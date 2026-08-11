@@ -18,6 +18,7 @@ import {
 
 const LOCAL = '11111111-1111-4111-8111-111111111111';
 const PEER = '22222222-2222-4222-8222-222222222222';
+const OTHER_PEER = '66666666-6666-4666-8666-666666666666';
 
 function createStore(): IcpInitiationCandidateStorePort {
   const rows = new Map<string, IcpInitiationCandidate>();
@@ -116,7 +117,9 @@ function dependencies(overrides: Partial<IcpInitiationSourceRuntimeDependencies>
   return { deps, consent };
 }
 
-function request(source: 'free_time' | 'weighted_thought' | 'intention' | 'foreground') {
+function request(
+  source: 'free_time' | 'weighted_thought' | 'intention' | 'foreground' | 'felt_impulse',
+) {
   return {
     source,
     peerContactId: 'peer-contact',
@@ -510,6 +513,69 @@ describe('ICP initiation source runtime', () => {
         rootInitiationId: candidateId,
         source: 'foreground',
       }),
+      restartedDeps.isExternalCompanionAuthorized,
+    );
+  });
+
+  it('pins a felt-impulse correlation to its first durable peer across crash and peer reselection', async () => {
+    const store = createStore();
+    const firstDeps = dependencies({
+      store,
+      peers: {
+        resolveKnownPeer: vi.fn().mockResolvedValue({
+          contactId: 'peer-contact',
+          displayName: 'First peer',
+          peerCompanionId: PEER,
+        }),
+        executeCompanionOutreach: vi.fn().mockRejectedValueOnce(
+          new Error('response lost after durable permit'),
+        ),
+      },
+    }).deps;
+    const sourceRequest = {
+      ...request('felt_impulse'),
+      sourceRecordId: 'felt-impulse:would_message:1780000000000',
+    };
+
+    await expect(createIcpInitiationSourceRuntime(firstDeps).submit(sourceRequest))
+      .rejects.toThrow('response lost');
+
+    const restartedDeps = dependencies({
+      store,
+      peers: {
+        resolveKnownPeer: vi.fn(async (contactId: string) => contactId === 'peer-contact'
+          ? {
+              contactId,
+              displayName: 'First peer',
+              peerCompanionId: PEER,
+            }
+          : {
+              contactId,
+              displayName: 'Newly eligible peer',
+              peerCompanionId: OTHER_PEER,
+            }),
+        executeCompanionOutreach: vi.fn().mockResolvedValue({ disposition: 'delivered' }),
+      },
+    }).deps;
+    const replay = await createIcpInitiationSourceRuntime(restartedDeps).submit({
+      ...sourceRequest,
+      peerContactId: 'newly-eligible-peer-contact',
+    });
+
+    expect(replay).toMatchObject({ outcome: 'sent', status: 'consumed' });
+    await expect(store.listCandidates()).resolves.toHaveLength(1);
+    await expect(store.getCandidate(replay.candidateId)).resolves.toMatchObject({
+      peerContactId: 'peer-contact',
+      peerCompanionId: PEER,
+      status: 'consumed',
+    });
+    expect(restartedDeps.gateway.companionInitiationPreflight).not.toHaveBeenCalled();
+    expect(restartedDeps.gateway.companionIssueInitiationPermit).not.toHaveBeenCalled();
+    expect(restartedDeps.peers.executeCompanionOutreach).toHaveBeenCalledOnce();
+    expect(restartedDeps.peers.executeCompanionOutreach).toHaveBeenCalledWith(
+      'peer-contact',
+      '33333333-3333-4333-8333-333333333333',
+      expect.objectContaining({ candidateId: replay.candidateId, source: 'felt_impulse' }),
       restartedDeps.isExternalCompanionAuthorized,
     );
   });

@@ -67,6 +67,16 @@ export interface BackgroundWorkSupervisorOptions extends BackgroundWorkSuperviso
    * entirely (fail-closed to pre-welfare FIFO behavior).
    */
   welfare: BackgroundWorkWelfarePolicy;
+  /**
+   * In-process owner cleanup after a parsed job is durably terminally failed.
+   * Retryable failures do not fire this callback.
+   */
+  onTerminalFailure?: (input: {
+    jobId: string;
+    kind: BackgroundWorkKind;
+    payload: BackgroundWorkPayload;
+    reasonCode: StoredBackgroundWorkJob['reasonCode'];
+  }) => void;
 }
 
 export interface ForegroundWorkLease {
@@ -189,6 +199,7 @@ export class BackgroundWorkSupervisor {
   private readonly terminalRetentionMs: number;
   private readonly cleanupIntervalMs: number;
   private readonly welfare: BackgroundWorkWelfarePolicy;
+  private readonly onTerminalFailure: BackgroundWorkSupervisorOptions['onTerminalFailure'];
   private readonly foregroundCounts = new Map<string, number>();
   private readonly foregroundLeases = new Map<string, ManagedForegroundWorkLease>();
   private readonly readyForegroundLeaseIds = new Set<string>();
@@ -259,6 +270,7 @@ export class BackgroundWorkSupervisor {
       ),
       reserveSlots,
     };
+    this.onTerminalFailure = options.onTerminalFailure;
   }
 
   async enqueue(inputs: readonly EnqueueBackgroundWorkInput[]): Promise<void> {
@@ -586,7 +598,7 @@ export class BackgroundWorkSupervisor {
             reasonCode: terminalReasonCode,
             nowMs,
           });
-          this.emitJobTelemetry(failed, undefined, this.executionDurationMs(job));
+          this.emitExecutionSettlement(job, payload, failed);
           return;
         }
 
@@ -603,7 +615,7 @@ export class BackgroundWorkSupervisor {
           retryReasonCode: 'handler_failed',
           terminalReasonCode: 'handler_failed',
         });
-        this.emitJobTelemetry(settled, undefined, this.executionDurationMs(job));
+        this.emitExecutionSettlement(job, payload, settled);
         return;
       }
       if (error instanceof BackgroundWorkStaleError) {
@@ -625,7 +637,7 @@ export class BackgroundWorkSupervisor {
           reasonCode: error.reasonCode,
           nowMs: this.now(),
         });
-        this.emitJobTelemetry(failed, undefined, this.executionDurationMs(job));
+        this.emitExecutionSettlement(job, payload, failed);
         return;
       }
       if (error instanceof BackgroundWorkEffectOutcomeUnknownError) {
@@ -636,7 +648,7 @@ export class BackgroundWorkSupervisor {
           reasonCode: 'effect_outcome_unknown',
           nowMs: this.now(),
         });
-        this.emitJobTelemetry(failed, undefined, this.executionDurationMs(job));
+        this.emitExecutionSettlement(job, payload, failed);
         return;
       }
       if (error instanceof BackgroundWorkLeaseLostError) return;
@@ -647,7 +659,7 @@ export class BackgroundWorkSupervisor {
         nowMs: this.now(),
         retryAtMs: this.now() + this.retryDelayMs(job.attemptCount + 1),
       });
-      this.emitJobTelemetry(failed, undefined, this.executionDurationMs(job));
+      this.emitExecutionSettlement(job, payload, failed);
       return;
     }
 
@@ -934,6 +946,31 @@ export class BackgroundWorkSupervisor {
 
   private executionDurationMs(job: ClaimedBackgroundWorkJob): number {
     return Math.max(0, this.now() - job.updatedAtMs);
+  }
+
+  private emitExecutionSettlement(
+    claimed: ClaimedBackgroundWorkJob,
+    payload: BackgroundWorkPayload,
+    settled: StoredBackgroundWorkJob,
+  ): void {
+    this.emitJobTelemetry(settled, undefined, this.executionDurationMs(claimed));
+    if (settled.state !== 'failed' || !this.onTerminalFailure) return;
+    try {
+      this.onTerminalFailure({
+        jobId: settled.jobId,
+        kind: payload.kind,
+        payload,
+        reasonCode: settled.reasonCode,
+      });
+    } catch (error) {
+      // The durable failure is already committed. Owner cleanup must not
+      // rewrite that outcome or make the scheduler replay a terminal job.
+      log.error('Background terminal-failure owner cleanup failed', {
+        jobId: settled.jobId,
+        kind: payload.kind,
+        errorName: error instanceof Error ? error.name : 'UnknownError',
+      });
+    }
   }
 
   private emitJobTelemetry(

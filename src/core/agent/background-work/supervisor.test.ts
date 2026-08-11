@@ -1209,6 +1209,42 @@ describe('BackgroundWorkSupervisor', () => {
     expect(executor).toHaveBeenCalledTimes(2);
   });
 
+  it('notifies the owner only after an ordinary failure exhausts its retry budget', async () => {
+    let now = 1_000;
+    const store = new MemoryBackgroundWorkStore();
+    const onTerminalFailure = vi.fn();
+    const supervisor = createBackgroundWorkSupervisor({
+      store,
+      eventBus: new EventBus(),
+      now: () => now,
+      retryBaseDelayMs: 100,
+      onTerminalFailure,
+      executor: vi.fn().mockRejectedValue(new Error('appraisal provider unavailable')),
+    });
+    const input = { ...makeInput('session-a', 'turn-terminal-appraisal'), maxAttempts: 2 };
+    await store.enqueue(input);
+
+    await supervisor.tick();
+    await supervisor.waitForIdle();
+    expect(await store.get(input.jobId)).toMatchObject({ state: 'retry_wait' });
+    expect(onTerminalFailure).not.toHaveBeenCalled();
+
+    now += 100;
+    await supervisor.tick();
+    await supervisor.waitForIdle();
+    expect(await store.get(input.jobId)).toMatchObject({
+      state: 'failed',
+      reasonCode: 'retry_exhausted',
+      attemptCount: 2,
+    });
+    expect(onTerminalFailure).toHaveBeenCalledOnce();
+    expect(onTerminalFailure).toHaveBeenCalledWith(expect.objectContaining({
+      jobId: input.jobId,
+      reasonCode: 'retry_exhausted',
+      payload: input.payload,
+    }));
+  });
+
   it('abandons a pre-write intention receipt and retries the hook once', async () => {
     let now = 1_000;
     let hookAttempts = 0;
@@ -1445,10 +1481,12 @@ describe('BackgroundWorkSupervisor', () => {
 
   it('records a permanent source failure as failed, never stale-discarded', async () => {
     const store = new MemoryBackgroundWorkStore();
+    const onTerminalFailure = vi.fn();
     const supervisor = createBackgroundWorkSupervisor({
       store,
       eventBus: new EventBus(),
       now: () => 1_000,
+      onTerminalFailure,
       executor: async () => {
         throw new BackgroundWorkPermanentError('source_missing');
       },
@@ -1463,6 +1501,12 @@ describe('BackgroundWorkSupervisor', () => {
       state: 'failed',
       reasonCode: 'source_missing',
     });
+    expect(onTerminalFailure).toHaveBeenCalledOnce();
+    expect(onTerminalFailure).toHaveBeenCalledWith(expect.objectContaining({
+      jobId: input.jobId,
+      reasonCode: 'source_missing',
+      payload: input.payload,
+    }));
   });
 
   it('keeps quick source validation cycles at attempt zero and succeeds when the source arrives later', async () => {
@@ -1538,10 +1582,12 @@ describe('BackgroundWorkSupervisor', () => {
   it('bounds handler-drain requeues instead of leaving them at attempt zero', async () => {
     const store = new MemoryBackgroundWorkStore();
     let now = 100;
+    const onTerminalFailure = vi.fn();
     const supervisor = createBackgroundWorkSupervisor({
       store,
       eventBus: new EventBus(),
       now: () => now,
+      onTerminalFailure,
       executor: async () => {
         throw new BackgroundWorkDeferredError('handler_failed', 50);
       },
@@ -1552,6 +1598,9 @@ describe('BackgroundWorkSupervisor', () => {
     for (let attempt = 1; attempt <= input.maxAttempts; attempt += 1) {
       await supervisor.tick();
       await supervisor.waitForIdle();
+      expect(onTerminalFailure).toHaveBeenCalledTimes(
+        attempt === input.maxAttempts ? 1 : 0,
+      );
       if (attempt < input.maxAttempts) now += 50;
     }
 
@@ -1560,6 +1609,11 @@ describe('BackgroundWorkSupervisor', () => {
       reasonCode: 'handler_failed',
       attemptCount: input.maxAttempts,
     });
+    expect(onTerminalFailure).toHaveBeenCalledWith(expect.objectContaining({
+      jobId: input.jobId,
+      reasonCode: 'handler_failed',
+      payload: input.payload,
+    }));
   });
 
   it('emits content-free lifecycle telemetry with queue, attempt, age, duration, and a session hash', async () => {

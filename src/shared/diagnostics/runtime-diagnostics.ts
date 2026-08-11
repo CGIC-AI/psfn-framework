@@ -322,6 +322,38 @@ export function wireRuntimeDiagnosticsEventCapture(eventBus: EventBus): void {
       },
     });
   });
+  eventBus.on('emotion.proactive.transition', (event) => {
+    recordLifecycleDiagnosticEvent({
+      event: 'emotion.proactive.transition',
+      component: 'emotion',
+      observedAt: event.timestamp,
+      message: 'Emotion proactive transition observed',
+      details: {
+        correlationId: event.correlationId,
+        lever: event.lever,
+        stage: event.stage,
+        outcome: event.outcome,
+        firedAtMs: event.firedAtMs,
+        peerContactId: event.peerContactId,
+        candidateId: event.candidateId,
+        candidateStatus: event.candidateStatus,
+      },
+    });
+  });
+  eventBus.on('icp.felt_impulse.outcome', (event) => {
+    recordLifecycleDiagnosticEvent({
+      event: 'icp.felt_impulse.outcome',
+      component: 'icp',
+      observedAt: event.timestamp,
+      message: 'ICP felt-impulse outcome observed',
+      details: {
+        correlationId: event.correlationId,
+        outcome: event.outcome,
+        peerContactId: event.peerContactId,
+        candidateId: event.candidateId,
+      },
+    });
+  });
   eventBus.on('backup.failed', (event) => {
     recordBackupDiagnosticOutcome({
       status: 'failure',

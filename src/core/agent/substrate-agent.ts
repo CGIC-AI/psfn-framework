@@ -636,6 +636,18 @@ export class SubstrateAgent {
         store: backgroundWorkStore,
         eventBus: this.eventBus,
         welfare: backgroundWorkWelfare,
+        onTerminalFailure: ({ jobId, payload, reasonCode }) => {
+          if (payload.kind !== 'emotion_appraisal') return;
+          const released = this.emotionSelfModelRuntime.releaseNarrativeEmotionAppraisal({
+            sessionChannelId: payload.emotionSessionId,
+            driftDecision: payload.driftDecision,
+          });
+          log.debug('Terminal emotion appraisal reservation resolved', {
+            jobId,
+            reasonCode,
+            released,
+          });
+        },
         executor: (input) => executePostTurnBackgroundWork(input, {
           sessionManager: this.sessionManager,
           llmProvider: this.llmClient,

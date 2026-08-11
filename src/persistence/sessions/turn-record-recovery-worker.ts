@@ -176,7 +176,6 @@ function captureSourceSnapshotBoundary(
 }
 
 async function run(): Promise<void> {
-  // @ts-expect-error -- Node 24.19 supports defensive before the pinned Node 22 types expose it.
   const database = new DatabaseSync(input.databasePath, { defensive: true });
   let activeSnapshot: SnapshotFile | null = null;
   try {

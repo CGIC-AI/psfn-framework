@@ -172,6 +172,27 @@ describe('Postgres live schema migrations', () => {
     expect(sql).not.toContain('UPDATE l01_episodes SET meaning_authorship');
   });
 
+  it('records rebuildable episode embedding provenance and failure state', () => {
+    const sql = migrationSql(POSTGRES_MEMORY_MIGRATIONS);
+
+    for (const column of [
+      'embedding_document_schema TEXT',
+      'embedding_provider TEXT',
+      'embedding_model TEXT',
+      'embedding_dimensions INTEGER',
+      'embedding_document_hash TEXT',
+      'embedding_source_updated_at TIMESTAMPTZ',
+      'embedding_indexed_at TIMESTAMPTZ',
+      'embedding_attempted_at TIMESTAMPTZ',
+      'embedding_last_error TEXT',
+    ]) {
+      expectAddColumn(sql, 'l01_episodes', column.split(' ')[0] ?? column);
+      expect(sql).toContain(column);
+    }
+    expect(sql).toContain('l01_episodes_embedding_dimensions_check');
+    expect(sql).toContain('l01_episodes_embedding_document_hash_check');
+  });
+
   it('upgrades existing contact tables and creates social graph tables for companion DBs', () => {
     const sql = migrationSql(POSTGRES_CONTACT_MIGRATIONS);
 

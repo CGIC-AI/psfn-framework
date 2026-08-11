@@ -393,6 +393,113 @@ export interface EpisodeListOptions {
   offset?: number;
 }
 
+export interface EpisodeEmbeddingProfile {
+  documentSchema: string;
+  provider: string;
+  model: string;
+  dimensions: number;
+}
+
+export type EpisodeEmbeddingTargetReason = 'missing' | 'stale' | 'failed';
+
+export interface EpisodeEmbeddingTarget {
+  episode: Episode;
+  reason: EpisodeEmbeddingTargetReason;
+  lastError?: string;
+}
+
+export interface EpisodeEmbeddingTargetListInput {
+  profile: EpisodeEmbeddingProfile;
+  limit: number;
+}
+
+export interface EpisodeEmbeddingWriteInput {
+  episodeId: string;
+  sourceUpdatedAt: string;
+  profile: EpisodeEmbeddingProfile;
+  documentHash: string;
+  embedding: Float32Array;
+  indexedAt: string;
+}
+
+export interface EpisodeEmbeddingFailureInput {
+  episodeId: string;
+  sourceUpdatedAt: string;
+  profile: EpisodeEmbeddingProfile;
+  error: string;
+  attemptedAt: string;
+}
+
+export interface EpisodeSemanticSearchInput {
+  profile: EpisodeEmbeddingProfile;
+  queryEmbedding: Float32Array;
+  limit: number;
+}
+
+export interface EpisodeSemanticCandidate {
+  episode: Episode;
+  similarity: number;
+}
+
+export interface EpisodeEmbeddingIndexHealth {
+  total: number;
+  current: number;
+  missing: number;
+  stale: number;
+  failed: number;
+}
+
+export type EpisodeEmbeddingIndexAttempt =
+  | { episodeId: string; status: 'indexed' }
+  | { episodeId: string; status: 'failed'; error: string }
+  | { episodeId: string; status: 'changed_during_index' };
+
+export interface EpisodeEmbeddingLiveIndexerPort {
+  indexEpisode(episode: Episode): Promise<EpisodeEmbeddingIndexAttempt>;
+}
+
+export interface EpisodeEmbeddingIndexerAttachOptions {
+  onResult?: (result: EpisodeEmbeddingIndexAttempt) => void;
+  onError?: (error: unknown, episode: Episode) => void;
+}
+
+export interface EpisodeEmbeddingIndexerAttachPort {
+  attachEpisodeEmbeddingIndexer(
+    indexer: EpisodeEmbeddingLiveIndexerPort,
+    options?: EpisodeEmbeddingIndexerAttachOptions,
+  ): void;
+}
+
+/** Derived vector-state writer used by bounded indexing and repair jobs. */
+export interface EpisodeEmbeddingIndexStorePort {
+  listEpisodeEmbeddingTargets(
+    input: EpisodeEmbeddingTargetListInput,
+  ): EpisodicStoreResult<EpisodeEmbeddingTarget[]>;
+  writeEpisodeEmbedding(input: EpisodeEmbeddingWriteInput): EpisodicStoreResult<boolean>;
+  recordEpisodeEmbeddingFailure(input: EpisodeEmbeddingFailureInput): EpisodicStoreResult<boolean>;
+}
+
+export interface EpisodeEmbeddingSearchStorePort {
+  searchEpisodesByEmbedding(
+    input: EpisodeSemanticSearchInput,
+  ): EpisodicStoreResult<EpisodeSemanticCandidate[]>;
+}
+
+export interface EpisodeEmbeddingHealthStorePort {
+  getEpisodeEmbeddingIndexHealth(
+    profile: EpisodeEmbeddingProfile,
+  ): EpisodicStoreResult<EpisodeEmbeddingIndexHealth>;
+}
+
+export interface EpisodeEmbeddingStorePort extends
+  EpisodeEmbeddingIndexStorePort,
+  EpisodeEmbeddingSearchStorePort,
+  EpisodeEmbeddingHealthStorePort {}
+
+export interface EpisodeEmbeddingRuntimeStorePort extends
+  EpisodeEmbeddingStorePort,
+  EpisodeEmbeddingIndexerAttachPort {}
+
 export interface EpisodeTimeSearchOptions extends EpisodeListOptions {
   from?: string;
   to?: string;

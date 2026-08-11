@@ -193,22 +193,34 @@ function sourceIdentity(input: {
   peerCompanionId: string;
   request: IcpInitiationSourceRequest;
 }): string {
+  const durableSourceRecord = input.request.pendingFollowUpId === undefined
+    ? requireTrimmed(
+      input.request.sourceRecordId,
+      'sourceRecordId',
+      MAX_SOURCE_RECORD_ID_CHARS,
+    )
+    : `pending-follow-up:${requireTrimmed(
+      input.request.pendingFollowUpId,
+      'pendingFollowUpId',
+      MAX_SOURCE_RECORD_ID_CHARS,
+    )}`;
+  if (input.request.source === 'felt_impulse') {
+    // The correlation identifies one lever crossing globally for this
+    // companion. Peer eligibility is mutable routing input, so including it
+    // here would allow a crash/replay to mint a second candidate for a newly
+    // selected peer. The first candidate row durably pins the chosen peer.
+    return [
+      input.localCompanionId,
+      input.request.source,
+      durableSourceRecord,
+    ].join('\0');
+  }
   return [
     input.localCompanionId,
     input.peerCompanionId,
     input.request.source,
     input.request.preferredChannel,
-    input.request.pendingFollowUpId === undefined
-      ? requireTrimmed(
-        input.request.sourceRecordId,
-        'sourceRecordId',
-        MAX_SOURCE_RECORD_ID_CHARS,
-      )
-      : `pending-follow-up:${requireTrimmed(
-        input.request.pendingFollowUpId,
-        'pendingFollowUpId',
-        MAX_SOURCE_RECORD_ID_CHARS,
-      )}`,
+    durableSourceRecord,
   ].join('\0');
 }
 
@@ -286,6 +298,13 @@ export function createIcpInitiationSourceRuntime(
     permitTtlMs: DEFAULT_PERMIT_TTL_MS,
   };
   const inFlight = new Map<string, Promise<IcpInitiationSourceResult>>();
+  const resolvePeer = async (contactId: string): Promise<KnownCompanionPeer> => {
+    const peer = await dependencies.peers.resolveKnownPeer(contactId);
+    if (peer.contactId !== contactId) {
+      throw new Error('Resolved ICP peer contact does not match the requested canonical contact');
+    }
+    return peer;
+  };
 
   const emitLifecycle = async (
     candidate: IcpInitiationCandidate,
@@ -334,7 +353,7 @@ export function createIcpInitiationSourceRuntime(
 
   const run = async (
     request: IcpInitiationSourceRequest,
-    peer: KnownCompanionPeer,
+    initialPeer: KnownCompanionPeer,
     candidateId: string,
   ): Promise<IcpInitiationSourceResult> => {
     const currentNow = now();
@@ -345,6 +364,14 @@ export function createIcpInitiationSourceRuntime(
       MAX_ICP_CANDIDATE_TTL_MS,
       Math.max(1, Math.floor(request.ttlMs ?? policy.candidateDefaultTtlMs)),
     );
+    let peer = initialPeer;
+    let candidate: IcpInitiationCandidate;
+    const existingCandidate = await dependencies.store.getCandidate(candidateId);
+    if (request.source === 'felt_impulse'
+      && existingCandidate
+      && existingCandidate.peerContactId !== peer.contactId) {
+      peer = await resolvePeer(existingCandidate.peerContactId);
+    }
     const identity = sourceIdentity({
       localCompanionId: dependencies.localCompanionId,
       peerCompanionId: peer.peerCompanionId,
@@ -357,7 +384,7 @@ export function createIcpInitiationSourceRuntime(
     if (!isRfc4122Uuid(rootInitiationId)) {
       throw new Error('Inherited ICP rootInitiationId must be a lowercase RFC-4122 UUID');
     }
-    const proposed = parseIcpInitiationCandidate({
+    let proposed = parseIcpInitiationCandidate({
       candidateId,
       rootInitiationId,
       localCompanionId: dependencies.localCompanionId,
@@ -374,9 +401,6 @@ export function createIcpInitiationSourceRuntime(
       retryAttempt: 0,
       revision: 1,
     });
-
-    let candidate: IcpInitiationCandidate;
-    const existingCandidate = await dependencies.store.getCandidate(candidateId);
     if (existingCandidate) {
       candidate = existingCandidate;
     } else {
@@ -387,6 +411,15 @@ export function createIcpInitiationSourceRuntime(
         const racedCandidate = await dependencies.store.getCandidate(candidateId);
         if (!racedCandidate) throw error;
         candidate = racedCandidate;
+        if (request.source === 'felt_impulse'
+          && candidate.peerContactId !== peer.contactId) {
+          peer = await resolvePeer(candidate.peerContactId);
+          proposed = parseIcpInitiationCandidate({
+            ...proposed,
+            peerContactId: peer.contactId,
+            peerCompanionId: peer.peerCompanionId,
+          });
+        }
       }
     }
     if (!sameCandidate(candidate, proposed)) {
@@ -579,10 +612,7 @@ export function createIcpInitiationSourceRuntime(
 
   return {
     async submit(request) {
-      const peer = await dependencies.peers.resolveKnownPeer(request.peerContactId);
-      if (peer.contactId !== request.peerContactId) {
-        throw new Error('Resolved ICP peer contact does not match the requested canonical contact');
-      }
+      const peer = await resolvePeer(request.peerContactId);
       const identity = sourceIdentity({
         localCompanionId: dependencies.localCompanionId,
         peerCompanionId: peer.peerCompanionId,

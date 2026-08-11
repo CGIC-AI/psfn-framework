@@ -540,6 +540,17 @@ export class EmotionSelfModelRuntime {
     });
   }
 
+  releaseNarrativeEmotionAppraisal(input: {
+    sessionChannelId: string;
+    driftDecision: NarrativeAppraisalDriftDecision;
+  }): boolean {
+    if (!this.emotionAppraisal) return false;
+    return this.emotionAppraisal.releaseNarrativeAppraisal({
+      sessionId: input.sessionChannelId,
+      driftDecision: input.driftDecision,
+    });
+  }
+
   async triggerEmotionAppraisal(params: {
     sessionChannelId: string;
     turnId: TurnID;

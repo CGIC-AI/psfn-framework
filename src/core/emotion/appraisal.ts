@@ -301,6 +301,16 @@ function sameVad(left: VADVector, right: VADVector): boolean {
     && left.dominance === right.dominance;
 }
 
+function sameNarrativeAppraisalDecision(
+  left: NarrativeAppraisalDriftDecision,
+  right: NarrativeAppraisalDriftDecision,
+): boolean {
+  return sameVad(left.baselineVad, right.baselineVad)
+    && sameVad(left.targetVad, right.targetVad)
+    && left.vadDelta === right.vadDelta
+    && left.threshold === right.threshold;
+}
+
 function topDiscrete(discrete: Record<string, number>, limit: number): string {
   const top = Object.entries(discrete)
     .sort((left, right) => {
@@ -453,6 +463,26 @@ export class EmotionAppraisal {
     return this.reserveFromSnapshot(sessionId, snapshot, appraisalState, now).decision;
   }
 
+  /**
+   * Resolve an in-memory reservation after its durable job terminally fails.
+   * Exact decision matching prevents an older failed job from releasing a
+   * newer appraisal reservation for the same session.
+   */
+  releaseNarrativeAppraisal(input: {
+    sessionId: string;
+    driftDecision: NarrativeAppraisalDriftDecision;
+  }): boolean {
+    const sessionId = normalizeSessionId(input.sessionId);
+    const decision = parseNarrativeAppraisalDriftDecision(input.driftDecision);
+    const state = this.sessionState.get(sessionId);
+    if (!state?.pendingDecision
+      || !sameNarrativeAppraisalDecision(state.pendingDecision, decision)) {
+      return false;
+    }
+    state.pendingDecision = null;
+    return true;
+  }
+
   async maybeAppraise(input: EmotionAppraisalInput): Promise<EmotionAppraisalResult> {
     const sessionId = normalizeSessionId(input.sessionId);
     if (input.internalState && input.appraisalState) {
@@ -486,6 +516,12 @@ export class EmotionAppraisal {
       : this.reserveFromSnapshot(sessionId, snapshot, appraisalState, now);
     if (!reservation.decision) {
       await input.assertEffectAllowed?.();
+      if (input.driftDecision) {
+        this.releaseNarrativeAppraisal({
+          sessionId,
+          driftDecision: input.driftDecision,
+        });
+      }
       return {
         appraised: false,
         turnsSinceLast: reservation.turnsSinceLast,

@@ -3,6 +3,7 @@ import type { LLMProviderPort } from '../agent/contracts.js';
 import type { CompletionPurpose, LLMContext, LLMResponse } from '../../shared/contracts/runtime.js';
 import { EmotionAppraisal } from './appraisal.js';
 import { projectEmotionAppraisalState } from './appraisal-state.js';
+import { parseNarrativeAppraisalDriftDecision } from './narrative-appraisal-drift.js';
 import type { EmotionStateSnapshot } from './state.js';
 import { InternalStateComputer } from '../self-model/state.js';
 import {
@@ -240,6 +241,62 @@ describe('EmotionAppraisal', () => {
     await expect(run()).resolves.toMatchObject({ appraised: true, trigger: 'vad_shift' });
     await expect(run()).resolves.toMatchObject({ appraised: false });
     expect(workerProvider.complete).toHaveBeenCalledTimes(1);
+  });
+
+  it('releases only the matching terminally failed narrative reservation', () => {
+    const { provider, complete } = makeMockProvider(['Unexpected appraisal']);
+    const appraisal = new EmotionAppraisal({
+      llmProvider: provider,
+      vadDeltaThreshold: 0.2,
+    });
+    const baseline = projectEmotionAppraisalState(makeInternalState());
+    baseline.emotional.vad = { valence: 0, arousal: 0, dominance: 0 };
+    const target = structuredClone(baseline);
+    target.emotional.vad = { valence: 0.5, arousal: 0.1, dominance: 0 };
+    expect(appraisal.reserveNarrativeAppraisal({
+      sessionId: 'session-terminal-failure',
+      appraisalState: baseline,
+      now: TEST_NOW_MS,
+    })).toBeNull();
+    const decision = appraisal.reserveNarrativeAppraisal({
+      sessionId: 'session-terminal-failure',
+      appraisalState: target,
+      now: TEST_NOW_MS + 1,
+    })!;
+
+    expect(appraisal.releaseNarrativeAppraisal({
+      sessionId: 'session-terminal-failure',
+      driftDecision: {
+        ...decision,
+        targetVad: { ...decision.targetVad, valence: 0.6 },
+        vadDelta: 0.6,
+      },
+    })).toBe(false);
+    expect(appraisal.releaseNarrativeAppraisal({
+      sessionId: 'session-terminal-failure',
+      driftDecision: decision,
+    })).toBe(true);
+    expect(appraisal.releaseNarrativeAppraisal({
+      sessionId: 'session-terminal-failure',
+      driftDecision: decision,
+    })).toBe(false);
+    expect(appraisal.reserveNarrativeAppraisal({
+      sessionId: 'session-terminal-failure',
+      appraisalState: target,
+      now: TEST_NOW_MS + 2,
+    })).toEqual(decision);
+    expect(complete).not.toHaveBeenCalled();
+  });
+
+  it('rejects unknown keys nested inside durable narrative VAD snapshots', () => {
+    expect(() => parseNarrativeAppraisalDriftDecision({
+      schemaVersion: 1,
+      mode: 'drift_only',
+      baselineVad: { valence: 0, arousal: 0, dominance: 0, privateContent: 'reject me' },
+      targetVad: { valence: 0.5, arousal: 0, dominance: 0 },
+      vadDelta: 0.5,
+      threshold: 0.2,
+    })).toThrow('baselineVad contains unknown keys: privateContent');
   });
 
   it('spends no narrative model calls when the owner-file mode is disabled', async () => {

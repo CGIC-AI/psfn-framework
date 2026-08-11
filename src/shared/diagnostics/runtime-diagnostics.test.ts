@@ -7,7 +7,9 @@ import {
   recordBackupDiagnosticOutcome,
   recordToolValidationFailure,
   resetRuntimeDiagnosticsForTests,
+  wireRuntimeDiagnosticsEventCapture,
 } from './runtime-diagnostics.js';
+import { EventBus } from '../event-bus.js';
 import {
   clearDiagnosticLogRingBufferForTests,
   getRecentDiagnosticLogRecords,
@@ -102,6 +104,59 @@ describe('runtime diagnostics', () => {
       firstSeenAt: 1_700_000_000_000,
       lastSeenAt: 1_700_000_000_500,
     }]);
+  });
+
+  it('captures content-free correlated felt-impulse transitions for operator diagnostics', async () => {
+    const eventBus = new EventBus();
+    wireRuntimeDiagnosticsEventCapture(eventBus);
+
+    await eventBus.emit('emotion.proactive.transition', {
+      correlationId: 'felt-impulse:would_message:1780000000000',
+      lever: 'would_message',
+      stage: 'candidate_submission',
+      outcome: 'submitted',
+      firedAtMs: 1_780_000_000_000,
+      peerContactId: 'peer-contact',
+      candidateId: '11111111-1111-4111-8111-111111111111',
+      candidateStatus: 'permitted',
+      reasonCode: 'private reason must not be captured',
+      timestamp: 1_780_000_000_010,
+    });
+    await eventBus.emit('icp.felt_impulse.outcome', {
+      correlationId: 'felt-impulse:would_message:1780000000000',
+      outcome: 'sent',
+      peerContactId: 'peer-contact',
+      candidateId: '11111111-1111-4111-8111-111111111111',
+      reason: 'private outcome reason must not be captured',
+      timestamp: 1_780_000_000_020,
+    });
+
+    const snapshot = buildRuntimeDiagnosticsSnapshot({
+      now: () => 1_780_000_000_100,
+      windowMs: 1_000,
+      includeFileLogs: false,
+    });
+    expect(snapshot.lifecycle.events).toEqual([
+      expect.objectContaining({
+        event: 'icp.felt_impulse.outcome',
+        details: expect.objectContaining({
+          correlationId: 'felt-impulse:would_message:1780000000000',
+          outcome: 'sent',
+          candidateId: '11111111-1111-4111-8111-111111111111',
+        }),
+      }),
+      expect.objectContaining({
+        event: 'emotion.proactive.transition',
+        details: expect.objectContaining({
+          correlationId: 'felt-impulse:would_message:1780000000000',
+          stage: 'candidate_submission',
+          outcome: 'submitted',
+        }),
+      }),
+    ]);
+    const serialized = JSON.stringify(snapshot.lifecycle.events);
+    expect(serialized).not.toContain('private reason');
+    expect(serialized).not.toContain('private outcome');
   });
 
   it('returns explicit unavailable markers for kube-only rollout and pod data', () => {

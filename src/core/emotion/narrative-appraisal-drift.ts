@@ -1,4 +1,4 @@
-import { isRecord } from '../../shared/utils/types.js';
+import { assertNoUnknownKeys, isRecord } from '../../shared/utils/types.js';
 import type { NarrativeEmotionAppraisalMode } from '../../system/config/narrative-emotion-appraisal-config.js';
 import type { VADVector } from './state.js';
 
@@ -21,6 +21,7 @@ export function maxAbsoluteNarrativeVadDelta(left: VADVector, right: VADVector):
 
 function parseVad(value: unknown, fieldPath: string): VADVector {
   if (!isRecord(value)) throw new Error(`${fieldPath} must be an object`);
+  assertNoUnknownKeys(value, ['valence', 'arousal', 'dominance'], fieldPath);
   const parseAxis = (axis: keyof VADVector): number => {
     const entry = value[axis];
     if (typeof entry !== 'number' || !Number.isFinite(entry) || entry < -1 || entry > 1) {

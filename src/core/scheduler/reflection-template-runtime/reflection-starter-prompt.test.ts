@@ -137,7 +137,7 @@ describe('buildReflectionStarterPromptBundle', () => {
       provenanceRefs: ['memory:event-1', 'internal_state_snapshot:snapshot-1'],
     });
 
-    expect(REFLECTION_STARTER_PROMPT_VERSION).toBe(3);
+    expect(REFLECTION_STARTER_PROMPT_VERSION).toBe(4);
     expect(bundle.self).toContain('[Day Events Starter]');
     expect(bundle.self).toContain('Day event one');
     expect(bundle.self).toContain('Day event three');
@@ -155,6 +155,23 @@ describe('buildReflectionStarterPromptBundle', () => {
       'memory:event-1',
       'internal_state_snapshot:snapshot-1',
     ]);
+  });
+
+  it('leads the daily starter with the morning summary and does not recycle an active concern', () => {
+    const bundle = buildReflectionStarterPromptBundle({
+      templateId: 'daily-review',
+      internalStateContext: buildInternalStateContext(),
+      morningSummary: 'Yesterday ended with the repair holding and a clear next step.',
+      retrievedMemoryBlock: '- [reflection] Recycled concern framing should not lead today.',
+      recentSessionMessages: [],
+      recentDailyJournalEntries: [],
+      provenanceRefs: ['morning_summary:discord:primary|entry:20'],
+    });
+
+    expect(bundle.self).toContain('[Previous-Day Morning Summary]');
+    expect(bundle.self).toContain('Yesterday ended with the repair holding and a clear next step.');
+    expect(bundle.self).not.toContain('Recycled concern framing should not lead today.');
+    expect(bundle.self).not.toContain('Clarify the recovery timeline');
   });
 
   it('presents at most three open threads plus an omitted count in reflection evidence', () => {

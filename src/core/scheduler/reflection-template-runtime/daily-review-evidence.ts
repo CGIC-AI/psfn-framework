@@ -3,6 +3,10 @@ import type { PurrMemory } from '../../../faculties/memory/types.js';
 import type { EpisodicStorePort } from '../../../faculties/memory/episodic/store-port.js';
 import type { Episode } from '../../../shared/contracts/episodic-memory.js';
 import type { SessionEntry } from '../../session/types.js';
+import {
+  parseSessionLaneMetadata,
+  TEMPORAL_WAKEUP_MORNING_NOTE_SOURCE,
+} from '../../session/session-lane-metadata.js';
 import type { PromptAssemblyGateSummary } from '../../session/intake-sink-gating.js';
 import { REFLECTION_NOVELTY_ENTRY_SCAN_LIMIT } from './runtime-helpers.js';
 
@@ -37,6 +41,7 @@ interface DailyReviewEvidenceLogger {
 export interface DailyReviewEvidenceResult {
   promptSection: string;
   provenanceRefs: string[];
+  morningSummary?: string;
   degraded: boolean;
   degradationReasons: string[];
 }
@@ -106,6 +111,33 @@ function formatConversationLine(entry: SessionEntry): string {
   const speaker = entry.authorName?.trim()
     || (entry.role === 'assistant' ? 'Companion' : 'Contact');
   return truncateEvidenceLine(`${speaker}: ${entry.content}`);
+}
+
+function extractMorningSummary(
+  entries: readonly SessionEntry[],
+  expectedSessionId: string,
+  windowStartMs: number,
+  nowMs: number,
+): { summary: string; provenanceRef: string } | null {
+  const entry = [...entries]
+    .filter(candidate => (
+      candidate.channelId === expectedSessionId
+      && candidate.role === 'system'
+      && candidate.timestamp >= windowStartMs
+      && candidate.timestamp <= nowMs
+      && parseSessionLaneMetadata(candidate)?.source === TEMPORAL_WAKEUP_MORNING_NOTE_SOURCE
+    ))
+    .sort((left, right) => right.id - left.id || right.timestamp - left.timestamp)
+    .at(0);
+  if (!entry) return null;
+
+  const match = entry.content.match(/(?:^|\n)Catch-up on where things left off:\s*([^\n]+)/u);
+  const summary = match?.[1]?.trim();
+  if (!summary) return null;
+  return {
+    summary,
+    provenanceRef: `morning_summary:${entry.channelId}|entry:${String(entry.id)}`,
+  };
 }
 
 function isSameConversationScope(left: string | undefined, right: string): boolean {
@@ -237,6 +269,9 @@ export async function collectDailyReviewEvidence(
     windowStartMs,
     input.nowMs,
   );
+  const morningSummary = expectedSessionId
+    ? extractMorningSummary(scannedSessionEntries, expectedSessionId, windowStartMs, input.nowMs)
+    : null;
   const conversationEntryIds = new Set(conversationEntries.map(entry => entry.id));
   const withheldConversationEntryIds = new Set(
     reportedWithheldSessionEntryIds.filter(entryId => conversationEntryIds.has(entryId)),
@@ -404,6 +439,7 @@ export async function collectDailyReviewEvidence(
   return {
     promptSection: sections.join('\n'),
     provenanceRefs: [...new Set([
+      ...(morningSummary ? [morningSummary.provenanceRef] : []),
       ...conversationEntries.map(entry => (
         withheldConversationEntryIds.has(entry.id)
           ? `session_message_withheld:${entry.channelId}|entry:${String(entry.id)}`
@@ -412,6 +448,7 @@ export async function collectDailyReviewEvidence(
       ...episodes.map(value => `episode:${value.id}`),
       ...memoryDeltas.map(value => `memory:${value.id}`),
     ])],
+    ...(morningSummary ? { morningSummary: morningSummary.summary } : {}),
     degraded: degradationReasons.length > 0,
     degradationReasons,
   };

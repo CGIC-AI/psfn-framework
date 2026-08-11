@@ -8,6 +8,8 @@ import type {
   AdminReflectionDailyJournalApi,
   AdminReflectionJournalApi,
   AdminReflectionMetacognitionJournalApi,
+  AdminSchedulerApi,
+  AdminValuesJournalApi,
 } from './admin-contract.js';
 import type {
   AdminContactsService,
@@ -72,9 +74,11 @@ function makeRequest(url: string): IncomingMessage {
 }
 
 function makeRoutes(options: {
+  valuesJournal?: AdminValuesJournalApi | null;
   reflectionMetacognitionJournal?: AdminReflectionMetacognitionJournalApi | null;
   reflectionDailyJournal?: AdminReflectionDailyJournalApi | null;
   reflectionJournal?: AdminReflectionJournalApi | null;
+  scheduler?: AdminSchedulerApi | null;
   appendAuditTimelineEntry?: AuditAppender;
 }): AdminApiRoute[] {
   return buildAdminApiRoutes({
@@ -89,9 +93,11 @@ function makeRoutes(options: {
     identityService: {} as AdminIdentityService,
     promptsService: {} as AdminPromptsService,
     chatBootstrapService: {} as AdminChatBootstrapApi,
+    valuesJournal: options.valuesJournal,
     reflectionMetacognitionJournal: options.reflectionMetacognitionJournal,
     reflectionDailyJournal: options.reflectionDailyJournal,
     reflectionJournal: options.reflectionJournal,
+    scheduler: options.scheduler,
     // A break-glass disclosure fails closed unless it can be audited, so tests
     // default to a real appender; passing the key explicitly (even undefined)
     // exercises the unauditable path.
@@ -122,6 +128,64 @@ const JOURNAL_ROUTE_URLS = [
 ] as const;
 
 describe('values reflection journal admin API routes', () => {
+  it('reports counts, latest timestamps, and schedule failures without break-glass or journal bodies', async () => {
+    const routes = makeRoutes({
+      valuesJournal: {
+        list: () => [{ createdAt: '2026-08-09T12:00:00.000Z', reflection: 'sealed values body' }] as never,
+      },
+      reflectionMetacognitionJournal: {
+        listRecent: () => [{ occurredAt: '2026-08-10T10:00:00.000Z', reflection: 'sealed metacognition body' }] as never,
+      },
+      reflectionDailyJournal: {
+        listRecent: () => [{ createdAt: '2026-08-08T10:00:00.000Z', reflection: 'sealed daily body' }] as never,
+      },
+      reflectionJournal: {
+        listRecent: () => [
+          { templateId: 'musing', createdAt: '2026-08-10T11:00:00.000Z', reflection: 'sealed reflection body' },
+          { templateId: 'concern_route', createdAt: '2026-08-09T11:00:00.000Z', reflection: 'sealed concern body' },
+        ] as never,
+      },
+      scheduler: {
+        listTasks: () => [
+          {
+            id: 'reflection:daily-review',
+            state: 'idle',
+            lastOutcome: 'failed',
+            lastRunAt: Date.now(),
+          },
+          {
+            id: 'reflection:weekly-review',
+            state: 'paused',
+            lastRunAt: Date.now(),
+          },
+        ] as never,
+      },
+    });
+    const route = routes.find(candidate => candidate.match('/api/admin/values/status'));
+    expect(route).toBeDefined();
+
+    const response = await invokeRoute(route!, '/api/admin/values/status', oauthContext());
+    const body = JSON.parse(response.body) as Record<string, unknown>;
+
+    expect(response.status).toBe(200);
+    expect(response.headers['Cache-Control']).toBe('no-store');
+    expect(body).toMatchObject({
+      streams: {
+        values: { available: true, count: 1, latestAt: '2026-08-09T12:00:00.000Z' },
+        metacognition: { available: true, count: 1 },
+        daily: { available: true, count: 1 },
+        reflection: { available: true, count: 1 },
+        concerns: { available: true, count: 1 },
+      },
+      tasks: {
+        daily: { health: 'failed', attentionRequired: true },
+        weekly: { health: 'paused', attentionRequired: true },
+      },
+      attentionCount: 2,
+    });
+    expect(response.body).not.toContain('sealed');
+  });
+
   it('returns recent metacognition, daily, and free-form reflection entries', async () => {
     const metacognitionEntry: ReflectionMetacognitionJournalEntry = {
       id: 'meta-1',

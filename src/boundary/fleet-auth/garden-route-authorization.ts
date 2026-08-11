@@ -571,7 +571,7 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
   {
     action: 'values.read', area: 'values', routeIds: [
       ...ids('GET', [
-        '/api/admin/values', '/api/admin/values/reflections/daily',
+        '/api/admin/values', '/api/admin/values/status', '/api/admin/values/reflections/daily',
         '/api/admin/values/reflections/journal', '/api/admin/values/reflections/metacognition',
       ]),
       ...pageIds(['/values']),

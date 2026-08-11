@@ -115,6 +115,7 @@ import type { AdminSubjectVisibleAuditService } from './services/subject-visible
 import { privacyBreakGlassResourceSelectorDigest } from '../../shared/contracts/privacy-break-glass.js';
 import { buildAdminPrivacyBreakGlassRoutes } from './routes/privacy-break-glass-routes.js';
 import type { AdminPrivacyBreakGlassService } from './services/privacy-break-glass-service.js';
+import { buildAdminJournalStatus } from './services/journal-status-service.js';
 
 export type { AdminApiRoute, AuthorizedAdminApiRoute } from './routes/types.js';
 
@@ -1353,6 +1354,19 @@ export function buildAdminApiRoutes(options: {
       },
     },
     // ── Values Timeline ──
+    {
+      method: 'GET',
+      match: exactPath('/api/admin/values/status'),
+      handle: (_req, res) => {
+        sendJson(res, 200, buildAdminJournalStatus({
+          valuesJournal,
+          reflectionMetacognitionJournal,
+          reflectionDailyJournal,
+          reflectionJournal,
+          scheduler,
+        }), { 'Cache-Control': 'no-store' });
+      },
+    },
     {
       method: 'GET',
       match: exactPath('/api/admin/values'),

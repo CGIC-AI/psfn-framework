@@ -3,6 +3,11 @@ import { apiPostProtected } from '$lib/api/protected-mutation';
 import { isRecord } from '../../../../../src/shared/utils/types.js';
 import type { PrivacyBreakGlassReasonCategory } from '../../../../../src/shared/contracts/privacy-break-glass.js';
 import type {
+  AdminJournalStatusData,
+  AdminJournalStreamStatus,
+  AdminJournalTaskStatus,
+} from '../../../../../src/operator/garden/services/journal-status-service.js';
+import type {
   AdminReflectionDailyData,
   AdminReflectionJournalData,
   AdminReflectionMetacognitionData,
@@ -18,6 +23,20 @@ export type JournalPrivacyStream =
   | 'reflection-metacognition'
   | 'reflection-daily'
   | 'reflection-journal';
+
+export interface JournalPrivacyTarget {
+  stream: JournalPrivacyStream;
+  label: string;
+}
+
+export const JOURNAL_PRIVACY_TARGETS: readonly JournalPrivacyTarget[] = [
+  { stream: 'values-journal', label: 'Values journal' },
+  { stream: 'reflection-metacognition', label: 'Metacognition journal' },
+  { stream: 'reflection-daily', label: 'Daily reflection journal' },
+  { stream: 'reflection-journal', label: 'Reflection journal' },
+];
+
+export type { AdminJournalStatusData, AdminJournalStreamStatus, AdminJournalTaskStatus };
 
 export interface JournalPrivacyBreakGlassInput {
   stream: JournalPrivacyStream;
@@ -147,4 +166,8 @@ export function getReflectionDailyData(): Promise<AdminReflectionDailyData> {
 
 export function getReflectionJournalData(): Promise<AdminReflectionJournalData> {
   return apiGet<AdminReflectionJournalData>('/api/admin/values/reflections/journal');
+}
+
+export function getJournalStatus(): Promise<AdminJournalStatusData> {
+  return apiGet<AdminJournalStatusData>('/api/admin/values/status');
 }

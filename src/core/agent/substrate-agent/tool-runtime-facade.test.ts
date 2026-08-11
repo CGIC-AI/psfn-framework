@@ -838,6 +838,7 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
     facade.registerTool(makeTool('system'), 'core');
     facade.registerTool(makeTool('self_status'), 'core');
     facade.registerTool(makeTool('session'), 'core');
+    facade.registerTool(makeTool('memory'), 'core');
     facade.registerTool(makeTool('contact'), 'core');
     facade.registerTool(makeTool('subagent'), 'core');
     facade.registerTool(makeTool('analysis_workbench'), 'core');
@@ -855,6 +856,7 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
     const tools = agent.setTools.mock.calls.at(-1)?.[0] as Array<{ name: string }>;
     expect(tools.map(tool => tool.name)).toEqual([
       'contact',
+      'memory',
       'session',
       'identity',
       'self_status',
@@ -868,7 +870,11 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
     ]));
   });
 
-  it('keeps daily-reflection evidence recall on direct session tools without invoking analysis_workbench', async () => {
+  it('keeps daily-reflection evidence recall on direct memory and session tools without invoking analysis_workbench', async () => {
+    const memoryExecute = vi.fn(async () => ({
+      content: [{ type: 'text' as const, text: 'cross-tier companion memory evidence' }],
+      details: {},
+    }));
     const sessionExecute = vi.fn(async () => ({
       content: [{ type: 'text' as const, text: 'same-day session evidence' }],
       details: {},
@@ -878,6 +884,7 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
       details: {},
     }));
     const { facade, agent, emitTelemetry, correlation } = createFacade('reflection', ['repl.execute']);
+    facade.registerTool(makeTool('memory', memoryExecute), 'core');
     facade.registerTool(makeTool('session', sessionExecute), 'core');
     facade.registerTool(makeTool('analysis_workbench', workbenchExecute), 'core');
 
@@ -901,13 +908,23 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
     }, 'reflection', 'background', correlation, { intent: 'reflection' });
 
     const tools = agent.state.tools;
-    expect(tools.map(tool => tool.name)).toEqual(['session']);
-    await tools[0]?.execute('session-recall-1', {
+    expect(tools.map(tool => tool.name)).toEqual(['memory', 'session']);
+    await tools.find(tool => tool.name === 'memory')?.execute('memory-recall-1', {
       action: 'search',
       query: 'today',
     });
+    await tools.find(tool => tool.name === 'session')?.execute('session-recall-1', {
+      action: 'search',
+      query: 'today',
+    });
+    const deniedMutation = await tools.find(tool => tool.name === 'memory')?.execute(
+      'memory-write-1',
+      { action: 'write', text: 'do not write during reflection' },
+    );
+    expect(memoryExecute).toHaveBeenCalledOnce();
     expect(sessionExecute).toHaveBeenCalledOnce();
     expect(workbenchExecute).not.toHaveBeenCalled();
+    expect(deniedMutation).toMatchObject({ details: { isError: true } });
     expect(emitTelemetry).toHaveBeenCalledWith(
       'agent.tools.core_guardrail.skipped',
       expect.objectContaining({

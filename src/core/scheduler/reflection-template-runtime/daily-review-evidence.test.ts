@@ -179,6 +179,42 @@ describe('collectDailyReviewEvidence', () => {
     }));
   });
 
+  it('extracts the morning-generated previous-day summary as the preferred daily starter', async () => {
+    const morningSummary = 'Yesterday we finished the repair and left one concrete follow-up for today.';
+    const result = await collectDailyReviewEvidence({
+      nowMs: NOW_MS,
+      windowMs: WINDOW_MS,
+      scope: SCOPE,
+      sessionManager: {
+        getRecentMessages: () => [],
+        getConversationEvidenceWindow: () => ({
+          entries: [sessionEntry({
+            id: 20,
+            role: 'system',
+            timestamp: NOW_MS - 60 * 60 * 1000,
+            content: `[Temporal wake]\nCatch-up on where things left off: ${morningSummary}\nRuntime context note.`,
+            metadata: JSON.stringify({
+              sessionLane: {
+                schemaVersion: 1,
+                kind: 'system_note',
+                source: 'temporal_wakeup_morning',
+              },
+            }),
+          })],
+          saturated: false,
+        }),
+      },
+      episodicStore: { searchByTime: async () => [] },
+      memoryStore: {
+        listActiveMemories: async () => [],
+        listActiveMemoriesInWindow: async () => ({ memories: [], saturated: false }),
+      },
+    });
+
+    expect(result.morningSummary).toBe(morningSummary);
+    expect(result.provenanceRefs).toContain('morning_summary:discord:primary|entry:20');
+  });
+
   it('applies the canonical enforce-mode intake sink gate before session evidence reaches a reflection', async () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'daily-review-intake-gate-'));
     try {

@@ -1,8 +1,14 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import type {
+    AdminJournalStatusData,
+    AdminJournalStreamStatus,
+    AdminJournalTaskStatus,
     JournalPrivacyDisclosure,
-    JournalPrivacyStream,
+  } from '$lib/api/endpoints/values';
+  import {
+    getJournalStatus,
+    JOURNAL_PRIVACY_TARGETS,
   } from '$lib/api/endpoints/values';
   import JournalPrivacyBreakGlass from '$lib/components/JournalPrivacyBreakGlass.svelte';
   import BoundedList from '$lib/components/garden/BoundedList.svelte';
@@ -13,6 +19,10 @@
     ensureCompanionNameLoaded,
     getCompanionName,
   } from '$lib/stores/companion.svelte';
+  import {
+    getJournalDisclosure,
+    rememberJournalDisclosure,
+  } from '$lib/stores/journal-disclosure-session';
   import type {
     ReflectionDailyJournalEntry,
     ReflectionJournalEntry,
@@ -36,6 +46,16 @@
     disclosed: boolean;
   }
 
+  interface JournalStreamStatusCard {
+    label: string;
+    stream: AdminJournalStreamStatus;
+  }
+
+  interface JournalTaskStatusCard {
+    label: string;
+    task: AdminJournalTaskStatus;
+  }
+
   function emptyJournalState<T>(): JournalState<T> {
     return {
       entries: [],
@@ -43,10 +63,26 @@
     };
   }
 
-  let values = $state<JournalState<ValuesJournalEntry>>(emptyJournalState());
-  let metacognition = $state<JournalState<ReflectionMetacognitionJournalEntry>>(emptyJournalState());
-  let daily = $state<JournalState<ReflectionDailyJournalEntry>>(emptyJournalState());
-  let reflection = $state<JournalState<ReflectionJournalEntry>>(emptyJournalState());
+  function cachedJournalState<T>(entries: T[] | undefined): JournalState<T> {
+    return entries
+      ? { entries, disclosed: true }
+      : emptyJournalState<T>();
+  }
+
+  let values = $state<JournalState<ValuesJournalEntry>>(cachedJournalState(
+    getJournalDisclosure('values-journal')?.entries,
+  ));
+  let metacognition = $state<JournalState<ReflectionMetacognitionJournalEntry>>(cachedJournalState(
+    getJournalDisclosure('reflection-metacognition')?.entries,
+  ));
+  let daily = $state<JournalState<ReflectionDailyJournalEntry>>(cachedJournalState(
+    getJournalDisclosure('reflection-daily')?.entries,
+  ));
+  let reflection = $state<JournalState<ReflectionJournalEntry>>(cachedJournalState(
+    getJournalDisclosure('reflection-journal')?.entries,
+  ));
+  let journalStatus = $state<AdminJournalStatusData | null>(null);
+  let journalStatusError = $state('');
   let activeTab = $state<JournalTab>('values');
   let searchQuery = $state('');
   const companionName = $derived(getCompanionName());
@@ -115,12 +151,24 @@
   );
 
   const tabs = $derived([
-    { id: 'values', label: 'Values', count: values.entries.length },
-    { id: 'daily', label: 'Daily', count: daily.entries.length },
-    { id: 'reflection', label: 'Reflections', count: reflectionEntries.length },
-    { id: 'concerns', label: 'Concern routing', count: concernEntries.length },
-    { id: 'metacognition', label: 'Metacognition', count: metacognition.entries.length },
+    { id: 'values', label: 'Values', count: journalStatus?.streams.values.count ?? (values.disclosed ? values.entries.length : undefined) },
+    { id: 'daily', label: 'Daily', count: journalStatus?.streams.daily.count ?? (daily.disclosed ? daily.entries.length : undefined) },
+    { id: 'reflection', label: 'Reflections', count: journalStatus?.streams.reflection.count ?? (reflection.disclosed ? reflectionEntries.length : undefined) },
+    { id: 'concerns', label: 'Concern routing', count: journalStatus?.streams.concerns.count ?? (reflection.disclosed ? concernEntries.length : undefined) },
+    { id: 'metacognition', label: 'Metacognition', count: journalStatus?.streams.metacognition.count ?? (metacognition.disclosed ? metacognition.entries.length : undefined) },
   ]);
+
+  const streamStatusCards = $derived<JournalStreamStatusCard[]>(journalStatus ? [
+    { label: 'Values', stream: journalStatus.streams.values },
+    { label: 'Daily', stream: journalStatus.streams.daily },
+    { label: 'Reflections', stream: journalStatus.streams.reflection },
+    { label: 'Concerns', stream: journalStatus.streams.concerns },
+    { label: 'Metacognition', stream: journalStatus.streams.metacognition },
+  ] : []);
+  const taskStatusCards = $derived<JournalTaskStatusCard[]>(journalStatus ? [
+    { label: 'Daily review', task: journalStatus.tasks.daily },
+    { label: 'Weekly review', task: journalStatus.tasks.weekly },
+  ] : []);
 
   const activeCounts = $derived.by(() => {
     switch (activeTab) {
@@ -137,23 +185,17 @@
     }
   });
 
-  const activePrivacyTarget = $derived.by((): {
-    stream: JournalPrivacyStream;
-    label: string;
-  } => {
-    switch (activeTab) {
-      case 'values':
-        return { stream: 'values-journal', label: 'Values journal' };
-      case 'metacognition':
-        return { stream: 'reflection-metacognition', label: 'Metacognition journal' };
-      case 'daily':
-        return { stream: 'reflection-daily', label: 'Daily reflection journal' };
-      default:
-        return { stream: 'reflection-journal', label: 'Reflection journal' };
+  const lockedPrivacyTargets = $derived(JOURNAL_PRIVACY_TARGETS.filter(target => {
+    switch (target.stream) {
+      case 'values-journal': return !values.disclosed;
+      case 'reflection-metacognition': return !metacognition.disclosed;
+      case 'reflection-daily': return !daily.disclosed;
+      default: return !reflection.disclosed;
     }
-  });
+  }));
 
   function handleJournalDisclosure(disclosure: JournalPrivacyDisclosure): void {
+    rememberJournalDisclosure(disclosure);
     switch (disclosure.stream) {
       case 'values-journal':
         values = { entries: disclosure.entries, disclosed: true };
@@ -184,8 +226,26 @@
     return `${date.toLocaleDateString()} ${date.toLocaleTimeString()}`;
   }
 
+  function formatStatusDateTime(isoStr: string | null): string {
+    return isoStr ? formatDateTime(isoStr) : 'Never';
+  }
+
+  function formatHealth(value: string): string {
+    return value.replace(/_/g, ' ').replace(/^./, first => first.toUpperCase());
+  }
+
+  async function refreshJournalStatus(): Promise<void> {
+    try {
+      journalStatus = await getJournalStatus();
+      journalStatusError = '';
+    } catch (error) {
+      journalStatusError = error instanceof Error ? error.message : 'Journal activity status is unavailable';
+    }
+  }
+
   onMount(() => {
     void ensureCompanionNameLoaded();
+    void refreshJournalStatus();
   });
 </script>
 
@@ -245,13 +305,56 @@
     </div>
   </div>
 
-  {#key activePrivacyTarget.stream}
+  <section class="card-garden p-4 space-y-3" aria-labelledby="journal-activity-status">
+    <div class="flex flex-wrap items-baseline justify-between gap-2">
+      <h2 id="journal-activity-status" class="font-serif text-lg font-semibold text-shadow-900">Journal activity</h2>
+      <p class="text-xs text-shadow-600">Counts and run health stay visible while journal bodies are sealed.</p>
+    </div>
+    {#if journalStatus}
+      <div class="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+        {#each streamStatusCards as { label, stream } (label)}
+          <div class="rounded-lg border border-bark-200 bg-bark-50 p-3">
+            <p class="text-xs font-medium uppercase tracking-wide text-shadow-600">{label}</p>
+            {#if stream.available}
+              <p class="mt-1 text-lg font-semibold tabular-nums text-shadow-900">{stream.count}</p>
+              <p class="text-xs text-shadow-600">Latest: {formatStatusDateTime(stream.latestAt)}</p>
+            {:else}
+              <p class="mt-1 text-sm font-medium text-wilt-700">Unavailable</p>
+              <p class="text-xs text-shadow-600">Count not reported</p>
+            {/if}
+          </div>
+        {/each}
+      </div>
+      <div class="grid gap-2 sm:grid-cols-2">
+        {#each taskStatusCards as { label, task } (label)}
+          <div class="rounded-lg border p-3 {task.attentionRequired ? 'border-wilt-300 bg-wilt-50' : 'border-leaf-200 bg-leaf-50'}">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <p class="text-sm font-medium text-shadow-800">{label}</p>
+              <span class="rounded-full px-2 py-0.5 text-xs font-medium {task.attentionRequired ? 'bg-wilt-100 text-wilt-700' : 'bg-leaf-100 text-leaf-700'}">
+                {formatHealth(task.health)}
+              </span>
+            </div>
+            <p class="mt-1 text-xs text-shadow-600">Last run: {formatStatusDateTime(task.lastRunAt)}</p>
+          </div>
+        {/each}
+      </div>
+    {:else if journalStatusError}
+      <p class="text-sm text-wilt-700" role="alert">Journal activity status unavailable: {journalStatusError}</p>
+    {:else}
+      <p class="text-sm text-shadow-600">Loading journal counts and schedule health…</p>
+    {/if}
+  </section>
+
+  {#if lockedPrivacyTargets.length > 0}
     <JournalPrivacyBreakGlass
-      stream={activePrivacyTarget.stream}
-      streamLabel={activePrivacyTarget.label}
+      targets={lockedPrivacyTargets}
       onDisclosure={handleJournalDisclosure}
     />
-  {/key}
+  {:else}
+    <p class="rounded-lg border border-leaf-200 bg-leaf-50 px-4 py-3 text-sm text-leaf-700">
+      All journal views are unlocked for this browser session.
+    </p>
+  {/if}
 
   {#if activeTab === 'values'}
     {#if !values.disclosed}
@@ -288,8 +391,7 @@
     {/if}
   {:else if activeTab === 'metacognition'}
     <p class="text-xs text-shadow-600">
-      Every non-silent reflection writes one entry to both the daily journal and this metacognition log,
-      so their counts always match — these are the same reflections viewed as run and mutation records.
+      Metacognition records reflection runs and mutations separately from the daily journal.
     </p>
     {#if !metacognition.disclosed}
       <div class="garden-empty card-garden p-8 text-center">

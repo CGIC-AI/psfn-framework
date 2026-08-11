@@ -27,7 +27,7 @@ test('uses the operator-approved PR publication window', () => {
   assert.deepEqual(CHANGE_BUDGET.commit.lines, { target: 800, maximum: 2_500 });
 });
 
-test('accepts both endpoints of the mandatory publication window', () => {
+test('accepts both endpoints of the publication window', () => {
   for (const lines of [800, 2_500]) {
     const decision = evaluateChangeBudget({
       files: 25,
@@ -50,7 +50,7 @@ test('accepts both endpoints of the mandatory publication window', () => {
   );
 });
 
-test('rejects PRs below the mandatory 800-line publication floor', () => {
+test('requires an explicit variance below the 800-line publication floor', () => {
   const decision = evaluateChangeBudget({
     files: 1,
     lines: 799,
@@ -231,7 +231,7 @@ test('uses exception metadata from the authenticated current-branch PR', () => {
       return JSON.stringify({
         state: 'OPEN',
         labels: [{ name: 'change-budget:exception' }],
-        body: '## Change-budget exception\nBLOCKER: cannot be bundled before the broken publication gate is restored.',
+        body: '## Change-budget exception\nThis coherent gate repair should ship without padding.',
       });
     },
   });
@@ -272,7 +272,7 @@ test('accepts the documented explicit offline exception metadata', () => {
     env: {
       CHANGE_BUDGET_EXCEPTION: 'true',
       CHANGE_BUDGET_PR_BODY:
-        '## Change-budget exception\nBLOCKER: no compatible work can land until this gate fix lands.',
+        '## Change-budget exception\nThis coherent gate repair should ship without padding.',
     },
     runGh() {
       calledGitHub = true;
@@ -310,29 +310,21 @@ test('requires a written rationale for a maintainer exception', () => {
   const accepted = decideChangeBudget(stats, {
     exception: true,
     pullRequestBody:
-      '## Change-budget exception\nBLOCKER: no compatible train can be published until this fix lands.',
+      '## Change-budget exception\nThis coherent process update should ship without padding or delay.',
   });
   assert.equal(accepted.violations.length, 0);
   assert.equal(accepted.bypassed.length, 1);
 });
 
-test('allows an under-floor exception only for an explicit unbundleable blocker', () => {
+test('allows an under-floor exception with an explicit variance rationale', () => {
   const stats = { files: 1, lines: 799, commitCount: 1, commits: [] };
-  const generic = decideChangeBudget(stats, {
-    exception: true,
-    pullRequestBody: '## Change-budget exception\nSmall cleanup that is ready.',
-  });
-  assert.deepEqual(generic.violations, [
-    'under-800 PR exceptions require a "BLOCKER:" rationale explaining why the blocking change cannot be combined with compatible work',
-  ]);
-
-  const blocker = decideChangeBudget(stats, {
+  const decision = decideChangeBudget(stats, {
     exception: true,
     pullRequestBody:
-      '## Change-budget exception\nBLOCKER: required to restore publication, with no compatible work available to bundle.',
+      '## Change-budget exception\nSmall coherent cleanup that is ready to ship without filler.',
   });
-  assert.equal(blocker.violations.length, 0);
-  assert.deepEqual(blocker.bypassed, [
+  assert.equal(decision.violations.length, 0);
+  assert.deepEqual(decision.bypassed, [
     'PR has 799 changed lines; minimum is 800',
   ]);
 });

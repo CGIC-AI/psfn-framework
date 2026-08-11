@@ -1055,15 +1055,28 @@ test('Greptile requires an explicit paid-review label and never rescans pushes',
   assert.equal(config.triggerOnDrafts, false);
 });
 
-test('agent contracts keep one Beads block and no floating tool installers', () => {
+test('agent contracts enforce close-on-main and avoid floating tool installers', () => {
   const agents = readFileSync('AGENTS.md', 'utf8');
   const claude = readFileSync('CLAUDE.md', 'utf8');
+  const orchestration = readFileSync('docs/orchestration-process.md', 'utf8');
 
   assert.equal((agents.match(/<!-- BEGIN BEADS/g) ?? []).length, 1);
   assert.doesNotMatch(agents, /ultimate_bug_scanner\/main|npx -y fallow/);
   assert.doesNotMatch(claude, /ultimate_bug_scanner\/main|npx -y fallow/);
   assert.match(agents, /commit coherent checkpoints and push\s+every non-main work branch/);
   assert.match(agents, /Direct pushes to `main` are prohibited/);
+  assert.match(
+    agents,
+    /Close an implementation bead as soon as its implementation is present on\s+`main`/,
+  );
+  assert.match(agents, /create a new, explicitly scoped testing\s+or validation bead/);
+  assert.match(agents, /never reopen the delivered implementation bead/);
+  assert.match(
+    orchestration,
+    /An implementation bead's lifecycle ends when its implementation is present on\s+`main`/,
+  );
+  assert.match(orchestration, /create a new testing or validation bead before\s+closing/);
+  assert.match(orchestration, /Never reopen the delivered implementation bead/);
 });
 
 test('trusted PR label automation has the write scope required by the labels API', () => {

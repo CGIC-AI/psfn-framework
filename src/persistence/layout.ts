@@ -401,8 +401,8 @@ export function resolveSystemStateDir(systemDataDir: string): string {
 // attached to a site and are owned by operator/caretaker maintenance surfaces
 // (publication + bulk import), never authored by a companion directly. They live
 // under system-data so a single canonical copy is shared across companions
-// (multi-companion §4 W5: the "shared" data domain). One subtree per site keeps
-// publication and import idempotent and per-site isolated.
+// (docs/multi-companion.md, "Locations, presence, and the shared world"). One
+// subtree per site keeps publication and import idempotent and per-site isolated.
 const SHARED_WORLD_DIRNAME = 'shared-world';
 const SHARED_WORLD_WIKI_DIRNAME = 'wiki';
 const SHARED_WORLD_WIKI_SITES_DIRNAME = 'sites';

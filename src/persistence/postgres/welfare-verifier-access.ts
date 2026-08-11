@@ -101,8 +101,8 @@ export async function provisionWelfareVerifierLoginRole(
  * connects through its dedicated LOGIN role and proves `SELECT` on
  * `agent_background_work_jobs` in every fleet schema before honoring
  * `preemptionProtected`. Tenant membership alone cannot supply that privilege:
- * every fleet login role is NOINHERIT (docs/helm-upgrades.md tenancy cutover
- * gate 6), so the membership provisioning grants carries
+ * every fleet login role is NOINHERIT (the Postgres tenancy contract in
+ * docs/multi-companion.md), so the membership provisioning grants carries
  * `inherit_option = false` and a login role holds no privilege through it.
  * Without these direct grants the readiness probe fails closed and the
  * verifier degrades.

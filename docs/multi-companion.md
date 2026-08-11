@@ -547,10 +547,8 @@ notes but are not wired in this branch:
   updates). Today shared-world writes are operator-driven maintenance commands.
 - Cross-cluster companion communication and cross-cluster world sync (one world =
   one cluster).
-- A "management" capability tier acting on other companions' settings.
 - Cross-companion message composition/puppeteering, private-reasoning or
   transcript inspection, and cluster-wide autonomy controls. The shipped Garden
   surface is local, control-plane-only, and deliberately cannot become these.
-- Voice subsystem rewrite.
 - Additional bounded cluster-overview posture indicators, subject to the same
   authorization and privacy constraints as the current projection.

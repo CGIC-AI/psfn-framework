@@ -171,7 +171,8 @@ function normalizeSourceClass(value: unknown): WikiSourceClass {
  * tolerant (an out-of-band `shared_world:*` doc round-trips), but writing one
  * through this store is the world-info leak surface and is fail-closed rejected:
  * companions never author shared world knowledge directly — that is the deferred
- * caretaker layer's job (dedup + operator approval). See W5b / decision-log §8.
+ * caretaker layer's job (dedup + operator approval). The current boundary is
+ * documented in docs/memory.md and docs/multi-companion.md.
  */
 function assertPersonalScopeWrite(scope: WikiScope): void {
   if (!isPersonalScope(scope)) {

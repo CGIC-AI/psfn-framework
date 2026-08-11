@@ -81,6 +81,9 @@ The command performs these checks before it reports success:
   sanitization;
 - full-clone object sizes are measured before and after;
 - the post-rewrite marker activates bounded tracker-snapshot generations.
+- once that marker exists, public sanitization scans the tracked
+  `.beads/issues.jsonl` snapshot too, so a later export cannot silently restore
+  deployment-private values.
 
 Review `validation-report.json`, `pre-refs.tsv`, `post-refs.tsv`, and
 `CUTOVER_PLAN.md`. The bundle and raw tracker export contain private pre-rewrite

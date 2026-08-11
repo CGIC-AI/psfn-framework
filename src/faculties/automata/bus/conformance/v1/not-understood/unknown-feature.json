@@ -1,0 +1,18 @@
+{
+  "description": "A reader declines an event whose required semantics it does not implement, without inspecting the opaque body.",
+  "events": [
+    {
+      "schemaVersion": 1,
+      "eventId": "event-future-feature-1",
+      "companionId": "companion-a",
+      "sequence": 1,
+      "occurredAt": "2026-08-10T20:07:00.000Z",
+      "mustUnderstand": ["future-collective-consensus-v1"],
+      "context": {},
+      "type": "collective-consensus",
+      "body": {
+        "opaque": true
+      }
+    }
+  ]
+}

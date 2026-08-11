@@ -1,0 +1,54 @@
+{
+  "contractVersion": 1,
+  "sources": {
+    "developmentFork": "93ee245db060e9cdb9c9c32f6d31d76d0c5a491d",
+    "upstream": "7dba0e40a1ce4def8b1c4ac8670a94aa54f9116e"
+  },
+  "cases": [
+    {
+      "file": "accept/computed-finding.json",
+      "outcome": "accepted",
+      "proves": ["structured-context", "provenance-evidence", "separate-verification"]
+    },
+    {
+      "file": "reject/computed-without-evidence.json",
+      "outcome": "rejected",
+      "proves": ["mandatory-evidence"]
+    },
+    {
+      "file": "reject/relation-without-feature.json",
+      "outcome": "rejected",
+      "proves": ["must-understand-declaration"]
+    },
+    {
+      "file": "reject/stale-lineage-target.json",
+      "outcome": "rejected",
+      "proves": ["deterministic-lineage-end"]
+    },
+    {
+      "file": "reject/unknown-understood-field.json",
+      "outcome": "rejected",
+      "proves": ["unknown-understood-data-fails-closed"]
+    },
+    {
+      "file": "not-understood/unknown-feature.json",
+      "outcome": "not-understood",
+      "proves": ["unknown-feature-not-interpreted"]
+    },
+    {
+      "file": "not-understood/future-generation.json",
+      "outcome": "not-understood",
+      "proves": ["future-generation-not-interpreted"]
+    },
+    {
+      "file": "state/correction-chain.json",
+      "outcome": "accepted",
+      "proves": ["correction", "supersession", "replacement-materialization"]
+    },
+    {
+      "file": "state/retraction.json",
+      "outcome": "accepted",
+      "proves": ["retraction", "unrelated-current-finding"]
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+agentbus
+Copyright 2026 Federated Industrial Laboratories
+
+Licensed under the Apache License, Version 2.0. See the LICENSE file in this directory for the
+full text.
+
+PSFN's Automata Bus TypeScript contract, compatibility analysis, and language-neutral
+conformance cases adapt schema and reducer concepts from these Agent Bus revisions:
+
+- development fork 93ee245db060e9cdb9c9c32f6d31d76d0c5a491d
+- upstream 7dba0e40a1ce4def8b1c4ac8670a94aa54f9116e
+
+No Agent Bus JSONL runtime, Python implementation, viewer, model, voice, or dispatch component
+is included.

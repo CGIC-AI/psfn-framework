@@ -83,21 +83,77 @@ function presentsAliasAsCanonicalAction(
  * Narrow, auditable exceptions for text whose purpose is to record retired
  * names rather than instruct the model to call them.
  */
-function isDocumentedRetiredAliasContext(path: string, line: string): boolean {
+function instructsCallingAlias(line: string, alias: string): boolean {
+  const escaped = escapeRegExp(alias);
+  return new RegExp(
+    `\\b(?:use|call|invoke|run|execute|prefer|load|activate)\\b[^\\n]{0,100}(?<![A-Za-z0-9_])${escaped}(?![A-Za-z0-9_])`,
+    'iu',
+  ).test(line);
+}
+
+function isCogSecVocabularyContext(
+  alias: RetiredAliasAuthorityEntry,
+  line: string,
+): boolean {
+  if (alias.alias === 'memory_write') {
+    return /\b(?:prompt_assembly|wiki_write|tool_egress|quarantine-label-gated|memory formation|MINJA-style|sink classification)\b/u
+      .test(line)
+      || /^\s*\|\s*`memory_write`\s*\|\s*`src\/faculties\/memory\//u.test(line);
+  }
+  if (alias.alias === 'web_fetch') {
+    return /\b(?:public_contact|web_search|image_ocr|NO_CAPABILITY_REQUIREMENT|machine-carried source classes)\b/u
+      .test(line);
+  }
+  if (alias.alias === 'issue_create' || alias.alias === 'issue_ready' || alias.alias === 'issue_show') {
+    return /^\s*\|\s*`beads_database_(?:create|ready|show)`\s*\|/u.test(line)
+      && line.includes('Native `beads` tool');
+  }
+  return false;
+}
+
+function isDocumentedRetiredAliasContext(
+  path: string,
+  line: string,
+  alias: RetiredAliasAuthorityEntry,
+): boolean {
   if (path === 'docs/tool-surface.md') {
-    return /^\s*\|/u.test(line)
-      || line.includes('->')
-      || /^\s*- Primary actions:/u.test(line)
-      || /\b(?:retired|historical|legacy|formerly|no longer live|not model-facing|must not be model-facing|must not be used)\b/iu.test(line)
-      || /REPL-only.+(?:helper|tool-catalog)/iu.test(line)
-      || /OpenRouter.+server tool/iu.test(line);
+    const escapedAlias = escapeRegExp(alias.alias);
+    const escapedCanonicalName = escapeRegExp(alias.canonicalName);
+    const retirementTableRow = new RegExp(
+      `^\\s*\\|\\s*\`${escapedAlias}\`\\s*\\|\\s*\`${escapedCanonicalName}\`\\s*\\|`,
+      'u',
+    ).test(line);
+    const replacementMap = alias.replacementAction
+      ? new RegExp(
+          `^\\s*\`${escapedAlias}\`\\s*->\\s*\`${escapeRegExp(alias.replacementAction)}\``,
+          'u',
+        ).test(line)
+      : false;
+    const canonicalActionInventory = alias.replacementAction === alias.alias
+      && /^\s*- Primary actions:/u.test(line)
+      && line.includes(`\`${alias.alias}\``);
+    const mappedCanonicalAction = alias.replacementAction === alias.alias
+      && new RegExp(`^\\s*\`[^\`]+\`\\s*->\\s*\`${escapedAlias}\``, 'u').test(line);
+    const exactNamedContext = (alias.alias === 'shell_exec'
+        && /REPL-only.+(?:helper|tool-catalog)/iu.test(line))
+      || (alias.alias === 'web_fetch' && /OpenRouter.+server tool/iu.test(line));
+    const explicitRetirementContext = /\b(?:retired|historical|legacy|formerly|no longer live|not model-facing|must not be model-facing|must not be used)\b/iu
+      .test(line)
+      && !instructsCallingAlias(line, alias.alias);
+    return retirementTableRow
+      || replacementMap
+      || canonicalActionInventory
+      || mappedCanonicalAction
+      || exactNamedContext
+      || explicitRetirementContext;
   }
   if (path === 'docs/cognitive-security.md') {
-    return /^\s*\|/u.test(line)
-      || !/\b(?:use|call|invoke|run|execute|prefer|load|activate)\b/iu.test(line);
+    return isCogSecVocabularyContext(alias, line);
   }
   if (path === 'docs/PSFN_PROJECT_CHARTER.md') {
-    return /\b(?:retired|historical|legacy|not (?:a )?(?:separate )?model-facing tools?|must not remain callable)\b/iu.test(line);
+    return /\b(?:retired|historical|legacy|not (?:a )?(?:separate )?model-facing tools?|must not remain callable)\b/iu
+      .test(line)
+      && !instructsCallingAlias(line, alias.alias);
   }
   return false;
 }
@@ -111,10 +167,10 @@ export function scanModelFacingToolGuidanceEntries(
   for (const entry of entries) {
     const path = entry.path.replaceAll('\\', '/');
     for (const [lineIndex, lineText] of entry.text.split(/\r?\n/u).entries()) {
-      if (isDocumentedRetiredAliasContext(path, lineText)) continue;
       for (const alias of authority.values()) {
         if (!presentsAliasAsCallable(lineText, alias.alias)) continue;
         if (presentsAliasAsCanonicalAction(lineText, alias)) continue;
+        if (isDocumentedRetiredAliasContext(path, lineText, alias)) continue;
         violations.push({
           path,
           line: lineIndex + 1,

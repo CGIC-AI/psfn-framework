@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { EmbeddingProviderPort } from '../../shared/contracts/embedding-provider.js';
 import { normalizeTrustLevel } from '../../core/contacts/store/identity-utils.js';
-import { createContactSetTrustTool } from '../../core/contacts/tools.js';
+import { createContactTool } from '../../core/contacts/tools.js';
 import { INTAKE_FIREWALL_OFF_SELF_AUTHORED_MUTATION_RUNTIME } from '../../core/session/intake-sink-gating.js';
 import { MemoryRetriever } from '../../faculties/memory/retrieval.js';
 import type { MemoryStorePort } from '../../faculties/memory/memory-store-port.js';
@@ -434,10 +434,9 @@ describe('privacy red-team regression suite', () => {
       trustLevel: 'public',
       discordUserId: 'target-user-1',
     });
-    const trustTool = createContactSetTrustTool(
-      contactStore,
-      INTAKE_FIREWALL_OFF_SELF_AUTHORED_MUTATION_RUNTIME,
-    );
+    const trustTool = createContactTool(contactStore, {
+      intake: INTAKE_FIREWALL_OFF_SELF_AUTHORED_MUTATION_RUNTIME,
+    });
 
     const blockedAutonomousEscalation = await contactStore.setTrustLevel(
       target.id,
@@ -449,6 +448,7 @@ describe('privacy red-team regression suite', () => {
     expect((await contactStore.getById(target.id))?.trustLevel).toBe('public');
 
     const blockedDirectToolEscalation = await trustTool.execute('trust-attack-1', {
+      action: 'set_trust',
       contactId: target.id,
       trustLevel: 'trusted',
     });
@@ -457,6 +457,7 @@ describe('privacy red-team regression suite', () => {
     expect((await contactStore.getById(target.id))?.trustLevel).toBe('public');
 
     const preview = await trustTool.execute('trust-attack-2', {
+      action: 'set_trust',
       contactId: target.id,
       trustLevel: 'trusted',
       behaviorSignals: {
@@ -472,6 +473,7 @@ describe('privacy red-team regression suite', () => {
     expect((await contactStore.getById(target.id))?.trustLevel).toBe('public');
 
     const applied = await trustTool.execute('trust-attack-3', {
+      action: 'set_trust',
       contactId: target.id,
       trustLevel: 'trusted',
       behaviorSignals: {

@@ -280,6 +280,41 @@ describe('AdminAuditHistoryDataService', () => {
     });
   });
 
+  it.each(['AUTONOMOUS_TIER_REQUIRED', 'REQUIRES_HUMAN_APPROVAL'] as const)(
+    'maps gateway escalation class %s to a pending-approval audit decision',
+    async (decision) => {
+      const service = new AdminAuditHistoryDataService({
+        gardenStore: new GardenAuditHistoryJsonlStore(join(makeTempDir(), 'garden-audit-history.jsonl')),
+        gatewayReader: () => ({
+          entries: [{
+            id: 8,
+            timestamp: 1_700_000_000_200,
+            method: 'fs.write',
+            decision,
+            paramsJson: '{"path":"/outside"}',
+            durationMs: null,
+            error: null,
+          }],
+          total: 1,
+          limit: 2_000,
+          offset: 0,
+        }),
+        chargeLedger: null,
+        scopeId: 'companion-a',
+        opaqueIdKeyring: TEST_OPAQUE_ID_KEYRING,
+        now: () => 1_700_000_000_500,
+      });
+
+      const data = await service.getAuditHistory({ source: 'gateway', timeRange: 'all' });
+
+      expect(data.entries).toHaveLength(1);
+      expect(data.entries[0]).toMatchObject({
+        actionType: 'gateway_policy',
+        decision: 'needs_approval',
+      });
+    },
+  );
+
   it('filters historical audit rows by source, action type, decision, and text', async () => {
     const dir = makeTempDir();
     const service = new AdminAuditHistoryDataService({

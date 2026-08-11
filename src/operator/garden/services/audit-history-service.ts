@@ -621,7 +621,8 @@ function fromGatewayDecision(decision: AuditEntry['decision']): AdminAuditDecisi
   switch (decision) {
     case 'ALLOW':
       return 'allowed';
-    case 'NEEDS_APPROVAL':
+    case 'AUTONOMOUS_TIER_REQUIRED':
+    case 'REQUIRES_HUMAN_APPROVAL':
       return 'needs_approval';
     case 'DENY':
       return 'denied';

@@ -128,6 +128,17 @@ Rules:
   `helm-ops`, `agent-tooling`, `metacog`, `emotion`, `channels`, `cogsec`,
   `persistence`, `voice`, `world`, `docs`, `fleet-auth`, `companion-ui`, `icp`,
   `shards`, `prompts`, and `testing`.
+- Close an implementation bead as soon as its implementation is present on
+  `main`. Cite the main commit or merged PR in the close reason. Manual, live,
+  deployment, regression, release, or other acceptance testing is not a reason
+  to keep a delivered implementation bead or epic open.
+- When testing remains after delivery, create a new, explicitly scoped testing
+  or validation bead before closing the implementation bead. Link it with
+  `discovered-from:<implementation-id>` and give it its own environment,
+  evidence, and pass/fail acceptance criteria. A failure discovered there
+  creates a new bug bead; never reopen the delivered implementation bead.
+- Close an implementation epic when its implementation children are on `main`.
+  Do not use an implementation epic as a long-lived umbrella for testing beads.
 - The local shared Dolt server is authoritative for this checkout. Commit local
   bead changes, but do not run `bd dolt push` unless the operator explicitly asks;
   the configured origin may be stale or misleading.
@@ -361,8 +372,10 @@ Before ending tracked implementation work:
 2. Record branch, exact remote SHA, validation, and blocker/next action on the bead.
 3. Run the appropriate quality gates.
 4. Publish or park remotely; leave nothing only in a worktree.
-5. Close implementation beads only after delivery to `main` and required checks,
-   or after an explicitly authorized direct-main hotfix with equivalent evidence.
+5. Once delivery reaches `main`, close every delivered implementation bead and
+   implementation epic immediately with the main commit evidence. Move any
+   remaining testing into a new testing/validation bead; do not delay closure or
+   reopen the implementation bead for later failures.
 6. Commit pending Beads state with `bd dolt commit --json`.
 7. Report tests, remaining risks, open beads, and exact delivered head.
 

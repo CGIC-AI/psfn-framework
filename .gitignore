@@ -120,7 +120,6 @@ admin-ui/.svelte-kit/
 /.codex/
 /.cursor/
 /.gemini/
-/.githooks/
 /CLAUDE.md
 /GEMINI.md
 /.github/copilot-instructions.md

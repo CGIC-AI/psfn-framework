@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { execSync } from 'node:child_process';
+import { execFileSync, execSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 
@@ -38,9 +38,6 @@ const FORBIDDEN_PATH_RULES = [
 ];
 
 const TEXT_RULES = [
-  { name: 'private-operator-identity', regex: /\b(?:Ada|MrDragonFox)\b/gi },
-  { name: 'private-companion-identity', regex: /\b(?:Artemis|Artie|Purrsephone)\b/gi },
-  { name: 'private-device-identity', regex: /\bwaveshare-bedroom\b/gi },
   { name: 'token-telegram', regex: /\b\d{8,}:[A-Za-z0-9_-]{20,}\b/g },
   { name: 'token-openai-like', regex: /\bsk-[A-Za-z0-9]{20,}\b/g },
   { name: 'token-github-pat', regex: /\bghp_[A-Za-z0-9]{20,}\b/g },
@@ -68,13 +65,36 @@ function toPosixRelativePath(maybePath) {
 
 function resolveLocalBlocklistPath() {
   const configured = process.env.PUBLIC_SANITIZE_LOCAL_BLOCKLIST?.trim();
-  if (!configured) return DEFAULT_LOCAL_BLOCKLIST_PATH;
-  return path.isAbsolute(configured) ? configured : path.resolve(configured);
+  if (configured) return path.isAbsolute(configured) ? configured : path.resolve(configured);
+  let repositoryConfigured = '';
+  try {
+    repositoryConfigured = execFileSync('git', ['config', '--get', 'publicSanitize.localBlocklist'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+  } catch (error) {
+    if (!error || typeof error !== 'object' || !('status' in error) || error.status !== 1) {
+      throw error;
+    }
+    // Git status 1 is the documented no-value result and the normal public-CI case.
+  }
+  if (!repositoryConfigured) return DEFAULT_LOCAL_BLOCKLIST_PATH;
+  return path.isAbsolute(repositoryConfigured)
+    ? repositoryConfigured
+    : path.resolve(repositoryConfigured);
 }
 
-export function loadLocalBlocklist() {
+export function loadLocalBlocklist({
+  required = process.env.PUBLIC_SANITIZE_REQUIRE_LOCAL_BLOCKLIST === '1',
+} = {}) {
   const localPath = resolveLocalBlocklistPath();
   if (!existsSync(localPath)) {
+    if (required) {
+      throw new Error(
+        'Required local privacy blocklist is missing. Set PUBLIC_SANITIZE_LOCAL_BLOCKLIST '
+        + 'to an external file or create the ignored workspace/sanitize/local-blocklist.json.',
+      );
+    }
     return {
       localPath,
       forbiddenPathRegex: [],
@@ -286,16 +306,16 @@ function main() {
     if (result.violations.length > 0) {
       console.error('Public-sanitize check failed. Violations found:');
       for (const violation of result.violations) {
-        console.error(`- ${violation.file}:${violation.line} [${violation.rule}] ${violation.snippet}`);
+        console.error(`- ${violation.file}:${violation.line} [${violation.rule}]`);
       }
       process.exit(1);
     }
 
     console.log('Public-sanitize check passed. No blocked patterns found.');
     if (result.localBlocklist.loaded) {
-      console.log(`Local blocklist loaded from ${result.localBlocklist.localPath}`);
+      console.log('Local privacy blocklist loaded.');
     } else {
-      console.log(`No local blocklist found at ${result.localBlocklist.localPath} (generic checks only).`);
+      console.log('No local privacy blocklist configured (generic checks only).');
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

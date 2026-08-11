@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { fromAny } from '@total-typescript/shoehorn';
+import { Type } from '@sinclair/typebox';
 import { EventEmitter } from 'node:events';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -7,6 +8,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { JSONRPCClient, JSONRPCServer, JSONRPCServerAndClient } from 'json-rpc-2.0';
 import type { Context } from '@earendil-works/pi-ai';
+import type { AgentTool, AssistantMessage } from '../../boundary/pi-agent/index.js';
 import type { CanonicalModelRegistry, CompletionPurpose, ModelRegistryEntry, ModelSlot } from '../../shared/contracts/runtime.js';
 import {
   deriveChildIcpConversationCostCorrelation,
@@ -33,7 +35,8 @@ const mocks = vi.hoisted(() => ({
   getEnvApiKey: vi.fn(),
 }));
 
-vi.mock('@earendil-works/pi-ai', () => ({
+vi.mock('@earendil-works/pi-ai', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@earendil-works/pi-ai')>()),
   getModel: mocks.getModel,
   getModels: mocks.getModels,
   getProviders: mocks.getProviders,
@@ -96,6 +99,8 @@ import {
 } from '../../shared/resilience/circuit-breaker.js';
 import { COMPANION_PRIVATE_BACKGROUND_TELEMETRY } from '../../shared/telemetry/model-usage.js';
 import { createSubstrateStreamFn, resolveModel } from '../../core/agent/stream-adapter.js';
+import { executeToolCallsWithScheduler } from '../../core/agent/tool-call-scheduler.js';
+import type { WirableTool } from '../../core/agent/tool-wiring-validator.js';
 import { GatewayClient } from '../../boundary/gateway/client.js';
 import { registerLLMMethods } from '../../boundary/gateway/methods/llm.js';
 import type { ModelUsageEventInput } from '../../shared/telemetry/model-usage.js';
@@ -1649,6 +1654,79 @@ describe('LLMClient empty-tool-args completion retry (mihm)', () => {
     };
   }
 
+  function literalEmptyArgumentDelta() {
+    return {
+      type: 'toolcall_delta',
+      contentIndex: 0,
+      delta: '{}',
+      partial: { content: [] },
+    };
+  }
+
+  function completeWithToolCall(name: string, args: Record<string, unknown>) {
+    return {
+      role: 'assistant',
+      content: [{ type: 'toolCall', id: `call-${name}`, name, arguments: args }],
+      api: 'openai-completions',
+      provider: 'openrouter',
+      model: 'z-ai/glm-5',
+      usage: { input: 17, output: 9 },
+      stopReason: 'toolUse',
+      timestamp: 0,
+    };
+  }
+
+  function makeRequiredJournalTool(execute: AgentTool['execute']): AgentTool {
+    const tool: AgentTool = {
+      name: 'journal',
+      label: 'journal',
+      description: 'journal tool',
+      parameters: Type.Object({ action: Type.String() }),
+      execute,
+    };
+    (tool as WirableTool).wiringMeta = {
+      concurrency: {
+        class: 'exclusive',
+        exclusivityKeyPolicy: 'static_key',
+        exclusivityKey: 'core:journal',
+        interruptibility: 'cooperative',
+        eligibility: { foreground: true, background: true },
+      },
+    };
+    return tool;
+  }
+
+  function asDispatcherMessage(response: Awaited<ReturnType<LLMClient['complete']>>): AssistantMessage {
+    return fromAny({
+      role: 'assistant',
+      content: response.toolCalls.map(call => ({
+        type: 'toolCall',
+        id: call.id,
+        name: call.name,
+        arguments: call.input,
+      })),
+      api: 'openai-completions',
+      provider: 'openrouter',
+      model: response.model,
+      usage: { input: 17, output: 9, cacheRead: 0, cacheWrite: 0, totalTokens: 26 },
+      stopReason: 'toolUse',
+      timestamp: 0,
+    });
+  }
+
+  async function dispatchResponse(
+    response: Awaited<ReturnType<LLMClient['complete']>>,
+    tool: AgentTool,
+  ) {
+    return await executeToolCallsWithScheduler(
+      [tool],
+      asDispatcherMessage(response),
+      undefined,
+      { stream: { push: () => undefined } },
+      { maxParallelToolCalls: 1 },
+    );
+  }
+
   beforeEach(() => {
     mocks.getModel.mockReset();
     mocks.getModels.mockReset();
@@ -1688,9 +1766,17 @@ describe('LLMClient empty-tool-args completion retry (mihm)', () => {
   it('retries and returns the recovered result when a later attempt yields valid args', async () => {
     const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
     const client = new LLMClient(makeConfig(), { usageRecorder });
+    const execute = vi.fn(async () => ({
+      content: [{ type: 'text' as const, text: 'listed' }],
+      details: {},
+    }));
+    const journal = makeRequiredJournalTool(execute);
 
     mocks.streamSimple
-      .mockImplementationOnce(streamYielding(doneWithToolCall('journal', {})))
+      .mockImplementationOnce(streamYielding(
+        literalEmptyArgumentDelta(),
+        doneWithToolCall('journal', {}),
+      ))
       .mockImplementation(streamYielding(doneWithToolCall('journal', { action: 'list' })));
 
     const response = await client.stream({
@@ -1698,27 +1784,51 @@ describe('LLMClient empty-tool-args completion retry (mihm)', () => {
       messages: [{ role: 'user', content: 'journal please' }],
       tools: [requiredActionTool],
     });
+    const dispatch = await dispatchResponse(response, journal);
 
     expect(mocks.streamSimple).toHaveBeenCalledTimes(2);
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(execute).toHaveBeenCalledWith(
+      'call-journal',
+      { action: 'list' },
+      undefined,
+      expect.any(Function),
+    );
+    expect(dispatch.toolResults[0]).toMatchObject({ isError: false });
     expect(response.toolCalls).toEqual([
       { id: 'call-journal', name: 'journal', input: { action: 'list' } },
     ]);
     expect(usageRecorder.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({
       metadata: expect.objectContaining({ emptyArgsRetries: 1 }),
     }));
+    expect(usageRecorder.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({
+      metadata: expect.objectContaining({
+        emptyToolArgumentProvenance: 'provider_emitted_empty',
+        toolArgumentFragmentBytes: 2,
+      }),
+    }));
   });
 
   it('fails closed after exhausting retries: returns the corrupt-empty response as-is', async () => {
     const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
     const client = new LLMClient(makeConfig(), { usageRecorder });
+    const execute = vi.fn(async () => ({
+      content: [{ type: 'text' as const, text: 'must not run' }],
+      details: {},
+    }));
+    const journal = makeRequiredJournalTool(execute);
 
-    mocks.streamSimple.mockImplementation(streamYielding(doneWithToolCall('journal', {})));
+    mocks.streamSimple.mockImplementation(streamYielding(
+      literalEmptyArgumentDelta(),
+      doneWithToolCall('journal', {}),
+    ));
 
     const response = await client.stream({
       systemPrompt: 'System',
       messages: [{ role: 'user', content: 'journal please' }],
       tools: [requiredActionTool],
     });
+    const dispatch = await dispatchResponse(response, journal);
 
     // 1 initial attempt + 2 bounded retries, then the corrupt tool call is returned intact
     // so downstream AJV validation surfaces the error (never fabricated/dropped/defaulted).
@@ -1726,8 +1836,82 @@ describe('LLMClient empty-tool-args completion retry (mihm)', () => {
     expect(response.toolCalls).toEqual([
       { id: 'call-journal', name: 'journal', input: {} },
     ]);
+    expect(execute).not.toHaveBeenCalled();
+    expect(dispatch.toolResults[0]).toMatchObject({ isError: true });
     expect(usageRecorder.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({
-      metadata: expect.objectContaining({ emptyArgsRetries: 2 }),
+      metadata: expect.objectContaining({
+        emptyArgsRetries: 2,
+        emptyToolArgumentProvenance: 'provider_emitted_empty',
+        toolArgumentFragmentBytes: 2,
+      }),
+    }));
+  });
+
+  it('recovers a complete() literal-empty required call before the dispatcher executes it', async () => {
+    const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
+    const client = new LLMClient(makeConfig({ retryMaxAttempts: 0 }), { usageRecorder });
+    const execute = vi.fn(async () => ({
+      content: [{ type: 'text' as const, text: 'listed' }],
+      details: {},
+    }));
+    const journal = makeRequiredJournalTool(execute);
+    mocks.completeSimple
+      .mockResolvedValueOnce(completeWithToolCall('journal', {}))
+      .mockResolvedValueOnce(completeWithToolCall('journal', { action: 'list' }));
+
+    const response = await client.complete({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'journal please' }],
+      tools: [requiredActionTool],
+    }, 'background');
+    const dispatch = await dispatchResponse(response, journal);
+
+    expect(mocks.completeSimple).toHaveBeenCalledTimes(2);
+    expect(dispatch.toolResults[0]).toMatchObject({ isError: false });
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(execute).toHaveBeenCalledWith(
+      'call-journal',
+      { action: 'list' },
+      undefined,
+      expect.any(Function),
+    );
+    expect(usageRecorder.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({
+      metadata: expect.objectContaining({
+        emptyArgsRetries: 0,
+        emptyToolArgumentProvenance: 'provider_emitted_empty',
+        toolArgumentFragmentBytes: 0,
+      }),
+    }));
+    expect(usageRecorder.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({
+      metadata: expect.objectContaining({ emptyArgsRetries: 1 }),
+    }));
+  });
+
+  it('keeps an exhausted complete() literal-empty required call out of tool execution', async () => {
+    const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
+    const client = new LLMClient(makeConfig({ retryMaxAttempts: 0 }), { usageRecorder });
+    const execute = vi.fn(async () => ({
+      content: [{ type: 'text' as const, text: 'must not run' }],
+      details: {},
+    }));
+    const journal = makeRequiredJournalTool(execute);
+    mocks.completeSimple.mockResolvedValue(completeWithToolCall('journal', {}));
+
+    const response = await client.complete({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'journal please' }],
+      tools: [requiredActionTool],
+    }, 'background');
+    const dispatch = await dispatchResponse(response, journal);
+
+    expect(mocks.completeSimple).toHaveBeenCalledTimes(3);
+    expect(execute).not.toHaveBeenCalled();
+    expect(dispatch.toolResults[0]).toMatchObject({ isError: true });
+    expect(usageRecorder.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({
+      metadata: expect.objectContaining({
+        emptyArgsRetries: 2,
+        emptyToolArgumentProvenance: 'provider_emitted_empty',
+      }),
     }));
   });
 

@@ -128,6 +128,52 @@ export function shouldStopContainerBetweenFiles(
 const READY_RETRY_LIMIT = 120;
 const READY_RETRY_DELAY_MS = 500;
 const MAX_DATABASES_FOR_IN_PLACE_RESET = 16;
+
+export interface PostgresTestCleanupPlan {
+  action: 'reset' | 'recycle' | 'quarantine';
+  releaseLease: boolean;
+}
+
+type PostgresTestHarnessQuarantineReason =
+  | 'client_backend_drain_failed'
+  | 'database_reset_failed'
+  | 'admin_pool_close_failed'
+  | 'container_recycle_failed'
+  | 'container_stop_failed';
+
+export function formatPostgresTestHarnessQuarantineDiagnostic(
+  containerName: string,
+  reason: PostgresTestHarnessQuarantineReason = 'client_backend_drain_failed',
+): string {
+  const cleanupState = reason === 'client_backend_drain_failed'
+    ? 'reset/recycle/stop were withheld'
+    : 'further cleanup was withheld after the failure';
+  return `Postgres test harness lifecycle=quarantined reason=${reason} `
+    + `${reason === 'client_backend_drain_failed' ? 'possible_cause=suite_cancellation_or_connection_leak ' : ''}`
+    + `container=${containerName} `
+    + `cleanup=deferred_until_worker_exit; ${cleanupState} and the lease was retained. `
+    + 'A later worker may reap the stale lease and reset only after this '
+    + 'worker exits.';
+}
+
+/**
+ * A harness lease is safe to hand to another test file only after every
+ * client backend has drained. Vitest can enter afterAll while an async test is
+ * being cancelled by a fail-fast run; force-dropping its database then sends
+ * 57P01 to the still-live client and misattributes teardown damage to the test.
+ */
+export function resolvePostgresTestCleanupPlan(input: {
+  clientBackendsDrained: boolean;
+  databaseCount: number;
+}): PostgresTestCleanupPlan {
+  if (!input.clientBackendsDrained) {
+    return { action: 'quarantine', releaseLease: false };
+  }
+  return input.databaseCount > MAX_DATABASES_FOR_IN_PLACE_RESET
+    ? { action: 'recycle', releaseLease: true }
+    : { action: 'reset', releaseLease: true };
+}
+
 /**
  * Before resetting a worker's databases, wait for every test-owned client
  * backend to disconnect. Properly-ended pools cost zero wait; a leaked pool closes its
@@ -198,6 +244,13 @@ interface PostgresTestHarnessLease {
   slot: number;
 }
 
+interface PostgresTestHarnessLeaseBoundary {
+  isOwnerRunning(pid: number): boolean;
+  lockBasePath: string;
+  maxConcurrentHarnesses: number;
+  ownerPid: number;
+}
+
 function runDockerCommand(args: string[]): DockerCommandResult {
   const result = spawnSync('docker', args, { encoding: 'utf8' });
   return {
@@ -257,12 +310,19 @@ function isProcessRunning(pid: number): boolean {
   }
 }
 
-async function acquirePostgresTestHarnessLease(): Promise<PostgresTestHarnessLease> {
+export async function acquirePostgresTestHarnessLease(
+  boundary: PostgresTestHarnessLeaseBoundary = {
+    isOwnerRunning: isProcessRunning,
+    lockBasePath: POSTGRES_TEST_RUNTIME.lockBasePath,
+    maxConcurrentHarnesses: POSTGRES_TEST_RUNTIME.maxConcurrentHarnesses,
+    ownerPid: process.pid,
+  },
+): Promise<PostgresTestHarnessLease> {
   for (;;) {
-    for (let slot = 0; slot < POSTGRES_TEST_RUNTIME.maxConcurrentHarnesses; slot += 1) {
-      const lockPath = `${POSTGRES_TEST_RUNTIME.lockBasePath}.${slot}.lock`;
+    for (let slot = 0; slot < boundary.maxConcurrentHarnesses; slot += 1) {
+      const lockPath = `${boundary.lockBasePath}.${slot}.lock`;
       const owner: PostgresTestLockOwner = {
-        pid: process.pid,
+        pid: boundary.ownerPid,
         token: randomUUID(),
       };
       try {
@@ -309,7 +369,7 @@ async function acquirePostgresTestHarnessLease(): Promise<PostgresTestHarnessLea
         throw error;
       }
       if (!existingOwner) continue;
-      if (!isProcessRunning(existingOwner.pid)) {
+      if (!boundary.isOwnerRunning(existingOwner.pid)) {
         try {
           unlinkSync(lockPath);
         } catch (error) {
@@ -738,38 +798,53 @@ export async function startPostgresTestHarness(options: PostgresTestHarnessOptio
         // `initdb`. See shouldStopContainerBetweenFiles for why stopping is
         // wrong here and how to opt back into it.
         const cleanupErrors: Error[] = [];
-        let recycleContainer = false;
+        let cleanupPlan: PostgresTestCleanupPlan = {
+          action: 'quarantine',
+          releaseLease: false,
+        };
+        let quarantineReason: PostgresTestHarnessQuarantineReason = 'client_backend_drain_failed';
         try {
           const testDatabases = await listTestDatabases(activeAdminPool);
-          recycleContainer = testDatabases.size > MAX_DATABASES_FOR_IN_PLACE_RESET;
           await waitForClientBackendsToDrain(activeAdminPool, testDatabases);
+          cleanupPlan = resolvePostgresTestCleanupPlan({
+            clientBackendsDrained: true,
+            databaseCount: testDatabases.size,
+          });
         } catch (error) {
           cleanupErrors.push(error instanceof Error ? error : new Error(String(error)));
         }
-        if (!recycleContainer) {
+        if (cleanupPlan.action === 'reset') {
           try {
             await resetWorkerPostgres(activeAdminPool);
           } catch (error) {
             cleanupErrors.push(error instanceof Error ? error : new Error(String(error)));
+            cleanupPlan = { action: 'quarantine', releaseLease: false };
+            quarantineReason = 'database_reset_failed';
           }
         }
         try {
           await activeAdminPool.end();
         } catch (error) {
           cleanupErrors.push(error instanceof Error ? error : new Error(String(error)));
+          cleanupPlan = { action: 'quarantine', releaseLease: false };
+          quarantineReason = 'admin_pool_close_failed';
         }
-        if (recycleContainer) {
+        if (cleanupPlan.action === 'recycle') {
           try {
             recyclePersistentPostgresContainer(containerName, image);
           } catch (error) {
             cleanupErrors.push(error instanceof Error ? error : new Error(String(error)));
+            cleanupPlan = { action: 'quarantine', releaseLease: false };
+            quarantineReason = 'container_recycle_failed';
           }
         }
-        if (shouldStopContainerBetweenFiles()) {
+        if (cleanupPlan.action !== 'quarantine' && shouldStopContainerBetweenFiles()) {
           try {
             stopPersistentPostgresContainer(containerName, image);
           } catch (error) {
             cleanupErrors.push(error instanceof Error ? error : new Error(String(error)));
+            cleanupPlan = { action: 'quarantine', releaseLease: false };
+            quarantineReason = 'container_stop_failed';
           }
         }
         try {
@@ -777,10 +852,16 @@ export async function startPostgresTestHarness(options: PostgresTestHarnessOptio
         } catch (error) {
           cleanupErrors.push(error instanceof Error ? error : new Error(String(error)));
         }
-        try {
-          lease.release();
-        } catch (error) {
-          cleanupErrors.push(error instanceof Error ? error : new Error(String(error)));
+        if (cleanupPlan.releaseLease) {
+          try {
+            lease.release();
+          } catch (error) {
+            cleanupErrors.push(error instanceof Error ? error : new Error(String(error)));
+          }
+        } else {
+          cleanupErrors.push(new Error(
+            formatPostgresTestHarnessQuarantineDiagnostic(containerName, quarantineReason),
+          ));
         }
         if (cleanupErrors.length > 1) {
           throw new AggregateError(cleanupErrors, 'Postgres test harness cleanup failed');

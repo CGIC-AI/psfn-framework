@@ -6,9 +6,12 @@ This is the repository map and operating contract for coding agents. Use it with
 the current code, not instead of it. Current operator instructions win; runtime
 and configuration contracts win when prose has drifted.
 
-Product operation guidance lives in [`docs/operations.md`](./docs/operations.md).
-Operator-specific deployment configuration and runbooks are intentionally kept
-outside this public repository.
+Load detailed workflow documents only when the task needs them:
+
+- Multi-bead or multi-PR implementation wave: [`docs/orchestration-process.md`](./docs/orchestration-process.md)
+- Portable gate/reviewer setup: [`docs/internal-review-workflow.md`](./docs/internal-review-workflow.md)
+- High-risk review practices: [`docs/adversarial-review-and-bugfixing-practices.md`](./docs/adversarial-review-and-bugfixing-practices.md)
+- Live operations: [`docs/operations.md`](./docs/operations.md)
 
 ## Implementation first: process must earn its cost
 

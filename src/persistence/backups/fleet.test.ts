@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describeStartupOwnerFileChecks } from '../../system/config/startup-owner-files.js';
 import {
   FLEET_BACKUP_MANIFEST_NAME,
   FLEET_CLUSTER_DIR_NAME,
@@ -367,6 +368,18 @@ function writeSystemOwnerFiles(systemDataDir: string): void {
   writeFileSync(join(systemDataDir, 'channels.json'), JSON.stringify({
     discord: { heartbeatChannelId: 'heartbeat' },
   }), 'utf-8');
+  writeFileSync(join(systemDataDir, 'companions.json'), TEST_COMPANIONS_BYTES, 'utf-8');
+  for (const descriptor of describeStartupOwnerFileChecks()) {
+    if (descriptor.scope !== 'system'
+      || descriptor.optionalWhenMissing
+      || existsSync(join(systemDataDir, descriptor.ownerFileName))) {
+      continue;
+    }
+    writeFileSync(
+      join(systemDataDir, descriptor.ownerFileName),
+      readFileSync(join(process.cwd(), 'config', descriptor.seedFileName)),
+    );
+  }
 }
 
 function writeTestHelmChart(root: string): KubernetesHelmBackupConfig {
@@ -437,6 +450,31 @@ function makeSharedWorkspace(root: string): string {
 
 const COMPANION_A = '11111111-1111-4111-8111-111111111111';
 const COMPANION_B = '22222222-2222-4222-8222-222222222222';
+
+const TEST_COMPANIONS_BYTES = `${JSON.stringify({
+  postgres: {
+    sharedMigrationRole: 'shared_schema_migration',
+    sharedMigrationDatabaseUrlRef: { kind: 'env', envName: 'SHARED_SCHEMA_MIGRATION_DATABASE_URL' },
+  },
+  companions: [
+    {
+      companionId: COMPANION_A,
+      companionDataDir: 'companions/alpha',
+      characterCardPath: 'companions/alpha/character-card.json',
+      postgresSchema: 'companion_alpha',
+      postgresRole: 'companion_alpha_runtime',
+      postgresDatabaseUrlRef: { kind: 'env', envName: 'COMPANION_ALPHA_DATABASE_URL' },
+    },
+    {
+      companionId: COMPANION_B,
+      companionDataDir: 'companions/beta',
+      characterCardPath: 'companions/beta/character-card.json',
+      postgresSchema: 'companion_beta',
+      postgresRole: 'companion_beta_runtime',
+      postgresDatabaseUrlRef: { kind: 'env', envName: 'COMPANION_BETA_DATABASE_URL' },
+    },
+  ],
+}, null, 2)}\n`;
 
 async function createPerCompanionTestBackup(root: string) {
   const systemDataDir = join(root, 'system-data');
@@ -518,6 +556,8 @@ describe('runFleetBackupCycle', () => {
     const clusterDir = join(backupRootDir, clusterArtifact!);
     expect(existsSync(join(clusterDir, 'database', 'psfn.shared.dump'))).toBe(true);
     expect(existsSync(join(clusterDir, 'system-config', 'settings.json'))).toBe(true);
+    expect(readFileSync(join(clusterDir, 'system-config', 'companions.json'), 'utf8'))
+      .toBe(TEST_COMPANIONS_BYTES);
     expect(existsSync(join(clusterDir, KUBERNETES_HELM_RECOVERY_MANIFEST_NAME))).toBe(true);
     expect(existsSync(join(clusterDir, 'companion-tree'))).toBe(false);
     expect(existsSync(join(clusterDir, 'workspace-tree', 'artifacts', 'world.md'))).toBe(true);
@@ -580,6 +620,8 @@ describe('runFleetBackupCycle', () => {
     expect(existsSync(join(groupDir, 'companion-tree', COMPANION_A, 'vault', 'note.md'))).toBe(true);
     expect(existsSync(join(groupDir, 'companion-tree', COMPANION_B, 'vault', 'note.md'))).toBe(true);
     expect(existsSync(join(groupDir, 'system-config', 'settings.json'))).toBe(true);
+    expect(readFileSync(join(groupDir, 'system-config', 'companions.json'), 'utf8'))
+      .toBe(TEST_COMPANIONS_BYTES);
     expect(existsSync(join(groupDir, 'workspace-tree', 'personal', COMPANION_A, 'journal', 'personal.md'))).toBe(true);
     expect(existsSync(join(groupDir, 'workspace-tree', 'shared', 'artifacts', 'world.md'))).toBe(true);
     expect(existsSync(join(groupDir, KUBERNETES_HELM_RECOVERY_MANIFEST_NAME))).toBe(true);
@@ -759,6 +801,8 @@ describe('runFleetBackupCycle', () => {
       },
     });
     expect(existsSync(join(restoredSystemDataDir, 'settings.json'))).toBe(true);
+    expect(readFileSync(join(restoredSystemDataDir, 'companions.json'), 'utf8'))
+      .toBe(TEST_COMPANIONS_BYTES);
     expect(readFileSync(join(restoredSharedWorkspace, 'artifacts/world.md'), 'utf8')).toBe('shared world\n');
     expect(existsSync(join(restoredSharedWorkspace, 'personal'))).toBe(false);
 
@@ -1274,5 +1318,7 @@ describe('runFleetBackupCycle', () => {
     expect(existsSync(join(destinations.groupWorkspacesRoot, 'personal', COMPANION_A, 'journal/personal.md'))).toBe(true);
     expect(existsSync(join(destinations.groupWorkspacesRoot, 'shared', 'artifacts/world.md'))).toBe(true);
     expect(existsSync(join(destinations.systemDataDir, 'settings.json'))).toBe(true);
+    expect(readFileSync(join(destinations.systemDataDir, 'companions.json'), 'utf8'))
+      .toBe(TEST_COMPANIONS_BYTES);
   });
 });

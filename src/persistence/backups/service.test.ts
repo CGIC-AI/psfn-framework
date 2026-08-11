@@ -11,6 +11,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EventBus } from '../../shared/event-bus.js';
 import { Scheduler } from '../../core/scheduler/scheduler.js';
+import { describeStartupOwnerFileChecks } from '../../system/config/startup-owner-files.js';
 import {
   ENCRYPTED_BACKUP_MANIFEST_NAME,
   ENCRYPTED_BACKUP_PAYLOAD_NAME,
@@ -47,6 +48,21 @@ const TEST_BACKUP_ENCRYPTION: BackupEncryptionRuntimeConfig = {
   },
   passphrase: 'test-backup-secret',
 };
+
+const TEST_COMPANIONS_BYTES = `${JSON.stringify({
+  postgres: {
+    sharedMigrationRole: 'shared_schema_migration',
+    sharedMigrationDatabaseUrlRef: { kind: 'env', envName: 'SHARED_SCHEMA_MIGRATION_DATABASE_URL' },
+  },
+  companions: [{
+    companionId: '11111111-1111-4111-8111-111111111111',
+    companionDataDir: 'companions/alpha',
+    characterCardPath: 'companions/alpha/character-card.json',
+    postgresSchema: 'companion_alpha',
+    postgresRole: 'companion_alpha_runtime',
+    postgresDatabaseUrlRef: { kind: 'env', envName: 'COMPANION_ALPHA_DATABASE_URL' },
+  }],
+}, null, 2)}\n`;
 
 function makeBackupRuntimeConfig(rootDir: string, verifyRestore = false) {
   return {
@@ -147,6 +163,18 @@ function writeSystemOwnerFiles(systemDataDir: string): void {
     schemaVersion: 1,
     servers: [],
   }), 'utf-8');
+  writeFileSync(join(systemDataDir, 'companions.json'), TEST_COMPANIONS_BYTES, 'utf-8');
+  for (const descriptor of describeStartupOwnerFileChecks()) {
+    if (descriptor.scope !== 'system'
+      || descriptor.optionalWhenMissing
+      || existsSync(join(systemDataDir, descriptor.ownerFileName))) {
+      continue;
+    }
+    writeFileSync(
+      join(systemDataDir, descriptor.ownerFileName),
+      readFileSync(join(process.cwd(), 'config', descriptor.seedFileName)),
+    );
+  }
   writeFileSync(join(systemDataDir, '.env'), 'OPENROUTER_API_KEY=super-secret-env\n', 'utf-8');
 }
 
@@ -637,16 +665,20 @@ describe('runBackupCycle', () => {
     });
 
     expect(result.systemConfig).toBeDefined();
-    expect(result.systemConfig?.fileCount).toBe(5);
-    expect(result.systemConfigVerification?.verifiedFileCount).toBe(5);
+    expect(result.systemConfig?.fileCount).toBe(10);
+    expect(result.systemConfigVerification?.verifiedFileCount).toBe(10);
     expect(existsSync(join(result.backupDir, SYSTEM_CONFIG_MANIFEST_NAME))).toBe(true);
     expect(existsSync(join(result.backupDir, SYSTEM_CONFIG_DIR_NAME, 'settings.json'))).toBe(true);
     expect(readFileSync(
       join(result.backupDir, SYSTEM_CONFIG_DIR_NAME, 'mcp-servers.json'),
       'utf-8',
     )).toBe(JSON.stringify({ schemaVersion: 1, servers: [] }));
+    expect(readFileSync(
+      join(result.backupDir, SYSTEM_CONFIG_DIR_NAME, 'companions.json'),
+      'utf-8',
+    )).toBe(TEST_COMPANIONS_BYTES);
     expect(existsSync(join(result.backupDir, SYSTEM_CONFIG_DIR_NAME, '.env'))).toBe(false);
-    expect(verifySystemConfigSnapshot(result.backupDir).verifiedFileCount).toBe(5);
+    expect(verifySystemConfigSnapshot(result.backupDir).verifiedFileCount).toBe(10);
 
     writeFileSync(
       join(result.backupDir, SYSTEM_CONFIG_DIR_NAME, 'mcp-servers.json'),
@@ -711,7 +743,7 @@ describe('runBackupCycle', () => {
 
     expect(result.encryptedBackup).toBeDefined();
     expect(result.postgresDumpVerification?.tocEntryCount).toBe(2);
-    expect(result.systemConfigVerification?.verifiedFileCount).toBe(5);
+    expect(result.systemConfigVerification?.verifiedFileCount).toBe(10);
     expect(result.kubernetesHelmVerification?.chart.verifiedFileCount).toBe(4);
     expect(result.backupContentsVerification?.kubernetesHelmRecovery).toBe('required');
     expect(existsSync(join(result.backupDir, ENCRYPTED_BACKUP_MANIFEST_NAME))).toBe(true);
@@ -728,6 +760,8 @@ describe('runBackupCycle', () => {
     expect(existsSync(join(decryptDir, 'database', 'psfn.dump'))).toBe(true);
     expect(existsSync(join(decryptDir, 'sessions', 'channel.jsonl'))).toBe(true);
     expect(existsSync(join(decryptDir, SYSTEM_CONFIG_DIR_NAME, 'settings.json'))).toBe(true);
+    expect(readFileSync(join(decryptDir, SYSTEM_CONFIG_DIR_NAME, 'companions.json'), 'utf8'))
+      .toBe(TEST_COMPANIONS_BYTES);
     expect(existsSync(join(decryptDir, SYSTEM_CONFIG_DIR_NAME, '.env'))).toBe(false);
     expect(existsSync(join(decryptDir, KUBERNETES_HELM_RECOVERY_MANIFEST_NAME))).toBe(true);
     expect(verifyKubernetesHelmSnapshot(decryptDir).chart.verifiedFileCount).toBe(4);

@@ -1,6 +1,9 @@
-import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
-import { captureSystemConfigSnapshot } from '../src/persistence/backups/system-config-tree.js'
+import {
+  captureSystemConfigSnapshot,
+  verifySystemConfigSnapshot,
+} from '../src/persistence/backups/system-config-tree.js'
 import {
   KUBERNETES_HELM_RECOVERY_MANIFEST_NAME,
   captureKubernetesHelmSnapshot,
@@ -12,6 +15,7 @@ import {
   inspectKubernetesHelmRecoveryChart,
 } from '../src/persistence/backups/kubernetes-helm-chart.js'
 import { createBackupContentsManifest } from '../src/persistence/backups/backup-contents.js'
+import { describeStartupOwnerFileChecks } from '../src/system/config/startup-owner-files.js'
 
 const REPOSITORY_BACKUP_RESTORE_FIXTURE_ROOT = resolve('workspace/verify-backup-restore-fixture')
 const REPOSITORY_BACKUP_RESTORE_FIXTURE_SNAPSHOT = '20260227T101112123Z'
@@ -31,7 +35,8 @@ function fixtureIsComplete(rootDir: string): boolean {
     && existsSync(join(backupDir, 'sessions', FIXTURE_SESSION_FILE_NAME))
   if (!expectedFilesExist) return false
   try {
-    return readKubernetesHelmRecoveryDescriptor(backupDir).chart.name === 'companion-runtime'
+    return verifySystemConfigSnapshot(backupDir).verifiedFileCount > 0
+      && readKubernetesHelmRecoveryDescriptor(backupDir).chart.name === 'companion-runtime'
       && verifyKubernetesHelmSnapshot(backupDir).chart.verifiedFileCount > 0
   } catch {
     return false
@@ -56,6 +61,17 @@ export function ensureRepositoryBackupRestoreFixture(
     `${JSON.stringify({ sessionHistoryBudgetPct: 6 }, null, 2)}\n`,
     'utf8',
   )
+  for (const descriptor of describeStartupOwnerFileChecks()) {
+    if (descriptor.scope !== 'system'
+      || descriptor.optionalWhenMissing
+      || existsSync(join(systemDataDir, descriptor.ownerFileName))) {
+      continue
+    }
+    writeFileSync(
+      join(systemDataDir, descriptor.ownerFileName),
+      readFileSync(join(process.cwd(), 'config', descriptor.seedFileName)),
+    )
+  }
   captureSystemConfigSnapshot({
     systemDataDir,
     backupDir,

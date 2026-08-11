@@ -1,10 +1,38 @@
 import { assertNoUnknownKeys, isRecord } from '../../../../shared/utils/types.js';
 import { assertBoundedRulePattern } from './proximity.js';
 
+export const INTAKE_ENCODING_CANDIDATE_IDS = [
+  'base64',
+  'hex',
+  'percent',
+  'backslashHex',
+  'htmlNumeric',
+  'jsonUnicode',
+  'binaryBytes',
+  'numericCodepoints',
+  'utf7',
+  'base32',
+  'base58',
+  'base85',
+] as const;
+
+export type IntakeEncodingCandidateId = typeof INTAKE_ENCODING_CANDIDATE_IDS[number];
+
+const FIXED_CIPHER_PROBE_IDS = new Set(['atbash', 'reverse', 'upsideDown']);
+
+export function encodingCipherProbeAttemptCount(maxCaesarShifts: number): number {
+  return maxCaesarShifts + FIXED_CIPHER_PROBE_IDS.size;
+}
+
 export interface IntakeEncodingPolicy {
   maxCandidatesPerEncoding: number;
+  maxTotalDecodeAttempts: number;
   maxEncodedChars: number;
+  maxDecodedChars: number;
+  maxInflatedBytes: number;
+  maxInflationRatio: number;
   maxCipherChars: number;
+  maxCaesarShifts: number;
   unpromptedBase64MinEncodedChars: number;
   unpromptedHexMinEncodedChars: number;
   unpromptedPercentMinGroups: number;
@@ -13,11 +41,7 @@ export interface IntakeEncodingPolicy {
   cueWindowChars: number;
   decodingCue: RegExp;
   injectionProbe: RegExp;
-  candidatePatterns: Readonly<{
-    base64: RegExp;
-    hex: RegExp;
-    percent: RegExp;
-  }>;
+  candidatePatterns: Readonly<Record<IntakeEncodingCandidateId, RegExp>>;
 }
 
 function invalid(sourcePath: string, detail: string): Error {
@@ -40,6 +64,13 @@ function requireInteger(
 function requireRatio(value: unknown, field: string, sourcePath: string): number {
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 1) {
     throw invalid(sourcePath, `${field} must be a finite number in [0, 1]`);
+  }
+  return value;
+}
+
+function requirePositiveRatio(value: unknown, field: string, sourcePath: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 1 || value > 1_024) {
+    throw invalid(sourcePath, `${field} must be a finite number in [1, 1024]`);
   }
   return value;
 }
@@ -80,8 +111,13 @@ export function compileIntakeEncodingPolicy(
   }
   assertNoUnknownKeys(raw, [
     'maxCandidatesPerEncoding',
+    'maxTotalDecodeAttempts',
     'maxEncodedChars',
+    'maxDecodedChars',
+    'maxInflatedBytes',
+    'maxInflationRatio',
     'maxCipherChars',
+    'maxCaesarShifts',
     'unpromptedBase64MinEncodedChars',
     'unpromptedHexMinEncodedChars',
     'unpromptedPercentMinGroups',
@@ -97,12 +133,22 @@ export function compileIntakeEncodingPolicy(
   }
   assertNoUnknownKeys(
     raw.candidatePatterns,
-    ['base64', 'hex', 'percent'],
+    INTAKE_ENCODING_CANDIDATE_IDS,
     'encodingPolicy.candidatePatterns',
     { errorPrefix: `Invalid intake L1 encoding policy at ${sourcePath}` },
   );
 
-  return {
+  const candidatePatterns = {} as Record<IntakeEncodingCandidateId, RegExp>;
+  for (const id of INTAKE_ENCODING_CANDIDATE_IDS) {
+    candidatePatterns[id] = compilePolicyPattern(
+      raw.candidatePatterns[id],
+      `encodingPolicy.candidatePatterns.${id}`,
+      sourcePath,
+      true,
+    );
+  }
+
+  const policy: IntakeEncodingPolicy = {
     maxCandidatesPerEncoding: requireInteger(
       raw.maxCandidatesPerEncoding,
       'encodingPolicy.maxCandidatesPerEncoding',
@@ -110,12 +156,38 @@ export function compileIntakeEncodingPolicy(
       1,
       32,
     ),
+    maxTotalDecodeAttempts: requireInteger(
+      raw.maxTotalDecodeAttempts,
+      'encodingPolicy.maxTotalDecodeAttempts',
+      sourcePath,
+      1,
+      256,
+    ),
     maxEncodedChars: requireInteger(
       raw.maxEncodedChars,
       'encodingPolicy.maxEncodedChars',
       sourcePath,
       16,
-      4_096,
+      8_192,
+    ),
+    maxDecodedChars: requireInteger(
+      raw.maxDecodedChars,
+      'encodingPolicy.maxDecodedChars',
+      sourcePath,
+      16,
+      8_192,
+    ),
+    maxInflatedBytes: requireInteger(
+      raw.maxInflatedBytes,
+      'encodingPolicy.maxInflatedBytes',
+      sourcePath,
+      64,
+      65_536,
+    ),
+    maxInflationRatio: requirePositiveRatio(
+      raw.maxInflationRatio,
+      'encodingPolicy.maxInflationRatio',
+      sourcePath,
     ),
     maxCipherChars: requireInteger(
       raw.maxCipherChars,
@@ -123,6 +195,13 @@ export function compileIntakeEncodingPolicy(
       sourcePath,
       64,
       32_768,
+    ),
+    maxCaesarShifts: requireInteger(
+      raw.maxCaesarShifts,
+      'encodingPolicy.maxCaesarShifts',
+      sourcePath,
+      1,
+      25,
     ),
     unpromptedBase64MinEncodedChars: requireInteger(
       raw.unpromptedBase64MinEncodedChars,
@@ -176,25 +255,17 @@ export function compileIntakeEncodingPolicy(
       sourcePath,
       false,
     ),
-    candidatePatterns: {
-      base64: compilePolicyPattern(
-        raw.candidatePatterns.base64,
-        'encodingPolicy.candidatePatterns.base64',
-        sourcePath,
-        true,
-      ),
-      hex: compilePolicyPattern(
-        raw.candidatePatterns.hex,
-        'encodingPolicy.candidatePatterns.hex',
-        sourcePath,
-        true,
-      ),
-      percent: compilePolicyPattern(
-        raw.candidatePatterns.percent,
-        'encodingPolicy.candidatePatterns.percent',
-        sourcePath,
-        true,
-      ),
-    },
+    candidatePatterns,
   };
+  const minimumAttempts = encodingCipherProbeAttemptCount(policy.maxCaesarShifts)
+    + INTAKE_ENCODING_CANDIDATE_IDS.length
+    + 1;
+  if (policy.maxTotalDecodeAttempts < minimumAttempts) {
+    throw invalid(
+      sourcePath,
+      `encodingPolicy.maxTotalDecodeAttempts must be at least ${String(minimumAttempts)} `
+      + 'to reserve one attempt for every decoder class',
+    );
+  }
+  return policy;
 }

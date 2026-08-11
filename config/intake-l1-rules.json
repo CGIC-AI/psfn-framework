@@ -2,20 +2,34 @@
   "schemaVersion": 1,
   "encodingPolicy": {
     "maxCandidatesPerEncoding": 8,
-    "maxEncodedChars": 512,
+    "maxTotalDecodeAttempts": 132,
+    "maxEncodedChars": 2048,
+    "maxDecodedChars": 2048,
+    "maxInflatedBytes": 8192,
+    "maxInflationRatio": 64,
     "maxCipherChars": 16384,
+    "maxCaesarShifts": 25,
     "unpromptedBase64MinEncodedChars": 80,
     "unpromptedHexMinEncodedChars": 120,
     "unpromptedPercentMinGroups": 24,
-    "minTextBytes": 8,
+    "minTextBytes": 4,
     "minPrintableRatio": 0.9,
     "cueWindowChars": 128,
-    "decodingCuePattern": "\\b(?:decode|decoded|interpret|convert|base64|hex(?:adecimal)?|bytes?|binary)\\b",
+    "decodingCuePattern": "\\b(?:decode|decoded|decompress|decompressed|inflate|interpret|parse|convert|base(?:32|58|64|85)|hex(?:adecimal)?|bytes?|binary|octal|codepoints?|utf-?7|caesar|atbash|reverse|upside[ -]down)\\b",
     "injectionProbePattern": "\\b(?:ignore|disregard|forget|override)\\s{1,8}(?:\\w{1,32}\\s{1,8}){0,8}(?:instructions|rules|directives)\\b|\\bsystem\\s{1,8}prompt\\b|\\bapi[_-]?key\\b|\\bpassword\\s{0,4}[:=]",
     "candidatePatterns": {
       "base64": "(?<![A-Za-z0-9+/])[A-Za-z0-9+/]{16,2048}={0,2}(?![A-Za-z0-9+/=])",
       "hex": "(?<![0-9A-Fa-f])(?:[0-9A-Fa-f]{8,2048}|(?:[0-9A-Fa-f]{2}[ \\t]){3,682}[0-9A-Fa-f]{2})(?![0-9A-Fa-f])",
-      "percent": "(?:%[0-9A-Fa-f]{2}){2,1365}"
+      "percent": "(?:%[0-9A-Fa-f]{2}){2,1365}",
+      "backslashHex": "(?:\\\\x[0-9A-Fa-f]{2}){2,512}",
+      "htmlNumeric": "(?:&#(?:x[0-9A-Fa-f]{1,6}|[0-9]{1,7});){2,256}",
+      "jsonUnicode": "(?:\\\\u[0-9A-Fa-f]{4}){2,256}",
+      "binaryBytes": "(?:[01]{8}[ \\t]){2,255}[01]{8}",
+      "numericCodepoints": "(?:[0-9]{2,3}[ \\t]){3,255}[0-9]{2,3}",
+      "utf7": "\\+[A-Za-z0-9+/]{8,2048}-",
+      "base32": "(?<![A-Z2-7])[A-Z2-7]{16,2048}={0,6}(?![A-Z2-7=])",
+      "base58": "(?<![1-9A-HJ-NP-Za-km-z])[1-9A-HJ-NP-Za-km-z]{16,2048}(?![1-9A-HJ-NP-Za-km-z])",
+      "base85": "(?:<~)?[!-u]{16,2048}(?:~>)?"
     }
   },
   "rules": [

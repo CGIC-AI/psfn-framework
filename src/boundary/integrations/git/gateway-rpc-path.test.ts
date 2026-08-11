@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { GatewayServer, type GatewayServerOptions } from '../../gateway/server.js';
 import { GatewayClient } from '../../gateway/client.js';
 import { createGatewayOpsPortFromClient } from '../../gateway/gateway-ops-port.js';
+import { GatewayErrors } from '../../gateway/protocol.js';
 import { EventBus } from '../../../shared/event-bus.js';
 import { testShadowIntakeScreening } from '../../../test-support/intake-screening.js';
 import { GatewayGitOps } from './gateway-ops.js';
@@ -105,10 +106,38 @@ describe('Gateway git RPC path', () => {
       staged: 'cached',
       unstaged: 'working',
     });
-    await expect(gatewayOps.createBranch('feature/demo', 'main')).resolves.toBe('feature/demo');
-    await expect(gatewayOps.applyPatch('src/feature.ts', 'export const x = 1;')).resolves.toBeUndefined();
-    await expect(gatewayOps.commit('message', 'intent', 'scope')).resolves.toMatchObject({ hash: 'abc123' });
-    await expect(gatewayOps.openPR('Title', 'Body', 'main')).resolves.toBe('https://example.test/pr/1');
+
+    const approveQueuedWrite = async (
+      operation: Promise<unknown>,
+      expectedMethod: string,
+    ): Promise<void> => {
+      await expect(operation).rejects.toMatchObject({ code: GatewayErrors.NEEDS_APPROVAL });
+      const pending = server!.listOperatorConfirmations().pending;
+      expect(pending).toEqual([
+        expect.objectContaining({ method: expectedMethod }),
+      ]);
+      await expect(server!.resolveOperatorApproval({
+        id: pending[0]!.id,
+        decision: 'approve',
+      })).resolves.toMatchObject({ status: 'approved', executed: true });
+    };
+
+    await approveQueuedWrite(
+      gatewayOps.createBranch('feature/demo', 'main'),
+      'git.create_branch',
+    );
+    await approveQueuedWrite(
+      gatewayOps.applyPatch('src/feature.ts', 'export const x = 1;'),
+      'git.apply_patch',
+    );
+    await approveQueuedWrite(
+      gatewayOps.commit('message', 'intent', 'scope'),
+      'git.commit',
+    );
+    await approveQueuedWrite(
+      gatewayOps.openPR('Title', 'Body', 'main'),
+      'git.open_pr',
+    );
 
     expect(gitOps.status).toHaveBeenCalledTimes(1);
     expect(gitOps.diff).toHaveBeenCalledWith({ staged: false });

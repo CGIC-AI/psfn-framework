@@ -1519,10 +1519,14 @@ describe('SubstrateAgent.registerTool', () => {
     );
 
     agent.registerTool(fromAny({
-      name: 'repo_status',
-      label: 'repo_status',
-      description: 'read-only git status',
-      parameters: { type: 'object' as const, properties: {} },
+      name: 'repo',
+      label: 'repo',
+      description: 'read-only repository inspection',
+      parameters: {
+        type: 'object' as const,
+        properties: { action: { type: 'string' as const, enum: ['inspect'] } },
+      },
+      wiringMeta: { concurrency: { class: 'read_only' } },
       execute: vi.fn<any>().mockResolvedValue({ content: [{ type: 'text', text: 'ok' }], details: {} }),
     }), 'extended');
 
@@ -1543,20 +1547,24 @@ describe('SubstrateAgent.registerTool', () => {
     }), 'core');
 
     agent.registerTool(fromAny({
-      name: 'schedule_task',
-      label: 'schedule_task',
-      description: 'scheduler tool',
-      parameters: { type: 'object' as const, properties: {} },
+      name: 'schedule',
+      label: 'schedule',
+      description: 'canonical scheduler test tool',
+      parameters: {
+        type: 'object' as const,
+        properties: { action: { type: 'string' as const, enum: ['schedule_prompt'] } },
+      },
+      requiredCapability: NO_CAPABILITY_REQUIREMENT,
       execute: vi.fn<any>().mockResolvedValue({ content: [{ type: 'text', text: 'ok' }], details: {} }),
     }), 'extended');
 
     const catalog = agent.getToolCatalog();
-    const repoStatus = fromAny([...catalog.extended].find(tool => tool.name === 'repo_status'));
+    const repoInspect = fromAny([...catalog.extended].find(tool => tool.name === 'repo'));
     const subagent = fromAny([...catalog.core].find(tool => tool.name === 'subagent'));
     const memoryWrite = fromAny([...catalog.core].find(tool => tool.name === 'stateful_write_probe'));
-    const scheduleTask = fromAny([...catalog.extended].find(tool => tool.name === 'schedule_task'));
+    const schedule = fromAny([...catalog.extended].find(tool => tool.name === 'schedule'));
 
-    expect(repoStatus?.wiringMeta?.concurrency).toMatchObject({
+    expect(repoInspect?.wiringMeta?.concurrency).toMatchObject({
       class: 'read_only',
       exclusivityKeyPolicy: 'none',
       maxParallel: 3,
@@ -1586,7 +1594,7 @@ describe('SubstrateAgent.registerTool', () => {
         background: true,
       },
     });
-    expect(scheduleTask?.wiringMeta?.concurrency).toMatchObject({
+    expect(schedule?.wiringMeta?.concurrency).toMatchObject({
       class: 'exclusive',
       eligibility: {
         foreground: true,
@@ -4492,26 +4500,33 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(invalidName.errorCode).toBe('tool_not_extended');
 
     const deniedTool = fromAny({
-      name: 'repo_commit',
-      label: 'repo_commit',
-      description: 'commit test tool',
-      parameters: {},
+      name: 'repo',
+      label: 'repo',
+      description: 'commit-only repository test tool',
+      parameters: {
+        type: 'object',
+        properties: { action: { type: 'string', enum: ['commit'] } },
+      },
+      requiredCapability: 'git.write',
       execute: vi.fn(async () => ({ content: [{ type: 'text', text: 'ok' }], details: {} })),
     });
     agent.registerTool(deniedTool, 'extended');
 
-    const denied = await agent.addPromotedExtendedTool('repo_commit');
+    const denied = await agent.addPromotedExtendedTool('repo');
     expect(denied.ok).toBe(false);
     expect(denied.errorCode).toBe('capability_denied');
     expect(denied.missingTokens).toContain('git.write');
 
-    const backgroundTool = makeExtendedProbeTool('schedule_task');
+    const backgroundTool = withCapabilityRequirement(
+      makeExtendedProbeTool('schedule'),
+      NO_CAPABILITY_REQUIREMENT,
+    );
     agent.registerTool(backgroundTool, 'extended');
 
     // Pins affect presentation only, so any capability-eligible extended tool
     // can be pinned without changing whether it is callable.
-    const scheduleTaskPromotion = await agent.addPromotedExtendedTool('schedule_task');
-    expect(scheduleTaskPromotion.ok).toBe(true);
+    const schedulePromotion = await agent.addPromotedExtendedTool('schedule');
+    expect(schedulePromotion.ok).toBe(true);
   });
 
   it('keeps runtime state unchanged when pin persistence fails', async () => {

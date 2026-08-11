@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { fromAny } from '@total-typescript/shoehorn';
 import type { GatewayMethodRuntime, ShardBackendExecutor } from './types.js';
+import type { ApprovalBoundaryGateOptions } from '../approval-boundary.js';
 import type { PolicyConfig } from '../policy.js';
 import type { CapabilityTier } from '../../../system/config/runtime-config-contracts.js';
 import type { CapabilityGrantSnapshot } from '../../../system/capabilities/access.js';
@@ -118,7 +119,16 @@ function createHarness(options: HarnessOptions): {
     getRuntimeHealth: vi.fn(),
     nextStreamRequestId: () => 'stream-1',
     audited: (_method, handler) => handler,
-    gated: (_method, handler) => handler,
+    approvalBoundary: fromAny({
+      gate: (options: ApprovalBoundaryGateOptions<Record<string, unknown>, unknown>) =>
+        async (params: unknown) => {
+          const prepared = options.prepareParams
+            ? options.prepareParams(params)
+            : params as Record<string, unknown>;
+          options.prePolicyGuard?.(prepared);
+          return options.handler(prepared);
+        },
+    }),
   } as GatewayMethodRuntime;
   registerShardBackendMethods(runtime);
   const method = methods.get('shard.backend.request');

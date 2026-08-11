@@ -269,13 +269,16 @@ async function startServer(options: GatewayServerOptions): Promise<{
   return { server, conn };
 }
 
-function callServiceParams(): HomeAssistantCallServiceParams {
+function callServiceParams(
+  affordanceId = 'den-lamp',
+  entityId = 'light.den_lamp',
+): HomeAssistantCallServiceParams {
   return {
     domain: 'light',
     service: 'turn_on',
     placeId: 'den',
-    affordanceId: 'den-lamp',
-    entityId: 'light.den_lamp',
+    affordanceId,
+    entityId,
     reason: 'Task needs the den lamp on',
     intent: 'direct',
   };
@@ -330,6 +333,7 @@ describe('shard approval-grant production composition (2h6q.3 / 2h6q.1)', () => 
           enabled: true,
           hubBaseUrl,
           tokenConfigured: true,
+          autonomousControlEnabled: true,
           placesRegistry: {
             places: [{
               placeId: 'den',
@@ -342,6 +346,27 @@ describe('shard approval-grant production composition (2h6q.3 / 2h6q.1)', () => 
                 kind: 'light',
                 backend: 'ha',
                 entityId: 'light.den_lamp',
+                control: ['on', 'off', 'toggle'],
+              }, {
+                affordanceId: 'parent-main-lamp',
+                role: 'effector',
+                kind: 'light',
+                backend: 'ha',
+                entityId: 'light.parent_main_lamp',
+                control: ['on', 'off', 'toggle'],
+              }, {
+                affordanceId: 'parent-channel-lamp',
+                role: 'effector',
+                kind: 'light',
+                backend: 'ha',
+                entityId: 'light.parent_channel_lamp',
+                control: ['on', 'off', 'toggle'],
+              }, {
+                affordanceId: 'parent-bare-lamp',
+                role: 'effector',
+                kind: 'light',
+                backend: 'ha',
+                entityId: 'light.parent_bare_lamp',
                 control: ['on', 'off', 'toggle'],
               }],
             }],
@@ -580,11 +605,16 @@ describe('shard approval-grant production composition (2h6q.3 / 2h6q.1)', () => 
       .toEqual(['prepared', 'issued', 'consumed', 'executed']);
   }, 20_000);
 
-  it('preserves the parent companion autonomous auto-clear on the same method', async () => {
+  it('preserves the parent companion explicit autonomous affordance on the same method', async () => {
     const worldOps = new GatewayWorldOps(homeAssistantOpsFor(mainConn));
     const hubCallsBefore = hubCalls.length;
-    // No request context: this is the parent's own dispatch.
-    const result = await worldOps.callService(callServiceParams());
+    // No request context: this is the parent's own dispatch through the
+    // configured autonomous light affordance. Shard dispatches on the same
+    // method remain exceptional and require operator approval.
+    const result = await worldOps.callService(callServiceParams(
+      'parent-main-lamp',
+      'light.parent_main_lamp',
+    ));
     expect(result).toMatchObject({ domain: 'light', service: 'turn_on' });
     expect(hubCalls).toHaveLength(hubCallsBefore + 1);
     expect(mainServer.listOperatorConfirmations().pending).toHaveLength(0);
@@ -720,7 +750,10 @@ describe('shard approval-grant production composition (2h6q.3 / 2h6q.1)', () => 
     // A channel that never hosted a shard keeps the ordinary parent path.
     const parentResult = await runWithRequestContext(
       { channelId: 'discord:general-777' },
-      async () => worldOps.callService(callServiceParams()),
+      async () => worldOps.callService(callServiceParams(
+        'parent-channel-lamp',
+        'light.parent_channel_lamp',
+      )),
     );
     expect(parentResult).toMatchObject({ domain: 'light', service: 'turn_on' });
     expect(hubCalls).toHaveLength(hubCallsBefore + 1);
@@ -739,7 +772,10 @@ describe('shard approval-grant production composition (2h6q.3 / 2h6q.1)', () => 
     ).rejects.toMatchObject({ code: GatewayErrors.POLICY_DENIED });
     expect(hubCalls).toHaveLength(hubCallsBefore);
     // The parent path on the same bare server keeps its autonomy.
-    await expect(worldOps.callService(callServiceParams()))
+    await expect(worldOps.callService(callServiceParams(
+      'parent-bare-lamp',
+      'light.parent_bare_lamp',
+    )))
       .resolves.toMatchObject({ domain: 'light' });
     expect(hubCalls).toHaveLength(hubCallsBefore + 1);
   }, 20_000);

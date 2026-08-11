@@ -1552,7 +1552,7 @@ describe('ShardManager', () => {
     await eventBus.emit('agent.tool.start', {
       channelId: degraded[0].channelId,
       toolCallId: 'recover-call',
-      toolName: 'repo_status',
+      toolName: 'repo',
     });
 
     const recovered = manager.getActiveShards();
@@ -1834,9 +1834,7 @@ describe('ShardManager', () => {
   it('injects default nursery shard toolset and blocks recursion tools', async () => {
     const memory = makeTestTool('memory');
     const contact = makeTestTool('contact');
-    const repoStatus = makeTestTool('repo_status');
-    const repoDiff = makeTestTool('repo_diff');
-    const repoCommit = makeTestTool('repo_commit');
+    const repo = makeTestTool('repo');
     const spawnSubagent = makeTestTool('spawn_subagent');
 
     const manager = createTestShardManager({
@@ -1849,7 +1847,7 @@ describe('ShardManager', () => {
       parentSystemPrompt: 'test',
       toolCatalogProvider: () => ({
         core: [memory.tool, contact.tool],
-        extended: [repoStatus.tool, repoDiff.tool, repoCommit.tool, spawnSubagent.tool],
+        extended: [repo.tool, spawnSubagent.tool],
       }),
     });
 
@@ -1858,7 +1856,7 @@ describe('ShardManager', () => {
     const injected = lastSetToolNames();
     expect(injected).toEqual(expect.arrayContaining(['tool_search', 'toolset', ...DEFAULT_SHARD_TOOLSET]));
     expect(injected).not.toContain('load_tools');
-    expect(injected).not.toContain('repo_commit');
+    expect(injected).not.toContain('repo');
     expect(injected).not.toContain('spawn_subagent');
   });
 
@@ -1893,7 +1891,7 @@ describe('ShardManager', () => {
 
   it('unlocks full configured catalog for autonomous tier', async () => {
     const memory = makeTestTool('memory');
-    const repoCommit = makeTestTool('repo_commit');
+    const repo = makeTestTool('repo');
     const promptUpdate = makeTestTool('prompt_layer_update');
 
     const manager = createTestShardManager({
@@ -1906,7 +1904,7 @@ describe('ShardManager', () => {
       parentSystemPrompt: 'test',
       toolCatalogProvider: () => ({
         core: [memory.tool],
-        extended: [repoCommit.tool, promptUpdate.tool],
+        extended: [repo.tool, promptUpdate.tool],
       }),
     });
 
@@ -1915,7 +1913,7 @@ describe('ShardManager', () => {
     const injected = lastSetToolNames();
     expect(injected).toEqual(expect.arrayContaining([
       'memory',
-      'repo_commit',
+      'repo',
       'prompt_layer_update',
     ]));
   });
@@ -1964,8 +1962,7 @@ describe('ShardManager', () => {
 
   it('respects configured shard toolset overrides', async () => {
     const memory = makeTestTool('memory');
-    const repoDiff = makeTestTool('repo_diff');
-    const repoStatus = makeTestTool('repo_status');
+    const repo = makeTestTool('repo');
 
     const manager = createTestShardManager({
       eventBus,
@@ -1976,21 +1973,20 @@ describe('ShardManager', () => {
       config: {
         ...TEST_CONFIG,
         capabilityTier: 'nursery',
-        shardToolsets: { nursery: ['repo_status'] },
+        shardToolsets: { nursery: ['repo'] },
       },
       parentSystemPrompt: 'test',
       toolCatalogProvider: () => ({
-        core: [memory.tool, repoDiff.tool],
-        extended: [repoStatus.tool],
+        core: [memory.tool],
+        extended: [repo.tool],
       }),
     });
 
     await manager.spawn({ name: 'toolset-customized', task: 'test' });
 
     const injected = lastSetToolNames();
-    expect(injected).toContain('repo_status');
+    expect(injected).toContain('repo');
     expect(injected).not.toContain('memory');
-    expect(injected).not.toContain('repo_diff');
   });
 
   it('blocks canonical contact / identity / north_star even for an autonomous shard (psfn-framework-gjkh)', async () => {
@@ -2036,7 +2032,7 @@ describe('ShardManager', () => {
     // toolset override; BLOCKED_SHARD_TOOL_NAMES is applied before selection.
     const memory = makeTestTool('memory');
     const contact = makeTestTool('contact');
-    const repoStatus = makeTestTool('repo_status');
+    const repo = makeTestTool('repo');
 
     const manager = createTestShardManager({
       eventBus,
@@ -2047,19 +2043,19 @@ describe('ShardManager', () => {
       config: {
         ...TEST_CONFIG,
         capabilityTier: 'nursery',
-        shardToolsets: { nursery: ['contact', 'repo_status'] },
+        shardToolsets: { nursery: ['contact', 'repo'] },
       },
       parentSystemPrompt: 'test',
       toolCatalogProvider: () => ({
         core: [memory.tool, contact.tool],
-        extended: [repoStatus.tool],
+        extended: [repo.tool],
       }),
     });
 
     await manager.spawn({ name: 'toolset-override-contact', task: 'test' });
 
     const injected = lastSetToolNames();
-    expect(injected).toContain('repo_status');
+    expect(injected).toContain('repo');
     expect(injected).not.toContain('contact');
   });
 
@@ -2150,9 +2146,7 @@ describe('ShardManager', () => {
     });
     const memory = makeTestTool('memory');
     const contact = makeTestTool('contact');
-    const repoStatus = makeTestTool('repo_status');
-    const repoDiff = makeTestTool('repo_diff');
-    const repoCommit = makeTestTool('repo_commit');
+    const repo = makeTestTool('repo');
     const spawnSubagent = makeTestTool('spawn_subagent');
 
     const manager = createTestShardManager({
@@ -2174,7 +2168,7 @@ describe('ShardManager', () => {
       parentSystemPrompt: 'test',
       toolCatalogProvider: () => ({
         core: [memory.tool, contact.tool],
-        extended: [repoStatus.tool, repoDiff.tool, repoCommit.tool, spawnSubagent.tool],
+        extended: [repo.tool, spawnSubagent.tool],
       }),
     });
 
@@ -2191,7 +2185,7 @@ describe('ShardManager', () => {
     const injected = lastSetToolNames();
     expect(injected).toEqual(expect.arrayContaining(['tool_search', 'toolset', ...DEFAULT_SHARD_TOOLSET]));
     expect(injected).not.toContain('load_tools');
-    expect(injected).not.toContain('repo_commit');
+    expect(injected).not.toContain('repo');
     expect(injected).not.toContain('spawn_subagent');
   });
 

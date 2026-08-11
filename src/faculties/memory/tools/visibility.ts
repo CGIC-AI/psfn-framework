@@ -77,7 +77,13 @@ type TimelineVisibilityResult =
   }
   | { ok: false; error: string };
 
-export type MemoryVisibilityAction = 'timeline' | 'get' | 'census' | 'exists' | 'shared_background';
+export type MemoryVisibilityAction =
+  | 'episode_search'
+  | 'timeline'
+  | 'get'
+  | 'census'
+  | 'exists'
+  | 'shared_background';
 
 type MemoryScopeFilterParams = {
   contact_id?: unknown;

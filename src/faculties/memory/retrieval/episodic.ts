@@ -17,7 +17,7 @@ import {
 import type {
   EpisodicStorePort,
 } from '../episodic/store-port.js';
-import type { MemoryScopeQuery } from '../types.js';
+import type { MemoryScopeQuery, RetrievalAccessScope } from '../types.js';
 import type { RolledOutSessionBoundary } from '../../../core/session/rolled-out-session-boundary.js';
 import {
   mergePreferredBreadcrumbs,
@@ -28,6 +28,7 @@ import {
   cloneEpisodeArc,
 } from './episodic-cloning.js';
 import type {
+  EpisodicLexicalSearchResult,
   EpisodicRetrievalChain,
   EpisodicRetrievalStore,
 } from './episodic-types.js';
@@ -35,6 +36,7 @@ import { positiveIntegerOr } from '../../../shared/utils/numeric.js';
 
 export { cloneEpisodicRetrievalChain } from './episodic-cloning.js';
 export type {
+  EpisodicLexicalSearchResult,
   EpisodicRetrievalChain,
   EpisodicRetrievalStore,
 } from './episodic-types.js';
@@ -65,6 +67,7 @@ export interface EpisodicRetrievalInput {
   trustLevel: TrustLevel;
   channelDisclosure: ChannelDisclosureContext;
   canonicalContactId?: string;
+  accessScope?: RetrievalAccessScope;
   scopeQuery?: MemoryScopeQuery;
   scanLimit?: number;
   maxChains?: number;
@@ -72,6 +75,25 @@ export interface EpisodicRetrievalInput {
   maxEpisodesPerChain?: number;
   memoryRetrievalPolicy?: MemoryRetrievalPolicy;
 }
+
+export type EpisodicLexicalSearchInput = Omit<
+  EpisodicRetrievalInput,
+  'contextText' | 'rolledOutSessionBoundary' | 'maxChains'
+> & {
+  query: string;
+  limit?: number;
+  includeChain?: (chain: EpisodicRetrievalChain) => boolean;
+};
+
+export type EpisodicSelectedRootInput = Omit<
+  EpisodicRetrievalInput,
+  'contextText' | 'rolledOutSessionBoundary' | 'maxChains'
+> & {
+  episodeId: string;
+  rootScore: number;
+  contextText?: string;
+  matchedTerms?: readonly string[];
+};
 
 export interface EpisodicTimelineInput {
   from?: string;
@@ -91,6 +113,7 @@ export interface EpisodicTimelineInput {
 interface EpisodeCandidate {
   episode: Episode;
   score: number;
+  lexicalScore: number;
   matchedTerms: string[];
 }
 
@@ -164,14 +187,8 @@ export async function retrieveEpisodicChains(
   input: EpisodicRetrievalInput,
 ): Promise<EpisodicRetrievalChain[]> {
   const queryTokens = tokenizeQuery(input.contextText);
-  const normalizedQuery = normalizeSearchText(input.contextText);
   const episodicPolicy = resolveMemoryRetrievalPolicy(input.memoryRetrievalPolicy).episodic;
   const maxChains = positiveIntegerOr(input.maxChains, episodicPolicy.maxChains);
-  const maxDepth = normalizeNonNegativeInteger(input.maxDepth, episodicPolicy.maxDepth);
-  const maxEpisodesPerChain = positiveIntegerOr(
-    input.maxEpisodesPerChain,
-    episodicPolicy.maxEpisodesPerChain,
-  );
   const rolledOutBreadcrumbs = await retrieveRolledOutBreadcrumbs({
     store,
     boundary: input.rolledOutSessionBoundary,
@@ -182,6 +199,23 @@ export async function retrieveEpisodicChains(
   if (queryTokens.length === 0 && !input.scopeQuery) {
     return rolledOutBreadcrumbs;
   }
+  const rankedChains = await retrieveRankedEpisodicChains(store, input, maxChains);
+  return mergePreferredBreadcrumbs(rolledOutBreadcrumbs, rankedChains, maxChains);
+}
+
+async function retrieveRankedEpisodicChains(
+  store: EpisodicRetrievalStore,
+  input: EpisodicRetrievalInput,
+  maxChains: number,
+): Promise<EpisodicRetrievalChain[]> {
+  const queryTokens = tokenizeQuery(input.contextText);
+  const normalizedQuery = normalizeSearchText(input.contextText);
+  const episodicPolicy = resolveMemoryRetrievalPolicy(input.memoryRetrievalPolicy).episodic;
+  const maxDepth = normalizeNonNegativeInteger(input.maxDepth, episodicPolicy.maxDepth);
+  const maxEpisodesPerChain = positiveIntegerOr(
+    input.maxEpisodesPerChain,
+    episodicPolicy.maxEpisodesPerChain,
+  );
   const episodes = (await store.listEpisodes({
     limit: positiveIntegerOr(input.scanLimit, episodicPolicy.scanLimit),
   })).map(cloneEpisode);
@@ -228,7 +262,112 @@ export async function retrieveEpisodicChains(
     if (right.score !== left.score) return right.score - left.score;
     return left.rootEpisodeId.localeCompare(right.rootEpisodeId);
   });
-  return mergePreferredBreadcrumbs(rolledOutBreadcrumbs, rankedChains, maxChains);
+  return rankedChains;
+}
+
+/**
+ * Deliberately query canonical L0.1 episodes using the same lexical ranking,
+ * visibility rules, and arc expansion as foreground episodic retrieval.
+ */
+export async function searchEpisodicEpisodesLexically(
+  store: EpisodicRetrievalStore,
+  input: EpisodicLexicalSearchInput,
+): Promise<EpisodicLexicalSearchResult[]> {
+  const query = input.query.trim();
+  if (!query) return [];
+  const { includeChain, limit, query: _query, ...retrievalInput } = input;
+  const episodicPolicy = resolveMemoryRetrievalPolicy(input.memoryRetrievalPolicy).episodic;
+  const resultLimit = positiveIntegerOr(limit, episodicPolicy.maxChains);
+  const chains = await retrieveRankedEpisodicChains(store, {
+    ...retrievalInput,
+    contextText: query,
+  }, includeChain
+    ? positiveIntegerOr(input.scanLimit, episodicPolicy.scanLimit)
+    : resultLimit);
+  const queryTokens = tokenizeQuery(query);
+  const normalizedQuery = normalizeSearchText(query);
+
+  return chains.flatMap((chain) => {
+    if (includeChain && !includeChain(chain)) return [];
+    const episode = chain.episodes.find(candidate => candidate.id === chain.rootEpisodeId);
+    if (!episode) return [];
+    const evidence = scoreEpisode(episode, queryTokens, normalizedQuery);
+    if (!evidence) return [];
+    return [{
+      episode: cloneEpisode(episode),
+      chain,
+      lexicalScore: evidence.lexicalScore,
+      matchedTerms: [...evidence.matchedTerms].sort(),
+      retrievalMode: 'lexical' as const,
+    }];
+  }).slice(0, resultLimit);
+}
+
+/**
+ * Apply canonical visibility and arc expansion to a root selected by another
+ * retrieval mode (for example semantic episode search).
+ */
+export async function buildEpisodicChainFromRoot(
+  store: EpisodicRetrievalStore,
+  input: EpisodicSelectedRootInput,
+): Promise<EpisodicRetrievalChain | null> {
+  if (!Number.isFinite(input.rootScore) || input.rootScore < 0 || input.rootScore > 1) {
+    throw new Error('episodic selected-root score must be between 0 and 1');
+  }
+  const root = await store.getEpisode(input.episodeId);
+  if (!root) return null;
+  const parsedRoot = parseEpisode(cloneEpisode(root));
+  if (!isEpisodeVisibleForTurn(parsedRoot, {
+    ...input,
+    contextText: input.contextText ?? '',
+  })) return null;
+  if (input.scopeQuery?.mode === 'only' && !episodeMatchesScopeQuery(parsedRoot, input.scopeQuery)) {
+    return null;
+  }
+
+  const episodicPolicy = resolveMemoryRetrievalPolicy(input.memoryRetrievalPolicy).episodic;
+  const query = input.contextText?.trim() ?? '';
+  const queryTokens = tokenizeQuery(query);
+  const normalizedQuery = normalizeSearchText(query);
+  const lexicalEvidence = scoreEpisode(parsedRoot, queryTokens, normalizedQuery, input.scopeQuery);
+  const matchedTerms = new Set([
+    ...(input.matchedTerms ?? []),
+    ...(lexicalEvidence?.matchedTerms ?? []),
+  ]);
+  const episodes = await store.listEpisodes({
+    limit: positiveIntegerOr(input.scanLimit, episodicPolicy.scanLimit),
+  });
+  const episodeIndex = new Map(
+    episodes.map(episode => {
+      const parsed = parseEpisode(cloneEpisode(episode));
+      return [parsed.id, parsed] as const;
+    }),
+  );
+  episodeIndex.set(parsedRoot.id, parsedRoot);
+
+  return await buildEpisodeChain({
+    store,
+    root: {
+      episode: parsedRoot,
+      score: input.rootScore,
+      lexicalScore: lexicalEvidence?.lexicalScore ?? 0,
+      matchedTerms: [...matchedTerms].sort(),
+    },
+    input: {
+      ...input,
+      contextText: query,
+    },
+    queryTokens,
+    normalizedQuery,
+    episodeIndex,
+    maxDepth: normalizeNonNegativeInteger(input.maxDepth, episodicPolicy.maxDepth),
+    maxEpisodesPerChain: positiveIntegerOr(
+      input.maxEpisodesPerChain,
+      episodicPolicy.maxEpisodesPerChain,
+    ),
+    arcScanLimit: episodicPolicy.arcScanLimit,
+    minRelatedMatchScore: episodicPolicy.minRelatedMatchScore,
+  });
 }
 
 export async function retrieveEpisodicTimeline(
@@ -288,6 +427,7 @@ export async function retrieveEpisodicTimeline(
       root: {
         episode: root,
         score: root.salience.score,
+        lexicalScore: 0,
         matchedTerms: [],
       },
       input: visibilityInput,
@@ -550,11 +690,10 @@ function scoreEpisode(
     ? 0.25
     : 0;
   const queryDenominator = Math.max(1, queryTokens.length * 2.4);
-  const lexicalScore = weightedMatches / queryDenominator;
+  const lexicalScore = Math.min(1, (weightedMatches / queryDenominator) + phraseBoost);
   const score = Math.min(
     1,
     lexicalScore
-      + phraseBoost
       + (episode.salience.score * 0.22)
       + (scopeMatch ? 0.18 : 0),
   );
@@ -566,6 +705,7 @@ function scoreEpisode(
   return {
     episode,
     score,
+    lexicalScore,
     matchedTerms: [...matchedTerms],
   };
 }
@@ -598,6 +738,10 @@ function isRelatedEpisodeUseful(
 }
 
 export function isEpisodeVisibleForTurn(episode: Episode, input: EpisodicRetrievalInput): boolean {
+  if (input.accessScope === 'companion_self_reflection') {
+    return input.scopeQuery?.mode !== 'only'
+      || episodeMatchesScopeQuery(episode, input.scopeQuery);
+  }
   if (episode.channelId === input.channelId) {
     return true;
   }

@@ -286,7 +286,7 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     domain: 'memory',
     exposure: 'core',
     description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.memory,
-    actions: ['write', 'search', 'get', 'shared_background', 'census', 'exists', 'timeline', 'import', 'patch', 'redact', 'delete', 'restore'],
+    actions: ['write', 'search', 'episode_search', 'get', 'shared_background', 'census', 'exists', 'timeline', 'import', 'patch', 'redact', 'delete', 'restore'],
     capabilityMetadata: { kind: 'action_aware', source: CAPABILITIES_REQUIREMENTS },
     retiredAliases: [
       retiredAlias('memory_write', 'memory', 'retired', 'write', 'Memory writes belong on memory.'),

@@ -15,6 +15,7 @@ import type {
   MemoryFormationVAD,
   MemorySourceType,
   MemoryProvenance,
+  RetrievalAccessScope,
 } from './types.js';
 import {
   VALID_MEMORY_TYPES,
@@ -36,10 +37,16 @@ import {
   type ChannelPrivacy,
 } from '../../system/trust/context-envelope.js';
 import {
+  searchEpisodicEpisodesLexically,
   retrieveEpisodicTimeline,
+  type EpisodicLexicalSearchResult,
   type EpisodicTimelineEntry,
   type EpisodicTimelineStore,
 } from './retrieval/episodic.js';
+import {
+  filterQuarantinedEpisodicChains,
+  type MemorySessionQuarantineFilter,
+} from './retrieval/session-quarantine.js';
 import {
   formatEpisodeDrilldown,
   retrieveEpisodeDrilldown,
@@ -51,6 +58,7 @@ import {
   type MemoryRetrievalPolicy,
 } from '../../system/config/memory-retrieval-policy.js';
 import type { SharedBackgroundProvider } from './retrieval/shared-background.js';
+import { resolveAuthorizedRetrievalAccessScope } from './retrieval/access-scope.js';
 import type {
   MemoryDeletionApprovalPort,
   MemoryDeletionProposalStorePort,
@@ -87,6 +95,7 @@ const MEMORY_TIMELINE_MAX_LIMIT = 20;
 const MEMORY_TOOL_ACTIONS = [
   'write',
   'search',
+  'episode_search',
   'get',
   'shared_background',
   'census',
@@ -234,7 +243,7 @@ function buildToolSourceContext(
 }
 
 function buildUnifiedMemorySourceContext(
-  action: Exclude<MemoryToolAction, 'search' | 'timeline'>,
+  action: Exclude<MemoryToolAction, 'search' | 'episode_search' | 'timeline'>,
   toolCallId: string,
   internalSource: string | null,
   qualifiers: string[] = [],
@@ -278,6 +287,37 @@ function formatMemorySearchResults(
     lines.push(
       `- ${entry.id} [${entry.type}, ${entry.sensitivity}, similarity=${entry.similarity.toFixed(2)}]: ${entry.text}`,
     );
+  }
+  return lines.join('\n');
+}
+
+function formatEpisodicSearchResults(
+  entries: readonly EpisodicLexicalSearchResult[],
+): string {
+  if (entries.length === 0) {
+    return 'No visible canonical episodes matched the search query (retrieval_mode=lexical).';
+  }
+
+  const lines = [
+    `Episode search results (${entries.length}; retrieval_mode=lexical):`,
+  ];
+  for (const entry of entries) {
+    const episode = entry.episode;
+    lines.push(
+      `- ${episode.id} | lexical_score=${entry.lexicalScore.toFixed(4)}`
+      + ` | matched_terms=${entry.matchedTerms.join(',')}`,
+    );
+    lines.push(`  ${formatTimelineInstant(episode.startedAt)} to ${formatTimelineInstant(episode.endedAt)}: ${episode.title}`);
+    lines.push(`  Landmark: ${truncateTimelineText(episode.landmark, 220)}`);
+    if (episode.meaning?.text) {
+      lines.push(`  Meaning: ${truncateTimelineText(episode.meaning.text, 180)}`);
+    }
+    const relatedEpisodeIds = entry.chain.episodes
+      .map(candidate => candidate.id)
+      .filter(id => id !== episode.id);
+    if (relatedEpisodeIds.length > 0) {
+      lines.push(`  Related episode IDs: ${relatedEpisodeIds.join(', ')}`);
+    }
   }
   return lines.join('\n');
 }
@@ -367,6 +407,12 @@ export interface MemoryWriteToolOptions {
 export interface MemoryToolOptions extends MemoryWriteToolOptions {
   episodicStore?: (EpisodicTimelineStore & EpisodeDrilldownStore) | null;
   sessionReader?: EpisodeDrilldownSessionReader | null;
+  sessionQuarantineFilter?: MemorySessionQuarantineFilter | null;
+  /**
+   * Internal-only episode retrieval scope. The authorization resolver still
+   * verifies the exact trusted reflection request context on every call.
+   */
+  episodicAccessScope?: RetrievalAccessScope | (() => RetrievalAccessScope | undefined);
   /**
    * Shared-background provider (E4.5) backing `action=shared_background`. When
    * absent the action fails closed with an explicit not-configured error.
@@ -809,7 +855,7 @@ export function createMemoryTool(
       action: Type.Unsafe<MemoryToolAction>({
         type: 'string',
         enum: [...MEMORY_TOOL_ACTIONS],
-        description: 'One of: write, search, get, shared_background, census, exists, timeline, import, patch, redact, delete, restore.',
+        description: 'One of: write, search, episode_search, get, shared_background, census, exists, timeline, import, patch, redact, delete, restore.',
       }),
       text: Type.Optional(
         Type.String({ description: 'Required for action=write. The memory text to store.' }),
@@ -834,7 +880,7 @@ export function createMemoryTool(
         }),
       ),
       query: Type.Optional(
-        Type.String({ description: 'Required for action=search or action=exists. Lexical memory topic query.' }),
+        Type.String({ description: 'Required for action=search, action=episode_search, or action=exists. Lexical memory or canonical episode topic query.' }),
       ),
       episode_id: Type.Optional(
         Type.String({
@@ -843,7 +889,7 @@ export function createMemoryTool(
       ),
       limit: Type.Optional(
         Type.Number({
-          description: `Optional result limit for action=search, action=get sibling expansion, or action=timeline. Search: ${MEMORY_SEARCH_DEFAULT_LIMIT}-${MEMORY_SEARCH_MAX_LIMIT}; episode siblings: ${MEMORY_EPISODE_GET_LIMITS.defaultSiblings}-${MEMORY_EPISODE_GET_LIMITS.maxSiblings}; timeline: ${MEMORY_TIMELINE_DEFAULT_LIMIT}-${MEMORY_TIMELINE_MAX_LIMIT}.`,
+          description: `Optional result limit for action=search, action=episode_search, action=get sibling expansion, or action=timeline. Search: ${MEMORY_SEARCH_DEFAULT_LIMIT}-${MEMORY_SEARCH_MAX_LIMIT}; episode siblings: ${MEMORY_EPISODE_GET_LIMITS.defaultSiblings}-${MEMORY_EPISODE_GET_LIMITS.maxSiblings}; timeline: ${MEMORY_TIMELINE_DEFAULT_LIMIT}-${MEMORY_TIMELINE_MAX_LIMIT}.`,
         }),
       ),
       contact_id: Type.Optional(
@@ -875,24 +921,24 @@ export function createMemoryTool(
         Type.String({ description: 'For action=timeline, inclusive range end as YYYY-MM-DD or ISO-8601 timestamp with timezone.' }),
       ),
       channel_id: Type.Optional(
-        Type.String({ description: 'For action=get, action=census, action=exists, or action=timeline, current channel id. Usually supplied by runtime context.' }),
+        Type.String({ description: 'For action=episode_search, action=get, action=census, action=exists, or action=timeline, current channel id. Usually supplied by runtime context.' }),
       ),
       trust_level: Type.Optional(
         Type.Unsafe<TrustLevel>({
           type: 'string',
           enum: [...TRUST_LEVELS],
-          description: 'For action=get, action=census, action=exists, or action=timeline, current viewer trust level. Usually supplied by runtime context.',
+          description: 'For action=episode_search, action=get, action=census, action=exists, or action=timeline, current viewer trust level. Usually supplied by runtime context.',
         }),
       ),
       channel_visibility: Type.Optional(
         Type.Unsafe<ChannelPrivacy>({
           type: 'string',
           enum: [...CHANNEL_PRIVACY_VALUES],
-          description: 'For action=get, action=census, action=exists, or action=timeline, current channel visibility. Usually supplied by runtime context.',
+          description: 'For action=episode_search, action=get, action=census, action=exists, or action=timeline, current channel visibility. Usually supplied by runtime context.',
         }),
       ),
       canonical_contact_id: Type.Optional(
-        Type.String({ description: 'For action=get, action=census, action=exists, or action=timeline, optional canonical contact id for trusted cross-channel continuity. Runtime ingress remains authoritative.' }),
+        Type.String({ description: 'For action=episode_search, action=get, action=census, action=exists, or action=timeline, optional canonical contact id for trusted cross-channel continuity. Runtime ingress remains authoritative.' }),
       ),
       contact_a: Type.Optional(
         Type.String({ description: 'Required for action=shared_background. First contact id of the pair to find shared background for.' }),
@@ -1055,6 +1101,66 @@ export function createMemoryTool(
               sensitivity: memory.sensitivity,
               similarity: memory.similarity,
             }))));
+          }
+
+          case 'episode_search': {
+            if (!options.episodicStore) {
+              return textResultWithError(
+                'Error: episodic store is not configured for action=episode_search',
+                true,
+              );
+            }
+            const query = normalizedParams.query?.trim();
+            if (!query) {
+              return textResultWithError(
+                'Error: query is required for action=episode_search. '
+                + 'Missing required field "query". '
+                + 'Minimal valid JSON: {"action":"episode_search","query":"topic"}. '
+                + 'Do not retry action=episode_search without a non-empty query.',
+                true,
+              );
+            }
+            const visibility = resolveMemoryVisibility(normalizedParams, 'episode_search');
+            if (!visibility.ok) {
+              return textResultWithError(visibility.error, true);
+            }
+            const limit = normalizedParams.limit === undefined
+              ? MEMORY_SEARCH_DEFAULT_LIMIT
+              : clampInt(normalizedParams.limit, 1, MEMORY_SEARCH_MAX_LIMIT);
+            const memoryRetrievalPolicy = resolveMemoryRetrievalPolicy(
+              typeof options.memoryRetrievalPolicy === 'function'
+                ? options.memoryRetrievalPolicy()
+                : options.memoryRetrievalPolicy,
+            );
+            const requestedAccessScope = typeof options.episodicAccessScope === 'function'
+              ? options.episodicAccessScope()
+              : options.episodicAccessScope;
+            const accessScope = resolveAuthorizedRetrievalAccessScope(
+              visibility.channelId,
+              requestedAccessScope,
+            );
+            const rawResults = await searchEpisodicEpisodesLexically(options.episodicStore, {
+              query,
+              channelId: visibility.channelId,
+              trustLevel: visibility.trustLevel,
+              channelDisclosure: {
+                channelPrivacy: visibility.channelVisibility,
+                broadcast: visibility.broadcast,
+              },
+              ...(visibility.canonicalContactId
+                ? { canonicalContactId: visibility.canonicalContactId }
+                : {}),
+              limit,
+              accessScope,
+              memoryRetrievalPolicy,
+              includeChain: chain => (
+                filterQuarantinedEpisodicChains(
+                  options.sessionQuarantineFilter ?? null,
+                  [chain],
+                ).length === 1
+              ),
+            });
+            return textResult(formatEpisodicSearchResults(rawResults));
           }
 
           case 'get': {

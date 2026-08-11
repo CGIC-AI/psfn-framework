@@ -51,6 +51,10 @@ export const CONTINUITY_TOOL_CONTRACTS = {
     actions: [
       action('write', ['text', 'type'], ['importance', 'emotional_valence', 'confidence', 'tags', 'sensitivity', 'formation_vad']),
       action('search', ['query'], ['limit']),
+      action('episode_search', ['query'], ['limit', 'channel_id', 'trust_level', 'channel_visibility', 'canonical_contact_id'], {
+        id: 'episode_search',
+        rule: 'lexically searches visible canonical episodes and returns exact episode ids for action=get drill-down',
+      }),
       action('get', ['episode_id'], ['limit', 'channel_id', 'trust_level', 'channel_visibility', 'canonical_contact_id'], {
         id: 'get',
         rule: 'expands the exact visible episode into journal-current source turns plus visible arc and thread siblings',
@@ -72,8 +76,8 @@ export const CONTINUITY_TOOL_CONTRACTS = {
       action('restore', ['delete_id']),
     ],
     output: 'It returns exact memory, episode-turn, event, deletion-proposal, delete, or provenance identifiers instead of changing unrelated records silently.',
-    guidance: 'Use get only with an exact episode ID already surfaced by episodic retrieval. Do not use durable memory as a scratch file, journal, transcript index, or reference wiki.',
-    example: { action: 'get', episode_id: 'episode-id-from-a-landmark', limit: 8 },
+    guidance: 'Use episode_search for deliberate event recall, then get with an exact returned episode ID for source-turn evidence. Do not use durable memory as a scratch file, journal, transcript index, or reference wiki.',
+    example: { action: 'episode_search', query: 'the planter repair', limit: 5 },
   },
   scratchpad: {
     purpose: 'Keep temporary working notes and excerpts that may expire after the current day.',

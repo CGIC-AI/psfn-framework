@@ -2,12 +2,14 @@ import type { ToolRegistrar } from '../../core/agent/tool-registrar.js';
 import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
 import type { MemoryRetrievalPolicy } from '../../system/config/memory-retrieval-policy.js';
 import type { MemoryStorePort } from './memory-store-port.js';
+import type { RetrievalAccessScope } from './types.js';
 import type {
   MemoryDeletionApprovalPort,
   MemoryDeletionProposalStorePort,
 } from './deletion-proposals.js';
 import type { MemoryDeletionPolicy } from '../../system/config/memory-deletion-policy.js';
 import type { EpisodicTimelineStore } from './retrieval/episodic.js';
+import type { MemorySessionQuarantineFilter } from './retrieval/session-quarantine.js';
 import type {
   EpisodeDrilldownSessionReader,
   EpisodeDrilldownStore,
@@ -33,6 +35,8 @@ export function registerMemoryTools(
     memoryDeletionPolicy: MemoryDeletionPolicy | (() => MemoryDeletionPolicy | undefined);
     episodicStore?: (EpisodicTimelineStore & EpisodeDrilldownStore) | null;
     sessionReader?: EpisodeDrilldownSessionReader | null;
+    sessionQuarantineFilter?: MemorySessionQuarantineFilter | null;
+    episodicAccessScope?: RetrievalAccessScope | (() => RetrievalAccessScope | undefined);
     contactStore?: ContactStorePort | null;
     /**
      * Live retrieval policy authority (zet.2) so the `action=timeline` tool
@@ -51,6 +55,10 @@ export function registerMemoryTools(
   target.registerTool(createMemoryTool(options.writer, options.memoryStore, {
     episodicStore: options.episodicStore ?? null,
     sessionReader: options.sessionReader ?? null,
+    sessionQuarantineFilter: options.sessionQuarantineFilter ?? null,
+    ...(options.episodicAccessScope !== undefined
+      ? { episodicAccessScope: options.episodicAccessScope }
+      : {}),
     sharedBackgroundProvider,
     ...(options.memoryRetrievalPolicy !== undefined
       ? { memoryRetrievalPolicy: options.memoryRetrievalPolicy }

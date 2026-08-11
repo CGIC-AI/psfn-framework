@@ -7,16 +7,20 @@ The important lesson is not "rewrite in Rust." The important lesson is to stop f
 
 ## When To Use Adversarial Review
 
-Use an adversarial review pass for changes that affect:
+Use a separate adversarial review when the assembled change has an actual trust
+boundary or complexity risk that focused validation cannot cheaply cover.
+Relevant risk signals include:
 
 - Gateway policy, capability checks, confirmation gates, path policy, URL policy, or tool execution.
 - Runtime startup, process supervision, deployment files, live service wiring, or persistence layout.
-- Config owner files, settings contracts, Garden settings surfaces, or environment-variable authority.
+- Semantic changes to config owner files, settings contracts, Garden settings surfaces, or environment-variable authority.
 - Trust, privacy, channel envelopes, prompt assembly, attribution, memory writes, fold-review, or shard/subagent outputs.
 - Migrations, repair scripts, backup/restore, and any code that mutates durable state.
-- Large multi-bead integration branches or any change where the implementer had to make a judgement call under uncertainty.
+- Cross-cutting integration where interacting seams or unresolved uncertainty create a concrete failure mode.
 
-Small cosmetic edits and low-risk docs-only changes usually do not need a separate reviewer unless they update operating rules.
+Priority, branch size, bead count, or ordinary implementation judgement alone do
+not require a reviewer. Small cosmetic edits and low-risk docs-only changes
+usually do not need one unless they materially change operating or trust rules.
 
 ## Review Shape
 
@@ -45,7 +49,8 @@ For real bugs, default to this sequence:
 2. Add the smallest failing regression test or verification script change.
 3. Implement the fix.
 4. Run the targeted test or script.
-5. Run `npm run lint` for tracked code changes.
+5. Run `npm run lint:changed -- --base <fixed-point>` for tracked code changes;
+   let the final pre-PR gate select full lint when the changed scope requires it.
 6. Record the validation evidence in the bead close reason or handoff.
 
 If a regression test is not practical, explain why and add the nearest deterministic gate, smoke, script assertion, or operator-visible validation step.

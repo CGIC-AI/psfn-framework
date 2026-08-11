@@ -101,9 +101,9 @@ main
        └── train/<wave>-<n>
 ```
 
-Use worktrees under `$HOME/ai/dev/worktrees/psfn-framework`. Worktrees are writer
-isolation, not PR boundaries: integrate compatible lanes into one train. A lone
-writer doing sequential work need not create one worktree per bead.
+Use the operator-provided external worktree root. Worktrees are writer isolation,
+not PR boundaries: integrate compatible lanes into one train. A lone writer doing
+sequential work need not create one worktree per bead.
 
 ## Roles
 
@@ -227,7 +227,7 @@ the named worktree and branch:
 
 ```bash
 BEAD_ID="psfn-framework-..."
-WORKTREE_PATH="$HOME/ai/dev/worktrees/psfn-framework/<lane>"
+WORKTREE_PATH="<operator-provided-external-worktree-root>/<lane>"
 BASE_SHA="<full-base-sha>"
 
 cd "$WORKTREE_PATH"
@@ -257,7 +257,7 @@ repository and run a focused reproduction:
 
 ```bash
 BEAD_ID="psfn-framework-..."
-WORKTREE_PATH="$HOME/ai/dev/worktrees/psfn-framework/<review-lane>"
+WORKTREE_PATH="<operator-provided-external-worktree-root>/<review-lane>"
 BASE_SHA="<full-base-sha>"
 HEAD_SHA="<full-head-sha>"
 REVIEW_OUT="/tmp/${BEAD_ID}-kimi-review.txt"
@@ -293,7 +293,7 @@ verdict in the Pi prompt. Every new Pi review uses
 
 ```bash
 BEAD_ID="psfn-framework-..."
-WORKTREE_PATH="$HOME/ai/dev/worktrees/psfn-framework/<review-lane>"
+WORKTREE_PATH="<operator-provided-external-worktree-root>/<review-lane>"
 BASE_SHA="<full-base-sha>"
 HEAD_SHA="<full-final-head-sha>"
 REVIEW_OUT="/tmp/${BEAD_ID}-glm52-review.txt"
@@ -468,7 +468,9 @@ handoff record.
 - Never manually force-push, delete worktrees/branches/stashes, or rewrite shared
   history. The exact-head publisher is the only normal lease-protected update path.
 - Preserve fail-closed security and configuration contracts.
-- Live deployment remains operator-directed and follows `docs/operations.md`.
+- Runtime and framework operations follow `docs/operations.md`; live deployment
+  remains operator-directed and requires an explicitly supplied external
+  configuration location.
 - Manual, live, deployment, and release validation are separate work. They do not
   reopen a completed implementation loop or delay unrelated feature work; track
   them in new testing beads whose failures create new bugs.

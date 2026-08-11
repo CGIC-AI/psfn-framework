@@ -4,13 +4,14 @@ This reproduces PSFN's pre-PR gate and internal reviews on another machine.
 
 ## Prerequisites and setup
 
-Install Git, Node.js 24 LTS (24.19.0 or newer 24.x), npm, a running Docker engine, authenticated GitHub CLI,
-and UBS 5.3.5. Install UBS from its immutable tag after verifying the installer:
+Install Git, Node.js 24 LTS (24.19.0 or newer 24.x), npm, a running Docker engine,
+authenticated GitHub CLI, and UBS 5.3.7. Install UBS from its immutable tag after
+verifying the installer:
 
 ```bash
 ubs_installer="$(mktemp)"
 curl -fsSL \
-  https://raw.githubusercontent.com/Dicklesworthstone/ultimate_bug_scanner/v5.3.5/install.sh \
+  https://raw.githubusercontent.com/Dicklesworthstone/ultimate_bug_scanner/v5.3.7/install.sh \
   -o "$ubs_installer"
 printf '%s  %s\n' \
   '1a5fbf3f487df5de8e23f439c5b07ce1d0db1b9991b39ead983a51f89ba603e2' \
@@ -20,6 +21,17 @@ bash "$ubs_installer" --easy-mode
 
 Keep UBS in `PATH`; the gate pins it with `--no-auto-update`. Semgrep, actionlint,
 and zizmor use pinned Docker images and need no host install.
+
+Before running the local gate, configure the ignored or external privacy
+blocklist and the approved maintainer identity without placing either value in
+tracked files. Repository maintainers configure the matching GitHub variables:
+
+```bash
+git config publicSanitize.localBlocklist '<absolute-path-to-private-blocklist.json>'
+git config --add delivery.allowedCommitEmail '<approved-maintainer-email>'
+gh variable set DELIVERY_ALLOWED_COMMIT_EMAILS --body '<approved-maintainer-email>'
+gh variable set LOCAL_GATE_STATUS_ACTOR --body "$(gh api user --jq .login)"
+```
 
 Run once per clone/worktree:
 
@@ -31,13 +43,9 @@ git config --get core.hooksPath       # .githooks
 gh alias list | grep '^gated-pr:'     # !npm run pr:publish -- "$@"
 ```
 
-The installer replaces nothing; run it separately in every worktree.
-Repository maintainers must also configure the only GitHub identity allowed to
-publish local-gate statuses:
-
-```bash
-gh variable set LOCAL_GATE_STATUS_ACTOR --body "$(gh api user --jq .login)"
-```
+The hook installer replaces nothing; run it separately in every worktree. The
+privacy blocklist may be shared by absolute path across worktrees; the local gate
+fails closed when the configured file is absent.
 
 The integration harness keeps one labeled Postgres container alive per exact
 test image, Vitest invocation, and worker pool, then creates an isolated
@@ -87,10 +95,10 @@ npm run gate:pre-pr
 ```
 
 The sequential gate always owns delivery rules and budgets, changed-file lint,
-Semgrep diff scanning, and changed-file UBS 5.3.5. Full root lint, build,
+Semgrep diff scanning, and changed-file UBS 5.3.7. Full root lint, build,
 baselined typecheck, repository hygiene, and product tests capped at eight
 workers with fail-fast enabled run only for root runtime/build-graph or root
-lockfile changes. UI and deployment changes use their focused checks instead
+lockfile changes. UI changes use their focused checks instead
 of the backend/Postgres suite; Semgrep rule tests and changed-workflow
 actionlint/zizmor run only when their own files change.
 
@@ -162,11 +170,12 @@ its URL, and returns while checks continue asynchronously. Do not use raw
 dependencies. Use `--wait` only when the operator explicitly asks this session to
 monitor required checks.
 
-GitHub has one complementary delta runner and one status aggregator. Drafts use
-no runners; labels do not retrigger CI. Clean root builds, UI checks, and
-deployment contracts run only for applicable paths. GitHub never runs the full
-repository product/Postgres suite, while local lint, typecheck, hygiene, UBS,
-Semgrep, and specialist checks are not repeated wholesale.
+GitHub has one five-minute policy job and one status aggregator. Drafts use no
+runners, and labels do not retrigger CI. The policy job verifies the authenticated
+exact-head local-gate attestation and enforces only change budget, commit identity,
+and generic public-sanitation policy. It does not install project dependencies or
+repeat local lint, build, typecheck, tests, hygiene, UBS, Semgrep, or specialist
+checks.
 
 On a later external failure, return evidence to the owning implementer. An
 external P0/P1 badge is not itself a severity ruling. Gate a corrected final head

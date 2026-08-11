@@ -58,12 +58,13 @@ docker ps -aq --filter label=io.local-gate.test-postgres=true |
 
 Use targeted tests and `npm run lint:changed -- --base origin/main` while
 editing. A bead is an ownership unit, not automatically a PR: batch compatible
-ready beads into one coherent train. The hard limits are 25 files, 2,500 counted
-changed lines, and 8 commits; 15 files, 1,500 lines, and 5 commits are planning
-targets. The publication floor is 800 counted changed lines to prevent tiny PRs
-from incurring separate flat-price external reviews. Batch compatible work and
-never add filler. An under-floor PR requires `change-budget:exception` plus a
-`BLOCKER:` rationale showing that it must land alone and cannot safely wait.
+ready beads into one coherent train. The standard publication window is 800–2,500
+counted changed lines, at most 25 files, and at most 8 commits; 15 files, 1,500
+lines, and 5 commits are planning targets. The floor discourages tiny PRs that
+incur separate flat-price external reviews, but none of these numbers justifies
+padding, splitting, reshaping, or delaying coherent ready work. Tag an
+out-of-window PR `change-budget:exception`, state the coherent variance in one
+line, and finish delivery.
 
 Commit coherent checkpoints and push the same-name non-main branch immediately:
 

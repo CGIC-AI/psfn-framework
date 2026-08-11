@@ -21,15 +21,13 @@ Non-goals:
 
 ## Change budget
 
-- [ ] This PR is inside the mandatory window: 800–2,500 counted changed lines, at most 25 files, at most 8 commits
-- [ ] Compatible completed and in-flight work was bundled; this is not an avoidable small PR
+- [ ] This PR is inside the standard window: 800–2,500 counted changed lines, at most 25 files, at most 8 commits, or carries an explicit coherent variance
+- [ ] Compatible work was bundled when that produced a coherent change; this PR was not padded or delayed to fit the window
 
 ## Change-budget exception
 
 <!--
 Leave blank unless a maintainer applied `change-budget:exception`.
-This exception is only for a PR below 800 lines that is an otherwise-unlandable
-blocker and cannot be combined safely with compatible work. Begin the rationale
-with `BLOCKER:` and explain both facts. It cannot bypass the 25-file or
-2,500-line maximum.
+For any out-of-window coherent change, explain the variance in one line. Do not
+pad, split, reshape, or delay ready work merely to fit the standard window.
 -->

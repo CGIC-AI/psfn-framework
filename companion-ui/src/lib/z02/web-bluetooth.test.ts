@@ -22,9 +22,15 @@ describe('Web Bluetooth Z02 connector', () => {
     const progress = vi.fn();
     const disconnected = vi.fn();
     const audioPcm = vi.fn();
+    const prepareAudio = vi.fn(async () => undefined);
     const connector = new WebBluetoothZ02Connector(fixture.bluetooth);
 
-    const connection = await connector.connect({ progress, disconnected, audioPcm });
+    const connection = await connector.connect({
+      progress,
+      disconnected,
+      audioPcm,
+      prepareAudio,
+    });
 
     expect(fixture.requestDevice).toHaveBeenCalledWith({
       filters: [
@@ -53,6 +59,7 @@ describe('Web Bluetooth Z02 connector', () => {
     expect(connection.deviceName).toBe('Z02 Test Badge');
     expect(connection.transport).toBe('stock-rcsp');
     expect(connection.microphone).toBe('pcm16-16khz');
+    expect(prepareAudio).toHaveBeenCalledOnce();
     expect(fixture.writes).toHaveLength(5);
     expect(fixture.writes[4]?.[4]).toBe(0x04);
     expect(fixture.writes[4]?.[8]).toBe(0x00);

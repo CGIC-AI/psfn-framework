@@ -14,7 +14,11 @@ export function ThreadView({
 
   useEffect(() => {
     threadEndRef.current?.scrollIntoView({ block: 'end' });
-  }, [streamState.messages.length, streamState.liveAssistant?.content]);
+  }, [
+    streamState.messages.length,
+    streamState.liveUser?.content,
+    streamState.liveAssistant?.content,
+  ]);
 
   return (
     <section
@@ -27,7 +31,7 @@ export function ThreadView({
         </div>
       )}
       <div className="message-list" aria-live="polite">
-        {streamState.messages.length === 0 && !streamState.liveAssistant ? (
+        {streamState.messages.length === 0 && !streamState.liveUser && !streamState.liveAssistant ? (
           <div className="thread-empty">
             <Sparkles aria-hidden />
             <p>{streamState.connection === 'ready' ? 'Ready for the thread.' : 'Open settings to connect.'}</p>
@@ -42,6 +46,13 @@ export function ThreadView({
                 </div>
               </article>
             ))}
+            {streamState.liveUser && (
+              <article className="message-row user live">
+                <div className="message-bubble">
+                  <p>{streamState.liveUser.content}</p>
+                </div>
+              </article>
+            )}
             {streamState.liveAssistant && (
               <article className="message-row assistant live">
                 <AvatarMark />

@@ -274,6 +274,43 @@ describe('hub stream reducer', () => {
     });
   });
 
+  it('replaces cumulative live microphone transcripts and commits only the final turn', () => {
+    let state = createInitialHubStreamState('2026-06-17T00:00:00.000Z');
+
+    for (const [index, content] of ['hello', 'hello there'].entries()) {
+      state = reduceHubStreamState(state, {
+        type: 'hub.inbound',
+        at: `2026-06-17T00:00:0${index + 1}.000Z`,
+        event: {
+          message: {
+            type: 'message',
+            data: { role: 'user', content, live: true },
+          },
+        },
+      });
+    }
+
+    expect(state.messages).toEqual([]);
+    expect(state.liveUser?.content).toBe('hello there');
+    state = reduceHubStreamState(state, {
+      type: 'hub.inbound',
+      at: '2026-06-17T00:00:03.000Z',
+      event: {
+        message: {
+          type: 'message',
+          data: { role: 'user', content: 'hello there', final: true },
+        },
+      },
+    });
+
+    expect(state.liveUser).toBeNull();
+    expect(state.messages).toEqual([expect.objectContaining({
+      role: 'user',
+      content: 'hello there',
+      final: true,
+    })]);
+  });
+
   it('surfaces disconnects and failures honestly', () => {
     let state: HubStreamState = {
       ...createInitialHubStreamState('2026-06-17T00:00:00.000Z'),
@@ -410,6 +447,24 @@ describe('hub stream store', () => {
 });
 
 describe('hub stream store control + artifact wiring', () => {
+  it('relays PCM stream lifecycle through the active gateway transport', async () => {
+    const client = new FakeHubClient();
+    const start = vi.spyOn(client, 'startPcmAudioStream');
+    const send = vi.spyOn(client, 'sendPcmAudio');
+    const stop = vi.spyOn(client, 'stopPcmAudioStream');
+    const store = new HubStreamStore(client);
+    const pcm = Uint8Array.of(0x00, 0x01);
+
+    await store.startPcmAudioStream();
+    store.sendPcmAudio(pcm);
+    await store.stopPcmAudioStream();
+
+    expect(start).toHaveBeenCalledOnce();
+    expect(send).toHaveBeenCalledWith(pcm);
+    expect(stop).toHaveBeenCalledOnce();
+    store.destroy();
+  });
+
   it('relays a coalesced headpat through the client transport', () => {
     const client = new FakeHubClient();
     const spy = vi.spyOn(client, 'sendTouchInteraction');
@@ -568,6 +623,18 @@ class FakeHubClient implements HubStreamClientLike {
 
   interrupt(): void {
     return;
+  }
+
+  startPcmAudioStream(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  sendPcmAudio(): void {
+    return;
+  }
+
+  stopPcmAudioStream(): Promise<void> {
+    return Promise.resolve();
   }
 
   sendApprovalDecision(): void {

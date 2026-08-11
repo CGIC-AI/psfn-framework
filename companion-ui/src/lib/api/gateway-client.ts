@@ -3,6 +3,11 @@ import type { DeviceLocationSample } from '../geolocation.js';
 import type { HubToClientMessage } from '../protocol/events.js';
 import { buildSatelliteHello } from './auth.js';
 import { COMPANION_APPROVALS_V2_CAPABILITY } from '../../../../src/shared/contracts/companion-relay.js';
+import {
+  encodeCompanionUiAudioChunk,
+  parseCompanionUiAudioServerFrame,
+  type CompanionUiAudioServerFrame,
+} from '../../../../src/shared/contracts/companion-ui-audio.js';
 import type {
   SatelliteHubClientEventMap,
   SatelliteHubConnectionState,
@@ -36,6 +41,22 @@ import {
 const SOCKET_OPEN = 1;
 const SOCKET_CLOSING = 2;
 const SOCKET_CLOSED = 3;
+const DEFAULT_MAX_BUFFERED_AUDIO_BYTES = 1_048_576;
+
+interface Deferred {
+  readonly promise: Promise<void>;
+  resolve(): void;
+  reject(error: Error): void;
+}
+
+interface ActiveAudioStream {
+  readonly requestId: string;
+  readonly started: Deferred;
+  phase: 'starting' | 'ready' | 'stopping';
+  nextSequence: number;
+  nextAckSequence: number;
+  stopped?: Deferred;
+}
 interface PendingAction {
   readonly resource: CompanionUiResource;
   readonly artifactId?: string;
@@ -61,6 +82,7 @@ export interface CompanionGatewayClientOptions {
   readonly clock?: () => Date;
   readonly requestIdFactory?: () => string;
   readonly handshakeTimeoutMs?: number;
+  readonly maxBufferedAudioBytes?: number;
 }
 
 type Listener = (event: SatelliteHubClientEventMap[keyof SatelliteHubClientEventMap]) => void;
@@ -77,10 +99,12 @@ export class CompanionGatewayClient {
   private readonly clock: () => Date;
   private readonly requestIdFactory: () => string;
   private readonly handshakeTimeoutMs: number;
+  private readonly maxBufferedAudioBytes: number;
   private socket: SatelliteHubWebSocketLike | null = null;
   private state: SatelliteHubConnectionState = 'idle';
   private ready = false;
   private activeInteraction: ActiveInteraction | null = null;
+  private activeAudio: ActiveAudioStream | null = null;
   private authorizedShardId: string | null = null;
   private session: SatelliteHubSession = {};
 
@@ -88,6 +112,12 @@ export class CompanionGatewayClient {
     this.clock = options.clock ?? (() => new Date());
     this.requestIdFactory = options.requestIdFactory ?? (() => globalThis.crypto.randomUUID());
     this.handshakeTimeoutMs = options.handshakeTimeoutMs ?? 10_000;
+    this.maxBufferedAudioBytes = options.maxBufferedAudioBytes
+      ?? DEFAULT_MAX_BUFFERED_AUDIO_BYTES;
+    if (!Number.isSafeInteger(this.maxBufferedAudioBytes)
+      || this.maxBufferedAudioBytes < 1) {
+      throw new Error('Companion audio backpressure limit is invalid');
+    }
   }
 
   on<K extends keyof SatelliteHubClientEventMap>(
@@ -153,6 +183,7 @@ export class CompanionGatewayClient {
         if (!this.ready) settle(error);
       });
       this.attachSocketListener(socket, 'close', () => {
+        this.clearAudio(new Error('Companion gateway closed during audio startup'));
         this.socket = null;
         this.ready = false;
         this.pending.clear();
@@ -172,6 +203,7 @@ export class CompanionGatewayClient {
     this.pending.clear();
     this.activeInteraction = null;
     this.authorizedShardId = null;
+    this.clearAudio(new Error('Companion gateway disconnected during audio streaming'));
     this.session = {};
     if (socket && socket.readyState !== SOCKET_CLOSED && socket.readyState !== SOCKET_CLOSING) {
       this.setState('closing');
@@ -205,6 +237,89 @@ export class CompanionGatewayClient {
       ...(shardId ? { shardId } : {}),
     };
     this.emitInbound({ type: 'message', data: { role: 'user', content, final: true } });
+  }
+
+  startPcmAudioStream(): Promise<void> {
+    const socket = this.socket;
+    if (!this.ready || !socket || socket.readyState !== SOCKET_OPEN) {
+      throw this.emitLocalError('Companion gateway is not ready for audio', true);
+    }
+    if (!this.session.capabilities?.input?.includes('microphone_pcm')) {
+      throw this.emitLocalError('Companion gateway did not authorize microphone audio', true);
+    }
+    if (this.activeAudio) {
+      throw this.emitLocalError('Companion audio stream is already active', true);
+    }
+    const requestId = this.requestIdFactory();
+    if (!validCompanionRequestId(requestId) || this.pending.has(requestId)) {
+      throw this.emitLocalError('Companion audio request identifier is invalid', true);
+    }
+    const started = createDeferred();
+    const audio: ActiveAudioStream = {
+      requestId,
+      started,
+      phase: 'starting',
+      nextSequence: 0,
+      nextAckSequence: 0,
+    };
+    this.activeAudio = audio;
+    try {
+      socket.send(JSON.stringify({ schemaVersion: 1, type: 'audio.start', requestId }));
+    } catch (error) {
+      this.activeAudio = null;
+      const resolved = this.emitLocalError('Companion audio stream could not be started', true, error);
+      started.reject(resolved);
+      throw resolved;
+    }
+    return started.promise;
+  }
+
+  sendPcmAudio(pcm: Uint8Array): void {
+    const socket = this.socket;
+    const audio = this.activeAudio;
+    if (!this.ready || !socket || socket.readyState !== SOCKET_OPEN
+      || !audio || audio.phase !== 'ready') {
+      throw this.emitLocalError('Companion audio stream is not ready', true);
+    }
+    const frame = encodeCompanionUiAudioChunk(audio.nextSequence, pcm);
+    if ((socket.bufferedAmount ?? 0) + frame.byteLength > this.maxBufferedAudioBytes) {
+      throw this.emitLocalError('Companion audio backpressure limit was reached', true);
+    }
+    try {
+      socket.send(frame);
+      audio.nextSequence = (audio.nextSequence + 1) >>> 0;
+    } catch (error) {
+      throw this.emitLocalError('Companion audio chunk could not be sent', true, error);
+    }
+  }
+
+  stopPcmAudioStream(): Promise<void> {
+    const audio = this.activeAudio;
+    if (!audio) return Promise.resolve();
+    if (audio.phase === 'starting') {
+      return audio.started.promise.then(() => this.stopPcmAudioStream());
+    }
+    if (audio.phase === 'stopping') return audio.stopped?.promise ?? Promise.resolve();
+    const socket = this.socket;
+    if (!socket || socket.readyState !== SOCKET_OPEN) {
+      this.clearAudio(new Error('Companion gateway closed before audio could stop'));
+      return Promise.reject(new Error('Companion gateway closed before audio could stop'));
+    }
+    const stopped = createDeferred();
+    audio.phase = 'stopping';
+    audio.stopped = stopped;
+    try {
+      socket.send(JSON.stringify({
+        schemaVersion: 1,
+        type: 'audio.stop',
+        requestId: audio.requestId,
+      }));
+    } catch (error) {
+      const resolved = this.emitLocalError('Companion audio stream could not be stopped', true, error);
+      this.clearAudio(resolved);
+      return Promise.reject(resolved);
+    }
+    return stopped.promise;
   }
 
   interrupt(): void {
@@ -332,6 +447,8 @@ export class CompanionGatewayClient {
       this.applyReady(ready);
       return true;
     }
+    const audioFrame = parseCompanionUiAudioServerFrame(value);
+    if (audioFrame) return this.consumeAudioFrame(audioFrame);
     const event = parseGatewayEvent(value);
     if (event) {
       if (!this.ready || (event.type === 'approval.requested'
@@ -367,6 +484,43 @@ export class CompanionGatewayClient {
     this.ready = true;
     this.setState('ready');
     this.emit('session', cloneGatewaySession(this.session));
+  }
+
+  private consumeAudioFrame(frame: CompanionUiAudioServerFrame): false {
+    const audio = this.activeAudio;
+    if (!audio || audio.requestId !== frame.requestId) {
+      return this.failProtocol('Companion audio frame did not match the active stream');
+    }
+    if (frame.type === 'audio.ready') {
+      if (audio.phase !== 'starting') {
+        return this.failProtocol('Companion audio stream became ready out of order');
+      }
+      audio.phase = 'ready';
+      audio.started.resolve();
+      return false;
+    }
+    if (frame.type === 'audio.ack') {
+      if (audio.phase !== 'ready' || frame.sequence !== audio.nextAckSequence
+        || frame.sequence >= audio.nextSequence) {
+        return this.failProtocol('Companion audio acknowledgement was out of order');
+      }
+      audio.nextAckSequence = (audio.nextAckSequence + 1) >>> 0;
+      return false;
+    }
+    if (audio.phase !== 'stopping' || !audio.stopped) {
+      return this.failProtocol('Companion audio stream stopped out of order');
+    }
+    this.activeAudio = null;
+    audio.stopped.resolve();
+    return false;
+  }
+
+  private clearAudio(error: Error): void {
+    const audio = this.activeAudio;
+    this.activeAudio = null;
+    if (!audio) return;
+    if (audio.phase === 'starting') audio.started.reject(error);
+    if (audio.phase === 'stopping') audio.stopped?.reject(error);
   }
 
   private consumeResult(requestId: string, pending: PendingAction, result: unknown): void {
@@ -564,4 +718,14 @@ export class CompanionGatewayClient {
   ): void {
     for (const listener of [...(this.listeners.get(type) ?? [])]) listener(event);
   }
+}
+
+function createDeferred(): Deferred {
+  let resolve!: () => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<void>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
 }

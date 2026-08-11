@@ -157,6 +157,7 @@ export interface HubStreamState {
   status: string | null;
   session: SatelliteHubSession | null;
   messages: HubStreamMessage[];
+  liveUser: HubStreamMessage | null;
   liveAssistant: HubStreamMessage | null;
   events: HubStreamEventLogEntry[];
   failure: HubStreamFailure | null;
@@ -190,6 +191,9 @@ export interface HubStreamClientLike {
   disconnect(): void;
   sendUserText(text: string, options?: { interrupt?: boolean }): void;
   interrupt(): void;
+  startPcmAudioStream?(): Promise<void>;
+  sendPcmAudio?(pcm: Uint8Array): void;
+  stopPcmAudioStream?(): Promise<void>;
   sendApprovalDecision(id: string, decision: 'approve' | 'deny'): void;
   sendArtifactPreviewRequest(requestId: string, artifactId: string): void;
   sendTouchInteraction(interaction: TouchInteraction): void;
@@ -218,6 +222,7 @@ export function createInitialHubStreamState(at = new Date().toISOString()): HubS
     status: null,
     session: null,
     messages: [],
+    liveUser: null,
     liveAssistant: null,
     events: [],
     failure: null,
@@ -267,6 +272,7 @@ export function reduceHubStreamState(
         voicePlayback,
         ...(shardSelectionChanged ? {
           messages: [],
+          liveUser: null,
           liveAssistant: null,
           phase: 'idle' as const,
         } : {}),
@@ -373,6 +379,7 @@ export class HubStreamStore {
       ...this.state,
       session: cloneSession(this.state.session ?? undefined) ?? null,
       messages: this.state.messages.map((message) => ({ ...message })),
+      liveUser: this.state.liveUser ? { ...this.state.liveUser } : null,
       liveAssistant: this.state.liveAssistant ? { ...this.state.liveAssistant } : null,
       events: this.state.events.map((entry) => ({ ...entry })),
       failure: this.state.failure ? { ...this.state.failure } : null,
@@ -409,6 +416,24 @@ export class HubStreamStore {
 
   interrupt(): void {
     this.client.interrupt();
+  }
+
+  startPcmAudioStream(): Promise<void> {
+    if (!this.client.startPcmAudioStream) {
+      throw new Error('Microphone audio is unavailable on this transport');
+    }
+    return this.client.startPcmAudioStream();
+  }
+
+  sendPcmAudio(pcm: Uint8Array): void {
+    if (!this.client.sendPcmAudio) {
+      throw new Error('Microphone audio is unavailable on this transport');
+    }
+    this.client.sendPcmAudio(pcm);
+  }
+
+  stopPcmAudioStream(): Promise<void> {
+    return this.client.stopPcmAudioStream?.() ?? Promise.resolve();
   }
 
   /**
@@ -530,6 +555,8 @@ function applyConnectionState(
     ...(authorityCleared
       ? {
           session: null,
+          liveUser: null,
+          liveAssistant: null,
           approvals: [],
           approvalResolutions: {},
           // Drop stale companion affect on lost authority so the sprite falls
@@ -834,10 +861,22 @@ function applyConversationMessage(
     };
   }
 
+  if (message.data.role === 'user' && streamMessage.live && !streamMessage.final) {
+    return {
+      ...state,
+      phase: 'listening',
+      liveUser: {
+        ...streamMessage,
+        id: state.liveUser?.id ?? streamMessage.id,
+      },
+    };
+  }
+
   const messages = [...state.messages, { ...streamMessage, live: false, final: true }];
   return {
     ...state,
     phase: message.data.role === 'assistant' ? 'listening' : 'responding',
+    liveUser: message.data.role === 'user' ? null : state.liveUser,
     liveAssistant: message.data.role === 'assistant' ? null : state.liveAssistant,
     messages,
   };

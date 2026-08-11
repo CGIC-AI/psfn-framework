@@ -12,6 +12,8 @@ export interface SttStreamConfig {
 export interface SttTranscriptChunk {
   type: 'partial' | 'final';
   text: string;
+  /** Provider-confirmed end of one spoken utterance within a continuous stream. */
+  utteranceFinal?: boolean;
   confidence?: number;
   startMs?: number;
   endMs?: number;

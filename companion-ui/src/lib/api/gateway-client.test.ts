@@ -2,14 +2,16 @@ import { describe, expect, it } from 'vitest';
 import type { SatelliteHubWebSocketLike } from './client.js';
 import { HubStreamStore } from '../stream/hub-stream.js';
 import { CompanionGatewayClient } from './gateway-client.js';
+import { parseCompanionUiAudioChunk } from '../../../../src/shared/contracts/companion-ui-audio.js';
 
 class FakeSocket implements SatelliteHubWebSocketLike {
   readyState = 0;
-  readonly sent: string[] = [];
+  bufferedAmount = 0;
+  readonly sent: Array<string | ArrayBuffer | ArrayBufferView> = [];
   readonly closeCalls: Array<readonly [number | undefined, string | undefined]> = [];
   private readonly listeners = new Map<string, Set<(event?: unknown) => void>>();
 
-  send(data: string): void {
+  send(data: string | ArrayBuffer | ArrayBufferView): void {
     this.sent.push(data);
   }
 
@@ -52,7 +54,7 @@ const READY = Object.freeze({
   type: 'session.ready',
   device: { id: 'office-display', label: 'Office display' },
   place: { id: 'office', label: 'Office' },
-  capabilities: ['text', 'audio_output', 'touch'],
+  capabilities: ['text', 'audio_input', 'audio_output', 'speech_to_text', 'touch'],
   telemetryScopes: ['status', 'approvals', 'artifacts', 'tool_activity'],
   eventCapabilities: ['approvals.v2'],
 });
@@ -65,7 +67,7 @@ async function connectClient(socket: FakeSocket, requestIds = ['request-1']) {
   });
   const connecting = client.connect();
   socket.open();
-  expect(socket.sent.map(frame => JSON.parse(frame))).toEqual([{
+  expect(socket.sent.map(frame => JSON.parse(String(frame)))).toEqual([{
     schemaVersion: 1,
     type: 'session.configure',
     eventCapabilities: ['approvals.v2'],
@@ -77,6 +79,72 @@ async function connectClient(socket: FakeSocket, requestIds = ['request-1']) {
 }
 
 describe('CompanionGatewayClient', () => {
+  it('starts one authenticated PCM stream and sends sequenced binary chunks', async () => {
+    const socket = new FakeSocket();
+    const client = await connectClient(socket, ['audio-request-1']);
+
+    const starting = client.startPcmAudioStream();
+    expect(socket.sent).toEqual([JSON.stringify({
+      schemaVersion: 1,
+      type: 'audio.start',
+      requestId: 'audio-request-1',
+    })]);
+    socket.message({ schemaVersion: 1, type: 'audio.ready', requestId: 'audio-request-1' });
+    await starting;
+    socket.sent.length = 0;
+
+    client.sendPcmAudio(Uint8Array.of(0x00, 0x01, 0x02, 0x03));
+    const binary = socket.sent[0];
+    expect(binary).toBeInstanceOf(Uint8Array);
+    expect(parseCompanionUiAudioChunk(binary as Uint8Array)).toEqual({
+      sequence: 0,
+      pcm: Uint8Array.of(0x00, 0x01, 0x02, 0x03),
+    });
+    socket.message({
+      schemaVersion: 1,
+      type: 'audio.ack',
+      requestId: 'audio-request-1',
+      sequence: 0,
+    });
+    await flushAsyncMessage();
+
+    const stopping = client.stopPcmAudioStream();
+    expect(socket.sent.at(-1)).toBe(JSON.stringify({
+      schemaVersion: 1,
+      type: 'audio.stop',
+      requestId: 'audio-request-1',
+    }));
+    socket.message({ schemaVersion: 1, type: 'audio.stopped', requestId: 'audio-request-1' });
+    await stopping;
+  });
+
+  it('fails closed before audio readiness and when websocket buffering is exhausted', async () => {
+    const socket = new FakeSocket();
+    const client = await connectClient(socket, ['audio-request-1']);
+
+    expect(() => client.sendPcmAudio(Uint8Array.of(0x00, 0x01)))
+      .toThrow(/audio stream is not ready/u);
+    const starting = client.startPcmAudioStream();
+    expect(() => client.sendPcmAudio(Uint8Array.of(0x00, 0x01)))
+      .toThrow(/audio stream is not ready/u);
+    socket.message({ schemaVersion: 1, type: 'audio.ready', requestId: 'audio-request-1' });
+    await starting;
+    socket.bufferedAmount = 1_048_576;
+
+    expect(() => client.sendPcmAudio(Uint8Array.of(0x00, 0x01)))
+      .toThrow(/audio backpressure limit/u);
+  });
+
+  it('rejects an audio start still waiting when the authenticated socket closes', async () => {
+    const socket = new FakeSocket();
+    const client = await connectClient(socket, ['audio-request-1']);
+
+    const starting = client.startPcmAudioStream();
+    socket.serverClose(1006);
+
+    await expect(starting).rejects.toThrow(/closed during audio startup/u);
+  });
+
   it('waits for exact server attachment metadata and emits no legacy hello or browser authority', async () => {
     const socket = new FakeSocket();
     const client = await connectClient(socket);
@@ -89,7 +157,7 @@ describe('CompanionGatewayClient', () => {
         deviceName: 'Office display',
         place: { id: 'office', name: 'Office' },
         capabilities: {
-          input: ['text'],
+          input: ['text', 'microphone_pcm', 'final_transcript'],
           output: ['text', 'streamed_audio', 'artifact', 'tool_activity'],
           control: ['interrupt', 'approvals', 'touch'],
         },
@@ -108,14 +176,14 @@ describe('CompanionGatewayClient', () => {
 
     client.sendUserText('  hello companion  ');
 
-    expect(socket.sent.map(frame => JSON.parse(frame))).toEqual([{
+    expect(socket.sent.map(frame => JSON.parse(String(frame)))).toEqual([{
       schemaVersion: 1,
       requestId: 'request-interact-1',
       action: 'companion.interact',
       resource: 'conversation.interact',
       body: { content: 'hello companion' },
     }]);
-    expect(socket.sent[0]).not.toMatch(/deviceId|placeId|sessionId|channelId|credential|assertion|embodiment/u);
+    expect(String(socket.sent[0])).not.toMatch(/deviceId|placeId|sessionId|channelId|credential|assertion|embodiment/u);
     socket.message({
       schemaVersion: 1,
       type: 'result',
@@ -150,7 +218,7 @@ describe('CompanionGatewayClient', () => {
 
     expect(() => client.selectShard('shard-forged')).toThrow(/not in the server directory/u);
     client.refreshShards();
-    expect(JSON.parse(socket.sent.at(-1)!)).toMatchObject({
+    expect(JSON.parse(String(socket.sent.at(-1)))).toMatchObject({
       requestId: 'list-1',
       action: 'companion.read',
       resource: 'shards.list',
@@ -172,7 +240,7 @@ describe('CompanionGatewayClient', () => {
     await flushAsyncMessage();
 
     client.selectShard('shard-live-1');
-    expect(JSON.parse(socket.sent.at(-1)!)).toMatchObject({
+    expect(JSON.parse(String(socket.sent.at(-1)))).toMatchObject({
       requestId: 'history-1',
       action: 'companion.read',
       resource: 'shards.history',
@@ -198,14 +266,14 @@ describe('CompanionGatewayClient', () => {
     expect(client.snapshot().session.activeShardId).toBe('shard-live-1');
 
     client.sendUserText('ask exact shard');
-    expect(JSON.parse(socket.sent.at(-1)!)).toMatchObject({
+    expect(JSON.parse(String(socket.sent.at(-1)))).toMatchObject({
       requestId: 'interaction-1',
       action: 'companion.interact',
       resource: 'shards.interact',
       body: { shardId: 'shard-live-1', content: 'ask exact shard' },
     });
     client.interrupt();
-    expect(JSON.parse(socket.sent.at(-1)!)).toMatchObject({
+    expect(JSON.parse(String(socket.sent.at(-1)))).toMatchObject({
       requestId: 'interrupt-1',
       resource: 'shards.interrupt',
       body: { shardId: 'shard-live-1', interactionId: 'interaction-1' },
@@ -264,7 +332,7 @@ describe('CompanionGatewayClient', () => {
     });
     await flushAsyncMessage();
     client.interrupt();
-    expect(JSON.parse(socket.sent.at(-1)!)).toMatchObject({
+    expect(JSON.parse(String(socket.sent.at(-1)))).toMatchObject({
       requestId: 'interrupt-a',
       resource: 'shards.interrupt',
       body: { shardId: 'a', interactionId: 'interaction-a' },
@@ -388,7 +456,7 @@ describe('CompanionGatewayClient', () => {
     client.sendArtifactPreviewRequest('preview-1', 'artifact-id');
     client.sendTouchInteraction({ kind: 'headpat', region: 'head', count: 2, durationMs: 20 });
 
-    expect(socket.sent.map(frame => JSON.parse(frame))).toEqual([
+    expect(socket.sent.map(frame => JSON.parse(String(frame)))).toEqual([
       expect.objectContaining({ requestId: 'interaction-1', resource: 'conversation.interact' }),
       {
         schemaVersion: 1,

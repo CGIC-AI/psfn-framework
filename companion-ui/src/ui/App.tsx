@@ -93,6 +93,7 @@ export function App() {
   );
   const fleetSessionRef = useRef<FleetSessionClient | null>(null);
   const storeRef = useRef<HubStreamStore | null>(null);
+  const z02AudioStoreRef = useRef<HubStreamStore | null>(null);
   const headpatCoalescerRef = useRef<HeadpatCoalescer | null>(null);
   const headpatReactionTimerRef = useRef<number | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
@@ -104,7 +105,25 @@ export function App() {
     connect,
     reportError: setConfigError,
   });
-  const z02Link = useZ02Link();
+  const z02AudioRelay = useMemo(() => ({
+    async start(): Promise<void> {
+      const store = storeRef.current;
+      if (!store) throw new Error('Companion is not connected');
+      await store.startPcmAudioStream();
+      z02AudioStoreRef.current = store;
+    },
+    write(pcm: Uint8Array): void {
+      const store = z02AudioStoreRef.current;
+      if (!store) throw new Error('Companion audio stream is not ready');
+      store.sendPcmAudio(pcm);
+    },
+    async stop(): Promise<void> {
+      const store = z02AudioStoreRef.current;
+      z02AudioStoreRef.current = null;
+      await store?.stopPcmAudioStream();
+    },
+  }), []);
+  const z02Link = useZ02Link(undefined, { audioRelay: z02AudioRelay });
   const mouthOpen = useVoicePlayback(streamState.voicePlayback, storeRef.current);
 
   const sendDeviceLocation = useCallback((sample: DeviceLocationSample) => {

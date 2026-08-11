@@ -39,6 +39,7 @@ export interface Z02LinkConnection {
 
 export interface Z02LinkConnector {
   connect(callbacks: {
+    prepareAudio?: () => Promise<void>;
     audioPcm?: (pcm: Uint8Array) => void;
     audioFrame?: (frame: OmiOpusFrame) => void;
     disconnected: () => void;
@@ -89,6 +90,7 @@ export class WebBluetoothZ02Connector implements Z02LinkConnector {
   constructor(private readonly bluetooth: Z02Bluetooth) {}
 
   async connect(callbacks: {
+    prepareAudio?: () => Promise<void>;
     audioPcm?: (pcm: Uint8Array) => void;
     audioFrame?: (frame: OmiOpusFrame) => void;
     disconnected: () => void;
@@ -190,6 +192,7 @@ export class WebBluetoothZ02Connector implements Z02LinkConnector {
           }
         };
         audio.addEventListener('characteristicvaluechanged', notificationListener);
+        await callbacks.prepareAudio?.();
         callbacks.progress?.('subscribing');
         await withTimeout(
           audio.startNotifications(),
@@ -267,6 +270,7 @@ export class WebBluetoothZ02Connector implements Z02LinkConnector {
           writeCharacteristic,
           encodeRcspCommand(RCSP_OPCODE_APP_RECORD_END, stopSequence),
         );
+        await callbacks.prepareAudio?.();
         callbacks.progress?.('subscribing');
         await writeRcsp(encodeRcspCommand(
           RCSP_OPCODE_APP_RECORDING,

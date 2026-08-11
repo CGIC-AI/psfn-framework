@@ -146,6 +146,7 @@ function fixture(
 describe('GatewayCompanionUiActionBroker', () => {
   it('resolves current human authority and dispatches only a linked agent child with sibling provenance', async () => {
     const built = fixture();
+    const controller = new AbortController();
     await expect(built.broker.execute({
       rawBody: actionBody(),
       companionId,
@@ -156,11 +157,13 @@ describe('GatewayCompanionUiActionBroker', () => {
         principal: { id: 'satellite-principal', mode: 'api_key', scope: 'satellite' },
         headers: {},
       },
+      signal: controller.signal,
     })).resolves.toHaveProperty('targetDigest');
     expect(built.dispatch.dispatch).toHaveBeenCalledOnce();
     const dispatched = built.dispatch.dispatch.mock.calls[0]![0];
     expect(dispatched.attachment.actor).toEqual(attachment.actor);
     expect(dispatched.attachment.deviceActor).toEqual(attachment.deviceActor);
+    expect(dispatched.signal).toBe(controller.signal);
     expect(dispatched).not.toHaveProperty('parentToken');
     const verifiedChild = built.verifier.verifyAgent({
       token: dispatched.childAssertion.token,

@@ -559,6 +559,35 @@ describe('CompanionUiWebSocketAdapter upgrade policy', () => {
     await built.adapter.stop();
   });
 
+  it('routes an explicit guest audio turn only through the guest broker', async () => {
+    const built = fixture({ guest: true, audio: true });
+    const candidate = request();
+    delete candidate.headers.cookie;
+    candidate.headers['x-psfn-satellite-capabilities'] = 'text,audio_input,speech_to_text';
+    candidate.rawHeaders = Object.entries(candidate.headers)
+      .flatMap(([name, value]) => [name, String(value)]);
+    const socket = new FakeSocket();
+    built.adapter.handleUpgrade(candidate, socket as unknown as Duplex, Buffer.alloc(0));
+    await vi.waitFor(() => expect(built.handleUpgrade).toHaveBeenCalledOnce());
+    built.webSocket.emit('message', CONFIGURE, false);
+    await vi.waitFor(() => expect(built.webSocket.sent).toHaveLength(1));
+    built.webSocket.emit('message', Buffer.from(JSON.stringify({
+      schemaVersion: 1,
+      type: 'audio.start',
+      requestId: 'z02-guest-stream',
+    })), false);
+    await vi.waitFor(() => expect(built.audioIngress?.start).toHaveBeenCalledOnce());
+
+    await built.audioIngress?.callbacks?.onUtterance('guest speech');
+
+    expect(built.execute).not.toHaveBeenCalled();
+    expect(built.guestExecute).toHaveBeenCalledWith(expect.objectContaining({
+      signal: expect.any(AbortSignal),
+      attachment: expect.objectContaining({ actor: { kind: 'guest', companionId } }),
+    }));
+    await built.adapter.stop();
+  });
+
   it('denies binary audio before a capability-gated server stream exists', async () => {
     const built = fixture();
     const socket = new FakeSocket();
@@ -638,6 +667,102 @@ describe('CompanionUiWebSocketAdapter upgrade policy', () => {
       type: 'event',
       event: { type: 'action', data: 'interrupt' },
     }));
+    await built.adapter.stop();
+  });
+
+  it('propagates a fast interrupt that arrives before backend dispatch registration', async () => {
+    const built = fixture({ audio: true });
+    const candidate = request();
+    candidate.headers['x-psfn-satellite-capabilities'] = 'text,audio_input,speech_to_text';
+    candidate.rawHeaders = Object.entries(candidate.headers)
+      .flatMap(([name, value]) => [name, String(value)]);
+    const socket = new FakeSocket();
+    built.adapter.handleUpgrade(candidate, socket as unknown as Duplex, Buffer.alloc(0));
+    await vi.waitFor(() => expect(built.handleUpgrade).toHaveBeenCalledOnce());
+    built.webSocket.emit('message', CONFIGURE, false);
+    await vi.waitFor(() => expect(built.webSocket.sent).toHaveLength(1));
+    built.webSocket.emit('message', Buffer.from(JSON.stringify({
+      schemaVersion: 1,
+      type: 'audio.start',
+      requestId: 'z02-fast-interrupt',
+    })), false);
+    await vi.waitFor(() => expect(built.audioIngress?.start).toHaveBeenCalledOnce());
+
+    const admission = await built.admit.mock.results[0]!.value;
+    let releaseDispatchRefresh!: () => void;
+    built.admit.mockImplementationOnce(async () => admission);
+    built.admit.mockImplementationOnce(() => new Promise(resolve => {
+      releaseDispatchRefresh = () => resolve(admission);
+    }));
+    const delivering = built.audioIngress?.callbacks?.onUtterance('interrupt immediately');
+    await vi.waitFor(() => expect(built.webSocket.sent).toContainEqual(
+      JSON.stringify({
+        schemaVersion: 1,
+        type: 'audio.turn.started',
+        requestId: 'z02-fast-interrupt',
+      }),
+    ));
+    expect(built.execute).not.toHaveBeenCalled();
+
+    built.webSocket.emit('message', Buffer.from(JSON.stringify({
+      schemaVersion: 1,
+      type: 'audio.interrupt',
+      requestId: 'z02-fast-interrupt',
+    })), false);
+    await vi.waitFor(() => expect(built.cancelAudioInteraction).toHaveBeenCalledOnce());
+    releaseDispatchRefresh();
+    await vi.waitFor(() => expect(built.execute).toHaveBeenCalledOnce());
+    const input = built.execute.mock.calls[0]?.[0] as { signal?: AbortSignal };
+    expect(input.signal?.aborted).toBe(true);
+    await delivering;
+    await built.adapter.stop();
+  });
+
+  it('terminates the socket and cancels the active turn when transcription fails', async () => {
+    const built = fixture({ audio: true });
+    const candidate = request();
+    candidate.headers['x-psfn-satellite-capabilities'] = 'text,audio_input,speech_to_text';
+    candidate.rawHeaders = Object.entries(candidate.headers)
+      .flatMap(([name, value]) => [name, String(value)]);
+    const socket = new FakeSocket();
+    built.adapter.handleUpgrade(candidate, socket as unknown as Duplex, Buffer.alloc(0));
+    await vi.waitFor(() => expect(built.handleUpgrade).toHaveBeenCalledOnce());
+    built.webSocket.emit('message', CONFIGURE, false);
+    await vi.waitFor(() => expect(built.webSocket.sent).toHaveLength(1));
+    built.webSocket.emit('message', Buffer.from(JSON.stringify({
+      schemaVersion: 1,
+      type: 'audio.start',
+      requestId: 'z02-stream-failure',
+    })), false);
+    await vi.waitFor(() => expect(built.audioIngress?.start).toHaveBeenCalledOnce());
+
+    let finishAction!: () => void;
+    built.execute.mockImplementationOnce(() => new Promise(resolve => {
+      finishAction = () => resolve({
+        content: '',
+        channelId: 'server-owned-channel',
+        inputTokens: 1,
+        outputTokens: 0,
+      });
+    }));
+    const delivering = built.audioIngress?.callbacks?.onUtterance('cancel this turn');
+    await vi.waitFor(() => expect(built.webSocket.sent).toContainEqual(
+      JSON.stringify({
+        schemaVersion: 1,
+        type: 'audio.turn.started',
+        requestId: 'z02-stream-failure',
+      }),
+    ));
+
+    built.audioIngress?.callbacks?.onError(new Error('provider disconnected'));
+
+    await vi.waitFor(() => expect(built.cancelAudioInteraction).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(built.audioIngress?.cancel)
+      .toHaveBeenCalledWith('STT stream failed'));
+    expect(built.webSocket.closeArgs[0]).toBe(4403);
+    expect(built.webSocket.closeArgs[1]).toBe('audio relay failed');
+    finishAction();
+    await delivering;
     await built.adapter.stop();
   });
 

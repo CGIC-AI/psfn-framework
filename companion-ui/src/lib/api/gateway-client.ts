@@ -1,5 +1,6 @@
 import type { TouchInteraction } from '../touch-interactions.js';
 import type { DeviceLocationSample } from '../geolocation.js';
+import type { PcmAudioStreamPort } from './pcm-audio.js';
 import type { HubToClientMessage } from '../protocol/events.js';
 import { buildSatelliteHello } from './auth.js';
 import { COMPANION_APPROVALS_V2_CAPABILITY } from '../../../../src/shared/contracts/companion-relay.js';
@@ -98,6 +99,11 @@ type Listener = (event: SatelliteHubClientEventMap[keyof SatelliteHubClientEvent
  * browser frame.
  */
 export class CompanionGatewayClient {
+  readonly pcmAudio: PcmAudioStreamPort = Object.freeze({
+    start: () => this.startPcmAudioStream(),
+    write: (pcm: Uint8Array) => this.sendPcmAudio(pcm),
+    stop: () => this.stopPcmAudioStream(),
+  });
   private readonly listeners = new Map<keyof SatelliteHubClientEventMap, Set<Listener>>();
   private readonly pending = new Map<string, PendingAction>();
   private readonly clock: () => Date;
@@ -248,7 +254,7 @@ export class CompanionGatewayClient {
     this.emitInbound({ type: 'message', data: { role: 'user', content, final: true } });
   }
 
-  startPcmAudioStream(): Promise<void> {
+  private startPcmAudioStream(): Promise<void> {
     const socket = this.socket;
     if (!this.ready || !socket || socket.readyState !== SOCKET_OPEN) {
       throw this.emitLocalError('Companion gateway is not ready for audio', true);
@@ -285,7 +291,7 @@ export class CompanionGatewayClient {
     return started.promise;
   }
 
-  sendPcmAudio(pcm: Uint8Array): Promise<void> {
+  private sendPcmAudio(pcm: Uint8Array): Promise<void> {
     const socket = this.socket;
     const audio = this.activeAudio;
     if (!this.ready || !socket || socket.readyState !== SOCKET_OPEN
@@ -312,7 +318,7 @@ export class CompanionGatewayClient {
     return acknowledged.promise;
   }
 
-  stopPcmAudioStream(): Promise<void> {
+  private stopPcmAudioStream(): Promise<void> {
     const audio = this.activeAudio;
     if (!audio) return Promise.resolve();
     if (audio.phase === 'starting') {
@@ -556,14 +562,15 @@ export class CompanionGatewayClient {
       return false;
     }
     if (frame.type === 'audio.turn.ended') {
-      if (audio.phase !== 'ready' || !audio.turnActive) {
+      if ((audio.phase !== 'ready' && audio.phase !== 'stopping') || !audio.turnActive) {
         return this.failProtocol('Companion audio turn ended out of order');
       }
       audio.turnActive = false;
       this.emitInbound({ type: 'action', data: 'pause-audio' });
       return false;
     }
-    if (audio.phase !== 'stopping' || !audio.stopped) {
+    if (audio.phase !== 'stopping' || !audio.stopped || audio.turnActive
+      || audio.pendingAcks.size > 0) {
       return this.failProtocol('Companion audio stream stopped out of order');
     }
     this.activeAudio = null;

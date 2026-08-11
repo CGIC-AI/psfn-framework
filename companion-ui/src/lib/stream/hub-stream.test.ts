@@ -449,9 +449,9 @@ describe('hub stream store', () => {
 describe('hub stream store control + artifact wiring', () => {
   it('relays PCM stream lifecycle through the active gateway transport', async () => {
     const client = new FakeHubClient();
-    const start = vi.spyOn(client, 'startPcmAudioStream');
-    const send = vi.spyOn(client, 'sendPcmAudio');
-    const stop = vi.spyOn(client, 'stopPcmAudioStream');
+    const start = vi.spyOn(client.pcmAudio, 'start');
+    const send = vi.spyOn(client.pcmAudio, 'write');
+    const stop = vi.spyOn(client.pcmAudio, 'stop');
     const store = new HubStreamStore(client);
     const pcm = Uint8Array.of(0x00, 0x01);
 
@@ -591,6 +591,11 @@ describe('hub stream store control + artifact wiring', () => {
 });
 
 class FakeHubClient implements HubStreamClientLike {
+  readonly pcmAudio = {
+    start: () => Promise.resolve(),
+    write: (_pcm: Uint8Array) => Promise.resolve(),
+    stop: () => Promise.resolve(),
+  };
   private readonly listeners = new Map<keyof SatelliteHubClientEventMap, Set<(event: never) => void>>();
   private readonly hello = buildSatelliteHello();
 
@@ -623,18 +628,6 @@ class FakeHubClient implements HubStreamClientLike {
 
   interrupt(): void {
     return;
-  }
-
-  startPcmAudioStream(): Promise<void> {
-    return Promise.resolve();
-  }
-
-  sendPcmAudio(): Promise<void> {
-    return Promise.resolve();
-  }
-
-  stopPcmAudioStream(): Promise<void> {
-    return Promise.resolve();
   }
 
   sendApprovalDecision(): void {

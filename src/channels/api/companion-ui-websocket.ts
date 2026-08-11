@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 import { TLSSocket } from 'node:tls';
 import type { Duplex } from 'node:stream';
@@ -10,7 +9,7 @@ import type {
   SatelliteTelemetryScope,
 } from '../../shared/contracts/satellite-registry.js';
 import type { CompanionId } from '../../shared/routing/companion-id.js';
-import { isObjectRecord as isRecord, isRfc4122Uuid } from '../../shared/utils/types.js';
+import { isRfc4122Uuid } from '../../shared/utils/types.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import type { GatewayHubDeviceIngressService } from '../../boundary/fleet-auth/hub-device-ingress.js';
 import type { HubDeviceAttachmentSnapshot } from '../../shared/contracts/hub-device-ingress.js';
@@ -18,19 +17,11 @@ import type {
   CompanionUiActionBrokerInput,
   GatewayCompanionUiActionBroker,
 } from '../../boundary/gateway/companion-ui-action-broker.js';
-import type {
-  CompanionUiAudioIngressPort,
-  CompanionUiAudioIngressSession,
-} from '../../boundary/gateway/companion-ui-audio-ingress.js';
+import type { CompanionUiAudioIngressPort } from '../../boundary/gateway/companion-ui-audio-ingress.js';
 import {
   parseCompanionUiActionFrame,
   parseCompanionUiSessionConfigureFrame,
 } from '../../boundary/fleet-auth/companion-ui-action.js';
-import {
-  parseCompanionUiAudioChunk,
-  parseCompanionUiAudioControlFrame,
-  type CompanionUiAudioControlFrame,
-} from '../../shared/contracts/companion-ui-audio.js';
 import {
   COMPANION_APPROVALS_V2_CAPABILITY,
   companionEventKindsForScopes,
@@ -56,6 +47,7 @@ import {
 } from './server/hub-device-ingress.js';
 import { readExclusiveFleetSessionCookie } from './server/fleet-auth-cookie.js';
 import { REQUEST_CAPABILITY_ASSERTION_HEADERS } from '../../boundary/fleet-auth/request-capability-transport.js';
+import { CompanionUiAudioSocketSession } from './companion-ui-audio-socket.js';
 
 const log = createComponentLogger('CompanionUiWebSocket');
 const PATH_PATTERN = /^\/companion-ui\/companions\/([0-9a-f-]+)\/ws$/u;
@@ -129,17 +121,6 @@ interface UpgradeAuthority {
   }>;
 }
 
-interface ActiveAudioStream {
-  readonly requestId: string;
-  readonly session: CompanionUiAudioIngressSession;
-  nextSequence: number;
-  pendingWrites: number;
-  writeChain: Promise<void>;
-  interactionId?: string;
-  interruptedInteractionId?: string;
-  stopping: boolean;
-}
-
 function rawHeaderCount(request: IncomingMessage, name: string): number {
   let count = 0;
   for (let index = 0; index < request.rawHeaders.length; index += 2) {
@@ -174,43 +155,6 @@ function rawDataBytes(raw: RawData): Uint8Array {
 
 function sendJson(socket: WebSocket, value: unknown): void {
   if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(value));
-}
-
-function tryParseAudioControl(body: Uint8Array): CompanionUiAudioControlFrame | undefined {
-  try {
-    return parseCompanionUiAudioControlFrame(body);
-  } catch {
-    return undefined;
-  }
-}
-
-function sendConversationMessage(
-  socket: WebSocket,
-  role: 'user' | 'assistant',
-  content: string,
-  state: Readonly<{ live: true } | { final: true }>,
-): void {
-  sendJson(socket, {
-    schemaVersion: 1,
-    type: 'event',
-    event: {
-      type: 'message',
-      data: { role, content, ...state },
-    },
-  });
-}
-
-function companionResponseContent(result: unknown): string {
-  if (!isRecord(result) || typeof result.content !== 'string') {
-    throw new Error('Companion audio response was malformed');
-  }
-  return result.content;
-}
-
-function reportAudioCancellationFailure(error: unknown): void {
-  log.warn('Companion UI audio cancellation failed', {
-    errorType: error instanceof Error ? error.name : typeof error,
-  });
 }
 
 function projectCompanionEventFrame(
@@ -456,8 +400,7 @@ export class CompanionUiWebSocketAdapter {
     let attachment = initialAttachment;
     let closed = false;
     let configured = false;
-    let startingAudioRequestId: string | null = null;
-    let activeAudio: ActiveAudioStream | null = null;
+    let audioSocket: CompanionUiAudioSocketSession | null = null;
     let unsubscribeEvents: (() => void) | null = null;
     let eventDelivery = Promise.resolve();
     const seenRequestIds = new Set<string>();
@@ -480,19 +423,8 @@ export class CompanionUiWebSocketAdapter {
       clearInterval(watch);
       unsubscribeEvents?.();
       unsubscribeEvents = null;
-      startingAudioRequestId = null;
-      const audio = activeAudio;
-      activeAudio = null;
-      if (audio) {
-        if (audio.interactionId && this.config.cancelAudioInteraction) {
-          void this.config.cancelAudioInteraction({
-            companionId: authority.companionId,
-            attachment,
-            interactionId: audio.interactionId,
-          }).catch(reportAudioCancellationFailure);
-        }
-        void audio.session.cancel(reason).catch(reportAudioCancellationFailure);
-      }
+      audioSocket?.close(reason);
+      audioSocket = null;
       this.activeSockets.delete(socket);
       if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
         socket.close(code, reason);
@@ -520,7 +452,7 @@ export class CompanionUiWebSocketAdapter {
       }
       seenRequestIds.add(requestId);
     };
-    const dispatchAction = async (body: Uint8Array): Promise<unknown> => {
+    const dispatchAction = async (body: Uint8Array, signal?: AbortSignal): Promise<unknown> => {
       await refreshAuthority();
       const common: Omit<CompanionUiActionBrokerInput, 'sessionToken'> = {
         rawBody: body,
@@ -528,6 +460,7 @@ export class CompanionUiWebSocketAdapter {
         attachment,
         physicalCeiling: authority.physicalCeiling,
         deviceTransport: authority.deviceTransport as CompanionUiActionBrokerInput['deviceTransport'],
+        ...(signal ? { signal } : {}),
       };
       const result = authority.sessionToken
         ? await this.config.actionBroker.execute({ ...common, sessionToken: authority.sessionToken })
@@ -537,119 +470,36 @@ export class CompanionUiWebSocketAdapter {
       }
       return result;
     };
-    const failAudio = (requestId: string, reason: string): void => {
-      const audio = activeAudio;
-      if (!audio || audio.requestId !== requestId) return;
-      activeAudio = null;
-      sendJson(socket, {
-        schemaVersion: 1,
-        type: 'event',
-        event: {
-          type: 'error-event',
-          data: { message: 'Companion audio relay failed' },
-        },
-      });
-      void audio.session.cancel(reason).catch(reportAudioCancellationFailure);
-    };
-    const interruptAudioInteraction = async (audio: ActiveAudioStream): Promise<void> => {
-      const interactionId = audio.interactionId;
-      const cancelAudioInteraction = this.config.cancelAudioInteraction;
-      if (!interactionId || !cancelAudioInteraction) return;
-      audio.interruptedInteractionId = interactionId;
-      await refreshAuthority();
-      await cancelAudioInteraction({
+    if (this.config.audioIngress
+      && this.config.screenAudioTranscript
+      && this.config.cancelAudioInteraction) {
+      audioSocket = new CompanionUiAudioSocketSession({
+        enabled: audioCapable,
         companionId: authority.companionId,
-        attachment,
-        interactionId,
+        ingress: this.config.audioIngress,
+        maxPendingFrames: this.maxPendingAudioFrames,
+        send: value => sendJson(socket, value),
+        refreshAuthority,
+        attachment: () => attachment,
+        reserveRequestId,
+        dispatchAction,
+        screenTranscript: this.config.screenAudioTranscript,
+        cancelInteraction: this.config.cancelAudioInteraction,
+        terminateSocket: reason => close(CLOSE.denied, reason),
       });
-    };
-    const deliverAudioUtterance = async (requestId: string, transcript: string): Promise<void> => {
-      const screenAudioTranscript = this.config.screenAudioTranscript;
-      const streamIsActive = () => !closed && activeAudio?.requestId === requestId;
-      if (!streamIsActive() || !screenAudioTranscript) return;
-      const actionRequestId = randomUUID();
-      await refreshAuthority();
-      const effectiveTranscript = await screenAudioTranscript({
-        companionId: authority.companionId,
-        attachment,
-        requestId: actionRequestId,
-        transcript,
-      });
-      if (!streamIsActive()) return;
-      reserveRequestId(actionRequestId);
-      const body = Buffer.from(JSON.stringify({
-        schemaVersion: 1,
-        requestId: actionRequestId,
-        action: 'companion.interact',
-        resource: 'conversation.audio',
-        body: { transcript: effectiveTranscript },
-      }));
-      const audio = activeAudio;
-      if (!audio || audio.requestId !== requestId) return;
-      audio.interactionId = actionRequestId;
-      sendJson(socket, {
-        schemaVersion: 1,
-        type: 'audio.turn.started',
-        requestId,
-      });
-      sendConversationMessage(socket, 'user', effectiveTranscript, { final: true });
-      try {
-        const result = await dispatchAction(body);
-        const content = companionResponseContent(result);
-        if (streamIsActive()
-          && audio.interruptedInteractionId !== actionRequestId
-          && content) {
-          sendConversationMessage(socket, 'assistant', content, { final: true });
-        }
-      } catch (error) {
-        if (audio.interruptedInteractionId !== actionRequestId) throw error;
-      } finally {
-        if (audio.interactionId === actionRequestId) delete audio.interactionId;
-        if (audio.interruptedInteractionId === actionRequestId) {
-          delete audio.interruptedInteractionId;
-        }
-        if (streamIsActive()) {
-          sendJson(socket, {
-            schemaVersion: 1,
-            type: 'audio.turn.ended',
-            requestId,
-          });
-        }
-      }
-    };
+    }
     const watch = setInterval(() => {
       void refreshAuthority().catch(() => close(CLOSE.authorityChanged, 'authority changed'));
     }, this.authorityPollMs);
     watch.unref();
     socket.on('message', (raw, isBinary) => {
       if (isBinary) {
-        if (!configured || !activeAudio) {
+        if (!configured || !audioSocket) {
           close(CLOSE.denied, 'audio stream not ready');
           return;
         }
-        const audio = activeAudio;
         try {
-          const chunk = parseCompanionUiAudioChunk(rawDataBytes(raw));
-          if (chunk.sequence !== audio.nextSequence
-            || audio.pendingWrites >= this.maxPendingAudioFrames) {
-            throw new Error('audio sequence or backpressure violation');
-          }
-          audio.nextSequence = (audio.nextSequence + 1) >>> 0;
-          audio.pendingWrites += 1;
-          audio.writeChain = audio.writeChain
-            .then(async () => {
-              await audio.session.writePcm(chunk.pcm);
-              if (!closed && activeAudio === audio) {
-                sendJson(socket, {
-                  schemaVersion: 1,
-                  type: 'audio.ack',
-                  requestId: audio.requestId,
-                  sequence: chunk.sequence,
-                });
-              }
-            })
-            .catch(() => { failAudio(audio.requestId, 'audio write failed'); })
-            .finally(() => { audio.pendingWrites -= 1; });
+          audioSocket.handleBinary(rawDataBytes(raw));
         } catch {
           close(CLOSE.denied, 'invalid audio frame');
         }
@@ -696,90 +546,7 @@ export class CompanionUiWebSocketAdapter {
           });
           return;
         }
-        const audioControl = tryParseAudioControl(body);
-        if (audioControl?.type === 'audio.start') {
-          if (!audioCapable || !this.config.audioIngress
-            || startingAudioRequestId || activeAudio) {
-            throw new Error('audio stream denied');
-          }
-          reserveRequestId(audioControl.requestId);
-          const requestId = audioControl.requestId;
-          startingAudioRequestId = requestId;
-          const startState = { failed: false };
-          const startIsCurrent = () => !closed && startingAudioRequestId === requestId;
-          try {
-            await refreshAuthority();
-            if (!startIsCurrent()) return;
-            const session = await this.config.audioIngress.start({
-              companionId: authority.companionId,
-              onPartial: (text) => {
-                if (!closed && activeAudio?.requestId === requestId) {
-                  sendConversationMessage(socket, 'user', text, { live: true });
-                }
-              },
-              onUtterance: async (text) => deliverAudioUtterance(requestId, text),
-              onError: () => {
-                if (activeAudio?.requestId === requestId) {
-                  failAudio(requestId, 'STT stream failed');
-                } else if (startingAudioRequestId === requestId) {
-                  startState.failed = true;
-                }
-              },
-            });
-            if (!startIsCurrent() || startState.failed) {
-              await session.cancel('audio start superseded')
-                .catch(reportAudioCancellationFailure);
-              if (startState.failed) throw new Error('audio stream failed during startup');
-              return;
-            }
-            activeAudio = {
-              requestId,
-              session,
-              nextSequence: 0,
-              pendingWrites: 0,
-              writeChain: Promise.resolve(),
-              stopping: false,
-            };
-            sendJson(socket, {
-              schemaVersion: 1,
-              type: 'audio.ready',
-              requestId,
-            });
-          } finally {
-            if (startingAudioRequestId === requestId) startingAudioRequestId = null;
-          }
-          return;
-        }
-        if (audioControl?.type === 'audio.interrupt') {
-          const audio = activeAudio;
-          if (!audio || audio.requestId !== audioControl.requestId || audio.stopping) {
-            throw new Error('audio stream mismatch');
-          }
-          await interruptAudioInteraction(audio);
-          sendJson(socket, {
-            schemaVersion: 1,
-            type: 'event',
-            event: { type: 'action', data: 'interrupt' },
-          });
-          return;
-        }
-        if (audioControl?.type === 'audio.stop') {
-          const audio = activeAudio;
-          if (!audio || audio.requestId !== audioControl.requestId) {
-            throw new Error('audio stream mismatch');
-          }
-          audio.stopping = true;
-          await interruptAudioInteraction(audio);
-          await audio.writeChain;
-          await audio.session.stop('client stop');
-          if (activeAudio === audio) activeAudio = null;
-          sendJson(socket, {
-            schemaVersion: 1,
-            type: 'audio.stopped',
-            requestId: audio.requestId,
-          });
-          return;
-        }
+        if (audioSocket && await audioSocket.tryHandleControl(body)) return;
         const frame = parseCompanionUiActionFrame(body);
         reserveRequestId(frame.requestId);
         const result = await dispatchAction(body);

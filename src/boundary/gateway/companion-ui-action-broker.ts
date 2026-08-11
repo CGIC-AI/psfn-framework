@@ -24,6 +24,7 @@ import type {
 export interface CompanionUiAgentDispatchInput {
   readonly compiled: CompiledCompanionUiAction;
   readonly attachment: HubDeviceAttachmentSnapshot;
+  readonly signal?: AbortSignal;
   /** Agent-only assertion. The operator token is deliberately absent. */
   readonly childAssertion: GatewayChildAssertionExchangeResult;
   readonly deviceTransport: Readonly<{
@@ -44,6 +45,8 @@ export interface CompanionUiActionBrokerInput {
   readonly attachment: HubDeviceAttachmentSnapshot;
   readonly physicalCeiling: CompanionUiPhysicalCapabilityCeiling;
   readonly deviceTransport: CompanionUiAgentDispatchInput['deviceTransport'];
+  /** Server-owned cancellation only; never parsed from the browser frame. */
+  readonly signal?: AbortSignal;
 }
 
 export class CompanionUiActionDeniedError extends Error {
@@ -173,6 +176,7 @@ export class GatewayCompanionUiActionBroker {
       attachment: input.attachment,
       childAssertion,
       deviceTransport: input.deviceTransport,
+      ...(input.signal ? { signal: input.signal } : {}),
     });
   }
 }

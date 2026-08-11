@@ -14,18 +14,12 @@ interface PostgresWriteCounters {
 export type PostgresWriteSnapshot = Readonly<Record<string, PostgresWriteCounters>>;
 
 interface IdlePurityFilesystemAllowance {
-  readonly pathPrefix: string;
+  readonly path: string;
   readonly reason: string;
-}
-
-interface IdlePurityPostgresAllowance {
-  readonly reason: string;
-  readonly relation: string;
 }
 
 interface IdlePurityAllowlist {
   readonly filesystem?: readonly IdlePurityFilesystemAllowance[];
-  readonly postgres?: readonly IdlePurityPostgresAllowance[];
 }
 
 export interface IdlePurityCertificationInput {
@@ -130,14 +124,10 @@ function comparePostgres(
       if (!previousRowFingerprint || !currentRowFingerprint) {
         throw new Error(`Invalid PostgreSQL row fingerprint for ${relation}`);
       }
-      if (previousRowCount === currentRowCount
-        && previousRowFingerprint === currentRowFingerprint) {
-        // pg_stat tuple counters can remain private to an idle writer backend
-        // until its next command. A stable MVCC fingerprint proves that a
-        // newly visible counter belongs to state already present at baseline.
-        continue;
-      }
     }
+    const physicalStateChanged = previousHasState && currentHasState
+      && (previousRowCount !== currentRowCount
+        || previousRowFingerprint !== currentRowFingerprint);
     const delta = (field: 'deleted' | 'inserted' | 'updated'): bigint => {
       const beforeValue = previous ? parseCounter(previous[field], relation, field) : 0n;
       const afterValue = parseCounter(current[field], relation, field);
@@ -156,11 +146,13 @@ function comparePostgres(
       continue;
     }
     if (deltas.every(delta => delta === 0n)) {
-      changes.push({
-        description: `postgres state changed: ${relation}`,
-        surface: 'postgres',
-        target: relation,
-      });
+      if (physicalStateChanged) {
+        changes.push({
+          description: `postgres state changed: ${relation}`,
+          surface: 'postgres',
+          target: relation,
+        });
+      }
       continue;
     }
     changes.push({
@@ -175,15 +167,9 @@ function comparePostgres(
 
 function validateAllowlist(allowlist: IdlePurityAllowlist): void {
   for (const allowance of allowlist.filesystem ?? []) {
-    if (!allowance.pathPrefix || allowance.pathPrefix.startsWith('/')
-      || allowance.pathPrefix.split('/').includes('..')) {
-      throw new Error(`Invalid idle-purity filesystem allowance: ${allowance.pathPrefix}`);
-    }
-    if (!allowance.reason.trim()) throw new Error('Idle-purity allowances require a reason');
-  }
-  for (const allowance of allowlist.postgres ?? []) {
-    if (!/^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$/u.test(allowance.relation)) {
-      throw new Error(`Invalid idle-purity PostgreSQL allowance: ${allowance.relation}`);
+    if (!allowance.path || allowance.path.startsWith('/')
+      || allowance.path.split('/').includes('..')) {
+      throw new Error(`Invalid idle-purity filesystem allowance: ${allowance.path}`);
     }
     if (!allowance.reason.trim()) throw new Error('Idle-purity allowances require a reason');
   }
@@ -193,13 +179,8 @@ function allowanceReason(
   change: IdlePurityChange,
   allowlist: IdlePurityAllowlist,
 ): string | undefined {
-  if (change.surface === 'filesystem') {
-    return allowlist.filesystem?.find(allowance => (
-      change.target === allowance.pathPrefix
-      || change.target.startsWith(`${allowance.pathPrefix}/`)
-    ))?.reason;
-  }
-  return allowlist.postgres?.find(allowance => allowance.relation === change.target)?.reason;
+  if (change.surface !== 'filesystem') return undefined;
+  return allowlist.filesystem?.find(allowance => change.target === allowance.path)?.reason;
 }
 
 function classifyChanges(

@@ -16,7 +16,7 @@ describe('idle-purity certification', () => {
   it('fails when the quiet window rewrites an unapproved durable file', async () => {
     const runtimeRoot = await mkdtemp(join(tmpdir(), 'psfn-idle-purity-'));
     roots.push(runtimeRoot);
-    const companionDir = join(runtimeRoot, 'companions', 'purrsephone');
+    const companionDir = join(runtimeRoot, 'companions', 'certification');
     const statePath = join(companionDir, 'state.json');
     await mkdir(companionDir, { recursive: true });
     await writeFile(statePath, '{"revision":1}\n', 'utf8');
@@ -28,13 +28,13 @@ describe('idle-purity certification', () => {
       wait: async () => {
         await writeFile(statePath, '{"revision":2}\n', 'utf8');
       },
-    })).rejects.toThrow(/filesystem modified: companions\/purrsephone\/state\.json/u);
+    })).rejects.toThrow(/filesystem modified: companions\/certification\/state\.json/u);
   });
 
   it('reports explicitly allowed automata writes without treating them as violations', async () => {
     const runtimeRoot = await mkdtemp(join(tmpdir(), 'psfn-idle-purity-'));
     roots.push(runtimeRoot);
-    const noteDir = join(runtimeRoot, 'companions', 'purrsephone', 'automata-notes');
+    const noteDir = join(runtimeRoot, 'companions', 'certification', 'automata-notes');
     const notePath = join(noteDir, 'ambient-presence.jsonl');
     await mkdir(noteDir, { recursive: true });
     await writeFile(notePath, '{"note":"before"}\n', 'utf8');
@@ -45,7 +45,7 @@ describe('idle-purity certification', () => {
       capturePostgresWrites: async () => ({}),
       allowlist: {
         filesystem: [{
-          pathPrefix: 'companions/purrsephone/automata-notes',
+          path: 'companions/certification/automata-notes/ambient-presence.jsonl',
           reason: 'Ambient-presence notes are an intentional automaton lane',
         }],
       },
@@ -56,7 +56,7 @@ describe('idle-purity certification', () => {
 
     expect(report.violations).toEqual([]);
     expect(report.allowedChanges).toEqual([
-      'filesystem modified: companions/purrsephone/automata-notes/ambient-presence.jsonl '
+      'filesystem modified: companions/certification/automata-notes/ambient-presence.jsonl '
       + '(Ambient-presence notes are an intentional automaton lane)',
     ]);
   });
@@ -86,41 +86,12 @@ describe('idle-purity certification', () => {
       runtimeRoot,
       idleWindowMs: 0,
       capturePostgresWrites: async () => ({
-        'purrsephone.sessions': { deleted: '2', inserted, updated: '4' },
+        'certification.sessions': { deleted: '2', inserted, updated: '4' },
       }),
       wait: async () => {
         inserted = '13';
       },
-    })).rejects.toThrow(/postgres wrote: purrsephone\.sessions \(inserted=1, updated=0, deleted=0\)/u);
-  });
-
-  it('reports an explicitly allowed PostgreSQL automata write', async () => {
-    const runtimeRoot = await mkdtemp(join(tmpdir(), 'psfn-idle-purity-'));
-    roots.push(runtimeRoot);
-    let updated = '7';
-
-    const report = await certifyIdlePurity({
-      runtimeRoot,
-      idleWindowMs: 0,
-      capturePostgresWrites: async () => ({
-        'purrsephone.session_entries': { deleted: '0', inserted: '20', updated },
-      }),
-      allowlist: {
-        postgres: [{
-          relation: 'purrsephone.session_entries',
-          reason: 'Temporal-wakeup note append is intentional',
-        }],
-      },
-      wait: async () => {
-        updated = '8';
-      },
-    });
-
-    expect(report.violations).toEqual([]);
-    expect(report.allowedChanges).toEqual([
-      'postgres wrote: purrsephone.session_entries (inserted=0, updated=1, deleted=0) '
-      + '(Temporal-wakeup note append is intentional)',
-    ]);
+    })).rejects.toThrow(/postgres wrote: certification\.sessions \(inserted=1, updated=0, deleted=0\)/u);
   });
 
   it('starts the measured window only after delayed startup writes settle', async () => {
@@ -145,16 +116,16 @@ describe('idle-purity certification', () => {
     expect(report).toEqual({ allowedChanges: [], violations: [] });
   });
 
-  it('does not mistake delayed counter publication for a new durable write', async () => {
+  it('fails closed when a tuple counter becomes visible after the baseline', async () => {
     const runtimeRoot = await mkdtemp(join(tmpdir(), 'psfn-idle-purity-'));
     roots.push(runtimeRoot);
     let inserted = '0';
 
-    const report = await certifyIdlePurity({
+    await expect(certifyIdlePurity({
       runtimeRoot,
       idleWindowMs: 0,
       capturePostgresWrites: async () => ({
-        'purrsephone.startup_checkpoint': {
+        'certification.startup_checkpoint': {
           deleted: '0',
           inserted,
           rowCount: '1',
@@ -165,8 +136,28 @@ describe('idle-purity certification', () => {
       wait: async () => {
         inserted = '1';
       },
-    });
+    })).rejects.toThrow(
+      /postgres wrote: certification\.startup_checkpoint \(inserted=1, updated=0, deleted=0\)/u,
+    );
+  });
 
-    expect(report).toEqual({ allowedChanges: [], violations: [] });
+  it('accepts an unchanged PostgreSQL physical snapshot with unchanged counters', async () => {
+    const runtimeRoot = await mkdtemp(join(tmpdir(), 'psfn-idle-purity-'));
+    roots.push(runtimeRoot);
+
+    await expect(certifyIdlePurity({
+      runtimeRoot,
+      idleWindowMs: 0,
+      capturePostgresWrites: async () => ({
+        'public.stable_relation': {
+          deleted: '2',
+          inserted: '12',
+          rowCount: '10',
+          rowFingerprint: 'stable-physical-state',
+          updated: '4',
+        },
+      }),
+      wait: async () => undefined,
+    })).resolves.toEqual({ allowedChanges: [], violations: [] });
   });
 });

@@ -3,6 +3,9 @@ import { describe, expect, it } from 'vitest';
 import type { AgentToolResult } from '../../boundary/pi-agent/index.js';
 import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from '../../core/agent/tool-surface/descriptions.js';
 import { runWithRequestContext } from '../../primitives/llm/request-context.js';
+import { buildSessionMetadataWithTurn } from '../../core/session/turn-provenance.js';
+import type { SessionEntry } from '../../core/session/types.js';
+import type { TurnID } from '../../shared/contracts/runtime.js';
 import { FakeEpisodicPool } from '../../test-support/fake-postgres-episodic-pool.js';
 import type { MemoryStorePort } from './memory-store-port.js';
 import { PostgresEpisodicStore } from './episodic/postgres-store.js';
@@ -182,5 +185,125 @@ describe('memory action=episode_search', () => {
     }));
 
     expect(resultText(result)).toContain('cross-channel-self-episode');
+  });
+
+  it('applies companion-self reflection scope to timeline and exact source-turn drilldown', async () => {
+    const store = new PostgresEpisodicStore(
+      new FakeEpisodicPool() as unknown as Pool,
+      { now: () => new Date('2026-07-18T12:00:00.000Z') },
+    );
+    const firstTurn = '00000000-0000-7000-a000-000000000001' as TurnID;
+    const secondTurn = '00000000-0000-7000-a000-000000000002' as TurnID;
+    const sourceChannel = 'api:another-private-channel';
+    const sourceSession = 'session:cross-channel';
+    await store.createCompanionAuthoredEpisode({
+      id: 'cross-channel-drilldown',
+      title: 'The repair conversation',
+      landmark: 'We chose visible failure over silence.',
+      startedAt: '2026-07-17T12:00:00.000Z',
+      endedAt: '2026-07-17T13:00:00.000Z',
+      channelId: sourceChannel,
+      participantContactIds: ['contact:someone-else'],
+      salience: { score: 0.8 },
+      affect: { labels: ['resolved'] },
+      themes: ['repair'],
+      spanRefs: [{
+        spanId: 'span-cross-channel',
+        channelId: sourceChannel,
+        sessionId: sourceSession,
+        startTurnId: firstTurn,
+        endTurnId: secondTurn,
+      }],
+      artifactRefs: [],
+      provenanceRefs: [],
+    });
+    const entries: SessionEntry[] = [
+      {
+        id: 1,
+        channelId: sourceChannel,
+        role: 'user',
+        content: 'The exact cross-channel partner turn.',
+        timestamp: Date.parse('2026-07-17T12:00:00.000Z'),
+        metadata: buildSessionMetadataWithTurn(undefined, {
+          turnId: firstTurn,
+          requestId: 'request-1',
+          role: 'user',
+        }),
+      },
+      {
+        id: 2,
+        channelId: sourceChannel,
+        role: 'assistant',
+        content: 'The exact cross-channel companion turn.',
+        timestamp: Date.parse('2026-07-17T12:01:00.000Z'),
+        metadata: buildSessionMetadataWithTurn(undefined, {
+          turnId: secondTurn,
+          requestId: 'request-2',
+          role: 'assistant',
+        }),
+      },
+    ];
+    const tool = createMemoryTool(
+      {} as MemoryWriter,
+      {} as MemoryStorePort,
+      {
+        episodicStore: store,
+        sessionReader: { getRecent: () => entries },
+        sessionQuarantineFilter: { isSessionRetiredOrQuarantined: () => false },
+        episodicAccessScope: () => 'companion_self_reflection',
+      },
+    );
+    const reflectionChannel = 'internal:reflection:daily';
+    const reflectionContext = {
+      channelId: reflectionChannel,
+      viewerTrustLevel: 'regular' as const,
+      viewerChannelPrivacy: 'private' as const,
+      requesterProvenance: 'self_directed' as const,
+      callType: 'background' as const,
+      originType: 'background' as const,
+      purpose: COMPANION_SELF_REFLECTION_RETRIEVAL_PURPOSE,
+      originStage: COMPANION_SELF_REFLECTION_RETRIEVAL_PURPOSE,
+    };
+
+    const timeline = await runWithRequestContext(reflectionContext, () => tool.execute(
+      'memory-episode-timeline-reflection',
+      { action: 'timeline', date: '2026-07-17' },
+    ));
+    const drilldown = await runWithRequestContext(reflectionContext, () => tool.execute(
+      'memory-episode-get-reflection',
+      { action: 'get', episode_id: 'cross-channel-drilldown' },
+    ));
+
+    expect(resultText(timeline)).toContain('cross-channel-drilldown');
+    expect(resultText(drilldown)).toContain('The exact cross-channel partner turn.');
+    expect(resultText(drilldown)).toContain('The exact cross-channel companion turn.');
+
+    const quarantinedTool = createMemoryTool(
+      {} as MemoryWriter,
+      {} as MemoryStorePort,
+      {
+        episodicStore: store,
+        sessionReader: { getRecent: () => entries },
+        sessionQuarantineFilter: {
+          isSessionRetiredOrQuarantined: sessionId => sessionId === sourceSession,
+        },
+        episodicAccessScope: () => 'companion_self_reflection',
+      },
+    );
+    const quarantinedTimeline = await runWithRequestContext(reflectionContext, () => (
+      quarantinedTool.execute('memory-episode-timeline-quarantined', {
+        action: 'timeline',
+        date: '2026-07-17',
+      })
+    ));
+    const quarantinedGet = await runWithRequestContext(reflectionContext, () => (
+      quarantinedTool.execute('memory-episode-get-quarantined', {
+        action: 'get',
+        episode_id: 'cross-channel-drilldown',
+      })
+    ));
+    expect(resultText(quarantinedTimeline)).not.toContain('cross-channel-drilldown');
+    expect(resultText(quarantinedGet)).not.toContain('The exact cross-channel partner turn.');
+    expect(quarantinedGet.details).toMatchObject({ isError: true });
   });
 });

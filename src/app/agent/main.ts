@@ -19,6 +19,7 @@ import {
   wireEpisodeSemanticIndexRuntime,
 } from '../../faculties/memory/episodic/index.js';
 import { resolveEmbeddingProviderProvenanceFromConfig } from '../../faculties/memory/embedding.js';
+import { createHybridEpisodeSearch } from '../../faculties/memory/retrieval/episode-search.js';
 import { SleepCycleEpisodeConsolidator } from '../../faculties/memory/episodic/sleep-consolidation.js';
 import { EpisodeArcWeaver } from '../../faculties/memory/episodic/arc-formation.js';
 import { DreamMeaningPass } from '../../faculties/memory/episodic/dream-meaning-pass.js';
@@ -731,6 +732,29 @@ async function main(): Promise<void> {
     sharedWorldWikiCaretaker: coreRuntime.sharedWorldWikiCaretaker,
     companionAvailability,
   });
+  const episodeEmbeddingProvenance = resolveEmbeddingProviderProvenanceFromConfig(
+    config,
+    gateway.dims,
+  );
+  const episodeEmbeddingProfile = {
+    documentSchema: EPISODE_SEARCH_DOCUMENT_SCHEMA,
+    ...episodeEmbeddingProvenance,
+  };
+  const episodeSessionQuarantineFilter = {
+    isSessionRetiredOrQuarantined: (sessionId: string) => (
+      sessionManager.isSessionRetiredOrQuarantined(sessionId)
+    ),
+    getRetiredLogicalSessionIds: () => sessionManager.getRetiredLogicalSessionIds(),
+  };
+  const episodeSearch = createHybridEpisodeSearch({
+    store: companionEpisodicStore,
+    embeddingService: gateway,
+    profile: episodeEmbeddingProfile,
+    memoryRetrievalPolicy: () => config.memoryRetrievalPolicy,
+    onDegraded: diagnostic => {
+      log.warn('Episode search semantic mode degraded', diagnostic);
+    },
+  });
   const {
     runtimeEnablement: icpRuntimeEnablement,
     sourceRuntime: icpInitiationSourceRuntime,
@@ -815,6 +839,7 @@ async function main(): Promise<void> {
     sessionStore,
     embeddingService: gateway,
     memoryStore,
+    episodeSearch,
     sessionManager,
     config,
     parentSystemPrompt: systemPrompt,
@@ -892,14 +917,6 @@ async function main(): Promise<void> {
     });
   }
   const episodicStore = companionEpisodicStore;
-  const episodeEmbeddingProvenance = resolveEmbeddingProviderProvenanceFromConfig(
-    config,
-    gateway.dims,
-  );
-  const episodeEmbeddingProfile = {
-    documentSchema: EPISODE_SEARCH_DOCUMENT_SCHEMA,
-    ...episodeEmbeddingProvenance,
-  };
   const episodeEmbeddingRuntime = wireEpisodeSemanticIndexRuntime({
     store: episodicStore,
     embedding: gateway,
@@ -1104,7 +1121,16 @@ async function main(): Promise<void> {
     writer: toolMemoryWriter,
     memoryStore: toolMemoryStore,
     episodicStore,
+    episodeSearch,
     sessionReader: sessionStore,
+    sessionQuarantineFilter: episodeSessionQuarantineFilter,
+    episodicAccessScope: () => {
+      const context = getRequestContext();
+      return context?.requesterProvenance === 'self_directed'
+        && context.channelId?.startsWith('internal:reflection:') === true
+        ? 'companion_self_reflection'
+        : undefined;
+    },
     contactStore,
     memoryDeletionProposalStore,
     memoryDeletionApprovalPort: gateway,

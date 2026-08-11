@@ -44,6 +44,7 @@ import {
 } from './retrieval/episodic.js';
 import {
   filterQuarantinedEpisodicChains,
+  isEpisodeQuarantined,
   type MemorySessionQuarantineFilter,
 } from './retrieval/session-quarantine.js';
 import type {
@@ -1217,6 +1218,13 @@ export function createMemoryTool(
             const siblingLimit = normalizedParams.limit === undefined
               ? MEMORY_EPISODE_GET_LIMITS.defaultSiblings
               : clampInt(normalizedParams.limit, 1, MEMORY_EPISODE_GET_LIMITS.maxSiblings);
+            const requestedAccessScope = typeof options.episodicAccessScope === 'function'
+              ? options.episodicAccessScope()
+              : options.episodicAccessScope;
+            const accessScope = resolveAuthorizedRetrievalAccessScope(
+              visibility.channelId,
+              requestedAccessScope,
+            );
             const result = await retrieveEpisodeDrilldown(
               options.episodicStore,
               options.sessionReader,
@@ -1231,6 +1239,8 @@ export function createMemoryTool(
                 ...(visibility.canonicalContactId
                   ? { canonicalContactId: visibility.canonicalContactId }
                   : {}),
+                accessScope,
+                sessionQuarantineFilter: options.sessionQuarantineFilter ?? null,
                 siblingLimit,
               },
             );
@@ -1367,6 +1377,13 @@ export function createMemoryTool(
             const explicitLimit = normalizedParams.limit === undefined
               ? undefined
               : clampInt(normalizedParams.limit, 1, MEMORY_TIMELINE_MAX_LIMIT);
+            const requestedAccessScope = typeof options.episodicAccessScope === 'function'
+              ? options.episodicAccessScope()
+              : options.episodicAccessScope;
+            const accessScope = resolveAuthorizedRetrievalAccessScope(
+              visibility.channelId,
+              requestedAccessScope,
+            );
             const entries = await retrieveEpisodicTimeline(options.episodicStore, {
               ...(range.from ? { from: range.from } : {}),
               ...(range.to ? { to: range.to } : {}),
@@ -1377,6 +1394,11 @@ export function createMemoryTool(
                 broadcast: visibility.broadcast,
               },
               ...(visibility.canonicalContactId ? { canonicalContactId: visibility.canonicalContactId } : {}),
+              accessScope,
+              includeEpisode: episode => !isEpisodeQuarantined(
+                options.sessionQuarantineFilter ?? null,
+                episode,
+              ),
               ...(explicitLimit !== undefined ? { limit: explicitLimit } : {}),
               memoryRetrievalPolicy,
             });

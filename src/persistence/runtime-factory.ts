@@ -8,6 +8,7 @@ import {
 } from '../faculties/memory/episodic/index.js';
 import type {
   CompanionAuthoredEpisodicStorePort,
+  EpisodeEmbeddingRuntimeStorePort,
   FirstPersonPreservingEpisodicStorePort,
 } from '../faculties/memory/episodic/store-port.js';
 import { createPostgresContactStore } from '../core/contacts/postgres-adapter.js';
@@ -74,7 +75,7 @@ export interface AgentPersistenceRuntime {
   memoryStore: MemoryStorePort;
   /** Postgres-only durable deletion proposal and linked audit authority. */
   memoryDeletionProposalStore: MemoryDeletionProposalStorePort;
-  episodicStore: EpisodicStorePort;
+  episodicStore: EpisodicStorePort & EpisodeEmbeddingRuntimeStorePort;
   /** Consolidation-only capability for source-proven first-person preservation. */
   firstPersonPreservingEpisodicStore: EpisodicStorePort & FirstPersonPreservingEpisodicStorePort;
   /** Narrow capability for the companion's own first-person affect/meaning writes. */

@@ -8,10 +8,16 @@ import {
   type PostgresTestHarness,
 } from '../../../test-support/postgres-test-harness.js';
 import { PostgresEpisodicStore } from './postgres-store.js';
-import type { EpisodeCreateInput } from './store-port.js';
+import type { EpisodeCreateInput, EpisodeEmbeddingProfile } from './store-port.js';
 
 const CREATED_AT = new Date('2026-07-28T11:00:00.000Z');
 const REPOINTED_AT = new Date('2026-07-28T12:00:00.000Z');
+const EMBEDDING_PROFILE: EpisodeEmbeddingProfile = {
+  documentSchema: 'l01-episode-search/1',
+  provider: 'transformers',
+  model: 'integration-model',
+  dimensions: 3,
+};
 
 let harness: PostgresTestHarness | null = null;
 
@@ -81,6 +87,66 @@ async function readRows(pool: Pool): Promise<EpisodeRepointRow[]> {
 }
 
 describe('PostgresEpisodicStore thread repoint integration', () => {
+  it('searches only live vectors from the exact current episode revision', async () => {
+    await withEpisodicDatabase(async (_pool, store) => {
+      const anchor = await store.getEpisode('episode-anchor');
+      const sibling = await store.getEpisode('episode-sibling');
+      if (!anchor || !sibling) throw new Error('expected seeded episodes');
+
+      await expect(store.writeEpisodeEmbedding({
+        episodeId: anchor.id,
+        sourceUpdatedAt: anchor.updatedAt,
+        profile: EMBEDDING_PROFILE,
+        documentHash: 'a'.repeat(64),
+        embedding: new Float32Array([1, 0, 0]),
+        indexedAt: CREATED_AT.toISOString(),
+      })).resolves.toBe(true);
+      await expect(store.writeEpisodeEmbedding({
+        episodeId: sibling.id,
+        sourceUpdatedAt: sibling.updatedAt,
+        profile: EMBEDDING_PROFILE,
+        documentHash: 'b'.repeat(64),
+        embedding: new Float32Array([0, 1, 0]),
+        indexedAt: CREATED_AT.toISOString(),
+      })).resolves.toBe(true);
+
+      await expect(store.searchEpisodesByEmbedding({
+        profile: EMBEDDING_PROFILE,
+        queryEmbedding: new Float32Array([1, 0, 0]),
+        limit: 2,
+      })).resolves.toMatchObject([
+        { episode: { id: 'episode-anchor' }, similarity: 1 },
+        { episode: { id: 'episode-sibling' }, similarity: 0 },
+      ]);
+
+      await store.markEpisodeMerged(sibling.id, anchor.id);
+      const {
+        schemaVersion: _schemaVersion,
+        createdAt: _createdAt,
+        updatedAt: _updatedAt,
+        ...anchorUpdate
+      } = anchor;
+      await store.updateEpisode({ ...anchorUpdate, title: 'Updated anchor' });
+
+      await expect(store.searchEpisodesByEmbedding({
+        profile: EMBEDDING_PROFILE,
+        queryEmbedding: new Float32Array([1, 0, 0]),
+        limit: 2,
+      })).resolves.toEqual([]);
+      await expect(store.getEpisodeEmbeddingIndexHealth(EMBEDDING_PROFILE)).resolves.toEqual({
+        total: 1,
+        current: 0,
+        missing: 0,
+        stale: 1,
+        failed: 0,
+      });
+      await expect(store.listEpisodeEmbeddingTargets({
+        profile: EMBEDDING_PROFILE,
+        limit: 2,
+      })).resolves.toMatchObject([{ episode: { id: 'episode-anchor' }, reason: 'stale' }]);
+    });
+  });
+
   it('round-trips first-person authorship columns and exposes legacy NULL as unknown', async () => {
     await withEpisodicDatabase(async (pool, store) => {
       await expect(store.getEpisodeFirstPersonAuthorship('episode-anchor')).resolves.toEqual({

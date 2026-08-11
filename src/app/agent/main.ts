@@ -13,7 +13,12 @@ import { createPolicyGovernedShardParentIcpDelivery } from '../../channels/backp
 import { parsePositiveIntEnv } from '../../shared/utils/env.js';
 import { MemoryWriter } from '../../faculties/memory/writer.js';
 import { resolveDocumentIngestLimits } from '../../faculties/file-ingest/index.js';
-import { EpisodicSynthesizer } from '../../faculties/memory/episodic/index.js';
+import {
+  EpisodicSynthesizer,
+  EPISODE_SEARCH_DOCUMENT_SCHEMA,
+  wireEpisodeSemanticIndexRuntime,
+} from '../../faculties/memory/episodic/index.js';
+import { resolveEmbeddingProviderProvenanceFromConfig } from '../../faculties/memory/embedding.js';
 import { SleepCycleEpisodeConsolidator } from '../../faculties/memory/episodic/sleep-consolidation.js';
 import { EpisodeArcWeaver } from '../../faculties/memory/episodic/arc-formation.js';
 import { DreamMeaningPass } from '../../faculties/memory/episodic/dream-meaning-pass.js';
@@ -887,6 +892,62 @@ async function main(): Promise<void> {
     });
   }
   const episodicStore = companionEpisodicStore;
+  const episodeEmbeddingProvenance = resolveEmbeddingProviderProvenanceFromConfig(
+    config,
+    gateway.dims,
+  );
+  const episodeEmbeddingProfile = {
+    documentSchema: EPISODE_SEARCH_DOCUMENT_SCHEMA,
+    ...episodeEmbeddingProvenance,
+  };
+  const episodeEmbeddingRuntime = wireEpisodeSemanticIndexRuntime({
+    store: episodicStore,
+    embedding: gateway,
+    provider: episodeEmbeddingProvenance.provider,
+    model: episodeEmbeddingProvenance.model,
+    backfillLimit: schedulerConfig.episodeSynthesis.maxEpisodesPerRun,
+    backgroundMaintenance,
+    onBatch: async (source, result) => {
+      const health = await episodicStore.getEpisodeEmbeddingIndexHealth(
+        episodeEmbeddingProfile,
+      );
+      const details = {
+        source,
+        selected: result.selected,
+        indexed: result.indexed,
+        failed: result.failed.length,
+        changedDuringIndex: result.changedDuringIndex.length,
+        current: health.current,
+        missing: health.missing,
+        stale: health.stale,
+        persistedFailures: health.failed,
+      };
+      if (result.failed.length > 0) {
+        log.warn('Episode semantic index batch completed with retryable failures', details);
+      } else {
+        log.info('Episode semantic index batch completed', details);
+      }
+    },
+    onLiveResult: (result) => {
+      if (result.status === 'failed') {
+        log.warn('Live episode semantic indexing failed; persisted for retry', {
+          episodeId: result.episodeId,
+          error: result.error,
+        });
+      }
+    },
+    onLiveError: (error, episode) => {
+      log.error('Live episode semantic indexing failed before retry state was persisted', {
+        episodeId: episode.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    },
+  });
+  void episodeEmbeddingRuntime.startupBackfill.catch((error: unknown) => {
+    log.error('Startup episode semantic index backfill failed', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
   // Episodic lane tuning is JSON-owned (scheduler.json episodeSynthesis /
   // sleepConsolidation / arcFormation) — no hardcoded cadences or windows.
   const MINUTE_MS = 60_000;

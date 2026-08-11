@@ -44,7 +44,6 @@ import { executeQueuedAction, resolveCompanionReason } from './confirmation-acti
 import type { CanaryEgressGuard } from './canary-egress-guard.js';
 
 const unknownCompanionDisplayIdentity = createCompanionDisplayIdentityResolver([]);
-const log = createComponentLogger('GatewayApprovalBoundary');
 
 interface ApprovalBoundaryAuditHooks {
   audit(method: string, decision: GatewayPolicyDecision, params?: Record<string, unknown>): Promise<number>;
@@ -553,7 +552,7 @@ export function createGatewayApprovalBoundaryService(
       // The confirmation was durably queued before notification delivery. Keep
       // it inspectable in Garden and surface the unreachable alert path through
       // runtime subsystem health instead of discarding or hiding the request.
-      log.error('Queued confirmation has no reachable operator notification sink', {
+      approvalLog.error('Queued confirmation has no reachable operator notification sink', {
         confirmationId: queueEntry.id,
         error: toErrorMessage(error),
       });

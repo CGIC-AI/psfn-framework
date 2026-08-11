@@ -134,6 +134,20 @@ describe('contact tools', () => {
       expect((await store.getById(contact.id))!.trustLevel).toBe('public');
     });
 
+    it('updates notes through action=note', async () => {
+      const contact = await store.upsert({ displayName: 'Charlie' });
+      const tool = createContactTool(store);
+
+      const result = await tool.execute('contact-note', {
+        action: 'note',
+        contactId: contact.id,
+        notes: 'Likes cats and programming',
+      });
+
+      expect(resultText(result)).toContain('Notes updated');
+      expect((await store.getById(contact.id))!.notes).toBe('Likes cats and programming');
+    });
+
     it('screens benign trust content and applies it through a real envelope', async () => {
       const contact = await store.upsert({ displayName: 'Alice', discordUserId: 'alice-screened' });
       const screen = vi.fn(async (text: string) => ({

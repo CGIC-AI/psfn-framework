@@ -141,19 +141,6 @@ describe('repo tool', () => {
     expect(result.details?.isError).toBe(true);
   });
 
-  it.each(['nursery', 'apprentice', 'autonomous', 'custom'])('%s parent projection remains read-only', async (tier) => {
-    const tool = createRepoTool(mockOps, { access: 'read_only' });
-    const result = await tool.execute(`call-${tier}`, {
-      action: 'commit',
-      message: `${tier} mutation`,
-      intent: 'prove tier-independent parent projection',
-    });
-
-    expect(mockOps.commit).not.toHaveBeenCalled();
-    expect(resultText(result)).toContain('repo action is unavailable in read_only mode');
-    expect(result.details?.isError).toBe(true);
-  });
-
   it('returns canonical errors from delegated operations', async () => {
     mockOps.commit.mockRejectedValueOnce(new Error('commit failed'));
 

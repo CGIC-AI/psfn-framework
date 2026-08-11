@@ -41,6 +41,14 @@ describe('model-facing retired tool guidance verifier', () => {
       path: 'docs/operations.md',
       text: 'Use `memory_write` to persist this value.',
     }]).violations).toHaveLength(1);
+    expect(scanModelFacingToolGuidanceEntries([{
+      path: 'docs/cognitive-security.md',
+      text: 'The callable memory tool is `memory_write`.',
+    }]).violations).toHaveLength(1);
+    expect(scanModelFacingToolGuidanceEntries([{
+      path: 'docs/tool-surface.md',
+      text: 'Though retired, use `web_fetch` for this request.',
+    }]).violations).toHaveLength(1);
   });
 
   it('fails closed when the canonical alias authority is empty or malformed', () => {

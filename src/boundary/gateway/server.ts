@@ -662,7 +662,8 @@ export class GatewayServer {
     this.runtimeHealthTracker = new GatewayRuntimeHealthTracker({
       ntfyConfigured: Boolean(options.ntfy),
       approvalNotificationConfigured: Boolean(
-        options.confirmation?.operatorDiscordChannelId?.trim() || options.ntfy,
+        options.confirmation?.operatorDiscordChannelId?.trim()
+        || (options.confirmation?.ntfyTopic?.trim() && this.ntfyNotifier.isConfigured()),
       ),
       vaultEnabled: Boolean(options.policyConfig.vault?.enabled),
       vaultAllowActions: options.policyConfig.vault?.allowActions ?? [],

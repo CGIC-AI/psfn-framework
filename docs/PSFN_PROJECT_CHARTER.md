@@ -1399,7 +1399,7 @@ Model-facing tool surfaces follow Law 33:
 - `orient` owns active orientation, active concerns, and values actions; `values_add` and `values_update` are not separate model-facing tools.
 - `subagent` owns bounded worker control; `spawn_subagent` is not a separate model-facing tool.
 - `generate_image` owns generic generate, edit, and analyze workflows; `image_create`, `image_edit`, and `image_analyze` are not separate model-facing tools.
-- `selfie_create` is the canonical first-class self-expression image tool. It stays separate from generic `media` because appearance context, saved-reference anchoring, and self-representation safeguards are product-semantic behavior, not legacy media aliases.
+- `selfie_create` is the canonical first-class self-expression image tool. It stays separate from generic image generation because appearance context, saved-reference anchoring, and self-representation safeguards are product-semantic behavior, not legacy media aliases.
 - `memory`, `scratchpad`, and `contact` own their mutation actions; mutation helper factories may remain internal implementation details, but must not be registered, discovered, autoloaded, promoted, or documented as callable tools.
 - `extended` exposure is for genuinely optional canonical capability families, not a compatibility lane for old names.
 - `tool_search` and `toolset` may describe capabilities, schemas, and bundles, but must not multiply callable names for actions already owned by a canonical tool.

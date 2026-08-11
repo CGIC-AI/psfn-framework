@@ -2513,7 +2513,7 @@ describe('GatewayServer', () => {
       vi.unstubAllGlobals();
     });
 
-    it('surfaces gateway, ntfy, and vault health through runtime.health', async () => {
+    it('surfaces gateway, notification, ntfy, and vault health through runtime.health', async () => {
       const vaultOps = {
         write: vi.fn().mockRejectedValue(new Error('vault write failed')),
         read: vi.fn(),
@@ -2582,6 +2582,7 @@ describe('GatewayServer', () => {
       const initial = await invokeRpc(conn, 600, 'runtime.health', {});
       expect(initial.result.services).toEqual(expect.arrayContaining([
         expect.objectContaining({ serviceId: 'gateway', status: 'healthy' }),
+        expect.objectContaining({ serviceId: 'approval_notifications', status: 'degraded' }),
         expect.objectContaining({ serviceId: 'ntfy', status: 'healthy' }),
         expect.objectContaining({
           serviceId: 'mcp',

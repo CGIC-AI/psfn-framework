@@ -10,6 +10,7 @@ import type {
 import type { MemoryDeletionPolicy } from '../../system/config/memory-deletion-policy.js';
 import type { EpisodicTimelineStore } from './retrieval/episodic.js';
 import type { MemorySessionQuarantineFilter } from './retrieval/session-quarantine.js';
+import type { HybridEpisodeSearchPort } from './retrieval/episode-search.js';
 import type {
   EpisodeDrilldownSessionReader,
   EpisodeDrilldownStore,
@@ -34,6 +35,7 @@ export function registerMemoryTools(
     memoryDeletionApprovalPort: MemoryDeletionApprovalPort;
     memoryDeletionPolicy: MemoryDeletionPolicy | (() => MemoryDeletionPolicy | undefined);
     episodicStore?: (EpisodicTimelineStore & EpisodeDrilldownStore) | null;
+    episodeSearch?: HybridEpisodeSearchPort | null;
     sessionReader?: EpisodeDrilldownSessionReader | null;
     sessionQuarantineFilter?: MemorySessionQuarantineFilter | null;
     episodicAccessScope?: RetrievalAccessScope | (() => RetrievalAccessScope | undefined);
@@ -54,6 +56,7 @@ export function registerMemoryTools(
     : null;
   target.registerTool(createMemoryTool(options.writer, options.memoryStore, {
     episodicStore: options.episodicStore ?? null,
+    episodeSearch: options.episodeSearch ?? null,
     sessionReader: options.sessionReader ?? null,
     sessionQuarantineFilter: options.sessionQuarantineFilter ?? null,
     ...(options.episodicAccessScope !== undefined

@@ -39,7 +39,6 @@ import {
 import {
   searchEpisodicEpisodesLexically,
   retrieveEpisodicTimeline,
-  type EpisodicLexicalSearchResult,
   type EpisodicTimelineEntry,
   type EpisodicTimelineStore,
 } from './retrieval/episodic.js';
@@ -47,6 +46,10 @@ import {
   filterQuarantinedEpisodicChains,
   type MemorySessionQuarantineFilter,
 } from './retrieval/session-quarantine.js';
+import type {
+  HybridEpisodeSearchPort,
+  HybridEpisodeSearchResponse,
+} from './retrieval/episode-search.js';
 import {
   formatEpisodeDrilldown,
   retrieveEpisodeDrilldown,
@@ -292,19 +295,28 @@ function formatMemorySearchResults(
 }
 
 function formatEpisodicSearchResults(
-  entries: readonly EpisodicLexicalSearchResult[],
+  response: HybridEpisodeSearchResponse,
 ): string {
+  const { results: entries, modes, degraded } = response;
   if (entries.length === 0) {
-    return 'No visible canonical episodes matched the search query (retrieval_mode=lexical).';
+    return 'No visible canonical episodes matched the search query '
+      + `(lexical_status=${modes.lexical.status}; semantic_status=${modes.semantic.status}; degraded=${String(degraded)}).`;
   }
 
   const lines = [
-    `Episode search results (${entries.length}; retrieval_mode=lexical):`,
+    `Episode search results (${entries.length}; lexical_status=${modes.lexical.status}; `
+      + `semantic_status=${modes.semantic.status}; degraded=${String(degraded)}):`,
   ];
+  if (modes.semantic.error) {
+    lines.push(`Semantic retrieval error: ${modes.semantic.error}`);
+  }
   for (const entry of entries) {
     const episode = entry.episode;
     lines.push(
-      `- ${episode.id} | lexical_score=${entry.lexicalScore.toFixed(4)}`
+      `- ${episode.id} | fused_score=${entry.fusedScore.toFixed(4)}`
+      + ` | lexical_score=${entry.lexicalScore?.toFixed(4) ?? 'n/a'}`
+      + ` | semantic_similarity=${entry.semanticSimilarity?.toFixed(4) ?? 'n/a'}`
+      + ` | retrieval_modes=${entry.retrievalModes.join(',')}`
       + ` | matched_terms=${entry.matchedTerms.join(',')}`,
     );
     lines.push(`  ${formatTimelineInstant(episode.startedAt)} to ${formatTimelineInstant(episode.endedAt)}: ${episode.title}`);
@@ -406,6 +418,7 @@ export interface MemoryWriteToolOptions {
 
 export interface MemoryToolOptions extends MemoryWriteToolOptions {
   episodicStore?: (EpisodicTimelineStore & EpisodeDrilldownStore) | null;
+  episodeSearch?: HybridEpisodeSearchPort | null;
   sessionReader?: EpisodeDrilldownSessionReader | null;
   sessionQuarantineFilter?: MemorySessionQuarantineFilter | null;
   /**
@@ -1139,7 +1152,7 @@ export function createMemoryTool(
               visibility.channelId,
               requestedAccessScope,
             );
-            const rawResults = await searchEpisodicEpisodesLexically(options.episodicStore, {
+            const searchInput = {
               query,
               channelId: visibility.channelId,
               trustLevel: visibility.trustLevel,
@@ -1153,14 +1166,37 @@ export function createMemoryTool(
               limit,
               accessScope,
               memoryRetrievalPolicy,
-              includeChain: chain => (
-                filterQuarantinedEpisodicChains(
-                  options.sessionQuarantineFilter ?? null,
-                  [chain],
-                ).length === 1
-              ),
-            });
-            return textResult(formatEpisodicSearchResults(rawResults));
+              sessionQuarantineFilter: options.sessionQuarantineFilter ?? null,
+            };
+            const response: HybridEpisodeSearchResponse = options.episodeSearch
+              ? await options.episodeSearch.search(searchInput)
+              : await (async (): Promise<HybridEpisodeSearchResponse> => {
+                const rawResults = await searchEpisodicEpisodesLexically(options.episodicStore!, {
+                  ...searchInput,
+                  includeChain: chain => (
+                    filterQuarantinedEpisodicChains(
+                      options.sessionQuarantineFilter ?? null,
+                      [chain],
+                    ).length === 1
+                  ),
+                });
+                return {
+                  results: rawResults.map(entry => ({
+                    episode: entry.episode,
+                    chain: entry.chain,
+                    fusedScore: entry.lexicalScore,
+                    lexicalScore: entry.lexicalScore,
+                    matchedTerms: entry.matchedTerms,
+                    retrievalModes: ['lexical'],
+                  })),
+                  modes: {
+                    lexical: { status: 'completed', candidateCount: rawResults.length },
+                    semantic: { status: 'unavailable', candidateCount: 0 },
+                  },
+                  degraded: true,
+                };
+              })();
+            return textResult(formatEpisodicSearchResults(response));
           }
 
           case 'get': {

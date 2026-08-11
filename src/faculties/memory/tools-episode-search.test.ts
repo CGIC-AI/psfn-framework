@@ -71,7 +71,10 @@ describe('memory action=episode_search', () => {
       channel_visibility: 'private',
     });
     const text = resultText(result);
-    expect(text).toContain('retrieval_mode=lexical');
+    expect(text).toContain('lexical_status=completed');
+    expect(text).toContain('semantic_status=unavailable');
+    expect(text).toContain('degraded=true');
+    expect(text).toContain('retrieval_modes=lexical');
     expect(text).toContain('episode-kintsugi');
     expect(text).toContain('lexical_score=');
     expect(text).toContain('matched_terms=kintsugi');

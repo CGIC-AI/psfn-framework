@@ -11,9 +11,9 @@ requires:
 Use this skill when you need to retrieve relevant facts, save durable details, or reason about what should be remembered.
 
 ## Tooling
-- `memory_write` for intentional memory creation.
+- Use `memory` with `action="write"` for intentional memory creation.
 - `think` for deeper memory search and analysis.
-- `settings_get` to inspect runtime knobs when memory behavior looks off.
+- Use `system` with `action="read"` to inspect runtime settings when memory behavior looks off.
 
 ## Operating Pattern
 1. Retrieve context first.

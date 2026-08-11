@@ -401,7 +401,7 @@ export function evaluatePolicy(ctx: GatewayPolicyContext, policyConfig: PolicyCo
         && typeof request.reason === 'string'
         && request.reason.trim().length > 0
         && typeof request.intent === 'string';
-      return autonomousLight ? 'ALLOW' : 'NEEDS_APPROVAL';
+      return autonomousLight ? 'ALLOW' : 'REQUIRES_HUMAN_APPROVAL';
     }
 
     case 'vault.write':
@@ -483,7 +483,7 @@ export function evaluatePolicy(ctx: GatewayPolicyContext, policyConfig: PolicyCo
 
       // Step 1: Check normalized path (string prefix match)
       if (!isInsideAllowedPaths(normalizedPath, allowedPrefixes)) {
-        return 'NEEDS_APPROVAL';
+        return 'AUTONOMOUS_TIER_REQUIRED';
       }
 
       // Step 2: Resolve symlinks and check canonical path
@@ -578,7 +578,7 @@ export function evaluatePolicy(ctx: GatewayPolicyContext, policyConfig: PolicyCo
       const workspaceRoot = resolveWorkspaceRoot(policyConfig.workspacePath);
       const normalizedPath = resolveWorkspaceFsPathFromRoot(path, workspaceRoot);
       if (!isInsideAllowedPaths(normalizedPath, [workspaceRoot])) {
-        return 'NEEDS_APPROVAL';
+        return 'AUTONOMOUS_TIER_REQUIRED';
       }
 
       const protectedPrefixes = resolveProtectedWritePrefixes(policyConfig, workspaceRoot);
@@ -614,7 +614,7 @@ export function evaluatePolicy(ctx: GatewayPolicyContext, policyConfig: PolicyCo
     case 'git.apply_patch':
     case 'git.commit':
     case 'git.open_pr':
-      return 'NEEDS_APPROVAL';
+      return 'REQUIRES_HUMAN_APPROVAL';
 
     default:
       return 'DENY';

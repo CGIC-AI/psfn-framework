@@ -27,6 +27,7 @@ export interface GatewayConnectionSummary {
 
 export interface GatewayRuntimeHealthOptions {
   ntfyConfigured: boolean;
+  approvalNotificationConfigured: boolean;
   vaultEnabled: boolean;
   vaultAllowActions: readonly VaultPolicyAction[];
   vaultOpsConfigured: boolean;
@@ -49,14 +50,17 @@ const TRACKED_METHODS = new Set<GatewayTrackedMethod>([
 
 export class GatewayRuntimeHealthTracker {
   private readonly ntfyConfigured: boolean;
+  private readonly approvalNotificationConfigured: boolean;
   private readonly vaultEnabled: boolean;
   private readonly vaultAllowActions: readonly VaultPolicyAction[];
   private readonly vaultOpsConfigured: boolean;
   private readonly mcpBroker: McpGatewayBroker | undefined;
   private readonly methodState = new Map<GatewayTrackedMethod, MethodHealthState>();
+  private approvalNotificationState: MethodHealthState = {};
 
   constructor(options: GatewayRuntimeHealthOptions) {
     this.ntfyConfigured = options.ntfyConfigured;
+    this.approvalNotificationConfigured = options.approvalNotificationConfigured;
     this.vaultEnabled = options.vaultEnabled;
     this.vaultAllowActions = [...options.vaultAllowActions];
     this.vaultOpsConfigured = options.vaultOpsConfigured;
@@ -89,6 +93,23 @@ export class GatewayRuntimeHealthTracker {
     });
   }
 
+  recordApprovalNotificationSuccess(): void {
+    this.approvalNotificationState = {
+      lastSuccessAt: Date.now(),
+    };
+  }
+
+  recordApprovalNotificationFailure(error: unknown): void {
+    this.approvalNotificationState = {
+      ...this.approvalNotificationState,
+      lastFailure: {
+        message: toErrorMessage(error),
+        at: Date.now(),
+        scope: 'approval.notification',
+      },
+    };
+  }
+
   getSnapshot(
     connectionSummary: GatewayConnectionSummary,
     companionId?: string,
@@ -98,6 +119,7 @@ export class GatewayRuntimeHealthTracker {
       checkedAt,
       services: [
         this.buildGatewayServiceHealth(connectionSummary, checkedAt),
+        this.buildApprovalNotificationHealth(checkedAt),
         this.buildNtfyServiceHealth(checkedAt),
         this.buildVaultServiceHealth(checkedAt),
         this.buildMcpServiceHealth(checkedAt, companionId),
@@ -161,6 +183,35 @@ export class GatewayRuntimeHealthTracker {
       serviceId: 'ntfy',
       status: 'healthy',
       detail: 'Gateway ntfy notifier is configured.',
+      checkedAt,
+    };
+  }
+
+  private buildApprovalNotificationHealth(checkedAt: number): RuntimeServiceHealth {
+    const lastFailure = hasUnresolvedFailure(this.approvalNotificationState)
+      ? this.approvalNotificationState.lastFailure
+      : undefined;
+    if (lastFailure) {
+      return {
+        serviceId: 'approval_notifications',
+        status: 'unavailable',
+        detail: `A durable approval is queued, but no operator notification sink was reachable: ${lastFailure.message}`,
+        checkedAt,
+        lastFailure,
+      };
+    }
+    if (!this.approvalNotificationConfigured) {
+      return {
+        serviceId: 'approval_notifications',
+        status: 'degraded',
+        detail: 'No operator approval notification sink is configured; queued approvals remain visible in Garden.',
+        checkedAt,
+      };
+    }
+    return {
+      serviceId: 'approval_notifications',
+      status: 'healthy',
+      detail: 'At least one operator approval notification sink is configured.',
       checkedAt,
     };
   }

@@ -59,7 +59,7 @@ import {
   type WirableTool,
 } from '../tool-wiring-validator.js';
 import {
-  assertNoModelFacingDriftGuardToolAliases,
+  assertNoRetiredFirstPartyToolAliases,
   getCanonicalToolSurface,
   getRetiredToolAlias,
 } from '../tool-surface/registry.js';
@@ -372,7 +372,7 @@ export class ToolRuntimeFacade {
   }
 
   registerTool(tool: AgentTool<any>, category: ToolCategory = 'core'): void {
-    assertNoModelFacingDriftGuardToolAliases([tool.name], `${category} tool registration`);
+    assertNoRetiredFirstPartyToolAliases([tool.name], `${category} tool registration`);
     const canonicalSurface = getCanonicalToolSurface(tool.name);
     const policyHydration = (tool as WirableTool).wiringMeta?.policyHydration;
     if (policyHydration) {

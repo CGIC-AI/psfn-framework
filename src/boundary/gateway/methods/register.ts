@@ -39,15 +39,11 @@ export function registerGatedDescriptors(
   runtime: GatewayMethodRuntime,
   descriptors: ReadonlyArray<GatedMethodDescriptor>,
 ): void {
-  const runtimeWithCompatibility = runtime as Partial<GatewayMethodRuntime> & {
-    gated?: <P, R>(
-      method: string,
-      handler: (params: P) => Promise<R>,
-      paramsSummary?: (params: P) => Record<string, unknown>,
-    ) => (params: P) => Promise<R>;
-  };
-  let gateMethod:
-    | ((input: {
+  const approvalBoundary = (runtime as Partial<GatewayMethodRuntime>).approvalBoundary;
+  if (!approvalBoundary || typeof approvalBoundary.gate !== 'function') {
+    throw new Error('Gateway method runtime is missing approvalBoundary.gate');
+  }
+  const gateMethod = (input: {
       method: string;
       handler: (params: unknown) => Promise<unknown>;
       prepareParams: (params: unknown) => unknown;
@@ -58,11 +54,9 @@ export function registerGatedDescriptors(
       approvalReason?: (params: unknown) => string;
       prePolicyGuard?: (params: unknown) => void;
       policyConfigProvider?: () => GatewayMethodRuntime['policyConfig'];
-    }) => (params: unknown) => Promise<unknown>)
-    | undefined;
-  if (runtimeWithCompatibility.approvalBoundary) {
+    }): ((params: unknown) => Promise<unknown>) => {
     const resolveShardWorkloadForChannel = runtime.resolveShardWorkloadForChannel;
-    gateMethod = (input) => runtimeWithCompatibility.approvalBoundary!.gate({
+    return approvalBoundary.gate({
       method: input.method,
       handler: input.handler,
       prepareParams: input.prepareParams,
@@ -78,19 +72,12 @@ export function registerGatedDescriptors(
       // the correlation channel id is only a lookup key).
       ...(resolveShardWorkloadForChannel
         ? {
-            shardApprovalGrant: (params: unknown) =>
-              resolveShardWorkloadForChannel(readCorrelationChannelId(params)),
-          }
+          shardApprovalGrant: (params: unknown) =>
+            resolveShardWorkloadForChannel(readCorrelationChannelId(params)),
+        }
         : {}),
     });
-  } else if (runtimeWithCompatibility.gated) {
-    gateMethod = ({ method, handler, prepareParams }) =>
-      runtimeWithCompatibility.gated!(method, (params: unknown) =>
-        handler(prepareParams(params)));
-  }
-  if (gateMethod === undefined) {
-    throw new Error('Gateway method runtime is missing approvalBoundary.gate');
-  }
+  };
 
   for (const descriptor of descriptors) {
     runtime.target.addMethod(

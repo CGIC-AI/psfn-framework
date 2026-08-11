@@ -12,6 +12,7 @@ export const SERVICE_LABELS: Record<RuntimeServiceHealth['serviceId'], string> =
   vault: 'External Vault',
   ntfy: 'ntfy',
   mcp: 'External MCP',
+  approval_notifications: 'Approval Notifications',
 };
 
 export const HEALTH_LABELS: Record<RuntimeServiceHealthStatus, string> = {

@@ -83,6 +83,37 @@ Those helpers keep the split runtime and shared wiring aligned on core wiring:
 - Optional operator-facing support surfaces live here too: ntfy notifications, confirmation queue, beads tools, vault tools, shell execution, and git-backed mutations.
 - Discord, Telegram, and Wyoming host-facing adapters are started from the gateway side when enabled.
 
+### Gateway RPC trust and approval classes
+
+The default Unix-socket transport is a single-host trust boundary. The gateway
+sets the socket mode to `0770`; access is therefore delegated to the operating
+system owner/group assigned to that socket. Unix transport frames do not carry
+TLS identity or repeat caller credentials on every RPC. Processes with socket
+filesystem access are trusted to reach the connection protocol, so deployments
+must not grant that owner/group to unrelated workloads. WSS is the remote-host
+alternative and requires mutual TLS plus the configured peer SPIFFE identity.
+
+In a companion cluster, filesystem admission is not companion ownership. An
+agent connection must identify once with its role-bound companion credential;
+the gateway then binds that connection to exactly one manifest companion. An
+unknown companion, missing or wrong-role credential, duplicate live owner, or
+attempt to re-identify as a sibling is rejected. Subsequent RPC authorization
+uses that immutable connection binding rather than caller-supplied companion
+parameters.
+
+Gateway policy distinguishes two escalation decisions:
+
+- `AUTONOMOUS_TIER_REQUIRED` may execute directly only for the authenticated
+  companion's autonomous tier; lower tiers enter the durable Garden approval
+  queue.
+- `REQUIRES_HUMAN_APPROVAL` enters that queue at every tier. Home Assistant
+  operations outside the explicit autonomous affordance and all generic git
+  mutations are in this class.
+
+Unknown policy decisions deny. If a queued confirmation cannot reach Discord or
+ntfy, the request remains inspectable in Garden and the Approval Notifications
+runtime-health subsystem becomes unavailable with the delivery error.
+
 ## Agent Responsibilities
 
 `src/app/agent/main.ts` builds the companion runtime:
@@ -92,6 +123,9 @@ Those helpers keep the split runtime and shared wiring aligned on core wiring:
 - loads the character card and prompt registry
 - composes `SessionManager`, `SubstrateAgent`, `MemoryStore`, `MemoryRetriever`, `MemoryExtractor`, `Scheduler`, the gateway-routed API backend, and the private admin transport
 - wires contacts, values, skills, safeguards, core memory, subagents, shard internals, analysis workbench tools, media/journal/wiki tools, and post-turn actions
+- exposes the parent `repo` projection as read-only at every capability tier;
+  a future mutable repository or self-modification path requires its own
+  explicit authority contract rather than this generic approval queue
 
 The agent talks to the gateway through `GatewayClient`, which acts as the LLM and embeddings provider inside the isolated process.
 

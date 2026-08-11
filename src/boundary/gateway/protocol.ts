@@ -1281,7 +1281,11 @@ export interface GatewayNotifications {
 
 // ── Policy types ──
 
-export type GatewayPolicyDecision = 'ALLOW' | 'DENY' | 'NEEDS_APPROVAL';
+export type GatewayPolicyDecision =
+  | 'ALLOW'
+  | 'DENY'
+  | 'AUTONOMOUS_TIER_REQUIRED'
+  | 'REQUIRES_HUMAN_APPROVAL';
 
 export interface GatewayPolicyContext {
   method: string;

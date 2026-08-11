@@ -36,6 +36,24 @@ activates only when the manifest has more than one entry).
   a bounded derived runtime of one origin companion and does not become a cluster
   entry or peer identity.
 
+### Unix-socket admission and companion ownership
+
+The shared gateway Unix socket is protected by host filesystem ownership and
+mode `0770`; it does not authenticate an OS peer on each JSON-RPC call. Every
+process admitted by that owner/group is therefore inside the local transport
+trust boundary. The multi-companion application protocol adds a separate,
+one-time ownership bind: each agent presents a role-bound credential for one
+manifest companion, and the gateway pins the live connection to that companion
+until disconnect. Credentials cannot be used for another role, a connection
+cannot change companion identity, and a second live connection cannot evict the
+current owner. Requests then derive companion scope from the bound connection,
+never from an untrusted RPC parameter.
+
+This division is intentional: socket permissions decide which local processes
+may connect; the authenticated identify handshake decides which companion a
+connection owns. Remote WSS connections use mutual TLS and peer SPIFFE identity
+before the same application-level ownership rules.
+
 ## The cluster manifest
 
 Every PSFN deployment is a cluster of one or more companions: the system-owned

@@ -162,6 +162,7 @@ export async function notifyOperatorForPendingAction({
   const notification = formatPendingConfirmationAlert(entry);
   const operatorChannelId = operatorDiscordChannelId?.trim();
   let delivered = false;
+  const deliveryErrors: string[] = [];
 
   if (operatorChannelId) {
     try {
@@ -171,6 +172,7 @@ export async function notifyOperatorForPendingAction({
       );
       delivered = true;
     } catch (error) {
+      deliveryErrors.push(`Discord: ${toErrorMessage(error)}`);
       log.warn('Failed to send confirmation alert via Discord', {
         confirmationId: entry.id,
         channelId: operatorChannelId,
@@ -190,6 +192,7 @@ export async function notifyOperatorForPendingAction({
       });
       delivered = true;
     } catch (error) {
+      deliveryErrors.push(`ntfy: ${toErrorMessage(error)}`);
       log.warn('Failed to send confirmation alert via ntfy', {
         confirmationId: entry.id,
         error: toErrorMessage(error),
@@ -198,9 +201,10 @@ export async function notifyOperatorForPendingAction({
   }
 
   if (!delivered) {
-    log.warn('No operator notification channel available for queued confirmation', {
-      confirmationId: entry.id,
-    });
+    const detail = deliveryErrors.length > 0
+      ? ` (${deliveryErrors.join('; ')})`
+      : '';
+    throw new Error(`Queued confirmation ${entry.id} has no reachable operator notification sink${detail}`);
   }
 }
 

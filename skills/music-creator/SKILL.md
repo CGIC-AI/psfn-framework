@@ -6,17 +6,17 @@ always: false
 ---
 # Music Creator
 
-Use this skill when a music workflow needs domain-specific guidance beyond the generic `media` surface.
+Use this skill when a music workflow needs domain-specific guidance beyond the current `generate_image` surface.
 
 Creator skills sit above execution tools:
-- Keep execution on `media`.
+- Keep execution on canonical tools exposed by the runtime; do not invent a generic media tool.
 - Load this skill with `skill action="view"` when you need composition guidance, arrangement constraints, lyric structure guidance, or backend-specific notes.
 - Follow the same pattern for future creator domains. Add or load a creator skill instead of inventing a new top-level tool.
 
 ## Action Selection
-- Use `media action="generate"` for a new music piece, stem set, loop, or song draft when the runtime exposes that backend.
-- Use `media action="edit"` for transformations of an existing media artifact when the backend supports iterative remixing, continuation, or restyling.
-- Use `media action="analyze"` when you need to inspect the contents or structure of a produced artifact through the shared media surface.
+- Use the canonical generation action exposed by a future music-capable tool for a new piece, stem set, loop, or song draft.
+- Use that tool's canonical edit action for remixing, continuation, or restyling.
+- Use that tool's canonical analysis action to inspect the contents or structure of a produced artifact.
 - If the current runtime is image-backed only, treat this skill as the pattern contract for upcoming media backends rather than forcing a fake tool call.
 
 ## Prompt Craft

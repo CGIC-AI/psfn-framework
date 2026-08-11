@@ -41,6 +41,12 @@ export function createLocalAdminToolHealthProvider(
             detail: 'Single-process runtime does not use gateway RPC.',
             checkedAt,
           },
+          {
+            serviceId: 'approval_notifications',
+            status: 'not_applicable',
+            detail: 'Single-process runtime does not use the gateway approval queue.',
+            checkedAt,
+          },
           resolveLocalNtfyHealth(checkedAt, ntfyBaseUrl, ntfyTopic),
           vaultName
             ? {
@@ -87,6 +93,12 @@ export function createGatewayAdminToolHealthProvider(
           checkedAt,
           services: [
             gatewayFailure,
+            {
+              serviceId: 'approval_notifications',
+              status: 'unavailable',
+              detail: 'Gateway runtime health is unavailable; approval notification status is unknown.',
+              checkedAt,
+            },
             {
               serviceId: 'vault',
               status: 'unavailable',

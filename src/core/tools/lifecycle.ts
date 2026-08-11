@@ -660,13 +660,10 @@ export function createSystemTool(
     parameters: Type.Object({
       action: Type.Optional(Type.Union([
         Type.Literal('read'),
-        Type.Literal('settings_get'),
         Type.Literal('restart'),
-        Type.Literal('self_restart'),
         Type.Literal('rebuild'),
-        Type.Literal('self_rebuild'),
       ], {
-        description: 'System action. Preferred actions: read, restart, rebuild. Legacy action aliases remain accepted.',
+        description: 'System action: read, restart, or rebuild.',
       })),
       key: Type.Optional(Type.String({ description: 'Used with action=read. Single settings key to retrieve.' })),
       keys: Type.Optional(Type.Array(Type.String(), { description: 'Used with action=read. Subset of settings keys to retrieve.' })),

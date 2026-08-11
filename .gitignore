@@ -38,7 +38,6 @@ workspace/
 /docs/helm-upgrades.md
 /docs/monorepo-imports.md
 /docs/satellite-hub-kube.md
-/docs/shakedown.md
 /docs/system-schematic-2026-08-05.md
 /shakedown/
 /tools/evals/eval/local/profiles/

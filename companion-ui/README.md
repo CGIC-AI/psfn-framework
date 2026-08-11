@@ -72,20 +72,47 @@ Run the development server:
 npm run dev
 ```
 
-### Linking a stock ZNP Z02
+### Linking a ZNP Z02 through the phone
 
 Open **Settings → Z02 badge → Link Z02** in Chrome on Android (or another Web
-Bluetooth browser) while the app is served over HTTPS. The chooser is limited
-to the stock `ZNP Z02` name and JieLi `AE00` service. After selection, the app
-discovers `AE01`/`AE02` and completes the same recovered mutual-authentication
-exchange as BagiBagi before showing **Authenticated**.
+Bluetooth browser) while the app is served over HTTPS. The phone is the
+conduit: the badge has no PSFN network connection of its own.
+
+Two BLE transports are recognized:
+
+- Stock `ZNP Z02`: JieLi RCSP service `AE00`, writes on `AE01`, notifications
+  on `AE02`. The app performs the recovered BagiBagi mutual authentication,
+  sends app-recording opcode `0x04` with codec `0x00`, and validates the success
+  response before accepting opcode `0x01` / sub-opcode `0x04` as signed 16-bit
+  little-endian, mono, 16 kHz PCM. Disconnect sends recording-stop opcode
+  `0x05` before closing GATT.
+- Stark Ruby `Omi`: service `19b10000-e8f2-537e-4f6c-d104768a1214`, Opus audio
+  characteristic `...0001`, and codec characteristic `...0002`. Codec `0x15`
+  is required. BLE fragments are reassembled into complete Opus frames. A
+  separately tested WebCodecs adapter converts those frames to the same 16 kHz
+  mono PCM boundary; the current automatic relay path prioritizes stock PCM.
+
+RCSP envelopes are stream-decoded because one frame may span several BLE
+notifications or several frames may arrive together. Malformed envelopes,
+odd-sized PCM, rejected microphone-start responses, unsupported codecs, and
+timeouts fail closed. No RCSP OTA, erase, flash-write, file mutation, or
+recording-download command is implemented here.
 
 The link is local to the open app and is not persisted. Disconnect BagiBagi
-first because the badge accepts only one active BLE client. This initial client
-implements no RCSP OTA, erase, flash-write, or file-mutation commands. The
-transport sits behind a small connector interface so a packaged Android build
-can replace Web Bluetooth with a native BLE adapter without changing the auth
-or UI state machine.
+first because the badge accepts only one active BLE client. The transport sits
+behind a small connector interface so a packaged Android build can replace Web
+Bluetooth with a native BLE adapter without changing authentication, framing,
+or UI state. This replacement is required for Android WebView shells that do
+not expose Web Bluetooth; Chrome/TWA can use the browser connector directly.
+
+The UI reports receipt and upstream relay separately. The retained direct-Hub
+client can forward valid PCM only after the session advertises
+`microphone_pcm`; audio payloads are redacted from client telemetry. The shipped
+same-origin Companion Gateway action transport currently accepts final audio
+transcripts, not raw PCM, so it deliberately reports **Mic received** instead
+of claiming end-to-end relay. Adding a gateway-owned streaming-audio ingress is
+the remaining server-side dependency; browser code must not invent a Hub URL,
+device credential, or channel authority to bypass it.
 
 Build the PWA:
 

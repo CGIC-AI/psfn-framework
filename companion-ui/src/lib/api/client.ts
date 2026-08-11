@@ -133,6 +133,7 @@ type Listener = (event: SatelliteHubClientEventMap[keyof SatelliteHubClientEvent
 const SOCKET_OPEN = 1;
 const SOCKET_CLOSING = 2;
 const SOCKET_CLOSED = 3;
+const MAX_MICROPHONE_PCM_CHUNK_BYTES = 64 * 1024;
 
 export class SatelliteHubClient {
   private readonly listeners = new Map<keyof SatelliteHubClientEventMap, Set<Listener>>();
@@ -262,6 +263,15 @@ export class SatelliteHubClient {
       text: normalized,
       interrupt: options.interrupt ?? true,
     });
+  }
+
+  /** Send signed 16-bit little-endian, mono, 16 kHz microphone PCM. */
+  sendMicrophonePcm(pcm: Uint8Array): void {
+    if (pcm.byteLength === 0 || pcm.byteLength > MAX_MICROPHONE_PCM_CHUNK_BYTES
+      || pcm.byteLength % 2 !== 0) {
+      throw this.emitLocalError('Microphone PCM chunk has an invalid size', false);
+    }
+    this.send({ type: 'audio', audio: encodeBytesToBase64(pcm) });
   }
 
   startTurn(options: { interrupt?: boolean } = {}): void {
@@ -577,7 +587,21 @@ function redactClientMessage(message: ClientToHubMessage): ClientToHubMessage {
       timestamp: message.timestamp,
     };
   }
+  if (message.type === 'audio') {
+    return { type: 'audio', audio: '[redacted]' };
+  }
   return message;
+}
+
+function encodeBytesToBase64(value: Uint8Array): string {
+  const encoder = (globalThis as { btoa?: (data: string) => string }).btoa;
+  if (!encoder) throw new Error('No base64 encoder is available in this environment');
+  let binary = '';
+  for (let offset = 0; offset < value.byteLength; offset += 0x8000) {
+    const chunk = value.subarray(offset, Math.min(value.byteLength, offset + 0x8000));
+    for (const byte of chunk) binary += String.fromCharCode(byte);
+  }
+  return encoder(binary);
 }
 
 function cloneIdentity(identity: RuntimeIdentity | undefined): RuntimeIdentity | undefined {

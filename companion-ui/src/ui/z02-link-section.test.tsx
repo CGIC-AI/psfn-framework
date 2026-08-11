@@ -18,14 +18,18 @@ describe('Z02LinkSection', () => {
     expect(screen.getByRole('status').textContent).toContain('Ready to discover');
   });
 
-  it('shows authenticated identity and a disconnect control once linked', () => {
+  it('shows a streaming stock microphone and a disconnect control once linked', () => {
     const onDisconnect = vi.fn();
     render(
       <Z02LinkSection
         state={{
           phase: 'linked',
           deviceName: 'Z02 Test Badge',
-          detail: 'Mutual stock authentication passed. The badge is linked locally.',
+          detail: 'PCM relay active — 4 chunks received and sent.',
+          audioFrames: 4,
+          relayedFrames: 4,
+          microphone: 'pcm16-16khz',
+          transport: 'stock-rcsp',
         }}
         onDisconnect={onDisconnect}
         onLink={vi.fn()}
@@ -33,9 +37,29 @@ describe('Z02LinkSection', () => {
     );
 
     expect(screen.getByText('Z02 Test Badge')).toBeTruthy();
-    expect(screen.getByText('Authenticated')).toBeTruthy();
+    expect(screen.getByText('Mic relaying')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Disconnect Z02' }));
     expect(onDisconnect).toHaveBeenCalledOnce();
+  });
+
+  it('distinguishes an active Stark Ruby microphone stream from a stock control link', () => {
+    render(
+      <Z02LinkSection
+        state={{
+          phase: 'linked',
+          deviceName: 'Omi',
+          detail: 'Audio stream active — 12 Opus frames received.',
+          audioFrames: 12,
+          microphone: 'opus-16khz',
+          transport: 'omi-audio',
+        }}
+        onDisconnect={vi.fn()}
+        onLink={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('Mic streaming')).toBeTruthy();
+    expect(screen.getByRole('status').textContent).toContain('12 Opus frames');
   });
 
   it('explains when this browser cannot use Web Bluetooth', () => {

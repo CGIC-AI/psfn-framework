@@ -50,7 +50,10 @@ export function resolveReflectionIntrospectionPolicy(input: {
 // introspection surfaces. The trusted companion-self scope crosses ordinary
 // channel, session, and sensitivity disclosure boundaries while remaining
 // read-only.
-export const REFLECTION_INTROSPECTION_POLICY_BLOCK_VERSION = 6;
+// v7 (42o3c): ground daily and weekly reflection in canonical episodes before
+// falling through to raw session search. Episode search, timeline, and exact
+// drill-down share the same companion-self, read-only boundary.
+export const REFLECTION_INTROSPECTION_POLICY_BLOCK_VERSION = 7;
 
 const NULL_REPORT_GUIDANCE_LINE =
   '- "Nothing surfaced" is an acceptable outcome; record it as open reflection with limited reach, not as evidence that nothing is there.';
@@ -69,10 +72,14 @@ export function formatReflectionIntrospectionPolicyBlock(
   if (policy.toolUseMode === 'bounded_read_only_introspection') {
     lines.push(
       '- This is a maintenance reflection turn, not a foreground conversation turn.',
-      '- Most useful grounding tools: memory action=search for companion memory, then session action=list, search, or grep for conversation evidence.',
+      '- Begin with the supplied starter; for a daily reflection, its morning-generated previous-day summary is the first orientation when present.',
+      '- Search canonical lived episodes by relevant themes or unresolved questions with memory action=episode_search.',
+      '- Use memory action=timeline for a bounded day or week overview and memory action=get to inspect source turns for a selected episode.',
+      '- Use memory action=search for durable companion memory, then session action=search only when episode evidence needs direct conversation follow-up.',
       '- Private introspection memory access spans ordinary sensitivity, channel, and session boundaries; use it only to ground this companion-private reflection.',
       '- Keep routine recall inside this reflection turn instead of delegating it to another analysis loop.',
       '- Stay read-only: do not mutate memory, sessions, settings, schedules, files, or external systems.',
+      '- If an episode search is empty or degraded, say which retrieval modes actually ran; do not treat it as evidence that no episode exists.',
       '- If memory and session recall are incomplete, say so explicitly.',
       NULL_REPORT_GUIDANCE_LINE,
     );

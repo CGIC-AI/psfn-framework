@@ -152,7 +152,7 @@ const MAINTENANCE_TOOL_POLICIES = new Map<string, MaintenanceToolPolicy>([
     resolveAction: resolveMaintenanceIdentityAction,
   }],
   ['memory', {
-    allowedActions: ['search'],
+    allowedActions: ['search', 'episode_search', 'timeline', 'get'],
     resolveAction: resolveMaintenanceMemoryAction,
     allowedTaskKinds: PRIVATE_REFLECTION_TASK_KINDS,
   }],
@@ -278,7 +278,12 @@ function resolveMaintenanceSessionAction(params: Record<string, unknown>): strin
 
 function resolveMaintenanceMemoryAction(params: Record<string, unknown>): string | null {
   const rawAction = typeof params.action === 'string' ? params.action.trim() : '';
-  return rawAction === 'search' ? rawAction : null;
+  return rawAction === 'search'
+    || rawAction === 'episode_search'
+    || rawAction === 'timeline'
+    || rawAction === 'get'
+    ? rawAction
+    : null;
 }
 
 function resolveMaintenanceSelfStatusAction(params: Record<string, unknown>): string | null {

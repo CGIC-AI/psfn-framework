@@ -719,8 +719,10 @@ describe('createReflectionTemplateRuntime reflection metacognition journal', () 
       journalEntryId: expect.stringMatching(/^reflection-/),
     }));
     expect(toolGroundingPrompts[0]).not.toContain('analysis_workbench');
-    expect(toolGroundingPrompts[0]).toContain('memory action=search');
-    expect(toolGroundingPrompts[0]).toContain('session action=list, search, or grep');
+    expect(toolGroundingPrompts[0]).toContain('memory action=episode_search');
+    expect(toolGroundingPrompts[0]).toContain('memory action=timeline');
+    expect(toolGroundingPrompts[0]).toContain('memory action=get');
+    expect(toolGroundingPrompts[0]).toContain('session action=search');
     expect(capturedPrompts).toHaveLength(3);
     expect(capturedPrompts[0]).toContain('Stage: evidence');
     expect(capturedPrompts[0]).toContain('[Reflection Introspection Policy]');
@@ -1208,8 +1210,10 @@ describe('createReflectionTemplateRuntime reflection metacognition journal', () 
       expect(introspectionPolicySection).toContain('memory_access_scope: companion_self_reflection');
       expect(introspectionPolicySection).toContain('overlay_tool_activation: forbidden');
       expect(introspectionPolicySection).not.toContain('analysis_workbench');
-      expect(introspectionPolicySection).toContain('memory action=search');
-      expect(introspectionPolicySection).toContain('session action=list, search, or grep');
+      expect(introspectionPolicySection).toContain('memory action=episode_search');
+      expect(introspectionPolicySection).toContain('memory action=timeline');
+      expect(introspectionPolicySection).toContain('memory action=get');
+      expect(introspectionPolicySection).toContain('session action=search');
       expectCuratedReflectionStarter(prompt, templateId === 'weekly-review' ? 'Week' : 'Day');
       expect(prompt).toContain('trust-filtered contact memory');
       expect(prompt).toContain('[High-Signal Starter Clues]');

@@ -1,6 +1,6 @@
 import { isRecord } from '../../shared/utils/types.js';
 
-export const NARRATIVE_EMOTION_APPRAISAL_MODES = [
+const NARRATIVE_EMOTION_APPRAISAL_MODES = [
   'disabled',
   'drift_only',
 ] as const;

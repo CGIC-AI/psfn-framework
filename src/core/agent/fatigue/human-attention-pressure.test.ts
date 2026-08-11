@@ -73,7 +73,7 @@ function evaluate(
   overrides: Partial<Parameters<DeterministicHumanAttentionPressure['evaluate']>[0]> = {},
 ) {
   return pressure.evaluate({
-    localCompanionId: 'purrsephone',
+    localCompanionId: 'companion',
     contactId: 'human-low-trust',
     channelId: 'group-a',
     trustLevel: 'public',

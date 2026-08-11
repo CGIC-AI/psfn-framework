@@ -147,7 +147,7 @@ describe('skills runtime', () => {
   it('reports managed skill ownership under the personal files root when configured', () => {
     const root = mkdtempSync(join(tmpdir(), 'skills-runtime-managed-root-'));
     const companionDataDir = join(root, 'companion-data');
-    const personalFilesDir = join(root, 'purrsephone');
+    const personalFilesDir = join(root, 'companion');
     const seedDir = join(root, 'config');
 
     mkdirSync(companionDataDir, { recursive: true });
@@ -167,7 +167,7 @@ describe('skills runtime', () => {
 
       expect(runtime.getManagedOwnership()).toEqual({
         owner: 'personal',
-        managedRoot: 'purrsephone/skills',
+        managedRoot: 'companion/skills',
         configPath: 'companion-data/skills.json',
       });
     } finally {

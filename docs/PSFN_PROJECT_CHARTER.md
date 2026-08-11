@@ -679,7 +679,7 @@ Shards must have separate lineage identifiers:
 - seed snapshot and fold identifiers when applicable
 - clear parent-child provenance
 
-A human-readable label such as `Purrsephone / shard 01` is useful for display,
+A human-readable label such as `Companion / shard 01` is useful for display,
 but must not be a routing or authority key.
 
 Purpose:
@@ -848,7 +848,7 @@ A weighted thought is a persistent internal signal that accumulates urgency over
 
 Weighted thoughts are for:
 
-- surfacing proactive care behavior ("V seemed stressed 6 hours ago, check in?")
+- surfacing proactive care behavior ("Morgan seemed stressed 6 hours ago, check in?")
 - converting passive concern into actionable nudges at a configurable threshold
 - modeling organic urgency: things that matter build pressure until the companion acts or explicitly defers
 

@@ -34,7 +34,7 @@ function episodeInput(id: string, threadId: string = id): EpisodeCreateInput {
     landmark: `Landmark ${id}`,
     startedAt: '2026-06-01T10:00:00.000Z',
     endedAt: '2026-06-01T10:30:00.000Z',
-    participantContactIds: ['contact:vega'],
+    participantContactIds: ['contact:morgan'],
     salience: { score: 0.5 },
     affect: { labels: [] },
     themes: ['memory'],

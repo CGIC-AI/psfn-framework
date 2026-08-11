@@ -243,7 +243,7 @@ describe('CompanionUiWebSocketAdapter upgrade policy', () => {
         redactedContext: 'Read documentation',
         status: 'pending',
         sourceSystem: 'tool-access',
-        attribution: { parentId: companionId, parentLabel: 'Purrsephone' },
+        attribution: { parentId: companionId, parentLabel: 'Companion' },
         action: 'web.fetch',
         scope: 'example.test',
         reason: 'Read documentation',
@@ -261,7 +261,7 @@ describe('CompanionUiWebSocketAdapter upgrade policy', () => {
         data: expect.objectContaining({
           id: 'approval-1',
           sourceSystem: 'tool-access',
-          attribution: { parentId: companionId, parentLabel: 'Purrsephone' },
+          attribution: { parentId: companionId, parentLabel: 'Companion' },
           grantMode: { kind: 'once' },
         }),
       },

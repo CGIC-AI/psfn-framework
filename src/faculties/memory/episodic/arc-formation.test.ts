@@ -41,7 +41,7 @@ describe('EpisodeArcWeaver', () => {
       endedAt,
       threadId: 'discord:main',
       channelId: 'discord:main',
-      participantContactIds: ['contact:vega'],
+      participantContactIds: ['contact:morgan'],
       salience: { score: 0.6 },
       affect: { labels: [] },
       themes: ['postgres', 'memory'],

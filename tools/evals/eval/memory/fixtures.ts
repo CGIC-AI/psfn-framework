@@ -355,7 +355,7 @@ export const MEMORY_REGRESSION_FIXTURES: readonly MemoryRegressionFixture[] = [
     retrievals: [
       {
         id: 'retrieve-workspace-lineage',
-        query: 'workspace history previous writable path purrsephone old_lab',
+        query: 'workspace history previous writable path companion old_lab',
         topK: 3,
         trustLevel: 'trusted',
         expectedMemoryIds: ['m-lineage-workspace-current'],

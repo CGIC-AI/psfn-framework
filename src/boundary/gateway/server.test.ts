@@ -940,7 +940,7 @@ describe('GatewayServer', () => {
 
   it('prefers personal workspace reads and shallow lists in yolo mode while preserving codebase fallback', async () => {
     const codebaseRoot = mkdtempSync(join(tmpdir(), 'gw-yolo-root-'));
-    const workspace = join(codebaseRoot, 'purrsephone');
+    const workspace = join(codebaseRoot, 'companion');
     mkdirSync(join(workspace, 'downloads'), { recursive: true });
     mkdirSync(join(codebaseRoot, 'src'), { recursive: true });
     writeFileSync(join(codebaseRoot, 'AGENTS.md'), 'root-agents');
@@ -987,7 +987,7 @@ describe('GatewayServer', () => {
       ]);
 
       const prefixedDownloadsListResponse = await invokeRpc(conn, 974, 'fs.list', {
-        path: 'purrsephone/downloads',
+        path: 'companion/downloads',
         maxEntries: 20,
       });
       expect(prefixedDownloadsListResponse.result.paths).toEqual([
@@ -1014,7 +1014,7 @@ describe('GatewayServer', () => {
 
   it('retargets broad yolo fs.search to the personal working folders', async () => {
     const codebaseRoot = mkdtempSync(join(tmpdir(), 'gw-yolo-search-'));
-    const workspace = join(codebaseRoot, 'purrsephone');
+    const workspace = join(codebaseRoot, 'companion');
     mkdirSync(join(workspace, 'downloads'), { recursive: true });
     mkdirSync(join(codebaseRoot, 'src'), { recursive: true });
     writeFileSync(
@@ -1040,10 +1040,10 @@ describe('GatewayServer', () => {
       });
 
       expect(searchResponse.error).toBeUndefined();
-      expect(searchResponse.result.glob).toContain('purrsephone/');
+      expect(searchResponse.result.glob).toContain('companion/');
       expect(searchResponse.result.glob).not.toBe('**/*');
       expect(searchResponse.result.matches).toEqual([
-        expect.objectContaining({ path: 'purrsephone/downloads/COMPANION_EXPERIENCE.md' }),
+        expect.objectContaining({ path: 'companion/downloads/COMPANION_EXPERIENCE.md' }),
       ]);
     } finally {
       rmSync(codebaseRoot, { recursive: true, force: true });

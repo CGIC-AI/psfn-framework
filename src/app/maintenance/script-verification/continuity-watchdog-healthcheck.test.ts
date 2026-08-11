@@ -136,7 +136,7 @@ describe('continuity watchdog healthcheck paging', () => {
   it('pages through ntfy when the configured user service is down', async () => {
     const stateFile = await makeStateFile();
     const config = makeConfig(stateFile, {
-      CONTINUITY_WATCHDOG_SYSTEMD_SERVICE: 'purrsephone.service',
+      CONTINUITY_WATCHDOG_SYSTEMD_SERVICE: 'companion.service',
     });
     const { fetchImpl, ntfyRequests } = makeFetch({
       healthStatus: 200,
@@ -164,7 +164,7 @@ describe('continuity watchdog healthcheck paging', () => {
     expect(ntfyRequests).toHaveLength(1);
     expect(ntfyRequests[0]?.url).toBe('https://ntfy.local/ops');
     expect(ntfyRequests[0]?.headers.get('authorization')).toBe('Bearer secret-token');
-    expect(ntfyRequests[0]?.body).toContain('systemd --user service: purrsephone.service');
+    expect(ntfyRequests[0]?.body).toContain('systemd --user service: companion.service');
   });
 
   it('pages when the health endpoint reports stale scheduler liveness', async () => {

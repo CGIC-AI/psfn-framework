@@ -135,7 +135,7 @@ describe('reflection post-turn lane split (E5.2)', () => {
           minSingleEntryChars: 120,
         },
         episodicWatermarkStore: fromAny(episodicWatermarkStore),
-        companionNames: ['Purrsephone'],
+        companionNames: ['Companion'],
         companionAuthorIds: ['bot-1'],
         episodicSynthesizer,
         sleepConsolidator,

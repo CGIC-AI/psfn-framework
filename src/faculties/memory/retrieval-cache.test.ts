@@ -78,7 +78,7 @@ function makeRuntimeConfig(): SubstrateConfig {
 
 describe('active-memory refresh cache', () => {
   it('returns the byte-identical snapshot without embedding or scanning when query and corpus are unchanged', async () => {
-    const recalled = makeMemory('memory-1', 'V prefers oolong tea in the afternoon.');
+    const recalled = makeMemory('memory-1', 'Morgan prefers oolong tea in the afternoon.');
     const { store } = makeStore([recalled]);
     const embedding = makeEmbedding();
     const retriever = new MemoryRetriever(store, embedding, { retrievalBudgetPct: 0.1 });
@@ -97,8 +97,8 @@ describe('active-memory refresh cache', () => {
   });
 
   it('reruns the pipeline and returns current results when the query or corpus changes', async () => {
-    const firstMemory = makeMemory('memory-1', 'V prefers oolong tea.');
-    const secondMemory = makeMemory('memory-2', 'V prefers jasmine tea.');
+    const firstMemory = makeMemory('memory-1', 'Morgan prefers oolong tea.');
+    const secondMemory = makeMemory('memory-2', 'Morgan prefers jasmine tea.');
     const fixture = makeStore([firstMemory]);
     const embedding = makeEmbedding();
     const retriever = new MemoryRetriever(fixture.store, embedding, { retrievalBudgetPct: 0.1 });
@@ -128,7 +128,7 @@ describe('active-memory refresh cache', () => {
   });
 
   it('coalesces concurrent unchanged refreshes into one retrieval pipeline', async () => {
-    const recalled = makeMemory('memory-1', 'V prefers oolong tea.');
+    const recalled = makeMemory('memory-1', 'Morgan prefers oolong tea.');
     const { store } = makeStore([recalled]);
     const embedding = makeEmbedding();
     const retriever = new MemoryRetriever(store, embedding, { retrievalBudgetPct: 0.1 });
@@ -269,7 +269,7 @@ describe('active-memory refresh cache', () => {
 
 describe('shared per-turn retrieval embedding', () => {
   it('shares one query embedding between memory and wiki without changing either result', async () => {
-    const recalled = makeMemory('memory-1', 'V prefers oolong tea.');
+    const recalled = makeMemory('memory-1', 'Morgan prefers oolong tea.');
     const sharedFixture = makeStore([recalled]);
     const sharedEmbedding = makeEmbedding();
     const config = makeRuntimeConfig();

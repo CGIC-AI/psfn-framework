@@ -1007,9 +1007,9 @@ rejects NodePort and never renders a direct Companion UI Ingress.
 ## Shakedown Runbook
 
 Use an isolated namespace and test values before any live Pi cutover. For the
-Artie fixture, treat `/mnt/c/Temp/PSFN-TEST/psfn-shakedown` as read-only until
+Artie fixture, treat `/srv/example/psfn-shakedown/psfn-shakedown` as read-only until
 you intentionally copy data into test PVCs. Never point test values at live
-Purrsephone runtime roots or live database credentials.
+companion runtime roots or live database credentials.
 
 Install cert-manager first, with a pinned chart/version selected by the
 operator:
@@ -1098,7 +1098,7 @@ kubectl -n psfn-test logs deploy/psfn-agent --since=10m | \
 ## Backup And Pi Cutover
 
 Live Pi cutover requires explicit operator confirmation and a service freeze
-window. Do not interrupt the live Purrsephone system during chart prep or test
+window. Do not interrupt the live companion system during chart prep or test
 cluster shakedowns.
 
 The shared application image carries the repo-owned chart at

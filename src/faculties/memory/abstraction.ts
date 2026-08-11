@@ -40,9 +40,6 @@ function inferSubject(text: string): 'Partner' | 'Someone' {
   if (RELATIONSHIP_CONTEXT_PATTERN.test(text)) {
     return 'Partner';
   }
-  if (/^\s*[A-Z]\b/.test(text)) {
-    return 'Partner';
-  }
   if (/\b(my|our)\b/i.test(text)) {
     return 'Partner';
   }

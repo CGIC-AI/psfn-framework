@@ -1201,7 +1201,7 @@ describe('postgres memory store unit coverage', () => {
     });
 
     const write = await writer.write({
-      text: 'V prefers oolong tea in the morning',
+      text: 'Morgan prefers oolong tea in the morning',
       type: 'semantic',
       sourceRef: 'api:test:conversation',
     });
@@ -1209,7 +1209,7 @@ describe('postgres memory store unit coverage', () => {
 
     expect(write.action).toBe('created');
     expect(await store.countActiveMemories()).toBe(1);
-    expect(retrieved).toContain('V prefers oolong tea in the morning');
+    expect(retrieved).toContain('Morgan prefers oolong tea in the morning');
     expect(postgresMocks.createPostgresPool).toHaveBeenCalledWith('postgres://unused', {
       applicationName: 'psfn-memory',
       allowExitOnIdle: true,
@@ -1778,7 +1778,7 @@ describe('postgres memory store unit coverage', () => {
     postgresMocks.activePool = pool;
 
     const store = await createPostgresMemoryStore('postgres://unused', 4);
-    await store.insertMemory(makeMemory('pg-retention-pref', 'V prefers oolong tea', {
+    await store.insertMemory(makeMemory('pg-retention-pref', 'Morgan prefers oolong tea', {
       tags: ['preference:tea'],
     }), new Float32Array([0.1, 0.2, 0.3, 0.4]));
     await store.insertMemory(makeMemory('pg-retention-standard', 'Standard memory', {

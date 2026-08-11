@@ -446,7 +446,7 @@ test('buildPromptMonitorTurns sanitizes uncloneable prompt loom data without dro
         new Proxy({
           id: 'call-1',
           name: 'contact_lookup',
-          arguments: { query: 'Vega' },
+          arguments: { query: 'Morgan' },
           uncloneable: () => 'drop me',
         }, {}) as unknown as AdminSessionTurnData['record']['toolCalls'][number],
       ],

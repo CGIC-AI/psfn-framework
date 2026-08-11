@@ -292,7 +292,7 @@ describe('conversation-state producer — participant relationships (E4.4)', () 
 
   function makeEdge(overrides: Partial<ParticipantRelationshipEdgeInput> = {}): ParticipantRelationshipEdgeInput {
     return {
-      aName: 'Vega',
+      aName: 'Morgan',
       bName: 'Iki',
       relationshipType: 'sibling',
       sensitivity: 'personal',
@@ -320,7 +320,7 @@ describe('conversation-state producer — participant relationships (E4.4)', () 
     const variables = renderGroup([makeEdge()]);
     expect(variables.runtime_participant_relationships_count).toBe('1');
     expect(variables.runtime_participant_relationships_xml).toBe(
-      '\n<participant_relationships>\n<rel a="Vega" b="Iki" type="sibling" />\n</participant_relationships>',
+      '\n<participant_relationships>\n<rel a="Morgan" b="Iki" type="sibling" />\n</participant_relationships>',
     );
   });
 
@@ -383,10 +383,10 @@ describe('conversation-state producer — participant relationships (E4.4)', () 
 
   it('renders nothing on dm turns (a dm has one participant)', () => {
     const variables = buildConversationStatePromptVariables({
-      message: makeMessage({ channelId: 'discord:dm:vega', authorId: 'user-vega', authorName: 'Vega' }),
+      message: makeMessage({ channelId: 'discord:dm:morgan', authorId: 'user-morgan', authorName: 'Morgan' }),
       conversationScope: createDmConversationScope({
-        channelId: 'discord:dm:vega',
-        contact: { contactId: 'contact-vega', displayName: 'Vega' },
+        channelId: 'discord:dm:morgan',
+        contact: { contactId: 'contact-morgan', displayName: 'Morgan' },
       }),
       internalTurn: false,
       trustLevel: 'trusted',

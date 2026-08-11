@@ -18,7 +18,7 @@ describe('operational traces', () => {
           audioFormat: 'pcm16',
           identity: {
             source: 'framework',
-            companion: { id: 'companion-1', name: 'Purrsephone' },
+            companion: { id: 'companion-1', name: 'Companion' },
             user: { id: 'contact-1', name: 'Ada' },
           },
         },
@@ -49,12 +49,12 @@ describe('operational traces', () => {
 
     expect(traces[1]).toMatchObject({
       operationClass: 'assistant_message',
-      summary: 'Purrsephone message',
+      summary: 'Companion message',
       metadata: { role: 'assistant' },
     });
     expect(traces[2]).toMatchObject({
       operationClass: 'assistant_interrupt',
-      summary: 'Purrsephone interrupted',
+      summary: 'Companion interrupted',
     });
   });
 

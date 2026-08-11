@@ -56,7 +56,7 @@ describe('MemoryExtractor emotional persistence fencing', () => {
         }),
       };
       const sessionManager = {
-        characterName: 'Purrsephone',
+        characterName: 'Companion',
         getRecentMessages: vi.fn().mockReturnValue([
           {
             id: 1,
@@ -71,7 +71,7 @@ describe('MemoryExtractor emotional persistence fencing', () => {
             channelId,
             role: 'assistant',
             content: 'That sounds like a meaningful milestone.',
-            authorName: 'Purrsephone',
+            authorName: 'Companion',
             timestamp: 1_001,
           },
         ]),

@@ -57,7 +57,7 @@ function makeSender(
   return createAgentLoopEgressReplySender({
     generator,
     delivery,
-    companionName: overrides.companionName ?? 'Purrsephone',
+    companionName: overrides.companionName ?? 'Companion',
     outboundReplyGuard: overrides.guard ?? new OutboundReplyDeduper(),
     resolveDestinationDisclosure: overrides.resolveDisclosure ?? (() => PUBLIC_DISCLOSURE),
     ...(overrides.eventFenceWindowMs !== undefined

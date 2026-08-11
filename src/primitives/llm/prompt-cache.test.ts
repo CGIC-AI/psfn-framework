@@ -9,7 +9,7 @@ import {
   type PromptCachePayloadReport,
 } from './prompt-cache.js';
 
-const STATIC_TEXT = '<character_foundation>\nYou are Purrsephone.\n</character_foundation>';
+const STATIC_TEXT = '<character_foundation>\nYou are Companion.\n</character_foundation>';
 const SESSION_TEXT = '<session_notes>\nDM with Alice.\n</session_notes>';
 const VOLATILE_TEXT = '<runtime_context>\nmood: curious\n</runtime_context>';
 

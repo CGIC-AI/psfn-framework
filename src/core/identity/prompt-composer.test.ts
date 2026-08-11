@@ -988,15 +988,15 @@ describe('PromptComposer', () => {
       );
       store.create({ type: 'base', name: 'Base', content: 'BASE', identifier: 'main' });
 
-      const vega = constitutionComposer.composeSplit({ user: 'Vega' });
+      const morgan = constitutionComposer.composeSplit({ user: 'Morgan' });
       const iku = constitutionComposer.composeSplit({ user: 'Iku' });
 
-      expect(vega.staticPrefix).toBe(iku.staticPrefix);
-      expect(vega.staticHash).toBe(iku.staticHash);
-      expect(vega.staticPrefix).toContain('Support your Partner\'s flourishing.');
-      expect(vega.staticPrefix).not.toContain('{{user}}');
-      expect(vega.staticPrefix).not.toContain('Vega');
-      expect(vega.staticPrefix).not.toContain('Iku');
+      expect(morgan.staticPrefix).toBe(iku.staticPrefix);
+      expect(morgan.staticHash).toBe(iku.staticHash);
+      expect(morgan.staticPrefix).toContain('Support your Partner\'s flourishing.');
+      expect(morgan.staticPrefix).not.toContain('{{user}}');
+      expect(morgan.staticPrefix).not.toContain('Morgan');
+      expect(morgan.staticPrefix).not.toContain('Iku');
     });
   });
 });

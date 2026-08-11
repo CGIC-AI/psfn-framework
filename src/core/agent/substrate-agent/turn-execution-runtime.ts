@@ -1300,7 +1300,7 @@ export async function handleMessageForTurn(
       if (egress.disposition === 'queued') {
         runtime.sessionManager.appendSystemNote(
           turnSessionIdentity.logicalSessionId,
-          `Artifact share held for V's review because it inherited ${egress.sensitivity} context. `
+          `Artifact share held for operator review because it inherited ${egress.sensitivity} context. `
             + `Confirmation ${egress.queueEntry.id} is pending; the artifact remains in the personal gallery.`,
           'artifact_egress_approval',
           turnSessionIdentity.sourceChannelId,

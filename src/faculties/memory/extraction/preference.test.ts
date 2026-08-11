@@ -10,13 +10,13 @@ describe('extractExplicitPreferenceFactsFromEntries', () => {
         role: 'user',
         content: 'Please remember that my favorite color is teal.',
         timestamp: 1,
-        authorName: 'Vega',
+        authorName: 'Morgan',
       },
     ]);
 
     expect(facts).toHaveLength(1);
     expect(facts[0]).toMatchObject({
-      text: "Vega's favorite color is teal.",
+      text: "Morgan's favorite color is teal.",
       type: 'semantic',
       retentionClass: 'durable',
       tags: ['preference', 'favorite', 'preference:color'],
@@ -24,8 +24,8 @@ describe('extractExplicitPreferenceFactsFromEntries', () => {
         sourceMessageIds: [42],
         sourceSpanStartMessageId: 42,
         sourceSpanEndMessageId: 42,
-        sourceSpeakerName: 'Vega',
-        subjectName: 'Vega',
+        sourceSpeakerName: 'Morgan',
+        subjectName: 'Morgan',
         addressMode: 'direct_to_companion',
       },
     });

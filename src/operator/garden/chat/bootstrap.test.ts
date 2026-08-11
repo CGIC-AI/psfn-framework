@@ -317,7 +317,7 @@ describe('AdminChatBootstrapService', () => {
     const contactStore = {
       listAll: () => [
         makeContact('contact-api-principal', 'API Principal'),
-        makeContact('contact-v', 'V'),
+        makeContact('contact-v', 'Morgan'),
       ],
     } as unknown as ContactStorePort;
     const service = new AdminChatBootstrapService(contactStore, {
@@ -333,8 +333,8 @@ describe('AdminChatBootstrapService', () => {
       channel: 'api',
       userId: 'admin-user',
     });
-    expect(updated.displayName).toBe('V');
-    expect(updated.defaultAuthorName).toBe('V');
+    expect(updated.displayName).toBe('Morgan');
+    expect(updated.defaultAuthorName).toBe('Morgan');
     expect(updated.defaultAuthorId).toBe('admin-user');
   });
 

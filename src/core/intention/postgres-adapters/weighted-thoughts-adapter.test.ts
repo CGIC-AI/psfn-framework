@@ -102,7 +102,7 @@ describe('PostgresWeightedThoughtStore', () => {
     const thought = createThoughtWeight(
       {
         id: 'wt-1',
-        content: 'check in on V',
+        content: 'check in on Morgan',
         source: 'concern',
         thoughtClass: 'time_sensitive',
         contactId: 'contact-v',
@@ -114,7 +114,7 @@ describe('PostgresWeightedThoughtStore', () => {
     await store.save(thought);
     const loaded = await store.getById('wt-1');
     expect(loaded).not.toBeNull();
-    expect(loaded!.content).toBe('check in on V');
+    expect(loaded!.content).toBe('check in on Morgan');
     expect(loaded!.provenance.concernId).toBe('concern-1');
     expect(loaded!.provenance.sourceChannelType).toBe('discord');
     expect(loaded!.contactId).toBe('contact-v');

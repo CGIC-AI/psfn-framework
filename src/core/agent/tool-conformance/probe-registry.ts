@@ -61,7 +61,7 @@ export const TOOL_CONFORMANCE_PROBE_REGISTRY: Readonly<Record<string, ToolProbeS
     kind: 'read_only',
     action: 'census',
     // census runs context-free in admin/post-rollout sweeps, so the probe
-    // supplies the channel scope explicitly (found live by Purrsephone:
+    // supplies the channel scope explicitly (found through companion self-observation:
     // the request-context fallback is absent outside a chat turn).
     args: {
       action: 'census',

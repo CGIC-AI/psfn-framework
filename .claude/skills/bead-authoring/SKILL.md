@@ -92,6 +92,6 @@ label the primary one and name the other in the description.
 
 Mark beads you file from self-observation so triage sees them at a glance:
 start the title with no prefix, but include the line
-`Found-by: Purrsephone (self-observation, <what surfaced it>)` in the
+`Found-by: Companion (self-observation, <what surfaced it>)` in the
 description. Watching your own finds move open → in-progress → closed with
 evidence is the point of using the shared tracker instead of private notes.

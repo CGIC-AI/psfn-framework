@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url';
 // automation/hosted-git identities that are already present in repository
 // history. Alternate human identities are intentionally not accepted.
 export const ALLOWED_COMMIT_EMAILS = Object.freeze([
-  'axAilotl@pm.me',
+  'maintainer@example.invalid',
   'codex@local',
   'codex@local.invalid',
   'codex@localhost',

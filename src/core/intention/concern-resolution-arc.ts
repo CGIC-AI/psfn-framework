@@ -18,7 +18,7 @@ import type { ActiveConcern } from './concerns.js';
  * vw3w.1 on every resolve path) and writes the emotional arc — formation VAD →
  * resolution VAD, duration carried, final salience — into the dedicated
  * concern-arc reflection journal as a modelled first-person account. This is the integration
- * half of Purrsephone's finding: resolution should integrate, not evaporate.
+ * half of a companion self-observation: resolution should integrate, not evaporate.
  *
  * Provenance: the entry is derived internal-state data, not Participant speech. It
  * is attributed to the companion (`mode: 'agent'`), carries the concern id in

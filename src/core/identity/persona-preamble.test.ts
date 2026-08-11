@@ -29,8 +29,8 @@ function createSeededRegistry(): PersonaPreambleRegistryReader & { set(key: stri
 }
 
 const CARD_VARS = {
-  char: 'Purrsephone',
-  name: 'Purrsephone',
+  char: 'Companion',
+  name: 'Companion',
   personality: 'A warm, wry nun who tends a walled garden and grows cannabis among the herbs. Steady, earthy, unhurried; she blesses what she plants.',
   description: 'A cloistered gardener with dirt under her nails and a dry sense of humor.',
 };
@@ -46,7 +46,7 @@ describe('persona preamble service', () => {
     const preamble = service.build('memory_extraction');
     const seed = getSubsystemPersonaSeed('memory_extraction');
 
-    expect(preamble.startsWith("I'm Purrsephone's memory system, I'm ")).toBe(true);
+    expect(preamble.startsWith("I'm Companion's memory system, I'm ")).toBe(true);
     expect(preamble).toContain(`My job is to ${seed.instruction}.`);
     // Compressed persona is derived from the card, not hand-maintained.
     expect(preamble).toContain('warm, wry nun');
@@ -64,7 +64,7 @@ describe('persona preamble service', () => {
     const after = service.build('memory_extraction');
 
     expect(after).not.toBe(before);
-    expect(after.startsWith('As Purrsephone, working as my memory system:')).toBe(true);
+    expect(after.startsWith('As Companion, working as my memory system:')).toBe(true);
   });
 
   it('changes the assembled prompt when a per-subsystem label or instruction is edited', () => {
@@ -79,7 +79,7 @@ describe('persona preamble service', () => {
     registry.set(seed.instructionKey, 'weave separate days into one story');
     const preamble = service.build('arc_formation');
 
-    expect(preamble).toContain("I'm Purrsephone's keeper of the long threads");
+    expect(preamble).toContain("I'm Companion's keeper of the long threads");
     expect(preamble).toContain('My job is to weave separate days into one story.');
   });
 
@@ -93,7 +93,7 @@ describe('persona preamble service', () => {
     const assembled = service.prepend('topic_segmentation', task);
 
     expect(assembled.endsWith(task)).toBe(true);
-    expect(assembled.indexOf("I'm Purrsephone's")).toBe(0);
+    expect(assembled.indexOf("I'm Companion's")).toBe(0);
   });
 
   it('falls back to seed defaults when the registry has no entry', () => {
@@ -105,7 +105,7 @@ describe('persona preamble service', () => {
     const preamble = service.build('profile_synthesis');
     const seed = getSubsystemPersonaSeed('profile_synthesis');
 
-    expect(preamble).toContain(`I'm Purrsephone's ${seed.label}`);
+    expect(preamble).toContain(`I'm Companion's ${seed.label}`);
     expect(preamble).toContain(`My job is to ${seed.instruction}.`);
   });
 
@@ -126,7 +126,7 @@ describe('persona preamble service', () => {
     const service = createPersonaPreambleService({
       registry,
       personaVariables: () => ({
-        char: 'Purrsephone',
+        char: 'Companion',
         personality: 'Devoted to {{user}} and to the garden.',
       }),
     });
@@ -145,7 +145,7 @@ describe('persona preamble service', () => {
     for (const seed of SUBSYSTEM_PERSONA_SEEDS) {
       const preamble = service.build(seed.id);
       expect(preamble.length).toBeGreaterThan(0);
-      expect(preamble).toContain("I'm Purrsephone's");
+      expect(preamble).toContain("I'm Companion's");
     }
   });
 });

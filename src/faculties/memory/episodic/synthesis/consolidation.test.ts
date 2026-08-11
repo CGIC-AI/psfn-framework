@@ -23,7 +23,7 @@ function canonicalEpisode(overrides: Partial<Episode> = {}): Episode {
     endedAt: '2026-06-10T01:20:00.000Z',
     threadId: 'topic:discord-main',
     channelId: 'discord:main',
-    participantContactIds: ['contact:vega'],
+    participantContactIds: ['contact:morgan'],
     salience: { score: 0.7 },
     affect: { labels: [] },
     machineSignals: {
@@ -50,7 +50,7 @@ function candidate(overrides: Partial<EpisodeCandidateInput> = {}): EpisodeCandi
     endedAt: '2026-06-10T01:40:00.000Z',
     threadId: 'topic:discord-main',
     channelId: 'discord:main',
-    participantContactIds: ['contact:vega'],
+    participantContactIds: ['contact:morgan'],
     salience: { score: 0.6 },
     affect: { labels: [] },
     machineSignals: {

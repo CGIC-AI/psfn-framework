@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the auditable microWakeWord corpus, features, and config for Purrsephone."""
+"""Build an auditable microWakeWord corpus, features, and training config."""
 
 from __future__ import annotations
 
@@ -12,10 +12,6 @@ from pathlib import Path
 
 import numpy as np
 import yaml
-
-
-REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_DEFINITIONS = REPOSITORY_ROOT / "satellites" / "waveshare-bedroom" / "wakeword"
 
 
 def synthesize_corpus(workspace: Path, definitions: Path, generator: Path, model: Path) -> None:
@@ -249,7 +245,7 @@ def main() -> None:
         choices=("synthesize", "augment", "positive-features", "hard-negative-features", "config"),
     )
     parser.add_argument("--workspace", type=Path, required=True)
-    parser.add_argument("--definitions", type=Path, default=DEFAULT_DEFINITIONS)
+    parser.add_argument("--definitions", type=Path)
     parser.add_argument("--piper-generator", type=Path)
     parser.add_argument("--piper-model", type=Path)
     args = parser.parse_args()
@@ -258,6 +254,8 @@ def main() -> None:
         parser.error(f"{args.stage} requires --piper-generator")
     if args.stage == "synthesize" and args.piper_model is None:
         parser.error("synthesize requires --piper-model")
+    if args.stage == "synthesize" and args.definitions is None:
+        parser.error("synthesize requires --definitions from an ignored local directory")
     if args.stage == "synthesize":
         synthesize_corpus(
             workspace,

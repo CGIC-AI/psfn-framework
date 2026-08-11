@@ -17,7 +17,7 @@ import {
 import { ObservedGroupMemoryScheduler } from './group-observed-scheduler.js';
 
 const CHANNEL_ID = 'discord:shared-attribution-room';
-const VEGA = { authorId: 'vega-user', authorName: 'Vega' } as const;
+const MORGAN = { authorId: 'morgan-user', authorName: 'Morgan' } as const;
 const TARGET = { authorId: 'cedar-bot', authorName: 'Cedar' } as const;
 const COMPANIONS = ['Cedar', 'Juniper', 'Maple', 'Rowan', 'Willow'] as const;
 
@@ -30,15 +30,15 @@ function makeAddressedEntry(observerName: string): SessionEntry {
     // CogSec may sanitize the body. The typed addressing envelope, not body
     // visibility or prose, is the authority for speaker and addressee.
     content: 'I call you love when the observatory is quiet. [sanitized]',
-    authorId: VEGA.authorId,
-    authorName: VEGA.authorName,
+    authorId: MORGAN.authorId,
+    authorName: MORGAN.authorName,
     timestamp: 1_000,
     channelVisibility: 'invite_only',
     discordMessageId: 'discord-message-1',
     metadata: buildSessionMetadataWithMessageAddressing(undefined, {
       schemaVersion: 2,
       source: 'discord',
-      author: VEGA,
+      author: MORGAN,
       observer: { authorId: observerAuthorId, authorName: observerName },
       mentionedTargets: [TARGET],
       channel: { scope: 'group', channelId: CHANNEL_ID },
@@ -54,12 +54,12 @@ function makeModelResponse(observerName: string): string {
   const observerConfabulation = observerName === TARGET.authorName
     ? ''
     : `<fact>
-<text>Vega affectionately called ${observerName} love while speaking to Cedar.</text>
+<text>Morgan affectionately called ${observerName} love while speaking to Cedar.</text>
 <type>relational</type>
 <importance>0.96</importance>
 <confidence>0.98</confidence>
 <source_message_ids>1</source_message_ids>
-<source_speaker_name>Vega</source_speaker_name>
+<source_speaker_name>Morgan</source_speaker_name>
 <subject_name>${observerName}</subject_name>
 <address_mode>overheard_room_context</address_mode>
 </fact>`;
@@ -79,12 +79,12 @@ ${observerConfabulation}
 <address_mode>${trueAddressMode}</address_mode>
 </fact>
 <fact>
-<text>Vega affectionately called Cedar love.</text>
+<text>Morgan affectionately called Cedar love.</text>
 <type>relational</type>
 <importance>0.96</importance>
 <confidence>0.98</confidence>
 <source_message_ids>1</source_message_ids>
-<source_speaker_name>Vega</source_speaker_name>
+<source_speaker_name>Morgan</source_speaker_name>
 <subject_name>Cedar</subject_name>
 <address_mode>${trueAddressMode}</address_mode>
 </fact>
@@ -132,8 +132,8 @@ function makeObservedMessage(): SubstrateMessage {
     id: 'discord-message-1',
     channelId: CHANNEL_ID,
     channelType: 'discord',
-    authorId: VEGA.authorId,
-    authorName: VEGA.authorName,
+    authorId: MORGAN.authorId,
+    authorName: MORGAN.authorName,
     content: 'I call you love when the observatory is quiet. [sanitized]',
     timestamp: new Date(1_000),
     routing: { source: 'discord', responseMode: 'observe' },
@@ -159,23 +159,23 @@ async function runProductionExtraction(observerName: string) {
   const llmComplete = vi.fn().mockResolvedValue({
     content: makeModelResponse(observerName),
   });
-  const vegaContact = {
-    id: 'contact-vega',
-    displayName: VEGA.authorName,
-    discordUserId: VEGA.authorId,
+  const morganContact = {
+    id: 'contact-morgan',
+    displayName: MORGAN.authorName,
+    discordUserId: MORGAN.authorId,
     relationshipType: 'stranger',
   };
   const contactStore = {
     getByChannelIdentity: vi.fn(async (_channel: string, authorId: string) => (
-      authorId === VEGA.authorId ? vegaContact : undefined
+      authorId === MORGAN.authorId ? morganContact : undefined
     )),
     getByDiscordUserId: vi.fn(async (authorId: string) => (
-      authorId === VEGA.authorId ? vegaContact : undefined
+      authorId === MORGAN.authorId ? morganContact : undefined
     )),
     getById: vi.fn(async (contactId: string) => (
-      contactId === vegaContact.id ? vegaContact : undefined
+      contactId === morganContact.id ? morganContact : undefined
     )),
-    listAll: vi.fn(async () => [vegaContact]),
+    listAll: vi.fn(async () => [morganContact]),
     upsert: vi.fn(),
     updateRelationshipType: vi.fn(async () => false),
     updateEmotionalBaseline: vi.fn(async () => undefined),
@@ -228,11 +228,11 @@ describe('production group attribution boundary (fwoso)', () => {
       );
       expect(memories).toHaveLength(1);
       expect(memories[0]).toMatchObject({
-        text: 'Vega affectionately called Cedar love.',
-        contactId: 'contact-vega',
+        text: 'Morgan affectionately called Cedar love.',
+        contactId: 'contact-morgan',
         provenance: {
-          sourceSpeakerName: 'Vega',
-          sourceAuthorId: VEGA.authorId,
+          sourceSpeakerName: 'Morgan',
+          sourceAuthorId: MORGAN.authorId,
           subjectName: 'Cedar',
           addressMode: observerName === TARGET.authorName
             ? 'direct_to_companion'

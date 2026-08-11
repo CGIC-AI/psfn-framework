@@ -20,7 +20,7 @@ describe('evaluateCogSecMemoryCandidacy', () => {
 
   it('allows relationship and boundary facts', () => {
     const decision = evaluateCogSecMemoryCandidacy({
-      text: 'Vega prefers direct technical feedback.',
+      text: 'Morgan prefers direct technical feedback.',
       type: 'relational',
       tags: ['relationship'],
     });
@@ -49,7 +49,7 @@ describe('evaluateCogSecMemoryCandidacy', () => {
 
   it('does not reject ordinary talk about image readers failing', () => {
     const decision = evaluateCogSecMemoryCandidacy({
-      text: 'Vega mentioned that his camera app failed to load an image yesterday.',
+      text: 'Morgan mentioned that his camera app failed to load an image yesterday.',
       type: 'semantic',
       tags: [],
     });

@@ -173,7 +173,7 @@ describe('CoreMemoryStore', () => {
     const path = makeStorePath('psfn-core-memory-scope-');
     const store = new CoreMemoryStore(path);
     const groupScope = coreMemoryChannelScope({ channelId: 'discord:room-a', isDirectMessage: false });
-    const dmScope = coreMemoryChannelScope({ channelId: 'discord:dm-vega', isDirectMessage: true });
+    const dmScope = coreMemoryChannelScope({ channelId: 'discord:dm-morgan', isDirectMessage: true });
 
     store.rethink({
       persona: 'Room A local continuity.',
@@ -182,27 +182,27 @@ describe('CoreMemoryStore', () => {
     }, { scope: groupScope });
     store.rethink({
       persona: 'DM local continuity.',
-      human: 'Vega one-to-one context.',
+      human: 'Morgan one-to-one context.',
       goals: 'Keep DM continuity local.',
     }, { scope: dmScope });
 
     const groupContext = store.formatForContext({
       channelId: 'discord:room-a',
       isDirectMessage: false,
-      activeParticipantNames: ['Vega', 'Iku', 'Miss Dragon Fox', 'A', 'B', 'C'],
+      activeParticipantNames: ['Morgan', 'Iku', 'Miss Dragon Fox', 'A', 'B', 'C'],
     });
     expect(groupContext).toContain('<room_context');
-    expect(groupContext).toContain('active_participants="Vega, Iku, Miss Dragon Fox, A, B"');
+    expect(groupContext).toContain('active_participants="Morgan, Iku, Miss Dragon Fox, A, B"');
     expect(groupContext).toContain('Room A local continuity.');
     expect(groupContext).not.toContain('<human>');
     expect(groupContext).not.toContain('DM local continuity.');
 
     const dmContext = store.formatForContext({
-      channelId: 'discord:dm-vega',
+      channelId: 'discord:dm-morgan',
       isDirectMessage: true,
-      participantName: 'Vega',
+      participantName: 'Morgan',
     });
-    expect(dmContext).toContain('<participant_context name="Vega"');
+    expect(dmContext).toContain('<participant_context name="Morgan"');
     expect(dmContext).toContain('DM local continuity.');
     expect(dmContext).not.toContain('Room A local continuity.');
     expect(dmContext).not.toContain('<human>');

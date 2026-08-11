@@ -115,13 +115,13 @@ describe('satellite hub websocket client', () => {
       place: { id: 'office', name: 'Office' },
       identity: {
         source: 'framework',
-        companion: { id: 'companion-1', name: 'Purrsephone' },
+        companion: { id: 'companion-1', name: 'Companion' },
       },
     });
     await flushAsyncMessage();
 
     expect(client.snapshot().ready).toBe(true);
-    expect(client.snapshot().session.identity?.companion?.name).toBe('Purrsephone');
+    expect(client.snapshot().session.identity?.companion?.name).toBe('Companion');
     expect(client.snapshot().session.place).toEqual({ id: 'office', name: 'Office' });
     expect(client.snapshot().session.eventCapabilities).toEqual(['approvals.v2']);
     expect(sessions).toHaveLength(1);

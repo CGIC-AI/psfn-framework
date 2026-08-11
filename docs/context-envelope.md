@@ -355,7 +355,7 @@ inside `conversation_state`):
 
 ```xml
 <participant_relationships>
-<rel a="Vega" b="Iki" type="sibling" />
+<rel a="Morgan" b="Iki" type="sibling" />
 </participant_relationships>
 ```
 

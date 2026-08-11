@@ -77,7 +77,7 @@ describe('biographical claim digests', () => {
   });
 
   it('changes the claim digest when the subject version changes (contact merge detection)', () => {
-    const value = canonicalizeClaimValue('name', { kind: 'name', name: 'V', role: 'primary' });
+    const value = canonicalizeClaimValue('name', { kind: 'name', name: 'Morgan', role: 'primary' });
     const before = computeClaimDigest({ schemaVersion: 1, normalizerVersion: 1, subject: contact('v', 1), kind: 'name', value });
     const after = computeClaimDigest({ schemaVersion: 1, normalizerVersion: 1, subject: contact('v', 2), kind: 'name', value });
     expect(before).not.toBe(after);
@@ -271,11 +271,11 @@ describe('biographical validation (fail closed)', () => {
 
   it('rejects malformed structured values', () => {
     expectInvalid('name', { kind: 'name', name: '', role: 'primary' });
-    expectInvalid('name', { kind: 'name', name: 'V', role: 'super' });
+    expectInvalid('name', { kind: 'name', name: 'Morgan', role: 'super' });
     expectInvalid('nickname', { kind: 'nickname', nickname: '', scope: 'self' });
-    expectInvalid('nickname', { kind: 'nickname', nickname: 'V', scope: 'both' });
+    expectInvalid('nickname', { kind: 'nickname', nickname: 'Morgan', scope: 'both' });
     expectInvalid('relationship', { kind: 'relationship', relationshipType: '' });
-    expectInvalid('name', { kind: 'name', name: 'V', role: 'primary', hidden: 'payload' });
+    expectInvalid('name', { kind: 'name', name: 'Morgan', role: 'primary', hidden: 'payload' });
   });
 
   it('rejects unknown subject and source fields', () => {
@@ -291,7 +291,7 @@ describe('biographical validation (fail closed)', () => {
   });
 
   it('rejects name values with a related subject (cardinality gate)', () => {
-    expectInvalid('name', { kind: 'name', name: 'V', role: 'primary' }, contact('other'));
+    expectInvalid('name', { kind: 'name', name: 'Morgan', role: 'primary' }, contact('other'));
   });
 
   it('rejects relationship values without a related subject', () => {
@@ -344,7 +344,7 @@ describe('biographical validation (fail closed)', () => {
       id: 'claim-1',
       subject: contact('v'),
       kind: 'name',
-      value: { kind: 'name', name: 'V', role: 'primary' },
+      value: { kind: 'name', name: 'Morgan', role: 'primary' },
       basis: 'explicit',
       status: 'active',
       sources: [source()],
@@ -377,7 +377,7 @@ describe('biographical conflict keys', () => {
     const primaryA = claimConflictKey('name', subject, { kind: 'name', name: 'Vincent', role: 'primary' });
     const primaryB = claimConflictKey('name', subject, { kind: 'name', name: 'Vince', role: 'primary' });
     expect(primaryA).toBe(primaryB);
-    const alias = claimConflictKey('name', subject, { kind: 'name', name: 'V', role: 'alias' });
+    const alias = claimConflictKey('name', subject, { kind: 'name', name: 'Morgan', role: 'alias' });
     expect(alias).not.toBe(primaryA);
   });
 

@@ -188,7 +188,7 @@ describe('orientation context surface wiring', () => {
         ? currentContent
         : `Earlier message ${index + 1} with enough detail to consume the deliberately tiny history budget.`,
       authorId: 'u1',
-      authorName: 'Vega',
+      authorName: 'Morgan',
       timestamp: 1_700_000_000_000 + index,
     }));
     const store = {
@@ -857,7 +857,7 @@ describe('orientation context surface wiring', () => {
         role: 'user',
         content: 'Before the break we chose the shared summary service.',
         authorId: 'u1',
-        authorName: 'Vega',
+        authorName: 'Morgan',
         timestamp: now - (5 * hourMs),
       },
       {
@@ -874,7 +874,7 @@ describe('orientation context surface wiring', () => {
         role: 'user',
         content: 'I am back.',
         authorId: 'u1',
-        authorName: 'Vega',
+        authorName: 'Morgan',
         timestamp: now,
       },
     ];
@@ -904,7 +904,7 @@ describe('orientation context surface wiring', () => {
       return {
         content: originStage === 'session.recent.summary.wake_continuity'
           ? 'The side channel was waiting on prompt registry review.'
-          : 'Before the pause, Vega and Companion chose the shared summary service and queued tests.',
+          : 'Before the pause, Morgan and Companion chose the shared summary service and queued tests.',
         model: 'test',
         inputTokens: 0,
         outputTokens: 0,

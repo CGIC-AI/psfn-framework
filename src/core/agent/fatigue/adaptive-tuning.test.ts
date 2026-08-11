@@ -7,7 +7,7 @@ function makeEvent(overrides: Partial<FatigueBudgetEvent> = {}): FatigueBudgetEv
   return {
     timestampMs: Date.parse('2027-01-15T12:00:00.000Z'),
     dayKey: '2027-01-15',
-    localCompanionId: 'purrsephone',
+    localCompanionId: 'companion',
     peerContactId: 'peer-mi',
     channelId: 'channel-a',
     triggeringAuthor: {

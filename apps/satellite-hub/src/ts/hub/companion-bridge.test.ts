@@ -277,7 +277,7 @@ test("companion bridge submits typed touch stimuli with its registered identity"
       body: JSON.stringify({
         status: "accepted",
         messageId: "stimulus-1",
-        response: "Purrsephone smiles.",
+        response: "Companion smiles.",
       }),
     };
     const result = await bridge.submitTouchStimulus({
@@ -293,7 +293,7 @@ test("companion bridge submits typed touch stimuli with its registered identity"
     assert.deepEqual(result, {
       status: "accepted",
       messageId: "stimulus-1",
-      response: "Purrsephone smiles.",
+      response: "Companion smiles.",
     });
     assert.deepEqual(backplane.stimulusRequests, [{
       authorization: "Bearer companion-key",

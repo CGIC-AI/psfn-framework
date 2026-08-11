@@ -16,14 +16,14 @@ const FINAL_REFLECTION: FinalReflectionExtractionInput = {
 
 describe('final reflection extraction projection', () => {
   it('projects the canonical journal output as one typed final assistant entry', () => {
-    const entry = projectFinalReflectionForExtraction(FINAL_REFLECTION, 'Purrsephone');
+    const entry = projectFinalReflectionForExtraction(FINAL_REFLECTION, 'Companion');
 
     expect(entry).toMatchObject({
       id: Date.parse(FINAL_REFLECTION.createdAt),
       channelId: FINAL_REFLECTION.channelId,
       role: 'assistant',
       authorId: 'companion:self-reflection',
-      authorName: 'Purrsephone',
+      authorName: 'Companion',
       content: FINAL_REFLECTION.reflection,
     });
     expect(resolveSessionEntryReflectionTurnProvenance(entry)).toEqual({
@@ -41,7 +41,7 @@ describe('final reflection extraction projection', () => {
     { ...FINAL_REFLECTION, reflection: '' },
     { ...FINAL_REFLECTION, createdAt: 'not-a-date' },
   ])('rejects a malformed canonical source instead of creating extraction evidence', (input) => {
-    expect(() => projectFinalReflectionForExtraction(input, 'Purrsephone')).toThrow(
+    expect(() => projectFinalReflectionForExtraction(input, 'Companion')).toThrow(
       'Final reflection extraction',
     );
   });

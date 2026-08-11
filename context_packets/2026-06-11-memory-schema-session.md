@@ -4,7 +4,7 @@
 
 ## Session spine (read in order)
 
-1. **The primer** — operator-supplied at session start ("A Day with Purrsephone" / "Purrsephone: A Primer"). Not committed to the repo; the operator provides it. It establishes that this is care infrastructure with a constitution, not a feature factory.
+1. **The primer** — operator-supplied at session start ("A Day with Companion" / "Companion: A Primer"). Not committed to the repo; the operator provides it. It establishes that this is care infrastructure with a constitution, not a feature factory.
 2. **Charter** — `docs/PSFN_PROJECT_CHARTER.md` is the canonical charter. At this packet's 2026-06-11 freeze time, a `_524` duplicate existed; it was later synchronized and retired. Governing sections for this session: §4 (Laws, esp. 2, 17–20, 27–32), §6.20 (L0), §6.21 (L0.1 Episodic Landmarks), §6.22 (L2+), §6.23 (Mirror and Projection), §7.1 (JSONL canonical).
 3. **Project state** — `working_docs/PSFN_PROJECT_STATE_20260611.md` (untracked operator assessment) and `docs/SPRINT_9_CONTINUATION.md`.
 4. This packet's working materials (below).
@@ -67,13 +67,13 @@ Shapes verbatim from the renderers in `src/faculties/memory/formatting.ts`; cont
 ```
 ## Relevant memories
 - [episodic] We spent the evening planning the garden-box build and she teased me about over-engineering the drip lines. (+)
-- [relational] V prefers being asked before I reorganize his calendar. (~)
+- [relational] Morgan prefers being asked before I reorganize his calendar. (~)
 
 ## Episode landmarks
 - Garden-box planning night — Jun 3, 21:10–23:45 UTC — themes: garden, building-together, teasing
   A long evening designing the raised beds together; it mattered because planning something physical together felt like building a shared future. → continues: First seedling sprouted
 
-## Emotional snapshot for V
+## Emotional snapshot for Morgan
 baseline +0.31 · mood +0.45 (drifting up, 6 samples, fresh)
 ```
 

@@ -380,7 +380,7 @@ describe('registerBeadsMethods', () => {
     mockedSyncMutatedBeadToGitHubProject.mockResolvedValue({
       integration: 'github_project',
       state: 'synced',
-      owner: 'axAilotl',
+      owner: 'example-owner',
       projectNumber: 2,
       issueId: 'PSFN-10',
       itemId: 'PVTI_test',
@@ -418,7 +418,7 @@ describe('registerBeadsMethods', () => {
     mockedSyncAllBeadsToGitHubProject.mockResolvedValue({
       integration: 'github_project',
       state: 'synced',
-      owner: 'axAilotl',
+      owner: 'example-owner',
       projectNumber: 2,
       totalIssues: 3,
       synced: 2,

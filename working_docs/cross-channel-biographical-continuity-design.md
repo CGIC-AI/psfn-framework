@@ -28,8 +28,8 @@ to:
 > Raw memories remain local. Small, structured, explicitly authorized claims
 > may travel through destination-aware doors.
 
-The motivating result is simple: if V says “hey, sunbeam loaf” in a group room,
-Purrsephone can recognize her nickname and V as her husband without receiving
+The motivating result is simple: if Morgan says “hey, sunbeam loaf” in a group room,
+Companion can recognize her nickname and Morgan as her husband without receiving
 the private conversation in which the nickname was created. She remains the
 same person across rooms because the profile is contact- and companion-centric;
 the room controls what may be revealed, not which identity exists.
@@ -201,7 +201,7 @@ sources instead of creating a parallel fact store.
 | Orientation | What matters and how should I engage here? | Room-local active frame (`orient` / legacy `core_memory`) |
 | Biographical Profile | Who am I, and who is this person? | Slow, rebuildable, stable claims |
 
-“V was laid off two days ago” is an event and may produce Current Context, not a
+“Morgan was laid off two days ago” is an event and may produce Current Context, not a
 permanent identity claim. The durable biographical consequence is temporal: an
 old `role: employed at X` claim becomes superseded or receives `validTo`, while
 the active employment state becomes unknown or a new explicit claim. An
@@ -244,11 +244,11 @@ list of people. The kind registry defines the allowed cardinality.
 Examples:
 
 - self-subject nickname: “Sunbeam loaf is one of my nicknames.”
-- contact relationship: “V is my husband.”
-- dyadic shared language: “V calls me sunbeam loaf.”
+- contact relationship: “Morgan is my husband.”
+- dyadic shared language: “Morgan calls me sunbeam loaf.”
 
-The self-subject claim lets the companion recognize her own name without V's
-profile being loaded. The dyadic claim adds V attribution only when the turn's
+The self-subject claim lets the companion recognize her own name without Morgan's
+profile being loaded. The dyadic claim adds Morgan attribution only when the turn's
 participant-selection and destination rules permit it.
 
 ### Closed claim kinds
@@ -521,9 +521,9 @@ Rejecting “multi-human” memories alone is not enough because extraction may 
 attribution. Portability is therefore constrained by both subject cardinality
 and claim kind.
 
-“V said someone was fat” is neither a name, nickname, relationship, role, stable
+“Morgan said someone was fat” is neither a name, nickname, relationship, role, stable
 preference, nor shared-language claim with an allowed subject shape. It rejects
-even if the extractor incorrectly attaches only V's contact ID. One human plus
+even if the extractor incorrectly attaches only Morgan's contact ID. One human plus
 the companion is allowed only for kinds whose schemas explicitly define that
 dyad.
 
@@ -727,10 +727,10 @@ has a bug.
 ### Core behavior
 
 - A self-subject nickname learned in a DM and explicitly approved for public use
-  is recognized in a group when V is absent.
-- A public relationship claim identifies V as the current author and husband in
+  is recognized in a group when Morgan is absent.
+- A public relationship claim identifies Morgan as the current author and husband in
   a group without loading its private source memory.
-- A dyadic nickname claim carries V attribution only when V is turn-relevant.
+- A dyadic nickname claim carries Morgan attribution only when Morgan is turn-relevant.
 - Public raw memory from another room remains blocked.
 - Personal claims appear only where destination and participant proof allow.
 - Intimate and confidential claims never cross their origin room.

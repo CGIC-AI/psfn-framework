@@ -55,7 +55,7 @@ describe('InMemoryBiographicalProfileStore — writeClaim', () => {
     const full = await s.writeClaim({
       subject: companion('purrs'),
       kind: 'name',
-      value: { kind: 'name', name: 'Purrsephone', role: 'primary' },
+      value: { kind: 'name', name: 'Companion', role: 'primary' },
       basis: 'explicit',
       confidence: 1,
       sources: [source()],
@@ -100,7 +100,7 @@ describe('InMemoryBiographicalProfileStore — writeClaim', () => {
       s.writeClaim({
         subject: companion('purrs'),
         kind: 'name',
-        value: { kind: 'name', name: 'Purrsephone', role: 'primary' },
+        value: { kind: 'name', name: 'Companion', role: 'primary' },
         basis: 'explicit',
         // @ts-expect-error runtime callers must fail closed too
         proposedSensitivity: 'friends-only',
@@ -116,7 +116,7 @@ describe('InMemoryBiographicalProfileStore — writeClaim', () => {
     const claim = await s.writeClaim({
       subject: contact('v'),
       kind: 'name',
-      value: { kind: 'name', name: 'V', role: 'primary' },
+      value: { kind: 'name', name: 'Morgan', role: 'primary' },
       basis: 'explicit',
       confidence: 1,
       sources: [source({ revision: '1' })],
@@ -131,7 +131,7 @@ describe('InMemoryBiographicalProfileStore — writeClaim', () => {
       id: 'claim-fixed',
       subject: contact('v'),
       kind: 'name' as const,
-      value: { kind: 'name' as const, name: 'V', role: 'primary' as const },
+      value: { kind: 'name' as const, name: 'Morgan', role: 'primary' as const },
       basis: 'explicit' as const,
       confidence: 1,
       sources: [source()],
@@ -149,7 +149,7 @@ describe('InMemoryBiographicalProfileStore — writeClaim', () => {
     await s.writeClaim({
       subject: contact('v', 1),
       kind: 'name',
-      value: { kind: 'name', name: 'V', role: 'primary' },
+      value: { kind: 'name', name: 'Morgan', role: 'primary' },
       basis: 'explicit',
       confidence: 1,
       sources: [source()],
@@ -220,7 +220,7 @@ describe('InMemoryBiographicalProfileStore — supersession (append-only)', () =
     const original = await s.writeClaim({
       subject: contact('v'),
       kind: 'name',
-      value: { kind: 'name', name: 'V', role: 'primary' },
+      value: { kind: 'name', name: 'Morgan', role: 'primary' },
       basis: 'explicit',
       confidence: 1,
       sources: [source()],
@@ -247,7 +247,7 @@ describe('InMemoryBiographicalProfileStore — supersession (append-only)', () =
     const original = await s.writeClaim({
       subject: contact('v'),
       kind: 'name',
-      value: { kind: 'name', name: 'V', role: 'primary' },
+      value: { kind: 'name', name: 'Morgan', role: 'primary' },
       basis: 'explicit',
       confidence: 1,
       sources: [source()],

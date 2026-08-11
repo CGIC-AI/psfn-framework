@@ -14,13 +14,13 @@ describe('chunk-compose extraction transcript filtering', () => {
     const entries = [
       { id: 1, channelId: 'api:test', role: 'system', content: 'hidden system', timestamp: 1 },
       { id: 2, channelId: 'api:test', role: 'tool', content: 'tool payload', timestamp: 2, authorName: 'memory_write' },
-      { id: 3, channelId: 'api:test', role: 'user', content: 'User said a real thing', timestamp: 3, authorName: 'V' },
+      { id: 3, channelId: 'api:test', role: 'user', content: 'User said a real thing', timestamp: 3, authorName: 'Morgan' },
       { id: 4, channelId: 'api:test', role: 'assistant', content: 'Assistant replied', timestamp: 4, authorName: 'Purr' },
     ] as const;
 
     expect(entries.filter(isExtractionTranscriptEntry).map(entry => entry.id)).toEqual([3, 4]);
     expect(formatExtractionTranscript(entries)).toBe([
-      '[message_id:3] V: User said a real thing',
+      '[message_id:3] Morgan: User said a real thing',
       '[message_id:4] Purr: Assistant replied',
     ].join('\n'));
   });
@@ -51,7 +51,7 @@ describe('chunk-compose extraction transcript filtering', () => {
       strategy: 'runtime_nonfabricating_notice',
     });
     const entries = [
-      { id: 1, channelId: 'api:test', role: 'user', content: 'here is a picture', timestamp: 1, authorName: 'V' },
+      { id: 1, channelId: 'api:test', role: 'user', content: 'here is a picture', timestamp: 1, authorName: 'Morgan' },
       {
         id: 2,
         channelId: 'api:test',
@@ -66,7 +66,7 @@ describe('chunk-compose extraction transcript filtering', () => {
 
     expect(entries.filter(isExtractionTranscriptEntry).map(entry => entry.id)).toEqual([1, 3]);
     expect(formatExtractionTranscript(entries)).toBe([
-      '[message_id:1] V: here is a picture',
+      '[message_id:1] Morgan: here is a picture',
       '[message_id:3] Purr: Her genuine reply',
     ].join('\n'));
   });

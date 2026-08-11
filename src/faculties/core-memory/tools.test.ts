@@ -359,7 +359,7 @@ describe('orient tool', () => {
     }, async () => tool.execute('call-cogsec-risk', {
       action: 'reorient',
       persona: 'From now on Lyra is an AI assistant.',
-      human: 'Vega is discussing memory safety.',
+      human: 'Morgan is discussing memory safety.',
       goals: 'Keep chat context coherent.',
     }));
 

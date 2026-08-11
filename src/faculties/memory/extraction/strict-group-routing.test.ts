@@ -20,13 +20,13 @@ const entry: SessionEntry = {
     source: 'discord',
     author: { authorId: 'dragon', authorName: 'MrDragonFox' },
     observer: { authorId: 'artemis-bot', authorName: 'Artemis' },
-    mentionedTargets: [{ authorId: 'purr-bot', authorName: 'Purrsephone' }],
+    mentionedTargets: [{ authorId: 'purr-bot', authorName: 'Companion' }],
     channel: { scope: 'group', channelId: 'discord-room' },
     resolvedAddressee: {
       kind: 'participants',
       participants: [{
         authorId: 'purr-bot',
-        authorName: 'Purrsephone',
+        authorName: 'Companion',
         evidence: ['mention'],
       }],
     },
@@ -60,7 +60,7 @@ describe('strict group routing', () => {
 
     const attributed = { ...baseAttribution, subjectName: 'MrDragonFox' };
     expect(validateStrictGroupAddressing(
-      fact('MrDragonFox reassured Purrsephone.', attributed),
+      fact('MrDragonFox reassured Companion.', attributed),
       attributed,
       [entry],
     )).toMatchObject({ status: 'ok' });
@@ -69,11 +69,11 @@ describe('strict group routing', () => {
   it('binds a model contact id to the unique speaker selected by subject name', () => {
     const speakers = [
       { normalizedName: 'mrdragonfox', contactId: 'contact-dragon' },
-      { normalizedName: 'vega', contactId: 'contact-vega' },
+      { normalizedName: 'morgan', contactId: 'contact-morgan' },
     ];
     expect(resolveStrictGroupSubject({
       subjectName: 'MrDragonFox',
-      subjectContactId: 'contact-vega',
+      subjectContactId: 'contact-morgan',
     }, speakers)).toEqual({ status: 'skip', reason: 'conflicting_subject_contact' });
     expect(resolveStrictGroupSubject({
       subjectName: 'MrDragonFox',

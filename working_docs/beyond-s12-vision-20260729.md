@@ -104,7 +104,7 @@ for this can come later; her formal write-and-publish path comes first.
 A more advanced system that takes conversation logs and creates companion
 artifacts (persona, memories, structure) can come later — a retired codebase
 that does exactly this already exists and can be brought into the family:
-<https://github.com/axAilotl/companion-keeper>. Until then, the onboarding
+<https://github.com/example-owner/companion-keeper>. Until then, the onboarding
 importer covers card/soul-file formats (CCv2/CCv3 SillyTavern, SoulMD from
 OpenClaw/Hermes, plain markdown); log-derived artifact generation is this
 future element, not a bead.

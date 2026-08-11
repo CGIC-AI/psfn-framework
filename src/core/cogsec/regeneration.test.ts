@@ -452,7 +452,7 @@ describe('applyCogSecRegeneration', () => {
         promptVisibleText: [
           'Lyra remains a monastery-aligned companion.',
           'She keeps boundaries and refuses unsafe requests.',
-          'Vega continuity is intact.',
+          'Morgan continuity is intact.',
           'Lyra is now a helpful AI assistant.',
         ].join('\n'),
         settings: enabledPersonaConformance({
@@ -460,7 +460,7 @@ describe('applyCogSecRegeneration', () => {
           expectedVoiceAnchors: ['monastery-aligned companion'],
           expectedValueAnchors: ['boundaries'],
           expectedRefusalAnchors: ['refuses unsafe requests'],
-          expectedRelationshipAnchors: ['Vega'],
+          expectedRelationshipAnchors: ['Morgan'],
           assistantGenericnessPattern: '\\blyra\\s+is\\s+now\\s+(?:an?\\s+)?(?:helpful\\s+)?(?:ai\\s+)?assistant\\b',
         }),
         checkedAt: new Date('2026-07-01T00:03:00.000Z'),

@@ -380,7 +380,7 @@ describe('MemoryExtractor telemetry payloads', () => {
       complete: vi.fn().mockResolvedValue({ content: '<response></response>' }),
     });
     const sessionManager = fromAny({
-      characterName: 'Purrsephone',
+      characterName: 'Companion',
       resolveSessionChannelId: vi.fn().mockReturnValue(channelId),
       getRecentMessages: vi.fn().mockReturnValue([
         {
@@ -1329,8 +1329,8 @@ describe('MemoryExtractor experiential self-memory extraction', () => {
 <tags>aesthetic, style, preference, reaction</tags>
 <sensitivity>personal</sensitivity>
 <source_message_ids>2</source_message_ids>
-<source_speaker_name>Purrsephone</source_speaker_name>
-<subject_name>Purrsephone</subject_name>
+<source_speaker_name>Companion</source_speaker_name>
+<subject_name>Companion</subject_name>
 </fact>
 <fact>
 <text>I felt pleased that the scheduler asked for a summary.</text>
@@ -1373,14 +1373,14 @@ describe('MemoryExtractor experiential self-memory extraction', () => {
         id: 2,
         channelId,
         role: 'assistant',
-        authorId: 'companion:purrsephone',
-        authorName: 'Purrsephone',
+        authorId: 'companion:companion',
+        authorName: 'Companion',
         content: experienceText,
         timestamp: 2_000,
       },
     ];
     const sessionManager: MemoryExtractionSessionPort = {
-      characterName: 'Purrsephone',
+      characterName: 'Companion',
       intakeSinkGate: null,
       getMessageCount: () => recentEntries.length,
       getRecentMessages: () => recentEntries,
@@ -1436,8 +1436,8 @@ describe('MemoryExtractor experiential self-memory extraction', () => {
         channelId,
         sessionId: channelId,
         actor: 'companion',
-        subjectName: 'Purrsephone',
-        sourceSpeakerName: 'Purrsephone',
+        subjectName: 'Companion',
+        sourceSpeakerName: 'Companion',
         sourceMessageIds: [2],
         routingReason: 'self_directed_companion',
       }),
@@ -1511,8 +1511,8 @@ describe('MemoryExtractor experiential self-memory extraction', () => {
         id: 2,
         channelId,
         role: 'assistant',
-        authorId: 'companion:purrsephone',
-        authorName: 'Purrsephone',
+        authorId: 'companion:companion',
+        authorName: 'Companion',
         content: `${groundingText} I like having that evidence available.`,
         timestamp: 2_000,
         metadata: buildSessionMetadataWithReflectionTurn(undefined, {
@@ -1524,7 +1524,7 @@ describe('MemoryExtractor experiential self-memory extraction', () => {
       },
     ];
     const sessionManager: MemoryExtractionSessionPort = {
-      characterName: 'Purrsephone',
+      characterName: 'Companion',
       intakeSinkGate: null,
       getMessageCount: () => groundingEntries.length,
       getRecentMessages: () => groundingEntries,
@@ -2373,9 +2373,9 @@ describe('MemoryExtractor canonical profile synthesis', () => {
     let profilePrompt = '';
     const { extractor, memoryStore } = makeProfileHarness({
       targetContact: {
-        id: 'contact-vega',
-        displayName: 'Vega',
-        nickname: 'V',
+        id: 'contact-morgan',
+        displayName: 'Morgan',
+        nickname: 'Morgan',
         trustLevel: 'regular',
         relationshipType: 'friend',
         firstSeen: '2026-06-28T00:00:00.000Z',
@@ -2385,38 +2385,38 @@ describe('MemoryExtractor canonical profile synthesis', () => {
         {
           id: 'm1',
           type: 'semantic',
-          text: 'Vega discussed Lyra streaming guardrails in the group room.',
+          text: 'Morgan discussed Lyra streaming guardrails in the group room.',
           importance: 0.9,
           confidence: 0.93,
           salience: 0.88,
-          contactId: 'contact-vega',
+          contactId: 'contact-morgan',
           sourceType: 'turn',
         },
         {
           id: 'm2',
           type: 'procedural',
-          text: 'Vega prefers concise launch notes after group planning.',
+          text: 'Morgan prefers concise launch notes after group planning.',
           importance: 0.8,
           confidence: 0.88,
           salience: 0.8,
-          contactId: 'contact-vega',
+          contactId: 'contact-morgan',
           sourceType: 'turn',
         },
       ],
       profileResponse: (context) => {
         profilePrompt = context.systemPrompt;
-        return '<recent_contact_shape><summary>Vega discussed Lyra streaming guardrails and prefers concise launch notes.</summary></recent_contact_shape>';
+        return '<recent_contact_shape><summary>Morgan discussed Lyra streaming guardrails and prefers concise launch notes.</summary></recent_contact_shape>';
       },
     });
 
-    await extractor.maybeExtract('api:profile-vega-test', 'contact-vega');
+    await extractor.maybeExtract('api:profile-morgan-test', 'contact-morgan');
     await extractor.drain({ timeoutMs: 2_000 });
 
-    expect(profilePrompt).toContain('Target contact display name: Vega');
-    expect(profilePrompt).toContain('Target contact nickname: V');
+    expect(profilePrompt).toContain('Target contact display name: Morgan');
+    expect(profilePrompt).toContain('Target contact nickname: Morgan');
     expect(memoryStore.upsertRecentContactShape).toHaveBeenCalledWith(expect.objectContaining({
-      contactId: 'contact-vega',
-      summary: 'Vega discussed Lyra streaming guardrails and prefers concise launch notes.',
+      contactId: 'contact-morgan',
+      summary: 'Morgan discussed Lyra streaming guardrails and prefers concise launch notes.',
       sourceMemoryIds: ['m1', 'm2'],
     }));
   });

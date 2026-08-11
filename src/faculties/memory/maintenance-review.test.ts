@@ -107,7 +107,7 @@ function makeReviewCapableStore(candidate?: PurrMemory & { similarity: number })
 describe('Memory maintenance review scheduling', () => {
   it('queues near-duplicate review state with provenance and unique details asynchronously', async () => {
     const candidate = {
-      ...makeMemory('existing-1', 'V prefers jasmine tea in the red mug', {
+      ...makeMemory('existing-1', 'Morgan prefers jasmine tea in the red mug', {
         sourceRef: 'legacy:import#1',
         provenanceRefs: ['archive:old#7'],
         confidence: 0.86,
@@ -128,7 +128,7 @@ describe('Memory maintenance review scheduling', () => {
     );
 
     const result = await writer.write({
-      text: 'V prefers jasmine tea in the blue mug',
+      text: 'Morgan prefers jasmine tea in the blue mug',
       type: 'semantic',
       sourceRef: 'api:new#2',
       provenanceRefs: ['session:new#2'],
@@ -196,7 +196,7 @@ describe('Memory maintenance review scheduling', () => {
 
   it('does not treat maintenance persistence as foreground write work', async () => {
     const candidate = {
-      ...makeMemory('existing-2', 'V stores notes in a green notebook'),
+      ...makeMemory('existing-2', 'Morgan stores notes in a green notebook'),
       similarity: 0.86,
     };
     const store = makeReviewCapableStore(candidate);
@@ -212,7 +212,7 @@ describe('Memory maintenance review scheduling', () => {
     );
 
     const result = await writer.write({
-      text: 'V stores notes in a blue notebook',
+      text: 'Morgan stores notes in a blue notebook',
       type: 'semantic',
       confidence: 0.75,
     });
@@ -227,8 +227,8 @@ describe('Memory maintenance review scheduling', () => {
 describe('Memory maintenance review state', () => {
   it('extracts stable unique detail tokens for merge review state', () => {
     expect(extractUniqueDetails(
-      'V keeps the travel adapter in the blue pouch.',
-      ['V keeps the travel adapter in the red pouch.'],
+      'Morgan keeps the travel adapter in the blue pouch.',
+      ['Morgan keeps the travel adapter in the red pouch.'],
     )).toContain('blue');
   });
 

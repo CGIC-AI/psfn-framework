@@ -38,7 +38,7 @@ describe('prompt cache affinity — cross-companion isolation (fleet threat mode
     // guild channel and share one provider organisation. The channel id is
     // identical; only the companion differs.
     const sharedChannel = 'discord:guild-42:general';
-    const tokens = ['companion-purrsephone', 'companion-artemis', 'companion-lyra'].map(
+    const tokens = ['companion-companion', 'companion-artemis', 'companion-lyra'].map(
       companionId => affinityToken({ companionId, channelId: sharedChannel }),
     );
     expect(new Set(tokens).size).toBe(tokens.length);
@@ -47,7 +47,7 @@ describe('prompt cache affinity — cross-companion isolation (fleet threat mode
   it('never shares a token across contacts within one companion on a shared room channel', () => {
     // A group room: one companion, one channel id, several speakers. The
     // canonical subject contact is the only discriminator.
-    const companionId = 'companion-purrsephone';
+    const companionId = 'companion-companion';
     const roomChannel = 'discord:guild-42:townsquare';
     const tokens = ['contact-alice', 'contact-bob', 'contact-carol'].map(contact =>
       affinityToken({
@@ -99,7 +99,7 @@ describe('prompt cache affinity — cross-companion isolation (fleet threat mode
 describe('prompt cache affinity — within-scope stability (caching actually works)', () => {
   it('is deterministic and stable for an identical (companion, contact, channel) tuple', () => {
     const correlation: PromptCacheCorrelation = {
-      companionId: 'companion-purrsephone',
+      companionId: 'companion-companion',
       channelId: 'discord:dm:alice',
       viewerMemorySubjectContactId: 'contact-alice',
     };
@@ -227,7 +227,7 @@ describe('cacheable content prefix — cross-companion/contact byte isolation', 
   }
 
   it('produces distinct static-prefix hashes for distinct companions', () => {
-    const a = serialize('You are Purrsephone.', 'DM with Alice.');
+    const a = serialize('You are Companion.', 'DM with Alice.');
     const b = serialize('You are Artemis.', 'DM with Alice.');
     const boundariesA = buildSystemPromptCacheBoundaries(a);
     const boundariesB = buildSystemPromptCacheBoundaries(b);
@@ -239,8 +239,8 @@ describe('cacheable content prefix — cross-companion/contact byte isolation', 
   });
 
   it('produces distinct session-stable-prefix hashes for distinct contacts', () => {
-    const alice = serialize('You are Purrsephone.', 'DM with Alice.');
-    const bob = serialize('You are Purrsephone.', 'DM with Bob.');
+    const alice = serialize('You are Companion.', 'DM with Alice.');
+    const bob = serialize('You are Companion.', 'DM with Bob.');
     const boundariesAlice = buildSystemPromptCacheBoundaries(alice);
     const boundariesBob = buildSystemPromptCacheBoundaries(bob);
     // Same companion → identical static-prefix hash (the shared, non-private

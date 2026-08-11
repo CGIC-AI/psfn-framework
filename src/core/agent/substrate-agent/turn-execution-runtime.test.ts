@@ -5447,8 +5447,8 @@ describe('handleMessageForTurn compaction scheduling', () => {
         trustLevel: 'regular',
         speakerRole: 'user',
         actorKind: 'human',
-        resolvedUserName: 'Vega',
-        canonicalContactKey: 'contact-vega',
+        resolvedUserName: 'Morgan',
+        canonicalContactKey: 'contact-morgan',
         continuityFallbackKeys: [],
       })),
     });
@@ -5465,7 +5465,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
       channelId: '123456789012345678',
       channelType: 'discord',
       authorId: '388908766306893854',
-      authorName: 'Vega',
+      authorName: 'Morgan',
       content: 'can you hear us?',
       isDirectMessage: false,
     }));
@@ -5473,13 +5473,13 @@ describe('handleMessageForTurn compaction scheduling', () => {
     expect(historyAtPrompt).toEqual([[]]);
     expect(runtime.agent.prompt).toHaveBeenCalledWith(expect.objectContaining({
       role: 'user',
-      content: 'Vega (discord:388908766306893854): can you hear us?',
+      content: 'Morgan (discord:388908766306893854): can you hear us?',
     }));
     expect(recordUserMessage).toHaveBeenCalledWith(
       expect.objectContaining({
         channelId: '123456789012345678',
         authorId: '388908766306893854',
-        authorName: 'Vega',
+        authorName: 'Morgan',
         content: 'can you hear us?',
       }),
       expect.objectContaining({
@@ -5489,7 +5489,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
       expect.any(String),
       'msg-group-current',
       'regular',
-      'contact-vega',
+      'contact-morgan',
       undefined,
       'human',
     );
@@ -5503,7 +5503,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
       {
         role: 'user',
         source: 'message',
-        content: 'Vega (discord:388908766306893854): can you hear us?',
+        content: 'Morgan (discord:388908766306893854): can you hear us?',
       },
     ]);
   });
@@ -6609,14 +6609,14 @@ describe('handleMessageForTurn pre-response concurrency', () => {
         trustLevel: 'primary',
         speakerRole: 'user',
         actorKind: 'human',
-        resolvedUserName: 'V',
+        resolvedUserName: 'Morgan',
         canonicalContactKey: 'contact-v',
         continuityFallbackKeys: [],
       })),
     });
     vi.mocked(runtime.agent.prompt).mockImplementationOnce(async () => {
       observedAudiences.push(getRequestContext()?.requestAudience);
-      runtime.agent.state.messages.push({ role: 'assistant', content: 'hello V' });
+      runtime.agent.state.messages.push({ role: 'assistant', content: 'hello Morgan' });
     });
 
     await handleMessageForTurn(runtime, createMessage('msg-primary-contact', {

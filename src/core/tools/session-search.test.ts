@@ -584,14 +584,14 @@ describe('session search tools', () => {
 
   it('session_search labels retired and active logical session route hits for audit', async () => {
     const sourceChannelId = 'discord:garden:room';
-    manager.recordUserMessage(sourceChannelId, 'Route audit needle before reset.', 'vega-id', 'Vega', false);
+    manager.recordUserMessage(sourceChannelId, 'Route audit needle before reset.', 'morgan-id', 'Morgan', false);
     const reset = manager.resetSourceChannelSession({
       sourceChannelId,
       actor: 'operator',
       reason: 'audit label test',
       mode: 'break_glass_quarantine',
     });
-    manager.recordUserMessage(sourceChannelId, 'Route audit needle after reset.', 'vega-id', 'Vega', false);
+    manager.recordUserMessage(sourceChannelId, 'Route audit needle after reset.', 'morgan-id', 'Morgan', false);
 
     const llmProvider = fromPartial({
       complete: vi.fn(async () => ({
@@ -659,7 +659,7 @@ describe('session search tools', () => {
             content: 'Exact Orion launch date is still public.',
             timestamp: 5_000,
             channelVisibility: 'public',
-            authorName: 'Purrsephone',
+            authorName: 'Companion',
           }),
         },
         {
@@ -673,7 +673,7 @@ describe('session search tools', () => {
             content: 'Exact Orion launch date and private checklist.',
             timestamp: 6_000,
             channelVisibility: 'private',
-            authorName: 'Purrsephone',
+            authorName: 'Companion',
           }),
         },
         {
@@ -720,7 +720,7 @@ describe('session search tools', () => {
     expect(payload.gatedOutCount).toBe(1);
     expect(payload.hits).toHaveLength(1);
     expect(payload.hits[0]?.channelId).toBe('api:public-session');
-    expect(payload.hits[0]?.authorName).toBe('Purrsephone');
+    expect(payload.hits[0]?.authorName).toBe('Companion');
     expect(payload.hits[0]?.snippet).toContain('Orion launch date');
   });
 
@@ -808,7 +808,7 @@ describe('session search tools', () => {
             content: 'Grep route needle before reset.',
             timestamp: 7_000,
             channelVisibility: 'private',
-            authorName: 'Vega',
+            authorName: 'Morgan',
           }),
         },
       ],

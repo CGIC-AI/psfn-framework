@@ -149,7 +149,7 @@ async def test_provider_override_keeps_full_companion_prompt_pipeline() -> None:
             capability_profile="voice-only",
             satellite_id="bedroom",
             endpoint_id="waveshare-bedroom",
-            display_name="Purrsephone Bedroom",
+            display_name="Companion Bedroom",
         ),
         client=client,
     )
@@ -206,7 +206,7 @@ async def test_provider_submits_typed_headpat_to_companion_stimuli_route() -> No
             capability_profile="voice-only",
             satellite_id="bedroom",
             endpoint_id="waveshare-bedroom",
-            display_name="Purrsephone Bedroom",
+            display_name="Companion Bedroom",
         ),
         client=client,
     )

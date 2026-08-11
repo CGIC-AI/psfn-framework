@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "presencePolicy": {
     "mode": "last_motion_rising_edge_wins",
-    "emitToPurrsephone": false,
+    "emitToCompanion": false,
     "exclusiveGroup": "primary-occupant",
     "ignoreInactiveEdges": true,
     "deduplicateCurrentArea": true,

@@ -173,7 +173,7 @@ async def test_empty_device_conversation_uses_stable_configured_channel(tmp_path
         conversation_id="",
         flags=0,
         audio_settings=VoiceAssistantAudioSettings(),
-        wake_word_phrase="Purrsephone",
+        wake_word_phrase="Companion",
     )
 
     assert runtime._active is not None
@@ -195,7 +195,7 @@ async def test_configured_channel_overrides_device_supplied_conversation_id(tmp_
         conversation_id="old-test-channel",
         flags=0,
         audio_settings=VoiceAssistantAudioSettings(),
-        wake_word_phrase="Purrsephone",
+        wake_word_phrase="Companion",
     )
 
     assert runtime._active is not None
@@ -218,7 +218,7 @@ async def test_pinned_channel_survives_runtime_restart(tmp_path: Path) -> None:
             conversation_id=f"device-id-{index}",
             flags=0,
             audio_settings=VoiceAssistantAudioSettings(),
-            wake_word_phrase="Purrsephone",
+            wake_word_phrase="Companion",
         )
         assert runtime._active is not None
         session_ids.append(runtime._active.session_id)

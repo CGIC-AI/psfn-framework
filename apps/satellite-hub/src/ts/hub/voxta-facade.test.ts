@@ -556,7 +556,7 @@ test("Voxta facade normalizes VaM slash-command context before PSFN routing", as
     socket.send(encodeFrame(invocation("send-event", {
       $type: "send",
       sessionId: chatStarted.sessionId,
-      text: "/event {{ user }} slaps Purrsephone's face.",
+      text: "/event {{ user }} slaps Companion's face.",
     })));
     await waitForCompletion(frames, "send-event");
     assert.equal(agent.calls.length, 1);
@@ -564,7 +564,7 @@ test("Voxta facade normalizes VaM slash-command context before PSFN routing", as
     socket.send(encodeFrame(invocation("send-secret", {
       $type: "send",
       sessionId: chatStarted.sessionId,
-      text: "/secret {{ user }} cups Purrsephone's face.",
+      text: "/secret {{ user }} cups Companion's face.",
     })));
     await waitForCompletion(frames, "send-secret");
     assert.equal(agent.calls.length, 1);
@@ -576,12 +576,12 @@ test("Voxta facade normalizes VaM slash-command context before PSFN routing", as
     })));
     await waitForCompletion(frames, "send-after-secret");
 
-    assert.equal(agent.calls[0]?.userText, "{{user}} slaps Purrsephone's face.");
+    assert.equal(agent.calls[0]?.userText, "{{user}} slaps Companion's face.");
     assert.equal(agent.calls[1]?.userText, "did you get that?");
     assert.deepEqual(agent.calls[1]?.history?.map((message) => message.content), [
-      "{{user}} slaps Purrsephone's face.",
+      "{{user}} slaps Companion's face.",
       "Hello from PSFN",
-      "{{user}} cups Purrsephone's face.",
+      "{{user}} cups Companion's face.",
       "did you get that?",
     ]);
   } finally {
@@ -756,7 +756,7 @@ test("Voxta facade retains TouchElite context slots for the next PSFN turn", asy
       sessionId: chatStarted.sessionId,
       contextKey: "VaM/Slot2",
       contexts: [{
-        text: "Purrsephone is standing. The scene view shows {{ user }} nearby.",
+        text: "Companion is standing. The scene view shows {{ user }} nearby.",
       }],
     })));
     const contextUpdated = await waitForVoxta(frames, "contextUpdated");
@@ -772,7 +772,7 @@ test("Voxta facade retains TouchElite context slots for the next PSFN turn", asy
 
     assert.deepEqual(agent.calls[0]?.channel?.contextNotes, [{
       key: "VaM/Slot2",
-      text: "Purrsephone is standing. The scene view shows {{user}} nearby.",
+      text: "Companion is standing. The scene view shows {{user}} nearby.",
     }]);
   } finally {
     socket?.close();

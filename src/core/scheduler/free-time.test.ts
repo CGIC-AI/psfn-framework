@@ -249,7 +249,7 @@ describe('free-time framing', () => {
       seedText: 'You have some time to yourself. You can do nothing if you want.',
     });
     expect(prompt.startsWith('[Free time]\n\n')).toBe(true);
-    expect(prompt).not.toContain('I am Purrsephone');
+    expect(prompt).not.toContain('I am Companion');
     expect(prompt).not.toContain('PERSONALITY_SENTINEL');
     expect(prompt).not.toContain('DESCRIPTION_SENTINEL');
     expect(prompt).not.toContain('SCENARIO_SENTINEL');
@@ -522,7 +522,7 @@ describe('registerFreeTimeTasks', () => {
         expect(channelId.startsWith(FREE_TIME_CHANNEL_PREFIX)).toBe(true);
         expect(isInternalSessionId(channelId)).toBe(true);
         expect(turn.audience).toBe('self');
-        expect(turn.content).not.toContain('I am Purrsephone');
+        expect(turn.content).not.toContain('I am Companion');
       }
       // No outbound message was emitted by the block.
       expect(sent).toHaveLength(0);

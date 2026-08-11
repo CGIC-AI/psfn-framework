@@ -6,7 +6,7 @@ import { buildSessionMetadataWithReflectionTurn } from '../../../core/session/re
 
 const CHANNEL_ID = 'internal:free-time:idle';
 const REFLECTION_CHANNEL_ID = 'internal:reflection:daily-review';
-const COMPANION_NAME = 'Purrsephone';
+const COMPANION_NAME = 'Companion';
 const GENUINE_FEELING = 'I felt unexpectedly calm while painting the blue wash.';
 const STYLE_PREFERENCE = 'I dislike polished symmetry; I prefer loose watercolor edges because they feel alive.';
 const GROUNDING_FALSE_POSITIVE = 'I found that Alice prefers blue.';
@@ -26,7 +26,7 @@ const entries: SessionEntry[] = [
     id: 2,
     channelId: CHANNEL_ID,
     role: 'assistant',
-    authorId: 'companion:purrsephone',
+    authorId: 'companion:companion',
     authorName: COMPANION_NAME,
     content: GENUINE_FEELING,
     timestamp: 2_000,
@@ -35,7 +35,7 @@ const entries: SessionEntry[] = [
     id: 3,
     channelId: CHANNEL_ID,
     role: 'assistant',
-    authorId: 'companion:purrsephone',
+    authorId: 'companion:companion',
     authorName: COMPANION_NAME,
     content: STYLE_PREFERENCE,
     timestamp: 3_000,
@@ -75,7 +75,7 @@ describe('experiential self-memory exact grounding', () => {
         id: 10,
         channelId: REFLECTION_CHANNEL_ID,
         role: 'assistant',
-        authorId: 'companion:purrsephone',
+        authorId: 'companion:companion',
         authorName: COMPANION_NAME,
         content: `${GROUNDING_FALSE_POSITIVE} I like having that evidence available.`,
         timestamp: 10_000,
@@ -90,7 +90,7 @@ describe('experiential self-memory exact grounding', () => {
         id: 11,
         channelId: REFLECTION_CHANNEL_ID,
         role: 'assistant',
-        authorId: 'companion:purrsephone',
+        authorId: 'companion:companion',
         authorName: COMPANION_NAME,
         content: FINAL_REFLECTION,
         timestamp: 11_000,

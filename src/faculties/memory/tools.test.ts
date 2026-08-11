@@ -263,14 +263,14 @@ describe('createMemoryTool', () => {
 
     await tool.execute('memory-call-1', {
       action: 'write',
-      text: '  V enjoys precise APIs  ',
+      text: '  Morgan enjoys precise APIs  ',
       type: 'semantic',
       importance: 0.7,
       tags: 'Identity, Preference',
     });
 
     expect(writer.write).toHaveBeenCalledWith(expect.objectContaining({
-      text: 'V enjoys precise APIs',
+      text: 'Morgan enjoys precise APIs',
       type: 'semantic',
       importance: 0.7,
       tags: ['identity', 'preference'],
@@ -294,7 +294,7 @@ describe('createMemoryTool', () => {
     const before = Date.now();
     await tool.execute('memory-call-live', {
       action: 'write',
-      text: 'V shipped the disclosure-epoch fix today',
+      text: 'Morgan shipped the disclosure-epoch fix today',
       type: 'episodic',
     });
     const after = Date.now();
@@ -460,7 +460,7 @@ describe('createMemoryTool', () => {
 
     await tool.execute('memory-call-json-tags', {
       action: 'write',
-      text: 'V likes clean tag metadata',
+      text: 'Morgan likes clean tag metadata',
       type: 'semantic',
       tags: '["Identity", "Preference", 42, "  Hobby  "]',
     });
@@ -522,7 +522,7 @@ describe('createMemoryTool', () => {
   it('searches through action=search and formats results', async () => {
     const store = mockUnifiedStore();
     store.searchByText.mockResolvedValue([
-      { ...makeMemory({ id: 'mem-search-1', text: 'V likes direct answers', sensitivity: 'public' }), similarity: 0.82 },
+      { ...makeMemory({ id: 'mem-search-1', text: 'Morgan likes direct answers', sensitivity: 'public' }), similarity: 0.82 },
     ]);
     const tool = createMemoryTool(writer as unknown as MemoryWriter, store as unknown as MemoryStorePort);
 
@@ -1459,7 +1459,7 @@ describe('createMemoryWriteTool', () => {
 
     const tool = createMemoryWriteTool(writer as unknown as MemoryWriter);
     const result = await tool.execute('call-1', {
-      text: 'V enjoys programming',
+      text: 'Morgan enjoys programming',
       type: 'episodic',
       importance: 0.7,
     });
@@ -1470,7 +1470,7 @@ describe('createMemoryWriteTool', () => {
     expect(result.details?.isError).toBeUndefined();
 
     expect(writer.write).toHaveBeenCalledWith(expect.objectContaining({
-      text: 'V enjoys programming',
+      text: 'Morgan enjoys programming',
       type: 'episodic',
       importance: 0.7,
       sourceRef: 'source:tool:memory_write|invocation:call-1',

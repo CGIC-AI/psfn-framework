@@ -19,7 +19,7 @@ describe('TurnPerformanceTracker', () => {
         stage: 'speech_end',
         monotonicAtMs: offset,
         timestampMs: offset,
-        companionId: 'purrsephone',
+        companionId: 'companion',
         channelType: 'voice',
       }));
       tracker.observe(event({

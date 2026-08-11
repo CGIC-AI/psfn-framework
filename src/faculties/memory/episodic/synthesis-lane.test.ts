@@ -31,7 +31,7 @@ function synthMemory(provenance: MemoryProvenance, extractedAt: number): ScoredM
   return { memory } as unknown as ScoredMemory;
 }
 
-const COMPANION_NAME = 'Purrsephone';
+const COMPANION_NAME = 'Companion';
 const COMPANION_AUTHOR_ID = 'bot-companion-1';
 const WATERMARK_END_MS = Date.parse('2026-06-01T10:00:00.000Z');
 

@@ -20,8 +20,8 @@ describe('hub websocket framing', () => {
       place: { id: 'office', name: 'Office' },
       identity: {
         source: 'framework',
-        companion: { id: 'companion-1', name: 'Purrsephone' },
-        user: { id: 'user-1', name: 'V', canonicalContactId: 'contact-1' },
+        companion: { id: 'companion-1', name: 'Companion' },
+        user: { id: 'user-1', name: 'Morgan', canonicalContactId: 'contact-1' },
       },
     },
     {
@@ -87,7 +87,7 @@ describe('hub websocket framing', () => {
         redactedContext: 'Redacted action summary',
         status: 'pending',
         sourceSystem: 'tool-access',
-        attribution: { parentId: 'companion-1', parentLabel: 'Purrsephone', shardId: 'shard-1', shardLabel: 'Shard' },
+        attribution: { parentId: 'companion-1', parentLabel: 'Companion', shardId: 'shard-1', shardLabel: 'Shard' },
         action: 'send email',
         scope: 'outbound',
         reason: 'Redacted action summary',

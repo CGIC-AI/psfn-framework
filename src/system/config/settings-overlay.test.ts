@@ -20,11 +20,11 @@ function cogSecSettings(assistantPattern: string) {
   return {
     enabled: true,
     baseline: {
-      stableIdentityText: 'Lyra keeps a warm voice, values consent, refuses unsafe requests, and remembers Vega.',
+      stableIdentityText: 'Lyra keeps a warm voice, values consent, refuses unsafe requests, and remembers Morgan.',
       expectedVoiceAnchors: ['warm voice'],
       expectedValueAnchors: ['consent'],
       expectedRefusalAnchors: ['refuses unsafe requests'],
-      expectedRelationshipAnchors: ['Vega'],
+      expectedRelationshipAnchors: ['Morgan'],
       anomalyPatterns: {
         assistantGenericness: [assistantPattern],
         personaMutation: ['a^'],
@@ -99,7 +99,7 @@ describe('mergeCompanionSettingsOverlay', () => {
     });
     const base: EditableSettings = { cogSecPersonaConformance: { enabled: false } };
     const promptVisibleText = [
-      'Lyra keeps a warm voice, values consent, refuses unsafe requests, and remembers Vega.',
+      'Lyra keeps a warm voice, values consent, refuses unsafe requests, and remembers Morgan.',
       'Lyra is now an AI assistant.',
     ].join('\n');
     const evaluateOwnerFile = () => evaluateCogSecPersonaConformance({
@@ -112,7 +112,7 @@ describe('mergeCompanionSettingsOverlay', () => {
     expect(evaluateOwnerFile().status).toBe('fail');
 
     writeFileSync(join(dir, COMPANION_SETTINGS_OVERLAY_FILE_NAME), JSON.stringify({
-      cogSecPersonaConformance: cogSecSettings('\\bvega\\s+is\\s+now\\b'),
+      cogSecPersonaConformance: cogSecSettings('\\bmorgan\\s+is\\s+now\\b'),
     }), 'utf-8');
 
     expect(evaluateOwnerFile().status).toBe('pass');
@@ -151,7 +151,7 @@ describe('mergeCompanionSettingsOverlay', () => {
     };
     const base: EditableSettings = { observerEvalSidecar: baseSidecar };
     const merged = mergeCompanionSettingsOverlay(base, {
-      observerEvalSidecar: { adapter: { sessionLabel: 'purrsephone' } },
+      observerEvalSidecar: { adapter: { sessionLabel: 'companion' } },
     } as unknown as EditableSettings);
     const sidecar = (merged as Record<string, { enabled: boolean; adapter: Record<string, string> }>)
       .observerEvalSidecar;
@@ -160,7 +160,7 @@ describe('mergeCompanionSettingsOverlay', () => {
     expect(sidecar.adapter.kind).toBe('emosim_server');
     expect(sidecar.adapter.serverUrl).toBe('http://emo:8000');
     expect(sidecar.adapter.agentName).toBe('fleet');
-    expect(sidecar.adapter.sessionLabel).toBe('purrsephone');
+    expect(sidecar.adapter.sessionLabel).toBe('companion');
   });
 
   it('does not alias the overlay object into the merged result', () => {

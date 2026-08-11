@@ -501,7 +501,7 @@ describe('MemoryStorePort', () => {
     });
 
     const write = await writer.write({
-      text: 'V prefers oolong tea in the morning',
+      text: 'Morgan prefers oolong tea in the morning',
       type: 'semantic',
       sourceRef: 'api:test:conversation',
     });
@@ -509,7 +509,7 @@ describe('MemoryStorePort', () => {
 
     expect(write.action).toBe('created');
     expect(await store.countActiveMemories()).toBe(1);
-    expect(retrieved).toContain('V prefers oolong tea in the morning');
+    expect(retrieved).toContain('Morgan prefers oolong tea in the morning');
   });
 
   it('lists archived memories separately from active memory reads', () => {

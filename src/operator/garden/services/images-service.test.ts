@@ -125,7 +125,7 @@ describe('AdminImagesDataService', () => {
       artifactRefs: [{ kind: 'l0_artifact', refId: 'artifact-gallery-note', label: 'Episode artifact' }],
       sensitivityContest: {
         sensitivity: 'personal',
-        reason: 'V reviewed the abstraction and approved the lower boundary.',
+        reason: 'Morgan reviewed the abstraction and approved the lower boundary.',
       },
     });
 
@@ -155,7 +155,7 @@ describe('AdminImagesDataService', () => {
         actor: 'operator',
         previousSensitivity: 'confidential',
         sensitivity: 'personal',
-        reason: 'V reviewed the abstraction and approved the lower boundary.',
+        reason: 'Morgan reviewed the abstraction and approved the lower boundary.',
       }],
     });
 

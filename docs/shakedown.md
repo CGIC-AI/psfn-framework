@@ -1,6 +1,6 @@
 # PSFN Post-Sprint Shakedown
 
-**This is the single canonical shakedown document.** It supersedes the Sprint 8/9 external doc sets (`PSFN-SHAKEDOWN.md`, `HARNESS-RUNBOOK.md`, `FULL-AUTONOMY-CHECKLIST.md`, `SPRINT-N-POST-SPRINT-E2E-RUNBOOK.md`, `SPRINT-N-FEATURE-COVERAGE.md` under `/mnt/c/Temp/PSFN-TEST/`). Those trees remain as historical run archives; no process content should be maintained there again. Per-sprint coverage lives in the appendix of this file and is replaced each sprint. Tracker umbrella: epic `psfn-framework-65rk` (release shakedown).
+**This is the single canonical shakedown document.** It supersedes the Sprint 8/9 external doc sets (`PSFN-SHAKEDOWN.md`, `HARNESS-RUNBOOK.md`, `FULL-AUTONOMY-CHECKLIST.md`, `SPRINT-N-POST-SPRINT-E2E-RUNBOOK.md`, `SPRINT-N-FEATURE-COVERAGE.md` under `/srv/example/psfn-shakedown/`). Those trees remain as historical run archives; no process content should be maintained there again. Per-sprint coverage lives in the appendix of this file and is replaced each sprint. Tracker umbrella: epic `psfn-framework-65rk` (release shakedown).
 
 ## What a shakedown is
 
@@ -191,7 +191,7 @@ Goal: one clean, repeatable path from release-candidate commit to first proven c
 ### Local runtime lane
 
 1. **Dedicated clone** of the RC commit (never the dev checkout): `git clone <repo> <shakedown-repo> && cd <shakedown-repo> && git checkout <rc-sha>` then `npm ci && npm run build && npm run garden:build`.
-2. **Shakedown root** outside both the repo and any live data root (e.g. `/mnt/c/Temp/PSFN-TEST/sprint<N>-shakedown/`). Copy `shakedown/artie/shakedown.env.template` there as `shakedown.env` and fill the `OPERATOR-CONFIRM` values. Never point it at live Purrsephone roots — the layout guard rejects overlapping mutable roots in production mode, but do not rely on it.
+2. **Shakedown root** outside both the repo and any live data root (e.g. `/srv/example/psfn-shakedown/sprint<N>-shakedown/`). Copy `shakedown/artie/shakedown.env.template` there as `shakedown.env` and fill the `OPERATOR-CONFIRM` values. Never point it at live companion roots — the layout guard rejects overlapping mutable roots in production mode, but do not rely on it.
 3. **Env sourcing, two stages, in order**: `set -a; source <live>/.env; set +a` (secrets), then the same for `shakedown.env` (paths/ports/layout override). Every harness script fails closed on missing env — there are no fallback paths.
 4. **Seed owner files**: first boot seeds `system-data` from `config/*.seed.json`; gate with `npm run verify:startup-owner-files` and `npm run verify:settings-contract`.
 5. **Import Artie**: `npm run import-character -- shakedown/artie/ARTIE.png` (or Garden upload). This creates `companion-data/companion.json` and her avatar asset.
@@ -507,7 +507,7 @@ Every finding — hers or the harness's — becomes a structured record: **Sever
 ### Explicitly out of scope for S10
 
 - **Proactive voice on satellites** — design only, never built; do not attempt to shake down.
-- **Cross-cluster ICP** (Purrsephone↔Artie link, `0ggv.4`/`s10d1`) — deferred, hardware pending.
+- **Cross-cluster ICP** (Companion↔Artie link, `0ggv.4`/`s10d1`) — deferred, hardware pending.
 - `fleet-auth` SSO / passkeys (`opl1` bulk), wiki caretaker beyond propose-approve, restore build-out (`s10d7`), docker variant full pass (spot check only this round).
 
 ### Known open items to re-check at round open
@@ -518,4 +518,4 @@ Every finding — hers or the harness's — becomes a structured record: **Sever
 
 ## Build-out status
 
-Tracked as child beads of epic `psfn-framework-65rk`: `65rk.1` harness port (shared probe lib, fail-closed env, tier sweep, scorecard coverage cross-check) — **landed** in-repo at `shakedown/harness/` (see `shakedown/harness/README.md`); `65rk.2` one-command fresh bootstrap with Artie; `65rk.3` S10 case authoring for the appendix; `65rk.4` support-companion fixtures. Rounds run the in-repo harness with the env sourced first; the Sprint-9 script set under `/mnt/c/Temp/PSFN-TEST/` remains only as a historical run archive. Until `65rk.3` maps the appendix surfaces to cases, the scorecard's coverage cross-check is red by design — that is the fail-closed default, not a regression.
+Tracked as child beads of epic `psfn-framework-65rk`: `65rk.1` harness port (shared probe lib, fail-closed env, tier sweep, scorecard coverage cross-check) — **landed** in-repo at `shakedown/harness/` (see `shakedown/harness/README.md`); `65rk.2` one-command fresh bootstrap with Artie; `65rk.3` S10 case authoring for the appendix; `65rk.4` support-companion fixtures. Rounds run the in-repo harness with the env sourced first; the Sprint-9 script set under `/srv/example/psfn-shakedown/` remains only as a historical run archive. Until `65rk.3` maps the appendix surfaces to cases, the scorecard's coverage cross-check is red by design — that is the fail-closed default, not a regression.

@@ -62,7 +62,7 @@ function buildEpisodicChainFixture(): EpisodicRetrievalChain {
   const episodeA = {
     id: EPISODE_A_ID,
     title: 'Late-night debugging of the voice pipeline',
-    landmark: 'V and Purrsephone traced the Discord voice dropouts to a transport timeout and celebrated the fix together.',
+    landmark: 'Morgan and Companion traced the Discord voice dropouts to a transport timeout and celebrated the fix together.',
     startedAt: '2026-05-02T01:10:00.000Z',
     endedAt: '2026-05-02T03:40:00.000Z',
     themes: ['technology', 'voice', 'collaboration'],
@@ -108,7 +108,7 @@ function buildScoredMemoryFixture(): ScoredMemory {
   const memory = {
     id: '19659937-bcb5-41ab-8500-b3fd772ed093',
     type: 'semantic',
-    text: 'V is working on enabling Purrsephone to send proactive messages to him.',
+    text: 'Morgan is working on enabling Companion to send proactive messages to him.',
     emotionalValence: 0.5,
     tags: ['technology', 'proactive-messaging'],
     sourceRef: '1313001762793197678:extract|source:session|session:1313001762793197678|lines:2642-2653|turn:019eae59-7a5c-75d8-a78d-359fa36fa077|trigger:interval|visibility:private|operation:extract',
@@ -266,7 +266,7 @@ describe('renderPromptBlock companion-facing rendering contract', () => {
     const rendered = renderPromptBlock(undefined, [buildScoredMemoryFixture()]);
 
     expect(rendered).toContain(
-      '- [semantic] V is working on enabling Purrsephone to send proactive messages to him.',
+      '- [semantic] Morgan is working on enabling Companion to send proactive messages to him.',
     );
     expectNoIdentifierLeaks(rendered);
   });

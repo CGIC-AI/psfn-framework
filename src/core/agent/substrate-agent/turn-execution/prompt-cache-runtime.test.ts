@@ -22,7 +22,7 @@ function block(id: string, volatility: PromptPlanVolatility, renderedText: strin
 function makeTurnBlocks(turn: number, staticOverrides: Partial<Record<string, string>> = {}): PromptPlanBlock[] {
   return [
     block('static_prefix', 'static', staticOverrides.static_prefix
-      ?? '<character_foundation>You are Purrsephone.</character_foundation>'),
+      ?? '<character_foundation>You are Companion.</character_foundation>'),
     block('values.core', 'static', staticOverrides['values.core']
       ?? '<values>Individual confidences stay individual.</values>'),
     block('session.orientation', 'session_stable', '<orientation>DM with Alice.</orientation>'),

@@ -95,7 +95,7 @@ function makeChooser(overrides: Partial<FreeTimeChooserPorts> = {}): {
     resolver,
     restWindowPolicy,
     listResumableProjects,
-    companionName: 'Purrsephone',
+    companionName: 'Companion',
     ...(overrides.offerNewWorkspace ? { offerNewWorkspace: overrides.offerNewWorkspace } : {}),
     ...(overrides.settings ? { settings: overrides.settings } : {}),
     ...(overrides.companionId ? { companionId: overrides.companionId } : {}),

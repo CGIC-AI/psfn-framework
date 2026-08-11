@@ -4327,7 +4327,7 @@ describe('SubstrateAgent.handleMessage', () => {
     const sharedContact = {
       id: 'contact-primary',
       displayName: 'PrimaryUser',
-      nickname: 'V',
+      nickname: 'Morgan',
       trustLevel: 'primary',
       relationshipType: 'friend',
       firstSeen: '2025-01-01T00:00:00.000Z',
@@ -4373,8 +4373,8 @@ describe('SubstrateAgent.handleMessage', () => {
 
     const firstPrompt = (fromAny(sessionManager.buildContext)).mock.calls[0][1] as string;
     const secondPrompt = (fromAny(sessionManager.buildContext)).mock.calls[1][1] as string;
-    expect(firstPrompt).toContain('Address V by name.');
-    expect(secondPrompt).toContain('Address V by name.');
+    expect(firstPrompt).toContain('Address Morgan by name.');
+    expect(secondPrompt).toContain('Address Morgan by name.');
     expect(firstPrompt).toContain('<current_message_author name="discord-user" id="discord-user" trust="primary" relationship="friend" />');
     expect(secondPrompt).toContain('<current_message_author name="5635268079" id="5635268079" trust="primary" relationship="friend" />');
     expect(firstPrompt).not.toContain('<speaking_with>');
@@ -4713,7 +4713,7 @@ describe('SubstrateAgent.handleMessage', () => {
     agent.setActiveConcernProvider(fromAny({
       getActiveConcerns: vi.fn().mockReturnValue([{
         id: 'concern-1',
-        text: 'Check whether V ate today.',
+        text: 'Check whether Morgan ate today.',
         priority: 'high',
         source: 'agent',
         createdAt: '2026-02-01T10:00:00.000Z',
@@ -4729,7 +4729,7 @@ describe('SubstrateAgent.handleMessage', () => {
     const buildCall = (fromAny(sessionManager.buildContext)).mock.calls[0];
     const prompt = buildCall[1] as string;
     expect(prompt).toContain('<open_threads>');
-    expect(prompt).toContain('Check whether V ate today');
+    expect(prompt).toContain('Check whether Morgan ate today');
     expect(prompt).toContain('high');
   });
 

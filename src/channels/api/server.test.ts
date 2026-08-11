@@ -582,13 +582,13 @@ describe('ApiServer', () => {
         eventBus,
         sessionManager: createMockSessionManager(),
         allowInsecureWithoutAuth: true,
-        modelName: 'purrsephone',
-        companionName: 'Purrsephone',
+        modelName: 'companion',
+        companionName: 'Companion',
         externalChannelProfiles: {
           'psfn-amica': {
             authorId: 'admin-user',
-            authorName: 'Vega',
-            canonicalContactId: 'contact-vega',
+            authorName: 'Morgan',
+            canonicalContactId: 'contact-morgan',
             channelPrivacy: 'invite_only',
           },
         },
@@ -603,16 +603,16 @@ describe('ApiServer', () => {
       expect(body).toEqual({
         object: 'psfn.identity',
         companion: {
-          id: 'purrsephone',
-          name: 'Purrsephone',
+          id: 'companion',
+          name: 'Companion',
         },
         channels: {
           'psfn-amica': {
             user: {
               id: 'admin-user',
-              name: 'Vega',
+              name: 'Morgan',
             },
-            canonicalContactId: 'contact-vega',
+            canonicalContactId: 'contact-morgan',
             channelPrivacy: 'invite_only',
           },
         },
@@ -918,7 +918,7 @@ describe('ApiServer', () => {
         messages: [{ role: 'user', content: 'Hello' }],
       }, {
         'X-User-ID': 'v-primary',
-        'X-User-Name': 'V',
+        'X-User-Name': 'Morgan',
       });
       expect(res.status).toBe(200);
 
@@ -2275,7 +2275,7 @@ describe('ApiServer', () => {
       }, {
         'X-Session-ID': 'test-seed-headers',
         'X-User-ID': 'v-primary',
-        'X-User-Name': 'V',
+        'X-User-Name': 'Morgan',
       });
 
       expect(mockSessionMgr.recordUserMessage).toHaveBeenCalledWith(

@@ -33,7 +33,7 @@ describe('orient concern actions', () => {
     const tool = makeTool();
     const result = await tool.execute('call-1', {
       action: 'create_concern',
-      text: 'Check if V has eaten.',
+      text: 'Check if Morgan has eaten.',
       priority: 'high',
       contactId: 'contact-v',
       status: 'deferred',
@@ -55,7 +55,7 @@ describe('orient concern actions', () => {
     };
     expect(payload.created).toBe(true);
     expect(payload.concern.id).toBeTruthy();
-    expect(payload.concern.text).toBe('Check if V has eaten.');
+    expect(payload.concern.text).toBe('Check if Morgan has eaten.');
     expect(payload.concern.priority).toBe('high');
     expect(payload.concern.status).toBe('deferred');
     expect(payload.concern.contactId).toBe('contact-v');

@@ -113,7 +113,7 @@ describe('closed stable-biography kinds', () => {
       'stable-preference', likes, preference('prefers'),
     )).toBe(true);
     expect(claimValuesCanCoexist('stable-preference', likes, dislikes)).toBe(false);
-    const aliasA = canonicalizeClaimValue('name', { kind: 'name', name: 'V', role: 'alias' });
+    const aliasA = canonicalizeClaimValue('name', { kind: 'name', name: 'Morgan', role: 'alias' });
     const aliasB = canonicalizeClaimValue('name', { kind: 'name', name: 'Vee', role: 'alias' });
     expect(claimConflictKey('name', CONTACT, aliasA))
       .not.toBe(claimConflictKey('name', CONTACT, aliasB));
@@ -158,7 +158,7 @@ describe('closed stable-biography kinds', () => {
     };
     expect(() => parsePortableStableCandidate({ ...base, status: 'active' }, { now: NOW }))
       .toThrow(/status and free-form notes are forbidden/);
-    expect(() => parsePortableStableCandidate({ ...base, notes: 'V likes tea' }, { now: NOW }))
+    expect(() => parsePortableStableCandidate({ ...base, notes: 'Morgan likes tea' }, { now: NOW }))
       .toThrow(/free-form notes/);
     expect(() => parsePortableStableCandidate({ ...base, kind: 'ephemeral-status' }, { now: NOW }))
       .toThrow(/kind must be one of/);

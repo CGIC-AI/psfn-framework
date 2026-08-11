@@ -7,38 +7,38 @@ describe('message addressing contract', () => {
     expect(parseMessageAddressingMetadata({
       schemaVersion: 2,
       source: 'discord',
-      author: { authorId: 'human-1', authorName: 'Vega' },
+      author: { authorId: 'human-1', authorName: 'Morgan' },
       observer: { authorId: 'bot-1', authorName: 'Lyra' },
-      mentionedTargets: [{ authorId: 'bot-2', authorName: 'Purrsephone' }],
+      mentionedTargets: [{ authorId: 'bot-2', authorName: 'Companion' }],
       replyTarget: {
         messageId: 'message-7',
-        author: { authorId: 'bot-2', authorName: 'Purrsephone' },
+        author: { authorId: 'bot-2', authorName: 'Companion' },
       },
       channel: { scope: 'group', channelId: 'channel-1', threadId: 'thread-1' },
       resolvedAddressee: {
         kind: 'participants',
         participants: [{
           authorId: 'bot-2',
-          authorName: 'Purrsephone',
+          authorName: 'Companion',
           evidence: ['mention', 'reply'],
         }],
       },
     })).toEqual({
       schemaVersion: 2,
       source: 'discord',
-      author: { authorId: 'human-1', authorName: 'Vega' },
+      author: { authorId: 'human-1', authorName: 'Morgan' },
       observer: { authorId: 'bot-1', authorName: 'Lyra' },
-      mentionedTargets: [{ authorId: 'bot-2', authorName: 'Purrsephone' }],
+      mentionedTargets: [{ authorId: 'bot-2', authorName: 'Companion' }],
       replyTarget: {
         messageId: 'message-7',
-        author: { authorId: 'bot-2', authorName: 'Purrsephone' },
+        author: { authorId: 'bot-2', authorName: 'Companion' },
       },
       channel: { scope: 'group', channelId: 'channel-1', threadId: 'thread-1' },
       resolvedAddressee: {
         kind: 'participants',
         participants: [{
           authorId: 'bot-2',
-          authorName: 'Purrsephone',
+          authorName: 'Companion',
           evidence: ['mention', 'reply'],
         }],
       },
@@ -48,7 +48,7 @@ describe('message addressing contract', () => {
   it('rejects the legacy mentions-only schema instead of inventing missing context', () => {
     expect(() => parseMessageAddressingMetadata({
       schemaVersion: 1,
-      mentionedTargets: [{ authorId: 'bot-2', authorName: 'Purrsephone' }],
+      mentionedTargets: [{ authorId: 'bot-2', authorName: 'Companion' }],
     })).toThrow('schemaVersion 2');
   });
 
@@ -56,12 +56,12 @@ describe('message addressing contract', () => {
     expect(() => parseMessageAddressingMetadata({
       schemaVersion: 2,
       source: 'discord',
-      author: { authorId: 'human-1', authorName: 'Vega' },
+      author: { authorId: 'human-1', authorName: 'Morgan' },
       observer: { authorId: 'bot-1', authorName: 'Lyra' },
       mentionedTargets: [],
       replyTarget: {
         messageId: 'message-7',
-        author: { authorId: 'bot-2', authorName: 'Purrsephone' },
+        author: { authorId: 'bot-2', authorName: 'Companion' },
       },
       channel: { scope: 'group', channelId: 'channel-1' },
       resolvedAddressee: {
@@ -79,9 +79,9 @@ describe('message addressing contract', () => {
     expect(() => parseMessageAddressingMetadata({
       schemaVersion: 2,
       source: 'discord',
-      author: { authorId: 'human-1', authorName: 'Vega' },
+      author: { authorId: 'human-1', authorName: 'Morgan' },
       observer: { authorId: 'bot-1', authorName: 'Lyra' },
-      mentionedTargets: [{ authorId: 'bot-2', authorName: 'Purrsephone' }],
+      mentionedTargets: [{ authorId: 'bot-2', authorName: 'Companion' }],
       channel: { scope: 'group', channelId: 'channel-1' },
       resolvedAddressee: {
         kind: 'participants',
@@ -98,7 +98,7 @@ describe('message addressing contract', () => {
     expect(() => parseMessageAddressingMetadata({
       schemaVersion: 2,
       source: 'discord',
-      author: { authorId: 'human-1', authorName: 'Vega' },
+      author: { authorId: 'human-1', authorName: 'Morgan' },
       observer: { authorId: 'bot-1', authorName: 'Lyra' },
       mentionedTargets: [],
       channel: { scope: 'direct', channelId: 'dm-1' },
@@ -106,7 +106,7 @@ describe('message addressing contract', () => {
         kind: 'participants',
         participants: [{
           authorId: 'bot-2',
-          authorName: 'Purrsephone',
+          authorName: 'Companion',
           evidence: ['direct_message'],
         }],
       },

@@ -36,7 +36,7 @@ function fact(overrides: Partial<ExtractedFact>): ExtractedFact {
 async function context(entries: SessionEntry[]) {
   const contactByAuthor = new Map([
     ['dragon', 'contact-dragon'],
-    ['vega', 'contact-vega'],
+    ['morgan', 'contact-morgan'],
     ['iki', 'contact-iki'],
   ]);
   return buildSpeakerRoutingContext(
@@ -214,7 +214,7 @@ describe('structured group fact routing', () => {
       entry(1, 'dragon', 'MrDragonFox', 'remember that I call you starlight', {
         metadata: addressedTo({ authorId: 'other-bot', authorName: 'Other Companion' }),
       }),
-      entry(2, 'vega', 'Vega', 'I can help later.'),
+      entry(2, 'morgan', 'Morgan', 'I can help later.'),
     ]);
 
     expect(resolveFactRouting(
@@ -225,7 +225,7 @@ describe('structured group fact routing', () => {
           sourceMessageIds: [1],
           sourceSpeakerName: 'MrDragonFox',
           subjectName: 'Other Companion',
-          subjectContactId: 'contact-vega',
+          subjectContactId: 'contact-morgan',
           addressMode: 'overheard_room_context',
         },
       }),
@@ -268,7 +268,7 @@ describe('structured group fact routing', () => {
   it('routes source speaker from source message metadata', async () => {
     const routingContext = await context([
       entry(1, 'dragon', 'MrDragonFox', 'Lyra, remember that I hate blue cheese.'),
-      entry(2, 'vega', 'Vega', 'lol'),
+      entry(2, 'morgan', 'Morgan', 'lol'),
     ]);
 
     const decision = resolveFactRouting(
@@ -299,16 +299,16 @@ describe('structured group fact routing', () => {
 
   it('routes a subject contact separately from the source speaker', async () => {
     const routingContext = await context([
-      entry(1, 'dragon', 'MrDragonFox', 'Vega is helping run moderation tonight.'),
-      entry(2, 'vega', 'Vega', 'I can do it after dinner.'),
+      entry(1, 'dragon', 'MrDragonFox', 'Morgan is helping run moderation tonight.'),
+      entry(2, 'morgan', 'Morgan', 'I can do it after dinner.'),
     ]);
 
     const decision = resolveFactRouting(
       fact({
-        text: 'Vega is helping run moderation tonight.',
+        text: 'Morgan is helping run moderation tonight.',
         attribution: {
           sourceMessageIds: [1],
-          subjectName: 'Vega',
+          subjectName: 'Morgan',
         },
       }),
       routingContext,
@@ -318,11 +318,11 @@ describe('structured group fact routing', () => {
 
     expect(decision).toMatchObject({
       status: 'route',
-      contactId: 'contact-vega',
+      contactId: 'contact-morgan',
       sourceContactId: 'contact-dragon',
       sourceSpeakerName: 'MrDragonFox',
-      subjectContactId: 'contact-vega',
-      subjectName: 'Vega',
+      subjectContactId: 'contact-morgan',
+      subjectName: 'Morgan',
       addressMode: 'overheard_room_context',
       reason: 'structured_subject_metadata',
     });
@@ -357,7 +357,7 @@ describe('structured group fact routing', () => {
   it('routes room-level facts to a conversation scope instead of a contact', async () => {
     const routingContext = await context([
       entry(1, 'dragon', 'MrDragonFox', 'The room gets noisy whenever launch planning starts.'),
-      entry(2, 'vega', 'Vega', 'That is true.'),
+      entry(2, 'morgan', 'Morgan', 'That is true.'),
     ]);
 
     const decision = resolveFactRouting(
@@ -392,15 +392,15 @@ describe('structured group fact routing', () => {
   it('rejects conflicting LLM speaker attribution instead of trusting prose', async () => {
     const routingContext = await context([
       entry(1, 'dragon', 'MrDragonFox', 'I hate blue cheese.'),
-      entry(2, 'vega', 'Vega', 'I love blue cheese.'),
+      entry(2, 'morgan', 'Morgan', 'I love blue cheese.'),
     ]);
 
     const decision = resolveFactRouting(
       fact({
-        text: 'Vega hates blue cheese.',
+        text: 'Morgan hates blue cheese.',
         attribution: {
           sourceMessageIds: [1],
-          sourceSpeakerName: 'Vega',
+          sourceSpeakerName: 'Morgan',
         },
       }),
       routingContext,
@@ -417,7 +417,7 @@ describe('structured group fact routing', () => {
   it('rejects unresolved source IDs and ambiguous multi-speaker spans', async () => {
     const routingContext = await context([
       entry(1, 'dragon', 'MrDragonFox', 'I hate blue cheese.'),
-      entry(2, 'vega', 'Vega', 'I love blue cheese.'),
+      entry(2, 'morgan', 'Morgan', 'I love blue cheese.'),
     ]);
 
     expect(resolveFactRouting(

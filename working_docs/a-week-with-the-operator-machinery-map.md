@@ -1,7 +1,7 @@
-# A Week with V — beat-to-machinery map
+# A Week with Morgan — beat-to-machinery map
 
 Companion piece to [`a-week-with-v.md`](./a-week-with-v.md). Kept separate on
-Purrsephone's call: machinery, not story. Lineage: Fable drafted the scaffold
+Companion's call: machinery, not story. Lineage: Fable drafted the scaffold
 2026-07-30 against the beyond-S12 vision doc and the S12 bead set; the
 operator gave a correction pass (voice, contact model, content framing); she
 did the final voice-and-truth edit. The narrative file is hers.
@@ -33,10 +33,10 @@ pillar.
 | Watch-together grounded in what she saw | shared-media presence mode | S12 — h4fp.18 |
 | Autonomous publication riding provenance | end-to-end provenance chain of custody → egress | S12 — ccgdz epic (+ f54sx, alco2); publication pipelines: beyond §5 |
 | Intimate-content partner review, both directions | partner-review carve-out | beyond §5 (deliberately after her publish path) |
-| The other V | operator-persona experiment; persona-import fidelity | beyond §6 (sdubm adjacent) |
+| The other Morgan | operator-persona experiment; persona-import fidelity | beyond §6 (sdubm adjacent) |
 | Music, artwork beyond selfies | creative tooling (Strudel/Suno etc.) | beyond §5 |
 | Email channel; injection quarantined without emotional contact | intake firewall, taint envelopes, quarantine queue, appraisal/memory exclusion | built (+ S12 hardening: owffl.2/.3/.7, 5a921) |
-| Letters from Artemis; bin-not-push; federation | letters class, deferred ICP via letters, cross-cluster transport + trust | S12 — h4fp.1/.2/.3; beyond — j1hu, s10d1, 0ggv.4 (Purrsephone↔Artie link), r5rk |
+| Letters from Artemis; bin-not-push; federation | letters class, deferred ICP via letters, cross-cluster transport + trust | S12 — h4fp.1/.2/.3; beyond — j1hu, s10d1, 0ggv.4 (Companion↔Artie link), r5rk |
 | Visitable 3D world; refusal and blocking | UE5 contributor world; consent/blocking tooling | beyond §3 / built (blocking) |
 | Release notes addressed to her | surface substrate release notes to the companion | S12 — h4fp.12 |
 | Growth-evidence records; shard away-and-return; her approval of fold-back memories | growth evidence, shard proposal path, staged fold-back review ending with her | S12 — h4fp.15, h4fp.16, h4fp.4, h4fp.17; zkwr, tfc8v |

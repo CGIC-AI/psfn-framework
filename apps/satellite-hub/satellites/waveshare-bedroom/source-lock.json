@@ -55,16 +55,6 @@
         "no_speech.zip": "722dbcc967275c64c9581ecb85729549830a9094ce605ee22b2ddab9dbabf3c8",
         "speech.zip": "68b6b811b347b8321169f9e75ea2b9be73245943b4470af9532ca288d9f1b3cc"
       }
-    },
-    "purrsephone-micro-wake-word": {
-      "kind": "generated-model",
-      "sha256": "5a8d78d5d0aad0ac09a8adada75a7def86a6a36ee9ab53fbc9ed54c7b73d4a66",
-      "trainingSteps": 15000,
-      "probabilityCutoff": 0.93,
-      "quantizedStreamingEvaluation": {
-        "falseAcceptsPerHour": 0.375,
-        "falseRejectRate": 0.02
-      }
     }
   }
 }

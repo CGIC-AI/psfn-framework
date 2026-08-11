@@ -25,7 +25,7 @@ const COMPANION: BiographicalSubjectRef = {
   companionId: 'purrs',
   subjectVersion: 1,
 };
-const V: BiographicalSubjectRef = { kind: 'contact', contactId: 'v', subjectVersion: 1 };
+const Morgan: BiographicalSubjectRef = { kind: 'contact', contactId: 'v', subjectVersion: 1 };
 const EVE: BiographicalSubjectRef = { kind: 'contact', contactId: 'eve', subjectVersion: 1 };
 
 function envelope(channelPrivacy: ContextEnvelope['channelPrivacy']): ContextEnvelope {
@@ -85,7 +85,7 @@ async function seedIdentity(input: {
     | { kind: 'relational_nickname'; nickname: string };
   ref: string;
 }): Promise<BiographicalClaim> {
-  const currentAuthorSubject = input.subject ?? V;
+  const currentAuthorSubject = input.subject ?? Morgan;
   const sources = [source(input.ref)];
   input.revalidator.seed(sources);
   const dyadic = input.value.kind !== 'name';
@@ -121,10 +121,10 @@ async function makePublic(store: InMemoryBiographicalProfileStore, claim: Biogra
 }
 
 describe('projectBiographicalContext — verified current author', () => {
-  it('recognizes V as the partner and nickname source in a public group without raw memories', async () => {
+  it('recognizes Morgan as the partner and nickname source in a public group without raw memories', async () => {
     const store = new InMemoryBiographicalProfileStore(() => NOW);
     const revalidator = new MemoryRevalidator();
-    const name = await seedIdentity({ store, revalidator, value: { kind: 'name', name: 'V', role: 'primary' }, ref: 'contact:v' });
+    const name = await seedIdentity({ store, revalidator, value: { kind: 'name', name: 'Morgan', role: 'primary' }, ref: 'contact:v' });
     const relationship = await seedIdentity({ store, revalidator, value: { kind: 'relationship', relationshipType: 'partner' }, ref: 'memory:relationship-v' });
     const nickname = await seedIdentity({ store, revalidator, value: { kind: 'relational_nickname', nickname: 'Sunbeam loaf' }, ref: 'memory:nickname-v' });
     await makePublic(store, name);
@@ -135,15 +135,15 @@ describe('projectBiographicalContext — verified current author', () => {
       { store, revalidator, rebuildQueueMaxPending: 8 },
       {
         companionSubject: COMPANION,
-        currentAuthor: { status: 'verified', subject: V, trustLevel: 'primary' },
-        conversationScope: group('public', [{ authorId: 'discord-v', name: 'V' }]),
+        currentAuthor: { status: 'verified', subject: Morgan, trustLevel: 'primary' },
+        conversationScope: group('public', [{ authorId: 'discord-v', name: 'Morgan' }]),
         now: NOW,
       },
     );
 
     expect(result.admittedClaimIds).toEqual([name.id, relationship.id, nickname.id]);
     expect(result.promptSection).toContain('## Current author identity');
-    expect(result.promptSection).toContain('- Primary name: V');
+    expect(result.promptSection).toContain('- Primary name: Morgan');
     expect(result.promptSection).toContain('- Relationship to the companion: partner');
     expect(result.promptSection).toContain('## Current author relational attribution');
     expect(result.promptSection).toContain('- The current author calls the companion “Sunbeam loaf”.');
@@ -158,7 +158,7 @@ describe('projectBiographicalContext — verified current author', () => {
   it('never ambiently loads a present or rostered but unrelated contact', async () => {
     const store = new InMemoryBiographicalProfileStore(() => NOW);
     const revalidator = new MemoryRevalidator();
-    const vName = await seedIdentity({ store, revalidator, value: { kind: 'name', name: 'V', role: 'primary' }, ref: 'contact:v' });
+    const vName = await seedIdentity({ store, revalidator, value: { kind: 'name', name: 'Morgan', role: 'primary' }, ref: 'contact:v' });
     const eveName = await seedIdentity({ store, revalidator, subject: EVE, value: { kind: 'name', name: 'Eve', role: 'primary' }, ref: 'contact:eve' });
     await makePublic(store, vName);
     await makePublic(store, eveName);
@@ -167,9 +167,9 @@ describe('projectBiographicalContext — verified current author', () => {
       { store, revalidator, rebuildQueueMaxPending: 8 },
       {
         companionSubject: COMPANION,
-        currentAuthor: { status: 'verified', subject: V, trustLevel: 'regular' },
+        currentAuthor: { status: 'verified', subject: Morgan, trustLevel: 'regular' },
         conversationScope: group('public', [
-          { authorId: 'discord-v', name: 'V' },
+          { authorId: 'discord-v', name: 'Morgan' },
           { authorId: 'discord-eve', name: 'Eve' },
         ]),
         now: NOW,
@@ -177,7 +177,7 @@ describe('projectBiographicalContext — verified current author', () => {
     );
 
     expect(result.admittedClaimIds).toEqual([vName.id]);
-    expect(result.promptSection).toContain('V');
+    expect(result.promptSection).toContain('Morgan');
     expect(result.promptSection).not.toContain('Eve');
     expect(result.disclosureSources.some(item => item.ref === `biographical:${eveName.id}`)).toBe(false);
   });
@@ -185,7 +185,7 @@ describe('projectBiographicalContext — verified current author', () => {
   it.each(['missing', 'ambiguous'] as const)('fails closed when canonical author resolution is %s', async status => {
     const store = new InMemoryBiographicalProfileStore(() => NOW);
     const revalidator = new MemoryRevalidator();
-    const name = await seedIdentity({ store, revalidator, value: { kind: 'name', name: 'V', role: 'primary' }, ref: 'contact:v' });
+    const name = await seedIdentity({ store, revalidator, value: { kind: 'name', name: 'Morgan', role: 'primary' }, ref: 'contact:v' });
     await makePublic(store, name);
 
     const result = await projectBiographicalContext(
@@ -193,7 +193,7 @@ describe('projectBiographicalContext — verified current author', () => {
       {
         companionSubject: COMPANION,
         currentAuthor: { status },
-        conversationScope: group('public', [{ authorId: 'discord-v', name: 'V' }]),
+        conversationScope: group('public', [{ authorId: 'discord-v', name: 'Morgan' }]),
         now: NOW,
       },
     );
@@ -212,7 +212,7 @@ describe('projectBiographicalContext — verified current author', () => {
       { store, revalidator, rebuildQueueMaxPending: 8 },
       {
         companionSubject: COMPANION,
-        currentAuthor: { status: 'verified', subject: V, trustLevel: 'public' },
+        currentAuthor: { status: 'verified', subject: Morgan, trustLevel: 'public' },
         conversationScope: group('invite_only'),
         now: NOW,
       },
@@ -221,7 +221,7 @@ describe('projectBiographicalContext — verified current author', () => {
       { store, revalidator, rebuildQueueMaxPending: 8 },
       {
         companionSubject: COMPANION,
-        currentAuthor: { status: 'verified', subject: V, trustLevel: 'regular' },
+        currentAuthor: { status: 'verified', subject: Morgan, trustLevel: 'regular' },
         conversationScope: group('invite_only'),
         now: NOW,
       },
@@ -239,7 +239,7 @@ describe('projectBiographicalContext — verified current author', () => {
   it('keeps current-author claims and lineage 1:1 under a bounded prompt budget', async () => {
     const store = new InMemoryBiographicalProfileStore(() => NOW);
     const revalidator = new MemoryRevalidator();
-    const name = await seedIdentity({ store, revalidator, value: { kind: 'name', name: 'V', role: 'primary' }, ref: 'contact:v' });
+    const name = await seedIdentity({ store, revalidator, value: { kind: 'name', name: 'Morgan', role: 'primary' }, ref: 'contact:v' });
     const relationship = await seedIdentity({ store, revalidator, value: { kind: 'relationship', relationshipType: 'partner' }, ref: 'memory:relationship-v' });
     await makePublic(store, name);
     await makePublic(store, relationship);
@@ -248,7 +248,7 @@ describe('projectBiographicalContext — verified current author', () => {
       { store, revalidator, rebuildQueueMaxPending: 8 },
       {
         companionSubject: COMPANION,
-        currentAuthor: { status: 'verified', subject: V, trustLevel: 'primary' },
+        currentAuthor: { status: 'verified', subject: Morgan, trustLevel: 'primary' },
         conversationScope: group('public'),
         tokenBudget: 25,
         estimateTokens: () => 10,

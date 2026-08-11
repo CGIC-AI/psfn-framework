@@ -3,7 +3,7 @@ const OMI_CHANNELS = 1;
 const OMI_FRAME_DURATION_US = 20_000;
 const OMI_MAX_OPUS_FRAME_BYTES = 1_275;
 
-export type OmiPcmFrame = Readonly<{
+type OmiPcmFrame = Readonly<{
   pcm: Uint8Array;
   sampleRateHz: 16_000;
   channels: 1;
@@ -129,12 +129,6 @@ export class WebCodecsOmiOpusDecoder {
   private fail(error: unknown): void {
     this.callbacks.error(error instanceof Error ? error : new Error(String(error)));
   }
-}
-
-export function browserSupportsOmiOpusDecoding(): boolean {
-  const browser = globalThis as Record<string, unknown>;
-  return typeof browser.AudioDecoder === 'function'
-    && typeof browser.EncodedAudioChunk === 'function';
 }
 
 function readBrowserWebCodecs(): OmiWebCodecs {

@@ -1,5 +1,5 @@
 export const OMI_OPUS_CODEC_ID = 0x15;
-export const OMI_AUDIO_HEADER_BYTES = 3;
+const OMI_AUDIO_HEADER_BYTES = 3;
 
 const MAX_OPUS_FRAME_BYTES = 1_275;
 

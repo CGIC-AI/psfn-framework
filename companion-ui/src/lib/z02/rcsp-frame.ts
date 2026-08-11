@@ -3,7 +3,7 @@ const RCSP_TRAILER = 0xef;
 const RCSP_ENVELOPE_BYTES = 8;
 const MAX_RCSP_PAYLOAD_BYTES = 0xffff;
 
-export interface RcspCommandFrame {
+interface RcspCommandFrame {
   readonly kind: 'command';
   readonly flags: number;
   readonly opcode: number;

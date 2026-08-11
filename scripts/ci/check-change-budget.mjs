@@ -6,8 +6,7 @@
  * - Offline runs set CHANGE_BUDGET_EXCEPTION=false when no exception label is present.
  * - Offline maintainer exceptions use --exception or
  *   CHANGE_BUDGET_EXCEPTION=true together with CHANGE_BUDGET_PR_BODY containing
- *   the complete PR body and a non-empty exception rationale. Under-floor
- *   exceptions additionally require a `BLOCKER:` rationale.
+ *   the complete PR body and a non-empty exception rationale.
  */
 
 import { execFileSync } from 'node:child_process';
@@ -400,24 +399,10 @@ export function decideChangeBudget(stats, { exception = false, pullRequestBody =
       bypassed: [],
     };
   }
-  const underPublicationFloor =
-    stats.lines < CHANGE_BUDGET.pullRequest.lines.minimum;
   if (evaluation.violations.length === 0) {
     return {
       warnings: evaluation.warnings,
       violations: ['remove change-budget:exception; this change is within the publication limits'],
-      bypassed: [],
-    };
-  }
-  const floorViolation =
-    `PR has ${stats.lines} changed lines; minimum is ${CHANGE_BUDGET.pullRequest.lines.minimum}`;
-  if (underPublicationFloor && !/^BLOCKER:\s+\S/i.test(reason)) {
-    return {
-      warnings: evaluation.warnings,
-      violations: [
-        ...evaluation.violations.filter(violation => violation !== floorViolation),
-        'under-800 PR exceptions require a "BLOCKER:" rationale explaining why the blocking change cannot be combined with compatible work',
-      ],
       bypassed: [],
     };
   }

@@ -11,6 +11,7 @@ import {
   GATE_PHASE,
   GATE_VERSION,
   REMOTE_ATTESTATION_CONTEXT,
+  ROOT_BUILD_NODE_HEAP_MB,
   STAGE_SCHEMA_VERSION,
   assessHookInstallation,
   buildValidatedPushRefspec,
@@ -263,7 +264,7 @@ test('delivery-only gate stays fast while product changes retain full validation
   });
   const names = plan.map(({ name }) => name);
 
-  assert.equal(plan.find(({ name }) => name === 'build').nodeHeapMb, 12288);
+  assert.equal(plan.find(({ name }) => name === 'build').nodeHeapMb, ROOT_BUILD_NODE_HEAP_MB);
   assert.equal(plan.find(({ name }) => name === 'typecheck').nodeHeapMb, 4096);
 
   assert.deepEqual(names.slice(0, 4), [
@@ -309,6 +310,20 @@ test('delivery-only gate stays fast while product changes retain full validation
   assert.deepEqual(
     deletionPlan.find(({ name }) => name === 'ubs').args,
     ['--no-auto-update', '--skip-js=4,7', 'src/retained.ts'],
+  );
+});
+
+test('ci.yml build heap ceiling stays in sync with ROOT_BUILD_NODE_HEAP_MB', () => {
+  // The CI clean-environment build and the local gate must use the same root
+  // build ceiling; tsup's .d.ts rollup worker derives its old-gen cap from it,
+  // so silent drift re-introduces the ERR_WORKER_OUT_OF_MEMORY flake.
+  const ciYml = readFileSync(new URL('../../.github/workflows/ci.yml', import.meta.url), 'utf8');
+  const heapFlags = [...ciYml.matchAll(/--max-old-space-size=(\d+)/g)];
+  assert.equal(heapFlags.length, 1, 'ci.yml must set exactly one --max-old-space-size');
+  assert.equal(
+    Number(heapFlags[0][1]),
+    ROOT_BUILD_NODE_HEAP_MB,
+    'ci.yml build ceiling must match ROOT_BUILD_NODE_HEAP_MB',
   );
 });
 

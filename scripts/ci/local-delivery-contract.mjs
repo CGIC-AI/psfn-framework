@@ -37,6 +37,17 @@ export const GATE_PHASE = Object.freeze({ PREFLIGHT: 'preflight', HEAVY: 'heavy'
 // holder's metadata and the reap mutex live beside it.
 export const HEAVY_PHASE_LOCK_DIR = join(tmpdir(), 'psfn-local-gate-heavy.lock');
 
+// Root build (tsup) old-generation heap ceiling, in MB. tsup spawns the .d.ts
+// rollup as a node worker_thread with no resourceLimits, so that worker's
+// old-generation cap is derived from the parent --max-old-space-size. At 8192
+// the derived cap sat right on the DTS working set and the root build flaked
+// (ERR_WORKER_OUT_OF_MEMORY) once the bundled type graph grew. Measured peak
+// RSS is ~5.5 GB and matches a passing main build, so this ceiling buys
+// worker old-gen headroom, not real memory; do not lower it without
+// re-verifying the DTS rollup has deterministic margin. Keep .github/workflows/
+// ci.yml's clean-environment build NODE_OPTIONS in sync with this value.
+export const ROOT_BUILD_NODE_HEAP_MB = 12288;
+
 function assertSha(value, name) {
   if (!SHA.test(value)) throw new Error(`${name} must be a lowercase 40-character git SHA`);
 }
@@ -306,7 +317,7 @@ export function buildGatePlan({
       : command('lint-changed', 'npm', ['run', 'lint:changed', '--', '--base', base]),
     ...(rootRuntime
       ? [
-          command('build', 'npm', ['run', 'build'], { nodeHeapMb: 12288 }),
+          command('build', 'npm', ['run', 'build'], { nodeHeapMb: ROOT_BUILD_NODE_HEAP_MB }),
           command('typecheck', 'npm', ['run', 'verify:typecheck-baseline'], {
             nodeHeapMb: 4096,
           }),

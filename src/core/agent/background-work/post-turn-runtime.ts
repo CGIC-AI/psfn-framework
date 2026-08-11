@@ -456,10 +456,11 @@ async function runPostTurnBackgroundWork(
       // on every bounded turn. It stays on the always-enqueued intention job so
       // drift-only narrative scheduling cannot starve accumulation.
       if (payload.appraisalState && dependencies.socialDesireFeltSignals) {
+        const appraisalState = payload.appraisalState;
         const feltSignalWriter = dependencies.socialDesireFeltSignals;
         await input.effects.run('social-desire-felt-signal', async (assertOwned) => {
           await assertOwned();
-          await feltSignalWriter.record(payload.appraisalState, {
+          await feltSignalWriter.record(appraisalState, {
             sourceRef: `emotion_appraisal:${payload.source.channelId}:${payload.source.turnId}`,
             nowMs: payload.source.createdAtMs,
           });

@@ -486,6 +486,7 @@ export type RuntimeSettingValue =
   | CompositionalPolicyConfig
   | GroupMemorySettings
   | EmotionScopingSettings
+  | NarrativeEmotionAppraisalSettings
   | MemoryRetrievalPolicy
   | BiographicalDepthPolicy
   | MemoryPresentationProfile

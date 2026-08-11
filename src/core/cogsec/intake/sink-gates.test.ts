@@ -7,7 +7,7 @@
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   INTAKE_SINKS,
   snapshotIntakeEnvelope,
@@ -69,6 +69,78 @@ function makeSnapshot(input: {
 }
 
 describe('evaluateSinkAccess (htm9.3)', () => {
+  it.each(INTAKE_SINKS)(
+    'records a shadow-mode quarantine catch while allowing content through %s',
+    (sink) => {
+      const onAudit = vi.fn();
+      const gate = createIntakeSinkGate({
+        policy: makePolicy('shadow'),
+        actor: 'test:per-sink-shadow',
+        onAudit,
+      });
+
+      const decision = gate.evaluate(sink, [makeSnapshot({ state: 'quarantined' })], {
+        scenario: 'per-sink-shadow-quarantine',
+      });
+
+      expect(decision).toMatchObject({
+        sink,
+        mode: 'shadow',
+        verdict: 'deny',
+        allowed: true,
+        deniedEnvelopeIds: ['test-envelope-0001'],
+      });
+      expect(onAudit).toHaveBeenCalledOnce();
+      expect(onAudit).toHaveBeenCalledWith(expect.objectContaining({
+        kind: 'sink_access',
+        sink,
+        mode: 'shadow',
+        verdict: 'deny',
+        allowed: true,
+        context: expect.objectContaining({
+          scenario: 'per-sink-shadow-quarantine',
+          deniedEnvelopeIds: ['test-envelope-0001'],
+        }),
+      }));
+    },
+  );
+
+  it.each(INTAKE_SINKS)(
+    'records an enforce-mode quarantine catch and denies content at %s',
+    (sink) => {
+      const onAudit = vi.fn();
+      const gate = createIntakeSinkGate({
+        policy: makePolicy('strict'),
+        actor: 'test:per-sink-enforce',
+        onAudit,
+      });
+
+      const decision = gate.evaluate(sink, [makeSnapshot({ state: 'quarantined' })], {
+        scenario: 'per-sink-enforce-quarantine',
+      });
+
+      expect(decision).toMatchObject({
+        sink,
+        mode: 'enforce',
+        verdict: 'deny',
+        allowed: false,
+        deniedEnvelopeIds: ['test-envelope-0001'],
+      });
+      expect(onAudit).toHaveBeenCalledOnce();
+      expect(onAudit).toHaveBeenCalledWith(expect.objectContaining({
+        kind: 'sink_access',
+        sink,
+        mode: 'enforce',
+        verdict: 'deny',
+        allowed: false,
+        context: expect.objectContaining({
+          scenario: 'per-sink-enforce-quarantine',
+          deniedEnvelopeIds: ['test-envelope-0001'],
+        }),
+      }));
+    },
+  );
+
   it('denies quarantined content at EVERY sink in enforce mode (quarantine invisibility)', () => {
     const policy = makePolicy('strict');
     const quarantined = makeSnapshot({ state: 'quarantined' });

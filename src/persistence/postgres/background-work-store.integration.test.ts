@@ -248,6 +248,14 @@ function makeFourJobBatch(
         },
         relational: { contactId: null, trustLevel: 'regular', moodDrift: 0 },
       },
+      driftDecision: {
+        schemaVersion: 1,
+        mode: 'drift_only',
+        baselineVad: { valence: -0.5, arousal: 0, dominance: 0 },
+        targetVad: { valence: 0, arousal: 0, dominance: 0 },
+        vadDelta: 0.5,
+        threshold: 0.35,
+      },
       personalityOwnerRef: 'character-card',
       personalityProjectionHash: 'b'.repeat(64),
     },
@@ -2895,6 +2903,9 @@ describe('PostgresBackgroundWorkStore', () => {
           inferPostTurnActions: async () => [],
           buildTurnRecord: () => turnRecord,
           backgroundWorkMaxAttempts: DEFAULT_BACKGROUND_WORK_TUNING.postTurn.maxAttempts,
+          emotionSelfModelRuntime: {
+            reserveNarrativeEmotionAppraisal: vi.fn(() => null),
+          },
           enqueuePostTurnBackgroundWork: async (inputs) => {
             enqueuedInputs.push(...inputs);
             await supervisor.enqueue(inputs);

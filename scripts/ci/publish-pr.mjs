@@ -186,7 +186,11 @@ function markPrReady(reference, runCommand = run) {
   runCommand('gh', args, { stdio: 'inherit' });
 }
 
-function pushBranch(branch, head, { runCommand = run, spawnCommand = spawnSync } = {}) {
+function pushBranch(branch, head, {
+  runCommand = run,
+  spawnCommand = spawnSync,
+  changeBudgetException = false,
+} = {}) {
   if (runCommand('git', ['rev-parse', 'HEAD']) !== head) {
     throw new Error('Branch HEAD changed after local validation; refusing to push');
   }
@@ -199,7 +203,11 @@ function pushBranch(branch, head, { runCommand = run, spawnCommand = spawnSync }
   pushArgs.push(buildValidatedPushRefspec(head, branch));
   const result = spawnCommand('git', pushArgs, {
     stdio: 'inherit',
-    env: { ...process.env, PSFN_ATTESTED_PUBLISH: '1' },
+    env: {
+      ...process.env,
+      PSFN_ATTESTED_PUBLISH: '1',
+      CHANGE_BUDGET_EXCEPTION: String(changeBudgetException),
+    },
   });
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`git push failed with exit ${String(result.status)}`);
@@ -285,7 +293,7 @@ export async function publishPr(argv = process.argv.slice(2), {
     markPrReady(existing.number, runCommand);
   }
   try {
-    pushBranch(branch, state.head, { runCommand, spawnCommand });
+    pushBranch(branch, state.head, { runCommand, spawnCommand, changeBudgetException });
   } catch (error) {
     if (flippedReady) {
       // The PR was flipped ready for a push that never landed; restore draft so

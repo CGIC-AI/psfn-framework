@@ -19,11 +19,11 @@ env:
   EXPECTED_LOCAL_GATE_STATUS_ACTOR: ${{ vars.LOCAL_GATE_STATUS_ACTOR }}
 
 jobs:
-  github-delta:
-    name: GitHub delta
+  github-policy:
+    name: GitHub policy
     if: github.event.pull_request.draft == false
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 5
     steps:
       - name: Check out exact change head
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
@@ -36,21 +36,11 @@ jobs:
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-          cache-dependency-path: |
-            package-lock.json
-            admin-ui/package-lock.json
-            companion-ui/package-lock.json
-            apps/satellite-hub/package-lock.json
-            tools/evals/package-lock.json
 
       - name: Verify exact local-gate status
         env:
           GH_TOKEN: ${{ github.token }}
         run: node scripts/ci/verify-pr-attestation.mjs
-
-      - name: Test delivery rules
-        run: npm run test:ci-rules
 
       - name: Enforce change budget
         env:
@@ -66,95 +56,23 @@ jobs:
       - name: Enforce commit identity allowlist
         env:
           DELIVERY_ALLOWED_COMMIT_EMAILS: ${{ vars.DELIVERY_ALLOWED_COMMIT_EMAILS }}
-        run: npm run verify:commit-identities -- --base "$BASE_SHA" --head "$HEAD_SHA"
+        run: node scripts/ci/commit-identity-check.mjs --base "$BASE_SHA" --head "$HEAD_SHA"
 
       - name: Verify public repository sanitation
-        run: npm run verify:public-sanitize
-
-      - name: Detect clean-environment coverage
-        id: scope
-        run: node scripts/ci/detect-change-scope.mjs --base "$BASE_SHA" --head "$HEAD_SHA"
-
-      - name: Scan changed workflow security surface
-        run: node scripts/ci/run-zizmor-changed.mjs --format=github --base "$BASE_SHA" --head "$HEAD_SHA"
-
-      - name: Install root dependencies in a clean environment
-        if: steps.scope.outputs.root_runtime == 'true' || steps.scope.outputs.admin_ui == 'true' || steps.scope.outputs.evals == 'true'
-        run: npm ci --ignore-scripts
-
-      - name: Install repository-hygiene workspace dependencies
-        if: steps.scope.outputs.root_runtime == 'true'
-        run: |
-          npm ci --prefix admin-ui --ignore-scripts
-          npm ci --prefix companion-ui --ignore-scripts
-
-      - name: Set up pinned uv for Satellite Hub checks
-        if: steps.scope.outputs.satellite_hub == 'true'
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
-        with:
-          version: 0.11.6
-          enable-cache: true
-          cache-dependency-glob: apps/satellite-hub/uv.lock
-
-      - name: Report import-graph impact for changed seam files
-        if: steps.scope.outputs.root_runtime == 'true'
-        run: |
-          ./node_modules/.bin/tsx scripts/report-import-graph-impact.ts --base "$BASE_SHA" --head "$HEAD_SHA" \
-            || echo "::warning title=Import-graph impact unavailable::Reporter process failed; informational check will not block CI."
-
-      - name: Lint root runtime in the clean environment
-        if: steps.scope.outputs.root_runtime == 'true'
-        env:
-          NODE_OPTIONS: --max-old-space-size=8192
-        run: npm run lint
-
-      - name: Check repository hygiene in the clean environment
-        if: steps.scope.outputs.root_runtime == 'true'
-        env:
-          NODE_OPTIONS: --max-old-space-size=8192
-        run: npm run verify:repository-hygiene
-
-      - name: Test root runtime in the clean environment
-        if: steps.scope.outputs.root_runtime == 'true'
-        env:
-          NODE_OPTIONS: --max-old-space-size=8192
-        run: npm test -- --reporter=dot --silent=passed-only
-
-      - name: Build root runtime in the clean environment
-        if: steps.scope.outputs.root_runtime == 'true'
-        env:
-          # tsup's declaration-rollup worker needs additional old-generation headroom.
-          NODE_OPTIONS: --max-old-space-size=12288
-        run: npm run build
-
-      - name: Build and test Garden in the clean environment
-        if: steps.scope.outputs.admin_ui == 'true'
-        run: npm ci --prefix admin-ui && npm --prefix admin-ui run build && npm --prefix admin-ui test
-
-      - name: Lint, build, and test companion UI in the clean environment
-        if: steps.scope.outputs.companion_ui == 'true'
-        run: npm run verify:companion-ui
-
-      - name: Check Satellite Hub in the clean environment
-        if: steps.scope.outputs.satellite_hub == 'true'
-        run: npm run verify:satellite-hub
-
-      - name: Check eval toolkit in the clean environment
-        if: steps.scope.outputs.evals == 'true'
-        run: npm run verify:evals
+        run: node scripts/public-sanitize-check.mjs
 
   ci-required:
     name: ci-required
     if: always() && github.event.pull_request.draft == false
-    needs: [github-delta]
+    needs: [github-policy]
     runs-on: ubuntu-24.04
     timeout-minutes: 2
     steps:
       - name: Require GitHub validation
         env:
-          GITHUB_DELTA_RESULT: ${{ needs.github-delta.result }}
+          GITHUB_POLICY_RESULT: ${{ needs.github-policy.result }}
         run: |
-          if [[ "$GITHUB_DELTA_RESULT" != "success" ]]; then
-            echo "::error title=Required CI failed::GitHub validation ended with: $GITHUB_DELTA_RESULT"
+          if [[ "$GITHUB_POLICY_RESULT" != "success" ]]; then
+            echo "::error title=Required CI failed::GitHub policy validation ended with: $GITHUB_POLICY_RESULT"
             exit 1
           fi

@@ -44,8 +44,8 @@ export const HEAVY_PHASE_LOCK_DIR = join(tmpdir(), 'local-delivery-gate-heavy.lo
 // (ERR_WORKER_OUT_OF_MEMORY) once the bundled type graph grew. Measured peak
 // RSS is ~5.5 GB and matches a passing main build, so this ceiling buys
 // worker old-gen headroom, not real memory; do not lower it without
-// re-verifying the DTS rollup has deterministic margin. Keep .github/workflows/
-// ci.yml's clean-environment build NODE_OPTIONS in sync with this value.
+// re-verifying the DTS rollup has deterministic margin. GitHub trusts the exact
+// local-gate attestation and deliberately does not repeat this build remotely.
 export const ROOT_BUILD_NODE_HEAP_MB = 12288;
 
 function assertSha(value, name) {

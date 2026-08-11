@@ -294,6 +294,7 @@ export const TOOL_CONFORMANCE_ACTION_REGISTRY:
     census: safeRead({ action: 'census', ...READ_CHANNEL_SCOPE }),
     write: SCHEMA_ASSERT,
     search: SCHEMA_ASSERT,
+    episode_search: SCHEMA_ASSERT,
     get: SCHEMA_ASSERT,
     shared_background: SCHEMA_ASSERT,
     exists: SCHEMA_ASSERT,

@@ -6,12 +6,9 @@ This is the repository map and operating contract for coding agents. Use it with
 the current code, not instead of it. Current operator instructions win; runtime
 and configuration contracts win when prose has drifted.
 
-Load detailed workflow documents only when the task needs them:
-
-- Multi-bead or multi-PR implementation wave: [`docs/orchestration-process.md`](./docs/orchestration-process.md)
-- Portable gate/reviewer setup: [`docs/internal-review-workflow.md`](./docs/internal-review-workflow.md)
-- High-risk review practices: [`docs/adversarial-review-and-bugfixing-practices.md`](./docs/adversarial-review-and-bugfixing-practices.md)
-- Live operations: [`docs/operations.md`](./docs/operations.md)
+Product operation guidance lives in [`docs/operations.md`](./docs/operations.md).
+Operator-specific deployment configuration and runbooks are intentionally kept
+outside this public repository.
 
 ## Implementation first: process must earn its cost
 
@@ -21,7 +18,7 @@ specific plausible defect, protects work from loss, or coordinates genuinely
 concurrent writers. Producing more tracker, review, bus, gate, or status artifacts
 is not progress by itself.
 
-Hard stopping rules:
+Working rules:
 
 - Start the first useful source or test edit after the minimum safe setup: inspect
   the target, run `bd prime`, read/claim the existing bead (or create one), and
@@ -34,28 +31,12 @@ Hard stopping rules:
 - Tracker priority is product priority, not automatic review intensity. A P0/P1
   label alone never requires extra agents, model reviews, broad tests, or a
   separate PR.
-- Small or low-risk changes use one implementer, one branch, focused tests, and no
-  model reviewer, agent bus, or clean-main canary unless a concrete risk or current
-  operator instruction requires one. Worktree isolation is separate from review
-  ceremony: whenever agents or subagents write concurrently, every writer uses its
-  own branch and worktree, including work in overlapping systems.
-- Review the assembled PR train at most once, and only when its actual trust
-  boundaries or complexity justify review. Do not review every bead and then
-  review the same code again as an epic or train.
-- Run the broad pre-PR gate once on the final committed train head. Never run it
-  on worker checkpoints, and do not rerun an unchanged attested head.
-- When compatible fixes are ready, batch them into one train up to the hard PR
-  limits. The 800-line publication floor exists to prevent tiny PRs from creating
-  separate paid-review events. None of these numbers is set in stone: variances
-  are fine when the change is coherent — tag the variance and finish the work
-  rather than reshaping, splitting, or delaying it to fit the numbers, and never
-  add filler to reach the floor.
-- Publishing, CI, external review, and merging are asynchronous boundaries. After
-  creating the PR, report its URL and move to the next implementation task. Do not
-  babysit checks or wait for Greptile unless the operator explicitly asks.
-- Greptile is paid and opt-in. Never add `review:greptile`, mention the bot, or
-  otherwise trigger it unless the operator explicitly requests that paid review.
-  A P0/P1 label, PR publication, or `--wait` is not authorization.
+- Small or low-risk changes use one implementer, one branch, and focused tests.
+  Concurrent writers use distinct branches and worktrees.
+- Run broad validation once on the final committed head. Do not rerun an
+  unchanged head.
+- Publishing, CI, review, and merging are asynchronous boundaries. After creating
+  a PR, report its URL instead of polling unless the operator asks you to wait.
 - When the operator says ship, publish, hurry, or stop reviewing, all optional
   review and documentation work stops immediately. Finish only the minimum safe
   validation and delivery actions requested.
@@ -68,11 +49,11 @@ Hard stopping rules:
 - **Single implementation or fix:** run `bd prime`, inspect or create the bead,
   claim it, work on a named non-main branch, run focused validation, commit, and
   push the checkpoint.
-- **Several independent beads or a sprint wave:** read the orchestration process
-  before fanout. Parallelize only independent seams and only when it reduces wall
-  time after including setup and integration cost.
-- **Live owner-file, persistence, or deployment work:** read the live authority
-  section below and `docs/operations.md` before any mutation.
+- **Several independent beads or a sprint wave:** parallelize only independent
+  seams and only when it reduces wall time after setup and integration cost.
+- **Live owner-file, persistence, or deployment work:** operator-owned deployment
+  configuration is external to this repository. Obtain its location explicitly
+  before any mutation.
 
 ## Delivery authority: remote by default
 
@@ -84,11 +65,10 @@ This repository opts into the **team-maintainer** profile.
   current operator explicitly authorizes a direct-main exception.
 - A checkpoint push is remote backup, not publication. It does not claim that
   broad gates or review passed.
-- Before publication, run `npm run gate:pre-pr` once on the exact final committed
-  head and publish through `npm run pr:publish`.
-- Never manually force-push or rewrite a shared branch. Rebase before publication
-  when the base moves; the exact-head `pr:publish` wrapper alone may update that
-  branch with an attestation-checked, exact-remote `--force-with-lease`.
+- Before publication, run the focused tests plus `npm run build`, `npm run lint`,
+  and `npm run verify:repository-hygiene` on the exact final head.
+- Never force-push or rewrite a shared branch. Rebase before publication when the
+  base moves.
 - A parked lane is still remotely durable: its bead note records the remote
   branch, exact pushed head, validation state, and blocker. Local-only parking is
   forbidden.
@@ -142,11 +122,8 @@ Rules:
 - The local shared Dolt server is authoritative for this checkout. Commit local
   bead changes, but do not run `bd dolt push` unless the operator explicitly asks;
   the configured origin may be stale or misleading.
-- Keep `bd config get export.git-add` at `false`. Do not stage ignored `.beads/`
-  runtime/export state in a direct-Dolt lane.
-- Remote-only lanes import the committed `.beads/issues.jsonl` after pulling and
-  export, commit, and push that single snapshot after closing work. This exception
-  does not apply to lanes with direct shared-Dolt access.
+- Initialize new workspaces with `bd init --stealth`. Keep
+  `bd config get export.git-add` at `false`, and never stage `.beads/` state.
 
 When verifying whether an old bead is already delivered, work one bead at a
 time: read its acceptance criteria, inspect matching commit history, read the
@@ -211,42 +188,30 @@ Fail startup when:
 New settings must be wired through the owner-file contract, Garden exposure, and
 tests. Run `npm run verify:settings-contract` for settings/config changes.
 
-## Live deployment and private data
+## Private deployment boundary
 
-The live authority is the k3s deployment in namespace `psfn`, not host systemd.
-System owner files and persistent state live on Kubernetes PVCs. Before a live
-owner-file or persistence change, discover the running workloads and inspect
-owner-file hashes read-only using `docs/operations.md`.
+This public repository does not own a live deployment. Helm charts, overlays,
+service definitions, kubeconfigs, deployment CI, infrastructure names, private
+addresses, operator paths, and live runbooks belong in an external private
+configuration repository or remain untracked locally.
 
-- Do not mutate the legacy host tree assuming it is live.
-- Do not create authoritative runtime/service/env config outside the repository
-  without explicit permission.
-- Do not create shadow config under `$HOME`, `/tmp`, supervisor drop-ins, or
-  side directories to avoid a restart.
-## Private Deployment Data
-
-Tracked agent instructions must not contain live hostnames, SSH aliases, device
-identifiers, private addresses, mount points, or operator home paths. Keep that
-deployment-specific evidence in the ignored repo-local note described by
-`working_docs/private-live-ops.example.md`, and supply script inputs through
-environment variables or `scripts/ops/private-ops.env`.
-
-Do not copy values from the private note back into tracked files, test fixtures,
-examples, or comments. Public examples must use placeholders or reserved
-documentation addresses.
+- Never infer the location or topology of a live deployment.
+- Obtain the external configuration path explicitly before deployment work.
+- Never copy private values into tracked source, tests, fixtures, examples,
+  comments, logs, or Beads exports.
+- Public examples use invented identities, reserved documentation addresses,
+  temporary paths, and empty secret placeholders.
+- A private repository is not a secret store. Credentials, tokens, key material,
+  kubeconfigs, databases, backups, and runtime data remain untracked everywhere.
 
 ## Runtime Entry Points
 
-Use the right entrypoint for the task:
+Run split components explicitly; deployment supervisors are operator-owned:
 
 ```bash
-npm run dev                 # split gateway + agent launcher
 npm run gateway             # host-side gateway
 npm run agent               # isolated agent entrypoint
-npm run split               # same launcher as npm run dev
-npm run yolo                # split runtime with broader fs.read policy
-npm run agent:docker        # production containerized agent
-npm run agent:docker:continuous
+npm run operator            # Garden/operator entrypoint
 ```
 
 Additional useful commands:
@@ -325,17 +290,10 @@ Before publication:
 
 1. Fetch and rebase onto the intended base.
 2. Commit the exact clean head.
-3. Run `npm run gate:pre-pr` once; it owns broad PREFLIGHT and HEAVY validation.
-4. Publish only with `npm run pr:publish`.
+3. Run focused tests plus build, lint, and repository hygiene once.
+4. Push the branch and create a pull request with the repository host tooling.
 5. Return the PR URL. CI continues asynchronously; use `--wait` only when the
    operator explicitly asks this session to monitor required checks.
-
-The publication window is 800–2,500 counted changed lines, at most 25 files, and
-at most 8 commits. These numbers are not set in stone: variances are fine when
-the change is coherent. Tag an out-of-window PR `change-budget:exception` with a
-one-line reason, then finish the work — never reshape, split, or delay a ready
-change just to fit the numbers, and never add filler to reach the floor.
-Fifteen files, 1,500 lines, and 5 commits are planning targets, not limits.
 
 Integration-test timeout overrides must be registered in
 `src/test-support/integration-timeout-registry.json`. Measure first and preserve
@@ -353,7 +311,7 @@ Preserve work owned by other agents.
 - Forbidden without approval: branch deletion, worktree removal, stash drop or
   clear, `git reset --hard`, `git checkout -- .`, `git clean -f`, and recursive
   deletion of possible worktrees.
-- Use worktrees under `$HOME/ai/dev/worktrees/psfn-framework` for parallel work.
+- Put parallel worktrees outside the repository at an operator-provided path.
 - Every concurrent writer—including subagents—owns a distinct branch and
   worktree. This remains mandatory when lanes touch the same system or files;
   coordinate ownership and integrate explicitly instead of sharing a checkout.
@@ -383,7 +341,6 @@ Do not remain idle after publication merely to observe CI, external review, or a
 merge. Record `published, awaiting checks`, return the PR URL, and move on. The
 merging session or a later reconciliation sweep closes delivered beads.
 
-<!-- BEGIN BEADS CODEX SETUP: generated by bd setup codex -->
 ## Beads quick reference
 
 Use the `beads` skill and `bd` CLI for durable tracking:
@@ -399,24 +356,3 @@ bd prime
 Use `bd remember` for durable project memory; do not create ad hoc memory files.
 The managed Beads block is task-tracking guidance, not permission to override
 current operator or repository instructions.
-<!-- END BEADS CODEX SETUP -->
-
-## The agent bus
-
-The bus is optional coordination infrastructure, not a completion gate. Open one
-only when two or more concurrent writers need durable cross-lane findings or
-handoffs and the bus is cheaper than direct messages plus bead notes. Multiple
-phases, multiple reviewers, or a single orchestrator do not by themselves justify
-a bus.
-
-If a run is justified, follow `~/agentbus/SCHEMA.md`, append only decisions or
-findings another lane needs, and run `bus-lint` before the last writer leaves.
-Do not install or operate an embedding model, run duplicate sweeps, or produce
-per-command traffic unless the run's size has created an observed retrieval
-problem. Bus maintenance must never delay implementation, validation, or PR
-publication.
-
-**Frame the external claims.** Run `frame-claims <file>` on any shipped document — PR body,
-release notes, onboarding doc. It lists the sentences that assert something the work cannot
-establish on its own (citations, version numbers, CVE ids, attributions, settled claims), each
-a thing to fetch rather than recall. `frame-claims test` self-checks the patterns.

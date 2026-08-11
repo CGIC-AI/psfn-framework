@@ -56,7 +56,7 @@ function makeIcpCorrelation(rootInitiationId: string, channelId: string, turnId:
     initiatedByCompanionId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
     localCompanionId: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
     peerCompanionId: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
-    peerContactId: 'artemis',
+    peerContactId: 'fixture-companion',
     channelId,
     turnId,
     messageId: `message-${turnId}`,
@@ -81,15 +81,15 @@ describe('DeterministicFatigueBudgetPort', () => {
 
     const miEvaluation = port.evaluate({
       localCompanionId: 'companion-alpha',
-      channelId: 'dm-artemis',
+      channelId: 'dm-fixture-companion',
       peer: {
-        contactId: 'artemis',
-        displayName: 'Artemis',
+        contactId: 'fixture-companion',
+        displayName: 'Fixture Companion',
         isMachineIntelligence: true,
       },
       triggeringAuthor: {
         role: 'machine_intelligence',
-        contactId: 'artemis',
+        contactId: 'fixture-companion',
         isMachineIntelligence: true,
       },
       limits: LIMITS,
@@ -118,9 +118,9 @@ describe('DeterministicFatigueBudgetPort', () => {
 
     const humanEvaluation = port.evaluate({
       localCompanionId: 'companion-alpha',
-      channelId: 'dm-artemis',
+      channelId: 'dm-fixture-companion',
       peer: {
-        contactId: 'artemis',
+        contactId: 'fixture-companion',
         isMachineIntelligence: true,
       },
       triggeringAuthor: {
@@ -147,8 +147,8 @@ describe('DeterministicFatigueBudgetPort', () => {
 
     const state = port.readState({
       localCompanionId: 'companion-alpha',
-      peerContactId: 'artemis',
-      channelId: 'dm-artemis',
+      peerContactId: 'fixture-companion',
+      channelId: 'dm-fixture-companion',
       dayKey: '2027-01-15',
       limits: LIMITS,
     });
@@ -165,11 +165,11 @@ describe('DeterministicFatigueBudgetPort', () => {
     const { ledger, port } = makePort();
     const evaluation = port.evaluate({
       localCompanionId: 'companion-alpha',
-      channelId: 'dm-artemis',
-      peer: { contactId: 'artemis', isMachineIntelligence: true },
+      channelId: 'dm-fixture-companion',
+      peer: { contactId: 'fixture-companion', isMachineIntelligence: true },
       triggeringAuthor: {
         role: 'machine_intelligence',
-        contactId: 'artemis',
+        contactId: 'fixture-companion',
         isMachineIntelligence: true,
       },
       limits: LIMITS_WITH_OVERCHARGE,
@@ -204,8 +204,8 @@ describe('DeterministicFatigueBudgetPort', () => {
     expect(ledger.listFatigueEvents()).toHaveLength(1);
     expect(port.readState({
       localCompanionId: 'companion-alpha',
-      peerContactId: 'artemis',
-      channelId: 'dm-artemis',
+      peerContactId: 'fixture-companion',
+      channelId: 'dm-fixture-companion',
       dayKey: evaluation.dayKey,
       limits: LIMITS_WITH_OVERCHARGE,
     }).spent).toBe(1);
@@ -219,17 +219,17 @@ describe('DeterministicFatigueBudgetPort', () => {
   it('keeps the same MI peer isolated by channel and accumulates within one channel', () => {
     const { port } = makePort();
 
-    for (const channelId of ['dm-artemis', 'dm-artemis']) {
+    for (const channelId of ['dm-fixture-companion', 'dm-fixture-companion']) {
       const evaluation = port.evaluate({
         localCompanionId: 'companion-alpha',
         channelId,
         peer: {
-          contactId: 'artemis',
+          contactId: 'fixture-companion',
           isMachineIntelligence: true,
         },
         triggeringAuthor: {
           role: 'machine_intelligence',
-          contactId: 'artemis',
+          contactId: 'fixture-companion',
           isMachineIntelligence: true,
         },
         limits: LIMITS,
@@ -239,15 +239,15 @@ describe('DeterministicFatigueBudgetPort', () => {
 
     expect(port.readState({
       localCompanionId: 'companion-alpha',
-      peerContactId: 'artemis',
-      channelId: 'dm-artemis',
+      peerContactId: 'fixture-companion',
+      channelId: 'dm-fixture-companion',
       dayKey: '2027-01-15',
       limits: LIMITS,
     }).spent).toBe(2);
 
     expect(port.readState({
       localCompanionId: 'companion-alpha',
-      peerContactId: 'artemis',
+      peerContactId: 'fixture-companion',
       channelId: 'group-room',
       dayKey: '2027-01-15',
       limits: LIMITS,
@@ -257,12 +257,12 @@ describe('DeterministicFatigueBudgetPort', () => {
       localCompanionId: 'companion-alpha',
       channelId: 'group-room',
       peer: {
-        contactId: 'artemis',
+        contactId: 'fixture-companion',
         isMachineIntelligence: true,
       },
       triggeringAuthor: {
         role: 'machine_intelligence',
-        contactId: 'artemis',
+        contactId: 'fixture-companion',
         isMachineIntelligence: true,
       },
       limits: LIMITS,
@@ -271,7 +271,7 @@ describe('DeterministicFatigueBudgetPort', () => {
 
     expect(port.readState({
       localCompanionId: 'companion-alpha',
-      peerContactId: 'artemis',
+      peerContactId: 'fixture-companion',
       channelId: 'group-room',
       dayKey: '2027-01-15',
       limits: LIMITS,
@@ -286,14 +286,14 @@ describe('DeterministicFatigueBudgetPort', () => {
 
     first.port.recordFinalDecision(first.port.evaluate({
       localCompanionId: 'companion-alpha',
-      channelId: 'dm-artemis',
+      channelId: 'dm-fixture-companion',
       peer: {
-        contactId: 'artemis',
+        contactId: 'fixture-companion',
         isMachineIntelligence: true,
       },
       triggeringAuthor: {
         role: 'machine_intelligence',
-        contactId: 'artemis',
+        contactId: 'fixture-companion',
         isMachineIntelligence: true,
       },
       limits: LIMITS,
@@ -305,29 +305,29 @@ describe('DeterministicFatigueBudgetPort', () => {
 
     expect(second.readState({
       localCompanionId: 'companion-alpha',
-      peerContactId: 'artemis',
-      channelId: 'dm-artemis',
+      peerContactId: 'fixture-companion',
+      channelId: 'dm-fixture-companion',
       dayKey: '2027-01-15',
       limits: LIMITS,
     }).spent).toBe(1);
     expect(second.readState({
       localCompanionId: 'companion-alpha',
-      peerContactId: 'artemis',
-      channelId: 'dm-artemis',
+      peerContactId: 'fixture-companion',
+      channelId: 'dm-fixture-companion',
       dayKey: '2027-01-16',
       limits: LIMITS,
     }).spent).toBe(0);
 
     const nextDayEvaluation = second.evaluate({
       localCompanionId: 'companion-alpha',
-      channelId: 'dm-artemis',
+      channelId: 'dm-fixture-companion',
       peer: {
-        contactId: 'artemis',
+        contactId: 'fixture-companion',
         isMachineIntelligence: true,
       },
       triggeringAuthor: {
         role: 'machine_intelligence',
-        contactId: 'artemis',
+        contactId: 'fixture-companion',
         isMachineIntelligence: true,
       },
       limits: LIMITS,
@@ -351,7 +351,7 @@ describe('DeterministicFatigueBudgetPort', () => {
     first.port.recordFinalDecision(first.port.evaluate({
       localCompanionId: 'companion-alpha',
       channelId: 'companion-dm:a:b',
-      peer: { contactId: 'artemis', isMachineIntelligence: true },
+      peer: { contactId: 'fixture-companion', isMachineIntelligence: true },
       triggeringAuthor: { role: 'machine_intelligence', isMachineIntelligence: true },
       limits: LIMITS_WITH_OVERCHARGE,
       timestampMs: beforeMidnightMs,
@@ -366,7 +366,7 @@ describe('DeterministicFatigueBudgetPort', () => {
     const second = makePort({ ledgerPath, nowMs: afterMidnightMs });
     const state = second.port.readState({
       localCompanionId: 'companion-alpha',
-      peerContactId: 'artemis',
+      peerContactId: 'fixture-companion',
       channelId: 'companion-room:elsewhere',
       dayKey: '2027-01-16',
       limits: LIMITS_WITH_OVERCHARGE,
@@ -394,7 +394,7 @@ describe('DeterministicFatigueBudgetPort', () => {
     port.recordFinalDecision(port.evaluate({
       localCompanionId: 'companion-alpha',
       channelId: 'dm-a',
-      peer: { contactId: 'artemis', isMachineIntelligence: true },
+      peer: { contactId: 'fixture-companion', isMachineIntelligence: true },
       triggeringAuthor: { role: 'machine_intelligence', isMachineIntelligence: true },
       limits: LIMITS_WITH_OVERCHARGE,
       timestampMs: startMs,
@@ -408,14 +408,14 @@ describe('DeterministicFatigueBudgetPort', () => {
     const afterHalfLife = startMs + REGULATION_HALF_LIFE_MS;
     const sameRoot = port.readState({
       localCompanionId: 'companion-alpha',
-      peerContactId: 'artemis',
+      peerContactId: 'fixture-companion',
       channelId: 'room-b',
       limits: LIMITS_WITH_OVERCHARGE,
       regulation: { ...rootRegulation, timestampMs: afterHalfLife },
     });
     const newRoot = port.readState({
       localCompanionId: 'companion-alpha',
-      peerContactId: 'artemis',
+      peerContactId: 'fixture-companion',
       channelId: 'room-b',
       limits: LIMITS_WITH_OVERCHARGE,
       regulation: {
@@ -432,7 +432,7 @@ describe('DeterministicFatigueBudgetPort', () => {
 
     const afterWindow = port.readState({
       localCompanionId: 'companion-alpha',
-      peerContactId: 'artemis',
+      peerContactId: 'fixture-companion',
       channelId: 'room-b',
       limits: LIMITS_WITH_OVERCHARGE,
       regulation: {
@@ -457,7 +457,7 @@ describe('DeterministicFatigueBudgetPort', () => {
     port.recordFinalDecision(port.evaluate({
       localCompanionId: 'companion-alpha',
       channelId: 'dm-a',
-      peer: { contactId: 'artemis', isMachineIntelligence: true },
+      peer: { contactId: 'fixture-companion', isMachineIntelligence: true },
       triggeringAuthor: { role: 'machine_intelligence', isMachineIntelligence: true },
       limits: LIMITS_WITH_OVERCHARGE,
       timestampMs: nowMs,
@@ -469,13 +469,13 @@ describe('DeterministicFatigueBudgetPort', () => {
     }));
     expect(port.readState({
       localCompanionId: 'companion-alpha',
-      peerContactId: 'artemis',
+      peerContactId: 'fixture-companion',
       channelId: 'dm-a',
       limits: LIMITS_WITH_OVERCHARGE,
       regulation,
     }).normalSpent).toBe(1);
     expect(port.readState({
-      localCompanionId: 'artemis',
+      localCompanionId: 'fixture-companion',
       peerContactId: 'companion-alpha',
       channelId: 'dm-a',
       limits: LIMITS_WITH_OVERCHARGE,
@@ -489,14 +489,14 @@ describe('DeterministicFatigueBudgetPort', () => {
     for (let index = 0; index < LIMITS_WITH_OVERCHARGE.hardLimit; index += 1) {
       const evaluation = port.evaluate({
         localCompanionId: 'companion-alpha',
-        channelId: 'dm-artemis',
+        channelId: 'dm-fixture-companion',
         peer: {
-          contactId: 'artemis',
+          contactId: 'fixture-companion',
           isMachineIntelligence: true,
         },
         triggeringAuthor: {
           role: 'machine_intelligence',
-          contactId: 'artemis',
+          contactId: 'fixture-companion',
           isMachineIntelligence: true,
         },
         limits: LIMITS_WITH_OVERCHARGE,
@@ -506,14 +506,14 @@ describe('DeterministicFatigueBudgetPort', () => {
 
     const baseEvaluation = port.evaluate({
       localCompanionId: 'companion-alpha',
-      channelId: 'dm-artemis',
+      channelId: 'dm-fixture-companion',
       peer: {
-        contactId: 'artemis',
+        contactId: 'fixture-companion',
         isMachineIntelligence: true,
       },
       triggeringAuthor: {
         role: 'machine_intelligence',
-        contactId: 'artemis',
+        contactId: 'fixture-companion',
         isMachineIntelligence: true,
       },
       limits: LIMITS_WITH_OVERCHARGE,
@@ -544,8 +544,8 @@ describe('DeterministicFatigueBudgetPort', () => {
 
     const state = port.readState({
       localCompanionId: 'companion-alpha',
-      peerContactId: 'artemis',
-      channelId: 'dm-artemis',
+      peerContactId: 'fixture-companion',
+      channelId: 'dm-fixture-companion',
       dayKey: '2027-01-15',
       limits: LIMITS_WITH_OVERCHARGE,
     });
@@ -581,7 +581,7 @@ describe('DeterministicFatigueBudgetPort', () => {
       localCompanionId: 'companion-alpha',
       channelId: 'group-room',
       peer: {
-        contactId: 'artemis',
+        contactId: 'fixture-companion',
         isMachineIntelligence: true,
       },
       triggeringAuthor: {
@@ -604,7 +604,7 @@ describe('DeterministicFatigueBudgetPort', () => {
     }).spent).toBe(0);
     expect(port.readState({
       localCompanionId: 'companion-alpha',
-      peerContactId: 'artemis',
+      peerContactId: 'fixture-companion',
       channelId: 'group-room',
       dayKey: '2027-01-15',
       limits: LIMITS,

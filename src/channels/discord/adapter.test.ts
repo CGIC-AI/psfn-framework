@@ -1648,7 +1648,7 @@ describe('DiscordAdapter DM routing', () => {
   it('observes configured companion bot guild messages and replies only to mentions', async () => {
     const eventBus = new EventBus();
     const adapter = new DiscordAdapter(
-      makeConfig({ discordTriggerWords: ['artie'] }),
+      makeConfig({ discordTriggerWords: ['fixture-companion'] }),
       eventBus,
       { allowedBotUserIds: ['companion-bot'] },
     );
@@ -1674,7 +1674,7 @@ describe('DiscordAdapter DM routing', () => {
         authorId: 'companion-bot',
         authorDisplayName: 'Companion',
         bot: true,
-        content: 'artie without a mention',
+        content: 'fixture-companion without a mention',
         mentioned: false,
       }),
     );
@@ -1683,7 +1683,7 @@ describe('DiscordAdapter DM routing', () => {
       id: 'guild-companion-trigger-word',
       authorId: 'companion-bot',
       authorName: 'Companion',
-      content: 'artie without a mention',
+      content: 'fixture-companion without a mention',
       routing: expect.objectContaining({
         source: 'discord',
         responseMode: 'observe',

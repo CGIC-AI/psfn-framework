@@ -8,7 +8,7 @@ import type { GardenCapabilityContext } from './garden-admission.js';
 import { hasExactKeys, isRecord } from '../../shared/utils/types.js';
 
 // GATEWAY_OPERATOR_API_BASE_URL already ends in /v1 (chart helper
-// psfn.gatewayApiBaseUrl and start-gateway-agent.sh both include it), matching
+// psfn.gatewayApiBaseUrl and the deployment supervisor both include it), matching
 // the operator-confirmation client convention: append route paths WITHOUT /v1.
 const CHILD_ASSERTION_PATH = '/internal/fleet-auth/child-assertions';
 const CHILD_ASSERTION_PROTOCOL_BOUNDS = Object.freeze({

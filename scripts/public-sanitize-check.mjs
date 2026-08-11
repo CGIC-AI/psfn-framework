@@ -5,16 +5,6 @@ import path from 'node:path';
 
 export const SELF_PATH = 'scripts/public-sanitize-check.mjs';
 export const DEFAULT_LOCAL_BLOCKLIST_PATH = 'workspace/sanitize/local-blocklist.json';
-export const REWRITE_GENERATION_MARKER_PATH = 'config/history-rewrite-generation.json';
-
-// Beads history logs are machine-managed workspace artifacts, not public source/docs.
-const MACHINE_MANAGED_BEADS_HISTORY_FILES = new Set([
-  'daemon.log',
-  'issues.jsonl',
-  'beads.left.jsonl',
-  'beads.left.meta.json',
-  'interactions.jsonl',
-]);
 
 const BINARY_EXTENSIONS = new Set([
   '.png', '.jpg', '.jpeg', '.gif', '.webp', '.ico', '.pdf', '.zip', '.gz', '.tar', '.woff', '.woff2',
@@ -25,6 +15,14 @@ const SOURCE_CODE_EXTENSIONS = new Set([
 ]);
 
 const FORBIDDEN_PATH_RULES = [
+  {
+    name: 'local-only-repository-surface',
+    test: (file) => /^(?:\.beads|working_docs|deploy|deployment|shakedown|\.agents|\.claude|\.codec|\.codex|\.cursor|\.gemini)(?:\/|$)/i.test(file),
+  },
+  {
+    name: 'private-deployment-config',
+    test: (file) => file === '.trivyignore.yaml' || file === '.github/workflows/trivy-config.yml',
+  },
   {
     name: 'character-card-artifact',
     test: (file) => /(^|\/)(character\.json|.*\.charx)$/i.test(file),
@@ -40,6 +38,9 @@ const FORBIDDEN_PATH_RULES = [
 ];
 
 const TEXT_RULES = [
+  { name: 'private-operator-identity', regex: /\b(?:Ada|MrDragonFox)\b/gi },
+  { name: 'private-companion-identity', regex: /\b(?:Artemis|Artie|Purrsephone)\b/gi },
+  { name: 'private-device-identity', regex: /\bwaveshare-bedroom\b/gi },
   { name: 'token-telegram', regex: /\b\d{8,}:[A-Za-z0-9_-]{20,}\b/g },
   { name: 'token-openai-like', regex: /\bsk-[A-Za-z0-9]{20,}\b/g },
   { name: 'token-github-pat', regex: /\bghp_[A-Za-z0-9]{20,}\b/g },
@@ -49,6 +50,10 @@ const TEXT_RULES = [
     regex: /\b(?:mfa\.)?[A-Za-z\d_-]{24}\.[A-Za-z\d_-]{6}\.[A-Za-z\d_-]{27}\b/g,
   },
   { name: 'tailnet-address', regex: /\b100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])(?:\.\d{1,3}){2}\b(?!\/)/g },
+  {
+    name: 'private-ipv4-address',
+    regex: /\b(?:10(?:\.\d{1,3}){3}|172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2}|192\.168(?:\.\d{1,3}){2})\b/g,
+  },
   { name: 'internal-local-hostname', regex: /\b[a-z0-9.-]+\.local\.internal\b/gi },
   {
     name: 'live-hardware-uuid',
@@ -108,19 +113,15 @@ export function loadLocalBlocklist() {
 }
 
 /** @param {string} file */
-export function shouldSkipTrackedFile(file, rewriteGenerationActive = false) {
+export function shouldSkipTrackedFile(file) {
   const normalized = toPosixRelativePath(file);
-  if (normalized === SELF_PATH) return true;
-  if (!normalized.startsWith('.beads/')) return false;
-  const basename = path.posix.basename(normalized);
-  if (basename === 'issues.jsonl' && rewriteGenerationActive) return false;
-  return MACHINE_MANAGED_BEADS_HISTORY_FILES.has(basename);
+  return normalized === SELF_PATH;
 }
 
 /** @param {string} file */
-export function shouldScanTextContent(file, rewriteGenerationActive = false) {
+export function shouldScanTextContent(file) {
   const normalized = toPosixRelativePath(file);
-  if (shouldSkipTrackedFile(normalized, rewriteGenerationActive)) return false;
+  if (shouldSkipTrackedFile(normalized)) return false;
   const ext = path.extname(normalized).toLowerCase();
   return !BINARY_EXTENSIONS.has(ext);
 }
@@ -128,7 +129,6 @@ export function shouldScanTextContent(file, rewriteGenerationActive = false) {
 /** @param {string} file */
 export function shouldScanSourceForNulByte(file) {
   const normalized = toPosixRelativePath(file);
-  if (normalized.startsWith('.beads/')) return false;
   return SOURCE_CODE_EXTENSIONS.has(path.extname(normalized).toLowerCase());
 }
 
@@ -156,6 +156,13 @@ function collectTextViolations(file, text, rules) {
     }
   }
   return violations;
+}
+
+function textRulesForFile(file) {
+  if (/\.(?:test|spec)\.[^.]+$/i.test(file) || /(?:^|\/)corpus(?:\/|$)/i.test(file)) {
+    return TEXT_RULES.filter((rule) => rule.name !== 'private-ipv4-address');
+  }
+  return TEXT_RULES;
 }
 
 /** @returns {Array<{file:string, line:number, rule:string, snippet:string}>} */
@@ -211,15 +218,12 @@ function listTrackedFiles() {
  *     loaded: boolean;
  *   };
  *   readTextFile?: (file: string) => string;
- *   rewriteGenerationActive?: boolean;
  * }} [options]
  */
 export function scanPublicSanitizeTrackedFiles(trackedFiles, options = {}) {
   const localBlocklist = options.localBlocklist ?? loadLocalBlocklist();
   const readTextFile = options.readTextFile ?? ((file) => readFileSync(file, 'utf8'));
   const skipMissingWorkingTreeFiles = options.readTextFile === undefined;
-  const rewriteGenerationActive = options.rewriteGenerationActive
-    ?? existsSync(REWRITE_GENERATION_MARKER_PATH);
 
   /** @type {Array<{file:string, line:number, rule:string, snippet:string}>} */
   const violations = [];
@@ -245,11 +249,11 @@ export function scanPublicSanitizeTrackedFiles(trackedFiles, options = {}) {
       }
     }
 
-    if (shouldSkipTrackedFile(trackedFile, rewriteGenerationActive)) {
+    if (shouldSkipTrackedFile(trackedFile)) {
       continue;
     }
 
-    if (!shouldScanTextContent(trackedFile, rewriteGenerationActive)) {
+    if (!shouldScanTextContent(trackedFile)) {
       continue;
     }
 
@@ -257,7 +261,7 @@ export function scanPublicSanitizeTrackedFiles(trackedFiles, options = {}) {
       continue;
     }
     const text = sourceText ?? readTextFile(trackedFile);
-    violations.push(...collectTextViolations(trackedFile, text, TEXT_RULES));
+    violations.push(...collectTextViolations(trackedFile, text, textRulesForFile(trackedFile)));
     violations.push(...collectTextViolations(trackedFile, text, localBlocklist.textRuleRegex));
   }
 

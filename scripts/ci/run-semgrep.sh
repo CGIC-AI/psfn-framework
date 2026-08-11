@@ -2,7 +2,7 @@
 set -euo pipefail
 
 readonly SEMGREP_IMAGE='semgrep/semgrep:1.170.0@sha256:f42392ee2c00f0de06702135e0e20415f481935900790fbe37aa778591be3999'
-readonly SEMGREP_CONFIG='.semgrep'
+readonly SEMGREP_CONFIG='config/semgrep'
 
 mode="${1:-full}"
 baseline_commit="${2:-}"
@@ -34,7 +34,7 @@ case "$mode" in
     semgrep_args=(
       semgrep
       test
-      .semgrep
+      config/semgrep
     )
     ;;
   full | diff)

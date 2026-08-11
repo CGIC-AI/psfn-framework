@@ -36,8 +36,6 @@ Current operational shape:
 | Charge budget | Run-scoped charge accounting, lane quotas, cost visibility, and Garden charge page are wired. | Shipped |
 | Values loop | Values evolution ledger read-back into prompt composition is wired and covered by acceptance tests. | Shipped |
 | Minimal proactive outbound | Appraisal can produce guarded outbound actions through the proactive dispatcher for configured allowlisted delivery. | Shipped minimal slice |
-| Live storage migration | Write-heavy live paths may be bind-mounted from operator-provisioned storage; service registration caveats are documented in operations. | Shipped operationally |
-| Live-deploy ship lane | Component-selective `ship:kube` targets a live Kubernetes runtime/cluster with a topology-aware pre-ship gate, contract-skew guard, in-image tool pinning, two-way companion beads sync, and an operator-side post-rollout validation gate. | Shipped operationally |
 | Companion self-diagnosis | `self_status` self-diagnosis surface plus a bounded, redacted runtime diagnostics service behind the agent admin transport, with a live tool-surface conformance harness. | Shipped |
 | Durable scheduled prompts | Scheduled/one-shot prompts persist in Postgres (`scheduler_scheduled_prompts`) and rehydrate at startup, so they survive frequent agent restarts; completion is recorded only after successful delivery. | Shipped |
 | Deliberate trust ratchet | Nightly contact trust-drift review lane derives behavior signals; trusted-tier promotions require human-in-the-loop approval; social-graph edges are backed by persisted memory provenance. | Shipped |

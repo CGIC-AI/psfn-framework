@@ -148,7 +148,7 @@ async def test_provider_override_keeps_full_companion_prompt_pipeline() -> None:
         claim_config=normalize_claim_config(
             capability_profile="voice-only",
             satellite_id="bedroom",
-            endpoint_id="waveshare-bedroom",
+            endpoint_id="fixture-satellite",
             display_name="Companion Bedroom",
         ),
         client=client,
@@ -205,7 +205,7 @@ async def test_provider_submits_typed_headpat_to_companion_stimuli_route() -> No
         claim_config=normalize_claim_config(
             capability_profile="voice-only",
             satellite_id="bedroom",
-            endpoint_id="waveshare-bedroom",
+            endpoint_id="fixture-satellite",
             display_name="Companion Bedroom",
         ),
         client=client,
@@ -230,10 +230,10 @@ async def test_provider_submits_typed_headpat_to_companion_stimuli_route() -> No
         "Bearer satellite-secret",
         {
             "satelliteId": "bedroom",
-            "endpointId": "waveshare-bedroom",
+            "endpointId": "fixture-satellite",
             "claimType": "voice-only",
             "sessionId": "bedroom",
-            "deviceId": "waveshare-bedroom",
+            "deviceId": "fixture-satellite",
             "kind": "headpat",
             "region": "head",
             "count": 1,

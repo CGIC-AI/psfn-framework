@@ -315,7 +315,7 @@ skills/modules/prompt/memory source.
 Key files: `src/system/config/companions-config.ts`,
 `src/persistence/postgres.ts`, `src/persistence/runtime-factory.ts`,
 `src/boundary/gateway/fleet-portal-http-routes.ts`,
-`scripts/start-gateway-agent.sh`.
+`scripts/resolve-companion-fleet.ts`.
 
 ## Persistence Ports
 

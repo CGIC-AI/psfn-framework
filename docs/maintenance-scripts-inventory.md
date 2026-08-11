@@ -81,7 +81,7 @@ listed with their corresponding implementation file.
 | `migrate-system-owner-fleet.ts` | `migrate:system-owner-fleet` | `package.json`, `tsup.config.ts` |
 | `system-owner-fleet-snapshot.ts` | `snapshot:system-owner-fleet`, `restore:system-owner-fleet-snapshot` | `package.json`, `tsup.config.ts` |
 | `system-owner-fleet-context.ts` + `.test.ts` | Shared logic for system-owner-fleet migration | `migrate-system-owner-fleet.ts` |
-| `owner-upgrade-readiness-probe.ts` | Packaged readiness probe for owner upgrade | `tsup.config.ts`, `deploy/helm/psfn/templates/owner-migration-upgrade.yaml` |
+| `owner-upgrade-readiness-probe.ts` | Packaged readiness probe for owner upgrade | `tsup.config.ts`; invoked by deployment tooling |
 
 ### Migrations added to the boundary by this audit
 
@@ -114,13 +114,13 @@ listed with their corresponding implementation file.
 | `testing-session-purge-postgres.ts` + `.test.ts` | Postgres implementation of testing-session purge | `purge-testing-session.ts` |
 | `testing-session-purge-target.ts` | Target abstraction for testing-session purge | `purge-testing-session.ts`, `testing-session-purge-postgres.ts` |
 
-### Verified production / Helm wiring (do not remove without replacing)
+### Packaged deployment integration tools
 
 | File | Role | Wired from |
 |---|---|---|
-| `migrate-required-settings-blocks.ts` | Helm init-time owner-file block migration | `tsup.config.ts`, `deploy/helm/psfn/templates/_helpers.tpl`, `docs/helm-upgrades.md`, `scripts/verify-helm-chart.mjs`, `knip.json` |
+| `migrate-required-settings-blocks.ts` | Owner-file block migration | `tsup.config.ts`, `knip.json`; invoked by deployment tooling |
 | `verify-shell-sandbox-runtime.ts` | Bubblewrap sandbox runtime verification | `tsup.config.ts`, `scripts/verify-shell-sandbox-image.mjs`, `config/identity-literal-scan-allowlist.json` |
-| `resolve-model-usage-ledger-schema.ts` + `.test.ts` | Kube rollout schema resolution | `tsup.config.ts`, `scripts/ops/validate-kube-rollout.sh` |
+| `resolve-model-usage-ledger-schema.ts` + `.test.ts` | Rollout-time schema resolution | `tsup.config.ts`; invoked by deployment tooling |
 
 ### Legacy / tracked separately
 
@@ -142,10 +142,9 @@ reference it:
 1. `package.json` script entry.
 2. `tsup.config.ts` entry, if present.
 3. `knip.json` entry/ignore, if present.
-4. Helm templates under `deploy/helm/psfn/templates/` and `_helpers.tpl`.
-5. Helm verifier scripts: `scripts/verify-helm-chart.mjs`, `scripts/verify-helm-charge-skills-owner-upgrade*.mjs`.
-6. Shell rollout scripts: `scripts/ops/validate-kube-rollout.sh`, `scripts/start-gateway-agent.sh`.
-7. Documentation: `docs/specifications.md`, `docs/operations.md`, `docs/context-envelope.md`, `docs/helm-upgrades.md`, `docs/setup.md`.
-8. Admin / UI strings that name the command.
-9. Tests that import the module or assert the script exists.
-10. Baseline / allowlist metadata that names the file's literals.
+4. The private deployment repository that consumes packaged binaries.
+5. Documentation: `docs/specifications.md`, `docs/operations.md`,
+   `docs/context-envelope.md`, and `docs/setup.md`.
+6. Admin / UI strings that name the command.
+7. Tests that import the module or assert the script exists.
+8. Baseline / allowlist metadata that names the file's literals.

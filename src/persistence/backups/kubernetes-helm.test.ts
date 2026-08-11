@@ -8,7 +8,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   KUBERNETES_HELM_CHART_MANIFEST_NAME,
@@ -100,14 +100,14 @@ describe('Kubernetes Helm backup config', () => {
   it('fails closed when Kubernetes backup metadata is incomplete', () => {
     expect(() => resolveKubernetesHelmBackupConfig({
       PSFN_KUBERNETES_BACKUP_ENABLED: 'true',
-      PSFN_HELM_CHART_DIR: '/app/deploy/helm/psfn',
+      PSFN_HELM_CHART_DIR: '/external/config/charts/psfn',
     })).toThrow('PSFN_HELM_RELEASE_NAME');
   });
 
   it('resolves only non-secret Helm and image provenance fields', () => {
     const config = resolveKubernetesHelmBackupConfig({
       PSFN_KUBERNETES_BACKUP_ENABLED: 'true',
-      PSFN_HELM_CHART_DIR: '/app/deploy/helm/psfn',
+      PSFN_HELM_CHART_DIR: '/external/config/charts/psfn',
       PSFN_HELM_RELEASE_NAME: 'psfn',
       PSFN_HELM_NAMESPACE: 'psfn',
       PSFN_HELM_CHART_NAME: 'psfn',
@@ -126,7 +126,7 @@ describe('Kubernetes Helm backup config', () => {
     });
 
     const { revision: _unresolvable, ...expected } = makeConfig(
-      '/app/deploy/helm/psfn',
+      '/external/config/charts/psfn',
       TEST_CHART_DIGEST,
     );
     expect(config).toEqual(expected);
@@ -140,7 +140,7 @@ describe('Kubernetes Helm backup config', () => {
   it('ignores a leftover PSFN_HELM_REVISION rather than recording a stale revision', () => {
     const env = {
       PSFN_KUBERNETES_BACKUP_ENABLED: 'true',
-      PSFN_HELM_CHART_DIR: '/app/deploy/helm/psfn',
+      PSFN_HELM_CHART_DIR: '/external/config/charts/psfn',
       PSFN_HELM_RELEASE_NAME: 'psfn',
       PSFN_HELM_NAMESPACE: 'psfn',
       PSFN_HELM_CHART_NAME: 'psfn',
@@ -197,28 +197,6 @@ describe('Kubernetes Helm recovery snapshot', () => {
       namespace: 'psfn',
       revision: 33,
     });
-  });
-
-  it('accepts the canonical repository-owned PSFN chart', () => {
-    const root = join(tmpdir(), `psfn-kube-helm-canonical-${Date.now()}`);
-    roots.push(root);
-    const result = captureKubernetesHelmSnapshot({
-      config: makeConfig(resolve('deploy/helm/psfn')),
-      backupDir: join(root, 'backup'),
-    });
-
-    expect(result.chart.fileCount).toBeGreaterThan(10);
-    expect(existsSync(join(root, 'backup', 'helm-recovery', 'chart', 'README.md'))).toBe(false);
-    expect(existsSync(join(
-      root,
-      'backup',
-      'helm-recovery',
-      'chart',
-      'overlays',
-      'pi-satellite-hub.values.yaml',
-    ))).toBe(true);
-    expect(verifyKubernetesHelmSnapshot(join(root, 'backup')).chart.verifiedFileCount)
-      .toBe(result.chart.fileCount);
   });
 
   it('rejects an ad hoc live values overlay at the chart root', () => {

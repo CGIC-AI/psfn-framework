@@ -2,7 +2,6 @@
   "version": 1,
   "managedPrefixes": ["system:", "size:"],
   "lineCountExclusions": [
-    ".beads/issues.jsonl",
     "admin-ui/package-lock.json",
     "companion-ui/package-lock.json",
     "package-lock.json"
@@ -40,7 +39,7 @@
     {
       "label": "system:helm-ops",
       "patterns": [
-        "^(?:deploy|deployment|docker)/",
+        "^docker/",
         "^scripts/ops/",
         "^docs/operations\\.md$"
       ]
@@ -50,7 +49,7 @@
       "patterns": [
         "^\\.github/",
         "^scripts/ci/",
-        "^(?:AGENTS|CLAUDE)\\.md$",
+        "^AGENTS\\.md$",
         "^src/core/tools/",
         "^src/faculties/subagents/"
       ]
@@ -73,8 +72,7 @@
       "label": "system:cogsec",
       "patterns": [
         "^src/core/cogsec/",
-        "cogsec",
-        "^docs/adversarial-review-and-bugfixing-practices\\.md$"
+        "cogsec"
       ]
     },
     { "label": "system:persistence", "patterns": ["^src/persistence/"] },
@@ -116,10 +114,8 @@
     {
       "label": "system:testing",
       "patterns": [
-        "^shakedown/",
         "^src/test-support/",
-        "^test-fixtures/",
-        "^type-tests/",
+        "^tests/",
         "^vitest(?:\\.|-)",
         "^scripts/.*\\.test\\."
       ]

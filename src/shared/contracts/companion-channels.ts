@@ -5,8 +5,7 @@
 // message enters the receiving agent as a normal inbound channel turn, so the
 // conversation-fatigue system (MI↔MI charging, human-resets-free, soft
 // wrap-up, hard suppression) applies with zero new mechanism. There is no
-// side-channel dispatch, ever (working_docs/sprint-10-multi-companion.md §8,
-// "fatigue bypass" risk).
+// side-channel dispatch, ever; that would create a fatigue bypass.
 //
 // Two channel shapes (review §9):
 //

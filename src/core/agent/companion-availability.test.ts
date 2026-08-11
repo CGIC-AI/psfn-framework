@@ -70,7 +70,7 @@ function message(id: string): SubstrateMessage {
     channelId: 'discord-room',
     channelType: 'discord',
     authorId: 'human-1',
-    authorName: 'Ada',
+    authorName: 'Example Person',
     content: `message ${id}`,
     timestamp: new Date('2026-08-06T12:00:00.000Z'),
   };

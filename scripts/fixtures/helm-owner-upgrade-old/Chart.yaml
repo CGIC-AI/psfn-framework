@@ -1,7 +1,0 @@
-apiVersion: v2
-name: psfn
-description: Deterministic pre-DNLL owner-layout fixture for the real Helm upgrade gate
-type: application
-version: 0.0.1
-appVersion: 0.0.1-owner-layout
-kubeVersion: ">=1.29.0-0"

@@ -1,6 +1,0 @@
-{
-  "labels": ["review:greptile"],
-  "triggerOnUpdates": false,
-  "triggerOnDrafts": false,
-  "statusCheck": true
-}

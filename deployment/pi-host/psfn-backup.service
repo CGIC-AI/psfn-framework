@@ -1,6 +1,0 @@
-[Unit]
-Description=PSFN interim backup to NAS
-RequiresMountsFor=/srv/psfn-backup
-[Service]
-Type=oneshot
-ExecStart=/usr/local/bin/psfn-backup.sh

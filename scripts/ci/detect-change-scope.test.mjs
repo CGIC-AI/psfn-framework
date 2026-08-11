@@ -9,12 +9,10 @@ test('detects specialist validation scopes', () => {
       '.github/workflows/ci.yml',
       'admin-ui/src/routes/settings/+page.svelte',
       'companion-ui/src/App.tsx',
-      'deploy/helm/psfn/values.yaml',
       'src/system/config/load-config.ts',
     ]),
     {
       settings: true,
-      deployment: true,
       supply_chain: true,
       admin_ui: true,
       companion_ui: true,
@@ -29,7 +27,6 @@ test('detects specialist validation scopes', () => {
 test('leaves unrelated source changes on the core CI path', () => {
   assert.deepEqual(detectChangeScope(['src/core/session/manager.ts']), {
     settings: false,
-    deployment: false,
     supply_chain: false,
     admin_ui: false,
     companion_ui: false,
@@ -40,15 +37,12 @@ test('leaves unrelated source changes on the core CI path', () => {
   });
 });
 
-test('keeps docs and real delivery tooling on the cheap path', () => {
+test('keeps docs and workflow metadata on the cheap path', () => {
   const scope = detectChangeScope([
-    '.githooks/pre-push',
     '.github/workflows/ci.yml',
     'AGENTS.md',
-    'CLAUDE.md',
-    'docs/orchestration-process.md',
+    'docs/architecture.md',
     'package.json',
-    'scripts/ci/local-delivery-contract.mjs',
   ]);
   assert.equal(scope.root_runtime, false);
   assert.equal(scope.satellite_hub, false);
@@ -56,11 +50,10 @@ test('keeps docs and real delivery tooling on the cheap path', () => {
   assert.equal(scope.clean_environment, false);
 });
 
-test('routes UI and deploy changes to specialists without selecting root runtime', () => {
+test('routes UI changes to specialists without selecting root runtime', () => {
   for (const path of [
     'admin-ui/src/routes/+page.svelte',
     'companion-ui/src/App.tsx',
-    'deploy/helm/psfn/values.yaml',
   ]) {
     const scope = detectChangeScope([path]);
     assert.equal(scope.root_runtime, false, path);

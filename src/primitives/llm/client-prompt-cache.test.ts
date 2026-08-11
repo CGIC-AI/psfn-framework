@@ -38,7 +38,7 @@ describe('prompt cache affinity — cross-companion isolation (fleet threat mode
     // guild channel and share one provider organisation. The channel id is
     // identical; only the companion differs.
     const sharedChannel = 'discord:guild-42:general';
-    const tokens = ['companion-companion', 'companion-artemis', 'companion-lyra'].map(
+    const tokens = ['companion-companion', 'companion-fixture-companion', 'companion-lyra'].map(
       companionId => affinityToken({ companionId, channelId: sharedChannel }),
     );
     expect(new Set(tokens).size).toBe(tokens.length);
@@ -228,7 +228,7 @@ describe('cacheable content prefix — cross-companion/contact byte isolation', 
 
   it('produces distinct static-prefix hashes for distinct companions', () => {
     const a = serialize('You are Companion.', 'DM with Alice.');
-    const b = serialize('You are Artemis.', 'DM with Alice.');
+    const b = serialize('You are Fixture Companion.', 'DM with Alice.');
     const boundariesA = buildSystemPromptCacheBoundaries(a);
     const boundariesB = buildSystemPromptCacheBoundaries(b);
     expect(boundariesA.staticPrefixHash).not.toBe(boundariesB.staticPrefixHash);

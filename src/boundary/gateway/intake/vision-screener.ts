@@ -18,9 +18,8 @@
 // construction — this module leans on that machinery instead of rebuilding it.
 //
 // RESIDUAL RISK (documented, accepted): pixel-perturbation and steganographic
-// attacks against the DOWNSTREAM vision model have no deployable detector —
-// nothing in the survey (working_docs/COGSEC_INTAKE_FIREWALL_RESEARCH_
-// 20260709.md §6) ships one. A clean transcript therefore NEVER upgrades the
+// attacks against the DOWNSTREAM vision model have no deployable detector.
+// A clean transcript therefore NEVER upgrades the
 // image's provenance: sourceClass 'image_ocr' stays hostile-tier on the
 // envelope regardless of how benign the transcript looks, and the benign-path
 // transcript is delivered only under an explicit untrusted-data label.

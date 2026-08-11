@@ -26,7 +26,7 @@ def test_headpat_signal_is_discovered_from_native_api_metadata() -> None:
 def test_headpat_event_is_recorded_as_a_typed_interaction(tmp_path) -> None:
     recorder = ESPHomeInteractionRecorder(
         headpat_signal_key=42,
-        endpoint_id="waveshare-bedroom",
+        endpoint_id="fixture-satellite",
         artifacts_root=tmp_path,
         now=lambda: datetime(2026, 7, 14, 2, 30, tzinfo=timezone.utc),
     )
@@ -35,12 +35,12 @@ def test_headpat_event_is_recorded_as_a_typed_interaction(tmp_path) -> None:
 
     assert recorded is not None
     assert recorded.interaction_type == "headpat"
-    assert recorded.endpoint_id == "waveshare-bedroom"
+    assert recorded.endpoint_id == "fixture-satellite"
     assert recorded.occurred_at == "2026-07-14T02:30:00+00:00"
     lines = (tmp_path / "interactions" / "events.jsonl").read_text(encoding="utf-8").splitlines()
     assert [json.loads(line) for line in lines] == [
         {
-            "endpointId": "waveshare-bedroom",
+            "endpointId": "fixture-satellite",
             "interactionType": "headpat",
             "occurredAt": "2026-07-14T02:30:00+00:00",
             "protocolVersion": "satellite-interaction.v1",
@@ -52,7 +52,7 @@ def test_headpat_event_is_recorded_as_a_typed_interaction(tmp_path) -> None:
 def test_interaction_recorder_ignores_other_entities_and_event_types(tmp_path) -> None:
     recorder = ESPHomeInteractionRecorder(
         headpat_signal_key=42,
-        endpoint_id="waveshare-bedroom",
+        endpoint_id="fixture-satellite",
         artifacts_root=tmp_path,
     )
 
@@ -73,7 +73,7 @@ async def test_headpat_interaction_delivers_one_fixed_touch_stimulus() -> None:
     result = await deliver_interaction(
         SatelliteInteraction(
             interaction_type="headpat",
-            endpoint_id="waveshare-bedroom",
+            endpoint_id="fixture-satellite",
             occurred_at="2026-07-14T02:30:00+00:00",
         ),
         submitter=Submitter(),

@@ -1,8 +1,6 @@
 // ── Biographical Profile projection: companion self-nickname tracer (o61vb.3) ──
 //
-// The deep projection module described in
-// `working_docs/cross-channel-biographical-continuity-design.md` ("Deep
-// projection module"). It owns storage access, read-time source revalidation,
+// This deep projection module owns storage access, read-time source revalidation,
 // destination policy, deterministic rendering, ranking, and CogSec disclosure
 // lineage construction behind one small interface. Rendering and lineage are
 // produced together: if either cannot be produced for a claim, neither is

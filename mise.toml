@@ -17,16 +17,6 @@ description = "Run bounded Satellite Hub TypeScript and Python checks"
 depends = ["hub:install"]
 run = "npm --prefix apps/satellite-hub run verify:fast"
 
-[tasks."hub:firmware"]
-description = "Run optional firmware preparation and wiring checks"
-dir = "apps/satellite-hub"
-run = "npm run test:firmware"
-
-[tasks."hub:firmware:compile"]
-description = "Compile the optional pinned ESPHome firmware"
-dir = "apps/satellite-hub"
-run = "npm run firmware:compile:waveshare-bedroom"
-
 [tasks."hub:dotnet"]
 description = "Build the optional Voxta relay when the .NET 8 SDK is available"
 dir = "apps/satellite-hub/relay/psfn-voxta-relay"

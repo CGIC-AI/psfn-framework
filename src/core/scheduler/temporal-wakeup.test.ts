@@ -428,7 +428,7 @@ describe('note builders', () => {
     const note = buildMorningWakeNote({
       nowMs: DAY2_MORNING,
       lastActivityAtMs: DAY1_EVENING,
-      catchUpSummary: 'You and Ada wrapped up the garden plans before bed.',
+      catchUpSummary: 'You and Example Person wrapped up the garden plans before bed.',
       timeZone: 'UTC',
     });
     expect(note).toContain('[Temporal wake]');
@@ -436,7 +436,7 @@ describe('note builders', () => {
     expect(note).toContain('08:05');
     expect(note).toContain('morning');
     expect(note).toContain('10 hours 7 minutes ago');
-    expect(note).toContain('You and Ada wrapped up the garden plans before bed.');
+    expect(note).toContain('You and Example Person wrapped up the garden plans before bed.');
     expect(note).not.toContain('overnight gap');
     expect(note).not.toContain('Reconnection warmth');
     expect(note).not.toContain('perform affection');
@@ -481,7 +481,7 @@ describe('morning wake lane (simulated clock, real session manager)', () => {
   it('injects the new-day frame overnight so it precedes the first partner message of the day in built context', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(DAY1_EVENING));
-    mgr.recordUserMessage('api:main', 'goodnight — heading to bed', 'user-1', 'Ada');
+    mgr.recordUserMessage('api:main', 'goodnight — heading to bed', 'user-1', 'Example Person');
     vi.setSystemTime(new Date(DAY1_NIGHT));
     mgr.recordAssistantMessage('api:main', 'sleep well, talk tomorrow');
 
@@ -490,7 +490,7 @@ describe('morning wake lane (simulated clock, real session manager)', () => {
       scheduler,
       sessionManager: mgr,
       config: makeWakeConfig({ refresher: { enabled: false } }),
-      summarizeCatchUp: async () => 'You and Ada wrapped up the garden plans before bed.',
+      summarizeCatchUp: async () => 'You and Example Person wrapped up the garden plans before bed.',
       invokeWakeTurn: async () => null,
     });
 
@@ -509,7 +509,7 @@ describe('morning wake lane (simulated clock, real session manager)', () => {
     expect(noteEntry).toBeDefined();
     expect(noteEntry?.authorId).toBe('system');
     expect(noteEntry?.content).toContain('June 11, 2026');
-    expect(noteEntry?.content).toContain('You and Ada wrapped up the garden plans before bed.');
+    expect(noteEntry?.content).toContain('You and Example Person wrapped up the garden plans before bed.');
     expect(JSON.parse(noteEntry?.metadata ?? '{}')).toMatchObject({
       sessionLane: { kind: 'system_note', source: TEMPORAL_WAKEUP_MORNING_NOTE_SOURCE },
     });
@@ -517,7 +517,7 @@ describe('morning wake lane (simulated clock, real session manager)', () => {
     // The partner speaks AFTER the wake — the note must already be in the
     // assembled context, before the partner's first message of the day.
     vi.setSystemTime(new Date(DAY2_MORNING + 5 * 60_000));
-    mgr.recordUserMessage('api:main', 'good morning!', 'user-1', 'Ada');
+    mgr.recordUserMessage('api:main', 'good morning!', 'user-1', 'Example Person');
 
     const ctx = await mgr.buildContext('api:main', 'System prompt', '');
     const wakeIndex = ctx.messages.findIndex(
@@ -540,7 +540,7 @@ describe('morning wake lane (simulated clock, real session manager)', () => {
   it('fires one morning note after a post-midnight refresher without repeating its catch-up', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(DAY1_EVENING));
-    mgr.recordUserMessage('api:main', 'wrapping up for the night', 'user-1', 'Ada');
+    mgr.recordUserMessage('api:main', 'wrapping up for the night', 'user-1', 'Example Person');
 
     const refresherAt = Date.parse('2026-06-11T02:34:00.000Z');
     vi.setSystemTime(new Date(refresherAt));
@@ -579,7 +579,7 @@ describe('morning wake lane (simulated clock, real session manager)', () => {
   it('does not reset elapsed-time or ambient idle accounting (wake notes are not partner activity)', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(DAY1_EVENING));
-    mgr.recordUserMessage('api:main', 'goodnight', 'user-1', 'Ada');
+    mgr.recordUserMessage('api:main', 'goodnight', 'user-1', 'Example Person');
     vi.setSystemTime(new Date(DAY1_NIGHT));
     mgr.recordAssistantMessage('api:main', 'sleep well');
 
@@ -647,7 +647,7 @@ describe('morning wake lane (simulated clock, real session manager)', () => {
   it('keeps wake notes system-authored: attribution can never render them as partner speech', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(DAY1_EVENING));
-    mgr.recordUserMessage('api:main', 'goodnight', 'user-1', 'Ada');
+    mgr.recordUserMessage('api:main', 'goodnight', 'user-1', 'Example Person');
 
     const scheduler = new Scheduler(new EventBus(), { tickIntervalMs: 60_000, heartbeatIntervalMs: 1_800_000 });
     registerTemporalWakeupTasks({

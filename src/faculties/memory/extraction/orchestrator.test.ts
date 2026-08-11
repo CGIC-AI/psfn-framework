@@ -191,12 +191,12 @@ describe('runExtractionOrchestration durable children', () => {
       role: 'user' as const,
       content: 'remember the observatory promise',
       authorId: 'dragon',
-      authorName: 'MrDragonFox',
+      authorName: 'Example Partner',
       timestamp: 1,
       metadata: buildSessionMetadataWithMessageAddressing(undefined, {
         schemaVersion: 2,
         source: 'discord',
-        author: { authorId: 'dragon', authorName: 'MrDragonFox' },
+        author: { authorId: 'dragon', authorName: 'Example Partner' },
         observer: { authorId: 'lyra-bot', authorName: 'Lyra' },
         mentionedTargets: [{ authorId: 'other-bot', authorName: 'Other Companion' }],
         channel: { scope: 'group', channelId: 'discord-room' },
@@ -219,7 +219,7 @@ describe('runExtractionOrchestration durable children', () => {
       recoveredEntries: [groupEntry],
       promptRegistry: { getPrompt } as ExtractionRunOptions['promptRegistry'],
       llmClient: {
-        complete: vi.fn().mockResolvedValue({ content: factResponse('MrDragonFox remembers the promise.') }),
+        complete: vi.fn().mockResolvedValue({ content: factResponse('Example Partner remembers the promise.') }),
       } as ExtractionRunOptions['llmClient'],
       processFact,
     });
@@ -1316,13 +1316,13 @@ describe('runExtractionOrchestration group-room speaker routing', () => {
   it('routes a clear mixed-speaker fact to the source speaker contact instead of the trigger contact', async () => {
     const processFact = vi.fn().mockResolvedValue({
       action: 'created',
-      memory: { id: 'mem-mrdragonfox' },
+      memory: { id: 'mem-example-partner' },
     });
     const emitExtractionEnd = vi.fn().mockResolvedValue(undefined);
     const maybePersistEmotionalState = vi.fn();
     const maybeRefreshRecentContactShape = vi.fn();
     const resolveSourceSpeakerContactId = vi.fn(async (speaker: ExtractionSourceSpeaker) => {
-      if (speaker.authorId === 'discord-mrdragonfox') return 'contact-mrdragonfox';
+      if (speaker.authorId === 'discord-example-partner') return 'contact-example-partner';
       if (speaker.authorId === 'discord-morgan') return 'contact-morgan';
       return undefined;
     });
@@ -1334,8 +1334,8 @@ describe('runExtractionOrchestration group-room speaker routing', () => {
           id: 1,
           channelId: 'discord:kube',
           role: 'user',
-          authorId: 'discord-mrdragonfox',
-          authorName: 'MrDragonFox',
+          authorId: 'discord-example-partner',
+          authorName: 'Example Partner',
           content: 'ya i mean if we put her on twitch or yt live or ticktok we need also guardrails',
           timestamp: 1,
         },
@@ -1357,7 +1357,7 @@ describe('runExtractionOrchestration group-room speaker routing', () => {
         complete: vi.fn().mockResolvedValue({
           content: `<response>
 <fact>
-<text>MrDragonFox believes that if Lyra is put on Twitch, YouTube, or TikTok live, guardrails are needed.</text>
+<text>Example Partner believes that if Lyra is put on Twitch, YouTube, or TikTok live, guardrails are needed.</text>
 <type>semantic</type>
 <importance>0.92</importance>
 <confidence>0.95</confidence>
@@ -1377,33 +1377,33 @@ describe('runExtractionOrchestration group-room speaker routing', () => {
 
     expect(processFact).toHaveBeenCalledTimes(1);
     expect(processFact).toHaveBeenCalledWith(expect.objectContaining({
-      text: expect.stringContaining('MrDragonFox believes'),
-    }), expect.any(String), 'contact-mrdragonfox', expect.objectContaining({
+      text: expect.stringContaining('Example Partner believes'),
+    }), expect.any(String), 'contact-example-partner', expect.objectContaining({
       triggerContactId: 'contact-morgan',
-      routedContactId: 'contact-mrdragonfox',
-      sourceSpeakerName: 'MrDragonFox',
+      routedContactId: 'contact-example-partner',
+      sourceSpeakerName: 'Example Partner',
       routingReason: 'speaker_name_prefix',
     }));
     expect(maybePersistEmotionalState).toHaveBeenCalledWith(
-      'contact-mrdragonfox',
-      [expect.objectContaining({ text: expect.stringContaining('MrDragonFox believes') })],
+      'contact-example-partner',
+      [expect.objectContaining({ text: expect.stringContaining('Example Partner believes') })],
       expect.any(Array),
     );
     expect(maybeRefreshRecentContactShape).toHaveBeenCalledWith(
       'discord:kube',
       'manual',
-      'contact-mrdragonfox',
+      'contact-example-partner',
       [expect.objectContaining({
-        contactId: 'contact-mrdragonfox',
+        contactId: 'contact-example-partner',
         triggerContactId: 'contact-morgan',
-        sourceSpeakerName: 'MrDragonFox',
+        sourceSpeakerName: 'Example Partner',
       })],
     );
     expect(maybeRefreshRecentContactShape.mock.calls.map(call => call[2])).not.toContain('contact-morgan');
     expect(emitExtractionEnd).toHaveBeenCalledWith(expect.objectContaining({
       triggerContactId: 'contact-morgan',
-      routedContactIds: ['contact-mrdragonfox'],
-      sourceSpeakerNames: ['MrDragonFox'],
+      routedContactIds: ['contact-example-partner'],
+      sourceSpeakerNames: ['Example Partner'],
       routedFactCount: 1,
       ambiguousSpeakerSkippedCount: 0,
       rejectionBreakdown: expect.objectContaining({
@@ -1418,7 +1418,7 @@ describe('runExtractionOrchestration group-room speaker routing', () => {
       memory: { id: 'mem-structured' },
     });
     const resolveStructuredSourceContactId = vi.fn(async (speaker: ExtractionSourceSpeaker) => {
-      if (speaker.authorId === 'discord-mrdragonfox') return 'contact-mrdragonfox';
+      if (speaker.authorId === 'discord-example-partner') return 'contact-example-partner';
       if (speaker.authorId === 'discord-morgan') return 'contact-morgan';
       return undefined;
     });
@@ -1430,8 +1430,8 @@ describe('runExtractionOrchestration group-room speaker routing', () => {
           id: 1,
           channelId: 'discord:kube',
           role: 'user',
-          authorId: 'discord-mrdragonfox',
-          authorName: 'MrDragonFox',
+          authorId: 'discord-example-partner',
+          authorName: 'Example Partner',
           content: 'Lyra, Morgan is helping run moderation tonight.',
           timestamp: 1,
         },
@@ -1458,7 +1458,7 @@ describe('runExtractionOrchestration group-room speaker routing', () => {
 <importance>0.92</importance>
 <confidence>0.95</confidence>
 <source_message_ids>1</source_message_ids>
-<source_speaker_name>MrDragonFox</source_speaker_name>
+<source_speaker_name>Example Partner</source_speaker_name>
 <subject_name>Morgan</subject_name>
 </fact>
 </response>`,
@@ -1478,9 +1478,9 @@ describe('runExtractionOrchestration group-room speaker routing', () => {
       expect.objectContaining({
         triggerContactId: 'contact-morgan',
         routedContactId: 'contact-morgan',
-        sourceContactId: 'contact-mrdragonfox',
-        sourceAuthorId: 'discord-mrdragonfox',
-        sourceSpeakerName: 'MrDragonFox',
+        sourceContactId: 'contact-example-partner',
+        sourceAuthorId: 'discord-example-partner',
+        sourceSpeakerName: 'Example Partner',
         subjectContactId: 'contact-morgan',
         subjectName: 'Morgan',
         addressMode: 'direct_to_companion',
@@ -1608,8 +1608,8 @@ describe('runExtractionOrchestration group-room speaker routing', () => {
           id: 1,
           channelId: 'discord:kube',
           role: 'user',
-          authorId: 'discord-mrdragonfox',
-          authorName: 'MrDragonFox',
+          authorId: 'discord-example-partner',
+          authorName: 'Example Partner',
           content: 'The room gets noisy whenever launch planning starts.',
           timestamp: 1,
         },
@@ -1632,7 +1632,7 @@ describe('runExtractionOrchestration group-room speaker routing', () => {
 <importance>0.9</importance>
 <confidence>0.95</confidence>
 <source_message_ids>1</source_message_ids>
-<source_speaker_name>MrDragonFox</source_speaker_name>
+<source_speaker_name>Example Partner</source_speaker_name>
 <subject_name>room</subject_name>
 </fact>
 </response>`,
@@ -1641,7 +1641,7 @@ describe('runExtractionOrchestration group-room speaker routing', () => {
       processFact,
       maybeRefreshRecentContactShape,
       resolveSourceSpeakerContactId: vi.fn(async (speaker: ExtractionSourceSpeaker) => {
-        if (speaker.authorId === 'discord-mrdragonfox') return 'contact-mrdragonfox';
+        if (speaker.authorId === 'discord-example-partner') return 'contact-example-partner';
         if (speaker.authorId === 'discord-morgan') return 'contact-morgan';
         return undefined;
       }),
@@ -1656,8 +1656,8 @@ describe('runExtractionOrchestration group-room speaker routing', () => {
       undefined,
       expect.objectContaining({
         triggerContactId: 'contact-morgan',
-        sourceContactId: 'contact-mrdragonfox',
-        sourceSpeakerName: 'MrDragonFox',
+        sourceContactId: 'contact-example-partner',
+        sourceSpeakerName: 'Example Partner',
         subjectName: 'room',
         scopeRef: {
           kind: 'conversation',
@@ -1682,8 +1682,8 @@ describe('runExtractionOrchestration group-room speaker routing', () => {
           id: 1,
           channelId: 'discord:kube',
           role: 'user',
-          authorId: 'discord-mrdragonfox',
-          authorName: 'MrDragonFox',
+          authorId: 'discord-example-partner',
+          authorName: 'Example Partner',
           content: 'Guardrails matter before any streams happen.',
           timestamp: 1,
         },
@@ -1712,7 +1712,7 @@ describe('runExtractionOrchestration group-room speaker routing', () => {
       processFact,
       emitExtractionEnd,
       resolveSourceSpeakerContactId: vi.fn(async (speaker: ExtractionSourceSpeaker) => {
-        if (speaker.authorId === 'discord-mrdragonfox') return 'contact-mrdragonfox';
+        if (speaker.authorId === 'discord-example-partner') return 'contact-example-partner';
         if (speaker.authorId === 'discord-morgan') return 'contact-morgan';
         return undefined;
       }),

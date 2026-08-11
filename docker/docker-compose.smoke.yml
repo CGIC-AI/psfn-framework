@@ -2,8 +2,7 @@ name: psfn-smoke
 
 # ── Compose smoke stack (psfn-framework-65rk.12) ──
 # The contributor onboarding / "someone can run it" path (public-flip checklist
-# item 4). Unlike docker-compose.yml (single agent-only container, host-socket
-# bind, SQLite), this file stands up the real split runtime end to end:
+# item 4). This file stands up the real split runtime end to end:
 #
 #   postgres  pgvector-backed Postgres 17 — the only supported runtime store.
 #   seed      one-shot: lays split-root owner files + a starter card, chowns the

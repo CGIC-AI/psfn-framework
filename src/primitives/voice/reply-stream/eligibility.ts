@@ -6,8 +6,7 @@
 // existing final-only voice path (unchanged).
 //
 // The criteria structurally exclude every whole-reply withdrawal/replacement
-// gate so that a committed segment can never be withdrawn (Law 18); see the
-// safety proof in working_docs/briefs/mmo9.8-plan.txt §3.
+// gate so that a committed segment can never be withdrawn (Law 18).
 
 import type { EligibilityCriterion, EligibilityResult, TurnPreparation } from './types.js';
 

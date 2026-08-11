@@ -9,7 +9,7 @@ const CANDIDATE_ROW = {
   candidate_id: '11111111-1111-4111-8111-111111111111',
   root_initiation_id: '33333333-3333-4333-8333-333333333333',
   local_companion_id: A,
-  peer_contact_id: 'contact-artemis',
+  peer_contact_id: 'contact-fixture-companion',
   peer_companion_id: B,
   preferred_channel: 'dm',
   source: 'weighted_thought',

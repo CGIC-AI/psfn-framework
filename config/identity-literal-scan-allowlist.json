@@ -55,12 +55,6 @@
       "pattern": "identity-legacy-slug"
     },
     {
-      "path": "src/boundary/gateway/fleet-sso-router.ts",
-      "contains": "x-psfn-jit-grant",
-      "reason": "The unified-origin proxy consumes this opaque single-use fleet JIT grant header and never forwards it to companion workloads.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
       "path": "src/boundary/gateway/fleet-login-landing.ts",
       "contains": "PSFN",
       "reason": "The fleet login landing intentionally presents the framework product brand and does not define a companion identity or persona default.",
@@ -95,30 +89,6 @@
       "contains": "x-psfn-",
       "reason": "Internal request-capability headers use the established project protocol namespace and are stripped at browser-facing listeners.",
       "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "admin-ui/src/app.css",
-      "contains": "PSFN's Garden",
-      "reason": "Legacy UI branding pending follow-up customization epic.",
-      "pattern": "identity-proper-name"
-    },
-    {
-      "path": "admin-ui/src/app.html",
-      "contains": "PSFN's Garden",
-      "reason": "Legacy UI branding pending follow-up customization epic.",
-      "pattern": "identity-proper-name"
-    },
-    {
-      "path": "admin-ui/src/lib/api/endpoints/enrollment.ts",
-      "contains": "PSFN-00yo.1",
-      "reason": "Implementation comment cites the bead that owns canonical admin-view type reuse.",
-      "pattern": "identity-proper-name"
-    },
-    {
-      "path": "admin-ui/src/lib/api/endpoints/places.ts",
-      "contains": "PSFN-00yo.1",
-      "reason": "Implementation comment cites the bead that owns canonical admin-view type reuse.",
-      "pattern": "identity-proper-name"
     },
     {
       "path": "admin-ui/src/lib/companion-name.ts",
@@ -163,22 +133,10 @@
       "pattern": "identity-legacy-slug"
     },
     {
-      "path": "admin-ui/src/routes/model-room/+page.svelte",
-      "contains": "psfn:model-room:",
-      "reason": "Model Room localStorage keys keep the project namespace to preserve operator browser state.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
       "path": "admin-ui/src/routes/primer/+page.svelte",
       "contains": "github.com/CGIC-AI/psfn-framework/blob/main/docs/",
       "reason": "Operator Guide links use the canonical project repository path for maintained documentation; this project identifier is not a companion identity default.",
       "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "scripts/check-dependency-cycles.mjs",
-      "contains": "PSFN-",
-      "reason": "Project bead IDs use the PSFN prefix in remediation guidance.",
-      "pattern": "identity-proper-name"
     },
     {
       "path": "scripts/import-discord-export-l0.ts",
@@ -193,109 +151,6 @@
       "pattern": "identity-legacy-slug"
     },
     {
-      "path": "scripts/ops/continuity-watchdog-healthcheck.mjs",
-      "contains": "psfn",
-      "reason": "Watchdog state file uses the project slug in its filename.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "scripts/ops/continuity-watchdog-smoke.mjs",
-      "contains": "psfn",
-      "reason": "Watchdog smoke temp directories use the project slug in their prefix.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "scripts/public-sanitize-check.mjs",
-      "contains": "psfn",
-      "reason": "Public sanitization rejects deployment fingerprints that use the project slug; these patterns are infrastructure hygiene rules, not companion identity defaults.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "scripts/verify-postgres-only.mjs",
-      "contains": "deploy/helm/psfn/README.md",
-      "reason": "The Postgres-only repository gate scans the project-owned Helm README for retired backend claims.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "scripts/verify-postgres-only.mjs",
-      "contains": "scripts/recovery/psfn-ext4-recovery.sh",
-      "reason": "The Postgres-only repository gate classifies the project-owned recovery script's legacy artifact signature.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "scripts/verify-agent-docker-isolation.mjs",
-      "contains": "psfn",
-      "reason": "Docker isolation verification references project-owned service and network names.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "scripts/verify-helm-charge-skills-owner-upgrade-k3d.mjs",
-      "contains": "psfn",
-      "reason": "The real k3d owner-upgrade proof uses project-scoped chart, cluster, release, image, and container names; these are infrastructure identifiers rather than companion identity defaults.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "scripts/verify-helm-chart.mjs",
-      "contains": "PSFN",
-      "reason": "Helm chart verification asserts PSFN-specific Kubernetes environment contracts.",
-      "pattern": "identity-proper-name"
-    },
-    {
-      "path": "scripts/verify-helm-chart.mjs",
-      "contains": "psfn",
-      "reason": "Helm chart verification asserts project-owned Kubernetes resource names and labels.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "scripts/verify-helm-owner-file-registry.ts",
-      "contains": "deploy/helm/psfn/templates/_helpers.tpl",
-      "reason": "Owner-file registry verification must address the repository's checked-in Helm chart path; renaming it would be a chart relocation, not identity-default cleanup.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "scripts/verify-helm-owner-file-registry.ts",
-      "contains": "psfn\\.perCompanionOwnerFilePattern",
-      "reason": "Owner-file registry verification must match the established project-scoped Helm helper identifier used by the checked-in chart.",
-      "pattern": "identity-legacy-slug"
-    },
-
-    {
-      "path": "scripts/verify-kube-ship-chart-provenance.mjs",
-      "contains": "PSFN",
-      "reason": "Kubernetes ship verification uses project-specific Git fixture metadata.",
-      "pattern": "identity-proper-name"
-    },
-    {
-      "path": "scripts/verify-kube-ship-chart-provenance.mjs",
-      "contains": "psfn",
-      "reason": "Kubernetes ship verification exercises the project-owned Helm chart path and temporary Git fixture.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "scripts/ci/run-trivy-scan.mjs",
-      "contains": "psfn",
-      "reason": "The Trivy wrapper renders and scans the repository-owned PSFN Helm chart, whose checked-in chart path and generated output identifiers use the stable project slug.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "scripts/verify-kubernetes-helm-recovery-chart.ts",
-      "contains": "deploy/helm/psfn",
-      "reason": "Recovery-chart verification targets the repo-owned Helm chart directory.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "scripts/verify-kubernetes-helm-recovery-chart.ts",
-      "contains": "resolve('deploy/helm/psfn')",
-      "reason": "The verifier must address the repository's existing Helm chart directory by its checked-in path.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "src/app/agent/core-runtime.ts",
-      "contains": "psfn-framework-htm9.10",
-      "reason": "Implementation comment cites the bead that owns explicit web-backend selection.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
       "path": "src/app/agent/main.ts",
       "contains": "PSFN contact approval required",
       "reason": "Pending contact approval notifications use project-branded operator titles.",
@@ -305,12 +160,6 @@
       "path": "src/app/agent/main.ts",
       "contains": "psfn-framework-mdxu",
       "reason": "Implementation comment cites the bead that owns outbound reply dedupe behavior.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "src/app/agent/main.ts",
-      "contains": "psfn-framework-s10rm",
-      "reason": "Implementation comment cites the bead that owns presence-windowed private-room delivery.",
       "pattern": "identity-legacy-slug"
     },
     {
@@ -329,12 +178,6 @@
       "path": "src/app/cert-manager/config.ts",
       "contains": "DEFAULT_CA_COMMON_NAME = 'PSFN Private CA'",
       "reason": "Private PKI uses an installation-level project CA common name, not a companion identity.",
-      "pattern": "identity-proper-name"
-    },
-    {
-      "path": "src/app/cert-manager/pki.ts",
-      "contains": "PSFN private CA sidecar",
-      "reason": "PKI module documentation names the project-level private CA sidecar.",
       "pattern": "identity-proper-name"
     },
     {
@@ -374,12 +217,6 @@
       "pattern": "identity-legacy-slug"
     },
     {
-      "path": "src/app/gateway/api-surface.ts",
-      "contains": "X-PSFN-Client-Cert-",
-      "reason": "Gateway sanitization names the stable project-scoped client-certificate header protocol.",
-      "pattern": "identity-proper-name"
-    },
-    {
       "path": "src/app/maintenance/backfill-memory-provenance.ts",
       "contains": "psfn-framework-27ut",
       "reason": "Maintenance CLI comment cites the bead that owns memory provenance backfill.",
@@ -392,51 +229,9 @@
       "pattern": "identity-legacy-slug"
     },
     {
-      "path": "src/app/maintenance/import-wiki.ts",
-      "contains": "psfn-framework-vinz.27",
-      "reason": "Maintenance CLI comment cites the bead that owns bulk wiki import.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "src/app/maintenance/publish-places-wiki.ts",
-      "contains": "psfn-framework-vinz.4",
-      "reason": "Maintenance CLI comment cites the bead that owns places-to-world-wiki publication.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "src/app/startup/composition/channel-runtime.ts",
-      "contains": "PSFN",
-      "reason": "Startup channel wiring includes the PSFN Amica channel label.",
-      "pattern": "identity-proper-name"
-    },
-    {
-      "path": "src/app/startup/composition/channel-runtime.ts",
-      "contains": "psfn-amica",
-      "reason": "Startup channel wiring preserves the psfn-amica external channel type.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "src/app/startup/support/operator-alerts.ts",
-      "contains": "PSFN",
-      "reason": "Operator alerts use the configured default companion name placeholder.",
-      "pattern": "identity-proper-name"
-    },
-    {
       "path": "src/boundary/gateway/bootstrap-input.ts",
       "contains": "/run/psfn/gateway.sock",
       "reason": "Gateway bootstrap keeps the project-owned default socket path.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "src/boundary/gateway/bootstrap-input.ts",
-      "contains": "psfn-framework-htm9.10",
-      "reason": "Implementation comment cites the bead that owns explicit web-backend selection.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "src/boundary/gateway/client.ts",
-      "contains": "psfn-rpc-v1",
-      "reason": "Gateway client preserves the project-scoped RPC websocket subprotocol.",
       "pattern": "identity-legacy-slug"
     },
     {
@@ -458,45 +253,15 @@
       "pattern": "identity-legacy-slug"
     },
     {
-      "path": "src/boundary/gateway/methods/openrouter-web.ts",
-      "contains": "psfn-framework-htm9.10",
-      "reason": "Implementation comment cites the bead that owns the OpenRouter web backend.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "src/boundary/gateway/methods/web.ts",
-      "contains": "psfn-framework-htm9.10",
-      "reason": "Implementation comments cite the bead that owns explicit web-backend selection.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "src/boundary/gateway/methods/web.ts",
-      "contains": "psfn-framework-htm9.2",
-      "reason": "Implementation comment cites the bead that owns cognition-intake wrapping for web results.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
       "path": "src/boundary/gateway/ntfy-notifier.ts",
       "contains": "PSFN",
       "reason": "Approval notifications use project-branded operator titles.",
       "pattern": "identity-proper-name"
     },
     {
-      "path": "src/boundary/gateway/policy.ts",
-      "contains": "psfn-framework-htm9.10",
-      "reason": "Policy documentation cites the bead that owns explicit web-backend selection.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
       "path": "src/boundary/gateway/postgres-audit.ts",
       "contains": "applicationName: options.applicationName ?? 'psfn-gateway-audit'",
       "reason": "Gateway audit persistence uses a project-scoped PostgreSQL application_name label.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "src/boundary/gateway/server.ts",
-      "contains": "psfn-framework-s10rm",
-      "reason": "Implementation comments cite the bead that owns presence-windowed private-room delivery.",
       "pattern": "identity-legacy-slug"
     },
     {
@@ -524,93 +289,9 @@
       "pattern": "identity-proper-name"
     },
     {
-      "path": "src/boundary/integrations/git/runtime-wiring.ts",
-      "contains": "psfn img2 audit",
-      "reason": "Audit comment identifies the project image-tool review that classified this boundary surface.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "src/boundary/integrations/git/tools.ts",
-      "contains": "legacy psfn/ is still allowed",
-      "reason": "Intentional note describing temporary legacy skills path.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "src/boundary/integrations/shell/runtime-wiring.ts",
-      "contains": "psfn img2 audit",
-      "reason": "Audit comment identifies the project image-tool review that classified this boundary surface.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "src/boundary/integrations/web/ops.ts",
-      "contains": "psfn-framework-htm9.10",
-      "reason": "Contract comment cites the bead that owns the gateway web backend.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "src/boundary/integrations/web/runtime-wiring.ts",
-      "contains": "psfn-framework-htm9.10",
-      "reason": "Runtime-wiring comment cites the bead that owns explicit web-backend selection.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "src/boundary/integrations/web/tools.ts",
-      "contains": "psfn-framework-htm9.10",
-      "reason": "Tool documentation cites the bead that owns explicit web-backend selection.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "src/boundary/integrations/world/tools.ts",
-      "contains": "See bead psfn-framework-vinz.10",
-      "reason": "Beads issue-ID reference in a code comment (Sprint 10 world tool follow-up).",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "src/boundary/pi-agent/agent-loop-patch.ts",
-      "contains": "PSFN extension: index into messages",
-      "reason": "Boundary-adapter documentation names the project extension carried beside the upstream agent API.",
-      "pattern": "identity-proper-name"
-    },
-    {
-      "path": "src/boundary/pi-agent/agent-loop-patch.ts",
-      "contains": "for PSFN's scheduled loop",
-      "reason": "Boundary-adapter documentation names the project-specific scheduled-loop extension to the upstream agent API.",
-      "pattern": "identity-proper-name"
-    },
-    {
       "path": "src/boundary/pi-agent/agent-loop-patch.ts",
       "contains": "psfn-framework-ay73",
       "reason": "Implementation comment cites the bead that owns internal follow-up reply handling.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "src/boundary/pi-agent/substrate-agent-tool.ts",
-      "contains": "PSFN's tool-call scheduler",
-      "reason": "Boundary-adapter documentation distinguishes the project scheduler from the upstream tool type.",
-      "pattern": "identity-proper-name"
-    },
-    {
-      "path": "src/channels/admin/templates/layout.ts",
-      "contains": "PSFN's Garden",
-      "reason": "Legacy admin template branding pending neutral terminology migration.",
-      "pattern": "identity-proper-name"
-    },
-    {
-      "path": "src/channels/api/agent-backend.ts",
-      "contains": "PSFN Amica claims require a canonical contact mapping",
-      "reason": "Agent backend errors intentionally name PSFN Amica claim requirements.",
-      "pattern": "identity-proper-name"
-    },
-    {
-      "path": "src/channels/api/agent-backend.ts",
-      "contains": "PSFN Amica claims require a configured channel privacy level",
-      "reason": "Agent backend errors intentionally name PSFN Amica claim requirements.",
-      "pattern": "identity-proper-name"
-    },
-    {
-      "path": "src/channels/api/agent-backend.ts",
-      "contains": "if (channelType === 'psfn-amica') {",
-      "reason": "Agent backend preserves the psfn-amica external channel type.",
       "pattern": "identity-legacy-slug"
     },
     {
@@ -699,12 +380,6 @@
     },
     {
       "path": "src/channels/backplane/http/client-cert.ts",
-      "contains": "Every PSFN listener",
-      "reason": "Security contract applies stripping to every listener in the project runtime, not to a companion identity.",
-      "pattern": "identity-proper-name"
-    },
-    {
-      "path": "src/channels/backplane/http/client-cert.ts",
       "contains": "TRUSTED_PROXY_TOKEN_HEADER = 'x-psfn-trusted-proxy-token'",
       "reason": "The trusted-proxy protocol requires the deployed proxy-token header name exactly.",
       "pattern": "identity-legacy-slug"
@@ -729,7 +404,7 @@
     },
     {
       "path": "src/channels/backplane/places-mermaid.ts",
-      "contains": "%% PSFN world map \u2014 sites, places, affordances, and bound satellites.",
+      "contains": "%% PSFN world map — sites, places, affordances, and bound satellites.",
       "reason": "The generated operator-facing Mermaid artifact retains its explicit product title.",
       "pattern": "identity-proper-name"
     },
@@ -738,12 +413,6 @@
       "contains": "PSFN world map",
       "reason": "Generated Mermaid provenance labels the project-owned world-map format, not the companion persona.",
       "pattern": "identity-proper-name"
-    },
-    {
-      "path": "src/channels/backplane/places-registry.ts",
-      "contains": "psfn-framework-s10rm",
-      "reason": "Contract comment cites the bead that owns room privacy classification.",
-      "pattern": "identity-legacy-slug"
     },
     {
       "path": "src/channels/backplane/satellite-registry.ts",
@@ -755,18 +424,6 @@
       "path": "src/channels/backplane/satellite-registry.ts",
       "contains": "x-psfn-",
       "reason": "Satellite registry preserves PSFN-scoped transport header names as part of the external protocol.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "src/core/agent/companion-presence-store-port.ts",
-      "contains": "psfn-framework-s10rm",
-      "reason": "Port comments cite the bead that owns presence-window clock semantics.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "src/core/agent/companion-room-window.ts",
-      "contains": "psfn-framework-s10rm",
-      "reason": "Module comment cites the bead that owns presence-windowed private-room delivery.",
       "pattern": "identity-legacy-slug"
     },
     {
@@ -788,33 +445,9 @@
       "pattern": "identity-legacy-slug"
     },
     {
-      "path": "src/core/agent/substrate-agent/tool-runtime-facade.ts",
-      "contains": "psfn img2 audit",
-      "reason": "Audit comment identifies the project review that classified maintenance-restricted tool loading.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
       "path": "src/core/agent/substrate-agent/turn-execution-runtime.ts",
       "contains": "psfn-framework-ay73",
       "reason": "Runtime comment cites the bead that owns internal follow-up reply handling.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "src/core/agent/tool-surface/registry.ts",
-      "contains": "psfn img2 audit",
-      "reason": "Audit comment identifies the project review that fixed first-party tool preference.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "src/core/cogsec/intake-firewall-notice-templates.ts",
-      "contains": "psfn-framework-htm9.12",
-      "reason": "Notice-template contract cites the bead that owns fixed companion-facing wording.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "src/core/contacts/postgres-adapter.ts",
-      "contains": "application_name: options.applicationName ?? 'psfn-contacts'",
-      "reason": "Contacts persistence uses a project-scoped PostgreSQL application_name label.",
       "pattern": "identity-legacy-slug"
     },
     {
@@ -830,21 +463,9 @@
       "pattern": "identity-legacy-slug"
     },
     {
-      "path": "src/core/contacts/postgres-adapter/factory.ts",
-      "contains": "application_name: options.applicationName ?? 'psfn-contacts'",
-      "reason": "Contacts persistence uses a project-scoped PostgreSQL application_name label.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
       "path": "src/core/emotion/acac.ts",
       "contains": "https://psfn.local/emotion/acac-self-report.schema.json",
       "reason": "ACAC self-report JSON Schema uses a stable project-scoped local schema ID.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "src/core/emotion/acac.ts",
-      "contains": "psfn.acac_self_report",
-      "reason": "ACAC self-report artifacts use a stable project-scoped schema namespace.",
       "pattern": "identity-legacy-slug"
     },
     {
@@ -891,12 +512,6 @@
     },
     {
       "path": "src/core/eval/observer-sidecar/emosim-adapter.ts",
-      "contains": "psfn.observer-sidecar.emosim-adapter.v1",
-      "reason": "Observer sidecar adapter version uses a stable project-scoped schema namespace.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "src/core/eval/observer-sidecar/emosim-adapter.ts",
       "contains": "psfn.observer-sidecar.emosim-adapter.v2",
       "reason": "Observer sidecar adapter version uses a stable project-scoped schema namespace.",
       "pattern": "identity-legacy-slug"
@@ -927,26 +542,8 @@
     },
     {
       "path": "src/core/eval/observer-sidecar/projection.ts",
-      "contains": "psfn.observer-sidecar.appraisal-projection.v1",
-      "reason": "Observer sidecar projection version uses a stable project-scoped schema namespace.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "src/core/eval/observer-sidecar/projection.ts",
-      "contains": "psfn.observer-sidecar.appraisal-projection.v2",
-      "reason": "Observer sidecar projection version uses a stable project-scoped schema namespace.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "src/core/eval/observer-sidecar/projection.ts",
       "contains": "psfn.observer-sidecar.appraisal-projection.v3",
       "reason": "Observer sidecar projection v3 retains the project-scoped telemetry protocol namespace; it is not a companion identity default.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "src/core/intention/appraisal.ts",
-      "contains": "psfn-amica",
-      "reason": "Intention appraisal logic recognizes the psfn-amica channel type.",
       "pattern": "identity-legacy-slug"
     },
     {
@@ -956,45 +553,9 @@
       "pattern": "identity-legacy-slug"
     },
     {
-      "path": "src/core/intention/pending-follow-ups.ts",
-      "contains": "psfn-amica",
-      "reason": "Pending follow-up persistence preserves the psfn-amica channel type.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "src/core/intention/postgres-adapters.ts",
-      "contains": "applicationName: options.applicationName ?? 'psfn-intention'",
-      "reason": "Intention persistence uses a project-scoped PostgreSQL application_name label.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "src/core/intention/postgres-adapters.ts",
-      "contains": "const CHANNEL_TYPES = ['terminal', 'api', 'discord', 'telegram', 'psfn-amica'] as const;",
-      "reason": "Intention persistence preserves the psfn-amica external channel type.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "src/core/intention/postgres-adapters.ts",
-      "contains": "function normalizeChannelType(value: string): 'terminal' | 'api' | 'discord' | 'telegram' | 'psfn-amica' {",
-      "reason": "Intention persistence preserves the psfn-amica external channel type.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "src/core/intention/postgres-adapters.ts",
-      "contains": "return value as 'terminal' | 'api' | 'discord' | 'telegram' | 'psfn-amica';",
-      "reason": "Intention persistence preserves the psfn-amica external channel type.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
       "path": "src/core/intention/postgres-adapters/connection.ts",
       "contains": "applicationName: options.applicationName ?? 'psfn-intention'",
       "reason": "Intention persistence uses a project-scoped PostgreSQL application_name label.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "src/core/scheduler/post-turn-runtime.ts",
-      "contains": "psfn-framework-mdxu",
-      "reason": "Scheduler comment cites the bead that owns post-turn continuation delivery.",
       "pattern": "identity-legacy-slug"
     },
     {
@@ -1004,51 +565,9 @@
       "pattern": "identity-legacy-slug"
     },
     {
-      "path": "src/core/scheduler/schedule-tool.ts",
-      "contains": "Type.Literal('psfn-amica')",
-      "reason": "Scheduler follow-up tooling preserves the psfn-amica external channel type.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "src/core/scheduler/schedule-tool.ts",
-      "contains": "case 'psfn-amica':",
-      "reason": "Scheduler follow-up tooling preserves the psfn-amica external channel type.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
       "path": "src/core/self-model/state.ts",
       "contains": "psfn-amica",
       "reason": "Self-model state normalization preserves the psfn-amica channel type.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "src/core/session/context-manifest.ts",
-      "contains": "psfn-framework-s10rm",
-      "reason": "Context-manifest contract cites the bead that owns presence-window timestamps.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "src/core/session/manager.ts",
-      "contains": "psfn-framework-s10rm",
-      "reason": "Session-manager comments cite the bead that owns presence-windowed room content.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "src/core/session/manager/context-builder.ts",
-      "contains": "psfn-framework-s10rm",
-      "reason": "Context-builder comments cite the bead that owns presence-windowed room content.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "src/core/session/room-content-window.ts",
-      "contains": "psfn-framework-s10rm",
-      "reason": "Module comment cites the bead that owns presence-windowed room content.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "src/core/session/room-entry-note.ts",
-      "contains": "psfn-framework-s10rm",
-      "reason": "Privacy-invariant comment cites the bead that owns presence-windowed delivery.",
       "pattern": "identity-legacy-slug"
     },
     {
@@ -1056,12 +575,6 @@
       "contains": "PSFN Runtime Image",
       "reason": "Self-diagnosis names the runtime image committer identity used in snapshot metadata.",
       "pattern": "identity-proper-name"
-    },
-    {
-      "path": "src/core/turns/snapshot.ts",
-      "contains": "psfn-framework-s10rm",
-      "reason": "Turn-snapshot contract cites the bead that owns presence-window timestamps.",
-      "pattern": "identity-legacy-slug"
     },
     {
       "path": "src/faculties/context-feedback/runtime.ts",
@@ -1082,18 +595,6 @@
       "pattern": "identity-legacy-slug"
     },
     {
-      "path": "src/faculties/memory/extraction.ts",
-      "contains": "psfn-framework-xcw8",
-      "reason": "Memory extraction comment cites the bead that owns awaited extraction behavior.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "src/faculties/memory/extraction/location-tags.ts",
-      "contains": "psfn-framework-vinz.16",
-      "reason": "Module comment cites the bead that owns memory location tagging.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
       "path": "src/faculties/memory/extraction/mention-only-contacts.ts",
       "contains": "psfn-framework-kada.1",
       "reason": "Mention-only contact extraction comments cite the bead that owns relationship progression.",
@@ -1103,12 +604,6 @@
       "path": "src/faculties/memory/extraction/orchestrator.ts",
       "contains": "psfn-framework-2tmg",
       "reason": "Extraction orchestrator comment cites the bead that owns deterministic contact qualification.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "src/faculties/memory/extraction/runtime-helpers.ts",
-      "contains": "psfn-framework-xcw8",
-      "reason": "Extraction runtime helper comment cites the bead that owns awaited extraction behavior.",
       "pattern": "identity-legacy-slug"
     },
     {
@@ -1140,12 +635,6 @@
       "contains": "applicationName: 'psfn-shared-wiki-projection'",
       "reason": "Shared-world wiki projection uses a project-scoped PostgreSQL application_name label.",
       "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "src/identity/loader.ts",
-      "contains": "LEGACY_BOOTSTRAP_NAME = 'PSFN'",
-      "reason": "Legacy bootstrap identity migration marker.",
-      "pattern": "identity-proper-name"
     },
     {
       "path": "src/operator/garden/services/settings-service.ts",
@@ -1191,12 +680,6 @@
     },
     {
       "path": "src/persistence/backups/service.ts",
-      "contains": "psfn-backup-restore-",
-      "reason": "Backup restore scratch directories use the project slug in their prefix.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "src/persistence/backups/service.ts",
       "contains": "psfn-backup-stage-",
       "reason": "Backup encryption staging uses an established project-scoped temp directory prefix.",
       "pattern": "identity-legacy-slug"
@@ -1223,12 +706,6 @@
       "path": "src/persistence/postgres/companion-presence-store.ts",
       "contains": "applicationName: 'psfn-companion-presence'",
       "reason": "Companion presence persistence uses a project-scoped PostgreSQL application_name label.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "src/persistence/postgres/companion-presence-store.ts",
-      "contains": "psfn-framework-s10rm",
-      "reason": "Store comment cites the bead that owns presence-window arrival semantics.",
       "pattern": "identity-legacy-slug"
     },
     {
@@ -1271,18 +748,6 @@
       "path": "src/persistence/postgres/model-usage-store/store.ts",
       "contains": "applicationName: 'psfn-model-usage'",
       "reason": "Model-usage persistence uses a project-scoped PostgreSQL application_name label.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "src/persistence/postgres/parity-matrix.ts",
-      "contains": "psfn-framework-3c2.4",
-      "reason": "Postgres parity matrix references a project bead ID in migration evidence.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "src/persistence/postgres/parity-matrix.ts",
-      "contains": "scripts/system/install-psfn-service.sh",
-      "reason": "Postgres parity matrix references the existing repo-owned service installer path.",
       "pattern": "identity-legacy-slug"
     },
     {
@@ -1358,36 +823,6 @@
       "pattern": "identity-legacy-slug"
     },
     {
-      "path": "src/shared/contracts/companion-relay.ts",
-      "contains": "PSFN pushes REDACTED operational events",
-      "reason": "Relay contract names the project-side producer in the cross-repository Satellite Hub protocol.",
-      "pattern": "identity-proper-name"
-    },
-    {
-      "path": "src/shared/contracts/companion-relay.ts",
-      "contains": "psfn-framework-w9hj.1",
-      "reason": "Relay contract comment cites the bead that owns the companion event protocol.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "src/shared/contracts/places-registry.ts",
-      "contains": "psfn-framework-s10rm",
-      "reason": "Places contract comments cite the bead that owns room privacy and presence-windowing.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "src/shared/contracts/runtime.ts",
-      "contains": "psfn-amica",
-      "reason": "Runtime contracts preserve the psfn-amica channel/source enum values.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "src/shared/contracts/runtime.ts",
-      "contains": "psfn-emosim",
-      "reason": "Runtime config docs use the deployment service-name example for EmoSim.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
       "path": "src/shared/contracts/satellite-registry.ts",
       "contains": "X-PSFN-Client-Cert-",
       "reason": "Satellite trust-mode contract names the stable project-scoped client-certificate header protocol.",
@@ -1418,21 +853,9 @@
       "pattern": "identity-proper-name"
     },
     {
-      "path": "src/system/config/providers-config.ts",
-      "contains": "psfn-framework-htm9.10",
-      "reason": "Provider contract comment cites the bead that owns explicit web-backend selection.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
       "path": "src/system/config/runtime-config-contracts.ts",
       "contains": "psfn-companion",
       "reason": "Runtime config defaults preserve the observer eval sidecar agent label.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "src/system/config/runtime-config-contracts.ts",
-      "contains": "psfn-framework-htm9.10",
-      "reason": "Runtime-config contract comment cites the bead that owns explicit web-backend selection.",
       "pattern": "identity-legacy-slug"
     },
     {
@@ -1622,12 +1045,6 @@
       "pattern": "identity-legacy-slug"
     },
     {
-      "path": "src/persistence/sessions/store.ts",
-      "contains": "psfn-framework-hgw3.5",
-      "reason": "Session-store comments cite the bead that owns the shared tail cache.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
       "path": "src/shared/utils/history-stamp-hygiene.ts",
       "contains": "psfn-framework-2x37.10",
       "reason": "Module heading cites the bead that owns history-stamp hygiene.",
@@ -1637,12 +1054,6 @@
       "path": "src/system/config/runtime-config-contracts.ts",
       "contains": "psfn-framework-hgw3.5",
       "reason": "Runtime-config comment cites the bead that owns the shared session-tail cache.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "src/system/config/scheduler-config.ts",
-      "contains": "psfn-framework-2x37.3",
-      "reason": "Scheduler-config comment cites the bead that owns active-channel wake fan-out.",
       "pattern": "identity-legacy-slug"
     },
     {
@@ -1892,18 +1303,6 @@
       "pattern": "identity-legacy-slug"
     },
     {
-      "path": "src/persistence/sessions/store.ts",
-      "contains": "psfn-framework-eb14",
-      "reason": "Session-store comments cite the bead that owns captured-wire redaction propagation.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "src/persistence/sessions/store.ts",
-      "contains": "psfn-framework-9ree",
-      "reason": "Session-store comment cites the bead that owns ref-backed session-window reconstruction.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
       "path": "src/persistence/sessions/turn-record-memory-refs.ts",
       "contains": "psfn-framework-jsi9",
       "reason": "Turn-record memory-reference contract cites the bead that owns retrieved-memory diet behavior.",
@@ -1991,18 +1390,6 @@
       "path": "src/primitives/voice/transports/websocket/types.ts",
       "contains": "psfn-framework-mmo9.8.3",
       "reason": "Voice websocket type contracts cite the bead that owns live assistant streaming.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "src/system/config/scheduler-config.ts",
-      "contains": "psfn-framework-b0yl.5",
-      "reason": "Scheduler-config contract cites the bead that owns tool-usage evaluator cadence and thresholds.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "scripts/verify-helm-charge-skills-owner-upgrade.mjs",
-      "contains": "psfn",
-      "reason": "The Helm charge/skills owner-upgrade proof uses project-scoped chart directory, release, namespace, image repository, and rendered Deployment names, plus project-scoped mkdtemp fixture prefixes; these are infrastructure identifiers rather than companion identity defaults.",
       "pattern": "identity-legacy-slug"
     },
     {
@@ -2144,12 +1531,6 @@
       "pattern": "identity-legacy-slug"
     },
     {
-      "path": "src/persistence/postgres/fleet-auth/gateway-persistence.ts",
-      "contains": "rpName: 'PSFN Fleet'",
-      "reason": "The WebAuthn relying-party name is the established fleet application label, not a companion identity default.",
-      "pattern": "identity-proper-name"
-    },
-    {
       "path": "src/persistence/postgres/fleet-auth/hub-device-assertion-replay-sql.ts",
       "contains": "psfn-framework-5wrp",
       "reason": "Replay-ledger SQL documentation cites the bead that owns keyed audit digests.",
@@ -2237,18 +1618,6 @@
       "path": "src/system/capabilities/shard-derivation.ts",
       "contains": "psfn.capability-owner.v1",
       "reason": "Capability owner versions use a stable project-scoped protocol label.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "admin-ui/src/routes/+layout.svelte",
-      "contains": "X-PSFN-CSRF",
-      "reason": "The admin layout sends the stable project-scoped fleet CSRF request header.",
-      "pattern": "identity-proper-name"
-    },
-    {
-      "path": "scripts/shakedown-support-fixtures/postgres.ts",
-      "contains": "psfn-shakedown-support-fixtures",
-      "reason": "Shakedown support persistence uses a project-scoped PostgreSQL application_name label.",
       "pattern": "identity-legacy-slug"
     },
     {
@@ -2342,12 +1711,6 @@
       "pattern": "identity-proper-name"
     },
     {
-      "path": "scripts/ci/local-delivery-contract.mjs",
-      "contains": "psfn-local-gate-heavy.lock",
-      "reason": "Machine-wide heavy-phase gate lock needs a stable project-scoped name under os.tmpdir() so independent worktrees serialize on the same lock.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
       "path": "scripts/prewarm-worktree.mjs",
       "contains": "psfn-worktree-prewarm-",
       "reason": "Disposable prewarm install fixtures use a project-scoped temp prefix so stray dirs are attributable and safely cleanable.",
@@ -2391,7 +1754,7 @@
     },
     {
       "path": "scripts/onboarding/flow.ts",
-      "contains": "PSFN onboarding \u2014 configure",
+      "contains": "PSFN onboarding — configure",
       "reason": "User-facing installer banner naming the product.",
       "pattern": "identity-proper-name"
     },
@@ -2406,12 +1769,6 @@
       "contains": "PSFN onboarding",
       "reason": "CLI help header naming the product.",
       "pattern": "identity-proper-name"
-    },
-    {
-      "path": "scripts/onboarding/modes.ts",
-      "contains": "deploy/helm/psfn",
-      "reason": "Kubernetes-mode help text citing the repository chart path verbatim.",
-      "pattern": "identity-legacy-slug"
     },
     {
       "path": "admin-ui/src/lib/api/fleet-escalation.ts",

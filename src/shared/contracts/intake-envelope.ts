@@ -126,8 +126,7 @@ export function maxIntakeSourceRiskTier(
  *   D_policy_security_modification → policy/security_modification
  *   E_executable_instruction    → execution/executable_instruction
  *
- * The remaining categories seed from the prior-art survey
- * (working_docs/COGSEC_INTAKE_FIREWALL_RESEARCH_20260709.md §7). Classifier
+ * The remaining categories are part of the closed intake taxonomy. Classifier
  * beads (htm9.4–.8) assign these labels; they must not invent labels outside
  * this closed list — grow the list in the contract instead so sink gates and
  * Garden always share one vocabulary.

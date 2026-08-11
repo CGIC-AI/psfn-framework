@@ -1323,7 +1323,7 @@ describe('Postgres contact store machine-intelligence flag', () => {
   });
 
   it('defaults to not-MI, sets and round-trips the flag with audit', async () => {
-    const contact = await store.resolveChannelIdentity('discord', 'artemis-001', 'Artemis');
+    const contact = await store.resolveChannelIdentity('discord', 'fixture-companion-001', 'Fixture Companion');
     expect(contact.isMachineIntelligence).toBeUndefined();
 
     expect(await store.setMachineIntelligence(contact.id, true, 'test')).toBe(true);

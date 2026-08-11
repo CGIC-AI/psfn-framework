@@ -14,14 +14,14 @@ import {
 
 const APPROVAL: FleetApprovalEntry = {
   companionId: '22222222-2222-4222-8222-222222222222',
-  companionDisplayName: 'Artie',
+  companionDisplayName: 'Fixture Companion',
   id: 'approval-1',
   title: 'Write file',
   redactedContext: 'Requested write',
   sourceSystem: 'tool-access',
   attribution: {
     parentId: '22222222-2222-4222-8222-222222222222',
-    parentLabel: 'Artie',
+    parentLabel: 'Fixture Companion',
   },
   action: 'write',
   scope: 'workspace',

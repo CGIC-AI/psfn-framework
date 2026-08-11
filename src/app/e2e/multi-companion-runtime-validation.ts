@@ -18,6 +18,7 @@ import type { CompanionId } from '../../shared/routing/companion-id.js';
 import {
   CERTIFICATION_COMPANION_A,
   CERTIFICATION_COMPANION_B,
+  CERTIFICATION_COMPANION_C,
   CERTIFICATION_DM_CHANNEL,
   CERTIFICATION_PRIVATE_ROOM,
   CERTIFICATION_SCHEMA_A,
@@ -787,12 +788,12 @@ async function main(): Promise<Record<string, unknown>> {
     const supportFixturePaths = [
       fixture.companions[1].companionDataDir,
       fixture.companions[1].workspacePath,
-      join(fixture.runtimeRoot, 'support-companions', 'lumen', 'data'),
+      join(fixture.runtimeRoot, 'companions', 'gamma', 'data'),
       join(
         fixture.runtimeRoot,
         'workspaces',
         'personal',
-        'c7100000-0000-4000-8000-000000000003',
+        CERTIFICATION_COMPANION_C,
       ),
     ];
 
@@ -822,7 +823,7 @@ async function main(): Promise<Record<string, unknown>> {
       revision,
       coverageCaseIds: MULTI_COMPANION_COVERAGE_CASE_IDS,
       topology: {
-        fixtureContract: 'shakedown/support/companions.template.json',
+        fixtureContract: 'synthetic_icp_certification',
         gatewayCount: 1,
         gatewayProcessId: process.pid,
         gatewayTransport: 'unix',

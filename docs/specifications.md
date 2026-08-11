@@ -24,7 +24,8 @@ Last updated: 2026-08-07.
 
 - The canonical operational mode is split gateway + agent.
 - `src/app/startup/index.ts` is disabled and exits fail-closed.
-- `npm run split` and `npm run yolo` are the intended launchers for day-to-day runtime use.
+- `npm run gateway`, `npm run agent`, and `npm run operator` are the supported
+  component entrypoints.
 
 ### Cluster human and operator surfaces
 
@@ -200,8 +201,7 @@ Supported until beta:
   remove the migration-only `contact_profiles` rename branch before beta.
   Validate the boundary with migration SQL assertions, source-rebuild and
   atomic-projection tests, Postgres adapter/parity checks, and the restore
-  verifier (design: `working_docs/cross-channel-biographical-continuity-design.md`,
-  delivery tickets o61vb.3 through o61vb.10).
+  verifier and the delivery tickets o61vb.3 through o61vb.10.
 - Forward-schema rollback bridges for the live-alpha Postgres memory and model
   usage tables. `l2_memories.salience_decay_anchor_at` retains a current-time
   default so an image from before the anchor column can insert a new live

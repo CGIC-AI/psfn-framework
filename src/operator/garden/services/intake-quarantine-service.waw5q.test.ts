@@ -138,7 +138,7 @@ describe('admin intake quarantine read service (waw5q)', () => {
         quarantineMaxHeldItems: 500,
       }),
       attributionResolvers: {
-        contactDisplayName: contactId => (contactId === 'contact-allowed' ? 'Ada' : undefined),
+        contactDisplayName: contactId => (contactId === 'contact-allowed' ? 'Example Person' : undefined),
       },
     });
     const { items } = service.listItems();
@@ -181,7 +181,7 @@ describe('admin intake quarantine read service (waw5q)', () => {
       store,
       now: () => NOW,
       attributionResolvers: {
-        contactDisplayName: contactId => (contactId === 'contact-allowed' ? 'Ada' : undefined),
+        contactDisplayName: contactId => (contactId === 'contact-allowed' ? 'Example Person' : undefined),
       },
     });
     const { items } = service.listItems();

@@ -921,7 +921,7 @@ describe('ICP autonomy Postgres persistence', () => {
         candidateId: CANDIDATE_ID,
         rootInitiationId: ROOT_ID,
         localCompanionId: A,
-        peerContactId: 'contact-artemis',
+        peerContactId: 'contact-fixture-companion',
         peerCompanionId: B,
         preferredChannel: 'dm',
         source: 'weighted_thought',

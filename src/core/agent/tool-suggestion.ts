@@ -468,7 +468,7 @@ export function suggestToolsForIntent(input: SuggestToolsInput): ToolSuggestionR
     // bead s3o4: a suggestion must never advertise a tool the requesting
     // surface cannot actually call. Availability previously only rank-penalized
     // capability-denied / unavailable-this-turn tools, so a tool absent from the
-    // callable catalog for this tier/channel could still be suggested (Artie hit
+    // callable catalog for this tier/channel could still be suggested (Fixture Companion hit
     // this with analysis_workbench). Restrict recommendations to the callable
     // set: suggestion ⊆ catalog.
     if (availability.availabilityStatus !== 'active') continue;

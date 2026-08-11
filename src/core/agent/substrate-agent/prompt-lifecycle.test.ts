@@ -104,7 +104,7 @@ describe('prompt-lifecycle cacheability', () => {
       now_iso: '2026-04-04T10:30:00.000-04:00',
     }, staticPrefixTemplate);
     const stableIdentityChange = buildStaticPromptSettingsHash({
-      char_name: 'Artemis',
+      char_name: 'Fixture Companion',
       personality: 'Warm and precise.',
       user: 'Morgan',
       runtime_current_datetime_iso: '2026-04-04T10:00:00.000-04:00',

@@ -28,19 +28,19 @@ export const INSTALL_MODES: Record<InstallMode, InstallModeInfo> = {
   },
   local: {
     mode: 'local',
-    label: 'Local dev (split gateway + agent via npm run dev)',
-    hint: 'Runs the split runtime on the host from a shared ./data root.',
+    label: 'Local development (explicit component entrypoints)',
+    hint: 'Generates separate system and companion roots for host-side development.',
     defaultRoots: {
-      systemDataDir: './data',
-      companionDataDir: './data',
-      shared: true,
+      systemDataDir: './data/system-data',
+      companionDataDir: './data/companion-data',
+      shared: false,
     },
     capturesHostSecret: true,
   },
   kubernetes: {
     mode: 'kubernetes',
-    label: 'Kubernetes (validation + Helm pointers, for experienced operators)',
-    hint: 'Generates and validates owner files; secrets go in cluster Secrets, not a host .env.',
+    label: 'External orchestrator (owner-file generation only)',
+    hint: 'Generates and validates owner files without writing host deployment configuration.',
     defaultRoots: {
       systemDataDir: './data/system-data',
       companionDataDir: './data/companion-data',
@@ -73,21 +73,22 @@ export function modeGuidance(mode: InstallMode, provider: { apiKeyEnvName: strin
       return [
         'Local dev next steps:',
         `  1. Your provider key was written to .env as ${provider.apiKeyEnvName}.`,
-        '  2. Start the split gateway + agent runtime:',
+        '  2. Start the gateway, agent, and operator in separate terminals:',
         '',
-        '       npm run dev',
+        '       npm run gateway',
+        '       npm run agent',
+        '       npm run operator',
         '',
-        '  Owner files were written under ./data (shared system/companion root).',
+        '  Owner files were written under separate ./data roots.',
       ];
     case 'kubernetes':
       return [
-        'Kubernetes next steps (experienced operators):',
+        'External orchestrator next steps:',
         '  1. Owner files were generated and validated against the settings-contract',
-        '     guard. Load them onto the system-data PVC per the Helm chart.',
-        `  2. Provide provider/runtime secrets as cluster Secrets (key env: ${provider.apiKeyEnvName}).`,
+        '     guard. Import them through your private deployment configuration.',
+        `  2. Provide provider/runtime secrets through your orchestrator (key env: ${provider.apiKeyEnvName}).`,
         '     No host .env was written for this mode.',
-        '  3. See deploy/helm/psfn and docs/operations.md ("Live deployment authority")',
-        '     for the reference deployment shape and rollout/validation gates.',
+        '  3. See docs/operations.md for the public runtime integration contract.',
       ];
     default:
       return [];

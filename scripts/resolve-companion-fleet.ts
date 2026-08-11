@@ -1,6 +1,6 @@
 /**
  * Supervisor launcher helper: resolve the validated companion fleet and
- * emit a machine-parseable spawn plan for `scripts/start-gateway-agent.sh`.
+ * emit a machine-parseable spawn plan for an external process supervisor.
  *
  * The launcher sources `.env` into this process's environment before invoking
  * this helper, so — like `src/app/agent/main.ts` — this script does NOT import

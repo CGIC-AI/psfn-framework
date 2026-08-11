@@ -3910,7 +3910,7 @@ describe('SessionStore', () => {
       channelId: 'api:provider-index-a',
       role: 'assistant',
       content: 'Most recent session preview',
-      authorName: 'ARTEMIS',
+      authorName: 'FIXTURE COMPANION',
       timestamp: 2_000,
     });
     writer.append({
@@ -3931,7 +3931,7 @@ describe('SessionStore', () => {
     expect(sessions[0]).toMatchObject({
       lastActivityAt: 2_000,
       lastRole: 'assistant',
-      lastAuthorName: 'ARTEMIS',
+      lastAuthorName: 'FIXTURE COMPANION',
       lastMessagePreview: 'Most recent session preview',
     });
     expect(verify).not.toHaveBeenCalled();

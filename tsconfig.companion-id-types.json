@@ -8,6 +8,6 @@
     "noEmit": true,
     "noUncheckedIndexedAccess": false
   },
-  "include": ["type-tests/companion-id.type-test.ts"],
+  "include": ["tests/types/companion-id.type-test.ts"],
   "exclude": []
 }

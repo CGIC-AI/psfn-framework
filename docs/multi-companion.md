@@ -228,10 +228,10 @@ owned by the primary companion rather than becoming a second shared DML schema.
   instead of a reported error. Observing it does not swallow it: the promise is
   still awaited — and still throws — on every store operation.
 
-## Launcher: supervisor mode
+## Supervisor integration
 
-`scripts/start-gateway-agent.sh` is a cluster supervisor that reads the resolved
-cluster and spawns one agent process per companion.
+The public repository emits a validated cluster plan for an external supervisor
+to consume when it starts one agent process per companion.
 
 - Cluster plan: `npm run resolve:companion-fleet`
   (`scripts/resolve-companion-fleet.ts`) reuses `resolveCompanionFleet` and emits
@@ -241,7 +241,7 @@ cluster and spawns one agent process per companion.
   role-bound agent proof, role-bound session-integrity proof,
   resolved database credential, adminTransportSocket`. A one-entry roster emits
   one line and follows the same
-  supervisor path as a larger roster. The admin socket is derived from
+  execution path as a larger roster. The admin socket is derived from
   `resolveCompanionAdminTransportSocketPath`
   (`src/operator/garden/transport-paths.ts`), never by the shell.
 - Per-agent env: each spawned agent gets a scrubbed environment
@@ -450,8 +450,7 @@ replay disabled.
 ## Locations, presence, and the shared world
 
 Multi-companion layers on top of the single-companion locations/world surface
-(see [`docs/architecture.md`](./architecture.md) and the working design note
-`working_docs/SPRINT_10_LOCATIONS.md`). The multi-companion deltas:
+(see [`docs/architecture.md`](./architecture.md)). The multi-companion deltas:
 
 - **Co-presence.** `companion_presence` lives in the `shared` schema
   (`companionId → siteId/placeId`, `kind: physical | virtual`, `since`), written

@@ -16,7 +16,7 @@ describe('private ICP initiation candidate contract', () => {
     candidateId: '11111111-1111-4111-8111-111111111111',
     rootInitiationId: '33333333-3333-4333-8333-333333333333',
     localCompanionId: COMPANION_A,
-    peerContactId: 'contact-artemis',
+    peerContactId: 'contact-fixture-companion',
     peerCompanionId: COMPANION_B,
     preferredChannel: 'dm',
     source: 'weighted_thought',

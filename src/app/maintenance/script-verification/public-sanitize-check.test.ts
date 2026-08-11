@@ -13,15 +13,12 @@ function buildOpenAiLikeToken() {
 }
 
 describe('public-sanitize check', () => {
-  it('keeps source/docs in scope while excluding pre-rewrite machine-managed beads history logs', () => {
+  it('keeps text source and docs in scope', () => {
     expect(shouldScanTextContent('src/app/agent/main.ts')).toBe(true);
     expect(shouldScanTextContent('docs/README.md')).toBe(true);
     expect(shouldScanTextContent('.beads/README.md')).toBe(true);
-    expect(shouldScanTextContent('.beads/daemon.log')).toBe(false);
-    expect(shouldScanTextContent('.beads/issues.jsonl')).toBe(false);
-    expect(shouldScanTextContent('.beads/issues.jsonl', true)).toBe(true);
-    expect(shouldScanTextContent('.beads/beads.left.jsonl')).toBe(false);
-    expect(shouldScanTextContent('.beads/interactions.jsonl')).toBe(false);
+    expect(shouldScanTextContent('.beads/daemon.log')).toBe(true);
+    expect(shouldScanTextContent('.beads/issues.jsonl')).toBe(true);
     expect(shouldScanTextContent('docs/image.png')).toBe(false);
   });
 
@@ -143,14 +140,14 @@ describe('public-sanitize check', () => {
     );
 
     expect(result.violations.map((violation) => violation.rule).sort()).toEqual([
+      'local-only-repository-surface',
+      'local-only-repository-surface',
       'tracked-beads-runtime-log',
       'tracked-session-archive',
     ]);
   });
 
-  it('does not scan excluded beads history log content', () => {
-    const tokenValue = buildOpenAiLikeToken();
-    const reads: string[] = [];
+  it('rejects every tracked Beads file as a local-only surface', () => {
     const result = scanPublicSanitizeTrackedFiles(
       ['.beads/issues.jsonl', '.beads/beads.left.jsonl', '.beads/interactions.jsonl'],
       {
@@ -160,42 +157,14 @@ describe('public-sanitize check', () => {
           textRuleRegex: [],
           loaded: false,
         },
-        readTextFile: (file) => {
-          reads.push(file);
-          return tokenValue;
-        },
+        readTextFile: () => '',
       },
     );
 
-    expect(result.violations).toHaveLength(0);
-    expect(reads).toHaveLength(0);
-  });
-
-  it('scans the authoritative issues snapshot after the sanitized generation activates', () => {
-    const result = scanPublicSanitizeTrackedFiles(
-      ['.beads/issues.jsonl', '.beads/interactions.jsonl'],
-      {
-        localBlocklist: {
-          localPath: 'workspace/sanitize/local-blocklist.json',
-          forbiddenPathRegex: [],
-          textRuleRegex: [
-            { name: 'local-text-1', regex: /private-operator/giu },
-          ],
-          loaded: true,
-        },
-        readTextFile: () => 'private-operator',
-        rewriteGenerationActive: true,
-      },
-    );
-
-    expect(result.violations).toEqual([
-      {
-        file: '.beads/issues.jsonl',
-        line: 1,
-        rule: 'local-text-1',
-        snippet: 'private-operator',
-      },
-    ]);
+    expect(result.violations).toHaveLength(3);
+    expect(result.violations.every((violation) => (
+      violation.rule === 'local-only-repository-surface'
+    ))).toBe(true);
   });
 
   it('drops gitlink submodule entries from tracked-file scanning', () => {

@@ -277,7 +277,7 @@ describe('room-episode circuit breaker: human immunity', () => {
       events.push(makeEvent({
         timestampMs: NOW - i * 60_000,
         channelId: 'roomA',
-        peerContactId: i % 2 === 0 ? 'artemis' : 'boreas',
+        peerContactId: i % 2 === 0 ? 'fixture-companion' : 'boreas',
         decision: 'free',
         role: 'human',
       }));
@@ -292,7 +292,7 @@ describe('room-episode circuit breaker: human immunity', () => {
     const humanTurns = Array.from({ length: 12 }, (_, i) => makeEvent({
       timestampMs: NOW - i * 60_000,
       channelId: 'roomA',
-      peerContactId: 'artemis',
+      peerContactId: 'fixture-companion',
       decision: 'free',
       role: 'human',
     }));
@@ -307,7 +307,7 @@ describe('room-episode circuit breaker: human immunity', () => {
 describe('room-episode circuit breaker: round-robin machine flood', () => {
   it('trips once sustained three-companion machine traffic floods the room past trip', () => {
     const events: FatigueBudgetEvent[] = [];
-    const peers = ['artemis', 'boreas', 'calliope'];
+    const peers = ['fixture-companion', 'boreas', 'calliope'];
     for (let i = 0; i < 11; i += 1) {
       events.push(makeEvent({
         timestampMs: NOW - i * 30_000,
@@ -330,7 +330,7 @@ describe('room-episode circuit breaker: round-robin machine flood', () => {
       events.push(makeEvent({
         timestampMs: NOW - i * 30_000,
         channelId: 'roomA',
-        peerContactId: 'artemis',
+        peerContactId: 'fixture-companion',
         decision: 'charged',
         role: 'machine_intelligence',
       }));

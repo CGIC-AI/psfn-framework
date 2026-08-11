@@ -137,7 +137,7 @@ describe('createLiveDeployPipelineRunner', () => {
       repoDir: '/repo',
       dockerfile: 'docker/Dockerfile.agent',
       buildContext: '.',
-      chartPath: 'deploy/helm/psfn',
+      chartPath: '/external/config/charts/psfn',
       importImage: async () => undefined,
       verifyBackup: async () => true,
     });
@@ -185,7 +185,7 @@ describe('createLiveDeployPipelineRunner', () => {
       repoDir: '/repo',
       dockerfile: 'docker/Dockerfile.agent',
       buildContext: '.',
-      chartPath: 'deploy/helm/psfn',
+      chartPath: '/external/config/charts/psfn',
       importImage: async () => undefined,
       verifyBackup: async () => true,
     });
@@ -221,7 +221,7 @@ describe('createLiveDeployPipelineRunner', () => {
       repoDir: '/repo',
       dockerfile: 'docker/Dockerfile.agent',
       buildContext: '.',
-      chartPath: 'deploy/helm/psfn',
+      chartPath: '/external/config/charts/psfn',
       importImage: async () => undefined,
       verifyBackup: async () => true,
     });

@@ -13,6 +13,7 @@ import { PER_COMPANION_OWNER_FILES } from '../../../system/config/settings-contr
 import {
   CERTIFICATION_COMPANION_A,
   CERTIFICATION_COMPANION_B,
+  CERTIFICATION_COMPANION_C,
   CERTIFICATION_EMBEDDING_DIMS,
   CERTIFICATION_SCHEMA_A,
   CERTIFICATION_SCHEMA_B,
@@ -81,40 +82,44 @@ describe('ICP certification production-shape fixture', () => {
     expect(configA.companionFleet?.companions.map(companion => companion.companionId)).toEqual([
       CERTIFICATION_COMPANION_A,
       CERTIFICATION_COMPANION_B,
-      'c7100000-0000-4000-8000-000000000003',
+      CERTIFICATION_COMPANION_C,
     ]);
     expect(fixture.companions[0].companionDataDir).toBe(join(
       fixture.runtimeRoot,
-      'companion-data',
+      'companions',
+      'alpha',
+      'data',
     ));
     expect(fixture.companions[0].characterCardPath).toBe(join(
       fixture.runtimeRoot,
-      'companion-data',
+      'companions',
+      'alpha',
+      'data',
       'companion.json',
     ));
     expect(fixture.companions[1].companionDataDir).toBe(join(
       fixture.runtimeRoot,
-      'support-companions',
-      'mica',
+      'companions',
+      'beta',
       'data',
     ));
     expect(fixture.companions[1].characterCardPath).toBe(join(
       fixture.runtimeRoot,
-      'support-companions',
-      'mica',
+      'companions',
+      'beta',
       'data',
       'companion.json',
     ));
-    const lumenDataDir = join(
+    const gammaDataDir = join(
       fixture.runtimeRoot,
-      'support-companions',
-      'lumen',
+      'companions',
+      'gamma',
       'data',
     );
     expect([...PER_COMPANION_OWNER_FILES].every(ownerFile => (
-      existsSync(join(lumenDataDir, ownerFile))
+      existsSync(join(gammaDataDir, ownerFile))
     ))).toBe(true);
-    expect(existsSync(join(lumenDataDir, 'companion.json'))).toBe(true);
+    expect(existsSync(join(gammaDataDir, 'companion.json'))).toBe(true);
     const chatModels = configA.modelRegistry?.models.filter(model => (
       model.purposes.some(purpose => purpose.purpose === 'chat')
     ));

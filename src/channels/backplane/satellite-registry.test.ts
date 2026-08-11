@@ -264,7 +264,7 @@ describe('satellite registry', () => {
           mobility: 'static',
           endpoints: [
             {
-              endpointId: 'test-waveshare-bedroom',
+              endpointId: 'test-fixture-satellite',
               displayName: 'Synthetic Waveshare Voice and Touch',
               claimTypes: ['voice-only'],
               promptChannelType: 'voice_satellite',
@@ -300,7 +300,7 @@ describe('satellite registry', () => {
       },
       {
         satelliteId: 'test-bedroom',
-        endpointId: 'test-waveshare-bedroom',
+        endpointId: 'test-fixture-satellite',
         claimType: 'voice-only',
         principal: wavesharePrincipal,
       },
@@ -676,7 +676,7 @@ describe('satellite registry', () => {
         'x-psfn-satellite-claim-type': 'android-mobile',
         'x-psfn-satellite-id': 'android-phone',
         'x-psfn-satellite-endpoint-id': 'companion-app',
-        'x-psfn-satellite-session-id': 'walk-with-artie',
+        'x-psfn-satellite-session-id': 'walk-with-fixture-companion',
         'x-psfn-satellite-capabilities': 'text,audio_input,speech_to_text,audio_output,text_to_speech,vision,image_upload,location',
         'x-psfn-satellite-telemetry-scopes': 'location,timezone,presence',
       },
@@ -685,7 +685,7 @@ describe('satellite registry', () => {
     expect(result).toMatchObject({
       ok: true,
       value: {
-        channelId: 'satellite:android-mobile:walk-with-artie',
+        channelId: 'satellite:android-mobile:walk-with-fixture-companion',
         authorId: 'primary-user',
         authorName: 'Primary User',
         canonicalContactId: 'contact-primary-user',
@@ -714,7 +714,7 @@ describe('satellite registry', () => {
         'x-psfn-satellite-claim-type': 'android-mobile',
         'x-psfn-satellite-id': 'android-phone',
         'x-psfn-satellite-endpoint-id': 'missing',
-        'x-psfn-satellite-session-id': 'walk-with-artie',
+        'x-psfn-satellite-session-id': 'walk-with-fixture-companion',
       },
     });
     expect(unknown).toMatchObject({

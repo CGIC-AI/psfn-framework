@@ -49,7 +49,6 @@ test('framework, UI builders, and CI share the exact Node 24 LTS standard', () =
     '.github/workflows/ci.yml',
     '.github/workflows/osv-scan.yml',
     '.github/workflows/pr-labels.yml',
-    '.github/workflows/trivy-config.yml',
     '.github/workflows/trivy-image.yml',
     '.github/workflows/zizmor-audit.yml',
   ]) {
@@ -61,10 +60,7 @@ test('active runtime and operator docs do not retain the Node 22 split', () => {
   const activeSurfaces = [
     'README.md',
     'docs/setup.md',
-    'docs/internal-review-workflow.md',
-    'deploy/helm/psfn/README.md',
-    'scripts/start-gateway-agent.sh',
-    'scripts/system/runtime-env.sh',
+    'docs/operations.md',
     'scripts/ci/check-local-tools.mjs',
   ].map(read).join('\n');
 

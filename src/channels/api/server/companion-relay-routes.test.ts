@@ -759,7 +759,7 @@ describe('companion relay routes', () => {
       endpointId: 'hub-endpoint',
       claimType: 'satellite-hub',
       sessionId: 'bedroom',
-      deviceId: 'waveshare-bedroom',
+      deviceId: 'fixture-satellite',
       kind: 'headpat',
       region: 'head',
       count: 1,
@@ -797,7 +797,7 @@ describe('companion relay routes', () => {
             region: 'head',
             count: 1,
             durationMs: 0,
-            deviceId: 'waveshare-bedroom',
+            deviceId: 'fixture-satellite',
           },
           presence: {
             kind: 'satellite',

@@ -8,6 +8,7 @@ import {
   buildFilenameCallback,
   builtInReplacementRules,
   classifyRemoteRef,
+  isRemovedHistoryPath,
   parseArguments,
   parseCommitMap,
   parsePrivateRemovalPaths,
@@ -30,11 +31,9 @@ test('history rewrite arguments require explicit source, output, identity, and p
     '--public-name', PUBLIC_IDENTITY.publicName,
     '--public-email', PUBLIC_IDENTITY.publicEmail,
     '--filter-repo', '/opt/tools/git-filter-repo',
-    '--bd', '/opt/tools/bd',
     '--private-replacements', 'workspace/history-rewrite/private-replacements.txt',
     '--private-remove-paths', 'workspace/history-rewrite/private-remove-paths.txt',
   ]), {
-    bd: '/opt/tools/bd',
     filterRepo: '/opt/tools/git-filter-repo',
     mainRef: 'refs/heads/main',
     output: 'workspace/history-rewrite/example',
@@ -51,7 +50,6 @@ test('history rewrite arguments require explicit source, output, identity, and p
     '--public-name', 'Maintainer',
     '--public-email', 'invalid',
     '--filter-repo', 'git-filter-repo',
-    '--bd', '/opt/tools/bd',
     '--private-replacements', 'private.txt',
     '--private-remove-paths', 'remove-paths.txt',
   ]), /syntactically valid/u);
@@ -117,6 +115,8 @@ test('private removal paths are normalized, unique, and explicitly supplied', ()
   assert.throws(() => parsePrivateRemovalPaths('../outside'), /repository-relative/u);
   assert.throws(() => parsePrivateRemovalPaths('same\nsame'), /duplicates/u);
   assert.throws(() => parsePrivateRemovalPaths('# only comments'), /at least one/u);
+  assert.equal(isRemovedHistoryPath('working_docs/nested/note.md', ['working_docs/']), true);
+  assert.equal(isRemovedHistoryPath('docs/public.md', ['working_docs/']), false);
 });
 
 test('changelog links remap to rewritten SHAs and reject pruned commits', () => {

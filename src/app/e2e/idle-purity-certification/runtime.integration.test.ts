@@ -245,4 +245,73 @@ describe('idle-purity real quiet-runtime certification', () => {
       await writerPool.end();
     }
   }, TIMEOUT_MS);
+
+  it('fails when PostgreSQL creates, writes, and drops a relation within the window', async () => {
+    if (!postgres) throw new Error('PostgreSQL idle-purity harness is unavailable');
+    const { databaseUrl } = await postgres.createDatabase();
+    fixture = createIcpCertificationFixture({ databaseUrl, topology: 'single_companion' });
+    const writerPool = createPostgresPool(databaseUrl, {
+      applicationName: 'psfn-idle-purity-certification-ddl-probe',
+      max: 1,
+    });
+    const observerPool = createPostgresPool(databaseUrl, {
+      applicationName: 'psfn-idle-purity-certification-ddl-observer',
+      max: 1,
+      readOnly: true,
+    });
+    try {
+      await installPostgresWriteAudit(writerPool);
+      await expect(certifyIdlePurity({
+        runtimeRoot: fixture.runtimeRoot,
+        idleWindowMs: 0,
+        capturePostgresWrites: async () => await capturePostgresWriteSnapshot(observerPool),
+        wait: async () => {
+          await writerPool.query(`
+            BEGIN;
+            CREATE TABLE public.idle_purity_ddl_probe (id integer PRIMARY KEY);
+            INSERT INTO public.idle_purity_ddl_probe (id) VALUES (1);
+            DROP TABLE public.idle_purity_ddl_probe;
+            COMMIT;
+          `);
+        },
+      })).rejects.toThrow(
+        /postgres state changed: idle_purity_certification\.write_events/u,
+      );
+    } finally {
+      await observerPool.end();
+      await writerPool.end();
+    }
+  }, TIMEOUT_MS);
+
+  it('fails when PostgreSQL truncates an empty relation within the window', async () => {
+    if (!postgres) throw new Error('PostgreSQL idle-purity harness is unavailable');
+    const { databaseUrl } = await postgres.createDatabase();
+    fixture = createIcpCertificationFixture({ databaseUrl, topology: 'single_companion' });
+    const writerPool = createPostgresPool(databaseUrl, {
+      applicationName: 'psfn-idle-purity-certification-truncate-probe',
+      max: 1,
+    });
+    const observerPool = createPostgresPool(databaseUrl, {
+      applicationName: 'psfn-idle-purity-certification-truncate-observer',
+      max: 1,
+      readOnly: true,
+    });
+    try {
+      await writerPool.query('CREATE TABLE public.idle_purity_truncate_probe (id integer PRIMARY KEY)');
+      await installPostgresWriteAudit(writerPool);
+      await expect(certifyIdlePurity({
+        runtimeRoot: fixture.runtimeRoot,
+        idleWindowMs: 0,
+        capturePostgresWrites: async () => await capturePostgresWriteSnapshot(observerPool),
+        wait: async () => {
+          await writerPool.query('TRUNCATE TABLE public.idle_purity_truncate_probe');
+        },
+      })).rejects.toThrow(
+        /postgres state changed: idle_purity_certification\.write_events/u,
+      );
+    } finally {
+      await observerPool.end();
+      await writerPool.end();
+    }
+  }, TIMEOUT_MS);
 });

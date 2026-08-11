@@ -187,7 +187,7 @@ describe('first-party tool surface registry', () => {
 
   it('declares memory visibility actions on the canonical memory surface', () => {
     expect(getCanonicalToolSurface('memory')?.actions).toEqual(
-      expect.arrayContaining(['get', 'census', 'exists']),
+      expect.arrayContaining(['episode_search', 'get', 'census', 'exists']),
     );
   });
 

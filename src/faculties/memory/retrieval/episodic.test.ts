@@ -6,7 +6,12 @@ import {
   type EpisodeCreateInput,
 } from '../episodic/store-port.js';
 import { classifyChannelDisclosure } from '../../../system/trust/policy.js';
-import { listEpisodeArcMemberships, retrieveEpisodicChains } from './episodic.js';
+import {
+  buildEpisodicChainFromRoot,
+  listEpisodeArcMemberships,
+  retrieveEpisodicChains,
+  searchEpisodicEpisodesLexically,
+} from './episodic.js';
 
 const NOW = new Date('2026-06-10T08:00:00.000Z');
 
@@ -178,6 +183,7 @@ describe('retrieveEpisodicChains rolled-out session breadcrumbs', () => {
       channelId?: string;
       threadId?: string;
       meaning?: string;
+      participantContactIds?: string[];
     },
   ): Promise<void> {
     await store.createCompanionAuthoredEpisode({
@@ -188,7 +194,7 @@ describe('retrieveEpisodicChains rolled-out session breadcrumbs', () => {
       endedAt: input.endedAt,
       threadId: input.threadId ?? 'session:current',
       channelId: input.channelId ?? 'discord:current',
-      participantContactIds: ['contact:current'],
+      participantContactIds: input.participantContactIds ?? ['contact:current'],
       salience: { score: 0.6 },
       affect: { labels: ['warm'] },
       themes: ['shared-life'],
@@ -235,6 +241,123 @@ describe('retrieveEpisodicChains rolled-out session breadcrumbs', () => {
         matchedTerms: ['kintsugi'],
       }),
     ]);
+  });
+
+  it('returns bounded lexical episode results with exact ids and match evidence', async () => {
+    const store = makeStore();
+    await createEpisode(store, {
+      id: 'repair-first',
+      title: 'Repairing the cedar planter',
+      landmark: 'We fitted the broken corner together.',
+      startedAt: '2026-06-08T18:00:00.000Z',
+      endedAt: '2026-06-08T20:00:00.000Z',
+    });
+    await createEpisode(store, {
+      id: 'repair-second',
+      title: 'Another repair',
+      landmark: 'We mended the shelf.',
+      startedAt: '2026-06-07T18:00:00.000Z',
+      endedAt: '2026-06-07T20:00:00.000Z',
+    });
+
+    const results = await searchEpisodicEpisodesLexically(store, {
+      query: 'cedar repair',
+      channelId: 'discord:current',
+      trustLevel: 'regular',
+      channelDisclosure: classifyChannelDisclosure('discord:current', { isDirectMessage: true }),
+      canonicalContactId: 'contact:current',
+      limit: 1,
+    });
+
+    expect(results).toEqual([
+      expect.objectContaining({
+        episode: expect.objectContaining({ id: 'repair-first' }),
+        matchedTerms: ['cedar', 'repair'],
+        lexicalScore: expect.any(Number),
+        retrievalMode: 'lexical',
+      }),
+    ]);
+  });
+
+  it('lets explicit companion-self reflection cross channels while preserving scope-only filters', async () => {
+    const store = makeStore();
+    await createEpisode(store, {
+      id: 'cross-channel-reflection',
+      title: 'The kintsugi realization',
+      landmark: 'A private realization in another conversation.',
+      startedAt: '2026-06-08T18:00:00.000Z',
+      endedAt: '2026-06-08T20:00:00.000Z',
+      channelId: 'discord:other-private-room',
+      participantContactIds: ['contact:someone-else'],
+    });
+    const baseInput = {
+      query: 'kintsugi',
+      channelId: 'internal:reflection:daily',
+      trustLevel: 'regular' as const,
+      channelDisclosure: classifyChannelDisclosure('internal:reflection:daily', { isDirectMessage: true }),
+      limit: 1,
+    };
+
+    expect(await searchEpisodicEpisodesLexically(store, baseInput)).toEqual([]);
+    expect(await searchEpisodicEpisodesLexically(store, {
+      ...baseInput,
+      accessScope: 'companion_self_reflection',
+    })).toEqual([
+      expect.objectContaining({
+        episode: expect.objectContaining({ id: 'cross-channel-reflection' }),
+      }),
+    ]);
+    expect(await searchEpisodicEpisodesLexically(store, {
+      ...baseInput,
+      accessScope: 'companion_self_reflection',
+      scopeQuery: { mode: 'only', tags: ['unrelated-scope'] },
+    })).toEqual([]);
+  });
+
+  it('expands an externally selected visible root through the canonical arc-chain builder', async () => {
+    const store = makeStore();
+    await createEpisode(store, {
+      id: 'semantic-root',
+      title: 'A selected semantic root',
+      landmark: 'The root was selected outside lexical ranking.',
+      startedAt: '2026-06-07T18:00:00.000Z',
+      endedAt: '2026-06-07T20:00:00.000Z',
+    });
+    await createEpisode(store, {
+      id: 'semantic-related',
+      title: 'What followed afterward',
+      landmark: 'This continuation belongs in the expanded chain.',
+      startedAt: '2026-06-08T18:00:00.000Z',
+      endedAt: '2026-06-08T20:00:00.000Z',
+    });
+    const arc = await store.writeEpisodeArc({
+      sourceEpisodeId: 'semantic-root',
+      targetEpisodeId: 'semantic-related',
+      arcKind: 'continuation',
+      salience: 0.8,
+      confidence: 0.9,
+      themes: ['shared-life'],
+      spanRefs: [],
+      artifactRefs: [],
+      provenanceRefs: [],
+    });
+
+    const chain = await buildEpisodicChainFromRoot(store, {
+      episodeId: 'semantic-root',
+      rootScore: 0.82,
+      channelId: 'discord:current',
+      trustLevel: 'regular',
+      channelDisclosure: classifyChannelDisclosure('discord:current', { isDirectMessage: true }),
+    });
+
+    expect(chain).toEqual(expect.objectContaining({
+      rootEpisodeId: 'semantic-root',
+      episodes: [
+        expect.objectContaining({ id: 'semantic-root' }),
+        expect.objectContaining({ id: 'semantic-related' }),
+      ],
+      arcs: [expect.objectContaining({ id: arc.id })],
+    }));
   });
 
   it('includes the latest episode before the rolled-out cutoff without lexical overlap', async () => {

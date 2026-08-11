@@ -16,3 +16,11 @@ export interface EpisodicRetrievalChain {
   score: number;
   matchedTerms: string[];
 }
+
+export interface EpisodicLexicalSearchResult {
+  episode: Episode;
+  chain: EpisodicRetrievalChain;
+  lexicalScore: number;
+  matchedTerms: string[];
+  retrievalMode: 'lexical';
+}

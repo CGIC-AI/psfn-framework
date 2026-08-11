@@ -109,7 +109,7 @@ export function setIcpCertificationAutonomyEnabled(
 }
 
 function copyCanonicalOwners(seedDir: string, systemDataDir: string): void {
-  for (const owner of OWNER_NAMES) {
+  for (const owner of [...OWNER_NAMES, 'mcp-servers', 'partner-affect-shadow'] as const) {
     const ownerFile = `${owner}.json`;
     if (!PER_COMPANION_OWNER_FILES.has(ownerFile)) {
       cpSync(join(seedDir, `${owner}.seed.json`), join(systemDataDir, ownerFile));

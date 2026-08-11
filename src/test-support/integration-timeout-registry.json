@@ -43,10 +43,10 @@
     },
     {
       "file": "src/app/e2e/idle-purity-certification/runtime.integration.test.ts",
-      "timeoutMs": 180000,
-      "measuredBaselineMs": 67770,
+      "timeoutMs": 300000,
+      "measuredBaselineMs": 134850,
       "baselineSource": "measured",
-      "note": "rzuq quiet-runtime certification with the default 60s measured idle window. Baseline 67.77s file wall (real gateway/agent plus disposable pgvector Postgres, this host, 2026-08-10); 180000/67770 = 2.66x headroom for cold-start and shared-heavy harness variance."
+      "note": "rzuq quiet-runtime certification with a 65s startup-statistics warm-up and the default 60s measured idle window. Baseline 134.85s file wall (real gateway/agent plus disposable pgvector Postgres, this host, 2026-08-11); 300000/134850 = 2.22x headroom for cold-start and shared-heavy harness variance."
     },
     {
       "file": "src/boundary/gateway/welfare-grant-verifier.integration.test.ts",

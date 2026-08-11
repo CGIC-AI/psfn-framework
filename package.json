@@ -136,7 +136,7 @@
     "verify:dependency-cycles": "tsx scripts/check-dependency-cycles.ts",
     "verify:shared-type-guards": "node scripts/verify-shared-type-guards.mjs",
     "verify:model-usage-capture": "node scripts/verify-model-usage-capture.mjs",
-    "verify:idle-purity": "PSFN_IDLE_PURITY_WINDOW_MS=${PSFN_IDLE_PURITY_WINDOW_MS:-60000} vitest run --reporter=verbose src/app/e2e/idle-purity-certification/runtime.integration.test.ts",
+    "verify:idle-purity": "PSFN_IDLE_PURITY_WARMUP_MS=${PSFN_IDLE_PURITY_WARMUP_MS:-65000} PSFN_IDLE_PURITY_WINDOW_MS=${PSFN_IDLE_PURITY_WINDOW_MS:-60000} vitest run --reporter=verbose src/app/e2e/idle-purity-certification/runtime.integration.test.ts",
     "verify:postgres-only": "node scripts/verify-postgres-only.mjs",
     "verify:hardcoded-settings": "node scripts/verify-hardcoded-settings.mjs",
     "verify:typecheck-baseline": "node scripts/verify-typecheck-baseline.mjs",

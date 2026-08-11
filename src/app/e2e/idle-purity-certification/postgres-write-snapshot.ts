@@ -23,10 +23,11 @@ interface PostgresSequenceStateRow extends QueryResultRow {
 
 /**
  * Capture tuple-write counters and a direct MVCC fingerprint for every
- * non-system relation in one repeatable-read snapshot. The fingerprint keeps
- * counter publication lag from looking like a new write and catches updates
- * whose counters have not been published yet. These reads do not write
- * application state, so the observer cannot make its own certification fail.
+ * non-system relation in one repeatable-read snapshot. The fingerprint catches
+ * durable changes whose counters have not been published yet; the counters
+ * independently retain evidence of net-zero insert/delete activity. These reads
+ * do not write application state, so the observer cannot make its own
+ * certification fail.
  */
 export async function capturePostgresWriteSnapshot(
   pool: Pool,

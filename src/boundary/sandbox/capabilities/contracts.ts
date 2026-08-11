@@ -1,6 +1,7 @@
 import type { LLMProviderPort, LLMRequestMetadata } from '../../../core/agent/contracts.js';
 import type { EmbeddingProviderPort } from '../../../shared/contracts/embedding-provider.js';
 import type { MemoryStorePort } from '../../../faculties/memory/memory-store-port.js';
+import type { HybridEpisodeSearchPort } from '../../../faculties/memory/retrieval/episode-search.js';
 import type { SessionManager } from '../../../core/session/manager.js';
 import type { Scheduler } from '../../../core/scheduler/scheduler.js';
 import type { TaskState, TaskType } from '../../../core/scheduler/types.js';
@@ -100,6 +101,7 @@ export interface SandboxDeps {
   executionPort?: SandboxExecutionPort | SandboxExecutionPortSeed | null;
   embeddingService: EmbeddingProviderPort | null;
   memoryStore: MemoryStorePort | null;
+  episodeSearch?: HybridEpisodeSearchPort | null;
   sessionManager: SessionManager | null;
   scheduler?: Scheduler | null;
   eventBus?: EventBus | null;

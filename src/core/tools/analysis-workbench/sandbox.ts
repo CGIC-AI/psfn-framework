@@ -76,6 +76,7 @@ export class REPLSandbox {
       llmProvider: this.deps.llmProvider,
       embeddingService: this.deps.embeddingService,
       memoryStore: this.deps.memoryStore,
+      episodeSearch: this.deps.episodeSearch ?? null,
       sessionManager: this.deps.sessionManager,
       pushEvidence,
     });
@@ -137,6 +138,7 @@ export class REPLSandbox {
       llm_query_json: llm.llm_query_json,
       ...(nestedAnalysis ? { nested_analysis: nestedAnalysis.nested_analysis } : {}),
       memory_search: memory.memory_search,
+      episode_search: memory.episode_search,
       memory_count: memory.memory_count,
       memory_get_by_id: memory.memory_get_by_id,
       session_messages: memory.session_messages,

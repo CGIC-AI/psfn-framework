@@ -10,6 +10,7 @@ import type {
   MemorySubjectAuthorizedQueryResult,
 } from '../../../faculties/memory/memory-store-port.js';
 import type { LLMResponse } from '../../../shared/contracts/runtime.js';
+import { parseEpisode } from '../../../shared/contracts/episodic-memory.js';
 import { runWithRequestContext } from '../../../primitives/llm/request-context.js';
 import { InMemoryMemoryStore } from '../../../test-support/in-memory-memory-store.js';
 import { createMemoryCapabilities } from './memory.js';
@@ -56,6 +57,99 @@ class SubjectAuthorizedIntrospectionMemoryStore extends InMemoryMemoryStore {
 }
 
 describe('createMemoryCapabilities session_search', () => {
+  it('exposes the shared hybrid episode search with bounded evidence', async () => {
+    const episode = parseEpisode({
+      schemaVersion: 2,
+      id: 'episode-repair',
+      title: 'Repair without hiding the break',
+      landmark: 'We made a silent failure visible.',
+      startedAt: '2026-08-09T09:00:00.000Z',
+      endedAt: '2026-08-09T09:30:00.000Z',
+      channelId: 'api:research',
+      participantContactIds: ['contact:primary'],
+      salience: { score: 0.9 },
+      affect: { labels: ['relieved'] },
+      themes: ['repair'],
+      spanRefs: [{ spanId: 'span-repair', sessionId: 'api:research' }],
+      artifactRefs: [],
+      provenanceRefs: [],
+      createdAt: '2026-08-09T09:30:00.000Z',
+      updatedAt: '2026-08-09T09:30:00.000Z',
+    });
+    const episodeSearch = {
+      search: vi.fn(async () => ({
+        results: [{
+          episode,
+          chain: {
+            rootEpisodeId: episode.id,
+            episodes: [episode],
+            arcs: [],
+            score: 0.9,
+            matchedTerms: ['repair'],
+          },
+          fusedScore: 0.88,
+          lexicalScore: 0.7,
+          semanticSimilarity: 0.91,
+          matchedTerms: ['repair'],
+          retrievalModes: ['lexical', 'semantic'] as Array<'lexical' | 'semantic'>,
+        }],
+        modes: {
+          lexical: { status: 'completed' as const, candidateCount: 1 },
+          semantic: { status: 'completed' as const, candidateCount: 1 },
+        },
+        degraded: false,
+      })),
+    };
+    const pushEvidence = vi.fn();
+    const sessionManager = {
+      isSessionRetiredOrQuarantined: vi.fn(() => false),
+      getRetiredLogicalSessionIds: vi.fn(() => new Set<string>()),
+      getRecentMessages: vi.fn(() => []),
+      appendSystemNote: vi.fn(),
+    };
+    const capabilities = createMemoryCapabilities({
+      llmProvider: mockLLM(),
+      embeddingService: null,
+      memoryStore: null,
+      episodeSearch,
+      sessionManager,
+      pushEvidence,
+    });
+
+    const result = await runWithRequestContext({
+      channelId: 'api:research',
+      viewerTrustLevel: 'trusted',
+      viewerChannelPrivacy: 'private',
+      viewerMemorySubjectContactId: 'contact:primary',
+      requesterProvenance: 'external',
+      callType: 'chat',
+      originType: 'user',
+    }, () => capabilities.episode_search('what did repair teach me?', 4));
+
+    expect(result).toMatchObject({
+      degraded: false,
+      results: [{
+        id: 'episode-repair',
+        title: 'Repair without hiding the break',
+        fusedScore: 0.88,
+        retrievalModes: ['lexical', 'semantic'],
+      }],
+    });
+    expect(episodeSearch.search).toHaveBeenCalledWith(expect.objectContaining({
+      query: 'what did repair teach me?',
+      limit: 4,
+      channelId: 'api:research',
+      accessScope: 'channel_participant',
+      sessionQuarantineFilter: expect.any(Object),
+    }));
+    expect(pushEvidence).toHaveBeenCalledWith(expect.objectContaining({
+      source: 'episode_search',
+      query: 'what did repair teach me?',
+      snippet: 'We made a silent failure visible.',
+      resultCount: 1,
+    }));
+  });
+
   it('keeps CogSec-quarantined memories out of read-only introspection helpers', async () => {
     const retiredSessionId = 'discord:dm:partner:session:retired';
     const fresh: MemorySearchResult = {

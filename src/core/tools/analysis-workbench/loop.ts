@@ -764,6 +764,7 @@ export async function runRLMLoop(
     executionPort: deps.executionPort ?? null,
     embeddingService: deps.embeddingService,
     memoryStore: deps.memoryStore,
+    episodeSearch: deps.episodeSearch ?? null,
     sessionManager: deps.sessionManager,
     scheduler: deps.scheduler,
     eventBus: deps.eventBus,

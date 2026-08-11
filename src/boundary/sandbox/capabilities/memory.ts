@@ -26,6 +26,11 @@ import {
   isMemoryQuarantined,
   type MemorySessionQuarantineFilter,
 } from '../../../faculties/memory/retrieval/session-quarantine.js';
+import type {
+  EpisodeSearchModeReport,
+  HybridEpisodeSearchPort,
+} from '../../../faculties/memory/retrieval/episode-search.js';
+import { resolveMemoryVisibility } from '../../../faculties/memory/tools/visibility.js';
 
 export interface SessionSearchOptions {
   channelId?: SessionSearchViewerContext['channelId'];
@@ -35,6 +40,24 @@ export interface SessionSearchOptions {
 
 export interface MemoryCapabilities {
   memory_search: (query: string, limit?: number) => Promise<Array<{ text: string; type: string; importance: number; similarity: number }>>;
+  episode_search: (query: string, limit?: number) => Promise<{
+    results: Array<{
+      id: string;
+      title: string;
+      landmark: string;
+      meaning?: string;
+      startedAt: string;
+      endedAt: string;
+      fusedScore: number;
+      lexicalScore?: number;
+      semanticSimilarity?: number;
+      matchedTerms: string[];
+      retrievalModes: Array<'lexical' | 'semantic'>;
+    }>;
+    modes: { lexical: EpisodeSearchModeReport; semantic: EpisodeSearchModeReport };
+    degraded: boolean;
+    error?: string;
+  }>;
   memory_count: () => Promise<number> | number;
   memory_write: (
     text: string,
@@ -87,6 +110,7 @@ interface CreateMemoryCapabilitiesOptions {
   llmProvider: LLMProviderPort;
   embeddingService: EmbeddingProviderPort | null;
   memoryStore: MemoryStorePort | null;
+  episodeSearch?: HybridEpisodeSearchPort | null;
   sessionManager: MemoryCapabilitySessionPort | null;
   pushEvidence: (entry: AnalysisWorkbenchEvidence) => void;
 }
@@ -272,6 +296,67 @@ export function createMemoryCapabilities(options: CreateMemoryCapabilitiesOption
       importance: memory.importance,
       similarity: memory.similarity,
     }));
+  };
+
+  const episode_search: MemoryCapabilities['episode_search'] = async (query, limit = 10) => {
+    const normalizedQuery = toTrimmedString(query);
+    const unavailable = (error: string): Awaited<ReturnType<MemoryCapabilities['episode_search']>> => ({
+      results: [],
+      modes: {
+        lexical: { status: 'unavailable', candidateCount: 0 },
+        semantic: { status: 'unavailable', candidateCount: 0 },
+      },
+      degraded: true,
+      error,
+    });
+    if (!normalizedQuery) return unavailable('episode search query must be non-empty');
+    if (!options.episodeSearch) return unavailable('hybrid episode search is not configured');
+    if (isSelfDirectedReflectionRequest() && !sessionQuarantineFilter) {
+      return unavailable('episode search requires session quarantine state during reflection');
+    }
+    const visibility = resolveMemoryVisibility({}, 'episode_search');
+    if (!visibility.ok) return unavailable(visibility.error);
+
+    const response = await options.episodeSearch.search({
+      query: normalizedQuery,
+      limit,
+      channelId: visibility.channelId,
+      trustLevel: visibility.trustLevel,
+      channelDisclosure: {
+        channelPrivacy: visibility.channelVisibility,
+        broadcast: visibility.broadcast,
+      },
+      ...(visibility.canonicalContactId
+        ? { canonicalContactId: visibility.canonicalContactId }
+        : {}),
+      accessScope: 'channel_participant',
+      sessionQuarantineFilter,
+    });
+    addEvidence(options.pushEvidence, {
+      source: 'episode_search',
+      query: normalizedQuery,
+      snippet: response.results[0]?.episode.landmark ?? '',
+      resultCount: response.results.length,
+    });
+    return {
+      results: response.results.map(entry => ({
+        id: entry.episode.id,
+        title: entry.episode.title,
+        landmark: entry.episode.landmark,
+        ...(entry.episode.meaning?.text ? { meaning: entry.episode.meaning.text } : {}),
+        startedAt: entry.episode.startedAt,
+        endedAt: entry.episode.endedAt,
+        fusedScore: entry.fusedScore,
+        ...(entry.lexicalScore !== undefined ? { lexicalScore: entry.lexicalScore } : {}),
+        ...(entry.semanticSimilarity !== undefined
+          ? { semanticSimilarity: entry.semanticSimilarity }
+          : {}),
+        matchedTerms: [...entry.matchedTerms],
+        retrievalModes: [...entry.retrievalModes],
+      })),
+      modes: response.modes,
+      degraded: response.degraded,
+    };
   };
 
   const memory_count = (): Promise<number> | number => {
@@ -478,6 +563,7 @@ export function createMemoryCapabilities(options: CreateMemoryCapabilitiesOption
 
   return {
     memory_search,
+    episode_search,
     memory_count,
     memory_write,
     memory_import_batch,

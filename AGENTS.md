@@ -46,6 +46,10 @@ Working rules:
   delivery to fit the numbers.
 - Publishing, CI, review, and merging are asynchronous boundaries. After creating
   a PR, report its URL instead of polling unless the operator asks you to wait.
+- GitHub CI verifies the exact local-gate attestation and cheap PR-host policy
+  (change budget, commit identity, and public sanitation). It must not repeat the
+  broad lint, build, hygiene, product-test, or specialist suites already bound to
+  that attested head.
 - Greptile is paid and opt-in. Never add `review:greptile`, mention the bot, or
   otherwise trigger it unless the operator explicitly requests that paid review.
 - When the operator says ship, publish, hurry, or stop reviewing, all optional

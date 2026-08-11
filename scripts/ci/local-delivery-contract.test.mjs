@@ -328,19 +328,6 @@ test('delivery-only gate stays fast while product changes retain full validation
   );
 });
 
-test('ci.yml build heap ceiling stays in sync with ROOT_BUILD_NODE_HEAP_MB', () => {
-  // The CI clean-environment build and the local gate must use the same root
-  // build ceiling; tsup's .d.ts rollup worker derives its old-gen cap from it,
-  // so silent drift re-introduces the ERR_WORKER_OUT_OF_MEMORY flake.
-  const ciYml = readFileSync(new URL('../../.github/workflows/ci.yml', import.meta.url), 'utf8');
-  const heapFlags = [...ciYml.matchAll(/--max-old-space-size=(\d+)/g)]
-    .map((match) => Number(match[1]));
-  assert.ok(
-    heapFlags.includes(ROOT_BUILD_NODE_HEAP_MB),
-    'ci.yml build ceiling must include ROOT_BUILD_NODE_HEAP_MB',
-  );
-});
-
 test('local tool doctor pins UBS while accepting supported Node releases', () => {
   assert.doesNotThrow(() =>
     validateToolReport({ nodeVersion: 'v24.19.0', ubsVersion: 'UBS Meta-Runner v5.3.7' }),
@@ -1053,52 +1040,31 @@ test('changed-workflow security scan accepts only explicit GitHub workflow input
   assert.throws(() => validateZizmorInputs(['src/index.ts']), /unexpected zizmor input/);
 });
 
-test('GitHub CI is one complementary delta lane without label-triggered reruns', () => {
+test('GitHub CI trusts the exact local gate and runs only cheap host policy checks', () => {
   const workflow = readFileSync('.github/workflows/ci.yml', 'utf8');
 
   assert.doesNotMatch(workflow, /\b(?:labeled|unlabeled)\b/);
   assert.doesNotMatch(workflow, /^  push:\s*$/m);
   assert.doesNotMatch(workflow, /^  workflow_dispatch:\s*$/m);
-  assert.match(workflow, /^  github-delta:\s*$/m);
+  assert.match(workflow, /^  github-policy:\s*$/m);
   assert.match(workflow, /^  ci-required:\s*$/m);
   assert.equal((workflow.match(/^    runs-on:/gm) ?? []).length, 2);
+  assert.match(workflow, /run: node scripts\/ci\/verify-pr-attestation\.mjs/);
   assert.ok(
-    workflow.indexOf('Verify exact local-gate status') < workflow.indexOf('run: npm ci'),
-    'attestation must fail before the clean-environment install',
+    workflow.indexOf('Verify exact local-gate status') < workflow.indexOf('Enforce change budget'),
+    'exact-head attestation must fail before PR-host policy checks',
   );
-  assert.match(workflow, /steps\.scope\.outputs\.root_runtime == 'true'/);
-  assert.match(workflow, /steps\.scope\.outputs\.admin_ui == 'true'/);
-  assert.match(workflow, /steps\.scope\.outputs\.companion_ui == 'true'/);
-  assert.match(workflow, /steps\.scope\.outputs\.satellite_hub == 'true'/);
-  assert.match(workflow, /steps\.scope\.outputs\.evals == 'true'/);
-  assert.doesNotMatch(workflow, /steps\.scope\.outputs\.deployment == 'true'/);
-  assert.match(
-    workflow,
-    /Install root dependencies in a clean environment[\s\S]{0,280}if: steps\.scope\.outputs\.root_runtime == 'true' \|\| steps\.scope\.outputs\.admin_ui == 'true' \|\| steps\.scope\.outputs\.evals == 'true'[\s\S]{0,120}run: npm ci --ignore-scripts/,
-  );
-  assert.equal(
-    (workflow.match(/npm ci --prefix admin-ui/g) ?? []).length,
-    2,
-    'admin-ui installs once for root hygiene dependencies and once for its own build/test lane',
-  );
-  assert.match(workflow, /run: npm run lint/);
-  assert.match(workflow, /run: npm run verify:repository-hygiene/);
-  assert.match(workflow, /run: npm test/);
-  assert.doesNotMatch(workflow, /run: bash scripts\/ci\/run-semgrep\.sh/);
+  assert.doesNotMatch(workflow, /npm ci|npm test|npm run (?:build|lint|verify:)/);
+  assert.doesNotMatch(workflow, /detect-change-scope|run-zizmor-changed|setup-uv/);
+  assert.doesNotMatch(workflow, /steps\.scope\.outputs\./);
   assert.match(workflow, /statuses: read/);
   assert.match(workflow, /vars\.LOCAL_GATE_STATUS_ACTOR/);
-  // The workflow-security scan is a step inside the always-run delta job, so it
-  // enforces zizmor findings without adding a skippable ci-required dependency.
   assert.match(
     workflow,
-    /node scripts\/ci\/run-zizmor-changed\.mjs --format=github --base "\$BASE_SHA" --head "\$HEAD_SHA"/,
-  );
-  assert.match(
-    workflow,
-    /npm run verify:commit-identities -- --base "\$BASE_SHA" --head "\$HEAD_SHA"/,
+    /node scripts\/ci\/commit-identity-check\.mjs --base "\$BASE_SHA" --head "\$HEAD_SHA"/,
   );
   assert.match(workflow, /node scripts\/ci\/check-change-budget\.mjs/);
-  assert.match(workflow, /run: npm run verify:public-sanitize/);
+  assert.match(workflow, /run: node scripts\/public-sanitize-check\.mjs/);
 });
 
 test('agent contracts enforce close-on-main and avoid floating tool installers', () => {
@@ -1119,6 +1085,7 @@ test('agent contracts enforce close-on-main and avoid floating tool installers',
   assert.match(agents, /npm run hooks:install/);
   assert.match(agents, /Publish only with `npm run pr:publish`/);
   assert.match(agents, /exact-remote `--force-with-lease`/);
+  assert.match(agents, /must not repeat the\s+broad lint, build, hygiene, product-test/);
   assert.match(agents, /PUBLIC_SANITIZE_LOCAL_BLOCKLIST/);
   assert.doesNotMatch(pullRequestTemplate, /mandatory window|`BLOCKER:`/);
   assert.match(pullRequestTemplate, /inside the standard window/);

@@ -99,18 +99,12 @@ export function App() {
   const reconnectAttemptRef = useRef(0);
   const authorityEpochRef = useRef(0);
   const manualDisconnectRef = useRef(false);
-  const relayZ02MicrophonePcm = useCallback((pcm: Uint8Array): boolean => {
-    const store = storeRef.current;
-    if (!store?.canSendMicrophonePcm()) return false;
-    store.sendMicrophonePcm(pcm);
-    return true;
-  }, []);
   const fleet = useFleetRouting({
     accessState: access.state,
     connect,
     reportError: setConfigError,
   });
-  const z02Link = useZ02Link(undefined, { relayMicrophonePcm: relayZ02MicrophonePcm });
+  const z02Link = useZ02Link();
   const mouthOpen = useVoicePlayback(streamState.voicePlayback, storeRef.current);
 
   const sendDeviceLocation = useCallback((sample: DeviceLocationSample) => {

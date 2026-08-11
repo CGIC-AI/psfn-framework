@@ -80,9 +80,10 @@ function busyLabel(phase: Z02LinkState['phase']): string {
 }
 
 function linkedLabel(state: Z02LinkState): string {
+  if (state.audioError) return 'Audio error';
   if (state.transport === 'omi-audio') {
-    return (state.audioFrames ?? 0) > 0 ? 'Mic streaming' : 'Mic subscribed';
+    if ((state.decodedFrames ?? 0) > 0) return 'Mic decoded';
+    return (state.audioFrames ?? 0) > 0 ? 'Opus received' : 'Mic subscribed';
   }
-  if ((state.relayedFrames ?? 0) > 0) return 'Mic relaying';
   return (state.audioFrames ?? 0) > 0 ? 'Mic received' : 'Mic started';
 }

@@ -189,7 +189,6 @@ export interface HubStreamClientLike {
   connect(): Promise<void>;
   disconnect(): void;
   sendUserText(text: string, options?: { interrupt?: boolean }): void;
-  sendMicrophonePcm?(pcm: Uint8Array): void;
   interrupt(): void;
   sendApprovalDecision(id: string, decision: 'approve' | 'deny'): void;
   sendArtifactPreviewRequest(requestId: string, artifactId: string): void;
@@ -406,18 +405,6 @@ export class HubStreamStore {
 
   sendUserText(text: string, options?: { interrupt?: boolean }): void {
     this.client.sendUserText(text, options);
-  }
-
-  canSendMicrophonePcm(): boolean {
-    return typeof this.client.sendMicrophonePcm === 'function'
-      && Boolean(this.state.session?.capabilities?.input?.includes('microphone_pcm'));
-  }
-
-  sendMicrophonePcm(pcm: Uint8Array): void {
-    if (!this.canSendMicrophonePcm() || !this.client.sendMicrophonePcm) {
-      throw new Error('The current Companion UI attachment cannot relay microphone PCM');
-    }
-    this.client.sendMicrophonePcm(pcm);
   }
 
   interrupt(): void {

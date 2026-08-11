@@ -538,7 +538,6 @@ describe('hub stream store control + artifact wiring', () => {
 class FakeHubClient implements HubStreamClientLike {
   private readonly listeners = new Map<keyof SatelliteHubClientEventMap, Set<(event: never) => void>>();
   private readonly hello = buildSatelliteHello();
-  readonly microphonePcm: Uint8Array[] = [];
 
   on<K extends keyof SatelliteHubClientEventMap>(
     type: K,
@@ -565,10 +564,6 @@ class FakeHubClient implements HubStreamClientLike {
 
   sendUserText(): void {
     return;
-  }
-
-  sendMicrophonePcm(pcm: Uint8Array): void {
-    this.microphonePcm.push(pcm.slice());
   }
 
   interrupt(): void {
@@ -694,16 +689,4 @@ describe('hub stream voice playback wiring', () => {
     expect(store.snapshot().voicePlayback.queue).toHaveLength(0);
   });
 
-  it('relays microphone PCM only after the authenticated session grants that input', () => {
-    const client = new FakeHubClient();
-    const store = new HubStreamStore(client);
-    expect(store.canSendMicrophonePcm()).toBe(false);
-    expect(() => store.sendMicrophonePcm(Uint8Array.of(0, 0)))
-      .toThrow('cannot relay microphone PCM');
-
-    client.emit('session', { capabilities: { input: ['microphone_pcm'] } });
-    expect(store.canSendMicrophonePcm()).toBe(true);
-    store.sendMicrophonePcm(Uint8Array.of(1, 2));
-    expect(client.microphonePcm).toEqual([Uint8Array.of(1, 2)]);
-  });
 });

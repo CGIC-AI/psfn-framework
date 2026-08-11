@@ -88,9 +88,8 @@ Two BLE transports are recognized:
   `0x05` before closing GATT.
 - Stark Ruby `Omi`: service `19b10000-e8f2-537e-4f6c-d104768a1214`, Opus audio
   characteristic `...0001`, and codec characteristic `...0002`. Codec `0x15`
-  is required. BLE fragments are reassembled into complete Opus frames. A
-  separately tested WebCodecs adapter converts those frames to the same 16 kHz
-  mono PCM boundary; the current automatic relay path prioritizes stock PCM.
+  is required. BLE fragments are reassembled into complete Opus frames and the
+  live WebCodecs adapter converts them to the same 16 kHz mono PCM boundary.
 
 RCSP envelopes are stream-decoded because one frame may span several BLE
 notifications or several frames may arrive together. Malformed envelopes,
@@ -105,14 +104,13 @@ Bluetooth with a native BLE adapter without changing authentication, framing,
 or UI state. This replacement is required for Android WebView shells that do
 not expose Web Bluetooth; Chrome/TWA can use the browser connector directly.
 
-The UI reports receipt and upstream relay separately. The retained direct-Hub
-client can forward valid PCM only after the session advertises
-`microphone_pcm`; audio payloads are redacted from client telemetry. The shipped
+The UI reports receipt/decoding without claiming upstream delivery. The shipped
 same-origin Companion Gateway action transport currently accepts final audio
-transcripts, not raw PCM, so it deliberately reports **Mic received** instead
-of claiming end-to-end relay. Adding a gateway-owned streaming-audio ingress is
-the remaining server-side dependency; browser code must not invent a Hub URL,
-device credential, or channel authority to bypass it.
+transcripts, not raw PCM, so it deliberately reports **Mic received** or
+**Mic decoded** instead of claiming end-to-end relay. Adding a gateway-owned,
+bounded streaming-audio ingress is the remaining server-side dependency;
+browser code must not invent a Hub URL, device credential, or channel authority
+to bypass it.
 
 Build the PWA:
 

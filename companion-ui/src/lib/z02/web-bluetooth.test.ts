@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { computeStockAuthProof } from './rcsp-auth.js';
 import {
+  OMI_AUDIO_CHARACTERISTIC_UUID,
+  OMI_AUDIO_SERVICE_UUID,
+  OMI_CODEC_CHARACTERISTIC_UUID,
   Z02_NOTIFY_CHARACTERISTIC_UUID,
   Z02_RCSP_SERVICE_UUID,
   Z02_WRITE_CHARACTERISTIC_UUID,
@@ -14,13 +17,14 @@ afterEach(() => {
 });
 
 describe('Web Bluetooth Z02 connector', () => {
-  it('selects the stock service, discovers AE01/AE02, and authenticates before linking', async () => {
+  it('authenticates stock RCSP, starts PCM recording, and emits microphone chunks', async () => {
     const fixture = createBluetoothFixture();
     const progress = vi.fn();
     const disconnected = vi.fn();
+    const audioPcm = vi.fn();
     const connector = new WebBluetoothZ02Connector(fixture.bluetooth);
 
-    const connection = await connector.connect({ progress, disconnected });
+    const connection = await connector.connect({ progress, disconnected, audioPcm });
 
     expect(fixture.requestDevice).toHaveBeenCalledWith({
       filters: [
@@ -28,8 +32,12 @@ describe('Web Bluetooth Z02 connector', () => {
           namePrefix: 'ZNP Z02',
           services: [Z02_RCSP_SERVICE_UUID],
         },
+        {
+          namePrefix: 'Omi',
+          services: [OMI_AUDIO_SERVICE_UUID],
+        },
       ],
-      optionalServices: [Z02_RCSP_SERVICE_UUID],
+      optionalServices: [Z02_RCSP_SERVICE_UUID, OMI_AUDIO_SERVICE_UUID],
     });
     expect(fixture.getPrimaryService).toHaveBeenCalledWith(Z02_RCSP_SERVICE_UUID);
     expect(fixture.getCharacteristic.mock.calls.map(call => call[0])).toEqual([
@@ -40,12 +48,43 @@ describe('Web Bluetooth Z02 connector', () => {
       'selecting',
       'connecting',
       'authenticating',
+      'subscribing',
     ]);
     expect(connection.deviceName).toBe('Z02 Test Badge');
-    expect(fixture.writes).toHaveLength(4);
+    expect(connection.transport).toBe('stock-rcsp');
+    expect(connection.microphone).toBe('pcm16-16khz');
+    expect(fixture.writes).toHaveLength(5);
+    expect(fixture.writes[4]?.[4]).toBe(0x04);
+    expect(fixture.writes[4]?.[8]).toBe(0x00);
+
+    fixture.notify(fromHex('fedcba8001000633040001'));
+    fixture.notify(fromHex('0203ef'));
+    expect(audioPcm).toHaveBeenCalledWith(Uint8Array.of(0x00, 0x01, 0x02, 0x03));
 
     fixture.device.dispatch('gattserverdisconnected');
     expect(disconnected).toHaveBeenCalledOnce();
+  });
+
+  it('fails closed when the stock badge rejects microphone start', async () => {
+    const fixture = createBluetoothFixture({ rejectMicrophone: true });
+    const connector = new WebBluetoothZ02Connector(fixture.bluetooth);
+
+    await expect(connector.connect({ disconnected: vi.fn() }))
+      .rejects.toThrow('Z02 microphone start failed');
+    expect(fixture.disconnect).toHaveBeenCalledOnce();
+  });
+
+  it('sends the stock recording-stop command before a local GATT disconnect', async () => {
+    const fixture = createBluetoothFixture();
+    const connection = await new WebBluetoothZ02Connector(fixture.bluetooth).connect({
+      disconnected: vi.fn(),
+    });
+
+    connection.disconnect();
+
+    await vi.waitFor(() => expect(fixture.disconnect).toHaveBeenCalledOnce());
+    expect(fixture.writes).toHaveLength(6);
+    expect(fixture.writes[5]?.[4]).toBe(0x05);
   });
 
   it('disconnects and fails closed when stock authentication is rejected', async () => {
@@ -90,9 +129,62 @@ describe('Web Bluetooth Z02 connector', () => {
     await Promise.resolve();
     expect(disconnect).toHaveBeenCalledOnce();
   });
+
+  it('subscribes to Stark Ruby Omi audio and emits complete Opus frames', async () => {
+    const fixture = createOmiBluetoothFixture();
+    const audioFrame = vi.fn();
+    const progress = vi.fn();
+    const connector = new WebBluetoothZ02Connector(fixture.bluetooth);
+
+    const connection = await connector.connect({
+      audioFrame,
+      disconnected: vi.fn(),
+      progress,
+    });
+
+    expect(fixture.requestDevice).toHaveBeenCalledWith({
+      filters: [
+        { namePrefix: 'ZNP Z02', services: [Z02_RCSP_SERVICE_UUID] },
+        { namePrefix: 'Omi', services: [OMI_AUDIO_SERVICE_UUID] },
+      ],
+      optionalServices: [Z02_RCSP_SERVICE_UUID, OMI_AUDIO_SERVICE_UUID],
+    });
+    expect(fixture.getPrimaryService).toHaveBeenCalledWith(OMI_AUDIO_SERVICE_UUID);
+    expect(fixture.getCharacteristic.mock.calls.map(call => call[0])).toEqual([
+      OMI_AUDIO_CHARACTERISTIC_UUID,
+      OMI_CODEC_CHARACTERISTIC_UUID,
+    ]);
+    expect(progress.mock.calls.map(call => call[0])).toEqual([
+      'selecting',
+      'connecting',
+      'subscribing',
+    ]);
+    expect(connection).toMatchObject({
+      deviceName: 'Omi',
+      transport: 'omi-audio',
+      microphone: 'opus-16khz',
+    });
+
+    fixture.notify(Uint8Array.of(4, 0, 0, 0xa1));
+    fixture.notify(Uint8Array.of(5, 0, 0, 0xb1, 0xb2));
+    expect(audioFrame).toHaveBeenCalledWith({
+      firstSequence: 4,
+      lastSequence: 4,
+      opus: Uint8Array.of(0xa1),
+    });
+  });
+
+  it('rejects an Omi-named badge that reports an unsupported codec', async () => {
+    const fixture = createOmiBluetoothFixture({ codec: 0x01 });
+    const connector = new WebBluetoothZ02Connector(fixture.bluetooth);
+
+    await expect(connector.connect({ disconnected: vi.fn() }))
+      .rejects.toThrow('Unsupported Omi audio codec 1');
+    expect(fixture.disconnect).toHaveBeenCalledOnce();
+  });
 });
 
-function createBluetoothFixture(options: { rejectProof?: boolean } = {}) {
+function createBluetoothFixture(options: { rejectProof?: boolean; rejectMicrophone?: boolean } = {}) {
   const writes: Uint8Array[] = [];
   const listeners = new Set<(event: Event) => void>();
   let notifyCharacteristic: Z02BluetoothCharacteristic;
@@ -110,6 +202,14 @@ function createBluetoothFixture(options: { rejectProof?: boolean } = {}) {
         notify(concat(0x00, badgeChallenge));
       } else if (bytes[0] === 0x01 && bytes.length === 17) {
         notify(fromHex('0270617373'));
+      } else if (bytes[0] === 0xfe && bytes[4] === 0x04) {
+        const sequence = bytes[7] ?? 0;
+        notify(Uint8Array.of(
+          0xfe, 0xdc, 0xba, 0x00, 0x04, 0x00, 0x02,
+          options.rejectMicrophone ? 0x01 : 0x00,
+          sequence,
+          0xef,
+        ));
       }
     },
     async startNotifications() { return notifyCharacteristic; },
@@ -169,7 +269,59 @@ function createBluetoothFixture(options: { rejectProof?: boolean } = {}) {
     getCharacteristic,
     getPrimaryService,
     requestDevice,
+    notify,
     writes,
+  };
+}
+
+function createOmiBluetoothFixture(options: { codec?: number } = {}) {
+  const listeners = new Set<(event: Event) => void>();
+  let audioCharacteristic: Z02BluetoothCharacteristic;
+  audioCharacteristic = {
+    value: null,
+    async startNotifications() { return audioCharacteristic; },
+    addEventListener(_type, listener) { listeners.add(listener); },
+    removeEventListener(_type, listener) { listeners.delete(listener); },
+  };
+  const codecBytes = Uint8Array.of(options.codec ?? 0x15);
+  const codecCharacteristic: Z02BluetoothCharacteristic = {
+    async readValue() {
+      return new DataView(codecBytes.buffer, codecBytes.byteOffset, codecBytes.byteLength);
+    },
+    async startNotifications() { return codecCharacteristic; },
+    addEventListener() {},
+    removeEventListener() {},
+  };
+  const getCharacteristic = vi.fn(async (uuid: string) => (
+    uuid === OMI_AUDIO_CHARACTERISTIC_UUID ? audioCharacteristic : codecCharacteristic
+  ));
+  const getPrimaryService = vi.fn(async () => ({ getCharacteristic }));
+  const disconnect = vi.fn();
+  const device = {
+    name: 'Omi',
+    gatt: {
+      connected: false,
+      async connect() {
+        this.connected = true;
+        return { getPrimaryService };
+      },
+      disconnect,
+    },
+    addEventListener() {},
+    removeEventListener() {},
+  };
+  const requestDevice = vi.fn(async () => device);
+  return {
+    bluetooth: { requestDevice } satisfies Z02Bluetooth,
+    disconnect,
+    getCharacteristic,
+    getPrimaryService,
+    notify(bytes: Uint8Array) {
+      audioCharacteristic.value = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      const event = { target: audioCharacteristic } as unknown as Event;
+      for (const listener of listeners) listener(event);
+    },
+    requestDevice,
   };
 }
 

@@ -16,12 +16,12 @@ export function Z02LinkSection({
   return (
     <section className="settings-section z02-link-section" aria-label="Z02 badge link">
       <h2>Z02 badge</h2>
-      <p>Link directly to the badge&apos;s stock JieLi RCSP service. Discovery starts only when you tap the button.</p>
+      <p>Use this phone as the network relay for an untouched stock badge over JieLi RCSP or a Stark Ruby badge over its Omi audio service. Discovery starts only when you tap the button.</p>
       <div className={`z02-link-summary ${linked ? 'linked' : ''}`}>
         {linked ? <ShieldCheck aria-hidden /> : <Bluetooth aria-hidden />}
         <span>
-          <strong>{state.deviceName ?? 'Stock ZNP Z02'}</strong>
-          <small>{linked ? 'Authenticated' : statusLabel(state.phase)}</small>
+          <strong>{state.deviceName ?? 'ZNP Z02 / Stark Ruby'}</strong>
+          <small>{linked ? linkedLabel(state) : statusLabel(state.phase)}</small>
         </span>
       </div>
       <p className="z02-link-detail" role="status" aria-live="polite">{state.detail}</p>
@@ -59,6 +59,8 @@ function statusLabel(phase: Z02LinkState['phase']): string {
       return 'Connecting';
     case 'authenticating':
       return 'Authenticating';
+    case 'subscribing':
+      return 'Subscribing to audio';
     default:
       return 'Not linked';
   }
@@ -70,7 +72,17 @@ function busyLabel(phase: Z02LinkState['phase']): string {
       return 'Choose badge…';
     case 'connecting':
       return 'Connecting…';
+    case 'subscribing':
+      return 'Subscribing…';
     default:
       return 'Authenticating…';
   }
+}
+
+function linkedLabel(state: Z02LinkState): string {
+  if (state.transport === 'omi-audio') {
+    return (state.audioFrames ?? 0) > 0 ? 'Mic streaming' : 'Mic subscribed';
+  }
+  if ((state.relayedFrames ?? 0) > 0) return 'Mic relaying';
+  return (state.audioFrames ?? 0) > 0 ? 'Mic received' : 'Mic started';
 }

@@ -123,6 +123,37 @@ export interface DeterministicGateEvent {
 }
 
 /**
+ * Content-free lifecycle for one affect-driven proactive transition. The
+ * correlation id is derived from the lever crossing, so retries and the
+ * eventual ICP candidate can be joined without logging message or motivation
+ * text.
+ */
+export interface EmotionProactiveTransitionEvent {
+  correlationId: string;
+  lever: 'would_message';
+  stage: 'would_message' | 'felt_impulse' | 'candidate_submission' | 'final_disposition';
+  outcome:
+    | 'qualified'
+    | 'received'
+    | 'submitted'
+    | 'sent'
+    | 'suppressed'
+    | 'deferred'
+    | 'declined'
+    | 'rejected'
+    | 'deduped'
+    | 'not_authorized'
+    | 'no_eligible_peer'
+    | 'throttled';
+  firedAtMs: number;
+  peerContactId?: string;
+  candidateId?: string;
+  candidateStatus?: IcpInitiationCandidateStatus;
+  reasonCode?: string;
+  timestamp: number;
+}
+
+/**
  * Outcome of one participation-appraiser run (bible §8.2). Content-free faculty
  * telemetry: the ternary decision, its advisory reason/confidence, and whether
  * the decision was a fail-closed `ignore` (disabled/timeout/error/malformed)
@@ -1149,10 +1180,23 @@ export interface EventMap {
   // Affect-driven ICP initiation impulse (hrmrq.34, operator ruling D4): the
   // emo-sim proactivity sidecar's would_message lever fired. The felt-impulse
   // adapter (app wiring) is the ratified authoritative consumer; content-free.
-  'icp.felt_impulse.lever': { lever: 'would_message'; firedAtMs: number; timestamp: number };
+  'icp.felt_impulse.lever': {
+    lever: 'would_message';
+    correlationId: string;
+    firedAtMs: number;
+    timestamp: number;
+  };
+  'emotion.proactive.transition': EmotionProactiveTransitionEvent;
   // Outcome telemetry from the felt-impulse adapter, incl. the EXPLICIT
   // no-eligible-peer surface (missing channel='companion' sibling seed).
-  'icp.felt_impulse.outcome': { outcome: string; peerContactId?: string; candidateId?: string; reason?: string; timestamp: number };
+  'icp.felt_impulse.outcome': {
+    correlationId: string;
+    outcome: string;
+    peerContactId?: string;
+    candidateId?: string;
+    reason?: string;
+    timestamp: number;
+  };
   'social_desire.consent.declined': { contactId: string; reason?: string; dampenedPressure: number; timestamp: number };
   'social_desire.consent.blocked': { contactId: string; reason: string; timestamp: number };
   'model.budget.blocked': ModelBudgetBlockedEvent;

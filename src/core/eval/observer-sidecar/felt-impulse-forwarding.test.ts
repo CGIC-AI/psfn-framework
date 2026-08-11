@@ -60,6 +60,7 @@ describe('would_message lever forwards to the felt-impulse seam', () => {
     expect(emitFeltImpulse).toHaveBeenCalledTimes(1);
     expect(emitFeltImpulse).toHaveBeenCalledWith({
       lever: 'would_message',
+      correlationId: `felt-impulse:would_message:${NOW_MS}`,
       firedAtMs: NOW_MS + 30 * MINUTE_MS,
       timestamp: NOW_MS + 30 * MINUTE_MS,
     });
@@ -95,5 +96,36 @@ describe('would_message lever forwards to the felt-impulse seam', () => {
       runId: 'run-2', observationId: 'obs-b', snapshot: restless, observedAtMs: NOW_MS + 60 * MINUTE_MS,
     });
     expect(emitFeltImpulse).not.toHaveBeenCalled();
+  });
+
+  it('retries a failed required handoff with the same correlation identity', async () => {
+    const persistence = makeLeverPersistence();
+    const emitFeltImpulse = vi.fn()
+      .mockRejectedValueOnce(new Error('required ICP consumer unavailable'))
+      .mockResolvedValue(undefined);
+    const stage = new ObserverEvalLeverStage({
+      settings: { ...createDefaultObserverEvalSidecarLeverSettings(), enabled: true },
+      persistence,
+      sidecarId: 'sidecar-felt-impulse-test',
+      retentionDays: 14,
+      emitFeltImpulse,
+    });
+
+    const observe = (observedAtMs: number) => stage.evaluateObservation({
+      runId: 'run-retry',
+      observationId: `obs-${observedAtMs}`,
+      snapshot: lonelySnapshot(),
+      observedAtMs,
+    });
+
+    await observe(NOW_MS);
+    await observe(NOW_MS + 30 * MINUTE_MS);
+    await observe(NOW_MS + 31 * MINUTE_MS);
+
+    expect(emitFeltImpulse).toHaveBeenCalledTimes(2);
+    expect(emitFeltImpulse.mock.calls.map(([event]) => event.correlationId)).toEqual([
+      `felt-impulse:would_message:${NOW_MS}`,
+      `felt-impulse:would_message:${NOW_MS}`,
+    ]);
   });
 });

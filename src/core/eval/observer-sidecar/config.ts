@@ -1,5 +1,5 @@
 import { createComponentLogger } from '../../../shared/logger.js';
-import type { EventBus } from '../../../shared/event-bus.js';
+import type { EventBus, EventMap } from '../../../shared/event-bus.js';
 import type { ContextCoherenceEvent } from '../../../shared/contracts/context-coherence.js';
 import type { TurnID } from '../../../shared/contracts/runtime.js';
 import type { ObserverEvalSidecarLeverSettings } from '../../../shared/contracts/runtime.js';
@@ -95,9 +95,13 @@ function createObserverEvalSidecarPort(
       : {}),
     // hrmrq.34 (D4): forward would_message lever fires to the affect-driven
     // ICP initiation seam. The subscriber lives in app wiring (felt-impulse
-    // adapter); with no subscriber the emit is inert telemetry.
+    // adapter). Required delivery makes a missing or failed consumer visible
+    // and leaves the crossing retryable instead of silently consuming it.
     ...(eventBus
-      ? { emitFeltImpulse: event => eventBus.emit('icp.felt_impulse.lever', event) }
+      ? {
+          emitFeltImpulse: event => eventBus.emitRequired('icp.felt_impulse.lever', event),
+          emitProactiveTransition: event => eventBus.emit('emotion.proactive.transition', event),
+        }
       : {}),
     // One runner per sidecar: it caches the contract check and the persistent
     // session bootstrap across observations.
@@ -154,7 +158,8 @@ interface EmoSimObserverEvalSidecarOptions {
    * lever output; everything else about the lever store stays eval-owned
    * telemetry.
    */
-  emitFeltImpulse?: (event: { lever: 'would_message'; firedAtMs: number; timestamp: number }) => Promise<void>;
+  emitFeltImpulse?: (event: EventMap['icp.felt_impulse.lever']) => Promise<void>;
+  emitProactiveTransition?: (event: EventMap['emotion.proactive.transition']) => Promise<void>;
 }
 
 class EmoSimObserverEvalSidecar implements ObserverEvalSidecarPort {
@@ -181,6 +186,9 @@ class EmoSimObserverEvalSidecar implements ObserverEvalSidecarPort {
         : {}),
       ...(options.emitFeltImpulse
         ? { emitFeltImpulse: options.emitFeltImpulse }
+        : {}),
+      ...(options.emitProactiveTransition
+        ? { emitProactiveTransition: options.emitProactiveTransition }
         : {}),
     });
   }
@@ -382,7 +390,8 @@ interface ObserverEvalLeverStageOptions {
   retentionDays: number;
   emitContextCoherence?: (event: ContextCoherenceEvent) => Promise<void>;
   /** hrmrq.34 (D4): forward fired would_message levers to the ICP felt-impulse seam. */
-  emitFeltImpulse?: (event: { lever: 'would_message'; firedAtMs: number; timestamp: number }) => Promise<void>;
+  emitFeltImpulse?: (event: EventMap['icp.felt_impulse.lever']) => Promise<void>;
+  emitProactiveTransition?: (event: EventMap['emotion.proactive.transition']) => Promise<void>;
 }
 
 interface ObserverEvalCoherenceContext {
@@ -398,7 +407,8 @@ function createObserverEvalLeverStage(input: {
   sidecarId: string;
   retentionDays: number;
   emitContextCoherence?: (event: ContextCoherenceEvent) => Promise<void>;
-  emitFeltImpulse?: (event: { lever: 'would_message'; firedAtMs: number; timestamp: number }) => Promise<void>;
+  emitFeltImpulse?: (event: EventMap['icp.felt_impulse.lever']) => Promise<void>;
+  emitProactiveTransition?: (event: EventMap['emotion.proactive.transition']) => Promise<void>;
 }): ObserverEvalLeverStage | null {
   if (input.settings?.enabled !== true) {
     return null;
@@ -419,6 +429,9 @@ function createObserverEvalLeverStage(input: {
     ...(input.emitFeltImpulse
       ? { emitFeltImpulse: input.emitFeltImpulse }
       : {}),
+    ...(input.emitProactiveTransition
+      ? { emitProactiveTransition: input.emitProactiveTransition }
+      : {}),
   });
 }
 
@@ -434,10 +447,10 @@ function isLeverPersistencePort(
 }
 
 /**
- * Shadow lever stage: runs after each persisted observation and emits
- * WOULD-ACT telemetry events. TRACKING ONLY -- writes go to the eval-owned,
- * non-authoritative lever tables; the only reader is the Garden admin
- * service. Nothing in the live companion loop consumes these events.
+ * Lever stage: runs after each persisted observation and records WOULD-ACT
+ * telemetry in eval-owned, non-authoritative tables. The would_message lever
+ * additionally hands one content-free felt impulse to the app-owned ICP
+ * candidate seam; all targeting, authorization, and delivery stay ICP-owned.
  */
 export class ObserverEvalLeverStage {
   private tracker: ObserverLeverTracker | null = null;
@@ -452,8 +465,10 @@ export class ObserverEvalLeverStage {
     observedAtMs: number;
     coherenceContext?: ObserverEvalCoherenceContext;
   }): Promise<void> {
+    let previousState: ReturnType<ObserverLeverTracker['getState']> | null = null;
     try {
       const tracker = await this.ensureTracker();
+      previousState = tracker.getState();
       const evaluation = tracker.evaluate({
         snapshot: input.snapshot,
         observedAtMs: input.observedAtMs,
@@ -478,8 +493,20 @@ export class ObserverEvalLeverStage {
         // authorization, and candidate creation. Content-free by construction
         // (lever name + timestamps only).
         if (event.lever === 'would_message' && this.options.emitFeltImpulse) {
+          const correlationId = `felt-impulse:would_message:${event.firstCrossingMs}`;
+          if (this.options.emitProactiveTransition) {
+            await this.options.emitProactiveTransition({
+              correlationId,
+              lever: 'would_message',
+              stage: 'would_message',
+              outcome: 'qualified',
+              firedAtMs: event.firedAtMs,
+              timestamp: input.observedAtMs,
+            });
+          }
           await this.options.emitFeltImpulse({
             lever: 'would_message',
+            correlationId,
             firedAtMs: event.firedAtMs,
             timestamp: input.observedAtMs,
           });
@@ -514,6 +541,13 @@ export class ObserverEvalLeverStage {
       // catch: the failure goes through the sidecar's component logger and is
       // recorded on the persisted lever state (best effort).
       const message = error instanceof Error ? error.message : String(error);
+      if (previousState) {
+        // A failed required handoff must not consume the crossing. Restore the
+        // pre-evaluation tracker so the next observation retries with the same
+        // firstCrossing-derived correlation id. The candidate source identity
+        // then deduplicates even across response-loss retries.
+        this.tracker = new ObserverLeverTracker(this.options.settings, previousState);
+      }
       this.logger.error('Observer eval sidecar lever evaluation failed', {
         sidecarId: this.options.sidecarId,
         runId: input.runId,

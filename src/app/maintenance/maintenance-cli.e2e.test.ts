@@ -15,6 +15,7 @@ import {
   signJournalEntry,
 } from '../../persistence/journals/journal-utils.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import { runIntakePolicyOwnerMigrationCli } from './migrate-intake-policy-owner.js';
 import { runSchedulerOwnerMigrationCli } from './migrate-scheduler-owner.js';
 import { runSessionIntegrityRepairCli } from './session-integrity-repair.js';
 import { runSessionRepairCli } from './session-repair.js';
@@ -28,6 +29,17 @@ describe('maintenance CLI entrypoints', () => {
       rmSync(scratchDir, { force: true, recursive: true });
     }
     scratchDirs.length = 0;
+  });
+
+  it('describes every supported intake-policy migration source and the v5 target', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    const result = await runIntakePolicyOwnerMigrationCli(['--help']);
+
+    expect(result).toBeUndefined();
+    expect(log.mock.calls.flat().join('\n')).toContain(
+      'Upgrades schema-v1/v2/v3/v4 intake-policy.json owners to v5',
+    );
   });
 
   it('runs the session repair CLI against a scratch data directory and preserves its report shape', async () => {

@@ -1119,6 +1119,42 @@ describe('GatewayServer', () => {
       ]);
     });
 
+    it('uses the ntfy default topic for approval delivery and reports the sink healthy', async () => {
+      const fetchMock = vi.fn(async () => new Response('', { status: 200 }));
+      vi.stubGlobal('fetch', fetchMock);
+      try {
+        const queuedPath = join(tempDir, 'default-topic-write.txt');
+        const { conn } = await setupServerConnection({
+          ...createMinimalOptions(),
+          capabilityTierProvider: () => 'apprentice',
+          ntfy: {
+            baseUrl: 'https://ntfy.local',
+            defaultTopic: 'approval-default',
+            timeoutMs: 1_000,
+            debounceWindowMs: 0,
+          },
+        });
+
+        const queued = await invokeRpc(conn, 15, 'fs.write', {
+          path: queuedPath,
+          content: 'queued-content',
+        });
+        expect(queued.error.code).toBe(GatewayErrors.NEEDS_APPROVAL);
+        expect(fetchMock).toHaveBeenCalledWith(
+          'https://ntfy.local/approval-default',
+          expect.objectContaining({ method: 'POST' }),
+        );
+
+        const health = await invokeRpc(conn, 16, 'runtime.health', {});
+        expect(health.result.services).toContainEqual(expect.objectContaining({
+          serviceId: 'approval_notifications',
+          status: 'healthy',
+        }));
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
+
     it('executes modify decision with operator-provided params', async () => {
       const originalPath = join(tempDir, 'original.txt');
       const modifiedPath = join(tempDir, 'modified.txt');
@@ -2582,7 +2618,7 @@ describe('GatewayServer', () => {
       const initial = await invokeRpc(conn, 600, 'runtime.health', {});
       expect(initial.result.services).toEqual(expect.arrayContaining([
         expect.objectContaining({ serviceId: 'gateway', status: 'healthy' }),
-        expect.objectContaining({ serviceId: 'approval_notifications', status: 'degraded' }),
+        expect.objectContaining({ serviceId: 'approval_notifications', status: 'healthy' }),
         expect.objectContaining({ serviceId: 'ntfy', status: 'healthy' }),
         expect.objectContaining({
           serviceId: 'mcp',

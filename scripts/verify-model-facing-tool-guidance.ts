@@ -73,10 +73,16 @@ function presentsAliasAsCanonicalAction(
 ): boolean {
   if (alias.replacementAction !== alias.alias) return false;
   const escaped = escapeRegExp(alias.alias);
-  if (new RegExp(`\\baction\\s*=\\s*["']${escaped}["']`, 'u').test(line)) return true;
-  return line.includes(`\`${alias.canonicalName}\``)
-    && /\bactions?\b/iu.test(line)
-    && new RegExp(`\`${escaped}\``, 'u').test(line);
+  const escapedCanonicalName = escapeRegExp(alias.canonicalName);
+  const canonicalActionPattern = new RegExp(
+    `(?:\`${escapedCanonicalName}\`|(?<![A-Za-z0-9_])${escapedCanonicalName}(?![A-Za-z0-9_]))`
+      + `(?:\\s+with)?\\s+\`?action\\s*=\\s*`
+      + `(?:["']${escaped}["']|${escaped}(?![A-Za-z0-9_]))\`?`,
+    'gu',
+  );
+  const withoutCanonicalActions = line.replace(canonicalActionPattern, '');
+  return withoutCanonicalActions !== line
+    && !presentsAliasAsCallable(withoutCanonicalActions, alias.alias);
 }
 
 /**

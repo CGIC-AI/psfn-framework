@@ -249,4 +249,44 @@ describe('postgres gateway audit adapter', () => {
     ]);
     expect(recent[0]?.paramsJson).toContain('req-1');
   });
+
+  it('normalizes pre-upgrade NEEDS_APPROVAL rows at the persistence boundary', async () => {
+    const pool = new FakeAuditPool();
+    const store = createPostgresGatewayAuditStoreFromPool(pool as never);
+    pool.seed({
+      timestamp: 1_000,
+      method: 'git.commit',
+      decision: 'NEEDS_APPROVAL',
+      paramsJson: '{"message":"checkpoint"}',
+      durationMs: null,
+      error: null,
+    });
+
+    expect(await store.getRecent(1)).toEqual([
+      expect.objectContaining({
+        method: 'git.commit',
+        decision: 'AUTONOMOUS_TIER_REQUIRED',
+      }),
+    ]);
+    expect(await store.getApprovalEvents(1)).toEqual([
+      expect.objectContaining({ decision: 'AUTONOMOUS_TIER_REQUIRED' }),
+    ]);
+  });
+
+  it('rejects unknown persisted policy decisions', async () => {
+    const pool = new FakeAuditPool();
+    const store = createPostgresGatewayAuditStoreFromPool(pool as never);
+    pool.seed({
+      timestamp: 1_000,
+      method: 'future.method',
+      decision: 'FUTURE_DECISION',
+      paramsJson: null,
+      durationMs: null,
+      error: null,
+    });
+
+    await expect(store.getRecent(1)).rejects.toThrow(
+      'Unknown persisted gateway policy decision: FUTURE_DECISION',
+    );
+  });
 });

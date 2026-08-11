@@ -305,7 +305,11 @@ describe('AdminAuditHistoryDataService', () => {
         now: () => 1_700_000_000_500,
       });
 
-      const data = await service.getAuditHistory({ source: 'gateway', timeRange: 'all' });
+      const data = await service.getAuditHistory({
+        source: 'gateway',
+        decision: 'needs_approval',
+        timeRange: 'all',
+      });
 
       expect(data.entries).toHaveLength(1);
       expect(data.entries[0]).toMatchObject({

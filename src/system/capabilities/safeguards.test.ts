@@ -11,7 +11,7 @@ import {
   resolveToolReversibility,
   tagToolWithReversibility,
 } from './safeguards.js';
-import { MODEL_FACING_DRIFT_GUARD_RETIRED_TOOL_ALIASES } from '../../core/agent/tool-surface/registry.js';
+import { listRetiredToolAliases } from '../../core/agent/tool-surface/registry.js';
 
 function mockTool(name: string): AgentTool<any> {
   return {
@@ -38,11 +38,9 @@ describe('tool reversibility tagging', () => {
 
   it('does not author reversibility metadata for retired model-facing split aliases', () => {
     const retiredMetadataAliases = [
-      ...MODEL_FACING_DRIFT_GUARD_RETIRED_TOOL_ALIASES,
-      'promoted_tools_list',
-      'promoted_tools_add',
-      'promoted_tools_remove',
-      'promoted_tools_swap',
+      ...listRetiredToolAliases()
+        .filter(alias => alias.exposure === 'retired')
+        .map(alias => alias.alias),
     ];
 
     for (const alias of retiredMetadataAliases) {

@@ -8,7 +8,7 @@ version: 1
 ---
 # Web Fetch Skill
 
-Prefer the top-level `web_fetch` tool for routine page reads.
+Prefer `web` with `action="fetch"` for routine page reads.
 
 Use `lane: "default"` for normal web pages.
 Use `lane: "local_crawler"` only when you explicitly need the local crawler path.
@@ -46,7 +46,7 @@ Content-Type: application/json
 
 ## Usage
 When asked to read a URL or fetch web content:
-1. Prefer the top-level `web_fetch` tool
+1. Prefer `web` with `action="fetch"`
 2. Only fall back to a raw crawl4ai endpoint when the operator has explicitly
    supplied one for this deployment
 3. Return the fetched content to the user

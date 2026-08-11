@@ -160,7 +160,7 @@ describe('postgres gateway audit adapter', () => {
     });
     const second = await store.append({
       method: 'fs.read',
-      decision: 'NEEDS_APPROVAL',
+      decision: 'REQUIRES_HUMAN_APPROVAL',
       params: { path: '/etc/passwd' },
     });
     const third = await store.append({

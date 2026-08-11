@@ -4,7 +4,7 @@ export type RuntimeServiceHealthStatus =
   | 'unavailable'
   | 'not_applicable';
 
-export type RuntimeServiceId = 'gateway' | 'vault' | 'ntfy' | 'mcp';
+export type RuntimeServiceId = 'gateway' | 'vault' | 'ntfy' | 'mcp' | 'approval_notifications';
 
 export interface McpRuntimeServerHealth {
   serverId: string;

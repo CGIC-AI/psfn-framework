@@ -2,8 +2,6 @@ import { describe, expect, it } from 'vitest';
 import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from './descriptions.js';
 import {
   CANONICAL_FIRST_PARTY_TOOL_SURFACES,
-  MODEL_FACING_DRIFT_GUARD_RETIRED_TOOL_ALIASES,
-  assertNoModelFacingDriftGuardToolAliases,
   assertNoRetiredFirstPartyToolAliases,
   getCanonicalToolSurface,
   getRetiredToolAlias,
@@ -142,36 +140,28 @@ describe('first-party tool surface registry', () => {
   });
 
   it('has no open charter exceptions for retired model-facing aliases', () => {
-    expect(listRetiredToolAliases().filter(alias => alias.charterException)).toEqual([]);
-  });
-
-  it('keeps the high-risk split tool names retired and non-canonical', () => {
-    for (const name of MODEL_FACING_DRIFT_GUARD_RETIRED_TOOL_ALIASES) {
-      expect(isCanonicalFirstPartyToolName(name)).toBe(false);
-      expect(getRetiredToolAlias(name), name).toBeDefined();
-    }
-    expect(() => assertNoModelFacingDriftGuardToolAliases(
-      MODEL_FACING_DRIFT_GUARD_RETIRED_TOOL_ALIASES,
-      'high-risk split tool set',
+    const retiredAliases = listRetiredToolAliases();
+    expect(retiredAliases.filter(alias => alias.charterException)).toEqual([]);
+    expect(() => assertNoRetiredFirstPartyToolAliases(
+      retiredAliases.map(alias => alias.alias),
+      'canonical retired aliases',
     )).toThrow();
   });
 
-  it('derives the drift guard from every exposure:retired alias so it cannot drift (as1wr)', () => {
-    const guardSet = new Set(MODEL_FACING_DRIFT_GUARD_RETIRED_TOOL_ALIASES);
-    const retiredExposureAliases = listRetiredToolAliases()
-      .filter(alias => alias.exposure === 'retired')
-      .map(alias => alias.alias);
-    // Every standalone retired split surface (each still backed by a live
-    // factory) is present in the guard automatically.
-    for (const alias of retiredExposureAliases) {
-      expect(guardSet.has(alias), alias).toBe(true);
+  it('keeps every retired tool alias non-canonical and guarded', () => {
+    for (const { alias: name } of listRetiredToolAliases()) {
+      expect(isCanonicalFirstPartyToolName(name)).toBe(false);
+      expect(getRetiredToolAlias(name), name).toBeDefined();
     }
-    // Specifically the four split surfaces the old hand-typed array omitted while
-    // their factories stayed exported and callable.
-    for (const alias of ['memory_write', 'scratchpad_read', 'contact_list', 'contact_lookup']) {
-      expect(getRetiredToolAlias(alias)?.exposure, alias).toBe('retired');
-      expect(guardSet.has(alias), alias).toBe(true);
-      expect(() => assertNoModelFacingDriftGuardToolAliases([alias], 'drift check')).toThrow(
+    expect(() => assertNoRetiredFirstPartyToolAliases(
+      listRetiredToolAliases().map(alias => alias.alias),
+      'retired tool set',
+    )).toThrow();
+  });
+
+  it('derives registration protection from every registry alias without a second list', () => {
+    for (const { alias } of listRetiredToolAliases()) {
+      expect(() => assertNoRetiredFirstPartyToolAliases([alias], 'drift check')).toThrow(
         `drift check includes retired first-party tool aliases: ${alias}->`,
       );
     }

@@ -642,6 +642,17 @@ describe('system action=rebuild', () => {
 });
 
 describe('createSystemTool', () => {
+  it('exposes only canonical lifecycle actions to the model', () => {
+    const schema = JSON.stringify(createSystemTool(makeConfig()).parameters);
+
+    expect(schema).toContain('read');
+    expect(schema).toContain('restart');
+    expect(schema).toContain('rebuild');
+    expect(schema).not.toContain('settings_get');
+    expect(schema).not.toContain('self_restart');
+    expect(schema).not.toContain('self_rebuild');
+  });
+
   let mockNotifier: LifecycleNotifier;
   let mockStopFn: ReturnType<typeof vi.fn>;
   let prepareRestartCommand: ReturnType<typeof vi.fn>;

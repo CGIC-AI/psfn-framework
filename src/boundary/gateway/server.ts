@@ -656,9 +656,14 @@ export class GatewayServer {
       auditComplete: this.auditComplete.bind(this),
       recordMethodSuccess: (method) => this.runtimeHealthTracker.recordMethodSuccess(method),
       recordMethodFailure: (method, error) => this.runtimeHealthTracker.recordMethodFailure(method, error),
+      recordApprovalNotificationSuccess: () => this.runtimeHealthTracker.recordApprovalNotificationSuccess(),
+      recordApprovalNotificationFailure: (error) => this.runtimeHealthTracker.recordApprovalNotificationFailure(error),
     });
     this.runtimeHealthTracker = new GatewayRuntimeHealthTracker({
       ntfyConfigured: Boolean(options.ntfy),
+      approvalNotificationConfigured: Boolean(
+        options.confirmation?.operatorDiscordChannelId?.trim() || options.ntfy,
+      ),
       vaultEnabled: Boolean(options.policyConfig.vault?.enabled),
       vaultAllowActions: options.policyConfig.vault?.allowActions ?? [],
       vaultOpsConfigured: Boolean(options.policyConfig.vault?.ops),

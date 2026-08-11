@@ -44,12 +44,15 @@ import { executeQueuedAction, resolveCompanionReason } from './confirmation-acti
 import type { CanaryEgressGuard } from './canary-egress-guard.js';
 
 const unknownCompanionDisplayIdentity = createCompanionDisplayIdentityResolver([]);
+const log = createComponentLogger('GatewayApprovalBoundary');
 
 interface ApprovalBoundaryAuditHooks {
   audit(method: string, decision: GatewayPolicyDecision, params?: Record<string, unknown>): Promise<number>;
   auditComplete(id: number, startTime: number, error?: string): Promise<void>;
   recordMethodSuccess(method: string): void;
   recordMethodFailure(method: string, error: unknown): void;
+  recordApprovalNotificationSuccess?(): void;
+  recordApprovalNotificationFailure?(error: unknown): void;
 }
 
 interface ApprovalBoundaryOptions extends ApprovalBoundaryAuditHooks {
@@ -211,6 +214,31 @@ export interface ApprovalBoundaryService {
     status: 'approved' | 'denied';
   }): ConfirmationResolveResult;
   gate<P, R>(options: ApprovalBoundaryGateOptions<P, R>): (params: P) => Promise<R>;
+}
+
+export type GatewayApprovalDisposition = 'allow' | 'deny' | 'queue';
+
+/**
+ * Interpret policy decisions at the approval choke point. This is deliberately
+ * total over `unknown`: policy vocabulary drift must deny, never fall through
+ * to handler execution.
+ */
+export function resolveGatewayApprovalDisposition(
+  decision: unknown,
+  capabilityTier: CapabilityTier,
+): GatewayApprovalDisposition {
+  switch (decision) {
+    case 'ALLOW':
+      return 'allow';
+    case 'DENY':
+      return 'deny';
+    case 'AUTONOMOUS_TIER_REQUIRED':
+      return capabilityTier === 'autonomous' ? 'allow' : 'queue';
+    case 'REQUIRES_HUMAN_APPROVAL':
+      return 'queue';
+    default:
+      return 'deny';
+  }
 }
 
 const approvalLog = createComponentLogger('ApprovalBoundary');
@@ -512,13 +540,25 @@ export function createGatewayApprovalBoundaryService(
         expiresAt: queueEntry.expiresAt,
       });
     }
-    await notifyOperatorForPendingAction({
-      entry: queueEntry,
-      discordAdapter: options.discordAdapter,
-      operatorDiscordChannelId: confirmationConfig.operatorDiscordChannelId,
-      ntfyTopic: confirmationConfig.ntfyTopic,
-      ntfyNotifier: options.ntfyNotifier,
-    });
+    try {
+      await notifyOperatorForPendingAction({
+        entry: queueEntry,
+        discordAdapter: options.discordAdapter,
+        operatorDiscordChannelId: confirmationConfig.operatorDiscordChannelId,
+        ntfyTopic: confirmationConfig.ntfyTopic,
+        ntfyNotifier: options.ntfyNotifier,
+      });
+      options.recordApprovalNotificationSuccess?.();
+    } catch (error) {
+      // The confirmation was durably queued before notification delivery. Keep
+      // it inspectable in Garden and surface the unreachable alert path through
+      // runtime subsystem health instead of discarding or hiding the request.
+      log.error('Queued confirmation has no reachable operator notification sink', {
+        confirmationId: queueEntry.id,
+        error: toErrorMessage(error),
+      });
+      options.recordApprovalNotificationFailure?.(error);
+    }
     return queueEntry;
   };
 
@@ -623,11 +663,19 @@ export function createGatewayApprovalBoundaryService(
         const startTime = Date.now();
 
         try {
-          if (decision === 'DENY') {
+          const authenticatedCompanionId = gateOptions.authenticatedCompanionId();
+          const approvalDisposition = resolveGatewayApprovalDisposition(
+            decision,
+            decision === 'AUTONOMOUS_TIER_REQUIRED'
+              ? options.capabilityTierProvider(authenticatedCompanionId)
+              : 'custom',
+          );
+          const decisionRequiresApprovalBoundary = decision === 'AUTONOMOUS_TIER_REQUIRED'
+            || decision === 'REQUIRES_HUMAN_APPROVAL';
+          if (approvalDisposition === 'deny') {
             throw new JSONRPCErrorException('Policy denied', GatewayErrors.POLICY_DENIED);
           }
 
-          const authenticatedCompanionId = gateOptions.authenticatedCompanionId();
           // 2h6q.3: resolve authenticated shard lineage BEFORE any auto-clear
           // decision. The resolver throws (deny) when a recognizably
           // shard-originated dispatch cannot be bound to a live authenticated
@@ -639,7 +687,7 @@ export function createGatewayApprovalBoundaryService(
           if (
             shardApprovalGrant !== undefined
             && !shardExceptionalAction
-            && decision === 'NEEDS_APPROVAL'
+            && decisionRequiresApprovalBoundary
           ) {
             // A shard fence is never auto-cleared, and a shard approval
             // without an exact-once grant binding is not offered: deny.
@@ -650,11 +698,7 @@ export function createGatewayApprovalBoundaryService(
           }
           if (
             shardExceptionalAction
-            || (
-              decision === 'NEEDS_APPROVAL'
-              && shardApprovalGrant === undefined
-              && options.capabilityTierProvider(authenticatedCompanionId) !== 'autonomous'
-            )
+            || (approvalDisposition === 'queue' && shardApprovalGrant === undefined)
           ) {
             const paramsRecord = params as unknown as Record<string, unknown>;
             const queueEntry = await requestExplicitApproval({

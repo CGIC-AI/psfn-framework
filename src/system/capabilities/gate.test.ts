@@ -8,7 +8,10 @@ import {
   type RedactedPreToolHookAudit,
 } from '../../boundary/gateway/pre-tool-hook.js';
 import { HookMatcher, HookRegistry } from '../../boundary/gateway/hook-registry.js';
-import { resolveToolAliasMatchers } from '../../core/agent/tool-surface/registry.js';
+import {
+  listRetiredToolAliases,
+  resolveToolAliasMatchers,
+} from '../../core/agent/tool-surface/registry.js';
 import type { AgentTool } from '../../boundary/pi-agent/index.js';
 import type { CapabilityTier } from '../config/runtime-config-contracts.js';
 import type { CapabilityToken } from './tokens.js';
@@ -25,7 +28,6 @@ import {
   toolHasDeclaredCapabilityRequirement,
   withCapabilityRequirement,
 } from './requirements.js';
-import { MODEL_FACING_DRIFT_GUARD_RETIRED_TOOL_ALIASES } from '../../core/agent/tool-surface/registry.js';
 import { allowShardRequestScopedCapabilityTransport } from '../../faculties/shards/request-scoped-capability-transport.js';
 import { isRecord } from '../../shared/utils/types.js';
 import {
@@ -477,11 +479,9 @@ describe('capability tool gating', () => {
 
   it('fails closed for retired model-facing split aliases without executable policy', () => {
     const retiredMetadataAliases = [
-      ...MODEL_FACING_DRIFT_GUARD_RETIRED_TOOL_ALIASES,
-      'promoted_tools_list',
-      'promoted_tools_add',
-      'promoted_tools_remove',
-      'promoted_tools_swap',
+      ...listRetiredToolAliases()
+        .filter(alias => alias.exposure === 'retired')
+        .map(alias => alias.alias),
     ];
 
     for (const alias of retiredMetadataAliases) {

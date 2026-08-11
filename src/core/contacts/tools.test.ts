@@ -10,9 +10,7 @@ import {
   createContactLinkIdentityTool,
   createContactListTool,
   createContactLookupTool,
-  createContactNoteTool,
   createContactSetChannelPrivacyTool,
-  createContactSetTrustTool as createContactSetTrustToolImpl,
 } from './tools.js';
 import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from '../agent/tool-surface/descriptions.js';
 import {
@@ -34,13 +32,6 @@ function createContactTool(
     intake: INTAKE_FIREWALL_OFF_SELF_AUTHORED_MUTATION_RUNTIME,
     ...options,
   });
-}
-
-function createContactSetTrustTool(store: ContactStorePort) {
-  return createContactSetTrustToolImpl(
-    store,
-    INTAKE_FIREWALL_OFF_SELF_AUTHORED_MUTATION_RUNTIME,
-  );
 }
 
 describe('contact tools', () => {
@@ -738,146 +729,6 @@ describe('contact tools', () => {
       };
       expect(tool.requiredCapability?.({ action: 'propose_trust', contactId: 'c-1' }))
         .toBe('identity.write.runtime');
-    });
-  });
-
-  // ── contact_set_trust ──
-
-  describe('createContactSetTrustTool', () => {
-    it('returns a valid AgentTool with correct name and schema', () => {
-      const tool = createContactSetTrustTool(store);
-
-      expect(tool.name).toBe('contact_set_trust');
-      expect(tool.description).toBeTruthy();
-      expect(tool.label).toBe('contact_set_trust');
-      expect(tool.parameters).toBeDefined();
-      expect(typeof tool.execute).toBe('function');
-    });
-
-    it('sets low-tier trust level for an existing contact', async () => {
-      const contact = await store.upsert({ displayName: 'Alice', discordUserId: 'alice-discord' });
-      const tool = createContactSetTrustTool(store);
-
-      const result = await tool.execute('call-1', {
-        contactId: contact.id,
-        trustLevel: 'public',
-      });
-
-      expect(resultText(result)).toContain('set to public');
-      expect((await store.getById(contact.id))!.trustLevel).toBe('public');
-    });
-
-    it('denies autonomous high-tier trust updates', async () => {
-      const contact = await store.upsert({ displayName: 'High Tier Target', discordUserId: 'trusted-target' });
-      const tool = createContactSetTrustTool(store);
-
-      const result = await tool.execute('call-1b', {
-        contactId: contact.id,
-        trustLevel: 'trusted',
-      });
-
-      expect(resultText(result)).toContain('manual admin approval');
-      expect((await store.getById(contact.id))!.trustLevel).toBe('regular');
-      expect(result.details?.isError).toBe(true);
-    });
-
-    it('returns error for invalid trust level', async () => {
-      const contact = await store.upsert({ displayName: 'Bob' });
-      const tool = createContactSetTrustTool(store);
-
-      const result = await tool.execute('call-2', {
-        contactId: contact.id,
-        trustLevel: 'superadmin',
-      });
-
-      expect(resultText(result)).toContain('Invalid trust level');
-      expect(resultText(result)).toContain('superadmin');
-      expect(result.details?.isError).toBe(true);
-    });
-
-    it('returns error for contact not found', async () => {
-      const tool = createContactSetTrustTool(store);
-
-      const result = await tool.execute('call-3', {
-        contactId: 'nonexistent-id',
-        trustLevel: 'trusted',
-      });
-
-      expect(resultText(result)).toContain('not found');
-      expect(result.details?.isError).toBe(true);
-    });
-
-    it('returns error when trying to change the primary trust level', async () => {
-      // Create a contact with primary trust.
-      await store.upsert({ displayName: 'Morgan', discordUserId: 'primary-user-123' });
-      const primary = (await store.getByDiscordUserId('primary-user-123'))!;
-      const tool = createContactSetTrustTool(store);
-
-      const result = await tool.execute('call-4', {
-        contactId: primary.id,
-        trustLevel: 'regular',
-      });
-
-      // setTrustLevel returns false for a contact with primary trust.
-      expect(resultText(result)).toContain('not found or has primary trust');
-      // Trust level should remain 'primary'
-      expect((await store.getById(primary.id))!.trustLevel).toBe('primary');
-      expect(result.details?.isError).toBe(true);
-    });
-
-    it('returns canonical error when setTrustLevel throws', async () => {
-      const contact = await store.upsert({ displayName: 'Throwy' });
-      vi.spyOn(store, 'setTrustLevel').mockImplementation(() => {
-        throw new Error('store unavailable');
-      });
-      const tool = createContactSetTrustTool(store);
-
-      const result = await tool.execute('call-4b', {
-        contactId: contact.id,
-        trustLevel: 'trusted',
-      });
-
-      expect(resultText(result)).toContain('contact_set_trust failed');
-      expect(resultText(result)).toContain('store unavailable');
-      expect(result.details?.isError).toBe(true);
-    });
-  });
-
-  // ── contact_note ──
-
-  describe('createContactNoteTool', () => {
-    it('returns a valid AgentTool with correct name and schema', () => {
-      const tool = createContactNoteTool(store);
-
-      expect(tool.name).toBe('contact_note');
-      expect(tool.description).toBeTruthy();
-      expect(tool.label).toBe('contact_note');
-      expect(tool.parameters).toBeDefined();
-    });
-
-    it('updates notes for an existing contact', async () => {
-      const contact = await store.upsert({ displayName: 'Charlie' });
-      const tool = createContactNoteTool(store);
-
-      const result = await tool.execute('call-5', {
-        contactId: contact.id,
-        notes: 'Likes cats and programming',
-      });
-
-      expect(resultText(result)).toContain('Notes updated');
-      expect((await store.getById(contact.id))!.notes).toBe('Likes cats and programming');
-    });
-
-    it('returns error for contact not found', async () => {
-      const tool = createContactNoteTool(store);
-
-      const result = await tool.execute('call-6', {
-        contactId: 'nonexistent-id',
-        notes: 'Some notes',
-      });
-
-      expect(resultText(result)).toContain('not found');
-      expect(result.details?.isError).toBe(true);
     });
   });
 

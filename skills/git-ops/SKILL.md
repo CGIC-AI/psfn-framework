@@ -15,7 +15,7 @@ Use this skill when changes require repository operations.
 - Keep commits scoped and descriptive.
 
 ## Tooling
-- `repo_status` to inspect branch and dirty state.
-- `repo_diff` to inspect changes.
-- `repo_apply_patch` for targeted edits.
-- `repo_commit` when the change is verified.
+- Use `repo` with `action="inspect"` and `target="status"` for branch and dirty state.
+- Use `repo` with `action="inspect"` and `target="diff"` to inspect changes.
+- Use `repo` with `action="patch"` for targeted edits when mutation is available.
+- Use `repo` with `action="commit"` when the change is verified and mutation is available.

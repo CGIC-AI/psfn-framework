@@ -1,7 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import {
-  MODEL_FACING_DRIFT_GUARD_RETIRED_TOOL_ALIASES,
-  assertNoModelFacingDriftGuardToolAliases,
   assertNoRetiredFirstPartyToolAliases,
   isCanonicalFirstPartyToolName,
 } from '../../../core/agent/tool-surface/registry.js';
@@ -30,7 +28,7 @@ describe('startup composition tool surface registry coverage', () => {
     )).not.toThrow();
   });
 
-  it('keeps the collapsed per-action aliases inside the model-facing drift guard', () => {
+  it('keeps every collapsed per-action alias behind the canonical retired-alias guard', () => {
     const collapsedAliases = [
       'create_concern',
       'list_concerns',
@@ -45,11 +43,7 @@ describe('startup composition tool surface registry coverage', () => {
     ];
 
     for (const alias of collapsedAliases) {
-      expect(
-        (MODEL_FACING_DRIFT_GUARD_RETIRED_TOOL_ALIASES as readonly string[]).includes(alias),
-        alias,
-      ).toBe(true);
-      expect(() => assertNoModelFacingDriftGuardToolAliases(
+      expect(() => assertNoRetiredFirstPartyToolAliases(
         [alias],
         'shared startup composition',
       )).toThrow(`shared startup composition includes retired first-party tool aliases: ${alias}->`);

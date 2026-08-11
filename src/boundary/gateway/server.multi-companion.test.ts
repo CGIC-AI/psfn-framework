@@ -3289,8 +3289,8 @@ describe('GatewayServer per-companion capability tier (an52.3)', () => {
       await identifyAgent(connA, '11111111-1111-4111-8111-111111111111', 1);
       await identifyAgent(connB, '22222222-2222-4222-8222-222222222222', 2);
 
-      // A write outside the personal workspace is a NEEDS_APPROVAL policy path.
-      // Autonomous A auto-clears the approval gate (its error, if any, is the
+      // A write outside the personal workspace is an AUTONOMOUS_TIER_REQUIRED
+      // policy path. Autonomous A auto-clears the approval gate (its error, if any, is the
       // downstream workspace confinement — never the approval hold); apprentice
       // B must queue for operator approval, so its call is held, not executed.
       const outsidePathB = join(root, 'outside', 'b-apprentice.txt');

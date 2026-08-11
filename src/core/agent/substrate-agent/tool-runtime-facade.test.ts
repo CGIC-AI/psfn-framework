@@ -731,6 +731,9 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
 
   it('rejects high-risk retired first-party aliases at the model-facing registration boundary', () => {
     const { facade } = createFacade(null);
+    expect(() => facade.registerTool(makeTool('fs_read'), 'core')).toThrow(
+      'core tool registration includes retired first-party tool aliases: fs_read->fs',
+    );
     expect(() => facade.registerTool(makeTool('session_new'), 'core')).toThrow(
       'core tool registration includes retired first-party tool aliases: session_new->session',
     );

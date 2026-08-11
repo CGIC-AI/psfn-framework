@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { once } from 'node:events';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import * as net from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -454,6 +454,17 @@ describe('computeReconnectDelayMs backoff schedule', () => {
 });
 
 describe('createSocketClient lifecycle', () => {
+  it('restricts the trusted local Unix socket to owner and group', async () => {
+    const socketPath = join(tmpdir(), `psfn-transport-mode-${randomUUID()}.sock`);
+    const server = createSocketServer(socketPath, () => undefined);
+    try {
+      await once(server, 'listening');
+      expect(statSync(socketPath).mode & 0o777).toBe(0o770);
+    } finally {
+      await closeServer(server);
+    }
+  });
+
   it('counts NDJSON backpressure as accepted but rejects writes after destruction', () => {
     const socket = new net.Socket();
     const write = vi.spyOn(socket, 'write').mockReturnValue(false);

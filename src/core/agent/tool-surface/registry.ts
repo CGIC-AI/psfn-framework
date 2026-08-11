@@ -57,47 +57,6 @@ const TOOLSET_RUNTIME = 'src/core/agent/substrate-agent/adaptive-tools-runtime.t
 
 export const TOOL_PRESENTATION_RANK_UNKNOWN = 200;
 
-// ── Model-facing drift guard (Law 33) ──
-//
-// The production `registerTool` funnel rejects any tool whose name is a
-// high-risk retired split surface, so a wiring mistake can never re-expose one
-// to the model. This set is DERIVED (below, once the canonical surfaces are
-// declared) so it cannot drift out of sync with the registry:
-//
-//   1. EVERY `exposure: 'retired'` alias is included automatically. Those names
-//      were once standalone model-facing tools with their own factories; each
-//      still has a live exported factory, so re-registering one would rebuild a
-//      split surface Law 33 forbids. Deriving them means a newly retired alias
-//      is enforced the moment it is declared — no hand-typed list to forget
-//      (psfn-framework-as1wr closed a gap where memory_write, scratchpad_read,
-//      contact_list, and contact_lookup were exposure:'retired' with live
-//      factories yet absent from the old hand-typed array).
-//
-//   2. A CURATED set of `exposure: 'hidden'` per-action aliases is added on top.
-//      Most hidden aliases are obvious collapsed sub-verbs (fs_read, repo_diff,
-//      settings_get) that the capability layer still recognizes for compat and
-//      that no implementer would re-register as a standalone tool; those are NOT
-//      guarded. The curated names below still read like standalone tools an
-//      implementer might reintroduce, so they are guarded explicitly. This stays
-//      a hand-maintained judgment call because "which hidden sub-verb looks
-//      standalone" is not mechanically derivable.
-const MODEL_FACING_DRIFT_GUARD_CURATED_HIDDEN_ALIASES = [
-  'session_list',
-  'session_search',
-  'session_grep',
-  'values_list',
-  'create_concern',
-  'list_concerns',
-  'resolve_concern',
-  'north_star_list',
-  'north_star_create',
-  'north_star_update',
-  'north_star_delete',
-  'north_star_reorder',
-  'self_restart',
-  'self_rebuild',
-] as const;
-
 function retiredAlias(
   alias: string,
   canonicalName: string,
@@ -569,24 +528,6 @@ const RETIRED_BY_NAME = new Map(
     .map(alias => [alias.alias, alias]),
 );
 
-// Derived model-facing drift-guard set (see the comment on
-// MODEL_FACING_DRIFT_GUARD_CURATED_HIDDEN_ALIASES above). Every
-// exposure:'retired' alias declared on any canonical surface is included
-// automatically, so a newly retired split surface is guarded the moment it is
-// declared; the curated hidden per-action names are added on top. The two input
-// sets are disjoint by construction (retired vs hidden exposure).
-export const MODEL_FACING_DRIFT_GUARD_RETIRED_TOOL_ALIASES: readonly string[] = [
-  ...CANONICAL_FIRST_PARTY_TOOL_SURFACES
-    .flatMap(entry => entry.retiredAliases)
-    .filter(alias => alias.exposure === 'retired')
-    .map(alias => alias.alias),
-  ...MODEL_FACING_DRIFT_GUARD_CURATED_HIDDEN_ALIASES,
-];
-
-const MODEL_FACING_DRIFT_GUARD_RETIRED_TOOL_ALIAS_SET = new Set<string>(
-  MODEL_FACING_DRIFT_GUARD_RETIRED_TOOL_ALIASES,
-);
-
 export function listCanonicalToolSurfaces(): readonly CanonicalToolSurfaceEntry[] {
   return CANONICAL_FIRST_PARTY_TOOL_SURFACES;
 }
@@ -682,23 +623,6 @@ export function assertNoRetiredFirstPartyToolAliases(
 ): void {
   const retiredNames: string[] = [];
   for (const name of toolNames) {
-    const retired = getRetiredToolAlias(name);
-    if (retired && !retired.charterException) {
-      retiredNames.push(`${name}->${retired.canonicalName}`);
-    }
-  }
-  if (retiredNames.length > 0) {
-    throw new Error(`${context} includes retired first-party tool aliases: ${retiredNames.join(', ')}`);
-  }
-}
-
-export function assertNoModelFacingDriftGuardToolAliases(
-  toolNames: Iterable<string>,
-  context: string,
-): void {
-  const retiredNames: string[] = [];
-  for (const name of toolNames) {
-    if (!MODEL_FACING_DRIFT_GUARD_RETIRED_TOOL_ALIAS_SET.has(name)) continue;
     const retired = getRetiredToolAlias(name);
     if (retired && !retired.charterException) {
       retiredNames.push(`${name}->${retired.canonicalName}`);

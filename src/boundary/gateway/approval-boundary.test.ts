@@ -8,6 +8,7 @@ import type { ChannelOutboundDock } from '../../channels/backplane/types.js';
 import { GatewayNtfyNotifier } from './ntfy-notifier.js';
 import {
   createGatewayApprovalBoundaryService,
+  resolveGatewayApprovalDisposition,
   type ApprovalBoundaryService,
 } from './approval-boundary.js';
 import { GatewayErrors } from './protocol.js';
@@ -60,6 +61,7 @@ interface Harness {
   eventBus: EventBus;
   requested: Array<{ companionId: string; shardId?: string; payload: CompanionApprovalRequestedPayload }>;
   resolved: Array<{ companionId: string; shardId?: string; payload: CompanionApprovalResolvedPayload }>;
+  approvalNotificationFailures: unknown[];
 }
 
 function createHarness(
@@ -70,11 +72,13 @@ function createHarness(
   options: {
     capabilityTier?: 'nursery' | 'apprentice' | 'autonomous' | 'custom';
     shardApprovalGrants?: ShardApprovalGrantAuthority;
+    notificationSink?: 'configured' | 'unreachable';
   } = {},
 ): Harness {
   const eventBus = new EventBus();
   const requested: Harness['requested'] = [];
   const resolved: Harness['resolved'] = [];
+  const approvalNotificationFailures: unknown[] = [];
   eventBus.on('companion.approval.requested', (event) => {
     requested.push({
       companionId: event.companionId,
@@ -101,6 +105,9 @@ function createHarness(
     },
     ntfyNotifier: new GatewayNtfyNotifier(),
     discordAdapter: noopDock,
+    ...(options.notificationSink === 'unreachable'
+      ? {}
+      : { confirmation: { operatorDiscordChannelId: 'operator-test' } }),
     capabilityTierProvider: () => options.capabilityTier ?? 'apprentice',
     eventBus,
     parentLabelProvider: (companionId) => labels[companionId],
@@ -111,9 +118,10 @@ function createHarness(
     auditComplete: async () => {},
     recordMethodSuccess: () => {},
     recordMethodFailure: () => {},
+    recordApprovalNotificationFailure: error => approvalNotificationFailures.push(error),
   });
 
-  return { service, eventBus, requested, resolved };
+  return { service, eventBus, requested, resolved, approvalNotificationFailures };
 }
 
 function baseRequest(overrides: Record<string, unknown> = {}) {
@@ -128,6 +136,23 @@ function baseRequest(overrides: Record<string, unknown> = {}) {
 }
 
 describe('approval attribution — ordinary companion approvals (non-shard)', () => {
+  it('keeps an unnotified approval durable and surfaces its sink failure', async () => {
+    const h = createHarness({ [PARENT_A]: 'Parent A' }, { notificationSink: 'unreachable' });
+
+    const entry = await h.service.requestExplicitApproval({
+      authenticatedCompanionId: PARENT_A,
+      request: baseRequest(),
+      execute: async () => 'ok',
+    });
+
+    expect(h.service.listPendingConfirmations()).toEqual([
+      expect.objectContaining({ id: entry.id }),
+    ]);
+    expect(h.approvalNotificationFailures).toEqual([
+      expect.objectContaining({ message: expect.stringContaining('no reachable operator notification sink') }),
+    ]);
+  });
+
   it('enqueues with the parent owner and emits requested/resolved without shardId', async () => {
     const h = createHarness();
     const entry = await h.service.requestExplicitApproval({
@@ -505,7 +530,7 @@ describe('approval-bound shard request grants', () => {
       shardApprovalGrant: () => ({ workload }),
     });
 
-    // fs.write outside the workspace is NEEDS_APPROVAL for a parent; with
+    // fs.write outside the workspace is AUTONOMOUS_TIER_REQUIRED for a parent; with
     // authenticated shard lineage on a non-eligible method it must deny —
     // never auto-clear, never enqueue a grantless shard approval.
     await expect(dispatch({ path: '/outside/todo.txt' })).rejects.toMatchObject({
@@ -611,24 +636,47 @@ describe('approval-bound shard request grants', () => {
     expect(execute).not.toHaveBeenCalled();
   });
 
-  it('preserves ordinary autonomous companion auto-clear behavior', async () => {
+  it('auto-clears only autonomous-tier-eligible escalation for an autonomous companion', async () => {
     const h = createHarness({
       [PARENT_A]: 'Parent A',
       [PARENT_B]: 'Parent B',
     }, { capabilityTier: 'autonomous' });
     const handler = vi.fn(async () => ({ ok: true }));
     const dispatch = h.service.gate({
-      method: 'image.create',
+      method: 'fs.read',
       handler,
       paramsSummary: () => ({}),
       authenticatedCompanionId: () => PARENT_A,
-      approvalAction: 'image.create',
-      approvalScope: () => 'generated-image',
+      approvalAction: 'read file',
+      approvalScope: () => '/outside/reference.txt',
     });
 
-    await expect(dispatch({ prompt: 'test image' })).resolves.toEqual({ ok: true });
+    await expect(dispatch({ path: '/outside/reference.txt' })).resolves.toEqual({ ok: true });
     expect(handler).toHaveBeenCalledOnce();
     expect(h.service.listPendingConfirmations()).toHaveLength(0);
+  });
+
+  it('never auto-clears a human-only decision for an autonomous companion', async () => {
+    const h = createHarness({ [PARENT_A]: 'Parent A' }, { capabilityTier: 'autonomous' });
+    const handler = vi.fn(async () => ({ ok: true }));
+    const dispatch = h.service.gate({
+      method: 'git.commit',
+      handler,
+      paramsSummary: () => ({}),
+      authenticatedCompanionId: () => PARENT_A,
+      approvalAction: 'commit',
+      approvalScope: () => 'repository',
+    });
+
+    await expect(dispatch({ message: 'change', intent: 'test' })).rejects.toMatchObject({
+      code: GatewayErrors.NEEDS_APPROVAL,
+    });
+    expect(handler).not.toHaveBeenCalled();
+    expect(h.service.listPendingConfirmations()).toHaveLength(1);
+  });
+
+  it('fails closed when policy returns an unknown approval class', () => {
+    expect(resolveGatewayApprovalDisposition('UNKNOWN_POLICY_CLASS', 'autonomous')).toBe('deny');
   });
 });
 

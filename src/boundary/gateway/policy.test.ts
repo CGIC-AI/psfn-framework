@@ -396,14 +396,14 @@ describe('evaluatePolicy', () => {
     )).toBe('DENY');
   });
 
-  it('requires approval for home_assistant.call_service when fully configured', () => {
+  it('requires human approval for home_assistant.call_service when fully configured', () => {
     expect(evaluatePolicy(
       { method: 'home_assistant.call_service', params: { domain: 'light', service: 'turn_on' } },
       {
         ...policyConfig,
         homeAssistant: { enabled: true, hubBaseUrl: 'http://hub.local:8788', tokenConfigured: true },
       },
-    )).toBe('NEEDS_APPROVAL');
+    )).toBe('REQUIRES_HUMAN_APPROVAL');
   });
 
   it('allows reasoned light control without approval only at autonomous tier', () => {
@@ -437,7 +437,7 @@ describe('evaluatePolicy', () => {
         domain: 'switch', service: 'turn_on', placeId: 'office', affordanceId: 'missing',
         entityId: 'switch.office_light', intent: 'attention', reason: 'Get attention',
       },
-    }, configured)).toBe('NEEDS_APPROVAL');
+    }, configured)).toBe('REQUIRES_HUMAN_APPROVAL');
   });
 
   // ── Filesystem: workspace paths ──
@@ -560,18 +560,18 @@ describe('evaluatePolicy', () => {
 
   // ── Filesystem: outside workspace ──
 
-  it('requires approval for fs.read outside workspace', () => {
+  it('classifies fs.read outside workspace as autonomous-tier escalation', () => {
     expect(evaluatePolicy(
       { method: 'fs.read', params: { path: '/etc/passwd' } },
       policyConfig,
-    )).toBe('NEEDS_APPROVAL');
+    )).toBe('AUTONOMOUS_TIER_REQUIRED');
   });
 
-  it('requires approval for fs.write outside workspace', () => {
+  it('classifies fs.write outside workspace as autonomous-tier escalation', () => {
     expect(evaluatePolicy(
       { method: 'fs.write', params: { path: '/tmp/evil.sh' } },
       policyConfig,
-    )).toBe('NEEDS_APPROVAL');
+    )).toBe('AUTONOMOUS_TIER_REQUIRED');
   });
 
   it('allows fs.read outside workspace when full codebase root is configured', () => {
@@ -593,7 +593,7 @@ describe('evaluatePolicy', () => {
     expect(evaluatePolicy(
       { method: 'fs.read', params: { path: '/etc/passwd' } },
       yoloConfig,
-    )).toBe('NEEDS_APPROVAL');
+    )).toBe('AUTONOMOUS_TIER_REQUIRED');
   });
 
   it('keeps fs.write outside workspace blocked in yolo mode', () => {
@@ -604,7 +604,7 @@ describe('evaluatePolicy', () => {
     expect(evaluatePolicy(
       { method: 'fs.write', params: { path: '/app/src/app/gateway/main.ts' } },
       yoloConfig,
-    )).toBe('NEEDS_APPROVAL');
+    )).toBe('AUTONOMOUS_TIER_REQUIRED');
   });
 
   it('blocks path traversal attempts', () => {
@@ -685,7 +685,7 @@ describe('evaluatePolicy', () => {
     )).toBe('DENY');
   });
 
-  it('requires approval for fs.edit outside workspace', () => {
+  it('classifies fs.edit outside workspace as autonomous-tier escalation', () => {
     expect(evaluatePolicy(
       {
         method: 'fs.edit',
@@ -696,7 +696,7 @@ describe('evaluatePolicy', () => {
         },
       },
       policyConfig,
-    )).toBe('NEEDS_APPROVAL');
+    )).toBe('AUTONOMOUS_TIER_REQUIRED');
   });
 
   // ── Allowed read paths ──
@@ -733,7 +733,7 @@ describe('evaluatePolicy', () => {
     expect(evaluatePolicy(
       { method: 'fs.write', params: { path: '/app/identity/character.json' } },
       policyConfig,
-    )).toBe('NEEDS_APPROVAL');
+    )).toBe('AUTONOMOUS_TIER_REQUIRED');
   });
 
   it('denies fs.write under the protected companion state subtree', () => {
@@ -856,32 +856,32 @@ describe('evaluatePolicy', () => {
     )).toBe('ALLOW');
   });
 
-  it('requires approval for git.commit (write)', () => {
+  it('requires human approval for git.commit (write)', () => {
     expect(evaluatePolicy(
       { method: 'git.commit', params: { message: 'test', intent: 'fix', scope: 'src' } },
       policyConfig,
-    )).toBe('NEEDS_APPROVAL');
+    )).toBe('REQUIRES_HUMAN_APPROVAL');
   });
 
-  it('requires approval for git.create_branch (write)', () => {
+  it('requires human approval for git.create_branch (write)', () => {
     expect(evaluatePolicy(
       { method: 'git.create_branch', params: { name: 'feature/test' } },
       policyConfig,
-    )).toBe('NEEDS_APPROVAL');
+    )).toBe('REQUIRES_HUMAN_APPROVAL');
   });
 
-  it('requires approval for git.apply_patch (write)', () => {
+  it('requires human approval for git.apply_patch (write)', () => {
     expect(evaluatePolicy(
       { method: 'git.apply_patch', params: { filePath: 'src/test.ts', content: 'patch' } },
       policyConfig,
-    )).toBe('NEEDS_APPROVAL');
+    )).toBe('REQUIRES_HUMAN_APPROVAL');
   });
 
-  it('requires approval for git.open_pr (write)', () => {
+  it('requires human approval for git.open_pr (write)', () => {
     expect(evaluatePolicy(
       { method: 'git.open_pr', params: { title: 'test PR', body: 'body', base: 'main' } },
       policyConfig,
-    )).toBe('NEEDS_APPROVAL');
+    )).toBe('REQUIRES_HUMAN_APPROVAL');
   });
 
   // ── Unknown methods ──

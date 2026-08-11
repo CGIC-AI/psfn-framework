@@ -400,7 +400,7 @@ export interface EpisodeEmbeddingProfile {
   dimensions: number;
 }
 
-export type EpisodeEmbeddingTargetReason = 'missing' | 'stale' | 'failed';
+type EpisodeEmbeddingTargetReason = 'missing' | 'stale' | 'failed';
 
 export interface EpisodeEmbeddingTarget {
   episode: Episode;
@@ -463,7 +463,7 @@ export interface EpisodeEmbeddingIndexerAttachOptions {
   onError?: (error: unknown, episode: Episode) => void;
 }
 
-export interface EpisodeEmbeddingIndexerAttachPort {
+interface EpisodeEmbeddingIndexerAttachPort {
   attachEpisodeEmbeddingIndexer(
     indexer: EpisodeEmbeddingLiveIndexerPort,
     options?: EpisodeEmbeddingIndexerAttachOptions,
@@ -479,13 +479,13 @@ export interface EpisodeEmbeddingIndexStorePort {
   recordEpisodeEmbeddingFailure(input: EpisodeEmbeddingFailureInput): EpisodicStoreResult<boolean>;
 }
 
-export interface EpisodeEmbeddingSearchStorePort {
+interface EpisodeEmbeddingSearchStorePort {
   searchEpisodesByEmbedding(
     input: EpisodeSemanticSearchInput,
   ): EpisodicStoreResult<EpisodeSemanticCandidate[]>;
 }
 
-export interface EpisodeEmbeddingHealthStorePort {
+interface EpisodeEmbeddingHealthStorePort {
   getEpisodeEmbeddingIndexHealth(
     profile: EpisodeEmbeddingProfile,
   ): EpisodicStoreResult<EpisodeEmbeddingIndexHealth>;

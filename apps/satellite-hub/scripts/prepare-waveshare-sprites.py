@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare user-supplied Purrsephone sprites for the 360px round display."""
+"""Prepare user-supplied Companion sprites for the 360px round display."""
 
 from __future__ import annotations
 
@@ -98,7 +98,7 @@ def main() -> None:
         if not source.is_file():
             raise FileNotFoundError(source)
         prepared = fit_to_canvas(remove_connected_background(Image.open(source)))
-        target = args.output / f"purrsephone-{state}-360.png"
+        target = args.output / f"companion-{state}-360.png"
         prepared.save(target, format="PNG", optimize=True)
         print(f"{state}: {target}")
 

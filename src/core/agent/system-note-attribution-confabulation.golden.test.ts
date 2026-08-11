@@ -432,7 +432,7 @@ describe('golden: system notes never render as unprefixed companion thoughts', (
 
       const transcript = formatExtractionTranscript(
         [partner, systemNote, companion],
-        { charName: 'Purrsephone', userName: 'Alice' },
+        { charName: 'Companion', userName: 'Alice' },
       );
 
       // Golden extraction output: only partner + companion speaker lines. The
@@ -440,10 +440,10 @@ describe('golden: system notes never render as unprefixed companion thoughts', (
       // so extraction cannot confabulate it into a self-attributed memory.
       expect(transcript).toBe(
         '[message_id:1] Alice: good morning\n' +
-          '[message_id:2] Purrsephone: good morning to you too',
+          '[message_id:2] Companion: good morning to you too',
       );
       expect(transcript).not.toContain(ORIGINAL_INCIDENT_NOTE);
-      expect(transcript).not.toContain('Purrsephone: ' + ORIGINAL_INCIDENT_NOTE);
+      expect(transcript).not.toContain('Companion: ' + ORIGINAL_INCIDENT_NOTE);
     });
   });
 });

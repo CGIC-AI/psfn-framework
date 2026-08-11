@@ -1851,14 +1851,14 @@ describe('runtime subject identity', () => {
         channelType: 'discord',
         isDirectMessage: false,
         authorId: 'discord:u-current',
-        authorName: 'Vega "Pilot"',
+        authorName: 'Morgan "Pilot"',
         content: 'status?',
       }),
-      resolvedUserName: 'Vega',
+      resolvedUserName: 'Morgan',
       trustLevel: 'trusted',
       relationshipType: 'friend',
       channelType: 'discord_text',
-      canonicalContactKey: 'contact-vega',
+      canonicalContactKey: 'contact-morgan',
       responseStyle: 'concise',
       now: new Date('2026-03-18T13:30:00Z'),
       templateVariables: {},
@@ -1878,7 +1878,7 @@ describe('runtime subject identity', () => {
       behavioralNotesBlock: '',
       currentUserRuntimeProfile: {
         user_id: 'discord:u-current',
-        display_name: 'Vega',
+        display_name: 'Morgan',
         timezone: 'America/Chicago',
       },
       recentActiveParticipantRuntimeProfiles: [
@@ -1902,14 +1902,14 @@ describe('runtime subject identity', () => {
 
     expect(variables.runtime_chat_type).toBe('group');
     expect(variables.runtime_room_id).toBe('discord:group:ops');
-    expect(variables.runtime_current_message_author_name).toBe('Vega "Pilot"');
-    expect(variables.runtime_current_message_author_name_xml_attr).toBe('Vega &quot;Pilot&quot;');
+    expect(variables.runtime_current_message_author_name).toBe('Morgan "Pilot"');
+    expect(variables.runtime_current_message_author_name_xml_attr).toBe('Morgan &quot;Pilot&quot;');
     expect(variables.runtime_current_message_author_timezone).toBe('America/Chicago');
     expect(variables.runtime_current_message_author_local_time).toBe('8:30 AM');
     expect(variables.runtime_current_message_author_trust_level).toBe('trusted');
     expect(variables.runtime_current_message_author_relationship).toBe('friend');
     expect(variables.runtime_current_message_author_xml).toBe(
-      '<current_message_author name="Vega &quot;Pilot&quot;" id="discord:u-current" trust="trusted" relationship="friend" timezone="America/Chicago" local_time="8:30 AM" />',
+      '<current_message_author name="Morgan &quot;Pilot&quot;" id="discord:u-current" trust="trusted" relationship="friend" timezone="America/Chicago" local_time="8:30 AM" />',
     );
     expect(variables.runtime_recent_active_participants_count).toBe('5');
     expect(variables.runtime_recent_active_participants_xml.match(/<participant\b/gu)).toHaveLength(5);
@@ -1934,7 +1934,7 @@ describe('runtime subject identity', () => {
     expect(rendered).toContain('<conversation_state>');
     expect(rendered).toContain('<chat_type>group</chat_type>');
     expect(rendered).toContain('<channel_id>discord:group:ops</channel_id>');
-    expect(rendered).toContain('<current_message_author name="Vega &quot;Pilot&quot;" id="discord:u-current" trust="trusted" relationship="friend" timezone="America/Chicago" local_time="8:30 AM" />');
+    expect(rendered).toContain('<current_message_author name="Morgan &quot;Pilot&quot;" id="discord:u-current" trust="trusted" relationship="friend" timezone="America/Chicago" local_time="8:30 AM" />');
     expect(rendered).toContain('<recent_active_participants max="5">');
   });
 
@@ -2886,11 +2886,11 @@ describe('turn prompt variable namespace conformance', () => {
       subjectIdentityKey: 'alex',
       now,
       characterPromptVariables: {
-        name: 'Purrsephone',
-        char: 'Purrsephone',
-        char_name: 'Purrsephone',
-        character: 'Purrsephone',
-        character_name: 'Purrsephone',
+        name: 'Companion',
+        char: 'Companion',
+        char_name: 'Companion',
+        character: 'Companion',
+        character_name: 'Companion',
         description: 'A companion.',
         personality: 'Warm.',
         scenario: '{{user}} and {{char}} are chatting.',
@@ -2904,13 +2904,13 @@ describe('turn prompt variable namespace conformance', () => {
         alternate_greetings: '',
         visual_description: 'Silver eyes.',
         extensions_visual_description: 'Silver eyes.',
-        'character.name': 'Purrsephone',
+        'character.name': 'Companion',
         'character.visual_description': 'Silver eyes.',
         'character.extensions.likes': 'jazz',
         extensions_likes: 'jazz',
       },
       modelId: 'test-model',
-      fallbackCharacterName: 'Purrsephone',
+      fallbackCharacterName: 'Companion',
     });
 
     const dynamicVariables = buildDynamicPromptTemplateVariables(withConversationScope({

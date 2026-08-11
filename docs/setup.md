@@ -425,7 +425,7 @@ details, descriptions, schemas, or outputs.
    OPENROUTER_API_KEY=...
    COMPANION_ID=11111111-1111-4111-8111-111111111111
    DATA_DIR=./data
-   WORKSPACE_PATH=./purrsephone
+   WORKSPACE_PATH=./companion
    CHARACTER_CARD_PATH=./data/companion.json
    POSTGRES_DATABASE_URL=postgresql://psfn:password@127.0.0.1:5432/psfn
    PSFN_BACKUP_ENCRYPTION_KEY=<long random secret>
@@ -531,8 +531,8 @@ details, descriptions, schemas, or outputs.
 - Uses `WORKSPACE_PATH` as one companion's Personal Workspace for documents,
   downloads, generated images, personal journal/scratchpad files,
   knowledge-base notes, authored skills, modules, and experiments. It is not a
-  runtime-state root or a general shared-files root. In the live Purrsephone
-  deployment this is repo-root `./purrsephone`.
+  runtime-state root or a general shared-files root. A local deployment may use
+  repo-root `./companion`.
 - Good for local development and smoke testing.
 - This shared-root support is an alpha migration boundary item that survives only until beta. Do not build new setup or runtime behavior that depends on shared-root fallback.
 

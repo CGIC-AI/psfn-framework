@@ -3,9 +3,9 @@ import { abstractMemoryText } from './abstraction.js';
 
 describe('abstractMemoryText', () => {
   it('converts sensitive medication event into generalized lesson', () => {
-    const result = abstractMemoryText('V missed meds Tuesday at 9am after a 14-hour shift.');
+    const result = abstractMemoryText('My partner missed meds Tuesday at 9am after a 14-hour shift.');
     expect(result.text).toBe('Partner benefits from medication reminders during high workload periods.');
-    expect(result.text).not.toContain('V');
+    expect(result.text).not.toContain('partner missed');
     expect(result.text).not.toContain('Tuesday');
     expect(result.text).not.toContain('9am');
   });

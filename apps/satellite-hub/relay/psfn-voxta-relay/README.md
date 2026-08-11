@@ -38,7 +38,7 @@ The published folder includes `appsettings.json` beside the EXE:
 {
   "PsfnVoxtaRelay": {
     "ListenUrl": "http://127.0.0.1:8789",
-    "Remote": "http://purrsephone.local.vega.nyc:8789",
+    "Remote": "http://companion.example.com:8789",
     "AudioFolder": "E:\\VAM\\Custom\\Sounds\\Voxta",
     "RemoteBearerToken": ""
   }

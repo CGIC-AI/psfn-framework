@@ -58,7 +58,7 @@ function baseWorld(): FakeWorld {
     statfs,
     gitRepos: new Map<string, GitRepoState>([
       [REPO_ROOT, { commit: 'image00000000', branch: 'HEAD', committer: 'PSFN Runtime Image', dirty: false }],
-      [CHECKOUT, { commit: 'current1111', branch: 'foundation_e0_e2', committer: 'axAilotl', dirty: false }],
+      [CHECKOUT, { commit: 'current1111', branch: 'foundation_e0_e2', committer: 'example-owner', dirty: false }],
     ]),
     gitLog: new Map<string, string>([
       [`${CHECKOUT}:prev00000..current1111`, [

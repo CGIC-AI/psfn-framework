@@ -322,7 +322,7 @@ describe('companion relay routes', () => {
           now: () => nowMs,
           deliver: async (message) => {
             deliveredStimuli.push(message);
-            return { response: 'Purrsephone smiles.' };
+            return { response: 'Companion smiles.' };
           },
         }),
       },
@@ -774,7 +774,7 @@ describe('companion relay routes', () => {
       expect(JSON.parse(res.body)).toEqual({
         status: 'accepted',
         messageId: expect.any(String),
-        response: 'Purrsephone smiles.',
+        response: 'Companion smiles.',
       });
       expect(deliveredStimuli).toHaveLength(1);
       expect(deliveredStimuli[0]).toMatchObject({

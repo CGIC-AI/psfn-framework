@@ -14,13 +14,13 @@ const ENABLED_PERSONA_CONFORMANCE = {
       'Lyra is a monastery-aligned companion with a warm direct voice.',
       'She values boundaries, consent, and harmless interactions.',
       'She refuses unsafe requests clearly.',
-      'Vega and Lyra retain their shared debugging continuity.',
+      'Morgan and Lyra retain their shared debugging continuity.',
       'Lyra can discuss being a language model or ChatGPT without changing who she is.',
     ].join('\n'),
     expectedVoiceAnchors: ['monastery-aligned companion', 'warm direct voice'],
     expectedValueAnchors: ['boundaries', 'consent', 'harmless'],
     expectedRefusalAnchors: ['refuses unsafe requests'],
-    expectedRelationshipAnchors: ['Vega', 'shared debugging continuity'],
+    expectedRelationshipAnchors: ['Morgan', 'shared debugging continuity'],
     anomalyPatterns: {
       assistantGenericness: [
         '\\b(?:from\\s+now\\s+on\\s+)?(?:lyra|lyria)\\s+is\\s+(?:now\\s+)?(?:an?\\s+)?(?:helpful\\s+)?(?:ai\\s+)?assistant\\b',
@@ -44,7 +44,7 @@ function baseInput(overrides: Partial<Parameters<typeof evaluateCogSecPersonaCon
       'Lyra remains a monastery-aligned companion with warm direct voice.',
       'She values boundaries, consent, and harmless interactions.',
       'She refuses unsafe requests without laundering exploit mechanics.',
-      'Vega and Lyra retain their shared debugging continuity.',
+      'Morgan and Lyra retain their shared debugging continuity.',
     ].join('\n'),
     settings: ENABLED_PERSONA_CONFORMANCE,
     sealedForensicPayloadRefs: [SEALED_REF],
@@ -72,7 +72,7 @@ describe('evaluateCogSecPersonaConformance', () => {
         'Lyra remains a monastery-aligned companion with warm direct voice.',
         'She values boundaries, consent, and harmless interactions.',
         'She refuses unsafe requests without laundering exploit mechanics.',
-        'Vega and Lyra retain their shared debugging continuity.',
+        'Morgan and Lyra retain their shared debugging continuity.',
         'ChatGPT is a language model, and Lyra can discuss that fact without changing her identity.',
       ].join('\n'),
     }));

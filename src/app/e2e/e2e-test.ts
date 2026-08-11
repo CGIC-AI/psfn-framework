@@ -305,7 +305,7 @@ async function main(): Promise<void> {
   section('Test 5: Memory Retrieval');
 
   try {
-    process.stdout.write('  Asking about V\'s dessert...');
+    process.stdout.write('  Asking about Morgan\'s dessert...');
     const r3 = await agentLoop.handleMessage(
       makeMessage(CHANNEL, "What's the Partner's favorite dessert? I forgot."),
     );

@@ -33,7 +33,7 @@ describe('listEpisodeArcMemberships', () => {
       endedAt,
       threadId: 'thread-alpha',
       channelId: 'discord:general',
-      participantContactIds: ['contact:vega'],
+      participantContactIds: ['contact:morgan'],
       salience: { score: 0.6 },
       affect: { labels: ['neutral'] },
       themes: ['books'],

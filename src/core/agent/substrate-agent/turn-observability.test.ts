@@ -106,9 +106,9 @@ describe('buildTurnCorrelation', () => {
       'turn-1' as TurnID,
       'request-1',
       { sessionId: 'session-1', rootInitiationId: 'root-1' },
-      'companion-purrsephone',
+      'companion-companion',
     );
-    expect(correlation.companionId).toBe('companion-purrsephone');
+    expect(correlation.companionId).toBe('companion-companion');
     expect(correlation.icpCorrelation).toBeUndefined();
 
     // The correlation now yields a session-keyed affinity token (no longer

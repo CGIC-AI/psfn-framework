@@ -21,11 +21,11 @@ describe('companion ready lifecycle notification authentication', () => {
 
   it('matches only the exact ready message for the bound companion identity', () => {
     expect(isCompanionReadyLifecycleNotification(
-      `[agent:${companionId}] Purrsephone is back~ (startup took 0s)`,
+      `[agent:${companionId}] Companion is back~ (startup took 0s)`,
       companionId,
     )).toBe(true);
     expect(isCompanionReadyLifecycleNotification(
-      `[agent:${companionId}] Purrsephone is back~ (startup took 17s)`,
+      `[agent:${companionId}] Companion is back~ (startup took 17s)`,
       companionId,
     )).toBe(true);
     expect(isCompanionReadyLifecycleNotification(
@@ -35,11 +35,11 @@ describe('companion ready lifecycle notification authentication', () => {
   });
 
   it.each([
-    "[agent:22222222-2222-4222-8222-222222222223] Purrsephone is back~ (startup took 0s)",
-    "[agent:22222222-2222-4222-8222-222222222222] Purrsephone is back~ (startup took 00s)",
-    "[agent:22222222-2222-4222-8222-222222222222] Purrsephone is back~ (startup took -1s)",
+    "[agent:22222222-2222-4222-8222-222222222223] Companion is back~ (startup took 0s)",
+    "[agent:22222222-2222-4222-8222-222222222222] Companion is back~ (startup took 00s)",
+    "[agent:22222222-2222-4222-8222-222222222222] Companion is back~ (startup took -1s)",
     "[agent:22222222-2222-4222-8222-222222222222] is back~ (startup took 0s)",
-    "prefix [agent:22222222-2222-4222-8222-222222222222] Purrsephone is back~ (startup took 0s)",
+    "prefix [agent:22222222-2222-4222-8222-222222222222] Companion is back~ (startup took 0s)",
   ])('rejects unauthenticated or non-canonical lookalike %j', (content) => {
     expect(isCompanionReadyLifecycleNotification(content, companionId)).toBe(false);
   });
@@ -233,13 +233,13 @@ describe('DiscordLifecycleNotifier', () => {
         heartbeatChannelId: 'hb-channel',
         dataDir: tempDir,
         startTime: Date.now(),
-        subsystemLabel: 'agent:purrsephone',
-        companionDisplayLabel: 'Purrsephone',
+        subsystemLabel: 'agent:companion',
+        companionDisplayLabel: 'Companion',
       });
 
       await notifier.notifyReady();
 
-      expect(sentMessages[0].content).toMatch(/^\[agent:purrsephone\] Purrsephone is back/);
+      expect(sentMessages[0].content).toMatch(/^\[agent:companion\] Companion is back/);
     });
 
     it('falls back to the process role when the subsystem label is blank', async () => {
@@ -334,14 +334,14 @@ describe('DiscordLifecycleNotifier', () => {
         heartbeatChannelId: 'hb-channel',
         dataDir: tempDir,
         startTime: Date.now(),
-        subsystemLabel: 'agent:purrsephone',
-        companionDisplayLabel: 'Purrsephone',
+        subsystemLabel: 'agent:companion',
+        companionDisplayLabel: 'Companion',
       });
 
       await notifier.notifyShutdown('maintenance');
 
       expect(sentMessages[0].content).toMatch(
-        /^\[agent:purrsephone\] Purrsephone is going offline -- maintenance\./,
+        /^\[agent:companion\] Companion is going offline -- maintenance\./,
       );
     });
 

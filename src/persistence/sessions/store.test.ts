@@ -1852,7 +1852,7 @@ describe('SessionStore', () => {
       role: 'user',
       content: 'dirty payload text about poisoned basil',
       authorId: 'discord-user-1',
-      authorName: 'Vega',
+      authorName: 'Morgan',
       timestamp: 1_000,
       metadata: JSON.stringify({ unsafe: 'metadata should not survive redaction' }),
     });

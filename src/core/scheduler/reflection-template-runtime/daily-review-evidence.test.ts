@@ -109,7 +109,7 @@ describe('collectDailyReviewEvidence', () => {
     const sessionEntries = [
       sessionEntry({ id: 1, content: 'Too old', timestamp: NOW_MS - WINDOW_MS - 1 }),
       sessionEntry({ id: 2, content: 'Morning recovery-plan check-in', timestamp: NOW_MS - 20 * 60 * 60 * 1000 }),
-      sessionEntry({ id: 3, role: 'assistant', authorName: 'Purrsephone', content: 'Afternoon handoff follow-up', timestamp: NOW_MS - 12 * 60 * 60 * 1000 }),
+      sessionEntry({ id: 3, role: 'assistant', authorName: 'Companion', content: 'Afternoon handoff follow-up', timestamp: NOW_MS - 12 * 60 * 60 * 1000 }),
       sessionEntry({ id: 4, content: 'Evening garden planning', timestamp: NOW_MS - 4 * 60 * 60 * 1000 }),
       sessionEntry({ id: 5, content: 'Late-night reassurance', timestamp: NOW_MS - 60 * 60 * 1000 }),
     ];

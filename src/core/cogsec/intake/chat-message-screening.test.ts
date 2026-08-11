@@ -34,19 +34,19 @@ describe('chat message body intake screening', () => {
     const addressing = {
       schemaVersion: 2,
       source: 'discord',
-      author: { authorId: 'operator-1', authorName: 'Vega' },
+      author: { authorId: 'operator-1', authorName: 'Morgan' },
       observer: { authorId: 'lyra-bot', authorName: 'Lyra' },
-      mentionedTargets: [{ authorId: 'purrsephone-bot', authorName: 'Purrsephone' }],
+      mentionedTargets: [{ authorId: 'companion-bot', authorName: 'Companion' }],
       replyTarget: {
         messageId: 'discord-parent-1',
-        author: { authorId: 'purrsephone-bot', authorName: 'Purrsephone' },
+        author: { authorId: 'companion-bot', authorName: 'Companion' },
       },
       channel: { scope: 'group', channelId: 'discord-room-1', threadId: 'discord-thread-1' },
       resolvedAddressee: {
         kind: 'participants',
         participants: [{
-          authorId: 'purrsephone-bot',
-          authorName: 'Purrsephone',
+          authorId: 'companion-bot',
+          authorName: 'Companion',
           evidence: ['mention', 'reply'],
         }],
       },
@@ -70,7 +70,7 @@ describe('chat message body intake screening', () => {
 
     const screened = await screenChatMessageEnvelope({
       envelope: {
-        content: '<@purrsephone-bot> hello love',
+        content: '<@companion-bot> hello love',
         addressing,
       },
       screening,

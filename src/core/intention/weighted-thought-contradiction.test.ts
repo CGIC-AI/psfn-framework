@@ -101,7 +101,7 @@ function resolutionEvent(concern: ActiveConcern): ConcernResolutionAppraisalEven
 function stubConcern(overrides: Partial<ActiveConcern>): ActiveConcern {
   return {
     id: 'concern-1',
-    text: 'V seemed stressed earlier',
+    text: 'Morgan seemed stressed earlier',
     priority: 'medium',
     source: 'appraisal',
     status: 'resolved',
@@ -126,7 +126,7 @@ describe('applyWeightedThoughtContradictionDampening (production path)', () => {
     const store = createWeightedThoughtStorePort(backend);
     const seeded = createThoughtWeight({
       id: 'care-thought-v',
-      content: 'Check in on V',
+      content: 'Check in on Morgan',
       source: 'concern',
       thoughtClass: 'standard',
       contactId: 'contact-v',
@@ -164,7 +164,7 @@ describe('applyWeightedThoughtContradictionDampening (production path)', () => {
     const store = createWeightedThoughtStorePort(backend);
     const seeded = createThoughtWeight({
       id: 'care-thought-v',
-      content: 'Check in on V',
+      content: 'Check in on Morgan',
       source: 'concern',
       thoughtClass: 'standard',
       contactId: 'contact-v',
@@ -224,7 +224,7 @@ describe('applyWeightedThoughtContradictionDampening (production path)', () => {
     const store = createWeightedThoughtStorePort(backend);
     const seeded = createThoughtWeight({
       id: 'care-thought-v',
-      content: 'Check in on V',
+      content: 'Check in on Morgan',
       source: 'concern',
       thoughtClass: 'standard',
       contactId: 'contact-v',

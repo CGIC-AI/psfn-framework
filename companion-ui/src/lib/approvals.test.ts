@@ -103,7 +103,7 @@ describe('approval panel fail-closed state', () => {
       redactedContext: 'Shard requests outbound fetch',
       sourceSystem: 'shard',
       attribution: {
-        parentLabel: 'Purrsephone', parentId: 'p-1', shardLabel: 'research-shard', shardId: 's-1',
+        parentLabel: 'Companion', parentId: 'p-1', shardLabel: 'research-shard', shardId: 's-1',
       },
       action: 'http.get https://example.com',
       scope: 'network:egress',
@@ -116,7 +116,7 @@ describe('approval panel fail-closed state', () => {
       id: 'ap-v2',
       status: 'pending',
       sourceSystem: 'shard',
-      attribution: { parentLabel: 'Purrsephone', parentId: 'p-1', shardLabel: 'research-shard', shardId: 's-1' },
+      attribution: { parentLabel: 'Companion', parentId: 'p-1', shardLabel: 'research-shard', shardId: 's-1' },
       action: 'http.get https://example.com',
       scope: 'network:egress',
       reason: 'operator-approved research',

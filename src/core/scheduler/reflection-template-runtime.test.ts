@@ -642,7 +642,7 @@ describe('createReflectionTemplateRuntime reflection metacognition journal', () 
       runtimeOptions: {
         llmProvider: fromAny(llmProvider),
         characterPromptVariablesProvider: () => ({
-          char: 'Purrsephone',
+          char: 'Companion',
           personality: 'PERSONALITY_SENTINEL',
           description: 'DESCRIPTION_SENTINEL',
           scenario: 'SCENARIO_SENTINEL',
@@ -2009,7 +2009,7 @@ describe('createReflectionTemplateRuntime reflection metacognition journal', () 
       dataDir: tempDir,
       runtimeOptions: {
         characterPromptVariablesProvider: () => ({
-          char: 'Purrsephone',
+          char: 'Companion',
           personality: 'PERSONALITY_SENTINEL',
           description: 'DESCRIPTION_SENTINEL',
           scenario: 'SCENARIO_SENTINEL',

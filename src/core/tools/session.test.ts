@@ -679,7 +679,7 @@ class InMemoryTranscriptSearch {
           content: 'Exact Orion launch date is still public.',
           timestamp: 5_000,
           channelVisibility: 'public',
-          authorName: 'Purrsephone',
+          authorName: 'Companion',
         }),
       }],
       truncated: false,

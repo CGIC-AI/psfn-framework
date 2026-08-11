@@ -47,7 +47,7 @@ describe('beads GitHub Project sync helper', () => {
     const runner = new FakeRunner([
       {
         stdout: JSON.stringify({
-          'custom.github_project_sync.owner': 'axAilotl',
+          'custom.github_project_sync.owner': 'example-owner',
           'custom.github_project_sync.project_number': '2',
         }),
       },
@@ -60,7 +60,7 @@ describe('beads GitHub Project sync helper', () => {
           status: 'open',
           priority: 2,
           issue_type: 'task',
-          owner: 'axAilotl@pm.me',
+          owner: 'maintainer@example.invalid',
         }]),
       },
       { stdout: JSON.stringify({ id: 'PVTI_item_1' }) },
@@ -90,7 +90,7 @@ describe('beads GitHub Project sync helper', () => {
     expect(result).toMatchObject({
       integration: 'github_project',
       state: 'synced',
-      owner: 'axAilotl',
+      owner: 'example-owner',
       projectNumber: 2,
       issueId: 'PSFN-1',
       itemId: 'PVTI_item_1',
@@ -114,7 +114,7 @@ describe('beads GitHub Project sync helper', () => {
     ]));
     expect(runner.calls[5]?.args).toEqual(expect.arrayContaining([
       '--set-metadata',
-      'github_project_sync_owner=axAilotl',
+      'github_project_sync_owner=example-owner',
       '--set-metadata',
       'github_project_sync_project_number=2',
       '--set-metadata',
@@ -128,7 +128,7 @@ describe('beads GitHub Project sync helper', () => {
     const runner = new FakeRunner([
       {
         stdout: JSON.stringify({
-          'custom.github_project_sync.owner': 'axAilotl',
+          'custom.github_project_sync.owner': 'example-owner',
           'custom.github_project_sync.project_number': '2',
           'custom.github_project_sync.fields.status.field_id': 'PVTSSF_status',
           'custom.github_project_sync.fields.status.options.open': 'status_open',
@@ -199,7 +199,7 @@ describe('beads GitHub Project sync helper', () => {
     expect(result).toMatchObject({
       integration: 'github_project',
       state: 'synced',
-      owner: 'axAilotl',
+      owner: 'example-owner',
       projectNumber: 2,
       issueId: 'PSFN-10',
       itemId: 'PVTI_item_fields',
@@ -252,7 +252,7 @@ describe('beads GitHub Project sync helper', () => {
     const runner = new FakeRunner([
       {
         stdout: JSON.stringify({
-          'custom.github_project_sync.project_url': 'https://github.com/users/axAilotl/projects/2',
+          'custom.github_project_sync.project_url': 'https://github.com/users/example-owner/projects/2',
         }),
       },
       { stdout: JSON.stringify({ id: 'PVT_x' }) },
@@ -262,7 +262,7 @@ describe('beads GitHub Project sync helper', () => {
           title: 'Repair synced item',
           status: 'open',
           metadata: {
-            github_project_sync_owner: 'axAilotl',
+            github_project_sync_owner: 'example-owner',
             github_project_sync_project_number: 2,
             github_project_sync_item_id: 'PVTI_item_2',
           },
@@ -295,7 +295,7 @@ describe('beads GitHub Project sync helper', () => {
     expect(result).toMatchObject({
       integration: 'github_project',
       state: 'synced',
-      owner: 'axAilotl',
+      owner: 'example-owner',
       projectNumber: 2,
       issueId: 'PSFN-2',
       itemId: 'PVTI_item_2',
@@ -323,7 +323,7 @@ describe('beads GitHub Project sync helper', () => {
     const runner = new FakeRunner([
       {
         stdout: JSON.stringify({
-          'custom.github_project_sync.project_url': 'https://github.com/users/axAilotl/projects/2',
+          'custom.github_project_sync.project_url': 'https://github.com/users/example-owner/projects/2',
           'custom.github_project_sync.fields.priority.field_id': 'PVTSSF_priority',
           'custom.github_project_sync.fields.priority.type': 'single_select',
           'custom.github_project_sync.fields.priority.options.0': 'priority_p0',
@@ -341,7 +341,7 @@ describe('beads GitHub Project sync helper', () => {
           status: 'open',
           priority: 0,
           metadata: {
-            github_project_sync_owner: 'axAilotl',
+            github_project_sync_owner: 'example-owner',
             github_project_sync_project_number: 2,
             github_project_sync_item_id: 'PVTI_item_11',
             github_project_sync_draft_content_id: 'DI_item_11',
@@ -371,7 +371,7 @@ describe('beads GitHub Project sync helper', () => {
     expect(result).toMatchObject({
       integration: 'github_project',
       state: 'synced',
-      owner: 'axAilotl',
+      owner: 'example-owner',
       projectNumber: 2,
       issueId: 'PSFN-11',
       itemId: 'PVTI_item_11',
@@ -402,7 +402,7 @@ describe('beads GitHub Project sync helper', () => {
     const runner = new FakeRunner([
       {
         stdout: JSON.stringify({
-          'custom.github_project_sync.project_url': 'https://github.com/users/axAilotl/projects/2',
+          'custom.github_project_sync.project_url': 'https://github.com/users/example-owner/projects/2',
         }),
       },
       { stdout: JSON.stringify({ id: 'PVT_x' }) },
@@ -412,7 +412,7 @@ describe('beads GitHub Project sync helper', () => {
           title: 'Close sync item',
           status: 'closed',
           metadata: {
-            github_project_sync_owner: 'axAilotl',
+            github_project_sync_owner: 'example-owner',
             github_project_sync_project_number: 2,
             github_project_sync_item_id: 'PVTI_item_5',
             github_project_sync_draft_content_id: 'DI_item_5',
@@ -434,7 +434,7 @@ describe('beads GitHub Project sync helper', () => {
     expect(result).toMatchObject({
       integration: 'github_project',
       state: 'archived',
-      owner: 'axAilotl',
+      owner: 'example-owner',
       projectNumber: 2,
       issueId: 'PSFN-5',
       itemId: 'PVTI_item_5',
@@ -445,7 +445,7 @@ describe('beads GitHub Project sync helper', () => {
       'item-archive',
       '2',
       '--owner',
-      'axAilotl',
+      'example-owner',
       '--id',
       'PVTI_item_5',
     ]));
@@ -459,7 +459,7 @@ describe('beads GitHub Project sync helper', () => {
     const runner = new FakeRunner([
       {
         stdout: JSON.stringify({
-          'custom.github_project_sync.owner': 'axAilotl',
+          'custom.github_project_sync.owner': 'example-owner',
           'custom.github_project_sync.project_number': '2',
           'custom.github_project_sync.fields.status.field_id': 'PVTSSF_status',
           'custom.github_project_sync.fields.status.options.open': 'status_open',
@@ -488,7 +488,7 @@ describe('beads GitHub Project sync helper', () => {
     const runner = new FakeRunner([
       {
         stdout: JSON.stringify({
-          'custom.github_project_sync.owner': 'axAilotl',
+          'custom.github_project_sync.owner': 'example-owner',
           'custom.github_project_sync.project_number': '2',
           'custom.github_project_sync.fields.priority.field_id': 'PVTF_priority',
           'custom.github_project_sync.fields.priority.type': 'number',
@@ -508,14 +508,14 @@ describe('beads GitHub Project sync helper', () => {
     expect(result).toMatchObject({
       integration: 'github_project',
       state: 'error',
-      owner: 'axAilotl',
+      owner: 'example-owner',
       projectNumber: 2,
       issueId: 'PSFN-13',
-      reason: 'gh project view axAilotl/2 returned no project id',
+      reason: 'gh project view example-owner/2 returned no project id',
     });
     expect(runner.calls.map((call) => call.label)).toEqual([
       'bd config list',
-      'gh project view axAilotl/2',
+      'gh project view example-owner/2',
     ]);
   });
 
@@ -523,7 +523,7 @@ describe('beads GitHub Project sync helper', () => {
     const runner = new FakeRunner([
       {
         stdout: JSON.stringify({
-          'custom.github_project_sync.owner': 'axAilotl',
+          'custom.github_project_sync.owner': 'example-owner',
           'custom.github_project_sync.project_number': '2',
         }),
       },
@@ -570,7 +570,7 @@ describe('beads GitHub Project sync helper', () => {
     expect(result).toMatchObject({
       integration: 'github_project',
       state: 'error',
-      owner: 'axAilotl',
+      owner: 'example-owner',
       projectNumber: 2,
       totalIssues: 2,
       synced: 1,

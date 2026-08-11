@@ -19,7 +19,7 @@ const COMPANION: BiographicalSubjectRef = {
   companionId: 'purrs',
   subjectVersion: 1,
 };
-const V: BiographicalSubjectRef = { kind: 'contact', contactId: 'v', subjectVersion: 1 };
+const Morgan: BiographicalSubjectRef = { kind: 'contact', contactId: 'v', subjectVersion: 1 };
 const EVE: BiographicalSubjectRef = { kind: 'contact', contactId: 'eve', subjectVersion: 1 };
 
 function source(ref: string, patch: Partial<BiographicalClaimSource> = {}): BiographicalClaimSource {
@@ -41,7 +41,7 @@ function evidence(
   patch: Partial<CurrentAuthorIdentityEvidence> = {},
 ): CurrentAuthorIdentityEvidence {
   return {
-    currentAuthorSubject: V,
+    currentAuthorSubject: Morgan,
     companionSubject: COMPANION,
     value,
     sources: [source('contact:v')],
@@ -59,25 +59,25 @@ describe('ingestCurrentAuthorIdentityEvidence', () => {
 
     const name = await ingestCurrentAuthorIdentityEvidence({
       store,
-      evidence: evidence({ kind: 'name', name: 'V', role: 'primary' }, [V]),
+      evidence: evidence({ kind: 'name', name: 'Morgan', role: 'primary' }, [Morgan]),
     });
     const relationship = await ingestCurrentAuthorIdentityEvidence({
       store,
-      evidence: evidence({ kind: 'relationship', relationshipType: 'partner' }, [V, COMPANION]),
+      evidence: evidence({ kind: 'relationship', relationshipType: 'partner' }, [Morgan, COMPANION]),
     });
     const nickname = await ingestCurrentAuthorIdentityEvidence({
       store,
-      evidence: evidence({ kind: 'relational_nickname', nickname: 'Sunbeam loaf' }, [V, COMPANION]),
+      evidence: evidence({ kind: 'relational_nickname', nickname: 'Sunbeam loaf' }, [Morgan, COMPANION]),
     });
 
     expect(name.claim).toMatchObject({
-      subject: V,
+      subject: Morgan,
       kind: 'name',
-      value: { kind: 'name', name: 'V', role: 'primary' },
+      value: { kind: 'name', name: 'Morgan', role: 'primary' },
       status: 'active',
     });
     expect(relationship.claim).toMatchObject({
-      subject: V,
+      subject: Morgan,
       relatedSubject: COMPANION,
       kind: 'relationship',
       value: { kind: 'relationship', relationshipType: 'partner' },
@@ -85,7 +85,7 @@ describe('ingestCurrentAuthorIdentityEvidence', () => {
     });
     expect(nickname.claim).toMatchObject({
       subject: COMPANION,
-      relatedSubject: V,
+      relatedSubject: Morgan,
       kind: 'nickname',
       value: { kind: 'nickname', nickname: 'Sunbeam loaf', scope: 'relational' },
       status: 'active',
@@ -94,7 +94,7 @@ describe('ingestCurrentAuthorIdentityEvidence', () => {
 
   it('closes the change gate without synthesis or a write for identical evidence', async () => {
     const store = new InMemoryBiographicalProfileStore(() => NOW);
-    const input = evidence({ kind: 'relationship', relationshipType: 'partner' }, [V, COMPANION]);
+    const input = evidence({ kind: 'relationship', relationshipType: 'partner' }, [Morgan, COMPANION]);
     const first = await ingestCurrentAuthorIdentityEvidence({ store, evidence: input });
     const synthesize = vi.fn(async () => input.value);
 
@@ -107,11 +107,11 @@ describe('ingestCurrentAuthorIdentityEvidence', () => {
 
   it('supersedes only the same structured claim when its exact source set drifts', async () => {
     const store = new InMemoryBiographicalProfileStore(() => NOW);
-    const firstEvidence = evidence({ kind: 'name', name: 'V', role: 'primary' }, [V]);
+    const firstEvidence = evidence({ kind: 'name', name: 'Morgan', role: 'primary' }, [Morgan]);
     const first = await ingestCurrentAuthorIdentityEvidence({ store, evidence: firstEvidence });
     const drifted = evidence(
-      { kind: 'name', name: 'V', role: 'primary' },
-      [V],
+      { kind: 'name', name: 'Morgan', role: 'primary' },
+      [Morgan],
       { sources: [source('contact:v', { revision: '2026-08-10T11:00:00.000Z' })] },
     );
 
@@ -129,12 +129,12 @@ describe('ingestCurrentAuthorIdentityEvidence', () => {
     const store = new InMemoryBiographicalProfileStore(() => NOW);
     const incomplete = evidence(
       { kind: 'relationship', relationshipType: 'partner' },
-      [V, COMPANION],
-      { attribution: { status: 'incomplete', participantSubjects: [V, COMPANION] } },
+      [Morgan, COMPANION],
+      { attribution: { status: 'incomplete', participantSubjects: [Morgan, COMPANION] } },
     );
     const gossipShaped = evidence(
       { kind: 'relational_nickname', nickname: 'A third-party story' },
-      [V, COMPANION, EVE],
+      [Morgan, COMPANION, EVE],
     );
 
     await expect(ingestCurrentAuthorIdentityEvidence({ store, evidence: incomplete }))
@@ -148,11 +148,11 @@ describe('ingestCurrentAuthorIdentityEvidence', () => {
     const store = new InMemoryBiographicalProfileStore(() => NOW);
     const unknown = evidence(
       { kind: 'gossip', statement: 'someone said something' } as never,
-      [V, COMPANION],
+      [Morgan, COMPANION],
     );
     const unregisteredRelationship = evidence(
       { kind: 'relationship', relationshipType: 'someone-was-fat' } as never,
-      [V, COMPANION],
+      [Morgan, COMPANION],
     );
     const proseSmuggling = evidence(
       {
@@ -160,7 +160,7 @@ describe('ingestCurrentAuthorIdentityEvidence', () => {
         relationshipType: 'partner',
         statement: 'someone said something about another person',
       } as never,
-      [V, COMPANION],
+      [Morgan, COMPANION],
     );
 
     await expect(ingestCurrentAuthorIdentityEvidence({ store, evidence: unknown }))

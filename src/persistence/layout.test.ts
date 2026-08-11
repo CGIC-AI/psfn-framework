@@ -334,7 +334,7 @@ describe('persistence layout', () => {
   });
 
   it('creates the personal files skeleton separately from runtime state', () => {
-    const personalFilesDir = join(tempDir, 'purrsephone');
+    const personalFilesDir = join(tempDir, 'companion');
 
     ensurePersonalFilesLayout(personalFilesDir);
 

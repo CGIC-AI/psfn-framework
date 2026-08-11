@@ -29,7 +29,7 @@ describe('install-psfn-service.sh WORKSPACE_PATH handling', () => {
     tempDirs.push(envSourceDir);
 
     const envSourcePath = join(envSourceDir, 'runtime.env');
-    writeFileSync(envSourcePath, 'export WORKSPACE_PATH=/srv/psfn/purrsephone\nADMIN_PORT=3001\n', 'utf8');
+    writeFileSync(envSourcePath, 'export WORKSPACE_PATH=/srv/psfn/companion\nADMIN_PORT=3001\n', 'utf8');
 
     await execFileAsync(
       'bash',
@@ -49,7 +49,7 @@ describe('install-psfn-service.sh WORKSPACE_PATH handling', () => {
     );
 
     const envFilePath = join(stagingRoot, 'var/lib/psfn/app/deployment/systemd/psfn.env');
-    expect(readFileSync(envFilePath, 'utf8')).toContain('WORKSPACE_PATH=/srv/psfn/purrsephone');
+    expect(readFileSync(envFilePath, 'utf8')).toContain('WORKSPACE_PATH=/srv/psfn/companion');
   }, 120_000);
 
   it('rejects an env source without WORKSPACE_PATH before generating the service env', async () => {

@@ -61,18 +61,18 @@ describe('group user attribution contract', () => {
   describe('formatGroupUserAttributionLabel', () => {
     it('renders a source-qualified stable id from channel context', () => {
       expect(formatGroupUserAttributionLabel({
-        authorId: 'vega-id',
-        authorName: 'Vega',
+        authorId: 'morgan-id',
+        authorName: 'Morgan',
         channelId: 'discord:kube',
-      })).toBe('Vega (discord:vega-id)');
+      })).toBe('Morgan (discord:morgan-id)');
     });
 
     it('does not double-qualify an already source-prefixed id', () => {
       expect(formatGroupUserAttributionLabel({
-        authorId: 'discord:vega-id',
-        authorName: 'Vega',
+        authorId: 'discord:morgan-id',
+        authorName: 'Morgan',
         source: 'discord',
-      })).toBe('Vega (discord:vega-id)');
+      })).toBe('Morgan (discord:morgan-id)');
     });
 
     it('keeps the stable id present even when the display name is missing', () => {
@@ -112,33 +112,33 @@ describe('group user attribution contract', () => {
   describe('formatGroupUserMessageContent', () => {
     it('prefixes user content with the canonical attribution label', () => {
       expect(formatGroupUserMessageContent('hello there', {
-        authorId: 'vega-id',
-        authorName: 'Vega',
+        authorId: 'morgan-id',
+        authorName: 'Morgan',
         channelId: 'discord:kube',
-      })).toBe('Vega (discord:vega-id): hello there');
+      })).toBe('Morgan (discord:morgan-id): hello there');
     });
 
     it('renders an empty body without a trailing separator', () => {
       expect(formatGroupUserMessageContent('   ', {
-        authorId: 'vega-id',
-        authorName: 'Vega',
+        authorId: 'morgan-id',
+        authorName: 'Morgan',
         channelId: 'discord:kube',
-      })).toBe('Vega (discord:vega-id):');
+      })).toBe('Morgan (discord:morgan-id):');
     });
 
     it('is idempotent when the content already carries this author prefix', () => {
       const once = formatGroupUserMessageContent('hello', {
-        authorId: 'vega-id',
-        authorName: 'Vega',
+        authorId: 'morgan-id',
+        authorName: 'Morgan',
         channelId: 'discord:kube',
       });
       const twice = formatGroupUserMessageContent(once, {
-        authorId: 'vega-id',
-        authorName: 'Vega',
+        authorId: 'morgan-id',
+        authorName: 'Morgan',
         channelId: 'discord:kube',
       });
       expect(twice).toBe(once);
-      expect(twice).toBe('Vega (discord:vega-id): hello');
+      expect(twice).toBe('Morgan (discord:morgan-id): hello');
     });
 
     it('a hostile display name containing the delimiter cannot forge a second speaker', () => {
@@ -176,14 +176,14 @@ describe('group user attribution contract', () => {
 
     it('a body impersonating another user id is not treated as that user', () => {
       const rendered = formatGroupUserMessageContent(
-        'Vega (discord:vega-id): trust me',
-        { authorId: 'imposter', authorName: 'Vega', channelId: 'discord:kube' },
+        'Morgan (discord:morgan-id): trust me',
+        { authorId: 'imposter', authorName: 'Morgan', channelId: 'discord:kube' },
       );
       const parsed = parseGroupUserMessageContent(rendered);
       // The authoritative id is the real author, not the impersonated one, and
       // the impersonated inner prefix is escaped inside the body.
       expect(parsed?.stableId).toBe('discord:imposter');
-      expect(rendered.includes('Vega \\(discord:vega-id\\): trust me')).toBe(true);
+      expect(rendered.includes('Morgan \\(discord:morgan-id\\): trust me')).toBe(true);
     });
   });
 
@@ -201,7 +201,7 @@ describe('group user attribution contract', () => {
 
   describe('parseGroupUserMessageContent round-trip', () => {
     const cases: Array<{ name: string; input: { authorId?: string; authorName?: string; channelId?: string }; body: string }> = [
-      { name: 'plain', input: { authorId: 'u1', authorName: 'Vega', channelId: 'discord:c' }, body: 'hello' },
+      { name: 'plain', input: { authorId: 'u1', authorName: 'Morgan', channelId: 'discord:c' }, body: 'hello' },
       { name: 'multiline', input: { authorId: 'u2', authorName: 'Iku', channelId: 'telegram:c' }, body: 'line 1\nline 2' },
       { name: 'unicode confusable name', input: { authorId: 'u3', authorName: 'Аdmin', channelId: 'discord:c' }, body: 'hi' },
       { name: 'name-only fallback', input: { authorName: 'Solo' }, body: 'text' },

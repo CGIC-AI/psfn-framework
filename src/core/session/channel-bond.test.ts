@@ -18,7 +18,7 @@ function makeEntry(overrides: Partial<SessionEntry> & Pick<SessionEntry, 'id' | 
   return {
     role: 'user',
     content: `message ${overrides.id}`,
-    authorId: 'vega-test-user',
+    authorId: 'morgan-test-user',
     authorName: 'Partner',
     timestamp: NOW - 60_000,
     channelVisibility: 'private',
@@ -52,11 +52,11 @@ function activeChannel(channelId: string, channelVisibility: ActiveContinuityCha
 function resolveTimeline(overrides: Partial<Parameters<typeof resolveBondedSessionTimeline>[0]> = {}) {
   return resolveBondedSessionTimeline({
     bond: {
-      currentIdentity: { channel: 'discord', userId: 'vega-test-user' },
+      currentIdentity: { channel: 'discord', userId: 'morgan-test-user' },
       bondedIdentities: [
-        { channel: 'discord', userId: 'vega-test-user' },
-        { channel: 'telegram', userId: 'vega-test-user' },
-        { channel: 'api', userId: 'vega-test-user' },
+        { channel: 'discord', userId: 'morgan-test-user' },
+        { channel: 'telegram', userId: 'morgan-test-user' },
+        { channel: 'api', userId: 'morgan-test-user' },
       ],
       trustLevel: 'primary',
     },
@@ -206,8 +206,8 @@ describe('resolveBondedSessionTimeline', () => {
   it('returns null when the current channel platform is not part of the bonded set', () => {
     const result = resolveTimeline({
       bond: {
-        currentIdentity: { channel: 'discord', userId: 'vega-test-user' },
-        bondedIdentities: [{ channel: 'telegram', userId: 'vega-test-user' }],
+        currentIdentity: { channel: 'discord', userId: 'morgan-test-user' },
+        bondedIdentities: [{ channel: 'telegram', userId: 'morgan-test-user' }],
         trustLevel: 'primary',
       },
       crossChannelContinuity: makePort([activeChannel('telegram:777')]),
@@ -240,7 +240,7 @@ describe('resolveBondedSessionTimeline', () => {
           makeEntry({
             id: 7,
             channelId: 'telegram:group:777',
-            authorId: 'vega-test-user',
+            authorId: 'morgan-test-user',
             content: 'bonded partner message',
           }),
           makeEntry({
@@ -323,10 +323,10 @@ describe('resolveBondedSessionTimeline', () => {
     // source) content across channels; the same shape passes at 'primary'.
     const build = (trustLevel: 'primary' | 'regular') => resolveTimeline({
       bond: {
-        currentIdentity: { channel: 'discord', userId: 'vega-test-user' },
+        currentIdentity: { channel: 'discord', userId: 'morgan-test-user' },
         bondedIdentities: [
-          { channel: 'discord', userId: 'vega-test-user' },
-          { channel: 'telegram', userId: 'vega-test-user' },
+          { channel: 'discord', userId: 'morgan-test-user' },
+          { channel: 'telegram', userId: 'morgan-test-user' },
         ],
         trustLevel,
       },

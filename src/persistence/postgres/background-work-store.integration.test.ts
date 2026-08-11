@@ -2404,7 +2404,7 @@ describe('PostgresBackgroundWorkStore', () => {
           llmClient: { complete } as ExtractionRunOptions['llmClient'],
           sessionManager: {
             getRecentMessages,
-            characterName: 'Purrsephone',
+            characterName: 'Companion',
           } as ExtractionRunOptions['sessionManager'],
           memoryStore: {
             getMemoriesByChannel: vi.fn().mockResolvedValue([]),
@@ -2829,7 +2829,7 @@ describe('PostgresBackgroundWorkStore', () => {
       role: 'assistant',
       content: 'I will keep that in mind.',
       authorId: 'companion',
-      authorName: 'Purrsephone',
+      authorName: 'Companion',
       timestamp: 1_001,
       metadata: buildSessionMetadataWithTurn(undefined, {
         turnId,

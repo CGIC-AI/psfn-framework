@@ -890,7 +890,7 @@ describe('AdminSessionDataService', () => {
       role: 'user',
       content: 'DIRTY_OLD_LOGICAL_SESSION_TEXT',
       timestamp: 1,
-      authorName: 'Vega',
+      authorName: 'Morgan',
     });
     const config = makeConfig({ dataDir: dir });
     const sessionManager = new SessionManager(store, config);

@@ -960,10 +960,10 @@ test('GitHub waits for an authenticated exact-base commit status', async () => {
     context: REMOTE_ATTESTATION_CONTEXT,
     state: 'success',
     description: `base=${BASE}`,
-    creator: { login: 'axAilotl' },
+    creator: { login: 'example-owner' },
   }];
   assert.equal(
-    validateRemoteAttestation(statuses, BASE, 'axAilotl').context,
+    validateRemoteAttestation(statuses, BASE, 'example-owner').context,
     REMOTE_ATTESTATION_CONTEXT,
   );
   assert.throws(
@@ -971,7 +971,7 @@ test('GitHub waits for an authenticated exact-base commit status', async () => {
     /trusted issuer/,
   );
   assert.throws(
-    () => validateRemoteAttestation(statuses, `3${BASE.slice(1)}`, 'axAilotl'),
+    () => validateRemoteAttestation(statuses, `3${BASE.slice(1)}`, 'example-owner'),
     /exact base/,
   );
   assert.equal(
@@ -979,7 +979,7 @@ test('GitHub waits for an authenticated exact-base commit status', async () => {
       repository: 'owner/repo',
       head: HEAD,
       base: BASE,
-      expectedActor: 'axAilotl',
+      expectedActor: 'example-owner',
       attempts: 1,
       read: () => statuses,
     })).state,

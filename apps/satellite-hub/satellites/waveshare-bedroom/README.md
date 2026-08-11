@@ -1,6 +1,6 @@
 # Waveshare Bedroom Satellite
 
-Static bedroom voice-and-touch satellite for Purrsephone.
+Static bedroom voice-and-touch satellite for Companion.
 
 ## Confirmed Hardware
 
@@ -20,12 +20,12 @@ VAD. Its only observed peripheral error was the expected absence of an SD card.
 
 The endpoint is a private, static satellite bound to the PSFN `bedroom` place.
 It keeps wake-word detection, audio-front-end processing, VAD, immediate touch
-feedback, and display state local. PSFN Satellite Hub owns STT, Purrsephone turn
+feedback, and display state local. PSFN Satellite Hub owns STT, Companion turn
 routing, TTS, endpoint authentication, and bounded Home Assistant control.
 
 The first UI uses replaceable pixel-art states for idle, listening, thinking,
 speaking, and error. Wake detection immediately raises the backlight to full
-brightness and shows a purple `Listening...` label over Purrsephone's idle
+brightness and shows a purple `Listening...` label over Companion's idle
 sprite. A deliberate tap on the head is a headpat. The device gives immediate
 local feedback, emits one native-API pulse to Satellite Hub, and suppresses
 additional headpats for three seconds. Hub forwards the typed interaction to
@@ -74,23 +74,21 @@ flash; the upstream setting attempted to copy more than 9 MB into 8 MB PSRAM
 and rebooted before `setup()`.
 
 The encrypted native API exposes `start_voice_turn` and `stop_voice_turn` as a
-stable push-to-talk seam. A Pi-side transport probe invoked the start action and
-captured more than 1.4 MB of live microphone PCM. The repo-owned bare
-`Purrsephone` microWakeWord model is trained from the three pronunciations and
-near-name exclusions under `wakeword/`. Its training recipe selects checkpoints
-by ambient false activations before recall; touch-to-talk remains available
+stable push-to-talk seam. A transport probe invoked the start action and
+captured more than 1.4 MB of live microphone PCM. Firmware preparation keeps
+the pinned upstream wake-word model unless an operator supplies an ignored
+local manifest and exact model digest. Touch-to-talk remains available
 independently of the wake detector.
 
 The physical GPIO0 button remains the push-to-talk fallback. A short press on
 the idle face is reserved for headpats and is not repurposed for voice input.
 
-The compiled runtime binds the repo-owned bare `Purrsephone` model directly to
-ESPHome's local microWakeWord component. Detection starts the ESPHome native
-voice-assistant stream, which is consumed by the Pi-side Satellite Hub fallback
-bridge. Home Assistant Assist is not in the conversation path. The bridge runs
-as `psfn-waveshare-bedroom.service`, performs streaming Deepgram STT, sends the
-turn through the authenticated PSFN bedroom endpoint, and returns Purrsephone's
-ElevenLabs stream to the onboard speaker.
+The compiled runtime binds the selected model to ESPHome's local microWakeWord
+component. Detection starts the ESPHome native voice-assistant stream, which is
+consumed by the Satellite Hub fallback bridge. Home Assistant Assist is not in
+the conversation path. The bridge runs as `psfn-waveshare-bedroom.service`,
+performs streaming STT, sends the turn through the authenticated bedroom
+endpoint, and returns the companion's speech stream to the onboard speaker.
 The bridge requires `ffmpeg` to convert ElevenLabs MP3 chunks into the 48 kHz
 mono FLAC format advertised by this firmware's speaker pipeline.
 All voice turns use the stable `bedroom` conversation id, producing the single
@@ -119,7 +117,7 @@ therefore cannot perform OTA recovery or updates. USB serial remains the update
 path until the unused SIP/VoIP and artwork surface is removed and a dual-slot
 partition layout fits.
 
-## Purrsephone Sprites
+## Companion Sprites
 
 Firmware-ready 360x360 RGBA assets live under `assets/sprites/`. The preparation
 script flood-removes only near-white background pixels connected to an image

@@ -44,7 +44,7 @@ describe('approval cards', () => {
         expiresInSeconds: 240,
         sourceSystem: 'shard',
         attribution: {
-          parentLabel: 'Purrsephone',
+          parentLabel: 'Companion',
           parentId: 'parent-opaque-1',
           shardLabel: 'research-shard',
           shardId: 'shard-opaque-1',
@@ -56,7 +56,7 @@ describe('approval cards', () => {
       }],
     });
 
-    expect(screen.getByText('Purrsephone · research-shard')).toBeTruthy();
+    expect(screen.getByText('Companion · research-shard')).toBeTruthy();
     expect(screen.getByText('parent-opaque-1')).toBeTruthy();
     expect(screen.getByText('shard-opaque-1')).toBeTruthy();
     expect(screen.getByText('http.get')).toBeTruthy();
@@ -107,7 +107,7 @@ describe('approval cards', () => {
         resolvedAt: '2026-07-17T00:00:10.000Z',
         expiresInSeconds: null,
         attribution: {
-          parentLabel: 'Purrsephone',
+          parentLabel: 'Companion',
           parentId: 'parent-opaque-1',
         },
         grantMode: { kind: 'ttl', ttlSeconds: 300 },

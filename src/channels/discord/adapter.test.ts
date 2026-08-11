@@ -370,7 +370,7 @@ describe('DiscordAdapter startup backfill', () => {
       makeMessage('m-companion-bot', 1400, {
         bot: true,
         authorId: 'companion-bot',
-        displayName: 'Purrsephone',
+        displayName: 'Companion',
         content: 'companion prior message',
       }),
     ]);
@@ -388,7 +388,7 @@ describe('DiscordAdapter startup backfill', () => {
     expect(appended.at(-1)).toEqual(expect.objectContaining({
       content: 'companion prior message',
       authorId: 'companion-bot',
-      authorName: 'Purrsephone',
+      authorName: 'Companion',
     }));
   });
 
@@ -904,7 +904,7 @@ describe('DiscordAdapter DM routing', () => {
         content: 'peer companion says hi',
         guildId: 'guild-1',
         authorId: 'companion-bot',
-        authorDisplayName: 'Purrsephone',
+        authorDisplayName: 'Companion',
         bot: true,
       }),
     );
@@ -1533,13 +1533,13 @@ describe('DiscordAdapter DM routing', () => {
         replyToMessageId: 'guild-parent-1',
         replyToAuthor: { id: 'other-companion', displayName: 'Other Companion' },
         authorId: 'operator-1',
-        authorDisplayName: 'Vega',
+        authorDisplayName: 'Morgan',
       }),
     );
 
     expect(handler).toHaveBeenCalledWith(expect.objectContaining({
       authorId: 'operator-1',
-      authorName: 'Vega',
+      authorName: 'Morgan',
       content: '[sanitized group body]',
       replyToMessageId: 'guild-parent-1',
       routing: expect.objectContaining({
@@ -1547,7 +1547,7 @@ describe('DiscordAdapter DM routing', () => {
         addressing: {
           schemaVersion: 2,
           source: 'discord',
-          author: { authorId: 'operator-1', authorName: 'Vega' },
+          author: { authorId: 'operator-1', authorName: 'Morgan' },
           observer: { authorId: 'bot-1', authorName: 'Test Companion' },
           mentionedTargets: [{
             authorId: 'other-companion',
@@ -1672,7 +1672,7 @@ describe('DiscordAdapter DM routing', () => {
         id: 'guild-companion-trigger-word',
         guildId: 'guild-1',
         authorId: 'companion-bot',
-        authorDisplayName: 'Purrsephone',
+        authorDisplayName: 'Companion',
         bot: true,
         content: 'artie without a mention',
         mentioned: false,
@@ -1682,7 +1682,7 @@ describe('DiscordAdapter DM routing', () => {
     expect(handler.mock.calls[0][0]).toEqual(expect.objectContaining({
       id: 'guild-companion-trigger-word',
       authorId: 'companion-bot',
-      authorName: 'Purrsephone',
+      authorName: 'Companion',
       content: 'artie without a mention',
       routing: expect.objectContaining({
         source: 'discord',
@@ -1696,9 +1696,9 @@ describe('DiscordAdapter DM routing', () => {
         id: 'guild-companion-mention',
         guildId: 'guild-1',
         authorId: 'companion-bot',
-        authorDisplayName: 'Purrsephone',
+        authorDisplayName: 'Companion',
         bot: true,
-        content: '<@!bot-1> hello from Purrsephone',
+        content: '<@!bot-1> hello from Companion',
         mentioned: true,
       }),
     );
@@ -1708,8 +1708,8 @@ describe('DiscordAdapter DM routing', () => {
       id: 'guild-companion-mention',
       channelId,
       authorId: 'companion-bot',
-      authorName: 'Purrsephone',
-      content: 'hello from Purrsephone',
+      authorName: 'Companion',
+      content: 'hello from Companion',
       routing: expect.objectContaining({
         source: 'discord',
         responseMode: 'respond',

@@ -895,7 +895,7 @@ describe('image tools', () => {
       })),
     };
 
-    const prompt = 'Purrsephone in a soft oversized off-shoulder knit sweater, flirty expression, cozy bedroom background with rumpled sheets';
+    const prompt = 'Companion in a soft oversized off-shoulder knit sweater, flirty expression, cozy bedroom background with rumpled sheets';
     const tool = createSelfieTool(ops, reviewer, { referenceResolver });
     const result = await tool.execute('tool-call-selfie-policy-fallback', {
       prompt,

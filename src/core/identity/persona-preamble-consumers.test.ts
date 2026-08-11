@@ -36,7 +36,7 @@ function personaService() {
   return createPersonaPreambleService({
     registry: seededRegistry(),
     personaVariables: () => ({
-      char: 'Purrsephone',
+      char: 'Companion',
       personality: 'A warm, wry cloistered gardener who tends what she plants.',
     }),
   });
@@ -58,10 +58,10 @@ describe('persona preamble consumption in schema-bound subprocesses', () => {
 
     await proposeTopicSegments(llmProvider, { sessionId: 's', channelId: 'c', entries }, personaService());
 
-    expect(capturedSystemPrompt.startsWith("I'm Purrsephone's")).toBe(true);
+    expect(capturedSystemPrompt.startsWith("I'm Companion's")).toBe(true);
     expect(capturedSystemPrompt).toContain(TOPIC_SEGMENTATION_SYSTEM_PROMPT);
     // Soft framing first, hard instructions after.
-    expect(capturedSystemPrompt.indexOf("I'm Purrsephone's"))
+    expect(capturedSystemPrompt.indexOf("I'm Companion's"))
       .toBeLessThan(capturedSystemPrompt.indexOf(TOPIC_SEGMENTATION_SYSTEM_PROMPT));
   });
 
@@ -99,7 +99,7 @@ describe('persona preamble consumption in schema-bound subprocesses', () => {
     await reviewer.review(candidates);
 
     const schemaBody = buildConcernCandidateReviewPrompt(candidates);
-    expect(capturedSystemPrompt.startsWith("I'm Purrsephone's")).toBe(true);
+    expect(capturedSystemPrompt.startsWith("I'm Companion's")).toBe(true);
     expect(capturedSystemPrompt).toContain(schemaBody);
   });
 });

@@ -601,23 +601,23 @@ The repo-owned watchdog runner lives at:
 scripts/ops/continuity-watchdog-healthcheck.mjs
 ```
 
-It is intended to run outside the Purrsephone runtime, usually through the repo-owned systemd user timer templates:
+It is intended to run outside the companion runtime, usually through the repo-owned systemd user timer templates:
 
 ```text
-deployment/systemd/user/purrsephone-watchdog.service
-deployment/systemd/user/purrsephone-watchdog.timer
-deployment/systemd/user/purrsephone-watchdog.environment.example
+deployment/systemd/user/companion-watchdog.service
+deployment/systemd/user/companion-watchdog.timer
+deployment/systemd/user/companion-watchdog.environment.example
 ```
 
 The watchdog checks the configured `systemd --user` service, optional process pattern, and API `/health` continuity contract. It pages through ntfy when the service is down, the health endpoint is unreachable, or continuity checks such as `schedulerHealthcheck` report stale liveness. It persists a small replay guard under the repo-local `data/ops/` default so repeated timer runs do not send duplicate pages for the same unresolved incident until `CONTINUITY_WATCHDOG_REPEAT_PAGE_AFTER_MS` elapses.
 
-Configuration is fail-closed. The service template targets the live checkout at `%h/psfn-framework-source`, requires `deployment/systemd/user/purrsephone-watchdog.env` in that deployed repo checkout, and the script refuses to run without explicit ntfy base URL, topic, and token by default. If a deployment uses a different checkout path, edit the repo-owned template before installation. Copy the example file to that ignored env path and fill in deployment-specific values there. Do not create shadow watchdog env files in `~/.config/systemd`, `/etc/systemd`, `/tmp`, or other off-repo locations.
+Configuration is fail-closed. The service template targets the live checkout at `%h/psfn-framework-source`, requires `deployment/systemd/user/companion-watchdog.env` in that deployed repo checkout, and the script refuses to run without explicit ntfy base URL, topic, and token by default. If a deployment uses a different checkout path, edit the repo-owned template before installation. Copy the example file to that ignored env path and fill in deployment-specific values there. Do not create shadow watchdog env files in `~/.config/systemd`, `/etc/systemd`, `/tmp`, or other off-repo locations.
 
 Dry-run and config validation:
 
 ```bash
 set -a
-. deployment/systemd/user/purrsephone-watchdog.env
+. deployment/systemd/user/companion-watchdog.env
 set +a
 CONTINUITY_WATCHDOG_DRY_RUN=true node scripts/ops/continuity-watchdog-healthcheck.mjs
 node scripts/ops/continuity-watchdog-healthcheck.mjs --check-config
@@ -814,8 +814,8 @@ The live alpha migration boundary is defined in [`docs/specifications.md`](./spe
   runtime startup-owner preflight before restarting the cluster.
 - Use continuous/local `DATA_DIR` only for local development and smoke testing. Production must use split roots and fail closed on shared-root or partial split-root wiring.
 - Keep `WORKSPACE_PATH` as one companion's Personal Workspace. It must not
-  overlap runtime data roots; live Purrsephone personal files live under
-  repo-root `purrsephone/`, while active config, databases, sessions, telemetry,
+  overlap runtime data roots; a local deployment may use repo-root
+  `companion/`, while active config, databases, sessions, telemetry,
   and identity artifacts remain under runtime data. In a current cluster this is
   not yet a per-companion isolation boundary; see the workspace warning above.
 - Treat owner-file drift warnings as cleanup signals, not as permission to keep `.env` as mutable config authority.

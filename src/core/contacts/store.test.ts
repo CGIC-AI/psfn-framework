@@ -59,7 +59,7 @@ describe('Postgres contact store behavior', () => {
 
     it('forces primary trust for primaryUserId', async () => {
       const contact = await store.upsert({
-        displayName: 'V',
+        displayName: 'Morgan',
         discordUserId: PRIMARY_USER_ID,
         trustLevel: 'regular',  // Should be overridden
       });
@@ -84,9 +84,9 @@ describe('Postgres contact store behavior', () => {
     });
 
     it('forces primary trust when updating existing primary user', async () => {
-      await store.upsert({ displayName: 'V', discordUserId: PRIMARY_USER_ID });
+      await store.upsert({ displayName: 'Morgan', discordUserId: PRIMARY_USER_ID });
       const updated = await store.upsert({
-        displayName: 'V Updated',
+        displayName: 'Morgan Updated',
         discordUserId: PRIMARY_USER_ID,
         trustLevel: 'public',  // Should be overridden
       });
@@ -125,7 +125,7 @@ describe('Postgres contact store behavior', () => {
 
     it('audits allowed owner-mapped upsert primary assignment', async () => {
       const contact = await store.upsert({
-        displayName: 'V',
+        displayName: 'Morgan',
         discordUserId: PRIMARY_USER_ID,
         trustLevel: 'regular',
       });
@@ -358,7 +358,7 @@ describe('Postgres contact store behavior', () => {
     });
 
     it('cannot change primary user trust', async () => {
-      const primary = await store.upsert({ displayName: 'V', discordUserId: PRIMARY_USER_ID });
+      const primary = await store.upsert({ displayName: 'Morgan', discordUserId: PRIMARY_USER_ID });
       const result = await store.setTrustLevel(primary.id, 'public');
       expect(result).toBe(false);
 
@@ -959,11 +959,11 @@ describe('Postgres contact store behavior', () => {
     });
 
     it('reuses canonical contact when linked channel identity exists', async () => {
-      const contact = await store.upsert({ displayName: 'V', discordUserId: PRIMARY_USER_ID });
+      const contact = await store.upsert({ displayName: 'Morgan', discordUserId: PRIMARY_USER_ID });
       const link = await store.linkChannelIdentity(contact.id, 'api', 'v-api-id');
       expect(link).toBe('linked');
 
-      const resolved = await store.resolveChannelIdentity('api', 'v-api-id', 'V API');
+      const resolved = await store.resolveChannelIdentity('api', 'v-api-id', 'Morgan API');
       expect(resolved.id).toBe(contact.id);
       expect(resolved.trustLevel).toBe('primary');
     });

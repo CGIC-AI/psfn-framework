@@ -61,7 +61,7 @@ function baseEpisode(overrides: Partial<EpisodeCreateInput> = {}): EpisodeCreate
     endedAt: '2026-03-30T10:05:00.000Z',
     threadId: 'thread-alpha',
     channelId: 'discord:general',
-    participantContactIds: ['contact:vega'],
+    participantContactIds: ['contact:morgan'],
     salience: { score: 0.72, novelty: 0.4, emotionalIntensity: 0.35 },
     affect: { labels: [] },
     themes: ['postgres', 'episodic-memory'],

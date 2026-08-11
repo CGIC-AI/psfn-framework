@@ -251,7 +251,7 @@ export async function authorizeArtifactEgress(
 /**
  * Recovery cannot trust the interrupted turn's context classification. External
  * release is re-authorized from the artifact sidecars as they exist now, while
- * self/V delivery retains the direct-delivery policy of a normal turn.
+ * self/operator delivery retains the direct-delivery policy of a normal turn.
  */
 export async function authorizeRecoveredArtifactEgress(input: {
   attachments: readonly Attachment[];

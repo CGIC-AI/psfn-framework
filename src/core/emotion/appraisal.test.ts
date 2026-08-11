@@ -296,7 +296,7 @@ describe('EmotionAppraisal', () => {
       llmProvider: provider,
       turnCadence: 1,
       vadDeltaThreshold: 1.5,
-      companionId: '  companion-purrsephone  ',
+      companionId: '  companion-companion  ',
       systemPrompt,
     });
 
@@ -328,7 +328,7 @@ describe('EmotionAppraisal', () => {
     // Companion identity is folded into the correlation (outer cache scope),
     // trimmed to the normalized value.
     expect(complete.mock.calls[0]?.[2]).toMatchObject({
-      correlation: { companionId: 'companion-purrsephone' },
+      correlation: { companionId: 'companion-companion' },
     });
   });
 

@@ -136,7 +136,7 @@ describe('AdminSettingsDataService', () => {
     }
     (fleetPrimary.identity as Record<string, unknown>).model = 'moonshotai/kimi-k3';
     modelsOwner.models.push({
-      id: 'purrsephone-chat',
+      id: 'companion-chat',
       rank: 90,
       identity: {
         provider: 'openrouter',
@@ -150,7 +150,7 @@ describe('AdminSettingsDataService', () => {
     writeFileSync(modelsPath, JSON.stringify(modelsOwner), 'utf8');
     writeFileSync(
       join(root, 'settings.overlay.json'),
-      JSON.stringify({ modelPurposeSelection: { chat: 'purrsephone-chat' } }),
+      JSON.stringify({ modelPurposeSelection: { chat: 'companion-chat' } }),
       'utf8',
     );
 
@@ -160,7 +160,7 @@ describe('AdminSettingsDataService', () => {
     expect(settingsData.effectiveModelSelection.chat).toEqual({
       purpose: 'chat',
       source: 'companion_selection',
-      slotKey: 'purrsephone-chat',
+      slotKey: 'companion-chat',
       provider: 'openrouter',
       model: 'z-ai/glm-5.2',
     });

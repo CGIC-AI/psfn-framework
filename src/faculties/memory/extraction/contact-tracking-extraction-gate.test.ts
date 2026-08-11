@@ -41,7 +41,7 @@ describe('MemoryExtractor contact-tracking gate (E3.4)', () => {
   function makeExtractor(isAutoContactCreationAllowed?: (channelId: string) => boolean): MemoryExtractor {
     return new MemoryExtractor(
       fromAny({ complete: vi.fn() }),
-      fromAny({ characterName: 'Purrsephone' }),
+      fromAny({ characterName: 'Companion' }),
       memoryStore.asPort(),
       fromAny({
         embed: vi.fn().mockResolvedValue(new Float32Array(EMBEDDING_DIMS)),
@@ -77,7 +77,7 @@ describe('MemoryExtractor contact-tracking gate (E3.4)', () => {
         APPROVAL_CHANNEL,
         undefined,
         primary.displayName,
-        'Purrsephone',
+        'Companion',
       );
     }
 
@@ -102,7 +102,7 @@ describe('MemoryExtractor contact-tracking gate (E3.4)', () => {
       APPROVAL_CHANNEL,
       undefined,
       undefined,
-      'Purrsephone',
+      'Companion',
       undefined,
       undefined,
       {
@@ -146,7 +146,7 @@ describe('MemoryExtractor contact-tracking gate (E3.4)', () => {
         'api:auto-room',
         undefined,
         primary.displayName,
-        'Purrsephone',
+        'Companion',
       );
     }
 

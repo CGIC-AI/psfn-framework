@@ -1,0 +1,6 @@
+{
+  "schemaVersion": 1,
+  "maxIssuesSnapshotBytes": 16000000,
+  "maxIssuesSnapshotVersionsPerGeneration": 250,
+  "rewriteGenerationMarker": "config/history-rewrite-generation.json"
+}

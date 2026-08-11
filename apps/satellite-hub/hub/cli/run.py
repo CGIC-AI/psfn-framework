@@ -58,7 +58,7 @@ async def _run_esphome_runtime(
             )
             response = result.get("response", "").strip()
             detail = f": {response}" if response else ""
-            typer.echo(f"Headpat delivered to Purrsephone{detail}")
+            typer.echo(f"Headpat delivered to Companion{detail}")
         except Exception as exc:
             typer.echo(f"Headpat delivery failed: {exc}")
 

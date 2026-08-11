@@ -34,8 +34,8 @@ describe('EpisodicSynthesizer', () => {
       channelId: 'terminal:daily',
       role,
       content,
-      authorId: role === 'user' ? 'contact:vega' : 'assistant:psfn',
-      authorName: role === 'user' ? 'Vega' : 'PSFN',
+      authorId: role === 'user' ? 'contact:morgan' : 'assistant:psfn',
+      authorName: role === 'user' ? 'Morgan' : 'PSFN',
       timestamp: Date.parse(timestamp),
       metadata: JSON.stringify({
         turn: {
@@ -687,8 +687,8 @@ describe('EpisodicSynthesizer contextual topic cutting (E5.4)', () => {
       channelId: SESSION_ID,
       role,
       content,
-      authorId: role === 'user' ? 'contact:vega' : 'assistant:psfn',
-      authorName: role === 'user' ? 'Vega' : 'PSFN',
+      authorId: role === 'user' ? 'contact:morgan' : 'assistant:psfn',
+      authorName: role === 'user' ? 'Morgan' : 'PSFN',
       timestamp: Date.parse(entryTimestamp(id)),
       metadata: JSON.stringify({
         turn: {

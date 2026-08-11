@@ -259,6 +259,6 @@ describe('isDeliberateMachineIntelligenceCorrection', () => {
   it('treats operator/admin/agent-tool actors as deliberate corrections', () => {
     expect(isDeliberateMachineIntelligenceCorrection('admin:api')).toBe(true);
     expect(isDeliberateMachineIntelligenceCorrection('agent:tool:contact_set_machine_intelligence')).toBe(true);
-    expect(isDeliberateMachineIntelligenceCorrection('operator:raul')).toBe(true);
+    expect(isDeliberateMachineIntelligenceCorrection('operator:casey')).toBe(true);
   });
 });

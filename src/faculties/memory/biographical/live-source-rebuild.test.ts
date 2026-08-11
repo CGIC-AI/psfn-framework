@@ -20,7 +20,7 @@ const CONTACT: BiographicalSubjectRef = {
 };
 const COMPANION = {
   kind: 'companion' as const,
-  companionId: 'purrsephone',
+  companionId: 'companion',
   subjectVersion: 1,
 };
 

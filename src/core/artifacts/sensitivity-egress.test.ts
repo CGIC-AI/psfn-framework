@@ -42,7 +42,7 @@ describe('artifact sensitivity egress', () => {
     expect(executeApprovedShare).not.toHaveBeenCalled();
   });
 
-  it('queues a public high-sensitivity share, notifies V, and executes only after approval', async () => {
+  it('queues a public high-sensitivity share, notifies Morgan, and executes only after approval', async () => {
     const queue = new ConfirmationQueue({ idFactory: () => 'artifact-approval-1' });
     const approvalQueue = createApprovalQueuePortFromConfirmationQueue(queue);
     const notify = vi.fn(async () => ({ messageId: 'notice-1' }));
@@ -249,7 +249,7 @@ describe('artifact sensitivity egress', () => {
     expect(notify).not.toHaveBeenCalled();
   });
 
-  it('lets recovered self/V artifact egress proceed without external classification review', async () => {
+  it('lets recovered self/Morgan artifact egress proceed without external classification review', async () => {
     const readCurrentClassifications = vi.fn(async () => {
       throw new Error('self recovery must not require an external-release sidecar check');
     });

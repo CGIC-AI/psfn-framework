@@ -161,7 +161,7 @@ contains **zero** `consentFlags` references. The only place in the tree that set
 writeable, readable, mergeable, and enforced — but no production path populates
 it. alco2's "gate is enforceable but unsettable" framing is reproduced.
 
-**[testimony]** The specific claim "100% of live rows are `{}` (2728 Purrsephone
+**[testimony]** The specific claim "100% of live rows are `{}` (2728 Companion
 + fleet counts)" requires a live DB query I did not run. The code evidence is
 consistent with it but does not prove the row counts.
 

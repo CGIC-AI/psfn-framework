@@ -809,7 +809,7 @@ describe('contact tools', () => {
 
     it('returns error when trying to change the primary trust level', async () => {
       // Create a contact with primary trust.
-      await store.upsert({ displayName: 'V', discordUserId: 'primary-user-123' });
+      await store.upsert({ displayName: 'Morgan', discordUserId: 'primary-user-123' });
       const primary = (await store.getByDiscordUserId('primary-user-123'))!;
       const tool = createContactSetTrustTool(store);
 

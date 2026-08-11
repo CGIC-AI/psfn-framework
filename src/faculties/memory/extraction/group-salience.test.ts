@@ -106,7 +106,7 @@ describe('group salience candidate selection', () => {
   it('selects important participant facts even when the companion was not addressed', () => {
     const entries = [
       makeEntry(1, 'lol'),
-      makeEntry(2, 'My brother Vega is helping run moderation tonight.'),
+      makeEntry(2, 'My brother Morgan is helping run moderation tonight.'),
       makeEntry(3, 'ok'),
     ];
 

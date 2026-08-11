@@ -73,7 +73,7 @@
 
     <div class="absolute inset-x-0 bottom-0 p-10">
       <p class="page-kicker tracking-[0.22em] text-gold-600">
-        Purrsephone Companion Framework
+        PSFN Companion Framework
       </p>
       <p class="mt-3 max-w-md font-serif text-2xl leading-snug text-ink">
         &ldquo;A garden is only as tended as its keeper is present.&rdquo;

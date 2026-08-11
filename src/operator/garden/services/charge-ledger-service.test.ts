@@ -39,7 +39,7 @@ function makeFatigueData(): FatigueLedgerData {
       ],
       scopes: [
         {
-          localCompanionId: 'purrsephone',
+          localCompanionId: 'companion',
           peerContactId: 'peer-mi',
           channelId: 'group-room',
           dayKey: '2027-01-15',
@@ -60,7 +60,7 @@ function makeFatigueData(): FatigueLedgerData {
         event: {
           timestampMs: Date.parse('2027-01-15T12:00:00Z'),
           dayKey: '2027-01-15',
-          localCompanionId: 'purrsephone',
+          localCompanionId: 'companion',
           peerContactId: 'peer-mi',
           channelId: 'group-room',
           triggeringAuthor: {
@@ -95,7 +95,7 @@ function makeFatigueData(): FatigueLedgerData {
         event: {
           timestampMs: Date.parse('2027-01-15T12:01:00Z'),
           dayKey: '2027-01-15',
-          localCompanionId: 'purrsephone',
+          localCompanionId: 'companion',
           peerContactId: 'peer-mi',
           channelId: 'group-room',
           triggeringAuthor: {

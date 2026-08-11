@@ -40,7 +40,7 @@ stableId        := source-qualified identity token, e.g. "discord:12345";
 content         := Participant text with the forgery guard applied
 ```
 
-Example: `Vega (discord:vega-id): hello there`
+Example: `Morgan (discord:morgan-id): hello there`
 
 ## Trust rule
 

@@ -294,13 +294,13 @@ describe('group memory classifier', () => {
   });
 
   it('filters companion, bot, system, API principal, and AI companion participants by policy', async () => {
-    const aiCompanion = contact('contact-vega', 'Vega', {
+    const aiCompanion = contact('contact-morgan', 'Morgan', {
       relationshipType: 'ai_companion',
       isMachineIntelligence: true,
     });
     const contactStore = {
       getByChannelIdentity: vi.fn(async (_channel: string, userId: string) => (
-        userId === 'vega' ? aiCompanion : undefined
+        userId === 'morgan' ? aiCompanion : undefined
       )),
     };
 
@@ -317,7 +317,7 @@ describe('group memory classifier', () => {
         entry(2, 'music-bot', 'Music Bot'),
         entry(3, 'system-user', 'System'),
         entry(4, 'api-principal', 'API'),
-        entry(5, 'vega', 'Vega'),
+        entry(5, 'morgan', 'Morgan'),
         entry(6, 'human-one', 'Human One'),
         entry(7, 'human-two', 'Human Two', {
           metadata: JSON.stringify({ authorIsBot: false }),
@@ -339,7 +339,7 @@ describe('group memory classifier', () => {
   });
 
   it('can include AI companions when explicitly configured', async () => {
-    const aiCompanion = contact('contact-vega', 'Vega', {
+    const aiCompanion = contact('contact-morgan', 'Morgan', {
       relationshipType: 'ai_companion',
       isMachineIntelligence: true,
     });
@@ -357,7 +357,7 @@ describe('group memory classifier', () => {
         },
       }),
       contactStore,
-      recentEntries: [entry(1, 'vega', 'Vega')],
+      recentEntries: [entry(1, 'morgan', 'Morgan')],
       channelTopology: {
         kind: 'group_channel',
       },
@@ -365,7 +365,7 @@ describe('group memory classifier', () => {
 
     expect(classification.recentParticipantCount).toBe(1);
     expect(classification.recentParticipants[0]).toMatchObject({
-      stableId: 'contact:contact-vega',
+      stableId: 'contact:contact-morgan',
       contactRelationshipType: 'ai_companion',
       isMachineIntelligence: true,
     });

@@ -47,7 +47,7 @@ describe('SleepCycleEpisodeConsolidator', () => {
       // the old thread_id=sessionId filter — the bug this fixture now guards.
       threadId: 'topic:discord-main',
       channelId: 'discord:main',
-      participantContactIds: ['contact:vega'],
+      participantContactIds: ['contact:morgan'],
       salience: { score: 0.85, novelty: 0.4, emotionalIntensity: 0.2 },
       affect: { labels: [] },
       themes: ['they', 'what'],
@@ -64,8 +64,8 @@ describe('SleepCycleEpisodeConsolidator', () => {
       channelId: 'discord:main',
       role,
       content,
-      authorId: role === 'user' ? 'contact:vega' : 'assistant:psfn',
-      authorName: role === 'user' ? 'Vega' : 'Purrsephone',
+      authorId: role === 'user' ? 'contact:morgan' : 'assistant:psfn',
+      authorName: role === 'user' ? 'Morgan' : 'Companion',
       timestamp: Date.parse(timestamp),
       metadata: '{}',
     };
@@ -537,7 +537,7 @@ describe('buildConsolidatedEpisodeInput machineSignals union (h4fp.6)', () => {
       endedAt: '2026-06-10T01:20:00.000Z',
       threadId: 'topic:discord-main',
       channelId: 'discord:main',
-      participantContactIds: ['contact:vega'],
+      participantContactIds: ['contact:morgan'],
       salience: { score: 0.6 },
       affect: { labels: [] },
       ...(machineSignals ? { machineSignals } : {}),
@@ -640,7 +640,7 @@ describe('SleepCycleEpisodeConsolidator candidate consolidation (m58.1)', () => 
       // apq0-shaped topic thread, decoupled from the session (see episodeInput).
       threadId: 'topic:discord-main',
       channelId: 'discord:main',
-      participantContactIds: ['contact:vega'],
+      participantContactIds: ['contact:morgan'],
       salience: { score: 0.6, novelty: 0.3, emotionalIntensity: 0.2 },
       affect: { labels: [] },
       themes: ['they', 'what'],
@@ -710,7 +710,7 @@ describe('SleepCycleEpisodeConsolidator candidate consolidation (m58.1)', () => 
         channelId: 'discord:main',
         role: role as SessionEntry['role'],
         content,
-        authorId: role === 'user' ? 'contact:vega' : 'assistant:psfn',
+        authorId: role === 'user' ? 'contact:morgan' : 'assistant:psfn',
         timestamp: Date.parse(timestamp),
         metadata: JSON.stringify({
           turn: { schemaVersion: 1, turnId, requestId: `request:${id}`, role },

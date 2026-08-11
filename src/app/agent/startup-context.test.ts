@@ -85,7 +85,7 @@ describe('prepareAgentStartupContext', () => {
             source: {
               type: 'generic_openai',
               label: 'Shared Router',
-              baseUrl: 'https://inference.local.vega.nyc/v1',
+              baseUrl: 'https://inference.example.invalid/v1',
             },
           },
           purposes: [
@@ -166,7 +166,7 @@ describe('prepareAgentStartupContext', () => {
           type: 'generic_openai',
           enabled: true,
           label: 'Shared Router',
-          apiBaseUrl: 'https://inference.local.vega.nyc/v1',
+          apiBaseUrl: 'https://inference.example.invalid/v1',
           apiKeyRef: {
             kind: 'env',
             envName: 'SHARED_ROUTER_API_KEY',
@@ -191,7 +191,7 @@ describe('prepareAgentStartupContext', () => {
     delete process.env.SYSTEM_DATA_DIR;
     delete process.env.COMPANION_DATA_DIR;
     process.env.WORKSPACE_PATH = workspaceDir;
-    process.env.CHARACTER_CARD_PATH = join(systemDataDir, 'purrsephone.json');
+    process.env.CHARACTER_CARD_PATH = join(systemDataDir, 'companion.json');
     process.env.COMPANION_ID = '11111111-1111-4111-8111-111111111111';
     const postgresCredentialPath = join(rootDir, 'postgres-database-url');
     writeFileSync(

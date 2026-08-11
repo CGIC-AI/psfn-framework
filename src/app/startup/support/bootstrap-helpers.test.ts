@@ -1427,8 +1427,8 @@ describe('hydrateCanonicalStartupConfig', () => {
       adapter: {
         kind: 'emosim_server' as const,
         serverUrl: 'http://psfn-emosim:17342',
-        sessionLabel: 'psfn-purrsephone',
-        agentName: 'purrsephone',
+        sessionLabel: 'psfn-companion',
+        agentName: 'companion',
         includeWorldState: false,
       },
       persistence: {
@@ -1510,7 +1510,7 @@ describe('hydrateCanonicalStartupConfig', () => {
         imageProvider: 'comfyui',
         imageSelfieEditModel: 'xai/grok-imagine-image/quality/edit',
         modelPurposeSelection: { chat: 'kimi-k2.5' },
-        observerEvalSidecar: { adapter: { sessionLabel: 'psfn-purrsephone' } },
+        observerEvalSidecar: { adapter: { sessionLabel: 'psfn-companion' } },
       }),
       'utf-8',
     );
@@ -1542,7 +1542,7 @@ describe('hydrateCanonicalStartupConfig', () => {
     expect(config.observerEvalSidecar?.enabled).toBe(true);
     expect(config.observerEvalSidecar?.adapter.serverUrl).toBe('http://emosim.test:17342');
     expect(config.observerEvalSidecar?.adapter.agentName).toBe('fleet');
-    expect(config.observerEvalSidecar?.adapter.sessionLabel).toBe('psfn-purrsephone');
+    expect(config.observerEvalSidecar?.adapter.sessionLabel).toBe('psfn-companion');
   });
 
   it('fails closed when a companion overlay selects a model slot missing from models.json (23pp)', () => {

@@ -26,8 +26,8 @@ describe('recent session summary primitives', () => {
         entry({
           id: 1,
           role: 'user',
-          authorId: 'discord:vega',
-          authorName: 'Vega',
+          authorId: 'discord:morgan',
+          authorName: 'Morgan',
           content: 'We need room-scoped memory boundaries.',
         }),
         entry({
@@ -47,11 +47,11 @@ describe('recent session summary primitives', () => {
 
     expect(summary).toContain('[History summary]');
     expect(summary).toContain('Earlier in the summarized span,');
-    expect(summary).toContain('Vega noted "We need room-scoped memory boundaries');
+    expect(summary).toContain('Morgan noted "We need room-scoped memory boundaries');
     expect(summary).toContain('Iku noted "Speaker attribution must survive provider rendering');
     expect(summary).toContain('Cardellini noted "I will keep the summary compact');
-    expect(summary).not.toContain('Vega said:');
-    expect(summary).not.toContain('\n- Vega:');
+    expect(summary).not.toContain('Morgan said:');
+    expect(summary).not.toContain('\n- Morgan:');
   });
 
   it('compresses repeated tool failures before summary input', () => {
@@ -108,7 +108,7 @@ describe('temporal session history window floor', () => {
       role,
       content: `${role} message ${id}`,
       authorId: role === 'user' ? 'user-1' : 'assistant',
-      authorName: role === 'user' ? 'V' : 'P',
+      authorName: role === 'user' ? 'Morgan' : 'P',
       timestamp,
       channelVisibility: 'private',
     } as SessionEntry;

@@ -264,7 +264,7 @@ describe('refreshRecentContactShape', () => {
       biographicalRebuild: {
         profileStore,
         companionSubject: {
-          kind: 'companion', companionId: 'purrsephone', subjectVersion: 1,
+          kind: 'companion', companionId: 'companion', subjectVersion: 1,
         },
         policy: createDefaultBiographicalDepthPolicy(),
         depth: 'developing',
@@ -341,7 +341,7 @@ describe('refreshRecentContactShape', () => {
       biographicalRebuild: {
         profileStore,
         companionSubject: {
-          kind: 'companion', companionId: 'purrsephone', subjectVersion: 1,
+          kind: 'companion', companionId: 'companion', subjectVersion: 1,
         },
         policy: createDefaultBiographicalDepthPolicy(),
         depth: 'developing',

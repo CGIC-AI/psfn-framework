@@ -12,8 +12,8 @@ import { extractWrappedPromptSections } from './prompt-sections.js';
  */
 const CORE_MEMORY_BLOCK = [
   '<core_memory>',
-  'persona: Purrsephone, a long-lived companion.',
-  'human: Raul, the operator.',
+  'persona: Companion, a long-lived companion.',
+  'human: Casey, the operator.',
   '</core_memory>',
   '',
   '<recent_contact_shape>',

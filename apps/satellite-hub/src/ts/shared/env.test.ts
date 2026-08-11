@@ -226,7 +226,7 @@ test("loadHubConfig supports text-only mode without voice provider secrets", () 
     REALTIME_VOICE_BIND_HOST: "0.0.0.0",
     REALTIME_VOICE_PORT: "8787",
     PSFN_API_BASE_URL: "http://127.0.0.1:10053/v1",
-    PSFN_MODEL: "purrsephone",
+    PSFN_MODEL: "companion",
     PSFN_CAPABILITY_PROFILE: "text-only",
   }, () => {
     const config = loadHubConfig(projectRoot);

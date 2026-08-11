@@ -3,7 +3,7 @@ import { createOpenAICompatibleEndpointModel } from './models.js';
 import { PiProviderRuntime } from './provider-runtime.js';
 
 // ── gu8m regression: streamed tool-call argument accumulation ──
-// Live Purrsephone (z-ai/glm-5.2 via OpenRouter, interleaved reasoning) intermittently
+// Live Companion (z-ai/glm-5.2 via OpenRouter, interleaved reasoning) intermittently
 // received EMPTY arguments for required-action first-party tools. Root cause was in
 // pi-ai 0.62.0's openai-completions streaming accumulator: it keyed tool-call
 // continuation fragments off `currentBlock`, so a reasoning/text delta arriving

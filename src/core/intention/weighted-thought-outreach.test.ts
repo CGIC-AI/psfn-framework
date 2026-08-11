@@ -75,7 +75,7 @@ function strongThought(id = 'wt-strong'): ThoughtWeight {
   return createThoughtWeight(
     {
       id,
-      content: 'check in on V',
+      content: 'check in on Morgan',
       source: 'concern',
       thoughtClass: 'standard',
       emotionalIntensity: 1, // 0.4 * (1+1) = 0.8 > 0.5 threshold

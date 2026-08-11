@@ -1008,7 +1008,10 @@ const ids = Array.isArray(payload.data)
   : [];
 let pattern;
 try {
-  pattern = new RegExp(process.env.COMPANION_MODEL_PATTERN || "purrsephone", "i");
+  if (!process.env.COMPANION_MODEL_PATTERN) {
+    throw new Error("COMPANION_MODEL_PATTERN was not resolved");
+  }
+  pattern = new RegExp(process.env.COMPANION_MODEL_PATTERN, "i");
 } catch (error) {
   console.error(`invalid companion route regex: ${error.message}`);
   process.exit(1);

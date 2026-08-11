@@ -18,7 +18,7 @@ function event(overrides: Partial<HumanAttentionPressureEvent> = {}): HumanAtten
   return {
     schemaVersion: 1,
     timestampMs: 1_000,
-    localCompanionId: 'purrsephone',
+    localCompanionId: 'companion',
     contactId: 'human-a',
     channelId: 'channel-a',
     trustLevel: 'public',
@@ -57,7 +57,7 @@ describe('HumanAttentionPressureLedger', () => {
     expect(readFileSync(path, 'utf-8')).not.toContain('messageText');
     const rebooted = new HumanAttentionPressureLedger(path);
     expect(rebooted.listHumanAttentionPressureEvents({
-      localCompanionId: 'purrsephone',
+      localCompanionId: 'companion',
       contactId: 'human-a',
       channelId: 'channel-a',
       sinceMs: 0,
@@ -97,7 +97,7 @@ describe('HumanAttentionPressureLedger', () => {
     const rebooted = new HumanAttentionPressureLedger(path);
 
     expect(rebooted.findHumanAttentionPressureEvent({
-      localCompanionId: 'purrsephone',
+      localCompanionId: 'companion',
       contactId: 'human-a',
       channelId: 'channel-a',
       sourceMessageId: 'discord-message-1',

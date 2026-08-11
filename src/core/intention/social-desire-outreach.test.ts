@@ -92,7 +92,7 @@ function primaryChannel(): SocialDesireDeliveryChannel {
   return {
     channelId: 'dm-primary',
     channelType: 'discord',
-    contactName: 'V',
+    contactName: 'Morgan',
     companionTarget: false,
   };
 }

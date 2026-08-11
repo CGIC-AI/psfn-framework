@@ -28,24 +28,30 @@ __pycache__/
 !.beads/issues.jsonl
 
 # Internal planning/audit artifacts (non-product docs)
-history/
+/history/
 working_doc/
 working_docs/*primer*
 working_docs/*Primer*
 working_docs/*PRIMER*
 working_docs/PSFN_PROJECT_STATE_20260611.md
 working_docs/private-live-ops.md
+working_docs/*session*.zip
+working_docs/*transcript*.zip
 workspace/
 
 # Deployment-specific operator inputs; copy from the tracked example.
 scripts/ops/private-ops.env
 deploy/helm/psfn/overlays/*.local.values.yaml
 
-# Companion personal files live inside the repo tree but are runtime/personal data.
-purrsephone/
-
 # Imported package environments are local build state.
 apps/satellite-hub/.venv/
+
+# Deployment-specific wake-word models and training definitions stay local.
+/apps/satellite-hub/satellites/waveshare-bedroom/wakeword/*.tflite
+/apps/satellite-hub/satellites/waveshare-bedroom/wakeword/*.json
+/apps/satellite-hub/satellites/waveshare-bedroom/wakeword/pronunciations.txt
+/apps/satellite-hub/satellites/waveshare-bedroom/wakeword/hard-negatives.txt
+/apps/satellite-hub/satellites/waveshare-bedroom/wakeword/tflite-streaming-roc.txt
 
 # SvelteKit admin UI
 .svelte-kit/

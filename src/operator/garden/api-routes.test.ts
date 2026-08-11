@@ -1931,7 +1931,7 @@ describe('AdminServer JSON API routes', () => {
     const now = Date.UTC(2026, 2, 1, 10, 0, 0);
     insertGardenTestMemory(memoryStore, {
       id: 'pref-durable-color',
-      text: "V's favorite color is teal.",
+      text: "Morgan's favorite color is teal.",
       type: 'semantic',
       importance: 0.9,
       confidence: 0.95,
@@ -1947,7 +1947,7 @@ describe('AdminServer JSON API routes', () => {
     }, new Float32Array([0.1, 0.3, 0.2]));
     insertGardenTestMemory(memoryStore, {
       id: 'pref-standard-style',
-      text: 'V likes matte stationery.',
+      text: 'Morgan likes matte stationery.',
       type: 'semantic',
       importance: 0.65,
       confidence: 0.85,

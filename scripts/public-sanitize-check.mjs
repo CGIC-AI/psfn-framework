@@ -28,6 +28,14 @@ const FORBIDDEN_PATH_RULES = [
     name: 'character-card-artifact',
     test: (file) => /(^|\/)(character\.json|.*\.charx)$/i.test(file),
   },
+  {
+    name: 'tracked-session-archive',
+    test: (file) => /^working_docs\/.*(?:session|transcript).*\.(?:zip|tar|gz|7z)$/i.test(file),
+  },
+  {
+    name: 'tracked-beads-runtime-log',
+    test: (file) => /^\.beads\/.*\.log$/i.test(file),
+  },
 ];
 
 const TEXT_RULES = [
@@ -39,14 +47,8 @@ const TEXT_RULES = [
     name: 'token-discord-bot',
     regex: /\b(?:mfa\.)?[A-Za-z\d_-]{24}\.[A-Za-z\d_-]{6}\.[A-Za-z\d_-]{27}\b/g,
   },
-  { name: 'live-host-alias', regex: /\bpsfn-(?:shard|pi)\b/gi },
-  { name: 'private-cluster-host', regex: /\bcarlini\b/gi },
   { name: 'tailnet-address', regex: /\b100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])(?:\.\d{1,3}){2}\b(?!\/)/g },
   { name: 'internal-local-hostname', regex: /\b[a-z0-9.-]+\.local\.internal\b/gi },
-  { name: 'live-service-home-path', regex: /\/home\/psfn(?:\/|\b)/g },
-  { name: 'operator-home-path', regex: /\/home\/ada(?:\/|\b)/g },
-  { name: 'live-storage-mount-path', regex: /\/mnt\/psfn-nvme(?:\/|\b)/g },
-  { name: 'private-node-name', regex: /\bminiforum\d+\b/gi },
   {
     name: 'live-hardware-uuid',
     regex: /\buuid:\s*[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b/gi,
@@ -227,10 +229,6 @@ export function scanPublicSanitizeTrackedFiles(trackedFiles, options = {}) {
       violations.push(...collectNulByteViolations(trackedFile, sourceText));
     }
 
-    if (shouldSkipTrackedFile(trackedFile)) {
-      continue;
-    }
-
     for (const rule of FORBIDDEN_PATH_RULES) {
       if (rule.test(trackedFile)) {
         violations.push({ file: trackedFile, line: 1, rule: rule.name, snippet: trackedFile });
@@ -240,6 +238,10 @@ export function scanPublicSanitizeTrackedFiles(trackedFiles, options = {}) {
       if (localRule.regex.test(trackedFile)) {
         violations.push({ file: trackedFile, line: 1, rule: localRule.name, snippet: trackedFile });
       }
+    }
+
+    if (shouldSkipTrackedFile(trackedFile)) {
+      continue;
     }
 
     if (!shouldScanTextContent(trackedFile)) {

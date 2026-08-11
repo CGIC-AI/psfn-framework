@@ -74,32 +74,11 @@ describe('public-sanitize check', () => {
     expect(result.violations[0].rule).toBe('token-openai-like');
   });
 
-  it('detects a deployment-specific host alias in tracked text', () => {
-    const privateHostAlias = ['psfn', 'shard'].join('-');
-    const result = scanPublicSanitizeTrackedFiles(
-      ['docs/operations.md'],
-      {
-        localBlocklist: {
-          localPath: 'workspace/sanitize/local-blocklist.json',
-          forbiddenPathRegex: [],
-          textRuleRegex: [],
-          loaded: false,
-        },
-        readTextFile: () => `Live host: ${privateHostAlias}\n`,
-      },
-    );
-
-    expect(result.violations.map((violation) => violation.rule)).toEqual(['live-host-alias']);
-  });
-
-  it('detects private network, hardware, and live-path fingerprints', () => {
+  it('detects generic private-network, hostname, and hardware fingerprints', () => {
     const privateValues = [
-      ['100', '96', '206', '29'].join('.'),
-      ['crawler', 'local', 'internal'].join('.'),
-      ['', 'home', 'psfn', 'repository'].join('/'),
-      ['', 'mnt', 'psfn-nvme', 'runtime'].join('/'),
-      ['miniforum', '01'].join(''),
-      `uuid: ${['d1f3c5fc', 'c352', '418f', '8fbd', 'bf72d84935a2'].join('-')}`,
+      ['100', '64', '0', '1'].join('.'),
+      ['example-node', 'local', 'internal'].join('.'),
+      `uuid: ${['11111111', '2222', '4333', '8444', '555555555555'].join('-')}`,
     ];
     const result = scanPublicSanitizeTrackedFiles(
       ['docs/operations.md'],
@@ -117,18 +96,40 @@ describe('public-sanitize check', () => {
     expect(result.violations.map((violation) => violation.rule).sort()).toEqual([
       'internal-local-hostname',
       'live-hardware-uuid',
-      'live-service-home-path',
-      'live-storage-mount-path',
-      'private-node-name',
       'tailnet-address',
     ]);
   });
 
-  it('detects private cluster/host aliases and operator home paths', () => {
-    const clusterHost = ['car', 'lini'].join('');
-    const operatorHomePath = ['', 'home', 'ada', 'psfn-framework'].join('/');
+  it('applies ignored local patterns for deployment-specific values', () => {
     const result = scanPublicSanitizeTrackedFiles(
-      ['deploy/helm/psfn/README.md'],
+      ['docs/private-example-operations.md', 'docs/attribution.md'],
+      {
+        localBlocklist: {
+          localPath: 'workspace/sanitize/local-blocklist.json',
+          forbiddenPathRegex: [
+            { name: 'local-path-1', regex: /private-example/iu },
+          ],
+          textRuleRegex: [
+            { name: 'local-text-1', regex: /private-operator|\/home\/private-user/giu },
+          ],
+          loaded: true,
+        },
+        readTextFile: (file) => file.endsWith('attribution.md')
+          ? 'Maintainer: private-operator; source: /home/private-user/project'
+          : 'generic content',
+      },
+    );
+
+    expect(result.violations.map((violation) => violation.rule).sort()).toEqual([
+      'local-path-1',
+      'local-text-1',
+      'local-text-1',
+    ]);
+  });
+
+  it('rejects tracked session archives and Beads runtime logs', () => {
+    const result = scanPublicSanitizeTrackedFiles(
+      ['working_docs/session-export.zip', '.beads/daemon.log'],
       {
         localBlocklist: {
           localPath: 'workspace/sanitize/local-blocklist.json',
@@ -136,13 +137,13 @@ describe('public-sanitize check', () => {
           textRuleRegex: [],
           loaded: false,
         },
-        readTextFile: () => `Cluster host: ${clusterHost}\nSource: ${operatorHomePath}\n`,
+        readTextFile: () => '',
       },
     );
 
     expect(result.violations.map((violation) => violation.rule).sort()).toEqual([
-      'operator-home-path',
-      'private-cluster-host',
+      'tracked-beads-runtime-log',
+      'tracked-session-archive',
     ]);
   });
 
@@ -150,7 +151,7 @@ describe('public-sanitize check', () => {
     const tokenValue = buildOpenAiLikeToken();
     const reads: string[] = [];
     const result = scanPublicSanitizeTrackedFiles(
-      ['.beads/daemon.log', '.beads/issues.jsonl', '.beads/beads.left.jsonl', '.beads/interactions.jsonl'],
+      ['.beads/issues.jsonl', '.beads/beads.left.jsonl', '.beads/interactions.jsonl'],
       {
         localBlocklist: {
           localPath: 'workspace/sanitize/local-blocklist.json',

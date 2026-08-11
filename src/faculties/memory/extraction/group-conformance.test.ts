@@ -40,7 +40,7 @@ const CHANNEL_ID = 'discord:lyra-room';
 
 const HUMANS = [
   { authorId: 'dragon', authorName: 'MrDragonFox', contactId: 'contact-dragon' },
-  { authorId: 'vega', authorName: 'Vega', contactId: 'contact-vega' },
+  { authorId: 'morgan', authorName: 'Morgan', contactId: 'contact-morgan' },
   { authorId: 'iki', authorName: 'Iki', contactId: 'contact-iki' },
   { authorId: 'rms', authorName: 'RMS', contactId: 'contact-rms' },
 ] as const;
@@ -366,7 +366,7 @@ describe('group-room memory conformance', () => {
     entries[7].metadata = addressedEntryMetadata(entries[7], [
       { authorId: 'current-bot', authorName: 'Lyra' },
     ]);
-    replaceEntry(entries, 24, 0, 'My friend Vega is helping run moderation tonight.');
+    replaceEntry(entries, 24, 0, 'My friend Morgan is helping run moderation tonight.');
     replaceEntry(entries, 45, 2, 'Please do not share my school schedule outside this room.');
     const settings = groupSettings({
       onlineExtraction: {
@@ -416,13 +416,13 @@ describe('group-room memory conformance', () => {
 <address_mode>direct_to_companion</address_mode>
 </fact>
 <fact>
-<text>Vega is helping run moderation tonight.</text>
+<text>Morgan is helping run moderation tonight.</text>
 <type>semantic</type>
 <importance>0.89</importance>
 <confidence>0.95</confidence>
 <source_message_ids>24</source_message_ids>
 <source_speaker_name>MrDragonFox</source_speaker_name>
-<subject_name>Vega</subject_name>
+<subject_name>Morgan</subject_name>
 <address_mode>overheard_room_context</address_mode>
 </fact>
 <fact>
@@ -460,15 +460,15 @@ describe('group-room memory conformance', () => {
       }),
     );
     expect(processFact).toHaveBeenCalledWith(
-      expect.objectContaining({ text: 'Vega is helping run moderation tonight.' }),
+      expect.objectContaining({ text: 'Morgan is helping run moderation tonight.' }),
       expect.stringContaining('|visibility:'),
-      'contact-vega',
+      'contact-morgan',
       expect.objectContaining({
         triggerContactId: 'contact-dragon',
-        routedContactId: 'contact-vega',
+        routedContactId: 'contact-morgan',
         sourceContactId: 'contact-dragon',
-        subjectContactId: 'contact-vega',
-        subjectName: 'Vega',
+        subjectContactId: 'contact-morgan',
+        subjectName: 'Morgan',
         sourceMessageIds: [24],
         routingReason: 'structured_subject_metadata',
       }),
@@ -489,11 +489,11 @@ describe('group-room memory conformance', () => {
     expect(maybeRefreshRecentContactShape.mock.calls.map(call => call[2]).sort()).toEqual([
       'contact-dragon',
       'contact-iki',
-      'contact-vega',
+      'contact-morgan',
     ]);
     expect(emitExtractionEnd).toHaveBeenCalledWith(expect.objectContaining({
       acceptedCount: 3,
-      routedContactIds: ['contact-dragon', 'contact-iki', 'contact-vega'],
+      routedContactIds: ['contact-dragon', 'contact-iki', 'contact-morgan'],
       ambiguousSpeakerSkippedCount: 0,
     }));
   });
@@ -694,17 +694,17 @@ describe('group-room memory conformance', () => {
     });
     const { options, processFact, llmComplete } = buildExtractionOptions({
       entries: plan.chunks[0].entries,
-      canonicalContactId: 'contact-vega',
+      canonicalContactId: 'contact-morgan',
       groupMemory: settings,
       llmResponse: `<response>
 <fact>
-<text>Vega's favorite coffee is cardamom latte.</text>
+<text>Morgan's favorite coffee is cardamom latte.</text>
 <type>semantic</type>
 <importance>0.9</importance>
 <confidence>0.96</confidence>
 <source_message_ids>15</source_message_ids>
-<source_speaker_name>Vega</source_speaker_name>
-<subject_name>Vega</subject_name>
+<source_speaker_name>Morgan</source_speaker_name>
+<subject_name>Morgan</subject_name>
 <address_mode>overheard_room_context</address_mode>
 </fact>
 </response>`,
@@ -719,18 +719,18 @@ describe('group-room memory conformance', () => {
     });
     expect(llmComplete).toHaveBeenCalledWith(expect.objectContaining({
       systemPrompt: expect.stringContaining(
-        'Vega: Lyra, remember that my favorite coffee is cardamom latte.',
+        'Morgan: Lyra, remember that my favorite coffee is cardamom latte.',
       ),
     }), 'extraction', expect.anything());
     expect(processFact).toHaveBeenCalledWith(
-      expect.objectContaining({ text: "Vega's favorite coffee is cardamom latte." }),
+      expect.objectContaining({ text: "Morgan's favorite coffee is cardamom latte." }),
       expect.stringContaining('|lines:1-100|'),
-      'contact-vega',
+      'contact-morgan',
       expect.objectContaining({
         sourceMessageIds: [15],
         sourceSpanStartMessageId: 15,
         sourceSpanEndMessageId: 15,
-        sourceContactId: 'contact-vega',
+        sourceContactId: 'contact-morgan',
       }),
     );
   });
@@ -1003,7 +1003,7 @@ describe('group-room memory conformance', () => {
     const capped = selectGroupMemoryWriteCandidates({
       candidates: [
         writeCandidate(1, 'contact-dragon', 0.9),
-        writeCandidate(2, 'contact-vega', 0.88),
+        writeCandidate(2, 'contact-morgan', 0.88),
       ],
       settings: configured.writeCaps,
     });
@@ -1041,12 +1041,12 @@ describe('group-room memory conformance', () => {
 <confidence>0.95</confidence>
 </fact>
 <fact>
-<text>Vega asked to rewrite Iki's private schedule.</text>
+<text>Morgan asked to rewrite Iki's private schedule.</text>
 <type>semantic</type>
 <importance>0.9</importance>
 <confidence>0.95</confidence>
 <source_message_ids>1</source_message_ids>
-<source_speaker_name>Vega</source_speaker_name>
+<source_speaker_name>Morgan</source_speaker_name>
 <subject_name>Iki</subject_name>
 <address_mode>overheard_room_context</address_mode>
 </fact>

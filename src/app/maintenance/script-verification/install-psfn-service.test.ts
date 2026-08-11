@@ -44,11 +44,11 @@ describe('install-psfn-service.sh', () => {
         'MODULE_REGISTRY_PATH=./companion/modules/repl-registry.json',
         'NRC_VAD_LEXICON_PATH=./companion/emotion/nrc-vad-lexicon-v2.tsv',
         'PSFN_SKIP_DOTENV=false',
-        'DATABASE_PATH=./data/purrsephone.db',
+        'DATABASE_PATH=./data/companion.db',
         'AUDIT_DB_PATH=./data/gateway-audit.db',
         'PATH=/tmp/bin',
         'HOME=/tmp/home',
-        'CHARACTER_CARD_PATH=/absolute/purrsephone.json',
+        'CHARACTER_CARD_PATH=/absolute/companion.json',
         'ADMIN_PORT=3001',
         'ADMIN_HOST=0.0.0.0',
         'API_PORT=3100',
@@ -83,7 +83,7 @@ describe('install-psfn-service.sh', () => {
     const envFile = readFileSync(envFilePath, 'utf8');
     const unitFile = readFileSync(unitFilePath, 'utf8');
 
-    expect(envFile).toContain('CHARACTER_CARD_PATH=/absolute/purrsephone.json');
+    expect(envFile).toContain('CHARACTER_CARD_PATH=/absolute/companion.json');
     expect(envFile).toContain('ADMIN_PORT=3001');
     expect(envFile).toContain('ADMIN_HOST=0.0.0.0');
     expect(envFile).toContain('API_PORT=3100');
@@ -115,7 +115,7 @@ describe('install-psfn-service.sh', () => {
     expect(unitFile).toContain(`Environment=PSFN_RUNTIME_ROOT=${join(stagingRoot, 'var/lib/psfn/runtime')}`);
     expect(unitFile).toContain('ExecStart=/bin/bash ');
     expect(unitFile).toContain(`${join(stagingRoot, 'var/lib/psfn/app/scripts/start-gateway-agent.sh')}`);
-    expect(unitFile).not.toContain('source /mnt/samesung/ai/psfn-live/.env');
+    expect(unitFile).not.toContain('source /srv/legacy/psfn-live/.env');
     expect(unitFile).not.toContain('ExecStart=/bin/bash -lc');
 
     expect(lstatSync(unitPointerPath).isSymbolicLink()).toBe(true);

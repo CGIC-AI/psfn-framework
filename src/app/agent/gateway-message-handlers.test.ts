@@ -1024,7 +1024,7 @@ describe('registerGatewayMessageHandlers', () => {
     }));
     await harness.onDiscordMessage(makeMessage({
       id: 'msg-b',
-      content: 'from vega',
+      content: 'from morgan',
       authorId: 'user-1',
       channelId: 'discord:general',
       channelType: 'discord',
@@ -1043,11 +1043,11 @@ describe('registerGatewayMessageHandlers', () => {
     }));
     releaseFirstTurn(makeResponse('first reply'));
 
-    // Three turns total: opener, vega's queued message, the other author's.
+    // Three turns total: opener, morgan's queued message, the other author's.
     await vi.waitFor(() => {
       expect(handleMessage).toHaveBeenCalledTimes(3);
     });
-    expect((handleMessage.mock.calls[1][0] as SubstrateMessage).content).toBe('from vega');
+    expect((handleMessage.mock.calls[1][0] as SubstrateMessage).content).toBe('from morgan');
     expect((handleMessage.mock.calls[2][0] as SubstrateMessage).content).toBe('from someone else');
     expect(harness.safeguardAuditTrail.append).not.toHaveBeenCalledWith('discord.message.bundled', expect.anything());
   });

@@ -38,7 +38,7 @@ const MIME = {
 const COMPANIONS = [
   {
     companionId: '11111111-1111-4111-8111-111111111111',
-    displayName: 'Purrsephone',
+    displayName: 'Companion',
     health: { agentRpc: 'up', adminTransport: 'up', channels: 'up' },
     posture: {
       status: 'available',

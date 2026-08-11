@@ -287,7 +287,7 @@ describe('image admin API routes', () => {
         artifactRefs: [{ kind: 'l0_artifact', refId: 'artifact-1' }],
         sensitivityContest: {
           sensitivity: 'personal',
-          reason: 'V reviewed the artifact boundary.',
+          reason: 'Morgan reviewed the artifact boundary.',
         },
       }),
     );
@@ -302,7 +302,7 @@ describe('image admin API routes', () => {
       artifactRefs: [{ kind: 'l0_artifact', refId: 'artifact-1' }],
       sensitivityContest: {
         sensitivity: 'personal',
-        reason: 'V reviewed the artifact boundary.',
+        reason: 'Morgan reviewed the artifact boundary.',
       },
     });
     expect(JSON.parse(String(patchResponse.body))).toMatchObject({

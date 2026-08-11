@@ -55,19 +55,19 @@ describe('prompt-lifecycle cacheability', () => {
   it('builds a stable settings hash regardless of variable order or now_iso churn', () => {
     const baseline = buildStaticPromptSettingsHash({
       user: 'Operator',
-      char: 'Purrsephone',
+      char: 'Companion',
       active_timezone: 'America/New_York',
       now_iso: '2026-04-04T10:00:00.000-04:00',
     });
     const reordered = buildStaticPromptSettingsHash({
       now_iso: '2026-04-04T10:30:00.000-04:00',
       active_timezone: 'America/New_York',
-      char: 'Purrsephone',
+      char: 'Companion',
       user: 'Operator',
     });
     const changedStableSetting = buildStaticPromptSettingsHash({
       user: 'Operator',
-      char: 'Purrsephone',
+      char: 'Companion',
       active_timezone: 'UTC',
       now_iso: '2026-04-04T10:00:00.000-04:00',
     });
@@ -82,10 +82,10 @@ describe('prompt-lifecycle cacheability', () => {
       '<style>{{personality}}</style>',
     ].join('\n');
     const baseline = buildStaticPromptSettingsHash({
-      char_name: 'Purrsephone',
+      char_name: 'Companion',
       personality: 'Warm and precise.',
-      user: 'Vega',
-      user_id: 'discord:vega',
+      user: 'Morgan',
+      user_id: 'discord:morgan',
       channel_id: 'discord:group:1',
       runtime_current_datetime_iso: '2026-04-04T10:00:00.000-04:00',
       runtime_charge_budget_body: '24 remaining',
@@ -93,7 +93,7 @@ describe('prompt-lifecycle cacheability', () => {
       now_iso: '2026-04-04T10:00:00.000-04:00',
     }, staticPrefixTemplate);
     const volatileOnlyChange = buildStaticPromptSettingsHash({
-      char_name: 'Purrsephone',
+      char_name: 'Companion',
       personality: 'Warm and precise.',
       user: 'Different speaker',
       user_id: 'discord:different',
@@ -106,7 +106,7 @@ describe('prompt-lifecycle cacheability', () => {
     const stableIdentityChange = buildStaticPromptSettingsHash({
       char_name: 'Artemis',
       personality: 'Warm and precise.',
-      user: 'Vega',
+      user: 'Morgan',
       runtime_current_datetime_iso: '2026-04-04T10:00:00.000-04:00',
       runtime_charge_budget_body: '24 remaining',
       memory_context: 'remembered item A',

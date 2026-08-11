@@ -539,7 +539,7 @@ describe('ReflectionPolicyStore', () => {
           {
             id: 'whisper',
             name: 'Whisper',
-            prompt: 'Your hourly heartbeat is firing. Share a brief thought, feeling, or observation — a little whisper from your inner world. Keep it to 1-2 sentences, something authentic and natural. This goes to Discord for V to see.',
+            prompt: 'Your hourly heartbeat is firing. Share a brief thought, feeling, or observation — a little whisper from your inner world. Keep it to 1-2 sentences, something authentic and natural. This goes to Discord for Morgan to see.',
             intervalMs: 3_600_000,
             cadence: { kind: 'hourly', minute: 0, timezone: 'local' },
             enabled: true,

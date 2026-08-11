@@ -260,7 +260,7 @@ describe('MemoryRetriever active memory context', () => {
         channelId: 'internal:free-time:idle',
         sessionId: 'internal:free-time:idle',
         actor: 'companion',
-        subjectName: 'Purrsephone',
+        subjectName: 'Companion',
       },
       tags: ['self_directed', 'self_experience'],
       similarity: 0.96,
@@ -322,7 +322,7 @@ describe('MemoryRetriever active memory context', () => {
 
   it('retains existing recalled memories when a later refresh has no candidates', async () => {
     const recalled = makeMemory({
-      text: 'V prefers oolong tea in the afternoon.',
+      text: 'Morgan prefers oolong tea in the afternoon.',
       sensitivity: 'public',
       similarity: 0.95,
     });
@@ -571,7 +571,7 @@ describe('MemoryRetriever active memory context', () => {
 
   it('marks refresh degraded and keeps the previous active context when retrieval fails', async () => {
     const recalled = makeMemory({
-      text: 'V prefers oolong tea in the afternoon.',
+      text: 'Morgan prefers oolong tea in the afternoon.',
       sensitivity: 'public',
       similarity: 0.95,
     });
@@ -600,7 +600,7 @@ describe('MemoryRetriever active memory context', () => {
 
   it('invalidates active memory contexts by selected memory id or session channel id', async () => {
     const recalled = makeMemory({
-      text: 'V prefers oolong tea in the afternoon.',
+      text: 'Morgan prefers oolong tea in the afternoon.',
       sensitivity: 'public',
       similarity: 0.95,
     });
@@ -1435,7 +1435,7 @@ describe('MemoryRetriever trust-gated filtering', () => {
     const memories = [
       makeMemory({
         id: 'normal-memory',
-        text: 'V likes oolong tea.',
+        text: 'Morgan likes oolong tea.',
         sensitivity: 'public',
         similarity: 0.95,
         sourceRef: 'api:test:normal',
@@ -1455,16 +1455,16 @@ describe('MemoryRetriever trust-gated filtering', () => {
     const embedding = makeMockEmbedding();
     const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 });
 
-    const result = await retriever.retrieve('what does V like?', 'api:test', 'primary');
+    const result = await retriever.retrieve('what does Morgan like?', 'api:test', 'primary');
 
-    expect(result).toContain('V likes oolong tea.');
+    expect(result).toContain('Morgan likes oolong tea.');
     expect(result).not.toContain('Context feedback for turn abc');
   });
 
   it('boosts durable preferences when the context asks for a matching preference category', async () => {
     const preference = makeMemory({
       id: 'favorite-color',
-      text: "V's favorite color is teal.",
+      text: "Morgan's favorite color is teal.",
       sensitivity: 'public',
       importance: 0.9,
       salience: 0.9,
@@ -1474,7 +1474,7 @@ describe('MemoryRetriever trust-gated filtering', () => {
     });
     const higherSimilarityTask = makeMemory({
       id: 'receipt-task',
-      text: 'V recently filed receipts for grocery budgeting.',
+      text: 'Morgan recently filed receipts for grocery budgeting.',
       sensitivity: 'public',
       importance: 0.55,
       salience: 0.65,
@@ -1485,18 +1485,18 @@ describe('MemoryRetriever trust-gated filtering', () => {
     const embedding = makeMockEmbedding();
     const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 });
 
-    const result = await retriever.retrieve("What is V's favorite color?", 'api:test', 'primary');
+    const result = await retriever.retrieve("What is Morgan's favorite color?", 'api:test', 'primary');
 
-    expect(result).toContain("V's favorite color is teal.");
-    expect(result.indexOf("V's favorite color is teal.")).toBeLessThan(
-      result.indexOf('V recently filed receipts for grocery budgeting.'),
+    expect(result).toContain("Morgan's favorite color is teal.");
+    expect(result.indexOf("Morgan's favorite color is teal.")).toBeLessThan(
+      result.indexOf('Morgan recently filed receipts for grocery budgeting.'),
     );
   });
 
   it('keeps durable preferences quiet during unrelated retrieval', async () => {
     const preference = makeMemory({
       id: 'quiet-favorite-color',
-      text: "V's favorite color is teal.",
+      text: "Morgan's favorite color is teal.",
       sensitivity: 'public',
       importance: 0.95,
       salience: 0.95,
@@ -1520,7 +1520,7 @@ describe('MemoryRetriever trust-gated filtering', () => {
     const result = await retriever.retrieve('deployment checklist status', 'api:test', 'primary');
 
     expect(result).toContain('The deployment checklist requires npm run build before handoff.');
-    expect(result).not.toContain("V's favorite color is teal.");
+    expect(result).not.toContain("Morgan's favorite color is teal.");
     expect(countRenderedMemories(result)).toBe(1);
   });
 
@@ -3477,7 +3477,7 @@ describe('MemoryRetriever retrieval trace telemetry', () => {
 describe('MemoryRetriever room-scoped visibility', () => {
   const GROUP_ROOM_X = 'discord:guild-1:room-x';
   const GROUP_ROOM_Y = 'discord:guild-1:room-y';
-  const VEGA_DM = 'discord:dm:vega';
+  const MORGAN_DM = 'discord:dm:morgan';
 
   beforeEach(() => {
     idCounter = 0;
@@ -3496,23 +3496,23 @@ describe('MemoryRetriever room-scoped visibility', () => {
 
   async function makeRoomVisibilityContactStore(): Promise<{
     contactStore: ContactStorePort;
-    vegaId: string;
+    morganId: string;
   }> {
     const { store: contactStore } = await createTestPostgresContactStore('primary-user');
-    const vega = await contactStore.upsert({
-      displayName: 'Vega',
-      discordUserId: 'vega-discord',
+    const morgan = await contactStore.upsert({
+      displayName: 'Morgan',
+      discordUserId: 'morgan-discord',
       trustLevel: 'trusted',
       relationshipType: 'friend',
     });
-    await contactStore.recordChannelActivity(vega.id, 'discord', VEGA_DM, 'private');
-    return { contactStore, vegaId: vega.id };
+    await contactStore.recordChannelActivity(morgan.id, 'discord', MORGAN_DM, 'private');
+    return { contactStore, morganId: morgan.id };
   }
 
   it('allows same-room group memories while blocking cross-room and DM memories in a group room', async () => {
-    const { contactStore, vegaId } = await makeRoomVisibilityContactStore();
-    await contactStore.recordChannelActivity(vegaId, 'discord', GROUP_ROOM_X, 'invite_only');
-    await contactStore.recordChannelActivity(vegaId, 'discord', GROUP_ROOM_Y, 'invite_only');
+    const { contactStore, morganId } = await makeRoomVisibilityContactStore();
+    await contactStore.recordChannelActivity(morganId, 'discord', GROUP_ROOM_X, 'invite_only');
+    await contactStore.recordChannelActivity(morganId, 'discord', GROUP_ROOM_Y, 'invite_only');
     const sameRoomMemory = makeMemory({
       id: 'group-x-memory',
       text: 'Room X decided the deployment window is Friday.',
@@ -3530,11 +3530,11 @@ describe('MemoryRetriever room-scoped visibility', () => {
       similarity: 0.96,
     });
     const dmMemory = makeMemory({
-      id: 'vega-dm-memory',
-      text: 'Vega said in DM that the invoice folder is personal.',
+      id: 'morgan-dm-memory',
+      text: 'Morgan said in DM that the invoice folder is personal.',
       sensitivity: 'public',
-      contactId: vegaId,
-      provenance: { channelId: VEGA_DM },
+      contactId: morganId,
+      provenance: { channelId: MORGAN_DM },
       similarity: 0.95,
     });
     const eventBus = makeMockEventBus();
@@ -3551,7 +3551,7 @@ describe('MemoryRetriever room-scoped visibility', () => {
       GROUP_ROOM_X,
       'primary',
       { isDirectMessage: false, privacyLevel: 'invite_only' },
-      vegaId,
+      morganId,
     );
 
     expect(result).toContain('Room X decided the deployment window is Friday.');
@@ -3567,13 +3567,13 @@ describe('MemoryRetriever room-scoped visibility', () => {
   });
 
   it('allows same-room personal memories for regular contacts without trust ceiling rejection', async () => {
-    const { contactStore, vegaId } = await makeRoomVisibilityContactStore();
-    await contactStore.recordChannelActivity(vegaId, 'discord', GROUP_ROOM_X, 'invite_only');
+    const { contactStore, morganId } = await makeRoomVisibilityContactStore();
+    await contactStore.recordChannelActivity(morganId, 'discord', GROUP_ROOM_X, 'invite_only');
     const sameRoomPersonalMemory = makeMemory({
       id: 'group-x-personal-memory',
-      text: 'Room X heard Vega prefers the quiet rollout plan.',
+      text: 'Room X heard Morgan prefers the quiet rollout plan.',
       sensitivity: 'personal',
-      contactId: vegaId,
+      contactId: morganId,
       provenance: { channelId: GROUP_ROOM_X },
       scopeRef: { kind: 'conversation', id: GROUP_ROOM_X },
       similarity: 0.99,
@@ -3592,10 +3592,10 @@ describe('MemoryRetriever room-scoped visibility', () => {
       GROUP_ROOM_X,
       'regular',
       { isDirectMessage: false, privacyLevel: 'invite_only' },
-      vegaId,
+      morganId,
     );
 
-    expect(result).toContain('Room X heard Vega prefers the quiet rollout plan.');
+    expect(result).toContain('Room X heard Morgan prefers the quiet rollout plan.');
 
     const telemetry = latestRetrievalTelemetry(eventBus);
     expect(telemetry.roomVisibilityRejectedCount).toBe(0);
@@ -3606,21 +3606,21 @@ describe('MemoryRetriever room-scoped visibility', () => {
   });
 
   it('allows participated group memories in the primary partner DM and blocks unparticipated rooms', async () => {
-    const { contactStore, vegaId } = await makeRoomVisibilityContactStore();
-    await contactStore.recordChannelActivity(vegaId, 'discord', GROUP_ROOM_X, 'invite_only');
+    const { contactStore, morganId } = await makeRoomVisibilityContactStore();
+    await contactStore.recordChannelActivity(morganId, 'discord', GROUP_ROOM_X, 'invite_only');
     const dmMemory = makeMemory({
-      id: 'vega-dm-memory',
-      text: 'Vega DM reminder: prefer short deployment summaries.',
+      id: 'morgan-dm-memory',
+      text: 'Morgan DM reminder: prefer short deployment summaries.',
       sensitivity: 'public',
-      contactId: vegaId,
-      provenance: { channelId: VEGA_DM },
+      contactId: morganId,
+      provenance: { channelId: MORGAN_DM },
       similarity: 0.98,
     });
     const participatedGroupMemory = makeMemory({
       id: 'group-x-memory',
-      text: 'Room X agreed Vega owns the smoke test checklist.',
+      text: 'Room X agreed Morgan owns the smoke test checklist.',
       sensitivity: 'public',
-      contactId: vegaId,
+      contactId: morganId,
       provenance: { channelId: GROUP_ROOM_X },
       scopeRef: { kind: 'conversation', id: GROUP_ROOM_X },
       similarity: 0.97,
@@ -3644,14 +3644,14 @@ describe('MemoryRetriever room-scoped visibility', () => {
 
     const result = await retriever.retrieve(
       'deployment summary and checklist',
-      VEGA_DM,
+      MORGAN_DM,
       'primary',
       { isDirectMessage: true, privacyLevel: 'private' },
-      vegaId,
+      morganId,
     );
 
-    expect(result).toContain('Vega DM reminder: prefer short deployment summaries.');
-    expect(result).toContain('Room X agreed Vega owns the smoke test checklist.');
+    expect(result).toContain('Morgan DM reminder: prefer short deployment summaries.');
+    expect(result).toContain('Room X agreed Morgan owns the smoke test checklist.');
     expect(result).not.toContain('Room Y agreed on a secret budget ceiling.');
 
     const telemetry = latestRetrievalTelemetry(eventBus);
@@ -3663,13 +3663,13 @@ describe('MemoryRetriever room-scoped visibility', () => {
   });
 
   it('allows participated group personal memories in the participant DM for regular contacts', async () => {
-    const { contactStore, vegaId } = await makeRoomVisibilityContactStore();
-    await contactStore.recordChannelActivity(vegaId, 'discord', GROUP_ROOM_X, 'invite_only');
+    const { contactStore, morganId } = await makeRoomVisibilityContactStore();
+    await contactStore.recordChannelActivity(morganId, 'discord', GROUP_ROOM_X, 'invite_only');
     const participatedGroupMemory = makeMemory({
       id: 'group-x-personal-memory',
-      text: 'Room X knows Vega volunteered to own the risky checklist.',
+      text: 'Room X knows Morgan volunteered to own the risky checklist.',
       sensitivity: 'personal',
-      contactId: vegaId,
+      contactId: morganId,
       provenance: { channelId: GROUP_ROOM_X },
       scopeRef: { kind: 'conversation', id: GROUP_ROOM_X },
       similarity: 0.99,
@@ -3685,13 +3685,13 @@ describe('MemoryRetriever room-scoped visibility', () => {
 
     const result = await retriever.retrieve(
       'risky checklist',
-      VEGA_DM,
+      MORGAN_DM,
       'regular',
       { isDirectMessage: true, privacyLevel: 'private' },
-      vegaId,
+      morganId,
     );
 
-    expect(result).toContain('Room X knows Vega volunteered to own the risky checklist.');
+    expect(result).toContain('Room X knows Morgan volunteered to own the risky checklist.');
 
     const telemetry = latestRetrievalTelemetry(eventBus);
     expect(telemetry.roomVisibilityRejectedCount).toBe(0);
@@ -3702,12 +3702,12 @@ describe('MemoryRetriever room-scoped visibility', () => {
   });
 
   it('allows the primary partner subject memory when origin-channel proof is missing', async () => {
-    const { contactStore, vegaId } = await makeRoomVisibilityContactStore();
+    const { contactStore, morganId } = await makeRoomVisibilityContactStore();
     const blockedGroupMemory = makeMemory({
       id: 'group-x-memory',
       text: 'Room X discussed a private server migration plan.',
       sensitivity: 'public',
-      contactId: vegaId,
+      contactId: morganId,
       provenance: { channelId: GROUP_ROOM_X },
       scopeRef: { kind: 'conversation', id: GROUP_ROOM_X },
       similarity: 0.99,
@@ -3723,10 +3723,10 @@ describe('MemoryRetriever room-scoped visibility', () => {
 
     const result = await retriever.retrieve(
       'server migration plan',
-      VEGA_DM,
+      MORGAN_DM,
       'primary',
       { isDirectMessage: true, privacyLevel: 'private' },
-      vegaId,
+      morganId,
     );
 
     expect(result).toContain('Room X discussed a private server migration plan.');
@@ -3741,8 +3741,8 @@ describe('MemoryRetriever room-scoped visibility', () => {
   });
 
   it('withholds same-room memories from retired logical sessions while allowing fresh-route memories', async () => {
-    const { contactStore, vegaId } = await makeRoomVisibilityContactStore();
-    await contactStore.recordChannelActivity(vegaId, 'discord', GROUP_ROOM_X, 'invite_only');
+    const { contactStore, morganId } = await makeRoomVisibilityContactStore();
+    await contactStore.recordChannelActivity(morganId, 'discord', GROUP_ROOM_X, 'invite_only');
     const freshLogicalSessionId = `${GROUP_ROOM_X}:session:20260630T120000Z-fresh123`;
     const retiredMemory = makeMemory({
       id: 'retired-room-memory',
@@ -3782,7 +3782,7 @@ describe('MemoryRetriever room-scoped visibility', () => {
       GROUP_ROOM_X,
       'primary',
       { isDirectMessage: false, privacyLevel: 'invite_only' },
-      vegaId,
+      morganId,
     );
 
     expect(result).toContain('Fresh lane says the deployment checklist is smoke test first.');
@@ -3798,8 +3798,8 @@ describe('MemoryRetriever room-scoped visibility', () => {
   });
 
   it('carries room-visibility rejections into active context manifest seeds', async () => {
-    const { contactStore, vegaId } = await makeRoomVisibilityContactStore();
-    await contactStore.recordChannelActivity(vegaId, 'discord', GROUP_ROOM_X, 'invite_only');
+    const { contactStore, morganId } = await makeRoomVisibilityContactStore();
+    await contactStore.recordChannelActivity(morganId, 'discord', GROUP_ROOM_X, 'invite_only');
     const sameRoomMemory = makeMemory({
       id: 'group-x-memory',
       text: 'Room X selected the blue release train.',
@@ -3828,7 +3828,7 @@ describe('MemoryRetriever room-scoped visibility', () => {
       channelId: GROUP_ROOM_X,
       trustLevel: 'primary' as const,
       channelMeta: { isDirectMessage: false, privacyLevel: 'invite_only' as const },
-      canonicalContactId: vegaId,
+      canonicalContactId: morganId,
     };
 
     await retriever.refreshActiveMemoryContext(request);

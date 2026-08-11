@@ -11,14 +11,14 @@ describe('companion sprite headpats', () => {
     const { getByRole } = render(
       <CompanionSprite
         animated
-        label="Purrsephone"
+        label="Companion"
         onHeadpat={onHeadpat}
         petted
         state="attentive"
       />,
     );
 
-    const sprite = getByRole('button', { name: /give Purrsephone a headpat/i });
+    const sprite = getByRole('button', { name: /give Companion a headpat/i });
     expect(sprite.className).toContain('petted');
     expect(sprite.querySelectorAll('.sprite-heart')).toHaveLength(3);
     fireEvent.click(sprite);

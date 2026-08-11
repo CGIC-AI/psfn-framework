@@ -4,8 +4,8 @@ packages:
   hardware_baseline: !include ../.generated/upstream-profile.yaml
 
 substitutions:
-  name: purrsephone-bedroom
-  friendly_name: Purrsephone Bedroom
+  name: companion-bedroom
+  friendly_name: Companion Bedroom
 
 esphome:
   includes:
@@ -22,24 +22,24 @@ esp32:
       CONFIG_SPIRAM_RODATA: "n"
 
 image:
-  - file: ../assets/sprites/purrsephone-idle-360.png
-    id: purrsephone_idle
+  - file: ../assets/sprites/companion-idle-360.png
+    id: companion_idle
     type: RGB565
     transparency: alpha_channel
-  - file: ../assets/sprites/purrsephone-thinking-360.png
-    id: purrsephone_thinking
+  - file: ../assets/sprites/companion-thinking-360.png
+    id: companion_thinking
     type: RGB565
     transparency: alpha_channel
-  - file: ../assets/sprites/purrsephone-sleeping-360.png
-    id: purrsephone_sleeping
+  - file: ../assets/sprites/companion-sleeping-360.png
+    id: companion_sleeping
     type: RGB565
     transparency: alpha_channel
-  - file: ../assets/sprites/purrsephone-tool-use-360.png
-    id: purrsephone_tool_use
+  - file: ../assets/sprites/companion-tool-use-360.png
+    id: companion_tool_use
     type: RGB565
     transparency: alpha_channel
-  - file: ../assets/sprites/purrsephone-talking-360.png
-    id: purrsephone_talking
+  - file: ../assets/sprites/companion-talking-360.png
+    id: companion_talking
     type: RGB565
     transparency: alpha_channel
 
@@ -62,7 +62,7 @@ api:
   encryption:
     key: !secret api_encryption_key
   actions:
-    # Native push-to-talk seam used by the Purrsephone face and by transport
+    # Native push-to-talk seam used by the Companion face and by transport
     # diagnostics. This intentionally bypasses the borrowed intercom runtime
     # controller while retaining ESPHome's on-device silence detection.
     - action: start_voice_turn

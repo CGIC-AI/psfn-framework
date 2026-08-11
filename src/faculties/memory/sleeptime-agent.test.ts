@@ -523,7 +523,7 @@ describe('SleeptimeMemoryAgent', () => {
         goals: 'Continue the gateway debugging work carefully.',
       },
       memory_writes: [{
-        text: 'Purrsephone adopted a pet iguana named Sparkles last spring.',
+        text: 'Companion adopted a pet iguana named Sparkles last spring.',
         type: 'semantic',
         importance: 0.7,
         confidence: 0.9,

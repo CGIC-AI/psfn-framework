@@ -553,28 +553,28 @@ describe('start-gateway-agent launcher supervision', () => {
   });
 
   it('keeps the user unit pointed at the launcher instead of npm', () => {
-    const unit = readFileSync(join(repoRoot, 'scripts/system/user/purrsephone.service'), 'utf8');
+    const unit = readFileSync(join(repoRoot, 'scripts/system/user/companion.service'), 'utf8');
     expect(unit).toContain('ExecStart=/bin/bash %h/psfn-framework/scripts/start-gateway-agent.sh --yolo');
     expect(unit).not.toContain('ExecStart=%h/.nvm/versions/node/v22.21.1/bin/npm run yolo');
   });
 
   it('keeps user-local tools visible without pinning a host-local Node install', () => {
-    const unit = readFileSync(join(repoRoot, 'scripts/system/user/purrsephone.service'), 'utf8');
+    const unit = readFileSync(join(repoRoot, 'scripts/system/user/companion.service'), 'utf8');
     expect(unit).toMatch(/^Environment=PATH=%h\/\.local\/bin:/m);
     expect(unit).not.toContain('%h/.nvm/versions/node/');
   });
 
   it('keeps host-specific runtime paths out of the repo-owned user unit', () => {
-    const unit = readFileSync(join(repoRoot, 'scripts/system/user/purrsephone.service'), 'utf8');
+    const unit = readFileSync(join(repoRoot, 'scripts/system/user/companion.service'), 'utf8');
     expect(unit).toContain('WorkingDirectory=%h/psfn-framework');
     expect(unit).toContain('Environment=PSFN_DOTENV_FILE=.env');
-    expect(unit).not.toContain('/mnt/samesung/ai/psfn-live');
+    expect(unit).not.toContain('/srv/legacy/psfn-live');
     expect(unit).not.toContain('Environment=DATA_DIR=');
     expect(unit).not.toContain('Environment=DATABASE_PATH=');
     expect(unit).not.toContain('Environment=WORKSPACE_PATH=');
     expect(unit).not.toContain('Environment=CHARACTER_CARD_PATH=');
-    expect(unit).not.toContain('purrsephone.db');
-    expect(unit).not.toContain('purrsephone.json');
+    expect(unit).not.toContain('companion.db');
+    expect(unit).not.toContain('companion.json');
   });
 
   it('does not ambiently opt the agent into outbound network access', () => {
@@ -1692,7 +1692,7 @@ describe('psfn_source_dotenv_preserving_existing_env', () => {
             'export PSFN_RUNTIME_LAYOUT_MODE=production',
             'export API_HOST=0.0.0.0 API_PORT=10053 API_KEY=test-api-key',
             'export ADMIN_HOST=0.0.0.0 ADMIN_PORT=10054 ADMIN_TOKEN=test-admin-token',
-            'export WORKSPACE_PATH=/srv/psfn/purrsephone',
+            'export WORKSPACE_PATH=/srv/psfn/companion',
             'export GATEWAY_SESSION_HMAC_KEYS=test-keyring',
             'export ALLOW_INSECURE_LOCAL_API=true',
             'psfn_require_production_launcher_env',
@@ -1750,7 +1750,7 @@ describe('psfn_source_dotenv_preserving_existing_env', () => {
             'export PSFN_RUNTIME_LAYOUT_MODE=production',
             'export API_HOST=0.0.0.0 API_PORT=10053 API_KEY=test-api-key',
             'export ADMIN_HOST=0.0.0.0 ADMIN_PORT=10054 ADMIN_TOKEN=test-admin-token',
-            'export WORKSPACE_PATH=/srv/psfn/purrsephone',
+            'export WORKSPACE_PATH=/srv/psfn/companion',
             'export GATEWAY_SESSION_HMAC_KEY=psfn-dev-session-hmac',
             'psfn_require_production_launcher_env',
           ].join('; '),
@@ -1777,7 +1777,7 @@ describe('psfn_source_dotenv_preserving_existing_env', () => {
           'export PSFN_RUNTIME_LAYOUT_MODE=production',
           'export API_HOST=0.0.0.0 API_PORT=10053 API_KEY=test-api-key',
           'export ADMIN_HOST=0.0.0.0 ADMIN_PORT=10054 ADMIN_TOKEN=test-admin-token',
-          'export WORKSPACE_PATH=/srv/psfn/purrsephone',
+          'export WORKSPACE_PATH=/srv/psfn/companion',
           'export GATEWAY_SESSION_HMAC_KEYS=test-keyring',
           'psfn_require_production_launcher_env',
           'printf ok',
@@ -1799,7 +1799,7 @@ describe('psfn_source_dotenv_preserving_existing_env', () => {
           'export PSFN_RUNTIME_LAYOUT_MODE=production PSFN_FLEET_AUTH=1',
           'export API_HOST=0.0.0.0 API_PORT=10053 API_KEY=test-api-key',
           'export ADMIN_HOST=0.0.0.0 ADMIN_PORT=10054',
-          'export WORKSPACE_PATH=/srv/psfn/purrsephone',
+          'export WORKSPACE_PATH=/srv/psfn/companion',
           'export GATEWAY_SESSION_HMAC_KEYS=test-keyring',
           'unset ADMIN_TOKEN',
           'psfn_require_production_launcher_env',

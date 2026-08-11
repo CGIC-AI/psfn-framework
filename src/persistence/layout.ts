@@ -742,7 +742,7 @@ export function resolveNorthStarPath(companionDataDir: string): string {
 
 export function resolveReflectionPolicyPath(companionDataDir: string): string {
   // Preserve the existing on-disk filename. Renaming it requires a separately
-  // planned owner-file migration and live Companion Cluster rollout.
+  // planned owner-file migration and live companion-cluster rollout.
   return join(resolveCompanionStateDir(companionDataDir), 'heartbeat-policy.json');
 }
 

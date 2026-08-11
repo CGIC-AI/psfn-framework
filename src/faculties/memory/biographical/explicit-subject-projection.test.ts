@@ -163,7 +163,7 @@ function addressedParticipants(input: {
     schemaVersion: 2,
     source: 'discord',
     author: { authorId: 'discord-author', authorName: 'Author' },
-    observer: { authorId: 'discord-companion', authorName: 'Purrsephone' },
+    observer: { authorId: 'discord-companion', authorName: 'Companion' },
     mentionedTargets,
     ...(replied
       ? {
@@ -190,7 +190,7 @@ function unresolvedReply(channelId: string) {
     schemaVersion: 2,
     source: 'discord',
     author: { authorId: 'discord-author', authorName: 'Author' },
-    observer: { authorId: 'discord-companion', authorName: 'Purrsephone' },
+    observer: { authorId: 'discord-companion', authorName: 'Companion' },
     mentionedTargets: [],
     replyTarget: { messageId: 'missing-reply' },
     channel: { scope: 'group', channelId },
@@ -388,7 +388,7 @@ describe('projectBiographicalContext — explicit reply and mention subjects', (
           channelId: scope.channelId,
           participants: [{
             id: 'discord-companion',
-            name: 'Purrsephone',
+            name: 'Companion',
             evidence: ['mention'],
           }],
         }),
@@ -438,7 +438,7 @@ describe('projectBiographicalContext — explicit reply and mention subjects', (
       schemaVersion: 2,
       source: 'discord',
       author: { authorId: 'discord-author', authorName: 'Author' },
-      observer: { authorId: 'discord-companion', authorName: 'Purrsephone' },
+      observer: { authorId: 'discord-companion', authorName: 'Companion' },
       mentionedTargets: [{ authorId: 'discord-eve', authorName: 'Eve' }],
       channel: { scope: 'group', channelId: scope.channelId },
       resolvedAddressee: { kind: 'room', channelId: scope.channelId },

@@ -17,7 +17,7 @@ describe('episodic memory contracts', () => {
       endedAt: '2026-03-30T10:05:00.000Z',
       threadId: 'thread-alpha',
       channelId: 'discord:general',
-      participantContactIds: ['contact:vega'],
+      participantContactIds: ['contact:morgan'],
       salience: { score: 0.7, novelty: 0.4 },
       affect: { valence: 0.1, arousal: 0.3, labels: ['steady'] },
       themes: ['collaboration'],

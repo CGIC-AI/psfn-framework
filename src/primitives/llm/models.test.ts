@@ -185,8 +185,8 @@ describe('normalizeContent', () => {
   });
 
   it('handles escaped backslashes', () => {
-    const wrapped = "[{'type': 'text', 'text': 'path: C:\\\\Users\\\\V'}]";
-    expect(normalizeContent(wrapped)).toBe('path: C:\\Users\\V');
+    const wrapped = "[{'type': 'text', 'text': 'path: C:\\\\Users\\\\Morgan'}]";
+    expect(normalizeContent(wrapped)).toBe('path: C:\\Users\\Morgan');
   });
 
   it('unwraps double-nested content blocks', () => {

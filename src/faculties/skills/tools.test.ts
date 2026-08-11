@@ -70,7 +70,7 @@ interface SkillToolHarness {
 function setupSkillRuntime(prefix: string): SkillToolHarness {
   const root = mkdtempSync(join(tmpdir(), prefix));
   const companionDataDir = join(root, 'companion-data');
-  const personalFilesDir = join(root, 'purrsephone');
+  const personalFilesDir = join(root, 'companion');
   const seedDir = join(root, 'config');
   mkdirSync(companionDataDir, { recursive: true });
   mkdirSync(personalFilesDir, { recursive: true });
@@ -110,7 +110,7 @@ describe('skills tools', () => {
   it('supports create, view, update, and list through the unified skill tool', async () => {
     const root = mkdtempSync(join(tmpdir(), 'skills-tools-'));
     const companionDataDir = join(root, 'companion-data');
-    const personalFilesDir = join(root, 'purrsephone');
+    const personalFilesDir = join(root, 'companion');
     const seedDir = join(root, 'config');
     mkdirSync(companionDataDir, { recursive: true });
     mkdirSync(personalFilesDir, { recursive: true });
@@ -145,7 +145,7 @@ describe('skills tools', () => {
       expect(createdPayload.action).toBe('created');
       expect(createdPayload.version).toBe(1);
       expect(createdPayload.ownership).toBe('personal');
-      expect(createdPayload.path).toContain('purrsephone/skills/ops/incident-runbook/SKILL.md');
+      expect(createdPayload.path).toContain('companion/skills/ops/incident-runbook/SKILL.md');
 
       const viewCreated = await skillTool.execute('call-2', {
         action: 'skill_view',
@@ -185,7 +185,7 @@ describe('skills tools', () => {
       };
       expect(listPayload.managedOwnership).toEqual({
         owner: 'personal',
-        managedRoot: 'purrsephone/skills',
+        managedRoot: 'companion/skills',
         configPath: 'companion-data/skills.json',
       });
       expect(listPayload.categories).toContainEqual({
@@ -208,7 +208,7 @@ describe('skills tools', () => {
   it('returns explicit errors for invalid actions, invalid names, and missing skills', async () => {
     const root = mkdtempSync(join(tmpdir(), 'skills-tools-errors-'));
     const companionDataDir = join(root, 'companion-data');
-    const personalFilesDir = join(root, 'purrsephone');
+    const personalFilesDir = join(root, 'companion');
     const seedDir = join(root, 'config');
     mkdirSync(companionDataDir, { recursive: true });
     mkdirSync(personalFilesDir, { recursive: true });
@@ -297,7 +297,7 @@ describe('skills tools', () => {
   it('exposes named and list-level skill usage stats without skill content', async () => {
     const root = mkdtempSync(join(tmpdir(), 'skills-tools-stats-'));
     const companionDataDir = join(root, 'companion-data');
-    const personalFilesDir = join(root, 'purrsephone');
+    const personalFilesDir = join(root, 'companion');
     const seedDir = join(root, 'config');
     mkdirSync(companionDataDir, { recursive: true });
     mkdirSync(personalFilesDir, { recursive: true });
@@ -354,7 +354,7 @@ describe('skills tools', () => {
       };
       expect(namedStats.status).toBe('ok');
       expect(namedStats.skill.name).toBe('incident-runbook');
-      expect(namedStats.skill.path).toContain('purrsephone/skills/ops/incident-runbook/SKILL.md');
+      expect(namedStats.skill.path).toContain('companion/skills/ops/incident-runbook/SKILL.md');
       expect(namedStats.stats.invocationCount).toBe(2);
       expect(namedStats.stats.successCount).toBe(1);
       expect(namedStats.stats.failureCount).toBe(1);

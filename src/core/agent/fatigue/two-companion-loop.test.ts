@@ -94,8 +94,8 @@ const miAuthorContext: FatigueAuthorPolicyContext = {
 const humanAuthorContext: FatigueAuthorPolicyContext = {
   trustLevel: 'trusted',
   speakerRole: 'user',
-  resolvedUserName: 'Raul',
-  canonicalContactKey: 'human-raul',
+  resolvedUserName: 'Casey',
+  canonicalContactKey: 'human-casey',
   relationshipType: 'friend',
 };
 
@@ -130,7 +130,7 @@ function runTurn(
     fatiguePolicy: opts.config,
     localCompanionId: LOCAL_COMPANION,
     message: human
-      ? makeMessage(opts.content ?? 'hey you two, what are you up to?', 'human-raul', 'Raul')
+      ? makeMessage(opts.content ?? 'hey you two, what are you up to?', 'human-casey', 'Casey')
       : makeMessage(opts.content ?? 'just carrying on chatting', PEER_CONTACT, 'Nova'),
     authorContext: human ? humanAuthorContext : miAuthorContext,
     channelId: CHANNEL_ID,

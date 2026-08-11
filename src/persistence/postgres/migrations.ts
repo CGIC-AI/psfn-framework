@@ -396,6 +396,15 @@ export const POSTGRES_MEMORY_MIGRATIONS = [
     scope_json JSONB NOT NULL DEFAULT '{}'::jsonb,
     consent_flags JSONB NOT NULL DEFAULT '{}'::jsonb,
     embedding VECTOR,
+    embedding_document_schema TEXT,
+    embedding_provider TEXT,
+    embedding_model TEXT,
+    embedding_dimensions INTEGER,
+    embedding_document_hash TEXT,
+    embedding_source_updated_at TIMESTAMPTZ,
+    embedding_indexed_at TIMESTAMPTZ,
+    embedding_attempted_at TIMESTAMPTZ,
+    embedding_last_error TEXT,
     episode_json JSONB NOT NULL,
     affect_authorship TEXT,
     meaning_authorship TEXT,
@@ -412,6 +421,23 @@ export const POSTGRES_MEMORY_MIGRATIONS = [
   // backfilled. Every new store write supplies an explicit value.
   `ALTER TABLE l01_episodes ADD COLUMN IF NOT EXISTS affect_authorship TEXT;`,
   `ALTER TABLE l01_episodes ADD COLUMN IF NOT EXISTS meaning_authorship TEXT;`,
+  `ALTER TABLE l01_episodes ADD COLUMN IF NOT EXISTS embedding_document_schema TEXT;`,
+  `ALTER TABLE l01_episodes ADD COLUMN IF NOT EXISTS embedding_provider TEXT;`,
+  `ALTER TABLE l01_episodes ADD COLUMN IF NOT EXISTS embedding_model TEXT;`,
+  `ALTER TABLE l01_episodes ADD COLUMN IF NOT EXISTS embedding_dimensions INTEGER;`,
+  `ALTER TABLE l01_episodes ADD COLUMN IF NOT EXISTS embedding_document_hash TEXT;`,
+  `ALTER TABLE l01_episodes ADD COLUMN IF NOT EXISTS embedding_source_updated_at TIMESTAMPTZ;`,
+  `ALTER TABLE l01_episodes ADD COLUMN IF NOT EXISTS embedding_indexed_at TIMESTAMPTZ;`,
+  `ALTER TABLE l01_episodes ADD COLUMN IF NOT EXISTS embedding_attempted_at TIMESTAMPTZ;`,
+  `ALTER TABLE l01_episodes ADD COLUMN IF NOT EXISTS embedding_last_error TEXT;`,
+  `ALTER TABLE l01_episodes DROP CONSTRAINT IF EXISTS l01_episodes_embedding_dimensions_check;`,
+  `ALTER TABLE l01_episodes ADD CONSTRAINT l01_episodes_embedding_dimensions_check CHECK (
+    embedding_dimensions IS NULL OR embedding_dimensions > 0
+  );`,
+  `ALTER TABLE l01_episodes DROP CONSTRAINT IF EXISTS l01_episodes_embedding_document_hash_check;`,
+  `ALTER TABLE l01_episodes ADD CONSTRAINT l01_episodes_embedding_document_hash_check CHECK (
+    embedding_document_hash IS NULL OR embedding_document_hash ~ '^[a-f0-9]{64}$'
+  );`,
   `ALTER TABLE l01_episodes DROP CONSTRAINT IF EXISTS l01_episodes_affect_authorship_check;`,
   `ALTER TABLE l01_episodes ADD CONSTRAINT l01_episodes_affect_authorship_check CHECK (
     affect_authorship IS NULL
@@ -432,6 +458,9 @@ export const POSTGRES_MEMORY_MIGRATIONS = [
   `CREATE INDEX IF NOT EXISTS idx_l01_episodes_merged ON l01_episodes(merged_into_episode_id) WHERE merged_into_episode_id IS NOT NULL;`,
   `CREATE INDEX IF NOT EXISTS idx_l01_episodes_superseded ON l01_episodes(superseded_by_episode_id) WHERE superseded_by_episode_id IS NOT NULL;`,
   `CREATE INDEX IF NOT EXISTS idx_l01_episodes_embedding_present ON l01_episodes(id) WHERE embedding IS NOT NULL;`,
+  `CREATE INDEX IF NOT EXISTS idx_l01_episodes_embedding_profile ON l01_episodes(
+    embedding_document_schema, embedding_provider, embedding_model, embedding_dimensions
+  ) WHERE embedding IS NOT NULL;`,
   `CREATE INDEX IF NOT EXISTS idx_l01_episodes_participants_gin ON l01_episodes USING GIN (participant_contact_ids);`,
   `CREATE INDEX IF NOT EXISTS idx_l01_episodes_themes_gin ON l01_episodes USING GIN (themes);`,
   `CREATE INDEX IF NOT EXISTS idx_l01_episodes_artifact_refs_gin ON l01_episodes USING GIN (artifact_refs);`,

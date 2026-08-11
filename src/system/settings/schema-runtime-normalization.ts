@@ -8,6 +8,7 @@ import {
 } from '../config/runtime-config-contracts.js';
 import { normalizeGroupMemorySettings } from '../config/group-memory-config.js';
 import { normalizeEmotionScopingSettings } from '../config/emotion-scoping-config.js';
+import { normalizeNarrativeEmotionAppraisalSettings } from '../config/narrative-emotion-appraisal-config.js';
 import { normalizeMemoryRetrievalPolicy } from '../config/memory-retrieval-policy.js';
 import { normalizeBiographicalDepthPolicy } from '../config/biographical-depth-policy.js';
 import { normalizeMemoryPresentationProfile } from '../config/memory-presentation-profile.js';
@@ -696,6 +697,12 @@ function normalizeEndpointAndGardenSettings(
     normalized.emotionScoping = normalizeEmotionScopingSettings(
       settings.emotionScoping,
       'emotionScoping',
+    );
+  }
+  if ('narrativeEmotionAppraisal' in settings) {
+    normalized.narrativeEmotionAppraisal = normalizeNarrativeEmotionAppraisalSettings(
+      settings.narrativeEmotionAppraisal,
+      'narrativeEmotionAppraisal',
     );
   }
   if ('wikiStartupHydration' in settings) {

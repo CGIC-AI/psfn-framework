@@ -3740,16 +3740,6 @@
     },
     {
       "file": "src/core/emotion/appraisal.ts",
-      "name": "DEFAULT_TURN_CADENCE",
-      "value": "5"
-    },
-    {
-      "file": "src/core/emotion/appraisal.ts",
-      "name": "DEFAULT_VAD_DELTA_THRESHOLD",
-      "value": "0.35"
-    },
-    {
-      "file": "src/core/emotion/appraisal.ts",
       "name": "MAX_TRAIT_COUNT",
       "value": "16"
     },
@@ -12292,6 +12282,13 @@
       "value": "[ 'episodic', 'semantic', 'emotional', 'procedural', 'boundary', 'reflection', 'relational', ] as const",
       "form": "array",
       "note": "Canonical owner-file/schema metadata MEMORY_POLICY_TYPES; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
+    },
+    {
+      "file": "src/system/config/narrative-emotion-appraisal-config.ts",
+      "name": "createDefaultNarrativeEmotionAppraisalSettings.vadDeltaThreshold",
+      "value": "0.35",
+      "form": "object-member",
+      "note": "Bootstrap fallback for the mutable settings.json narrativeEmotionAppraisal policy; owner-file normalization, Garden exposure, and the canonical seed remain authoritative."
     },
     {
       "file": "src/system/config/owner-file-modes.ts",

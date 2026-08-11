@@ -594,6 +594,9 @@ export class SubstrateAgent {
       ...(this.config.companionId ? { companionId: this.config.companionId } : {}),
       emotionRuntime: options.emotionRuntime,
       ...(config.emotionScoping ? { emotionScopingConfig: config.emotionScoping } : {}),
+      ...(config.narrativeEmotionAppraisal
+        ? { narrativeEmotionAppraisalConfig: config.narrativeEmotionAppraisal }
+        : {}),
       getActiveConcernProvider: () => this.activeConcernProvider,
       getPendingFollowUpProvider: () => this.pendingFollowUpProvider,
       getContactStore: () => this.contactStore,

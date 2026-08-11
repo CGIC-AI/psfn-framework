@@ -357,6 +357,7 @@ const SETTINGS_OBJECT_FIELDS = new Set<string>([
   'compositionalPolicy',
   'groupMemory',
   'emotionScoping',
+  'narrativeEmotionAppraisal',
   'observerEvalSidecar',
   'sessionTailCache',
   'imageWorkflows',

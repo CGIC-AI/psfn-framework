@@ -623,6 +623,14 @@ function createRuntime(params: {
     computeInternalStateForTurn: vi.fn(() => TEST_INTERNAL_STATE),
     computeMetacognitiveFlagsForTurn: vi.fn(() => []),
     triggerEmotionAppraisal: vi.fn(async () => undefined),
+    reserveNarrativeEmotionAppraisal: vi.fn(() => ({
+      schemaVersion: 1,
+      mode: 'drift_only',
+      baselineVad: { valence: -0.5, arousal: 0, dominance: 0 },
+      targetVad: { valence: 0, arousal: 0, dominance: 0 },
+      vadDelta: 0.5,
+      threshold: 0.35,
+    })),
     ...params.emotionSelfModelRuntimeOverrides,
   };
   const sessionManager = {
@@ -4023,6 +4031,31 @@ describe('handleMessageForTurn observer eval sidecar seam', () => {
 });
 
 describe('handleMessageForTurn compaction scheduling', () => {
+  it('does not enqueue narrative appraisal work for a stable turn', async () => {
+    const reserveNarrativeEmotionAppraisal = vi.fn(() => null);
+    const runtime = createRuntime({
+      eventBus: new EventBus(),
+      sessionManager: {} as SessionManager,
+      buildContext: vi.fn(async () => ({
+        systemPrompt: 'System prompt',
+        messages: [],
+        manifest: makeContextManifestFixture(),
+      })),
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage: vi.fn(() => 2),
+      emotionSelfModelRuntimeOverrides: { reserveNarrativeEmotionAppraisal } as never,
+    });
+
+    await handleMessageForTurn(runtime, createMessage('stable-emotion-turn'));
+
+    const jobs = (runtime.enqueuePostTurnBackgroundWork as ReturnType<typeof vi.fn>)
+      .mock.calls[0]?.[0] as Array<{ kind: string }>;
+    expect(reserveNarrativeEmotionAppraisal).toHaveBeenCalledTimes(1);
+    expect(jobs.map(job => job.kind)).not.toContain('emotion_appraisal');
+  });
+
   it('threads ICP lineage into extraction, intention, emotion, and compaction side work', async () => {
     const eventBus = new EventBus();
     const scheduleAutoCompactionBetweenTurns = vi.fn(async () => undefined);

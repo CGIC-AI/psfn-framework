@@ -245,6 +245,10 @@
   "backgroundFailureEscalationThreshold": 3,
   "memoryRefreshFailureAlertThreshold": 3,
   "intakeScreeningFailureAlertThreshold": 3,
+  "narrativeEmotionAppraisal": {
+    "mode": "drift_only",
+    "vadDeltaThreshold": 0.35
+  },
   "groupMemory": {
     "enabled": true,
     "memoryMode": "auto",

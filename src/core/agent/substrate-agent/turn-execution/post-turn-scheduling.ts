@@ -311,6 +311,13 @@ export async function schedulePostTurnWork(input: {
   // their source-record-only intention hook is a valid background contract.
   const hasBoundedSessionSource = userSessionEntryId !== null
     || assistantSessionEntryId !== null;
+  const appraisalState = projectEmotionAppraisalState(internalState);
+  const narrativeAppraisalDrift = hasBoundedSessionSource
+    ? runtime.emotionSelfModelRuntime.reserveNarrativeEmotionAppraisal({
+        sessionChannelId: emotionSessionId,
+        appraisalState,
+      })
+    : null;
   const payloads: BackgroundWorkPayload[] = [];
   if (runtime.memoryExtractor && hasBoundedSessionSource) {
     payloads.push({
@@ -328,20 +335,25 @@ export async function schedulePostTurnWork(input: {
       kind: 'intention_post_turn_hooks',
       source,
       ...(canonicalContactKey ? { canonicalContactKey } : {}),
+      ...(hasBoundedSessionSource ? { appraisalState } : {}),
     },
   );
   if (hasBoundedSessionSource) {
+    if (narrativeAppraisalDrift) {
+      payloads.push({
+        schemaVersion: 1,
+        kind: 'emotion_appraisal',
+        source,
+        emotionSessionId,
+        internalStateSnapshotRef,
+        appraisalState,
+        driftDecision: narrativeAppraisalDrift,
+        personalityOwnerRef: 'character-card',
+        personalityProjectionHash: fingerprintEmotionAppraisalPersonalityProjection(templateVariables),
+        ...(icpCorrelation ? { icpCorrelation } : {}),
+      });
+    }
     payloads.push({
-      schemaVersion: 1,
-      kind: 'emotion_appraisal',
-      source,
-      emotionSessionId,
-      internalStateSnapshotRef,
-      appraisalState: projectEmotionAppraisalState(internalState),
-      personalityOwnerRef: 'character-card',
-      personalityProjectionHash: fingerprintEmotionAppraisalPersonalityProjection(templateVariables),
-      ...(icpCorrelation ? { icpCorrelation } : {}),
-    }, {
       schemaVersion: 1,
       kind: 'auto_compaction',
       source,

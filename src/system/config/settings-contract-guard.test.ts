@@ -274,6 +274,8 @@ describe('settings contract guard', () => {
     // (absent from the seed settings.json) are now surfaced in their sections.
     expect(SETTINGS_GARDEN_ADVANCED_SECTION_FIELDS.channels).toContain('promotedExtendedTools');
     expect(SETTINGS_GARDEN_ADVANCED_SECTION_FIELDS.memory).toContain('emotionScoping');
+    expect(SETTINGS_GARDEN_ADVANCED_SECTION_FIELDS.memory)
+      .toContain('narrativeEmotionAppraisal');
     expect(SETTINGS_GARDEN_ADVANCED_SECTION_FIELDS.memory).toContain('embeddingProvider');
     expect(SETTINGS_GARDEN_ADVANCED_SECTION_FIELDS.sessions).toContain('sessionMirrorEnabled');
     expect(SETTINGS_GARDEN_ADVANCED_SECTION_FIELDS.sessions).toContain('continuityMessageLimit');

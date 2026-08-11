@@ -129,14 +129,65 @@ export function wireIcpInitiationSources(
       await feltImpulseAdapter.onLeverSignal(signal);
     });
     log.info('ICP felt-impulse initiation source wired to the emo-sim would_message lever');
-  } else if (input.config.enabled) {
-    // Explicit, not silent: autonomy is on but the affect-driven impulse has
-    // no path (no source runtime or no peer directory in this topology).
-    log.warn('ICP felt-impulse initiation source NOT wired', {
-      hasSourceRuntime: Boolean(sourceRuntime),
-      hasPeerDirectory: Boolean(input.peerDirectory),
-      hint: 'requires multi-companion topology (candidate store + peers) and the observer-sidecar levers enabled',
+  } else {
+    // Always install one required-event consumer. A disabled or incomplete ICP
+    // lane is a terminal fail-closed disposition, not an absent subscriber
+    // that makes the observer retry and log the same qualified impulse on each
+    // later observation.
+    const outcome = input.config.enabled ? 'suppressed' : 'not_authorized';
+    const reasonCode = !input.config.enabled
+      ? 'autonomy_disabled'
+      : sourceRuntime
+        ? 'peer_directory_unavailable'
+        : 'source_runtime_unavailable';
+    unregisterFeltImpulseAdapter = input.eventBus.on('icp.felt_impulse.lever', async (signal) => {
+      const emitTransition = async (
+        stage: 'felt_impulse' | 'final_disposition',
+        transitionOutcome: 'received' | 'suppressed' | 'not_authorized',
+      ): Promise<void> => {
+        try {
+          await input.eventBus.emit('emotion.proactive.transition', {
+            correlationId: signal.correlationId,
+            lever: signal.lever,
+            stage,
+            outcome: transitionOutcome,
+            firedAtMs: signal.firedAtMs,
+            reasonCode,
+            timestamp: Date.now(),
+          });
+        } catch (error) {
+          log.warn('ICP felt-impulse terminal transition telemetry failed', {
+            correlationId: signal.correlationId,
+            stage,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      };
+      await emitTransition('felt_impulse', 'received');
+      try {
+        await input.eventBus.emit('icp.felt_impulse.outcome', {
+          correlationId: signal.correlationId,
+          outcome,
+          reason: reasonCode,
+          timestamp: Date.now(),
+        });
+      } catch (error) {
+        log.warn('ICP felt-impulse terminal outcome telemetry failed', {
+          correlationId: signal.correlationId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      await emitTransition('final_disposition', outcome);
     });
+    if (input.config.enabled) {
+      // Explicit, not silent: autonomy is on but the affect-driven impulse has
+      // no candidate path (no source runtime or peer directory in this topology).
+      log.warn('ICP felt-impulse initiation source unavailable; terminal suppression wired', {
+        hasSourceRuntime: Boolean(sourceRuntime),
+        hasPeerDirectory: Boolean(input.peerDirectory),
+        hint: 'requires multi-companion topology (candidate store + peers) and the observer-sidecar levers enabled',
+      });
+    }
   }
 
   return {

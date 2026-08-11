@@ -46,8 +46,16 @@ function submittedResult(): IcpInitiationSourceResult {
   };
 }
 
-function signal(firedAtMs = T0) {
-  return { lever: 'would_message' as const, firedAtMs, timestamp: firedAtMs };
+function signal(
+  firedAtMs = T0,
+  correlationId = `felt-impulse:would_message:${firedAtMs}`,
+) {
+  return {
+    lever: 'would_message' as const,
+    correlationId,
+    firedAtMs,
+    timestamp: firedAtMs,
+  };
 }
 
 describe('felt-impulse ICP initiation (psfn-framework-hrmrq.34, operator ruling D4)', () => {
@@ -90,6 +98,26 @@ describe('felt-impulse ICP initiation (psfn-framework-hrmrq.34, operator ruling 
     expect(submit.mock.calls[0]?.[0]).toMatchObject({ peerContactId: 'peer-b' });
   });
 
+  it('submits nothing when every known peer is currently ineligible', async () => {
+    const submit = vi.fn(async () => submittedResult());
+    const adapter = createIcpFeltImpulseInitiationAdapter({
+      sourceRuntime: { submit },
+      peers: {
+        listKnownPeerAvailability: async () => [
+          peerOf('peer-a', { eligible: false, leaseState: 'busy' }),
+          peerOf('peer-b', { eligible: false, leaseState: 'do_not_disturb' }),
+        ],
+      },
+      isAuthorized: () => true,
+      now: () => T0,
+    });
+
+    await expect(adapter.onLeverSignal(signal())).resolves.toEqual({
+      kind: 'no_eligible_peer',
+    });
+    expect(submit).not.toHaveBeenCalled();
+  });
+
   it('fails EXPLICITLY (event + outcome) when no companion-channel sibling contact exists', async () => {
     const submit = vi.fn();
     const eventBus = new EventBus();
@@ -110,7 +138,7 @@ describe('felt-impulse ICP initiation (psfn-framework-hrmrq.34, operator ruling 
     expect(outcome).toEqual({ kind: 'no_eligible_peer' });
     expect(submit).not.toHaveBeenCalled();
     expect(outcomes).toEqual([
-      { outcome: 'no_eligible_peer', reason: 'missing_companion_channel_contacts' },
+      { outcome: 'no_eligible_peer', reason: 'missing_or_ineligible_companion_channel_contacts' },
     ]);
   });
 
@@ -150,5 +178,52 @@ describe('felt-impulse ICP initiation (psfn-framework-hrmrq.34, operator ruling 
     const third = await adapter.onLeverSignal(signal(nowMs));
     expect(third.kind).toBe('submitted');
     expect(submit).toHaveBeenCalledTimes(2);
+  });
+
+  it('deduplicates a replayed correlation even after the local flood floor', async () => {
+    let nowMs = T0;
+    const submit = vi.fn(async () => submittedResult());
+    const adapter = createIcpFeltImpulseInitiationAdapter({
+      sourceRuntime: { submit },
+      peers: { listKnownPeerAvailability: async () => [peerOf('peer-a')] },
+      isAuthorized: () => true,
+      now: () => nowMs,
+    });
+
+    const first = await adapter.onLeverSignal(signal(T0));
+    nowMs = T0 + FELT_IMPULSE_MIN_INTERVAL_MS;
+    const replay = await adapter.onLeverSignal(signal(
+      T0 + 5_000,
+      `felt-impulse:would_message:${T0}`,
+    ));
+
+    expect(first.kind).toBe('submitted');
+    expect(replay).toEqual({ kind: 'deduped', candidateId: submittedResult().candidateId });
+    expect(submit).toHaveBeenCalledTimes(1);
+  });
+
+  it('emits content-free correlated transition telemetry through final disposition', async () => {
+    const eventBus = new EventBus();
+    const transitions: Array<Record<string, unknown>> = [];
+    eventBus.on('emotion.proactive.transition', event => transitions.push(event));
+    const adapter = createIcpFeltImpulseInitiationAdapter({
+      sourceRuntime: { submit: vi.fn(async () => submittedResult()) },
+      peers: { listKnownPeerAvailability: async () => [peerOf('peer-a')] },
+      isAuthorized: () => true,
+      eventBus,
+      now: () => T0,
+    });
+
+    await adapter.onLeverSignal(signal());
+
+    expect(transitions.map(event => event.stage)).toEqual([
+      'felt_impulse',
+      'candidate_submission',
+      'final_disposition',
+    ]);
+    expect(transitions.every(event => (
+      event.correlationId === `felt-impulse:would_message:${T0}`
+    ))).toBe(true);
+    expect(JSON.stringify(transitions)).not.toContain('wanting to reach out');
   });
 });

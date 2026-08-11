@@ -118,6 +118,17 @@ describe('gateway RPC parameter decoder catalog', () => {
       messages: [{ role: 'user', content: 42 }],
       systemPrompt: '',
     });
+    expectInvalid(gatewayMethodParamDecoders['llm.chat'], {
+      model: 'test-model',
+      provider: 'test-provider',
+      messages: [{
+        role: 'toolResult',
+        toolCallId: 'call-1',
+        content: [{ type: 'text', text: 'result' }],
+        isError: false,
+      }],
+      systemPrompt: '',
+    });
     expectInvalid(gatewayMethodParamDecoders['notify.ntfy'], {
       message: 'hello',
       sender: { kind: 'operator', provenance: 'test' },

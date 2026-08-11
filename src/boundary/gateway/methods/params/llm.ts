@@ -47,11 +47,38 @@ const messageContent = Type.Union([
   Type.String(),
   Type.Array(gatewayLLMContentBlock),
 ]);
-const gatewayMessage = strictObject({
+const gatewayConversationMessage = strictObject({
   role: enumSchema(['user', 'assistant', 'system']),
   content: messageContent,
   provenance: Type.Optional(unknownRecord),
 });
+const gatewayToolResultMessage = strictObject({
+  role: Type.Literal('toolResult'),
+  toolCallId: Type.String(),
+  toolName: Type.String(),
+  content: Type.Array(Type.Union([
+    strictObject({
+      type: Type.Literal('text'),
+      text: Type.String(),
+      textSignature: optionalString,
+    }),
+    strictObject({
+      type: Type.Literal('image'),
+      data: Type.String(),
+      mimeType: Type.String(),
+    }),
+    strictObject({
+      type: Type.Literal('gateway_image_ref'),
+      handle: Type.String(),
+    }),
+  ])),
+  isError: Type.Boolean(),
+  provenance: Type.Optional(unknownRecord),
+});
+const gatewayMessage = Type.Union([
+  gatewayConversationMessage,
+  gatewayToolResultMessage,
+]);
 const toolSchema = strictObject({
   name: Type.String(),
   description: Type.String(),

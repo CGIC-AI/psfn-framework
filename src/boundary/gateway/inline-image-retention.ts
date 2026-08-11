@@ -3,6 +3,7 @@ import { isObjectRecord as isRecord } from '../../shared/utils/types.js';
 import type {
   GatewayLLMContentBlock,
   GatewayLLMMessage,
+  GatewayToolResultContentBlock,
 } from './protocol.js';
 
 export const GATEWAY_INLINE_IMAGE_REFERENCE_TYPE = 'gateway_image_ref';
@@ -37,6 +38,14 @@ export interface GatewayInlineImageRetentionStats {
 interface GatewayRetainedImageEntry extends GatewayRetainedImage {
   descriptor: GatewayRetainedImageDescriptor;
   decodedBytes: number;
+}
+
+function isGatewayToolResultContentBlock(
+  block: GatewayLLMContentBlock,
+): block is GatewayToolResultContentBlock {
+  return block.type === 'text'
+    || block.type === 'image'
+    || block.type === GATEWAY_INLINE_IMAGE_REFERENCE_TYPE;
 }
 
 export class GatewayInlineImageRetentionMissError extends Error {
@@ -215,9 +224,18 @@ export function resolveGatewayInlineImageReferences(
         mimeType: image.mimeType,
       });
     }
-    resolved.push(resolvedMessage
-      ? { ...message, content: resolvedContent }
-      : message);
+    if (!resolvedMessage) {
+      resolved.push(message);
+      continue;
+    }
+    if (message.role === 'toolResult') {
+      if (!resolvedContent.every(isGatewayToolResultContentBlock)) {
+        throw new Error('Gateway tool-result content widened outside its canonical wire contract');
+      }
+      resolved.push({ ...message, content: resolvedContent });
+      continue;
+    }
+    resolved.push({ ...message, content: resolvedContent });
   }
   return resolvedCount > 0 ? resolved : messages;
 }

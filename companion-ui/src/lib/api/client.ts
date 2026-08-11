@@ -277,6 +277,18 @@ export class SatelliteHubClient {
     this.send({ type: 'interrupt' });
   }
 
+  startPcmAudioStream(): Promise<void> {
+    return Promise.reject(new Error('Microphone audio is unavailable on the Satellite Hub transport'));
+  }
+
+  sendPcmAudio(_pcm: Uint8Array): Promise<void> {
+    return Promise.reject(new Error('Microphone audio is unavailable on the Satellite Hub transport'));
+  }
+
+  stopPcmAudioStream(): Promise<void> {
+    return Promise.reject(new Error('Microphone audio is unavailable on the Satellite Hub transport'));
+  }
+
   sendApprovalDecision(id: string, decision: 'approve' | 'deny'): void {
     this.send({ type: 'approval.decision', id, decision });
   }

@@ -112,10 +112,10 @@ export function App() {
       await store.startPcmAudioStream();
       z02AudioStoreRef.current = store;
     },
-    write(pcm: Uint8Array): void {
+    write(pcm: Uint8Array): Promise<void> {
       const store = z02AudioStoreRef.current;
       if (!store) throw new Error('Companion audio stream is not ready');
-      store.sendPcmAudio(pcm);
+      return store.sendPcmAudio(pcm);
     },
     async stop(): Promise<void> {
       const store = z02AudioStoreRef.current;
@@ -255,7 +255,8 @@ export function App() {
   const companionTalking = Boolean(streamState.liveAssistant)
     || (latestTrace?.operationClass === 'relay_tts' && latestTrace.status === 'active');
   const voiceStopActive = composer.micMode === 'voice' && companionTalking;
-  const generationStopActive = Boolean(streamState.liveAssistant);
+  const generationStopActive = Boolean(streamState.liveAssistant)
+    || (z02Link.state.phase === 'linked' && streamState.phase === 'responding');
 
   async function refreshAuthority(connectWhenAllowed: boolean) {
     const authorityEpoch = authorityEpochRef.current + 1;

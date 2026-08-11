@@ -12,7 +12,7 @@ describe('useZ02Link', () => {
     const disconnect = vi.fn();
     const relay = {
       start: vi.fn(async () => undefined),
-      write: vi.fn(),
+      write: vi.fn(async () => undefined),
       stop: vi.fn(async () => undefined),
     };
     let emitPcm: ((pcm: Uint8Array) => void) | undefined;
@@ -49,12 +49,12 @@ describe('useZ02Link', () => {
     expect(result.current.state).toMatchObject({ audioFrames: 1, decodedFrames: 1 });
     expect(relay.start).toHaveBeenCalledOnce();
     expect(relay.write).toHaveBeenCalledWith(Uint8Array.of(0x00, 0x01));
-    expect(result.current.state).toMatchObject({ relayedFrames: 1 });
+    await vi.waitFor(() => expect(result.current.state).toMatchObject({ relayedFrames: 1 }));
     expect(result.current.state.detail).toContain('Relayed 1 PCM chunk');
 
     act(() => { remoteDisconnect?.(); });
     expect(result.current.state).toMatchObject({ phase: 'idle', detail: 'Badge disconnected.' });
-    expect(relay.stop).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(relay.stop).toHaveBeenCalledOnce());
 
     act(() => { result.current.disconnect(); });
     expect(disconnect).not.toHaveBeenCalled();
@@ -85,12 +85,40 @@ describe('useZ02Link', () => {
     });
   });
 
+  it('surfaces backend audio teardown failures after disconnecting the badge', async () => {
+    const relay = {
+      start: vi.fn(async () => undefined),
+      write: vi.fn(async () => undefined),
+      stop: vi.fn(async () => { throw new Error('backend stop failed'); }),
+    };
+    const connector: Z02LinkConnector = {
+      connect: vi.fn(async callbacks => {
+        await callbacks.prepareAudio?.();
+        return {
+          deviceName: 'Z02 Test Badge',
+          disconnect: vi.fn(),
+          microphone: 'pcm16-16khz',
+          transport: 'stock-rcsp',
+        } satisfies Z02LinkConnection;
+      }),
+    };
+    const { result } = renderHook(() => useZ02Link(connector, { audioRelay: relay }));
+
+    await act(async () => { await result.current.link(); });
+    act(() => { result.current.disconnect(); });
+
+    await vi.waitFor(() => expect(result.current.state).toEqual({
+      phase: 'error',
+      detail: 'The badge disconnected, but the Companion audio stream did not stop cleanly.',
+    }));
+  });
+
   it('decodes Stark Ruby Omi frames to PCM through the live WebCodecs seam', async () => {
     const decode = vi.fn();
     const close = vi.fn();
     const relay = {
       start: vi.fn(async () => undefined),
-      write: vi.fn(),
+      write: vi.fn(async () => undefined),
       stop: vi.fn(async () => undefined),
     };
     let emitAudio: ((frame: {
@@ -138,7 +166,7 @@ describe('useZ02Link', () => {
     expect(decode).toHaveBeenCalledWith(Uint8Array.of(0xaa));
     expect(result.current.state).toMatchObject({ audioFrames: 1, decodedFrames: 1 });
     expect(relay.write).toHaveBeenCalledWith(Uint8Array.of(0x00, 0x01));
-    expect(result.current.state).toMatchObject({ relayedFrames: 1 });
+    await vi.waitFor(() => expect(result.current.state).toMatchObject({ relayedFrames: 1 }));
     expect(result.current.state.detail).toContain('decoded to PCM');
 
     act(() => { result.current.disconnect(); });

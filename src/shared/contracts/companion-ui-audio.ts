@@ -9,13 +9,13 @@ const textDecoder = new TextDecoder('utf-8', { fatal: true });
 
 export type CompanionUiAudioControlFrame = Readonly<{
   schemaVersion: 1;
-  type: 'audio.start' | 'audio.stop';
+  type: 'audio.start' | 'audio.interrupt' | 'audio.stop';
   requestId: string;
 }>;
 
 export type CompanionUiAudioServerFrame = Readonly<{
   schemaVersion: 1;
-  type: 'audio.ready' | 'audio.stopped';
+  type: 'audio.ready' | 'audio.turn.started' | 'audio.turn.ended' | 'audio.stopped';
   requestId: string;
 }> | Readonly<{
   schemaVersion: 1;
@@ -62,13 +62,13 @@ export function parseCompanionUiAudioControlFrame(
   if (!isRecord(value)
     || !hasExactKeys(value, ['schemaVersion', 'type', 'requestId'])
     || value.schemaVersion !== 1
-    || (value.type !== 'audio.start' && value.type !== 'audio.stop')
+    || !['audio.start', 'audio.interrupt', 'audio.stop'].includes(String(value.type))
     || !validRequestId(value.requestId)) {
     throw new CompanionUiAudioProtocolError();
   }
   return Object.freeze({
     schemaVersion: 1,
-    type: value.type,
+    type: value.type as CompanionUiAudioControlFrame['type'],
     requestId: value.requestId,
   });
 }
@@ -108,11 +108,12 @@ export function parseCompanionUiAudioServerFrame(
   if (!isRecord(value) || value.schemaVersion !== 1 || !validRequestId(value.requestId)) {
     return undefined;
   }
-  if ((value.type === 'audio.ready' || value.type === 'audio.stopped')
+  if (['audio.ready', 'audio.turn.started', 'audio.turn.ended', 'audio.stopped']
+    .includes(String(value.type))
     && hasExactKeys(value, ['schemaVersion', 'type', 'requestId'])) {
     return Object.freeze({
       schemaVersion: 1,
-      type: value.type,
+      type: value.type as Extract<CompanionUiAudioServerFrame, { sequence?: never }>['type'],
       requestId: value.requestId,
     });
   }

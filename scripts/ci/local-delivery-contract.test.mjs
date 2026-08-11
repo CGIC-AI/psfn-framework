@@ -1059,6 +1059,8 @@ test('agent contracts enforce close-on-main and avoid floating tool installers',
   const agents = readFileSync('AGENTS.md', 'utf8');
   const claude = readFileSync('CLAUDE.md', 'utf8');
   const orchestration = readFileSync('docs/orchestration-process.md', 'utf8');
+  const reviewWorkflow = readFileSync('docs/internal-review-workflow.md', 'utf8');
+  const pullRequestTemplate = readFileSync('.github/pull_request_template.md', 'utf8');
 
   assert.equal((agents.match(/<!-- BEGIN BEADS/g) ?? []).length, 1);
   assert.doesNotMatch(agents, /ultimate_bug_scanner\/main|npx -y fallow/);
@@ -1077,6 +1079,11 @@ test('agent contracts enforce close-on-main and avoid floating tool installers',
   );
   assert.match(orchestration, /create a new testing or validation bead before\s+closing/);
   assert.match(orchestration, /Never reopen the delivered implementation bead/);
+  assert.doesNotMatch(reviewWorkflow, /`BLOCKER:` rationale/);
+  assert.match(reviewWorkflow, /Tag an\s+out-of-window PR `change-budget:exception`/);
+  assert.doesNotMatch(pullRequestTemplate, /mandatory window|`BLOCKER:`/);
+  assert.match(pullRequestTemplate, /inside the standard window/);
+  assert.match(pullRequestTemplate, /explain the variance in one line/);
 });
 
 test('trusted PR label automation has the write scope required by the labels API', () => {

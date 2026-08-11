@@ -57,6 +57,10 @@ interface CogSecEventListLite {
   events?: Array<{ type: string; status: string }>;
 }
 
+interface JournalStatusLite {
+  attentionCount: number;
+}
+
 async function confirmationsCount(): Promise<number> {
   const data = await apiGet<AdminConfirmationsData>('/api/admin/confirmations');
   if (!data.available) return 0;
@@ -89,10 +93,16 @@ async function sessionIntegrityIncidentsCount(): Promise<number> {
   ).length;
 }
 
+async function journalHealthAttentionCount(): Promise<number> {
+  const data = await apiGet<JournalStatusLite>('/api/admin/values/status');
+  return data.attentionCount;
+}
+
 export const ATTENTION_SOURCES: AttentionSource[] = [
   { path: '/confirmations', fetchCount: confirmationsCount },
   { path: '/contact-approvals', fetchCount: contactApprovalsCount },
   { path: '/cognitive-security/approvals', fetchCount: cogsecApprovalsCount },
   { path: '/cognitive-security/remediation', fetchCount: sessionIntegrityIncidentsCount },
   { path: '/graph-proposals', fetchCount: graphProposalsCount },
+  { path: '/values', fetchCount: journalHealthAttentionCount },
 ];

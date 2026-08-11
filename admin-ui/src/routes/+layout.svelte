@@ -36,6 +36,7 @@
   } from '$lib/stores/ui-preferences.svelte';
   import { getToasts, removeToast } from '$lib/stores/toast.svelte';
   import { clearToasts } from '$lib/stores/toast.svelte';
+  import { clearJournalDisclosures } from '$lib/stores/journal-disclosure-session';
   import {
     activateCompanionScopeFromPath,
     isFleetOverviewPath,
@@ -182,6 +183,7 @@
       return;
     }
     if (!isAuthenticated()) {
+      clearJournalDisclosures();
       if (companionScope) {
         window.location.assign('/fleet/login');
       } else {
@@ -203,6 +205,7 @@
     if (companionScope || isFleetPage) {
       try {
         await logoutFleetSession();
+        clearJournalDisclosures();
         clearToken();
         window.location.assign('/fleet/login');
         return;
@@ -224,6 +227,7 @@
     } catch {
       // Best-effort server-side cookie clear; client token clear still executes.
     }
+    clearJournalDisclosures();
     clearToken();
     goto(`${base}/login`);
   }

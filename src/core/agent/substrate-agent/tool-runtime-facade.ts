@@ -140,6 +140,7 @@ const CANDIDATE_TOOL_MUTATION_DENIAL =
 //                   no outward image expression or heavyweight analysis loop.
 //   - maintenance-> NOT available. Pure ops/housekeeping.
 const MAINTENANCE_EXPRESSIVE_TASK_KINDS = ['heartbeat'] as const;
+const PRIVATE_REFLECTION_TASK_KINDS = ['reflection'] as const;
 
 const MAINTENANCE_TOOL_POLICIES = new Map<string, MaintenanceToolPolicy>([
   ['contact', {
@@ -149,6 +150,11 @@ const MAINTENANCE_TOOL_POLICIES = new Map<string, MaintenanceToolPolicy>([
   ['identity', {
     allowedActions: ['list_layers', 'get_layer', 'diff_layer', 'history'],
     resolveAction: resolveMaintenanceIdentityAction,
+  }],
+  ['memory', {
+    allowedActions: ['search'],
+    resolveAction: resolveMaintenanceMemoryAction,
+    allowedTaskKinds: PRIVATE_REFLECTION_TASK_KINDS,
   }],
   ['session', {
     allowedActions: ['list', 'search', 'grep'],
@@ -268,6 +274,11 @@ function resolveMaintenanceSessionAction(params: Record<string, unknown>): strin
     default:
       return null;
   }
+}
+
+function resolveMaintenanceMemoryAction(params: Record<string, unknown>): string | null {
+  const rawAction = typeof params.action === 'string' ? params.action.trim() : '';
+  return rawAction === 'search' ? rawAction : null;
 }
 
 function resolveMaintenanceSelfStatusAction(params: Record<string, unknown>): string | null {

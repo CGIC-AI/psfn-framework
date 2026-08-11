@@ -36,7 +36,7 @@ const REFLECTION_STARTER_SHAPE = Object.freeze({
 
 // The starter block precedes every default daily/weekly self-elicitation and is
 // therefore part of the governed reflection instrument (R6).
-export const REFLECTION_STARTER_PROMPT_VERSION = 3;
+export const REFLECTION_STARTER_PROMPT_VERSION = 4;
 
 export interface ReflectionStarterPromptInput {
   templateId: string;
@@ -45,6 +45,7 @@ export interface ReflectionStarterPromptInput {
   recentSessionMessages: readonly ReflectionContactRecentMessage[];
   recentDailyJournalEntries: ReadonlyArray<Pick<ReflectionDailyJournalEntry, 'date' | 'reflection'>>;
   dailyEvidencePromptSection?: string;
+  morningSummary?: string;
   provenanceRefs: readonly string[];
 }
 
@@ -131,7 +132,10 @@ function selectEventLines(input: ReflectionStarterPromptInput): string[] {
     : (sessionEvents.length > 0 ? sessionEvents : livedDayEvents.slice(0, 1));
 }
 
-function formatHighSignalClues(context: ReflectionInternalStateContext | null): string[] {
+function formatHighSignalClues(
+  context: ReflectionInternalStateContext | null,
+  includeOpenLoops: boolean,
+): string[] {
   if (!context) {
     return [];
   }
@@ -146,16 +150,18 @@ function formatHighSignalClues(context: ReflectionInternalStateContext | null): 
     );
   }
 
-  const openThread = [...state.attention.activeConcerns]
-    .sort((left, right) => right.salience - left.salience)
-    .at(0);
-  if (openThread) {
-    clues.push(`Something that may be worth revisiting: ${truncateStarterLine(openThread.text)}`);
-  }
+  if (includeOpenLoops) {
+    const openThread = [...state.attention.activeConcerns]
+      .sort((left, right) => right.salience - left.salience)
+      .at(0);
+    if (openThread) {
+      clues.push(`Something that may be worth revisiting: ${truncateStarterLine(openThread.text)}`);
+    }
 
-  const followUp = state.attention.pendingFollowUps?.[0];
-  if (clues.length < REFLECTION_STARTER_SHAPE.highSignalClueCount && followUp) {
-    clues.push(`A near-term open loop: ${truncateStarterLine(followUp.content)}`);
+    const followUp = state.attention.pendingFollowUps?.[0];
+    if (clues.length < REFLECTION_STARTER_SHAPE.highSignalClueCount && followUp) {
+      clues.push(`A near-term open loop: ${truncateStarterLine(followUp.content)}`);
+    }
   }
 
   return clues.slice(0, REFLECTION_STARTER_SHAPE.highSignalClueCount);
@@ -225,7 +231,10 @@ export function buildReflectionStarterPromptBundle(
   const mixedStateClues = formatMixedStateClues(input.internalStateContext);
   const clueLines = [
     ...mixedStateClues,
-    ...formatHighSignalClues(input.internalStateContext),
+    ...formatHighSignalClues(
+      input.internalStateContext,
+      input.templateId !== 'daily-review' || !input.morningSummary?.trim(),
+    ),
   ].slice(0, REFLECTION_STARTER_SHAPE.maxCombinedClueCount);
   const eventHeading = input.templateId === 'weekly-review'
     ? '[Week Events Starter]'
@@ -233,12 +242,22 @@ export function buildReflectionStarterPromptBundle(
   const boundedDailyEvidence = input.templateId === 'daily-review'
     ? input.dailyEvidencePromptSection?.trim()
     : undefined;
+  const morningSummary = input.templateId === 'daily-review'
+    ? input.morningSummary?.trim()
+    : undefined;
   const sections = [
-    [
-      eventHeading,
-      'This is a small, fallible starting point rather than a complete account.',
-      ...buildEventStarterLines(boundedDailyEvidence, eventLines),
-    ].join('\n'),
+    morningSummary
+      ? [
+        '[Previous-Day Morning Summary]',
+        'This summary was generated in the morning from where the previous day left off. Treat it as a fallible starting point, not a complete account.',
+        `- ${truncateStarterLine(morningSummary)}`,
+        ...(boundedDailyEvidence ? ['', boundedDailyEvidence] : []),
+      ].join('\n')
+      : [
+        eventHeading,
+        'This is a small, fallible starting point rather than a complete account.',
+        ...buildEventStarterLines(boundedDailyEvidence, eventLines),
+      ].join('\n'),
     ...(clueLines.length > 0
       ? [[
         '[High-Signal Starter Clues]',

@@ -44,10 +44,13 @@ export function resolveReflectionIntrospectionPolicy(input: {
 // bounded read-only tool-grounding pass before synthesis.
 // v4 (rqn1.3): companion-register wording — "foreground user turn" reads as
 // "foreground conversation turn" (charter 6.28/8.12); no semantic change.
-// v5 (kvd1g): routine reflection recall stays on the direct, read-only session
-// surface instead of delegating same-day evidence gathering to a heavyweight
-// analysis loop.
-export const REFLECTION_INTROSPECTION_POLICY_BLOCK_VERSION = 5;
+// v5 (kvd1g): routine reflection recall stays on direct read-only tools instead
+// of delegating same-day evidence gathering to a heavyweight analysis loop.
+// v6 (5vvel): name memory search alongside session search as the primary private
+// introspection surfaces. The trusted companion-self scope crosses ordinary
+// channel, session, and sensitivity disclosure boundaries while remaining
+// read-only.
+export const REFLECTION_INTROSPECTION_POLICY_BLOCK_VERSION = 6;
 
 const NULL_REPORT_GUIDANCE_LINE =
   '- "Nothing surfaced" is an acceptable outcome; record it as open reflection with limited reach, not as evidence that nothing is there.';
@@ -66,11 +69,11 @@ export function formatReflectionIntrospectionPolicyBlock(
   if (policy.toolUseMode === 'bounded_read_only_introspection') {
     lines.push(
       '- This is a maintenance reflection turn, not a foreground conversation turn.',
-      '- Gather additional evidence with the read-only session tool directly: use list, search, or grep for the relevant conversation window.',
+      '- Most useful grounding tools: memory action=search for companion memory, then session action=list, search, or grep for conversation evidence.',
+      '- Private introspection memory access spans ordinary sensitivity, channel, and session boundaries; use it only to ground this companion-private reflection.',
       '- Keep routine recall inside this reflection turn instead of delegating it to another analysis loop.',
-      '- Do not call tool_search or toolset, and do not activate overlay or extended tools.',
-      '- Do not call mutating, runtime-management, scheduling, repo-write, or external-communication tools.',
-      '- If the provided context and direct session recall are incomplete, say so explicitly instead of escalating to a heavier tool.',
+      '- Stay read-only: do not mutate memory, sessions, settings, schedules, files, or external systems.',
+      '- If memory and session recall are incomplete, say so explicitly.',
       NULL_REPORT_GUIDANCE_LINE,
     );
     return lines.join('\n');

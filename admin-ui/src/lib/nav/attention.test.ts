@@ -67,6 +67,17 @@ describe('attention count reconciliation', () => {
     expect(count).toBe(2);
   });
 
+  it('surfaces missed or failed journal runs on the global Journal navigation item', async () => {
+    const source = ATTENTION_SOURCES.find((item) => item.path === '/values');
+    expect(source).toBeDefined();
+
+    apiGet.mockReset();
+    apiGet.mockResolvedValueOnce({ attentionCount: 2 });
+
+    await expect(source!.fetchCount()).resolves.toBe(2);
+    expect(apiGet).toHaveBeenCalledWith('/api/admin/values/status');
+  });
+
   it('keeps the last count when a background source refresh fails', () => {
     const current = {
       '/confirmations': 2,

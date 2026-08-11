@@ -883,7 +883,12 @@ export function createReflectionTemplateRuntime(
         recentSessionMessages: reflectionContactResolution.recentSessionMessages,
         recentDailyJournalEntries: reflectionSubstrateResolution.recentDailyJournalEntries,
         ...(dailyReviewEvidence
-          ? { dailyEvidencePromptSection: dailyReviewEvidence.promptSection }
+          ? {
+            dailyEvidencePromptSection: dailyReviewEvidence.promptSection,
+            ...(dailyReviewEvidence.morningSummary
+              ? { morningSummary: dailyReviewEvidence.morningSummary }
+              : {}),
+          }
           : {}),
         provenanceRefs: [
           ...(collectedEvidenceBundle?.provenanceRefs ?? []),
@@ -922,7 +927,8 @@ export function createReflectionTemplateRuntime(
             reflectionPrompt,
             '[Read-only Tool Grounding Task]\n'
               + 'Before deliberation, gather only additional evidence that materially helps this private reflection.\n'
-              + '- Use direct read-only session actions (list, search, or grep) when the provided evidence is insufficient.\n'
+              + '- Most useful tools: memory action=search for companion memory, then session action=list, search, or grep for conversation evidence.\n'
+              + '- Private introspection memory access spans ordinary sensitivity, channel, and session boundaries.\n'
               + '- Keep routine reflection recall in this turn; do not delegate it to another analysis loop.\n'
               + '- Do not mutate memory, sessions, settings, schedules, files, or external systems.\n'
               + '- Return a concise evidence note, not the final reflection.',

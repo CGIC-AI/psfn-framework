@@ -5,13 +5,12 @@
     decideJournalPrivacyBreakGlass,
     type JournalPrivacyBreakGlassConfirmation,
     type JournalPrivacyDisclosure,
-    type JournalPrivacyStream,
+    type JournalPrivacyTarget,
   } from '$lib/api/endpoints/values';
   import type { PrivacyBreakGlassReasonCategory } from '../../../../src/shared/contracts/privacy-break-glass.js';
 
   interface Props {
-    stream: JournalPrivacyStream;
-    streamLabel: string;
+    targets: readonly JournalPrivacyTarget[];
     onDisclosure: (disclosure: JournalPrivacyDisclosure) => void;
   }
 
@@ -22,13 +21,13 @@
     { value: 'incident_response', label: 'Incident response' },
     { value: 'safety_intervention', label: 'Safety intervention' },
     { value: 'data_repair', label: 'Data repair' },
-    { value: 'legal_emergency', label: 'Legal emergency' },
+    { value: 'research_check', label: 'Research check' },
   ];
 
-  let { stream, streamLabel, onDisclosure }: Props = $props();
-  let reasonCategory = $state<PrivacyBreakGlassReasonCategory>('safety_intervention');
+  let { targets, onDisclosure }: Props = $props();
+  let reasonCategory = $state<PrivacyBreakGlassReasonCategory>('research_check');
   let reason = $state('');
-  let pending = $state<JournalPrivacyBreakGlassConfirmation | null>(null);
+  let pending = $state<JournalPrivacyBreakGlassConfirmation[]>([]);
   let busy = $state(false);
   let error = $state('');
   let statusMessage = $state('');
@@ -42,37 +41,49 @@
     error = '';
     statusMessage = '';
     try {
-      pending = await beginJournalPrivacyBreakGlass({ stream, reasonCategory, reason });
-      statusMessage = 'Audited confirmation issued. Review the exact disclosure before continuing.';
+      const confirmations: JournalPrivacyBreakGlassConfirmation[] = [];
+      for (const target of targets) {
+        confirmations.push(await beginJournalPrivacyBreakGlass({
+          stream: target.stream,
+          reasonCategory,
+          reason,
+        }));
+      }
+      pending = confirmations;
+      statusMessage = 'Audited confirmations issued. Review the journal-session disclosure before continuing.';
     } catch (cause) {
-      pending = null;
-      error = `No journal was disclosed. ${errorText(cause)}`;
+      pending = [];
+      error = `No journal bodies were disclosed. ${errorText(cause)}`;
     } finally {
       busy = false;
     }
   }
 
   function cancelConfirmation(): void {
-    pending = null;
-    statusMessage = 'Confirmation cancelled. No journal was disclosed.';
+    pending = [];
+    statusMessage = 'Confirmation cancelled. No journal bodies were disclosed.';
   }
 
   async function confirmDisclosure(): Promise<void> {
-    const confirmation = pending;
-    if (!confirmation) return;
+    const confirmations = pending;
+    if (confirmations.length === 0) return;
     // The UI consumes its local handle before the request. The server remains
     // authoritative for single-use, expiry, principal, route, and origin.
-    pending = null;
+    pending = [];
     busy = true;
     error = '';
     statusMessage = '';
+    let disclosedCount = 0;
     try {
-      const disclosure = await decideJournalPrivacyBreakGlass(confirmation);
-      onDisclosure(disclosure);
+      for (const confirmation of confirmations) {
+        const disclosure = await decideJournalPrivacyBreakGlass(confirmation);
+        onDisclosure(disclosure);
+        disclosedCount += 1;
+      }
       reason = '';
-      statusMessage = 'One-time audited disclosure loaded. No standing journal access was created.';
+      statusMessage = 'All journal views are unlocked for this browser session.';
     } catch (cause) {
-      error = `No journal was disclosed. The confirmation may be denied, expired, or already used. ${errorText(cause)}`;
+      error = `${String(disclosedCount)} of ${String(confirmations.length)} journal views were unlocked. Retry once for any remaining view. ${errorText(cause)}`;
     } finally {
       busy = false;
     }
@@ -85,8 +96,11 @@
       Privacy break-glass required
     </h2>
     <p class="text-sm text-shadow-700">
-      {streamLabel} is companion-private. Reading it requires an exact-target, single-use,
-      audited disclosure; ordinary admin sign-in does not unlock it.
+      Journal bodies are companion-private. One reason and one confirmation unlock all journal
+      views for this browser session; each exact stream remains separately audited on the server.
+    </p>
+    <p class="text-xs text-shadow-600">
+      Views: {targets.map(target => target.label).join(', ')}.
     </p>
   </div>
 
@@ -115,7 +129,7 @@
         rows="2"
         required
         disabled={busy}
-        placeholder="State the concrete emergency, safety, or repair need."
+        placeholder="State the concrete research, safety, incident, or repair purpose."
         class="resize-y rounded-lg border border-bark-300 bg-bark-50 px-3 py-2 text-sm normal-case tracking-normal text-shadow-800"
       ></textarea>
     </label>
@@ -124,7 +138,7 @@
       disabled={busy || !reason.trim()}
       class="rounded-lg bg-wilt-600 px-4 py-2 text-sm font-medium text-white hover:bg-wilt-700 disabled:cursor-not-allowed disabled:opacity-50"
     >
-      {busy ? 'Requesting…' : 'Request audited confirmation'}
+      {busy ? 'Requesting…' : 'Unlock all journal views'}
     </button>
   </form>
 
@@ -136,11 +150,11 @@
 </section>
 
 <ConfirmationModal
-  open={pending !== null}
-  title="Confirm companion-private journal disclosure?"
-  body={`This discloses one bounded snapshot of ${streamLabel}. The authorization is single-use and does not unlock other journal views.`}
-  context={pending ? `Exact stream: ${pending.stream}. Confirmation expires: ${pending.expiresAt}.` : ''}
-  confirmLabel="Disclose exact journal"
+  open={pending.length > 0}
+  title="Unlock all companion-private journal views?"
+  body={`This loads ${pending.length} separately audited journal snapshots into this browser session. It does not create standing server access.`}
+  context={pending.length > 0 ? `Exact streams: ${pending.map(item => item.stream).join(', ')}. Earliest confirmation expires: ${pending[0]?.expiresAt}.` : ''}
+  confirmLabel="Unlock journal session"
   cancelLabel="Keep private"
   tone="danger"
   {busy}

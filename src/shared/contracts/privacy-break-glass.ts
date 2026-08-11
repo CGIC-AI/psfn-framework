@@ -5,7 +5,7 @@ export const PRIVACY_BREAK_GLASS_REASON_CATEGORIES = [
   'incident_response',
   'safety_intervention',
   'data_repair',
-  'legal_emergency',
+  'research_check',
 ] as const;
 
 export type PrivacyBreakGlassReasonCategory =

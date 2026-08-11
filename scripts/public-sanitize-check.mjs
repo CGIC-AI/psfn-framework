@@ -5,6 +5,7 @@ import path from 'node:path';
 
 export const SELF_PATH = 'scripts/public-sanitize-check.mjs';
 export const DEFAULT_LOCAL_BLOCKLIST_PATH = 'workspace/sanitize/local-blocklist.json';
+export const REWRITE_GENERATION_MARKER_PATH = 'config/history-rewrite-generation.json';
 
 // Beads history logs are machine-managed workspace artifacts, not public source/docs.
 const MACHINE_MANAGED_BEADS_HISTORY_FILES = new Set([
@@ -107,18 +108,19 @@ export function loadLocalBlocklist() {
 }
 
 /** @param {string} file */
-export function shouldSkipTrackedFile(file) {
+export function shouldSkipTrackedFile(file, rewriteGenerationActive = false) {
   const normalized = toPosixRelativePath(file);
   if (normalized === SELF_PATH) return true;
   if (!normalized.startsWith('.beads/')) return false;
   const basename = path.posix.basename(normalized);
+  if (basename === 'issues.jsonl' && rewriteGenerationActive) return false;
   return MACHINE_MANAGED_BEADS_HISTORY_FILES.has(basename);
 }
 
 /** @param {string} file */
-export function shouldScanTextContent(file) {
+export function shouldScanTextContent(file, rewriteGenerationActive = false) {
   const normalized = toPosixRelativePath(file);
-  if (shouldSkipTrackedFile(normalized)) return false;
+  if (shouldSkipTrackedFile(normalized, rewriteGenerationActive)) return false;
   const ext = path.extname(normalized).toLowerCase();
   return !BINARY_EXTENSIONS.has(ext);
 }
@@ -209,12 +211,15 @@ function listTrackedFiles() {
  *     loaded: boolean;
  *   };
  *   readTextFile?: (file: string) => string;
+ *   rewriteGenerationActive?: boolean;
  * }} [options]
  */
 export function scanPublicSanitizeTrackedFiles(trackedFiles, options = {}) {
   const localBlocklist = options.localBlocklist ?? loadLocalBlocklist();
   const readTextFile = options.readTextFile ?? ((file) => readFileSync(file, 'utf8'));
   const skipMissingWorkingTreeFiles = options.readTextFile === undefined;
+  const rewriteGenerationActive = options.rewriteGenerationActive
+    ?? existsSync(REWRITE_GENERATION_MARKER_PATH);
 
   /** @type {Array<{file:string, line:number, rule:string, snippet:string}>} */
   const violations = [];
@@ -240,11 +245,11 @@ export function scanPublicSanitizeTrackedFiles(trackedFiles, options = {}) {
       }
     }
 
-    if (shouldSkipTrackedFile(trackedFile)) {
+    if (shouldSkipTrackedFile(trackedFile, rewriteGenerationActive)) {
       continue;
     }
 
-    if (!shouldScanTextContent(trackedFile)) {
+    if (!shouldScanTextContent(trackedFile, rewriteGenerationActive)) {
       continue;
     }
 

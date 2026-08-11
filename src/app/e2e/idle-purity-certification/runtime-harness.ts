@@ -167,88 +167,103 @@ export async function startIdlePurityRuntimeHarness(input: {
   if (input.fixture.topology !== 'single_companion') {
     throw new Error('Idle-purity certification requires a single-companion fixture');
   }
-  const modelServer = await startIcpCertificationModelServer();
-  configureIcpCertificationModelEndpoint(input.fixture, modelServer.baseUrl);
   const previousOpenRouterApiKey = process.env.OPENROUTER_API_KEY;
-  process.env.OPENROUTER_API_KEY = 'idle-purity-loopback-key';
-  const companion = input.fixture.companions[0];
-  const config = hydrateJsonBackedRuntimeConfig(
-    loadAgentConfig(companion.env),
-    { seedDir: companion.env.CONFIG_DIR },
-  );
-  const gateway = new GatewayServer({
-    socketPath: input.fixture.gatewaySocketPath,
-    llmProvider: new LLMClient(config),
-    embeddingService: {
-      dims: CERTIFICATION_EMBEDDING_DIMS,
-      embed: async text => deterministicEmbedding(text),
-      embedBatch: async texts => texts.map(deterministicEmbedding),
-    },
-    discordAdapter: {
-      id: 'idle-purity-disabled-discord',
-      outbound: {
-        textChunkLimit: Number.MAX_SAFE_INTEGER,
-        sendText: async () => undefined,
-      },
-    },
-    policyConfig: { workspacePath: input.fixture.rootDir },
-    intakeScreeningMode: 'shadow',
-    intakeScreening: testShadowIntakeScreening(),
-    sessionHmacKeyring: CERTIFICATION_SESSION_KEYRING,
-    wyomingShardRouting: { enabled: false },
-    eventBus: new EventBus(),
-  });
+  const modelServer = await startIcpCertificationModelServer();
+  let gateway: GatewayServer | undefined;
+  let gatewayStarted = false;
   let agent: IdlePurityProductionAgent | undefined;
-  const adminTransportEndpoint = resolveAdminTransportClientEndpoint(companion.env);
-  try {
-    if (adminTransportEndpoint.mode !== 'socket') {
-      throw new Error('Idle-purity certification requires the local admin socket transport');
-    }
-    gateway.start();
-    await waitForSocket(input.fixture.gatewaySocketPath);
-    agent = await IdlePurityProductionAgent.start(companion);
-    await waitForSocket(adminTransportEndpoint.socketPath);
-  } catch (error) {
-    await agent?.stop().catch(() => undefined);
-    await gateway.stop().catch(() => undefined);
-    await modelServer.stop().catch(() => undefined);
-    if (previousOpenRouterApiKey === undefined) delete process.env.OPENROUTER_API_KEY;
-    else process.env.OPENROUTER_API_KEY = previousOpenRouterApiKey;
-    throw error;
-  }
-  const adminProxy = new GardenAdminTransportProxy(adminTransportEndpoint);
   let stopped = false;
-  return {
-    get modelRequestCount() {
-      return modelServer.requests.length;
-    },
-    async schedulerTaskIds() {
-      return parseSchedulerTaskIds(await adminProxy.requestJson('/api/admin/scheduler', {}));
-    },
-    async stop() {
-      if (stopped) return;
-      stopped = true;
-      const errors: unknown[] = [];
+
+  const cleanup = async (): Promise<unknown[]> => {
+    if (stopped) return [];
+    stopped = true;
+    const errors: unknown[] = [];
+    if (agent) {
       try {
         await agent.stop();
       } catch (error) {
         errors.push(error);
       }
+    }
+    if (gateway && gatewayStarted) {
       try {
         await gateway.stop();
       } catch (error) {
         errors.push(error);
       }
-      try {
-        await modelServer.stop();
-      } catch (error) {
-        errors.push(error);
-      }
-      if (previousOpenRouterApiKey === undefined) delete process.env.OPENROUTER_API_KEY;
-      else process.env.OPENROUTER_API_KEY = previousOpenRouterApiKey;
-      if (errors.length > 0) {
-        throw new AggregateError(errors, 'Failed to stop idle-purity runtime harness cleanly');
-      }
-    },
+    }
+    try {
+      await modelServer.stop();
+    } catch (error) {
+      errors.push(error);
+    }
+    if (previousOpenRouterApiKey === undefined) delete process.env.OPENROUTER_API_KEY;
+    else process.env.OPENROUTER_API_KEY = previousOpenRouterApiKey;
+    return errors;
   };
+
+  try {
+    process.env.OPENROUTER_API_KEY = 'idle-purity-loopback-key';
+    configureIcpCertificationModelEndpoint(input.fixture, modelServer.baseUrl);
+    const companion = input.fixture.companions[0];
+    const config = hydrateJsonBackedRuntimeConfig(
+      loadAgentConfig(companion.env),
+      { seedDir: companion.env.CONFIG_DIR },
+    );
+    gateway = new GatewayServer({
+      socketPath: input.fixture.gatewaySocketPath,
+      llmProvider: new LLMClient(config),
+      embeddingService: {
+        dims: CERTIFICATION_EMBEDDING_DIMS,
+        embed: async text => deterministicEmbedding(text),
+        embedBatch: async texts => texts.map(deterministicEmbedding),
+      },
+      discordAdapter: {
+        id: 'idle-purity-disabled-discord',
+        outbound: {
+          textChunkLimit: Number.MAX_SAFE_INTEGER,
+          sendText: async () => undefined,
+        },
+      },
+      policyConfig: { workspacePath: input.fixture.rootDir },
+      intakeScreeningMode: 'shadow',
+      intakeScreening: testShadowIntakeScreening(),
+      sessionHmacKeyring: CERTIFICATION_SESSION_KEYRING,
+      wyomingShardRouting: { enabled: false },
+      eventBus: new EventBus(),
+    });
+    const adminTransportEndpoint = resolveAdminTransportClientEndpoint(companion.env);
+    if (adminTransportEndpoint.mode !== 'socket') {
+      throw new Error('Idle-purity certification requires the local admin socket transport');
+    }
+    gatewayStarted = true;
+    gateway.start();
+    await waitForSocket(input.fixture.gatewaySocketPath);
+    agent = await IdlePurityProductionAgent.start(companion);
+    await waitForSocket(adminTransportEndpoint.socketPath);
+    const adminProxy = new GardenAdminTransportProxy(adminTransportEndpoint);
+    return {
+      get modelRequestCount() {
+        return modelServer.requests.length;
+      },
+      async schedulerTaskIds() {
+        return parseSchedulerTaskIds(await adminProxy.requestJson('/api/admin/scheduler', {}));
+      },
+      async stop() {
+        const errors = await cleanup();
+        if (errors.length > 0) {
+          throw new AggregateError(errors, 'Failed to stop idle-purity runtime harness cleanly');
+        }
+      },
+    };
+  } catch (error) {
+    const cleanupErrors = await cleanup();
+    if (cleanupErrors.length > 0) {
+      throw new AggregateError(
+        [error, ...cleanupErrors],
+        'Failed to start and clean up idle-purity runtime harness',
+      );
+    }
+    throw error;
+  }
 }

@@ -1,6 +1,7 @@
 import { generateKeyPairSync, randomUUID } from 'node:crypto';
 import {
   chmodSync,
+  existsSync,
   mkdtempSync,
   mkdirSync,
   readFileSync,
@@ -37,6 +38,7 @@ import {
 import { runFleetBackupCycle as runFleetBackupCycleProduction } from './service.js';
 import { prepareFleetSharedSchemaRuntime } from './fleet-shared-schema-startup.js';
 import { PhaseTimer } from '../../test-support/phase-timer.js';
+import { describeStartupOwnerFileChecks } from '../../system/config/startup-owner-files.js';
 
 // Timeout-margin policy (see src/test-support/integration-timeout-registry.json):
 // measured worst-case baseline is the documented clean-main file runtime of 108.5s
@@ -208,6 +210,53 @@ function writeFleetAuthTestConfig(systemDataDir: string): void {
     `${JSON.stringify(seed, null, 2)}\n`,
     'utf8',
   );
+}
+
+function writeMandatorySystemOwnerFiles(systemDataDir: string): void {
+  writeFileSync(join(systemDataDir, 'companions.json'), `${JSON.stringify({
+    postgres: {
+      sharedMigrationRole: SHARED_OWNER_ROLE,
+      sharedMigrationDatabaseUrlRef: {
+        kind: 'env',
+        envName: 'SHARED_SCHEMA_MIGRATION_DATABASE_URL',
+      },
+    },
+    companions: [
+      {
+        companionId: '11111111-1111-4111-8111-111111111111',
+        companionDataDir: 'companion-data/companion-one',
+        characterCardPath: 'companion-data/companion-one/character-card.json',
+        postgresSchema: 'companion_one',
+        postgresRole: COMPANION_ROLE,
+        postgresDatabaseUrlRef: {
+          kind: 'env',
+          envName: 'COMPANION_ONE_DATABASE_URL',
+        },
+      },
+      {
+        companionId: '22222222-2222-4222-8222-222222222222',
+        companionDataDir: 'companion-data/companion-two',
+        characterCardPath: 'companion-data/companion-two/character-card.json',
+        postgresSchema: 'companion_two',
+        postgresRole: COMPANION_ROLE_TWO,
+        postgresDatabaseUrlRef: {
+          kind: 'env',
+          envName: 'COMPANION_TWO_DATABASE_URL',
+        },
+      },
+    ],
+  }, null, 2)}\n`);
+  for (const descriptor of describeStartupOwnerFileChecks()) {
+    if (descriptor.scope !== 'system'
+      || descriptor.optionalWhenMissing
+      || existsSync(join(systemDataDir, descriptor.ownerFileName))) {
+      continue;
+    }
+    writeFileSync(
+      join(systemDataDir, descriptor.ownerFileName),
+      readFileSync(join(process.cwd(), 'config', descriptor.seedFileName)),
+    );
+  }
 }
 
 async function freshRestoreVerifyDatabase() {
@@ -412,6 +461,7 @@ describe('fleet-auth consistent family restore against real Postgres', () => {
     mkdirSync(floorRoot, { recursive: true, mode: 0o700 });
     chmodSync(floorRoot, 0o700);
     writeFleetAuthTestConfig(systemDataDir);
+    writeMandatorySystemOwnerFiles(systemDataDir);
     const principalId = randomUUID();
     const sourceAuditEventId = randomUUID();
     const sourceAttachmentId = randomUUID();

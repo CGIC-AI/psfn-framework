@@ -8,6 +8,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { describeStartupOwnerFileChecks } from '../../system/config/startup-owner-files.js';
 import { createPostgresPool } from '../postgres.js';
 import {
   PGVECTOR_POSTGRES_TEST_IMAGE,
@@ -147,6 +148,50 @@ function createFleetFiles(root: string): {
     groupMode: false,
     encryption: { mode: 'off' },
   }));
+  writeFileSync(join(systemDataDir, 'companions.json'), `${JSON.stringify({
+    postgres: {
+      sharedMigrationRole: 'shared_schema_migration',
+      sharedMigrationDatabaseUrlRef: {
+        kind: 'env',
+        envName: 'SHARED_SCHEMA_MIGRATION_DATABASE_URL',
+      },
+    },
+    companions: [
+      {
+        companionId: COMPANION_A,
+        companionDataDir: `companion-data/${COMPANION_A}`,
+        characterCardPath: `companion-data/${COMPANION_A}/character-card.json`,
+        postgresSchema: 'companion_alpha',
+        postgresRole: 'companion_alpha_runtime',
+        postgresDatabaseUrlRef: {
+          kind: 'env',
+          envName: 'COMPANION_ALPHA_DATABASE_URL',
+        },
+      },
+      {
+        companionId: COMPANION_B,
+        companionDataDir: `companion-data/${COMPANION_B}`,
+        characterCardPath: `companion-data/${COMPANION_B}/character-card.json`,
+        postgresSchema: 'companion_beta',
+        postgresRole: 'companion_beta_runtime',
+        postgresDatabaseUrlRef: {
+          kind: 'env',
+          envName: 'COMPANION_BETA_DATABASE_URL',
+        },
+      },
+    ],
+  }, null, 2)}\n`);
+  for (const descriptor of describeStartupOwnerFileChecks()) {
+    if (descriptor.scope !== 'system'
+      || descriptor.optionalWhenMissing
+      || existsSync(join(systemDataDir, descriptor.ownerFileName))) {
+      continue;
+    }
+    writeFileSync(
+      join(systemDataDir, descriptor.ownerFileName),
+      readFileSync(join(process.cwd(), 'config', descriptor.seedFileName)),
+    );
+  }
 
   const companions = [
     [COMPANION_A, 'companion_alpha', 'alpha'],

@@ -56,6 +56,12 @@ jobs:
         if: steps.scope.outputs.root_runtime == 'true' || steps.scope.outputs.admin_ui == 'true' || steps.scope.outputs.evals == 'true'
         run: npm ci --ignore-scripts
 
+      - name: Install repository-hygiene workspace dependencies
+        if: steps.scope.outputs.root_runtime == 'true'
+        run: |
+          npm ci --prefix admin-ui --ignore-scripts
+          npm ci --prefix companion-ui --ignore-scripts
+
       - name: Set up pinned uv for Satellite Hub checks
         if: steps.scope.outputs.satellite_hub == 'true'
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0

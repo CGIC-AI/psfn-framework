@@ -1,5 +1,8 @@
 import { JSONRPCErrorException } from 'json-rpc-2.0';
 import { describe, expect, it, vi } from 'vitest';
+import type { CapabilityTier } from '../../../system/capabilities/tier-types.js';
+import { resolveTierCapabilityTokens } from '../../../system/capabilities/tiers.js';
+import { gateToolWithCapabilities } from '../../../system/capabilities/gate.js';
 import { resolveToolRequiredCapabilities } from '../../../system/capabilities/requirements.js';
 import { GatewayErrors, type McpExecuteResult } from '../../gateway/protocol.js';
 import { createMcpTool, type McpToolGatewayPort } from './tools.js';
@@ -20,6 +23,55 @@ function gateway(result?: McpExecuteResult): McpToolGatewayPort & { mcpExecute: 
 }
 
 describe('canonical MCP tool', () => {
+  it.each([
+    ['nursery', false],
+    ['apprentice', true],
+    ['autonomous', true],
+  ] as const)(
+    'applies the production capability gate to external.mcp at the %s tier without external I/O',
+    async (tier, expectedAllowed) => {
+      const mcpGateway = gateway({
+        action: 'call',
+        serverId: 'bounded-test-server',
+        toolName: 'bounded_test_tool',
+        isError: false,
+        effectiveText: '[bounded local gateway response]',
+        withheld: false,
+      });
+      const grantedTokens = new Set(resolveTierCapabilityTokens(tier));
+      const tool = gateToolWithCapabilities(
+        createMcpTool({ gateway: mcpGateway }),
+        () => ({
+          getTier: () => tier as CapabilityTier,
+          getGrantedTokens: () => grantedTokens,
+          has: token => grantedTokens.has(token),
+        }),
+      );
+
+      const result = await tool.execute(`mcp-capability-${tier}`, {
+        action: 'call',
+        server_id: 'bounded-test-server',
+        tool_name: 'bounded_test_tool',
+        arguments: {},
+      });
+
+      if (expectedAllowed) {
+        expect(mcpGateway.mcpExecute).toHaveBeenCalledOnce();
+        expect(text(result)).toBe('[bounded local gateway response]');
+        expect(result.details).not.toMatchObject({ capabilityDenied: true });
+      } else {
+        expect(mcpGateway.mcpExecute).not.toHaveBeenCalled();
+        expect(result.details).toMatchObject({
+          isError: true,
+          capabilityDenied: true,
+          tier: 'nursery',
+          missingTokens: ['external.mcp'],
+        });
+        expect(text(result)).toContain('external.mcp');
+      }
+    },
+  );
+
   it('keeps one bounded schema and exposes no authority, credential, or sensitivity fields', () => {
     const tool = createMcpTool({ gateway: gateway() });
     const serialized = JSON.stringify(tool.parameters);

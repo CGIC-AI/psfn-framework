@@ -107,7 +107,8 @@ export type SatelliteHubUnsubscribe = () => void;
 
 export interface SatelliteHubWebSocketLike {
   readonly readyState: number;
-  send(data: string): void;
+  readonly bufferedAmount?: number;
+  send(data: string | ArrayBuffer | ArrayBufferView): void;
   close(code?: number, reason?: string): void;
   addEventListener?: (type: string, listener: (event: unknown) => void) => void;
   removeEventListener?: (type: string, listener: (event: unknown) => void) => void;

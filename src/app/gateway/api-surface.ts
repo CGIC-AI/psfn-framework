@@ -20,7 +20,11 @@ import {
   resolveSatelliteClaim,
   SATELLITE_CLAIM_HEADERS,
 } from '../../channels/backplane/satellite-registry.js';
-import { createApiVoiceWebSocketRuntime } from '../../channels/api/voice-websocket-runtime.js';
+import {
+  buildVoiceWebSocketServerOptions,
+  createApiVoiceWebSocketRuntime,
+} from '../../channels/api/voice-websocket-runtime.js';
+import { createRuntimeVoiceSttConnector } from '../../channels/backplane/voice-provider-runtime.js';
 import {
   computeGatewayChatRequestTimeoutMs,
   GatewayApiRuntime,
@@ -47,6 +51,7 @@ import {
 import type { GatewayFleetAuthBroker } from '../../boundary/gateway/fleet-auth-broker.js';
 import type { GatewayFleetAuthChildAssertionBroker } from '../../boundary/gateway/fleet-auth-child-assertions.js';
 import { GatewayCompanionUiActionBroker } from '../../boundary/gateway/companion-ui-action-broker.js';
+import { GatewayCompanionUiAudioIngress } from '../../boundary/gateway/companion-ui-audio-ingress.js';
 import type {
   GatewayRequestCapabilitySigner,
   RequestCapabilityVerifier,
@@ -89,6 +94,7 @@ import { createGatewayFleetPortalProjection } from './fleet-portal-composition.j
 import type { FleetModelUsageSummaryQueryPort } from '../../shared/telemetry/model-usage.js';
 import { createGatewayFleetModelUsageProjection } from './fleet-model-usage-composition.js';
 import { createBearerCompanionRoutingConfig } from '../../channels/api/server/bearer-companion-selector.js';
+import { resolveVoiceSecurityLimits } from '../../primitives/voice/policy/security.js';
 
 const DISABLED_VOICE_WEBSOCKET_PATH = '/v1/voice/ws-disabled';
 const GATEWAY_API_REQUEST_TIMEOUT_MS = 240_000;
@@ -667,6 +673,27 @@ export async function startOptionalGatewayApiServer(
     selectableCompanionIds: options.channelsConfig?.api.selectableCompanionIds,
   });
   const activeCompanionUiInteractions = new Map<string, AbortController>();
+  const companionUiVoiceLimits = buildVoiceWebSocketServerOptions(options.config);
+  const companionUiStt = fleetAuthBootstrapOnly
+    ? createRuntimeVoiceSttConnector(options.config, {
+        eligibilityGate: options.eligibilityGate,
+      })
+    : null;
+  const companionUiAudioIngress = companionUiStt
+    ? new GatewayCompanionUiAudioIngress({
+        createConnector: (companionId) => {
+          const owned = createRuntimeVoiceSttConnector(options.config, {
+            eligibilityGate: options.eligibilityGate,
+            companionId,
+          });
+          if (!owned) throw new Error('Companion audio transcription is unavailable');
+          return owned.connector;
+        },
+        maxFrameBytes: companionUiVoiceLimits.maxFrameBytes!,
+        maxPendingUtterances: companionUiVoiceLimits.maxPendingFrames!,
+        maxTranscriptBytes: resolveVoiceSecurityLimits().maxTranscriptChars,
+      })
+    : undefined;
   const companionUiWebSocket = fleetAuthBootstrapOnly
     && options.config.fleetAuth
     && options.fleetAuthBroker
@@ -683,6 +710,30 @@ export async function startOptionalGatewayApiServer(
         ...(trustedProxyClientCertToken ? { trustedProxyClientCertToken } : {}),
         hubDeviceIngress,
         eventRelay: options.companionRelay.relay,
+        ...(companionUiAudioIngress ? {
+          audioIngress: companionUiAudioIngress,
+          maxPendingAudioFrames: companionUiVoiceLimits.maxPendingFrames,
+          screenAudioTranscript: async (input) => {
+            const screening = resolveOwnedIntakeScreening(options, input.companionId);
+            if (!screening || !input.transcript.trim()) return input.transcript;
+            const screened = await screening.screen(input.transcript, {
+              sourceClass: 'audio_transcript',
+              origin: {
+                ref: `companion-ui-audio:${input.attachment.channel.id}:${input.requestId}`,
+              },
+              scope: 'context',
+              subject: { kind: 'body' },
+              sourceChannelId: input.attachment.channel.id,
+              timing: {
+                traceId: input.requestId,
+                requestId: input.requestId,
+                channelId: input.attachment.channel.id,
+                channelType: 'api',
+              },
+            });
+            return screened.effectiveText;
+          },
+        } : {}),
         actionBroker: new GatewayCompanionUiActionBroker({
           resolveAuthorizationContext: input => options.fleetAuthBroker!.resolveAuthorizationContext(input),
           signer: options.fleetAuthRequestCapabilities,

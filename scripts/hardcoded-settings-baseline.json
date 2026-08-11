@@ -1954,6 +1954,13 @@
     },
     {
       "file": "src/channels/api/companion-ui-websocket.ts",
+      "name": "RUNTIME_LIMITS.maxPendingAudioFrames",
+      "value": "32",
+      "form": "object-member",
+      "note": "Code-owned DoS/backpressure guard; the fixed server queue ceiling protects the authenticated streaming socket independently of operator tuning."
+    },
+    {
+      "file": "src/channels/api/companion-ui-websocket.ts",
       "name": "RUNTIME_LIMITS.maxRequestIdsPerSocket",
       "value": "4_096",
       "form": "object-member",
@@ -10642,6 +10649,12 @@
       "value": "[ 'normal', 'nearing_limit', 'soft_exhausted', 'wrap_up_allowed', 'hard_exhausted', 'overcharge_eligible', ] as const",
       "form": "array",
       "note": "Immutable parser/wire/schema contract FATIGUE_POLICY_STATE_VALUES; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning."
+    },
+    {
+      "file": "src/shared/contracts/companion-ui-audio.ts",
+      "name": "MAX_SEQUENCE",
+      "value": "0xffff_ffff",
+      "note": "Immutable wire-format bound for the unsigned 32-bit PCM sequence field; changing it requires a protocol revision."
     },
     {
       "file": "src/shared/contracts/contact-lifecycle-ledger.ts",

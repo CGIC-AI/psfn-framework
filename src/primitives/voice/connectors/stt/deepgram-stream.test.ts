@@ -127,6 +127,7 @@ describe('DeepgramStreamingSttConnector', () => {
       {
         type: 'final',
         text: 'hello world',
+        utteranceFinal: true,
         confidence: 0.93,
         startMs: 250,
         endMs: 980,

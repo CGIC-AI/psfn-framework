@@ -273,6 +273,7 @@ function mapDeepgramMessage(message: DeepgramResultMessage): SttTranscriptChunk 
   return {
     type: message.is_final || message.speech_final ? 'final' : 'partial',
     text,
+    ...(message.speech_final ? { utteranceFinal: true } : {}),
     confidence,
     startMs,
     endMs,

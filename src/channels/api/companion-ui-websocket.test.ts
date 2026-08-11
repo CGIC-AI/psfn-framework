@@ -8,6 +8,11 @@ import { deriveApiKeyPrincipalId } from '../backplane/http/auth.js';
 import { CompanionUiWebSocketAdapter } from './companion-ui-websocket.js';
 import { EventBus } from '../../shared/event-bus.js';
 import { CompanionEventRelay } from '../backplane/companion-relay/relay.js';
+import { encodeCompanionUiAudioChunk } from '../../shared/contracts/companion-ui-audio.js';
+import type {
+  CompanionUiAudioIngressCallbacks,
+  CompanionUiAudioIngressSession,
+} from '../../boundary/gateway/companion-ui-audio-ingress.js';
 
 const companionId = '11111111-1111-4111-8111-111111111111';
 const satelliteKey = 'satellite-key-with-more-than-sixteen-characters';
@@ -65,7 +70,7 @@ function request(overrides: Partial<IncomingMessage> = {}): IncomingMessage {
   } as IncomingMessage;
 }
 
-  function fixture(options: { guest?: boolean } = {}) {
+function fixture(options: { guest?: boolean; audio?: boolean } = {}) {
   const eventBus = new EventBus();
   const eventRelay = new CompanionEventRelay({
     eventBus,
@@ -105,13 +110,22 @@ function request(overrides: Partial<IncomingMessage> = {}): IncomingMessage {
     sessionDisposition: 'created' as const,
     attachment,
   }));
-  const execute = vi.fn(async () => ({ generation: 1, currentDeviceIsPrimary: true }));
+  const execute = vi.fn(async () => options.audio ? ({
+    content: 'companion heard you',
+    channelId: 'server-owned-channel',
+    inputTokens: 2,
+    outputTokens: 3,
+  }) : ({ generation: 1, currentDeviceIsPrimary: true }));
   const guestExecute = vi.fn(async () => ({
     content: 'guest reply',
     channelId: 'server-owned-channel',
     inputTokens: 1,
     outputTokens: 2,
   }));
+  const audioIngress = options.audio ? createAudioIngressHarness() : undefined;
+  const screenAudioTranscript = vi.fn(async (input: { transcript: string }) => (
+    input.transcript === 'hello there' ? 'screened speech' : input.transcript
+  ));
   const adapter = new CompanionUiWebSocketAdapter({
     canonicalOrigin: 'https://fleet.example.test',
     satelliteApiKeys: [satelliteKey],
@@ -131,13 +145,17 @@ function request(overrides: Partial<IncomingMessage> = {}): IncomingMessage {
           defaultIdentity: {
             authorId: 'legacy', authorName: 'Legacy', canonicalContactId: 'legacy-contact', channelPrivacy: 'private',
           },
-          maxCapabilities: ['text'], telemetryScopes: ['status', 'approvals'],
+          maxCapabilities: options.audio
+            ? ['text', 'audio_input', 'speech_to_text']
+            : ['text'],
+          telemetryScopes: ['status', 'approvals'],
           hubDeviceEnrollment: { deviceId: 'display', enrollmentVersion: 1, enrollmentStatus: 'active' },
         }],
       }],
     }),
     hubDeviceIngress: { admit } as never,
     actionBroker: { execute } as never,
+    ...(audioIngress ? { audioIngress, screenAudioTranscript } : {}),
     eventRelay,
     ...(options.guest ? {
       guestMode: 'explicit' as const,
@@ -149,7 +167,36 @@ function request(overrides: Partial<IncomingMessage> = {}): IncomingMessage {
       close: (callback: (error?: Error) => void) => callback(),
     }) as never,
   });
-  return { adapter, admit, eventBus, execute, guestExecute, handleUpgrade, webSocket };
+  return {
+    adapter,
+    admit,
+    eventBus,
+    execute,
+    guestExecute,
+    handleUpgrade,
+    webSocket,
+    audioIngress,
+    screenAudioTranscript,
+  };
+}
+
+function createAudioIngressHarness() {
+  let callbacks: CompanionUiAudioIngressCallbacks | undefined;
+  const writePcm = vi.fn(async () => undefined);
+  const stop = vi.fn(async () => undefined);
+  const cancel = vi.fn(async () => undefined);
+  const session: CompanionUiAudioIngressSession = { writePcm, stop, cancel };
+  const start = vi.fn(async (next: CompanionUiAudioIngressCallbacks) => {
+    callbacks = next;
+    return session;
+  });
+  return {
+    start,
+    writePcm,
+    stop,
+    cancel,
+    get callbacks() { return callbacks; },
+  };
 }
 
 describe('CompanionUiWebSocketAdapter upgrade policy', () => {
@@ -410,6 +457,114 @@ describe('CompanionUiWebSocketAdapter upgrade policy', () => {
     expect(body.toString()).not.toContain('deviceId');
     expect(body.toString()).not.toContain('placeId');
     await vi.waitFor(() => expect(built.webSocket.sent).toContainEqual(expect.stringContaining('"ok":true')));
+    await built.adapter.stop();
+  });
+
+  it('binds a continuous PCM stream to socket authority and dispatches final speech as a signed audio turn', async () => {
+    const built = fixture({ audio: true });
+    const candidate = request();
+    candidate.headers['x-psfn-satellite-capabilities'] = 'text,audio_input,speech_to_text';
+    candidate.rawHeaders = Object.entries(candidate.headers)
+      .flatMap(([name, value]) => [name, String(value)]);
+    const socket = new FakeSocket();
+    built.adapter.handleUpgrade(candidate, socket as unknown as Duplex, Buffer.alloc(0));
+    await vi.waitFor(() => expect(built.handleUpgrade).toHaveBeenCalledOnce());
+    built.webSocket.emit('message', CONFIGURE, false);
+    await vi.waitFor(() => expect(built.webSocket.sent).toHaveLength(1));
+    expect(JSON.parse(built.webSocket.sent[0]!)).toMatchObject({
+      type: 'session.ready',
+      capabilities: ['text', 'audio_input', 'speech_to_text'],
+    });
+
+    built.webSocket.emit('message', Buffer.from(JSON.stringify({
+      schemaVersion: 1,
+      type: 'audio.start',
+      requestId: 'z02-stream-1',
+    })), false);
+    await vi.waitFor(() => expect(built.audioIngress?.start).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(built.webSocket.sent).toContainEqual(
+      JSON.stringify({ schemaVersion: 1, type: 'audio.ready', requestId: 'z02-stream-1' }),
+    ));
+    expect(built.audioIngress?.start).toHaveBeenCalledWith(expect.objectContaining({
+      companionId,
+      onPartial: expect.any(Function),
+      onUtterance: expect.any(Function),
+      onError: expect.any(Function),
+    }));
+
+    const pcm = Uint8Array.of(0x34, 0x12, 0xcc, 0xff);
+    built.webSocket.emit('message', encodeCompanionUiAudioChunk(0, pcm), true);
+    await vi.waitFor(() => expect(built.audioIngress?.writePcm).toHaveBeenCalledWith(pcm));
+    await vi.waitFor(() => expect(built.webSocket.sent).toContainEqual(
+      JSON.stringify({
+        schemaVersion: 1,
+        type: 'audio.ack',
+        requestId: 'z02-stream-1',
+        sequence: 0,
+      }),
+    ));
+
+    built.audioIngress?.callbacks?.onPartial('hello there');
+    await built.audioIngress?.callbacks?.onUtterance('hello there');
+    await vi.waitFor(() => expect(built.execute).toHaveBeenCalledOnce());
+    expect(built.screenAudioTranscript).toHaveBeenCalledWith(expect.objectContaining({
+      companionId,
+      transcript: 'hello there',
+      requestId: expect.any(String),
+      attachment: expect.objectContaining({
+        channel: expect.objectContaining({ source: 'server', companionId }),
+      }),
+    }));
+    const brokerInput = built.execute.mock.calls[0]?.[0] as { rawBody: Uint8Array };
+    expect(JSON.parse(Buffer.from(brokerInput.rawBody).toString('utf8'))).toMatchObject({
+      schemaVersion: 1,
+      action: 'companion.interact',
+      resource: 'conversation.audio',
+      body: { transcript: 'screened speech' },
+    });
+    expect(built.webSocket.sent.map(value => JSON.parse(value))).toEqual(expect.arrayContaining([
+      {
+        schemaVersion: 1,
+        type: 'event',
+        event: { type: 'message', data: { role: 'user', content: 'hello there', live: true } },
+      },
+      {
+        schemaVersion: 1,
+        type: 'event',
+        event: { type: 'message', data: { role: 'user', content: 'screened speech', final: true } },
+      },
+      {
+        schemaVersion: 1,
+        type: 'event',
+        event: { type: 'message', data: { role: 'assistant', content: 'companion heard you', final: true } },
+      },
+    ]));
+    expect(built.webSocket.sent.join('\n')).not.toContain('3412ccff');
+
+    built.webSocket.emit('message', Buffer.from(JSON.stringify({
+      schemaVersion: 1,
+      type: 'audio.stop',
+      requestId: 'z02-stream-1',
+    })), false);
+    await vi.waitFor(() => expect(built.audioIngress?.stop).toHaveBeenCalledWith('client stop'));
+    await vi.waitFor(() => expect(built.webSocket.sent).toContainEqual(
+      JSON.stringify({ schemaVersion: 1, type: 'audio.stopped', requestId: 'z02-stream-1' }),
+    ));
+    await built.adapter.stop();
+  });
+
+  it('denies binary audio before a capability-gated server stream exists', async () => {
+    const built = fixture();
+    const socket = new FakeSocket();
+    built.adapter.handleUpgrade(request(), socket as unknown as Duplex, Buffer.alloc(0));
+    await vi.waitFor(() => expect(built.handleUpgrade).toHaveBeenCalledOnce());
+    built.webSocket.emit('message', CONFIGURE, false);
+    await vi.waitFor(() => expect(built.webSocket.sent).toHaveLength(1));
+
+    built.webSocket.emit('message', encodeCompanionUiAudioChunk(0, Uint8Array.of(0, 0)), true);
+    await vi.waitFor(() => expect(built.webSocket.readyState).toBe(WebSocket.CLOSED));
+    expect(built.webSocket.closeArgs[0]).toBe(4403);
+    expect(built.execute).not.toHaveBeenCalled();
     await built.adapter.stop();
   });
 });

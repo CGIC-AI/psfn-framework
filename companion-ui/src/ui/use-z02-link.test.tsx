@@ -10,6 +10,11 @@ import { useZ02Link } from './use-z02-link.js';
 describe('useZ02Link', () => {
   it('reports stock PCM receipt from the badge', async () => {
     const disconnect = vi.fn();
+    const relay = {
+      start: vi.fn(async () => undefined),
+      write: vi.fn(),
+      stop: vi.fn(async () => undefined),
+    };
     let emitPcm: ((pcm: Uint8Array) => void) | undefined;
     let remoteDisconnect: (() => void) | null = null;
     const connector: Z02LinkConnector = {
@@ -19,6 +24,7 @@ describe('useZ02Link', () => {
         for (const phase of ['selecting', 'connecting', 'authenticating', 'subscribing'] as Z02LinkProgress[]) {
           callbacks.progress?.(phase);
         }
+        await callbacks.prepareAudio?.();
         return {
           deviceName: 'Z02 Test Badge',
           disconnect,
@@ -27,7 +33,7 @@ describe('useZ02Link', () => {
         } satisfies Z02LinkConnection;
       }),
     };
-    const { result } = renderHook(() => useZ02Link(connector));
+    const { result } = renderHook(() => useZ02Link(connector, { audioRelay: relay }));
 
     expect(result.current.state.phase).toBe('idle');
     await act(async () => { await result.current.link(); });
@@ -41,10 +47,14 @@ describe('useZ02Link', () => {
 
     act(() => { emitPcm?.(Uint8Array.of(0x00, 0x01)); });
     expect(result.current.state).toMatchObject({ audioFrames: 1, decodedFrames: 1 });
-    expect(result.current.state.detail).toContain('Phone received 1 PCM chunk');
+    expect(relay.start).toHaveBeenCalledOnce();
+    expect(relay.write).toHaveBeenCalledWith(Uint8Array.of(0x00, 0x01));
+    expect(result.current.state).toMatchObject({ relayedFrames: 1 });
+    expect(result.current.state.detail).toContain('Relayed 1 PCM chunk');
 
     act(() => { remoteDisconnect?.(); });
     expect(result.current.state).toMatchObject({ phase: 'idle', detail: 'Badge disconnected.' });
+    expect(relay.stop).toHaveBeenCalledOnce();
 
     act(() => { result.current.disconnect(); });
     expect(disconnect).not.toHaveBeenCalled();
@@ -78,6 +88,11 @@ describe('useZ02Link', () => {
   it('decodes Stark Ruby Omi frames to PCM through the live WebCodecs seam', async () => {
     const decode = vi.fn();
     const close = vi.fn();
+    const relay = {
+      start: vi.fn(async () => undefined),
+      write: vi.fn(),
+      stop: vi.fn(async () => undefined),
+    };
     let emitAudio: ((frame: {
       firstSequence: number;
       lastSequence: number;
@@ -86,6 +101,7 @@ describe('useZ02Link', () => {
     const connector: Z02LinkConnector = {
       connect: vi.fn(async callbacks => {
         emitAudio = callbacks.audioFrame;
+        await callbacks.prepareAudio?.();
         return {
           deviceName: 'Omi',
           disconnect: vi.fn(),
@@ -95,6 +111,7 @@ describe('useZ02Link', () => {
       }),
     };
     const { result } = renderHook(() => useZ02Link(connector, {
+      audioRelay: relay,
       createOmiDecoder: callbacks => ({
         close,
         decode(opus) {
@@ -120,6 +137,8 @@ describe('useZ02Link', () => {
     act(() => emitAudio?.({ firstSequence: 0, lastSequence: 0, opus: Uint8Array.of(0xaa) }));
     expect(decode).toHaveBeenCalledWith(Uint8Array.of(0xaa));
     expect(result.current.state).toMatchObject({ audioFrames: 1, decodedFrames: 1 });
+    expect(relay.write).toHaveBeenCalledWith(Uint8Array.of(0x00, 0x01));
+    expect(result.current.state).toMatchObject({ relayedFrames: 1 });
     expect(result.current.state.detail).toContain('decoded to PCM');
 
     act(() => { result.current.disconnect(); });

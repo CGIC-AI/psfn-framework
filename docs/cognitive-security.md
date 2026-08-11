@@ -1,6 +1,6 @@
 # Cognitive Security: The Cognition Intake Firewall
 
-Last updated: 2026-07-09.
+Last updated: 2026-08-11.
 
 This document covers the cognition intake firewall (the htm9 epic): the
 threat model, the envelope/taint contract, the screening layers, the sink
@@ -14,14 +14,35 @@ remediation half of CogSec (tombstones, revocation, regeneration, forensic
 archive), see the Garden Remediation page and `src/core/cogsec/` — the
 firewall is the pre-hoc half of that same system.
 
-> **Wiring status note (2026-07-09).** Everything described here is wired to
-> runtime entrypoints. L2/L3 escalation runs **gateway-side only**, through the
+> **Source wiring note.** L2/L3 escalation runs **gateway-side only**, through the
 > `IntakeEscalationPort` composed in
 > `src/boundary/gateway/intake/compose-screening.ts`; the agent process holds no
 > escalation port and stays L1-only by construction. When no OpenRouter backend
-> is resolvable, escalation is not composed (loud warning) — except under
-> `mode: "enforce"` with non-empty `mandatoryTiers`, which fails startup rather
-> than silently skipping screening the policy demands.
+> is resolvable, escalation is not composed and emits a warning in `shadow`.
+> `boundary` and `strict` fail startup when non-empty `mandatoryTiers` require
+> escalation that cannot be composed.
+
+## Global mode contract
+
+Schema-v5 `intake-policy.json` accepts exactly three global modes:
+
+- `shadow` screens every declared vector and records decisions without
+  changing delivery, except that a hard lethal-trifecta denial remains
+  blocking;
+- `boundary` enforces external chat, file, and web ingress plus registered
+  outbound publication, while structurally authenticated internal activity
+  uses the clean bubble with no semantic-screening call; and
+- `strict` screens and enforces both external and internal vectors.
+
+The vector classification and decision matrix live in
+`src/shared/contracts/cogsec-mode.ts`. Structural call-site provenance, not
+message text or model arguments, determines whether an item is internal.
+External bytes cannot claim an internal provenance class. The retired global
+values `off` and `enforce` are rejected by schema-v5 validation; the explicit
+owner migration maps them to `shadow` and `strict`, respectively. Some internal
+interfaces and stored quarantine records still use `enforce` for the binary
+per-surface posture produced by both `boundary` and `strict`. That internal
+value is not an owner-file mode.
 
 ## Threat Model
 
@@ -104,7 +125,7 @@ L1-only screening service for in-process surfaces (`src/app/agent/main.ts`),
 and the sink gate is constructed agent-side (`src/app/agent/core-runtime.ts`,
 `maybeCreateIntakeSinkGate`).
 
-Live envelope-creation points (verified call sites):
+Canonical envelope-creation call sites:
 
 | Surface | Where screening runs |
 | --- | --- |
@@ -239,7 +260,7 @@ Two disciplines worth knowing:
   L1 output never includes a decision; that authority belongs to the
   screening service and the sink gates.
 
-### L1.5 — ONNX injection classifier (wired, gateway-side; required under enforce)
+### L1.5 — ONNX injection classifier (wired, gateway-side; required when enforcing)
 
 `src/boundary/gateway/intake/injection-classifier.ts` runs
 `protectai/deberta-v3-base-prompt-injection-v2` (Apache-2.0, pinned revision
@@ -262,11 +283,12 @@ runtime: `npm run provision:injection-model` fetches the pinned revision with
 per-file sha256 verification. Composition posture
 (`compose-screening.ts`, tightened by `cyy7l`):
 
-- **`mode=enforce`, weights absent → gateway startup FAILS CLOSED** with an
+- **`mode=boundary` or `mode=strict`, weights absent → gateway startup fails
+  closed** with an
   actionable error naming the provisioning command. A degraded L1-only
   firewall under an enforce posture is a fail-closed violation: the posture
-  reports "armed" while L1.5 scoring silently never runs, so enforce refuses
-  to start until the weights are on disk.
+  reports "armed" while L1.5 scoring silently never runs, so startup refuses
+  to continue until the weights are on disk.
 - **`mode=shadow`, weights absent → loud skip**: one structured startup
   warning (never per-message), screening continues on the deterministic L1
   layer alone, and the composition is flagged
@@ -274,17 +296,15 @@ per-file sha256 verification. Composition posture
 - **weights present but broken (any mode) → gateway startup fails closed.**
 
 Model dir: `PSFN_INJECTION_MODEL_DIR`, default `./models/prompt-injection-v2`
-(kube: `<modelCacheDir>/prompt-injection-v2` on the model-cache PVC). On
-Kubernetes, `modelPrefetch.enabled=true` provisions the weights onto that PVC
-before the restricted-egress gateway relies on them; the deploy contract
-(`npm run verify:deployment-contracts`) asserts the prefetch destination
-matches the gateway's `PSFN_INJECTION_MODEL_DIR`. There is no RPC method for
-the classifier — it runs inside the gateway's `screen()`; the agent-side
-L1-only service never runs it.
+(the deployment may supply another exact path). The private operations
+authority must ensure every gateway artifact has the pinned weights at that
+path before an enforcing startup. There is no RPC method for the classifier;
+it runs inside the gateway's `screen()`, and the agent-side L1-only service
+never runs it.
 
 ### L2 — fast API LLM screener
 
-> **Status:** live gateway-side. `evaluateL2`
+> **Wiring:** `evaluateL2`
 > (`src/boundary/gateway/intake/l2-screener.ts`) is invoked from the
 > `IntakeEscalationPort` in `src/boundary/gateway/intake/escalation.ts`.
 
@@ -317,7 +337,7 @@ tier in `l3Screener.mandatoryTiers` — returns an `escalate_l3` outcome.
 
 ### L3 — heavy escalation screener + safe representation
 
-> **Status:** live gateway-side, reached from L2's `escalate_l3` outcome or a
+> **Wiring:** reached from L2's `escalate_l3` outcome or a
 > mandatory tier, via the same `IntakeEscalationPort` as L2.
 
 The deep second/third pass for items L2 flags, or for tiers mandating deep
@@ -344,10 +364,10 @@ flagged) stored in `envelope.extractedFields`; a verbatim-quote guard rejects
 any screener output that echoes a run of ≥24 chars of the screened content —
 summary-instead-of-quote is enforced structurally, not by prompt politeness.
 There is no per-tier fail-closed action for L3: an L3 failure always holds
-the item in quarantine in enforce mode. Each L3 failed-closed result also
-emits structural `intake.screening.fail_closed` telemetry with stage `l3` and
-the source class. The standard operator-alert handler raises a priority-5
-alert once that pair reaches the settings.json-owned
+the item in quarantine in `boundary` and `strict`. Each L3 failed-closed result
+also emits structural `intake.screening.fail_closed` telemetry with stage `l3`
+and the source class. The standard operator-alert handler raises a priority-5
+alert once that pair reaches the `settings.json`-owned
 `intakeScreeningFailureAlertThreshold` (seed 3), rather than once per item.
 
 ### Vision screening (L2.5/L3, wired — htm9.8)
@@ -361,10 +381,9 @@ image** before it can become model input.
 One small multimodal call, resolved through the canonical `vision` purpose,
 OCRs **and** describes the image — deliberately not a heavy OCR pipeline (no
 Tesseract, no CLIP+OCR at L1). Startup requires the selected catalog entry to
-declare `supportsVision: true`. One call costs a fraction of a cent (seed
-caps: 20 s timeout, 1 600 output tokens). This closes the
-typographic-injection gap: rendered instruction text, including
-near-white-on-white that a machine reads and a human cannot.
+declare `supportsVision: true`. Seed caps are a 20 s timeout and 1 600 output
+tokens. This closes the typographic-injection gap: rendered instruction text,
+including near-white-on-white that a machine reads and a human cannot.
 
 Taint rules, both verified in code:
 
@@ -383,11 +402,11 @@ Taint rules, both verified in code:
   text-only or image-ignoring model cannot silently classify every image as
   benign.
 
-Fail closed: vision model unreachable/timeout/unparseable in enforce mode
-means the image is **withheld** (fixed soft-notice template) — never
+Fail closed: vision model unreachable/timeout/unparseable in `boundary` or
+`strict` means the image is **withheld** (fixed soft-notice template) — never
 delivered unscreened. Shadow mode audits the failure and passes the image
-through. `visionScreener.enabled: false` restores pre-htm9.8 behavior;
-enabled with no resolvable OpenRouter backend fails startup in enforce mode
+through. `visionScreener.enabled: false` restores pre-htm9.8 behavior; enabled
+with no resolvable OpenRouter backend fails startup in `boundary` or `strict`
 and skips loudly in shadow.
 
 ### File ingestion (htm9.9, wired)
@@ -441,7 +460,7 @@ Structural rules (never configurable):
   at `untrusted`, and caps `persona_mutation` and `trust_mutation` at
   `standard`. Managed skill text is re-screened at strict scope and evaluated
   together with every active-turn envelope, so one held/denied influence
-  vetoes the write in enforce mode.
+  vetoes the write in `boundary` or `strict`.
 - **Lethal trifecta** (Willison): untrusted content + private data + egress
   never meet in one uncontrolled path. `evaluateEgressTrifecta` applies
   per-tier strength from `sinkGates.trifecta.enforcementByTier`: `hard`
@@ -449,7 +468,7 @@ Structural rules (never configurable):
   it but flags the invocation for operator review (seed: `trusted`,
   `standard`) — never a silent pass. Egress-capable tools are identified by
   capability token (`INTAKE_EGRESS_CAPABILITY_TOKENS`). A `hard` deny blocks
-  **in both modes** (hrmrq.77): shadow mode is observe-only for everything
+  **in every global mode** (hrmrq.77): shadow mode is observe-only for everything
   else, but in shadow the untrusted content was delivered — never withheld —
   so the trifecta is fully armed exactly when observe-only would wave it
   through; per-tier `hard` enforcement therefore overrides the global shadow
@@ -459,14 +478,16 @@ Content reaching a gated sink **without** an envelope (legacy paths that
 predate stamping) resolves per the sink's explicit `unscreened` policy
 default. There is no implicit default, and the owner-file validator requires
 every sink to map one. The full per-sink posture decision, its justifications,
-and the enforce-mode wiring caveats are in
+and the current mutation wiring are in
 [Per-sink `unscreened` posture (qg13)](#per-sink-unscreened-posture-qg13)
 below.
 
-Mode semantics mirror screening: `shadow` evaluates and audits every gate but
-always allows — with the single hrmrq.77 exception above (a hard-enforcement
-trifecta deny blocks even in shadow); `enforce` honors verdicts fail-closed;
-`off` constructs no gate at all.
+Mode semantics follow the centralized vector matrix. `shadow` evaluates and
+audits every gate but otherwise allows, with the hard lethal-trifecta exception
+above. `boundary` enforces external influences and outbound publication while
+structurally authenticated internal activity uses the clean bubble. `strict`
+enforces every declared vector. Both enforcing global modes project to the
+internal binary `enforce` posture used by sink-gate decisions and audit rows.
 
 ### Tool-result screening and the quarantined-artifact read gate (hrmrq.54)
 
@@ -477,10 +498,10 @@ document but its raw bytes were one `fs.read` of the disclosed path away:
   `toolResultScreener` wired in `src/core/agent/substrate-agent.ts`): every
   executed tool result — including error text — is screened as
   `sourceClass: 'tool_output'` **before** the result message enters the turn,
-  not only on the persistence copy. Enforce-mode quarantine substitutes the
-  fixed withheld notice (non-text blocks are dropped with it, fail closed),
-  sanitize substitutes the sanitized text, shadow observes. The outcome is
-  stashed on the result message and reused by session recording
+  not only on the persistence copy. Quarantine under `boundary` or `strict`
+  substitutes the fixed withheld notice (non-text blocks are dropped with it,
+  fail closed), sanitize substitutes the sanitized text, and shadow observes.
+  The outcome is stashed on the result message and reused by session recording
   (`precomputedToolIntakeScreening`), so one screen produces one envelope and
   one hold. A screener failure fails the result closed.
 - **Filesystem seam** (`src/core/cogsec/intake/quarantined-artifact-guard.ts`,
@@ -488,8 +509,8 @@ document but its raw bytes were one `fs.read` of the disclosed path away:
   `src/boundary/gateway/methods/fs.ts`): quarantine holds register the held
   item's on-disk artifact paths (`artifactPaths` on the store entry); a read
   of a registered artifact whose envelope is not sink-consumable returns the
-  fixed withheld notice instead of content in enforce mode (search drops its
-  matches/previews), and **every** such attempt — enforce or shadow — is
+  fixed withheld notice instead of content under `boundary` or `strict`
+  (search drops its matches/previews), and **every** such attempt is
   recorded on the quarantine entry (`accessAttempts`, surfaced as
   `contentAccessAttempts` in the Garden queue view), so a bypass attempt is
   never invisible to the operator reviewing the case. Operator release
@@ -509,10 +530,11 @@ document but its raw bytes were one `fs.read` of the disclosed path away:
   closed: the `shell.exec` descriptor consults the guard for the resolved cwd
   and every argv-derived path candidate (via `gateway:shell.exec`; a withheld
   verdict returns the fixed notice as a failed exec, records the attempt, and
-  never launches the sandbox), and — enforce mode — every registered artifact
-  of a not-released entry is masked inside the sandbox with a read-only
-  `/dev/null` bind (`shadowReadPaths`), so `cat`/`cp`/pipes/globs and every
-  argv shape the descriptor cannot parse physically read empty. An
+  never launches the sandbox), and, under `boundary` or `strict`, every
+  registered artifact of a not-released entry is masked inside the sandbox
+  with a read-only `/dev/null` bind (`shadowReadPaths`), so
+  `cat`/`cp`/pipes/globs and every argv shape the descriptor cannot parse
+  physically read empty. An
   unenumerable deny set fails the exec instead of launching open; shadow mode
   audits without withholding and mounts nothing.
 
@@ -521,16 +543,17 @@ document but its raw bytes were one `fs.read` of the disclosed path away:
 
 The `unscreened` default decides what happens when content reaches a gated
 sink **with no covering envelope** (`envelopes: []`). It only bites in
-`enforce` mode — `shadow` always allows regardless. The audit set the posture
+`boundary` or `strict`; `shadow` allows unless the hard lethal-trifecta rule
+applies. The audit set the posture
 per sink with a fail-closed bias: a sink stays `allow` only with a stated
 justification.
 
 | Sink | Old | New | Justification |
 | --- | --- | --- | --- |
 | `skill_write` | `deny` | `deny` (unchanged) | Durable, prompt-bearing, self-authored: managed skill text becomes part of the model's own instruction surface. Already canonical; now schema-forced. Its call site (`screenSkillWrite`) already screens the proposed content + attaches active-turn envelopes, so legitimate writes carry an envelope and pass; `deny` bites only when screening is unavailable. |
-| `persona_mutation` | `allow` | **`deny`** | Durable, prompt-bearing, self-authored: identity/persona layers *are* the prompt. Parity with `skill_write` — "you do not write a skill that namshubs yourself." Schema-forced. **Enforce-mode caveat below.** |
-| `wiki_write` | `allow` | **`deny`** | Durable, prompt-bearing, self-authored: wiki knowledge is retrievable back into context. Parity with `skill_write`. Schema-forced. **Enforce-mode caveat below.** |
-| `trust_mutation` | `allow` | **`deny`** | Security-sensitive: trust drives a contact's effective source-risk tier, which drives screening leniency (trust-grooming is a named attack). Fail closed by default. **Not** schema-forced — not prompt-bearing, so an operator may set `allow` with a justification. **Enforce-mode caveat below.** |
+| `persona_mutation` | `allow` | **`deny`** | Durable, prompt-bearing, self-authored: identity/persona layers *are* the prompt. Parity with `skill_write`; schema-forced. The companion-owned `identity update_persona` action is screened and audited but keeps its structural/confirmation authority. |
+| `wiki_write` | `allow` | **`deny`** | Durable, prompt-bearing, self-authored: wiki knowledge is retrievable back into context. Parity with `skill_write`; schema-forced. |
+| `trust_mutation` | `allow` | **`deny`** | Security-sensitive: trust drives a contact's effective source-risk tier, which drives screening leniency. Fail closed by default. It is operator-tunable because it is not prompt-bearing. |
 | `prompt_assembly` | `allow` | `allow` (justified) | The inform boundary (`maxSourceRiskTier: hostile` — all tiers may inform). Unenveloped content here is trusted-origin system/operator/character context that has no intake envelope by nature; external content already arrives enveloped and tier/label-gated. Denying unscreened would break core turn assembly on every turn without external content. |
 | `memory_write` | `allow` | `allow` (justified) | Fed by external-derived facts (enveloped + quarantine-label-gated) **and** self-authored reflection/heartbeat memory (no external envelope, legitimate, high-volume). Denying unscreened would block the companion's own memory formation; slow self-poisoning is covered by the drift lanes (htm9.14/.15), not by blocking unenveloped writes. |
 | `tool_egress` | `allow` | `allow` (justified) | The egress control here is the **trifecta assessment** (`assessEgressTrifecta`), a separate mechanism, not the `unscreened` default. Unenveloped tool calls are the norm; `denyRiskLabels` (`exfil/canary_leak`) gate enveloped content. Denying unscreened would block all tool egress. |
@@ -542,37 +565,23 @@ owner-file validator **rejects** any value other than `deny` for them (no
 operator override). `trust_mutation` defaults to `deny` in the seed but stays
 operator-tunable.
 
-**Enforce-mode wiring caveat (open seam).** The `persona_mutation`,
-`wiki_write`, and `trust_mutation` gate call sites currently evaluate with an
-**empty** envelope list (agent-authored params; no screening pipeline
-attached — `src/core/identity/prompt-tools.ts`, `src/faculties/wiki/tools.ts`,
-`src/core/contacts/tools.ts`). Consequently, under `deny` an **enforce-mode**
-self-authored persona/wiki/trust write is **held** (soft htm9.12 notice), not
-screen-then-allowed the way `skill_write` is. This is fail-closed and inert
-while the firewall runs in `shadow` (the current live mode), but before
-enabling `enforce` an operator/dev must either (a) wire those call sites to
-attach the active-turn envelopes + screen the proposed content (mirror
-`screenSkillWrite`) so legitimate self-authored writes carry an envelope and
-pass, or (b) accept that these self-modification surfaces are held for operator
-review in `enforce`. Tracked as a follow-up seam; not closed by qg13.
+**Current self-authored mutation wiring.** `screenSelfAuthoredMutation` screens
+every model-authored string in persona, wiki, and trust mutations, combines the
+resulting envelopes with active-turn provenance, then invokes the canonical
+sink gate. A partially wired runtime, a missing screening service, or a
+mutation with no textual content refuses before gate evaluation. Wiki and trust
+consume the screened effective values and honor the gate verdict. The
+companion-owned `identity update_persona` action is deliberately audit-only:
+CogSec records its proposed text, but the existing structural and confirmation
+path remains the authority over persona changes. Other identity mutations keep
+normal sink enforcement.
 
-**Live verification steps (operator — the deployed `system-data` owner JSON is
-not visible from the repo).** On the live system:
-
-1. Open the deployed `system-data/intake-policy.json` (or the Garden Firewall
-   page) and read `sinkGates.sinks.<sink>.unscreened` for all seven sinks.
-   Expected: `persona_mutation`, `wiki_write`, `trust_mutation`, `skill_write`
-   = `deny`; `prompt_assembly`, `memory_write`, `tool_egress` = `allow`.
-2. If the live owner still shows any of `persona_mutation` / `wiki_write` /
-   `trust_mutation` at `allow`, flip them to `deny` (the schema now rejects
-   `allow` for the first three at load, so an un-migrated owner will fail
-   startup — a fail-closed prompt to fix it, not a silent pass).
-3. Confirm `mode`. While `shadow`, none of this changes behavior. Before
-   flipping to `enforce`, resolve the wiring caveat above.
-4. Enforce-mode behavior check (once wired): drive an unscreened write at each
-   `deny` sink (a persona/identity mutation, a wiki write, a `set_trust`) and
-   confirm it is held with the soft withheld notice, and that an audit
-   `sink_access` deny event is recorded on the Garden Cognitive Security page.
+Garden is the operator surface for inspecting the effective owner policy,
+quarantine records, CogSec events, and review actions. The operator supplies
+the authority for release, discard, source-list changes, and remediation.
+Garden is the interface, not a second policy owner. Deployment-specific checks
+and effective owner fingerprints belong in the private operations authority,
+not this public source guide.
 <!-- END qg13 -->
 
 
@@ -644,8 +653,8 @@ all PUA material (and the marker specifically, at forgery weight) from every
 only at prompt-assembly read time, after screening — so it only ever exists
 in text the firewall itself marked. The plan is computed at screening time,
 persisted in session-entry intake metadata, and applied at prompt-assembly
-read time in enforce mode (`intake-sink-gating.ts`); persisted content is
-never modified.
+read time when the vector posture enforces (`intake-sink-gating.ts`);
+persisted content is never modified.
 
 ## Quarantine Lifecycle and the Operator Release Flow (htm9.11)
 
@@ -665,8 +674,8 @@ hrmrq.54) and a bounded `accessAttempts` audit of reads attempted while the
 item was not released — shown in the queue view as `contentAccessAttempts`.
 
 The Garden **Cognitive Security → Approvals** page
-(`admin-ui/src/routes/cognitive-security/approvals/+page.svelte`) is the only
-surface that resolves held items, through
+(`admin-ui/src/routes/cognitive-security/approvals/+page.svelte`) resolves held
+items through
 `src/operator/garden/routes/intake-quarantine-routes.ts`:
 
 - `GET /api/admin/intake/policy` — read-only policy overview
@@ -737,7 +746,7 @@ Two invariants, verified in code:
   for a human decision.
 
 The drift-velocity lane (`drift-review-lane.ts`, registered in
-`src/core/scheduler/heartbeat-post-turn-runtime/scheduler-lanes.ts`) scores
+`src/core/scheduler/post-turn-runtime/scheduler-lanes.ts`) scores
 four signals per contact/source against that entity's **own baseline** — the
 load-bearing idea is drift *velocity*, not drift, since normal relationships
 fluctuate: `valence_velocity` (z-scored short-window shift vs the contact's
@@ -812,8 +821,8 @@ opposite direction:
   (`turn-execution-runtime.ts`), and the resolved result gets the token
   attached under the reserved `__cogsecCanary` carrier key. Streamed reply
   frames (`api.stream.delta`, which bypass the JSON-RPC client send wrapper)
-  attach the carrier explicitly per frame. In `off` mode no token is ever
-  minted, so the wire format is byte-identical.
+  attach the carrier explicitly per frame. The canonical CogSec mode is always
+  armed, so turns in `shadow`, `boundary`, and `strict` all mint a token.
 - **Gateway side.** `CanaryEgressGuard.inspectReply` strips the carrier and
   scans the remaining reply strings at every seam chokepoint before anything
   reaches a channel adapter: `GatewayServer.requestAgent`,
@@ -824,13 +833,13 @@ opposite direction:
   and satellite voice). `inspectApiStreamDelta` scans each streamed frame
   over a rolling per-request tail window of `token.length - 1` chars, so a
   token split across frame boundaries is caught on the frame that completes
-  it. The carrier is stripped defensively in every mode, including `off`.
+  it. The carrier is stripped defensively in every global mode.
 
 **Recorded tradeoff decision: inline block, not post-send alert.** In
-`enforce` mode a canary hit HOLDS the reply — the reverse-RPC result throws
-the same `EGRESS_HELD` error as the request path (the channel surfaces its
-standard failure behavior), and a hit on a streamed frame closes the stream
-tap for the rest of that request. Rationale: (1) a canary token is
+`boundary` or `strict`, a canary hit HOLDS the reply — the reverse-RPC result
+throws the same `EGRESS_HELD` error as the request path (the channel surfaces
+its standard failure behavior), and a hit on a streamed frame closes the
+stream tap for the rest of that request. Rationale: (1) a canary token is
 `cnry_` + 16 base32 chars of 80-bit process-local randomness that the model
 is explicitly never told to emit — a substring match in a reply is
 practically always a real prompt-material leak, so the false-positive cost
@@ -840,7 +849,7 @@ per-turn latency; (3) a post-send alert cannot un-send an exfiltrated
 token, and the repo doctrine for security paths is fail-closed. `shadow`
 mode records the CogSec event and lets the reply through. Fail-closed
 extends to scanner failure: a scan bound exceeded or scanner error on a
-carried-token reply is treated as a leak (held in `enforce`, recorded in
+carried-token reply is treated as a leak (held in `boundary`/`strict`, recorded in
 `shadow`). Residual accepted risk: with streaming, a *partial* token prefix
 in an earlier frame may egress before the completing fragment is blocked
 (the fragment alone has no replay value), and per-request stream scan state
@@ -897,10 +906,10 @@ verified exclusions on it:
   so firewall activity never becomes a durable memory.
 
 The same contract covers every companion-visible substitute text: the
-withheld-content placeholder (enforce-mode quarantine of a page, document,
-or tool result), the withheld-image variant (vision screening), sink-held
-notices in the contacts/wiki/identity tools, and the optional second-arrow
-self-notice. Notices are delivered through the existing
+withheld-content placeholder (a page, document, or tool result quarantined
+under `boundary` or `strict`), the withheld-image variant (vision screening),
+sink-held notices in the contacts/wiki/identity tools, and the optional
+second-arrow self-notice. Notices are delivered through the existing
 `session.cogsec_notices` prompt block (`src/core/cogsec/safe-log.ts` →
 `src/core/session/manager/context-builder.ts`), provenance-tagged as a
 system note. Forensic detail — labels, scores, journals, raw content —
@@ -932,6 +941,42 @@ shared file (`companion-data/state/contact-block-list.json`), keyed by
 by the agent-side tool and read by the gateway. Unblocking is only ever
 explicit (companion or operator); nothing clears a block automatically.
 
+## Persona Conformance During Remediation
+
+Persona conformance is a companion-specific anomaly and drift check applied to
+the prompt-visible context left after CogSec remediation. Its mutable baseline
+lives under `settings.json` `cogSecPersonaConformance`, not in source code. An
+enabled baseline supplies stable identity text, expected voice/value/refusal/
+relationship anchors, and anomaly patterns. The runtime compares pattern
+counts in the candidate context with that companion's own stable baseline, so a
+term is notable only when it represents configured drift.
+
+This check is ontology-neutral. Words such as “AI,” “assistant,” “language
+model,” or a provider name are not forbidden concepts. A companion may use or
+self-apply them when that usage is consistent with its configured baseline.
+The check looks for a change from the companion-specific register; it does not
+decide what a companion is, censor model knowledge, or replace operator
+interpretation.
+
+Configuration behavior is explicit and fail-closed:
+
+- `{ "enabled": false }` records a `warning` with reason
+  `conformance_explicitly_disabled`; it does not manufacture a passing
+  conformance result.
+- An absent `cogSecPersonaConformance` setting refuses Garden remediation
+  before it mutates the selected session or creates a CogSec event.
+- When enabled, missing/empty baseline text or anchor/pattern arrays, invalid
+  patterns, unknown keys, and patterns that match empty text fail settings
+  normalization. Runtime checks also throw if required configured anchors are
+  unavailable.
+- Missing expected anchors are warnings. Pattern drift, unauthorized persona
+  mutation drift, or visible sealed material are failures requiring operator
+  review before the case can be considered clean.
+
+Garden presents the remediation record and conformance reasons to the operator.
+The operator interprets the evidence and owns the remediation decision; Garden
+does not infer persona truth from generic ontology terms.
+
 ## `intake-policy.json` Reference
 
 Owner file: `src/system/config/intake-policy-config.ts`; seed:
@@ -959,8 +1004,8 @@ silently ignores or aliases the retired keys.
 
 | Knob | Seed default | What it does |
 | --- | --- | --- |
-| `schemaVersion` | `4` | Must be 4. Schema 1/2/3 owners require the explicit `migrate:intake-policy-owner` command. |
-| `mode` | `"shadow"` | `off`: no screening service or sink gate constructed, no envelopes exist. `shadow`: envelopes created, screened, journaled, and audited, but delivered content never changes and gates never block. `enforce`: `effectiveText` honors decisions (sanitize substitutes sanitized text; quarantine/block substitute the withheld notice) and sink-gate denials are real. |
+| `schemaVersion` | `5` | Must be 5. Schema 1/2/3/4 owners require the explicit `migrate:intake-policy-owner` command. |
+| `mode` | `"shadow"` | `shadow` screens and audits without changing delivery, apart from hard lethal-trifecta denial. `boundary` enforces external ingress and outbound publication while structurally authenticated internal activity uses the clean bubble. `strict` screens and enforces all declared vectors. |
 | `sourceRiskTiers` | see below | Risk tier per source class; every class required. |
 | `sourceLists` | all four empty | Operator-curated trusted/denied sites and people (flywheel target). |
 | `urlScanner.schemeActions` | `javascript`: deny; `data`: deny except inline images; `mailto`/`tel`: allow | Per-scheme URL-scanner treatment. Missing or invalid actions fail owner-file validation; unlisted schemes stay silent to avoid false positives in ordinary conversation. |
@@ -1007,13 +1052,13 @@ Seed `sourceRiskTiers`: `operator`/`companion_self`/`primary_user` → `trusted`
 | `maxOutputTokens` | `1200` | Output cap per verdict. |
 
 There is deliberately no L3 fail-closed knob: anything that reached L3 is
-already suspect, so an L3 failure always holds the item (enforce mode).
+already suspect, so an L3 failure always holds the item in `boundary` or `strict`.
 
 ### `visionScreener`
 
 | Knob | Seed default | What it does |
 | --- | --- | --- |
-| `enabled` | `true` | `false` restores pre-htm9.8 behavior (images bypass VLM screening). When true, enforce mode fails closed: unreachable vision model means the image is withheld. |
+| `enabled` | `true` | `false` restores pre-htm9.8 behavior (images bypass VLM screening). When true, `boundary` and `strict` fail closed: an unreachable vision model means the image is withheld. |
 | `timeoutMs` | `20000` | Per-call timeout. |
 | `maxOutputTokens` | `1600` | Output cap for the OCR+description verdict. |
 
@@ -1023,7 +1068,7 @@ already suspect, so an L3 failure always holds the item (enforce mode).
 result classes. It is intentionally not a text or regular-expression
 allowlist: runtime code must first establish the trusted tool identity and an
 exact structured-result contract. Omitting `benignClasses` (including in an
-existing schema-v4 owner) enables no exemptions.
+otherwise valid schema-v5 owner) enables no exemptions.
 
 | Class | Seed suppression | Runtime proof required |
 | --- | --- | --- |
@@ -1049,7 +1094,7 @@ Per sink (`sinks.<sink>`), all seven sinks required:
 | --- | --- |
 | `maxSourceRiskTier` | Highest tier whose content may drive this sink (the inform-vs-instruct cap). |
 | `denyRiskLabels` | Screening findings refused at this sink even for released content. |
-| `unscreened` | Enforce-mode action (`allow`/`deny`) for content reaching the sink without an envelope. Explicit — no implicit fail-open. |
+| `unscreened` | Action (`allow`/`deny`) for content reaching the sink without an envelope when its vector posture enforces. Explicit; no implicit fail-open. |
 
 Seed values: `prompt_assembly`, `memory_write`, `wiki_write`, and
 `tool_egress` cap at `hostile` (inform sinks); `skill_write` caps at
@@ -1063,12 +1108,30 @@ persona/policy-mutation, and poisoning labels; `persona_mutation`/
 `skill_write`, `persona_mutation`, `wiki_write`, and `trust_mutation` map
 `deny`; `prompt_assembly`, `memory_write`, and `tool_egress` stay `allow` —
 see [Per-sink `unscreened` posture (qg13)](#per-sink-unscreened-posture-qg13)
-for the full decision table and the enforce-mode wiring caveat. The validator
+for the full decision table and current wiring. The validator
 schema-forces `deny` for `skill_write`/`persona_mutation`/`wiki_write`.
 
 | Knob | Seed default | What it does |
 | --- | --- | --- |
 | `trifecta.enforcementByTier` | trusted/standard `soft`, untrusted/hostile `hard` | Lethal-trifecta strength per source tier of the untrusted content in the egress path: `hard` denies, `soft` allows + flags for operator review. |
+
+### `screeningPool`
+
+The gateway composes one bounded screening pool. Work from one companion stays
+serial to preserve decision and delivery order, while independent companion
+streams may overlap within the fleet-wide bound. Admission backpressures once
+the queue is full, and the item deadline covers queue wait plus screening.
+Expiry fails the item closed.
+
+| Knob | Seed default | Valid range |
+| --- | --- | --- |
+| `concurrency` | `3` | `2`–`4` workers |
+| `maxQueueDepth` | `64` | `1`–`1024` admitted items waiting to run |
+| `itemDeadlineMs` | `60000` | `5000`–`300000` ms |
+
+The validation bounds are owned by
+`src/system/config/intake-screening-pool-contract.json`; values outside them
+refuse owner-file loading.
 
 ### `driftDetection`
 
@@ -1110,8 +1173,10 @@ schema-forces `deny` for `skill_write`/`persona_mutation`/`wiki_write`.
 
 ## Operator Runbook
 
-Operational quick reference also lives in
-[`docs/operations.md`](./operations.md) ("Cognitive Security Operations").
+[`docs/operations.md`](./operations.md) defines the public runtime and
+configuration boundary. Target selection, rollout commands, effective owner
+fingerprints, and incident procedures belong in the private operations
+authority for the installation.
 
 ### Provision the injection classifier
 
@@ -1126,10 +1191,10 @@ with `PSFN_INJECTION_MODEL_DIR`. Golden-set parity test:
 
 ```bash
 PSFN_INJECTION_MODEL_DIR=./models/prompt-injection-v2 \
-  npx vitest run src/boundary/gateway/intake/injection-classifier.test.ts
+  npm test -- src/boundary/gateway/intake/injection-classifier.test.ts
 ```
 
-### Shadow → enforce rollout
+### Shadow to enforcement rollout
 
 1. Run in `shadow` (the seed default) for long enough to see representative
    traffic. Shadow creates, screens, and journals envelopes and audits every
@@ -1145,11 +1210,13 @@ PSFN_INJECTION_MODEL_DIR=./models/prompt-injection-v2 \
    and seed the `sourceLists` with the sites and
    people you already trust or deny (or let the release flywheel populate
    them as you review).
-4. Flip `mode` to `"enforce"` in `intake-policy.json` and restart. From that
-   point: sanitize decisions substitute sanitized text, quarantine decisions
-   substitute the fixed withheld notice, sink gates deny for real, the
-   trifecta hard-denies for untrusted/hostile tiers, and vision-screening
-   failures withhold images instead of passing them.
+4. Choose the intended enforcement boundary. `boundary` enforces external
+   ingress and outbound publication while preserving the structurally
+   authenticated internal clean bubble. `strict` also semantically screens and
+   enforces internal vectors. Change `mode` through the installation's audited
+   owner-file path and restart. Sanitize decisions then substitute sanitized
+   text, quarantine decisions substitute the fixed withheld notice, applicable
+   sink-gate denials block, and vision-screening failures withhold images.
 5. Watch the quarantine queue cadence. Reviews are async and batched by
    design — items keep for `itemTtlHours`; nothing needs an interrupt-driven
    response.
@@ -1200,7 +1267,7 @@ Documented deliberately; do not let the layer diagram imply otherwise.
 - **The canary egress scan now covers the main conversational reply (d269).**
   The reverse-RPC result/stream seam (`requestAgent`, companion/satellite
   chat, both voice paths, `api.stream.delta` frames) is scanned by the reply
-  guard — inline block in `enforce`, record-and-allow in `shadow`; see
+  guard — inline block in `boundary`/`strict`, record-and-allow in `shadow`; see
   [Reverse-RPC reply canary scan (d269)](#reverse-rpc-reply-canary-scan-d269).
   Residual: a partial token prefix in an already-forwarded stream frame may
   egress before the completing fragment is blocked, and bounded stream-scan
@@ -1214,19 +1281,13 @@ Documented deliberately; do not let the layer diagram imply otherwise.
   recorded source channel; an item held with no source channel cannot be
   routed and reports an undeliverable outcome (the release still applies), so
   such items still need out-of-band relay.
-- **`persona_mutation` / `wiki_write` / `trust_mutation` fail closed but are
-  not yet screen-then-allow wired (qg13).** Their seed `unscreened` default is
-  now `deny` (the first two are schema-forced), so an unenveloped write is
-  *held* in enforce mode. But their gate call sites still evaluate with an
-  empty envelope list, so — unlike `skill_write`, which screens its proposed
-  content and attaches active-turn envelopes — a *legitimate* self-authored
-  persona/wiki/trust write is also held rather than screened-and-passed. Inert
-  in `shadow` (current live mode); before enabling `enforce`, wire those call
-  sites (mirror `screenSkillWrite`) or accept the held-for-review posture. See
+- **Self-authored mutation screening has an intentional persona exception.**
+  Wiki and trust mutations consume screened effective values and honor sink
+  denials. The companion-owned `identity update_persona` action is screened and
+  audited, but CogSec does not independently replace or block the proposed
+  persona text; its structural and confirmation path remains authoritative.
+  Other identity mutation actions retain normal sink enforcement. See
   [Per-sink `unscreened` posture (qg13)](#per-sink-unscreened-posture-qg13).
-  `prompt_assembly`, `memory_write`, and `tool_egress` remain `allow` with
-  stated justifications (inform boundary; self-authored memory; trifecta is the
-  egress control).
 - **L1 is fail-open-advisory by design.** A scanner exception is recorded
   and visible but does not hold the item; the structural guarantees live in
   the envelope states and sink gates, not in L1.

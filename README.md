@@ -124,6 +124,7 @@ configuration is intentionally external to this public repository.
 **Operations and process**:
 
 - [`docs/setup.md`](./docs/setup.md), [`docs/operations.md`](./docs/operations.md)
+- [`docs/shakedown.md`](./docs/shakedown.md) — cumulative release recertification contract
 - [`docs/development-status.md`](./docs/development-status.md) — where the project stands
 - [`AGENTS.md`](./AGENTS.md) — the operating contract for coding agents
 

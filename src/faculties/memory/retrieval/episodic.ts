@@ -105,6 +105,7 @@ export interface EpisodicTimelineInput {
   accessScope?: RetrievalAccessScope;
   scopeQuery?: MemoryScopeQuery;
   includeEpisode?: (episode: Episode) => boolean;
+  includeArc?: (arc: EpisodeArc) => boolean;
   limit?: number;
   scanLimit?: number;
   maxDepth?: number;
@@ -449,6 +450,7 @@ export async function retrieveEpisodicTimeline(
       if (entriesById.has(episode.id)) continue;
       if (entriesById.size >= limit) break;
       const arc = findTimelineArcForEpisode(episode.id, chain.arcs);
+      if (arc && input.includeArc?.(arc) === false) continue;
       const linkedFromEpisodeId = arc
         ? (arc.sourceEpisodeId === episode.id ? arc.targetEpisodeId : arc.sourceEpisodeId)
         : undefined;

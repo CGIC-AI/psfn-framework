@@ -53,7 +53,7 @@ export const CONTINUITY_TOOL_CONTRACTS = {
       action('search', ['query'], ['limit']),
       action('episode_search', ['query'], ['limit', 'channel_id', 'trust_level', 'channel_visibility', 'canonical_contact_id'], {
         id: 'episode_search',
-        rule: 'lexically searches visible canonical episodes and returns exact episode ids for action=get drill-down',
+        rule: 'hybrid-searches visible canonical episodes, reports lexical/semantic mode health, and returns exact episode ids for action=get drill-down',
       }),
       action('get', ['episode_id'], ['limit', 'channel_id', 'trust_level', 'channel_visibility', 'canonical_contact_id'], {
         id: 'get',

@@ -44,6 +44,7 @@ import {
 } from './retrieval/episodic.js';
 import {
   filterQuarantinedEpisodicChains,
+  isEpisodeArcQuarantined,
   isEpisodeQuarantined,
   type MemorySessionQuarantineFilter,
 } from './retrieval/session-quarantine.js';
@@ -1398,6 +1399,10 @@ export function createMemoryTool(
               includeEpisode: episode => !isEpisodeQuarantined(
                 options.sessionQuarantineFilter ?? null,
                 episode,
+              ),
+              includeArc: arc => !isEpisodeArcQuarantined(
+                options.sessionQuarantineFilter ?? null,
+                arc,
               ),
               ...(explicitLimit !== undefined ? { limit: explicitLimit } : {}),
               memoryRetrievalPolicy,

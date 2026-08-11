@@ -12,6 +12,7 @@ import type { EpisodeCreateInput, EpisodeEmbeddingProfile } from './store-port.j
 
 const CREATED_AT = new Date('2026-07-28T11:00:00.000Z');
 const REPOINTED_AT = new Date('2026-07-28T12:00:00.000Z');
+const UPDATED_AT = new Date('2026-07-28T12:01:00.000Z');
 const EMBEDDING_PROFILE: EpisodeEmbeddingProfile = {
   documentSchema: 'l01-episode-search/1',
   provider: 'transformers',
@@ -30,7 +31,11 @@ afterAll(async () => {
 });
 
 async function withEpisodicDatabase<T>(
-  operation: (pool: Pool, store: PostgresEpisodicStore) => Promise<T>,
+  operation: (
+    pool: Pool,
+    store: PostgresEpisodicStore,
+    setNow: (value: Date) => void,
+  ) => Promise<T>,
 ): Promise<T> {
   if (!harness) throw new Error('PostgreSQL integration harness is not available');
   const database = await harness.createDatabase();
@@ -46,7 +51,9 @@ async function withEpisodicDatabase<T>(
     await store.createEpisode(episodeInput('episode-anchor', 'thread-old'));
     await store.createEpisode(episodeInput('episode-sibling', 'thread-old'));
     now = REPOINTED_AT;
-    return await operation(pool, store);
+    return await operation(pool, store, value => {
+      now = value;
+    });
   } finally {
     await pool.end();
   }
@@ -88,7 +95,7 @@ async function readRows(pool: Pool): Promise<EpisodeRepointRow[]> {
 
 describe('PostgresEpisodicStore thread repoint integration', () => {
   it('searches only live vectors from the exact current episode revision', async () => {
-    await withEpisodicDatabase(async (_pool, store) => {
+    await withEpisodicDatabase(async (_pool, store, setNow) => {
       const anchor = await store.getEpisode('episode-anchor');
       const sibling = await store.getEpisode('episode-sibling');
       if (!anchor || !sibling) throw new Error('expected seeded episodes');
@@ -110,6 +117,11 @@ describe('PostgresEpisodicStore thread repoint integration', () => {
         indexedAt: CREATED_AT.toISOString(),
       })).resolves.toBe(true);
 
+      await store.confirmEpisodeCanonical(anchor.id);
+      await expect(store.getEpisode(anchor.id)).resolves.toMatchObject({
+        updatedAt: REPOINTED_AT.toISOString(),
+      });
+
       await expect(store.searchEpisodesByEmbedding({
         profile: EMBEDDING_PROFILE,
         queryEmbedding: new Float32Array([1, 0, 0]),
@@ -120,6 +132,7 @@ describe('PostgresEpisodicStore thread repoint integration', () => {
       ]);
 
       await store.markEpisodeMerged(sibling.id, anchor.id);
+      setNow(UPDATED_AT);
       const {
         schemaVersion: _schemaVersion,
         createdAt: _createdAt,

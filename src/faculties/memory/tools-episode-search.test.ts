@@ -306,4 +306,70 @@ describe('memory action=episode_search', () => {
     expect(resultText(quarantinedGet)).not.toContain('The exact cross-channel partner turn.');
     expect(quarantinedGet.details).toMatchObject({ isError: true });
   });
+
+  it('does not expand timeline relationships sourced from a quarantined session', async () => {
+    const store = new PostgresEpisodicStore(
+      new FakeEpisodicPool() as unknown as Pool,
+      { now: () => new Date('2026-07-18T12:00:00.000Z') },
+    );
+    const common = {
+      channelId: CHANNEL_ID,
+      participantContactIds: ['contact:current'],
+      salience: { score: 0.8 },
+      affect: { labels: [] },
+      themes: ['repair'],
+      spanRefs: [],
+      artifactRefs: [{ artifactId: 'artifact:timeline-grounding' }],
+      provenanceRefs: [],
+    };
+    await store.createCompanionAuthoredEpisode({
+      ...common,
+      id: 'timeline-root',
+      title: 'Timeline root',
+      landmark: 'The visible event in the requested range.',
+      startedAt: '2026-07-17T12:00:00.000Z',
+      endedAt: '2026-07-17T13:00:00.000Z',
+    });
+    await store.createCompanionAuthoredEpisode({
+      ...common,
+      id: 'timeline-quarantined-link',
+      title: 'Quarantined linked episode',
+      landmark: 'This relationship must not be disclosed.',
+      startedAt: '2026-07-16T12:00:00.000Z',
+      endedAt: '2026-07-16T13:00:00.000Z',
+    });
+    await store.writeEpisodeArc({
+      sourceEpisodeId: 'timeline-root',
+      targetEpisodeId: 'timeline-quarantined-link',
+      arcKind: 'continuation',
+      salience: 0.9,
+      confidence: 0.9,
+      themes: ['repair'],
+      spanRefs: [],
+      artifactRefs: [],
+      provenanceRefs: [{ kind: 'session', refId: 'session:quarantined-arc' }],
+    });
+    const tool = createMemoryTool(
+      {} as MemoryWriter,
+      {} as MemoryStorePort,
+      {
+        episodicStore: store,
+        sessionQuarantineFilter: {
+          isSessionRetiredOrQuarantined: id => id === 'session:quarantined-arc',
+        },
+      },
+    );
+
+    const timeline = await tool.execute('memory-timeline-arc-quarantine', {
+      action: 'timeline',
+      date: '2026-07-17',
+      channel_id: CHANNEL_ID,
+      trust_level: 'trusted',
+      channel_visibility: 'private',
+    });
+
+    expect(resultText(timeline)).toContain('timeline-root');
+    expect(resultText(timeline)).not.toContain('timeline-quarantined-link');
+    expect(resultText(timeline)).not.toContain('This relationship must not be disclosed.');
+  });
 });

@@ -290,13 +290,25 @@ export class PostgresEpisodicStore implements
    */
   async confirmEpisodeCanonical(episodeId: string): Promise<void> {
     const normalizedId = parseRequiredText(episodeId, 'episode id');
+    const confirmedAt = this.now().toISOString();
     const result = await executeQuery(this.pool, `
       UPDATE l01_episodes
-      SET status = 'canonical', updated_at = $2
+      SET status = 'canonical',
+          episode_json = jsonb_set(
+            episode_json,
+            '{updatedAt}',
+            to_jsonb($2::text),
+            true
+          ),
+          embedding_source_updated_at = CASE
+            WHEN embedding_source_updated_at = updated_at THEN $2::timestamptz
+            ELSE embedding_source_updated_at
+          END,
+          updated_at = $2::timestamptz
       WHERE id = $1
         AND merged_into_episode_id IS NULL
         AND superseded_by_episode_id IS NULL
-    `, [normalizedId, this.now().toISOString()]);
+    `, [normalizedId, confirmedAt]);
     if (result.rowCount === 0) {
       if (!(await this.getEpisode(normalizedId))) {
         throw new Error(`episode "${normalizedId}" does not exist`);

@@ -1184,6 +1184,45 @@ button:focus-visible {
   margin: 0;
 }
 
+.z02-link-summary {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.62rem 0.7rem;
+  border: 1px solid rgba(143, 187, 232, 0.32);
+  border-radius: 8px;
+  background: rgba(234, 244, 255, 0.4);
+}
+
+.z02-link-summary.linked {
+  border-color: rgba(95, 157, 111, 0.42);
+  background: rgba(232, 247, 233, 0.6);
+}
+
+.z02-link-summary > svg {
+  flex: 0 0 auto;
+  color: var(--color-blue);
+}
+
+.z02-link-summary.linked > svg {
+  color: #4f8b5e;
+}
+
+.z02-link-summary > span {
+  display: grid;
+  gap: 0.12rem;
+}
+
+.z02-link-summary small,
+.z02-link-detail {
+  color: var(--color-muted);
+}
+
+.z02-link-detail {
+  margin: 0;
+  font-size: 0.8rem;
+}
+
 .segmented-field {
   display: grid;
   gap: 0.35rem;

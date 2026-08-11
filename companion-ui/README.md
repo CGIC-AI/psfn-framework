@@ -72,6 +72,21 @@ Run the development server:
 npm run dev
 ```
 
+### Linking a stock ZNP Z02
+
+Open **Settings → Z02 badge → Link Z02** in Chrome on Android (or another Web
+Bluetooth browser) while the app is served over HTTPS. The chooser is limited
+to the stock `ZNP Z02` name and JieLi `AE00` service. After selection, the app
+discovers `AE01`/`AE02` and completes the same recovered mutual-authentication
+exchange as BagiBagi before showing **Authenticated**.
+
+The link is local to the open app and is not persisted. Disconnect BagiBagi
+first because the badge accepts only one active BLE client. This initial client
+implements no RCSP OTA, erase, flash-write, or file-mutation commands. The
+transport sits behind a small connector interface so a packaged Android build
+can replace Web Bluetooth with a native BLE adapter without changing the auth
+or UI state machine.
+
 Build the PWA:
 
 ```bash

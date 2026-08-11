@@ -60,6 +60,7 @@ import { ThreadView } from './thread-view.js';
 import type { ActivityFilter, OverlayDrawer } from './types.js';
 import { useFleetRouting } from './use-fleet-routing.js';
 import { useVoicePlayback } from './use-voice-playback.js';
+import { useZ02Link } from './use-z02-link.js';
 import { WishlistDrawer } from './wishlist-drawer.js';
 
 type AccessState = FleetSessionStatus
@@ -103,6 +104,7 @@ export function App() {
     connect,
     reportError: setConfigError,
   });
+  const z02Link = useZ02Link();
   const mouthOpen = useVoicePlayback(streamState.voicePlayback, storeRef.current);
 
   const sendDeviceLocation = useCallback((sample: DeviceLocationSample) => {
@@ -528,6 +530,7 @@ export function App() {
               locationEnabled={locationEnabled}
               locationStatus={locationStatus}
               streamState={streamState}
+              z02LinkState={z02Link.state}
               onClose={() => setOverlay(null)}
               onLocationEnabledChange={setLocationEnabled}
               onConnect={() => void refreshAuthority(true)}
@@ -549,6 +552,8 @@ export function App() {
                 setOverlay(null);
                 void switchUser();
               }}
+              onZ02Disconnect={z02Link.disconnect}
+              onZ02Link={() => { void z02Link.link(); }}
             />
           ) : overlay === 'wishlist' ? (
             <WishlistDrawer

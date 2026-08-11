@@ -23,7 +23,7 @@ import {
 
 export type HybridEpisodeSearchStore = EpisodicRetrievalStore & EpisodeEmbeddingStorePort;
 
-export type EpisodeSearchModeStatus = 'completed' | 'unavailable' | 'failed' | 'stale';
+type EpisodeSearchModeStatus = 'completed' | 'unavailable' | 'failed' | 'stale';
 
 export interface EpisodeSearchModeReport {
   status: EpisodeSearchModeStatus;
@@ -32,7 +32,7 @@ export interface EpisodeSearchModeReport {
   pendingIndexCount?: number;
 }
 
-export interface HybridEpisodeSearchResult {
+interface HybridEpisodeSearchResult {
   episode: Episode;
   chain: EpisodicRetrievalChain;
   fusedScore: number;
@@ -51,7 +51,7 @@ export interface HybridEpisodeSearchResponse {
   degraded: boolean;
 }
 
-export type HybridEpisodeSearchInput = Omit<EpisodicLexicalSearchInput, 'includeChain'> & {
+type HybridEpisodeSearchInput = Omit<EpisodicLexicalSearchInput, 'includeChain'> & {
   sessionQuarantineFilter?: MemorySessionQuarantineFilter | null;
 };
 
@@ -59,7 +59,7 @@ export interface HybridEpisodeSearchPort {
   search(input: HybridEpisodeSearchInput): Promise<HybridEpisodeSearchResponse>;
 }
 
-export interface HybridEpisodeSearchDiagnostic {
+interface HybridEpisodeSearchDiagnostic {
   mode: 'semantic';
   status: Exclude<EpisodeSearchModeStatus, 'completed'>;
   error?: string;

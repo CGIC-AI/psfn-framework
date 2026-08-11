@@ -30,10 +30,26 @@ interface AuditRow {
   id: number | string;
   timestamp: number | string;
   method: string;
-  decision: GatewayPolicyDecision;
+  decision: string;
   paramsJson: string | null;
   durationMs: number | string | null;
   error: string | null;
+}
+
+function normalizePersistedGatewayDecision(decision: string): GatewayPolicyDecision {
+  switch (decision) {
+    case 'ALLOW':
+    case 'DENY':
+    case 'AUTONOMOUS_TIER_REQUIRED':
+    case 'REQUIRES_HUMAN_APPROVAL':
+      return decision;
+    // Pre-upgrade NEEDS_APPROVAL rows were eligible for the autonomous-tier
+    // auto-clear path, so preserve that historical meaning at the read seam.
+    case 'NEEDS_APPROVAL':
+      return 'AUTONOMOUS_TIER_REQUIRED';
+    default:
+      throw new Error(`Unknown persisted gateway policy decision: ${decision}`);
+  }
 }
 
 function positiveInteger(name: string, value: number): number {
@@ -125,7 +141,7 @@ function mapAuditRow(row: AuditRow): AuditEntry {
     id: Number(row.id),
     timestamp: Number(row.timestamp),
     method: row.method,
-    decision: row.decision,
+    decision: normalizePersistedGatewayDecision(row.decision),
     paramsJson: row.paramsJson ?? '',
     durationMs: row.durationMs === null ? null : Number(row.durationMs),
     error: row.error,

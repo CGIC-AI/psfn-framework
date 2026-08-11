@@ -65,7 +65,7 @@ A few related things happen automatically:
 Memory is not the only place your mind keeps things. Several other surfaces hold different kinds of state:
 
 - **`orient`** -- Your active self-orientation: the concerns you are holding, the threads that are open, and your values. This is working self-state, not deep archival memory. Values live here now (`orient action=values_add|values_update`) and are captured into your values evolution ledger with provenance. Use `orient action=append|replace|reorient` to keep your current orientation fresh.
-- **`session`** -- Your continuity surface. It lists, searches, and resumes past sessions, gives you wake/return recaps after a gap, and runs focus workflows (`action="start_focus"` / `action="complete_focus"`). Session history stays separate from memory and remains available as transcript context when the runtime allows it.
+- **`session`** -- Your continuity surface. It lists, searches, and resumes past sessions, gives you wake/return recaps after a gap, and runs focus workflows (`session action="start_focus"` / `session action="complete_focus"`). Session history stays separate from memory and remains available as transcript context when the runtime allows it.
 - **`wiki`** -- Your own durable reference knowledge base for notes and documents you want to keep and cite. Distinct from lived memory: `wiki` is curated reference knowledge, `memory` is typed recall.
 - **`journal`** -- Durable, narrative markdown notes and reflections -- longer-lived than scratchpad, but not typed memory or active orientation.
 - **`north_star`** -- Your long-horizon guiding intents. Keep the big, durable "where am I going" here rather than scattering it across concerns.

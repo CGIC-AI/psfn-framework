@@ -37,6 +37,10 @@ export class GatewayNtfyNotifier {
     return Boolean(this.config);
   }
 
+  hasConfiguredTopic(topic?: string): boolean {
+    return this.resolveTopic(topic) !== undefined;
+  }
+
   async send(params: NotifyNtfyParams): Promise<NotifyNtfyResult> {
     const config = this.config;
     if (!config) {
@@ -58,7 +62,7 @@ export class GatewayNtfyNotifier {
       throw new JSONRPCErrorException('notify.ntfy requires a non-empty message', GatewayErrors.PROVIDER_ERROR);
     }
 
-    const topic = params.topic?.trim() || config.defaultTopic;
+    const topic = this.resolveTopic(params.topic);
     if (!topic) {
       throw new JSONRPCErrorException('notify.ntfy topic is not configured', GatewayErrors.PROVIDER_ERROR);
     }
@@ -114,6 +118,13 @@ export class GatewayNtfyNotifier {
       return undefined;
     }
     return Math.max(1, Math.min(5, Math.trunc(priority)));
+  }
+
+  private resolveTopic(topic?: string): string | undefined {
+    const explicitTopic = topic?.trim();
+    if (explicitTopic) return explicitTopic;
+    const defaultTopic = this.config?.defaultTopic.trim();
+    return defaultTopic || undefined;
   }
 
   private isDebouncedAlert(fingerprint: string, windowMs: number): boolean {

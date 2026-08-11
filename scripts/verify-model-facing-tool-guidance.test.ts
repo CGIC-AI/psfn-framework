@@ -26,6 +26,34 @@ describe('model-facing retired tool guidance verifier', () => {
     }]).violations).toEqual([]);
   });
 
+  it('does not treat a retired alias as its own canonical action owner', () => {
+    expect(scanModelFacingToolGuidanceEntries([{
+      path: 'skills/example/SKILL.md',
+      text: 'Use values_add with action="values_add".',
+    }]).violations).toEqual([
+      expect.objectContaining({ alias: 'values_add', canonicalName: 'orient' }),
+    ]);
+
+    expect(scanModelFacingToolGuidanceEntries([{
+      path: 'skills/example/SKILL.md',
+      text: 'Use `orient` with `action="values_add"`.',
+    }]).violations).toEqual([]);
+
+    expect(scanModelFacingToolGuidanceEntries([{
+      path: 'skills/example/SKILL.md',
+      text: 'The `orient` actions are useful; call `values_add` directly.',
+    }]).violations).toEqual([
+      expect.objectContaining({ alias: 'values_add', canonicalName: 'orient' }),
+    ]);
+
+    expect(scanModelFacingToolGuidanceEntries([{
+      path: 'skills/example/SKILL.md',
+      text: 'Call `values_add` directly; use `orient` with `action="values_add"` otherwise.',
+    }]).violations).toEqual([
+      expect.objectContaining({ alias: 'values_add', canonicalName: 'orient' }),
+    ]);
+  });
+
   it('admits only documented retirement maps and CogSec sink identifiers', () => {
     expect(scanModelFacingToolGuidanceEntries([
       {

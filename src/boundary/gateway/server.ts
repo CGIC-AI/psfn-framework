@@ -663,7 +663,7 @@ export class GatewayServer {
       ntfyConfigured: Boolean(options.ntfy),
       approvalNotificationConfigured: Boolean(
         options.confirmation?.operatorDiscordChannelId?.trim()
-        || (options.confirmation?.ntfyTopic?.trim() && this.ntfyNotifier.isConfigured()),
+        || this.ntfyNotifier.hasConfiguredTopic(options.confirmation?.ntfyTopic),
       ),
       vaultEnabled: Boolean(options.policyConfig.vault?.enabled),
       vaultAllowActions: options.policyConfig.vault?.allowActions ?? [],

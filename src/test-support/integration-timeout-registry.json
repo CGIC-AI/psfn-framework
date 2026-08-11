@@ -42,6 +42,13 @@
       "note": "Pre-policy 120s override (repo-standard integration cap). Registered as measurement debt: pinned to its current value so any change forces a re-measured registry update. No independent baseline measured under this bead (timing wiring scoped to the restore suite)."
     },
     {
+      "file": "src/app/e2e/idle-purity-certification/runtime.integration.test.ts",
+      "timeoutMs": 180000,
+      "measuredBaselineMs": 67770,
+      "baselineSource": "measured",
+      "note": "rzuq quiet-runtime certification with the default 60s measured idle window. Baseline 67.77s file wall (real gateway/agent plus disposable pgvector Postgres, this host, 2026-08-10); 180000/67770 = 2.66x headroom for cold-start and shared-heavy harness variance."
+    },
+    {
       "file": "src/boundary/gateway/welfare-grant-verifier.integration.test.ts",
       "timeoutMs": 120000,
       "measuredBaselineMs": null,

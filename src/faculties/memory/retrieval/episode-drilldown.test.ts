@@ -188,6 +188,38 @@ describe('retrieveEpisodeDrilldown', () => {
     expect(getRecent).not.toHaveBeenCalled();
   });
 
+  it('withholds arc siblings whose relationship provenance is quarantined', async () => {
+    const store = await makeStore();
+    await store.createCompanionAuthoredEpisode({
+      ...episode('arc-quarantined', '2026-07-18T10:08:00.000Z', { span: false }),
+      threadId: 'thread:quarantined-arc-only',
+    });
+    await store.writeEpisodeArc({
+      sourceEpisodeId: 'root',
+      targetEpisodeId: 'arc-quarantined',
+      arcKind: 'continuation',
+      salience: 0.8,
+      confidence: 0.9,
+      themes: ['shared topic'],
+      spanRefs: [],
+      artifactRefs: [],
+      provenanceRefs: [{ kind: 'session', refId: 'session:quarantined-arc' }],
+    });
+
+    const result = await retrieveEpisodeDrilldown(store, { getRecent: () => [] }, {
+      episodeId: 'root',
+      channelId: CURRENT_CHANNEL,
+      trustLevel: 'trusted',
+      channelDisclosure: { channelPrivacy: 'private', broadcast: false },
+      siblingLimit: 10,
+      sessionQuarantineFilter: {
+        isSessionRetiredOrQuarantined: id => id === 'session:quarantined-arc',
+      },
+    });
+
+    expect(result?.arcSiblings.map(sibling => sibling.episode.id)).toEqual(['arc-visible']);
+  });
+
   it('degrades a compacted/rolled-out span to metadata-only instead of erroring the drill-down', async () => {
     const store = await makeStore();
 

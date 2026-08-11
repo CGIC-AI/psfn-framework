@@ -100,6 +100,7 @@ function buildBasePrompt(
     '',
     '### Memory (read-only)',
     '- `await memory_search(query, limit?)` — Search memories by semantic similarity, returns array of {text, type, importance, similarity}',
+    '- `await episode_search(query, limit?)` — Hybrid lexical/semantic search of canonical episodes; returns exact episode ids, bounded evidence, scores, and explicit retrieval-mode degradation',
     '- `await memory_count()` — Number of active memories',
     '- `await memory_get_by_id(id)` — Get a specific memory by its ID',
     '',

@@ -135,7 +135,11 @@ describe('createHybridEpisodeSearch', () => {
   it('reports stale semantic state instead of claiming an empty healthy index', async () => {
     const lexical = episode('episode-lexical', 'Apollo repair');
     const search = createHybridEpisodeSearch({
-      store: store([lexical], [], [{ episode: lexical, reason: 'stale' }]),
+      store: store(
+        [lexical],
+        [{ episode: lexical, similarity: 0.82 }],
+        [{ episode: lexical, reason: 'stale' }],
+      ),
       embeddingService: embedding(),
       profile: PROFILE,
     });
@@ -145,7 +149,7 @@ describe('createHybridEpisodeSearch', () => {
     expect(result.degraded).toBe(true);
     expect(result.modes.semantic).toEqual({
       status: 'stale',
-      candidateCount: 0,
+      candidateCount: 1,
       pendingIndexCount: 1,
     });
   });

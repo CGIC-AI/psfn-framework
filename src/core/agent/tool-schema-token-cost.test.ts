@@ -77,11 +77,11 @@ describe('full callable catalog schema token cost', () => {
       totalTools: 30,
       includesLibrary: false,
       beforeTokens: 17_503,
-      afterTokens: 21_207,
-      deltaTokens: 3_704,
+      afterTokens: 21_215,
+      deltaTokens: 3_712,
       beforeBytes: 82_621,
-      afterBytes: 99_111,
-      providerSchemaHash: '0d6d4c961dd47bb6d294e3c0bd368a741f1b77301ae161a443bda4b86e3ba37c',
+      afterBytes: 99_147,
+      providerSchemaHash: 'fdc472ba83486f34638edf95206cef7ef33f71adf72fd19c39ff098e6f273181',
       parameterSchemaHash: '55fc1f6d5cacb9117c0f32e533d5a6460c41ad8618f2575aa21a3103dcf57ce5',
     });
 

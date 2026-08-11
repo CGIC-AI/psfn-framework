@@ -11,6 +11,7 @@ import type { EpisodicStorePort } from '../episodic/store-port.js';
 import type { RetrievalAccessScope } from '../types.js';
 import { resolveEpisodeSessionEntryTurnId } from '../episodic/turn-reference.js';
 import {
+  isEpisodeArcQuarantined,
   isEpisodeQuarantined,
   type MemorySessionQuarantineFilter,
 } from './session-quarantine.js';
@@ -195,7 +196,8 @@ export async function retrieveEpisodeDrilldown(
     limit: input.siblingLimit,
   });
   const visibleMemberships = memberships.filter(membership => (
-    membership.members.every(member => (
+    !isEpisodeArcQuarantined(input.sessionQuarantineFilter ?? null, membership.arc)
+    && membership.members.every(member => (
       isEpisodeVisibleForTurn(member, visibilityInput)
       && !isEpisodeQuarantined(input.sessionQuarantineFilter ?? null, member)
     ))

@@ -169,21 +169,19 @@ export function createHybridEpisodeSearch(
         });
       }
 
-      if (candidates.length === 0) {
-        const pending = await options.store.listEpisodeEmbeddingTargets({
-          profile: options.profile,
-          limit: candidateLimit,
-        });
-        if (pending.length > 0) {
-          return {
-            entries,
-            report: {
-              status: 'stale',
-              candidateCount: entries.length,
-              pendingIndexCount: pending.length,
-            },
-          };
-        }
+      const pending = await options.store.listEpisodeEmbeddingTargets({
+        profile: options.profile,
+        limit: candidateLimit,
+      });
+      if (pending.length > 0) {
+        return {
+          entries,
+          report: {
+            status: 'stale',
+            candidateCount: entries.length,
+            pendingIndexCount: pending.length,
+          },
+        };
       }
 
       return {

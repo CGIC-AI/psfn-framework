@@ -64,6 +64,24 @@ describe('PostgresEpisodicStore episode embedding index', () => {
     expect(pool.episodes.get(EPISODE.id)?.episode_json).toBe(serializeEpisode(updated));
   });
 
+  it('keeps a current embedding current when confirming a candidate', async () => {
+    const query = vi.fn(async () => queryResult([], 1));
+    const confirmedAt = new Date('2026-08-10T12:00:00.000Z');
+    const store = new PostgresEpisodicStore(
+      { query } as unknown as Pool,
+      { now: () => confirmedAt },
+    );
+
+    await store.confirmEpisodeCanonical(EPISODE.id);
+
+    const [sql, values] = query.mock.calls[0] ?? [];
+    expect(String(sql)).toContain("SET status = 'canonical'");
+    expect(String(sql)).toContain("jsonb_set(\n            episode_json,\n            '{updatedAt}'");
+    expect(String(sql)).toContain('WHEN embedding_source_updated_at = updated_at THEN $2::timestamptz');
+    expect(String(sql)).toContain('updated_at = $2::timestamptz');
+    expect(values).toEqual([EPISODE.id, confirmedAt.toISOString()]);
+  });
+
   it('selects a bounded deterministic batch of missing, stale, or failed live episodes', async () => {
     const query = vi.fn(async () => queryResult([{
       id: EPISODE.id,

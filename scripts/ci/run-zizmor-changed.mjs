@@ -28,7 +28,7 @@ export const ACTIONLINT_IMAGE =
 const INPUT = /^\.github\/(?:workflows\/.*\.ya?ml|actions\/.*\.ya?ml|dependabot\.yml)$/;
 const FORMATS = new Set(['plain', 'github', 'sarif']);
 
-// Explicit-input mode (local gate): a caller that names paths must name at least
+// Explicit-input mode: a caller that names paths must name at least
 // one, and every path must be inside the owned set. Zero or unexpected inputs
 // are a misuse and fail closed.
 export function validateZizmorInputs(paths) {
@@ -182,7 +182,6 @@ export function runZizmor({ argv = process.argv.slice(2), runDocker = realDocker
   return runDocker(buildZizmorScanArgs({ mode: 'changed', format: opts.format, paths: inputs })).status;
 }
 
-// Backwards-compatible entry used by the local delivery gate:
 // `node run-zizmor-changed.mjs <owned-path...>` runs an offline, plain-format,
 // regular-persona scan of the named inputs.
 export function main(argv = process.argv.slice(2)) {

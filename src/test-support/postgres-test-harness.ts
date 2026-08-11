@@ -25,9 +25,9 @@ const POSTGRES_USER = 'postgres';
 const POSTGRES_PASSWORD = 'postgres';
 const POSTGRES_DATABASE = 'postgres';
 const POSTGRES_PORT = 5432;
-const TEST_POSTGRES_LABEL = 'io.local-gate.test-postgres';
-const TEST_POSTGRES_IMAGE_LABEL = 'io.local-gate.test-postgres.image';
-const TEST_POSTGRES_PROFILE_LABEL = 'io.local-gate.test-postgres.profile';
+const TEST_POSTGRES_LABEL = 'io.test-harness.postgres';
+const TEST_POSTGRES_IMAGE_LABEL = 'io.test-harness.postgres.image';
+const TEST_POSTGRES_PROFILE_LABEL = 'io.test-harness.postgres.profile';
 const MIN_CONCURRENT_HARNESSES = 4;
 const MAX_CONCURRENT_HARNESSES = 8;
 const DEFAULT_POSTGRES_TEST_TMPFS_SIZE = '1g';
@@ -336,7 +336,7 @@ export function postgresTestContainerNameForImage(
   }
   const imageHash = createHash('sha256').update(normalizedImage).digest('hex').slice(0, 16);
   const scopeHash = createHash('sha256').update(normalizedScope).digest('hex').slice(0, 8);
-  return `local-gate-test-postgres-${scopeHash}-${imageHash}`;
+  return `test-postgres-${scopeHash}-${imageHash}`;
 }
 
 export function postgresTestDockerRunArgs(image: string, name: string): string[] {

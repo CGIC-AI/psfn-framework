@@ -14,7 +14,7 @@
  */
 import { spawnSync } from 'node:child_process';
 
-const TEST_POSTGRES_LABEL = 'io.local-gate.test-postgres';
+const TEST_POSTGRES_LABEL = 'io.test-harness.postgres';
 const DOCKER_TIMEOUT_MS = 60_000;
 
 function docker(args) {

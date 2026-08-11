@@ -46,9 +46,9 @@ stable release contract for PSFN:
 - development fork `93ee245db060e9cdb9c9c32f6d31d76d0c5a491d`;
 - upstream `7dba0e40a1ce4def8b1c4ac8670a94aa54f9116e`.
 
-The revisions were read from Git objects, not from the dirty Agent Bus checkout. The conformance
-manifest records both revisions. The adapted material is attributed under
-[`third_party/agentbus`](../third_party/agentbus).
+The revisions were read from Git objects rather than treated as a runtime dependency. The
+conformance manifest records both revisions; no Agent Bus code or developer tooling ships with
+the framework.
 
 | Agent Bus capability | V1 decision | PSFN reason |
 | --- | --- | --- |

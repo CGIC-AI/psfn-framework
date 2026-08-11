@@ -1,9 +1,8 @@
 #!/usr/bin/env node
 
+import { execFileSync } from 'node:child_process';
 import { appendFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
-
-import { collectRangeStats } from './check-change-budget.mjs';
 
 export function detectChangeScope(paths) {
   const matches = (pattern) => paths.some((path) => pattern.test(path));
@@ -42,11 +41,17 @@ async function main() {
   const headIndex = args.indexOf('--head');
   const base = baseIndex === -1 ? '' : args[baseIndex + 1];
   const head = headIndex === -1 ? 'HEAD' : args[headIndex + 1];
-  const { execFileSync } = await import('node:child_process');
-  const stats = collectRangeStats({ base, head });
+  if (!base) throw new Error('--base requires a commit');
+  if (!head) throw new Error('--head requires a commit');
+  const resolvedBase = execFileSync('git', ['merge-base', base, head], {
+    encoding: 'utf8',
+  }).trim();
+  const resolvedHead = execFileSync('git', ['rev-parse', '--verify', `${head}^{commit}`], {
+    encoding: 'utf8',
+  }).trim();
   const output = execFileSync(
     'git',
-    ['diff', '--name-only', '-M', stats.base, stats.head],
+    ['diff', '--name-only', '-M', resolvedBase, resolvedHead],
     { encoding: 'utf8' },
   ).trim();
   const paths = output ? output.split('\n') : [];

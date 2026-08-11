@@ -13,6 +13,8 @@ import type { FleetRosterCompanion } from '../lib/fleet-roster.js';
 import { DrawerHeader } from './overlay-drawer.js';
 import type { MicMode } from './types.js';
 import type { DeviceLocationStatus } from './use-device-location.js';
+import type { Z02LinkState } from './use-z02-link.js';
+import { Z02LinkSection } from './z02-link-section.js';
 
 export type CompanionUiAccessPresentation = Readonly<{
   state: 'loading' | 'offline' | 'signed_out' | 'signed_in' | 'guest';
@@ -32,6 +34,7 @@ export function SettingsDrawer({
   locationEnabled,
   locationStatus,
   streamState,
+  z02LinkState,
   onClose,
   onConnect,
   onDisconnect,
@@ -44,6 +47,8 @@ export function SettingsDrawer({
   onSpriteEnabledChange,
   onLocationEnabledChange,
   onSwitchUser,
+  onZ02Disconnect,
+  onZ02Link,
 }: {
   access: CompanionUiAccessPresentation;
   activeCompanionId: string | null;
@@ -55,6 +60,7 @@ export function SettingsDrawer({
   locationEnabled: boolean;
   locationStatus: DeviceLocationStatus;
   streamState: HubStreamState;
+  z02LinkState: Z02LinkState;
   onClose: () => void;
   onConnect: () => void;
   onDisconnect: () => void;
@@ -67,6 +73,8 @@ export function SettingsDrawer({
   onSpriteEnabledChange: (value: boolean) => void;
   onLocationEnabledChange: (value: boolean) => void;
   onSwitchUser: () => void;
+  onZ02Disconnect: () => void;
+  onZ02Link: () => void;
 }) {
   const attached = streamState.session;
   return (
@@ -104,6 +112,12 @@ export function SettingsDrawer({
             )}
           </div>
         </section>
+
+        <Z02LinkSection
+          state={z02LinkState}
+          onDisconnect={onZ02Disconnect}
+          onLink={onZ02Link}
+        />
 
         <section className="settings-section">
           <h2>Connection</h2>

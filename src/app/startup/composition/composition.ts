@@ -50,6 +50,7 @@ import { HumanAttentionPressureLedger } from '../../../core/agent/fatigue/human-
 import type { ObserverEvalSidecarRuntime } from '../../../core/eval/observer-sidecar/types.js';
 import { MemoryRetriever } from '../../../faculties/memory/retrieval.js';
 import type { EpisodicRetrievalStore } from '../../../faculties/memory/retrieval/episodic.js';
+import type { HybridEpisodeSearchPort } from '../../../faculties/memory/retrieval/episode-search.js';
 import {
   MemoryExtractor,
   type MemoryExtractorFormationOptions,
@@ -624,6 +625,7 @@ export interface ToolRuntimeOptions {
   sessionStore: SessionStore;
   embeddingService: EmbeddingProviderPort;
   memoryStore: MemoryStorePort;
+  episodeSearch?: HybridEpisodeSearchPort | null;
   sessionManager: SessionManager;
   config: SubstrateConfig;
   parentSystemPrompt: string;
@@ -748,6 +750,7 @@ export function wireShardAndThinkRuntime(options: ToolRuntimeOptions): ShardExec
       : {}),
     embeddingService: options.embeddingService,
     memoryStore: options.memoryStore,
+    episodeSearch: options.episodeSearch ?? null,
     sessionManager: options.sessionManager,
     scheduler: options.scheduler ?? null,
     eventBus: options.eventBus,

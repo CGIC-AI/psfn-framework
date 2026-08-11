@@ -3,6 +3,7 @@
 import type { LLMProviderPort, LLMRequestMetadata } from '../../agent/contracts.js';
 import type { EmbeddingProviderPort } from '../../../shared/contracts/embedding-provider.js';
 import type { MemoryStorePort } from '../../../faculties/memory/memory-store-port.js';
+import type { HybridEpisodeSearchPort } from '../../../faculties/memory/retrieval/episode-search.js';
 import type { SessionManager } from '../../session/manager.js';
 import type { Scheduler } from '../../scheduler/scheduler.js';
 import type { EventBus } from '../../../shared/event-bus.js';
@@ -155,6 +156,7 @@ export interface REPLDeps {
   executionPort?: SandboxExecutionPort | SandboxExecutionPortSeed | null;
   embeddingService: EmbeddingProviderPort | null;
   memoryStore: MemoryStorePort | null;
+  episodeSearch?: HybridEpisodeSearchPort | null;
   sessionManager: SessionManager | null;
   scheduler?: Scheduler | null;
   eventBus?: EventBus | null;
@@ -172,6 +174,7 @@ export interface REPLDeps {
 export interface AnalysisWorkbenchEvidence {
   source:
     | 'memory_search'
+    | 'episode_search'
     | 'memory_get_by_id'
     | 'session_messages'
     | 'session_search'

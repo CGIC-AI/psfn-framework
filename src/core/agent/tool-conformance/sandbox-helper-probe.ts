@@ -56,6 +56,7 @@ export const SANDBOX_HELPER_CATALOG: readonly SandboxHelperCatalogEntry[] = [
   { name: 'llm_query_json', gate: 'always' },
   { name: 'nested_analysis', gate: 'nested_analysis' },
   { name: 'memory_search', gate: 'always' },
+  { name: 'episode_search', gate: 'always' },
   { name: 'memory_count', gate: 'always' },
   { name: 'memory_get_by_id', gate: 'always' },
   { name: 'session_messages', gate: 'always' },

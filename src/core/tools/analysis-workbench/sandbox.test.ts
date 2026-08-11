@@ -194,6 +194,7 @@ function executeAsAuthorizedReflection(sandbox: REPLSandbox, code: string) {
 describe('REPLSandbox', () => {
   it('executes simple code and captures print output', async () => {
     const sandbox = new REPLSandbox(nullDeps());
+    expect(sandbox.hasHelper('episode_search')).toBe(true);
     const result = await sandbox.execute('print("hello", 42);', 5000, 8192);
     expect(result.output).toBe('hello 42');
     expect(result.error).toBeNull();

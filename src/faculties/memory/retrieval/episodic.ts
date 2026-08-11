@@ -517,7 +517,10 @@ function scoreEpisode(
 
   const weightedFields = [
     { weight: 2.4, tokens: tokenizeSearchText(episode.themes.join(' ')) },
-    { weight: 2.0, tokens: tokenizeSearchText(episode.title) },
+    {
+      weight: 2.0,
+      tokens: tokenizeSearchText([episode.title, episode.meaning?.text ?? ''].join(' ')),
+    },
     { weight: 1.3, tokens: tokenizeSearchText(episode.landmark) },
     { weight: 0.8, tokens: tokenizeSearchText(episode.affect.labels.join(' ')) },
   ];
@@ -541,6 +544,7 @@ function scoreEpisode(
     episode.landmark,
     episode.themes.join(' '),
     episode.affect.labels.join(' '),
+    episode.meaning?.text ?? '',
   ].join(' '));
   const phraseBoost = normalizedQuery.length >= 6 && searchableText.includes(normalizedQuery)
     ? 0.25

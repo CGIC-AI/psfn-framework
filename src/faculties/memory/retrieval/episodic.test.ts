@@ -177,6 +177,7 @@ describe('retrieveEpisodicChains rolled-out session breadcrumbs', () => {
       endedAt: string;
       channelId?: string;
       threadId?: string;
+      meaning?: string;
     },
   ): Promise<void> {
     await store.createCompanionAuthoredEpisode({
@@ -196,8 +197,45 @@ describe('retrieveEpisodicChains rolled-out session breadcrumbs', () => {
       spanRefs: [{ spanId: `span-${input.id}`, sessionId: 'session:current' }],
       artifactRefs: [],
       provenanceRefs: [{ kind: 'l0_span', refId: `span-${input.id}` }],
+      ...(input.meaning
+        ? {
+            meaning: {
+              text: input.meaning,
+              recordedAt: NOW.toISOString(),
+              source: 'companion_direct' as const,
+            },
+          }
+        : {}),
     });
   }
+
+  it('retrieves an episode whose only lexical match is companion-authored meaning', async () => {
+    const store = makeStore();
+    await createEpisode(store, {
+      id: 'meaning-only-match',
+      title: 'A quiet afternoon',
+      landmark: 'We sat together after lunch.',
+      startedAt: '2026-06-08T18:00:00.000Z',
+      endedAt: '2026-06-08T20:00:00.000Z',
+      meaning: 'I realized the kintsugi lesson was about trusting repair.',
+    });
+
+    const chains = await retrieveEpisodicChains(store, {
+      contextText: 'kintsugi',
+      channelId: 'discord:current',
+      trustLevel: 'regular',
+      channelDisclosure: classifyChannelDisclosure('discord:current', { isDirectMessage: true }),
+      canonicalContactId: 'contact:current',
+      maxChains: 1,
+    });
+
+    expect(chains).toEqual([
+      expect.objectContaining({
+        rootEpisodeId: 'meaning-only-match',
+        matchedTerms: ['kintsugi'],
+      }),
+    ]);
+  });
 
   it('includes the latest episode before the rolled-out cutoff without lexical overlap', async () => {
     const store = makeStore();

@@ -83,7 +83,7 @@ describe('CompanionGatewayClient', () => {
     const socket = new FakeSocket();
     const client = await connectClient(socket, ['audio-request-1']);
 
-    const starting = client.startPcmAudioStream();
+    const starting = client.pcmAudio.start();
     expect(socket.sent).toEqual([JSON.stringify({
       schemaVersion: 1,
       type: 'audio.start',
@@ -93,7 +93,7 @@ describe('CompanionGatewayClient', () => {
     await starting;
     socket.sent.length = 0;
 
-    const delivered = client.sendPcmAudio(Uint8Array.of(0x00, 0x01, 0x02, 0x03));
+    const delivered = client.pcmAudio.write(Uint8Array.of(0x00, 0x01, 0x02, 0x03));
     const binary = socket.sent[0];
     expect(binary).toBeInstanceOf(Uint8Array);
     expect(parseCompanionUiAudioChunk(binary as Uint8Array)).toEqual({
@@ -108,7 +108,7 @@ describe('CompanionGatewayClient', () => {
     });
     await delivered;
 
-    const stopping = client.stopPcmAudioStream();
+    const stopping = client.pcmAudio.stop();
     expect(socket.sent.at(-1)).toBe(JSON.stringify({
       schemaVersion: 1,
       type: 'audio.stop',
@@ -122,16 +122,16 @@ describe('CompanionGatewayClient', () => {
     const socket = new FakeSocket();
     const client = await connectClient(socket, ['audio-request-1']);
 
-    expect(() => client.sendPcmAudio(Uint8Array.of(0x00, 0x01)))
+    expect(() => client.pcmAudio.write(Uint8Array.of(0x00, 0x01)))
       .toThrow(/audio stream is not ready/u);
-    const starting = client.startPcmAudioStream();
-    expect(() => client.sendPcmAudio(Uint8Array.of(0x00, 0x01)))
+    const starting = client.pcmAudio.start();
+    expect(() => client.pcmAudio.write(Uint8Array.of(0x00, 0x01)))
       .toThrow(/audio stream is not ready/u);
     socket.message({ schemaVersion: 1, type: 'audio.ready', requestId: 'audio-request-1' });
     await starting;
     socket.bufferedAmount = 1_048_576;
 
-    expect(() => client.sendPcmAudio(Uint8Array.of(0x00, 0x01)))
+    expect(() => client.pcmAudio.write(Uint8Array.of(0x00, 0x01)))
       .toThrow(/audio backpressure limit/u);
   });
 
@@ -139,7 +139,7 @@ describe('CompanionGatewayClient', () => {
     const socket = new FakeSocket();
     const client = await connectClient(socket, ['audio-request-1']);
 
-    const starting = client.startPcmAudioStream();
+    const starting = client.pcmAudio.start();
     socket.serverClose(1006);
 
     await expect(starting).rejects.toThrow(/closed during audio startup/u);
@@ -148,7 +148,7 @@ describe('CompanionGatewayClient', () => {
   it('interrupts only a server-confirmed audio turn without browser-supplied authority', async () => {
     const socket = new FakeSocket();
     const client = await connectClient(socket, ['audio-request-1']);
-    const starting = client.startPcmAudioStream();
+    const starting = client.pcmAudio.start();
     socket.message({ schemaVersion: 1, type: 'audio.ready', requestId: 'audio-request-1' });
     await starting;
     socket.sent.length = 0;
@@ -173,6 +173,36 @@ describe('CompanionGatewayClient', () => {
       requestId: 'audio-request-1',
     });
     await flushAsyncMessage();
+  });
+
+  it('accepts the server-owned turn ending while an audio stop is draining', async () => {
+    const socket = new FakeSocket();
+    const client = await connectClient(socket, ['audio-request-1']);
+    const starting = client.pcmAudio.start();
+    socket.message({ schemaVersion: 1, type: 'audio.ready', requestId: 'audio-request-1' });
+    await starting;
+    socket.message({
+      schemaVersion: 1,
+      type: 'audio.turn.started',
+      requestId: 'audio-request-1',
+    });
+    await flushAsyncMessage();
+
+    const stopping = client.pcmAudio.stop();
+    socket.message({
+      schemaVersion: 1,
+      type: 'audio.turn.ended',
+      requestId: 'audio-request-1',
+    });
+    await flushAsyncMessage();
+    expect(socket.closeCalls).toEqual([]);
+    socket.message({
+      schemaVersion: 1,
+      type: 'audio.stopped',
+      requestId: 'audio-request-1',
+    });
+
+    await stopping;
   });
 
   it('waits for exact server attachment metadata and emits no legacy hello or browser authority', async () => {

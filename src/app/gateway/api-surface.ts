@@ -673,6 +673,25 @@ export async function startOptionalGatewayApiServer(
     selectableCompanionIds: options.channelsConfig?.api.selectableCompanionIds,
   });
   const activeCompanionUiInteractions = new Map<string, AbortController>();
+  const beginCompanionUiInteraction = (
+    interactionId: string,
+    upstream?: AbortSignal,
+  ): Readonly<{ signal: AbortSignal; release: () => void }> => {
+    const controller = new AbortController();
+    const mirrorAbort = () => controller.abort(upstream?.reason);
+    if (upstream?.aborted) mirrorAbort();
+    else upstream?.addEventListener('abort', mirrorAbort, { once: true });
+    activeCompanionUiInteractions.set(interactionId, controller);
+    return Object.freeze({
+      signal: controller.signal,
+      release: () => {
+        upstream?.removeEventListener('abort', mirrorAbort);
+        if (activeCompanionUiInteractions.get(interactionId) === controller) {
+          activeCompanionUiInteractions.delete(interactionId);
+        }
+      },
+    });
+  };
   const companionUiVoiceLimits = buildVoiceWebSocketServerOptions(options.config);
   const companionUiStt = fleetAuthBootstrapOnly
     ? createRuntimeVoiceSttConnector(options.config, {
@@ -823,8 +842,7 @@ export async function startOptionalGatewayApiServer(
               }
               const content = companionUiPromptContent(frame);
               if (!content) throw new Error('Companion UI action has no dispatcher');
-              const controller = new AbortController();
-              activeCompanionUiInteractions.set(frame.requestId, controller);
+              const interaction = beginCompanionUiInteraction(frame.requestId, input.signal);
               try {
                 const result = await gatewayApiRuntime.handleChatCompletion({
                   request: {
@@ -845,14 +863,12 @@ export async function startOptionalGatewayApiServer(
                     parent: input.childAssertion.parent,
                     rawBodyBase64Url: Buffer.from(input.compiled.target.body).toString('base64url'),
                   },
-                  signal: controller.signal,
+                  signal: interaction.signal,
                 });
                 if (!result.ok) throw new Error(result.error.type);
                 return result.response;
               } finally {
-                if (activeCompanionUiInteractions.get(frame.requestId) === controller) {
-                  activeCompanionUiInteractions.delete(frame.requestId);
-                }
+                interaction.release();
               }
             },
           },
@@ -882,8 +898,7 @@ export async function startOptionalGatewayApiServer(
               }
               const content = companionUiPromptContent(frame);
               if (!content) throw new Error('Companion UI guest action has no dispatcher');
-              const controller = new AbortController();
-              activeCompanionUiInteractions.set(frame.requestId, controller);
+              const interaction = beginCompanionUiInteraction(frame.requestId, input.signal);
               try {
                 const result = await gatewayApiRuntime.handleChatCompletion({
                   request: {
@@ -896,14 +911,12 @@ export async function startOptionalGatewayApiServer(
                   ...(input.deviceTransport.clientCert ? { clientCert: input.deviceTransport.clientCert } : {}),
                   hubDevicePrincipal: input.attachment.deviceActor.principal,
                   hubDeviceAttachment: input.attachment,
-                  signal: controller.signal,
+                  signal: interaction.signal,
                 });
                 if (!result.ok) throw new Error(result.error.type);
                 return result.response;
               } finally {
-                if (activeCompanionUiInteractions.get(frame.requestId) === controller) {
-                  activeCompanionUiInteractions.delete(frame.requestId);
-                }
+                interaction.release();
               }
             },
           },

@@ -7,6 +7,7 @@ import type {
   SatelliteHubSnapshot,
   SatelliteHubStateEvent,
 } from '../api/client.js';
+import type { PcmAudioStreamPort } from '../api/pcm-audio.js';
 import type {
   ApprovalAttribution,
   ApprovalGrantMode,
@@ -191,9 +192,7 @@ export interface HubStreamClientLike {
   disconnect(): void;
   sendUserText(text: string, options?: { interrupt?: boolean }): void;
   interrupt(): void;
-  startPcmAudioStream(): Promise<void>;
-  sendPcmAudio(pcm: Uint8Array): Promise<void>;
-  stopPcmAudioStream(): Promise<void>;
+  readonly pcmAudio?: PcmAudioStreamPort;
   sendApprovalDecision(id: string, decision: 'approve' | 'deny'): void;
   sendArtifactPreviewRequest(requestId: string, artifactId: string): void;
   sendTouchInteraction(interaction: TouchInteraction): void;
@@ -419,15 +418,22 @@ export class HubStreamStore {
   }
 
   startPcmAudioStream(): Promise<void> {
-    return this.client.startPcmAudioStream();
+    return this.pcmAudio().start();
   }
 
   sendPcmAudio(pcm: Uint8Array): Promise<void> {
-    return this.client.sendPcmAudio(pcm);
+    return this.pcmAudio().write(pcm);
   }
 
   stopPcmAudioStream(): Promise<void> {
-    return this.client.stopPcmAudioStream();
+    return this.pcmAudio().stop();
+  }
+
+  private pcmAudio(): PcmAudioStreamPort {
+    if (!this.client.pcmAudio) {
+      throw new Error('Microphone audio is unavailable on this Companion transport');
+    }
+    return this.client.pcmAudio;
   }
 
   /**

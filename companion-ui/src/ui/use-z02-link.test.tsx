@@ -113,6 +113,35 @@ describe('useZ02Link', () => {
     }));
   });
 
+  it('logs backend audio teardown failures when the link unmounts', async () => {
+    const report = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const relay = {
+      start: vi.fn(async () => undefined),
+      write: vi.fn(async () => undefined),
+      stop: vi.fn(async () => { throw new Error('backend stop failed'); }),
+    };
+    const connector: Z02LinkConnector = {
+      connect: vi.fn(async callbacks => {
+        await callbacks.prepareAudio?.();
+        return {
+          deviceName: 'Z02 Test Badge',
+          disconnect: vi.fn(),
+          microphone: 'pcm16-16khz',
+          transport: 'stock-rcsp',
+        } satisfies Z02LinkConnection;
+      }),
+    };
+    const { result, unmount } = renderHook(() => useZ02Link(connector, { audioRelay: relay }));
+
+    await act(async () => { await result.current.link(); });
+    unmount();
+
+    await vi.waitFor(() => expect(report).toHaveBeenCalledWith(
+      'Companion audio stream did not stop cleanly during teardown',
+    ));
+    report.mockRestore();
+  });
+
   it('decodes Stark Ruby Omi frames to PCM through the live WebCodecs seam', async () => {
     const decode = vi.fn();
     const close = vi.fn();

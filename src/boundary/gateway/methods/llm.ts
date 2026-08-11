@@ -94,7 +94,15 @@ function normalizeLlmMessages<P extends { messages: Array<{ role: unknown; conte
   const messages = params.messages.map((message: unknown) => {
     if (!isRecord(message)) return message;
     const { role, content, provenance } = message;
-    const normalized: Record<string, unknown> = { role, content };
+    const normalized: Record<string, unknown> = role === 'toolResult'
+      ? {
+          role,
+          content,
+          toolCallId: message.toolCallId,
+          toolName: message.toolName,
+          isError: message.isError,
+        }
+      : { role, content };
     if (isRecord(provenance)) normalized.provenance = provenance;
     return normalized;
   });

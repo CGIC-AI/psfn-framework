@@ -147,6 +147,59 @@ describe('gateway inline image retention RPC flow', () => {
     });
   });
 
+  it('resolves retained image references inside canonical tool results', async () => {
+    const { methods, stream } = createHarness();
+    const imageBase64 = 'aGVsbG8=';
+    const requestScope = 'turn-tool-result';
+    const screened = await methods.get('intake.screen_image')!({
+      imageBase64,
+      mimeType: 'image/png',
+      originRef: 'tool:generate_image:result:0',
+      requestScope,
+    }) as VisionIntakeImageScreenResult;
+
+    await methods.get('llm.chat')!({
+      model: '',
+      provider: '',
+      systemPrompt: 'system',
+      turnId: requestScope,
+      messages: [
+        {
+          role: 'assistant',
+          content: [{
+            type: 'toolCall',
+            id: 'call-1',
+            name: 'generate_image',
+            arguments: {},
+          }],
+        },
+        {
+          role: 'toolResult',
+          toolCallId: 'call-1',
+          toolName: 'generate_image',
+          content: [{
+            type: 'gateway_image_ref',
+            handle: screened.retainedImage!.handle,
+          }],
+          isError: false,
+        },
+      ],
+    });
+
+    expect(stream.mock.calls[0]?.[0]).toMatchObject({
+      messages: [
+        expect.objectContaining({ role: 'assistant' }),
+        {
+          role: 'toolResult',
+          toolCallId: 'call-1',
+          toolName: 'generate_image',
+          content: [{ type: 'image', data: imageBase64, mimeType: 'image/png' }],
+          isError: false,
+        },
+      ],
+    });
+  });
+
   it('does not retain bytes when screening was skipped or withheld', async () => {
     for (const screenResult of [
       {

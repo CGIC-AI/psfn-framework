@@ -208,6 +208,69 @@ function createLinkedGatewayClient(
   return new GatewayClient(connection as unknown as NdjsonConnection, 1024);
 }
 
+it('preserves canonical pi-ai tool results while stripping transient message decorations', async () => {
+  const harness = createHarness();
+
+  await harness.invoke('llm.chat', {
+    requestId: 'tool-loop-request',
+    model: '',
+    provider: '',
+    messages: [
+      {
+        role: 'assistant',
+        content: [{
+          type: 'toolCall',
+          id: 'call-1',
+          name: 'memory',
+          arguments: { action: 'search' },
+        }],
+        api: 'openai-completions',
+        provider: 'openrouter',
+        model: 'test-model',
+        usage: { totalTokens: 12 },
+        stopReason: 'toolUse',
+        timestamp: 123,
+      },
+      {
+        role: 'toolResult',
+        toolCallId: 'call-1',
+        toolName: 'memory',
+        content: [{ type: 'text', text: 'result' }],
+        details: { privateRuntimeOnly: true },
+        usage: { totalTokens: 0 },
+        isError: false,
+        timestamp: 124,
+      },
+    ],
+    systemPrompt: 'system',
+  });
+
+  expect(harness.stream).toHaveBeenCalledWith(
+    expect.objectContaining({
+      messages: [
+        {
+          role: 'assistant',
+          content: [{
+            type: 'toolCall',
+            id: 'call-1',
+            name: 'memory',
+            arguments: { action: 'search' },
+          }],
+        },
+        {
+          role: 'toolResult',
+          toolCallId: 'call-1',
+          toolName: 'memory',
+          content: [{ type: 'text', text: 'result' }],
+          isError: false,
+        },
+      ],
+    }),
+    undefined,
+    undefined,
+  );
+});
+
 describe('registerLLMMethods', () => {
   it('reserves completion cancellation before an awaited audit and passes the aborted signal upstream', async () => {
     let releaseAudit!: () => void;

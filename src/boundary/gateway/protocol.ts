@@ -180,10 +180,24 @@ export type GatewayLLMContentBlock =
   | ToolCall
   | GatewayInlineImageReferenceContent;
 
+export type GatewayToolResultContentBlock =
+  | TextContent
+  | ImageContent
+  | GatewayInlineImageReferenceContent;
+
 /** JSON-RPC wire form; unlike the legacy provider context, it carries structured content blocks. */
-export interface GatewayLLMMessage extends Omit<ContextMessage, 'content'> {
-  content: string | GatewayLLMContentBlock[];
-}
+export type GatewayLLMMessage =
+  | (Omit<ContextMessage, 'content'> & {
+      content: string | GatewayLLMContentBlock[];
+    })
+  | {
+      role: 'toolResult';
+      toolCallId: string;
+      toolName: string;
+      content: GatewayToolResultContentBlock[];
+      isError: boolean;
+      provenance?: ContextMessage['provenance'];
+    };
 
 export interface LLMChatParams extends GatewayCorrelationParams, GatewayLLMCancellationParams {
   model: string;

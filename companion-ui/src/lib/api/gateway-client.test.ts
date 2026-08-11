@@ -205,6 +205,37 @@ describe('CompanionGatewayClient', () => {
     await stopping;
   });
 
+  it('accepts the server-owned turn starting and ending while an audio stop is draining', async () => {
+    const socket = new FakeSocket();
+    const client = await connectClient(socket, ['audio-request-1']);
+    const starting = client.pcmAudio.start();
+    socket.message({ schemaVersion: 1, type: 'audio.ready', requestId: 'audio-request-1' });
+    await starting;
+
+    const stopping = client.pcmAudio.stop();
+    socket.message({
+      schemaVersion: 1,
+      type: 'audio.turn.started',
+      requestId: 'audio-request-1',
+    });
+    await flushAsyncMessage();
+    expect(socket.closeCalls).toEqual([]);
+    socket.message({
+      schemaVersion: 1,
+      type: 'audio.turn.ended',
+      requestId: 'audio-request-1',
+    });
+    await flushAsyncMessage();
+    expect(socket.closeCalls).toEqual([]);
+    socket.message({
+      schemaVersion: 1,
+      type: 'audio.stopped',
+      requestId: 'audio-request-1',
+    });
+
+    await stopping;
+  });
+
   it('waits for exact server attachment metadata and emits no legacy hello or browser authority', async () => {
     const socket = new FakeSocket();
     const client = await connectClient(socket);

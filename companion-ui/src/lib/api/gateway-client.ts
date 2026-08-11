@@ -555,7 +555,7 @@ export class CompanionGatewayClient {
       return false;
     }
     if (frame.type === 'audio.turn.started') {
-      if (audio.phase !== 'ready' || audio.turnActive) {
+      if ((audio.phase !== 'ready' && audio.phase !== 'stopping') || audio.turnActive) {
         return this.failProtocol('Companion audio turn started out of order');
       }
       audio.turnActive = true;

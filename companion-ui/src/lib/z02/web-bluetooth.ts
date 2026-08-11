@@ -442,10 +442,20 @@ async function withTimeout<T>(
 ): Promise<T> {
   let timer: ReturnType<typeof globalThis.setTimeout> | undefined;
   let expired = false;
-  const observed = promise.then(value => {
-    if (expired) onLateResolution?.(value);
-    return value;
-  });
+  const observed = promise.then(
+    value => {
+      if (expired) onLateResolution?.(value);
+      return value;
+    },
+    (error: unknown): T => {
+      if (expired) {
+        // The timeout already won the race; swallow the late rejection so it
+        // does not surface as an unhandled rejection.
+        return undefined as T;
+      }
+      throw error;
+    },
+  );
   const timeout = new Promise<never>((_resolve, reject) => {
     timer = globalThis.setTimeout(() => {
       expired = true;

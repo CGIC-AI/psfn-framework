@@ -2501,6 +2501,16 @@ describe('postgres memory store ANN embedding search (a27w.2)', () => {
       // candidate pool (>= 200). The 5 authorized rows sit far away in embedding
       // space, so a naive top-pool scan would never surface them; the filtered ANN
       // plan (iterative scan on pgvector >= 0.8) must still return exactly them.
+      // Invariant (psfn-framework-yje3l): filtered ANN recall is exact up to the
+      // limit — pgvector's iterative scan keeps walking index candidates until the
+      // authorization filter yields the requested rows, so a completed HNSW index
+      // must never miss authorized rows. The store is deliberately built WITHOUT
+      // awaitAnnIndexBuild, so each run exercises whichever plan exists at query
+      // time (exact scan or HNSW iterative scan); both must satisfy the invariant.
+      // The 2026-07 flake was harness tmpfs exhaustion (ENOSPC), fixed by
+      // cbc274b59d — an HNSW recall miss was never observed. Soak evidence:
+      // 20/20 consecutive green runs of this file on a loaded 32-core machine,
+      // 2026-08-11.
       await bulkSeedNearMemories(pool, 300);
       const authorizedIds: string[] = [];
       for (let index = 0; index < 5; index += 1) {

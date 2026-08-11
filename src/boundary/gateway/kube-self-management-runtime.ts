@@ -74,7 +74,10 @@ function parseEnabled(raw: string | undefined): boolean {
 function auditSummary(event: KubeSelfManagementAuditEvent): AuditSummaryEntry {
   return {
     method: `kube.self_management.${event.phase}`,
-    decision: event.decision,
+    // Kube self-management events still use the legacy NEEDS_APPROVAL literal;
+    // they always enqueue to the operator approval queue, so translate to the
+    // current GatewayPolicyDecision vocabulary at the audit seam.
+    decision: event.decision === 'NEEDS_APPROVAL' ? 'REQUIRES_HUMAN_APPROVAL' : event.decision,
     params: {
       actor: event.actor,
       requestedAction: event.requestedAction,

@@ -94,6 +94,9 @@ jobs:
       - name: Build root runtime in the clean environment
         if: steps.scope.outputs.root_runtime == 'true'
         env:
+          # Keep in sync with ROOT_BUILD_NODE_HEAP_MB in scripts/ci/local-delivery-contract.mjs.
+          # tsup's .d.ts rollup worker derives its old-gen cap from this value;
+          # ~5.5 GB actual peak RSS, this buys DTS worker headroom, not real usage.
           NODE_OPTIONS: --max-old-space-size=12288
         run: npm run build
 

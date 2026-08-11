@@ -1,0 +1,48 @@
+{
+  "description": "A relation must declare the v1 relation semantics it requires.",
+  "events": [
+    {
+      "schemaVersion": 1,
+      "eventId": "event-finding-1",
+      "companionId": "companion-a",
+      "sequence": 1,
+      "occurredAt": "2026-08-10T20:02:00.000Z",
+      "mustUnderstand": [],
+      "context": {
+        "automatonClass": "research",
+        "runId": "run-3",
+        "taskId": "task-3",
+        "sessionIds": [],
+        "artifactRefs": []
+      },
+      "type": "finding",
+      "body": {
+        "claim": "A recalled lead.",
+        "provenance": "recalled",
+        "evidence": [],
+        "verification": { "status": "pending" }
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "eventId": "event-retraction-2",
+      "companionId": "companion-a",
+      "sequence": 2,
+      "occurredAt": "2026-08-10T20:03:00.000Z",
+      "mustUnderstand": [],
+      "context": {
+        "automatonClass": "reviewer",
+        "runId": "run-3",
+        "taskId": "task-3",
+        "sessionIds": [],
+        "artifactRefs": []
+      },
+      "type": "relation",
+      "body": {
+        "targetEventId": "event-finding-1",
+        "relation": "retracts",
+        "reason": "The lead was withdrawn."
+      }
+    }
+  ]
+}

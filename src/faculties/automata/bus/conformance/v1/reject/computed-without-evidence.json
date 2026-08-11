@@ -1,0 +1,29 @@
+{
+  "description": "Computed claims cannot enter learned state without structured evidence.",
+  "events": [
+    {
+      "schemaVersion": 1,
+      "eventId": "event-unsupported-claim",
+      "companionId": "companion-a",
+      "sequence": 1,
+      "occurredAt": "2026-08-10T20:01:00.000Z",
+      "mustUnderstand": [],
+      "context": {
+        "automatonClass": "research",
+        "runId": "run-2",
+        "taskId": "task-2",
+        "sessionIds": [],
+        "artifactRefs": []
+      },
+      "type": "finding",
+      "body": {
+        "claim": "An unsupported computed conclusion.",
+        "provenance": "computed",
+        "evidence": [],
+        "verification": {
+          "status": "pending"
+        }
+      }
+    }
+  ]
+}

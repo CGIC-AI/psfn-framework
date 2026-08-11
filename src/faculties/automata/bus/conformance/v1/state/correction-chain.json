@@ -1,0 +1,121 @@
+{
+  "description": "Corrections and supersessions materialize one deterministic current finding while retaining every disposition.",
+  "events": [
+    {
+      "schemaVersion": 1,
+      "eventId": "event-finding-1",
+      "companionId": "companion-a",
+      "sequence": 1,
+      "occurredAt": "2026-08-10T20:10:00.000Z",
+      "mustUnderstand": [],
+      "context": {
+        "automatonClass": "research",
+        "runId": "run-5",
+        "taskId": "task-5",
+        "sessionIds": ["session-5"],
+        "artifactRefs": []
+      },
+      "type": "finding",
+      "body": {
+        "claim": "The endpoint uses the old path.",
+        "provenance": "recalled",
+        "evidence": [],
+        "verification": { "status": "pending" }
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "eventId": "event-correction-2",
+      "companionId": "companion-a",
+      "sequence": 2,
+      "occurredAt": "2026-08-10T20:11:00.000Z",
+      "mustUnderstand": ["finding-relations-v1"],
+      "context": {
+        "automatonClass": "reviewer",
+        "runId": "run-5",
+        "taskId": "task-5",
+        "sessionIds": ["session-5"],
+        "artifactRefs": ["artifact:route-inspection"]
+      },
+      "type": "relation",
+      "body": {
+        "targetEventId": "event-finding-1",
+        "relation": "corrects",
+        "reason": "A route inspection contradicted the recalled path.",
+        "replacement": {
+          "claim": "The endpoint uses the current path.",
+          "provenance": "computed",
+          "evidence": [
+            {
+              "kind": "artifact",
+              "reference": "artifact:route-inspection",
+              "summary": "The registered route uses the current path."
+            }
+          ],
+          "verification": {
+            "status": "verified",
+            "by": "reviewer-automaton",
+            "evidenceRefs": ["artifact:route-inspection"]
+          }
+        }
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "eventId": "event-supersession-3",
+      "companionId": "companion-a",
+      "sequence": 3,
+      "occurredAt": "2026-08-10T20:12:00.000Z",
+      "mustUnderstand": ["finding-relations-v1"],
+      "context": {
+        "automatonClass": "reviewer",
+        "runId": "run-6",
+        "taskId": "task-5",
+        "sessionIds": ["session-6"],
+        "artifactRefs": ["artifact:route-test"]
+      },
+      "type": "relation",
+      "body": {
+        "targetEventId": "event-correction-2",
+        "relation": "supersedes",
+        "reason": "A later execution test gives stronger evidence.",
+        "replacement": {
+          "claim": "The endpoint uses the current path and passes its route test.",
+          "provenance": "computed",
+          "evidence": [
+            {
+              "kind": "command",
+              "reference": "artifact:route-test",
+              "summary": "The focused route test passed."
+            }
+          ],
+          "verification": {
+            "status": "verified",
+            "by": "reviewer-automaton",
+            "evidenceRefs": ["artifact:route-test"]
+          }
+        }
+      }
+    }
+  ],
+  "projection": {
+    "effectiveFindings": [
+      {
+        "eventId": "event-supersession-3",
+        "claim": "The endpoint uses the current path and passes its route test."
+      }
+    ],
+    "dispositions": [
+      {
+        "targetEventId": "event-finding-1",
+        "relation": "corrects",
+        "byEventId": "event-correction-2"
+      },
+      {
+        "targetEventId": "event-correction-2",
+        "relation": "supersedes",
+        "byEventId": "event-supersession-3"
+      }
+    ]
+  }
+}

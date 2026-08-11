@@ -1,0 +1,75 @@
+{
+  "description": "A second relation must target the replacement at the current lineage end, not its departed ancestor.",
+  "events": [
+    {
+      "schemaVersion": 1,
+      "eventId": "event-finding-1",
+      "companionId": "companion-a",
+      "sequence": 1,
+      "occurredAt": "2026-08-10T20:04:00.000Z",
+      "mustUnderstand": [],
+      "context": {
+        "automatonClass": "research",
+        "runId": "run-4",
+        "taskId": "task-4",
+        "sessionIds": [],
+        "artifactRefs": []
+      },
+      "type": "finding",
+      "body": {
+        "claim": "First wording.",
+        "provenance": "recalled",
+        "evidence": [],
+        "verification": { "status": "pending" }
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "eventId": "event-correction-2",
+      "companionId": "companion-a",
+      "sequence": 2,
+      "occurredAt": "2026-08-10T20:05:00.000Z",
+      "mustUnderstand": ["finding-relations-v1"],
+      "context": {
+        "automatonClass": "reviewer",
+        "runId": "run-4",
+        "taskId": "task-4",
+        "sessionIds": [],
+        "artifactRefs": []
+      },
+      "type": "relation",
+      "body": {
+        "targetEventId": "event-finding-1",
+        "relation": "corrects",
+        "reason": "Clarify the wording.",
+        "replacement": {
+          "claim": "Corrected wording.",
+          "provenance": "recalled",
+          "evidence": [],
+          "verification": { "status": "pending" }
+        }
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "eventId": "event-retraction-3",
+      "companionId": "companion-a",
+      "sequence": 3,
+      "occurredAt": "2026-08-10T20:06:00.000Z",
+      "mustUnderstand": ["finding-relations-v1"],
+      "context": {
+        "automatonClass": "reviewer",
+        "runId": "run-4",
+        "taskId": "task-4",
+        "sessionIds": [],
+        "artifactRefs": []
+      },
+      "type": "relation",
+      "body": {
+        "targetEventId": "event-finding-1",
+        "relation": "retracts",
+        "reason": "This incorrectly targets the departed ancestor."
+      }
+    }
+  ]
+}

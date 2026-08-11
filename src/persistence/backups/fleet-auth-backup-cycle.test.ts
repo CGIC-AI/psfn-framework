@@ -16,6 +16,7 @@ import {
   buildRuntimeDiagnosticsSnapshot,
   resetRuntimeDiagnosticsForTests,
 } from '../../shared/diagnostics/runtime-diagnostics.js';
+import { describeStartupOwnerFileChecks } from '../../system/config/startup-owner-files.js';
 import type { FleetAuthFamilyDatabaseRoles } from '../postgres/fleet-auth/schema.js';
 import { FleetAuthAuthorityFloorStore } from '../postgres/fleet-auth/authority-floor.js';
 import type { BackupRuntimeConfig } from './config.js';
@@ -185,6 +186,37 @@ function makeCycleOptions(
   writeFileSync(join(sharedWorkspacePath, 'artifacts', 'world.txt'), 'shared-workspace\n');
   writeFileSync(join(systemDataDir, 'settings.json'), '{}\n');
   writeFileSync(join(systemDataDir, 'fleet-auth.json'), '{}\n');
+  writeFileSync(join(systemDataDir, 'companions.json'), `${JSON.stringify({
+    postgres: {
+      sharedMigrationRole: 'shared_schema_migration',
+      sharedMigrationDatabaseUrlRef: {
+        kind: 'env',
+        envName: 'SHARED_SCHEMA_MIGRATION_DATABASE_URL',
+      },
+    },
+    companions: [{
+      companionId: COMPANION_ID,
+      companionDataDir: 'companions/one',
+      characterCardPath: 'companions/one/character-card.json',
+      postgresSchema: 'companion_one',
+      postgresRole: 'companion_runtime',
+      postgresDatabaseUrlRef: {
+        kind: 'env',
+        envName: 'COMPANION_ONE_DATABASE_URL',
+      },
+    }],
+  }, null, 2)}\n`);
+  for (const descriptor of describeStartupOwnerFileChecks()) {
+    if (descriptor.scope !== 'system'
+      || descriptor.optionalWhenMissing
+      || existsSync(join(systemDataDir, descriptor.ownerFileName))) {
+      continue;
+    }
+    writeFileSync(
+      join(systemDataDir, descriptor.ownerFileName),
+      readFileSync(join(process.cwd(), 'config', descriptor.seedFileName)),
+    );
+  }
   const authorityFloors = new FleetAuthAuthorityFloorStore(authorityRoot);
   if (!authorityFloors.exists()) {
     authorityFloors.open({ activationGeneration: 1, databaseHasDurableAuthority: false });
@@ -345,6 +377,8 @@ describe('runFleetAuthConsistentBackupCycle', () => {
       .toBe('shared-workspace\n');
     expect(readFileSync(join(clusterArtifact, 'system-config/settings.json'), 'utf8'))
       .toBe('{}\n');
+    expect(readFileSync(join(clusterArtifact, 'system-config/companions.json'), 'utf8'))
+      .toContain(COMPANION_ID);
     expect(readFileSync(join(clusterArtifact, 'system-config/fleet-auth.json'), 'utf8'))
       .toBe('{}\n');
   });

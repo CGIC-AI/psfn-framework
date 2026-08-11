@@ -9,6 +9,12 @@ import { join } from 'node:path';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import { isRecord } from '../../shared/utils/types.js';
 import {
+  COMPANIONS_FILE_NAME,
+  validateCompanionsConfig,
+} from '../../system/config/companions-config.js';
+import { SETTINGS_SUBSYSTEMS } from '../../system/config/settings-contract.js';
+import { describeStartupOwnerFileChecks } from '../../system/config/startup-owner-files.js';
+import {
   verifyTreeSnapshot,
   type TreeSnapshotManifest,
   type TreeSnapshotManifestEntry,
@@ -19,23 +25,30 @@ import {
 export const SYSTEM_CONFIG_DIR_NAME = 'system-config';
 export const SYSTEM_CONFIG_MANIFEST_NAME = 'system-config-manifest.json';
 
-// Cluster-global owner files rooted at systemDataDir. Per-companion owner files
-// are captured by the companion-tree slice (an exhaustive walk of companionDataDir)
-// and MUST NOT be listed here. capability-tier.json is per-companion (dnll.2);
-// scheduler.json is per-companion (dnll.3); charge-policy.json is
-// per-companion (dnll.8); skills.json is per-companion (dnll.9).
-export const SYSTEM_CONFIG_OWNER_FILES = [
-  'settings.json',
-  'models.json',
-  'providers.json',
-  'channels.json',
-  'backup.json',
-  'trust-policy.json',
-  'intake-policy.json',
-  'partner-affect-shadow.json',
-  'fleet-auth.json',
-  'mcp-servers.json',
-] as const;
+const STARTUP_SYSTEM_OWNER_DESCRIPTORS = describeStartupOwnerFileChecks()
+  .filter(descriptor => descriptor.scope === 'system');
+
+/** Mandatory cluster-global owners, derived from the startup guard's registry. */
+const MANDATORY_SYSTEM_CONFIG_OWNER_FILES: readonly string[] =
+  STARTUP_SYSTEM_OWNER_DESCRIPTORS
+    .filter(descriptor => !descriptor.optionalWhenMissing)
+    .map(descriptor => descriptor.ownerFileName);
+
+// Cluster-global owner files rooted at systemDataDir. The startup descriptors
+// are the authority for startup-critical topology/config, while the settings
+// contract contributes cluster-global owners (currently channels.json) that
+// are not startup checks. Per-companion owners are filtered by scope and remain
+// exclusively in the exhaustive companion-tree slice.
+export const SYSTEM_CONFIG_OWNER_FILES: readonly string[] = [
+  ...new Set([
+    ...STARTUP_SYSTEM_OWNER_DESCRIPTORS.map(descriptor => descriptor.ownerFileName),
+    ...Object.values(SETTINGS_SUBSYSTEMS)
+      .filter(subsystem => subsystem.scope === 'global')
+      .map(subsystem => subsystem.ownerFile),
+  ]),
+];
+
+const MANDATORY_SYSTEM_CONFIG_OWNER_FILE_SET = new Set(MANDATORY_SYSTEM_CONFIG_OWNER_FILES);
 
 export interface CaptureSystemConfigSnapshotOptions {
   systemDataDir: string;
@@ -65,6 +78,9 @@ function assertJsonOwnerFile(path: string, ownerFile: string): void {
   if (!isRecord(parsed)) {
     throw new Error(`System config owner file ${ownerFile} must contain a JSON object`);
   }
+  if (ownerFile === COMPANIONS_FILE_NAME) {
+    validateCompanionsConfig(parsed, path);
+  }
 }
 
 export function captureSystemConfigSnapshot(
@@ -86,7 +102,12 @@ export function captureSystemConfigSnapshot(
   let totalBytes = 0;
   for (const ownerFile of SYSTEM_CONFIG_OWNER_FILES) {
     const sourcePath = join(systemDataDir, ownerFile);
-    if (!existsSync(sourcePath)) continue;
+    if (!existsSync(sourcePath)) {
+      if (MANDATORY_SYSTEM_CONFIG_OWNER_FILE_SET.has(ownerFile)) {
+        throw new Error(`Mandatory system config owner file missing: ${sourcePath}`);
+      }
+      continue;
+    }
     assertJsonOwnerFile(sourcePath, ownerFile);
 
     const destinationPath = join(treeDir, ownerFile);
@@ -125,16 +146,57 @@ export function captureSystemConfigSnapshot(
 export function verifySystemConfigSnapshot(
   backupDir: string,
 ): SystemConfigSnapshotVerificationResult {
+  const manifestPath = join(backupDir, SYSTEM_CONFIG_MANIFEST_NAME);
+  if (!existsSync(manifestPath)) {
+    throw new Error(`System config manifest missing: ${manifestPath}`);
+  }
+  const parsedManifest = JSON.parse(readFileSync(manifestPath, 'utf-8')) as unknown;
+  if (!isRecord(parsedManifest) || !Array.isArray(parsedManifest.files)) {
+    throw new Error(`Invalid system config manifest: ${manifestPath}`);
+  }
+  const manifestEntries = parsedManifest.files.map((entry) => {
+    if (!isRecord(entry)
+      || typeof entry.path !== 'string'
+      || typeof entry.sizeBytes !== 'number'
+      || !Number.isSafeInteger(entry.sizeBytes)
+      || entry.sizeBytes < 0
+      || typeof entry.sha256 !== 'string') {
+      throw new Error(`Invalid system config manifest: ${manifestPath}`);
+    }
+    return {
+      path: entry.path,
+      sizeBytes: entry.sizeBytes,
+      sha256: entry.sha256,
+    };
+  });
+  const manifestPaths = new Set(manifestEntries.map(entry => entry.path));
+  for (const ownerFile of MANDATORY_SYSTEM_CONFIG_OWNER_FILES) {
+    if (!manifestPaths.has(ownerFile)) {
+      throw new Error(`Mandatory system config owner missing from manifest: ${ownerFile}`);
+    }
+  }
+
   const result = verifyTreeSnapshot(
     backupDir,
     SYSTEM_CONFIG_DIR_NAME,
     SYSTEM_CONFIG_MANIFEST_NAME,
     'System config',
   );
-  for (const ownerFile of SYSTEM_CONFIG_OWNER_FILES) {
-    const capturedPath = join(backupDir, SYSTEM_CONFIG_DIR_NAME, ownerFile);
-    if (!existsSync(capturedPath)) continue;
-    assertJsonOwnerFile(capturedPath, ownerFile);
+  let declaredTotalBytes = 0;
+  for (const entry of manifestEntries) {
+    const capturedPath = join(backupDir, SYSTEM_CONFIG_DIR_NAME, entry.path);
+    const actualSizeBytes = readFileSync(capturedPath).length;
+    if (actualSizeBytes !== entry.sizeBytes) {
+      throw new Error(`System config capture size mismatch for ${entry.path}`);
+    }
+    declaredTotalBytes += entry.sizeBytes;
+    if (SYSTEM_CONFIG_OWNER_FILES.includes(entry.path)) {
+      assertJsonOwnerFile(capturedPath, entry.path);
+    }
+  }
+  if (parsedManifest.fileCount !== manifestEntries.length
+    || parsedManifest.totalBytes !== declaredTotalBytes) {
+    throw new Error(`System config manifest aggregate size/count mismatch: ${manifestPath}`);
   }
   return result;
 }

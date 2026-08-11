@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  WebCodecsOmiOpusDecoder,
+  type OmiOpusDecoderCallbacks,
+} from '../lib/z02/omi-opus-decoder.js';
+import {
   readBrowserZ02Connector,
   type Z02LinkConnection,
   type Z02LinkConnector,
@@ -18,15 +22,17 @@ export type Z02LinkState = Readonly<{
   phase: Z02LinkPhase;
   detail: string;
   audioFrames?: number;
-  relayedFrames?: number;
+  decodedFrames?: number;
+  audioError?: string;
   deviceName?: string;
   microphone?: 'pcm16-16khz' | 'opus-16khz';
   transport?: Z02LinkTransport;
 }>;
 
+type OmiDecoder = Pick<WebCodecsOmiOpusDecoder, 'close' | 'decode'>;
+
 export interface Z02LinkOptions {
-  /** Return true only when the PCM chunk was accepted by the active Companion transport. */
-  relayMicrophonePcm?: (pcm: Uint8Array) => boolean;
+  createOmiDecoder?: (callbacks: OmiOpusDecoderCallbacks) => OmiDecoder;
 }
 
 const IDLE_STATE: Z02LinkState = {
@@ -48,49 +54,67 @@ export function useZ02Link(
   ));
   const [state, setState] = useState<Z02LinkState>(() => connector ? IDLE_STATE : UNSUPPORTED_STATE);
   const connectionRef = useRef<Z02LinkConnection | null>(null);
+  const omiDecoderRef = useRef<OmiDecoder | null>(null);
   const attemptRef = useRef(0);
   const audioFramesRef = useRef(0);
-  const relayedFramesRef = useRef(0);
-  const relayMicrophonePcmRef = useRef(options.relayMicrophonePcm);
-  relayMicrophonePcmRef.current = options.relayMicrophonePcm;
+  const decodedFramesRef = useRef(0);
+  const audioErrorRef = useRef<string | null>(null);
+  const createOmiDecoderRef = useRef(options.createOmiDecoder ?? createBrowserOmiDecoder);
+  createOmiDecoderRef.current = options.createOmiDecoder ?? createBrowserOmiDecoder;
 
   const link = useCallback(async () => {
     if (!connector || connectionRef.current || isZ02LinkBusy(state.phase)) return;
     const attempt = ++attemptRef.current;
     let disconnectedBeforeReady = false;
+    closeOmiDecoder(omiDecoderRef.current);
+    omiDecoderRef.current = null;
     audioFramesRef.current = 0;
-    relayedFramesRef.current = 0;
+    decodedFramesRef.current = 0;
+    audioErrorRef.current = null;
     setState(progressState('selecting'));
 
     try {
+      const publishAudioState = () => {
+        setState(current => current.phase === 'linked'
+          ? linkedState(
+            connectionRef.current,
+            audioFramesRef.current,
+            decodedFramesRef.current,
+            audioErrorRef.current,
+          )
+          : current);
+      };
+      const reportAudioError = (message: string) => {
+        if (attemptRef.current !== attempt) return;
+        audioErrorRef.current = message;
+        publishAudioState();
+      };
       const connection = await connector.connect({
-        audioPcm: pcm => {
+        audioPcm: () => {
+          if (attemptRef.current !== attempt) return;
+          audioFramesRef.current += 1;
+          decodedFramesRef.current += 1;
+          publishAudioState();
+        },
+        audioFrame: frame => {
           if (attemptRef.current !== attempt) return;
           audioFramesRef.current += 1;
           try {
-            if (relayMicrophonePcmRef.current?.(pcm)) relayedFramesRef.current += 1;
+            omiDecoderRef.current ??= createOmiDecoderRef.current({
+              pcm: () => {
+                if (attemptRef.current !== attempt) return;
+                decodedFramesRef.current += 1;
+                publishAudioState();
+              },
+              error: () => reportAudioError('The browser failed to decode Omi audio.'),
+            });
+            omiDecoderRef.current.decode(frame.opus);
           } catch {
-            // A transient upstream failure must not tear down the BLE link.
+            reportAudioError('This browser cannot decode the Omi audio stream.');
           }
-          setState(current => current.phase === 'linked'
-            ? linkedState(
-              connectionRef.current,
-              audioFramesRef.current,
-              relayedFramesRef.current,
-            )
-            : current);
+          publishAudioState();
         },
-        audioFrame: () => {
-          if (attemptRef.current !== attempt) return;
-          audioFramesRef.current += 1;
-          setState(current => current.phase === 'linked'
-            ? linkedState(
-              connectionRef.current,
-              audioFramesRef.current,
-              relayedFramesRef.current,
-            )
-            : current);
-        },
+        error: () => reportAudioError('The badge audio stream reported an error.'),
         progress: phase => {
           if (attemptRef.current === attempt) setState(progressState(phase));
         },
@@ -98,6 +122,8 @@ export function useZ02Link(
           disconnectedBeforeReady = true;
           if (attemptRef.current !== attempt) return;
           connectionRef.current = null;
+          closeOmiDecoder(omiDecoderRef.current);
+          omiDecoderRef.current = null;
           setState({ phase: 'idle', detail: 'Badge disconnected.' });
         },
       });
@@ -107,10 +133,17 @@ export function useZ02Link(
         return;
       }
       connectionRef.current = connection;
-      setState(linkedState(connection, audioFramesRef.current, relayedFramesRef.current));
+      setState(linkedState(
+        connection,
+        audioFramesRef.current,
+        decodedFramesRef.current,
+        audioErrorRef.current,
+      ));
     } catch (error) {
       if (attemptRef.current !== attempt) return;
       connectionRef.current = null;
+      closeOmiDecoder(omiDecoderRef.current);
+      omiDecoderRef.current = null;
       if (disconnectedBeforeReady) {
         setState({ phase: 'idle', detail: 'Badge disconnected.' });
         return;
@@ -123,8 +156,11 @@ export function useZ02Link(
     attemptRef.current += 1;
     const connection = connectionRef.current;
     connectionRef.current = null;
+    closeOmiDecoder(omiDecoderRef.current);
+    omiDecoderRef.current = null;
     audioFramesRef.current = 0;
-    relayedFramesRef.current = 0;
+    decodedFramesRef.current = 0;
+    audioErrorRef.current = null;
     connection?.disconnect();
     setState(connector ? IDLE_STATE : UNSUPPORTED_STATE);
   }, [connector]);
@@ -133,6 +169,8 @@ export function useZ02Link(
     attemptRef.current += 1;
     connectionRef.current?.disconnect();
     connectionRef.current = null;
+    closeOmiDecoder(omiDecoderRef.current);
+    omiDecoderRef.current = null;
   }, []);
 
   return { state, link, disconnect } as const;
@@ -159,35 +197,50 @@ export function isZ02LinkBusy(phase: Z02LinkPhase): boolean {
 function linkedState(
   connection: Z02LinkConnection | null,
   audioFrames: number,
-  relayedFrames: number,
+  decodedFrames: number,
+  audioError: string | null,
 ): Z02LinkState {
   if (!connection) return { phase: 'idle', detail: 'Badge disconnected.' };
   if (connection.transport === 'omi-audio') {
     return {
       phase: 'linked',
       audioFrames,
-      relayedFrames,
+      decodedFrames,
+      ...(audioError ? { audioError } : {}),
       deviceName: connection.deviceName,
       microphone: connection.microphone,
       transport: connection.transport,
-      detail: audioFrames > 0
-        ? `Audio stream active — ${audioFrames} Opus frame${audioFrames === 1 ? '' : 's'} received.`
-        : 'Omi microphone subscribed. Waiting for the badge to deliver its first audio frame.',
+      detail: audioError
+        ?? (decodedFrames > 0
+          ? `Omi audio active — ${audioFrames} Opus frame${audioFrames === 1 ? '' : 's'} received; ${decodedFrames} decoded to PCM.`
+          : audioFrames > 0
+            ? `Received ${audioFrames} Opus frame${audioFrames === 1 ? '' : 's'}; waiting for decoded PCM.`
+            : 'Omi microphone subscribed. Waiting for the badge to deliver its first audio frame.'),
     };
   }
   return {
     phase: 'linked',
     audioFrames,
-    relayedFrames,
+    decodedFrames,
+    ...(audioError ? { audioError } : {}),
     deviceName: connection.deviceName,
     microphone: connection.microphone,
     transport: connection.transport,
-    detail: audioFrames === 0
-      ? 'Stock microphone started. Waiting for the first PCM chunk.'
-      : relayedFrames > 0
-        ? `PCM relay active — ${audioFrames} chunk${audioFrames === 1 ? '' : 's'} received; ${relayedFrames} sent to Companion.`
-        : `Badge microphone active — ${audioFrames} PCM chunk${audioFrames === 1 ? '' : 's'} received. Waiting for Companion audio relay.`,
+    detail: audioError
+      ?? (audioFrames === 0
+        ? 'Stock microphone started. Waiting for the first PCM chunk.'
+        : `Phone received ${audioFrames} PCM chunk${audioFrames === 1 ? '' : 's'} from the stock badge. Companion audio relay is not available on this connection.`),
   };
+}
+
+function createBrowserOmiDecoder(
+  callbacks: OmiOpusDecoderCallbacks,
+): WebCodecsOmiOpusDecoder {
+  return new WebCodecsOmiOpusDecoder(callbacks);
+}
+
+function closeOmiDecoder(decoder: OmiDecoder | null): void {
+  decoder?.close();
 }
 
 function describeLinkError(error: unknown): string {

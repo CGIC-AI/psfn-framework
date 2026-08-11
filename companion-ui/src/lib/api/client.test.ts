@@ -146,27 +146,6 @@ describe('satellite hub websocket client', () => {
     });
   });
 
-  it('sends badge PCM as the hub base64 audio frame without logging its contents', async () => {
-    const socket = new FakeSocket();
-    const client = new SatelliteHubClient({
-      url: 'ws://127.0.0.1:8787/',
-      webSocketFactory: () => socket,
-    });
-    const outbound: unknown[] = [];
-    client.on('outbound', event => outbound.push(event.message));
-
-    const connecting = client.connect();
-    socket.open();
-    await connecting;
-    client.sendMicrophonePcm(Uint8Array.of(0x00, 0x7f, 0xff, 0x80));
-
-    expect(socket.sent.map(frame => JSON.parse(frame))).toContainEqual({
-      type: 'audio',
-      audio: 'AH//gA==',
-    });
-    expect(outbound).toContainEqual({ type: 'audio', audio: '[redacted]' });
-  });
-
   it('sends a typed headpat interaction over the hub protocol', async () => {
     const socket = new FakeSocket();
     const client = new SatelliteHubClient({

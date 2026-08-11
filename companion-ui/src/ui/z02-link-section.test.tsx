@@ -25,9 +25,9 @@ describe('Z02LinkSection', () => {
         state={{
           phase: 'linked',
           deviceName: 'Z02 Test Badge',
-          detail: 'PCM relay active — 4 chunks received and sent.',
+          detail: 'Phone received 4 PCM chunks from the stock badge.',
           audioFrames: 4,
-          relayedFrames: 4,
+          decodedFrames: 4,
           microphone: 'pcm16-16khz',
           transport: 'stock-rcsp',
         }}
@@ -37,7 +37,7 @@ describe('Z02LinkSection', () => {
     );
 
     expect(screen.getByText('Z02 Test Badge')).toBeTruthy();
-    expect(screen.getByText('Mic relaying')).toBeTruthy();
+    expect(screen.getByText('Mic received')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Disconnect Z02' }));
     expect(onDisconnect).toHaveBeenCalledOnce();
   });
@@ -48,8 +48,9 @@ describe('Z02LinkSection', () => {
         state={{
           phase: 'linked',
           deviceName: 'Omi',
-          detail: 'Audio stream active — 12 Opus frames received.',
+          detail: 'Omi audio active — 12 Opus frames received; 12 decoded to PCM.',
           audioFrames: 12,
+          decodedFrames: 12,
           microphone: 'opus-16khz',
           transport: 'omi-audio',
         }}
@@ -58,7 +59,7 @@ describe('Z02LinkSection', () => {
       />,
     );
 
-    expect(screen.getByText('Mic streaming')).toBeTruthy();
+    expect(screen.getByText('Mic decoded')).toBeTruthy();
     expect(screen.getByRole('status').textContent).toContain('12 Opus frames');
   });
 

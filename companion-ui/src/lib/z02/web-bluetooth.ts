@@ -42,6 +42,7 @@ export interface Z02LinkConnector {
     audioPcm?: (pcm: Uint8Array) => void;
     audioFrame?: (frame: OmiOpusFrame) => void;
     disconnected: () => void;
+    error?: (error: Error) => void;
     progress?: (phase: Z02LinkProgress) => void;
   }): Promise<Z02LinkConnection>;
 }
@@ -91,6 +92,7 @@ export class WebBluetoothZ02Connector implements Z02LinkConnector {
     audioPcm?: (pcm: Uint8Array) => void;
     audioFrame?: (frame: OmiOpusFrame) => void;
     disconnected: () => void;
+    error?: (error: Error) => void;
     progress?: (phase: Z02LinkProgress) => void;
   }): Promise<Z02LinkConnection> {
     callbacks.progress?.('selecting');
@@ -113,8 +115,8 @@ export class WebBluetoothZ02Connector implements Z02LinkConnector {
     let notifyCharacteristic: Z02BluetoothCharacteristic | null = null;
     let notificationListener: ((event: Event) => void) | null = null;
     let disconnectedListener: (() => void) | null = null;
-    const inbox = new NotificationInbox();
-    let rcspInbox: RcspResponseInbox | null = null;
+    const inbox = new BoundedInbox<Uint8Array>();
+    let rcspInbox: BoundedInbox<RcspResponseFrame> | null = null;
     let stopStockMicrophone: (() => Promise<void>) | null = null;
 
     const cleanUpListeners = () => {
@@ -182,8 +184,9 @@ export class WebBluetoothZ02Connector implements Z02LinkConnector {
           const bytes = new Uint8Array(value.buffer, value.byteOffset, value.byteLength).slice();
           try {
             for (const frame of assembler.push(bytes)) callbacks.audioFrame?.(frame);
-          } catch {
+          } catch (error) {
             assembler.reset();
+            callbacks.error?.(asError(error, 'Omi audio packet was malformed'));
           }
         };
         audio.addEventListener('characteristicvaluechanged', notificationListener);
@@ -231,12 +234,15 @@ export class WebBluetoothZ02Connector implements Z02LinkConnector {
             OPERATION_TIMEOUT_MS,
             'Z02 authentication write timed out',
           ),
-          nextNotification: timeoutMs => inbox.next(timeoutMs),
+          nextNotification: timeoutMs => inbox.next(
+            timeoutMs,
+            'Z02 authentication timed out',
+          ),
         };
         await authenticateStockZ02(io);
 
         const decoder = new RcspStreamDecoder();
-        rcspInbox = new RcspResponseInbox();
+        rcspInbox = new BoundedInbox<RcspResponseFrame>();
         consumeNotification = value => {
           for (const frame of decoder.push(value)) {
             if (frame.kind === 'command'
@@ -268,9 +274,10 @@ export class WebBluetoothZ02Connector implements Z02LinkConnector {
           Uint8Array.of(RCSP_AUDIO_CODEC_PCM),
         ));
         const startResponse = await rcspInbox.next(
-          RCSP_OPCODE_APP_RECORDING,
-          startSequence,
           OPERATION_TIMEOUT_MS,
+          'Z02 microphone start timed out',
+          response => response.opcode === RCSP_OPCODE_APP_RECORDING
+            && response.sequence === startSequence,
         );
         if (startResponse.status !== 0) throw new Error('Z02 microphone start failed');
         transport = 'stock-rcsp';
@@ -298,7 +305,9 @@ export class WebBluetoothZ02Connector implements Z02LinkConnector {
             stop(),
             DISCONNECT_WRITE_TIMEOUT_MS,
             'Z02 microphone stop timed out',
-          ).catch(() => undefined).finally(() => {
+          ).catch(error => {
+            callbacks.error?.(asError(error, 'Z02 microphone stop failed'));
+          }).finally(() => {
             if (gatt.connected) gatt.disconnect();
           });
         },
@@ -308,16 +317,24 @@ export class WebBluetoothZ02Connector implements Z02LinkConnector {
       inbox.close(new Error('Z02 link failed'));
       rcspInbox?.close(new Error('Z02 link failed'));
       if (stopStockMicrophone && gatt.connected) {
-        await withTimeout(
-          stopStockMicrophone(),
-          DISCONNECT_WRITE_TIMEOUT_MS,
-          'Z02 microphone stop timed out',
-        ).catch(() => undefined);
+        try {
+          await withTimeout(
+            stopStockMicrophone(),
+            DISCONNECT_WRITE_TIMEOUT_MS,
+            'Z02 microphone stop timed out',
+          );
+        } catch (stopError) {
+          callbacks.error?.(asError(stopError, 'Z02 microphone stop failed'));
+        }
       }
       if (gatt.connected) gatt.disconnect();
       throw error;
     }
   }
+}
+
+function asError(value: unknown, fallback: string): Error {
+  return value instanceof Error ? value : new Error(fallback);
 }
 
 function randomRcspSequence(): number {
@@ -351,75 +368,21 @@ async function writeCharacteristicValue(
   throw new Error('The Z02 write characteristic is not writable');
 }
 
-class NotificationInbox {
-  private readonly queued: Uint8Array[] = [];
+class BoundedInbox<T> {
+  private readonly queued: T[] = [];
   private readonly waiters: Array<{
-    resolve: (value: Uint8Array) => void;
+    matches: (value: T) => boolean;
+    resolve: (value: T) => void;
     reject: (reason?: unknown) => void;
     timer: ReturnType<typeof globalThis.setTimeout>;
   }> = [];
   private closed: Error | null = null;
 
-  push(value: Uint8Array): void {
+  push(value: T): void {
     if (this.closed) return;
-    const waiter = this.waiters.shift();
-    if (waiter) {
-      globalThis.clearTimeout(waiter.timer);
-      waiter.resolve(value);
-      return;
-    }
-    this.queued.push(value);
-    if (this.queued.length > MAX_QUEUED_NOTIFICATIONS) this.queued.shift();
-  }
-
-  next(timeoutMs: number): Promise<Uint8Array> {
-    const queued = this.queued.shift();
-    if (queued) return Promise.resolve(queued);
-    if (this.closed) return Promise.reject(this.closed);
-
-    return new Promise((resolve, reject) => {
-      const waiter = {
-        resolve,
-        reject,
-        timer: globalThis.setTimeout(() => {
-          const index = this.waiters.indexOf(waiter);
-          if (index >= 0) this.waiters.splice(index, 1);
-          reject(new Error('Z02 authentication timed out'));
-        }, timeoutMs),
-      };
-      this.waiters.push(waiter);
-    });
-  }
-
-  close(reason: Error): void {
-    if (this.closed) return;
-    this.closed = reason;
-    for (const waiter of this.waiters.splice(0)) {
-      globalThis.clearTimeout(waiter.timer);
-      waiter.reject(reason);
-    }
-    this.queued.length = 0;
-  }
-}
-
-class RcspResponseInbox {
-  private readonly queued: RcspResponseFrame[] = [];
-  private readonly waiters: Array<{
-    opcode: number;
-    sequence: number;
-    resolve: (value: RcspResponseFrame) => void;
-    reject: (reason?: unknown) => void;
-    timer: ReturnType<typeof globalThis.setTimeout>;
-  }> = [];
-  private closed: Error | null = null;
-
-  push(value: RcspResponseFrame): void {
-    if (this.closed) return;
-    const index = this.waiters.findIndex(waiter => (
-      waiter.opcode === value.opcode && waiter.sequence === value.sequence
-    ));
-    if (index >= 0) {
-      const [waiter] = this.waiters.splice(index, 1);
+    const waiterIndex = this.waiters.findIndex(waiter => waiter.matches(value));
+    if (waiterIndex >= 0) {
+      const [waiter] = this.waiters.splice(waiterIndex, 1);
       if (!waiter) return;
       globalThis.clearTimeout(waiter.timer);
       waiter.resolve(value);
@@ -429,26 +392,27 @@ class RcspResponseInbox {
     if (this.queued.length > MAX_QUEUED_NOTIFICATIONS) this.queued.shift();
   }
 
-  next(opcode: number, sequence: number, timeoutMs: number): Promise<RcspResponseFrame> {
-    const index = this.queued.findIndex(value => (
-      value.opcode === opcode && value.sequence === sequence
-    ));
-    if (index >= 0) {
-      const [queued] = this.queued.splice(index, 1);
-      if (queued) return Promise.resolve(queued);
+  next(
+    timeoutMs: number,
+    timeoutMessage: string,
+    matches: (value: T) => boolean = () => true,
+  ): Promise<T> {
+    const queuedIndex = this.queued.findIndex(matches);
+    if (queuedIndex >= 0) {
+      const [queued] = this.queued.splice(queuedIndex, 1);
+      if (queued !== undefined) return Promise.resolve(queued);
     }
     if (this.closed) return Promise.reject(this.closed);
 
     return new Promise((resolve, reject) => {
       const waiter = {
-        opcode,
-        sequence,
+        matches,
         resolve,
         reject,
         timer: globalThis.setTimeout(() => {
-          const waiterIndex = this.waiters.indexOf(waiter);
-          if (waiterIndex >= 0) this.waiters.splice(waiterIndex, 1);
-          reject(new Error('Z02 microphone start timed out'));
+          const index = this.waiters.indexOf(waiter);
+          if (index >= 0) this.waiters.splice(index, 1);
+          reject(new Error(timeoutMessage));
         }, timeoutMs),
       };
       this.waiters.push(waiter);

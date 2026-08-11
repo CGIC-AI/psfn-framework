@@ -182,6 +182,21 @@ describe('Web Bluetooth Z02 connector', () => {
       .rejects.toThrow('Unsupported Omi audio codec 1');
     expect(fixture.disconnect).toHaveBeenCalledOnce();
   });
+
+  it('reports a malformed Omi audio notification instead of silently resetting', async () => {
+    const fixture = createOmiBluetoothFixture();
+    const error = vi.fn();
+    await new WebBluetoothZ02Connector(fixture.bluetooth).connect({
+      disconnected: vi.fn(),
+      error,
+    });
+
+    fixture.notify(Uint8Array.of(0x01, 0x02));
+
+    expect(error).toHaveBeenCalledWith(expect.objectContaining({
+      message: 'Omi audio packet has no Opus payload',
+    }));
+  });
 });
 
 function createBluetoothFixture(options: { rejectProof?: boolean; rejectMicrophone?: boolean } = {}) {

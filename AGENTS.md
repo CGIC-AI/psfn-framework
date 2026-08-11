@@ -31,12 +31,23 @@ Working rules:
 - Tracker priority is product priority, not automatic review intensity. A P0/P1
   label alone never requires extra agents, model reviews, broad tests, or a
   separate PR.
-- Small or low-risk changes use one implementer, one branch, and focused tests.
-  Concurrent writers use distinct branches and worktrees.
-- Run broad validation once on the final committed head. Do not rerun an
-  unchanged head.
+- Small or low-risk changes use one implementer, one branch, focused tests, and no
+  model reviewer, agent bus, or clean-main canary unless a concrete risk or current
+  operator instruction requires one. Concurrent writers use distinct branches and
+  worktrees.
+- Review an assembled PR train at most once, and only when its actual trust
+  boundaries or complexity justify review. Do not review the same code again at
+  every bead, epic, and train boundary.
+- Run `npm run gate:pre-pr` once on the final committed train head. Never run it
+  on worker checkpoints, and do not rerun an unchanged attested head.
+- When compatible fixes are ready, batch them into one coherent train. The
+  publication window prevents tiny PRs from creating repeated paid-review events;
+  tag a coherent variance and finish the work instead of adding filler or delaying
+  delivery to fit the numbers.
 - Publishing, CI, review, and merging are asynchronous boundaries. After creating
   a PR, report its URL instead of polling unless the operator asks you to wait.
+- Greptile is paid and opt-in. Never add `review:greptile`, mention the bot, or
+  otherwise trigger it unless the operator explicitly requests that paid review.
 - When the operator says ship, publish, hurry, or stop reviewing, all optional
   review and documentation work stops immediately. Finish only the minimum safe
   validation and delivery actions requested.
@@ -65,10 +76,13 @@ This repository opts into the **team-maintainer** profile.
   current operator explicitly authorizes a direct-main exception.
 - A checkpoint push is remote backup, not publication. It does not claim that
   broad gates or review passed.
-- Before publication, run the focused tests plus `npm run build`, `npm run lint`,
-  and `npm run verify:repository-hygiene` on the exact final head.
-- Never force-push or rewrite a shared branch. Rebase before publication when the
-  base moves.
+- Run `npm run hooks:install` once in every new checkout or worktree. Publication
+  fails closed unless the tracked pre-push hook is active.
+- Before publication, run `npm run gate:pre-pr` once on the exact final committed
+  head and publish through `npm run pr:publish`.
+- Never manually force-push or rewrite a shared branch. Rebase before publication
+  when the base moves; the exact-head `pr:publish` wrapper alone may update that
+  branch with an attestation-checked, exact-remote `--force-with-lease`.
 - A parked lane is still remotely durable: its bead note records the remote
   branch, exact pushed head, validation state, and blocker. Local-only parking is
   forbidden.
@@ -203,6 +217,16 @@ configuration repository or remain untracked locally.
   temporary paths, and empty secret placeholders.
 - A private repository is not a secret store. Credentials, tokens, key material,
   kubeconfigs, databases, backups, and runtime data remain untracked everywhere.
+- Deployment-specific privacy patterns live in the ignored
+  `workspace/sanitize/local-blocklist.json` or an external file selected by
+  `PUBLIC_SANITIZE_LOCAL_BLOCKLIST`. For shared worktrees, configure the external
+  path once with `git config publicSanitize.localBlocklist <absolute-path>`. Local
+  gates require that input; public CI runs the generic privacy rules without
+  tracking or printing private values.
+- Maintainer commit identities use the untracked
+  `delivery.allowedCommitEmail` Git config or the repository variable
+  `DELIVERY_ALLOWED_COMMIT_EMAILS`; do not place personal addresses in tracked
+  allowlists or print rejected addresses in CI diagnostics.
 
 ## Runtime Entry Points
 
@@ -290,10 +314,17 @@ Before publication:
 
 1. Fetch and rebase onto the intended base.
 2. Commit the exact clean head.
-3. Run focused tests plus build, lint, and repository hygiene once.
-4. Push the branch and create a pull request with the repository host tooling.
-5. Return the PR URL. CI continues asynchronously; use `--wait` only when the
+3. Ensure `npm run hooks:install` has configured the tracked pre-push hook.
+4. Run `npm run gate:pre-pr` once; it owns broad PREFLIGHT and HEAVY validation.
+5. Publish only with `npm run pr:publish`.
+6. Return the PR URL. CI continues asynchronously; use `--wait` only when the
    operator explicitly asks this session to monitor required checks.
+
+The publication window is 800–2,500 counted changed lines, at most 25 files, and
+at most 8 commits. These numbers are not set in stone: variances are fine when
+the change is coherent. Tag an out-of-window PR `change-budget:exception` with a
+one-line reason, then finish the work—never add filler, reshape, split, or delay a
+ready change merely to fit the window.
 
 Integration-test timeout overrides must be registered in
 `src/test-support/integration-timeout-registry.json`. Measure first and preserve
@@ -341,6 +372,7 @@ Do not remain idle after publication merely to observe CI, external review, or a
 merge. Record `published, awaiting checks`, return the PR URL, and move on. The
 merging session or a later reconciliation sweep closes delivered beads.
 
+<!-- BEGIN BEADS CODEX SETUP: generated by bd setup codex -->
 ## Beads quick reference
 
 Use the `beads` skill and `bd` CLI for durable tracking:
@@ -356,3 +388,4 @@ bd prime
 Use `bd remember` for durable project memory; do not create ad hoc memory files.
 The managed Beads block is task-tracking guidance, not permission to override
 current operator or repository instructions.
+<!-- END BEADS CODEX SETUP -->

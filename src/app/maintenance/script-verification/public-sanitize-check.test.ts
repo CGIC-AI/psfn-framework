@@ -1,6 +1,11 @@
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
 import {
+  loadLocalBlocklist,
   parseTrackedFilesFromGitLsStage,
   scanPublicSanitizeTrackedFiles,
   shouldScanSourceForNulByte,
@@ -13,6 +18,56 @@ function buildOpenAiLikeToken() {
 }
 
 describe('public-sanitize check', () => {
+  it('allows generic-only CI checks when the external blocklist is absent', () => {
+    const previous = process.env.PUBLIC_SANITIZE_LOCAL_BLOCKLIST;
+    process.env.PUBLIC_SANITIZE_LOCAL_BLOCKLIST = join(tmpdir(), 'missing-public-sanitize-blocklist.json');
+    try {
+      expect(loadLocalBlocklist({ required: false })).toMatchObject({
+        forbiddenPathRegex: [],
+        textRuleRegex: [],
+        loaded: false,
+      });
+      expect(() => loadLocalBlocklist({ required: true })).toThrow(
+        'Required local privacy blocklist is missing',
+      );
+    } finally {
+      if (previous === undefined) delete process.env.PUBLIC_SANITIZE_LOCAL_BLOCKLIST;
+      else process.env.PUBLIC_SANITIZE_LOCAL_BLOCKLIST = previous;
+    }
+  });
+
+  it('loads synthetic private patterns from an external blocklist', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'public-sanitize-'));
+    const localPath = join(directory, 'local-blocklist.json');
+    const previous = process.env.PUBLIC_SANITIZE_LOCAL_BLOCKLIST;
+    writeFileSync(localPath, JSON.stringify({
+      forbiddenPathRegex: ['private-fixture'],
+      textRegex: [{ name: 'synthetic-identity', pattern: 'Example Private Name', flags: 'gi' }],
+    }));
+    process.env.PUBLIC_SANITIZE_LOCAL_BLOCKLIST = localPath;
+    try {
+      const localBlocklist = loadLocalBlocklist({ required: true });
+      expect(localBlocklist.loaded).toBe(true);
+      const result = scanPublicSanitizeTrackedFiles(
+        ['docs/private-fixture.md', 'docs/maintainers.md'],
+        {
+          localBlocklist,
+          readTextFile: (file) => file.endsWith('maintainers.md')
+            ? 'Maintainer: Example Private Name'
+            : 'generic content',
+        },
+      );
+      expect(result.violations.map(({ rule }) => rule).sort()).toEqual([
+        'local-path-1',
+        'synthetic-identity',
+      ]);
+    } finally {
+      if (previous === undefined) delete process.env.PUBLIC_SANITIZE_LOCAL_BLOCKLIST;
+      else process.env.PUBLIC_SANITIZE_LOCAL_BLOCKLIST = previous;
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('keeps text source and docs in scope', () => {
     expect(shouldScanTextContent('src/app/agent/main.ts')).toBe(true);
     expect(shouldScanTextContent('docs/README.md')).toBe(true);

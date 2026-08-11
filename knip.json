@@ -27,6 +27,7 @@
         "sherpa-onnx-node"
       ],
       "ignoreBinaries": [
+        "gh",
         "rg",
         "uv"
       ]

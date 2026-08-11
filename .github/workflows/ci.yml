@@ -6,6 +6,7 @@ on:
 
 permissions:
   contents: read
+  statuses: read
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number }}
@@ -15,6 +16,7 @@ env:
   NODE_VERSION: 24.19.0
   BASE_SHA: ${{ github.event.pull_request.base.sha }}
   HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+  EXPECTED_LOCAL_GATE_STATUS_ACTOR: ${{ vars.LOCAL_GATE_STATUS_ACTOR }}
 
 jobs:
   github-delta:
@@ -42,8 +44,32 @@ jobs:
             apps/satellite-hub/package-lock.json
             tools/evals/package-lock.json
 
-      - name: Test CI helpers
+      - name: Verify exact local-gate status
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/ci/verify-pr-attestation.mjs
+
+      - name: Test delivery rules
         run: npm run test:ci-rules
+
+      - name: Enforce change budget
+        env:
+          CHANGE_BUDGET_EXCEPTION: ${{ contains(github.event.pull_request.labels.*.name, 'change-budget:exception') }}
+          CHANGE_BUDGET_PR_BODY: ${{ github.event.pull_request.body || '' }}
+        run: |
+          args=(--base "$BASE_SHA" --head "$HEAD_SHA")
+          if [[ "$CHANGE_BUDGET_EXCEPTION" == "true" ]]; then
+            args+=(--exception)
+          fi
+          node scripts/ci/check-change-budget.mjs "${args[@]}"
+
+      - name: Enforce commit identity allowlist
+        env:
+          DELIVERY_ALLOWED_COMMIT_EMAILS: ${{ vars.DELIVERY_ALLOWED_COMMIT_EMAILS }}
+        run: npm run verify:commit-identities -- --base "$BASE_SHA" --head "$HEAD_SHA"
+
+      - name: Verify public repository sanitation
+        run: npm run verify:public-sanitize
 
       - name: Detect clean-environment coverage
         id: scope

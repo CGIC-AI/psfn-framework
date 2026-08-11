@@ -183,6 +183,16 @@ describe('compileIntakeEncodingPolicyFile', () => {
     }), 'oversized-policy.json')).toThrow(/maxCandidatesPerEncoding/);
     expect(() => compileIntakeEncodingPolicyFile(JSON.stringify({
       schemaVersion: 1,
+      encodingPolicy: { ...base, maxTotalDecodeAttempts: 40 },
+      rules: [BASE_RULE],
+    }), 'starved-policy.json')).toThrow(/reserve one attempt for every decoder class/);
+    expect(() => compileIntakeEncodingPolicyFile(JSON.stringify({
+      schemaVersion: 1,
+      encodingPolicy: { ...base, maxInflationRatio: 0 },
+      rules: [BASE_RULE],
+    }), 'unsafe-inflation-policy.json')).toThrow(/maxInflationRatio/);
+    expect(() => compileIntakeEncodingPolicyFile(JSON.stringify({
+      schemaVersion: 1,
       encodingPolicy: { ...base, decodingCuePattern: 'decode.*payload' },
       rules: [BASE_RULE],
     }), 'unsafe-policy.json')).toThrow(/unbounded quantifier/);

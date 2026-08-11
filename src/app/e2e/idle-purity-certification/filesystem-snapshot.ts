@@ -15,9 +15,9 @@ function relativeSnapshotPath(root: string, path: string): string {
 
 async function fingerprintEntry(path: string): Promise<DurableFileEntry> {
   const stat = await lstat(path, { bigint: true });
-  const common = `${stat.mode.toString()}:${stat.mtimeNs.toString()}`;
+  const common = `${stat.mode.toString()}:${stat.mtimeNs.toString()}:${stat.ctimeNs.toString()}`;
   if (stat.isDirectory()) {
-    return { kind: 'directory', fingerprint: stat.mode.toString() };
+    return { kind: 'directory', fingerprint: common };
   }
   if (stat.isFile()) {
     const digest = createHash('sha256').update(await readFile(path)).digest('hex');
@@ -34,6 +34,7 @@ async function fingerprintEntry(path: string): Promise<DurableFileEntry> {
 
 export async function captureDurableFileSnapshot(root: string): Promise<DurableFileSnapshot> {
   const snapshot = new Map<string, DurableFileEntry>();
+  snapshot.set('.', await fingerprintEntry(root));
 
   const walk = async (directory: string): Promise<void> => {
     const entries = await readdir(directory, { withFileTypes: true });

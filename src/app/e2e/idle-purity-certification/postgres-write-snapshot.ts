@@ -102,7 +102,14 @@ export async function capturePostgresWriteSnapshot(
     await client.query('COMMIT');
     return snapshot;
   } catch (error) {
-    await client.query('ROLLBACK').catch(() => undefined);
+    try {
+      await client.query('ROLLBACK');
+    } catch (rollbackError) {
+      throw new AggregateError(
+        [error, rollbackError],
+        'PostgreSQL write snapshot and rollback both failed',
+      );
+    }
     throw error;
   } finally {
     client.release();

@@ -29,12 +29,20 @@ import {
   startIdlePurityRuntimeHarness,
   type IdlePurityRuntimeHarness,
 } from './runtime-harness.js';
+import { installPostgresWriteAudit } from './postgres-write-audit.js';
 
 const TIMEOUT_MS = 300_000;
 const DEFAULT_TEST_IDLE_WINDOW_MS = 1_000;
 const DEFAULT_TEST_WARMUP_MS = 0;
 const BASELINE_SAMPLE_INTERVAL_MS = 1_500;
 const BASELINE_SETTLE_TIMEOUT_MS = 15_000;
+const CERTIFIED_AUTOMATA_TASK_IDS = [
+  BACKGROUND_MAINTENANCE_TASK_ID,
+  FREE_TIME_IDLE_TASK_ID,
+  FREE_TIME_QUIET_HOURS_TASK_ID,
+  TEMPORAL_WAKEUP_MORNING_TASK_ID,
+  WEIGHTED_THOUGHT_OUTREACH_TASK_ID,
+] as const;
 
 function resolveIdleWindowMs(): number {
   const configured = process.env.PSFN_IDLE_PURITY_WINDOW_MS;
@@ -66,10 +74,22 @@ describe('idle-purity real quiet-runtime certification', () => {
   }, TIMEOUT_MS);
 
   afterEach(async () => {
-    await processHarness?.stop();
+    const errors: unknown[] = [];
+    try {
+      await processHarness?.stop();
+    } catch (error) {
+      errors.push(error);
+    }
     processHarness = null;
-    fixture?.cleanup();
+    try {
+      fixture?.cleanup();
+    } catch (error) {
+      errors.push(error);
+    }
     fixture = null;
+    if (errors.length > 0) {
+      throw new AggregateError(errors, 'Failed to clean up idle-purity integration state');
+    }
   }, TIMEOUT_MS);
 
   afterAll(async () => {
@@ -86,13 +106,9 @@ describe('idle-purity real quiet-runtime certification', () => {
       topology: 'single_companion',
     });
     processHarness = await startIdlePurityRuntimeHarness({ fixture });
-    await expect(processHarness.schedulerTaskIds()).resolves.toEqual(expect.arrayContaining([
-      BACKGROUND_MAINTENANCE_TASK_ID,
-      FREE_TIME_IDLE_TASK_ID,
-      FREE_TIME_QUIET_HOURS_TASK_ID,
-      TEMPORAL_WAKEUP_MORNING_TASK_ID,
-      WEIGHTED_THOUGHT_OUTREACH_TASK_ID,
-    ]));
+    await expect(processHarness.schedulerTaskIds()).resolves.toEqual(
+      expect.arrayContaining(CERTIFIED_AUTOMATA_TASK_IDS),
+    );
     expect(processHarness.modelRequestCount).toBe(0);
     const warmupMs = resolveWarmupMs();
     if (warmupMs > 0) {
@@ -104,7 +120,12 @@ describe('idle-purity real quiet-runtime certification', () => {
       max: 1,
       readOnly: true,
     });
+    const auditPool = createPostgresPool(databaseUrl, {
+      applicationName: 'psfn-idle-purity-write-audit-installer',
+      max: 1,
+    });
     try {
+      await installPostgresWriteAudit(auditPool);
       const report = await certifyIdlePurity({
         allowlist: { filesystem: [] },
         runtimeRoot: fixture.runtimeRoot,
@@ -117,8 +138,17 @@ describe('idle-purity real quiet-runtime certification', () => {
       });
       expect(report).toEqual({ allowedChanges: [], violations: [] });
       expect(processHarness.modelRequestCount).toBe(0);
+      await expect(processHarness.schedulerTaskIds()).resolves.toEqual(
+        expect.arrayContaining(CERTIFIED_AUTOMATA_TASK_IDS),
+      );
     } finally {
-      await observerPool.end();
+      const results = await Promise.allSettled([observerPool.end(), auditPool.end()]);
+      const errors = results
+        .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
+        .map(result => result.reason);
+      if (errors.length > 0) {
+        throw new AggregateError(errors, 'Failed to close idle-purity PostgreSQL pools');
+      }
     }
   }, TIMEOUT_MS);
 
@@ -198,6 +228,7 @@ describe('idle-purity real quiet-runtime certification', () => {
     });
     try {
       await writerPool.query('CREATE TABLE public.idle_purity_net_zero_probe (id integer PRIMARY KEY)');
+      await installPostgresWriteAudit(writerPool);
       await expect(certifyIdlePurity({
         runtimeRoot: fixture.runtimeRoot,
         idleWindowMs: 0,
@@ -205,10 +236,9 @@ describe('idle-purity real quiet-runtime certification', () => {
         wait: async () => {
           await writerPool.query('INSERT INTO public.idle_purity_net_zero_probe (id) VALUES (1)');
           await writerPool.query('DELETE FROM public.idle_purity_net_zero_probe WHERE id = 1');
-          await writerPool.query('SELECT pg_stat_force_next_flush()');
         },
       })).rejects.toThrow(
-        /postgres wrote: public\.idle_purity_net_zero_probe \(inserted=1, updated=0, deleted=1\)/u,
+        /postgres state changed: idle_purity_certification\.write_events/u,
       );
     } finally {
       await observerPool.end();

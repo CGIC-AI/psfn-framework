@@ -77,6 +77,24 @@ describe('idle-purity certification', () => {
     })).rejects.toThrow(/filesystem modified: state\.json/u);
   });
 
+  it('detects a file created and deleted within the measured window', async () => {
+    const runtimeRoot = await mkdtemp(join(tmpdir(), 'psfn-idle-purity-'));
+    roots.push(runtimeRoot);
+    const durableDir = join(runtimeRoot, 'durable-state');
+    const transientPath = join(durableDir, 'transient.json');
+    await mkdir(durableDir);
+
+    await expect(certifyIdlePurity({
+      runtimeRoot,
+      idleWindowMs: 0,
+      capturePostgresWrites: async () => ({}),
+      wait: async () => {
+        await writeFile(transientPath, '{}\n', 'utf8');
+        await rm(transientPath);
+      },
+    })).rejects.toThrow(/filesystem modified: durable-state/u);
+  });
+
   it('fails on unapproved PostgreSQL tuple writes', async () => {
     const runtimeRoot = await mkdtemp(join(tmpdir(), 'psfn-idle-purity-'));
     roots.push(runtimeRoot);

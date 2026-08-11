@@ -1,7 +1,8 @@
 // ── Dual-presence turn classification + mindspace twin default (vinz.29) ──
 //
-// Sprint-10 decisions 9-13 (SPRINT_10_LOCATIONS.md §7): every turn is
-// classified by its DEVICE ORIGIN into one of two presence modes.
+// The locations contract in docs/architecture.md and the situated-presence
+// lifecycle in docs/chat-turn-lifecycle.md require every turn to be classified
+// by its DEVICE ORIGIN into one of two presence modes.
 //
 //  * `physical`  — the inbound device is a classified satellite (or a physical
 //    voice endpoint): the companion is physically emanating into that room;

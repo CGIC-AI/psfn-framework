@@ -1,15 +1,16 @@
 import type { PlaceKind } from '../../shared/contracts/places-registry.js';
 import { LOWERCASE_RFC4122_COMPANION_ID_PATTERN } from '../../shared/routing/companion-id.js';
 
-// ── Cross-companion presence store port (sprint 10, W5a) ──
+// ── Cross-companion presence store port ──
 //
 // The `companion_presence` table in the SHARED Postgres schema is the durable
 // authority for "which companion is at which place" across a cluster. Each
 // agent process writes ITS OWN row only; everyone reads everyone's rows.
 //
-// Privacy invariant (sprint-10 doc §8): NOTHING personal ever goes through
-// this port — presence is companion id + place coordinates + timestamps, full
-// stop. Do not add fields that carry conversational or personal state.
+// Privacy invariant (docs/multi-companion.md, "Locations, presence, and the
+// shared world"): NOTHING personal ever goes through this port — presence is
+// companion id + place coordinates + timestamps, full stop. Do not add fields
+// that carry conversational or personal state.
 
 /**
  * Lowercase RFC-4122 UUID (versions 1-5), mirroring the companion-id format

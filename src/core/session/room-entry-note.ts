@@ -1,6 +1,6 @@
 import type { AffordanceConfig, PlaceKind } from '../../shared/contracts/places-registry.js';
 
-// ── Room-entry system-note helper (Sprint 10, W5 "Entry event" contract) ──
+// ── Room-entry system-note helper ──
 //
 // A companion entering a room receives a system-only message: room ID,
 // surroundings, who else is present." This module is the single deterministic
@@ -53,7 +53,7 @@ export interface RoomEntryOccupant {
 }
 
 export interface RoomEntryNoteInput {
-  /** The room's channel/room ID (part of the world ID; see W5). */
+  /** The room's channel/room ID within the situated-presence world. */
   roomChannelId: string;
   /** The place bound to this room, when the soft places registry resolves one. */
   place?: RoomEntryPlace;
@@ -89,7 +89,7 @@ function formatList(items: readonly string[]): string {
 }
 
 /**
- * Compose the system-only room-entry note (W5 entry event). Pure and
+ * Compose the system-only room-entry note. Pure and
  * deterministic. Returns a multi-line string carrying: the room/channel ID, the
  * bound place name and whether it is physical or virtual, a surroundings summary
  * (operator description plus perceivers/effectors phrased naturally), and who

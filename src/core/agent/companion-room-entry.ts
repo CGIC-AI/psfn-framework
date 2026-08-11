@@ -1,15 +1,16 @@
-// ── Co-location → room-entry note wiring (sprint 10, W6) ──
+// ── Co-location → room-entry note wiring ──
 //
 // When the presence runtime observes a co-location
 // (`presence.companion.co_located`: a companion newly present at our place,
-// including everyone already there when WE arrive), append the W5 room-entry
+// including everyone already there when WE arrive), append the room-entry
 // system note to the place's companion-room channel session so the arrival is
 // visible in-context.
 //
-// CONVERSATION INITIATION POLICY (documented decision, W6): an arrival note is
-// CONTEXT, not a triggered turn. No model call, no auto-greeting — the note
-// sits in the room session and informs whatever turn happens next. A free-time
-// or outreach lane deliberately choosing to speak into a room is future work.
+// CONVERSATION INITIATION POLICY (docs/chat-turn-lifecycle.md, "Situated
+// presence and companion-room delivery"): an arrival note is CONTEXT, not a
+// triggered turn. No model call, no auto-greeting — the note sits in the room
+// session and informs whatever turn happens next. A free-time or outreach lane
+// deliberately choosing to speak into a room is future work.
 
 import type { EventBus } from '../../shared/event-bus.js';
 import type { PlacesRegistryConfig } from '../../shared/contracts/places-registry.js';

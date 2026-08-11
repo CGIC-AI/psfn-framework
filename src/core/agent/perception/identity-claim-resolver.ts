@@ -1,4 +1,5 @@
-// Presence identity-claim resolver (Sprint 10, Workstream D2b — bead .13).
+// Presence identity-claim resolver. The current locations contract lives in
+// docs/architecture.md under "Locations, presence, and world."
 //
 // A face-scope identity-claim PerceptionEvent (produced by the .11 sensor →
 // cognition bridge) carries an OPAQUE hub identity handle plus a confidence,
@@ -35,7 +36,7 @@ const log = createComponentLogger('IdentityClaimResolver');
  * Minimum claim confidence (0..1) required before a handle is even resolved
  * against the enrollment binding. Below this, the presence surfaces as
  * anonymous `low_confidence` — the companion never guesses a name off a weak
- * match (Sprint 10 §5 fail-closed identity posture).
+ * match (the fail-closed identity posture in docs/architecture.md).
  */
 export const DEFAULT_IDENTITY_CLAIM_CONFIDENCE_THRESHOLD = 0.6;
 

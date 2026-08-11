@@ -1,4 +1,4 @@
-// ── Same-cluster inter-companion channel identifiers (sprint 10, W6) ──
+// ── Same-cluster inter-companion channel identifiers ──
 //
 // Companion-to-companion conversation happens through ORDINARY CHANNELS in the
 // normal turn pipeline — that is the entire loop-safety argument. Every peer
@@ -7,7 +7,8 @@
 // wrap-up, hard suppression) applies with zero new mechanism. There is no
 // side-channel dispatch, ever; that would create a fatigue bypass.
 //
-// Two channel shapes (review §9):
+// Two channel shapes (docs/chat-turn-lifecycle.md, "Situated presence and
+// companion-room delivery"):
 //
 //  - ROOM (`companion-room:<placeId>`) — many-to-many. A virtual place's
 //    conversation venue: companions whose shared-schema presence is at the
@@ -22,16 +23,16 @@
 //    {localCompanionId, peerContactId, channelId, dayKey}, the DM budget is
 //    independent of any room budget by construction.
 //
-//    FATIGUE CLASSIFICATION DECISION (documented per W6): companion DMs are
+//    FATIGUE CLASSIFICATION DECISION: companion DMs are
 //    delivered with `isDirectMessage: true`, so `resolvePolicyChannelType`
 //    classifies them as `dm` (channel setting `dm`, the most generous limits
 //    in charge-policy.seed.json), NOT `quiet_companion_room`. This follows the
 //    seed config's intent: `dm` is the setting for one-to-one channels, and
-//    the sprint doc frames companion IPC as the DM analogue. The MI↔MI
-//    relationship budget still applies and hard exhaustion still suppresses —
-//    the classification only picks which channel-setting cap bounds it.
+//    the canonical channel contract frames companion IPC as the DM analogue.
+//    The MI↔MI relationship budget still applies and hard exhaustion still
+//    suppresses — the classification only picks which channel-setting cap bounds it.
 //
-// CONVERSATION INITIATION POLICY (documented per W6): minimal. A co-location
+// CONVERSATION INITIATION POLICY: minimal. A co-location
 // arrival appends a system-only room-entry note to the room channel session —
 // context, not a triggered turn. No auto-greeting is dispatched on arrival;
 // a free-time/outreach lane choosing to speak into a room is future work.

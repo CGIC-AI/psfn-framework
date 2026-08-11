@@ -188,7 +188,7 @@ Readonly<Record<GatewayConnectionState, readonly GatewayConnectionState[]>> = {
   offline: [],
 };
 
-// ── Fleet health snapshot (sprint-10 W4 fleet view) ──
+// ── Fleet health snapshot (bounded multi-companion fleet view) ──
 // Cheap, read-only view over state the gateway already tracks: the companion
 // connection registry, latest bounded agent posture, and an in-memory ring of
 // multi-companion violation alarms. The gateway never reads companion stores.
@@ -254,7 +254,7 @@ export interface GatewayServerOptions extends OptionalCompanionRoutingBinding {
   modelDiscovery?: ModelDiscoveryBackend;
   discordAdapter: ChannelOutboundDock;
   /**
-   * Multi-account discord (sprint-10 W1-P2): outbound dock per companionId.
+   * Multi-account Discord: outbound dock per companionId.
    * Required to cover every companion routed via multiCompanion.discordAccounts;
    * outbound sends from a companion connection resolve through its own dock
    * only, so one companion can never egress through another companion's bot.
@@ -351,14 +351,14 @@ export interface GatewayServerOptions extends OptionalCompanionRoutingBinding {
   wyomingShardRouting: WyomingShardRoutingConfig;
   companionId?: CompanionId;
   /**
-   * Multi-companion (sprint-10 W1). When absent or disabled, the gateway keeps
+   * Multi-companion topology. When absent or disabled, the gateway keeps
    * the single-agent semantics (first-ready routing + broadcast notifications)
    * byte-identical. When enabled, every routed exchange is companion-addressed
    * and any ambiguity fails closed.
    */
   multiCompanion?: GatewayMultiCompanionConfig;
   /**
-   * Inter-companion channel lane (sprint-10 W6): resolves companion-room /
+   * Inter-companion channel lane: resolves companion-room /
    * companion-dm addressing for `companion.message.send`. Requires the
    * multi-companion flag; providing it flag-off is a configuration error
    * (fail closed). Absent while multi-companion is on, the lane RPC alarms
@@ -1331,7 +1331,7 @@ export class GatewayServer {
     return this.connectionStatuses.get(conn)?.companionId === routedCompanionId;
   }
 
-  // ── Inter-companion channel lane (sprint-10 W6) ──
+  // ── Inter-companion channel lane ──
   // `companion.message.send`: the ONLY way a companion message moves between
   // agents. The sender identity is the connection's BOUND companionId (never a
   // parameter); the lane resolves recipients (room = presence at the place,
@@ -1339,7 +1339,8 @@ export class GatewayServer {
   // notification (`companion.message`) so the receiving agent runs it through
   // the normal turn pipeline — fatigue (MI↔MI charging, hard suppression),
   // trust, and extraction apply with zero new mechanism. No side-channel
-  // dispatch exists (sprint doc §8 fatigue-bypass risk).
+  // dispatch exists; docs/specifications.md defines the same-cluster autonomy
+  // boundary and forbids bypassing ordinary-channel fatigue controls.
 
   private async handleCompanionMessageSend(
     conn: GatewayRpcConnection,
@@ -2468,7 +2469,7 @@ export class GatewayServer {
   }
 
   /**
-   * Read-only fleet health view (sprint-10 W4): identified companion
+   * Read-only fleet health view: identified companion
    * connections, last-seen activity (retained across disconnects), and recent
    * multi-companion violation counts. Available for bounded, server-side fleet
    * projections and internal operations; never mutates connection state.

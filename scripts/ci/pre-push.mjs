@@ -29,19 +29,26 @@ function isAncestor(ancestor, descendant) {
   throw new Error(`git merge-base --is-ancestor failed with exit ${String(result.status)}`);
 }
 
-function validateAttestedPublication(currentBranch) {
-  if (process.env.PSFN_ATTESTED_PUBLISH !== '1') return false;
-  const baseRef = git([
+export function validateAttestedPublication(currentBranch, {
+  env = process.env,
+  gitCommand = git,
+  resolveGateState = resolveLocalGateState,
+  readGateAttestation = readAttestation,
+  validateGateAttestation = validateStateAttestation,
+} = {}) {
+  if (env.PSFN_ATTESTED_PUBLISH !== '1') return false;
+  const baseRef = gitCommand([
     'config',
     '--get',
     '--default',
     'origin/main',
     `branch.${currentBranch}.psfnGateBase`,
   ]);
-  const state = resolveLocalGateState({ baseRef });
-  const validation = validateStateAttestation(
-    readAttestation(state.attestationPath),
+  const state = resolveGateState({ baseRef });
+  const validation = validateGateAttestation(
+    readGateAttestation(state.attestationPath),
     state,
+    { changeBudgetException: env.CHANGE_BUDGET_EXCEPTION === 'true' },
   ).result;
   if (!validation.valid) {
     throw new Error(`Attested publication denied: ${validation.reason}`);

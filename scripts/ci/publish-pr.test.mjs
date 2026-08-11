@@ -195,6 +195,7 @@ test('publisher updates only existing-PR title and body through REST before the 
     `${HEAD}:refs/heads/work/publish-ordering`,
   ]);
   assert.equal(fixture.spawnCalls[0].options.env.PSFN_ATTESTED_PUBLISH, '1');
+  assert.equal(fixture.spawnCalls[0].options.env.CHANGE_BUDGET_EXCEPTION, 'false');
   assert.equal(
     fixture.calls.some(call => call[0] === 'gh' && call[1] === 'pr' && call[2] === 'edit'),
     false,
@@ -411,6 +412,7 @@ test('publisher gates a new exception PR against its intended labels and body', 
     body: '## Change-budget exception\n\nDocumented test variance.\n',
     forceOffline: 'true',
   }]);
+  assert.equal(fixture.spawnCalls[0].options.env.CHANGE_BUDGET_EXCEPTION, 'true');
   assert.equal(process.env.CHANGE_BUDGET_USE_OFFLINE, previousOfflineMode);
 });
 

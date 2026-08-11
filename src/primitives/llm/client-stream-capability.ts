@@ -26,6 +26,7 @@ import {
   isPotentialProviderResponsePrefixArtifact,
   normalizeContent,
   normalizeLLMUsageDetails,
+  resolveEmptyToolArgumentUsageMetadata,
   stripProviderResponseTerminatorArtifact,
 } from './client-response-helpers.js';
 import { countMessageTokens } from './tokens.js';
@@ -342,6 +343,10 @@ export async function runLLMStreamAttempt(
           emptyToolArgsAttempt: input.attemptIndex,
           emptyArgsRetries: input.attemptIndex,
           toolCallCount: response.toolCalls.length,
+          ...resolveEmptyToolArgumentUsageMetadata(
+            response.toolCalls,
+            toolArgumentFragmentBytes,
+          ),
           ...(cancelledAfterCompletion ? { cancelledAfterCompletion: true } : {}),
         },
       }),
@@ -388,6 +393,10 @@ export async function runLLMStreamAttempt(
         emptyToolArgsAttempt: input.attemptIndex,
         emptyArgsRetries: input.attemptIndex,
         partialOutputChars: content.length + reasoning.length,
+        ...resolveEmptyToolArgumentUsageMetadata(
+          incompleteResponse.toolCalls,
+          toolArgumentFragmentBytes,
+        ),
         ...(cancelledAfterCompletion ? { cancelledAfterCompletion: true } : {}),
       },
     }),

@@ -75,6 +75,7 @@ import {
   extractCompletionToolCalls,
   normalizeContent,
   normalizeLLMUsageDetails,
+  resolveEmptyToolArgumentUsageMetadata,
   normalizeSharedRouteKey,
   stripProviderResponseTerminatorArtifact,
 } from './client-response-helpers.js';
@@ -1172,6 +1173,11 @@ export class LLMClient {
           // the abort — otherwise the spend is lost to the budget SUM and the
           // pre-taken reservation strands pending forever (no sweeper).
           const cancelledAfterCompletion = transportSignal.aborted;
+          const completionToolCalls = extractCompletionToolCalls(response);
+          const emptyToolArgumentUsageMetadata = resolveEmptyToolArgumentUsageMetadata(
+            completionToolCalls,
+            0,
+          );
           let usageDetails: LLMUsageDetails;
           try {
             const responseWithLegacyTokenCounts = response as typeof response & {
@@ -1212,6 +1218,7 @@ export class LLMClient {
                   completionPurpose: purpose,
                   routingPurpose,
                   emptyArgsRetries,
+                  ...emptyToolArgumentUsageMetadata,
                   malformedRawUsage: response.usage,
                 },
               },
@@ -1241,7 +1248,12 @@ export class LLMClient {
                 settlement: 'complete',
                 error: err,
                 providerObservability,
-                metadata: { completionPurpose: purpose, routingPurpose, emptyArgsRetries },
+                metadata: {
+                  completionPurpose: purpose,
+                  routingPurpose,
+                  emptyArgsRetries,
+                  ...emptyToolArgumentUsageMetadata,
+                },
               },
             );
             throw err;
@@ -1269,6 +1281,7 @@ export class LLMClient {
                 completionPurpose: purpose,
                 routingPurpose,
                 emptyArgsRetries,
+                ...emptyToolArgumentUsageMetadata,
                 ...(cancelledAfterCompletion ? { cancelledAfterCompletion: true } : {}),
               },
             },
@@ -1417,7 +1430,7 @@ export class LLMClient {
           ? { providerObservability }
           : {}
       ),
-      toolCalls: Array.isArray(completionResponse.toolCalls) ? completionResponse.toolCalls : [],
+      toolCalls: extractCompletionToolCalls(completionResponse),
       model: completionResponse.model,
       inputTokens,
       outputTokens,

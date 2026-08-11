@@ -408,6 +408,30 @@ export function classifyToolArgumentProvenance(input: {
   return 'stream_parse_dropped';
 }
 
+export function resolveEmptyToolArgumentUsageMetadata(
+  toolCalls: readonly ToolCall[],
+  argumentFragmentBytes: number,
+): Record<string, unknown> {
+  const emptyProvenances = toolCalls
+    .map(toolCall => classifyToolArgumentProvenance({
+      args: toolCall.input,
+      argumentFragmentBytes,
+    }))
+    .filter(provenance => provenance !== 'validation_rejected');
+  if (emptyProvenances.length === 0) return {};
+
+  // A parser-loss signal is the higher-severity aggregate when one response
+  // contains multiple empty calls. The normal literal-'{}' case remains a
+  // directly queryable scalar for operator model-usage projections.
+  const provenance = emptyProvenances.includes('stream_parse_dropped')
+    ? 'stream_parse_dropped'
+    : 'provider_emitted_empty';
+  return {
+    emptyToolArgumentProvenance: provenance,
+    toolArgumentFragmentBytes: argumentFragmentBytes,
+  };
+}
+
 /**
  * A tool call is a mihm "corrupt-empty" call when its arguments are empty
  * ({} / null / undefined) AND the tool's own schema declares required properties.
@@ -451,14 +475,20 @@ export function toDiagnosticCorrelationFields(
 }
 
 /**
- * Tool calls a non-streaming completion would dispatch. Matches complete()'s final
- * derivation (the raw response's `toolCalls` field) so the mihm empty-args retry
- * decision inspects exactly what would otherwise be sent to the tools.
+ * Tool calls a non-streaming completion would dispatch. Canonical pi-ai responses
+ * carry them as content blocks; injected/legacy transports may still expose the
+ * direct `toolCalls` field. The retry decision and final response share this
+ * derivation so they cannot disagree about what reaches the dispatcher.
  */
 export function extractCompletionToolCalls(raw: unknown): ToolCall[] {
   if (!raw || typeof raw !== 'object') return [];
-  const toolCalls = (raw as { toolCalls?: unknown }).toolCalls;
-  return Array.isArray(toolCalls) ? toolCalls as ToolCall[] : [];
+  const response = raw as { content?: unknown; toolCalls?: unknown };
+  if (Array.isArray(response.toolCalls) && response.toolCalls.length > 0) {
+    return response.toolCalls as ToolCall[];
+  }
+  return extractToolCallsFromContentBlocks(
+    Array.isArray(response.content) ? response.content : undefined,
+  );
 }
 
 export function extractToolCallsFromContentBlocks(blocks?: unknown[]): ToolCall[] {

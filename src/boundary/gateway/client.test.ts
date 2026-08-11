@@ -233,7 +233,7 @@ describe('GatewayClient MCP transport', () => {
       action: 'call',
       serverId: 'notes',
       toolName: 'search_notes',
-      arguments: { query: 'Ada' },
+      arguments: { query: 'Example Person' },
     }, {
       toolCallId: 'mcp-call-1',
     });
@@ -249,7 +249,7 @@ describe('GatewayClient MCP transport', () => {
         action: 'call',
         serverId: 'notes',
         toolName: 'search_notes',
-        arguments: { query: 'Ada' },
+        arguments: { query: 'Example Person' },
         permit: 'de305d54-75b4-431b-adb2-eb6b9e546015',
       },
     });

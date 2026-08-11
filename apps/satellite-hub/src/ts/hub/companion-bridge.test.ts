@@ -282,7 +282,7 @@ test("companion bridge submits typed touch stimuli with its registered identity"
     };
     const result = await bridge.submitTouchStimulus({
       sessionId: "bedroom",
-      deviceId: "waveshare-bedroom",
+      deviceId: "fixture-satellite",
       kind: "headpat",
       region: "head",
       count: 1,
@@ -300,7 +300,7 @@ test("companion bridge submits typed touch stimuli with its registered identity"
       body: {
         ...TEST_IDENTITY,
         sessionId: "bedroom",
-        deviceId: "waveshare-bedroom",
+        deviceId: "fixture-satellite",
         kind: "headpat",
         region: "head",
         count: 1,

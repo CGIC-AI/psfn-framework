@@ -160,7 +160,7 @@ async function runProvider(provider: typeof PROVIDERS[number]): Promise<TtftBenc
   );
   hydrateJsonBackedRuntimeConfig(config, { seedDir: 'config' });
 
-  process.env.CHARACTER_CARD_PATH = join(process.cwd(), 'artie-character-card.json');
+  process.env.CHARACTER_CARD_PATH = join(process.cwd(), 'fixture-companion-character-card.json');
 
   const sessionsDir = join(rootDir, 'sessions');
   mkdirSync(sessionsDir, { recursive: true });

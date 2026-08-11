@@ -85,22 +85,24 @@ npm run smoke:docker                  # exit 0 = deployment done; exit 2 = no ke
 This is the ratified "deployment done" bar for newcomers; the definition and
 pass criteria are in [`docs/setup.md`](./docs/setup.md#deployment-done-the-public-on-ramp-definition).
 
-For the manual local split runtime instead (you provision Postgres and lay the
-owner files yourself):
+For a manual split runtime, provision Postgres and the owner files, then start
+the components in separate terminals:
 
 ```bash
 git clone <repo-url> && cd psfn-framework
 npm install
 cp .env.example .env   # secrets and bootstrap wiring only
 # then lay the owner files — see docs/setup.md → First Local Bring-Up
-npm run split          # gateway + agent + operator
+npm run gateway
+npm run agent
+npm run operator
 ```
 
 Configuration lives in canonical JSON owner files, never `.env` sprawl. The
 full bring-up — owner files, embeddings, runtime modes, optional surfaces —
-is [`docs/setup.md`](./docs/setup.md). Production, Kubernetes/Helm deployment,
-backups, and live-fleet operations are [`docs/operations.md`](./docs/operations.md)
-and [`docs/helm-upgrades.md`](./docs/helm-upgrades.md).
+is [`docs/setup.md`](./docs/setup.md). Generic backup and runtime operations are
+documented in [`docs/operations.md`](./docs/operations.md). Live deployment
+configuration is intentionally external to this public repository.
 
 ## Documentation
 
@@ -121,13 +123,12 @@ and [`docs/helm-upgrades.md`](./docs/helm-upgrades.md).
 
 **Operations and process**:
 
-- [`docs/setup.md`](./docs/setup.md), [`docs/operations.md`](./docs/operations.md),
-  [`docs/helm-upgrades.md`](./docs/helm-upgrades.md), [`docs/shakedown.md`](./docs/shakedown.md)
+- [`docs/setup.md`](./docs/setup.md), [`docs/operations.md`](./docs/operations.md)
 - [`docs/development-status.md`](./docs/development-status.md) — where the project stands
-- [`AGENTS.md`](./AGENTS.md) — the operating contract for coding agents (process, beads, gates)
-- [`CLAUDE.md`](./CLAUDE.md) — Claude-specific orientation; AGENTS.md wins on process
+- [`AGENTS.md`](./AGENTS.md) — the operating contract for coding agents
 
-**Companion-facing material** lives in [`companion_docs/`](./companion_docs/):
+**Companion-facing material** lives in
+[`resources/companion-library/`](./resources/companion-library/):
 welcome documentation, philosophy, and privacy references for companions built
 on the framework.
 
@@ -150,6 +151,8 @@ tools/
   evals/         # offline evaluation, calibration, and model-probe toolkit
 admin-ui/        # Garden operator UI
 companion-ui/    # companion PWA
+resources/       # public runtime seed resources
+tests/           # cross-package and type-level tests
 ```
 
 ### Self-Direction Tool Surfaces

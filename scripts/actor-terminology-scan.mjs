@@ -57,7 +57,6 @@ const GENERIC_USER_COPY_FILES = new Set([
   'src/system/capabilities/change-notice.ts',
   'src/system/trust/policy.ts',
   'scripts/ops/psfn-compose-smoke-seed.sh',
-  'scripts/ops/setup-local-artemis-shakedown.sh',
 ]);
 
 /**

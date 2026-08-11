@@ -1,13 +1,10 @@
 node_modules/
 dist/
-data/
-data-phase45/
-psfn/
-!deploy/helm/psfn/
-!deploy/helm/psfn/**
-companion/
+/data/
+/data-phase45/
+/psfn/
+/companion/
 .env
-proxy/.env
 *.db
 *.db-journal
 logs/
@@ -20,38 +17,80 @@ __pycache__/
 # bv (beads viewer) local config and caches
 .bv/
 
-# Local beads state lives in the shared Dolt server and must not dirty code commits.
-# Exception: issues.jsonl is tracked so bead state syncs across machines over git
-# (export here -> commit -> pull + import/rehydrate on the other machine). Everything
-# else under .beads/ (the Dolt DB, credential key, config, runtime locks) stays ignored.
-.beads/*
-!.beads/issues.jsonl
+# Beads is local-only. Initialize new checkouts with `bd init --stealth`.
+/.beads/
 
 # Internal planning/audit artifacts (non-product docs)
 /history/
-working_doc/
-working_docs/*primer*
-working_docs/*Primer*
-working_docs/*PRIMER*
-working_docs/PSFN_PROJECT_STATE_20260611.md
-working_docs/private-live-ops.md
-working_docs/*session*.zip
-working_docs/*transcript*.zip
+/.repo_janitor_workspace/
+/working_doc/
+/working_docs/
 workspace/
 
-# Deployment-specific operator inputs; copy from the tracked example.
-scripts/ops/private-ops.env
-deploy/helm/psfn/overlays/*.local.values.yaml
+# Operator-owned deployment and validation material lives in a separate private
+# configuration repository, never in this public source tree.
+/.github/workflows/trivy-config.yml
+/.trivyignore.yaml
+/deploy/
+/deployment/
+/docker/docker-compose.yml
+/docker/docker-compose.production.yml
+/docs/helm-upgrades.md
+/docs/monorepo-imports.md
+/docs/satellite-hub-kube.md
+/docs/shakedown.md
+/docs/system-schematic-2026-08-05.md
+/shakedown/
+/tools/evals/eval/local/profiles/
+/companion_docs/live_verification_checklist.md
+/scripts/fixtures/helm-owner-upgrade-old/
+/scripts/cert-setup.sh
+/scripts/ops/continuity-watchdog-healthcheck.mjs
+/scripts/ops/continuity-watchdog-smoke.mjs
+/scripts/ops/keep-kube-port-forward.sh
+/scripts/ops/keep-kube-port-forward.test.mjs
+/scripts/ops/load-private-ops-config.sh
+/scripts/ops/model-prefetch-job.sh
+/scripts/ops/pin-main-checkout.sh
+/scripts/ops/private-ops.env
+/scripts/ops/private-ops.env.example
+/scripts/ops/setup-local-*-shakedown.sh
+/scripts/ops/setup-local-*-shakedown.test.ts
+/scripts/ops/ship-kube-update.sh
+/scripts/ops/sync-companion-beads.sh
+/scripts/ops/sync-companion-source.sh
+/scripts/ops/validate-kube-rollout.sh
+/scripts/ops/validate-kube-rollout.test.ts
+/scripts/shakedown-support-fixtures.ts
+/scripts/shakedown-support-fixtures.test.ts
+/scripts/shakedown-support-fixtures/
+/scripts/start-gateway-agent.sh
+/scripts/recovery/
+/scripts/self/
+/scripts/system/
+/scripts/verify-agent-docker-isolation.mjs
+/scripts/verify-helm-*
+/scripts/verify-kube-ship-chart-provenance.mjs
+/scripts/verify-kubernetes-helm-recovery-chart.ts
+/src/app/e2e/kube-self-update-e2e.test.ts
+/src/app/maintenance/script-verification/continuity-watchdog-healthcheck.test.ts
+/src/app/maintenance/script-verification/helm-runtime-secret-wiring.test.ts
+/src/app/maintenance/script-verification/install-psfn-service-workspace.test.ts
+/src/app/maintenance/script-verification/install-psfn-service.test.ts
+/src/app/maintenance/script-verification/private-ops-scripts.test.ts
+/src/app/maintenance/script-verification/start-gateway-agent.test.ts
+/src/app/maintenance/script-verification/validate-kube-rollout.test.ts
+/apps/satellite-hub/client/pi_realtime/
+/apps/satellite-hub/client/ts_realtime/
+/apps/satellite-hub/deployment/
+/apps/satellite-hub/relay/psfn-voxta-relay/appsettings.json
+/apps/satellite-hub/satellites/
+/apps/satellite-hub/scripts/deploy-pi-realtime-client.sh
+/apps/satellite-hub/scripts/deploy-ts-pi-client.sh
+/apps/satellite-hub/scripts/prepare-*-firmware.mjs
 
 # Imported package environments are local build state.
 apps/satellite-hub/.venv/
-
-# Deployment-specific wake-word models and training definitions stay local.
-/apps/satellite-hub/satellites/waveshare-bedroom/wakeword/*.tflite
-/apps/satellite-hub/satellites/waveshare-bedroom/wakeword/*.json
-/apps/satellite-hub/satellites/waveshare-bedroom/wakeword/pronunciations.txt
-/apps/satellite-hub/satellites/waveshare-bedroom/wakeword/hard-negatives.txt
-/apps/satellite-hub/satellites/waveshare-bedroom/wakeword/tflite-streaming-roc.txt
 
 # SvelteKit admin UI
 .svelte-kit/
@@ -74,19 +113,30 @@ admin-ui/.svelte-kit/
 # Beads / Dolt files (added by bd init)
 .beads-credential-key
 
-# ephemeral agent worktrees
-.claude/worktrees/
+# Repository-local agent/editor integrations are intentionally not public.
+/.agents/
+/.claude/
+/.codec/
+/.codex/
+/.cursor/
+/.gemini/
+/.githooks/
+/CLAUDE.md
+/GEMINI.md
+/.github/copilot-instructions.md
+/WAVE-BRIEF.md
+/.worktree_branch*
 worktrees/
 
 # Provisioned ML model weights (never committed; see npm run provision:injection-model)
 /models/
-working_docs/review/
 
-# Beads / Dolt files (added by bd init)
-.beads/proxieddb/
-
-# agentbus run files (ephemeral multi-agent ledgers; tracked incident buses live elsewhere)
+# Agent-bus run files are ephemeral multi-agent ledgers.
 bus/runs/
+
+# Runtime-generated and retired local artifacts.
+/context_packets/
+/modules/
 
 # CodeGraph local index (machine-generated, do not commit)
 /.codegraph/

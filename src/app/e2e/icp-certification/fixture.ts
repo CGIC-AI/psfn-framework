@@ -13,6 +13,7 @@ import { deriveCompanionAuthToken } from '../../../boundary/gateway/companion-au
 import { createBootstrapStarterCard } from '../../../core/identity/loader.js';
 import { isRecord } from '../../../shared/utils/types.js';
 import { PER_COMPANION_OWNER_FILES } from '../../../system/config/settings-contract.js';
+import { validateCompanionsConfig } from '../../../system/config/companions-config.js';
 import { seedCompanionStartupOwnerFiles } from '../../../system/config/startup-owner-files.js';
 import { DEFAULT_BACKGROUND_WORK_WELFARE_CONFIG, DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG } from '../../../system/config/scheduler-config.js';
 import {
@@ -21,6 +22,7 @@ import {
 import {
   CERTIFICATION_COMPANION_A,
   CERTIFICATION_COMPANION_B,
+  CERTIFICATION_COMPANION_C,
   CERTIFICATION_EMBEDDING_DIMS,
   CERTIFICATION_ROLE_A,
   CERTIFICATION_ROLE_B,
@@ -28,18 +30,7 @@ import {
   CERTIFICATION_SCHEMA_B,
   CERTIFICATION_SESSION_KEYRING,
 } from './constants.js';
-import {
-  loadSupportFixtureContract,
-  SUPPORT_COMPANION_IDS,
-} from '../../../../scripts/shakedown-support-fixtures/contract.js';
 
-const REPO_ROOT = resolve(import.meta.dirname, '../../../..');
-const SUPPORT_FIXTURE_TEMPLATE_PATH = join(
-  REPO_ROOT,
-  'shakedown',
-  'support',
-  'companions.template.json',
-);
 const OWNER_NAMES = [
   'backup',
   'capability-tier',
@@ -52,6 +43,56 @@ const OWNER_NAMES = [
   'skills',
   'trust-policy',
 ] as const;
+
+function createCertificationFleetContract() {
+  return validateCompanionsConfig({
+    postgres: {
+      sharedMigrationRole: 'certification_shared_migration',
+      sharedMigrationDatabaseUrlRef: {
+        kind: 'env',
+        envName: 'CERTIFICATION_SHARED_MIGRATION_DATABASE_URL',
+      },
+    },
+    companions: [
+      {
+        companionId: CERTIFICATION_COMPANION_A,
+        companionDataDir: 'companions/alpha/data',
+        characterCardPath: 'companions/alpha/data/companion.json',
+        postgresSchema: CERTIFICATION_SCHEMA_A,
+        postgresRole: CERTIFICATION_ROLE_A,
+        postgresDatabaseUrlRef: {
+          kind: 'env',
+          envName: 'CERTIFICATION_ALPHA_DATABASE_URL',
+        },
+        displayName: 'Fixture Alpha',
+      },
+      {
+        companionId: CERTIFICATION_COMPANION_B,
+        companionDataDir: 'companions/beta/data',
+        characterCardPath: 'companions/beta/data/companion.json',
+        postgresSchema: CERTIFICATION_SCHEMA_B,
+        postgresRole: CERTIFICATION_ROLE_B,
+        postgresDatabaseUrlRef: {
+          kind: 'env',
+          envName: 'CERTIFICATION_BETA_DATABASE_URL',
+        },
+        displayName: 'Fixture Beta',
+      },
+      {
+        companionId: CERTIFICATION_COMPANION_C,
+        companionDataDir: 'companions/gamma/data',
+        characterCardPath: 'companions/gamma/data/companion.json',
+        postgresSchema: 'certification_gamma',
+        postgresRole: 'certification_gamma_runtime',
+        postgresDatabaseUrlRef: {
+          kind: 'env',
+          envName: 'CERTIFICATION_GAMMA_DATABASE_URL',
+        },
+        displayName: 'Fixture Gamma',
+      },
+    ],
+  }, 'synthetic ICP certification fixture');
+}
 
 export interface IcpCertificationCompanionFixture {
   companionId: string;
@@ -236,7 +277,6 @@ function configureCompanionOwnerFiles(
 function makeCompanion(input: {
   authSocketDir: string;
   characterCardPath: string;
-  characterCardSourcePath?: string;
   companionDataDir: string;
   companionId: string;
   configDir: string;
@@ -254,11 +294,7 @@ function makeCompanion(input: {
     input.authSocketDir,
     `postgres-${input.companionId}.url`,
   );
-  if (input.characterCardSourcePath) {
-    cpSync(input.characterCardSourcePath, characterCardPath);
-  } else {
-    writeJson(characterCardPath, createBootstrapStarterCard(input.name));
-  }
+  writeJson(characterCardPath, createBootstrapStarterCard(input.name));
   writeFileSync(postgresCredentialPath, `${input.databaseUrl}\n`, { encoding: 'utf8', mode: 0o600 });
   mkdirSync(input.workspacePath, { recursive: true });
   const baseEnv: NodeJS.ProcessEnv = {
@@ -326,7 +362,7 @@ export function createIcpCertificationFixture(input: {
   const socketDir = join(rootDir, 'sockets');
   const gatewaySocketPath = join(socketDir, 'gateway.sock');
   const seedDir = resolve(input.seedDir ?? 'config');
-  const supportContract = loadSupportFixtureContract(SUPPORT_FIXTURE_TEMPLATE_PATH);
+  const supportContract = createCertificationFleetContract();
   const companionAContract = supportContract.companions[0]!;
   const companionBContract = supportContract.companions[1]!;
   if (
@@ -337,7 +373,7 @@ export function createIcpCertificationFixture(input: {
     || companionBContract.postgresSchema !== CERTIFICATION_SCHEMA_B
     || companionBContract.postgresRole !== CERTIFICATION_ROLE_B
   ) {
-    throw new Error('Canonical support fixture contract drifted from ICP certification identities');
+    throw new Error('Synthetic fixture contract drifted from ICP certification identities');
   }
   const companionDataA = join(runtimeRoot, companionAContract.companionDataDir);
   const companionDataB = join(runtimeRoot, companionBContract.companionDataDir);
@@ -368,21 +404,9 @@ export function createIcpCertificationFixture(input: {
       input.autonomyEnabled ?? true,
       input.fatigueProfile ?? 'default',
     );
-    const supportIndex = SUPPORT_COMPANION_IDS.indexOf(
-      support.companionId as (typeof SUPPORT_COMPANION_IDS)[number],
-    );
-    if (supportIndex < 0) {
-      throw new Error(`Unsupported companion in canonical fixture contract: ${support.companionId}`);
-    }
-    cpSync(
-      join(
-        REPO_ROOT,
-        'shakedown',
-        'support',
-        'cards',
-        supportIndex === 0 ? 'mica.json' : 'lumen.json',
-      ),
+    writeJson(
       join(runtimeRoot, support.characterCardPath),
+      createBootstrapStarterCard(support.displayName ?? 'Fixture Companion'),
     );
     mkdirSync(
       join(runtimeRoot, 'workspaces', 'personal', support.companionId),
@@ -483,7 +507,7 @@ export function createIcpCertificationFixture(input: {
       configDir: seedDir,
       databaseUrl: input.databaseUrl,
       gatewaySocketPath,
-      name: companionAContract.displayName ?? 'ARTEMIS',
+      name: companionAContract.displayName ?? 'FIXTURE COMPANION',
       postgresSchema: CERTIFICATION_SCHEMA_A,
       postgresRole: companionAContract.postgresRole,
       runtimeRoot,
@@ -493,19 +517,12 @@ export function createIcpCertificationFixture(input: {
     makeCompanion({
       authSocketDir: socketDir,
       characterCardPath: join(runtimeRoot, companionBContract.characterCardPath),
-      characterCardSourcePath: join(
-        REPO_ROOT,
-        'shakedown',
-        'support',
-        'cards',
-        'mica.json',
-      ),
       companionDataDir: companionDataB,
       companionId: CERTIFICATION_COMPANION_B,
       configDir: seedDir,
       databaseUrl: input.databaseUrl,
       gatewaySocketPath,
-      name: companionBContract.displayName ?? 'Mica',
+      name: companionBContract.displayName ?? 'Fixture Beta',
       postgresSchema: CERTIFICATION_SCHEMA_B,
       postgresRole: companionBContract.postgresRole,
       runtimeRoot,

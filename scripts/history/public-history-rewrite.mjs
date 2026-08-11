@@ -17,11 +17,22 @@ import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 export const FILTER_REPO_PACKAGE_VERSION = '2.47.0';
-export const REWRITE_MARKER_PATH = 'config/history-rewrite-generation.json';
-export const ISSUES_SNAPSHOT_PATH = '.beads/issues.jsonl';
 export const REMOVED_HISTORY_PATHS = Object.freeze([
-  '.beads/daemon.log',
-  ISSUES_SNAPSHOT_PATH,
+  '.agents/',
+  '.beads/',
+  '.claude/',
+  '.codec/',
+  '.codex/',
+  '.cursor/',
+  '.gemini/',
+  '.github/workflows/trivy-config.yml',
+  '.trivyignore.yaml',
+  'context_packets/',
+  'deploy/',
+  'deployment/',
+  'modules/',
+  'shakedown/',
+  'working_docs/',
 ]);
 
 const ZERO_SHA = /^0{40}$/u;
@@ -73,7 +84,6 @@ export function parseArguments(argv) {
     else if (argument === '--public-name') parsed.publicName = argv[++index];
     else if (argument === '--public-email') parsed.publicEmail = argv[++index];
     else if (argument === '--filter-repo') parsed.filterRepo = argv[++index];
-    else if (argument === '--bd') parsed.bd = argv[++index];
     else if (argument === '--private-replacements') parsed.privateReplacements = argv[++index];
     else if (argument === '--private-remove-paths') parsed.privateRemovePaths = argv[++index];
     else if (argument === '--main-ref') parsed.mainRef = argv[++index];
@@ -86,7 +96,6 @@ export function parseArguments(argv) {
     'publicName',
     'publicEmail',
     'filterRepo',
-    'bd',
     'privateReplacements',
     'privateRemovePaths',
   ]) {
@@ -186,6 +195,12 @@ export function parsePrivateRemovalPaths(raw, label = 'private removal path file
   return paths;
 }
 
+export function isRemovedHistoryPath(file, removedPaths) {
+  return removedPaths.some((removedPath) => (
+    removedPath.endsWith('/') ? file.startsWith(removedPath) : file === removedPath
+  ));
+}
+
 function javascriptRegex(rule) {
   let pattern = rule.pattern;
   let flags = 'gu';
@@ -272,8 +287,14 @@ export function parseCommitMap(raw) {
 
 export function remapChangelogLinks(raw, commitMap) {
   const oldShas = [...commitMap.keys()];
+  const projectSlug = ['ps', 'fn'].join('');
+  const commitUrlPrefix = `https://github.com/CGIC-AI/${projectSlug}-framework/commit/`;
+  const commitUrlPattern = new RegExp(
+    `(${commitUrlPrefix.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')})([0-9a-f]{7,40})`,
+    'gu',
+  );
   return raw.replace(
-    /(https:\/\/github\.com\/CGIC-AI\/psfn-framework\/commit\/)([0-9a-f]{7,40})/gu,
+    commitUrlPattern,
     (match, prefix, abbreviatedSha) => {
       const candidates = oldShas.filter((sha) => sha.startsWith(abbreviatedSha));
       if (candidates.length !== 1) {
@@ -476,7 +497,7 @@ function verifyFilteredMainTree({ backupMirror, rewrittenMirror, oldMain, filter
 
   for (const [oldPath, oldEntry] of before) {
     const newPath = renameIdentityPath(oldPath, rules);
-    if (removedPaths.includes(oldPath)) {
+    if (isRemovedHistoryPath(oldPath, removedPaths)) {
       if (after.has(newPath)) mismatches.push(`${oldPath}: removed path remains`);
       continue;
     }
@@ -505,28 +526,6 @@ function verifyFilteredMainTree({ backupMirror, rewrittenMirror, oldMain, filter
     throw new Error(`Filtered main tree has ${mismatches.length} unexplained changes:\n${mismatches.join('\n')}`);
   }
   return { comparedPaths: before.size, mismatches: 0 };
-}
-
-function validateJsonl(raw) {
-  let records = 0;
-  for (const [index, line] of raw.split(/\r?\n/u).entries()) {
-    if (!line) continue;
-    let record;
-    try {
-      record = JSON.parse(line);
-    } catch (error) {
-      throw new Error(`Sanitized Beads snapshot line ${index + 1} is invalid JSON: ${error.message}`);
-    }
-    if (!record || typeof record !== 'object' || Array.isArray(record)) {
-      throw new Error(`Sanitized Beads snapshot line ${index + 1} is not an object`);
-    }
-    if (typeof record.title !== 'string' || record.title.length === 0) {
-      throw new Error(`Sanitized Beads snapshot line ${index + 1} has no title`);
-    }
-    records += 1;
-  }
-  if (records === 0) throw new Error('Sanitized Beads snapshot is empty');
-  return records;
 }
 
 function scanRewrittenPatch({ rewrittenMirror, refs, rules, publicEmail }) {
@@ -562,7 +561,6 @@ function writeText(file, contents) {
 
 function createPostRewriteCommit({
   rewrittenMirror,
-  sanitizedSnapshot,
   commitMap,
   publicName,
   publicEmail,
@@ -573,22 +571,11 @@ function createPostRewriteCommit({
   try {
     run('git', ['clone', '--no-local', rewrittenMirror, checkout], { stdio: 'inherit' });
     git(checkout, ['checkout', '-B', 'history-rewrite-main', `origin/${mainRef.slice('refs/heads/'.length)}`]);
-    const issuesTarget = join(checkout, ISSUES_SNAPSHOT_PATH);
-    mkdirSync(dirname(issuesTarget), { recursive: true });
-    writeText(issuesTarget, sanitizedSnapshot);
-
     const changelogPath = join(checkout, 'CHANGELOG.md');
     const remappedChangelog = remapChangelogLinks(readFileSync(changelogPath, 'utf8'), commitMap);
     writeText(changelogPath, remappedChangelog);
 
-    const markerPath = join(checkout, REWRITE_MARKER_PATH);
-    writeText(markerPath, JSON.stringify({
-      schemaVersion: 1,
-      activatedBy: 'public-history-rewrite',
-      issuesSnapshotSha256: sha256(sanitizedSnapshot),
-    }, null, 2));
-
-    git(checkout, ['add', '--', ISSUES_SNAPSHOT_PATH, 'CHANGELOG.md', REWRITE_MARKER_PATH]);
+    git(checkout, ['add', '--', 'CHANGELOG.md']);
     const env = {
       ...process.env,
       GIT_AUTHOR_NAME: publicName,
@@ -599,24 +586,13 @@ function createPostRewriteCommit({
     git(checkout, [
       'commit',
       '-m',
-      'chore(history): activate sanitized generation (psfn-framework-upx0.5, psfn-framework-ibi96)',
+      'chore(history): finalize public commit links',
     ], { env });
     const finalMain = git(checkout, ['rev-parse', 'HEAD']).trim();
     git(checkout, ['push', 'origin', `HEAD:${mainRef}`]);
     return finalMain;
   } finally {
     rmSync(checkout, { force: true, recursive: true });
-  }
-}
-
-function verifyBeadsDryRun({ bdExecutable, snapshotPath, cwd }) {
-  const result = spawnSync(bdExecutable, ['import', snapshotPath, '--dry-run', '--json'], {
-    cwd,
-    encoding: 'utf8',
-    maxBuffer: MAX_BUFFER,
-  });
-  if (result.status !== 0) {
-    throw new Error(`bd import --dry-run failed: ${result.stderr || result.stdout}`);
   }
 }
 
@@ -628,7 +604,6 @@ function usage() {
     --public-name <name> \\
     --public-email <email> \\
     --filter-repo <path-to-pinned-git-filter-repo> \\
-    --bd <path-to-bd> \\
     --private-replacements <ignored-file> \\
     --private-remove-paths <ignored-file> \\
     [--main-ref refs/heads/main]
@@ -645,7 +620,6 @@ export function preparePublicHistoryRewrite(options) {
   mkdirSync(outputRoot);
 
   const filterRepo = verifyFilterRepoVersion(options.filterRepo);
-  const bdExecutable = resolveExecutable(options.bd);
   const privateRules = parseReplacementFile(
     readFileSync(resolve(options.privateReplacements), 'utf8'),
     options.privateReplacements,
@@ -655,7 +629,7 @@ export function preparePublicHistoryRewrite(options) {
     readFileSync(resolve(options.privateRemovePaths), 'utf8'),
     options.privateRemovePaths,
   );
-  const removedPaths = [...REMOVED_HISTORY_PATHS, ...privateRemovedPaths];
+  const removedPaths = [...new Set([...REMOVED_HISTORY_PATHS, ...privateRemovedPaths])];
   const replacementsPath = join(outputRoot, 'filter-repo-replacements.txt');
   writeText(replacementsPath, serializeFilterRepoReplacementRules(rules));
 
@@ -668,15 +642,6 @@ export function preparePublicHistoryRewrite(options) {
   const beforeRefRaw = refMap(backupMirror);
   writeText(join(outputRoot, 'pre-refs.tsv'), beforeRefRaw);
   git(backupMirror, ['bundle', 'create', bundlePath, '--all'], { stdio: 'inherit' });
-
-  const rawSnapshotPath = join(outputRoot, 'current-authoritative-issues.raw.jsonl');
-  run(bdExecutable, ['export', '-o', rawSnapshotPath], { cwd: process.cwd(), stdio: 'inherit' });
-  const rawSnapshot = readFileSync(rawSnapshotPath, 'utf8');
-  const sanitizedSnapshot = applyReplacementRules(rawSnapshot, rules);
-  const sanitizedSnapshotPath = join(outputRoot, 'current-authoritative-issues.sanitized.jsonl');
-  writeText(sanitizedSnapshotPath, sanitizedSnapshot);
-  const beadRecordCount = validateJsonl(sanitizedSnapshot);
-  verifyBeadsDryRun({ bdExecutable, snapshotPath: sanitizedSnapshotPath, cwd: process.cwd() });
 
   run('git', ['clone', '--mirror', '--no-local', backupMirror, rewrittenMirror], { stdio: 'inherit' });
   const beforeRefs = parseRefMap(beforeRefRaw);
@@ -712,7 +677,6 @@ export function preparePublicHistoryRewrite(options) {
   });
   const finalMain = createPostRewriteCommit({
     rewrittenMirror,
-    sanitizedSnapshot,
     commitMap,
     publicName: options.publicName,
     publicEmail: options.publicEmail,
@@ -741,15 +705,13 @@ export function preparePublicHistoryRewrite(options) {
     publicEmail: options.publicEmail,
   });
   const reachableObjects = git(rewrittenMirror, ['rev-list', '--objects', ...reachableRefs]);
-  for (const removedPath of removedPaths.filter((file) => file !== ISSUES_SNAPSHOT_PATH)) {
-    if (reachableObjects.split('\n').some((row) => row.endsWith(` ${removedPath}`))) {
+  const reachableObjectPaths = reachableObjects.split('\n').map((row) => (
+    row.includes(' ') ? row.slice(row.indexOf(' ') + 1) : ''
+  )).filter(Boolean);
+  for (const removedPath of removedPaths) {
+    if (reachableObjectPaths.some((file) => isRemovedHistoryPath(file, [removedPath]))) {
       throw new Error(`Removed history path remains reachable: ${removedPath}`);
     }
-  }
-  const issuesObjects = reachableObjects.split('\n')
-    .filter((row) => row.endsWith(` ${ISSUES_SNAPSHOT_PATH}`));
-  if (issuesObjects.length !== 1) {
-    throw new Error(`Expected one reachable ${ISSUES_SNAPSHOT_PATH} blob; found ${issuesObjects.length}`);
   }
 
   const finalChangedPaths = splitLines(git(rewrittenMirror, [
@@ -760,7 +722,7 @@ export function preparePublicHistoryRewrite(options) {
     filteredMain,
     finalMain,
   ])).sort();
-  const expectedFinalPaths = ['CHANGELOG.md', ISSUES_SNAPSHOT_PATH, REWRITE_MARKER_PATH].sort();
+  const expectedFinalPaths = ['CHANGELOG.md'];
   if (finalChangedPaths.join('\n') !== expectedFinalPaths.join('\n')) {
     throw new Error(`Post-rewrite commit changed unexpected paths: ${finalChangedPaths.join(', ')}`);
   }
@@ -812,8 +774,6 @@ export function preparePublicHistoryRewrite(options) {
     history: {
       filterRepoVersion: filterRepo.version,
       removedPaths,
-      issuesSnapshotReachableObjects: issuesObjects.length,
-      beadRecordCount,
       mainBefore: oldMain,
       mainFiltered: filteredMain,
       mainFinal: finalMain,

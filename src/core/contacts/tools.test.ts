@@ -275,7 +275,7 @@ describe('contact tools', () => {
         notes: 'Compiler history and navy stories',
         channelIdentities: [{ channel: 'discord', userId: 'grace-discord' }],
       });
-      await store.upsert({ displayName: 'Ada Lovelace', notes: 'Analytical engine notes' });
+      await store.upsert({ displayName: 'Example Person Lovelace', notes: 'Analytical engine notes' });
       const tool = createContactTool(store);
 
       const result = await tool.execute('contact-search', {

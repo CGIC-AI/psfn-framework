@@ -63,7 +63,7 @@ describe('MemoryExtractor emotional persistence fencing', () => {
             channelId,
             role: 'user',
             content: 'I feel relieved after finishing the launch plan.',
-            authorName: 'Ada',
+            authorName: 'Example Person',
             timestamp: 1_000,
           },
           {
@@ -130,7 +130,7 @@ describe('MemoryExtractor emotional persistence fencing', () => {
         canonicalContactId,
         acceptedFacts: [
           expect.objectContaining({
-            text: 'Ada felt relieved after finishing the launch plan',
+            text: 'Example Person felt relieved after finishing the launch plan',
             type: 'emotional',
           }),
         ],

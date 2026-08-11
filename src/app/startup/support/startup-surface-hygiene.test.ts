@@ -38,18 +38,19 @@ describe('startup surface hygiene', () => {
       expect(source).not.toContain(removedStartupHarnessReference);
     }
 
-    expect(scripts.dev).toBe('./scripts/start-gateway-agent.sh');
-    expect(scripts.start).toBe('./scripts/start-gateway-agent.sh');
-    expect(scripts.split).toBe('./scripts/start-gateway-agent.sh');
-    expect(scripts.yolo).toBe('./scripts/start-gateway-agent.sh --yolo');
+    expect(scripts.gateway).toBe('tsx src/app/gateway/main.ts');
+    expect(scripts.agent).toBe('tsx src/app/agent/main.ts');
+    expect(scripts.operator).toBe('tsx src/app/operator/main.ts');
+    expect(scripts).not.toHaveProperty('dev');
+    expect(scripts).not.toHaveProperty('start');
+    expect(scripts).not.toHaveProperty('split');
+    expect(scripts).not.toHaveProperty('yolo');
     expect(Object.keys(scripts)).not.toContain('single');
     expect(Object.keys(scripts)).not.toContain('runtime');
 
-    for (const scriptName of ['dev', 'start', 'split', 'yolo']) {
-      expect(scripts[scriptName]).not.toMatch(/src\/index\.ts|dist\/index\.js/);
-    }
-
-    expect(readme).toContain('npm run split');
+    expect(readme).toContain('npm run gateway');
+    expect(readme).toContain('npm run agent');
+    expect(readme).toContain('npm run operator');
     expect(specifications).toContain('split gateway + agent');
     expect(specifications).toContain('`src/app/startup/index.ts` is disabled');
     expect(architecture).toContain('`src/app/startup/index.ts` is disabled');

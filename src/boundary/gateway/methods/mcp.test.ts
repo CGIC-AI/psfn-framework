@@ -118,9 +118,9 @@ describe('MCP gateway RPC', () => {
       action: 'call',
       serverId: 'notes',
       toolName: 'search_notes',
-      arguments: { query: 'Ada' },
+      arguments: { query: 'Example Person' },
       permit: permit({
-        action: 'call', server_id: 'notes', tool_name: 'search_notes', arguments: { query: 'Ada' },
+        action: 'call', server_id: 'notes', tool_name: 'search_notes', arguments: { query: 'Example Person' },
       }),
       cancellationId: 'de305d54-75b4-431b-adb2-eb6b9e546014',
     })).resolves.toMatchObject({ action: 'call', effectiveText: expect.stringContaining('screened') });
@@ -221,9 +221,9 @@ describe('MCP gateway RPC', () => {
       action: 'call',
       serverId: 'notes',
       toolName: 'search_notes',
-      arguments: { query: 'Ada' },
+      arguments: { query: 'Example Person' },
       permit: permit({
-        action: 'call', server_id: 'notes', tool_name: 'search_notes', arguments: { query: 'Ada' },
+        action: 'call', server_id: 'notes', tool_name: 'search_notes', arguments: { query: 'Example Person' },
       }),
     })).rejects.toMatchObject({
       code: GatewayErrors.NEEDS_APPROVAL,

@@ -19,7 +19,7 @@ MCowBQYDK2VwAyEA1QtSd1BkjN8MfcUdxGshRQsTRWmoPMPmcXtCQfY2Ytk=
 -----END PUBLIC KEY-----
 `;
 const fixture = JSON.parse(fs.readFileSync(
-  "test-fixtures/fleet-sso/hub-device-assertion-v1.json",
+  "src/test-support/fixtures/fleet-sso/hub-device-assertion-v1.json",
   "utf8",
 )) as { validToken: string };
 

@@ -2335,7 +2335,7 @@ describe('MemoryExtractor canonical profile synthesis', () => {
         {
           id: 'm1',
           type: 'semantic',
-          text: 'MrDragonFox stated that Lyra needs streaming guardrails.',
+          text: 'Example Partner stated that Lyra needs streaming guardrails.',
           importance: 0.92,
           confidence: 0.95,
           salience: 0.9,
@@ -2355,7 +2355,7 @@ describe('MemoryExtractor canonical profile synthesis', () => {
       ],
       profileResponse: (context) => {
         profilePrompt = context.systemPrompt;
-        return '<recent_contact_shape><summary>This contact, known as MrDragonFox and also by the name Lyra, cares about streaming guardrails.</summary></recent_contact_shape>';
+        return '<recent_contact_shape><summary>This contact, known as Example Partner and also by the name Lyra, cares about streaming guardrails.</summary></recent_contact_shape>';
       },
     });
 

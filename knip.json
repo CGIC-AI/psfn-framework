@@ -16,16 +16,11 @@
         "src/core/emotion/calibration.ts",
         "src/persistence/sessions/turn-record-recovery-worker.ts",
         "src/persistence/sessions/turn-tombstone-authority-worker.ts",
-        "scripts/**/*.{ts,mjs}",
-        "shakedown/harness/*.mjs"
+        "scripts/**/*.{ts,mjs}"
       ],
       "project": [
         "src/**/*.ts",
-        "scripts/**/*.{ts,mjs}",
-        "shakedown/harness/**/*.{ts,mts,mjs}"
-      ],
-      "ignore": [
-        "shakedown/harness/**/*.d.mts"
+        "scripts/**/*.{ts,mjs}"
       ],
       "ignoreDependencies": [
         "@snazzah/davey",

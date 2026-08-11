@@ -42,7 +42,7 @@ function server(): McpServerConfig {
     description: 'Private notes',
     endpoint: 'https://localhost:8443/mcp',
     tls: { caCertificateRef: { kind: 'env', envName: 'MCP_CA_PEM' } },
-    allowedCompanionIds: ['ada'],
+    allowedCompanionIds: ['example-person'],
     authentication: {
       kind: 'bearer',
       tokenRef: { kind: 'env', envName: 'MCP_TOKEN' },
@@ -89,7 +89,7 @@ describe('official MCP SDK client adapter', () => {
     });
 
     const port = await factory.create({
-      companionId: 'ada',
+      companionId: 'example-person',
       server: server(),
       connectTimeoutMs: 5_000,
       requestTimeoutMs: 30_000,
@@ -126,7 +126,7 @@ describe('official MCP SDK client adapter', () => {
     await port.listTools({ timeoutMs: 2_000 });
     await port.callTool({
       name: 'search',
-      arguments: { query: 'Ada' },
+      arguments: { query: 'Example Person' },
       toolDefinition: { name: 'search', inputSchema: { type: 'object' } },
       timeoutMs: 3_000,
     });
@@ -135,7 +135,7 @@ describe('official MCP SDK client adapter', () => {
       { timeout: 2_000, cacheMode: 'refresh' },
     );
     expect(sdk.clients[0]?.callTool).toHaveBeenCalledWith(
-      { name: 'search', arguments: { query: 'Ada' } },
+      { name: 'search', arguments: { query: 'Example Person' } },
       expect.objectContaining({ timeout: 3_000 }),
     );
 

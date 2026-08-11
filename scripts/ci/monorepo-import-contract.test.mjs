@@ -32,9 +32,7 @@ test('active integration surfaces use in-repo Hub ownership', () => {
   const active = [
     'README.md',
     'companion-ui/README.md',
-    'deploy/helm/psfn/README.md',
-    'deploy/helm/psfn/values.yaml',
-    'docs/satellite-hub-kube.md',
+    'apps/satellite-hub/README.md',
     'docker/satellite-hub/build-image.sh',
   ].map(read).join('\n');
   assert.doesNotMatch(active, /SATELLITE_HUB_SOURCE(?:_REF)?|\.\.\/PSFN-Satellite-Hub/u);

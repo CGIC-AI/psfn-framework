@@ -98,7 +98,7 @@ const LOW_TRUST: SharedBackgroundAccessOptions = {
 };
 
 function baseFixture(): FixtureOptions {
-  const contactA = makeContact('contact-a', 'Ada', ['room:shared']);
+  const contactA = makeContact('contact-a', 'Example Person', ['room:shared']);
   const contactB = makeContact('contact-b', 'Bosco', ['room:shared']);
   return {
     contacts: { 'contact-a': contactA, 'contact-b': contactB },
@@ -140,7 +140,7 @@ describe('collectSharedBackgroundUnion', () => {
     });
 
     expect(union.resolved).toBe(true);
-    expect(union.contactADisplayName).toBe('Ada');
+    expect(union.contactADisplayName).toBe('Example Person');
     expect(union.contactBDisplayName).toBe('Bosco');
 
     const byId = new Map(union.candidates.map(c => [c.memory.id, c]));

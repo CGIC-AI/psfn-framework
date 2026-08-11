@@ -26,7 +26,7 @@ function validEnv(overrides: Record<string, string | undefined> = {}): NodeJS.Pr
     PSFN_SYSTEM_DATA_DIR: '/srv/system-data',
     PSFN_REPO_DIR: '/srv/psfn',
     PSFN_DOCKERFILE: 'docker/Dockerfile',
-    PSFN_CHART_PATH: 'deploy/helm/psfn',
+    PSFN_CHART_PATH: '/external/config/charts/psfn',
     PSFN_GARDEN_HEALTH_URL: 'http://garden:8080/health',
     PSFN_MODEL_ROUTE_URL: 'http://gateway:8081/v1/models',
     PSFN_EXPECTED_MODEL_ID: 'psfn-companion',

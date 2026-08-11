@@ -51,7 +51,7 @@ function addressedTo(...targets: Array<{ authorId: string; authorName: string }>
   return buildSessionMetadataWithMessageAddressing(undefined, {
     schemaVersion: 2,
     source: 'discord',
-    author: { authorId: 'dragon', authorName: 'MrDragonFox' },
+    author: { authorId: 'dragon', authorName: 'Example Partner' },
     observer: { authorId: 'current-companion-bot', authorName: 'Lyra' },
     mentionedTargets: targets,
     channel: { scope: 'group', channelId: 'discord-room' },
@@ -66,7 +66,7 @@ function repliedTo(target: { authorId: string; authorName: string }): string {
   return buildSessionMetadataWithMessageAddressing(undefined, {
     schemaVersion: 2,
     source: 'discord',
-    author: { authorId: 'dragon', authorName: 'MrDragonFox' },
+    author: { authorId: 'dragon', authorName: 'Example Partner' },
     observer: { authorId: 'current-companion-bot', authorName: 'Lyra' },
     mentionedTargets: [],
     replyTarget: { messageId: 'discord-parent', author: target },
@@ -81,13 +81,13 @@ function repliedTo(target: { authorId: string; authorName: string }): string {
 describe('structured group fact routing', () => {
   it('rejects attribution-less facts whenever group addressing is required', async () => {
     const routingContext = await context([
-      entry(1, 'dragon', 'MrDragonFox', 'remember the observatory promise', {
+      entry(1, 'dragon', 'Example Partner', 'remember the observatory promise', {
         metadata: addressedTo({ authorId: 'other-bot', authorName: 'Other Companion' }),
       }),
     ]);
 
     expect(resolveFactRouting(
-      fact({ text: 'MrDragonFox remembers the observatory promise.' }),
+      fact({ text: 'Example Partner remembers the observatory promise.' }),
       routingContext,
       undefined,
       { requireStructuredAddressing: true },
@@ -99,18 +99,18 @@ describe('structured group fact routing', () => {
 
   it('rejects observer-directed relational confabulation even when claimed as overheard', async () => {
     const routingContext = await context([
-      entry(1, 'dragon', 'MrDragonFox', 'remember that I call you starlight', {
+      entry(1, 'dragon', 'Example Partner', 'remember that I call you starlight', {
         metadata: addressedTo({ authorId: 'other-bot', authorName: 'Other Companion' }),
       }),
     ]);
 
     expect(resolveFactRouting(
       fact({
-        text: 'MrDragonFox affectionately called Lyra starlight.',
+        text: 'Example Partner affectionately called Lyra starlight.',
         type: 'relational',
         attribution: {
           sourceMessageIds: [1],
-          sourceSpeakerName: 'MrDragonFox',
+          sourceSpeakerName: 'Example Partner',
           subjectName: 'Lyra',
           addressMode: 'overheard_room_context',
         },
@@ -121,24 +121,24 @@ describe('structured group fact routing', () => {
     )).toEqual({
       status: 'skip',
       reason: 'conflicting_observer_attribution',
-      sourceSpeakerName: 'MrDragonFox',
+      sourceSpeakerName: 'Example Partner',
     });
   });
 
   it('rejects attribution-less subjects for emotional facts in a typed group room', async () => {
     const routingContext = await context([
-      entry(1, 'dragon', 'MrDragonFox', 'remember that I call you starlight', {
+      entry(1, 'dragon', 'Example Partner', 'remember that I call you starlight', {
         metadata: addressedTo({ authorId: 'other-bot', authorName: 'Other Companion' }),
       }),
     ]);
 
     expect(resolveFactRouting(
       fact({
-        text: 'MrDragonFox reassured Lyra that he was not angry.',
+        text: 'Example Partner reassured Lyra that he was not angry.',
         type: 'emotional',
         attribution: {
           sourceMessageIds: [1],
-          sourceSpeakerName: 'MrDragonFox',
+          sourceSpeakerName: 'Example Partner',
           addressMode: 'overheard_room_context',
         },
       }),
@@ -148,25 +148,25 @@ describe('structured group fact routing', () => {
     )).toEqual({
       status: 'skip',
       reason: 'missing_subject_attribution',
-      sourceSpeakerName: 'MrDragonFox',
+      sourceSpeakerName: 'Example Partner',
     });
   });
 
   it('rejects episodic observer confabulation when another participant is the true addressee', async () => {
     const routingContext = await context([
-      entry(1, 'dragon', 'MrDragonFox', 'remember that I call you starlight', {
+      entry(1, 'dragon', 'Example Partner', 'remember that I call you starlight', {
         metadata: addressedTo({ authorId: 'other-bot', authorName: 'Other Companion' }),
       }),
     ]);
 
     expect(resolveFactRouting(
       fact({
-        text: 'MrDragonFox told Lyra that the observatory promise still mattered.',
+        text: 'Example Partner told Lyra that the observatory promise still mattered.',
         type: 'episodic',
         attribution: {
           sourceMessageIds: [1],
-          sourceSpeakerName: 'MrDragonFox',
-          subjectName: 'MrDragonFox',
+          sourceSpeakerName: 'Example Partner',
+          subjectName: 'Example Partner',
           addressMode: 'overheard_room_context',
         },
       }),
@@ -176,24 +176,24 @@ describe('structured group fact routing', () => {
     )).toEqual({
       status: 'skip',
       reason: 'conflicting_observer_attribution',
-      sourceSpeakerName: 'MrDragonFox',
+      sourceSpeakerName: 'Example Partner',
     });
   });
 
   it('rejects the known source contact when the model binds it to another named subject', async () => {
     const routingContext = await context([
-      entry(1, 'dragon', 'MrDragonFox', 'remember that I call you starlight', {
+      entry(1, 'dragon', 'Example Partner', 'remember that I call you starlight', {
         metadata: addressedTo({ authorId: 'other-bot', authorName: 'Other Companion' }),
       }),
     ]);
 
     expect(resolveFactRouting(
       fact({
-        text: 'MrDragonFox affectionately called Other Companion starlight.',
+        text: 'Example Partner affectionately called Other Companion starlight.',
         type: 'relational',
         attribution: {
           sourceMessageIds: [1],
-          sourceSpeakerName: 'MrDragonFox',
+          sourceSpeakerName: 'Example Partner',
           subjectName: 'Other Companion',
           subjectContactId: 'contact-dragon',
           addressMode: 'overheard_room_context',
@@ -205,13 +205,13 @@ describe('structured group fact routing', () => {
     )).toEqual({
       status: 'skip',
       reason: 'conflicting_subject_contact',
-      sourceSpeakerName: 'MrDragonFox',
+      sourceSpeakerName: 'Example Partner',
     });
   });
 
   it('rejects an unrelated known contact when the model binds it to another named subject', async () => {
     const routingContext = await context([
-      entry(1, 'dragon', 'MrDragonFox', 'remember that I call you starlight', {
+      entry(1, 'dragon', 'Example Partner', 'remember that I call you starlight', {
         metadata: addressedTo({ authorId: 'other-bot', authorName: 'Other Companion' }),
       }),
       entry(2, 'morgan', 'Morgan', 'I can help later.'),
@@ -219,11 +219,11 @@ describe('structured group fact routing', () => {
 
     expect(resolveFactRouting(
       fact({
-        text: 'MrDragonFox affectionately called Other Companion starlight.',
+        text: 'Example Partner affectionately called Other Companion starlight.',
         type: 'relational',
         attribution: {
           sourceMessageIds: [1],
-          sourceSpeakerName: 'MrDragonFox',
+          sourceSpeakerName: 'Example Partner',
           subjectName: 'Other Companion',
           subjectContactId: 'contact-morgan',
           addressMode: 'overheard_room_context',
@@ -235,24 +235,24 @@ describe('structured group fact routing', () => {
     )).toEqual({
       status: 'skip',
       reason: 'conflicting_subject_contact',
-      sourceSpeakerName: 'MrDragonFox',
+      sourceSpeakerName: 'Example Partner',
     });
   });
 
   it('treats a typed reply to another participant as overheard room context', async () => {
     const routingContext = await context([
-      entry(1, 'dragon', 'MrDragonFox', 'the observatory promise still matters', {
+      entry(1, 'dragon', 'Example Partner', 'the observatory promise still matters', {
         metadata: repliedTo({ authorId: 'other-bot', authorName: 'Other Companion' }),
       }),
     ]);
 
     expect(resolveFactRouting(
       fact({
-        text: 'MrDragonFox told Other Companion the observatory promise still matters.',
+        text: 'Example Partner told Other Companion the observatory promise still matters.',
         attribution: {
           sourceMessageIds: [1],
-          sourceSpeakerName: 'MrDragonFox',
-          subjectName: 'MrDragonFox',
+          sourceSpeakerName: 'Example Partner',
+          subjectName: 'Example Partner',
           addressMode: 'reply_to_user',
         },
       }),
@@ -267,13 +267,13 @@ describe('structured group fact routing', () => {
 
   it('routes source speaker from source message metadata', async () => {
     const routingContext = await context([
-      entry(1, 'dragon', 'MrDragonFox', 'Lyra, remember that I hate blue cheese.'),
+      entry(1, 'dragon', 'Example Partner', 'Lyra, remember that I hate blue cheese.'),
       entry(2, 'morgan', 'Morgan', 'lol'),
     ]);
 
     const decision = resolveFactRouting(
       fact({
-        text: 'MrDragonFox hates blue cheese.',
+        text: 'Example Partner hates blue cheese.',
         attribution: {
           sourceMessageIds: [1],
         },
@@ -288,7 +288,7 @@ describe('structured group fact routing', () => {
       contactId: 'contact-dragon',
       sourceContactId: 'contact-dragon',
       sourceAuthorId: 'dragon',
-      sourceSpeakerName: 'MrDragonFox',
+      sourceSpeakerName: 'Example Partner',
       addressMode: 'direct_to_companion',
       sourceMessageIds: [1],
       sourceSpanStartMessageId: 1,
@@ -299,7 +299,7 @@ describe('structured group fact routing', () => {
 
   it('routes a subject contact separately from the source speaker', async () => {
     const routingContext = await context([
-      entry(1, 'dragon', 'MrDragonFox', 'Morgan is helping run moderation tonight.'),
+      entry(1, 'dragon', 'Example Partner', 'Morgan is helping run moderation tonight.'),
       entry(2, 'morgan', 'Morgan', 'I can do it after dinner.'),
     ]);
 
@@ -320,7 +320,7 @@ describe('structured group fact routing', () => {
       status: 'route',
       contactId: 'contact-morgan',
       sourceContactId: 'contact-dragon',
-      sourceSpeakerName: 'MrDragonFox',
+      sourceSpeakerName: 'Example Partner',
       subjectContactId: 'contact-morgan',
       subjectName: 'Morgan',
       addressMode: 'overheard_room_context',
@@ -330,7 +330,7 @@ describe('structured group fact routing', () => {
 
   it('skips a named subject whose contact is unresolved instead of routing to the source', async () => {
     const routingContext = await context([
-      entry(1, 'dragon', 'MrDragonFox', 'Robin is helping run moderation tonight.'),
+      entry(1, 'dragon', 'Example Partner', 'Robin is helping run moderation tonight.'),
       entry(2, 'stranger', 'Robin', 'I can do it after dinner.'),
     ]);
 
@@ -350,13 +350,13 @@ describe('structured group fact routing', () => {
     expect(decision).toEqual({
       status: 'skip',
       reason: 'unresolved_subject_contact',
-      sourceSpeakerName: 'MrDragonFox',
+      sourceSpeakerName: 'Example Partner',
     });
   });
 
   it('routes room-level facts to a conversation scope instead of a contact', async () => {
     const routingContext = await context([
-      entry(1, 'dragon', 'MrDragonFox', 'The room gets noisy whenever launch planning starts.'),
+      entry(1, 'dragon', 'Example Partner', 'The room gets noisy whenever launch planning starts.'),
       entry(2, 'morgan', 'Morgan', 'That is true.'),
     ]);
 
@@ -376,7 +376,7 @@ describe('structured group fact routing', () => {
     expect(decision).toMatchObject({
       status: 'route',
       sourceContactId: 'contact-dragon',
-      sourceSpeakerName: 'MrDragonFox',
+      sourceSpeakerName: 'Example Partner',
       subjectName: 'room',
       scopeRef: {
         kind: 'conversation',
@@ -391,7 +391,7 @@ describe('structured group fact routing', () => {
 
   it('rejects conflicting LLM speaker attribution instead of trusting prose', async () => {
     const routingContext = await context([
-      entry(1, 'dragon', 'MrDragonFox', 'I hate blue cheese.'),
+      entry(1, 'dragon', 'Example Partner', 'I hate blue cheese.'),
       entry(2, 'morgan', 'Morgan', 'I love blue cheese.'),
     ]);
 
@@ -410,13 +410,13 @@ describe('structured group fact routing', () => {
     expect(decision).toEqual({
       status: 'skip',
       reason: 'conflicting_source_attribution',
-      sourceSpeakerName: 'MrDragonFox',
+      sourceSpeakerName: 'Example Partner',
     });
   });
 
   it('rejects unresolved source IDs and ambiguous multi-speaker spans', async () => {
     const routingContext = await context([
-      entry(1, 'dragon', 'MrDragonFox', 'I hate blue cheese.'),
+      entry(1, 'dragon', 'Example Partner', 'I hate blue cheese.'),
       entry(2, 'morgan', 'Morgan', 'I love blue cheese.'),
     ]);
 
@@ -435,7 +435,7 @@ describe('structured group fact routing', () => {
 
   it('classifies mention, reply, and explicit system/api address modes', async () => {
     const mentionContext = await context([
-      entry(1, 'dragon', 'MrDragonFox', 'I think Lyra should stream later.'),
+      entry(1, 'dragon', 'Example Partner', 'I think Lyra should stream later.'),
     ]);
     expect(resolveFactRouting(
       fact({ attribution: { sourceMessageIds: [1] } }),
@@ -477,19 +477,19 @@ describe('structured group fact routing', () => {
 
   it('rejects an unsupported direct-to-companion claim in a group room', async () => {
     const routingContext = await context([
-      entry(1, 'dragon', 'MrDragonFox', '<@other-bot> hello there', {
+      entry(1, 'dragon', 'Example Partner', '<@other-bot> hello there', {
         metadata: addressedTo({ authorId: 'other-bot', authorName: 'Other Companion' }),
       }),
     ]);
 
     expect(resolveFactRouting(
       fact({
-        text: 'MrDragonFox affectionately greeted Other Companion.',
+        text: 'Example Partner affectionately greeted Other Companion.',
         type: 'semantic',
         attribution: {
           sourceMessageIds: [1],
-          sourceSpeakerName: 'MrDragonFox',
-          subjectName: 'MrDragonFox',
+          sourceSpeakerName: 'Example Partner',
+          subjectName: 'Example Partner',
           addressMode: 'direct_to_companion',
         },
       }),
@@ -499,24 +499,24 @@ describe('structured group fact routing', () => {
     )).toEqual({
       status: 'skip',
       reason: 'unverified_direct_address',
-      sourceSpeakerName: 'MrDragonFox',
+      sourceSpeakerName: 'Example Partner',
     });
   });
 
   it('keeps another participant address as observer context and trusts transport over the model', async () => {
     const routingContext = await context([
-      entry(1, 'dragon', 'MrDragonFox', '<@other-bot> hello there', {
+      entry(1, 'dragon', 'Example Partner', '<@other-bot> hello there', {
         metadata: addressedTo({ authorId: 'other-bot', authorName: 'Other Companion' }),
       }),
     ]);
 
     expect(resolveFactRouting(
       fact({
-        text: 'MrDragonFox greeted Other Companion.',
+        text: 'Example Partner greeted Other Companion.',
         attribution: {
           sourceMessageIds: [1],
-          sourceSpeakerName: 'MrDragonFox',
-          subjectName: 'MrDragonFox',
+          sourceSpeakerName: 'Example Partner',
+          subjectName: 'Example Partner',
           addressMode: 'overheard_room_context',
         },
       }),
@@ -532,18 +532,18 @@ describe('structured group fact routing', () => {
 
   it('derives direct address from a structured current-companion mention', async () => {
     const routingContext = await context([
-      entry(1, 'dragon', 'MrDragonFox', 'hello there', {
+      entry(1, 'dragon', 'Example Partner', 'hello there', {
         metadata: addressedTo({ authorId: 'current-companion-bot', authorName: 'Lyra' }),
       }),
     ]);
 
     expect(resolveFactRouting(
       fact({
-        text: 'MrDragonFox greeted Lyra.',
+        text: 'Example Partner greeted Lyra.',
         attribution: {
           sourceMessageIds: [1],
-          sourceSpeakerName: 'MrDragonFox',
-          subjectName: 'MrDragonFox',
+          sourceSpeakerName: 'Example Partner',
+          subjectName: 'Example Partner',
           addressMode: 'overheard_room_context',
         },
       }),
@@ -562,7 +562,7 @@ describe('structured group fact routing', () => {
 
   it('does not let a companion-like display name override configured transport ids', async () => {
     const routingContext = await context([
-      entry(1, 'dragon', 'MrDragonFox', 'hello there', {
+      entry(1, 'dragon', 'Example Partner', 'hello there', {
         metadata: addressedTo({
           authorId: 'imposter-bot',
           authorName: 'Lyra',
@@ -577,11 +577,11 @@ describe('structured group fact routing', () => {
 
     expect(resolveFactRouting(
       fact({
-        text: 'MrDragonFox greeted Lyra.',
+        text: 'Example Partner greeted Lyra.',
         attribution: {
           sourceMessageIds: [1],
-          sourceSpeakerName: 'MrDragonFox',
-          subjectName: 'MrDragonFox',
+          sourceSpeakerName: 'Example Partner',
+          subjectName: 'Example Partner',
           addressMode: 'direct_to_companion',
         },
       }),
@@ -591,16 +591,16 @@ describe('structured group fact routing', () => {
     )).toEqual({
       status: 'skip',
       reason: 'unverified_direct_address',
-      sourceSpeakerName: 'MrDragonFox',
+      sourceSpeakerName: 'Example Partner',
     });
 
     expect(resolveFactRouting(
       fact({
-        text: 'MrDragonFox greeted the participant using Lyra as a display name.',
+        text: 'Example Partner greeted the participant using Lyra as a display name.',
         attribution: {
           sourceMessageIds: [1],
-          sourceSpeakerName: 'MrDragonFox',
-          subjectName: 'MrDragonFox',
+          sourceSpeakerName: 'Example Partner',
+          subjectName: 'Example Partner',
           addressMode: 'overheard_room_context',
         },
       }),
@@ -615,23 +615,23 @@ describe('structured group fact routing', () => {
 
   it('rejects a direct claim whose attributed span mixes current and other targets', async () => {
     const routingContext = await context([
-      entry(1, 'dragon', 'MrDragonFox', 'hello Lyra', {
+      entry(1, 'dragon', 'Example Partner', 'hello Lyra', {
         metadata: addressedTo({
           authorId: 'current-companion-bot',
           authorName: 'Room Nickname',
         }),
       }),
-      entry(2, 'dragon', 'MrDragonFox', 'hello Other Companion', {
+      entry(2, 'dragon', 'Example Partner', 'hello Other Companion', {
         metadata: addressedTo({ authorId: 'imposter-bot', authorName: 'Lyra' }),
       }),
     ]);
 
     expect(resolveFactRouting(
       fact({
-        text: 'MrDragonFox addressed Lyra directly.',
+        text: 'Example Partner addressed Lyra directly.',
         attribution: {
           sourceMessageIds: [1, 2],
-          sourceSpeakerName: 'MrDragonFox',
+          sourceSpeakerName: 'Example Partner',
           addressMode: 'direct_to_companion',
         },
       }),
@@ -645,13 +645,13 @@ describe('structured group fact routing', () => {
     )).toEqual({
       status: 'skip',
       reason: 'conflicting_resolved_addressee',
-      sourceSpeakerName: 'MrDragonFox',
+      sourceSpeakerName: 'Example Partner',
     });
   });
 
   it('recognizes the current companion by transport author id when its room display name differs', async () => {
     const routingContext = await context([
-      entry(1, 'dragon', 'MrDragonFox', 'hello there', {
+      entry(1, 'dragon', 'Example Partner', 'hello there', {
         metadata: addressedTo({
           authorId: 'current-companion-bot',
           authorName: 'Room Nickname',
@@ -661,11 +661,11 @@ describe('structured group fact routing', () => {
 
     expect(resolveFactRouting(
       fact({
-        text: 'MrDragonFox greeted Lyra.',
+        text: 'Example Partner greeted Lyra.',
         attribution: {
           sourceMessageIds: [1],
-          sourceSpeakerName: 'MrDragonFox',
-          subjectName: 'MrDragonFox',
+          sourceSpeakerName: 'Example Partner',
+          subjectName: 'Example Partner',
           addressMode: 'direct_to_companion',
         },
       }),

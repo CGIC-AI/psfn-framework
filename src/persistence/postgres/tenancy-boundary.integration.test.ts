@@ -255,8 +255,8 @@ describe('PostgreSQL least-privilege companion and shard roles', () => {
       applicationName: 'psfn-disposable-tenant-cleanup',
       max: 2,
     });
-    const primary = planPostgresTenantAccess({ schema: 'shakedown_artie' });
-    const support = planPostgresTenantAccess({ schema: 'shakedown_support_mica' });
+    const primary = planPostgresTenantAccess({ schema: 'certification_alpha' });
+    const support = planPostgresTenantAccess({ schema: 'certification_beta' });
     try {
       await provisionPostgresTenantAccess(admin, {
         plan: primary,
@@ -274,8 +274,8 @@ describe('PostgreSQL least-privilege companion and shard roles', () => {
       })).rejects.toThrow(
         `PostgreSQL tenant ${support.schema} must be absent before disposable provisioning`,
       );
-      await admin.query('CREATE TABLE shakedown_artie.primary_probe (id TEXT PRIMARY KEY)');
-      await admin.query('CREATE TABLE shakedown_support_mica.support_probe (id TEXT PRIMARY KEY)');
+      await admin.query('CREATE TABLE certification_alpha.primary_probe (id TEXT PRIMARY KEY)');
+      await admin.query('CREATE TABLE certification_beta.support_probe (id TEXT PRIMARY KEY)');
       await admin.query(`
         CREATE COLLATION public.cleanup_guard_collation (
           provider = libc,
@@ -291,8 +291,8 @@ describe('PostgreSQL least-privilege companion and shard roles', () => {
         dropRole: true,
       })).rejects.toThrow('cannot be dropped because some objects depend on it');
       expect(await admin.query<{ relation: string | null }>(
-        "SELECT to_regclass('shakedown_support_mica.support_probe')::text AS relation",
-      )).toMatchObject({ rows: [{ relation: 'shakedown_support_mica.support_probe' }] });
+        "SELECT to_regclass('certification_beta.support_probe')::text AS relation",
+      )).toMatchObject({ rows: [{ relation: 'certification_beta.support_probe' }] });
 
       await admin.query('ALTER COLLATION public.cleanup_guard_collation OWNER TO postgres');
       await admin.query('DROP COLLATION public.cleanup_guard_collation');
@@ -318,8 +318,8 @@ describe('PostgreSQL least-privilege companion and shard roles', () => {
       });
       await assertPostgresTenantAccessProvisioned(admin, primary);
       expect(await admin.query<{ relation: string | null }>(
-        "SELECT to_regclass('shakedown_artie.primary_probe')::text AS relation",
-      )).toMatchObject({ rows: [{ relation: 'shakedown_artie.primary_probe' }] });
+        "SELECT to_regclass('certification_alpha.primary_probe')::text AS relation",
+      )).toMatchObject({ rows: [{ relation: 'certification_alpha.primary_probe' }] });
     } finally {
       await admin.end();
     }

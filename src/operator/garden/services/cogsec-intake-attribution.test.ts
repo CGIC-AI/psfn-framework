@@ -142,13 +142,13 @@ describe('projectIntakeCogSecAttribution', () => {
 
   it('includes an authorized target contact display name only when the resolver supplies one', () => {
     const authorized = (contactId: string | undefined): string | undefined => (
-      contactId === 'contact-allowed' ? 'Ada' : undefined
+      contactId === 'contact-allowed' ? 'Example Person' : undefined
     );
     const allowed = projectIntakeCogSecAttribution(
       { sourceClass: 'regular_contact', canonicalContactId: 'contact-allowed', riskLabels: [], holdReason: 'detection', status: 'held' },
       { contactDisplayName: authorized },
     );
-    expect(allowed.targetContactDisplayName).toBe('Ada');
+    expect(allowed.targetContactDisplayName).toBe('Example Person');
 
     const denied = projectIntakeCogSecAttribution(
       { sourceClass: 'regular_contact', canonicalContactId: 'contact-other', riskLabels: [], holdReason: 'detection', status: 'held' },

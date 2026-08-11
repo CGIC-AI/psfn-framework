@@ -17,17 +17,17 @@ describe('MCP CogSec screening adapter', () => {
   it('classifies server metadata and changing tool output through distinct intake classes', async () => {
     const screening = screeningService();
     const port = createMcpCogSecScreeningPort(companionId => (
-      companionId === 'ada' ? screening : null
+      companionId === 'example-person' ? screening : null
     ));
 
     await expect(port.screenStaticMetadata({
-      companionId: 'ada',
+      companionId: 'example-person',
       serverId: 'notes',
       sha256: 'abc123',
       text: 'metadata',
     })).resolves.toEqual({ effectiveText: 'metadata', withheld: false });
     await expect(port.screenDynamicOutput({
-      companionId: 'ada',
+      companionId: 'example-person',
       serverId: 'notes',
       toolName: 'search_notes',
       text: 'dynamic',

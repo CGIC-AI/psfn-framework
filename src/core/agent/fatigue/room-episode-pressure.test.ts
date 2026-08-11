@@ -208,7 +208,7 @@ describe('room-episode pressure from the fatigue ledger', () => {
     // Three companions round-robin in one room: each dyad has a single charged
     // turn (well below any dyadic cap) but the room aggregate is three.
     const { history } = makeStubHistory([
-      makeEvent({ timestampMs: NOW, localCompanionId: 'local', channelId: 'roomA', peerContactId: 'artemis', decision: 'charged', role: 'machine_intelligence' }),
+      makeEvent({ timestampMs: NOW, localCompanionId: 'local', channelId: 'roomA', peerContactId: 'fixture-companion', decision: 'charged', role: 'machine_intelligence' }),
       makeEvent({ timestampMs: NOW, localCompanionId: 'local', channelId: 'roomA', peerContactId: 'boreas', decision: 'charged', role: 'machine_intelligence' }),
       makeEvent({ timestampMs: NOW, localCompanionId: 'local', channelId: 'roomA', peerContactId: 'calliope', decision: 'overcharge', role: 'machine_intelligence' }),
     ]);
@@ -230,7 +230,7 @@ describe('room-episode pressure from the fatigue ledger', () => {
         timestampMs: NOW - i * 60_000,
         localCompanionId: 'local',
         channelId: 'roomA',
-        peerContactId: i % 2 === 0 ? 'artemis' : 'boreas',
+        peerContactId: i % 2 === 0 ? 'fixture-companion' : 'boreas',
         decision: 'charged',
         role: 'machine_intelligence',
       }));
@@ -249,9 +249,9 @@ describe('room-episode pressure from the fatigue ledger', () => {
 
   it('keeps two rooms independent', () => {
     const { history } = makeStubHistory([
-      makeEvent({ timestampMs: NOW, localCompanionId: 'local', channelId: 'roomA', peerContactId: 'artemis', decision: 'charged', role: 'machine_intelligence' }),
+      makeEvent({ timestampMs: NOW, localCompanionId: 'local', channelId: 'roomA', peerContactId: 'fixture-companion', decision: 'charged', role: 'machine_intelligence' }),
       makeEvent({ timestampMs: NOW, localCompanionId: 'local', channelId: 'roomA', peerContactId: 'boreas', decision: 'charged', role: 'machine_intelligence' }),
-      makeEvent({ timestampMs: NOW, localCompanionId: 'local', channelId: 'roomB', peerContactId: 'artemis', decision: 'charged', role: 'machine_intelligence' }),
+      makeEvent({ timestampMs: NOW, localCompanionId: 'local', channelId: 'roomB', peerContactId: 'fixture-companion', decision: 'charged', role: 'machine_intelligence' }),
     ]);
     const roomA = readRoomEpisodePressureFromLedger(history, {
       localCompanionId: 'local', channelId: 'roomA', nowMs: NOW, config: CONFIG,
@@ -267,7 +267,7 @@ describe('room-episode pressure from the fatigue ledger', () => {
 
   it('never counts human-authored (free) turns, preserving the human-uncharged invariant', () => {
     const { history } = makeStubHistory([
-      makeEvent({ timestampMs: NOW, localCompanionId: 'local', channelId: 'roomA', peerContactId: 'artemis', decision: 'free', role: 'human' }),
+      makeEvent({ timestampMs: NOW, localCompanionId: 'local', channelId: 'roomA', peerContactId: 'fixture-companion', decision: 'free', role: 'human' }),
       makeEvent({ timestampMs: NOW, localCompanionId: 'local', channelId: 'roomA', peerContactId: 'boreas', decision: 'free', role: 'human' }),
     ]);
     const assessment = readRoomEpisodePressureFromLedger(history, {
@@ -280,7 +280,7 @@ describe('room-episode pressure from the fatigue ledger', () => {
 
   it('merges observed reactions at near-zero pressure without touching the pot', () => {
     const { history, listSpy } = makeStubHistory([
-      makeEvent({ timestampMs: NOW, localCompanionId: 'local', channelId: 'roomA', peerContactId: 'artemis', decision: 'charged', role: 'machine_intelligence' }),
+      makeEvent({ timestampMs: NOW, localCompanionId: 'local', channelId: 'roomA', peerContactId: 'fixture-companion', decision: 'charged', role: 'machine_intelligence' }),
     ]);
     const assessment = readRoomEpisodePressureFromLedger(history, {
       localCompanionId: 'local',

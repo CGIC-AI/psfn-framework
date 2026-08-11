@@ -11,7 +11,7 @@ describe('persistEmotionalStateFromExtraction', () => {
       sourceSessionId: 'api:testing:emotion-persistence',
       canonicalContactId: 'contact-testing',
       acceptedFacts: [{
-        text: 'Ada felt relieved after the deployment completed.',
+        text: 'Example Person felt relieved after the deployment completed.',
         type: 'emotional',
         importance: 0.9,
         emotionalValence: 0.8,

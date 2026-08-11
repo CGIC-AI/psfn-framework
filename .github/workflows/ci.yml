@@ -74,7 +74,7 @@ jobs:
         run: node scripts/ci/run-zizmor-changed.mjs --format=github --base "$BASE_SHA" --head "$HEAD_SHA"
 
       - name: Install root dependencies in a clean environment
-        if: steps.scope.outputs.root_runtime == 'true' || steps.scope.outputs.admin_ui == 'true' || steps.scope.outputs.deployment == 'true' || steps.scope.outputs.evals == 'true'
+        if: steps.scope.outputs.root_runtime == 'true' || steps.scope.outputs.admin_ui == 'true' || steps.scope.outputs.evals == 'true'
         run: npm ci --ignore-scripts
 
       - name: Set up pinned uv for Satellite Hub checks
@@ -115,10 +115,6 @@ jobs:
       - name: Check eval toolkit in the clean environment
         if: steps.scope.outputs.evals == 'true'
         run: npm run verify:evals
-
-      - name: Verify deployment contracts in the clean environment
-        if: steps.scope.outputs.deployment == 'true'
-        run: npm run verify:deployment-contracts
 
   ci-required:
     name: ci-required

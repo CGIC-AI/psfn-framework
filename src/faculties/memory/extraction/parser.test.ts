@@ -11,7 +11,7 @@ describe('parseFactsXml', () => {
 <confidence>0.95</confidence>
 <source_message_ids>12, 14 14</source_message_ids>
 <source_span>12-14</source_span>
-<source_speaker_name>MrDragonFox</source_speaker_name>
+<source_speaker_name>Example Partner</source_speaker_name>
 <subject_name>Morgan</subject_name>
 <subject_contact_id>contact-morgan</subject_contact_id>
 <address_mode>overheard_room_context</address_mode>
@@ -23,7 +23,7 @@ describe('parseFactsXml', () => {
       sourceMessageIds: [12, 14],
       sourceSpanStartMessageId: 12,
       sourceSpanEndMessageId: 14,
-      sourceSpeakerName: 'MrDragonFox',
+      sourceSpeakerName: 'Example Partner',
       subjectName: 'Morgan',
       subjectContactId: 'contact-morgan',
       addressMode: 'overheard_room_context',
@@ -33,7 +33,7 @@ describe('parseFactsXml', () => {
   it('ignores malformed attribution values without rejecting the fact', () => {
     const facts = parseFactsXml(`<response>
 <fact>
-<text>MrDragonFox likes jasmine tea.</text>
+<text>Example Partner likes jasmine tea.</text>
 <type>semantic</type>
 <importance>0.9</importance>
 <confidence>0.95</confidence>

@@ -879,7 +879,7 @@ describe('fleet-auth owner-file configuration', () => {
     }, FLEET_AUTH_FILE_NAME)).toThrow(/distributed seed or test fixture key must be replaced/i);
 
     const fixture = JSON.parse(readFileSync(
-      join(process.cwd(), 'test-fixtures/fleet-sso/hub-device-assertion-v1.json'),
+      join(process.cwd(), 'src/test-support/fixtures/fleet-sso/hub-device-assertion-v1.json'),
       'utf8',
     )) as { publicKeyPem: string };
     expect(() => validateFleetAuthConfig({

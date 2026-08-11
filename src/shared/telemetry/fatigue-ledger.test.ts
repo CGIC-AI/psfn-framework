@@ -19,15 +19,15 @@ function makeEvent(overrides: Partial<FatigueBudgetEvent> = {}): FatigueBudgetEv
     timestampMs: Date.parse('2027-01-15T12:00:00.000Z'),
     dayKey: '2027-01-15',
     localCompanionId: 'companion',
-    peerContactId: 'artemis',
-    channelId: 'dm-artemis',
+    peerContactId: 'fixture-companion',
+    channelId: 'dm-fixture-companion',
     triggeringAuthor: {
       role: 'machine_intelligence',
-      contactId: 'artemis',
+      contactId: 'fixture-companion',
       isMachineIntelligence: true,
     },
     peer: {
-      contactId: 'artemis',
+      contactId: 'fixture-companion',
       isMachineIntelligence: true,
     },
     amount: 1,
@@ -88,8 +88,8 @@ describe('FatigueLedger', () => {
     const rebooted = new FatigueLedger(ledgerPath);
     const events = rebooted.listFatigueEvents({
       localCompanionId: 'companion',
-      peerContactId: 'artemis',
-      channelId: 'dm-artemis',
+      peerContactId: 'fixture-companion',
+      channelId: 'dm-fixture-companion',
       dayKey: '2027-01-15',
     });
 
@@ -193,7 +193,7 @@ describe('FatigueLedger', () => {
     }));
 
     expect(ledger.listFatigueEvents({
-      peerContactId: 'artemis',
+      peerContactId: 'fixture-companion',
       dayKey: '2027-01-15',
       decision: 'charged',
     }).map(event => event.requestId)).toEqual(['req-b1', 'req-a1']);
@@ -211,7 +211,7 @@ describe('FatigueLedger', () => {
     ]);
     expect(data.aggregates.byPeer).toEqual([
       { key: 'borealis', amount: 2, eventCount: 2 },
-      { key: 'artemis', amount: 1, eventCount: 2 },
+      { key: 'fixture-companion', amount: 1, eventCount: 2 },
     ]);
     expect(data.aggregates.byDay).toEqual([
       { key: '2027-01-16', amount: 2, eventCount: 2 },
@@ -236,7 +236,7 @@ describe('FatigueLedger', () => {
       }),
       expect.objectContaining({
         localCompanionId: 'companion',
-        peerContactId: 'artemis',
+        peerContactId: 'fixture-companion',
         channelId: 'chan-a',
         dayKey: '2027-01-15',
         amount: 1,

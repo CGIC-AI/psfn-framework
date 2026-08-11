@@ -104,7 +104,7 @@ the verified allow; an identical retry returns that recorded decision through
 the assertion lifetime, while a different digest using the same `jti` is denied
 and durably audited. Unknown, expired, revoked-key, mutated-replay, or
 non-canonical assertions fail closed. The deterministic shared fixture is
-`test-fixtures/fleet-sso/hub-device-assertion-v1.json`.
+`src/test-support/fixtures/fleet-sso/hub-device-assertion-v1.json`.
 
 `user.text`
 

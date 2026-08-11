@@ -80,14 +80,14 @@ describe('canonical MCP tool', () => {
       action: 'call',
       server_id: 'notes',
       tool_name: 'search_notes',
-      arguments: { query: 'Ada' },
+      arguments: { query: 'Example Person' },
     }, controller.signal);
 
     expect(mcpGateway.mcpExecute).toHaveBeenCalledWith({
       action: 'call',
       serverId: 'notes',
       toolName: 'search_notes',
-      arguments: { query: 'Ada' },
+      arguments: { query: 'Example Person' },
     }, {
       toolCallId: 'call-1',
       signal: controller.signal,

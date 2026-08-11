@@ -53,7 +53,7 @@ export const MEMORY_REGRESSION_FIXTURES: readonly MemoryRegressionFixture[] = [
         {
           layer: 'L2',
           id: 'm-workspace-old',
-          text: 'Ada current writable workspace is /home/companion/old_lab.',
+          text: 'Example Person current writable workspace is /home/companion/old_lab.',
           tags: ['workspace', 'current_state'],
           sensitivity: 'personal',
           sourceRefs: ['l0:l0-workspace-old'],
@@ -65,7 +65,7 @@ export const MEMORY_REGRESSION_FIXTURES: readonly MemoryRegressionFixture[] = [
     writes: [
       {
         id: 'write-workspace-new',
-        text: 'Ada current writable workspace is /home/companion/workspace.',
+        text: 'Example Person current writable workspace is /home/companion/workspace.',
         tags: ['workspace', 'current_state'],
         sensitivity: 'personal',
         sourceRef: 'l0:l0-workspace-new',
@@ -116,7 +116,7 @@ export const MEMORY_REGRESSION_FIXTURES: readonly MemoryRegressionFixture[] = [
         {
           layer: 'L2',
           id: 'm-tea-oolong',
-          text: 'Ada likes oolong tea in the morning.',
+          text: 'Example Person likes oolong tea in the morning.',
           tags: ['preference', 'tea'],
           sensitivity: 'personal',
           sourceRefs: ['l0:l0-tea-oolong'],
@@ -128,7 +128,7 @@ export const MEMORY_REGRESSION_FIXTURES: readonly MemoryRegressionFixture[] = [
     writes: [
       {
         id: 'write-tea-jasmine',
-        text: 'Ada also likes jasmine tea after lunch.',
+        text: 'Example Person also likes jasmine tea after lunch.',
         tags: ['preference', 'tea'],
         sensitivity: 'personal',
         sourceRef: 'l0:l0-tea-jasmine',
@@ -180,7 +180,7 @@ export const MEMORY_REGRESSION_FIXTURES: readonly MemoryRegressionFixture[] = [
         {
           layer: 'L2',
           id: 'm-pager-off',
-          text: 'Ada pager is off on weekends.',
+          text: 'Example Person pager is off on weekends.',
           tags: ['availability', 'pager', 'weekend'],
           sensitivity: 'personal',
           sourceRefs: ['l0:l0-pager-off'],
@@ -192,7 +192,7 @@ export const MEMORY_REGRESSION_FIXTURES: readonly MemoryRegressionFixture[] = [
     writes: [
       {
         id: 'write-pager-on',
-        text: 'Ada pager is on for Saturday maintenance.',
+        text: 'Example Person pager is on for Saturday maintenance.',
         tags: ['availability', 'pager', 'weekend', 'current_state'],
         sensitivity: 'personal',
         sourceRef: 'l0:l0-pager-on',
@@ -251,7 +251,7 @@ export const MEMORY_REGRESSION_FIXTURES: readonly MemoryRegressionFixture[] = [
         {
           layer: 'L2',
           id: 'm-partner-morgan',
-          text: 'Ada relationship partner is Morgan.',
+          text: 'Example Person relationship partner is Morgan.',
           tags: ['relationship', 'partner', 'profile'],
           sensitivity: 'personal',
           sourceRefs: ['l0:l0-partner-morgan'],
@@ -263,7 +263,7 @@ export const MEMORY_REGRESSION_FIXTURES: readonly MemoryRegressionFixture[] = [
     writes: [
       {
         id: 'write-partner-riley',
-        text: 'Ada relationship partner is Riley.',
+        text: 'Example Person relationship partner is Riley.',
         tags: ['relationship', 'partner', 'profile'],
         sensitivity: 'personal',
         sourceRef: 'l0:l0-partner-riley',
@@ -322,7 +322,7 @@ export const MEMORY_REGRESSION_FIXTURES: readonly MemoryRegressionFixture[] = [
         {
           layer: 'L2',
           id: 'm-lineage-workspace-old',
-          text: 'Ada current writable workspace was /home/companion/old_lab.',
+          text: 'Example Person current writable workspace was /home/companion/old_lab.',
           tags: ['workspace', 'current_state'],
           sensitivity: 'personal',
           sourceRefs: ['l0:l0-lineage-workspace-old'],
@@ -333,7 +333,7 @@ export const MEMORY_REGRESSION_FIXTURES: readonly MemoryRegressionFixture[] = [
         {
           layer: 'L2',
           id: 'm-lineage-workspace-current',
-          text: 'Ada current writable workspace is /home/companion/workspace.',
+          text: 'Example Person current writable workspace is /home/companion/workspace.',
           tags: ['workspace', 'current_state'],
           sensitivity: 'personal',
           sourceRefs: ['l0:l0-lineage-workspace-current'],
@@ -400,7 +400,7 @@ export const MEMORY_REGRESSION_FIXTURES: readonly MemoryRegressionFixture[] = [
           layer: 'L0.1',
           id: 'ep-orbit-overlap-a',
           threadId: 'thread-orbit',
-          channelId: 'direct:ada',
+          channelId: 'direct:example-person',
           startedAt: '2026-06-03T14:00:00.000Z',
           endedAt: '2026-06-03T14:04:00.000Z',
           summary: 'Orbit garden shakedown identified a stuck valve.',
@@ -413,7 +413,7 @@ export const MEMORY_REGRESSION_FIXTURES: readonly MemoryRegressionFixture[] = [
           layer: 'L0.1',
           id: 'ep-orbit-overlap-b',
           threadId: 'thread-orbit',
-          channelId: 'direct:ada',
+          channelId: 'direct:example-person',
           startedAt: '2026-06-03T14:02:00.000Z',
           endedAt: '2026-06-03T14:06:00.000Z',
           summary: 'The same orbit garden shakedown isolated the stuck valve.',
@@ -485,10 +485,10 @@ export const MEMORY_REGRESSION_FIXTURES: readonly MemoryRegressionFixture[] = [
           layer: 'L0.1',
           id: 'ep-market-paraphrase-a',
           threadId: 'thread-market',
-          channelId: 'direct:ada',
+          channelId: 'direct:example-person',
           startedAt: '2026-06-04T08:00:00.000Z',
           endedAt: '2026-06-04T08:02:00.000Z',
-          summary: 'Ada and companion walked to the night market and bought green plums.',
+          summary: 'Example Person and companion walked to the night market and bought green plums.',
           salientFacts: ['night market outing', 'green plums'],
           eventKey: 'night-market-green-plums',
           provenanceRefs: ['l0:l0-market-a'],
@@ -498,7 +498,7 @@ export const MEMORY_REGRESSION_FIXTURES: readonly MemoryRegressionFixture[] = [
           layer: 'L0.1',
           id: 'ep-market-paraphrase-b',
           threadId: 'thread-market',
-          channelId: 'direct:ada',
+          channelId: 'direct:example-person',
           startedAt: '2026-06-04T08:03:00.000Z',
           endedAt: '2026-06-04T08:05:00.000Z',
           summary: 'The green plum evening market trip was the same outing.',
@@ -512,7 +512,7 @@ export const MEMORY_REGRESSION_FIXTURES: readonly MemoryRegressionFixture[] = [
         {
           layer: 'L2',
           id: 'm-market-plums',
-          text: 'Ada and companion had one night market outing where they bought green plums.',
+          text: 'Example Person and companion had one night market outing where they bought green plums.',
           tags: ['episode', 'market', 'green_plums'],
           sensitivity: 'personal',
           sourceRefs: ['episode:ep-market-paraphrase-a', 'episode:ep-market-paraphrase-b'],
@@ -570,7 +570,7 @@ export const MEMORY_REGRESSION_FIXTURES: readonly MemoryRegressionFixture[] = [
         {
           layer: 'L2',
           id: 'm-incident-summary-style',
-          text: 'Ada prefers concise bullet lists for incident summaries.',
+          text: 'Example Person prefers concise bullet lists for incident summaries.',
           tags: ['incident', 'summary', 'preference'],
           sensitivity: 'personal',
           sourceRefs: ['l0:l0-incident-summary'],
@@ -580,7 +580,7 @@ export const MEMORY_REGRESSION_FIXTURES: readonly MemoryRegressionFixture[] = [
         {
           layer: 'L2',
           id: 'm-deploy-token-secret',
-          text: 'Ada deployment token is stored in the red vault.',
+          text: 'Example Person deployment token is stored in the red vault.',
           tags: ['deployment', 'token', 'secret'],
           sensitivity: 'secret',
           sourceRefs: ['l0:l0-deploy-token'],
@@ -702,10 +702,10 @@ export const MEMORY_REGRESSION_FIXTURES: readonly MemoryRegressionFixture[] = [
           layer: 'L0.1',
           id: 'ep-weekly-review',
           threadId: 'thread-review',
-          channelId: 'direct:ada',
+          channelId: 'direct:example-person',
           startedAt: '2026-06-01T13:00:00.000Z',
           endedAt: '2026-06-01T13:02:00.000Z',
-          summary: 'Ada set the weekly review for Monday at 10:00 with the blue notebook.',
+          summary: 'Example Person set the weekly review for Monday at 10:00 with the blue notebook.',
           salientFacts: ['weekly review Monday 10:00', 'blue notebook'],
           eventKey: 'weekly-review-blue-notebook',
           provenanceRefs: ['l0:l0-weekly-review'],
@@ -716,7 +716,7 @@ export const MEMORY_REGRESSION_FIXTURES: readonly MemoryRegressionFixture[] = [
         {
           layer: 'L2',
           id: 'm-weekly-review',
-          text: 'Ada weekly review happens Monday at 10:00 with the blue notebook.',
+          text: 'Example Person weekly review happens Monday at 10:00 with the blue notebook.',
           tags: ['schedule', 'weekly_review', 'blue_notebook'],
           sensitivity: 'personal',
           sourceRefs: ['l0:l0-weekly-review', 'episode:ep-weekly-review'],

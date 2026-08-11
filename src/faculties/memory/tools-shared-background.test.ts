@@ -65,7 +65,7 @@ function makeEntity(id: string, contactId: string): SocialGraphEntity {
 }
 
 function makeFixtureTool() {
-  const contactA = makeContact('contact-a', 'Ada', ['room:shared']);
+  const contactA = makeContact('contact-a', 'Example Person', ['room:shared']);
   const contactB = makeContact('contact-b', 'Bosco', ['room:shared']);
   const memories: PurrMemory[] = [
     makeMemory({ id: 'mem-evidence', text: 'A and B met at the conference' }),
@@ -107,7 +107,7 @@ describe('memory tool action=shared_background', () => {
       channel_visibility: 'private',
     });
     const text = resultText(fromAny(result));
-    expect(text).toContain('Shared background between Ada and Bosco:');
+    expect(text).toContain('Shared background between Example Person and Bosco:');
     expect(text).toContain('[edge-evidence]');
     expect(text).toContain('A and B met at the conference');
     expect(text).toContain('[shared-room]');

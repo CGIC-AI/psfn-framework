@@ -19,7 +19,7 @@ describe('operational traces', () => {
           identity: {
             source: 'framework',
             companion: { id: 'companion-1', name: 'Companion' },
-            user: { id: 'contact-1', name: 'Ada' },
+            user: { id: 'contact-1', name: 'Example Person' },
           },
         },
       },

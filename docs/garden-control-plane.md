@@ -395,10 +395,10 @@ No shard causes creation of:
 
 ## Deployment topology
 
-### Local supervisor
+### External supervisor
 
-`scripts/start-gateway-agent.sh` continues to spawn one agent per cluster entry,
-then starts one cluster Garden after the complete target registry can be built.
+The consuming deployment starts one agent per cluster entry and then starts one
+cluster Garden after the complete target registry can be built.
 The cluster Garden derives every socket endpoint from the validated companion ID
 using `resolveCompanionAdminTransportSocketPath`; it does not accept manifest
 path overrides or a delimiter-packed endpoint env variable.
@@ -510,15 +510,14 @@ Implementation is not complete until the integrated branch proves:
   topology;
 - shard lookup enforces parent lineage, inherited fields remain read-only, and
   model/budget overrides cannot widen parent authority;
-- rendered local and Helm plans contain exactly one Garden and zero shard
-  Gardens;
+- rendered deployment plans contain exactly one Garden and zero shard Gardens;
 - migration cutover and pinned rollback preserve the public route and owner
   data.
 
 Run targeted unit/integration/E2E coverage, `npm run lint`, `npm run build`,
-`npm run verify:settings-contract`, `npm run verify:repository-hygiene`,
-`helm lint deploy/helm/psfn`, and `npm run verify:helm-chart` once the complete
-implementation sequence is integrated.
+`npm run verify:settings-contract`, and `npm run verify:repository-hygiene` once
+the complete implementation sequence is integrated. Deployment-specific gates
+belong in the consuming configuration repository.
 
 ## Non-goals
 

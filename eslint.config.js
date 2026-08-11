@@ -19,8 +19,19 @@ const GLOBAL_IGNORES = [
   '**/import/**',
   'apps/satellite-hub/**',
   'tools/evals/**',
-  // Coding-agent worktrees (transient full repo copies) must never be linted.
+  '.beads/**',
+  'working_docs/**',
+  '.repo_janitor_workspace/**',
+  // Repository-local tool state and private deployment overlays are never linted.
+  '.agents/**',
   '.claude/**',
+  '.codec/**',
+  '.codex/**',
+  '.cursor/**',
+  '.gemini/**',
+  'deploy/**',
+  'deployment/**',
+  'shakedown/**',
   '**/.claude/**',
 ];
 

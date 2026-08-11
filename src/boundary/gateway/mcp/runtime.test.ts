@@ -24,7 +24,7 @@ function config(enabled: boolean): McpServersConfig {
       enabled,
       description: 'Private notes',
       endpoint: 'https://localhost:8443/mcp',
-      allowedCompanionIds: ['ada'],
+      allowedCompanionIds: ['example-person'],
       authentication: { kind: 'bearer', tokenRef: { kind: 'env', envName: 'MCP_TOKEN' } },
       trust: {
         level: 'primary',
@@ -65,7 +65,7 @@ describe('MCP gateway runtime composition', () => {
       credentialVault: createStaticCredentialVault({ MCP_TOKEN: 'secret' }),
       screeningFor: () => null,
       clientFactory,
-    })).toThrow(/CogSec screening.*ada/);
+    })).toThrow(/CogSec screening.*example-person/);
   });
 
   it('constructs a lazy broker when every allowed companion has CogSec', () => {
@@ -73,12 +73,12 @@ describe('MCP gateway runtime composition', () => {
     const runtime = composeMcpGatewayRuntime({
       config: config(true),
       credentialVault: createStaticCredentialVault({ MCP_TOKEN: 'secret' }),
-      screeningFor: companionId => companionId === 'ada' ? screening : null,
+      screeningFor: companionId => companionId === 'example-person' ? screening : null,
       clientFactory,
     });
 
     expect(runtime.enabledServerCount).toBe(1);
-    expect(runtime.broker?.getCatalog({ companionId: 'ada' })).toHaveLength(1);
+    expect(runtime.broker?.getCatalog({ companionId: 'example-person' })).toHaveLength(1);
     expect(clientFactory.create).not.toHaveBeenCalled();
   });
 });

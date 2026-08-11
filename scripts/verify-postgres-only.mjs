@@ -41,7 +41,6 @@ const SCAN_TARGETS = [
   'docs/specifications.md',
   'docs/PSFN_PROJECT_CHARTER.md',
   'docs/context-envelope.md',
-  'deploy/helm/psfn/README.md',
 ];
 const RETIRED_IMPLEMENTATION_PATHS = [
   'src/app/maintenance/sqlite-to-postgres-memory-migration.ts',
@@ -88,12 +87,6 @@ const TEXT_REFERENCE_ALLOWLIST = [
     reason: 'Architecture makes the port boundary unambiguous.',
   },
   {
-    path: 'docs/operations.md',
-    contains: 'SQLite-backed stores, migration readers, and native packages are removed',
-    classification: 'cutover-contract',
-    reason: 'Operations records the supported backend boundary.',
-  },
-  {
     path: 'docs/development-status.md',
     contains: 'original SQLite-centered prototype shape: SQLite implementations and packages are removed',
     classification: 'cutover-history',
@@ -122,12 +115,6 @@ const TEXT_REFERENCE_ALLOWLIST = [
     contains: 'SQLite implementations, dependencies, readers, and adapter fixtures are removed.',
     classification: 'cutover-contract',
     reason: 'The project charter states the final persistence law.',
-  },
-  {
-    path: 'scripts/recovery/psfn-ext4-recovery.sh',
-    contains: 'SQLite format 3|l2_memories|contact_profiles|session_messages_index',
-    classification: 'legacy-artifact-signature',
-    reason: 'Filesystem recovery intentionally recognizes old on-disk artifacts without opening them.',
   },
   {
     path: 'scripts/verify-backup-restore.ts',

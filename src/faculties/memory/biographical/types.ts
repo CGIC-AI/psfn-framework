@@ -7,8 +7,7 @@ import type { SensitivityLevel } from '../../../system/trust/types.js';
  * canonical contact is. Raw memories stay room-scoped; only independently
  * validated, sensitivity-gated, source-snapshot-bound claims live here. This
  * module owns the kernel + persistence only: it does not extract, render, or
- * reach prompts (those are later tracers). See
- * `working_docs/cross-channel-biographical-continuity-design.md`.
+ * reach prompts (those are later tracers).
  *
  * Everything fails closed: unknown kinds, schema/normalizer versions, subject
  * shapes, malformed sources, invalid temporal intervals, invalid lifecycle

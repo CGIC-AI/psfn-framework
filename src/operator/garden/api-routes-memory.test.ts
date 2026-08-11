@@ -56,7 +56,7 @@ function makeMemoryService(overrides: Partial<AdminMemorySessionService> = {}): 
         consentGatedCount: 0,
         sensitivityCounts: {},
       },
-      contactsById: new Map([['contact-1', { id: 'contact-1', displayName: 'Ada' }]]),
+      contactsById: new Map([['contact-1', { id: 'contact-1', displayName: 'Example Person' }]]),
     })),
     getMemoryDetail: vi.fn(async id => ({ memory: { id }, links: [] } as never)),
     listManagedScopes: vi.fn(async () => ({ scopes: [] })),
@@ -149,7 +149,7 @@ describe('admin memory API route split', () => {
     );
     expect(okResponse.status).toBe(200);
     expect(parseBody(okResponse).contactsById).toEqual({
-      'contact-1': { id: 'contact-1', displayName: 'Ada' },
+      'contact-1': { id: 'contact-1', displayName: 'Example Person' },
     });
     const forwardedParams = vi.mocked(memoryService.listMemories).mock.calls[0]?.[0];
     expect(forwardedParams?.get('type')).toBe('semantic');

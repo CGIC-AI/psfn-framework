@@ -11,8 +11,8 @@
 // STABLE ID CONTRACT (load-bearing for multi-companion):
 //   `placeId` and `siteId` are stable string identifiers. The multi-companion
 //   substrate keys its shared `companion_presence` table on `siteId`/`placeId`
-//   (see working_docs/sprint-10-multi-companion.md §4 W5). Do NOT recycle or
-//   re-mint these IDs across renames — a display name may change freely, the ID
+//   Do NOT recycle or re-mint these IDs across renames — a display name may
+//   change freely, but the ID
 //   must not. Treat them like primary keys.
 //
 // An affordance is either a PERCEIVER (sensor: presence, face, mic, camera) or

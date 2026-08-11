@@ -40,7 +40,7 @@ const NOW = 1_784_112_410;
 const COMPANION_ID = '11111111-1111-4111-8111-111111111111';
 const JTI = '018f0f10-79b2-4cc7-8c99-0242ac120002';
 const fixture = JSON.parse(readFileSync(
-  'test-fixtures/fleet-sso/hub-device-assertion-v1.json',
+  'src/test-support/fixtures/fleet-sso/hub-device-assertion-v1.json',
   'utf8',
 )) as { validToken: string };
 

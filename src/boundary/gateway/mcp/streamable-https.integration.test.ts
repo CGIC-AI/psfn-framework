@@ -271,7 +271,7 @@ function config(url: string): McpServersConfig {
         description: 'Operator-owned journal integration.',
         endpoint: url,
         tls: { caCertificateRef: { kind: 'env', envName: 'MCP_TEST_CA' } },
-        allowedCompanionIds: ['ada'],
+        allowedCompanionIds: ['example-person'],
         authentication: {
           kind: 'bearer',
           tokenRef: { kind: 'env', envName: 'MCP_TEST_TOKEN' },
@@ -337,11 +337,11 @@ describe('MCP Streamable HTTPS certification', () => {
       now: () => now,
     });
 
-    expect(broker.getCatalog({ companionId: 'ada' })).toHaveLength(1);
+    expect(broker.getCatalog({ companionId: 'example-person' })).toHaveLength(1);
     expect(endpoint.observations).toEqual([]);
 
     await expect(
-      broker.searchTools({ companionId: 'ada', query: 'notes' }),
+      broker.searchTools({ companionId: 'example-person', query: 'notes' }),
     ).resolves.toEqual(
       expect.arrayContaining([
         expect.objectContaining({ toolName: 'search_notes' }),
@@ -365,30 +365,30 @@ describe('MCP Streamable HTTPS certification', () => {
       mcpMethod: 'server/discover',
     });
 
-    await broker.searchTools({ companionId: 'ada', query: 'private' });
+    await broker.searchTools({ companionId: 'example-person', query: 'private' });
     expect(
       endpoint.observations.filter((entry) => entry.method === 'tools/list'),
     ).toHaveLength(1);
     expect(cogsec.screenStaticMetadata).toHaveBeenCalledTimes(1);
-    const firstHash = broker.health({ companionId: 'ada' }).servers[0]?.metadata
+    const firstHash = broker.health({ companionId: 'example-person' }).servers[0]?.metadata
       .sha256;
 
     now += 101;
-    await broker.searchTools({ companionId: 'ada', query: 'private' });
+    await broker.searchTools({ companionId: 'example-person', query: 'private' });
     expect(
       endpoint.observations.filter((entry) => entry.method === 'tools/list'),
     ).toHaveLength(2);
     expect(cogsec.screenStaticMetadata).toHaveBeenCalledTimes(1);
 
     const first = await broker.invokeTool({
-      companionId: 'ada',
+      companionId: 'example-person',
       serverId: 'notes',
       toolName: 'search_notes',
       arguments: { query: 'private' },
       outboundSensitivity: 'confidential',
     });
     const second = await broker.invokeTool({
-      companionId: 'ada',
+      companionId: 'example-person',
       serverId: 'notes',
       toolName: 'search_notes',
       arguments: { query: 'journal' },
@@ -401,13 +401,13 @@ describe('MCP Streamable HTTPS certification', () => {
 
     endpoint.metadataRevision = 2;
     now += 101;
-    await broker.searchTools({ companionId: 'ada', query: 'updated' });
+    await broker.searchTools({ companionId: 'example-person', query: 'updated' });
     expect(cogsec.screenStaticMetadata).toHaveBeenCalledTimes(2);
     expect(
-      broker.health({ companionId: 'ada' }).servers[0]?.metadata.sha256,
+      broker.health({ companionId: 'example-person' }).servers[0]?.metadata.sha256,
     ).not.toBe(firstHash);
     await expect(broker.invokeTool({
-      companionId: 'ada',
+      companionId: 'example-person',
       serverId: 'notes',
       toolName: 'search_notes',
       arguments: { query: 'changed' },
@@ -419,7 +419,7 @@ describe('MCP Streamable HTTPS certification', () => {
     ).length;
     await expect(
       broker.invokeTool({
-        companionId: 'ada',
+        companionId: 'example-person',
         serverId: 'notes',
         toolName: 'unknown_tool',
         arguments: {},
@@ -428,7 +428,7 @@ describe('MCP Streamable HTTPS certification', () => {
     ).rejects.toMatchObject({ code: 'TOOL_DENIED' });
     await expect(
       broker.invokeTool({
-        companionId: 'ada',
+        companionId: 'example-person',
         serverId: 'notes',
         toolName: 'write_note',
         arguments: { text: 'intimate' },
@@ -440,7 +440,7 @@ describe('MCP Streamable HTTPS certification', () => {
     ).toHaveLength(callsBeforeDenials);
 
     await broker.invokeTool({
-      companionId: 'ada',
+      companionId: 'example-person',
       serverId: 'notes',
       toolName: 'write_note',
       arguments: { text: 'operator approved' },
@@ -452,11 +452,11 @@ describe('MCP Streamable HTTPS certification', () => {
     const discoveryCount = endpoint.observations.filter(
       (entry) => entry.method === 'server/discover',
     ).length;
-    await broker.releaseServer({ companionId: 'ada', serverId: 'notes' });
-    expect(broker.health({ companionId: 'ada' })).toMatchObject({
+    await broker.releaseServer({ companionId: 'example-person', serverId: 'notes' });
+    expect(broker.health({ companionId: 'example-person' })).toMatchObject({
       activeSessions: 0,
     });
-    await broker.searchTools({ companionId: 'ada', query: 'updated' });
+    await broker.searchTools({ companionId: 'example-person', query: 'updated' });
     expect(
       endpoint.observations.filter(
         (entry) => entry.method === 'server/discover',
@@ -480,7 +480,7 @@ describe('MCP Streamable HTTPS certification', () => {
 
     let failure: unknown;
     try {
-      await broker.searchTools({ companionId: 'ada', query: 'notes' });
+      await broker.searchTools({ companionId: 'example-person', query: 'notes' });
     } catch (error) {
       failure = error;
     }

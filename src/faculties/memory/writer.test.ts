@@ -723,7 +723,7 @@ describe('MemoryWriter', () => {
     it('links compatible updates without superseding older memories', async () => {
       const oldMemory = makeExistingMemory({
         type: 'semantic',
-        text: 'Ada likes oolong tea.',
+        text: 'Example Person likes oolong tea.',
         confidence: 0.6,
         tags: ['preference', 'tea'],
       });
@@ -732,7 +732,7 @@ describe('MemoryWriter', () => {
       store.searchByEmbedding.mockReturnValueOnce([oldMemory]);
 
       const result = await writer.write({
-        text: 'Ada also likes jasmine tea.',
+        text: 'Example Person also likes jasmine tea.',
         type: 'semantic',
         confidence: 0.9,
         tags: ['preference', 'tea'],
@@ -813,7 +813,7 @@ describe('MemoryWriter', () => {
     it('records high-impact ambiguous relationship changes as conflicts without supersession', async () => {
       const oldMemory = makeExistingMemory({
         type: 'relational',
-        text: "Ada's partner is Morgan.",
+        text: "Example Person's partner is Morgan.",
         confidence: 0.65,
         tags: ['relationship'],
       });
@@ -822,7 +822,7 @@ describe('MemoryWriter', () => {
       store.searchByEmbedding.mockReturnValueOnce([oldMemory]);
 
       const result = await writer.write({
-        text: "Ada's partner is Riley.",
+        text: "Example Person's partner is Riley.",
         type: 'relational',
         confidence: 0.95,
         tags: ['relationship'],
@@ -841,7 +841,7 @@ describe('MemoryWriter', () => {
     it('records high-impact explicit contradictions as negations without blind supersession', async () => {
       const oldMemory = makeExistingMemory({
         type: 'boundary',
-        text: 'Ada allows workplace calls after 8pm.',
+        text: 'Example Person allows workplace calls after 8pm.',
         confidence: 0.65,
         tags: ['boundary'],
       });
@@ -850,7 +850,7 @@ describe('MemoryWriter', () => {
       store.searchByEmbedding.mockReturnValueOnce([oldMemory]);
 
       const result = await writer.write({
-        text: 'Ada does not allow workplace calls after 8pm.',
+        text: 'Example Person does not allow workplace calls after 8pm.',
         type: 'boundary',
         confidence: 0.95,
         tags: ['boundary'],

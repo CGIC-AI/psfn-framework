@@ -48,8 +48,7 @@ export const COMPANION_MODEL_SELECTION_SETTINGS_OVERLAY_KEYS = [
 ] as const satisfies readonly RuntimeSettingKey[];
 
 /**
- * The only settings.json keys a per-companion overlay may set. Sourced from the
- * shared-seams audit (§11 of working_docs/fleet-analysis-findings-20260714.md):
+ * The only settings.json keys a per-companion overlay may set:
  * activeTimezone (seam 3), voice* (seam 6), observerEvalSidecar (seam 1),
  * emotionScoping (seam 9), plus uiThemeId and discordTrigger* per the bead.
  *

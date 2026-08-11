@@ -1,0 +1,75 @@
+rules:
+  - id: psfn.charter.no-empty-catch
+    message: >-
+      This catch block discards the failure. Handle it explicitly, preserve it
+      as cause/suppressed context, or rethrow it so broken state cannot look
+      healthy.
+    severity: ERROR
+    languages: [typescript, javascript]
+    metadata:
+      category: correctness
+      confidence: high
+      charter_law: "4.20"
+    # Use source text rather than the AST here: Semgrep intentionally removes
+    # comments, but an explanatory comment distinguishes a reviewed fallback
+    # from a literally empty, silent catch.
+    pattern-regex: 'catch\s*(?:\([^)]*\))?\s*\{\s*\}'
+
+  - id: psfn.charter.core-no-direct-credential-env
+    message: >-
+      Companion Core must not read a credential directly from process.env.
+      Resolve it at startup or through CredentialVaultPort and inject only the
+      capability the Core needs.
+    severity: ERROR
+    languages: [typescript, javascript]
+    metadata:
+      category: security
+      confidence: high
+      charter_law: "4.7"
+    paths:
+      include:
+        - /src/core/**
+        - /config/semgrep/psfn-charter.ts
+    patterns:
+      - pattern-either:
+          - pattern: process.env.$CREDENTIAL
+          - pattern: process.env[$CREDENTIAL]
+      - metavariable-regex:
+          metavariable: $CREDENTIAL
+          regex: (?i)^['"]?.*_(?:api_)?(?:key|token|secret|password|credentials?)['"]?$
+
+  - id: psfn.charter.core-no-child-process
+    message: >-
+      Companion Core is not a shell or privileged execution host. Move the
+      process boundary behind the gateway, sandbox, or a boundary adapter.
+    severity: ERROR
+    languages: [typescript, javascript]
+    metadata:
+      category: security
+      confidence: high
+      charter_law: "6.2"
+    paths:
+      include:
+        - /src/core/**
+        - /config/semgrep/psfn-charter.ts
+      exclude:
+        # Existing reviewed lifecycle boundary; new Core execution surfaces
+        # remain forbidden while this legacy seam is retired separately.
+        - /src/core/tools/lifecycle.ts
+        # Existing bounded diagnostic command adapter.
+        - /src/core/tools/self-diagnosis.ts
+        # Existing read-only ripgrep adapter for session search.
+        - /src/core/tools/session-search.ts
+    pattern-either:
+      - pattern: import { ..., $IMPORT, ... } from 'node:child_process'
+      - pattern: import { ..., $IMPORT, ... } from 'child_process'
+      - pattern: import * as $IMPORT from 'node:child_process'
+      - pattern: import * as $IMPORT from 'child_process'
+      - pattern: import $IMPORT from 'node:child_process'
+      - pattern: import $IMPORT from 'child_process'
+      - pattern: import 'node:child_process'
+      - pattern: import 'child_process'
+      - pattern: require('node:child_process')
+      - pattern: require('child_process')
+      - pattern: import('node:child_process')
+      - pattern: import('child_process')

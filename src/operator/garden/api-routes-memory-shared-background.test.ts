@@ -48,7 +48,7 @@ async function invoke(routes: AdminApiRoute[], url: string): Promise<CapturingRe
 const sample: AdminSharedBackgroundResult = {
   contactAId: 'contact-a',
   contactBId: 'contact-b',
-  contactADisplayName: 'Ada',
+  contactADisplayName: 'Example Person',
   contactBDisplayName: 'Bosco',
   resolved: true,
   missingContactIds: [],
@@ -57,7 +57,7 @@ const sample: AdminSharedBackgroundResult = {
     sources: ['edge_evidence'],
     score: 3.4,
   }],
-  contactsById: new Map([['contact-a', { id: 'contact-a', displayName: 'Ada' }]]),
+  contactsById: new Map([['contact-a', { id: 'contact-a', displayName: 'Example Person' }]]),
   totalCandidates: 1,
   truncated: false,
   limit: 12,
@@ -74,7 +74,7 @@ describe('GET /api/admin/memory/shared-background', () => {
     expect(sharedBackground).toHaveBeenCalledWith('contact-a', 'contact-b', 5);
 
     const body = JSON.parse(response.body) as Record<string, unknown>;
-    expect(body.contactsById).toEqual({ 'contact-a': { id: 'contact-a', displayName: 'Ada' } });
+    expect(body.contactsById).toEqual({ 'contact-a': { id: 'contact-a', displayName: 'Example Person' } });
     const items = body.items as Array<{ memory: { bodyRedacted?: boolean }; sources: string[] }>;
     expect(items[0].sources).toEqual(['edge_evidence']);
     // Redaction from the service body gate is carried through unchanged.

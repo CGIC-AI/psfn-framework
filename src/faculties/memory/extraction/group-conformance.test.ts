@@ -39,7 +39,7 @@ import { buildSessionMetadataWithMessageAddressing } from '../../../core/session
 const CHANNEL_ID = 'discord:lyra-room';
 
 const HUMANS = [
-  { authorId: 'dragon', authorName: 'MrDragonFox', contactId: 'contact-dragon' },
+  { authorId: 'dragon', authorName: 'Example Partner', contactId: 'contact-dragon' },
   { authorId: 'morgan', authorName: 'Morgan', contactId: 'contact-morgan' },
   { authorId: 'iki', authorName: 'Iki', contactId: 'contact-iki' },
   { authorId: 'rms', authorName: 'RMS', contactId: 'contact-rms' },
@@ -349,7 +349,7 @@ function makeObservedMessage(): SubstrateMessage {
     channelId: CHANNEL_ID,
     channelType: 'discord',
     authorId: 'dragon',
-    authorName: 'MrDragonFox',
+    authorName: 'Example Partner',
     content: 'Lyra, remember I prefer concise summaries.',
     timestamp: new Date('2026-06-28T12:00:00.000Z'),
     routing: {
@@ -406,13 +406,13 @@ describe('group-room memory conformance', () => {
         groupMemory: settings,
         llmResponse: `<response>
 <fact>
-<text>MrDragonFox prefers concise deployment summaries.</text>
+<text>Example Partner prefers concise deployment summaries.</text>
 <type>semantic</type>
 <importance>0.91</importance>
 <confidence>0.95</confidence>
 <source_message_ids>8</source_message_ids>
-<source_speaker_name>MrDragonFox</source_speaker_name>
-<subject_name>MrDragonFox</subject_name>
+<source_speaker_name>Example Partner</source_speaker_name>
+<subject_name>Example Partner</subject_name>
 <address_mode>direct_to_companion</address_mode>
 </fact>
 <fact>
@@ -421,7 +421,7 @@ describe('group-room memory conformance', () => {
 <importance>0.89</importance>
 <confidence>0.95</confidence>
 <source_message_ids>24</source_message_ids>
-<source_speaker_name>MrDragonFox</source_speaker_name>
+<source_speaker_name>Example Partner</source_speaker_name>
 <subject_name>Morgan</subject_name>
 <address_mode>overheard_room_context</address_mode>
 </fact>
@@ -443,7 +443,7 @@ describe('group-room memory conformance', () => {
 
     expect(processFact).toHaveBeenCalledTimes(3);
     expect(processFact).toHaveBeenCalledWith(
-      expect.objectContaining({ text: 'MrDragonFox prefers concise deployment summaries.' }),
+      expect.objectContaining({ text: 'Example Partner prefers concise deployment summaries.' }),
       expect.stringContaining('|lines:1-50|'),
       'contact-dragon',
       expect.objectContaining({
@@ -451,7 +451,7 @@ describe('group-room memory conformance', () => {
         routedContactId: 'contact-dragon',
         sourceContactId: 'contact-dragon',
         sourceAuthorId: 'dragon',
-        sourceSpeakerName: 'MrDragonFox',
+        sourceSpeakerName: 'Example Partner',
         addressMode: 'direct_to_companion',
         sourceMessageIds: [8],
         sourceSpanStartMessageId: 8,
@@ -513,21 +513,21 @@ describe('group-room memory conformance', () => {
       maxWrites: 4,
       llmResponse: `<response>
 <fact>
-<text>MrDragonFox affectionately called Lyra "starlight".</text>
+<text>Example Partner affectionately called Lyra "starlight".</text>
 <type>emotional</type>
 <importance>0.94</importance>
 <confidence>0.96</confidence>
 <source_message_ids>1</source_message_ids>
-<source_speaker_name>MrDragonFox</source_speaker_name>
+<source_speaker_name>Example Partner</source_speaker_name>
 <address_mode>overheard_room_context</address_mode>
 </fact>
 <fact>
-<text>MrDragonFox affectionately called Other Companion "starlight".</text>
+<text>Example Partner affectionately called Other Companion "starlight".</text>
 <type>relational</type>
 <importance>0.94</importance>
 <confidence>0.96</confidence>
 <source_message_ids>1</source_message_ids>
-<source_speaker_name>MrDragonFox</source_speaker_name>
+<source_speaker_name>Example Partner</source_speaker_name>
 <subject_name>Other Companion</subject_name>
 <address_mode>overheard_room_context</address_mode>
 </fact>
@@ -540,7 +540,7 @@ describe('group-room memory conformance', () => {
       '[mentioned_targets: Other Companion (author_id=other-companion)]',
     );
     expect(JSON.stringify(llmComplete.mock.calls)).toContain(
-      '[author: MrDragonFox (author_id=dragon)]',
+      '[author: Example Partner (author_id=dragon)]',
     );
     expect(JSON.stringify(llmComplete.mock.calls)).toContain(
       '[observer: Lyra (author_id=current-bot)]',
@@ -552,7 +552,7 @@ describe('group-room memory conformance', () => {
     expect(processFact).toHaveBeenCalledTimes(1);
     expect(processFact).toHaveBeenCalledWith(
       expect.objectContaining({
-        text: 'MrDragonFox affectionately called Other Companion "starlight".',
+        text: 'Example Partner affectionately called Other Companion "starlight".',
       }),
       expect.any(String),
       'contact-dragon',
@@ -562,7 +562,7 @@ describe('group-room memory conformance', () => {
       }),
     );
     expect(JSON.stringify(processFact.mock.calls)).not.toContain(
-      'MrDragonFox affectionately called Lyra',
+      'Example Partner affectionately called Lyra',
     );
   });
 
@@ -585,12 +585,12 @@ describe('group-room memory conformance', () => {
         companionName,
         llmResponse: `<response>
 <fact>
-<text>MrDragonFox and Cedar share an enduring observatory promise.</text>
+<text>Example Partner and Cedar share an enduring observatory promise.</text>
 <type>relational</type>
 <importance>0.94</importance>
 <confidence>0.96</confidence>
 <source_message_ids>1</source_message_ids>
-<source_speaker_name>MrDragonFox</source_speaker_name>
+<source_speaker_name>Example Partner</source_speaker_name>
 <subject_name>Cedar</subject_name>
 <address_mode>direct_to_companion</address_mode>
 </fact>
@@ -624,12 +624,12 @@ describe('group-room memory conformance', () => {
       companionAuthorIds: ['current-bot'],
       llmResponse: `<response>
 <fact>
-<text>MrDragonFox and Lyra share an observatory promise.</text>
+<text>Example Partner and Lyra share an observatory promise.</text>
 <type>relational</type>
 <importance>0.94</importance>
 <confidence>0.96</confidence>
 <source_message_ids>1</source_message_ids>
-<source_speaker_name>MrDragonFox</source_speaker_name>
+<source_speaker_name>Example Partner</source_speaker_name>
 <subject_name>Lyra</subject_name>
 <address_mode>direct_to_companion</address_mode>
 </fact>
@@ -657,12 +657,12 @@ describe('group-room memory conformance', () => {
       companionAuthorIds: ['current-bot'],
       llmResponse: `<response>
 <fact>
-<text>MrDragonFox and Lyra share an observatory promise.</text>
+<text>Example Partner and Lyra share an observatory promise.</text>
 <type>relational</type>
 <importance>0.94</importance>
 <confidence>0.96</confidence>
 <source_message_ids>1</source_message_ids>
-<source_speaker_name>MrDragonFox</source_speaker_name>
+<source_speaker_name>Example Partner</source_speaker_name>
 <subject_name>Lyra</subject_name>
 <address_mode>direct_to_companion</address_mode>
 </fact>
@@ -919,9 +919,9 @@ describe('group-room memory conformance', () => {
       llmClient: {
         complete: vi.fn().mockResolvedValue({
           content: `<response>
-<fact><text>MrDragonFox prefers jasmine tea.</text><type>semantic</type><importance>0.9</importance><confidence>0.95</confidence></fact>
-<fact><text>MrDragonFox likes chess.</text><type>semantic</type><importance>0.88</importance><confidence>0.95</confidence></fact>
-<fact><text>MrDragonFox enjoys strategy games.</text><type>semantic</type><importance>0.86</importance><confidence>0.95</confidence></fact>
+<fact><text>Example Partner prefers jasmine tea.</text><type>semantic</type><importance>0.9</importance><confidence>0.95</confidence></fact>
+<fact><text>Example Partner likes chess.</text><type>semantic</type><importance>0.88</importance><confidence>0.95</confidence></fact>
+<fact><text>Example Partner enjoys strategy games.</text><type>semantic</type><importance>0.86</importance><confidence>0.95</confidence></fact>
 </response>`,
         }),
       } as ExtractionRunOptions['llmClient'],

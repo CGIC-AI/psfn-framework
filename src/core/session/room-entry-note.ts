@@ -2,8 +2,7 @@ import type { AffordanceConfig, PlaceKind } from '../../shared/contracts/places-
 
 // ── Room-entry system-note helper (Sprint 10, W5 "Entry event" contract) ──
 //
-// Implements the working_docs/sprint-10-multi-companion.md §4 W5 decision:
-// "a companion entering a room receives a system-only message: room ID,
+// A companion entering a room receives a system-only message: room ID,
 // surroundings, who else is present." This module is the single deterministic
 // composer for that note plus a thin append wrapper that delivers it through
 // the existing context-system-note lane (the same lane temporal wakeups use).

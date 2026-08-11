@@ -2,8 +2,7 @@
  * Canonical settings-domain registry (psfn-framework-4ssd5.1, epic 4ssd5).
  *
  * This is the single typed authority for the eight operator-approved
- * configuration domains identified by the settings authority audit
- * (`working_docs/hardcoded-settings-audit-2026-08-06.md`, section 4):
+ * configuration domains owned by the settings authority contract:
  *
  *   core, models, channels, memory, scheduler, cogsec, economy, capabilities
  *

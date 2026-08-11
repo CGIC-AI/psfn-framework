@@ -58,7 +58,7 @@ function makeEntity(id: string, contactId: string): SocialGraphEntity {
 }
 
 function makeService() {
-  const contactA = makeContact('contact-a', 'Ada', ['room:shared']);
+  const contactA = makeContact('contact-a', 'Example Person', ['room:shared']);
   const contactB = makeContact('contact-b', 'Bosco', ['room:shared']);
   const memories: PurrMemory[] = [
     makeMemory('mem-evidence', { text: 'they met at the conference' }),
@@ -91,7 +91,7 @@ describe('AdminMemoryDataService.sharedBackground', () => {
     const result = await service.forSession('cookie:operator-a').sharedBackground('contact-a', 'contact-b');
 
     expect(result.resolved).toBe(true);
-    expect(result.contactADisplayName).toBe('Ada');
+    expect(result.contactADisplayName).toBe('Example Person');
     const byId = new Map(result.items.map(item => [item.memory.id, item]));
     expect([...byId.keys()].sort()).toEqual(['mem-evidence', 'mem-intimate']);
     expect(byId.get('mem-evidence')!.sources).toEqual(['edge_evidence']);

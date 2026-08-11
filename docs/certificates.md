@@ -119,7 +119,7 @@ Keys written this way get mode 0600; everything is written atomically.
    STATE=./data/cert-manager        # your resolved state dir
    curl -sS -H "Authorization: Bearer $CERT_MANAGER_TOKEN" \
      -X POST http://127.0.0.1:10070/v1/certs/server \
-     -d '{"identityId":"gateway","sans":["gateway.internal","10.0.0.5"],"manage":true}' \
+     -d '{"identityId":"gateway","sans":["gateway.example.test","192.0.2.5"],"manage":true}' \
      | jq '{serialNumber, notAfter, outputs}'
    ```
 

@@ -149,24 +149,19 @@ from the manifest — the swap is file-for-file with no code change — then set
 via the Satellite-Hub fal.ai sprite pipeline (satellite-side, out of scope for
 this package); only the packed sheets and manifest are consumed here.
 
-## In-Cluster Test Deployment
+## Container image
 
-For a browser-reachable test of this PWA against an in-cluster Satellite Hub,
-the repo ships an optional static web container and Helm workload. This is a
-stopgap test surface, to be replaced by a packaged app; it serves the built
+The repository includes an optional static web container. It serves the built
 `dist/` tree only and holds no server logic.
 
 - Image: `docker/companion-ui/Dockerfile` (multi-stage — builds this package,
   serves only `/companion-ui/` with a pinned `nginx-unprivileged` base on port
   8080 as uid 999).
-- Build script: `docker/companion-ui/build-image.sh` (ARM64 by default for the
-  Pi; commit-tied tag; refuses dirty tree and floating tags).
-- Chart workload: `companionUiTest.enabled` in `deploy/helm/psfn` (disabled by
-  default, pinned image enforced, ClusterIP Service, optional Ingress,
-  egress-denied NetworkPolicy).
+- Build script: `docker/companion-ui/build-image.sh` (commit-tied tag; refuses
+  dirty trees and floating tags).
 
-The full build/import/enable/reach flow is documented under "Companion UI Test
-Surface" in `deploy/helm/psfn/README.md`.
+Ingress, service, and network-policy configuration belongs in the consuming
+deployment repository.
 
 ## Validation
 

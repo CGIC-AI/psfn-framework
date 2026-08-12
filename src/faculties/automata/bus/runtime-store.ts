@@ -177,6 +177,15 @@ export class PostgresAutomataBusRuntimeStore {
     return await this.store.readCurrentState(input);
   }
 
+  /**
+   * Share the companion-locked pool with derived query/index adapters. The
+   * canonical store remains the only content authority and retains pool
+   * lifecycle ownership.
+   */
+  getQueryPool(): AutomataBusSqlPool {
+    return this.pool;
+  }
+
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;

@@ -39,6 +39,7 @@ function makeTempDir(): string {
     'backup.json',
     'skills.json',
     'mcp-servers.json',
+    'automata-policy.json',
   ]) {
     const seedFile = ownerFile.replace(/\.json$/u, '.seed.json');
     writeFileSync(
@@ -200,6 +201,18 @@ describe('AdminSettingsDataService', () => {
       message: 'mcp-servers.json saved; restart required before MCP connections change',
     });
     expect(JSON.parse(service.getSubConfigJson('mcp') ?? '{}')).toEqual(payload);
+  });
+
+  it('round-trips the operator-owned automata policy through the raw Garden surface', async () => {
+    const root = makeTempDir();
+    const service = buildService(buildConfig(root));
+    const payload = JSON.parse(readFileSync(join(root, 'automata-policy.json'), 'utf8')) as object;
+
+    expect(await service.saveSubConfigJson('automata-policy', JSON.stringify(payload))).toEqual({
+      ok: true,
+      message: 'automata-policy.json saved; restart required before automata policy changes take effect',
+    });
+    expect(JSON.parse(service.getSubConfigJson('automata-policy') ?? '{}')).toEqual(payload);
   });
 
   it('exposes skill_write through the typed and raw Garden intake-policy surfaces', async () => {

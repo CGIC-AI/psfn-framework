@@ -33,6 +33,7 @@ export const SYSTEM_OWNER_WRITE_KEYS = [
   'trust-policy',
   'intake-policy',
   'partner-affect-shadow',
+  'automata-policy',
   'backup',
   'mcp',
 ] as const;
@@ -273,6 +274,7 @@ export class GatewaySystemDataWriter implements GatewaySystemDataWriterPort {
       | 'saveTrustPolicy'
       | 'saveIntakePolicy'
       | 'savePartnerAffectShadow'
+      | 'saveAutomataPolicy'
       | 'saveBackup'
       | 'saveMcpServers'
     >;
@@ -317,6 +319,9 @@ export class GatewaySystemDataWriter implements GatewaySystemDataWriterPort {
         break;
       case 'partner-affect-shadow':
         this.deps.configStore.savePartnerAffectShadow(request.payload);
+        break;
+      case 'automata-policy':
+        this.deps.configStore.saveAutomataPolicy(request.payload);
         break;
       case 'backup':
         this.deps.configStore.saveBackup(request.payload);

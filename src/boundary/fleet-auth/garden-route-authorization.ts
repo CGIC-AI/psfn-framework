@@ -473,7 +473,7 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
   },
   {
     action: 'scheduler.read', area: 'scheduler', routeIds: [
-      ...ids('GET', ['/api/admin/scheduler', '/api/admin/scheduler/wake-window']),
+      ...ids('GET', ['/api/admin/automata', '/api/admin/scheduler', '/api/admin/scheduler/wake-window']),
       ...pageIds(['/scheduler']),
     ],
   },

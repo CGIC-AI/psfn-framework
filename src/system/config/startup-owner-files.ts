@@ -81,6 +81,11 @@ import {
   MCP_SERVERS_SEED_FILE_NAME,
   type McpServersConfig,
 } from './mcp-servers-config.js';
+import {
+  AUTOMATA_FILE_NAME,
+  AUTOMATA_SEED_FILE_NAME,
+  loadAutomataPolicyConfig,
+} from './automata-policy-config.js';
 
 export interface StartupOwnerFileLoadOptions {
   dataDir: string;
@@ -351,6 +356,15 @@ function systemOwnerFileChecks(
       dataPath: join(options.dataDir, PARTNER_AFFECT_SHADOW_FILE_NAME),
       seedPath: join(seedDir, PARTNER_AFFECT_SHADOW_SEED_FILE_NAME),
       run: () => loadPartnerAffectShadowConfig(
+        options.dataDir,
+        options.seedDir ? { seedDir: options.seedDir } : undefined,
+      ),
+    },
+    {
+      label: 'automata-policy',
+      dataPath: join(options.dataDir, AUTOMATA_FILE_NAME),
+      seedPath: join(seedDir, AUTOMATA_SEED_FILE_NAME),
+      run: () => loadAutomataPolicyConfig(
         options.dataDir,
         options.seedDir ? { seedDir: options.seedDir } : undefined,
       ),

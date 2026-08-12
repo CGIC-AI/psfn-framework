@@ -22,6 +22,7 @@ import {
 import { type ChargePolicyConfig } from '../../../system/config/charge-policy-config.js';
 import { type SchedulerRuntimeConfig } from '../../../system/config/scheduler-config.js';
 import { type TrustPolicyConfig } from '../../../system/config/trust-policy-config.js';
+import type { AutomataOwnerPolicy } from '../../../faculties/automata/registry-contract.js';
 import { setRuntimeTrustPolicy } from '../../../system/trust/runtime-policy.js';
 import {
   resolveConfiguredCompanionDataDir,
@@ -61,6 +62,7 @@ export interface StartupConfigHydrationResult {
   trustPolicyConfig: TrustPolicyConfig;
   schedulerConfig: SchedulerRuntimeConfig;
   chargePolicyConfig: ChargePolicyConfig;
+  automataPolicy: AutomataOwnerPolicy;
   diagnostics: StartupConfigHydrationDiagnostics;
 }
 
@@ -406,6 +408,8 @@ export function hydrateCanonicalStartupConfig(
   config.chargePolicy = chargePolicyConfig;
   // bead 7ym.2.1: schema-owned subagent role registry (subagent-roles.json).
   config.subagentRoles = configStore.loadStartupSubagentRoles();
+  const automataPolicy = configStore.loadStartupAutomataPolicy();
+  config.automataPolicy = automataPolicy;
 
   return {
     systemDataDir,
@@ -418,6 +422,7 @@ export function hydrateCanonicalStartupConfig(
     trustPolicyConfig,
     schedulerConfig,
     chargePolicyConfig,
+    automataPolicy,
     diagnostics,
   };
 }

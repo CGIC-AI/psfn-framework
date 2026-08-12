@@ -31,7 +31,7 @@ describe('projectAutomataLessons', () => {
         eventId: 'finding-2',
         evidenceRefs: ['session://private-partner-conversation/turn-4'],
       },
-    ], { minimumSupport: 2, maxGroups: 10, maxSourcesPerGroup: 10 });
+    ], { maxGroups: 10, maxSourcesPerGroup: 10 });
 
     expect(projection.groups).toEqual([
       expect.objectContaining({
@@ -63,7 +63,7 @@ describe('projectAutomataLessons', () => {
         verificationStatus: 'pending',
         contradictionEventIds: ['finding-contradiction'],
       },
-    ], { minimumSupport: 2, maxGroups: 10, maxSourcesPerGroup: 10 });
+    ], { maxGroups: 10, maxSourcesPerGroup: 10 });
 
     expect(projection.groups[0]).toMatchObject({
       sourceCount: 1,
@@ -82,7 +82,7 @@ describe('projectAutomataLessons', () => {
     const projection = projectAutomataLessons([
       baseFinding,
       { ...baseFinding, eventId: 'finding-pending', verificationStatus: 'pending' },
-    ], { minimumSupport: 2, maxGroups: 10, maxSourcesPerGroup: 10 });
+    ], { maxGroups: 10, maxSourcesPerGroup: 10 });
 
     expect(projection.groups).toHaveLength(2);
     expect(projection.groups.map(group => group.evidenceQuality).sort())
@@ -91,7 +91,7 @@ describe('projectAutomataLessons', () => {
   });
 
   it('fails closed on companion, audience, and sensitivity scope violations', () => {
-    const policy = { minimumSupport: 2, maxGroups: 10, maxSourcesPerGroup: 10 };
+    const policy = { maxGroups: 10, maxSourcesPerGroup: 10 };
     expect(() => projectAutomataLessons([
       { ...baseFinding, companionId: 'companion-b' },
     ], policy, { companionId: 'companion-a', audience: 'operator', maxSensitivity: 'confidential' }))
@@ -113,7 +113,7 @@ describe('projectAutomataLessons', () => {
     ];
     const service = new AutomataLessonProjectionService({
       source: { listCurrent: async () => current },
-      policy: { minimumSupport: 2, maxGroups: 10, maxSourcesPerGroup: 10 },
+      policy: { maxGroups: 10, maxSourcesPerGroup: 10 },
     });
 
     expect((await service.query({

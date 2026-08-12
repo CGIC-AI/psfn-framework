@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
 
+  import AutomataLessonsPanel from '$lib/components/automata/AutomataLessonsPanel.svelte';
   import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
   import {
     getAutomataSnapshot,
@@ -127,7 +128,7 @@
   <GardenPageHeader
     eyebrow="Operations · Durable workers"
     title="Automata"
-    description="Read-only registry, retained runs, and content-safe Automata Bus state for the selected companion."
+    description="Registry, retained runs, content-safe Bus state, and review-only recurrent lesson proposals for the selected companion."
   >
     {#snippet actions()}
       <button
@@ -425,6 +426,8 @@
         {/if}
       </section>
     </div>
+
+    <AutomataLessonsPanel lessons={snapshot.lessons} />
 
     <section class="garden-section card-garden p-5" aria-labelledby="extensions-heading">
       <p class="page-kicker">Extension seam</p>

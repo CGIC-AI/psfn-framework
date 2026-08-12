@@ -5,7 +5,11 @@ import {
 
 export const AUTOMATA_BUS_SCHEMA_VERSION = 1 as const;
 export const AUTOMATA_BUS_RELATIONS_FEATURE = 'finding-relations-v1' as const;
-export const AUTOMATA_BUS_SUPPORTED_FEATURES = [AUTOMATA_BUS_RELATIONS_FEATURE] as const;
+export const AUTOMATA_BUS_LESSON_ATTRIBUTION_FEATURE = 'lesson-attribution-v1' as const;
+export const AUTOMATA_BUS_SUPPORTED_FEATURES = [
+  AUTOMATA_BUS_RELATIONS_FEATURE,
+  AUTOMATA_BUS_LESSON_ATTRIBUTION_FEATURE,
+] as const;
 
 export type AutomataBusFeature = typeof AUTOMATA_BUS_SUPPORTED_FEATURES[number];
 export type AutomataBusEventType = 'finding' | 'relation';
@@ -37,11 +41,20 @@ export interface AutomataBusVerification {
   evidenceRefs?: string[];
 }
 
+export interface AutomataBusLessonAttribution {
+  promptRevision: string;
+  toolName: string;
+  failureCategory: string;
+  lessonCode: string;
+  contradictionEventIds: string[];
+}
+
 export interface AutomataBusFindingBody {
   claim: string;
   provenance: AutomataBusProvenance;
   evidence: AutomataBusEvidence[];
   verification: AutomataBusVerification;
+  lessonAttribution?: AutomataBusLessonAttribution;
   source?: string;
   confidence?: number;
 }
@@ -121,17 +134,26 @@ const FINDING_KEYS = [
   'provenance',
   'evidence',
   'verification',
+  'lessonAttribution',
   'source',
   'confidence',
 ] as const;
 const EVIDENCE_KEYS = ['kind', 'reference', 'summary', 'digest'] as const;
 const VERIFICATION_KEYS = ['status', 'by', 'artifactDigest', 'evidenceRefs'] as const;
+const LESSON_ATTRIBUTION_KEYS = [
+  'promptRevision',
+  'toolName',
+  'failureCategory',
+  'lessonCode',
+  'contradictionEventIds',
+] as const;
 const RELATION_KEYS = ['targetEventId', 'relation', 'reason', 'replacement'] as const;
 const PROVENANCE_VALUES = ['computed', 'fetched', 'recalled', 'testimony'] as const;
 const EVIDENCE_KIND_VALUES = ['artifact', 'command', 'external', 'session-span'] as const;
 const VERIFICATION_STATUS_VALUES = ['pending', 'rejected', 'verified'] as const;
 const RELATION_VALUES = ['corrects', 'retracts', 'supersedes'] as const;
 const SHA256_DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/u;
+const CONTENT_SAFE_ATTRIBUTION_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,255}$/u;
 
 function reportUnknownKeys(
   value: Record<string, unknown>,
@@ -156,6 +178,18 @@ function readNonEmptyString(
     return undefined;
   }
   return value;
+}
+
+function readContentSafeAttribution(
+  value: unknown,
+  path: string,
+  issues: string[],
+): string | undefined {
+  const parsed = readNonEmptyString(value, path, issues);
+  if (parsed !== undefined && !CONTENT_SAFE_ATTRIBUTION_PATTERN.test(parsed)) {
+    issues.push(`${path} must be a content-safe identifier`);
+  }
+  return parsed;
 }
 
 function readStringArray(
@@ -311,6 +345,51 @@ function parseVerification(
   };
 }
 
+function parseLessonAttribution(
+  value: unknown,
+  issues: string[],
+): AutomataBusLessonAttribution | undefined {
+  if (!isRecord(value)) {
+    issues.push('event.body.lessonAttribution must be an object');
+    return undefined;
+  }
+  reportUnknownKeys(value, LESSON_ATTRIBUTION_KEYS, 'event.body.lessonAttribution', issues);
+  const promptRevision = readContentSafeAttribution(
+    value.promptRevision,
+    'event.body.lessonAttribution.promptRevision',
+    issues,
+  );
+  const toolName = readContentSafeAttribution(
+    value.toolName,
+    'event.body.lessonAttribution.toolName',
+    issues,
+  );
+  const failureCategory = readContentSafeAttribution(
+    value.failureCategory,
+    'event.body.lessonAttribution.failureCategory',
+    issues,
+  );
+  const lessonCode = readContentSafeAttribution(
+    value.lessonCode,
+    'event.body.lessonAttribution.lessonCode',
+    issues,
+  );
+  const contradictionEventIds = readStringArray(
+    value.contradictionEventIds,
+    'event.body.lessonAttribution.contradictionEventIds',
+    issues,
+    { allowEmpty: true },
+  );
+  if (
+    promptRevision === undefined
+    || toolName === undefined
+    || failureCategory === undefined
+    || lessonCode === undefined
+    || contradictionEventIds === undefined
+  ) return undefined;
+  return { promptRevision, toolName, failureCategory, lessonCode, contradictionEventIds };
+}
+
 function parseFindingBody(
   value: unknown,
   context: AutomataBusEventContext,
@@ -340,6 +419,9 @@ function parseFindingBody(
     ...context.artifactRefs,
   ]);
   const verification = parseVerification(value.verification, evidenceReferences, issues);
+  const lessonAttribution = value.lessonAttribution === undefined
+    ? undefined
+    : parseLessonAttribution(value.lessonAttribution, issues);
   const source = value.source === undefined
     ? undefined
     : readNonEmptyString(value.source, 'event.body.source', issues);
@@ -375,6 +457,7 @@ function parseFindingBody(
     provenance,
     evidence,
     verification,
+    ...(lessonAttribution !== undefined ? { lessonAttribution } : {}),
     ...(source !== undefined ? { source } : {}),
     ...(typeof confidence === 'number' && Number.isFinite(confidence) ? { confidence } : {}),
   };
@@ -489,6 +572,21 @@ export function parseAutomataBusEvent(input: unknown): AutomataBusParseResult<Au
       : type === 'relation'
         ? parseRelationBody(input.body, context, issues)
         : undefined;
+  const hasLessonAttribution = body !== undefined && (
+    type === 'finding'
+      ? (body as AutomataBusFindingBody).lessonAttribution !== undefined
+      : type === 'relation'
+        ? (body as AutomataBusRelationBody).replacement?.lessonAttribution !== undefined
+        : false
+  );
+  if (
+    hasLessonAttribution
+    && !(mustUnderstand ?? []).includes(AUTOMATA_BUS_LESSON_ATTRIBUTION_FEATURE)
+  ) {
+    issues.push(
+      `attributed findings must declare ${AUTOMATA_BUS_LESSON_ATTRIBUTION_FEATURE} in mustUnderstand`,
+    );
+  }
   if (
     issues.length > 0
     || eventId === undefined

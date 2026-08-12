@@ -10,6 +10,9 @@ import {
   SharedWorkspaceAuthenticationError,
   type AdminSharedWorkspaceService,
 } from './services/shared-workspace-service.js';
+import { AutomataLessonProposalService } from '../../faculties/automata/bus/lesson-proposal.js';
+import { createGardenAutomataLessonReviewPort } from './services/automata-lesson-review-adapter.js';
+import type { AdminAutomataService } from './services/automata-service.js';
 
 function sendActionError(res: ServerResponse, error: unknown): void {
   sendJson(res, error instanceof SharedWorkspaceAuthenticationError ? 401 : 400, {
@@ -22,8 +25,43 @@ function hasOnlyKeys(value: Record<string, unknown>, allowed: readonly string[])
   return Object.keys(value).every(key => allowedSet.has(key));
 }
 
+interface AutomataLessonProposalAction {
+  kind: 'automata_lesson';
+  groupId: string;
+  target: { kind: 'instruction' | 'tool'; id: string; baseRevision: string };
+  before: string;
+  after: string;
+}
+
+function parseAutomataLessonProposalAction(value: Record<string, unknown>): AutomataLessonProposalAction | null {
+  if (!hasOnlyKeys(value, ['kind', 'groupId', 'target', 'before', 'after'])
+    || value.kind !== 'automata_lesson'
+    || typeof value.groupId !== 'string'
+    || !isRecord(value.target)
+    || !hasOnlyKeys(value.target, ['kind', 'id', 'baseRevision'])
+    || (value.target.kind !== 'instruction' && value.target.kind !== 'tool')
+    || typeof value.target.id !== 'string'
+    || typeof value.target.baseRevision !== 'string'
+    || typeof value.before !== 'string'
+    || typeof value.after !== 'string') {
+    return null;
+  }
+  return {
+    kind: value.kind,
+    groupId: value.groupId,
+    target: {
+      kind: value.target.kind,
+      id: value.target.id,
+      baseRevision: value.target.baseRevision,
+    },
+    before: value.before,
+    after: value.after,
+  };
+}
+
 export function buildAdminSharedWorkspaceRoutes(options: {
   service: AdminSharedWorkspaceService;
+  automataService?: AdminAutomataService | null;
   withBody: (req: IncomingMessage, res: ServerResponse, cb: (body: string) => void) => void;
 }): AdminApiRoute[] {
   return [
@@ -65,6 +103,43 @@ export function buildAdminSharedWorkspaceRoutes(options: {
           return;
         }
         const value = parsed.value;
+        if (value.kind === 'automata_lesson') {
+          const action = parseAutomataLessonProposalAction(value);
+          if (!action) {
+            sendJson(res, 400, { error: 'Invalid Automata lesson proposal action' });
+            return;
+          }
+          if (!options.automataService) {
+            sendJson(res, 503, { error: 'Automata lesson projection unavailable' });
+            return;
+          }
+          options.automataService.getSnapshot().then(async snapshot => {
+            const group = snapshot.lessons.groups.find(candidate => candidate.groupId === action.groupId);
+            if (!group) throw new Error('Automata lesson group is not current or visible');
+            const proposalService = new AutomataLessonProposalService({
+              review: createGardenAutomataLessonReviewPort({
+                service: options.service,
+                context,
+              }),
+              policy: {
+                maxChangeChars: body.length,
+                maxSourceIds: group.sourceFindingIds.length,
+              },
+            });
+            const prepared = proposalService.prepare({
+              group,
+              target: action.target,
+              before: action.before,
+              after: action.after,
+              rationaleCode: 'recurrent-supported-finding',
+            });
+            return await proposalService.submitForReview(prepared);
+          }).then(
+            receipt => sendJson(res, 201, receipt),
+            error => sendActionError(res, error),
+          );
+          return;
+        }
         if (!hasOnlyKeys(value, ['artifactPath', 'content', 'mediaType', 'provenance'])
           || typeof value.artifactPath !== 'string'
           || typeof value.content !== 'string'
@@ -74,6 +149,13 @@ export function buildAdminSharedWorkspaceRoutes(options: {
           || typeof value.provenance !== 'string') {
           sendJson(res, 400, {
             error: 'artifactPath, content, mediaType, and provenance are required; identity claims are forbidden',
+          });
+          return;
+        }
+        if (value.artifactPath.startsWith('automata/lesson-proposals/')
+          || value.provenance.startsWith('automata-lesson:')) {
+          sendJson(res, 400, {
+            error: 'Automata lesson artifacts must use the server-validated proposal action',
           });
           return;
         }

@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildAutomataPath, resolveAutomataPageState, type AutomataSnapshot } from './automata';
+import {
+  buildAutomataPath,
+  resolveAutomataPageState,
+  type AutomataSnapshot,
+} from './automata';
 
 const snapshot = {
   classes: [],
@@ -22,6 +26,14 @@ const snapshot = {
     currentFindings: [],
     correctionHistory: [],
     page: { offset: 0, limit: 20, hasMore: false },
+  },
+  lessons: {
+    available: true,
+    condition: 'ready',
+    groups: [],
+    hasMore: false,
+    sourceFindingCount: 0,
+    proposalReviewPath: '/api/admin/shared-workspace/proposals',
   },
   extensions: { managementPanels: [] },
 } satisfies AutomataSnapshot;

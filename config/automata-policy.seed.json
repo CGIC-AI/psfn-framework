@@ -17,7 +17,21 @@
       "memory.retrieval",
       "background.emotion_appraisal",
       "background.auto_compaction"
-    ]
+    ],
+    "query": {
+      "maxQueryChars": 512,
+      "candidateLimit": 40,
+      "maxSearchResults": 20,
+      "maxBriefingItems": 8,
+      "maxBriefingChars": 4000,
+      "maxBriefingClaimChars": 500,
+      "resultCacheEnabled": true,
+      "resultCacheTtlMs": 30000,
+      "semanticWeight": 0.7,
+      "lexicalWeight": 0.3,
+      "exactFallbackEnabled": true,
+      "modelIdentityPolicy": "configured-provider-strict"
+    }
   },
   "retentionMs": {
     "ephemeral": 86400000,

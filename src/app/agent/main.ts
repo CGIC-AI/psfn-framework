@@ -186,6 +186,8 @@ import {
   startIcpRuntimeAvailability,
   type AgentIcpRuntimeAvailability,
 } from './icp-runtime-availability.js';
+import { createAutomataBusProductionRuntime } from '../../faculties/automata/bus/production-runtime.js';
+import { PostgresAdminAutomataBusReadAdapter } from '../../operator/garden/services/automata-bus-read-adapter.js';
 
 const log = createComponentLogger('Agent');
 ensureActiveTimezone();
@@ -548,6 +550,25 @@ async function main(): Promise<void> {
     toolConformanceRunner,
     personalProjects,
   } = coreRuntime;
+  const embeddingProvenance = resolveEmbeddingProviderProvenanceFromConfig(
+    config,
+    gateway.dims,
+  );
+  const automataBusRuntime = createAutomataBusProductionRuntime({
+    pool: persistenceRuntime.automataBusStore.getQueryPool(),
+    store: persistenceRuntime.automataBusStore,
+    companionId: resolveCoreCompanionIdFromConfig(config),
+    embeddingProvider: gateway,
+    embeddingIdentity: embeddingProvenance,
+    appCache,
+    policy: config.automataPolicy!.bus.query,
+  });
+  const automataBusReadPort = new PostgresAdminAutomataBusReadAdapter({
+    pool: persistenceRuntime.automataBusStore.getQueryPool(),
+    vector: automataBusRuntime.vector,
+    companionId: resolveCoreCompanionIdFromConfig(config),
+    maxPageLimit: config.automataPolicy!.operatorMutationLimit,
+  });
   agentLoop.setBackgroundWorkExecutionScope(
     handler => companionAvailability.run('do_not_disturb', handler),
   );
@@ -732,10 +753,7 @@ async function main(): Promise<void> {
     sharedWorldWikiCaretaker: coreRuntime.sharedWorldWikiCaretaker,
     companionAvailability,
   });
-  const episodeEmbeddingProvenance = resolveEmbeddingProviderProvenanceFromConfig(
-    config,
-    gateway.dims,
-  );
+  const episodeEmbeddingProvenance = embeddingProvenance;
   const episodeEmbeddingProfile = {
     documentSchema: EPISODE_SEARCH_DOCUMENT_SCHEMA,
     ...episodeEmbeddingProvenance,
@@ -1424,6 +1442,7 @@ async function main(): Promise<void> {
     eventBus,
     chargeLedger,
     automataRunRegistry: persistenceRuntime.automataRunRegistry,
+    automataBusReadPort,
     scheduler,
     schedulerConfig,
     icpInitiationCandidateStore: persistenceRuntime.icpInitiationCandidateStore,

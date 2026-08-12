@@ -13,6 +13,20 @@ function policy() {
         .filter(entry => entry.id !== 'memory.retrieval')
         .map(entry => entry.id),
       excludedClasses: ['memory.retrieval'],
+      query: {
+        maxQueryChars: 512,
+        candidateLimit: 40,
+        maxSearchResults: 20,
+        maxBriefingItems: 8,
+        maxBriefingChars: 4_000,
+        maxBriefingClaimChars: 500,
+        resultCacheEnabled: true,
+        resultCacheTtlMs: 30_000,
+        semanticWeight: 0.7,
+        lexicalWeight: 0.3,
+        exactFallbackEnabled: true,
+        modelIdentityPolicy: 'configured-provider-strict',
+      },
     },
     retentionMs: { ephemeral: 1_000, standard: 10_000, extended: 20_000 },
     recentRunLimit: 25,
@@ -86,7 +100,11 @@ describe('AutomataRunRegistry', () => {
   it('makes bus eligibility exhaustive and operator-owned', () => {
     expect(() => parseAutomataOwnerPolicy({
       schemaVersion: 1,
-      bus: { eligibleClasses: ['subagent.bounded'], excludedClasses: [] },
+      bus: {
+        ...policy().bus,
+        eligibleClasses: ['subagent.bounded'],
+        excludedClasses: [],
+      },
       retentionMs: { ephemeral: 1, standard: 2, extended: 3 },
       recentRunLimit: 5,
       operatorMutationLimit: 10,
@@ -94,6 +112,52 @@ describe('AutomataRunRegistry', () => {
     expect(() => parseAutomataOwnerPolicy({
       ...policy(),
       hiddenEligibilityOverride: true,
+    })).toThrow('contains unknown keys');
+  });
+
+  it('validates every Bus query bound and identity behavior fail closed', () => {
+    expect(policy().bus.query).toEqual({
+      maxQueryChars: 512,
+      candidateLimit: 40,
+      maxSearchResults: 20,
+      maxBriefingItems: 8,
+      maxBriefingChars: 4_000,
+      maxBriefingClaimChars: 500,
+      resultCacheEnabled: true,
+      resultCacheTtlMs: 30_000,
+      semanticWeight: 0.7,
+      lexicalWeight: 0.3,
+      exactFallbackEnabled: true,
+      modelIdentityPolicy: 'configured-provider-strict',
+    });
+
+    expect(() => parseAutomataOwnerPolicy({
+      ...policy(),
+      bus: {
+        ...policy().bus,
+        query: { ...policy().bus.query, maxSearchResults: 41 },
+      },
+    })).toThrow('maxSearchResults must not exceed candidateLimit');
+    expect(() => parseAutomataOwnerPolicy({
+      ...policy(),
+      bus: {
+        ...policy().bus,
+        query: { ...policy().bus.query, semanticWeight: 0.8 },
+      },
+    })).toThrow('weights must sum to 1');
+    expect(() => parseAutomataOwnerPolicy({
+      ...policy(),
+      bus: {
+        ...policy().bus,
+        query: { ...policy().bus.query, modelIdentityPolicy: 'trust-index' },
+      },
+    })).toThrow('modelIdentityPolicy');
+    expect(() => parseAutomataOwnerPolicy({
+      ...policy(),
+      bus: {
+        ...policy().bus,
+        query: { ...policy().bus.query, hiddenLimit: 1 },
+      },
     })).toThrow('contains unknown keys');
   });
 });

@@ -10,7 +10,7 @@ import { toErrorMessage } from '../../shared/utils/errors.js';
 import { getRequestContext } from '../../primitives/llm/request-context.js';
 import { buildSubagentWorkSpec } from './work-spec.js';
 
-type SubagentToolAction = 'spawn' | 'message' | 'wait' | 'cancel' | 'status';
+type SubagentToolAction = 'spawn' | 'message' | 'wait' | 'cancel' | 'status' | 'discover' | 'inspect';
 
 interface SubagentToolParams {
   action?: SubagentToolAction;
@@ -26,6 +26,7 @@ interface SubagentToolParams {
   required_capabilities?: string[];
   task_limit?: number;
   transcript_limit?: number;
+  task_query?: string;
 }
 
 export function createSubagentTool(port: SubagentControlPort): SubstrateAgentTool {
@@ -40,6 +41,8 @@ export function createSubagentTool(port: SubagentControlPort): SubstrateAgentToo
         Type.Literal('wait'),
         Type.Literal('cancel'),
         Type.Literal('status'),
+        Type.Literal('discover'),
+        Type.Literal('inspect'),
       ], { description: 'Automata control action. Default: spawn.' })),
       subagent_id: Type.Optional(Type.String({ description: 'The automaton id (the subagent_id returned by spawn or status) to message, wait on, cancel, or check status for.' })),
       name: Type.Optional(Type.String({ description: 'Short label for a spawned automaton.' })),
@@ -72,6 +75,9 @@ export function createSubagentTool(port: SubagentControlPort): SubstrateAgentToo
         minimum: 1,
         maximum: 50,
         description: 'Optional transcript entry limit for status views.',
+      })),
+      task_query: Type.Optional(Type.String({
+        description: 'Task id, label, or description fragment for durable automata discovery.',
       })),
     }),
     execute: async (
@@ -109,6 +115,11 @@ export function createSubagentTool(port: SubagentControlPort): SubstrateAgentToo
                       ...(requestContext.sessionId ? { logicalSessionId: requestContext.sessionId } : {}),
                       ...(requestContext.requestId ? { requestId: requestContext.requestId } : {}),
                       ...(requestContext.turnId ? { turnId: requestContext.turnId } : {}),
+                      ...(requestContext.workloadId
+                        ? { originatingTaskId: requestContext.workloadId }
+                        : {}),
+                      ...(requestContext.chargeRunId ? { parentRunId: requestContext.chargeRunId } : {}),
+                      ...(requestContext.chargeRootRunId ? { sourceRunId: requestContext.chargeRootRunId } : {}),
                     },
                   }
                 : {}),
@@ -194,6 +205,34 @@ export function createSubagentTool(port: SubagentControlPort): SubstrateAgentToo
               }),
             }));
           }
+
+          case 'discover': {
+            const tasks = await port.discover(
+              normalizeRequiredText(params.task_query, 'task_query'),
+              params.task_limit,
+            );
+            return textResult(formatPayload({
+              action,
+              surface: 'subagent',
+              semantics: 'durable_registry_discovery',
+              tasks,
+            }));
+          }
+
+          case 'inspect': {
+            const detail = await port.inspect(
+              normalizeRequiredText(params.subagent_id, 'subagent_id'),
+            );
+            if (!detail) {
+              return textResultWithError(`Unknown automaton task "${params.subagent_id}".`, true);
+            }
+            return textResult(formatPayload({
+              action,
+              surface: 'subagent',
+              semantics: 'durable_registry_and_bus_inspection',
+              detail,
+            }));
+          }
         }
       } catch (error) {
         return textResultWithError(`automata ${action} failed: ${toErrorMessage(error)}`, true);
@@ -204,7 +243,7 @@ export function createSubagentTool(port: SubagentControlPort): SubstrateAgentToo
   return tagToolWithReversibility(
     withCapabilityRequirement(tool, (params) => {
       const action = typeof params.action === 'string' ? params.action : 'spawn';
-      return action === 'status' || action === 'wait'
+      return action === 'status' || action === 'wait' || action === 'discover' || action === 'inspect'
         ? 'identity.read'
         : 'shard.spawn';
     }),

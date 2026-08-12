@@ -24,7 +24,9 @@ import {
   INTAKE_POLICY_SEED_FILE_NAME,
   INTAKE_POLICY_SCHEMA_VERSION,
   validateIntakePolicy,
+  validateChatBodyHandling,
   validateScreeningPool,
+  type IntakeChatBodyHandlingPolicyConfig,
   type IntakeScreeningPoolPolicyConfig,
 } from './intake-policy-config.js';
 import {
@@ -117,6 +119,36 @@ function loadSeedScreeningPoolPolicy(seedDir: string): IntakeScreeningPoolPolicy
   return validateScreeningPool(raw.screeningPool, seedPath);
 }
 
+function loadSeedChatBodyHandlingPolicy(seedDir: string): IntakeChatBodyHandlingPolicyConfig {
+  const seedPath = join(seedDir, INTAKE_POLICY_SEED_FILE_NAME);
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(seedPath, 'utf8')) as unknown;
+  } catch (error) {
+    throw new Error(
+      `Cannot load intake chat-body handling migration policy from ${seedPath}: ${String(error)}`,
+    );
+  }
+  if (!isRecord(raw)) {
+    throw new Error(`Invalid intake policy seed at ${seedPath}: expected object`);
+  }
+  return validateChatBodyHandling(raw.chatBodyHandling, seedPath);
+}
+
+function ensureChatBodyHandlingPresent(
+  candidate: Record<string, unknown>,
+  filePath: string,
+  seedDir: string,
+): { candidate: Record<string, unknown>; addedPaths: string[] } {
+  if (isRecord(candidate.chatBodyHandling)) {
+    validateChatBodyHandling(candidate.chatBodyHandling, filePath);
+    return { candidate, addedPaths: [] };
+  }
+  const next = structuredClone(candidate);
+  next.chatBodyHandling = loadSeedChatBodyHandlingPolicy(seedDir);
+  return { candidate: next, addedPaths: ['chatBodyHandling'] };
+}
+
 function ensureScreeningPoolPresent(
   candidate: Record<string, unknown>,
   filePath: string,
@@ -203,7 +235,7 @@ function repairSelfAuthoredMutationPolicy(
 }
 
 /**
- * Explicitly upgrades intake-policy schema v1/v2/v3/v4 owners to v5. V1 gains the
+ * Explicitly upgrades intake-policy schema v1/v2/v3/v4/v5 owners to v6. V1 gains the
  * canonical skill_write sink rule; legacy owners gain the explicit
  * trusted companion_self source class used only for screened self-authored
  * mutations. Every legacy version gains the URL scanner scheme policy from the
@@ -285,9 +317,18 @@ export function migrateIntakePolicyOwner(
         filePath,
         options.seedDir ?? process.env.CONFIG_DIR ?? './config',
       );
-      const retired = removeRetiredScreenerModelKeys(withScreeningPool.candidate);
+      const withChatBodyHandling = ensureChatBodyHandlingPresent(
+        withScreeningPool.candidate,
+        filePath,
+        options.seedDir ?? process.env.CONFIG_DIR ?? './config',
+      );
+      const retired = removeRetiredScreenerModelKeys(withChatBodyHandling.candidate);
       candidate = retired.candidate;
-      const addedPaths = [...repaired.addedPaths, ...withScreeningPool.addedPaths];
+      const addedPaths = [
+        ...repaired.addedPaths,
+        ...withScreeningPool.addedPaths,
+        ...withChatBodyHandling.addedPaths,
+      ];
       const updatedPaths: string[] = [];
       if (modeRemapped.updatedMode) {
         updatedPaths.push(`mode (${String(raw.mode)} -> ${String(candidate.mode)})`);
@@ -320,9 +361,10 @@ export function migrateIntakePolicyOwner(
         toSchemaVersion: INTAKE_POLICY_SCHEMA_VERSION,
       };
     }
-    if (raw.schemaVersion !== 1 && raw.schemaVersion !== 2 && raw.schemaVersion !== 3 && raw.schemaVersion !== 4) {
+    if (raw.schemaVersion !== 1 && raw.schemaVersion !== 2 && raw.schemaVersion !== 3
+      && raw.schemaVersion !== 4 && raw.schemaVersion !== 5) {
       throw new Error(
-        `Intake policy owner migration at ${filePath} requires schemaVersion 1, 2, 3, 4, or `
+        `Intake policy owner migration at ${filePath} requires schemaVersion 1, 2, 3, 4, 5, or `
         + `the current schemaVersion ${String(INTAKE_POLICY_SCHEMA_VERSION)}`,
       );
     }
@@ -364,6 +406,13 @@ export function migrateIntakePolicyOwner(
     );
     Object.assign(upgraded, withScreeningPool.candidate);
     addedPaths.push(...withScreeningPool.addedPaths);
+    const withChatBodyHandling = ensureChatBodyHandlingPresent(
+      upgraded,
+      filePath,
+      options.seedDir ?? process.env.CONFIG_DIR ?? './config',
+    );
+    Object.assign(upgraded, withChatBodyHandling.candidate);
+    addedPaths.push(...withChatBodyHandling.addedPaths);
     const upgradedSinks = structuredClone(raw.sinkGates.sinks);
     if (raw.schemaVersion === 1) {
       upgradedSinks.skill_write = createSkillWriteSinkRule();

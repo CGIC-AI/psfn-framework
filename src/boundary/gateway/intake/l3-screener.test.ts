@@ -774,6 +774,45 @@ describe('applyL3ScreeningOutcome', () => {
     );
   });
 
+  it('explicit chat-body observe-only posture retains L3 findings and audit but skips withholding and hold', async () => {
+    const config = testPolicy({ mode: 'strict' });
+    const events = makeEventStore();
+    const outcome = await screenedOutcome(FLAGGED_RESPONSE, config, {
+      sourceClass: 'primary_user',
+      sourceRiskTier: 'trusted',
+    });
+    const hold = vi.fn();
+    const result = applyL3ScreeningOutcome(applyInput(outcome, config, events, {
+      text: HOSTILE_CONTENT,
+      sourceClass: 'primary_user',
+      sourceRiskTier: 'trusted',
+      origin: { ref: 'api:private-direct:message-1' },
+      enforcementPosture: 'shadow',
+      quarantine: { hold } as unknown as IntakeQuarantineHoldPort,
+    }));
+
+    expect(result).toMatchObject({
+      action: 'pass',
+      withheld: false,
+      effectiveText: HOSTILE_CONTENT,
+      envelope: {
+        state: 'released',
+        decision: {
+          action: 'pass',
+          reason: expect.stringContaining('chat-body-mark-only:l3:'),
+        },
+        riskLabels: expect.arrayContaining(['injection/override_attempt']),
+      },
+    });
+    expect(result.envelope.scores[L3_SCREENER_SCANNER_ID]).toBe(0.97);
+    expect(hold).not.toHaveBeenCalled();
+    expect(events.getEvent(result.cogSecCaseId)).toMatchObject({
+      type: 'intake_firewall',
+      severity: 'high',
+      safeAgentSummary: expect.stringContaining('recorded'),
+    });
+  });
+
   it('clear + enforce: explicit released_sanitized decision; safe representation substitutes the raw text', async () => {
     const config = testPolicy({ mode: 'strict' });
     const events = makeEventStore();

@@ -221,6 +221,9 @@ export function createGatewayIntakeEscalationPort(
         ? { artifactPaths: request.artifactPaths }
         : {}),
       sourceRiskTier: request.sourceRiskTier,
+      ...(request.enforcementPosture
+        ? { enforcementPosture: request.enforcementPosture }
+        : {}),
       priorContribution: mergeContributions(request.priorContribution, l2Contribution),
       atMs: request.atMs,
     });

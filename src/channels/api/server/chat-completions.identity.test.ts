@@ -2,11 +2,16 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { Readable } from 'node:stream';
 import { EventEmitter } from 'node:events';
 import { describe, expect, it, vi } from 'vitest';
-import type { EventBus } from '../../../shared/event-bus.js';
+import { fromAny } from '@total-typescript/shoehorn';
+import { EventBus } from '../../../shared/event-bus.js';
 import type { SessionManager } from '../../../core/session/manager.js';
 import type { SubstrateAgent } from '../../../core/agent/substrate-agent.js';
 import type { ApiServerRuntime } from '../types.js';
-import { ApiChatCompletionsHandler } from './chat-completions.js';
+import type { IntakeScreeningService } from '../../../core/cogsec/intake/screening.js';
+import {
+  ApiChatCompletionsHandler,
+  type ApiChatCompletionsHandlerConfig,
+} from './chat-completions.js';
 
 const COMPANION_A = '11111111-1111-4111-8111-111111111111';
 const COMPANION_B = '22222222-2222-4222-8222-222222222222';
@@ -82,12 +87,13 @@ function runtime(): ApiServerRuntime {
 }
 
 function handler(
-  apiRuntime: ApiServerRuntime,
+  apiRuntime: ApiServerRuntime | null,
   bearerCompanionRouting?: {
     pinnedCompanionId: string;
     knownCompanionIds: string[];
     selectableCompanionIds?: string[];
   },
+  overrides: Partial<ApiChatCompletionsHandlerConfig> = {},
 ): ApiChatCompletionsHandler {
   return new ApiChatCompletionsHandler({
     agentLoop: {} as SubstrateAgent,
@@ -108,10 +114,103 @@ function handler(
     },
     documentIngest: null,
     ...(bearerCompanionRouting ? { bearerCompanionRouting } : {}),
+    ...overrides,
   });
 }
 
 describe('ApiChatCompletionsHandler response identity', () => {
+  it('threads canonical private 1:1 Agent API context through monolith screening', async () => {
+    const res = response();
+    const handleMessage = vi.fn(async () => ({
+      content: 'monolith response',
+      channelId: 'api:principal:private-direct',
+      metadata: { inputTokens: 1, outputTokens: 1 },
+    }));
+    const primaryContact = {
+      id: 'contact-primary',
+      displayName: 'Primary Operator',
+      trustLevel: 'primary' as const,
+      relationshipType: 'partner' as const,
+      firstSeen: '2026-08-12T00:00:00.000Z',
+      lastSeen: '2026-08-12T00:00:00.000Z',
+    };
+    const screen = vi.fn(async (content: string) => ({
+      effectiveText: content,
+      snapshot: {
+        envelopeId: 'env-monolith-private-direct',
+        sourceClass: 'primary_user' as const,
+        sourceRiskTier: 'trusted' as const,
+        state: 'released' as const,
+        riskLabels: [],
+        subject: { kind: 'body' as const },
+      },
+    }));
+    const contactStore = fromAny({
+      getByChannelIdentity: vi.fn(async () => primaryContact),
+      getById: vi.fn(async () => primaryContact),
+    });
+    const chatHandler = handler(null, undefined, {
+      agentLoop: fromAny({ handleMessage, abort: vi.fn() }),
+      eventBus: new EventBus(),
+      sessionManager: fromAny({
+        getMessageCount: vi.fn(() => 0),
+        recordUserMessage: vi.fn(),
+        recordAssistantMessage: vi.fn(),
+      }),
+      contactStore,
+      documentIngest: {
+        personalFilesDir: process.cwd(),
+        intakeScreening: { mode: 'strict', screen } as unknown as IntakeScreeningService,
+      },
+    });
+
+    await chatHandler.handle(
+      request(
+        {
+          model: 'openai-compatible-placeholder',
+          messages: [{ role: 'user', content: 'private direct message' }],
+        },
+        {
+          'x-session-id': 'private-direct',
+          'x-channel-privacy': 'private',
+          'x-canonical-contact-id': primaryContact.id,
+          'x-identity-claim-channel': 'discord',
+          'x-identity-claim-user-id': 'operator-1',
+        },
+      ),
+      res,
+      { id: 'principal', mode: 'api_key' },
+    );
+
+    expect(res.statusCode).toBe(200);
+    expect(screen).toHaveBeenCalledWith(
+      'private direct message',
+      expect.objectContaining({
+        sourceClass: 'primary_user',
+        sourceChannelId: 'api:principal:private-direct',
+        channelPrivacy: 'private',
+        chatBodyContext: expect.objectContaining({
+          channelClass: 'api_direct',
+          contactTrust: expect.objectContaining({
+            contactId: primaryContact.id,
+            trustLevel: 'primary',
+          }),
+          conversationScope: expect.objectContaining({
+            kind: 'dm',
+            contact: { contactId: primaryContact.id },
+          }),
+        }),
+      }),
+    );
+    expect(handleMessage).toHaveBeenCalledWith(expect.objectContaining({
+      content: 'private direct message',
+      routing: expect.objectContaining({
+        canonicalContactId: primaryContact.id,
+        intakeEnvelopes: [expect.objectContaining({ envelopeId: 'env-monolith-private-direct' })],
+      }),
+    }));
+  });
+
   it('reports the fleet-routed responding companion in a non-streaming response', async () => {
     const apiRuntime = runtime();
     const res = response();

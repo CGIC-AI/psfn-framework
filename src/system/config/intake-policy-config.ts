@@ -40,7 +40,7 @@ export type { IntakeUrlScannerPolicyConfig } from './intake-url-scanner-policy.j
 
 export const INTAKE_POLICY_FILE_NAME = 'intake-policy.json';
 export const INTAKE_POLICY_SEED_FILE_NAME = 'intake-policy.seed.json';
-export const INTAKE_POLICY_SCHEMA_VERSION = 5 as const;
+export const INTAKE_POLICY_SCHEMA_VERSION = 6 as const;
 
 /**
  * Bounded asynchronous screening pool (psfn-framework-yxz0z.4). The gateway
@@ -242,6 +242,33 @@ export interface IntakeVisionScreenerPolicyConfig {
   timeoutMs: number;
   /** Max completion tokens for the OCR+description verdict (output cap). */
   maxOutputTokens: number;
+}
+
+export const INTAKE_CHAT_BODY_FINDING_DISPOSITIONS = ['enforce', 'mark_only'] as const;
+export type IntakeChatBodyFindingDisposition =
+  typeof INTAKE_CHAT_BODY_FINDING_DISPOSITIONS[number];
+export const INTAKE_CHAT_BODY_CHANNEL_CLASSES = [
+  'api_direct',
+  'companion_ui',
+  'discord',
+  'telegram',
+] as const;
+export type IntakeChatBodyChannelClass = typeof INTAKE_CHAT_BODY_CHANNEL_CLASSES[number];
+const INTAKE_CHAT_BODY_ELIGIBLE_CHANNEL_CLASSES = ['api_direct', 'companion_ui'] as const;
+
+/**
+ * Narrow conversational exception for a freshly resolved primary contact in
+ * a canonical private DM. Attachments, tools, searches, and derived content
+ * remain governed by their own source classes independently of this policy.
+ */
+export interface IntakeChatBodyHandlingPolicyConfig {
+  highestTrustPrivateDirect: {
+    findingDisposition: IntakeChatBodyFindingDisposition;
+    /** Explicit channel classes eligible for this exception. */
+    eligibleChannelClasses: IntakeChatBodyChannelClass[];
+    /** Maximum age of the canonical Contact lookup used by this one screen. */
+    trustResolutionMaxAgeMs: number;
+  };
 }
 
 // ── Source lists (htm9.13): trusted/denied sites and people ──
@@ -809,6 +836,7 @@ export interface IntakePolicyConfig {
   l2Screener: IntakeL2ScreenerPolicyConfig;
   l3Screener: IntakeL3ScreenerPolicyConfig;
   visionScreener: IntakeVisionScreenerPolicyConfig;
+  chatBodyHandling: IntakeChatBodyHandlingPolicyConfig;
   sinkGates: IntakeSinkGatesPolicyConfig;
   /** Bounded async screening pool (psfn-framework-yxz0z.4). */
   screeningPool: IntakeScreeningPoolPolicyConfig;
@@ -1071,6 +1099,82 @@ function validateVisionScreener(
       sourcePath,
       'visionScreener.maxOutputTokens',
     ),
+  };
+}
+
+export function validateChatBodyHandling(
+  raw: unknown,
+  sourcePath: string,
+): IntakeChatBodyHandlingPolicyConfig {
+  if (!isRecord(raw)) {
+    throw invalid(sourcePath, 'chatBodyHandling must be an object');
+  }
+  const unknownKeys = Object.keys(raw)
+    .filter((key) => key !== 'highestTrustPrivateDirect');
+  if (unknownKeys.length > 0) {
+    throw invalid(sourcePath, `chatBodyHandling has unsupported keys: ${unknownKeys.join(', ')}`);
+  }
+  if (!isRecord(raw.highestTrustPrivateDirect)) {
+    throw invalid(sourcePath, 'chatBodyHandling.highestTrustPrivateDirect must be an object');
+  }
+  const direct = raw.highestTrustPrivateDirect;
+  const unknownDirectKeys = Object.keys(direct)
+    .filter((key) => ![
+      'findingDisposition',
+      'eligibleChannelClasses',
+      'trustResolutionMaxAgeMs',
+    ].includes(key));
+  if (unknownDirectKeys.length > 0) {
+    throw invalid(
+      sourcePath,
+      `chatBodyHandling.highestTrustPrivateDirect has unsupported keys: ${unknownDirectKeys.join(', ')}`,
+    );
+  }
+  if (typeof direct.findingDisposition !== 'string'
+    || !(INTAKE_CHAT_BODY_FINDING_DISPOSITIONS as readonly string[])
+      .includes(direct.findingDisposition)) {
+    throw invalid(
+      sourcePath,
+      'chatBodyHandling.highestTrustPrivateDirect.findingDisposition must be one of: '
+      + INTAKE_CHAT_BODY_FINDING_DISPOSITIONS.join(', '),
+    );
+  }
+  if (!Array.isArray(direct.eligibleChannelClasses)
+    || direct.eligibleChannelClasses.length === 0) {
+    throw invalid(
+      sourcePath,
+      'chatBodyHandling.highestTrustPrivateDirect.eligibleChannelClasses must be a non-empty array',
+    );
+  }
+  const eligibleChannelClasses = new Set<IntakeChatBodyChannelClass>();
+  for (const channelClass of direct.eligibleChannelClasses) {
+    if (typeof channelClass !== 'string'
+      || !(INTAKE_CHAT_BODY_ELIGIBLE_CHANNEL_CLASSES as readonly string[]).includes(channelClass)) {
+      throw invalid(
+        sourcePath,
+        'chatBodyHandling.highestTrustPrivateDirect.eligibleChannelClasses contains unsupported '
+        + `channel class '${String(channelClass)}'`,
+      );
+    }
+    if (eligibleChannelClasses.has(channelClass as IntakeChatBodyChannelClass)) {
+      throw invalid(
+        sourcePath,
+        'chatBodyHandling.highestTrustPrivateDirect.eligibleChannelClasses contains duplicate '
+        + `'${channelClass}'`,
+      );
+    }
+    eligibleChannelClasses.add(channelClass as IntakeChatBodyChannelClass);
+  }
+  return {
+    highestTrustPrivateDirect: {
+      findingDisposition: direct.findingDisposition as IntakeChatBodyFindingDisposition,
+      eligibleChannelClasses: [...eligibleChannelClasses],
+      trustResolutionMaxAgeMs: validatePositiveInteger(
+        direct.trustResolutionMaxAgeMs,
+        sourcePath,
+        'chatBodyHandling.highestTrustPrivateDirect.trustResolutionMaxAgeMs',
+      ),
+    },
   };
 }
 
@@ -1602,7 +1706,8 @@ export function validateIntakePolicy(raw: unknown, sourcePath: string): IntakePo
   }
   const knownKeys = [
     'schemaVersion', 'mode', 'sourceRiskTiers', 'sourceLists', 'quarantine',
-    'injectionClassifier', 'l2Screener', 'l3Screener', 'visionScreener', 'sinkGates',
+    'injectionClassifier', 'l2Screener', 'l3Screener', 'visionScreener',
+    'chatBodyHandling', 'sinkGates',
     'screeningPool', 'driftDetection', 'urlScanner',
   ];
   const unknownKeys = Object.keys(raw).filter((key) => !knownKeys.includes(key));
@@ -1614,6 +1719,7 @@ export function validateIntakePolicy(raw: unknown, sourcePath: string): IntakePo
       || raw.schemaVersion === 2
       || raw.schemaVersion === 3
       || raw.schemaVersion === 4
+      || raw.schemaVersion === 5
       ? `; schemaVersion ${String(raw.schemaVersion)} owners require the explicit `
         + 'migrate:intake-policy-owner command'
       : '';
@@ -1672,6 +1778,7 @@ export function validateIntakePolicy(raw: unknown, sourcePath: string): IntakePo
     l2Screener: validateL2Screener(raw.l2Screener, sourcePath),
     l3Screener: validateL3Screener(raw.l3Screener, sourcePath),
     visionScreener: validateVisionScreener(raw.visionScreener, sourcePath),
+    chatBodyHandling: validateChatBodyHandling(raw.chatBodyHandling, sourcePath),
     sinkGates,
     screeningPool: validateScreeningPool(raw.screeningPool, sourcePath),
     driftDetection: validateDriftDetection(raw.driftDetection, sourcePath),

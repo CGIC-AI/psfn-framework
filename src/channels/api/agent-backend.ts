@@ -61,7 +61,10 @@ import {
   type ApiDocumentIngestConfig,
 } from './server/session.js';
 import type { IntakeEnvelopeSnapshot } from '../../shared/contracts/intake-envelope.js';
-import { screenChatMessageBody } from '../../core/cogsec/intake/chat-message-screening.js';
+import {
+  createAuthenticatedPrivateDirectChatScope,
+  screenChatMessageBody,
+} from '../../core/cogsec/intake/chat-message-screening.js';
 import { buildApiHealthResponse } from './server-health.js';
 import {
   type FifoChannelLease,
@@ -1698,10 +1701,22 @@ export class AgentApiBackend {
     }
 
     const lastUserAttachments = getLastUserMessageAttachments(request.messages);
+    const chatBodyChannelClass = source === 'api'
+      ? 'api_direct' as const
+      : source === 'companion-ui'
+        ? 'companion_ui' as const
+        : undefined;
+    const privateDirectScope = canonicalContactId
+      && resolvedChannelPrivacy === 'private'
+      && chatBodyChannelClass
+      ? createAuthenticatedPrivateDirectChatScope({ channelId, canonicalContactId })
+      : undefined;
+    const isAuthenticatedDirectHuman = source === 'api'
+      || (source === 'companion-ui' && hubDeviceAttachment?.actor.kind === 'human');
     const screenedBody = await screenChatMessageBody({
       content: this.getLastUserMessage(request.messages),
       screening: this.documentIngest?.intakeScreening,
-      sourceClass: source === 'api'
+      sourceClass: isAuthenticatedDirectHuman
         ? 'primary_user'
         : resolvedChannelPrivacy === 'public' || hubDeviceAttachment?.actor.kind === 'guest'
           ? 'public_contact'
@@ -1710,6 +1725,10 @@ export class AgentApiBackend {
       channelId,
       messageId: requestId,
       ...(canonicalContactId ? { canonicalContactId } : {}),
+      ...(resolvedChannelPrivacy ? { channelPrivacy: resolvedChannelPrivacy } : {}),
+      ...(chatBodyChannelClass ? { channelClass: chatBodyChannelClass } : {}),
+      ...(privateDirectScope ? { conversationScope: privateDirectScope } : {}),
+      ...(this.contactStore ? { contactStore: this.contactStore } : {}),
     });
     // htm9.9: `file` content parts run the shared file-ingest pipeline
     // (quarantine -> parse -> intake screening) before prompt assembly.

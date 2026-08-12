@@ -153,6 +153,17 @@
       "note": "Narrowed from Hermes (bare 'system'/'secret'/'hidden' inside comments is common in scraped pages)."
     },
     {
+      "id": "forged_chat_role_boundary",
+      "labels": ["injection/role_confusion"],
+      "scope": "all",
+      "weight": 0.95,
+      "match": {
+        "kind": "regex",
+        "pattern": "(?:<\\|im_end\\|>\\s{0,64}<\\|im_start\\|>\\s{0,64}(?:system|assistant|developer|user)\\b|<\\|eot_id\\|>\\s{0,64}<\\|start_header_id\\|>\\s{0,64}(?:system|assistant|developer|user)\\s{0,64}<\\|end_header_id\\|>|<\\|end_of_turn\\|>\\s{0,64}<\\|start_of_turn\\|>\\s{0,64}(?:system|model|user)\\b)"
+      },
+      "note": "High-confidence structural boundary forgery: a model-specific end marker immediately followed by a start/header marker and role. Individual token names and prose comparing token formats remain silent. psfn-framework-zig0t."
+    },
+    {
       "id": "hidden_div",
       "labels": ["injection/indirect"],
       "scope": "all",
@@ -192,7 +203,8 @@
         "kind": "phrase",
         "anchors": ["\\byou\\s{1,4}are", "now", "(?:a|an|the)\\b"],
         "maxFillerWords": 8
-      }
+      },
+      "note": "Deliberately context-tier, not universal: explicit role reassignment is relevant on prompt-bearing intake, while ordinary persona/meta discussion must not become an all-scope lexical block. Semantic ambiguity remains an L2 concern. psfn-framework-qrch1."
     },
     {
       "id": "role_pretend",
@@ -218,7 +230,22 @@
           "(?:prompt|instructions)\\b"
         ],
         "maxFillerWords": 8
-      }
+      },
+      "note": "Deliberately context-tier: an explicit disclosure verb plus protected prompt/instruction noun is high signal on prompt-bearing intake, but universal scanning would over-label quoted security discussion. Question-form and other ambiguous requests remain semantic L2. psfn-framework-qrch1."
+    },
+    {
+      "id": "template_system_prompt_exfil",
+      "labels": ["exfil/prompt_disclosure"],
+      "scope": "context",
+      "weight": 0.85,
+      "match": {
+        "kind": "near",
+        "left": "\\b(?:output|print|reveal|show|dump|repeat|leak)\\b",
+        "right": "\\$\\{\\s{0,8}(?:SYSTEM|DEVELOPER|HIDDEN)_(?:PROMPT|INSTRUCTIONS)\\s{0,8}\\}",
+        "maxGapChars": 128,
+        "sameLine": true
+      },
+      "note": "Action-bound template-variable disclosure is an explicit structural exfiltration request. Bare template examples remain silent. psfn-framework-qrch1."
     },
     {
       "id": "remove_filters",
@@ -369,16 +396,36 @@
     },
     {
       "id": "read_secret_files",
-      "labels": ["execution/executable_instruction", "secrets/credential_material"],
+      "labels": ["execution/executable_instruction", "secrets/credential_material", "policy/security_modification"],
       "scope": "all",
       "weight": 0.85,
       "match": {
-        "kind": "near",
-        "left": "\\bcat\\b",
-        "right": "(?:\\.env\\b|credentials|\\.netrc\\b|\\.pgpass\\b|\\.npmrc\\b|\\.pypirc\\b)",
-        "maxGapChars": 2048,
-        "sameLine": true
-      }
+        "kind": "regex",
+        "pattern": "(?:\\b(?:cat|less|head|tail)\\s{1,64}(?:-[A-Za-z]{1,16}\\s{1,16})?|\\b(?:read(?:ing)?|open(?:ing)?|print(?:ing)?|copy(?:ing)?|include|upload(?:ing)?)\\s{1,16}(?:the\\s{1,8})?(?:(?:file|contents?|private\\s{1,8}key)\\s{1,8}(?:(?:at|from|of)\\s{1,8})?)?)(?:\\.env\\b|credentials|\\.netrc\\b|\\.pgpass\\b|\\.npmrc\\b|\\.pypirc\\b|/etc/(?:passwd|shadow)\\b|(?:\\$HOME|~|/home/[A-Za-z0-9._-]{1,64})/\\.ssh/(?:id_(?:rsa|dsa|ecdsa|ed25519)|[A-Za-z0-9._-]{1,64}\\.pem)\\b)"
+      },
+      "note": "Universal only because a bounded direct read/copy/exfil action must bind to a credential store, passwd-class system file, or concrete SSH private-key path. 'Read about' phrasing and bare path discussion remain silent. psfn-framework-68daq."
+    },
+    {
+      "id": "sensitive_value_exfil_to_url",
+      "labels": ["execution/executable_instruction", "exfil/unknown_link", "secrets/credential_material"],
+      "scope": "all",
+      "weight": 0.95,
+      "match": {
+        "kind": "regex",
+        "pattern": "\\b(?:send|post|upload|transmit)\\s{1,64}(?:the\\s{1,8})?(?:api[ _-]?key|password|credential|access[ _-]?token|secret)\\s{1,64}(?:to|at)\\s{1,8}https?://"
+      },
+      "note": "Universal high-confidence exfiltration requires a transfer verb, an explicitly sensitive value, and an HTTP destination in one bounded phrase. The broad transfer-to-URL rule remains strict. psfn-framework-qrch1."
+    },
+    {
+      "id": "instruction_bearing_link",
+      "labels": ["injection/indirect", "exfil/unknown_link"],
+      "scope": "context",
+      "weight": 0.8,
+      "match": {
+        "kind": "regex",
+        "pattern": "\\b(?:visit|open|fetch)\\s{1,64}(?:this\\s{1,8})?(?:url|link)\\s{1,64}and\\s{1,64}(?:follow|obey|execute)\\s{1,64}(?:its|the)\\s{1,64}instructions?\\s{0,16}:?\\s{0,16}https?://"
+      },
+      "note": "Context-tier only: the URL is labeled when an explicit visit/open action is joined to an instruction-following directive. Ordinary links and recommendations remain silent. psfn-framework-qrch1."
     },
     {
       "id": "exfil_send_to_url",
@@ -391,7 +438,8 @@
         "right": "\\b(?:to|at)\\s{1,8}https?://",
         "maxGapChars": 2048,
         "sameLine": true
-      }
+      },
+      "note": "Deliberately strict because a transfer verb plus URL is common benign workflow prose. The all-scope sensitive_value_exfil_to_url sibling handles explicit secret exfiltration without widening this rule. psfn-framework-qrch1."
     },
     {
       "id": "context_exfiltration",
@@ -419,7 +467,8 @@
       "labels": ["policy/security_modification"],
       "scope": "strict",
       "weight": 0.7,
-      "match": { "kind": "regex", "pattern": "(?:\\$HOME|~)/\\.ssh\\b" }
+      "match": { "kind": "regex", "pattern": "(?:\\$HOME|~)/\\.ssh\\b" },
+      "note": "Deliberately strict because a bare SSH directory path appears in benign operations discussion. The all-scope read_secret_files rule covers action-bound private-key access. psfn-framework-68daq and psfn-framework-qrch1."
     },
     {
       "id": "destructive_filesystem_command",
@@ -451,10 +500,25 @@
       "match": {
         "kind": "near",
         "left": "\\b(?:update|modify|edit|write|change|append|add)\\b",
-        "right": "(?:AGENTS\\.md|CLAUDE\\.md|SOUL\\.md|\\.cursorrules|\\.clinerules)",
+        "right": "(?:AGENTS\\.md|CLAUDE\\.md|SOUL\\.md|\\.cursorrules|\\.cursor/rules(?:/[^\\s'\"`]{1,256})?|\\.clinerules)",
         "maxGapChars": 2048,
         "sameLine": true
-      }
+      },
+      "note": "Deliberately strict because legitimate maintenance edits these files. The path alternation includes the modern .cursor/rules directory; the context-tier hidden_agent_instruction_file sibling catches an untrusted hidden-line framing without widening ordinary path discussion. psfn-framework-68daq and psfn-framework-qrch1."
+    },
+    {
+      "id": "hidden_agent_instruction_file",
+      "labels": ["policy/security_modification"],
+      "scope": "context",
+      "weight": 0.85,
+      "match": {
+        "kind": "near",
+        "left": "\\b(?:hidden\\s{1,8}line|embedded\\s{1,8}instruction|injected\\s{1,8}instruction)\\b",
+        "right": "(?:AGENTS\\.md|CLAUDE\\.md|SOUL\\.md|\\.cursorrules|\\.cursor/rules(?:/[^\\s'\"`]{1,256})?|\\.clinerules)",
+        "maxGapChars": 256,
+        "sameLine": true
+      },
+      "note": "A hidden/embedded/injected directive explicitly tied to an agent instruction path is high-signal on prompt-bearing intake. Bare .cursor/rules references stay silent. psfn-framework-68daq."
     },
     {
       "id": "psfn_owner_config_mod",

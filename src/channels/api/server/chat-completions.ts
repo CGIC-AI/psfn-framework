@@ -76,7 +76,10 @@ import {
   resolveBearerCompanionTarget,
   type BearerCompanionRoutingConfig,
 } from './bearer-companion-selector.js';
-import { screenChatMessageBody } from '../../../core/cogsec/intake/chat-message-screening.js';
+import {
+  createAuthenticatedPrivateDirectChatScope,
+  screenChatMessageBody,
+} from '../../../core/cogsec/intake/chat-message-screening.js';
 
 const IDENTITY_LINK_CHALLENGE_TTL_MS = 5 * 60_000;
 
@@ -823,6 +826,16 @@ export class ApiChatCompletionsHandler {
     const lastUserMsg = getLastUserMessage(request.messages);
     const lastUserAttachments = getLastUserMessageAttachments(request.messages);
     const bodyMessageId = `api-body-${randomUUID()}`;
+    const chatBodyChannelClass = source === 'api'
+      ? 'api_direct' as const
+      : source === 'companion-ui'
+        ? 'companion_ui' as const
+        : undefined;
+    const privateDirectScope = canonicalContactId
+      && resolvedChannelPrivacy === 'private'
+      && chatBodyChannelClass
+      ? createAuthenticatedPrivateDirectChatScope({ channelId, canonicalContactId })
+      : undefined;
     const screenedBody = await screenChatMessageBody({
       content: lastUserMsg,
       screening: this.documentIngest?.intakeScreening,
@@ -835,6 +848,10 @@ export class ApiChatCompletionsHandler {
       channelId,
       messageId: bodyMessageId,
       ...(canonicalContactId ? { canonicalContactId } : {}),
+      ...(resolvedChannelPrivacy ? { channelPrivacy: resolvedChannelPrivacy } : {}),
+      ...(chatBodyChannelClass ? { channelClass: chatBodyChannelClass } : {}),
+      ...(privateDirectScope ? { conversationScope: privateDirectScope } : {}),
+      ...(this.contactStore ? { contactStore: this.contactStore } : {}),
     });
     // htm9.9: `file` content parts run the shared file-ingest pipeline
     // (quarantine -> parse -> intake screening) before prompt assembly.

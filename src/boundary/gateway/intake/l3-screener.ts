@@ -63,10 +63,10 @@ import {
 import {
   isL3MandatoryTier,
   l3EscalationConfidenceThresholdForTier,
-  isIntakeEnforcingMode,
   intakeModeEnforcementPosture,
   type IntakePolicyConfig,
 } from '../../../system/config/intake-policy-config.js';
+import type { IntakeEnforcementPosture } from '../../../shared/contracts/cogsec-mode.js';
 import {
   INTAKE_QUARANTINE_RISK_LABELS,
   renderIntakeWithheldContentPlaceholder,
@@ -811,6 +811,8 @@ export interface ApplyL3ScreeningOutcomeInput {
    * escalation seam. Defaults to the static class tier from policy.
    */
   sourceRiskTier?: IntakeSourceRiskTier;
+  /** Explicit item posture for narrow policy-owned observe-only chat bodies. */
+  enforcementPosture?: IntakeEnforcementPosture;
   /**
    * Screening fields from the layers that ran before L3 (L1 report, L1.5
    * score, prior signals, the L2 verdict), folded into the envelope's
@@ -852,7 +854,7 @@ export interface L3EscalationResult {
   /** The envelope in state 'quarantined' or 'released_sanitized'. */
   envelope: IntakeEnvelope;
   snapshot: IntakeEnvelopeSnapshot;
-  action: Extract<IntakeDecisionAction, 'quarantine' | 'sanitize'>;
+  action: Extract<IntakeDecisionAction, 'pass' | 'quarantine' | 'sanitize'>;
   mode: 'shadow' | 'enforce';
   /**
    * Text for downstream use. Shadow mode: always the original input
@@ -888,10 +890,12 @@ function buildContentRef(text: string, store: string): {
 }
 
 /**
- * Enforces the operator-locked hard rule for everything that reaches L3:
+ * Enforces the operator-locked rule for everything that reaches L3:
  * the item becomes an IntakeEnvelope routed to 'quarantined' (flagged or
  * failed-closed) or 'released_sanitized' (cleared, with explicit reasons),
  * AND an auditable CogSecEvent is written — every invocation, no exceptions.
+ * A narrow owner-resolved chat-body posture records the same findings and
+ * audit event while routing the original body as released without a hold.
  * A failed CogSecEvent write throws: without its audit record the item must
  * not be delivered at all (fail closed; the caller withholds).
  */
@@ -906,12 +910,13 @@ export function applyL3ScreeningOutcome(
     );
   }
   const mode = config.mode;
-  const posture = intakeModeEnforcementPosture(mode);
+  const posture = input.enforcementPosture ?? intakeModeEnforcementPosture(mode);
+  const itemObserveOnly = input.enforcementPosture === 'shadow';
   const actor = input.actor ?? 'gateway:intake-l3';
   const atMs = input.atMs ?? Date.now();
   const sourceRiskTier = input.sourceRiskTier ?? config.sourceRiskTiers[input.sourceClass];
 
-  let action: Extract<IntakeDecisionAction, 'quarantine' | 'sanitize'>;
+  let action: Extract<IntakeDecisionAction, 'pass' | 'quarantine' | 'sanitize'>;
   let reason: string;
   if (outcome.kind === 'failed_closed') {
     action = 'quarantine';
@@ -930,6 +935,10 @@ export function applyL3ScreeningOutcome(
       + `; confidence=${outcome.aggregate.injectionConfidence.toFixed(3)}`
       + `; models=${outcome.aggregate.models.join('+')}`
       + `; via=${outcome.escalationReason}`;
+  }
+  if (itemObserveOnly) {
+    action = 'pass';
+    reason = `chat-body-mark-only:${reason}`;
   }
   reason = reason.slice(0, COGSEC_DECISION_REASON_MAX_CHARS);
 
@@ -979,9 +988,9 @@ export function applyL3ScreeningOutcome(
     atMs,
   });
 
-  const withheld = isIntakeEnforcingMode(mode) && action === 'quarantine';
+  const withheld = posture === 'enforce' && action === 'quarantine';
   let effectiveText = input.text;
-  if (isIntakeEnforcingMode(mode)) {
+  if (posture === 'enforce') {
     effectiveText = withheld
       ? renderIntakeWithheldContentPlaceholder()
       : renderIntakeSafeRepresentation(
@@ -999,19 +1008,32 @@ export function applyL3ScreeningOutcome(
   let safeAgentSummary: string;
   if (outcome.kind === 'failed_closed') {
     severity = 'high';
-    safeAgentSummary = `Intake L3 heavy screening could not complete for one `
-      + `${input.sourceClass} item; it is held fail-closed in quarantine `
-      + `(mode ${mode}, envelope ${envelope.id})`;
+    safeAgentSummary = itemObserveOnly
+      ? `Intake L3 heavy screening could not complete for one ${input.sourceClass} `
+        + `chat body; the owner-configured observe-only handling recorded it without withholding `
+        + `(mode ${mode}, envelope ${envelope.id})`
+      : `Intake L3 heavy screening could not complete for one `
+        + `${input.sourceClass} item; it is held fail-closed in quarantine `
+        + `(mode ${mode}, envelope ${envelope.id})`;
   } else if (outcome.aggregate.flagged) {
     severity = 'high';
-    safeAgentSummary = `Intake L3 heavy screening held one ${input.sourceClass} `
-      + `item in quarantine pending review (mode ${mode}, ${dualNote} verdict, `
-      + `${String(outcome.aggregate.labels.length)} risk labels, envelope ${envelope.id})`;
+    safeAgentSummary = itemObserveOnly
+      ? `Intake L3 heavy screening recorded one flagged ${input.sourceClass} chat body `
+        + `without withholding under owner-configured observe-only handling (mode ${mode}, `
+        + `${dualNote} verdict, ${String(outcome.aggregate.labels.length)} risk labels, `
+        + `envelope ${envelope.id})`
+      : `Intake L3 heavy screening held one ${input.sourceClass} `
+        + `item in quarantine pending review (mode ${mode}, ${dualNote} verdict, `
+        + `${String(outcome.aggregate.labels.length)} risk labels, envelope ${envelope.id})`;
   } else {
     severity = 'low';
-    safeAgentSummary = `Intake L3 heavy screening cleared one ${input.sourceClass} `
-      + `item and substituted a neutral safe representation (mode ${mode}, `
-      + `${dualNote} verdict, envelope ${envelope.id})`;
+    safeAgentSummary = itemObserveOnly
+      ? `Intake L3 heavy screening cleared one ${input.sourceClass} chat body and recorded `
+        + `the verdict without rewriting it under owner-configured observe-only handling `
+        + `(mode ${mode}, ${dualNote} verdict, envelope ${envelope.id})`
+      : `Intake L3 heavy screening cleared one ${input.sourceClass} `
+        + `item and substituted a neutral safe representation (mode ${mode}, `
+        + `${dualNote} verdict, envelope ${envelope.id})`;
   }
 
   // Fail closed: if this write throws, the caller receives the exception and
@@ -1025,7 +1047,11 @@ export function applyL3ScreeningOutcome(
     actions: [],
     safeAgentSummary,
     ...(outcome.kind === 'failed_closed'
-      ? { failureDetails: 'L3 screener call or verdict validation failed; item held fail-closed (see envelope journal and gateway logs)' }
+      ? {
+        failureDetails: itemObserveOnly
+          ? 'L3 screener call or verdict validation failed; owner-configured observe-only chat handling recorded the failure (see envelope journal and gateway logs)'
+          : 'L3 screener call or verdict validation failed; item held fail-closed (see envelope journal and gateway logs)',
+      }
       : {}),
     sealedForensicPayloadHashes: [`sha256:${contentRef.sha256}`],
   });

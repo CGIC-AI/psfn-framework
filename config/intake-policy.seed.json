@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 5,
+  "schemaVersion": 6,
   "mode": "shadow",
   "sourceRiskTiers": {
     "operator": "trusted",
@@ -79,6 +79,13 @@
     "enabled": true,
     "timeoutMs": 20000,
     "maxOutputTokens": 1600
+  },
+  "chatBodyHandling": {
+    "highestTrustPrivateDirect": {
+      "findingDisposition": "mark_only",
+      "eligibleChannelClasses": ["api_direct", "companion_ui"],
+      "trustResolutionMaxAgeMs": 5000
+    }
   },
   "sinkGates": {
     "benignClasses": {

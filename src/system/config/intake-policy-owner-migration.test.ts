@@ -339,4 +339,37 @@ describe('intake policy owner migration', () => {
     });
     expect(loadIntakePolicyConfig(dataDir).screeningPool.concurrency).toBeGreaterThanOrEqual(2);
   });
+
+  it('upgrades a v5 owner with the owner-defined private direct chat-body policy', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-intake-policy-migration-'));
+    tempDirs.push(dataDir);
+    const filePath = join(dataDir, INTAKE_POLICY_FILE_NAME);
+    const legacy = JSON.parse(
+      readFileSync(join(process.cwd(), 'config', 'intake-policy.seed.json'), 'utf8'),
+    ) as Record<string, unknown>;
+    legacy.schemaVersion = 5;
+    delete legacy.chatBodyHandling;
+    writeFileSync(filePath, `${JSON.stringify(legacy, null, 2)}\n`);
+
+    expect(() => loadIntakePolicyConfig(dataDir))
+      .toThrow(/schemaVersion 5 owners require the explicit migrate:intake-policy-owner command/);
+    expect(migrateIntakePolicyOwner({ dataDir })).toMatchObject({
+      status: 'planned',
+      fromSchemaVersion: 5,
+      toSchemaVersion: INTAKE_POLICY_SCHEMA_VERSION,
+      addedPaths: ['chatBodyHandling'],
+    });
+    expect(migrateIntakePolicyOwner({ dataDir, apply: true })).toMatchObject({
+      status: 'applied',
+      fromSchemaVersion: 5,
+      addedPaths: ['chatBodyHandling'],
+    });
+    expect(loadIntakePolicyConfig(dataDir).chatBodyHandling).toEqual({
+      highestTrustPrivateDirect: {
+        findingDisposition: 'mark_only',
+        eligibleChannelClasses: ['api_direct', 'companion_ui'],
+        trustResolutionMaxAgeMs: 5_000,
+      },
+    });
+  });
 });

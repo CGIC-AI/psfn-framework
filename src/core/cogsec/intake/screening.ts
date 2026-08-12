@@ -69,9 +69,12 @@ import {
 import {
   injectionScoreThresholdForTier,
   type IntakeBenignClass,
+  type IntakeChatBodyChannelClass,
   type IntakePolicyConfig,
 } from '../../../system/config/intake-policy-config.js';
 import type { ChannelPrivacy } from '../../../system/trust/context-envelope.js';
+import type { ConversationScope } from '../../session/conversation-scope.js';
+import type { TrustLevel } from '../../../system/trust/types.js';
 import { INTAKE_FIREWALL_NOTICE_TEMPLATES } from '../intake-firewall-notice-templates.js';
 import {
   INTAKE_QUARANTINE_RISK_LABELS,
@@ -140,6 +143,8 @@ export interface IntakeEscalationRequest {
   text: string;
   sourceClass: IntakeSourceClass;
   sourceRiskTier: IntakeSourceRiskTier;
+  /** Explicit per-item posture; private-direct mark-only uses observe-only. */
+  enforcementPosture?: IntakeEnforcementPosture;
   priorScore: number;
   origin: { ref: string; detail?: string };
   subject?: IntakeEnvelopeSubject;
@@ -260,6 +265,21 @@ export interface IntakeScreeningInput {
   canonicalContactId?: string;
   /** Canonical channel classification supplied by the authenticated surface. */
   channelPrivacy?: ChannelPrivacy;
+  /**
+   * Canonical, content-free evidence for the narrow owner-configured private
+   * direct-chat handling rule. Missing or contradictory fields simply retain
+   * the ordinary stricter screening path.
+   */
+  chatBodyContext?: {
+    channelClass: IntakeChatBodyChannelClass;
+    conversationScope: ConversationScope;
+    contactTrust: {
+      contactId: string;
+      trustLevel: TrustLevel;
+      resolvedAtMs: number;
+      archived: boolean;
+    };
+  };
   /**
    * Signals from screeners that already ran on this content upstream (htm9.8
    * vision screener). Folded into the envelope; quarantine-family prior labels
@@ -744,6 +764,30 @@ export function createIntakeScreeningService(
     };
   }
 
+  function isHighestTrustPrivateDirectMarkOnly(input: IntakeScreeningInput): boolean {
+    const rule = policy.chatBodyHandling.highestTrustPrivateDirect;
+    const context = input.chatBodyContext;
+    if (rule.findingDisposition !== 'mark_only' || !context) return false;
+    const scope = context.conversationScope;
+    const ageMs = (input.atMs ?? now()) - context.contactTrust.resolvedAtMs;
+    return rule.eligibleChannelClasses.includes(context.channelClass)
+      && input.sourceClass === 'primary_user'
+      && input.canonicalContactId !== undefined
+      && scope.kind === 'dm'
+      && scope.contact.contactId === input.canonicalContactId
+      && context.contactTrust.contactId === input.canonicalContactId
+      && context.contactTrust.trustLevel === 'primary'
+      && context.contactTrust.archived === false
+      && scope.channelId === input.sourceChannelId
+      && input.channelPrivacy === 'private'
+      && scope.envelope.channelPrivacy === 'private'
+      && scope.envelope.audienceScope === 'one'
+      && scope.envelope.audienceKnowledge === 'all_known'
+      && scope.envelope.broadcast === false
+      && ageMs >= 0
+      && ageMs <= rule.trustResolutionMaxAgeMs;
+  }
+
   function emitTiming(
     input: IntakeScreeningInput,
     stage: IntakeScreeningTimingStage,
@@ -860,7 +904,7 @@ export function createIntakeScreeningService(
     const injectionScoreForDecision = escalationExtras?.observeUncorroboratedSemanticScore
       ? undefined
       : scorerOutcome.score;
-    const decision = escalationExtras?.forced
+    const screenedDecision = escalationExtras?.forced
       ? { action: escalationExtras.forced.action, reason: escalationExtras.forced.reason }
       : decideAction({
         report,
@@ -868,6 +912,13 @@ export function createIntakeScreeningService(
         injectionScoreThreshold: injectionScoreThresholdForTier(policy, sourceRiskTier),
         priorSignals,
       });
+    const markOnlyChatBody = isHighestTrustPrivateDirectMarkOnly(input);
+    const decision = markOnlyChatBody && screenedDecision.action !== 'pass'
+      ? {
+        action: 'pass' as const,
+        reason: `chat-body-mark-only:${screenedDecision.reason}`,
+      }
+      : screenedDecision;
     const ruleMatchEvidence = ruleMatchesForDecision(report, decision);
     const intakeDecision: IntakeDecision = {
       action: decision.action,
@@ -903,6 +954,12 @@ export function createIntakeScreeningService(
       ...(escalationExtras?.contribution?.extractedFields ?? {}),
       ...(escalationExtras?.observeUncorroboratedSemanticScore
         ? { 'semantic_score.disposition': 'observed_first_party_closed_channel' }
+        : {}),
+      ...(markOnlyChatBody
+        ? {
+          'chat_body.handling': 'highest_trust_private_direct_mark_only',
+          'chat_body.screened_action': screenedDecision.action,
+        }
         : {}),
     };
 
@@ -1107,6 +1164,9 @@ export function createIntakeScreeningService(
         text,
         sourceClass: input.sourceClass,
         sourceRiskTier: adjusted.tier,
+        ...(isHighestTrustPrivateDirectMarkOnly(input)
+          ? { enforcementPosture: 'shadow' as const }
+          : {}),
         priorScore,
         origin: input.origin,
         ...(input.subject ? { subject: input.subject } : {}),

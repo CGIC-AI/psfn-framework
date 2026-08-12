@@ -31,14 +31,14 @@ describe('maintenance CLI entrypoints', () => {
     scratchDirs.length = 0;
   });
 
-  it('describes every supported intake-policy migration source and the v5 target', async () => {
+  it('describes every supported intake-policy migration source and the v6 target', async () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
 
     const result = await runIntakePolicyOwnerMigrationCli(['--help']);
 
     expect(result).toBeUndefined();
     expect(log.mock.calls.flat().join('\n')).toContain(
-      'Upgrades schema-v1/v2/v3/v4 intake-policy.json owners to v5',
+      'Upgrades schema-v1/v2/v3/v4/v5 intake-policy.json owners to v6',
     );
   });
 

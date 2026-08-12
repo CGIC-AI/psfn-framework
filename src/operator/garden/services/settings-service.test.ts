@@ -221,6 +221,13 @@ describe('AdminSettingsDataService', () => {
 
     expect(service.getIntakePolicyOverview()).toMatchObject({
       schemaVersion: INTAKE_POLICY_SCHEMA_VERSION,
+      chatBodyHandling: {
+        highestTrustPrivateDirect: {
+          findingDisposition: 'mark_only',
+          eligibleChannelClasses: ['api_direct', 'companion_ui'],
+          trustResolutionMaxAgeMs: 5_000,
+        },
+      },
       urlScanner: {
         schemeActions: {
           javascript: 'deny',
@@ -251,9 +258,23 @@ describe('AdminSettingsDataService', () => {
 
     const raw = service.getSubConfigJson('intake-policy');
     expect(raw).not.toBeNull();
-    const missingSkillWrite = JSON.parse(raw!) as {
+    const owner = JSON.parse(raw!) as {
+      chatBodyHandling: {
+        highestTrustPrivateDirect: { eligibleChannelClasses: string[] };
+      };
       sinkGates: { sinks: Record<string, unknown> };
     };
+    const unsupportedDiscordEligibility = structuredClone(owner);
+    unsupportedDiscordEligibility.chatBodyHandling
+      .highestTrustPrivateDirect.eligibleChannelClasses = ['discord'];
+    expect(await service.saveSubConfigJson(
+      'intake-policy',
+      JSON.stringify(unsupportedDiscordEligibility),
+    )).toMatchObject({
+      ok: false,
+      message: expect.stringMatching(/unsupported.*discord/i),
+    });
+    const missingSkillWrite = structuredClone(owner);
     delete missingSkillWrite.sinkGates.sinks.skill_write;
     expect(await service.saveSubConfigJson(
       'intake-policy',

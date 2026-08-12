@@ -55,7 +55,7 @@ export class AutomataBusIndexingService {
       companionId: finding.companionId,
       stage,
       modelIdentity: this.embeddings.identity,
-    }).catch(() => undefined);
+    });
     return {
       status: 'lagging',
       eventId: finding.eventId,
@@ -106,7 +106,7 @@ export class AutomataBusIndexingService {
       eventId: finding.eventId,
       companionId: finding.companionId,
       modelIdentity: this.embeddings.identity,
-    }).catch(() => undefined);
+    });
     return {
       status: 'indexed',
       eventId: finding.eventId,

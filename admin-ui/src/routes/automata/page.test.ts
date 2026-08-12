@@ -19,6 +19,12 @@ describe('Automata Garden page', () => {
     expect(source).toContain('Bus data is stale');
     expect(source).toContain('Bus reads are degraded');
     expect(source).toContain('No retained runs match these filters');
+    expect(source).toContain('Bus: {run.busEligibility}');
+    expect(source).toContain('Parent: {run.parentRunId');
+    expect(source).toContain('Source: {run.sourceRunId');
+    expect(source).toContain('Promotion: {run.promotionState}');
+    expect(source).toContain('Fold: {run.foldState}');
+    expect(source).toContain('{run.retentionState}');
     expect(source).toContain('Instruction and tool lessons');
     expect(source).toContain('Lesson projection unavailable');
     expect(source).toContain('low support, contradictions, inference-only evidence, or truncated traces');

@@ -135,6 +135,7 @@ interface PendingTurn {
   channelId: string;
   releaseChannel: () => void;
   substrateMsg: SubstrateMessage;
+  conversationScope?: import('../../core/session/conversation-scope.js').ConversationScope;
 }
 
 interface TurnRoutingOverrides {
@@ -587,7 +588,13 @@ export class AgentApiBackend {
 
       turnCompletion = this.observeTurnCompletion(pendingTurn.value.substrateMsg.id);
       activeRequest.markActive();
-      const turnPromise = this.agentLoop.handleMessage(pendingTurn.value.substrateMsg);
+      const turnPromise = this.agentLoop.handleMessage(
+        pendingTurn.value.substrateMsg,
+        undefined,
+        pendingTurn.value.conversationScope
+          ? { conversationScope: pendingTurn.value.conversationScope }
+          : undefined,
+      );
       turnCompletion.attachFallback(turnPromise);
       this.attachTurnCleanup(pendingTurn.value.releaseChannel, turnPromise);
       const turnTimeoutPromise = timeoutMs === null
@@ -1801,6 +1808,7 @@ export class AgentApiBackend {
         channelId,
         releaseChannel,
         substrateMsg,
+        ...(privateDirectScope ? { conversationScope: privateDirectScope } : {}),
       },
     };
   }

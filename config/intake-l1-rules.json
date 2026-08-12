@@ -401,9 +401,9 @@
       "weight": 0.85,
       "match": {
         "kind": "regex",
-        "pattern": "(?:\\b(?:cat|less|head|tail)\\s{1,64}(?:-[A-Za-z]{1,16}\\s{1,16})?|\\b(?:read(?:ing)?|open(?:ing)?|print(?:ing)?|copy(?:ing)?|include|upload(?:ing)?)\\s{1,16}(?:the\\s{1,8})?(?:(?:file|contents?|private\\s{1,8}key)\\s{1,8}(?:(?:at|from|of)\\s{1,8})?)?)(?:\\.env\\b|credentials|\\.netrc\\b|\\.pgpass\\b|\\.npmrc\\b|\\.pypirc\\b|/etc/(?:passwd|shadow)\\b|(?:\\$HOME|~|/home/[A-Za-z0-9._-]{1,64})/\\.ssh/(?:id_(?:rsa|dsa|ecdsa|ed25519)|[A-Za-z0-9._-]{1,64}\\.pem)\\b)"
+        "pattern": "(?:^|[\\n;:]\\s{0,16}|\\b(?:please|then|now|execute|run)\\s{0,16})(?:(?:cat|less|head|tail)\\s{1,64}(?:-[A-Za-z]{1,16}\\s{1,16})?|(?:read|open|print|copy|include|upload)\\s{1,16}(?:the\\s{1,8})?(?:(?:file|contents?|private\\s{1,8}key)\\s{1,8}(?:(?:at|from|of)\\s{1,8})?)?)(?:\\.env\\b|credentials|\\.netrc\\b|\\.pgpass\\b|\\.npmrc\\b|\\.pypirc\\b|/etc/(?:passwd|shadow)\\b|(?:\\$HOME|~|/home/[A-Za-z0-9._-]{1,64})/\\.ssh/(?:id_(?:rsa|dsa|ecdsa|ed25519)|[A-Za-z0-9._-]{1,64}\\.pem)\\b)"
       },
-      "note": "Universal only because a bounded direct read/copy/exfil action must bind to a credential store, passwd-class system file, or concrete SSH private-key path. 'Read about' phrasing and bare path discussion remain silent. psfn-framework-68daq."
+      "note": "Universal only for a clause-initial command or explicit imperative cue bound to a credential store, passwd-class system file, or concrete SSH private-key path. Gerunds, negated advice, questions, and meta discussion remain semantic L2 concerns. psfn-framework-68daq."
     },
     {
       "id": "sensitive_value_exfil_to_url",
@@ -412,9 +412,9 @@
       "weight": 0.95,
       "match": {
         "kind": "regex",
-        "pattern": "\\b(?:send|post|upload|transmit)\\s{1,64}(?:the\\s{1,8})?(?:api[ _-]?key|password|credential|access[ _-]?token|secret)\\s{1,64}(?:to|at)\\s{1,8}https?://"
+        "pattern": "(?:^|[\\n;:]\\s{0,16}|\\b(?:please|then|now)\\s{1,16})(?:send|post|upload|transmit)\\s{1,64}(?:the\\s{1,8})?(?:api[ _-]?key|password|credential|access[ _-]?token|secret)\\s{1,64}(?:to|at)\\s{1,8}https?://"
       },
-      "note": "Universal high-confidence exfiltration requires a transfer verb, an explicitly sensitive value, and an HTTP destination in one bounded phrase. The broad transfer-to-URL rule remains strict. psfn-framework-qrch1."
+      "note": "Universal high-confidence exfiltration requires a clause-initial direct transfer imperative, an explicitly sensitive value, and an HTTP destination. Negated advice and meta discussion remain semantic L2 concerns. psfn-framework-qrch1."
     },
     {
       "id": "instruction_bearing_link",

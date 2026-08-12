@@ -306,6 +306,7 @@ export function createGatewayIntakeEscalationPort(
         envelope: result.envelope,
         snapshot: result.snapshot,
         action: result.action,
+        mode: result.mode,
         effectiveText: result.effectiveText,
         withheld: result.withheld,
         cogSecCaseId: result.cogSecCaseId,

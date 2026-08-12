@@ -171,6 +171,9 @@ describe('AgentApiBackend chat body intake screening', () => {
         contact: { contactId: primaryContact.id },
       }),
     );
+    const screenedScope = screen.mock.calls[0]?.[1]?.chatBodyContext?.conversationScope;
+    expect(screenedScope).toBeDefined();
+    expect(handleMessage.mock.calls[0]?.[2]?.conversationScope).toBe(screenedScope);
   });
 });
 

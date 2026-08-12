@@ -307,6 +307,8 @@ export async function prepareTurnIdentityState(input: {
   requestId: string;
   turnCorrelationBase: CorrelationMetadata;
   observability: Pick<TurnExecutionObservability, 'emitObservedTurnStage' | 'emitPerformanceStage'>;
+  /** Authenticated scope already used to screen this exact chat body. */
+  conversationScope?: ConversationScope;
   deferSessionEntryPersistence?: boolean;
   skipSessionEntryPersistence?: boolean;
 }): Promise<PreparedTurnIdentityState> {
@@ -477,9 +479,10 @@ export async function prepareTurnIdentityState(input: {
         resolveSessionActorKind(authorContext),
       );
 
-  // Single per-turn ConversationScope resolution (session-manager ingress).
-  // Resolved after the turn's user message is recorded so the recent-speaker
-  // scan sees the same session state the context build sees.
+  // Single per-turn ConversationScope authority (session-manager ingress).
+  // Authenticated API direct-chat intake threads the exact scope object already
+  // used for screening. Other turns resolve after recording the user message
+  // so their recent-speaker scan sees the same session state as context build.
   //
   // E1.7: a scheduler-dispatched reflection/heartbeat turn may carry an explicit
   // group scope hint. When present, the reflection reflects on the ROOM: the
@@ -504,7 +507,20 @@ export async function prepareTurnIdentityState(input: {
   // ingress. Group reflection turns fail closed (no contact lookups through
   // the internal transport channel).
   let conversationScope: ConversationScope;
-  if (reflectionScopeHint?.kind === 'group') {
+  if (input.conversationScope) {
+    if (reflectionScopeHint) {
+      throw new Error('Authenticated chat ConversationScope conflicts with reflection scope');
+    }
+    if (input.conversationScope.channelId !== message.channelId) {
+      throw new Error('Authenticated chat ConversationScope channel does not match the turn');
+    }
+    if (input.conversationScope.kind !== 'dm'
+      || channelMeta.isDirectMessage !== true
+      || input.conversationScope.envelope.channelPrivacy !== channelMeta.privacyLevel) {
+      throw new Error('Authenticated chat ConversationScope topology conflicts with the turn');
+    }
+    conversationScope = input.conversationScope;
+  } else if (reflectionScopeHint?.kind === 'group') {
     conversationScope = sessionReads.resolveForeignSessionForTurn(
       'reflection group conversation scope',
       reflectionScopeHint.roomId,

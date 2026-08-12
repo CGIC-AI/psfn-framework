@@ -345,7 +345,10 @@ describe('intake policy owner migration', () => {
     tempDirs.push(dataDir);
     const filePath = join(dataDir, INTAKE_POLICY_FILE_NAME);
     const legacy = JSON.parse(
-      readFileSync(join(process.cwd(), 'config', 'intake-policy.seed.json'), 'utf8'),
+      readFileSync(
+        join(process.cwd(), 'src', 'system', 'config', 'fixtures', 'intake-policy.v5.json'),
+        'utf8',
+      ),
     ) as Record<string, unknown>;
     legacy.schemaVersion = 5;
     delete legacy.chatBodyHandling;
@@ -358,11 +361,13 @@ describe('intake policy owner migration', () => {
       fromSchemaVersion: 5,
       toSchemaVersion: INTAKE_POLICY_SCHEMA_VERSION,
       addedPaths: ['chatBodyHandling'],
+      updatedPaths: ['l2Screener.mandatoryTiers'],
     });
     expect(migrateIntakePolicyOwner({ dataDir, apply: true })).toMatchObject({
       status: 'applied',
       fromSchemaVersion: 5,
       addedPaths: ['chatBodyHandling'],
+      updatedPaths: ['l2Screener.mandatoryTiers'],
     });
     expect(loadIntakePolicyConfig(dataDir).chatBodyHandling).toEqual({
       highestTrustPrivateDirect: {
@@ -371,5 +376,26 @@ describe('intake policy owner migration', () => {
         trustResolutionMaxAgeMs: 5_000,
       },
     });
+    expect(loadIntakePolicyConfig(dataDir).l2Screener.mandatoryTiers)
+      .toEqual(['untrusted', 'hostile']);
+  });
+
+  it.each([
+    { mandatoryTiers: 'hostile', error: /mandatoryTiers to be an array/ },
+    { mandatoryTiers: ['hostile', 'unknown'], error: /unsupported.*mandatoryTiers entry/ },
+  ])('fails closed on malformed legacy L2 tiers: $mandatoryTiers', ({ mandatoryTiers, error }) => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-intake-policy-migration-'));
+    tempDirs.push(dataDir);
+    const filePath = join(dataDir, INTAKE_POLICY_FILE_NAME);
+    const legacy = JSON.parse(readFileSync(
+      join(process.cwd(), 'src', 'system', 'config', 'fixtures', 'intake-policy.v5.json'),
+      'utf8',
+    )) as Record<string, unknown>;
+    (legacy.l2Screener as Record<string, unknown>).mandatoryTiers = mandatoryTiers;
+    const before = `${JSON.stringify(legacy, null, 2)}\n`;
+    writeFileSync(filePath, before);
+
+    expect(() => migrateIntakePolicyOwner({ dataDir, apply: true })).toThrow(error);
+    expect(readFileSync(filePath, 'utf8')).toBe(before);
   });
 });

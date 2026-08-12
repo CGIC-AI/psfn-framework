@@ -6,6 +6,7 @@ import {
 } from '../../shared/utils/fs.js';
 import { isRecord } from '../../shared/utils/types.js';
 import {
+  INTAKE_SOURCE_RISK_TIERS,
   compareIntakeSourceRiskTiers,
   isIntakeSourceRiskTier,
 } from '../../shared/contracts/intake-envelope.js';
@@ -147,6 +148,43 @@ function ensureChatBodyHandlingPresent(
   const next = structuredClone(candidate);
   next.chatBodyHandling = loadSeedChatBodyHandlingPolicy(seedDir);
   return { candidate: next, addedPaths: ['chatBodyHandling'] };
+}
+
+function ensureLegacyMandatoryUntrustedL2(
+  candidate: Record<string, unknown>,
+  filePath: string,
+): { candidate: Record<string, unknown>; updatedPaths: string[] } {
+  if (!isRecord(candidate.l2Screener)) {
+    throw new Error(
+      `Intake policy owner migration at ${filePath} requires l2Screener to be an object`,
+    );
+  }
+  const mandatoryTiers = candidate.l2Screener.mandatoryTiers;
+  if (!Array.isArray(mandatoryTiers)) {
+    throw new Error(
+      `Intake policy owner migration at ${filePath} requires l2Screener.mandatoryTiers to be an array`,
+    );
+  }
+  for (const tier of mandatoryTiers) {
+    if (!isIntakeSourceRiskTier(tier)) {
+      throw new Error(
+        `Intake policy owner migration at ${filePath} has unsupported `
+        + `l2Screener.mandatoryTiers entry ${JSON.stringify(tier)}`,
+      );
+    }
+  }
+  if (mandatoryTiers.includes('untrusted')) {
+    return { candidate, updatedPaths: [] };
+  }
+  const next = structuredClone(candidate);
+  const carriedTiers = new Set([...mandatoryTiers, 'untrusted']);
+  if (!isRecord(next.l2Screener)) {
+    throw new Error('Internal intake policy migration error: l2Screener clone was lost');
+  }
+  next.l2Screener.mandatoryTiers = INTAKE_SOURCE_RISK_TIERS.filter(
+    tier => carriedTiers.has(tier),
+  );
+  return { candidate: next, updatedPaths: ['l2Screener.mandatoryTiers'] };
 }
 
 function ensureScreeningPoolPresent(
@@ -422,7 +460,9 @@ export function migrateIntakePolicyOwner(
       ...raw.sinkGates,
       sinks: upgradedSinks,
     };
-    const repaired = repairSelfAuthoredMutationPolicy(upgraded, filePath, {
+    const withMandatoryUntrustedL2 = ensureLegacyMandatoryUntrustedL2(upgraded, filePath);
+    updatedPaths.push(...withMandatoryUntrustedL2.updatedPaths);
+    const repaired = repairSelfAuthoredMutationPolicy(withMandatoryUntrustedL2.candidate, filePath, {
       rejectExistingCompanionSelf: raw.schemaVersion === 1 || raw.schemaVersion === 2,
     });
     addedPaths.push(...repaired.addedPaths);

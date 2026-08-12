@@ -1,6 +1,6 @@
 # Cognitive Security: The Cognition Intake Firewall
 
-Last updated: 2026-08-11.
+Last updated: 2026-08-12.
 
 This document covers the cognition intake firewall (the htm9 epic): the
 threat model, the envelope/taint contract, the screening layers, the sink
@@ -24,7 +24,7 @@ firewall is the pre-hoc half of that same system.
 
 ## Global mode contract
 
-Schema-v5 `intake-policy.json` accepts exactly three global modes:
+Schema-v6 `intake-policy.json` accepts exactly three global modes:
 
 - `shadow` screens every declared vector and records decisions without
   changing delivery, except that a hard lethal-trifecta denial remains
@@ -38,7 +38,7 @@ The vector classification and decision matrix live in
 `src/shared/contracts/cogsec-mode.ts`. Structural call-site provenance, not
 message text or model arguments, determines whether an item is internal.
 External bytes cannot claim an internal provenance class. The retired global
-values `off` and `enforce` are rejected by schema-v5 validation; the explicit
+values `off` and `enforce` are rejected by schema-v6 validation; the explicit
 owner migration maps them to `shadow` and `strict`, respectively. Some internal
 interfaces and stored quarantine records still use `enforce` for the binary
 per-surface posture produced by both `boundary` and `strict`. That internal
@@ -365,10 +365,14 @@ aggregate flags if either flags (fail-closed aggregation), and both verdicts
 land on the envelope.
 
 Hard rule (operator-locked): anything that reaches L3 generates a CogSec
-event **and** a quarantine entry. `applyL3ScreeningOutcome` folds every
-executed L3 outcome into an envelope ending `quarantined` (flagged or
-failed-closed) or `released_sanitized` (cleared — delivered as the **safe
-representation**, never the raw text). The safe representation is a bounded
+event. Ordinary executed L3 outcomes also create a quarantine entry and end
+`quarantined` (flagged or failed-closed) or `released_sanitized` (cleared —
+delivered as the **safe representation**, never the raw text). The one narrow
+exception is an owner-configured, highest-trust human message in a canonically
+proven private direct chat: its finding remains labeled and audited, but its
+per-item posture is observe-only and the original chat body may continue.
+Group, public, unknown/conflicting topology, external/derived sources, and any
+event/audit/quarantine-store failure never receive this relaxation. The safe representation is a bounded
 neutral summary plus typed extracted fields (content type, key entities, why
 flagged) stored in `envelope.extractedFields`; a verbatim-quote guard rejects
 any screener output that echoes a run of ≥24 chars of the screened content —
@@ -1014,11 +1018,26 @@ silently ignores or aliases the retired keys.
 
 | Knob | Seed default | What it does |
 | --- | --- | --- |
-| `schemaVersion` | `5` | Must be 5. Schema 1/2/3/4 owners require the explicit `migrate:intake-policy-owner` command. |
+| `schemaVersion` | `6` | Must be 6. Schema 1/2/3/4/5 owners require the explicit `migrate:intake-policy-owner` command. |
 | `mode` | `"shadow"` | `shadow` screens and audits without changing delivery, apart from hard lethal-trifecta denial. `boundary` enforces external ingress and outbound publication while structurally authenticated internal activity uses the clean bubble. `strict` screens and enforces all declared vectors. |
 | `sourceRiskTiers` | see below | Risk tier per source class; every class required. |
 | `sourceLists` | all four empty | Operator-curated trusted/denied sites and people (flywheel target). |
 | `urlScanner.schemeActions` | `javascript`: deny; `data`: deny except inline images; `mailto`/`tel`: allow | Per-scheme URL-scanner treatment. Missing or invalid actions fail owner-file validation; unlisted schemes stay silent to avoid false positives in ordinary conversation. |
+
+### `chatBodyHandling`
+
+| Knob | Seed default | What it does |
+| --- | --- | --- |
+| `highestTrustPrivateDirect.findingDisposition` | `"mark_only"` | Makes findings observe-only only for the fully proven chat-body case below; it never weakens scanning or failure handling. |
+| `highestTrustPrivateDirect.eligibleChannelClasses` | `["api_direct", "companion_ui"]` | Explicit authenticated channel classes eligible for the rule. Discord/group/public/unknown channels are deliberately not eligible. |
+| `highestTrustPrivateDirect.trustResolutionMaxAgeMs` | `5000` | Maximum age of the canonical Contact trust snapshot. Missing, stale, archived, conflicting, or non-primary trust follows ordinary enforcement. |
+
+Eligibility additionally requires one canonical private-DM `ConversationScope`
+whose channel/contact/topology matches the screened body. The same resolved
+scope object is threaded into turn execution. Attachments, documents, web or
+search results, tools, subagents, MCP descriptions, images, OCR, and all other
+external or derived content retain their own source-class scrutiny even when a
+relaxed direct chat initiated the work.
 
 Seed `sourceRiskTiers`: `operator`/`companion_self`/`primary_user` → `trusted`;
 `trusted_contact`/`regular_contact`/`audio_transcript`/`shard_foldback` →
@@ -1078,7 +1097,7 @@ already suspect, so an L3 failure always holds the item in `boundary` or `strict
 result classes. It is intentionally not a text or regular-expression
 allowlist: runtime code must first establish the trusted tool identity and an
 exact structured-result contract. Omitting `benignClasses` (including in an
-otherwise valid schema-v5 owner) enables no exemptions.
+otherwise valid schema-v6 owner) enables no exemptions.
 
 | Class | Seed suppression | Runtime proof required |
 | --- | --- | --- |

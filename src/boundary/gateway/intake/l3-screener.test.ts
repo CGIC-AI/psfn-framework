@@ -793,6 +793,7 @@ describe('applyL3ScreeningOutcome', () => {
 
     expect(result).toMatchObject({
       action: 'pass',
+      mode: 'shadow',
       withheld: false,
       effectiveText: HOSTILE_CONTENT,
       envelope: {
@@ -811,6 +812,41 @@ describe('applyL3ScreeningOutcome', () => {
       severity: 'high',
       safeAgentSummary: expect.stringContaining('recorded'),
     });
+  });
+
+  it('does not let explicit chat-body observe-only posture release an L3 runtime failure', async () => {
+    const config = testPolicy({ mode: 'strict' });
+    const events = makeEventStore();
+    const outcome = await evaluateL3({
+      text: HOSTILE_CONTENT,
+      context: baseContext({ sourceClass: 'primary_user', sourceRiskTier: 'trusted' }),
+      l2: L2_FLAGGED,
+      config,
+      models: [PRIMARY_MODEL],
+      backend: BACKEND,
+      testCompletion: fetchHttpError(500, 'Internal Server Error'),
+    });
+    expect(outcome.kind).toBe('failed_closed');
+    const result = applyL3ScreeningOutcome(applyInput(
+      outcome as Exclude<L3ScreeningOutcome, { kind: 'skipped' }>,
+      config,
+      events,
+      {
+        sourceClass: 'primary_user',
+        sourceRiskTier: 'trusted',
+        enforcementPosture: 'shadow',
+      },
+    ));
+
+    expect(result).toMatchObject({
+      action: 'quarantine',
+      mode: 'enforce',
+      withheld: true,
+      effectiveText: renderIntakeWithheldContentPlaceholder(),
+      envelope: { state: 'quarantined' },
+    });
+    expect(events.getEvent(result.cogSecCaseId)?.failureDetails)
+      .toContain('held fail-closed');
   });
 
   it('clear + enforce: explicit released_sanitized decision; safe representation substitutes the raw text', async () => {

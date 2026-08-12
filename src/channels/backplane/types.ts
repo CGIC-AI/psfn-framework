@@ -8,6 +8,7 @@ import type {
 import type { ClarifyDeliverResult, PendingClarification } from '../../boundary/gateway/protocol.js';
 import type { EligibilityRequirements } from '../../system/capabilities/eligibility.js';
 import type { ResolvedReactionSurface } from '../shared/reaction-surface.js';
+import type { ConversationScope } from '../../core/session/conversation-scope.js';
 
 /**
  * mmo9.6.1: in-process turn-control options threaded alongside a dispatched
@@ -20,6 +21,8 @@ import type { ResolvedReactionSurface } from '../shared/reaction-surface.js';
 export interface MessageHandlerOptions {
   signal?: AbortSignal;
   cancellationId?: string;
+  /** Authenticated scope already consumed by pre-dispatch intake screening. */
+  conversationScope?: ConversationScope;
 }
 
 export type MessageHandler = (

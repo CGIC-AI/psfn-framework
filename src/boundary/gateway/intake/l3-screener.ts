@@ -910,8 +910,11 @@ export function applyL3ScreeningOutcome(
     );
   }
   const mode = config.mode;
-  const posture = input.enforcementPosture ?? intakeModeEnforcementPosture(mode);
-  const itemObserveOnly = input.enforcementPosture === 'shadow';
+  const itemObserveOnly = input.enforcementPosture === 'shadow'
+    && outcome.kind === 'screened';
+  const posture = outcome.kind === 'failed_closed' && mode !== 'shadow'
+    ? 'enforce'
+    : input.enforcementPosture ?? intakeModeEnforcementPosture(mode);
   const actor = input.actor ?? 'gateway:intake-l3';
   const atMs = input.atMs ?? Date.now();
   const sourceRiskTier = input.sourceRiskTier ?? config.sourceRiskTiers[input.sourceClass];

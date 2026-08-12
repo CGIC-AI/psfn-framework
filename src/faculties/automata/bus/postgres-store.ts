@@ -49,6 +49,14 @@ export interface AppendAutomataBusEventResult {
   inserted: boolean;
 }
 
+export interface AppendAllocatedAutomataBusEventInput {
+  companionId: string;
+  eventId: string;
+  createEvent(sequence: number): unknown;
+  audiences: readonly AutomataBusAudience[];
+  sensitivity: SensitivityLevel;
+}
+
 export interface PostgresAutomataBusStoreOptions {
   /** Called inside the append transaction, after an idempotent replay check. */
   authorizeAppend?: (event: AutomataBusEvent) => Promise<void> | void;
@@ -89,6 +97,13 @@ interface ParsedAutomataBusEventRow {
 }
 
 const APPEND_INPUT_KEYS = new Set(['companionId', 'event', 'audiences', 'sensitivity']);
+const ALLOCATED_APPEND_INPUT_KEYS = new Set([
+  'companionId',
+  'eventId',
+  'createEvent',
+  'audiences',
+  'sensitivity',
+]);
 const READ_SCOPE_KEYS = new Set(['companionId', 'audience', 'maxSensitivity']);
 const CURRENT_FINDING_READ_SCOPE_KEYS = new Set([
   'companionId',
@@ -182,6 +197,29 @@ function parseAppendInput(input: AppendAutomataBusEventInput): {
   const audiences = parseAudiences(input.audiences, 'audiences');
   if (!isSensitivity(input.sensitivity)) throw new Error('sensitivity must be a supported level');
   return { companionId, event, audiences, sensitivity: input.sensitivity };
+}
+
+function parseAllocatedAppendInput(input: AppendAllocatedAutomataBusEventInput): {
+  companionId: string;
+  eventId: string;
+  createEvent: (sequence: number) => unknown;
+  audiences: AutomataBusAudience[];
+  sensitivity: SensitivityLevel;
+} {
+  if (!isRecord(input)) throw new Error('Automata Bus allocated append input must be an object');
+  assertExactKeys(input, ALLOCATED_APPEND_INPUT_KEYS, 'Automata Bus allocated append input');
+  const companionId = requireNonEmptyString(input.companionId, 'companionId');
+  const eventId = requireNonEmptyString(input.eventId, 'eventId');
+  if (typeof input.createEvent !== 'function') throw new Error('createEvent must be a function');
+  const audiences = parseAudiences(input.audiences, 'audiences');
+  if (!isSensitivity(input.sensitivity)) throw new Error('sensitivity must be a supported level');
+  return {
+    companionId,
+    eventId,
+    createEvent: input.createEvent,
+    audiences,
+    sensitivity: input.sensitivity,
+  };
 }
 
 function parseReadScope(input: AutomataBusReadScope): AutomataBusReadScope {
@@ -326,15 +364,85 @@ export class PostgresAutomataBusStore {
         WHERE companion_id = $1 AND event_id = $2
         FOR UPDATE
       `, [companionId, event.eventId]);
-      if (incumbent.rows.length > 0) {
-        const existing = parseEventRow(incumbent.rows[0]);
-        if (!samePersistedEvent(existing, event, audiences, sensitivity)) {
-          throw new Error(`Automata Bus eventId ${event.eventId} was reused with different content`);
-        }
-        return { event: existing.event, inserted: false };
-      }
+      return await this.appendLocked(client, {
+        companionId,
+        event,
+        audiences,
+        sensitivity,
+      }, incumbent.rows[0]);
+    });
+  }
 
-      await this.options.authorizeAppend?.(event);
+  /**
+   * Allocates the canonical sequence and constructs the event while holding the
+   * same companion-scoped database lock used for validation and persistence.
+   */
+  async appendAllocated(
+    input: AppendAllocatedAutomataBusEventInput,
+  ): Promise<AppendAutomataBusEventResult> {
+    const { companionId, eventId, createEvent, audiences, sensitivity } =
+      parseAllocatedAppendInput(input);
+    return withTransaction(this.pool, async (client) => {
+      await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [companionId]);
+      const incumbent = await client.query<AutomataBusEventRow>(`
+        SELECT companion_id, event_id, sequence, audiences, sensitivity, event_json
+        FROM automata_bus_events
+        WHERE companion_id = $1 AND event_id = $2
+        FOR UPDATE
+      `, [companionId, eventId]);
+      const incumbentRow = incumbent.rows[0];
+      const sequence = incumbentRow
+        ? parseEventRow(incumbentRow).sequence
+        : await this.nextSequenceLocked(client, companionId);
+      const event = acceptedEvent(createEvent(sequence), 'Automata Bus allocated event');
+      if (
+        event.companionId !== companionId
+        || event.eventId !== eventId
+        || event.sequence !== sequence
+      ) {
+        throw new Error('Automata Bus allocated event identity does not match its locked allocation');
+      }
+      return await this.appendLocked(client, {
+        companionId,
+        event,
+        audiences,
+        sensitivity,
+      }, incumbentRow);
+    });
+  }
+
+  private async nextSequenceLocked(
+    client: AutomataBusSqlClient,
+    companionId: string,
+  ): Promise<number> {
+    const next = await client.query<{ next_sequence: unknown }>(`
+      SELECT (COALESCE(MAX(sequence), 0) + 1)::bigint AS next_sequence
+      FROM automata_bus_events
+      WHERE companion_id = $1
+    `, [companionId]);
+    return positiveSafeInteger(next.rows[0]?.next_sequence, 'Automata Bus next sequence');
+  }
+
+  private async appendLocked(
+    client: AutomataBusSqlClient,
+    input: {
+      companionId: string;
+      event: AutomataBusEvent;
+      audiences: AutomataBusAudience[];
+      sensitivity: SensitivityLevel;
+    },
+    incumbentRow: AutomataBusEventRow | undefined,
+  ): Promise<AppendAutomataBusEventResult> {
+    const { companionId, event, audiences, sensitivity } = input;
+    if (incumbentRow) {
+      const existing = parseEventRow(incumbentRow);
+      if (!samePersistedEvent(existing, event, audiences, sensitivity)) {
+        throw new Error(`Automata Bus eventId ${event.eventId} was reused with different content`);
+      }
+      return { event: existing.event, inserted: false };
+    }
+
+    await this.options.authorizeAppend?.(event);
 
       const historyRows = await client.query<AutomataBusEventRow>(`
         SELECT companion_id, event_id, sequence, audiences, sensitivity, event_json
@@ -406,7 +514,6 @@ export class PostgresAutomataBusStore {
         }
       }
       return { event: parseEventRow(inserted.rows[0]).event, inserted: true };
-    });
   }
 
   async readHistory(input: AutomataBusReadScope): Promise<AutomataBusEvent[]> {

@@ -60,6 +60,13 @@ class TestAutomataBusPool implements AutomataBusSqlPool {
         row.companion_id === companionId && row.event_id === eventId
       )) as Row[]);
     }
+    if (text.includes('COALESCE(MAX(sequence)')) {
+      const [companionId] = values as [string];
+      const lastSequence = this.eventRows
+        .filter(row => row.companion_id === companionId)
+        .reduce((highest, row) => Math.max(highest, row.sequence), 0);
+      return result<Row>([{ next_sequence: lastSequence + 1 } as Row]);
+    }
     if (text.includes('FROM automata_bus_events')) {
       const [companionId, audience, allowedSensitivities] = values as [string, string | undefined, string[] | undefined];
       return result<Row>(this.eventRows
@@ -218,6 +225,54 @@ describe('PostgresAutomataBusStore', () => {
       audience: 'eligible-automata',
       maxSensitivity: 'personal',
     })).resolves.toEqual([finding()]);
+  });
+
+  it('allocates distinct sequences inside the companion lock across store instances', async () => {
+    const pool = new TestAutomataBusPool();
+    const firstStore = new PostgresAutomataBusStore(pool);
+    const secondStore = new PostgresAutomataBusStore(pool);
+    const allocated = (eventId: string, occurredAt: string) => ({
+      companionId: 'companion-a',
+      eventId,
+      createEvent: (sequence: number) => finding({ eventId, sequence, occurredAt }),
+      audiences: ['eligible-automata'] as const,
+      sensitivity: 'personal' as const,
+    });
+
+    const results = await Promise.all([
+      firstStore.appendAllocated(allocated('finding-a', '2026-08-11T12:00:00.000Z')),
+      secondStore.appendAllocated(allocated('finding-b', '2026-08-11T12:01:00.000Z')),
+    ]);
+
+    expect(results.map(result => result.event.sequence).sort()).toEqual([1, 2]);
+    expect(results.every(result => result.inserted)).toBe(true);
+  });
+
+  it('uses the incumbent sequence for exact allocated replay and rejects conflicts', async () => {
+    const store = new PostgresAutomataBusStore(new TestAutomataBusPool());
+    const input = {
+      companionId: 'companion-a',
+      eventId: 'finding-1',
+      createEvent: (sequence: number) => finding({ sequence }),
+      audiences: ['eligible-automata'] as const,
+      sensitivity: 'personal' as const,
+    };
+
+    await expect(store.appendAllocated(input)).resolves.toMatchObject({ inserted: true });
+    await expect(store.appendAllocated(input)).resolves.toMatchObject({
+      inserted: false,
+      event: { sequence: 1 },
+    });
+    await expect(store.appendAllocated({
+      ...input,
+      createEvent: sequence => finding({
+        sequence,
+        body: {
+          ...finding().body,
+          claim: 'Conflicting content under the same event ID.',
+        },
+      } as Partial<AutomataBusEvent>),
+    })).rejects.toThrow(/reused with different content/u);
   });
 
   it('materializes a correction chain deterministically across store restart', async () => {

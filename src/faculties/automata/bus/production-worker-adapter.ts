@@ -25,13 +25,9 @@ import {
   type AutomataBusFeature,
   type AutomataBusFindingBody,
   type AutomataBusRelationBody,
-  parseAutomataBusEvent,
 } from './contract.js';
 import type { AutomataBusProductionRuntime } from './production-runtime.js';
-import type {
-  AutomataBusAudience,
-  AutomataBusSqlPool,
-} from './postgres-store.js';
+import type { AutomataBusAudience } from './postgres-store.js';
 import type { PostgresAutomataBusRuntimeStore } from './runtime-store.js';
 import type {
   AutomataBusWorkerAccess,
@@ -39,16 +35,6 @@ import type {
   AutomataBusWorkerPort,
   AutomataBusWorkerScope,
 } from './worker-access.js';
-
-interface SequenceRow {
-  next_sequence: unknown;
-}
-
-interface ExistingEventRow {
-  event_json: unknown;
-  audiences: unknown;
-  sensitivity: unknown;
-}
 
 interface CanonicalAppendInput {
   eventId: string;
@@ -74,14 +60,6 @@ function requiredText(value: string, field: string): string {
 
 function stableId(namespace: string, values: readonly unknown[]): string {
   return `${namespace}:v1:${createHash('sha256').update(JSON.stringify(values)).digest('hex')}`;
-}
-
-function parsePositiveInteger(value: unknown, field: string): number {
-  const parsed = typeof value === 'string' && /^\d+$/u.test(value) ? Number(value) : value;
-  if (typeof parsed !== 'number' || !Number.isSafeInteger(parsed) || parsed < 1) {
-    throw new Error(`Automata Bus ${field} must be a positive safe integer`);
-  }
-  return parsed;
 }
 
 function contextFromRun(run: AutomataRunRecord): AutomataBusEventContext {
@@ -120,16 +98,15 @@ function exactRunForScope(
 
 /**
  * The only production append path used by worker and lifecycle adapters.
- * Appends are serialized in-process so a companion's monotonically increasing
- * sequence is allocated immediately before the store's transactional append.
+ * Appends are serialized in-process as an optimization. Cross-process sequence
+ * correctness is owned by the store's companion-locked database transaction.
  */
 export class CanonicalAutomataBusWriter {
   private appendTail: Promise<void> = Promise.resolve();
 
   constructor(private readonly options: {
     companionId: string;
-    pool: AutomataBusSqlPool;
-    store: PostgresAutomataBusRuntimeStore;
+    store: Pick<PostgresAutomataBusRuntimeStore, 'appendAllocated'>;
     runtime: AutomataBusProductionRuntime;
   }) {
     requiredText(options.companionId, 'writer companionId');
@@ -142,57 +119,30 @@ export class CanonicalAutomataBusWriter {
   }
 
   private async appendSerialized(input: CanonicalAppendInput): Promise<CanonicalAppendResult> {
-    const existing = await this.options.pool.query<ExistingEventRow>(`
-      SELECT event_json, audiences, sensitivity
-      FROM automata_bus_events
-      WHERE companion_id = $1 AND event_id = $2
-    `, [this.options.companionId, input.eventId]);
-    const incumbent = existing.rows[0];
-    if (incumbent) {
-      const parsed = parseAutomataBusEvent(incumbent.event_json);
-      if (parsed.status !== 'accepted') {
-        throw new Error('Automata Bus idempotency lookup returned an invalid event');
-      }
-      const event = parsed.value;
-      const same = event.type === input.type
-        && event.occurredAt === new Date(input.occurredAt).toISOString()
-        && JSON.stringify(event.context) === JSON.stringify(contextFromRun(input.run))
-        && JSON.stringify(event.body) === JSON.stringify(input.body)
-        && JSON.stringify(incumbent.audiences) === JSON.stringify([...input.audiences].sort())
-        && incumbent.sensitivity === input.sensitivity;
-      if (!same) {
-        throw new Error(`Automata Bus eventId ${input.eventId} was reused with different content`);
-      }
-      return await this.indexPersisted(event, false);
-    }
-    const next = await this.options.pool.query<SequenceRow>(`
-      SELECT (COALESCE(MAX(sequence), 0) + 1)::bigint AS next_sequence
-      FROM automata_bus_events
-      WHERE companion_id = $1
-    `, [this.options.companionId]);
-    const sequence = parsePositiveInteger(next.rows[0]?.next_sequence, 'next sequence');
-    const hasLessonAttribution = input.type === 'finding'
-      ? (input.body as AutomataBusFindingBody).lessonAttribution !== undefined
-      : (input.body as AutomataBusRelationBody).replacement?.lessonAttribution !== undefined;
-    const mustUnderstand: AutomataBusFeature[] = [
-      ...(input.type === 'relation' ? [AUTOMATA_BUS_RELATIONS_FEATURE] : []),
-      ...(hasLessonAttribution ? [AUTOMATA_BUS_LESSON_ATTRIBUTION_FEATURE] : []),
-    ];
-    const base = {
-      schemaVersion: AUTOMATA_BUS_SCHEMA_VERSION,
+    const persisted = await this.options.store.appendAllocated({
+      companionId: this.options.companionId,
       eventId: requiredText(input.eventId, 'eventId'),
-      companionId: this.options.companionId,
-      sequence,
-      occurredAt: new Date(input.occurredAt).toISOString(),
-      mustUnderstand,
-      context: contextFromRun(input.run),
-    };
-    const event: AutomataBusEvent = input.type === 'finding'
-      ? { ...base, type: 'finding', body: input.body as AutomataBusFindingBody }
-      : { ...base, type: 'relation', body: input.body as AutomataBusRelationBody };
-    const persisted = await this.options.store.append({
-      companionId: this.options.companionId,
-      event,
+      createEvent: sequence => {
+        const hasLessonAttribution = input.type === 'finding'
+          ? (input.body as AutomataBusFindingBody).lessonAttribution !== undefined
+          : (input.body as AutomataBusRelationBody).replacement?.lessonAttribution !== undefined;
+        const mustUnderstand: AutomataBusFeature[] = [
+          ...(input.type === 'relation' ? [AUTOMATA_BUS_RELATIONS_FEATURE] : []),
+          ...(hasLessonAttribution ? [AUTOMATA_BUS_LESSON_ATTRIBUTION_FEATURE] : []),
+        ];
+        const base = {
+          schemaVersion: AUTOMATA_BUS_SCHEMA_VERSION,
+          eventId: requiredText(input.eventId, 'eventId'),
+          companionId: this.options.companionId,
+          sequence,
+          occurredAt: new Date(input.occurredAt).toISOString(),
+          mustUnderstand,
+          context: contextFromRun(input.run),
+        };
+        return input.type === 'finding'
+          ? { ...base, type: 'finding', body: input.body as AutomataBusFindingBody }
+          : { ...base, type: 'relation', body: input.body as AutomataBusRelationBody };
+      },
       audiences: input.audiences,
       sensitivity: input.sensitivity,
     });

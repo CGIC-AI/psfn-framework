@@ -17,6 +17,13 @@ describe('verify-startup-owner-files parity', () => {
     expect(() => assertOwnerFileSeedParity()).not.toThrow();
   });
 
+  it('stages the required Automata policy seed', () => {
+    expect(OWNER_FILE_SEEDS).toContainEqual([
+      'automata-policy.seed.json',
+      'automata-policy.json',
+    ]);
+  });
+
   it('stages every owner the guard requires when its file is missing', () => {
     const required = describeStartupOwnerFileChecks()
       .filter(check => !check.optionalWhenMissing)

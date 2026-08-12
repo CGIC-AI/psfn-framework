@@ -10,7 +10,10 @@ import {
   SharedWorkspaceAuthenticationError,
   type AdminSharedWorkspaceService,
 } from './services/shared-workspace-service.js';
-import { AutomataLessonProposalService } from '../../faculties/automata/bus/lesson-proposal.js';
+import {
+  AutomataLessonProposalService,
+  type AutomataLessonProposalPolicy,
+} from '../../faculties/automata/bus/lesson-proposal.js';
 import { createGardenAutomataLessonReviewPort } from './services/automata-lesson-review-adapter.js';
 import type { AdminAutomataService } from './services/automata-service.js';
 
@@ -62,6 +65,7 @@ function parseAutomataLessonProposalAction(value: Record<string, unknown>): Auto
 export function buildAdminSharedWorkspaceRoutes(options: {
   service: AdminSharedWorkspaceService;
   automataService?: AdminAutomataService | null;
+  automataLessonProposalPolicy?: AutomataLessonProposalPolicy;
   withBody: (req: IncomingMessage, res: ServerResponse, cb: (body: string) => void) => void;
 }): AdminApiRoute[] {
   return [
@@ -113,6 +117,11 @@ export function buildAdminSharedWorkspaceRoutes(options: {
             sendJson(res, 503, { error: 'Automata lesson projection unavailable' });
             return;
           }
+          const proposalPolicy = options.automataLessonProposalPolicy;
+          if (!proposalPolicy) {
+            sendJson(res, 503, { error: 'Automata lesson proposal policy unavailable' });
+            return;
+          }
           options.automataService.getSnapshot().then(async snapshot => {
             const group = snapshot.lessons.groups.find(candidate => candidate.groupId === action.groupId);
             if (!group) throw new Error('Automata lesson group is not current or visible');
@@ -121,10 +130,7 @@ export function buildAdminSharedWorkspaceRoutes(options: {
                 service: options.service,
                 context,
               }),
-              policy: {
-                maxChangeChars: body.length,
-                maxSourceIds: group.sourceFindingIds.length,
-              },
+              policy: proposalPolicy,
             });
             const prepared = proposalService.prepare({
               group,

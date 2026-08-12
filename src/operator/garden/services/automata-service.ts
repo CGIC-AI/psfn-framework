@@ -23,7 +23,15 @@ import type {
   EffectiveAutomataClassDescriptor,
 } from '../../../faculties/automata/registry-contract.js';
 import type { AutomataRunRegistry } from '../../../faculties/automata/run-registry.js';
+import { createComponentLogger } from '../../../shared/logger.js';
+import { toErrorMessage } from '../../../shared/utils/errors.js';
 import { SENSITIVITY_LEVELS } from '../../../system/trust/types.js';
+
+interface AdminAutomataReadLogger {
+  error(message: string, metadata?: Record<string, unknown>): void;
+}
+
+const log = createComponentLogger('AdminAutomataDataService');
 
 type AdminAutomataBusCondition = 'degraded' | 'healthy' | 'unavailable';
 type AdminAutomataBusFreshness = 'fresh' | 'stale' | 'unknown';
@@ -390,6 +398,7 @@ export class AdminAutomataDataService implements AdminAutomataService {
     bus?: AdminAutomataBusReadPort | null;
     lessons?: AdminAutomataLessonReadPort | null;
     managementPanels?: readonly AdminAutomataPanelExtension[];
+    logger?: AdminAutomataReadLogger;
   }) {
     requirePageValue(
       options.readPolicy.defaultPageLimit,
@@ -481,6 +490,9 @@ export class AdminAutomataDataService implements AdminAutomataService {
         };
       } catch (error) {
         if (error instanceof AdminAutomataNotFoundError) throw error;
+        (this.options.logger ?? log).error('Automata Bus operator read failed', {
+          error: toErrorMessage(error),
+        });
         bus = {
           ...bus,
           health: {
@@ -524,7 +536,10 @@ export class AdminAutomataDataService implements AdminAutomataService {
           sourceFindingCount: projection.sourceFindingCount,
           proposalReviewPath: '/api/admin/shared-workspace/proposals',
         };
-      } catch {
+      } catch (error) {
+        (this.options.logger ?? log).error('Automata lesson operator read failed', {
+          error: toErrorMessage(error),
+        });
         lessons = { ...lessons, degradationReason: 'read_failed' };
       }
     }

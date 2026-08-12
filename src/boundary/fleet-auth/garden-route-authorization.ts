@@ -472,9 +472,15 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
     ], confirmation: 'explicit',
   },
   {
+    action: 'automata.read', area: 'automata', routeIds: [
+      ...ids('GET', ['/api/admin/automata']),
+      ...pageIds(['/automata']),
+    ],
+  },
+  {
     action: 'scheduler.read', area: 'scheduler', routeIds: [
-      ...ids('GET', ['/api/admin/automata', '/api/admin/scheduler', '/api/admin/scheduler/wake-window']),
-      ...pageIds(['/automata', '/scheduler']),
+      ...ids('GET', ['/api/admin/scheduler', '/api/admin/scheduler/wake-window']),
+      ...pageIds(['/scheduler']),
     ],
   },
   {

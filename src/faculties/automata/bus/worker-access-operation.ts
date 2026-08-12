@@ -146,6 +146,16 @@ function boundedLimit(value: unknown, field: string, maximum: number): number | 
   return value as number;
 }
 
+function requiredBoundedText(
+  value: unknown,
+  field: string,
+  bounds: AutomataBusWorkerBounds,
+): string {
+  const normalized = boundedText(value, field, bounds, true);
+  if (normalized === undefined) throw new Error(`${field} must be non-empty`);
+  return normalized;
+}
+
 /** Validate provider/model arguments and normalize them into the canonical dispatch shape. */
 export function normalizeAutomataBusWorkerOperation(
   params: unknown,
@@ -164,54 +174,59 @@ export function normalizeAutomataBusWorkerOperation(
     throw new Error(`action=${action} arguments do not match the automata_bus schema`);
   }
   const typed = params as AutomataBusToolParams;
-  const operation: AutomataBusWorkerOperation = { action };
   switch (action) {
-    case 'brief':
-      operation.query = boundedText(typed.query, 'query', bounds);
-      break;
-    case 'search':
-      operation.query = boundedText(typed.query, 'query', bounds, true);
-      operation.limit = boundedLimit(typed.limit, 'limit', bounds.maxSearchResults);
-      break;
-    case 'append':
-      operation.claim = boundedText(typed.claim, 'claim', bounds, true);
-      operation.provenance = typed.provenance ?? 'computed';
-      operation.evidence = boundedEvidence(typed.evidence, bounds);
-      operation.artifactRefs = boundedTexts(typed.artifact_refs, 'artifact_refs', bounds) ?? [];
-      operation.verificationStatus = typed.verification_status ?? 'pending';
-      operation.source = boundedText(typed.source, 'source', bounds);
+    case 'brief': {
+      const query = boundedText(typed.query, 'query', bounds);
+      return { action, ...(query === undefined ? {} : { query }) };
+    }
+    case 'search': {
+      const limit = boundedLimit(typed.limit, 'limit', bounds.maxSearchResults);
+      return {
+        action,
+        query: requiredBoundedText(typed.query, 'query', bounds),
+        ...(limit === undefined ? {} : { limit }),
+      };
+    }
+    case 'append': {
+      const claim = requiredBoundedText(typed.claim, 'claim', bounds);
+      const provenance = typed.provenance ?? 'computed';
+      const evidence = boundedEvidence(typed.evidence, bounds);
+      const artifactRefs = boundedTexts(typed.artifact_refs, 'artifact_refs', bounds) ?? [];
+      const verificationStatus = typed.verification_status ?? 'pending';
+      const source = boundedText(typed.source, 'source', bounds);
+      let confidence: number | undefined;
       if (typed.confidence !== undefined) {
         if (!Number.isFinite(typed.confidence) || typed.confidence < 0 || typed.confidence > 1) {
           throw new Error('confidence must be a finite number in [0,1]');
         }
-        operation.confidence = typed.confidence;
+        confidence = typed.confidence;
       }
+      let normalizedLessonAttribution: Extract<
+        AutomataBusWorkerOperation,
+        { action: 'append' }
+      >['lessonAttribution'];
       if (typed.lesson_attribution !== undefined) {
-        operation.lessonAttribution = {
-          promptRevision: boundedText(
+        normalizedLessonAttribution = {
+          promptRevision: requiredBoundedText(
             typed.lesson_attribution.prompt_revision,
             'lesson_attribution.prompt_revision',
             bounds,
-            true,
-          )!,
-          toolName: boundedText(
+          ),
+          toolName: requiredBoundedText(
             typed.lesson_attribution.tool_name,
             'lesson_attribution.tool_name',
             bounds,
-            true,
-          )!,
-          failureCategory: boundedText(
+          ),
+          failureCategory: requiredBoundedText(
             typed.lesson_attribution.failure_category,
             'lesson_attribution.failure_category',
             bounds,
-            true,
-          )!,
-          lessonCode: boundedText(
+          ),
+          lessonCode: requiredBoundedText(
             typed.lesson_attribution.lesson_code,
             'lesson_attribution.lesson_code',
             bounds,
-            true,
-          )!,
+          ),
           contradictionEventIds: boundedTexts(
             typed.lesson_attribution.contradiction_event_ids,
             'lesson_attribution.contradiction_event_ids',
@@ -219,33 +234,40 @@ export function normalizeAutomataBusWorkerOperation(
           ) ?? [],
         };
       }
-      if (operation.provenance === 'computed' && (operation.evidence as unknown[]).length === 0) {
+      if (provenance === 'computed' && evidence.length === 0) {
         throw new Error('computed findings require structured evidence');
       }
       if (
-        operation.provenance === 'fetched'
-        && !(operation.evidence as AutomataBusEvidence[]).some(entry => entry.kind === 'external')
+        provenance === 'fetched'
+        && !evidence.some(entry => entry.kind === 'external')
       ) {
         throw new Error('fetched findings require external evidence');
       }
-      if (operation.provenance === 'testimony' && operation.source === undefined) {
+      if (provenance === 'testimony' && source === undefined) {
         throw new Error('testimony findings require source');
       }
-      if (operation.provenance === 'recalled' && operation.verificationStatus !== 'pending') {
+      if (provenance === 'recalled' && verificationStatus !== 'pending') {
         throw new Error('recalled findings must remain pending');
       }
-      if (
-        operation.verificationStatus !== 'pending'
-        && (operation.evidence as unknown[]).length === 0
-      ) {
+      if (verificationStatus !== 'pending' && evidence.length === 0) {
         throw new Error('verified or rejected findings require evidence');
       }
-      break;
+      return {
+        action,
+        claim,
+        provenance,
+        evidence,
+        artifactRefs,
+        verificationStatus,
+        ...(source === undefined ? {} : { source }),
+        ...(confidence === undefined ? {} : { confidence }),
+        ...(normalizedLessonAttribution === undefined
+          ? {}
+          : { lessonAttribution: normalizedLessonAttribution }),
+      };
+    }
     case 'correct': {
-      operation.targetEventId = boundedText(typed.target_event_id, 'target_event_id', bounds, true);
-      operation.relation = typed.relation;
       if (!typed.relation) throw new Error('relation is required for action=correct');
-      operation.reason = boundedText(typed.reason, 'reason', bounds, true);
       const replacementClaim = boundedText(typed.replacement_claim, 'replacement_claim', bounds);
       if (typed.relation !== 'retracts' && replacementClaim === undefined) {
         throw new Error('replacement_claim is required for corrects and supersedes');
@@ -253,38 +275,54 @@ export function normalizeAutomataBusWorkerOperation(
       if (typed.relation === 'retracts' && replacementClaim !== undefined) {
         throw new Error('replacement_claim is not allowed for retracts');
       }
-      if (replacementClaim !== undefined) operation.replacementClaim = replacementClaim;
-      break;
+      return {
+        action,
+        targetEventId: requiredBoundedText(typed.target_event_id, 'target_event_id', bounds),
+        relation: typed.relation,
+        reason: requiredBoundedText(typed.reason, 'reason', bounds),
+        ...(replacementClaim === undefined ? {} : { replacementClaim }),
+      };
     }
-    case 'handoff':
-      operation.summary = boundedText(typed.summary, 'summary', bounds, true);
-      operation.outputRefs = boundedTexts(typed.output_refs, 'output_refs', bounds) ?? [];
-      operation.validationPerformed = boundedTexts(
-        typed.validation_performed,
-        'validation_performed',
-        bounds,
-      ) ?? [];
-      operation.blocker = boundedText(typed.blocker, 'blocker', bounds);
-      operation.nextAction = boundedText(typed.next_action, 'next_action', bounds);
-      break;
-    case 'runs':
-      operation.status = boundedText(typed.status, 'status', bounds);
-      operation.classId = boundedText(typed.class_id, 'class_id', bounds);
-      operation.taskId = boundedText(typed.task_id, 'task_id', bounds);
-      operation.limit = boundedLimit(typed.limit, 'limit', bounds.maxRunResults);
-      break;
+    case 'handoff': {
+      const blocker = boundedText(typed.blocker, 'blocker', bounds);
+      const nextAction = boundedText(typed.next_action, 'next_action', bounds);
+      return {
+        action,
+        summary: requiredBoundedText(typed.summary, 'summary', bounds),
+        outputRefs: boundedTexts(typed.output_refs, 'output_refs', bounds) ?? [],
+        validationPerformed: boundedTexts(
+          typed.validation_performed,
+          'validation_performed',
+          bounds,
+        ) ?? [],
+        ...(blocker === undefined ? {} : { blocker }),
+        ...(nextAction === undefined ? {} : { nextAction }),
+      };
+    }
+    case 'runs': {
+      const status = boundedText(typed.status, 'status', bounds);
+      const classId = boundedText(typed.class_id, 'class_id', bounds);
+      const taskId = boundedText(typed.task_id, 'task_id', bounds);
+      const limit = boundedLimit(typed.limit, 'limit', bounds.maxRunResults);
+      return {
+        action,
+        ...(status === undefined ? {} : { status }),
+        ...(classId === undefined ? {} : { classId }),
+        ...(taskId === undefined ? {} : { taskId }),
+        ...(limit === undefined ? {} : { limit }),
+      };
+    }
     case 'inspect': {
       const eventId = boundedText(typed.event_id, 'event_id', bounds);
       const runId = boundedText(typed.run_id, 'run_id', bounds);
       if (eventId === undefined && runId === undefined) {
         throw new Error('event_id or run_id is required for action=inspect');
       }
-      if (eventId !== undefined) operation.eventId = eventId;
-      if (runId !== undefined) operation.runId = runId;
-      break;
+      return {
+        action,
+        ...(eventId === undefined ? {} : { eventId }),
+        ...(runId === undefined ? {} : { runId }),
+      };
     }
   }
-  return Object.fromEntries(
-    Object.entries(operation).filter(([, value]) => value !== undefined),
-  ) as AutomataBusWorkerOperation;
 }

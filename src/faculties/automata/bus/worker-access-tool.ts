@@ -4,14 +4,7 @@ import { textResult, textResultWithError } from '../../../core/tools/results.js'
 import { tagToolWithReversibility } from '../../../system/capabilities/safeguards.js';
 import { isRecord } from '../../../shared/utils/types.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
-import type {
-  AutomataBusEvidence,
-  AutomataBusLessonAttribution,
-  AutomataBusProvenance,
-  AutomataBusVerificationStatus,
-} from './contract.js';
 import {
-  type AutomataBusToolAction,
   type AutomataBusWorkerAccess,
   type AutomataBusWorkerOperation,
   type AutomataBusWorkerPort,
@@ -76,72 +69,68 @@ function boundedError(error: unknown, maximum: number): string {
   return `${prefix}${detail}`.slice(0, maximum);
 }
 
-type OperationDispatcher = (
-  port: AutomataBusWorkerPort,
-  scope: AutomataBusWorkerScope,
-  operation: AutomataBusWorkerOperation,
-) => Promise<unknown>;
-
-const OPERATION_DISPATCHERS: Readonly<Record<AutomataBusToolAction, OperationDispatcher>> = {
-  brief: (port, scope, operation) => port.brief({
-    scope,
-    ...(typeof operation.query === 'string' ? { query: operation.query } : {}),
-  }),
-  search: (port, scope, operation) => port.search({
-    scope,
-    query: operation.query as string,
-    ...(typeof operation.limit === 'number' ? { limit: operation.limit } : {}),
-  }),
-  append: (port, scope, operation) => port.append({
-    scope,
-    claim: operation.claim as string,
-    provenance: operation.provenance as AutomataBusProvenance,
-    evidence: operation.evidence as AutomataBusEvidence[],
-    artifactRefs: operation.artifactRefs as string[],
-    verificationStatus: operation.verificationStatus as AutomataBusVerificationStatus,
-    ...(typeof operation.source === 'string' ? { source: operation.source } : {}),
-    ...(typeof operation.confidence === 'number' ? { confidence: operation.confidence } : {}),
-    ...(operation.lessonAttribution
-      ? { lessonAttribution: operation.lessonAttribution as AutomataBusLessonAttribution }
-      : {}),
-  }),
-  correct: (port, scope, operation) => port.correct({
-    scope,
-    targetEventId: operation.targetEventId as string,
-    relation: operation.relation as string,
-    reason: operation.reason as string,
-    ...(typeof operation.replacementClaim === 'string'
-      ? { replacementClaim: operation.replacementClaim }
-      : {}),
-  }),
-  handoff: (port, scope, operation) => port.handoff({
-    scope,
-    summary: operation.summary as string,
-    outputRefs: operation.outputRefs as string[],
-    validationPerformed: operation.validationPerformed as string[],
-    ...(typeof operation.blocker === 'string' ? { blocker: operation.blocker } : {}),
-    ...(typeof operation.nextAction === 'string' ? { nextAction: operation.nextAction } : {}),
-  }),
-  runs: (port, scope, operation) => port.runs({
-    scope,
-    ...(typeof operation.status === 'string' ? { status: operation.status } : {}),
-    ...(typeof operation.classId === 'string' ? { classId: operation.classId } : {}),
-    ...(typeof operation.taskId === 'string' ? { taskId: operation.taskId } : {}),
-    ...(typeof operation.limit === 'number' ? { limit: operation.limit } : {}),
-  }),
-  inspect: (port, scope, operation) => port.inspect({
-    scope,
-    ...(typeof operation.eventId === 'string' ? { eventId: operation.eventId } : {}),
-    ...(typeof operation.runId === 'string' ? { runId: operation.runId } : {}),
-  }),
-};
-
 async function dispatchOperation(
   port: AutomataBusWorkerPort,
   scope: AutomataBusWorkerScope,
   operation: AutomataBusWorkerOperation,
 ): Promise<unknown> {
-  return OPERATION_DISPATCHERS[operation.action](port, scope, operation);
+  switch (operation.action) {
+    case 'brief':
+      return await port.brief({ scope, ...(operation.query ? { query: operation.query } : {}) });
+    case 'search':
+      return await port.search({
+        scope,
+        query: operation.query,
+        ...(operation.limit === undefined ? {} : { limit: operation.limit }),
+      });
+    case 'append':
+      return await port.append({
+        scope,
+        claim: operation.claim,
+        provenance: operation.provenance,
+        evidence: operation.evidence,
+        artifactRefs: operation.artifactRefs,
+        verificationStatus: operation.verificationStatus,
+        ...(operation.source === undefined ? {} : { source: operation.source }),
+        ...(operation.confidence === undefined ? {} : { confidence: operation.confidence }),
+        ...(operation.lessonAttribution === undefined
+          ? {}
+          : { lessonAttribution: operation.lessonAttribution }),
+      });
+    case 'correct':
+      return await port.correct({
+        scope,
+        targetEventId: operation.targetEventId,
+        relation: operation.relation,
+        reason: operation.reason,
+        ...(operation.replacementClaim === undefined
+          ? {}
+          : { replacementClaim: operation.replacementClaim }),
+      });
+    case 'handoff':
+      return await port.handoff({
+        scope,
+        summary: operation.summary,
+        outputRefs: operation.outputRefs,
+        validationPerformed: operation.validationPerformed,
+        ...(operation.blocker === undefined ? {} : { blocker: operation.blocker }),
+        ...(operation.nextAction === undefined ? {} : { nextAction: operation.nextAction }),
+      });
+    case 'runs':
+      return await port.runs({
+        scope,
+        ...(operation.status === undefined ? {} : { status: operation.status }),
+        ...(operation.classId === undefined ? {} : { classId: operation.classId }),
+        ...(operation.taskId === undefined ? {} : { taskId: operation.taskId }),
+        ...(operation.limit === undefined ? {} : { limit: operation.limit }),
+      });
+    case 'inspect':
+      return await port.inspect({
+        scope,
+        ...(operation.eventId === undefined ? {} : { eventId: operation.eventId }),
+        ...(operation.runId === undefined ? {} : { runId: operation.runId }),
+      });
+  }
 }
 
 export function createAutomataBusTool(input: {

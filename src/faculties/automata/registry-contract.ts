@@ -3,6 +3,7 @@ import {
   parseAutomataBusReviewerPolicy,
   type AutomataBusReviewerPolicy,
 } from './bus/reviewer-policy.js';
+import type { AutomataLessonProposalPolicy } from './bus/lesson-proposal.js';
 
 const AUTOMATA_RUN_STATUSES = [
   'queued',
@@ -227,6 +228,7 @@ export interface AutomataOwnerPolicy {
     excludedClasses: ProductionAutomataClassId[];
     query: AutomataBusQueryOwnerPolicy;
     reviewer: AutomataBusReviewerPolicy;
+    lessonProposal: AutomataLessonProposalPolicy;
   };
   /** Raw journals for eligible automata sessions; protected sessions ignore this policy. */
   rawSessionRetentionMs: number;
@@ -351,6 +353,15 @@ function parseBusQueryPolicy(value: unknown, path: string): AutomataBusQueryOwne
   };
 }
 
+function parseLessonProposalPolicy(value: unknown, path: string): AutomataLessonProposalPolicy {
+  if (!isRecord(value)) throw new Error(`${path} must be an object`);
+  assertExactKeys(value, ['maxChangeChars', 'maxSourceIds'], path);
+  return {
+    maxChangeChars: requirePositiveInteger(value.maxChangeChars, `${path}.maxChangeChars`),
+    maxSourceIds: requirePositiveInteger(value.maxSourceIds, `${path}.maxSourceIds`),
+  };
+}
+
 function parseClassList(value: unknown, path: string): ProductionAutomataClassId[] {
   if (!Array.isArray(value)) throw new Error(`${path} must be an array`);
   const classes = value.map((entry, index) => {
@@ -380,7 +391,11 @@ export function parseAutomataOwnerPolicy(value: unknown, source = 'automata-poli
     ],
     source,
   );
-  assertExactKeys(value.bus, ['eligibleClasses', 'excludedClasses', 'query', 'reviewer'], `${source}.bus`);
+  assertExactKeys(
+    value.bus,
+    ['eligibleClasses', 'excludedClasses', 'query', 'reviewer', 'lessonProposal'],
+    `${source}.bus`,
+  );
   assertExactKeys(retentionValues, RETENTION_CLASSES, `${source}.retentionMs`);
   const eligibleClasses = parseClassList(value.bus.eligibleClasses, `${source}.bus.eligibleClasses`);
   const excludedClasses = parseClassList(value.bus.excludedClasses, `${source}.bus.excludedClasses`);
@@ -391,13 +406,17 @@ export function parseAutomataOwnerPolicy(value: unknown, source = 'automata-poli
   if (missing.length > 0) throw new Error(`${source} does not assign bus policy for: ${missing.join(', ')}`);
   const query = parseBusQueryPolicy(value.bus.query, `${source}.bus.query`);
   const reviewer = parseAutomataBusReviewerPolicy(value.bus.reviewer, `${source}.bus.reviewer`);
+  const lessonProposal = parseLessonProposalPolicy(
+    value.bus.lessonProposal,
+    `${source}.bus.lessonProposal`,
+  );
   const retentionMs = Object.fromEntries(RETENTION_CLASSES.map(retentionClass => [
     retentionClass,
     requirePositiveInteger(retentionValues[retentionClass], `${source}.retentionMs.${retentionClass}`),
   ])) as Record<AutomataRetentionClass, number>;
   return {
     schemaVersion: 1,
-    bus: { eligibleClasses, excludedClasses, query, reviewer },
+    bus: { eligibleClasses, excludedClasses, query, reviewer, lessonProposal },
     rawSessionRetentionMs: requirePositiveInteger(
       value.rawSessionRetentionMs,
       `${source}.rawSessionRetentionMs`,

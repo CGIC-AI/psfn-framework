@@ -4,6 +4,10 @@ import {
   type SensitivityLevel,
 } from '../../../system/trust/types.js';
 import {
+  normalizeAutomataStringList,
+  normalizeAutomataTimestamp,
+} from '../validation.js';
+import {
   AUTOMATA_BUS_AUDIENCES,
   type AutomataBusAudience,
 } from './postgres-store.js';
@@ -56,24 +60,6 @@ export function requireAutomataBusPositiveInteger(value: unknown, field: string)
   return value;
 }
 
-function normalizeStringList(values: readonly string[] | undefined, field: string): string[] | undefined {
-  if (values === undefined) return undefined;
-  const normalized = values.map((value, index) => (
-    requireAutomataBusNonEmptyString(value, `${field}[${index}]`)
-  ));
-  return [...new Set(normalized)].sort();
-}
-
-function normalizeTimestamp(value: string | undefined, field: string): string | undefined {
-  if (value === undefined) return undefined;
-  const normalized = requireAutomataBusNonEmptyString(value, field);
-  const parsed = Date.parse(normalized);
-  if (!Number.isFinite(parsed) || new Date(parsed).toISOString() !== normalized) {
-    throw new Error(`${field} must be a canonical UTC ISO-8601 timestamp`);
-  }
-  return normalized;
-}
-
 function isAudience(value: unknown): value is AutomataBusAudience {
   return typeof value === 'string' && AUTOMATA_BUS_AUDIENCES.some(candidate => candidate === value);
 }
@@ -102,8 +88,16 @@ export function normalizeAutomataBusPostgresQuery(
     requireAutomataBusPositiveInteger(requestedLimit, 'limit'),
     maxLimit,
   );
-  const occurredAfter = normalizeTimestamp(filters.occurredAfter, 'filters.occurredAfter');
-  const occurredBefore = normalizeTimestamp(filters.occurredBefore, 'filters.occurredBefore');
+  const occurredAfter = normalizeAutomataTimestamp(
+    filters.occurredAfter,
+    'filters.occurredAfter',
+    requireAutomataBusNonEmptyString,
+  );
+  const occurredBefore = normalizeAutomataTimestamp(
+    filters.occurredBefore,
+    'filters.occurredBefore',
+    requireAutomataBusNonEmptyString,
+  );
   if (
     occurredAfter !== undefined
     && occurredBefore !== undefined
@@ -125,13 +119,31 @@ export function normalizeAutomataBusPostgresQuery(
     },
     filters: {
       ...(filters.automatonClasses !== undefined
-        ? { automatonClasses: normalizeStringList(filters.automatonClasses, 'filters.automatonClasses') }
+        ? {
+            automatonClasses: normalizeAutomataStringList(
+              filters.automatonClasses,
+              'filters.automatonClasses',
+              requireAutomataBusNonEmptyString,
+            ),
+          }
         : {}),
       ...(filters.taskIds !== undefined
-        ? { taskIds: normalizeStringList(filters.taskIds, 'filters.taskIds') }
+        ? {
+            taskIds: normalizeAutomataStringList(
+              filters.taskIds,
+              'filters.taskIds',
+              requireAutomataBusNonEmptyString,
+            ),
+          }
         : {}),
       ...(filters.runIds !== undefined
-        ? { runIds: normalizeStringList(filters.runIds, 'filters.runIds') }
+        ? {
+            runIds: normalizeAutomataStringList(
+              filters.runIds,
+              'filters.runIds',
+              requireAutomataBusNonEmptyString,
+            ),
+          }
         : {}),
       ...(occurredAfter !== undefined ? { occurredAfter } : {}),
       ...(occurredBefore !== undefined ? { occurredBefore } : {}),

@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 
 import { isRecord } from '../../../shared/utils/types.js';
 import type { SensitivityLevel } from '../../../system/trust/types.js';
+import { createAutomataPositiveIntegerValidator } from '../validation.js';
 
 const AUTOMATA_BUS_REVIEWER_CANDIDATE_KINDS = [
   'duplicate',
@@ -96,12 +97,7 @@ function assertExactKeys(
   if (unknown.length > 0) throw new Error(`${label} contains unknown fields: ${unknown.join(', ')}`);
 }
 
-function positiveInteger(value: number, field: string): number {
-  if (!Number.isSafeInteger(value) || value < 1) {
-    throw new Error(`Automata Bus reviewer ${field} must be a positive safe integer`);
-  }
-  return value;
-}
+const positiveInteger = createAutomataPositiveIntegerValidator('Automata Bus reviewer');
 
 function nonNegativeInteger(value: unknown, field: string): number {
   if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {

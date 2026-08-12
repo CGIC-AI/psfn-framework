@@ -14,6 +14,7 @@ import type {
   PermanentReferenceCustodyPort,
 } from './retention-contract.js';
 import type { AutomataSessionClassification } from './session-classification.js';
+import { createAutomataTextValidator } from './validation.js';
 
 const terminalRunStatuses: ReadonlySet<AutomataRunStatus> = new Set([
   'completed',
@@ -30,11 +31,7 @@ const exactPurgeSurfaces: ReadonlySet<AutomataSessionPurgeSurface> = new Set([
   'redis_tail_pointers',
 ]);
 
-function requiredText(value: string, field: string): string {
-  const normalized = value.trim();
-  if (!normalized) throw new Error(`Automata retention ${field} must be a non-empty string`);
-  return normalized;
-}
+const requiredText = createAutomataTextValidator('Automata retention');
 
 function uniqueReferences(values: readonly string[]): string[] {
   return [...new Set(values.map((value, index) => requiredText(value, `reference[${index}]`)))].sort();

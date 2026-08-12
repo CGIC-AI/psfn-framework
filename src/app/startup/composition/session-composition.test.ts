@@ -80,6 +80,7 @@ describe('session runtime composition transcript projection wiring', () => {
         postgresRole: 'companion_alpha_runtime',
         multiCompanion: true,
       }),
+      automataRetentionCompanionId: 'companion-test',
     });
 
     expect(createDefaultPostgresSessionAdapters).toHaveBeenCalledWith(
@@ -105,6 +106,7 @@ describe('session runtime composition transcript projection wiring', () => {
         persistenceBackend: 'postgres',
         postgresDatabaseUrl: 'postgres://postgres:secret@localhost:5432/psfn_test',
       }),
+      automataRetentionCompanionId: 'companion-test',
     });
 
     expect(existsSync(join(sessionsDir, 'session-search.sqlite'))).toBe(false);
@@ -138,6 +140,22 @@ describe('session runtime composition transcript projection wiring', () => {
     })).rejects.toThrow('requires config.postgresDatabaseUrl');
   });
 
+  it('fails closed without an authoritative Automata retention companion identity', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'psfn-session-composition-missing-companion-'));
+    dirs.push(root);
+    const companionDataDir = join(root, 'companion-data');
+
+    await expect(composeSessionRuntimeAsync({
+      config: fromAny({
+        companionDataDir,
+        dataDir: companionDataDir,
+        persistenceBackend: 'postgres',
+        postgresDatabaseUrl: 'postgres://postgres:secret@localhost:5432/psfn_test',
+      }),
+    })).rejects.toThrow('requires an Automata retention companionId');
+    expect(createDefaultPostgresSessionAdapters).not.toHaveBeenCalled();
+  });
+
   it('fails closed when postgres session adapters omit the TurnRecord eligibility fence', async () => {
     const root = mkdtempSync(join(tmpdir(), 'psfn-session-composition-missing-turn-fence-'));
     dirs.push(root);
@@ -156,6 +174,7 @@ describe('session runtime composition transcript projection wiring', () => {
         persistenceBackend: 'postgres',
         postgresDatabaseUrl: 'postgres://postgres:secret@localhost:5432/psfn_test',
       }),
+      automataRetentionCompanionId: 'companion-test',
     })).rejects.toThrow('requires a TurnRecord eligibility fence');
   });
 
@@ -171,6 +190,7 @@ describe('session runtime composition transcript projection wiring', () => {
         persistenceBackend: 'postgres',
       }),
       postgresDatabaseUrl: 'postgres://postgres:secret@localhost:5432/psfn_test',
+      automataRetentionCompanionId: 'companion-test',
     });
 
     await expect(composition.sessionManager.searchByKeywords('anything', 5)).resolves.toEqual([]);
@@ -187,6 +207,7 @@ describe('session runtime composition transcript projection wiring', () => {
         persistenceBackend: 'postgres',
       }),
       postgresDatabaseUrl: 'postgres://postgres:secret@localhost:5432/psfn_test',
+      automataRetentionCompanionId: 'companion-test',
       enableContinuity: true,
       continuityChannelIds: ['discord:configured-room'],
     });
@@ -230,6 +251,7 @@ describe('session runtime composition transcript projection wiring', () => {
         persistenceBackend: 'postgres',
       }),
       postgresDatabaseUrl: 'postgres://postgres:secret@localhost:5432/psfn_test',
+      automataRetentionCompanionId: 'companion-test',
       enableContinuity: true,
     })).rejects.toThrow('requires configured channels.json channel ids');
   });

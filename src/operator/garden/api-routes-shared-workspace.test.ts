@@ -54,7 +54,10 @@ describe('shared workspace admin write authentication', () => {
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
   });
 
-  function fixture(automataService?: AdminAutomataService): {
+  function fixture(
+    automataService?: AdminAutomataService,
+    automataLessonProposalPolicy = { maxChangeChars: 80, maxSourceIds: 2 },
+  ): {
     service: AdminSharedWorkspaceService;
     routes: AdminApiRoute[];
   } {
@@ -69,6 +72,7 @@ describe('shared workspace admin write authentication', () => {
       routes: buildAdminSharedWorkspaceRoutes({
         service,
         automataService,
+        automataLessonProposalPolicy,
         withBody: (req, _res, callback) => {
           let body = '';
           req.on('data', chunk => { body += String(chunk); });
@@ -212,6 +216,58 @@ describe('shared workspace admin write authentication', () => {
       safeguards: { appliesChange: false, promotesPrimaryMemory: false, publishesTelemetry: false },
     });
     expect(review?.content).toContain('+Read relevant files before editing.');
+  });
+
+  it('enforces owner limits independently of the submitted Automata lesson request', async () => {
+    const lessonGroup = {
+      groupId: `automata-lesson:v1:${'a'.repeat(64)}`,
+      automatonClass: 'subagent.bounded',
+      promptRevision: 'sha256:prompt-r1',
+      toolName: 'repo',
+      failureCategory: 'missing-instruction',
+      lessonCode: 'read-before-edit',
+      sourceCount: 2,
+      support: 'supported' as const,
+      evidenceQuality: 'verified' as const,
+      sourceFindingIds: ['finding-1', 'finding-2'],
+      evidenceIds: [`sha256:${'b'.repeat(64)}`],
+      sourceTraceTruncated: false,
+      contradiction: { present: false, sourceFindingIds: [] },
+      inferenceOnly: false,
+      interpretation: 'candidate-pattern-not-verified-defect' as const,
+    };
+    const automataService = {
+      getSnapshot: async () => ({ lessons: { groups: [lessonGroup] } }) as never,
+    } satisfies AdminAutomataService;
+    const proposal = {
+      kind: 'automata_lesson',
+      groupId: lessonGroup.groupId,
+      target: { kind: 'instruction', id: 'memory.extraction', baseRevision: 'sha256:prompt-r1' },
+      before: 'Inspect the task.',
+      after: 'Inspect the task. Read relevant files before editing.',
+    };
+
+    const sourceBound = fixture(automataService, { maxChangeChars: 80, maxSourceIds: 1 });
+    const sourceResponse = await invoke(
+      sourceBound.routes.find(route => route.match('/api/admin/shared-workspace/proposals'))!,
+      '/api/admin/shared-workspace/proposals',
+      proposal,
+      context('POST /api/admin/shared-workspace/proposals'),
+    );
+    expect(sourceResponse.status).toBe(400);
+    expect(sourceResponse.body).toContain('bounded source trace');
+    expect(sourceBound.service.getSnapshot().reviews).toEqual([]);
+
+    const changeBound = fixture(automataService, { maxChangeChars: 20, maxSourceIds: 2 });
+    const changeResponse = await invoke(
+      changeBound.routes.find(route => route.match('/api/admin/shared-workspace/proposals'))!,
+      '/api/admin/shared-workspace/proposals',
+      proposal,
+      context('POST /api/admin/shared-workspace/proposals'),
+    );
+    expect(changeResponse.status).toBe(400);
+    expect(changeResponse.body).toContain('maxChangeChars');
+    expect(changeBound.service.getSnapshot().reviews).toEqual([]);
   });
 
   it('does not accept a reusable browser credential as workflow identity', async () => {

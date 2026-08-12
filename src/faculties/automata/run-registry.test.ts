@@ -45,6 +45,7 @@ function policy() {
         tokenCeiling: 4_000,
         costCeilingUsd: 0.25,
       },
+      lessonProposal: { maxChangeChars: 4_000, maxSourceIds: 20 },
     },
     rawSessionRetentionMs: 30_000,
     retentionMs: { ephemeral: 1_000, standard: 10_000, extended: 20_000 },
@@ -252,5 +253,23 @@ describe('AutomataRunRegistry', () => {
         query: { ...policy().bus.query, hiddenLimit: 1 },
       },
     })).toThrow('contains unknown keys');
+  });
+
+  it('requires explicit owner bounds for governed lesson proposals', () => {
+    const configured = parseAutomataOwnerPolicy({
+      ...policy(),
+      bus: {
+        ...policy().bus,
+        lessonProposal: { maxChangeChars: 4_000, maxSourceIds: 20 },
+      },
+    });
+    expect(configured.bus.lessonProposal).toEqual({ maxChangeChars: 4_000, maxSourceIds: 20 });
+    expect(() => parseAutomataOwnerPolicy({
+      ...configured,
+      bus: {
+        ...configured.bus,
+        lessonProposal: { maxChangeChars: 0, maxSourceIds: 20 },
+      },
+    })).toThrow('lessonProposal.maxChangeChars must be a positive safe integer');
   });
 });

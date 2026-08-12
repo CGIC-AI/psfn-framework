@@ -53,6 +53,16 @@ describe('Garden route capability catalogue', () => {
       });
     expect(resolveGardenRouteCapability('PATCH', '/api/admin/settings')?.capability.authorization)
       .toMatchObject({ action: 'settings.write', baseRole: 'admin' });
+    expect(resolveGardenRouteCapability('GET', '/api/admin/automata')?.capability.authorization)
+      .toMatchObject({
+        action: 'automata.read',
+        baseRole: 'admin',
+        resource: { area: 'automata' },
+      });
+    expect(resolveGardenRouteCapability('GET', '/automata')?.capability.authorization)
+      .toMatchObject({ action: 'automata.read', baseRole: 'admin' });
+    expect(resolveGardenRouteCapability('GET', '/api/admin/scheduler')?.capability.authorization)
+      .toMatchObject({ action: 'scheduler.read', baseRole: 'admin' });
     expect(resolveGardenRouteCapability('POST', '/v1/chat/completions')?.capability)
       .toMatchObject({
         body: { mode: 'required', maxBytes: 1_048_576 },

@@ -50,6 +50,10 @@
       "deadlineMs": 120000,
       "tokenCeiling": 4000,
       "costCeilingUsd": 0.25
+    },
+    "lessonProposal": {
+      "maxChangeChars": 4000,
+      "maxSourceIds": 20
     }
   },
   "rawSessionRetentionMs": 2592000000,

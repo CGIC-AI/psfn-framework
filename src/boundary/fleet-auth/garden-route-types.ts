@@ -20,6 +20,7 @@ export const GARDEN_RESOURCE_AREAS = [
   'action_pipe',
   'attachments',
   'audit',
+  'automata',
   'autonomy',
   'beads',
   'channels',

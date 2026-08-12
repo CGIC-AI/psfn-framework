@@ -11,6 +11,7 @@ import {
   type EffectiveAutomataClassDescriptor,
   type ProductionAutomataClassId,
 } from './registry-contract.js';
+import { createAutomataTextValidator } from './validation.js';
 
 const ALLOWED_TRANSITIONS: Readonly<Record<AutomataRunStatus, readonly AutomataRunStatus[]>> = {
   queued: ['running', 'failed', 'cancelled'],
@@ -51,11 +52,7 @@ export interface TransitionAutomataRunInput {
   failureReason?: string;
 }
 
-function requiredText(value: string, field: string): string {
-  const normalized = value.trim();
-  if (!normalized) throw new Error(`Automata run ${field} must be a non-empty string`);
-  return normalized;
-}
+const requiredText = createAutomataTextValidator('Automata run');
 
 function uniqueTexts(values: readonly string[], field: string): string[] {
   const normalized = values.map((value, index) => requiredText(value, `${field}[${index}]`));

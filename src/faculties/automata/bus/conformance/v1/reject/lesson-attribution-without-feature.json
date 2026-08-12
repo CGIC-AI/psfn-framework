@@ -1,0 +1,45 @@
+{
+  "description": "A lesson attribution is rejected when the event does not declare its must-understand feature.",
+  "events": [
+    {
+      "schemaVersion": 1,
+      "eventId": "event-lesson-without-feature-1",
+      "companionId": "companion-a",
+      "sequence": 1,
+      "occurredAt": "2026-08-10T20:01:30.000Z",
+      "mustUnderstand": [],
+      "context": {
+        "automatonClass": "memory.extraction",
+        "runId": "run-lesson-2",
+        "taskId": "task-lesson-2",
+        "sessionIds": [],
+        "artifactRefs": ["artifact:lesson-test-report"]
+      },
+      "type": "finding",
+      "body": {
+        "claim": "The extraction worker needed an explicit read-before-edit instruction.",
+        "provenance": "computed",
+        "evidence": [
+          {
+            "kind": "artifact",
+            "reference": "artifact:lesson-test-report",
+            "summary": "The bounded conformance run reproduced the missing instruction.",
+            "digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+          }
+        ],
+        "verification": {
+          "status": "verified",
+          "by": "reviewer-automaton",
+          "evidenceRefs": ["artifact:lesson-test-report"]
+        },
+        "lessonAttribution": {
+          "promptRevision": "sha256:prompt-r1",
+          "toolName": "repo",
+          "failureCategory": "missing-instruction",
+          "lessonCode": "read-before-edit",
+          "contradictionEventIds": []
+        }
+      }
+    }
+  ]
+}

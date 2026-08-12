@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 
 import type { AutomataLessonGroup } from './lesson-projection.js';
+import { createAutomataPositiveIntegerValidator } from '../validation.js';
 
 export interface GovernedAutomataLessonReviewRequest {
   artifactPath: string;
@@ -48,12 +49,7 @@ export interface AutomataLessonProposalPolicy {
 const SAFE_IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,255}$/u;
 const SHA256_ID_PATTERN = /^sha256:[0-9a-f]{64}$/u;
 
-function positiveInteger(value: number, field: string): number {
-  if (!Number.isSafeInteger(value) || value < 1) {
-    throw new Error(`Automata lesson proposal ${field} must be a positive safe integer`);
-  }
-  return value;
-}
+const positiveInteger = createAutomataPositiveIntegerValidator('Automata lesson proposal');
 
 function safeIdentifier(value: string, field: string): string {
   const normalized = value.trim();

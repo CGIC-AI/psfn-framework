@@ -5,6 +5,8 @@ import {
   getGardenDenialsLastHour,
   recordGardenDenial,
 } from './garden-denial-observability.js';
+import { resolveGardenRouteCapability } from '../../boundary/fleet-auth/garden-route-capabilities.js';
+import { fleetAuthRoleAllowsAction } from '../../boundary/fleet-auth/role-action-policy.js';
 
 describe('Garden denial observability', () => {
   afterEach(() => {
@@ -67,5 +69,30 @@ describe('Garden denial observability', () => {
 
     expect(getGardenDenialsLastHour()).toBe(10_000);
     expect(getGardenDenialBucketCountForTests()).toBe(1);
+  });
+
+  it('attributes Automata authorization denials to the dedicated read action', () => {
+    const logger = { warn: vi.fn() };
+    const route = resolveGardenRouteCapability('GET', '/api/admin/automata');
+    expect(route?.capability.authorization.action).toBe('automata.read');
+    expect(fleetAuthRoleAllowsAction('admin', 'automata.read')).toBe(true);
+    expect(fleetAuthRoleAllowsAction('member', 'automata.read')).toBe(false);
+
+    recordGardenDenial(logger, {
+      reasonCode: 'fleet_authorization_denied',
+      status: 403,
+      routeId: route?.capability.id,
+      action: route?.capability.authorization.action,
+      principalId: 'member-a',
+    });
+
+    expect(logger.warn).toHaveBeenCalledWith('Fleet Garden request denied', {
+      reasonCode: 'fleet_authorization_denied',
+      reason: 'fleet_authorization_denied',
+      status: 403,
+      routeId: 'GET /api/admin/automata',
+      action: 'automata.read',
+      principalId: 'member-a',
+    });
   });
 });

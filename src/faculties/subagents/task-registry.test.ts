@@ -46,6 +46,7 @@ function automataPolicy() {
         tokenCeiling: 4_000,
         costCeilingUsd: 0.25,
       },
+      lessonProposal: { maxChangeChars: 4_000, maxSourceIds: 20 },
     },
     rawSessionRetentionMs: 30_000,
     retentionMs: { ephemeral: 1_000, standard: 10_000, extended: 20_000 },

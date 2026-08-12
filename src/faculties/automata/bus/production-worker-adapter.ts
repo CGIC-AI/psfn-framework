@@ -16,6 +16,7 @@ import type {
   AutomataRunRecord,
 } from '../registry-contract.js';
 import type { AutomataRunRegistry } from '../run-registry.js';
+import { createAutomataTextValidator } from '../validation.js';
 import {
   AUTOMATA_BUS_LESSON_ATTRIBUTION_FEATURE,
   AUTOMATA_BUS_RELATIONS_FEATURE,
@@ -52,11 +53,7 @@ interface CanonicalAppendResult {
   indexStatus: 'indexed' | 'lagging' | 'not-current';
 }
 
-function requiredText(value: string, field: string): string {
-  const normalized = value.trim();
-  if (!normalized) throw new Error(`Automata Bus ${field} must be non-empty`);
-  return normalized;
-}
+const requiredText = createAutomataTextValidator('Automata Bus');
 
 function stableId(namespace: string, values: readonly unknown[]): string {
   return `${namespace}:v1:${createHash('sha256').update(JSON.stringify(values)).digest('hex')}`;
@@ -285,7 +282,7 @@ export function createProductionAutomataBusWorkerAccess(options: {
         type: 'relation',
         body: {
           targetEventId: input.targetEventId,
-          relation: input.relation as AutomataBusRelationBody['relation'],
+          relation: input.relation,
           reason,
           ...(replacement ? { replacement } : {}),
         },

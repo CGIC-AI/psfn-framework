@@ -541,6 +541,7 @@ export function buildAdminApiRoutes(options: {
       ? buildAdminSharedWorkspaceRoutes({
           service: sharedWorkspaceService,
           automataService,
+          automataLessonProposalPolicy: config.automataPolicy?.bus.lessonProposal,
           withBody,
         })
       : []),

@@ -4,6 +4,10 @@ import {
   SENSITIVITY_LEVELS,
   sensitivityAtMost,
 } from '../../../system/trust/types.js';
+import {
+  normalizeAutomataStringList,
+  normalizeAutomataTimestamp,
+} from '../validation.js';
 import type { AutomataBusVerificationStatus } from './contract.js';
 import type {
   AutomataBusQueryAudience,
@@ -132,32 +136,25 @@ function validatePolicy(policy: AutomataBusQueryPolicy): void {
   }
 }
 
-function normalizeRequired(value: string, field: string): string {
+function normalizeRequired(value: unknown, field: string): string {
+  if (typeof value !== 'string') throw new Error(`${field} must be non-empty`);
   const normalized = value.trim();
   if (!normalized) throw new Error(`${field} must be non-empty`);
   return normalized;
 }
 
-function normalizeStringList(values: readonly string[] | undefined, field: string): string[] | undefined {
-  if (values === undefined) return undefined;
-  const normalized = values.map(value => normalizeRequired(value, field));
-  return [...new Set(normalized)].sort();
-}
-
-function normalizeTimestamp(value: string | undefined, field: string): string | undefined {
-  if (value === undefined) return undefined;
-  const normalized = normalizeRequired(value, field);
-  const instant = Date.parse(normalized);
-  if (!Number.isFinite(instant) || new Date(instant).toISOString() !== normalized) {
-    throw new Error(`${field} must be a canonical UTC ISO-8601 timestamp`);
-  }
-  return normalized;
-}
-
 function normalizeFilters(filters: AutomataBusSearchFilters | undefined): AutomataBusSearchFilters {
   if (filters === undefined) return {};
-  const occurredAfter = normalizeTimestamp(filters.occurredAfter, 'filters.occurredAfter');
-  const occurredBefore = normalizeTimestamp(filters.occurredBefore, 'filters.occurredBefore');
+  const occurredAfter = normalizeAutomataTimestamp(
+    filters.occurredAfter,
+    'filters.occurredAfter',
+    normalizeRequired,
+  );
+  const occurredBefore = normalizeAutomataTimestamp(
+    filters.occurredBefore,
+    'filters.occurredBefore',
+    normalizeRequired,
+  );
   if (
     occurredAfter !== undefined
     && occurredBefore !== undefined
@@ -173,13 +170,31 @@ function normalizeFilters(filters: AutomataBusSearchFilters | undefined): Automa
   }
   return {
     ...(filters.automatonClasses !== undefined
-      ? { automatonClasses: normalizeStringList(filters.automatonClasses, 'filters.automatonClasses') }
+      ? {
+          automatonClasses: normalizeAutomataStringList(
+            filters.automatonClasses,
+            'filters.automatonClasses',
+            normalizeRequired,
+          ),
+        }
       : {}),
     ...(filters.taskIds !== undefined
-      ? { taskIds: normalizeStringList(filters.taskIds, 'filters.taskIds') }
+      ? {
+          taskIds: normalizeAutomataStringList(
+            filters.taskIds,
+            'filters.taskIds',
+            normalizeRequired,
+          ),
+        }
       : {}),
     ...(filters.runIds !== undefined
-      ? { runIds: normalizeStringList(filters.runIds, 'filters.runIds') }
+      ? {
+          runIds: normalizeAutomataStringList(
+            filters.runIds,
+            'filters.runIds',
+            normalizeRequired,
+          ),
+        }
       : {}),
     ...(occurredAfter !== undefined ? { occurredAfter } : {}),
     ...(occurredBefore !== undefined ? { occurredBefore } : {}),

@@ -3,6 +3,7 @@ import {
   type ProductionAutomataClassId,
 } from './registry-contract.js';
 import { FREE_TIME_CHANNEL_PREFIX } from '../../core/session/session-id.js';
+import { createAutomataTextValidator } from './validation.js';
 
 export type ProtectedSessionOwnership =
   | 'companion'
@@ -80,11 +81,7 @@ export function resolveForegroundSessionOwner(
   return undefined;
 }
 
-function requiredText(value: string, field: string): string {
-  const normalized = value.trim();
-  if (!normalized) throw new Error(`Session classification ${field} must be a non-empty string`);
-  return normalized;
-}
+const requiredText = createAutomataTextValidator('Session classification');
 
 function safeTimestamp(value: number, field: string): number {
   if (!Number.isSafeInteger(value) || value < 0) {

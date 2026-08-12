@@ -307,11 +307,14 @@ export async function composeSessionRuntimeAsync(
   const redactionDriftObserver = createProjectionDriftIncidentObserver({
     cogSecEvents: () => new CogSecEventStore(resolveCogSecEventsPath(companionDataDir)),
   });
+  const automataRetentionCompanionId = options.automataRetentionCompanionId?.trim()
+    || options.config.companionId?.trim();
+  if (!automataRetentionCompanionId) {
+    throw new Error('PostgreSQL session composition requires an Automata retention companionId');
+  }
   const exactSessionWriteBarrier = new FilesystemAutomataRetentionWriteBarrier(
     sessionsDir,
-    options.automataRetentionCompanionId
-      ?? options.config.companionId
-      ?? 'unscoped-session-composition',
+    automataRetentionCompanionId,
   );
   const sessionAdapters = await awaitPostgresStoreReadiness(
     'session_transcripts',

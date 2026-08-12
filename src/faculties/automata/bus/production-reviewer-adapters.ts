@@ -3,6 +3,7 @@ import { buildLLMWorkSpec, completeWithWorkSpec } from '../../../primitives/llm/
 import { isRecord } from '../../../shared/utils/types.js';
 import { SENSITIVITY_LEVELS } from '../../../system/trust/types.js';
 import type { AutomataRunRegistry } from '../run-registry.js';
+import { createAutomataTextValidator } from '../validation.js';
 import {
   type AutomataBusEvent,
   type AutomataBusFindingBody,
@@ -56,12 +57,7 @@ const OUTCOME_STATUSES = new Set<AutomataBusReviewerOutcomeStatus>([
   'stale',
 ]);
 
-function requiredText(value: unknown, field: string): string {
-  if (typeof value !== 'string' || value.trim().length === 0) {
-    throw new Error(`Automata Bus reviewer ${field} must be a non-empty string`);
-  }
-  return value.trim();
-}
+const requiredText = createAutomataTextValidator('Automata Bus reviewer');
 
 function nonNegativeInteger(value: unknown, field: string): number {
   const parsed = typeof value === 'string' && /^\d+$/u.test(value) ? Number(value) : value;

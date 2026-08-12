@@ -18,6 +18,7 @@ import {
   type PersistedAutomataBusCurrentFinding,
 } from './postgres-store.js';
 import type { AutomataBusCurrentState } from './current-state.js';
+import { createAutomataTextValidator } from '../validation.js';
 
 const IMMUTABLE_EVENT_TRIGGERS = [
   'automata_bus_events_append_only',
@@ -50,11 +51,7 @@ interface AutomataBusTriggerReadinessRow {
   trigger_name: string;
 }
 
-function requiredText(value: string, field: string): string {
-  const normalized = value.trim();
-  if (!normalized) throw new Error(`Automata Bus ${field} must be a non-empty string`);
-  return normalized;
-}
+const requiredText = createAutomataTextValidator('Automata Bus');
 
 export function assertAutomataBusEventAuthorized(
   event: AutomataBusEvent,

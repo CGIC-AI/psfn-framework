@@ -11,6 +11,11 @@
       "proves": ["structured-context", "provenance-evidence", "separate-verification"]
     },
     {
+      "file": "accept/lesson-attribution.json",
+      "outcome": "accepted",
+      "proves": ["lesson-attribution-feature", "content-safe-attribution"]
+    },
+    {
       "file": "reject/computed-without-evidence.json",
       "outcome": "rejected",
       "proves": ["mandatory-evidence"]
@@ -19,6 +24,11 @@
       "file": "reject/relation-without-feature.json",
       "outcome": "rejected",
       "proves": ["must-understand-declaration"]
+    },
+    {
+      "file": "reject/lesson-attribution-without-feature.json",
+      "outcome": "rejected",
+      "proves": ["lesson-attribution-must-understand-declaration"]
     },
     {
       "file": "reject/stale-lineage-target.json",

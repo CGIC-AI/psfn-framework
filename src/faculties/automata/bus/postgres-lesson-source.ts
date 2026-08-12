@@ -17,6 +17,7 @@ import type {
   AutomataBusAudience,
   AutomataBusSqlPool,
 } from './postgres-store.js';
+import { createAutomataTextValidator } from '../validation.js';
 
 interface CurrentLessonRow {
   audiences: unknown;
@@ -29,11 +30,7 @@ export interface PostgresAutomataLessonSourceOptions {
   companionId: string;
 }
 
-function requiredText(value: string, field: string): string {
-  const normalized = value.trim();
-  if (!normalized) throw new Error(`Automata lesson source ${field} must be non-empty`);
-  return normalized;
-}
+const requiredText = createAutomataTextValidator('Automata lesson source');
 
 function isSensitivity(value: unknown): value is SensitivityLevel {
   return typeof value === 'string' && SENSITIVITY_LEVELS.includes(value as SensitivityLevel);

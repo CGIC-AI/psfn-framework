@@ -5,6 +5,7 @@ import type {
   AutomataBusEvidence,
   AutomataBusLessonAttribution,
   AutomataBusProvenance,
+  AutomataBusRelationKind,
   AutomataBusVerificationStatus,
 } from './contract.js';
 
@@ -50,10 +51,37 @@ export interface AutomataBusWorkerBriefing {
   itemCount: number;
 }
 
-export interface AutomataBusWorkerOperation {
-  action: AutomataBusToolAction;
-  [key: string]: unknown;
-}
+export type AutomataBusWorkerOperation =
+  | { action: 'brief'; query?: string }
+  | { action: 'search'; query: string; limit?: number }
+  | {
+    action: 'append';
+    claim: string;
+    provenance: AutomataBusProvenance;
+    evidence: AutomataBusEvidence[];
+    artifactRefs: string[];
+    verificationStatus: AutomataBusVerificationStatus;
+    source?: string;
+    confidence?: number;
+    lessonAttribution?: AutomataBusLessonAttribution;
+  }
+  | {
+    action: 'correct';
+    targetEventId: string;
+    relation: AutomataBusRelationKind;
+    reason: string;
+    replacementClaim?: string;
+  }
+  | {
+    action: 'handoff';
+    summary: string;
+    outputRefs: string[];
+    validationPerformed: string[];
+    blocker?: string;
+    nextAction?: string;
+  }
+  | { action: 'runs'; status?: string; classId?: string; taskId?: string; limit?: number }
+  | { action: 'inspect'; eventId?: string; runId?: string };
 
 /**
  * Narrow adapter over the canonical Bus store/query service and run registry.
@@ -84,7 +112,7 @@ export interface AutomataBusWorkerPort {
   correct(input: {
     scope: AutomataBusWorkerScope;
     targetEventId: string;
-    relation: string;
+    relation: AutomataBusRelationKind;
     reason: string;
     replacementClaim?: string;
   }): Promise<unknown>;

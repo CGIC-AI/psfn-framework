@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type { AutomataBusFindingEvent } from '../../../faculties/automata/bus/contract.js';
 import type { AutomataBusEffectiveFinding } from '../../../faculties/automata/bus/current-state.js';
@@ -208,6 +208,38 @@ describe('AdminAutomataDataService', () => {
     expect((await service.getSnapshot()).bus).toMatchObject({
       available: false,
       health: { condition: 'unavailable', freshness: 'unknown' },
+    });
+  });
+
+  it('logs Bus and lesson read failures before returning degraded operator state', async () => {
+    const registry = await createRegistry();
+    const logger = { error: vi.fn() };
+    const service = new AdminAutomataDataService({
+      registry,
+      companionId: 'companion-test',
+      readPolicy: { defaultPageLimit: 5, maxPageLimit: 20 },
+      bus: {
+        async readPage() {
+          throw new Error('canonical Bus read unavailable');
+        },
+      },
+      lessons: {
+        async query() {
+          throw new Error('lesson projection unavailable');
+        },
+      },
+      logger,
+    });
+
+    const snapshot = await service.getSnapshot();
+
+    expect(snapshot.bus.health.degradationReasons).toEqual(['read_failed']);
+    expect(snapshot.lessons.degradationReason).toBe('read_failed');
+    expect(logger.error).toHaveBeenCalledWith('Automata Bus operator read failed', {
+      error: 'canonical Bus read unavailable',
+    });
+    expect(logger.error).toHaveBeenCalledWith('Automata lesson operator read failed', {
+      error: 'lesson projection unavailable',
     });
   });
 

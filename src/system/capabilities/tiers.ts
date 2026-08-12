@@ -12,6 +12,9 @@ const NURSERY_TOKENS: readonly CapabilityToken[] = [
   'identity.read',
   'identity.write.runtime',
   'memory.write',
+  // The tier token alone cannot authorize a Bus mutation. Runtime composition
+  // separately binds an owner-eligible automata class plus authoritative
+  // companion/run/task scope, and the canonical store rechecks that scope.
   'automata.bus.read',
   'automata.bus.write',
   'git.read',

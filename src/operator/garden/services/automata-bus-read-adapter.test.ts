@@ -181,6 +181,33 @@ describe('PostgresAdminAutomataBusReadAdapter', () => {
     });
   });
 
+  it('logs vector-state failures before reporting the derived index unavailable', async () => {
+    const database = pool();
+    const logger = { error: vi.fn() };
+    const adapter = new PostgresAdminAutomataBusReadAdapter({
+      pool: database.pool,
+      vector: {
+        readState: vi.fn(async () => {
+          throw new Error('vector state unavailable');
+        }),
+      },
+      companionId: 'companion-a',
+      maxPageLimit: 20,
+      logger,
+    });
+
+    const page = await adapter.readPage({ companionId: 'companion-a', offset: 0, limit: 4 });
+
+    expect(page.health).toMatchObject({
+      condition: 'degraded',
+      indexState: 'unavailable',
+      degradationReasons: ['index_unavailable', 'reindex_required'],
+    });
+    expect(logger.error).toHaveBeenCalledWith('Automata Bus vector state read failed', {
+      error: 'vector state unavailable',
+    });
+  });
+
   it('composes the content-safe current-finding lesson projection', async () => {
     const database = pool();
     const adapter = new PostgresAdminAutomataBusReadAdapter({

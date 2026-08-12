@@ -72,6 +72,7 @@ describe('internal role envelope runtime wiring', () => {
           persistenceBackend: 'postgres',
           postgresDatabaseUrl: 'postgres://postgres:secret@localhost:5432/psfn_test',
         }),
+        automataRetentionCompanionId: 'companion-test',
       }),
     );
 

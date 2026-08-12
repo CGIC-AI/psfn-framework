@@ -11,6 +11,7 @@ import type {
   PermanentReferenceCustodyPort,
 } from './retention-contract.js';
 import type { SessionClassification } from './session-classification.js';
+import { createAutomataTextValidator } from './validation.js';
 
 export const EXACT_SESSION_PURGE_SURFACE_ORDER = [
   'redis_tail_pointers',
@@ -108,11 +109,7 @@ function cloneSaga(record: ExactSessionPurgeSagaRecord): ExactSessionPurgeSagaRe
   };
 }
 
-function requiredText(value: string, field: string): string {
-  const normalized = value.trim();
-  if (!normalized) throw new Error(`Exact-session purge ${field} must be a non-empty string`);
-  return normalized;
-}
+const requiredText = createAutomataTextValidator('Exact-session purge');
 
 function safeInteger(value: unknown, field: string, minimum = 0): number {
   if (!Number.isSafeInteger(value) || (value as number) < minimum) {

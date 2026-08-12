@@ -4,6 +4,12 @@ Automata Bus is durable learned state for ephemeral PSFN workers. It records com
 their evidence, and later changes to their standing. It is not a transcript store, a developer
 coordination bus, or a replacement for the companion's own L2 memory.
 
+An owner-eligible background `memory.extraction` run may receive a bounded Bus briefing and use
+the same scoped Bus tool as other eligible workers. Its L2 extraction result and any canonical
+Bus append remain separate writes with separate contracts. Foreground `memory.retrieval` never
+queries the Bus or receives its tool, so Bus state cannot silently replace or alter primary L2
+recall.
+
 The executable v1 contract is
 [`src/faculties/automata/bus/contract.ts`](../src/faculties/automata/bus/contract.ts).
 The language-neutral fixtures live under
@@ -34,6 +40,12 @@ a newer schema generation or an unsupported token returns `not-understood` and d
 the event body. Malformed data from a generation the reader does understand is rejected, including
 unknown fields. This distinction lets a future event remain intact without letting an old reader
 guess at its meaning.
+
+The `lesson-attribution-v1` must-understand token owns the optional recurrent-lesson attribution
+on a finding. Its prompt revision, tool name, failure category, lesson code, and contradiction
+event IDs are content-safe identifiers rather than prompt, transcript, or evidence text. A finding
+that carries lesson attribution without declaring this token is rejected. The language-neutral
+corpus includes both an accepted attributed finding and the missing-token rejection.
 
 Postgres will be the canonical runtime store. A semantic index is derived, disposable state: it
 may accelerate recall, but it cannot create, merge, correct, supersede, retract, or verify a claim.

@@ -29,6 +29,8 @@ import {
   type AutomataLessonReadScope,
 } from '../../../faculties/automata/bus/lesson-projection.js';
 import { PostgresAutomataLessonSource } from '../../../faculties/automata/bus/postgres-lesson-source.js';
+import { createComponentLogger } from '../../../shared/logger.js';
+import { toErrorMessage } from '../../../shared/utils/errors.js';
 import type {
   AdminAutomataBusDegradationReason,
   AdminAutomataBusHealthSource,
@@ -36,6 +38,12 @@ import type {
   AdminAutomataBusReadPort,
   AdminAutomataLessonReadPort,
 } from './automata-service.js';
+
+interface AutomataBusReadAdapterLogger {
+  error(message: string, metadata?: Record<string, unknown>): void;
+}
+
+const log = createComponentLogger('PostgresAdminAutomataBusReadAdapter');
 
 interface EventJsonRow {
   event_json: unknown;
@@ -55,6 +63,7 @@ interface PostgresAdminAutomataBusReadAdapterOptions {
   companionId: string;
   maxPageLimit: number;
   now?: () => Date;
+  logger?: AutomataBusReadAdapterLogger;
 }
 
 function requireNonNegativeInteger(value: unknown, field: string): number {
@@ -288,7 +297,12 @@ export class PostgresAdminAutomataBusReadAdapter implements
           AND 'operator' = ANY(audiences)
           AND sensitivity = ANY($2::text[])
       `, [this.companionId, [...SENSITIVITY_LEVELS]]),
-      this.options.vector.readState().catch(() => unavailableVectorState()),
+      this.options.vector.readState().catch((error) => {
+        (this.options.logger ?? log).error('Automata Bus vector state read failed', {
+          error: toErrorMessage(error),
+        });
+        return unavailableVectorState();
+      }),
     ]);
 
     const parsedEvents = eventRows.rows.map(row => parsePersistedEvent(row.event_json));

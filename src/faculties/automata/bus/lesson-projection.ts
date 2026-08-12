@@ -10,6 +10,7 @@ import type {
   AutomataBusVerificationStatus,
 } from './contract.js';
 import type { AutomataBusAudience } from './postgres-store.js';
+import { createAutomataPositiveIntegerValidator } from '../validation.js';
 
 type AutomataLessonEvidenceQuality =
   | 'none'
@@ -83,12 +84,7 @@ export interface AutomataLessonSourcePort {
 
 const SAFE_DIMENSION_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,255}$/u;
 
-function positiveInteger(value: number, field: string): number {
-  if (!Number.isSafeInteger(value) || value < 1) {
-    throw new Error(`Automata lesson ${field} must be a positive safe integer`);
-  }
-  return value;
-}
+const positiveInteger = createAutomataPositiveIntegerValidator('Automata lesson');
 
 function normalizePolicy(policy: AutomataLessonProjectionPolicy): AutomataLessonProjectionPolicy {
   return Object.freeze({

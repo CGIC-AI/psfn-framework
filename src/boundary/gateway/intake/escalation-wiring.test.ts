@@ -388,6 +388,14 @@ describe('L2/L3 escalation wired into the live gateway screening path', () => {
     expect(result.effectiveText).toBe(BENIGN_CONTENT);
     expect(result.withheld).toBe(false);
     expect(result.cogSecCaseId).toBeUndefined();
+    expect(result.observability).toMatchObject({
+      action: 'pass',
+      state: 'released',
+      semanticTrace: {
+        l2: { status: 'not_run' },
+        l3: { status: 'not_run' },
+      },
+    });
     expect(composition.quarantine!.list()).toHaveLength(0);
     expect(timing).toEqual([
       expect.objectContaining({
@@ -423,6 +431,38 @@ describe('L2/L3 escalation wired into the live gateway screening path', () => {
     expect(result.envelope.extractedFields[L2_SCREENER_SUMMARY_FIELD])
       .toBe(L2_CLEAN_VERDICT.summary);
     expect(result.cogSecCaseId).toBeUndefined();
+    expect(result.observability).toMatchObject({
+      action: 'pass',
+      state: 'released',
+      scores: { [L2_SCREENER_SCANNER_ID]: 0.05 },
+      semanticTrace: {
+        l2: { status: 'clear' },
+        l3: { status: 'not_run' },
+      },
+    });
+
+    await composition.dispose();
+  });
+
+  it('routes an L1/L1.5-clean untrusted item through the semantic L2 catch layer', async () => {
+    const transport = routingFetch({ [L2_MODEL]: { verdict: L2_CLEAN_VERDICT } });
+    const { composition } = await composeWith(seedPolicy({ mode: 'strict' }), transport.fetch);
+
+    const result = await composition.screening!.screen(BENIGN_CONTENT, {
+      sourceClass: 'web_search',
+      origin: { ref: 'web-search:semantic-catch-clean-prior' },
+      scope: 'context',
+    });
+
+    expect(result.report.riskLabels).toEqual([]);
+    expect(result.injectionScore).toBeCloseTo(0.01, 5);
+    expect(transport.calls(L2_MODEL)).toBe(1);
+    expect(transport.calls(L3_MODEL)).toBe(0);
+    expect(result.envelope.state).toBe('released');
+    expect(result.observability.semanticTrace).toMatchObject({
+      l2: { status: 'clear' },
+      l3: { status: 'not_run' },
+    });
 
     await composition.dispose();
   });

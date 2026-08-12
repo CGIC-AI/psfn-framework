@@ -310,9 +310,10 @@ never runs it.
 
 The mid-weight tier for items whose L1/L1.5 prior score crosses the per-tier
 escalation threshold (`l2Screener.escalationThresholdsByTier`) or whose tier
-is listed in `l2Screener.mandatoryTiers` (seed: `hostile`). Below-threshold,
-non-mandatory items skip L2 entirely — the trusted-tier fast path pays no
-latency.
+is listed in `l2Screener.mandatoryTiers` (seed: `untrusted`, `hostile`). This
+makes L2 the deliberate semantic catch for public and machine-carried content
+that reads clean to lexical L1 and bounded ONNX L1.5, while below-threshold
+trusted/standard items keep the zero-call fast path.
 
 It is a **tool-less** OpenRouter chat call (dual-LLM discipline, CaMeL): the
 screener model sees untrusted content but holds no tools and no capabilities;
@@ -334,6 +335,15 @@ classification. `evaluateL2` wraps it with routing plus per-tier fail-closed
 actions (`failClosedActionByTier`): `quarantine` for high-risk tiers,
 `l1_labels_only` for trusted tiers. A verdict that flags the content — or a
 tier in `l3Screener.mandatoryTiers` — returns an `escalate_l3` outcome.
+
+Every completed canonical text screening emits one info-level `Intake
+screening observability` record, including released envelopes and `image_ocr`
+transcripts. The record is content-free: envelope/source identifiers, final
+state/action, risk labels, all per-layer scores, and an L2/L3 status plus
+routing reason. It excludes raw text, origin refs, summaries, and model output.
+The same record is returned as `IntakeScreeningResult.observability` and can be
+captured through the isolated `onDecision` observer. This makes a corpus miss
+attributable to `L2 not_run` versus `L2 clear` without raising log sensitivity.
 
 ### L3 — heavy escalation screener + safe representation
 
@@ -1035,7 +1045,7 @@ Seed `sourceRiskTiers`: `operator`/`companion_self`/`primary_user` → `trusted`
 | Knob | Seed default | What it does |
 | --- | --- | --- |
 | `escalationThresholdsByTier` | trusted `0.95`, standard `0.85`, untrusted `0.6`, hostile `0.5` | Prior (max L1/L1.5) score at/above which an item escalates to L2. |
-| `mandatoryTiers` | `["hostile"]` | Tiers that always escalate to L2 regardless of prior score. |
+| `mandatoryTiers` | `["untrusted", "hostile"]` | Tiers that always reach the tool-less semantic L2 classifier regardless of their L1/L1.5 score. Trusted/standard content retains the threshold-gated fast path. |
 | `failClosedActionByTier` | trusted/standard `l1_labels_only`, untrusted/hostile `quarantine` | Action when the L2 call errors/times out. No silent-pass option exists. |
 | `timeoutMs` | `8000` | Per-call timeout. |
 | `maxContentChars` | `24000` | Input cap sent to the screener. |

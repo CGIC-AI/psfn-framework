@@ -524,6 +524,7 @@ async function main(): Promise<void> {
       : {}),
     automataRuntime: {
       registry: persistenceRuntime.automataRunRegistry,
+      runs: persistenceRuntime.automataRunStore,
       store: persistenceRuntime.automataBusStore,
       retentionStore: persistenceRuntime.automataRetentionStore,
       purgeSagaStore: persistenceRuntime.automataPurgeSagaStore,

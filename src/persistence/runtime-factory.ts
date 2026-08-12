@@ -110,6 +110,8 @@ export interface AgentPersistenceRuntime {
   introspectionLandmarkStore: IntrospectionLandmarkPostgresStore;
   backgroundWorkStore: BackgroundWorkStorePort;
   automataRunRegistry: AutomataRunRegistry;
+  /** Exact durable run authority retained beyond the bounded registry discovery view. */
+  automataRunStore: PostgresAutomataRunStore;
   /** Companion-locked canonical Automata Bus store; derived search indexes are not authority. */
   automataBusStore: PostgresAutomataBusRuntimeStore;
   automataRetentionStore: PostgresAutomataRetentionStore;
@@ -400,6 +402,7 @@ export async function createAgentPersistenceRuntime(
       () => PostgresBackgroundWorkStore.connect(databaseUrl, { schema, role: tenantRole }),
     ),
     automataRunRegistry,
+    automataRunStore,
     automataBusStore,
     automataRetentionStore,
     automataSessionClassification,

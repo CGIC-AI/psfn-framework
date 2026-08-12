@@ -1,6 +1,4 @@
-import { createHash } from 'node:crypto';
 import type { Pool } from 'pg';
-import { withPostgresClient } from '../../persistence/postgres.js';
 import {
   createFilesystemExactSessionPurgeSurfaces,
   PostgresExactSessionProjectionPurgeSurface,
@@ -9,13 +7,14 @@ import {
 } from '../../persistence/sessions/exact-session-purge-surfaces.js';
 import type { PostgresExactSessionPurgeSagaStore } from '../../persistence/postgres/automata-exact-session-purge-store.js';
 import type { PostgresAutomataBusRuntimeStore } from './bus/runtime-store.js';
-import type { AutomataRunRegistry } from './run-registry.js';
+import type { AutomataRunRegistry, AutomataRunStorePort } from './run-registry.js';
 import type { AutomataSessionPurgeSurface } from './retention-contract.js';
 import { AutomataRetentionCoordinator } from './retention-coordinator.js';
 import type { PostgresAutomataRetentionStore } from './retention-postgres-store.js';
 import {
   ProductionExactSessionPurge,
   type ExactSessionPurgeExclusiveFencePort,
+  type ExactSessionWriteBarrierPort,
   type ExactSessionSurfacePurgePort,
 } from './production-exact-session-purge.js';
 import {
@@ -23,30 +22,20 @@ import {
   ProductionAutomataRetentionProofSource,
   ProductionExactSessionPurgeTargetAuthority,
 } from './production-retention-authority.js';
-
-function advisoryLockKey(companionId: string, sessionId: string): bigint {
-  const digest = createHash('sha256')
-    .update('automata-exact-session-purge-v1\0')
-    .update(companionId)
-    .update('\0')
-    .update(sessionId)
-    .digest();
-  return digest.readBigInt64BE(0);
-}
+import { PostgresAutomataCompanionMutationFence } from './retention-mutation-fence.js';
 
 export class PostgresExactSessionPurgeExclusiveFence implements ExactSessionPurgeExclusiveFencePort {
-  constructor(private readonly pool: Pool) {}
+  private readonly fence: PostgresAutomataCompanionMutationFence;
+
+  constructor(pool: Pool) {
+    this.fence = new PostgresAutomataCompanionMutationFence(pool);
+  }
 
   async runExclusive<T>(
     input: { companionId: string; sessionId: string },
     operation: () => Promise<T>,
   ): Promise<T> {
-    return await withPostgresClient(this.pool, async client => {
-      await client.query('SELECT pg_advisory_xact_lock($1::bigint)', [
-        advisoryLockKey(input.companionId, input.sessionId).toString(),
-      ]);
-      return await operation();
-    });
+    return await this.fence.runExclusive(input, async () => await operation());
   }
 }
 
@@ -67,6 +56,7 @@ export function createProductionAutomataRetentionRuntime(options: {
   sessionsDir: string;
   batchLimit: number;
   registry: AutomataRunRegistry;
+  runs: Pick<AutomataRunStorePort, 'loadExact'>;
   bus: PostgresAutomataBusRuntimeStore;
   retentionStore: PostgresAutomataRetentionStore;
   sagaStore: PostgresExactSessionPurgeSagaStore;
@@ -76,6 +66,7 @@ export function createProductionAutomataRetentionRuntime(options: {
     evictChannel(channelId: string): void;
   };
   redisTail: ExactSessionRedisTailPurgePort | null;
+  writeBarrier: ExactSessionWriteBarrierPort;
 }): ProductionAutomataRetentionRuntime {
   if (!Number.isSafeInteger(options.batchLimit) || options.batchLimit < 1) {
     throw new Error('Automata retention batchLimit must be a positive safe integer');
@@ -83,11 +74,13 @@ export function createProductionAutomataRetentionRuntime(options: {
   const proofs = new ProductionAutomataRetentionProofSource({
     companionId: options.companionId,
     registry: options.registry,
+    runs: options.runs,
     bus: options.bus,
   });
   const custody = new ProductionAutomataPermanentReferenceCustody({
     companionId: options.companionId,
     registry: options.registry,
+    runs: options.runs,
     bus: options.bus,
   });
   const authority = new ProductionExactSessionPurgeTargetAuthority({
@@ -114,6 +107,7 @@ export function createProductionAutomataRetentionRuntime(options: {
     authority,
     custody,
     fence: new PostgresExactSessionPurgeExclusiveFence(options.projection.pool),
+    writeBarrier: options.writeBarrier,
     sagaStore: options.sagaStore,
     surfaces,
   });

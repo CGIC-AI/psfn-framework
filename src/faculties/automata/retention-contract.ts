@@ -76,7 +76,10 @@ export interface AutomataRetentionProofPort {
 }
 
 export interface PermanentReferenceCustodyPort {
-  assertResolvable(references: readonly string[]): Promise<void>;
+  assertResolvable(
+    references: readonly string[],
+    target?: { companionId: string; runId: string },
+  ): Promise<void>;
 }
 
 export interface ExactSessionPurgeInput {

@@ -93,6 +93,7 @@ export interface BootstrapAgentCoreRuntimeOptions {
   placesRegistryConfig?: PlacesRegistryConfig;
   automataRuntime?: {
     registry: AutomataRunRegistry;
+    runs: Pick<import('../../faculties/automata/run-registry.js').AutomataRunStorePort, 'loadExact'>;
     store: PostgresAutomataBusRuntimeStore;
     retentionStore: PostgresAutomataRetentionStore;
     purgeSagaStore: PostgresExactSessionPurgeSagaStore;

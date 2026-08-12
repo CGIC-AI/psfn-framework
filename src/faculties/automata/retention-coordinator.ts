@@ -275,7 +275,10 @@ export class AutomataRetentionCoordinator {
 
     const preserveReferences = finalDecision.preserveReferences;
     try {
-      await this.ports.custody.assertResolvable(preserveReferences);
+      await this.ports.custody.assertResolvable(preserveReferences, {
+        companionId: classification.companionId,
+        runId: classification.runId,
+      });
     } catch (error) {
       await this.recordFailure(classification, revalidated, attemptId, nowMs, 'evidence_unresolvable', error);
       return {
@@ -306,7 +309,10 @@ export class AutomataRetentionCoordinator {
         preserveReferences,
       });
       validatePurgeReport(classification, revalidated, preserveReferences, report);
-      await this.ports.custody.assertResolvable(preserveReferences);
+      await this.ports.custody.assertResolvable(preserveReferences, {
+        companionId: classification.companionId,
+        runId: classification.runId,
+      });
     } catch (error) {
       const reason: AutomataRetentionReason = error instanceof Error
         && error.message.startsWith('Exact-session purge')

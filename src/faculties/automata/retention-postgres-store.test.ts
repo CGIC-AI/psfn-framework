@@ -12,12 +12,23 @@ class FakePool implements AutomataRetentionSqlPool {
 
   constructor(private readonly replies: QueryResultRow[][]) {}
 
+  async connect() {
+    return {
+      query: this.query.bind(this),
+      release: () => undefined,
+    };
+  }
+
   async query<R extends QueryResultRow = QueryResultRow>(
     text: string,
     values: readonly unknown[] = [],
   ): Promise<QueryResult<R>> {
     this.calls.push({ text, values });
-    const rows = (this.replies.shift() ?? []) as R[];
+    const isTransactionControl = text === 'BEGIN'
+      || text === 'COMMIT'
+      || text === 'ROLLBACK'
+      || text === 'SELECT pg_advisory_xact_lock(hashtext($1))';
+    const rows = (isTransactionControl ? [] : this.replies.shift() ?? []) as R[];
     return {
       command: '',
       rowCount: rows.length,
@@ -82,9 +93,11 @@ describe('PostgresAutomataRetentionStore', () => {
     const store = new PostgresAutomataRetentionStore(pool);
     await store.recordClassification(classification);
 
-    expect(pool.calls).toHaveLength(1);
-    expect(pool.calls[0]?.text).toContain('INSERT INTO automata_session_classifications');
-    expect(pool.calls[0]?.values).toEqual([
+    const insert = pool.calls.find(call => call.text.includes('INSERT INTO automata_session_classifications'));
+    expect(pool.calls.map(call => call.text)).toEqual(expect.arrayContaining([
+      'SELECT pg_advisory_xact_lock(hashtext($1))',
+    ]));
+    expect(insert?.values).toEqual([
       'companion-a',
       'session-a',
       1,

@@ -120,6 +120,10 @@ export interface SessionStoreOptions {
   integrityObserver?: SessionIntegrityObserver | null;
   /** Test/observability seam after recovery pins an owner L0 snapshot. */
   recoveryAuthoritySnapshotHook?: (ownerSessionId: string) => void | Promise<void>;
+  /** Durable exact-session seal checked at every journal and TurnRecord commit. */
+  automataRetentionWriteBarrier?: {
+    assertWritable(sessionIdentities: readonly string[]): void;
+  } | null;
 }
 
 export interface SessionIntegrityProvider {

@@ -10,6 +10,7 @@ import {
   type AutomataRunStatus,
 } from '../../faculties/automata/registry-contract.js';
 import type { AutomataRunStorePort } from '../../faculties/automata/run-registry.js';
+import { PostgresAutomataCompanionMutationFence } from '../../faculties/automata/retention-mutation-fence.js';
 import {
   createPostgresPool,
   ensurePostgresSchema,
@@ -156,10 +157,14 @@ function rowParams(record: AutomataRunRecord): unknown[] {
 }
 
 export class PostgresAutomataRunStore implements AutomataRunStorePort {
+  private readonly mutationFence: PostgresAutomataCompanionMutationFence;
+
   private constructor(
     private readonly pool: Pool,
     private readonly companionId: string,
-  ) {}
+  ) {
+    this.mutationFence = new PostgresAutomataCompanionMutationFence(pool);
+  }
 
   static async connect(
     databaseUrl: string,
@@ -181,33 +186,59 @@ export class PostgresAutomataRunStore implements AutomataRunStorePort {
     const rows = await queryRows<AutomataRunRow>(this.pool, `
       SELECT ${RUN_COLUMNS}
       FROM automata_runs
-      WHERE companion_id = $1 AND retention_deadline_ms > $2
+      WHERE companion_id = $1
+        AND (
+          status NOT IN ('completed', 'failed', 'cancelled')
+          OR retention_deadline_ms > $2
+        )
       ORDER BY created_at_ms DESC, run_id ASC
     `, [this.companionId, nowMs]);
     return rows.map(mapRow);
   }
 
+  async loadExact(companionId: string, runId: string): Promise<AutomataRunRecord | null> {
+    this.assertCompanion(companionId);
+    const rows = await queryRows<AutomataRunRow>(this.pool, `
+      SELECT ${RUN_COLUMNS}
+      FROM automata_runs
+      WHERE companion_id = $1 AND run_id = $2
+      LIMIT 1
+    `, [this.companionId, text(runId, 'runId')]);
+    const row = rows[0];
+    if (!row) return null;
+    if (rows.length !== 1) throw new Error(`Automata run store returned duplicate run "${runId}".`);
+    const record = mapRow(row);
+    if (record.companionId !== this.companionId || record.runId !== runId.trim()) {
+      throw new Error('Automata run store exact lookup scope mismatch');
+    }
+    return record;
+  }
+
   async insert(record: AutomataRunRecord): Promise<void> {
     this.assertCompanion(record.companionId);
-    await this.pool.query(`
-      INSERT INTO automata_runs (${RUN_COLUMNS})
-      VALUES (${rowParams(record).map((_, index) => `$${index + 1}`).join(', ')})
-    `, rowParams(record));
+    await this.mutationFence.runExclusive(record, async client => {
+      await client.query(`
+        INSERT INTO automata_runs (${RUN_COLUMNS})
+        VALUES (${rowParams(record).map((_, index) => `$${index + 1}`).join(', ')})
+      `, rowParams(record));
+    });
   }
 
   async update(record: AutomataRunRecord, previousStatus: AutomataRunStatus): Promise<void> {
     this.assertCompanion(record.companionId);
-    const result = await this.pool.query(`
-      UPDATE automata_runs SET
-        automaton_class = $3, worker_id = $4, worker_generation = $5,
-        task_id = $6, task_label = $7, task_summary = $8,
-        parent_run_id = $9, source_run_id = $10, session_ids_json = $11::jsonb,
-        artifacts_json = $12::jsonb, status = $13, status_reason = $14,
-        outcome = $15, failure_reason = $16, promotion_state = $17,
-        fold_state = $18, created_at_ms = $19, started_at_ms = $20,
-        finished_at_ms = $21, retention_deadline_ms = $22
-      WHERE companion_id = $1 AND run_id = $2 AND status = $23
-    `, [...rowParams(record), previousStatus]);
+    const result = await this.mutationFence.runExclusive(record, async client => (
+      await client.query(`
+        UPDATE automata_runs SET
+          automaton_class = $3, worker_id = $4, worker_generation = $5,
+          task_id = $6, task_label = $7, task_summary = $8,
+          parent_run_id = $9, source_run_id = $10, session_ids_json = $11::jsonb,
+          artifacts_json = $12::jsonb, status = $13, status_reason = $14,
+          outcome = $15, failure_reason = $16, promotion_state = $17,
+          fold_state = $18, created_at_ms = $19, started_at_ms = $20,
+          finished_at_ms = $21, retention_deadline_ms = $22
+        WHERE companion_id = $1 AND run_id = $2 AND status = $23
+      `, [...rowParams(record), previousStatus])
+    ));
     if (result.rowCount !== 1) throw new Error(`Automata run "${record.runId}" changed concurrently.`);
   }
 

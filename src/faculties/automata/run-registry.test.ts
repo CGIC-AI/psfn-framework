@@ -86,6 +86,15 @@ describe('AutomataRunRegistry', () => {
     expect(restarted.getRun('run-active')?.status).toBe('running');
     expect(restarted.getRun('run-recent')?.status).toBe('completed');
     expect(restarted.findByTask('task-recent')[0]?.sessionIds).toEqual(['subagent:subagent-2']);
+
+    const restartedAfterDiscoveryRetention = await AutomataRunRegistry.hydrate({
+      companionId: 'companion-a',
+      policy: policy(),
+      store,
+      nowMs: 20_000,
+    });
+    expect(restartedAfterDiscoveryRetention.getRun('run-active')?.status).toBe('running');
+    expect(restartedAfterDiscoveryRetention.getRun('run-recent')).toBeNull();
   });
 
   it('fails closed on unknown class, status, and transition', async () => {

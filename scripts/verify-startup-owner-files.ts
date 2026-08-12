@@ -28,6 +28,7 @@ export const OWNER_FILE_SEEDS = [
   ['scheduler.seed.json', 'scheduler.json'],
   ['capability-tier.seed.json', 'capability-tier.json'],
   ['charge-policy.seed.json', 'charge-policy.json'],
+  ['automata-policy.seed.json', 'automata-policy.json'],
   ['backup.seed.json', 'backup.json'],
   ['skills.seed.json', 'skills.json'],
   ['intake-policy.seed.json', 'intake-policy.json'],

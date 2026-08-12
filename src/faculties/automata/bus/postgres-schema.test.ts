@@ -46,6 +46,7 @@ describe('Automata Bus Postgres schema contract', () => {
       'DROP TABLE IF EXISTS automata_bus_vector_state',
       'DROP TABLE IF EXISTS automata_bus_current_findings',
       'DROP TABLE IF EXISTS automata_bus_events',
+      'DROP FUNCTION IF EXISTS reject_automata_bus_event_mutation()',
     ]);
   });
 });

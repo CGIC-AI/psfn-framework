@@ -24,6 +24,7 @@ import {
 } from './screening.js';
 import { createIntakeL1Scanner } from './scanners/index.js';
 import type { IntakeQuarantineHoldPort } from './quarantine-store.js';
+import { resolveConversationScopeFromMetadata } from '../../session/conversation-scope.js';
 
 const RULES_PATH = join(process.cwd(), 'config', 'intake-l1-rules.json');
 const POLICY_SEED_PATH = join(process.cwd(), 'config', 'intake-policy.seed.json');
@@ -1067,6 +1068,59 @@ describe('fail-closed screening alert telemetry', () => {
       timestamp: 123,
     }]);
     expect(JSON.stringify(failures)).not.toContain(CLEAN_TEXT);
+  });
+
+  it('does not let private-direct mark-only handling release an unaudited escalation failure', async () => {
+    const channelId = 'api:private-direct';
+    const canonicalContactId = 'contact-primary';
+    const service = createIntakeScreeningService({
+      policy: makePolicy('strict'),
+      l1: createIntakeL1Scanner({ rulesPath: RULES_PATH, reloadCheckIntervalMs: -1 }),
+      escalation: {
+        escalate: async () => {
+          throw new Error('CogSecEvent store unavailable');
+        },
+      },
+      actor: 'test:intake-screening',
+      now: () => 123,
+    });
+
+    const result = await service.screen(CLEAN_TEXT, {
+      sourceClass: 'primary_user',
+      origin: { ref: `${channelId}:message-1` },
+      scope: 'context',
+      canonicalContactId,
+      channelPrivacy: 'private',
+      sourceChannelId: channelId,
+      chatBodyContext: {
+        channelClass: 'api_direct',
+        conversationScope: resolveConversationScopeFromMetadata({
+          channelId,
+          isDirectMessage: true,
+          channelMeta: { isDirectMessage: true, privacyLevel: 'private' },
+          contact: { contactId: canonicalContactId },
+          recentSpeakers: [{ authorId: canonicalContactId, name: 'Primary Operator' }],
+          resolvedSpeakerContactCount: 1,
+        }),
+        contactTrust: {
+          contactId: canonicalContactId,
+          trustLevel: 'primary',
+          resolvedAtMs: 123,
+          archived: false,
+        },
+      },
+    });
+
+    expect(result).toMatchObject({
+      action: 'quarantine',
+      withheld: true,
+      effectiveText: renderIntakeWithheldContentPlaceholder(),
+      envelope: {
+        state: 'quarantined',
+        decision: { reason: expect.stringContaining('escalation-fail-closed') },
+      },
+    });
+    expect(result.envelope.extractedFields['chat_body.handling']).toBeUndefined();
   });
 });
 

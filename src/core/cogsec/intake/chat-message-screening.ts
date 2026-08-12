@@ -4,11 +4,7 @@ import type {
 } from '../../../shared/contracts/intake-envelope.js';
 import type { ChannelPrivacy } from '../../../system/trust/context-envelope.js';
 import type { ContactStorePort } from '../../contacts/contact-store-port.js';
-import {
-  createDmConversationScope,
-  type ConversationScope,
-  type DmConversationScope,
-} from '../../session/conversation-scope.js';
+import type { ConversationScope } from '../../session/conversation-scope.js';
 import type { IntakeChatBodyChannelClass } from '../../../system/config/intake-policy-config.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import {
@@ -54,27 +50,6 @@ export interface ScreenChatMessageEnvelopeInput
 export interface ScreenedChatMessageEnvelope {
   envelope: PlatformChatMessageEnvelope;
   snapshot: IntakeEnvelopeSnapshot | null;
-}
-
-/**
- * Builds the canonical scope for an already-authenticated private 1:1 API
- * surface. Callers must not use this helper for room, public, or inferred
- * identities; those paths intentionally omit the scope and stay strict.
- */
-export function createAuthenticatedPrivateDirectChatScope(input: {
-  channelId: string;
-  canonicalContactId: string;
-}): DmConversationScope {
-  return createDmConversationScope({
-    channelId: input.channelId,
-    contact: { contactId: input.canonicalContactId },
-    envelope: {
-      channelPrivacy: 'private',
-      audienceScope: 'one',
-      audienceKnowledge: 'all_known',
-      broadcast: false,
-    },
-  });
 }
 
 /**

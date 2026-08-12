@@ -353,6 +353,8 @@ export function buildSubstrateMessage(params: {
   overrides: TurnRoutingOverrides;
   channelPrivacy?: ChannelPrivacy;
   canonicalContactId?: string;
+  /** Server-resolved channel topology; never derived from privacy alone. */
+  isDirectMessage?: boolean;
   satellite?: SatelliteRoutingMetadata;
   attachments?: Attachment[];
   /** Intake-firewall snapshots for the body and screened document attachments. */
@@ -369,6 +371,7 @@ export function buildSubstrateMessage(params: {
     overrides,
     channelPrivacy,
     canonicalContactId,
+    isDirectMessage,
     satellite,
     attachments,
     intakeEnvelopes,
@@ -419,7 +422,11 @@ export function buildSubstrateMessage(params: {
     authorId,
     authorName,
     content,
-    ...(channelPrivacy === 'public' ? { isDirectMessage: false } : {}),
+    ...(isDirectMessage !== undefined
+      ? { isDirectMessage }
+      : channelPrivacy === 'public'
+        ? { isDirectMessage: false }
+        : {}),
     ...(attachments && attachments.length > 0 ? { attachments } : {}),
     ...(hasRouting ? { routing } : {}),
     timestamp: new Date(),

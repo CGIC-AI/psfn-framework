@@ -7,8 +7,12 @@ import { Scheduler } from '../../core/scheduler/scheduler.js';
 import { BackgroundMaintenanceRegistry } from '../../core/scheduler/background-maintenance.js';
 import { createEligibilityGate } from '../../system/capabilities/eligibility.js';
 import type { MemoryStorePort } from '../../faculties/memory/memory-store-port.js';
+import { AutomataRunRegistry, InMemoryAutomataRunStore } from '../../faculties/automata/run-registry.js';
+import { loadAutomataPolicySeedDefaults } from '../../system/config/automata-policy-config.js';
 import {
   BACKGROUND_WORK_SUPERVISOR_TASK_ID,
+  AUTOMATA_BUS_REVIEWER_TASK_ID,
+  registerAutomataBusReviewerTask,
   SHARED_WORLD_WIKI_CARETAKER_OPERATION_ID,
   registerSharedWorldWikiCaretakerOperation,
   registerSalienceDecayOperation,
@@ -48,6 +52,60 @@ describe('agent scheduler runtime wiring', () => {
     });
     await task?.handler();
     expect(tickBackgroundWork).toHaveBeenCalledOnce();
+  });
+
+  it('runs the owner-cadenced reviewer as a registered terminal Automata run', async () => {
+    const scheduler = new Scheduler(new EventBus());
+    const registry = await AutomataRunRegistry.hydrate({
+      companionId: 'companion-a',
+      policy: loadAutomataPolicySeedDefaults(),
+      store: new InMemoryAutomataRunStore(),
+    });
+    const run = vi.fn(async () => ({
+      status: 'completed' as const,
+      health: 'healthy' as const,
+      attempted: 0,
+      skippedHandled: 0,
+      backlog: {
+        findingsScanned: 0,
+        nominationsSeen: 0,
+        clustersReturned: 0,
+        hasMore: false,
+        remainingClusters: 0,
+      },
+      outcomes: { applied: 0, noChange: 0, uncertain: 0, partial: 0, failed: 0, stale: 0 },
+    }));
+
+    registerAutomataBusReviewerTask({
+      scheduler,
+      registry,
+      companionId: 'companion-a',
+      task: {
+        enabled: true,
+        cadenceMs: 12_345,
+        run,
+        readHealth: async () => ({ status: 'healthy', pendingClusters: 0, outcomes: {
+          applied: 0, noChange: 0, uncertain: 0, partial: 0, failed: 0, stale: 0,
+        } }),
+      },
+    });
+
+    const task = scheduler.getTask(AUTOMATA_BUS_REVIEWER_TASK_ID);
+    expect(task).toMatchObject({
+      intervalMs: 12_345,
+      availability: 'do_not_disturb',
+      scheduleSource: 'automata-policy.json > bus.reviewer.cadenceMs',
+    });
+    await task?.handler();
+
+    expect(run).toHaveBeenCalledWith(expect.objectContaining({
+      companionId: 'companion-a',
+      audience: 'operator',
+      maxSensitivity: 'confidential',
+      runId: expect.stringMatching(/^automata-bus-review:/u),
+    }));
+    expect(registry.listRuns({ classId: 'scheduler.automata_bus_reviewer' })[0])
+      .toMatchObject({ status: 'completed', outcome: 'completed' });
   });
 
   it('rejects background task registration without a durable supervisor', () => {

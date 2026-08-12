@@ -153,6 +153,32 @@ import type { BackgroundWorkRuntimeTuning } from '../../core/agent/background-wo
 import type { BackgroundWorkWelfarePolicy } from '../../core/agent/background-work/store-port.js';
 import { createCompanionId } from '../../shared/routing/companion-id.js';
 import { reconcileConcernResolutionArcsAtStartup } from './concern-resolution-arc-startup.js';
+import type { AutomataRunRegistry } from '../../faculties/automata/run-registry.js';
+import type { PostgresAutomataBusRuntimeStore } from '../../faculties/automata/bus/runtime-store.js';
+import {
+  createAutomataBusProductionRuntime,
+  type AutomataBusProductionRuntime,
+} from '../../faculties/automata/bus/production-runtime.js';
+import {
+  CanonicalAutomataBusWriter,
+  automataBusWorkerBoundsFromOwnerPolicy,
+  createProductionAutomataBusWorkerAccess,
+  createSubagentAutomataLifecycleAdapter,
+} from '../../faculties/automata/bus/production-worker-adapter.js';
+import { createBackgroundWorkAutomataLifecycle } from './automata-background-work-lifecycle.js';
+import type { AutomataBusWorkerAccess } from '../../faculties/automata/bus/worker-access.js';
+import type { SubagentAutomataLifecyclePort } from '../../faculties/subagents/automata-lifecycle.js';
+import {
+  createAutomataBusReviewerFindingAdapter,
+  createAutomataBusReviewerModelAdapter,
+  createAutomataBusReviewerMutationAdapter,
+  createAutomataBusReviewerOutcomeAdapter,
+  PostgresAutomataBusReviewerNominationAdapter,
+} from '../../faculties/automata/bus/production-reviewer-adapters.js';
+import {
+  createAutomataBusReviewerTask,
+  type AutomataBusReviewerTaskPort,
+} from '../../faculties/automata/bus/reviewer-service.js';
 
 const log = createComponentLogger('AgentCoreRuntime');
 
@@ -196,6 +222,10 @@ export interface AgentCoreRuntimeOptions {
    * events to contacts (bead .13); absent leaves the bridge sink a no-op.
    */
   hubIdentityEnrollmentStore?: HubIdentityEnrollmentStorePort;
+  automataRuntime?: {
+    registry: AutomataRunRegistry;
+    store: PostgresAutomataBusRuntimeStore;
+  };
 }
 
 export interface AgentCoreRuntime {
@@ -239,6 +269,12 @@ export interface AgentCoreRuntime {
   /** Shared lazy durable model-usage query handle (b0yl.5); null on non-postgres. */
   getModelUsageQuery: () => ModelUsageQueryPort | null;
   icpAutonomyRuntime?: AgentFacingIcpAutonomyRuntime;
+  automataBus?: {
+    runtime: AutomataBusProductionRuntime;
+    workerAccess: AutomataBusWorkerAccess;
+    lifecycle: SubagentAutomataLifecyclePort;
+    reviewer: AutomataBusReviewerTaskPort;
+  };
 }
 
 export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): Promise<AgentCoreRuntime> {
@@ -280,6 +316,76 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   });
   const appCache = await createAppCacheFromEnv();
   const llmProvider = createLLMProviderPort(gateway);
+  const automataBus = options.automataRuntime
+    ? (() => {
+        const companionId = resolveCompanionIdFromConfig(config);
+        const policy = config.automataPolicy ?? (() => {
+          throw new Error('Automata Bus runtime requires automata-policy.json');
+        })();
+        const runtime = createAutomataBusProductionRuntime({
+          pool: options.automataRuntime.store.getQueryPool(),
+          store: options.automataRuntime.store,
+          companionId,
+          embeddingProvider: gateway,
+          embeddingIdentity: resolveEmbeddingProviderProvenanceFromConfig(config, gateway.dims),
+          appCache,
+          policy: policy.bus.query,
+        });
+        const writer = new CanonicalAutomataBusWriter({
+          companionId,
+          pool: options.automataRuntime.store.getQueryPool(),
+          store: options.automataRuntime.store,
+          runtime,
+        });
+        const reviewer = createAutomataBusReviewerTask({
+          nominations: new PostgresAutomataBusReviewerNominationAdapter({
+            pool: options.automataRuntime.store.getQueryPool(),
+            companionId,
+          }),
+          findings: createAutomataBusReviewerFindingAdapter({
+            store: options.automataRuntime.store,
+            companionId,
+          }),
+          model: createAutomataBusReviewerModelAdapter({
+            llmProvider,
+          }),
+          mutations: createAutomataBusReviewerMutationAdapter({
+            companionId,
+            registry: options.automataRuntime.registry,
+            store: options.automataRuntime.store,
+            writer,
+          }),
+          outcomes: createAutomataBusReviewerOutcomeAdapter({
+            companionId,
+            registry: options.automataRuntime.registry,
+            store: options.automataRuntime.store,
+            writer,
+          }),
+          policy: policy.bus.reviewer,
+        });
+        return {
+          runtime,
+          reviewer,
+          workerAccess: createProductionAutomataBusWorkerAccess({
+            companionId,
+            registry: options.automataRuntime.registry,
+            store: options.automataRuntime.store,
+            runtime,
+            writer,
+            bounds: automataBusWorkerBoundsFromOwnerPolicy({
+              query: policy.bus.query,
+              recentRunLimit: policy.recentRunLimit,
+            }),
+          }),
+          lifecycle: createSubagentAutomataLifecycleAdapter({
+            companionId,
+            registry: options.automataRuntime.registry,
+            store: options.automataRuntime.store,
+            writer,
+          }),
+        };
+      })()
+    : undefined;
   const runtime = new PiProviderRuntime(undefined, config);
   const gatewayOps = createGatewayOpsPortFromClient(gateway);
   const observerEvalSidecar = createObserverEvalSidecarRuntimeFromConfig(config, {
@@ -383,6 +489,13 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     backgroundWorkStore: options.backgroundWorkStore,
     backgroundWorkTuning: options.backgroundWorkTuning,
     ...(options.backgroundWorkWelfare ? { backgroundWorkWelfare: options.backgroundWorkWelfare } : {}),
+    ...(options.automataRuntime
+      ? {
+          backgroundWorkAutomataLifecycle: createBackgroundWorkAutomataLifecycle(
+            options.automataRuntime.registry,
+          ),
+        }
+      : {}),
     contactTrackingGate,
     ...(options.placesRegistryConfig ? { placesRegistryConfig: options.placesRegistryConfig } : {}),
   });
@@ -811,6 +924,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
       ? (channelId: string) => contactTrackingGate.isAutoContactCreationAllowed(channelId)
       : null,
     personaPreamble,
+    automataBusWorkerAccess: automataBus?.workerAccess,
   });
   const promptState = createPromptStatePort({
     layers: promptStore,
@@ -854,5 +968,6 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     // so the two do not open separate pools.
     getModelUsageQuery,
     ...(icpAutonomyRuntime ? { icpAutonomyRuntime } : {}),
+    ...(automataBus ? { automataBus } : {}),
   };
 }

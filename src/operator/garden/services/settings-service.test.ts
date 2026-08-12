@@ -1003,6 +1003,8 @@ describe('AdminSettingsDataService', () => {
           'identity.read',
           'identity.write.runtime',
           'memory.write',
+          'automata.bus.read',
+          'automata.bus.write',
           'git.read',
           'issue.read',
           'repl.execute',
@@ -1016,6 +1018,8 @@ describe('AdminSettingsDataService', () => {
       withdrawn: [
         'identity.write.runtime',
         'memory.write',
+        'automata.bus.read',
+        'automata.bus.write',
         'git.read',
         'issue.read',
         'repl.execute',

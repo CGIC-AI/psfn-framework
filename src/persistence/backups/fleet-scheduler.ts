@@ -17,6 +17,7 @@ import type { KubernetesHelmBackupConfig } from './kubernetes-helm.js';
 import {
   validateFleetAuthSchemaAccessContracts,
   type FleetAuthSchemaAccessContract,
+  type FleetAuthWelfareVerifierSchemaAccess,
 } from './fleet-auth-schema-access.js';
 import { deriveRestoreVerifyDatabaseUrl } from './postgres-restore.js';
 import { verifyFleetAuthConsistentFamilyRestore } from './fleet-restore.js';
@@ -313,6 +314,7 @@ export function buildFleetAuthBackupCycleOptions(params: {
   authorityFloors: FleetAuthAuthorityFloorStore;
   schemaOwnerDatabaseUrls: Readonly<Record<string, string>>;
   schemaAccessContracts: readonly FleetAuthSchemaAccessContract[];
+  welfareVerifier?: FleetAuthWelfareVerifierSchemaAccess;
   backupConfig: BackupRuntimeConfig;
   kubernetesHelm?: KubernetesHelmBackupConfig;
   pgDumpBinary?: string;
@@ -320,16 +322,37 @@ export function buildFleetAuthBackupCycleOptions(params: {
   if (params.fleet.companions.length === 0) {
     throw new Error('Fleet auth consistent backup requires at least one companion schema');
   }
+  if (params.welfareVerifier) {
+    const credential = parseExactPostgresCredential(
+      params.welfareVerifier.databaseUrl,
+      'Fleet auth backup welfare verifier credential',
+    );
+    if (credential.username !== params.welfareVerifier.role) {
+      throw new Error(
+        `Fleet auth backup welfare verifier credential must authenticate as ${params.welfareVerifier.role}`,
+      );
+    }
+  }
   const restoreVerifyDatabaseUrl = params.backupConfig.verifyRestore
     ? deriveRestoreVerifyDatabaseUrl(params.backupRestoreDatabaseUrl)
     : undefined;
   const restoreVerifySchemaOwnerDatabaseUrl = params.backupConfig.verifyRestore
     ? deriveRestoreVerifyDatabaseUrl(params.schemaOwnerDatabaseUrl)
     : undefined;
+  const scratchWelfareVerifierDatabaseUrl = params.backupConfig.verifyRestore
+    && params.welfareVerifier
+    ? deriveRestoreVerifyDatabaseUrl(params.welfareVerifier.databaseUrl)
+    : undefined;
   if (params.backupConfig.verifyRestore
     && (!restoreVerifyDatabaseUrl || !restoreVerifySchemaOwnerDatabaseUrl)) {
     throw new Error(
       'Fleet auth verifyRestore requires a derivable dedicated scratch database URL',
+    );
+  }
+  if (params.backupConfig.verifyRestore && params.welfareVerifier
+    && !scratchWelfareVerifierDatabaseUrl) {
+    throw new Error(
+      'Fleet auth verifyRestore requires a derivable welfare verifier scratch database credential',
     );
   }
   const companions: FleetBackupCompanionUnit[] = params.fleet.companions.map(companion => ({
@@ -391,6 +414,14 @@ export function buildFleetAuthBackupCycleOptions(params: {
     fleetBackupOptions,
     authorityFloors: params.authorityFloors,
     scratchSchemaOwnerDatabaseUrls,
+    ...(params.welfareVerifier && scratchWelfareVerifierDatabaseUrl
+      ? {
+          scratchWelfareVerifier: {
+            role: params.welfareVerifier.role,
+            databaseUrl: scratchWelfareVerifierDatabaseUrl,
+          },
+        }
+      : {}),
     verifyFamilyRestore: verifyFleetAuthConsistentFamilyRestore,
     ...(params.pgDumpBinary ? { pgDumpBinary: params.pgDumpBinary } : {}),
   };

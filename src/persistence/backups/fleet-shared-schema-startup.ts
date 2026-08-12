@@ -63,6 +63,10 @@ export async function prepareFleetSharedSchemaRuntime(options: {
   fleetAuth?: {
     backupRestoreDatabaseUrl: string;
     roles: FleetAuthDatabaseRoles;
+    welfareVerifier?: {
+      databaseUrl: string;
+      role: string;
+    };
   };
 }): Promise<FleetAuthSchemaAccessContract[]> {
   const migrationCredential = parseExactPostgresCredential(
@@ -97,19 +101,36 @@ export async function prepareFleetSharedSchemaRuntime(options: {
     throw new Error('Fleet shared schema startup requires distinct companion/shared schema authorities');
   }
 
+  const welfareVerifierRole = options.fleetAuth?.welfareVerifier?.role;
+  const welfareVerifierCredential = options.fleetAuth?.welfareVerifier
+    ? parseExactPostgresCredential(
+        options.fleetAuth.welfareVerifier.databaseUrl,
+        'Fleet shared schema welfare verifier credential',
+      )
+    : undefined;
+  if (welfareVerifierCredential && welfareVerifierCredential.username !== welfareVerifierRole) {
+    throw new Error(
+      `Fleet shared schema welfare verifier credential must authenticate as PostgreSQL role ${welfareVerifierRole}`,
+    );
+  }
   const protectedRoles = options.fleetAuth ? Object.values(options.fleetAuth.roles) : [];
   const mappedRoles = [...new Set([
     ...protectedRoles,
+    ...(welfareVerifierRole ? [welfareVerifierRole] : []),
     options.sharedMigrationRole,
     ...companionRoles,
   ])].sort();
-  if (mappedRoles.length !== protectedRoles.length + companionRoles.length + 1) {
+  if (mappedRoles.length !== protectedRoles.length + companionRoles.length + 1
+    + (welfareVerifierRole ? 1 : 0)) {
     throw new Error('Fleet shared schema startup requires every authority role to be distinct');
   }
   const credentialValues = [
     options.sharedMigrationDatabaseUrl,
     ...companionDatabases.map(entry => entry.databaseUrl),
     ...(options.fleetAuth ? [options.fleetAuth.backupRestoreDatabaseUrl] : []),
+    ...(options.fleetAuth?.welfareVerifier
+      ? [options.fleetAuth.welfareVerifier.databaseUrl]
+      : []),
   ];
   if (new Set(credentialValues).size !== credentialValues.length) {
     throw new Error('Fleet shared schema startup requires every database credential to be distinct');
@@ -138,6 +159,13 @@ export async function prepareFleetSharedSchemaRuntime(options: {
         )
       : undefined;
     if (backup) connections.push(backup);
+    const welfareVerifier = options.fleetAuth?.welfareVerifier
+      ? await connectPreflightPool(
+          options.fleetAuth.welfareVerifier.databaseUrl,
+          'fleet-shared-schema-welfare-verifier-preflight',
+        )
+      : undefined;
+    if (welfareVerifier) connections.push(welfareVerifier);
 
     await assertFleetAuthRolesAreSafe(
       migration.client,
@@ -183,6 +211,17 @@ export async function prepareFleetSharedSchemaRuntime(options: {
       const target = await readDatabaseTargetIdentity(backup.client);
       if (JSON.stringify(target) !== JSON.stringify(expectedTarget)) {
         throw new Error('Fleet shared schema backup credential targets another database');
+      }
+    }
+    if (welfareVerifier && welfareVerifierRole) {
+      await assertFleetAuthRolesAreSafe(
+        welfareVerifier.client,
+        mappedRoles,
+        welfareVerifierRole,
+      );
+      const target = await readDatabaseTargetIdentity(welfareVerifier.client);
+      if (JSON.stringify(target) !== JSON.stringify(expectedTarget)) {
+        throw new Error('Fleet shared schema welfare verifier credential targets another database');
       }
     }
 
@@ -236,11 +275,13 @@ export async function prepareFleetSharedSchemaRuntime(options: {
       [sharedSchema, options.sharedMigrationDatabaseUrl],
     ]),
     ...(options.fleetAuth ? { backupRole: options.fleetAuth.roles.backupRestore } : {}),
+    ...(welfareVerifierRole ? { welfareVerifierRole } : {}),
   });
   await assertFleetAuthSchemaAccessIsolation({
     databaseUrl: options.sharedMigrationDatabaseUrl,
     contracts,
     ownerRole: options.sharedMigrationRole,
+    ...(welfareVerifierRole ? { welfareVerifierRole } : {}),
   });
   return contracts;
 }

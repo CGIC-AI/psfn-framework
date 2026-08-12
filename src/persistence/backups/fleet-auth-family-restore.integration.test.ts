@@ -39,6 +39,7 @@ import { runFleetBackupCycle as runFleetBackupCycleProduction } from './service.
 import { prepareFleetSharedSchemaRuntime } from './fleet-shared-schema-startup.js';
 import { PhaseTimer } from '../../test-support/phase-timer.js';
 import { describeStartupOwnerFileChecks } from '../../system/config/startup-owner-files.js';
+import { grantWelfareVerifierReadAccessToTenantSchema } from '../postgres/welfare-verifier-access.js';
 
 // Timeout-margin policy (see src/test-support/integration-timeout-registry.json):
 // measured worst-case baseline is the documented clean-main file runtime of 108.5s
@@ -55,6 +56,8 @@ const COMPANION_ROLE = 'family_companion_runtime';
 const COMPANION_ROLE_TWO = 'family_companion_two';
 const SHARED_OWNER_ROLE = 'family_shared_migration';
 const OVERPRIVILEGED_SHARED_ROLE = 'family_shared_overpriv';
+const WELFARE_VERIFIER_ROLE = 'family_welfare_verifier';
+const WELFARE_VERIFIER_ROLE_TWO = 'family_welfare_verifier_two';
 const PASSWORDS = {
   family_auth_runtime: 'runtime-password',
   family_auth_migration: 'migration-password',
@@ -63,6 +66,8 @@ const PASSWORDS = {
   family_companion_two: 'companion-two-password',
   family_shared_migration: 'shared-migration-password',
   family_shared_overpriv: 'overprivileged-password',
+  family_welfare_verifier: 'welfare-verifier-password',
+  family_welfare_verifier_two: 'welfare-verifier-two-password',
 } as const;
 
 let harness: PostgresTestHarness | null = null;
@@ -131,7 +136,7 @@ beforeAll(async () => {
   try {
     for (const role of [
       ...Object.values(ROLES), COMPANION_ROLE, COMPANION_ROLE_TWO,
-      OVERPRIVILEGED_SHARED_ROLE,
+      OVERPRIVILEGED_SHARED_ROLE, WELFARE_VERIFIER_ROLE, WELFARE_VERIFIER_ROLE_TWO,
     ]) {
       await admin.query(
         `CREATE ROLE ${quoteIdentifier(role)} LOGIN NOINHERIT CONNECTION LIMIT 8 `
@@ -186,6 +191,8 @@ async function freshDatabase() {
     companionUrl: roleUrl(database.databaseUrl, COMPANION_ROLE),
     companionTwoUrl: roleUrl(database.databaseUrl, COMPANION_ROLE_TWO),
     sharedOwnerUrl: roleUrl(database.databaseUrl, SHARED_OWNER_ROLE),
+    welfareVerifierUrl: roleUrl(database.databaseUrl, WELFARE_VERIFIER_ROLE),
+    welfareVerifierTwoUrl: roleUrl(database.databaseUrl, WELFARE_VERIFIER_ROLE_TWO),
   };
 }
 
@@ -300,6 +307,7 @@ async function freshRestoreVerifyDatabase() {
     companionUrl: roleUrl(databaseUrl.toString(), COMPANION_ROLE),
     companionTwoUrl: roleUrl(databaseUrl.toString(), COMPANION_ROLE_TWO),
     sharedOwnerUrl: roleUrl(databaseUrl.toString(), SHARED_OWNER_ROLE),
+    welfareVerifierUrl: roleUrl(databaseUrl.toString(), WELFARE_VERIFIER_ROLE),
   };
 }
 
@@ -308,6 +316,10 @@ function sharedStartupOptions(
   overrides: {
     sharedMigrationDatabaseUrl?: string;
     sharedMigrationRole?: string;
+    welfareVerifier?: {
+      databaseUrl: string;
+      role: string;
+    };
   } = {},
 ) {
   return {
@@ -326,6 +338,9 @@ function sharedStartupOptions(
         migration: ROLES.migration,
         backupRestore: ROLES.backupRestore,
       },
+      ...(overrides.welfareVerifier
+        ? { welfareVerifier: overrides.welfareVerifier }
+        : {}),
     },
   };
 }
@@ -354,6 +369,88 @@ async function waitForRestoreAdvisoryLockWaiter(databaseUrl: string): Promise<vo
 }
 
 describe('fleet-auth consistent family restore against real Postgres', () => {
+  it('reconciles only the exact owner-declared welfare verifier schema access', async () => {
+    const database = await freshDatabase();
+    const companionOne = createPostgresPool(database.companionUrl, { max: 1 });
+    const companionTwo = createPostgresPool(database.companionTwoUrl, { max: 1 });
+    try {
+      await companionOne.query(`
+        CREATE SCHEMA companion_one;
+        CREATE TABLE companion_one.agent_background_work_jobs (job_id text PRIMARY KEY);
+        CREATE TABLE companion_one.verifier_forbidden_table (id integer PRIMARY KEY);
+      `);
+      await companionTwo.query(`
+        CREATE SCHEMA companion_two;
+        CREATE TABLE companion_two.agent_background_work_jobs (job_id text PRIMARY KEY);
+      `);
+    } finally {
+      await companionOne.end();
+      await companionTwo.end();
+    }
+    const ownerOne = createPostgresPool(database.companionUrl, { max: 1 });
+    const ownerTwo = createPostgresPool(database.companionTwoUrl, { max: 1 });
+    const welfareVerifier = {
+      databaseUrl: database.welfareVerifierUrl,
+      role: WELFARE_VERIFIER_ROLE,
+    };
+    try {
+      await grantWelfareVerifierReadAccessToTenantSchema(ownerOne, {
+        schema: 'companion_one',
+        verifierRole: WELFARE_VERIFIER_ROLE,
+      });
+      await grantWelfareVerifierReadAccessToTenantSchema(ownerTwo, {
+        schema: 'companion_two',
+        verifierRole: WELFARE_VERIFIER_ROLE,
+      });
+
+      await expect(prepareFleetSharedSchemaRuntime(sharedStartupOptions(database, {
+        welfareVerifier,
+      }))).resolves.toHaveLength(3);
+
+      await ownerOne.query(
+        `GRANT CREATE ON SCHEMA companion_one TO ${quoteIdentifier(WELFARE_VERIFIER_ROLE)}`,
+      );
+      await expect(prepareFleetSharedSchemaRuntime(sharedStartupOptions(database, {
+        welfareVerifier,
+      }))).rejects.toThrow(/welfare verifier schema access mismatch/i);
+      await ownerOne.query(
+        `REVOKE CREATE ON SCHEMA companion_one FROM ${quoteIdentifier(WELFARE_VERIFIER_ROLE)}`,
+      );
+
+      await ownerOne.query(
+        `GRANT SELECT ON companion_one.verifier_forbidden_table TO ${quoteIdentifier(WELFARE_VERIFIER_ROLE)}`,
+      );
+      await expect(prepareFleetSharedSchemaRuntime(sharedStartupOptions(database, {
+        welfareVerifier,
+      }))).rejects.toThrow(/welfare verifier schema access mismatch/i);
+      await ownerOne.query(
+        `REVOKE SELECT ON companion_one.verifier_forbidden_table FROM ${quoteIdentifier(WELFARE_VERIFIER_ROLE)}`,
+      );
+
+      await ownerOne.query(
+        `GRANT UPDATE ON companion_one.agent_background_work_jobs TO ${quoteIdentifier(WELFARE_VERIFIER_ROLE)}`,
+      );
+      await expect(prepareFleetSharedSchemaRuntime(sharedStartupOptions(database, {
+        welfareVerifier,
+      }))).rejects.toThrow(/welfare verifier schema access mismatch/i);
+      await ownerOne.query(
+        `REVOKE UPDATE ON companion_one.agent_background_work_jobs FROM ${quoteIdentifier(WELFARE_VERIFIER_ROLE)}`,
+      );
+
+      await expect(prepareFleetSharedSchemaRuntime(sharedStartupOptions(database, {
+        welfareVerifier: {
+          databaseUrl: database.welfareVerifierUrl,
+          role: WELFARE_VERIFIER_ROLE_TWO,
+        },
+      }))).rejects.toThrow(/must authenticate as PostgreSQL role family_welfare_verifier_two/i);
+
+      await expect(prepareFleetSharedSchemaRuntime(sharedStartupOptions(database)))
+        .rejects.toThrow(/unexpected PostgreSQL grantees/i);
+    } finally {
+      await Promise.all([ownerOne.end(), ownerTwo.end()]);
+    }
+  }, TIMEOUT_MS);
+
   it('rejects target-database ownership for every topology authority before shared DDL', async () => {
     for (const ownerRole of [
       SHARED_OWNER_ROLE,
@@ -481,6 +578,7 @@ describe('fleet-auth consistent family restore against real Postgres', () => {
       sourceSharedOwner = createPostgresPool(source.sharedOwnerUrl, { max: 1 });
       await sourceCompanion.query(`
         CREATE SCHEMA companion_one;
+        CREATE TABLE companion_one.agent_background_work_jobs (job_id TEXT PRIMARY KEY);
         CREATE TABLE companion_one.restore_probe (marker TEXT NOT NULL);
         INSERT INTO companion_one.restore_probe VALUES ('companion-source');
         CREATE TABLE companion_one.contacts (
@@ -516,6 +614,7 @@ describe('fleet-auth consistent family restore against real Postgres', () => {
       `);
       await sourceCompanionTwo.query(`
         CREATE SCHEMA companion_two;
+        CREATE TABLE companion_two.agent_background_work_jobs (job_id TEXT PRIMARY KEY);
         CREATE TABLE companion_two.restore_probe (marker TEXT NOT NULL);
         INSERT INTO companion_two.restore_probe VALUES ('companion-two-source');
         GRANT USAGE ON SCHEMA companion_two TO ${quoteIdentifier(ROLES.backupRestore)};
@@ -549,7 +648,12 @@ describe('fleet-auth consistent family restore against real Postgres', () => {
         INSERT INTO shared.restore_probe VALUES ('shared-source');
       `);
       const productionAccessContracts = await prepareFleetSharedSchemaRuntime(
-        sharedStartupOptions(source),
+        sharedStartupOptions(source, {
+          welfareVerifier: {
+            databaseUrl: source.welfareVerifierUrl,
+            role: WELFARE_VERIFIER_ROLE,
+          },
+        }),
       );
       expect(productionAccessContracts).toEqual([
         {
@@ -799,6 +903,10 @@ describe('fleet-auth consistent family restore against real Postgres', () => {
         roles: ROLES,
         authorityFloors: floors,
         activationGeneration: floorBeforeVerification.trustedHost.activationGeneration,
+        scratchWelfareVerifier: {
+          databaseUrl: scratch.welfareVerifierUrl,
+          role: WELFARE_VERIFIER_ROLE,
+        },
       });
       expect(floors.read()).toEqual(floorBeforeVerification);
       const scratchRuntime = createPostgresPool(scratch.runtimeUrl, { max: 1 });
@@ -856,13 +964,22 @@ describe('fleet-auth consistent family restore against real Postgres', () => {
           companion_two: target.companionTwoUrl,
           shared: target.sharedOwnerUrl,
         },
+        welfareVerifier: {
+          databaseUrl: target.welfareVerifierUrl,
+          role: WELFARE_VERIFIER_ROLE,
+        },
         restoredAt: '2026-07-15T16:00:00.000Z',
       });
 
       endDurableRestore();
 
       const endRestoreAssertions = timer.begin('post-restore authority assertions');
-      await prepareFleetSharedSchemaRuntime(sharedStartupOptions(target));
+      await prepareFleetSharedSchemaRuntime(sharedStartupOptions(target, {
+        welfareVerifier: {
+          databaseUrl: target.welfareVerifierUrl,
+          role: WELFARE_VERIFIER_ROLE,
+        },
+      }));
       await assertSharedSchemaRuntimeAuthority(target.companionUrl, {
         ownSchema: 'companion_one',
         companionSchemas: ['companion_one', 'companion_two'],
@@ -879,6 +996,7 @@ describe('fleet-auth consistent family restore against real Postgres', () => {
       const targetCompanion = createPostgresPool(target.companionUrl, { max: 1 });
       const targetCompanionTwo = createPostgresPool(target.companionTwoUrl, { max: 1 });
       const targetSharedMigration = createPostgresPool(target.sharedOwnerUrl, { max: 1 });
+      const targetWelfareVerifier = createPostgresPool(target.welfareVerifierUrl, { max: 1 });
       const presenceOne = await PostgresCompanionPresenceStore.connect(target.companionUrl);
       const presenceTwo = await PostgresCompanionPresenceStore.connect(target.companionTwoUrl);
       try {
@@ -912,6 +1030,13 @@ describe('fleet-auth consistent family restore against real Postgres', () => {
         });
         await expect(targetCompanion.query('SELECT marker FROM companion_one.restore_probe'))
           .resolves.toMatchObject({ rows: [{ marker: 'companion-source' }] });
+        await expect(targetWelfareVerifier.query(
+          'SELECT count(*)::integer AS count FROM companion_one.agent_background_work_jobs',
+        )).resolves.toMatchObject({ rows: [{ count: 0 }] });
+        await expect(targetWelfareVerifier.query('SELECT marker FROM companion_one.restore_probe'))
+          .rejects.toThrow(/permission denied/i);
+        await expect(targetWelfareVerifier.query('CREATE TABLE companion_one.forbidden (id integer)'))
+          .rejects.toThrow(/permission denied/i);
         await expect(targetCompanion.query(`
           SELECT contact_lifecycle_state, contact_restore_state, contact_authority_version
           FROM companion_one.contacts
@@ -995,6 +1120,7 @@ describe('fleet-auth consistent family restore against real Postgres', () => {
         await targetCompanion.end();
         await targetCompanionTwo.end();
         await targetSharedMigration.end();
+        await targetWelfareVerifier.end();
       }
 
       endRestoreAssertions();

@@ -268,6 +268,10 @@ function makeCycleOptions(
         'postgresql://companion_runtime:secret@127.0.0.1:5432/app_restore_verify',
       shared: 'postgresql://companion_runtime:secret@127.0.0.1:5432/app_restore_verify',
     },
+    scratchWelfareVerifier: {
+      role: 'welfare_verifier',
+      databaseUrl: 'postgresql://welfare_verifier:secret@127.0.0.1:5432/app_restore_verify',
+    },
     verifyFamilyRestore,
     now: () => Date.UTC(2026, 6, 15, 15, 0, 0),
     runCoordinator,
@@ -334,6 +338,10 @@ describe('runFleetAuthConsistentBackupCycle', () => {
         companion_one:
           'postgresql://companion_runtime:secret@127.0.0.1:5432/app_restore_verify',
         shared: 'postgresql://companion_runtime:secret@127.0.0.1:5432/app_restore_verify',
+      },
+      scratchWelfareVerifier: {
+        role: 'welfare_verifier',
+        databaseUrl: 'postgresql://welfare_verifier:secret@127.0.0.1:5432/app_restore_verify',
       },
     }));
     expect(existsSync(join(result.backupDir, ENCRYPTED_BACKUP_PAYLOAD_NAME))).toBe(true);

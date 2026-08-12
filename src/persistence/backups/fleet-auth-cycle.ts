@@ -13,6 +13,7 @@ import { recordBackupDiagnosticOutcome } from '../../shared/diagnostics/runtime-
 import { createComponentLogger } from '../../shared/logger.js';
 import type { FleetAuthFamilyDatabaseRoles } from '../postgres/fleet-auth/schema.js';
 import type { FleetAuthAuthorityFloorStore } from '../postgres/fleet-auth/authority-floor.js';
+import type { FleetAuthWelfareVerifierSchemaAccess } from './fleet-auth-schema-access.js';
 import type { BackupRuntimeConfig } from './config.js';
 import {
   assertBackupRootWritable,
@@ -63,6 +64,8 @@ export interface FleetAuthConsistentBackupCycleOptions {
   authorityFloors: FleetAuthAuthorityFloorStore;
   /** Dedicated scratch-database credentials for every authenticated schema owner. */
   scratchSchemaOwnerDatabaseUrls: Readonly<Record<string, string>>;
+  /** Scratch-database form of the owner-declared welfare verifier authority. */
+  scratchWelfareVerifier?: FleetAuthWelfareVerifierSchemaAccess;
   verifyFamilyRestore?: (options: FleetAuthFamilyRestoreVerificationOptions) => Promise<void>;
   pgDumpBinary?: string;
   now?: () => number;
@@ -89,6 +92,7 @@ export interface FleetAuthFamilyRestoreVerificationOptions {
   roles: FleetAuthFamilyDatabaseRoles;
   authorityFloors: FleetAuthAuthorityFloorStore;
   activationGeneration: number;
+  scratchWelfareVerifier?: FleetAuthWelfareVerifierSchemaAccess;
   pgRestoreBinary?: string;
 }
 
@@ -208,6 +212,9 @@ export async function runFleetAuthConsistentBackupCycleImplementation(
         roles: options.roles,
         authorityFloors: options.authorityFloors,
         activationGeneration: options.authorityFloors.read().trustedHost.activationGeneration,
+        ...(options.scratchWelfareVerifier
+          ? { scratchWelfareVerifier: options.scratchWelfareVerifier }
+          : {}),
       });
       familyRestoreVerified = true;
     }

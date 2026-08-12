@@ -2,7 +2,10 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { describe, expect, it } from 'vitest';
 import { InMemoryAutomataRunStore, AutomataRunRegistry } from '../../../faculties/automata/run-registry.js';
 import { loadAutomataPolicySeedDefaults } from '../../../system/config/automata-policy-config.js';
-import { AdminAutomataDataService } from '../services/automata-service.js';
+import {
+  AdminAutomataDataService,
+  type AdminAutomataService,
+} from '../services/automata-service.js';
 import { buildAdminAutomataRoutes } from './automata-routes.js';
 
 interface CapturedResponse {
@@ -21,15 +24,32 @@ function fakeResponse(captured: CapturedResponse): ServerResponse {
   } as unknown as ServerResponse;
 }
 
-function invoke(service: AdminAutomataDataService | null, query = ''): CapturedResponse {
+async function invoke(service: AdminAutomataService | null, query = ''): Promise<CapturedResponse> {
   const [route] = buildAdminAutomataRoutes({ automataService: service });
   const captured: CapturedResponse = { status: 0, body: undefined };
+  let complete: (() => void) | undefined;
+  const completed = new Promise<void>(resolve => { complete = resolve; });
+  const response = fakeResponse(captured);
+  response.end = ((payload?: string) => {
+    captured.body = payload ? JSON.parse(payload) : undefined;
+    complete?.();
+    return response;
+  }) as ServerResponse['end'];
   route!.handle(
     { url: `/api/admin/automata${query}`, headers: {} } as IncomingMessage,
-    fakeResponse(captured),
+    response,
     {},
   );
+  await completed;
   return captured;
+}
+
+function service(registry: AutomataRunRegistry): AdminAutomataDataService {
+  return new AdminAutomataDataService({
+    registry,
+    companionId: 'companion-test',
+    readPolicy: { defaultPageLimit: 10, maxPageLimit: 100 },
+  });
 }
 
 describe('GET /api/admin/automata', () => {
@@ -51,7 +71,7 @@ describe('GET /api/admin/automata', () => {
       createdAtMs: 2,
     });
 
-    const captured = invoke(new AdminAutomataDataService(registry), '?taskId=task-1&limit=10');
+    const captured = await invoke(service(registry), '?taskId=task-1&limit=10');
 
     expect(captured.status).toBe(200);
     expect(captured.body).toMatchObject({
@@ -63,14 +83,39 @@ describe('GET /api/admin/automata', () => {
   });
 
   it('fails closed for unavailable registries and unknown class queries', async () => {
-    expect(invoke(null).status).toBe(503);
+    expect((await invoke(null)).status).toBe(503);
     const registry = await AutomataRunRegistry.hydrate({
       companionId: 'companion-test',
       policy: loadAutomataPolicySeedDefaults(),
       store: new InMemoryAutomataRunStore(),
     });
-    const captured = invoke(new AdminAutomataDataService(registry), '?classId=unknown');
+    const captured = await invoke(service(registry), '?classId=unknown');
     expect(captured.status).toBe(400);
     expect(captured.body).toMatchObject({ error: expect.stringMatching(/Unknown automata class/) });
+  });
+
+  it('rejects unknown Bus statuses and malformed pagination', async () => {
+    const registry = await AutomataRunRegistry.hydrate({
+      companionId: 'companion-test',
+      policy: loadAutomataPolicySeedDefaults(),
+      store: new InMemoryAutomataRunStore(),
+    });
+
+    expect((await invoke(service(registry), '?verificationStatus=guessed')).status).toBe(400);
+    expect((await invoke(service(registry), '?runOffset=-1')).status).toBe(400);
+    expect((await invoke(service(registry), '?busLimit=0')).status).toBe(400);
+  });
+
+  it('does not disclose internal service failures', async () => {
+    const captured = await invoke({
+      async getSnapshot() {
+        throw new Error('private database address and query text');
+      },
+    });
+
+    expect(captured).toEqual({
+      status: 500,
+      body: { error: 'Failed to load Automata data' },
+    });
   });
 });

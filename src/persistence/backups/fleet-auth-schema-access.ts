@@ -219,12 +219,65 @@ interface WelfareVerifierPrivilegeRow {
   is_grantable: boolean;
 }
 
+interface WelfareVerifierDefaultPrivilegeRow {
+  owner_role: string;
+  schema_name: string;
+  object_type: string;
+  grantee_role: string;
+  privilege_type: string;
+  is_grantable: boolean;
+}
+
+async function assertNoWelfareVerifierDefaultPrivileges(
+  client: PoolClient,
+  schema: string,
+  welfareVerifierRole: string,
+): Promise<void> {
+  const defaults = await client.query<WelfareVerifierDefaultPrivilegeRow>(`
+    SELECT owner.rolname AS owner_role,
+           COALESCE(namespace.nspname, '*') AS schema_name,
+           default_acl.defaclobjtype::text AS object_type,
+           CASE WHEN acl.grantee = 0 THEN 'PUBLIC' ELSE grantee.rolname END AS grantee_role,
+           acl.privilege_type,
+           acl.is_grantable
+    FROM pg_default_acl AS default_acl
+    JOIN pg_roles AS owner ON owner.oid = default_acl.defaclrole
+    LEFT JOIN pg_namespace AS namespace ON namespace.oid = default_acl.defaclnamespace
+    CROSS JOIN LATERAL aclexplode(default_acl.defaclacl) AS acl
+    LEFT JOIN pg_roles AS grantee ON grantee.oid = acl.grantee
+    WHERE (default_acl.defaclnamespace = 0 OR namespace.nspname = $1)
+      AND CASE
+        WHEN acl.grantee = 0 THEN TRUE
+        ELSE grantee.rolname = $2 OR pg_has_role($2, acl.grantee, 'MEMBER')
+      END
+    ORDER BY owner_role, schema_name, object_type, grantee_role,
+             privilege_type, is_grantable
+  `, [schema, welfareVerifierRole]);
+  if (defaults.rows.length > 0) {
+    throw new Error(
+      `Fleet auth welfare verifier default privileges would widen schema access for ${schema}: `
+      + JSON.stringify(defaults.rows),
+    );
+  }
+}
+
 async function assertWelfareVerifierSchemaAccess(
   client: PoolClient,
   contract: FleetAuthSchemaAccessContract,
   welfareVerifierRole: string,
   requireExact: boolean,
 ): Promise<void> {
+  // A default ACL is latent authority: even if the currently restored objects
+  // have the exact grants below, a later table/function/sequence creation could
+  // silently widen this gateway-only reader. Reject schema-local and global
+  // defaults granted directly, through PUBLIC, or through a membership target.
+  // The surrounding role-posture guard separately rejects membership edges,
+  // but this query keeps the ACL proof fail-closed when called independently.
+  await assertNoWelfareVerifierDefaultPrivileges(
+    client,
+    contract.schema,
+    welfareVerifierRole,
+  );
   const privileges = await client.query<WelfareVerifierPrivilegeRow>(`
     SELECT 'schema'::text AS object_kind,
            namespace.nspname AS object_name,

@@ -140,6 +140,7 @@ describe('ICP certification production-shape fixture', () => {
       hardLimitUsd: 0.0004,
     });
     expect(existsSync(join(fixture.systemDataDir, 'charge-policy.json'))).toBe(false);
+    expect(existsSync(join(fixture.systemDataDir, 'automata-policy.json'))).toBe(true);
     expect(configA).toMatchObject({
       compactionThresholdPct: 30,
       modelRoster: {

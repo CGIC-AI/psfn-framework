@@ -138,9 +138,14 @@ describe('AdminAutomataDataService', () => {
     })]);
     expect(snapshot.runs).toEqual([expect.objectContaining({
       taskId: 'task-1',
+      trigger: 'tool-or-post-turn-request',
+      busEligibility: 'eligible',
       sessionIds: ['subagent:worker-1'],
       artifactCount: 1,
       artifactCustody: { discarded: 0, durable: 1, pending: 0 },
+      promotionState: 'not_requested',
+      foldState: 'not_required',
+      retentionState: 'active_protected',
     })]);
     expect(snapshot.bus).toMatchObject({
       available: true,

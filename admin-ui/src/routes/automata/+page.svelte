@@ -297,7 +297,7 @@
         <div class="garden-table-shell mt-4">
           <div class="garden-table-scroll">
             <table class="garden-table">
-              <thead><tr><th>Run / task</th><th>Class</th><th>Status</th><th>Sessions</th><th>Artifacts</th><th>Created</th></tr></thead>
+              <thead><tr><th>Run / task</th><th>Class / trigger</th><th>Status / outcome</th><th>Lineage</th><th>Custody</th><th>Retention</th></tr></thead>
               <tbody>
                 {#each snapshot.runs as run (run.runId)}
                   <tr>
@@ -306,19 +306,37 @@
                       <div class="mt-1 text-sm text-shadow-700">{run.taskLabel}</div>
                       <div class="font-mono text-xs text-shadow-500">{run.taskId}</div>
                     </td>
-                    <td class="font-mono text-xs">{run.automatonClass}</td>
-                    <td><span class="rounded-full bg-bark-100 px-2 py-1 text-xs font-medium">{run.status}</span></td>
                     <td>
+                      <div class="font-mono text-xs">{run.automatonClass}</div>
+                      <div class="mt-1 text-xs text-shadow-500">{run.trigger}</div>
+                      <div class="mt-1 text-xs">Bus: {run.busEligibility}</div>
+                    </td>
+                    <td>
+                      <span class="rounded-full bg-bark-100 px-2 py-1 text-xs font-medium">{run.status}</span>
+                      <div class="mt-2 text-xs text-shadow-500">{run.outcome ?? 'No terminal outcome'}</div>
+                      <div class="mt-1 text-xs text-shadow-500">{run.statusReason}</div>
+                    </td>
+                    <td>
+                      <div class="text-xs">Worker {run.workerId} · gen {run.workerGeneration}</div>
+                      <div class="mt-1 font-mono text-xs">Parent: {run.parentRunId ?? 'None'}</div>
+                      <div class="font-mono text-xs">Source: {run.sourceRunId ?? 'None'}</div>
                       {#if run.sessionIds.length === 0}
-                        <span class="text-shadow-400">None</span>
+                        <span class="mt-1 block text-shadow-400">No sessions</span>
                       {:else}
                         {#each run.sessionIds as sessionId}
                           <div class="font-mono text-xs">{sessionId}</div>
                         {/each}
                       {/if}
                     </td>
-                    <td>{run.artifactCount} ({run.artifactCustody.durable} durable)</td>
-                    <td>{formatDate(run.createdAtMs)}</td>
+                    <td>
+                      <div>{run.artifactCount} artifacts ({run.artifactCustody.durable} durable)</div>
+                      <div class="mt-1 text-xs text-shadow-500">Promotion: {run.promotionState}</div>
+                      <div class="text-xs text-shadow-500">Fold: {run.foldState}</div>
+                    </td>
+                    <td>
+                      <div>{run.retentionState}</div>
+                      <div class="mt-1 text-xs text-shadow-500">{formatDate(run.retentionDeadlineMs)}</div>
+                    </td>
                   </tr>
                 {/each}
               </tbody>

@@ -92,6 +92,8 @@ export interface AdminAutomataRunView {
   workerGeneration: number;
   taskId: string;
   taskLabel: string;
+  trigger: string;
+  busEligibility: EffectiveAutomataClassDescriptor['busEligibility'];
   parentRunId?: string;
   sourceRunId?: string;
   sessionIds: string[];
@@ -106,6 +108,7 @@ export interface AdminAutomataRunView {
   startedAtMs?: number;
   finishedAtMs?: number;
   retentionDeadlineMs: number;
+  retentionState: 'active_protected' | 'due' | 'retained';
 }
 
 export interface AdminAutomataEvidenceView {
@@ -260,7 +263,11 @@ function requireVerificationStatus(value: string | undefined): AutomataBusVerifi
   return value as AutomataBusVerificationStatus;
 }
 
-function projectRun(record: AutomataRunRecord): AdminAutomataRunView {
+function projectRun(
+  record: AutomataRunRecord,
+  descriptor: EffectiveAutomataClassDescriptor,
+  nowMs: number,
+): AdminAutomataRunView {
   const artifactCustody = { discarded: 0, durable: 0, pending: 0 };
   for (const artifact of record.artifacts) artifactCustody[artifact.custody] += 1;
   return {
@@ -271,6 +278,8 @@ function projectRun(record: AutomataRunRecord): AdminAutomataRunView {
     workerGeneration: record.workerGeneration,
     taskId: record.taskId,
     taskLabel: record.taskLabel,
+    trigger: descriptor.trigger,
+    busEligibility: descriptor.busEligibility,
     ...(record.parentRunId ? { parentRunId: record.parentRunId } : {}),
     ...(record.sourceRunId ? { sourceRunId: record.sourceRunId } : {}),
     sessionIds: [...record.sessionIds],
@@ -285,6 +294,11 @@ function projectRun(record: AutomataRunRecord): AdminAutomataRunView {
     ...(record.startedAtMs === undefined ? {} : { startedAtMs: record.startedAtMs }),
     ...(record.finishedAtMs === undefined ? {} : { finishedAtMs: record.finishedAtMs }),
     retentionDeadlineMs: record.retentionDeadlineMs,
+    retentionState: record.status === 'queued' || record.status === 'running'
+      ? 'active_protected'
+      : record.retentionDeadlineMs <= nowMs
+        ? 'due'
+        : 'retained',
   };
 }
 
@@ -515,9 +529,18 @@ export class AdminAutomataDataService implements AdminAutomataService {
       }
     }
 
+    const classes = registry.listClasses();
+    const classesById = new Map(classes.map(descriptor => [descriptor.id, descriptor]));
+    const nowMs = Date.now();
     return {
-      classes: registry.listClasses(),
-      runs: runItems.map(projectRun),
+      classes,
+      runs: runItems.map((record) => {
+        const descriptor = classesById.get(record.automatonClass);
+        if (!descriptor) {
+          throw new Error(`Automata registry returned run with unknown class "${record.automatonClass}"`);
+        }
+        return projectRun(record, descriptor, nowMs);
+      }),
       runPage: { offset: runOffset, limit, hasMore: requestedRuns.length > runPageEnd },
       bus,
       lessons,

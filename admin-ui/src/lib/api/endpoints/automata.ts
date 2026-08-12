@@ -22,15 +22,23 @@ export interface AutomataRunView {
   workerGeneration: number;
   taskId: string;
   taskLabel: string;
+  trigger: string;
+  busEligibility: 'eligible' | 'excluded';
+  parentRunId?: string;
+  sourceRunId?: string;
   sessionIds: string[];
   artifactCount: number;
   artifactCustody: Record<'discarded' | 'durable' | 'pending', number>;
   status: AutomataRunStatus;
   statusReason: string;
+  outcome?: 'blocked' | 'budget_limited' | 'cancelled' | 'completed';
+  promotionState: 'not_requested' | 'pending' | 'promoted' | 'rejected';
+  foldState: 'not_required' | 'pending' | 'folded' | 'rejected';
   createdAtMs: number;
   startedAtMs?: number;
   finishedAtMs?: number;
   retentionDeadlineMs: number;
+  retentionState: 'active_protected' | 'due' | 'retained';
 }
 
 export interface AutomataFindingView {

@@ -119,6 +119,13 @@
       "note": "Automata Bus transactional store, conformance, tenancy, readiness, rollback, and backup-access suite against real containerized Postgres. Baseline 2.68s file wall (10 tests, warm tmpfs harness, this host, 2026-08-11); 120s is the repo-standard integration cap with headroom dominated by cold-start and shared harness-slot contention."
     },
     {
+      "file": "src/faculties/automata/bus/postgres-query-adapters.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": 1511,
+      "baselineSource": "measured",
+      "note": "Automata Bus canonical/pgvector adapter suite against the persistent RAM-backed pgvector harness. Baseline 1.511s file wall (implementation run, this host, 2026-08-11); 120s preserves ample headroom for cold-start container and shared-heavy gate variance."
+    },
+    {
       "file": "src/faculties/introspection/postgres-store.integration.test.ts",
       "timeoutMs": 120000,
       "measuredBaselineMs": null,

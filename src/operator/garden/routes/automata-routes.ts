@@ -1,7 +1,12 @@
 import { sendJson } from '../../../channels/backplane/http/primitives.js';
 import { exactPath } from '../route-matchers.js';
 import { parseRequestUrl } from '../request-url.js';
-import type { AdminAutomataService } from '../services/automata-service.js';
+import {
+  AdminAutomataNotFoundError,
+  AdminAutomataQueryError,
+  type AdminAutomataService,
+  type AdminAutomataSnapshotOptions,
+} from '../services/automata-service.js';
 import {
   ADMIN_DYNAMIC_JSON_HEADERS,
   parsePositiveIntegerQueryNumber,
@@ -10,6 +15,19 @@ import {
 import type { AdminApiRoute } from './types.js';
 
 const AUTOMATA_PATH = '/api/admin/automata';
+
+function parseOffset(params: URLSearchParams, name: string): { ok: true; value?: number } | { ok: false; error: string } {
+  const raw = params.get(name);
+  if (raw === null) return { ok: true };
+  if (!/^\d+$/u.test(raw)) return { ok: false, error: `${name} must be a non-negative integer` };
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value)) return { ok: false, error: `${name} must be a non-negative safe integer` };
+  return { ok: true, value };
+}
+
+function optionalQuery(params: URLSearchParams, name: string): string | undefined {
+  return params.get(name) ?? undefined;
+}
 
 export function buildAdminAutomataRoutes(options: {
   automataService?: AdminAutomataService | null;
@@ -23,23 +41,65 @@ export function buildAdminAutomataRoutes(options: {
         return;
       }
       const url = parseRequestUrl(req, AUTOMATA_PATH);
-      const parsedLimit = parsePositiveIntegerQueryNumber(url.searchParams, 'limit');
-      if (!parsedLimit.ok) {
-        sendJson(res, 400, { error: parsedLimit.error });
+      const limit = parsePositiveIntegerQueryNumber(url.searchParams, 'limit');
+      const busLimit = parsePositiveIntegerQueryNumber(url.searchParams, 'busLimit');
+      const runOffset = parseOffset(url.searchParams, 'runOffset');
+      const busOffset = parseOffset(url.searchParams, 'busOffset');
+      if (!limit.ok) {
+        sendJson(res, 400, { error: limit.error });
+        return;
+      }
+      if (!busLimit.ok) {
+        sendJson(res, 400, { error: busLimit.error });
+        return;
+      }
+      if (!runOffset.ok) {
+        sendJson(res, 400, { error: runOffset.error });
+        return;
+      }
+      if (!busOffset.ok) {
+        sendJson(res, 400, { error: busOffset.error });
         return;
       }
       try {
-        const status = url.searchParams.get('status') ?? undefined;
-        const classId = url.searchParams.get('classId') ?? undefined;
-        const taskId = url.searchParams.get('taskId') ?? undefined;
-        sendJson(res, 200, options.automataService.getSnapshot({
+        const status = optionalQuery(url.searchParams, 'status');
+        const classId = optionalQuery(url.searchParams, 'classId');
+        const taskId = optionalQuery(url.searchParams, 'taskId');
+        const busClassId = optionalQuery(url.searchParams, 'busClassId');
+        const busRunId = optionalQuery(url.searchParams, 'busRunId');
+        const busTaskId = optionalQuery(url.searchParams, 'busTaskId');
+        const eventId = optionalQuery(url.searchParams, 'eventId');
+        const verificationStatus = optionalQuery(url.searchParams, 'verificationStatus');
+        const query: AdminAutomataSnapshotOptions = {
           ...(status === undefined ? {} : { status }),
           ...(classId === undefined ? {} : { classId }),
           ...(taskId === undefined ? {} : { taskId }),
-          ...(parsedLimit.value === undefined ? {} : { limit: parsedLimit.value }),
-        }), ADMIN_DYNAMIC_JSON_HEADERS);
-      } catch (error) {
-        sendJson(res, 400, { error: toSanitizedMessage(error, 'Invalid automata query') });
+          ...(limit.value === undefined ? {} : { limit: limit.value }),
+          ...(runOffset.value === undefined ? {} : { runOffset: runOffset.value }),
+          ...(busLimit.value === undefined ? {} : { busLimit: busLimit.value }),
+          ...(busOffset.value === undefined ? {} : { busOffset: busOffset.value }),
+          ...(busClassId === undefined ? {} : { busClassId }),
+          ...(busRunId === undefined ? {} : { busRunId }),
+          ...(busTaskId === undefined ? {} : { busTaskId }),
+          ...(eventId === undefined ? {} : { eventId }),
+          ...(verificationStatus === undefined ? {} : { verificationStatus }),
+        };
+        options.automataService.getSnapshot(query).then(
+          snapshot => sendJson(res, 200, snapshot, ADMIN_DYNAMIC_JSON_HEADERS),
+          error => {
+            if (error instanceof AdminAutomataNotFoundError) {
+              sendJson(res, 404, { error: toSanitizedMessage(error, 'Unknown Automata resource') });
+              return;
+            }
+            if (error instanceof AdminAutomataQueryError) {
+              sendJson(res, 400, { error: toSanitizedMessage(error, 'Invalid automata query') });
+              return;
+            }
+            sendJson(res, 500, { error: 'Failed to load Automata data' });
+          },
+        );
+      } catch {
+        sendJson(res, 500, { error: 'Failed to load Automata data' });
       }
     },
   }];

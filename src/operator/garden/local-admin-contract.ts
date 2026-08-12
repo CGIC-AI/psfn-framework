@@ -77,7 +77,10 @@ import { createPostgresAnalysisWorkbenchTraceStoreFromConfig } from '../../persi
 import { createPostgresObserverEvalSidecarStore } from '../../core/eval/observer-sidecar/persistence.js';
 import { createOwnerFileConfigStore } from '../../system/config/config-store.js';
 import { AdminPartnerAffectShadowDataService } from './services/partner-affect-shadow-service.js';
-import { AdminAutomataDataService } from './services/automata-service.js';
+import {
+  AdminAutomataDataService,
+  type AdminAutomataBusReadPort,
+} from './services/automata-service.js';
 import type { PartnerAffectShadowStorePort } from '../../core/emotion/partner-affect/shadow-store-port.js';
 import {
   createDefaultObserverEvalSidecarSettings,
@@ -215,6 +218,8 @@ export interface InProcessGardenAdminContractOptions {
   apiPort?: number;
   memoryStore: MemoryStorePort;
   automataRunRegistry?: AutomataRunRegistry | null;
+  /** Optional content source for the read-only Automata Bus operator projection. */
+  automataBusReadPort?: AdminAutomataBusReadPort | null;
   biographicalReviewService?: GardenAdminDomainServices['biographicalReview'];
   /** Fixed legacy-mode scope; fleet requests always use signed request context. */
   legacyMemorySubjectAccessContext?: Readonly<MemorySubjectAccessContext>;
@@ -653,10 +658,27 @@ export function createInProcessGardenAdminContract(
     },
   });
 
+  let automata: AdminAutomataDataService | null = null;
+  if (options.automataRunRegistry) {
+    if (!options.config.companionId) {
+      throw new Error('Automata Garden service requires config.companionId');
+    }
+    if (!options.config.automataPolicy) {
+      throw new Error('Automata Garden service requires automata-policy.json');
+    }
+    automata = new AdminAutomataDataService({
+      registry: options.automataRunRegistry,
+      companionId: options.config.companionId,
+      readPolicy: {
+        defaultPageLimit: options.config.automataPolicy.recentRunLimit,
+        maxPageLimit: options.config.automataPolicy.operatorMutationLimit,
+      },
+      bus: options.automataBusReadPort ?? null,
+    });
+  }
+
   return {
-    automata: options.automataRunRegistry
-      ? new AdminAutomataDataService(options.automataRunRegistry)
-      : null,
+    automata,
     dashboard: new AdminDashboardDataService({
       getMemoryStatsForRequest: context => memory.getStatsForRequest(context),
       sessionStore: options.sessionStore,

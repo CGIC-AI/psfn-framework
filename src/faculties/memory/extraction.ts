@@ -88,6 +88,7 @@ import {
 } from './extraction/signals.js';
 import { parseFactsXml } from './extraction/parser.js';
 import type { MemoryExtractionSessionPort } from './extraction/session-port.js';
+import type { AutomataBusWorkerAccess } from '../automata/bus/worker-access.js';
 import { projectFinalReflectionForExtraction } from './extraction/reflection-output.js';
 import type { BiographicalProfileStorePort } from './biographical/store-port.js';
 import type { BiographicalSubjectRef } from './biographical/types.js';
@@ -148,6 +149,8 @@ export interface MemoryExtractorFormationOptions {
    * framing before their strict schema-bound instructions.
    */
   personaPreamble?: PersonaPreamblePort | null;
+  /** Companion-bound Automata Bus worker adapter; owner policy gates extraction. */
+  automataBusWorkerAccess?: AutomataBusWorkerAccess | null;
   biographicalRebuild?: {
     profileStore: BiographicalProfileStorePort;
     companionSubject: Extract<BiographicalSubjectRef, { kind: 'companion' }>;
@@ -205,6 +208,7 @@ export class MemoryExtractor {
   private emitConcernCandidates: ConcernCandidateExtractionSink | null = null;
   private isAutoContactCreationAllowed: ((channelId: string) => boolean) | null = null;
   private personaPreamble: PersonaPreamblePort | null = null;
+  private automataBusWorkerAccess: AutomataBusWorkerAccess | null = null;
   private biographicalRebuild: MemoryExtractorFormationOptions['biographicalRebuild'] = undefined;
 
   constructor(
@@ -266,6 +270,7 @@ export class MemoryExtractor {
     this.emitConcernCandidates = formationOptions?.emitConcernCandidates ?? null;
     this.isAutoContactCreationAllowed = formationOptions?.isAutoContactCreationAllowed ?? null;
     this.personaPreamble = formationOptions?.personaPreamble ?? null;
+    this.automataBusWorkerAccess = formationOptions?.automataBusWorkerAccess ?? null;
     this.biographicalRebuild = formationOptions?.biographicalRebuild;
   }
 
@@ -739,6 +744,7 @@ export class MemoryExtractor {
       memoryStore: this.memoryStore,
       promptRegistry: this.promptRegistry,
       personaPreamble: this.personaPreamble,
+      automataBusWorkerAccess: this.automataBusWorkerAccess,
       gateConfig: resolveGateConfig(this.runtimeConfig, {
         minImportance: this.minImportance,
         minConfidence: this.minConfidence,

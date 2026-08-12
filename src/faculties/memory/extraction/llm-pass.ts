@@ -33,6 +33,8 @@ export interface ExtractionChunkPromptContext {
   experientialCompanionName: string | undefined;
   /** E6.1: soft persona framing prepended before the schema-bound task prompt. */
   personaPreamble: PersonaPreamblePort | null | undefined;
+  /** Policy-eligible Automata Bus layer, already validated and bounded. */
+  automataBusPrompt?: string;
 }
 
 export function renderExtractionChunkPrompt(
@@ -52,8 +54,17 @@ export function renderExtractionChunkPrompt(
   const taskPrompt = [renderedPrompt, namingGuidance, selfDirectedGuidance]
     .filter((section): section is string => Boolean(section))
     .join('\n\n');
-  // E6.1: soft persona framing precedes the strict task instructions and
-  // JSON schema; the schema/format sections stay byte-identical.
+  if (context.automataBusPrompt) {
+    // Stable public worker prompt order: inherited subsystem identity, bounded
+    // Bus guidance/briefing, then the strict extraction task and schema.
+    return [
+      context.personaPreamble?.build('memory_extraction'),
+      context.automataBusPrompt,
+      taskPrompt,
+    ].filter((section): section is string => Boolean(section)).join('\n\n');
+  }
+  // Preserve the pre-Bus prompt byte-for-byte when no eligible formation was
+  // injected (including the latency-sensitive memory retrieval lane).
   return context.personaPreamble
     ? context.personaPreamble.prepend('memory_extraction', taskPrompt)
     : taskPrompt;

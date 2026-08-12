@@ -45,6 +45,7 @@ import {
   emitCompletionHandoff,
   safeEmitCompletionHandoffError,
   summarizeCompletionText,
+  type CompletionHandoffEmission,
   type CompletionHandoffInput,
 } from '../../core/agent/completion-handoff.js';
 import type {
@@ -69,6 +70,7 @@ import {
 import type { SubagentControlPort } from './port.js';
 import { SubagentTaskRegistry } from './task-registry.js';
 import type { AutomataRunRegistry } from '../automata/run-registry.js';
+import type { AutomataArtifactRef } from '../automata/registry-contract.js';
 import {
   buildAutomataBusWorkerScope,
   createAutomataBusTool,
@@ -77,6 +79,12 @@ import {
   type AutomataBusWorkerScope,
 } from '../automata/bus/worker-access.js';
 import { buildSubagentWorkSpec, createSubagentWorkSpecProvider } from './work-spec.js';
+import {
+  buildSubagentTerminalHandoffKey,
+  type SubagentAutomataLifecyclePort,
+  type SubagentAutomataLifecycleDelivery,
+  type SubagentAutomataLineage,
+} from './automata-lifecycle.js';
 import {
   deriveSubagentCapabilityGrant,
   type DerivedSubagentCapabilityGrant,
@@ -90,6 +98,7 @@ import {
 import type {
   SubagentExecutionRequest,
   SubagentExecutionSourceContext,
+  SubagentDurableTaskInspection,
   SubagentPartialResult,
   SubagentRemainingBudget,
   SubagentRuntimeArtifactView,
@@ -228,6 +237,8 @@ export interface SubagentFacultyDeps {
   automataRunRegistry?: AutomataRunRegistry;
   /** Companion-bound Bus prompt/tool adapter. Absent means no Bus prompt or tool. */
   automataBusWorkerAccess?: AutomataBusWorkerAccess | null;
+  /** Durable terminal handoff/inspection adapter; receives references, never raw worker text. */
+  automataLifecyclePort?: SubagentAutomataLifecyclePort | null;
 }
 
 export interface WyomingSubagentDelegationResult {
@@ -264,6 +275,8 @@ interface ActiveSubagentHandle {
   agentLoop: SubstrateAgent | null;
   pendingMessages: SubstrateMessage[];
   cancelReason?: string;
+  /** Exact raw-session entry reference for the latest bounded-turn output. */
+  latestOutputRef?: string;
   completion: Promise<SubagentResult>;
   resolveCompletion: (result: SubagentResult) => void;
   settled: boolean;
@@ -322,6 +335,8 @@ export class SubagentFaculty implements SubagentControlPort {
     // single runtime lane resolver (Law 12.4) before any worker is registered.
     assertWorkSpecLaneParity(request.workSpec);
     const subagentId = `subagent-${randomUUID()}`;
+    const executionChannelId = normalizeExecutionChannelId(request.executionChannelId)
+      ?? `subagent:${subagentId}`;
     const startTime = Date.now();
     if (this.taskRegistry.getActiveCount() >= this.maxConcurrent) {
       await this.emitBlockedSpawnHandoff(
@@ -348,6 +363,7 @@ export class SubagentFaculty implements SubagentControlPort {
         throw error instanceof Error ? error : new Error(message);
       }
     }
+    const durableLineage = this.resolveAutomataLineage(request, subagentId, executionChannelId);
     const automataBusAccess = this.deps.automataBusWorkerAccess;
     const roleAllowsAutomataBus = resolvedRole?.definition.allowedTools === undefined
       || resolvedRole.definition.allowedTools.includes('automata_bus');
@@ -355,7 +371,7 @@ export class SubagentFaculty implements SubagentControlPort {
       ? buildAutomataBusWorkerScope(automataBusAccess, {
         automatonClass: 'subagent.bounded',
         runId: subagentId,
-        taskId: request.sourceContext?.originatingTaskId ?? subagentId,
+        taskId: durableLineage.taskId,
       })
       : undefined;
     let automataBusPrompt: string | undefined;
@@ -443,8 +459,6 @@ export class SubagentFaculty implements SubagentControlPort {
       ...(request.memoryWriteElevation ? { memoryWriteElevation: request.memoryWriteElevation } : {}),
     });
 
-    const executionChannelId = normalizeExecutionChannelId(request.executionChannelId)
-      ?? `subagent:${subagentId}`;
     const workerExecution = createWorkerExecutionPolicy(SUBAGENT_WORKER_LANE);
     const baseMessage = this.buildBaseMessage(subagentId, executionChannelId, request);
     const ingestedIntakeEnvelopes = cloneIntakeSnapshots(
@@ -474,6 +488,10 @@ export class SubagentFaculty implements SubagentControlPort {
       capabilities,
       requiredCapabilities,
       ...(request.sourceContext ? { sourceContext: request.sourceContext } : {}),
+      taskId: durableLineage.taskId,
+      ...(durableLineage.parentRunId ? { parentRunId: durableLineage.parentRunId } : {}),
+      ...(durableLineage.sourceRunId ? { sourceRunId: durableLineage.sourceRunId } : {}),
+      sessionIds: durableLineage.sessionIds,
       createdAt: startTime,
     });
     const task = taskRegistration instanceof Promise ? await taskRegistration : taskRegistration;
@@ -604,6 +622,56 @@ export class SubagentFaculty implements SubagentControlPort {
     return cloneSubagentResult(await handle.completion);
   }
 
+  async discover(taskQuery: string, limit?: number): Promise<SubagentTaskRecord[]> {
+    return this.taskRegistry.findByTaskDescription(
+      normalizeRequiredText(taskQuery, 'task query'),
+      normalizePositiveInteger(limit, 10),
+    );
+  }
+
+  async inspect(subagentId: string): Promise<SubagentDurableTaskInspection | null> {
+    const task = this.taskRegistry.getActiveTask(subagentId)
+      ?? this.taskRegistry.getRecentTasks(Number.MAX_SAFE_INTEGER)
+        .find(candidate => candidate.subagentId === subagentId);
+    if (!task) return null;
+    const lineage = task.lineage ?? {
+      runId: task.subagentId,
+      taskId: task.sourceContext?.originatingTaskId ?? task.subagentId,
+      workerId: task.subagentId,
+      sessionIds: [task.channelId],
+    };
+    const bus = this.deps.automataLifecyclePort
+      ? await this.deps.automataLifecyclePort.inspectRun(lineage)
+      : undefined;
+    if (bus && (bus.runId !== lineage.runId || bus.taskId !== lineage.taskId)) {
+      throw new Error(`Automata lifecycle inspection returned mismatched lineage for "${subagentId}".`);
+    }
+    return {
+      task,
+      lineage: {
+        ...lineage,
+        sessionIds: [...lineage.sessionIds],
+      },
+      ...(bus
+        ? {
+            bus: {
+              ...bus,
+              sessionIds: [...bus.sessionIds],
+              findingRefs: [...bus.findingRefs],
+              evidenceRefs: [...bus.evidenceRefs],
+              artifactRefs: bus.artifactRefs.map(reference => ({ ...reference })),
+              handoffRefs: [...bus.handoffRefs],
+            },
+          }
+        : {}),
+      rawSession: {
+        separatelyGoverned: true,
+        sessionIds: [...lineage.sessionIds],
+        accessSurface: 'subagent.status',
+      },
+    };
+  }
+
   private async runHandle(handle: ActiveSubagentHandle): Promise<void> {
     if (handle.settled) return;
 
@@ -693,6 +761,8 @@ export class SubagentFaculty implements SubagentControlPort {
         totalOutput += response.metadata.outputTokens;
         lastModel = response.metadata.model;
         lastContent = response.content;
+        handle.latestOutputRef = this.resolveLatestOutputRef(handle.channelId, response.content)
+          ?? handle.latestOutputRef;
         turns += 1;
         await this.emitLifecycleProgressHandoff(handle, 'progress', turns);
 
@@ -999,8 +1069,9 @@ export class SubagentFaculty implements SubagentControlPort {
     // the session store races an in-flight journal write (psfn-framework-k510).
     await this.drainOutstandingTurns(handle);
     let completionHandoff: SubagentResult['completionHandoff'] = { status: 'delivered' };
+    let completionEmission: CompletionHandoffEmission | undefined;
     try {
-      await this.emitCompletionHandoff(handle, result);
+      completionEmission = await this.emitCompletionHandoff(handle, result);
     } catch (handoffError) {
       completionHandoff = buildFailedCompletionHandoffDelivery(handoffError);
       log.error('Terminal subagent lifecycle handoff failed without changing the task result', {
@@ -1009,9 +1080,15 @@ export class SubagentFaculty implements SubagentControlPort {
         error: completionHandoff.error,
       });
     }
+    const automataLifecycle = await this.recordAutomataTerminalHandoff(
+      handle,
+      result,
+      completionEmission?.handoff.handoffId,
+    );
     const terminalResult: SubagentResult = {
       ...result,
       completionHandoff,
+      automataLifecycle,
     };
     this.storeRecentResult(terminalResult);
     handle.resolveCompletion(cloneSubagentResult(terminalResult));
@@ -1054,7 +1131,7 @@ export class SubagentFaculty implements SubagentControlPort {
   private async emitCompletionHandoff(
     handle: ActiveSubagentHandle,
     result: SubagentExecutionResult,
-  ): Promise<void> {
+  ): Promise<CompletionHandoffEmission> {
     const sourceContext = this.resolveSourceContext(handle.request);
 
     // mmo9.7.7: key the handoff off the honest terminal outcome + checkpoint. A
@@ -1072,7 +1149,7 @@ export class SubagentFaculty implements SubagentControlPort {
         : result.outcome === 'cancelled'
           ? 'cancelled'
           : (isPartial ? 'partial' : 'failed');
-    await this.emitHandoff({
+    return await this.emitHandoff({
       source: 'subagent',
       taskId: handle.subagentId,
       taskLabel: result.name,
@@ -1159,10 +1236,10 @@ export class SubagentFaculty implements SubagentControlPort {
     handoff: CompletionHandoffInput,
     targetChannelId?: string,
     bufferNotice = true,
-  ): Promise<void> {
+  ): Promise<CompletionHandoffEmission> {
     const completionIntake = this.deps.completionIntakeProvider?.();
     try {
-      await emitCompletionHandoff({
+      return await emitCompletionHandoff({
         eventBus: this.deps.eventBus,
         handoff,
         ...(targetChannelId ? { targetChannelId } : {}),
@@ -1189,6 +1266,93 @@ export class SubagentFaculty implements SubagentControlPort {
     }
   }
 
+  private async recordAutomataTerminalHandoff(
+    handle: ActiveSubagentHandle,
+    result: SubagentExecutionResult,
+    parentHandoffRef?: string,
+  ): Promise<SubagentAutomataLifecycleDelivery> {
+    const port = this.deps.automataLifecyclePort;
+    if (!port) return { status: 'not_configured' };
+    const idempotencyKey = buildSubagentTerminalHandoffKey(handle.subagentId);
+    try {
+      const task = this.taskRegistry.getRecentTasks(Number.MAX_SAFE_INTEGER)
+        .find(candidate => candidate.subagentId === handle.subagentId);
+      const lineage = task?.lineage
+        ?? this.resolveAutomataLineage(handle.request, handle.subagentId, handle.channelId);
+      const hasPartialOutput = result.partial?.latestCheckpoint.content.trim().length
+        ? true
+        : false;
+      const resultKind = result.outcome === 'completed'
+        ? 'final'
+        : hasPartialOutput
+          ? 'partial'
+          : 'none';
+      const outputRefs = resultKind === 'none' || !handle.latestOutputRef
+        ? []
+        : [{
+            kind: 'session_output',
+            ref: handle.latestOutputRef,
+            custody: 'pending' as const,
+          }];
+      const receipt = await port.recordTerminalHandoff({
+        idempotencyKey,
+        lineage,
+        lifecycleState: result.lifecycleState,
+        outcome: result.outcome,
+        stateReason: result.stateReason,
+        ...(result.failureReason ? { failureReason: result.failureReason } : {}),
+        resultKind,
+        usage: {
+          model: result.model,
+          inputTokens: result.inputTokens,
+          outputTokens: result.outputTokens,
+          durationMs: result.durationMs,
+          turns: result.turns,
+        },
+        outputRefs,
+        ...(parentHandoffRef ? { parentHandoffRef } : {}),
+        occurredAtMs: task?.finishedAt ?? handle.startTime + result.durationMs,
+      });
+      const handoffRef = normalizeRequiredText(receipt.handoffRef, 'automata handoff ref');
+      const findingRefs = normalizeReferenceList(receipt.findingRefs, 'finding ref');
+      const evidenceRefs = normalizeReferenceList(receipt.evidenceRefs, 'evidence ref');
+      const artifactRefs = dedupeArtifactRefs([
+        ...outputRefs,
+        ...receipt.artifactRefs,
+        { kind: 'automata_bus_handoff', ref: handoffRef, custody: 'durable' },
+        ...findingRefs.map(ref => ({ kind: 'automata_bus_finding', ref, custody: 'durable' as const })),
+        ...evidenceRefs.map(ref => ({ kind: 'automata_bus_evidence', ref, custody: 'durable' as const })),
+        ...(parentHandoffRef
+          ? [{ kind: 'parent_completion_handoff', ref: parentHandoffRef, custody: 'durable' as const }]
+          : []),
+      ]);
+      await this.taskRegistry.linkReferences(handle.subagentId, artifactRefs);
+      return {
+        status: 'recorded',
+        idempotencyKey,
+        handoffRef,
+        replay: !receipt.inserted,
+        findingRefs,
+        evidenceRefs,
+        artifactRefs: artifactRefs.map(reference => ({ ...reference })),
+      };
+    } catch (error) {
+      const message = toErrorMessage(error);
+      this.auditTrail?.append('subagent.automata_lifecycle.failed', {
+        subagentId: handle.subagentId,
+        outcome: result.outcome,
+        idempotencyKey,
+        error: message,
+      });
+      log.error('Durable Automata terminal handoff failed without changing the task result', {
+        subagentId: handle.subagentId,
+        lifecycleState: result.lifecycleState,
+        error: message,
+      });
+      return { status: 'failed', idempotencyKey, error: message };
+    }
+  }
+
   private resolveSourceContext(request: SubagentExecutionRequest): SubagentExecutionSourceContext | null {
     if (request.sourceContext?.channelId.trim()) {
       return request.sourceContext;
@@ -1204,6 +1368,41 @@ export class SubagentFaculty implements SubagentControlPort {
       };
     }
     return null;
+  }
+
+  private resolveAutomataLineage(
+    request: SubagentExecutionRequest,
+    subagentId: string,
+    executionChannelId: string,
+  ): SubagentAutomataLineage {
+    const correlation = request.workSpec.correlation;
+    const taskId = normalizeOptionalText(request.sourceContext?.originatingTaskId)
+      ?? normalizeOptionalText(correlation?.workloadId)
+      ?? subagentId;
+    const parentRunId = normalizeOptionalText(request.sourceContext?.parentRunId)
+      ?? normalizeOptionalText(correlation?.chargeRunId);
+    const sourceRunId = normalizeOptionalText(request.sourceContext?.sourceRunId)
+      ?? normalizeOptionalText(correlation?.chargeRootRunId);
+    const sessionIds = [...new Set([
+      executionChannelId,
+      ...(request.sourceContext?.logicalSessionId
+        ? [request.sourceContext.logicalSessionId]
+        : []),
+    ])];
+    return {
+      runId: subagentId,
+      taskId,
+      workerId: subagentId,
+      ...(parentRunId ? { parentRunId } : {}),
+      ...(sourceRunId ? { sourceRunId } : {}),
+      sessionIds,
+    };
+  }
+
+  private resolveLatestOutputRef(channelId: string, content: string): string | undefined {
+    const entry = this.deps.sessionStore.getRecent(channelId, 1).at(-1);
+    if (!entry || entry.role !== 'assistant' || entry.content !== content) return undefined;
+    return `${channelId}#message:${entry.id}`;
   }
 
   private originFromSourceContext(sourceContext: SubagentExecutionSourceContext): CompletionHandoffInput['origin'] {
@@ -1844,10 +2043,40 @@ function normalizeRequiredText(value: string, field: string): string {
   return normalized;
 }
 
+function normalizeReferenceList(values: readonly string[], field: string): string[] {
+  const normalized = values.map(value => normalizeRequiredText(value, field));
+  if (new Set(normalized).size !== normalized.length) {
+    throw new Error(`${field} list must not contain duplicates.`);
+  }
+  return normalized;
+}
+
+function dedupeArtifactRefs(references: readonly AutomataArtifactRef[]): AutomataArtifactRef[] {
+  const byReference = new Map<string, AutomataArtifactRef>();
+  for (const reference of references) {
+    const kind = normalizeRequiredText(reference.kind, 'artifact kind');
+    const ref = normalizeRequiredText(reference.ref, 'artifact ref');
+    byReference.set(`${kind}\0${ref}`, { kind, ref, custody: reference.custody });
+  }
+  return [...byReference.values()];
+}
+
 function cloneSubagentResult(result: SubagentResult): SubagentResult {
   return {
     ...result,
     completionHandoff: { ...result.completionHandoff },
+    ...(result.automataLifecycle?.status === 'recorded'
+      ? {
+          automataLifecycle: {
+            ...result.automataLifecycle,
+            findingRefs: [...result.automataLifecycle.findingRefs],
+            evidenceRefs: [...result.automataLifecycle.evidenceRefs],
+            artifactRefs: result.automataLifecycle.artifactRefs.map(reference => ({ ...reference })),
+          },
+        }
+      : result.automataLifecycle
+        ? { automataLifecycle: { ...result.automataLifecycle } }
+        : {}),
     ...(result.partial
       ? {
           partial: {

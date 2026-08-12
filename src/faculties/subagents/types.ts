@@ -3,6 +3,12 @@ import type { SessionEntry } from '../../core/session/types.js';
 import type { CompletionHandoffDelivery } from '../../shared/contracts/completion-handoff.js';
 import type { LLMWorkSpec, SubstrateMessage, WyomingRoutingMetadata } from '../../shared/contracts/runtime.js';
 import type { GatewayRoutingEnvelope } from '../../shared/routing/envelope.js';
+import type { AutomataArtifactRef } from '../automata/registry-contract.js';
+import type {
+  SubagentAutomataLifecycleDelivery,
+  SubagentAutomataRunInspection,
+  SubagentAutomataLineage,
+} from './automata-lifecycle.js';
 
 export type SubagentTaskLifecycleState = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
 
@@ -27,6 +33,10 @@ export interface SubagentExecutionSourceContext {
   turnId?: string;
   originatingTaskId?: string;
   originatingBeadId?: string;
+  /** Trusted runtime run that directly spawned this worker. */
+  parentRunId?: string;
+  /** Trusted root/source run that led to this worker. */
+  sourceRunId?: string;
 }
 
 export interface SubagentExecutionRequest {
@@ -128,6 +138,10 @@ export interface SubagentTaskRecord {
   capabilities: string[];
   requiredCapabilities: string[];
   sourceContext?: SubagentExecutionSourceContext;
+  /** Durable run/task/session identity shared by roster, discovery, and Bus. */
+  lineage?: SubagentAutomataLineage;
+  /** Durable references only; never transcript or reasoning content. */
+  linkedRefs?: AutomataArtifactRef[];
 }
 
 export interface SubagentResult {
@@ -149,6 +163,8 @@ export interface SubagentResult {
   outcome: SubagentOutcome;
   /** Terminal lifecycle delivery, reported separately from the worker outcome. */
   completionHandoff: CompletionHandoffDelivery;
+  /** Durable run/Bus terminal delivery, independent of the parent notice path. */
+  automataLifecycle?: SubagentAutomataLifecycleDelivery;
   stateReason: string;
   failureReason?: string;
   /**
@@ -191,6 +207,17 @@ export interface SubagentRuntimeTaskView {
 export interface SubagentRuntimeTaskDetail {
   view: SubagentRuntimeTaskView;
   result?: SubagentResult;
+}
+
+export interface SubagentDurableTaskInspection {
+  task: SubagentTaskRecord;
+  lineage: SubagentAutomataLineage;
+  bus?: SubagentAutomataRunInspection;
+  rawSession: {
+    separatelyGoverned: true;
+    sessionIds: string[];
+    accessSurface: 'subagent.status';
+  };
 }
 
 export interface SubagentRuntimeSnapshot {

@@ -42,6 +42,10 @@ import {
 } from '../../system/capabilities/requirements.js';
 import type { CapabilityTier } from '../../system/capabilities/tier-types.js';
 import type { AutomataBusWorkerAccess } from '../automata/bus/worker-access.js';
+import {
+  buildSubagentTerminalHandoffKey,
+  type SubagentAutomataLifecyclePort,
+} from './automata-lifecycle.js';
 
 let mockSubagentContent = 'subagent response';
 let mockSubagentError: Error | null = null;
@@ -347,6 +351,168 @@ describe('SubagentFaculty', () => {
     expect(lifecycleEvents.every(event => (
       event.targetChannelId === undefined && event.noticeBuffered === false
     ))).toBe(true);
+  });
+
+  it('records one reference-only durable terminal handoff with authoritative lineage and cost', async () => {
+    mockSubagentContent = 'private worker output that must stay in the raw session';
+    const recordTerminalHandoff = vi.fn<SubagentAutomataLifecyclePort['recordTerminalHandoff']>(
+      async input => ({
+        handoffRef: `bus-handoff:${input.idempotencyKey}`,
+        inserted: true,
+        findingRefs: ['finding:checkpoint-1'],
+        evidenceRefs: ['evidence:command-1'],
+        artifactRefs: [{ kind: 'work_product', ref: 'artifact:patch-1', custody: 'durable' }],
+      }),
+    );
+    const inspectRun = vi.fn<SubagentAutomataLifecyclePort['inspectRun']>(async lineage => ({
+      runId: lineage.runId,
+      taskId: lineage.taskId,
+      sessionIds: [...lineage.sessionIds],
+      findingRefs: ['finding:checkpoint-1'],
+      evidenceRefs: ['evidence:command-1'],
+      artifactRefs: [{ kind: 'work_product', ref: 'artifact:patch-1', custody: 'durable' }],
+      handoffRefs: ['bus-handoff:terminal'],
+    }));
+    const faculty = new SubagentFaculty({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: TEST_CONFIG,
+      parentSystemPrompt: 'test prompt',
+      automataLifecyclePort: { recordTerminalHandoff, inspectRun },
+    });
+
+    const result = await faculty.execute({
+      name: 'lineage-worker',
+      task: 'inspect durable lineage',
+      executionChannelId: 'subagent:durable-worker',
+      sourceContext: {
+        channelId: 'api:parent',
+        logicalSessionId: 'session-parent',
+        originatingTaskId: 'task-source',
+        parentRunId: 'run-source-parent',
+        sourceRunId: 'run-source-root',
+      },
+      workSpec: buildSubagentWorkSpec({
+        correlation: {
+          workloadId: 'task-work-spec',
+          chargeRunId: 'run-work-parent',
+          chargeRootRunId: 'run-work-root',
+        },
+      }),
+    });
+
+    expect(recordTerminalHandoff).toHaveBeenCalledTimes(1);
+    const terminalInput = recordTerminalHandoff.mock.calls[0]?.[0];
+    expect(terminalInput).toMatchObject({
+      lineage: {
+        runId: result.subagentId,
+        taskId: 'task-source',
+        workerId: result.subagentId,
+        parentRunId: 'run-source-parent',
+        sourceRunId: 'run-source-root',
+        sessionIds: ['subagent:durable-worker', 'session-parent'],
+      },
+      lifecycleState: 'completed',
+      outcome: 'completed',
+      resultKind: 'final',
+      usage: {
+        model: 'deepseek/deepseek-v3.2',
+        inputTokens: 0,
+        outputTokens: 0,
+        turns: 1,
+      },
+    });
+    expect(terminalInput?.idempotencyKey).toBe(
+      buildSubagentTerminalHandoffKey(result.subagentId),
+    );
+    expect(terminalInput?.outputRefs).toEqual([{
+      kind: 'session_output',
+      ref: expect.stringMatching(/^subagent:durable-worker#message:\d+$/u),
+      custody: 'pending',
+    }]);
+    expect(JSON.stringify(terminalInput)).not.toContain(mockSubagentContent);
+    expect(JSON.stringify(terminalInput)).not.toContain('transcript');
+    expect(result.automataLifecycle).toMatchObject({
+      status: 'recorded',
+      replay: false,
+      findingRefs: ['finding:checkpoint-1'],
+      evidenceRefs: ['evidence:command-1'],
+    });
+    expect(faculty.getRecentTasks(1)[0]?.linkedRefs).toEqual(expect.arrayContaining([
+      { kind: 'automata_bus_finding', ref: 'finding:checkpoint-1', custody: 'durable' },
+      { kind: 'automata_bus_evidence', ref: 'evidence:command-1', custody: 'durable' },
+      { kind: 'work_product', ref: 'artifact:patch-1', custody: 'durable' },
+    ]));
+
+    const discovered = await faculty.discover('durable lineage');
+    expect(discovered.map(task => task.subagentId)).toEqual([result.subagentId]);
+    const inspection = await faculty.inspect(result.subagentId);
+    expect(inspection).toMatchObject({
+      lineage: { taskId: 'task-source', sessionIds: ['subagent:durable-worker', 'session-parent'] },
+      bus: {
+        findingRefs: ['finding:checkpoint-1'],
+        evidenceRefs: ['evidence:command-1'],
+      },
+      rawSession: {
+        separatelyGoverned: true,
+        accessSurface: 'subagent.status',
+      },
+    });
+    expect(JSON.stringify(inspection)).not.toContain(mockSubagentContent);
+  });
+
+  it('records failed workers as terminal blocked outcomes without fabricating a final artifact', async () => {
+    mockSubagentError = new Error('worker unavailable');
+    const recordTerminalHandoff = vi.fn<SubagentAutomataLifecyclePort['recordTerminalHandoff']>()
+      .mockResolvedValue({
+        handoffRef: 'bus-handoff:failed',
+        inserted: true,
+        findingRefs: [],
+        evidenceRefs: [],
+        artifactRefs: [],
+      });
+    const faculty = new SubagentFaculty({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: TEST_CONFIG,
+      parentSystemPrompt: 'test prompt',
+      automataLifecyclePort: {
+        recordTerminalHandoff,
+        inspectRun: vi.fn(async lineage => ({
+          runId: lineage.runId,
+          taskId: lineage.taskId,
+          sessionIds: [...lineage.sessionIds],
+          findingRefs: [],
+          evidenceRefs: [],
+          artifactRefs: [],
+          handoffRefs: ['bus-handoff:failed'],
+        })),
+      },
+    });
+
+    const error = await faculty.execute({
+      name: 'failing-worker',
+      task: 'fail and preserve partial metadata',
+      workSpec: buildSubagentWorkSpec(),
+    }).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(SubagentExecutionError);
+    expect(recordTerminalHandoff).toHaveBeenCalledWith(expect.objectContaining({
+      lifecycleState: 'failed',
+      outcome: 'blocked',
+      resultKind: 'none',
+      outputRefs: [],
+    }));
+    expect((error as SubagentExecutionError).result.automataLifecycle).toMatchObject({
+      status: 'recorded',
+      handoffRef: 'bus-handoff:failed',
+    });
   });
 
   // hrmrq.54: subagent tool results screen like the parent's. The provider is

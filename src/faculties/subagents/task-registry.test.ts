@@ -1,5 +1,25 @@
 import { describe, expect, it } from 'vitest';
 import { SubagentTaskRegistry } from './task-registry.js';
+import {
+  PRODUCTION_AUTOMATA_CLASSES,
+  parseAutomataOwnerPolicy,
+} from '../automata/registry-contract.js';
+import { AutomataRunRegistry, InMemoryAutomataRunStore } from '../automata/run-registry.js';
+
+function automataPolicy() {
+  return parseAutomataOwnerPolicy({
+    schemaVersion: 1,
+    bus: {
+      eligibleClasses: PRODUCTION_AUTOMATA_CLASSES
+        .filter(entry => entry.id !== 'memory.retrieval')
+        .map(entry => entry.id),
+      excludedClasses: ['memory.retrieval'],
+    },
+    retentionMs: { ephemeral: 1_000, standard: 10_000, extended: 20_000 },
+    recentRunLimit: 25,
+    operatorMutationLimit: 100,
+  });
+}
 
 describe('SubagentTaskRegistry', () => {
   it('tracks active and completed tasks on the subagent worker lane', () => {
@@ -48,7 +68,7 @@ describe('SubagentTaskRegistry', () => {
     ]) {
       let message = '';
       try {
-        transition();
+        void transition();
       } catch (error) {
         message = error instanceof Error ? error.message : String(error);
       }
@@ -59,7 +79,7 @@ describe('SubagentTaskRegistry', () => {
 
   it('fails closed on invalid lifecycle transitions', () => {
     const registry = new SubagentTaskRegistry();
-    registry.register({
+    void registry.register({
       subagentId: 'subagent-2',
       name: 'research',
       task: 'collect notes',
@@ -75,7 +95,7 @@ describe('SubagentTaskRegistry', () => {
 
   it('tracks explicit cancellation as a terminal bounded-worker state', () => {
     const registry = new SubagentTaskRegistry();
-    registry.register({
+    void registry.register({
       subagentId: 'subagent-3',
       name: 'cancelled-task',
       task: 'wait here',
@@ -90,5 +110,47 @@ describe('SubagentTaskRegistry', () => {
     expect(cancelled.finishedAt).toBe(200);
     expect(cancelled.failureReason).toBe('operator_cancelled');
     expect(registry.getActiveCount()).toBe(0);
+  });
+
+  it('uses the durable registry for lineage, task discovery, and linked references', async () => {
+    const runRegistry = await AutomataRunRegistry.hydrate({
+      companionId: 'companion-a',
+      policy: automataPolicy(),
+      store: new InMemoryAutomataRunStore(),
+      nowMs: 100,
+    });
+    const registry = new SubagentTaskRegistry({ runRegistry });
+    const task = await registry.register({
+      subagentId: 'subagent-durable',
+      name: 'Lineage investigator',
+      task: 'Inspect session and evidence links',
+      channelId: 'subagent:durable',
+      capabilities: ['general'],
+      requiredCapabilities: [],
+      taskId: 'task-durable',
+      parentRunId: 'run-parent',
+      sourceRunId: 'run-root',
+      sessionIds: ['subagent:durable', 'session-parent'],
+      createdAt: 100,
+    });
+    expect(task.lineage).toEqual({
+      runId: 'subagent-durable',
+      taskId: 'task-durable',
+      workerId: 'subagent-durable',
+      parentRunId: 'run-parent',
+      sourceRunId: 'run-root',
+      sessionIds: ['subagent:durable', 'session-parent'],
+    });
+    expect(registry.findByTaskDescription('evidence links')).toHaveLength(1);
+    await registry.linkReferences('subagent-durable', [{
+      kind: 'automata_bus_evidence',
+      ref: 'evidence:one',
+      custody: 'durable',
+    }]);
+    expect(runRegistry.getRun('subagent-durable')?.artifacts).toEqual([{
+      kind: 'automata_bus_evidence',
+      ref: 'evidence:one',
+      custody: 'durable',
+    }]);
   });
 });

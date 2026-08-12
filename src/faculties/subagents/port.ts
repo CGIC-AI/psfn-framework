@@ -1,4 +1,5 @@
 import type {
+  SubagentDurableTaskInspection,
   SubagentExecutionRequest,
   SubagentResult,
   SubagentRuntimeSnapshotOptions,
@@ -18,6 +19,8 @@ export interface SubagentControlPort extends SubagentExecutionPort, SubagentRunt
   message(subagentId: string, message: string): Promise<SubagentRuntimeTaskView>;
   wait(subagentId: string): Promise<SubagentResult>;
   cancel(subagentId: string, reason?: string): Promise<SubagentResult>;
+  discover(taskQuery: string, limit?: number): Promise<SubagentTaskRecord[]>;
+  inspect(subagentId: string): Promise<SubagentDurableTaskInspection | null>;
   getRuntimeTaskDetail(
     subagentId: string,
     options?: SubagentRuntimeSnapshotOptions,

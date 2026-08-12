@@ -44,6 +44,9 @@ import type { BackgroundWorkRuntimeTuning } from '../../core/agent/background-wo
 import type { BackgroundWorkWelfarePolicy } from '../../core/agent/background-work/store-port.js';
 import type { AutomataRunRegistry } from '../../faculties/automata/run-registry.js';
 import type { PostgresAutomataBusRuntimeStore } from '../../faculties/automata/bus/runtime-store.js';
+import type { PostgresAutomataRetentionStore } from '../../faculties/automata/retention-postgres-store.js';
+import type { PostgresExactSessionPurgeSagaStore } from '../../persistence/postgres/automata-exact-session-purge-store.js';
+import type { AutomataSessionClassificationService } from '../../faculties/automata/session-classification.js';
 
 const log = createComponentLogger('Agent');
 
@@ -91,6 +94,9 @@ export interface BootstrapAgentCoreRuntimeOptions {
   automataRuntime?: {
     registry: AutomataRunRegistry;
     store: PostgresAutomataBusRuntimeStore;
+    retentionStore: PostgresAutomataRetentionStore;
+    purgeSagaStore: PostgresExactSessionPurgeSagaStore;
+    sessionClassification: AutomataSessionClassificationService;
   };
 }
 

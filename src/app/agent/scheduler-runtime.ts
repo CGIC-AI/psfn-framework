@@ -76,6 +76,7 @@ const log = createComponentLogger('Agent');
 export { BACKGROUND_WORK_SUPERVISOR_TASK_ID };
 export const SHARED_WORLD_WIKI_CARETAKER_OPERATION_ID = 'shared-world-wiki-caretaker';
 export const AUTOMATA_BUS_REVIEWER_TASK_ID = 'automata-bus-reviewer';
+export const AUTOMATA_RETENTION_OPERATION_ID = 'automata-raw-session-retention';
 
 export interface AgentSchedulerRuntime {
   scheduler: Scheduler;
@@ -117,6 +118,7 @@ export interface BuildAgentSchedulerRuntimeOptions {
     registry: AutomataRunRegistry;
     companionId: string;
   };
+  automataRetention?: { runBounded(nowMs?: number): Promise<unknown> };
 }
 
 export function registerAutomataBusReviewerTask(input: {
@@ -399,6 +401,17 @@ export function buildAgentSchedulerRuntime(
     eligibilityGate: options.eligibilityGate,
     llmProvider: options.gateway,
   });
+
+  if (options.automataRetention) {
+    backgroundMaintenance.registerOperation({
+      id: AUTOMATA_RETENTION_OPERATION_ID,
+      name: 'Automata Raw Session Retention',
+      description: 'Revalidates durable terminal evidence and purges only exact eligible sessions.',
+      handler: async () => {
+        await options.automataRetention!.runBounded();
+      },
+    });
+  }
 
   registerSalienceDecayOperation({
     backgroundMaintenance,

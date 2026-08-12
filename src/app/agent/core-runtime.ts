@@ -17,6 +17,7 @@ import type { MemoryExtractor } from '../../faculties/memory/extraction.js';
 import type { SessionManager } from '../../core/session/manager.js';
 import type { SessionStore } from '../../persistence/sessions/store.js';
 import type { SessionTailCachePort } from '../../persistence/sessions/session-tail-cache-port.js';
+import { RedisSessionTailCache } from '../../persistence/sessions/redis-session-tail-cache.js';
 import type { SkillsRuntime } from '../../faculties/skills/runtime.js';
 import type { CharacterCardV2 } from '../../core/identity/types.js';
 import type { CapabilityRuntime } from '../../system/capabilities/runtime.js';
@@ -168,6 +169,16 @@ import {
 import { createBackgroundWorkAutomataLifecycle } from './automata-background-work-lifecycle.js';
 import type { AutomataBusWorkerAccess } from '../../faculties/automata/bus/worker-access.js';
 import type { SubagentAutomataLifecyclePort } from '../../faculties/subagents/automata-lifecycle.js';
+import type { PostgresAutomataRetentionStore } from '../../faculties/automata/retention-postgres-store.js';
+import type { PostgresExactSessionPurgeSagaStore } from '../../persistence/postgres/automata-exact-session-purge-store.js';
+import {
+  resolveForegroundSessionOwner,
+  type AutomataSessionClassificationService,
+} from '../../faculties/automata/session-classification.js';
+import {
+  createProductionAutomataRetentionRuntime,
+  type ProductionAutomataRetentionRuntime,
+} from '../../faculties/automata/production-retention-runtime.js';
 import {
   createAutomataBusReviewerFindingAdapter,
   createAutomataBusReviewerModelAdapter,
@@ -225,6 +236,9 @@ export interface AgentCoreRuntimeOptions {
   automataRuntime?: {
     registry: AutomataRunRegistry;
     store: PostgresAutomataBusRuntimeStore;
+    retentionStore: PostgresAutomataRetentionStore;
+    purgeSagaStore: PostgresExactSessionPurgeSagaStore;
+    sessionClassification: AutomataSessionClassificationService;
   };
 }
 
@@ -275,6 +289,7 @@ export interface AgentCoreRuntime {
     lifecycle: SubagentAutomataLifecyclePort;
     reviewer: AutomataBusReviewerTaskPort;
   };
+  automataRetention?: ProductionAutomataRetentionRuntime;
 }
 
 export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): Promise<AgentCoreRuntime> {
@@ -410,6 +425,23 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
       )
     : null;
   const { sessionStore, sessionManager } = sessionComposition;
+  const automataRetention = options.automataRuntime
+    ? createProductionAutomataRetentionRuntime({
+        companionId: resolveCompanionIdFromConfig(config),
+        sessionsDir: sessionComposition.sessionsDir,
+        batchLimit: config.automataPolicy?.recentRunLimit ?? (() => {
+          throw new Error('Automata retention runtime requires automata-policy.json');
+        })(),
+        registry: options.automataRuntime.registry,
+        bus: options.automataRuntime.store,
+        retentionStore: options.automataRuntime.retentionStore,
+        sagaStore: options.automataRuntime.purgeSagaStore,
+        projection: sessionComposition.exactSessionProjection,
+        redisTail: sessionComposition.sessionTailCache instanceof RedisSessionTailCache
+          ? sessionComposition.sessionTailCache
+          : null,
+      })
+    : undefined;
   sessionManager.characterName = card.data.name;
 
   // ── Cognition intake firewall sink gates (htm9.3) ──
@@ -494,6 +526,22 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
           backgroundWorkAutomataLifecycle: createBackgroundWorkAutomataLifecycle(
             options.automataRuntime.registry,
           ),
+          classifySessionAtCreation: async (message) => {
+            const owner = resolveForegroundSessionOwner({
+              channelId: message.channelId,
+              channelType: message.channelType,
+              hasIcpCorrelation: message.routing?.icpCorrelation !== undefined,
+              ...(message.routing?.canonicalContactId
+                ? { canonicalContactId: message.routing.canonicalContactId }
+                : {}),
+            });
+            await options.automataRuntime!.sessionClassification.ensureClassifiedAtCreation({
+              companionId: resolveCompanionIdFromConfig(config),
+              sessionId: sessionManager.resolveSessionChannelId(message.channelId),
+              createdAtMs: message.timestamp.getTime(),
+              ...(owner ? { owner } : {}),
+            });
+          },
         }
       : {}),
     contactTrackingGate,
@@ -969,5 +1017,6 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     getModelUsageQuery,
     ...(icpAutonomyRuntime ? { icpAutonomyRuntime } : {}),
     ...(automataBus ? { automataBus } : {}),
+    ...(automataRetention ? { automataRetention } : {}),
   };
 }

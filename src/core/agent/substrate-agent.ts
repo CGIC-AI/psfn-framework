@@ -269,6 +269,8 @@ export interface SubstrateAgentOptions {
   backgroundWorkWelfare?: Partial<BackgroundWorkWelfarePolicy>;
   /** Canonical lifecycle binding for eligible durable background automata. */
   backgroundWorkAutomataLifecycle?: BackgroundWorkAutomataLifecyclePort;
+  /** Durable creation gate that must complete before any raw session append. */
+  classifySessionAtCreation?: (message: SubstrateMessage) => Promise<void>;
 }
 
 function requireBackgroundWorkTuning(
@@ -311,6 +313,9 @@ export class SubstrateAgent {
   private characterName: string;
   private resolveCharacterPromptVariables: () => Record<string, string>;
   private config: CoreSubstrateConfig;
+  private readonly classifySessionAtCreation:
+    | ((message: SubstrateMessage) => Promise<void>)
+    | undefined;
   private modelResolved = false;
   private modelSignature: string | null = null;
   private bridge: EventBridge;
@@ -572,6 +577,7 @@ export class SubstrateAgent {
     this.resolveCharacterPromptVariables = options.characterPromptVariablesProvider
       ?? (() => fallbackPromptVariables);
     this.config = config;
+    this.classifySessionAtCreation = options?.classifySessionAtCreation;
     this.runtimeMode = options.runtimeMode ?? 'gateway';
     this.allowCapabilityDeniedTransport = options.allowCapabilityDeniedTransport;
     this.appCache = options.appCache ?? createMemoryAppCache({ name: 'substrate-agent-prompt-cache' });
@@ -1271,6 +1277,7 @@ export class SubstrateAgent {
    * in later turns but must not itself trigger a reply.
    */
   async observeMessage(message: SubstrateMessage): Promise<void> {
+    await this.classifySessionAtCreation?.(message);
     return this.turnRunReservation.runIngress({
       kind: 'queued-ingress',
       sourceId: message.id,
@@ -1538,6 +1545,7 @@ export class SubstrateAgent {
     deliveryLifecycle?: TurnDeliveryLifecycle,
     turnControl?: MessageHandlerOptions,
   ): Promise<AgentResponse> {
+    await this.classifySessionAtCreation?.(message);
     return this.turnRunReservation.runShared(
       { kind: 'ordinary-turn', sourceId: message.id },
       () => {

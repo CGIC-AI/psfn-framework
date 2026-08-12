@@ -68,6 +68,7 @@ import { ShardManager } from '../../../faculties/shards/manager.js';
 import { ShardWorkloadRegistry } from '../../../faculties/shards/workload-registry.js';
 import type { ShardWorkloadLifecyclePort } from '../../../system/capabilities/shard-approval-grant-contracts.js';
 import type { AutomataRunRegistry } from '../../../faculties/automata/run-registry.js';
+import type { AutomataSessionClassificationService } from '../../../faculties/automata/session-classification.js';
 import type { AutomataBusWorkerAccess } from '../../../faculties/automata/bus/worker-access.js';
 import type { SubagentAutomataLifecyclePort } from '../../../faculties/subagents/automata-lifecycle.js';
 import { ShardFoldReviewController } from '../../../faculties/shards/fold-review.js';
@@ -143,6 +144,8 @@ export interface SessionComposition {
   internalRoleEnvelopeLedger: InternalRoleEnvelopeLedgerStore;
   /** Non-null only when settings.json sessionTailCache.enabled=true (psfn-framework-hgw3.5). */
   sessionTailCache: SessionTailCachePort | null;
+  sessionsDir: string;
+  exactSessionProjection: Awaited<ReturnType<typeof createDefaultPostgresSessionAdapters>>['exactSessionProjection'];
 }
 
 export interface SessionCompositionOptions {
@@ -255,7 +258,15 @@ function createSessionComposition(
     sessionManager.crossChannelContinuity = createDisabledCrossChannelContinuityPort();
   }
 
-  return { sessionStore, sessionManager, continuityStore, internalRoleEnvelopeLedger, sessionTailCache };
+  return {
+    sessionStore,
+    sessionManager,
+    continuityStore,
+    internalRoleEnvelopeLedger,
+    sessionTailCache,
+    sessionsDir,
+    exactSessionProjection: sessionAdapters.exactSessionProjection,
+  };
 }
 
 export async function composeSessionRuntimeAsync(
@@ -382,6 +393,7 @@ export interface SubstrateAgentCompositionOptions {
   backgroundWorkDisabled?: boolean;
   backgroundWorkWelfare?: SubstrateAgentOptions['backgroundWorkWelfare'];
   backgroundWorkAutomataLifecycle?: SubstrateAgentOptions['backgroundWorkAutomataLifecycle'];
+  classifySessionAtCreation?: SubstrateAgentOptions['classifySessionAtCreation'];
 }
 
 export function composeSubstrateAgent(options: SubstrateAgentCompositionOptions): SubstrateAgent {
@@ -421,6 +433,9 @@ export function composeSubstrateAgent(options: SubstrateAgentCompositionOptions)
       ...(options.backgroundWorkWelfare ? { backgroundWorkWelfare: options.backgroundWorkWelfare } : {}),
       ...(options.backgroundWorkAutomataLifecycle
         ? { backgroundWorkAutomataLifecycle: options.backgroundWorkAutomataLifecycle }
+        : {}),
+      ...(options.classifySessionAtCreation
+        ? { classifySessionAtCreation: options.classifySessionAtCreation }
         : {}),
     },
   );
@@ -662,6 +677,7 @@ export interface ToolRuntimeOptions {
    */
   shardWorkloadRegistry?: ShardWorkloadLifecyclePort;
   automataRunRegistry?: AutomataRunRegistry;
+  automataSessionClassification?: Pick<AutomataSessionClassificationService, 'classifyAtCreation'>;
   automataBusWorkerAccess?: AutomataBusWorkerAccess | null;
   automataLifecyclePort?: SubagentAutomataLifecyclePort | null;
 }
@@ -754,6 +770,7 @@ export function wireShardAndThinkRuntime(options: ToolRuntimeOptions): ShardExec
     }),
     activeTurnIntakeEnvelopesProvider: () => options.agentLoop.getActiveTurnIntakeEnvelopes(),
     automataRunRegistry: options.automataRunRegistry,
+    automataSessionClassification: options.automataSessionClassification,
     automataBusWorkerAccess: options.automataBusWorkerAccess,
     automataLifecyclePort: options.automataLifecyclePort,
   });

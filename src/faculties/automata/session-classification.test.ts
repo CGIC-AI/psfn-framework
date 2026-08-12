@@ -3,6 +3,7 @@ import { InMemoryAutomataRetentionStore } from './retention-store.js';
 import {
   AutomataSessionClassificationService,
   classifySessionAtCreation,
+  resolveForegroundSessionOwner,
 } from './session-classification.js';
 
 const ownerPolicy = { rawSessionRetentionMs: 202 };
@@ -89,6 +90,39 @@ describe('classifySessionAtCreation', () => {
       },
     });
     expect(store.listClassifications()).toHaveLength(1);
+  });
+
+  it('persists missing foreground authority as immutable unknown before reuse', async () => {
+    const store = new InMemoryAutomataRetentionStore();
+    const service = new AutomataSessionClassificationService(ownerPolicy, store);
+    const first = await service.ensureClassifiedAtCreation({
+      companionId: 'companion-a',
+      sessionId: 'discord:unbound',
+      createdAtMs: 1_000,
+      owner: resolveForegroundSessionOwner({
+        channelId: 'discord:unbound',
+        channelType: 'discord',
+        hasIcpCorrelation: false,
+      }),
+    });
+    const reused = await service.ensureClassifiedAtCreation({
+      companionId: 'companion-a',
+      sessionId: 'discord:unbound',
+      createdAtMs: 2_000,
+      owner: { kind: 'contact' },
+    });
+    expect(first).toMatchObject({ ownership: 'unknown', classifiedAtMs: 1_000 });
+    expect(reused).toEqual(first);
+    expect(store.listClassifications()).toEqual([first]);
+  });
+
+  it.each([
+    [{ channelId: 'internal:free-time:project', channelType: 'api', hasIcpCorrelation: false }, 'free_time'],
+    [{ channelId: 'companion:peer', channelType: 'companion', hasIcpCorrelation: true }, 'icp'],
+    [{ channelId: 'discord:dm', channelType: 'discord', hasIcpCorrelation: false, canonicalContactId: 'contact-a' }, 'contact'],
+    [{ channelId: 'companion:self', channelType: 'companion', hasIcpCorrelation: false }, 'companion'],
+  ])('recognizes explicit foreground ownership %#', (input, ownership) => {
+    expect(resolveForegroundSessionOwner(input)).toEqual({ kind: ownership });
   });
 
   it('has no implicit retention fallback when owner policy is invalid', () => {

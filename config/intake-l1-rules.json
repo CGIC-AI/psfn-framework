@@ -401,9 +401,20 @@
       "weight": 0.85,
       "match": {
         "kind": "regex",
-        "pattern": "(?:^|[\\n;:]\\s{0,16}|\\b(?:please|then|now|execute|run)\\s{0,16})(?:(?:cat|less|head|tail)\\s{1,64}(?:-[A-Za-z]{1,16}\\s{1,16})?|(?:read|open|print|copy|include|upload)\\s{1,16}(?:the\\s{1,8})?(?:(?:file|contents?|private\\s{1,8}key)\\s{1,8}(?:(?:at|from|of)\\s{1,8})?)?)(?:\\.env\\b|credentials|\\.netrc\\b|\\.pgpass\\b|\\.npmrc\\b|\\.pypirc\\b|/etc/(?:passwd|shadow)\\b|(?:\\$HOME|~|/home/[A-Za-z0-9._-]{1,64})/\\.ssh/(?:id_(?:rsa|dsa|ecdsa|ed25519)|[A-Za-z0-9._-]{1,64}\\.pem)\\b)"
+        "pattern": "(?:^(?:(?:please|now|also)\\s{1,16})?|>\\s{0,16}also\\s{1,16}|\\b(?:please|then|now)\\s{1,16})(?:(?:cat|less|head|tail)\\s{1,64}(?:-[A-Za-z]{1,16}\\s{1,16})?|(?:read|open|print|copy|include|upload)\\s{1,16}(?:the\\s{1,8})?(?:(?:file|contents?|private\\s{1,8}key)\\s{1,8}(?:(?:at|from|of)\\s{1,8})?)?)(?:\\.env\\b|credentials|\\.netrc\\b|\\.pgpass\\b|\\.npmrc\\b|\\.pypirc\\b|/etc/(?:passwd|shadow)\\b|(?:\\$HOME|~|/home/[A-Za-z0-9._-]{1,64})/\\.ssh/(?:id_(?:rsa|dsa|ecdsa|ed25519)|[A-Za-z0-9._-]{1,64}\\.pem)\\b)"
       },
-      "note": "Universal only for a clause-initial command or explicit imperative cue bound to a credential store, passwd-class system file, or concrete SSH private-key path. Gerunds, negated advice, questions, and meta discussion remain semantic L2 concerns. psfn-framework-68daq."
+      "note": "Universal only for a clause-initial command or explicit imperative cue bound to a credential store, passwd-class system file, or concrete SSH private-key path. Bare gerunds, negated advice, questions, and meta discussion remain semantic L2 concerns. psfn-framework-68daq."
+    },
+    {
+      "id": "try_read_secret_files",
+      "labels": ["execution/executable_instruction", "secrets/credential_material", "policy/security_modification"],
+      "scope": "all",
+      "weight": 0.85,
+      "match": {
+        "kind": "regex",
+        "pattern": "(?:^|[.!?]\\s{1,16})try\\s{1,16}(?:(?:to\\s{1,8})?(?:read|open|print|copy|include|upload)|(?:reading|opening|printing|copying|including|uploading))\\s{1,16}(?:the\\s{1,8})?(?:(?:file|contents?|private\\s{1,8}key)\\s{1,8}(?:(?:at|from|of)\\s{1,8})?)?(?:\\.env\\b|credentials|\\.netrc\\b|\\.pgpass\\b|\\.npmrc\\b|\\.pypirc\\b|/etc/(?:passwd|shadow)\\b|(?:\\$HOME|~|/home/[A-Za-z0-9._-]{1,64})/\\.ssh/(?:id_(?:rsa|dsa|ecdsa|ed25519)|[A-Za-z0-9._-]{1,64}\\.pem)\\b)"
+      },
+      "note": "The bounded clause-initial 'try' imperative admits base or gerund access verbs only when bound to a credential store, passwd-class system file, or concrete SSH private-key path. Embedded questions and meta discussion remain semantic L2 concerns. psfn-framework-68daq."
     },
     {
       "id": "sensitive_value_exfil_to_url",
@@ -412,7 +423,7 @@
       "weight": 0.95,
       "match": {
         "kind": "regex",
-        "pattern": "(?:^|[\\n;:]\\s{0,16}|\\b(?:please|then|now)\\s{1,16})(?:send|post|upload|transmit)\\s{1,64}(?:the\\s{1,8})?(?:api[ _-]?key|password|credential|access[ _-]?token|secret)\\s{1,64}(?:to|at)\\s{1,8}https?://"
+        "pattern": "(?:^(?:(?:please|now)\\s{1,16})?|\\b(?:please|then|now)\\s{1,16})(?:send|post|upload|transmit)\\s{1,64}(?:the\\s{1,8})?(?:api[ _-]?key|password|credential|access[ _-]?token|secret)\\s{1,64}(?:to|at)\\s{1,8}https?://"
       },
       "note": "Universal high-confidence exfiltration requires a clause-initial direct transfer imperative, an explicitly sensitive value, and an HTTP destination. Negated advice and meta discussion remain semantic L2 concerns. psfn-framework-qrch1."
     },

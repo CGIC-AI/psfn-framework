@@ -38,7 +38,7 @@ function testPolicy(): IntakePolicyConfig {
   return validateIntakePolicy(
     {
       ...seed,
-      schemaVersion: 5,
+      schemaVersion: 6,
       mode: 'strict',
       sourceRiskTiers: {
         operator: 'trusted',
@@ -68,7 +68,7 @@ function testPolicy(): IntakePolicyConfig {
         escalationThresholdsByTier: {
           trusted: 0.95, standard: 0.85, untrusted: 0.6, hostile: 0.5,
         },
-        mandatoryTiers: ['hostile'],
+        mandatoryTiers: ['untrusted', 'hostile'],
         failClosedActionByTier: {
           trusted: 'l1_labels_only',
           standard: 'l1_labels_only',
@@ -487,7 +487,10 @@ describe('evaluateL2 L3 escalation', () => {
   });
 
   it('does NOT escalate a benign verdict on a non-mandatory tier', async () => {
-    const outcome = await evaluateL2(evalInput({ testCompletion: fetchReturning(BENIGN_RESPONSE) }));
+    const outcome = await evaluateL2(evalInput({
+      context: baseContext({ sourceClass: 'regular_contact', sourceRiskTier: 'standard' }),
+      testCompletion: fetchReturning(BENIGN_RESPONSE),
+    }));
     expect(outcome.kind).toBe('classified');
   });
 });

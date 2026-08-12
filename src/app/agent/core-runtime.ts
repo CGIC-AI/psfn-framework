@@ -348,7 +348,6 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
         });
         const writer = new CanonicalAutomataBusWriter({
           companionId,
-          pool: options.automataRuntime.store.getQueryPool(),
           store: options.automataRuntime.store,
           runtime,
         });

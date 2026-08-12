@@ -18,7 +18,10 @@ import {
   startPostgresTestHarness,
   type PostgresTestHarness,
 } from '../../../test-support/postgres-test-harness.js';
+import type { AutomataRunRecord } from '../registry-contract.js';
 import type { AutomataBusEvent } from './contract.js';
+import type { AutomataBusProductionRuntime } from './production-runtime.js';
+import { CanonicalAutomataBusWriter } from './production-worker-adapter.js';
 import {
   AUTOMATA_BUS_POSTGRES_RELATIONS,
   AUTOMATA_BUS_POSTGRES_ROLLBACK_STATEMENTS,
@@ -57,6 +60,40 @@ async function withStore<T>(
     return await operation(new PostgresAutomataBusStore(pool), pool);
   } finally {
     await pool.end();
+  }
+}
+
+async function withIndependentStores<T>(
+  operation: (
+    first: PostgresAutomataBusStore,
+    second: PostgresAutomataBusStore,
+    firstPool: Pool,
+  ) => Promise<T>,
+): Promise<T> {
+  if (!harness) throw new Error('Automata Bus Postgres integration harness is unavailable');
+  const database = await harness.createDatabase();
+  const firstPool = createPostgresPool(database.databaseUrl, {
+    applicationName: 'automata-bus-writer-a',
+    allowExitOnIdle: true,
+    max: 2,
+  });
+  const secondPool = createPostgresPool(database.databaseUrl, {
+    applicationName: 'automata-bus-writer-b',
+    allowExitOnIdle: true,
+    max: 2,
+  });
+  try {
+    await runPostgresMigrations(firstPool, [
+      POSTGRES_VECTOR_EXTENSION_MIGRATION,
+      ...AUTOMATA_BUS_POSTGRES_SCHEMA_STATEMENTS,
+    ]);
+    return await operation(
+      new PostgresAutomataBusStore(firstPool),
+      new PostgresAutomataBusStore(secondPool),
+      firstPool,
+    );
+  } finally {
+    await Promise.all([firstPool.end(), secondPool.end()]);
   }
 }
 
@@ -109,6 +146,39 @@ function finding(overrides: Partial<AutomataBusEvent> = {}): AutomataBusEvent {
   } as AutomataBusEvent;
 }
 
+function writerRun(): AutomataRunRecord {
+  return {
+    companionId: 'companion-a',
+    runId: 'run-1',
+    automatonClass: 'memory.extraction',
+    workerId: 'worker-1',
+    workerGeneration: 1,
+    taskId: 'task-1',
+    taskLabel: 'Concurrent writer certification',
+    taskSummary: 'Certify canonical sequence allocation across processes.',
+    sessionIds: ['session-1'],
+    artifacts: [],
+    status: 'running',
+    statusReason: 'started',
+    promotionState: 'not_requested',
+    foldState: 'not_required',
+    createdAtMs: 1_700_000_000_000,
+    startedAtMs: 1_700_000_000_001,
+    retentionDeadlineMs: 1_700_086_400_000,
+  };
+}
+
+function nonIndexingRuntime(): AutomataBusProductionRuntime {
+  return {
+    canonical: { getCurrentByEventIds: async () => [] },
+    indexing: {
+      indexCurrentFinding: async () => {
+        throw new Error('Concurrent writer test must not index a missing projection');
+      },
+    },
+  } as unknown as AutomataBusProductionRuntime;
+}
+
 interface AutomataBusStateFixture {
   events: AutomataBusEvent[];
   projection: {
@@ -129,6 +199,70 @@ function stateFixture(name: 'correction-chain' | 'retraction'): AutomataBusState
 }
 
 describe('PostgresAutomataBusStore real Postgres', () => {
+  it('allocates monotonic unique sequences across independent canonical writers', async () => {
+    await withIndependentStores(async (firstStore, secondStore, firstPool) => {
+      await firstPool.query(`
+        CREATE FUNCTION delay_automata_bus_race_insert() RETURNS trigger
+        LANGUAGE plpgsql AS $$
+        BEGIN
+          PERFORM pg_sleep(0.2);
+          RETURN NEW;
+        END
+        $$
+      `);
+      await firstPool.query(`
+        CREATE TRIGGER delay_automata_bus_race_insert_trigger
+        BEFORE INSERT ON automata_bus_events
+        FOR EACH ROW EXECUTE FUNCTION delay_automata_bus_race_insert()
+      `);
+      const runtime = nonIndexingRuntime();
+      const firstWriter = new CanonicalAutomataBusWriter({
+        companionId: 'companion-a',
+        store: firstStore,
+        runtime,
+      });
+      const secondWriter = new CanonicalAutomataBusWriter({
+        companionId: 'companion-a',
+        store: secondStore,
+        runtime,
+      });
+      const append = (eventId: string, occurredAt: string) => ({
+        eventId,
+        occurredAt,
+        run: writerRun(),
+        type: 'finding' as const,
+        body: {
+          claim: `Concurrent finding ${eventId}.`,
+          provenance: 'computed' as const,
+          evidence: [{
+            kind: 'command' as const,
+            reference: `test:${eventId}`,
+            summary: 'Independent canonical writer invocation.',
+          }],
+          verification: { status: 'pending' as const },
+        },
+        audiences: ['eligible-automata'] as const,
+        sensitivity: 'personal' as const,
+      });
+
+      const results = await Promise.all([
+        firstWriter.append(append('race-a', '2026-08-11T12:00:00.000Z')),
+        secondWriter.append(append('race-b', '2026-08-11T12:01:00.000Z')),
+      ]);
+
+      expect(results.every(result => result.inserted)).toBe(true);
+      expect(results.map(result => result.event.sequence).sort()).toEqual([1, 2]);
+      await expect(firstStore.readHistory({
+        companionId: 'companion-a',
+        audience: 'eligible-automata',
+        maxSensitivity: 'personal',
+      })).resolves.toMatchObject([
+        { sequence: 1 },
+        { sequence: 2 },
+      ]);
+    });
+  });
+
   it('makes concurrent duplicate appends atomic and idempotent', async () => {
     await withStore(async (store) => {
       const input = {

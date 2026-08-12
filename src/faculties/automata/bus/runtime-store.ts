@@ -9,6 +9,7 @@ import type { AutomataBusEvent } from './contract.js';
 import { AUTOMATA_BUS_POSTGRES_RELATIONS } from './postgres-schema.js';
 import {
   PostgresAutomataBusStore,
+  type AppendAllocatedAutomataBusEventInput,
   type AppendAutomataBusEventInput,
   type AppendAutomataBusEventResult,
   type AutomataBusCurrentFindingReadScope,
@@ -158,6 +159,13 @@ export class PostgresAutomataBusRuntimeStore {
   async append(input: AppendAutomataBusEventInput): Promise<AppendAutomataBusEventResult> {
     this.assertCompanion(input.companionId);
     return await this.store.append(input);
+  }
+
+  async appendAllocated(
+    input: AppendAllocatedAutomataBusEventInput,
+  ): Promise<AppendAutomataBusEventResult> {
+    this.assertCompanion(input.companionId);
+    return await this.store.appendAllocated(input);
   }
 
   async readHistory(input: AutomataBusReadScope): Promise<AutomataBusEvent[]> {

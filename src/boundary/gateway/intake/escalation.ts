@@ -38,10 +38,14 @@ import type {
   IntakeScreeningServiceOptions,
 } from '../../../core/cogsec/intake/screening.js';
 import type { IntakeQuarantineHoldPort } from '../../../core/cogsec/intake/quarantine-store.js';
+import { INTAKE_QUARANTINE_RISK_LABELS } from '../../../core/cogsec/intake/risk-label-families.js';
 import { COGSEC_EVIDENCE_FIELD_MAX_CHARS } from '../../../core/cogsec/intake/screening-envelope-policy.js';
 import type { IntakeRiskLabel } from '../../../shared/contracts/intake-envelope.js';
 import type { CogSecEventStore } from '../../../core/cogsec/events.js';
-import type { IntakePolicyConfig } from '../../../system/config/intake-policy-config.js';
+import {
+  l3EscalationConfidenceThresholdForTier,
+  type IntakePolicyConfig,
+} from '../../../system/config/intake-policy-config.js';
 import type {
   ScreenerBackend,
   ScreenerModel,
@@ -87,14 +91,24 @@ function mergeContributions(
 
 function l2Trace(
   outcome: Awaited<ReturnType<typeof evaluateL2>>,
+  policy: IntakePolicyConfig,
+  tier: IntakeEscalationRequest['sourceRiskTier'],
 ): IntakeSemanticScreeningTrace['l2'] {
   switch (outcome.kind) {
     case 'skipped':
       return { status: 'not_run', reason: outcome.reason };
     case 'classified':
       return { status: 'clear', reason: 'L2 ran and did not trigger L3' };
-    case 'escalate_l3':
-      return { status: 'flagged', reason: outcome.reason };
+    case 'escalate_l3': {
+      const verdictFlagged = outcome.classification.labels.some(
+        label => INTAKE_QUARANTINE_RISK_LABELS.includes(label),
+      ) || outcome.classification.injectionConfidence
+        >= l3EscalationConfidenceThresholdForTier(policy, tier);
+      return {
+        status: verdictFlagged ? 'flagged' : 'clear',
+        reason: outcome.reason,
+      };
+    }
     case 'failed_closed':
       return { status: 'failed_closed', reason: `L2 failed closed to ${outcome.action}` };
   }
@@ -166,7 +180,7 @@ export function createGatewayIntakeEscalationPort(
           kind: 'quarantine',
           reason: `l2-fail-closed:${l2Outcome.error}`,
           trace: {
-            l2: l2Trace(l2Outcome),
+            l2: l2Trace(l2Outcome, deps.policy, request.sourceRiskTier),
             l3: { status: 'not_run', reason: 'L2 fail-closed quarantine is terminal' },
           },
           contribution: {
@@ -228,13 +242,19 @@ export function createGatewayIntakeEscalationPort(
         return {
           kind: 'contribution',
           contribution: l2Contribution,
-          trace: { l2: l2Trace(l2Outcome), l3: l3Trace(l3Outcome) },
+          trace: {
+            l2: l2Trace(l2Outcome, deps.policy, request.sourceRiskTier),
+            l3: l3Trace(l3Outcome),
+          },
         };
       }
       return {
         kind: 'skipped',
         reason: `l2 ${l2Outcome.kind}; l3 ${l3Outcome.reason}`,
-        trace: { l2: l2Trace(l2Outcome), l3: l3Trace(l3Outcome) },
+        trace: {
+          l2: l2Trace(l2Outcome, deps.policy, request.sourceRiskTier),
+          l3: l3Trace(l3Outcome),
+        },
       };
     }
 
@@ -278,7 +298,10 @@ export function createGatewayIntakeEscalationPort(
     }
     return {
       kind: 'final',
-      trace: { l2: l2Trace(l2Outcome), l3: l3Trace(l3Outcome) },
+      trace: {
+        l2: l2Trace(l2Outcome, deps.policy, request.sourceRiskTier),
+        l3: l3Trace(l3Outcome),
+      },
       result: {
         envelope: result.envelope,
         snapshot: result.snapshot,

@@ -222,7 +222,10 @@ describe('ApiChatCompletionsHandler response identity', () => {
         canonicalContactId: primaryContact.id,
         intakeEnvelopes: [expect.objectContaining({ envelopeId: 'env-monolith-private-direct' })],
       }),
-    }));
+    }), undefined, expect.objectContaining({ conversationScope: expect.any(Object) }));
+    const screenedScope = screen.mock.calls[0]?.[1]?.chatBodyContext?.conversationScope;
+    expect(screenedScope).toBeDefined();
+    expect(handleMessage.mock.calls[0]?.[2]?.conversationScope).toBe(screenedScope);
   });
 
   it('reports the fleet-routed responding companion in a non-streaming response', async () => {

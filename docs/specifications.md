@@ -99,20 +99,22 @@ Supported until beta:
   scheduler shape.
 - Explicit intake-policy owner migration through
   `npm run migrate:intake-policy-owner -- --data-dir <exact-system-data-dir>`.
-  This operator-only command upgrades schema v1/v2/v3/v4 to v5: v1 gains the
+  This operator-only command upgrades schema v1/v2/v3/v4/v5 to v6: v1 gains the
   canonical `skill_write` sink rule, and legacy owners gain any missing URL
-  scanner and bounded screening-pool policy from the distributed seed. It adds
+  scanner, bounded screening-pool policy, and private-direct chat-body handling
+  from the distributed seed. It also adds `untrusted` to legacy L2 mandatory
+  tiers so external and derived content receives the intended semantic pass. It adds
   or repairs the explicit trusted `companion_self` source class used for
   screened self-authored mutations, remaps retired modes, and removes retired
   screener model selectors. Persona/trust caps remain `standard`, preserving
   the invariant that released untrusted external content may inform but never
-  instruct those sinks. The command also repairs current schema-v5 owners that
+  instruct those sinks. The command also repairs current schema-v6 owners that
   predate these remediations.
   Dry-run is the default and `--apply` performs a validated durable atomic
   replacement. Runtime loading never invokes the migrator and rejects legacy
   or unremediated owners. Validate the result through the canonical
   startup-owner preflight. Remove the command before beta after every system
-  owner uses canonical schema v5.
+  owner uses canonical schema v6.
 - Startup owner-file hydration for currently supported legacy owner data. Hydration may seed missing owner files on first boot, migrate or warn on existing owner-file drift, and load model/provider registries with the existing migration paths, but it must not restore `.env` as mutable-settings authority.
 - Helm's one-time per-companion owner and scheduler-schema cutover for
   `scheduler.json` and `capability-tier.json`. The chart init path may copy a legacy regular file

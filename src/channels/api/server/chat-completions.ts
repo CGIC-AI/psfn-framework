@@ -96,6 +96,7 @@ interface PendingTurn {
   wasQueued: boolean;
   releaseChannel: () => void;
   substrateMsg: SubstrateMessage;
+  conversationScope?: import('../../../core/session/conversation-scope.js').ConversationScope;
 }
 
 interface PreparedTurn {
@@ -908,11 +909,12 @@ export class ApiChatCompletionsHandler {
       wasQueued: acquiredChannel.wasQueued,
       releaseChannel: acquiredChannel.releaseChannel,
       substrateMsg,
+      ...(privateDirectScope ? { conversationScope: privateDirectScope } : {}),
     };
   }
 
   private beginPreparedTurn(turn: PendingTurn): PreparedTurn {
-    if (turn.wasQueued) {
+    if (turn.wasQueued && !turn.conversationScope) {
       const maybeFollowUp = (this.agentLoop as unknown as {
         followUp?: (message: SubstrateMessage) => Promise<void> | void;
       }).followUp;
@@ -955,7 +957,11 @@ export class ApiChatCompletionsHandler {
       }
     }
 
-    const turnPromise = this.agentLoop.handleMessage(turn.substrateMsg);
+    const turnPromise = this.agentLoop.handleMessage(
+      turn.substrateMsg,
+      undefined,
+      turn.conversationScope ? { conversationScope: turn.conversationScope } : undefined,
+    );
     this.attachTurnCleanup(turn.releaseChannel, turnPromise);
     return {
       channelId: turn.channelId,

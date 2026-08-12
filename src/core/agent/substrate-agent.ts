@@ -1597,7 +1597,11 @@ export class SubstrateAgent {
       }
     }
     try {
-      return await this.handleMessageUnderReservationInner(message, deliveryLifecycle);
+      return await this.handleMessageUnderReservationInner(
+        message,
+        deliveryLifecycle,
+        turnControl?.conversationScope,
+      );
     } finally {
       detachCancelSignal?.();
       // Clear only the identity THIS turn registered. A concurrent throw-away
@@ -1611,6 +1615,7 @@ export class SubstrateAgent {
   private async handleMessageUnderReservationInner(
     message: SubstrateMessage,
     deliveryLifecycle?: TurnDeliveryLifecycle,
+    conversationScope?: import('../session/conversation-scope.js').ConversationScope,
   ): Promise<AgentResponse> {
     const run = async (): Promise<AgentResponse> => handleMessageForTurn(createTurnExecutionRuntimeAdapter({
       eventBus: this.eventBus,
@@ -1831,7 +1836,7 @@ export class SubstrateAgent {
           this.promptContextBuilder.getUserFacingBoundaryIndex(),
         ),
       },
-    }), message, deliveryLifecycle);
+    }), message, deliveryLifecycle, conversationScope);
 
     return this.toolRuntimeFacade.runWithTurnToolContext(message, async () => {
       // htm9.3: expose the message's intake envelopes to the egress tool guard

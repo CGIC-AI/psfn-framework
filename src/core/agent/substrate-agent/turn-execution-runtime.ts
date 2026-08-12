@@ -363,6 +363,7 @@ export async function handleMessageForTurn(
   runtime: TurnAdmissionRuntime,
   message: SubstrateMessage,
   deliveryLifecycle?: TurnDeliveryLifecycle,
+  authenticatedConversationScope?: import('../../session/conversation-scope.js').ConversationScope,
 ): Promise<AgentResponse> {
   const transportReceivedAt = monotonicEpochNowMs();
   const transportReceivedTimestamp = Date.now();
@@ -564,6 +565,9 @@ export async function handleMessageForTurn(
     requestId,
     turnCorrelationBase,
     observability,
+    ...(authenticatedConversationScope
+      ? { conversationScope: authenticatedConversationScope }
+      : {}),
     deferSessionEntryPersistence,
     skipSessionEntryPersistence,
   });

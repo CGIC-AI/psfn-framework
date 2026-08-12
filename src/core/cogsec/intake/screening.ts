@@ -226,6 +226,7 @@ export type IntakeEscalationDecision =
       envelope: IntakeEnvelope;
       snapshot: IntakeEnvelopeSnapshot;
       action: IntakeDecisionAction;
+      mode: IntakeEnforcementPosture;
       effectiveText: string;
       withheld: boolean;
       /** The auditable CogSecEvent written for the L3 invocation. */
@@ -1018,6 +1019,9 @@ export function createIntakeScreeningService(
     const markOnlyChatBody = !escalationExtras?.forced
       && !escalationExtras?.failure
       && isHighestTrustPrivateDirectMarkOnly(input);
+    const effectiveItemPosture: IntakeEnforcementPosture = markOnlyChatBody
+      ? 'shadow'
+      : itemPosture;
     const decision = markOnlyChatBody && screenedDecision.action !== 'pass'
       ? {
         action: 'pass' as const,
@@ -1155,7 +1159,7 @@ export function createIntakeScreeningService(
       sourceClass: input.sourceClass,
       sourceRiskTier,
       originRef: input.origin.ref,
-      mode: itemPosture,
+      mode: effectiveItemPosture,
       globalMode,
       cogsecVector,
       action: decision.action,
@@ -1219,7 +1223,7 @@ export function createIntakeScreeningService(
       snapshot,
       report,
       action: decision.action,
-      mode: itemPosture,
+      mode: effectiveItemPosture,
       globalMode,
       cogsecVector,
       observability,
@@ -1393,7 +1397,7 @@ export function createIntakeScreeningService(
           snapshot: final.snapshot,
           report,
           action: final.action,
-          mode: itemPosture,
+          mode: final.mode,
           globalMode,
           cogsecVector,
           observability,
@@ -1472,11 +1476,7 @@ export function createIntakeScreeningService(
       && scorerOutcome.score >= injectionScoreThresholdForTier(policy, adjustedTier);
     const mandatoryDeepScreening = policy.l2Screener.mandatoryTiers.includes(adjustedTier)
       || policy.l3Screener.mandatoryTiers.includes(adjustedTier);
-    const closedFirstPartyConversation = (
-      input.sourceClass === 'primary_user' || input.sourceClass === 'companion_self'
-    ) && (
-      input.channelPrivacy === 'private' || input.channelPrivacy === 'invite_only'
-    );
+    const provenHighestTrustPrivateDirect = isHighestTrustPrivateDirectMarkOnly(input);
     const deterministicScreenIsClean = report.riskLabels.length === 0
       && report.scannerErrors.length === 0
       && !report.truncated
@@ -1484,12 +1484,12 @@ export function createIntakeScreeningService(
     if (
       aboveSemanticThreshold
       && !mandatoryDeepScreening
-      && closedFirstPartyConversation
+      && provenHighestTrustPrivateDirect
       && deterministicScreenIsClean
     ) {
       // The local classifier remains visible telemetry, but an uncorroborated
-      // false positive must not rewrite or delay an authenticated first-party
-      // conversation in a closed channel. Deterministic findings still take
+      // false positive must not rewrite or delay an authenticated highest-trust
+      // private direct chat. Deterministic findings still take
       // their ordinary fail-closed path before this narrow optimization, and
       // operator-mandated L2/L3 tiers retain their configured deep screening.
       emitDeepScreeningNotRun(input);

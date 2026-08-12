@@ -343,6 +343,7 @@ at least 2x headroom; never raise a timeout reactively.
 
 Preserve work owned by other agents.
 
+- Keep the primary checkout on `main`, synchronized with `origin/main`; use a linked worktree for every non-main branch and never check one out here.
 - Unexpected changes block edits, rebases, branch switches, or destructive Git
   operations only when they overlap the planned mutation or make it unsafe.
   Read-only inspection continues.

@@ -17,10 +17,12 @@ import type {
 } from '../registry-contract.js';
 import type { AutomataRunRegistry } from '../run-registry.js';
 import {
+  AUTOMATA_BUS_LESSON_ATTRIBUTION_FEATURE,
   AUTOMATA_BUS_RELATIONS_FEATURE,
   AUTOMATA_BUS_SCHEMA_VERSION,
   type AutomataBusEvent,
   type AutomataBusEventContext,
+  type AutomataBusFeature,
   type AutomataBusFindingBody,
   type AutomataBusRelationBody,
   parseAutomataBusEvent,
@@ -169,13 +171,20 @@ export class CanonicalAutomataBusWriter {
       WHERE companion_id = $1
     `, [this.options.companionId]);
     const sequence = parsePositiveInteger(next.rows[0]?.next_sequence, 'next sequence');
+    const hasLessonAttribution = input.type === 'finding'
+      ? (input.body as AutomataBusFindingBody).lessonAttribution !== undefined
+      : (input.body as AutomataBusRelationBody).replacement?.lessonAttribution !== undefined;
+    const mustUnderstand: AutomataBusFeature[] = [
+      ...(input.type === 'relation' ? [AUTOMATA_BUS_RELATIONS_FEATURE] : []),
+      ...(hasLessonAttribution ? [AUTOMATA_BUS_LESSON_ATTRIBUTION_FEATURE] : []),
+    ];
     const base = {
       schemaVersion: AUTOMATA_BUS_SCHEMA_VERSION,
       eventId: requiredText(input.eventId, 'eventId'),
       companionId: this.options.companionId,
       sequence,
       occurredAt: new Date(input.occurredAt).toISOString(),
-      mustUnderstand: input.type === 'relation' ? [AUTOMATA_BUS_RELATIONS_FEATURE] : [],
+      mustUnderstand,
       context: contextFromRun(input.run),
     };
     const event: AutomataBusEvent = input.type === 'finding'
@@ -236,6 +245,14 @@ function workerFindingBody(input: Parameters<AutomataBusWorkerPort['append']>[0]
     },
     ...(input.source ? { source: input.source } : {}),
     ...(input.confidence === undefined ? {} : { confidence: input.confidence }),
+    ...(input.lessonAttribution === undefined
+      ? {}
+      : {
+          lessonAttribution: {
+            ...input.lessonAttribution,
+            contradictionEventIds: [...input.lessonAttribution.contradictionEventIds],
+          },
+        }),
   };
 }
 
@@ -300,6 +317,16 @@ export function createProductionAutomataBusWorkerAccess(options: {
               summary: reason,
             }],
             verification: { status: 'pending' },
+            ...(target.effectiveFinding.body.lessonAttribution
+              ? {
+                  lessonAttribution: {
+                    ...target.effectiveFinding.body.lessonAttribution,
+                    contradictionEventIds: [
+                      ...target.effectiveFinding.body.lessonAttribution.contradictionEventIds,
+                    ],
+                  },
+                }
+              : {}),
           };
       return await options.writer.append({
         eventId: `automata-bus-relation:${randomUUID()}`,

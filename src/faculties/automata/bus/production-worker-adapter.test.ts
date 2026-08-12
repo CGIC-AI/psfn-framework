@@ -3,7 +3,10 @@ import { describe, expect, it, vi } from 'vitest';
 import { loadAutomataPolicySeedDefaults } from '../../../system/config/automata-policy-config.js';
 import type { LLMProviderPort } from '../../../core/agent/contracts.js';
 import { AutomataRunRegistry, InMemoryAutomataRunStore } from '../run-registry.js';
-import type { AutomataBusEvent } from './contract.js';
+import {
+  AUTOMATA_BUS_LESSON_ATTRIBUTION_FEATURE,
+  type AutomataBusEvent,
+} from './contract.js';
 import type { AutomataBusProductionRuntime } from './production-runtime.js';
 import type { AutomataBusSqlPool } from './postgres-store.js';
 import type { PostgresAutomataBusRuntimeStore } from './runtime-store.js';
@@ -133,6 +136,37 @@ async function createRegistry() {
 }
 
 describe('production Automata Bus lifecycle composition', () => {
+  it('marks attributed findings with the required negotiated feature', async () => {
+    const harness = createHarness();
+    const registry = await createRegistry();
+    const run = registry.getRun('subagent-1');
+    if (!run) throw new Error('expected test run');
+
+    const result = await harness.writer.append({
+      eventId: 'finding-attributed',
+      occurredAt: '2026-08-11T12:00:00.000Z',
+      run,
+      type: 'finding',
+      body: {
+        claim: 'The worker omitted a repository instruction.',
+        provenance: 'computed',
+        evidence: [{ kind: 'artifact', reference: 'artifact:test', summary: 'Reviewed output.' }],
+        verification: { status: 'pending' },
+        lessonAttribution: {
+          promptRevision: 'sha256:prompt-r1',
+          toolName: 'repo',
+          failureCategory: 'missing-instruction',
+          lessonCode: 'read-before-edit',
+          contradictionEventIds: [],
+        },
+      },
+      audiences: ['operator'],
+      sensitivity: 'personal',
+    });
+
+    expect(result.event.mustUnderstand).toContain(AUTOMATA_BUS_LESSON_ATTRIBUTION_FEATURE);
+  });
+
   it('persists, hydrates, and only then indexes the canonical terminal finding', async () => {
     const harness = createHarness();
     const lifecycle = createSubagentAutomataLifecycleAdapter({

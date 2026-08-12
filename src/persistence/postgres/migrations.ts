@@ -3422,6 +3422,10 @@ export const POSTGRES_AUTOMATA_RUN_MIGRATIONS: readonly string[] = [
 
 /** One ordered migration head for the run authority and its append-only Bus. */
 export const POSTGRES_AUTOMATA_MIGRATIONS: readonly string[] = [
+  // The Bus vector relation is part of this independently executable migration
+  // head (PostgresAutomataRunStore.connect runs it without memory migrations).
+  // Install or validate pgvector before any VECTOR-typed Bus DDL is parsed.
+  POSTGRES_VECTOR_EXTENSION_MIGRATION,
   ...POSTGRES_AUTOMATA_RUN_MIGRATIONS,
   ...AUTOMATA_BUS_POSTGRES_SCHEMA_STATEMENTS,
   ...AUTOMATA_RETENTION_POSTGRES_SCHEMA_STATEMENTS,

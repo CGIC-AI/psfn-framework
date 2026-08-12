@@ -27,6 +27,7 @@ import {
   parseNarrativeAppraisalDriftDecision,
   type NarrativeAppraisalDriftDecision,
 } from '../../emotion/narrative-appraisal-drift.js';
+import type { ProductionAutomataClassId } from '../../../faculties/automata/registry-contract.js';
 
 export const BACKGROUND_WORK_KINDS = [
   'memory_extraction',
@@ -47,6 +48,14 @@ const MODEL_PURPOSES: Readonly<Record<ModelPurpose, true>> = {
 };
 
 export type BackgroundWorkKind = typeof BACKGROUND_WORK_KINDS[number];
+
+/** Every durable background-work kind is classified; additions fail TypeScript until registered. */
+export const BACKGROUND_WORK_AUTOMATA_CLASSES: Record<BackgroundWorkKind, ProductionAutomataClassId> = {
+  memory_extraction: 'memory.extraction',
+  intention_post_turn_hooks: 'background.intention_post_turn_hooks',
+  emotion_appraisal: 'background.emotion_appraisal',
+  auto_compaction: 'background.auto_compaction',
+};
 
 export const BACKGROUND_WORK_STATES = [
   'queued',

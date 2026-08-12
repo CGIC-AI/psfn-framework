@@ -303,6 +303,7 @@ export const SETTINGS_GARDEN_RAW_EDITOR_SUBSYSTEM_BY_KEY = {
   capabilities: 'capabilities',
   'charge-policy': 'chargePolicy',
   'partner-affect-shadow': 'partnerAffectShadow',
+  'automata-policy': 'automataPolicy',
   backup: 'backup',
   mcp: 'mcp',
 } as const;
@@ -331,6 +332,7 @@ export const SETTINGS_GARDEN_RAW_EDITOR_FALLBACK_FILE_BY_KEY: Record<GardenSetti
   capabilities: 'capability-tier.json',
   'charge-policy': 'charge-policy.json',
   'partner-affect-shadow': 'partner-affect-shadow.json',
+  'automata-policy': 'automata-policy.json',
   backup: 'backup.json',
   mcp: 'mcp-servers.json',
 };
@@ -347,6 +349,7 @@ export const SETTINGS_GARDEN_RAW_SUBSYSTEM_IDS = [
   'trustPolicy',
   'intakePolicy',
   'partnerAffectShadow',
+  'automataPolicy',
   'backup',
   'mcp',
 ] as const;

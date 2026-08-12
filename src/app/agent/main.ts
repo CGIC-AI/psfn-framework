@@ -858,6 +858,7 @@ async function main(): Promise<void> {
     compressionGuidelineEvolution,
     shardParentIcpDelivery,
     shardWorkloadRegistry: gateway,
+    automataRunRegistry: persistenceRuntime.automataRunRegistry,
   });
 
   // Operator-extensible lifecycle hooks (bead vvf.2): workspace
@@ -1422,6 +1423,7 @@ async function main(): Promise<void> {
     gateway,
     eventBus,
     chargeLedger,
+    automataRunRegistry: persistenceRuntime.automataRunRegistry,
     scheduler,
     schedulerConfig,
     icpInitiationCandidateStore: persistenceRuntime.icpInitiationCandidateStore,
@@ -1490,6 +1492,7 @@ async function main(): Promise<void> {
       await persistenceRuntime.socialPotStore?.close();
       await persistenceRuntime.speakingArbiterStore?.close();
       await persistenceRuntime.backgroundWorkStore.close();
+      await persistenceRuntime.automataRunRegistry.close();
       await persistenceRuntime.introspectionLandmarkStore.close();
       await persistenceRuntime.partnerAffectShadowStore.close();
       await persistenceRuntime.companionAvailabilityStore.close();

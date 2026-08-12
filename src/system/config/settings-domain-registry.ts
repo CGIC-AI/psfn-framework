@@ -545,6 +545,7 @@ export const SETTINGS_DOMAIN_REGISTRY: Readonly<Record<SettingsDomainId, Setting
  * outside the eight domains and may never be claimed by a domain descriptor.
  */
 export const SETTINGS_NON_DOMAIN_OWNER_FILES: readonly string[] = [
+  'automata-policy.json',
   'companions.json',
   'fleet-auth.json',
   'mcp-servers.json',

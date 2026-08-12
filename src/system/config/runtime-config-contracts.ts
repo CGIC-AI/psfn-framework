@@ -10,6 +10,7 @@ import type { StreamingTtsProvider } from '../../primitives/voice/connectors/tts
 import type { CapabilityTier } from '../capabilities/tier-types.js';
 import type { ChargePolicyConfig } from './charge-policy-config.js';
 import type { SubagentRoleRegistryConfig } from '../../faculties/subagents/role-registry.js';
+import type { AutomataOwnerPolicy } from '../../faculties/automata/registry-contract.js';
 import type {
   CompanionRuntimeIdentity,
   ResolvedCompanionsFleetConfig,
@@ -333,6 +334,8 @@ export interface SubstrateConfig {
    * configured (unknown-role spawns fail closed).
    */
   subagentRoles?: SubagentRoleRegistryConfig;
+  /** System-owned automata class eligibility and retention policy. */
+  automataPolicy?: AutomataOwnerPolicy;
   /** Concurrency cap on simultaneously active subagent tasks (zet.7). */
   subagentMaxConcurrent?: number;
   /** Concurrency cap on simultaneously active shards (zet.7). */

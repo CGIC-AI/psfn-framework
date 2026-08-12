@@ -300,6 +300,7 @@ describe('settings contract guard', () => {
       { rawEditorKey: 'capabilities', subsystemId: 'capabilities', ownerFile: 'capability-tier.json' },
       { rawEditorKey: 'charge-policy', subsystemId: 'chargePolicy', ownerFile: 'charge-policy.json' },
       { rawEditorKey: 'partner-affect-shadow', subsystemId: 'partnerAffectShadow', ownerFile: 'partner-affect-shadow.json' },
+      { rawEditorKey: 'automata-policy', subsystemId: 'automataPolicy', ownerFile: 'automata-policy.json' },
       { rawEditorKey: 'backup', subsystemId: 'backup', ownerFile: 'backup.json' },
       { rawEditorKey: 'mcp', subsystemId: 'mcp', ownerFile: 'mcp-servers.json' },
     ]);
@@ -331,6 +332,17 @@ describe('settings contract guard', () => {
     expect(contractData.subsystems.mcp).toEqual({
       id: 'mcp',
       ownerFile: 'mcp-servers.json',
+      mode: 'raw_only',
+      scope: 'global',
+    });
+  });
+
+  it('declares the automata policy as a global raw-only owner-file subsystem', () => {
+    const contractData = buildSettingsContractData();
+
+    expect(contractData.subsystems.automataPolicy).toEqual({
+      id: 'automataPolicy',
+      ownerFile: 'automata-policy.json',
       mode: 'raw_only',
       scope: 'global',
     });

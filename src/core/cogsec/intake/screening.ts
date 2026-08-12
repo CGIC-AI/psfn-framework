@@ -354,7 +354,7 @@ export interface IntakeScreeningTimingEvent extends IntakeScreeningTimingContext
  * screening, including released items. Raw text, safe summaries, origin refs,
  * and model output never ride this surface.
  */
-export interface IntakeScreeningObservabilityEvent {
+interface IntakeScreeningObservabilityEvent {
   envelopeId: string;
   sourceClass: IntakeSourceClass;
   sourceRiskTier: IntakeSourceRiskTier;

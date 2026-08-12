@@ -195,11 +195,30 @@ export class RedisSessionTailCache implements SessionTailCachePort {
    * can be removed.
    */
   async purgeChannelKeyFamily(channelKey: string): Promise<number> {
+    const keys = await this.listChannelKeyFamilyKeys(channelKey);
+    if (keys.size === 0) return 0;
+    let removed = 0;
+    const pending = [...keys];
+    for (let offset = 0; offset < pending.length; offset += REDIS_PURGE_LIMITS.deleteBatchSize) {
+      removed += await this.client.del(
+        ...pending.slice(offset, offset + REDIS_PURGE_LIMITS.deleteBatchSize),
+      );
+    }
+    return removed;
+  }
+
+  /** Read-only exact-family verification used by the durable retention saga. */
+  async isChannelKeyFamilyAbsent(channelKey: string): Promise<boolean> {
+    return (await this.listChannelKeyFamilyKeys(channelKey)).size === 0;
+  }
+
+  private async listChannelKeyFamilyKeys(channelKey: string): Promise<Set<string>> {
     await this.ensureConnected();
     const exactTailPrefix = this.buildTailKey(channelKey, 0).slice(0, -1);
     const match = `${escapeRedisGlobLiteral(exactTailPrefix)}*`;
     const epochKey = this.buildEpochKey(channelKey);
-    const keys = new Set<string>([epochKey]);
+    const keys = new Set<string>();
+    if (await this.send(['GET', epochKey]) !== null) keys.add(epochKey);
     for await (const item of this.client.scanIterator({
       MATCH: match,
       COUNT: REDIS_PURGE_LIMITS.scanCount,
@@ -211,15 +230,7 @@ export class RedisSessionTailCache implements SessionTailCachePort {
         if (/^\d+$/u.test(suffix)) keys.add(key);
       }
     }
-
-    let removed = 0;
-    const pending = [...keys];
-    for (let offset = 0; offset < pending.length; offset += REDIS_PURGE_LIMITS.deleteBatchSize) {
-      removed += await this.client.del(
-        ...pending.slice(offset, offset + REDIS_PURGE_LIMITS.deleteBatchSize),
-      );
-    }
-    return removed;
+    return keys;
   }
 
   async bumpEpoch(channelKey: string): Promise<number> {

@@ -152,6 +152,7 @@ describe('completed system-owner fleet migration owner evolution', () => {
       'mcp-servers',
       'intake-policy',
       'partner-affect-shadow',
+      'automata-policy',
     ]) {
       copyFileSync(join(seedDir, `${ownerFile}.seed.json`), join(systemDataDir, `${ownerFile}.json`));
     }

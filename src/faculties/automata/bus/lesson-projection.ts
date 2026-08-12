@@ -45,7 +45,6 @@ export interface AutomataLessonReadScope {
 }
 
 export interface AutomataLessonProjectionPolicy {
-  minimumSupport: number;
   maxGroups: number;
   maxSourcesPerGroup: number;
 }
@@ -93,7 +92,6 @@ function positiveInteger(value: number, field: string): number {
 
 function normalizePolicy(policy: AutomataLessonProjectionPolicy): AutomataLessonProjectionPolicy {
   return Object.freeze({
-    minimumSupport: positiveInteger(policy.minimumSupport, 'minimumSupport'),
     maxGroups: positiveInteger(policy.maxGroups, 'maxGroups'),
     maxSourcesPerGroup: positiveInteger(policy.maxSourcesPerGroup, 'maxSourcesPerGroup'),
   });
@@ -215,7 +213,7 @@ export function projectAutomataLessons(
       failureCategory,
       lessonCode,
       sourceCount: findings.length,
-      support: findings.length >= policy.minimumSupport ? 'supported' : 'low-support',
+      support: findings.at(1) === undefined ? 'low-support' : 'supported',
       evidenceQuality,
       sourceFindingIds: sourceFindingIds.slice(0, policy.maxSourcesPerGroup),
       evidenceIds: evidenceIds.slice(0, policy.maxSourcesPerGroup),

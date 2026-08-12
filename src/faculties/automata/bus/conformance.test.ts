@@ -6,6 +6,7 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
 
 import { projectAutomataBusReferenceState } from '../../../test-support/automata-bus-reference-reducer.js';
 import {
+  AUTOMATA_BUS_LESSON_ATTRIBUTION_FEATURE,
   AUTOMATA_BUS_RELATIONS_FEATURE,
   AUTOMATA_BUS_SCHEMA_VERSION,
   AUTOMATA_BUS_SUPPORTED_FEATURES,
@@ -84,8 +85,12 @@ function compactProjection(state: ReturnType<typeof projectAutomataBusCurrentSta
 describe('Automata Bus v1 language-neutral conformance corpus', () => {
   it('exposes the complete typed v1 contract surface', () => {
     expect(AUTOMATA_BUS_SCHEMA_VERSION).toBe(1);
-    expect(AUTOMATA_BUS_SUPPORTED_FEATURES).toEqual([AUTOMATA_BUS_RELATIONS_FEATURE]);
-    expectTypeOf<AutomataBusFeature>().toEqualTypeOf<'finding-relations-v1'>();
+    expect(AUTOMATA_BUS_SUPPORTED_FEATURES).toEqual([
+      AUTOMATA_BUS_RELATIONS_FEATURE,
+      AUTOMATA_BUS_LESSON_ATTRIBUTION_FEATURE,
+    ]);
+    expectTypeOf<AutomataBusFeature>()
+      .toEqualTypeOf<'finding-relations-v1' | 'lesson-attribution-v1'>();
     expectTypeOf<AutomataBusEventType>().toEqualTypeOf<'finding' | 'relation'>();
     expectTypeOf<AutomataBusProvenance>()
       .toEqualTypeOf<'computed' | 'fetched' | 'recalled' | 'testimony'>();
@@ -107,6 +112,45 @@ describe('Automata Bus v1 language-neutral conformance corpus', () => {
 
     const fixture = readJson<ConformanceFixture>(join(FIXTURE_ROOT, 'accept/computed-finding.json'));
     expect(parseAutomataBusEvent(fixture.events[0]).status).toBe('accepted');
+  });
+
+  it('requires explicit feature negotiation and content-safe identifiers for lesson attribution', () => {
+    const fixture = readJson<ConformanceFixture>(join(FIXTURE_ROOT, 'accept/computed-finding.json'));
+    const base = fixture.events[0] as Record<string, unknown>;
+    const body = base.body as Record<string, unknown>;
+    const attributed = {
+      ...base,
+      mustUnderstand: [AUTOMATA_BUS_LESSON_ATTRIBUTION_FEATURE],
+      body: {
+        ...body,
+        lessonAttribution: {
+          promptRevision: 'sha256:prompt-r1',
+          toolName: 'repo',
+          failureCategory: 'missing-instruction',
+          lessonCode: 'read-before-edit',
+          contradictionEventIds: [],
+        },
+      },
+    };
+
+    expect(parseAutomataBusEvent(attributed).status).toBe('accepted');
+    expect(parseAutomataBusEvent({ ...attributed, mustUnderstand: [] })).toMatchObject({
+      status: 'rejected',
+      issues: [expect.stringMatching(/lesson-attribution-v1/u)],
+    });
+    expect(parseAutomataBusEvent({
+      ...attributed,
+      body: {
+        ...attributed.body,
+        lessonAttribution: {
+          ...(attributed.body as Record<string, unknown>).lessonAttribution as object,
+          lessonCode: 'private transcript sentence',
+        },
+      },
+    })).toMatchObject({
+      status: 'rejected',
+      issues: [expect.stringMatching(/content-safe identifier/u)],
+    });
   });
 
   it('pins both source commits and the contract generation', () => {

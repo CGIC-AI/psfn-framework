@@ -12,7 +12,7 @@ import type { AdminSharedWorkspaceService } from './shared-workspace-service.js'
  */
 export function createGardenAutomataLessonReviewPort(options: {
   service: Pick<AdminSharedWorkspaceService, 'propose'>;
-  context: GardenRequestContext;
+  context: GardenRequestContext | undefined;
 }): GovernedAutomataLessonReviewPort {
   return {
     async propose(request: GovernedAutomataLessonReviewRequest) {

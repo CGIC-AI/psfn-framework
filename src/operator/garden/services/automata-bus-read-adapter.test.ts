@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import type { AutomataBusFindingEvent } from '../../../faculties/automata/bus/contract.js';
+import {
+  AUTOMATA_BUS_LESSON_ATTRIBUTION_FEATURE,
+  type AutomataBusFindingEvent,
+} from '../../../faculties/automata/bus/contract.js';
 import type { AutomataBusSqlPool } from '../../../faculties/automata/bus/postgres-store.js';
 import type { AutomataBusVectorIndexPort } from '../../../faculties/automata/bus/query-ports.js';
 import { PostgresAdminAutomataBusReadAdapter } from './automata-bus-read-adapter.js';
@@ -37,6 +40,22 @@ const event: AutomataBusFindingEvent = {
   },
 };
 
+const attributedEvent: AutomataBusFindingEvent = {
+  ...event,
+  eventId: 'event-attributed',
+  mustUnderstand: [AUTOMATA_BUS_LESSON_ATTRIBUTION_FEATURE],
+  body: {
+    ...event.body,
+    lessonAttribution: {
+      promptRevision: 'sha256:prompt-r1',
+      toolName: 'repo',
+      failureCategory: 'missing-instruction',
+      lessonCode: 'read-before-edit',
+      contradictionEventIds: [],
+    },
+  },
+};
+
 function vector(
   state: Awaited<ReturnType<AutomataBusVectorIndexPort['readState']>> = {
     indexState: 'ready',
@@ -57,7 +76,14 @@ function pool(): { pool: AutomataBusSqlPool; query: ReturnType<typeof vi.fn> } {
       return { rows: [{ event_json: event }], rowCount: 1 };
     }
     if (text.includes('FROM automata_bus_current_findings')) {
-      return { rows: [{ event_json: event }], rowCount: 1 };
+      return {
+        rows: [{
+          event_json: text.includes('lessonAttribution') ? attributedEvent : event,
+          audiences: ['operator'],
+          sensitivity: 'personal',
+        }],
+        rowCount: 1,
+      };
     }
     return { rows: [], rowCount: 0 };
   });
@@ -153,6 +179,35 @@ describe('PostgresAdminAutomataBusReadAdapter', () => {
       degradationReasons: ['index_building', 'index_lagging', 'reindex_required'],
       pendingIndexCount: 2,
     });
+  });
+
+  it('composes the content-safe current-finding lesson projection', async () => {
+    const database = pool();
+    const adapter = new PostgresAdminAutomataBusReadAdapter({
+      pool: database.pool,
+      vector: vector(),
+      companionId: 'companion-a',
+      maxPageLimit: 20,
+    });
+
+    const projection = await adapter.query({
+      companionId: 'companion-a',
+      audience: 'operator',
+      maxSensitivity: 'personal',
+    });
+
+    expect(projection).toMatchObject({
+      sourceFindingCount: 1,
+      groups: [{
+        promptRevision: 'sha256:prompt-r1',
+        lessonCode: 'read-before-edit',
+        sourceFindingIds: ['event-attributed'],
+        evidenceIds: [expect.stringMatching(/^sha256:/u)],
+      }],
+    });
+    expect(JSON.stringify(projection)).not.toContain(event.body.claim);
+    expect(JSON.stringify(projection)).not.toContain(event.body.evidence[0]?.summary);
+    expect(JSON.stringify(projection)).not.toContain(event.body.evidence[0]?.reference);
   });
 
   it('rejects cross-companion and over-bound pages before SQL', async () => {

@@ -1447,6 +1447,7 @@ async function main(): Promise<void> {
     chargeLedger,
     automataRunRegistry: persistenceRuntime.automataRunRegistry,
     automataBusReadPort,
+    automataLessonReadPort: automataBusReadPort,
     scheduler,
     schedulerConfig,
     icpInitiationCandidateStore: persistenceRuntime.icpInitiationCandidateStore,

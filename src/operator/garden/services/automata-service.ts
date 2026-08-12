@@ -486,9 +486,10 @@ export class AdminAutomataDataService implements AdminAutomataService {
       sourceFindingCount: 0,
       proposalReviewPath: '/api/admin/shared-workspace/proposals',
     };
-    if (this.options.lessons) {
+    const lessonReader = this.options.lessons;
+    if (lessonReader) {
       try {
-        const projection = await this.options.lessons.query({
+        const projection = await lessonReader.query({
           companionId,
           audience: 'operator',
           maxSensitivity: OPERATOR_AUTOMATA_SENSITIVITY,

@@ -13,6 +13,8 @@ import {
   POSTGRES_SHARED_WIKI_MIGRATIONS,
   POSTGRES_PARTNER_AFFECT_SHADOW_MIGRATIONS,
   POSTGRES_ANALYSIS_WORKBENCH_TRACE_MIGRATIONS,
+  POSTGRES_AUTOMATA_MIGRATIONS,
+  POSTGRES_AUTOMATA_ROLLBACK_MIGRATIONS,
 } from './migrations.js';
 import { MODEL_USAGE_RUNTIME_LANE_CLASSES } from '../../shared/telemetry/model-usage-attribution.js';
 import { RUNTIME_LANE_CLASSES } from '../../shared/contracts/runtime-lanes.js';
@@ -96,6 +98,22 @@ describe('Postgres live schema migrations', () => {
     expect(sql).toContain('CREATE TRIGGER introspection_landmarks_no_truncate');
     expect(sql).toContain('CREATE TRIGGER introspection_audit_decisions_append_only');
     expect(sql).toContain('CREATE TRIGGER introspection_audit_decisions_no_truncate');
+  });
+
+  it('installs the Automata Bus after the run registry with an explicit rollback contract', () => {
+    const sql = migrationSql(POSTGRES_AUTOMATA_MIGRATIONS);
+
+    expect(sql.indexOf('CREATE TABLE IF NOT EXISTS automata_runs')).toBeLessThan(
+      sql.indexOf('CREATE TABLE IF NOT EXISTS automata_bus_events'),
+    );
+    expect(sql).toContain('CREATE TABLE IF NOT EXISTS automata_bus_current_findings');
+    expect(sql).toContain('CREATE TRIGGER automata_bus_events_append_only');
+    expect(sql).toContain('CREATE TRIGGER automata_bus_events_no_truncate');
+    expect(POSTGRES_AUTOMATA_ROLLBACK_MIGRATIONS).toEqual([
+      'DROP TABLE IF EXISTS automata_bus_current_findings',
+      'DROP TABLE IF EXISTS automata_bus_events',
+      'DROP FUNCTION IF EXISTS reject_automata_bus_event_mutation()',
+    ]);
   });
 
   it('upgrades existing l2 memory tables with scoped memory columns before indexed use', () => {

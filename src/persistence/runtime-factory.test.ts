@@ -54,6 +54,16 @@ const runtimeFactoryMocks = vi.hoisted(() => ({
     close: vi.fn(async () => undefined),
   },
   connectPostgresAutomataRunStore: vi.fn(async () => runtimeFactoryMocks.postgresAutomataRunStore),
+  postgresAutomataBusStore: {
+    append: vi.fn(),
+    readHistory: vi.fn(),
+    readCurrentFindingsByEventIds: vi.fn(),
+    readCurrentState: vi.fn(),
+    close: vi.fn(async () => undefined),
+  },
+  connectPostgresAutomataBusRuntimeStore: vi.fn(
+    async () => runtimeFactoryMocks.postgresAutomataBusStore,
+  ),
   bootstrapPool: { end: vi.fn(async () => undefined) },
   createPostgresPool: vi.fn(() => runtimeFactoryMocks.bootstrapPool),
   ensurePostgresSchemaExists: vi.fn(async () => undefined),
@@ -161,6 +171,11 @@ vi.mock('./postgres/automata-run-store.js', () => ({
   },
 }));
 
+vi.mock('../faculties/automata/bus/runtime-store.js', () => ({
+  connectPostgresAutomataBusRuntimeStore:
+    runtimeFactoryMocks.connectPostgresAutomataBusRuntimeStore,
+}));
+
 vi.mock('./postgres.js', () => ({
   createPostgresPool: runtimeFactoryMocks.createPostgresPool,
   ensurePostgresSchemaExists: runtimeFactoryMocks.ensurePostgresSchemaExists,
@@ -191,6 +206,7 @@ beforeEach(() => {
   runtimeFactoryMocks.connectPostgresSpeakingArbiterStore.mockClear();
   runtimeFactoryMocks.connectPostgresPartnerAffectShadowStore.mockClear();
   runtimeFactoryMocks.connectPostgresAutomataRunStore.mockClear();
+  runtimeFactoryMocks.connectPostgresAutomataBusRuntimeStore.mockClear();
   runtimeFactoryMocks.createReflectionMetacognitionJournalStore.mockClear();
   runtimeFactoryMocks.connectPostgresInternalStateStore.mockClear();
   runtimeFactoryMocks.connectPostgresParticipantTrendStore.mockClear();
@@ -339,6 +355,7 @@ describe('createAgentPersistenceRuntime', () => {
       backgroundWorkStore: runtimeFactoryMocks.postgresBackgroundWorkStore,
       partnerAffectShadowStore: runtimeFactoryMocks.postgresPartnerAffectShadowStore,
       automataRunRegistry: expect.any(Object),
+      automataBusStore: runtimeFactoryMocks.postgresAutomataBusStore,
       introspectionLandmarkStore: expect.any(Object),
       weightedThoughtStore: undefined,
       socialDesireStore: undefined,
@@ -389,6 +406,12 @@ describe('createAgentPersistenceRuntime', () => {
     expect(runtimeFactoryMocks.connectPostgresBackgroundWorkStore).toHaveBeenCalledWith(
       'postgres://postgres:secret@localhost:5432/psfn',
       { schema: undefined },
+    );
+    expect(runtimeFactoryMocks.connectPostgresAutomataBusRuntimeStore).toHaveBeenCalledWith(
+      'postgres://postgres:secret@localhost:5432/psfn',
+      'companion-x',
+      expect.any(Object),
+      { schema: undefined, role: undefined },
     );
     // No schema configured: no companion schema is provisioned up front. The
     // enrollment store still creates its own (schema-less) pool, so assert no
@@ -550,6 +573,12 @@ describe('createAgentPersistenceRuntime', () => {
     expect(runtimeFactoryMocks.connectPostgresBackgroundWorkStore).toHaveBeenCalledWith(
       'postgres://postgres:secret@localhost:5432/psfn',
       { schema: 'companion_x' },
+    );
+    expect(runtimeFactoryMocks.connectPostgresAutomataBusRuntimeStore).toHaveBeenCalledWith(
+      'postgres://postgres:secret@localhost:5432/psfn',
+      'companion-x',
+      expect.any(Object),
+      { schema: 'companion_x', role: undefined },
     );
   });
 });

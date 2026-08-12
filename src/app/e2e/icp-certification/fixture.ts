@@ -32,6 +32,7 @@ import {
 } from './constants.js';
 
 const OWNER_NAMES = [
+  'automata-policy',
   'backup',
   'capability-tier',
   'charge-policy',

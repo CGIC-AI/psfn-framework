@@ -186,7 +186,6 @@ import {
   startIcpRuntimeAvailability,
   type AgentIcpRuntimeAvailability,
 } from './icp-runtime-availability.js';
-import { createAutomataBusProductionRuntime } from '../../faculties/automata/bus/production-runtime.js';
 import { PostgresAdminAutomataBusReadAdapter } from '../../operator/garden/services/automata-bus-read-adapter.js';
 
 const log = createComponentLogger('Agent');
@@ -523,6 +522,10 @@ async function main(): Promise<void> {
     ...(persistedHubIdentityEnrollmentStore
       ? { hubIdentityEnrollmentStore: persistedHubIdentityEnrollmentStore }
       : {}),
+    automataRuntime: {
+      registry: persistenceRuntime.automataRunRegistry,
+      store: persistenceRuntime.automataBusStore,
+    },
   });
   const {
     safeguardAuditTrail,
@@ -554,15 +557,9 @@ async function main(): Promise<void> {
     config,
     gateway.dims,
   );
-  const automataBusRuntime = createAutomataBusProductionRuntime({
-    pool: persistenceRuntime.automataBusStore.getQueryPool(),
-    store: persistenceRuntime.automataBusStore,
-    companionId: resolveCoreCompanionIdFromConfig(config),
-    embeddingProvider: gateway,
-    embeddingIdentity: embeddingProvenance,
-    appCache,
-    policy: config.automataPolicy!.bus.query,
-  });
+  const automataBusRuntime = coreRuntime.automataBus?.runtime ?? (() => {
+    throw new Error('Agent core runtime did not compose the required Automata Bus runtime');
+  })();
   const automataBusReadPort = new PostgresAdminAutomataBusReadAdapter({
     pool: persistenceRuntime.automataBusStore.getQueryPool(),
     vector: automataBusRuntime.vector,
@@ -752,6 +749,11 @@ async function main(): Promise<void> {
     socialGraphWatermarkStore,
     sharedWorldWikiCaretaker: coreRuntime.sharedWorldWikiCaretaker,
     companionAvailability,
+    automataReviewer: {
+      task: coreRuntime.automataBus!.reviewer,
+      registry: persistenceRuntime.automataRunRegistry,
+      companionId: resolveCoreCompanionIdFromConfig(config),
+    },
   });
   const episodeEmbeddingProvenance = embeddingProvenance;
   const episodeEmbeddingProfile = {
@@ -877,6 +879,8 @@ async function main(): Promise<void> {
     shardParentIcpDelivery,
     shardWorkloadRegistry: gateway,
     automataRunRegistry: persistenceRuntime.automataRunRegistry,
+    automataBusWorkerAccess: coreRuntime.automataBus!.workerAccess,
+    automataLifecyclePort: coreRuntime.automataBus!.lifecycle,
   });
 
   // Operator-extensible lifecycle hooks (bead vvf.2): workspace

@@ -186,6 +186,7 @@ import type { ArtifactEgressDestination } from '../artifacts/sensitivity-egress.
 import { TurnSupportRuntime } from './substrate-agent/turn-support-runtime.js';
 import {
   BackgroundWorkSupervisor,
+  type BackgroundWorkAutomataLifecyclePort,
   type BackgroundWorkExecutionScope,
 } from './background-work/supervisor.js';
 import type {
@@ -266,6 +267,8 @@ export interface SubstrateAgentOptions {
   allowCapabilityDeniedTransport?: import('../../system/capabilities/gate.js').CapabilityDeniedTransportPolicy;
   /** Anti-starvation welfare policy (mmo9.7.4), owner-file backed (scheduler.json). */
   backgroundWorkWelfare?: Partial<BackgroundWorkWelfarePolicy>;
+  /** Canonical lifecycle binding for eligible durable background automata. */
+  backgroundWorkAutomataLifecycle?: BackgroundWorkAutomataLifecyclePort;
 }
 
 function requireBackgroundWorkTuning(
@@ -636,6 +639,9 @@ export class SubstrateAgent {
         store: backgroundWorkStore,
         eventBus: this.eventBus,
         welfare: backgroundWorkWelfare,
+        ...(options.backgroundWorkAutomataLifecycle
+          ? { automataLifecycle: options.backgroundWorkAutomataLifecycle }
+          : {}),
         onTerminalFailure: ({ jobId, payload, reasonCode }) => {
           if (payload.kind !== 'emotion_appraisal') return;
           const released = this.emotionSelfModelRuntime.releaseNarrativeEmotionAppraisal({

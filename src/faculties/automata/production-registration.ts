@@ -82,4 +82,9 @@ export const PRODUCTION_AUTOMATA_SPAWN_PATHS = [
     classId: 'scheduler.free_time',
     sourcePath: 'src/app/agent/startup/free-time-lane.ts',
   },
+  {
+    id: 'automata-bus-reviewer',
+    classId: 'scheduler.automata_bus_reviewer',
+    sourcePath: 'src/app/agent/scheduler-runtime.ts',
+  },
 ] as const satisfies readonly ProductionAutomataSpawnPath[];

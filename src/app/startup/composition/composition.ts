@@ -68,6 +68,8 @@ import { ShardManager } from '../../../faculties/shards/manager.js';
 import { ShardWorkloadRegistry } from '../../../faculties/shards/workload-registry.js';
 import type { ShardWorkloadLifecyclePort } from '../../../system/capabilities/shard-approval-grant-contracts.js';
 import type { AutomataRunRegistry } from '../../../faculties/automata/run-registry.js';
+import type { AutomataBusWorkerAccess } from '../../../faculties/automata/bus/worker-access.js';
+import type { SubagentAutomataLifecyclePort } from '../../../faculties/subagents/automata-lifecycle.js';
 import { ShardFoldReviewController } from '../../../faculties/shards/fold-review.js';
 import {
   createShardExecutionPort,
@@ -379,6 +381,7 @@ export interface SubstrateAgentCompositionOptions {
   backgroundWorkTuning?: SubstrateAgentOptions['backgroundWorkTuning'];
   backgroundWorkDisabled?: boolean;
   backgroundWorkWelfare?: SubstrateAgentOptions['backgroundWorkWelfare'];
+  backgroundWorkAutomataLifecycle?: SubstrateAgentOptions['backgroundWorkAutomataLifecycle'];
 }
 
 export function composeSubstrateAgent(options: SubstrateAgentCompositionOptions): SubstrateAgent {
@@ -416,6 +419,9 @@ export function composeSubstrateAgent(options: SubstrateAgentCompositionOptions)
         : {}),
       ...(options.backgroundWorkDisabled ? { backgroundWorkDisabled: true } : {}),
       ...(options.backgroundWorkWelfare ? { backgroundWorkWelfare: options.backgroundWorkWelfare } : {}),
+      ...(options.backgroundWorkAutomataLifecycle
+        ? { backgroundWorkAutomataLifecycle: options.backgroundWorkAutomataLifecycle }
+        : {}),
     },
   );
 }
@@ -534,6 +540,8 @@ export interface MemoryRuntimeOptions {
   personaPreamble?: PersonaPreamblePort | null;
   biographicalProjection?: Pick<MemoryProvider, 'projectBiographicalContext'> | null;
   biographicalRebuild?: MemoryExtractorFormationOptions['biographicalRebuild'];
+  /** Eligible extraction-only Bus access; foreground MemoryRetriever never receives it. */
+  automataBusWorkerAccess?: AutomataBusWorkerAccess | null;
 }
 
 export function wireMemoryRuntime(options: MemoryRuntimeOptions): MemoryExtractor {
@@ -576,6 +584,9 @@ export function wireMemoryRuntime(options: MemoryRuntimeOptions): MemoryExtracto
       : {}),
     ...(options.biographicalRebuild
       ? { biographicalRebuild: options.biographicalRebuild }
+      : {}),
+    ...(options.automataBusWorkerAccess
+      ? { automataBusWorkerAccess: options.automataBusWorkerAccess }
       : {}),
   };
   const memoryExtractor = options.config
@@ -651,6 +662,8 @@ export interface ToolRuntimeOptions {
    */
   shardWorkloadRegistry?: ShardWorkloadLifecyclePort;
   automataRunRegistry?: AutomataRunRegistry;
+  automataBusWorkerAccess?: AutomataBusWorkerAccess | null;
+  automataLifecyclePort?: SubagentAutomataLifecyclePort | null;
 }
 
 function requireExplicitShardParentIcpDelivery(
@@ -741,6 +754,8 @@ export function wireShardAndThinkRuntime(options: ToolRuntimeOptions): ShardExec
     }),
     activeTurnIntakeEnvelopesProvider: () => options.agentLoop.getActiveTurnIntakeEnvelopes(),
     automataRunRegistry: options.automataRunRegistry,
+    automataBusWorkerAccess: options.automataBusWorkerAccess,
+    automataLifecyclePort: options.automataLifecyclePort,
   });
   const shardExecutionPort = createShardExecutionPort(shardManager);
   options.agentLoop.registerTool(createSubagentTool(subagentFaculty), 'core');

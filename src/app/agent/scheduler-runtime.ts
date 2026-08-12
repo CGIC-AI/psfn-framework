@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 import type { BackupRuntimeConfig } from '../../persistence/backups/config.js';
 import {
   SCHEDULED_BACKUP_TASK_ID,
@@ -59,6 +61,9 @@ import {
 import type { SchedulerRuntimeConfig } from '../../system/config/scheduler-config.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { SharedWorldWikiCaretakerService } from '../../faculties/wiki/shared-world-caretaker.js';
+import { SENSITIVITY_LEVELS } from '../../system/trust/types.js';
+import type { AutomataRunRegistry } from '../../faculties/automata/run-registry.js';
+import type { AutomataBusReviewerTaskPort } from '../../faculties/automata/bus/reviewer-service.js';
 import {
   resolveCharacterCardHistoryPath,
   resolveMemoryJournalPath,
@@ -70,6 +75,7 @@ import {
 const log = createComponentLogger('Agent');
 export { BACKGROUND_WORK_SUPERVISOR_TASK_ID };
 export const SHARED_WORLD_WIKI_CARETAKER_OPERATION_ID = 'shared-world-wiki-caretaker';
+export const AUTOMATA_BUS_REVIEWER_TASK_ID = 'automata-bus-reviewer';
 
 export interface AgentSchedulerRuntime {
   scheduler: Scheduler;
@@ -106,6 +112,67 @@ export interface BuildAgentSchedulerRuntimeOptions {
   /** Multi-companion-only operator-owned shared-world projection caretaker. */
   sharedWorldWikiCaretaker?: Pick<SharedWorldWikiCaretakerService, 'cleanupChangedContent'> | null;
   companionAvailability?: Pick<CompanionAvailabilityRuntime, 'run'>;
+  automataReviewer?: {
+    task: AutomataBusReviewerTaskPort;
+    registry: AutomataRunRegistry;
+    companionId: string;
+  };
+}
+
+export function registerAutomataBusReviewerTask(input: {
+  scheduler: Scheduler;
+  task: AutomataBusReviewerTaskPort;
+  registry: AutomataRunRegistry;
+  companionId: string;
+}): void {
+  if (!input.task.enabled) return;
+  input.scheduler.register({
+    id: AUTOMATA_BUS_REVIEWER_TASK_ID,
+    name: 'Automata Bus Evidence Reviewer',
+    description:
+      'Nominates bounded Bus consistency candidates and appends only complete evidence-citing review decisions.',
+    scheduleSource: 'automata-policy.json > bus.reviewer.cadenceMs',
+    type: 'every',
+    intervalMs: input.task.cadenceMs,
+    availability: 'do_not_disturb',
+    state: 'idle',
+    handler: async () => {
+      const runId = `automata-bus-review:${randomUUID()}`;
+      const run = await input.registry.register({
+        runId,
+        automatonClass: 'scheduler.automata_bus_reviewer',
+        workerId: AUTOMATA_BUS_REVIEWER_TASK_ID,
+        taskId: AUTOMATA_BUS_REVIEWER_TASK_ID,
+        taskLabel: 'Review Automata Bus evidence',
+        taskSummary: 'Nominate and review a bounded batch of duplicate, contradiction, stale-evidence, and orphan-provenance candidates.',
+      });
+      await input.registry.transition(runId, {
+        status: 'running',
+        reason: 'scheduled_review_started',
+      });
+      try {
+        await input.task.run({
+          companionId: input.companionId,
+          runId,
+          audience: 'operator',
+          maxSensitivity: SENSITIVITY_LEVELS.at(-1)!,
+        });
+        await input.registry.transition(runId, {
+          status: 'completed',
+          reason: 'scheduled_review_completed',
+          outcome: 'completed',
+        });
+      } catch (error) {
+        await input.registry.transition(run.runId, {
+          status: 'failed',
+          reason: 'scheduled_review_failed',
+          outcome: 'blocked',
+          failureReason: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+      }
+    },
+  }, { skipFirstRun: true });
 }
 
 export function registerSalienceDecayOperation(input: {
@@ -314,6 +381,14 @@ export function buildAgentSchedulerRuntime(
     intervalMs: options.schedulerConfig.tickIntervalMs,
     scheduler,
   });
+  if (options.automataReviewer) {
+    registerAutomataBusReviewerTask({
+      scheduler,
+      task: options.automataReviewer.task,
+      registry: options.automataReviewer.registry,
+      companionId: options.automataReviewer.companionId,
+    });
+  }
 
   const backgroundMaintenance = new BackgroundMaintenanceRegistry({
     scheduler,

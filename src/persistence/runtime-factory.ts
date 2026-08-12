@@ -69,6 +69,8 @@ import type { BackgroundWorkStorePort } from '../core/agent/background-work/stor
 import type { ContactLifecycleGatewayPort } from '../core/contacts/contact-lifecycle-gateway-port.js';
 import { ContactLifecycleRecoveryRuntime } from '../core/contacts/contact-lifecycle-recovery-runtime.js';
 import { awaitPostgresStoreReadiness } from './postgres/runtime-readiness.js';
+import { PostgresAutomataRunStore } from './postgres/automata-run-store.js';
+import { AutomataRunRegistry } from '../faculties/automata/run-registry.js';
 
 export interface AgentPersistenceRuntime {
   backend: PersistenceBackend;
@@ -100,6 +102,7 @@ export interface AgentPersistenceRuntime {
   companionAvailabilityStore: CompanionAvailabilityStorePort & { close(): Promise<void> };
   introspectionLandmarkStore: IntrospectionLandmarkPostgresStore;
   backgroundWorkStore: BackgroundWorkStorePort;
+  automataRunRegistry: AutomataRunRegistry;
   /**
    * Shadow-only Partner Affect observation store (docs/partner-affect.md
    * slice 1). Written by the shadow ingest bridge; read only by the Garden
@@ -145,6 +148,8 @@ export interface CreateAgentPersistenceRuntimeOptions {
     | 'multiCompanion'
     | 'companionFleet'
     | 'memoryDeletionPolicy'
+    | 'companionId'
+    | 'automataPolicy'
   >;
   pathSnapshot: RuntimePathSnapshot;
   embeddingDims: number;
@@ -303,6 +308,18 @@ export async function createAgentPersistenceRuntime(
       role: tenantRole,
     }),
   );
+  const companionId = options.config.companionId?.trim();
+  if (!companionId) throw new Error('Automata run persistence requires config.companionId');
+  if (!options.config.automataPolicy) throw new Error('Automata run persistence requires automata-policy.json');
+  const automataRunStore = await awaitPostgresStoreReadiness(
+    'automata_runs',
+    () => PostgresAutomataRunStore.connect(databaseUrl, companionId, { schema, role: tenantRole }),
+  );
+  const automataRunRegistry = await AutomataRunRegistry.hydrate({
+    companionId,
+    policy: options.config.automataPolicy,
+    store: automataRunStore,
+  });
   const runtime: AgentPersistenceRuntime = {
     backend: 'postgres',
     memoryStore,
@@ -349,6 +366,7 @@ export async function createAgentPersistenceRuntime(
       'background_work',
       () => PostgresBackgroundWorkStore.connect(databaseUrl, { schema, role: tenantRole }),
     ),
+    automataRunRegistry,
     partnerAffectShadowStore: await awaitPostgresStoreReadiness(
       'partner_affect_shadow',
       () => PostgresPartnerAffectShadowStore.connect(databaseUrl, { schema, role: tenantRole }),

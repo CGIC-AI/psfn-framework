@@ -188,6 +188,7 @@ export interface AdminChatBootstrapApi {
 }
 
 export interface GardenAdminDomainServices {
+  automata?: import('./services/automata-service.js').AdminAutomataService | null;
   dashboard: AdminDashboardService;
   diagnostics: AdminDiagnosticsService;
   images: AdminImagesService;

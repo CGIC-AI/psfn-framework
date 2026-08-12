@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "bus": {
+    "eligibleClasses": [
+      "subagent.bounded",
+      "shard.long_horizon",
+      "memory.extraction",
+      "memory.sleeptime",
+      "memory.social_graph_builder",
+      "intention.concern_candidate_review",
+      "background.intention_post_turn_hooks",
+      "scheduler.reflection",
+      "scheduler.free_time",
+      "post_turn.subagent_spawn"
+    ],
+    "excludedClasses": [
+      "memory.retrieval",
+      "background.emotion_appraisal",
+      "background.auto_compaction"
+    ]
+  },
+  "retentionMs": {
+    "ephemeral": 86400000,
+    "standard": 604800000,
+    "extended": 2592000000
+  },
+  "recentRunLimit": 50,
+  "operatorMutationLimit": 200
+}

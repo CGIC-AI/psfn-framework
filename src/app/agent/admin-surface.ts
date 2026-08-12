@@ -45,6 +45,7 @@ import { createPostgresPool } from '../../persistence/postgres.js';
 import { resolveConfigTenantPoolScope } from '../../persistence/postgres/tenant-pool-scope.js';
 import { createPostgresBiographicalProfileStore } from '../../faculties/memory/biographical/postgres-store.js';
 import { AdminBiographicalReviewService } from '../../operator/garden/services/biographical-review-service.js';
+import type { AutomataRunRegistry } from '../../faculties/automata/run-registry.js';
 
 export interface StartOptionalAdminTransportServerOptions {
   adminPort?: number;
@@ -57,6 +58,7 @@ export interface StartOptionalAdminTransportServerOptions {
   gateway: GatewayClient;
   eventBus: EventBus;
   chargeLedger: RunChargeLedger;
+  automataRunRegistry: AutomataRunRegistry;
   scheduler: Scheduler;
   schedulerConfig: SchedulerRuntimeConfig;
   icpInitiationCandidateStore?: IcpInitiationCandidateStorePort | null;
@@ -192,6 +194,7 @@ export async function startOptionalAdminTransportServer(
     apiHost: options.apiHost,
     apiPort: options.apiPort,
     memoryStore: options.coreRuntime.memoryStore,
+    automataRunRegistry: options.automataRunRegistry,
     biographicalReviewService,
     subsystemOutputRefStore: options.subsystemOutputRefStore,
     episodicStore: options.episodicStore ?? null,

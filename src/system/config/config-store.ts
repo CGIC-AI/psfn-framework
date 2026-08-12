@@ -86,6 +86,11 @@ import {
   saveTrustPolicyConfig,
 } from './trust-policy-config.js';
 import type { FleetAuthConfig } from './fleet-auth-config.js';
+import type { AutomataOwnerPolicy } from '../../faculties/automata/registry-contract.js';
+import {
+  loadAutomataPolicyConfig,
+  saveAutomataPolicyConfig,
+} from './automata-policy-config.js';
 import {
   fleetAuthFilePath,
   loadFleetAuthConfig,
@@ -136,6 +141,9 @@ export interface ConfigStorePort {
   loadSubagentRoles(): SubagentRoleRegistryConfig;
   saveSubagentRoles(nextConfig: unknown): SubagentRoleRegistryConfig;
   loadStartupSubagentRoles(): SubagentRoleRegistryConfig;
+  loadAutomataPolicy(): AutomataOwnerPolicy;
+  saveAutomataPolicy(nextConfig: unknown): AutomataOwnerPolicy;
+  loadStartupAutomataPolicy(): AutomataOwnerPolicy;
 }
 
 export interface OwnerFileConfigStoreOptions {
@@ -193,6 +201,8 @@ export function createOwnerFileConfigStore(
     // bead 7ym.2.1: subagent-roles.json is a cluster-global system owner file.
     loadSubagentRoles: () => loadSubagentRolesConfig(options.dataDir, loadOptions),
     saveSubagentRoles: (nextConfig) => saveSubagentRolesConfig(options.dataDir, nextConfig),
+    loadAutomataPolicy: () => loadAutomataPolicyConfig(options.dataDir, loadOptions),
+    saveAutomataPolicy: (nextConfig) => saveAutomataPolicyConfig(options.dataDir, nextConfig),
     loadChannels: (env, overrides) => loadRuntimeChannelsConfig(
       options.dataDir,
       env,
@@ -252,5 +262,6 @@ export function createOwnerFileConfigStore(
       options.dataDir,
       options.seedDir,
     ),
+    loadStartupAutomataPolicy: () => loadAutomataPolicyConfig(options.dataDir, loadOptions),
   };
 }

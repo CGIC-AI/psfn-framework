@@ -3,6 +3,7 @@ import type { MemoryStorePort } from '../faculties/memory/memory-store-port.js';
 import type { ContactStorePort } from '../core/contacts/contact-store-port.js';
 import type { IntentionRuntimeProviders, IntentionRuntimeWiring } from '../core/intention/runtime-wiring.js';
 import { createAgentPersistenceRuntime } from './runtime-factory.js';
+import { loadAutomataPolicySeedDefaults } from '../system/config/automata-policy-config.js';
 
 const runtimeFactoryMocks = vi.hoisted(() => ({
   postgresMemoryStore: {
@@ -46,6 +47,13 @@ const runtimeFactoryMocks = vi.hoisted(() => ({
   connectPostgresSpeakingArbiterStore: vi.fn(async () => runtimeFactoryMocks.postgresSpeakingArbiterStore),
   postgresPartnerAffectShadowStore: { kind: 'postgres-partner-affect-shadow-store' },
   connectPostgresPartnerAffectShadowStore: vi.fn(async () => runtimeFactoryMocks.postgresPartnerAffectShadowStore),
+  postgresAutomataRunStore: {
+    loadRetained: vi.fn(async () => []),
+    insert: vi.fn(async () => undefined),
+    update: vi.fn(async () => undefined),
+    close: vi.fn(async () => undefined),
+  },
+  connectPostgresAutomataRunStore: vi.fn(async () => runtimeFactoryMocks.postgresAutomataRunStore),
   bootstrapPool: { end: vi.fn(async () => undefined) },
   createPostgresPool: vi.fn(() => runtimeFactoryMocks.bootstrapPool),
   ensurePostgresSchemaExists: vi.fn(async () => undefined),
@@ -147,6 +155,12 @@ vi.mock('./postgres/partner-affect-shadow-store.js', () => ({
   },
 }));
 
+vi.mock('./postgres/automata-run-store.js', () => ({
+  PostgresAutomataRunStore: {
+    connect: runtimeFactoryMocks.connectPostgresAutomataRunStore,
+  },
+}));
+
 vi.mock('./postgres.js', () => ({
   createPostgresPool: runtimeFactoryMocks.createPostgresPool,
   ensurePostgresSchemaExists: runtimeFactoryMocks.ensurePostgresSchemaExists,
@@ -176,6 +190,7 @@ beforeEach(() => {
   runtimeFactoryMocks.connectPostgresSocialPotStore.mockClear();
   runtimeFactoryMocks.connectPostgresSpeakingArbiterStore.mockClear();
   runtimeFactoryMocks.connectPostgresPartnerAffectShadowStore.mockClear();
+  runtimeFactoryMocks.connectPostgresAutomataRunStore.mockClear();
   runtimeFactoryMocks.createReflectionMetacognitionJournalStore.mockClear();
   runtimeFactoryMocks.connectPostgresInternalStateStore.mockClear();
   runtimeFactoryMocks.connectPostgresParticipantTrendStore.mockClear();
@@ -227,6 +242,8 @@ describe('createAgentPersistenceRuntime', () => {
         persistenceBackend: 'postgres',
         postgresDatabaseUrl: 'postgres://postgres:secret@localhost:5432/psfn',
         postgresSchema: 'companion_x',
+        companionId: 'companion-x',
+        automataPolicy: loadAutomataPolicySeedDefaults(),
       },
       pathSnapshot: {
         systemDataDir: '/tmp/system-data',
@@ -280,6 +297,8 @@ describe('createAgentPersistenceRuntime', () => {
         databasePath: '/tmp/ignored.db',
         persistenceBackend: 'postgres',
         postgresDatabaseUrl: 'postgres://postgres:secret@localhost:5432/psfn',
+        companionId: 'companion-x',
+        automataPolicy: loadAutomataPolicySeedDefaults(),
       },
       pathSnapshot: {
         systemDataDir: '/tmp/system-data',
@@ -319,6 +338,7 @@ describe('createAgentPersistenceRuntime', () => {
       companionAvailabilityStore: runtimeFactoryMocks.postgresCompanionAvailabilityStore,
       backgroundWorkStore: runtimeFactoryMocks.postgresBackgroundWorkStore,
       partnerAffectShadowStore: runtimeFactoryMocks.postgresPartnerAffectShadowStore,
+      automataRunRegistry: expect.any(Object),
       introspectionLandmarkStore: expect.any(Object),
       weightedThoughtStore: undefined,
       socialDesireStore: undefined,
@@ -396,6 +416,8 @@ describe('createAgentPersistenceRuntime', () => {
         postgresSchema: 'companion_x',
         postgresRole: 'companion_x_runtime',
         multiCompanion: true,
+        companionId: 'companion-x',
+        automataPolicy: loadAutomataPolicySeedDefaults(),
         companionFleet: {
           persistenceRoot: '/tmp',
           workspacesRoot: '/tmp/workspaces',
@@ -455,6 +477,8 @@ describe('createAgentPersistenceRuntime', () => {
         persistenceBackend: 'postgres',
         postgresDatabaseUrl: 'postgres://postgres:secret@localhost:5432/psfn',
         postgresSchema: 'companion_x',
+        companionId: 'companion-x',
+        automataPolicy: loadAutomataPolicySeedDefaults(),
       },
       pathSnapshot: {
         systemDataDir: '/tmp/system-data',

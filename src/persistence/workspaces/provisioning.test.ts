@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { resolveCompanionFleetPaths, type CompanionsFleetConfig } from '../../system/config/companions-config.js';
 import {
@@ -46,14 +46,12 @@ describe('fleet workspace provisioning', () => {
     roots.push(root, source);
     writeFileSync(join(source, 'welcome.md'), 'seed welcome\n');
     writeFileSync(join(source, 'privacy-boundary-reference.md'), 'seed privacy\n');
-    writeFileSync(join(source, 'live_verification_checklist.md'), 'seed checklist\n');
     writeFileSync(join(source, COMPANION_LIBRARY_MANIFEST_FILE), `${JSON.stringify({
       schemaVersion: 1,
       bundleVersion: COMPANION_LIBRARY_SEED_VERSION,
       files: [
         { path: 'welcome.md', sha256: createHash('sha256').update('seed welcome\n').digest('hex') },
         { path: 'privacy-boundary-reference.md', sha256: createHash('sha256').update('seed privacy\n').digest('hex') },
-        { path: 'live_verification_checklist.md', sha256: createHash('sha256').update('seed checklist\n').digest('hex') },
       ],
     }, null, 2)}\n`);
     return { root, source, fleet: resolveCompanionFleetPaths(FLEET, root) };
@@ -66,14 +64,27 @@ describe('fleet workspace provisioning', () => {
 
     expect(readFileSync(join(personal, 'docs/companion-library/welcome.md'), 'utf8'))
       .toBe('seed welcome\n');
-    expect(readFileSync(join(personal, 'docs/companion-library/live_verification_checklist.md'), 'utf8'))
-      .toBe('seed checklist\n');
     expect(JSON.parse(readFileSync(
       join(personal, '.psfn/seed-bundles', `${COMPANION_LIBRARY_SEED_VERSION}.json`),
       'utf8',
     ))).toMatchObject({ bundleVersion: COMPANION_LIBRARY_SEED_VERSION, overwritePolicy: 'never' });
     expect(JSON.parse(readFileSync(join(fixture.fleet.sharedWorkspacePath, 'policy.json'), 'utf8')))
       .toEqual(SHARED_WORKSPACE_POLICY);
+  });
+
+  it('accepts the exact checked-in public Companion Library bundle', () => {
+    const fixture = makeFixture();
+    const source = resolve(import.meta.dirname, '../../../resources/companion-library');
+
+    provisionFleetWorkspaces(fixture.fleet, { companionLibrarySourceDir: source });
+
+    const personal = fixture.fleet.companions[0].personalWorkspacePath;
+    expect(readFileSync(join(personal, 'docs/companion-library/welcome.md'), 'utf8'))
+      .toBe(readFileSync(join(source, 'welcome.md'), 'utf8'));
+    expect(readFileSync(
+      join(personal, 'docs/companion-library/privacy-boundary-reference.md'),
+      'utf8',
+    )).toBe(readFileSync(join(source, 'privacy-boundary-reference.md'), 'utf8'));
   });
 
   it('never overwrites companion-authored files when applying the seed', () => {
@@ -149,7 +160,6 @@ describe('fleet workspace provisioning', () => {
       files: [
         { path: 'welcome.md', sha256: createHash('sha256').update('seed welcome\n').digest('hex') },
         { path: 'privacy-boundary-reference.md', sha256: createHash('sha256').update(privacy).digest('hex') },
-        { path: 'live_verification_checklist.md', sha256: createHash('sha256').update('seed checklist\n').digest('hex') },
       ],
     }, null, 2)}\n`);
 

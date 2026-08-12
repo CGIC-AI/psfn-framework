@@ -140,6 +140,10 @@ describe('buildFleetAuthBackupCycleOptions', () => {
       authorityFloors,
       schemaOwnerDatabaseUrls: SCHEMA_OWNER_DATABASE_URLS,
       schemaAccessContracts: SCHEMA_ACCESS_CONTRACTS,
+      welfareVerifier: {
+        role: 'welfare_verifier',
+        databaseUrl: 'postgresql://welfare_verifier:secret@127.0.0.1:5432/app',
+      },
       backupConfig: BACKUP_CONFIG,
       kubernetesHelm: KUBERNETES_HELM,
       pgDumpBinary: '/usr/local/bin/pg_dump',
@@ -174,6 +178,10 @@ describe('buildFleetAuthBackupCycleOptions', () => {
           'postgresql://companion_two_runtime:secret@127.0.0.1:5432/app_restore_verify',
         shared: 'postgresql://shared_migration:secret@127.0.0.1:5432/app_restore_verify',
       },
+      scratchWelfareVerifier: {
+        role: 'welfare_verifier',
+        databaseUrl: 'postgresql://welfare_verifier:secret@127.0.0.1:5432/app_restore_verify',
+      },
       fleetBackupOptions: {
         postgres: {
           databaseUrl: 'postgresql://auth_backup_restore:secret@127.0.0.1:5432/app',
@@ -198,6 +206,24 @@ describe('buildFleetAuthBackupCycleOptions', () => {
       },
     });
     expect(options.verifyFamilyRestore).toBeTypeOf('function');
+  });
+
+  it('rejects welfare verifier credential role drift before scheduling verification', () => {
+    expect(() => buildFleetAuthBackupCycleOptions({
+      fleet: FLEET,
+      systemDataDir: '/runtime/system-data',
+      backupRestoreDatabaseUrl: 'postgresql://auth_backup_restore:secret@127.0.0.1:5432/app',
+      schemaOwnerDatabaseUrl: 'postgresql://auth_migration:secret@127.0.0.1:5432/app',
+      roles: ROLES,
+      authorityFloors: makeAuthorityFloors(),
+      schemaOwnerDatabaseUrls: SCHEMA_OWNER_DATABASE_URLS,
+      schemaAccessContracts: SCHEMA_ACCESS_CONTRACTS,
+      welfareVerifier: {
+        role: 'welfare_verifier',
+        databaseUrl: 'postgresql://drifted_verifier:secret@127.0.0.1:5432/app',
+      },
+      backupConfig: BACKUP_CONFIG,
+    })).toThrow(/must authenticate as welfare_verifier/i);
   });
 
   it('rejects one companion role mapped across sibling schemas', () => {

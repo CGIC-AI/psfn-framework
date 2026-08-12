@@ -115,12 +115,40 @@ describe('renderExtractionChunkPrompt', () => {
 
   it('prepends the persona preamble around the assembled task prompt', () => {
     const prepend = vi.fn((_purpose: string, prompt: string) => `PERSONA\n\n${prompt}`);
+    const build = vi.fn(() => 'PERSONA');
     const rendered = renderExtractionChunkPrompt(
       [entry(1)],
-      promptContext({ personaPreamble: { prepend } }),
+      promptContext({ personaPreamble: { build, prepend } }),
     );
     expect(prepend).toHaveBeenCalledWith('memory_extraction', expect.stringContaining('Transcript:'));
     expect(rendered.startsWith('PERSONA\n\n')).toBe(true);
+  });
+
+  it('renders the golden extraction order identity then Bus then task', () => {
+    const build = vi.fn(() => 'INHERITED EXTRACTION IDENTITY');
+    const prepend = vi.fn((_purpose: string, prompt: string) => `unexpected\n${prompt}`);
+    const rendered = renderExtractionChunkPrompt(
+      [entry(1)],
+      promptContext({
+        personaPreamble: { build, prepend },
+        automataBusPrompt: 'BOUNDED BUS INSTRUCTIONS\n\nSPAWN BRIEFING',
+      }),
+    );
+    expect(rendered).toBe([
+      'INHERITED EXTRACTION IDENTITY',
+      '',
+      'BOUNDED BUS INSTRUCTIONS',
+      '',
+      'SPAWN BRIEFING',
+      '',
+      'Known facts:',
+      '(none yet)',
+      '',
+      'Transcript:',
+      '[message_id:1] Alex: line 1',
+    ].join('\n'));
+    expect(build).toHaveBeenCalledWith('memory_extraction');
+    expect(prepend).not.toHaveBeenCalled();
   });
 });
 

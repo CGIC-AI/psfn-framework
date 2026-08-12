@@ -59,6 +59,11 @@ import type { ExtractionSessionReader } from './session-port.js';
 import { ExtractionIntegrityError } from './integrity-error.js';
 import { selectExtractionRecentEntries } from './recovered-entries.js';
 import { parseSessionMessageAddressing } from '../../../core/session/message-addressing.js';
+import {
+  buildAutomataBusWorkerScope,
+  resolveAutomataBusWorkerFormation,
+  type AutomataBusWorkerAccess,
+} from '../../automata/bus/worker-access.js';
 
 export { ExtractionIntegrityError } from './integrity-error.js';
 
@@ -136,6 +141,8 @@ export interface ExtractionRunOptions {
   promptRegistry: PromptRegistryStatePort | null;
   /** Shared persona preamble service (E6.1). Prepends soft persona framing before the schema-bound task prompt. */
   personaPreamble?: PersonaPreamblePort | null;
+  /** Companion-bound Bus adapter; owner policy decides memory.extraction eligibility. */
+  automataBusWorkerAccess?: AutomataBusWorkerAccess | null;
   gateConfig: ExtractionGateConfig;
   maxWrites: number;
   groupWriteCaps?: GroupMemoryWriteCapSettings;
@@ -315,6 +322,20 @@ export async function runExtractionOrchestration(
     const extractionPrompt = options.promptRegistry?.getPrompt(extractionPromptKey)
       ?? getDefaultPromptText(extractionPromptKey);
     const compositionalMode = options.useCompositionalExtraction ? 'chunk_compose' : 'single_pass';
+    const automataBusScope = options.automataBusWorkerAccess
+      ? buildAutomataBusWorkerScope(options.automataBusWorkerAccess, {
+        automatonClass: 'memory.extraction',
+        runId: requestId,
+        taskId: options.channelId,
+      })
+      : undefined;
+    const automataBusFormation = automataBusScope
+      ? await resolveAutomataBusWorkerFormation({
+        access: options.automataBusWorkerAccess,
+        scope: automataBusScope,
+        query: `memory extraction ${options.triggerReason}`,
+      })
+      : null;
     const llmPass = await executeExtractionLlmPass({
       recentEntries,
       useCompositionalExtraction: options.useCompositionalExtraction,
@@ -325,6 +346,7 @@ export async function runExtractionOrchestration(
         characterName: options.sessionManager.characterName,
         experientialCompanionName,
         personaPreamble: options.personaPreamble,
+        ...(automataBusFormation ? { automataBusPrompt: automataBusFormation.promptBlock } : {}),
       },
       requestId,
       completeChunk: createExtractionChunkCompleter(options, turnId),

@@ -6,6 +6,8 @@ export const CAPABILITY_TOKENS = [
   'identity.write.operator',
   'memory.write',
   'memory.delete',
+  'automata.bus.read',
+  'automata.bus.write',
   'external.discord',
   'external.email',
   'external.web',

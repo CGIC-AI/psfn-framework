@@ -34,7 +34,10 @@ export const AUTOMATA_EXACT_SESSION_PURGE_POSTGRES_SCHEMA_STATEMENTS = [
       'journals', 'journal_rolls', 'channel_index', 'transcript_projection',
       'turn_records', 'redis_tail_pointers'
     ]),
-    CHECK (jsonb_object_length(saga_json -> 'surfaces') = 6)
+    CHECK ((saga_json -> 'surfaces') - ARRAY[
+      'journals', 'journal_rolls', 'channel_index', 'transcript_projection',
+      'turn_records', 'redis_tail_pointers'
+    ]::text[] = '{}'::jsonb)
   )`,
   `CREATE INDEX IF NOT EXISTS automata_exact_session_purge_in_progress_idx
     ON automata_exact_session_purge_sagas (companion_id, updated_at, session_id)

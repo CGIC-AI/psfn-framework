@@ -13,11 +13,17 @@ import type {
   AutomataBusEffectiveFinding,
 } from '../../../faculties/automata/bus/current-state.js';
 import type {
+  AutomataLessonGroup,
+  AutomataLessonProjection,
+  AutomataLessonReadScope,
+} from '../../../faculties/automata/bus/lesson-projection.js';
+import type {
   AutomataRunRecord,
   AutomataRunStatus,
   EffectiveAutomataClassDescriptor,
 } from '../../../faculties/automata/registry-contract.js';
 import type { AutomataRunRegistry } from '../../../faculties/automata/run-registry.js';
+import { SENSITIVITY_LEVELS } from '../../../system/trust/types.js';
 
 export type AdminAutomataBusCondition = 'degraded' | 'healthy' | 'unavailable';
 export type AdminAutomataBusFreshness = 'fresh' | 'stale' | 'unknown';
@@ -67,6 +73,10 @@ export interface AdminAutomataBusReadPort {
     eventIdMatched?: boolean;
     health: AdminAutomataBusHealthSource;
   }>;
+}
+
+export interface AdminAutomataLessonReadPort {
+  query(scope: AutomataLessonReadScope): Promise<AutomataLessonProjection>;
 }
 
 export interface AdminAutomataReadPolicy {
@@ -166,6 +176,15 @@ export interface AdminAutomataSnapshot {
     correctionHistory: AutomataBusDisposition[];
     page: { offset: number; limit: number; hasMore: boolean };
   };
+  lessons: {
+    available: boolean;
+    condition: 'ready' | 'unavailable';
+    degradationReason?: 'read_failed' | 'source_unavailable';
+    groups: AutomataLessonGroup[];
+    hasMore: boolean;
+    sourceFindingCount: number;
+    proposalReviewPath: '/api/admin/shared-workspace/proposals';
+  };
   extensions: { managementPanels: AdminAutomataPanelExtension[] };
 }
 
@@ -207,6 +226,8 @@ const UNAVAILABLE_HEALTH = Object.freeze({
   pendingIndexCount: 0,
   degradationReasons: ['source_unavailable'] as const,
 }) satisfies AdminAutomataBusHealthSource;
+
+const OPERATOR_AUTOMATA_SENSITIVITY = SENSITIVITY_LEVELS[SENSITIVITY_LEVELS.length - 1]!;
 
 function requirePageValue(value: number | undefined, fallback: number, maximum: number, label: string): number {
   const resolved = value ?? fallback;
@@ -353,6 +374,7 @@ export class AdminAutomataDataService implements AdminAutomataService {
     companionId: string;
     readPolicy: AdminAutomataReadPolicy;
     bus?: AdminAutomataBusReadPort | null;
+    lessons?: AdminAutomataLessonReadPort | null;
     managementPanels?: readonly AdminAutomataPanelExtension[];
   }) {
     requirePageValue(
@@ -455,11 +477,49 @@ export class AdminAutomataDataService implements AdminAutomataService {
       }
     }
 
+    let lessons: AdminAutomataSnapshot['lessons'] = {
+      available: false,
+      condition: 'unavailable',
+      degradationReason: 'source_unavailable',
+      groups: [],
+      hasMore: false,
+      sourceFindingCount: 0,
+      proposalReviewPath: '/api/admin/shared-workspace/proposals',
+    };
+    if (this.options.lessons) {
+      try {
+        const projection = await this.options.lessons.query({
+          companionId,
+          audience: 'operator',
+          maxSensitivity: OPERATOR_AUTOMATA_SENSITIVITY,
+        });
+        lessons = {
+          available: true,
+          condition: 'ready',
+          groups: projection.groups.map(group => ({
+            ...group,
+            sourceFindingIds: [...group.sourceFindingIds],
+            evidenceIds: [...group.evidenceIds],
+            contradiction: {
+              ...group.contradiction,
+              sourceFindingIds: [...group.contradiction.sourceFindingIds],
+            },
+          })),
+          hasMore: projection.hasMore,
+          sourceFindingCount: projection.sourceFindingCount,
+          proposalReviewPath: '/api/admin/shared-workspace/proposals',
+        };
+      } catch {
+        lessons = { ...lessons, degradationReason: 'read_failed' };
+      }
+    }
+
     return {
       classes: registry.listClasses(),
       runs: runItems.map(projectRun),
       runPage: { offset: runOffset, limit, hasMore: requestedRuns.length > runPageEnd },
       bus,
+      lessons,
       extensions: {
         managementPanels: (this.options.managementPanels ?? []).map(panel => ({ ...panel, mode: 'read_only' })),
       },

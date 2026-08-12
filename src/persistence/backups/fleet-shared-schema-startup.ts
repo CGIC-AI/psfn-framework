@@ -13,6 +13,7 @@ import {
   assertSharedMigrationAuthorityIsolation,
   validateFleetAuthSchemaAccessContracts,
   type FleetAuthSchemaAccessContract,
+  type FleetAuthWelfareVerifierSchemaAccess,
 } from './fleet-auth-schema-access.js';
 
 interface DatabaseTargetIdentity {
@@ -63,10 +64,7 @@ export async function prepareFleetSharedSchemaRuntime(options: {
   fleetAuth?: {
     backupRestoreDatabaseUrl: string;
     roles: FleetAuthDatabaseRoles;
-    welfareVerifier?: {
-      databaseUrl: string;
-      role: string;
-    };
+    welfareVerifier?: FleetAuthWelfareVerifierSchemaAccess;
   };
 }): Promise<FleetAuthSchemaAccessContract[]> {
   const migrationCredential = parseExactPostgresCredential(

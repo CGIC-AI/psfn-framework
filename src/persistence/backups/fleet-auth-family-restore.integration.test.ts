@@ -408,6 +408,40 @@ describe('fleet-auth consistent family restore against real Postgres', () => {
       }))).resolves.toHaveLength(3);
 
       await ownerOne.query(
+        `ALTER DEFAULT PRIVILEGES IN SCHEMA companion_one GRANT SELECT ON TABLES TO ${quoteIdentifier(WELFARE_VERIFIER_ROLE)}`,
+      );
+      await expect(prepareFleetSharedSchemaRuntime(sharedStartupOptions(database, {
+        welfareVerifier,
+      }))).rejects.toThrow(/welfare verifier default privileges would widen schema access/i);
+      await ownerOne.query(
+        `ALTER DEFAULT PRIVILEGES IN SCHEMA companion_one REVOKE SELECT ON TABLES FROM ${quoteIdentifier(WELFARE_VERIFIER_ROLE)}`,
+      );
+
+      await ownerOne.query(
+        `ALTER DEFAULT PRIVILEGES GRANT SELECT ON TABLES TO ${quoteIdentifier(WELFARE_VERIFIER_ROLE)}`,
+      );
+      await expect(prepareFleetSharedSchemaRuntime(sharedStartupOptions(database, {
+        welfareVerifier,
+      }))).rejects.toThrow(/welfare verifier default privileges would widen schema access/i);
+      await ownerOne.query(
+        `ALTER DEFAULT PRIVILEGES REVOKE SELECT ON TABLES FROM ${quoteIdentifier(WELFARE_VERIFIER_ROLE)}`,
+      );
+
+      await ownerOne.query(
+        'ALTER DEFAULT PRIVILEGES IN SCHEMA companion_one GRANT SELECT ON TABLES TO PUBLIC',
+      );
+      await expect(prepareFleetSharedSchemaRuntime(sharedStartupOptions(database, {
+        welfareVerifier,
+      }))).rejects.toThrow(/welfare verifier default privileges would widen schema access/i);
+      await ownerOne.query(
+        'ALTER DEFAULT PRIVILEGES IN SCHEMA companion_one REVOKE SELECT ON TABLES FROM PUBLIC',
+      );
+
+      await expect(prepareFleetSharedSchemaRuntime(sharedStartupOptions(database, {
+        welfareVerifier,
+      }))).resolves.toHaveLength(3);
+
+      await ownerOne.query(
         `GRANT CREATE ON SCHEMA companion_one TO ${quoteIdentifier(WELFARE_VERIFIER_ROLE)}`,
       );
       await expect(prepareFleetSharedSchemaRuntime(sharedStartupOptions(database, {

@@ -28,6 +28,7 @@ export const navGroups: NavGroup[] = [
     { id: 'chat', path: '/chat', defaultLabel: 'Chat', icon: '\u{1F4AC}' },
     { id: 'sessions', path: '/sessions', defaultLabel: 'Sessions', icon: '\u{1F332}' },
     { id: 'scheduler', path: '/scheduler', defaultLabel: 'Scheduler', icon: '\u{23F0}' },
+    { id: 'automata', path: '/automata', defaultLabel: 'Automata', icon: '\u{2699}\u{FE0F}' },
     { id: 'satellites', path: '/satellites', defaultLabel: 'Satellites', icon: '\u{1F6F0}\u{FE0F}' },
     { id: 'places', path: '/places', defaultLabel: 'Places', icon: '\u{1F5FA}\u{FE0F}' },
     { id: 'action-pipe', path: '/action-pipe', defaultLabel: 'Action Pipe', icon: '\u{1F39B}\u{FE0F}' },

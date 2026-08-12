@@ -75,7 +75,10 @@ const queryPolicies: Readonly<Partial<Record<string, Readonly<Partial<Record<str
     '/api/admin/audit/history': singleton([
       'limit', 'offset', 'actionType', 'decision', 'timeRange', 'source', 'query',
     ]),
-    '/api/admin/automata': singleton(['status', 'classId', 'taskId', 'limit']),
+    '/api/admin/automata': singleton([
+      'status', 'classId', 'taskId', 'limit', 'runOffset', 'busLimit', 'busOffset',
+      'busClassId', 'busRunId', 'busTaskId', 'eventId', 'verificationStatus',
+    ]),
     '/api/admin/charge-costs': singleton([
       'sinceMs', 'untilMs', 'lane', 'surface', 'channelId', 'runId', 'rootRunId',
     ]),
@@ -337,7 +340,7 @@ const dynamicRoutes: readonly RouteTuple[] = [
 ];
 
 export const GARDEN_CLIENT_ROUTES = Object.freeze([
-  '/', '/action-pipe', '/analysis-workbench', '/autonomy', '/channels', '/charge-budget', '/chat',
+  '/', '/action-pipe', '/analysis-workbench', '/automata', '/autonomy', '/channels', '/charge-budget', '/chat',
   '/cognitive-security/approvals', '/cognitive-security/drift', '/cognitive-security/firewall',
   '/cognitive-security/remediation', '/concerns', '/confirmations', '/contact-approvals', '/contacts',
   '/enrollment', '/evals/emotion-sidecar', '/episodic-memory', '/graph-proposals', '/identity',

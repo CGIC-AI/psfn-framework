@@ -25,3 +25,16 @@ test('operator guide replaces the primer without changing its route slot', () =>
     },
   );
 });
+
+test('Automata is discoverable beside the scheduler in live operations', () => {
+  const schedulerIndex = navItems.findIndex(item => item.id === 'scheduler');
+  const automata = navItems[schedulerIndex + 1];
+
+  assert.deepEqual(automata, {
+    id: 'automata',
+    path: '/automata',
+    defaultLabel: 'Automata',
+    icon: '\u{2699}\u{FE0F}',
+    groupId: 'operate',
+  });
+});

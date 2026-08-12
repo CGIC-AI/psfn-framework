@@ -244,16 +244,14 @@ export interface IntakeVisionScreenerPolicyConfig {
   maxOutputTokens: number;
 }
 
-export const INTAKE_CHAT_BODY_FINDING_DISPOSITIONS = ['enforce', 'mark_only'] as const;
-export type IntakeChatBodyFindingDisposition =
+const INTAKE_CHAT_BODY_FINDING_DISPOSITIONS = ['enforce', 'mark_only'] as const;
+type IntakeChatBodyFindingDisposition =
   typeof INTAKE_CHAT_BODY_FINDING_DISPOSITIONS[number];
-export const INTAKE_CHAT_BODY_CHANNEL_CLASSES = [
-  'api_direct',
-  'companion_ui',
-  'discord',
-  'telegram',
-] as const;
-export type IntakeChatBodyChannelClass = typeof INTAKE_CHAT_BODY_CHANNEL_CLASSES[number];
+export type IntakeChatBodyChannelClass =
+  | 'api_direct'
+  | 'companion_ui'
+  | 'discord'
+  | 'telegram';
 const INTAKE_CHAT_BODY_ELIGIBLE_CHANNEL_CLASSES = ['api_direct', 'companion_ui'] as const;
 
 /**

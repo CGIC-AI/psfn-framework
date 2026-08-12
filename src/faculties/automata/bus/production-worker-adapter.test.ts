@@ -8,7 +8,6 @@ import {
   type AutomataBusEvent,
 } from './contract.js';
 import type { AutomataBusProductionRuntime } from './production-runtime.js';
-import type { AutomataBusSqlPool } from './postgres-store.js';
 import type { PostgresAutomataBusRuntimeStore } from './runtime-store.js';
 import {
   CanonicalAutomataBusWriter,
@@ -23,40 +22,33 @@ function createHarness() {
     sensitivity: string;
   }>();
   const order: string[] = [];
-  const pool = {
-    query: vi.fn(async (text: string, values?: unknown[]) => {
-      if (text.includes('SELECT event_json, audiences, sensitivity')) {
-        const incumbent = events.get(String(values?.[1]));
-        return {
-          rows: incumbent
-            ? [{
-                event_json: incumbent.event,
-                audiences: incumbent.audiences,
-                sensitivity: incumbent.sensitivity,
-              }]
-            : [],
-          rowCount: incumbent ? 1 : 0,
-        };
-      }
-      if (text.includes('COALESCE(MAX(sequence)')) {
-        return { rows: [{ next_sequence: events.size + 1 }], rowCount: 1 };
-      }
-      throw new Error(`Unexpected SQL: ${text}`);
-    }),
-  } as unknown as AutomataBusSqlPool;
   const store = {
-    append: vi.fn(async (input: {
-      event: AutomataBusEvent;
+    appendAllocated: vi.fn(async (input: {
+      eventId: string;
+      createEvent(sequence: number): unknown;
       audiences: string[];
       sensitivity: string;
     }) => {
+      const incumbent = events.get(input.eventId);
+      const event = input.createEvent(
+        incumbent?.event.sequence ?? events.size + 1,
+      ) as AutomataBusEvent;
+      if (incumbent) {
+        const same = JSON.stringify(incumbent.event) === JSON.stringify(event)
+          && JSON.stringify(incumbent.audiences) === JSON.stringify([...input.audiences].sort())
+          && incumbent.sensitivity === input.sensitivity;
+        if (!same) {
+          throw new Error(`Automata Bus eventId ${input.eventId} was reused with different content`);
+        }
+        return { event: incumbent.event, inserted: false };
+      }
       order.push('persist');
-      events.set(input.event.eventId, {
-        event: input.event,
+      events.set(event.eventId, {
+        event,
         audiences: [...input.audiences].sort(),
         sensitivity: input.sensitivity,
       });
-      return { event: input.event, inserted: true };
+      return { event, inserted: true };
     }),
     readHistory: vi.fn(async () => [...events.values()].map(value => value.event)),
   } as unknown as PostgresAutomataBusRuntimeStore;
@@ -98,7 +90,6 @@ function createHarness() {
     store,
     writer: new CanonicalAutomataBusWriter({
       companionId: 'companion-a',
-      pool,
       store,
       runtime,
     }),

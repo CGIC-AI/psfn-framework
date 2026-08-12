@@ -71,6 +71,10 @@ import { ContactLifecycleRecoveryRuntime } from '../core/contacts/contact-lifecy
 import { awaitPostgresStoreReadiness } from './postgres/runtime-readiness.js';
 import { PostgresAutomataRunStore } from './postgres/automata-run-store.js';
 import { AutomataRunRegistry } from '../faculties/automata/run-registry.js';
+import {
+  connectPostgresAutomataBusRuntimeStore,
+  type PostgresAutomataBusRuntimeStore,
+} from '../faculties/automata/bus/runtime-store.js';
 
 export interface AgentPersistenceRuntime {
   backend: PersistenceBackend;
@@ -103,6 +107,8 @@ export interface AgentPersistenceRuntime {
   introspectionLandmarkStore: IntrospectionLandmarkPostgresStore;
   backgroundWorkStore: BackgroundWorkStorePort;
   automataRunRegistry: AutomataRunRegistry;
+  /** Companion-locked canonical Automata Bus store; derived search indexes are not authority. */
+  automataBusStore: PostgresAutomataBusRuntimeStore;
   /**
    * Shadow-only Partner Affect observation store (docs/partner-affect.md
    * slice 1). Written by the shadow ingest bridge; read only by the Garden
@@ -320,6 +326,15 @@ export async function createAgentPersistenceRuntime(
     policy: options.config.automataPolicy,
     store: automataRunStore,
   });
+  const automataBusStore = await awaitPostgresStoreReadiness(
+    'automata_bus',
+    () => connectPostgresAutomataBusRuntimeStore(
+      databaseUrl,
+      companionId,
+      automataRunRegistry,
+      { schema, role: tenantRole },
+    ),
+  );
   const runtime: AgentPersistenceRuntime = {
     backend: 'postgres',
     memoryStore,
@@ -367,6 +382,7 @@ export async function createAgentPersistenceRuntime(
       () => PostgresBackgroundWorkStore.connect(databaseUrl, { schema, role: tenantRole }),
     ),
     automataRunRegistry,
+    automataBusStore,
     partnerAffectShadowStore: await awaitPostgresStoreReadiness(
       'partner_affect_shadow',
       () => PostgresPartnerAffectShadowStore.connect(databaseUrl, { schema, role: tenantRole }),

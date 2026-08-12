@@ -49,6 +49,11 @@ export interface AppendAutomataBusEventResult {
   inserted: boolean;
 }
 
+export interface PostgresAutomataBusStoreOptions {
+  /** Called inside the append transaction, after an idempotent replay check. */
+  authorizeAppend?: (event: AutomataBusEvent) => Promise<void> | void;
+}
+
 export interface AutomataBusReadScope {
   companionId: string;
   audience: AutomataBusAudience;
@@ -306,7 +311,10 @@ function assertRowWithinScope(
 }
 
 export class PostgresAutomataBusStore {
-  constructor(private readonly pool: AutomataBusSqlPool) {}
+  constructor(
+    private readonly pool: AutomataBusSqlPool,
+    private readonly options: PostgresAutomataBusStoreOptions = {},
+  ) {}
 
   async append(input: AppendAutomataBusEventInput): Promise<AppendAutomataBusEventResult> {
     const { companionId, event, audiences, sensitivity } = parseAppendInput(input);
@@ -325,6 +333,8 @@ export class PostgresAutomataBusStore {
         }
         return { event: existing.event, inserted: false };
       }
+
+      await this.options.authorizeAppend?.(event);
 
       const historyRows = await client.query<AutomataBusEventRow>(`
         SELECT companion_id, event_id, sequence, audiences, sensitivity, event_json

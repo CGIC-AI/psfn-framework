@@ -1,6 +1,10 @@
 import { POSTGRES_CONTACT_LIFECYCLE_MIGRATIONS } from './contact-lifecycle-migrations.js';
 import { POSTGRES_MODEL_USAGE_ROLLBACK_MIGRATIONS } from './model-usage-rollback-migrations.js';
 import { POSTGRES_VECTOR_EXTENSION_MIGRATION } from './vector-extension-migration.js';
+import {
+  AUTOMATA_BUS_POSTGRES_ROLLBACK_STATEMENTS,
+  AUTOMATA_BUS_POSTGRES_SCHEMA_STATEMENTS,
+} from '../../faculties/automata/bus/postgres-schema.js';
 
 export const POSTGRES_MEMORY_MIGRATIONS = [
   // Tenant search paths exclude public. Deployment provisioning creates the
@@ -3406,4 +3410,15 @@ export const POSTGRES_AUTOMATA_RUN_MIGRATIONS: readonly string[] = [
     ON automata_runs(companion_id, automaton_class, created_at_ms DESC);`,
   `CREATE INDEX IF NOT EXISTS idx_automata_runs_retention
     ON automata_runs(companion_id, retention_deadline_ms);`,
+];
+
+/** One ordered migration head for the run authority and its append-only Bus. */
+export const POSTGRES_AUTOMATA_MIGRATIONS: readonly string[] = [
+  ...POSTGRES_AUTOMATA_RUN_MIGRATIONS,
+  ...AUTOMATA_BUS_POSTGRES_SCHEMA_STATEMENTS,
+];
+
+/** Roll back only the dependent Bus slice, preserving the run authority. */
+export const POSTGRES_AUTOMATA_ROLLBACK_MIGRATIONS: readonly string[] = [
+  ...AUTOMATA_BUS_POSTGRES_ROLLBACK_STATEMENTS,
 ];

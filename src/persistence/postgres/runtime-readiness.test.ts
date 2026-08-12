@@ -146,6 +146,7 @@ describe('PostgresRuntimeReadiness', () => {
     expect(POSTGRES_STORE_READINESS_CATALOG.icp_initiation_policy.requirement).toBe('required');
     expect(POSTGRES_STORE_READINESS_CATALOG.fleet_auth.requirement).toBe('required');
     expect(POSTGRES_STORE_READINESS_CATALOG.model_usage_accounting.requirement).toBe('required');
+    expect(POSTGRES_STORE_READINESS_CATALOG.automata_bus.requirement).toBe('required');
     expect(POSTGRES_STORE_READINESS_CATALOG.memory_ann_index.requirement).toBe('optional');
     expect(POSTGRES_STORE_READINESS_CATALOG.model_usage_diagnostics.requirement).toBe('optional');
     expect(POSTGRES_STORE_READINESS_CATALOG.analysis_workbench_trace.requirement).toBe('optional');

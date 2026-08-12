@@ -3,6 +3,7 @@ import {
   type ProductionAutomataClassId,
 } from './registry-contract.js';
 import type { AutomataRetentionStorePort } from './retention-contract.js';
+import { FREE_TIME_CHANNEL_PREFIX } from '../../core/session/session-id.js';
 
 export type ProtectedSessionOwnership =
   | 'companion'
@@ -53,6 +54,26 @@ export interface ClassifySessionAtCreationInput {
 /** Supplied by the canonical Automata owner file; this module has no fallback. */
 export interface AutomataRawSessionRetentionPolicy {
   rawSessionRetentionMs: number;
+}
+
+export interface ForegroundSessionAuthorityInput {
+  channelId: string;
+  channelType: string;
+  hasIcpCorrelation: boolean;
+  canonicalContactId?: string;
+}
+
+/** Only explicit runtime provenance protects a foreground owner; absence stays unknown. */
+export function resolveForegroundSessionOwner(
+  input: ForegroundSessionAuthorityInput,
+): ClassifySessionAtCreationInput['owner'] {
+  if (input.channelId.startsWith(FREE_TIME_CHANNEL_PREFIX)) return { kind: 'free_time' };
+  if (input.hasIcpCorrelation) return { kind: 'icp' };
+  if (input.canonicalContactId?.trim()) return { kind: 'contact' };
+  if (input.channelType === 'companion' || input.channelType === 'companion-ui') {
+    return { kind: 'companion' };
+  }
+  return undefined;
 }
 
 function requiredText(value: string, field: string): string {
@@ -130,12 +151,31 @@ export function classifySessionAtCreation(
 export class AutomataSessionClassificationService {
   constructor(
     private readonly policy: AutomataRawSessionRetentionPolicy,
-    private readonly store: Pick<AutomataRetentionStorePort, 'recordClassification'>,
+    private readonly store: Pick<
+      AutomataRetentionStorePort,
+      'recordClassification' | 'loadClassification'
+    >,
   ) {}
 
   async classifyAtCreation(input: ClassifySessionAtCreationInput): Promise<SessionClassification> {
     const classification = classifySessionAtCreation(input, this.policy);
     await this.store.recordClassification(classification);
     return classification;
+  }
+
+  async ensureClassifiedAtCreation(
+    input: ClassifySessionAtCreationInput,
+  ): Promise<SessionClassification> {
+    const existing = await this.store.loadClassification(input.companionId, input.sessionId);
+    if (existing) return existing;
+    try {
+      return await this.classifyAtCreation(input);
+    } catch (error) {
+      // Concurrent first turns can race between the read and immutable insert.
+      // A committed classification is authoritative; all other failures escape.
+      const raced = await this.store.loadClassification(input.companionId, input.sessionId);
+      if (raced) return raced;
+      throw error;
+    }
   }
 }

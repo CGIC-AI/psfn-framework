@@ -1,4 +1,4 @@
-import type { QueryResult, QueryResultRow } from 'pg';
+import type { QueryResultRow } from 'pg';
 import { isDeepStrictEqual } from 'node:util';
 import { isRecord } from '../../shared/utils/types.js';
 import { requireAutomataClass } from './registry-contract.js';
@@ -16,8 +16,8 @@ import type {
 export interface AutomataRetentionSqlPool {
   query<R extends QueryResultRow = QueryResultRow>(
     text: string,
-    values?: readonly unknown[],
-  ): Promise<QueryResult<R>>;
+    values?: unknown[],
+  ): Promise<{ rows: R[]; rowCount: number | null }>;
 }
 
 interface ClassificationRow extends QueryResultRow {
@@ -279,6 +279,34 @@ export class PostgresAutomataRetentionStore implements AutomataRetentionStorePor
     if (!stored || !isDeepStrictEqual(mapClassification(stored), classification)) {
       throw new Error(`Session classification is immutable for ${classification.sessionId}`);
     }
+  }
+
+  async loadClassification(
+    companionId: string,
+    sessionId: string,
+  ): Promise<SessionClassification | null> {
+    const current = await this.pool.query<ClassificationRow>(`
+      SELECT ${classificationColumns}
+      FROM automata_session_classifications
+      WHERE companion_id = $1 AND session_id = $2
+    `, [companionId, sessionId]);
+    const stored = current.rows[0];
+    return stored ? mapClassification(stored) : null;
+  }
+
+  async loadLatestAuditEvent(
+    companionId: string,
+    sessionId: string,
+  ): Promise<AutomataRetentionAuditEvent | null> {
+    const current = await this.pool.query<AuditEventRow>(`
+      SELECT ${auditColumns}
+      FROM automata_retention_audit_events
+      WHERE companion_id = $1 AND session_id = $2
+      ORDER BY occurred_at_ms DESC, event_id DESC
+      LIMIT 1
+    `, [companionId, sessionId]);
+    const stored = current.rows[0];
+    return stored ? mapAuditEvent(stored) : null;
   }
 
   async listDueAutomataSessions(

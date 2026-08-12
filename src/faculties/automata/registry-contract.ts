@@ -228,6 +228,8 @@ export interface AutomataOwnerPolicy {
     query: AutomataBusQueryOwnerPolicy;
     reviewer: AutomataBusReviewerPolicy;
   };
+  /** Raw journals for eligible automata sessions; protected sessions ignore this policy. */
+  rawSessionRetentionMs: number;
   retentionMs: Record<AutomataRetentionClass, number>;
   recentRunLimit: number;
   operatorMutationLimit: number;
@@ -368,7 +370,14 @@ export function parseAutomataOwnerPolicy(value: unknown, source = 'automata-poli
   const retentionValues = value.retentionMs;
   assertExactKeys(
     value,
-    ['schemaVersion', 'bus', 'retentionMs', 'recentRunLimit', 'operatorMutationLimit'],
+    [
+      'schemaVersion',
+      'bus',
+      'rawSessionRetentionMs',
+      'retentionMs',
+      'recentRunLimit',
+      'operatorMutationLimit',
+    ],
     source,
   );
   assertExactKeys(value.bus, ['eligibleClasses', 'excludedClasses', 'query', 'reviewer'], `${source}.bus`);
@@ -389,6 +398,10 @@ export function parseAutomataOwnerPolicy(value: unknown, source = 'automata-poli
   return {
     schemaVersion: 1,
     bus: { eligibleClasses, excludedClasses, query, reviewer },
+    rawSessionRetentionMs: requirePositiveInteger(
+      value.rawSessionRetentionMs,
+      `${source}.rawSessionRetentionMs`,
+    ),
     retentionMs,
     recentRunLimit: requirePositiveInteger(value.recentRunLimit, `${source}.recentRunLimit`),
     operatorMutationLimit: requirePositiveInteger(value.operatorMutationLimit, `${source}.operatorMutationLimit`),

@@ -377,7 +377,10 @@ describe('intake policy owner file', () => {
     expect(shouldEscalateToL2(policy, 'trusted', trustedThreshold - 0.01)).toBe(false);
     // At/above threshold escalates.
     expect(shouldEscalateToL2(policy, 'trusted', trustedThreshold)).toBe(true);
-    // Hostile is mandatory: escalates even at zero prior score.
+    // Untrusted machine-carried/public content is the semantic-catch tier;
+    // hostile retains the same mandatory behavior.
+    expect(policy.l2Screener.mandatoryTiers).toContain('untrusted');
+    expect(shouldEscalateToL2(policy, 'untrusted', 0)).toBe(true);
     expect(policy.l2Screener.mandatoryTiers).toContain('hostile');
     expect(shouldEscalateToL2(policy, 'hostile', 0)).toBe(true);
   });

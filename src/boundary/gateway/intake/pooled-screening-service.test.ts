@@ -60,6 +60,20 @@ function fakeUnderlying(mode: 'shadow' | 'enforce'): {
     mode,
     globalMode: mode === 'shadow' ? 'shadow' : 'strict',
     cogsecVector: 'external_web_ingress',
+    observability: {
+      envelopeId: 'test-envelope',
+      sourceClass: 'web_fetch',
+      sourceRiskTier: 'untrusted',
+      state: 'released',
+      action: 'pass',
+      riskLabels: [],
+      scores: {},
+      priorVerdicts: {},
+      semanticTrace: {
+        l2: { status: 'not_run', reason: 'test' },
+        l3: { status: 'not_run', reason: 'test' },
+      },
+    },
     effectiveText: 'original',
     withheld: false,
   };

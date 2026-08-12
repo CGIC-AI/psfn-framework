@@ -132,6 +132,23 @@ export interface IntakeEscalationContribution {
 }
 
 /**
+ * Content-free account of whether each semantic layer ran and what verdict it
+ * produced. Scores and labels remain on the envelope; this trace supplies the
+ * missing routing reason that lets an operator distinguish a gated-off layer
+ * from a layer that ran and returned clear.
+ */
+export interface IntakeSemanticScreeningTrace {
+  l2: {
+    status: 'not_run' | 'clear' | 'flagged' | 'failed_closed';
+    reason: string;
+  };
+  l3: {
+    status: 'not_run' | 'clear' | 'flagged' | 'failed_closed';
+    reason: string;
+  };
+}
+
+/**
  * One escalation request from `screen()` to the gateway-side L2/L3 port,
  * issued AFTER the L1 scanners and the L1.5 scorer ran and only when the
  * cheaper layers did not already withhold the item. Routing state:
@@ -190,11 +207,21 @@ export interface IntakeEscalationRequest {
  *                   returned result replaces the service's own finalize.
  */
 export type IntakeEscalationDecision =
-  | { kind: 'skipped'; reason: string }
-  | { kind: 'contribution'; contribution: IntakeEscalationContribution }
-  | { kind: 'quarantine'; reason: string; contribution: IntakeEscalationContribution }
+  | { kind: 'skipped'; reason: string; trace?: IntakeSemanticScreeningTrace }
+  | {
+    kind: 'contribution';
+    contribution: IntakeEscalationContribution;
+    trace?: IntakeSemanticScreeningTrace;
+  }
+  | {
+    kind: 'quarantine';
+    reason: string;
+    contribution: IntakeEscalationContribution;
+    trace?: IntakeSemanticScreeningTrace;
+  }
   | {
     kind: 'final';
+    trace?: IntakeSemanticScreeningTrace;
     result: {
       envelope: IntakeEnvelope;
       snapshot: IntakeEnvelopeSnapshot;
@@ -321,6 +348,24 @@ export interface IntakeScreeningTimingEvent extends IntakeScreeningTimingContext
   durationMs?: number;
 }
 
+/**
+ * Canonical content-free decision record emitted for every completed
+ * screening, including released items. Raw text, safe summaries, origin refs,
+ * and model output never ride this surface.
+ */
+export interface IntakeScreeningObservabilityEvent {
+  envelopeId: string;
+  sourceClass: IntakeSourceClass;
+  sourceRiskTier: IntakeSourceRiskTier;
+  state: IntakeEnvelope['state'];
+  action: IntakeDecisionAction;
+  riskLabels: readonly IntakeRiskLabel[];
+  scores: Readonly<Record<string, number>>;
+  /** Verdicts supplied by upstream layers such as the image/OCR screener. */
+  priorVerdicts: Readonly<Record<string, 'clear' | 'flagged'>>;
+  semanticTrace: IntakeSemanticScreeningTrace;
+}
+
 export interface IntakeScreeningResult {
   /** The envelope in its post-screening state (released/…/quarantined). */
   envelope: IntakeEnvelope;
@@ -337,6 +382,8 @@ export interface IntakeScreeningResult {
    * from structural provenance). Feeds the centralized decision telemetry.
    */
   cogsecVector: CogSecVector;
+  /** Content-free layer scores, escalation routing, and downstream verdicts. */
+  observability: IntakeScreeningObservabilityEvent;
   /**
    * Text for downstream use. Shadow mode: always the original input. Enforce
    * mode: original on 'pass', L1 sanitized text on 'sanitize', the fixed
@@ -415,6 +462,8 @@ export interface IntakeScreeningServiceOptions {
   }) => void;
   /** Content-free, telemetry-only observer. A throwing observer is isolated from screening. */
   onTiming?: (event: IntakeScreeningTimingEvent) => void;
+  /** Canonical content-free decision observer. A throwing observer is isolated. */
+  onDecision?: (event: IntakeScreeningObservabilityEvent) => void;
 }
 
 /** The fixed, operator-reviewed in-place placeholder for withheld content. */
@@ -636,6 +685,15 @@ interface EscalationExtras {
   failure?: { stage: 'escalation'; error: string };
   /** Keep an uncorroborated semantic score for audit, but do not act on it. */
   observeUncorroboratedSemanticScore?: boolean;
+  /** Gateway semantic-layer routing/verdict record (content-free). */
+  semanticTrace?: IntakeSemanticScreeningTrace;
+}
+
+function semanticLayersNotRun(reason: string): IntakeSemanticScreeningTrace {
+  return {
+    l2: { status: 'not_run', reason },
+    l3: { status: 'not_run', reason },
+  };
 }
 
 export function createIntakeScreeningService(
@@ -648,6 +706,42 @@ export function createIntakeScreeningService(
   // resolved inside screen()/screenSync() through the centralized posture.
   const mode = intakeEnforcementPosture(globalMode);
   const now = options.now ?? Date.now;
+
+  function emitScreeningObservability(
+    envelope: IntakeEnvelope,
+    action: IntakeDecisionAction,
+    semanticTrace: IntakeSemanticScreeningTrace,
+    priorSignals: readonly IntakePriorScreeningSignal[] = [],
+  ): IntakeScreeningObservabilityEvent {
+    const priorVerdicts = Object.fromEntries(priorSignals.map((signal) => [
+      signal.scannerId,
+      signal.labels.length > 0 ? 'flagged' : 'clear',
+    ])) as Record<string, 'clear' | 'flagged'>;
+    const event: IntakeScreeningObservabilityEvent = {
+      envelopeId: envelope.id,
+      sourceClass: envelope.sourceClass,
+      sourceRiskTier: envelope.sourceRiskTier,
+      state: envelope.state,
+      action,
+      riskLabels: [...envelope.riskLabels],
+      scores: { ...envelope.scores },
+      priorVerdicts,
+      semanticTrace,
+    };
+    // This deliberately runs at info for pass/release too. Before n82kq those
+    // decisions existed only at debug and could not be attributed in a live
+    // corpus drive. The payload is content-free by construction.
+    log.info('Intake screening observability', event);
+    try {
+      options.onDecision?.(event);
+    } catch (error) {
+      log.warn('Intake screening decision observer failed', {
+        envelopeId: envelope.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    return event;
+  }
 
   /** Resolves the declared CogSec vector for an item from its structural provenance. */
   function resolveCogSecVector(input: IntakeScreeningInput): CogSecVector {
@@ -729,6 +823,11 @@ export function createIntakeScreeningService(
       originRef: input.origin.ref,
     });
     emitDeepScreeningNotRun(input);
+    const observability = emitScreeningObservability(
+      envelope,
+      'pass',
+      semanticLayersNotRun(`clean-bubble:${vector}`),
+    );
     log.debug('Intake clean-bubble release (zero semantic-screening calls)', {
       envelopeId: envelope.id,
       globalMode,
@@ -744,6 +843,7 @@ export function createIntakeScreeningService(
       mode: 'shadow',
       globalMode,
       cogsecVector: vector,
+      observability,
       effectiveText: text,
       withheld: false,
     };
@@ -1106,6 +1206,14 @@ export function createIntakeScreeningService(
       });
     }
 
+    const observability = emitScreeningObservability(
+      envelope,
+      decision.action,
+      escalationExtras?.semanticTrace
+        ?? semanticLayersNotRun('semantic escalation was not requested'),
+      priorSignals,
+    );
+
     return {
       envelope,
       snapshot,
@@ -1114,6 +1222,7 @@ export function createIntakeScreeningService(
       mode: itemPosture,
       globalMode,
       cogsecVector,
+      observability,
       effectiveText,
       withheld,
       ...(scorerOutcome.score !== undefined ? { injectionScore: scorerOutcome.score } : {}),
@@ -1157,7 +1266,11 @@ export function createIntakeScreeningService(
     });
     if (preliminary.action === 'quarantine' || preliminary.action === 'block') {
       emitDeepScreeningNotRun(timedInput);
-      return finalize(text, timedInput, report, scorerOutcome, itemPosture, cogsecVector);
+      return finalize(text, timedInput, report, scorerOutcome, itemPosture, cogsecVector, {
+        semanticTrace: semanticLayersNotRun(
+          `local-terminal:${preliminary.action}`,
+        ),
+      });
     }
 
     const prior = collectSignalContribution(report, scorerOutcome, priorSignals, adjusted);
@@ -1232,15 +1345,24 @@ export function createIntakeScreeningService(
             'escalation.error': message.slice(0, COGSEC_EVIDENCE_FIELD_MAX_CHARS),
           },
         },
+        semanticTrace: {
+          l2: { status: 'failed_closed', reason: 'gateway escalation port failed' },
+          l3: { status: 'failed_closed', reason: 'gateway escalation port failed' },
+        },
       });
     }
 
     switch (escalationDecision.kind) {
       case 'skipped':
-        return finalize(text, timedInput, report, scorerOutcome, itemPosture, cogsecVector);
+        return finalize(text, timedInput, report, scorerOutcome, itemPosture, cogsecVector, {
+          semanticTrace: escalationDecision.trace
+            ?? semanticLayersNotRun(`uninstrumented escalation port: ${escalationDecision.reason}`),
+        });
       case 'contribution':
         return finalize(text, timedInput, report, scorerOutcome, itemPosture, cogsecVector, {
           contribution: escalationDecision.contribution,
+          semanticTrace: escalationDecision.trace
+            ?? semanticLayersNotRun('uninstrumented escalation contribution'),
         });
       case 'quarantine':
         return finalize(text, timedInput, report, scorerOutcome, itemPosture, cogsecVector, {
@@ -1249,6 +1371,8 @@ export function createIntakeScreeningService(
             reason: escalationDecision.reason.slice(0, COGSEC_DECISION_REASON_MAX_CHARS),
           },
           contribution: escalationDecision.contribution,
+          semanticTrace: escalationDecision.trace
+            ?? semanticLayersNotRun('uninstrumented escalation quarantine'),
         });
       case 'final': {
         // L3 was invoked: the port already owns the envelope, the CogSecEvent,
@@ -1257,6 +1381,13 @@ export function createIntakeScreeningService(
         // withheld notice / safe representation in enforce — the L3-reached
         // raw content string never ships in enforce mode.
         const final = escalationDecision.result;
+        const observability = emitScreeningObservability(
+          final.envelope,
+          final.action,
+          escalationDecision.trace
+            ?? semanticLayersNotRun('uninstrumented final escalation'),
+          priorSignals,
+        );
         return {
           envelope: final.envelope,
           snapshot: final.snapshot,
@@ -1265,6 +1396,7 @@ export function createIntakeScreeningService(
           mode: itemPosture,
           globalMode,
           cogsecVector,
+          observability,
           effectiveText: final.effectiveText,
           withheld: final.withheld,
           ...(scorerOutcome.score !== undefined ? { injectionScore: scorerOutcome.score } : {}),

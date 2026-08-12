@@ -413,6 +413,27 @@ describe('AutomataBusIndexingService', () => {
     }));
   });
 
+  it('surfaces a lag-health persistence failure instead of claiming lag was recorded', async () => {
+    const ports = createPorts({ findings: [finding('durable-health-failure')] });
+    const health = healthPort();
+    vi.mocked(ports.embeddings.embed).mockRejectedValue(new Error('provider unavailable'));
+    vi.mocked(health.markLagging).mockRejectedValue(new Error('lag health write failed'));
+    const service = new AutomataBusIndexingService({
+      embeddings: ports.embeddings,
+      vector: ports.vector,
+      health,
+    });
+
+    await expect(service.indexCurrentFinding(finding('durable-health-failure')))
+      .rejects.toThrow('lag health write failed');
+
+    expect(ports.vector.upsert).not.toHaveBeenCalled();
+    expect(health.markLagging).toHaveBeenCalledWith(expect.objectContaining({
+      eventId: 'durable-health-failure',
+      stage: 'embedding',
+    }));
+  });
+
   it('writes derived vectors with explicit model identity and clears lag only after success', async () => {
     const ports = createPorts({ findings: [finding('indexed')] });
     const health = healthPort();
@@ -433,6 +454,28 @@ describe('AutomataBusIndexingService', () => {
     expect(health.markIndexed).toHaveBeenCalledWith(expect.objectContaining({
       eventId: 'indexed',
       modelIdentity: MODEL,
+    }));
+  });
+
+  it('surfaces an indexed-health persistence failure after retaining the derived vector', async () => {
+    const ports = createPorts({ findings: [finding('indexed-health-failure')] });
+    const health = healthPort();
+    vi.mocked(health.markIndexed).mockRejectedValue(new Error('indexed health write failed'));
+    const service = new AutomataBusIndexingService({
+      embeddings: ports.embeddings,
+      vector: ports.vector,
+      health,
+    });
+
+    await expect(service.indexCurrentFinding(finding('indexed-health-failure')))
+      .rejects.toThrow('indexed health write failed');
+
+    expect(ports.vector.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      eventId: 'indexed-health-failure',
+      modelIdentity: MODEL,
+    }));
+    expect(health.markIndexed).toHaveBeenCalledWith(expect.objectContaining({
+      eventId: 'indexed-health-failure',
     }));
   });
 });

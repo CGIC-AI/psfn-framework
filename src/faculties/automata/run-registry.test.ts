@@ -46,6 +46,7 @@ function policy() {
         costCeilingUsd: 0.25,
       },
     },
+    rawSessionRetentionMs: 30_000,
     retentionMs: { ephemeral: 1_000, standard: 10_000, extended: 20_000 },
     recentRunLimit: 25,
     operatorMutationLimit: 100,
@@ -175,6 +176,7 @@ describe('AutomataRunRegistry', () => {
         eligibleClasses: ['subagent.bounded'],
         excludedClasses: [],
       },
+      rawSessionRetentionMs: 30,
       retentionMs: { ephemeral: 1, standard: 2, extended: 3 },
       recentRunLimit: 5,
       operatorMutationLimit: 10,
@@ -183,6 +185,18 @@ describe('AutomataRunRegistry', () => {
       ...policy(),
       hiddenEligibilityOverride: true,
     })).toThrow('contains unknown keys');
+  });
+
+  it('requires an owner-supplied positive raw-session retention window', () => {
+    expect(policy().rawSessionRetentionMs).toBe(30_000);
+    expect(() => parseAutomataOwnerPolicy({
+      ...policy(),
+      rawSessionRetentionMs: 0,
+    })).toThrow('rawSessionRetentionMs must be a positive safe integer');
+    const { rawSessionRetentionMs: _missing, ...missing } = policy();
+    expect(() => parseAutomataOwnerPolicy(missing)).toThrow(
+      'rawSessionRetentionMs must be a positive safe integer',
+    );
   });
 
   it('validates every Bus query bound and identity behavior fail closed', () => {

@@ -52,6 +52,7 @@
       "costCeilingUsd": 0.25
     }
   },
+  "rawSessionRetentionMs": 2592000000,
   "retentionMs": {
     "ephemeral": 86400000,
     "standard": 604800000,

@@ -40,6 +40,14 @@ export class InMemoryAutomataRetentionStore implements AutomataRetentionStorePor
     this.classifications.set(key, cloneClassification(classification));
   }
 
+  async loadClassification(
+    companionId: string,
+    sessionId: string,
+  ): Promise<SessionClassification | null> {
+    const classification = this.classifications.get(classificationKey(companionId, sessionId));
+    return classification ? cloneClassification(classification) : null;
+  }
+
   async listDueAutomataSessions(
     companionId: string,
     nowMs: number,

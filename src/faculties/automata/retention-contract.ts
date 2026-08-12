@@ -138,6 +138,7 @@ export interface AutomataRetentionAuditEvent {
 
 export interface AutomataRetentionStorePort {
   recordClassification(classification: SessionClassification): Promise<void>;
+  loadClassification(companionId: string, sessionId: string): Promise<SessionClassification | null>;
   listDueAutomataSessions(
     companionId: string,
     nowMs: number,

@@ -109,11 +109,24 @@ export interface PostgresSessionAdapters {
   transcriptSearch: KeywordSearchableTranscriptProjection;
   turnRecordStore: TurnRecordStorePort;
   turnRecordEligibilityFence: TurnRecordEligibilityFencePort;
+  /** Production exact-purge seam; deliberately excludes the testing purge port. */
+  exactSessionProjection: {
+    pool: Pool;
+    flushPendingWrites(): Promise<void>;
+    evictChannel(channelId: string): void;
+  };
 }
 
 export interface PostgresSessionAdaptersOptions extends PostgresTranscriptProjectionOptions {
   sessionsDir: string;
 }
+
+type ExactTranscriptProjection = KeywordSearchableTranscriptProjection
+  & SessionDatabasePurgePort
+  & {
+    flushPendingWrites(): Promise<void>;
+    evictChannel(channelId: string): void;
+  };
 
 function normalizeSearchLimit(limit: number | undefined): number {
   if (!Number.isFinite(limit) || limit === undefined) return DEFAULT_SEARCH_LIMIT;
@@ -672,6 +685,12 @@ class PostgresTranscriptProjection implements KeywordSearchableTranscriptProject
     await this.writeChain;
   }
 
+  evictChannel(channelId: string): void {
+    this.messageMetadataByChannel.delete(channelId);
+    this.driftByChannel.delete(channelId);
+    this.pendingDurableDriftChannels.delete(channelId);
+  }
+
   /**
    * Best-effort retry of durable-drift rows whose insert failed at capture
    * time. A failure here is logged, not thrown: the in-memory record already
@@ -799,7 +818,7 @@ class PostgresTranscriptProjection implements KeywordSearchableTranscriptProject
 export async function createPostgresTranscriptProjection(
   databaseUrl: string,
   options: PostgresTranscriptProjectionOptions = {},
-): Promise<KeywordSearchableTranscriptProjection & SessionDatabasePurgePort> {
+): Promise<ExactTranscriptProjection> {
   const pool = options.pool ?? createPostgresPool(databaseUrl, {
     applicationName: options.applicationName ?? 'psfn-session-search',
     allowExitOnIdle: true,
@@ -848,5 +867,10 @@ export async function createDefaultPostgresSessionAdapters(
       pool,
       options.schema ?? 'default',
     ),
+    exactSessionProjection: {
+      pool,
+      flushPendingWrites: () => transcriptProjection.flushPendingWrites(),
+      evictChannel: channelId => transcriptProjection.evictChannel(channelId),
+    },
   };
 }

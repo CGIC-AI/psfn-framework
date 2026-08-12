@@ -525,6 +525,9 @@ async function main(): Promise<void> {
     automataRuntime: {
       registry: persistenceRuntime.automataRunRegistry,
       store: persistenceRuntime.automataBusStore,
+      retentionStore: persistenceRuntime.automataRetentionStore,
+      purgeSagaStore: persistenceRuntime.automataPurgeSagaStore,
+      sessionClassification: persistenceRuntime.automataSessionClassification,
     },
   });
   const {
@@ -754,6 +757,7 @@ async function main(): Promise<void> {
       registry: persistenceRuntime.automataRunRegistry,
       companionId: resolveCoreCompanionIdFromConfig(config),
     },
+    automataRetention: coreRuntime.automataRetention,
   });
   const episodeEmbeddingProvenance = embeddingProvenance;
   const episodeEmbeddingProfile = {
@@ -879,6 +883,7 @@ async function main(): Promise<void> {
     shardParentIcpDelivery,
     shardWorkloadRegistry: gateway,
     automataRunRegistry: persistenceRuntime.automataRunRegistry,
+    automataSessionClassification: persistenceRuntime.automataSessionClassification,
     automataBusWorkerAccess: coreRuntime.automataBus!.workerAccess,
     automataLifecyclePort: coreRuntime.automataBus!.lifecycle,
   });

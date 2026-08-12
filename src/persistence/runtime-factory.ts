@@ -75,6 +75,9 @@ import {
   connectPostgresAutomataBusRuntimeStore,
   type PostgresAutomataBusRuntimeStore,
 } from '../faculties/automata/bus/runtime-store.js';
+import { PostgresAutomataRetentionStore } from '../faculties/automata/retention-postgres-store.js';
+import { AutomataSessionClassificationService } from '../faculties/automata/session-classification.js';
+import { PostgresExactSessionPurgeSagaStore } from './postgres/automata-exact-session-purge-store.js';
 
 export interface AgentPersistenceRuntime {
   backend: PersistenceBackend;
@@ -109,6 +112,9 @@ export interface AgentPersistenceRuntime {
   automataRunRegistry: AutomataRunRegistry;
   /** Companion-locked canonical Automata Bus store; derived search indexes are not authority. */
   automataBusStore: PostgresAutomataBusRuntimeStore;
+  automataRetentionStore: PostgresAutomataRetentionStore;
+  automataSessionClassification: AutomataSessionClassificationService;
+  automataPurgeSagaStore: PostgresExactSessionPurgeSagaStore;
   /**
    * Shadow-only Partner Affect observation store (docs/partner-affect.md
    * slice 1). Written by the shadow ingest bridge; read only by the Garden
@@ -335,6 +341,18 @@ export async function createAgentPersistenceRuntime(
       { schema, role: tenantRole },
     ),
   );
+  const automataRetentionStore = await awaitPostgresStoreReadiness(
+    'automata_retention',
+    async () => new PostgresAutomataRetentionStore(automataBusStore.getQueryPool()),
+  );
+  const automataSessionClassification = new AutomataSessionClassificationService(
+    { rawSessionRetentionMs: options.config.automataPolicy.rawSessionRetentionMs },
+    automataRetentionStore,
+  );
+  const automataPurgeSagaStore = new PostgresExactSessionPurgeSagaStore(
+    automataBusStore.getQueryPool(),
+    companionId,
+  );
   const runtime: AgentPersistenceRuntime = {
     backend: 'postgres',
     memoryStore,
@@ -383,6 +401,9 @@ export async function createAgentPersistenceRuntime(
     ),
     automataRunRegistry,
     automataBusStore,
+    automataRetentionStore,
+    automataSessionClassification,
+    automataPurgeSagaStore,
     partnerAffectShadowStore: await awaitPostgresStoreReadiness(
       'partner_affect_shadow',
       () => PostgresPartnerAffectShadowStore.connect(databaseUrl, { schema, role: tenantRole }),

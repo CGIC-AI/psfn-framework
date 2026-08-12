@@ -47,6 +47,7 @@ function automataPolicy() {
         costCeilingUsd: 0.25,
       },
     },
+    rawSessionRetentionMs: 30_000,
     retentionMs: { ephemeral: 1_000, standard: 10_000, extended: 20_000 },
     recentRunLimit: 25,
     operatorMutationLimit: 100,

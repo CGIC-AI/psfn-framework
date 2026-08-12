@@ -71,6 +71,7 @@ import type { SubagentControlPort } from './port.js';
 import { SubagentTaskRegistry } from './task-registry.js';
 import type { AutomataRunRegistry } from '../automata/run-registry.js';
 import type { AutomataArtifactRef } from '../automata/registry-contract.js';
+import type { AutomataSessionClassificationService } from '../automata/session-classification.js';
 import {
   buildAutomataBusWorkerScope,
   createAutomataBusTool,
@@ -235,6 +236,8 @@ export interface SubagentFacultyDeps {
   activeTurnIntakeEnvelopesProvider?: () => readonly IntakeEnvelopeSnapshot[];
   /** Hydrated companion-scoped durable automata registry. */
   automataRunRegistry?: AutomataRunRegistry;
+  /** Creation-time durable classification; must complete before the worker can write its journal. */
+  automataSessionClassification?: Pick<AutomataSessionClassificationService, 'classifyAtCreation'>;
   /** Companion-bound Bus prompt/tool adapter. Absent means no Bus prompt or tool. */
   automataBusWorkerAccess?: AutomataBusWorkerAccess | null;
   /** Durable terminal handoff/inspection adapter; receives references, never raw worker text. */
@@ -495,6 +498,25 @@ export class SubagentFaculty implements SubagentControlPort {
       createdAt: startTime,
     });
     const task = taskRegistration instanceof Promise ? await taskRegistration : taskRegistration;
+    if (this.deps.automataRunRegistry) {
+      const classifier = this.deps.automataSessionClassification;
+      if (!classifier) {
+        throw new Error('Automata subagent session creation requires durable classification');
+      }
+      const run = this.deps.automataRunRegistry.getRun(durableLineage.runId);
+      if (!run) throw new Error('Automata subagent run disappeared before session classification');
+      await classifier.classifyAtCreation({
+        companionId: run.companionId,
+        sessionId: executionChannelId,
+        createdAtMs: startTime,
+        owner: {
+          kind: 'automata',
+          runId: run.runId,
+          automatonClass: run.automatonClass,
+          workerGeneration: run.workerGeneration,
+        },
+      });
+    }
     this.auditTrail?.append('subagent.lifecycle.transition', {
       subagentId,
       from: 'none',

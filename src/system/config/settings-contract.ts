@@ -10,6 +10,7 @@ import { CAPABILITY_TIER_FILE_NAME } from './capability-tier-config.js';
 import { CHARGE_POLICY_FILE_NAME } from './charge-policy-config.js';
 import { INTAKE_POLICY_FILE_NAME } from './intake-policy-config.js';
 import { MCP_SERVERS_FILE_NAME } from './mcp-servers-config.js';
+import { AUTOMATA_FILE_NAME } from './automata-policy-config.js';
 import { PARTNER_AFFECT_SHADOW_FILE_NAME } from './partner-affect-shadow-config.js';
 import { MODELS_FILE_NAME } from './models-config.js';
 import { PROVIDERS_FILE_NAME } from './providers-config.js';
@@ -47,6 +48,7 @@ export type SettingsSubsystemId =
   | 'partnerAffectShadow'
   | 'backup'
   | 'channels'
+  | 'automataPolicy'
   | 'mcp';
 
 export type SettingsFieldType =
@@ -116,6 +118,13 @@ export interface SettingsContractData {
   schemaVersion: 1;
   subsystems: Record<SettingsSubsystemId, SettingsContractSubsystem>;
   fields: Record<string, SettingsContractField>;
+}
+
+function rawOnlySubsystem<Id extends SettingsSubsystemId>(
+  id: Id,
+  ownerFile: string,
+): SettingsContractSubsystem & { id: Id } {
+  return { id, ownerFile, mode: 'raw_only', scope: ownerFileScope(ownerFile) };
 }
 
 export const SETTINGS_SUBSYSTEMS: Record<SettingsSubsystemId, SettingsContractSubsystem> = {
@@ -191,6 +200,7 @@ export const SETTINGS_SUBSYSTEMS: Record<SettingsSubsystemId, SettingsContractSu
     mode: 'raw_only',
     scope: ownerFileScope(CHANNELS_FILE_NAME),
   },
+  automataPolicy: rawOnlySubsystem('automataPolicy', AUTOMATA_FILE_NAME),
   mcp: {
     id: 'mcp',
     ownerFile: MCP_SERVERS_FILE_NAME,

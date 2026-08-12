@@ -185,6 +185,7 @@ export function buildAdminRoutes(deps: AdminRouteDependencies): AdminRoute[] {
       },
     },
     ...buildAdminApiRoutes({
+      automataService: deps.services.automata,
       dashboardService: deps.services.dashboard,
       diagnosticsService: deps.services.diagnostics,
       imagesService: deps.services.images,

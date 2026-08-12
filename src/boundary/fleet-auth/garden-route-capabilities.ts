@@ -75,6 +75,7 @@ const queryPolicies: Readonly<Partial<Record<string, Readonly<Partial<Record<str
     '/api/admin/audit/history': singleton([
       'limit', 'offset', 'actionType', 'decision', 'timeRange', 'source', 'query',
     ]),
+    '/api/admin/automata': singleton(['status', 'classId', 'taskId', 'limit']),
     '/api/admin/charge-costs': singleton([
       'sinceMs', 'untilMs', 'lane', 'surface', 'channelId', 'runId', 'rootRunId',
     ]),
@@ -211,6 +212,7 @@ const fixedRoutes: readonly RouteTuple[] = [
   ['POST', '/v1/chat/completions'],
   [['GET', 'POST'], '/login'], ['GET', '/health'], ['POST', '/api/admin/logout'],
   ['GET', '/api/admin/action-pipe'], ['GET', '/api/admin/audit/history'],
+  ['GET', '/api/admin/automata'],
   ['GET', '/api/admin/charge-costs'], ['GET', '/api/admin/charges'],
   ['GET', '/api/admin/concerns'], ['POST', '/api/admin/concerns/resolve-stale'],
   ['GET', '/api/admin/confirmations'], ['POST', '/api/admin/confirmations/resolve'],

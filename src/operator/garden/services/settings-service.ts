@@ -1726,6 +1726,8 @@ export class AdminSettingsDataService implements AdminSettingsService {
           return JSON.stringify(this.deps.configStore.loadIntakePolicy(), null, 2);
         case 'partner-affect-shadow':
           return JSON.stringify(this.deps.configStore.loadPartnerAffectShadow(), null, 2);
+        case 'automata-policy':
+          return JSON.stringify(this.deps.configStore.loadAutomataPolicy(), null, 2);
         case 'capabilities':
           return JSON.stringify(this.deps.configStore.loadCapabilityTier(), null, 2);
         case 'charge-policy':
@@ -1904,6 +1906,18 @@ export class AdminSettingsDataService implements AdminSettingsService {
             () => this.deps.configStore.savePartnerAffectShadow(parsed),
           );
           return { ok: true, message: 'partner-affect-shadow.json saved' };
+        }
+        case 'automata-policy': {
+          await this.persistSystemOwner(
+            'automata-policy',
+            parsed,
+            () => this.deps.configStore.loadAutomataPolicy(),
+            () => this.deps.configStore.saveAutomataPolicy(parsed),
+          );
+          return {
+            ok: true,
+            message: 'automata-policy.json saved; restart required before automata policy changes take effect',
+          };
         }
         case 'mcp': {
           await this.persistSystemOwner(

@@ -32,7 +32,9 @@ import { buildAdminPromptRoutes } from './routes/prompt-routes.js';
 import { buildAdminSchedulerRoutes } from './routes/scheduler-routes.js';
 import { buildAdminSubsystemHealthRoutes } from './routes/subsystem-health-routes.js';
 import { buildAdminPartnerAffectShadowRoutes } from './routes/partner-affect-shadow-routes.js';
+import { buildAdminAutomataRoutes } from './routes/automata-routes.js';
 import type { AdminPartnerAffectShadowService } from './services/partner-affect-shadow-service.js';
+import type { AdminAutomataService } from './services/automata-service.js';
 import { buildAdminToolConformanceRoutes } from './routes/tool-conformance-routes.js';
 import { buildAdminIcpAutonomyRoutes } from './routes/icp-autonomy-routes.js';
 import { buildAdminRoomArbiterRoutes } from './routes/room-arbiter-routes.js';
@@ -290,6 +292,7 @@ function attachDisclosureProvenance(entry: ConfirmationQueueEntry): Confirmation
 export function buildAdminApiRoutes(options: {
   config: SubstrateConfig;
   dashboardService: AdminDashboardService;
+  automataService?: AdminAutomataService | null;
   diagnosticsService?: AdminDiagnosticsService | null;
   imagesService: AdminImagesService;
   auditHistoryService?: AdminAuditHistoryService | null;
@@ -351,6 +354,7 @@ export function buildAdminApiRoutes(options: {
   const {
     config,
     dashboardService,
+    automataService,
     diagnosticsService,
     imagesService,
     auditHistoryService,
@@ -527,6 +531,7 @@ export function buildAdminApiRoutes(options: {
   };
 
   return compileGardenRouteDeclarations([
+    ...buildAdminAutomataRoutes({ automataService }),
     ...buildAdminWishlistRoutes({
       wishlistService,
       withBody,

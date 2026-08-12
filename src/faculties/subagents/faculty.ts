@@ -68,6 +68,7 @@ import {
 } from './tool-governance.js';
 import type { SubagentControlPort } from './port.js';
 import { SubagentTaskRegistry } from './task-registry.js';
+import type { AutomataRunRegistry } from '../automata/run-registry.js';
 import { buildSubagentWorkSpec, createSubagentWorkSpecProvider } from './work-spec.js';
 import {
   deriveSubagentCapabilityGrant,
@@ -213,6 +214,8 @@ export interface SubagentFacultyDeps {
   };
   /** Exact async-local parent turn envelopes captured before detached work. */
   activeTurnIntakeEnvelopesProvider?: () => readonly IntakeEnvelopeSnapshot[];
+  /** Hydrated companion-scoped durable automata registry. */
+  automataRunRegistry?: AutomataRunRegistry;
 }
 
 export interface WyomingSubagentDelegationResult {
@@ -268,7 +271,7 @@ export class SubagentFaculty implements SubagentControlPort {
   readonly portFamily = 'subagent' as const;
 
   private readonly maxConcurrent: number;
-  private readonly taskRegistry = new SubagentTaskRegistry();
+  private readonly taskRegistry: SubagentTaskRegistry;
   private readonly auditTrail: SubagentAuditTrail | null;
   private readonly activeHandles = new Map<string, ActiveSubagentHandle>();
   private readonly recentResults = new Map<string, SubagentResult>();
@@ -284,6 +287,7 @@ export class SubagentFaculty implements SubagentControlPort {
       Math.trunc(deps.maxConcurrent ?? deps.config.subagentMaxConcurrent ?? DEFAULT_MAX_CONCURRENT),
     );
     this.auditTrail = deps.auditTrail ?? null;
+    this.taskRegistry = new SubagentTaskRegistry({ runRegistry: deps.automataRunRegistry });
   }
 
   /** Resolved concurrency cap on active subagent tasks (owner-file backed, zet.7). */
@@ -422,7 +426,7 @@ export class SubagentFaculty implements SubagentControlPort {
         reason: memoryWritePolicy.reason,
       });
     }
-    const task = this.taskRegistry.register({
+    const taskRegistration = this.taskRegistry.register({
       subagentId,
       name: request.name,
       task: request.task,
@@ -432,6 +436,7 @@ export class SubagentFaculty implements SubagentControlPort {
       ...(request.sourceContext ? { sourceContext: request.sourceContext } : {}),
       createdAt: startTime,
     });
+    const task = taskRegistration instanceof Promise ? await taskRegistration : taskRegistration;
     this.auditTrail?.append('subagent.lifecycle.transition', {
       subagentId,
       from: 'none',
@@ -630,7 +635,7 @@ export class SubagentFaculty implements SubagentControlPort {
         return;
       }
 
-      this.transitionTask(handle.subagentId, 'running', 'agent_initialized', handle.startTime);
+      await this.transitionTask(handle.subagentId, 'running', 'agent_initialized', handle.startTime);
       await this.emitLifecycleProgressHandoff(handle, 'started', 0);
       this.flushPendingMessages(handle);
 
@@ -917,7 +922,10 @@ export class SubagentFaculty implements SubagentControlPort {
     }
   }
 
-  private async finishHandle(handle: ActiveSubagentHandle, result: SubagentExecutionResult): Promise<void> {
+  private async finishHandle(
+    handle: ActiveSubagentHandle,
+    pendingResult: SubagentExecutionResult | Promise<SubagentExecutionResult>,
+  ): Promise<void> {
     if (handle.settled) return;
     // 7ym.2: claim the handle synchronously — before the first await and before
     // any slot release — so this method is idempotent against the cancel-race.
@@ -940,6 +948,10 @@ export class SubagentFaculty implements SubagentControlPort {
         this.roleActiveCounts.delete(handle.resolvedRole.name);
       }
     }
+    // Durable lifecycle persistence may be asynchronous. Claiming the handle
+    // above must still happen before awaiting it, preserving the cancel-before-
+    // start idempotency contract.
+    const result = await pendingResult;
     // Drain any follow-up/steer turns still writing to the subagent session
     // before reporting terminality. Without this, `wait`/`execute`/`cancel`
     // resolve while a detached turn is mid-write, and a caller that disposes
@@ -1178,16 +1190,16 @@ export class SubagentFaculty implements SubagentControlPort {
     }
   }
 
-  private finalizeCompleted(
+  private async finalizeCompleted(
     handle: ActiveSubagentHandle,
     totalInput: number,
     totalOutput: number,
     lastModel: string,
     lastContent: string,
     turns: number,
-  ): SubagentExecutionResult {
+  ): Promise<SubagentExecutionResult> {
     const previous = this.taskRegistry.getActiveTask(handle.subagentId);
-    const completed = this.taskRegistry.markCompleted(handle.subagentId, 'completed', Date.now());
+    const completed = await this.taskRegistry.markCompleted(handle.subagentId, 'completed', Date.now());
     this.auditTrail?.append('subagent.lifecycle.transition', {
       subagentId: handle.subagentId,
       from: previous?.lifecycleState ?? 'running',
@@ -1222,16 +1234,16 @@ export class SubagentFaculty implements SubagentControlPort {
     return result;
   }
 
-  private finalizeCancelled(
+  private async finalizeCancelled(
     handle: ActiveSubagentHandle,
     totalInput: number,
     totalOutput: number,
     lastModel: string,
     lastContent: string,
     turns: number,
-  ): SubagentExecutionResult {
+  ): Promise<SubagentExecutionResult> {
     const previous = this.taskRegistry.getActiveTask(handle.subagentId);
-    const cancelled = this.taskRegistry.markCancelled(
+    const cancelled = await this.taskRegistry.markCancelled(
       handle.subagentId,
       'cancel_requested',
       Date.now(),
@@ -1275,12 +1287,12 @@ export class SubagentFaculty implements SubagentControlPort {
     return result;
   }
 
-  private finalizeFailed(
+  private async finalizeFailed(
     handle: ActiveSubagentHandle,
     failureReason: string,
-  ): SubagentExecutionResult {
+  ): Promise<SubagentExecutionResult> {
     const previous = this.taskRegistry.getActiveTask(handle.subagentId);
-    const failed = this.taskRegistry.markFailed(
+    const failed = await this.taskRegistry.markFailed(
       handle.subagentId,
       'execution_failed',
       failureReason,
@@ -1323,7 +1335,7 @@ export class SubagentFaculty implements SubagentControlPort {
     return result;
   }
 
-  private finalizeBudgetLimited(
+  private async finalizeBudgetLimited(
     handle: ActiveSubagentHandle,
     totalInput: number,
     totalOutput: number,
@@ -1331,7 +1343,7 @@ export class SubagentFaculty implements SubagentControlPort {
     lastContent: string,
     turns: number,
     budget: SubagentBudgetExhaustion,
-  ): SubagentExecutionResult {
+  ): Promise<SubagentExecutionResult> {
     const failureReason = budget.reason === 'deadline'
       ? 'work spec deadline budget exhausted before completion'
       : 'work spec output-token budget exhausted before completion';
@@ -1339,11 +1351,12 @@ export class SubagentFaculty implements SubagentControlPort {
     // The registry lifecycle machine has no budget terminal; record the coarse
     // non-completed terminal (failed) while the result reports the honest
     // `budget_limited` outcome so it never masquerades as completed.
-    const stopped = this.taskRegistry.markFailed(
+    const stopped = await this.taskRegistry.markFailed(
       handle.subagentId,
       'budget_exhausted',
       failureReason,
       Date.now(),
+      'budget_limited',
     );
     this.auditTrail?.append('subagent.lifecycle.transition', {
       subagentId: handle.subagentId,
@@ -1663,13 +1676,13 @@ export class SubagentFaculty implements SubagentControlPort {
     return capabilityTokens;
   }
 
-  private transitionTask(
+  private async transitionTask(
     subagentId: string,
     nextState: 'running',
     reason: string,
     startedAt: number,
-  ): void {
-    const task = this.taskRegistry.markRunning(subagentId, reason, startedAt);
+  ): Promise<void> {
+    const task = await this.taskRegistry.markRunning(subagentId, reason, startedAt);
     this.auditTrail?.append('subagent.lifecycle.transition', {
       subagentId,
       from: 'queued',

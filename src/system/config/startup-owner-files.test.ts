@@ -61,6 +61,7 @@ describe('startup owner-file loaders', () => {
     'companions.json',
     'partner-affect-shadow.json',
     'mcp-servers.json',
+    'automata-policy.json',
   ] as const;
 
   afterEach(() => {

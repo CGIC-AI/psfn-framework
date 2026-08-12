@@ -67,6 +67,7 @@ import type { ContactTrackingGate } from '../../../core/contacts/tracking-gate.j
 import { ShardManager } from '../../../faculties/shards/manager.js';
 import { ShardWorkloadRegistry } from '../../../faculties/shards/workload-registry.js';
 import type { ShardWorkloadLifecyclePort } from '../../../system/capabilities/shard-approval-grant-contracts.js';
+import type { AutomataRunRegistry } from '../../../faculties/automata/run-registry.js';
 import { ShardFoldReviewController } from '../../../faculties/shards/fold-review.js';
 import {
   createShardExecutionPort,
@@ -649,6 +650,7 @@ export interface ToolRuntimeOptions {
    * process-local registry while retaining the same lifecycle contract.
    */
   shardWorkloadRegistry?: ShardWorkloadLifecyclePort;
+  automataRunRegistry?: AutomataRunRegistry;
 }
 
 function requireExplicitShardParentIcpDelivery(
@@ -738,6 +740,7 @@ export function wireShardAndThinkRuntime(options: ToolRuntimeOptions): ShardExec
       sinkGate: options.sessionManager.intakeSinkGate,
     }),
     activeTurnIntakeEnvelopesProvider: () => options.agentLoop.getActiveTurnIntakeEnvelopes(),
+    automataRunRegistry: options.automataRunRegistry,
   });
   const shardExecutionPort = createShardExecutionPort(shardManager);
   options.agentLoop.registerTool(createSubagentTool(subagentFaculty), 'core');

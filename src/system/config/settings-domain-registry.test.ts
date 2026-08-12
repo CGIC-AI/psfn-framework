@@ -116,6 +116,7 @@ describe('settings-domain registry canonical shape', () => {
 describe('settings-domain registry topology/authority/extension boundary', () => {
   it('keeps topology, authority, and extension files explicitly outside the domains', () => {
     expect([...SETTINGS_NON_DOMAIN_OWNER_FILES]).toEqual([
+      'automata-policy.json',
       'companions.json',
       'fleet-auth.json',
       'mcp-servers.json',

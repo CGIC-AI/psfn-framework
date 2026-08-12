@@ -32,14 +32,13 @@ import {
 } from '../../faculties/memory/subject-authorized-store.js';
 import { JsonGroupMemoryWatermarkStore } from '../../faculties/memory/extraction/group-ranges.js';
 import type { GroupMemoryBackfillExtractorPort } from '../../faculties/memory/extraction/group-backfill.js';
-import type {
-  EpisodicStorePort,
-} from '../../faculties/memory/episodic/store-port.js';
+import type { EpisodicStorePort } from '../../faculties/memory/episodic/store-port.js';
 import {
   DEFAULT_PASS_INTERVAL_MS as DREAM_MEANING_PASS_INTERVAL_MS,
 } from '../../faculties/memory/episodic/dream-meaning-pass.js';
 import type { ShardExecutionPort } from '../../faculties/shards/port.js';
 import type { SkillsRuntime } from '../../faculties/skills/runtime.js';
+import type { AutomataRunRegistry } from '../../faculties/automata/run-registry.js';
 import { ValuesJournalStore } from '../../faculties/values/store.js';
 import { ReflectionJournalStore } from '../../persistence/journals/reflection-journal.js';
 import { ReflectionMetacognitionJournalStore } from '../../persistence/journals/reflection-metacognition-journal.js';
@@ -78,6 +77,7 @@ import { createPostgresAnalysisWorkbenchTraceStoreFromConfig } from '../../persi
 import { createPostgresObserverEvalSidecarStore } from '../../core/eval/observer-sidecar/persistence.js';
 import { createOwnerFileConfigStore } from '../../system/config/config-store.js';
 import { AdminPartnerAffectShadowDataService } from './services/partner-affect-shadow-service.js';
+import { AdminAutomataDataService } from './services/automata-service.js';
 import type { PartnerAffectShadowStorePort } from '../../core/emotion/partner-affect/shadow-store-port.js';
 import {
   createDefaultObserverEvalSidecarSettings,
@@ -214,6 +214,7 @@ export interface InProcessGardenAdminContractOptions {
   apiHost?: string;
   apiPort?: number;
   memoryStore: MemoryStorePort;
+  automataRunRegistry?: AutomataRunRegistry | null;
   biographicalReviewService?: GardenAdminDomainServices['biographicalReview'];
   /** Fixed legacy-mode scope; fleet requests always use signed request context. */
   legacyMemorySubjectAccessContext?: Readonly<MemorySubjectAccessContext>;
@@ -653,6 +654,9 @@ export function createInProcessGardenAdminContract(
   });
 
   return {
+    automata: options.automataRunRegistry
+      ? new AdminAutomataDataService(options.automataRunRegistry)
+      : null,
     dashboard: new AdminDashboardDataService({
       getMemoryStatsForRequest: context => memory.getStatsForRequest(context),
       sessionStore: options.sessionStore,

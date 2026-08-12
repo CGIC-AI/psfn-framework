@@ -32,8 +32,8 @@ function isCapabilityTierChangeNoticeMessage(message: ContextMessage): boolean {
 }
 
 /**
- * Pull capability notices delivered immediately before the current user turn
- * out of ordinary session history. The current user entry is deliberately
+ * Pull capability notices delivered immediately before the current human turn
+ * out of ordinary session history. The current human entry is deliberately
  * excluded from prompt history, so a notice is fresh only while no later user
  * or assistant entry exists. On the following turn it naturally falls back to
  * historical session context and is not re-announced.

@@ -146,7 +146,7 @@ export function normalizeAutomataBusPostgresQuery(
   };
 }
 
-export function automataBusAllowedSensitivities(maximum: SensitivityLevel): SensitivityLevel[] {
+function automataBusAllowedSensitivities(maximum: SensitivityLevel): SensitivityLevel[] {
   return SENSITIVITY_LEVELS.filter(level => sensitivityAtMost(level, maximum));
 }
 

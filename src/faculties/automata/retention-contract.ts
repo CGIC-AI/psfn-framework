@@ -35,18 +35,18 @@ export type AutomataSessionPurgeSurface =
   | 'turn_records'
   | 'redis_tail_pointers';
 
-export interface PromotionCompleteReceipt {
+interface PromotionCompleteReceipt {
   disposition: 'promoted';
   receiptRefs: string[];
   copiedEvidenceRefs: string[];
 }
 
-export interface NothingToPromoteReceipt {
+interface NothingToPromoteReceipt {
   disposition: 'nothing_to_promote';
   receiptRef: string;
 }
 
-export type AutomataPromotionReceipt =
+type AutomataPromotionReceipt =
   | PromotionCompleteReceipt
   | NothingToPromoteReceipt;
 
@@ -112,7 +112,7 @@ export interface ExactSessionPurgePort {
   purgeExactSession(input: ExactSessionPurgeInput): Promise<ExactSessionPurgeReport>;
 }
 
-export type AutomataRetentionAuditKind =
+type AutomataRetentionAuditKind =
   | 'retained'
   | 'purge_started'
   | 'purged'

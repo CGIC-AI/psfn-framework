@@ -4,7 +4,7 @@ import { withQuery } from '$lib/api/query';
 export type AutomataRunStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
 export type AutomataVerificationStatus = 'pending' | 'rejected' | 'verified';
 
-export interface AutomataClassView {
+interface AutomataClassView {
   id: string;
   workerKind: 'subagent' | 'shard' | 'background' | 'scheduler' | 'post_turn';
   trigger: string;
@@ -14,7 +14,7 @@ export interface AutomataClassView {
   concurrencyClass: string;
 }
 
-export interface AutomataRunView {
+interface AutomataRunView {
   companionId: string;
   runId: string;
   automatonClass: string;
@@ -41,7 +41,7 @@ export interface AutomataRunView {
   retentionState: 'active_protected' | 'due' | 'retained';
 }
 
-export interface AutomataFindingView {
+interface AutomataFindingView {
   claim: string;
   provenance: 'computed' | 'fetched' | 'recalled' | 'testimony';
   verificationStatus: AutomataVerificationStatus;
@@ -54,7 +54,7 @@ export interface AutomataFindingView {
   }>;
 }
 
-export interface AutomataEventView {
+interface AutomataEventView {
   eventId: string;
   sequence: number;
   occurredAt: string;

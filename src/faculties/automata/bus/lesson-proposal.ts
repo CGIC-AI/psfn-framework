@@ -19,7 +19,7 @@ export interface GovernedAutomataLessonReviewPort {
   propose(request: GovernedAutomataLessonReviewRequest): Promise<GovernedAutomataLessonReviewReceipt>;
 }
 
-export interface AutomataLessonChangeTarget {
+interface AutomataLessonChangeTarget {
   kind: 'instruction' | 'tool';
   id: string;
   baseRevision: string;

@@ -34,7 +34,7 @@ function advisoryLockKey(companionId: string, sessionId: string): bigint {
   return digest.readBigInt64BE(0);
 }
 
-export class PostgresExactSessionPurgeExclusiveFence implements ExactSessionPurgeExclusiveFencePort {
+class PostgresExactSessionPurgeExclusiveFence implements ExactSessionPurgeExclusiveFencePort {
   constructor(private readonly pool: Pool) {}
 
   async runExclusive<T>(

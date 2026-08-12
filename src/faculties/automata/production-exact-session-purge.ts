@@ -58,7 +58,7 @@ export interface ExactSessionSurfacePurgePort {
   ): Promise<boolean>;
 }
 
-export interface ExactSessionPurgeSagaSurfaceState {
+interface ExactSessionPurgeSagaSurfaceState {
   status: 'not_started' | 'pending' | 'completed';
   attempts: number;
   removedCount: number;

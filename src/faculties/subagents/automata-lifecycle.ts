@@ -11,7 +11,7 @@ export interface SubagentAutomataLineage {
   sessionIds: readonly string[];
 }
 
-export interface SubagentTerminalUsage {
+interface SubagentTerminalUsage {
   model: string;
   inputTokens: number;
   outputTokens: number;

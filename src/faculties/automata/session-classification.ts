@@ -26,7 +26,7 @@ export interface AutomataSessionClassification extends SessionClassificationBase
   retentionDeadlineMs: number;
 }
 
-export interface ProtectedSessionClassification extends SessionClassificationBase {
+interface ProtectedSessionClassification extends SessionClassificationBase {
   ownership: ProtectedSessionOwnership;
 }
 

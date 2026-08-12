@@ -25,8 +25,8 @@ import type {
 import type { AutomataRunRegistry } from '../../../faculties/automata/run-registry.js';
 import { SENSITIVITY_LEVELS } from '../../../system/trust/types.js';
 
-export type AdminAutomataBusCondition = 'degraded' | 'healthy' | 'unavailable';
-export type AdminAutomataBusFreshness = 'fresh' | 'stale' | 'unknown';
+type AdminAutomataBusCondition = 'degraded' | 'healthy' | 'unavailable';
+type AdminAutomataBusFreshness = 'fresh' | 'stale' | 'unknown';
 export type AdminAutomataBusDegradationReason =
   | 'index_building'
   | 'index_lagging'
@@ -84,7 +84,7 @@ export interface AdminAutomataReadPolicy {
   maxPageLimit: number;
 }
 
-export interface AdminAutomataRunView {
+interface AdminAutomataRunView {
   companionId: string;
   runId: string;
   automatonClass: string;
@@ -111,7 +111,7 @@ export interface AdminAutomataRunView {
   retentionState: 'active_protected' | 'due' | 'retained';
 }
 
-export interface AdminAutomataEvidenceView {
+interface AdminAutomataEvidenceView {
   kind: AutomataBusEvidence['kind'];
   summary: string;
   digest?: string;
@@ -119,7 +119,7 @@ export interface AdminAutomataEvidenceView {
   referenceDigest: string;
 }
 
-export interface AdminAutomataFindingView {
+interface AdminAutomataFindingView {
   claim: string;
   provenance: AutomataBusProvenance;
   verificationStatus: AutomataBusVerificationStatus;
@@ -127,7 +127,7 @@ export interface AdminAutomataFindingView {
   evidence: AdminAutomataEvidenceView[];
 }
 
-export interface AdminAutomataEventContextView {
+interface AdminAutomataEventContextView {
   automatonClass: string;
   runId: string;
   taskId: string;
@@ -136,7 +136,7 @@ export interface AdminAutomataEventContextView {
   artifactCount: number;
 }
 
-export interface AdminAutomataEventView {
+interface AdminAutomataEventView {
   eventId: string;
   sequence: number;
   occurredAt: string;
@@ -151,7 +151,7 @@ export interface AdminAutomataEventView {
   };
 }
 
-export interface AdminAutomataCurrentFindingView {
+interface AdminAutomataCurrentFindingView {
   eventId: string;
   sequence: number;
   occurredAt: string;

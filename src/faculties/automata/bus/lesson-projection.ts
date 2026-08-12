@@ -11,7 +11,7 @@ import type {
 } from './contract.js';
 import type { AutomataBusAudience } from './postgres-store.js';
 
-export type AutomataLessonEvidenceQuality =
+type AutomataLessonEvidenceQuality =
   | 'none'
   | 'rejected'
   | 'unverified'

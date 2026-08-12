@@ -283,8 +283,6 @@ describe('production Automata Bus reviewer model composition', () => {
         retryPolicy: 'none',
         chargeLane: 'maintenance',
         chargeSurface: 'externalModelConsult',
-        preemptionProtected: true,
-        welfareGrantJobId: 'welfare-job-1',
       },
     });
 
@@ -306,8 +304,6 @@ describe('production Automata Bus reviewer model composition', () => {
           costCeilingUsd: 0.25,
           cancellation: 'caller_signal',
           retryPolicy: 'none',
-          preemptionProtected: true,
-          welfareGrantJobId: 'welfare-job-1',
         }),
       }),
     );

@@ -291,10 +291,6 @@ export function createAutomataBusReviewerModelAdapter(options: {
           costCeilingUsd: input.work.costCeilingUsd,
           cancellation: input.work.cancellation,
           retryPolicy: input.work.retryPolicy,
-          preemptionProtected: input.work.preemptionProtected,
-          ...(input.work.welfareGrantJobId
-            ? { welfareGrantJobId: input.work.welfareGrantJobId }
-            : {}),
           correlation: {
             requestId: `${input.reviewerRunId}:${input.cluster.clusterId}`,
             channelId: 'internal:automata-bus-reviewer',

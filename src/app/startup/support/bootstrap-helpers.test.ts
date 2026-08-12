@@ -136,6 +136,7 @@ const HYDRATION_OWNER_FILES = [
   'scheduler.json',
   'capability-tier.json',
   'charge-policy.json',
+  'automata-policy.json',
 ] as const;
 
 function writeHydrationOwnerExamples(systemDataDir: string, companionDataDir: string): void {

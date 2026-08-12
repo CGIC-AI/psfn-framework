@@ -15,6 +15,7 @@ const REQUIRED_OWNER_EXAMPLES = [
   'capability-tier.json',
   'charge-policy.json',
   'backup.json',
+  'automata-policy.json',
 ] as const;
 
 function restoreEnv(): void {

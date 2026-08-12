@@ -51,8 +51,6 @@ interface AutomataBusReviewerWork {
   retryPolicy: 'none';
   chargeLane: 'maintenance';
   chargeSurface: 'externalModelConsult';
-  preemptionProtected: boolean;
-  welfareGrantJobId?: string;
 }
 
 export interface AutomataBusReviewerModelPort {
@@ -140,8 +138,6 @@ export interface AutomataBusReviewerOutcomePort {
 
 export interface AutomataBusReviewerRunInput extends AutomataBusReviewerScope {
   runId: string;
-  /** Sanctioned background-work welfare proof; omitted calls remain preemptable. */
-  welfareGrantJobId?: string;
   signal?: AbortSignal;
 }
 
@@ -514,10 +510,6 @@ export class AutomataBusReviewerService implements AutomataBusReviewerTaskPort {
     const selected = pending.slice(0, this.policy.maxReviewsPerRun);
     const counts = emptyCounts();
     const occurredAt = (this.options.now?.() ?? new Date()).toISOString();
-    const welfareGrantJobId = input.welfareGrantJobId === undefined
-      ? undefined
-      : requiredText(input.welfareGrantJobId, 'welfareGrantJobId');
-
     const record = async (
       cluster: AutomataBusReviewerCandidateCluster,
       status: AutomataBusReviewerOutcomeStatus,
@@ -583,8 +575,6 @@ export class AutomataBusReviewerService implements AutomataBusReviewerTaskPort {
             retryPolicy: disableModelRetries(),
             chargeLane: 'maintenance',
             chargeSurface: 'externalModelConsult',
-            preemptionProtected: welfareGrantJobId !== undefined,
-            ...(welfareGrantJobId !== undefined ? { welfareGrantJobId } : {}),
           },
           ...(input.signal !== undefined ? { signal: input.signal } : {}),
         }), findings, this.policy, occurredAt);

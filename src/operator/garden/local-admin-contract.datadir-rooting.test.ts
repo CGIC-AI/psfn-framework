@@ -279,7 +279,7 @@ describe('createInProcessGardenAdminContract per-companion dataDir rooting (dnll
     expect(notices[0]?.content).toContain('from "nursery" to "custom"');
     expect(notices[0]?.content).toContain('Newly granted: memory.delete.');
     expect(notices[0]?.content).toContain(
-      'Withdrawn: identity.write.runtime, memory.write, git.read, issue.read, repl.execute.',
+      'Withdrawn: identity.write.runtime, memory.write, automata.bus.read, automata.bus.write, git.read, issue.read, repl.execute.',
     );
     expect(notices[0]?.content).toContain('not a fault in you');
   });

@@ -463,7 +463,7 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     domain: 'subagents',
     exposure: 'core',
     description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.subagent,
-    actions: ['spawn', 'message', 'wait', 'cancel', 'status'],
+    actions: ['spawn', 'message', 'wait', 'cancel', 'status', 'discover', 'inspect'],
     capabilityMetadata: { kind: 'action_aware', source: CAPABILITIES_REQUIREMENTS },
     retiredAliases: [
       retiredAlias('spawn_subagent', 'subagent', 'retired', 'spawn', 'Bounded worker launch belongs on subagent.'),

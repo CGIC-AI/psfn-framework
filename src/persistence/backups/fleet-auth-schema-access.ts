@@ -228,6 +228,11 @@ interface WelfareVerifierDefaultPrivilegeRow {
   is_grantable: boolean;
 }
 
+interface WelfareVerifierExecutableRoutineRow {
+  routine_name: string;
+  identity_arguments: string;
+}
+
 async function assertNoWelfareVerifierDefaultPrivileges(
   client: PoolClient,
   schema: string,
@@ -343,10 +348,22 @@ async function assertWelfareVerifierSchemaAccess(
         JSON.stringify(actual) === JSON.stringify(row)
       )))
     : [];
-  if (unexpected.length > 0 || missing.length > 0) {
+  const executableRoutines = requireExact && contract.kind === 'companion'
+    ? await client.query<WelfareVerifierExecutableRoutineRow>(`
+        SELECT routine.proname AS routine_name,
+               pg_get_function_identity_arguments(routine.oid) AS identity_arguments
+        FROM pg_proc AS routine
+        JOIN pg_namespace AS namespace ON namespace.oid = routine.pronamespace
+        WHERE namespace.nspname = $1
+          AND has_function_privilege($2, routine.oid, 'EXECUTE')
+        ORDER BY routine.proname, pg_get_function_identity_arguments(routine.oid)
+      `, [contract.schema, welfareVerifierRole])
+    : { rows: [] };
+  if (unexpected.length > 0 || missing.length > 0 || executableRoutines.rows.length > 0) {
     throw new Error(
       `Fleet auth welfare verifier schema access mismatch for ${contract.schema}: `
-      + `unexpected=${JSON.stringify(unexpected)}, missing=${JSON.stringify(missing)}`,
+      + `unexpected=${JSON.stringify(unexpected)}, missing=${JSON.stringify(missing)}, `
+      + `executableRoutines=${JSON.stringify(executableRoutines.rows)}`,
     );
   }
 }
@@ -747,6 +764,17 @@ export async function applyFleetAuthSchemaAccessContracts(options: {
       await client.query(`REVOKE ALL ON ALL TABLES IN SCHEMA ${schema} FROM PUBLIC`);
       await client.query(`REVOKE ALL ON ALL SEQUENCES IN SCHEMA ${schema} FROM PUBLIC`);
       await client.query(`REVOKE ALL ON ALL FUNCTIONS IN SCHEMA ${schema} FROM PUBLIC`);
+      if (welfareVerifierRole && contract.kind === 'companion') {
+        // PostgreSQL implicitly grants PUBLIC EXECUTE on new routines when the
+        // owning role has no explicit default ACL. A per-schema REVOKE cannot
+        // subtract that global built-in default, so pin the companion owner's
+        // global routine default. The family contract above proves that this
+        // owner maps to exactly one companion schema and no sibling schema.
+        await client.query(
+          `ALTER DEFAULT PRIVILEGES FOR ROLE ${quoteIdentifier(contract.ownerRole)} `
+          + 'REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC',
+        );
+      }
       await client.query(`REVOKE ALL ON ALL TABLES IN SCHEMA ${schema} FROM ${mappedRuntimeGrantees}`);
       await client.query(`REVOKE ALL ON ALL SEQUENCES IN SCHEMA ${schema} FROM ${mappedRuntimeGrantees}`);
       await client.query(`REVOKE ALL ON ALL FUNCTIONS IN SCHEMA ${schema} FROM ${mappedRuntimeGrantees}`);

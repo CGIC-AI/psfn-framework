@@ -378,6 +378,8 @@ describe('fleet-auth consistent family restore against real Postgres', () => {
         CREATE SCHEMA companion_one;
         CREATE TABLE companion_one.agent_background_work_jobs (job_id text PRIMARY KEY);
         CREATE TABLE companion_one.verifier_forbidden_table (id integer PRIMARY KEY);
+        CREATE FUNCTION companion_one.verifier_existing_function() RETURNS integer
+          LANGUAGE SQL AS 'SELECT 1';
       `);
       await companionTwo.query(`
         CREATE SCHEMA companion_two;
@@ -406,6 +408,19 @@ describe('fleet-auth consistent family restore against real Postgres', () => {
       await expect(prepareFleetSharedSchemaRuntime(sharedStartupOptions(database, {
         welfareVerifier,
       }))).resolves.toHaveLength(3);
+      const verifier = createPostgresPool(database.welfareVerifierUrl, { max: 1 });
+      try {
+        await expect(verifier.query('SELECT companion_one.verifier_existing_function()'))
+          .rejects.toThrow(/permission denied/i);
+        await ownerOne.query(`
+          CREATE FUNCTION companion_one.verifier_future_function() RETURNS integer
+            LANGUAGE SQL AS 'SELECT 2'
+        `);
+        await expect(verifier.query('SELECT companion_one.verifier_future_function()'))
+          .rejects.toThrow(/permission denied/i);
+      } finally {
+        await verifier.end();
+      }
 
       await ownerOne.query(
         `ALTER DEFAULT PRIVILEGES IN SCHEMA companion_one GRANT SELECT ON TABLES TO ${quoteIdentifier(WELFARE_VERIFIER_ROLE)}`,
@@ -1070,6 +1085,14 @@ describe('fleet-auth consistent family restore against real Postgres', () => {
         await expect(targetWelfareVerifier.query('SELECT marker FROM companion_one.restore_probe'))
           .rejects.toThrow(/permission denied/i);
         await expect(targetWelfareVerifier.query('CREATE TABLE companion_one.forbidden (id integer)'))
+          .rejects.toThrow(/permission denied/i);
+        await expect(targetWelfareVerifier.query('SELECT companion_one.restore_function()'))
+          .rejects.toThrow(/permission denied/i);
+        await targetCompanion.query(`
+          CREATE FUNCTION companion_one.posture_future_function() RETURNS TEXT
+            LANGUAGE SQL AS 'SELECT ''future''::text'
+        `);
+        await expect(targetWelfareVerifier.query('SELECT companion_one.posture_future_function()'))
           .rejects.toThrow(/permission denied/i);
         await expect(targetCompanion.query(`
           SELECT contact_lifecycle_state, contact_restore_state, contact_authority_version

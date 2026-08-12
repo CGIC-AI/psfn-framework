@@ -119,6 +119,9 @@ export interface PostgresSessionAdapters {
 
 export interface PostgresSessionAdaptersOptions extends PostgresTranscriptProjectionOptions {
   sessionsDir: string;
+  automataRetentionWriteBarrier?: {
+    assertWritable(sessionIdentities: readonly string[]): void;
+  };
 }
 
 type ExactTranscriptProjection = KeywordSearchableTranscriptProjection
@@ -862,7 +865,16 @@ export async function createDefaultPostgresSessionAdapters(
     sessionArchivePort: createFilesystemSessionArchivePort(),
     transcriptProjection,
     transcriptSearch: transcriptProjection,
-    turnRecordStore: createFilesystemTurnRecordStorePort(options.sessionsDir),
+    turnRecordStore: createFilesystemTurnRecordStorePort(options.sessionsDir, {
+      ...(options.automataRetentionWriteBarrier
+        ? {
+            assertWritable: record => options.automataRetentionWriteBarrier?.assertWritable([
+              record.sessionId ?? record.channelId,
+              record.channelId,
+            ]),
+          }
+        : {}),
+    }),
     turnRecordEligibilityFence: new PostgresTurnRecordEligibilityFence(
       pool,
       options.schema ?? 'default',

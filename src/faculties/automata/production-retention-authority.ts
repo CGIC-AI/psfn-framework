@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import type { AutomataBusEvent } from './bus/contract.js';
 import type { PostgresAutomataBusRuntimeStore } from './bus/runtime-store.js';
 import type { AutomataRunRecord } from './registry-contract.js';
-import type { AutomataRunRegistry } from './run-registry.js';
+import type { AutomataRunRegistry, AutomataRunStorePort } from './run-registry.js';
 import type {
   AutomataRetentionProof,
   AutomataRetentionProofPort,
@@ -47,13 +47,13 @@ function eventEvidenceReferences(events: readonly AutomataBusEvent[]): string[] 
   )))].sort();
 }
 
-function exactRun(
-  registry: AutomataRunRegistry,
+function matchingRun(
+  run: AutomataRunRecord | null,
   classification: AutomataSessionClassification,
 ): AutomataRunRecord | null {
-  const run = registry.getRun(classification.runId);
   if (!run
     || run.companionId !== classification.companionId
+    || run.runId !== classification.runId
     || run.automatonClass !== classification.automatonClass
     || run.workerGeneration !== classification.workerGeneration
     || !run.sessionIds.includes(classification.sessionId)) {
@@ -62,11 +62,25 @@ function exactRun(
   return run;
 }
 
+async function exactRun(
+  registry: AutomataRunRegistry,
+  runs: Pick<AutomataRunStorePort, 'loadExact'>,
+  classification: AutomataSessionClassification,
+): Promise<AutomataRunRecord | null> {
+  const hydrated = matchingRun(registry.getRun(classification.runId), classification);
+  if (hydrated) return hydrated;
+  return matchingRun(
+    await runs.loadExact(classification.companionId, classification.runId),
+    classification,
+  );
+}
+
 /** Durable run + Bus projection used by both eligibility and last-moment revalidation. */
 export class ProductionAutomataRetentionProofSource implements AutomataRetentionProofPort {
   constructor(private readonly options: {
     companionId: string;
     registry: AutomataRunRegistry;
+    runs: Pick<AutomataRunStorePort, 'loadExact'>;
     bus: PostgresAutomataBusRuntimeStore;
   }) {}
 
@@ -74,7 +88,7 @@ export class ProductionAutomataRetentionProofSource implements AutomataRetention
     classification: AutomataSessionClassification,
   ): Promise<AutomataRetentionProof | null> {
     if (classification.companionId !== this.options.companionId) return null;
-    const run = exactRun(this.options.registry, classification);
+    const run = await exactRun(this.options.registry, this.options.runs, classification);
     if (!run) return null;
     const history = (await this.options.bus.readHistory({
       companionId: this.options.companionId,
@@ -130,10 +144,23 @@ export class ProductionAutomataPermanentReferenceCustody implements PermanentRef
   constructor(private readonly options: {
     companionId: string;
     registry: AutomataRunRegistry;
+    runs: Pick<AutomataRunStorePort, 'loadExact'>;
     bus: PostgresAutomataBusRuntimeStore;
   }) {}
 
-  async assertResolvable(references: readonly string[]): Promise<void> {
+  async assertResolvable(
+    references: readonly string[],
+    target?: { companionId: string; runId: string },
+  ): Promise<void> {
+    if (target && target.companionId !== this.options.companionId) {
+      throw new Error('Automata retention custody companion scope mismatch');
+    }
+    const exact = target
+      ? await this.options.runs.loadExact(target.companionId, target.runId)
+      : null;
+    if (exact && (exact.companionId !== this.options.companionId || exact.runId !== target?.runId)) {
+      throw new Error('Automata retention custody exact run scope mismatch');
+    }
     const history = await this.options.bus.readHistory({
       companionId: this.options.companionId,
       audience: 'operator',
@@ -146,6 +173,14 @@ export class ProductionAutomataPermanentReferenceCustody implements PermanentRef
         `automata-run:${run.runId}`,
         ...run.artifacts.filter(artifact => artifact.custody === 'durable').map(artifact => artifact.ref),
       ]),
+      ...(exact
+        ? [
+            `automata-run:${exact.runId}`,
+            ...exact.artifacts
+              .filter(artifact => artifact.custody === 'durable')
+              .map(artifact => artifact.ref),
+          ]
+        : []),
     ]);
     for (const reference of references) {
       if (!resolvable.has(reference)) {

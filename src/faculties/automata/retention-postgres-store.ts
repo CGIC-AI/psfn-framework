@@ -2,6 +2,10 @@ import type { QueryResultRow } from 'pg';
 import { isDeepStrictEqual } from 'node:util';
 import { isRecord } from '../../shared/utils/types.js';
 import { requireAutomataClass } from './registry-contract.js';
+import {
+  PostgresAutomataCompanionMutationFence,
+  type AutomataMutationSqlPool,
+} from './retention-mutation-fence.js';
 import type {
   AutomataRetentionAuditEvent,
   AutomataRetentionStorePort,
@@ -260,25 +264,31 @@ function auditParams(event: AutomataRetentionAuditEvent): unknown[] {
 
 /** Durable, append-only Postgres retention classification and audit adapter. */
 export class PostgresAutomataRetentionStore implements AutomataRetentionStorePort {
-  constructor(private readonly pool: AutomataRetentionSqlPool) {}
+  private readonly mutationFence: PostgresAutomataCompanionMutationFence;
+
+  constructor(private readonly pool: AutomataRetentionSqlPool & AutomataMutationSqlPool) {
+    this.mutationFence = new PostgresAutomataCompanionMutationFence(pool);
+  }
 
   async recordClassification(classification: SessionClassification): Promise<void> {
-    const result = await this.pool.query(`
-      INSERT INTO automata_session_classifications (${classificationColumns})
-      VALUES (${classificationParams(classification).map((_, index) => `$${index + 1}`).join(', ')})
-      ON CONFLICT (companion_id, session_id) DO NOTHING
-      RETURNING session_id
-    `, classificationParams(classification));
-    if (result.rowCount === 1) return;
-    const current = await this.pool.query<ClassificationRow>(`
-      SELECT ${classificationColumns}
-      FROM automata_session_classifications
-      WHERE companion_id = $1 AND session_id = $2
-    `, [classification.companionId, classification.sessionId]);
-    const stored = current.rows[0];
-    if (!stored || !isDeepStrictEqual(mapClassification(stored), classification)) {
-      throw new Error(`Session classification is immutable for ${classification.sessionId}`);
-    }
+    await this.mutationFence.runExclusive(classification, async client => {
+      const result = await client.query(`
+        INSERT INTO automata_session_classifications (${classificationColumns})
+        VALUES (${classificationParams(classification).map((_, index) => `$${index + 1}`).join(', ')})
+        ON CONFLICT (companion_id, session_id) DO NOTHING
+        RETURNING session_id
+      `, classificationParams(classification));
+      if (result.rowCount === 1) return;
+      const current = await client.query<ClassificationRow>(`
+        SELECT ${classificationColumns}
+        FROM automata_session_classifications
+        WHERE companion_id = $1 AND session_id = $2
+      `, [classification.companionId, classification.sessionId]);
+      const stored = current.rows[0];
+      if (!stored || !isDeepStrictEqual(mapClassification(stored), classification)) {
+        throw new Error(`Session classification is immutable for ${classification.sessionId}`);
+      }
+    });
   }
 
   async loadClassification(

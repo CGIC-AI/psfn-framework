@@ -170,6 +170,8 @@ export class SessionStore implements TranscriptSearchPort {
   private readonly tailOperations: SessionTailOperations;
   private readonly cogSecOperations: SessionCogSecOperations;
   private readonly cursorOperations: SessionCursorOperations;
+  private readonly automataRetentionWriteBarrier:
+    NonNullable<SessionStoreOptions['automataRetentionWriteBarrier']> | null;
   constructor(sessionsDir: string, options: SessionStoreOptions = {}) {
     this.sessionsDir = sessionsDir;
     this.maxHotChannels = Math.max(
@@ -194,7 +196,20 @@ export class SessionStore implements TranscriptSearchPort {
     } else if (supportsKeywordSearch(this.transcriptProjection)) {
       this.transcriptSearch = this.transcriptProjection;
     }
-    this.turnRecordStore = options.turnRecordStore ?? createFilesystemTurnRecordStorePort(this.sessionsDir);
+    this.automataRetentionWriteBarrier = options.automataRetentionWriteBarrier ?? null;
+    this.turnRecordStore = options.turnRecordStore ?? createFilesystemTurnRecordStorePort(
+      this.sessionsDir,
+      {
+        ...(this.automataRetentionWriteBarrier
+          ? {
+              assertWritable: (record) => this.automataRetentionWriteBarrier?.assertWritable([
+                record.sessionId ?? record.channelId,
+                record.channelId,
+              ]),
+            }
+          : {}),
+      },
+    );
     this.turnRecordEligibilityFence = options.turnRecordEligibilityFence ?? null;
     this.cursorOperations = new SessionCursorOperations({
       sessionsDir: this.sessionsDir,
@@ -257,6 +272,9 @@ export class SessionStore implements TranscriptSearchPort {
       upsertChannelIndex: this.upsertChannelIndex.bind(this),
       getEntriesInRange: this.cursorOperations.getEntriesInRange.bind(this.cursorOperations),
       refreshChannelIndexFromDisk: this.refreshChannelIndexFromDisk.bind(this),
+      assertSessionWritable: (sessionId, channelId) => {
+        this.automataRetentionWriteBarrier?.assertWritable([sessionId, channelId]);
+      },
     });
   }
 
@@ -685,20 +703,32 @@ export class SessionStore implements TranscriptSearchPort {
     seed: SessionFileSeed,
     writer: (cache: ChannelCache, renewLease: () => void) => T,
   ): T {
+    this.assertChannelWritable(channelId);
     const cache = this.ensureChannelForWrite(channelId, seed);
-    return withSessionJournalWriteLock(cache.archivePaths[0]!, (renewLease) => (
-      writer(this.reconcileWriteCache(cache), renewLease)
-    ));
+    return withSessionJournalWriteLock(cache.archivePaths[0]!, (renewLease) => {
+      this.assertChannelWritable(channelId, cache);
+      return writer(this.reconcileWriteCache(cache), renewLease);
+    });
   }
   private withLockedExistingChannelWrite<T>(
     channelId: string,
     writer: (cache: ChannelCache, renewLease: () => void) => T,
   ): T | null {
+    this.assertChannelWritable(channelId);
     const cache = this.getLoadedCache(channelId) ?? this.loadExistingChannelCache(channelId);
     if (!cache) return null;
-    return withSessionJournalWriteLock(cache.archivePaths[0]!, (renewLease) => (
-      writer(this.reconcileWriteCache(cache), renewLease)
-    ));
+    return withSessionJournalWriteLock(cache.archivePaths[0]!, (renewLease) => {
+      this.assertChannelWritable(channelId, cache);
+      return writer(this.reconcileWriteCache(cache), renewLease);
+    });
+  }
+  private assertChannelWritable(channelId: string, cache?: ChannelCache): void {
+    const sessionId = cache
+      ? this.resolveCacheSessionKey(cache)
+      : this.resolveSessionId(channelId) ?? channelId;
+    this.automataRetentionWriteBarrier?.assertWritable(
+      sessionId === channelId ? [sessionId] : [sessionId, channelId],
+    );
   }
   private fingerprintArchive(cache: ChannelCache): string | null {
     return fingerprintSessionJournalChain(this.journalRuntime, cache);

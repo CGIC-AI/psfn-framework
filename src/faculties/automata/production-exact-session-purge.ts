@@ -42,6 +42,13 @@ export interface ExactSessionPurgeExclusiveFencePort {
   runExclusive<T>(input: ExactSessionPurgeInput, operation: () => Promise<T>): Promise<T>;
 }
 
+export interface ExactSessionWriteBarrierPort {
+  seal(
+    input: ExactSessionPurgeInput,
+    target: ExactSessionPurgeResolvedTarget,
+  ): Promise<void>;
+}
+
 export interface ExactSessionSurfaceDeleteResult {
   status: 'removed' | 'already_absent';
   removedCount: number;
@@ -441,6 +448,7 @@ export class ProductionExactSessionPurge implements ExactSessionPurgePort {
     authority: ExactSessionPurgeTargetAuthorityPort;
     custody: PermanentReferenceCustodyPort;
     fence: ExactSessionPurgeExclusiveFencePort;
+    writeBarrier: ExactSessionWriteBarrierPort;
     sagaStore: ExactSessionPurgeSagaStorePort;
     surfaces: Record<AutomataSessionPurgeSurface, ExactSessionSurfacePurgePort>;
   }) {}
@@ -463,11 +471,12 @@ export class ProductionExactSessionPurge implements ExactSessionPurgePort {
       assertSagaMatchesInput(saga, input);
     }
 
+    await this.ports.writeBarrier.seal(input, saga.target);
     await this.ports.authority.revalidate(input, saga.target);
-    await this.ports.custody.assertResolvable(saga.preserveReferences);
+    await this.ports.custody.assertResolvable(saga.preserveReferences, input);
     if (saga.status === 'completed') {
       await this.verifyAllAbsent(input, saga);
-      await this.ports.custody.assertResolvable(saga.preserveReferences);
+      await this.ports.custody.assertResolvable(saga.preserveReferences, input);
       return reportFromSaga(saga, 'already_purged');
     }
 
@@ -497,7 +506,7 @@ export class ProductionExactSessionPurge implements ExactSessionPurgePort {
 
     try {
       await this.verifyAllAbsent(input, saga);
-      await this.ports.custody.assertResolvable(saga.preserveReferences);
+      await this.ports.custody.assertResolvable(saga.preserveReferences, input);
       await this.ports.authority.revalidate(input, saga.target);
     } catch (error) {
       throw new ExactSessionPurgeIncompleteError(cloneSaga(saga), null, error);

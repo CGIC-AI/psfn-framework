@@ -91,6 +91,7 @@ function harness(options: {
       authority: { resolveAndAuthorize, revalidate },
       custody: { assertResolvable },
       fence: { runExclusive },
+      writeBarrier: { seal: async () => undefined },
       sagaStore,
       surfaces,
     }),
@@ -98,6 +99,96 @@ function harness(options: {
 }
 
 describe('ProductionExactSessionPurge', () => {
+  it('retries without deleting when a fenced proof writer wins the purge race', async () => {
+    let queue = Promise.resolve();
+    const fence = {
+      async runExclusive<T>(_scope: unknown, operation: () => Promise<T>): Promise<T> {
+        const predecessor = queue;
+        let release!: () => void;
+        queue = new Promise<void>(resolve => {
+          release = resolve;
+        });
+        await predecessor;
+        try {
+          return await operation();
+        } finally {
+          release();
+        }
+      },
+    };
+    let proofRevision = input.targetRevision;
+    let writerStarted!: () => void;
+    let releaseWriter!: () => void;
+    const writerReady = new Promise<void>(resolve => {
+      writerStarted = resolve;
+    });
+    const writerRelease = new Promise<void>(resolve => {
+      releaseWriter = resolve;
+    });
+    const writer = fence.runExclusive(input, async () => {
+      writerStarted();
+      await writerRelease;
+      proofRevision = 'revision-b';
+    });
+    await writerReady;
+
+    const surfaces = Object.fromEntries(
+      EXACT_SESSION_PURGE_SURFACE_ORDER.map(surface => [surface, new FakeSurface()]),
+    ) as Record<AutomataSessionPurgeSurface, FakeSurface>;
+    const purge = new ProductionExactSessionPurge({
+      authority: {
+        resolveAndAuthorize: async () => automataTarget,
+        revalidate: async () => {
+          if (proofRevision !== input.targetRevision) {
+            throw new Error('Exact-session purge targetRevision changed');
+          }
+        },
+      },
+      custody: { assertResolvable: async () => undefined },
+      fence,
+      writeBarrier: { seal: async () => undefined },
+      sagaStore: new InMemoryExactSessionPurgeSagaStore(),
+      surfaces,
+    });
+    const purgeResult = purge.purgeExactSession(input);
+    releaseWriter();
+    await writer;
+
+    await expect(purgeResult).rejects.toThrow('targetRevision changed');
+    expect(Object.values(surfaces).every(surface => surface.removeCalls === 0)).toBe(true);
+  });
+
+  it('seals canonical session writers before the first irreversible delete', async () => {
+    let sealed = false;
+    const removeOrder: string[] = [];
+    const surfaces = Object.fromEntries(EXACT_SESSION_PURGE_SURFACE_ORDER.map(surface => [surface, {
+      remove: async () => {
+        expect(sealed).toBe(true);
+        removeOrder.push(surface);
+        return { status: 'removed' as const, removedCount: 1 };
+      },
+      isAbsent: async () => true,
+    }])) as Record<AutomataSessionPurgeSurface, ExactSessionSurfacePurgePort>;
+    const purge = new ProductionExactSessionPurge({
+      authority: {
+        resolveAndAuthorize: async () => automataTarget,
+        revalidate: async () => undefined,
+      },
+      custody: { assertResolvable: async () => undefined },
+      fence: { runExclusive: async (_scope, operation) => await operation() },
+      writeBarrier: {
+        seal: async () => {
+          sealed = true;
+        },
+      },
+      sagaStore: new InMemoryExactSessionPurgeSagaStore(),
+      surfaces,
+    });
+
+    await expect(purge.purgeExactSession(input)).resolves.toMatchObject({ status: 'purged' });
+    expect(removeOrder).toEqual(EXACT_SESSION_PURGE_SURFACE_ORDER);
+  });
+
   it('records pending/completed around every surface and succeeds only after final absence', async () => {
     const test = harness();
     await expect(test.purge.purgeExactSession(input)).resolves.toEqual({

@@ -143,6 +143,7 @@ export interface SessionTurnRecordOperationsContext {
   upsertChannelIndex(sessionId: string, entry: ChannelIndexEntry): void;
   getEntriesInRange(channelId: string, startId: number, endId: number): SessionEntry[];
   refreshChannelIndexFromDisk(): void;
+  assertSessionWritable(sessionId: string, channelId: string): void;
 }
 
 export class SessionTurnRecordOperations {
@@ -159,6 +160,7 @@ export class SessionTurnRecordOperations {
       record.sessionId ?? record.channelId,
       record.turnId,
       async () => {
+        this.context.assertSessionWritable(record.sessionId ?? record.channelId, record.channelId);
         this.context.turnRecordStore.appendTurnRecord(
           slimTurnRecordMemoryCandidatesForAppend(
             slimTurnRecordSessionEntriesForAppend(record),

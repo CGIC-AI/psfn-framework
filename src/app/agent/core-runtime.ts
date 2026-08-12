@@ -235,6 +235,7 @@ export interface AgentCoreRuntimeOptions {
   hubIdentityEnrollmentStore?: HubIdentityEnrollmentStorePort;
   automataRuntime?: {
     registry: AutomataRunRegistry;
+    runs: Pick<import('../../faculties/automata/run-registry.js').AutomataRunStorePort, 'loadExact'>;
     store: PostgresAutomataBusRuntimeStore;
     retentionStore: PostgresAutomataRetentionStore;
     purgeSagaStore: PostgresExactSessionPurgeSagaStore;
@@ -415,6 +416,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     continuityChannelIds: options.continuityChannelIds,
     promptRegistry,
     sessionIntegrityProvider: gateway.createSessionIntegrityProvider(),
+    automataRetentionCompanionId: resolveCompanionIdFromConfig(config),
   });
   const fatigueRuntime = composeFatigueBudgetRuntime({ config, eventBus });
   const fatigueRegulationReservations = config.multiCompanion === true
@@ -432,6 +434,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
           throw new Error('Automata retention runtime requires automata-policy.json');
         })(),
         registry: options.automataRuntime.registry,
+        runs: options.automataRuntime.runs,
         bus: options.automataRuntime.store,
         retentionStore: options.automataRuntime.retentionStore,
         sagaStore: options.automataRuntime.purgeSagaStore,
@@ -439,6 +442,15 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
         redisTail: sessionComposition.sessionTailCache instanceof RedisSessionTailCache
           ? sessionComposition.sessionTailCache
           : null,
+        writeBarrier: {
+          seal: async (input, target) => {
+            sessionComposition.exactSessionWriteBarrier.seal(input, target);
+            await Promise.all([
+              sessionComposition.sessionStore.flushSessionTailWrites(),
+              sessionComposition.exactSessionProjection.flushPendingWrites(),
+            ]);
+          },
+        },
       })
     : undefined;
   sessionManager.characterName = card.data.name;

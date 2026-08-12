@@ -183,11 +183,13 @@ describe('Automata assembled certification', () => {
       const proofs = new ProductionAutomataRetentionProofSource({
         companionId: COMPANION_ID,
         registry,
+        runs: new InMemoryAutomataRunStore(),
         bus,
       });
       const custody = new ProductionAutomataPermanentReferenceCustody({
         companionId: COMPANION_ID,
         registry,
+        runs: new InMemoryAutomataRunStore(),
         bus,
       });
       const authority = new ProductionExactSessionPurgeTargetAuthority({
@@ -232,6 +234,7 @@ describe('Automata assembled certification', () => {
         authority,
         custody,
         fence: { runExclusive: async (_input, operation) => await operation() },
+        writeBarrier: { seal: async () => undefined },
         sagaStore: new InMemoryExactSessionPurgeSagaStore(),
         surfaces,
       });
@@ -274,6 +277,89 @@ describe('Automata assembled certification', () => {
     } finally {
       rmSync(sessionsDir, { recursive: true, force: true });
     }
+  });
+
+  it('recovers terminal cleanup proof from an exact durable run after restart retention', async () => {
+    const policy = loadAutomataPolicySeedDefaults();
+    const runs = new InMemoryAutomataRunStore();
+    const initial = await AutomataRunRegistry.hydrate({
+      companionId: COMPANION_ID,
+      policy,
+      store: runs,
+      nowMs: 1,
+    });
+    await initial.register({
+      runId: RUN_ID,
+      automatonClass: 'subagent.bounded',
+      workerId: 'worker-retention',
+      taskId: 'task-retention',
+      taskLabel: 'Certify restart retention',
+      taskSummary: 'Recover exact durable proof at raw cleanup time.',
+      sessionIds: [AUTOMATA_SESSION_ID],
+      artifacts: [{ kind: 'report', ref: 'artifact:durable-report', custody: 'durable' }],
+      createdAtMs: 1,
+    });
+    await initial.transition(RUN_ID, {
+      status: 'running',
+      reason: 'agent_initialized',
+      atMs: 2,
+    });
+    await initial.transition(RUN_ID, {
+      status: 'completed',
+      reason: 'completed',
+      outcome: 'completed',
+      atMs: 3,
+    });
+    const cleanupAtMs = policy.rawSessionRetentionMs + 1;
+    const restarted = await AutomataRunRegistry.hydrate({
+      companionId: COMPANION_ID,
+      policy,
+      store: runs,
+      nowMs: cleanupAtMs,
+    });
+    expect(restarted.getRun(RUN_ID)).toBeNull();
+
+    const bus = {
+      readHistory: vi.fn(async () => [terminalFinding()]),
+    } as unknown as PostgresAutomataBusRuntimeStore;
+    const proofs = new ProductionAutomataRetentionProofSource({
+      companionId: COMPANION_ID,
+      registry: restarted,
+      runs,
+      bus,
+    });
+
+    await expect(proofs.loadProof({
+      schemaVersion: 1,
+      companionId: COMPANION_ID,
+      sessionId: AUTOMATA_SESSION_ID,
+      ownership: 'automata',
+      runId: RUN_ID,
+      automatonClass: 'subagent.bounded',
+      workerGeneration: 1,
+      classifiedAtMs: 1,
+      retentionDeadlineMs: cleanupAtMs,
+    })).resolves.toMatchObject({
+      companionId: COMPANION_ID,
+      runId: RUN_ID,
+      runStatus: 'completed',
+      generationState: 'terminal',
+    });
+
+    const custody = new ProductionAutomataPermanentReferenceCustody({
+      companionId: COMPANION_ID,
+      registry: restarted,
+      runs,
+      bus,
+    });
+    await expect(custody.assertResolvable(['artifact:durable-report'], {
+      companionId: COMPANION_ID,
+      runId: RUN_ID,
+    })).resolves.toBeUndefined();
+    await expect(custody.assertResolvable(['artifact:durable-report'], {
+      companionId: 'companion-b',
+      runId: RUN_ID,
+    })).rejects.toThrow('companion scope mismatch');
   });
 
   it('measures zero Bus calls for foreground retrieval against one bounded eligible briefing', async () => {

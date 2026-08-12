@@ -2,10 +2,16 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PostgresAutomataRunStore } from './automata-run-store.js';
 
 const mocks = vi.hoisted(() => ({
+  updateRowCount: { value: 1 },
   pool: {
-    query: vi.fn(async () => ({ rowCount: 1 })),
+    query: vi.fn(async (text: string) => ({
+      rows: [],
+      rowCount: text.includes('UPDATE automata_runs') ? mocks.updateRowCount.value : 0,
+    })),
+    connect: vi.fn(),
     end: vi.fn(async () => undefined),
   },
+  release: vi.fn(),
   createPostgresPool: vi.fn(),
   ensurePostgresSchema: vi.fn(async () => undefined),
   queryRows: vi.fn(async () => [] as unknown[]),
@@ -43,15 +49,21 @@ const ROW = {
 };
 
 beforeEach(() => {
+  mocks.updateRowCount.value = 1;
+  mocks.pool.connect.mockReset().mockResolvedValue({
+    query: mocks.pool.query,
+    release: mocks.release,
+  });
   mocks.createPostgresPool.mockReset().mockReturnValue(mocks.pool);
   mocks.ensurePostgresSchema.mockClear();
   mocks.queryRows.mockReset().mockResolvedValue([]);
-  mocks.pool.query.mockReset().mockResolvedValue({ rowCount: 1 });
+  mocks.pool.query.mockClear();
+  mocks.release.mockClear();
   mocks.pool.end.mockClear();
 });
 
 describe('PostgresAutomataRunStore', () => {
-  it('loads only retained rows inside its fixed companion scope', async () => {
+  it('loads retained terminal rows and all active rows inside its fixed companion scope', async () => {
     mocks.queryRows.mockResolvedValue([ROW]);
     const store = await PostgresAutomataRunStore.connect('postgres://test', 'companion-a', {
       schema: 'companion_a',
@@ -66,11 +78,27 @@ describe('PostgresAutomataRunStore', () => {
     }));
     expect(mocks.queryRows).toHaveBeenCalledWith(
       mocks.pool,
-      expect.stringContaining('WHERE companion_id = $1 AND retention_deadline_ms > $2'),
+      expect.stringContaining("status NOT IN ('completed', 'failed', 'cancelled')"),
       ['companion-a', 100],
     );
     expect(rows[0]).toMatchObject({ runId: 'run-1', taskId: 'task-1', status: 'running' });
     await expect(store.loadRetained('companion-b', 100)).rejects.toThrow('companion scope mismatch');
+  });
+
+  it('loads one exact durable run after discovery retention without widening companion scope', async () => {
+    mocks.queryRows.mockResolvedValue([ROW]);
+    const store = await PostgresAutomataRunStore.connect('postgres://test', 'companion-a');
+
+    await expect(store.loadExact('companion-a', 'run-1')).resolves.toMatchObject({
+      companionId: 'companion-a',
+      runId: 'run-1',
+    });
+    expect(mocks.queryRows).toHaveBeenCalledWith(
+      mocks.pool,
+      expect.stringContaining('WHERE companion_id = $1 AND run_id = $2'),
+      ['companion-a', 'run-1'],
+    );
+    await expect(store.loadExact('companion-b', 'run-1')).rejects.toThrow('companion scope mismatch');
   });
 
   it('uses prior-status compare-and-swap for transitions', async () => {
@@ -102,7 +130,7 @@ describe('PostgresAutomataRunStore', () => {
       expect.stringContaining('status = $23'),
       expect.arrayContaining(['companion-a', 'run-1', 'running']),
     );
-    mocks.pool.query.mockResolvedValueOnce({ rowCount: 0 });
+    mocks.updateRowCount.value = 0;
     await expect(store.update(record, 'running')).rejects.toThrow('changed concurrently');
   });
 });

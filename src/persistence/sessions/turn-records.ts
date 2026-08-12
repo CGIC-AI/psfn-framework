@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import {
   existsSync,
   linkSync,
+  mkdirSync,
   statSync,
   unlinkSync,
 } from 'node:fs';
@@ -1060,34 +1061,23 @@ function rotateActiveSegmentLocked(dir: string, sanitizedChannelId: string, acti
  * re-evaluated under the lock because the loser of the race sees the new,
  * small active file and must skip.
  */
-function maybeRotateActiveSegment(
+function maybeRotateActiveSegmentLocked(
   dir: string,
   sanitizedChannelId: string,
   activePath: string,
   segmentMaxBytes: number,
 ): void {
-  let preLockSize: number;
+  let size: number;
   try {
-    preLockSize = statSync(activePath).size;
+    size = statSync(activePath).size;
   } catch (error) {
     // No active file (never written, or a concurrent rotation just moved it):
     // nothing to rotate; the append recreates it.
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
     throw error;
   }
-  if (preLockSize < segmentMaxBytes) return;
-  withTurnRecordRotationLock(activePath, () => {
-    let size: number;
-    try {
-      size = statSync(activePath).size;
-    } catch (error) {
-      // A concurrent writer already rotated while we waited for the lock.
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
-      throw error;
-    }
-    if (size < segmentMaxBytes) return;
-    rotateActiveSegmentLocked(dir, sanitizedChannelId, activePath);
-  });
+  if (size < segmentMaxBytes) return;
+  rotateActiveSegmentLocked(dir, sanitizedChannelId, activePath);
 }
 
 /**
@@ -1636,15 +1626,19 @@ export function appendTurnRecordWithRotation(
   sessionsDir: string,
   record: TurnRecord,
   segmentMaxBytes: number,
+  assertWritable?: (record: TurnRecord) => void,
 ): void {
   const normalized = normalizeTurnRecord(record, record.channelId);
   const sanitized = sanitizeChannelId(record.channelId);
   const dir = turnRecordsDir(sessionsDir);
   const activePath = join(dir, `${sanitized}.jsonl`);
+  mkdirSync(dir, { recursive: true });
 
-  maybeRotateActiveSegment(dir, sanitized, activePath, segmentMaxBytes);
-
-  appendJsonLine(activePath, normalized);
+  withTurnRecordRotationLock(activePath, () => {
+    assertWritable?.(normalized);
+    maybeRotateActiveSegmentLocked(dir, sanitized, activePath, segmentMaxBytes);
+    appendJsonLine(activePath, normalized);
+  });
 }
 
 export interface FilesystemTurnRecordStoreOptions {
@@ -1653,6 +1647,8 @@ export interface FilesystemTurnRecordStoreOptions {
   recoveryMaxRowBytes?: number;
   /** Deterministic concurrency seam used by snapshot/rotation tests. */
   recoverySnapshotHook?: (sourceChannelId: string) => void | Promise<void>;
+  /** Runs under the channel rotation lock immediately before durable append. */
+  assertWritable?: (record: TurnRecord) => void;
 }
 
 export function createFilesystemTurnRecordStorePort(
@@ -1691,7 +1687,12 @@ export function createFilesystemTurnRecordStorePort(
         ),
         sharedStore,
       );
-      appendTurnRecordWithRotation(sessionsDir, slimmed, segmentMaxBytes);
+      appendTurnRecordWithRotation(
+        sessionsDir,
+        slimmed,
+        segmentMaxBytes,
+        options.assertWritable,
+      );
     },
     readRecentTurnRecords: (channelId, limit) => {
       if (limit <= 0) return [];

@@ -22,6 +22,7 @@ const ALLOWED_TRANSITIONS: Readonly<Record<AutomataRunStatus, readonly AutomataR
 
 export interface AutomataRunStorePort {
   loadRetained(companionId: string, nowMs: number): Promise<AutomataRunRecord[]>;
+  loadExact(companionId: string, runId: string): Promise<AutomataRunRecord | null>;
   insert(record: AutomataRunRecord): Promise<void>;
   update(record: AutomataRunRecord, previousStatus: AutomataRunStatus): Promise<void>;
   close?(): Promise<void>;
@@ -69,8 +70,16 @@ export class InMemoryAutomataRunStore implements AutomataRunStorePort {
 
   async loadRetained(companionId: string, nowMs: number): Promise<AutomataRunRecord[]> {
     return [...this.records.values()]
-      .filter(record => record.companionId === companionId && record.retentionDeadlineMs > nowMs)
+      .filter(record => (
+        record.companionId === companionId
+        && (!isTerminalStatus(record.status) || record.retentionDeadlineMs > nowMs)
+      ))
       .map(cloneAutomataRun);
+  }
+
+  async loadExact(companionId: string, runId: string): Promise<AutomataRunRecord | null> {
+    const record = this.records.get(runId);
+    return record?.companionId === companionId ? cloneAutomataRun(record) : null;
   }
 
   async insert(record: AutomataRunRecord): Promise<void> {

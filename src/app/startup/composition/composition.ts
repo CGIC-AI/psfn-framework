@@ -130,6 +130,7 @@ import {
   resolveValuesJournalPath,
 } from '../../../persistence/layout.js';
 import { createDefaultPostgresSessionAdapters } from '../../../persistence/sessions/postgres-adapters.js';
+import { FilesystemAutomataRetentionWriteBarrier } from '../../../persistence/sessions/automata-retention-write-barrier.js';
 import { awaitPostgresStoreReadiness } from '../../../persistence/postgres/runtime-readiness.js';
 import { CogSecEventStore } from '../../../core/cogsec/events.js';
 import { createSessionIntegrityIncidentObserver } from '../../../core/cogsec/session-integrity-incident.js';
@@ -146,6 +147,7 @@ export interface SessionComposition {
   sessionTailCache: SessionTailCachePort | null;
   sessionsDir: string;
   exactSessionProjection: Awaited<ReturnType<typeof createDefaultPostgresSessionAdapters>>['exactSessionProjection'];
+  exactSessionWriteBarrier: FilesystemAutomataRetentionWriteBarrier;
 }
 
 export interface SessionCompositionOptions {
@@ -169,6 +171,8 @@ export interface SessionCompositionOptions {
    * disables it regardless of config.
    */
   sessionTailCache?: SessionTailCachePort | null;
+  /** Exact runtime identity used by retention write barriers in full agent composition. */
+  automataRetentionCompanionId?: string;
 }
 
 /**
@@ -204,6 +208,7 @@ function createSessionComposition(
   sessionAdapters: Awaited<ReturnType<typeof createDefaultPostgresSessionAdapters>>,
   sessionsDir: string,
   sessionTailCache: SessionTailCachePort | null,
+  exactSessionWriteBarrier: FilesystemAutomataRetentionWriteBarrier,
 ): SessionComposition {
   const companionDataDir = resolveConfiguredCompanionDataDir(options.config);
   // Keep the adapter contract required at compile time while still rejecting
@@ -232,6 +237,7 @@ function createSessionComposition(
     turnRecordEligibilityFence,
     tailCache: sessionTailCache,
     integrityObserver,
+    automataRetentionWriteBarrier: exactSessionWriteBarrier,
   });
   const sessionManager = new SessionManager(
     sessionStore,
@@ -266,6 +272,7 @@ function createSessionComposition(
     sessionTailCache,
     sessionsDir,
     exactSessionProjection: sessionAdapters.exactSessionProjection,
+    exactSessionWriteBarrier,
   };
 }
 
@@ -300,17 +307,30 @@ export async function composeSessionRuntimeAsync(
   const redactionDriftObserver = createProjectionDriftIncidentObserver({
     cogSecEvents: () => new CogSecEventStore(resolveCogSecEventsPath(companionDataDir)),
   });
+  const exactSessionWriteBarrier = new FilesystemAutomataRetentionWriteBarrier(
+    sessionsDir,
+    options.automataRetentionCompanionId
+      ?? options.config.companionId
+      ?? 'unscoped-session-composition',
+  );
   const sessionAdapters = await awaitPostgresStoreReadiness(
     'session_transcripts',
     () => createDefaultPostgresSessionAdapters(databaseUrl, {
       sessionsDir,
       redactionDriftObserver,
+      automataRetentionWriteBarrier: exactSessionWriteBarrier,
       ...(postgresSchema ? { schema: postgresSchema } : {}),
       ...(postgresRole ? { role: postgresRole } : {}),
     }),
   );
   const sessionTailCache = await composeSessionTailCache(options.config, options.sessionTailCache);
-  return createSessionComposition(options, sessionAdapters, sessionsDir, sessionTailCache);
+  return createSessionComposition(
+    options,
+    sessionAdapters,
+    sessionsDir,
+    sessionTailCache,
+    exactSessionWriteBarrier,
+  );
 }
 
 export async function composeMemoryStoreAsync(

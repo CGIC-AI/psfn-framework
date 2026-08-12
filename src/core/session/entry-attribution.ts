@@ -1,4 +1,9 @@
 import type { SessionEntry, SessionEntryRole } from './types.js';
+import {
+  CAPABILITY_TIER_CHANGE_NOTICE_AUTHOR_ID,
+  CAPABILITY_TIER_CHANGE_NOTICE_AUTHOR_NAME,
+  CAPABILITY_TIER_CHANGE_NOTICE_PREFIX,
+} from '../../system/capabilities/change-notice.js';
 
 interface ParsedTurnMetadata {
   requestId?: string;
@@ -252,6 +257,16 @@ function hasIntentionPrefix(content: string): boolean {
     || content.startsWith('[SYSTEM: Intention Appraisal]');
 }
 
+function claimsCapabilityTierChangeNotice(entry: {
+  content: string;
+  authorId?: string;
+  authorName?: string;
+}): boolean {
+  return entry.authorId?.trim() === CAPABILITY_TIER_CHANGE_NOTICE_AUTHOR_ID
+    || entry.authorName?.trim() === CAPABILITY_TIER_CHANGE_NOTICE_AUTHOR_NAME
+    || entry.content.trimStart().startsWith(CAPABILITY_TIER_CHANGE_NOTICE_PREFIX);
+}
+
 function stripBracketedPrefix(content: string, label: string): string {
   const trimmed = content.trimStart();
   const prefix = `[${label}]`;
@@ -287,6 +302,7 @@ export function isIntentionAppraisalArtifact(
     || startsWithIntentionFollowUp(turn.requestId)
     || startsWithIntentionFollowUp(turn.sourceMessageId)
     || hasIntentionPrefix(content)
+    || claimsCapabilityTierChangeNotice(entry)
   );
 }
 

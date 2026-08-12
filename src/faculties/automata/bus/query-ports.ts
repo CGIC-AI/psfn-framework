@@ -79,7 +79,7 @@ export interface AutomataBusEmbeddingIdentity {
   dimensions: number;
 }
 
-/** Supply the configured, usage-accounted PSFN embedding provider here. */
+/** Supply the configured, usage-accounted gateway embedding provider here. */
 export interface AutomataBusEmbeddingPort {
   readonly identity: AutomataBusEmbeddingIdentity;
   embed(text: string, options?: { signal?: AbortSignal }): Promise<Float32Array>;

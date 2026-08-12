@@ -214,7 +214,7 @@ export async function connectPostgresAutomataBusRuntimeStore(
   options: { schema?: string; role?: string } = {},
 ): Promise<PostgresAutomataBusRuntimeStore> {
   const pool: Pool = createPostgresPool(databaseUrl, {
-    applicationName: 'psfn-automata-bus',
+    applicationName: 'automata-bus',
     allowExitOnIdle: true,
     schema: options.schema,
     role: options.role,

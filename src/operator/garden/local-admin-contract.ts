@@ -77,10 +77,7 @@ import { createPostgresAnalysisWorkbenchTraceStoreFromConfig } from '../../persi
 import { createPostgresObserverEvalSidecarStore } from '../../core/eval/observer-sidecar/persistence.js';
 import { createOwnerFileConfigStore } from '../../system/config/config-store.js';
 import { AdminPartnerAffectShadowDataService } from './services/partner-affect-shadow-service.js';
-import {
-  AdminAutomataDataService,
-  type AdminAutomataBusReadPort,
-} from './services/automata-service.js';
+import { AdminAutomataDataService, type AdminAutomataBusReadPort } from './services/automata-service.js';
 import type { PartnerAffectShadowStorePort } from '../../core/emotion/partner-affect/shadow-store-port.js';
 import {
   createDefaultObserverEvalSidecarSettings,

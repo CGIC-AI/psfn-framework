@@ -398,7 +398,7 @@ export class AdminAutomataDataService implements AdminAutomataService {
     const busTaskId = requireText(input.busTaskId, 'Automata Bus taskId');
     if (busClassId !== undefined) {
       try {
-        registry.listRuns({ classId: busClassId, limit: 1 });
+        registry.listRuns({ classId: busClassId, limit: readPolicy.defaultPageLimit });
       } catch (error) {
         throw new AdminAutomataQueryError(error instanceof Error ? error.message : 'Invalid Automata Bus class query');
       }

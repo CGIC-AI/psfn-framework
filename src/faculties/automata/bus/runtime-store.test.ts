@@ -137,6 +137,7 @@ describe('Automata Bus production runtime store', () => {
 
     await expect(assertAutomataBusPostgresReady(pool)).resolves.toBeUndefined();
     const store = new PostgresAutomataBusRuntimeStore(pool, 'companion-a', authority());
+    expect(store.getQueryPool()).toBe(pool);
     await expect(store.readHistory({
       companionId: 'companion-b',
       audience: 'operator',

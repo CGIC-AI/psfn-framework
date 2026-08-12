@@ -6,6 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { createPostgresPool, runPostgresMigrations } from '../../../persistence/postgres.js';
 import { POSTGRES_AUTOMATA_MIGRATIONS } from '../../../persistence/postgres/migrations.js';
+import { POSTGRES_VECTOR_EXTENSION_MIGRATION } from '../../../persistence/postgres/vector-extension-migration.js';
 import {
   planPostgresTenantAccess,
   provisionPostgresTenantAccess,
@@ -13,7 +14,7 @@ import {
 import { runBackupCycle } from '../../../persistence/backups/service.js';
 import { restorePostgresSchemaSlice } from '../../../persistence/backups/fleet-restore.js';
 import {
-  DEFAULT_POSTGRES_TEST_IMAGE,
+  PGVECTOR_POSTGRES_TEST_IMAGE,
   startPostgresTestHarness,
   type PostgresTestHarness,
 } from '../../../test-support/postgres-test-harness.js';
@@ -31,7 +32,7 @@ const INTEGRATION_TIMEOUT_MS = 120_000;
 let harness: PostgresTestHarness | null = null;
 
 beforeAll(async () => {
-  harness = await startPostgresTestHarness({ image: DEFAULT_POSTGRES_TEST_IMAGE });
+  harness = await startPostgresTestHarness({ image: PGVECTOR_POSTGRES_TEST_IMAGE });
 }, INTEGRATION_TIMEOUT_MS);
 
 afterAll(async () => {
@@ -49,11 +50,33 @@ async function withStore<T>(
     max: 8,
   });
   try {
-    await runPostgresMigrations(pool, AUTOMATA_BUS_POSTGRES_SCHEMA_STATEMENTS);
+    await runPostgresMigrations(pool, [
+      POSTGRES_VECTOR_EXTENSION_MIGRATION,
+      ...AUTOMATA_BUS_POSTGRES_SCHEMA_STATEMENTS,
+    ]);
     return await operation(new PostgresAutomataBusStore(pool), pool);
   } finally {
     await pool.end();
   }
+}
+
+async function installVectorExtension(databaseUrl: string): Promise<void> {
+  const owner = createPostgresPool(databaseUrl, {
+    applicationName: 'automata-bus-vector-extension-provisioning',
+    allowExitOnIdle: true,
+    max: 1,
+  });
+  try {
+    await owner.query('CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA extensions');
+  } finally {
+    await owner.end();
+  }
+}
+
+function seededRelationCount(relation: typeof AUTOMATA_BUS_POSTGRES_RELATIONS[number]): string {
+  return relation === 'automata_bus_events' || relation === 'automata_bus_current_findings'
+    ? '1'
+    : '0';
 }
 
 function finding(overrides: Partial<AutomataBusEvent> = {}): AutomataBusEvent {
@@ -382,8 +405,12 @@ describe('PostgresAutomataBusStore real Postgres', () => {
         schema: 'automata_tenant_b',
         max: 2,
       });
-      await runPostgresMigrations(tenantA, AUTOMATA_BUS_POSTGRES_SCHEMA_STATEMENTS);
-      await runPostgresMigrations(tenantB, AUTOMATA_BUS_POSTGRES_SCHEMA_STATEMENTS);
+      const migrations = [
+        POSTGRES_VECTOR_EXTENSION_MIGRATION,
+        ...AUTOMATA_BUS_POSTGRES_SCHEMA_STATEMENTS,
+      ];
+      await runPostgresMigrations(tenantA, migrations);
+      await runPostgresMigrations(tenantB, migrations);
       const storeA = new PostgresAutomataBusStore(tenantA);
       const storeB = new PostgresAutomataBusStore(tenantB);
       const eventA = finding();
@@ -493,7 +520,10 @@ describe('PostgresAutomataBusStore real Postgres', () => {
     const sessionsDir = join(root, 'sessions');
     mkdirSync(sessionsDir, { recursive: true });
     try {
-      await runPostgresMigrations(source, AUTOMATA_BUS_POSTGRES_SCHEMA_STATEMENTS);
+      await runPostgresMigrations(source, [
+        POSTGRES_VECTOR_EXTENSION_MIGRATION,
+        ...AUTOMATA_BUS_POSTGRES_SCHEMA_STATEMENTS,
+      ]);
       const store = new PostgresAutomataBusStore(source);
       await store.append({
         companionId: 'companion-a',
@@ -517,6 +547,9 @@ describe('PostgresAutomataBusStore real Postgres', () => {
       });
       if (!backup.postgresDumpPath) throw new Error('Automata Bus backup did not create a dump');
       const restored = await harness.createDatabase();
+      // Schema-slice dumps reference the provisioned extension but intentionally
+      // do not own it. Restore into the same production prerequisite shape.
+      await installVectorExtension(restored.databaseUrl);
       await restorePostgresSchemaSlice({
         dumpPath: backup.postgresDumpPath,
         schema,
@@ -535,7 +568,7 @@ describe('PostgresAutomataBusStore real Postgres', () => {
         await expect(assertAutomataBusPostgresReady(restoredPool)).resolves.toBeUndefined();
         for (const relation of AUTOMATA_BUS_POSTGRES_RELATIONS) {
           await expect(restoredPool.query(`SELECT COUNT(*)::text AS count FROM ${relation}`))
-            .resolves.toMatchObject({ rows: [{ count: '1' }] });
+            .resolves.toMatchObject({ rows: [{ count: seededRelationCount(relation) }] });
         }
         await expect(restoredPool.query('DELETE FROM automata_bus_events'))
           .rejects.toThrow(/append-only/u);
@@ -568,6 +601,9 @@ describe('PostgresAutomataBusStore real Postgres', () => {
         runtimeLoginRole: 'postgres',
         backupRole,
       });
+      // Deployment provisioning owns extension installation; the restricted
+      // runtime migration validates it and must never need CREATE EXTENSION.
+      await owner.query('CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA extensions');
       runtime = createPostgresPool(database.databaseUrl, {
         applicationName: 'automata-bus-runtime-role',
         schema,
@@ -601,7 +637,7 @@ describe('PostgresAutomataBusStore real Postgres', () => {
 
       for (const relation of AUTOMATA_BUS_POSTGRES_RELATIONS) {
         await expect(backup.query(`SELECT COUNT(*)::text AS count FROM ${relation}`))
-          .resolves.toMatchObject({ rows: [{ count: '1' }] });
+          .resolves.toMatchObject({ rows: [{ count: seededRelationCount(relation) }] });
       }
       await expect(backup.query('INSERT INTO automata_bus_events DEFAULT VALUES'))
         .rejects.toThrow(/permission denied/u);

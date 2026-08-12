@@ -103,6 +103,9 @@ describe('Postgres live schema migrations', () => {
   it('installs the Automata Bus after the run registry with an explicit rollback contract', () => {
     const sql = migrationSql(POSTGRES_AUTOMATA_MIGRATIONS);
 
+    expect(sql.indexOf("WHERE extension.extname = 'vector'")).toBeLessThan(
+      sql.indexOf('CREATE TABLE IF NOT EXISTS automata_bus_finding_vectors'),
+    );
     expect(sql.indexOf('CREATE TABLE IF NOT EXISTS automata_runs')).toBeLessThan(
       sql.indexOf('CREATE TABLE IF NOT EXISTS automata_bus_events'),
     );

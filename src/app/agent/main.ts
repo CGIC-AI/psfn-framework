@@ -1492,6 +1492,7 @@ async function main(): Promise<void> {
       await persistenceRuntime.socialPotStore?.close();
       await persistenceRuntime.speakingArbiterStore?.close();
       await persistenceRuntime.backgroundWorkStore.close();
+      await persistenceRuntime.automataBusStore.close();
       await persistenceRuntime.automataRunRegistry.close();
       await persistenceRuntime.introspectionLandmarkStore.close();
       await persistenceRuntime.partnerAffectShadowStore.close();

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type { AutomataBusEvent } from './contract.js';
 import {
@@ -181,6 +181,25 @@ function finding(overrides: Partial<AutomataBusEvent> = {}): AutomataBusEvent {
 }
 
 describe('PostgresAutomataBusStore', () => {
+  it('authorizes only a new immutable event and preserves replay idempotency', async () => {
+    const pool = new TestAutomataBusPool();
+    const authorizeAppend = vi.fn(async () => undefined);
+    const store = new PostgresAutomataBusStore(pool, { authorizeAppend });
+    const input = {
+      companionId: 'companion-a',
+      event: finding(),
+      audiences: ['eligible-automata'] as const,
+      sensitivity: 'personal' as const,
+    };
+
+    await expect(store.append(input)).resolves.toMatchObject({ inserted: true });
+    authorizeAppend.mockRejectedValueOnce(new Error('run no longer retained'));
+    await expect(store.append(input)).resolves.toMatchObject({ inserted: false });
+
+    expect(authorizeAppend).toHaveBeenCalledTimes(1);
+    expect(authorizeAppend).toHaveBeenCalledWith(finding());
+  });
+
   it('makes concurrent duplicate appends atomic and idempotent', async () => {
     const pool = new TestAutomataBusPool();
     const store = new PostgresAutomataBusStore(pool);

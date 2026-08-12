@@ -42,6 +42,8 @@ import type {
 import type { BackgroundWorkStorePort } from '../../core/agent/background-work/store-port.js';
 import type { BackgroundWorkRuntimeTuning } from '../../core/agent/background-work/config.js';
 import type { BackgroundWorkWelfarePolicy } from '../../core/agent/background-work/store-port.js';
+import type { AutomataRunRegistry } from '../../faculties/automata/run-registry.js';
+import type { PostgresAutomataBusRuntimeStore } from '../../faculties/automata/bus/runtime-store.js';
 
 const log = createComponentLogger('Agent');
 
@@ -86,6 +88,10 @@ export interface BootstrapAgentCoreRuntimeOptions {
   satelliteRegistryConfig?: SatelliteRegistryConfig;
   /** Places soft-registry (S10). Absent behaves as an empty registry. */
   placesRegistryConfig?: PlacesRegistryConfig;
+  automataRuntime?: {
+    registry: AutomataRunRegistry;
+    store: PostgresAutomataBusRuntimeStore;
+  };
 }
 
 export async function bootstrapAgentCoreRuntime(
@@ -184,6 +190,7 @@ export async function bootstrapAgentCoreRuntime(
     contactTrackingGate: options.contactTrackingGate ?? null,
     ...(options.satelliteRegistryConfig ? { satelliteRegistryConfig: options.satelliteRegistryConfig } : {}),
     ...(options.placesRegistryConfig ? { placesRegistryConfig: options.placesRegistryConfig } : {}),
+    ...(options.automataRuntime ? { automataRuntime: options.automataRuntime } : {}),
   });
 
   return {

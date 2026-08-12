@@ -39,6 +39,31 @@ describe('agent core runtime builder', () => {
     expect(coreRuntimeSource).toContain('wireMemoryRuntime(');
   });
 
+  it('constructs eligible worker Bus ports while keeping foreground retrieval Bus-free', () => {
+    const agentMainSource = readSource('main.ts');
+    const coreRuntimeSource = readSource('core-runtime.ts');
+    const compositionSource = readFileSync(
+      join(SRC_DIR, '../startup/composition/composition.ts'),
+      'utf-8',
+    );
+    const memoryRuntimeStart = compositionSource.indexOf('export function wireMemoryRuntime(');
+    const memoryRuntimeEnd = compositionSource.indexOf('export interface ToolRuntimeOptions', memoryRuntimeStart);
+    const memoryRuntime = compositionSource.slice(memoryRuntimeStart, memoryRuntimeEnd);
+    const retrieverEnd = memoryRuntime.indexOf('const extractorFormationOptions');
+
+    expect(coreRuntimeSource).toContain('createProductionAutomataBusWorkerAccess({');
+    expect(coreRuntimeSource).toContain('createSubagentAutomataLifecycleAdapter({');
+    expect(coreRuntimeSource).toContain('createBackgroundWorkAutomataLifecycle(');
+    expect(coreRuntimeSource).toContain('backgroundWorkAutomataLifecycle:');
+    expect(coreRuntimeSource).toContain('automataBusWorkerAccess: automataBus?.workerAccess');
+    expect(memoryRuntime.slice(0, retrieverEnd)).not.toContain('automataBusWorkerAccess');
+    expect(memoryRuntime.slice(retrieverEnd)).toContain(
+      'automataBusWorkerAccess: options.automataBusWorkerAccess',
+    );
+    expect(agentMainSource).toContain('automataBusWorkerAccess: coreRuntime.automataBus!.workerAccess');
+    expect(agentMainSource).toContain('automataLifecyclePort: coreRuntime.automataBus!.lifecycle');
+  });
+
   it('production-wires one nonempty-envelope mutation intake into identity, wiki, and contacts', () => {
     const coreRuntimeSource = readSource('core-runtime.ts');
     const runtimeStart = coreRuntimeSource.indexOf('const selfAuthoredMutationIntake = {');

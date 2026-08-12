@@ -11,6 +11,7 @@
       "background.intention_post_turn_hooks",
       "scheduler.reflection",
       "scheduler.free_time",
+      "scheduler.automata_bus_reviewer",
       "post_turn.subagent_spawn"
     ],
     "excludedClasses": [
@@ -31,6 +32,24 @@
       "lexicalWeight": 0.3,
       "exactFallbackEnabled": true,
       "modelIdentityPolicy": "configured-provider-strict"
+    },
+    "reviewer": {
+      "enabled": true,
+      "cadenceMs": 21600000,
+      "model": "gpt-5.4-nano",
+      "similarityThreshold": 0.9,
+      "maxFindingsPerRun": 100,
+      "maxNominationsPerRun": 80,
+      "maxCandidatesPerCluster": 8,
+      "maxClustersPerRun": 20,
+      "maxReviewsPerRun": 5,
+      "maxEvidenceRefsPerReview": 20,
+      "maxReviewInputChars": 24000,
+      "maxDecisionReasonChars": 2000,
+      "maxOutputTokens": 1200,
+      "deadlineMs": 120000,
+      "tokenCeiling": 4000,
+      "costCeilingUsd": 0.25
     }
   },
   "retentionMs": {

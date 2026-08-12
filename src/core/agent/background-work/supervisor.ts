@@ -55,6 +55,22 @@ export type BackgroundWorkExecutionScope = (
   handler: () => Promise<void>,
 ) => Promise<void>;
 
+export interface BackgroundWorkAutomataLifecyclePort {
+  onClaimed(input: {
+    job: ClaimedBackgroundWorkJob;
+    payload: BackgroundWorkPayload;
+  }): Promise<void>;
+  onCompleted(input: {
+    job: ClaimedBackgroundWorkJob;
+    payload: BackgroundWorkPayload;
+  }): Promise<void>;
+  onFailed(input: {
+    job: ClaimedBackgroundWorkJob;
+    payload: BackgroundWorkPayload;
+    reasonCode: StoredBackgroundWorkJob['reasonCode'];
+  }): Promise<void>;
+}
+
 export interface BackgroundWorkSupervisorOptions extends BackgroundWorkSupervisorTuning {
   store: BackgroundWorkStorePort;
   eventBus: EventBus;
@@ -67,6 +83,8 @@ export interface BackgroundWorkSupervisorOptions extends BackgroundWorkSuperviso
    * entirely (fail-closed to pre-welfare FIFO behavior).
    */
   welfare: BackgroundWorkWelfarePolicy;
+  /** Canonical automata lifecycle for eligible durable background workers. */
+  automataLifecycle?: BackgroundWorkAutomataLifecyclePort;
   /**
    * In-process owner cleanup after a parsed job is durably terminally failed.
    * Retryable failures do not fire this callback.
@@ -199,6 +217,7 @@ export class BackgroundWorkSupervisor {
   private readonly terminalRetentionMs: number;
   private readonly cleanupIntervalMs: number;
   private readonly welfare: BackgroundWorkWelfarePolicy;
+  private readonly automataLifecycle: BackgroundWorkAutomataLifecyclePort | undefined;
   private readonly onTerminalFailure: BackgroundWorkSupervisorOptions['onTerminalFailure'];
   private readonly foregroundCounts = new Map<string, number>();
   private readonly foregroundLeases = new Map<string, ManagedForegroundWorkLease>();
@@ -270,6 +289,7 @@ export class BackgroundWorkSupervisor {
       ),
       reserveSlots,
     };
+    this.automataLifecycle = options.automataLifecycle;
     this.onTerminalFailure = options.onTerminalFailure;
   }
 
@@ -558,12 +578,14 @@ export class BackgroundWorkSupervisor {
 
     this.emitJobTelemetry(job);
     try {
+      await this.automataLifecycle?.onClaimed({ job, payload });
       await this.executor({
         job,
         payload,
         effects: this.createEffectRunner(job, fence),
         signal: controller.signal,
       });
+      await this.automataLifecycle?.onCompleted({ job, payload });
     } catch (error) {
       if (error instanceof BackgroundWorkShutdownRequeueError) {
         // Pre-boundary interruption: the claim never crossed its effect
@@ -598,7 +620,7 @@ export class BackgroundWorkSupervisor {
             reasonCode: terminalReasonCode,
             nowMs,
           });
-          this.emitExecutionSettlement(job, payload, failed);
+          await this.emitExecutionSettlement(job, payload, failed);
           return;
         }
 
@@ -615,7 +637,7 @@ export class BackgroundWorkSupervisor {
           retryReasonCode: 'handler_failed',
           terminalReasonCode: 'handler_failed',
         });
-        this.emitExecutionSettlement(job, payload, settled);
+        await this.emitExecutionSettlement(job, payload, settled);
         return;
       }
       if (error instanceof BackgroundWorkStaleError) {
@@ -637,7 +659,7 @@ export class BackgroundWorkSupervisor {
           reasonCode: error.reasonCode,
           nowMs: this.now(),
         });
-        this.emitExecutionSettlement(job, payload, failed);
+        await this.emitExecutionSettlement(job, payload, failed);
         return;
       }
       if (error instanceof BackgroundWorkEffectOutcomeUnknownError) {
@@ -648,7 +670,7 @@ export class BackgroundWorkSupervisor {
           reasonCode: 'effect_outcome_unknown',
           nowMs: this.now(),
         });
-        this.emitExecutionSettlement(job, payload, failed);
+        await this.emitExecutionSettlement(job, payload, failed);
         return;
       }
       if (error instanceof BackgroundWorkLeaseLostError) return;
@@ -659,7 +681,7 @@ export class BackgroundWorkSupervisor {
         nowMs: this.now(),
         retryAtMs: this.now() + this.retryDelayMs(job.attemptCount + 1),
       });
-      this.emitExecutionSettlement(job, payload, failed);
+      await this.emitExecutionSettlement(job, payload, failed);
       return;
     }
 
@@ -948,13 +970,27 @@ export class BackgroundWorkSupervisor {
     return Math.max(0, this.now() - job.updatedAtMs);
   }
 
-  private emitExecutionSettlement(
+  private async emitExecutionSettlement(
     claimed: ClaimedBackgroundWorkJob,
     payload: BackgroundWorkPayload,
     settled: StoredBackgroundWorkJob,
-  ): void {
+  ): Promise<void> {
     this.emitJobTelemetry(settled, undefined, this.executionDurationMs(claimed));
-    if (settled.state !== 'failed' || !this.onTerminalFailure) return;
+    if (settled.state !== 'failed') return;
+    try {
+      await this.automataLifecycle?.onFailed({
+        job: claimed,
+        payload,
+        reasonCode: settled.reasonCode,
+      });
+    } catch (error) {
+      log.error('Background terminal-failure automata lifecycle failed', {
+        jobId: settled.jobId,
+        kind: payload.kind,
+        errorName: error instanceof Error ? error.name : 'UnknownError',
+      });
+    }
+    if (!this.onTerminalFailure) return;
     try {
       this.onTerminalFailure({
         jobId: settled.jobId,

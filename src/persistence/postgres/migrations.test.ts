@@ -110,6 +110,9 @@ describe('Postgres live schema migrations', () => {
     expect(sql).toContain('CREATE TRIGGER automata_bus_events_append_only');
     expect(sql).toContain('CREATE TRIGGER automata_bus_events_no_truncate');
     expect(POSTGRES_AUTOMATA_ROLLBACK_MIGRATIONS).toEqual([
+      'DROP TABLE IF EXISTS automata_bus_vector_lag',
+      'DROP TABLE IF EXISTS automata_bus_finding_vectors',
+      'DROP TABLE IF EXISTS automata_bus_vector_state',
       'DROP TABLE IF EXISTS automata_bus_current_findings',
       'DROP TABLE IF EXISTS automata_bus_events',
       'DROP FUNCTION IF EXISTS reject_automata_bus_event_mutation()',

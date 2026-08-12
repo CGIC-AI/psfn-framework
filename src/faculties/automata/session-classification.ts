@@ -2,7 +2,6 @@ import {
   requireAutomataClass,
   type ProductionAutomataClassId,
 } from './registry-contract.js';
-import type { AutomataRetentionStorePort } from './retention-contract.js';
 import { FREE_TIME_CHANNEL_PREFIX } from '../../core/session/session-id.js';
 
 export type ProtectedSessionOwnership =
@@ -34,6 +33,11 @@ export interface ProtectedSessionClassification extends SessionClassificationBas
 export type SessionClassification =
   | AutomataSessionClassification
   | ProtectedSessionClassification;
+
+export interface SessionClassificationStorePort {
+  recordClassification(classification: SessionClassification): Promise<void>;
+  loadClassification(companionId: string, sessionId: string): Promise<SessionClassification | null>;
+}
 
 export interface ClassifySessionAtCreationInput {
   companionId: string;
@@ -151,10 +155,7 @@ export function classifySessionAtCreation(
 export class AutomataSessionClassificationService {
   constructor(
     private readonly policy: AutomataRawSessionRetentionPolicy,
-    private readonly store: Pick<
-      AutomataRetentionStorePort,
-      'recordClassification' | 'loadClassification'
-    >,
+    private readonly store: SessionClassificationStorePort,
   ) {}
 
   async classifyAtCreation(input: ClassifySessionAtCreationInput): Promise<SessionClassification> {

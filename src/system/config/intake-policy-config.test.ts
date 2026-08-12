@@ -200,7 +200,7 @@ describe('intake policy owner file', () => {
   it('rejects invalid config on save (never writes a broken owner file)', () => {
     const dataDir = makeDataDir();
     expect(() => saveIntakePolicyConfig(dataDir, { schemaVersion: 2 }))
-      .toThrow(/schemaVersion must be 5/);
+      .toThrow(/schemaVersion must be 6/);
     expect(() => loadIntakePolicyConfig(dataDir)).toThrow(/Missing required JSON owner file/);
   });
 

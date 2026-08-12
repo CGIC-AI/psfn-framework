@@ -112,6 +112,13 @@
       "note": "Observer-sidecar fresh tenant-schema migration suite against the real containerized Postgres harness. Baseline 11.47s file wall (2 tests, local implementation run, 2026-07-30); 120000/11470 = 10.46x headroom for cold-start and shared-heavy-phase variance."
     },
     {
+      "file": "src/faculties/automata/bus/postgres-store.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": 2680,
+      "baselineSource": "measured",
+      "note": "Automata Bus transactional store, conformance, tenancy, readiness, rollback, and backup-access suite against real containerized Postgres. Baseline 2.68s file wall (10 tests, warm tmpfs harness, this host, 2026-08-11); 120s is the repo-standard integration cap with headroom dominated by cold-start and shared harness-slot contention."
+    },
+    {
       "file": "src/faculties/introspection/postgres-store.integration.test.ts",
       "timeoutMs": 120000,
       "measuredBaselineMs": null,

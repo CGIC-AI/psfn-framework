@@ -665,8 +665,8 @@ describe('runBackupCycle', () => {
     });
 
     expect(result.systemConfig).toBeDefined();
-    expect(result.systemConfig?.fileCount).toBe(10);
-    expect(result.systemConfigVerification?.verifiedFileCount).toBe(10);
+    expect(result.systemConfig?.fileCount).toBe(11);
+    expect(result.systemConfigVerification?.verifiedFileCount).toBe(11);
     expect(existsSync(join(result.backupDir, SYSTEM_CONFIG_MANIFEST_NAME))).toBe(true);
     expect(existsSync(join(result.backupDir, SYSTEM_CONFIG_DIR_NAME, 'settings.json'))).toBe(true);
     expect(readFileSync(
@@ -678,7 +678,7 @@ describe('runBackupCycle', () => {
       'utf-8',
     )).toBe(TEST_COMPANIONS_BYTES);
     expect(existsSync(join(result.backupDir, SYSTEM_CONFIG_DIR_NAME, '.env'))).toBe(false);
-    expect(verifySystemConfigSnapshot(result.backupDir).verifiedFileCount).toBe(10);
+    expect(verifySystemConfigSnapshot(result.backupDir).verifiedFileCount).toBe(11);
 
     writeFileSync(
       join(result.backupDir, SYSTEM_CONFIG_DIR_NAME, 'mcp-servers.json'),
@@ -743,7 +743,7 @@ describe('runBackupCycle', () => {
 
     expect(result.encryptedBackup).toBeDefined();
     expect(result.postgresDumpVerification?.tocEntryCount).toBe(2);
-    expect(result.systemConfigVerification?.verifiedFileCount).toBe(10);
+    expect(result.systemConfigVerification?.verifiedFileCount).toBe(11);
     expect(result.kubernetesHelmVerification?.chart.verifiedFileCount).toBe(4);
     expect(result.backupContentsVerification?.kubernetesHelmRecovery).toBe('required');
     expect(existsSync(join(result.backupDir, ENCRYPTED_BACKUP_MANIFEST_NAME))).toBe(true);

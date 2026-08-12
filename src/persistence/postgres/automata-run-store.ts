@@ -15,7 +15,7 @@ import {
   ensurePostgresSchema,
   queryRows,
 } from '../postgres.js';
-import { POSTGRES_AUTOMATA_RUN_MIGRATIONS } from './migrations.js';
+import { POSTGRES_AUTOMATA_MIGRATIONS } from './migrations.js';
 
 interface AutomataRunRow extends QueryResultRow {
   companion_id: string;
@@ -172,7 +172,7 @@ export class PostgresAutomataRunStore implements AutomataRunStorePort {
       schema: options.schema,
       role: options.role,
     });
-    await ensurePostgresSchema(pool, POSTGRES_AUTOMATA_RUN_MIGRATIONS);
+    await ensurePostgresSchema(pool, POSTGRES_AUTOMATA_MIGRATIONS);
     return new PostgresAutomataRunStore(pool, text(companionId, 'companionId'));
   }
 

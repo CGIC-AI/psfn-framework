@@ -48,6 +48,22 @@ export const AUTOMATA_BUS_POSTGRES_SCHEMA_STATEMENTS = [
     ON automata_bus_events (companion_id, run_id, sequence)`,
   `CREATE INDEX IF NOT EXISTS automata_bus_events_task_sequence_idx
     ON automata_bus_events (companion_id, task_id, sequence)`,
+  `CREATE OR REPLACE FUNCTION reject_automata_bus_event_mutation()
+    RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+    BEGIN
+      RAISE EXCEPTION 'Automata Bus events are append-only' USING ERRCODE = '55000';
+    END
+    $$`,
+  `DROP TRIGGER IF EXISTS automata_bus_events_append_only ON automata_bus_events`,
+  `CREATE TRIGGER automata_bus_events_append_only
+    BEFORE UPDATE OR DELETE ON automata_bus_events
+    FOR EACH ROW EXECUTE FUNCTION reject_automata_bus_event_mutation()`,
+  `DROP TRIGGER IF EXISTS automata_bus_events_no_truncate ON automata_bus_events`,
+  `CREATE TRIGGER automata_bus_events_no_truncate
+    BEFORE TRUNCATE ON automata_bus_events
+    FOR EACH STATEMENT EXECUTE FUNCTION reject_automata_bus_event_mutation()`,
   `CREATE TABLE IF NOT EXISTS automata_bus_current_findings (
     companion_id TEXT NOT NULL,
     event_id TEXT NOT NULL,
@@ -124,6 +140,7 @@ export const AUTOMATA_BUS_POSTGRES_ROLLBACK_STATEMENTS = [
   'DROP TABLE IF EXISTS automata_bus_vector_state',
   'DROP TABLE IF EXISTS automata_bus_current_findings',
   'DROP TABLE IF EXISTS automata_bus_events',
+  'DROP FUNCTION IF EXISTS reject_automata_bus_event_mutation()',
 ] as const;
 
 function requireAnnDimensions(dimensions: number): number {

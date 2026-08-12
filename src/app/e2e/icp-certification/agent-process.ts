@@ -953,6 +953,8 @@ async function main(): Promise<void> {
         await presenceRuntime?.shutdown();
         await fatigueReservations.close();
         await persistence.backgroundWorkStore.close();
+        await persistence.automataBusStore.close();
+        await persistence.automataRunRegistry.close();
         chargeLedger.close();
         startup.stopDebugObserver();
         reply({ id: raw.id, ok: true });

@@ -112,6 +112,13 @@
       "note": "Observer-sidecar fresh tenant-schema migration suite against the real containerized Postgres harness. Baseline 11.47s file wall (2 tests, local implementation run, 2026-07-30); 120000/11470 = 10.46x headroom for cold-start and shared-heavy-phase variance."
     },
     {
+      "file": "src/faculties/automata/bus/postgres-query-adapters.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": 1511,
+      "baselineSource": "measured",
+      "note": "Automata Bus canonical/pgvector adapter suite against the persistent RAM-backed pgvector harness. Baseline 1.511s file wall (implementation run, this host, 2026-08-11); 120s preserves ample headroom for cold-start container and shared-heavy gate variance."
+    },
+    {
       "file": "src/faculties/introspection/postgres-store.integration.test.ts",
       "timeoutMs": 120000,
       "measuredBaselineMs": null,

@@ -325,6 +325,7 @@ describe('system-owner fleet migration', () => {
       'mcp-servers',
       'intake-policy',
       'partner-affect-shadow',
+      'automata-policy',
     ]) {
       copyFileSync(
         join(seedDir, `${ownerFile}.seed.json`),

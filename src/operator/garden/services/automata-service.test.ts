@@ -9,6 +9,7 @@ import {
   AdminAutomataNotFoundError,
   type AdminAutomataBusReadInput,
   type AdminAutomataBusReadPort,
+  type AdminAutomataLessonReadPort,
 } from './automata-service.js';
 
 const findingEvent: AutomataBusFindingEvent = {
@@ -202,6 +203,52 @@ describe('AdminAutomataDataService', () => {
     expect((await service.getSnapshot()).bus).toMatchObject({
       available: false,
       health: { condition: 'unavailable', freshness: 'unknown' },
+    });
+  });
+
+  it('exposes the content-safe recurrent lesson projection and governed review handoff', async () => {
+    const registry = await createRegistry();
+    const lessons: AdminAutomataLessonReadPort = {
+      async query(scope) {
+        expect(scope).toEqual({
+          companionId: 'companion-test',
+          audience: 'operator',
+          maxSensitivity: 'confidential',
+        });
+        return {
+          groups: [{
+            groupId: `automata-lesson:v1:${'a'.repeat(64)}`,
+            automatonClass: 'subagent.bounded',
+            promptRevision: 'sha256:prompt-r1',
+            toolName: 'repo',
+            failureCategory: 'missing-instruction',
+            lessonCode: 'read-before-edit',
+            sourceCount: 2,
+            support: 'supported',
+            evidenceQuality: 'verified',
+            sourceFindingIds: ['finding-1', 'finding-2'],
+            evidenceIds: [`sha256:${'b'.repeat(64)}`],
+            sourceTraceTruncated: false,
+            contradiction: { present: false, sourceFindingIds: [] },
+            inferenceOnly: false,
+            interpretation: 'candidate-pattern-not-verified-defect',
+          }],
+          hasMore: false,
+          sourceFindingCount: 2,
+        };
+      },
+    };
+    const service = new AdminAutomataDataService({
+      registry,
+      companionId: 'companion-test',
+      readPolicy: { defaultPageLimit: 5, maxPageLimit: 20 },
+      lessons,
+    });
+
+    expect((await service.getSnapshot()).lessons).toMatchObject({
+      available: true,
+      groups: [{ support: 'supported', evidenceQuality: 'verified', sourceCount: 2 }],
+      proposalReviewPath: '/api/admin/shared-workspace/proposals',
     });
   });
 });

@@ -76,10 +76,7 @@ import {
   resolveBearerCompanionTarget,
   type BearerCompanionRoutingConfig,
 } from './bearer-companion-selector.js';
-import {
-  createAuthenticatedPrivateDirectChatScope,
-  screenChatMessageBody,
-} from '../../../core/cogsec/intake/chat-message-screening.js';
+import { screenChatMessageBody } from '../../../core/cogsec/intake/chat-message-screening.js';
 
 const IDENTITY_LINK_CHALLENGE_TTL_MS = 5 * 60_000;
 
@@ -831,10 +828,20 @@ export class ApiChatCompletionsHandler {
       : source === 'companion-ui'
         ? 'companion_ui' as const
         : undefined;
+    // This legacy monolith can prove direct topology only for its server-owned
+    // API surface. External channel claims stay strict even when private.
+    const isAuthenticatedPrivateDirect = source === 'api'
+      && resolvedChannelPrivacy === 'private';
     const privateDirectScope = canonicalContactId
-      && resolvedChannelPrivacy === 'private'
+      && isAuthenticatedPrivateDirect
       && chatBodyChannelClass
-      ? createAuthenticatedPrivateDirectChatScope({ channelId, canonicalContactId })
+      ? this.sessionManager.resolveConversationScope({
+        channelId,
+        channelMeta: { isDirectMessage: true, privacyLevel: 'private' },
+        contact: { contactId: canonicalContactId },
+        recentSpeakers: [{ authorId, name: authorName }],
+        resolvedSpeakerContactCount: 1,
+      })
       : undefined;
     const screenedBody = await screenChatMessageBody({
       content: lastUserMsg,
@@ -876,6 +883,7 @@ export class ApiChatCompletionsHandler {
       channelPrivacy: resolvedChannelPrivacy,
       canonicalContactId,
       satellite,
+      ...(privateDirectScope?.kind === 'dm' ? { isDirectMessage: true } : {}),
       attachments: [...lastUserAttachments, ...ingestedFiles.attachments],
       intakeEnvelopes: [
         ...(screenedBody.snapshot ? [screenedBody.snapshot] : []),

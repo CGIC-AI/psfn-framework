@@ -22,13 +22,16 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  createIntakeScreeningService,
   maybeCreateIntakeScreeningService,
   renderIntakeWithheldContentPlaceholder,
 } from '../../../core/cogsec/intake/screening.js';
+import { createIntakeL1Scanner } from '../../../core/cogsec/intake/scanners/index.js';
 import { createQuarantinedArtifactAccessGuard } from '../../../core/cogsec/intake/quarantined-artifact-guard.js';
 import { CogSecEventStore } from '../../../core/cogsec/events.js';
 import { resolveCogSecEventsPath } from '../../../persistence/layout.js';
 import { validateIntakePolicy } from '../../../system/config/intake-policy-config.js';
+import { resolveConversationScopeFromMetadata } from '../../../core/session/conversation-scope.js';
 import { composeGatewayIntakeScreening } from './compose-screening.js';
 import type { InjectionClassifierBackend } from './injection-classifier.js';
 import type { ScreenerTestCompletion } from './screener-transport.js';
@@ -38,11 +41,12 @@ import {
 } from './screener-transport.test-support.js';
 import { L2_SCREENER_SCANNER_ID, L2_SCREENER_SUMMARY_FIELD } from './l2-screener.js';
 import { L3_FIELD_ERROR, L3_SCREENER_SCANNER_ID } from './l3-screener.js';
-import { L2_SCREENER_ERROR_FIELD } from './escalation.js';
+import { createGatewayIntakeEscalationPort, L2_SCREENER_ERROR_FIELD } from './escalation.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import { loadSeedIntakeScreenerTestConfig } from './screener-test-config.js';
 
 const POLICY_SEED_PATH = join(process.cwd(), 'config', 'intake-policy.seed.json');
+const L1_RULES_PATH = join(process.cwd(), 'config', 'intake-l1-rules.json');
 
 // Enforce-mode compositions now REQUIRE a provisioned L1.5 classifier (cyy7l);
 // the ~700MiB ONNX weights are unavailable in unit tests, so this fake backend
@@ -210,6 +214,118 @@ async function composeWith(
 }
 
 describe('L2/L3 escalation wired into the live gateway screening path', () => {
+  it.each([
+    ['CogSecEvent write', false],
+    ['CogSecEvent and fallback quarantine writes', true],
+  ] as const)(
+    'private-direct mark-only still withholds when the %s fail',
+    async (_failureName, failFallbackHold) => {
+      const rawPolicy = seedPolicy({ mode: 'strict' });
+      const rawL2 = rawPolicy.l2Screener as Record<string, unknown>;
+      const rawL3 = rawPolicy.l3Screener as Record<string, unknown>;
+      const policy = validateIntakePolicy({
+        ...rawPolicy,
+        l2Screener: {
+          ...rawL2,
+          escalationThresholdsByTier: {
+            ...(rawL2.escalationThresholdsByTier as Record<string, number>),
+            trusted: 0.7,
+          },
+        },
+        l3Screener: {
+          ...rawL3,
+          escalationConfidenceThresholdsByTier: {
+            ...(rawL3.escalationConfidenceThresholdsByTier as Record<string, number>),
+            trusted: 0.7,
+          },
+        },
+      }, 'intake-policy.audit-failure.test');
+      const transport = routingFetch({
+        [L2_MODEL]: { verdict: L2_FLAGGING_VERDICT },
+        [L3_MODEL]: { verdict: L3_FLAGGED_VERDICT },
+      });
+      let holdCalls = 0;
+      const quarantine = {
+        hold: () => {
+          holdCalls += 1;
+          if (failFallbackHold) {
+            throw new Error('quarantine store unavailable');
+          }
+          return {} as never;
+        },
+      };
+      const escalation = createGatewayIntakeEscalationPort({
+        policy,
+        l2Model: L2_MODEL,
+        l3Models: [L3_MODEL],
+        backend: BACKEND,
+        testCompletion: transport.fetch,
+        cogSecEvents: {
+          createEvent: () => {
+            throw new Error('CogSecEvent store unavailable');
+          },
+        },
+        quarantine,
+      });
+      const screening = createIntakeScreeningService({
+        policy,
+        l1: createIntakeL1Scanner({
+          rulesPath: L1_RULES_PATH,
+          reloadCheckIntervalMs: -1,
+        }),
+        escalation,
+        quarantine,
+        actor: 'test:intake-screening',
+      });
+      const channelId = 'api:private-direct';
+      const canonicalContactId = 'contact-primary';
+      const conversationScope = resolveConversationScopeFromMetadata({
+        channelId,
+        isDirectMessage: true,
+        channelMeta: { isDirectMessage: true, privacyLevel: 'private' },
+        contact: { contactId: canonicalContactId },
+        recentSpeakers: [{ authorId: canonicalContactId, name: 'Primary Operator' }],
+        resolvedSpeakerContactCount: 1,
+      });
+
+      const result = await screening.screen(HOSTILE_CONTENT, {
+        sourceClass: 'primary_user',
+        origin: { ref: `${channelId}:message-1` },
+        scope: 'context',
+        canonicalContactId,
+        channelPrivacy: 'private',
+        sourceChannelId: channelId,
+        chatBodyContext: {
+          channelClass: 'api_direct',
+          conversationScope,
+          contactTrust: {
+            contactId: canonicalContactId,
+            trustLevel: 'primary',
+            resolvedAtMs: Date.now(),
+            archived: false,
+          },
+        },
+      });
+
+      expect(transport.calls(L2_MODEL)).toBe(1);
+      expect(transport.calls(L3_MODEL)).toBe(1);
+      expect(result).toMatchObject({
+        action: 'quarantine',
+        withheld: true,
+        effectiveText: renderIntakeWithheldContentPlaceholder(),
+        envelope: {
+          state: 'quarantined',
+          decision: { reason: expect.stringContaining('escalation-fail-closed') },
+        },
+      });
+      expect(result.envelope.extractedFields['chat_body.handling']).toBeUndefined();
+      expect(holdCalls).toBe(1);
+      expect(result.quarantineHoldError).toBe(
+        failFallbackHold ? 'quarantine store unavailable' : undefined,
+      );
+    },
+  );
+
   it('END-TO-END enforce: hostile web_fetch crosses the L2 threshold, L2 flags, L3 quarantines, CogSecEvent written, hostile string never delivered', async () => {
     const transport = routingFetch({
       [L2_MODEL]: { verdict: L2_FLAGGING_VERDICT },

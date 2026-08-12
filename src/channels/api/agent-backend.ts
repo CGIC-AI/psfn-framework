@@ -61,10 +61,7 @@ import {
   type ApiDocumentIngestConfig,
 } from './server/session.js';
 import type { IntakeEnvelopeSnapshot } from '../../shared/contracts/intake-envelope.js';
-import {
-  createAuthenticatedPrivateDirectChatScope,
-  screenChatMessageBody,
-} from '../../core/cogsec/intake/chat-message-screening.js';
+import { screenChatMessageBody } from '../../core/cogsec/intake/chat-message-screening.js';
 import { buildApiHealthResponse } from './server-health.js';
 import {
   type FifoChannelLease,
@@ -180,7 +177,7 @@ export interface AgentApiBackendConfig {
   eventBus: EventBus;
   sessionManager: Pick<
     SessionManager,
-    'getMessageCount' | 'recordUserMessage' | 'recordAssistantMessage'
+    'getMessageCount' | 'recordUserMessage' | 'recordAssistantMessage' | 'resolveConversationScope'
   >;
   /** Required for direct (raw) model completions that bypass the companion turn pipeline. */
   llmProvider?: LLMProviderPort;
@@ -205,7 +202,7 @@ export class AgentApiBackend {
   private readonly eventBus: EventBus;
   private readonly sessionManager: Pick<
     SessionManager,
-    'getMessageCount' | 'recordUserMessage' | 'recordAssistantMessage'
+    'getMessageCount' | 'recordUserMessage' | 'recordAssistantMessage' | 'resolveConversationScope'
   >;
   private readonly llmProvider: LLMProviderPort | null;
   private readonly contactStore: ContactStorePort | null;
@@ -1491,6 +1488,7 @@ export class AgentApiBackend {
     canonicalContactId?: string;
     satellite?: SatelliteRoutingMetadata;
     hubDeviceAttachment?: HubDeviceAttachmentSnapshot;
+    isDirectMessage?: boolean;
     attachments?: Attachment[];
     /** Intake-firewall snapshots for the body and screened document attachments. */
     intakeEnvelopes?: IntakeEnvelopeSnapshot[];
@@ -1539,7 +1537,11 @@ export class AgentApiBackend {
       authorId: params.authorId,
       authorName: params.authorName,
       content: params.content,
-      ...(params.channelPrivacy === 'public' ? { isDirectMessage: false } : {}),
+      ...(params.isDirectMessage !== undefined
+        ? { isDirectMessage: params.isDirectMessage }
+        : params.channelPrivacy === 'public'
+          ? { isDirectMessage: false }
+          : {}),
       ...(params.attachments && params.attachments.length > 0 ? { attachments: params.attachments } : {}),
       ...(hasRouting ? { routing } : {}),
       timestamp: new Date(),
@@ -1706,10 +1708,19 @@ export class AgentApiBackend {
       : source === 'companion-ui'
         ? 'companion_ui' as const
         : undefined;
+    const isAuthenticatedPrivateDirect = resolvedChannelPrivacy === 'private'
+      && (source === 'api'
+        || (source === 'companion-ui' && hubDeviceAttachment?.actor.kind === 'human'));
     const privateDirectScope = canonicalContactId
-      && resolvedChannelPrivacy === 'private'
+      && isAuthenticatedPrivateDirect
       && chatBodyChannelClass
-      ? createAuthenticatedPrivateDirectChatScope({ channelId, canonicalContactId })
+      ? this.sessionManager.resolveConversationScope({
+        channelId,
+        channelMeta: { isDirectMessage: true, privacyLevel: 'private' },
+        contact: { contactId: canonicalContactId },
+        recentSpeakers: [{ authorId, name: authorName }],
+        resolvedSpeakerContactCount: 1,
+      })
       : undefined;
     const isAuthenticatedDirectHuman = source === 'api'
       || (source === 'companion-ui' && hubDeviceAttachment?.actor.kind === 'human');
@@ -1761,6 +1772,7 @@ export class AgentApiBackend {
       canonicalContactId,
       satellite,
       ...(hubDeviceAttachment ? { hubDeviceAttachment } : {}),
+      ...(privateDirectScope?.kind === 'dm' ? { isDirectMessage: true } : {}),
       attachments: [...lastUserAttachments, ...ingestedFiles.attachments],
       intakeEnvelopes: [
         ...(screenedBody.snapshot ? [screenedBody.snapshot] : []),

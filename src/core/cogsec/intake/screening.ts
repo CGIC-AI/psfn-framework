@@ -912,7 +912,12 @@ export function createIntakeScreeningService(
         injectionScoreThreshold: injectionScoreThresholdForTier(policy, sourceRiskTier),
         priorSignals,
       });
-    const markOnlyChatBody = isHighestTrustPrivateDirectMarkOnly(input);
+    // A valid direct-chat rule may downgrade actual screening findings, but
+    // never infrastructure/audit failures: those retain the hard fail-closed
+    // quarantine required by the escalation boundary.
+    const markOnlyChatBody = !escalationExtras?.forced
+      && !escalationExtras?.failure
+      && isHighestTrustPrivateDirectMarkOnly(input);
     const decision = markOnlyChatBody && screenedDecision.action !== 'pass'
       ? {
         action: 'pass' as const,

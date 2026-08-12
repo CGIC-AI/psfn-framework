@@ -8,6 +8,7 @@ import type { SessionManager } from '../../../core/session/manager.js';
 import type { SubstrateAgent } from '../../../core/agent/substrate-agent.js';
 import type { ApiServerRuntime } from '../types.js';
 import type { IntakeScreeningService } from '../../../core/cogsec/intake/screening.js';
+import { resolveConversationScopeFromMetadata } from '../../../core/session/conversation-scope.js';
 import {
   ApiChatCompletionsHandler,
   type ApiChatCompletionsHandlerConfig,
@@ -156,6 +157,18 @@ describe('ApiChatCompletionsHandler response identity', () => {
         getMessageCount: vi.fn(() => 0),
         recordUserMessage: vi.fn(),
         recordAssistantMessage: vi.fn(),
+        resolveConversationScope: vi.fn((
+          input: Parameters<SessionManager['resolveConversationScope']>[0],
+        ) => resolveConversationScopeFromMetadata({
+          channelId: input.channelId,
+          isDirectMessage: input.channelMeta?.isDirectMessage,
+          ...(input.channelMeta ? { channelMeta: input.channelMeta } : {}),
+          ...(input.contact ? { contact: input.contact } : {}),
+          ...(input.recentSpeakers ? { recentSpeakers: input.recentSpeakers } : {}),
+          ...(input.resolvedSpeakerContactCount !== undefined
+            ? { resolvedSpeakerContactCount: input.resolvedSpeakerContactCount }
+            : {}),
+        })),
       }),
       contactStore,
       documentIngest: {
@@ -204,6 +217,7 @@ describe('ApiChatCompletionsHandler response identity', () => {
     );
     expect(handleMessage).toHaveBeenCalledWith(expect.objectContaining({
       content: 'private direct message',
+      isDirectMessage: true,
       routing: expect.objectContaining({
         canonicalContactId: primaryContact.id,
         intakeEnvelopes: [expect.objectContaining({ envelopeId: 'env-monolith-private-direct' })],

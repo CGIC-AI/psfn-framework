@@ -208,12 +208,10 @@ describe('AutomataBusReviewerService', () => {
     const first = await harness.service.run({
       ...SCOPE,
       runId: 'review-run-1',
-      welfareGrantJobId: 'background-job-1',
     });
     const second = await harness.service.run({
       ...SCOPE,
       runId: 'review-run-2',
-      welfareGrantJobId: 'background-job-2',
     });
 
     expect(harness.findings.loadCurrent).toHaveBeenCalledWith({
@@ -248,8 +246,6 @@ describe('AutomataBusReviewerService', () => {
         retryPolicy: 'none',
         chargeLane: 'maintenance',
         chargeSurface: 'externalModelConsult',
-        preemptionProtected: true,
-        welfareGrantJobId: 'background-job-1',
       },
     }));
     expect(harness.mutations.appendRelation).not.toHaveBeenCalled();

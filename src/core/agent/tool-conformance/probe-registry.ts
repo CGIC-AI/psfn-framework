@@ -100,6 +100,9 @@ export const TOOL_CONFORMANCE_PROBE_REGISTRY: Readonly<Record<string, ToolProbeS
   // read-only probe exists, so validate schema only.
   publication: { kind: 'schema_only' },
   subagent: { kind: 'schema_only' },
+  // Bus reads require an authoritative companion/run scope and its write actions
+  // append durable state, so the hermetic harness validates only the schema.
+  automata_bus: { kind: 'schema_only' },
   vault: {
     kind: 'read_only',
     action: 'search',
@@ -305,6 +308,15 @@ export const TOOL_CONFORMANCE_ACTION_REGISTRY:
     delete: SCHEMA_ASSERT,
     restore: SCHEMA_ASSERT,
   },
+  automata_bus: {
+    brief: SCHEMA_ASSERT,
+    search: SCHEMA_ASSERT,
+    append: SCHEMA_ASSERT,
+    correct: SCHEMA_ASSERT,
+    handoff: SCHEMA_ASSERT,
+    runs: SCHEMA_ASSERT,
+    inspect: SCHEMA_ASSERT,
+  },
   scratchpad: {
     list: safeRead({ action: 'list' }),
     add: SCHEMA_ASSERT,
@@ -444,6 +456,8 @@ export const TOOL_CONFORMANCE_ACTION_REGISTRY:
     wait: SCHEMA_ASSERT,
     cancel: SCHEMA_ASSERT,
     status: SCHEMA_ASSERT,
+    discover: SCHEMA_ASSERT,
+    inspect: SCHEMA_ASSERT,
   },
   vault: {
     write: SCHEMA_ASSERT,

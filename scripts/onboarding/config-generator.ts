@@ -48,6 +48,7 @@ const SEED_COPIED_OWNER_FILES: readonly string[] = [
   'backup.json',
   'mcp-servers.json',
   'partner-affect-shadow.json',
+  'automata-policy.json',
   'places.json',
   'runtime-prompt-layers.json',
   // per-companion (rooted under companionDataDir):

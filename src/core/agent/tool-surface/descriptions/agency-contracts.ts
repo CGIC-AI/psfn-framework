@@ -58,9 +58,11 @@ export const AGENCY_TOOL_CONTRACTS = {
       action('message', ['subagent_id', 'message']), action('wait', [], ['subagent_id']),
       action('cancel', ['subagent_id'], ['reason']),
       action('status', [], ['subagent_id', 'task_limit', 'transcript_limit']),
+      action('discover', ['task_query'], ['task_limit']),
+      action('inspect', ['subagent_id']),
     ],
     output: 'It returns task IDs, lifecycle state, or bounded results and never grants tools you cannot delegate.',
-    guidance: 'Do not use a bounded automaton as a long-horizon shard; inspect status before messaging or cancelling.',
+    guidance: 'Do not use a bounded automaton as a long-horizon shard; inspect status before messaging or cancelling, and use discover then inspect to recover durable task lineage.',
     example: { action: 'spawn', name: 'log-check', task: 'Compare the two bounded error excerpts.' },
   },
   vault: {

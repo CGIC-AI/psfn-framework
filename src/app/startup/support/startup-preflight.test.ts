@@ -98,6 +98,7 @@ describe('resolveStartupPreflightBundle', () => {
     'trust-policy.json',
     'capability-tier.json',
     'charge-policy.json',
+    'automata-policy.json',
   ] as const;
 
   afterEach(() => {

@@ -446,6 +446,11 @@ describe('evaluateVisionIntake (htm9.8 pipeline)', () => {
     expect(quarantine.holds).toHaveLength(0);
     // Benign transcript does NOT clear the pixels: provenance stays hostile.
     expect(outcome.screening.envelope.sourceRiskTier).toBe('hostile');
+    expect(outcome.screening.observability).toMatchObject({
+      sourceClass: 'image_ocr',
+      state: 'released',
+      priorVerdicts: { [VISION_SCREENER_SCANNER_ID]: 'clear' },
+    });
   });
 
   it('cannot silently pass an empty-OCR verdict without the sentinel', async () => {

@@ -180,6 +180,20 @@ export function synthesizeFailClosedScreeningResult(
     mode,
     globalMode,
     cogsecVector: cogSecVectorForProvenance(provenance, sourceClass),
+    observability: {
+      envelopeId: envelope.id,
+      sourceClass,
+      sourceRiskTier,
+      state: envelope.state,
+      action: 'quarantine',
+      riskLabels: [],
+      scores: {},
+      priorVerdicts: {},
+      semanticTrace: {
+        l2: { status: 'failed_closed', reason: 'screening pool failed before completion' },
+        l3: { status: 'not_run', reason: 'screening pool failed before completion' },
+      },
+    },
     effectiveText,
     withheld,
   };

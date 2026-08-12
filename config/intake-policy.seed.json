@@ -52,7 +52,7 @@
       "untrusted": 0.6,
       "hostile": 0.5
     },
-    "mandatoryTiers": ["hostile"],
+    "mandatoryTiers": ["untrusted", "hostile"],
     "failClosedActionByTier": {
       "trusted": "l1_labels_only",
       "standard": "l1_labels_only",

@@ -257,6 +257,15 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     ],
   },
   {
+    name: 'automata_bus',
+    domain: 'memory',
+    exposure: 'core',
+    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.automata_bus,
+    actions: ['brief', 'search', 'append', 'correct', 'handoff', 'runs', 'inspect'],
+    capabilityMetadata: { kind: 'action_aware', source: CAPABILITIES_REQUIREMENTS },
+    retiredAliases: [],
+  },
+  {
     name: 'scratchpad',
     domain: 'memory',
     exposure: 'core',

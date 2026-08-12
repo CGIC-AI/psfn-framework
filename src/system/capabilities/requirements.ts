@@ -97,6 +97,15 @@ function resolveMemoryRequirement(action: string | null): CapabilityRequirement 
   return MEMORY_REQUIREMENTS;
 }
 
+const AUTOMATA_BUS_READ_ACTIONS = new Set(['brief', 'search', 'runs', 'inspect']);
+const AUTOMATA_BUS_WRITE_ACTIONS = new Set(['append', 'correct', 'handoff']);
+
+function resolveAutomataBusRequirement(action: string | null): CapabilityRequirement {
+  if (actionIn(action, AUTOMATA_BUS_READ_ACTIONS)) return 'automata.bus.read';
+  if (actionIn(action, AUTOMATA_BUS_WRITE_ACTIONS)) return 'automata.bus.write';
+  return ['automata.bus.read', 'automata.bus.write'];
+}
+
 const NORTH_STAR_READ_ACTIONS = new Set(['list', 'read', 'get']);
 const NORTH_STAR_WRITE_ACTIONS = new Set(['create', 'update', 'delete', 'reorder']);
 
@@ -320,6 +329,7 @@ const UNIFIED_TOOL_REQUIREMENT_RESOLVERS: Readonly<Partial<Record<string, Unifie
   system: (action) => resolveSystemRequirement(action),
   identity: (action) => resolveIdentityRequirement(action),
   memory: (action) => resolveMemoryRequirement(action),
+  automata_bus: (action) => resolveAutomataBusRequirement(action),
   north_star: (action) => resolveNorthStarRequirement(action),
   shell: () => 'repl.execute',
   scratchpad: (action) => resolveScratchpadRequirement(action),

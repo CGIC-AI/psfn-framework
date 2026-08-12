@@ -69,6 +69,13 @@ import {
 import type { SubagentControlPort } from './port.js';
 import { SubagentTaskRegistry } from './task-registry.js';
 import type { AutomataRunRegistry } from '../automata/run-registry.js';
+import {
+  buildAutomataBusWorkerScope,
+  createAutomataBusTool,
+  resolveAutomataBusWorkerFormation,
+  type AutomataBusWorkerAccess,
+  type AutomataBusWorkerScope,
+} from '../automata/bus/worker-access.js';
 import { buildSubagentWorkSpec, createSubagentWorkSpecProvider } from './work-spec.js';
 import {
   deriveSubagentCapabilityGrant,
@@ -146,6 +153,9 @@ const BLOCKED_SUBAGENT_TOOL_NAMES = new Set([
   'memory_redact',
   'memory_delete',
   'undo_memory_delete',
+  // The ordinary catalog must never supply an unbound Bus surface. Eligible
+  // workers receive a fresh tool bound to their authoritative run scope below.
+  'automata_bus',
 ]);
 const SUBAGENT_TASK_AUTHOR_ID = 'system:subagent-task';
 const SUBAGENT_TASK_AUTHOR_NAME = 'SubagentTask';
@@ -216,6 +226,8 @@ export interface SubagentFacultyDeps {
   activeTurnIntakeEnvelopesProvider?: () => readonly IntakeEnvelopeSnapshot[];
   /** Hydrated companion-scoped durable automata registry. */
   automataRunRegistry?: AutomataRunRegistry;
+  /** Companion-bound Bus prompt/tool adapter. Absent means no Bus prompt or tool. */
+  automataBusWorkerAccess?: AutomataBusWorkerAccess | null;
 }
 
 export interface WyomingSubagentDelegationResult {
@@ -241,6 +253,7 @@ interface ActiveSubagentHandle {
   resolvedRole: ResolvedSubagentRole | null;
   /** bead 7ym.2.1 — effective system prompt: role instructions layered over inherited identity. */
   systemPrompt: string;
+  automataBusScope?: AutomataBusWorkerScope;
   /** bead 7ym.2.2 — role wall-clock deadline (ms), enforced as a turn-boundary budget ceiling. */
   roleTimeoutMs?: number;
   capabilities: string[];
@@ -335,13 +348,38 @@ export class SubagentFaculty implements SubagentControlPort {
         throw error instanceof Error ? error : new Error(message);
       }
     }
-    // Field-level identity inheritance: an explicit per-spawn systemPrompt wins
-    // wholesale; otherwise role instructions layer OVER the inherited companion
-    // identity (never replacing it) unless the role opts out.
+    const automataBusAccess = this.deps.automataBusWorkerAccess;
+    const roleAllowsAutomataBus = resolvedRole?.definition.allowedTools === undefined
+      || resolvedRole.definition.allowedTools.includes('automata_bus');
+    const automataBusScope = automataBusAccess && roleAllowsAutomataBus
+      ? buildAutomataBusWorkerScope(automataBusAccess, {
+        automatonClass: 'subagent.bounded',
+        runId: subagentId,
+        taskId: request.sourceContext?.originatingTaskId ?? subagentId,
+      })
+      : undefined;
+    let automataBusPrompt: string | undefined;
+    if (automataBusScope && automataBusAccess) {
+      try {
+        const formation = await resolveAutomataBusWorkerFormation({
+          access: automataBusAccess,
+          scope: automataBusScope,
+          query: request.name,
+        });
+        automataBusPrompt = formation?.promptBlock;
+      } catch (error) {
+        const message = toErrorMessage(error);
+        await this.emitBlockedSpawnHandoff(request, subagentId, 'automata_bus_formation', message);
+        throw error instanceof Error ? error : new Error(message);
+      }
+    }
+    // Stable public prompt order: inherited identity, bounded Bus layer, then
+    // the owner-resolved role posture. The task remains the first user message.
     const systemPrompt = layerRoleSystemPrompt(
       this.deps.parentSystemPrompt,
       request.systemPrompt,
       resolvedRole,
+      automataBusPrompt,
     );
 
     // bead 7ym.2.2: a role can only NARROW the parent tier. Enforce the per-role
@@ -379,9 +417,11 @@ export class SubagentFaculty implements SubagentControlPort {
       );
     }
     const capabilityGrant = this.resolveCapabilityGrant(
-      request.memoryWriteElevation
-        ? [...capabilities, 'memory.write']
-        : capabilities,
+      [
+        ...capabilities,
+        ...(request.memoryWriteElevation ? ['memory.write'] : []),
+        ...(automataBusPrompt ? ['automata.bus.read', 'automata.bus.write'] : []),
+      ],
     );
     if (capabilityGrant.deniedExplicitTokens.length > 0) {
       const deniedTokens = capabilityGrant.deniedExplicitTokens.join(', ');
@@ -470,6 +510,7 @@ export class SubagentFaculty implements SubagentControlPort {
       maxTurns,
       resolvedRole,
       systemPrompt,
+      ...(automataBusPrompt && automataBusScope ? { automataBusScope } : {}),
       ...(resolvedRole?.definition.timeoutMs !== undefined
         ? { roleTimeoutMs: resolvedRole.definition.timeoutMs }
         : {}),
@@ -1506,7 +1547,6 @@ export class SubagentFaculty implements SubagentControlPort {
 
   private resolveInjectedTools(handle: ActiveSubagentHandle): AgentTool<any>[] {
     const catalog = this.deps.toolCatalogProvider?.();
-    if (!catalog) return [];
 
     // bead 7ym.2.2: a role's allow-list can only NARROW the tier's toolset —
     // it never adds a tool the tier does not already grant (the intersection is
@@ -1515,7 +1555,7 @@ export class SubagentFaculty implements SubagentControlPort {
     const roleAllowSet = roleAllowedTools ? new Set(roleAllowedTools) : null;
 
     const availableByName = new Map<string, AgentTool<any>>();
-    for (const tool of [...catalog.core, ...catalog.extended]) {
+    for (const tool of catalog ? [...catalog.core, ...catalog.extended] : []) {
       if (BLOCKED_SUBAGENT_TOOL_NAMES.has(tool.name)) continue;
       if (roleAllowSet && !roleAllowSet.has(tool.name)) continue;
       if (!availableByName.has(tool.name)) {
@@ -1530,6 +1570,14 @@ export class SubagentFaculty implements SubagentControlPort {
             : this.governCoreAuthoritativeTool(tool, handle),
         );
       }
+    }
+
+    const automataBusAccess = this.deps.automataBusWorkerAccess;
+    if (automataBusAccess && handle.automataBusScope) {
+      availableByName.set('automata_bus', createAutomataBusTool({
+        access: automataBusAccess,
+        scope: handle.automataBusScope,
+      }));
     }
 
     return [...availableByName.values()];

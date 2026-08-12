@@ -256,20 +256,34 @@ export function layerRoleSystemPrompt(
   parentSystemPrompt: string,
   requestSystemPrompt: string | undefined,
   role: ResolvedSubagentRole | null,
+  middleLayer?: string,
 ): string {
+  const normalizedMiddle = middleLayer?.trim();
   if (typeof requestSystemPrompt === 'string' && requestSystemPrompt.trim().length > 0) {
-    return requestSystemPrompt;
+    return [requestSystemPrompt, normalizedMiddle]
+      .filter((section): section is string => Boolean(section))
+      .join('\n\n');
   }
   if (!role) {
-    return parentSystemPrompt;
+    return [parentSystemPrompt, normalizedMiddle]
+      .filter((section): section is string => Boolean(section))
+      .join('\n\n');
   }
   const instructions = role.definition.instructions.trim();
   const inherit = role.definition.inheritIdentity !== false;
   if (!inherit) {
-    return instructions.length > 0 ? instructions : parentSystemPrompt;
+    return [normalizedMiddle, instructions.length > 0 ? instructions : parentSystemPrompt]
+      .filter((section): section is string => Boolean(section))
+      .join('\n\n');
   }
   if (instructions.length === 0) {
-    return parentSystemPrompt;
+    return [parentSystemPrompt, normalizedMiddle]
+      .filter((section): section is string => Boolean(section))
+      .join('\n\n');
   }
-  return `${parentSystemPrompt}\n\n## Role: ${role.name}\n\n${instructions}`;
+  return [
+    parentSystemPrompt,
+    normalizedMiddle,
+    `## Role: ${role.name}\n\n${instructions}`,
+  ].filter((section): section is string => Boolean(section)).join('\n\n');
 }

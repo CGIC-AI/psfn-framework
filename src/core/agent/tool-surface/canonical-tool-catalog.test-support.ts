@@ -3,6 +3,7 @@ import { createBeadsTool } from '../../../boundary/integrations/beads/tools.js';
 import { createFsTool } from '../../../boundary/integrations/filesystem/tools.js';
 import { createRepoTool } from '../../../boundary/integrations/git/tools.js';
 import { createJournalTool } from '../../../boundary/integrations/journal/tools.js';
+import { createAutomataBusTool } from '../../../faculties/automata/bus/worker-access.js';
 import { createMcpTool } from '../../../boundary/integrations/mcp/tools.js';
 import { createShellTool } from '../../../boundary/integrations/shell/tools.js';
 import { createVaultTool } from '../../../boundary/integrations/vault/tools.js';
@@ -28,9 +29,55 @@ import { createGenerateImageTool, createSelfieTool } from '../../../primitives/i
 import { createResponseControlTool } from '../no-reply-tool.js';
 import { createToolSearchTool, createToolsetTool } from '../substrate-agent/adaptive-tools-runtime.js';
 import { INTAKE_FIREWALL_OFF_SELF_AUTHORED_MUTATION_RUNTIME } from '../../session/intake-sink-gating.js';
+import type { SensitivityLevel } from '../../../system/trust/types.js';
+
+function testBound(value: string): number {
+  return Number.parseInt(value, 10);
+}
+
+function testSensitivity(value: SensitivityLevel): SensitivityLevel {
+  return value;
+}
 
 export function createProviderFactoryToolCatalog(): AgentTool<any>[] {
   const inert = {} as never;
+  const automataBus = createAutomataBusTool({
+    access: {
+      identity: {
+        companionId: 'companion-public-example',
+        audience: 'eligible-automata',
+        maxSensitivity: testSensitivity('personal'),
+      },
+      bounds: {
+        maxQueryChars: testBound('100'),
+        maxTextChars: testBound('200'),
+        maxArrayItems: testBound('8'),
+        maxSearchResults: testBound('8'),
+        maxRunResults: testBound('16'),
+        maxBriefingChars: testBound('200'),
+        maxBriefingItems: testBound('4'),
+        maxToolResultChars: testBound('1000'),
+      },
+      port: {
+        isClassEligible: () => true,
+        brief: inert,
+        search: inert,
+        append: inert,
+        correct: inert,
+        handoff: inert,
+        runs: inert,
+        inspect: inert,
+      },
+    },
+    scope: {
+      companionId: 'companion-public-example',
+      runId: 'run-public-example',
+      taskId: 'task-public-example',
+      automatonClass: 'subagent.bounded',
+      audience: 'eligible-automata',
+      maxSensitivity: testSensitivity('personal'),
+    },
+  });
   return [
     createToolSearchTool(inert), createToolsetTool(inert),
     createResponseControlTool(() => null), createFsTool(inert), createRepoTool(inert),
@@ -39,7 +86,7 @@ export function createProviderFactoryToolCatalog(): AgentTool<any>[] {
     createAnalysisWorkbenchTool(inert), createOrientTool(inert), createIdentityTool(inert, {
       intake: INTAKE_FIREWALL_OFF_SELF_AUTHORED_MUTATION_RUNTIME,
     }),
-    createMemoryTool(inert, inert), createScratchpadTool(inert), createContactTool(inert, {
+    createMemoryTool(inert, inert), automataBus, createScratchpadTool(inert), createContactTool(inert, {
       intake: INTAKE_FIREWALL_OFF_SELF_AUTHORED_MUTATION_RUNTIME,
     }),
     createSessionTool(inert), createSelfStatusTool(inert), createSystemTool(inert),

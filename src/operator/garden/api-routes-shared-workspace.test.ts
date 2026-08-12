@@ -7,6 +7,7 @@ import { buildAdminSharedWorkspaceRoutes } from './api-routes-shared-workspace.j
 import { AdminSharedWorkspaceService } from './services/shared-workspace-service.js';
 import type { AdminApiRoute } from './routes/types.js';
 import type { GardenRequestContext } from './garden-request-context.js';
+import type { AdminAutomataService } from './services/automata-service.js';
 
 class CapturingResponse {
   status = 0;
@@ -53,7 +54,10 @@ describe('shared workspace admin write authentication', () => {
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
   });
 
-  function fixture(): { service: AdminSharedWorkspaceService; routes: AdminApiRoute[] } {
+  function fixture(automataService?: AdminAutomataService): {
+    service: AdminSharedWorkspaceService;
+    routes: AdminApiRoute[];
+  } {
     const root = mkdtempSync(join(tmpdir(), 'psfn-shared-routes-'));
     roots.push(root);
     for (const path of [
@@ -64,6 +68,7 @@ describe('shared workspace admin write authentication', () => {
       service,
       routes: buildAdminSharedWorkspaceRoutes({
         service,
+        automataService,
         withBody: (req, _res, callback) => {
           let body = '';
           req.on('data', chunk => { body += String(chunk); });
@@ -149,6 +154,64 @@ describe('shared workspace admin write authentication', () => {
       provenance: 'source',
     });
     expect(missingCredential.status).toBe(401);
+  });
+
+  it('rejects client-built artifacts that bypass Automata proposal validation', async () => {
+    const { routes } = fixture();
+    const proposalRoute = routes.find(route => route.match('/api/admin/shared-workspace/proposals'))!;
+    const response = await invoke(proposalRoute, '/api/admin/shared-workspace/proposals', {
+      artifactPath: 'automata/lesson-proposals/client-built.json',
+      content: '{}',
+      mediaType: 'application/json',
+      provenance: 'automata-lesson:client-built',
+    }, context('POST /api/admin/shared-workspace/proposals'));
+
+    expect(response.status).toBe(400);
+    expect(response.body).toContain('server-validated proposal action');
+  });
+
+  it('builds Automata diffs server-side from the current redacted lesson group', async () => {
+    const lessonGroup = {
+      groupId: `automata-lesson:v1:${'a'.repeat(64)}`,
+      automatonClass: 'subagent.bounded',
+      promptRevision: 'sha256:prompt-r1',
+      toolName: 'repo',
+      failureCategory: 'missing-instruction',
+      lessonCode: 'read-before-edit',
+      sourceCount: 2,
+      support: 'supported' as const,
+      evidenceQuality: 'verified' as const,
+      sourceFindingIds: ['finding-1', 'finding-2'],
+      evidenceIds: [`sha256:${'b'.repeat(64)}`],
+      sourceTraceTruncated: false,
+      contradiction: { present: false, sourceFindingIds: [] },
+      inferenceOnly: false,
+      interpretation: 'candidate-pattern-not-verified-defect' as const,
+    };
+    const automataService = {
+      getSnapshot: async () => ({ lessons: { groups: [lessonGroup] } }) as never,
+    } satisfies AdminAutomataService;
+    const { service, routes } = fixture(automataService);
+    const proposalRoute = routes.find(route => route.match('/api/admin/shared-workspace/proposals'))!;
+
+    const response = await invoke(proposalRoute, '/api/admin/shared-workspace/proposals', {
+      kind: 'automata_lesson',
+      groupId: lessonGroup.groupId,
+      target: { kind: 'instruction', id: 'memory.extraction', baseRevision: 'sha256:prompt-r1' },
+      before: 'Inspect the task.',
+      after: 'Inspect the task.\nRead relevant files before editing.',
+    }, context('POST /api/admin/shared-workspace/proposals'));
+
+    expect(response.status).toBe(201);
+    expect(JSON.parse(response.body)).toMatchObject({ status: 'pending' });
+    const [review] = service.getSnapshot().reviews;
+    expect(review?.artifactPath).toMatch(/^automata\/lesson-proposals\/[0-9a-f]{64}\.json$/u);
+    expect(JSON.parse(review!.content)).toMatchObject({
+      state: 'review_required',
+      source: { sourceFindingIds: ['finding-1', 'finding-2'] },
+      safeguards: { appliesChange: false, promotesPrimaryMemory: false, publishesTelemetry: false },
+    });
+    expect(review?.content).toContain('+Read relevant files before editing.');
   });
 
   it('does not accept a reusable browser credential as workflow identity', async () => {

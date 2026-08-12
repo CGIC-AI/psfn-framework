@@ -23,11 +23,18 @@ import type {
   AutomataBusVectorIndexPort,
   AutomataBusVectorIndexState,
 } from '../../../faculties/automata/bus/query-ports.js';
+import {
+  AutomataLessonProjectionService,
+  type AutomataLessonProjection,
+  type AutomataLessonReadScope,
+} from '../../../faculties/automata/bus/lesson-projection.js';
+import { PostgresAutomataLessonSource } from '../../../faculties/automata/bus/postgres-lesson-source.js';
 import type {
   AdminAutomataBusDegradationReason,
   AdminAutomataBusHealthSource,
   AdminAutomataBusReadInput,
   AdminAutomataBusReadPort,
+  AdminAutomataLessonReadPort,
 } from './automata-service.js';
 
 interface EventJsonRow {
@@ -194,15 +201,32 @@ function appendFilters(
   return predicates;
 }
 
-export class PostgresAdminAutomataBusReadAdapter implements AdminAutomataBusReadPort {
+export class PostgresAdminAutomataBusReadAdapter implements
+  AdminAutomataBusReadPort,
+  AdminAutomataLessonReadPort {
   private readonly companionId: string;
   private readonly maxPageLimit: number;
   private readonly now: () => Date;
+  private readonly lessons: AutomataLessonProjectionService;
 
   constructor(private readonly options: PostgresAdminAutomataBusReadAdapterOptions) {
     this.companionId = requireAutomataBusNonEmptyString(options.companionId, 'companionId');
     this.maxPageLimit = requireAutomataBusPositiveInteger(options.maxPageLimit, 'maxPageLimit');
     this.now = options.now ?? (() => new Date());
+    this.lessons = new AutomataLessonProjectionService({
+      source: new PostgresAutomataLessonSource({
+        pool: options.pool,
+        companionId: this.companionId,
+      }),
+      policy: {
+        maxGroups: this.maxPageLimit,
+        maxSourcesPerGroup: this.maxPageLimit,
+      },
+    });
+  }
+
+  async query(scope: AutomataLessonReadScope): Promise<AutomataLessonProjection> {
+    return await this.lessons.query(scope);
   }
 
   async readPage(input: AdminAutomataBusReadInput): Promise<{

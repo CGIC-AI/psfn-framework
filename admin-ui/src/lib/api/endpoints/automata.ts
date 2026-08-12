@@ -1,4 +1,4 @@
-import { apiGet } from '$lib/api/client';
+import { apiGet, apiPost } from '$lib/api/client';
 import { withQuery } from '$lib/api/query';
 
 export type AutomataRunStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
@@ -102,6 +102,15 @@ export interface AutomataSnapshot {
     }>;
     page: { offset: number; limit: number; hasMore: boolean };
   };
+  lessons: {
+    available: boolean;
+    condition: 'ready' | 'unavailable';
+    degradationReason?: 'read_failed' | 'source_unavailable';
+    groups: AutomataLessonGroup[];
+    hasMore: boolean;
+    sourceFindingCount: number;
+    proposalReviewPath: '/api/admin/shared-workspace/proposals';
+  };
   extensions: {
     managementPanels: Array<{
       id: string;
@@ -110,6 +119,41 @@ export interface AutomataSnapshot {
       mode: 'read_only';
     }>;
   };
+}
+
+export interface AutomataLessonGroup {
+  groupId: string;
+  automatonClass: string;
+  promptRevision: string;
+  toolName: string;
+  failureCategory: string;
+  lessonCode: string;
+  sourceCount: number;
+  support: 'low-support' | 'supported';
+  evidenceQuality: 'none' | 'rejected' | 'unverified' | 'verified';
+  sourceFindingIds: string[];
+  evidenceIds: string[];
+  sourceTraceTruncated: boolean;
+  contradiction: { present: boolean; sourceFindingIds: string[] };
+  inferenceOnly: boolean;
+  interpretation: 'candidate-pattern-not-verified-defect';
+}
+
+export interface AutomataLessonProposalAction {
+  kind: 'automata_lesson';
+  groupId: string;
+  target: { kind: 'instruction' | 'tool'; id: string; baseRevision: string };
+  before: string;
+  after: string;
+}
+
+export function submitAutomataLessonProposal(
+  action: AutomataLessonProposalAction,
+): Promise<{ reviewId: string; status: 'pending' }> {
+  return apiPost<{ reviewId: string; status: 'pending' }>(
+    '/api/admin/shared-workspace/proposals',
+    action,
+  );
 }
 
 export interface AutomataQuery {
@@ -151,7 +195,12 @@ export function resolveAutomataPageState(input: {
   if (input.error && input.snapshot === null) return 'error';
   if (input.snapshot === null) return 'empty';
   if (input.snapshot.bus.health.condition !== 'healthy') return 'degraded';
+  if (input.snapshot.lessons.condition !== 'ready') return 'degraded';
   if (input.snapshot.bus.health.freshness === 'stale') return 'stale';
-  if (input.snapshot.runs.length === 0 && input.snapshot.bus.events.length === 0) return 'empty';
+  if (
+    input.snapshot.runs.length === 0
+    && input.snapshot.bus.events.length === 0
+    && input.snapshot.lessons.groups.length === 0
+  ) return 'empty';
   return 'ready';
 }

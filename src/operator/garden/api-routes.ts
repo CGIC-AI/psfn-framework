@@ -538,7 +538,11 @@ export function buildAdminApiRoutes(options: {
       ...(appendAuditTimelineEntry ? { appendAuditTimelineEntry } : {}),
     }),
     ...(sharedWorkspaceService
-      ? buildAdminSharedWorkspaceRoutes({ service: sharedWorkspaceService, withBody })
+      ? buildAdminSharedWorkspaceRoutes({
+          service: sharedWorkspaceService,
+          automataService,
+          withBody,
+        })
       : []),
     ...buildAdminOverviewRoutes({
       config,

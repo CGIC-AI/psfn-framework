@@ -64,6 +64,10 @@ import {
   resolveAutomataBusWorkerFormation,
   type AutomataBusWorkerAccess,
 } from '../../automata/bus/worker-access.js';
+import {
+  completeExtractionChunkWithAutomataBus,
+  type ExtractionAutomataBusBinding,
+} from './automata-bus-completion.js';
 
 export { ExtractionIntegrityError } from './integrity-error.js';
 
@@ -349,7 +353,16 @@ export async function runExtractionOrchestration(
         ...(automataBusFormation ? { automataBusPrompt: automataBusFormation.promptBlock } : {}),
       },
       requestId,
-      completeChunk: createExtractionChunkCompleter(options, turnId),
+      completeChunk: createExtractionChunkCompleter(
+        options,
+        turnId,
+        automataBusFormation
+          ? {
+              access: options.automataBusWorkerAccess!,
+              scope: automataBusFormation.scope,
+            }
+          : undefined,
+      ),
     });
     const { mergedParsedFacts, crossChunkDeduplicatedCount } = llmPass;
     const normalization = normalizeAndMergeExtractedFacts({
@@ -568,46 +581,52 @@ function toErrorMessage(error: unknown): string {
 function createExtractionChunkCompleter(
   options: ExtractionRunOptions,
   turnId: TurnID | undefined,
+  automataBus: ExtractionAutomataBusBinding | undefined,
 ): (prompt: string, chunkRequestId: string) => Promise<string> {
   return async (prompt, chunkRequestId) => {
-    const response = await completeWithWorkSpec(
-      options.llmClient,
-      {
-        systemPrompt: prompt,
-        messages: [{ role: 'user', content: 'Extract facts from the conversation above.' }],
-      },
-      buildLLMWorkSpec({
-        purpose: 'extraction',
-        durable: true,
-        ...(options.preemptionProtected
-          ? {
-              preemptionProtected: true,
-              ...(options.welfareGrantJobId
-                ? { welfareGrantJobId: options.welfareGrantJobId }
+    return completeExtractionChunkWithAutomataBus({
+      prompt,
+      ...(automataBus ? { automataBus } : {}),
+      complete: (context, phase) => {
+        const requestId = phase === 'initial'
+          ? chunkRequestId
+          : `${chunkRequestId}:automata-bus-followup`;
+        return completeWithWorkSpec(
+          options.llmClient,
+          context,
+          buildLLMWorkSpec({
+            purpose: 'extraction',
+            durable: true,
+            ...(options.preemptionProtected
+              ? {
+                  preemptionProtected: true,
+                  ...(options.welfareGrantJobId
+                    ? { welfareGrantJobId: options.welfareGrantJobId }
+                    : {}),
+                }
+              : {}),
+            correlation: {
+              requestId,
+              ...(turnId ? { turnId } : {}),
+              channelId: options.channelId,
+              callType: 'memory',
+              purpose: 'memory.extraction',
+              ...(options.icpCorrelation
+                ? {
+                    icpCorrelation: deriveChildIcpConversationCostCorrelation(
+                      options.icpCorrelation,
+                      {
+                        requestId,
+                        costPurpose: 'extraction',
+                        costOriginStage: 'post_turn',
+                      },
+                    ),
+                  }
                 : {}),
-            }
-          : {}),
-        correlation: {
-          requestId: chunkRequestId,
-          ...(turnId ? { turnId } : {}),
-          channelId: options.channelId,
-          callType: 'memory',
-          purpose: 'memory.extraction',
-          ...(options.icpCorrelation
-            ? {
-                icpCorrelation: deriveChildIcpConversationCostCorrelation(
-                  options.icpCorrelation,
-                  {
-                    requestId: chunkRequestId,
-                    costPurpose: 'extraction',
-                    costOriginStage: 'post_turn',
-                  },
-                ),
-              }
-            : {}),
-        },
-      }),
-    );
-    return response.content;
+            },
+          }),
+        );
+      },
+    });
   };
 }

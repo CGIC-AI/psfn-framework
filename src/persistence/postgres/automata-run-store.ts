@@ -172,7 +172,7 @@ export class PostgresAutomataRunStore implements AutomataRunStorePort {
     options: { schema?: string; role?: string } = {},
   ): Promise<PostgresAutomataRunStore> {
     const pool = createPostgresPool(databaseUrl, {
-      applicationName: 'psfn-automata-run-registry',
+      applicationName: 'automata-run-registry',
       allowExitOnIdle: true,
       schema: options.schema,
       role: options.role,

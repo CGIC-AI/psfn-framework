@@ -1,4 +1,4 @@
-import type { Pool, QueryResultRow } from 'pg';
+import type { QueryResultRow } from 'pg';
 import {
   parseExactSessionPurgeSagaRecord,
   type ExactSessionPurgeSagaRecord,
@@ -50,6 +50,13 @@ interface SagaRow extends QueryResultRow {
   saga_revision: number | string;
 }
 
+export interface ExactSessionPurgeSagaSqlPool {
+  query<R extends QueryResultRow = QueryResultRow>(
+    text: string,
+    values?: unknown[],
+  ): Promise<{ rows: R[]; rowCount: number | null }>;
+}
+
 function rowRevision(value: unknown): number {
   const parsed = typeof value === 'number' ? value : Number(value);
   if (!Number.isSafeInteger(parsed) || parsed < 1) {
@@ -61,7 +68,7 @@ function rowRevision(value: unknown): number {
 /** Companion-scoped durable CAS store for restartable forward recovery. */
 export class PostgresExactSessionPurgeSagaStore implements ExactSessionPurgeSagaStorePort {
   constructor(
-    private readonly pool: Pool,
+    private readonly pool: ExactSessionPurgeSagaSqlPool,
     private readonly companionId: string,
   ) {
     if (!companionId.trim()) throw new Error('Exact-session purge saga companionId is required');

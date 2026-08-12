@@ -110,6 +110,10 @@ describe('Postgres live schema migrations', () => {
     expect(sql).toContain('CREATE TRIGGER automata_bus_events_append_only');
     expect(sql).toContain('CREATE TRIGGER automata_bus_events_no_truncate');
     expect(POSTGRES_AUTOMATA_ROLLBACK_MIGRATIONS).toEqual([
+      'DROP TABLE IF EXISTS automata_exact_session_purge_sagas',
+      'DROP TABLE IF EXISTS automata_retention_audit_events',
+      'DROP TABLE IF EXISTS automata_session_classifications',
+      'DROP FUNCTION IF EXISTS reject_automata_retention_history_mutation()',
       'DROP TABLE IF EXISTS automata_bus_vector_lag',
       'DROP TABLE IF EXISTS automata_bus_finding_vectors',
       'DROP TABLE IF EXISTS automata_bus_vector_state',
@@ -117,6 +121,18 @@ describe('Postgres live schema migrations', () => {
       'DROP TABLE IF EXISTS automata_bus_events',
       'DROP FUNCTION IF EXISTS reject_automata_bus_event_mutation()',
     ]);
+  });
+
+  it('installs append-only retention history and restartable exact-purge recovery', () => {
+    const sql = migrationSql(POSTGRES_AUTOMATA_MIGRATIONS);
+
+    expect(sql).toContain('CREATE TABLE IF NOT EXISTS automata_session_classifications');
+    expect(sql).toContain('CREATE TABLE IF NOT EXISTS automata_retention_audit_events');
+    expect(sql).toContain('CREATE TABLE IF NOT EXISTS automata_exact_session_purge_sagas');
+    expect(sql).toContain('CREATE TRIGGER automata_session_classifications_append_only');
+    expect(sql).toContain('CREATE TRIGGER automata_session_classifications_no_truncate');
+    expect(sql).toContain('CREATE TRIGGER automata_retention_audit_events_append_only');
+    expect(sql).toContain('CREATE TRIGGER automata_retention_audit_events_no_truncate');
   });
 
   it('upgrades existing l2 memory tables with scoped memory columns before indexed use', () => {

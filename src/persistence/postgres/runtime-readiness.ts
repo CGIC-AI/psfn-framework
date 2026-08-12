@@ -35,6 +35,7 @@ export const POSTGRES_STORE_READINESS_CATALOG = {
   background_work: { label: 'background work', requirement: 'required' },
   automata_runs: { label: 'automata runs', requirement: 'required' },
   automata_bus: { label: 'Automata Bus', requirement: 'required' },
+  automata_retention: { label: 'Automata retention', requirement: 'required' },
   partner_affect_shadow: { label: 'partner affect shadow', requirement: 'required' },
   session_transcripts: { label: 'session transcripts', requirement: 'required' },
   companion_presence: { label: 'companion presence', requirement: 'required' },

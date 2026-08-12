@@ -2,4 +2,5 @@
 set -euo pipefail
 
 repo_root="$(git rev-parse --show-toplevel)"
-exec node "$repo_root/scripts/ci/pre-push.mjs" "$@"
+exec "$repo_root/scripts/ci/run-repository-node.sh" \
+  "$repo_root" "$repo_root/scripts/ci/pre-push.mjs" "$@"

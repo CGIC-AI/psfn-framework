@@ -20,6 +20,7 @@ test('framework, UI builders, and CI share the exact Node 24 LTS standard', () =
   const evalPackage = JSON.parse(read('tools/evals/package.json'));
 
   assert.equal(read('.node-version').trim(), nodeVersion);
+  assert.match(read('.githooks/pre-push'), /run-repository-node\.sh/u);
   assert.match(read('.npmrc'), /^engine-strict=true$/mu);
   assert.equal(rootPackage.packageManager, 'npm@11.17.0');
   assert.equal(rootPackage.engines.node, `>=${nodeVersion} <25`);

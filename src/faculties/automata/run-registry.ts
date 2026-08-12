@@ -148,11 +148,7 @@ export class AutomataRunRegistry {
       ...(input.parentRunId ? { parentRunId: requiredText(input.parentRunId, 'parentRunId') } : {}),
       ...(input.sourceRunId ? { sourceRunId: requiredText(input.sourceRunId, 'sourceRunId') } : {}),
       sessionIds: uniqueTexts(input.sessionIds ?? [], 'sessionIds'),
-      artifacts: (input.artifacts ?? []).map(artifact => ({
-        kind: requiredText(artifact.kind, 'artifacts.kind'),
-        ref: requiredText(artifact.ref, 'artifacts.ref'),
-        custody: artifact.custody,
-      })),
+      artifacts: normalizeArtifacts(input.artifacts ?? []),
       status: 'queued',
       statusReason: 'execution_requested',
       promotionState: 'not_requested',
@@ -170,6 +166,19 @@ export class AutomataRunRegistry {
     const current = this.runs.get(normalizedRunId);
     if (!current) throw new Error(`Unknown automata run "${normalizedRunId}".`);
     const next = requireAutomataRunStatus(input.status);
+    if (current.status === next && isTerminalStatus(next)) {
+      const reason = requiredText(input.reason, 'statusReason');
+      const failureReason = input.failureReason === undefined
+        ? undefined
+        : requiredText(input.failureReason, 'failureReason');
+      if (
+        current.statusReason === reason
+        && current.outcome === input.outcome
+        && current.failureReason === failureReason
+      ) {
+        return cloneAutomataRun(current);
+      }
+    }
     if (!ALLOWED_TRANSITIONS[current.status].includes(next)) {
       throw new Error(`Invalid automata run transition for ${normalizedRunId}: ${current.status} -> ${next}.`);
     }
@@ -187,6 +196,21 @@ export class AutomataRunRegistry {
     return cloneAutomataRun(updated);
   }
 
+  async linkArtifacts(
+    runId: string,
+    artifacts: readonly AutomataArtifactRef[],
+  ): Promise<AutomataRunRecord> {
+    const normalizedRunId = requiredText(runId, 'runId');
+    const current = this.runs.get(normalizedRunId);
+    if (!current) throw new Error(`Unknown automata run "${normalizedRunId}".`);
+    const merged = mergeArtifacts(current.artifacts, normalizeArtifacts(artifacts));
+    if (sameArtifacts(current.artifacts, merged)) return cloneAutomataRun(current);
+    const updated = { ...cloneAutomataRun(current), artifacts: merged };
+    await this.store.update(updated, current.status);
+    this.runs.set(normalizedRunId, updated);
+    return cloneAutomataRun(updated);
+  }
+
   getRun(runId: string): AutomataRunRecord | null {
     const record = this.runs.get(runId);
     return record ? cloneAutomataRun(record) : null;
@@ -195,6 +219,17 @@ export class AutomataRunRegistry {
   findByTask(taskId: string): AutomataRunRecord[] {
     const normalized = requiredText(taskId, 'taskId');
     return this.sortedRuns().filter(record => record.taskId === normalized);
+  }
+
+  findByTaskDescription(query: string, limit = this.policy.recentRunLimit): AutomataRunRecord[] {
+    const normalized = requiredText(query, 'task query').toLowerCase();
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > this.policy.operatorMutationLimit) {
+      throw new Error(`Automata task discovery limit must be between 1 and ${this.policy.operatorMutationLimit}`);
+    }
+    return this.sortedRuns()
+      .filter(record => [record.runId, record.workerId, record.taskId, record.taskLabel, record.taskSummary]
+        .some(value => value.toLowerCase().includes(normalized)))
+      .slice(0, limit);
   }
 
   listRuns(options: {
@@ -233,4 +268,46 @@ export class AutomataRunRegistry {
       .sort((left, right) => right.createdAtMs - left.createdAtMs || left.runId.localeCompare(right.runId))
       .map(cloneAutomataRun);
   }
+}
+
+function isTerminalStatus(status: AutomataRunStatus): boolean {
+  return status === 'completed' || status === 'failed' || status === 'cancelled';
+}
+
+function normalizeArtifacts(artifacts: readonly AutomataArtifactRef[]): AutomataArtifactRef[] {
+  const normalized = artifacts.map(artifact => {
+    if (!['pending', 'durable', 'discarded'].includes(artifact.custody)) {
+      throw new Error(`Automata run artifact custody "${String(artifact.custody)}" is invalid`);
+    }
+    return {
+      kind: requiredText(artifact.kind, 'artifacts.kind'),
+      ref: requiredText(artifact.ref, 'artifacts.ref'),
+      custody: artifact.custody,
+    };
+  });
+  if (new Set(normalized.map(artifact => `${artifact.kind}\0${artifact.ref}`)).size !== normalized.length) {
+    throw new Error('Automata run artifacts must not contain duplicate kind/ref pairs');
+  }
+  return normalized;
+}
+
+function mergeArtifacts(
+  existing: readonly AutomataArtifactRef[],
+  added: readonly AutomataArtifactRef[],
+): AutomataArtifactRef[] {
+  const byReference = new Map(existing.map(artifact => [
+    `${artifact.kind}\0${artifact.ref}`,
+    { ...artifact },
+  ]));
+  for (const artifact of added) {
+    byReference.set(`${artifact.kind}\0${artifact.ref}`, { ...artifact });
+  }
+  return [...byReference.values()];
+}
+
+function sameArtifacts(
+  left: readonly AutomataArtifactRef[],
+  right: readonly AutomataArtifactRef[],
+): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
 }

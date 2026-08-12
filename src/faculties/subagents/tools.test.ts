@@ -100,6 +100,8 @@ function createPort(): SubagentControlPort {
       capabilities: ['general'],
       requiredCapabilities: [],
     })),
+    discover: vi.fn(async () => []),
+    inspect: vi.fn(async () => null),
     getRuntimeSnapshot: vi.fn(() => ({
       generatedAt: 100,
       activeCount: 1,
@@ -196,6 +198,51 @@ describe('createSubagentTool', () => {
         lifecycleState: 'queued',
       },
     });
+  });
+
+  it('discovers by task and inspects durable lineage without using the raw status surface', async () => {
+    const port = createPort();
+    (port.discover as ReturnType<typeof vi.fn>).mockResolvedValueOnce([{
+      subagentId: 'subagent-1',
+      name: 'inspect',
+      task: 'inspect runtime state',
+      workerLane: 'subagent',
+      channelId: 'subagent:subagent-1',
+      lifecycleState: 'completed',
+      stateReason: 'completed',
+      createdAt: 100,
+      capabilities: [],
+      requiredCapabilities: [],
+    }]);
+    (port.inspect as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      task: (await port.discover('inspect'))[0],
+      lineage: {
+        runId: 'subagent-1',
+        taskId: 'task-1',
+        workerId: 'subagent-1',
+        sessionIds: ['subagent:subagent-1'],
+      },
+      rawSession: {
+        separatelyGoverned: true,
+        sessionIds: ['subagent:subagent-1'],
+        accessSurface: 'subagent.status',
+      },
+    });
+    const tool = createSubagentTool(port);
+
+    await tool.execute('discover', { action: 'discover', task_query: 'runtime state' });
+    const inspected = await tool.execute('inspect', { action: 'inspect', subagent_id: 'subagent-1' });
+
+    expect(port.discover).toHaveBeenLastCalledWith('runtime state', undefined);
+    expect(port.inspect).toHaveBeenCalledWith('subagent-1');
+    expect(parseText(inspected)).toMatchObject({
+      semantics: 'durable_registry_and_bus_inspection',
+      detail: {
+        lineage: { runId: 'subagent-1', sessionIds: ['subagent:subagent-1'] },
+        rawSession: { separatelyGoverned: true, accessSurface: 'subagent.status' },
+      },
+    });
+    expect(JSON.stringify(parseText(inspected))).not.toContain('transcript');
   });
 
   it('threads a requested role through the spawn surface (7ym.2)', async () => {

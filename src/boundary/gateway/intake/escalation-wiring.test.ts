@@ -507,6 +507,11 @@ describe('L2/L3 escalation wired into the live gateway screening path', () => {
     expect(result.effectiveText).toContain(L3_CLEAR_VERDICT.summary);
     expect(result.effectiveText).not.toContain(BENIGN_CONTENT);
     expect(result.cogSecCaseId).toBeDefined();
+    // Policy continued to mandatory L3; the L2 verdict itself stayed clear.
+    expect(result.observability.semanticTrace).toMatchObject({
+      l2: { status: 'clear' },
+      l3: { status: 'clear' },
+    });
 
     await composition.dispose();
   });

@@ -83,7 +83,10 @@ export const AUTOMATA_RETENTION_POSTGRES_SCHEMA_STATEMENTS = [
           'journals', 'journal_rolls', 'channel_index', 'transcript_projection',
           'turn_records', 'redis_tail_pointers'
         ]
-        AND jsonb_object_length(surface_counts_json) = 6
+        AND surface_counts_json - ARRAY[
+          'journals', 'journal_rolls', 'channel_index', 'transcript_projection',
+          'turn_records', 'redis_tail_pointers'
+        ]::text[] = '{}'::jsonb
         AND error_digest IS NULL)
       OR event_kind <> 'purged'
     ),

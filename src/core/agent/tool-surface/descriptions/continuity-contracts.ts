@@ -7,6 +7,27 @@ const PERSONA_FIELDS = [
 ] as const;
 
 export const CONTINUITY_TOOL_CONTRACTS = {
+  automata_bus: {
+    purpose: 'Reuse companion-scoped, evidence-bearing learned state across eligible ephemeral automata.',
+    actions: [
+      action('brief', [], ['query']),
+      action('search', ['query'], ['limit']),
+      action('append', ['claim'], ['provenance', 'evidence', 'artifact_refs', 'verification_status', 'source', 'confidence']),
+      action('correct', ['target_event_id', 'relation', 'reason'], ['replacement_claim'], {
+        id: 'correct',
+        rule: 'corrects and supersedes require replacement_claim; retracts forbids it',
+      }),
+      action('handoff', ['summary'], ['output_refs', 'validation_performed', 'blocker', 'next_action']),
+      action('runs', [], ['status', 'class_id', 'task_id', 'limit']),
+      action('inspect', [], [], {
+        id: 'inspect',
+        requiredAnyOf: [['event_id'], ['run_id']],
+      }),
+    ],
+    output: 'It returns bounded current findings, durable run references, handoff receipts, or append/correction identifiers.',
+    guidance: 'Do not use it on every turn; use it only at spawn, meaningful checkpoints, stage transitions, handoff, or completion. Bus findings are automata learned state, not companion memory or primary-prompt content.',
+    example: { action: 'search', query: 'known failure modes for this task' },
+  },
   orient: {
     purpose: 'Maintain scoped continuity blocks, values, open threads, and explicit introspection consent choices.',
     actions: [

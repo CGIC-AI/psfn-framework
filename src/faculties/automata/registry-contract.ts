@@ -1,4 +1,8 @@
 import { isRecord } from '../../shared/utils/types.js';
+import {
+  parseAutomataBusReviewerPolicy,
+  type AutomataBusReviewerPolicy,
+} from './bus/reviewer-policy.js';
 
 export const AUTOMATA_RUN_STATUSES = [
   'queued',
@@ -187,6 +191,16 @@ export const PRODUCTION_AUTOMATA_CLASSES = [
     failureClass: 'isolated',
     retentionClass: 'standard',
   },
+  {
+    id: 'scheduler.automata_bus_reviewer',
+    workerKind: 'scheduler',
+    trigger: 'scheduler:automata-bus-reviewer',
+    promptPolicy: INHERITANCE_MODES.system,
+    chargeClass: 'maintenance',
+    concurrencyClass: EXECUTION_MODES.scheduler,
+    failureClass: 'isolated',
+    retentionClass: 'standard',
+  },
 ] as const satisfies readonly AutomataClassDescriptor[];
 
 export type ProductionAutomataClassId = typeof PRODUCTION_AUTOMATA_CLASSES[number]['id'];
@@ -212,6 +226,7 @@ export interface AutomataOwnerPolicy {
     eligibleClasses: ProductionAutomataClassId[];
     excludedClasses: ProductionAutomataClassId[];
     query: AutomataBusQueryOwnerPolicy;
+    reviewer: AutomataBusReviewerPolicy;
   };
   retentionMs: Record<AutomataRetentionClass, number>;
   recentRunLimit: number;
@@ -356,7 +371,7 @@ export function parseAutomataOwnerPolicy(value: unknown, source = 'automata-poli
     ['schemaVersion', 'bus', 'retentionMs', 'recentRunLimit', 'operatorMutationLimit'],
     source,
   );
-  assertExactKeys(value.bus, ['eligibleClasses', 'excludedClasses', 'query'], `${source}.bus`);
+  assertExactKeys(value.bus, ['eligibleClasses', 'excludedClasses', 'query', 'reviewer'], `${source}.bus`);
   assertExactKeys(retentionValues, RETENTION_CLASSES, `${source}.retentionMs`);
   const eligibleClasses = parseClassList(value.bus.eligibleClasses, `${source}.bus.eligibleClasses`);
   const excludedClasses = parseClassList(value.bus.excludedClasses, `${source}.bus.excludedClasses`);
@@ -366,13 +381,14 @@ export function parseAutomataOwnerPolicy(value: unknown, source = 'automata-poli
   const missing = PRODUCTION_AUTOMATA_CLASSES.map(entry => entry.id).filter(classId => !accounted.has(classId));
   if (missing.length > 0) throw new Error(`${source} does not assign bus policy for: ${missing.join(', ')}`);
   const query = parseBusQueryPolicy(value.bus.query, `${source}.bus.query`);
+  const reviewer = parseAutomataBusReviewerPolicy(value.bus.reviewer, `${source}.bus.reviewer`);
   const retentionMs = Object.fromEntries(RETENTION_CLASSES.map(retentionClass => [
     retentionClass,
     requirePositiveInteger(retentionValues[retentionClass], `${source}.retentionMs.${retentionClass}`),
   ])) as Record<AutomataRetentionClass, number>;
   return {
     schemaVersion: 1,
-    bus: { eligibleClasses, excludedClasses, query },
+    bus: { eligibleClasses, excludedClasses, query, reviewer },
     retentionMs,
     recentRunLimit: requirePositiveInteger(value.recentRunLimit, `${source}.recentRunLimit`),
     operatorMutationLimit: requirePositiveInteger(value.operatorMutationLimit, `${source}.operatorMutationLimit`),

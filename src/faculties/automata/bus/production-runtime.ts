@@ -34,7 +34,7 @@ export interface AutomataBusCanonicalHydrationStore {
   }): Promise<PersistedAutomataBusCurrentFinding[]>;
 }
 
-export interface AutomataBusProductionRuntimeComposition {
+interface AutomataBusProductionRuntimeComposition {
   embeddingIdentity: AutomataBusEmbeddingIdentity;
   resultCache: 'disabled' | 'memory' | 'redis' | 'unavailable';
   /** HNSW readiness is observed; unavailable ANN degrades to bounded exact search. */

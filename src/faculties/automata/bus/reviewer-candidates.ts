@@ -3,14 +3,14 @@ import { createHash } from 'node:crypto';
 import { isRecord } from '../../../shared/utils/types.js';
 import type { SensitivityLevel } from '../../../system/trust/types.js';
 
-export const AUTOMATA_BUS_REVIEWER_CANDIDATE_KINDS = [
+const AUTOMATA_BUS_REVIEWER_CANDIDATE_KINDS = [
   'duplicate',
   'contradiction',
   'stale-evidence',
   'orphan-provenance',
 ] as const;
 
-export type AutomataBusReviewerCandidateKind =
+type AutomataBusReviewerCandidateKind =
   typeof AUTOMATA_BUS_REVIEWER_CANDIDATE_KINDS[number];
 
 export interface AutomataBusReviewerCandidatePolicy {
@@ -21,7 +21,7 @@ export interface AutomataBusReviewerCandidatePolicy {
   maxClustersPerRun: number;
 }
 
-export interface AutomataBusReviewerNomination {
+interface AutomataBusReviewerNomination {
   kind: AutomataBusReviewerCandidateKind;
   eventIds: readonly string[];
   /** Derived similarity is a nomination hint only; it is never a truth decision. */

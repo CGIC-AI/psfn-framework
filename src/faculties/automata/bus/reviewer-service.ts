@@ -39,7 +39,7 @@ export interface AutomataBusReviewerFindingPort {
   }): Promise<readonly AutomataBusReviewerCurrentFinding[]>;
 }
 
-export interface AutomataBusReviewerWork {
+interface AutomataBusReviewerWork {
   purpose: 'background';
   model: string;
   durable: true;
@@ -67,7 +67,7 @@ export interface AutomataBusReviewerModelPort {
   }): Promise<unknown>;
 }
 
-export interface AutomataBusReviewerMutationInput {
+interface AutomataBusReviewerMutationInput {
   scope: AutomataBusReviewerScope;
   reviewerRunId: string;
   clusterId: string;

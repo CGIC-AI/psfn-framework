@@ -41,13 +41,13 @@ export interface AutomataBusSearchInput {
   signal?: AbortSignal;
 }
 
-export interface AutomataBusSearchResultItem extends AutomataBusCanonicalFinding {
+interface AutomataBusSearchResultItem extends AutomataBusCanonicalFinding {
   score: number;
   semanticScore?: number;
   lexicalScore?: number;
 }
 
-export type AutomataBusSemanticPath =
+type AutomataBusSemanticPath =
   | 'ann'
   | 'cache'
   | 'embedding-unavailable'
@@ -57,7 +57,7 @@ export type AutomataBusSemanticPath =
   | 'model-mismatch'
   | 'reindex-required';
 
-export interface AutomataBusSearchDiagnostics {
+interface AutomataBusSearchDiagnostics {
   cache: 'disabled' | 'error' | 'hit' | 'miss';
   semanticPath: AutomataBusSemanticPath;
   indexState: AutomataBusVectorIndexState['indexState'];

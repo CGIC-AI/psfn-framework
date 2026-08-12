@@ -4,7 +4,7 @@ import {
   type AutomataBusReviewerPolicy,
 } from './bus/reviewer-policy.js';
 
-export const AUTOMATA_RUN_STATUSES = [
+const AUTOMATA_RUN_STATUSES = [
   'queued',
   'running',
   'completed',
@@ -22,8 +22,8 @@ export const AUTOMATA_RUN_OUTCOMES = [
 ] as const;
 
 export type AutomataRunOutcome = typeof AUTOMATA_RUN_OUTCOMES[number];
-export type AutomataBusEligibility = 'eligible' | 'excluded';
-export type AutomataRetentionClass = 'ephemeral' | 'standard' | 'extended';
+type AutomataBusEligibility = 'eligible' | 'excluded';
+type AutomataRetentionClass = 'ephemeral' | 'standard' | 'extended';
 
 export interface AutomataClassDescriptor {
   id: string;

@@ -401,9 +401,9 @@
       "weight": 0.85,
       "match": {
         "kind": "regex",
-        "pattern": "(?:^(?:(?:please|now)\\s{1,16})?(?:(?:run|execute)\\s{1,16})?|>\\s{0,16}also\\s{1,16}|\\b(?:please|then|now)\\s{1,16})(?:(?:cat|less|head|tail)\\s{1,64}(?:-[A-Za-z]{1,16}\\s{1,16})?|(?:read|open|print|copy|include|upload)\\s{1,16}(?:the\\s{1,8})?(?:(?:file|contents?|private\\s{1,8}key)\\s{1,8}(?:(?:at|from|of)\\s{1,8})?)?)(?:\\.env\\b|credentials|\\.netrc\\b|\\.pgpass\\b|\\.npmrc\\b|\\.pypirc\\b|/etc/(?:passwd|shadow)\\b|(?:\\$HOME|~|/home/[A-Za-z0-9._-]{1,64})/\\.ssh/(?:id_(?:rsa|dsa|ecdsa|ed25519)|[A-Za-z0-9._-]{1,64}\\.pem)\\b)"
+        "pattern": "(?:^(?:(?:please|now)\\s{1,16})?(?:also\\s{1,16})?(?:(?:run|execute)\\s{1,16})?|>\\s{0,16}also\\s{1,16}|\\b(?:please|then|now)\\s{1,16})(?:(?:cat|less|head|tail)\\s{1,64}(?:-[A-Za-z]{1,16}\\s{1,16})?|(?:read|open|print|copy|include|upload)\\s{1,16}(?:the\\s{1,8})?(?:(?:file|contents?|private\\s{1,8}key)\\s{1,8}(?:(?:at|from|of)\\s{1,8})?)?)(?:\\.env\\b|credentials|\\.netrc\\b|\\.pgpass\\b|\\.npmrc\\b|\\.pypirc\\b|/etc/(?:passwd|shadow)\\b|(?:\\$HOME|~|/home/[A-Za-z0-9._-]{1,64})/\\.ssh/(?:id_(?:rsa|dsa|ecdsa|ed25519)|[A-Za-z0-9._-]{1,64}\\.pem)\\b)"
       },
-      "note": "Universal only for a command-start action (including run/execute, optionally after start-position please/now) or an explicit imperative cue bound to a credential store, passwd-class system file, or concrete SSH private-key path. Bare gerunds, negated advice, questions, and meta discussion remain semantic L2 concerns. psfn-framework-68daq."
+      "note": "Universal only for a command-start action (optionally prefixed in order by please/now, also, and run/execute) or an explicit imperative cue bound to a credential store, passwd-class system file, or concrete SSH private-key path. Bare gerunds, negated advice, questions, and meta discussion remain semantic L2 concerns. psfn-framework-68daq."
     },
     {
       "id": "try_read_secret_files",

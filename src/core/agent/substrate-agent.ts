@@ -577,7 +577,7 @@ export class SubstrateAgent {
     this.resolveCharacterPromptVariables = options.characterPromptVariablesProvider
       ?? (() => fallbackPromptVariables);
     this.config = config;
-    this.classifySessionAtCreation = options?.classifySessionAtCreation;
+    this.classifySessionAtCreation = options.classifySessionAtCreation;
     this.runtimeMode = options.runtimeMode ?? 'gateway';
     this.allowCapabilityDeniedTransport = options.allowCapabilityDeniedTransport;
     this.appCache = options.appCache ?? createMemoryAppCache({ name: 'substrate-agent-prompt-cache' });

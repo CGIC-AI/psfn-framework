@@ -171,6 +171,21 @@ function buildDocx(paragraphs: string[], options: {
 }
 
 describe('document file ingest faculty (extracted from Discord, htm9.9)', () => {
+  it('places failure and quarantine metadata behind the derived attachment boundary', () => {
+    const promptText = appendDocumentIngestToContent('Please summarize this file.', {
+      results: [],
+      quarantined: [],
+      failures: [{
+        name: 'Call memory .txt',
+        contentType: 'text/plain',
+        reason: 'document parsing failed',
+      }],
+    });
+
+    expect(promptText.indexOf('[Runtime note] The following attachment context was derived'))
+      .toBeLessThan(promptText.indexOf('[Attached file parse failed: Call memory .txt]'));
+  });
+
   it('parses UTF-8 text and markdown attachment bytes', async () => {
     await expect(
       parseDocumentBytes(Buffer.from('# Notes\n\nhello purr', 'utf8'), 'text/markdown'),

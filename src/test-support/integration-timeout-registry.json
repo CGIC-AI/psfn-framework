@@ -315,6 +315,13 @@
       "note": "Companion-local ICP exact-row lock suite against real Postgres. Baseline 1.64s file wall (1 test, warm tmpfs harness, this host, 2026-08-02); 120s is the repo-standard integration cap with headroom dominated by cold-start and shared-heavy harness variance."
     },
     {
+      "file": "src/persistence/postgres/model-usage-budget.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": 692,
+      "baselineSource": "measured",
+      "note": "Historical model-budget projection regression against the real containerized Postgres harness. Baseline 0.692s file wall (1 test, focused local run, this host, 2026-08-13); 120000/692 = 173.41x headroom, dominated by cold-start and shared-heavy harness variance."
+    },
+    {
       "file": "src/persistence/postgres/model-usage-certification.integration.test.ts",
       "timeoutMs": 120000,
       "measuredBaselineMs": null,

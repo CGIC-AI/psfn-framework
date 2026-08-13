@@ -75,6 +75,7 @@ import type { AutomataSessionClassificationService } from '../automata/session-c
 import {
   buildAutomataBusWorkerScope,
   createAutomataBusTool,
+  isAutomataBusWorkerEligible,
   resolveAutomataBusWorkerFormation,
   type AutomataBusWorkerAccess,
   type AutomataBusWorkerScope,
@@ -377,29 +378,8 @@ export class SubagentFaculty implements SubagentControlPort {
         taskId: durableLineage.taskId,
       })
       : undefined;
-    let automataBusPrompt: string | undefined;
-    if (automataBusScope && automataBusAccess) {
-      try {
-        const formation = await resolveAutomataBusWorkerFormation({
-          access: automataBusAccess,
-          scope: automataBusScope,
-          query: request.name,
-        });
-        automataBusPrompt = formation?.promptBlock;
-      } catch (error) {
-        const message = toErrorMessage(error);
-        await this.emitBlockedSpawnHandoff(request, subagentId, 'automata_bus_formation', message);
-        throw error instanceof Error ? error : new Error(message);
-      }
-    }
-    // Stable public prompt order: inherited identity, bounded Bus layer, then
-    // the owner-resolved role posture. The task remains the first user message.
-    const systemPrompt = layerRoleSystemPrompt(
-      this.deps.parentSystemPrompt,
-      request.systemPrompt,
-      resolvedRole,
-      automataBusPrompt,
-    );
+    const automataBusEligible = automataBusScope !== undefined
+      && isAutomataBusWorkerEligible(automataBusAccess, 'subagent.bounded');
 
     // bead 7ym.2.2: a role can only NARROW the parent tier. Enforce the per-role
     // concurrency ceiling before registration, then clamp turns and intersect
@@ -439,7 +419,7 @@ export class SubagentFaculty implements SubagentControlPort {
       [
         ...capabilities,
         ...(request.memoryWriteElevation ? ['memory.write'] : []),
-        ...(automataBusPrompt ? ['automata.bus.read', 'automata.bus.write'] : []),
+        ...(automataBusEligible ? ['automata.bus.read', 'automata.bus.write'] : []),
       ],
     );
     if (capabilityGrant.deniedExplicitTokens.length > 0) {
@@ -517,6 +497,35 @@ export class SubagentFaculty implements SubagentControlPort {
         },
       });
     }
+    let automataBusPrompt: string | undefined;
+    if (automataBusEligible) {
+      try {
+        const formation = await resolveAutomataBusWorkerFormation({
+          access: automataBusAccess,
+          scope: automataBusScope,
+          query: request.name,
+        });
+        automataBusPrompt = formation?.promptBlock;
+      } catch (error) {
+        const message = toErrorMessage(error);
+        await this.taskRegistry.markFailed(
+          subagentId,
+          'automata_bus_formation_failed',
+          message,
+          Date.now(),
+        );
+        await this.emitBlockedSpawnHandoff(request, subagentId, 'automata_bus_formation', message);
+        throw error instanceof Error ? error : new Error(message);
+      }
+    }
+    // Stable public prompt order: inherited identity, bounded Bus layer, then
+    // the owner-resolved role posture. The task remains the first user message.
+    const systemPrompt = layerRoleSystemPrompt(
+      this.deps.parentSystemPrompt,
+      request.systemPrompt,
+      resolvedRole,
+      automataBusPrompt,
+    );
     this.auditTrail?.append('subagent.lifecycle.transition', {
       subagentId,
       from: 'none',

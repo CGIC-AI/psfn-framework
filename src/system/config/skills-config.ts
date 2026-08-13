@@ -4,6 +4,7 @@ import {
 } from './load-or-seed.js';
 import { assertPositiveInteger } from './validators.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
+import { OWNER_FILE_MODE_COMPANION_POLICY } from './owner-file-modes.js';
 import { isRecord, normalizeStringArray } from '../../shared/utils/types.js';
 
 export const SKILLS_FILE_NAME = 'skills.json';
@@ -70,6 +71,8 @@ export function saveSkillsConfig(
   nextConfig: unknown,
 ): SkillsRuntimeConfig {
   const validated = validateSkillsConfig(nextConfig, SKILLS_FILE_NAME);
-  writeJsonAtomic(join(dataDir, SKILLS_FILE_NAME), validated);
+  writeJsonAtomic(join(dataDir, SKILLS_FILE_NAME), validated, {
+    mode: OWNER_FILE_MODE_COMPANION_POLICY,
+  });
   return validated;
 }

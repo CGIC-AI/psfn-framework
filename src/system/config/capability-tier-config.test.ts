@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, expect, it } from 'vitest';
@@ -100,6 +100,7 @@ describe('capability-tier config', () => {
 
       const persisted = JSON.parse(readFileSync(join(dataDir, CAPABILITY_TIER_FILE_NAME), 'utf-8'));
       expect(persisted).toEqual(saved);
+      expect(statSync(join(dataDir, CAPABILITY_TIER_FILE_NAME)).mode & 0o777).toBe(0o640);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

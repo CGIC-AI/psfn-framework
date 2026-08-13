@@ -9,6 +9,7 @@ import {
 } from './load-or-seed.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import { isRecord } from '../../shared/utils/types.js';
+import { OWNER_FILE_MODE_COMPANION_POLICY } from './owner-file-modes.js';
 
 export const CAPABILITY_TIER_FILE_NAME = 'capability-tier.json';
 export const CAPABILITY_TIER_SEED_FILE_NAME = 'capability-tier.seed.json';
@@ -70,6 +71,8 @@ export function saveCapabilityTierConfig(
   nextConfig: unknown,
 ): CapabilityTierConfig {
   const validated = validateCapabilityTierConfig(nextConfig, CAPABILITY_TIER_FILE_NAME);
-  writeJsonAtomic(join(dataDir, CAPABILITY_TIER_FILE_NAME), validated);
+  writeJsonAtomic(join(dataDir, CAPABILITY_TIER_FILE_NAME), validated, {
+    mode: OWNER_FILE_MODE_COMPANION_POLICY,
+  });
   return validated;
 }

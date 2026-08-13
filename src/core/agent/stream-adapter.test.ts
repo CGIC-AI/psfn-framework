@@ -791,6 +791,63 @@ describe('createSubstrateStreamFn', () => {
     expect((streamAdapterMocks.transportStream.mock.calls[1]?.[0] as LLMContext).modelHint?.model).toBe('moonshotai/kimi-k2.5');
   });
 
+  it('holds explicit-tool text until terminal validation so a zero-call provider can fall back safely', async () => {
+    const baseConfig = makeConfig();
+    const config = makeConfig({
+      modelRegistry: {
+        ...baseConfig.modelRegistry!,
+        models: [
+          ...baseConfig.modelRegistry!.models,
+          {
+            id: 'chat-fallback',
+            rank: 500,
+            identity: {
+              provider: 'openrouter',
+              model: 'moonshotai/kimi-k2.5',
+              source: { type: 'openrouter' },
+            },
+            purposes: [{ purpose: 'chat', primary: false }],
+            capabilities: { maxOutputTokens: 8192, contextWindow: 128_000 },
+            tuning: { maxOutputTokens: 8192, contextWindow: 128_000 },
+          },
+        ],
+      },
+    });
+    streamAdapterMocks.transportStream.mockImplementation(
+      async (context: LLMContext, callbacks?: StreamCallbacks) => {
+        if (context.modelHint?.model === 'deepseek/deepseek-v3.2') {
+          callbacks?.onText?.('I will pretend this worked.');
+          throw new Error('Provider violated explicit tool contract: expected exactly one "notify" call, received []');
+        }
+        return {
+          content: '',
+          toolCalls: [{ id: 'notify-1', name: 'notify', arguments: { message: 'done' } }],
+          model: 'openrouter/moonshotai/kimi-k2.5',
+          inputTokens: 7,
+          outputTokens: 4,
+          stopReason: 'toolUse',
+        };
+      },
+    );
+
+    const streamFn = makeStreamFn(config);
+    const stream = await streamFn(resolveModel(config, makeRuntime(), 'chat'), fromAny({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'Call notify now.' }],
+      tools: [{
+        name: 'notify',
+        description: 'Notify the operator.',
+        parameters: Type.Object({ message: Type.String() }),
+      }],
+    }), {});
+    const events = await collectStreamEvents(stream as AsyncIterable<unknown>);
+
+    expect(streamAdapterMocks.transportStream).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(events)).not.toContain('pretend this worked');
+    expect((events.at(-1) as { type: string }).type).toBe('done');
+    expect(JSON.stringify(events.at(-1))).toContain('notify');
+  });
+
   it('leads chat with the companion-selected slot and transports that slot to the gateway', async () => {
     const config = makeCompanionSelectedChatConfig();
     streamAdapterMocks.transportStream.mockResolvedValue({

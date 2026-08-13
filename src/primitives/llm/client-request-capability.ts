@@ -35,6 +35,8 @@ import {
   resolveOptionalCredentialReference,
 } from '../../boundary/custody/credential-vault.js';
 import { createComponentLogger } from '../../shared/logger.js';
+import { resolveExplicitToolContract } from './explicit-tool-request.js';
+import type { ExplicitToolChoice } from './explicit-tool-request.js';
 
 const log = createComponentLogger('LLMClient');
 
@@ -45,12 +47,15 @@ const FULL_KNOB_PASSTHROUGH_PROVIDERS = new Set([
 
 export interface LLMRequestOptions extends SimpleStreamOptions {
   zdr?: boolean;
-  provider?: { order: string[] };
+  provider?: { order?: string[]; require_parameters?: boolean };
   contextWindow?: number;
   topP?: number;
   topK?: number;
   frequencyPenalty?: number;
   repetitionPenalty?: number;
+  toolChoice?: ExplicitToolChoice;
+  /** Exact tool contract paired with a provider-generic `required` choice. */
+  requiredToolName?: string;
 }
 
 /** Owns provider model resolution, request construction, and as-sent capture. */
@@ -208,6 +213,77 @@ export class LLMRequestCapability {
       messages: contextMessagesToPiMessages(context.messages),
       ...(context.tools?.length ? { tools: toPiTools(context.tools) } : {}),
     };
+  }
+
+  applyExplicitToolChoice(
+    requestOptions: LLMRequestOptions,
+    context: LLMContext,
+    correlation: ResolvedCorrelationMetadata | undefined,
+    model: Model<any>,
+    candidate?: RoutingCandidate,
+  ): void {
+    const contract = resolveExplicitToolContract({
+      context,
+      originStage: correlation?.originStage,
+      modelApi: String(model.api),
+    });
+    if (!contract) return;
+    const { choice: toolChoice } = contract;
+    requestOptions.toolChoice = toolChoice;
+    if (contract.requiredToolName) requestOptions.requiredToolName = contract.requiredToolName;
+    if (candidate?.provider === 'openrouter') {
+      requestOptions.provider = {
+        ...(requestOptions.provider ?? {}),
+        require_parameters: true,
+      };
+    }
+
+    // pi-ai's SimpleStreamOptions contract does not type provider-specific
+    // toolChoice, even though the OpenAI completions adapter currently forwards
+    // it. Inject the provider-native field at the final payload seam as well so
+    // an adapter/model-registry wrapper cannot silently drop a required call.
+    if (String(model.api) === 'openai-completions') {
+      const priorOnPayload = requestOptions.onPayload;
+      requestOptions.onPayload = async (payload, payloadModel) => {
+        const prior = await priorOnPayload?.(payload, payloadModel);
+        const outgoing = prior ?? payload;
+        if (!outgoing || typeof outgoing !== 'object' || Array.isArray(outgoing)) {
+          throw new Error('OpenAI completions payload must be an object before tool choice injection');
+        }
+        const tools = requestOptions.requiredToolName && Array.isArray(outgoing.tools)
+          ? outgoing.tools.filter((tool) => (
+              !!tool
+              && typeof tool === 'object'
+              && !Array.isArray(tool)
+              && (tool as { function?: { name?: unknown } }).function?.name === requestOptions.requiredToolName
+            ))
+          : outgoing.tools;
+        if (requestOptions.requiredToolName && (!Array.isArray(tools) || tools.length !== 1)) {
+          throw new Error(
+            `OpenAI completions payload is missing required tool ${JSON.stringify(requestOptions.requiredToolName)}`,
+          );
+        }
+        return {
+          ...outgoing,
+          ...(tools !== undefined ? { tools } : {}),
+          ...(candidate?.provider === 'openrouter'
+            ? {
+                provider: {
+                  ...(
+                    outgoing.provider
+                    && typeof outgoing.provider === 'object'
+                    && !Array.isArray(outgoing.provider)
+                      ? outgoing.provider
+                      : {}
+                  ),
+                  require_parameters: true,
+                },
+              }
+            : {}),
+          tool_choice: toolChoice,
+        };
+      };
+    }
   }
 
   resolveRouteKind(candidate: RoutingCandidate): LLMProviderObservability['routeKind'] {

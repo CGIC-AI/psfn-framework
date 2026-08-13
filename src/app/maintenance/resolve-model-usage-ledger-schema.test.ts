@@ -50,5 +50,15 @@ describe('resolveModelUsageLedgerSchema', () => {
     }, null, 2)}\n`, 'utf8');
 
     expect(resolveModelUsageLedgerSchema(systemDataDir)).toBe('companion_alpha');
+    expect(resolveModelUsageLedgerSchema(
+      systemDataDir,
+      undefined,
+      COMPANION_IDS[1],
+    )).toBe('companion_beta');
+    expect(() => resolveModelUsageLedgerSchema(
+      systemDataDir,
+      undefined,
+      '4e5c9f2b-3333-4000-8000-dddddddddddd',
+    )).toThrow(/target companion.*not registered/iu);
   });
 });

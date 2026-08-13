@@ -57,6 +57,10 @@ describe('gateway fleet authorization context wiring', () => {
     expect(mainSource).toContain('principalAuthenticationWired: true,');
     expect(apiSurfaceSource).toContain('const principalAuthenticationWired =');
     expect(apiSurfaceSource).toContain('if (fleetAuthBootstrapOnly && !principalAuthenticationWired)');
+    expect(apiSurfaceSource).toContain('adminToken: env.ADMIN_TOKEN || undefined,');
+    expect(apiSurfaceSource).not.toContain(
+      'adminToken: fleetAuthBootstrapOnly ? undefined : env.ADMIN_TOKEN || undefined,',
+    );
     expect(mainSource).toContain('hubDeviceAssertionVerifier: fleetAuthPersistence,');
     expect(mainSource).toContain('primaryEmbodiments: fleetAuthPersistence.primaryEmbodiments,');
     expect(mainSource).toContain(

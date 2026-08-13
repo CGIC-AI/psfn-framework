@@ -59,6 +59,7 @@ import {
   appendCompanionAllowlist,
   buildWhere,
   normalizeLimit,
+  normalizeModelUsageBudgetPricing,
   normalizeQuery,
   normalizeQueryText,
 } from './query-input.js';
@@ -372,6 +373,7 @@ export class PostgresModelUsageQueries {
     scope?: { companionId: string },
     pricing: readonly ModelUsageBudgetPricingRate[] = [],
   ): Promise<ModelUsageBudgetSpendSnapshot> {
+    const normalizedPricing = normalizeModelUsageBudgetPricing(pricing);
     await this.waitUntilReady();
     const now = inputNonNegativeInteger(nowMs, 'nowMs');
     const requestedCompanionId = normalizeQueryText(scope?.companionId, 'companionId');
@@ -390,7 +392,7 @@ export class PostgresModelUsageQueries {
     const month = monthKey(now);
     const dayStartMs = Date.parse(`${day}T00:00:00.000Z`);
     const monthStartMs = Date.UTC(nowDate.getUTCFullYear(), nowDate.getUTCMonth(), 1);
-    const serializedPricing = pricing.map(rate => ({
+    const serializedPricing = normalizedPricing.map(rate => ({
       slot_key: rate.slotKey,
       provider: rate.provider,
       model: rate.model,

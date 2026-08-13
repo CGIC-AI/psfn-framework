@@ -1,4 +1,5 @@
 import type {
+  ModelUsageBudgetPricingRate,
   ModelUsageGroupDimension,
   ModelUsageQuery,
 } from '../../../shared/telemetry/model-usage.js';
@@ -21,6 +22,8 @@ import {
   MODEL_USAGE_ORIGIN_TYPES,
   MODEL_USAGE_RUNTIME_LANE_CLASSES,
 } from '../../../shared/telemetry/model-usage-attribution.js';
+import { isRecord } from '../../../shared/utils/types.js';
+import { inputNonNegativeCost } from './common.js';
 import type { SqlWhere } from './rows.js';
 import { MODEL_USAGE_DIMENSION_SQL } from './query-support.js';
 
@@ -119,6 +122,45 @@ export function normalizeQueryText(value: unknown, field: string): string | unde
     throw new Error(`${field} must not contain control characters`);
   }
   return normalized;
+}
+
+function normalizeRequiredQueryText(value: unknown, field: string): string {
+  const normalized = normalizeQueryText(value, field);
+  if (normalized === undefined) throw new Error(`${field} is required`);
+  return normalized;
+}
+
+export function normalizeModelUsageBudgetPricing(
+  pricing: unknown,
+): ModelUsageBudgetPricingRate[] {
+  if (!Array.isArray(pricing)) throw new Error('pricing must be an array');
+  const identityIndexes = new Map<string, number>();
+  return pricing.map((rate, index) => {
+    const field = `pricing[${index}]`;
+    if (!isRecord(rate)) throw new Error(`${field} must be an object`);
+    const normalized = {
+      slotKey: normalizeRequiredQueryText(rate.slotKey, `${field}.slotKey`),
+      provider: normalizeRequiredQueryText(rate.provider, `${field}.provider`),
+      model: normalizeRequiredQueryText(rate.model, `${field}.model`),
+      inputPer1MUsd: inputNonNegativeCost(rate.inputPer1MUsd, `${field}.inputPer1MUsd`),
+      outputPer1MUsd: inputNonNegativeCost(rate.outputPer1MUsd, `${field}.outputPer1MUsd`),
+      cacheReadPer1MUsd: inputNonNegativeCost(rate.cacheReadPer1MUsd, `${field}.cacheReadPer1MUsd`),
+      cacheWritePer1MUsd: inputNonNegativeCost(rate.cacheWritePer1MUsd, `${field}.cacheWritePer1MUsd`),
+    };
+    const identity = JSON.stringify([
+      normalized.slotKey,
+      normalized.provider,
+      normalized.model,
+    ]);
+    const priorIndex = identityIndexes.get(identity);
+    if (priorIndex !== undefined) {
+      throw new Error(
+        `${field} duplicates the exact slot/provider/model identity from pricing[${priorIndex}]`,
+      );
+    }
+    identityIndexes.set(identity, index);
+    return normalized;
+  });
 }
 
 export function normalizeQuery(

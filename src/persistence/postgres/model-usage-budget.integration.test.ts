@@ -136,6 +136,50 @@ describe('Postgres model-usage budget projection', () => {
         costSource: 'none',
       });
 
+      await expect(store.getModelBudgetSpend(nowMs, undefined, [{
+        slotKey: modelEntry.id,
+        provider: modelEntry.identity.provider,
+        model: modelEntry.identity.model,
+        inputPer1MUsd: -3,
+        outputPer1MUsd: modelEntry.cost.outputPer1MUsd,
+        cacheReadPer1MUsd: modelEntry.cost.cacheReadPer1MUsd,
+        cacheWritePer1MUsd: modelEntry.cost.cacheWritePer1MUsd,
+      }])).rejects.toThrow('pricing[0].inputPer1MUsd must be a finite number >= 0');
+      await expect(store.getModelBudgetSpend(nowMs, undefined, [{
+        slotKey: modelEntry.id,
+        provider: modelEntry.identity.provider,
+        model: modelEntry.identity.model,
+        inputPer1MUsd: modelEntry.cost.inputPer1MUsd,
+        outputPer1MUsd: Number.POSITIVE_INFINITY,
+        cacheReadPer1MUsd: modelEntry.cost.cacheReadPer1MUsd,
+        cacheWritePer1MUsd: modelEntry.cost.cacheWritePer1MUsd,
+      }])).rejects.toThrow('pricing[0].outputPer1MUsd must be a finite number >= 0');
+      await expect(store.getModelBudgetSpend(nowMs, undefined, [{
+        slotKey: ' ',
+        provider: modelEntry.identity.provider,
+        model: modelEntry.identity.model,
+        inputPer1MUsd: modelEntry.cost.inputPer1MUsd,
+        outputPer1MUsd: modelEntry.cost.outputPer1MUsd,
+        cacheReadPer1MUsd: modelEntry.cost.cacheReadPer1MUsd,
+        cacheWritePer1MUsd: modelEntry.cost.cacheWritePer1MUsd,
+      }])).rejects.toThrow('pricing[0].slotKey must be non-empty');
+      const matchingPricing = {
+        slotKey: modelEntry.id,
+        provider: modelEntry.identity.provider,
+        model: modelEntry.identity.model,
+        inputPer1MUsd: modelEntry.cost.inputPer1MUsd,
+        outputPer1MUsd: modelEntry.cost.outputPer1MUsd,
+        cacheReadPer1MUsd: modelEntry.cost.cacheReadPer1MUsd,
+        cacheWritePer1MUsd: modelEntry.cost.cacheWritePer1MUsd,
+      };
+      await expect(store.getModelBudgetSpend(
+        nowMs,
+        undefined,
+        [matchingPricing, matchingPricing],
+      )).rejects.toThrow(
+        'pricing[1] duplicates the exact slot/provider/model identity from pricing[0]',
+      );
+
       const preflight = await new ModelBudgetController(config, store).evaluatePreflight({
         candidate: {
           provider: modelEntry.identity.provider,

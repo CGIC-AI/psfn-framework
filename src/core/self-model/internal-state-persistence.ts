@@ -1,4 +1,4 @@
-import { cloneInternalState, type InternalState } from './state.js';
+import { cloneInternalState, type InternalState, type SituatedLocation } from './state.js';
 import { cloneMetacognitiveFlags, type MetacognitiveFlag } from './metacognition.js';
 
 /**
@@ -35,6 +35,8 @@ export interface InternalStateContinuityGap {
 
 export interface InternalStateRehydrationAgent {
   restorePersistedInternalState(record: PersistedInternalStateRecord): void;
+  /** Restore durable place evidence without reviving stale affect or attention state. */
+  restorePersistedSituatedLocation(location: SituatedLocation): void;
   noteInternalStateContinuityGap(gap: InternalStateContinuityGap): void;
 }
 
@@ -92,6 +94,9 @@ export async function rehydratePersistedInternalState(options: {
     offlineSince: normalized.savedAt,
     gapMs: ageMs,
   };
+  if (normalized.state.situated.location) {
+    options.agent.restorePersistedSituatedLocation(normalized.state.situated.location);
+  }
   options.agent.noteInternalStateContinuityGap(gap);
   return { outcome: 'gap_detected', gap };
 }

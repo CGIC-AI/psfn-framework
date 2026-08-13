@@ -175,6 +175,11 @@ the multi-companion flag.
   companion is, its perceivers/effectors, and — under multi-companion — who else
   is co-present (`Also here:`). A turn with no resolvable place renders no block;
   the companion never fabricates a location.
+  The last-known location is written with InternalState to Postgres on each
+  state update. The turn awaits that database write and fails if it cannot be
+  committed. Restart hydration restores location separately when the rest of
+  an old snapshot is too stale to revive, so a continuity gap cannot erase the
+  durable physical source used to choose a plain-channel mindspace twin.
 - **Co-presence.** Cross-companion presence is read from `companion_presence` in
   the shared schema (`CompanionPresenceRuntime`,
   `src/core/agent/companion-presence-runtime.ts`); a companion arriving where a

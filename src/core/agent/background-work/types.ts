@@ -13,6 +13,7 @@ import { isRecord } from '../../../shared/utils/types.js';
 import type {
   ModelPurpose,
   TurnRecord,
+  TurnRecordBackgroundWorkJob,
   TurnRecordBackgroundWorkHandoff,
 } from '../../../shared/contracts/runtime.js';
 import {
@@ -135,6 +136,14 @@ export interface EmotionAppraisalBackgroundPayload {
   personalityProjectionHash: string;
   icpCorrelation?: IcpConversationCorrelation;
 }
+
+/**
+ * Exact live-alpha payload written before narrative drift became a required
+ * scheduling decision. Recovery may validate and retire this shape, but it is
+ * never accepted by the current enqueue or claim boundaries.
+ */
+interface LegacyEmotionAppraisalBackgroundPayloadV1
+  extends Omit<EmotionAppraisalBackgroundPayload, 'driftDecision'> {}
 
 export interface BackgroundChannelProjection {
   isDirectMessage?: boolean;
@@ -575,6 +584,39 @@ export function parseBackgroundWorkPayload(
   }
 }
 
+function parseLegacyEmotionAppraisalBackgroundPayload(
+  value: unknown,
+): LegacyEmotionAppraisalBackgroundPayloadV1 {
+  if (!isRecord(value)
+    || value.schemaVersion !== 1
+    || value.kind !== 'emotion_appraisal'
+    || value.driftDecision !== undefined) {
+    throw new Error('legacy emotion appraisal payload is malformed');
+  }
+  assertOnlyKeys(value, [
+    'schemaVersion', 'kind', 'source', 'emotionSessionId', 'internalStateSnapshotRef',
+    'appraisalState', 'personalityOwnerRef', 'personalityProjectionHash', 'icpCorrelation',
+  ], 'legacy emotion appraisal payload');
+  const icpCorrelation = parseOptionalIcpCorrelation(value.icpCorrelation);
+  return {
+    schemaVersion: 1,
+    kind: 'emotion_appraisal',
+    source: parseSourceRef(value.source),
+    emotionSessionId: requireString(value.emotionSessionId, 'emotion emotionSessionId'),
+    internalStateSnapshotRef: requireString(
+      value.internalStateSnapshotRef,
+      'emotion internalStateSnapshotRef',
+    ),
+    appraisalState: parseEmotionAppraisalStateSnapshot(value.appraisalState),
+    personalityOwnerRef: requirePersonalityOwnerRef(value.personalityOwnerRef),
+    personalityProjectionHash: requireSha256(
+      value.personalityProjectionHash,
+      'emotion personalityProjectionHash',
+    ),
+    ...(icpCorrelation ? { icpCorrelation } : {}),
+  };
+}
+
 function requirePersonalityOwnerRef(value: unknown): 'character-card' {
   if (value !== 'character-card') throw new Error('emotion personalityOwnerRef is invalid');
   return value;
@@ -615,6 +657,10 @@ export function stableBackgroundWorkStringify(value: unknown): string {
 }
 
 export function fingerprintBackgroundWorkPayload(payload: BackgroundWorkPayload): string {
+  return fingerprintBackgroundWorkPayloadValue(payload);
+}
+
+function fingerprintBackgroundWorkPayloadValue(payload: unknown): string {
   return createHash('sha256').update(stableBackgroundWorkStringify(payload)).digest('hex');
 }
 
@@ -706,10 +752,71 @@ export function parseWorkerValidatedTurnRecordBackgroundWorkHandoffProjection(
   return parseTurnRecordBackgroundWorkHandoffWithExpectedFingerprint(record, null);
 }
 
+export interface LegacyTurnRecordBackgroundWorkRecoveryRepair {
+  record: TurnRecord;
+  retiredLegacyEmotionAppraisalJobs: number;
+}
+
+/**
+ * Bounded live-alpha repair for pre-drift emotion appraisal handoffs.
+ *
+ * The obsolete job cannot be executed honestly because its persisted payload
+ * contains no drift evidence from which to derive the now-required decision.
+ * Recovery therefore validates the complete legacy payload and every durable
+ * identity/fingerprint/source binding, retires only that job, and leaves all
+ * current siblings replayable. Near-legacy or malformed current payloads still
+ * fail closed. Current enqueue and claim parsing never call this seam.
+ */
+export function repairLegacyTurnRecordBackgroundWorkHandoffForRecovery(
+  record: TurnRecord,
+): LegacyTurnRecordBackgroundWorkRecoveryRepair {
+  const jobs = parseTurnRecordBackgroundWorkHandoffJobs(
+    record,
+    fingerprintBackgroundWorkTurnRecord(record),
+    true,
+  );
+  const retainedJobs = jobs.flatMap(job => job.retireLegacyEmotionAppraisal ? [] : [job.job]);
+  const retiredLegacyEmotionAppraisalJobs = jobs.length - retainedJobs.length;
+  if (retiredLegacyEmotionAppraisalJobs === 0) {
+    return { record, retiredLegacyEmotionAppraisalJobs };
+  }
+  if (retainedJobs.length === 0) {
+    const { backgroundWorkHandoff: _retiredHandoff, ...recordWithoutHandoff } = record;
+    return {
+      record: recordWithoutHandoff,
+      retiredLegacyEmotionAppraisalJobs,
+    };
+  }
+  return {
+    record: {
+      ...record,
+      backgroundWorkHandoff: {
+        schemaVersion: 1,
+        jobs: retainedJobs,
+      },
+    },
+    retiredLegacyEmotionAppraisalJobs,
+  };
+}
+
 function parseTurnRecordBackgroundWorkHandoffWithExpectedFingerprint(
   record: TurnRecord,
   expectedTurnFingerprint: string | null,
 ): EnqueueBackgroundWorkInput[] {
+  return parseTurnRecordBackgroundWorkHandoffJobs(record, expectedTurnFingerprint, false)
+    .map(result => result.job as EnqueueBackgroundWorkInput);
+}
+
+interface ParsedTurnRecordBackgroundWorkJob {
+  job: TurnRecordBackgroundWorkJob | EnqueueBackgroundWorkInput;
+  retireLegacyEmotionAppraisal: boolean;
+}
+
+function parseTurnRecordBackgroundWorkHandoffJobs(
+  record: TurnRecord,
+  expectedTurnFingerprint: string | null,
+  allowLegacyEmotionAppraisalRetirement: boolean,
+): ParsedTurnRecordBackgroundWorkJob[] {
   const handoff = record.backgroundWorkHandoff;
   if (!handoff) return [];
   if (record.status !== 'completed'
@@ -723,7 +830,13 @@ function parseTurnRecordBackgroundWorkHandoffWithExpectedFingerprint(
       throw new Error(`TurnRecord background work kind is invalid or duplicated: ${job.kind}`);
     }
     seenKinds.add(job.kind);
-    const payload = parseBackgroundWorkPayload(job.kind, job.payload);
+    const retireLegacyEmotionAppraisal = allowLegacyEmotionAppraisalRetirement
+      && job.kind === 'emotion_appraisal'
+      && isRecord(job.payload)
+      && job.payload.driftDecision === undefined;
+    const payload = retireLegacyEmotionAppraisal
+      ? parseLegacyEmotionAppraisalBackgroundPayload(job.payload)
+      : parseBackgroundWorkPayload(job.kind, job.payload);
     const identity = createBackgroundWorkIdentity({
       logicalSessionId,
       turnId: record.turnId,
@@ -747,7 +860,7 @@ function parseTurnRecordBackgroundWorkHandoffWithExpectedFingerprint(
       && payload.source.turnRecordFingerprint !== expectedTurnFingerprint) {
       bindingMismatches.push('payload.turn_record_fingerprint');
     }
-    if (job.payloadFingerprint !== fingerprintBackgroundWorkPayload(payload)) {
+    if (job.payloadFingerprint !== fingerprintBackgroundWorkPayloadValue(payload)) {
       bindingMismatches.push('payload_fingerprint');
     }
     if (bindingMismatches.length > 0) {
@@ -755,11 +868,16 @@ function parseTurnRecordBackgroundWorkHandoffWithExpectedFingerprint(
         `TurnRecord background work binding mismatch for ${job.kind}: ${bindingMismatches.join(', ')}`,
       );
     }
-    return {
-      ...job,
-      kind: job.kind,
-      payload,
-    };
+    return retireLegacyEmotionAppraisal
+      ? { job, retireLegacyEmotionAppraisal }
+      : {
+          job: {
+            ...job,
+            kind: job.kind,
+            payload: payload as BackgroundWorkPayload,
+          },
+          retireLegacyEmotionAppraisal,
+        };
   });
 }
 

@@ -325,6 +325,12 @@ export interface ReflectionRunTemplateResult {
    * Manual run_template invocations never carry this flag.
    */
   noveltyGateSkipped?: boolean;
+  /**
+   * Set when the template requires InternalState but startup deliberately did
+   * not rehydrate a stale snapshot. This is a truthful skipped run, not a
+   * scheduler failure that should be retried until it crash-loops.
+   */
+  internalStateUnavailableSkipped?: boolean;
   queued?: boolean;
   queuedVia?: 'scheduler' | 'post_turn';
   deferredAction?: PostTurnActionCandidate;

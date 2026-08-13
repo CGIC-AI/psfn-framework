@@ -24,6 +24,7 @@ import {
 } from '../../persistence/journals/reflection-substrate.js';
 import { ReflectionMetacognitionJournalStore } from '../../persistence/journals/reflection-metacognition-journal.js';
 import { InternalStateComputer, buildInternalStateSnapshotRef } from '../self-model/state.js';
+import { rehydratePersistedInternalState } from '../self-model/internal-state-persistence.js';
 import type { ActiveConcern } from '../intention/concerns.js';
 import {
   resolveReflectionPolicyPath,
@@ -101,6 +102,106 @@ describe('createReflectionTemplateRuntime reflection metacognition journal', () 
     }
     expect(prompt).not.toContain('silence or absence framing');
   }
+
+  it('truthfully skips an InternalState-dependent reflection during a restart continuity gap', async () => {
+    tempDir = mkdtempSync(join(tmpdir(), 'reflection-internal-state-gap-'));
+    const policyStore = new ReflectionPolicyStore(resolveReflectionPolicyPath(tempDir));
+    const policy = policyStore.load();
+    const template = policy.templates.find(candidate => candidate.id === 'daily-review');
+    expect(template).toBeDefined();
+    if (!template) throw new Error('daily-review template missing from defaults');
+    template.internalStateInput = true;
+    policyStore.save(policy);
+    const handleMessage = vi.fn<ReflectionAgent['handleMessage']>();
+    const runtime = createReflectionTemplateRuntime({
+      scheduler: new Scheduler(new EventBus(), {
+        tickIntervalMs: 100,
+        heartbeatIntervalMs: 1_000,
+      }),
+      agentLoop: {
+        handleMessage,
+        getCurrentInternalState: () => null,
+      },
+      dataDir: tempDir,
+    });
+
+    await expect(runtime.runTemplateNow('daily-review', { deferIfBusy: false }))
+      .resolves.toMatchObject({
+        templateId: 'daily-review',
+        reflection: '',
+        internalStateUnavailableSkipped: true,
+      });
+    expect(handleMessage).not.toHaveBeenCalled();
+  });
+
+  it('runs an InternalState-dependent reflection from a freshly rehydrated Postgres snapshot', async () => {
+    tempDir = mkdtempSync(join(tmpdir(), 'reflection-rehydrated-internal-state-'));
+    const policyStore = new ReflectionPolicyStore(resolveReflectionPolicyPath(tempDir));
+    const policy = policyStore.load();
+    const template = policy.templates.find(candidate => candidate.id === 'daily-review');
+    expect(template).toBeDefined();
+    if (!template) throw new Error('daily-review template missing from defaults');
+    template.internalStateInput = true;
+    policyStore.save(policy);
+    const state = new InternalStateComputer().computeState({
+      emotionState: null,
+      activeConcerns: [],
+      trustLevel: 'regular',
+      sessionMetrics: {
+        userMessageText: 'Restart check.',
+        responseText: 'State restored.',
+        toolCallCount: 0,
+        recentTurnCount: 1,
+        lastSeenDeltaSeconds: 10,
+      },
+    });
+    const snapshotRef = buildInternalStateSnapshotRef(state);
+    let restoredState = null as typeof state | null;
+    let restoredSnapshotRef: string | null = null;
+    const restored = await rehydratePersistedInternalState({
+      store: {
+        loadLatest: vi.fn(async () => ({
+          state,
+          snapshotRef,
+          metacognitiveFlags: [],
+          savedAt: '2026-08-13T15:00:00.000Z',
+        })),
+        save: vi.fn(async () => undefined),
+      },
+      agent: {
+        restorePersistedInternalState: record => {
+          restoredState = record.state;
+          restoredSnapshotRef = record.snapshotRef;
+        },
+        restorePersistedSituatedLocation: () => undefined,
+        noteInternalStateContinuityGap: () => {
+          throw new Error('fresh restart must not create a continuity gap');
+        },
+      },
+      now: new Date('2026-08-13T15:01:00.000Z'),
+    });
+    expect(restored.outcome).toBe('restored');
+    const handleMessage = vi.fn<ReflectionAgent['handleMessage']>(async () => ({
+      content: 'Reflection used restored state.',
+    }));
+    const runtime = createReflectionTemplateRuntime({
+      scheduler: new Scheduler(new EventBus(), {
+        tickIntervalMs: 100,
+        heartbeatIntervalMs: 1_000,
+      }),
+      agentLoop: {
+        handleMessage,
+        getCurrentInternalState: () => restoredState,
+        getCurrentInternalStateSnapshotRef: () => restoredSnapshotRef,
+        getCurrentMetacognitiveFlags: () => [],
+      },
+      dataDir: tempDir,
+    });
+
+    await expect(runtime.runTemplateNow('daily-review', { deferIfBusy: false }))
+      .resolves.toMatchObject({ reflection: 'Reflection used restored state.' });
+    expect(handleMessage).toHaveBeenCalledOnce();
+  });
 
   it('keeps raw ACAC detail out of the daily starter while preserving it in telemetry', async () => {
     tempDir = mkdtempSync(join(tmpdir(), 'reflection-template-runtime-'));

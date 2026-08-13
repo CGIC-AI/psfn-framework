@@ -329,6 +329,13 @@
       "note": "Pre-policy 120s override (repo-standard integration cap). Registered as measurement debt: pinned to its current value so any change forces a re-measured registry update. No independent baseline measured under this bead (timing wiring scoped to the restore suite)."
     },
     {
+      "file": "src/persistence/postgres/internal-state-store.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": 11830,
+      "baselineSource": "measured",
+      "note": "y9a2t Postgres restart-continuity regression. Measured 11.83s standalone including warm-container acquisition, schema setup, two independent store connections, and the stale-state location restore on this host (2026-08-13); 120s preserves >10x headroom for cold image startup and harness-slot contention."
+    },
+    {
       "file": "src/persistence/postgres/model-usage-store.benchmark.integration.test.ts",
       "timeoutMs": 120000,
       "measuredBaselineMs": null,

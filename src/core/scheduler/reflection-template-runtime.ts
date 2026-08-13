@@ -732,6 +732,18 @@ export function createReflectionTemplateRuntime(
     const currentInternalState = template.internalStateInput
       ? agentLoop.getCurrentInternalState?.()
       : null;
+    if (template.internalStateInput && !currentInternalState) {
+      log.warn(`Skipping reflection "${template.id}" because InternalState is unavailable`, {
+        source,
+        templateId: template.id,
+      });
+      return {
+        templateId: template.id,
+        templateName: template.name,
+        reflection: '',
+        internalStateUnavailableSkipped: true,
+      };
+    }
     const internalStateContextResult = resolveInternalStateContext({
       template,
       currentInternalState,

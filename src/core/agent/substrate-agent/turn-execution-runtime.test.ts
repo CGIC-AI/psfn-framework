@@ -857,7 +857,7 @@ function createRuntime(params: {
     resolveResponseStyle: vi.fn(() => 'concise'),
     buildPromptTemplateVariables: vi.fn(() => ({})),
     buildDynamicPromptTemplateVariables: vi.fn(async () => ({ ...BASE_TURN_PROMPT_VARIABLES })),
-    setCurrentSelfModelState: vi.fn(),
+    setCurrentSelfModelState: vi.fn(async () => undefined),
     setCurrentTurnDisclosureLineage: vi.fn((lineage) => {
       currentTurnDisclosureLineage = lineage;
     }),

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { appendFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -16,6 +17,7 @@ import {
   createBackgroundWorkIdentity,
   fingerprintBackgroundWorkPayload,
   fingerprintBackgroundWorkTurnRecord,
+  stableBackgroundWorkStringify,
 } from '../../core/agent/background-work/types.js';
 import { createTurnRecordSharedStore } from './turn-record-shared-store.js';
 import { sanitizeChannelId } from './store-file-contracts.js';
@@ -202,6 +204,75 @@ function withRecoveryHandoff(record: TurnRecord): TurnRecord {
     maxAttempts: 3,
   };
   return { ...record, backgroundWorkHandoff: { schemaVersion: 1, jobs: [job] } };
+}
+
+function withLegacyEmotionAppraisalHandoff(record: TurnRecord): TurnRecord {
+  const current = withRecoveryHandoff(record);
+  const logicalSessionId = record.sessionId ?? record.channelId;
+  const payload = {
+    schemaVersion: 1 as const,
+    kind: 'emotion_appraisal' as const,
+    source: {
+      schemaVersion: 1 as const,
+      logicalSessionId,
+      channelId: record.channelId,
+      turnId: record.turnId,
+      requestId: record.requestId,
+      turnRecordFingerprint: fingerprintBackgroundWorkTurnRecord(record),
+      createdAtMs: record.completedAt,
+    },
+    emotionSessionId: logicalSessionId,
+    internalStateSnapshotRef: 'internal-state-v1:legacy-appraisal',
+    appraisalState: {
+      schemaVersion: 1 as const,
+      emotional: {
+        vad: { valence: 0.2, arousal: 0.3, dominance: 0.4 },
+        mood: { valence: 0.1, arousal: 0.2, dominance: 0.3 },
+        discreteEmotions: { joy: 0.7 },
+        confidence: 0.8,
+        telemetry: {
+          status: 'trusted' as const,
+          source: 'runtime_state' as const,
+          reasons: [],
+          weight: 1,
+        },
+      },
+      cognitive: { certaintyLevel: 0.6, topicEngagement: 0.7, processingQuality: 'fluent' as const },
+      attention: {
+        activeConcernCount: 2,
+        salientEntityCount: 1,
+        conversationTrajectory: 'deepening' as const,
+      },
+      relational: { contactId: 'contact-1', trustLevel: 'regular' as const, moodDrift: 0.1 },
+    },
+    personalityOwnerRef: 'character-card' as const,
+    personalityProjectionHash: 'a'.repeat(64),
+  };
+  const legacyEmotionJob = {
+    ...createBackgroundWorkIdentity({
+      logicalSessionId,
+      turnId: record.turnId,
+      kind: payload.kind,
+    }),
+    logicalSessionId,
+    kind: payload.kind,
+    payload,
+    payloadFingerprint: createHash('sha256')
+      .update(stableBackgroundWorkStringify(payload))
+      .digest('hex'),
+    sourceTurnId: record.turnId,
+    sourceRequestId: record.requestId,
+    sourceChannelId: record.channelId,
+    createdAtMs: record.completedAt,
+    maxAttempts: 3,
+  };
+  return {
+    ...current,
+    backgroundWorkHandoff: {
+      schemaVersion: 1,
+      jobs: [legacyEmotionJob, ...current.backgroundWorkHandoff!.jobs],
+    },
+  };
 }
 
 describe('turn-records', () => {
@@ -994,6 +1065,35 @@ describe('turn-records', () => {
     });
 
     expect(yielded).toEqual([]);
+  });
+
+  it('retires an exact pre-drift appraisal without poisoning sibling recovery jobs', async () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-recovery-legacy-appraisal-'));
+    const store = createFilesystemTurnRecordStorePort(sessionsDir);
+    const record = withLegacyEmotionAppraisalHandoff(createTurnRecord());
+    store.appendTurnRecord(record);
+    const stats: TurnRecordRecoveryScanStats = {
+      bytesRead: 0,
+      rowsScanned: 0,
+      filesScanned: 0,
+      candidatesYielded: 0,
+      peakIdentityRowsInMemory: 0,
+      sqliteCacheBytes: 0,
+      maxRowBytes: 0,
+    };
+    const recovered: TurnRecord[] = [];
+
+    for await (const candidate of store.streamTurnRecordsForRecovery!(
+      [record.channelId],
+      { stats },
+    )) {
+      recovered.push(candidate);
+    }
+
+    expect(recovered).toHaveLength(1);
+    expect(recovered[0]?.backgroundWorkHandoff?.jobs.map(job => job.kind))
+      .toEqual(['memory_extraction']);
+    expect(stats.legacyEmotionAppraisalJobsRetired).toBe(1);
   });
 
   it('fails closed on malformed rows and rows beyond the declared byte cap', async () => {

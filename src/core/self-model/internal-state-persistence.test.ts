@@ -70,7 +70,11 @@ describe('rehydratePersistedInternalState', () => {
 
     const result = await rehydratePersistedInternalState({
       store: buildStore(record),
-      agent: { restorePersistedInternalState: restore, noteInternalStateContinuityGap: noteGap },
+      agent: {
+        restorePersistedInternalState: restore,
+        restorePersistedSituatedLocation: vi.fn(),
+        noteInternalStateContinuityGap: noteGap,
+      },
       now,
     });
 
@@ -84,20 +88,57 @@ describe('rehydratePersistedInternalState', () => {
     const now = new Date('2026-06-10T12:00:00Z');
     const record = buildRecord('2026-06-07T12:00:00Z');
     const restore = vi.fn();
+    const restoreLocation = vi.fn();
     const noteGap = vi.fn();
 
     const result = await rehydratePersistedInternalState({
       store: buildStore(record),
-      agent: { restorePersistedInternalState: restore, noteInternalStateContinuityGap: noteGap },
+      agent: {
+        restorePersistedInternalState: restore,
+        restorePersistedSituatedLocation: restoreLocation,
+        noteInternalStateContinuityGap: noteGap,
+      },
       now,
     });
 
     expect(result.outcome).toBe('gap_detected');
     expect(restore).not.toHaveBeenCalled();
+    expect(restoreLocation).not.toHaveBeenCalled();
     expect(noteGap).toHaveBeenCalledWith({
       offlineSince: '2026-06-07T12:00:00.000Z',
       gapMs: 3 * 24 * 60 * 60 * 1000,
     });
+  });
+
+  it('restores only durable situated evidence from a stale snapshot', async () => {
+    const now = new Date('2026-06-10T12:00:00Z');
+    const record = buildRecord('2026-06-07T12:00:00Z');
+    record.state.situated.location = {
+      placeId: 'place.living-room',
+      siteId: 'site.home',
+      label: 'Living Room',
+      kind: 'physical',
+      updatedAt: '2026-06-07T11:30:00.000Z',
+    };
+    record.snapshotRef = buildInternalStateSnapshotRef(record.state);
+    const restore = vi.fn();
+    const restoreLocation = vi.fn();
+    const noteGap = vi.fn();
+
+    const result = await rehydratePersistedInternalState({
+      store: buildStore(record),
+      agent: {
+        restorePersistedInternalState: restore,
+        restorePersistedSituatedLocation: restoreLocation,
+        noteInternalStateContinuityGap: noteGap,
+      },
+      now,
+    });
+
+    expect(result.outcome).toBe('gap_detected');
+    expect(restore).not.toHaveBeenCalled();
+    expect(restoreLocation).toHaveBeenCalledWith(record.state.situated.location);
+    expect(noteGap).toHaveBeenCalledOnce();
   });
 
   it('treats a snapshot exactly at the window edge as fresh', async () => {
@@ -107,7 +148,11 @@ describe('rehydratePersistedInternalState', () => {
 
     const result = await rehydratePersistedInternalState({
       store: buildStore(buildRecord(savedAt)),
-      agent: { restorePersistedInternalState: restore, noteInternalStateContinuityGap: vi.fn() },
+      agent: {
+        restorePersistedInternalState: restore,
+        restorePersistedSituatedLocation: vi.fn(),
+        noteInternalStateContinuityGap: vi.fn(),
+      },
       now,
     });
 
@@ -121,7 +166,11 @@ describe('rehydratePersistedInternalState', () => {
 
     const result = await rehydratePersistedInternalState({
       store: buildStore(null),
-      agent: { restorePersistedInternalState: restore, noteInternalStateContinuityGap: noteGap },
+      agent: {
+        restorePersistedInternalState: restore,
+        restorePersistedSituatedLocation: vi.fn(),
+        noteInternalStateContinuityGap: noteGap,
+      },
     });
 
     expect(result.outcome).toBe('no_snapshot');
@@ -138,7 +187,11 @@ describe('rehydratePersistedInternalState', () => {
 
     await expect(rehydratePersistedInternalState({
       store: buildStore(corrupt),
-      agent: { restorePersistedInternalState: vi.fn(), noteInternalStateContinuityGap: vi.fn() },
+      agent: {
+        restorePersistedInternalState: vi.fn(),
+        restorePersistedSituatedLocation: vi.fn(),
+        noteInternalStateContinuityGap: vi.fn(),
+      },
       now: new Date('2026-06-10T12:00:00Z'),
     })).rejects.toThrow(/confidence/);
   });

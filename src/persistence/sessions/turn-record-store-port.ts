@@ -69,6 +69,8 @@ export interface TurnRecordRecoveryScanStats {
   peakIdentityRowsInMemory: number;
   sqliteCacheBytes: number;
   maxRowBytes: number;
+  /** Exact pre-drift emotion appraisal jobs validated and retired during live-alpha repair. */
+  legacyEmotionAppraisalJobsRetired?: number;
   authorityActionsReturned?: number;
   authorityBytesRead?: number;
   authorityFilesScanned?: number;

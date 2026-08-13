@@ -17,6 +17,7 @@ import { monotonicEpochNowMs } from '../../shared/telemetry/turn-performance.js'
 import type { AgentResponse } from '../../shared/contracts/runtime.js';
 import { resolveConversationScopeFromMetadata } from '../../core/session/conversation-scope.js';
 import type { SessionManager } from '../../core/session/manager.js';
+import { ExplicitToolContractError } from '../../primitives/llm/explicit-tool-request.js';
 
 function createSessionManagerStub() {
   return {
@@ -68,6 +69,48 @@ describe('AgentApiBackend health RPC', () => {
     });
     expect(health).not.toHaveProperty('statusCode');
     expect(health).not.toHaveProperty('body');
+  });
+});
+
+describe('AgentApiBackend model contract failures', () => {
+  it('returns a classified upstream-model error for an explicit tool violation', async () => {
+    const backend = new AgentApiBackend({
+      agentLoop: fromAny({
+        handleMessage: vi.fn(async () => {
+          throw new ExplicitToolContractError(
+            'Provider violated explicit tool contract: expected exactly one "memory" call, received []',
+          );
+        }),
+        abort: vi.fn(),
+      }),
+      eventBus: new EventBus(),
+      sessionManager: createSessionManagerStub(),
+    });
+
+    const result = await backend.handleChatCompletion({
+      requestId: 'tool-contract-request-1',
+      request: {
+        model: 'test-model',
+        messages: [{ role: 'user', content: 'Call memory exactly once.' }],
+      },
+      principal: { id: 'principal-1', mode: 'api_key' },
+      headers: {
+        'x-session-id': 'tool-contract',
+        'x-channel-privacy': 'private',
+      },
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        status: 502,
+        type: 'model_tool_contract_incompatible',
+        message: 'Selected model could not satisfy the required tool call',
+        details: {
+          cause: 'Provider violated explicit tool contract: expected exactly one "memory" call, received []',
+        },
+      },
+    });
   });
 });
 

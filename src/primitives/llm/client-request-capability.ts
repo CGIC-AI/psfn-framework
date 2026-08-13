@@ -250,14 +250,15 @@ export class LLMRequestCapability {
         if (!outgoing || typeof outgoing !== 'object' || Array.isArray(outgoing)) {
           throw new Error('OpenAI completions payload must be an object before tool choice injection');
         }
-        const tools = requestOptions.requiredToolName && Array.isArray(outgoing.tools)
-          ? outgoing.tools.filter((tool) => (
+        const outgoingRecord = outgoing as Record<string, unknown>;
+        const tools = requestOptions.requiredToolName && Array.isArray(outgoingRecord.tools)
+          ? outgoingRecord.tools.filter((tool: unknown) => (
               !!tool
               && typeof tool === 'object'
               && !Array.isArray(tool)
               && (tool as { function?: { name?: unknown } }).function?.name === requestOptions.requiredToolName
             ))
-          : outgoing.tools;
+          : outgoingRecord.tools;
         if (requestOptions.requiredToolName && (!Array.isArray(tools) || tools.length !== 1)) {
           throw new Error(
             `OpenAI completions payload is missing required tool ${JSON.stringify(requestOptions.requiredToolName)}`,
@@ -270,10 +271,10 @@ export class LLMRequestCapability {
             ? {
                 provider: {
                   ...(
-                    outgoing.provider
-                    && typeof outgoing.provider === 'object'
-                    && !Array.isArray(outgoing.provider)
-                      ? outgoing.provider
+                    outgoingRecord.provider
+                    && typeof outgoingRecord.provider === 'object'
+                    && !Array.isArray(outgoingRecord.provider)
+                      ? outgoingRecord.provider
                       : {}
                   ),
                   require_parameters: true,
@@ -281,6 +282,7 @@ export class LLMRequestCapability {
               }
             : {}),
           tool_choice: toolChoice,
+          ...(requestOptions.requiredToolName ? { parallel_tool_calls: false } : {}),
         };
       };
     }

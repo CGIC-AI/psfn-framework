@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { classifyLLMError } from './error-classify.js';
+import { ExplicitToolContractError } from './explicit-tool-request.js';
 
 describe('classifyLLMError', () => {
   it('classifies abort errors as non-retryable', () => {
@@ -85,6 +86,17 @@ describe('classifyLLMError', () => {
     );
 
     expect(result.category).toBe('empty_response');
+    expect(result.retryable).toBe(true);
+  });
+
+  it('classifies a forced-tool violation as a retryable model incompatibility', () => {
+    const result = classifyLLMError(
+      new ExplicitToolContractError(
+        'Provider violated explicit tool contract: expected exactly one "memory" call, received []',
+      ),
+    );
+
+    expect(result.category).toBe('tool_contract_incompatible');
     expect(result.retryable).toBe(true);
   });
 

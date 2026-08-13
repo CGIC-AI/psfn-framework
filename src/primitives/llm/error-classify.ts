@@ -1,4 +1,5 @@
 import { toError } from '../../shared/utils/errors.js';
+import { isExplicitToolContractError } from './explicit-tool-request.js';
 
 export type LLMErrorCategory =
   | 'abort'
@@ -8,6 +9,7 @@ export type LLMErrorCategory =
   | 'timeout'
   | 'auth'
   | 'empty_response'
+  | 'tool_contract_incompatible'
   | 'unknown';
 
 export interface LLMErrorClassification {
@@ -130,6 +132,14 @@ export function classifyLLMError(error: unknown): LLMErrorClassification {
   const statusCode = getStatusCode(errorLike);
   const text = `${err.name} ${err.message}`.toLowerCase();
   const code = readErrorCode(errorLike);
+
+  if (isExplicitToolContractError(error)) {
+    return {
+      category: 'tool_contract_incompatible',
+      retryable: true,
+      ...(statusCode !== undefined ? { statusCode } : {}),
+    };
+  }
 
   const abortByCode = code === 'ABORT_ERR' || code === 'ERR_ABORTED';
   const abortByName = err.name === 'AbortError';

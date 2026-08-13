@@ -1,5 +1,6 @@
 import type { LLMContext } from '../../shared/contracts/runtime.js';
 import { resolveExplicitToolRequestSequence } from '../../shared/tools/explicit-tool-request.js';
+import { isRecord } from '../../shared/utils/types.js';
 
 export interface ExplicitNamedToolChoice {
   type: 'function';
@@ -13,10 +14,21 @@ export interface ExplicitToolContract {
 }
 
 export class ExplicitToolContractError extends Error {
+  readonly code = 'MODEL_TOOL_CONTRACT_INCOMPATIBLE';
+
   constructor(message: string) {
     super(message);
     this.name = 'ExplicitToolContractError';
   }
+}
+
+export function isExplicitToolContractError(error: unknown): error is ExplicitToolContractError {
+  return error instanceof ExplicitToolContractError
+    || (
+      isRecord(error)
+      && error.name === 'ExplicitToolContractError'
+      && error.code === 'MODEL_TOOL_CONTRACT_INCOMPATIBLE'
+    );
 }
 
 function textContent(content: unknown): string {
@@ -36,10 +48,6 @@ function textContent(content: unknown): string {
 function providerToolChoice(modelApi: string, toolName?: string): ExplicitToolChoice {
   switch (modelApi) {
     case 'openai-completions':
-      // Some OpenAI-compatible providers ignore a named function choice while
-      // still honoring `required`. The final payload seam limits the catalog to
-      // the one expected function, making `required` equally deterministic.
-      return toolName ? 'required' : 'none';
     case 'pi-messages':
       return toolName
         ? { type: 'function', function: { name: toolName } }
@@ -159,7 +167,7 @@ export function resolveExplicitToolContract(input: {
   );
   return {
     choice,
-    ...(choice === 'required' && nextToolName ? { requiredToolName: nextToolName } : {}),
+    ...(nextToolName ? { requiredToolName: nextToolName } : {}),
   };
 }
 

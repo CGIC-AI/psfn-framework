@@ -2463,7 +2463,7 @@ describe('LLMClient completion model hints', () => {
 
     expect(mocks.streamSimple).toHaveBeenCalledTimes(1);
     expect(mocks.streamSimple.mock.calls[0]?.[2]).toMatchObject({
-      toolChoice: 'required',
+      toolChoice: { type: 'function', function: { name: 'notify' } },
       requiredToolName: 'notify',
     });
   });

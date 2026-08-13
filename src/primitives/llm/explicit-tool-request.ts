@@ -1,7 +1,10 @@
 import type { LLMContext } from '../../shared/contracts/runtime.js';
 import { resolveExplicitlyRequestedToolNames } from '../../shared/tools/explicit-tool-request.js';
 
-type ExplicitToolChoice = 'required' | 'any';
+export interface ExplicitToolChoice {
+  type: 'function';
+  function: { name: string };
+}
 
 function textContent(content: unknown): string {
   if (typeof content === 'string') return content;
@@ -17,22 +20,15 @@ function textContent(content: unknown): string {
     .join('\n');
 }
 
-function providerToolChoice(modelApi: string): ExplicitToolChoice | undefined {
+function providerToolChoice(modelApi: string, toolName: string): ExplicitToolChoice {
   switch (modelApi) {
     case 'openai-completions':
-    case 'openai-responses':
-    case 'azure-openai-responses':
-    case 'openai-codex-responses':
-    case 'mistral-conversations':
     case 'pi-messages':
-      return 'required';
-    case 'anthropic-messages':
-    case 'bedrock-converse-stream':
-    case 'google-generative-ai':
-    case 'google-vertex':
-      return 'any';
+      return { type: 'function', function: { name: toolName } };
     default:
-      return undefined;
+      throw new Error(
+        `cannot enforce explicit tool execution for unsupported model API: ${modelApi}`,
+      );
   }
 }
 
@@ -55,16 +51,19 @@ export function resolveExplicitToolChoice(input: {
     }
   }
   if (currentUserIndex < 0) return undefined;
-  if (messages.slice(currentUserIndex + 1).some(message => (
-    message.role === 'toolResult' || message.role === 'tool'
-  ))) {
-    return undefined;
-  }
-
   const requestText = textContent(messages[currentUserIndex]?.content);
   const requestedToolNames = resolveExplicitlyRequestedToolNames(
     requestText,
     input.context.tools.map(tool => tool.name),
   );
-  return requestedToolNames.length > 0 ? providerToolChoice(input.modelApi) : undefined;
+  const attemptedToolNames = new Set(
+    messages.slice(currentUserIndex + 1)
+      .filter(message => message.role === 'toolResult' || message.role === 'tool')
+      .map(message => (message as { toolName?: unknown }).toolName)
+      .filter((name): name is string => typeof name === 'string'),
+  );
+  const nextRequestedToolName = requestedToolNames.find(name => !attemptedToolNames.has(name));
+  return nextRequestedToolName
+    ? providerToolChoice(input.modelApi, nextRequestedToolName)
+    : undefined;
 }

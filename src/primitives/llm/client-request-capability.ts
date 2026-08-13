@@ -36,6 +36,7 @@ import {
 } from '../../boundary/custody/credential-vault.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { resolveExplicitToolChoice } from './explicit-tool-request.js';
+import type { ExplicitToolChoice } from './explicit-tool-request.js';
 
 const log = createComponentLogger('LLMClient');
 
@@ -52,7 +53,7 @@ export interface LLMRequestOptions extends SimpleStreamOptions {
   topK?: number;
   frequencyPenalty?: number;
   repetitionPenalty?: number;
-  toolChoice?: 'required' | 'any';
+  toolChoice?: ExplicitToolChoice;
 }
 
 /** Owns provider model resolution, request construction, and as-sent capture. */

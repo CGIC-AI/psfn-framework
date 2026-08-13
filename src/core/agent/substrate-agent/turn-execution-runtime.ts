@@ -82,8 +82,11 @@ import {
 import { stripLeadingHistoryStamps } from '../../../shared/utils/history-stamp-hygiene.js';
 import {
   rejectsUnconfirmedToolExecutionClaim,
+  UNAVAILABLE_REQUESTED_TOOL_CORRECTION,
   UNCONFIRMED_TOOL_EXECUTION_CORRECTION,
 } from '../tool-outcome-claim-guard.js';
+import { CANONICAL_FIRST_PARTY_TOOL_SURFACES } from '../tool-surface/registry.js';
+import { resolveExplicitlyRequestedToolNames } from '../../../shared/tools/explicit-tool-request.js';
 import {
   invokeAgentForTurn,
   type AgentInvocationMutableState,
@@ -1333,17 +1336,30 @@ export async function handleMessageForTurn(
       });
     }
 
+    const activeToolNames = (
+      turnSnapshot.plan?.toolDefinitions
+      ?? turnSnapshot.toolContext?.activeTools
+      ?? []
+    ).map(tool => tool.name);
+    const knownToolNames = [
+      ...new Set([
+        ...activeToolNames,
+        ...CANONICAL_FIRST_PARTY_TOOL_SURFACES.map(tool => tool.name),
+      ]),
+    ];
+    const unavailableRequestedToolNames = resolveExplicitlyRequestedToolNames(
+      message.content,
+      knownToolNames,
+    ).filter(name => !activeToolNames.includes(name));
     if (rejectsUnconfirmedToolExecutionClaim({
       requestText: message.content,
-      activeToolNames: (
-        turnSnapshot.plan?.toolDefinitions
-        ?? turnSnapshot.toolContext?.activeTools
-        ?? []
-      ).map(tool => tool.name),
+      activeToolNames,
       responseText: safeResponseText,
       turnMessages,
     })) {
-      safeResponseText = UNCONFIRMED_TOOL_EXECUTION_CORRECTION;
+      safeResponseText = unavailableRequestedToolNames.length > 0
+        ? UNAVAILABLE_REQUESTED_TOOL_CORRECTION
+        : UNCONFIRMED_TOOL_EXECUTION_CORRECTION;
       log.warn('Rejected assistant execution-success claim without a successful tool outcome', {
         channelId: message.channelId,
         turnId,

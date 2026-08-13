@@ -4,6 +4,7 @@ import {
   resolveToolCallOutcome,
 } from '../../shared/contracts/tool-call-outcome.js';
 import { resolveExplicitlyRequestedToolNames } from '../../shared/tools/explicit-tool-request.js';
+import { CANONICAL_FIRST_PARTY_TOOL_SURFACES } from './tool-surface/registry.js';
 
 const EXECUTION_SUCCESS_CLAIM_PATTERNS = [
   /(?:^|[.!?]\s+)\s*(?:done|completed|finished|success)\s*[.!?]?(?:\s|$)/iu,
@@ -14,6 +15,9 @@ const EXECUTION_SUCCESS_CLAIM_PATTERNS = [
 
 export const UNCONFIRMED_TOOL_EXECUTION_CORRECTION =
   'No matching successful tool execution was recorded, so I cannot truthfully report that operation as completed.';
+
+export const UNAVAILABLE_REQUESTED_TOOL_CORRECTION =
+  'The requested tool is unavailable in the current live catalog, so no operation was executed.';
 
 const STRUCTURED_EXECUTION_SUCCESS_KEY = /^(?:success|succeeded|completed|done|created|updated|deleted|sent|saved|wrote|written|executed|ran|fetched|downloaded|uploaded|attached|posted|published|scheduled|cancelled|canceled|restored|imported|appended|notified|inspected|viewed|listed|linked|redacted|considered|started|worked|toggled(?:Twice)?|disabledThenRestored)$/iu;
 const STRUCTURED_EXECUTION_FAILURE_PATTERN = /\b(?:could not|cannot|can't|failed|failure|error|denied|blocked|refused|unavailable|not executed|not completed)\b/iu;
@@ -79,7 +83,12 @@ export function rejectsUnconfirmedToolExecutionClaim(input: {
 
   const explicitlyRequestedToolNames = resolveExplicitlyRequestedToolNames(
     input.requestText ?? '',
-    input.activeToolNames ?? [],
+    [
+      ...new Set([
+        ...(input.activeToolNames ?? []),
+        ...CANONICAL_FIRST_PARTY_TOOL_SURFACES.map(tool => tool.name),
+      ]),
+    ],
   );
   const successClaimed = claimsExecutionSuccess(
     input.responseText,

@@ -85,6 +85,15 @@ describe('tool outcome final-response conformance', () => {
     })).toBe(true);
   });
 
+  it('rejects success for a known requested tool missing from the active catalog', () => {
+    expect(rejectsUnconfirmedToolExecutionClaim({
+      requestText: 'Call beads to create the issue.',
+      activeToolNames: ['memory'],
+      responseText: 'Done. I created it.',
+      turnMessages: [],
+    })).toBe(true);
+  });
+
   it('allows an honest structured tool failure', () => {
     expect(rejectsUnconfirmedToolExecutionClaim({
       requestText: 'Call beads to create the issue.',

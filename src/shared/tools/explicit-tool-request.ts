@@ -1,7 +1,37 @@
 const EXPLICIT_TOOL_VERBS = '(?:call|use|invoke|run|execute|trigger|attempt)';
 
+/**
+ * Document ingest appends runtime-derived attachment data after this boundary.
+ * Only the participant-authored prefix may opt into forced tool execution.
+ */
+export const DERIVED_ATTACHMENT_CONTEXT_BOUNDARY =
+  '[Runtime note] The following attachment context was derived by the runtime from Participant-provided files.';
+
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+}
+
+function directiveSentenceAt(requestText: string, matchIndex: number, matchEnd: number): string {
+  let sentenceStart = 0;
+  const priorText = requestText.slice(0, matchIndex);
+  for (const boundary of priorText.matchAll(/[.!?]["')\]]*\s+(?=[\p{Lu}\p{Lt}])/gu)) {
+    sentenceStart = boundary.index + boundary[0].length;
+  }
+  const remainingText = requestText.slice(matchEnd);
+  const nextBoundary = /[.!?]["')\]]*(?=\s+[\p{Lu}\p{Lt}]|$)/u.exec(remainingText);
+  const sentenceEnd = nextBoundary
+    ? matchEnd + nextBoundary.index + nextBoundary[0].length
+    : requestText.length;
+  return requestText.slice(sentenceStart, sentenceEnd);
+}
+
+function isProhibitedToolDirective(
+  requestText: string,
+  matchIndex: number,
+  matchEnd: number,
+): boolean {
+  return /\b(?:no|not|never|avoid|forbid|forbidden|prohibit|prohibited|refrain|without)\b|n['’]t\b/iu
+    .test(directiveSentenceAt(requestText, matchIndex, matchEnd));
 }
 
 /**
@@ -20,6 +50,10 @@ export function resolveExplicitToolRequestSequence(
   requestText: string,
   activeToolNames: readonly string[],
 ): string[] {
+  const attachmentBoundaryIndex = requestText.indexOf(DERIVED_ATTACHMENT_CONTEXT_BOUNDARY);
+  const participantRequestText = attachmentBoundaryIndex >= 0
+    ? requestText.slice(0, attachmentBoundaryIndex)
+    : requestText;
   const matches: Array<{
     name: string;
     index: number;
@@ -34,16 +68,16 @@ export function resolveExplicitToolRequestSequence(
       `\\b${EXPLICIT_TOOL_VERBS}\\s+(?:the\\s+)?(?:tool\\s+)?[\u0060]?${escapeRegExp(name)}[\u0060]?(?=\\s|[.,;:!?)]|$)`,
       'giu',
     );
-    for (const match of requestText.matchAll(pattern)) {
-      const prefix = requestText.slice(0, match.index);
-      if (/\b(?:do\s+not|don't|never)\s*$/iu.test(prefix)) continue;
-      const clauseSuffix = requestText
-        .slice(match.index + match[0].length)
+    for (const match of participantRequestText.matchAll(pattern)) {
+      const matchEnd = match.index + match[0].length;
+      if (isProhibitedToolDirective(participantRequestText, match.index, matchEnd)) continue;
+      const clauseSuffix = participantRequestText
+        .slice(matchEnd)
         .split(/[.;!?]/u, 1)[0] ?? '';
       matches.push({
         name,
         index: match.index,
-        end: match.index + match[0].length,
+        end: matchEnd,
         repeatCount: /\b(?:exactly\s+)?twice\b/iu.test(clauseSuffix) ? 2 : 1,
         explicit: true,
       });
@@ -57,7 +91,7 @@ export function resolveExplicitToolRequestSequence(
       `[\u0060]?${escapeRegExp(name)}[\u0060]?\\s+with\\s+action\\s+(?:"[^"]+"|'[^']+'|[\\w-]+)`,
       'giu',
     );
-    const actionMatches = [...requestText.matchAll(actionPattern)];
+    const actionMatches = [...participantRequestText.matchAll(actionPattern)];
     let activeSeries = false;
     let previousActionEnd = -1;
     for (const actionMatch of actionMatches) {
@@ -70,7 +104,7 @@ export function resolveExplicitToolRequestSequence(
         && match.end >= actionIndex + name.length
       ));
       const connector = previousActionEnd >= 0
-        ? requestText.slice(previousActionEnd, actionIndex)
+        ? participantRequestText.slice(previousActionEnd, actionIndex)
         : '';
       const continuesSeries: boolean = activeSeries
         && /^\s*,\s*(?:and\s+)?$/iu.test(connector);
@@ -87,24 +121,7 @@ export function resolveExplicitToolRequestSequence(
       previousActionEnd = actionEnd;
     }
   }
-  const ordered = matches
-    .sort((left, right) => left.index - right.index || left.name.localeCompare(right.name));
-  const steps: typeof ordered = [];
-  for (const match of ordered) {
-    const previous = steps.at(-1);
-    if (
-      match.explicit
-      && previous?.explicit
-      && previous.name === match.name
-      && previous.repeatCount === 1
-      && match.repeatCount === 1
-    ) {
-      const connector = requestText.slice(previous.end, match.index);
-      const startsAnotherStep = /\b(?:then|next|afterwards?|subsequently)\b/iu.test(connector)
-        || /(?:^|[,;])\s*and\s*$/iu.test(connector);
-      if (!startsAnotherStep) continue;
-    }
-    steps.push(match);
-  }
-  return steps.flatMap(match => Array.from({ length: match.repeatCount }, () => match.name));
+  return matches
+    .sort((left, right) => left.index - right.index || left.name.localeCompare(right.name))
+    .flatMap(match => Array.from({ length: match.repeatCount }, () => match.name));
 }

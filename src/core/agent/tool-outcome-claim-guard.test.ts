@@ -136,6 +136,18 @@ describe('tool outcome final-response conformance', () => {
     })).toBe(false);
   });
 
+  it('rejects a claim that repeated same-tool calls both succeeded when one failed', () => {
+    expect(rejectsUnconfirmedToolExecutionClaim({
+      requestText: 'Call memory to write the first item. Then call memory to write the second item.',
+      activeToolNames: ['memory'],
+      responseText: JSON.stringify({ written: true, count: 2 }),
+      turnMessages: [
+        namedToolResult('memory', 'success'),
+        namedToolResult('memory', 'execution_failure'),
+      ],
+    })).toBe(true);
+  });
+
   it('does not turn ordinary discussion of a tool into an execution requirement', () => {
     expect(rejectsUnconfirmedToolExecutionClaim({
       requestText: 'Why is north_star useful?',

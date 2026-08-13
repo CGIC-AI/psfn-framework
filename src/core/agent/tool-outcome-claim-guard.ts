@@ -3,7 +3,7 @@ import {
   isToolResultOutcomeProjection,
   resolveToolCallOutcome,
 } from '../../shared/contracts/tool-call-outcome.js';
-import { resolveExplicitlyRequestedToolNames } from '../../shared/tools/explicit-tool-request.js';
+import { resolveExplicitToolRequestSequence } from '../../shared/tools/explicit-tool-request.js';
 import { CANONICAL_FIRST_PARTY_TOOL_SURFACES } from './tool-surface/registry.js';
 
 const EXECUTION_SUCCESS_CLAIM_PATTERNS = [
@@ -64,9 +64,11 @@ export function rejectsUnconfirmedToolExecutionClaim(input: {
 }): boolean {
   let observedNonExecutionOutcome = false;
   const successfulToolNames = new Set<string>();
+  const observedToolOutcomes: Array<{ toolName: string; outcome: ReturnType<typeof resolveToolCallOutcome> }> = [];
   for (const message of input.turnMessages) {
     if (!isToolResultOutcomeProjection(message)) continue;
     const outcome = resolveToolCallOutcome(message);
+    observedToolOutcomes.push({ toolName: message.toolName, outcome });
     if (outcome === 'success') {
       successfulToolNames.add(message.toolName);
       continue;
@@ -81,7 +83,7 @@ export function rejectsUnconfirmedToolExecutionClaim(input: {
     }
   }
 
-  const explicitlyRequestedToolNames = resolveExplicitlyRequestedToolNames(
+  const explicitlyRequestedToolSequence = resolveExplicitToolRequestSequence(
     input.requestText ?? '',
     [
       ...new Set([
@@ -92,10 +94,22 @@ export function rejectsUnconfirmedToolExecutionClaim(input: {
   );
   const successClaimed = claimsExecutionSuccess(
     input.responseText,
-    explicitlyRequestedToolNames.length > 0,
+    explicitlyRequestedToolSequence.length > 0,
   );
-  if (explicitlyRequestedToolNames.length > 0 && successClaimed) {
-    return explicitlyRequestedToolNames.some(toolName => !successfulToolNames.has(toolName));
+  if (explicitlyRequestedToolSequence.length > 0 && successClaimed) {
+    let observedIndex = 0;
+    for (const requestedToolName of explicitlyRequestedToolSequence) {
+      while (
+        observedIndex < observedToolOutcomes.length
+        && observedToolOutcomes[observedIndex]?.toolName !== requestedToolName
+      ) {
+        observedIndex += 1;
+      }
+      const matchingOutcome = observedToolOutcomes[observedIndex];
+      if (!matchingOutcome || matchingOutcome.outcome !== 'success') return true;
+      observedIndex += 1;
+    }
+    return false;
   }
 
   return successfulToolNames.size === 0 && observedNonExecutionOutcome && successClaimed;

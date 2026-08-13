@@ -29,6 +29,8 @@ export function resolveExplicitToolRequestSequence(
       'giu',
     );
     for (const match of requestText.matchAll(pattern)) {
+      const prefix = requestText.slice(0, match.index);
+      if (/\b(?:do\s+not|don't|never)\s*$/iu.test(prefix)) continue;
       matches.push({ name, index: match.index });
     }
   }

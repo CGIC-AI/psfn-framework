@@ -119,6 +119,36 @@ describe('explicit tool request choice', () => {
     })).toBe('none');
   });
 
+  it('does not turn a negated tool prohibition into a requested sequence step', () => {
+    const request = 'Call north_star to append this. Do not call notify or any unrelated tool.';
+    expect(resolveExplicitToolChoice({
+      context: context([{ role: 'user', content: request }]),
+      originStage: 'agent.turn.prompt',
+      modelApi: 'pi-messages',
+    })).toEqual({ type: 'function', function: { name: 'north_star' } });
+    expect(resolveExplicitToolChoice({
+      context: context([
+        { role: 'user', content: request },
+        {
+          role: 'toolResult',
+          toolCallId: 'call-1',
+          toolName: 'north_star',
+          content: 'ok',
+        },
+      ] as LLMContext['messages']),
+      originStage: 'agent.turn.prompt',
+      modelApi: 'pi-messages',
+    })).toBe('none');
+
+    for (const prohibited of ["Don't call notify.", 'Never invoke notify.']) {
+      expect(resolveExplicitToolChoice({
+        context: context([{ role: 'user', content: `Call north_star. ${prohibited}` }]),
+        originStage: 'agent.turn.prompt',
+        modelApi: 'pi-messages',
+      })).toEqual({ type: 'function', function: { name: 'north_star' } });
+    }
+  });
+
   it('rejects an unsupported provider API when an explicit request must be enforced', () => {
     expect(() => resolveExplicitToolChoice({
       context: context([{ role: 'user', content: 'Call north_star now.' }]),

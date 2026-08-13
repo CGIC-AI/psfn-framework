@@ -33,7 +33,6 @@ export const SHARED_WORKSPACE_POLICY = Object.freeze({
 const LIBRARY_SOURCE_FILES = [
   'welcome.md',
   'privacy-boundary-reference.md',
-  'live_verification_checklist.md',
 ] as const;
 
 interface CompanionLibrarySourceFile {

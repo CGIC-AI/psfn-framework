@@ -104,6 +104,7 @@ import {
   runLLMStreamAttempt,
   type StreamUsageRecord,
 } from './client-stream-capability.js';
+import { assertExplicitToolContractSatisfied } from './explicit-tool-request.js';
 
 export {
   classifyToolArgumentProvenance,
@@ -1239,8 +1240,16 @@ export class LLMClient {
           }
           try {
             assertUsableProviderResponse(response, candidateTarget);
+            assertExplicitToolContractSatisfied({
+              choice: requestOptions.toolChoice,
+              ...(requestOptions.requiredToolName
+                ? { requiredToolName: requestOptions.requiredToolName }
+                : {}),
+              toolCalls: completionToolCalls,
+            });
           } catch (error) {
             const err = error instanceof Error ? error : new Error(String(error));
+            markErrorAsNonRetryable(err);
             await this.recordUsage(
               routingPurpose,
               'completion',

@@ -29,16 +29,24 @@ describe('LLMRequestCapability explicit tool payload', () => {
       { api: 'openai-completions' } as Model<'openai-completions'>,
     );
 
-    const choice = { type: 'function', function: { name: 'notify' } };
-    expect(requestOptions.toolChoice).toEqual(choice);
+    expect(requestOptions.toolChoice).toBe('required');
+    expect(requestOptions.requiredToolName).toBe('notify');
     expect(await requestOptions.onPayload?.(
-      { model: 'example', messages: [] },
+      {
+        model: 'example',
+        messages: [],
+        tools: [
+          { type: 'function', function: { name: 'notify' } },
+          { type: 'function', function: { name: 'north_star' } },
+        ],
+      },
       { api: 'openai-completions' } as Model<'openai-completions'>,
     )).toEqual({
       model: 'example',
       messages: [],
+      tools: [{ type: 'function', function: { name: 'notify' } }],
       transformed: true,
-      tool_choice: choice,
+      tool_choice: 'required',
     });
     expect(priorOnPayload).toHaveBeenCalledOnce();
   });

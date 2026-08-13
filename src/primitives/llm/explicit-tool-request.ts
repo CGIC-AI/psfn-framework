@@ -5,7 +5,19 @@ export interface ExplicitNamedToolChoice {
   type: 'function';
   function: { name: string };
 }
-export type ExplicitToolChoice = ExplicitNamedToolChoice | 'none';
+export type ExplicitToolChoice = ExplicitNamedToolChoice | 'required' | 'none';
+
+export interface ExplicitToolContract {
+  choice: ExplicitToolChoice;
+  requiredToolName?: string;
+}
+
+export class ExplicitToolContractError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ExplicitToolContractError';
+  }
+}
 
 function textContent(content: unknown): string {
   if (typeof content === 'string') return content;
@@ -24,6 +36,10 @@ function textContent(content: unknown): string {
 function providerToolChoice(modelApi: string, toolName?: string): ExplicitToolChoice {
   switch (modelApi) {
     case 'openai-completions':
+      // Some OpenAI-compatible providers ignore a named function choice while
+      // still honoring `required`. The final payload seam limits the catalog to
+      // the one expected function, making `required` equally deterministic.
+      return toolName ? 'required' : 'none';
     case 'pi-messages':
       return toolName
         ? { type: 'function', function: { name: toolName } }
@@ -35,12 +51,39 @@ function providerToolChoice(modelApi: string, toolName?: string): ExplicitToolCh
   }
 }
 
+export function assertExplicitToolContractSatisfied(input: {
+  choice: ExplicitToolChoice | undefined;
+  requiredToolName?: string;
+  toolCalls: ReadonlyArray<{ name: string }>;
+}): void {
+  if (!input.choice) return;
+  if (input.choice === 'none') {
+    if (input.toolCalls.length === 0) return;
+    throw new ExplicitToolContractError(
+      `Provider returned ${input.toolCalls.length} tool call(s) after tool execution was disabled`,
+    );
+  }
+  const expectedName = input.choice === 'required'
+    ? input.requiredToolName
+    : input.choice.function.name;
+  if (
+    expectedName
+    && input.toolCalls.length === 1
+    && input.toolCalls[0]?.name === expectedName
+  ) {
+    return;
+  }
+  throw new ExplicitToolContractError(
+    `Provider violated explicit tool contract: expected exactly one ${JSON.stringify(expectedName)} call, received ${JSON.stringify(input.toolCalls.map(call => call.name))}`,
+  );
+}
+
 /** Enforce the named sequence, then forbid extra tools for that explicit request. */
-export function resolveExplicitToolChoice(input: {
+export function resolveExplicitToolContract(input: {
   context: LLMContext;
   originStage?: string;
   modelApi: string;
-}): ExplicitToolChoice | undefined {
+}): ExplicitToolContract | undefined {
   if (input.originStage !== 'agent.turn.prompt' || !input.context.tools?.length) {
     return undefined;
   }
@@ -71,8 +114,21 @@ export function resolveExplicitToolChoice(input: {
     }
     if (completedSequenceSteps === requestedToolSequence.length) break;
   }
-  return providerToolChoice(
+  const nextToolName = requestedToolSequence[completedSequenceSteps];
+  const choice = providerToolChoice(
     input.modelApi,
-    requestedToolSequence[completedSequenceSteps],
+    nextToolName,
   );
+  return {
+    choice,
+    ...(choice === 'required' && nextToolName ? { requiredToolName: nextToolName } : {}),
+  };
+}
+
+export function resolveExplicitToolChoice(input: {
+  context: LLMContext;
+  originStage?: string;
+  modelApi: string;
+}): ExplicitToolChoice | undefined {
+  return resolveExplicitToolContract(input)?.choice;
 }

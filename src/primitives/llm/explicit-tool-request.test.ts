@@ -1,6 +1,9 @@
 import type { LLMContext } from '../../shared/contracts/runtime.js';
 import { describe, expect, it } from 'vitest';
-import { resolveExplicitToolChoice } from './explicit-tool-request.js';
+import {
+  assertExplicitToolContractSatisfied,
+  resolveExplicitToolChoice,
+} from './explicit-tool-request.js';
 
 function context(messages: LLMContext['messages']): LLMContext {
   return {
@@ -19,7 +22,7 @@ describe('explicit tool request choice', () => {
       context: context([{ role: 'user', content: 'Call north_star to append this decision.' }]),
       originStage: 'agent.turn.prompt',
       modelApi: 'openai-completions',
-    })).toEqual({ type: 'function', function: { name: 'north_star' } });
+    })).toBe('required');
   });
 
   it('forbids extra tool calls after a single requested tool has a result', () => {
@@ -64,7 +67,7 @@ describe('explicit tool request choice', () => {
       context: context([{ role: 'user', content: 'Attempt notify exactly once.' }]),
       originStage: 'agent.turn.prompt',
       modelApi: 'openai-completions',
-    })).toEqual({ type: 'function', function: { name: 'notify' } });
+    })).toBe('required');
   });
 
   it('forces each requested tool in order across provider steps', () => {
@@ -80,7 +83,7 @@ describe('explicit tool request choice', () => {
       ] as LLMContext['messages']),
       originStage: 'agent.turn.prompt',
       modelApi: 'openai-completions',
-    })).toEqual({ type: 'function', function: { name: 'notify' } });
+    })).toBe('required');
   });
 
   it('retains repeated named-tool steps and forbids calls after the sequence', () => {
@@ -98,7 +101,7 @@ describe('explicit tool request choice', () => {
       ] as LLMContext['messages']),
       originStage: 'agent.turn.prompt',
       modelApi: 'openai-completions',
-    })).toEqual({ type: 'function', function: { name: 'north_star' } });
+    })).toBe('required');
 
     expect(resolveExplicitToolChoice({
       context: context([
@@ -122,5 +125,35 @@ describe('explicit tool request choice', () => {
       originStage: 'agent.turn.prompt',
       modelApi: 'custom-provider-api',
     })).toThrow('cannot enforce explicit tool execution for unsupported model API');
+  });
+
+  it('rejects zero, unrelated, or parallel calls for a required exact tool', () => {
+    expect(() => assertExplicitToolContractSatisfied({
+      choice: 'required',
+      requiredToolName: 'notify',
+      toolCalls: [],
+    })).toThrow('expected exactly one "notify" call');
+    expect(() => assertExplicitToolContractSatisfied({
+      choice: 'required',
+      requiredToolName: 'notify',
+      toolCalls: [{ name: 'north_star' }],
+    })).toThrow('received ["north_star"]');
+    expect(() => assertExplicitToolContractSatisfied({
+      choice: 'required',
+      requiredToolName: 'notify',
+      toolCalls: [{ name: 'notify' }, { name: 'notify' }],
+    })).toThrow('received ["notify","notify"]');
+    expect(() => assertExplicitToolContractSatisfied({
+      choice: 'required',
+      requiredToolName: 'notify',
+      toolCalls: [{ name: 'notify' }],
+    })).not.toThrow();
+  });
+
+  it('rejects any tool call after the requested sequence is complete', () => {
+    expect(() => assertExplicitToolContractSatisfied({
+      choice: 'none',
+      toolCalls: [{ name: 'notify' }],
+    })).toThrow('after tool execution was disabled');
   });
 });

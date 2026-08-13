@@ -35,7 +35,7 @@ import {
   resolveOptionalCredentialReference,
 } from '../../boundary/custody/credential-vault.js';
 import { createComponentLogger } from '../../shared/logger.js';
-import { resolveExplicitToolChoice } from './explicit-tool-request.js';
+import { resolveExplicitToolContract } from './explicit-tool-request.js';
 import type { ExplicitToolChoice } from './explicit-tool-request.js';
 
 const log = createComponentLogger('LLMClient');
@@ -54,6 +54,8 @@ export interface LLMRequestOptions extends SimpleStreamOptions {
   frequencyPenalty?: number;
   repetitionPenalty?: number;
   toolChoice?: ExplicitToolChoice;
+  /** Exact tool contract paired with a provider-generic `required` choice. */
+  requiredToolName?: string;
 }
 
 /** Owns provider model resolution, request construction, and as-sent capture. */
@@ -219,13 +221,15 @@ export class LLMRequestCapability {
     correlation: ResolvedCorrelationMetadata | undefined,
     model: Model<any>,
   ): void {
-    const toolChoice = resolveExplicitToolChoice({
+    const contract = resolveExplicitToolContract({
       context,
       originStage: correlation?.originStage,
       modelApi: String(model.api),
     });
-    if (!toolChoice) return;
+    if (!contract) return;
+    const { choice: toolChoice } = contract;
     requestOptions.toolChoice = toolChoice;
+    if (contract.requiredToolName) requestOptions.requiredToolName = contract.requiredToolName;
 
     // pi-ai's SimpleStreamOptions contract does not type provider-specific
     // toolChoice, even though the OpenAI completions adapter currently forwards
@@ -239,7 +243,24 @@ export class LLMRequestCapability {
         if (!outgoing || typeof outgoing !== 'object' || Array.isArray(outgoing)) {
           throw new Error('OpenAI completions payload must be an object before tool choice injection');
         }
-        return { ...outgoing, tool_choice: toolChoice };
+        const tools = requestOptions.requiredToolName && Array.isArray(outgoing.tools)
+          ? outgoing.tools.filter((tool) => (
+              !!tool
+              && typeof tool === 'object'
+              && !Array.isArray(tool)
+              && (tool as { function?: { name?: unknown } }).function?.name === requestOptions.requiredToolName
+            ))
+          : outgoing.tools;
+        if (requestOptions.requiredToolName && (!Array.isArray(tools) || tools.length !== 1)) {
+          throw new Error(
+            `OpenAI completions payload is missing required tool ${JSON.stringify(requestOptions.requiredToolName)}`,
+          );
+        }
+        return {
+          ...outgoing,
+          ...(tools !== undefined ? { tools } : {}),
+          tool_choice: toolChoice,
+        };
       };
     }
   }

@@ -2433,6 +2433,41 @@ describe('LLMClient completion model hints', () => {
     mocks.getEnvApiKey.mockReturnValue(undefined);
   });
 
+  it('rejects a provider that returns text instead of the one explicitly required tool without retrying', async () => {
+    const client = new LLMClient(makeConfig({ openRouterApiBaseUrl: 'http://litellm.test/v1' }));
+    mocks.streamSimple.mockImplementation(async function* ignoresRequiredTool() {
+      yield {
+        type: 'done',
+        message: {
+          model: 'z-ai/glm-5',
+          usage: { input: 8, output: 4 },
+          content: [{ type: 'text', text: 'I did it.' }],
+        },
+        reason: 'stop',
+      };
+    });
+
+    await expect(client.stream({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'Call notify exactly once.' }],
+      tools: [{ name: 'notify', description: 'Notify', inputSchema: { type: 'object' } }],
+      correlation: {
+        turnId: 'turn-required-tool-contract',
+        requestId: 'request-required-tool-contract',
+        channelId: 'api:testing-harness',
+        callType: 'chat',
+        originType: 'chat',
+        originStage: 'agent.turn.prompt',
+      },
+    })).rejects.toThrow('expected exactly one "notify" call, received []');
+
+    expect(mocks.streamSimple).toHaveBeenCalledTimes(1);
+    expect(mocks.streamSimple.mock.calls[0]?.[2]).toMatchObject({
+      toolChoice: 'required',
+      requiredToolName: 'notify',
+    });
+  });
+
   it('prioritizes explicit model hints for completion routing', async () => {
     const client = new LLMClient(makeConfig({ openRouterApiBaseUrl: 'http://litellm.test/v1' }));
     mocks.completeSimple.mockResolvedValue({

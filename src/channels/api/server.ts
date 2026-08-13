@@ -78,7 +78,12 @@ import {
 import type { ExternalChannelProfileConfig } from '../backplane/config.js';
 import { resolveCompanionIdFromConfig } from '../../core/identity/companion-runtime.js';
 import { ApiChatCompletionsHandler } from './server/chat-completions.js';
-import type { BearerCompanionRoutingConfig } from './server/bearer-companion-selector.js';
+import {
+  BEARER_COMPANION_SELECTOR_HEADER,
+  resolveBearerCompanionTarget,
+  type BearerCompanionRoutingConfig,
+} from './server/bearer-companion-selector.js';
+import { singleApiHeader } from './server/request.js';
 import type { ApiDocumentIngestConfig } from './server/session.js';
 import {
   applyApiCorsPolicy,
@@ -543,6 +548,7 @@ export class ApiServer implements ChannelAdapterPort {
   private hubDeviceIngress?: GatewayHubDeviceIngressService;
   private hubDeviceCompanionId?: string;
   private companionUiWebSocket?: CompanionUiWebSocketAdapter;
+  private bearerCompanionRouting?: BearerCompanionRoutingConfig;
   private healthChecks: ApiServerHealthChecks;
   private schedulerHealthcheckStaleAfterMs: number;
   private lastSchedulerHealthcheckAtMs: number | null = null;
@@ -591,6 +597,7 @@ export class ApiServer implements ChannelAdapterPort {
     this.hubDeviceIngress = config.hubDeviceIngress;
     this.hubDeviceCompanionId = config.hubDeviceCompanionId;
     this.companionUiWebSocket = config.companionUiWebSocket;
+    this.bearerCompanionRouting = config.bearerCompanionRouting;
     this.schedulerHealthcheckStaleAfterMs = parseSchedulerHealthcheckStaleAfterMs(
       config.schedulerHealthcheckStaleAfterMs,
     );
@@ -826,7 +833,23 @@ export class ApiServer implements ChannelAdapterPort {
       }
     }
     if (req.method === 'GET' && path === '/v1/models') {
-      handleModelsEndpoint(res, this.modelName);
+      let advertisedModelName = this.modelName;
+      if (this.bearerCompanionRouting) {
+        const requestedCompanionId = singleApiHeader(
+          req.headers[BEARER_COMPANION_SELECTOR_HEADER],
+        )?.trim();
+        const resolution = resolveBearerCompanionTarget({
+          requestedCompanionId,
+          principal,
+          routing: this.bearerCompanionRouting,
+        });
+        if (!resolution.ok) {
+          sendApiError(res, resolution.status, resolution.type, resolution.message);
+          return;
+        }
+        advertisedModelName = resolution.companionId;
+      }
+      handleModelsEndpoint(res, advertisedModelName);
     } else if (req.method === 'GET' && path === '/v1/identity') {
       this.handleIdentity(res);
     } else if (req.method === 'GET' && path === '/v1/satellites/config') {

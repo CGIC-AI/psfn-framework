@@ -2388,6 +2388,92 @@ describe('SubagentFaculty core-authoritative tool governance (p0le)', () => {
       handleSpy.mockRestore();
     });
 
+    it('registers the durable run before requesting its Automata Bus spawn briefing', async () => {
+      const runs = new Map<string, Record<string, unknown>>();
+      const order: string[] = [];
+      const runRegistry = fromAny({
+        listRetainedRunsForRuntime: () => [],
+        register: async (input: Record<string, unknown>) => {
+          order.push('register');
+          const run = {
+            ...input,
+            companionId: 'companion-public-example',
+            status: 'queued',
+            statusReason: 'execution_requested',
+            workerGeneration: 1,
+            artifacts: [],
+          };
+          runs.set(String(input.runId), run);
+          return run;
+        },
+        getRun: (runId: string) => runs.get(runId) ?? null,
+        transition: async (runId: string, input: Record<string, unknown>) => {
+          const run = runs.get(runId);
+          if (!run) throw new Error(`missing test run ${runId}`);
+          Object.assign(run, input);
+          return run;
+        },
+        findByTaskDescription: () => [],
+      });
+      const brief = vi.fn(async ({ scope }: { scope: { runId: string } }) => {
+        order.push('brief');
+        if (!runRegistry.getRun(scope.runId)) {
+          throw new Error(`Automata Bus run "${scope.runId}" is not registered`);
+        }
+        return { text: 'Registered briefing', itemCount: 0 };
+      });
+      const access: AutomataBusWorkerAccess = {
+        identity: {
+          companionId: 'companion-public-example',
+          audience: 'eligible-automata',
+          maxSensitivity: 'personal',
+        },
+        bounds: {
+          maxQueryChars: 100,
+          maxTextChars: 200,
+          maxArrayItems: 8,
+          maxSearchResults: 8,
+          maxRunResults: 16,
+          maxBriefingChars: 200,
+          maxBriefingItems: 4,
+          maxToolResultChars: 1_000,
+        },
+        port: {
+          isClassEligible: classId => classId === 'subagent.bounded',
+          brief,
+          search: vi.fn(async () => ({ ok: true })),
+          append: vi.fn(async () => ({ ok: true })),
+          correct: vi.fn(async () => ({ ok: true })),
+          handoff: vi.fn(async () => ({ ok: true })),
+          runs: vi.fn(async () => ({ ok: true })),
+          inspect: vi.fn(async () => ({ ok: true })),
+        },
+      };
+      const faculty = new SubagentFaculty({
+        eventBus,
+        llmProvider: mockLLM(),
+        sessionStore,
+        embeddingService: null,
+        memoryProvider: null,
+        config: ROLE_CONFIG,
+        parentSystemPrompt: 'You are Companion.',
+        automataBusWorkerAccess: access,
+        automataRunRegistry: runRegistry,
+        automataSessionClassification: {
+          classifyAtCreation: vi.fn(async () => undefined),
+        },
+      });
+
+      await faculty.execute({
+        name: 'registered-route',
+        task: 'Inspect the registered route.',
+        workSpec: buildSubagentWorkSpec(),
+      });
+
+      expect(order.slice(0, 2)).toEqual(['register', 'brief']);
+      expect(brief).toHaveBeenCalledOnce();
+    });
+
     it('lets a role opt out of identity inheritance (replaces the identity)', async () => {
       const handleSpy = vi.spyOn(SubstrateAgent.prototype, 'handleMessage');
       const faculty = makeFaculty(ROLE_CONFIG, 'You are Companion.');

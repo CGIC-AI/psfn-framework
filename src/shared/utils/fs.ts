@@ -102,6 +102,7 @@ export function unlinkDurableSync(path: string): void {
 export interface WriteJsonAtomicOptions {
   space?: number;
   trailingNewline?: boolean;
+  mode?: number;
 }
 
 export function writeJsonAtomic(path: string, value: unknown, options: WriteJsonAtomicOptions = {}): void {
@@ -114,7 +115,10 @@ export function writeJsonAtomic(path: string, value: unknown, options: WriteJson
   const payload = trailingNewline ? `${body}\n` : body;
 
   try {
-    writeFileSync(tmpPath, payload, 'utf-8');
+    writeFileSync(tmpPath, payload, {
+      encoding: 'utf-8',
+      ...(options.mode === undefined ? {} : { mode: options.mode }),
+    });
     renameSync(tmpPath, path);
   } catch (error) {
     try {

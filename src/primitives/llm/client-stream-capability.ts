@@ -34,6 +34,9 @@ import { monotonicEpochNowMs } from '../../shared/telemetry/turn-performance.js'
 import { markErrorAsNonRetryable } from './retry.js';
 import { logEmptyToolArgumentProvenance } from './empty-tool-argument-retry.js';
 import { createComponentLogger } from '../../shared/logger.js';
+import {
+  selectExplicitToolContractCall,
+} from './explicit-tool-request.js';
 
 const log = createComponentLogger('LLMClient');
 
@@ -306,8 +309,16 @@ export async function runLLMStreamAttempt(
   if (response) {
     try {
       assertUsableProviderResponse(response, input.candidate);
+      response.toolCalls = selectExplicitToolContractCall({
+        choice: input.requestOptions.toolChoice,
+        ...(input.requestOptions.requiredToolName
+          ? { requiredToolName: input.requestOptions.requiredToolName }
+          : {}),
+        toolCalls: response.toolCalls,
+      });
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
+      markErrorAsNonRetryable(err);
       await input.recordUsage({
         inputTokens: response.inputTokens,
         outputTokens: response.outputTokens,
@@ -381,6 +392,13 @@ export async function runLLMStreamAttempt(
     stopReason: 'unknown',
   };
   assertUsableProviderResponse(incompleteResponse, input.candidate);
+  incompleteResponse.toolCalls = selectExplicitToolContractCall({
+    choice: input.requestOptions.toolChoice,
+    ...(input.requestOptions.requiredToolName
+      ? { requiredToolName: input.requestOptions.requiredToolName }
+      : {}),
+    toolCalls: incompleteResponse.toolCalls,
+  });
   await input.recordUsage({
     inputTokens: incompleteUsage.input,
     outputTokens: incompleteUsage.output,

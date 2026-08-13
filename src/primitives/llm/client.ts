@@ -104,6 +104,7 @@ import {
   runLLMStreamAttempt,
   type StreamUsageRecord,
 } from './client-stream-capability.js';
+import { assertExplicitToolContractSatisfied } from './explicit-tool-request.js';
 
 export {
   classifyToolArgumentProvenance,
@@ -884,6 +885,13 @@ export class LLMClient {
             signal: transportSignal,
             correlation,
           });
+          this.requestCapability.applyExplicitToolChoice(
+            requestOptions,
+            context,
+            correlation,
+            model,
+            candidateTarget,
+          );
           const promptCaching = applyModelAgnosticPromptCache({
             promptCacheEnabled: candidateTarget.promptCacheEnabled,
             promptCacheStrategy: candidateTarget.promptCacheStrategy,
@@ -1086,6 +1094,13 @@ export class LLMClient {
           signal: transportSignal,
           correlation,
         });
+        this.requestCapability.applyExplicitToolChoice(
+          requestOptions,
+          context,
+          correlation,
+          model,
+          candidateTarget,
+        );
         const promptCaching = applyModelAgnosticPromptCache({
           promptCacheEnabled: candidateTarget.promptCacheEnabled,
           promptCacheStrategy: candidateTarget.promptCacheStrategy,
@@ -1227,8 +1242,16 @@ export class LLMClient {
           }
           try {
             assertUsableProviderResponse(response, candidateTarget);
+            assertExplicitToolContractSatisfied({
+              choice: requestOptions.toolChoice,
+              ...(requestOptions.requiredToolName
+                ? { requiredToolName: requestOptions.requiredToolName }
+                : {}),
+              toolCalls: completionToolCalls,
+            });
           } catch (error) {
             const err = error instanceof Error ? error : new Error(String(error));
+            markErrorAsNonRetryable(err);
             await this.recordUsage(
               routingPurpose,
               'completion',

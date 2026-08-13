@@ -5,6 +5,7 @@ import {
 } from './load-or-seed.js';
 import { isRecord } from '../../shared/utils/types.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
+import { OWNER_FILE_MODE_COMPANION_POLICY } from './owner-file-modes.js';
 import type { BackgroundWorkRuntimeTuning } from '../../core/agent/background-work/config.js';
 import {
   parseIcpAutonomySchedulerConfig,
@@ -324,6 +325,8 @@ export function saveSchedulerConfig(
   nextConfig: unknown,
 ): SchedulerRuntimeConfig {
   const validated = validateSchedulerConfig(nextConfig, SCHEDULER_FILE_NAME);
-  writeJsonAtomic(join(dataDir, SCHEDULER_FILE_NAME), validated);
+  writeJsonAtomic(join(dataDir, SCHEDULER_FILE_NAME), validated, {
+    mode: OWNER_FILE_MODE_COMPANION_POLICY,
+  });
   return validated;
 }

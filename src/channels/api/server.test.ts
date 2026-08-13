@@ -571,6 +571,35 @@ describe('ApiServer', () => {
       const body = JSON.parse(res.body);
       expect(body.data[0].id).toBe('custom-model');
     });
+
+    it('advertises the bearer-pinned companion in a fleet gateway', async () => {
+      await server.stop();
+      const pinnedCompanionId = '22222222-2222-4222-8222-222222222222';
+      server = createApiServer({
+        port,
+        agentLoop: createMockAgentLoop(eventBus),
+        eventBus,
+        sessionManager: createMockSessionManager(),
+        apiKey: 'shared-api-key-for-test',
+        testingHarnessPrincipal: {
+          principalId: 'testing-harness',
+          apiKey: 'dedicated-testing-harness-key',
+        },
+        modelName: DEFAULT_COMPANION_ID,
+        bearerCompanionRouting: {
+          pinnedCompanionId,
+          knownCompanionIds: [DEFAULT_COMPANION_ID, pinnedCompanionId],
+        },
+      });
+      await server.init();
+      await server.start();
+
+      const res = await request(port, 'GET', '/v1/models', undefined, {
+        Authorization: 'Bearer dedicated-testing-harness-key',
+      });
+      expect(res.status).toBe(200);
+      expect(JSON.parse(res.body).data[0].id).toBe(pinnedCompanionId);
+    });
   });
 
   describe('GET /v1/identity', () => {

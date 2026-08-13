@@ -57,6 +57,7 @@ import { repairStringifiedJsonArrayToolArguments } from './tool-argument-repair.
 import { isRecord } from '../../shared/utils/types.js';
 import type { LLMProviderStreamOptions } from './contracts.js';
 import type { ProviderRuntime } from '../../primitives/llm/provider-runtime.js';
+import { resolveExplicitToolRequestSequence } from '../../shared/tools/explicit-tool-request.js';
 
 const log = createComponentLogger('StreamAdapter');
 const FULL_KNOB_PASSTHROUGH_PROVIDERS = new Set(['openrouter', 'local_endpoint']);
@@ -264,6 +265,7 @@ function executeStreamCandidate(params: ExecuteStreamCandidateParams): AsyncGene
   const baseDelayMs = Number.isFinite(retryConfig.baseDelayMs)
     ? Math.max(0, Math.floor(retryConfig.baseDelayMs!))
     : DEFAULT_BASE_DELAY_MS;
+  const holdEventsUntilTerminal = hasExplicitToolExecutionRequest(params.context);
 
   return (async function* executeWithRetry() {
     for (let retryAttempt = 0; ; retryAttempt += 1) {
@@ -317,7 +319,7 @@ function executeStreamCandidate(params: ExecuteStreamCandidateParams): AsyncGene
 
           if (!committed) {
             bufferedEvents.push(event);
-            if (shouldCommitBufferedEvent(event)) {
+            if (!holdEventsUntilTerminal && shouldCommitBufferedEvent(event)) {
               committed = true;
               for (const bufferedEvent of bufferedEvents) {
                 yield bufferedEvent;
@@ -364,6 +366,31 @@ function executeStreamCandidate(params: ExecuteStreamCandidateParams): AsyncGene
       }
     }
   })();
+}
+
+function hasExplicitToolExecutionRequest(context: unknown): boolean {
+  if (!isRecord(context) || !Array.isArray(context.messages) || !Array.isArray(context.tools)) {
+    return false;
+  }
+  const activeToolNames = context.tools
+    .filter(isRecord)
+    .map(tool => tool.name)
+    .filter((name): name is string => typeof name === 'string' && name.length > 0);
+  const latestUserMessage = [...context.messages]
+    .reverse()
+    .find(message => isRecord(message) && message.role === 'user');
+  if (!isRecord(latestUserMessage)) return false;
+  const content = latestUserMessage.content;
+  const requestText = typeof content === 'string'
+    ? content
+    : Array.isArray(content)
+      ? content
+          .filter(isRecord)
+          .filter(block => block.type === 'text' && typeof block.text === 'string')
+          .map(block => block.text as string)
+          .join('\n')
+      : '';
+  return resolveExplicitToolRequestSequence(requestText, activeToolNames).length > 0;
 }
 
 interface TransportEventStreamParams {

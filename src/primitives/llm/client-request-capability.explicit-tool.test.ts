@@ -42,4 +42,42 @@ describe('LLMRequestCapability explicit tool payload', () => {
     });
     expect(priorOnPayload).toHaveBeenCalledOnce();
   });
+
+  it('injects none after the requested tool sequence is complete', async () => {
+    const capability = new LLMRequestCapability(
+      {} as SubstrateConfig,
+      {} as ProviderRuntime,
+    );
+    const requestOptions: LLMRequestOptions = {};
+    const context: LLMContext = {
+      systemPrompt: 'system',
+      messages: [
+        { role: 'user', content: 'Use notify to send this.' },
+        {
+          role: 'toolResult',
+          toolCallId: 'notify-1',
+          toolName: 'notify',
+          content: 'sent',
+        },
+      ] as LLMContext['messages'],
+      tools: [{ name: 'notify', description: 'Notify', inputSchema: { type: 'object' } }],
+    };
+
+    capability.applyExplicitToolChoice(
+      requestOptions,
+      context,
+      { originStage: 'agent.turn.prompt' },
+      { api: 'openai-completions' } as Model<'openai-completions'>,
+    );
+
+    expect(requestOptions.toolChoice).toBe('none');
+    expect(await requestOptions.onPayload?.(
+      { model: 'example', messages: [] },
+      { api: 'openai-completions' } as Model<'openai-completions'>,
+    )).toEqual({
+      model: 'example',
+      messages: [],
+      tool_choice: 'none',
+    });
+  });
 });

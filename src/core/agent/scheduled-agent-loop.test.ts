@@ -3,6 +3,7 @@ import { fromAny, fromPartial } from '@total-typescript/shoehorn';
 import type { AssistantMessage, ToolCall, ToolResultMessage } from '@earendil-works/pi-ai';
 import type { AgentMessage } from '../../boundary/pi-agent/index.js';
 import type { AgentLoopErrorEvent, ScheduledAgentEvent } from './agent-loop-events.js';
+import { convertToLlm } from './messages.js';
 import { agentLoopWithScheduler, resolveStreamResult } from './scheduled-agent-loop.js';
 import {
   AGENT_LOOP_ASSISTANT_STEP_CHECK_IN_AT,
@@ -472,6 +473,7 @@ describe('scheduled-agent-loop stream result contract', () => {
     const events: any[] = [];
     const config = {
       ...makeLoopConfig(),
+      convertToLlm,
       getFollowUpMessages: async () => [{
         role: 'user',
         content: [{ type: 'text', text: 'continue' }],
@@ -498,12 +500,15 @@ describe('scheduled-agent-loop stream result contract', () => {
 
     expect(streamFn).toHaveBeenCalledTimes(AGENT_LOOP_MAX_ASSISTANT_STEPS_PER_RUN);
     const checkInMessages = events.filter((event) => {
-      if (event.type !== 'message_end' || event.message?.role !== 'system') return false;
-      const text = event.message.content?.[0]?.text;
-      return typeof text === 'string' && text.includes('[SYSTEM: Long-Horizon Check-In]');
+      if (
+        event.type !== 'message_end'
+        || event.message?.role !== 'custom'
+        || event.message?.type !== 'systemNote'
+      ) return false;
+      return event.message.content.includes('[SYSTEM: Long-Horizon Check-In]');
     });
     expect(checkInMessages).toHaveLength(1);
-    expect(checkInMessages[0]?.message?.content?.[0]?.text)
+    expect(checkInMessages[0]?.message?.content)
       .toContain(`used ${AGENT_LOOP_ASSISTANT_STEP_CHECK_IN_AT} assistant steps`);
     const terminalError = events.find((event) => event.type === 'agent_error')?.error;
     expect(terminalError).toBeInstanceOf(ParentTurnContinuationBudgetExceededError);

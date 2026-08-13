@@ -2,6 +2,8 @@ import { EventStream, type AssistantMessage, type ToolCall, type ToolResultMessa
 import type { AgentContext, AgentLoopConfig, AgentMessage, AgentTool, StreamFn } from '../../boundary/pi-agent/index.js';
 import type { AgentLoopErrorEvent, ScheduledAgentEvent } from './agent-loop-events.js';
 import type { LLMSystemPromptCacheBoundaries } from '../../shared/contracts/runtime.js';
+import { MESSAGE_CLASSES } from './message-classes.js';
+import type { SystemNoteMessage } from './messages.js';
 import {
   createToolCallExecutionGuard,
   executeToolCallsWithScheduler,
@@ -296,18 +298,17 @@ async function runLoop(
   }
 }
 
-function buildLoopCheckInMessage(stepCount: number): AgentMessage {
+function buildLoopCheckInMessage(stepCount: number): SystemNoteMessage {
   return {
-    role: 'system',
-    content: [{
-      type: 'text',
-      text: `[SYSTEM: Long-Horizon Check-In] You have used ${stepCount} assistant steps in this turn. `
-        + 'Pause before the next tool call: state the current goal, what has been proven, what remains uncertain, '
-        + 'and whether to continue inline, delegate to an automaton/shard, create or claim a bead, or stop with partial findings. '
-        + 'Do not repeat failed tool calls; continue only when the next step directly advances the goal and fits the charge budget.',
-    }],
+    role: 'custom',
+    type: 'systemNote',
+    messageClass: MESSAGE_CLASSES.systemNote,
+    content: `[SYSTEM: Long-Horizon Check-In] You have used ${stepCount} assistant steps in this turn. `
+      + 'Pause before the next tool call: state the current goal, what has been proven, what remains uncertain, '
+      + 'and whether to continue inline, delegate to an automaton/shard, create or claim a bead, or stop with partial findings. '
+      + 'Do not repeat failed tool calls; continue only when the next step directly advances the goal and fits the charge budget.',
     timestamp: Date.now(),
-  } as unknown as AgentMessage;
+  };
 }
 
 async function streamAssistantResponse(

@@ -890,6 +890,7 @@ export class LLMClient {
             context,
             correlation,
             model,
+            candidateTarget,
           );
           const promptCaching = applyModelAgnosticPromptCache({
             promptCacheEnabled: candidateTarget.promptCacheEnabled,
@@ -1098,6 +1099,7 @@ export class LLMClient {
           context,
           correlation,
           model,
+          candidateTarget,
         );
         const promptCaching = applyModelAgnosticPromptCache({
           promptCacheEnabled: candidateTarget.promptCacheEnabled,

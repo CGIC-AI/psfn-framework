@@ -47,7 +47,7 @@ const FULL_KNOB_PASSTHROUGH_PROVIDERS = new Set([
 
 export interface LLMRequestOptions extends SimpleStreamOptions {
   zdr?: boolean;
-  provider?: { order: string[] };
+  provider?: { order?: string[]; require_parameters?: boolean };
   contextWindow?: number;
   topP?: number;
   topK?: number;
@@ -220,6 +220,7 @@ export class LLMRequestCapability {
     context: LLMContext,
     correlation: ResolvedCorrelationMetadata | undefined,
     model: Model<any>,
+    candidate?: RoutingCandidate,
   ): void {
     const contract = resolveExplicitToolContract({
       context,
@@ -230,6 +231,12 @@ export class LLMRequestCapability {
     const { choice: toolChoice } = contract;
     requestOptions.toolChoice = toolChoice;
     if (contract.requiredToolName) requestOptions.requiredToolName = contract.requiredToolName;
+    if (candidate?.provider === 'openrouter') {
+      requestOptions.provider = {
+        ...(requestOptions.provider ?? {}),
+        require_parameters: true,
+      };
+    }
 
     // pi-ai's SimpleStreamOptions contract does not type provider-specific
     // toolChoice, even though the OpenAI completions adapter currently forwards
@@ -259,6 +266,21 @@ export class LLMRequestCapability {
         return {
           ...outgoing,
           ...(tools !== undefined ? { tools } : {}),
+          ...(candidate?.provider === 'openrouter'
+            ? {
+                provider: {
+                  ...(
+                    outgoing.provider
+                    && typeof outgoing.provider === 'object'
+                    && !Array.isArray(outgoing.provider)
+                      ? outgoing.provider
+                      : {}
+                  ),
+                  require_parameters: true,
+                },
+                parallel_tool_calls: false,
+              }
+            : {}),
           tool_choice: toolChoice,
         };
       };

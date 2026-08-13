@@ -4,6 +4,12 @@ import type { LLMContext } from '../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { LLMRequestCapability, type LLMRequestOptions } from './client-request-capability.js';
 import type { ProviderRuntime } from './provider-runtime.js';
+import type { RoutingCandidate } from './routing.js';
+
+const openRouterCandidate = {
+  provider: 'openrouter',
+  model: 'example',
+} as RoutingCandidate;
 
 describe('LLMRequestCapability explicit tool payload', () => {
   it('injects the named choice into the final OpenAI completions wire payload', async () => {
@@ -27,6 +33,7 @@ describe('LLMRequestCapability explicit tool payload', () => {
       context,
       { originStage: 'agent.turn.prompt' },
       { api: 'openai-completions' } as Model<'openai-completions'>,
+      openRouterCandidate,
     );
 
     expect(requestOptions.toolChoice).toBe('required');
@@ -46,6 +53,8 @@ describe('LLMRequestCapability explicit tool payload', () => {
       messages: [],
       tools: [{ type: 'function', function: { name: 'notify' } }],
       transformed: true,
+      provider: { require_parameters: true },
+      parallel_tool_calls: false,
       tool_choice: 'required',
     });
     expect(priorOnPayload).toHaveBeenCalledOnce();
@@ -76,6 +85,7 @@ describe('LLMRequestCapability explicit tool payload', () => {
       context,
       { originStage: 'agent.turn.prompt' },
       { api: 'openai-completions' } as Model<'openai-completions'>,
+      openRouterCandidate,
     );
 
     expect(requestOptions.toolChoice).toBe('none');
@@ -85,6 +95,8 @@ describe('LLMRequestCapability explicit tool payload', () => {
     )).toEqual({
       model: 'example',
       messages: [],
+      provider: { require_parameters: true },
+      parallel_tool_calls: false,
       tool_choice: 'none',
     });
   });

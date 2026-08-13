@@ -36,7 +36,10 @@ describe('LLMRequestCapability explicit tool payload', () => {
       openRouterCandidate,
     );
 
-    expect(requestOptions.toolChoice).toBe('required');
+    expect(requestOptions.toolChoice).toEqual({
+      type: 'function',
+      function: { name: 'notify' },
+    });
     expect(requestOptions.requiredToolName).toBe('notify');
     expect(await requestOptions.onPayload?.(
       {
@@ -54,7 +57,8 @@ describe('LLMRequestCapability explicit tool payload', () => {
       tools: [{ type: 'function', function: { name: 'notify' } }],
       transformed: true,
       provider: { require_parameters: true },
-      tool_choice: 'required',
+      tool_choice: { type: 'function', function: { name: 'notify' } },
+      parallel_tool_calls: false,
     });
     expect(priorOnPayload).toHaveBeenCalledOnce();
   });

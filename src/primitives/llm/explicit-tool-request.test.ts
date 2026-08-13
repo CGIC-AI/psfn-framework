@@ -13,6 +13,8 @@ function context(messages: LLMContext['messages']): LLMContext {
     tools: [
       { name: 'north_star', description: 'Direction', inputSchema: { type: 'object' } },
       { name: 'notify', description: 'Notify', inputSchema: { type: 'object' } },
+      { name: 'memory', description: 'Memory', inputSchema: { type: 'object' } },
+      { name: 'orient', description: 'Orientation', inputSchema: { type: 'object' } },
     ],
   };
 }
@@ -23,7 +25,7 @@ describe('explicit tool request choice', () => {
       context: context([{ role: 'user', content: 'Call north_star to append this decision.' }]),
       originStage: 'agent.turn.prompt',
       modelApi: 'openai-completions',
-    })).toBe('required');
+    })).toEqual({ type: 'function', function: { name: 'north_star' } });
   });
 
   it('forbids extra tool calls after a single requested tool has a result', () => {
@@ -68,7 +70,7 @@ describe('explicit tool request choice', () => {
       context: context([{ role: 'user', content: 'Attempt notify exactly once.' }]),
       originStage: 'agent.turn.prompt',
       modelApi: 'openai-completions',
-    })).toBe('required');
+    })).toEqual({ type: 'function', function: { name: 'notify' } });
   });
 
   it('forces each requested tool in order across provider steps', () => {
@@ -84,7 +86,7 @@ describe('explicit tool request choice', () => {
       ] as LLMContext['messages']),
       originStage: 'agent.turn.prompt',
       modelApi: 'openai-completions',
-    })).toBe('required');
+    })).toEqual({ type: 'function', function: { name: 'notify' } });
   });
 
   it('retains repeated named-tool steps and forbids calls after the sequence', () => {
@@ -102,7 +104,7 @@ describe('explicit tool request choice', () => {
       ] as LLMContext['messages']),
       originStage: 'agent.turn.prompt',
       modelApi: 'openai-completions',
-    })).toBe('required');
+    })).toEqual({ type: 'function', function: { name: 'north_star' } });
 
     expect(resolveExplicitToolChoice({
       context: context([
@@ -114,6 +116,51 @@ describe('explicit tool request choice', () => {
           toolName: 'north_star',
           content: 'updated',
         },
+      ] as LLMContext['messages']),
+      originStage: 'agent.turn.prompt',
+      modelApi: 'openai-completions',
+    })).toBe('none');
+  });
+
+  it('does not turn argument elaboration into a duplicate call', () => {
+    const request = 'Use memory with action "write" to store this exact secret. Call memory with text set to the exact secret, type "semantic", and sensitivity "personal".';
+    expect(resolveExplicitToolChoice({
+      context: context([
+        { role: 'user', content: request },
+        {
+          role: 'toolResult',
+          toolCallId: 'call-1',
+          toolName: 'memory',
+          content: 'created',
+        },
+      ] as LLMContext['messages']),
+      originStage: 'agent.turn.prompt',
+      modelApi: 'openai-completions',
+    })).toBe('none');
+  });
+
+  it('retains elided same-tool steps in an explicit action sequence', () => {
+    const request = 'Use orient with action "create_concern". Then use orient with action "list_concerns", orient with action "resolve_concern", and orient with action "list_concerns" again.';
+    const result = (index: number) => ({
+      role: 'toolResult',
+      toolCallId: `call-${index}`,
+      toolName: 'orient',
+      content: 'ok',
+    });
+    for (const completed of [1, 2, 3]) {
+      expect(resolveExplicitToolChoice({
+        context: context([
+          { role: 'user', content: request },
+          ...Array.from({ length: completed }, (_, index) => result(index)),
+        ] as LLMContext['messages']),
+        originStage: 'agent.turn.prompt',
+        modelApi: 'openai-completions',
+      })).toEqual({ type: 'function', function: { name: 'orient' } });
+    }
+    expect(resolveExplicitToolChoice({
+      context: context([
+        { role: 'user', content: request },
+        ...Array.from({ length: 4 }, (_, index) => result(index)),
       ] as LLMContext['messages']),
       originStage: 'agent.turn.prompt',
       modelApi: 'openai-completions',
@@ -142,7 +189,7 @@ describe('explicit tool request choice', () => {
       ] as LLMContext['messages']),
       originStage: 'agent.turn.prompt',
       modelApi: 'openai-completions',
-    })).toBe('required');
+    })).toEqual({ type: 'function', function: { name: 'north_star' } });
 
     expect(resolveExplicitToolChoice({
       context: context([

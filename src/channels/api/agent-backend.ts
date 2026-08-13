@@ -72,6 +72,7 @@ import {
 import { resolveApiTurnIdentity } from './external-channel-claim.js';
 import type { ExternalChannelProfileConfig } from '../backplane/config.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
+import { isExplicitToolContractError } from '../../primitives/llm/explicit-tool-request.js';
 import {
   clampHttpHeader as clampHeaderValue,
   singleHeader as firstHeaderValue,
@@ -641,6 +642,14 @@ export class AgentApiBackend {
       }
       if (isBusyTurnError(error)) {
         return this.fail(503, 'agent_busy', 'Agent is already processing another prompt');
+      }
+      if (isExplicitToolContractError(error)) {
+        return this.fail(
+          502,
+          'model_tool_contract_incompatible',
+          'Selected model could not satisfy the required tool call',
+          { cause: toErrorMessage(error) },
+        );
       }
       return this.fail(500, 'internal_error', 'Internal server error', {
         cause: toErrorMessage(error),

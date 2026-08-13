@@ -8,6 +8,7 @@ import {
   assertPositiveInteger,
 } from './validators.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
+import { OWNER_FILE_MODE_COMPANION_POLICY } from './owner-file-modes.js';
 import { isRecord } from '../../shared/utils/types.js';
 import {
   CHARGE_POLICY_FILE_NAME,
@@ -987,6 +988,8 @@ export function saveChargePolicyConfig(
   nextConfig: unknown,
 ): ChargePolicyConfig {
   const validated = validateChargePolicyConfig(nextConfig, CHARGE_POLICY_FILE_NAME);
-  writeJsonAtomic(join(dataDir, CHARGE_POLICY_FILE_NAME), validated);
+  writeJsonAtomic(join(dataDir, CHARGE_POLICY_FILE_NAME), validated, {
+    mode: OWNER_FILE_MODE_COMPANION_POLICY,
+  });
   return validated;
 }

@@ -54,7 +54,6 @@ describe('LLMRequestCapability explicit tool payload', () => {
       tools: [{ type: 'function', function: { name: 'notify' } }],
       transformed: true,
       provider: { require_parameters: true },
-      parallel_tool_calls: false,
       tool_choice: 'required',
     });
     expect(priorOnPayload).toHaveBeenCalledOnce();
@@ -96,7 +95,6 @@ describe('LLMRequestCapability explicit tool payload', () => {
       model: 'example',
       messages: [],
       provider: { require_parameters: true },
-      parallel_tool_calls: false,
       tool_choice: 'none',
     });
   });

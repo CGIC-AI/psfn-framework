@@ -278,7 +278,6 @@ export class LLMRequestCapability {
                   ),
                   require_parameters: true,
                 },
-                parallel_tool_calls: false,
               }
             : {}),
           tool_choice: toolChoice,

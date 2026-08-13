@@ -48,14 +48,12 @@ describe('SharedCompanionWorkspaceStore', () => {
     roots.push(root, source);
     writeFileSync(join(source, 'welcome.md'), 'welcome');
     writeFileSync(join(source, 'privacy-boundary-reference.md'), 'privacy');
-    writeFileSync(join(source, 'live_verification_checklist.md'), 'checklist');
     writeFileSync(join(source, COMPANION_LIBRARY_MANIFEST_FILE), JSON.stringify({
       schemaVersion: 1,
       bundleVersion: COMPANION_LIBRARY_SEED_VERSION,
       files: [
         { path: 'welcome.md', sha256: createHash('sha256').update('welcome').digest('hex') },
         { path: 'privacy-boundary-reference.md', sha256: createHash('sha256').update('privacy').digest('hex') },
-        { path: 'live_verification_checklist.md', sha256: createHash('sha256').update('checklist').digest('hex') },
       ],
     }));
     const fleet = resolveCompanionFleetPaths(FLEET, root);

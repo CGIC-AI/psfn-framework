@@ -1,5 +1,6 @@
 import http from 'node:http';
 import net from 'node:net';
+import { fromAny } from '@total-typescript/shoehorn';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
@@ -134,5 +135,41 @@ describe('ApiServer operator confirmation route', () => {
       decision: 'modify',
     })).resolves.toMatchObject({ status: 400 });
     expect(resolve).not.toHaveBeenCalled();
+  });
+
+  it('keeps the ADMIN_TOKEN operator resolver reachable in fleet bootstrap mode', async () => {
+    const resolve = vi.fn(async (params) => ({
+      id: params.id,
+      status: 'approved' as const,
+      message: 'Fleet confirmation approved.',
+      executed: true,
+    }));
+    server = new ApiServer({
+      port,
+      host: '127.0.0.1',
+      companionId: TEST_COMPANION_ID,
+      agentLoop: { handleMessage: vi.fn() } as unknown as SubstrateAgent,
+      eventBus: new EventBus(),
+      sessionManager: { recordAssistantMessage: vi.fn() } as unknown as SessionManager,
+      apiKey: API_TOKEN,
+      adminToken: ADMIN_TOKEN,
+      confirmationOperator: { resolve },
+      fleetAuthBootstrapOnly: true,
+      fleetAuthHttpRoutes: fromAny({
+        applyLifecycleCorsPolicy: () => 'not_applicable',
+        matches: () => false,
+        handle: vi.fn(),
+      }),
+    });
+    await server.start();
+
+    await expect(request(port, ADMIN_TOKEN, {
+      id: 'fleet-memory-approval',
+      decision: 'approve',
+    })).resolves.toMatchObject({
+      status: 200,
+      body: { id: 'fleet-memory-approval', status: 'approved', executed: true },
+    });
+    expect(resolve).toHaveBeenCalledOnce();
   });
 });

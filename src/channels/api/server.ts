@@ -751,6 +751,11 @@ export class ApiServer implements ChannelAdapterPort {
 
     const testingHarnessPrincipal = this.resolveTestingHarnessPrincipal(req);
     const companionRoute = matchCompanionRelayRoute(req.method, path);
+    const isConfirmationOperatorResolve = req.method === 'POST'
+      && path === CONFIRMATION_OPERATOR_RESOLVE_PATH;
+    const icpOperatorCancelMatch = req.method === 'POST'
+      ? ICP_OPERATOR_CANCEL_PATH.exec(path)
+      : null;
     // This credential names one room. Remove caller-selected affinity before
     // either the direct or gateway/agent backend reads the request headers.
     if (testingHarnessPrincipal) {
@@ -773,7 +778,13 @@ export class ApiServer implements ChannelAdapterPort {
     // mode so sanctioned external probes can reach the one persistent test
     // room without acquiring a partner or device identity. Companion relay
     // routes remain satellite-only and must resolve through API_SATELLITE_KEYS.
-    if (this.fleetAuthBootstrapOnly && !testingHarnessPrincipal && !companionRoute) {
+    if (
+      this.fleetAuthBootstrapOnly
+      && !testingHarnessPrincipal
+      && !companionRoute
+      && !isConfirmationOperatorResolve
+      && !icpOperatorCancelMatch
+    ) {
       if (req.method === 'POST' && path === '/v1/chat/completions') {
         void this.handleFleetHubDeviceChat(req, res, clientCert);
         return;
@@ -792,14 +803,11 @@ export class ApiServer implements ChannelAdapterPort {
     }
 
     const isTelemetryIngest = req.method === 'POST' && path === '/v1/telemetry/ingest';
-    const icpOperatorCancelMatch = req.method === 'POST'
-      ? ICP_OPERATOR_CANCEL_PATH.exec(path)
-      : null;
     if (icpOperatorCancelMatch?.[1]) {
       this.handleIcpOperatorCancel(req, res, icpOperatorCancelMatch[1]);
       return;
     }
-    if (req.method === 'POST' && path === CONFIRMATION_OPERATOR_RESOLVE_PATH) {
+    if (isConfirmationOperatorResolve) {
       this.handleConfirmationOperatorResolve(req, res);
       return;
     }

@@ -1015,7 +1015,9 @@ export async function startOptionalGatewayApiServer(
     sensorIngest: inertSensorIngest,
     apiKey: fleetAuthBootstrapOnly ? undefined : env.API_KEY || undefined,
     testingHarnessPrincipal: options.channelsConfig?.api.testingHarness,
-    adminToken: fleetAuthBootstrapOnly ? undefined : env.ADMIN_TOKEN || undefined,
+    // Fleet browser/API admission remains SSO-only. ADMIN_TOKEN is retained
+    // solely for the private Garden -> Gateway operator confirmation endpoint.
+    adminToken: env.ADMIN_TOKEN || undefined,
     ...(satelliteApiKeys.length > 0 ? { satelliteApiKeys } : {}),
     ...(trustedProxyClientCertToken ? { trustedProxyClientCertToken } : {}),
     ...(apiTlsConfig ? { tls: apiTlsConfig } : {}),

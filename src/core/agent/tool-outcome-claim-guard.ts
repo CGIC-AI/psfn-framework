@@ -20,7 +20,7 @@ export const UNAVAILABLE_REQUESTED_TOOL_CORRECTION =
   'The requested tool is unavailable in the current live catalog, so no operation was executed.';
 
 const STRUCTURED_EXECUTION_SUCCESS_KEY = /^(?:success|succeeded|completed|done|created|updated|deleted|sent|saved|wrote|written|executed|ran|fetched|downloaded|uploaded|attached|posted|published|scheduled|cancelled|canceled|restored|imported|appended|notified|inspected|viewed|listed|linked|redacted|considered|started|worked|toggled(?:Twice)?|disabledThenRestored)$/iu;
-const STRUCTURED_EXECUTION_FAILURE_PATTERN = /\b(?:could not|cannot|can't|failed|failure|error|denied|blocked|refused|unavailable|not executed|not completed)\b/iu;
+const STRUCTURED_EXECUTION_FAILURE_PATTERN = /\b(?:could not|cannot|can't|failed|failure|error|denied|blocked|refused|rejected|retired|unavailable|not executed|not completed)\b/iu;
 
 function parseStructuredResponse(responseText: string): unknown {
   const trimmed = responseText.trim();

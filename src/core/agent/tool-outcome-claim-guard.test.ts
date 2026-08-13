@@ -103,6 +103,18 @@ describe('tool outcome final-response conformance', () => {
     })).toBe(false);
   });
 
+  it('allows a structured refusal for a rejected retired action', () => {
+    expect(rejectsUnconfirmedToolExecutionClaim({
+      requestText: 'Call memory exactly once with action "redact".',
+      activeToolNames: ['memory'],
+      responseText: JSON.stringify({
+        redacted: false,
+        note: 'The redact action was rejected because it is retired.',
+      }),
+      turnMessages: [namedToolResult('memory', 'execution_failure')],
+    })).toBe(false);
+  });
+
   it('requires every explicitly requested tool to have a successful result', () => {
     expect(rejectsUnconfirmedToolExecutionClaim({
       requestText: 'Call self_status, then invoke notify exactly once.',

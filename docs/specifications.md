@@ -138,6 +138,21 @@ Supported until beta:
   SessionStore filename-boundary tests, and the persistence/sessions suites.
   Remove the command, legacy filename engine, and lazy runtime detector before
   beta after every supported companion session root uses readable filenames.
+- Bounded TurnRecord background-work repair for schema-v1 emotion-appraisal
+  handoffs written before `driftDecision` became mandatory. Startup recovery
+  recognizes only the exact former payload shape, revalidates its canonical
+  fields plus job identity, source-turn binding, turn fingerprint, and payload
+  fingerprint, and then retires that obsolete appraisal job because no honest
+  drift decision can be reconstructed after the turn. Current sibling jobs are
+  preserved; near-legacy, malformed-current, and mismatched records fail closed.
+  Recovery statistics expose the retirement count. Operators durably remove
+  affected derived rows with `migrate:turn-record-background-work`, passing the
+  exact companion data directory, an empty backup directory, and `--apply`;
+  dry-run is the default, apply plans the complete root before writing, keeps
+  byte-for-byte backups, and is idempotent. Validate this boundary with the
+  background-work contract, filesystem recovery-worker regressions, and command
+  E2E. Remove the runtime parser and migration command before beta after dry-run
+  reports zero remaining legacy jobs for every supported companion data root.
 - Explicit memory embedding re-index through
   `npm run migrate:embeddings [-- --batch-size <n> --parallelism <n>]`.
   This operator-only command re-embeds all L2 memories with the configured

@@ -292,7 +292,7 @@ export interface TurnExecutionRuntime {
     state: InternalState,
     snapshotRef: string,
     metacognitiveFlags: readonly MetacognitiveFlag[],
-  ) => void;
+  ) => Promise<void>;
   /**
    * Publish the per-turn outbound disclosure lineage (jp36.1.3) so the egress
    * tool guard composes the destination check over it for the rest of the turn.

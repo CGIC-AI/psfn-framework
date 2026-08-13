@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -12,10 +14,15 @@ import {
   fingerprintBackgroundWorkTurnRecord,
   parseBackgroundWorkPayload,
   parseTurnRecordBackgroundWorkHandoff,
+  repairLegacyTurnRecordBackgroundWorkHandoffForRecovery,
   stableBackgroundWorkStringify,
   type AutoCompactionBackgroundPayload,
   type EnqueueBackgroundWorkInput,
 } from './types.js';
+
+function fingerprintUnknownPayload(payload: unknown): string {
+  return createHash('sha256').update(stableBackgroundWorkStringify(payload)).digest('hex');
+}
 
 function makeTurnRecord(): TurnRecord {
   return {
@@ -268,5 +275,121 @@ describe('auto-compaction background payload contract', () => {
 
     record.backgroundWorkHandoff = { schemaVersion: 1, jobs: [job] };
     expect(() => parseTurnRecordBackgroundWorkHandoff(record)).toThrow();
+  });
+});
+
+describe('legacy emotion-appraisal TurnRecord recovery', () => {
+  function makeLegacyEmotionJob(record: TurnRecord) {
+    const logicalSessionId = record.sessionId ?? record.channelId;
+    const payload = {
+      schemaVersion: 1 as const,
+      kind: 'emotion_appraisal' as const,
+      source: {
+        schemaVersion: 1 as const,
+        logicalSessionId,
+        channelId: record.channelId,
+        turnId: record.turnId,
+        requestId: record.requestId,
+        turnRecordFingerprint: fingerprintBackgroundWorkTurnRecord(record),
+        createdAtMs: record.completedAt,
+      },
+      emotionSessionId: logicalSessionId,
+      internalStateSnapshotRef: 'internal-state-v1:legacy-appraisal',
+      appraisalState: {
+        schemaVersion: 1 as const,
+        emotional: {
+          vad: { valence: 0.2, arousal: 0.3, dominance: 0.4 },
+          mood: { valence: 0.1, arousal: 0.2, dominance: 0.3 },
+          discreteEmotions: { joy: 0.7 },
+          confidence: 0.8,
+          telemetry: {
+            status: 'trusted' as const,
+            source: 'runtime_state' as const,
+            reasons: [],
+            weight: 1,
+          },
+        },
+        cognitive: { certaintyLevel: 0.6, topicEngagement: 0.7, processingQuality: 'fluent' as const },
+        attention: {
+          activeConcernCount: 2,
+          salientEntityCount: 1,
+          conversationTrajectory: 'deepening' as const,
+        },
+        relational: { contactId: 'contact-1', trustLevel: 'regular' as const, moodDrift: 0.1 },
+      },
+      personalityOwnerRef: 'character-card' as const,
+      personalityProjectionHash: 'a'.repeat(64),
+    };
+    return {
+      ...createBackgroundWorkIdentity({
+        logicalSessionId,
+        turnId: record.turnId,
+        kind: payload.kind,
+      }),
+      logicalSessionId,
+      kind: payload.kind,
+      payload,
+      payloadFingerprint: fingerprintUnknownPayload(payload),
+      sourceTurnId: record.turnId,
+      sourceRequestId: record.requestId,
+      sourceChannelId: record.channelId,
+      createdAtMs: record.completedAt,
+      maxAttempts: 3,
+    };
+  }
+
+  it('retires an exact pre-drift appraisal while preserving a current sibling handoff', () => {
+    const record = makeTurnRecord();
+    const compactionPayload = makePayload(record);
+    const compactionJob = makeInput(record, compactionPayload);
+    const legacyEmotionJob = makeLegacyEmotionJob(record);
+    record.backgroundWorkHandoff = {
+      schemaVersion: 1,
+      jobs: [legacyEmotionJob, compactionJob],
+    };
+
+    expect(() => parseTurnRecordBackgroundWorkHandoff(record))
+      .toThrow('narrativeAppraisalDrift must be an object');
+
+    const repaired = repairLegacyTurnRecordBackgroundWorkHandoffForRecovery(record);
+
+    expect(repaired.retiredLegacyEmotionAppraisalJobs).toBe(1);
+    expect(repaired.record.backgroundWorkHandoff?.jobs).toEqual([compactionJob]);
+    expect(parseTurnRecordBackgroundWorkHandoff(repaired.record)).toHaveLength(1);
+  });
+
+  it('removes the handoff when the obsolete appraisal was its only job', () => {
+    const record = makeTurnRecord();
+    record.backgroundWorkHandoff = {
+      schemaVersion: 1,
+      jobs: [makeLegacyEmotionJob(record)],
+    };
+
+    const repaired = repairLegacyTurnRecordBackgroundWorkHandoffForRecovery(record);
+
+    expect(repaired.retiredLegacyEmotionAppraisalJobs).toBe(1);
+    expect(repaired.record.backgroundWorkHandoff).toBeUndefined();
+  });
+
+  it('fails closed on a near-legacy appraisal with an unsupported field', () => {
+    const record = makeTurnRecord();
+    const job = makeLegacyEmotionJob(record);
+    const payload = job.payload as Record<string, unknown>;
+    payload.unreviewedMigrationField = true;
+    job.payloadFingerprint = fingerprintUnknownPayload(payload);
+    record.backgroundWorkHandoff = { schemaVersion: 1, jobs: [job] };
+
+    expect(() => repairLegacyTurnRecordBackgroundWorkHandoffForRecovery(record))
+      .toThrow('legacy emotion appraisal payload contains unsupported field');
+  });
+
+  it('fails closed when a legacy appraisal binding or fingerprint was altered', () => {
+    const record = makeTurnRecord();
+    const job = makeLegacyEmotionJob(record);
+    job.sourceRequestId = 'wrong-request';
+    record.backgroundWorkHandoff = { schemaVersion: 1, jobs: [job] };
+
+    expect(() => repairLegacyTurnRecordBackgroundWorkHandoffForRecovery(record))
+      .toThrow('source_request_id');
   });
 });

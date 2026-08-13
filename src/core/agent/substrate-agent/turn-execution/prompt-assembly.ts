@@ -276,7 +276,7 @@ export async function assembleTurnPrompt(input: {
     retrievalProvenanceRefs: getRetrievalProvenanceRefs(),
     capturedSessionReads: input.sessionReads,
   });
-  runtime.setCurrentSelfModelState(
+  await runtime.setCurrentSelfModelState(
     preTurnInternalState,
     preTurnInternalStateSnapshotRef,
     preTurnMetacognitiveFlags,

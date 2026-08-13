@@ -108,6 +108,7 @@ import {
 import {
   cloneInternalState,
   type InternalState,
+  type SituatedLocation,
 } from '../self-model/state.js';
 import {
   type InternalStateContinuityGap,
@@ -1437,6 +1438,16 @@ export class SubstrateAgent {
     this.emotionSelfModelRuntime.restoreSituatedLocation(this.currentInternalState.situated.location);
   }
 
+  /**
+   * Restores the durable last-known place independently of time-sensitive
+   * affect/attention state. Startup uses this when the Postgres InternalState
+   * snapshot is too old to revive wholesale but its situated evidence remains
+   * the canonical source for plain-channel mindspace resolution.
+   */
+  restorePersistedSituatedLocation(location: SituatedLocation): void {
+    this.emotionSelfModelRuntime.restoreSituatedLocation({ ...location });
+  }
+
   /** Records that persisted state was too stale to restore; surfaced to her on the next turn. */
   noteInternalStateContinuityGap(gap: InternalStateContinuityGap): void {
     this.internalStateContinuityGap = gap;
@@ -1447,7 +1458,7 @@ export class SubstrateAgent {
     return this.internalStateContinuityGap;
   }
 
-  private persistCurrentInternalState(): void {
+  private async persistCurrentInternalState(): Promise<void> {
     if (!this.internalStateStore || !this.currentInternalState || !this.currentInternalStateSnapshotRef) {
       return;
     }
@@ -1457,12 +1468,15 @@ export class SubstrateAgent {
       metacognitiveFlags: cloneMetacognitiveFlags(this.currentMetacognitiveFlags),
       savedAt: new Date().toISOString(),
     };
-    this.internalStateStore.save(record).catch((error: unknown) => {
+    try {
+      await this.internalStateStore.save(record);
+    } catch (error) {
       log.error('Failed to persist current internal state', {
         error: toErrorMessage(error),
         snapshotRef: record.snapshotRef,
       });
-    });
+      throw error;
+    }
   }
 
   registerPostTurnActionInferer(inferer: PostTurnActionInferer): () => void {
@@ -1748,7 +1762,7 @@ export class SubstrateAgent {
           participantRelationshipEdges,
           capturedSessionReads,
         ),
-        setCurrentSelfModelState: (state, snapshotRef, metacognitiveFlags) => {
+        setCurrentSelfModelState: async (state, snapshotRef, metacognitiveFlags) => {
           this.currentInternalState = state;
           this.currentInternalStateSnapshotRef = snapshotRef;
           this.currentMetacognitiveFlags = cloneMetacognitiveFlags(metacognitiveFlags);
@@ -1757,7 +1771,7 @@ export class SubstrateAgent {
           if (this.internalStateContinuityGap && this.internalStateContinuityGapRenderCount > 0) {
             this.internalStateContinuityGap = null;
           }
-          this.persistCurrentInternalState();
+          await this.persistCurrentInternalState();
         },
         setCurrentTurnDisclosureLineage: (lineage) => {
           this.currentTurnDisclosureLineage = lineage;

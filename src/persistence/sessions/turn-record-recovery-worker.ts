@@ -8,7 +8,9 @@ import {
 } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import type { TurnRecord } from '../../shared/contracts/runtime.js';
-import { parseTurnRecordBackgroundWorkHandoff } from '../../core/agent/background-work/types.js';
+import {
+  repairLegacyTurnRecordBackgroundWorkHandoffForRecovery,
+} from '../../core/agent/background-work/types.js';
 import {
   TURN_RECORD_RECOVERY_STRUCTURAL_EVIDENCE_CODE,
   TurnRecordRecoveryEvidenceError,
@@ -59,6 +61,7 @@ const stats: TurnRecordRecoveryScanStats = {
   peakIdentityRowsInMemory: 1,
   sqliteCacheBytes: input.sqliteCacheBytes,
   maxRowBytes: input.maxRowBytes,
+  legacyEmotionAppraisalJobsRetired: 0,
 };
 
 function assertNotAborted(): void {
@@ -269,7 +272,11 @@ async function run(): Promise<void> {
         try {
           record = normalizeTurnRecord(JSON.parse(line) as unknown, sourceChannelId);
           if (record.status === 'completed' && record.backgroundWorkHandoff) {
-            parseTurnRecordBackgroundWorkHandoff(record);
+            const repair = repairLegacyTurnRecordBackgroundWorkHandoffForRecovery(record);
+            record = repair.record;
+            stats.legacyEmotionAppraisalJobsRetired =
+              (stats.legacyEmotionAppraisalJobsRetired ?? 0)
+              + repair.retiredLegacyEmotionAppraisalJobs;
           }
         } catch (error) {
           throw evidenceError(

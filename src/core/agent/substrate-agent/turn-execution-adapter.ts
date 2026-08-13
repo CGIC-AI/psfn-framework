@@ -105,7 +105,7 @@ interface TurnExecutionAdapterCallbacks {
     state: InternalState,
     snapshotRef: string,
     metacognitiveFlags: readonly MetacognitiveFlag[],
-  ) => void;
+  ) => Promise<void>;
   setCurrentTurnDisclosureLineage: (lineage: DisclosureLineage) => void;
   getCurrentTurnDisclosureLineage: () => DisclosureLineage | undefined;
   buildRuntimeContext: (

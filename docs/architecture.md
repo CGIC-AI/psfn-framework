@@ -287,6 +287,12 @@ ceilings both apply; the tool ceiling may narrow but never widen server trust.
   companion emanates into a real room) or `mindspace` (a plain chat channel —
   the companion is co-located with the partner in a virtual twin of the
   last-known physical room, resolved via a place's `mirrorsPlaceId` twin link).
+- The last-known situated location is durable companion state inside the
+  Postgres `internal_state_snapshots` row. Restart hydration restores this
+  location independently even when the surrounding affect/attention snapshot
+  is older than the freshness window and is correctly withheld as stale. Turn
+  execution awaits each state write before advancing, so a completed turn
+  cannot outrun its latest snapshot; a failed write fails the turn boundary.
 - The `world` tool (`src/boundary/integrations/world/`) exposes
   `perceive`/`list`/`move`, with `control` staged off by default
   (`WORLD_CONTROL_RUNTIME_ENABLED = false`) until proven on hardware. HA control

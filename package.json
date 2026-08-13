@@ -61,6 +61,7 @@
     "provision:injection-model": "tsx scripts/provision-injection-model.ts",
     "migrate:persistence-layout": "tsx src/app/maintenance/migrate-persistence-layout.ts",
     "migrate:session-filenames": "tsx src/app/maintenance/migrate-session-filenames.ts",
+    "migrate:turn-record-background-work": "tsx src/app/maintenance/migrate-turn-record-background-work.ts",
     "migrate:system-owner-fleet": "tsx src/app/maintenance/migrate-system-owner-fleet.ts",
     "seed:sibling-contacts": "tsx src/app/maintenance/seed-sibling-contacts.ts",
     "snapshot:system-owner-fleet": "tsx src/app/maintenance/system-owner-fleet-snapshot.ts capture",

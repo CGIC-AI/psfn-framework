@@ -1148,7 +1148,7 @@ export async function handleMessageForTurn(
           retrievalProvenanceRefs,
           capturedSessionReads: sessionReads,
         });
-    runtime.setCurrentSelfModelState(
+    await runtime.setCurrentSelfModelState(
       internalState,
       internalStateSnapshotRef,
       metacognitiveFlags,

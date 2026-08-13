@@ -2756,6 +2756,59 @@ describe('SubstrateAgent.handleMessage', () => {
     });
   });
 
+  it('persists situated presence on a plain turn after restoring durable location evidence', async () => {
+    const config = makeConfig();
+    const sessionManager = fromAny(makeMockSessionManager());
+    const agent = new SubstrateAgent(
+      new EventBus(),
+      makeMockLLMProvider(),
+      sessionManager,
+      'test',
+      config,
+      {
+        placesRegistryConfig: {
+          schemaVersion: 1,
+          sites: [
+            { siteId: 'site.home', displayName: 'Home', kind: 'physical' },
+            { siteId: 'site.virtual', displayName: 'Shared Space', kind: 'virtual' },
+          ],
+          places: [
+            {
+              placeId: 'place.living-room',
+              siteId: 'site.home',
+              displayName: 'Living Room',
+              kind: 'physical',
+              affordances: [],
+            },
+            {
+              placeId: 'place.living-room-twin',
+              siteId: 'site.virtual',
+              displayName: 'Shared Living Room',
+              kind: 'virtual',
+              mirrorsPlaceId: 'place.living-room',
+              affordances: [],
+            },
+          ],
+        },
+      },
+    );
+    agent.restorePersistedSituatedLocation({
+      placeId: 'place.living-room',
+      siteId: 'site.home',
+      label: 'Living Room',
+      kind: 'physical',
+      updatedAt: '2026-08-10T12:00:00.000Z',
+    });
+
+    await agent.handleMessage(makeMessage({ id: 'msg-restored-mindspace' }));
+
+    const record = sessionManager.recordTurn.mock.calls[0]?.[0];
+    const section = record?.observability?.snapshot?.promptContext?.runtimeContextSections
+      ?.find((candidate: { id: string }) => candidate.id === 'runtime_situated_presence');
+    expect(section?.content).toContain('Here: Shared Living Room (virtual place)');
+    expect(section?.content).toContain('Shared mindspace: Shared Living Room (virtual twin of Living Room)');
+  });
+
   it('uses canonical contact key for continuity indexing and context lookup', async () => {
     const config = makeConfig();
     const sessionManager = makeMockSessionManager();
@@ -7098,6 +7151,52 @@ describe('SubstrateAgent internal state persistence', () => {
       gapMs: 3 * 24 * 60 * 60 * 1000,
     });
     expect(agent.getCurrentInternalState()).toBeNull();
+  });
+
+  it('awaits each Postgres state write before the turn can advance or complete', async () => {
+    const sessionManager = makeMockSessionManager();
+    const agent = new SubstrateAgent(
+      new EventBus(), makeMockLLMProvider(), sessionManager, 'System prompt', makeConfig(),
+    );
+    const releases: Array<() => void> = [];
+    const save = vi.fn(() => new Promise<void>((resolve) => { releases.push(resolve); }));
+    agent.setInternalStateStore({
+      save,
+      loadLatest: vi.fn(async () => null),
+    });
+    let settled = false;
+
+    const turn = agent.handleMessage(makeMessage({ id: 'persist-before-complete' }))
+      .finally(() => { settled = true; });
+    await vi.waitFor(() => { expect(save).toHaveBeenCalledTimes(1); });
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(settled).toBe(false);
+    expect(sessionManager.recordTurn).not.toHaveBeenCalled();
+
+    releases[0]!();
+    await vi.waitFor(() => { expect(save).toHaveBeenCalledTimes(2); });
+    expect(settled).toBe(false);
+    expect(sessionManager.recordTurn).not.toHaveBeenCalled();
+
+    releases[1]!();
+    await turn;
+    expect(sessionManager.recordTurn).toHaveBeenCalledOnce();
+    expect(save.mock.calls[1]?.[0].snapshotRef)
+      .toBe(agent.getCurrentInternalStateSnapshotRef());
+  });
+
+  it('fails the turn when Postgres cannot commit its InternalState boundary', async () => {
+    const agent = makeAgent();
+    const saveError = new Error('internal state database unavailable');
+    const save = vi.fn(async () => { throw saveError; });
+    agent.setInternalStateStore({
+      save,
+      loadLatest: vi.fn(async () => null),
+    });
+
+    await expect(agent.handleMessage(makeMessage({ id: 'persist-failure' })))
+      .rejects.toBe(saveError);
+    expect(save).toHaveBeenCalledOnce();
   });
 });
 

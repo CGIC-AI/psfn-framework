@@ -28,6 +28,7 @@ import { startOfDashboardUtcDay } from '../../operator/garden/services/dashboard
 import type { Scheduler } from '../../core/scheduler/scheduler.js';
 import type { ShardExecutionPort } from '../../faculties/shards/port.js';
 import { LLMClient } from '../../primitives/llm/client.js';
+import { ModelBudgetController } from '../../primitives/llm/model-budget.js';
 import type { ProviderRuntime } from '../../primitives/llm/provider-runtime.js';
 import { DefaultImageVisionReviewer } from '../../primitives/images/vision-reviewer.js';
 import { createGenerateImageTool } from '../../primitives/images/tools.js';
@@ -2060,6 +2061,132 @@ describe('PostgresModelUsageStore reconciliation', () => {
       expect(csv.body).toContain('"retired"');
     } finally {
       await pool.end();
+    }
+  }, INTEGRATION_TIMEOUT_MS);
+
+  it('keeps the budget gate open after persisting successful cached usage', async () => {
+    if (!harness) throw new Error('Postgres test harness is unavailable');
+    const { databaseUrl } = await harness.createDatabase();
+    const pool = createPostgresPool(databaseUrl, {
+      applicationName: 'model-usage-cached-budget-regression',
+      allowExitOnIdle: true,
+      max: 1,
+    });
+    const dataDir = mkdtempSync(join(tmpdir(), 'model-usage-cached-budget-'));
+    const modelEntry = {
+      id: 'background',
+      rank: 10,
+      identity: {
+        provider: 'test-provider',
+        model: 'priced-cache-model',
+        source: { type: 'configured' },
+      },
+      purposes: [{ purpose: 'background' as const, primary: true }],
+      capabilities: { maxOutputTokens: 1_024, contextWindow: 128_000 },
+      tuning: { maxOutputTokens: 1_024 },
+      cost: {
+        inputPer1MUsd: 3,
+        outputPer1MUsd: 15,
+        cacheReadPer1MUsd: 3,
+        cacheWritePer1MUsd: 3,
+        currency: 'USD',
+      },
+    };
+    const config: SubstrateConfig = {
+      ...makeSessionConfig(dataDir),
+      companionId: 'companion-a',
+      modelRoster: {
+        background: {
+          model: modelEntry.identity.model,
+          provider: modelEntry.identity.provider,
+          maxTokens: modelEntry.capabilities.maxOutputTokens,
+          contextWindow: modelEntry.capabilities.contextWindow,
+        },
+      },
+      modelRegistry: {
+        schemaVersion: 1,
+        budgetPolicy: {
+          enabled: true,
+          dailyUsdLimit: 20,
+          monthlyUsdLimit: 20,
+          currency: 'USD',
+        },
+        models: [modelEntry],
+      },
+    };
+    const runtime = {
+      getProviders: () => ['test-provider'],
+      getModels: () => [{
+        id: modelEntry.identity.model,
+        provider: modelEntry.identity.provider,
+        name: modelEntry.identity.model,
+        api: 'openai-completions',
+        input: ['text'],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: modelEntry.capabilities.contextWindow,
+        maxTokens: modelEntry.capabilities.maxOutputTokens,
+      }],
+      getModel: () => undefined,
+      getAuth: async () => undefined,
+      resolveProviderApiKey: () => undefined,
+      complete: async () => ({
+        content: [{ type: 'text', text: 'cached result' }],
+        model: modelEntry.identity.model,
+        usage: {
+          input: 17_549,
+          output: 22,
+          cacheRead: 25_472,
+          cacheWrite: 0,
+          totalTokens: 43_043,
+        },
+        stopReason: 'stop',
+      }),
+      stream: async function* () { /* unused */ },
+    } as ProviderRuntime;
+
+    try {
+      const store = new PostgresModelUsageStore(pool, { companionId: 'companion-a' });
+      const client = new LLMClient(config, {
+        runtime,
+        usageRecorder: store,
+        usageBudgetQuery: store,
+      });
+      await client.complete({
+        systemPrompt: 'System',
+        messages: [{ role: 'user', content: 'Use the cached prompt.' }],
+      }, 'background', { disableRetry: true });
+
+      const nowMs = Date.now();
+      expect(await store.getModelBudgetSpend(nowMs)).toMatchObject({
+        dailyEstimatedCostUsd: 0.129393,
+        monthlyEstimatedCostUsd: 0.129393,
+        dailyUnknownCostAttempts: 0,
+        monthlyUnknownCostAttempts: 0,
+      });
+      expect((await store.getUsageData({ limit: 1 })).recentEvents[0]).toMatchObject({
+        status: 'success',
+        settlement: 'complete',
+        costSource: 'estimate',
+        estimatedCostUsd: 0.129393,
+      });
+
+      await expect(new ModelBudgetController(config, store).evaluatePreflight({
+        candidate: {
+          provider: modelEntry.identity.provider,
+          model: modelEntry.identity.model,
+          maxTokens: modelEntry.capabilities.maxOutputTokens,
+          slotKey: modelEntry.id,
+        },
+        purpose: 'background',
+        service: 'background',
+        process: 'regression.next-call',
+        estimatedInputTokens: 1,
+        estimatedOutputTokens: 1,
+        nowMs,
+      })).resolves.toMatchObject({ allowed: true });
+    } finally {
+      await pool.end();
+      rmSync(dataDir, { recursive: true, force: true });
     }
   }, INTEGRATION_TIMEOUT_MS);
 

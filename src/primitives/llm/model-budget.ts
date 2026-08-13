@@ -99,7 +99,6 @@ function resolveRegistryEntryForIdentity(
   if (identity.slotKey) {
     const byId = registry.models.find(entry => entry.id === identity.slotKey);
     if (!byId || byId.enabled === false) return undefined;
-    if (purpose && !byId.purposes.some(tag => tag.purpose === purpose)) return undefined;
     return toModelKey(byId.identity.provider, byId.identity.model)
       === toModelKey(identity.provider, identity.model)
       ? byId

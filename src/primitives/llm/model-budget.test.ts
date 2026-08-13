@@ -6,6 +6,7 @@ import {
   findRegistryEntryByModelId,
   findRegistryEntryByProviderModel,
   ModelBudgetController,
+  resolveModelUsageCostRates,
   resolveModelUsageCostRatesForIdentity,
 } from './model-budget.js';
 
@@ -239,6 +240,22 @@ describe('ModelBudgetController', () => {
 });
 
 describe('resolveModelUsageCostRatesForIdentity', () => {
+  it('trusts an exact routed slot identity even when the settlement purpose differs', () => {
+    const dataDir = '/tmp/psfn-model-budget-routed-slot-rate-resolution';
+    const config = makeConfig(dataDir);
+
+    expect(resolveModelUsageCostRates(config, {
+      provider: 'openrouter',
+      model: 'z-ai/glm-5',
+      maxTokens: 1_000,
+      slotKey: 'chat',
+    }, 'background')).toEqual({
+      inputPer1MUsd: 1,
+      outputPer1MUsd: 1,
+      currency: 'USD',
+    });
+  });
+
   it('uses only an exact canonical provider and model identity match', () => {
     const dataDir = '/tmp/psfn-model-budget-rate-resolution';
     const base = makeConfig(dataDir);

@@ -954,6 +954,13 @@ describe('settings', () => {
               ],
               capabilities: { maxOutputTokens: 4096, contextWindow: 128_000 },
               tuning: { maxOutputTokens: 4096 },
+              cost: {
+                inputPer1MUsd: 1,
+                outputPer1MUsd: 2,
+                cacheReadPer1MUsd: 0.1,
+                cacheWritePer1MUsd: 1.25,
+                currency: 'USD',
+              },
             },
             {
               id: 'extraction',
@@ -970,6 +977,13 @@ describe('settings', () => {
               ],
               capabilities: { maxOutputTokens: 2048, contextWindow: 128_000 },
               tuning: { maxOutputTokens: 2048 },
+              cost: {
+                inputPer1MUsd: 0.5,
+                outputPer1MUsd: 1,
+                cacheReadPer1MUsd: 0.05,
+                cacheWritePer1MUsd: 0.625,
+                currency: 'USD',
+              },
             },
           ],
         },

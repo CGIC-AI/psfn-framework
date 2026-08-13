@@ -133,7 +133,7 @@ describe('ModelBudgetController', () => {
     const controller = new ModelBudgetController(config, query);
     const preflight = await controller.evaluatePreflight(preflightInput);
 
-    expect(query.getModelBudgetSpend).toHaveBeenCalledWith(nowMs);
+    expect(query.getModelBudgetSpend).toHaveBeenCalledWith(nowMs, undefined, []);
     expect(preflight.allowed).toBe(false);
     expect(preflight.blockedEvent?.reason).toBe('daily_budget_exceeded');
     expect(preflight.blockedEvent?.budget.dailyLimitUsd).toBe(0.001);
@@ -155,6 +155,7 @@ describe('ModelBudgetController', () => {
     expect(query.getModelBudgetSpend).toHaveBeenCalledWith(
       nowMs,
       { companionId: 'companion-a' },
+      [],
     );
   });
 

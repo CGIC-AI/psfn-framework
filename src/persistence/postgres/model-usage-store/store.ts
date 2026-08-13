@@ -18,6 +18,7 @@ import type {
   IcpConversationCostReservationInput,
   IcpConversationCostReservationResult,
   ModelUsageBudgetQueryPort,
+  ModelUsageBudgetPricingRate,
   ModelUsageBudgetSpendSnapshot,
   ModelUsageCostHydrationData,
   ModelUsageCostHydrationQueryPort,
@@ -185,8 +186,9 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
   async getModelBudgetSpend(
     nowMs = Date.now(),
     scope?: { companionId: string },
+    pricing: readonly ModelUsageBudgetPricingRate[] = [],
   ): Promise<ModelUsageBudgetSpendSnapshot> {
-    return await this.queries.getModelBudgetSpend(nowMs, scope);
+    return await this.queries.getModelBudgetSpend(nowMs, scope, pricing);
   }
 }
 

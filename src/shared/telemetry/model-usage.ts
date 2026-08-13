@@ -481,11 +481,23 @@ export interface ModelUsageBudgetSpendSnapshot {
   monthlyUnknownCostAttempts: number;
 }
 
+/** Exact registry identity and complete USD rates used to price historical attempts. */
+export interface ModelUsageBudgetPricingRate {
+  slotKey: string;
+  provider: string;
+  model: string;
+  inputPer1MUsd: number;
+  outputPer1MUsd: number;
+  cacheReadPer1MUsd: number;
+  cacheWritePer1MUsd: number;
+}
+
 /** Canonical budget projection over immutable PostgreSQL model attempts. */
 export interface ModelUsageBudgetQueryPort {
   getModelBudgetSpend(
     nowMs?: number,
     scope?: { companionId: string },
+    pricing?: readonly ModelUsageBudgetPricingRate[],
   ): Promise<ModelUsageBudgetSpendSnapshot>;
 }
 

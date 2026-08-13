@@ -7,6 +7,7 @@ import type {
 } from '../../shared/contracts/runtime.js';
 import type {
   ModelUsageBudgetQueryPort,
+  ModelUsageBudgetPricingRate,
   ModelUsageBudgetSpendSnapshot,
 } from '../../shared/telemetry/model-usage.js';
 import type { ModelUsageCostRates } from '../../shared/telemetry/model-usage-accounting.js';
@@ -178,6 +179,33 @@ function resolveCostRatesForEntry(
   return Object.keys(rates).length > 1 ? rates : undefined;
 }
 
+function resolveHistoricalBudgetPricing(
+  config: SubstrateConfig,
+): ModelUsageBudgetPricingRate[] {
+  return (config.modelRegistry?.models ?? []).flatMap((entry) => {
+    if (entry.enabled === false) return [];
+    const rates = resolveCostRatesForEntry(entry);
+    if (
+      rates?.inputPer1MUsd === undefined
+      || rates.outputPer1MUsd === undefined
+      || rates.cacheReadPer1MUsd === undefined
+      || rates.cacheWritePer1MUsd === undefined
+    ) {
+      return [];
+    }
+    const provider = entry.identity.provider.trim().toLowerCase();
+    return [{
+      slotKey: entry.id,
+      provider,
+      model: normalizeModelIdForProvider(provider, entry.identity.model),
+      inputPer1MUsd: rates.inputPer1MUsd,
+      outputPer1MUsd: rates.outputPer1MUsd,
+      cacheReadPer1MUsd: rates.cacheReadPer1MUsd,
+      cacheWritePer1MUsd: rates.cacheWritePer1MUsd,
+    }];
+  });
+}
+
 function estimateCostUsd(
   inputTokens: number,
   outputTokens: number,
@@ -317,9 +345,10 @@ export class ModelBudgetController {
     let spend: ModelUsageBudgetSpendSnapshot;
     try {
       const companionId = params.correlation?.companionId?.trim();
+      const historicalPricing = resolveHistoricalBudgetPricing(this.config);
       spend = companionId
-        ? await this.usageQuery.getModelBudgetSpend(nowMs, { companionId })
-        : await this.usageQuery.getModelBudgetSpend(nowMs);
+        ? await this.usageQuery.getModelBudgetSpend(nowMs, { companionId }, historicalPricing)
+        : await this.usageQuery.getModelBudgetSpend(nowMs, undefined, historicalPricing);
     } catch (error) {
       const accountingError = error instanceof Error ? error : new Error(String(error));
       const snapshot = toWindowSnapshot(

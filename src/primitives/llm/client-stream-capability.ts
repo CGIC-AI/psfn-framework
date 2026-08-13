@@ -34,7 +34,9 @@ import { monotonicEpochNowMs } from '../../shared/telemetry/turn-performance.js'
 import { markErrorAsNonRetryable } from './retry.js';
 import { logEmptyToolArgumentProvenance } from './empty-tool-argument-retry.js';
 import { createComponentLogger } from '../../shared/logger.js';
-import { assertExplicitToolContractSatisfied } from './explicit-tool-request.js';
+import {
+  selectExplicitToolContractCall,
+} from './explicit-tool-request.js';
 
 const log = createComponentLogger('LLMClient');
 
@@ -307,7 +309,7 @@ export async function runLLMStreamAttempt(
   if (response) {
     try {
       assertUsableProviderResponse(response, input.candidate);
-      assertExplicitToolContractSatisfied({
+      response.toolCalls = selectExplicitToolContractCall({
         choice: input.requestOptions.toolChoice,
         ...(input.requestOptions.requiredToolName
           ? { requiredToolName: input.requestOptions.requiredToolName }
@@ -390,7 +392,7 @@ export async function runLLMStreamAttempt(
     stopReason: 'unknown',
   };
   assertUsableProviderResponse(incompleteResponse, input.candidate);
-  assertExplicitToolContractSatisfied({
+  incompleteResponse.toolCalls = selectExplicitToolContractCall({
     choice: input.requestOptions.toolChoice,
     ...(input.requestOptions.requiredToolName
       ? { requiredToolName: input.requestOptions.requiredToolName }

@@ -78,6 +78,44 @@ export function assertExplicitToolContractSatisfied(input: {
   );
 }
 
+/**
+ * Keep one provider-emitted call for the current explicit sequence step.
+ *
+ * Some OpenAI-compatible providers return several calls for the sole exposed
+ * function even when the client asks for a required single-tool step. The
+ * agent loop must not execute that fan-out concurrently: retain the first
+ * exact call, feed its result back to the model, and let the next loop
+ * iteration enforce the next requested step. Mixed or missing calls still
+ * fail closed.
+ */
+export function selectExplicitToolContractCall<T extends { name: string }>(input: {
+  choice: ExplicitToolChoice | undefined;
+  requiredToolName?: string;
+  toolCalls: readonly T[];
+}): T[] {
+  if (!input.choice) return [...input.toolCalls];
+  if (input.choice === 'none') {
+    if (input.toolCalls.length === 0) return [];
+    throw new ExplicitToolContractError(
+      `Provider returned ${input.toolCalls.length} tool call(s) after tool execution was disabled`,
+    );
+  }
+  const expectedName = input.choice === 'required'
+    ? input.requiredToolName
+    : input.choice.function.name;
+  if (
+    expectedName
+    && input.toolCalls.length > 0
+    && input.toolCalls.every(call => call.name === expectedName)
+  ) {
+    const first = input.toolCalls[0];
+    return first ? [first] : [];
+  }
+  throw new ExplicitToolContractError(
+    `Provider violated explicit tool contract: expected exactly one ${JSON.stringify(expectedName)} call, received ${JSON.stringify(input.toolCalls.map(call => call.name))}`,
+  );
+}
+
 /** Enforce the named sequence, then forbid extra tools for that explicit request. */
 export function resolveExplicitToolContract(input: {
   context: LLMContext;

@@ -250,6 +250,30 @@ describe('orient tool', () => {
     expect(store.append).not.toHaveBeenCalled();
   });
 
+  it('reports an append normalized to no durable change as an error', async () => {
+    const unchanged = makeBlock('goals', { content: 'Keep the durable goal.' });
+    const store = {
+      getBlock: vi.fn().mockReturnValue(unchanged),
+      append: vi.fn().mockReturnValue(unchanged),
+      replace: vi.fn(),
+      rethink: vi.fn(),
+    };
+    const tool = createOrientTool(store);
+
+    const result = await runWithRequestContext({
+      callType: 'tool',
+      purpose: 'test',
+      channelId: 'api:testing-harness',
+    }, async () => tool.execute('call-noop', {
+        action: 'append',
+        block: 'goals',
+        text: 'matrix orient 2026-08-13T05-03-18-988Z',
+      }));
+
+    expect(resultText(result)).toContain('produced no durable change for goals');
+    expect(result.details?.isError).toBe(true);
+  });
+
   it('replaces one orientation block', async () => {
     const store = {
       append: vi.fn(),

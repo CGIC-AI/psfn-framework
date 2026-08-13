@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   assertExplicitToolContractSatisfied,
   resolveExplicitToolChoice,
+  selectExplicitToolContractCall,
 } from './explicit-tool-request.js';
 
 function context(messages: LLMContext['messages']): LLMContext {
@@ -178,6 +179,28 @@ describe('explicit tool request choice', () => {
       requiredToolName: 'notify',
       toolCalls: [{ name: 'notify' }],
     })).not.toThrow();
+  });
+
+  it('selects only the first exact call when a provider fans out one exposed tool', () => {
+    const calls = [
+      { id: 'notify-1', name: 'notify' },
+      { id: 'notify-2', name: 'notify' },
+    ];
+    expect(selectExplicitToolContractCall({
+      choice: 'required',
+      requiredToolName: 'notify',
+      toolCalls: calls,
+    })).toEqual([calls[0]]);
+    expect(() => selectExplicitToolContractCall({
+      choice: 'required',
+      requiredToolName: 'notify',
+      toolCalls: [{ id: 'notify-1', name: 'notify' }, { id: 'other-1', name: 'north_star' }],
+    })).toThrow('received ["notify","north_star"]');
+    expect(() => selectExplicitToolContractCall({
+      choice: 'required',
+      requiredToolName: 'notify',
+      toolCalls: [],
+    })).toThrow('expected exactly one "notify" call');
   });
 
   it('rejects any tool call after the requested sequence is complete', () => {

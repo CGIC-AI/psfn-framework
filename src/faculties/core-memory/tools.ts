@@ -74,6 +74,7 @@ const ORIENT_ACTIONS = [
 type OrientAction = (typeof ORIENT_ACTIONS)[number];
 
 interface CoreMemoryToolStore {
+  getBlock?(label: CoreMemoryLabel, options?: CoreMemoryMutationOptions): CoreMemoryBlock;
   append(
     label: CoreMemoryLabel,
     appendText: string,
@@ -631,10 +632,18 @@ export function createOrientTool(
           if (params.separator !== undefined && typeof params.separator !== 'string') {
             return textResultWithError('Error: separator must be a string when provided', true);
           }
+          const scopeOptions = { scope };
+          const previousContent = store.getBlock?.(label, scopeOptions).content;
           const block = store.append(label, appendText, {
             separator: params.separator,
             scope,
           });
+          if (previousContent !== undefined && block.content === previousContent) {
+            return textResultWithError(
+              `Error: orient append produced no durable change for ${label}`,
+              true,
+            );
+          }
           return textResult(
             `Appended to ${label} orientation (${block.content.length}/${block.maxChars} chars).`,
           );

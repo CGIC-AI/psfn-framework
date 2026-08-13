@@ -2468,6 +2468,43 @@ describe('LLMClient completion model hints', () => {
     });
   });
 
+  it('executes only the first call when a provider fans out the required tool', async () => {
+    const client = new LLMClient(makeConfig({ openRouterApiBaseUrl: 'http://litellm.test/v1' }));
+    mocks.streamSimple.mockImplementation(async function* fansOutRequiredTool() {
+      yield {
+        type: 'done',
+        message: {
+          model: 'z-ai/glm-5',
+          usage: { input: 10, output: 8 },
+          content: [
+            { type: 'toolCall', id: 'notify-1', name: 'notify', arguments: { text: 'first' } },
+            { type: 'toolCall', id: 'notify-2', name: 'notify', arguments: { text: 'second' } },
+          ],
+        },
+        reason: 'toolUse',
+      };
+    });
+
+    const response = await client.stream({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'Call notify exactly once.' }],
+      tools: [{ name: 'notify', description: 'Notify', inputSchema: { type: 'object' } }],
+      correlation: {
+        turnId: 'turn-required-tool-fanout',
+        requestId: 'request-required-tool-fanout',
+        channelId: 'api:testing-harness',
+        callType: 'chat',
+        originType: 'chat',
+        originStage: 'agent.turn.prompt',
+      },
+    });
+
+    expect(response.toolCalls).toEqual([
+      { id: 'notify-1', name: 'notify', input: { text: 'first' } },
+    ]);
+    expect(mocks.streamSimple).toHaveBeenCalledTimes(1);
+  });
+
   it('prioritizes explicit model hints for completion routing', async () => {
     const client = new LLMClient(makeConfig({ openRouterApiBaseUrl: 'http://litellm.test/v1' }));
     mocks.completeSimple.mockResolvedValue({

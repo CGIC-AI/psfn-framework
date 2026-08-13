@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createGatewayOperatorConfirmationClient } from './gateway-operator-confirmation-client.js';
 
 describe('createGatewayOperatorConfirmationClient', () => {
-  it('forwards only the authenticated Garden credential to the bounded operator endpoint', async () => {
+  it('uses the internal operator token after authenticated Garden admission', async () => {
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
       id: 'kube-approval',
       status: 'approved',
@@ -14,7 +14,11 @@ describe('createGatewayOperatorConfirmationClient', () => {
     }));
     const client = createGatewayOperatorConfirmationClient(
       'http://psfn-gateway:10053/v1',
-      { fetchImpl, requestTimeoutMs: 5_000 },
+      {
+        fetchImpl,
+        operatorToken: 'internal-operator-token',
+        requestTimeoutMs: 5_000,
+      },
     );
 
     const result = await client.resolve({
@@ -22,6 +26,7 @@ describe('createGatewayOperatorConfirmationClient', () => {
       decision: 'approve',
     }, {
       authorization: 'Bearer garden-admin-token',
+      cookie: 'garden-session=browser-credential',
     });
 
     expect(result).toMatchObject({ id: 'kube-approval', status: 'approved', executed: true });
@@ -32,10 +37,11 @@ describe('createGatewayOperatorConfirmationClient', () => {
       method: 'POST',
       redirect: 'error',
       headers: expect.objectContaining({
-        Authorization: 'Bearer garden-admin-token',
+        Authorization: 'Bearer internal-operator-token',
         'Content-Type': 'application/json',
       }),
     });
+    expect(init?.headers).not.toMatchObject({ Cookie: expect.any(String) });
     expect(JSON.parse(String(init?.body))).toEqual({
       id: 'kube-approval',
       decision: 'approve',
@@ -46,7 +52,11 @@ describe('createGatewayOperatorConfirmationClient', () => {
     const fetchImpl = vi.fn();
     const client = createGatewayOperatorConfirmationClient(
       'http://psfn-gateway:10053/v1',
-      { fetchImpl, requestTimeoutMs: 5_000 },
+      {
+        fetchImpl,
+        operatorToken: 'internal-operator-token',
+        requestTimeoutMs: 5_000,
+      },
     );
 
     await expect(client.resolve({
@@ -54,5 +64,12 @@ describe('createGatewayOperatorConfirmationClient', () => {
       decision: 'approve',
     }, {})).rejects.toThrow('Authenticated Garden operator credentials are required');
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('fails closed without an internal operator token', () => {
+    expect(() => createGatewayOperatorConfirmationClient(
+      'http://psfn-gateway:10053/v1',
+      { operatorToken: '', requestTimeoutMs: 5_000 },
+    )).toThrow('Internal gateway operator token is required');
   });
 });

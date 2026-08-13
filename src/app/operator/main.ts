@@ -60,6 +60,12 @@ async function main(): Promise<void> {
   // confirmations directly against the gateway, so the credential never
   // traverses the agent (x5rt.10).
   const operatorConfirmationBaseUrl = process.env.GATEWAY_OPERATOR_API_BASE_URL?.trim();
+  const operatorConfirmationToken = process.env.ADMIN_TOKEN?.trim();
+  if (operatorConfirmationBaseUrl && !operatorConfirmationToken) {
+    throw new Error(
+      'Garden operator confirmation routing requires ADMIN_TOKEN for the internal gateway hop',
+    );
+  }
   const fleetSsoTls = config.fleetAuthVerifier
     ? resolveFleetSsoGardenTls(process.env)
     : undefined;
@@ -124,6 +130,7 @@ async function main(): Promise<void> {
       ? {
           operatorConfirmationResolver:
             createGatewayOperatorConfirmationClient(operatorConfirmationBaseUrl, {
+              operatorToken: operatorConfirmationToken!,
               requestTimeoutMs: lifecycleKubernetes.operatorConfirmationRequestTimeoutMs,
             }),
         }

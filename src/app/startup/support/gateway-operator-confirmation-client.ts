@@ -26,6 +26,7 @@ export interface GatewayOperatorConfirmationClient {
 }
 
 interface GatewayOperatorConfirmationClientDeps {
+  operatorToken: string;
   requestTimeoutMs: number;
   fetchImpl?: typeof fetch;
 }
@@ -121,6 +122,10 @@ export function createGatewayOperatorConfirmationClient(
   if (!Number.isSafeInteger(deps.requestTimeoutMs) || deps.requestTimeoutMs <= 0) {
     throw new Error('Gateway operator confirmation request timeout must be a positive integer.');
   }
+  const operatorToken = boundedCredential(deps.operatorToken, MAX_AUTHORIZATION_LENGTH);
+  if (!operatorToken) {
+    throw new Error('Internal gateway operator token is required for confirmation resolution.');
+  }
   const endpoint = resolveEndpoint(baseUrl);
   const fetchImpl = deps.fetchImpl ?? fetch;
   return {
@@ -138,11 +143,7 @@ export function createGatewayOperatorConfirmationClient(
         headers: {
           Accept: 'application/json',
           'Content-Type': 'application/json',
-          ...(authorization
-            ? { Authorization: authorization }
-            : cookie
-              ? { Cookie: cookie }
-              : {}),
+          Authorization: `Bearer ${operatorToken}`,
         },
         body: JSON.stringify(params),
       });

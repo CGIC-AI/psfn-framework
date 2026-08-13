@@ -35,6 +35,7 @@ import {
   resolveOptionalCredentialReference,
 } from '../../boundary/custody/credential-vault.js';
 import { createComponentLogger } from '../../shared/logger.js';
+import { resolveExplicitToolChoice } from './explicit-tool-request.js';
 
 const log = createComponentLogger('LLMClient');
 
@@ -51,6 +52,7 @@ export interface LLMRequestOptions extends SimpleStreamOptions {
   topK?: number;
   frequencyPenalty?: number;
   repetitionPenalty?: number;
+  toolChoice?: 'required' | 'any';
 }
 
 /** Owns provider model resolution, request construction, and as-sent capture. */
@@ -208,6 +210,20 @@ export class LLMRequestCapability {
       messages: contextMessagesToPiMessages(context.messages),
       ...(context.tools?.length ? { tools: toPiTools(context.tools) } : {}),
     };
+  }
+
+  applyExplicitToolChoice(
+    requestOptions: LLMRequestOptions,
+    context: LLMContext,
+    correlation: ResolvedCorrelationMetadata | undefined,
+    model: Model<any>,
+  ): void {
+    const toolChoice = resolveExplicitToolChoice({
+      context,
+      originStage: correlation?.originStage,
+      modelApi: String(model.api),
+    });
+    if (toolChoice) requestOptions.toolChoice = toolChoice;
   }
 
   resolveRouteKind(candidate: RoutingCandidate): LLMProviderObservability['routeKind'] {

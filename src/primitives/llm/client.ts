@@ -884,6 +884,12 @@ export class LLMClient {
             signal: transportSignal,
             correlation,
           });
+          this.requestCapability.applyExplicitToolChoice(
+            requestOptions,
+            context,
+            correlation,
+            model,
+          );
           const promptCaching = applyModelAgnosticPromptCache({
             promptCacheEnabled: candidateTarget.promptCacheEnabled,
             promptCacheStrategy: candidateTarget.promptCacheStrategy,
@@ -1086,6 +1092,12 @@ export class LLMClient {
           signal: transportSignal,
           correlation,
         });
+        this.requestCapability.applyExplicitToolChoice(
+          requestOptions,
+          context,
+          correlation,
+          model,
+        );
         const promptCaching = applyModelAgnosticPromptCache({
           promptCacheEnabled: candidateTarget.promptCacheEnabled,
           promptCacheStrategy: candidateTarget.promptCacheStrategy,

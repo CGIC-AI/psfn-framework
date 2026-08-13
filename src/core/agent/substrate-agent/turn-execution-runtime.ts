@@ -1334,6 +1334,12 @@ export async function handleMessageForTurn(
     }
 
     if (rejectsUnconfirmedToolExecutionClaim({
+      requestText: message.content,
+      activeToolNames: (
+        turnSnapshot.plan?.toolDefinitions
+        ?? turnSnapshot.toolContext?.activeTools
+        ?? []
+      ).map(tool => tool.name),
       responseText: safeResponseText,
       turnMessages,
     })) {

@@ -1,4 +1,4 @@
-const EXPLICIT_TOOL_VERBS = '(?:call|use|invoke|run|execute|trigger)';
+const EXPLICIT_TOOL_VERBS = '(?:call|use|invoke|run|execute|trigger|attempt)';
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');

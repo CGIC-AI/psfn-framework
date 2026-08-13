@@ -224,7 +224,24 @@ export class LLMRequestCapability {
       originStage: correlation?.originStage,
       modelApi: String(model.api),
     });
-    if (toolChoice) requestOptions.toolChoice = toolChoice;
+    if (!toolChoice) return;
+    requestOptions.toolChoice = toolChoice;
+
+    // pi-ai's SimpleStreamOptions contract does not type provider-specific
+    // toolChoice, even though the OpenAI completions adapter currently forwards
+    // it. Inject the provider-native field at the final payload seam as well so
+    // an adapter/model-registry wrapper cannot silently drop a required call.
+    if (String(model.api) === 'openai-completions') {
+      const priorOnPayload = requestOptions.onPayload;
+      requestOptions.onPayload = async (payload, payloadModel) => {
+        const prior = await priorOnPayload?.(payload, payloadModel);
+        const outgoing = prior ?? payload;
+        if (!outgoing || typeof outgoing !== 'object' || Array.isArray(outgoing)) {
+          throw new Error('OpenAI completions payload must be an object before tool choice injection');
+        }
+        return { ...outgoing, tool_choice: toolChoice };
+      };
+    }
   }
 
   resolveRouteKind(candidate: RoutingCandidate): LLMProviderObservability['routeKind'] {

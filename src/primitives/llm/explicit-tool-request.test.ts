@@ -59,6 +59,14 @@ describe('explicit tool request choice', () => {
     })).toEqual({ type: 'function', function: { name: 'notify' } });
   });
 
+  it('treats an instruction to attempt a named tool as an explicit request', () => {
+    expect(resolveExplicitToolChoice({
+      context: context([{ role: 'user', content: 'Attempt notify exactly once.' }]),
+      originStage: 'agent.turn.prompt',
+      modelApi: 'openai-completions',
+    })).toEqual({ type: 'function', function: { name: 'notify' } });
+  });
+
   it('forces each requested tool in order across provider steps', () => {
     expect(resolveExplicitToolChoice({
       context: context([

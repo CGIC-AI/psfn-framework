@@ -64,4 +64,28 @@ describe('normalizeCanonicalModelRegistry endpoint metadata', () => {
     expect(() => normalizeCanonicalModelRegistry(badRouting))
       .toThrow('routing.providerOrder: expected non-empty strings');
   });
+
+  it('requires complete USD rates for every enabled model when budget enforcement is enabled', () => {
+    const incomplete = makeRegistry();
+    incomplete.budgetPolicy = {
+      enabled: true,
+      dailyUsdLimit: 1,
+      monthlyUsdLimit: 10,
+      currency: 'USD',
+    };
+    expect(() => normalizeCanonicalModelRegistry(incomplete))
+      .toThrow('budgetPolicy.enabled requires complete USD cost rates');
+
+    const complete = makeRegistry();
+    complete.budgetPolicy = incomplete.budgetPolicy;
+    const model = (complete.models as Array<Record<string, unknown>>)[0];
+    model.cost = {
+      inputPer1MUsd: 1,
+      outputPer1MUsd: 2,
+      cacheReadPer1MUsd: 0.1,
+      cacheWritePer1MUsd: 1.25,
+      currency: 'USD',
+    };
+    expect(normalizeCanonicalModelRegistry(complete).models[0]?.cost).toEqual(model.cost);
+  });
 });

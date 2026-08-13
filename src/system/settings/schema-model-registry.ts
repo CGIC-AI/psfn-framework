@@ -612,6 +612,22 @@ function normalizeModelRegistryEntry(value: unknown, fieldPath: string): ModelRe
   };
 }
 
+function hasCompleteUsdCostMetadata(entry: ModelRegistryEntry): boolean {
+  const cost = entry.cost;
+  if (!cost) return false;
+  const isRate = (value: unknown): boolean => (
+    typeof value === 'number' && Number.isFinite(value) && value >= 0
+  );
+  const currency = typeof cost.currency === 'string'
+    ? cost.currency.trim().toUpperCase()
+    : 'USD';
+  return currency === 'USD'
+    && isRate(cost.inputPer1MUsd)
+    && isRate(cost.outputPer1MUsd)
+    && isRate(cost.cacheReadPer1MUsd)
+    && isRate(cost.cacheWritePer1MUsd);
+}
+
 export function normalizeCanonicalModelRegistry(
   value: unknown,
   sourcePath = 'modelRegistry',
@@ -642,6 +658,18 @@ export function normalizeCanonicalModelRegistry(
     return normalized;
   });
   backfillPrimaryMemoryPurpose(models);
+
+  if (budgetPolicy?.enabled) {
+    const incompleteModel = models.find(model => (
+      model.enabled !== false && !hasCompleteUsdCostMetadata(model)
+    ));
+    if (incompleteModel) {
+      throw new Error(
+        `Invalid model registry at ${sourcePath}: budgetPolicy.enabled requires complete USD cost rates `
+        + `(inputPer1MUsd, outputPer1MUsd, cacheReadPer1MUsd, cacheWritePer1MUsd) for enabled model "${incompleteModel.id}"`,
+      );
+    }
+  }
 
   const primaryPurposeCounts = new Map<CanonicalModelPurpose, number>(
     CANONICAL_MODEL_PURPOSES.map((purpose) => [purpose, 0]),

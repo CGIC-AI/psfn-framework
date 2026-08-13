@@ -270,6 +270,11 @@ Out of boundary:
 - `charge-policy.json`
 - `backup.json`
 
+When `models.json` enables `budgetPolicy`, every enabled model entry must declare
+complete non-negative USD rates for input, output, cache read, and cache write.
+Startup rejects incomplete pricing rather than admitting calls that the ledger
+cannot settle and then locking the budget on unknown historical cost.
+
 Legacy env values for JSON-owned settings are ignored, and startup hydration migrates or warns on drift where compatibility shims still exist.
 
 ## External MCP Client Contract

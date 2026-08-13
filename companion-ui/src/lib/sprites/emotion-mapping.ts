@@ -186,6 +186,7 @@ export const TOOL_NAME_DOMAIN: Readonly<Record<string, FirstPartyToolDomain>> = 
   identity: 'identity',
   memory: 'memory',
   scratchpad: 'memory',
+  automata_bus: 'memory',
   contact: 'contacts',
   session: 'sessions',
   self_status: 'system',

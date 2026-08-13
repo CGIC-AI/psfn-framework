@@ -41,6 +41,19 @@ export interface OpenAICompatibleEndpointModelConfig {
   thinkingFormat?: 'openai' | 'zai' | 'qwen';
 }
 
+function resolveRoutedThinkingFormat(
+  modelId: string,
+  configured: OpenAICompatibleEndpointModelConfig['thinkingFormat'],
+): OpenAICompatibleEndpointModelConfig['thinkingFormat'] | 'openrouter' {
+  if (configured) return configured;
+  // Routed endpoint model ids use the first path segment as the upstream
+  // protocol owner. Preserve that explicit OpenRouter namespace so pi-ai emits
+  // `reasoning: { effort: "none" }` when thinking is not enabled. Treating the
+  // same id as generic OpenAI omits the off control, and GLM-4.5V defaults to
+  // thinking until it can exhaust the response budget without answer text.
+  return modelId.startsWith('openrouter/') ? 'openrouter' : undefined;
+}
+
 export function resolveRegisteredModel(
   runtime: ModelLookupRuntime,
   provider: string,
@@ -58,6 +71,7 @@ export function createOpenAICompatibleEndpointModel(
   config: OpenAICompatibleEndpointModelConfig,
  ): Model<OpenAICompatibleApi> {
   const routeLabel = config.routeLabel?.trim() || 'routed endpoint';
+  const thinkingFormat = resolveRoutedThinkingFormat(config.modelId, config.thinkingFormat);
   return {
     id: config.modelId,
     name: `${config.modelId} (via ${routeLabel})`,
@@ -77,7 +91,9 @@ export function createOpenAICompatibleEndpointModel(
     compat: {
       supportsStore: false,
       maxTokensField: 'max_tokens',
-      ...(config.reasoning && config.thinkingFormat ? { thinkingFormat: config.thinkingFormat } : {}),
+      ...(config.reasoning && thinkingFormat
+        ? { thinkingFormat }
+        : {}),
     },
   };
 }

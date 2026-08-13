@@ -94,6 +94,18 @@ describe('createOpenAICompatibleEndpointModel', () => {
 
     expect(model.input).toEqual(['text', 'image']);
   });
+
+  it('uses OpenRouter reasoning controls for an OpenRouter-namespaced routed model', () => {
+    const model = createOpenAICompatibleEndpointModel({
+      baseUrl: 'https://router.example.test/v1',
+      modelId: 'openrouter/z-ai/glm-4.5v',
+      provider: 'shared-router',
+      reasoning: true,
+      supportsVision: true,
+    });
+
+    expect(model.compat?.thinkingFormat).toBe('openrouter');
+  });
 });
 
 describe('resolveSystemRoleCapabilityMetadata', () => {

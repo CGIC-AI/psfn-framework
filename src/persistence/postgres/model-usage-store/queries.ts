@@ -6,6 +6,7 @@ import type {
   ModelUsageAttributionCoverage,
   ModelUsageBreakdown,
   ModelUsageBudgetSpendSnapshot,
+  ModelUsageBudgetPricingRate,
   ModelUsageCostHydrationBreakdown,
   ModelUsageCostHydrationData,
   ModelUsageData,
@@ -369,6 +370,7 @@ export class PostgresModelUsageQueries {
   async getModelBudgetSpend(
     nowMs = Date.now(),
     scope?: { companionId: string },
+    pricing: readonly ModelUsageBudgetPricingRate[] = [],
   ): Promise<ModelUsageBudgetSpendSnapshot> {
     await this.waitUntilReady();
     const now = inputNonNegativeInteger(nowMs, 'nowMs');
@@ -388,24 +390,64 @@ export class PostgresModelUsageQueries {
     const month = monthKey(now);
     const dayStartMs = Date.parse(`${day}T00:00:00.000Z`);
     const monthStartMs = Date.UTC(nowDate.getUTCFullYear(), nowDate.getUTCMonth(), 1);
+    const serializedPricing = pricing.map(rate => ({
+      slot_key: rate.slotKey,
+      provider: rate.provider,
+      model: rate.model,
+      input_per_1m_usd: rate.inputPer1MUsd,
+      output_per_1m_usd: rate.outputPer1MUsd,
+      cache_read_per_1m_usd: rate.cacheReadPer1MUsd,
+      cache_write_per_1m_usd: rate.cacheWritePer1MUsd,
+    }));
     const row = await queryOne<BudgetSpendRow>(this.pool, `
+      WITH pricing AS (
+        SELECT *
+        FROM jsonb_to_recordset($5::jsonb) AS rate(
+          slot_key TEXT,
+          provider TEXT,
+          model TEXT,
+          input_per_1m_usd NUMERIC,
+          output_per_1m_usd NUMERIC,
+          cache_read_per_1m_usd NUMERIC,
+          cache_write_per_1m_usd NUMERIC
+        )
+      ), budget_events AS (
+        SELECT
+          event.recorded_at_ms,
+          COALESCE(
+            event.estimated_cost_usd,
+            CASE WHEN event.status = 'success' AND rate.slot_key IS NOT NULL THEN
+              (
+                event.input_tokens * rate.input_per_1m_usd
+                + event.output_tokens * rate.output_per_1m_usd
+                + event.cache_read_tokens * rate.cache_read_per_1m_usd
+                + event.cache_write_tokens * rate.cache_write_per_1m_usd
+              ) / 1000000::NUMERIC
+            END
+          ) AS resolved_estimated_cost_usd
+        FROM model_usage_events AS event
+        LEFT JOIN pricing AS rate
+          ON rate.slot_key = event.slot_key
+          AND rate.provider = event.provider
+          AND rate.model = event.model
+        WHERE event.recorded_at_ms >= $2
+          AND event.recorded_at_ms <= $3
+          AND event.call_kind IN ('chat', 'completion')
+          AND event.companion_id = $4
+      )
       SELECT
-        COALESCE(SUM(estimated_cost_usd) FILTER (
+        COALESCE(SUM(resolved_estimated_cost_usd) FILTER (
           WHERE recorded_at_ms >= $1
         ), 0) AS daily_estimated_cost_usd,
-        COALESCE(SUM(estimated_cost_usd), 0) AS monthly_estimated_cost_usd,
+        COALESCE(SUM(resolved_estimated_cost_usd), 0) AS monthly_estimated_cost_usd,
         COUNT(*) FILTER (
-          WHERE recorded_at_ms >= $1 AND estimated_cost_usd IS NULL
+          WHERE recorded_at_ms >= $1 AND resolved_estimated_cost_usd IS NULL
         ) AS daily_unknown_cost_attempts,
         COUNT(*) FILTER (
-          WHERE estimated_cost_usd IS NULL
+          WHERE resolved_estimated_cost_usd IS NULL
         ) AS monthly_unknown_cost_attempts
-      FROM model_usage_events
-      WHERE recorded_at_ms >= $2
-        AND recorded_at_ms <= $3
-        AND call_kind IN ('chat', 'completion')
-        AND companion_id = $4
-    `, [dayStartMs, monthStartMs, now, budgetCompanionId]);
+      FROM budget_events
+    `, [dayStartMs, monthStartMs, now, budgetCompanionId, JSON.stringify(serializedPricing)]);
     return {
       dayKey: day,
       monthKey: month,

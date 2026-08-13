@@ -20,7 +20,7 @@ export function resolveExplicitToolRequestSequence(
   requestText: string,
   activeToolNames: readonly string[],
 ): string[] {
-  const matches: Array<{ name: string; index: number }> = [];
+  const matches: Array<{ name: string; index: number; repeatCount: number }> = [];
   for (const rawName of activeToolNames) {
     const name = rawName.trim();
     if (!name) continue;
@@ -31,10 +31,17 @@ export function resolveExplicitToolRequestSequence(
     for (const match of requestText.matchAll(pattern)) {
       const prefix = requestText.slice(0, match.index);
       if (/\b(?:do\s+not|don't|never)\s*$/iu.test(prefix)) continue;
-      matches.push({ name, index: match.index });
+      const clauseSuffix = requestText
+        .slice(match.index + match[0].length)
+        .split(/[.;!?]/u, 1)[0] ?? '';
+      matches.push({
+        name,
+        index: match.index,
+        repeatCount: /\b(?:exactly\s+)?twice\b/iu.test(clauseSuffix) ? 2 : 1,
+      });
     }
   }
   return matches
     .sort((left, right) => left.index - right.index || left.name.localeCompare(right.name))
-    .map(match => match.name);
+    .flatMap(match => Array.from({ length: match.repeatCount }, () => match.name));
 }

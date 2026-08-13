@@ -120,6 +120,47 @@ describe('explicit tool request choice', () => {
     })).toBe('none');
   });
 
+  it('expands an exact-twice quantifier into two required calls', () => {
+    const request = 'Use notify to inspect state. Then call north_star with this item exactly twice.';
+    const notifyResult = {
+      role: 'toolResult',
+      toolCallId: 'call-1',
+      toolName: 'notify',
+      content: 'inspected',
+    };
+    const firstNorthStarResult = {
+      role: 'toolResult',
+      toolCallId: 'call-2',
+      toolName: 'north_star',
+      content: 'first',
+    };
+    expect(resolveExplicitToolChoice({
+      context: context([
+        { role: 'user', content: request },
+        notifyResult,
+        firstNorthStarResult,
+      ] as LLMContext['messages']),
+      originStage: 'agent.turn.prompt',
+      modelApi: 'openai-completions',
+    })).toBe('required');
+
+    expect(resolveExplicitToolChoice({
+      context: context([
+        { role: 'user', content: request },
+        notifyResult,
+        firstNorthStarResult,
+        {
+          role: 'toolResult',
+          toolCallId: 'call-3',
+          toolName: 'north_star',
+          content: 'second',
+        },
+      ] as LLMContext['messages']),
+      originStage: 'agent.turn.prompt',
+      modelApi: 'openai-completions',
+    })).toBe('none');
+  });
+
   it('does not turn a negated tool prohibition into a requested sequence step', () => {
     const request = 'Call north_star to append this. Do not call notify or any unrelated tool.';
     expect(resolveExplicitToolChoice({

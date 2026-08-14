@@ -202,6 +202,25 @@ describe('explicit tool request choice', () => {
     })).toEqual({ type: 'function', function: { name: 'memory' } });
   });
 
+  it('preserves ordinally distinct repeated operations when the second omits the action field', () => {
+    const request = 'Use memory with action "write" to store the first item. Call memory to store the second item.';
+    expect(resolveExplicitToolChoice({
+      context: context([
+        { role: 'user', content: request },
+        {
+          role: 'toolResult',
+          toolCallId: 'call-1',
+          toolName: 'memory',
+          content: 'created first',
+          outcome: 'success',
+          isError: false,
+        },
+      ] as LLMContext['messages']),
+      originStage: 'agent.turn.prompt',
+      modelApi: 'openai-completions',
+    })).toEqual({ type: 'function', function: { name: 'memory' } });
+  });
+
   it('does not force an explicitly optional tool suggestion', () => {
     expect(resolveExplicitToolChoice({
       context: context([{
@@ -238,6 +257,42 @@ describe('explicit tool request choice', () => {
       originStage: 'agent.turn.prompt',
       modelApi: 'openai-completions',
     })).toEqual({ type: 'function', function: { name: 'notify' } });
+  });
+
+  it('allows final explanatory prose after policy denies the requested call', () => {
+    expect(resolveExplicitToolChoice({
+      context: context([
+        { role: 'user', content: 'Call notify exactly once.' },
+        {
+          role: 'toolResult',
+          toolCallId: 'call-1',
+          toolName: 'notify',
+          content: 'Denied by policy',
+          outcome: 'policy_denial',
+          isError: true,
+        },
+      ] as LLMContext['messages']),
+      originStage: 'agent.turn.prompt',
+      modelApi: 'openai-completions',
+    })).toBe('none');
+  });
+
+  it('does not force an idempotently skipped duplicate again', () => {
+    expect(resolveExplicitToolChoice({
+      context: context([
+        { role: 'user', content: 'Call notify exactly once.' },
+        {
+          role: 'toolResult',
+          toolCallId: 'call-1',
+          toolName: 'notify',
+          content: 'Skipped duplicate',
+          outcome: 'duplicate_skip',
+          isError: true,
+        },
+      ] as LLMContext['messages']),
+      originStage: 'agent.turn.prompt',
+      modelApi: 'openai-completions',
+    })).toBe('none');
   });
 
   it('retains elided same-tool steps in an explicit action sequence', () => {

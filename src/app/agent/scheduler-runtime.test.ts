@@ -22,6 +22,15 @@ import { registerDurableBackgroundWorkSupervisorTask } from '../../core/agent/ba
 const SRC_DIR = dirname(fileURLToPath(import.meta.url));
 
 describe('agent scheduler runtime wiring', () => {
+  it('wires the core concern worker into the deadline-aware scheduler supervisor', () => {
+    const schedulerSource = readFileSync(join(SRC_DIR, 'scheduler-runtime.ts'), 'utf-8');
+    const mainSource = readFileSync(join(SRC_DIR, 'main.ts'), 'utf-8');
+
+    expect(schedulerSource).toContain('registerConcernReviewSupervisorTask({');
+    expect(schedulerSource).toContain('worker: options.concernReviewWorker');
+    expect(mainSource).toContain('concernReviewWorker: coreRuntime.automatedConcernRuntime.worker');
+  });
+
   it('registers ambient presence on the shared background-maintenance task', () => {
     const source = readFileSync(join(SRC_DIR, 'scheduler-runtime.ts'), 'utf-8');
 

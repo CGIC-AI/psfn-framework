@@ -32,6 +32,10 @@ import {
 } from '../../core/intention/concern-grooming.js';
 import { createDefaultConcernRouteDispatcher } from './concern-route-wiring.js';
 import type { ConcernStorePort } from '../../core/intention/concern-store-port.js';
+import {
+  registerConcernReviewSupervisorTask,
+  type ConcernReviewSupervisorWorkerPort,
+} from '../../core/intention/concern-review-supervisor.js';
 import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
 import {
   SocialGraphBuilderWorker,
@@ -95,6 +99,7 @@ export interface BuildAgentSchedulerRuntimeOptions {
   memoryStore: MemoryStorePort;
   agentLoop: SubstrateAgent;
   concernStore?: ConcernStorePort | null;
+  concernReviewWorker?: ConcernReviewSupervisorWorkerPort | null;
   backupConfig: BackupRuntimeConfig;
   pathSnapshot: RuntimePathSnapshot;
   /** Deployment wiring used only to resolve the optional Kubernetes recovery bundle. */
@@ -383,6 +388,13 @@ export function buildAgentSchedulerRuntime(
     intervalMs: options.schedulerConfig.tickIntervalMs,
     scheduler,
   });
+  if (options.concernReviewWorker) {
+    registerConcernReviewSupervisorTask({
+      scheduler,
+      worker: options.concernReviewWorker,
+      intervalMs: options.schedulerConfig.tickIntervalMs,
+    });
+  }
   if (options.automataReviewer) {
     registerAutomataBusReviewerTask({
       scheduler,

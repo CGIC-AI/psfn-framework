@@ -42,10 +42,34 @@ const EXPLICIT_TEMPORAL_DIRECTIVE_PATTERN = /\b(?:remind(?:\s+me)?|tell\s+me|mak
 const NEGATED_TEMPORAL_DIRECTIVE_PATTERN = /\b(?:do\s+not|don['’]?t|never)\s+(?:remind|tell|follow\s+up|check\s+in|schedule)\b/i;
 const TEMPORAL_REFERENCE_PATTERN = /(?:\b(?:today|tomorrow|next\s+week|sun(?:day)?|mon(?:day)?|tue(?:s|sday)?|wed(?:nesday)?|thu(?:r|rs|rsday)?|fri(?:day)?|sat(?:urday)?)\b|\b\d{4}-\d{2}-\d{2}\b|\bat\s+(?:\d{1,2}(?::\d{2})?|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\b)/i;
 
+export type ConcernTemporalResolution =
+  | {
+    status: 'resolved';
+    dueAt: string;
+    timeZone: string;
+  }
+  | {
+    status: 'needs_clarification';
+    reason: 'unresolved_or_past';
+    timeZone: string;
+  };
+
 export function isExplicitTemporalConcernRequest(text: string): boolean {
   return !NEGATED_TEMPORAL_DIRECTIVE_PATTERN.test(text)
     && EXPLICIT_TEMPORAL_DIRECTIVE_PATTERN.test(text)
     && TEMPORAL_REFERENCE_PATTERN.test(text);
+}
+
+export function resolveConcernTemporalHint(
+  text: string,
+  createdAt: string,
+  timeZone = resolveActiveTimezone(),
+): ConcernTemporalResolution | undefined {
+  if (!isExplicitTemporalConcernRequest(text)) return undefined;
+  const dueAt = deriveConcernDueAtHint(text, createdAt, timeZone);
+  return dueAt
+    ? { status: 'resolved', dueAt, timeZone }
+    : { status: 'needs_clarification', reason: 'unresolved_or_past', timeZone };
 }
 
 export function deriveConcernDueAtHint(

@@ -41,6 +41,9 @@ export function buildDurableCandidateReviewSnapshot(
     conversationContext: candidate.conversationContext,
     relatedMemoryContext: candidate.relatedMemoryContext,
     ...(candidate.turnId ? { turnId: candidate.turnId } : {}),
+    ...(candidate.temporalResolution
+      ? { temporalResolution: candidate.temporalResolution }
+      : {}),
   };
 }
 
@@ -143,6 +146,7 @@ export function parseDurableCandidateReviewSnapshot(
   if (value.turnId !== undefined && typeof value.turnId !== 'string') {
     throw new Error('Durable concern candidate review snapshot turnId is invalid');
   }
+  const temporalResolution = parseTemporalResolution(value.temporalResolution);
   return {
     title: requireBoundedText('title'),
     summary: requireBoundedText('summary'),
@@ -154,5 +158,37 @@ export function parseDurableCandidateReviewSnapshot(
     conversationContext,
     relatedMemoryContext,
     ...(typeof value.turnId === 'string' ? { turnId: value.turnId } : {}),
+    ...(temporalResolution ? { temporalResolution } : {}),
   };
+}
+
+function parseTemporalResolution(
+  value: unknown,
+): ConcernCandidate['temporalResolution'] | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value) || typeof value.timeZone !== 'string' || value.timeZone.trim().length === 0) {
+    throw new Error('Durable concern candidate review snapshot temporalResolution is invalid');
+  }
+  try {
+    void new Intl.DateTimeFormat('en-US', { timeZone: value.timeZone }).format(new Date());
+  } catch {
+    throw new Error('Durable concern candidate review snapshot temporalResolution timezone is invalid');
+  }
+  if (value.status === 'resolved'
+    && typeof value.dueAt === 'string'
+    && Number.isFinite(Date.parse(value.dueAt))) {
+    return {
+      status: 'resolved',
+      dueAt: new Date(Date.parse(value.dueAt)).toISOString(),
+      timeZone: value.timeZone,
+    };
+  }
+  if (value.status === 'needs_clarification' && value.reason === 'unresolved_or_past') {
+    return {
+      status: 'needs_clarification',
+      reason: 'unresolved_or_past',
+      timeZone: value.timeZone,
+    };
+  }
+  throw new Error('Durable concern candidate review snapshot temporalResolution is invalid');
 }

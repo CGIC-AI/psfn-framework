@@ -16,6 +16,7 @@ import type { ConcernStorePort } from './concern-store-port.js';
 import {
   deriveConcernDueAtHint,
   isExplicitTemporalConcernRequest,
+  resolveConcernTemporalHint,
 } from './concern-temporal-hints.js';
 import type {
   ConcernCandidate,
@@ -85,7 +86,13 @@ function buildConcernReviewTurnGate(reviewTurnInterval: number): DeterministicGa
 const CANDIDATE_SIGNAL_PATTERN = /\b(follow\s+up|check\s+in|check\s+on|remind(?:er)?|ask\b.*\blater|tomorrow|next\s+week|due|appointment|deadline|worried|worry|concerned|hasn['’]?t|didn['’]?t)\b/i;
 const POSSIBLE_EXTERNAL_FOLLOW_UP_PATTERN = /\b(follow\s+up|check\s+in|check\s+on|remind|tell\s+me|make\s+sure|don['’]?t\s+let\s+me\s+forget|ask\b.*\blater)\b/i;
 
-export type ConcernCandidateReviewAction = 'create' | 'merge' | 'defer' | 'reject' | 'route';
+export type ConcernCandidateReviewAction =
+  | 'create'
+  | 'merge'
+  | 'defer'
+  | 'clarify'
+  | 'reject'
+  | 'route';
 export type ConcernCandidateRouteTarget = ConcernRouteTarget;
 
 export interface ConcernCandidateReviewDecision {
@@ -118,7 +125,11 @@ export interface ConcernCandidateReviewResult {
 
 export interface ConcernCandidateWorkerRunResult {
   status: 'skipped' | 'started' | 'completed';
-  reason?: 'turn_interval' | 'insufficient_candidates' | 'already_running';
+  reason?:
+    | 'turn_interval'
+    | 'insufficient_candidates'
+    | 'no_temporal_candidates'
+    | 'already_running';
   pendingCount: number;
   reviewedCount?: number;
   outcomes?: ConcernCandidateApplyOutcome[];
@@ -163,6 +174,25 @@ export class ConcernCandidateQueue {
 
   pendingCount(): number {
     return this.pending.length;
+  }
+
+  hasTemporalCandidate(): boolean {
+    return this.pending.some(candidate => (
+      typeof candidate.dueAt === 'string' && Number.isFinite(Date.parse(candidate.dueAt))
+    ) || candidate.temporalResolution?.status === 'needs_clarification');
+  }
+
+  removeByIds(ids: ReadonlySet<string>): number {
+    if (ids.size === 0) return 0;
+    const retained = this.pending.filter(candidate => !ids.has(candidate.id));
+    const removedCount = this.pending.length - retained.length;
+    if (removedCount === 0) return 0;
+    this.pending.splice(0, this.pending.length, ...retained);
+    this.pendingDedupeKeys.clear();
+    for (const candidate of retained) {
+      this.pendingDedupeKeys.add(candidate.dedupeKey);
+    }
+    return removedCount;
   }
 
   drainPending(limit = DEFAULT_MAX_REVIEW_BATCH): ConcernCandidate[] {
@@ -256,7 +286,16 @@ function buildCandidateFromFact(input: {
 }): ConcernCandidate {
   const sourceMessageIds = extractSourceMessageIds(input.fact, input.context.recentEntries);
   const title = buildCandidateTitle(input.fact.text);
-  const dueAt = deriveConcernDueAtHint(input.fact.text, input.createdAt, input.timeZone);
+  const temporalResolution = resolveConcernTemporalHint(
+    input.fact.text,
+    input.createdAt,
+    input.timeZone,
+  );
+  const dueAt = temporalResolution?.status === 'resolved'
+    ? temporalResolution.dueAt
+    : temporalResolution
+      ? undefined
+      : deriveConcernDueAtHint(input.fact.text, input.createdAt, input.timeZone);
   return {
     id: input.id,
     dedupeKey: buildCandidateDedupeKey(input.context.channelId, input.fact.text, sourceMessageIds),
@@ -278,6 +317,7 @@ function buildCandidateFromFact(input: {
     ...(input.context.canonicalContactId ? { contactId: input.context.canonicalContactId } : {}),
     ...(input.context.turnId ? { turnId: input.context.turnId } : {}),
     ...(dueAt ? { dueAt } : {}),
+    ...(temporalResolution ? { temporalResolution } : {}),
     ...(formationVADFromFact(input.fact) ? { formationVAD: formationVADFromFact(input.fact) } : {}),
   };
 }
@@ -293,7 +333,16 @@ function buildCandidateFromMessage(input: {
 }): ConcernCandidate {
   const sourceMessageIds = [input.entry.id];
   const title = buildCandidateTitle(input.entry.content);
-  const dueAt = deriveConcernDueAtHint(input.entry.content, input.createdAt, input.timeZone);
+  const temporalResolution = resolveConcernTemporalHint(
+    input.entry.content,
+    input.createdAt,
+    input.timeZone,
+  );
+  const dueAt = temporalResolution?.status === 'resolved'
+    ? temporalResolution.dueAt
+    : temporalResolution
+      ? undefined
+      : deriveConcernDueAtHint(input.entry.content, input.createdAt, input.timeZone);
   return {
     id: input.id,
     dedupeKey: buildCandidateDedupeKey(input.context.channelId, input.entry.content, sourceMessageIds),
@@ -315,6 +364,7 @@ function buildCandidateFromMessage(input: {
     ...(input.context.canonicalContactId ? { contactId: input.context.canonicalContactId } : {}),
     ...(input.context.turnId ? { turnId: input.context.turnId } : {}),
     ...(dueAt ? { dueAt } : {}),
+    ...(temporalResolution ? { temporalResolution } : {}),
   };
 }
 
@@ -369,14 +419,15 @@ export function buildConcernCandidateReviewPrompt(
     question: 'Is there anything here we should follow up on soon?',
     guidance: [
       'Treat these as soft follow-up candidates for a short-time attention list.',
-      'Use create for a near-term thread, merge when an existing thread fits, defer when more context would help, reject when it is noise, and route when it belongs in a north star, project, reminder, schedule, introspection, or another substrate.',
+      'Use create for a near-term thread, merge when an existing thread fits, defer when more context would help, clarify when a temporal request needs the companion to ask the participant what they meant, reject when it is noise, and route when it belongs in a north star, project, reminder, schedule, introspection, or another substrate.',
+      'A clarify decision preserves an internal thread; it does not write or send the participant-facing question.',
       'Keep some candidates internal-only when external contact is not clearly appropriate.',
       'Selecting an open thread is separate from outbound delivery.',
     ],
     outputShape: {
       decisions: [{
         candidateId: 'candidate id',
-        action: 'create | merge | defer | reject | route',
+        action: 'create | merge | defer | clarify | reject | route',
         reason: 'short rationale',
         priority: 'high | medium | low',
         targetOpenThreadId: 'optional existing open-thread id',
@@ -397,6 +448,7 @@ export function buildConcernCandidateReviewPrompt(
       evidenceRefs: candidate.evidenceRefs,
       conversationContext: candidate.conversationContext,
       relatedMemoryContext: candidate.relatedMemoryContext,
+      temporalResolution: candidate.temporalResolution ?? null,
     })),
   };
   return JSON.stringify(payload, null, 2);
@@ -549,6 +601,25 @@ async function applyConcernCandidateDecision(input: {
       return {
         candidateId: input.candidate.id,
         action: 'defer',
+        status: 'deferred',
+        reason: input.decision.reason,
+      };
+    }
+    case 'clarify': {
+      if (input.candidate.durableConcernId) {
+        await input.concernStore.transitionConcernStatus(input.candidate.durableConcernId, {
+          status: 'deferred',
+          transitionedAt: (input.now?.() ?? new Date()).toISOString(),
+          evidenceRefs: [
+            ...input.candidate.evidenceRefs,
+            { kind: 'runtime', ref: 'concern-candidate-needs-clarification' },
+          ],
+          clearNextReview: true,
+        });
+      }
+      return {
+        candidateId: input.candidate.id,
+        action: 'clarify',
         status: 'deferred',
         reason: input.decision.reason,
       };
@@ -819,20 +890,62 @@ export class ConcernCandidateWorker {
       this.emitGateEvent('skipped', pendingGate.reason, { pendingCount });
       return { status: 'skipped', reason: 'insufficient_candidates', pendingCount };
     }
-    this.emitGateEvent('ran', pendingGate.reason, { pendingCount });
-    this.inFlight = this.runReview()
-      .catch((error): ConcernCandidateWorkerRunResult => {
-        log.warn('Concern candidate review failed', { error: String(error) });
-        return { status: 'completed', pendingCount, reviewedCount: 0, outcomes: [] };
-      })
-      .finally(() => {
-        this.inFlight = null;
+    return this.startReview(pendingCount, pendingGate.reason);
+  }
+
+  reviewTemporalPending(): ConcernCandidateWorkerRunResult {
+    const pendingCount = this.options.queue.pendingCount();
+    if (this.inFlight) {
+      return { status: 'skipped', reason: 'already_running', pendingCount };
+    }
+    if (!this.options.queue.hasTemporalCandidate()) {
+      this.emitGateEvent('skipped', 'no_temporal_candidates', { pendingCount });
+      return { status: 'skipped', reason: 'no_temporal_candidates', pendingCount };
+    }
+    return this.startReview(pendingCount, 'temporal_candidate');
+  }
+
+  async retireStaleCandidates(): Promise<number> {
+    const asOf = this.now();
+    const candidates = await listAllDurableConcernCandidates(this.options.concernStore, {
+      includeExpired: true,
+    });
+    const expired = candidates.filter(candidate => Date.parse(candidate.expiresAt) <= asOf.getTime());
+    const retired: ActiveConcern[] = [];
+    for (const candidate of expired) {
+      const transitioned = await this.options.concernStore.transitionConcernStatus(candidate.id, {
+        status: 'dismissed',
+        transitionedAt: asOf.toISOString(),
+        outcome: 'Expired before concern-candidate review completed.',
+        evidenceRefs: [{ kind: 'runtime', ref: 'concern-review-supervisor-expired' }],
       });
-    return { status: 'started', pendingCount };
+      if (transitioned) retired.push(transitioned);
+    }
+    this.options.queue.removeByIds(new Set(retired.map(concern => concern.id)));
+    return retired.length;
   }
 
   async waitForInFlight(): Promise<ConcernCandidateWorkerRunResult | null> {
     return this.inFlight ?? Promise.resolve(null);
+  }
+
+  private startReview(
+    pendingCount: number,
+    gateReason: string,
+  ): ConcernCandidateWorkerRunResult {
+    this.emitGateEvent('ran', gateReason, { pendingCount });
+    const run = this.runReview().finally(() => {
+      if (this.inFlight === run) {
+        this.inFlight = null;
+      }
+    });
+    this.inFlight = run;
+    void run.catch((error: unknown) => {
+      log.warn('Concern candidate review failed; candidates remain queued for retry', {
+        error: String(error),
+      });
+    });
+    return { status: 'started', pendingCount };
   }
 
   private emitGateEvent(
@@ -1206,6 +1319,7 @@ function normalizeReviewAction(value: unknown): ConcernCandidateReviewAction | u
   return normalized === 'create'
     || normalized === 'merge'
     || normalized === 'defer'
+    || normalized === 'clarify'
     || normalized === 'reject'
     || normalized === 'route'
     ? normalized

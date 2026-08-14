@@ -560,6 +560,41 @@ describe('automated concern candidates', () => {
     ]);
   });
 
+  it('persists unresolved temporal interpretation so it is reviewed for clarification', () => {
+    const [candidate] = deriveConcernCandidatesFromExtraction({
+      now: () => new Date('2026-08-14T15:00:30.000Z'),
+      timeZone: 'America/New_York',
+      idFactory: () => 'candidate-ambiguous',
+      context: {
+        channelId: 'discord:primary',
+        triggerReason: 'response_turn',
+        sourceRef: 'source:ambiguous-temporal-request',
+        recentEntries: [{
+          id: 43,
+          channelId: 'discord:primary',
+          role: 'user',
+          content: 'Remind me sometime today to review the report.',
+          timestamp: Date.parse('2026-08-14T15:00:30.000Z'),
+        }],
+        acceptedFacts: [],
+        acceptedWrites: [],
+        relatedMemories: [],
+      },
+    });
+
+    expect(candidate).toMatchObject({
+      temporalResolution: {
+        status: 'needs_clarification',
+        reason: 'unresolved_or_past',
+        timeZone: 'America/New_York',
+      },
+    });
+    expect(candidate).not.toHaveProperty('dueAt');
+    expect(parseDurableCandidateReviewSnapshot(
+      buildDurableCandidateReviewSnapshot(candidate!),
+    )).toMatchObject({ temporalResolution: candidate!.temporalResolution });
+  });
+
   it('builds a soft review prompt with source conversation and related memories', () => {
     const prompt = buildConcernCandidateReviewPrompt([makeCandidate('a')]);
 
@@ -588,6 +623,20 @@ describe('automated concern candidates', () => {
     }]);
   });
 
+  it('parses clarify as an internal disposition rather than participant-facing prose', () => {
+    expect(parseConcernCandidateReviewResponse(JSON.stringify({
+      decisions: [{
+        candidateId: 'a',
+        action: 'clarify',
+        reason: 'the requested clock is ambiguous',
+      }],
+    }), [makeCandidate('a')])).toEqual([{
+      candidateId: 'a',
+      action: 'clarify',
+      reason: 'the requested clock is ambiguous',
+    }]);
+  });
+
   it('checks every few turns and spends no model call for empty or single-item pipes', () => {
     const complete = vi.fn<LLMProviderPort['complete']>();
     const queue = new ConcernCandidateQueue();
@@ -608,6 +657,131 @@ describe('automated concern candidates', () => {
     expect(worker.notifyTurnCompleted()).toBe(false);
     expect(worker.notifyTurnCompleted()).toBe(false);
     expect(complete).not.toHaveBeenCalled();
+  });
+
+  it('reviews one temporal candidate without another turn or a second candidate', async () => {
+    const complete = vi.fn<LLMProviderPort['complete']>().mockResolvedValue({
+      content: JSON.stringify({
+        decisions: [{
+          candidateId: 'temporal',
+          action: 'clarify',
+          reason: 'the companion should decide how to ask what time was meant',
+        }],
+      }),
+    });
+    const queue = new ConcernCandidateQueue();
+    queue.enqueueMany([{
+      ...makeCandidate('temporal'),
+      temporalResolution: {
+        status: 'needs_clarification',
+        reason: 'unresolved_or_past',
+        timeZone: 'America/New_York',
+      },
+    }]);
+    const worker = new ConcernCandidateWorker({
+      queue,
+      reviewer: new ConcernCandidateReviewer({ complete } as unknown as LLMProviderPort),
+      concernStore: makeConcernStore(),
+    });
+
+    expect(worker.reviewTemporalPending()).toMatchObject({ status: 'started', pendingCount: 1 });
+    await expect(worker.waitForInFlight()).resolves.toMatchObject({
+      status: 'completed',
+      reviewedCount: 1,
+    });
+    expect(complete).toHaveBeenCalledOnce();
+  });
+
+  it('keeps a failed temporal review retryable and surfaces the failure to its supervisor', async () => {
+    const complete = vi.fn<LLMProviderPort['complete']>()
+      .mockRejectedValueOnce(new Error('temporary model outage'))
+      .mockResolvedValueOnce({
+        content: JSON.stringify({
+          decisions: [{ candidateId: 'temporal-retry', action: 'reject', reason: 'reviewed on retry' }],
+        }),
+      });
+    const queue = new ConcernCandidateQueue();
+    queue.enqueueMany([{
+      ...makeCandidate('temporal-retry'),
+      dueAt: '2026-06-29T17:00:00.000Z',
+    }]);
+    const worker = new ConcernCandidateWorker({
+      queue,
+      reviewer: new ConcernCandidateReviewer({ complete } as unknown as LLMProviderPort),
+      concernStore: makeConcernStore(),
+    });
+
+    expect(worker.reviewTemporalPending().status).toBe('started');
+    await expect(worker.waitForInFlight()).rejects.toThrow('temporary model outage');
+    expect(queue.pendingCount()).toBe(1);
+
+    expect(worker.reviewTemporalPending().status).toBe('started');
+    await expect(worker.waitForInFlight()).resolves.toMatchObject({ reviewedCount: 1 });
+    expect(queue.pendingCount()).toBe(0);
+  });
+
+  it('terminalizes and removes a candidate that expired while the process stayed alive', async () => {
+    const concernStore = makeConcernStore();
+    const candidate = {
+      ...makeCandidate('expired-live'),
+      createdAt: '2026-06-29T10:00:00.000Z',
+      dueAt: '2026-06-29T10:30:00.000Z',
+    };
+    const persisted = await concernStore.create({
+      text: candidate.summary,
+      status: 'candidate',
+      createdAt: candidate.createdAt,
+      expiresAt: '2026-06-29T11:00:00.000Z',
+      nextReviewAt: candidate.dueAt,
+      candidateReviewSnapshot: buildDurableCandidateReviewSnapshot(candidate),
+    });
+    const queue = new ConcernCandidateQueue();
+    queue.enqueueMany([{ ...candidate, id: persisted.id, durableConcernId: persisted.id }]);
+    const worker = new ConcernCandidateWorker({
+      queue,
+      reviewer: new ConcernCandidateReviewer({ complete: vi.fn() } as unknown as LLMProviderPort),
+      concernStore,
+      now: () => new Date('2026-06-29T12:00:00.000Z'),
+    });
+
+    await expect(worker.retireStaleCandidates()).resolves.toBe(1);
+    expect(queue.pendingCount()).toBe(0);
+    await expect(concernStore.getById(persisted.id)).resolves.toMatchObject({
+      status: 'dismissed',
+      resolutionOutcome: 'Expired before concern-candidate review completed.',
+      resolutionEvidenceRefs: expect.arrayContaining([
+        { kind: 'runtime', ref: 'concern-review-supervisor-expired' },
+      ]),
+    });
+  });
+
+  it('reviews an overdue candidate instead of confusing its deadline with expiry', async () => {
+    const concernStore = makeConcernStore();
+    const candidate = {
+      ...makeCandidate('overdue-live'),
+      createdAt: '2026-06-29T10:00:00.000Z',
+      dueAt: '2026-06-29T11:00:00.000Z',
+    };
+    const persisted = await concernStore.create({
+      text: candidate.summary,
+      status: 'candidate',
+      createdAt: candidate.createdAt,
+      expiresAt: '2026-06-29T18:00:00.000Z',
+      nextReviewAt: candidate.dueAt,
+      candidateReviewSnapshot: buildDurableCandidateReviewSnapshot(candidate),
+    });
+    const queue = new ConcernCandidateQueue();
+    queue.enqueueMany([{ ...candidate, id: persisted.id, durableConcernId: persisted.id }]);
+    const worker = new ConcernCandidateWorker({
+      queue,
+      reviewer: new ConcernCandidateReviewer({ complete: vi.fn() } as unknown as LLMProviderPort),
+      concernStore,
+      now: () => new Date('2026-06-29T12:00:00.000Z'),
+    });
+
+    await expect(worker.retireStaleCandidates()).resolves.toBe(0);
+    expect(queue.pendingCount()).toBe(1);
+    await expect(concernStore.getById(persisted.id)).resolves.toMatchObject({ status: 'candidate' });
   });
 
   it('emits a typed concern-review gate event on skip and on run (jpvd.4)', () => {
@@ -679,6 +853,42 @@ describe('automated concern candidates', () => {
         { candidateId: 'a', status: 'created' },
         { candidateId: 'b', status: 'rejected' },
       ],
+    });
+  });
+
+  it('keeps clarification as a durable deferred internal thread', async () => {
+    const concernStore = makeConcernStore();
+    const candidate = {
+      ...makeCandidate('clarify-durable'),
+      temporalResolution: {
+        status: 'needs_clarification' as const,
+        reason: 'unresolved_or_past' as const,
+        timeZone: 'America/New_York',
+      },
+    };
+    const persisted = await concernStore.create({
+      text: candidate.summary,
+      status: 'candidate',
+      candidateReviewSnapshot: buildDurableCandidateReviewSnapshot(candidate),
+    });
+
+    await expect(applyConcernCandidateReview({
+      concernStore,
+      candidates: [{ ...candidate, id: persisted.id, durableConcernId: persisted.id }],
+      decisions: [{
+        candidateId: persisted.id,
+        action: 'clarify',
+        reason: 'ask which five o’clock was intended on the next ordinary turn',
+      }],
+    })).resolves.toEqual([expect.objectContaining({
+      action: 'clarify',
+      status: 'deferred',
+    })]);
+    await expect(concernStore.getById(persisted.id)).resolves.toMatchObject({
+      status: 'deferred',
+      evidenceRefs: expect.arrayContaining([
+        { kind: 'runtime', ref: 'concern-candidate-needs-clarification' },
+      ]),
     });
   });
 
@@ -799,7 +1009,7 @@ describe('automated concern candidates', () => {
     });
 
     expect(worker.reviewPending().status).toBe('started');
-    await worker.waitForInFlight();
+    await expect(worker.waitForInFlight()).rejects.toThrow('transient store failure');
 
     // Candidate 'a' was applied before the failure: it must NOT be requeued.
     expect(queue.pendingCount()).toBe(1);

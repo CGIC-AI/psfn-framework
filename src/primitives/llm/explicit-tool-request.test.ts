@@ -192,6 +192,15 @@ describe('explicit tool request choice', () => {
       originStage: 'agent.turn.prompt',
       modelApi: 'openai-completions',
     })).toBeUndefined();
+
+    expect(resolveExplicitToolChoice({
+      context: context([{
+        role: 'user',
+        content: 'Use fs to inspect if needed, then call memory to record the result.',
+      }]),
+      originStage: 'agent.turn.prompt',
+      modelApi: 'openai-completions',
+    })).toEqual({ type: 'function', function: { name: 'memory' } });
   });
 
   it('keeps the current explicit step after tool validation rejects the call', () => {

@@ -841,6 +841,72 @@ describe('createSubstrateStreamFn', () => {
     expect(JSON.stringify(events.at(-1))).toContain('notify');
   });
 
+  it('hard-fails after the one zero-call retry without switching to a fallback model', async () => {
+    const baseConfig = makeConfig();
+    const config = makeConfig({
+      retryMaxAttempts: 0,
+      retryBaseDelayMs: 0,
+      modelRegistry: {
+        ...baseConfig.modelRegistry!,
+        models: [
+          ...baseConfig.modelRegistry!.models,
+          {
+            id: 'chat-fallback',
+            rank: 500,
+            identity: {
+              provider: 'openrouter',
+              model: 'moonshotai/kimi-k2.5',
+              source: { type: 'openrouter' },
+            },
+            purposes: [{ purpose: 'chat', primary: false }],
+            capabilities: { maxOutputTokens: 8192, contextWindow: 128_000 },
+            tuning: { maxOutputTokens: 8192, contextWindow: 128_000 },
+          },
+        ],
+      },
+    });
+    streamAdapterMocks.transportStream.mockImplementation(async (context: LLMContext) => (
+      context.modelHint?.model === 'deepseek/deepseek-v3.2'
+        ? {
+            content: 'Still no tool call.',
+            toolCalls: [],
+            model: 'openrouter/deepseek/deepseek-v3.2',
+            inputTokens: 6,
+            outputTokens: 4,
+            stopReason: 'stop',
+          }
+        : {
+            content: '',
+            toolCalls: [{ id: 'notify-fallback', name: 'notify', input: { message: 'fallback' } }],
+            model: 'openrouter/moonshotai/kimi-k2.5',
+            inputTokens: 7,
+            outputTokens: 4,
+            stopReason: 'toolUse',
+          }
+    ));
+
+    const streamFn = makeStreamFn(config);
+    const stream = await streamFn(resolveModel(config, makeRuntime(), 'chat'), fromAny({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'Call notify now.' }],
+      tools: [{
+        name: 'notify',
+        description: 'Notify the operator.',
+        parameters: Type.Object({ message: Type.String() }),
+      }],
+    }), {});
+
+    await expect(collectStreamEvents(stream as AsyncIterable<unknown>))
+      .rejects.toThrow('expected exactly one "notify" call, received []');
+    expect(streamAdapterMocks.transportStream).toHaveBeenCalledTimes(2);
+    expect(streamAdapterMocks.transportStream.mock.calls.map(
+      call => (call[0] as LLMContext).modelHint?.model,
+    )).toEqual(['deepseek/deepseek-v3.2', 'deepseek/deepseek-v3.2']);
+    expect(streamAdapterMocks.transportStream.mock.calls.map(
+      call => (call[0] as LLMContext).accounting?.attempt,
+    )).toEqual([1, 2]);
+  });
+
   it('retries corrupt empty union-schema arguments at the split-runtime caller boundary', async () => {
     const config = makeConfig({ retryMaxAttempts: 0, retryBaseDelayMs: 0 });
     streamAdapterMocks.transportStream

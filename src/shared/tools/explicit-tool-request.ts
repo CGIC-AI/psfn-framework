@@ -60,6 +60,9 @@ function isSameActionArgumentRestatement(
     return false;
   }
   const currentClause = requestText.slice(current.end).split(/[.;!?]/u, 1)[0] ?? '';
+  if (/\bfirst\b/iu.test(betweenDirectives) && /\bsecond\b/iu.test(currentClause)) {
+    return false;
+  }
   return /\bwith\s+action\s+(?:"[^"]+"|'[^']+'|[\w-]+)/iu.test(betweenDirectives)
     && !/\bwith\s+action\s+(?:"[^"]+"|'[^']+'|[\w-]+)/iu.test(currentClause);
 }

@@ -434,7 +434,7 @@ function executeStreamCandidate(params: ExecuteStreamCandidateParams): AsyncGene
         }
 
         if (isMissingRequiredToolCallError(err)) {
-          throw err;
+          throw new NonRecoverableFallbackError(err);
         }
 
         const canRetry = transportRetryAttempt < maxRetries

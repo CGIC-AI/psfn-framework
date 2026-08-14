@@ -188,7 +188,10 @@ export function resolveExplicitToolContract(input: {
     .filter((message) => {
       if (isHeldToolCallResult(message.details)) return false;
       const outcome = resolveToolCallOutcome(message);
-      return outcome === 'success' || outcome === 'execution_failure';
+      return outcome === 'success'
+        || outcome === 'execution_failure'
+        || outcome === 'policy_denial'
+        || outcome === 'duplicate_skip';
     })
     .map(message => message.toolName);
   let completedSequenceSteps = 0;

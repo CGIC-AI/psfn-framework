@@ -3,6 +3,25 @@ import { createComponentLogger } from '../logger.js';
 const log = createComponentLogger('ActiveTimezone');
 
 const DEFAULT_ACTIVE_TIMEZONE = 'America/New_York';
+const WEEKDAY_INDEX: Readonly<Record<string, number>> = {
+  Sun: 0,
+  Mon: 1,
+  Tue: 2,
+  Wed: 3,
+  Thu: 4,
+  Fri: 5,
+  Sat: 6,
+};
+
+export interface ZonedWallClockParts {
+  year: number;
+  month: number;
+  day: number;
+  hour: number;
+  minute: number;
+  second: number;
+  weekday: number;
+}
 
 // Settings-owned active timezone override. Precedence for resolveActiveTimezone():
 //   settings.json activeTimezone (installed via setActiveTimezone) >
@@ -146,4 +165,67 @@ export function formatActiveWeekdayShort(now: Date): string {
 
 export function formatActiveDateTimeLabel(now: Date): string {
   return `${formatActiveDateTimeCompact(now)} ${resolveActiveTimezone()}`;
+}
+
+/** Return the calendar fields for one instant as observed in an IANA timezone. */
+export function zonedWallClockParts(
+  epochMs: number,
+  timeZone = resolveActiveTimezone(),
+): ZonedWallClockParts {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+      weekday: 'short',
+    })
+      .formatToParts(new Date(epochMs))
+      .filter(part => part.type !== 'literal')
+      .map(part => [part.type, part.value]),
+  );
+  return {
+    year: Number(parts.year),
+    month: Number(parts.month),
+    day: Number(parts.day),
+    hour: Number(parts.hour) % 24,
+    minute: Number(parts.minute),
+    second: Number(parts.second),
+    weekday: WEEKDAY_INDEX[parts.weekday as string] ?? 0,
+  };
+}
+
+function zonedOffsetMs(epochMs: number, timeZone: string): number {
+  const parts = zonedWallClockParts(epochMs, timeZone);
+  return Date.UTC(
+    parts.year,
+    parts.month - 1,
+    parts.day,
+    parts.hour,
+    parts.minute,
+    parts.second,
+  ) - epochMs;
+}
+
+/**
+ * Resolve local calendar fields to an epoch using the timezone's actual offset.
+ * A second lookup refines the result across daylight-saving transitions.
+ */
+export function zonedWallClockToEpoch(
+  timeZone: string,
+  year: number,
+  month: number,
+  day: number,
+  hour: number,
+  minute: number,
+): number {
+  const asUtc = Date.UTC(year, month - 1, day, hour, minute, 0);
+  const offset = zonedOffsetMs(asUtc, timeZone);
+  const epoch = asUtc - offset;
+  const refinedOffset = zonedOffsetMs(epoch, timeZone);
+  return refinedOffset === offset ? epoch : asUtc - refinedOffset;
 }

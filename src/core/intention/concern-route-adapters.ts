@@ -1,6 +1,10 @@
 import type { NorthStarStore } from '../../faculties/north-star/store.js';
 import type { ReflectionJournalStore } from '../../persistence/journals/reflection-journal.js';
+import type { ChannelType } from '../../shared/contracts/runtime.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
+import type { Awaitable } from '../../shared/utils/types.js';
+import type { PendingFollowUpStorePort } from './pending-follow-up-store-port.js';
+import { MAX_SUMMARY_CHARS } from './pending-follow-ups.js';
 import {
   CONCERN_ROUTE_SYSTEM_CHANNEL_ID,
   concernRouteProvenanceRefs,
@@ -10,6 +14,12 @@ import {
 } from './concern-route-handoff.js';
 
 const MAX_ROUTE_TEXT_CHARS = 500;
+
+export interface PendingFollowUpConcernRouteHandlerOptions {
+  pendingFollowUpStore: Pick<PendingFollowUpStorePort, 'enqueue'>;
+  resolveChannelType: (channelId: string) => Awaitable<ChannelType | null>;
+  now?: () => Date;
+}
 
 /**
  * North-star adapter. Routes a durable-priority concern into the north-star
@@ -90,6 +100,65 @@ export function createIntrospectionRouteHandler(
   };
 }
 
+/**
+ * Routes a time-bound concern into the canonical durable pending-follow-up
+ * substrate. The stored text is an internal review nudge: it preserves the
+ * concern and its provenance without deciding or writing an outbound message
+ * on the companion's behalf.
+ */
+export function createPendingFollowUpConcernRouteHandler(
+  options: PendingFollowUpConcernRouteHandlerOptions,
+): ConcernRouteHandler {
+  const now = options.now ?? (() => new Date());
+  return {
+    substrate: 'pending_follow_up',
+    async route(request: ConcernRouteRequest): Promise<ConcernRouteHandlerResult> {
+      const dueAtMs = request.dueAt ? Date.parse(request.dueAt) : Number.NaN;
+      if (!Number.isFinite(dueAtMs) || dueAtMs <= now().getTime()) {
+        return blockedPendingFollowUpRoute('requires a future dueAt');
+      }
+      const channelId = request.channelId?.trim();
+      if (!channelId) {
+        return blockedPendingFollowUpRoute('source channel id is unavailable');
+      }
+
+      try {
+        const channelType = await options.resolveChannelType(channelId);
+        if (!channelType) {
+          return blockedPendingFollowUpRoute('source channel type is unavailable');
+        }
+        const sourceMessageId = request.evidenceRefs
+          .find(ref => ref.kind === 'message' && ref.ref.trim().length > 0)
+          ?.ref.trim();
+        const followUp = await options.pendingFollowUpStore.enqueue({
+          content: buildPendingFollowUpReviewText(request),
+          priority: request.priority,
+          timing: 'scheduled',
+          channelId,
+          channelType,
+          authorId: 'system:intention',
+          authorName: 'Whisper',
+          dueAt: new Date(dueAtMs).toISOString(),
+          ...(request.contactId ? { contactId: request.contactId } : {}),
+          ...(sourceMessageId ? { sourceMessageId } : {}),
+          contextSummary: buildPendingFollowUpContextSummary(request),
+        });
+        if (!followUp) {
+          return blockedPendingFollowUpRoute('pending follow-up backlog is full');
+        }
+        return {
+          disposition: 'routed',
+          substrate: 'pending_follow_up',
+          targetRef: followUp.id,
+          reason: `Created pending follow-up ${followUp.id} for companion review`,
+        };
+      } catch (error) {
+        return blockedPendingFollowUpRoute(`handoff failed (${toErrorMessage(error)})`);
+      }
+    },
+  };
+}
+
 function buildNorthStarTitle(request: ConcernRouteRequest): string {
   const title = compact(request.title, 90);
   return title.length > 0 ? title : compact(request.summary, 90) || 'Routed concern';
@@ -111,6 +180,29 @@ function buildReflectionText(request: ConcernRouteRequest): string {
     request.reason ? `Rationale: ${request.reason}` : '',
   ].filter(part => part.trim().length > 0);
   return compact(parts.join(' '), MAX_ROUTE_TEXT_CHARS) || 'Routed concern retained for durable follow-up.';
+}
+
+function buildPendingFollowUpReviewText(request: ConcernRouteRequest): string {
+  const subject = request.title.trim() || request.summary.trim() || 'untitled concern';
+  return compact(`Time-bound concern ready for review: ${subject}`, MAX_ROUTE_TEXT_CHARS);
+}
+
+function buildPendingFollowUpContextSummary(request: ConcernRouteRequest): string {
+  const provenance = concernRouteProvenanceRefs(request).join(', ');
+  const parts = [
+    request.summary,
+    request.reason ? `Review rationale: ${request.reason}.` : '',
+    provenance ? `Provenance: ${provenance}.` : '',
+  ].filter(part => part.trim().length > 0);
+  return compact(parts.join(' '), MAX_SUMMARY_CHARS);
+}
+
+function blockedPendingFollowUpRoute(reason: string): ConcernRouteHandlerResult {
+  return {
+    disposition: 'blocked',
+    substrate: 'pending_follow_up',
+    reason: `blocked route: ${reason}`,
+  };
 }
 
 function normalizeChannelId(channelId: string | undefined): string {

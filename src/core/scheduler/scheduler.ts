@@ -14,7 +14,11 @@ import type {
 } from './types.js';
 import { DEFAULT_SCHEDULER_CONFIG } from './types.js';
 import { createComponentLogger } from '../../shared/logger.js';
-import { resolveActiveTimezone } from '../../shared/time/active-timezone.js';
+import {
+  resolveActiveTimezone,
+  zonedWallClockParts as zoneWallClockParts,
+  zonedWallClockToEpoch,
+} from '../../shared/time/active-timezone.js';
 import type {
   EligibilityDecision,
   EligibilityGate,
@@ -79,80 +83,6 @@ const DAY_MS = 86_400_000;
 // can never spin into a busy-loop even when a task is already overdue: an overdue
 // task wakes after at most this delay rather than immediately re-arming at 0ms.
 const MIN_WAKE_MS = 50;
-
-const WEEKDAY_INDEX: Record<string, number> = {
-  Sun: 0,
-  Mon: 1,
-  Tue: 2,
-  Wed: 3,
-  Thu: 4,
-  Fri: 5,
-  Sat: 6,
-};
-
-interface ZoneWallClock {
-  year: number;
-  month: number;
-  day: number;
-  hour: number;
-  minute: number;
-  second: number;
-  weekday: number;
-}
-
-// Wall-clock parts for an instant as observed in `timeZone` (DST-aware via Intl).
-function zoneWallClockParts(epochMs: number, timeZone: string): ZoneWallClock {
-  const parts = Object.fromEntries(
-    new Intl.DateTimeFormat('en-US', {
-      timeZone,
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hour12: false,
-      weekday: 'short',
-    })
-      .formatToParts(new Date(epochMs))
-      .filter(part => part.type !== 'literal')
-      .map(part => [part.type, part.value]),
-  );
-  return {
-    year: Number(parts.year),
-    month: Number(parts.month),
-    day: Number(parts.day),
-    hour: Number(parts.hour) % 24,
-    minute: Number(parts.minute),
-    second: Number(parts.second),
-    weekday: WEEKDAY_INDEX[parts.weekday as string] ?? 0,
-  };
-}
-
-// Offset (ms) of `timeZone` at `epochMs`: (wall-clock-as-if-UTC) − epoch.
-function zoneOffsetMs(epochMs: number, timeZone: string): number {
-  const p = zoneWallClockParts(epochMs, timeZone);
-  const asUtc = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second);
-  return asUtc - epochMs;
-}
-
-// Epoch ms for a wall-clock time in `timeZone`. The second offset lookup refines
-// the guess across DST transitions; nonexistent spring-forward wall times resolve
-// deterministically to the pre-transition offset instant.
-function zonedWallClockToEpoch(
-  timeZone: string,
-  year: number,
-  month: number,
-  day: number,
-  hour: number,
-  minute: number,
-): number {
-  const asUtc = Date.UTC(year, month - 1, day, hour, minute, 0);
-  const offset = zoneOffsetMs(asUtc, timeZone);
-  const epoch = asUtc - offset;
-  const refinedOffset = zoneOffsetMs(epoch, timeZone);
-  return refinedOffset === offset ? epoch : asUtc - refinedOffset;
-}
 
 // Wall-clock slot boundaries computed in the active timezone (or UTC), using Intl
 // rather than process-local Date math so the slot is correct regardless of the

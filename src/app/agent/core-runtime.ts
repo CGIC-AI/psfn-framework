@@ -952,6 +952,8 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   const concernRouteDispatcher = createDefaultConcernRouteDispatcher({
     companionDataDir: pathSnapshot.companionDataDir,
     eventBus,
+    pendingFollowUpStore: intentionRuntime.pendingFollowUpStore,
+    sessionActivity: sessionManager,
   });
   const automatedConcernRuntime = await createAutomatedConcernRuntime({
     eventBus,

@@ -64,7 +64,8 @@ function isSameActionArgumentRestatement(
     return false;
   }
   return /\bwith\s+action\s+(?:"[^"]+"|'[^']+'|[\w-]+)/iu.test(betweenDirectives)
-    && !/\bwith\s+action\s+(?:"[^"]+"|'[^']+'|[\w-]+)/iu.test(currentClause);
+    && !/\bwith\s+action\s+(?:"[^"]+"|'[^']+'|[\w-]+)/iu.test(currentClause)
+    && /\b(?:the\s+)?(?:same|exact)\s+[\p{L}\p{N}_-]+\b|\b(?:it|that)\b/iu.test(currentClause);
 }
 
 /**

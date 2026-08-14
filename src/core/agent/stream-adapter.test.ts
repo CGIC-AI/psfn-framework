@@ -907,6 +907,36 @@ describe('createSubstrateStreamFn', () => {
     )).toEqual([1, 2]);
   });
 
+  it.each(['error', 'aborted'] as const)(
+    'preserves a terminal %s response instead of retrying it as a missing tool call',
+    async (stopReason) => {
+      const config = makeConfig({ retryMaxAttempts: 2, retryBaseDelayMs: 0 });
+      streamAdapterMocks.transportStream.mockResolvedValue({
+        content: '',
+        toolCalls: [],
+        model: 'openrouter/deepseek/deepseek-v3.2',
+        inputTokens: 6,
+        outputTokens: 0,
+        stopReason,
+      });
+
+      const streamFn = makeStreamFn(config);
+      const stream = await streamFn(resolveModel(config, makeRuntime(), 'chat'), fromAny({
+        systemPrompt: 'System',
+        messages: [{ role: 'user', content: 'Call notify now.' }],
+        tools: [{
+          name: 'notify',
+          description: 'Notify the operator.',
+          parameters: Type.Object({ message: Type.String() }),
+        }],
+      }), {});
+
+      await expect(collectStreamEvents(stream as AsyncIterable<unknown>))
+        .rejects.toThrow('LLM request failed for openrouter/deepseek/deepseek-v3.2');
+      expect(streamAdapterMocks.transportStream).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it('retries corrupt empty union-schema arguments at the split-runtime caller boundary', async () => {
     const config = makeConfig({ retryMaxAttempts: 0, retryBaseDelayMs: 0 });
     streamAdapterMocks.transportStream

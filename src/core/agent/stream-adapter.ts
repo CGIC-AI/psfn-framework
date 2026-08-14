@@ -341,6 +341,7 @@ function executeStreamCandidate(params: ExecuteStreamCandidateParams): AsyncGene
           }
 
           if (event.type === 'done') {
+            assertTerminalDidNotFail(event.message, candidate);
             const terminalToolCalls = extractToolCallsFromContentBlocks(event.message.content);
             try {
               assertExplicitToolContractSatisfied({
@@ -364,7 +365,7 @@ function executeStreamCandidate(params: ExecuteStreamCandidateParams): AsyncGene
               }
               throw error;
             }
-            assertValidTerminalAssistantMessage(event.message, candidate);
+            assertTerminalHasUsableContent(event.message, candidate);
             const corruptEmptyCalls = findCorruptEmptyToolCalls(
               terminalToolCalls,
               normalizedTools,
@@ -1212,15 +1213,10 @@ function shouldCommitBufferedEvent(event: AssistantMessageEvent): boolean {
     && event.type !== 'thinking_start';
 }
 
-function assertValidTerminalAssistantMessage(
+function assertTerminalHasUsableContent(
   message: AssistantMessage,
   candidate: RoutingCandidate,
 ): void {
-  const stopReason = message.stopReason;
-  if (stopReason === 'error' || stopReason === 'aborted') {
-    throw new Error(message.errorMessage ?? `LLM request failed for ${candidate.provider}/${candidate.model}`);
-  }
-
   const hasText = message.content.some((entry) => (
     entry.type === 'text' && entry.text.trim().length > 0
   ));
@@ -1233,6 +1229,16 @@ function assertValidTerminalAssistantMessage(
       message.errorMessage
       ?? `LLM response from ${candidate.provider}/${candidate.model} contained no text or tool calls`,
     );
+  }
+}
+
+function assertTerminalDidNotFail(
+  message: AssistantMessage,
+  candidate: RoutingCandidate,
+): void {
+  const stopReason = message.stopReason;
+  if (stopReason === 'error' || stopReason === 'aborted') {
+    throw new Error(message.errorMessage ?? `LLM request failed for ${candidate.provider}/${candidate.model}`);
   }
 }
 

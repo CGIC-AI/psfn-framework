@@ -164,7 +164,7 @@ describe('explicit tool request choice', () => {
     })).toBe('none');
   });
 
-  it('preserves repeated imperatives even when the second supplies more arguments', () => {
+  it('collapses a same-action argument restatement into one execution step', () => {
     const request = 'Use memory with action "write" to store this exact secret. Call memory with text set to the exact secret, type "semantic", and sensitivity "personal".';
     expect(resolveExplicitToolChoice({
       context: context([
@@ -174,6 +174,25 @@ describe('explicit tool request choice', () => {
           toolCallId: 'call-1',
           toolName: 'memory',
           content: 'created',
+          outcome: 'success',
+          isError: false,
+        },
+      ] as LLMContext['messages']),
+      originStage: 'agent.turn.prompt',
+      modelApi: 'openai-completions',
+    })).toBe('none');
+  });
+
+  it('preserves distinct repeated operations when each directive declares the action', () => {
+    const request = 'Use memory with action "write" to store the first item. Call memory with action "write" to store the second item.';
+    expect(resolveExplicitToolChoice({
+      context: context([
+        { role: 'user', content: request },
+        {
+          role: 'toolResult',
+          toolCallId: 'call-1',
+          toolName: 'memory',
+          content: 'created first',
           outcome: 'success',
           isError: false,
         },

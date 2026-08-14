@@ -79,6 +79,7 @@ export interface RunLLMStreamAttemptInput {
   requestedModel: string;
   providerObservability: LLMProviderObservability;
   correlation: ResolvedCorrelationMetadata | undefined;
+  deferMissingRequiredToolCall?: boolean;
   reserveCost: () => Promise<void>;
   recordUsage: (record: StreamUsageRecord) => Promise<void>;
   throwIfAborted: () => void;
@@ -315,6 +316,7 @@ export async function runLLMStreamAttempt(
           ? { requiredToolName: input.requestOptions.requiredToolName }
           : {}),
         toolCalls: response.toolCalls,
+        ...(input.deferMissingRequiredToolCall ? { deferMissingRequiredCall: true } : {}),
       });
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));

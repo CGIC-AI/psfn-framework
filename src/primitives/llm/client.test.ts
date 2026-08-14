@@ -2521,6 +2521,42 @@ describe('LLMClient completion model hints', () => {
     expect(mocks.streamSimple).toHaveBeenCalledTimes(2);
   });
 
+  it('defers a missing required call to the split-runtime retry owner', async () => {
+    const client = new LLMClient(makeConfig({ openRouterApiBaseUrl: 'http://litellm.test/v1' }));
+    mocks.streamSimple.mockImplementation(async function* ignoresRequiredTool() {
+      yield {
+        type: 'done',
+        message: {
+          model: 'z-ai/glm-5',
+          usage: { input: 8, output: 4 },
+          content: [{ type: 'text', text: 'I did it.' }],
+        },
+        reason: 'stop',
+      };
+    });
+
+    await expect(client.stream({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'Call notify exactly once.' }],
+      tools: [{ name: 'notify', description: 'Notify', inputSchema: { type: 'object' } }],
+      correlation: {
+        turnId: 'turn-required-tool-contract-caller',
+        requestId: 'request-required-tool-contract-caller',
+        channelId: 'api:testing-harness',
+        callType: 'chat',
+        originType: 'chat',
+        originStage: 'agent.turn.prompt',
+      },
+      accounting: {
+        logicalCallId: 'llm:required-tool-contract-caller',
+        attempt: 1,
+        retryOwner: 'caller',
+      },
+    })).resolves.toMatchObject({ toolCalls: [] });
+
+    expect(mocks.streamSimple).toHaveBeenCalledTimes(1);
+  });
+
   it('executes only the first call when a provider fans out the required tool', async () => {
     const client = new LLMClient(makeConfig({ openRouterApiBaseUrl: 'http://litellm.test/v1' }));
     mocks.streamSimple.mockImplementation(async function* fansOutRequiredTool() {

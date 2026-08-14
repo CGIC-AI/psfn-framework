@@ -125,6 +125,7 @@ export function selectExplicitToolContractCall<T extends { name: string }>(input
   choice: ExplicitToolChoice | undefined;
   requiredToolName?: string;
   toolCalls: readonly T[];
+  deferMissingRequiredCall?: boolean;
 }): T[] {
   if (!input.choice) return [...input.toolCalls];
   if (input.choice === 'none') {
@@ -146,6 +147,7 @@ export function selectExplicitToolContractCall<T extends { name: string }>(input
     return first ? [first] : [];
   }
   if (expectedName && input.toolCalls.length === 0) {
+    if (input.deferMissingRequiredCall) return [];
     throw new ExplicitToolContractError(
       `Provider violated explicit tool contract: expected exactly one ${JSON.stringify(expectedName)} call, received []`,
       'missing_required_call',

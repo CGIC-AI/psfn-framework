@@ -270,6 +270,15 @@ export class LLMRequestCapability {
             `OpenAI completions payload is missing required tool ${JSON.stringify(requestOptions.requiredToolName)}`,
           );
         }
+        if (directZai && toolChoice === 'none') {
+          const {
+            tools: _tools,
+            tool_choice: _toolChoice,
+            parallel_tool_calls: _parallelToolCalls,
+            ...payloadWithoutTools
+          } = outgoingRecord;
+          return payloadWithoutTools;
+        }
         return {
           ...outgoing,
           ...(tools !== undefined ? { tools } : {}),

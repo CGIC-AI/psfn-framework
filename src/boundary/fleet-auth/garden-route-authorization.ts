@@ -551,6 +551,7 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
   {
     action: 'autonomy.manage', area: 'autonomy', routeIds: ids('POST', [
       '/api/admin/icp-autonomy/do-not-disturb', '/api/admin/icp-autonomy/emergency-disable',
+      '/api/admin/icp-autonomy/test-initiations',
       '/api/admin/icp-autonomy/candidates/:candidateId/cancel',
     ]), confirmation: 'explicit',
   },

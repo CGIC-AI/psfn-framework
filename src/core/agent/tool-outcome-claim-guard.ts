@@ -106,7 +106,12 @@ export function rejectsUnconfirmedToolExecutionClaim(input: {
     for (const requestedToolName of explicitlyRequestedToolSequence) {
       while (
         observedIndex < observedToolOutcomes.length
-        && observedToolOutcomes[observedIndex]?.toolName !== requestedToolName
+        && (
+          observedToolOutcomes[observedIndex]?.toolName !== requestedToolName
+          || !['success', 'execution_failure'].includes(
+            observedToolOutcomes[observedIndex]?.outcome ?? '',
+          )
+        )
       ) {
         observedIndex += 1;
       }

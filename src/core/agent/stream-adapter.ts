@@ -58,9 +58,31 @@ import { isRecord } from '../../shared/utils/types.js';
 import type { LLMProviderStreamOptions } from './contracts.js';
 import type { ProviderRuntime } from '../../primitives/llm/provider-runtime.js';
 import { resolveExplicitToolRequestSequence } from '../../shared/tools/explicit-tool-request.js';
+import {
+  MAX_EMPTY_TOOL_ARGS_COMPLETION_RETRIES,
+} from '../../primitives/llm/empty-tool-argument-retry.js';
+import {
+  extractToolCallsFromContentBlocks,
+  findCorruptEmptyToolCalls,
+} from '../../primitives/llm/client-response-helpers.js';
+import {
+  assertExplicitToolContractSatisfied,
+  isMissingRequiredToolCallError,
+  resolveExplicitToolContract,
+} from '../../primitives/llm/explicit-tool-request.js';
 
 const log = createComponentLogger('StreamAdapter');
 const FULL_KNOB_PASSTHROUGH_PROVIDERS = new Set(['openrouter', 'local_endpoint']);
+
+class SemanticToolRetrySignal extends Error {
+  constructor(
+    readonly reason: 'missing_required_call' | 'corrupt_empty_arguments',
+    readonly toolNames: readonly string[],
+  ) {
+    super(`Retry required for ${reason}: ${toolNames.join(', ')}`);
+    this.name = 'SemanticToolRetrySignal';
+  }
+}
 
 export interface StreamTerminalFailureEvent {
   purpose: RoutingPurpose;
@@ -266,9 +288,23 @@ function executeStreamCandidate(params: ExecuteStreamCandidateParams): AsyncGene
     ? Math.max(0, Math.floor(retryConfig.baseDelayMs!))
     : DEFAULT_BASE_DELAY_MS;
   const holdEventsUntilTerminal = hasExplicitToolExecutionRequest(params.context);
+  const normalizedTools = normalizeTransportTools((params.context as { tools?: unknown }).tools);
+  const explicitToolContract = holdEventsUntilTerminal
+    ? resolveExplicitToolContract({
+        context: {
+          ...(params.context as LLMContext),
+          ...(normalizedTools ? { tools: normalizedTools } : {}),
+        },
+        originStage: 'agent.turn.prompt',
+        modelApi: String((params.model as { api?: unknown }).api ?? ''),
+      })
+    : undefined;
 
   return (async function* executeWithRetry() {
-    for (let retryAttempt = 0; ; retryAttempt += 1) {
+    let transportRetryAttempt = 0;
+    let missingRequiredCallRetries = 0;
+    let corruptEmptyArgumentRetries = 0;
+    for (;;) {
       let committed = false;
       const bufferedEvents: AssistantMessageEvent[] = [];
 
@@ -306,6 +342,43 @@ function executeStreamCandidate(params: ExecuteStreamCandidateParams): AsyncGene
 
           if (event.type === 'done') {
             assertValidTerminalAssistantMessage(event.message, candidate);
+            const terminalToolCalls = extractToolCallsFromContentBlocks(event.message.content);
+            try {
+              assertExplicitToolContractSatisfied({
+                choice: explicitToolContract?.choice,
+                ...(explicitToolContract?.requiredToolName
+                  ? { requiredToolName: explicitToolContract.requiredToolName }
+                  : {}),
+                toolCalls: terminalToolCalls,
+              });
+            } catch (error) {
+              if (
+                isMissingRequiredToolCallError(error)
+                && missingRequiredCallRetries < 1
+                && explicitToolContract?.requiredToolName
+              ) {
+                missingRequiredCallRetries += 1;
+                throw new SemanticToolRetrySignal(
+                  'missing_required_call',
+                  [explicitToolContract.requiredToolName],
+                );
+              }
+              throw error;
+            }
+            const corruptEmptyCalls = findCorruptEmptyToolCalls(
+              terminalToolCalls,
+              normalizedTools,
+            );
+            if (
+              corruptEmptyCalls.length > 0
+              && corruptEmptyArgumentRetries < MAX_EMPTY_TOOL_ARGS_COMPLETION_RETRIES
+            ) {
+              corruptEmptyArgumentRetries += 1;
+              throw new SemanticToolRetrySignal(
+                'corrupt_empty_arguments',
+                corruptEmptyCalls.map(call => call.name),
+              );
+            }
             if (!committed) {
               committed = true;
               for (const bufferedEvent of bufferedEvents) {
@@ -346,16 +419,36 @@ function executeStreamCandidate(params: ExecuteStreamCandidateParams): AsyncGene
           throw explicitNonRecoverable ? error : new NonRecoverableFallbackError(err);
         }
 
-        const canRetry = retryAttempt < maxRetries && isRetryableError(err, retryConfig.retryableErrors);
+        if (error instanceof SemanticToolRetrySignal) {
+          log.warn('LLM semantic tool response failed, retrying at caller boundary', {
+            model: String(params.model.id),
+            provider: candidate.provider,
+            reason: error.reason,
+            toolNames: error.toolNames,
+            missingRequiredCallRetries,
+            corruptEmptyArgumentRetries,
+            purpose: params.purpose,
+            ...params.correlationFields,
+          });
+          continue;
+        }
+
+        if (isMissingRequiredToolCallError(err)) {
+          throw err;
+        }
+
+        const canRetry = transportRetryAttempt < maxRetries
+          && isRetryableError(err, retryConfig.retryableErrors);
         if (!canRetry) {
           throw err;
         }
 
-        const delayMs = baseDelayMs * (2 ** retryAttempt);
+        const delayMs = baseDelayMs * (2 ** transportRetryAttempt);
+        transportRetryAttempt += 1;
         log.warn('LLM stream failed, retrying', {
           model: String(params.model.id),
           provider: candidate.provider,
-          attempt: retryAttempt + 1,
+          attempt: transportRetryAttempt,
           maxRetries,
           delayMs,
           error: err.message,

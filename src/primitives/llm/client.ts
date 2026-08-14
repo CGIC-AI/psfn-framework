@@ -964,6 +964,9 @@ export class LLMClient {
                   requestedModel: requestedModel ?? candidateTarget.model,
                   providerObservability,
                   correlation,
+                  ...(externalAccounting?.retryOwner === 'caller'
+                    ? { deferMissingRequiredToolCall: true }
+                    : {}),
                   reserveCost: async () => await this.reserveIcpConversationCost(
                     streamRoutingPurpose,
                     candidateTarget,

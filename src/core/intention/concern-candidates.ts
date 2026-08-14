@@ -13,6 +13,10 @@ import {
   type DeterministicGateDefinition,
 } from '../../shared/gating/deterministic-gate.js';
 import type { ConcernStorePort } from './concern-store-port.js';
+import {
+  deriveConcernDueAtHint,
+  isExplicitTemporalConcernRequest,
+} from './concern-temporal-hints.js';
 import type {
   ConcernCandidate,
   IntentionConcernCandidateExtractionContext,
@@ -79,9 +83,7 @@ function buildConcernReviewTurnGate(reviewTurnInterval: number): DeterministicGa
   };
 }
 const CANDIDATE_SIGNAL_PATTERN = /\b(follow\s+up|check\s+in|check\s+on|remind(?:er)?|ask\b.*\blater|tomorrow|next\s+week|due|appointment|deadline|worried|worry|concerned|hasn['’]?t|didn['’]?t)\b/i;
-const POSSIBLE_EXTERNAL_FOLLOW_UP_PATTERN = /\b(follow\s+up|check\s+in|check\s+on|remind|ask\b.*\blater)\b/i;
-const TOMORROW_FOLLOW_UP_DELAY_MS = 24 * 60 * 60 * 1000;
-const NEXT_WEEK_FOLLOW_UP_DELAY_MS = 7 * 24 * 60 * 60 * 1000;
+const POSSIBLE_EXTERNAL_FOLLOW_UP_PATTERN = /\b(follow\s+up|check\s+in|check\s+on|remind|tell\s+me|make\s+sure|don['’]?t\s+let\s+me\s+forget|ask\b.*\blater)\b/i;
 
 export type ConcernCandidateReviewAction = 'create' | 'merge' | 'defer' | 'reject' | 'route';
 export type ConcernCandidateRouteTarget = ConcernRouteTarget;
@@ -186,6 +188,7 @@ export interface DeriveConcernCandidatesOptions {
   context: IntentionConcernCandidateExtractionContext;
   idFactory?: () => string;
   now?: () => Date;
+  timeZone?: string;
 }
 
 export function deriveConcernCandidatesFromExtraction(
@@ -208,7 +211,7 @@ export function deriveConcernCandidatesFromExtraction(
     }));
 
   const factCandidates = context.acceptedFacts
-    .filter(fact => CANDIDATE_SIGNAL_PATTERN.test(fact.text))
+    .filter(fact => hasConcernCandidateSignal(fact.text))
     .slice(0, DEFAULT_MAX_REVIEW_BATCH)
     .map(fact => buildCandidateFromFact({
       fact,
@@ -217,6 +220,7 @@ export function deriveConcernCandidatesFromExtraction(
       relatedMemoryContext,
       id: idFactory(),
       createdAt: now().toISOString(),
+      ...(options.timeZone ? { timeZone: options.timeZone } : {}),
     }));
 
   if (factCandidates.length > 0) {
@@ -225,7 +229,7 @@ export function deriveConcernCandidatesFromExtraction(
 
   const transcriptSignal = [...context.recentEntries]
     .reverse()
-    .find(entry => entry.role !== 'assistant' && CANDIDATE_SIGNAL_PATTERN.test(entry.content));
+    .find(entry => entry.role !== 'assistant' && hasConcernCandidateSignal(entry.content));
   if (!transcriptSignal) {
     return [];
   }
@@ -237,6 +241,7 @@ export function deriveConcernCandidatesFromExtraction(
     relatedMemoryContext,
     id: idFactory(),
     createdAt: now().toISOString(),
+    ...(options.timeZone ? { timeZone: options.timeZone } : {}),
   })];
 }
 
@@ -247,10 +252,11 @@ function buildCandidateFromFact(input: {
   relatedMemoryContext: ConcernCandidateMemoryContext[];
   id: string;
   createdAt: string;
+  timeZone?: string;
 }): ConcernCandidate {
   const sourceMessageIds = extractSourceMessageIds(input.fact, input.context.recentEntries);
   const title = buildCandidateTitle(input.fact.text);
-  const dueAt = deriveDueAtHint(input.fact.text, input.createdAt);
+  const dueAt = deriveConcernDueAtHint(input.fact.text, input.createdAt, input.timeZone);
   return {
     id: input.id,
     dedupeKey: buildCandidateDedupeKey(input.context.channelId, input.fact.text, sourceMessageIds),
@@ -283,10 +289,11 @@ function buildCandidateFromMessage(input: {
   relatedMemoryContext: ConcernCandidateMemoryContext[];
   id: string;
   createdAt: string;
+  timeZone?: string;
 }): ConcernCandidate {
   const sourceMessageIds = [input.entry.id];
   const title = buildCandidateTitle(input.entry.content);
-  const dueAt = deriveDueAtHint(input.entry.content, input.createdAt);
+  const dueAt = deriveConcernDueAtHint(input.entry.content, input.createdAt, input.timeZone);
   return {
     id: input.id,
     dedupeKey: buildCandidateDedupeKey(input.context.channelId, input.entry.content, sourceMessageIds),
@@ -1101,7 +1108,7 @@ function extractSourceMessageIds(
   }
   const matched = [...entries]
     .reverse()
-    .find(entry => entry.role !== 'assistant' && CANDIDATE_SIGNAL_PATTERN.test(entry.content));
+    .find(entry => entry.role !== 'assistant' && hasConcernCandidateSignal(entry.content));
   return matched ? [matched.id] : [];
 }
 
@@ -1135,16 +1142,8 @@ function formationVADFromFact(fact: ExtractedFact): ActiveConcernVAD | undefined
   };
 }
 
-function deriveDueAtHint(text: string, createdAt: string): string | undefined {
-  const baseMs = Date.parse(createdAt);
-  if (!Number.isFinite(baseMs)) return undefined;
-  if (/\btomorrow\b/i.test(text)) {
-    return new Date(baseMs + TOMORROW_FOLLOW_UP_DELAY_MS).toISOString();
-  }
-  if (/\bnext\s+week\b/i.test(text)) {
-    return new Date(baseMs + NEXT_WEEK_FOLLOW_UP_DELAY_MS).toISOString();
-  }
-  return undefined;
+function hasConcernCandidateSignal(text: string): boolean {
+  return CANDIDATE_SIGNAL_PATTERN.test(text) || isExplicitTemporalConcernRequest(text);
 }
 
 function buildCandidateTitle(text: string): string {

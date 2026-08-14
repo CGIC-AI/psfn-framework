@@ -514,6 +514,52 @@ describe('automated concern candidates', () => {
     expect(candidates[0]?.relatedMemoryContext[0]?.text).toContain('appointment');
   });
 
+  it.each([
+    [
+      'At five o’clock today, tell me to submit the backup report.',
+      '2026-08-14T21:00:00.000Z',
+    ],
+    [
+      'At 9 AM Tuesday, remind me to call the clinic.',
+      '2026-08-18T13:00:00.000Z',
+    ],
+    [
+      'On 2026-08-20 at 14:30, remind me to review the release notes.',
+      '2026-08-20T18:30:00.000Z',
+    ],
+  ])('turns an explicit temporal request into a dated concern candidate: %s', (content, dueAt) => {
+    const candidates = deriveConcernCandidatesFromExtraction({
+      now: () => new Date('2026-08-14T15:00:00.000Z'),
+      timeZone: 'America/New_York',
+      idFactory: () => 'candidate-temporal',
+      context: {
+        channelId: 'discord:primary',
+        triggerReason: 'response_turn',
+        canonicalContactId: 'contact-a',
+        sourceRef: 'source:temporal-request',
+        recentEntries: [{
+          id: 42,
+          channelId: 'discord:primary',
+          role: 'user',
+          content,
+          timestamp: Date.parse('2026-08-14T15:00:00.000Z'),
+        }],
+        acceptedFacts: [],
+        acceptedWrites: [],
+        relatedMemories: [],
+      },
+    });
+
+    expect(candidates).toEqual([
+      expect.objectContaining({
+        id: 'candidate-temporal',
+        followUpHint: 'possible_follow_up',
+        dueAt,
+        sourceMessageIds: [42],
+      }),
+    ]);
+  });
+
   it('builds a soft review prompt with source conversation and related memories', () => {
     const prompt = buildConcernCandidateReviewPrompt([makeCandidate('a')]);
 

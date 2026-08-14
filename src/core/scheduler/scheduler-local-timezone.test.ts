@@ -3,7 +3,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 // The active timezone is mocked to America/New_York while the process TZ is
 // pinned to UTC below. This proves getCurrentSlotStart computes wall-clock slots
 // in the active timezone via Intl, independent of the process-local TZ.
-vi.mock('../../shared/time/active-timezone.js', () => ({
+vi.mock('../../shared/time/active-timezone.js', async importOriginal => ({
+  ...await importOriginal<typeof import('../../shared/time/active-timezone.js')>(),
   resolveActiveTimezone: () => 'America/New_York',
 }));
 

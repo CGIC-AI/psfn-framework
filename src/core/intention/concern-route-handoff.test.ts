@@ -16,6 +16,7 @@ import {
 import {
   createIntrospectionRouteHandler,
   createNorthStarRouteHandler,
+  createPendingFollowUpConcernRouteHandler,
 } from './concern-route-adapters.js';
 
 const tempDirs: string[] = [];
@@ -214,6 +215,77 @@ describe('introspection route adapter', () => {
     const result = handler.route(request);
     expect(result.disposition).toBe('routed');
     expect(store.listRecent({ limit: 1 })[0]?.channelId).toBe('system:intention');
+  });
+});
+
+describe('pending-follow-up concern route adapter', () => {
+  it('persists a due reminder as an internal review nudge without authoring an outbound message', async () => {
+    const now = new Date('2026-06-29T12:00:00.000Z');
+    const pendingFollowUpStore = createTestPostgresIntentionPorts({
+      now: () => now,
+      idFactory: () => 'follow-up-1',
+    }).ports.pendingFollowUpStore;
+    const handler = createPendingFollowUpConcernRouteHandler({
+      pendingFollowUpStore,
+      resolveChannelType: channelId => channelId === 'discord:group-1' ? 'discord' : null,
+      now: () => now,
+    });
+
+    const result = await handler.route(makeRequest({
+      target: 'reminder',
+      dueAt: '2026-06-29T17:00:00.000Z',
+    }));
+
+    expect(result).toEqual({
+      disposition: 'routed',
+      substrate: 'pending_follow_up',
+      targetRef: 'follow-up-1',
+      reason: 'Created pending follow-up follow-up-1 for companion review',
+    });
+    await expect(pendingFollowUpStore.peek('follow-up-1')).resolves.toMatchObject({
+      content: expect.stringContaining('Time-bound concern ready for review'),
+      priority: 'medium',
+      timing: 'scheduled',
+      dueAt: '2026-06-29T17:00:00.000Z',
+      channelId: 'discord:group-1',
+      channelType: 'discord',
+      contactId: 'contact-a',
+      authorId: 'system:intention',
+      authorName: 'Whisper',
+      contextSummary: expect.stringContaining('candidate:cand-1'),
+    });
+  });
+
+  it.each([
+    ['missing due time', makeRequest({ target: 'schedule' }), 'requires a future dueAt'],
+    [
+      'past due time',
+      makeRequest({ target: 'schedule', dueAt: '2026-06-29T11:59:59.999Z' }),
+      'requires a future dueAt',
+    ],
+    [
+      'unknown source channel',
+      makeRequest({ target: 'schedule', channelId: 'unregistered', dueAt: '2026-06-29T17:00:00.000Z' }),
+      'source channel type is unavailable',
+    ],
+  ])('fails closed for %s', async (_label, request, expectedReason) => {
+    const pendingFollowUpStore = createTestPostgresIntentionPorts({
+      now: () => new Date('2026-06-29T12:00:00.000Z'),
+    }).ports.pendingFollowUpStore;
+    const handler = createPendingFollowUpConcernRouteHandler({
+      pendingFollowUpStore,
+      resolveChannelType: channelId => channelId === 'discord:group-1' ? 'discord' : null,
+      now: () => new Date('2026-06-29T12:00:00.000Z'),
+    });
+
+    const result = await handler.route(request);
+
+    expect(result).toMatchObject({
+      disposition: 'blocked',
+      substrate: 'pending_follow_up',
+      reason: expect.stringContaining(expectedReason),
+    });
+    await expect(pendingFollowUpStore.list({ includeExpired: true })).resolves.toEqual([]);
   });
 });
 

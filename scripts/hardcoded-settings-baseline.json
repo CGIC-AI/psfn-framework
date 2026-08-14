@@ -4383,18 +4383,6 @@
       "value": "3"
     },
     {
-      "file": "src/core/intention/concern-candidates.ts",
-      "name": "NEXT_WEEK_FOLLOW_UP_DELAY_MS",
-      "value": "7 * 24 * 60 * 60 * 1000",
-      "note": "Code-owned lexical interpretation of the phrase next week; part of deterministic parser semantics, not operator scheduling policy."
-    },
-    {
-      "file": "src/core/intention/concern-candidates.ts",
-      "name": "TOMORROW_FOLLOW_UP_DELAY_MS",
-      "value": "24 * 60 * 60 * 1000",
-      "note": "Code-owned lexical interpretation of the word tomorrow; part of deterministic parser semantics, not operator scheduling policy."
-    },
-    {
       "file": "src/core/intention/concern-grooming.ts",
       "name": "CAP_RESOLUTION_OUTCOME",
       "value": "'Retired from concerns for durable tracking review because the active concern cap was reached.'",

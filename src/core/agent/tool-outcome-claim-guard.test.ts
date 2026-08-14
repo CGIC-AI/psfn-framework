@@ -143,6 +143,18 @@ describe('tool outcome final-response conformance', () => {
     })).toBe(false);
   });
 
+  it('allows a corrected same-tool call to satisfy the requested step after validation rejects the first call', () => {
+    expect(rejectsUnconfirmedToolExecutionClaim({
+      requestText: 'Call notify exactly once.',
+      activeToolNames: ['notify'],
+      responseText: JSON.stringify({ notified: true }),
+      turnMessages: [
+        namedToolResult('notify', 'validation_rejection'),
+        namedToolResult('notify', 'success'),
+      ],
+    })).toBe(false);
+  });
+
   it('rejects a claim that repeated same-tool calls both succeeded when one failed', () => {
     expect(rejectsUnconfirmedToolExecutionClaim({
       requestText: 'Call memory to write the first item. Then call memory to write the second item.',

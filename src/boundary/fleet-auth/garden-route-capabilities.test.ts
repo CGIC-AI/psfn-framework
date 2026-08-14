@@ -63,6 +63,18 @@ describe('Garden route capability catalogue', () => {
       .toMatchObject({ action: 'automata.read', baseRole: 'admin' });
     expect(resolveGardenRouteCapability('GET', '/api/admin/scheduler')?.capability.authorization)
       .toMatchObject({ action: 'scheduler.read', baseRole: 'admin' });
+    expect(resolveGardenRouteCapability(
+      'POST',
+      '/api/admin/icp-autonomy/test-initiations',
+    )?.capability).toMatchObject({
+      id: 'POST /api/admin/icp-autonomy/test-initiations',
+      body: { mode: 'required' },
+      authorization: {
+        action: 'autonomy.manage',
+        baseRole: 'admin',
+        requirements: { assurance: 'oauth', confirmation: 'explicit' },
+      },
+    });
     expect(resolveGardenRouteCapability('POST', '/v1/chat/completions')?.capability)
       .toMatchObject({
         body: { mode: 'required', maxBytes: 1_048_576 },
@@ -246,6 +258,17 @@ describe('Garden route capability catalogue', () => {
     expect(bodyMode('POST', '/api/admin/action-pipe/actions/action-a/acknowledge')).toBe('optional');
     expect(bodyMode('POST', '/api/admin/action-pipe/actions/action-a/cancel')).toBe('optional');
     expect(bodyMode('POST', '/api/admin/session-routes/reset')).toBe('optional');
+    expect(bodyMode('POST', '/api/admin/icp-autonomy/test-initiations')).toBe('required');
+  });
+
+  it('compiles the authenticated ICP test-initiation declaration', () => {
+    expect(compileGardenRouteDeclarations([{
+      method: 'POST',
+      match: { capabilityPattern: '/api/admin/icp-autonomy/test-initiations' },
+    }])[0]?.capability.authorization).toMatchObject({
+      action: 'autonomy.manage',
+      requirements: { assurance: 'oauth', confirmation: 'explicit' },
+    });
   });
 
   it('fails construction for an active route without an exact catalogue declaration', () => {

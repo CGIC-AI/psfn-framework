@@ -1062,7 +1062,7 @@ describe('Postgres schema tenancy plumbing', () => {
         const versionAgain = await pool.query<{ count: string }>(
           `SELECT COUNT(*)::text AS count FROM shared.shared_schema_migrations`,
         );
-        expect(versionAgain.rows[0]?.count).toBe('10');
+        expect(versionAgain.rows[0]?.count).toBe('11');
       } finally {
         await pool.end();
       }

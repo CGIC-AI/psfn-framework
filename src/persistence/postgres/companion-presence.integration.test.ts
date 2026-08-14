@@ -112,7 +112,7 @@ describe('companion_presence shared-schema integration', () => {
         const ledger = await pool.query<{ count: string }>(
           `SELECT COUNT(*)::text AS count FROM shared.shared_schema_migrations`,
         );
-        expect(ledger.rows[0]?.count).toBe('10');
+        expect(ledger.rows[0]?.count).toBe('11');
         // Nothing leaked into public.
         const publicTables = await pool.query<{ table_name: string }>(
           `SELECT table_name FROM information_schema.tables

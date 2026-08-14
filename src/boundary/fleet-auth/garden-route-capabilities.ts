@@ -158,6 +158,7 @@ const requiredBodyPatterns = new Set([
   'POST /api/admin/identity/onboarding',
   'POST /api/admin/identity/rollback',
   'POST /api/admin/images/generated/:id/promote-reference',
+  'POST /api/admin/icp-autonomy/test-initiations',
   'POST /api/admin/memory/bulk-delete',
   'POST /api/admin/memory/bulk-update',
   'POST /api/admin/memory/link',
@@ -277,6 +278,7 @@ const fixedRoutes: readonly RouteTuple[] = [
   ['GET', '/api/admin/models'], ['POST', '/api/admin/models/refresh'],
   [['GET', 'PATCH'], '/api/admin/settings'], [['GET', 'POST'], '/api/admin/settings/models'],
   ['GET', '/api/admin/settings/schema'], ['GET', '/api/admin/icp-autonomy'],
+  ['POST', '/api/admin/icp-autonomy/test-initiations'],
   ['POST', '/api/admin/icp-autonomy/do-not-disturb'], ['POST', '/api/admin/icp-autonomy/emergency-disable'],
   ['GET', '/api/admin/room-arbiter'],
 ];

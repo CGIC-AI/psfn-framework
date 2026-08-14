@@ -153,4 +153,51 @@ describe('LLMRequestCapability explicit tool payload', () => {
       tool_choice: 'none',
     });
   });
+
+  it('removes tools and unsupported none choice after a direct Z.AI sequence completes', async () => {
+    const capability = new LLMRequestCapability(
+      {} as SubstrateConfig,
+      {} as ProviderRuntime,
+    );
+    const requestOptions: LLMRequestOptions = {};
+    const context: LLMContext = {
+      systemPrompt: 'system',
+      messages: [
+        { role: 'user', content: 'Use notify to send this.' },
+        {
+          role: 'toolResult',
+          toolCallId: 'notify-1',
+          toolName: 'notify',
+          content: 'sent',
+          outcome: 'success',
+          isError: false,
+        },
+      ] as LLMContext['messages'],
+      tools: [{ name: 'notify', description: 'Notify', inputSchema: { type: 'object' } }],
+    };
+
+    capability.applyExplicitToolChoice(
+      requestOptions,
+      context,
+      { originStage: 'agent.turn.prompt' },
+      {
+        api: 'openai-completions',
+        baseUrl: 'https://api.z.ai/api/paas/v4',
+      } as Model<'openai-completions'>,
+      { provider: 'vega-testing', model: 'zai-code/zai/glm-5.2' } as RoutingCandidate,
+    );
+
+    expect(requestOptions.toolChoice).toBe('none');
+    expect(await requestOptions.onPayload?.({
+      model: 'zai-code/zai/glm-5.2',
+      messages: [],
+      tools: [{ type: 'function', function: { name: 'notify' } }],
+      tool_choice: 'none',
+    }, {
+      api: 'openai-completions',
+    } as Model<'openai-completions'>)).toEqual({
+      model: 'zai-code/zai/glm-5.2',
+      messages: [],
+    });
+  });
 });

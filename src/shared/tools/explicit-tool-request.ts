@@ -49,6 +49,21 @@ function isOptionalToolDirective(
       .test(clausePrefix);
 }
 
+function isSameActionArgumentRestatement(
+  requestText: string,
+  previous: { name: string; end: number; explicit: boolean },
+  current: { name: string; index: number; end: number; explicit: boolean },
+): boolean {
+  if (!previous.explicit || !current.explicit || previous.name !== current.name) return false;
+  const betweenDirectives = requestText.slice(previous.end, current.index);
+  if (/\b(?:then|next|again|afterwards?|subsequently|second(?:ly)?|another|twice)\b/iu.test(betweenDirectives)) {
+    return false;
+  }
+  const currentClause = requestText.slice(current.end).split(/[.;!?]/u, 1)[0] ?? '';
+  return /\bwith\s+action\s+(?:"[^"]+"|'[^']+'|[\w-]+)/iu.test(betweenDirectives)
+    && !/\bwith\s+action\s+(?:"[^"]+"|'[^']+'|[\w-]+)/iu.test(currentClause);
+}
+
 /**
  * Resolve active tools that the participant explicitly instructed the agent to
  * execute. Merely mentioning or asking about a tool is intentionally excluded.
@@ -141,7 +156,12 @@ export function resolveExplicitToolRequestSequence(
       previousActionEnd = actionEnd;
     }
   }
-  return matches
-    .sort((left, right) => left.index - right.index || left.name.localeCompare(right.name))
+  const orderedMatches = matches
+    .sort((left, right) => left.index - right.index || left.name.localeCompare(right.name));
+  const distinctSteps = orderedMatches.filter((match, index) => {
+    const previous = orderedMatches[index - 1];
+    return !previous || !isSameActionArgumentRestatement(participantRequestText, previous, match);
+  });
+  return distinctSteps
     .flatMap(match => Array.from({ length: match.repeatCount }, () => match.name));
 }

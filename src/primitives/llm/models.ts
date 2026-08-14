@@ -54,6 +54,10 @@ function resolveRoutedThinkingFormat(
   return modelId.startsWith('openrouter/') ? 'openrouter' : undefined;
 }
 
+export function usesDirectZaiEndpoint(baseUrl: string): boolean {
+  return /^https?:\/\/(?:api\.z\.ai|open\.bigmodel\.cn)(?=[:/]|$)/iu.test(baseUrl.trim());
+}
+
 export function resolveRegisteredModel(
   runtime: ModelLookupRuntime,
   provider: string,
@@ -91,6 +95,7 @@ export function createOpenAICompatibleEndpointModel(
     compat: {
       supportsStore: false,
       maxTokensField: 'max_tokens',
+      ...(usesDirectZaiEndpoint(config.baseUrl) ? { zaiToolStream: true } : {}),
       ...(config.reasoning && thinkingFormat
         ? { thinkingFormat }
         : {}),

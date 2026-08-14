@@ -84,8 +84,10 @@ import {
   resolveCandidates as resolveModelHintCandidates,
 } from './model-hint-routing.js';
 import {
+  createBufferedStreamCallbacks,
   logEmptyToolArgumentProvenance,
   retryCompletionOnCorruptEmptyToolArgs,
+  retryCompletionOnMissingRequiredToolCall,
 } from './empty-tool-argument-retry.js';
 import { normalizeLLMCallAccountingContext } from './accounting-context.js';
 import {
@@ -924,76 +926,91 @@ export class LLMClient {
             model,
           );
 
-          return retryCompletionOnCorruptEmptyToolArgs<LLMResponse>({
-            tools: context.tools,
+          const retried = await retryCompletionOnMissingRequiredToolCall({
             candidate: candidateTarget,
             correlation,
             purpose: streamRoutingPurpose,
-            ...(externalAccounting?.retryOwner === 'caller' ? { maxRetries: 0 } : {}),
-            extractToolCalls: (result) => result.toolCalls,
-            onRetriesResolved: () => {},
-            attempt: (attemptIndex) => withRetry(async () => {
-            physicalAttempt += 1;
-            const usageAttempt = physicalAttempt;
-            return runLLMStreamAttempt({
-              runtime: this.runtime,
-              model,
-              context: piContext,
-              requestOptions,
+            retryEnabled: externalAccounting?.retryOwner !== 'caller',
+            attempt: async () => await retryCompletionOnCorruptEmptyToolArgs<{
+              response: LLMResponse;
+              flush: () => void;
+            }>({
+              tools: context.tools,
               candidate: candidateTarget,
-              callbacks,
-              accountingInputTokens,
-              transportSignal,
-              attemptIndex,
-              usageAttempt,
-              logicalCallId,
-              requestedProvider: requestedProvider ?? candidateTarget.provider,
-              requestedModel: requestedModel ?? candidateTarget.model,
-              providerObservability,
               correlation,
-              reserveCost: async () => await this.reserveIcpConversationCost(
-                streamRoutingPurpose,
-                candidateTarget,
-                accountingInputTokens,
-                correlation,
-                logicalCallId,
-                usageAttempt,
-                promptCaching?.engaged === true,
-              ),
-              recordUsage: async (record: StreamUsageRecord) => await this.recordUsage(
-                streamRoutingPurpose,
-                'chat',
-                candidateTarget,
-                record.inputTokens,
-                record.outputTokens,
-                correlation,
-                record.usageDetails,
-                record.options,
-              ),
-              throwIfAborted: () => throwIfTransportAborted(transportSignal),
-            });
-          }, streamRetryConfig, {
-            circuitBreaker: {
-              breaker: this.circuitBreaker,
-              key: this.resolveCircuitBreakerKey('llm.stream', candidateTarget),
-              method: 'llm.stream',
-              onTransition: transition => this.logCircuitBreakerTransition(transition),
-            },
-            shouldRetry: ({ error }) => shouldRetryWithinCandidate(error),
-            onRetry: ({ attempt, maxRetries, delayMs, error }) => {
-              log.warn('LLM stream failed, retrying', {
-                model: String(model.id),
-                provider: candidateTarget.provider,
-                attempt,
-                maxRetries,
-                delayMs,
-                error: error.message,
-                ...correlation,
-                purpose: streamPurpose,
-              });
-            },
-          }),
+              purpose: streamRoutingPurpose,
+              ...(externalAccounting?.retryOwner === 'caller' ? { maxRetries: 0 } : {}),
+              extractToolCalls: (result) => result.response.toolCalls,
+              onRetriesResolved: () => {},
+              attempt: (attemptIndex) => withRetry(async () => {
+                physicalAttempt += 1;
+                const usageAttempt = physicalAttempt;
+                const buffered = requestOptions.requiredToolName
+                  ? createBufferedStreamCallbacks(callbacks)
+                  : { callbacks, flush: () => undefined };
+                const response = await runLLMStreamAttempt({
+                  runtime: this.runtime,
+                  model,
+                  context: piContext,
+                  requestOptions,
+                  candidate: candidateTarget,
+                  callbacks: buffered.callbacks,
+                  accountingInputTokens,
+                  transportSignal,
+                  attemptIndex,
+                  usageAttempt,
+                  logicalCallId,
+                  requestedProvider: requestedProvider ?? candidateTarget.provider,
+                  requestedModel: requestedModel ?? candidateTarget.model,
+                  providerObservability,
+                  correlation,
+                  reserveCost: async () => await this.reserveIcpConversationCost(
+                    streamRoutingPurpose,
+                    candidateTarget,
+                    accountingInputTokens,
+                    correlation,
+                    logicalCallId,
+                    usageAttempt,
+                    promptCaching?.engaged === true,
+                  ),
+                  recordUsage: async (record: StreamUsageRecord) => await this.recordUsage(
+                    streamRoutingPurpose,
+                    'chat',
+                    candidateTarget,
+                    record.inputTokens,
+                    record.outputTokens,
+                    correlation,
+                    record.usageDetails,
+                    record.options,
+                  ),
+                  throwIfAborted: () => throwIfTransportAborted(transportSignal),
+                });
+                return { response, flush: buffered.flush };
+              }, streamRetryConfig, {
+                circuitBreaker: {
+                  breaker: this.circuitBreaker,
+                  key: this.resolveCircuitBreakerKey('llm.stream', candidateTarget),
+                  method: 'llm.stream',
+                  onTransition: transition => this.logCircuitBreakerTransition(transition),
+                },
+                shouldRetry: ({ error }) => shouldRetryWithinCandidate(error),
+                onRetry: ({ attempt, maxRetries, delayMs, error }) => {
+                  log.warn('LLM stream failed, retrying', {
+                    model: String(model.id),
+                    provider: candidateTarget.provider,
+                    attempt,
+                    maxRetries,
+                    delayMs,
+                    error: error.message,
+                    ...correlation,
+                    purpose: streamPurpose,
+                  });
+                },
+              }),
+            }),
           });
+          retried.flush();
+          return retried.response;
         },
         {
           modelHint,
@@ -1323,49 +1340,55 @@ export class LLMClient {
           };
         }
 
-        return retryCompletionOnCorruptEmptyToolArgs<{
-          response: Awaited<ReturnType<ProviderRuntime['complete']>>;
-          providerObservability: LLMProviderObservability;
-        }>({
-          tools: context.tools,
+        return retryCompletionOnMissingRequiredToolCall({
           candidate: candidateTarget,
           correlation,
           purpose,
-          extractToolCalls: (result) => extractCompletionToolCalls(result.response),
-          onRetriesResolved: () => {},
-          attempt: (attemptIndex) => withRetry(async () => {
-            const attemptResponse = await request(attemptIndex);
-            logEmptyToolArgumentProvenance(
-              extractCompletionToolCalls(attemptResponse),
-              // Non-streaming: there is no fragment channel, so an empty payload is
-              // always a provider-emitted empty (never an accumulator drop).
-              0,
-              candidateTarget,
-              correlation,
-              attemptIndex,
-            );
-            return { response: attemptResponse, providerObservability };
-          }, llmRetryConfig(this.config), {
-            circuitBreaker: {
-              breaker: this.circuitBreaker,
-              key: this.resolveCircuitBreakerKey('llm.complete', candidateTarget),
-              method: 'llm.complete',
-              onTransition: transition => this.logCircuitBreakerTransition(transition),
-            },
-            shouldRetry: ({ error }) => shouldRetryWithinCandidate(error),
-            onRetry: ({ attempt, maxRetries, delayMs, error }) => {
-              log.warn('LLM complete failed, retrying', {
-                model: String(model.id),
-                provider: candidateTarget.provider,
-                attempt,
-                maxRetries,
-                delayMs,
-                error: error.message,
-                ...correlation,
-                purpose,
-                routingPurpose,
-              });
-            },
+          retryEnabled: true,
+          attempt: async () => await retryCompletionOnCorruptEmptyToolArgs<{
+            response: Awaited<ReturnType<ProviderRuntime['complete']>>;
+            providerObservability: LLMProviderObservability;
+          }>({
+            tools: context.tools,
+            candidate: candidateTarget,
+            correlation,
+            purpose,
+            extractToolCalls: (result) => extractCompletionToolCalls(result.response),
+            onRetriesResolved: () => {},
+            attempt: (attemptIndex) => withRetry(async () => {
+              const attemptResponse = await request(attemptIndex);
+              logEmptyToolArgumentProvenance(
+                extractCompletionToolCalls(attemptResponse),
+                // Non-streaming: there is no fragment channel, so an empty payload is
+                // always a provider-emitted empty (never an accumulator drop).
+                0,
+                candidateTarget,
+                correlation,
+                attemptIndex,
+              );
+              return { response: attemptResponse, providerObservability };
+            }, llmRetryConfig(this.config), {
+              circuitBreaker: {
+                breaker: this.circuitBreaker,
+                key: this.resolveCircuitBreakerKey('llm.complete', candidateTarget),
+                method: 'llm.complete',
+                onTransition: transition => this.logCircuitBreakerTransition(transition),
+              },
+              shouldRetry: ({ error }) => shouldRetryWithinCandidate(error),
+              onRetry: ({ attempt, maxRetries, delayMs, error }) => {
+                log.warn('LLM complete failed, retrying', {
+                  model: String(model.id),
+                  provider: candidateTarget.provider,
+                  attempt,
+                  maxRetries,
+                  delayMs,
+                  error: error.message,
+                  ...correlation,
+                  purpose,
+                  routingPurpose,
+                });
+              },
+            }),
           }),
         });
       },

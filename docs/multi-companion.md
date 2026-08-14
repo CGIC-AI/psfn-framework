@@ -524,8 +524,13 @@ Multi-companion layers on top of the single-companion locations/world surface
   machine-readable reasons/failures. It never reads candidate motivation,
   peer-contact IDs, transcripts, message bodies, private model reasoning, or
   chain-of-thought. Audited mutations can cancel one local revision-checked
-  candidate, set local operator DND, or emergency-disable the local source. They
-  cannot target another companion or cluster.
+  candidate, set local operator DND, emergency-disable the local source, or
+  trigger a local model-independent test initiation through
+  `POST /api/admin/icp-autonomy/test-initiations`. The test request contains only
+  a canonical peer companion UUID plus an idempotent request UUID and is durably
+  marked `operator_test`; it cannot supply peer-visible content or bypass broker
+  capability, identity, trust/block, availability, fatigue, charge, cost, or
+  one-use-permit policy. These controls cannot target another cluster.
 - **Private-room delivery is presence-windowed.** A place carries an optional
   `privacy` field (`PlacePrivacy = 'public' | 'private'`,
   `src/shared/contracts/places-registry.ts`; absent = `public`, byte-identical to

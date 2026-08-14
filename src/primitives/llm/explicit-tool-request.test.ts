@@ -15,6 +15,7 @@ function context(messages: LLMContext['messages']): LLMContext {
       { name: 'notify', description: 'Notify', inputSchema: { type: 'object' } },
       { name: 'memory', description: 'Memory', inputSchema: { type: 'object' } },
       { name: 'orient', description: 'Orientation', inputSchema: { type: 'object' } },
+      { name: 'fs', description: 'Filesystem', inputSchema: { type: 'object' } },
     ],
   };
 }
@@ -37,6 +38,8 @@ describe('explicit tool request choice', () => {
           toolCallId: 'call-1',
           toolName: 'north_star',
           content: 'ok',
+          outcome: 'success',
+          isError: false,
         },
       ] as LLMContext['messages']),
       originStage: 'agent.turn.prompt',
@@ -115,6 +118,8 @@ describe('explicit tool request choice', () => {
           toolCallId: 'call-1',
           toolName: 'north_star',
           content: 'ok',
+          outcome: 'success',
+          isError: false,
         },
       ] as LLMContext['messages']),
       originStage: 'agent.turn.prompt',
@@ -129,6 +134,8 @@ describe('explicit tool request choice', () => {
       toolCallId: 'call-1',
       toolName: 'north_star',
       content: 'created',
+      outcome: 'success',
+      isError: false,
     };
     expect(resolveExplicitToolChoice({
       context: context([
@@ -148,6 +155,8 @@ describe('explicit tool request choice', () => {
           toolCallId: 'call-2',
           toolName: 'north_star',
           content: 'updated',
+          outcome: 'success',
+          isError: false,
         },
       ] as LLMContext['messages']),
       originStage: 'agent.turn.prompt',
@@ -165,11 +174,42 @@ describe('explicit tool request choice', () => {
           toolCallId: 'call-1',
           toolName: 'memory',
           content: 'created',
+          outcome: 'success',
+          isError: false,
         },
       ] as LLMContext['messages']),
       originStage: 'agent.turn.prompt',
       modelApi: 'openai-completions',
     })).toEqual({ type: 'function', function: { name: 'memory' } });
+  });
+
+  it('does not force an explicitly optional tool suggestion', () => {
+    expect(resolveExplicitToolChoice({
+      context: context([{
+        role: 'user',
+        content: 'Use fs to inspect the workspace if needed, then answer from what you already know.',
+      }]),
+      originStage: 'agent.turn.prompt',
+      modelApi: 'openai-completions',
+    })).toBeUndefined();
+  });
+
+  it('keeps the current explicit step after tool validation rejects the call', () => {
+    expect(resolveExplicitToolChoice({
+      context: context([
+        { role: 'user', content: 'Call notify exactly once.' },
+        {
+          role: 'toolResult',
+          toolCallId: 'call-1',
+          toolName: 'notify',
+          content: 'Received arguments: {}',
+          outcome: 'validation_rejection',
+          isError: true,
+        },
+      ] as LLMContext['messages']),
+      originStage: 'agent.turn.prompt',
+      modelApi: 'openai-completions',
+    })).toEqual({ type: 'function', function: { name: 'notify' } });
   });
 
   it('retains elided same-tool steps in an explicit action sequence', () => {
@@ -179,6 +219,8 @@ describe('explicit tool request choice', () => {
       toolCallId: `call-${index}`,
       toolName: 'orient',
       content: 'ok',
+      outcome: 'success',
+      isError: false,
     });
     for (const completed of [1, 2, 3]) {
       expect(resolveExplicitToolChoice({
@@ -207,12 +249,16 @@ describe('explicit tool request choice', () => {
       toolCallId: 'call-1',
       toolName: 'notify',
       content: 'inspected',
+      outcome: 'success',
+      isError: false,
     };
     const firstNorthStarResult = {
       role: 'toolResult',
       toolCallId: 'call-2',
       toolName: 'north_star',
       content: 'first',
+      outcome: 'success',
+      isError: false,
     };
     expect(resolveExplicitToolChoice({
       context: context([
@@ -234,6 +280,8 @@ describe('explicit tool request choice', () => {
           toolCallId: 'call-3',
           toolName: 'north_star',
           content: 'second',
+          outcome: 'success',
+          isError: false,
         },
       ] as LLMContext['messages']),
       originStage: 'agent.turn.prompt',
@@ -256,6 +304,8 @@ describe('explicit tool request choice', () => {
           toolCallId: 'call-1',
           toolName: 'north_star',
           content: 'ok',
+          outcome: 'success',
+          isError: false,
         },
       ] as LLMContext['messages']),
       originStage: 'agent.turn.prompt',
@@ -292,6 +342,8 @@ describe('explicit tool request choice', () => {
             toolCallId: 'call-1',
             toolName: 'north_star',
             content: 'ok',
+            outcome: 'success',
+            isError: false,
           },
         ] as LLMContext['messages']),
         originStage: 'agent.turn.prompt',

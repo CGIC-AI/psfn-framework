@@ -1281,7 +1281,9 @@ export const POSTGRES_INTENTION_MIGRATIONS = [
     peer_contact_id TEXT NOT NULL,
     peer_companion_id UUID NOT NULL,
     preferred_channel TEXT NOT NULL CHECK (preferred_channel IN ('dm', 'current_room')),
-    source TEXT NOT NULL CHECK (source IN ('free_time', 'weighted_thought', 'intention', 'foreground')),
+    source TEXT NOT NULL CHECK (source IN (
+      'free_time', 'weighted_thought', 'intention', 'foreground', 'felt_impulse'
+    )),
     provenance_ref TEXT NOT NULL,
     reason_summary TEXT NOT NULL,
     continuation_task_kind TEXT CHECK (
@@ -1335,7 +1337,9 @@ export const POSTGRES_INTENTION_MIGRATIONS = [
     DROP CONSTRAINT IF EXISTS icp_initiation_candidates_source_check;`,
   `ALTER TABLE icp_initiation_candidates
     ADD CONSTRAINT icp_initiation_candidates_source_check
-    CHECK (source IN ('free_time', 'weighted_thought', 'intention', 'foreground', 'felt_impulse'));`,
+    CHECK (source IN (
+      'free_time', 'weighted_thought', 'intention', 'foreground', 'felt_impulse', 'operator_test'
+    ));`,
 ];
 
 export const POSTGRES_AUDIT_MIGRATIONS = [
@@ -2704,15 +2708,16 @@ export const POSTGRES_OBSERVER_EVAL_SIDECAR_MIGRATIONS = [
 //       (jp36.5.1.1 gateway speaking arbiter, two-phase reservation/egress lease)
 //  11 — speaking arbiter charge association
 //  12 — icp felt_impulse initiation source (hrmrq.34, operator ruling D4)
+//  13 — authenticated operator/harness ICP test initiation source (ph0mw)
 export const SHARED_SCHEMA_NAME = 'shared';
 
 /** Ledger versions installed by POSTGRES_SHARED_MIGRATIONS (excluding wiki versions 3 and 8). */
 export const POSTGRES_SHARED_BASE_MIGRATION_VERSIONS = [
-  1, 2, 4, 5, 6, 7, 9, 10, 11, 12,
+  1, 2, 4, 5, 6, 7, 9, 10, 11, 12, 13,
 ] as const;
 /** Complete ledger across the base and shared-wiki chains. */
 export const POSTGRES_SHARED_ALL_MIGRATION_VERSIONS = [
-  1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12,
+  1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13,
 ] as const;
 
 export const POSTGRES_SHARED_MIGRATIONS: readonly string[] = [
@@ -2787,7 +2792,7 @@ export const POSTGRES_SHARED_MIGRATIONS: readonly string[] = [
     root_initiation_id UUID NOT NULL,
     initiated_by_companion_id UUID NOT NULL,
     initiation_source TEXT NOT NULL CHECK (initiation_source IN (
-      'free_time', 'weighted_thought', 'intention', 'foreground'
+      'free_time', 'weighted_thought', 'intention', 'foreground', 'felt_impulse', 'operator_test'
     )),
     provenance_ref TEXT NOT NULL,
     opened_at_ms BIGINT NOT NULL CHECK (opened_at_ms >= 0),
@@ -3166,6 +3171,21 @@ export const POSTGRES_SHARED_MIGRATIONS: readonly string[] = [
   `
   INSERT INTO shared_schema_migrations (version, name)
   VALUES (12, 'icp-felt-impulse-initiation-source')
+  ON CONFLICT (version) DO NOTHING;
+  `,
+  // Version 13 (ph0mw): authenticated operator/harness test initiations use
+  // the normal broker and one-use permit while remaining durably distinguishable
+  // from companion-authored production initiations.
+  `ALTER TABLE icp_conversation_episodes
+    DROP CONSTRAINT IF EXISTS icp_conversation_episodes_initiation_source_check;
+   ALTER TABLE icp_conversation_episodes
+    ADD CONSTRAINT icp_conversation_episodes_initiation_source_check
+    CHECK (initiation_source IN (
+      'free_time', 'weighted_thought', 'intention', 'foreground', 'felt_impulse', 'operator_test'
+    ));`,
+  `
+  INSERT INTO shared_schema_migrations (version, name)
+  VALUES (13, 'icp-operator-test-initiation-source')
   ON CONFLICT (version) DO NOTHING;
   `,
 ];

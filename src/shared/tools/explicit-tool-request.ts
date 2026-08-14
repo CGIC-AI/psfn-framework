@@ -34,6 +34,15 @@ function isProhibitedToolDirective(
     .test(directiveSentenceAt(requestText, matchIndex, matchEnd));
 }
 
+function isOptionalToolDirective(
+  requestText: string,
+  matchIndex: number,
+  matchEnd: number,
+): boolean {
+  return /\b(?:if|when)\s+(?:it\s+is\s+)?(?:needed|necessary|required|helpful|useful|appropriate)\b|\bas\s+needed\b|\boptionally\b/iu
+    .test(directiveSentenceAt(requestText, matchIndex, matchEnd));
+}
+
 /**
  * Resolve active tools that the participant explicitly instructed the agent to
  * execute. Merely mentioning or asking about a tool is intentionally excluded.
@@ -70,7 +79,12 @@ export function resolveExplicitToolRequestSequence(
     );
     for (const match of participantRequestText.matchAll(pattern)) {
       const matchEnd = match.index + match[0].length;
-      if (isProhibitedToolDirective(participantRequestText, match.index, matchEnd)) continue;
+      if (
+        isProhibitedToolDirective(participantRequestText, match.index, matchEnd)
+        || isOptionalToolDirective(participantRequestText, match.index, matchEnd)
+      ) {
+        continue;
+      }
       const clauseSuffix = participantRequestText
         .slice(matchEnd)
         .split(/[.;!?]/u, 1)[0] ?? '';

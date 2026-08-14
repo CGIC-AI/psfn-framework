@@ -81,6 +81,7 @@ describe('companion_presence shared-schema integration', () => {
           { version: 10, name: 'speaking-arbiter' },
           { version: 11, name: 'speaking-arbiter-charge-association' },
           { version: 12, name: 'icp-felt-impulse-initiation-source' },
+          { version: 13, name: 'icp-operator-test-initiation-source' },
         ]);
       } finally {
         await pool.end();

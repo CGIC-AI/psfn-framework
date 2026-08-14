@@ -52,6 +52,36 @@ describe('findCorruptEmptyToolCalls', () => {
       .toHaveLength(1);
   });
 
+  it('flags empty args when every anyOf branch rejects an empty object', () => {
+    const unionSchema: ToolSchema = {
+      name: 'notify',
+      description: 'notify tool',
+      inputSchema: {
+        anyOf: [
+          {
+            type: 'object',
+            properties: {
+              action: { const: 'consider' },
+              text: { type: 'string' },
+            },
+            required: ['action', 'text'],
+          },
+          {
+            type: 'object',
+            properties: {
+              action: { const: 'send' },
+              permit: { type: 'string' },
+            },
+            required: ['action', 'permit'],
+          },
+        ],
+      },
+    };
+
+    expect(findCorruptEmptyToolCalls([emptyCall('notify')], [unionSchema]))
+      .toHaveLength(1);
+  });
+
   it('does not flag empty args when the schema accepts {} (no required properties)', () => {
     expect(findCorruptEmptyToolCalls([emptyCall('session')], [optionalSchema]))
       .toEqual([]);

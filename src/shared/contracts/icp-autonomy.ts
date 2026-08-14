@@ -34,6 +34,10 @@ export const ICP_INITIATION_SOURCES = [
   // send a proactive message now" — creates the candidate, replacing any
   // wall-clock initiating impulse. Retry/TTL plumbing is unchanged.
   'felt_impulse',
+  // Authenticated Garden/harness initiation. This marks operator-driven test
+  // traffic durably while the ordinary broker gates and one-use permit remain
+  // authoritative for delivery.
+  'operator_test',
 ] as const;
 export type IcpInitiationSource = typeof ICP_INITIATION_SOURCES[number];
 

@@ -50,6 +50,7 @@ import type {
   AdminAutomataBusReadPort,
   AdminAutomataLessonReadPort,
 } from '../../operator/garden/services/automata-service.js';
+import type { AdminIcpTestInitiationPort } from '../../operator/garden/services/types.js';
 
 export interface StartOptionalAdminTransportServerOptions {
   adminPort?: number;
@@ -71,6 +72,7 @@ export interface StartOptionalAdminTransportServerOptions {
   /** Shadow-only Partner Affect observation store (docs/partner-affect.md slice 1). */
   partnerAffectShadowStore?: PartnerAffectShadowStorePort | null;
   icpRuntimeEnablement: IcpAutonomyRuntimeEnablement;
+  icpTestInitiation?: AdminIcpTestInitiationPort;
   postTurnActions: PostTurnActionRuntime;
   outreachOutbox?: OutreachOutboxStore | null;
   episodicStore?: EpisodicStorePort | null;
@@ -216,6 +218,7 @@ export async function startOptionalAdminTransportServer(
     speakingArbiterAdminStore,
     partnerAffectShadowStore: options.partnerAffectShadowStore ?? null,
     icpRuntimeEnablement: options.icpRuntimeEnablement,
+    ...(options.icpTestInitiation ? { icpTestInitiation: options.icpTestInitiation } : {}),
     postTurnActions: options.postTurnActions,
     outreachOutbox: options.outreachOutbox ?? null,
     shardManager: options.shardManager,

@@ -12,6 +12,55 @@ const openRouterCandidate = {
 } as RoutingCandidate;
 
 describe('LLMRequestCapability explicit tool payload', () => {
+  it('uses Z.AI auto choice with one exposed tool and retains the exact postcondition', async () => {
+    const capability = new LLMRequestCapability(
+      {} as SubstrateConfig,
+      {} as ProviderRuntime,
+    );
+    const requestOptions: LLMRequestOptions = {};
+    const context: LLMContext = {
+      systemPrompt: 'system',
+      messages: [{ role: 'user', content: 'Use notify to send this.' }],
+      tools: [
+        { name: 'notify', description: 'Notify', inputSchema: { type: 'object' } },
+        { name: 'memory', description: 'Memory', inputSchema: { type: 'object' } },
+      ],
+    };
+
+    capability.applyExplicitToolChoice(
+      requestOptions,
+      context,
+      { originStage: 'agent.turn.prompt' },
+      {
+        api: 'openai-completions',
+        baseUrl: 'https://api.z.ai/api/paas/v4',
+      } as Model<'openai-completions'>,
+      { provider: 'vega-testing', model: 'zai-code/zai/glm-5.2' } as RoutingCandidate,
+    );
+
+    expect(requestOptions.toolChoice).toEqual({
+      type: 'function',
+      function: { name: 'notify' },
+    });
+    expect(requestOptions.requiredToolName).toBe('notify');
+    expect(await requestOptions.onPayload?.({
+      model: 'zai-code/zai/glm-5.2',
+      messages: [],
+      tools: [
+        { type: 'function', function: { name: 'notify' } },
+        { type: 'function', function: { name: 'memory' } },
+      ],
+    }, {
+      api: 'openai-completions',
+    } as Model<'openai-completions'>)).toEqual({
+      model: 'zai-code/zai/glm-5.2',
+      messages: [],
+      tools: [{ type: 'function', function: { name: 'notify' } }],
+      tool_choice: 'auto',
+      parallel_tool_calls: false,
+    });
+  });
+
   it('injects the named choice into the final OpenAI completions wire payload', async () => {
     const capability = new LLMRequestCapability(
       {} as SubstrateConfig,
@@ -78,6 +127,8 @@ describe('LLMRequestCapability explicit tool payload', () => {
           toolCallId: 'notify-1',
           toolName: 'notify',
           content: 'sent',
+          outcome: 'success',
+          isError: false,
         },
       ] as LLMContext['messages'],
       tools: [{ name: 'notify', description: 'Notify', inputSchema: { type: 'object' } }],

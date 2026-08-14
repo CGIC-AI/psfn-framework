@@ -17,6 +17,9 @@ import type {
   AdminIcpMutationResult,
   AdminIcpPermitView,
   AdminIcpRecentDeliveryEvent,
+  AdminIcpTestInitiationInput,
+  AdminIcpTestInitiationPort,
+  AdminIcpTestInitiationResult,
 } from './types/icp-autonomy.js';
 
 const ADMIN_ICP_LIMIT = 50;
@@ -35,6 +38,7 @@ export interface AdminIcpAutonomyServiceDependencies {
    * explicitly instead of reporting an undifferentiated quiet lane.
    */
   countCompanionPeerContacts?: () => Promise<number>;
+  testInitiation?: AdminIcpTestInitiationPort;
   now?: () => number;
 }
 
@@ -476,6 +480,15 @@ export class AdminIcpAutonomyDataService implements AdminIcpAutonomyService {
       revokedPermitCount: dnd.revokedPermitCount,
       message: 'Autonomous initiation disabled live and in scheduler.json; DND invalidated outstanding permits',
     };
+  }
+
+  async triggerTestInitiation(
+    input: AdminIcpTestInitiationInput,
+  ): Promise<AdminIcpTestInitiationResult> {
+    if (!this.deps.testInitiation) {
+      throw new Error('ICP operator test initiation unavailable');
+    }
+    return await this.deps.testInitiation.trigger(input);
   }
 
   async close(): Promise<void> {

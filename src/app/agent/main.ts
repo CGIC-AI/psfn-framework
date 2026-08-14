@@ -135,6 +135,7 @@ import { buildAgentControlPlane } from './control-plane.js';
 import type { AgentControlPlaneShutdownTargets } from './control-plane.js';
 import { createLLMProviderPort } from '../../core/agent/contracts.js';
 import { wireIcpInitiationSources } from './icp-initiation-source-wiring.js';
+import { createIcpTestInitiationTrigger } from './icp-test-initiation.js';
 import { wireCompanionPresenceContext } from './companion-presence-wiring.js';
 import { createGatewayOpsPortFromClient } from '../../boundary/gateway/gateway-ops-port.js';
 import { installPromotedToolsPersistenceHook } from '../startup/support/bootstrap-helpers.js';
@@ -809,6 +810,12 @@ async function main(): Promise<void> {
       : {}),
     lifecycleConfig: schedulerConfig.weightedThoughtOutreach.lifecycle,
   });
+  const icpTestInitiation = icpInitiationSourceRuntime && coreRuntime.icpAutonomyRuntime
+    ? createIcpTestInitiationTrigger({
+        sourceRuntime: icpInitiationSourceRuntime,
+        peers: coreRuntime.icpAutonomyRuntime,
+      })
+    : undefined;
 
   // ── Introspection audit runtime (Laws 28-30): extracted to
   // startup/introspection-lane.ts (charter 12.1 split).
@@ -1459,6 +1466,7 @@ async function main(): Promise<void> {
     icpInitiationCandidateStore: persistenceRuntime.icpInitiationCandidateStore,
     partnerAffectShadowStore: persistenceRuntime.partnerAffectShadowStore,
     icpRuntimeEnablement,
+    ...(icpTestInitiation ? { icpTestInitiation } : {}),
     postTurnActions,
     outreachOutbox,
     episodicStore,

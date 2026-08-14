@@ -2433,7 +2433,64 @@ describe('LLMClient completion model hints', () => {
     mocks.getEnvApiKey.mockReturnValue(undefined);
   });
 
-  it('rejects a provider that returns text instead of the one explicitly required tool without retrying', async () => {
+  it('retries once when a provider returns zero calls for an explicitly required tool', async () => {
+    const client = new LLMClient(makeConfig({ openRouterApiBaseUrl: 'http://litellm.test/v1' }));
+    const onText = vi.fn();
+    mocks.streamSimple
+      .mockImplementationOnce(async function* ignoresRequiredTool() {
+        yield { type: 'text_delta', delta: 'I did it.' };
+        yield {
+          type: 'done',
+          message: {
+            model: 'z-ai/glm-5',
+            usage: { input: 8, output: 4 },
+            content: [{ type: 'text', text: 'I did it.' }],
+          },
+          reason: 'stop',
+        };
+      })
+      .mockImplementationOnce(async function* emitsRequiredTool() {
+        yield {
+          type: 'done',
+          message: {
+            model: 'z-ai/glm-5',
+            usage: { input: 9, output: 5 },
+            content: [{
+              type: 'toolCall',
+              id: 'notify-1',
+              name: 'notify',
+              arguments: { action: 'consider' },
+            }],
+          },
+          reason: 'toolUse',
+        };
+      });
+
+    await expect(client.stream({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'Call notify exactly once.' }],
+      tools: [{ name: 'notify', description: 'Notify', inputSchema: { type: 'object' } }],
+      correlation: {
+        turnId: 'turn-required-tool-contract',
+        requestId: 'request-required-tool-contract',
+        channelId: 'api:testing-harness',
+        callType: 'chat',
+        originType: 'chat',
+        originStage: 'agent.turn.prompt',
+      },
+    }, { onText })).resolves.toMatchObject({
+      toolCalls: [{ id: 'notify-1', name: 'notify', input: { action: 'consider' } }],
+    });
+
+    expect(mocks.streamSimple).toHaveBeenCalledTimes(2);
+    expect(onText).not.toHaveBeenCalled();
+    expect(mocks.streamSimple.mock.calls[0]?.[2]).toMatchObject({
+      toolChoice: { type: 'function', function: { name: 'notify' } },
+      requiredToolName: 'notify',
+    });
+  });
+
+  it('hard-fails after one retry when the provider still returns zero required calls', async () => {
     const client = new LLMClient(makeConfig({ openRouterApiBaseUrl: 'http://litellm.test/v1' }));
     mocks.streamSimple.mockImplementation(async function* ignoresRequiredTool() {
       yield {
@@ -2452,8 +2509,8 @@ describe('LLMClient completion model hints', () => {
       messages: [{ role: 'user', content: 'Call notify exactly once.' }],
       tools: [{ name: 'notify', description: 'Notify', inputSchema: { type: 'object' } }],
       correlation: {
-        turnId: 'turn-required-tool-contract',
-        requestId: 'request-required-tool-contract',
+        turnId: 'turn-required-tool-contract-exhausted',
+        requestId: 'request-required-tool-contract-exhausted',
         channelId: 'api:testing-harness',
         callType: 'chat',
         originType: 'chat',
@@ -2461,11 +2518,7 @@ describe('LLMClient completion model hints', () => {
       },
     })).rejects.toThrow('expected exactly one "notify" call, received []');
 
-    expect(mocks.streamSimple).toHaveBeenCalledTimes(1);
-    expect(mocks.streamSimple.mock.calls[0]?.[2]).toMatchObject({
-      toolChoice: { type: 'function', function: { name: 'notify' } },
-      requiredToolName: 'notify',
-    });
+    expect(mocks.streamSimple).toHaveBeenCalledTimes(2);
   });
 
   it('executes only the first call when a provider fans out the required tool', async () => {

@@ -549,7 +549,11 @@ export function createIcpInitiationSourceRuntime(
       return result('rejected', rejected, 'policy_denied');
     }
 
-    if (!reconcilingCommittedPermit) {
+    // The authenticated Garden request is the explicit consent for a
+    // provenance-marked test initiation. It bypasses only the companion LLM
+    // consent question; authorization, preflight, permit, fatigue, cost, trust,
+    // availability, and delivery policy remain on the canonical broker path.
+    if (!reconcilingCommittedPermit && request.source !== 'operator_test') {
       const consent = await dependencies.consent.evaluate({ candidate, peer, channelId });
       const expiredAfterConsent = await expireIfElapsed();
       if (expiredAfterConsent) {

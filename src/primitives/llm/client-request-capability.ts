@@ -18,6 +18,7 @@ import {
   createOpenAICompatibleEndpointModel,
   resolveRegisteredModel,
   resolveSystemRoleCapabilityMetadata,
+  usesDirectZaiEndpoint,
   type OpenAICompatibleApi,
 } from './models.js';
 import type { ProviderRuntime } from './provider-runtime.js';
@@ -243,6 +244,11 @@ export class LLMRequestCapability {
     // it. Inject the provider-native field at the final payload seam as well so
     // an adapter/model-registry wrapper cannot silently drop a required call.
     if (String(model.api) === 'openai-completions') {
+      const directZai = typeof model.baseUrl === 'string'
+        && usesDirectZaiEndpoint(model.baseUrl);
+      const wireToolChoice = directZai && contract.requiredToolName
+        ? 'auto'
+        : toolChoice;
       const priorOnPayload = requestOptions.onPayload;
       requestOptions.onPayload = async (payload, payloadModel) => {
         const prior = await priorOnPayload?.(payload, payloadModel);
@@ -281,7 +287,9 @@ export class LLMRequestCapability {
                 },
               }
             : {}),
-          tool_choice: toolChoice,
+          // Direct Z.AI documents only `auto`; exactness is retained as a
+          // client postcondition after exposing only the requested tool.
+          tool_choice: wireToolChoice,
           ...(requestOptions.requiredToolName ? { parallel_tool_calls: false } : {}),
         };
       };

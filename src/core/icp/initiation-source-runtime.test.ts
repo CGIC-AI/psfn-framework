@@ -118,7 +118,7 @@ function dependencies(overrides: Partial<IcpInitiationSourceRuntimeDependencies>
 }
 
 function request(
-  source: 'free_time' | 'weighted_thought' | 'intention' | 'foreground' | 'felt_impulse',
+  source: 'free_time' | 'weighted_thought' | 'intention' | 'foreground' | 'felt_impulse' | 'operator_test',
 ) {
   return {
     source,
@@ -131,6 +131,24 @@ function request(
 }
 
 describe('ICP initiation source runtime', () => {
+  it('treats authenticated operator-test initiation as consent while retaining broker gates', async () => {
+    const { deps, consent } = dependencies();
+    vi.mocked(consent.evaluate).mockResolvedValue({ action: 'decline' });
+
+    const result = await createIcpInitiationSourceRuntime(deps)
+      .submit(request('operator_test'));
+
+    expect(result.outcome).toBe('sent');
+    expect(consent.evaluate).not.toHaveBeenCalled();
+    expect(deps.gateway.companionInitiationPreflight).toHaveBeenCalledOnce();
+    expect(deps.gateway.companionIssueInitiationPermit).toHaveBeenCalledOnce();
+    expect(deps.peers.executeCompanionOutreach).toHaveBeenCalledOnce();
+    await expect(deps.store.getCandidate(result.candidateId)).resolves.toMatchObject({
+      source: 'operator_test',
+      status: 'consumed',
+    });
+  });
+
   it.each(['free_time', 'weighted_thought', 'intention', 'foreground'] as const)(
     'routes %s through one private candidate, preflight, consent, permit, and target turn',
     async (source) => {

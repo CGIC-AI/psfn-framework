@@ -7,6 +7,7 @@ import { ADMIN_DYNAMIC_JSON_HEADERS, sendInternalError, toSanitizedMessage } fro
 import type { AdminApiRoute, AdminAuditTimelineAppender, AdminBodyReader } from './types.js';
 
 const ICP_AUTONOMY_PATH = '/api/admin/icp-autonomy';
+const ICP_TEST_INITIATIONS_PATH = `${ICP_AUTONOMY_PATH}/test-initiations`;
 const ICP_CANDIDATE_PREFIX = `${ICP_AUTONOMY_PATH}/candidates/`;
 const ICP_DND_PATH = `${ICP_AUTONOMY_PATH}/do-not-disturb`;
 const ICP_EMERGENCY_DISABLE_PATH = `${ICP_AUTONOMY_PATH}/emergency-disable`;
@@ -29,6 +30,28 @@ function parseCancelBody(
     return { ok: false, error: 'expectedRevision must be a positive safe integer' };
   }
   return { ok: true, expectedRevision: value.expectedRevision as number };
+}
+
+function parseTestInitiationBody(value: unknown):
+  | { ok: true; peerCompanionId: string; requestId: string }
+  | { ok: false; error: string } {
+  if (!isRecord(value)) return { ok: false, error: 'Body must be a JSON object' };
+  const unknown = Object.keys(value)
+    .filter(key => key !== 'peerCompanionId' && key !== 'requestId');
+  if (unknown.length > 0) {
+    return { ok: false, error: `Unknown test initiation fields: ${unknown.join(', ')}` };
+  }
+  if (!isRfc4122Uuid(value.peerCompanionId)) {
+    return { ok: false, error: 'peerCompanionId must be a lowercase RFC-4122 UUID' };
+  }
+  if (!isRfc4122Uuid(value.requestId)) {
+    return { ok: false, error: 'requestId must be a lowercase RFC-4122 UUID' };
+  }
+  return {
+    ok: true,
+    peerCompanionId: value.peerCompanionId,
+    requestId: value.requestId,
+  };
 }
 
 function statusForMutationError(error: unknown): number {
@@ -78,6 +101,39 @@ export function buildAdminIcpAutonomyRoutes(options: {
           data => sendJson(res, 200, data, ADMIN_DYNAMIC_JSON_HEADERS),
           error => sendInternalError(res, error, 'Failed to load ICP autonomy state'),
         );
+      },
+    },
+    {
+      method: 'POST',
+      match: exactPath(ICP_TEST_INITIATIONS_PATH),
+      handle: (req, res) => {
+        withStrictBody(req, res, 'test initiation', value => {
+          const parsed = parseTestInitiationBody(value);
+          if (!parsed.ok) {
+            audit('denied', 'Operator ICP test initiation rejected invalid fields.');
+            sendJson(res, 400, { error: parsed.error });
+            return;
+          }
+          service.triggerTestInitiation({
+            peerCompanionId: parsed.peerCompanionId,
+            requestId: parsed.requestId,
+          }).then(result => {
+            audit('allowed', 'Operator triggered an ICP test initiation.', [
+              `peerCompanionId=${parsed.peerCompanionId}`,
+              `requestId=${parsed.requestId}`,
+              `candidateId=${result.candidateId}`,
+              `outcome=${result.outcome}`,
+            ]);
+            sendJson(res, 200, result, ADMIN_DYNAMIC_JSON_HEADERS);
+          }, error => {
+            audit('denied', 'Operator ICP test initiation failed.', [
+              `peerCompanionId=${parsed.peerCompanionId}`,
+              `requestId=${parsed.requestId}`,
+              `error=${toSanitizedMessage(error, 'initiation failed')}`,
+            ]);
+            sendInternalError(res, error, 'Failed to trigger ICP test initiation');
+          });
+        });
       },
     },
     {

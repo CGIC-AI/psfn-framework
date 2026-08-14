@@ -247,6 +247,31 @@ describe('truthful quiet attribution (psfn-framework-hrmrq.34)', () => {
 });
 
 describe('AdminIcpAutonomyDataService', () => {
+  it('delegates operator test initiation to the model-independent runtime port', async () => {
+    const expected = {
+      outcome: 'sent' as const,
+      candidateId: CANDIDATE_ID,
+      status: 'consumed' as const,
+      deliveryDisposition: 'delivered' as const,
+    };
+    const trigger = vi.fn(async () => expected);
+    const service = new AdminIcpAutonomyDataService({
+      runtimeEnablement: createIcpAutonomyRuntimeEnablement(true),
+      settingsService: settings(),
+      operatorLeaseTtlMs: 1_000,
+      testInitiation: { trigger },
+    });
+
+    await expect(service.triggerTestInitiation({
+      peerCompanionId: PEER_ID,
+      requestId: OTHER_ROOT,
+    })).resolves.toEqual(expected);
+    expect(trigger).toHaveBeenCalledWith({
+      peerCompanionId: PEER_ID,
+      requestId: OTHER_ROOT,
+    });
+  });
+
   it.each([
     'relation_contract_unavailable',
     'row_contract_invalid',

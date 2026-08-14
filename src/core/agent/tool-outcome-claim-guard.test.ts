@@ -1,6 +1,7 @@
 import type { AgentMessage } from '../../boundary/pi-agent/index.js';
 import { describe, expect, it } from 'vitest';
 import {
+  detectsUnfinishedToolExecutionNarration,
   rejectsUnconfirmedToolExecutionClaim,
   UNCONFIRMED_TOOL_EXECUTION_CORRECTION,
 } from './tool-outcome-claim-guard.js';
@@ -27,6 +28,12 @@ function namedToolResult(toolName: string, outcome: string): AgentMessage {
 }
 
 describe('tool outcome final-response conformance', () => {
+  it('detects a final response that only narrates the next tool action', () => {
+    expect(detectsUnfinishedToolExecutionNarration('Now updating to in_progress.')).toBe(true);
+    expect(detectsUnfinishedToolExecutionNarration('Next I will call the update tool.')).toBe(true);
+    expect(detectsUnfinishedToolExecutionNarration('The issue remains open.')).toBe(false);
+  });
+
   it.each(['policy_denial', 'validation_rejection', 'duplicate_skip', 'dependency_skip'])(
     'rejects execution-success claims for a %s-only operation',
     (outcome) => {

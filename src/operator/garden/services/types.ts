@@ -102,6 +102,9 @@ export type {
   AdminIcpPermitView,
   AdminIcpReasonCount,
   AdminIcpRecentDeliveryEvent,
+  AdminIcpTestInitiationInput,
+  AdminIcpTestInitiationPort,
+  AdminIcpTestInitiationResult,
 } from './types/icp-autonomy.js';
 
 export type {

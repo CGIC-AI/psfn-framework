@@ -216,6 +216,24 @@ export interface AdminIcpCandidateCancelInput {
   expectedRevision: number;
 }
 
+export interface AdminIcpTestInitiationInput {
+  peerCompanionId: string;
+  requestId: string;
+}
+
+export interface AdminIcpTestInitiationResult {
+  outcome: 'sent' | 'suppressed' | 'deferred' | 'declined' | 'rejected' | 'deduped';
+  candidateId: string;
+  status: IcpInitiationCandidateStatus;
+  reasonCode?: IcpAutonomyReasonCode;
+  deliveryDisposition?: 'delivered' | 'suppressed';
+  retryEligibleAtMs?: number;
+}
+
+export interface AdminIcpTestInitiationPort {
+  trigger(input: AdminIcpTestInitiationInput): Promise<AdminIcpTestInitiationResult>;
+}
+
 export interface AdminIcpMutationResult {
   ok: true;
   revokedPermitCount: number;
@@ -227,5 +245,6 @@ export interface AdminIcpAutonomyService {
   cancelCandidate(input: AdminIcpCandidateCancelInput): Promise<AdminIcpMutationResult>;
   setDoNotDisturb(): Promise<AdminIcpMutationResult>;
   emergencyDisable(): Promise<AdminIcpMutationResult>;
+  triggerTestInitiation(input: AdminIcpTestInitiationInput): Promise<AdminIcpTestInitiationResult>;
   close?(): Promise<void>;
 }

@@ -321,6 +321,9 @@ describe('Postgres live schema migrations', () => {
     expect(localSql).toContain('reason_summary TEXT NOT NULL');
     expect(localSql).toContain('continuation_task_kind TEXT');
     expect(localSql).toContain('peer_contact_id TEXT NOT NULL');
+    expect(sharedSql).toContain("VALUES (13, 'icp-operator-test-initiation-source')");
+    expect(sharedSql).toContain("'operator_test'");
+    expect(localSql).toContain("'operator_test'");
   });
 
   it('adds the gateway speaking-arbiter state as shared migration 10 (jp36.5.1.1)', () => {
@@ -354,7 +357,6 @@ describe('Postgres live schema migrations', () => {
       sharedSql.indexOf("VALUES (10, 'speaking-arbiter')"),
     );
     expect(sharedSql).toContain("VALUES (10, 'speaking-arbiter')");
-
     // The base shared chain stays pgvector-free (the arbiter needs no vectors).
     expect(sharedSql).not.toMatch(/vector/i);
   });

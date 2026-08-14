@@ -81,6 +81,7 @@ import {
 } from '../../../primitives/images/attachment-claim-guard.js';
 import { stripLeadingHistoryStamps } from '../../../shared/utils/history-stamp-hygiene.js';
 import {
+  detectsUnfinishedToolExecutionNarration,
   rejectsUnconfirmedToolExecutionClaim,
   UNAVAILABLE_REQUESTED_TOOL_CORRECTION,
   UNCONFIRMED_TOOL_EXECUTION_CORRECTION,
@@ -1370,6 +1371,23 @@ export async function handleMessageForTurn(
         turnId,
         requestId,
         ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.tool_execution_claim.rejected'),
+      });
+    }
+
+    if (detectsUnfinishedToolExecutionNarration(safeResponseText)) {
+      log.warn('Assistant final response narrates a tool action that did not finish in the turn', {
+        channelId: message.channelId,
+        turnId,
+        requestId,
+      });
+      runtime.emitTelemetry('agent.tool_execution_narration.unfinished', {
+        channelId: message.channelId,
+        turnId,
+        requestId,
+        ...runtime.withCorrelationPurpose(
+          turnCorrelationBase,
+          'agent.tool_execution_narration.unfinished',
+        ),
       });
     }
 

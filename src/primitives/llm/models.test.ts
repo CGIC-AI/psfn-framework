@@ -106,6 +106,26 @@ describe('createOpenAICompatibleEndpointModel', () => {
 
     expect(model.compat?.thinkingFormat).toBe('openrouter');
   });
+
+  it('enables streamed tool arguments on a direct Z.AI endpoint', () => {
+    const model = createOpenAICompatibleEndpointModel({
+      baseUrl: 'https://api.z.ai/api/paas/v4',
+      modelId: 'zai-code/zai/glm-5.2',
+      provider: 'vega-testing',
+    });
+
+    expect((model.compat as { zaiToolStream?: boolean } | undefined)?.zaiToolStream).toBe(true);
+  });
+
+  it('does not send the Z.AI tool-stream extension through generic routers', () => {
+    const model = createOpenAICompatibleEndpointModel({
+      baseUrl: 'https://router.example.test/v1',
+      modelId: 'z-ai/glm-5.2',
+      provider: 'shared-router',
+    });
+
+    expect((model.compat as { zaiToolStream?: boolean } | undefined)?.zaiToolStream).toBeUndefined();
+  });
 });
 
 describe('resolveSystemRoleCapabilityMetadata', () => {

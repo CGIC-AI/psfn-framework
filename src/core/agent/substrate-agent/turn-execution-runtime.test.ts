@@ -1339,6 +1339,37 @@ describe('handleMessageForTurn outbound reply hygiene', () => {
       }),
     );
   });
+
+  it('emits telemetry when a final response only narrates a pending tool action', async () => {
+    const eventBus = new EventBus();
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'System prompt',
+      messages: [],
+      manifest: makeContextManifestFixture(),
+    }));
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {
+        buildContext,
+      } as unknown as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage: vi.fn(() => 2),
+    });
+    runtime.extractResponseText = vi.fn(() => 'Now updating to in_progress.');
+
+    await handleMessageForTurn(runtime, createMessage('msg-unfinished-tool-narration'));
+
+    expect(runtime.emitTelemetry).toHaveBeenCalledWith(
+      'agent.tool_execution_narration.unfinished',
+      expect.objectContaining({
+        channelId: 'ch1',
+        requestId: 'msg-unfinished-tool-narration',
+      }),
+    );
+  });
 });
 
 describe('handleMessageForTurn generated media delivery', () => {

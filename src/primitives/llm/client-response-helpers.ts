@@ -444,10 +444,62 @@ export function toolInputIsEmpty(input: Record<string, unknown> | null | undefin
   return !input || Object.keys(input).length === 0;
 }
 
-export function toolSchemaRequiresProperties(schema: Record<string, unknown> | undefined): boolean {
+function jsonValueEquals(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+/** Evaluate inline tool-schema constraints that can affect the single value `{}`. */
+function schemaAcceptsEmptyObject(schema: unknown): boolean {
+  if (typeof schema === 'boolean') return schema;
+  if (!isRecord(schema)) return false;
+  if (schema.$ref !== undefined || schema.$dynamicRef !== undefined) return false;
+
+  const declaredType = schema.type;
+  if (
+    typeof declaredType === 'string'
+      ? declaredType !== 'object'
+      : Array.isArray(declaredType)
+        ? !declaredType.includes('object')
+        : declaredType !== undefined
+  ) {
+    return false;
+  }
+  if (schema.required !== undefined) {
+    if (!Array.isArray(schema.required) || schema.required.length > 0) return false;
+  }
+  if (typeof schema.minProperties === 'number' && schema.minProperties > 0) return false;
+  if (schema.const !== undefined && !jsonValueEquals(schema.const, {})) return false;
+  if (schema.enum !== undefined) {
+    if (
+      !Array.isArray(schema.enum)
+      || !schema.enum.some(candidate => jsonValueEquals(candidate, {}))
+    ) {
+      return false;
+    }
+  }
+
+  if (schema.allOf !== undefined) {
+    if (!Array.isArray(schema.allOf) || !schema.allOf.every(schemaAcceptsEmptyObject)) return false;
+  }
+  if (schema.anyOf !== undefined) {
+    if (!Array.isArray(schema.anyOf) || !schema.anyOf.some(schemaAcceptsEmptyObject)) return false;
+  }
+  if (schema.oneOf !== undefined) {
+    if (!Array.isArray(schema.oneOf)) return false;
+    const acceptedBranches = schema.oneOf.filter(schemaAcceptsEmptyObject);
+    if (acceptedBranches.length !== 1) return false;
+  }
+  if (schema.not !== undefined && schemaAcceptsEmptyObject(schema.not)) return false;
+  if (schema.if !== undefined) {
+    const conditional = schemaAcceptsEmptyObject(schema.if) ? schema.then : schema.else;
+    if (conditional !== undefined && !schemaAcceptsEmptyObject(conditional)) return false;
+  }
+  return true;
+}
+
+export function toolSchemaRejectsEmptyObject(schema: Record<string, unknown> | undefined): boolean {
   if (!schema) return false;
-  const required = schema.required;
-  return Array.isArray(required) && required.length > 0;
+  return !schemaAcceptsEmptyObject(schema);
 }
 
 export function findCorruptEmptyToolCalls(
@@ -460,7 +512,7 @@ export function findCorruptEmptyToolCalls(
     if (!toolInputIsEmpty(call.input)) return false;
     // Unknown tool → we cannot prove it requires arguments, so do not flag it;
     // any downstream failure surfaces normally (no behavior change vs. today).
-    return toolSchemaRequiresProperties(schemaByName.get(call.name));
+    return toolSchemaRejectsEmptyObject(schemaByName.get(call.name));
   });
 }
 

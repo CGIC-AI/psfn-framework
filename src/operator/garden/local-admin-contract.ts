@@ -154,7 +154,10 @@ import { CogSecEventStore } from '../../core/cogsec/events.js';
 import { AdminShardFoldReviewDataService } from './services/shard-fold-review-service.js';
 import { AdminWikiDataService } from './services/wiki-service.js';
 import { AdminWishlistDataService } from './services/wishlist-service.js';
-import type { AdminWishlistBeadCreatePort } from './services/types.js';
+import type {
+  AdminIcpTestInitiationPort,
+  AdminWishlistBeadCreatePort,
+} from './services/types.js';
 import type { AdminToolHealthProvider } from './tool-health-provider.js';
 import type { GatewayCredentialPresenceResult } from '../../boundary/gateway/protocol.js';
 import type { IcpInitiationCandidateStorePort } from '../../core/icp/autonomy-store-ports.js';
@@ -279,6 +282,7 @@ export interface InProcessGardenAdminContractOptions {
   /** Shadow-only Partner Affect observation store (docs/partner-affect.md slice 1). */
   partnerAffectShadowStore?: PartnerAffectShadowStorePort | null;
   icpRuntimeEnablement?: IcpAutonomyRuntimeEnablement | null;
+  icpTestInitiation?: AdminIcpTestInitiationPort;
   /** Read-only fleet-wide arbiter projection; null in single-companion mode (jp36.8.1). */
   speakingArbiterAdminStore?: SpeakingArbiterAdminStore | null;
   /** Existing gateway-backed Beads create primitive used for explicit wish conversion. */
@@ -519,6 +523,7 @@ export function createInProcessGardenAdminContract(
       candidateStore: options.icpInitiationCandidateStore ?? null,
       projectionStore: options.icpAdminProjectionStore ?? null,
       runtimeEnablement: options.icpRuntimeEnablement,
+      ...(options.icpTestInitiation ? { testInitiation: options.icpTestInitiation } : {}),
       settingsService,
       operatorLeaseTtlMs:
         options.effectiveSchedulerConfig.icpAutonomy.availability.operatorLeaseTtlMs,

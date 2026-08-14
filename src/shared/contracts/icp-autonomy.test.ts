@@ -56,6 +56,10 @@ describe('ICP autonomy shared contracts', () => {
     }, { knownCompanionIds: new Set([COMPANION_A, COMPANION_B]) });
 
     expect(episode.channelId).toContain('companion-dm:');
+    expect(parseIcpConversationEpisode({
+      ...episode,
+      initiationSource: 'operator_test',
+    }).initiationSource).toBe('operator_test');
     expect(() => parseIcpConversationEpisode({
       ...episode,
       participantCompanionIds: [COMPANION_B, COMPANION_A],

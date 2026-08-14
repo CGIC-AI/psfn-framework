@@ -1,6 +1,7 @@
 import type {
   ToolCall,
   ToolSchema,
+  StreamCallbacks,
 } from '../../shared/contracts/runtime.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import type { ResolvedCorrelationMetadata } from './correlation.js';
@@ -10,6 +11,7 @@ import {
   toDiagnosticCorrelationFields,
 } from './client-response-helpers.js';
 import type { RoutingCandidate } from './routing.js';
+import { isMissingRequiredToolCallError } from './explicit-tool-request.js';
 
 const log = createComponentLogger('LLMClient');
 
@@ -18,6 +20,94 @@ const log = createComponentLogger('LLMClient');
 // many retries the (still corrupt) response is returned as-is so downstream validation
 // surfaces it — fail closed, never fabricate/drop/default.
 export const MAX_EMPTY_TOOL_ARGS_COMPLETION_RETRIES = 2;
+
+export interface BufferedStreamCallbacks {
+  callbacks: StreamCallbacks | undefined;
+  flush(): void;
+}
+
+/** Hold retryable attempt output until its response postconditions pass. */
+export function createBufferedStreamCallbacks(
+  callbacks: StreamCallbacks | undefined,
+): BufferedStreamCallbacks {
+  if (!callbacks) return { callbacks: undefined, flush: () => undefined };
+  const pending: Array<() => void> = [];
+  let flushed = false;
+  return {
+    callbacks: {
+      ...(callbacks.onText
+        ? { onText: (text: string) => pending.push(() => callbacks.onText?.(text)) }
+        : {}),
+      ...(callbacks.onToolCall
+        ? {
+          onToolCall: (name: string, input: Record<string, unknown>) => {
+            pending.push(() => callbacks.onToolCall?.(name, input));
+          },
+        }
+        : {}),
+      ...(callbacks.onFirstOutput
+        ? {
+          onFirstOutput: (observation: Parameters<NonNullable<StreamCallbacks['onFirstOutput']>>[0]) => {
+            pending.push(() => callbacks.onFirstOutput?.(observation));
+          },
+        }
+        : {}),
+    },
+    flush() {
+      if (flushed) return;
+      flushed = true;
+      for (const publish of pending) publish();
+    },
+  };
+}
+
+/**
+ * A required explicit step is a response postcondition, not a provider promise.
+ * Retry one fresh physical completion when the provider returns no call at all;
+ * every other contract violation remains immediately fatal.
+ */
+export async function retryCompletionOnMissingRequiredToolCall<T>(input: {
+  attempt: () => Promise<T>;
+  retryEnabled: boolean;
+  candidate: RoutingCandidate;
+  correlation: ResolvedCorrelationMetadata | undefined;
+  purpose: string;
+}): Promise<T> {
+  try {
+    return await input.attempt();
+  } catch (error) {
+    if (!input.retryEnabled || !isMissingRequiredToolCallError(error)) throw error;
+    log.warn('Retrying completion: provider returned no call for a required explicit tool step', {
+      provider: input.candidate.provider,
+      model: input.candidate.model,
+      purpose: input.purpose,
+      ...(input.correlation ? toDiagnosticCorrelationFields(input.correlation) : {}),
+    });
+  }
+
+  try {
+    const result = await input.attempt();
+    log.warn('Missing required tool-call retry resolved', {
+      outcome: 'recovered',
+      provider: input.candidate.provider,
+      model: input.candidate.model,
+      purpose: input.purpose,
+      ...(input.correlation ? toDiagnosticCorrelationFields(input.correlation) : {}),
+    });
+    return result;
+  } catch (error) {
+    if (isMissingRequiredToolCallError(error)) {
+      log.warn('Missing required tool-call retry resolved', {
+        outcome: 'exhausted',
+        provider: input.candidate.provider,
+        model: input.candidate.model,
+        purpose: input.purpose,
+        ...(input.correlation ? toDiagnosticCorrelationFields(input.correlation) : {}),
+      });
+    }
+    throw error;
+  }
+}
 
 /**
  * gu8m diagnostics: when a streamed response contains tool calls with empty

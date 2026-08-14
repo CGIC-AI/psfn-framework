@@ -1,4 +1,9 @@
 import type { LLMContext } from '../../shared/contracts/runtime.js';
+import {
+  isHeldToolCallResult,
+  isToolResultOutcomeProjection,
+  resolveToolCallOutcome,
+} from '../../shared/contracts/tool-call-outcome.js';
 import { resolveExplicitToolRequestSequence } from '../../shared/tools/explicit-tool-request.js';
 import { isRecord } from '../../shared/utils/types.js';
 
@@ -13,13 +18,26 @@ export interface ExplicitToolContract {
   requiredToolName?: string;
 }
 
+export type ExplicitToolContractViolation =
+  | 'missing_required_call'
+  | 'unexpected_tool_call'
+  | 'mismatched_tool_call';
+
 export class ExplicitToolContractError extends Error {
   readonly code = 'MODEL_TOOL_CONTRACT_INCOMPATIBLE';
 
-  constructor(message: string) {
+  constructor(
+    message: string,
+    readonly violation: ExplicitToolContractViolation = 'mismatched_tool_call',
+  ) {
     super(message);
     this.name = 'ExplicitToolContractError';
   }
+}
+
+export function isMissingRequiredToolCallError(error: unknown): boolean {
+  return isExplicitToolContractError(error)
+    && (error as { violation?: unknown }).violation === 'missing_required_call';
 }
 
 export function isExplicitToolContractError(error: unknown): error is ExplicitToolContractError {
@@ -69,6 +87,7 @@ export function assertExplicitToolContractSatisfied(input: {
     if (input.toolCalls.length === 0) return;
     throw new ExplicitToolContractError(
       `Provider returned ${input.toolCalls.length} tool call(s) after tool execution was disabled`,
+      'unexpected_tool_call',
     );
   }
   const expectedName = input.choice === 'required'
@@ -80,6 +99,12 @@ export function assertExplicitToolContractSatisfied(input: {
     && input.toolCalls[0]?.name === expectedName
   ) {
     return;
+  }
+  if (expectedName && input.toolCalls.length === 0) {
+    throw new ExplicitToolContractError(
+      `Provider violated explicit tool contract: expected exactly one ${JSON.stringify(expectedName)} call, received []`,
+      'missing_required_call',
+    );
   }
   throw new ExplicitToolContractError(
     `Provider violated explicit tool contract: expected exactly one ${JSON.stringify(expectedName)} call, received ${JSON.stringify(input.toolCalls.map(call => call.name))}`,
@@ -106,6 +131,7 @@ export function selectExplicitToolContractCall<T extends { name: string }>(input
     if (input.toolCalls.length === 0) return [];
     throw new ExplicitToolContractError(
       `Provider returned ${input.toolCalls.length} tool call(s) after tool execution was disabled`,
+      'unexpected_tool_call',
     );
   }
   const expectedName = input.choice === 'required'
@@ -118,6 +144,12 @@ export function selectExplicitToolContractCall<T extends { name: string }>(input
   ) {
     const first = input.toolCalls[0];
     return first ? [first] : [];
+  }
+  if (expectedName && input.toolCalls.length === 0) {
+    throw new ExplicitToolContractError(
+      `Provider violated explicit tool contract: expected exactly one ${JSON.stringify(expectedName)} call, received []`,
+      'missing_required_call',
+    );
   }
   throw new ExplicitToolContractError(
     `Provider violated explicit tool contract: expected exactly one ${JSON.stringify(expectedName)} call, received ${JSON.stringify(input.toolCalls.map(call => call.name))}`,
@@ -150,9 +182,13 @@ export function resolveExplicitToolContract(input: {
   );
   if (requestedToolSequence.length === 0) return undefined;
   const attemptedToolNames = messages.slice(currentUserIndex + 1)
-    .filter(message => message.role === 'toolResult' || message.role === 'tool')
-    .map(message => (message as { toolName?: unknown }).toolName)
-    .filter((name): name is string => typeof name === 'string');
+    .filter(isToolResultOutcomeProjection)
+    .filter((message) => {
+      if (isHeldToolCallResult(message.details)) return false;
+      const outcome = resolveToolCallOutcome(message);
+      return outcome === 'success' || outcome === 'execution_failure';
+    })
+    .map(message => message.toolName);
   let completedSequenceSteps = 0;
   for (const attemptedToolName of attemptedToolNames) {
     if (attemptedToolName === requestedToolSequence[completedSequenceSteps]) {

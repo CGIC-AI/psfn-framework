@@ -21,6 +21,11 @@ export const UNAVAILABLE_REQUESTED_TOOL_CORRECTION =
 
 const STRUCTURED_EXECUTION_SUCCESS_KEY = /^(?:success|succeeded|completed|done|created|updated|deleted|sent|saved|wrote|written|executed|ran|fetched|downloaded|uploaded|attached|posted|published|scheduled|cancelled|canceled|restored|imported|appended|notified|inspected|viewed|listed|linked|redacted|considered|started|worked|toggled(?:Twice)?|disabledThenRestored)$/iu;
 const STRUCTURED_EXECUTION_FAILURE_PATTERN = /\b(?:could not|cannot|can't|failed|failure|error|denied|blocked|refused|rejected|retired|unavailable|not executed|not completed)\b/iu;
+const UNFINISHED_TOOL_EXECUTION_NARRATION_PATTERN = /(?:^|[.!?]\s+)\s*(?:(?:now|next|then)\s+(?:(?:i|we)(?:'ll|\s+will|'m|\s+am|\s+are)?\s+)?|(?:i|we)(?:'ll|\s+will)\s+(?:now\s+)?)(?:call(?:ing)?|us(?:e|ing)|invok(?:e|ing)|runn?ing|execut(?:e|ing)|trigger(?:ing)?|updat(?:e|ing)|creat(?:e|ing)|send(?:ing)?|writ(?:e|ing)|delet(?:e|ing)|redact(?:ing)?|import(?:ing)?|patch(?:ing)?|mov(?:e|ing)|set(?:ting)?)\b/iu;
+
+export function detectsUnfinishedToolExecutionNarration(responseText: string): boolean {
+  return UNFINISHED_TOOL_EXECUTION_NARRATION_PATTERN.test(responseText.trim());
+}
 
 function parseStructuredResponse(responseText: string): unknown {
   const trimmed = responseText.trim();

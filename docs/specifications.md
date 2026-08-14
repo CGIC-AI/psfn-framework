@@ -482,8 +482,14 @@ Both gateway and agent startup run canonical hydration through `hydrateCanonical
   control-plane state and effective/on-disk/restart owner semantics. Unrelated
   peer↔peer lifecycle, provenance, reason, fatigue, cost, and derived counts are
   excluded. Audited local controls are
-  revision-checked candidate cancellation, operator DND, and one-way live
-  emergency disable plus persisted owner disable.
+  revision-checked candidate cancellation, operator DND, one-way live emergency
+  disable plus persisted owner disable, and a model-independent test initiation.
+  `POST /api/admin/icp-autonomy/test-initiations` accepts only a canonical peer
+  companion UUID and an idempotent request UUID. The durable source is
+  `operator_test`; the authenticated request supplies test consent, but the
+  ordinary capability, identity, trust/block, availability, fatigue, charge,
+  cost, preflight, one-use permit, and target-turn path remains mandatory. The
+  route accepts no message or motivation text.
 - Not shipped: cross-cluster communication, cluster-wide/cross-companion control,
   message puppeteering, private transcript/reasoning inspection, and any Garden
   exposure of chain-of-thought.

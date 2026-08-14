@@ -6,6 +6,8 @@ import { buildAdminIcpAutonomyRoutes } from './icp-autonomy-routes.js';
 import type { AdminAuditTimelineAppender, AdminBodyReader } from './types.js';
 
 const CANDIDATE_ID = '33333333-3333-4333-8333-333333333333';
+const PEER_ID = '22222222-2222-4222-8222-222222222222';
+const REQUEST_ID = '44444444-4444-4444-8444-444444444444';
 
 class CapturingResponse {
   statusCode = 0;
@@ -62,6 +64,51 @@ async function invoke(input: {
 }
 
 describe('admin ICP autonomy routes', () => {
+  it('strictly validates and audits operator test initiations', async () => {
+    const triggerTestInitiation = vi.fn(async () => ({
+      outcome: 'sent' as const,
+      candidateId: CANDIDATE_ID,
+      status: 'consumed' as const,
+      deliveryDisposition: 'delivered' as const,
+    }));
+    const audit = vi.fn<AdminAuditTimelineAppender>();
+
+    const result = await invoke({
+      method: 'POST',
+      path: '/api/admin/icp-autonomy/test-initiations',
+      body: { peerCompanionId: PEER_ID, requestId: REQUEST_ID },
+      service: { triggerTestInitiation },
+      audit,
+    });
+
+    expect(result.statusCode).toBe(200);
+    expect(triggerTestInitiation).toHaveBeenCalledWith({
+      peerCompanionId: PEER_ID,
+      requestId: REQUEST_ID,
+    });
+    expect(audit).toHaveBeenCalledWith(
+      'autonomy_control',
+      'allowed',
+      expect.stringContaining('test initiation'),
+      expect.arrayContaining([
+        `peerCompanionId=${PEER_ID}`,
+        `requestId=${REQUEST_ID}`,
+        `candidateId=${CANDIDATE_ID}`,
+      ]),
+      'operator',
+    );
+
+    const invalid = await invoke({
+      method: 'POST',
+      path: '/api/admin/icp-autonomy/test-initiations',
+      body: { peerCompanionId: PEER_ID, requestId: REQUEST_ID, reason: 'bypass' },
+      service: { triggerTestInitiation },
+      audit,
+    });
+    expect(invalid.statusCode).toBe(400);
+    expect(triggerTestInitiation).toHaveBeenCalledTimes(1);
+  });
+
   it('returns the bounded service projection, including content-free delivery telemetry', async () => {
     const data = {
       available: true,

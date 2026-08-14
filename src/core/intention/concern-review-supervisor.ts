@@ -5,8 +5,8 @@ import type {
 } from './concern-candidates.js';
 
 export const CONCERN_REVIEW_SUPERVISOR_TASK_ID = 'concern-review-supervisor';
-export const CONCERN_REVIEW_SUPERVISOR_TASK_NAME = 'Deadline-Aware Concern Review';
-export const CONCERN_REVIEW_SUPERVISOR_SCHEDULE_SOURCE = 'scheduler.json > tickIntervalMs';
+const CONCERN_REVIEW_SUPERVISOR_TASK_NAME = 'Deadline-Aware Concern Review';
+const CONCERN_REVIEW_SUPERVISOR_SCHEDULE_SOURCE = 'scheduler.json > tickIntervalMs';
 
 export interface ConcernReviewSupervisorWorkerPort {
   retireStaleCandidates(): Promise<number>;

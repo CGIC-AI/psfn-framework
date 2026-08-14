@@ -301,9 +301,9 @@ function executeStreamCandidate(params: ExecuteStreamCandidateParams): AsyncGene
     : undefined;
 
   return (async function* executeWithRetry() {
-    let transportRetryAttempt = 0;
-    let missingRequiredCallRetries = 0;
-    let corruptEmptyArgumentRetries = 0;
+    let retryAttempt = 0;
+    let missingRequiredCallRetries = retryAttempt;
+    let corruptEmptyArgumentRetries = retryAttempt;
     for (;;) {
       let committed = false;
       const bufferedEvents: AssistantMessageEvent[] = [];
@@ -438,18 +438,18 @@ function executeStreamCandidate(params: ExecuteStreamCandidateParams): AsyncGene
           throw new NonRecoverableFallbackError(err);
         }
 
-        const canRetry = transportRetryAttempt < maxRetries
+        const canRetry = retryAttempt < maxRetries
           && isRetryableError(err, retryConfig.retryableErrors);
         if (!canRetry) {
           throw err;
         }
 
-        const delayMs = baseDelayMs * (2 ** transportRetryAttempt);
-        transportRetryAttempt += 1;
+        const delayMs = baseDelayMs * (2 ** retryAttempt);
+        retryAttempt += 1;
         log.warn('LLM stream failed, retrying', {
           model: String(params.model.id),
           provider: candidate.provider,
-          attempt: transportRetryAttempt,
+          attempt: retryAttempt,
           maxRetries,
           delayMs,
           error: err.message,

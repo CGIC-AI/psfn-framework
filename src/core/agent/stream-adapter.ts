@@ -341,7 +341,6 @@ function executeStreamCandidate(params: ExecuteStreamCandidateParams): AsyncGene
           }
 
           if (event.type === 'done') {
-            assertValidTerminalAssistantMessage(event.message, candidate);
             const terminalToolCalls = extractToolCallsFromContentBlocks(event.message.content);
             try {
               assertExplicitToolContractSatisfied({
@@ -365,6 +364,7 @@ function executeStreamCandidate(params: ExecuteStreamCandidateParams): AsyncGene
               }
               throw error;
             }
+            assertValidTerminalAssistantMessage(event.message, candidate);
             const corruptEmptyCalls = findCorruptEmptyToolCalls(
               terminalToolCalls,
               normalizedTools,

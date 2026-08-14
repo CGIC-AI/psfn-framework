@@ -2498,7 +2498,7 @@ describe('LLMClient completion model hints', () => {
         message: {
           model: 'z-ai/glm-5',
           usage: { input: 8, output: 4 },
-          content: [{ type: 'text', text: 'I did it.' }],
+          content: [],
         },
         reason: 'stop',
       };

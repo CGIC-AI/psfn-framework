@@ -221,6 +221,27 @@ describe('explicit tool request choice', () => {
     })).toEqual({ type: 'function', function: { name: 'memory' } });
   });
 
+  it.each([
+    'Use memory with action "write" to store apples. Call memory to store oranges.',
+    'Use memory with action "write" to store alpha. Call memory with text set to beta.',
+  ])('preserves repeated operations with distinct operands: %s', (request) => {
+    expect(resolveExplicitToolChoice({
+      context: context([
+        { role: 'user', content: request },
+        {
+          role: 'toolResult',
+          toolCallId: 'call-1',
+          toolName: 'memory',
+          content: 'created first',
+          outcome: 'success',
+          isError: false,
+        },
+      ] as LLMContext['messages']),
+      originStage: 'agent.turn.prompt',
+      modelApi: 'openai-completions',
+    })).toEqual({ type: 'function', function: { name: 'memory' } });
+  });
+
   it('does not force an explicitly optional tool suggestion', () => {
     expect(resolveExplicitToolChoice({
       context: context([{

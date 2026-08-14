@@ -63,8 +63,6 @@ describe('Hardcoded-settings repository gate', () => {
       'src/core/cogsec/intake/screening-envelope-policy.ts::COGSEC_ORIGIN_DETAIL_MAX_CHARS',
       'src/core/cogsec/intake/screening-envelope-policy.ts::COGSEC_TRANSPORT_ERROR_MAX_CHARS',
       'src/core/contacts/store/identity-utils.ts::MAX_LINK_VERIFICATION_TTL_MS',
-      'src/core/intention/concern-candidates.ts::NEXT_WEEK_FOLLOW_UP_DELAY_MS',
-      'src/core/intention/concern-candidates.ts::TOMORROW_FOLLOW_UP_DELAY_MS',
       'src/core/tools/self-diagnosis.ts::SELF_DIAGNOSIS_MAX_BUFFER_BYTES',
       'src/primitives/images/vision-policy.ts::VISION_IMAGE_MAX_BYTES',
       'src/shared/audit-actor.ts::AUDIT_ACTOR_MAX_CHARS',
@@ -74,13 +72,15 @@ describe('Hardcoded-settings repository gate', () => {
       expect(identities).toContain(identity);
     }
 
-    for (const removedDuplicate of [
+    for (const removedOrReconciled of [
       'src/core/agent/substrate-agent/turn-execution/post-turn-scheduling.ts::createBackgroundWorkInput.maxAttempts',
+      'src/core/intention/concern-candidates.ts::NEXT_WEEK_FOLLOW_UP_DELAY_MS',
+      'src/core/intention/concern-candidates.ts::TOMORROW_FOLLOW_UP_DELAY_MS',
       'src/core/intention/postgres-adapters/concerns-adapter.ts::PostgresActiveConcernStore.resolveConcernTtlMs.$call:return-arithmetic:AsteriskToken#1',
       'src/core/tools/lifecycle.ts::runRepoLifecycleBuildCommand.$call:timer:setTimeout.arg1#1',
       'src/core/agent/substrate-agent/vision-attachments.ts::VISION_ATTACHMENT_MAX_BYTES',
     ]) {
-      expect(identities).not.toContain(removedDuplicate);
+      expect(identities).not.toContain(removedOrReconciled);
     }
   });
 

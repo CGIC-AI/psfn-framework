@@ -154,10 +154,7 @@ import { CogSecEventStore } from '../../core/cogsec/events.js';
 import { AdminShardFoldReviewDataService } from './services/shard-fold-review-service.js';
 import { AdminWikiDataService } from './services/wiki-service.js';
 import { AdminWishlistDataService } from './services/wishlist-service.js';
-import type {
-  AdminIcpTestInitiationPort,
-  AdminWishlistBeadCreatePort,
-} from './services/types.js';
+import type { AdminIcpTestInitiationPort, AdminWishlistBeadCreatePort } from './services/types.js';
 import type { AdminToolHealthProvider } from './tool-health-provider.js';
 import type { GatewayCredentialPresenceResult } from '../../boundary/gateway/protocol.js';
 import type { IcpInitiationCandidateStorePort } from '../../core/icp/autonomy-store-ports.js';

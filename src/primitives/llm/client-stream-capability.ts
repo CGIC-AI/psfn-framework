@@ -35,6 +35,7 @@ import { markErrorAsNonRetryable } from './retry.js';
 import { logEmptyToolArgumentProvenance } from './empty-tool-argument-retry.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import {
+  ExplicitToolContractError,
   selectExplicitToolContractCall,
 } from './explicit-tool-request.js';
 
@@ -83,6 +84,20 @@ export interface RunLLMStreamAttemptInput {
   reserveCost: () => Promise<void>;
   recordUsage: (record: StreamUsageRecord) => Promise<void>;
   throwIfAborted: () => void;
+}
+
+function deferredMissingRequiredCallError(
+  input: RunLLMStreamAttemptInput,
+  toolCalls: readonly ToolCall[],
+): ExplicitToolContractError | undefined {
+  const requiredToolName = input.requestOptions.requiredToolName;
+  if (!input.deferMissingRequiredToolCall || !requiredToolName || toolCalls.length > 0) {
+    return undefined;
+  }
+  return new ExplicitToolContractError(
+    `Provider violated explicit tool contract: expected exactly one ${JSON.stringify(requiredToolName)} call, received []`,
+    'missing_required_call',
+  );
 }
 
 function hasSubstantiveToolCallIdentity(
@@ -308,6 +323,7 @@ export async function runLLMStreamAttempt(
 
   const cancelledAfterCompletion = input.transportSignal.aborted;
   if (response) {
+    const deferredContractError = deferredMissingRequiredCallError(input, response.toolCalls);
     try {
       assertUsableProviderResponse(response, input.candidate);
       response.toolCalls = selectExplicitToolContractCall({
@@ -349,13 +365,18 @@ export async function runLLMStreamAttempt(
       outputTokens: response.outputTokens,
       usageDetails: response.usageDetails,
       options: usageOptions({
-        status: 'success',
+        status: deferredContractError ? 'failure' : 'success',
         settlement: 'complete',
-        stopReason: response.stopReason,
+        ...(deferredContractError
+          ? { error: deferredContractError }
+          : { stopReason: response.stopReason }),
         metadata: {
           emptyToolArgsAttempt: input.attemptIndex,
           emptyArgsRetries: input.attemptIndex,
           toolCallCount: response.toolCalls.length,
+          ...(deferredContractError
+            ? { toolContractViolation: deferredContractError.violation }
+            : {}),
           ...resolveEmptyToolArgumentUsageMetadata(
             response.toolCalls,
             toolArgumentFragmentBytes,
@@ -393,6 +414,10 @@ export async function runLLMStreamAttempt(
     usageDetails: incompleteUsage,
     stopReason: 'unknown',
   };
+  const deferredContractError = deferredMissingRequiredCallError(
+    input,
+    incompleteResponse.toolCalls,
+  );
   assertUsableProviderResponse(incompleteResponse, input.candidate);
   incompleteResponse.toolCalls = selectExplicitToolContractCall({
     choice: input.requestOptions.toolChoice,
@@ -400,19 +425,23 @@ export async function runLLMStreamAttempt(
       ? { requiredToolName: input.requestOptions.requiredToolName }
       : {}),
     toolCalls: incompleteResponse.toolCalls,
+    ...(input.deferMissingRequiredToolCall ? { deferMissingRequiredCall: true } : {}),
   });
   await input.recordUsage({
     inputTokens: incompleteUsage.input,
     outputTokens: incompleteUsage.output,
     usageDetails: incompleteUsage,
     options: usageOptions({
-      status: 'success',
+      status: deferredContractError ? 'failure' : 'success',
       settlement: 'partial',
-      stopReason: 'unknown',
+      ...(deferredContractError ? { error: deferredContractError } : { stopReason: 'unknown' }),
       metadata: {
         emptyToolArgsAttempt: input.attemptIndex,
         emptyArgsRetries: input.attemptIndex,
         partialOutputChars: content.length + reasoning.length,
+        ...(deferredContractError
+          ? { toolContractViolation: deferredContractError.violation }
+          : {}),
         ...resolveEmptyToolArgumentUsageMetadata(
           incompleteResponse.toolCalls,
           toolArgumentFragmentBytes,

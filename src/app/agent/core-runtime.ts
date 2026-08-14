@@ -62,7 +62,10 @@ import {
   createIntentionBehavioralPatternHooks,
   wireIntentionRuntimeStores,
 } from '../../core/intention/runtime-wiring.js';
-import { createAutomatedConcernRuntime } from '../../core/intention/concern-candidates.js';
+import {
+  createAutomatedConcernRuntime,
+  type AutomatedConcernRuntime,
+} from '../../core/intention/concern-candidates.js';
 import { createDefaultConcernRouteDispatcher } from './concern-route-wiring.js';
 import { createIdentityCoolingOffManagerFromEnv } from '../../system/capabilities/safeguards.js';
 import { composeSystemPromptTemplate } from '../../core/identity/loader.js';
@@ -254,6 +257,7 @@ export interface AgentCoreRuntime {
   coreMemoryStore: CoreMemoryStorePort;
   introspectionConsentStore: IntrospectionConsentStore;
   intentionRuntime: IntentionRuntimeWiring;
+  automatedConcernRuntime: AutomatedConcernRuntime;
   intentionAppraisalHooks: IntentionAppraisalHooks;
   intentionBehavioralHooks: IntentionBehavioralPatternHooks;
   observerEvalSidecar: ObserverEvalSidecarRuntime;
@@ -1003,6 +1007,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     coreMemoryStore,
     introspectionConsentStore,
     intentionRuntime,
+    automatedConcernRuntime,
     intentionAppraisalHooks,
     intentionBehavioralHooks,
     observerEvalSidecar,

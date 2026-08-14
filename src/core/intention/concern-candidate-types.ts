@@ -8,6 +8,7 @@ import type {
   ActiveConcernVAD,
 } from '../../shared/contracts/intention-contracts.js';
 import type { SessionEntry } from '../session/types.js';
+import type { ConcernTemporalResolution } from './concern-temporal-hints.js';
 
 export type IntentionConcernCandidateExtractionContext = MemoryConcernCandidateExtractionContext;
 export type ConcernCandidateSource = 'memory_extraction';
@@ -51,6 +52,7 @@ export interface ConcernCandidate {
   contactId?: string;
   turnId?: string;
   dueAt?: string;
+  temporalResolution?: ConcernTemporalResolution;
   formationVAD?: ActiveConcernVAD;
   /** Durable candidate concern backing this review item. */
   durableConcernId?: string;

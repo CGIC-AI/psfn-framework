@@ -746,6 +746,7 @@ async function main(): Promise<void> {
     memoryStore,
     agentLoop,
     concernStore: intentionRuntime.concernStore,
+    concernReviewWorker: coreRuntime.automatedConcernRuntime.worker,
     backupConfig,
     pathSnapshot,
     companionPresence: companionPresenceRuntime,

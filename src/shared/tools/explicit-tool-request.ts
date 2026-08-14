@@ -39,8 +39,14 @@ function isOptionalToolDirective(
   matchIndex: number,
   matchEnd: number,
 ): boolean {
-  return /\b(?:if|when)\s+(?:it\s+is\s+)?(?:needed|necessary|required|helpful|useful|appropriate)\b|\bas\s+needed\b|\boptionally\b/iu
-    .test(directiveSentenceAt(requestText, matchIndex, matchEnd));
+  const clauseSuffix = requestText
+    .slice(matchEnd)
+    .split(/[,;.!?]|\bthen\b/iu, 1)[0] ?? '';
+  const clausePrefix = requestText.slice(0, matchIndex);
+  const optional = /\b(?:if|when)\s+(?:it\s+is\s+)?(?:needed|necessary|required|helpful|useful|appropriate)\b|\bas\s+needed\b|\boptionally\b/iu;
+  return optional.test(clauseSuffix)
+    || /(?:\b(?:if|when)\s+(?:it\s+is\s+)?(?:needed|necessary|required|helpful|useful|appropriate)|\bas\s+needed|\boptionally)\s*,?\s*$/iu
+      .test(clausePrefix);
 }
 
 /**

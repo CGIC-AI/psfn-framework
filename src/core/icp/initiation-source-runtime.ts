@@ -204,11 +204,11 @@ function sourceIdentity(input: {
       'pendingFollowUpId',
       MAX_SOURCE_RECORD_ID_CHARS,
     )}`;
-  if (input.request.source === 'felt_impulse') {
-    // The correlation identifies one lever crossing globally for this
-    // companion. Peer eligibility is mutable routing input, so including it
-    // here would allow a crash/replay to mint a second candidate for a newly
-    // selected peer. The first candidate row durably pins the chosen peer.
+  if (input.request.source === 'felt_impulse' || input.request.source === 'operator_test') {
+    // The source record identifies one lever crossing or one authenticated
+    // operator request globally for this companion. Peer selection is routing
+    // input, so excluding it makes a replay idempotent and turns an attempted
+    // request-ID reuse for another peer into an identity conflict.
     return [
       input.localCompanionId,
       input.request.source,

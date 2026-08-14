@@ -63,9 +63,19 @@ function isSameActionArgumentRestatement(
   if (/\bfirst\b/iu.test(betweenDirectives) && /\bsecond\b/iu.test(currentClause)) {
     return false;
   }
-  return /\bwith\s+action\s+(?:"[^"]+"|'[^']+'|[\w-]+)/iu.test(betweenDirectives)
-    && !/\bwith\s+action\s+(?:"[^"]+"|'[^']+'|[\w-]+)/iu.test(currentClause)
-    && /\b(?:the\s+)?(?:same|exact)\s+[\p{L}\p{N}_-]+\b|\b(?:it|that)\b/iu.test(currentClause);
+  if (
+    !/\bwith\s+action\s+(?:"[^"]+"|'[^']+'|[\w-]+)/iu.test(betweenDirectives)
+    || /\bwith\s+action\s+(?:"[^"]+"|'[^']+'|[\w-]+)/iu.test(currentClause)
+    || /\bother\b/iu.test(currentClause)
+  ) {
+    return false;
+  }
+  const namedReferent = /\b(?:the\s+)?(?:same|exact|that)\s+([\p{L}\p{N}_-]+)\b/iu
+    .exec(currentClause)?.[1];
+  if (namedReferent) {
+    return new RegExp(`\\b${escapeRegExp(namedReferent)}\\b`, 'iu').test(betweenDirectives);
+  }
+  return /\b(?:it|that)\b/iu.test(currentClause);
 }
 
 /**

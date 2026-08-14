@@ -224,6 +224,8 @@ describe('explicit tool request choice', () => {
   it.each([
     'Use memory with action "write" to store apples. Call memory to store oranges.',
     'Use memory with action "write" to store alpha. Call memory with text set to beta.',
+    'Use memory with action "write" to store the exact apple. Call memory to store the exact orange.',
+    'Use memory with action "write" to store apples. Call memory to store that other orange.',
   ])('preserves repeated operations with distinct operands: %s', (request) => {
     expect(resolveExplicitToolChoice({
       context: context([

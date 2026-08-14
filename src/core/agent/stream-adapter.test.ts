@@ -841,10 +841,10 @@ describe('createSubstrateStreamFn', () => {
     expect(JSON.stringify(events.at(-1))).toContain('notify');
   });
 
-  it('hard-fails after the one zero-call retry without switching to a fallback model', async () => {
+  it('hard-fails blank responses after one semantic retry without transport retries or fallback', async () => {
     const baseConfig = makeConfig();
     const config = makeConfig({
-      retryMaxAttempts: 0,
+      retryMaxAttempts: 2,
       retryBaseDelayMs: 0,
       modelRegistry: {
         ...baseConfig.modelRegistry!,
@@ -868,7 +868,7 @@ describe('createSubstrateStreamFn', () => {
     streamAdapterMocks.transportStream.mockImplementation(async (context: LLMContext) => (
       context.modelHint?.model === 'deepseek/deepseek-v3.2'
         ? {
-            content: 'Still no tool call.',
+            content: '',
             toolCalls: [],
             model: 'openrouter/deepseek/deepseek-v3.2',
             inputTokens: 6,

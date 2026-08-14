@@ -325,7 +325,6 @@ export async function runLLMStreamAttempt(
   if (response) {
     const deferredContractError = deferredMissingRequiredCallError(input, response.toolCalls);
     try {
-      assertUsableProviderResponse(response, input.candidate);
       response.toolCalls = selectExplicitToolContractCall({
         choice: input.requestOptions.toolChoice,
         ...(input.requestOptions.requiredToolName
@@ -334,6 +333,9 @@ export async function runLLMStreamAttempt(
         toolCalls: response.toolCalls,
         ...(input.deferMissingRequiredToolCall ? { deferMissingRequiredCall: true } : {}),
       });
+      if (!deferredContractError) {
+        assertUsableProviderResponse(response, input.candidate);
+      }
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
       markErrorAsNonRetryable(err);
@@ -418,7 +420,6 @@ export async function runLLMStreamAttempt(
     input,
     incompleteResponse.toolCalls,
   );
-  assertUsableProviderResponse(incompleteResponse, input.candidate);
   incompleteResponse.toolCalls = selectExplicitToolContractCall({
     choice: input.requestOptions.toolChoice,
     ...(input.requestOptions.requiredToolName
@@ -427,6 +428,9 @@ export async function runLLMStreamAttempt(
     toolCalls: incompleteResponse.toolCalls,
     ...(input.deferMissingRequiredToolCall ? { deferMissingRequiredCall: true } : {}),
   });
+  if (!deferredContractError) {
+    assertUsableProviderResponse(incompleteResponse, input.candidate);
+  }
   await input.recordUsage({
     inputTokens: incompleteUsage.input,
     outputTokens: incompleteUsage.output,

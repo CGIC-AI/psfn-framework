@@ -2522,7 +2522,11 @@ describe('LLMClient completion model hints', () => {
   });
 
   it('defers a missing required call to the split-runtime retry owner', async () => {
-    const client = new LLMClient(makeConfig({ openRouterApiBaseUrl: 'http://litellm.test/v1' }));
+    const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
+    const client = new LLMClient(
+      makeConfig({ openRouterApiBaseUrl: 'http://litellm.test/v1' }),
+      { usageRecorder },
+    );
     mocks.streamSimple.mockImplementation(async function* ignoresRequiredTool() {
       yield {
         type: 'done',
@@ -2555,6 +2559,18 @@ describe('LLMClient completion model hints', () => {
     })).resolves.toMatchObject({ toolCalls: [] });
 
     expect(mocks.streamSimple).toHaveBeenCalledTimes(1);
+    expect(usageRecorder.recordUsageEvent).toHaveBeenCalledOnce();
+    expect(usageRecorder.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({
+      logicalCallId: 'llm:required-tool-contract-caller',
+      attempt: 1,
+      status: 'failure',
+      settlement: 'complete',
+      errorCode: 'ExplicitToolContractError',
+      metadata: expect.objectContaining({
+        toolContractViolation: 'missing_required_call',
+        toolCallCount: 0,
+      }),
+    }));
   });
 
   it('executes only the first call when a provider fans out the required tool', async () => {

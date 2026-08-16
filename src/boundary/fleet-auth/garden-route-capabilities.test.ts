@@ -11,6 +11,7 @@ import {
   FLEET_AUTH_DEFAULT_ROLE_ACTION_POLICY,
   fleetAuthRoleAllowsAction,
 } from './role-action-policy.js';
+import { TESTING_HARNESS_GARDEN_ADMIN_ACTIONS } from '../../channels/backplane/testing-harness-garden-config.js';
 
 describe('Garden route capability catalogue', () => {
   it('has one exact declaration per method and canonical pattern', () => {
@@ -269,6 +270,18 @@ describe('Garden route capability catalogue', () => {
       action: 'autonomy.manage',
       requirements: { assurance: 'oauth', confirmation: 'explicit' },
     });
+  });
+
+  it('keeps ICP test routes grantable by the bounded testing-harness policy', () => {
+    for (const [method, path] of [
+      ['GET', '/api/admin/icp-autonomy'],
+      ['POST', '/api/admin/icp-autonomy/test-initiations'],
+    ] as const) {
+      const action = resolveGardenRouteCapability(method, path)?.capability.authorization.action;
+
+      expect(action).toBeDefined();
+      expect(TESTING_HARNESS_GARDEN_ADMIN_ACTIONS).toContain(action);
+    }
   });
 
   it('fails construction for an active route without an exact catalogue declaration', () => {

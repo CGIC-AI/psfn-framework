@@ -241,6 +241,8 @@ describe('loadRuntimeChannelsConfig', () => {
               allowedActions: [
                 'action_pipe.read',
                 'action_pipe.manage',
+                'autonomy.read',
+                'autonomy.manage',
                 'cogsec.read',
                 'cogsec.manage',
                 'confirmations.read',
@@ -269,6 +271,8 @@ describe('loadRuntimeChannelsConfig', () => {
         allowedActions: [
           'action_pipe.read',
           'action_pipe.manage',
+          'autonomy.read',
+          'autonomy.manage',
           'cogsec.read',
           'cogsec.manage',
           'confirmations.read',

@@ -14,6 +14,8 @@ const OPERATOR_GRANT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 export const TESTING_HARNESS_GARDEN_ADMIN_ACTIONS = Object.freeze([
   'action_pipe.read',
   'action_pipe.manage',
+  'autonomy.read',
+  'autonomy.manage',
   'cogsec.read',
   'cogsec.manage',
   'confirmations.read',

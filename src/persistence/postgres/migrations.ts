@@ -3166,7 +3166,7 @@ export const POSTGRES_SHARED_MIGRATIONS: readonly string[] = [
   `ALTER TABLE icp_conversation_episodes
     ADD CONSTRAINT icp_conversation_episodes_initiation_source_check
     CHECK (initiation_source IN (
-      'free_time', 'weighted_thought', 'intention', 'foreground', 'felt_impulse'
+      'free_time', 'weighted_thought', 'intention', 'foreground', 'felt_impulse', 'operator_test'
     ));`,
   `
   INSERT INTO shared_schema_migrations (version, name)

@@ -17,8 +17,9 @@
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { SocialPotConfig } from '../../core/agent/fatigue/social-pot.js';
-import { createPostgresPool } from '../postgres.js';
+import { createPostgresPool, withPostgresClient } from '../postgres.js';
 import { bootstrapSharedSchema } from './shared-schema.js';
+import { POSTGRES_SHARED_MIGRATIONS } from './migrations.js';
 import { PostgresSocialPotStore } from './social-pot-store.js';
 import { PostgresSpeakingArbiterStore } from './speaking-arbiter-store.js';
 import {
@@ -34,6 +35,7 @@ const INTEGRATION_TIMEOUT_MS = 120_000;
 const COMPANION_ROLE = 'shared_runtime_companion';
 const COMPANION_PASSWORD = 'companion-dml-only';
 const COMPANION_A = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+const COMPANION_B = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 const CHANNEL = 'discord:guild-1:room-general';
 
 const TICK_MS = 60 * 60_000;
@@ -127,6 +129,47 @@ async function unprovisionedDmlOnlyDatabase(): Promise<string> {
 }
 
 describe('shared-schema runtime readiness under a DML-only companion role', () => {
+  it(
+    'keeps existing operator-test episodes valid across the idempotent migration chain',
+    async () => {
+      if (!harness) throw new Error('Postgres integration harness is not available');
+      const { databaseUrl } = await harness.createDatabase();
+      const owner = createPostgresPool(databaseUrl, { max: 1 });
+      try {
+        await withPostgresClient(owner, async (client) => {
+          await client.query('CREATE SCHEMA shared');
+          await client.query('SET search_path TO shared, public');
+          for (const statement of POSTGRES_SHARED_MIGRATIONS.slice(0, 44)) {
+            await client.query(statement);
+          }
+          await client.query(`
+            INSERT INTO icp_conversation_episodes (
+              conversation_id, channel_id, participant_companion_ids,
+              root_initiation_id, initiated_by_companion_id, initiation_source,
+              provenance_ref, opened_at_ms, last_activity_at_ms, status, revision
+            ) VALUES (
+              '22222222-2222-4222-8222-222222222222',
+              'companion-dm:operator-test', ARRAY[$1::uuid, $2::uuid],
+              '33333333-3333-4333-8333-333333333333', $1::uuid, 'operator_test',
+              'operator-test:restart-regression', 1, 1, 'active', 1
+            )
+          `, [COMPANION_A, COMPANION_B]);
+          for (const statement of POSTGRES_SHARED_MIGRATIONS.slice(44)) {
+            await client.query(statement);
+          }
+        });
+        await expect(owner.query(`
+          SELECT initiation_source
+          FROM shared.icp_conversation_episodes
+          WHERE conversation_id = '22222222-2222-4222-8222-222222222222'
+        `)).resolves.toMatchObject({ rows: [{ initiation_source: 'operator_test' }] });
+      } finally {
+        await owner.end();
+      }
+    },
+    INTEGRATION_TIMEOUT_MS,
+  );
+
   it(
     'grants the companion role DML but never CREATE on the shared schema',
     async () => {

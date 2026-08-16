@@ -166,6 +166,21 @@ function buildPromptMessage(
   speakerRole: 'user' | 'system',
   content: UserMessage['content'],
 ): UserMessage | SystemNoteMessage {
+  // A private ICP trigger is an internal instruction that asks the companion
+  // to produce the first peer-facing message. Keep its durable actor
+  // attribution as system-owned, but put the instruction in the provider's
+  // user lane. Otherwise an empty/new companion channel can produce an
+  // assistant-only transcript, which OpenAI-compatible providers may reject.
+  if (message.routing?.privateTurnTrigger === true) {
+    return {
+      role: 'user',
+      content: typeof content === 'string'
+        ? formatAttributedSystemContent(content, message.authorName)
+        : content,
+      timestamp: Date.now(),
+    } satisfies UserMessage;
+  }
+
   if (speakerRole !== 'system') {
     return {
       role: 'user',

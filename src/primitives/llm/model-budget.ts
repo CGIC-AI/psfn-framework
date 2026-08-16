@@ -328,6 +328,24 @@ export class ModelBudgetController {
       return { allowed: true, estimatedRequestCostUsd: 0, snapshot: null };
     }
 
+    if (policy.accountingStartMs !== undefined && policy.accountingStartMs > nowMs) {
+      const snapshot = toWindowSnapshot(
+        emptySpendSnapshot(nowMs),
+        policy.dailyUsdLimit,
+        policy.monthlyUsdLimit,
+      );
+      const accountingError = new Error(
+        'Model budget accountingStartMs cannot be later than the preflight timestamp',
+      );
+      return {
+        allowed: false,
+        estimatedRequestCostUsd: 0,
+        snapshot,
+        blockedEvent: buildBlockedEvent('accounting_unavailable', nowMs, params, 0, snapshot),
+        accountingError,
+      };
+    }
+
     if (!this.usageQuery) {
       const snapshot = toWindowSnapshot(
         emptySpendSnapshot(nowMs),
@@ -346,9 +364,15 @@ export class ModelBudgetController {
     try {
       const companionId = params.correlation?.companionId?.trim();
       const historicalPricing = resolveHistoricalBudgetPricing(this.config);
-      spend = companionId
-        ? await this.usageQuery.getModelBudgetSpend(nowMs, { companionId }, historicalPricing)
-        : await this.usageQuery.getModelBudgetSpend(nowMs, undefined, historicalPricing);
+      const scope = companionId ? { companionId } : undefined;
+      spend = policy.accountingStartMs === undefined
+        ? await this.usageQuery.getModelBudgetSpend(nowMs, scope, historicalPricing)
+        : await this.usageQuery.getModelBudgetSpend(
+          nowMs,
+          scope,
+          historicalPricing,
+          policy.accountingStartMs,
+        );
     } catch (error) {
       const accountingError = error instanceof Error ? error : new Error(String(error));
       const snapshot = toWindowSnapshot(

@@ -88,4 +88,30 @@ describe('normalizeCanonicalModelRegistry endpoint metadata', () => {
     };
     expect(normalizeCanonicalModelRegistry(complete).models[0]?.cost).toEqual(model.cost);
   });
+
+  it('preserves a reviewed budget accounting cutover and rejects invalid timestamps', () => {
+    const valid = makeRegistry();
+    valid.budgetPolicy = {
+      enabled: false,
+      dailyUsdLimit: 1,
+      monthlyUsdLimit: 10,
+      accountingStartMs: 1_786_634_545_850,
+    };
+
+    expect(normalizeCanonicalModelRegistry(valid).budgetPolicy).toMatchObject({
+      accountingStartMs: 1_786_634_545_850,
+    });
+
+    for (const accountingStartMs of [-1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+      const invalid = makeRegistry();
+      invalid.budgetPolicy = {
+        enabled: false,
+        dailyUsdLimit: 1,
+        monthlyUsdLimit: 10,
+        accountingStartMs,
+      };
+      expect(() => normalizeCanonicalModelRegistry(invalid))
+        .toThrow('budgetPolicy.accountingStartMs: expected non-negative safe integer');
+    }
+  });
 });

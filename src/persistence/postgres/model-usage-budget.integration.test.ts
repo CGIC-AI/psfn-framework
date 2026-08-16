@@ -207,6 +207,23 @@ describe('Postgres model-usage budget projection', () => {
         dailyUnknownCostAttempts: 1,
         monthlyUnknownCostAttempts: 1,
       });
+      expect(await store.getModelBudgetSpend(
+        nowMs,
+        undefined,
+        [],
+        nowMs - 750,
+      )).toMatchObject({
+        dailyEstimatedCostUsd: 0,
+        monthlyEstimatedCostUsd: 0,
+        dailyUnknownCostAttempts: 0,
+        monthlyUnknownCostAttempts: 0,
+      });
+      await expect(store.getModelBudgetSpend(
+        nowMs,
+        undefined,
+        [],
+        nowMs + 1,
+      )).rejects.toThrow('accountingStartMs cannot be later than nowMs');
       expect(await store.getModelBudgetSpend(nowMs, undefined, [{
         slotKey: modelEntry.id,
         provider: modelEntry.identity.provider,

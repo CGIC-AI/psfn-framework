@@ -362,6 +362,15 @@ function normalizeModelRegistryBudgetPolicy(
     throw new Error(`Invalid model registry at ${fieldPath}: monthlyUsdLimit must be >= dailyUsdLimit`);
   }
 
+  const accountingStartMs = value.accountingStartMs === undefined
+    ? undefined
+    : toStrictIntegerInRange(value.accountingStartMs, 0, Number.MAX_SAFE_INTEGER);
+  if (value.accountingStartMs !== undefined && accountingStartMs === undefined) {
+    throw new Error(
+      `Invalid model registry at ${fieldPath}.accountingStartMs: expected non-negative safe integer`,
+    );
+  }
+
   const currencyRaw = nonEmptyStringOrUndefined(value.currency);
   if (currencyRaw && currencyRaw.toUpperCase() !== 'USD') {
     throw new Error(`Invalid model registry at ${fieldPath}.currency: only "USD" is supported`);
@@ -371,6 +380,7 @@ function normalizeModelRegistryBudgetPolicy(
     enabled,
     dailyUsdLimit,
     monthlyUsdLimit,
+    ...(accountingStartMs !== undefined ? { accountingStartMs } : {}),
     currency: 'USD',
   };
 }

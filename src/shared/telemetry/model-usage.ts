@@ -498,6 +498,7 @@ export interface ModelUsageBudgetQueryPort {
     nowMs?: number,
     scope?: { companionId: string },
     pricing?: readonly ModelUsageBudgetPricingRate[],
+    accountingStartMs?: number,
   ): Promise<ModelUsageBudgetSpendSnapshot>;
 }
 

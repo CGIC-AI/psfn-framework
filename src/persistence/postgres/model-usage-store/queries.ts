@@ -372,10 +372,20 @@ export class PostgresModelUsageQueries {
     nowMs = Date.now(),
     scope?: { companionId: string },
     pricing: readonly ModelUsageBudgetPricingRate[] = [],
+    accountingStartMs?: number,
   ): Promise<ModelUsageBudgetSpendSnapshot> {
     const normalizedPricing = normalizeModelUsageBudgetPricing(pricing);
     await this.waitUntilReady();
     const now = inputNonNegativeInteger(nowMs, 'nowMs');
+    const accountingStart = accountingStartMs === undefined
+      ? undefined
+      : inputNonNegativeInteger(accountingStartMs, 'accountingStartMs');
+    if (accountingStart !== undefined && !Number.isSafeInteger(accountingStart)) {
+      throw new Error('accountingStartMs must be a non-negative safe integer');
+    }
+    if (accountingStart !== undefined && accountingStart > now) {
+      throw new Error('accountingStartMs cannot be later than nowMs');
+    }
     const requestedCompanionId = normalizeQueryText(scope?.companionId, 'companionId');
     if (this.companionId && requestedCompanionId && requestedCompanionId !== this.companionId) {
       throw new Error(
@@ -390,8 +400,10 @@ export class PostgresModelUsageQueries {
     const nowDate = new Date(now);
     const day = dayKey(now);
     const month = monthKey(now);
-    const dayStartMs = Date.parse(`${day}T00:00:00.000Z`);
-    const monthStartMs = Date.UTC(nowDate.getUTCFullYear(), nowDate.getUTCMonth(), 1);
+    const windowDayStartMs = Date.parse(`${day}T00:00:00.000Z`);
+    const windowMonthStartMs = Date.UTC(nowDate.getUTCFullYear(), nowDate.getUTCMonth(), 1);
+    const dayStartMs = Math.max(windowDayStartMs, accountingStart ?? windowDayStartMs);
+    const monthStartMs = Math.max(windowMonthStartMs, accountingStart ?? windowMonthStartMs);
     const serializedPricing = normalizedPricing.map(rate => ({
       slot_key: rate.slotKey,
       provider: rate.provider,

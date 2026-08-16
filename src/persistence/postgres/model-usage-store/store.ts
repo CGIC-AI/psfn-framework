@@ -187,8 +187,9 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
     nowMs = Date.now(),
     scope?: { companionId: string },
     pricing: readonly ModelUsageBudgetPricingRate[] = [],
+    accountingStartMs?: number,
   ): Promise<ModelUsageBudgetSpendSnapshot> {
-    return await this.queries.getModelBudgetSpend(nowMs, scope, pricing);
+    return await this.queries.getModelBudgetSpend(nowMs, scope, pricing, accountingStartMs);
   }
 }
 

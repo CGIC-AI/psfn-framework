@@ -1407,6 +1407,7 @@ export interface ModelRegistryBudgetPolicy {
   enabled: boolean;
   dailyUsdLimit: number;
   monthlyUsdLimit: number;
+  accountingStartMs?: number;
   currency?: 'USD';
 }
 

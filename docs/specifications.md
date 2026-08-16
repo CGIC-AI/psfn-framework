@@ -289,6 +289,11 @@ When `models.json` enables `budgetPolicy`, every enabled model entry must declar
 complete non-negative USD rates for input, output, cache read, and cache write.
 Startup rejects incomplete pricing rather than admitting calls that the ledger
 cannot settle and then locking the budget on unknown historical cost.
+For an existing ledger whose older model identities cannot be priced honestly,
+operators may set `budgetPolicy.accountingStartMs` to the non-negative Unix epoch
+millisecond at which complete pricing became authoritative. Daily and monthly
+budget projections then exclude earlier events without rewriting or deleting
+them. A cutover later than the evaluated request timestamp fails closed.
 
 Legacy env values for JSON-owned settings are ignored, and startup hydration migrates or warns on drift where compatibility shims still exist.
 

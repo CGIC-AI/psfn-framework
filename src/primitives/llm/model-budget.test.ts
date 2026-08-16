@@ -159,6 +159,56 @@ describe('ModelBudgetController', () => {
     );
   });
 
+  it('passes the configured accounting cutover to the canonical projection', async () => {
+    const dataDir = '/tmp/psfn-model-budget-accounting-cutover';
+    const baseRegistry = makeConfig(dataDir).modelRegistry!;
+    const accountingStartMs = nowMs - 1_000;
+    const query = makeQuery();
+    const controller = new ModelBudgetController(makeConfig(dataDir, {
+      modelRegistry: {
+        ...baseRegistry,
+        budgetPolicy: {
+          ...baseRegistry.budgetPolicy!,
+          accountingStartMs,
+        },
+      },
+    }), query);
+
+    await controller.evaluatePreflight({
+      ...preflightInput,
+      correlation: { companionId: 'companion-a' },
+    });
+
+    expect(query.getModelBudgetSpend).toHaveBeenCalledWith(
+      nowMs,
+      { companionId: 'companion-a' },
+      [],
+      accountingStartMs,
+    );
+  });
+
+  it('fails closed without querying when the accounting cutover is in the future', async () => {
+    const dataDir = '/tmp/psfn-model-budget-future-accounting-cutover';
+    const baseRegistry = makeConfig(dataDir).modelRegistry!;
+    const query = makeQuery();
+    const controller = new ModelBudgetController(makeConfig(dataDir, {
+      modelRegistry: {
+        ...baseRegistry,
+        budgetPolicy: {
+          ...baseRegistry.budgetPolicy!,
+          accountingStartMs: nowMs + 1,
+        },
+      },
+    }), query);
+
+    const preflight = await controller.evaluatePreflight(preflightInput);
+
+    expect(query.getModelBudgetSpend).not.toHaveBeenCalled();
+    expect(preflight.allowed).toBe(false);
+    expect(preflight.blockedEvent?.reason).toBe('accounting_unavailable');
+    expect(preflight.accountingError?.message).toContain('accountingStartMs');
+  });
+
   it('fails closed when a canonical historical attempt has unknown estimated cost', async () => {
     const query = makeQuery({
       ...zeroSpend,

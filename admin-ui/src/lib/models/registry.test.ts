@@ -3,6 +3,7 @@ import {
   CANONICAL_PURPOSES,
   PURPOSE_LABELS,
   parseModelRegistryJson,
+  serializeBudgetPolicyForSave,
 } from './registry';
 
 describe('model registry helpers', () => {
@@ -90,6 +91,25 @@ describe('model registry helpers', () => {
 
     expect(registry.models).toHaveLength(1);
     expect(registry.models[0]?.id).toBe('primary');
+  });
+
+  it('preserves the accounting cutover through Garden load and save', () => {
+    const accountingStartMs = 1_786_634_545_850;
+    const registry = parseModelRegistryJson(JSON.stringify({
+      schemaVersion: 1,
+      budgetPolicy: {
+        enabled: false,
+        dailyUsdLimit: 5,
+        monthlyUsdLimit: 100,
+        accountingStartMs,
+      },
+      models: [],
+    }));
+
+    expect(registry.budgetPolicy?.accountingStartMs).toBe(accountingStartMs);
+    expect(serializeBudgetPolicyForSave(registry.budgetPolicy!)).toMatchObject({
+      accountingStartMs,
+    });
   });
 
   it('tolerantly drops legacy per-model routing metadata written by old admin builds', () => {

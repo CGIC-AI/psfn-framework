@@ -17,6 +17,7 @@
     PURPOSE_LABELS,
     isRecord,
     parseModelRegistryJson,
+    serializeBudgetPolicyForSave,
     toNonEmptyString,
     type CanonicalModelPurpose,
     type CanonicalModelRegistry,
@@ -765,12 +766,7 @@
   function serializeForSave(entries: ModelRegistryEntry[], policy: ModelRegistryBudgetPolicy): CanonicalModelRegistry {
     return {
       schemaVersion: 1,
-      budgetPolicy: {
-        enabled: policy.enabled === true,
-        dailyUsdLimit: policy.dailyUsdLimit,
-        monthlyUsdLimit: policy.monthlyUsdLimit,
-        currency: 'USD',
-      },
+      budgetPolicy: serializeBudgetPolicyForSave(policy),
       models: resequenceRanks(entries).map((entry) => {
         const id = entry.id.trim();
         const identity = {

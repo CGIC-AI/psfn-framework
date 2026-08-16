@@ -364,15 +364,15 @@ export class ModelBudgetController {
     try {
       const companionId = params.correlation?.companionId?.trim();
       const historicalPricing = resolveHistoricalBudgetPricing(this.config);
-      const scope = companionId ? { companionId } : undefined;
-      spend = policy.accountingStartMs === undefined
-        ? await this.usageQuery.getModelBudgetSpend(nowMs, scope, historicalPricing)
-        : await this.usageQuery.getModelBudgetSpend(
-          nowMs,
-          scope,
-          historicalPricing,
-          policy.accountingStartMs,
-        );
+      const scope = companionId || policy.accountingStartMs !== undefined
+        ? {
+            ...(companionId ? { companionId } : {}),
+            ...(policy.accountingStartMs !== undefined
+              ? { accountingStartMs: policy.accountingStartMs }
+              : {}),
+          }
+        : undefined;
+      spend = await this.usageQuery.getModelBudgetSpend(nowMs, scope, historicalPricing);
     } catch (error) {
       const accountingError = error instanceof Error ? error : new Error(String(error));
       const snapshot = toWindowSnapshot(

@@ -209,9 +209,8 @@ describe('Postgres model-usage budget projection', () => {
       });
       expect(await store.getModelBudgetSpend(
         nowMs,
-        undefined,
+        { accountingStartMs: nowMs - 750 },
         [],
-        nowMs - 750,
       )).toMatchObject({
         dailyEstimatedCostUsd: 0,
         monthlyEstimatedCostUsd: 0,
@@ -220,9 +219,8 @@ describe('Postgres model-usage budget projection', () => {
       });
       await expect(store.getModelBudgetSpend(
         nowMs,
-        undefined,
+        { accountingStartMs: nowMs + 1 },
         [],
-        nowMs + 1,
       )).rejects.toThrow('accountingStartMs cannot be later than nowMs');
       expect(await store.getModelBudgetSpend(nowMs, undefined, [{
         slotKey: modelEntry.id,
@@ -236,7 +234,54 @@ describe('Postgres model-usage budget projection', () => {
         dailyUnknownCostAttempts: 1,
         monthlyUnknownCostAttempts: 1,
       });
-      const historicalEvent = (await store.getUsageData({ limit: 2 })).recentEvents
+      const accountingStartMs = nowMs - 750;
+      await store.recordUsageEvent({
+        logicalCallId: 'cutover-inclusive-priced-success',
+        attempt: 1,
+        recordedAtMs: accountingStartMs,
+        startedAtMs: accountingStartMs - 10,
+        completedAtMs: accountingStartMs,
+        status: 'success',
+        settlement: 'unknown',
+        callKind: 'completion',
+        attribution: { callType: 'background', purpose: 'background' },
+        provider: modelEntry.identity.provider,
+        model: modelEntry.identity.model,
+        slotKey: modelEntry.id,
+        inputTokens: 100,
+        outputTokens: 20,
+        totalTokens: 120,
+        costSource: 'none',
+      });
+      await store.recordUsageEvent({
+        logicalCallId: 'post-cutover-unknown-success',
+        attempt: 1,
+        recordedAtMs: nowMs - 250,
+        startedAtMs: nowMs - 260,
+        completedAtMs: nowMs - 250,
+        status: 'success',
+        settlement: 'unknown',
+        callKind: 'chat',
+        attribution: { callType: 'chat', purpose: 'chat' },
+        provider: 'retired-provider',
+        model: 'unpriced-model',
+        slotKey: 'retired-slot',
+        inputTokens: 1,
+        outputTokens: 1,
+        totalTokens: 2,
+        costSource: 'none',
+      });
+      expect(await store.getModelBudgetSpend(
+        nowMs,
+        { accountingStartMs },
+        [matchingPricing],
+      )).toMatchObject({
+        dailyEstimatedCostUsd: 0.0006,
+        monthlyEstimatedCostUsd: 0.0006,
+        dailyUnknownCostAttempts: 1,
+        monthlyUnknownCostAttempts: 1,
+      });
+      const historicalEvent = (await store.getUsageData({ limit: 4 })).recentEvents
         .find(event => event.logicalCallId === 'historical-unpriced-success');
       expect(historicalEvent).toMatchObject({
         status: 'success',

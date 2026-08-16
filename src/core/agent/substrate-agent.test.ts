@@ -2424,6 +2424,10 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(sessionManager.recordUserMessage).not.toHaveBeenCalled();
     expect(sessionManager.recordSystemMessage).not.toHaveBeenCalled();
     expect(sessionManager.recordAssistantMessage).toHaveBeenCalledTimes(1);
+    expect(promptSpy).toHaveBeenLastCalledWith(expect.objectContaining({
+      role: 'user',
+      content: '[SYSTEM: ICP Initiation] private target turn trigger',
+    }));
     expect(finalizeDelivery).toHaveBeenCalledWith(expect.objectContaining({
       content: TEST_ASSISTANT_RESPONSE,
       metadata: expect.objectContaining({ icpCorrelation: correlation }),

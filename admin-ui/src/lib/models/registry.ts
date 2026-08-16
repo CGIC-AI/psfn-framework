@@ -65,6 +65,12 @@ function normalizeBudgetPolicy(value: unknown): ModelRegistryBudgetPolicy {
   const enabled = value.enabled === true;
   const dailyUsdLimit = toFiniteNumber(value.dailyUsdLimit);
   const monthlyUsdLimit = toFiniteNumber(value.monthlyUsdLimit);
+  const accountingStartMs = toFiniteNumber(value.accountingStartMs);
+  const normalizedAccountingStartMs = accountingStartMs !== undefined
+    && Number.isSafeInteger(accountingStartMs)
+    && accountingStartMs >= 0
+    ? accountingStartMs
+    : undefined;
   const normalizedDaily = dailyUsdLimit !== undefined && dailyUsdLimit > 0
     ? dailyUsdLimit
     : DEFAULT_BUDGET_POLICY.dailyUsdLimit;
@@ -76,6 +82,23 @@ function normalizeBudgetPolicy(value: unknown): ModelRegistryBudgetPolicy {
     enabled,
     dailyUsdLimit: normalizedDaily,
     monthlyUsdLimit: normalizedMonthly,
+    ...(normalizedAccountingStartMs !== undefined
+      ? { accountingStartMs: normalizedAccountingStartMs }
+      : {}),
+    currency: 'USD',
+  };
+}
+
+export function serializeBudgetPolicyForSave(
+  policy: ModelRegistryBudgetPolicy,
+): ModelRegistryBudgetPolicy {
+  return {
+    enabled: policy.enabled === true,
+    dailyUsdLimit: policy.dailyUsdLimit,
+    monthlyUsdLimit: policy.monthlyUsdLimit,
+    ...(policy.accountingStartMs !== undefined
+      ? { accountingStartMs: policy.accountingStartMs }
+      : {}),
     currency: 'USD',
   };
 }

@@ -181,9 +181,8 @@ describe('ModelBudgetController', () => {
 
     expect(query.getModelBudgetSpend).toHaveBeenCalledWith(
       nowMs,
-      { companionId: 'companion-a' },
+      { companionId: 'companion-a', accountingStartMs },
       [],
-      accountingStartMs,
     );
   });
 

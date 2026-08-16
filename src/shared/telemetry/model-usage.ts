@@ -492,13 +492,18 @@ export interface ModelUsageBudgetPricingRate {
   cacheWritePer1MUsd: number;
 }
 
+/** Tenant and ledger-authority boundaries for a canonical budget projection. */
+export interface ModelUsageBudgetScope {
+  companionId?: string;
+  accountingStartMs?: number;
+}
+
 /** Canonical budget projection over immutable PostgreSQL model attempts. */
 export interface ModelUsageBudgetQueryPort {
   getModelBudgetSpend(
     nowMs?: number,
-    scope?: { companionId: string },
+    scope?: ModelUsageBudgetScope,
     pricing?: readonly ModelUsageBudgetPricingRate[],
-    accountingStartMs?: number,
   ): Promise<ModelUsageBudgetSpendSnapshot>;
 }
 

@@ -7,6 +7,7 @@ import type {
   ModelUsageBreakdown,
   ModelUsageBudgetSpendSnapshot,
   ModelUsageBudgetPricingRate,
+  ModelUsageBudgetScope,
   ModelUsageCostHydrationBreakdown,
   ModelUsageCostHydrationData,
   ModelUsageData,
@@ -370,16 +371,15 @@ export class PostgresModelUsageQueries {
 
   async getModelBudgetSpend(
     nowMs = Date.now(),
-    scope?: { companionId: string },
+    scope?: ModelUsageBudgetScope,
     pricing: readonly ModelUsageBudgetPricingRate[] = [],
-    accountingStartMs?: number,
   ): Promise<ModelUsageBudgetSpendSnapshot> {
     const normalizedPricing = normalizeModelUsageBudgetPricing(pricing);
     await this.waitUntilReady();
     const now = inputNonNegativeInteger(nowMs, 'nowMs');
-    const accountingStart = accountingStartMs === undefined
+    const accountingStart = scope?.accountingStartMs === undefined
       ? undefined
-      : inputNonNegativeInteger(accountingStartMs, 'accountingStartMs');
+      : inputNonNegativeInteger(scope.accountingStartMs, 'accountingStartMs');
     if (accountingStart !== undefined && !Number.isSafeInteger(accountingStart)) {
       throw new Error('accountingStartMs must be a non-negative safe integer');
     }

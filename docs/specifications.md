@@ -54,6 +54,14 @@ Until beta, the live runtime may keep only the migration support listed here. Ne
 
 Supported until beta:
 
+- Explicit model-budget ledger authority cutover through
+  `models.json` `budgetPolicy.accountingStartMs`. This may exclude only immutable
+  chat/completion attempts recorded before complete pricing became authoritative;
+  it never rewrites ledger rows. Validation requires a non-negative safe-integer
+  timestamp, rejects future cutovers fail closed, and confirms every event at or
+  after the cutover has resolvable pricing. Remove the owner-file setting once the
+  cutover predates the monthly accounting window; remove this compatibility field
+  at beta after no supported owner file still requires it.
 - Continuous/local shared-root layout through `DATA_DIR`. This is for local development and smoke testing only; production mode forbids shared-root operation.
 - Split-root persistence cutover through `npm run migrate:persistence-layout` and the installer `--migrate-data` path. The cutover tooling may read legacy shared roots, write manifests, and run existing intra-root cleanup, but production startup should stop until the plan is clean.
 - Explicit system-owner cluster re-rooting through

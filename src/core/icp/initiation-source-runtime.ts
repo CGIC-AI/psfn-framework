@@ -373,6 +373,43 @@ export function createIcpInitiationSourceRuntime(
     return next;
   };
 
+  const deferCandidateForCooldown = async (
+    candidate: IcpInitiationCandidate,
+    reasonCode: IcpAutonomyReasonCode,
+  ): Promise<IcpInitiationCandidate> => {
+    const transitionNow = now();
+    if (candidate.expiresAtMs <= transitionNow) {
+      return await transition(candidate, 'expired', 'candidate_expired');
+    }
+    const completedRetryAttempts = candidate.retryAttempt ?? 0;
+    if (completedRetryAttempts >= policy.maxRetryAttempts) {
+      const cancelled = await dependencies.store.transitionCandidate({
+        candidateId: candidate.candidateId,
+        expectedStatus: candidate.status,
+        expectedRevision: candidate.revision,
+        status: 'cancelled',
+        reasonCode,
+        retryAttempt: completedRetryAttempts,
+      });
+      await emitLifecycle(cancelled, candidate.status);
+      return cancelled;
+    }
+    const deferred = await dependencies.store.transitionCandidate({
+      candidateId: candidate.candidateId,
+      expectedStatus: candidate.status,
+      expectedRevision: candidate.revision,
+      status: 'deferred',
+      reasonCode,
+      retryAttempt: completedRetryAttempts + 1,
+      retryEligibleAtMs: Math.min(
+        candidate.expiresAtMs,
+        transitionNow + policy.retryCadenceMs,
+      ),
+    });
+    await emitLifecycle(deferred, candidate.status);
+    return deferred;
+  };
+
   const run = async (
     request: IcpInitiationSourceRequest,
     initialPeer: KnownCompanionPeer,
@@ -528,44 +565,6 @@ export function createIcpInitiationSourceRuntime(
       candidate = expired;
       return expired;
     };
-    const deferForCooldown = async (
-      reasonCode: IcpAutonomyReasonCode,
-    ): Promise<IcpInitiationCandidate> => {
-      const transitionNow = now();
-      if (candidate.expiresAtMs <= transitionNow) {
-        const expired = await transition(candidate, 'expired', 'candidate_expired');
-        candidate = expired;
-        return expired;
-      }
-      const completedRetryAttempts = candidate.retryAttempt ?? 0;
-      if (completedRetryAttempts >= policy.maxRetryAttempts) {
-        const cancelled = await dependencies.store.transitionCandidate({
-          candidateId: candidate.candidateId,
-          expectedStatus: candidate.status,
-          expectedRevision: candidate.revision,
-          status: 'cancelled',
-          reasonCode,
-          retryAttempt: completedRetryAttempts,
-        });
-        await emitLifecycle(cancelled, candidate.status);
-        return cancelled;
-      }
-      const retryAttempt = completedRetryAttempts + 1;
-      const deferred = await dependencies.store.transitionCandidate({
-        candidateId: candidate.candidateId,
-        expectedStatus: candidate.status,
-        expectedRevision: candidate.revision,
-        status: 'deferred',
-        reasonCode,
-        retryAttempt,
-        retryEligibleAtMs: Math.min(
-          candidate.expiresAtMs,
-          transitionNow + policy.retryCadenceMs,
-        ),
-      });
-      await emitLifecycle(deferred, candidate.status);
-      return deferred;
-    };
     let projection = toIcpInitiationCandidateSharedMetadata(candidate);
     const preflight = await dependencies.gateway.companionInitiationPreflight({
       candidate: projection,
@@ -580,7 +579,8 @@ export function createIcpInitiationSourceRuntime(
     if (!preflight.eligible && !reconcilingCommittedPermit) {
       if (preflight.reasonClass === 'deferrable') {
         const reasonCode = preflight.reasonCode ?? 'candidate_deferred';
-        const deferred = await deferForCooldown(reasonCode);
+        const deferred = await deferCandidateForCooldown(candidate, reasonCode);
+        candidate = deferred;
         return result('deferred', deferred, reasonCode);
       }
       const denied = transitionReason(preflight);
@@ -604,7 +604,8 @@ export function createIcpInitiationSourceRuntime(
         return result('deduped', expiredAfterConsent, 'candidate_expired');
       }
       if (consent.action === 'defer') {
-        const deferred = await deferForCooldown('candidate_deferred');
+        const deferred = await deferCandidateForCooldown(candidate, 'candidate_deferred');
+        candidate = deferred;
         return result('deferred', deferred, 'candidate_deferred');
       }
       if (consent.action === 'decline') {
@@ -632,7 +633,8 @@ export function createIcpInitiationSourceRuntime(
     if (!permitResult.decision.eligible || !permitResult.permit) {
       if (permitResult.decision.reasonClass === 'deferrable') {
         const reasonCode = permitResult.decision.reasonCode ?? 'candidate_deferred';
-        const deferred = await deferForCooldown(reasonCode);
+        const deferred = await deferCandidateForCooldown(candidate, reasonCode);
+        candidate = deferred;
         return result('deferred', deferred, reasonCode);
       }
       const denied = transitionReason(permitResult.decision);
@@ -667,30 +669,7 @@ export function createIcpInitiationSourceRuntime(
       const candidate = await dependencies.store.getCandidate(acceptance.candidateId);
       durableStatus = candidate?.status ?? 'missing';
       if (candidate?.status === 'pending') {
-        const completedRetryAttempts = candidate.retryAttempt ?? 0;
-        const failureNow = now();
-        const transitioned = completedRetryAttempts >= policy.maxRetryAttempts
-          ? await dependencies.store.transitionCandidate({
-              candidateId: candidate.candidateId,
-              expectedStatus: candidate.status,
-              expectedRevision: candidate.revision,
-              status: 'cancelled',
-              reasonCode: 'delivery_failed',
-              retryAttempt: completedRetryAttempts,
-            })
-          : await dependencies.store.transitionCandidate({
-              candidateId: candidate.candidateId,
-              expectedStatus: candidate.status,
-              expectedRevision: candidate.revision,
-              status: 'deferred',
-              reasonCode: 'delivery_failed',
-              retryAttempt: completedRetryAttempts + 1,
-              retryEligibleAtMs: Math.min(
-                candidate.expiresAtMs,
-                failureNow + policy.retryCadenceMs,
-              ),
-            });
-        await emitLifecycle(transitioned, candidate.status);
+        const transitioned = await deferCandidateForCooldown(candidate, 'delivery_failed');
         durableStatus = transitioned.status;
       }
     } catch (recordError) {

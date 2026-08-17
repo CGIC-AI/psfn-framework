@@ -132,7 +132,7 @@ export class PostgresIcpFeltImpulseFunnelStore implements IcpFeltImpulseFunnelSt
       throw new Error('ICP felt-impulse funnel store schema must be non-empty when supplied');
     }
     const pool = createPostgresPool(databaseUrl, {
-      applicationName: 'psfn-icp-felt-impulse-funnel',
+      applicationName: 'icp-felt-impulse-funnel',
       allowExitOnIdle: true,
       schema: options.schema,
       role: options.role,

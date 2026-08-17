@@ -28,6 +28,7 @@ import type {
   IcpFeltImpulseFunnelRecord,
   IcpFeltImpulseFunnelStorePort,
 } from './felt-impulse-funnel.js';
+import { parseFeltImpulseCorrelationFirstCrossingMs } from './felt-impulse-funnel.js';
 import type {
   IcpInitiationSourceAcceptance,
   IcpInitiationSourceAcceptanceRuntime,
@@ -139,6 +140,7 @@ export function createIcpFeltImpulseInitiationAdapter(
   const processSignal = async (signal: FeltImpulseLeverSignal): Promise<IcpFeltImpulseOutcome> => {
     const durableOutcome = await deps.funnelStore.getOutcome(signal.correlationId);
     if (durableOutcome) return replayDurableOutcome(durableOutcome);
+    const firstCrossingMs = parseFeltImpulseCorrelationFirstCrossingMs(signal.correlationId);
     await emitTransition(signal, { stage: 'felt_impulse', outcome: 'received' });
     const completedCandidateId = lastCompleted?.correlationId === signal.correlationId
       ? lastCompleted.candidateId
@@ -161,6 +163,7 @@ export function createIcpFeltImpulseInitiationAdapter(
       // Emergency-disabled at runtime or tier lacks external.companion.
       const durable = await deps.funnelStore.recordOutcome({
         correlationId: signal.correlationId,
+        firstCrossingMs,
         firedAtMs: signal.firedAtMs,
         recordedAtMs: now(),
         outcome: 'not_authorized',
@@ -174,6 +177,7 @@ export function createIcpFeltImpulseInitiationAdapter(
       const nextEligibleAtMs = lastSubmittedAtMs + minIntervalMs;
       const durable = await deps.funnelStore.recordOutcome({
         correlationId: signal.correlationId,
+        firstCrossingMs,
         firedAtMs: signal.firedAtMs,
         recordedAtMs: now(),
         outcome: 'throttled',
@@ -196,6 +200,7 @@ export function createIcpFeltImpulseInitiationAdapter(
       // contact to reach. Name the fix, do not degrade silently.
       const durable = await deps.funnelStore.recordOutcome({
         correlationId: signal.correlationId,
+        firstCrossingMs,
         firedAtMs: signal.firedAtMs,
         recordedAtMs: now(),
         outcome: 'no_eligible_peer',
@@ -249,6 +254,7 @@ export function createIcpFeltImpulseInitiationAdapter(
         // One durable identity per fire: the lever's own sustain/cooldown is
         // the natural dedupe window, and retries of the same fire coalesce.
         sourceRecordId: signal.correlationId,
+        feltImpulseFiredAtMs: signal.firedAtMs,
         reasonSummary: 'Felt social impulse: the affect model sustained wanting to reach out.',
         cause: { kind: 'independent' },
       });
@@ -290,6 +296,7 @@ export function createIcpFeltImpulseInitiationAdapter(
     });
     const durable = await deps.funnelStore.recordOutcome({
       correlationId: signal.correlationId,
+      firstCrossingMs,
       firedAtMs: signal.firedAtMs,
       recordedAtMs: now(),
       outcome: 'candidate_linked',

@@ -243,6 +243,7 @@ describe('ICP felt-impulse startup wiring', () => {
     expect(rows.size).toBe(0);
     expect([...funnelRows.values()]).toEqual([{
       correlationId: `felt-impulse:would_message:${NOW_MS}`,
+      firstCrossingMs: NOW_MS,
       firedAtMs: NOW_MS,
       recordedAtMs: expect.any(Number),
       outcome: 'not_authorized',

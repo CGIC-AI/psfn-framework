@@ -265,6 +265,7 @@ describe('AdminIcpAutonomyDataService', () => {
       },
       recent: [{
         correlationId: 'felt-impulse:would_message:1000',
+        firstCrossingMs: 1_000,
         firedAtMs: 1_000,
         recordedAtMs: 1_001,
         outcome: 'candidate_linked' as const,

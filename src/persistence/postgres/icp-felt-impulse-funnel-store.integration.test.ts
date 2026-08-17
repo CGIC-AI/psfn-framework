@@ -5,6 +5,12 @@ import {
   startPostgresTestHarness,
   type PostgresTestHarness,
 } from '../../test-support/postgres-test-harness.js';
+import { createIcpFeltImpulseInitiationAdapter } from '../../core/icp/felt-impulse-initiation.js';
+import { ObserverEvalLeverStage } from '../../core/eval/observer-sidecar/config.js';
+import type {
+  ObserverEvalSidecarLeverPersistencePort,
+} from '../../core/eval/observer-sidecar/persistence.js';
+import { createDefaultObserverEvalSidecarLeverSettings } from '../../system/config/runtime-config-contracts.js';
 import { createPostgresPool } from '../postgres.js';
 import { PostgresIcpInitiationCandidateStore } from './icp-initiation-candidate-store.js';
 import { PostgresIcpFeltImpulseFunnelStore } from './icp-felt-impulse-funnel-store.js';
@@ -16,8 +22,29 @@ const PEER_ID = '22222222-2222-4222-8222-222222222222';
 const CANDIDATE_ID = '33333333-3333-4333-8333-333333333333';
 const PERMIT_ID = '44444444-4444-4444-8444-444444444444';
 const T0 = Date.parse('2026-08-17T00:00:00.000Z');
+const MINUTE_MS = 60_000;
 
 let harness: PostgresTestHarness | null = null;
+
+function makeLeverPersistence(): ObserverEvalSidecarLeverPersistencePort {
+  return {
+    recordLeverEvent: async input => ({ ...input, retention: input.retention }),
+    queryLeverEvents: async () => [],
+    loadLeverState: async () => [],
+    saveLeverState: async () => undefined,
+    pruneExpiredLeverEvents: async () => ({ prunedEventIds: [] }),
+  } as unknown as ObserverEvalSidecarLeverPersistencePort;
+}
+
+function lonelySnapshot() {
+  return {
+    t: 0,
+    mood: { valence: 0.2, arousal: 0.1 },
+    dominant: 'Calmness',
+    emotions: { Calmness: 0.3 },
+    drives: { socialNeed: 0.8, sleepPressure: 0.2 },
+  };
+}
 
 beforeAll(async () => {
   harness = await startPostgresTestHarness({ image: DEFAULT_POSTGRES_TEST_IMAGE });
@@ -46,8 +73,43 @@ describe('Postgres felt-impulse funnel outcomes', () => {
       schema: SCHEMA,
     });
     try {
+      const firstCrossingMs = T0 - 60 * MINUTE_MS;
+      const producerFiredAtMs = firstCrossingMs + 30 * MINUTE_MS;
+      const adapter = createIcpFeltImpulseInitiationAdapter({
+        sourceRuntime: { accept: async () => { throw new Error('no eligible peer expected'); } },
+        peers: { listKnownPeerAvailability: async () => [] },
+        isAuthorized: () => true,
+        funnelStore: funnel,
+        now: () => producerFiredAtMs,
+      });
+      const producer = new ObserverEvalLeverStage({
+        settings: { ...createDefaultObserverEvalSidecarLeverSettings(), enabled: true },
+        persistence: makeLeverPersistence(),
+        sidecarId: 'sidecar-funnel-integration',
+        retentionDays: 14,
+        emitFeltImpulse: event => adapter.onLeverSignal(event).then(() => undefined),
+      });
+      const observe = (observedAtMs: number) => producer.evaluateObservation({
+        runId: 'producer-funnel-regression',
+        observationId: `observation-${observedAtMs}`,
+        snapshot: lonelySnapshot(),
+        observedAtMs,
+      });
+      await observe(firstCrossingMs);
+      await observe(producerFiredAtMs);
+      await expect(funnel.getOutcome(
+        `felt-impulse:would_message:${firstCrossingMs}`,
+      )).resolves.toEqual({
+        correlationId: `felt-impulse:would_message:${firstCrossingMs}`,
+        firstCrossingMs,
+        firedAtMs: producerFiredAtMs,
+        recordedAtMs: producerFiredAtMs,
+        outcome: 'no_eligible_peer',
+      });
+
       const noPeer = {
         correlationId: `felt-impulse:would_message:${T0}`,
+        firstCrossingMs: T0,
         firedAtMs: T0,
         recordedAtMs: T0 + 10,
         outcome: 'no_eligible_peer' as const,
@@ -55,21 +117,19 @@ describe('Postgres felt-impulse funnel outcomes', () => {
       await expect(funnel.recordOutcome(noPeer)).resolves.toEqual(noPeer);
       await expect(funnel.recordOutcome({
         ...noPeer,
-        correlationId: `felt-impulse:would_message:${T0 + 1}`,
-      })).rejects.toThrow('must encode firedAtMs');
-      await expect(funnel.recordOutcome({
-        ...noPeer,
         recordedAtMs: T0 + 20,
         outcome: 'not_authorized',
       })).resolves.toEqual(noPeer);
       const notAuthorized = {
         correlationId: `felt-impulse:would_message:${T0 + 100}`,
+        firstCrossingMs: T0 + 100,
         firedAtMs: T0 + 100,
         recordedAtMs: T0 + 110,
         outcome: 'not_authorized' as const,
       };
       const throttled = {
         correlationId: `felt-impulse:would_message:${T0 + 200}`,
+        firstCrossingMs: T0 + 200,
         firedAtMs: T0 + 200,
         recordedAtMs: T0 + 210,
         outcome: 'throttled' as const,
@@ -109,6 +169,7 @@ describe('Postgres felt-impulse funnel outcomes', () => {
       });
       const linked = {
         correlationId: `felt-impulse:would_message:${T0 + 1_000}`,
+        firstCrossingMs: T0 + 1_000,
         firedAtMs: T0 + 1_000,
         recordedAtMs: T0 + 1_010,
         outcome: 'candidate_linked' as const,
@@ -119,6 +180,7 @@ describe('Postgres felt-impulse funnel outcomes', () => {
 
       const atomicCandidateId = '66666666-6666-4666-8666-666666666666';
       const atomicFiredAtMs = T0 + 2_000;
+      const atomicFirstCrossingMs = atomicFiredAtMs - 30 * MINUTE_MS;
       await candidates.createClaimedFeltImpulseCandidate({
         candidateId: atomicCandidateId,
         rootInitiationId: atomicCandidateId,
@@ -137,7 +199,8 @@ describe('Postgres felt-impulse funnel outcomes', () => {
         claimToken: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
         claimExpiresAtMs: Date.now() + 60_000,
       }, {
-        correlationId: `felt-impulse:would_message:${atomicFiredAtMs}`,
+        correlationId: `felt-impulse:would_message:${atomicFirstCrossingMs}`,
+        firstCrossingMs: atomicFirstCrossingMs,
         firedAtMs: atomicFiredAtMs,
         recordedAtMs: atomicFiredAtMs,
         outcome: 'candidate_linked',
@@ -145,8 +208,10 @@ describe('Postgres felt-impulse funnel outcomes', () => {
         candidateOutcome: 'submitted',
       });
       await expect(funnel.getOutcome(
-        `felt-impulse:would_message:${atomicFiredAtMs}`,
+        `felt-impulse:would_message:${atomicFirstCrossingMs}`,
       )).resolves.toMatchObject({
+        firstCrossingMs: atomicFirstCrossingMs,
+        firedAtMs: atomicFiredAtMs,
         outcome: 'candidate_linked',
         candidateId: atomicCandidateId,
       });
@@ -171,6 +236,7 @@ describe('Postgres felt-impulse funnel outcomes', () => {
         claimExpiresAtMs: Date.now() + 60_000,
       }, {
         correlationId: noPeer.correlationId,
+        firstCrossingMs: noPeer.firstCrossingMs,
         firedAtMs: noPeer.firedAtMs,
         recordedAtMs: noPeer.recordedAtMs,
         outcome: 'candidate_linked',
@@ -232,6 +298,7 @@ describe('Postgres felt-impulse funnel outcomes', () => {
         const firedAtMs = T0 + 2_001 + index;
         await funnel.recordOutcome({
           correlationId: `felt-impulse:would_message:${firedAtMs}`,
+          firstCrossingMs: firedAtMs,
           firedAtMs,
           recordedAtMs: firedAtMs + 10,
           outcome: 'candidate_linked',
@@ -246,8 +313,8 @@ describe('Postgres felt-impulse funnel outcomes', () => {
       await expect(funnel.getOutcome(noPeer.correlationId)).resolves.toEqual(noPeer);
       const projection = await funnel.readProjection(20);
       expect(projection).toMatchObject({
-        totalQualified: 12,
-        preCandidate: { noEligiblePeer: 1, notAuthorized: 1, throttled: 1 },
+        totalQualified: 13,
+        preCandidate: { noEligiblePeer: 2, notAuthorized: 1, throttled: 1 },
         candidateLinks: { total: 9, submitted: 8, deduped: 1 },
         candidateLifecycle: {
           pending: 1,
@@ -261,9 +328,10 @@ describe('Postgres felt-impulse funnel outcomes', () => {
           cancelled: 1,
         },
       });
-      expect(projection.recent).toHaveLength(12);
+      expect(projection.recent).toHaveLength(13);
       expect(projection.recent).toContainEqual({
         correlationId: linked.correlationId,
+        firstCrossingMs: linked.firstCrossingMs,
         firedAtMs: linked.firedAtMs,
         recordedAtMs: linked.recordedAtMs,
         outcome: 'candidate_linked',

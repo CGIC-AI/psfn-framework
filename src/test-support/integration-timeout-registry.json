@@ -303,9 +303,9 @@
     {
       "file": "src/persistence/postgres/icp-felt-impulse-funnel-store.integration.test.ts",
       "timeoutMs": 120000,
-      "measuredBaselineMs": 1250,
+      "measuredBaselineMs": 1460,
       "baselineSource": "measured",
-      "note": "xu98k exactly-once felt-impulse funnel persistence, rollback, restart, and lifecycle projection suite against real Postgres. Baseline 1.25s file wall (1 test, focused local run, this host, 2026-08-17); 120s is the repo-standard integration cap with headroom dominated by cold-start and shared-heavy harness variance."
+      "note": "xu98k exactly-once felt-impulse producer forwarding, funnel persistence, rollback, restart, and lifecycle projection suite against real Postgres. Baseline 1.46s file wall (1 test, focused local run, this host, 2026-08-17); 120s is the repo-standard integration cap with headroom dominated by cold-start and shared-heavy harness variance."
     },
     {
       "file": "src/persistence/postgres/icp-intention-lifecycle.integration.test.ts",

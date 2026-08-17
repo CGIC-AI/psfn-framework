@@ -1360,6 +1360,7 @@ export const POSTGRES_INTENTION_MIGRATIONS = [
   `
   CREATE TABLE IF NOT EXISTS icp_felt_impulse_funnel_outcomes (
     correlation_id TEXT PRIMARY KEY,
+    first_crossing_ms BIGINT NOT NULL CHECK (first_crossing_ms >= 0),
     fired_at_ms BIGINT NOT NULL CHECK (fired_at_ms >= 0),
     recorded_at_ms BIGINT NOT NULL CHECK (recorded_at_ms >= 0),
     outcome TEXT NOT NULL CHECK (outcome IN (
@@ -1374,7 +1375,8 @@ export const POSTGRES_INTENTION_MIGRATIONS = [
         + char_length('9007199254740991')
       AND substring(
         correlation_id FROM char_length('felt-impulse:would_message:') + 1
-      ) = fired_at_ms::TEXT
+      ) = first_crossing_ms::TEXT
+      AND fired_at_ms >= first_crossing_ms
     ),
     CHECK (
       (outcome = 'throttled') = (next_eligible_at_ms IS NOT NULL)

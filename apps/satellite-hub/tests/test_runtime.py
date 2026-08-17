@@ -16,6 +16,8 @@ def test_load_runtime_config_reads_psfn_and_project_env(tmp_path: Path, monkeypa
         "ESPHOME_EXPECTED_NAME",
         "DEEPGRAM_API_KEY",
         "ELEVENLABS_API_KEY",
+        "AUDIO_SERVER_PORT",
+        "AUDIO_PUBLIC_PORT",
         "AUDIO_PUBLIC_HOST",
         "PSFN_API_BASE_URL",
         "PSFN_API_KEY",
@@ -44,6 +46,8 @@ def test_load_runtime_config_reads_psfn_and_project_env(tmp_path: Path, monkeypa
         "ESPHOME_PORT=6053\n"
         "ESPHOME_EXPECTED_NAME=Opanhome-Voice-Pi\n"
         "AUDIO_PUBLIC_HOST=voice.example\n"
+        "AUDIO_SERVER_PORT=8100\n"
+        "AUDIO_PUBLIC_PORT=8099\n"
         "DEEPGRAM_API_KEY=project-deepgram\n"
         "ELEVENLABS_API_KEY=project-eleven\n"
         "PSFN_API_BASE_URL=http://psfn.example:3100/v1\n"
@@ -60,6 +64,8 @@ def test_load_runtime_config_reads_psfn_and_project_env(tmp_path: Path, monkeypa
     assert config.deepgram_api_key == "project-deepgram"
     assert config.elevenlabs_api_key == "project-eleven"
     assert config.audio_public_host == "voice.example"
+    assert config.audio_port == 8100
+    assert config.audio_public_port == 8099
     assert config.psfn_api_base_url == "http://psfn.example:3100/v1"
     assert config.psfn_api_key is None
     assert config.psfn_provider == "openrouter"
@@ -255,9 +261,13 @@ def test_static_audio_server_uses_public_host_for_urls(tmp_path: Path) -> None:
         port=8099,
         root=root,
         public_host="192.0.2.50",
+        public_port=18099,
     )
 
-    assert server.url_for(audio_path) == "http://192.0.2.50:8099/reply.mp3"
+    assert server.url_for(audio_path) == "http://192.0.2.50:18099/reply.mp3"
+    stream = server.open_stream()
+    assert stream.url.startswith("http://192.0.2.50:18099/streams/")
+    stream.close()
 
 
 def test_static_audio_server_open_stream_uses_stream_endpoint(tmp_path: Path) -> None:

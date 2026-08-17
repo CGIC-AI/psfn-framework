@@ -85,6 +85,7 @@ class HubRuntimeConfig:
     audio_bind_host: str
     audio_public_host: str
     audio_port: int
+    audio_public_port: int
     artifacts_root: Path
     continue_conversation: bool
     session_ttl_seconds: int
@@ -132,6 +133,7 @@ def load_runtime_config(project_root: Path) -> HubRuntimeConfig:
     audio_bind_host = os.getenv("AUDIO_SERVER_BIND_HOST", "0.0.0.0")
     configured_audio_public_host = os.getenv("AUDIO_PUBLIC_HOST") or None
     audio_port = int(os.getenv("AUDIO_SERVER_PORT", "8099"))
+    audio_public_port = int(os.getenv("AUDIO_PUBLIC_PORT") or str(audio_port))
     realtime_bind_host = os.getenv("REALTIME_VOICE_BIND_HOST", "0.0.0.0")
     realtime_port = int(os.getenv("REALTIME_VOICE_PORT", "8787"))
     configured_realtime_public_host = os.getenv("REALTIME_VOICE_PUBLIC_HOST") or None
@@ -193,6 +195,7 @@ def load_runtime_config(project_root: Path) -> HubRuntimeConfig:
         audio_bind_host=audio_bind_host,
         audio_public_host=audio_public_host,
         audio_port=audio_port,
+        audio_public_port=audio_public_port,
         artifacts_root=artifacts_root,
         continue_conversation=_env_bool("CONTINUE_CONVERSATION", True),
         session_ttl_seconds=int(os.getenv("SESSION_TTL_SECONDS", "300")),

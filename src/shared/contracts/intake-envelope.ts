@@ -1189,6 +1189,8 @@ export interface IntakeEnvelopeSnapshot {
   sourceRiskTier: IntakeSourceRiskTier;
   state: IntakeEnvelopeState;
   riskLabels: readonly IntakeRiskLabel[];
+  /** Per-surface posture resolved at the structural ingress boundary. */
+  enforcementPosture?: 'shadow' | 'enforce';
   /** What the envelope covers on this message. */
   subject: IntakeEnvelopeSubject;
 }
@@ -1196,6 +1198,7 @@ export interface IntakeEnvelopeSnapshot {
 export function snapshotIntakeEnvelope(
   envelope: IntakeEnvelope,
   subject: IntakeEnvelopeSubject,
+  enforcementPosture?: 'shadow' | 'enforce',
 ): IntakeEnvelopeSnapshot {
   if (subject.kind === 'attachment'
     && (!Number.isInteger(subject.index) || subject.index < 0)) {
@@ -1207,6 +1210,7 @@ export function snapshotIntakeEnvelope(
     sourceRiskTier: envelope.sourceRiskTier,
     state: envelope.state,
     riskLabels: [...envelope.riskLabels],
+    ...(enforcementPosture ? { enforcementPosture } : {}),
     subject,
   };
 }

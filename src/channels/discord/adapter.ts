@@ -1096,6 +1096,7 @@ export class DiscordAdapter implements ChannelAdapterPort {
         channelId: msg.channelId,
         messageId: msg.id,
         channelPrivacy,
+        channelTopology: isDirectMessage ? 'direct' : 'group',
         ...(primaryUser?.canonicalContactId
           ? { canonicalContactId: primaryUser.canonicalContactId }
           : {}),

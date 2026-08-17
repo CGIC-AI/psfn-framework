@@ -133,6 +133,9 @@ function makeDataDirs(policy: Record<string, unknown>): {
   companionDataDir: string;
   config: SubstrateConfig;
   env: NodeJS.ProcessEnv;
+  operatorAlerting: { configuredSinks: ['ntfy']; status: 'configured'; warning: null };
+  onPostEscalation: ReturnType<typeof vi.fn>;
+  onInlineShadowFinding: ReturnType<typeof vi.fn>;
 } {
   const systemDataDir = mkdtempSync(join(tmpdir(), 'psfn-escalation-system-'));
   const companionDataDir = mkdtempSync(join(tmpdir(), 'psfn-escalation-companion-'));
@@ -148,6 +151,9 @@ function makeDataDirs(policy: Record<string, unknown>): {
     env: {
       PSFN_INJECTION_MODEL_DIR: join(systemDataDir, 'unprovisioned-injection-model'),
     },
+    operatorAlerting: { configuredSinks: ['ntfy'], status: 'configured', warning: null },
+    onPostEscalation: vi.fn(),
+    onInlineShadowFinding: vi.fn(),
   };
 }
 
@@ -200,6 +206,7 @@ async function composeWith(
 ): Promise<{
   composition: Awaited<ReturnType<typeof composeGatewayIntakeScreening>>;
   companionDataDir: string;
+  onInlineShadowFinding: ReturnType<typeof vi.fn>;
 }> {
   const dirs = makeDataDirs(policy);
   const composition = await composeGatewayIntakeScreening({
@@ -210,10 +217,122 @@ async function composeWith(
     ...(onFailClosedScreening ? { onFailClosedScreening } : {}),
     ...(onScreeningTiming ? { onScreeningTiming } : {}),
   });
-  return { composition, companionDataDir: dirs.companionDataDir };
+  return {
+    composition,
+    companionDataDir: dirs.companionDataDir,
+    onInlineShadowFinding: dirs.onInlineShadowFinding,
+  };
+}
+
+function operatorDirectInput(messageId: string) {
+  const channelId = 'api:operator-direct';
+  const canonicalContactId = 'contact-primary';
+  return {
+    sourceClass: 'primary_user' as const,
+    origin: { ref: `${channelId}:${messageId}` },
+    scope: 'context' as const,
+    atMs: 123,
+    canonicalContactId,
+    channelPrivacy: 'private' as const,
+    sourceChannelId: channelId,
+    sourceMessageId: messageId,
+    surface: { channelClass: 'operator_direct' as const },
+    chatBodyContext: {
+      channelClass: 'api_direct' as const,
+      conversationScope: resolveConversationScopeFromMetadata({
+        channelId,
+        isDirectMessage: true,
+        channelMeta: { isDirectMessage: true, privacyLevel: 'private' },
+        contact: { contactId: canonicalContactId },
+        recentSpeakers: [{ authorId: canonicalContactId, name: 'Primary Operator' }],
+        resolvedSpeakerContactCount: 1,
+      }),
+      contactTrust: {
+        contactId: canonicalContactId,
+        trustLevel: 'primary' as const,
+        resolvedAtMs: 123,
+        archived: false,
+      },
+    },
+  };
+}
+
+function operatorDirectEscalationPolicy(): Record<string, unknown> {
+  const policy = seedPolicy({ mode: 'strict' });
+  const l2Screener = policy.l2Screener as {
+    escalationThresholdsByTier: Record<string, number>;
+  };
+  return {
+    ...policy,
+    l2Screener: {
+      ...l2Screener,
+      escalationThresholdsByTier: {
+        ...l2Screener.escalationThresholdsByTier,
+        trusted: 0.6,
+      },
+    },
+  };
 }
 
 describe('L2/L3 escalation wired into the live gateway screening path', () => {
+  it.each([
+    {
+      name: 'confirmed L3 finding',
+      l3: { verdict: L3_FLAGGED_VERDICT },
+      expectedStatus: 'flagged',
+      expectedAction: 'pass',
+      expectedAlerts: 1,
+    },
+    {
+      name: 'clean L3 verdict',
+      l3: { verdict: L3_CLEAR_VERDICT },
+      expectedStatus: 'clear',
+      expectedAction: 'pass',
+      expectedAlerts: 0,
+    },
+    {
+      name: 'failed-closed L3 transport',
+      l3: { rejectWith: 'upstream 502' },
+      expectedStatus: 'failed_closed',
+      expectedAction: 'quarantine',
+      expectedAlerts: 0,
+    },
+  ] as const)(
+    'alerts only for a $name on the operator-direct shadow-full final path',
+    async ({ l3, expectedStatus, expectedAction, expectedAlerts }) => {
+      const transport = routingFetch({
+        [L2_MODEL]: { verdict: L2_FLAGGING_VERDICT },
+        [L3_MODEL]: l3,
+      });
+      const { composition, onInlineShadowFinding } = await composeWith(
+        operatorDirectEscalationPolicy(),
+        transport.fetch,
+      );
+
+      const result = await composition.screening!.screen(
+        HOSTILE_CONTENT,
+        operatorDirectInput(`message-${expectedStatus}`),
+      );
+
+      expect(result.action).toBe(expectedAction);
+      expect(result.observability.semanticTrace.l3.status).toBe(expectedStatus);
+      expect(onInlineShadowFinding).toHaveBeenCalledTimes(expectedAlerts);
+      if (expectedAlerts === 1) {
+        expect(onInlineShadowFinding).toHaveBeenCalledWith(expect.objectContaining({
+          phase: 'inline_shadow',
+          disposition: 'confirmed_bad',
+          action: 'pass',
+          sourceChannelId: 'api:operator-direct',
+          sourceMessageId: 'message-flagged',
+          semanticTrace: expect.objectContaining({
+            l3: expect.objectContaining({ status: 'flagged' }),
+          }),
+        }));
+      }
+      await composition.dispose();
+    },
+  );
+
   it.each([
     ['CogSecEvent write', false],
     ['CogSecEvent and fallback quarantine writes', true],
@@ -782,25 +901,23 @@ describe('L2/L3 escalation wired into the live gateway screening path', () => {
       // L1.5 provisioned (fake) so this test reaches the escalation-backend
       // fail-closed check rather than the L1.5 fail-closed gate (cyy7l).
       injectionBackendFactory: fakeInjectionBackendFactory,
-    })).rejects.toThrow(/no pi-ai provider backend is resolvable/);
+    })).rejects.toThrow(/requires a resolvable pi-ai deep-screening backend/);
   });
 
-  it('composes without escalation (loud skip) in shadow mode with no backend', async () => {
-    const dirs = makeDataDirs(seedPolicy({ mode: 'shadow' }));
-    const composition = await composeGatewayIntakeScreening({
+  it('fails startup when shadow-full posture has no deep-screening backend', async () => {
+    const policy = seedPolicy({ mode: 'shadow' });
+    const surfacePostures = policy.surfacePostures as {
+      channelClasses: Record<string, unknown>;
+    };
+    policy.surfacePostures = {
+      ...surfacePostures,
+      channelClasses: { ...surfacePostures.channelClasses, group_chat: 'shadow_full' },
+    };
+    const dirs = makeDataDirs(policy);
+    await expect(composeGatewayIntakeScreening({
       ...dirs,
       screenerBackend: null,
-    });
-    expect(composition.screening).not.toBeNull();
-    // A hostile-tier (L2/L3-mandatory) item screens L1-only — no escalation
-    // port exists, and screening still completes rather than erroring.
-    const result = await composition.screening!.screen(BENIGN_CONTENT, {
-      sourceClass: 'image_ocr',
-      origin: { ref: 'discord:channel-42:msg-9:attachment:0' },
-      scope: 'context',
-    });
-    expect(result.action).toBe('pass');
-    expect(result.envelope.scores).not.toHaveProperty(L2_SCREENER_SCANNER_ID);
-    await composition.dispose();
+      injectionBackendFactory: fakeInjectionBackendFactory,
+    })).rejects.toThrow(/requires a resolvable pi-ai deep-screening backend/);
   });
 });

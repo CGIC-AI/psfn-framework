@@ -94,7 +94,9 @@ function parseSnapshot(value: unknown, index: number): IntakeEnvelopeSnapshot {
   if (!isRecord(value)) {
     throw new Error(`Intake screening metadata envelopes[${String(index)}] must be an object`);
   }
-  const { envelopeId, sourceClass, sourceRiskTier, state, riskLabels, subject } = value;
+  const {
+    envelopeId, sourceClass, sourceRiskTier, state, riskLabels, enforcementPosture, subject,
+  } = value;
   if (typeof envelopeId !== 'string' || !envelopeId.trim()) {
     throw new Error(`Intake screening metadata envelopes[${String(index)}].envelopeId must be a non-empty string`);
   }
@@ -110,6 +112,13 @@ function parseSnapshot(value: unknown, index: number): IntakeEnvelopeSnapshot {
   if (!Array.isArray(riskLabels) || riskLabels.some((label) => !isIntakeRiskLabel(label))) {
     throw new Error(`Intake screening metadata envelopes[${String(index)}].riskLabels contains unknown labels`);
   }
+  if (enforcementPosture !== undefined
+    && enforcementPosture !== 'shadow'
+    && enforcementPosture !== 'enforce') {
+    throw new Error(
+      `Intake screening metadata envelopes[${String(index)}].enforcementPosture is invalid`,
+    );
+  }
   if (!isRecord(subject) || (subject.kind !== 'body' && subject.kind !== 'attachment')) {
     throw new Error(`Intake screening metadata envelopes[${String(index)}].subject is malformed`);
   }
@@ -123,6 +132,7 @@ function parseSnapshot(value: unknown, index: number): IntakeEnvelopeSnapshot {
     sourceRiskTier,
     state,
     riskLabels,
+    ...(enforcementPosture ? { enforcementPosture } : {}),
     subject: subject.kind === 'body'
       ? { kind: 'body' }
       : { kind: 'attachment', index: subject.index as number },

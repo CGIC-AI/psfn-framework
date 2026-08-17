@@ -148,12 +148,14 @@ function parseCogSecRanges(value: unknown): AdminCogSecRemediationInput['affecte
     const endEntryId = parseOptionalPositiveInteger(item.endEntryId, `affectedMessageRanges[${index}].endEntryId`);
     const messageIds = parseOptionalNumberArray(item.messageIds, `affectedMessageRanges[${index}].messageIds`);
     const discordMessageIds = parseOptionalStringArray(item.discordMessageIds, `affectedMessageRanges[${index}].discordMessageIds`);
+    const sourceMessageIds = parseOptionalStringArray(item.sourceMessageIds, `affectedMessageRanges[${index}].sourceMessageIds`);
     return {
       ...(sourceChannelId ? { sourceChannelId } : {}),
       ...(logicalSessionId ? { logicalSessionId } : {}),
       ...(startEntryId !== undefined ? { startEntryId } : {}),
       ...(endEntryId !== undefined ? { endEntryId } : {}),
       ...(messageIds ? { messageIds } : {}),
+      ...(sourceMessageIds ? { sourceMessageIds } : {}),
       ...(discordMessageIds ? { discordMessageIds } : {}),
     };
   });
@@ -194,6 +196,7 @@ function parseCogSecInput(
   const affectedLogicalSessionIds = parseOptionalStringArray(value.affectedLogicalSessionIds, 'affectedLogicalSessionIds');
   const affectedMessageRanges = parseCogSecRanges(value.affectedMessageRanges);
   const messageIds = parseOptionalNumberArray(value.messageIds, 'messageIds');
+  const sourceMessageIds = parseOptionalStringArray(value.sourceMessageIds, 'sourceMessageIds');
   const startEntryId = parseOptionalPositiveInteger(value.startEntryId, 'startEntryId');
   const endEntryId = parseOptionalPositiveInteger(value.endEntryId, 'endEntryId');
   const cutEpoch = parseOptionalBoolean(value.cutEpoch, 'cutEpoch');
@@ -203,6 +206,7 @@ function parseCogSecInput(
     ...(affectedLogicalSessionIds ? { affectedLogicalSessionIds } : {}),
     ...(affectedMessageRanges ? { affectedMessageRanges } : {}),
     ...(messageIds ? { messageIds } : {}),
+    ...(sourceMessageIds ? { sourceMessageIds } : {}),
     ...(startEntryId !== undefined ? { startEntryId } : {}),
     ...(endEntryId !== undefined ? { endEntryId } : {}),
     type: parseRequiredString(value.type, 'type') as AdminCogSecRemediationInput['type'],

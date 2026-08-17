@@ -44,9 +44,11 @@ import {
   cogSecVectorForProvenance,
   intakeEnforcementPosture,
   resolveCogSecProvenanceClass,
+  resolveCogSecSurfacePosture,
   resolveCogSecVectorPosture,
   type CogSecMode,
   type CogSecProvenanceClass,
+  type CogSecStructuralSurface,
   type CogSecVector,
   type IntakeEnforcementPosture,
 } from '../../../shared/contracts/cogsec-mode.js';
@@ -281,6 +283,11 @@ export interface IntakeScreeningInput {
    * 'external' (screened normally).
    */
   structuralProvenance?: CogSecProvenanceClass;
+  /**
+   * Structurally authenticated channel/workflow identity. Unknown values are
+   * rejected; content and origin strings never participate in resolution.
+   */
+  surface?: CogSecStructuralSurface;
   /** Origin locator: url, `discord:<channel>:<message>`, tool call id, ... */
   origin: { ref: string; detail?: string };
   scope: IntakeScanScope;
@@ -320,6 +327,8 @@ export interface IntakeScreeningInput {
    * rule); absent, the escalation port derives a source-class identifier.
    */
   sourceChannelId?: string;
+  /** Transport-authoritative message identity for post-incident correlation. */
+  sourceMessageId?: string;
   /**
    * On-disk artifact paths carrying this item's raw content (a saved
    * document and its parsed-text sidecar). Registered on the quarantine hold
@@ -418,7 +427,34 @@ export interface IntakeScreeningResult {
    * items that never escalated to L3.
    */
   cogSecCaseId?: string;
+  /** Deep layers were scheduled after pass-through and have not settled yet. */
+  postEscalation?: 'pending';
 }
+
+export interface IntakePostEscalationEvent {
+  phase: 'post_pass';
+  disposition: 'clear' | 'confirmed_bad' | 'failed_closed';
+  surface: CogSecStructuralSurface;
+  envelopeId: string;
+  sourceChannelId: string;
+  sourceMessageId: string;
+  action: IntakeDecisionAction;
+  riskLabels: readonly IntakeRiskLabel[];
+  scores: Readonly<Record<string, number>>;
+  semanticTrace: IntakeSemanticScreeningTrace;
+  cogSecCaseId?: string;
+  completedAtMs: number;
+}
+
+export interface IntakeInlineShadowFindingEvent
+  extends Omit<IntakePostEscalationEvent, 'phase' | 'disposition'> {
+  phase: 'inline_shadow';
+  disposition: 'confirmed_bad';
+}
+
+export type IntakeCogSecFindingEvent =
+  | IntakePostEscalationEvent
+  | IntakeInlineShadowFindingEvent;
 
 export interface IntakeScreeningService {
   /** Ingress enforcement posture of this screening instance (observe/enforce). */
@@ -465,6 +501,10 @@ export interface IntakeScreeningServiceOptions {
   onTiming?: (event: IntakeScreeningTimingEvent) => void;
   /** Canonical content-free decision observer. A throwing observer is isolated. */
   onDecision?: (event: IntakeScreeningObservabilityEvent) => void;
+  /** Content-free completion observer for pass-through deep screening. */
+  onPostEscalation?: (event: IntakePostEscalationEvent) => void | Promise<void>;
+  /** Content-free alert observer for non-clean inline shadow-full decisions. */
+  onInlineShadowFinding?: (event: IntakeInlineShadowFindingEvent) => void | Promise<void>;
 }
 
 /** The fixed, operator-reviewed in-place placeholder for withheld content. */
@@ -688,6 +728,8 @@ interface EscalationExtras {
   observeUncorroboratedSemanticScore?: boolean;
   /** Gateway semantic-layer routing/verdict record (content-free). */
   semanticTrace?: IntakeSemanticScreeningTrace;
+  /** Local fast scan is recorded, but this surface always passes before deep scan. */
+  postEscalationPass?: boolean;
 }
 
 function semanticLayersNotRun(reason: string): IntakeSemanticScreeningTrace {
@@ -855,13 +897,24 @@ export function createIntakeScreeningService(
     vector: CogSecVector;
     posture: IntakeEnforcementPosture;
     screens: boolean;
+    deepScreening: 'inline' | 'post_pass';
   } {
     const vector = resolveCogSecVector(input);
+    if (input.surface) {
+      const resolved = resolveCogSecSurfacePosture(policy.surfacePostures, input.surface);
+      return {
+        vector,
+        posture: resolved.enforces ? 'enforce' : 'shadow',
+        screens: resolved.screens,
+        deepScreening: resolved.deepScreening,
+      };
+    }
     const decision = resolveCogSecVectorPosture(globalMode, vector);
     return {
       vector,
       posture: cogSecItemEnforcementPosture(globalMode, vector),
       screens: decision.screens,
+      deepScreening: 'inline',
     };
   }
 
@@ -975,6 +1028,65 @@ export function createIntakeScreeningService(
     return { riskLabels, scores, extractedFields };
   }
 
+  function emitInlineShadowFinding(
+    input: IntakeScreeningInput,
+    envelope: IntakeEnvelope,
+    action: IntakeDecisionAction,
+    semanticTrace: IntakeSemanticScreeningTrace,
+    confirmedFinding: boolean,
+    cogSecCaseId?: string,
+  ): void {
+    if (!input.surface || !confirmedFinding) return;
+    const surfacePosture = resolveCogSecSurfacePosture(policy.surfacePostures, input.surface);
+    if (surfacePosture.profile !== 'shadow_full') return;
+    const sourceChannelId = input.sourceChannelId?.trim();
+    const sourceMessageId = input.sourceMessageId?.trim();
+    if (!sourceChannelId || !sourceMessageId) {
+      options.onFailClosed?.({
+        stage: 'escalation',
+        sourceClass: input.sourceClass,
+        error: 'inline shadow finding lacks structural sourceChannelId/sourceMessageId',
+        timestamp: input.atMs ?? now(),
+      });
+      return;
+    }
+    const event: IntakeInlineShadowFindingEvent = {
+      phase: 'inline_shadow',
+      disposition: 'confirmed_bad',
+      surface: input.surface,
+      envelopeId: envelope.id,
+      sourceChannelId,
+      sourceMessageId,
+      action,
+      riskLabels: [...envelope.riskLabels],
+      scores: { ...envelope.scores },
+      semanticTrace,
+      ...(cogSecCaseId ? { cogSecCaseId } : {}),
+      completedAtMs: now(),
+    };
+    log.info('Inline shadow-full CogSec finding completed', event);
+    try {
+      const completion = options.onInlineShadowFinding?.(event);
+      if (completion) {
+        void completion.catch(error => {
+          options.onFailClosed?.({
+            stage: 'escalation',
+            sourceClass: input.sourceClass,
+            error: `inline shadow finding observer failed: ${error instanceof Error ? error.message : String(error)}`,
+            timestamp: event.completedAtMs,
+          });
+        });
+      }
+    } catch (error) {
+      options.onFailClosed?.({
+        stage: 'escalation',
+        sourceClass: input.sourceClass,
+        error: `inline shadow finding observer failed: ${error instanceof Error ? error.message : String(error)}`,
+        timestamp: event.completedAtMs,
+      });
+    }
+  }
+
   function finalize(
     text: string,
     input: IntakeScreeningInput,
@@ -1019,10 +1131,16 @@ export function createIntakeScreeningService(
     const markOnlyChatBody = !escalationExtras?.forced
       && !escalationExtras?.failure
       && isHighestTrustPrivateDirectMarkOnly(input);
-    const effectiveItemPosture: IntakeEnforcementPosture = markOnlyChatBody
+    const postEscalationPass = escalationExtras?.postEscalationPass === true;
+    const effectiveItemPosture: IntakeEnforcementPosture = markOnlyChatBody || postEscalationPass
       ? 'shadow'
       : itemPosture;
-    const decision = markOnlyChatBody && screenedDecision.action !== 'pass'
+    const decision = postEscalationPass
+      ? {
+        action: 'pass' as const,
+        reason: `post-escalation-pass:${screenedDecision.reason}`,
+      }
+      : markOnlyChatBody && screenedDecision.action !== 'pass'
       ? {
         action: 'pass' as const,
         reason: `chat-body-mark-only:${screenedDecision.reason}`,
@@ -1151,7 +1269,11 @@ export function createIntakeScreeningService(
       }
     }
 
-    const snapshot = snapshotIntakeEnvelope(envelope, input.subject ?? { kind: 'body' });
+    const snapshot = snapshotIntakeEnvelope(
+      envelope,
+      input.subject ?? { kind: 'body' },
+      effectiveItemPosture,
+    );
 
     // Every decision is audited; findings and enforcement escalate severity.
     const auditPayload = {
@@ -1217,6 +1339,17 @@ export function createIntakeScreeningService(
         ?? semanticLayersNotRun('semantic escalation was not requested'),
       priorSignals,
     );
+    if (!postEscalationPass) {
+      const semanticFailure = observability.semanticTrace.l2.status === 'failed_closed'
+        || observability.semanticTrace.l3.status === 'failed_closed';
+      emitInlineShadowFinding(
+        input,
+        envelope,
+        screenedDecision.action,
+        observability.semanticTrace,
+        screenedDecision.action !== 'pass' && !semanticFailure,
+      );
+    }
 
     return {
       envelope,
@@ -1233,7 +1366,128 @@ export function createIntakeScreeningService(
       ...(scorerOutcome.error ? { injectionScorerError: scorerOutcome.error } : {}),
       ...(quarantineHoldError ? { quarantineHoldError } : {}),
       ...(markingPlan ? { markingPlan } : {}),
+      ...(postEscalationPass ? { postEscalation: 'pending' as const } : {}),
     };
+  }
+
+  function schedulePostEscalation(
+    text: string,
+    input: IntakeScreeningInput,
+    report: IntakeL1ScanReport,
+    scorerOutcome: ScorerOutcome,
+    port: IntakeEscalationPort,
+    cogsecVector: CogSecVector,
+  ): IntakeScreeningResult {
+    if (!input.surface) throw new Error('Post-escalation screening requires a structural surface');
+    const sourceChannelId = input.sourceChannelId?.trim();
+    const sourceMessageId = input.sourceMessageId?.trim();
+    if (!sourceChannelId || !sourceMessageId) {
+      throw new Error(
+        'Post-escalation screening requires structural sourceChannelId and sourceMessageId',
+      );
+    }
+    const atMs = input.atMs ?? now();
+    const timedInput: IntakeScreeningInput = { ...input, atMs };
+    const adjusted = resolveTier(input);
+    const priorSignals = input.priorSignals ?? [];
+    const prior = collectSignalContribution(report, scorerOutcome, priorSignals, adjusted);
+    const priorScore = Math.min(1, Math.max(0, ...Object.values(prior.scores)));
+    const local = finalize(text, timedInput, report, scorerOutcome, 'shadow', cogsecVector, {
+      postEscalationPass: true,
+      semanticTrace: semanticLayersNotRun('deep screening scheduled after pass-through'),
+    });
+
+    const completion = port.escalate({
+      text,
+      sourceClass: input.sourceClass,
+      sourceRiskTier: adjusted.tier,
+      enforcementPosture: 'shadow',
+      priorScore,
+      origin: input.origin,
+      ...(input.subject ? { subject: input.subject } : {}),
+      ...(input.canonicalContactId ? { canonicalContactId: input.canonicalContactId } : {}),
+      sourceChannelId,
+      priorContribution: prior,
+      ...(input.artifactPaths ? { artifactPaths: input.artifactPaths } : {}),
+      emitTiming: (stage, status, durationMs) => emitTiming(timedInput, stage, status, durationMs),
+      atMs,
+    }).then((decision): IntakePostEscalationEvent => {
+      const final = decision.kind === 'final' ? decision.result : undefined;
+      const action: IntakeDecisionAction = decision.kind === 'quarantine'
+        ? 'quarantine'
+        : final?.action ?? 'pass';
+      const deepRiskLabels = decision.kind === 'contribution' || decision.kind === 'quarantine'
+        ? decision.contribution.riskLabels
+        : final?.envelope.riskLabels ?? [];
+      const riskLabels = [...new Set([...prior.riskLabels, ...deepRiskLabels])];
+      const deepScores = decision.kind === 'contribution' || decision.kind === 'quarantine'
+        ? decision.contribution.scores
+        : final?.envelope.scores ?? {};
+      const scores = { ...prior.scores, ...deepScores };
+      const semanticTrace = decision.trace
+        ?? semanticLayersNotRun(`uninstrumented post-escalation result: ${decision.kind}`);
+      const confirmedBad = decision.kind === 'quarantine'
+        || action === 'quarantine'
+        || action === 'block'
+        || riskLabels.some(label => INTAKE_QUARANTINE_RISK_LABELS.includes(label));
+      return {
+        phase: 'post_pass',
+        disposition: confirmedBad ? 'confirmed_bad' : 'clear',
+        surface: input.surface!,
+        envelopeId: local.envelope.id,
+        sourceChannelId,
+        sourceMessageId,
+        action,
+        riskLabels: [...riskLabels],
+        scores,
+        semanticTrace,
+        ...(final?.cogSecCaseId ? { cogSecCaseId: final.cogSecCaseId } : {}),
+        completedAtMs: now(),
+      };
+    }).catch((error): IntakePostEscalationEvent => {
+      log.error('Post-pass CogSec escalation failed closed', {
+        envelopeId: local.envelope.id,
+        sourceChannelId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return {
+        phase: 'post_pass',
+        disposition: 'failed_closed',
+        surface: input.surface!,
+        envelopeId: local.envelope.id,
+        sourceChannelId,
+        sourceMessageId,
+        action: 'quarantine',
+        riskLabels: [],
+        scores: { ...prior.scores },
+        semanticTrace: {
+          l2: { status: 'failed_closed', reason: 'post-escalation transport failed' },
+          l3: { status: 'failed_closed', reason: 'post-escalation transport failed' },
+        },
+        completedAtMs: now(),
+      };
+    }).then(event => {
+      log.info('Post-pass CogSec escalation completed', event);
+      return event;
+    });
+    void completion.then(async event => {
+      try {
+        await options.onPostEscalation?.(event);
+      } catch (error) {
+        options.onFailClosed?.({
+          stage: 'escalation',
+          sourceClass: input.sourceClass,
+          error: `post-escalation observer failed: ${error instanceof Error ? error.message : String(error)}`,
+          timestamp: event.completedAtMs,
+        });
+        log.error('Post-pass CogSec escalation observer failed', {
+          envelopeId: event.envelopeId,
+          sourceChannelId: event.sourceChannelId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    });
+    return local;
   }
 
   // ── L2/L3 escalation (htm9.6/htm9.7, gateway-side port only) ──
@@ -1392,6 +1646,14 @@ export function createIntakeScreeningService(
             ?? semanticLayersNotRun('uninstrumented final escalation'),
           priorSignals,
         );
+        emitInlineShadowFinding(
+          timedInput,
+          final.envelope,
+          final.action,
+          observability.semanticTrace,
+          observability.semanticTrace.l3.status === 'flagged',
+          final.cogSecCaseId,
+        );
         return {
           envelope: final.envelope,
           snapshot: final.snapshot,
@@ -1501,6 +1763,9 @@ export function createIntakeScreeningService(
       emitDeepScreeningNotRun(input);
       return finalize(text, input, report, scorerOutcome, item.posture, item.vector);
     }
+    if (item.deepScreening === 'post_pass') {
+      return schedulePostEscalation(text, input, report, scorerOutcome, escalation, item.vector);
+    }
     return escalateAndFinalize(text, input, report, scorerOutcome, escalation, item.posture, item.vector);
   }
 
@@ -1513,6 +1778,11 @@ export function createIntakeScreeningService(
       );
     }
     const item = resolveItemPosture(input);
+    if (item.deepScreening === 'post_pass') {
+      throw new Error(
+        'CogSec post-escalation surfaces require asynchronous screen(); screenSync cannot schedule deep screening',
+      );
+    }
     if (!item.screens) {
       return screenCleanBubble(text, input, item.vector);
     }

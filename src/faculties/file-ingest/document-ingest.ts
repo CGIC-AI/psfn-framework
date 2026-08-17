@@ -355,6 +355,7 @@ export async function screenDocumentIngestSummary(
       },
       scope: 'context',
       subject: { kind: 'attachment', index: context.attachmentIndexBase + index },
+      surface: { workflow: 'file_ingress' },
       sourceChannelId: context.channelId,
       ...(artifactPaths.length > 0 ? { artifactPaths } : {}),
     });

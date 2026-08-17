@@ -849,6 +849,8 @@ export class TelegramAdapter implements ChannelAdapterPort {
           surface: 'telegram',
           channelId,
           messageId,
+          channelTopology: isDirectMessage ? 'direct' : 'group',
+          channelPrivacy: classifyChannelEnvelope(channelId, { isDirectMessage }).privacy,
         })
         : { content, snapshot: null };
       // htm9.9: resolve inline image bytes and push document attachments through

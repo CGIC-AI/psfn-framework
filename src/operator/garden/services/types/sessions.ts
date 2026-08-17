@@ -77,6 +77,8 @@ export interface AdminCogSecRemediationInput {
   affectedLogicalSessionIds?: string[];
   affectedMessageRanges?: CogSecAffectedMessageRange[];
   messageIds?: number[];
+  /** Structural transport ids resolved to exact stored L0 rows before preview/apply. */
+  sourceMessageIds?: string[];
   startEntryId?: number;
   endEntryId?: number;
   type: CogSecCaseType;

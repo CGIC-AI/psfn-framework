@@ -100,6 +100,7 @@ describe('CogSec safe event log', () => {
       startEntryId: 10,
       endEntryId: 12,
       messageIdCount: 3,
+      sourceMessageIdCount: 0,
       discordMessageIdCount: 1,
     }]);
     expect(serialized).not.toContain(SEALED_REF);

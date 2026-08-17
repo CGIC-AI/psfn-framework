@@ -19,7 +19,7 @@ function printUsage(): void {
   console.log('Usage: npm run migrate:intake-policy-owner -- --data-dir <system-data-dir> [OPTIONS]');
   console.log('');
   console.log('Upgrades schema-v1/v2/v3/v4/v5 intake-policy.json owners to v6 and removes');
-  console.log('retired screener model selector keys from current owners.');
+  console.log('retired screener model selectors and adds required posture sections to current owners.');
   console.log('Dry-run is the default.');
   console.log('');
   console.log('Options:');

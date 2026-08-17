@@ -6,6 +6,7 @@ import type { EventBus } from '../../../shared/event-bus.js';
 import { sessionEntryToMessage } from '../../../core/agent/messages.js';
 import { MESSAGE_CLASSES } from '../../../core/agent/message-classes.js';
 import { resolveValidatedCrossChannelContinuityProvenance } from '../../../core/session/cross-channel-continuity-port.js';
+import { resolveSessionEntryTurnContext } from '../../../core/session/turn-provenance.js';
 import type { SessionManager } from '../../../core/session/manager.js';
 import { mergeAuthenticatedJournalWithSessionTail } from '../../../core/session/manager/session-tail-read-store.js';
 import type { SessionStore } from '../../../persistence/sessions/store.js';
@@ -118,6 +119,7 @@ const COGSEC_CASE_TYPES: ReadonlySet<CogSecCaseType> = new Set([
   'memory_poisoning',
   'policy_drift',
   'content_poisoning',
+  'intake_firewall',
   'unknown',
 ]);
 const COGSEC_SEVERITIES: ReadonlySet<CogSecSeverity> = new Set(['low', 'medium', 'high', 'critical']);
@@ -421,6 +423,37 @@ export class AdminSessionDataService implements AdminSessionService {
     };
   }
 
+  private resolveSourceMessageEntryIds(
+    logicalSessionId: string,
+    sourceMessageIds: readonly string[],
+    field: string,
+  ): { sourceMessageIds: string[]; entryIds: number[] } {
+    const normalizedSourceMessageIds = [...new Set(sourceMessageIds
+      .map(id => normalizeRequiredText(id, `${field}[]`)))];
+    const entryIds: number[] = [];
+    const sessionEntryCount = this.deps.sessionStore.count(logicalSessionId);
+    for (const sourceMessageId of normalizedSourceMessageIds) {
+      const matches = this.deps.sessionStore.findLatestEntries(
+        logicalSessionId,
+        entry => entry.role === 'user' && (
+          entry.discordMessageId === sourceMessageId
+          || resolveSessionEntryTurnContext(entry).sourceMessageId === sourceMessageId
+        ),
+        sessionEntryCount,
+      );
+      if (matches.length !== 1) {
+        throw new Error(
+          `${field} entry '${sourceMessageId}' did not resolve to a stored session entry exactly once`,
+        );
+      }
+      entryIds.push(matches[0]!.id);
+    }
+    return {
+      sourceMessageIds: normalizedSourceMessageIds,
+      entryIds: [...new Set(entryIds)].sort((left, right) => left - right),
+    };
+  }
+
   private normalizeCogSecRanges(
     input: AdminCogSecRemediationInput,
     sourceChannelId: string,
@@ -428,6 +461,23 @@ export class AdminSessionDataService implements AdminSessionService {
   ): CogSecAffectedMessageRange[] {
     const ranges = input.affectedMessageRanges?.map((range, index) => {
       const logicalSessionId = range.logicalSessionId?.trim() || activeLogicalSessionId;
+      const numericMessageIds = normalizeMessageIds(
+        range.messageIds,
+        `affectedMessageRanges[${index}].messageIds`,
+      );
+      const resolvedSourceMessages = range.sourceMessageIds?.length
+        ? this.resolveSourceMessageEntryIds(
+          logicalSessionId,
+          range.sourceMessageIds,
+          `affectedMessageRanges[${index}].sourceMessageIds`,
+        )
+        : undefined;
+      const messageIds = numericMessageIds || resolvedSourceMessages
+        ? [...new Set([
+          ...(numericMessageIds ?? []),
+          ...(resolvedSourceMessages?.entryIds ?? []),
+        ])].sort((left, right) => left - right)
+        : undefined;
       const normalized: CogSecAffectedMessageRange = {
         sourceChannelId: range.sourceChannelId?.trim() || sourceChannelId,
         logicalSessionId,
@@ -437,8 +487,9 @@ export class AdminSessionDataService implements AdminSessionService {
         ...(normalizeOptionalPositiveInteger(range.endEntryId, `affectedMessageRanges[${index}].endEntryId`) !== undefined
           ? { endEntryId: normalizeOptionalPositiveInteger(range.endEntryId, `affectedMessageRanges[${index}].endEntryId`) }
           : {}),
-        ...(normalizeMessageIds(range.messageIds, `affectedMessageRanges[${index}].messageIds`)
-          ? { messageIds: normalizeMessageIds(range.messageIds, `affectedMessageRanges[${index}].messageIds`) }
+        ...(messageIds?.length ? { messageIds } : {}),
+        ...(resolvedSourceMessages
+          ? { sourceMessageIds: resolvedSourceMessages.sourceMessageIds }
           : {}),
       };
       if (
@@ -464,8 +515,26 @@ export class AdminSessionDataService implements AdminSessionService {
       });
     }
 
+    const sourceMessageIds = [...new Set((input.sourceMessageIds ?? [])
+      .map(id => normalizeRequiredText(id, 'sourceMessageIds[]')))];
+    if (sourceMessageIds.length > 0) {
+      const resolved = this.resolveSourceMessageEntryIds(
+        activeLogicalSessionId,
+        sourceMessageIds,
+        'sourceMessageIds',
+      );
+      ranges.push({
+        sourceChannelId,
+        logicalSessionId: activeLogicalSessionId,
+        messageIds: resolved.entryIds,
+        sourceMessageIds: resolved.sourceMessageIds,
+      });
+    }
+
     if (ranges.length === 0) {
-      throw new Error('CogSec remediation requires messageIds, startEntryId/endEntryId, or affectedMessageRanges');
+      throw new Error(
+        'CogSec remediation requires messageIds, sourceMessageIds, startEntryId/endEntryId, or affectedMessageRanges',
+      );
     }
     return ranges;
   }

@@ -190,6 +190,8 @@ export interface IcpInitiationCandidateClaim {
   candidate: IcpInitiationCandidate;
   /** Opaque private lease binding. Never project this token outside the companion runtime. */
   claimToken: string;
+  /** Operational-clock lease boundary used only for owner renewal. */
+  claimExpiresAtMs: number;
 }
 
 export interface IcpInitiationCandidateClaimOptions {
@@ -198,8 +200,32 @@ export interface IcpInitiationCandidateClaimOptions {
   limit: number;
 }
 
+export interface IcpInitiationCandidateProducerClaim {
+  /** Opaque private ownership token held only by the active source runtime. */
+  claimToken: string;
+  /** Bounded crash-recovery boundary after which a supervisor may reclaim the row. */
+  claimExpiresAtMs: number;
+}
+
 export interface IcpInitiationCandidateStorePort {
   createCandidate(candidate: IcpInitiationCandidate): Promise<IcpInitiationCandidate>;
+  /** Atomically creates a candidate with a producer lease so recovery cannot race live delivery. */
+  createClaimedCandidate?(
+    candidate: IcpInitiationCandidate,
+    claim: IcpInitiationCandidateProducerClaim,
+  ): Promise<IcpInitiationCandidate>;
+  /** Atomically takes an unowned nonterminal candidate for exact source replay. */
+  claimCandidate?(
+    candidateId: string,
+    claim: IcpInitiationCandidateProducerClaim,
+  ): Promise<IcpInitiationCandidate | null>;
+  /** Extends an exact live owner lease without changing candidate business state. */
+  renewCandidateClaim?(
+    candidateId: string,
+    claim: IcpInitiationCandidateProducerClaim,
+  ): Promise<void>;
+  /** Releases only the caller's exact lease; already-cleared terminal rows are a no-op. */
+  releaseCandidateClaim?(candidateId: string, claimToken: string): Promise<void>;
   getCandidate(candidateId: string): Promise<IcpInitiationCandidate | null>;
   getCandidateByPendingFollowUpId(
     pendingFollowUpId: string,

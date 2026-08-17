@@ -6,6 +6,7 @@ import type {
   IcpInitiationCandidateListOptions,
   IcpInitiationCandidateClaim,
   IcpInitiationCandidateClaimOptions,
+  IcpInitiationCandidateProducerClaim,
   IcpInitiationCandidateStorePort,
   IcpInitiationCandidateTransitionInput,
 } from '../../core/icp/autonomy-store-ports.js';
@@ -133,6 +134,96 @@ export class PostgresIcpInitiationCandidateStore implements IcpInitiationCandida
   }
 
   async createCandidate(candidateInput: IcpInitiationCandidate): Promise<IcpInitiationCandidate> {
+    return await this.insertCandidate(candidateInput);
+  }
+
+  async createClaimedCandidate(
+    candidateInput: IcpInitiationCandidate,
+    claim: IcpInitiationCandidateProducerClaim,
+  ): Promise<IcpInitiationCandidate> {
+    const candidate = parseIcpInitiationCandidate(candidateInput);
+    this.assertLiveClaim(claim);
+    return await this.insertCandidate(candidate, claim);
+  }
+
+  async renewCandidateClaim(
+    candidateId: string,
+    claim: IcpInitiationCandidateProducerClaim,
+  ): Promise<void> {
+    const operationalNowMs = Date.now();
+    this.assertLiveClaim(claim, operationalNowMs);
+    const row = await queryOne<{ candidate_id: string }>(this.pool, `
+      UPDATE icp_initiation_candidates
+      SET lifecycle_claim_expires_at_ms = $3
+      WHERE candidate_id = $1
+        AND lifecycle_claim_token = $2
+        AND lifecycle_claim_expires_at_ms > $4
+      RETURNING candidate_id
+    `, [
+      requireUuid(candidateId, 'candidateId'),
+      requireUuid(claim.claimToken, 'claimToken'),
+      claim.claimExpiresAtMs,
+      operationalNowMs,
+    ]);
+    if (!row) throw new Error(`ICP candidate claim renewal conflict for ${candidateId}`);
+  }
+
+  async claimCandidate(
+    candidateId: string,
+    claim: IcpInitiationCandidateProducerClaim,
+  ): Promise<IcpInitiationCandidate | null> {
+    const operationalNowMs = Date.now();
+    this.assertLiveClaim(claim, operationalNowMs);
+    const row = await queryOne<CandidateRow>(this.pool, `
+      UPDATE icp_initiation_candidates
+      SET lifecycle_claim_token = $2,
+        lifecycle_claim_expires_at_ms = $3,
+        revision = revision + 1
+      WHERE candidate_id = $1
+        AND status IN ('pending', 'deferred', 'permitted')
+        AND (
+          lifecycle_claim_token IS NULL
+          OR lifecycle_claim_expires_at_ms IS NULL
+          OR lifecycle_claim_expires_at_ms <= $4
+        )
+      RETURNING ${CANDIDATE_COLUMNS}
+    `, [
+      requireUuid(candidateId, 'candidateId'),
+      requireUuid(claim.claimToken, 'claimToken'),
+      claim.claimExpiresAtMs,
+      operationalNowMs,
+    ]);
+    return row ? mapCandidate(row) : null;
+  }
+
+  async releaseCandidateClaim(candidateId: string, claimToken: string): Promise<void> {
+    await this.pool.query(`
+      UPDATE icp_initiation_candidates
+      SET lifecycle_claim_token = NULL,
+        lifecycle_claim_expires_at_ms = NULL
+      WHERE candidate_id = $1 AND lifecycle_claim_token = $2
+    `, [
+      requireUuid(candidateId, 'candidateId'),
+      requireUuid(claimToken, 'claimToken'),
+    ]);
+  }
+
+  private assertLiveClaim(
+    claim: IcpInitiationCandidateProducerClaim,
+    operationalNowMs = Date.now(),
+  ): void {
+    requireUuid(claim.claimToken, 'claimToken');
+    if (!Number.isSafeInteger(claim.claimExpiresAtMs)
+      || claim.claimExpiresAtMs <= operationalNowMs
+      || claim.claimExpiresAtMs - operationalNowMs > MAX_ICP_CANDIDATE_TTL_MS) {
+      throw new Error('ICP candidate claim expiry must be a bounded future operational timestamp');
+    }
+  }
+
+  private async insertCandidate(
+    candidateInput: IcpInitiationCandidate,
+    claim?: IcpInitiationCandidateProducerClaim,
+  ): Promise<IcpInitiationCandidate> {
     const candidate = parseIcpInitiationCandidate(candidateInput);
     if (candidate.status !== 'pending' || candidate.revision !== 1) {
       throw new Error('A new ICP initiation candidate must start pending at revision 1');
@@ -143,10 +234,10 @@ export class PostgresIcpInitiationCandidateStore implements IcpInitiationCandida
         peer_companion_id, preferred_channel, source, provenance_ref, reason_summary,
         target_channel_id, continuation_task_kind, created_at_ms, expires_at_ms, status, reason_code, initiation_permit_id,
         pending_follow_up_id, delivery_disposition, retry_attempt, retry_eligible_at_ms,
-        revision
+        lifecycle_claim_token, lifecycle_claim_expires_at_ms, revision
       ) VALUES (
         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
-        $18, $19, $20, $21
+        $18, $19, $20, $21, $22, $23
       )
       RETURNING ${CANDIDATE_COLUMNS}
     `, [
@@ -170,6 +261,8 @@ export class PostgresIcpInitiationCandidateStore implements IcpInitiationCandida
       candidate.deliveryDisposition ?? null,
       candidate.retryAttempt ?? 0,
       candidate.retryEligibleAtMs ?? null,
+      claim?.claimToken ?? null,
+      claim?.claimExpiresAtMs ?? null,
       candidate.revision,
     ]);
     if (!row) throw new Error(`Failed to create ICP candidate ${candidate.candidateId}`);
@@ -247,7 +340,8 @@ export class PostgresIcpInitiationCandidateStore implements IcpInitiationCandida
       );
     }
     const claimToken = randomUUID();
-    const claimExpiresAtMs = options.nowMs + options.claimLeaseMs;
+    const operationalNowMs = Date.now();
+    const claimExpiresAtMs = operationalNowMs + options.claimLeaseMs;
     const stalePendingBeforeMs = Math.max(0, options.nowMs - options.claimLeaseMs);
     const client = await this.pool.connect();
     try {
@@ -269,7 +363,7 @@ export class PostgresIcpInitiationCandidateStore implements IcpInitiationCandida
             AND (
               lifecycle_claim_token IS NULL
               OR lifecycle_claim_expires_at_ms IS NULL
-              OR lifecycle_claim_expires_at_ms <= $1
+              OR lifecycle_claim_expires_at_ms <= $6
             )
           ORDER BY
             CASE WHEN expires_at_ms <= $1 THEN 0 ELSE 1 END,
@@ -291,9 +385,14 @@ export class PostgresIcpInitiationCandidateStore implements IcpInitiationCandida
         claimToken,
         claimExpiresAtMs,
         stalePendingBeforeMs,
+        operationalNowMs,
       ]);
       await client.query('COMMIT');
-      return result.rows.map(candidate => ({ candidate: mapCandidate(candidate), claimToken }));
+      return result.rows.map(candidate => ({
+        candidate: mapCandidate(candidate),
+        claimToken,
+        claimExpiresAtMs,
+      }));
     } catch (error) {
       try {
         await client.query('ROLLBACK');

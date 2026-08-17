@@ -41,8 +41,13 @@ export function createIcpCandidateLifecycleSupervisor(
   options: IcpCandidateLifecycleSupervisorOptions,
 ): IcpCandidateLifecycleSupervisor {
   const claimDueCandidates = options.store.claimDueCandidates;
-  if (!claimDueCandidates || !options.store.transitionClaimedCandidate) {
-    throw new Error('ICP candidate lifecycle supervisor requires a claim-capable store');
+  if (!options.store.createClaimedCandidate
+    || !options.store.claimCandidate
+    || !options.store.renewCandidateClaim
+    || !options.store.releaseCandidateClaim
+    || !claimDueCandidates
+    || !options.store.transitionClaimedCandidate) {
+    throw new Error('ICP candidate lifecycle supervisor requires a complete claim-capable store');
   }
   const retryCadenceMs = requirePositiveInteger(options.retryCadenceMs, 'retryCadenceMs');
   const claimLeaseMs = requirePositiveInteger(options.claimLeaseMs, 'claimLeaseMs');

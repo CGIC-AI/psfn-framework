@@ -196,6 +196,270 @@ describe('Postgres ICP candidate lifecycle supervisor', () => {
     }
   }, INTEGRATION_TIMEOUT_MS);
 
+  it('does not claim a freshly permitted candidate while its producer is delivering', async () => {
+    if (!harness) throw new Error('Postgres integration harness is unavailable');
+    const database = await harness.createDatabase();
+    const schema = 'companion_icp_supervisor_active_producer';
+    const nowMs = Date.parse('2026-08-17T12:30:00.000Z');
+    const store = await PostgresIcpInitiationCandidateStore.connect(database.databaseUrl, { schema });
+    let releaseDelivery!: () => void;
+    const deliveryGate = new Promise<void>(resolve => {
+      releaseDelivery = resolve;
+    });
+    let signalDeliveryStarted!: () => void;
+    const deliveryStarted = new Promise<void>(resolve => {
+      signalDeliveryStarted = resolve;
+    });
+    const delivery = vi.fn(async () => {
+      signalDeliveryStarted();
+      await deliveryGate;
+      return { disposition: 'delivered' as const };
+    });
+    const runtime = createIcpInitiationSourceRuntime({
+      localCompanionId: LOCAL_COMPANION_ID,
+      store,
+      peers: peers(delivery),
+      gateway: {
+        companionInitiationPreflight: vi.fn().mockResolvedValue({ eligible: true as const }),
+        companionIssueInitiationPermit: vi.fn().mockImplementation(async ({ candidate }) => ({
+          decision: { eligible: true as const },
+          permit: {
+            permitId: 'abababab-abab-4bab-8bab-abababababab',
+            candidateId: candidate.candidateId,
+            conversationId: 'cdcdcdcd-cdcd-4dcd-8dcd-cdcdcdcdcdcd',
+            senderCompanionId: LOCAL_COMPANION_ID,
+            recipientCompanionId: PEER_COMPANION_ID,
+            channelId: `companion-dm:${LOCAL_COMPANION_ID}:${PEER_COMPANION_ID}`,
+            provenanceRef: candidate.provenanceRef,
+            issuedAtMs: nowMs,
+            expiresAtMs: nowMs + 60_000,
+            status: 'issued' as const,
+            revision: 1,
+          },
+        })),
+      },
+      consent: { evaluate: vi.fn().mockResolvedValue({ action: 'send' as const }) },
+      isExternalCompanionAuthorized: () => true,
+      now: () => nowMs,
+    });
+    const supervisor = createIcpCandidateLifecycleSupervisor({
+      store,
+      sourceRuntime: runtime,
+      retryCadenceMs: 60_000,
+      claimLeaseMs: 60_000,
+      batchSize: 1,
+      now: () => nowMs,
+    });
+    let submission: Promise<unknown> | undefined;
+    try {
+      submission = runtime.submit({
+        source: 'foreground',
+        peerContactId: 'peer-contact',
+        preferredChannel: 'dm',
+        sourceRecordId: 'active-producer-permit',
+        reasonSummary: 'Keep this permit with its active producer until delivery finishes.',
+        cause: { kind: 'independent' },
+      });
+      await deliveryStarted;
+
+      supervisor.start();
+      await expect(supervisor.runOnce()).resolves.toEqual({
+        claimed: 0,
+        completed: 0,
+        failed: 0,
+      });
+      const [ownedCandidate] = await store.listCandidates();
+      if (!ownedCandidate) throw new Error('expected the producer-owned candidate');
+      const terminalInput = {
+        candidateId: ownedCandidate.candidateId,
+        expectedStatus: 'permitted' as const,
+        expectedRevision: ownedCandidate.revision,
+        status: 'consumed' as const,
+        deliveryDisposition: 'delivered' as const,
+      };
+      await expect(store.transitionCandidate(terminalInput)).rejects.toThrow('transition conflict');
+      await expect(store.transitionClaimedCandidate(
+        '99999999-9999-4999-8999-999999999999',
+        terminalInput,
+      )).rejects.toThrow('transition conflict');
+
+      releaseDelivery();
+      await expect(submission).resolves.toMatchObject({
+        status: 'consumed',
+        deliveryDisposition: 'delivered',
+      });
+      expect(delivery).toHaveBeenCalledOnce();
+    } finally {
+      releaseDelivery();
+      await submission?.catch(() => undefined);
+      await supervisor.stop();
+      await store.close();
+    }
+  }, INTEGRATION_TIMEOUT_MS);
+
+  it('allows only one producer to execute a raced deterministic candidate', async () => {
+    if (!harness) throw new Error('Postgres integration harness is unavailable');
+    const database = await harness.createDatabase();
+    const schema = 'companion_icp_supervisor_producer_race';
+    const nowMs = Date.parse('2026-08-17T12:45:00.000Z');
+    const storeA = await PostgresIcpInitiationCandidateStore.connect(database.databaseUrl, { schema });
+    const storeB = await PostgresIcpInitiationCandidateStore.connect(database.databaseUrl, { schema });
+    const delivery = vi.fn().mockResolvedValue({ disposition: 'delivered' as const });
+    const gateway = {
+      companionInitiationPreflight: vi.fn().mockResolvedValue({ eligible: true as const }),
+      companionIssueInitiationPermit: vi.fn().mockImplementation(async ({ candidate }) => ({
+        decision: { eligible: true as const },
+        permit: {
+          permitId: 'efefefef-efef-4fef-8fef-efefefefefef',
+          candidateId: candidate.candidateId,
+          conversationId: '12121212-1212-4212-8212-121212121212',
+          senderCompanionId: LOCAL_COMPANION_ID,
+          recipientCompanionId: PEER_COMPANION_ID,
+          channelId: `companion-dm:${LOCAL_COMPANION_ID}:${PEER_COMPANION_ID}`,
+          provenanceRef: candidate.provenanceRef,
+          issuedAtMs: nowMs,
+          expiresAtMs: nowMs + 60_000,
+          status: 'issued' as const,
+          revision: 1,
+        },
+      })),
+    };
+    const createRuntime = (store: PostgresIcpInitiationCandidateStore) => (
+      createIcpInitiationSourceRuntime({
+        localCompanionId: LOCAL_COMPANION_ID,
+        store,
+        peers: peers(delivery),
+        gateway,
+        consent: { evaluate: vi.fn().mockResolvedValue({ action: 'send' as const }) },
+        isExternalCompanionAuthorized: () => true,
+        now: () => nowMs,
+      })
+    );
+    const request = {
+      source: 'foreground' as const,
+      peerContactId: 'peer-contact',
+      preferredChannel: 'dm' as const,
+      sourceRecordId: 'producer-race',
+      reasonSummary: 'Execute exactly one producer for this deterministic source.',
+      cause: { kind: 'independent' as const },
+    };
+    try {
+      const outcomes = await Promise.all([
+        createRuntime(storeA).submit(request),
+        createRuntime(storeB).submit(request),
+      ]);
+
+      expect(outcomes.map(outcome => outcome.outcome).sort()).toEqual(['deduped', 'sent']);
+      expect(delivery).toHaveBeenCalledOnce();
+      await expect(storeA.listCandidates()).resolves.toHaveLength(1);
+    } finally {
+      await storeA.close();
+      await storeB.close();
+    }
+  }, INTEGRATION_TIMEOUT_MS);
+
+  it('records expiry when candidate time elapses under a live producer claim', async () => {
+    if (!harness) throw new Error('Postgres integration harness is unavailable');
+    const database = await harness.createDatabase();
+    const schema = 'companion_icp_supervisor_producer_expiry';
+    let nowMs = Date.parse('2026-08-17T12:50:00.000Z');
+    const store = await PostgresIcpInitiationCandidateStore.connect(database.databaseUrl, { schema });
+    const issuePermit = vi.fn();
+    const delivery = vi.fn();
+    const runtime = createIcpInitiationSourceRuntime({
+      localCompanionId: LOCAL_COMPANION_ID,
+      store,
+      peers: peers(delivery),
+      gateway: {
+        companionInitiationPreflight: vi.fn().mockImplementation(async () => {
+          nowMs += 2;
+          return { eligible: true as const };
+        }),
+        companionIssueInitiationPermit: issuePermit,
+      },
+      consent: { evaluate: vi.fn() },
+      isExternalCompanionAuthorized: () => true,
+      now: () => nowMs,
+    });
+    try {
+      await expect(runtime.submit({
+        source: 'operator_test',
+        peerContactId: 'peer-contact',
+        preferredChannel: 'dm',
+        sourceRecordId: 'producer-expiry',
+        reasonSummary: 'Expire after preflight while preserving exact durable ownership.',
+        cause: { kind: 'independent' },
+        ttlMs: 1,
+      })).resolves.toMatchObject({
+        outcome: 'deduped',
+        status: 'expired',
+        reasonCode: 'candidate_expired',
+      });
+      expect(issuePermit).not.toHaveBeenCalled();
+      expect(delivery).not.toHaveBeenCalled();
+    } finally {
+      await store.close();
+    }
+  }, INTEGRATION_TIMEOUT_MS);
+
+  it('uses the producer claim for detached failure evidence and consent decline', async () => {
+    if (!harness) throw new Error('Postgres integration harness is unavailable');
+    const database = await harness.createDatabase();
+    const schema = 'companion_icp_supervisor_producer_outcomes';
+    const nowMs = Date.parse('2026-08-17T12:55:00.000Z');
+    const store = await PostgresIcpInitiationCandidateStore.connect(database.databaseUrl, { schema });
+    const common = {
+      localCompanionId: LOCAL_COMPANION_ID,
+      store,
+      peers: peers(vi.fn()),
+      isExternalCompanionAuthorized: () => true,
+      now: () => nowMs,
+    };
+    try {
+      const failedRuntime = createIcpInitiationSourceRuntime({
+        ...common,
+        gateway: {
+          companionInitiationPreflight: vi.fn().mockRejectedValue(new Error('preflight offline')),
+          companionIssueInitiationPermit: vi.fn(),
+        },
+        consent: { evaluate: vi.fn() },
+      });
+      const acceptance = await failedRuntime.accept({
+        source: 'operator_test',
+        peerContactId: 'peer-contact',
+        preferredChannel: 'dm',
+        sourceRecordId: 'detached-failure-claim',
+        reasonSummary: 'Record a detached failure under exact producer ownership.',
+        cause: { kind: 'independent' },
+      });
+      await vi.waitFor(async () => {
+        await expect(store.getCandidate(acceptance.candidateId)).resolves.toMatchObject({
+          status: 'deferred',
+          reasonCode: 'delivery_failed',
+        });
+      });
+
+      const declinedRuntime = createIcpInitiationSourceRuntime({
+        ...common,
+        gateway: {
+          companionInitiationPreflight: vi.fn().mockResolvedValue({ eligible: true as const }),
+          companionIssueInitiationPermit: vi.fn(),
+        },
+        consent: { evaluate: vi.fn().mockResolvedValue({ action: 'decline' as const }) },
+      });
+      await expect(declinedRuntime.submit({
+        source: 'foreground',
+        peerContactId: 'peer-contact',
+        preferredChannel: 'dm',
+        sourceRecordId: 'consent-decline-claim',
+        reasonSummary: 'Persist a consent decline under exact producer ownership.',
+        cause: { kind: 'independent' },
+      })).resolves.toMatchObject({ outcome: 'declined', status: 'declined' });
+    } finally {
+      await store.close();
+    }
+  }, INTEGRATION_TIMEOUT_MS);
+
   it('expires stale work and cancels a repeatedly deferred candidate without source replay', async () => {
     if (!harness) throw new Error('Postgres integration harness is unavailable');
     const database = await harness.createDatabase();
@@ -284,7 +548,7 @@ describe('Postgres ICP candidate lifecycle supervisor', () => {
     if (!harness) throw new Error('Postgres integration harness is unavailable');
     const database = await harness.createDatabase();
     const schema = 'companion_icp_supervisor_permitted';
-    const nowMs = Date.parse('2026-08-17T14:00:00.000Z');
+    let nowMs = Date.parse('2026-08-17T14:00:00.000Z');
     let store: PostgresIcpInitiationCandidateStore | null = null;
     const delivery = vi.fn()
       .mockRejectedValueOnce(new Error('injected crash after permit commit'))
@@ -337,6 +601,7 @@ describe('Postgres ICP candidate lifecycle supervisor', () => {
 
       await store.close();
       store = await PostgresIcpInitiationCandidateStore.connect(database.databaseUrl, { schema });
+      nowMs += RETRY_CADENCE_MS + 1;
       const supervisor = createIcpCandidateLifecycleSupervisor({
         store,
         sourceRuntime: createRuntime(store),

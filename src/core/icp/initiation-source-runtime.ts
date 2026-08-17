@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 import { composeCompanionDmChannelId } from '../../shared/contracts/companion-channels.js';
 import type { IcpAutonomyReasonCode } from '../../shared/contracts/icp-autonomy.js';
 import { createComponentLogger } from '../../shared/logger.js';
@@ -6,6 +8,7 @@ import type { CompanionId } from '../../shared/routing/companion-id.js';
 import type { KnownCompanionPeer } from './agent-facing-autonomy.js';
 import type {
   IcpInitiationCandidateClaim,
+  IcpInitiationCandidateProducerClaim,
   IcpInitiationCandidateTransitionInput,
 } from './autonomy-store-ports.js';
 import {
@@ -80,12 +83,79 @@ export function createIcpInitiationSourceRuntime(
     maxRetryAttempts: MAX_ICP_INITIATION_RETRY_ATTEMPTS,
     permitTtlMs: DEFAULT_PERMIT_TTL_MS,
   };
+  const producerClaimLeaseMs = Math.max(1, Math.floor(policy.permitTtlMs / 3));
+  const claimCapabilityCount = [
+    dependencies.store.createClaimedCandidate,
+    dependencies.store.claimCandidate,
+    dependencies.store.renewCandidateClaim,
+    dependencies.store.releaseCandidateClaim,
+    dependencies.store.claimDueCandidates,
+    dependencies.store.transitionClaimedCandidate,
+  ].filter(capability => capability !== undefined).length;
+  if (claimCapabilityCount !== 0 && claimCapabilityCount !== 6) {
+    throw new Error('ICP initiation source requires a complete claim-capable candidate store');
+  }
+  const claimStore = claimCapabilityCount === 6
+    ? {
+        create: dependencies.store.createClaimedCandidate!.bind(dependencies.store),
+        claim: dependencies.store.claimCandidate!.bind(dependencies.store),
+        renew: dependencies.store.renewCandidateClaim!.bind(dependencies.store),
+        release: dependencies.store.releaseCandidateClaim!.bind(dependencies.store),
+      }
+    : undefined;
   const peerPort: IcpInitiationSourcePeerPort = dependencies.peers;
   const gatewayPort: IcpInitiationSourceGatewayPort = dependencies.gateway;
   const inFlight = new Map<string, {
     acceptance: Promise<IcpInitiationSourceAcceptance>;
     completion: Promise<IcpInitiationSourceResult>;
+    markDetachedAcceptance(): void;
   }>();
+
+  const releaseClaim = async (candidateId: string, claimToken?: string): Promise<void> => {
+    if (!claimStore || !claimToken) return;
+    try {
+      await claimStore.release(candidateId, claimToken);
+    } catch (error) {
+      log.error('ICP candidate owner lease release failed', {
+        candidateId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  };
+
+  const startClaimHeartbeat = (
+    candidateId: string,
+    claimToken: string,
+    leaseMs: number,
+  ): (() => Promise<void>) => {
+    if (!claimStore) {
+      throw new Error('ICP claim heartbeat requires a complete claim-capable candidate store');
+    }
+    const renewalCadenceMs = Math.max(1, Math.floor(leaseMs / 2));
+    let stopped = false;
+    let activeRenewal: Promise<void> | undefined;
+    const renew = () => {
+      if (stopped || activeRenewal) return;
+      activeRenewal = claimStore.renew(candidateId, {
+        claimToken,
+        claimExpiresAtMs: Date.now() + leaseMs,
+      }).catch(error => {
+        log.error('ICP candidate owner lease renewal failed', {
+          candidateId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }).finally(() => {
+        activeRenewal = undefined;
+      });
+    };
+    const timer = setInterval(renew, renewalCadenceMs);
+    timer.unref();
+    return async () => {
+      stopped = true;
+      clearInterval(timer);
+      if (activeRenewal) await activeRenewal;
+    };
+  };
   const resolvePeer = async (contactId: string): Promise<KnownCompanionPeer> => {
     const peer = await peerPort.resolveKnownPeer(contactId);
     if (peer.contactId !== contactId) {
@@ -205,6 +275,7 @@ export function createIcpInitiationSourceRuntime(
     onAccepted?: (
       candidate: IcpInitiationCandidate,
       outcome: IcpInitiationSourceAcceptance['outcome'],
+      claim?: IcpInitiationCandidateProducerClaim,
     ) => void,
   ): Promise<IcpInitiationSourceResult> => {
     const currentNow = now();
@@ -218,6 +289,12 @@ export function createIcpInitiationSourceRuntime(
     let peer = initialPeer;
     let candidate: IcpInitiationCandidate;
     let createdCandidate = false;
+    let lifecycleClaim = recoveryClaim
+      ? {
+          claimToken: recoveryClaim.claimToken,
+          claimExpiresAtMs: recoveryClaim.claimExpiresAtMs,
+        }
+      : undefined;
     const existingCandidate = recoveryClaim?.candidate
       ?? await dependencies.store.getCandidate(candidateId);
     if (request.source === 'felt_impulse'
@@ -271,7 +348,17 @@ export function createIcpInitiationSourceRuntime(
       candidate = existingCandidate;
     } else {
       try {
-        candidate = await dependencies.store.createCandidate(proposed);
+        if (claimStore) {
+          const claimToken = randomUUID();
+          const claim = {
+            claimToken,
+            claimExpiresAtMs: Date.now() + producerClaimLeaseMs,
+          };
+          candidate = await claimStore.create(proposed, claim);
+          lifecycleClaim = claim;
+        } else {
+          candidate = await dependencies.store.createCandidate(proposed);
+        }
         createdCandidate = true;
         await emitLifecycle(candidate, null);
       } catch (error) {
@@ -294,6 +381,25 @@ export function createIcpInitiationSourceRuntime(
       // invariant violation. Never silently reuse another private motivation.
       throw new Error(`ICP candidate identity conflict for ${candidateId}`);
     }
+    if (claimStore && !createdCandidate && !recoveryClaim) {
+      const resumable = candidate.status === 'pending'
+        || candidate.status === 'permitted'
+        || (candidate.status === 'deferred'
+          && (candidate.expiresAtMs <= now()
+            || candidate.retryEligibleAtMs === undefined
+            || candidate.retryEligibleAtMs <= now()));
+      if (resumable) {
+        const claim = {
+          claimToken: randomUUID(),
+          claimExpiresAtMs: Date.now() + producerClaimLeaseMs,
+        };
+        const claimedCandidate = await claimStore.claim(candidate.candidateId, claim);
+        if (claimedCandidate) {
+          candidate = claimedCandidate;
+          lifecycleClaim = claim;
+        }
+      }
+    }
     let acceptanceSignalled = false;
     const signalAcceptance = (
       acceptedCandidate: IcpInitiationCandidate,
@@ -301,8 +407,13 @@ export function createIcpInitiationSourceRuntime(
     ) => {
       if (acceptanceSignalled) return;
       acceptanceSignalled = true;
-      onAccepted?.(acceptedCandidate, outcome);
+      onAccepted?.(acceptedCandidate, outcome, lifecycleClaim);
     };
+    if (claimStore && !createdCandidate && !recoveryClaim && !lifecycleClaim) {
+      signalAcceptance(candidate, 'deduped');
+      const existingTerminal = terminalIcpSourceOutcome(candidate);
+      return existingTerminal ?? toIcpSourceResult('deduped', candidate, candidate.reasonCode);
+    }
     if (createdCandidate) signalAcceptance(candidate, 'accepted');
     if (candidate.expiresAtMs <= now()
       && ['pending', 'deferred', 'permitted'].includes(candidate.status)) {
@@ -311,7 +422,7 @@ export function createIcpInitiationSourceRuntime(
         'expired',
         'candidate_expired',
         undefined,
-        recoveryClaim?.claimToken,
+        lifecycleClaim?.claimToken,
       );
       signalAcceptance(expired, 'deduped');
       return toIcpSourceResult('deduped', expired, 'candidate_expired');
@@ -329,7 +440,7 @@ export function createIcpInitiationSourceRuntime(
         status: 'pending',
         clearRetryEligibility: true,
       };
-      const pending = await applyTransition(candidate, pendingInput, recoveryClaim?.claimToken);
+      const pending = await applyTransition(candidate, pendingInput, lifecycleClaim?.claimToken);
       candidate = pending;
     }
     const terminal = terminalIcpSourceOutcome(candidate);
@@ -345,7 +456,7 @@ export function createIcpInitiationSourceRuntime(
           'rejected',
           'policy_denied',
           undefined,
-          recoveryClaim?.claimToken,
+          lifecycleClaim?.claimToken,
         );
         return toIcpSourceResult('rejected', rejected, 'policy_denied');
       }
@@ -369,7 +480,7 @@ export function createIcpInitiationSourceRuntime(
         'consumed',
         undefined,
         execution.disposition,
-        recoveryClaim?.claimToken,
+        lifecycleClaim?.claimToken,
       );
       return toIcpSourceResult(
         execution.disposition === 'delivered' ? 'sent' : 'suppressed',
@@ -390,7 +501,7 @@ export function createIcpInitiationSourceRuntime(
         'cancelled',
         'policy_denied',
         undefined,
-        recoveryClaim?.claimToken,
+        lifecycleClaim?.claimToken,
       );
       return toIcpSourceResult('suppressed', cancelled, 'policy_denied');
     }
@@ -401,7 +512,7 @@ export function createIcpInitiationSourceRuntime(
         'expired',
         'candidate_expired',
         undefined,
-        recoveryClaim?.claimToken,
+        lifecycleClaim?.claimToken,
       );
       candidate = expired;
       return expired;
@@ -412,7 +523,7 @@ export function createIcpInitiationSourceRuntime(
       const deferred = await deferCandidateForCooldown(
         candidate,
         reasonCode,
-        recoveryClaim?.claimToken,
+        lifecycleClaim?.claimToken,
       );
       candidate = deferred;
       return deferred;
@@ -440,7 +551,7 @@ export function createIcpInitiationSourceRuntime(
         denied.status,
         denied.reasonCode,
         undefined,
-        recoveryClaim?.claimToken,
+        lifecycleClaim?.claimToken,
       );
       return toIcpSourceResult(
         denied.status === 'deferred' ? 'deferred' : 'rejected',
@@ -455,7 +566,7 @@ export function createIcpInitiationSourceRuntime(
         'rejected',
         'policy_denied',
         undefined,
-        recoveryClaim?.claimToken,
+        lifecycleClaim?.claimToken,
       );
       return toIcpSourceResult('rejected', rejected, 'policy_denied');
     }
@@ -480,7 +591,7 @@ export function createIcpInitiationSourceRuntime(
           'declined',
           'candidate_declined',
           undefined,
-          recoveryClaim?.claimToken,
+          lifecycleClaim?.claimToken,
         );
         return toIcpSourceResult('declined', declined, 'candidate_declined');
       }
@@ -492,7 +603,7 @@ export function createIcpInitiationSourceRuntime(
         'rejected',
         'policy_denied',
         undefined,
-        recoveryClaim?.claimToken,
+        lifecycleClaim?.claimToken,
       );
       return toIcpSourceResult('rejected', rejected, 'policy_denied');
     }
@@ -520,7 +631,7 @@ export function createIcpInitiationSourceRuntime(
         denied.status,
         denied.reasonCode,
         undefined,
-        recoveryClaim?.claimToken,
+        lifecycleClaim?.claimToken,
       );
       return toIcpSourceResult(
         denied.status === 'deferred' ? 'deferred' : 'rejected',
@@ -539,7 +650,7 @@ export function createIcpInitiationSourceRuntime(
     const permitted = await applyTransition(
       candidate,
       permittedInput,
-      recoveryClaim?.claimToken,
+      lifecycleClaim?.claimToken,
     );
     const execution = await peerPort.executeCompanionOutreach(
       peer.contactId,
@@ -552,7 +663,7 @@ export function createIcpInitiationSourceRuntime(
       'consumed',
       undefined,
       execution.disposition,
-      recoveryClaim?.claimToken,
+      lifecycleClaim?.claimToken,
     );
     return toIcpSourceResult(
       execution.disposition === 'delivered' ? 'sent' : 'suppressed',
@@ -574,21 +685,36 @@ export function createIcpInitiationSourceRuntime(
       );
       return toIcpSourceResult('deduped', expired, 'candidate_expired');
     },
-    execute: async (request, peer, claim) => (
-      await run(request, peer, claim.candidate.candidateId, claim)
-    ),
+    execute: async (request, peer, claim) => {
+      const stopHeartbeat = startClaimHeartbeat(
+        claim.candidate.candidateId,
+        claim.claimToken,
+        Math.max(1, claim.claimExpiresAtMs - Date.now()),
+      );
+      try {
+        return await run(request, peer, claim.candidate.candidateId, claim);
+      } finally {
+        await stopHeartbeat();
+        await releaseClaim(claim.candidate.candidateId, claim.claimToken);
+      }
+    },
   });
 
   const recordAcceptedBackgroundFailure = async (
     acceptance: IcpInitiationSourceAcceptance,
     error: unknown,
+    claimToken?: string,
   ): Promise<void> => {
     let durableStatus: IcpInitiationCandidateStatus | 'missing' = acceptance.status;
     try {
       const candidate = await dependencies.store.getCandidate(acceptance.candidateId);
       durableStatus = candidate?.status ?? 'missing';
       if (candidate?.status === 'pending') {
-        const transitioned = await deferCandidateForCooldown(candidate, 'delivery_failed');
+        const transitioned = await deferCandidateForCooldown(
+          candidate,
+          'delivery_failed',
+          claimToken,
+        );
         durableStatus = transitioned.status;
       }
     } catch (recordError) {
@@ -616,6 +742,10 @@ export function createIcpInitiationSourceRuntime(
 
     let resolveAcceptance!: (acceptance: IcpInitiationSourceAcceptance) => void;
     let rejectAcceptance!: (error: unknown) => void;
+    let producerClaimToken: string | undefined;
+    let stopHeartbeat: (() => Promise<void>) | undefined;
+    let resolvedAcceptance: IcpInitiationSourceAcceptance | undefined;
+    let detachedAcceptance = false;
     const acceptance = new Promise<IcpInitiationSourceAcceptance>((resolve, reject) => {
       resolveAcceptance = resolve;
       rejectAcceptance = reject;
@@ -624,17 +754,51 @@ export function createIcpInitiationSourceRuntime(
     // acceptance promise; attach a rejection observer so a fail-closed identity
     // or store error cannot become an unhandled rejection on that path.
     void acceptance.catch(() => undefined);
-    const completion = run(request, peer, candidateId, undefined, (candidate, outcome) => {
-      resolveAcceptance({
+    const rawCompletion = run(request, peer, candidateId, undefined, (candidate, outcome, claim) => {
+      producerClaimToken = claim?.claimToken;
+      if (claim) {
+        stopHeartbeat = startClaimHeartbeat(
+          candidate.candidateId,
+          claim.claimToken,
+          producerClaimLeaseMs,
+        );
+      }
+      resolvedAcceptance = {
         outcome,
         candidateId: candidate.candidateId,
         status: candidate.status,
         ...(candidate.deliveryDisposition
           ? { deliveryDisposition: candidate.deliveryDisposition }
           : {}),
-      });
+      };
+      resolveAcceptance(resolvedAcceptance);
     });
-    const submission = { acceptance, completion };
+    const completion = rawCompletion.then(
+      async result => {
+        await stopHeartbeat?.();
+        await releaseClaim(candidateId, producerClaimToken);
+        return result;
+      },
+      async error => {
+        await stopHeartbeat?.();
+        if (detachedAcceptance && resolvedAcceptance) {
+          await recordAcceptedBackgroundFailure(
+            resolvedAcceptance,
+            error,
+            producerClaimToken,
+          );
+        }
+        await releaseClaim(candidateId, producerClaimToken);
+        throw error;
+      },
+    );
+    const submission = {
+      acceptance,
+      completion,
+      markDetachedAcceptance() {
+        detachedAcceptance = true;
+      },
+    };
     inFlight.set(candidateId, submission);
     void completion.then(
       () => {
@@ -651,11 +815,8 @@ export function createIcpInitiationSourceRuntime(
   return {
     async accept(request) {
       const submission = await beginSubmission(request);
-      const acceptance = await submission.acceptance;
-      void submission.completion.catch(error => {
-        return recordAcceptedBackgroundFailure(acceptance, error);
-      });
-      return acceptance;
+      submission.markDetachedAcceptance();
+      return await submission.acceptance;
     },
     async submit(request) {
       const submission = await beginSubmission(request);

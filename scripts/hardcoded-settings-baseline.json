@@ -275,24 +275,24 @@
     },
     {
       "file": "src/app/e2e/icp-certification/fixture.ts",
-      "name": "configureCompanionOwnerFiles.fatigue.relationshipBudgets.trusted_collaborator_mi.hardCap@L264",
+      "name": "configureCompanionOwnerFiles.fatigue.relationshipBudgets.trusted_collaborator_mi.hardCap@L267",
       "value": "1",
       "form": "object-member",
-      "note": "Deterministic test/certification fixture configureCompanionOwnerFiles.fatigue.relationshipBudgets.trusted_collaborator_mi.hardCap@L264; code-owned only for harness behavior and not used as an unowned production setting."
+      "note": "Deterministic test/certification fixture configureCompanionOwnerFiles.fatigue.relationshipBudgets.trusted_collaborator_mi.hardCap@L267; code-owned only for harness behavior and not used as an unowned production setting."
     },
     {
       "file": "src/app/e2e/icp-certification/fixture.ts",
-      "name": "configureCompanionOwnerFiles.fatigue.relationshipBudgets.trusted_collaborator_mi.hardCap@L266",
+      "name": "configureCompanionOwnerFiles.fatigue.relationshipBudgets.trusted_collaborator_mi.hardCap@L269",
       "value": "16",
       "form": "object-member",
-      "note": "Deterministic test/certification fixture configureCompanionOwnerFiles.fatigue.relationshipBudgets.trusted_collaborator_mi.hardCap@L266; code-owned only for harness behavior and not used as an unowned production setting."
+      "note": "Deterministic test/certification fixture configureCompanionOwnerFiles.fatigue.relationshipBudgets.trusted_collaborator_mi.hardCap@L269; code-owned only for harness behavior and not used as an unowned production setting."
     },
     {
       "file": "src/app/e2e/icp-certification/fixture.ts",
-      "name": "configureCompanionOwnerFiles.fatigue.relationshipBudgets.trusted_collaborator_mi.hardCap@L267",
+      "name": "configureCompanionOwnerFiles.fatigue.relationshipBudgets.trusted_collaborator_mi.hardCap@L270",
       "value": "3",
       "form": "object-member",
-      "note": "Deterministic test/certification fixture configureCompanionOwnerFiles.fatigue.relationshipBudgets.trusted_collaborator_mi.hardCap@L267; code-owned only for harness behavior and not used as an unowned production setting."
+      "note": "Deterministic test/certification fixture configureCompanionOwnerFiles.fatigue.relationshipBudgets.trusted_collaborator_mi.hardCap@L270; code-owned only for harness behavior and not used as an unowned production setting."
     },
     {
       "file": "src/app/e2e/icp-certification/fixture.ts",
@@ -307,13 +307,6 @@
       "value": "3",
       "form": "object-member",
       "note": "Deterministic test/certification fixture configureCompanionOwnerFiles.scheduler.icpAutonomy.candidate.maxRetryAttempts; code-owned only for harness behavior and not used as an unowned production setting."
-    },
-    {
-      "file": "src/app/e2e/icp-certification/fixture.ts",
-      "name": "configureCompanionOwnerFiles.scheduler.icpAutonomy.candidate.retryCadenceMs",
-      "value": "50",
-      "form": "object-member",
-      "note": "Deterministic test/certification fixture configureCompanionOwnerFiles.scheduler.icpAutonomy.candidate.retryCadenceMs; code-owned only for harness behavior and not used as an unowned production setting."
     },
     {
       "file": "src/app/e2e/icp-certification/fixture.ts",
@@ -352,17 +345,17 @@
     },
     {
       "file": "src/app/e2e/icp-certification/fixture.ts",
-      "name": "createIcpCertificationFixture.hardLimitUsd@L473",
+      "name": "createIcpCertificationFixture.hardLimitUsd@L476",
       "value": "0.0002",
       "form": "object-member",
-      "note": "Deterministic test/certification fixture createIcpCertificationFixture.hardLimitUsd@L473; code-owned only for harness behavior and not used as an unowned production setting."
+      "note": "Deterministic test/certification fixture createIcpCertificationFixture.hardLimitUsd@L476; code-owned only for harness behavior and not used as an unowned production setting."
     },
     {
       "file": "src/app/e2e/icp-certification/fixture.ts",
-      "name": "createIcpCertificationFixture.hardLimitUsd@L487",
+      "name": "createIcpCertificationFixture.hardLimitUsd@L490",
       "value": "0.0003",
       "form": "object-member",
-      "note": "Deterministic test/certification fixture createIcpCertificationFixture.hardLimitUsd@L487; code-owned only for harness behavior and not used as an unowned production setting."
+      "note": "Deterministic test/certification fixture createIcpCertificationFixture.hardLimitUsd@L490; code-owned only for harness behavior and not used as an unowned production setting."
     },
     {
       "file": "src/app/e2e/icp-certification/fixture.ts",
@@ -380,17 +373,17 @@
     },
     {
       "file": "src/app/e2e/icp-certification/fixture.ts",
-      "name": "createIcpCertificationFixture.warningThresholdUsd@L472",
+      "name": "createIcpCertificationFixture.warningThresholdUsd@L475",
       "value": "0.00015",
       "form": "object-member",
-      "note": "Deterministic test/certification fixture createIcpCertificationFixture.warningThresholdUsd@L472; code-owned only for harness behavior and not used as an unowned production setting."
+      "note": "Deterministic test/certification fixture createIcpCertificationFixture.warningThresholdUsd@L475; code-owned only for harness behavior and not used as an unowned production setting."
     },
     {
       "file": "src/app/e2e/icp-certification/fixture.ts",
-      "name": "createIcpCertificationFixture.warningThresholdUsd@L486",
+      "name": "createIcpCertificationFixture.warningThresholdUsd@L489",
       "value": "0.0001",
       "form": "object-member",
-      "note": "Deterministic test/certification fixture createIcpCertificationFixture.warningThresholdUsd@L486; code-owned only for harness behavior and not used as an unowned production setting."
+      "note": "Deterministic test/certification fixture createIcpCertificationFixture.warningThresholdUsd@L489; code-owned only for harness behavior and not used as an unowned production setting."
     },
     {
       "file": "src/app/e2e/icp-certification/process-harness.ts",
@@ -3066,7 +3059,7 @@
     {
       "file": "src/core/agent/tool-surface/descriptions/continuity-contracts.ts",
       "name": "CONTINUITY_TOOL_CONTRACTS.memory.example.limit",
-      "value": "8",
+      "value": "5",
       "form": "object-member",
       "note": "Immutable parser/wire/schema contract CONTINUITY_TOOL_CONTRACTS.memory.example.limit; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning."
     },
@@ -4915,7 +4908,7 @@
     {
       "file": "src/core/scheduler/reflection-introspection-policy.ts",
       "name": "REFLECTION_INTROSPECTION_POLICY_BLOCK_VERSION",
-      "value": "5"
+      "value": "7"
     },
     {
       "file": "src/core/scheduler/reflection-policy.ts",
@@ -7682,7 +7675,7 @@
     {
       "file": "src/faculties/memory/subject-authorized-store.ts",
       "name": "MEMORY_STORE_METHOD_POLICY",
-      "value": "{ // --- authorized: explicit projection / denial in the proxy trap below --- insertMemory: 'authorized', persistMemoryWrite: 'authorized', searchByEmbedding: 'authorized', searchByText: 'authorized', updateMemory: 'authorized', recordPatchEvent: 'authorized', getAllActiveMemories: 'authorized', listMemories: 'authorized', listActiveMemories: 'authorized', listActiveMemoriesInWindow: 'authorized', listAdminMemories: 'authorized', getAdminMemoryPrivacySummary: 'authorized', countActiveMemories: 'authorized', getById: 'authorized', getByIds: 'authorized', softDeleteMemory: 'authorized', undoSoftDelete: 'authorized', getDeleteVersion: 'authorized', recordAbstractionLink: 'authorized', getAbstractionLinksForSourceMemory: 'authorized', getAbstractionLinksForAbstractedMemory: 'authorized', recordEvolutionLink: 'authorized', getEvolutionLinksForSourceMemory: 'authorized', getEvolutionLinksForTargetMemory: 'authorized', getStats: 'authorized', getMemoriesByChannel: 'authorized', getMemoriesByContact: 'authorized', linkMemories: 'authorized', unlinkMemories: 'authorized', getLinkedMemories: 'authorized', bulkDelete: 'authorized', bulkUpdate: 'authorized', bulkUpdateSalience: 'authorized', upsertContactProfile: 'authorized', getContactProfile: 'authorized', listContactProfiles: 'authorized', upsertMemoryMaintenanceReview: 'authorized', listMemoryMaintenanceReviews: 'authorized', getMemoryMaintenanceReview: 'authorized', getMemoryMaintenanceDiagnostics: 'authorized', listActiveMemoryEmbeddingsSince: 'authorized', queryAuthorizedMemorySubjects: 'authorized', aggregateAuthorizedMemorySubjects: 'authorized', mutateAuthorizedMemorySubjects: 'authorized', persistAuthorizedMemoryWrite: 'authorized', softDeleteAuthorizedMemorySubject: 'authorized', undoAuthorizedMemorySubjectDelete: 'authorized', getMemorySubjectClassification: 'authorized', backfillMemorySubjectClassifications: 'authorized', // --- pass-through-safe: exposes no contact-subject rows --- // Process-local monotonic counters (retrieval-cache / salience-decay // invalidation signals). They carry no memory content and are feature-detected // by their consumers; the bead requires the retrieval-cache getter keep working. getSalienceMaintenanceRevision: 'pass-through-safe', getRetrievalCorpusVersion: 'pass-through-safe', // Startup aggregate counts only; no memory identity, body, or subject rows. getStartupMemorySubjectClassificationCoverage: 'pass-through-safe', // Capability-free transaction boundary. Used by MemoryWriter.patch/patchMemory // through the subject store (memory tool action=patch). The operations inside // the handler run through this same authorized proxy (e.g. updateMemory -> // mutateAuthorizedMemorySubjects), so wrapping them in a DB transaction adds // atomicity without granting any unauthorized read or write. runInTransaction: 'pass-through-safe', // Companion-owned working scratchpad (ScratchpadProvider). Distinct ownership // contract from contact-subject memories: entries are process/companion-local // notes keyed by entry id, never per-contact subject rows, and the scratchpad // tool operates on this same store. No subject predicate applies. addScratchpadEntry: 'pass-through-safe', replaceScratchpadEntry: 'pass-through-safe', appendScratchpadEntry: 'pass-through-safe', removeScratchpadEntry: 'pass-through-safe', getScratchpadEntry: 'pass-through-safe', listScratchpadEntries: 'pass-through-safe', }",
+      "value": "{ // --- authorized: explicit projection / denial in the proxy trap below --- insertMemory: 'authorized', persistMemoryWrite: 'authorized', searchByEmbedding: 'authorized', searchByText: 'authorized', updateMemory: 'authorized', recordPatchEvent: 'authorized', getAllActiveMemories: 'authorized', listMemories: 'authorized', listActiveMemories: 'authorized', listActiveMemoriesInWindow: 'authorized', listAdminMemories: 'authorized', getAdminMemoryPrivacySummary: 'authorized', countActiveMemories: 'authorized', getById: 'authorized', getByIds: 'authorized', softDeleteMemory: 'authorized', undoSoftDelete: 'authorized', getDeleteVersion: 'authorized', recordAbstractionLink: 'authorized', getAbstractionLinksForSourceMemory: 'authorized', getAbstractionLinksForAbstractedMemory: 'authorized', recordEvolutionLink: 'authorized', getEvolutionLinksForSourceMemory: 'authorized', getEvolutionLinksForTargetMemory: 'authorized', getStats: 'authorized', getMemoriesByChannel: 'authorized', getMemoriesByContact: 'authorized', linkMemories: 'authorized', unlinkMemories: 'authorized', getLinkedMemories: 'authorized', bulkDelete: 'authorized', bulkUpdate: 'authorized', bulkUpdateSalience: 'authorized', upsertRecentContactShape: 'authorized', getRecentContactShape: 'authorized', listRecentContactShapes: 'authorized', upsertMemoryMaintenanceReview: 'authorized', listMemoryMaintenanceReviews: 'authorized', getMemoryMaintenanceReview: 'authorized', getMemoryMaintenanceDiagnostics: 'authorized', listActiveMemoryEmbeddingsSince: 'authorized', queryAuthorizedMemorySubjects: 'authorized', aggregateAuthorizedMemorySubjects: 'authorized', mutateAuthorizedMemorySubjects: 'authorized', persistAuthorizedMemoryWrite: 'authorized', softDeleteAuthorizedMemorySubject: 'authorized', undoAuthorizedMemorySubjectDelete: 'authorized', getMemorySubjectClassification: 'authorized', backfillMemorySubjectClassifications: 'authorized', // --- pass-through-safe: exposes no contact-subject rows --- // Process-local monotonic counters (retrieval-cache / salience-decay // invalidation signals). They carry no memory content and are feature-detected // by their consumers; the bead requires the retrieval-cache getter keep working. getSalienceMaintenanceRevision: 'pass-through-safe', getRetrievalCorpusVersion: 'pass-through-safe', // Startup aggregate counts only; no memory identity, body, or subject rows. getStartupMemorySubjectClassificationCoverage: 'pass-through-safe', // Capability-free transaction boundary. Used by MemoryWriter.patch/patchMemory // through the subject store (memory tool action=patch). The operations inside // the handler run through this same authorized proxy (e.g. updateMemory -> // mutateAuthorizedMemorySubjects), so wrapping them in a DB transaction adds // atomicity without granting any unauthorized read or write. runInTransaction: 'pass-through-safe', // Companion-owned working scratchpad (ScratchpadProvider). Distinct ownership // contract from contact-subject memories: entries are process/companion-local // notes keyed by entry id, never per-contact subject rows, and the scratchpad // tool operates on this same store. No subject predicate applies. addScratchpadEntry: 'pass-through-safe', replaceScratchpadEntry: 'pass-through-safe', appendScratchpadEntry: 'pass-through-safe', removeScratchpadEntry: 'pass-through-safe', getScratchpadEntry: 'pass-through-safe', listScratchpadEntries: 'pass-through-safe', }",
       "form": "object",
       "note": "Existing mutable policy candidate MEMORY_STORE_METHOD_POLICY; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
@@ -11811,7 +11804,7 @@
     {
       "file": "src/system/config/intake-policy-config.ts",
       "name": "INTAKE_POLICY_SCHEMA_VERSION",
-      "value": "5 as const"
+      "value": "6 as const"
     },
     {
       "file": "src/system/config/intake-policy-config.ts",

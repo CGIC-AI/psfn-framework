@@ -789,6 +789,7 @@ async function main(): Promise<void> {
     intentionCandidateAdapter: icpIntentionCandidateAdapter,
     unregisterCoLocationThoughtAdapter: unregisterIcpCoLocationThoughtAdapter,
     unregisterFeltImpulseAdapter: unregisterIcpFeltImpulseAdapter,
+    stopCandidateLifecycleSupervisor: stopIcpCandidateLifecycleSupervisor,
   } = wireIcpInitiationSources({
     config: schedulerConfig.icpAutonomy,
     localCompanionId: config.companionId,
@@ -1569,6 +1570,7 @@ async function main(): Promise<void> {
     detachCompanionEventForwarder();
     unregisterIcpCoLocationThoughtAdapter();
     unregisterIcpFeltImpulseAdapter();
+    await stopIcpCandidateLifecycleSupervisor();
     icpRuntimeAvailability?.stop();
     detachGatewayQueueChange();
     disposeApiBackend();

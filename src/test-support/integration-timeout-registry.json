@@ -280,6 +280,13 @@
       "note": "Pre-policy 120s override (repo-standard integration cap). Registered as measurement debt: pinned to its current value so any change forces a re-measured registry update. No independent baseline measured under this bead (timing wiring scoped to the restore suite)."
     },
     {
+      "file": "src/persistence/postgres/icp-candidate-lifecycle-supervisor.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": 1730,
+      "baselineSource": "measured",
+      "note": "kkvkh source-independent ICP candidate lifecycle recovery and concurrent-claim suite against real Postgres. Baseline 1.73s file wall (4 tests, warm tmpfs harness, this host, 2026-08-16); 120s is the repo-standard integration cap with headroom dominated by cold-start and shared-heavy harness variance."
+    },
+    {
       "file": "src/persistence/postgres/icp-conversation-cost-breaker.integration.test.ts",
       "timeoutMs": 120000,
       "measuredBaselineMs": null,

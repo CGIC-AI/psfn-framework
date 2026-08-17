@@ -1281,6 +1281,7 @@ export const POSTGRES_INTENTION_MIGRATIONS = [
     peer_contact_id TEXT NOT NULL,
     peer_companion_id UUID NOT NULL,
     preferred_channel TEXT NOT NULL CHECK (preferred_channel IN ('dm', 'current_room')),
+    target_channel_id TEXT,
     source TEXT NOT NULL CHECK (source IN (
       'free_time', 'weighted_thought', 'intention', 'foreground', 'felt_impulse'
     )),
@@ -1302,6 +1303,8 @@ export const POSTGRES_INTENTION_MIGRATIONS = [
     delivery_disposition TEXT CHECK (delivery_disposition IN ('delivered', 'suppressed')),
     retry_attempt INTEGER NOT NULL DEFAULT 0 CHECK (retry_attempt >= 0),
     retry_eligible_at_ms BIGINT,
+    lifecycle_claim_token UUID,
+    lifecycle_claim_expires_at_ms BIGINT,
     revision BIGINT NOT NULL CHECK (revision >= 1),
     CHECK (local_companion_id <> peer_companion_id),
     CHECK (pending_follow_up_id IS NULL OR source = 'intention'),
@@ -1328,6 +1331,17 @@ export const POSTGRES_INTENTION_MIGRATIONS = [
     ADD COLUMN IF NOT EXISTS retry_attempt INTEGER NOT NULL DEFAULT 0;`,
   `ALTER TABLE icp_initiation_candidates
     ADD COLUMN IF NOT EXISTS retry_eligible_at_ms BIGINT;`,
+  `ALTER TABLE icp_initiation_candidates
+    ADD COLUMN IF NOT EXISTS target_channel_id TEXT;`,
+  `ALTER TABLE icp_initiation_candidates
+    ADD COLUMN IF NOT EXISTS lifecycle_claim_token UUID;`,
+  `ALTER TABLE icp_initiation_candidates
+    ADD COLUMN IF NOT EXISTS lifecycle_claim_expires_at_ms BIGINT;`,
+  `CREATE INDEX IF NOT EXISTS idx_icp_initiation_candidates_lifecycle_due
+    ON icp_initiation_candidates (
+      status, retry_eligible_at_ms, expires_at_ms, lifecycle_claim_expires_at_ms, candidate_id
+    )
+    WHERE status IN ('pending', 'deferred', 'permitted');`,
   `CREATE UNIQUE INDEX IF NOT EXISTS idx_icp_initiation_candidates_pending_follow_up
     ON icp_initiation_candidates (pending_follow_up_id)
     WHERE pending_follow_up_id IS NOT NULL;`,

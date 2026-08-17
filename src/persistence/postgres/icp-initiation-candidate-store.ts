@@ -1,12 +1,17 @@
+import { randomUUID } from 'node:crypto';
+
 import type { Pool, QueryResultRow } from 'pg';
 
 import type {
   IcpInitiationCandidateListOptions,
+  IcpInitiationCandidateClaim,
+  IcpInitiationCandidateClaimOptions,
   IcpInitiationCandidateStorePort,
   IcpInitiationCandidateTransitionInput,
 } from '../../core/icp/autonomy-store-ports.js';
 import {
   ICP_INITIATION_CANDIDATE_STATUSES,
+  MAX_ICP_CANDIDATE_TTL_MS,
   assertIcpInitiationCandidateStatusTransition,
   parseIcpInitiationCandidate,
   type IcpInitiationCandidate,
@@ -33,6 +38,7 @@ interface CandidateRow extends QueryResultRow {
   peer_contact_id: string;
   peer_companion_id: string;
   preferred_channel: string;
+  target_channel_id: string | null;
   source: string;
   provenance_ref: string;
   reason_summary: string;
@@ -52,6 +58,7 @@ interface CandidateRow extends QueryResultRow {
 const CANDIDATE_COLUMNS = `
   candidate_id, root_initiation_id, local_companion_id, peer_contact_id,
   peer_companion_id, preferred_channel, source, provenance_ref, reason_summary,
+  target_channel_id,
   continuation_task_kind, created_at_ms, expires_at_ms, status, reason_code, initiation_permit_id,
   pending_follow_up_id, delivery_disposition, retry_attempt, retry_eligible_at_ms,
   revision
@@ -75,6 +82,7 @@ function mapCandidate(row: CandidateRow): IcpInitiationCandidate {
     peerContactId: row.peer_contact_id,
     peerCompanionId: row.peer_companion_id,
     preferredChannel: row.preferred_channel,
+    ...(row.target_channel_id !== null ? { targetChannelId: row.target_channel_id } : {}),
     source: row.source,
     provenanceRef: row.provenance_ref,
     reasonSummary: row.reason_summary,
@@ -133,12 +141,12 @@ export class PostgresIcpInitiationCandidateStore implements IcpInitiationCandida
       INSERT INTO icp_initiation_candidates (
         candidate_id, root_initiation_id, local_companion_id, peer_contact_id,
         peer_companion_id, preferred_channel, source, provenance_ref, reason_summary,
-        continuation_task_kind, created_at_ms, expires_at_ms, status, reason_code, initiation_permit_id,
+        target_channel_id, continuation_task_kind, created_at_ms, expires_at_ms, status, reason_code, initiation_permit_id,
         pending_follow_up_id, delivery_disposition, retry_attempt, retry_eligible_at_ms,
         revision
       ) VALUES (
         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
-        $18, $19, $20
+        $18, $19, $20, $21
       )
       RETURNING ${CANDIDATE_COLUMNS}
     `, [
@@ -151,6 +159,7 @@ export class PostgresIcpInitiationCandidateStore implements IcpInitiationCandida
       candidate.source,
       candidate.provenanceRef,
       candidate.reasonSummary,
+      candidate.targetChannelId ?? null,
       candidate.continuationTaskKind ?? null,
       candidate.createdAtMs,
       candidate.expiresAtMs,
@@ -213,6 +222,95 @@ export class PostgresIcpInitiationCandidateStore implements IcpInitiationCandida
   async transitionCandidate(
     input: IcpInitiationCandidateTransitionInput,
   ): Promise<IcpInitiationCandidate> {
+    return await this.transition(input);
+  }
+
+  async claimDueCandidates(
+    options: IcpInitiationCandidateClaimOptions,
+  ): Promise<IcpInitiationCandidateClaim[]> {
+    if (!Number.isSafeInteger(options.nowMs) || options.nowMs < 0) {
+      throw new Error('ICP candidate claim nowMs must be a non-negative safe integer timestamp');
+    }
+    if (!Number.isSafeInteger(options.claimLeaseMs)
+      || options.claimLeaseMs < 1
+      || options.claimLeaseMs > MAX_ICP_CANDIDATE_TTL_MS) {
+      throw new Error(
+        `ICP candidate claim lease must be between 1ms and ${MAX_ICP_CANDIDATE_TTL_MS}ms`,
+      );
+    }
+    const maximumClaimBatchSize = ICP_INITIATION_CANDIDATE_STATUSES.length * 25;
+    if (!Number.isSafeInteger(options.limit)
+      || options.limit < 1
+      || options.limit > maximumClaimBatchSize) {
+      throw new Error(
+        `ICP candidate claim limit must be an integer between 1 and ${maximumClaimBatchSize}`,
+      );
+    }
+    const claimToken = randomUUID();
+    const claimExpiresAtMs = options.nowMs + options.claimLeaseMs;
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const result = await client.query<CandidateRow>(`
+        WITH due AS (
+          SELECT candidate_id
+          FROM icp_initiation_candidates
+          WHERE status IN ('pending', 'deferred', 'permitted')
+            AND (
+              expires_at_ms <= $1
+              OR status <> 'deferred'
+              OR retry_eligible_at_ms IS NULL
+              OR retry_eligible_at_ms <= $1
+            )
+            AND (
+              lifecycle_claim_token IS NULL
+              OR lifecycle_claim_expires_at_ms IS NULL
+              OR lifecycle_claim_expires_at_ms <= $1
+            )
+          ORDER BY
+            CASE WHEN expires_at_ms <= $1 THEN 0 ELSE 1 END,
+            COALESCE(retry_eligible_at_ms, created_at_ms),
+            candidate_id
+          FOR UPDATE SKIP LOCKED
+          LIMIT $2
+        )
+        UPDATE icp_initiation_candidates AS candidate
+        SET lifecycle_claim_token = $3,
+          lifecycle_claim_expires_at_ms = $4,
+          revision = candidate.revision + 1
+        FROM due
+        WHERE candidate.candidate_id = due.candidate_id
+        RETURNING candidate.*
+      `, [options.nowMs, options.limit, claimToken, claimExpiresAtMs]);
+      await client.query('COMMIT');
+      return result.rows.map(candidate => ({ candidate: mapCandidate(candidate), claimToken }));
+    } catch (error) {
+      try {
+        await client.query('ROLLBACK');
+      } catch (rollbackError) {
+        throw new AggregateError(
+          [error, rollbackError],
+          'ICP candidate claim and rollback both failed',
+        );
+      }
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async transitionClaimedCandidate(
+    claimToken: string,
+    input: IcpInitiationCandidateTransitionInput,
+  ): Promise<IcpInitiationCandidate> {
+    requireUuid(claimToken, 'claimToken');
+    return await this.transition(input, claimToken);
+  }
+
+  private async transition(
+    input: IcpInitiationCandidateTransitionInput,
+    claimToken?: string,
+  ): Promise<IcpInitiationCandidate> {
     assertIcpInitiationCandidateStatusTransition(input.expectedStatus, input.status);
     if (input.reasonCode !== undefined && !ICP_AUTONOMY_REASON_CODES.includes(input.reasonCode)) {
       throw new Error(`Unknown ICP candidate reason code ${input.reasonCode}`);
@@ -258,8 +356,29 @@ export class PostgresIcpInitiationCandidateStore implements IcpInitiationCandida
           ELSE COALESCE($9::bigint, retry_eligible_at_ms)
         END,
         retry_attempt = COALESCE($10::integer, retry_attempt),
+        lifecycle_claim_token = CASE
+          WHEN $11::uuid IS NOT NULL AND $4 IN ('pending', 'permitted')
+            THEN lifecycle_claim_token
+          ELSE NULL
+        END,
+        lifecycle_claim_expires_at_ms = CASE
+          WHEN $11::uuid IS NOT NULL AND $4 IN ('pending', 'permitted')
+            THEN lifecycle_claim_expires_at_ms
+          ELSE NULL
+        END,
         revision = revision + 1
       WHERE candidate_id = $1 AND status = $2 AND revision = $3
+        AND (
+          ($11::uuid IS NULL AND (
+            lifecycle_claim_token IS NULL
+            OR lifecycle_claim_expires_at_ms IS NULL
+            OR lifecycle_claim_expires_at_ms <= $12
+          ))
+          OR (
+            lifecycle_claim_token = $11::uuid
+            AND lifecycle_claim_expires_at_ms > $12
+          )
+        )
       RETURNING ${CANDIDATE_COLUMNS}
     `, [
       requireUuid(input.candidateId, 'candidateId'),
@@ -272,6 +391,8 @@ export class PostgresIcpInitiationCandidateStore implements IcpInitiationCandida
       input.clearRetryEligibility === true,
       input.retryEligibleAtMs ?? null,
       input.retryAttempt ?? null,
+      claimToken ?? null,
+      Date.now(),
     ]);
     if (!row) throw new Error(`ICP candidate transition conflict for ${input.candidateId}`);
     return mapCandidate(row);

@@ -76,6 +76,24 @@ describe('private ICP initiation candidate contract', () => {
     expect(JSON.stringify(hostileProjection)).not.toContain('must-not-cross');
   });
 
+  it('keeps an exact private recovery route bound to the intended companion channel', () => {
+    const dmChannel = `companion-dm:${COMPANION_A}:${COMPANION_B}`;
+    const candidate = parseIcpInitiationCandidate({
+      ...rawCandidate,
+      targetChannelId: dmChannel,
+    });
+    expect(candidate.targetChannelId).toBe(dmChannel);
+    expect(toIcpInitiationCandidateSharedMetadata(candidate)).not.toHaveProperty('targetChannelId');
+    expect(() => parseIcpInitiationCandidate({
+      ...rawCandidate,
+      targetChannelId: 'companion-room:library',
+    })).toThrow('must match preferredChannel');
+    expect(() => parseIcpInitiationCandidate({
+      ...rawCandidate,
+      targetChannelId: `companion-dm:${COMPANION_A}:cccccccc-cccc-4ccc-8ccc-cccccccccccc`,
+    })).toThrow('must bind the candidate companion pair');
+  });
+
   it('enforces candidate lifecycle transitions', () => {
     expect(() => assertIcpInitiationCandidateStatusTransition('pending', 'permitted'))
       .not.toThrow();

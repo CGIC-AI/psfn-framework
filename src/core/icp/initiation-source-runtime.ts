@@ -21,7 +21,11 @@ import type {
   IcpCompanionOutreachExecutionResult,
   KnownCompanionPeer,
 } from './agent-facing-autonomy.js';
-import type { IcpInitiationCandidateStorePort } from './autonomy-store-ports.js';
+import type {
+  IcpInitiationCandidateClaim,
+  IcpInitiationCandidateStorePort,
+  IcpInitiationCandidateTransitionInput,
+} from './autonomy-store-ports.js';
 import {
   MAX_ICP_CANDIDATE_TTL_MS,
   parseIcpInitiationCandidate,
@@ -145,6 +149,8 @@ function toCandidateOrigin(
 
 export interface IcpInitiationSourceRuntime {
   submit(request: IcpInitiationSourceRequest): Promise<IcpInitiationSourceResult>;
+  /** Resume exact Postgres-leased lifecycle work without source resubmission. */
+  resumeClaim(claim: IcpInitiationCandidateClaim): Promise<IcpInitiationSourceResult>;
 }
 
 function requireTrimmed(value: string, field: string, maxChars: number): string {
@@ -346,23 +352,36 @@ export function createIcpInitiationSourceRuntime(
     status: IcpInitiationCandidateStatus,
     reasonCode?: IcpAutonomyReasonCode,
     deliveryDisposition?: IcpInitiationCandidate['deliveryDisposition'],
+    claimToken?: string,
   ): Promise<IcpInitiationCandidate> => {
-    const next = await dependencies.store.transitionCandidate({
+    const input: IcpInitiationCandidateTransitionInput = {
       candidateId: candidate.candidateId,
       expectedStatus: candidate.status,
       expectedRevision: candidate.revision,
       status,
       ...(reasonCode ? { reasonCode } : {}),
       ...(deliveryDisposition ? { deliveryDisposition } : {}),
-    });
+    };
+    const next = claimToken === undefined
+      ? await dependencies.store.transitionCandidate(input)
+      : await requireClaimTransition()(claimToken, input);
     await emitLifecycle(next, candidate.status);
     return next;
+  };
+
+  const requireClaimTransition = () => {
+    const claimedTransition = dependencies.store.transitionClaimedCandidate;
+    if (!claimedTransition) {
+      throw new Error('ICP lifecycle recovery requires a claim-capable candidate store');
+    }
+    return claimedTransition.bind(dependencies.store);
   };
 
   const run = async (
     request: IcpInitiationSourceRequest,
     initialPeer: KnownCompanionPeer,
     candidateId: string,
+    recoveryClaim?: IcpInitiationCandidateClaim,
   ): Promise<IcpInitiationSourceResult> => {
     const currentNow = now();
     if (request.pendingFollowUpId !== undefined && request.source !== 'intention') {
@@ -374,7 +393,8 @@ export function createIcpInitiationSourceRuntime(
     );
     let peer = initialPeer;
     let candidate: IcpInitiationCandidate;
-    const existingCandidate = await dependencies.store.getCandidate(candidateId);
+    const existingCandidate = recoveryClaim?.candidate
+      ?? await dependencies.store.getCandidate(candidateId);
     if (request.source === 'felt_impulse'
       && existingCandidate
       && existingCandidate.peerContactId !== peer.contactId) {
@@ -392,13 +412,18 @@ export function createIcpInitiationSourceRuntime(
     if (!isRfc4122Uuid(rootInitiationId)) {
       throw new Error('Inherited ICP rootInitiationId must be a lowercase RFC-4122 UUID');
     }
-    let proposed = parseIcpInitiationCandidate({
+    const targetChannelId = recoveryClaim?.candidate.targetChannelId
+      ?? (request.preferredChannel === 'dm'
+        ? resolveChannelId(dependencies.localCompanionId, peer.peerCompanionId, request)
+        : request.currentRoomChannelId);
+    let proposed = recoveryClaim?.candidate ?? parseIcpInitiationCandidate({
       candidateId,
       rootInitiationId,
       localCompanionId: dependencies.localCompanionId,
       peerContactId: peer.contactId,
       peerCompanionId: peer.peerCompanionId,
       preferredChannel: request.preferredChannel,
+      ...(targetChannelId ? { targetChannelId } : {}),
       source: request.source,
       provenanceRef,
       reasonSummary: request.reasonSummary,
@@ -409,7 +434,9 @@ export function createIcpInitiationSourceRuntime(
       retryAttempt: 0,
       revision: 1,
     });
-    if (existingCandidate) {
+    if (recoveryClaim) {
+      candidate = recoveryClaim.candidate;
+    } else if (existingCandidate) {
       candidate = existingCandidate;
     } else {
       try {
@@ -430,14 +457,20 @@ export function createIcpInitiationSourceRuntime(
         }
       }
     }
-    if (!sameCandidate(candidate, proposed)) {
+    if (!recoveryClaim && !sameCandidate(candidate, proposed)) {
       // A deterministic identity collision or mutated source input is an
       // invariant violation. Never silently reuse another private motivation.
       throw new Error(`ICP candidate identity conflict for ${candidateId}`);
     }
     if (candidate.expiresAtMs <= now()
       && ['pending', 'deferred', 'permitted'].includes(candidate.status)) {
-      const expired = await transition(candidate, 'expired', 'candidate_expired');
+      const expired = await transition(
+        candidate,
+        'expired',
+        'candidate_expired',
+        undefined,
+        recoveryClaim?.claimToken,
+      );
       return result('deduped', expired, 'candidate_expired');
     }
     if (candidate.status === 'deferred') {
@@ -445,13 +478,16 @@ export function createIcpInitiationSourceRuntime(
       if (candidate.retryEligibleAtMs === undefined || retryNow < candidate.retryEligibleAtMs) {
         return result('deduped', candidate, candidate.reasonCode ?? 'candidate_deferred');
       }
-      const pending = await dependencies.store.transitionCandidate({
+      const pendingInput: IcpInitiationCandidateTransitionInput = {
         candidateId: candidate.candidateId,
         expectedStatus: candidate.status,
         expectedRevision: candidate.revision,
         status: 'pending',
         clearRetryEligibility: true,
-      });
+      };
+      const pending = recoveryClaim
+        ? await requireClaimTransition()(recoveryClaim.claimToken, pendingInput)
+        : await dependencies.store.transitionCandidate(pendingInput);
       await emitLifecycle(pending, candidate.status);
       candidate = pending;
     }
@@ -459,7 +495,13 @@ export function createIcpInitiationSourceRuntime(
     if (terminal) return terminal;
     if (!dependencies.isExternalCompanionAuthorized()) {
       if (candidate.status === 'pending') {
-        const rejected = await transition(candidate, 'rejected', 'policy_denied');
+        const rejected = await transition(
+          candidate,
+          'rejected',
+          'policy_denied',
+          undefined,
+          recoveryClaim?.claimToken,
+        );
         return result('rejected', rejected, 'policy_denied');
       }
       throw new Error(`Cannot execute unauthorized ICP candidate from ${candidate.status}`);
@@ -477,18 +519,42 @@ export function createIcpInitiationSourceRuntime(
         toCandidateOrigin(candidate),
         dependencies.isExternalCompanionAuthorized,
       );
-      const consumed = await transition(candidate, 'consumed', undefined, execution.disposition);
+      const consumed = await transition(
+        candidate,
+        'consumed',
+        undefined,
+        execution.disposition,
+        recoveryClaim?.claimToken,
+      );
       return result(execution.disposition === 'delivered' ? 'sent' : 'suppressed', consumed);
     }
 
-    const channelId = resolveChannelId(
-      dependencies.localCompanionId,
-      peer.peerCompanionId,
-      request,
-    );
+    const channelId = candidate.targetChannelId
+      ?? (candidate.preferredChannel === 'dm'
+        ? composeCompanionDmChannelId(
+            dependencies.localCompanionId as CompanionId,
+            candidate.peerCompanionId as CompanionId,
+          )
+        : undefined);
+    if (!channelId) {
+      const cancelled = await transition(
+        candidate,
+        'cancelled',
+        'policy_denied',
+        undefined,
+        recoveryClaim?.claimToken,
+      );
+      return result('suppressed', cancelled, 'policy_denied');
+    }
     const expireIfElapsed = async (): Promise<IcpInitiationCandidate | null> => {
       if (candidate.expiresAtMs > now()) return null;
-      const expired = await transition(candidate, 'expired', 'candidate_expired');
+      const expired = await transition(
+        candidate,
+        'expired',
+        'candidate_expired',
+        undefined,
+        recoveryClaim?.claimToken,
+      );
       candidate = expired;
       return expired;
     };
@@ -497,25 +563,34 @@ export function createIcpInitiationSourceRuntime(
     ): Promise<IcpInitiationCandidate> => {
       const transitionNow = now();
       if (candidate.expiresAtMs <= transitionNow) {
-        const expired = await transition(candidate, 'expired', 'candidate_expired');
+        const expired = await transition(
+          candidate,
+          'expired',
+          'candidate_expired',
+          undefined,
+          recoveryClaim?.claimToken,
+        );
         candidate = expired;
         return expired;
       }
       const completedRetryAttempts = candidate.retryAttempt ?? 0;
       if (completedRetryAttempts >= policy.maxRetryAttempts) {
-        const cancelled = await dependencies.store.transitionCandidate({
+        const cancelledInput: IcpInitiationCandidateTransitionInput = {
           candidateId: candidate.candidateId,
           expectedStatus: candidate.status,
           expectedRevision: candidate.revision,
           status: 'cancelled',
           reasonCode,
           retryAttempt: completedRetryAttempts,
-        });
+        };
+        const cancelled = recoveryClaim
+          ? await requireClaimTransition()(recoveryClaim.claimToken, cancelledInput)
+          : await dependencies.store.transitionCandidate(cancelledInput);
         await emitLifecycle(cancelled, candidate.status);
         return cancelled;
       }
       const retryAttempt = completedRetryAttempts + 1;
-      const deferred = await dependencies.store.transitionCandidate({
+      const deferredInput: IcpInitiationCandidateTransitionInput = {
         candidateId: candidate.candidateId,
         expectedStatus: candidate.status,
         expectedRevision: candidate.revision,
@@ -526,7 +601,10 @@ export function createIcpInitiationSourceRuntime(
           candidate.expiresAtMs,
           transitionNow + policy.retryCadenceMs,
         ),
-      });
+      };
+      const deferred = recoveryClaim
+        ? await requireClaimTransition()(recoveryClaim.claimToken, deferredInput)
+        : await dependencies.store.transitionCandidate(deferredInput);
       await emitLifecycle(deferred, candidate.status);
       return deferred;
     };
@@ -548,12 +626,24 @@ export function createIcpInitiationSourceRuntime(
         return result('deferred', deferred, reasonCode);
       }
       const denied = transitionReason(preflight);
-      const transitioned = await transition(candidate, denied.status, denied.reasonCode);
+      const transitioned = await transition(
+        candidate,
+        denied.status,
+        denied.reasonCode,
+        undefined,
+        recoveryClaim?.claimToken,
+      );
       return result(denied.status === 'deferred' ? 'deferred' : 'rejected', transitioned, denied.reasonCode);
     }
 
     if (!dependencies.isExternalCompanionAuthorized()) {
-      const rejected = await transition(candidate, 'rejected', 'policy_denied');
+      const rejected = await transition(
+        candidate,
+        'rejected',
+        'policy_denied',
+        undefined,
+        recoveryClaim?.claimToken,
+      );
       return result('rejected', rejected, 'policy_denied');
     }
 
@@ -572,13 +662,25 @@ export function createIcpInitiationSourceRuntime(
         return result('deferred', deferred, 'candidate_deferred');
       }
       if (consent.action === 'decline') {
-        const declined = await transition(candidate, 'declined', 'candidate_declined');
+        const declined = await transition(
+          candidate,
+          'declined',
+          'candidate_declined',
+          undefined,
+          recoveryClaim?.claimToken,
+        );
         return result('declined', declined, 'candidate_declined');
       }
     }
 
     if (!dependencies.isExternalCompanionAuthorized()) {
-      const rejected = await transition(candidate, 'rejected', 'policy_denied');
+      const rejected = await transition(
+        candidate,
+        'rejected',
+        'policy_denied',
+        undefined,
+        recoveryClaim?.claimToken,
+      );
       return result('rejected', rejected, 'policy_denied');
     }
 
@@ -600,17 +702,26 @@ export function createIcpInitiationSourceRuntime(
         return result('deferred', deferred, reasonCode);
       }
       const denied = transitionReason(permitResult.decision);
-      const transitioned = await transition(candidate, denied.status, denied.reasonCode);
+      const transitioned = await transition(
+        candidate,
+        denied.status,
+        denied.reasonCode,
+        undefined,
+        recoveryClaim?.claimToken,
+      );
       return result(denied.status === 'deferred' ? 'deferred' : 'rejected', transitioned, denied.reasonCode);
     }
 
-    const permitted = await dependencies.store.transitionCandidate({
+    const permittedInput: IcpInitiationCandidateTransitionInput = {
       candidateId: candidate.candidateId,
       expectedStatus: candidate.status,
       expectedRevision: candidate.revision,
       status: 'permitted',
       permitId: permitResult.permit.permitId,
-    });
+    };
+    const permitted = recoveryClaim
+      ? await requireClaimTransition()(recoveryClaim.claimToken, permittedInput)
+      : await dependencies.store.transitionCandidate(permittedInput);
     await emitLifecycle(permitted, candidate.status);
     const execution = await dependencies.peers.executeCompanionOutreach(
       peer.contactId,
@@ -618,7 +729,13 @@ export function createIcpInitiationSourceRuntime(
       toCandidateOrigin(permitted),
       dependencies.isExternalCompanionAuthorized,
     );
-    const consumed = await transition(permitted, 'consumed', undefined, execution.disposition);
+    const consumed = await transition(
+      permitted,
+      'consumed',
+      undefined,
+      execution.disposition,
+      recoveryClaim?.claimToken,
+    );
     return result(execution.disposition === 'delivered' ? 'sent' : 'suppressed', consumed);
   };
 
@@ -640,6 +757,45 @@ export function createIcpInitiationSourceRuntime(
       } finally {
         if (inFlight.get(candidateId) === pending) inFlight.delete(candidateId);
       }
+    },
+    async resumeClaim(claim) {
+      if (claim.candidate.localCompanionId !== dependencies.localCompanionId) {
+        throw new Error('ICP lifecycle claim belongs to another companion');
+      }
+      if (claim.candidate.expiresAtMs <= now()
+        && ['pending', 'deferred', 'permitted'].includes(claim.candidate.status)) {
+        const expired = await transition(
+          claim.candidate,
+          'expired',
+          'candidate_expired',
+          undefined,
+          claim.claimToken,
+        );
+        return result('deduped', expired, 'candidate_expired');
+      }
+      const peer = await resolvePeer(claim.candidate.peerContactId);
+      if (peer.peerCompanionId !== claim.candidate.peerCompanionId) {
+        throw new Error('ICP lifecycle claim peer binding no longer matches canonical contact');
+      }
+      const request: IcpInitiationSourceRequest = {
+        source: claim.candidate.source,
+        peerContactId: claim.candidate.peerContactId,
+        preferredChannel: claim.candidate.preferredChannel,
+        ...(claim.candidate.preferredChannel === 'current_room'
+          && claim.candidate.targetChannelId
+          ? { currentRoomChannelId: claim.candidate.targetChannelId }
+          : {}),
+        sourceRecordId: `lifecycle-claim:${claim.candidate.candidateId}`,
+        ...(claim.candidate.pendingFollowUpId
+          ? { pendingFollowUpId: claim.candidate.pendingFollowUpId }
+          : {}),
+        reasonSummary: claim.candidate.reasonSummary,
+        cause: claim.candidate.rootInitiationId === claim.candidate.candidateId
+          ? { kind: 'independent' }
+          : { kind: 'icp_conversation', rootInitiationId: claim.candidate.rootInitiationId },
+        ttlMs: claim.candidate.expiresAtMs - claim.candidate.createdAtMs,
+      };
+      return await run(request, peer, claim.candidate.candidateId, claim);
     },
   };
 }

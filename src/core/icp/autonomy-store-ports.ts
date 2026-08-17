@@ -186,6 +186,18 @@ export interface IcpInitiationCandidateTransitionInput {
   clearRetryEligibility?: boolean;
 }
 
+export interface IcpInitiationCandidateClaim {
+  candidate: IcpInitiationCandidate;
+  /** Opaque private lease binding. Never project this token outside the companion runtime. */
+  claimToken: string;
+}
+
+export interface IcpInitiationCandidateClaimOptions {
+  nowMs: number;
+  claimLeaseMs: number;
+  limit: number;
+}
+
 export interface IcpInitiationCandidateStorePort {
   createCandidate(candidate: IcpInitiationCandidate): Promise<IcpInitiationCandidate>;
   getCandidate(candidateId: string): Promise<IcpInitiationCandidate | null>;
@@ -194,6 +206,15 @@ export interface IcpInitiationCandidateStorePort {
   ): Promise<IcpInitiationCandidate | null>;
   listCandidates(options?: IcpInitiationCandidateListOptions): Promise<IcpInitiationCandidate[]>;
   transitionCandidate(
+    input: IcpInitiationCandidateTransitionInput,
+  ): Promise<IcpInitiationCandidate>;
+  /** Atomically leases source-independent lifecycle work with SKIP LOCKED semantics. */
+  claimDueCandidates?(
+    options: IcpInitiationCandidateClaimOptions,
+  ): Promise<IcpInitiationCandidateClaim[]>;
+  /** Applies a transition only while the caller still owns the exact durable lease. */
+  transitionClaimedCandidate?(
+    claimToken: string,
     input: IcpInitiationCandidateTransitionInput,
   ): Promise<IcpInitiationCandidate>;
   close(): Promise<void>;

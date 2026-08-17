@@ -19,6 +19,7 @@ import {
   isIcpContinuationTaskKind,
   type IcpContinuationTaskKind,
 } from '../../shared/contracts/runtime.js';
+import { parseCompanionChannelId } from '../../shared/contracts/companion-channels.js';
 
 /** Private companion-local motivation. Never serialize this object to shared state. */
 export type IcpInitiationDeliveryDisposition = 'delivered' | 'suppressed';
@@ -30,6 +31,8 @@ export interface IcpInitiationCandidate {
   peerContactId: string;
   peerCompanionId: string;
   preferredChannel: 'dm' | 'current_room';
+  /** Exact private delivery route needed for source-independent current-room recovery. */
+  targetChannelId?: string;
   source: IcpInitiationSource;
   provenanceRef: string;
   /** Bounded private motivation; prohibited from shared schema and gateway payloads. */
@@ -57,6 +60,7 @@ export interface IcpInitiationCandidate {
 export type IcpInitiationCandidateSharedMetadata = Omit<
   IcpInitiationCandidate,
   | 'peerContactId'
+  | 'targetChannelId'
   | 'reasonSummary'
   | 'continuationTaskKind'
   | 'permitId'
@@ -72,6 +76,7 @@ export const MAX_ICP_CANDIDATE_REASON_CHARS = 1_000;
 const CANDIDATE_KEYS = [
   'candidateId', 'rootInitiationId', 'localCompanionId', 'peerContactId',
   'peerCompanionId', 'preferredChannel', 'source', 'provenanceRef', 'reasonSummary',
+  'targetChannelId',
   'continuationTaskKind', 'createdAtMs', 'expiresAtMs', 'status', 'reasonCode', 'permitId',
   'pendingFollowUpId', 'deliveryDisposition', 'retryAttempt', 'retryEligibleAtMs',
   'revision',
@@ -176,6 +181,27 @@ export function parseIcpInitiationCandidate(
   if (retryEligibleAtMs !== undefined && value.status !== 'deferred') {
     throw new Error('ICP candidate.retryEligibleAtMs requires deferred status');
   }
+  const preferredChannel = requireEnum(
+    value.preferredChannel,
+    ['dm', 'current_room'] as const,
+    'ICP candidate.preferredChannel',
+  );
+  const targetChannelId = value.targetChannelId === undefined
+    ? undefined
+    : requireString(value.targetChannelId, 'ICP candidate.targetChannelId');
+  if (targetChannelId !== undefined) {
+    const target = parseCompanionChannelId(targetChannelId);
+    if (!target || target.kind !== (preferredChannel === 'dm' ? 'dm' : 'room')) {
+      throw new Error('ICP candidate.targetChannelId must match preferredChannel');
+    }
+    if (target.kind === 'dm'
+      && !(
+        target.participants.some(participant => participant === localCompanionId)
+        && target.participants.some(participant => participant === peerCompanionId)
+      )) {
+      throw new Error('ICP candidate.targetChannelId must bind the candidate companion pair');
+    }
+  }
   const revision = value.revision;
   if (typeof revision !== 'number' || !Number.isSafeInteger(revision) || revision < 1) {
     throw new Error('ICP candidate.revision must be a positive safe integer');
@@ -186,11 +212,8 @@ export function parseIcpInitiationCandidate(
     localCompanionId,
     peerContactId: requireString(value.peerContactId, 'ICP candidate.peerContactId', 512),
     peerCompanionId,
-    preferredChannel: requireEnum(
-      value.preferredChannel,
-      ['dm', 'current_room'] as const,
-      'ICP candidate.preferredChannel',
-    ),
+    preferredChannel,
+    ...(targetChannelId !== undefined ? { targetChannelId } : {}),
     source: requireEnum(value.source, ICP_INITIATION_SOURCES, 'ICP candidate.source'),
     provenanceRef: parseIcpProvenanceHandle(value.provenanceRef, 'ICP candidate.provenanceRef'),
     reasonSummary: requireString(

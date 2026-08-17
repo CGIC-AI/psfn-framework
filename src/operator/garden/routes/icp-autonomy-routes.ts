@@ -118,7 +118,9 @@ export function buildAdminIcpAutonomyRoutes(options: {
             peerCompanionId: parsed.peerCompanionId,
             requestId: parsed.requestId,
           }).then(result => {
-            audit('allowed', 'Operator triggered an ICP test initiation.', [
+            audit('allowed', result.outcome === 'accepted'
+              ? 'Operator accepted an ICP test initiation for background delivery.'
+              : 'Operator replayed an existing ICP test initiation.', [
               `peerCompanionId=${parsed.peerCompanionId}`,
               `requestId=${parsed.requestId}`,
               `candidateId=${result.candidateId}`,

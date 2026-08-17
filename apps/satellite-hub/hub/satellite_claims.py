@@ -97,7 +97,6 @@ class SatelliteClaimConfig:
     location_mode: LocationMode
     capability_profile: CapabilityProfile
     telemetry: TelemetryConfig
-    addressed_companion_id: str | None = None
     tls: ClientCertificateConfig | None = None
 
 
@@ -198,7 +197,6 @@ def normalize_claim_config(
     location_mode: LocationMode | None = None,
     capability_profile: CapabilityProfile = DEFAULT_CAPABILITY_PROFILE,
     telemetry: TelemetryConfig | None = None,
-    addressed_companion_id: str | None = None,
     tls: ClientCertificateConfig | None = None,
 ) -> SatelliteClaimConfig:
     defaults = CAPABILITY_PROFILE_DEFAULTS[capability_profile]
@@ -214,7 +212,6 @@ def normalize_claim_config(
         location_mode=location_mode or defaults.location_mode,
         capability_profile=capability_profile,
         telemetry=telemetry or defaults.telemetry,
-        addressed_companion_id=(addressed_companion_id or "").strip() or None,
         tls=tls,
     )
 
@@ -309,8 +306,6 @@ def build_satellite_registry_headers(
         headers["X-PSFN-Satellite-Capabilities"] = ",".join(mapped_capabilities)
     if telemetry_scopes:
         headers["X-PSFN-Satellite-Telemetry-Scopes"] = ",".join(telemetry_scopes)
-    if config.addressed_companion_id:
-        headers["X-PSFN-Satellite-Addressed-Companion-ID"] = config.addressed_companion_id
 
     auth = satellite_claim.get("auth")
     if isinstance(auth, dict):

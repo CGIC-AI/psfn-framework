@@ -40,6 +40,10 @@ import {
 import { isSharedWorldScope, resolveWikiScope, sharedWorldScope, type WikiScope } from './scope.js';
 import type { SharedWorldWikiStore } from './store.js';
 import type { WikiDocument, WikiSourceClass } from './types.js';
+import {
+  createContentFreeEmbeddingWorkloadId,
+  createMaintenanceEmbeddingUsageProvenance,
+} from '../../core/agent/embedding-usage-provenance.js';
 
 const log = createComponentLogger('SharedWikiPgvectorProjection');
 
@@ -147,7 +151,18 @@ export class SharedWikiPgvectorProjectionStore implements SharedWikiSearchPort {
     }
     let embeddings: Float32Array[];
     try {
-      embeddings = await this.embedding.embedBatch(chunks);
+      embeddings = await this.embedding.embedBatch(chunks, {
+        usageProvenance: createMaintenanceEmbeddingUsageProvenance({
+          purpose: 'wiki.shared_projection',
+          service: 'wiki',
+          process: 'shared-projection',
+          workloadType: 'shared_wiki_projection',
+          workloadId: createContentFreeEmbeddingWorkloadId(
+            'shared-wiki-projection',
+            `${siteId}:${document.id}`,
+          ),
+        }),
+      });
       if (embeddings.length !== chunks.length) {
         throw new Error(`expected ${chunks.length} embeddings, received ${embeddings.length}`);
       }

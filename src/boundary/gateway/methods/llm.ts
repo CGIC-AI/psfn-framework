@@ -799,6 +799,9 @@ async function recordEmbeddingUsage(
       ? (hasProviderCostEvidenceConflict(usageDetails.raw) ? 'partial' : 'complete')
       : 'unknown',
     callKind: 'embedding',
+    telemetryVisibility: params.telemetryVisibility === 'companion_private'
+      ? 'companion_private'
+      : 'operator_visible',
     attribution: {
       ...(params.companionId ? { companionId: params.companionId } : {}),
       ...(params.sessionId ? { sessionId: params.sessionId } : {}),

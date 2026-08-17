@@ -2,7 +2,10 @@
 // Shared write/dedup/contradiction logic used by both MemoryExtractor and tools.
 
 import { v7 as uuidv7 } from 'uuid';
-import type { EmbeddingProviderPort } from '../../shared/contracts/embedding-provider.js';
+import type {
+  EmbeddingProviderCallOptions,
+  EmbeddingProviderPort,
+} from '../../shared/contracts/embedding-provider.js';
 import {
   InactiveMemoryUpdateError,
   type MemoryEvolutionLink,
@@ -53,6 +56,12 @@ import {
   resolveMemoryRetrievalPolicy,
   type MemoryRetrievalPolicy,
 } from '../../system/config/memory-retrieval-policy.js';
+import { getRequestContext } from '../../primitives/llm/request-context.js';
+import {
+  createContentFreeEmbeddingWorkloadId,
+  embeddingUsageProvenanceFromRequestContext,
+} from '../../core/agent/embedding-usage-provenance.js';
+import { RUNTIME_LANE_CLASSES } from '../../shared/contracts/runtime-lanes.js';
 import type { IntakeEnvelopeSnapshot } from '../../shared/contracts/intake-envelope.js';
 import type { IntakeSinkGate } from '../../core/cogsec/intake/sink-gates.js';
 import {
@@ -81,6 +90,7 @@ import {
 
 const log = createComponentLogger('MemoryWriter');
 const IMPORT_BATCH_EMBED_CHUNK_SIZE = 200;
+type MemoryEmbeddingOperation = 'write' | 'upsert' | 'patch' | 'correction' | 'import';
 
 export interface MemoryWriteOptions {
   text: string;
@@ -307,6 +317,36 @@ export class MemoryWriter {
     }
   }
 
+  private embeddingCallOptions(
+    operation: MemoryEmbeddingOperation,
+    provenance: MemoryProvenance | undefined,
+    fallbackWorkloadId: string,
+  ): EmbeddingProviderCallOptions {
+    const correlation = getRequestContext();
+    const inherited = embeddingUsageProvenanceFromRequestContext(correlation);
+    const workloadId = inherited?.workloadId
+      ?? provenance?.requestId
+      ?? provenance?.turnId
+      ?? provenance?.sessionId
+      ?? createContentFreeEmbeddingWorkloadId(
+        `memory-${operation}`,
+        fallbackWorkloadId.trim() || `memory-${operation}`,
+      );
+    return {
+      usageProvenance: {
+        callType: inherited?.callType ?? 'scheduled',
+        purpose: `memory.${operation}`,
+        originType: inherited?.originType ?? 'scheduled',
+        originStage: inherited?.originStage ?? `memory.${operation}`,
+        service: inherited?.service ?? 'memory',
+        process: operation,
+        runtimeLaneClass: inherited?.runtimeLaneClass ?? RUNTIME_LANE_CLASSES.maintenanceReflection,
+        workloadType: inherited?.workloadType ?? 'memory_embedding',
+        workloadId,
+      },
+    };
+  }
+
   private queueMaintenanceReview(input: {
     memory: PurrMemory;
     candidates: Array<PurrMemory & { similarity: number }>;
@@ -427,7 +467,10 @@ export class MemoryWriter {
   async write(opts: MemoryWriteOptions): Promise<WriteResult> {
     this.assertTestingSessionExcluded(opts);
     this.assertCogSecCandidacy(opts);
-    const embedding = await this.embeddingService.embed(opts.text);
+    const embedding = await this.embeddingService.embed(
+      opts.text,
+      this.embeddingCallOptions('write', opts.provenance, opts.sourceRef ?? 'memory-write'),
+    );
     return this.writeWithEmbedding(opts, embedding);
   }
 
@@ -826,7 +869,10 @@ export class MemoryWriter {
     const normalizedScopeTags = normalizeMemoryScopeTags(scopeTags);
     const targetSalience = clampUnit(salience ?? importance, importance);
 
-    const embedding = await this.embeddingService.embed(text);
+    const embedding = await this.embeddingService.embed(
+      text,
+      this.embeddingCallOptions('upsert', provenance, sourceRef ?? 'memory-upsert'),
+    );
     this.validateEmbedding(embedding, 'upsert');
 
     // Find similar memories of the same type at the dedup threshold
@@ -1076,7 +1122,10 @@ export class MemoryWriter {
         sourceType: opts.sourceType,
         provenance: opts.provenance,
       });
-      embedding = await this.embeddingService.embed(updates.text);
+      embedding = await this.embeddingService.embed(
+        updates.text,
+        this.embeddingCallOptions('patch', opts.provenance, memoryId),
+      );
       this.validateEmbedding(embedding, 'patchMemory');
       updates.embedding = embedding;
     }
@@ -1172,7 +1221,10 @@ export class MemoryWriter {
       sourceType: opts.sourceType,
       provenance: opts.provenance,
     });
-    const embedding = await this.embeddingService.embed(nextText);
+    const embedding = await this.embeddingService.embed(
+      nextText,
+      this.embeddingCallOptions('correction', opts.provenance, existing.id),
+    );
     this.validateEmbedding(embedding, 'patch');
     const replacementRetention = applyRetentionSemantics({
       text: nextText,
@@ -1383,9 +1435,17 @@ export class MemoryWriter {
     let batchEmbeddings: Float32Array[] | null = null;
     try {
       const embeddedChunks: Float32Array[][] = [];
+      const importWorkloadId = uuidv7();
       for (let start = 0; start < acceptedRecords.length; start += IMPORT_BATCH_EMBED_CHUNK_SIZE) {
         const chunk = acceptedRecords.slice(start, start + IMPORT_BATCH_EMBED_CHUNK_SIZE);
-        const embedded = await this.embeddingService.embedBatch(chunk.map(record => record.text));
+        const embedded = await this.embeddingService.embedBatch(
+          chunk.map(record => record.text),
+          this.embeddingCallOptions(
+            'import',
+            undefined,
+            `${importWorkloadId}:${start}`,
+          ),
+        );
         if (embedded.length !== chunk.length) {
           throw new Error(`Expected ${chunk.length} embeddings, received ${embedded.length}`);
         }

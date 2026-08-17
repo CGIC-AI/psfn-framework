@@ -79,6 +79,9 @@ export function withEmbeddingUsageAccounting(
         ? (hasProviderCostEvidenceConflict(usageDetails.raw) ? 'partial' : 'complete')
         : 'unknown',
       callKind: 'embedding',
+      telemetryVisibility: correlation.telemetryVisibility === 'companion_private'
+        ? 'companion_private'
+        : 'operator_visible',
       attribution: {
         ...(correlation.companionId
           ? { companionId: correlation.companionId }

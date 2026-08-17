@@ -1682,6 +1682,7 @@ describe('GatewayClient streaming', () => {
     };
     expect(batchReq.method).toBe('llm.embed');
     expect(batchReq.params.texts).toEqual(['alpha', 'beta']);
+    expect(batchReq.params).not.toHaveProperty('usageProvenance');
     conn._emit({
       id: batchReq.id,
       jsonrpc: '2.0',
@@ -1766,6 +1767,17 @@ describe('GatewayClient streaming', () => {
         workloadType: 'shard',
         workloadId: 'shard-1',
         texts: ['alpha'],
+        usageProvenance: {
+          callType: 'memory',
+          purpose: 'embedding',
+          originType: 'memory',
+          originStage: 'embedding',
+          service: 'memory',
+          process: 'embedding',
+          runtimeLaneClass: 'maintenance_reflection',
+          workloadType: 'shard',
+          workloadId: 'shard-1',
+        },
       },
     });
     for (const field of [

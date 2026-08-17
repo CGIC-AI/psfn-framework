@@ -84,6 +84,8 @@ function runWithPostTurnUsageAttribution<T>(
     purpose: originStage,
     originType: 'background',
     originStage,
+    workloadType: 'background_work',
+    workloadId: `${originStage}:${source.turnId}`,
     ...(record.icpCorrelation ? { icpCorrelation: record.icpCorrelation } : {}),
   }, operation);
 }

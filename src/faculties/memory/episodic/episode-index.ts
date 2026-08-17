@@ -8,6 +8,7 @@ import type {
   EpisodeEmbeddingProfile,
   EpisodeEmbeddingRuntimeStorePort,
 } from './store-port.js';
+import { createMaintenanceEmbeddingUsageProvenance } from '../../../core/agent/embedding-usage-provenance.js';
 
 export const EPISODE_SEARCH_DOCUMENT_SCHEMA = 'l01-episode-search/1';
 export const EPISODE_EMBEDDING_MAINTENANCE_OPERATION_ID = 'episode-semantic-index';
@@ -83,7 +84,15 @@ export class EpisodeSemanticIndexer {
     const document = buildEpisodeSearchDocument(episode);
     const attemptedAt = this.now().toISOString();
     try {
-      const vector = await this.embedding.embed(document);
+      const vector = await this.embedding.embed(document, {
+        usageProvenance: createMaintenanceEmbeddingUsageProvenance({
+          purpose: 'memory.episode_index',
+          service: 'memory',
+          process: 'episode-semantic-index',
+          workloadType: 'episode_indexing',
+          workloadId: episode.id,
+        }),
+      });
       this.assertEmbedding(vector);
       const written = await this.store.writeEpisodeEmbedding({
         episodeId: episode.id,

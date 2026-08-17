@@ -473,6 +473,8 @@ describe('executePostTurnBackgroundWork', () => {
       callType: 'background',
       originType: 'background',
       originStage: 'extraction',
+      workloadType: 'background_work',
+      workloadId: `extraction:${record.turnId}`,
     })]);
   });
 

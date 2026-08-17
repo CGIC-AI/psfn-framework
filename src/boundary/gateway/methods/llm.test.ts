@@ -1105,6 +1105,7 @@ describe('registerLLMMethods', () => {
       shardId: 'shard-1',
       workloadType: 'shard',
       workloadId: 'shard-1',
+      telemetryVisibility: 'companion_private',
     })).resolves.toEqual({
       embeddings: [[1, 2, 3]],
     });
@@ -1118,6 +1119,7 @@ describe('registerLLMMethods', () => {
       status: 'success',
       settlement: 'complete',
       callKind: 'embedding',
+      telemetryVisibility: 'companion_private',
       attribution: {
         companionId: 'companion-a',
         sessionId: 'session-1',

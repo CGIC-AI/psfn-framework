@@ -423,6 +423,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     continuityChannelIds: options.continuityChannelIds,
     promptRegistry,
     sessionIntegrityProvider: gateway.createSessionIntegrityProvider(),
+    sessionIntegrityRepairBackupRootDir: pathSnapshot.runtimePathLayout.backupsDir,
     automataRetentionCompanionId: resolveCompanionIdFromConfig(config),
   });
   const fatigueRuntime = composeFatigueBudgetRuntime({ config, eventBus });

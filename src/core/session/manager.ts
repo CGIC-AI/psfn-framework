@@ -1357,6 +1357,12 @@ export class SessionManager implements SessionManagerTypeSurface {
     );
   }
 
+  async quarantineCorruptBackgroundWorkHandoffRecoveryOwner(
+    skip: TurnRecordRecoveryEvidenceSkip,
+  ): Promise<void> {
+    await this.store.quarantineCorruptBackgroundWorkHandoffRecoveryOwner(skip);
+  }
+
   getRoleEnvelopeRefsForEntries(channelId: string, sessionEntryIds: readonly number[]): string[] {
     this.assertMutableSessionReadAllowed('SessionManager.getRoleEnvelopeRefsForEntries');
     return this.getRoleEnvelopeRefsForEntriesForResolvedChannel(

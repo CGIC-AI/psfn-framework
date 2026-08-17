@@ -46,6 +46,7 @@ describe('BackgroundWorkHandoffRecoveryRuntime', () => {
         pending = 0;
         return recovered;
       }),
+      quarantineCorruptBackgroundWorkHandoffRecoveryOwner: vi.fn(async () => undefined),
     };
     const enqueue = vi.fn(async () => {
       if (outage) throw new Error('backing store unavailable');
@@ -94,6 +95,7 @@ describe('BackgroundWorkHandoffRecoveryRuntime', () => {
       streamRecoverableBackgroundWorkTurnRecords: recoveryStream,
       deferWorkerValidatedBackgroundWorkHandoffRecovery: vi.fn(),
       recoverPendingBackgroundWorkHandoffs: recoverPending,
+      quarantineCorruptBackgroundWorkHandoffRecoveryOwner: vi.fn(async () => undefined),
     });
 
     await expect(runtime.recover(async () => undefined)).rejects.toMatchObject({
@@ -137,10 +139,12 @@ describe('BackgroundWorkHandoffRecoveryRuntime', () => {
       yield record;
     })());
     const enqueue = vi.fn(async () => undefined);
+    const quarantine = vi.fn(async () => undefined);
     const runtime = new BackgroundWorkHandoffRecoveryRuntime({
       streamRecoverableBackgroundWorkTurnRecords: recoveryStream,
       deferWorkerValidatedBackgroundWorkHandoffRecovery: vi.fn(),
       recoverPendingBackgroundWorkHandoffs: vi.fn(async () => 0),
+      quarantineCorruptBackgroundWorkHandoffRecoveryOwner: quarantine,
     });
 
     await expect(runtime.recover(enqueue)).resolves.toBeUndefined();
@@ -150,9 +154,43 @@ describe('BackgroundWorkHandoffRecoveryRuntime', () => {
     await expect(runtime.recover(enqueue)).resolves.toBeUndefined();
     expect(enqueue).toHaveBeenCalledOnce();
     expect(recoveryStream).toHaveBeenCalledTimes(3);
+    expect(quarantine).not.toHaveBeenCalled();
 
     await expect(runtime.recover(enqueue)).resolves.toBeUndefined();
     expect(recoveryStream).toHaveBeenCalledTimes(3);
+  });
+
+  it('terminally disposes EBADMSG owners once while leaving the clean rescan recoverable', async () => {
+    let corrupted = true;
+    const recoveryStream = vi.fn((
+      _signal?: AbortSignal,
+      onEvidenceOwnerSkipped?: (skip: TurnRecordRecoveryEvidenceSkip) => void,
+    ) => (async function* () {
+      if (corrupted) {
+        onEvidenceOwnerSkipped?.({
+          errno: 'EBADMSG',
+          ownerSessionId: 'api:corrupt-owner',
+        });
+      }
+    })());
+    const quarantine = vi.fn(async () => { corrupted = false; });
+    const runtime = new BackgroundWorkHandoffRecoveryRuntime({
+      streamRecoverableBackgroundWorkTurnRecords: recoveryStream,
+      deferWorkerValidatedBackgroundWorkHandoffRecovery: vi.fn(),
+      recoverPendingBackgroundWorkHandoffs: vi.fn(async () => 0),
+      quarantineCorruptBackgroundWorkHandoffRecoveryOwner: quarantine,
+    });
+
+    await expect(runtime.recover(async () => undefined)).resolves.toBeUndefined();
+    await expect(runtime.recover(async () => undefined)).resolves.toBeUndefined();
+    await expect(runtime.recover(async () => undefined)).resolves.toBeUndefined();
+
+    expect(quarantine).toHaveBeenCalledOnce();
+    expect(quarantine).toHaveBeenCalledWith({
+      errno: 'EBADMSG',
+      ownerSessionId: 'api:corrupt-owner',
+    });
+    expect(recoveryStream).toHaveBeenCalledTimes(2);
   });
 
   it.each(['ESTALE', 'EBADMSG'])(
@@ -173,6 +211,7 @@ describe('BackgroundWorkHandoffRecoveryRuntime', () => {
         streamRecoverableBackgroundWorkTurnRecords: recoveryStream,
         deferWorkerValidatedBackgroundWorkHandoffRecovery: vi.fn(),
         recoverPendingBackgroundWorkHandoffs: vi.fn(async () => 0),
+        quarantineCorruptBackgroundWorkHandoffRecoveryOwner: vi.fn(async () => undefined),
       });
 
       await expect(runtime.recover(async () => undefined)).rejects.toBe(retryableEvidenceError);

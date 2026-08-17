@@ -58,9 +58,11 @@ export interface ScreenedChatMessageEnvelope {
 function resolveChatCogSecSurface(
   input: ScreenChatMessageBodyInput,
   chatBodyContext: Parameters<IntakeScreeningService['screen']>[1]['chatBodyContext'],
-): CogSecStructuralSurface | undefined {
+): CogSecStructuralSurface {
   const topology = input.conversationScope?.kind ?? input.channelTopology;
-  if (!topology) return undefined;
+  if (!topology) {
+    throw new Error('CogSec chat screening requires authenticated channel topology');
+  }
   if (topology === 'group') return { channelClass: 'group_chat' };
   if (input.channelPrivacy === 'public') return { channelClass: 'public_channel' };
   const ownerEligiblePrimary = chatBodyContext?.contactTrust.trustLevel === 'primary'
@@ -127,7 +129,7 @@ export async function screenChatMessageBody(
     subject: { kind: 'body' },
     sourceChannelId: input.channelId,
     sourceMessageId: input.messageId,
-    ...(cogSecSurface ? { surface: cogSecSurface } : {}),
+    surface: cogSecSurface,
     ...(canonicalContactId
       ? { canonicalContactId }
       : {}),

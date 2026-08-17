@@ -61,6 +61,17 @@ function canonicalDirectScope(channelId: string, canonicalContactId: string) {
 }
 
 describe('chat message body intake screening', () => {
+  it('fails closed when an active chat boundary lacks authenticated topology', async () => {
+    await expect(screenChatMessageBody({
+      content: 'hello',
+      screening: makeScreening(),
+      sourceClass: 'regular_contact',
+      surface: 'telegram',
+      channelId: 'telegram:unknown',
+      messageId: 'telegram:unknown:1',
+    })).rejects.toThrow(/authenticated channel topology/iu);
+  });
+
   it('returns sanitized Discord content with the complete typed platform addressing envelope', async () => {
     const addressing = {
       schemaVersion: 2,
@@ -110,6 +121,7 @@ describe('chat message body intake screening', () => {
       channelId: 'discord-thread-1',
       messageId: 'discord-message-1',
       channelPrivacy: 'invite_only',
+      channelTopology: 'group',
     });
 
     expect(screened).toEqual({
@@ -130,6 +142,7 @@ describe('chat message body intake screening', () => {
       surface: 'discord',
       channelId: 'public-room',
       messageId: 'message-1',
+      channelTopology: 'group',
     });
 
     expect(screened.content).toBe(DIRECT_INJECTION);
@@ -182,6 +195,7 @@ describe('chat message body intake screening', () => {
       canonicalContactId: 'contact-primary',
       channelPrivacy: 'private',
       channelClass: override.channelClass ?? 'api_direct',
+      channelTopology: 'direct',
       ...(override.missingScope
         ? {}
         : { conversationScope: canonicalDirectScope('private-ordinary', 'contact-primary') }),

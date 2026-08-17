@@ -3,6 +3,7 @@ import type {
   CogSecAction,
   CogSecArtifactClass,
   CogSecEvent,
+  CogSecOperatorAlertDeliveryStatus,
   CogSecResultCounters,
 } from './events.js';
 import type { CogSecPersonaConformanceEventRecord } from './persona-conformance.js';
@@ -69,6 +70,7 @@ export interface CogSecOperatorVisibleEvent extends CogSecAgentVisibleEvent {
   sealedArtifactCount: number;
   sealedHashCount: number;
   failureSummary?: string;
+  operatorAlertDeliveryStatus?: CogSecOperatorAlertDeliveryStatus;
   personaConformance?: CogSecPersonaConformanceEventRecord;
 }
 
@@ -177,6 +179,9 @@ export function toOperatorVisibleCogSecEvent(event: CogSecEvent): CogSecOperator
     sealedArtifactCount: event.sealedForensicPayloadRefs.length,
     sealedHashCount: event.sealedForensicPayloadHashes.length,
     ...(event.failureDetails ? { failureSummary: event.failureDetails } : {}),
+    ...(event.operatorAlertDeliveryStatus
+      ? { operatorAlertDeliveryStatus: event.operatorAlertDeliveryStatus }
+      : {}),
     ...(event.personaConformance ? { personaConformance: clonePersonaConformance(event.personaConformance) } : {}),
   };
 }

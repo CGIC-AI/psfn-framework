@@ -561,7 +561,22 @@ describe('embedding providers', () => {
 
     await warmupEmbeddingProvider(embeddingService);
 
-    expect(embeddingService.embed).toHaveBeenCalledWith(STARTUP_EMBEDDING_WARMUP_TEXT);
+    expect(embeddingService.embed).toHaveBeenCalledWith(
+      STARTUP_EMBEDDING_WARMUP_TEXT,
+      {
+        usageProvenance: {
+          callType: 'scheduled',
+          purpose: 'embedding.bootstrap.warmup',
+          originType: 'scheduled',
+          originStage: 'embedding.bootstrap.warmup',
+          service: 'startup',
+          process: 'embedding-warmup',
+          runtimeLaneClass: 'maintenance_reflection',
+          workloadType: 'embedding_bootstrap',
+          workloadId: 'startup-warmup',
+        },
+      },
+    );
   });
 
   it('fails closed when warmup returns the wrong embedding dimensions', async () => {

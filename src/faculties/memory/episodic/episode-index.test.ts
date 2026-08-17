@@ -118,7 +118,19 @@ describe('EpisodeSemanticIndexer', () => {
       },
       limit: 4,
     });
-    expect(embedding.embed).toHaveBeenCalledWith(buildEpisodeSearchDocument(target));
+    expect(embedding.embed).toHaveBeenCalledWith(buildEpisodeSearchDocument(target), {
+      usageProvenance: {
+        callType: 'scheduled',
+        purpose: 'memory.episode_index',
+        originType: 'scheduled',
+        originStage: 'memory.episode_index',
+        service: 'memory',
+        process: 'episode-semantic-index',
+        runtimeLaneClass: 'maintenance_reflection',
+        workloadType: 'episode_indexing',
+        workloadId: target.id,
+      },
+    });
     expect(writeEpisodeEmbedding).toHaveBeenCalledWith(expect.objectContaining({
       episodeId: 'episode-1',
       sourceUpdatedAt: target.updatedAt,

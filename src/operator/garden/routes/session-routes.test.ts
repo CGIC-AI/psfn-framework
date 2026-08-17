@@ -1,4 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { AdminBodyReader } from './types.js';
 import { buildAdminSessionRoutes } from './session-routes.js';
@@ -7,6 +10,11 @@ import {
   AdminSessionTurnNotFoundError,
 } from '../services/session-service.js';
 import type { AdminSessionService } from '../services/types.js';
+import {
+  CogSecEventStore,
+  type CogSecOperatorAlertDeliveryStatus,
+} from '../../../core/cogsec/events.js';
+import { listOperatorVisibleCogSecEvents } from '../../../core/cogsec/safe-log.js';
 
 class CapturingResponse {
   statusCode = 0;
@@ -246,6 +254,86 @@ describe('admin selected-session detail route', () => {
 });
 
 describe('admin session CogSec routes', () => {
+  function makeDeliveryEvent(
+    store: CogSecEventStore,
+    caseId: string,
+    operatorAlertDeliveryStatus: CogSecOperatorAlertDeliveryStatus,
+  ): void {
+    store.createEvent({
+      caseId,
+      type: 'intake_firewall',
+      severity: 'high',
+      sourceChannelId: 'api:operator-alert-evidence',
+      sealedForensicPayloadRefs: ['cogsec-forensic://sealed/PRIVATE_PAYLOAD_TEXT.json'],
+      sealedForensicPayloadHashes: [`sha256:${'a'.repeat(64)}`],
+      actor: 'system:intake-sink-gate',
+      safeAgentSummary: 'An ordinary cognition intake operation was denied.',
+      operatorAlertDeliveryStatus,
+    });
+  }
+
+  it('returns typed durable alert evidence and refreshes a pending event after retry', async () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), 'psfn-cogsec-garden-route-'));
+    const eventsPath = join(tempRoot, 'cogsec-events.json');
+    try {
+      const store = new CogSecEventStore(eventsPath);
+      makeDeliveryEvent(store, 'cogsec_pending_0123456789abcdef01234567', 'pending');
+      makeDeliveryEvent(store, 'cogsec_failed_0123456789abcdef01234567', 'failed');
+      makeDeliveryEvent(store, 'cogsec_unconfigured_0123456789abcdef01234567', 'unconfigured');
+      const listCogSecEvents = vi.fn(async () => ({
+        events: listOperatorVisibleCogSecEvents(new CogSecEventStore(eventsPath).listEvents()),
+      }));
+
+      const pendingResponse = await invokeRoute(
+        { listCogSecEvents },
+        'GET',
+        '/api/admin/session-routes/cogsec/events',
+        undefined,
+      );
+
+      expect(pendingResponse.statusCode).toBe(200);
+      expect(pendingResponse.body).toMatchObject({
+        events: expect.arrayContaining([
+          expect.objectContaining({
+            caseId: 'cogsec_pending_0123456789abcdef01234567',
+            operatorAlertDeliveryStatus: 'pending',
+          }),
+          expect.objectContaining({
+            caseId: 'cogsec_failed_0123456789abcdef01234567',
+            operatorAlertDeliveryStatus: 'failed',
+          }),
+          expect.objectContaining({
+            caseId: 'cogsec_unconfigured_0123456789abcdef01234567',
+            operatorAlertDeliveryStatus: 'unconfigured',
+          }),
+        ]),
+      });
+      expect(JSON.stringify(pendingResponse.body)).not.toContain('PRIVATE_PAYLOAD_TEXT');
+
+      store.updateEvent('cogsec_pending_0123456789abcdef01234567', {
+        operatorAlertDeliveryStatus: 'delivered',
+      });
+      const deliveredResponse = await invokeRoute(
+        { listCogSecEvents },
+        'GET',
+        '/api/admin/session-routes/cogsec/events',
+        undefined,
+      );
+
+      expect(deliveredResponse.body).toMatchObject({
+        events: expect.arrayContaining([
+          expect.objectContaining({
+            caseId: 'cogsec_pending_0123456789abcdef01234567',
+            operatorAlertDeliveryStatus: 'delivered',
+          }),
+        ]),
+      });
+      expect(listCogSecEvents).toHaveBeenCalledTimes(2);
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
   it('parses CogSec preview input and forwards the safe remediation contract', async () => {
     const previewCogSecRemediation = vi.fn().mockResolvedValue({
       ok: true,

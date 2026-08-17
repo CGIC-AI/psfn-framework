@@ -350,6 +350,7 @@ function productionShapedSnapshot(index = 0) {
     rootInitiationId: `root-${index}`,
     workloadType: 'turn',
     workloadId: `workload-${index}`,
+    runtimeLaneClass: 'foreground_chat',
     viewerTrustLevel: 'regular',
     requesterProvenance: 'human',
     requestAudience: 'primary_contact',
@@ -454,6 +455,10 @@ test('current snapshot additions remain fail-closed for unknown keys and wrong t
     (snapshot: ReturnType<typeof productionShapedSnapshot>) => {
       const adaptive = snapshot.toolContext.adaptiveSnapshot as Record<string, unknown>;
       adaptive.embodimentContext = { kind: 'satellite' };
+    },
+    (snapshot: ReturnType<typeof productionShapedSnapshot>) => {
+      const adaptive = snapshot.toolContext.adaptiveSnapshot as Record<string, unknown>;
+      adaptive.runtimeLaneClass = 'invented_lane';
     },
     (snapshot: ReturnType<typeof productionShapedSnapshot>) => {
       snapshot.sessionContext.autoCompactionEligible = 'yes';

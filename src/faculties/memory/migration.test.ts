@@ -1,6 +1,9 @@
 import type { Pool, PoolClient, QueryResult } from 'pg';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { EmbeddingProviderPort } from '../../shared/contracts/embedding-provider.js';
+import type {
+  EmbeddingProviderCallOptions,
+  EmbeddingProviderPort,
+} from '../../shared/contracts/embedding-provider.js';
 import {
   migratePostgresMemoryEmbeddings,
   runRetrievalValidation,
@@ -53,6 +56,7 @@ interface CountingEmbeddingServiceOptions {
 class CountingEmbeddingService implements EmbeddingProviderPort {
   readonly dims: number;
   readonly batches: string[][] = [];
+  readonly batchOptions: Array<EmbeddingProviderCallOptions | undefined> = [];
   maxConcurrent = 0;
 
   private inFlight = 0;
@@ -74,8 +78,12 @@ class CountingEmbeddingService implements EmbeddingProviderPort {
     return embedded;
   }
 
-  async embedBatch(texts: string[]): Promise<Float32Array[]> {
+  async embedBatch(
+    texts: string[],
+    options?: EmbeddingProviderCallOptions,
+  ): Promise<Float32Array[]> {
     this.batches.push([...texts]);
+    this.batchOptions.push(options);
     this.inFlight += 1;
     this.maxConcurrent = Math.max(this.maxConcurrent, this.inFlight);
     try {
@@ -162,6 +170,27 @@ describe('migratePostgresMemoryEmbeddings', () => {
       failures: [],
     });
     expect(fresh.batches.map(batch => batch.length)).toEqual([2, 2, 1]);
+    expect(fresh.batchOptions).toEqual([
+      {
+        usageProvenance: {
+          callType: 'scheduled',
+          purpose: 'memory.embedding_migration',
+          originType: 'scheduled',
+          originStage: 'memory.embedding_migration',
+          service: 'memory',
+          process: 'embedding-migration',
+          runtimeLaneClass: 'maintenance_reflection',
+          workloadType: 'memory_embedding_migration',
+          workloadId: 'batch-0',
+        },
+      },
+      expect.objectContaining({
+        usageProvenance: expect.objectContaining({ workloadId: 'batch-1' }),
+      }),
+      expect.objectContaining({
+        usageProvenance: expect.objectContaining({ workloadId: 'batch-2' }),
+      }),
+    ]);
     expect(postgresMocks.clientQueries).toHaveLength(5);
     expect(postgresMocks.clientQueries[0]).toMatchObject({
       values: ['m-1', '[1,0]'],
@@ -224,5 +253,18 @@ describe('runRetrievalValidation', () => {
       ['m-cats'],
       ['m-space'],
     ]);
+    expect(embeddingService.batchOptions).toEqual([{
+      usageProvenance: {
+        callType: 'scheduled',
+        purpose: 'memory.retrieval_validation',
+        originType: 'scheduled',
+        originStage: 'memory.retrieval_validation',
+        service: 'memory',
+        process: 'retrieval-validation',
+        runtimeLaneClass: 'maintenance_reflection',
+        workloadType: 'memory_retrieval_validation',
+        workloadId: 'validation-batch',
+      },
+    }]);
   });
 });

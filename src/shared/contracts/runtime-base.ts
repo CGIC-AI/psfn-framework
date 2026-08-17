@@ -320,6 +320,8 @@ export interface LLMRequestMetadata {
   rootInitiationId?: string;
   workloadType?: string;
   workloadId?: string;
+  /** Runtime lane resolved once by the originating runtime; consumers only forward it. */
+  runtimeLaneClass?: RuntimeLaneClass;
 }
 
 /**
@@ -399,6 +401,7 @@ export const CORRELATION_METADATA_KEYS = [
   'rootInitiationId',
   'workloadType',
   'workloadId',
+  'runtimeLaneClass',
   'callType',
   'purpose',
   'viewerTrustLevel',

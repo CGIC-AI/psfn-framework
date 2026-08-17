@@ -9,6 +9,12 @@ import {
   normalizeAutomataTimestamp,
 } from '../validation.js';
 import type { AutomataBusVerificationStatus } from './contract.js';
+import { getRequestContext } from '../../../primitives/llm/request-context.js';
+import {
+  createEmbeddingUsageProvenance,
+  embeddingUsageProvenanceFromRequestContext,
+} from '../../../core/agent/embedding-usage-provenance.js';
+import { RUNTIME_LANE_CLASSES } from '../../../shared/contracts/runtime-lanes.js';
 import type {
   AutomataBusQueryAudience,
   AutomataBusCanonicalFinding,
@@ -376,7 +382,19 @@ export class AutomataBusQueryService {
 
     let embedding: Float32Array;
     try {
-      embedding = await this.embeddings.embed(input.query, { signal: input.signal });
+      embedding = await this.embeddings.embed(input.query, {
+        signal: input.signal,
+        usageProvenance: embeddingUsageProvenanceFromRequestContext(getRequestContext())
+          ?? createEmbeddingUsageProvenance({
+          callType: 'background',
+          purpose: 'automata_bus.query',
+          service: 'automata_bus',
+          process: 'semantic-query',
+          runtimeLaneClass: RUNTIME_LANE_CLASSES.backgroundContinuation,
+          workloadType: 'automata_bus_query',
+          workloadId: 'semantic-query',
+          }),
+      });
       if (embedding.length !== this.embeddings.identity.dimensions) {
         return { references: [], path: 'embedding-unavailable', state };
       }

@@ -6438,6 +6438,7 @@ describe('handleMessageForTurn pre-response concurrency', () => {
       callType: 'memory',
       originType: 'memory',
       originStage: 'memory.active_context.refresh',
+      runtimeLaneClass: 'maintenance_reflection',
     });
   });
 
@@ -6684,6 +6685,7 @@ describe('handleMessageForTurn pre-response concurrency', () => {
       requesterProvenance: 'self_directed',
       requestAudience: 'self',
       purpose: 'free_time.creation.memory_retrieval',
+      runtimeLaneClass: 'background_continuation',
     });
   });
 

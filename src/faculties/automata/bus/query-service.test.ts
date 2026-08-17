@@ -151,6 +151,20 @@ describe('AutomataBusQueryService', () => {
       limit: POLICY.candidateLimit,
       visibility: expect.objectContaining({ companionId: 'companion-a' }),
     }));
+    expect(ports.embeddings.embed).toHaveBeenCalledWith('bounded knowledge', {
+      signal: undefined,
+      usageProvenance: {
+        callType: 'background',
+        purpose: 'automata_bus.query',
+        originType: 'background',
+        originStage: 'automata_bus.query',
+        service: 'automata_bus',
+        process: 'semantic-query',
+        runtimeLaneClass: 'background_continuation',
+        workloadType: 'automata_bus_query',
+        workloadId: 'semantic-query',
+      },
+    });
     expect(ports.canonical.searchLexical).toHaveBeenCalledWith(expect.objectContaining({
       limit: POLICY.candidateLimit,
       visibility: expect.objectContaining({ maxSensitivity: 'personal' }),

@@ -5,7 +5,9 @@ import {
   computeWikiProjectionDrift,
   createWikiPgvectorProjectionStore,
   DEFAULT_WIKI_CHUNK_MAX_CHARS,
+  WikiPgvectorProjectionStore,
 } from './pgvector-projection.js';
+import type { WikiDocument } from './types.js';
 
 // Schema-threading test seam: stub the Postgres port so the create function can
 // be exercised without a live database. Only the pool-construction call is under
@@ -45,6 +47,52 @@ describe('createWikiPgvectorProjectionStore (per-companion schema pinning, s10f9
     expect(postgresMocks.createPostgresPool).toHaveBeenCalledTimes(1);
     const options = postgresMocks.createPostgresPool.mock.calls[0]?.[1];
     expect(options).not.toHaveProperty('schema');
+  });
+});
+
+describe('WikiPgvectorProjectionStore usage attribution', () => {
+  it('classifies a personal wiki projection by its canonical document id', async () => {
+    const embedBatch = vi.fn(async () => [new Float32Array(8)]);
+    const embedding = {
+      dims: 8,
+      embed: vi.fn(),
+      embedBatch,
+    } as unknown as EmbeddingProviderPort;
+    const store = new WikiPgvectorProjectionStore({} as never, embedding);
+    const document: WikiDocument = {
+      schemaVersion: 1,
+      id: 'journal-index',
+      title: 'Journal index',
+      bodyPath: 'documents/journal-index.md',
+      bodyFormat: 'markdown',
+      tags: [],
+      sourceClass: 'companion_authored_note',
+      provenanceRefs: [],
+      sensitivity: 'personal',
+      createdAt: '2026-08-17T00:00:00.000Z',
+      updatedAt: '2026-08-17T00:00:00.000Z',
+      updatedBy: 'agent',
+      version: 1,
+      bodySha256: 'sha',
+      body: 'A durable note.',
+    };
+
+    await expect(store.syncDocument(document)).resolves.toMatchObject({ status: 'ran' });
+    expect(embedBatch).toHaveBeenCalledWith(['A durable note.'], {
+      usageProvenance: {
+        callType: 'scheduled',
+        purpose: 'wiki.projection',
+        originType: 'scheduled',
+        originStage: 'wiki.projection',
+        service: 'wiki',
+        process: 'personal-projection',
+        runtimeLaneClass: 'maintenance_reflection',
+        workloadType: 'wiki_projection',
+        workloadId: expect.stringMatching(/^wiki-projection:[a-f0-9]{64}$/),
+      },
+    });
+    const options = embedBatch.mock.calls[0]?.[1];
+    expect(options?.usageProvenance?.workloadId).not.toContain(document.id);
   });
 });
 

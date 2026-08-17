@@ -6,6 +6,7 @@ import {
   type CorrelationMetadata,
 } from '../../../../../src/shared/contracts/runtime.js';
 import { isObservabilityCallType } from '../../../../../src/shared/contracts/observability-call-types.js';
+import { RUNTIME_LANE_CLASSES } from '../../../../../src/shared/contracts/runtime-lanes.js';
 import { parseIcpConversationCorrelation } from '../../../../../src/shared/contracts/icp-autonomy.js';
 import {
   CHARGE_POLICY_RUNTIME_LANE_VALUES,
@@ -161,6 +162,13 @@ export function parseCorrelationMetadataFields(
       source.chargeSurface,
       `${path}.chargeSurface`,
       CHARGE_POLICY_SURFACE_VALUES,
+    );
+  }
+  if (source.runtimeLaneClass !== undefined) {
+    parsed.runtimeLaneClass = requireOneOf(
+      source.runtimeLaneClass,
+      `${path}.runtimeLaneClass`,
+      Object.values(RUNTIME_LANE_CLASSES),
     );
   }
   if (source.viewerTrustLevel !== undefined) {

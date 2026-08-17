@@ -434,7 +434,7 @@ or hardware profiles into this application repository. See
 ## Common failures
 
 - **Node install reports `EBADENGINE`.** Select Node 24.19 or newer within the
-  supported Node 24 range, then rerun `npm ci`; Node 22 is rejected.
+  supported Node 24 range, then rerun `npm ci`; older Node releases are rejected.
 - **The local pgvector container or API cannot bind.** The database uses a
   Docker-assigned loopback port. Change `LOCAL_API_PORT` or `LOCAL_ALERT_PORT`
   if 13000 or 13002 is already occupied, then restart the disposable procedure.

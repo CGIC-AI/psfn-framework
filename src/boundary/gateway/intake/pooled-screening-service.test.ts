@@ -199,6 +199,52 @@ describe('createPooledIntakeScreeningService', () => {
     expect(result.action).toBe('quarantine');
     await pool.dispose();
   });
+
+  it('enforces a private-direct override when the pool fails under global shadow', async () => {
+    const policy = { ...seedPolicy(), mode: 'shadow' as const };
+    const pool = createScreeningPool({ concurrency: 1, maxQueueDepth: 4 });
+    const underlying = fakeUnderlying('shadow');
+    underlying.throws = true;
+    const pooled = createPooledIntakeScreeningService({
+      underlying: underlying.service,
+      pool,
+      streamKey: 'companion-a',
+      policy,
+    });
+
+    const result = await pooled.screen('private message', baseInput({
+      surface: { channelClass: 'private_direct' },
+    }));
+
+    expect(result.mode).toBe('enforce');
+    expect(result.snapshot.enforcementPosture).toBe('enforce');
+    expect(result.withheld).toBe(true);
+    expect(result.effectiveText).toBe(renderIntakeWithheldContentPlaceholder());
+    await pool.dispose();
+  });
+
+  it('observes an operator-direct override when the pool fails under global strict', async () => {
+    const policy = { ...seedPolicy(), mode: 'strict' as const };
+    const pool = createScreeningPool({ concurrency: 1, maxQueueDepth: 4 });
+    const underlying = fakeUnderlying('enforce');
+    underlying.throws = true;
+    const pooled = createPooledIntakeScreeningService({
+      underlying: underlying.service,
+      pool,
+      streamKey: 'companion-a',
+      policy,
+    });
+
+    const result = await pooled.screen('operator message', baseInput({
+      surface: { channelClass: 'operator_direct' },
+    }));
+
+    expect(result.mode).toBe('shadow');
+    expect(result.snapshot.enforcementPosture).toBe('shadow');
+    expect(result.withheld).toBe(false);
+    expect(result.effectiveText).toBe('operator message');
+    await pool.dispose();
+  });
 });
 
 describe('synthesizeFailClosedScreeningResult', () => {

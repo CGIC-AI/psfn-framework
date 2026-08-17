@@ -184,6 +184,16 @@ export interface EnqueueBackgroundWorkInput {
   maxAttempts: number;
 }
 
+/**
+ * Worker-validated restart recovery. `originalManifestFingerprint` is present
+ * only when the live-alpha legacy repair retired obsolete work from the
+ * canonical source handoff before replay.
+ */
+export interface BackgroundWorkHandoffRecoveryInput {
+  jobs: readonly EnqueueBackgroundWorkInput[];
+  originalManifestFingerprint?: string;
+}
+
 export interface StoredBackgroundWorkJob {
   jobId: string;
   idempotencyKey: string;
@@ -667,6 +677,12 @@ function fingerprintBackgroundWorkPayloadValue(payload: unknown): string {
 export function fingerprintBackgroundWorkHandoff(
   jobs: readonly EnqueueBackgroundWorkInput[],
 ): string {
+  return fingerprintBackgroundWorkHandoffJobs(jobs);
+}
+
+function fingerprintBackgroundWorkHandoffJobs(
+  jobs: readonly TurnRecordBackgroundWorkJob[],
+): string {
   const canonicalJobs = [...jobs].sort((left, right) => left.kind.localeCompare(right.kind));
   return createHash('sha256')
     .update(stableBackgroundWorkStringify({ schemaVersion: 1, jobs: canonicalJobs }))
@@ -749,12 +765,42 @@ export function parseTurnRecordBackgroundWorkHandoff(
 export function parseWorkerValidatedTurnRecordBackgroundWorkHandoffProjection(
   record: TurnRecord,
 ): EnqueueBackgroundWorkInput[] {
-  return parseTurnRecordBackgroundWorkHandoffWithExpectedFingerprint(record, null);
+  return [...parseWorkerValidatedTurnRecordBackgroundWorkHandoffRecovery(record).jobs];
+}
+
+/** Validate a canonical source and retain the exact receipt identity across legacy retirement. */
+export function parseTurnRecordBackgroundWorkHandoffRecovery(
+  record: TurnRecord,
+): BackgroundWorkHandoffRecoveryInput {
+  return parseTurnRecordBackgroundWorkHandoffRecoveryWithExpectedFingerprint(
+    record,
+    fingerprintBackgroundWorkTurnRecord(record),
+  );
+}
+
+/** Re-prove the content-free IPC projection whose source fingerprint the worker already checked. */
+function parseWorkerValidatedTurnRecordBackgroundWorkHandoffRecovery(
+  record: TurnRecord,
+): BackgroundWorkHandoffRecoveryInput {
+  const input = parseTurnRecordBackgroundWorkHandoffRecoveryWithExpectedFingerprint(record, null);
+  const projection = record as TurnRecord & {
+    recoveryOriginalManifestFingerprint?: unknown;
+  };
+  const originalManifestFingerprint = projection.recoveryOriginalManifestFingerprint;
+  if (originalManifestFingerprint === undefined) return input;
+  if (typeof originalManifestFingerprint !== 'string'
+    || !/^[a-f0-9]{64}$/u.test(originalManifestFingerprint)
+    || input.originalManifestFingerprint !== undefined
+    || input.jobs.some(job => job.kind === 'emotion_appraisal')) {
+    throw new Error('Worker-validated background work recovery receipt proof is invalid');
+  }
+  return { ...input, originalManifestFingerprint };
 }
 
 export interface LegacyTurnRecordBackgroundWorkRecoveryRepair {
   record: TurnRecord;
   retiredLegacyEmotionAppraisalJobs: number;
+  originalManifestFingerprint?: string;
 }
 
 /**
@@ -785,6 +831,9 @@ export function repairLegacyTurnRecordBackgroundWorkHandoffForRecovery(
     return {
       record: recordWithoutHandoff,
       retiredLegacyEmotionAppraisalJobs,
+      originalManifestFingerprint: fingerprintBackgroundWorkHandoffJobs(
+        jobs.map(job => job.job),
+      ),
     };
   }
   return {
@@ -796,6 +845,9 @@ export function repairLegacyTurnRecordBackgroundWorkHandoffForRecovery(
       },
     },
     retiredLegacyEmotionAppraisalJobs,
+    originalManifestFingerprint: fingerprintBackgroundWorkHandoffJobs(
+      jobs.map(job => job.job),
+    ),
   };
 }
 
@@ -805,6 +857,28 @@ function parseTurnRecordBackgroundWorkHandoffWithExpectedFingerprint(
 ): EnqueueBackgroundWorkInput[] {
   return parseTurnRecordBackgroundWorkHandoffJobs(record, expectedTurnFingerprint, false)
     .map(result => result.job as EnqueueBackgroundWorkInput);
+}
+
+function parseTurnRecordBackgroundWorkHandoffRecoveryWithExpectedFingerprint(
+  record: TurnRecord,
+  expectedTurnFingerprint: string | null,
+): BackgroundWorkHandoffRecoveryInput {
+  const parsed = parseTurnRecordBackgroundWorkHandoffJobs(
+    record,
+    expectedTurnFingerprint,
+    true,
+  );
+  const jobs = parsed.flatMap(job => (
+    job.retireLegacyEmotionAppraisal ? [] : [job.job as EnqueueBackgroundWorkInput]
+  ));
+  return parsed.some(job => job.retireLegacyEmotionAppraisal)
+    ? {
+        jobs,
+        originalManifestFingerprint: fingerprintBackgroundWorkHandoffJobs(
+          parsed.map(job => job.job),
+        ),
+      }
+    : { jobs };
 }
 
 interface ParsedTurnRecordBackgroundWorkJob {
@@ -869,7 +943,7 @@ function parseTurnRecordBackgroundWorkHandoffJobs(
       );
     }
     return retireLegacyEmotionAppraisal
-      ? { job, retireLegacyEmotionAppraisal }
+      ? { job: { ...job, payload }, retireLegacyEmotionAppraisal }
       : {
           job: {
             ...job,

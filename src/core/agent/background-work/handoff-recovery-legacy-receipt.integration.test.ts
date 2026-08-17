@@ -165,6 +165,7 @@ function makeLegacyFourJobRecord(
   record: TurnRecord;
   originalManifestFingerprint: string;
   obsoleteJobId: string;
+  retainedJobIds: string[];
 } {
   const record = makeRecord(channelId, completedAt);
   const logicalSessionId = record.sessionId ?? record.channelId;
@@ -255,6 +256,9 @@ function makeLegacyFourJobRecord(
   return {
     record,
     obsoleteJobId: legacyEmotionJob.jobId,
+    retainedJobIds: originalJobs
+      .filter(job => job.kind !== 'emotion_appraisal')
+      .map(job => job.jobId),
     originalManifestFingerprint: fingerprintBackgroundWorkHandoff(
       originalJobs as EnqueueBackgroundWorkInput[],
     ),
@@ -293,6 +297,63 @@ function findSessionJournalPath(sessionsDir: string, channelFragment: string): s
 }
 
 describe('legacy background-work receipt recovery', () => {
+  it('re-proves exact legacy siblings on the next tick after a transient enqueue failure', async () => {
+    const database = await harness.createDatabase();
+    const schema = 'legacy_receipt_transient_retry';
+    const backgroundStore = await PostgresBackgroundWorkStore.connect(database.databaseUrl, {
+      schema,
+    });
+    const inspectionPool = createPostgresPool(database.databaseUrl, { schema, max: 1 });
+    const root = mkdtempSync(join(tmpdir(), 'legacy-receipt-transient-retry-'));
+    rootsToDelete.push(root);
+    const sessionsDir = join(root, 'sessions');
+    const manager = new SessionManager(new SessionStore(sessionsDir, {
+      turnRecordEligibilityFence: createSerialTurnRecordEligibilityFence(),
+    }), makeConfig(root));
+    const legacy = makeLegacyFourJobRecord('api:legacy-transient-owner', 1_775_100_000_000);
+    try {
+      manager.recordUserMessage(
+        legacy.record.channelId,
+        'source',
+        'partner',
+        'Partner',
+        true,
+        undefined,
+        { turnId: legacy.record.turnId, requestId: legacy.record.requestId },
+      );
+      await manager.recordTurn(legacy.record);
+      await inspectionPool.query(`
+        INSERT INTO agent_background_work_handoffs (
+          logical_session_id, source_turn_id, manifest_fingerprint, accepted_at_ms
+        ) VALUES ($1, $2, $3, $4)
+      `, [
+        legacy.record.sessionId,
+        legacy.record.turnId,
+        legacy.originalManifestFingerprint,
+        legacy.record.completedAt,
+      ]);
+
+      const attempts: string[][] = [];
+      const enqueueRecovery = async (
+        input: Parameters<PostgresBackgroundWorkStore['recoverBatch']>[0],
+      ): Promise<void> => {
+        attempts.push(input.jobs.map(job => job.jobId));
+        if (attempts.length === 1) throw new Error('injected legacy receipt recovery outage');
+        await backgroundStore.recoverBatch(input);
+      };
+      const runtime = new BackgroundWorkHandoffRecoveryRuntime(manager);
+
+      await expect(runtime.recover(enqueueRecovery))
+        .rejects.toThrow('injected legacy receipt recovery outage');
+      await expect(runtime.recover(enqueueRecovery)).resolves.toBeUndefined();
+
+      expect(attempts).toEqual([legacy.retainedJobIds, legacy.retainedJobIds]);
+      expect(await backgroundStore.get(legacy.obsoleteJobId)).toBeNull();
+    } finally {
+      await Promise.all([inspectionPool.end(), backgroundStore.close()]);
+    }
+  });
+
   it('terminates beyond retry capacity, reaches a later handoff and disposes EBADMSG once', async () => {
     const database = await harness.createDatabase();
     const schema = 'legacy_receipt_recovery';

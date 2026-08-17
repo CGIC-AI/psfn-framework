@@ -2,7 +2,8 @@ import type { TurnRecord } from '../../../shared/contracts/runtime.js';
 import type { SessionStore } from '../../../persistence/sessions/store.js';
 import {
   parseTurnRecordBackgroundWorkHandoff,
-  parseWorkerValidatedTurnRecordBackgroundWorkHandoffProjection,
+  parseTurnRecordBackgroundWorkHandoffRecovery,
+  parseWorkerValidatedTurnRecordBackgroundWorkHandoffRecovery,
 } from '../../agent/background-work/types.js';
 import {
   BACKGROUND_WORK_HANDOFF_RECOVERY_BATCH_SIZE,
@@ -16,6 +17,7 @@ interface PendingBackgroundWorkHandoffReference {
   sourceChannelId: string;
   logicalSessionId: string;
   turnId: string;
+  legacyReceiptRecovery: boolean;
 }
 
 type BackgroundWorkHandoffRecoveryStore = Pick<
@@ -26,8 +28,9 @@ type BackgroundWorkHandoffRecoveryStore = Pick<
 
 /**
  * Process-local retry index for TurnRecords that became durable before their
- * PostgreSQL batch enqueue failed. The index retains source identifiers only;
- * recovery always re-reads the canonical record under its eligibility fence.
+ * PostgreSQL batch enqueue failed. The index retains source identifiers plus
+ * the worker-proved legacy parser mode; recovery always re-reads and re-proves
+ * the canonical record under its eligibility fence.
  */
 export class BackgroundWorkHandoffRecovery {
   private pending = new Map<string, PendingBackgroundWorkHandoffReference>();
@@ -54,18 +57,19 @@ export class BackgroundWorkHandoffRecovery {
    */
   deferWorkerValidatedProjection(record: TurnRecord): void {
     assertContentFreeRecoveryProjection(record);
-    assertValidRecoveryHandoff(
+    const input = assertValidRecoveryHandoff(
       record,
-      parseWorkerValidatedTurnRecordBackgroundWorkHandoffProjection,
+      parseWorkerValidatedTurnRecordBackgroundWorkHandoffRecovery,
     );
-    this.indexReference(record);
+    this.indexReference(record, input.originalManifestFingerprint !== undefined);
   }
 
-  private indexReference(record: TurnRecord): void {
+  private indexReference(record: TurnRecord, legacyReceiptRecovery = false): void {
     const reference = {
       sourceChannelId: record.channelId,
       logicalSessionId: record.sessionId ?? record.channelId,
       turnId: record.turnId,
+      legacyReceiptRecovery,
     } satisfies PendingBackgroundWorkHandoffReference;
     const key = referenceKey(reference);
     if (this.pending.has(key)) return;
@@ -124,7 +128,14 @@ export class BackgroundWorkHandoffRecovery {
               return false;
             }
             try {
-              assertValidRecoveryHandoff(current, parseTurnRecordBackgroundWorkHandoff);
+              if (reference.legacyReceiptRecovery) {
+                assertValidRecoveryHandoff(
+                  current,
+                  parseTurnRecordBackgroundWorkHandoffRecovery,
+                );
+              } else {
+                assertValidRecoveryHandoff(current, parseTurnRecordBackgroundWorkHandoff);
+              }
             } catch (error) {
               this.pending.delete(key);
               throw error;
@@ -155,17 +166,17 @@ function referenceKey(reference: PendingBackgroundWorkHandoffReference): string 
   return `${reference.sourceChannelId}\u0000${reference.logicalSessionId}\u0000${reference.turnId}`;
 }
 
-function assertValidRecoveryHandoff(
+function assertValidRecoveryHandoff<T>(
   record: TurnRecord,
-  parse: (candidate: TurnRecord) => unknown,
-): void {
+  parse: (candidate: TurnRecord) => T,
+): T {
   if (record.status !== 'completed' || !record.backgroundWorkHandoff) {
     throw recoveryEvidenceError(
       'Only completed TurnRecords with background work can be deferred for recovery',
     );
   }
   try {
-    parse(record);
+    return parse(record);
   } catch (error) {
     throw recoveryEvidenceError(
       `TurnRecord background work handoff is not safe to index for retry: ${

@@ -9,7 +9,7 @@
 import type { NotificationPort } from '../../../boundary/gateway/notification-port.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
-import type { CogSecEvent, CogSecEventStore } from '../events.js';
+import type { CogSecEventStore } from '../events.js';
 import type {
   BlockedEgressTrifectaContext,
   BlockedEgressTrifectaIncident,
@@ -42,15 +42,6 @@ function ordinaryDenialSummary(
 ): string {
   return `The intake firewall denied an enforce-mode ${sink} operation. `
     + `Operator alert delivery: ${delivery}.`;
-}
-
-function existingDeliveryStatus(
-  event: CogSecEvent,
-): OrdinaryIntakeSinkDenialNotificationStatus | 'pending' {
-  for (const status of ['delivered', 'failed', 'unconfigured'] as const) {
-    if (event.safeAgentSummary.endsWith(`Operator alert delivery: ${status}.`)) return status;
-  }
-  return 'pending';
 }
 
 function notificationFailureStatus(error: unknown): Exclude<
@@ -98,11 +89,12 @@ export function createOrdinaryIntakeSinkDenialRecorder(
       affectedLogicalSessionIds,
       actor: 'system:intake-sink-gate',
       safeAgentSummary: ordinaryDenialSummary(decision.sink, 'pending'),
+      operatorAlertDeliveryStatus: 'pending',
     }, (_existing) => {
       incident = 'deduplicated';
       return {};
     });
-    const priorDelivery = existingDeliveryStatus(recorded);
+    const priorDelivery = recorded.operatorAlertDeliveryStatus ?? 'pending';
 
     const activeNotification = inFlight.get(context.correlationId);
     if (activeNotification) {
@@ -112,12 +104,13 @@ export function createOrdinaryIntakeSinkDenialRecorder(
       return {
         caseId: context.correlationId,
         incident,
-        notification: Promise.resolve({ status: priorDelivery }),
+        notification: Promise.resolve({ status: priorDelivery, durableEvidence: 'recorded' }),
       };
     }
 
-    const notification = (async (): Promise<{
+    const notificationAttempt = async (): Promise<{
       status: OrdinaryIntakeSinkDenialNotificationStatus;
+      durableEvidence: 'recorded' | 'failed';
     }> => {
       let status: OrdinaryIntakeSinkDenialNotificationStatus;
       try {
@@ -147,6 +140,7 @@ export function createOrdinaryIntakeSinkDenialRecorder(
       try {
         deps.cogSecEvents().updateEvent(context.correlationId, {
           safeAgentSummary: ordinaryDenialSummary(decision.sink, status),
+          operatorAlertDeliveryStatus: status,
         });
       } catch (error) {
         log.error('Failed to persist ordinary intake sink notification evidence', {
@@ -155,11 +149,23 @@ export function createOrdinaryIntakeSinkDenialRecorder(
           status,
           error: toErrorMessage(error),
         });
+        return { status, durableEvidence: 'failed' };
       }
-      return { status };
-    })();
+      return { status, durableEvidence: 'recorded' };
+    };
+    const notification = notificationAttempt().catch((error): {
+      status: OrdinaryIntakeSinkDenialNotificationStatus;
+      durableEvidence: 'failed';
+    } => {
+      log.error('Unexpected ordinary intake sink denial alert failure', {
+        caseId: context.correlationId,
+        sink: decision.sink,
+        error: toErrorMessage(error),
+      });
+      return { status: 'failed', durableEvidence: 'failed' };
+    });
     inFlight.set(context.correlationId, notification);
-    void notification.finally(() => inFlight.delete(context.correlationId));
+    void notification.then(() => inFlight.delete(context.correlationId));
     return { caseId: context.correlationId, incident, notification };
   };
 }

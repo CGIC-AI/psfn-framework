@@ -230,12 +230,13 @@ async function executeContactSetTrust(
   contactStore: ContactStorePort,
   params: ContactSetTrustParams,
   intake: SelfAuthoredMutationIntakeRuntime,
+  attemptRef: string,
 ): Promise<AgentToolResult<{ isError?: boolean }>> {
   const screened = await screenSelfAuthoredMutation(
     'trust_mutation',
     { action: 'set_trust', ...params },
     intake,
-    { tool: 'contact', action: 'set_trust' },
+    { tool: 'contact', action: 'set_trust', attemptRef },
   );
   if (!screened.allowed) {
     // Soft, truthful, operator-reviewed wording (htm9.12); not an error so
@@ -750,6 +751,7 @@ async function executeUnifiedContactAction(
   contactStore: ContactStorePort,
   params: ContactToolParams,
   intake: SelfAuthoredMutationIntakeRuntime,
+  attemptRef: string,
   proposalQueue?: ApprovalQueuePort,
   blockList?: ContactBlockListStore,
   permitInvalidation?: ContactBlockPermitInvalidationPort,
@@ -767,7 +769,12 @@ async function executeUnifiedContactAction(
     case 'note':
       return await executeContactNote(contactStore, params);
     case 'set_trust':
-      return await executeContactSetTrust(contactStore, params as ContactSetTrustParams, intake);
+      return await executeContactSetTrust(
+        contactStore,
+        params as ContactSetTrustParams,
+        intake,
+        attemptRef,
+      );
     case 'propose_trust':
       return await executeContactProposeTrust(contactStore, proposalQueue, params);
     case 'set_relationship':
@@ -1127,7 +1134,7 @@ export function createContactTool(
       })),
     }),
     execute: async (
-      _toolCallId: string,
+      toolCallId: string,
       params: ContactToolParams = {},
       _signal?: AbortSignal,
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
@@ -1138,6 +1145,7 @@ export function createContactTool(
           contactStore,
           params,
           intake,
+          toolCallId,
           proposalQueue,
           blockList,
           permitInvalidation,

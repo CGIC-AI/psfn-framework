@@ -1,4 +1,5 @@
 import type { LLMProviderPort } from '../../agent/contracts.js';
+import { randomUUID } from 'node:crypto';
 import type { IntakeSinkGate } from '../../cogsec/intake/sink-gates.js';
 import { applyPromptAssemblySinkGate } from '../intake-sink-gating.js';
 import { countMessageTokens, countTokens } from '../../../primitives/llm/tokens.js';
@@ -71,6 +72,7 @@ import { MASKED_TOOL_OBSERVATION_CONTENT } from '../tool-observation.js';
 import { applyFocusCompactionRanges, type FocusCompactionRange } from '../focus-knowledge.js';
 import { buildPromptSectionTelemetryList } from '../../identity/prompt-sections.js';
 import type { CogSecEvent } from '../../cogsec/events.js';
+import { getRequestContext } from '../../../primitives/llm/request-context.js';
 import {
   buildCogSecEventNoticeBlock,
   listAgentVisibleCogSecEvents,
@@ -456,7 +458,11 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
   recent = applyPromptAssemblySinkGate(
     recent,
     params.intakeSinkGate ?? null,
-    { channelId: params.channelId },
+    {
+      channelId: params.channelId,
+      attemptRef: getRequestContext()?.requestId
+        ?? randomUUID(),
+    },
   ).entries;
   const historySummaryEntryCountFromSnapshot = params.turnSessionContext.historySummaryEntryCount ?? 0;
   const sourceEntryCount = Math.max(

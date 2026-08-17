@@ -116,6 +116,8 @@ export interface FactAcceptanceStageInput {
   /** Group-room routing must prove direct address from structured journal metadata. */
   requireStructuredAddressing?: boolean;
   channelId: string;
+  /** Stable identity of this extraction run; retries reuse it. */
+  attemptRef: string;
   triggerReason: ExtractionTriggerReason;
   telemetryEnabled: boolean;
 }
@@ -177,6 +179,7 @@ export function buildAcceptedFactCandidates(
         factIndex: index,
         factType: fact.type,
       }, {
+        attemptRef: input.attemptRef,
         correlationRef: `fact:${String(index)}`,
         sourceChannelId: input.channelId,
       });

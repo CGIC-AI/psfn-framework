@@ -341,7 +341,7 @@ export function createWikiTool(store: WikiStorePort, deps: WikiToolDeps): Substr
       supersedes_ref: Type.Optional(Type.String({ minLength: 1, description: 'Prior wardrobe:<id> ref replaced by this look.' })),
     }),
     execute: async (
-      _toolCallId: string,
+      toolCallId: string,
       params: WikiToolParams = {},
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
       let action: WikiAction = 'list';
@@ -420,7 +420,7 @@ export function createWikiTool(store: WikiStorePort, deps: WikiToolDeps): Substr
               'wiki_write',
               params as unknown as Record<string, unknown>,
               deps.intake,
-              { tool: 'wiki', action },
+              { tool: 'wiki', action, attemptRef: toolCallId },
             );
             if (!screened.allowed) {
               // Soft, truthful, operator-reviewed wording (htm9.12); not an

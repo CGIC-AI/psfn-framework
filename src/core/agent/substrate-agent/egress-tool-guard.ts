@@ -38,11 +38,12 @@ export function buildEgressToolGuard(deps: EgressToolGuardDeps): EgressToolGuard
   const gate = deps.intakeSinkGate;
   if (!gate) return null;
   return {
-    evaluate: ({ toolName, requiredTokens, params }) => {
+    evaluate: ({ toolCallId, toolName, requiredTokens, params }) => {
       if (!requiredTokens.some(isEgressCapabilityToken)) return null;
       const envelopes = deps.getActiveTurnIntakeEnvelopes();
       const turnIdentity = deps.getActiveTurnSessionIdentity();
       const access = gate.evaluate('tool_egress', envelopes, { toolName }, {
+        attemptRef: toolCallId,
         correlationRef: turnIdentity
           ? `${turnIdentity.logicalSessionId}:${toolName}`
           : `unrouted:${toolName}`,

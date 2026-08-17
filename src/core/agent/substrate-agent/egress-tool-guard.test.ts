@@ -24,6 +24,7 @@ describe('buildEgressToolGuard', () => {
       actor: 'test:egress-tool-guard',
       onAudit: event => auditEvents.push(event),
     });
+    const evaluate = vi.spyOn(gate, 'evaluate');
     const envelope: IntakeEnvelopeSnapshot = {
       envelopeId: '8b70243e',
       sourceClass: 'tool_output',
@@ -43,6 +44,7 @@ describe('buildEgressToolGuard', () => {
     });
 
     const decision = guard?.evaluate({
+      toolCallId: 'egress-call-1',
       toolName: 'fs',
       requiredTokens: ['repl.execute'],
       params: {},
@@ -52,6 +54,15 @@ describe('buildEgressToolGuard', () => {
       allowed: false,
       noticeText: INTAKE_FIREWALL_NOTICE_TEMPLATES.sinkHeld,
     });
+    expect(evaluate).toHaveBeenCalledWith(
+      'tool_egress',
+      [envelope],
+      { toolName: 'fs' },
+      expect.objectContaining({
+        attemptRef: 'egress-call-1',
+        correlationRef: 'discord:live-session:fs',
+      }),
+    );
     expect(auditEvents.find(event => event.kind === 'egress_trifecta')?.context).toEqual(
       expect.objectContaining({
         toolName: 'fs',

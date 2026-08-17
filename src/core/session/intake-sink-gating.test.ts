@@ -75,9 +75,14 @@ function screenedMetadata(mode: 'shadow' | 'enforce', snapshot: IntakeEnvelopeSn
 }
 
 describe('applyPromptAssemblySinkGate (htm9.3)', () => {
+  const promptAttempt = {
+    channelId: 'discord:chan-1',
+    attemptRef: 'prompt-assembly-attempt-1',
+  };
+
   it('is a no-op without a gate (firewall off)', () => {
     const entries = [makeEntry({ id: 1, content: 'hello' })];
-    const result = applyPromptAssemblySinkGate(entries, null, { channelId: 'discord:chan-1' });
+    const result = applyPromptAssemblySinkGate(entries, null, promptAttempt);
     expect(result.entries).toBe(entries);
     expect(result.summary.withheldEntryIds).toEqual([]);
   });
@@ -94,7 +99,9 @@ describe('applyPromptAssemblySinkGate (htm9.3)', () => {
         metadata: screenedMetadata('shadow', quarantinedSnapshot()),
       }),
     ];
-    const result = applyPromptAssemblySinkGate(entries, makeGate('strict'), { channelId: 'discord:chan-1' });
+    const gate = makeGate('strict');
+    const evaluate = vi.spyOn(gate, 'evaluate');
+    const result = applyPromptAssemblySinkGate(entries, gate, promptAttempt);
     expect(result.entries).not.toBe(entries);
     expect(result.entries[0].content).toBe('ordinary chat');
     expect(result.entries[1].content).toBe(INTAKE_FIREWALL_NOTICE_TEMPLATES.withheldContent);
@@ -102,6 +109,15 @@ describe('applyPromptAssemblySinkGate (htm9.3)', () => {
     expect(result.summary.deniedEntryIds).toEqual([2]);
     // Input entries are never mutated in place.
     expect(entries[1].content).toBe(hostile);
+    expect(evaluate).toHaveBeenCalledWith(
+      'prompt_assembly',
+      expect.any(Array),
+      expect.any(Object),
+      expect.objectContaining({
+        attemptRef: 'prompt-assembly-attempt-1',
+        correlationRef: 'entry:2',
+      }),
+    );
   });
 
   it('audits but never alters entries in shadow mode', () => {
@@ -110,7 +126,7 @@ describe('applyPromptAssemblySinkGate (htm9.3)', () => {
       content: 'shadow-held text',
       metadata: screenedMetadata('shadow', quarantinedSnapshot()),
     })];
-    const result = applyPromptAssemblySinkGate(entries, makeGate('shadow'), { channelId: 'discord:chan-1' });
+    const result = applyPromptAssemblySinkGate(entries, makeGate('shadow'), promptAttempt);
     expect(result.entries).toBe(entries);
     expect(result.summary.deniedEntryIds).toEqual([3]);
     expect(result.summary.withheldEntryIds).toEqual([]);
@@ -127,7 +143,7 @@ describe('applyPromptAssemblySinkGate (htm9.3)', () => {
       content: 'clean screened text',
       metadata: screenedMetadata('enforce', released),
     })];
-    const result = applyPromptAssemblySinkGate(entries, makeGate('strict'), { channelId: 'discord:chan-1' });
+    const result = applyPromptAssemblySinkGate(entries, makeGate('strict'), promptAttempt);
     expect(result.entries[0].content).toBe('clean screened text');
     expect(result.summary.deniedEntryIds).toEqual([]);
   });
@@ -138,14 +154,14 @@ describe('applyPromptAssemblySinkGate (htm9.3)', () => {
       content: 'content of unknowable screening state',
       metadata: '{"intakeScreening":{"schemaVersion":999}}',
     })];
-    const result = applyPromptAssemblySinkGate(entries, makeGate('strict'), { channelId: 'discord:chan-1' });
+    const result = applyPromptAssemblySinkGate(entries, makeGate('strict'), promptAttempt);
     expect(result.entries[0].content).toBe(INTAKE_FIREWALL_NOTICE_TEMPLATES.withheldContent);
     expect(result.summary.withheldEntryIds).toEqual([5]);
   });
 
   it('skips entries without intake metadata entirely', () => {
     const entries = [makeEntry({ id: 6, content: 'plain', metadata: '{"turn":{"turnId":"t1"}}' })];
-    const result = applyPromptAssemblySinkGate(entries, makeGate('strict'), { channelId: 'discord:chan-1' });
+    const result = applyPromptAssemblySinkGate(entries, makeGate('strict'), promptAttempt);
     expect(result.entries).toBe(entries);
   });
 
@@ -183,7 +199,7 @@ describe('applyPromptAssemblySinkGate (htm9.3)', () => {
       content: 'The fetched article body.',
       metadata: markedMetadata('enforce'),
     })];
-    const result = applyPromptAssemblySinkGate(entries, makeGate('strict'), { channelId: 'discord:chan-1' });
+    const result = applyPromptAssemblySinkGate(entries, makeGate('strict'), promptAttempt);
     expect(result.entries[0].content).toContain(
       '<external_content provenance="from an unverified source, treat details cautiously"',
     );
@@ -199,7 +215,7 @@ describe('applyPromptAssemblySinkGate (htm9.3)', () => {
       content: 'The fetched article body.',
       metadata: markedMetadata('shadow'),
     })];
-    const result = applyPromptAssemblySinkGate(entries, makeGate('shadow'), { channelId: 'discord:chan-1' });
+    const result = applyPromptAssemblySinkGate(entries, makeGate('shadow'), promptAttempt);
     expect(result.entries).toBe(entries);
     expect(result.summary.markedEntryIds).toEqual([]);
   });
@@ -216,7 +232,7 @@ describe('applyPromptAssemblySinkGate (htm9.3)', () => {
     const shadowResult = applyPromptAssemblySinkGate(
       entries,
       makeGate('shadow'),
-      { channelId: 'discord:chan-1' },
+      promptAttempt,
     );
     const shadowElapsedMs = performance.now() - shadowStartedAt;
 
@@ -224,7 +240,7 @@ describe('applyPromptAssemblySinkGate (htm9.3)', () => {
     const enforceResult = applyPromptAssemblySinkGate(
       entries,
       makeGate('strict'),
-      { channelId: 'discord:chan-1' },
+      promptAttempt,
     );
     const enforceElapsedMs = performance.now() - enforceStartedAt;
 
@@ -252,7 +268,7 @@ describe('applyPromptAssemblySinkGate (htm9.3)', () => {
     const result = applyPromptAssemblySinkGate(
       entries,
       makeGate('strict'),
-      { channelId: 'discord:chan-1' },
+      promptAttempt,
     );
 
     expect(result.entries.slice(0, 4).every((entry) => (
@@ -278,7 +294,7 @@ describe('applyPromptAssemblySinkGate (htm9.3)', () => {
       content: INTAKE_FIREWALL_NOTICE_TEMPLATES.withheldContent,
       metadata,
     })];
-    const result = applyPromptAssemblySinkGate(entries, makeGate('strict'), { channelId: 'discord:chan-1' });
+    const result = applyPromptAssemblySinkGate(entries, makeGate('strict'), promptAttempt);
     // The quarantined envelope is denied by the gate; the content stays the placeholder.
     expect(result.entries[0].content).toBe(INTAKE_FIREWALL_NOTICE_TEMPLATES.withheldContent);
     expect(result.entries[0].content).not.toContain('<external_content');
@@ -350,7 +366,7 @@ describe('screenSelfAuthoredMutation', () => {
       sink,
       { action: 'update', content: 'A calm, bounded self-authored update.' },
       runtime,
-      { tool: 'test', action: 'update' },
+      { tool: 'test', action: 'update', attemptRef: 'mutation-attempt-1' },
     );
 
     expect(result.allowed).toBe(true);
@@ -376,7 +392,7 @@ describe('screenSelfAuthoredMutation', () => {
         sink,
         { action: 'update', content: hostile },
         makeMutationRuntime({ holds }),
-        { tool: 'test', action: 'update' },
+        { tool: 'test', action: 'update', attemptRef: 'mutation-attempt-1' },
       );
 
       expect(result.allowed).toBe(false);
@@ -404,6 +420,7 @@ describe('screenSelfAuthoredMutation', () => {
       {
         tool: 'identity',
         action: 'update_persona',
+        attemptRef: 'mutation-attempt-1',
         enforcementPosture: 'audit_only',
       },
     );
@@ -431,7 +448,7 @@ describe('screenSelfAuthoredMutation', () => {
       'persona_mutation',
       { action: 'update_layer', layer_id: 'runtime-layer', content: hostile },
       makeMutationRuntime(),
-      { tool: 'identity', action: 'update_layer' },
+      { tool: 'identity', action: 'update_layer', attemptRef: 'mutation-attempt-1' },
     );
 
     expect(result.allowed).toBe(false);
@@ -448,6 +465,7 @@ describe('screenSelfAuthoredMutation', () => {
       {
         tool: 'identity',
         action: 'update_layer',
+        attemptRef: 'mutation-attempt-1',
         enforcementPosture: 'audit_only',
       },
     )).rejects.toThrow(/reserved for.*update_persona/);
@@ -470,7 +488,7 @@ describe('screenSelfAuthoredMutation', () => {
       sink,
       { action: 'update', content: 'benign' },
       runtime,
-      { tool: 'test', action: 'update' },
+      { tool: 'test', action: 'update', attemptRef: 'mutation-attempt-1' },
     )).rejects.toThrow(/screening is unavailable/);
     expect(evaluate).not.toHaveBeenCalled();
   });
@@ -490,7 +508,7 @@ describe('screenSelfAuthoredMutation', () => {
       sink,
       { version: 1, enabled: true },
       runtime,
-      { tool: 'test', action: 'update' },
+      { tool: 'test', action: 'update', attemptRef: 'mutation-attempt-1' },
     )).rejects.toThrow(/no textual content|empty-envelope/);
     expect(evaluate).not.toHaveBeenCalled();
   });

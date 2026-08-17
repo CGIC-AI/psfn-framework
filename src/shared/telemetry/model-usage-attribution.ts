@@ -154,9 +154,6 @@ export function resolveModelUsageChargeLane(
   input: ModelUsageChargeLaneResolutionInput,
 ): ChargePolicyRuntimeLane | undefined {
   if (input.explicitChargeLane) return input.explicitChargeLane;
-  if (input.runtimeLaneClass === RUNTIME_LANE_CLASSES.foregroundChat) {
-    return 'interactive';
-  }
   if (input.runtimeLaneClass === RUNTIME_LANE_CLASSES.maintenanceReflection) {
     return 'maintenance';
   }
@@ -174,7 +171,10 @@ export function resolveModelUsageChargeLane(
   }
   const hasSessionAttribution = Boolean(input.sessionId?.trim() || input.channelId?.trim());
   if (!hasSessionAttribution) return undefined;
-  if (input.callType === 'tool') {
+  if (
+    input.callType === 'tool'
+    || input.runtimeLaneClass === RUNTIME_LANE_CLASSES.foregroundChat
+  ) {
     return 'interactive';
   }
 

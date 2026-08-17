@@ -100,7 +100,6 @@ describe('normalizeModelUsageAttribution', () => {
   });
 
   it.each([
-    ['foreground_chat', 'interactive'],
     ['post_turn_appraisal', 'background'],
     ['background_continuation', 'background'],
     ['maintenance_reflection', 'maintenance'],
@@ -114,6 +113,15 @@ describe('normalizeModelUsageAttribution', () => {
       purpose: 'sessionless.embedding',
       runtimeLaneClass,
     }).chargeLane).toBe(chargeLane);
+  });
+
+  it('keeps a session-less foreground tool probe unknown without companion attribution', () => {
+    expect(normalizeModelUsageAttribution({
+      companionId: 'companion-alpha',
+      callType: 'tool',
+      purpose: 'reasoning',
+      runtimeLaneClass: 'foreground_chat',
+    }).chargeLane).toBe(MODEL_USAGE_UNKNOWN_DIMENSION);
   });
 
   it('never records foreground chat as unknown even without session metadata', () => {

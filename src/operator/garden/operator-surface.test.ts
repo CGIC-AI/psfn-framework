@@ -1154,15 +1154,12 @@ describe('Garden operator surface', () => {
       settleOutreach = resolve;
     });
     const trigger = createIcpTestInitiationTrigger({
-      localCompanionId: FLEET_COMPANION_ID,
       sourceRuntime: {
-        submit: vi.fn(async () => {
-          await outreachSettled;
+        accept: vi.fn(async () => {
+          void outreachSettled;
           return {
-            outcome: 'sent',
-            candidateId: '33333333-3333-4333-8333-333333333333',
-            status: 'consumed',
-            deliveryDisposition: 'delivered',
+            candidateId: '33333333-3333-5333-8333-333333333333',
+            status: 'pending',
           };
         }),
       },

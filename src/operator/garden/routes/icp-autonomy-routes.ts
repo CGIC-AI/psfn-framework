@@ -123,6 +123,8 @@ export function buildAdminIcpAutonomyRoutes(options: {
               `requestId=${parsed.requestId}`,
               `candidateId=${result.candidateId}`,
               `outcome=${result.outcome}`,
+              `status=${result.status}`,
+              `deliveryDisposition=${result.deliveryDisposition}`,
             ]);
             sendJson(res, 200, result, ADMIN_DYNAMIC_JSON_HEADERS);
           }, error => {

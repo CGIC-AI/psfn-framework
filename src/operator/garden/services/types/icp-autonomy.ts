@@ -222,7 +222,7 @@ export interface AdminIcpTestInitiationInput {
 }
 
 export interface AdminIcpTestInitiationResult {
-  outcome: 'accepted';
+  outcome: 'accepted' | 'deduped';
   candidateId: string;
   status: IcpInitiationCandidateStatus;
   deliveryDisposition: 'pending' | 'delivered' | 'suppressed';

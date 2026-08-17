@@ -31,6 +31,7 @@ describe('ICP operator test initiation trigger', () => {
 
   it('returns the runtime durable-candidate acceptance', async () => {
     const accept = vi.fn(async () => ({
+      outcome: 'accepted' as const,
       candidateId: '33333333-3333-5333-8333-333333333333',
       status: 'pending' as const,
     }));
@@ -58,6 +59,7 @@ describe('ICP operator test initiation trigger', () => {
 
   it('resolves a canonical peer and submits a provenance-marked broker request', async () => {
     const accept = vi.fn(async () => ({
+      outcome: 'accepted' as const,
       candidateId: '33333333-3333-5333-8333-333333333333',
       status: 'pending' as const,
     }));

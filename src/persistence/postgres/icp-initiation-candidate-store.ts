@@ -248,6 +248,7 @@ export class PostgresIcpInitiationCandidateStore implements IcpInitiationCandida
     }
     const claimToken = randomUUID();
     const claimExpiresAtMs = options.nowMs + options.claimLeaseMs;
+    const stalePendingBeforeMs = Math.max(0, options.nowMs - options.claimLeaseMs);
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
@@ -258,9 +259,12 @@ export class PostgresIcpInitiationCandidateStore implements IcpInitiationCandida
           WHERE status IN ('pending', 'deferred', 'permitted')
             AND (
               expires_at_ms <= $1
-              OR status <> 'deferred'
-              OR retry_eligible_at_ms IS NULL
-              OR retry_eligible_at_ms <= $1
+              OR status = 'permitted'
+              OR (status = 'pending' AND created_at_ms <= $5)
+              OR (
+                status = 'deferred'
+                AND (retry_eligible_at_ms IS NULL OR retry_eligible_at_ms <= $1)
+              )
             )
             AND (
               lifecycle_claim_token IS NULL
@@ -281,7 +285,13 @@ export class PostgresIcpInitiationCandidateStore implements IcpInitiationCandida
         FROM due
         WHERE candidate.candidate_id = due.candidate_id
         RETURNING candidate.*
-      `, [options.nowMs, options.limit, claimToken, claimExpiresAtMs]);
+      `, [
+        options.nowMs,
+        options.limit,
+        claimToken,
+        claimExpiresAtMs,
+        stalePendingBeforeMs,
+      ]);
       await client.query('COMMIT');
       return result.rows.map(candidate => ({ candidate: mapCandidate(candidate), claimToken }));
     } catch (error) {

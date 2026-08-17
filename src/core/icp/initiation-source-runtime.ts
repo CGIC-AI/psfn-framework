@@ -1,29 +1,11 @@
-import { createHash } from 'node:crypto';
-
-import type {
-  IcpInitiationGateDecision,
-  IcpInitiationPermitIssueResult,
-} from '../../boundary/gateway/icp-autonomy-contract.js';
-import {
-  composeCompanionDmChannelId,
-  parseCompanionChannelId,
-} from '../../shared/contracts/companion-channels.js';
-import type {
-  IcpAutonomyReasonCode,
-  IcpInitiationSource,
-} from '../../shared/contracts/icp-autonomy.js';
-import type { IcpAutonomyCandidateOrigin } from '../../shared/contracts/runtime.js';
-import type { EventBus } from '../../shared/event-bus.js';
+import { composeCompanionDmChannelId } from '../../shared/contracts/companion-channels.js';
+import type { IcpAutonomyReasonCode } from '../../shared/contracts/icp-autonomy.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { isRfc4122Uuid } from '../../shared/utils/types.js';
 import type { CompanionId } from '../../shared/routing/companion-id.js';
-import type {
-  IcpCompanionOutreachExecutionResult,
-  KnownCompanionPeer,
-} from './agent-facing-autonomy.js';
+import type { KnownCompanionPeer } from './agent-facing-autonomy.js';
 import type {
   IcpInitiationCandidateClaim,
-  IcpInitiationCandidateStorePort,
   IcpInitiationCandidateTransitionInput,
 } from './autonomy-store-ports.js';
 import {
@@ -33,269 +15,51 @@ import {
   type IcpInitiationCandidate,
   type IcpInitiationCandidateStatus,
 } from './initiation-candidate.js';
+import { createIcpCandidateClaimRecovery } from './candidate-lifecycle-recovery.js';
+import {
+  deriveIcpSourceIdentity,
+  deterministicIcpUuid,
+  isSameIcpCandidate,
+  resolveIcpCandidateChannelId,
+  resolveIcpTransitionDenial,
+  terminalIcpSourceOutcome,
+  toIcpCandidateOrigin,
+  toIcpSourceResult,
+  type IcpInitiationSourceRequest,
+  type IcpInitiationSourceResult,
+  type IcpInitiationSourceRuntime,
+  type IcpInitiationSourceRuntimeDependencies,
+} from './initiation-source-support.js';
 
+export type {
+  IcpInitiationCause,
+  IcpInitiationConsent,
+  IcpInitiationConsentEvaluator,
+  IcpInitiationSourceGatewayPort,
+  IcpInitiationSourceOutcome,
+  IcpInitiationSourcePeerPort,
+  IcpInitiationSourceRequest,
+  IcpInitiationSourceResult,
+  IcpInitiationSourceRuntime,
+  IcpInitiationSourceRuntimeDependencies,
+} from './initiation-source-support.js';
+
+const log = createComponentLogger('IcpInitiationSource');
 const DEFAULT_CANDIDATE_TTL_MS = 24 * 60 * 60_000;
 const DEFAULT_PERMIT_TTL_MS = 5 * 60_000;
 export const ICP_INITIATION_RETRY_COOLDOWN_MS = 5 * 60_000;
 export const MAX_ICP_INITIATION_RETRY_ATTEMPTS = 3;
 const MAX_SOURCE_RECORD_ID_CHARS = 1_024;
-const log = createComponentLogger('IcpInitiationSource');
-
-export type IcpInitiationCause =
-  | { kind: 'independent' }
-  | { kind: 'icp_conversation'; rootInitiationId: string };
-
-export interface IcpInitiationSourceRequest {
-  source: IcpInitiationSource;
-  peerContactId: string;
-  preferredChannel: 'dm' | 'current_room';
-  /** Required only for current_room; must be a canonical companion room. */
-  currentRoomChannelId?: string;
-  /** Durable source owner identity (thought/follow-up/turn/tool-call tuple). */
-  sourceRecordId: string;
-  /** Durable intention owner; stable when a scheduler action is recreated. */
-  pendingFollowUpId?: string;
-  /** Private companion-local motivation. Never projected to the gateway. */
-  reasonSummary: string;
-  cause: IcpInitiationCause;
-  ttlMs?: number;
-}
-
-export type IcpInitiationConsent =
-  | { action: 'send' }
-  | { action: 'defer'; reason?: string }
-  | { action: 'decline'; reason?: string };
-
-export interface IcpInitiationConsentEvaluator {
-  evaluate(input: {
-    candidate: IcpInitiationCandidate;
-    peer: KnownCompanionPeer;
-    channelId: string;
-  }): Promise<IcpInitiationConsent>;
-}
-
-export interface IcpInitiationSourcePeerPort {
-  resolveKnownPeer(contactId: string): Promise<KnownCompanionPeer>;
-  executeCompanionOutreach(
-    contactId: string,
-    permitId: string,
-    candidateOrigin: IcpAutonomyCandidateOrigin,
-    isExecutionAuthorized?: () => boolean,
-  ): Promise<IcpCompanionOutreachExecutionResult>;
-}
-
-export interface IcpInitiationSourceGatewayPort {
-  companionInitiationPreflight(input: {
-    candidate: ReturnType<typeof toIcpInitiationCandidateSharedMetadata>;
-    channelId: string;
-  }): Promise<IcpInitiationGateDecision>;
-  companionIssueInitiationPermit(input: {
-    candidate: ReturnType<typeof toIcpInitiationCandidateSharedMetadata>;
-    channelId: string;
-    permitExpiresAtMs: number;
-  }): Promise<IcpInitiationPermitIssueResult>;
-}
-
-export interface IcpInitiationSourceRuntimeDependencies {
-  localCompanionId: string;
-  store: IcpInitiationCandidateStorePort;
-  peers: IcpInitiationSourcePeerPort;
-  gateway: IcpInitiationSourceGatewayPort;
-  consent: IcpInitiationConsentEvaluator;
-  /** Canonical capability-tier authorization. Required for every source. */
-  isExternalCompanionAuthorized(): boolean;
-  policy?: {
-    candidateDefaultTtlMs: number;
-    retryCadenceMs: number;
-    maxRetryAttempts: number;
-    permitTtlMs: number;
-  };
-  eventBus?: EventBus;
-  now?: () => number;
-}
-
-export type IcpInitiationSourceOutcome =
-  | 'sent'
-  | 'suppressed'
-  | 'deferred'
-  | 'declined'
-  | 'rejected'
-  | 'deduped';
-
-export interface IcpInitiationSourceResult {
-  outcome: IcpInitiationSourceOutcome;
-  candidateId: string;
-  status: IcpInitiationCandidateStatus;
-  reasonCode?: IcpAutonomyReasonCode;
-  pendingFollowUpId?: string;
-  deliveryDisposition?: IcpInitiationCandidate['deliveryDisposition'];
-  /** Durable queue wake time for a deferred candidate. */
-  retryEligibleAtMs?: number;
-}
-
-function toCandidateOrigin(
-  candidate: IcpInitiationCandidate,
-): IcpAutonomyCandidateOrigin {
-  return {
-    candidateId: candidate.candidateId,
-    rootInitiationId: candidate.rootInitiationId,
-    source: candidate.source,
-    provenanceRef: candidate.provenanceRef,
-    ...(candidate.continuationTaskKind
-      ? { continuationTaskKind: candidate.continuationTaskKind }
-      : {}),
-  };
-}
-
-export interface IcpInitiationSourceRuntime {
-  submit(request: IcpInitiationSourceRequest): Promise<IcpInitiationSourceResult>;
-  /** Resume exact Postgres-leased lifecycle work without source resubmission. */
-  resumeClaim(claim: IcpInitiationCandidateClaim): Promise<IcpInitiationSourceResult>;
-}
-
-function requireTrimmed(value: string, field: string, maxChars: number): string {
-  if (!value || value.trim() !== value) {
-    throw new Error(`${field} must be a non-empty trimmed string`);
-  }
-  if (value.length > maxChars) {
-    throw new Error(`${field} must be ${maxChars} characters or fewer`);
-  }
-  return value;
-}
-
-/** Deterministic RFC-4122 v5-shaped id from private source identity. */
-function deterministicUuid(label: string, value: string): string {
-  const bytes = createHash('sha256').update(`${label}\0${value}`).digest().subarray(0, 16);
-  bytes[6] = (bytes[6]! & 0x0f) | 0x50;
-  bytes[8] = (bytes[8]! & 0x3f) | 0x80;
-  const hex = bytes.toString('hex');
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
-}
-
-function resolveChannelId(
-  localCompanionId: string,
-  peerCompanionId: string,
-  request: IcpInitiationSourceRequest,
-): string {
-  if (request.preferredChannel === 'dm') {
-    return composeCompanionDmChannelId(
-      localCompanionId as CompanionId,
-      peerCompanionId as CompanionId,
-    );
-  }
-  const channelId = requireTrimmed(
-    request.currentRoomChannelId ?? '',
-    'currentRoomChannelId',
-    1_024,
-  );
-  if (parseCompanionChannelId(channelId)?.kind !== 'room') {
-    throw new Error('currentRoomChannelId must be a canonical companion room channel');
-  }
-  return channelId;
-}
-
-function sourceIdentity(input: {
-  localCompanionId: string;
-  peerCompanionId: string;
-  request: IcpInitiationSourceRequest;
-}): string {
-  const durableSourceRecord = input.request.pendingFollowUpId === undefined
-    ? requireTrimmed(
-      input.request.sourceRecordId,
-      'sourceRecordId',
-      MAX_SOURCE_RECORD_ID_CHARS,
-    )
-    : `pending-follow-up:${requireTrimmed(
-      input.request.pendingFollowUpId,
-      'pendingFollowUpId',
-      MAX_SOURCE_RECORD_ID_CHARS,
-    )}`;
-  if (input.request.source === 'felt_impulse' || input.request.source === 'operator_test') {
-    // The source record identifies one lever crossing or one authenticated
-    // operator request globally for this companion. Peer selection is routing
-    // input, so excluding it makes a replay idempotent and turns an attempted
-    // request-ID reuse for another peer into an identity conflict.
-    return [
-      input.localCompanionId,
-      input.request.source,
-      durableSourceRecord,
-    ].join('\0');
-  }
-  return [
-    input.localCompanionId,
-    input.peerCompanionId,
-    input.request.source,
-    input.request.preferredChannel,
-    durableSourceRecord,
-  ].join('\0');
-}
 
 export function deriveIcpInitiationCandidateId(input: {
   localCompanionId: string;
   peerCompanionId: string;
   request: IcpInitiationSourceRequest;
 }): string {
-  return deterministicUuid('icp-candidate', sourceIdentity(input));
-}
-
-function sameCandidate(left: IcpInitiationCandidate, right: IcpInitiationCandidate): boolean {
-  return left.candidateId === right.candidateId
-    && left.rootInitiationId === right.rootInitiationId
-    && left.localCompanionId === right.localCompanionId
-    && left.peerContactId === right.peerContactId
-    && left.peerCompanionId === right.peerCompanionId
-    && left.preferredChannel === right.preferredChannel
-    && left.source === right.source
-    && left.provenanceRef === right.provenanceRef
-    && left.reasonSummary === right.reasonSummary
-    && left.pendingFollowUpId === right.pendingFollowUpId;
-}
-
-function result(
-  outcome: IcpInitiationSourceOutcome,
-  candidate: IcpInitiationCandidate,
-  reasonCode?: IcpAutonomyReasonCode,
-): IcpInitiationSourceResult {
-  return {
-    outcome,
-    candidateId: candidate.candidateId,
-    status: candidate.status,
-    ...(reasonCode ? { reasonCode } : {}),
-    ...(candidate.pendingFollowUpId ? { pendingFollowUpId: candidate.pendingFollowUpId } : {}),
-    ...(candidate.deliveryDisposition
-      ? { deliveryDisposition: candidate.deliveryDisposition }
-      : {}),
-    ...(candidate.status === 'deferred' && candidate.retryEligibleAtMs !== undefined
-      ? { retryEligibleAtMs: candidate.retryEligibleAtMs }
-      : {}),
-  };
-}
-
-function terminalOutcome(candidate: IcpInitiationCandidate): IcpInitiationSourceResult | null {
-  switch (candidate.status) {
-    case 'declined':
-      return result('deduped', candidate, candidate.reasonCode ?? 'candidate_declined');
-    case 'rejected':
-      return result('deduped', candidate, candidate.reasonCode);
-    case 'deferred':
-      return result('deduped', candidate, candidate.reasonCode ?? 'candidate_deferred');
-    case 'consumed':
-    case 'expired':
-    case 'cancelled':
-      return result('deduped', candidate, candidate.reasonCode);
-    case 'pending':
-    case 'permitted':
-      return null;
-  }
-}
-
-function transitionReason(
-  decision: IcpInitiationGateDecision,
-): { status: 'deferred' | 'rejected'; reasonCode: IcpAutonomyReasonCode } {
-  if (decision.reasonClass === 'deferrable') {
-    return { status: 'deferred', reasonCode: decision.reasonCode ?? 'candidate_deferred' };
-  }
-  return { status: 'rejected', reasonCode: decision.reasonCode ?? 'policy_denied' };
+  return deterministicIcpUuid(
+    'icp-candidate',
+    deriveIcpSourceIdentity(input, MAX_SOURCE_RECORD_ID_CHARS),
+  );
 }
 
 export function createIcpInitiationSourceRuntime(
@@ -347,28 +111,6 @@ export function createIcpInitiationSourceRuntime(
     }
   };
 
-  const transition = async (
-    candidate: IcpInitiationCandidate,
-    status: IcpInitiationCandidateStatus,
-    reasonCode?: IcpAutonomyReasonCode,
-    deliveryDisposition?: IcpInitiationCandidate['deliveryDisposition'],
-    claimToken?: string,
-  ): Promise<IcpInitiationCandidate> => {
-    const input: IcpInitiationCandidateTransitionInput = {
-      candidateId: candidate.candidateId,
-      expectedStatus: candidate.status,
-      expectedRevision: candidate.revision,
-      status,
-      ...(reasonCode ? { reasonCode } : {}),
-      ...(deliveryDisposition ? { deliveryDisposition } : {}),
-    };
-    const next = claimToken === undefined
-      ? await dependencies.store.transitionCandidate(input)
-      : await requireClaimTransition()(claimToken, input);
-    await emitLifecycle(next, candidate.status);
-    return next;
-  };
-
   const requireClaimTransition = () => {
     const claimedTransition = dependencies.store.transitionClaimedCandidate;
     if (!claimedTransition) {
@@ -376,6 +118,33 @@ export function createIcpInitiationSourceRuntime(
     }
     return claimedTransition.bind(dependencies.store);
   };
+
+  const applyTransition = async (
+    candidate: IcpInitiationCandidate,
+    input: IcpInitiationCandidateTransitionInput,
+    claimToken?: string,
+  ): Promise<IcpInitiationCandidate> => {
+    const next = claimToken === undefined
+      ? await dependencies.store.transitionCandidate(input)
+      : await requireClaimTransition()(claimToken, input);
+    await emitLifecycle(next, candidate.status);
+    return next;
+  };
+
+  const transition = async (
+    candidate: IcpInitiationCandidate,
+    status: IcpInitiationCandidateStatus,
+    reasonCode?: IcpAutonomyReasonCode,
+    deliveryDisposition?: IcpInitiationCandidate['deliveryDisposition'],
+    claimToken?: string,
+  ): Promise<IcpInitiationCandidate> => await applyTransition(candidate, {
+    candidateId: candidate.candidateId,
+    expectedStatus: candidate.status,
+    expectedRevision: candidate.revision,
+    status,
+    ...(reasonCode ? { reasonCode } : {}),
+    ...(deliveryDisposition ? { deliveryDisposition } : {}),
+  }, claimToken);
 
   const run = async (
     request: IcpInitiationSourceRequest,
@@ -400,12 +169,12 @@ export function createIcpInitiationSourceRuntime(
       && existingCandidate.peerContactId !== peer.contactId) {
       peer = await resolvePeer(existingCandidate.peerContactId);
     }
-    const identity = sourceIdentity({
+    const identity = deriveIcpSourceIdentity({
       localCompanionId: dependencies.localCompanionId,
       peerCompanionId: peer.peerCompanionId,
       request,
-    });
-    const provenanceRef = `icp-prov:${deterministicUuid('icp-provenance', identity)}`;
+    }, MAX_SOURCE_RECORD_ID_CHARS);
+    const provenanceRef = `icp-prov:${deterministicIcpUuid('icp-provenance', identity)}`;
     const rootInitiationId = request.cause.kind === 'independent'
       ? candidateId
       : request.cause.rootInitiationId;
@@ -414,7 +183,12 @@ export function createIcpInitiationSourceRuntime(
     }
     const targetChannelId = recoveryClaim?.candidate.targetChannelId
       ?? (request.preferredChannel === 'dm'
-        ? resolveChannelId(dependencies.localCompanionId, peer.peerCompanionId, request)
+        ? resolveIcpCandidateChannelId(
+            dependencies.localCompanionId,
+            peer.peerCompanionId,
+            request,
+            MAX_SOURCE_RECORD_ID_CHARS,
+          )
         : request.currentRoomChannelId);
     let proposed = recoveryClaim?.candidate ?? parseIcpInitiationCandidate({
       candidateId,
@@ -457,7 +231,7 @@ export function createIcpInitiationSourceRuntime(
         }
       }
     }
-    if (!recoveryClaim && !sameCandidate(candidate, proposed)) {
+    if (!recoveryClaim && !isSameIcpCandidate(candidate, proposed)) {
       // A deterministic identity collision or mutated source input is an
       // invariant violation. Never silently reuse another private motivation.
       throw new Error(`ICP candidate identity conflict for ${candidateId}`);
@@ -471,12 +245,12 @@ export function createIcpInitiationSourceRuntime(
         undefined,
         recoveryClaim?.claimToken,
       );
-      return result('deduped', expired, 'candidate_expired');
+      return toIcpSourceResult('deduped', expired, 'candidate_expired');
     }
     if (candidate.status === 'deferred') {
       const retryNow = now();
       if (candidate.retryEligibleAtMs === undefined || retryNow < candidate.retryEligibleAtMs) {
-        return result('deduped', candidate, candidate.reasonCode ?? 'candidate_deferred');
+        return toIcpSourceResult('deduped', candidate, candidate.reasonCode ?? 'candidate_deferred');
       }
       const pendingInput: IcpInitiationCandidateTransitionInput = {
         candidateId: candidate.candidateId,
@@ -485,13 +259,10 @@ export function createIcpInitiationSourceRuntime(
         status: 'pending',
         clearRetryEligibility: true,
       };
-      const pending = recoveryClaim
-        ? await requireClaimTransition()(recoveryClaim.claimToken, pendingInput)
-        : await dependencies.store.transitionCandidate(pendingInput);
-      await emitLifecycle(pending, candidate.status);
+      const pending = await applyTransition(candidate, pendingInput, recoveryClaim?.claimToken);
       candidate = pending;
     }
-    const terminal = terminalOutcome(candidate);
+    const terminal = terminalIcpSourceOutcome(candidate);
     if (terminal) return terminal;
     if (!dependencies.isExternalCompanionAuthorized()) {
       if (candidate.status === 'pending') {
@@ -502,7 +273,7 @@ export function createIcpInitiationSourceRuntime(
           undefined,
           recoveryClaim?.claimToken,
         );
-        return result('rejected', rejected, 'policy_denied');
+        return toIcpSourceResult('rejected', rejected, 'policy_denied');
       }
       throw new Error(`Cannot execute unauthorized ICP candidate from ${candidate.status}`);
     }
@@ -516,7 +287,7 @@ export function createIcpInitiationSourceRuntime(
       const execution = await dependencies.peers.executeCompanionOutreach(
         peer.contactId,
         candidate.permitId,
-        toCandidateOrigin(candidate),
+        toIcpCandidateOrigin(candidate),
         dependencies.isExternalCompanionAuthorized,
       );
       const consumed = await transition(
@@ -526,7 +297,10 @@ export function createIcpInitiationSourceRuntime(
         execution.disposition,
         recoveryClaim?.claimToken,
       );
-      return result(execution.disposition === 'delivered' ? 'sent' : 'suppressed', consumed);
+      return toIcpSourceResult(
+        execution.disposition === 'delivered' ? 'sent' : 'suppressed',
+        consumed,
+      );
     }
 
     const channelId = candidate.targetChannelId
@@ -544,7 +318,7 @@ export function createIcpInitiationSourceRuntime(
         undefined,
         recoveryClaim?.claimToken,
       );
-      return result('suppressed', cancelled, 'policy_denied');
+      return toIcpSourceResult('suppressed', cancelled, 'policy_denied');
     }
     const expireIfElapsed = async (): Promise<IcpInitiationCandidate | null> => {
       if (candidate.expiresAtMs > now()) return null;
@@ -583,10 +357,11 @@ export function createIcpInitiationSourceRuntime(
           reasonCode,
           retryAttempt: completedRetryAttempts,
         };
-        const cancelled = recoveryClaim
-          ? await requireClaimTransition()(recoveryClaim.claimToken, cancelledInput)
-          : await dependencies.store.transitionCandidate(cancelledInput);
-        await emitLifecycle(cancelled, candidate.status);
+        const cancelled = await applyTransition(
+          candidate,
+          cancelledInput,
+          recoveryClaim?.claimToken,
+        );
         return cancelled;
       }
       const retryAttempt = completedRetryAttempts + 1;
@@ -602,10 +377,11 @@ export function createIcpInitiationSourceRuntime(
           transitionNow + policy.retryCadenceMs,
         ),
       };
-      const deferred = recoveryClaim
-        ? await requireClaimTransition()(recoveryClaim.claimToken, deferredInput)
-        : await dependencies.store.transitionCandidate(deferredInput);
-      await emitLifecycle(deferred, candidate.status);
+      const deferred = await applyTransition(
+        candidate,
+        deferredInput,
+        recoveryClaim?.claimToken,
+      );
       return deferred;
     };
     let projection = toIcpInitiationCandidateSharedMetadata(candidate);
@@ -615,7 +391,7 @@ export function createIcpInitiationSourceRuntime(
     });
     const expiredAfterPreflight = await expireIfElapsed();
     if (expiredAfterPreflight) {
-      return result('deduped', expiredAfterPreflight, 'candidate_expired');
+      return toIcpSourceResult('deduped', expiredAfterPreflight, 'candidate_expired');
     }
     const reconcilingCommittedPermit = !preflight.eligible
       && preflight.reasonCode === 'invitation_outstanding';
@@ -623,9 +399,9 @@ export function createIcpInitiationSourceRuntime(
       if (preflight.reasonClass === 'deferrable') {
         const reasonCode = preflight.reasonCode ?? 'candidate_deferred';
         const deferred = await deferForCooldown(reasonCode);
-        return result('deferred', deferred, reasonCode);
+        return toIcpSourceResult('deferred', deferred, reasonCode);
       }
-      const denied = transitionReason(preflight);
+      const denied = resolveIcpTransitionDenial(preflight);
       const transitioned = await transition(
         candidate,
         denied.status,
@@ -633,7 +409,11 @@ export function createIcpInitiationSourceRuntime(
         undefined,
         recoveryClaim?.claimToken,
       );
-      return result(denied.status === 'deferred' ? 'deferred' : 'rejected', transitioned, denied.reasonCode);
+      return toIcpSourceResult(
+        denied.status === 'deferred' ? 'deferred' : 'rejected',
+        transitioned,
+        denied.reasonCode,
+      );
     }
 
     if (!dependencies.isExternalCompanionAuthorized()) {
@@ -644,7 +424,7 @@ export function createIcpInitiationSourceRuntime(
         undefined,
         recoveryClaim?.claimToken,
       );
-      return result('rejected', rejected, 'policy_denied');
+      return toIcpSourceResult('rejected', rejected, 'policy_denied');
     }
 
     // The authenticated Garden request is the explicit consent for a
@@ -655,11 +435,11 @@ export function createIcpInitiationSourceRuntime(
       const consent = await dependencies.consent.evaluate({ candidate, peer, channelId });
       const expiredAfterConsent = await expireIfElapsed();
       if (expiredAfterConsent) {
-        return result('deduped', expiredAfterConsent, 'candidate_expired');
+        return toIcpSourceResult('deduped', expiredAfterConsent, 'candidate_expired');
       }
       if (consent.action === 'defer') {
         const deferred = await deferForCooldown('candidate_deferred');
-        return result('deferred', deferred, 'candidate_deferred');
+        return toIcpSourceResult('deferred', deferred, 'candidate_deferred');
       }
       if (consent.action === 'decline') {
         const declined = await transition(
@@ -669,7 +449,7 @@ export function createIcpInitiationSourceRuntime(
           undefined,
           recoveryClaim?.claimToken,
         );
-        return result('declined', declined, 'candidate_declined');
+        return toIcpSourceResult('declined', declined, 'candidate_declined');
       }
     }
 
@@ -681,7 +461,7 @@ export function createIcpInitiationSourceRuntime(
         undefined,
         recoveryClaim?.claimToken,
       );
-      return result('rejected', rejected, 'policy_denied');
+      return toIcpSourceResult('rejected', rejected, 'policy_denied');
     }
 
     projection = toIcpInitiationCandidateSharedMetadata(candidate);
@@ -693,15 +473,15 @@ export function createIcpInitiationSourceRuntime(
     });
     const expiredAfterPermit = await expireIfElapsed();
     if (expiredAfterPermit) {
-      return result('deduped', expiredAfterPermit, 'candidate_expired');
+      return toIcpSourceResult('deduped', expiredAfterPermit, 'candidate_expired');
     }
     if (!permitResult.decision.eligible || !permitResult.permit) {
       if (permitResult.decision.reasonClass === 'deferrable') {
         const reasonCode = permitResult.decision.reasonCode ?? 'candidate_deferred';
         const deferred = await deferForCooldown(reasonCode);
-        return result('deferred', deferred, reasonCode);
+        return toIcpSourceResult('deferred', deferred, reasonCode);
       }
-      const denied = transitionReason(permitResult.decision);
+      const denied = resolveIcpTransitionDenial(permitResult.decision);
       const transitioned = await transition(
         candidate,
         denied.status,
@@ -709,7 +489,11 @@ export function createIcpInitiationSourceRuntime(
         undefined,
         recoveryClaim?.claimToken,
       );
-      return result(denied.status === 'deferred' ? 'deferred' : 'rejected', transitioned, denied.reasonCode);
+      return toIcpSourceResult(
+        denied.status === 'deferred' ? 'deferred' : 'rejected',
+        transitioned,
+        denied.reasonCode,
+      );
     }
 
     const permittedInput: IcpInitiationCandidateTransitionInput = {
@@ -719,14 +503,15 @@ export function createIcpInitiationSourceRuntime(
       status: 'permitted',
       permitId: permitResult.permit.permitId,
     };
-    const permitted = recoveryClaim
-      ? await requireClaimTransition()(recoveryClaim.claimToken, permittedInput)
-      : await dependencies.store.transitionCandidate(permittedInput);
-    await emitLifecycle(permitted, candidate.status);
+    const permitted = await applyTransition(
+      candidate,
+      permittedInput,
+      recoveryClaim?.claimToken,
+    );
     const execution = await dependencies.peers.executeCompanionOutreach(
       peer.contactId,
       permitResult.permit.permitId,
-      toCandidateOrigin(permitted),
+      toIcpCandidateOrigin(permitted),
       dependencies.isExternalCompanionAuthorized,
     );
     const consumed = await transition(
@@ -736,18 +521,39 @@ export function createIcpInitiationSourceRuntime(
       execution.disposition,
       recoveryClaim?.claimToken,
     );
-    return result(execution.disposition === 'delivered' ? 'sent' : 'suppressed', consumed);
+    return toIcpSourceResult(
+      execution.disposition === 'delivered' ? 'sent' : 'suppressed',
+      consumed,
+    );
   };
+
+  const resumeClaim = createIcpCandidateClaimRecovery({
+    localCompanionId: dependencies.localCompanionId,
+    now,
+    resolvePeer,
+    expire: async claim => {
+      const expired = await transition(
+        claim.candidate,
+        'expired',
+        'candidate_expired',
+        undefined,
+        claim.claimToken,
+      );
+      return toIcpSourceResult('deduped', expired, 'candidate_expired');
+    },
+    execute: async (request, peer, claim) => (
+      await run(request, peer, claim.candidate.candidateId, claim)
+    ),
+  });
 
   return {
     async submit(request) {
       const peer = await resolvePeer(request.peerContactId);
-      const identityInput = {
+      const candidateId = deriveIcpInitiationCandidateId({
         localCompanionId: dependencies.localCompanionId,
         peerCompanionId: peer.peerCompanionId,
         request,
-      };
-      const candidateId = deriveIcpInitiationCandidateId(identityInput);
+      });
       const existing = inFlight.get(candidateId);
       if (existing) return await existing;
       const pending = run(request, peer, candidateId);
@@ -758,44 +564,6 @@ export function createIcpInitiationSourceRuntime(
         if (inFlight.get(candidateId) === pending) inFlight.delete(candidateId);
       }
     },
-    async resumeClaim(claim) {
-      if (claim.candidate.localCompanionId !== dependencies.localCompanionId) {
-        throw new Error('ICP lifecycle claim belongs to another companion');
-      }
-      if (claim.candidate.expiresAtMs <= now()
-        && ['pending', 'deferred', 'permitted'].includes(claim.candidate.status)) {
-        const expired = await transition(
-          claim.candidate,
-          'expired',
-          'candidate_expired',
-          undefined,
-          claim.claimToken,
-        );
-        return result('deduped', expired, 'candidate_expired');
-      }
-      const peer = await resolvePeer(claim.candidate.peerContactId);
-      if (peer.peerCompanionId !== claim.candidate.peerCompanionId) {
-        throw new Error('ICP lifecycle claim peer binding no longer matches canonical contact');
-      }
-      const request: IcpInitiationSourceRequest = {
-        source: claim.candidate.source,
-        peerContactId: claim.candidate.peerContactId,
-        preferredChannel: claim.candidate.preferredChannel,
-        ...(claim.candidate.preferredChannel === 'current_room'
-          && claim.candidate.targetChannelId
-          ? { currentRoomChannelId: claim.candidate.targetChannelId }
-          : {}),
-        sourceRecordId: `lifecycle-claim:${claim.candidate.candidateId}`,
-        ...(claim.candidate.pendingFollowUpId
-          ? { pendingFollowUpId: claim.candidate.pendingFollowUpId }
-          : {}),
-        reasonSummary: claim.candidate.reasonSummary,
-        cause: claim.candidate.rootInitiationId === claim.candidate.candidateId
-          ? { kind: 'independent' }
-          : { kind: 'icp_conversation', rootInitiationId: claim.candidate.rootInitiationId },
-        ttlMs: claim.candidate.expiresAtMs - claim.candidate.createdAtMs,
-      };
-      return await run(request, peer, claim.candidate.candidateId, claim);
-    },
+    resumeClaim,
   };
 }

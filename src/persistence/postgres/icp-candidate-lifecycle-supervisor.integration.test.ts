@@ -152,13 +152,41 @@ describe('Postgres ICP candidate lifecycle supervisor', () => {
         revision: 1,
       });
 
+      await expect(storeA.claimDueCandidates({
+        nowMs,
+        claimLeaseMs: 60_000,
+        limit: 1,
+      })).resolves.toEqual([]);
+      await expect(storeA.transitionCandidate({
+        candidateId: '11111111-1111-4111-8111-111111111111',
+        expectedStatus: 'pending',
+        expectedRevision: 1,
+        status: 'rejected',
+        reasonCode: 'policy_denied',
+      })).resolves.toMatchObject({ status: 'rejected', revision: 2 });
+      await storeA.createCandidate({
+        candidateId: '33333333-3333-4333-8333-333333333333',
+        rootInitiationId: '33333333-3333-4333-8333-333333333333',
+        localCompanionId: LOCAL_COMPANION_ID,
+        peerContactId: 'peer-contact',
+        peerCompanionId: PEER_COMPANION_ID,
+        preferredChannel: 'dm',
+        source: 'foreground',
+        provenanceRef: 'icp-prov:33333333-3333-4333-8333-333333333333',
+        reasonSummary: 'Claim this stale pending candidate exactly once.',
+        createdAtMs: nowMs - 60_001,
+        expiresAtMs: nowMs + 60_000,
+        status: 'pending',
+        revision: 1,
+      });
+
       const [claimsA, claimsB] = await Promise.all([
         storeA.claimDueCandidates({ nowMs, claimLeaseMs: 60_000, limit: 1 }),
         storeB.claimDueCandidates({ nowMs, claimLeaseMs: 60_000, limit: 1 }),
       ]);
       expect([...claimsA, ...claimsB]).toHaveLength(1);
       expect([...claimsA, ...claimsB][0]?.candidate).toMatchObject({
-        candidateId: '11111111-1111-4111-8111-111111111111',
+        candidateId: '33333333-3333-4333-8333-333333333333',
         status: 'pending',
         revision: 2,
       });

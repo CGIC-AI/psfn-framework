@@ -54,12 +54,9 @@ export type CogSecChannelClass = typeof COGSEC_CHANNEL_CLASSES[number];
 
 /** Closed set of non-channel workflows governed by the CogSec owner file. */
 export const COGSEC_WORKFLOWS = [
-  'chat_ingress',
   'file_ingress',
   'web_fetch',
   'web_search',
-  'outbound_publication',
-  'internal_activity',
 ] as const;
 export type CogSecWorkflow = typeof COGSEC_WORKFLOWS[number];
 

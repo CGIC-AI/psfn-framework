@@ -435,8 +435,10 @@ export class AdminSessionDataService implements AdminSessionService {
     for (const sourceMessageId of normalizedSourceMessageIds) {
       const matches = this.deps.sessionStore.findLatestEntries(
         logicalSessionId,
-        entry => entry.discordMessageId === sourceMessageId
-          || resolveSessionEntryTurnContext(entry).sourceMessageId === sourceMessageId,
+        entry => entry.role === 'user' && (
+          entry.discordMessageId === sourceMessageId
+          || resolveSessionEntryTurnContext(entry).sourceMessageId === sourceMessageId
+        ),
         sessionEntryCount,
       );
       if (matches.length !== 1) {

@@ -135,6 +135,32 @@ describe('intake policy owner migration', () => {
     expect(loaded.sinkGates.sinks.trust_mutation.maxSourceRiskTier).toBe('standard');
   });
 
+  it('explicitly adds the required surface posture matrix to an older current owner', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-intake-policy-migration-'));
+    tempDirs.push(dataDir);
+    const filePath = join(dataDir, INTAKE_POLICY_FILE_NAME);
+    const current = JSON.parse(
+      readFileSync(join(process.cwd(), 'config', 'intake-policy.seed.json'), 'utf8'),
+    ) as Record<string, unknown>;
+    delete current.surfacePostures;
+    writeFileSync(filePath, `${JSON.stringify(current, null, 2)}\n`);
+
+    expect(() => loadIntakePolicyConfig(dataDir)).toThrow(/surfacePostures is required/);
+    expect(migrateIntakePolicyOwner({ dataDir })).toMatchObject({
+      status: 'planned',
+      addedPaths: ['surfacePostures'],
+    });
+    expect(migrateIntakePolicyOwner({ dataDir, apply: true })).toMatchObject({
+      status: 'applied',
+      addedPaths: ['surfacePostures'],
+    });
+    expect(loadIntakePolicyConfig(dataDir).surfacePostures).toMatchObject({
+      operatorAlertsRequired: true,
+      channelClasses: { group_chat: 'fast_pass_post_escalate' },
+      workflows: { web_search: 'enforce_full' },
+    });
+  });
+
   it('fails closed on malformed or ambiguous legacy sink maps', () => {
     const missingSink = makeOwner();
     const missingRaw = structuredClone(missingSink.legacy);
@@ -360,13 +386,13 @@ describe('intake policy owner migration', () => {
       status: 'planned',
       fromSchemaVersion: 5,
       toSchemaVersion: INTAKE_POLICY_SCHEMA_VERSION,
-      addedPaths: ['chatBodyHandling'],
+      addedPaths: ['chatBodyHandling', 'surfacePostures'],
       updatedPaths: ['l2Screener.mandatoryTiers'],
     });
     expect(migrateIntakePolicyOwner({ dataDir, apply: true })).toMatchObject({
       status: 'applied',
       fromSchemaVersion: 5,
-      addedPaths: ['chatBodyHandling'],
+      addedPaths: ['chatBodyHandling', 'surfacePostures'],
       updatedPaths: ['l2Screener.mandatoryTiers'],
     });
     expect(loadIntakePolicyConfig(dataDir).chatBodyHandling).toEqual({

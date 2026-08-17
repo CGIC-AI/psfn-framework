@@ -88,6 +88,20 @@ describe('evaluateSinkAccess (htm9.3)', () => {
     });
   });
 
+  it('preserves a structurally resolved enforcing surface through a shadow global baseline', () => {
+    const decision = evaluateSinkAccess(makePolicy('shadow'), 'memory_write', [makeSnapshot({
+      state: 'quarantined',
+      riskLabels: ['injection/override_attempt'],
+      enforcementPosture: 'enforce',
+    })]);
+
+    expect(decision).toMatchObject({
+      mode: 'enforce',
+      verdict: 'deny',
+      allowed: false,
+    });
+  });
+
   it.each(INTAKE_SINKS)(
     'records a shadow-mode quarantine catch while allowing content through %s',
     (sink) => {

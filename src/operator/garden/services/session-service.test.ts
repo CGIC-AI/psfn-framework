@@ -806,9 +806,16 @@ describe('AdminSessionDataService', () => {
     });
     store.append({
       channelId,
+      role: 'assistant',
+      content: 'assistant response shares the inbound turn provenance',
+      timestamp: 2,
+      discordMessageId: sourceMessageId,
+    });
+    store.append({
+      channelId,
       role: 'user',
       content: 'neighboring message stays intact',
-      timestamp: 2,
+      timestamp: 3,
       discordMessageId: 'transport-message-78',
     });
     const config = makeConfig({ dataDir: dir });
@@ -845,6 +852,7 @@ describe('AdminSessionDataService', () => {
     const remainingContent = store.getRecent(channelId, 10).map(entry => entry.content);
     expect(remainingContent).not.toContain('confirmed bad stream fragment');
     expect(remainingContent).toContain('neighboring message stays intact');
+    expect(remainingContent).toContain('assistant response shares the inbound turn provenance');
     expect(remainingContent.some(content => content.startsWith('[CogSec redaction:'))).toBe(true);
 
     await expect(service.previewCogSecRemediation({

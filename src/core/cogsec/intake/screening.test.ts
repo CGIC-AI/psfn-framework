@@ -158,8 +158,45 @@ describe('intake screening service (htm9.2)', () => {
       sourceChannelId: 'room-7',
       sourceMessageId: 'message-11',
       action: 'quarantine',
+      scores: expect.objectContaining({ 'l1.rules': expect.any(Number) }),
+      semanticTrace: {
+        l2: expect.objectContaining({ status: 'not_run' }),
+        l3: expect.objectContaining({ status: 'not_run' }),
+      },
     });
     expect(JSON.stringify(postEscalations[0])).not.toContain(HOSTILE_TEXT);
+  });
+
+  it('surfaces a durable post-escalation observer failure through fail-closed telemetry', async () => {
+    const onFailClosed = vi.fn();
+    const service = createIntakeScreeningService({
+      policy: makePolicy('strict'),
+      l1: createIntakeL1Scanner({ rulesPath: RULES_PATH, reloadCheckIntervalMs: -1 }),
+      escalation: {
+        escalate: vi.fn().mockResolvedValue({
+          kind: 'quarantine',
+          reason: 'confirmed hostile stream',
+          contribution: { riskLabels: [], scores: {}, extractedFields: {} },
+        }),
+      },
+      actor: 'test:intake-screening',
+      onPostEscalation: vi.fn().mockRejectedValue(new Error('incident store unavailable')),
+      onFailClosed,
+    });
+
+    await service.screen(CLEAN_TEXT, {
+      sourceClass: 'public_contact',
+      origin: { ref: 'discord:room-8:message-12' },
+      scope: 'context',
+      sourceChannelId: 'room-8',
+      sourceMessageId: 'message-12',
+      surface: { channelClass: 'group_chat' },
+    });
+
+    await vi.waitFor(() => expect(onFailClosed).toHaveBeenCalledWith(expect.objectContaining({
+      stage: 'escalation',
+      error: expect.stringContaining('post-escalation observer failed'),
+    })));
   });
 
   it('rejects an unknown explicitly claimed surface instead of inheriting a permissive mode', async () => {

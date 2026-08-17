@@ -54,12 +54,9 @@ describe('canonical CogSec enforcement matrix', () => {
         public_channel: 'enforce_full',
       },
       workflows: {
-        chat_ingress: 'enforce_full',
         file_ingress: 'enforce_full',
         web_fetch: 'enforce_full',
         web_search: 'enforce_full',
-        outbound_publication: 'enforce_full',
-        internal_activity: 'shadow_full',
       },
     } as const;
 

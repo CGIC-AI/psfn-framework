@@ -439,6 +439,8 @@ export interface IntakePostEscalationEvent {
   sourceMessageId: string;
   action: IntakeDecisionAction;
   riskLabels: readonly IntakeRiskLabel[];
+  scores: Readonly<Record<string, number>>;
+  semanticTrace: IntakeSemanticScreeningTrace;
   cogSecCaseId?: string;
   completedAtMs: number;
 }
@@ -1331,10 +1333,19 @@ export function createIntakeScreeningService(
       const action: IntakeDecisionAction = decision.kind === 'quarantine'
         ? 'quarantine'
         : final?.action ?? 'pass';
-      const riskLabels = decision.kind === 'contribution' || decision.kind === 'quarantine'
+      const deepRiskLabels = decision.kind === 'contribution' || decision.kind === 'quarantine'
         ? decision.contribution.riskLabels
         : final?.envelope.riskLabels ?? [];
+      const riskLabels = [...new Set([...prior.riskLabels, ...deepRiskLabels])];
+      const deepScores = decision.kind === 'contribution' || decision.kind === 'quarantine'
+        ? decision.contribution.scores
+        : final?.envelope.scores ?? {};
+      const scores = { ...prior.scores, ...deepScores };
+      const semanticTrace = decision.trace
+        ?? semanticLayersNotRun(`uninstrumented post-escalation result: ${decision.kind}`);
       const confirmedBad = decision.kind === 'quarantine'
+        || action === 'quarantine'
+        || action === 'block'
         || riskLabels.some(label => INTAKE_QUARANTINE_RISK_LABELS.includes(label));
       return {
         disposition: confirmedBad ? 'confirmed_bad' : 'clear',
@@ -1344,6 +1355,8 @@ export function createIntakeScreeningService(
         sourceMessageId,
         action,
         riskLabels: [...riskLabels],
+        scores,
+        semanticTrace,
         ...(final?.cogSecCaseId ? { cogSecCaseId: final.cogSecCaseId } : {}),
         completedAtMs: now(),
       };
@@ -1361,13 +1374,27 @@ export function createIntakeScreeningService(
         sourceMessageId,
         action: 'quarantine',
         riskLabels: [],
+        scores: { ...prior.scores },
+        semanticTrace: {
+          l2: { status: 'failed_closed', reason: 'post-escalation transport failed' },
+          l3: { status: 'failed_closed', reason: 'post-escalation transport failed' },
+        },
         completedAtMs: now(),
       };
+    }).then(event => {
+      log.info('Post-pass CogSec escalation completed', event);
+      return event;
     });
     void completion.then(async event => {
       try {
         await options.onPostEscalation?.(event);
       } catch (error) {
+        options.onFailClosed?.({
+          stage: 'escalation',
+          sourceClass: input.sourceClass,
+          error: `post-escalation observer failed: ${error instanceof Error ? error.message : String(error)}`,
+          timestamp: event.completedAtMs,
+        });
         log.error('Post-pass CogSec escalation observer failed', {
           envelopeId: event.envelopeId,
           sourceChannelId: event.sourceChannelId,

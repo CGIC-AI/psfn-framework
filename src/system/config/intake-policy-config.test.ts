@@ -99,15 +99,17 @@ describe('intake policy owner file', () => {
         channelClasses: { ...policy.surfacePostures.channelClasses, group_chat: 'disabled' },
       },
     }, INTAKE_POLICY_FILE_NAME)).toThrow(/group_chat must be one of/);
+    expect(() => validateIntakePolicy({
+      ...policy,
+      surfacePostures: { ...policy.surfacePostures, operatorAlertsRequired: false },
+    }, INTAKE_POLICY_FILE_NAME)).toThrow(/operatorAlertsRequired must be true/);
   });
 
-  it('safely derives a complete legacy matrix when the additive section is absent', () => {
+  it('requires an explicit migration when a current owner predates the posture matrix', () => {
     const policy = seedPolicy();
     const { surfacePostures: _absent, ...legacy } = policy;
-    const validated = validateIntakePolicy(legacy, INTAKE_POLICY_FILE_NAME);
-    expect(validated.surfacePostures.channelClasses.group_chat).toBe('shadow_full');
-    expect(validated.surfacePostures.workflows.web_search).toBe('shadow_full');
-    expect(validated.surfacePostures.operatorAlertsRequired).toBe(false);
+    expect(() => validateIntakePolicy(legacy, INTAKE_POLICY_FILE_NAME))
+      .toThrow(/surfacePostures is required/);
   });
 
   it('validates fail-closed URL scheme actions from the owner file', () => {

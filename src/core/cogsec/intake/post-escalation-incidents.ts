@@ -44,8 +44,13 @@ function deliveryFailure(error: unknown): 'failed' | 'unconfigured' {
   return toErrorMessage(error).includes('zero configured sinks') ? 'unconfigured' : 'failed';
 }
 
-function safeSummary(status: 'pending' | 'delivered' | 'failed' | 'unconfigured'): string {
-  return `Post-pass CogSec escalation requires operator review. Operator alert delivery: ${status}.`;
+function safeSummary(
+  disposition: IntakePostEscalationEvent['disposition'],
+  status: 'pending' | 'delivered' | 'failed' | 'unconfigured' | 'not_required',
+): string {
+  return disposition === 'clear'
+    ? 'Post-pass CogSec escalation completed clear. Operator alert not required.'
+    : `Post-pass CogSec escalation requires operator review. Operator alert delivery: ${status}.`;
 }
 
 export function createPostEscalationIncidentRecorder(
@@ -55,9 +60,6 @@ export function createPostEscalationIncidentRecorder(
   if (!companionName) throw new Error('Post-escalation alerts require a companion name');
 
   return async (event): Promise<PostEscalationIncidentEvidence> => {
-    if (event.disposition === 'clear') {
-      return { caseId: null, notification: 'not_required', durableEvidence: 'not_required' };
-    }
     const caseId = caseIdFor(event);
     const range = {
       sourceChannelId: event.sourceChannelId,
@@ -67,15 +69,21 @@ export function createPostEscalationIncidentRecorder(
     store.upsertEvent({
       caseId,
       type: 'intake_firewall',
-      severity: event.disposition === 'failed_closed' ? 'critical' : 'high',
-      status: 'open',
+      severity: event.disposition === 'clear'
+        ? 'low'
+        : event.disposition === 'failed_closed' ? 'critical' : 'high',
+      status: event.disposition === 'clear' ? 'applied' : 'open',
       sourceChannelId: event.sourceChannelId,
       affectedMessageRanges: [range],
-      actions: ['tombstone', 'search_exclude'],
+      actions: event.disposition === 'clear' ? [] : ['tombstone', 'search_exclude'],
       actor: 'system:cogsec-post-escalation',
-      safeAgentSummary: safeSummary('pending'),
-      operatorAlertDeliveryStatus: 'pending',
+      safeAgentSummary: safeSummary(
+        event.disposition,
+        event.disposition === 'clear' ? 'not_required' : 'pending',
+      ),
+      ...(event.disposition === 'clear' ? {} : { operatorAlertDeliveryStatus: 'pending' }),
     }, existing => ({
+      status: event.disposition === 'clear' ? 'applied' : 'open',
       affectedMessageRanges: [
         ...existing.affectedMessageRanges.filter(candidate => (
           candidate.sourceChannelId !== range.sourceChannelId
@@ -83,10 +91,19 @@ export function createPostEscalationIncidentRecorder(
         )),
         range,
       ],
-      actions: [...new Set([...existing.actions, 'tombstone' as const, 'search_exclude' as const])],
-      safeAgentSummary: safeSummary('pending'),
-      operatorAlertDeliveryStatus: 'pending',
+      actions: event.disposition === 'clear'
+        ? existing.actions
+        : [...new Set([...existing.actions, 'tombstone' as const, 'search_exclude' as const])],
+      safeAgentSummary: safeSummary(
+        event.disposition,
+        event.disposition === 'clear' ? 'not_required' : 'pending',
+      ),
+      ...(event.disposition === 'clear' ? {} : { operatorAlertDeliveryStatus: 'pending' }),
     }));
+
+    if (event.disposition === 'clear') {
+      return { caseId, notification: 'not_required', durableEvidence: 'recorded' };
+    }
 
     let notification: 'delivered' | 'failed' | 'unconfigured';
     try {
@@ -100,7 +117,9 @@ export function createPostEscalationIncidentRecorder(
           `Channel: ${event.sourceChannelId}`,
           `Source message: ${event.sourceMessageId}`,
           `Disposition: ${event.disposition}`,
-          `Scan evidence: ${event.riskLabels.length > 0 ? event.riskLabels.join(', ') : 'fail-closed screening failure'}`,
+          `Scan labels: ${event.riskLabels.length > 0 ? event.riskLabels.join(', ') : 'none'}`,
+          `Scan scores: ${Object.entries(event.scores).map(([key, value]) => `${key}=${value}`).join(', ') || 'none'}`,
+          `Deep layers: L2=${event.semanticTrace.l2.status}, L3=${event.semanticTrace.l3.status}`,
           'Use the structural source-message provenance for a surgical Garden preview before applying tombstones.',
         ].join('\n'),
       });
@@ -117,7 +136,7 @@ export function createPostEscalationIncidentRecorder(
 
     try {
       deps.cogSecEvents().updateEvent(caseId, {
-        safeAgentSummary: safeSummary(notification),
+        safeAgentSummary: safeSummary(event.disposition, notification),
         operatorAlertDeliveryStatus: notification,
       });
       return { caseId, notification, durableEvidence: 'recorded' };

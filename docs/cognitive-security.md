@@ -17,11 +17,10 @@ firewall is the pre-hoc half of that same system.
 > **Source wiring note.** L2/L3 escalation runs **gateway-side only**, through the
 > `IntakeEscalationPort` composed in
 > `src/boundary/gateway/intake/compose-screening.ts`; the agent process holds no
-> escalation port and stays L1-only by construction. When no provider backend
-> is resolvable, escalation is not composed and emits a warning only when no
-> configured surface requires deep screening. Any `fast_pass_post_escalate`
-> surface, and enforcing modes with non-empty `mandatoryTiers`, fail startup if
-> their deep-screening backend cannot be composed.
+> escalation port and stays L1-only by construction. Every declared surface
+> profile requires the provisioned L1.5 classifier and a resolvable deep-
+> screening backend; gateway startup fails instead of silently degrading a
+> `shadow_full`, `enforce_full`, or `fast_pass_post_escalate` surface.
 
 ## Global mode contract
 
@@ -1035,10 +1034,10 @@ silently ignores or aliases the retired keys.
 | `sourceLists` | all four empty | Operator-curated trusted/denied sites and people (flywheel target). |
 | `urlScanner.schemeActions` | `javascript`: deny; `data`: deny except inline images; `mailto`/`tel`: allow | Per-scheme URL-scanner treatment. Missing or invalid actions fail owner-file validation; unlisted schemes stay silent to avoid false positives in ordinary conversation. |
 
-Seed surface postures: operator-direct and internal-activity are
-`shadow_full`; private-direct, public-channel, chat/file/web/search ingress,
-and outbound publication are `enforce_full`; group-chat is
-`fast_pass_post_escalate`. `operatorAlertsRequired` is `true`. Channel classes
+Seed surface postures: operator-direct is `shadow_full`; private-direct,
+public-channel, and file/web/search ingress are `enforce_full`; group-chat is
+`fast_pass_post_escalate`. `operatorAlertsRequired` is required to be `true`.
+Channel classes
 come only from authenticated privacy/topology/contact context, and workflows
 come only from the owning call site; neither may be inferred from content.
 

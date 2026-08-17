@@ -26,11 +26,9 @@ import {
   COGSEC_WORKFLOWS,
   intakeEnforcementPosture,
   isCogSecMode,
-  type CogSecChannelClass,
   type CogSecMode,
   type CogSecSurfacePosture,
   type CogSecSurfacePostureMatrix,
-  type CogSecWorkflow,
   type IntakeEnforcementPosture,
 } from '../../shared/contracts/cogsec-mode.js';
 import { loadRequiredJson } from './load-or-seed.js';
@@ -115,25 +113,7 @@ export function intakeModeEnforcementPosture(mode: IntakeFirewallMode): IntakeEn
 
 export interface IntakeSurfacePosturesConfig extends CogSecSurfacePostureMatrix {
   /** Startup must prove at least one canonical operator notification sink. */
-  operatorAlertsRequired: boolean;
-}
-
-function legacySurfacePostures(mode: IntakeFirewallMode): IntakeSurfacePosturesConfig {
-  const defaultPosture: CogSecSurfacePosture = mode === 'shadow'
-    ? 'shadow_full'
-    : 'enforce_full';
-  return {
-    channelClasses: Object.fromEntries(
-      COGSEC_CHANNEL_CLASSES.map(channelClass => [channelClass, defaultPosture]),
-    ) as Record<CogSecChannelClass, CogSecSurfacePosture>,
-    workflows: Object.fromEntries(COGSEC_WORKFLOWS.map(workflow => [
-      workflow,
-      mode === 'boundary' && workflow === 'internal_activity'
-        ? 'shadow_full'
-        : defaultPosture,
-    ])) as Record<CogSecWorkflow, CogSecSurfacePosture>,
-    operatorAlertsRequired: false,
-  };
+  operatorAlertsRequired: true;
 }
 
 function validateSurfacePostureRecord<K extends string>(
@@ -167,19 +147,16 @@ function validateSurfacePostureRecord<K extends string>(
 function validateSurfacePostures(
   raw: unknown,
   sourcePath: string,
-  mode: IntakeFirewallMode,
 ): IntakeSurfacePosturesConfig {
-  // Additive compatibility for existing schema-v6 owners: their global mode
-  // expands to an exhaustive safe matrix until an operator writes this block.
-  if (raw === undefined) return legacySurfacePostures(mode);
+  if (raw === undefined) throw invalid(sourcePath, 'surfacePostures is required');
   if (!isRecord(raw)) throw invalid(sourcePath, 'surfacePostures must be an object');
   const knownKeys = ['channelClasses', 'workflows', 'operatorAlertsRequired'];
   const unknownKeys = Object.keys(raw).filter(key => !knownKeys.includes(key));
   if (unknownKeys.length > 0) {
     throw invalid(sourcePath, `surfacePostures has unsupported keys: ${unknownKeys.join(', ')}`);
   }
-  if (typeof raw.operatorAlertsRequired !== 'boolean') {
-    throw invalid(sourcePath, 'surfacePostures.operatorAlertsRequired must be a boolean');
+  if (raw.operatorAlertsRequired !== true) {
+    throw invalid(sourcePath, 'surfacePostures.operatorAlertsRequired must be true');
   }
   return {
     channelClasses: validateSurfacePostureRecord(
@@ -196,7 +173,7 @@ function validateSurfacePostures(
       'surfacePostures.workflows',
       'workflows',
     ),
-    operatorAlertsRequired: raw.operatorAlertsRequired,
+    operatorAlertsRequired: true,
   };
 }
 
@@ -1864,7 +1841,7 @@ export function validateIntakePolicy(raw: unknown, sourcePath: string): IntakePo
   return {
     schemaVersion: INTAKE_POLICY_SCHEMA_VERSION,
     mode: mode as IntakeFirewallMode,
-    surfacePostures: validateSurfacePostures(raw.surfacePostures, sourcePath, mode as IntakeFirewallMode),
+    surfacePostures: validateSurfacePostures(raw.surfacePostures, sourcePath),
     sourceRiskTiers,
     sourceLists: validateSourceLists(raw.sourceLists, sourcePath),
     urlScanner: validateIntakeUrlScannerPolicy(raw.urlScanner, sourcePath),

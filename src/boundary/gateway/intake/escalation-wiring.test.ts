@@ -789,7 +789,7 @@ describe('L2/L3 escalation wired into the live gateway screening path', () => {
     })).rejects.toThrow(/requires a resolvable pi-ai deep-screening backend/);
   });
 
-  it('composes without escalation (loud skip) in shadow mode with no backend', async () => {
+  it('fails startup when shadow-full posture has no deep-screening backend', async () => {
     const policy = seedPolicy({ mode: 'shadow' });
     const surfacePostures = policy.surfacePostures as {
       channelClasses: Record<string, unknown>;
@@ -799,20 +799,10 @@ describe('L2/L3 escalation wired into the live gateway screening path', () => {
       channelClasses: { ...surfacePostures.channelClasses, group_chat: 'shadow_full' },
     };
     const dirs = makeDataDirs(policy);
-    const composition = await composeGatewayIntakeScreening({
+    await expect(composeGatewayIntakeScreening({
       ...dirs,
       screenerBackend: null,
-    });
-    expect(composition.screening).not.toBeNull();
-    // A hostile-tier (L2/L3-mandatory) item screens L1-only — no escalation
-    // port exists, and screening still completes rather than erroring.
-    const result = await composition.screening!.screen(BENIGN_CONTENT, {
-      sourceClass: 'image_ocr',
-      origin: { ref: 'discord:channel-42:msg-9:attachment:0' },
-      scope: 'context',
-    });
-    expect(result.action).toBe('pass');
-    expect(result.envelope.scores).not.toHaveProperty(L2_SCREENER_SCANNER_ID);
-    await composition.dispose();
+      injectionBackendFactory: fakeInjectionBackendFactory,
+    })).rejects.toThrow(/requires a resolvable pi-ai deep-screening backend/);
   });
 });

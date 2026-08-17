@@ -38,7 +38,7 @@ import {
 } from '../../../core/cogsec/intake/quarantine-store.js';
 import { CogSecEventStore } from '../../../core/cogsec/events.js';
 import { resolveCogSecEventsPath, resolveIntakeQuarantinePath } from '../../../persistence/layout.js';
-import { loadIntakePolicyConfig, isIntakeEnforcingMode } from '../../../system/config/intake-policy-config.js';
+import { loadIntakePolicyConfig } from '../../../system/config/intake-policy-config.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import type { ProviderRuntime } from '../../../primitives/llm/provider-runtime.js';
 import { LLMRequestCapability } from '../../../primitives/llm/client-request-capability.js';
@@ -176,23 +176,19 @@ export async function composeGatewayIntakeScreening(input: {
 }): Promise<GatewayIntakeScreeningComposition> {
   const modelDir = resolveInjectionModelDir(input.env ?? process.env);
   const policy = loadIntakePolicyConfig(input.systemDataDir);
-  const enforcing = isIntakeEnforcingMode(policy.mode);
-  const postEscalationConfigured = [
+  const surfaceProfiles = [
     ...Object.values(policy.surfacePostures.channelClasses),
     ...Object.values(policy.surfacePostures.workflows),
-  ].includes('fast_pass_post_escalate');
+  ];
+  const postEscalationConfigured = surfaceProfiles.includes('fast_pass_post_escalate');
   if (postEscalationConfigured && !input.onPostEscalation) {
     throw new Error(
       'CogSec fast-pass post-escalation posture requires a durable completion/alert observer',
     );
   }
-  if (
-    postEscalationConfigured
-    && policy.surfacePostures.operatorAlertsRequired
-    && input.operatorAlerting?.status !== 'configured'
-  ) {
+  if (input.operatorAlerting?.status !== 'configured') {
     throw new Error(
-      'CogSec fast-pass post-escalation posture requires at least one configured operator alert sink',
+      'CogSec surface posture requires at least one configured operator alert sink',
     );
   }
   const screenerModels = resolveIntakeScreenerModels(input.config, {
@@ -233,7 +229,7 @@ export async function composeGatewayIntakeScreening(input: {
     : durableQuarantine;
 
   let classifier: InjectionClassifier | null = null;
-  let injectionClassifierDegraded = false;
+  const injectionClassifierDegraded = false;
   const injectionModelProvisioned = input.injectionBackendFactory != null
     || isInjectionModelProvisioned(modelDir);
   if (injectionModelProvisioned) {
@@ -252,7 +248,7 @@ export async function composeGatewayIntakeScreening(input: {
     // Treat it as broken state, not as the clean "not installed" case: an
     // interrupted download must never silently downgrade live screening.
     assertInjectionModelProvisioned(modelDir);
-  } else if (enforcing) {
+  } else {
     // FAIL CLOSED (cyy7l): an enforce-mode intake firewall that silently runs
     // on the deterministic L1 layer alone reports "armed" while the L1.5
     // injection classifier never scores anything. The ~700MiB weights are
@@ -260,25 +256,12 @@ export async function composeGatewayIntakeScreening(input: {
     // provisioning would otherwise pass this point degraded under an enforce
     // posture. Refuse to start until the weights are on disk.
     throw new Error(
-      `Intake firewall mode=${policy.mode} (enforcing) but the L1.5 injection classifier weights `
+      `Configured CogSec surface posture requires L1.5, but the injection classifier weights `
       + `are not provisioned at ${modelDir}. Provision them onto every deploy `
       + "target's model-cache before startup — "
       + `\`npm run provision:injection-model -- --dest ${modelDir}\` — then `
-      + 'restart the gateway. Refusing to run an enforce-mode intake firewall '
-      + 'on L1 scanners alone (no silent L1-only operation under boundary/strict).',
-    );
-  } else {
-    // shadow mode: a single loud, structured startup warning (never
-    // per-message) plus a degraded-capability flag on the composition so
-    // intake health surfaces can show the firewall is screening without L1.5.
-    injectionClassifierDegraded = true;
-    log.warn(
-      'Intake L1.5 injection classifier weights are not provisioned; gateway '
-      + 'intake screening runs on the deterministic L1 layer alone (DEGRADED). '
-      + 'Tolerated only because intake mode=shadow — provision the weights onto '
-      + 'the model-cache before switching to enforce (enforce fails closed here): '
-      + '`npm run provision:injection-model`.',
-      { modelDir, mode: policy.mode, injectionClassifierDegraded: true },
+      + 'restart the gateway. Refusing to run a declared full-stack posture '
+      + 'on L1 scanners alone.',
     );
   }
 
@@ -292,69 +275,32 @@ export async function composeGatewayIntakeScreening(input: {
   //                    (same posture as the vision screener below). Otherwise
   //                    the escalation layers are skipped LOUDLY (same posture
   //                    as unprovisioned L1.5 weights).
-  let backend = input.screenerBackend ?? null;
-  if (backend && !input.screenerTestCompletion) {
-    try {
-      assertScreenerBackendReady(backend, [
-        screenerModels.l2,
-        ...screenerModels.l3,
-        ...(screenerModels.vision ? [screenerModels.vision] : []),
-      ]);
-    } catch (error) {
-      if (enforcing) throw error;
-      log.warn(
-        'Intake pi-ai screener backend failed credential/model preflight; '
-        + `screeners remain disabled in shadow mode: ${error instanceof Error ? error.message : String(error)}`,
-      );
-      backend = null;
-    }
-  }
-  let escalation: IntakeEscalationPort | null = null;
-  if (backend) {
-    // Multi-writer JSON store (same file the gateway core, contact-block
-    // gate, and Garden use); reloads from disk per operation, so a second
-    // instance here is safe.
-    const cogSecEvents = new CogSecEventStore(
-      resolveCogSecEventsPath(input.companionDataDir),
-    );
-    escalation = createGatewayIntakeEscalationPort({
-      policy,
-      l2Model: screenerModels.l2,
-      l3Models: screenerModels.l3,
-      backend,
-      quarantine,
-      cogSecEvents,
-      ...(input.screenerTestCompletion
-        ? { testCompletion: input.screenerTestCompletion }
-        : {}),
-      ...(input.onFailClosedScreening
-        ? { onFailClosed: input.onFailClosedScreening }
-        : {}),
-    });
-  } else {
-    const mandatoryTiers = [...new Set([
-      ...policy.l2Screener.mandatoryTiers,
-      ...policy.l3Screener.mandatoryTiers,
-    ])];
-    if (postEscalationConfigured) {
-      throw new Error(
-        'CogSec fast-pass post-escalation posture requires a resolvable pi-ai deep-screening backend',
-      );
-    }
-    if (enforcing && mandatoryTiers.length > 0) {
-      throw new Error(
-        `Intake policy mandates L2/L3 deep screening for tiers [${mandatoryTiers.join(', ')}] `
-        + `with mode=${policy.mode} (enforcing) but no pi-ai provider backend is resolvable. `
-        + 'Configure the selected models and provider credentials or remove the l2Screener/l3Screener '
-        + 'mandatoryTiers from intake-policy.json.',
-      );
-    }
-    log.warn(
-      'Intake L2/L3 escalation screeners have no pi-ai provider backend; gateway '
-      + 'intake screening runs without escalation. Configure the selected models '
-      + 'and provider credentials to enable L2/L3.',
+  const backend = input.screenerBackend ?? null;
+  if (!backend) {
+    throw new Error(
+      'Configured CogSec surface posture requires a resolvable pi-ai deep-screening backend',
     );
   }
+  if (!input.screenerTestCompletion) {
+    assertScreenerBackendReady(backend, [
+      screenerModels.l2,
+      ...screenerModels.l3,
+      ...(screenerModels.vision ? [screenerModels.vision] : []),
+    ]);
+  }
+  // Multi-writer JSON store (same file the gateway core, contact-block gate,
+  // and Garden use); reloads from disk per operation.
+  const cogSecEvents = new CogSecEventStore(resolveCogSecEventsPath(input.companionDataDir));
+  const escalation: IntakeEscalationPort = createGatewayIntakeEscalationPort({
+    policy,
+    l2Model: screenerModels.l2,
+    l3Models: screenerModels.l3,
+    backend,
+    quarantine,
+    cogSecEvents,
+    ...(input.screenerTestCompletion ? { testCompletion: input.screenerTestCompletion } : {}),
+    ...(input.onFailClosedScreening ? { onFailClosed: input.onFailClosedScreening } : {}),
+  });
 
   const screening = createIntakeScreeningService({
     policy,
@@ -367,7 +313,7 @@ export async function composeGatewayIntakeScreening(input: {
         },
       }
       : {}),
-    ...(escalation ? { escalation } : {}),
+    escalation,
     quarantine,
     actor: 'gateway:intake-screening',
     ...(input.onFailClosedScreening ? { onFailClosed: input.onFailClosedScreening } : {}),
@@ -384,68 +330,53 @@ export async function composeGatewayIntakeScreening(input: {
   // disabled                 → not wired (pre-htm9.8 behavior, explicit knob).
   let visionIntake: GatewayVisionIntakeScreener | null = null;
   if (policy.visionScreener.enabled) {
-    if (backend) {
-      visionIntake = {
-        screenImage: async (request) => toVisionIntakeImageScreenResult(
-          await evaluateVisionIntake({
-            image: request.image,
-            origin: {
-              ref: request.originRef.slice(0, 2048),
-              ...(request.originDetail !== undefined
-                ? { detail: request.originDetail.slice(0, COGSEC_ORIGIN_DETAIL_MAX_CHARS) }
-                : {}),
-            },
-            ...(request.subjectIndex !== undefined
-              ? { subject: { kind: 'attachment', index: request.subjectIndex } }
+    visionIntake = {
+      screenImage: async (request) => toVisionIntakeImageScreenResult(
+        await evaluateVisionIntake({
+          image: request.image,
+          origin: {
+            ref: request.originRef.slice(0, 2048),
+            ...(request.originDetail !== undefined
+              ? { detail: request.originDetail.slice(0, COGSEC_ORIGIN_DETAIL_MAX_CHARS) }
               : {}),
-            ...(request.canonicalContactId !== undefined
-              ? { canonicalContactId: request.canonicalContactId }
-              : {}),
-            policy,
-            model: screenerModels.vision!,
-            screening,
-            backend,
-            quarantine,
-            ...(input.screenerTestCompletion
-              ? { testCompletion: input.screenerTestCompletion }
-              : {
-                  materializeImage: async (image: VisionIntakeImageInput) => {
-                    if (!image.url) return image;
-                    const remote = await fetchRemoteImageBinary(
-                      image.url,
-                      input.config,
-                      globalThis.fetch,
-                    );
-                    return {
-                      dataBase64: Buffer.from(remote.bytes).toString('base64'),
-                      mimeType: remote.contentType,
-                    };
-                  },
-                }),
-          }),
-        ),
-      };
-    } else if (enforcing) {
-      throw new Error(
-        `Intake vision screener is enabled with mode=${policy.mode} (enforcing) but no pi-ai `
-        + 'provider backend is resolvable from providers.json/models.json. '
-        + 'Configure the selected providers or set intake-policy.json '
-        + 'visionScreener.enabled=false.',
-      );
-    } else {
-      log.warn(
-        'Intake vision screener is enabled but no pi-ai provider backend is resolvable; '
-        + 'images pass UNSCREENED in shadow mode. Configure the selected vision model '
-        + 'and provider credentials to enable image screening.',
-      );
-    }
+          },
+          ...(request.subjectIndex !== undefined
+            ? { subject: { kind: 'attachment', index: request.subjectIndex } }
+            : {}),
+          ...(request.canonicalContactId !== undefined
+            ? { canonicalContactId: request.canonicalContactId }
+            : {}),
+          policy,
+          model: screenerModels.vision!,
+          screening,
+          backend,
+          quarantine,
+          ...(input.screenerTestCompletion
+            ? { testCompletion: input.screenerTestCompletion }
+            : {
+                materializeImage: async (image: VisionIntakeImageInput) => {
+                  if (!image.url) return image;
+                  const remote = await fetchRemoteImageBinary(
+                    image.url,
+                    input.config,
+                    globalThis.fetch,
+                  );
+                  return {
+                    dataBase64: Buffer.from(remote.bytes).toString('base64'),
+                    mimeType: remote.contentType,
+                  };
+                },
+              }),
+        }),
+      ),
+    };
   }
 
   log.info('Gateway intake screening composed', {
     mode: policy.mode,
     l15Enabled: classifier !== null,
     l15Degraded: injectionClassifierDegraded,
-    escalationWired: escalation !== null,
+    escalationWired: true,
     visionScreenerEnabled: policy.visionScreener.enabled,
     visionIntakeWired: visionIntake !== null,
   });

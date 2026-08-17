@@ -284,10 +284,11 @@ export function evaluateSinkAccess(
   // the message boundary. One enforcing envelope is sufficient to retain the
   // global enforce behavior; only an entirely observe-only set may pass a
   // policy denial for telemetry.
-  const mode = globalMode === 'shadow'
-    || envelopes.every(envelope => envelope.enforcementPosture === 'shadow')
+  const mode = envelopes.every(envelope => envelope.enforcementPosture === 'shadow')
     ? 'shadow'
-    : 'enforce';
+    : envelopes.some(envelope => envelope.enforcementPosture === 'enforce')
+      ? 'enforce'
+      : globalMode;
 
   const denials: Array<{ envelopeId: string; reason: string }> = [];
   for (const envelope of envelopes) {

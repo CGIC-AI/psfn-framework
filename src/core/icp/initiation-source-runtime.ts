@@ -25,10 +25,10 @@ import {
   terminalIcpSourceOutcome,
   toIcpCandidateOrigin,
   toIcpSourceResult,
-  type IcpInitiationCause as IcpInitiationCauseContract,
+  type IcpInitiationCause,
   type IcpInitiationSourceAcceptance,
-  type IcpInitiationSourceGatewayPort as IcpInitiationSourceGatewayPortContract,
-  type IcpInitiationSourcePeerPort as IcpInitiationSourcePeerPortContract,
+  type IcpInitiationSourceGatewayPort,
+  type IcpInitiationSourcePeerPort,
   type IcpInitiationSourceRequest,
   type IcpInitiationSourceResult,
   type IcpInitiationSourceRuntime,
@@ -36,19 +36,18 @@ import {
 } from './initiation-source-support.js';
 
 export type {
+  IcpInitiationCause,
   IcpInitiationConsent,
   IcpInitiationConsentEvaluator,
+  IcpInitiationSourceGatewayPort,
   IcpInitiationSourceOutcome,
+  IcpInitiationSourcePeerPort,
   IcpInitiationSourceAcceptanceRuntime,
   IcpInitiationSourceRequest,
   IcpInitiationSourceResult,
   IcpInitiationSourceRuntime,
   IcpInitiationSourceRuntimeDependencies,
 } from './initiation-source-support.js';
-
-export type IcpInitiationCause = IcpInitiationCauseContract;
-export type IcpInitiationSourceGatewayPort = IcpInitiationSourceGatewayPortContract;
-export type IcpInitiationSourcePeerPort = IcpInitiationSourcePeerPortContract;
 
 const log = createComponentLogger('IcpInitiationSource');
 const DEFAULT_CANDIDATE_TTL_MS = 24 * 60 * 60_000;
@@ -81,12 +80,14 @@ export function createIcpInitiationSourceRuntime(
     maxRetryAttempts: MAX_ICP_INITIATION_RETRY_ATTEMPTS,
     permitTtlMs: DEFAULT_PERMIT_TTL_MS,
   };
+  const peerPort: IcpInitiationSourcePeerPort = dependencies.peers;
+  const gatewayPort: IcpInitiationSourceGatewayPort = dependencies.gateway;
   const inFlight = new Map<string, {
     acceptance: Promise<IcpInitiationSourceAcceptance>;
     completion: Promise<IcpInitiationSourceResult>;
   }>();
   const resolvePeer = async (contactId: string): Promise<KnownCompanionPeer> => {
-    const peer = await dependencies.peers.resolveKnownPeer(contactId);
+    const peer = await peerPort.resolveKnownPeer(contactId);
     if (peer.contactId !== contactId) {
       throw new Error('Resolved ICP peer contact does not match the requested canonical contact');
     }
@@ -230,9 +231,10 @@ export function createIcpInitiationSourceRuntime(
       request,
     }, MAX_SOURCE_RECORD_ID_CHARS);
     const provenanceRef = `icp-prov:${deterministicIcpUuid('icp-provenance', identity)}`;
-    const rootInitiationId = request.cause.kind === 'independent'
+    const cause: IcpInitiationCause = request.cause;
+    const rootInitiationId = cause.kind === 'independent'
       ? candidateId
-      : request.cause.rootInitiationId;
+      : cause.rootInitiationId;
     if (!isRfc4122Uuid(rootInitiationId)) {
       throw new Error('Inherited ICP rootInitiationId must be a lowercase RFC-4122 UUID');
     }
@@ -356,7 +358,7 @@ export function createIcpInitiationSourceRuntime(
       if (!dependencies.isExternalCompanionAuthorized()) {
         throw new Error('companion outreach authorization is unavailable during permit recovery');
       }
-      const execution = await dependencies.peers.executeCompanionOutreach(
+      const execution = await peerPort.executeCompanionOutreach(
         peer.contactId,
         candidate.permitId,
         toIcpCandidateOrigin(candidate),
@@ -416,7 +418,7 @@ export function createIcpInitiationSourceRuntime(
       return deferred;
     };
     let projection = toIcpInitiationCandidateSharedMetadata(candidate);
-    const preflight = await dependencies.gateway.companionInitiationPreflight({
+    const preflight = await gatewayPort.companionInitiationPreflight({
       candidate: projection,
       channelId,
     });
@@ -497,7 +499,7 @@ export function createIcpInitiationSourceRuntime(
 
     projection = toIcpInitiationCandidateSharedMetadata(candidate);
     const permitRequestNow = now();
-    const permitResult = await dependencies.gateway.companionIssueInitiationPermit({
+    const permitResult = await gatewayPort.companionIssueInitiationPermit({
       candidate: projection,
       channelId,
       permitExpiresAtMs: Math.min(candidate.expiresAtMs, permitRequestNow + policy.permitTtlMs),
@@ -539,7 +541,7 @@ export function createIcpInitiationSourceRuntime(
       permittedInput,
       recoveryClaim?.claimToken,
     );
-    const execution = await dependencies.peers.executeCompanionOutreach(
+    const execution = await peerPort.executeCompanionOutreach(
       peer.contactId,
       permitResult.permit.permitId,
       toIcpCandidateOrigin(permitted),

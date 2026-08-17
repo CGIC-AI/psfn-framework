@@ -50,6 +50,8 @@ import type { CompanionAvailabilityStorePort } from '../core/agent/companion-ava
 import { PostgresCompanionPresenceStore } from './postgres/companion-presence-store.js';
 import { PostgresIcpInitiationCandidateStore } from './postgres/icp-initiation-candidate-store.js';
 import type { IcpInitiationCandidateStorePort } from '../core/icp/autonomy-store-ports.js';
+import { PostgresIcpFeltImpulseFunnelStore } from './postgres/icp-felt-impulse-funnel-store.js';
+import type { IcpFeltImpulseFunnelStorePort } from '../core/icp/felt-impulse-funnel.js';
 import type { CompanionPresenceStorePort } from '../core/agent/companion-presence-store-port.js';
 import { PostgresSocialPotStore } from './postgres/social-pot-store.js';
 import type { SocialPotPort } from '../core/agent/fatigue/social-pot.js';
@@ -131,6 +133,8 @@ export interface AgentPersistenceRuntime {
   companionPresenceStore?: CompanionPresenceStorePort;
   /** Companion-private durable ICP motivation; multi-companion only. */
   icpInitiationCandidateStore?: IcpInitiationCandidateStorePort;
+  /** Content-free exactly-once provenance for qualified felt-impulse fires. */
+  icpFeltImpulseFunnelStore: IcpFeltImpulseFunnelStorePort;
   /**
    * Gateway-owned per-companion social pot (shared schema). The durable
    * authority for the fatigue-economy budget that funds group participation and
@@ -271,6 +275,13 @@ export async function createAgentPersistenceRuntime(
         }),
       )
     : undefined;
+  const icpFeltImpulseFunnelStore = await awaitPostgresStoreReadiness(
+    'icp_felt_impulse_funnel',
+    () => PostgresIcpFeltImpulseFunnelStore.connect(databaseUrl, {
+      schema,
+      role: tenantRole,
+    }),
+  );
   // Per-companion social pot lives in the shared schema (gateway-owned budget,
   // never a companion-local store). Multi-companion only, like presence above.
   const socialPotStore = options.config.multiCompanion === true
@@ -411,6 +422,7 @@ export async function createAgentPersistenceRuntime(
       'partner_affect_shadow',
       () => PostgresPartnerAffectShadowStore.connect(databaseUrl, { schema, role: tenantRole }),
     ),
+    icpFeltImpulseFunnelStore,
     ...(companionPresenceStore ? { companionPresenceStore } : {}),
     ...(icpInitiationCandidateStore ? { icpInitiationCandidateStore } : {}),
     ...(socialPotStore ? { socialPotStore } : {}),

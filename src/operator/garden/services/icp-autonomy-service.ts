@@ -1,5 +1,6 @@
 import type { IcpInitiationCandidateStorePort } from '../../../core/icp/autonomy-store-ports.js';
 import type { IcpAutonomyRuntimeEnablement } from '../../../core/icp/runtime-enablement.js';
+import type { IcpFeltImpulseFunnelStorePort } from '../../../core/icp/felt-impulse-funnel.js';
 import type { IcpAdminProjectionStore } from '../../../persistence/postgres/icp-admin-projection-store.js';
 import type { IcpAutonomyReasonCode } from '../../../shared/contracts/icp-autonomy.js';
 import { isRecord } from '../../../shared/utils/types.js';
@@ -28,6 +29,7 @@ export interface AdminIcpAutonomyServiceDependencies {
   localCompanionId?: string;
   candidateStore?: IcpInitiationCandidateStorePort | null;
   projectionStore?: IcpAdminProjectionStore | null;
+  feltImpulseFunnelStore?: IcpFeltImpulseFunnelStorePort | null;
   runtimeEnablement: IcpAutonomyRuntimeEnablement;
   settingsService: AdminSettingsService;
   operatorLeaseTtlMs: number;
@@ -303,6 +305,9 @@ export class AdminIcpAutonomyDataService implements AdminIcpAutonomyService {
     const companionPeerContactCount = this.deps.countCompanionPeerContacts
       ? await this.deps.countCompanionPeerContacts()
       : null;
+    const feltImpulseFunnel = this.deps.feltImpulseFunnelStore
+      ? await this.deps.feltImpulseFunnelStore.readProjection(ADMIN_ICP_LIMIT)
+      : null;
     // Truthful per-gate attribution (hrmrq.34): 'disabled' distinguishes the
     // scheduler.json owner flag from the in-process emergency fence;
     // 'unavailable_topology' names the single-companion (or unprovisioned
@@ -373,6 +378,7 @@ export class AdminIcpAutonomyDataService implements AdminIcpAutonomyService {
       fatigue,
       costs,
       costProjection: projection.costProjection,
+      feltImpulseFunnel,
       delivery,
       reasonCounts: [...reasonCounts.entries()]
         .map(([reasonCode, count]) => ({ reasonCode, count }))

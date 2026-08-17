@@ -9,6 +9,7 @@ import type {
   IcpInitiationSource,
 } from '../../../../shared/contracts/icp-autonomy.js';
 import type { IcpConversationCostBreakerDecisionReason } from '../../../../shared/telemetry/model-usage.js';
+import type { IcpFeltImpulseFunnelProjection } from '../../../../core/icp/felt-impulse-funnel.js';
 import type { EffectiveIcpAutonomySettingsState } from './settings.js';
 
 export interface AdminIcpCandidateView {
@@ -191,6 +192,8 @@ export interface AdminIcpAutonomyData {
   costs: AdminIcpCostView[];
   /** Optional cost analytics never decide availability of the ICP control plane. */
   costProjection: AdminIcpCostProjectionStatus;
+  /** Bounded, content-free durable outcomes for qualified affect-driven initiations. */
+  feltImpulseFunnel: IcpFeltImpulseFunnelProjection | null;
   /**
    * Trustworthy content-free delivery telemetry: current availability plus
    * initiation/message lifecycle counts and the most recent resolved outcome.

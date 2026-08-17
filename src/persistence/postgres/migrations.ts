@@ -1354,6 +1354,43 @@ export const POSTGRES_INTENTION_MIGRATIONS = [
     CHECK (source IN (
       'free_time', 'weighted_thought', 'intention', 'foreground', 'felt_impulse', 'operator_test'
     ));`,
+  // Content-free exactly-once provenance for every qualified felt-impulse
+  // fire. Candidate lifecycle stays canonical in icp_initiation_candidates;
+  // this table stores only the immutable fire disposition or candidate link.
+  `
+  CREATE TABLE IF NOT EXISTS icp_felt_impulse_funnel_outcomes (
+    correlation_id TEXT PRIMARY KEY,
+    fired_at_ms BIGINT NOT NULL CHECK (fired_at_ms >= 0),
+    recorded_at_ms BIGINT NOT NULL CHECK (recorded_at_ms >= 0),
+    outcome TEXT NOT NULL CHECK (outcome IN (
+      'no_eligible_peer', 'not_authorized', 'throttled', 'candidate_linked'
+    )),
+    next_eligible_at_ms BIGINT,
+    candidate_id UUID REFERENCES icp_initiation_candidates(candidate_id) ON DELETE RESTRICT,
+    candidate_outcome TEXT CHECK (candidate_outcome IN ('submitted', 'deduped')),
+    CHECK (
+      correlation_id ~ '^felt-impulse:would_message:[0-9]+$'
+      AND char_length(correlation_id) <= char_length('felt-impulse:would_message:')
+        + char_length('9007199254740991')
+      AND substring(
+        correlation_id FROM char_length('felt-impulse:would_message:') + 1
+      ) = fired_at_ms::TEXT
+    ),
+    CHECK (
+      (outcome = 'throttled') = (next_eligible_at_ms IS NOT NULL)
+      AND (next_eligible_at_ms IS NULL OR next_eligible_at_ms > recorded_at_ms)
+    ),
+    CHECK (
+      (outcome = 'candidate_linked')
+      = (candidate_id IS NOT NULL AND candidate_outcome IS NOT NULL)
+    )
+  );
+  `,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_icp_felt_impulse_funnel_candidate
+    ON icp_felt_impulse_funnel_outcomes (candidate_id)
+    WHERE candidate_id IS NOT NULL;`,
+  `CREATE INDEX IF NOT EXISTS idx_icp_felt_impulse_funnel_recent
+    ON icp_felt_impulse_funnel_outcomes (fired_at_ms DESC, correlation_id);`,
 ];
 
 export const POSTGRES_AUDIT_MIGRATIONS = [

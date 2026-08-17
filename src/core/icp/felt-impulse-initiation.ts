@@ -25,8 +25,12 @@ import { createComponentLogger } from '../../shared/logger.js';
 import type { EmotionProactiveTransitionEvent, EventBus } from '../../shared/event-bus.js';
 import type { KnownCompanionPeerAvailability } from './agent-facing-autonomy.js';
 import type {
-  IcpInitiationSourceResult,
-  IcpInitiationSourceRuntime,
+  IcpFeltImpulseFunnelRecord,
+  IcpFeltImpulseFunnelStorePort,
+} from './felt-impulse-funnel.js';
+import type {
+  IcpInitiationSourceAcceptance,
+  IcpInitiationSourceAcceptanceRuntime,
 } from './initiation-source-runtime.js';
 
 const log = createComponentLogger('IcpFeltImpulse');
@@ -42,7 +46,7 @@ export interface FeltImpulseLeverSignal {
 }
 
 export type IcpFeltImpulseOutcome =
-  | { kind: 'submitted'; peerContactId: string; result: IcpInitiationSourceResult }
+  | { kind: 'submitted'; peerContactId: string; result: IcpInitiationSourceAcceptance }
   | { kind: 'no_eligible_peer' }
   | { kind: 'throttled'; nextEligibleAtMs: number }
   | { kind: 'deduped'; candidateId: string }
@@ -53,13 +57,14 @@ export interface IcpFeltImpulseInitiationAdapter {
 }
 
 export interface IcpFeltImpulseInitiationDeps {
-  sourceRuntime: IcpInitiationSourceRuntime;
+  sourceRuntime: IcpInitiationSourceAcceptanceRuntime;
   peers: {
     listKnownPeerAvailability(): Promise<KnownCompanionPeerAvailability[]>;
   };
   /** Runtime enablement AND capability tier, both re-checked per impulse. */
   isAuthorized(): boolean;
   eventBus?: EventBus;
+  funnelStore: IcpFeltImpulseFunnelStorePort;
   now?: () => number;
   minIntervalMs?: number;
 }
@@ -72,6 +77,21 @@ export function createIcpFeltImpulseInitiationAdapter(
   let lastSubmittedAtMs = 0;
   let lastCompleted: { correlationId: string; candidateId: string } | null = null;
   const inFlight = new Map<string, Promise<IcpFeltImpulseOutcome>>();
+
+  const replayDurableOutcome = (
+    record: IcpFeltImpulseFunnelRecord,
+  ): IcpFeltImpulseOutcome => {
+    switch (record.outcome) {
+      case 'no_eligible_peer':
+        return { kind: 'no_eligible_peer' };
+      case 'not_authorized':
+        return { kind: 'not_authorized' };
+      case 'throttled':
+        return { kind: 'throttled', nextEligibleAtMs: record.nextEligibleAtMs };
+      case 'candidate_linked':
+        return { kind: 'deduped', candidateId: record.candidateId };
+    }
+  };
 
   const emitOutcome = async (payload: {
     correlationId: string;
@@ -117,6 +137,8 @@ export function createIcpFeltImpulseInitiationAdapter(
   };
 
   const processSignal = async (signal: FeltImpulseLeverSignal): Promise<IcpFeltImpulseOutcome> => {
+    const durableOutcome = await deps.funnelStore.getOutcome(signal.correlationId);
+    if (durableOutcome) return replayDurableOutcome(durableOutcome);
     await emitTransition(signal, { stage: 'felt_impulse', outcome: 'received' });
     const completedCandidateId = lastCompleted?.correlationId === signal.correlationId
       ? lastCompleted.candidateId
@@ -137,20 +159,33 @@ export function createIcpFeltImpulseInitiationAdapter(
 
     if (!deps.isAuthorized()) {
       // Emergency-disabled at runtime or tier lacks external.companion.
+      const durable = await deps.funnelStore.recordOutcome({
+        correlationId: signal.correlationId,
+        firedAtMs: signal.firedAtMs,
+        recordedAtMs: now(),
+        outcome: 'not_authorized',
+      });
       await emitOutcome({ correlationId: signal.correlationId, outcome: 'not_authorized' });
       await emitTransition(signal, { stage: 'final_disposition', outcome: 'not_authorized' });
-      return { kind: 'not_authorized' };
+      return replayDurableOutcome(durable);
     }
     const nowMs = now();
     if (nowMs - lastSubmittedAtMs < minIntervalMs) {
       const nextEligibleAtMs = lastSubmittedAtMs + minIntervalMs;
+      const durable = await deps.funnelStore.recordOutcome({
+        correlationId: signal.correlationId,
+        firedAtMs: signal.firedAtMs,
+        recordedAtMs: now(),
+        outcome: 'throttled',
+        nextEligibleAtMs,
+      });
       await emitOutcome({ correlationId: signal.correlationId, outcome: 'throttled' });
       await emitTransition(signal, {
         stage: 'final_disposition',
         outcome: 'throttled',
         reasonCode: 'local_flood_floor',
       });
-      return { kind: 'throttled', nextEligibleAtMs };
+      return replayDurableOutcome(durable);
     }
 
     const peers = (await deps.peers.listKnownPeerAvailability())
@@ -159,6 +194,12 @@ export function createIcpFeltImpulseInitiationAdapter(
       // EXPLICIT peer-eligibility failure (hrmrq.34 / live fleet evidence):
       // the felt impulse fired but there is no ICP-canonical sibling
       // contact to reach. Name the fix, do not degrade silently.
+      const durable = await deps.funnelStore.recordOutcome({
+        correlationId: signal.correlationId,
+        firedAtMs: signal.firedAtMs,
+        recordedAtMs: now(),
+        outcome: 'no_eligible_peer',
+      });
       log.warn(
         'Felt social impulse fired but no ICP-eligible companion peer exists: '
         + "no contact with a channel='companion' identity is seeded in this companion's schema. "
@@ -175,7 +216,7 @@ export function createIcpFeltImpulseInitiationAdapter(
         outcome: 'no_eligible_peer',
         reasonCode: 'missing_or_ineligible_companion_channel_contacts',
       });
-      return { kind: 'no_eligible_peer' };
+      return replayDurableOutcome(durable);
     }
 
     // Prefer the most receptive peer; the gateway preflight/arbitration is
@@ -199,21 +240,25 @@ export function createIcpFeltImpulseInitiationAdapter(
     ));
     const peer = ranked[0]!;
 
-    const result = await deps.sourceRuntime.submit({
-      source: 'felt_impulse',
-      peerContactId: peer.contactId,
-      preferredChannel: 'dm',
-      // One durable identity per fire: the lever's own sustain/cooldown is
-      // the natural dedupe window, and retries of the same fire coalesce.
-      sourceRecordId: signal.correlationId,
-      reasonSummary: 'Felt social impulse: the affect model sustained wanting to reach out.',
-      cause: { kind: 'independent' },
-    });
-    lastSubmittedAtMs = nowMs;
-    // The durable source runtime performs the authoritative identity dedupe.
-    // Retain only the most recent response-loss replay locally; do not grow an
-    // unbounded process-lifetime set of content-free correlation ids.
-    lastCompleted = { correlationId: signal.correlationId, candidateId: result.candidateId };
+    let result: IcpInitiationSourceAcceptance;
+    try {
+      result = await deps.sourceRuntime.accept({
+        source: 'felt_impulse',
+        peerContactId: peer.contactId,
+        preferredChannel: 'dm',
+        // One durable identity per fire: the lever's own sustain/cooldown is
+        // the natural dedupe window, and retries of the same fire coalesce.
+        sourceRecordId: signal.correlationId,
+        reasonSummary: 'Felt social impulse: the affect model sustained wanting to reach out.',
+        cause: { kind: 'independent' },
+      });
+    } catch (error) {
+      // Cross-process contenders can choose different peers for the same fire.
+      // The atomic funnel insert decides the winner; replay it if it committed.
+      const winner = await deps.funnelStore.getOutcome(signal.correlationId);
+      if (winner) return replayDurableOutcome(winner);
+      throw error;
+    }
     log.info('Felt-impulse ICP initiation candidate submitted', {
       peerContactId: peer.contactId,
       peerEligible: peer.availability.eligible,
@@ -221,31 +266,48 @@ export function createIcpFeltImpulseInitiationAdapter(
       outcome: result.outcome,
       status: result.status,
       candidateId: result.candidateId,
-      ...(result.reasonCode ? { reasonCode: result.reasonCode } : {}),
     });
+    const sourceOutcome = result.outcome === 'deduped' ? 'deduped' : 'submitted';
     await emitTransition(signal, {
       stage: 'candidate_submission',
-      outcome: result.outcome === 'deduped' ? 'deduped' : 'submitted',
+      outcome: sourceOutcome,
       peerContactId: peer.contactId,
       candidateId: result.candidateId,
       candidateStatus: result.status,
-      ...(result.reasonCode ? { reasonCode: result.reasonCode } : {}),
     });
     await emitOutcome({
       correlationId: signal.correlationId,
-      outcome: result.outcome,
+      outcome: sourceOutcome,
       peerContactId: peer.contactId,
       candidateId: result.candidateId,
-      ...(result.reasonCode ? { reason: result.reasonCode } : {}),
     });
     await emitTransition(signal, {
       stage: 'final_disposition',
-      outcome: result.outcome,
+      outcome: sourceOutcome,
       peerContactId: peer.contactId,
       candidateId: result.candidateId,
       candidateStatus: result.status,
-      ...(result.reasonCode ? { reasonCode: result.reasonCode } : {}),
     });
+    const durable = await deps.funnelStore.recordOutcome({
+      correlationId: signal.correlationId,
+      firedAtMs: signal.firedAtMs,
+      recordedAtMs: now(),
+      outcome: 'candidate_linked',
+      candidateId: result.candidateId,
+      candidateOutcome: result.outcome === 'deduped' ? 'deduped' : 'submitted',
+    });
+    if (durable.outcome !== 'candidate_linked'
+      || durable.candidateId !== result.candidateId) {
+      return replayDurableOutcome(durable);
+    }
+    lastSubmittedAtMs = nowMs;
+    // The durable source runtime performs the authoritative identity dedupe.
+    // Retain only the most recent response-loss replay locally; do not grow an
+    // unbounded process-lifetime set of content-free correlation ids.
+    lastCompleted = { correlationId: signal.correlationId, candidateId: result.candidateId };
+    if (result.outcome === 'deduped') {
+      return { kind: 'deduped', candidateId: result.candidateId };
+    }
     return { kind: 'submitted', peerContactId: peer.contactId, result };
   };
 

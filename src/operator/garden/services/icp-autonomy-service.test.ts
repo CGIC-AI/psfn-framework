@@ -247,6 +247,53 @@ describe('truthful quiet attribution (psfn-framework-hrmrq.34)', () => {
 });
 
 describe('AdminIcpAutonomyDataService', () => {
+  it('projects bounded content-free felt-impulse funnel evidence', async () => {
+    const projection = {
+      totalQualified: 3,
+      preCandidate: { noEligiblePeer: 1, notAuthorized: 1, throttled: 0 },
+      candidateLinks: { total: 1, submitted: 1, deduped: 0 },
+      candidateLifecycle: {
+        pending: 0,
+        permitted: 0,
+        deferred: 0,
+        declined: 0,
+        rejected: 0,
+        delivered: 1,
+        suppressed: 0,
+        expired: 0,
+        cancelled: 0,
+      },
+      recent: [{
+        correlationId: 'felt-impulse:would_message:1000',
+        firedAtMs: 1_000,
+        recordedAtMs: 1_001,
+        outcome: 'candidate_linked' as const,
+        candidateId: CANDIDATE_ID,
+        candidateOutcome: 'submitted' as const,
+        lifecycleOutcome: 'delivered' as const,
+      }],
+    };
+    const readProjection = vi.fn(async () => projection);
+    const service = new AdminIcpAutonomyDataService({
+      feltImpulseFunnelStore: {
+        getOutcome: vi.fn(),
+        recordOutcome: vi.fn(),
+        readProjection,
+        close: vi.fn(),
+      },
+      runtimeEnablement: createIcpAutonomyRuntimeEnablement(true),
+      settingsService: settings(),
+      operatorLeaseTtlMs: 1_000,
+    });
+
+    const data = await service.getData();
+
+    expect(readProjection).toHaveBeenCalledWith(50);
+    expect(data.feltImpulseFunnel).toEqual(projection);
+    expect(JSON.stringify(data.feltImpulseFunnel)).not.toContain('private motivation');
+    expect(JSON.stringify(data.feltImpulseFunnel)).not.toContain('peerContactId');
+  });
+
   it('delegates operator test initiation to the model-independent runtime port', async () => {
     const expected = {
       outcome: 'accepted' as const,

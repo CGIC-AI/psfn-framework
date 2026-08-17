@@ -17,6 +17,10 @@ import {
   parseIcpInitiationCandidate,
   type IcpInitiationCandidate,
 } from '../../core/icp/initiation-candidate.js';
+import {
+  parseIcpFeltImpulseFunnelRecord,
+  type IcpFeltImpulseFunnelRecord,
+} from '../../core/icp/felt-impulse-funnel.js';
 import { ICP_AUTONOMY_REASON_CODES } from '../../shared/contracts/icp-autonomy.js';
 import {
   createPostgresPool,
@@ -146,6 +150,60 @@ export class PostgresIcpInitiationCandidateStore implements IcpInitiationCandida
     return await this.insertCandidate(candidate, claim);
   }
 
+  async createClaimedFeltImpulseCandidate(
+    candidateInput: IcpInitiationCandidate,
+    claim: IcpInitiationCandidateProducerClaim,
+    outcomeInput: Extract<IcpFeltImpulseFunnelRecord, { outcome: 'candidate_linked' }>,
+  ): Promise<IcpInitiationCandidate> {
+    const candidate = parseIcpInitiationCandidate(candidateInput);
+    const outcome = parseIcpFeltImpulseFunnelRecord(outcomeInput);
+    this.assertNewCandidate(candidate);
+    this.assertLiveClaim(claim);
+    if (candidate.source !== 'felt_impulse'
+      || outcome.outcome !== 'candidate_linked'
+      || outcome.candidateId !== candidate.candidateId
+      || outcome.candidateOutcome !== 'submitted') {
+      throw new Error('Atomic felt-impulse candidate creation requires its exact submitted link');
+    }
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const result = await client.query<CandidateRow>(`
+        INSERT INTO icp_initiation_candidates (
+          candidate_id, root_initiation_id, local_companion_id, peer_contact_id,
+          peer_companion_id, preferred_channel, source, provenance_ref, reason_summary,
+          target_channel_id, continuation_task_kind, created_at_ms, expires_at_ms, status, reason_code, initiation_permit_id,
+          pending_follow_up_id, delivery_disposition, retry_attempt, retry_eligible_at_ms,
+          lifecycle_claim_token, lifecycle_claim_expires_at_ms, revision
+        ) VALUES (
+          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
+          $18, $19, $20, $21, $22, $23
+        )
+        RETURNING ${CANDIDATE_COLUMNS}
+      `, this.candidateInsertValues(candidate, claim));
+      const row = result.rows[0];
+      if (!row) throw new Error(`Failed to create ICP candidate ${candidate.candidateId}`);
+      await client.query(`
+        INSERT INTO icp_felt_impulse_funnel_outcomes (
+          correlation_id, fired_at_ms, recorded_at_ms, outcome,
+          next_eligible_at_ms, candidate_id, candidate_outcome
+        ) VALUES ($1, $2, $3, 'candidate_linked', NULL, $4, 'submitted')
+      `, [
+        outcome.correlationId,
+        outcome.firedAtMs,
+        outcome.recordedAtMs,
+        outcome.candidateId,
+      ]);
+      await client.query('COMMIT');
+      return mapCandidate(row);
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   async renewCandidateClaim(
     candidateId: string,
     claim: IcpInitiationCandidateProducerClaim,
@@ -225,9 +283,7 @@ export class PostgresIcpInitiationCandidateStore implements IcpInitiationCandida
     claim?: IcpInitiationCandidateProducerClaim,
   ): Promise<IcpInitiationCandidate> {
     const candidate = parseIcpInitiationCandidate(candidateInput);
-    if (candidate.status !== 'pending' || candidate.revision !== 1) {
-      throw new Error('A new ICP initiation candidate must start pending at revision 1');
-    }
+    this.assertNewCandidate(candidate);
     const row = await queryOne<CandidateRow>(this.pool, `
       INSERT INTO icp_initiation_candidates (
         candidate_id, root_initiation_id, local_companion_id, peer_contact_id,
@@ -240,7 +296,22 @@ export class PostgresIcpInitiationCandidateStore implements IcpInitiationCandida
         $18, $19, $20, $21, $22, $23
       )
       RETURNING ${CANDIDATE_COLUMNS}
-    `, [
+    `, this.candidateInsertValues(candidate, claim));
+    if (!row) throw new Error(`Failed to create ICP candidate ${candidate.candidateId}`);
+    return mapCandidate(row);
+  }
+
+  private assertNewCandidate(candidate: IcpInitiationCandidate): void {
+    if (candidate.status !== 'pending' || candidate.revision !== 1) {
+      throw new Error('A new ICP initiation candidate must start pending at revision 1');
+    }
+  }
+
+  private candidateInsertValues(
+    candidate: IcpInitiationCandidate,
+    claim?: IcpInitiationCandidateProducerClaim,
+  ): unknown[] {
+    return [
       candidate.candidateId,
       candidate.rootInitiationId,
       candidate.localCompanionId,
@@ -264,9 +335,7 @@ export class PostgresIcpInitiationCandidateStore implements IcpInitiationCandida
       claim?.claimToken ?? null,
       claim?.claimExpiresAtMs ?? null,
       candidate.revision,
-    ]);
-    if (!row) throw new Error(`Failed to create ICP candidate ${candidate.candidateId}`);
-    return mapCandidate(row);
+    ];
   }
 
   async getCandidate(candidateId: string): Promise<IcpInitiationCandidate | null> {

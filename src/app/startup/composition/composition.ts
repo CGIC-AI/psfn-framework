@@ -114,6 +114,7 @@ import type { ToolWiringValidationMode } from '../../../core/agent/tool-wiring-v
 import type { ConcernStorePort } from '../../../core/intention/concern-store-port.js';
 import {
   migrateLegacyPersistenceLayout,
+  resolveBackupsDir,
   resolveCogSecEventsPath,
   resolveConfiguredCompanionDataDir,
   resolveCoreMemoryPath,
@@ -129,6 +130,7 @@ import {
   resolveSessionsDir,
   resolveValuesJournalPath,
 } from '../../../persistence/layout.js';
+import { createBackgroundWorkHandoffRecoveryDisposition } from '../../../persistence/repair/background-work-handoff-recovery-disposition.js';
 import { createDefaultPostgresSessionAdapters } from '../../../persistence/sessions/postgres-adapters.js';
 import { FilesystemAutomataRetentionWriteBarrier } from '../../../persistence/sessions/automata-retention-write-barrier.js';
 import { awaitPostgresStoreReadiness } from '../../../persistence/postgres/runtime-readiness.js';
@@ -137,6 +139,7 @@ import { createSessionIntegrityIncidentObserver } from '../../../core/cogsec/ses
 import { createProjectionDriftIncidentObserver } from '../../../core/cogsec/projection-drift-incident.js';
 import { createPostgresShardSchemaLifecycle } from '../../../persistence/postgres/shard-schema-lifecycle.js';
 import { FatigueLedger } from '../../../shared/telemetry/fatigue-ledger.js';
+import { createSafeguardAuditTrail } from '../../../system/capabilities/safeguards.js';
 
 export interface SessionComposition {
   sessionStore: SessionStore;
@@ -165,6 +168,8 @@ export interface SessionCompositionOptions {
   continuityChannelIds?: readonly string[];
   promptRegistry?: PromptRegistryStatePort | null;
   sessionIntegrityProvider?: SessionIntegrityProvider | null;
+  /** Runtime-owned backup root for automatic corrupt-handoff quarantine evidence. */
+  sessionIntegrityRepairBackupRootDir?: string;
   /**
    * Injected session tail cache (tests/harnesses). `undefined` builds the
    * Redis-backed tail from settings.json + env when enabled; explicit `null`
@@ -237,6 +242,18 @@ function createSessionComposition(
     turnRecordEligibilityFence,
     tailCache: sessionTailCache,
     integrityObserver,
+    ...(options.sessionIntegrityProvider
+      ? {
+        backgroundWorkHandoffRecoveryDisposition:
+          createBackgroundWorkHandoffRecoveryDisposition({
+            sessionsDir,
+            backupRootDir: options.sessionIntegrityRepairBackupRootDir
+              ?? resolveBackupsDir(companionDataDir),
+            integrityProvider: options.sessionIntegrityProvider,
+            audit: createSafeguardAuditTrail(companionDataDir),
+          }),
+      }
+      : {}),
     automataRetentionWriteBarrier: exactSessionWriteBarrier,
   });
   const sessionManager = new SessionManager(

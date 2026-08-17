@@ -16,9 +16,11 @@ import type { SessionHmacKeyring } from '../journals/journal-utils.js';
 import {
   parseJournalText,
   resolveJournalIntegrityChainCandidates,
-  signJournalEntry,
-  verifyJournalEntryIntegrity,
 } from '../journals/journal-utils.js';
+import {
+  createKeyringIntegrityProvider,
+  type SessionIntegrityProvider,
+} from '../sessions/store-primitives.js';
 import { createFilesystemSessionArchivePort } from '../journals/journal/port.js';
 import type { QuarantinedJournalEntry } from '../journals/journal/types.js';
 import { primeChannelIndexFromDisk } from '../sessions/store/channel-index.js';
@@ -65,10 +67,9 @@ export interface SessionIntegrityRepairAuditSink {
  */
 export const SESSION_INTEGRITY_REPAIR_AUDIT_EVENT = 'session_integrity_repair';
 
-interface RepairParams {
+interface RepairParamsBase {
   sessionsDir: string;
   backupDir: string;
-  keyring: SessionHmacKeyring;
   /**
    * Optional exact channel allowlist for a bounded repair. `undefined` retains
    * the existing all-channel maintenance mode; an explicitly empty or
@@ -89,6 +90,11 @@ interface RepairParams {
    */
   audit?: SessionIntegrityRepairAuditSink;
 }
+
+type RepairParams = RepairParamsBase & (
+  | { keyring: SessionHmacKeyring; integrityProvider?: never }
+  | { integrityProvider: SessionIntegrityProvider; keyring?: never }
+);
 
 function normalizeTargetChannelIds(
   targetChannelIds: readonly string[] | undefined,
@@ -298,6 +304,28 @@ export function rewriteJournalChainUnderLock(
   archivePort: ReturnType<typeof createFilesystemSessionArchivePort>,
   renewLease: () => void,
 ): { modifiedEntries: number; modifiedFiles: number; quarantinedRows: number } {
+  const integrityProvider = createKeyringIntegrityProvider(keyring);
+  if (!integrityProvider) {
+    throw new Error('Session integrity repair requires an integrity provider');
+  }
+  return rewriteJournalChainUnderLockWithProvider(
+    filePaths,
+    integrityProvider,
+    backupDir,
+    sessionsDir,
+    archivePort,
+    renewLease,
+  );
+}
+
+function rewriteJournalChainUnderLockWithProvider(
+  filePaths: readonly string[],
+  integrityProvider: SessionIntegrityProvider,
+  backupDir: string,
+  sessionsDir: string,
+  archivePort: ReturnType<typeof createFilesystemSessionArchivePort>,
+  renewLease: () => void,
+): { modifiedEntries: number; modifiedFiles: number; quarantinedRows: number } {
   const parsedByFile = filePaths.map((filePath) => {
     const parsed = parseJournalText(readFileSync(filePath, 'utf-8'));
     renewLease();
@@ -314,7 +342,7 @@ export function rewriteJournalChainUnderLock(
       const candidateList = previousHmacCandidates.length > 0 ? previousHmacCandidates : [null];
       const nextCandidates: Array<string | null> = [];
       for (const previousHmac of candidateList) {
-        const verification = verifyJournalEntryIntegrity(entry, keyring, previousHmac);
+        const verification = integrityProvider.verify(entry, previousHmac);
         if (verification.verified) verified = true;
         for (const candidate of resolveJournalIntegrityChainCandidates(verification, previousHmac)) {
           if (!nextCandidates.some(existing => existing === candidate)) {
@@ -366,7 +394,7 @@ export function rewriteJournalChainUnderLock(
       return entry;
     }
     const { _hmac, _hmacKeyVersion, ...unsigned } = entry;
-    const signed = signJournalEntry(unsigned, keyring, previousHmac);
+    const signed = integrityProvider.sign(unsigned, previousHmac);
     previousHmac = signed._hmac ?? null;
     return signed;
   }));
@@ -416,7 +444,7 @@ export function rewriteJournalChainUnderLock(
 
 function rewriteJournalChain(
   filePaths: readonly string[],
-  keyring: SessionHmacKeyring,
+  integrityProvider: SessionIntegrityProvider,
   backupDir: string,
   sessionsDir: string,
 ): { modifiedEntries: number; modifiedFiles: number; quarantinedRows: number } {
@@ -425,9 +453,9 @@ function rewriteJournalChain(
   const archivePort = createFilesystemSessionArchivePort();
   return withSessionJournalWriteLock(rootPath, (renewLease) => {
     archivePort.recoverJournalChainRewrite(rootPath);
-    return rewriteJournalChainUnderLock(
+    return rewriteJournalChainUnderLockWithProvider(
       filePaths,
-      keyring,
+      integrityProvider,
       backupDir,
       sessionsDir,
       archivePort,
@@ -451,6 +479,12 @@ export function runSessionIntegrityRepair(params: RepairParams): SessionIntegrit
     // Fail closed: every sanctioned re-sign must carry an operator reason so the
     // durable audit record is never anonymous.
     throw new Error('Session integrity repair requires a non-empty operator reason');
+  }
+  const integrityProvider = 'integrityProvider' in params
+    ? params.integrityProvider
+    : createKeyringIntegrityProvider(params.keyring);
+  if (!integrityProvider) {
+    throw new Error('Session integrity repair requires an integrity provider');
   }
   const targetChannelIds = normalizeTargetChannelIds(params.targetChannelIds);
 
@@ -521,7 +555,7 @@ export function runSessionIntegrityRepair(params: RepairParams): SessionIntegrit
     for (const chain of repairChains) {
       const modified = rewriteJournalChain(
         chain.filePaths,
-        params.keyring,
+        integrityProvider,
         params.backupDir,
         params.sessionsDir,
       );

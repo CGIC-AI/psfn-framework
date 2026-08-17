@@ -6,6 +6,7 @@ import {
 import {
   BACKGROUND_WORK_HANDOFF_RECOVERY_BATCH_SIZE,
   BackgroundWorkHandoffRetryCapacityError,
+  TURN_RECORD_RECOVERY_CORRUPT_EVIDENCE_CODE,
   TURN_RECORD_RECOVERY_STRUCTURAL_EVIDENCE_CODE,
   TurnRecordRecoveryEvidenceError,
   isTurnRecordRecoveryEvidenceError,
@@ -24,6 +25,9 @@ export interface BackgroundWorkHandoffRecoverySessionPort {
     operation: (record: TurnRecord) => Promise<void>,
     signal?: AbortSignal,
   ): Promise<number>;
+  quarantineCorruptBackgroundWorkHandoffRecoveryOwner(
+    skip: TurnRecordRecoveryEvidenceSkip,
+  ): Promise<void>;
 }
 
 export type BackgroundWorkHandoffEnqueue = (
@@ -105,9 +109,15 @@ export class BackgroundWorkHandoffRecoveryRuntime {
     }
     if (!this.historicalSnapshotRecovered) {
       const enumerationState = { complete: false, evidenceOwnerSkipped: false };
+      const corruptOwners = new Map<string, TurnRecordRecoveryEvidenceSkip>();
       const records = this.sessions.streamRecoverableBackgroundWorkTurnRecords(
         signal,
-        () => { enumerationState.evidenceOwnerSkipped = true; },
+        (skip) => {
+          enumerationState.evidenceOwnerSkipped = true;
+          if (skip.errno === TURN_RECORD_RECOVERY_CORRUPT_EVIDENCE_CODE) {
+            corruptOwners.set(skip.ownerSessionId, skip);
+          }
+        },
       );
       const completionTrackedRecords = (async function* () {
         for await (const record of records) yield record;
@@ -122,6 +132,10 @@ export class BackgroundWorkHandoffRecoveryRuntime {
           },
           record => this.sessions.deferWorkerValidatedBackgroundWorkHandoffRecovery(record),
         );
+        for (const skip of corruptOwners.values()) {
+          signal.throwIfAborted();
+          await this.sessions.quarantineCorruptBackgroundWorkHandoffRecoveryOwner(skip);
+        }
       } catch (error) {
         if (isDeterministicRecoveryEvidenceError(error)) {
           this.evidenceBlocked = true;

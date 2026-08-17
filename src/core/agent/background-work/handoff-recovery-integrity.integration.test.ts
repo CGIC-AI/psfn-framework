@@ -9,9 +9,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { buildSessionHmacKeyring } from '../../../persistence/journals/journal-utils.js';
-import { runSessionIntegrityRepair } from '../../../persistence/repair/integrity-repair.js';
+import { createBackgroundWorkHandoffRecoveryDisposition } from '../../../persistence/repair/background-work-handoff-recovery-disposition.js';
 import type { TurnRecordEligibilityFencePort } from '../../../persistence/sessions/turn-record-eligibility-fence-port.js';
 import { SessionStore } from '../../../persistence/sessions/store.js';
+import { createKeyringIntegrityProvider } from '../../../persistence/sessions/store-primitives.js';
 import {
   clearDiagnosticLogRingBufferForTests,
   getRecentDiagnosticLogRecords,
@@ -169,16 +170,27 @@ describe('background-work handoff integrity recovery', () => {
     const root = mkdtempSync(join(tmpdir(), 'handoff-integrity-recovery-'));
     rootsToDelete.push(root);
     const sessionsDir = join(root, 'sessions');
-    const backupDir = join(root, 'repair-backup');
+    const backupRootDir = join(root, 'repair-backups');
     const channelId = 'api:production-handoff-owner';
+    const healthyChannelId = 'api:production-healthy-owner';
     const keyring = buildSessionHmacKeyring({
       serializedKeys: 'v1:handoff-integrity-key',
       activeVersion: 'v1',
     })!;
+    const integrityProvider = createKeyringIntegrityProvider(keyring)!;
     const record = makeBackgroundHandoffTurnRecord(channelId, 1_775_000_000_000);
+    const healthyRecord = makeBackgroundHandoffTurnRecord(
+      healthyChannelId,
+      1_775_000_000_100,
+    );
     const store = new SessionStore(sessionsDir, {
       integrityKeyring: keyring,
       turnRecordEligibilityFence: createSerialTurnRecordEligibilityFence(),
+      backgroundWorkHandoffRecoveryDisposition: createBackgroundWorkHandoffRecoveryDisposition({
+        sessionsDir,
+        backupRootDir,
+        integrityProvider,
+      }),
     });
     const manager = new SessionManager(store, makeConfig(root));
     manager.recordUserMessage(
@@ -191,6 +203,16 @@ describe('background-work handoff integrity recovery', () => {
       { turnId: record.turnId, requestId: record.requestId },
     );
     await manager.recordTurn(record);
+    manager.recordUserMessage(
+      healthyChannelId,
+      'retained healthy source',
+      'partner',
+      'Partner',
+      true,
+      undefined,
+      { turnId: healthyRecord.turnId, requestId: healthyRecord.requestId },
+    );
+    await manager.recordTurn(healthyRecord);
 
     const journalPath = findSessionJournalPath(sessionsDir, 'production-handoff-owner');
     appendFileSync(journalPath, '{not-json}\n');
@@ -199,28 +221,26 @@ describe('background-work handoff integrity recovery', () => {
     clearDiagnosticLogRingBufferForTests();
 
     await expect(runtime.recover(preRepairEnqueue)).resolves.toBeUndefined();
-    await expect(runtime.recover(preRepairEnqueue)).resolves.toBeUndefined();
-    expect(preRepairEnqueue).not.toHaveBeenCalled();
-    expect(ebadmsgWarnings(channelId)).toHaveLength(2);
+    expect(preRepairEnqueue).toHaveBeenCalledOnce();
+    expect(preRepairEnqueue.mock.calls[0]?.[0][0]?.sourceChannelId).toBe(healthyChannelId);
+    expect(ebadmsgWarnings(channelId)).toHaveLength(1);
 
-    const report = runSessionIntegrityRepair({
-      sessionsDir,
-      backupDir,
-      keyring,
-      reason: 'repair exact EBADMSG background-work owner',
-      targetChannelIds: [channelId],
-    });
-    expect(report.journal).toMatchObject({
-      scannedFiles: 1,
-      modifiedFiles: 1,
-      quarantinedRows: 1,
-    });
-    expect(readFileSync(join(backupDir, journalPath.split('/').at(-1)!), 'utf8'))
-      .toContain('{not-json}');
+    const dispositionDir = join(backupRootDir, readdirSync(backupRootDir)[0]!);
+    const receipts = readFileSync(join(dispositionDir, 'quarantine-receipts.jsonl'), 'utf8');
+    expect(receipts).not.toContain('{not-json}');
+    expect(receipts.trim().split('\n').map(line => JSON.parse(line))).toEqual([
+      expect.objectContaining({ phase: 'prepared', reason: 'invalid_json' }),
+      expect.objectContaining({ phase: 'completed', rowCount: 1 }),
+    ]);
 
     const restartedStore = new SessionStore(sessionsDir, {
       integrityKeyring: keyring,
       turnRecordEligibilityFence: createSerialTurnRecordEligibilityFence(),
+      backgroundWorkHandoffRecoveryDisposition: createBackgroundWorkHandoffRecoveryDisposition({
+        sessionsDir,
+        backupRootDir,
+        integrityProvider,
+      }),
     });
     const restartedManager = new SessionManager(restartedStore, makeConfig(root));
     const restartedRuntime = new BackgroundWorkHandoffRecoveryRuntime(restartedManager);
@@ -230,9 +250,11 @@ describe('background-work handoff integrity recovery', () => {
     await expect(restartedRuntime.recover(enqueue)).resolves.toBeUndefined();
     await expect(restartedRuntime.recover(enqueue)).resolves.toBeUndefined();
 
-    expect(enqueue).toHaveBeenCalledOnce();
-    expect(enqueue.mock.calls[0]?.[0]).toHaveLength(1);
+    expect(enqueue).toHaveBeenCalledTimes(2);
+    expect(enqueue.mock.calls.flatMap(call => call[0]).map(job => job.sourceChannelId).sort())
+      .toEqual([channelId, healthyChannelId].sort());
     expect(ebadmsgWarnings(channelId)).toEqual([]);
+    expect(readdirSync(backupRootDir)).toHaveLength(1);
     expect(restartedStore.getRecent(channelId, 10).map(entry => entry.content))
       .toEqual(['retained source']);
   });

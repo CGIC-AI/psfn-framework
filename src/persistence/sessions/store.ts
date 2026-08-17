@@ -104,6 +104,7 @@ import {
 } from './store/cogsec-operations.js';
 import { SessionCursorOperations } from './store/cursor-operations.js';
 import type { LatestSessionSummary, SessionActivitySummary } from './store/cursor-operations.js';
+import type { TurnRecordRecoveryEvidenceSkip } from '../../core/agent/background-work/recovery-contract.js';
 
 const log = createComponentLogger('SessionStore');
 
@@ -159,6 +160,8 @@ export class SessionStore implements TranscriptSearchPort {
   }>();
   private readonly recoveryAuthoritySnapshotHook:
     ((ownerSessionId: string) => void | Promise<void>) | undefined;
+  private readonly backgroundWorkHandoffRecoveryDisposition:
+    NonNullable<SessionStoreOptions['backgroundWorkHandoffRecoveryDisposition']> | null;
   private readonly turnRecordOperations: SessionTurnRecordOperations;
   private importManifestPath: string;
   private transcriptProjection: TranscriptProjectionPort | null = null;
@@ -233,6 +236,8 @@ export class SessionStore implements TranscriptSearchPort {
       getRecent: this.cursorOperations.getRecent.bind(this.cursorOperations),
     });
     this.recoveryAuthoritySnapshotHook = options.recoveryAuthoritySnapshotHook;
+    this.backgroundWorkHandoffRecoveryDisposition =
+      options.backgroundWorkHandoffRecoveryDisposition ?? null;
     for (const rootPath of this.journalRuntime.listPendingJournalChainRewriteRoots(this.sessionsDir)) {
       withSessionJournalWriteLock(rootPath, () => {
         this.journalRuntime.recoverJournalChainRewrite(rootPath);
@@ -981,6 +986,15 @@ export class SessionStore implements TranscriptSearchPort {
       sourceChannelIds,
       options,
     );
+  }
+
+  async quarantineCorruptBackgroundWorkHandoffRecoveryOwner(
+    skip: TurnRecordRecoveryEvidenceSkip,
+  ): Promise<void> {
+    if (!this.backgroundWorkHandoffRecoveryDisposition) {
+      throw new Error('Corrupt background-work handoff recovery disposition is unavailable');
+    }
+    await this.backgroundWorkHandoffRecoveryDisposition.quarantineCorruptOwner(skip);
   }
   async isSourceTurnRecordEligible(
     sourceChannelId: string,

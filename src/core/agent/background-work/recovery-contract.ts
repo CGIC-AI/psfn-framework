@@ -1,10 +1,15 @@
 export const BACKGROUND_WORK_HANDOFF_RECOVERY_BATCH_SIZE = 32;
 export const TURN_RECORD_RECOVERY_EVIDENCE_ERROR_NAME = 'TurnRecordRecoveryEvidenceError';
 export const TURN_RECORD_RECOVERY_STRUCTURAL_EVIDENCE_CODE = 'ESTRUCTURAL';
+export const TURN_RECORD_RECOVERY_CORRUPT_EVIDENCE_CODE = 'EBADMSG';
 
 export interface TurnRecordRecoveryEvidenceSkip {
   errno: string;
   ownerSessionId: string;
+}
+
+export interface BackgroundWorkHandoffRecoveryDisposition {
+  quarantineCorruptOwner(skip: TurnRecordRecoveryEvidenceSkip): Promise<void>;
 }
 
 export interface TurnRecordRecoveryEvidenceErrorOptions extends ErrorOptions {

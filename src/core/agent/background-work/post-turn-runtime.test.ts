@@ -473,6 +473,7 @@ describe('executePostTurnBackgroundWork', () => {
       callType: 'background',
       originType: 'background',
       originStage: 'extraction',
+      runtimeLaneClass: 'maintenance_reflection',
       workloadType: 'background_work',
       workloadId: `extraction:${record.turnId}`,
     })]);

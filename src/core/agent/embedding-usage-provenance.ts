@@ -1,5 +1,8 @@
 import { createHash } from 'node:crypto';
-import type { EmbeddingUsageProvenance } from '../../shared/contracts/embedding-provider.js';
+import type {
+  EmbeddingProviderCallOptions,
+  EmbeddingUsageProvenance,
+} from '../../shared/contracts/embedding-provider.js';
 import {
   COMPANION_PRIVATE_BACKGROUND_PURPOSE,
   type CorrelationMetadata,
@@ -9,10 +12,7 @@ import {
   RUNTIME_LANE_CLASSES,
   type RuntimeLaneClass,
 } from '../../shared/contracts/runtime-lanes.js';
-import {
-  resolveRuntimeLaneClassForModelCall,
-  type ModelCallRuntimePurpose,
-} from './worker-lanes.js';
+import { getRequestContext } from '../../primitives/llm/request-context.js';
 
 export type ContentFreeEmbeddingWorkloadNamespace =
   | 'memory-write'
@@ -22,6 +22,14 @@ export type ContentFreeEmbeddingWorkloadNamespace =
   | 'memory-import'
   | 'wiki-projection'
   | 'shared-wiki-projection';
+
+export type MemoryEmbeddingOperation = 'write' | 'upsert' | 'patch' | 'correction' | 'import';
+
+export interface EmbeddingOriginIdentifiers {
+  requestId?: string;
+  turnId?: string;
+  sessionId?: string;
+}
 
 export interface CreateEmbeddingUsageProvenanceInput {
   callType: ObservabilityCallType;
@@ -87,18 +95,12 @@ function normalized(value: string | undefined): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
-function runtimePurposeForEmbedding(callType: ObservabilityCallType): ModelCallRuntimePurpose {
-  if (callType === 'chat' || callType === 'tool') return 'chat';
-  if (callType === 'summary') return 'summary';
-  if (callType === 'background') return 'background';
-  return 'memory';
-}
-
 /**
  * Preserve the agent-side workload that initiated an embedding before the call
- * crosses the gateway RPC boundary. An entirely absent request context is left
- * absent deliberately: the sessionless health probe remains the loud unknown
- * sentinel instead of being mislabeled as product work.
+ * crosses the gateway RPC boundary. An absent request context—or one whose
+ * originating runtime did not forward its already-resolved lane—is left absent
+ * deliberately. This keeps the sessionless health probe loud and prevents
+ * capture from becoming a second, potentially drifting lane resolver.
  */
 export function embeddingUsageProvenanceFromRequestContext(
   correlation: Partial<CorrelationMetadata> | undefined,
@@ -110,11 +112,13 @@ export function embeddingUsageProvenanceFromRequestContext(
       purpose: COMPANION_PRIVATE_BACKGROUND_PURPOSE,
       service: 'companion-private',
       process: 'embedding',
-      runtimeLaneClass: RUNTIME_LANE_CLASSES.backgroundContinuation,
+      runtimeLaneClass: correlation.runtimeLaneClass
+        ?? RUNTIME_LANE_CLASSES.backgroundContinuation,
       workloadType: 'companion_private_embedding',
       workloadId: 'companion-private:embedding',
     });
   }
+  if (!correlation.runtimeLaneClass) return undefined;
   const callType = correlation.callType ?? 'memory';
   const purpose = normalized(correlation.purpose) ?? 'embedding';
   const originStage = normalized(correlation.originStage) ?? purpose;
@@ -136,13 +140,44 @@ export function embeddingUsageProvenanceFromRequestContext(
     originStage,
     service,
     process,
-    runtimeLaneClass: resolveRuntimeLaneClassForModelCall({
-      purpose: runtimePurposeForEmbedding(callType),
-      callType,
-      ...(correlation.channelId ? { channelId: correlation.channelId } : {}),
-      originStage,
-    }),
+    runtimeLaneClass: correlation.runtimeLaneClass,
     workloadType,
     workloadId,
   });
+}
+
+/**
+ * Compose MemoryWriter embedding options at the telemetry boundary. The writer
+ * supplies memory-domain identifiers; this module owns request correlation,
+ * lane forwarding, and the bounded maintenance fallback.
+ */
+export function createMemoryEmbeddingCallOptions(
+  operation: MemoryEmbeddingOperation,
+  origin: EmbeddingOriginIdentifiers | undefined,
+  fallbackWorkloadId: string,
+): EmbeddingProviderCallOptions {
+  const inherited = embeddingUsageProvenanceFromRequestContext(getRequestContext());
+  const workloadId = inherited?.workloadId
+    ?? origin?.requestId
+    ?? origin?.turnId
+    ?? origin?.sessionId
+    ?? createContentFreeEmbeddingWorkloadId(
+      `memory-${operation}`,
+      fallbackWorkloadId.trim() || `memory-${operation}`,
+    );
+  const purpose = `memory.${operation}`;
+  return {
+    usageProvenance: createEmbeddingUsageProvenance({
+      callType: inherited?.callType ?? 'scheduled',
+      purpose,
+      originType: inherited?.originType ?? 'scheduled',
+      originStage: inherited?.originStage ?? purpose,
+      service: inherited?.service ?? 'memory',
+      process: operation,
+      runtimeLaneClass: inherited?.runtimeLaneClass
+        ?? RUNTIME_LANE_CLASSES.maintenanceReflection,
+      workloadType: inherited?.workloadType ?? 'memory_embedding',
+      workloadId,
+    }),
+  };
 }

@@ -8,6 +8,7 @@ import {
   type ReflectionContactRecentMessage,
 } from '../../../persistence/journals/reflection-substrate.js';
 import { runWithRequestContext } from '../../../primitives/llm/request-context.js';
+import { RUNTIME_LANE_CLASSES } from '../../../shared/contracts/runtime-lanes.js';
 import { COMPANION_SELF_REFLECTION_RETRIEVAL_PURPOSE } from '../../../faculties/memory/retrieval/access-scope.js';
 import type { ReflectionTemplate } from '../reflection-policy.js';
 import type {
@@ -117,6 +118,7 @@ export async function retrieveReflectionMemoryBlock(input: {
       originType: 'background',
       originStage: COMPANION_SELF_REFLECTION_RETRIEVAL_PURPOSE,
       purpose: COMPANION_SELF_REFLECTION_RETRIEVAL_PURPOSE,
+      runtimeLaneClass: RUNTIME_LANE_CLASSES.maintenanceReflection,
       requesterProvenance: 'self_directed',
     }, () => input.memoryProvider.retrieve(
       input.queryText,

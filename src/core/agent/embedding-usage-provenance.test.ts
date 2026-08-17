@@ -30,6 +30,7 @@ describe('embeddingUsageProvenanceFromRequestContext', () => {
       purpose: 'extraction',
       originType: 'background',
       originStage: 'extraction',
+      runtimeLaneClass: 'maintenance_reflection',
       workloadType: 'background_work',
       workloadId: 'extraction:turn-1',
     })).toEqual({
@@ -39,10 +40,20 @@ describe('embeddingUsageProvenanceFromRequestContext', () => {
       originStage: 'extraction',
       service: 'memory',
       process: 'extraction',
-      runtimeLaneClass: 'background_continuation',
+      runtimeLaneClass: 'maintenance_reflection',
       workloadType: 'background_work',
       workloadId: 'extraction:turn-1',
     });
+  });
+
+  it('does not second-resolve a lane when the originating runtime omitted it', () => {
+    expect(embeddingUsageProvenanceFromRequestContext({
+      callType: 'background',
+      purpose: 'extraction',
+      originStage: 'extraction',
+      workloadType: 'background_work',
+      workloadId: 'extraction:turn-1',
+    })).toBeUndefined();
   });
 
   it('bounds companion-private attribution without retaining request identity', () => {

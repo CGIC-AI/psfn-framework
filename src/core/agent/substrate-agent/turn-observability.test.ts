@@ -32,6 +32,7 @@ describe('buildTurnCorrelation', () => {
       channelType: 'api',
       callType: 'tool',
       purpose: 'agent.turn',
+      runtimeLaneClass: 'foreground_chat',
       service: 'agent',
       process: 'substrate-agent',
       conversationId: 'session-1',

@@ -1741,6 +1741,7 @@ describe('GatewayClient streaming', () => {
       channelType: 'api',
       callType: 'memory',
       purpose: 'embedding',
+      runtimeLaneClass: 'maintenance_reflection',
       chargeLane: 'shard',
       chargeSurface: 'externalModelConsult',
       chargeEventId: 'charge-event-1',

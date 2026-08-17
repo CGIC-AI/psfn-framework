@@ -26,6 +26,7 @@ import { buildSubsystemOutputRef } from '../../../shared/contracts/subsystem-out
 import { extractTurnRecordSelfSnapshotRef } from '../../../shared/contracts/turn-record-internal-state-ref.js';
 import type { SocialDesireFeltSignalWriter } from '../../intention/social-desire-felt-signal.js';
 import { runWithRequestContext } from '../../../primitives/llm/request-context.js';
+import { RUNTIME_LANE_CLASSES } from '../../../shared/contracts/runtime-lanes.js';
 
 export type PostTurnBackgroundSessionManager = Pick<
   SessionManager,
@@ -84,6 +85,9 @@ function runWithPostTurnUsageAttribution<T>(
     purpose: originStage,
     originType: 'background',
     originStage,
+    runtimeLaneClass: originStage === 'extraction'
+      ? RUNTIME_LANE_CLASSES.maintenanceReflection
+      : RUNTIME_LANE_CLASSES.backgroundContinuation,
     workloadType: 'background_work',
     workloadId: `${originStage}:${source.turnId}`,
     ...(record.icpCorrelation ? { icpCorrelation: record.icpCorrelation } : {}),

@@ -3,7 +3,6 @@
 
 import { v7 as uuidv7 } from 'uuid';
 import type {
-  EmbeddingProviderCallOptions,
   EmbeddingProviderPort,
 } from '../../shared/contracts/embedding-provider.js';
 import {
@@ -56,12 +55,9 @@ import {
   resolveMemoryRetrievalPolicy,
   type MemoryRetrievalPolicy,
 } from '../../system/config/memory-retrieval-policy.js';
-import { getRequestContext } from '../../primitives/llm/request-context.js';
 import {
-  createContentFreeEmbeddingWorkloadId,
-  embeddingUsageProvenanceFromRequestContext,
+  createMemoryEmbeddingCallOptions,
 } from '../../core/agent/embedding-usage-provenance.js';
-import { RUNTIME_LANE_CLASSES } from '../../shared/contracts/runtime-lanes.js';
 import type { IntakeEnvelopeSnapshot } from '../../shared/contracts/intake-envelope.js';
 import type { IntakeSinkGate } from '../../core/cogsec/intake/sink-gates.js';
 import {
@@ -90,7 +86,6 @@ import {
 
 const log = createComponentLogger('MemoryWriter');
 const IMPORT_BATCH_EMBED_CHUNK_SIZE = 200;
-type MemoryEmbeddingOperation = 'write' | 'upsert' | 'patch' | 'correction' | 'import';
 
 export interface MemoryWriteOptions {
   text: string;
@@ -317,36 +312,6 @@ export class MemoryWriter {
     }
   }
 
-  private embeddingCallOptions(
-    operation: MemoryEmbeddingOperation,
-    provenance: MemoryProvenance | undefined,
-    fallbackWorkloadId: string,
-  ): EmbeddingProviderCallOptions {
-    const correlation = getRequestContext();
-    const inherited = embeddingUsageProvenanceFromRequestContext(correlation);
-    const workloadId = inherited?.workloadId
-      ?? provenance?.requestId
-      ?? provenance?.turnId
-      ?? provenance?.sessionId
-      ?? createContentFreeEmbeddingWorkloadId(
-        `memory-${operation}`,
-        fallbackWorkloadId.trim() || `memory-${operation}`,
-      );
-    return {
-      usageProvenance: {
-        callType: inherited?.callType ?? 'scheduled',
-        purpose: `memory.${operation}`,
-        originType: inherited?.originType ?? 'scheduled',
-        originStage: inherited?.originStage ?? `memory.${operation}`,
-        service: inherited?.service ?? 'memory',
-        process: operation,
-        runtimeLaneClass: inherited?.runtimeLaneClass ?? RUNTIME_LANE_CLASSES.maintenanceReflection,
-        workloadType: inherited?.workloadType ?? 'memory_embedding',
-        workloadId,
-      },
-    };
-  }
-
   private queueMaintenanceReview(input: {
     memory: PurrMemory;
     candidates: Array<PurrMemory & { similarity: number }>;
@@ -469,7 +434,7 @@ export class MemoryWriter {
     this.assertCogSecCandidacy(opts);
     const embedding = await this.embeddingService.embed(
       opts.text,
-      this.embeddingCallOptions('write', opts.provenance, opts.sourceRef ?? 'memory-write'),
+      createMemoryEmbeddingCallOptions('write', opts.provenance, opts.sourceRef ?? 'memory-write'),
     );
     return this.writeWithEmbedding(opts, embedding);
   }
@@ -871,7 +836,7 @@ export class MemoryWriter {
 
     const embedding = await this.embeddingService.embed(
       text,
-      this.embeddingCallOptions('upsert', provenance, sourceRef ?? 'memory-upsert'),
+      createMemoryEmbeddingCallOptions('upsert', provenance, sourceRef ?? 'memory-upsert'),
     );
     this.validateEmbedding(embedding, 'upsert');
 
@@ -1124,7 +1089,7 @@ export class MemoryWriter {
       });
       embedding = await this.embeddingService.embed(
         updates.text,
-        this.embeddingCallOptions('patch', opts.provenance, memoryId),
+        createMemoryEmbeddingCallOptions('patch', opts.provenance, memoryId),
       );
       this.validateEmbedding(embedding, 'patchMemory');
       updates.embedding = embedding;
@@ -1223,7 +1188,7 @@ export class MemoryWriter {
     });
     const embedding = await this.embeddingService.embed(
       nextText,
-      this.embeddingCallOptions('correction', opts.provenance, existing.id),
+      createMemoryEmbeddingCallOptions('correction', opts.provenance, existing.id),
     );
     this.validateEmbedding(embedding, 'patch');
     const replacementRetention = applyRetentionSemantics({
@@ -1440,7 +1405,7 @@ export class MemoryWriter {
         const chunk = acceptedRecords.slice(start, start + IMPORT_BATCH_EMBED_CHUNK_SIZE);
         const embedded = await this.embeddingService.embedBatch(
           chunk.map(record => record.text),
-          this.embeddingCallOptions(
+          createMemoryEmbeddingCallOptions(
             'import',
             undefined,
             `${importWorkloadId}:${start}`,

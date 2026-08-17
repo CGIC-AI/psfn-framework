@@ -128,6 +128,7 @@ describe('MemoryWriter', () => {
       purpose: 'extraction',
       originType: 'background',
       originStage: 'extraction',
+      runtimeLaneClass: 'maintenance_reflection',
       workloadType: 'background_work',
       workloadId: 'memory-extraction:job-1',
     }, async () => await writer.write({
@@ -143,7 +144,7 @@ describe('MemoryWriter', () => {
         originStage: 'extraction',
         service: 'memory',
         process: 'write',
-        runtimeLaneClass: 'background_continuation',
+        runtimeLaneClass: 'maintenance_reflection',
         workloadType: 'background_work',
         workloadId: 'memory-extraction:job-1',
       },

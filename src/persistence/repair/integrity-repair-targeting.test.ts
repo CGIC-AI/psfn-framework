@@ -14,6 +14,8 @@ import {
   buildSessionHmacKeyring,
   signJournalEntry,
 } from '../journals/journal-utils.js';
+import { createFilesystemSessionArchivePort } from '../journals/journal/port.js';
+import { fingerprintJournalArchiveGeneration } from '../sessions/store/journal-chain-runtime.js';
 import { runSessionIntegrityRepair } from './integrity-repair.js';
 
 const rootsToDelete: string[] = [];
@@ -139,6 +141,103 @@ describe('targeted session integrity repair', () => {
     })).toThrow(/missing-recovery-owner/u);
 
     expect(readFileSync(join(harness.sessionsDir, filename), 'utf8')).toBe(original);
+    expect(existsSync(join(harness.backupDir, filename))).toBe(false);
+  });
+
+  it('repairs only one exact chain when a physical channel has sibling sessions', () => {
+    const harness = createHarness();
+    const keyring = buildSessionHmacKeyring({
+      serializedKeys: 'v1:exact-chain-key',
+      activeVersion: 'v1',
+    })!;
+    const channelId = 'api:shared-exact-owner';
+    const selectedFilename = '20260817_api-shared-exact-owner_one_000001.jsonl';
+    const siblingFilename = '20260817_api-shared-exact-owner_two_000002.jsonl';
+    writeMalformedJournal(harness.sessionsDir, selectedFilename, channelId, keyring);
+    const siblingBytes = writeMalformedJournal(
+      harness.sessionsDir,
+      siblingFilename,
+      channelId,
+      keyring,
+    );
+    const selectedPath = join(harness.sessionsDir, selectedFilename);
+    const archivePort = createFilesystemSessionArchivePort();
+    const expectedArchiveFingerprint = fingerprintJournalArchiveGeneration(
+      archivePort,
+      [archivePort.openArchive(channelId, selectedPath)],
+    )!;
+
+    const report = runSessionIntegrityRepair({
+      sessionsDir: harness.sessionsDir,
+      backupDir: harness.backupDir,
+      keyring,
+      reason: 'repair one evidence-bound chain',
+      targetJournalChain: {
+        channelId,
+        filePaths: [selectedPath],
+        expectedArchiveFingerprint,
+      },
+    });
+
+    expect(report.journal).toMatchObject({ scannedFiles: 1, modifiedFiles: 1 });
+    expect(readFileSync(selectedPath, 'utf8')).not.toContain('{not-json}');
+    expect(readFileSync(join(harness.sessionsDir, siblingFilename), 'utf8'))
+      .toBe(siblingBytes);
+    expect(existsSync(join(harness.backupDir, selectedFilename))).toBe(true);
+    expect(existsSync(join(harness.backupDir, siblingFilename))).toBe(false);
+  });
+
+  it('leaves a replacement generation byte-identical when exact evidence is stale', () => {
+    const harness = createHarness();
+    const keyring = buildSessionHmacKeyring({
+      serializedKeys: 'v1:stale-target-key',
+      activeVersion: 'v1',
+    })!;
+    const channelId = 'api:stale-recovery-owner';
+    const filename = '20260817_api-stale-recovery-owner_user_000001.jsonl';
+    const filePath = join(harness.sessionsDir, filename);
+    mkdirSync(harness.sessionsDir, { recursive: true });
+    const generationA = signJournalEntry(buildMessageJournalEntry(1, {
+      channelId,
+      role: 'user',
+      content: 'generation A evidence',
+      timestamp: 1_000,
+    }), keyring, null);
+    writeFileSync(filePath, `${JSON.stringify(generationA)}\n`, 'utf8');
+    const archivePort = createFilesystemSessionArchivePort();
+    const expectedArchiveFingerprint = fingerprintJournalArchiveGeneration(
+      archivePort,
+      [archivePort.openArchive(channelId, filePath)],
+    )!;
+
+    const generationB = signJournalEntry(buildMessageJournalEntry(1, {
+      channelId,
+      role: 'user',
+      content: 'repairable replacement generation B',
+      timestamp: 2_000,
+    }), keyring, null);
+    const replacementBytes = `${JSON.stringify(generationB)}\n{not-json}\n`;
+    writeFileSync(filePath, replacementBytes, 'utf8');
+
+    let failure: unknown;
+    try {
+      runSessionIntegrityRepair({
+        sessionsDir: harness.sessionsDir,
+        backupDir: harness.backupDir,
+        keyring,
+        reason: 'reject stale automatic recovery evidence',
+        targetJournalChain: {
+          channelId,
+          filePaths: [filePath],
+          expectedArchiveFingerprint,
+        },
+      });
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toMatchObject({ code: 'ESTALE' });
+    expect(readFileSync(filePath, 'utf8')).toBe(replacementBytes);
     expect(existsSync(join(harness.backupDir, filename))).toBe(false);
   });
 });

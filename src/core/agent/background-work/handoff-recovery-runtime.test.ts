@@ -173,7 +173,9 @@ describe('BackgroundWorkHandoffRecoveryRuntime', () => {
         onEvidenceOwnerSkipped?.({
           errno: 'EBADMSG',
           ownerSessionId: 'api:corrupt-owner',
+          sourceChannelId: 'api:corrupt-owner',
           sourceFingerprint: 'a'.repeat(64),
+          sourceArchiveFingerprint: 'b'.repeat(64),
           sourceArchivePaths: ['/tmp/corrupt-owner.jsonl'],
         });
       }
@@ -194,7 +196,9 @@ describe('BackgroundWorkHandoffRecoveryRuntime', () => {
     expect(quarantine).toHaveBeenCalledWith({
       errno: 'EBADMSG',
       ownerSessionId: 'api:corrupt-owner',
+      sourceChannelId: 'api:corrupt-owner',
       sourceFingerprint: 'a'.repeat(64),
+      sourceArchiveFingerprint: 'b'.repeat(64),
       sourceArchivePaths: ['/tmp/corrupt-owner.jsonl'],
     });
     expect(recoveryStream).toHaveBeenCalledTimes(2);

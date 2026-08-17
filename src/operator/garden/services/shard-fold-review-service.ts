@@ -180,7 +180,7 @@ export class AdminShardFoldReviewDataService implements AdminShardFoldReviewServ
     const review = await port.resolveFoldReview({
       ...input,
       actor: resolveActor(context, input.actor),
-      attemptRef: context.requestId ?? randomUUID(),
+      attemptRef: context?.requestId ?? randomUUID(),
     });
     if (!review) {
       return {

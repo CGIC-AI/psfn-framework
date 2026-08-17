@@ -40,6 +40,7 @@ export type {
   IcpInitiationSourceOutcome,
   IcpInitiationSourcePeerPort,
   IcpInitiationSourceAcceptance,
+  IcpInitiationSourceAcceptanceRuntime,
   IcpInitiationSourceRequest,
   IcpInitiationSourceResult,
   IcpInitiationSourceRuntime,
@@ -150,6 +151,47 @@ export function createIcpInitiationSourceRuntime(
     ...(reasonCode ? { reasonCode } : {}),
     ...(deliveryDisposition ? { deliveryDisposition } : {}),
   }, claimToken);
+
+  const deferCandidateForCooldown = async (
+    candidate: IcpInitiationCandidate,
+    reasonCode: IcpAutonomyReasonCode,
+    claimToken?: string,
+  ): Promise<IcpInitiationCandidate> => {
+    const transitionNow = now();
+    if (candidate.expiresAtMs <= transitionNow) {
+      return await transition(
+        candidate,
+        'expired',
+        'candidate_expired',
+        undefined,
+        claimToken,
+      );
+    }
+    const completedRetryAttempts = candidate.retryAttempt ?? 0;
+    const input: IcpInitiationCandidateTransitionInput = completedRetryAttempts
+      >= policy.maxRetryAttempts
+      ? {
+          candidateId: candidate.candidateId,
+          expectedStatus: candidate.status,
+          expectedRevision: candidate.revision,
+          status: 'cancelled',
+          reasonCode,
+          retryAttempt: completedRetryAttempts,
+        }
+      : {
+          candidateId: candidate.candidateId,
+          expectedStatus: candidate.status,
+          expectedRevision: candidate.revision,
+          status: 'deferred',
+          reasonCode,
+          retryAttempt: completedRetryAttempts + 1,
+          retryEligibleAtMs: Math.min(
+            candidate.expiresAtMs,
+            transitionNow + policy.retryCadenceMs,
+          ),
+        };
+    return await applyTransition(candidate, input, claimToken);
+  };
 
   const run = async (
     request: IcpInitiationSourceRequest,
@@ -362,53 +404,12 @@ export function createIcpInitiationSourceRuntime(
     const deferForCooldown = async (
       reasonCode: IcpAutonomyReasonCode,
     ): Promise<IcpInitiationCandidate> => {
-      const transitionNow = now();
-      if (candidate.expiresAtMs <= transitionNow) {
-        const expired = await transition(
-          candidate,
-          'expired',
-          'candidate_expired',
-          undefined,
-          recoveryClaim?.claimToken,
-        );
-        candidate = expired;
-        return expired;
-      }
-      const completedRetryAttempts = candidate.retryAttempt ?? 0;
-      if (completedRetryAttempts >= policy.maxRetryAttempts) {
-        const cancelledInput: IcpInitiationCandidateTransitionInput = {
-          candidateId: candidate.candidateId,
-          expectedStatus: candidate.status,
-          expectedRevision: candidate.revision,
-          status: 'cancelled',
-          reasonCode,
-          retryAttempt: completedRetryAttempts,
-        };
-        const cancelled = await applyTransition(
-          candidate,
-          cancelledInput,
-          recoveryClaim?.claimToken,
-        );
-        return cancelled;
-      }
-      const retryAttempt = completedRetryAttempts + 1;
-      const deferredInput: IcpInitiationCandidateTransitionInput = {
-        candidateId: candidate.candidateId,
-        expectedStatus: candidate.status,
-        expectedRevision: candidate.revision,
-        status: 'deferred',
-        reasonCode,
-        retryAttempt,
-        retryEligibleAtMs: Math.min(
-          candidate.expiresAtMs,
-          transitionNow + policy.retryCadenceMs,
-        ),
-      };
-      const deferred = await applyTransition(
+      const deferred = await deferCandidateForCooldown(
         candidate,
-        deferredInput,
+        reasonCode,
         recoveryClaim?.claimToken,
       );
+      candidate = deferred;
       return deferred;
     };
     let projection = toIcpInitiationCandidateSharedMetadata(candidate);
@@ -582,30 +583,7 @@ export function createIcpInitiationSourceRuntime(
       const candidate = await dependencies.store.getCandidate(acceptance.candidateId);
       durableStatus = candidate?.status ?? 'missing';
       if (candidate?.status === 'pending') {
-        const completedRetryAttempts = candidate.retryAttempt ?? 0;
-        const failureNow = now();
-        const transitioned = completedRetryAttempts >= policy.maxRetryAttempts
-          ? await dependencies.store.transitionCandidate({
-              candidateId: candidate.candidateId,
-              expectedStatus: candidate.status,
-              expectedRevision: candidate.revision,
-              status: 'cancelled',
-              reasonCode: 'delivery_failed',
-              retryAttempt: completedRetryAttempts,
-            })
-          : await dependencies.store.transitionCandidate({
-              candidateId: candidate.candidateId,
-              expectedStatus: candidate.status,
-              expectedRevision: candidate.revision,
-              status: 'deferred',
-              reasonCode: 'delivery_failed',
-              retryAttempt: completedRetryAttempts + 1,
-              retryEligibleAtMs: Math.min(
-                candidate.expiresAtMs,
-                failureNow + policy.retryCadenceMs,
-              ),
-            });
-        await emitLifecycle(transitioned, candidate.status);
+        const transitioned = await deferCandidateForCooldown(candidate, 'delivery_failed');
         durableStatus = transitioned.status;
       }
     } catch (recordError) {

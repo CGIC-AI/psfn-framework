@@ -70,6 +70,20 @@
       "note": "Pre-policy 120s override (repo-standard integration cap). Registered as measurement debt: pinned to its current value so any change forces a re-measured registry update. No independent baseline measured under this bead (timing wiring scoped to the restore suite)."
     },
     {
+      "file": "src/core/agent/background-work/handoff-recovery-legacy-receipt.integration.test.ts",
+      "timeoutMs": 30000,
+      "measuredBaselineMs": 5340,
+      "baselineSource": "measured",
+      "note": "2p0e0 legacy-receipt recovery regression against the real containerized Postgres harness. Baseline 5.34s full-file wall (2 tests, warm harness, this host, 2026-08-17); 30000/5340 = 5.62x headroom for teardown and shared-heavy harness variance."
+    },
+    {
+      "file": "src/core/agent/background-work/handoff-recovery-legacy-receipt.integration.test.ts",
+      "timeoutMs": 90000,
+      "measuredBaselineMs": 5340,
+      "baselineSource": "measured",
+      "note": "2p0e0 legacy-receipt recovery regression against the real containerized Postgres harness. Baseline 5.34s full-file wall (2 tests, warm harness, this host, 2026-08-17); 90000/5340 = 16.85x headroom for cold Postgres startup and shared-heavy harness variance."
+    },
+    {
       "file": "src/core/contacts/postgres-adapter.integration.test.ts",
       "timeoutMs": 120000,
       "measuredBaselineMs": null,

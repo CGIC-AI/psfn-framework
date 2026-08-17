@@ -195,6 +195,7 @@ describe('ApiServer authenticated Hub device ingress', () => {
       actor: { kind: 'guest', companionId: COMPANION_ID },
       channel: { source: 'server', companionId: COMPANION_ID },
     });
+    expect(requests[0]?.companionId).toBe(COMPANION_ID);
     expect(requests[0]?.headers.authorization).toBeUndefined();
     expect(requests[0]?.headers['x-psfn-hub-device-assertion']).toBeUndefined();
     expect(requests[0]?.headers['x-channel-privacy']).toBeUndefined();

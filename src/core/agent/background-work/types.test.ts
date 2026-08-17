@@ -10,10 +10,12 @@ import type { TurnRecord } from '../../../shared/contracts/runtime.js';
 import {
   createBackgroundWorkIdentity,
   createTurnRecordBackgroundWorkHandoff,
+  fingerprintBackgroundWorkHandoff,
   fingerprintBackgroundWorkPayload,
   fingerprintBackgroundWorkTurnRecord,
   parseBackgroundWorkPayload,
   parseTurnRecordBackgroundWorkHandoff,
+  parseTurnRecordBackgroundWorkHandoffRecovery,
   repairLegacyTurnRecordBackgroundWorkHandoffForRecovery,
   stableBackgroundWorkStringify,
   type AutoCompactionBackgroundPayload,
@@ -356,6 +358,24 @@ describe('legacy emotion-appraisal TurnRecord recovery', () => {
     expect(repaired.retiredLegacyEmotionAppraisalJobs).toBe(1);
     expect(repaired.record.backgroundWorkHandoff?.jobs).toEqual([compactionJob]);
     expect(parseTurnRecordBackgroundWorkHandoff(repaired.record)).toHaveLength(1);
+  });
+
+  it('binds a repaired sibling replay to the exact original legacy manifest', () => {
+    const record = makeTurnRecord();
+    const compactionJob = makeInput(record, makePayload(record));
+    const legacyEmotionJob = makeLegacyEmotionJob(record);
+    record.backgroundWorkHandoff = {
+      schemaVersion: 1,
+      jobs: [legacyEmotionJob, compactionJob],
+    };
+
+    expect(parseTurnRecordBackgroundWorkHandoffRecovery(record)).toEqual({
+      jobs: [compactionJob],
+      originalManifestFingerprint: fingerprintBackgroundWorkHandoff([
+        legacyEmotionJob as EnqueueBackgroundWorkInput,
+        compactionJob,
+      ]),
+    });
   });
 
   it('removes the handoff when the obsolete appraisal was its only job', () => {

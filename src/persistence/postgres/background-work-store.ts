@@ -15,7 +15,7 @@ import {
   fingerprintBackgroundWorkHandoff,
   fingerprintBackgroundWorkPayload,
   parseBackgroundWorkPayload,
-  type BackgroundWorkReasonCode,
+  type BackgroundWorkHandoffRecoveryInput, type BackgroundWorkReasonCode,
   type BackgroundWorkState,
   type ClaimedBackgroundWorkJob,
   type EnqueueBackgroundWorkInput,
@@ -385,6 +385,28 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort {
   async enqueueBatch(
     inputValues: readonly EnqueueBackgroundWorkInput[],
   ): Promise<BackgroundWorkEnqueueResult[]> {
+    return this.enqueueBatchWithReceipt(inputValues);
+  }
+
+  async recoverBatch(
+    input: BackgroundWorkHandoffRecoveryInput,
+  ): Promise<BackgroundWorkEnqueueResult[]> {
+    const originalManifestFingerprint = input.originalManifestFingerprint;
+    if (originalManifestFingerprint !== undefined
+      && !/^[a-f0-9]{64}$/u.test(originalManifestFingerprint)) {
+      throw new Error('Background work recovery manifest fingerprint must be a SHA-256 digest');
+    }
+    if (originalManifestFingerprint !== undefined
+      && input.jobs.some(job => job.kind === 'emotion_appraisal')) {
+      throw new Error('Legacy background work recovery must exclude the retired emotion appraisal');
+    }
+    return this.enqueueBatchWithReceipt(input.jobs, originalManifestFingerprint);
+  }
+
+  private async enqueueBatchWithReceipt(
+    inputValues: readonly EnqueueBackgroundWorkInput[],
+    originalManifestFingerprint?: string,
+  ): Promise<BackgroundWorkEnqueueResult[]> {
     if (inputValues.length === 0) return [];
     if (inputValues.length > 4) throw new Error('Background work handoff supports at most four jobs');
     const inputs = inputValues.map(validateEnqueueInput);
@@ -428,7 +450,8 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort {
           WHERE logical_session_id = $1 AND source_turn_id = $2
           FOR UPDATE
         `, [first.logicalSessionId, first.sourceTurnId]);
-        if (incumbent.rows[0]?.manifest_fingerprint !== manifestFingerprint) {
+        if (incumbent.rows[0]?.manifest_fingerprint !== manifestFingerprint
+          && incumbent.rows[0]?.manifest_fingerprint !== originalManifestFingerprint) {
           throw new Error('Background work handoff replay fingerprint mismatch');
         }
         const replayResults: BackgroundWorkEnqueueResult[] = [];

@@ -1,6 +1,7 @@
 import type { TurnRecord } from '../../../shared/contracts/runtime.js';
 import {
-  parseTurnRecordBackgroundWorkHandoff,
+  parseTurnRecordBackgroundWorkHandoffRecovery,
+  type BackgroundWorkHandoffRecoveryInput,
   type EnqueueBackgroundWorkInput,
 } from './types.js';
 import {
@@ -31,7 +32,7 @@ export interface BackgroundWorkHandoffRecoverySessionPort {
 }
 
 export type BackgroundWorkHandoffEnqueue = (
-  jobs: readonly EnqueueBackgroundWorkInput[],
+  input: BackgroundWorkHandoffRecoveryInput,
 ) => Promise<void>;
 
 /**
@@ -86,8 +87,8 @@ export class BackgroundWorkHandoffRecoveryRuntime {
       await this.sessions.recoverPendingBackgroundWorkHandoffs(
         BACKGROUND_WORK_HANDOFF_RECOVERY_BATCH_SIZE,
         async (record) => {
-          const jobs = parseTurnRecordBackgroundWorkHandoff(record);
-          if (jobs.length > 0) await enqueue(jobs);
+          const input = parseTurnRecordBackgroundWorkHandoffRecovery(record);
+          if (input.jobs.length > 0) await enqueue(input);
         },
         signal,
       );
@@ -127,8 +128,8 @@ export class BackgroundWorkHandoffRecoveryRuntime {
         await recoverHistoricalBackgroundWorkHandoffs(
           completionTrackedRecords,
           async (record) => {
-            const jobs = workerValidatedRecoveryJobs(record);
-            if (jobs.length > 0) await enqueue(jobs);
+            const input = workerValidatedRecoveryInput(record);
+            if (input.jobs.length > 0) await enqueue(input);
           },
           record => this.sessions.deferWorkerValidatedBackgroundWorkHandoffRecovery(record),
         );
@@ -154,7 +155,7 @@ export class BackgroundWorkHandoffRecoveryRuntime {
   }
 }
 
-function workerValidatedRecoveryJobs(record: TurnRecord): EnqueueBackgroundWorkInput[] {
+function workerValidatedRecoveryInput(record: TurnRecord): BackgroundWorkHandoffRecoveryInput {
   if (record.status !== 'completed' || !record.backgroundWorkHandoff) {
     throw new TurnRecordRecoveryEvidenceError(
       'Recovery worker returned a record without a completed handoff',
@@ -163,7 +164,21 @@ function workerValidatedRecoveryJobs(record: TurnRecord): EnqueueBackgroundWorkI
   }
   // The recovery worker validates identity, payload, payload fingerprint, and
   // source-turn fingerprint before it removes old-fat content for IPC.
-  return record.backgroundWorkHandoff.jobs as EnqueueBackgroundWorkInput[];
+  const jobs = record.backgroundWorkHandoff.jobs as EnqueueBackgroundWorkInput[];
+  const projection = record as TurnRecord & {
+    recoveryOriginalManifestFingerprint?: unknown;
+  };
+  const originalManifestFingerprint = projection.recoveryOriginalManifestFingerprint;
+  if (originalManifestFingerprint === undefined) return { jobs };
+  if (typeof originalManifestFingerprint !== 'string'
+    || !/^[a-f0-9]{64}$/u.test(originalManifestFingerprint)
+    || jobs.some(job => job.kind === 'emotion_appraisal')) {
+    throw new TurnRecordRecoveryEvidenceError(
+      'Recovery worker returned an invalid original manifest proof',
+      { code: TURN_RECORD_RECOVERY_STRUCTURAL_EVIDENCE_CODE },
+    );
+  }
+  return { jobs, originalManifestFingerprint };
 }
 
 function isDeterministicRecoveryEvidenceError(error: unknown): boolean {

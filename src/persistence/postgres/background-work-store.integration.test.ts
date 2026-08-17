@@ -1,11 +1,14 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { createHash } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
   createBackgroundWorkIdentity,
+  fingerprintBackgroundWorkHandoff,
   fingerprintBackgroundWorkPayload,
+  stableBackgroundWorkStringify,
   type AutoCompactionBackgroundPayload,
   type BackgroundWorkPayload,
   type ClaimedBackgroundWorkJob,
@@ -273,6 +276,23 @@ function makeFourJobBatch(
     createdAtMs: source.createdAtMs,
     maxAttempts: 3,
   }));
+}
+
+function makeLegacyFourJobBatch(
+  logicalSessionId: string,
+  turnId: string,
+): EnqueueBackgroundWorkInput[] {
+  return makeFourJobBatch(logicalSessionId, turnId).map((input) => {
+    if (input.kind !== 'emotion_appraisal') return input;
+    const { driftDecision: _retired, ...legacyPayload } = input.payload as Record<string, unknown>;
+    return {
+      ...input,
+      payload: legacyPayload as EnqueueBackgroundWorkInput['payload'],
+      payloadFingerprint: createHash('sha256')
+        .update(stableBackgroundWorkStringify(legacyPayload))
+        .digest('hex'),
+    };
+  });
 }
 
 async function waitForPostgresCondition(
@@ -677,6 +697,51 @@ describe('PostgresBackgroundWorkStore', () => {
         .filter((job) => job !== null)).toHaveLength(4);
     } finally {
       await store.close();
+    }
+  });
+
+  it('recognizes an exact legacy receipt without enqueueing the retired appraisal again', async () => {
+    const database = await harness.createDatabase();
+    const schema = 'legacy_recovery_receipt';
+    const store = await PostgresBackgroundWorkStore.connect(database.databaseUrl, { schema });
+    const inspectionPool = createPostgresPool(database.databaseUrl, { schema, max: 1 });
+    try {
+      const original = makeLegacyFourJobBatch('legacy-session', 'legacy-turn');
+      const retained = original.filter(input => input.kind !== 'emotion_appraisal');
+      const originalManifestFingerprint = fingerprintBackgroundWorkHandoff(original);
+      await inspectionPool.query(`
+        INSERT INTO agent_background_work_handoffs (
+          logical_session_id, source_turn_id, manifest_fingerprint, accepted_at_ms
+        ) VALUES ($1, $2, $3, $4)
+      `, [
+        original[0]!.logicalSessionId,
+        original[0]!.sourceTurnId,
+        originalManifestFingerprint,
+        original[0]!.createdAtMs,
+      ]);
+
+      const results = await store.recoverBatch({
+        jobs: retained,
+        originalManifestFingerprint,
+      });
+
+      expect(results).toEqual(retained.map(input => ({
+        outcome: 'already_accepted',
+        jobId: input.jobId,
+        staleDiscardedJobIds: [],
+      })));
+      expect(await Promise.all(original.map(input => store.get(input.jobId))))
+        .toEqual([null, null, null, null]);
+      await expect(store.recoverBatch({
+        jobs: makeFourJobBatch('legacy-session', 'legacy-turn'),
+        originalManifestFingerprint,
+      })).rejects.toThrow('must exclude the retired emotion appraisal');
+      await expect(store.recoverBatch({
+        jobs: retained,
+        originalManifestFingerprint: 'f'.repeat(64),
+      })).rejects.toThrow('Background work handoff replay fingerprint mismatch');
+    } finally {
+      await Promise.all([inspectionPool.end(), store.close()]);
     }
   });
 

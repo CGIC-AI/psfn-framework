@@ -135,6 +135,7 @@ function makeDataDirs(policy: Record<string, unknown>): {
   env: NodeJS.ProcessEnv;
   operatorAlerting: { configuredSinks: ['ntfy']; status: 'configured'; warning: null };
   onPostEscalation: ReturnType<typeof vi.fn>;
+  onInlineShadowFinding: ReturnType<typeof vi.fn>;
 } {
   const systemDataDir = mkdtempSync(join(tmpdir(), 'psfn-escalation-system-'));
   const companionDataDir = mkdtempSync(join(tmpdir(), 'psfn-escalation-companion-'));
@@ -152,6 +153,7 @@ function makeDataDirs(policy: Record<string, unknown>): {
     },
     operatorAlerting: { configuredSinks: ['ntfy'], status: 'configured', warning: null },
     onPostEscalation: vi.fn(),
+    onInlineShadowFinding: vi.fn(),
   };
 }
 

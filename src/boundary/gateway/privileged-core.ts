@@ -269,6 +269,12 @@ export async function buildGatewayPrivilegedCore(
         ...(companionId ? { companionId } : {}),
       });
     },
+    onInlineShadowFinding: async (companionId, event) => {
+      await eventBus.emitRequired('intake.screening.inline_shadow_finding', {
+        ...event,
+        ...(companionId ? { companionId } : {}),
+      });
+    },
     onScreeningTiming: (companionId, event) => {
       const ownerCompanionId = companionId ?? resolveCoreCompanionIdFromConfig(input.config);
       const stage = event.stage === 'local_screening'

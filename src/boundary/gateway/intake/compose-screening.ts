@@ -163,6 +163,8 @@ export async function composeGatewayIntakeScreening(input: {
   onScreeningTiming?: IntakeScreeningServiceOptions['onTiming'];
   /** Content-free completion path for asynchronous post-pass deep screening. */
   onPostEscalation?: IntakeScreeningServiceOptions['onPostEscalation'];
+  /** Content-free alert path for confirmed inline shadow-full findings. */
+  onInlineShadowFinding?: IntakeScreeningServiceOptions['onInlineShadowFinding'];
   /** Startup proof that at least one canonical operator sink is configured. */
   operatorAlerting?: OperatorAlertSinkConfiguration;
   env?: NodeJS.ProcessEnv;
@@ -181,9 +183,15 @@ export async function composeGatewayIntakeScreening(input: {
     ...Object.values(policy.surfacePostures.workflows),
   ];
   const postEscalationConfigured = surfaceProfiles.includes('fast_pass_post_escalate');
+  const inlineShadowConfigured = surfaceProfiles.includes('shadow_full');
   if (postEscalationConfigured && !input.onPostEscalation) {
     throw new Error(
       'CogSec fast-pass post-escalation posture requires a durable completion/alert observer',
+    );
+  }
+  if (inlineShadowConfigured && !input.onInlineShadowFinding) {
+    throw new Error(
+      'CogSec shadow-full posture requires a durable finding/alert observer',
     );
   }
   if (input.operatorAlerting?.status !== 'configured') {
@@ -319,6 +327,9 @@ export async function composeGatewayIntakeScreening(input: {
     ...(input.onFailClosedScreening ? { onFailClosed: input.onFailClosedScreening } : {}),
     ...(input.onScreeningTiming ? { onTiming: input.onScreeningTiming } : {}),
     ...(input.onPostEscalation ? { onPostEscalation: input.onPostEscalation } : {}),
+    ...(input.onInlineShadowFinding
+      ? { onInlineShadowFinding: input.onInlineShadowFinding }
+      : {}),
   });
   // ── Vision intake screener (htm9.8) ──
   // enabled + backend        → wired.

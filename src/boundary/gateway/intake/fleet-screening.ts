@@ -34,6 +34,9 @@ type ScreeningTimingEvent = Parameters<
 type PostEscalationEvent = Parameters<
   NonNullable<BaseCompositionInput['onPostEscalation']>
 >[0];
+type InlineShadowFindingEvent = Parameters<
+  NonNullable<BaseCompositionInput['onInlineShadowFinding']>
+>[0];
 
 export interface GatewayFleetScreeningCompanion {
   companionId: CompanionId;
@@ -48,6 +51,7 @@ export type GatewayIntakeScreeningRuntimeInput = Omit<
   | 'onFailClosedScreening'
   | 'onScreeningTiming'
   | 'onPostEscalation'
+  | 'onInlineShadowFinding'
 > & {
   /** Existing single-companion root; used byte-for-byte when fleet mode is disabled. */
   companionDataDir: string;
@@ -70,6 +74,10 @@ export type GatewayIntakeScreeningRuntimeInput = Omit<
   onPostEscalation?: (
     companionId: CompanionId | undefined,
     event: PostEscalationEvent,
+  ) => void | Promise<void>;
+  onInlineShadowFinding?: (
+    companionId: CompanionId | undefined,
+    event: InlineShadowFindingEvent,
   ) => void | Promise<void>;
   /**
    * Content-free bounded-pool telemetry (psfn-framework-yxz0z.4): queue depth,
@@ -173,6 +181,7 @@ export async function composeGatewayIntakeScreeningRuntime(
     onFailClosedScreening,
     onScreeningTiming,
     onPostEscalation,
+    onInlineShadowFinding,
     onScreeningPoolTelemetry,
     singleStreamKey,
     ...baseInput
@@ -201,6 +210,9 @@ export async function composeGatewayIntakeScreeningRuntime(
         : {}),
       ...(onPostEscalation
         ? { onPostEscalation: event => onPostEscalation(companionId, event) }
+        : {}),
+      ...(onInlineShadowFinding
+        ? { onInlineShadowFinding: event => onInlineShadowFinding(companionId, event) }
         : {}),
     });
     compositions.push(composition);

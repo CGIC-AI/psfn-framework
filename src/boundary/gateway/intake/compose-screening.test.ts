@@ -53,6 +53,7 @@ function makeDataDirs(mode: IntakeFirewallMode, visionEnabled: boolean): {
   config: SubstrateConfig;
   env: NodeJS.ProcessEnv;
   operatorAlerting: { configuredSinks: ['ntfy']; status: 'configured'; warning: null };
+  onInlineShadowFinding: ReturnType<typeof vi.fn>;
 } {
   const systemDataDir = mkdtempSync(join(tmpdir(), 'psfn-intake-system-'));
   const companionDataDir = mkdtempSync(join(tmpdir(), 'psfn-intake-companion-'));
@@ -88,6 +89,7 @@ function makeDataDirs(mode: IntakeFirewallMode, visionEnabled: boolean): {
       PSFN_INJECTION_MODEL_DIR: join(systemDataDir, 'unprovisioned-injection-model'),
     },
     operatorAlerting: { configuredSinks: ['ntfy'], status: 'configured', warning: null },
+    onInlineShadowFinding: vi.fn(),
   };
 }
 
@@ -178,6 +180,16 @@ describe('composeGatewayIntakeScreening vision wiring (htm9.8)', () => {
     })).rejects.toThrow(/requires a resolvable pi-ai deep-screening backend/);
   });
 
+  it('fails startup when a shadow-full surface lacks a durable finding observer', async () => {
+    const { onInlineShadowFinding: _observer, ...input } = makeDataDirs('shadow', false);
+    await expect(composeGatewayIntakeScreening({
+      ...input,
+      screenerBackend: TEST_SCREENER_BACKEND,
+      screenerTestCompletion: unusedScreenerCompletion,
+      injectionBackendFactory: fakeInjectionBackendFactory,
+    })).rejects.toThrow(/shadow-full posture requires a durable finding\/alert observer/iu);
+  });
+
   it('does not wire the vision screener when the policy knob is disabled', async () => {
     const composition = await composeGatewayIntakeScreening({
       ...makeDataDirs('strict', false),
@@ -223,11 +235,21 @@ describe('composeGatewayIntakeScreening vision wiring (htm9.8)', () => {
         sourceClass: 'primary_user',
         origin: { ref: 'discord:channel-1:message-1' },
         scope: 'context',
+        sourceChannelId: 'channel-1',
+        sourceMessageId: 'message-1',
+        surface: { channelClass: 'group_chat' },
       },
     );
 
     expect(result.action).toBe('quarantine');
     expect(durableCounts).toEqual([1]);
+    expect(input.onInlineShadowFinding).toHaveBeenCalledOnce();
+    expect(input.onInlineShadowFinding).toHaveBeenCalledWith(expect.objectContaining({
+      phase: 'inline_shadow',
+      sourceChannelId: 'channel-1',
+      sourceMessageId: 'message-1',
+      disposition: 'confirmed_bad',
+    }));
     await composition.dispose();
   });
 
@@ -315,6 +337,7 @@ describe('composeGatewayIntakeScreeningRuntime fleet quarantine ownership', () =
       injectionBackendFactory: fakeInjectionBackendFactory,
       env: input.env,
       operatorAlerting: input.operatorAlerting,
+      onInlineShadowFinding: input.onInlineShadowFinding,
       onQuarantineHeld: companionId => queueChanges.push(companionId ?? 'missing'),
       onFailClosedScreening: (companionId, event) => {
         failClosedEvents.push({ companionId, stage: event.stage });
@@ -455,6 +478,7 @@ describe('composeGatewayIntakeScreeningRuntime bounded screening pool (psfn-fram
       injectionBackendFactory: fakeInjectionBackendFactory,
       env: input.env,
       operatorAlerting: input.operatorAlerting,
+      onInlineShadowFinding: input.onInlineShadowFinding,
       onScreeningPoolTelemetry: (companionId, event) => {
         poolEvents.push({ companionId, kind: event.kind });
       },

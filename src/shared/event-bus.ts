@@ -47,7 +47,10 @@ import type { IcpConversationCostBreakerEvent } from './telemetry/model-usage.js
 import type { TurnPerformanceEvent } from './telemetry/turn-performance.js';
 import type { ToolCallOutcome } from './contracts/tool-call-outcome.js';
 import type { ContextCoherenceEvent } from './contracts/context-coherence.js';
-import type { IntakePostEscalationEvent } from '../core/cogsec/intake/screening.js';
+import type {
+  IntakeInlineShadowFindingEvent,
+  IntakePostEscalationEvent,
+} from '../core/cogsec/intake/screening.js';
 import type {
   CompanionApprovalRequestedPayload,
   CompanionApprovalResolvedPayload,
@@ -1100,6 +1103,9 @@ export interface EventMap {
     timestamp: number;
   };
   'intake.screening.post_escalation': IntakePostEscalationEvent & {
+    companionId?: string;
+  };
+  'intake.screening.inline_shadow_finding': IntakeInlineShadowFindingEvent & {
     companionId?: string;
   };
   'internal_state.gap_detected': { offlineSince: string; gapMs: number; timestamp: number };

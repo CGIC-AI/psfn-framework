@@ -432,6 +432,7 @@ export interface IntakeScreeningResult {
 }
 
 export interface IntakePostEscalationEvent {
+  phase: 'post_pass';
   disposition: 'clear' | 'confirmed_bad' | 'failed_closed';
   surface: CogSecStructuralSurface;
   envelopeId: string;
@@ -444,6 +445,16 @@ export interface IntakePostEscalationEvent {
   cogSecCaseId?: string;
   completedAtMs: number;
 }
+
+export interface IntakeInlineShadowFindingEvent
+  extends Omit<IntakePostEscalationEvent, 'phase' | 'disposition'> {
+  phase: 'inline_shadow';
+  disposition: 'confirmed_bad';
+}
+
+export type IntakeCogSecFindingEvent =
+  | IntakePostEscalationEvent
+  | IntakeInlineShadowFindingEvent;
 
 export interface IntakeScreeningService {
   /** Ingress enforcement posture of this screening instance (observe/enforce). */
@@ -492,6 +503,8 @@ export interface IntakeScreeningServiceOptions {
   onDecision?: (event: IntakeScreeningObservabilityEvent) => void;
   /** Content-free completion observer for pass-through deep screening. */
   onPostEscalation?: (event: IntakePostEscalationEvent) => void | Promise<void>;
+  /** Content-free alert observer for non-clean inline shadow-full decisions. */
+  onInlineShadowFinding?: (event: IntakeInlineShadowFindingEvent) => void | Promise<void>;
 }
 
 /** The fixed, operator-reviewed in-place placeholder for withheld content. */
@@ -1015,6 +1028,64 @@ export function createIntakeScreeningService(
     return { riskLabels, scores, extractedFields };
   }
 
+  function emitInlineShadowFinding(
+    input: IntakeScreeningInput,
+    envelope: IntakeEnvelope,
+    action: IntakeDecisionAction,
+    semanticTrace: IntakeSemanticScreeningTrace,
+    cogSecCaseId?: string,
+  ): void {
+    if (!input.surface || action === 'pass') return;
+    const surfacePosture = resolveCogSecSurfacePosture(policy.surfacePostures, input.surface);
+    if (surfacePosture.profile !== 'shadow_full') return;
+    const sourceChannelId = input.sourceChannelId?.trim();
+    const sourceMessageId = input.sourceMessageId?.trim();
+    if (!sourceChannelId || !sourceMessageId) {
+      options.onFailClosed?.({
+        stage: 'escalation',
+        sourceClass: input.sourceClass,
+        error: 'inline shadow finding lacks structural sourceChannelId/sourceMessageId',
+        timestamp: input.atMs ?? now(),
+      });
+      return;
+    }
+    const event: IntakeInlineShadowFindingEvent = {
+      phase: 'inline_shadow',
+      disposition: 'confirmed_bad',
+      surface: input.surface,
+      envelopeId: envelope.id,
+      sourceChannelId,
+      sourceMessageId,
+      action,
+      riskLabels: [...envelope.riskLabels],
+      scores: { ...envelope.scores },
+      semanticTrace,
+      ...(cogSecCaseId ? { cogSecCaseId } : {}),
+      completedAtMs: now(),
+    };
+    log.info('Inline shadow-full CogSec finding completed', event);
+    try {
+      const completion = options.onInlineShadowFinding?.(event);
+      if (completion) {
+        void completion.catch(error => {
+          options.onFailClosed?.({
+            stage: 'escalation',
+            sourceClass: input.sourceClass,
+            error: `inline shadow finding observer failed: ${error instanceof Error ? error.message : String(error)}`,
+            timestamp: event.completedAtMs,
+          });
+        });
+      }
+    } catch (error) {
+      options.onFailClosed?.({
+        stage: 'escalation',
+        sourceClass: input.sourceClass,
+        error: `inline shadow finding observer failed: ${error instanceof Error ? error.message : String(error)}`,
+        timestamp: event.completedAtMs,
+      });
+    }
+  }
+
   function finalize(
     text: string,
     input: IntakeScreeningInput,
@@ -1267,6 +1338,14 @@ export function createIntakeScreeningService(
         ?? semanticLayersNotRun('semantic escalation was not requested'),
       priorSignals,
     );
+    if (!postEscalationPass) {
+      emitInlineShadowFinding(
+        input,
+        envelope,
+        screenedDecision.action,
+        observability.semanticTrace,
+      );
+    }
 
     return {
       envelope,
@@ -1348,6 +1427,7 @@ export function createIntakeScreeningService(
         || action === 'block'
         || riskLabels.some(label => INTAKE_QUARANTINE_RISK_LABELS.includes(label));
       return {
+        phase: 'post_pass',
         disposition: confirmedBad ? 'confirmed_bad' : 'clear',
         surface: input.surface!,
         envelopeId: local.envelope.id,
@@ -1367,6 +1447,7 @@ export function createIntakeScreeningService(
         error: error instanceof Error ? error.message : String(error),
       });
       return {
+        phase: 'post_pass',
         disposition: 'failed_closed',
         surface: input.surface!,
         envelopeId: local.envelope.id,
@@ -1560,6 +1641,13 @@ export function createIntakeScreeningService(
           escalationDecision.trace
             ?? semanticLayersNotRun('uninstrumented final escalation'),
           priorSignals,
+        );
+        emitInlineShadowFinding(
+          timedInput,
+          final.envelope,
+          final.action,
+          observability.semanticTrace,
+          final.cogSecCaseId,
         );
         return {
           envelope: final.envelope,

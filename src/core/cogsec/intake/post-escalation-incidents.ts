@@ -3,12 +3,12 @@ import type { NotificationPort } from '../../../boundary/gateway/notification-po
 import { createComponentLogger } from '../../../shared/logger.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 import type { CogSecEventStore } from '../events.js';
-import type { IntakePostEscalationEvent } from './screening.js';
+import type { IntakeCogSecFindingEvent } from './screening.js';
 
 const log = createComponentLogger('PostEscalationIncidents');
 const ALERT_SENDER = Object.freeze({
   kind: 'system' as const,
-  provenance: 'system.operator_alert.cogsec_post_escalation',
+  provenance: 'system.operator_alert.cogsec_finding',
 });
 
 export interface PostEscalationIncidentRecorderDeps {
@@ -24,10 +24,10 @@ export interface PostEscalationIncidentEvidence {
 }
 
 export type PostEscalationIncidentRecorder = (
-  event: IntakePostEscalationEvent,
+  event: IntakeCogSecFindingEvent,
 ) => Promise<PostEscalationIncidentEvidence>;
 
-function caseIdFor(event: IntakePostEscalationEvent): string {
+function caseIdFor(event: IntakeCogSecFindingEvent): string {
   if (event.cogSecCaseId) return event.cogSecCaseId;
   const digest = createHash('sha256')
     .update(event.envelopeId, 'utf8')
@@ -37,7 +37,9 @@ function caseIdFor(event: IntakePostEscalationEvent): string {
     .update(event.sourceMessageId, 'utf8')
     .digest('hex')
     .slice(0, 40);
-  return `cogsec_post_${digest}`;
+  return event.phase === 'inline_shadow'
+    ? `cogsec_inline_${digest}`
+    : `cogsec_post_${digest}`;
 }
 
 function deliveryFailure(error: unknown): 'failed' | 'unconfigured' {
@@ -45,12 +47,28 @@ function deliveryFailure(error: unknown): 'failed' | 'unconfigured' {
 }
 
 function safeSummary(
-  disposition: IntakePostEscalationEvent['disposition'],
+  event: IntakeCogSecFindingEvent,
   status: 'pending' | 'delivered' | 'failed' | 'unconfigured' | 'not_required',
 ): string {
-  return disposition === 'clear'
-    ? 'Post-pass CogSec escalation completed clear. Operator alert not required.'
-    : `Post-pass CogSec escalation requires operator review. Operator alert delivery: ${status}.`;
+  if (event.disposition === 'clear') {
+    return 'Post-pass CogSec escalation completed clear. Operator alert not required.';
+  }
+  const phase = event.phase === 'inline_shadow'
+    ? 'Inline shadow-full CogSec finding'
+    : 'Post-pass CogSec escalation';
+  return `${phase} requires operator review. Operator alert delivery: ${status}.`;
+}
+
+function notificationTitle(companionName: string, event: IntakeCogSecFindingEvent): string {
+  return event.phase === 'inline_shadow'
+    ? `${companionName} CogSec shadow finding`
+    : `${companionName} CogSec post-escalation`;
+}
+
+function notificationLead(companionName: string, event: IntakeCogSecFindingEvent): string {
+  return event.phase === 'inline_shadow'
+    ? `${companionName} confirmed an inline shadow-full finding and requires operator review.`
+    : `${companionName} deep-screened a pass-through stream and requires operator review.`;
 }
 
 export function createPostEscalationIncidentRecorder(
@@ -58,15 +76,16 @@ export function createPostEscalationIncidentRecorder(
 ): PostEscalationIncidentRecorder {
   const companionName = deps.companionName.trim();
   if (!companionName) throw new Error('Post-escalation alerts require a companion name');
+  const inFlight = new Map<string, Promise<PostEscalationIncidentEvidence>>();
 
-  return async (event): Promise<PostEscalationIncidentEvidence> => {
+  return (event): Promise<PostEscalationIncidentEvidence> => {
     const caseId = caseIdFor(event);
     const range = {
       sourceChannelId: event.sourceChannelId,
       sourceMessageIds: [event.sourceMessageId],
     };
     const store = deps.cogSecEvents();
-    store.upsertEvent({
+    const recorded = store.upsertEvent({
       caseId,
       type: 'intake_firewall',
       severity: event.disposition === 'clear'
@@ -76,78 +95,103 @@ export function createPostEscalationIncidentRecorder(
       sourceChannelId: event.sourceChannelId,
       affectedMessageRanges: [range],
       actions: event.disposition === 'clear' ? [] : ['tombstone', 'search_exclude'],
-      actor: 'system:cogsec-post-escalation',
+      actor: 'system:cogsec-finding',
       safeAgentSummary: safeSummary(
-        event.disposition,
+        event,
         event.disposition === 'clear' ? 'not_required' : 'pending',
       ),
       ...(event.disposition === 'clear' ? {} : { operatorAlertDeliveryStatus: 'pending' }),
-    }, existing => ({
-      status: event.disposition === 'clear' ? 'applied' : 'open',
-      affectedMessageRanges: [
-        ...existing.affectedMessageRanges.filter(candidate => (
-          candidate.sourceChannelId !== range.sourceChannelId
-          || !candidate.sourceMessageIds?.includes(event.sourceMessageId)
-        )),
-        range,
-      ],
-      actions: event.disposition === 'clear'
-        ? existing.actions
-        : [...new Set([...existing.actions, 'tombstone' as const, 'search_exclude' as const])],
-      safeAgentSummary: safeSummary(
-        event.disposition,
-        event.disposition === 'clear' ? 'not_required' : 'pending',
-      ),
-      ...(event.disposition === 'clear' ? {} : { operatorAlertDeliveryStatus: 'pending' }),
-    }));
+    }, existing => {
+      const deliveryStatus = existing.operatorAlertDeliveryStatus === 'delivered'
+        ? 'delivered'
+        : 'pending';
+      return {
+        status: event.disposition === 'clear' ? 'applied' : 'open',
+        affectedMessageRanges: [
+          ...existing.affectedMessageRanges.filter(candidate => (
+            candidate.sourceChannelId !== range.sourceChannelId
+            || !candidate.sourceMessageIds?.includes(event.sourceMessageId)
+          )),
+          range,
+        ],
+        actions: event.disposition === 'clear'
+          ? existing.actions
+          : [...new Set([...existing.actions, 'tombstone' as const, 'search_exclude' as const])],
+        safeAgentSummary: safeSummary(
+          event,
+          event.disposition === 'clear' ? 'not_required' : deliveryStatus,
+        ),
+        ...(event.disposition === 'clear'
+          ? {}
+          : { operatorAlertDeliveryStatus: deliveryStatus }),
+      };
+    });
 
     if (event.disposition === 'clear') {
-      return { caseId, notification: 'not_required', durableEvidence: 'recorded' };
+      return Promise.resolve({
+        caseId,
+        notification: 'not_required',
+        durableEvidence: 'recorded',
+      });
+    }
+    if (recorded.operatorAlertDeliveryStatus === 'delivered') {
+      return Promise.resolve({ caseId, notification: 'delivered', durableEvidence: 'recorded' });
+    }
+    const active = inFlight.get(caseId);
+    if (active) {
+      return active;
     }
 
-    let notification: 'delivered' | 'failed' | 'unconfigured';
-    try {
-      await deps.notifier.notify({
-        sender: ALERT_SENDER,
-        title: `${companionName} CogSec post-escalation`,
-        priority: 5,
-        message: [
-          `${companionName} deep-screened a pass-through stream and requires operator review.`,
-          `Case: ${caseId}`,
-          `Channel: ${event.sourceChannelId}`,
-          `Source message: ${event.sourceMessageId}`,
-          `Disposition: ${event.disposition}`,
-          `Scan labels: ${event.riskLabels.length > 0 ? event.riskLabels.join(', ') : 'none'}`,
-          `Scan scores: ${Object.entries(event.scores).map(([key, value]) => `${key}=${value}`).join(', ') || 'none'}`,
-          `Deep layers: L2=${event.semanticTrace.l2.status}, L3=${event.semanticTrace.l3.status}`,
-          'Use the structural source-message provenance for a surgical Garden preview before applying tombstones.',
-        ].join('\n'),
-      });
-      notification = 'delivered';
-    } catch (error) {
-      notification = deliveryFailure(error);
-      log.error('Failed to deliver post-escalation CogSec alert', {
-        caseId,
-        sourceChannelId: event.sourceChannelId,
-        notification,
-        error: toErrorMessage(error),
-      });
-    }
+    const notificationAttempt = async (): Promise<PostEscalationIncidentEvidence> => {
+      let notification: 'delivered' | 'failed' | 'unconfigured';
+      try {
+        await deps.notifier.notify({
+          sender: ALERT_SENDER,
+          title: notificationTitle(companionName, event),
+          priority: 5,
+          message: [
+            notificationLead(companionName, event),
+            `Case: ${caseId}`,
+            `Channel: ${event.sourceChannelId}`,
+            `Source message: ${event.sourceMessageId}`,
+            `Disposition: ${event.disposition}`,
+            `Scan labels: ${event.riskLabels.length > 0 ? event.riskLabels.join(', ') : 'none'}`,
+            `Scan scores: ${Object.entries(event.scores).map(([key, value]) => `${key}=${value}`).join(', ') || 'none'}`,
+            `Deep layers: L2=${event.semanticTrace.l2.status}, L3=${event.semanticTrace.l3.status}`,
+            'Use the structural source-message provenance for a surgical Garden preview before applying tombstones.',
+          ].join('\n'),
+        });
+        notification = 'delivered';
+      } catch (error) {
+        notification = deliveryFailure(error);
+        log.error('Failed to deliver CogSec finding alert', {
+          caseId,
+          phase: event.phase,
+          sourceChannelId: event.sourceChannelId,
+          notification,
+          error: toErrorMessage(error),
+        });
+      }
 
-    try {
-      deps.cogSecEvents().updateEvent(caseId, {
-        safeAgentSummary: safeSummary(event.disposition, notification),
-        operatorAlertDeliveryStatus: notification,
-      });
-      return { caseId, notification, durableEvidence: 'recorded' };
-    } catch (error) {
-      log.error('Failed to persist post-escalation alert delivery evidence', {
-        caseId,
-        sourceChannelId: event.sourceChannelId,
-        notification,
-        error: toErrorMessage(error),
-      });
-      return { caseId, notification, durableEvidence: 'failed' };
-    }
+      try {
+        deps.cogSecEvents().updateEvent(caseId, {
+          safeAgentSummary: safeSummary(event, notification),
+          operatorAlertDeliveryStatus: notification,
+        });
+        return { caseId, notification, durableEvidence: 'recorded' };
+      } catch (error) {
+        log.error('Failed to persist CogSec finding alert delivery evidence', {
+          caseId,
+          phase: event.phase,
+          sourceChannelId: event.sourceChannelId,
+          notification,
+          error: toErrorMessage(error),
+        });
+        return { caseId, notification, durableEvidence: 'failed' };
+      }
+    };
+    const completion = notificationAttempt().finally(() => inFlight.delete(caseId));
+    inFlight.set(caseId, completion);
+    return completion;
   };
 }

@@ -104,6 +104,38 @@ const screenInput = {
 };
 
 describe('intake screening service (htm9.2)', () => {
+  it('alerts once for a confirmed inline shadow-full finding and not for a clean pass', async () => {
+    const findings: unknown[] = [];
+    const service = createIntakeScreeningService({
+      policy: makePolicy('strict'),
+      l1: createIntakeL1Scanner({ rulesPath: RULES_PATH, reloadCheckIntervalMs: -1 }),
+      actor: 'test:intake-screening',
+      onInlineShadowFinding: event => { findings.push(event); },
+    } as Parameters<typeof createIntakeScreeningService>[0]);
+    const structuralInput = {
+      sourceClass: 'primary_user' as const,
+      origin: { ref: 'discord:operator-room:message-inline' },
+      scope: 'context' as const,
+      sourceChannelId: 'operator-room',
+      sourceMessageId: 'message-inline',
+      surface: { channelClass: 'operator_direct' as const },
+    };
+
+    await service.screen(HOSTILE_TEXT, structuralInput);
+    await service.screen(CLEAN_TEXT, { ...structuralInput, sourceMessageId: 'message-clean' });
+
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({
+      phase: 'inline_shadow',
+      disposition: 'confirmed_bad',
+      sourceChannelId: 'operator-room',
+      sourceMessageId: 'message-inline',
+      action: 'quarantine',
+      riskLabels: expect.arrayContaining(['injection/override_attempt']),
+    });
+    expect(JSON.stringify(findings[0])).not.toContain(HOSTILE_TEXT);
+  });
+
   it('passes group chat after fast scanning and completes deep escalation asynchronously', async () => {
     let finishDeepScreening!: (value: {
       kind: 'quarantine';

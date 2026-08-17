@@ -22,7 +22,8 @@ describe('post-pass CogSec escalation incidents', () => {
       companionName: 'Test Companion',
     });
 
-    const evidence = await record({
+    const finding = {
+      phase: 'inline_shadow',
       disposition: 'confirmed_bad',
       surface: { channelClass: 'group_chat' },
       envelopeId: 'envelope-post-escalation-1',
@@ -36,9 +37,20 @@ describe('post-pass CogSec escalation incidents', () => {
         l3: { status: 'flagged', reason: 'deep screener flagged' },
       },
       completedAtMs: 1_786_900_000_000,
-    });
+    } as const;
+    const [evidence, concurrentEvidence] = await Promise.all([
+      record(finding),
+      record(finding),
+    ]);
+    const replayEvidence = await record(finding);
 
     expect(evidence).toMatchObject({ notification: 'delivered', durableEvidence: 'recorded' });
+    expect(concurrentEvidence).toMatchObject({
+      notification: 'delivered',
+      durableEvidence: 'recorded',
+    });
+    expect(replayEvidence).toMatchObject({ notification: 'delivered', durableEvidence: 'recorded' });
+    expect(notify).toHaveBeenCalledTimes(1);
     expect(notify).toHaveBeenCalledWith(expect.objectContaining({
       sender: expect.objectContaining({ kind: 'system' }),
       priority: 5,
@@ -63,13 +75,17 @@ describe('post-pass CogSec escalation incidents', () => {
     const dir = mkdtempSync(join(tmpdir(), 'psfn-post-escalation-'));
     dirs.push(dir);
     const path = join(dir, 'events.json');
+    const notify = vi.fn()
+      .mockRejectedValueOnce(new Error('zero configured sinks'))
+      .mockResolvedValue({ status: 'sent', topic: 'operator' });
     const record = createPostEscalationIncidentRecorder({
       cogSecEvents: () => new CogSecEventStore(path),
-      notifier: { notify: vi.fn().mockRejectedValue(new Error('zero configured sinks')) },
+      notifier: { notify },
       companionName: 'Test Companion',
     });
 
-    const evidence = await record({
+    const finding = {
+      phase: 'post_pass',
       disposition: 'failed_closed',
       surface: { channelClass: 'group_chat' },
       envelopeId: 'envelope-post-escalation-2',
@@ -83,11 +99,14 @@ describe('post-pass CogSec escalation incidents', () => {
         l3: { status: 'failed_closed', reason: 'transport unavailable' },
       },
       completedAtMs: 1_786_900_000_001,
-    });
+    } as const;
+    const evidence = await record(finding);
 
     expect(evidence.notification).toBe('unconfigured');
-    expect(new CogSecEventStore(path).listEvents()[0]?.operatorAlertDeliveryStatus)
-      .toBe('unconfigured');
+    const retryEvidence = await record(finding);
+    expect(retryEvidence.notification).toBe('delivered');
+    expect(notify).toHaveBeenCalledTimes(2);
+    expect(new CogSecEventStore(path).listEvents()[0]?.operatorAlertDeliveryStatus).toBe('delivered');
   });
 
   it('persists clear post-pass telemetry without notifying the operator', async () => {
@@ -102,6 +121,7 @@ describe('post-pass CogSec escalation incidents', () => {
     });
 
     const evidence = await record({
+      phase: 'post_pass',
       disposition: 'clear',
       surface: { channelClass: 'group_chat' },
       envelopeId: 'envelope-post-escalation-clear',

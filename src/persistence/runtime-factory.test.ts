@@ -347,6 +347,7 @@ describe('createAgentPersistenceRuntime', () => {
       // Enrollment store (locations vinz.12) is constructed for real around the
       // mocked pool — asserted structurally, schema threading asserted below.
       hubIdentityEnrollmentStore: expect.any(Object),
+      icpFeltImpulseFunnelStore: expect.any(Object),
       intentionRuntime: runtimeFactoryMocks.postgresIntentionRuntime as IntentionRuntimeWiring,
       intentionProviders: runtimeFactoryMocks.postgresIntentionRuntime as IntentionRuntimeProviders,
       internalStateStore: runtimeFactoryMocks.postgresInternalStateStore,

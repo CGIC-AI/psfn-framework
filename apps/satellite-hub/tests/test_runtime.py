@@ -38,6 +38,11 @@ def test_load_runtime_config_reads_psfn_and_project_env(tmp_path: Path, monkeypa
         "PSFN_CLIENT_KEY_PATH",
         "PSFN_CA_CERT_PATH",
         "VOICE_CONVERSATION_ID",
+        "HUB_DEVICE_ASSERTION_FLEET_AUTH_PATH",
+        "HUB_DEVICE_ASSERTION_SATELLITE_REGISTRY_PATH",
+        "HUB_DEVICE_ASSERTION_PRIVATE_KEY_PATH",
+        "HUB_DEVICE_ASSERTION_TTL_SECONDS",
+        "PSFN_COMPANION_ID",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -75,6 +80,7 @@ def test_load_runtime_config_reads_psfn_and_project_env(tmp_path: Path, monkeypa
     assert config.psfn_satellite_claim.capability_profile == "voice-only"
     assert config.psfn_satellite_claim.telemetry.mode == "disabled"
     assert config.voice_conversation_id == "hub"
+    assert config.hub_device_assertion is None
     assert config.elevenlabs_model_id == "eleven_flash_v2_5"
     assert config.reply_timeout_seconds == 30.0
     assert config.voice_initial_silence_timeout_seconds == 4.0
@@ -221,6 +227,33 @@ def test_load_runtime_config_requires_public_host_in_realtime_mode(tmp_path: Pat
         ValueError,
         match="AUDIO_PUBLIC_HOST or REALTIME_VOICE_PUBLIC_HOST is required when DEVICE_TRANSPORT=realtime",
     ):
+        load_runtime_config(tmp_path)
+
+
+def test_load_runtime_config_requires_complete_hub_device_assertion_authority(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    for name in (
+        "HUB_DEVICE_ASSERTION_FLEET_AUTH_PATH",
+        "HUB_DEVICE_ASSERTION_SATELLITE_REGISTRY_PATH",
+        "HUB_DEVICE_ASSERTION_PRIVATE_KEY_PATH",
+        "HUB_DEVICE_ASSERTION_TTL_SECONDS",
+        "PSFN_COMPANION_ID",
+        "PSFN_CLIENT_CERT_PATH",
+        "PSFN_CLIENT_KEY_PATH",
+        "PSFN_CA_CERT_PATH",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("HUB_DEVICE_ASSERTION_PRIVATE_KEY_PATH", "/run/secrets/hub-private.pem")
+    (tmp_path / ".env").write_text(
+        "ESPHOME_HOST=esphome.example\n"
+        "DEEPGRAM_API_KEY=project-deepgram\n"
+        "ELEVENLABS_API_KEY=project-eleven\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="configuration is incomplete"):
         load_runtime_config(tmp_path)
 
 

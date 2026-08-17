@@ -427,6 +427,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "aioesphomeapi" },
+    { name = "cryptography" },
     { name = "httpx" },
     { name = "python-dotenv" },
     { name = "typer" },
@@ -441,6 +442,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "aioesphomeapi", specifier = "==42.7.0" },
+    { name = "cryptography", specifier = "==46.0.5" },
     { name = "httpx", specifier = "==0.28.1" },
     { name = "python-dotenv", specifier = "==1.2.2" },
     { name = "typer", specifier = "==0.24.1" },

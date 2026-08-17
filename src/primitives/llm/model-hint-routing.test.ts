@@ -337,6 +337,20 @@ describe('resolveCandidates per-companion model selection (23pp)', () => {
     });
   });
 
+  it('bounds an explicit completion hint to the selected model output capability', () => {
+    const config = makeConfig();
+
+    expect(resolveCandidates(config, 'chat', {
+      model: 'chat/model',
+      provider: 'openrouter',
+      maxTokens: 214_404,
+    })[0]).toMatchObject({
+      model: 'chat/model',
+      provider: 'openrouter',
+      maxTokens: 8192,
+    });
+  });
+
   it('validates but does not let a companion selection override the global local import route', () => {
     const config = makeConfig({
       importProcessingRouteMode: 'local_endpoint',

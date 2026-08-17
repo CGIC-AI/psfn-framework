@@ -30,6 +30,7 @@ import {
   resolveOptionalCredentialReference,
 } from '../../boundary/custody/credential-vault.js';
 import { createOpenAICompatibleEndpointModel } from './models.js';
+import { resolveCompletionTokenBudget } from './completion-budget.js';
 
 export type ProviderRuntimeCompleteResult = AssistantMessage;
 
@@ -163,7 +164,10 @@ function registerConfiguredProviders(models: MutableModels, config: ProviderRunt
           provider: provider.id,
           routeLabel: provider.label ?? provider.id,
           contextWindow: entry.tuning?.contextWindow ?? entry.capabilities?.contextWindow,
-          maxTokens: entry.tuning?.maxOutputTokens ?? entry.capabilities?.maxOutputTokens,
+          maxTokens: resolveCompletionTokenBudget({
+            configuredMaxOutputTokens: entry.tuning?.maxOutputTokens,
+            capabilityMaxOutputTokens: entry.capabilities?.maxOutputTokens,
+          }),
           reasoning: entry.capabilities?.supportsReasoning === true
             && entry.tuning?.thinkingEnabled !== false,
           supportsVision: entry.capabilities?.supportsVision === true,

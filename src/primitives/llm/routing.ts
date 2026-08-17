@@ -13,6 +13,7 @@ import type {
 } from '../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { toFlooredPositiveInteger } from '../../shared/utils/numeric.js';
+import { resolveCompletionTokenBudget } from './completion-budget.js';
 
 export type RoutingPurpose = CanonicalModelPurpose | 'context';
 
@@ -369,9 +370,11 @@ export function resolveCandidateTuning(entry: ModelRegistryEntry): Pick<
 }
 
 function resolveMaxTokens(entry: ModelRegistryEntry): number | undefined {
-  return toPositiveNumber(entry.tuning?.maxOutputTokens)
-    ?? toPositiveNumber(entry.tuning?.maxTokens)
-    ?? toPositiveNumber(entry.capabilities?.maxOutputTokens);
+  return resolveCompletionTokenBudget({
+    configuredMaxOutputTokens: toPositiveNumber(entry.tuning?.maxOutputTokens)
+      ?? toPositiveNumber(entry.tuning?.maxTokens),
+    capabilityMaxOutputTokens: entry.capabilities?.maxOutputTokens,
+  });
 }
 
 function resolveContextWindow(entry: ModelRegistryEntry, defaultContextWindow: number): number | undefined {

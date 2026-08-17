@@ -137,6 +137,19 @@ describe('FallbackRunner', () => {
     expect(execute).toHaveBeenCalledTimes(1);
   });
 
+  it('surfaces payment-required errors without spending against a fallback candidate', async () => {
+    const runner = new FallbackRunner({ rateLimitCooldownMs: 1000, now: () => 0 });
+    const execute = vi.fn(async (_candidate: RoutingCandidate) => {
+      throw Object.assign(new Error('provider payment required'), { status: 402 });
+    });
+
+    await expect(
+      runner.run('chat', [chatPrimary, chatFallback], execute),
+    ).rejects.toThrow('provider payment required');
+
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
   it('streams through the next candidate after a pre-output failure', async () => {
     const runner = new FallbackRunner({ rateLimitCooldownMs: 1000, now: () => 0 });
     const seen: string[] = [];

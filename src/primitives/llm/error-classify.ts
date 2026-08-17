@@ -4,6 +4,7 @@ import { isExplicitToolContractError } from './explicit-tool-request.js';
 export type LLMErrorCategory =
   | 'abort'
   | 'context_overflow'
+  | 'payment_required'
   | 'rate_limit'
   | 'connection_unavailable'
   | 'timeout'
@@ -53,6 +54,13 @@ const RATE_LIMIT_PATTERNS = [
   'tokens per minute',
   'over capacity',
   'temporarily overloaded',
+] as const;
+
+const PAYMENT_REQUIRED_PATTERNS = [
+  'payment required',
+  'insufficient credits',
+  'insufficient balance',
+  'credits this account can afford',
 ] as const;
 
 const CONNECTION_UNAVAILABLE_PATTERNS = [
@@ -150,6 +158,14 @@ export function classifyLLMError(error: unknown): LLMErrorClassification {
   const contextStatus = statusCode === 400 || statusCode === 413 || statusCode === 422;
   if (contextStatus || includesAny(text, CONTEXT_OVERFLOW_PATTERNS)) {
     return { category: 'context_overflow', retryable: false, ...(statusCode !== undefined ? { statusCode } : {}) };
+  }
+
+  if (statusCode === 402 || includesAny(text, PAYMENT_REQUIRED_PATTERNS)) {
+    return {
+      category: 'payment_required',
+      retryable: false,
+      ...(statusCode !== undefined ? { statusCode } : {}),
+    };
   }
 
   if (statusCode === 429 || includesAny(text, RATE_LIMIT_PATTERNS)) {

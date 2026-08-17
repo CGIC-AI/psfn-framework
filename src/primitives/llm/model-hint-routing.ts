@@ -8,6 +8,7 @@ import type { SubstrateConfig } from '../../system/config/runtime-config-contrac
 import { createComponentLogger } from '../../shared/logger.js';
 import { toFlooredPositiveInteger } from '../../shared/utils/numeric.js';
 import { toFiniteNumber } from './client-response-helpers.js';
+import { resolveCompletionTokenBudget } from './completion-budget.js';
 import {
   findRegistryEntryByModelId,
   normalizeModelIdForProvider,
@@ -271,11 +272,20 @@ function resolveModelHintCandidate(
   // The hinted model's own catalog output cap beats the base candidate's:
   // inheriting a roster default above the target model's maximum is a guaranteed
   // 400 from the provider.
-  const registryMaxTokens = toFlooredPositiveInteger(registryEntry?.tuning?.maxOutputTokens)
-    ?? toFlooredPositiveInteger(registryEntry?.capabilities?.maxOutputTokens);
+  const registryTuningMaxTokens = toFlooredPositiveInteger(
+    registryEntry?.tuning?.maxOutputTokens,
+  );
+  const registryCapabilityMaxTokens = toFlooredPositiveInteger(
+    registryEntry?.capabilities?.maxOutputTokens,
+  );
   const registryContextWindow = toFlooredPositiveInteger(registryEntry?.tuning?.contextWindow)
     ?? toFlooredPositiveInteger(registryEntry?.capabilities?.contextWindow);
-  let maxTokens = modelHint.maxTokens ?? registryMaxTokens ?? baseCandidate.maxTokens;
+  const maxTokens = resolveCompletionTokenBudget({
+    requestedMaxTokens: modelHint.maxTokens,
+    configuredMaxOutputTokens: registryTuningMaxTokens,
+    capabilityMaxOutputTokens: registryCapabilityMaxTokens,
+    fallbackMaxTokens: baseCandidate.maxTokens,
+  }) ?? config.primaryMaxTokens;
   const contextWindow = modelHint.contextWindow ?? registryContextWindow ?? baseCandidate.contextWindow;
   // Per-model tuning must come from the matched registry entry, not the lane's
   // primary base candidate: a provider+model hint otherwise inherits an
@@ -305,9 +315,6 @@ function resolveModelHintCandidate(
   model = model.trim();
   if (!provider || !model) return null;
 
-  if (!Number.isFinite(maxTokens) || maxTokens <= 0) {
-    maxTokens = config.primaryMaxTokens;
-  }
   if (!Number.isFinite(maxTokens) || maxTokens <= 0) return null;
 
   const hinted: RoutingCandidate = {

@@ -39,6 +39,7 @@
 // shadow mode; in enforce mode the policy default decides. There is no
 // implicit default: the owner-file validator requires every sink to map one.
 
+import { createHash } from 'node:crypto';
 import { createComponentLogger } from '../../../shared/logger.js';
 import {
   isIntakeSinkConsumableState,
@@ -82,6 +83,45 @@ export interface IntakeSinkGateDecision {
   /** Envelope ids that produced a deny verdict (empty for allow/unscreened). */
   deniedEnvelopeIds: readonly string[];
 }
+
+export type OrdinaryIntakeSinkDenialNotificationStatus =
+  | 'delivered'
+  | 'failed'
+  | 'unconfigured';
+
+export interface OrdinaryIntakeSinkDenialEvidence {
+  caseId: string;
+  incident: 'created' | 'deduplicated';
+  /** Settles after the canonical NotificationPort attempt and durable evidence update. */
+  notification: Promise<{ status: OrdinaryIntakeSinkDenialNotificationStatus }>;
+}
+
+/**
+ * Content-free routing supplied by a production sink. `correlationRef` is
+ * hashed at the gate and never reaches persistence or notification. When it
+ * is absent, the denied envelope ids provide the stable replay correlation.
+ */
+export interface IntakeSinkDenialRouteContext {
+  correlationRef?: string;
+  sourceChannelId?: string;
+  logicalSessionId?: string;
+}
+
+/** Validated, content-free context delivered to the incident recorder. */
+export interface OrdinaryIntakeSinkDenialContext {
+  correlationId: string;
+  sourceChannelId?: string;
+  logicalSessionId?: string;
+}
+
+export interface OrdinaryIntakeSinkDenial {
+  decision: IntakeSinkGateDecision;
+  context: OrdinaryIntakeSinkDenialContext;
+}
+
+export type OrdinaryIntakeSinkDenialRecorder = (
+  denial: OrdinaryIntakeSinkDenial,
+) => OrdinaryIntakeSinkDenialEvidence;
 
 export interface IntakeEgressTrifectaAssessment {
   /** True when untrusted content + private data + egress all meet in this path. */
@@ -380,6 +420,7 @@ export interface IntakeSinkGate {
     sink: IntakeSink,
     envelopes: readonly IntakeEnvelopeSnapshot[],
     context?: Readonly<Record<string, unknown>>,
+    denialRoute?: IntakeSinkDenialRouteContext,
   ): IntakeSinkGateDecision;
   /** Trifecta assessment for the tool-egress sink. */
   assessEgressTrifecta(
@@ -400,6 +441,8 @@ export interface IntakeSinkGateOptions {
   actor: string;
   /** Optional additional audit sink (Garden/event-store wiring); logging always happens. */
   onAudit?: (event: IntakeSinkGateAuditEvent) => void;
+  /** Required in production: durable incident + canonical alert for ordinary enforce denials. */
+  onOrdinarySinkDenial?: OrdinaryIntakeSinkDenialRecorder;
   /**
    * Dedicated side effect for a blocked hard lethal-trifecta decision. Unlike
    * the best-effort telemetry hook above, callback failures propagate so a
@@ -410,11 +453,56 @@ export interface IntakeSinkGateOptions {
 
 export type RuntimeIntakeSinkGateOptions = IntakeSinkGateOptions & Required<Pick<
   IntakeSinkGateOptions,
-  'onBlockedEgressTrifecta'
+  'onBlockedEgressTrifecta' | 'onOrdinarySinkDenial'
 >>;
 
+function optionalContextId(value: string | undefined, field: string): string | undefined {
+  if (value === undefined) return undefined;
+  const normalized = value.trim();
+  if (!normalized) throw new Error(`Ordinary intake sink denial context has empty ${field}`);
+  return normalized;
+}
+
+function buildOrdinaryDenialContext(
+  decision: IntakeSinkGateDecision,
+  route: IntakeSinkDenialRouteContext | undefined,
+): OrdinaryIntakeSinkDenialContext {
+  const correlationRef = optionalContextId(route?.correlationRef, 'correlationRef');
+  const sourceChannelId = optionalContextId(route?.sourceChannelId, 'sourceChannelId');
+  const logicalSessionId = optionalContextId(route?.logicalSessionId, 'logicalSessionId');
+  const envelopeCorrelation = [...decision.deniedEnvelopeIds].sort().join('\u0000');
+  if (!correlationRef && !envelopeCorrelation) {
+    throw new Error(
+      `Ordinary enforce-mode ${decision.sink} denial is missing a stable correlation reference`,
+    );
+  }
+  const digest = createHash('sha256')
+    .update(decision.sink, 'utf8')
+    .update('\u0000', 'utf8')
+    .update(correlationRef ?? '', 'utf8')
+    .update('\u0000', 'utf8')
+    .update(sourceChannelId ?? '', 'utf8')
+    .update('\u0000', 'utf8')
+    .update(logicalSessionId ?? '', 'utf8')
+    .update('\u0000', 'utf8')
+    .update(correlationRef ? '' : envelopeCorrelation, 'utf8')
+    .digest('hex')
+    .slice(0, 40);
+  return {
+    correlationId: `cogsec_sinkdenial_${digest}`,
+    ...(sourceChannelId ? { sourceChannelId } : {}),
+    ...(logicalSessionId ? { logicalSessionId } : {}),
+  };
+}
+
 export function createIntakeSinkGate(options: IntakeSinkGateOptions): IntakeSinkGate {
-  const { policy, actor, onAudit, onBlockedEgressTrifecta } = options;
+  const {
+    policy,
+    actor,
+    onAudit,
+    onOrdinarySinkDenial,
+    onBlockedEgressTrifecta,
+  } = options;
   const mode = assertGateMode(policy);
 
   function audit(event: IntakeSinkGateAuditEvent): void {
@@ -452,7 +540,7 @@ export function createIntakeSinkGate(options: IntakeSinkGateOptions): IntakeSink
 
   return {
     mode,
-    evaluate(sink, envelopes, context = {}) {
+    evaluate(sink, envelopes, context = {}, denialRoute) {
       const decision = evaluateSinkAccess(policy, sink, envelopes);
       audit({
         kind: 'sink_access',
@@ -469,6 +557,17 @@ export function createIntakeSinkGate(options: IntakeSinkGateOptions): IntakeSink
             : {}),
         },
       });
+      if (
+        decision.mode === 'enforce'
+        && decision.verdict === 'deny'
+        && !decision.allowed
+        && onOrdinarySinkDenial
+      ) {
+        onOrdinarySinkDenial({
+          decision,
+          context: buildOrdinaryDenialContext(decision, denialRoute),
+        });
+      }
       return decision;
     },
     assessEgressTrifecta(input, context = {}) {
@@ -517,6 +616,9 @@ export function maybeCreateIntakeSinkGate(
 ): IntakeSinkGate | null {
   if (typeof options.onBlockedEgressTrifecta !== 'function') {
     throw new Error('Intake sink-gate runtime requires a durable hard-block incident recorder');
+  }
+  if (typeof options.onOrdinarySinkDenial !== 'function') {
+    throw new Error('Intake sink-gate runtime requires a durable ordinary-denial incident recorder');
   }
   return createIntakeSinkGate(options);
 }

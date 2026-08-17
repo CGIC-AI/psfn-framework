@@ -92,6 +92,13 @@ describe('agent core runtime builder', () => {
     expect(coreRuntimeSource).toContain('createMcpTool({ gateway })');
   });
 
+  it('production-wires ordinary sink denial incidents through the canonical operator notifier', () => {
+    const coreRuntimeSource = readSource('core-runtime.ts');
+    expect(coreRuntimeSource).toContain('onOrdinarySinkDenial: createOrdinaryIntakeSinkDenialRecorder({');
+    expect(coreRuntimeSource).toContain('notifier: operatorNotifier');
+    expect(coreRuntimeSource).toContain('companionName: card.data.name');
+  });
+
   it('wires concern resolution through isolated startup reconciliation and scoped emotion state', () => {
     const coreRuntimeSource = readSource('core-runtime.ts');
     expect(coreRuntimeSource).toContain('createConcernResolutionArcRecorder({');

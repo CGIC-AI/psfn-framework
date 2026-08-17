@@ -95,6 +95,8 @@ describe('skills runtime wiring', () => {
         tool: 'skill',
         action: 'create',
         screening: 'unavailable',
+      }, {
+        correlationRef: 'unrouted:create',
       });
       expect(target.skillsRuntime?.getStore().list()).toEqual([]);
     } finally {

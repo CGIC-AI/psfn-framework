@@ -217,6 +217,9 @@ describe('buildAcceptedFactCandidates', () => {
       triggerReason: 'manual',
       factIndex: 0,
       factType: 'semantic',
+    }, {
+      correlationRef: 'fact:0',
+      sourceChannelId: 'api:test',
     });
   });
 

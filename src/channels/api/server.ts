@@ -962,7 +962,7 @@ export class ApiServer implements ChannelAdapterPort {
       const connection = resolveAuthenticatedHubDeviceConnection({
         req,
         principal,
-        registry: this.satelliteRegistry,
+        registry: this.readSatelliteRegistry(),
         companionId: this.hubDeviceCompanionId,
         ...(clientCert ? { clientCert } : {}),
       });

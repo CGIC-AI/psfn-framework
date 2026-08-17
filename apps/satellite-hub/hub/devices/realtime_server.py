@@ -19,6 +19,7 @@ from hub.adapters.agent.psfn_streaming import PsfnStreamingProvider
 from hub.adapters.stt.deepgram_live import DeepgramLiveSTTProvider
 from hub.adapters.tts.elevenlabs_streaming import ElevenLabsStreamingTTS
 from hub.media.http_audio import StaticAudioServer
+from hub.security.device_assertion import HubDeviceAssertionConfig, HubDeviceAssertionIssuer
 from hub.satellite_claims import ClientCertificateConfig, SatelliteClaimConfig
 from hub.storage.session_cache import SessionCache
 from hub.util import ensure_directory, isoformat_z, to_jsonable, utc_now, write_json
@@ -62,6 +63,7 @@ class _RealtimeConnection:
         psfn_author_name: str | None,
         psfn_satellite_claim: SatelliteClaimConfig,
         psfn_client_certificate: ClientCertificateConfig | None,
+        hub_device_assertion: HubDeviceAssertionConfig | None = None,
     ) -> None:
         self._websocket = websocket
         self._audio_server = audio_server
@@ -82,6 +84,11 @@ class _RealtimeConnection:
             author_name=psfn_author_name,
             claim_config=psfn_satellite_claim,
             client_certificate=psfn_client_certificate,
+            device_assertion_issuer=(
+                HubDeviceAssertionIssuer(hub_device_assertion)
+                if hub_device_assertion is not None
+                else None
+            ),
         )
         self._device_id = f"client-{uuid.uuid4().hex[:8]}"
         self._device_name = "Realtime Voice Client"
@@ -443,6 +450,7 @@ class RealtimeVoiceServer:
         psfn_author_name: str | None,
         psfn_satellite_claim: SatelliteClaimConfig,
         psfn_client_certificate: ClientCertificateConfig | None,
+        hub_device_assertion: HubDeviceAssertionConfig | None = None,
     ) -> None:
         self._host = host
         self._port = port
@@ -461,6 +469,7 @@ class RealtimeVoiceServer:
         self._psfn_author_name = psfn_author_name
         self._psfn_satellite_claim = psfn_satellite_claim
         self._psfn_client_certificate = psfn_client_certificate
+        self._hub_device_assertion = hub_device_assertion
         self._server = None
 
     async def __aenter__(self) -> "RealtimeVoiceServer":
@@ -498,6 +507,7 @@ class RealtimeVoiceServer:
             psfn_author_name=self._psfn_author_name,
             psfn_satellite_claim=self._psfn_satellite_claim,
             psfn_client_certificate=self._psfn_client_certificate,
+            hub_device_assertion=self._hub_device_assertion,
         )
         try:
             await connection.run()

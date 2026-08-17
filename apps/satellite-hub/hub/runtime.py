@@ -9,6 +9,7 @@ from typing import TypeVar
 from dotenv import load_dotenv
 
 from hub.config import ESPHomeTarget, RealtimeTarget
+from hub.security.device_assertion import HubDeviceAssertionConfig
 from hub.satellite_claims import (
     CAPABILITY_PROFILE_DEFAULTS,
     DEFAULT_CAPABILITY_PROFILE,
@@ -82,6 +83,7 @@ class HubRuntimeConfig:
     psfn_satellite_claim: SatelliteClaimConfig
     voice_conversation_id: str
     psfn_client_certificate: ClientCertificateConfig | None
+    hub_device_assertion: HubDeviceAssertionConfig | None
     audio_bind_host: str
     audio_public_host: str
     audio_port: int
@@ -162,6 +164,11 @@ def load_runtime_config(project_root: Path) -> HubRuntimeConfig:
         raise ValueError("PSFN_AUTHOR_ID and PSFN_AUTHOR_NAME must both be set when either is configured")
     psfn_client_certificate = _load_psfn_client_certificate(project_root)
     psfn_satellite_claim = _load_psfn_satellite_claim(psfn_client_certificate)
+    hub_device_assertion = _load_hub_device_assertion_config(
+        project_root,
+        satellite_id=psfn_satellite_claim.satellite_id,
+        endpoint_id=psfn_satellite_claim.endpoint_id,
+    )
     voice_conversation_id = (
         os.getenv("VOICE_CONVERSATION_ID")
         or psfn_satellite_claim.satellite_id
@@ -192,6 +199,7 @@ def load_runtime_config(project_root: Path) -> HubRuntimeConfig:
         psfn_satellite_claim=psfn_satellite_claim,
         voice_conversation_id=voice_conversation_id,
         psfn_client_certificate=psfn_client_certificate,
+        hub_device_assertion=hub_device_assertion,
         audio_bind_host=audio_bind_host,
         audio_public_host=audio_public_host,
         audio_port=audio_port,
@@ -207,6 +215,45 @@ def load_runtime_config(project_root: Path) -> HubRuntimeConfig:
         voice_max_turn_seconds=float(os.getenv("VOICE_MAX_TURN_SECONDS", "20")),
         voice_speech_rms_threshold=float(os.getenv("VOICE_SPEECH_RMS_THRESHOLD", "25")),
         voice_min_speech_chunks_for_endpointing=int(os.getenv("VOICE_MIN_SPEECH_CHUNKS_FOR_ENDPOINTING", "4")),
+    )
+
+
+def _load_hub_device_assertion_config(
+    project_root: Path,
+    *,
+    satellite_id: str,
+    endpoint_id: str,
+) -> HubDeviceAssertionConfig | None:
+    names = (
+        "HUB_DEVICE_ASSERTION_FLEET_AUTH_PATH",
+        "HUB_DEVICE_ASSERTION_SATELLITE_REGISTRY_PATH",
+        "HUB_DEVICE_ASSERTION_PRIVATE_KEY_PATH",
+        "HUB_DEVICE_ASSERTION_TTL_SECONDS",
+        "PSFN_COMPANION_ID",
+    )
+    values = {name: (os.getenv(name) or "").strip() for name in names}
+    if not any(values.values()):
+        return None
+    missing = [name for name, value in values.items() if not value]
+    if missing:
+        raise ValueError(
+            "Hub device assertion configuration is incomplete: " + ", ".join(missing)
+        )
+    try:
+        ttl_seconds = int(values["HUB_DEVICE_ASSERTION_TTL_SECONDS"])
+    except ValueError as exc:
+        raise ValueError("HUB_DEVICE_ASSERTION_TTL_SECONDS must be an integer") from exc
+    return HubDeviceAssertionConfig(
+        fleet_auth_path=_resolve_path(project_root, values["HUB_DEVICE_ASSERTION_FLEET_AUTH_PATH"]),
+        satellite_registry_path=_resolve_path(
+            project_root,
+            values["HUB_DEVICE_ASSERTION_SATELLITE_REGISTRY_PATH"],
+        ),
+        private_key_path=_resolve_path(project_root, values["HUB_DEVICE_ASSERTION_PRIVATE_KEY_PATH"]),
+        ttl_seconds=ttl_seconds,
+        companion_id=values["PSFN_COMPANION_ID"],
+        satellite_id=satellite_id,
+        endpoint_id=endpoint_id,
     )
 
 

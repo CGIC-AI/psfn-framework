@@ -762,12 +762,6 @@ export function parseTurnRecordBackgroundWorkHandoff(
  * already proved the source-turn fingerprint against the full canonical row.
  * Every remaining identity, payload, and job binding is still recomputed here.
  */
-export function parseWorkerValidatedTurnRecordBackgroundWorkHandoffProjection(
-  record: TurnRecord,
-): EnqueueBackgroundWorkInput[] {
-  return [...parseWorkerValidatedTurnRecordBackgroundWorkHandoffRecovery(record).jobs];
-}
-
 /** Validate a canonical source and retain the exact receipt identity across legacy retirement. */
 export function parseTurnRecordBackgroundWorkHandoffRecovery(
   record: TurnRecord,

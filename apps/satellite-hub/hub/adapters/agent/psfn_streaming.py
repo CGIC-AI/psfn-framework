@@ -238,11 +238,12 @@ class PsfnStreamingProvider:
             "stream": stream,
             "system_prompt_mode": "default",
             "response_style": "concise",
-            "user": conversation_id,
             "satellite_claim": satellite_claim,
         }
-        if self._provider_name:
-            payload["provider"] = self._provider_name
+        if self._device_assertion_issuer is None:
+            payload["user"] = conversation_id
+            if self._provider_name:
+                payload["provider"] = self._provider_name
         return payload
 
     def _build_satellite_claim(self, conversation_id: str) -> dict[str, object]:

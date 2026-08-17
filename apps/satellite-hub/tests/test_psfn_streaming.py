@@ -73,6 +73,7 @@ async def test_psfn_streaming_provider_streams_deltas_and_persists_history() -> 
     provider = PsfnStreamingProvider(
         api_base_url="http://psfn.test/v1",
         api_key=None,
+        provider_name="openrouter",
         model_name="psfn",
         claim_config=normalize_claim_config(
             capability_profile="voice-only",
@@ -95,7 +96,8 @@ async def test_psfn_streaming_provider_streams_deltas_and_persists_history() -> 
     assert requests[0]["system_prompt_mode"] == "default"
     assert "system_prompt" not in requests[0]
     assert requests[0]["response_style"] == "concise"
-    assert requests[0]["user"] == "realtime:pi-w"
+    assert "user" not in requests[0]
+    assert "provider" not in requests[0]
     assert requests[0]["messages"] == [{"role": "user", "content": "hello"}]
     assert requests[0]["satellite_claim"]["claim"] == {
         "namespace": "satellite.endpoint",

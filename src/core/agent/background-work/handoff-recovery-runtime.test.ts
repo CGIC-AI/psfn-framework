@@ -112,53 +112,56 @@ describe('BackgroundWorkHandoffRecoveryRuntime', () => {
     expect(recoverPending).toHaveBeenCalledTimes(3);
   });
 
-  it('retries owner evidence skips until a later full enumeration completes cleanly', async () => {
-    const record = {
-      status: 'completed',
-      channelId: 'api:concurrent-append-owner',
-      sessionId: 'api:concurrent-append-owner',
-      turnId: 'turn-after-quiet',
-      backgroundWorkHandoff: {
-        schemaVersion: 1,
-        jobs: [{ jobId: 'job-after-quiet' }],
-      },
-    } as unknown as TurnRecord;
-    let scanAttempt = 0;
-    const recoveryStream = vi.fn((
-      _signal?: AbortSignal,
-      onEvidenceOwnerSkipped?: (skip: TurnRecordRecoveryEvidenceSkip) => void,
-    ) => (async function* () {
-      scanAttempt += 1;
-      if (scanAttempt <= 2) {
-        onEvidenceOwnerSkipped?.({
-          errno: 'ESTALE',
-          ownerSessionId: record.sessionId!,
-        });
-        return;
-      }
-      yield record;
-    })());
-    const enqueue = vi.fn(async () => undefined);
-    const quarantine = vi.fn(async () => undefined);
-    const runtime = new BackgroundWorkHandoffRecoveryRuntime({
-      streamRecoverableBackgroundWorkTurnRecords: recoveryStream,
-      deferWorkerValidatedBackgroundWorkHandoffRecovery: vi.fn(),
-      recoverPendingBackgroundWorkHandoffs: vi.fn(async () => 0),
-      quarantineCorruptBackgroundWorkHandoffRecoveryOwner: quarantine,
-    });
+  it.each(['ESTALE', 'EIO'])(
+    'retries %s owner evidence skips until a later full enumeration completes cleanly',
+    async (errno) => {
+      const record = {
+        status: 'completed',
+        channelId: 'api:concurrent-append-owner',
+        sessionId: 'api:concurrent-append-owner',
+        turnId: 'turn-after-quiet',
+        backgroundWorkHandoff: {
+          schemaVersion: 1,
+          jobs: [{ jobId: 'job-after-quiet' }],
+        },
+      } as unknown as TurnRecord;
+      let scanAttempt = 0;
+      const recoveryStream = vi.fn((
+        _signal?: AbortSignal,
+        onEvidenceOwnerSkipped?: (skip: TurnRecordRecoveryEvidenceSkip) => void,
+      ) => (async function* () {
+        scanAttempt += 1;
+        if (scanAttempt <= 2) {
+          onEvidenceOwnerSkipped?.({
+            errno,
+            ownerSessionId: record.sessionId!,
+          });
+          return;
+        }
+        yield record;
+      })());
+      const enqueue = vi.fn(async () => undefined);
+      const quarantine = vi.fn(async () => undefined);
+      const runtime = new BackgroundWorkHandoffRecoveryRuntime({
+        streamRecoverableBackgroundWorkTurnRecords: recoveryStream,
+        deferWorkerValidatedBackgroundWorkHandoffRecovery: vi.fn(),
+        recoverPendingBackgroundWorkHandoffs: vi.fn(async () => 0),
+        quarantineCorruptBackgroundWorkHandoffRecoveryOwner: quarantine,
+      });
 
-    await expect(runtime.recover(enqueue)).resolves.toBeUndefined();
-    await expect(runtime.recover(enqueue)).resolves.toBeUndefined();
-    expect(enqueue).not.toHaveBeenCalled();
+      await expect(runtime.recover(enqueue)).resolves.toBeUndefined();
+      await expect(runtime.recover(enqueue)).resolves.toBeUndefined();
+      expect(enqueue).not.toHaveBeenCalled();
 
-    await expect(runtime.recover(enqueue)).resolves.toBeUndefined();
-    expect(enqueue).toHaveBeenCalledOnce();
-    expect(recoveryStream).toHaveBeenCalledTimes(3);
-    expect(quarantine).not.toHaveBeenCalled();
+      await expect(runtime.recover(enqueue)).resolves.toBeUndefined();
+      expect(enqueue).toHaveBeenCalledOnce();
+      expect(recoveryStream).toHaveBeenCalledTimes(3);
+      expect(quarantine).not.toHaveBeenCalled();
 
-    await expect(runtime.recover(enqueue)).resolves.toBeUndefined();
-    expect(recoveryStream).toHaveBeenCalledTimes(3);
-  });
+      await expect(runtime.recover(enqueue)).resolves.toBeUndefined();
+      expect(recoveryStream).toHaveBeenCalledTimes(3);
+    },
+  );
 
   it('terminally disposes EBADMSG owners once while leaving the clean rescan recoverable', async () => {
     let corrupted = true;
@@ -170,6 +173,8 @@ describe('BackgroundWorkHandoffRecoveryRuntime', () => {
         onEvidenceOwnerSkipped?.({
           errno: 'EBADMSG',
           ownerSessionId: 'api:corrupt-owner',
+          sourceFingerprint: 'a'.repeat(64),
+          sourceArchivePaths: ['/tmp/corrupt-owner.jsonl'],
         });
       }
     })());
@@ -189,6 +194,8 @@ describe('BackgroundWorkHandoffRecoveryRuntime', () => {
     expect(quarantine).toHaveBeenCalledWith({
       errno: 'EBADMSG',
       ownerSessionId: 'api:corrupt-owner',
+      sourceFingerprint: 'a'.repeat(64),
+      sourceArchivePaths: ['/tmp/corrupt-owner.jsonl'],
     });
     expect(recoveryStream).toHaveBeenCalledTimes(2);
   });

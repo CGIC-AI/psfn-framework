@@ -6,10 +6,23 @@ export const TURN_RECORD_RECOVERY_CORRUPT_EVIDENCE_CODE = 'EBADMSG';
 export interface TurnRecordRecoveryEvidenceSkip {
   errno: string;
   ownerSessionId: string;
+  /** Exact content-free identity of the physical L0 generation that failed. */
+  sourceFingerprint?: string;
+  /** Trusted in-process paths used only to re-prove that exact generation before disposition. */
+  sourceArchivePaths?: readonly string[];
+  /** True when this exact generation already has an fsync-durable terminal disposition. */
+  retired?: boolean;
+}
+
+export interface CorruptTurnRecordRecoveryEvidenceSkip extends TurnRecordRecoveryEvidenceSkip {
+  errno: typeof TURN_RECORD_RECOVERY_CORRUPT_EVIDENCE_CODE;
+  sourceFingerprint: string;
+  sourceArchivePaths: readonly string[];
 }
 
 export interface BackgroundWorkHandoffRecoveryDisposition {
-  quarantineCorruptOwner(skip: TurnRecordRecoveryEvidenceSkip): Promise<void>;
+  isCorruptOwnerRetired(skip: CorruptTurnRecordRecoveryEvidenceSkip): boolean;
+  quarantineCorruptOwner(skip: CorruptTurnRecordRecoveryEvidenceSkip): Promise<void>;
 }
 
 export interface TurnRecordRecoveryEvidenceErrorOptions extends ErrorOptions {
@@ -38,6 +51,17 @@ export class TurnRecordRecoveryEvidenceError extends Error {
     this.name = TURN_RECORD_RECOVERY_EVIDENCE_ERROR_NAME;
     if (options?.code) this.code = options.code;
   }
+}
+
+export function isCorruptTurnRecordRecoveryEvidenceSkip(
+  skip: TurnRecordRecoveryEvidenceSkip,
+): skip is CorruptTurnRecordRecoveryEvidenceSkip {
+  return skip.errno === TURN_RECORD_RECOVERY_CORRUPT_EVIDENCE_CODE
+    && typeof skip.sourceFingerprint === 'string'
+    && /^[a-f0-9]{64}$/u.test(skip.sourceFingerprint)
+    && Array.isArray(skip.sourceArchivePaths)
+    && skip.sourceArchivePaths.length > 0
+    && skip.sourceArchivePaths.every(path => typeof path === 'string' && path.length > 0);
 }
 
 /**

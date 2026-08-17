@@ -1,11 +1,15 @@
 import { createHash } from 'node:crypto';
 import type { SessionEntry } from '../../../core/session/types.js';
 import { resolveSessionEntryTurnContext } from '../../../core/session/turn-provenance.js';
-import { isTurnRecordRecoveryEvidenceError } from '../../../core/agent/background-work/recovery-contract.js';
+import {
+  isTurnRecordRecoveryEvidenceError,
+  type CorruptTurnRecordRecoveryEvidenceSkip,
+} from '../../../core/agent/background-work/recovery-contract.js';
 import type { TurnRecord } from '../../../shared/contracts/runtime.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import { journalToTurnTombstoneEntry } from '../../journals/journal-utils.js';
 import { readTurnTombstoneAuthoritySnapshot } from '../turn-tombstone-authority.js';
+import { createCorruptTurnRecordRecoveryEvidence } from '../background-work-handoff-recovery-owner-evidence.js';
 import {
   slimTurnRecordSessionEntriesForAppend,
   resolveTurnRecordSessionEntries,
@@ -118,6 +122,7 @@ export interface SessionTurnRecordOperationsContext {
   readonly recoveryAuthoritySnapshotHook:
     | ((ownerSessionId: string) => void | Promise<void>)
     | undefined;
+  isCorruptRecoveryOwnerRetired(skip: CorruptTurnRecordRecoveryEvidenceSkip): boolean;
   resolveSessionId(channelId: string): string | null;
   resolveExistingSession(channelId: string): ResolvedIndexedSession | null;
   getChannelIndexEntry(sessionId: string): ChannelIndexEntry | undefined;
@@ -606,6 +611,7 @@ export class SessionTurnRecordOperations {
     ownerSessionId: string,
     turnId: string,
     options: TurnRecordRecoveryScanOptions,
+    retiredEvidenceChecks: Map<string, boolean>,
   ): Promise<boolean> {
     const limits = RECOVERY_AUTHORITY_LIMITS;
     const resolveEvidence = (): {
@@ -660,6 +666,20 @@ export class SessionTurnRecordOperations {
       options.signal?.throwIfAborted();
       const before = resolveEvidence();
       if (!before) return false;
+      const corruptOwnerEvidence = createCorruptTurnRecordRecoveryEvidence(
+        ownerSessionId,
+        before.filePaths,
+        before.archiveFingerprint,
+      );
+      let retired = retiredEvidenceChecks.get(corruptOwnerEvidence.sourceFingerprint);
+      if (retired === undefined) {
+        retired = this.context.isCorruptRecoveryOwnerRetired(corruptOwnerEvidence);
+        retiredEvidenceChecks.set(corruptOwnerEvidence.sourceFingerprint, retired);
+      }
+      if (retired) {
+        options.onEvidenceOwnerSkipped?.({ ...corruptOwnerEvidence, retired: true });
+        return false;
+      }
       const cached = this.recoveryTombstoneAuthority.get(before.sessionId);
       if (
         cached?.archiveFingerprint === before.archiveFingerprint
@@ -686,7 +706,28 @@ export class SessionTurnRecordOperations {
           signal: options.signal,
         });
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === 'ESTALE' && attempt === 0) continue;
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === 'ESTALE' && attempt === 0) continue;
+        if (code === 'EBADMSG') {
+          const after = resolveEvidence();
+          if (
+            !after
+            || after.sessionId !== before.sessionId
+            || after.archiveFingerprint !== before.archiveFingerprint
+            || after.baselineFingerprint !== before.baselineFingerprint
+          ) {
+            if (attempt === 0) continue;
+            throw this.recoveryAuthorityError(
+              `L0 tombstone authority for ${ownerSessionId} changed repeatedly during recovery`,
+              'ESTALE',
+            );
+          }
+          throw this.recoveryAuthorityError(
+            `L0 tombstone authority for ${ownerSessionId} is structurally invalid`,
+            'EBADMSG',
+            corruptOwnerEvidence,
+          );
+        }
         throw error;
       }
       const after = resolveEvidence();
@@ -714,6 +755,7 @@ export class SessionTurnRecordOperations {
           throw this.recoveryAuthorityError(
             `L0 authority action for ${ownerSessionId} is not a valid turn tombstone`,
             'EBADMSG',
+            corruptOwnerEvidence,
           );
         }
         if (tombstone.action === 'redact' || !normalized.verified) {
@@ -778,10 +820,17 @@ export class SessionTurnRecordOperations {
     return false;
   }
 
-  private recoveryAuthorityError(message: string, code?: string): Error {
-    const error = new Error(message) as NodeJS.ErrnoException;
+  private recoveryAuthorityError(
+    message: string,
+    code?: string,
+    corruptOwnerEvidence?: CorruptTurnRecordRecoveryEvidenceSkip,
+  ): Error {
+    const error = new Error(message) as NodeJS.ErrnoException & {
+      corruptOwnerEvidence?: CorruptTurnRecordRecoveryEvidenceSkip;
+    };
     error.name = 'TurnRecordRecoveryEvidenceError';
     if (code) error.code = code;
+    if (corruptOwnerEvidence) error.corruptOwnerEvidence = corruptOwnerEvidence;
     return error;
   }
 
@@ -839,23 +888,36 @@ export class SessionTurnRecordOperations {
     const uniqueSourceSet = new Set(sourceChannelIds);
     const uniqueSources = [...uniqueSourceSet];
     const evidenceBlockedOwners = new Set<string>();
+    const retiredEvidenceChecks = new Map<string, boolean>();
     for await (const record of streamSource.call(this.context.turnRecordStore, uniqueSources, options)) {
       const sourceChannelId = record.channelId;
       if (!uniqueSourceSet.has(sourceChannelId)) continue;
       const logicalSessionId = record.sessionId ?? sourceChannelId;
       if (evidenceBlockedOwners.has(logicalSessionId)) continue;
       try {
-        if (!await this.isRecoveryTurnEligible(logicalSessionId, record.turnId, options)) continue;
+        if (!await this.isRecoveryTurnEligible(
+          logicalSessionId,
+          record.turnId,
+          options,
+          retiredEvidenceChecks,
+        )) continue;
       } catch (error) {
         if (!isTurnRecordRecoveryEvidenceError(error)) throw error;
         evidenceBlockedOwners.add(logicalSessionId);
         const rawCode = (error as NodeJS.ErrnoException).code;
         const errno = typeof rawCode === 'string' && rawCode ? rawCode : 'UNKNOWN';
+        const corruptOwnerEvidence = (
+          error as NodeJS.ErrnoException & {
+            corruptOwnerEvidence?: CorruptTurnRecordRecoveryEvidenceSkip;
+          }
+        ).corruptOwnerEvidence;
+        if (errno === 'EBADMSG' && !corruptOwnerEvidence) throw error;
+        const skip = corruptOwnerEvidence ?? { errno, ownerSessionId: logicalSessionId };
         log.warn(
           `Skipping background-work handoff recovery owner ${logicalSessionId} (${errno})`,
           { errno, ownerSessionId: logicalSessionId },
         );
-        options.onEvidenceOwnerSkipped?.({ errno, ownerSessionId: logicalSessionId });
+        options.onEvidenceOwnerSkipped?.(skip);
         continue;
       }
       yield record;

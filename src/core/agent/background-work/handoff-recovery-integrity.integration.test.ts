@@ -24,6 +24,7 @@ import {
   getRecentDiagnosticLogRecords,
 } from '../../../shared/logger.js';
 import type { TurnRecord } from '../../../shared/contracts/runtime.js';
+import type { JournalEntry } from '../../session/types.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import { SessionManager } from '../../session/manager.js';
 import { createTurnId } from '../../turns/id.js';
@@ -172,50 +173,152 @@ function ebadmsgWarnings(channelId: string): ReturnType<typeof getRecentDiagnost
 }
 
 describe('background-work handoff integrity recovery', () => {
-  it('fails explicitly when EBADMSG disposition produces no durable repair evidence', async () => {
+  it('durably retires only the unchanged zero-repair EBADMSG owner and continues recovery', async () => {
     const root = mkdtempSync(join(tmpdir(), 'handoff-noop-ebadmsg-'));
     rootsToDelete.push(root);
     const sessionsDir = join(root, 'sessions');
-    const channelId = 'api:valid-noop-owner';
+    const backupRootDir = join(root, 'repair-backups');
+    const corruptChannelId = 'api:valid-noop-owner';
+    const healthyChannelId = 'api:valid-noop-sibling';
     const keyring = buildSessionHmacKeyring({
       serializedKeys: 'v1:noop-handoff-key',
       activeVersion: 'v1',
     })!;
-    const store = new SessionStore(sessionsDir, { integrityKeyring: keyring });
-    store.append({
-      channelId,
-      role: 'user',
-      content: 'valid source',
-      timestamp: 1_775_050_000_000,
-    });
+    const integrityProvider = createKeyringIntegrityProvider(keyring)!;
     const auditRecords: Array<{ event: string; details: Record<string, unknown> }> = [];
     const disposition = createBackgroundWorkHandoffRecoveryDisposition({
       sessionsDir,
-      backupRootDir: join(root, 'repair-backups'),
-      integrityProvider: createKeyringIntegrityProvider(keyring)!,
+      backupRootDir,
+      integrityProvider,
       audit: {
         append: (event, details) => { auditRecords.push({ event, details }); },
       },
     });
-
-    await expect(disposition.quarantineCorruptOwner({
-      errno: 'EBADMSG',
-      ownerSessionId: channelId,
-    })).rejects.toMatchObject({
-      name: 'BackgroundWorkHandoffRecoveryDispositionUnresolvedError',
-      code: 'EUNRESOLVED',
+    const store = new SessionStore(sessionsDir, {
+      integrityKeyring: keyring,
+      turnRecordEligibilityFence: createSerialTurnRecordEligibilityFence(),
+      backgroundWorkHandoffRecoveryDisposition: disposition,
     });
-    expect(auditRecords.at(-1)).toEqual({
-      event: BACKGROUND_WORK_HANDOFF_RECOVERY_DISPOSITION_AUDIT_EVENT,
-      details: {
-        outcome: 'unresolved',
+    const manager = new SessionManager(store, makeConfig(root));
+    const corruptRecord = makeBackgroundHandoffTurnRecord(
+      corruptChannelId,
+      1_775_050_000_000,
+    );
+    const healthyRecord = makeBackgroundHandoffTurnRecord(
+      healthyChannelId,
+      1_775_050_000_100,
+    );
+    for (const record of [corruptRecord, healthyRecord]) {
+      manager.recordUserMessage(
+        record.channelId,
+        'retained source',
+        'partner',
+        'Partner',
+        true,
+        undefined,
+        { turnId: record.turnId, requestId: record.requestId },
+      );
+      await manager.recordTurn(record);
+    }
+
+    const journalPath = findSessionJournalPath(sessionsDir, 'valid-noop-owner');
+    const lastEntry = JSON.parse(
+      readFileSync(journalPath, 'utf8').trim().split('\n').at(-1)!,
+    ) as JournalEntry;
+    const mismatchedEntry = integrityProvider.sign({
+      type: 'message',
+      id: lastEntry.id + 1,
+      channelId: 'api:wrong-physical-owner',
+      role: 'system',
+      content: 'raw mismatched owner evidence remains preserved',
+      timestamp: 1_775_050_000_010,
+    }, lastEntry._hmac ?? null);
+    appendFileSync(journalPath, `${JSON.stringify(mismatchedEntry)}\n`);
+    const rawCorruptOwner = readFileSync(journalPath, 'utf8');
+    const enqueue = vi.fn(async () => undefined);
+    clearDiagnosticLogRingBufferForTests();
+
+    await expect(new BackgroundWorkHandoffRecoveryRuntime(manager).recover(enqueue))
+      .resolves.toBeUndefined();
+    expect(enqueue.mock.calls.flatMap(call => call[0].jobs).map(job => job.sourceChannelId))
+      .toEqual([healthyChannelId]);
+    expect(readFileSync(journalPath, 'utf8')).toBe(rawCorruptOwner);
+    expect(ebadmsgWarnings(corruptChannelId)).toHaveLength(1);
+
+    const dispositionPath = join(
+      backupRootDir,
+      'background-work-handoff-recovery-dispositions.jsonl',
+    );
+    const firstDisposition = readFileSync(dispositionPath, 'utf8');
+    expect(firstDisposition).not.toContain(corruptChannelId);
+    expect(firstDisposition).not.toContain('raw mismatched owner evidence');
+    expect(firstDisposition.trim().split('\n').map(line => JSON.parse(line)))
+      .toEqual([expect.objectContaining({
+        schemaVersion: 1,
         errno: 'EBADMSG',
-        ownerSessionId: channelId,
+      })]);
+    expect(auditRecords).toContainEqual({
+      event: BACKGROUND_WORK_HANDOFF_RECOVERY_DISPOSITION_AUDIT_EVENT,
+      details: expect.objectContaining({
+        outcome: 'retired_unchanged_owner',
+        errno: 'EBADMSG',
+        ownerSessionId: corruptChannelId,
         modifiedFiles: 0,
         modifiedEntries: 0,
         quarantinedRows: 0,
-      },
+      }),
     });
+
+    const restartedStore = new SessionStore(sessionsDir, {
+      integrityKeyring: keyring,
+      turnRecordEligibilityFence: createSerialTurnRecordEligibilityFence(),
+      backgroundWorkHandoffRecoveryDisposition: createBackgroundWorkHandoffRecoveryDisposition({
+        sessionsDir,
+        backupRootDir,
+        integrityProvider,
+      }),
+    });
+    const restartedManager = new SessionManager(restartedStore, makeConfig(root));
+    const restartedRuntime = new BackgroundWorkHandoffRecoveryRuntime(restartedManager);
+    const restartedEnqueue = vi.fn(async () => undefined);
+    clearDiagnosticLogRingBufferForTests();
+
+    await expect(restartedRuntime.recover(restartedEnqueue)).resolves.toBeUndefined();
+    await expect(restartedRuntime.recover(restartedEnqueue)).resolves.toBeUndefined();
+    expect(restartedEnqueue.mock.calls.flatMap(call => call[0].jobs)
+      .map(job => job.sourceChannelId)).toEqual([healthyChannelId, healthyChannelId]);
+    expect(ebadmsgWarnings(corruptChannelId)).toEqual([]);
+    expect(readFileSync(dispositionPath, 'utf8')).toBe(firstDisposition);
+    expect(readFileSync(journalPath, 'utf8')).toBe(rawCorruptOwner);
+
+    const laterEntry = integrityProvider.sign({
+      type: 'message',
+      id: mismatchedEntry.id + 1,
+      channelId: corruptChannelId,
+      role: 'user',
+      content: 'later generation remains preserved',
+      timestamp: 1_775_050_000_020,
+    }, mismatchedEntry._hmac ?? null);
+    appendFileSync(journalPath, `${JSON.stringify(laterEntry)}\n`);
+    const laterRawOwner = readFileSync(journalPath, 'utf8');
+    const changedStore = new SessionStore(sessionsDir, {
+      integrityKeyring: keyring,
+      turnRecordEligibilityFence: createSerialTurnRecordEligibilityFence(),
+      backgroundWorkHandoffRecoveryDisposition: createBackgroundWorkHandoffRecoveryDisposition({
+        sessionsDir,
+        backupRootDir,
+        integrityProvider,
+      }),
+    });
+    clearDiagnosticLogRingBufferForTests();
+
+    await expect(new BackgroundWorkHandoffRecoveryRuntime(
+      new SessionManager(changedStore, makeConfig(root)),
+    ).recover(async () => undefined)).resolves.toBeUndefined();
+
+    expect(ebadmsgWarnings(corruptChannelId)).toHaveLength(1);
+    expect(readFileSync(journalPath, 'utf8')).toBe(laterRawOwner);
+    expect(readFileSync(dispositionPath, 'utf8').trim().split('\n')).toHaveLength(2);
   });
 
   it('quarantines a structurally invalid TurnRecord row and continues healthy handoffs', async () => {

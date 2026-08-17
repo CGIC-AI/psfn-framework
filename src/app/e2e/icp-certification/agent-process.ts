@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto';
-
 import { createLLMProviderPort } from '../../../core/agent/contracts.js';
 import { createNoopSatelliteRoutingPort } from '../../../core/agent/satellite-adapter-port.js';
 import { GatewayClient } from '../../../boundary/gateway/client.js';
@@ -59,7 +58,6 @@ import { resolveCoreCompanionIdFromConfig } from '../../../core/identity/compani
 import { createCompanionId } from '../../../shared/routing/companion-id.js';
 import { createAgentFleetPostureProvider } from '../../agent/fleet-posture.js';
 import { startIcpRuntimeAvailability } from '../../agent/icp-runtime-availability.js';
-
 type AgentProcessCommand = {
   id: number;
   type: 'background_work_snapshot' | 'ping' | 'shutdown' | 'snapshot';
@@ -325,6 +323,7 @@ async function main(): Promise<void> {
     config: startup.schedulerConfig.icpAutonomy,
     localCompanionId: companionId,
     candidateStore,
+    feltImpulseFunnelStore: persistence.icpFeltImpulseFunnelStore,
     peers: autonomy,
     gateway,
     isExternalCompanionAuthorized: () => startup.capabilityRuntime.has('external.companion'),
@@ -412,6 +411,7 @@ async function main(): Promise<void> {
     ? new AdminIcpAutonomyDataService({
         localCompanionId: companionId,
         candidateStore,
+        feltImpulseFunnelStore: persistence.icpFeltImpulseFunnelStore,
         projectionStore,
         runtimeEnablement,
         settingsService: new AdminSettingsDataService({

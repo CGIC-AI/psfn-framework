@@ -11,6 +11,7 @@ import type {
   IcpInitiationCandidate,
   IcpInitiationCandidateStatus,
 } from './initiation-candidate.js';
+import type { IcpFeltImpulseFunnelRecord } from './felt-impulse-funnel.js';
 
 export class IcpOutstandingInvitationConflictError extends Error {
   constructor() {
@@ -213,6 +214,12 @@ export interface IcpInitiationCandidateStorePort {
   createClaimedCandidate?(
     candidate: IcpInitiationCandidate,
     claim: IcpInitiationCandidateProducerClaim,
+  ): Promise<IcpInitiationCandidate>;
+  /** Atomically creates a claimed felt-impulse candidate and its content-free funnel link. */
+  createClaimedFeltImpulseCandidate?(
+    candidate: IcpInitiationCandidate,
+    claim: IcpInitiationCandidateProducerClaim,
+    outcome: Extract<IcpFeltImpulseFunnelRecord, { outcome: 'candidate_linked' }>,
   ): Promise<IcpInitiationCandidate>;
   /** Atomically takes an unowned nonterminal candidate for exact source replay. */
   claimCandidate?(

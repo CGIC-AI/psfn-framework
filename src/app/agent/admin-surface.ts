@@ -33,6 +33,7 @@ import type { RunChargeLedger } from '../../shared/telemetry/charge-ledger.js';
 import type { SchedulerRuntimeConfig } from '../../system/config/scheduler-config.js';
 import type { IcpInitiationCandidateStorePort } from '../../core/icp/autonomy-store-ports.js';
 import type { IcpAutonomyRuntimeEnablement } from '../../core/icp/runtime-enablement.js';
+import type { IcpFeltImpulseFunnelStorePort } from '../../core/icp/felt-impulse-funnel.js';
 import { PostgresIcpAdminProjectionStore } from '../../persistence/postgres/icp-admin-projection-store.js';
 import { PostgresSpeakingArbiterAdminStore } from '../../persistence/postgres/speaking-arbiter-admin-store.js';
 import type { BackgroundWorkStorePort } from '../../core/agent/background-work/store-port.js';
@@ -69,6 +70,7 @@ export interface StartOptionalAdminTransportServerOptions {
   scheduler: Scheduler;
   schedulerConfig: SchedulerRuntimeConfig;
   icpInitiationCandidateStore?: IcpInitiationCandidateStorePort | null;
+  icpFeltImpulseFunnelStore?: IcpFeltImpulseFunnelStorePort | null;
   /** Shadow-only Partner Affect observation store (docs/partner-affect.md slice 1). */
   partnerAffectShadowStore?: PartnerAffectShadowStorePort | null;
   icpRuntimeEnablement: IcpAutonomyRuntimeEnablement;
@@ -214,6 +216,7 @@ export async function startOptionalAdminTransportServer(
     scheduler: options.scheduler,
     effectiveSchedulerConfig: options.schedulerConfig,
     icpInitiationCandidateStore: options.icpInitiationCandidateStore ?? null,
+    icpFeltImpulseFunnelStore: options.icpFeltImpulseFunnelStore ?? null,
     icpAdminProjectionStore,
     speakingArbiterAdminStore,
     partnerAffectShadowStore: options.partnerAffectShadowStore ?? null,

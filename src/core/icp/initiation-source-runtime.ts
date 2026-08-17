@@ -19,6 +19,7 @@ import {
   type IcpInitiationCandidateStatus,
 } from './initiation-candidate.js';
 import { createIcpCandidateClaimRecovery } from './candidate-lifecycle-recovery.js';
+import { parseFeltImpulseCorrelationFiredAtMs } from './felt-impulse-funnel.js';
 import {
   deriveIcpSourceIdentity,
   deterministicIcpUuid,
@@ -45,6 +46,7 @@ export type {
   IcpInitiationSourceGatewayPort,
   IcpInitiationSourceOutcome,
   IcpInitiationSourcePeerPort,
+  IcpInitiationSourceAcceptance,
   IcpInitiationSourceAcceptanceRuntime,
   IcpInitiationSourceRequest,
   IcpInitiationSourceResult,
@@ -95,9 +97,15 @@ export function createIcpInitiationSourceRuntime(
   if (claimCapabilityCount !== 0 && claimCapabilityCount !== 6) {
     throw new Error('ICP initiation source requires a complete claim-capable candidate store');
   }
+  if (claimCapabilityCount === 6 && !dependencies.store.createClaimedFeltImpulseCandidate) {
+    throw new Error('Claim-capable ICP store requires atomic felt-impulse funnel persistence');
+  }
   const claimStore = claimCapabilityCount === 6
     ? {
         create: dependencies.store.createClaimedCandidate!.bind(dependencies.store),
+        createFeltImpulse: dependencies.store.createClaimedFeltImpulseCandidate!.bind(
+          dependencies.store,
+        ),
         claim: dependencies.store.claimCandidate!.bind(dependencies.store),
         renew: dependencies.store.renewCandidateClaim!.bind(dependencies.store),
         release: dependencies.store.releaseCandidateClaim!.bind(dependencies.store),
@@ -354,7 +362,16 @@ export function createIcpInitiationSourceRuntime(
             claimToken,
             claimExpiresAtMs: Date.now() + producerClaimLeaseMs,
           };
-          candidate = await claimStore.create(proposed, claim);
+          candidate = request.source === 'felt_impulse'
+            ? await claimStore.createFeltImpulse(proposed, claim, {
+                correlationId: request.sourceRecordId,
+                firedAtMs: parseFeltImpulseCorrelationFiredAtMs(request.sourceRecordId),
+                recordedAtMs: currentNow,
+                outcome: 'candidate_linked',
+                candidateId: proposed.candidateId,
+                candidateOutcome: 'submitted',
+              })
+            : await claimStore.create(proposed, claim);
           lifecycleClaim = claim;
         } else {
           candidate = await dependencies.store.createCandidate(proposed);

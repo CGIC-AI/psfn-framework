@@ -5,6 +5,10 @@ import type {
   IcpInitiationCandidateTransitionInput,
 } from '../../core/icp/autonomy-store-ports.js';
 import type { IcpInitiationCandidate } from '../../core/icp/initiation-candidate.js';
+import type {
+  IcpFeltImpulseFunnelRecord,
+  IcpFeltImpulseFunnelStorePort,
+} from '../../core/icp/felt-impulse-funnel.js';
 import { ObserverEvalLeverStage } from '../../core/eval/observer-sidecar/config.js';
 import type { ObserverEvalSidecarLeverPersistencePort } from '../../core/eval/observer-sidecar/persistence.js';
 import { EventBus, type EmotionProactiveTransitionEvent } from '../../shared/event-bus.js';
@@ -90,6 +94,22 @@ function createLeverPersistence(): ObserverEvalSidecarLeverPersistencePort {
 
 function createWiringInput(eventBus: EventBus, enabled = true) {
   const { store, rows } = createCandidateStore();
+  const funnelRows = new Map<string, IcpFeltImpulseFunnelRecord>();
+  const feltImpulseFunnelStore: IcpFeltImpulseFunnelStorePort = {
+    async getOutcome(correlationId) {
+      return funnelRows.get(correlationId) ?? null;
+    },
+    async recordOutcome(record) {
+      const existing = funnelRows.get(record.correlationId);
+      if (existing) return existing;
+      funnelRows.set(record.correlationId, structuredClone(record));
+      return structuredClone(record);
+    },
+    async readProjection() {
+      throw new Error('not used by source wiring');
+    },
+    async close() {},
+  };
   const peerRuntime = {
     resolveKnownPeer: vi.fn(async () => ({
       contactId: 'peer-contact',
@@ -106,10 +126,12 @@ function createWiringInput(eventBus: EventBus, enabled = true) {
   };
   return {
     rows,
+    funnelRows,
     input: {
       config: { ...structuredClone(DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG), enabled },
       localCompanionId: LOCAL,
       candidateStore: store,
+      feltImpulseFunnelStore,
       peers: peerRuntime,
       gateway: {
         companionInitiationPreflight: vi.fn(async () => ({ eligible: true as const })),
@@ -152,7 +174,7 @@ describe('ICP felt-impulse startup wiring', () => {
     eventBus.on('emotion.proactive.transition', event => {
       transitions.push(event);
     });
-    const { input, rows } = createWiringInput(eventBus);
+    const { input, rows, funnelRows } = createWiringInput(eventBus);
     wireIcpInitiationSources(input);
 
     const stage = new ObserverEvalLeverStage({
@@ -181,6 +203,12 @@ describe('ICP felt-impulse startup wiring', () => {
     await observe(NOW_MS + 35 * MINUTE_MS);
 
     expect(rows.size).toBe(1);
+    expect([...funnelRows.values()]).toEqual([
+      expect.objectContaining({
+        correlationId: `felt-impulse:would_message:${NOW_MS}`,
+        outcome: 'candidate_linked',
+      }),
+    ]);
     expect([...rows.values()][0]).toMatchObject({ source: 'felt_impulse', status: 'consumed' });
     expect(transitions.map(event => event.stage)).toEqual([
       'would_message',
@@ -202,25 +230,31 @@ describe('ICP felt-impulse startup wiring', () => {
     eventBus.on('emotion.proactive.transition', event => {
       transitions.push(event);
     });
-    const { input, rows } = createWiringInput(eventBus, false);
+    const { input, rows, funnelRows } = createWiringInput(eventBus, false);
     wireIcpInitiationSources(input);
 
     await expect(eventBus.emitRequired('icp.felt_impulse.lever', {
       lever: 'would_message',
-      correlationId: 'felt-impulse:would_message:disabled',
+      correlationId: `felt-impulse:would_message:${NOW_MS}`,
       firedAtMs: NOW_MS,
       timestamp: NOW_MS,
     })).resolves.toBeUndefined();
 
     expect(rows.size).toBe(0);
+    expect([...funnelRows.values()]).toEqual([{
+      correlationId: `felt-impulse:would_message:${NOW_MS}`,
+      firedAtMs: NOW_MS,
+      recordedAtMs: expect.any(Number),
+      outcome: 'not_authorized',
+    }]);
     expect(transitions).toEqual([
       expect.objectContaining({
-        correlationId: 'felt-impulse:would_message:disabled',
+        correlationId: `felt-impulse:would_message:${NOW_MS}`,
         stage: 'felt_impulse',
         outcome: 'received',
       }),
       expect.objectContaining({
-        correlationId: 'felt-impulse:would_message:disabled',
+        correlationId: `felt-impulse:would_message:${NOW_MS}`,
         stage: 'final_disposition',
         outcome: 'not_authorized',
       }),

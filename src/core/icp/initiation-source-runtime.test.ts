@@ -499,6 +499,26 @@ describe('ICP initiation source runtime', () => {
     expect(restartedDeps.peers.executeCompanionOutreach).not.toHaveBeenCalled();
   });
 
+  it('rejects a deterministic source replay that mutates its current-room route', async () => {
+    const store = createStore();
+    const firstDeps = dependencies({ store }).deps;
+    const sourceRequest = {
+      ...request('foreground'),
+      preferredChannel: 'current_room' as const,
+      currentRoomChannelId: 'companion-room:library',
+    };
+    await createIcpInitiationSourceRuntime(firstDeps).submit(sourceRequest);
+
+    const restartedDeps = dependencies({ store }).deps;
+    await expect(createIcpInitiationSourceRuntime(restartedDeps).submit({
+      ...sourceRequest,
+      currentRoomChannelId: 'companion-room:studio',
+    })).rejects.toThrow('ICP candidate identity conflict');
+    expect(restartedDeps.gateway.companionInitiationPreflight).not.toHaveBeenCalled();
+    expect(restartedDeps.gateway.companionIssueInitiationPermit).not.toHaveBeenCalled();
+    expect(restartedDeps.peers.executeCompanionOutreach).not.toHaveBeenCalled();
+  });
+
   it('persists the permit before delivery and recovers an interrupted target turn after restart', async () => {
     const store = createStore();
     const firstDeps = dependencies({ store }).deps;

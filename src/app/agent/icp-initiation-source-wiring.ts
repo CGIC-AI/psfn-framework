@@ -7,6 +7,7 @@ import { createLlmIcpInitiationConsentEvaluator } from '../../core/icp/initiatio
 import { createIcpIntentionCandidateAdapter } from '../../core/icp/intention-candidate-adapter.js';
 import { registerIcpCoLocationThoughtAdapter } from '../../core/icp/co-location-thought-adapter.js';
 import { createIcpWeightedThoughtCandidateAdapter } from '../../core/icp/weighted-thought-candidate-adapter.js';
+import { createIcpCandidateLifecycleSupervisor } from '../../core/icp/candidate-lifecycle-supervisor.js';
 import type { IcpAutonomySchedulerConfig } from '../../system/config/icp-autonomy-scheduler-config.js';
 import {
   createIcpAutonomyRuntimeEnablement,
@@ -56,6 +57,8 @@ export interface IcpInitiationSourceWiring {
   unregisterCoLocationThoughtAdapter: () => void;
   /** Unsubscribe the felt-impulse lever listener (no-op when not wired). */
   unregisterFeltImpulseAdapter: () => void;
+  /** Stops and drains the source-independent durable candidate owner. */
+  stopCandidateLifecycleSupervisor: () => Promise<void>;
 }
 
 const log = createComponentLogger('IcpInitiationSourceWiring');
@@ -98,6 +101,21 @@ export function wireIcpInitiationSources(
         ...(input.socialDesireStore ? { socialDesireStore: input.socialDesireStore } : {}),
       })
     : undefined;
+  const candidateLifecycleSupervisor = sourceRuntime
+    && input.candidateStore?.claimDueCandidates
+    && input.candidateStore.transitionClaimedCandidate
+    ? createIcpCandidateLifecycleSupervisor({
+        store: input.candidateStore,
+        sourceRuntime,
+        retryCadenceMs: input.config.candidate.retryCadenceMs,
+        claimLeaseMs: Math.max(
+          input.config.candidate.retryCadenceMs,
+          input.config.permit.ttlMs,
+        ),
+        batchSize: input.config.policyHolds.maxOutstanding,
+      })
+    : undefined;
+  candidateLifecycleSupervisor?.start();
   const unregisterCoLocationThoughtAdapter = (
     input.config.enabled
       && input.presenceEnabled && input.weightedThoughtStore && input.localCompanionId
@@ -197,5 +215,8 @@ export function wireIcpInitiationSources(
     intentionCandidateAdapter,
     unregisterCoLocationThoughtAdapter,
     unregisterFeltImpulseAdapter,
+    stopCandidateLifecycleSupervisor: candidateLifecycleSupervisor
+      ? () => candidateLifecycleSupervisor.stop()
+      : async () => undefined,
   };
 }

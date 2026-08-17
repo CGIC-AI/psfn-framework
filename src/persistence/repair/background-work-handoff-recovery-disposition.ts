@@ -14,6 +14,18 @@ import {
 
 const log = createComponentLogger('BackgroundWorkHandoffRecoveryDisposition');
 
+export const BACKGROUND_WORK_HANDOFF_RECOVERY_DISPOSITION_AUDIT_EVENT =
+  'background_work_handoff_recovery_disposition';
+
+export class BackgroundWorkHandoffRecoveryDispositionUnresolvedError extends Error {
+  readonly code = 'EUNRESOLVED';
+
+  constructor() {
+    super('EBADMSG background-work handoff recovery produced no durable repair evidence');
+    this.name = 'BackgroundWorkHandoffRecoveryDispositionUnresolvedError';
+  }
+}
+
 interface BackgroundWorkHandoffRecoveryDispositionOptionsBase {
   sessionsDir: string;
   backupRootDir: string;
@@ -61,6 +73,19 @@ export function createBackgroundWorkHandoffRecoveryDisposition(
             ? { integrityProvider: options.integrityProvider }
             : { keyring: options.keyring }),
         });
+        const hasDurableDisposition = report.journal.modifiedFiles > 0
+          && (report.journal.modifiedEntries > 0 || report.journal.quarantinedRows > 0);
+        if (!hasDurableDisposition) {
+          options.audit?.append(BACKGROUND_WORK_HANDOFF_RECOVERY_DISPOSITION_AUDIT_EVENT, {
+            outcome: 'unresolved',
+            errno: skip.errno,
+            ownerSessionId,
+            modifiedFiles: report.journal.modifiedFiles,
+            modifiedEntries: report.journal.modifiedEntries,
+            quarantinedRows: report.journal.quarantinedRows,
+          });
+          throw new BackgroundWorkHandoffRecoveryDispositionUnresolvedError();
+        }
         log.error('background_work_handoff_recovery_owner_quarantined', {
           errno: skip.errno,
           ownerSessionId,

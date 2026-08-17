@@ -71,6 +71,8 @@ export interface TurnRecordRecoveryScanStats {
   maxRowBytes: number;
   /** Exact pre-drift emotion appraisal jobs validated and retired during live-alpha repair. */
   legacyEmotionAppraisalJobsRetired?: number;
+  /** Structurally invalid TurnRecord rows skipped after durable content-free quarantine. */
+  quarantinedTurnRecordRows?: number;
   authorityActionsReturned?: number;
   authorityBytesRead?: number;
   authorityFilesScanned?: number;

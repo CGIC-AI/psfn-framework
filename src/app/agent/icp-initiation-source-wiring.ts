@@ -102,16 +102,20 @@ export function wireIcpInitiationSources(
       })
     : undefined;
   const candidateLifecycleSupervisor = sourceRuntime
-    && input.candidateStore?.claimDueCandidates
+    && input.candidateStore?.createClaimedCandidate
+    && input.candidateStore.claimCandidate
+    && input.candidateStore.renewCandidateClaim
+    && input.candidateStore.releaseCandidateClaim
+    && input.candidateStore.claimDueCandidates
     && input.candidateStore.transitionClaimedCandidate
     ? createIcpCandidateLifecycleSupervisor({
         store: input.candidateStore,
         sourceRuntime,
-        retryCadenceMs: input.config.candidate.retryCadenceMs,
-        claimLeaseMs: Math.max(
+        retryCadenceMs: Math.min(
           input.config.candidate.retryCadenceMs,
-          input.config.permit.ttlMs,
+          Math.max(1, Math.floor(input.config.permit.ttlMs / 3)),
         ),
+        claimLeaseMs: Math.max(1, Math.floor(input.config.permit.ttlMs / 3)),
         batchSize: input.config.policyHolds.maxOutstanding,
       })
     : undefined;

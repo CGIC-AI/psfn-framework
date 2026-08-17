@@ -211,7 +211,10 @@ function configureCompanionOwnerFiles(
     enabled: autonomyEnabled,
     candidate: {
       defaultTtlMs: 120_000,
-      retryCadenceMs: 50,
+      // The final-reserve scenario drives several independent gate probes in
+      // one process. Keep its deferred probe out of the source-independent
+      // recovery supervisor until those explicit probes finish.
+      retryCadenceMs: fatigueProfile === 'final_reserve' ? 60_000 : 50,
       maxRetryAttempts: 3,
     },
     permit: { ttlMs: 60_000 },

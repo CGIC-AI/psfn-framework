@@ -21,6 +21,7 @@ import {
   maybeCreateIntakeScreeningService,
   renderIntakeWithheldContentPlaceholder,
   type IntakeInjectionScorerPort,
+  type IntakePostEscalationEvent,
 } from './screening.js';
 import { createIntakeL1Scanner } from './scanners/index.js';
 import type { IntakeQuarantineHoldPort } from './quarantine-store.js';
@@ -103,6 +104,72 @@ const screenInput = {
 };
 
 describe('intake screening service (htm9.2)', () => {
+  it('passes group chat after fast scanning and completes deep escalation asynchronously', async () => {
+    let finishDeepScreening!: (value: {
+      kind: 'quarantine';
+      reason: string;
+      contribution: { riskLabels: []; scores: {}; extractedFields: {} };
+    }) => void;
+    const escalation = {
+      escalate: vi.fn(() => new Promise<{
+        kind: 'quarantine';
+        reason: string;
+        contribution: { riskLabels: []; scores: {}; extractedFields: {} };
+      }>((resolve) => { finishDeepScreening = resolve; })),
+    };
+    const postEscalations: IntakePostEscalationEvent[] = [];
+    const service = createIntakeScreeningService({
+      policy: makePolicy('strict'),
+      l1: createIntakeL1Scanner({ rulesPath: RULES_PATH, reloadCheckIntervalMs: -1 }),
+      escalation,
+      actor: 'test:intake-screening',
+      onPostEscalation: event => { postEscalations.push(event); },
+    });
+
+    const result = await service.screen(HOSTILE_TEXT, {
+      sourceClass: 'public_contact',
+      origin: { ref: 'discord:room-7:message-11' },
+      scope: 'context',
+      sourceChannelId: 'room-7',
+      sourceMessageId: 'message-11',
+      surface: { channelClass: 'group_chat' },
+    });
+
+    expect(result).toMatchObject({
+      action: 'pass',
+      mode: 'shadow',
+      effectiveText: HOSTILE_TEXT,
+      withheld: false,
+      postEscalation: 'pending',
+    });
+    expect(result.snapshot.enforcementPosture).toBe('shadow');
+    expect(escalation.escalate).toHaveBeenCalledOnce();
+    expect(postEscalations).toEqual([]);
+
+    finishDeepScreening({
+      kind: 'quarantine',
+      reason: 'confirmed hostile stream',
+      contribution: { riskLabels: [], scores: {}, extractedFields: {} },
+    });
+    await vi.waitFor(() => expect(postEscalations).toHaveLength(1));
+    expect(postEscalations[0]).toMatchObject({
+      disposition: 'confirmed_bad',
+      surface: { channelClass: 'group_chat' },
+      sourceChannelId: 'room-7',
+      sourceMessageId: 'message-11',
+      action: 'quarantine',
+    });
+    expect(JSON.stringify(postEscalations[0])).not.toContain(HOSTILE_TEXT);
+  });
+
+  it('rejects an unknown explicitly claimed surface instead of inheriting a permissive mode', async () => {
+    const service = makeService('shadow');
+    await expect(service.screen(CLEAN_TEXT, {
+      ...screenInput,
+      surface: { workflow: 'unknown_workflow' as never },
+    })).rejects.toThrow(/Unknown CogSec workflow/);
+  });
+
   it('passes clean text with a released envelope and unchanged effectiveText', async () => {
     const service = makeService('shadow');
     const result = await service.screen(CLEAN_TEXT, screenInput);
@@ -604,6 +671,10 @@ describe('intake screening service (htm9.2)', () => {
       classify: async () => ({ score: 0, labels: [] }),
     });
     expect(() => withScorer.screenSync(HOSTILE_TEXT, screenInput)).toThrow(/screenSync/);
+    expect(() => l1Only.screenSync(CLEAN_TEXT, {
+      ...screenInput,
+      surface: { channelClass: 'group_chat' },
+    })).toThrow(/post-escalation.*screen\(\)/i);
   });
 
   it('keeps a provenance-classified beads create result quiet without suppressing other attacks', () => {

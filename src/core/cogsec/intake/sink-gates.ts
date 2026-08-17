@@ -268,18 +268,26 @@ export function evaluateSinkAccess(
   sink: IntakeSink,
   envelopes: readonly IntakeEnvelopeSnapshot[],
 ): IntakeSinkGateDecision {
-  const mode = assertGateMode(policy);
+  const globalMode = assertGateMode(policy);
   if (envelopes.length === 0) {
     const rule = sinkRuleForSink(policy, sink);
     return finalizeDecision({
       sink,
-      mode,
+      mode: globalMode,
       verdict: rule.unscreened,
       reason: `no intake envelope covers this content; sink policy default '${rule.unscreened}' applies`,
       unscreened: true,
       deniedEnvelopeIds: [],
     });
   }
+  // A surface-resolved shadow/post-pass envelope carries its posture across
+  // the message boundary. One enforcing envelope is sufficient to retain the
+  // global enforce behavior; only an entirely observe-only set may pass a
+  // policy denial for telemetry.
+  const mode = globalMode === 'shadow'
+    || envelopes.every(envelope => envelope.enforcementPosture === 'shadow')
+    ? 'shadow'
+    : 'enforce';
 
   const denials: Array<{ envelopeId: string; reason: string }> = [];
   for (const envelope of envelopes) {

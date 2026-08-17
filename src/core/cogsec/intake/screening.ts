@@ -44,9 +44,11 @@ import {
   cogSecVectorForProvenance,
   intakeEnforcementPosture,
   resolveCogSecProvenanceClass,
+  resolveCogSecSurfacePosture,
   resolveCogSecVectorPosture,
   type CogSecMode,
   type CogSecProvenanceClass,
+  type CogSecStructuralSurface,
   type CogSecVector,
   type IntakeEnforcementPosture,
 } from '../../../shared/contracts/cogsec-mode.js';
@@ -281,6 +283,11 @@ export interface IntakeScreeningInput {
    * 'external' (screened normally).
    */
   structuralProvenance?: CogSecProvenanceClass;
+  /**
+   * Structurally authenticated channel/workflow identity. Unknown values are
+   * rejected; content and origin strings never participate in resolution.
+   */
+  surface?: CogSecStructuralSurface;
   /** Origin locator: url, `discord:<channel>:<message>`, tool call id, ... */
   origin: { ref: string; detail?: string };
   scope: IntakeScanScope;
@@ -320,6 +327,8 @@ export interface IntakeScreeningInput {
    * rule); absent, the escalation port derives a source-class identifier.
    */
   sourceChannelId?: string;
+  /** Transport-authoritative message identity for post-incident correlation. */
+  sourceMessageId?: string;
   /**
    * On-disk artifact paths carrying this item's raw content (a saved
    * document and its parsed-text sidecar). Registered on the quarantine hold
@@ -418,6 +427,20 @@ export interface IntakeScreeningResult {
    * items that never escalated to L3.
    */
   cogSecCaseId?: string;
+  /** Deep layers were scheduled after pass-through and have not settled yet. */
+  postEscalation?: 'pending';
+}
+
+export interface IntakePostEscalationEvent {
+  disposition: 'clear' | 'confirmed_bad' | 'failed_closed';
+  surface: CogSecStructuralSurface;
+  envelopeId: string;
+  sourceChannelId: string;
+  sourceMessageId: string;
+  action: IntakeDecisionAction;
+  riskLabels: readonly IntakeRiskLabel[];
+  cogSecCaseId?: string;
+  completedAtMs: number;
 }
 
 export interface IntakeScreeningService {
@@ -465,6 +488,8 @@ export interface IntakeScreeningServiceOptions {
   onTiming?: (event: IntakeScreeningTimingEvent) => void;
   /** Canonical content-free decision observer. A throwing observer is isolated. */
   onDecision?: (event: IntakeScreeningObservabilityEvent) => void;
+  /** Content-free completion observer for pass-through deep screening. */
+  onPostEscalation?: (event: IntakePostEscalationEvent) => void | Promise<void>;
 }
 
 /** The fixed, operator-reviewed in-place placeholder for withheld content. */
@@ -688,6 +713,8 @@ interface EscalationExtras {
   observeUncorroboratedSemanticScore?: boolean;
   /** Gateway semantic-layer routing/verdict record (content-free). */
   semanticTrace?: IntakeSemanticScreeningTrace;
+  /** Local fast scan is recorded, but this surface always passes before deep scan. */
+  postEscalationPass?: boolean;
 }
 
 function semanticLayersNotRun(reason: string): IntakeSemanticScreeningTrace {
@@ -855,13 +882,24 @@ export function createIntakeScreeningService(
     vector: CogSecVector;
     posture: IntakeEnforcementPosture;
     screens: boolean;
+    deepScreening: 'inline' | 'post_pass';
   } {
     const vector = resolveCogSecVector(input);
+    if (input.surface) {
+      const resolved = resolveCogSecSurfacePosture(policy.surfacePostures, input.surface);
+      return {
+        vector,
+        posture: resolved.enforces ? 'enforce' : 'shadow',
+        screens: resolved.screens,
+        deepScreening: resolved.deepScreening,
+      };
+    }
     const decision = resolveCogSecVectorPosture(globalMode, vector);
     return {
       vector,
       posture: cogSecItemEnforcementPosture(globalMode, vector),
       screens: decision.screens,
+      deepScreening: 'inline',
     };
   }
 
@@ -1019,10 +1057,16 @@ export function createIntakeScreeningService(
     const markOnlyChatBody = !escalationExtras?.forced
       && !escalationExtras?.failure
       && isHighestTrustPrivateDirectMarkOnly(input);
-    const effectiveItemPosture: IntakeEnforcementPosture = markOnlyChatBody
+    const postEscalationPass = escalationExtras?.postEscalationPass === true;
+    const effectiveItemPosture: IntakeEnforcementPosture = markOnlyChatBody || postEscalationPass
       ? 'shadow'
       : itemPosture;
-    const decision = markOnlyChatBody && screenedDecision.action !== 'pass'
+    const decision = postEscalationPass
+      ? {
+        action: 'pass' as const,
+        reason: `post-escalation-pass:${screenedDecision.reason}`,
+      }
+      : markOnlyChatBody && screenedDecision.action !== 'pass'
       ? {
         action: 'pass' as const,
         reason: `chat-body-mark-only:${screenedDecision.reason}`,
@@ -1151,7 +1195,11 @@ export function createIntakeScreeningService(
       }
     }
 
-    const snapshot = snapshotIntakeEnvelope(envelope, input.subject ?? { kind: 'body' });
+    const snapshot = snapshotIntakeEnvelope(
+      envelope,
+      input.subject ?? { kind: 'body' },
+      effectiveItemPosture,
+    );
 
     // Every decision is audited; findings and enforcement escalate severity.
     const auditPayload = {
@@ -1233,7 +1281,101 @@ export function createIntakeScreeningService(
       ...(scorerOutcome.error ? { injectionScorerError: scorerOutcome.error } : {}),
       ...(quarantineHoldError ? { quarantineHoldError } : {}),
       ...(markingPlan ? { markingPlan } : {}),
+      ...(postEscalationPass ? { postEscalation: 'pending' as const } : {}),
     };
+  }
+
+  function schedulePostEscalation(
+    text: string,
+    input: IntakeScreeningInput,
+    report: IntakeL1ScanReport,
+    scorerOutcome: ScorerOutcome,
+    port: IntakeEscalationPort,
+    cogsecVector: CogSecVector,
+  ): IntakeScreeningResult {
+    if (!input.surface) throw new Error('Post-escalation screening requires a structural surface');
+    const sourceChannelId = input.sourceChannelId?.trim();
+    const sourceMessageId = input.sourceMessageId?.trim();
+    if (!sourceChannelId || !sourceMessageId) {
+      throw new Error(
+        'Post-escalation screening requires structural sourceChannelId and sourceMessageId',
+      );
+    }
+    const atMs = input.atMs ?? now();
+    const timedInput: IntakeScreeningInput = { ...input, atMs };
+    const adjusted = resolveTier(input);
+    const priorSignals = input.priorSignals ?? [];
+    const prior = collectSignalContribution(report, scorerOutcome, priorSignals, adjusted);
+    const priorScore = Math.min(1, Math.max(0, ...Object.values(prior.scores)));
+    const local = finalize(text, timedInput, report, scorerOutcome, 'shadow', cogsecVector, {
+      postEscalationPass: true,
+      semanticTrace: semanticLayersNotRun('deep screening scheduled after pass-through'),
+    });
+
+    const completion = port.escalate({
+      text,
+      sourceClass: input.sourceClass,
+      sourceRiskTier: adjusted.tier,
+      enforcementPosture: 'shadow',
+      priorScore,
+      origin: input.origin,
+      ...(input.subject ? { subject: input.subject } : {}),
+      ...(input.canonicalContactId ? { canonicalContactId: input.canonicalContactId } : {}),
+      sourceChannelId,
+      priorContribution: prior,
+      ...(input.artifactPaths ? { artifactPaths: input.artifactPaths } : {}),
+      emitTiming: (stage, status, durationMs) => emitTiming(timedInput, stage, status, durationMs),
+      atMs,
+    }).then((decision): IntakePostEscalationEvent => {
+      const final = decision.kind === 'final' ? decision.result : undefined;
+      const action: IntakeDecisionAction = decision.kind === 'quarantine'
+        ? 'quarantine'
+        : final?.action ?? 'pass';
+      const riskLabels = decision.kind === 'contribution' || decision.kind === 'quarantine'
+        ? decision.contribution.riskLabels
+        : final?.envelope.riskLabels ?? [];
+      const confirmedBad = decision.kind === 'quarantine'
+        || riskLabels.some(label => INTAKE_QUARANTINE_RISK_LABELS.includes(label));
+      return {
+        disposition: confirmedBad ? 'confirmed_bad' : 'clear',
+        surface: input.surface!,
+        envelopeId: local.envelope.id,
+        sourceChannelId,
+        sourceMessageId,
+        action,
+        riskLabels: [...riskLabels],
+        ...(final?.cogSecCaseId ? { cogSecCaseId: final.cogSecCaseId } : {}),
+        completedAtMs: now(),
+      };
+    }).catch((error): IntakePostEscalationEvent => {
+      log.error('Post-pass CogSec escalation failed closed', {
+        envelopeId: local.envelope.id,
+        sourceChannelId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return {
+        disposition: 'failed_closed',
+        surface: input.surface!,
+        envelopeId: local.envelope.id,
+        sourceChannelId,
+        sourceMessageId,
+        action: 'quarantine',
+        riskLabels: [],
+        completedAtMs: now(),
+      };
+    });
+    void completion.then(async event => {
+      try {
+        await options.onPostEscalation?.(event);
+      } catch (error) {
+        log.error('Post-pass CogSec escalation observer failed', {
+          envelopeId: event.envelopeId,
+          sourceChannelId: event.sourceChannelId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    });
+    return local;
   }
 
   // ── L2/L3 escalation (htm9.6/htm9.7, gateway-side port only) ──
@@ -1501,6 +1643,9 @@ export function createIntakeScreeningService(
       emitDeepScreeningNotRun(input);
       return finalize(text, input, report, scorerOutcome, item.posture, item.vector);
     }
+    if (item.deepScreening === 'post_pass') {
+      return schedulePostEscalation(text, input, report, scorerOutcome, escalation, item.vector);
+    }
     return escalateAndFinalize(text, input, report, scorerOutcome, escalation, item.posture, item.vector);
   }
 
@@ -1513,6 +1658,11 @@ export function createIntakeScreeningService(
       );
     }
     const item = resolveItemPosture(input);
+    if (item.deepScreening === 'post_pass') {
+      throw new Error(
+        'CogSec post-escalation surfaces require asynchronous screen(); screenSync cannot schedule deep screening',
+      );
+    }
     if (!item.screens) {
       return screenCleanBubble(text, input, item.vector);
     }

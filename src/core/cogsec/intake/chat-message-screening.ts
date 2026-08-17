@@ -6,6 +6,7 @@ import type { ChannelPrivacy } from '../../../system/trust/context-envelope.js';
 import type { ContactStorePort } from '../../contacts/contact-store-port.js';
 import type { ConversationScope } from '../../session/conversation-scope.js';
 import type { IntakeChatBodyChannelClass } from '../../../system/config/intake-policy-config.js';
+import type { CogSecStructuralSurface } from '../../../shared/contracts/cogsec-mode.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import {
   parseMessageAddressingMetadata,
@@ -27,6 +28,8 @@ export interface ScreenChatMessageBodyInput {
   canonicalContactId?: string;
   channelPrivacy?: ChannelPrivacy;
   channelClass?: IntakeChatBodyChannelClass;
+  /** Authenticated adapter topology; never inferred from message text. */
+  channelTopology?: 'direct' | 'group';
   conversationScope?: ConversationScope;
   /** Canonical Contact authority; absent deliberately keeps ordinary enforcement. */
   contactStore?: Pick<ContactStorePort, 'getById'> | null;
@@ -50,6 +53,25 @@ export interface ScreenChatMessageEnvelopeInput
 export interface ScreenedChatMessageEnvelope {
   envelope: PlatformChatMessageEnvelope;
   snapshot: IntakeEnvelopeSnapshot | null;
+}
+
+function resolveChatCogSecSurface(
+  input: ScreenChatMessageBodyInput,
+  chatBodyContext: Parameters<IntakeScreeningService['screen']>[1]['chatBodyContext'],
+): CogSecStructuralSurface | undefined {
+  const topology = input.conversationScope?.kind ?? input.channelTopology;
+  if (!topology) return undefined;
+  if (topology === 'group') return { channelClass: 'group_chat' };
+  if (input.channelPrivacy === 'public') return { channelClass: 'public_channel' };
+  const ownerEligiblePrimary = chatBodyContext?.contactTrust.trustLevel === 'primary'
+    && chatBodyContext.contactTrust.archived === false
+    && chatBodyContext.contactTrust.contactId === input.canonicalContactId
+    && chatBodyContext.conversationScope.kind === 'dm';
+  if (input.sourceClass === 'operator'
+    || (input.sourceClass === 'primary_user' && ownerEligiblePrimary)) {
+    return { channelClass: 'operator_direct' };
+  }
+  return { channelClass: 'private_direct' };
 }
 
 /**
@@ -96,12 +118,16 @@ export async function screenChatMessageBody(
     }
   }
 
+  const cogSecSurface = resolveChatCogSecSurface(input, chatBodyContext);
+
   const screened = await input.screening.screen(input.content, {
     sourceClass: input.sourceClass,
     origin: { ref: `${input.surface}:${input.channelId}:${input.messageId}` },
     scope: 'context',
     subject: { kind: 'body' },
     sourceChannelId: input.channelId,
+    sourceMessageId: input.messageId,
+    ...(cogSecSurface ? { surface: cogSecSurface } : {}),
     ...(canonicalContactId
       ? { canonicalContactId }
       : {}),
@@ -140,6 +166,7 @@ export async function screenChatMessageEnvelope(
     ...(input.canonicalContactId ? { canonicalContactId: input.canonicalContactId } : {}),
     ...(input.channelPrivacy ? { channelPrivacy: input.channelPrivacy } : {}),
     ...(input.channelClass ? { channelClass: input.channelClass } : {}),
+    ...(input.channelTopology ? { channelTopology: input.channelTopology } : {}),
     ...(input.conversationScope ? { conversationScope: input.conversationScope } : {}),
     ...(input.contactStore ? { contactStore: input.contactStore } : {}),
   });

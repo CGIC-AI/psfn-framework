@@ -104,6 +104,7 @@ import {
 } from '../startup/support/operator-alerts.js';
 import { resolveCompanionNameFromConfig } from '../../core/identity/companion-runtime.js';
 import type { NotificationPort } from '../../core/tools/ntfy.js';
+import { createPostEscalationIncidentRecorder } from '../../core/cogsec/intake/post-escalation-incidents.js';
 import {
   awaitOptionalPostgresStoreReadiness,
   awaitPostgresStoreReadiness,
@@ -770,6 +771,20 @@ async function main(): Promise<void> {
       failureThreshold: config.intakeScreeningFailureAlertThreshold,
     }),
   );
+  eventBus.on('intake.screening.post_escalation', async event => {
+    const companion = event.companionId
+      ? config.companionFleet?.companions.find(candidate => candidate.companionId === event.companionId)
+      : undefined;
+    const companionDataDir = companion?.companionDataDir
+      ?? startupHydration.companionDataDir;
+    const companionName = operatorAlertCompanionName;
+    const record = createPostEscalationIncidentRecorder({
+      cogSecEvents: () => new CogSecEventStore(resolveCogSecEventsPath(companionDataDir)),
+      notifier: gatewayOperatorNotifier,
+      companionName,
+    });
+    await record(event);
+  });
   const fleetAuthLifecycleCeremonies = fleetAuthPersistence?.createLifecycleCeremonies({
     read: async ({ companionId, contactId, providerSubjectId }) => {
       const result = await gateway.requestCompanionAgent<unknown>(

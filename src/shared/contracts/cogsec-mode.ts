@@ -1,12 +1,12 @@
-// ── Canonical global CogSec enforcement mode ──
+// ── Canonical CogSec enforcement posture ──
 //
-// ONE global mode governs the whole cognition-security firewall. It is the
-// single owner-file value (intake-policy.json `mode`) and the single value
-// Garden reads and mutates through the audited owner-file path. Every CogSec
-// vector — every declared ingress, internal, and egress surface — is
-// classified here and resolved to ONE centralized enforce/monitor decision
-// against this mode. There are no per-tool mode forks and no second mode enum:
-// screening, sink gates, egress, and the clean bubble all consult this module.
+// The global intake-policy.json `mode` remains the centralized baseline for
+// vector enforcement and for call sites that do not carry a structural
+// channel/workflow identity. The same owner file also carries one exhaustive
+// surface matrix for authenticated channel topology and workflow seams. There
+// are no per-tool forks: global vector posture and explicit surface posture are
+// both closed contracts resolved in this module, and downstream sink gates use
+// the resulting per-envelope enforcement posture.
 //
 // MODES
 // - 'shadow':   every declared vector is evaluated and telemetered but NEVER
@@ -35,6 +35,106 @@ export type CogSecMode = typeof COGSEC_MODES[number];
 
 export function isCogSecMode(value: unknown): value is CogSecMode {
   return typeof value === 'string' && (COGSEC_MODES as readonly string[]).includes(value);
+}
+
+// ── Owner-resolved channel/workflow posture ──
+
+/**
+ * Structural conversational surfaces. A caller derives these from authenticated
+ * channel topology, privacy, and contact authority; message content is never an
+ * input to the classification.
+ */
+export const COGSEC_CHANNEL_CLASSES = [
+  'operator_direct',
+  'private_direct',
+  'group_chat',
+  'public_channel',
+] as const;
+export type CogSecChannelClass = typeof COGSEC_CHANNEL_CLASSES[number];
+
+/** Closed set of non-channel workflows governed by the CogSec owner file. */
+export const COGSEC_WORKFLOWS = [
+  'chat_ingress',
+  'file_ingress',
+  'web_fetch',
+  'web_search',
+  'outbound_publication',
+  'internal_activity',
+] as const;
+export type CogSecWorkflow = typeof COGSEC_WORKFLOWS[number];
+
+/**
+ * Surface profiles intentionally combine enforcement and deep-screen timing:
+ * there is no separately configurable "scan off" state. Every profile scans.
+ */
+export const COGSEC_SURFACE_POSTURES = [
+  'shadow_full',
+  'enforce_full',
+  'fast_pass_post_escalate',
+] as const;
+export type CogSecSurfacePosture = typeof COGSEC_SURFACE_POSTURES[number];
+
+export interface CogSecSurfacePostureMatrix {
+  channelClasses: Record<CogSecChannelClass, CogSecSurfacePosture>;
+  workflows: Record<CogSecWorkflow, CogSecSurfacePosture>;
+}
+
+export type CogSecStructuralSurface =
+  | { channelClass: CogSecChannelClass; workflow?: never }
+  | { workflow: CogSecWorkflow; channelClass?: never };
+
+export interface ResolvedCogSecSurfacePosture {
+  profile: CogSecSurfacePosture;
+  /** Always true: posture changes enforcement/timing, never visibility. */
+  screens: true;
+  enforces: boolean;
+  deepScreening: 'inline' | 'post_pass';
+}
+
+function isCogSecChannelClass(value: unknown): value is CogSecChannelClass {
+  return typeof value === 'string'
+    && (COGSEC_CHANNEL_CLASSES as readonly string[]).includes(value);
+}
+
+function isCogSecWorkflow(value: unknown): value is CogSecWorkflow {
+  return typeof value === 'string'
+    && (COGSEC_WORKFLOWS as readonly string[]).includes(value);
+}
+
+/**
+ * Resolve one structurally authenticated surface. Unknown or ambiguous inputs
+ * throw instead of inheriting a permissive default.
+ */
+export function resolveCogSecSurfacePosture(
+  matrix: CogSecSurfacePostureMatrix,
+  surface: CogSecStructuralSurface,
+): ResolvedCogSecSurfacePosture {
+  const channelClass = (surface as { channelClass?: unknown }).channelClass;
+  const workflow = (surface as { workflow?: unknown }).workflow;
+  if ((channelClass === undefined) === (workflow === undefined)) {
+    throw new Error('CogSec posture resolution requires exactly one structural surface');
+  }
+  let profile: CogSecSurfacePosture;
+  if (channelClass !== undefined) {
+    if (!isCogSecChannelClass(channelClass)) {
+      throw new Error(`Unknown CogSec channel class: ${String(channelClass)}`);
+    }
+    profile = matrix.channelClasses[channelClass];
+  } else {
+    if (!isCogSecWorkflow(workflow)) {
+      throw new Error(`Unknown CogSec workflow: ${String(workflow)}`);
+    }
+    profile = matrix.workflows[workflow];
+  }
+  if (!(COGSEC_SURFACE_POSTURES as readonly string[]).includes(profile)) {
+    throw new Error('CogSec posture matrix is missing a declared structural surface');
+  }
+  return {
+    profile,
+    screens: true,
+    enforces: profile === 'enforce_full',
+    deepScreening: profile === 'fast_pass_post_escalate' ? 'post_pass' : 'inline',
+  };
 }
 
 /**

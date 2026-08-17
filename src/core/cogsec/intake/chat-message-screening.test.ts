@@ -169,7 +169,6 @@ describe('chat message body intake screening', () => {
 
   it.each([
     ['lower trust', { trust: 'trusted' as const }],
-    ['Discord is not owner-enabled', { channelClass: 'discord' as const }],
     ['missing canonical store', { missingStore: true }],
     ['unknown conversation topology', { missingScope: true }],
   ])('retains ordinary enforcement for %s', async (_name, override) => {
@@ -193,7 +192,26 @@ describe('chat message body intake screening', () => {
     expect(screened.snapshot).toMatchObject({ state: 'quarantined' });
   });
 
-  it('keeps one uniform enforcement posture in a group room', async () => {
+  it('applies operator-direct shadow posture across an authenticated Discord DM', async () => {
+    const screened = await screenChatMessageBody({
+      content: DIRECT_INJECTION,
+      screening: makeScreening('strict'),
+      sourceClass: 'primary_user',
+      surface: 'discord',
+      channelId: 'private-discord',
+      messageId: 'message-discord-owner',
+      canonicalContactId: 'contact-primary',
+      channelPrivacy: 'private',
+      channelClass: 'discord',
+      conversationScope: canonicalDirectScope('private-discord', 'contact-primary'),
+      contactStore: contactStore('primary'),
+    });
+
+    expect(screened.content).toBe(DIRECT_INJECTION);
+    expect(screened.snapshot).toMatchObject({ enforcementPosture: 'shadow' });
+  });
+
+  it('uses the owner-configured post-pass posture for a structurally proven group room', async () => {
     const screened = await screenChatMessageBody({
       content: DIRECT_INJECTION,
       screening: makeScreening('strict'),
@@ -216,8 +234,11 @@ describe('chat message body intake screening', () => {
       contactStore: contactStore('primary'),
     });
 
-    expect(screened.content).not.toBe(DIRECT_INJECTION);
-    expect(screened.snapshot).toMatchObject({ state: 'quarantined' });
+    expect(screened.content).toBe(DIRECT_INJECTION);
+    expect(screened.snapshot).toMatchObject({
+      state: 'quarantined',
+      enforcementPosture: 'shadow',
+    });
   });
 
   it('retains ordinary enforcement for public, unknown, or conflicting contact context', async () => {

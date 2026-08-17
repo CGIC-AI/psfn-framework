@@ -133,6 +133,8 @@ function makeDataDirs(policy: Record<string, unknown>): {
   companionDataDir: string;
   config: SubstrateConfig;
   env: NodeJS.ProcessEnv;
+  operatorAlerting: { configuredSinks: ['ntfy']; status: 'configured'; warning: null };
+  onPostEscalation: ReturnType<typeof vi.fn>;
 } {
   const systemDataDir = mkdtempSync(join(tmpdir(), 'psfn-escalation-system-'));
   const companionDataDir = mkdtempSync(join(tmpdir(), 'psfn-escalation-companion-'));
@@ -148,6 +150,8 @@ function makeDataDirs(policy: Record<string, unknown>): {
     env: {
       PSFN_INJECTION_MODEL_DIR: join(systemDataDir, 'unprovisioned-injection-model'),
     },
+    operatorAlerting: { configuredSinks: ['ntfy'], status: 'configured', warning: null },
+    onPostEscalation: vi.fn(),
   };
 }
 
@@ -782,11 +786,19 @@ describe('L2/L3 escalation wired into the live gateway screening path', () => {
       // L1.5 provisioned (fake) so this test reaches the escalation-backend
       // fail-closed check rather than the L1.5 fail-closed gate (cyy7l).
       injectionBackendFactory: fakeInjectionBackendFactory,
-    })).rejects.toThrow(/no pi-ai provider backend is resolvable/);
+    })).rejects.toThrow(/requires a resolvable pi-ai deep-screening backend/);
   });
 
   it('composes without escalation (loud skip) in shadow mode with no backend', async () => {
-    const dirs = makeDataDirs(seedPolicy({ mode: 'shadow' }));
+    const policy = seedPolicy({ mode: 'shadow' });
+    const surfacePostures = policy.surfacePostures as {
+      channelClasses: Record<string, unknown>;
+    };
+    policy.surfacePostures = {
+      ...surfacePostures,
+      channelClasses: { ...surfacePostures.channelClasses, group_chat: 'shadow_full' },
+    };
+    const dirs = makeDataDirs(policy);
     const composition = await composeGatewayIntakeScreening({
       ...dirs,
       screenerBackend: null,

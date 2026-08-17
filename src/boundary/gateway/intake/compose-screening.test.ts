@@ -62,9 +62,21 @@ function makeDataDirs(mode: IntakeFirewallMode, visionEnabled: boolean): {
     ...(seed.visionScreener as Record<string, unknown>),
     enabled: visionEnabled,
   };
+  const seedSurfacePostures = seed.surfacePostures as {
+    channelClasses: Record<string, unknown>;
+    workflows: Record<string, unknown>;
+    operatorAlertsRequired: boolean;
+  };
+  const surfacePostures = {
+    ...seedSurfacePostures,
+    channelClasses: {
+      ...seedSurfacePostures.channelClasses,
+      group_chat: mode === 'shadow' ? 'shadow_full' : 'enforce_full',
+    },
+  };
   writeFileSync(
     join(systemDataDir, 'intake-policy.json'),
-    JSON.stringify({ ...seed, mode, visionScreener }, null, 2),
+    JSON.stringify({ ...seed, mode, visionScreener, surfacePostures }, null, 2),
   );
   return {
     systemDataDir,
@@ -85,6 +97,28 @@ afterEach(() => {
 });
 
 describe('composeGatewayIntakeScreening vision wiring (htm9.8)', () => {
+  it('fails startup when a post-escalation surface lacks configured operator alert proof', async () => {
+    const input = makeDataDirs('strict', false);
+    const ownerPath = join(input.systemDataDir, 'intake-policy.json');
+    const owner = JSON.parse(readFileSync(ownerPath, 'utf8')) as {
+      surfacePostures: {
+        channelClasses: Record<string, string>;
+        operatorAlertsRequired: boolean;
+      };
+    };
+    owner.surfacePostures.channelClasses.group_chat = 'fast_pass_post_escalate';
+    owner.surfacePostures.operatorAlertsRequired = true;
+    writeFileSync(ownerPath, JSON.stringify(owner, null, 2));
+
+    await expect(composeGatewayIntakeScreening({
+      ...input,
+      screenerBackend: TEST_SCREENER_BACKEND,
+      screenerTestCompletion: unusedScreenerCompletion,
+      injectionBackendFactory: fakeInjectionBackendFactory,
+      onPostEscalation: vi.fn(),
+    })).rejects.toThrow(/configured operator alert sink/iu);
+  });
+
   it('reuses the gateway provider runtime instead of constructing a second LLM gateway', () => {
     const input = makeDataDirs('strict', true);
     const runtime = fromAny<ProviderRuntime>({});

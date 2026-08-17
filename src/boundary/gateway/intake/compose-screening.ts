@@ -64,6 +64,7 @@ import {
   type VisionIntakeImageScreenResult,
 } from './vision-screener.js';
 import { resolveIntakeScreenerModels } from './screener-model-selection.js';
+import type { OperatorAlertSinkConfiguration } from '../../../shared/contracts/operator-alerting.js';
 
 const log = createComponentLogger('GatewayIntakeScreening');
 
@@ -160,6 +161,10 @@ export async function composeGatewayIntakeScreening(input: {
   onFailClosedScreening?: IntakeScreeningServiceOptions['onFailClosed'];
   /** Content-free per-stage latency observer; never receives screened text. */
   onScreeningTiming?: IntakeScreeningServiceOptions['onTiming'];
+  /** Content-free completion path for asynchronous post-pass deep screening. */
+  onPostEscalation?: IntakeScreeningServiceOptions['onPostEscalation'];
+  /** Startup proof that at least one canonical operator sink is configured. */
+  operatorAlerting?: OperatorAlertSinkConfiguration;
   env?: NodeJS.ProcessEnv;
   /**
    * Test seam for the L1.5 injection classifier backend. When provided the
@@ -172,6 +177,24 @@ export async function composeGatewayIntakeScreening(input: {
   const modelDir = resolveInjectionModelDir(input.env ?? process.env);
   const policy = loadIntakePolicyConfig(input.systemDataDir);
   const enforcing = isIntakeEnforcingMode(policy.mode);
+  const postEscalationConfigured = [
+    ...Object.values(policy.surfacePostures.channelClasses),
+    ...Object.values(policy.surfacePostures.workflows),
+  ].includes('fast_pass_post_escalate');
+  if (postEscalationConfigured && !input.onPostEscalation) {
+    throw new Error(
+      'CogSec fast-pass post-escalation posture requires a durable completion/alert observer',
+    );
+  }
+  if (
+    postEscalationConfigured
+    && policy.surfacePostures.operatorAlertsRequired
+    && input.operatorAlerting?.status !== 'configured'
+  ) {
+    throw new Error(
+      'CogSec fast-pass post-escalation posture requires at least one configured operator alert sink',
+    );
+  }
   const screenerModels = resolveIntakeScreenerModels(input.config, {
     l3DualModel: policy.l3Screener.dualModel,
     visionEnabled: policy.visionScreener.enabled,
@@ -313,6 +336,11 @@ export async function composeGatewayIntakeScreening(input: {
       ...policy.l2Screener.mandatoryTiers,
       ...policy.l3Screener.mandatoryTiers,
     ])];
+    if (postEscalationConfigured) {
+      throw new Error(
+        'CogSec fast-pass post-escalation posture requires a resolvable pi-ai deep-screening backend',
+      );
+    }
     if (enforcing && mandatoryTiers.length > 0) {
       throw new Error(
         `Intake policy mandates L2/L3 deep screening for tiers [${mandatoryTiers.join(', ')}] `
@@ -344,6 +372,7 @@ export async function composeGatewayIntakeScreening(input: {
     actor: 'gateway:intake-screening',
     ...(input.onFailClosedScreening ? { onFailClosed: input.onFailClosedScreening } : {}),
     ...(input.onScreeningTiming ? { onTiming: input.onScreeningTiming } : {}),
+    ...(input.onPostEscalation ? { onPostEscalation: input.onPostEscalation } : {}),
   });
   // ── Vision intake screener (htm9.8) ──
   // enabled + backend        → wired.

@@ -1751,6 +1751,7 @@ export class AgentApiBackend {
       surface: 'api',
       channelId,
       messageId: requestId,
+      channelTopology: 'direct',
       ...(canonicalContactId ? { canonicalContactId } : {}),
       ...(resolvedChannelPrivacy ? { channelPrivacy: resolvedChannelPrivacy } : {}),
       ...(chatBodyChannelClass ? { channelClass: chatBodyChannelClass } : {}),

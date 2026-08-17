@@ -27,6 +27,7 @@ export interface CogSecAgentVisibleRange {
   startEntryId?: number;
   endEntryId?: number;
   messageIdCount: number;
+  sourceMessageIdCount: number;
   discordMessageIdCount: number;
 }
 
@@ -100,6 +101,7 @@ function toAffectedRange(range: CogSecAffectedMessageRange): CogSecAgentVisibleR
     ...(range.startEntryId !== undefined ? { startEntryId: range.startEntryId } : {}),
     ...(range.endEntryId !== undefined ? { endEntryId: range.endEntryId } : {}),
     messageIdCount: range.messageIds?.length ?? 0,
+    sourceMessageIdCount: range.sourceMessageIds?.length ?? 0,
     discordMessageIdCount: range.discordMessageIds?.length ?? 0,
   };
 }

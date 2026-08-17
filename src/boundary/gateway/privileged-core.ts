@@ -47,6 +47,7 @@ import { emitTurnPerformance } from '../../shared/telemetry/turn-performance.js'
 import { createCompanionDisplayIdentityResolver } from '../../shared/companion-display-identity.js';
 import { PersonaMutationAttemptGuard } from './persona-mutation-attempt-guard.js';
 import { createPersonaOwnerPathRegistry } from './persona-owner-path-registry.js';
+import { resolveOperatorAlertSinkConfiguration } from '../../shared/contracts/operator-alerting.js';
 
 export interface GatewayPrivilegedCoreBuildInput {
   config: SubstrateConfig;
@@ -230,6 +231,11 @@ export async function buildGatewayPrivilegedCore(
     // htm9.8: intake screeners share the gateway's sole pi-ai runtime and
     // resolve provider credentials through the existing request capability.
     screenerBackend: resolveIntakeScreenerBackend(input.config, privilegedServices.runtime),
+    operatorAlerting: resolveOperatorAlertSinkConfiguration({
+      ntfyConfigured: input.bootstrap.server.ntfy !== undefined,
+      telegramEnabled: input.bootstrap.channelsConfig.telegram.enabled,
+      telegramChatId: input.bootstrap.channelsConfig.telegram.operatorChatId,
+    }),
     onQuarantineHeld: companionId => emitGardenQueueChanged(
       eventBus,
       'intake-quarantine',
@@ -255,6 +261,12 @@ export async function buildGatewayPrivilegedCore(
           stage: event.stage,
           error: String(error),
         });
+      });
+    },
+    onPostEscalation: async (companionId, event) => {
+      await eventBus.emitRequired('intake.screening.post_escalation', {
+        ...event,
+        ...(companionId ? { companionId } : {}),
       });
     },
     onScreeningTiming: (companionId, event) => {

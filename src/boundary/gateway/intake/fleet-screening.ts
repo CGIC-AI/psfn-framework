@@ -31,6 +31,9 @@ type FailClosedScreeningEvent = Parameters<
 type ScreeningTimingEvent = Parameters<
   NonNullable<BaseCompositionInput['onScreeningTiming']>
 >[0];
+type PostEscalationEvent = Parameters<
+  NonNullable<BaseCompositionInput['onPostEscalation']>
+>[0];
 
 export interface GatewayFleetScreeningCompanion {
   companionId: CompanionId;
@@ -44,6 +47,7 @@ export type GatewayIntakeScreeningRuntimeInput = Omit<
   | 'onQuarantineExpired'
   | 'onFailClosedScreening'
   | 'onScreeningTiming'
+  | 'onPostEscalation'
 > & {
   /** Existing single-companion root; used byte-for-byte when fleet mode is disabled. */
   companionDataDir: string;
@@ -63,6 +67,10 @@ export type GatewayIntakeScreeningRuntimeInput = Omit<
     companionId: CompanionId | undefined,
     event: ScreeningTimingEvent,
   ) => void;
+  onPostEscalation?: (
+    companionId: CompanionId | undefined,
+    event: PostEscalationEvent,
+  ) => void | Promise<void>;
   /**
    * Content-free bounded-pool telemetry (psfn-framework-yxz0z.4): queue depth,
    * wait/service time, and worker saturation per pooled screen() call. Never
@@ -164,6 +172,7 @@ export async function composeGatewayIntakeScreeningRuntime(
     onQuarantineExpired,
     onFailClosedScreening,
     onScreeningTiming,
+    onPostEscalation,
     onScreeningPoolTelemetry,
     singleStreamKey,
     ...baseInput
@@ -189,6 +198,9 @@ export async function composeGatewayIntakeScreeningRuntime(
         : {}),
       ...(onScreeningTiming
         ? { onScreeningTiming: event => onScreeningTiming(companionId, event) }
+        : {}),
+      ...(onPostEscalation
+        ? { onPostEscalation: event => onPostEscalation(companionId, event) }
         : {}),
     });
     compositions.push(composition);

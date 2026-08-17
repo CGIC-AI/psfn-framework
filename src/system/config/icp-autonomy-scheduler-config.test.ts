@@ -26,6 +26,13 @@ describe('ICP autonomy scheduler owner config', () => {
         defaultTtlMs: 8 * 24 * 60 * 60_000,
       },
     }],
+    ['retry cadence above claim-lease contract maximum', {
+      ...DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG,
+      candidate: {
+        ...DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG.candidate,
+        retryCadenceMs: 8 * 24 * 60 * 60_000,
+      },
+    }],
     ['permit TTL above contract maximum', {
       ...DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG,
       permit: {

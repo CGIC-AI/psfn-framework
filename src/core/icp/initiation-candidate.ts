@@ -71,6 +71,8 @@ export type IcpInitiationCandidateSharedMetadata = Omit<
 >;
 
 export const MAX_ICP_CANDIDATE_TTL_MS = 7 * 24 * 60 * 60_000;
+/** Structural maximum shared by owner config and durable supervisor leases. */
+export const MAX_ICP_CANDIDATE_CLAIM_LEASE_MS = MAX_ICP_CANDIDATE_TTL_MS;
 export const MAX_ICP_CANDIDATE_REASON_CHARS = 1_000;
 
 const CANDIDATE_KEYS = [

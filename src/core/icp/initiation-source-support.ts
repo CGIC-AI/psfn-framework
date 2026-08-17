@@ -203,6 +203,7 @@ export function isSameIcpCandidate(
     && left.peerContactId === right.peerContactId
     && left.peerCompanionId === right.peerCompanionId
     && left.preferredChannel === right.preferredChannel
+    && left.targetChannelId === right.targetChannelId
     && left.source === right.source
     && left.provenanceRef === right.provenanceRef
     && left.reasonSummary === right.reasonSummary

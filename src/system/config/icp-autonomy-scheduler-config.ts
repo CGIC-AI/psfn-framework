@@ -1,4 +1,7 @@
-import { MAX_ICP_CANDIDATE_TTL_MS } from '../../core/icp/initiation-candidate.js';
+import {
+  MAX_ICP_CANDIDATE_CLAIM_LEASE_MS,
+  MAX_ICP_CANDIDATE_TTL_MS,
+} from '../../core/icp/initiation-candidate.js';
 import {
   MAX_ICP_AVAILABILITY_LEASE_TTL_MS,
   MAX_ICP_PERMIT_TTL_MS,
@@ -127,6 +130,7 @@ export function parseIcpAutonomySchedulerConfig(
       retryCadenceMs: positiveInteger(
         candidate.retryCadenceMs,
         `${fieldPath}.candidate.retryCadenceMs`,
+        MAX_ICP_CANDIDATE_CLAIM_LEASE_MS,
       ),
       maxRetryAttempts: positiveInteger(
         candidate.maxRetryAttempts,

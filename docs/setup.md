@@ -55,9 +55,15 @@ PSFN_SMOKE_MODEL_PREFETCH_OFFLINE=1 \
 Offline mode fails before startup when the supplied directory is empty and
 prints the exact variables needed to repair the input. It also requires both
 exact revision directories, replaces only those two owned model directories in
-the disposable cache volume, and rejects a partial input before model loading.
+the disposable cache volume, verifies the pinned `prompt-injection-v2` files,
+and rejects a partial input before model loading.
 The Compose defaults pin the same revisions shown above. Keep model cache
 contents out of Git.
+
+The disposable profile also runs an internal-only operator-alert sink so CogSec
+can retain its production fail-closed posture without requiring a second real
+credential. The sink exposes no host port and discards request bodies; it is not
+a production notification service.
 
 ## Configuration model
 

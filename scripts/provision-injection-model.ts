@@ -70,6 +70,7 @@ const PROVISION_FILES: ProvisionFile[] = [
 interface ProvisionCliOptions {
   dest: string;
   dryRun: boolean;
+  offline: boolean;
 }
 
 function printUsage(): void {
@@ -87,6 +88,10 @@ function printUsage(): void {
 function parseCliOptions(args: string[]): ProvisionCliOptions {
   let dest = process.env.PSFN_INJECTION_MODEL_DIR?.trim() || DEFAULT_DEST;
   let dryRun = false;
+  const offlineValue = process.env.PSFN_INJECTION_MODEL_OFFLINE?.trim() ?? '';
+  if (!['', '0', '1'].includes(offlineValue)) {
+    throw new Error('PSFN_INJECTION_MODEL_OFFLINE must be 0 or 1');
+  }
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     switch (arg) {
@@ -113,6 +118,7 @@ function parseCliOptions(args: string[]): ProvisionCliOptions {
   return {
     dest: path.isAbsolute(dest) ? dest : path.resolve(process.cwd(), dest),
     dryRun,
+    offline: offlineValue === '1',
   };
 }
 
@@ -120,7 +126,11 @@ function sha256OfFile(filePath: string): string {
   return createHash('sha256').update(readFileSync(filePath)).digest('hex');
 }
 
-async function downloadVerified(file: ProvisionFile, destDir: string): Promise<'downloaded' | 'already-provisioned'> {
+async function downloadVerified(
+  file: ProvisionFile,
+  destDir: string,
+  offline: boolean,
+): Promise<'downloaded' | 'already-provisioned'> {
   const finalPath = path.join(destDir, file.localPath);
   if (existsSync(finalPath)) {
     const existing = sha256OfFile(finalPath);
@@ -130,6 +140,12 @@ async function downloadVerified(file: ProvisionFile, destDir: string): Promise<'
     throw new Error(
       `${finalPath} exists with unexpected sha256 ${existing} (want ${file.sha256}); `
       + 'refusing to overwrite — remove the file to re-provision',
+    );
+  }
+
+  if (offline) {
+    throw new Error(
+      `Offline injection-model input is missing ${file.localPath}; refusing network access`,
     );
   }
 
@@ -171,7 +187,7 @@ async function main(): Promise<void> {
     return;
   }
   for (const file of PROVISION_FILES) {
-    const outcome = await downloadVerified(file, options.dest);
+    const outcome = await downloadVerified(file, options.dest, options.offline);
     console.log(`[provision:injection-model] ${file.localPath}: ${outcome}`);
   }
   console.log('[provision:injection-model] provision complete (all files sha256-verified)');

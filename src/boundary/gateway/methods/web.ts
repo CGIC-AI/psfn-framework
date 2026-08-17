@@ -715,6 +715,7 @@ async function screenWebContent(
     sourceClass: input.sourceClass,
     origin: { ref: input.originRef.slice(0, 2048) },
     scope: 'context',
+    surface: { workflow: input.rpcMethod === 'web.search' ? 'web_search' : 'web_fetch' },
   });
   await runtime.recordAuditEvent?.({
     method: `${input.rpcMethod}.intake_screening`,

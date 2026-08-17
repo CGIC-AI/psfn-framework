@@ -60,6 +60,7 @@ function makeSnapshot(input: {
   sourceRiskTier?: IntakeSourceRiskTier;
   riskLabels?: IntakeRiskLabel[];
   envelopeId?: string;
+  enforcementPosture?: 'shadow' | 'enforce';
 }): IntakeEnvelopeSnapshot {
   return {
     envelopeId: input.envelopeId ?? 'test-envelope-0001',
@@ -67,11 +68,40 @@ function makeSnapshot(input: {
     sourceRiskTier: input.sourceRiskTier ?? 'untrusted',
     state: input.state ?? 'released',
     riskLabels: input.riskLabels ?? [],
+    ...(input.enforcementPosture ? { enforcementPosture: input.enforcementPosture } : {}),
     subject: { kind: 'body' },
   };
 }
 
 describe('evaluateSinkAccess (htm9.3)', () => {
+  it('preserves a structurally resolved shadow pass through strict global sink gates', () => {
+    const decision = evaluateSinkAccess(makePolicy('strict'), 'memory_write', [makeSnapshot({
+      state: 'quarantined',
+      riskLabels: ['injection/override_attempt'],
+      enforcementPosture: 'shadow',
+    })]);
+
+    expect(decision).toMatchObject({
+      mode: 'shadow',
+      verdict: 'deny',
+      allowed: true,
+    });
+  });
+
+  it('preserves a structurally resolved enforcing surface through a shadow global baseline', () => {
+    const decision = evaluateSinkAccess(makePolicy('shadow'), 'memory_write', [makeSnapshot({
+      state: 'quarantined',
+      riskLabels: ['injection/override_attempt'],
+      enforcementPosture: 'enforce',
+    })]);
+
+    expect(decision).toMatchObject({
+      mode: 'enforce',
+      verdict: 'deny',
+      allowed: false,
+    });
+  });
+
   it.each(INTAKE_SINKS)(
     'records a shadow-mode quarantine catch while allowing content through %s',
     (sink) => {

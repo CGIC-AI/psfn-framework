@@ -11,7 +11,6 @@ import {
 } from './compose-screening.js';
 import { composeGatewayIntakeScreeningRuntime } from './fleet-screening.js';
 import type { InjectionClassifierBackend } from './injection-classifier.js';
-import { getRecentDiagnosticLogRecords } from '../../../shared/logger.js';
 import { resolveIntakeQuarantinePath } from '../../../persistence/layout.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import { loadSeedIntakeScreenerTestConfig } from './screener-test-config.js';
@@ -53,6 +52,8 @@ function makeDataDirs(mode: IntakeFirewallMode, visionEnabled: boolean): {
   companionDataDir: string;
   config: SubstrateConfig;
   env: NodeJS.ProcessEnv;
+  operatorAlerting: { configuredSinks: ['ntfy']; status: 'configured'; warning: null };
+  onInlineShadowFinding: ReturnType<typeof vi.fn>;
 } {
   const systemDataDir = mkdtempSync(join(tmpdir(), 'psfn-intake-system-'));
   const companionDataDir = mkdtempSync(join(tmpdir(), 'psfn-intake-companion-'));
@@ -62,9 +63,21 @@ function makeDataDirs(mode: IntakeFirewallMode, visionEnabled: boolean): {
     ...(seed.visionScreener as Record<string, unknown>),
     enabled: visionEnabled,
   };
+  const seedSurfacePostures = seed.surfacePostures as {
+    channelClasses: Record<string, unknown>;
+    workflows: Record<string, unknown>;
+    operatorAlertsRequired: boolean;
+  };
+  const surfacePostures = {
+    ...seedSurfacePostures,
+    channelClasses: {
+      ...seedSurfacePostures.channelClasses,
+      group_chat: mode === 'shadow' ? 'shadow_full' : 'enforce_full',
+    },
+  };
   writeFileSync(
     join(systemDataDir, 'intake-policy.json'),
-    JSON.stringify({ ...seed, mode, visionScreener }, null, 2),
+    JSON.stringify({ ...seed, mode, visionScreener, surfacePostures }, null, 2),
   );
   return {
     systemDataDir,
@@ -75,6 +88,8 @@ function makeDataDirs(mode: IntakeFirewallMode, visionEnabled: boolean): {
     env: {
       PSFN_INJECTION_MODEL_DIR: join(systemDataDir, 'unprovisioned-injection-model'),
     },
+    operatorAlerting: { configuredSinks: ['ntfy'], status: 'configured', warning: null },
+    onInlineShadowFinding: vi.fn(),
   };
 }
 
@@ -85,6 +100,29 @@ afterEach(() => {
 });
 
 describe('composeGatewayIntakeScreening vision wiring (htm9.8)', () => {
+  it('fails startup when a post-escalation surface lacks configured operator alert proof', async () => {
+    const input = makeDataDirs('strict', false);
+    const ownerPath = join(input.systemDataDir, 'intake-policy.json');
+    const owner = JSON.parse(readFileSync(ownerPath, 'utf8')) as {
+      surfacePostures: {
+        channelClasses: Record<string, string>;
+        operatorAlertsRequired: boolean;
+      };
+    };
+    owner.surfacePostures.channelClasses.group_chat = 'fast_pass_post_escalate';
+    owner.surfacePostures.operatorAlertsRequired = true;
+    writeFileSync(ownerPath, JSON.stringify(owner, null, 2));
+
+    await expect(composeGatewayIntakeScreening({
+      ...input,
+      screenerBackend: TEST_SCREENER_BACKEND,
+      screenerTestCompletion: unusedScreenerCompletion,
+      injectionBackendFactory: fakeInjectionBackendFactory,
+      onPostEscalation: vi.fn(),
+      operatorAlerting: { configuredSinks: [], status: 'unconfigured', warning: 'test' },
+    })).rejects.toThrow(/configured operator alert sink/iu);
+  });
+
   it('reuses the gateway provider runtime instead of constructing a second LLM gateway', () => {
     const input = makeDataDirs('strict', true);
     const runtime = fromAny<ProviderRuntime>({});
@@ -111,7 +149,7 @@ describe('composeGatewayIntakeScreening vision wiring (htm9.8)', () => {
       ...makeDataDirs('strict', true),
       screenerBackend: null,
       injectionBackendFactory: fakeInjectionBackendFactory,
-    })).rejects.toThrow(/no pi-ai provider backend is resolvable/);
+    })).rejects.toThrow(/requires a resolvable pi-ai deep-screening backend/);
   });
 
   it('FAILS STARTUP when the selected vision model lacks explicit image capability', async () => {
@@ -134,14 +172,22 @@ describe('composeGatewayIntakeScreening vision wiring (htm9.8)', () => {
     })).rejects.toThrow(/vision.*supportsVision=true/is);
   });
 
-  it('skips loudly (null screener) in shadow mode without a backend', async () => {
-    const composition = await composeGatewayIntakeScreening({
+  it('fails startup when a shadow-full surface has no scanning backend', async () => {
+    await expect(composeGatewayIntakeScreening({
       ...makeDataDirs('shadow', true),
       screenerBackend: null,
-    });
-    expect(composition.screening).not.toBeNull();
-    expect(composition.visionIntake).toBeNull();
-    await composition.dispose();
+      injectionBackendFactory: fakeInjectionBackendFactory,
+    })).rejects.toThrow(/requires a resolvable pi-ai deep-screening backend/);
+  });
+
+  it('fails startup when a shadow-full surface lacks a durable finding observer', async () => {
+    const { onInlineShadowFinding: _observer, ...input } = makeDataDirs('shadow', false);
+    await expect(composeGatewayIntakeScreening({
+      ...input,
+      screenerBackend: TEST_SCREENER_BACKEND,
+      screenerTestCompletion: unusedScreenerCompletion,
+      injectionBackendFactory: fakeInjectionBackendFactory,
+    })).rejects.toThrow(/shadow-full posture requires a durable finding\/alert observer/iu);
   });
 
   it('does not wire the vision screener when the policy knob is disabled', async () => {
@@ -172,7 +218,9 @@ describe('composeGatewayIntakeScreening vision wiring (htm9.8)', () => {
     const durableCounts: number[] = [];
     const composition = await composeGatewayIntakeScreening({
       ...input,
-      screenerBackend: null,
+      screenerBackend: TEST_SCREENER_BACKEND,
+      screenerTestCompletion: unusedScreenerCompletion,
+      injectionBackendFactory: fakeInjectionBackendFactory,
       onQuarantineHeld: () => {
         const stored = JSON.parse(
           readFileSync(resolveIntakeQuarantinePath(input.companionDataDir), 'utf8'),
@@ -187,11 +235,21 @@ describe('composeGatewayIntakeScreening vision wiring (htm9.8)', () => {
         sourceClass: 'primary_user',
         origin: { ref: 'discord:channel-1:message-1' },
         scope: 'context',
+        sourceChannelId: 'channel-1',
+        sourceMessageId: 'message-1',
+        surface: { channelClass: 'group_chat' },
       },
     );
 
     expect(result.action).toBe('quarantine');
     expect(durableCounts).toEqual([1]);
+    expect(input.onInlineShadowFinding).toHaveBeenCalledOnce();
+    expect(input.onInlineShadowFinding).toHaveBeenCalledWith(expect.objectContaining({
+      phase: 'inline_shadow',
+      sourceChannelId: 'channel-1',
+      sourceMessageId: 'message-1',
+      disposition: 'confirmed_bad',
+    }));
     await composition.dispose();
   });
 
@@ -278,6 +336,8 @@ describe('composeGatewayIntakeScreeningRuntime fleet quarantine ownership', () =
       screenerTestCompletion: unusedScreenerCompletion,
       injectionBackendFactory: fakeInjectionBackendFactory,
       env: input.env,
+      operatorAlerting: input.operatorAlerting,
+      onInlineShadowFinding: input.onInlineShadowFinding,
       onQuarantineHeld: companionId => queueChanges.push(companionId ?? 'missing'),
       onFailClosedScreening: (companionId, event) => {
         failClosedEvents.push({ companionId, stage: event.stage });
@@ -417,6 +477,8 @@ describe('composeGatewayIntakeScreeningRuntime bounded screening pool (psfn-fram
       screenerTestCompletion: unusedScreenerCompletion,
       injectionBackendFactory: fakeInjectionBackendFactory,
       env: input.env,
+      operatorAlerting: input.operatorAlerting,
+      onInlineShadowFinding: input.onInlineShadowFinding,
       onScreeningPoolTelemetry: (companionId, event) => {
         poolEvents.push({ companionId, kind: event.kind });
       },
@@ -455,7 +517,7 @@ describe('composeGatewayIntakeScreening L1.5 provisioning gate (cyy7l)', () => {
     await expect(composeGatewayIntakeScreening({
       ...makeDataDirs('strict', false),
       screenerBackend: null,
-    })).rejects.toThrow(/mode=strict.*not provisioned/su);
+    })).rejects.toThrow(/requires L1\.5.*not provisioned/su);
   });
 
   it('names the provisioning command in the enforce fail-closed error', async () => {
@@ -465,29 +527,11 @@ describe('composeGatewayIntakeScreening L1.5 provisioning gate (cyy7l)', () => {
     })).rejects.toThrow(/npm run provision:injection-model/u);
   });
 
-  it('warns once and flags degraded (not throw) in shadow mode when weights are absent', async () => {
-    const startedAt = Date.now();
-    const input = makeDataDirs('shadow', false);
-    const composition = await composeGatewayIntakeScreening({
-      ...input,
+  it('fails closed in shadow-full mode when weights are absent', async () => {
+    await expect(composeGatewayIntakeScreening({
+      ...makeDataDirs('shadow', false),
       screenerBackend: null,
-    });
-    // Screening still runs (L1 alone); the classifier is not loaded.
-    expect(composition.screening).not.toBeNull();
-    expect(composition.injectionClassifier.enabled).toBe(false);
-    expect(composition.injectionClassifier.degraded).toBe(true);
-    expect(composition.injectionClassifier.modelDir)
-      .toBe(input.env.PSFN_INJECTION_MODEL_DIR);
-    // Exactly one structured degraded-capability warning for the absent L1.5
-    // weights — a startup-time notice, never per-message.
-    const l15Warnings = getRecentDiagnosticLogRecords({ sinceMs: startedAt })
-      .filter(record =>
-        record.level === 'warn'
-        && record.component === 'GatewayIntakeScreening'
-        && record.message.includes('L1.5 injection classifier weights are not provisioned'),
-      );
-    expect(l15Warnings).toHaveLength(1);
-    await composition.dispose();
+    })).rejects.toThrow(/requires L1\.5.*not provisioned/su);
   });
 
   it('loads the classifier and reports non-degraded when weights are provisioned (enforce)', async () => {
@@ -506,7 +550,8 @@ describe('composeGatewayIntakeScreening L1.5 provisioning gate (cyy7l)', () => {
   it('loads the classifier and reports non-degraded when weights are provisioned (shadow)', async () => {
     const composition = await composeGatewayIntakeScreening({
       ...makeDataDirs('shadow', false),
-      screenerBackend: null,
+      screenerBackend: TEST_SCREENER_BACKEND,
+      screenerTestCompletion: unusedScreenerCompletion,
       injectionBackendFactory: fakeInjectionBackendFactory,
     });
     expect(composition.injectionClassifier.enabled).toBe(true);

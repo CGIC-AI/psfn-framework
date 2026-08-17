@@ -8,6 +8,10 @@ import {
   INTAKE_SOURCE_RISK_TIERS,
 } from '../../shared/contracts/intake-envelope.js';
 import {
+  COGSEC_CHANNEL_CLASSES,
+  COGSEC_WORKFLOWS,
+} from '../../shared/contracts/cogsec-mode.js';
+import {
   INTAKE_POLICY_FILE_NAME,
   INTAKE_POLICY_SCHEMA_VERSION,
   INTAKE_POLICY_SEED_FILE_NAME,
@@ -60,6 +64,52 @@ describe('intake policy owner file', () => {
     expect(Object.keys(policy.sourceRiskTiers).sort()).toEqual([...INTAKE_SOURCE_CLASSES].sort());
     expect(policy.quarantine.itemTtlHours).toBeGreaterThanOrEqual(1);
     expect(policy.quarantine.maxHeldItems).toBeGreaterThanOrEqual(1);
+  });
+
+  it('validates exhaustive owner-file channel/workflow posture', () => {
+    const policy = seedPolicy();
+    expect(Object.keys(policy.surfacePostures.channelClasses).sort())
+      .toEqual([...COGSEC_CHANNEL_CLASSES].sort());
+    expect(Object.keys(policy.surfacePostures.workflows).sort())
+      .toEqual([...COGSEC_WORKFLOWS].sort());
+    expect(policy.surfacePostures.channelClasses.operator_direct).toBe('shadow_full');
+    expect(policy.surfacePostures.channelClasses.group_chat).toBe('fast_pass_post_escalate');
+    expect(policy.surfacePostures.workflows.web_search).toBe('enforce_full');
+    expect(policy.surfacePostures.operatorAlertsRequired).toBe(true);
+  });
+
+  it('fails closed on incomplete or unknown configured CogSec surfaces', () => {
+    const policy = seedPolicy();
+    const { group_chat: _missing, ...incompleteChannels } = policy.surfacePostures.channelClasses;
+    expect(() => validateIntakePolicy({
+      ...policy,
+      surfacePostures: { ...policy.surfacePostures, channelClasses: incompleteChannels },
+    }, INTAKE_POLICY_FILE_NAME)).toThrow(/surfacePostures\.channelClasses\.group_chat is required/);
+    expect(() => validateIntakePolicy({
+      ...policy,
+      surfacePostures: {
+        ...policy.surfacePostures,
+        workflows: { ...policy.surfacePostures.workflows, rss_feed: 'shadow_full' },
+      },
+    }, INTAKE_POLICY_FILE_NAME)).toThrow(/unsupported workflows: rss_feed/);
+    expect(() => validateIntakePolicy({
+      ...policy,
+      surfacePostures: {
+        ...policy.surfacePostures,
+        channelClasses: { ...policy.surfacePostures.channelClasses, group_chat: 'disabled' },
+      },
+    }, INTAKE_POLICY_FILE_NAME)).toThrow(/group_chat must be one of/);
+    expect(() => validateIntakePolicy({
+      ...policy,
+      surfacePostures: { ...policy.surfacePostures, operatorAlertsRequired: false },
+    }, INTAKE_POLICY_FILE_NAME)).toThrow(/operatorAlertsRequired must be true/);
+  });
+
+  it('requires an explicit migration when a current owner predates the posture matrix', () => {
+    const policy = seedPolicy();
+    const { surfacePostures: _absent, ...legacy } = policy;
+    expect(() => validateIntakePolicy(legacy, INTAKE_POLICY_FILE_NAME))
+      .toThrow(/surfacePostures is required/);
   });
 
   it('validates fail-closed URL scheme actions from the owner file', () => {

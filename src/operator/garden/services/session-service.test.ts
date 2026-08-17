@@ -794,6 +794,76 @@ describe('AdminSessionDataService', () => {
     expect(serializedEvents).not.toContain('sealedForensicPayloadRefs');
   });
 
+  it('resolves structural transport message provenance to one surgical L0 tombstone range', async () => {
+    const channelId = 'discord:room:post-escalation';
+    const sourceMessageId = 'transport-message-77';
+    const targetId = store.append({
+      channelId,
+      role: 'user',
+      content: 'confirmed bad stream fragment',
+      timestamp: 1,
+      discordMessageId: sourceMessageId,
+    });
+    store.append({
+      channelId,
+      role: 'assistant',
+      content: 'assistant response shares the inbound turn provenance',
+      timestamp: 2,
+      discordMessageId: sourceMessageId,
+    });
+    store.append({
+      channelId,
+      role: 'user',
+      content: 'neighboring message stays intact',
+      timestamp: 3,
+      discordMessageId: 'transport-message-78',
+    });
+    const config = makeConfig({ dataDir: dir });
+    const service = new AdminSessionDataService({
+      sessionStore: store,
+      sessionManager: new SessionManager(store, config),
+      eventBus: new EventBus(),
+      config,
+    });
+
+    const input = {
+      sourceChannelId: channelId,
+      affectedMessageRanges: [{
+        sourceChannelId: channelId,
+        sourceMessageIds: [sourceMessageId],
+      }],
+      type: 'intake_firewall' as const,
+      severity: 'high' as const,
+      reason: 'post-escalation confirmed the structurally identified message',
+    };
+    const preview = await service.previewCogSecRemediation(input);
+
+    expect(preview.draft.affectedMessageRanges).toEqual([{
+      sourceChannelId: channelId,
+      logicalSessionId: channelId,
+      messageIds: [targetId],
+      sourceMessageIds: [sourceMessageId],
+    }]);
+    expect(preview.counts.l0Rows).toBe(1);
+
+    const applied = await service.applyCogSecRemediation(input);
+    expect(applied.tombstones).toHaveLength(1);
+    expect(applied.tombstones[0]?.tombstonedL0RowCount).toBe(1);
+    const remainingContent = store.getRecent(channelId, 10).map(entry => entry.content);
+    expect(remainingContent).not.toContain('confirmed bad stream fragment');
+    expect(remainingContent).toContain('neighboring message stays intact');
+    expect(remainingContent).toContain('assistant response shares the inbound turn provenance');
+    expect(remainingContent.some(content => content.startsWith('[CogSec redaction:'))).toBe(true);
+
+    await expect(service.previewCogSecRemediation({
+      sourceChannelId: channelId,
+      sourceMessageIds: ['unknown-transport-message'],
+      type: 'intake_firewall',
+      severity: 'high',
+      reason: 'must not widen an unresolved structural range',
+    })).rejects.toThrow(/did not resolve to a stored session entry/);
+  });
+
   it('refuses unconfigured CogSec conformance before mutating remediation state', async () => {
     const channelId = 'api:cogsec-unconfigured';
     const dirtyText = 'DIRTY_UNCONFIGURED_COGSEC_TEXT';

@@ -17,14 +17,14 @@ firewall is the pre-hoc half of that same system.
 > **Source wiring note.** L2/L3 escalation runs **gateway-side only**, through the
 > `IntakeEscalationPort` composed in
 > `src/boundary/gateway/intake/compose-screening.ts`; the agent process holds no
-> escalation port and stays L1-only by construction. When no OpenRouter backend
-> is resolvable, escalation is not composed and emits a warning in `shadow`.
-> `boundary` and `strict` fail startup when non-empty `mandatoryTiers` require
-> escalation that cannot be composed.
+> escalation port and stays L1-only by construction. Every declared surface
+> profile requires the provisioned L1.5 classifier and a resolvable deep-
+> screening backend; gateway startup fails instead of silently degrading a
+> `shadow_full`, `enforce_full`, or `fast_pass_post_escalate` surface.
 
 ## Global mode contract
 
-Schema-v6 `intake-policy.json` accepts exactly three global modes:
+Schema-v6 `intake-policy.json` accepts exactly three global baseline modes:
 
 - `shadow` screens every declared vector and records decisions without
   changing delivery, except that a hard lethal-trifecta denial remains
@@ -34,7 +34,16 @@ Schema-v6 `intake-policy.json` accepts exactly three global modes:
   uses the clean bubble with no semantic-screening call; and
 - `strict` screens and enforces both external and internal vectors.
 
-The vector classification and decision matrix live in
+The owner also contains an exhaustive structural `surfacePostures` matrix for
+channel classes and workflows. Its profiles are `shadow_full`, `enforce_full`,
+and `fast_pass_post_escalate`. Every profile runs the fast scanners and records
+telemetry. The post-escalation profile passes the original group message after
+the fast scan, then completes L2/L3 asynchronously; a confirmed or failed-closed
+result writes a structural-provenance incident and alerts the operator. Startup
+requires both a deep-screening backend and proof of a configured alert sink when
+that profile is enabled. Unknown, ambiguous, or incomplete surfaces fail closed.
+
+The vector classification and both decision matrices live in
 `src/shared/contracts/cogsec-mode.ts`. Structural call-site provenance, not
 message text or model arguments, determines whether an item is internal.
 External bytes cannot claim an internal provenance class. The retired global
@@ -1020,9 +1029,17 @@ silently ignores or aliases the retired keys.
 | --- | --- | --- |
 | `schemaVersion` | `6` | Must be 6. Schema 1/2/3/4/5 owners require the explicit `migrate:intake-policy-owner` command. |
 | `mode` | `"shadow"` | `shadow` screens and audits without changing delivery, apart from hard lethal-trifecta denial. `boundary` enforces external ingress and outbound publication while structurally authenticated internal activity uses the clean bubble. `strict` screens and enforces all declared vectors. |
+| `surfacePostures` | exhaustive channel/workflow matrix; alerts required | Overrides the baseline at structurally authenticated surfaces. `shadow_full` and `enforce_full` screen inline; `fast_pass_post_escalate` passes after the fast scan and finishes L2/L3 asynchronously. Unknown or missing entries reject the owner. |
 | `sourceRiskTiers` | see below | Risk tier per source class; every class required. |
 | `sourceLists` | all four empty | Operator-curated trusted/denied sites and people (flywheel target). |
 | `urlScanner.schemeActions` | `javascript`: deny; `data`: deny except inline images; `mailto`/`tel`: allow | Per-scheme URL-scanner treatment. Missing or invalid actions fail owner-file validation; unlisted schemes stay silent to avoid false positives in ordinary conversation. |
+
+Seed surface postures: operator-direct is `shadow_full`; private-direct,
+public-channel, and file/web/search ingress are `enforce_full`; group-chat is
+`fast_pass_post_escalate`. `operatorAlertsRequired` is required to be `true`.
+Channel classes
+come only from authenticated privacy/topology/contact context, and workflows
+come only from the owning call site; neither may be inferred from content.
 
 ### `chatBodyHandling`
 

@@ -154,14 +154,15 @@ describe('parsed-document intake screening (htm9.2)', () => {
     expect(holds[0]!.sourceChannelId).toBe(context.channelId);
   });
 
-  it('shadow mode: parsed text is unchanged while envelopes record the decision', async () => {
+  it('file-ingress owner posture enforces even when the global baseline is shadow', async () => {
     const summary = makeSummary([HOSTILE_DOC_TEXT]);
     const screened = await screenDocumentIngestSummary(summary, makeScreening('shadow'), context);
 
-    expect(screened.summary.results[0]!.promptText).toBe(HOSTILE_DOC_TEXT);
+    expect(screened.summary.results[0]!.promptText).toBe(renderIntakeWithheldContentPlaceholder());
     expect(screened.snapshots[0]!.state).toBe('quarantined');
+    expect(screened.snapshots[0]!.enforcementPosture).toBe('enforce');
 
     const content = appendDocumentIngestToContent('Here are the files', screened.summary);
-    expect(content).toContain('ignore all previous instructions');
+    expect(content).not.toContain('ignore all previous instructions');
   });
 });

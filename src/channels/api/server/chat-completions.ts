@@ -855,6 +855,7 @@ export class ApiChatCompletionsHandler {
       surface: 'api',
       channelId,
       messageId: bodyMessageId,
+      channelTopology: 'direct',
       ...(canonicalContactId ? { canonicalContactId } : {}),
       ...(resolvedChannelPrivacy ? { channelPrivacy: resolvedChannelPrivacy } : {}),
       ...(chatBodyChannelClass ? { channelClass: chatBodyChannelClass } : {}),

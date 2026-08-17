@@ -61,6 +61,17 @@ function canonicalDirectScope(channelId: string, canonicalContactId: string) {
 }
 
 describe('chat message body intake screening', () => {
+  it('fails closed when an active chat boundary lacks authenticated topology', async () => {
+    await expect(screenChatMessageBody({
+      content: 'hello',
+      screening: makeScreening(),
+      sourceClass: 'regular_contact',
+      surface: 'telegram',
+      channelId: 'telegram:unknown',
+      messageId: 'telegram:unknown:1',
+    })).rejects.toThrow(/authenticated channel topology/iu);
+  });
+
   it('returns sanitized Discord content with the complete typed platform addressing envelope', async () => {
     const addressing = {
       schemaVersion: 2,
@@ -110,6 +121,7 @@ describe('chat message body intake screening', () => {
       channelId: 'discord-thread-1',
       messageId: 'discord-message-1',
       channelPrivacy: 'invite_only',
+      channelTopology: 'group',
     });
 
     expect(screened).toEqual({
@@ -130,6 +142,7 @@ describe('chat message body intake screening', () => {
       surface: 'discord',
       channelId: 'public-room',
       messageId: 'message-1',
+      channelTopology: 'group',
     });
 
     expect(screened.content).toBe(DIRECT_INJECTION);
@@ -169,7 +182,6 @@ describe('chat message body intake screening', () => {
 
   it.each([
     ['lower trust', { trust: 'trusted' as const }],
-    ['Discord is not owner-enabled', { channelClass: 'discord' as const }],
     ['missing canonical store', { missingStore: true }],
     ['unknown conversation topology', { missingScope: true }],
   ])('retains ordinary enforcement for %s', async (_name, override) => {
@@ -183,6 +195,7 @@ describe('chat message body intake screening', () => {
       canonicalContactId: 'contact-primary',
       channelPrivacy: 'private',
       channelClass: override.channelClass ?? 'api_direct',
+      channelTopology: 'direct',
       ...(override.missingScope
         ? {}
         : { conversationScope: canonicalDirectScope('private-ordinary', 'contact-primary') }),
@@ -193,7 +206,26 @@ describe('chat message body intake screening', () => {
     expect(screened.snapshot).toMatchObject({ state: 'quarantined' });
   });
 
-  it('keeps one uniform enforcement posture in a group room', async () => {
+  it('applies operator-direct shadow posture across an authenticated Discord DM', async () => {
+    const screened = await screenChatMessageBody({
+      content: DIRECT_INJECTION,
+      screening: makeScreening('strict'),
+      sourceClass: 'primary_user',
+      surface: 'discord',
+      channelId: 'private-discord',
+      messageId: 'message-discord-owner',
+      canonicalContactId: 'contact-primary',
+      channelPrivacy: 'private',
+      channelClass: 'discord',
+      conversationScope: canonicalDirectScope('private-discord', 'contact-primary'),
+      contactStore: contactStore('primary'),
+    });
+
+    expect(screened.content).toBe(DIRECT_INJECTION);
+    expect(screened.snapshot).toMatchObject({ enforcementPosture: 'shadow' });
+  });
+
+  it('uses the owner-configured post-pass posture for a structurally proven group room', async () => {
     const screened = await screenChatMessageBody({
       content: DIRECT_INJECTION,
       screening: makeScreening('strict'),
@@ -216,8 +248,11 @@ describe('chat message body intake screening', () => {
       contactStore: contactStore('primary'),
     });
 
-    expect(screened.content).not.toBe(DIRECT_INJECTION);
-    expect(screened.snapshot).toMatchObject({ state: 'quarantined' });
+    expect(screened.content).toBe(DIRECT_INJECTION);
+    expect(screened.snapshot).toMatchObject({
+      state: 'quarantined',
+      enforcementPosture: 'shadow',
+    });
   });
 
   it('retains ordinary enforcement for public, unknown, or conflicting contact context', async () => {

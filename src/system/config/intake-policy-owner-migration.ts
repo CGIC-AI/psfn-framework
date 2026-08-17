@@ -29,6 +29,7 @@ import {
   validateScreeningPool,
   type IntakeChatBodyHandlingPolicyConfig,
   type IntakeScreeningPoolPolicyConfig,
+  type IntakeSurfacePosturesConfig,
 } from './intake-policy-config.js';
 import {
   validateIntakeUrlScannerPolicy,
@@ -134,6 +135,31 @@ function loadSeedChatBodyHandlingPolicy(seedDir: string): IntakeChatBodyHandling
     throw new Error(`Invalid intake policy seed at ${seedPath}: expected object`);
   }
   return validateChatBodyHandling(raw.chatBodyHandling, seedPath);
+}
+
+function loadSeedSurfacePostures(seedDir: string): IntakeSurfacePosturesConfig {
+  const seedPath = join(seedDir, INTAKE_POLICY_SEED_FILE_NAME);
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(seedPath, 'utf8')) as unknown;
+  } catch (error) {
+    throw new Error(
+      `Cannot load intake surface-posture migration policy from ${seedPath}: ${String(error)}`,
+    );
+  }
+  return validateIntakePolicy(raw, seedPath).surfacePostures;
+}
+
+function ensureSurfacePosturesPresent(
+  candidate: Record<string, unknown>,
+  seedDir: string,
+): { candidate: Record<string, unknown>; addedPaths: string[] } {
+  if (isRecord(candidate.surfacePostures)) {
+    return { candidate, addedPaths: [] };
+  }
+  const next = structuredClone(candidate);
+  next.surfacePostures = loadSeedSurfacePostures(seedDir);
+  return { candidate: next, addedPaths: ['surfacePostures'] };
 }
 
 function ensureChatBodyHandlingPresent(
@@ -360,12 +386,17 @@ export function migrateIntakePolicyOwner(
         filePath,
         options.seedDir ?? process.env.CONFIG_DIR ?? './config',
       );
-      const retired = removeRetiredScreenerModelKeys(withChatBodyHandling.candidate);
+      const withSurfacePostures = ensureSurfacePosturesPresent(
+        withChatBodyHandling.candidate,
+        options.seedDir ?? process.env.CONFIG_DIR ?? './config',
+      );
+      const retired = removeRetiredScreenerModelKeys(withSurfacePostures.candidate);
       candidate = retired.candidate;
       const addedPaths = [
         ...repaired.addedPaths,
         ...withScreeningPool.addedPaths,
         ...withChatBodyHandling.addedPaths,
+        ...withSurfacePostures.addedPaths,
       ];
       const updatedPaths: string[] = [];
       if (modeRemapped.updatedMode) {
@@ -451,6 +482,12 @@ export function migrateIntakePolicyOwner(
     );
     Object.assign(upgraded, withChatBodyHandling.candidate);
     addedPaths.push(...withChatBodyHandling.addedPaths);
+    const withSurfacePostures = ensureSurfacePosturesPresent(
+      upgraded,
+      options.seedDir ?? process.env.CONFIG_DIR ?? './config',
+    );
+    Object.assign(upgraded, withSurfacePostures.candidate);
+    addedPaths.push(...withSurfacePostures.addedPaths);
     const upgradedSinks = structuredClone(raw.sinkGates.sinks);
     if (raw.schemaVersion === 1) {
       upgradedSinks.skill_write = createSkillWriteSinkRule();

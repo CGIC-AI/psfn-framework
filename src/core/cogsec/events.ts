@@ -61,6 +61,8 @@ export interface CogSecAffectedMessageRange {
   startEntryId?: number;
   endEntryId?: number;
   messageIds?: number[];
+  /** Transport-neutral structural ids stamped on the stored turn. */
+  sourceMessageIds?: string[];
   discordMessageIds?: string[];
 }
 
@@ -203,6 +205,7 @@ const MESSAGE_RANGE_KEYS = new Set([
   'startEntryId',
   'endEntryId',
   'messageIds',
+  'sourceMessageIds',
   'discordMessageIds',
 ]);
 const ARTIFACT_IMPACT_KEYS = new Set(['ids', 'count']);
@@ -438,6 +441,9 @@ function parseMessageRange(value: unknown, field: string): CogSecAffectedMessage
     ...(startEntryId !== undefined ? { startEntryId } : {}),
     ...(endEntryId !== undefined ? { endEntryId } : {}),
     ...(value.messageIds !== undefined ? { messageIds: parseNumberArray(value.messageIds, `${field}.messageIds`) } : {}),
+    ...(value.sourceMessageIds !== undefined
+      ? { sourceMessageIds: parseStringArray(value.sourceMessageIds, `${field}.sourceMessageIds`) }
+      : {}),
     ...(value.discordMessageIds !== undefined
       ? { discordMessageIds: parseStringArray(value.discordMessageIds, `${field}.discordMessageIds`) }
       : {}),
@@ -652,6 +658,7 @@ function cloneMessageRange(range: CogSecAffectedMessageRange): CogSecAffectedMes
   return {
     ...range,
     ...(range.messageIds ? { messageIds: [...range.messageIds] } : {}),
+    ...(range.sourceMessageIds ? { sourceMessageIds: [...range.sourceMessageIds] } : {}),
     ...(range.discordMessageIds ? { discordMessageIds: [...range.discordMessageIds] } : {}),
   };
 }

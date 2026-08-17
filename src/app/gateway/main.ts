@@ -104,6 +104,8 @@ import {
 } from '../startup/support/operator-alerts.js';
 import { resolveCompanionNameFromConfig } from '../../core/identity/companion-runtime.js';
 import type { NotificationPort } from '../../core/tools/ntfy.js';
+import { createPostEscalationIncidentRecorder } from '../../core/cogsec/intake/post-escalation-incidents.js';
+import type { IntakeCogSecFindingEvent } from '../../core/cogsec/intake/screening.js';
 import {
   awaitOptionalPostgresStoreReadiness,
   awaitPostgresStoreReadiness,
@@ -770,6 +772,32 @@ async function main(): Promise<void> {
       failureThreshold: config.intakeScreeningFailureAlertThreshold,
     }),
   );
+  const cogSecFindingRecorders = new Map<
+    string,
+    ReturnType<typeof createPostEscalationIncidentRecorder>
+  >();
+  const recordCogSecFinding = async (
+    event: IntakeCogSecFindingEvent & { companionId?: string },
+  ): Promise<void> => {
+    const companion = event.companionId
+      ? config.companionFleet?.companions.find(candidate => candidate.companionId === event.companionId)
+      : undefined;
+    const companionDataDir = companion?.companionDataDir
+      ?? startupHydration.companionDataDir;
+    const companionName = operatorAlertCompanionName;
+    let record = cogSecFindingRecorders.get(companionDataDir);
+    if (!record) {
+      record = createPostEscalationIncidentRecorder({
+        cogSecEvents: () => new CogSecEventStore(resolveCogSecEventsPath(companionDataDir)),
+        notifier: gatewayOperatorNotifier,
+        companionName,
+      });
+      cogSecFindingRecorders.set(companionDataDir, record);
+    }
+    await record(event);
+  };
+  eventBus.on('intake.screening.post_escalation', recordCogSecFinding);
+  eventBus.on('intake.screening.inline_shadow_finding', recordCogSecFinding);
   const fleetAuthLifecycleCeremonies = fleetAuthPersistence?.createLifecycleCeremonies({
     read: async ({ companionId, contactId, providerSubjectId }) => {
       const result = await gateway.requestCompanionAgent<unknown>(

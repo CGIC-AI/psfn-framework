@@ -70,6 +70,8 @@ type SelfAuthoredMutationEnforcementPosture = 'enforce' | 'audit_only';
 export interface SelfAuthoredMutationContext {
   tool: string;
   action: string;
+  /** Stable tool invocation id; retries of the same call reuse this value. */
+  attemptRef: string;
   enforcementPosture?: SelfAuthoredMutationEnforcementPosture;
 }
 
@@ -182,6 +184,7 @@ export async function screenSelfAuthoredMutation(
     activeTurnEnvelopeCount: activeTurnEnvelopes.length,
     screenedFieldCount: proposedContentEnvelopes.length,
   }, {
+    attemptRef: context.attemptRef,
     correlationRef: `${context.tool}:${context.action}`,
     ...(turnIdentity
       ? {
@@ -221,7 +224,7 @@ export interface PromptAssemblyGateSummary {
 export function applyPromptAssemblySinkGate(
   entries: SessionEntry[],
   gate: IntakeSinkGate | null,
-  context: { channelId: string },
+  context: { channelId: string; attemptRef: string },
 ): { entries: SessionEntry[]; summary: PromptAssemblyGateSummary } {
   const summary: PromptAssemblyGateSummary = {
     withheldEntryIds: [],
@@ -266,6 +269,7 @@ export function applyPromptAssemblySinkGate(
       entryRole: entry.role,
       recordedMode: screening.mode,
     }, {
+      attemptRef: context.attemptRef,
       correlationRef: `entry:${String(entry.id)}`,
       sourceChannelId: context.channelId,
     });

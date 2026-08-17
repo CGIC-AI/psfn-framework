@@ -55,11 +55,58 @@ describe('ordinary intake sink denial incidents (bead 62fv0)', () => {
 
     const evidence = record(denial());
 
-    await expect(evidence.notification).resolves.toEqual({ status });
+    await expect(evidence.notification).resolves.toEqual({
+      status,
+      durableEvidence: 'recorded',
+    });
     const [event] = new CogSecEventStore(path).listEvents();
+    expect(event.operatorAlertDeliveryStatus).toBe(status);
     expect(event.safeAgentSummary).toContain(`Operator alert delivery: ${status}.`);
     expect(JSON.stringify(event)).not.toContain(error.message);
     expect(JSON.stringify(event)).not.toContain('secret payload');
+  });
+
+  it('surfaces a durable-evidence update failure without rejecting an abandoned promise', async () => {
+    const store = new CogSecEventStore(storePath());
+    vi.spyOn(store, 'updateEvent').mockImplementation(() => {
+      throw new Error('event store offline');
+    });
+    const notify = vi.fn().mockResolvedValue({ status: 'sent', topic: 'operator-alerts' });
+    const record = createOrdinaryIntakeSinkDenialRecorder({
+      cogSecEvents: () => store,
+      notifier: { notify },
+      companionName: 'Test Companion',
+    });
+
+    const evidence = record(denial());
+
+    await expect(evidence.notification).resolves.toEqual({
+      status: 'delivered',
+      durableEvidence: 'failed',
+    });
+    expect(notify).toHaveBeenCalledOnce();
+    expect(store.listEvents()[0]?.operatorAlertDeliveryStatus).toBe('pending');
+  });
+
+  it('uses typed durable delivery state rather than presentation wording when deduplicating', async () => {
+    const store = new CogSecEventStore(storePath());
+    const notify = vi.fn().mockResolvedValue({ status: 'sent', topic: 'operator-alerts' });
+    const record = createOrdinaryIntakeSinkDenialRecorder({
+      cogSecEvents: () => store,
+      notifier: { notify },
+      companionName: 'Test Companion',
+    });
+
+    const first = record(denial());
+    await expect(first.notification).resolves.toMatchObject({ status: 'delivered' });
+    store.updateEvent(first.caseId, { safeAgentSummary: 'Presentation copy changed.' });
+    const replay = record(denial());
+
+    await expect(replay.notification).resolves.toEqual({
+      status: 'delivered',
+      durableEvidence: 'recorded',
+    });
+    expect(notify).toHaveBeenCalledOnce();
   });
 
   it('rejects a callback invocation that is not an enforce-mode ordinary denial', () => {

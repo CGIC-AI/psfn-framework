@@ -159,6 +159,8 @@ function appendHookContext(
  */
 export interface EgressToolGuard {
   evaluate(input: {
+    /** Stable tool invocation id; hook re-evaluation reuses the same id. */
+    toolCallId: string;
     toolName: string;
     requiredTokens: readonly CapabilityToken[];
     /**
@@ -245,6 +247,7 @@ export function gateToolWithCapabilities<T extends AgentTool<any>>(
         const egressGuard = getEgressGuard?.() ?? null;
         if (egressGuard) {
           const egressDecision = egressGuard.evaluate({
+            toolCallId,
             toolName: tool.name,
             requiredTokens: eligibility.requiredTokens,
             params: candidate,

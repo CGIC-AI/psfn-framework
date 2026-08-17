@@ -1,4 +1,5 @@
 import { isRecord } from '../../shared/utils/types.js';
+import { randomUUID } from 'node:crypto';
 import { clampSigned, clampUnit } from '../../shared/utils/numeric.js';
 import { uniqueStrings } from '../../shared/utils/strings.js';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
@@ -108,6 +109,8 @@ export interface ShardFoldReviewRecordInput {
 export interface ShardFoldReviewResolveParams {
   shardId: string;
   decision: ShardFoldReviewDecision;
+  /** Stable request identity when supplied by the operator boundary. */
+  attemptRef?: string;
   actor?: string;
   note?: string;
 }
@@ -412,6 +415,11 @@ export class ShardFoldReviewController implements ShardFoldReviewPort {
           shardId: input.shardId,
           outputId: output.outputId,
         },
+        denialRoute: {
+          attemptRef: output.outputId,
+          correlationRef: `fold-stage:${input.shardId}`,
+          sourceChannelId: input.channelId,
+        },
       });
       const clonedOutput = cloneTaggedOutput(output);
       if (screened.intake?.withheld) {
@@ -487,6 +495,7 @@ export class ShardFoldReviewController implements ShardFoldReviewPort {
     }
 
     const now = Date.now();
+    const attemptRef = params.attemptRef?.trim() || randomUUID();
     const actor = normalizeActor(params.actor);
     const note = normalizeNote(params.note);
 
@@ -500,7 +509,7 @@ export class ShardFoldReviewController implements ShardFoldReviewPort {
     } else {
       const memoryItemsToPromote: ShardFoldReviewMemoryItem[] = [];
       for (const item of record.memoryItems.filter(candidate => candidate.reviewState !== 'approved')) {
-        if (!this.recheckMemoryIntake(record, item)) {
+        if (!this.recheckMemoryIntake(record, item, attemptRef)) {
           item.reviewState = 'blocked';
           item.resolvedAt = now;
           item.resolutionNote = note ?? 'intake_denied';
@@ -577,6 +586,7 @@ export class ShardFoldReviewController implements ShardFoldReviewPort {
   private recheckMemoryIntake(
     record: ShardFoldReviewRecord,
     item: ShardFoldReviewMemoryItem,
+    attemptRef: string,
   ): boolean {
     if (!item.intake) return true;
     if (item.intake.withheld) return false;
@@ -588,6 +598,7 @@ export class ShardFoldReviewController implements ShardFoldReviewPort {
       outputId: item.output.outputId,
       phase: 'operator_approval',
     }, {
+      attemptRef,
       correlationRef: `fold:${record.shardId}:${item.output.outputId}`,
       sourceChannelId: record.channelId,
     });

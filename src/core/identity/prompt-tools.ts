@@ -583,7 +583,7 @@ export function createIdentityTool(
       } satisfies ToolCallIdempotencySchemaMetadata,
     }),
     execute: async (
-      _toolCallId: string,
+      toolCallId: string,
       params: Record<string, unknown>,
       _signal?: AbortSignal,
     ): Promise<AgentToolResult<{ isError?: boolean; status?: 'held' }>> => {
@@ -612,6 +612,7 @@ export function createIdentityTool(
             {
               tool: 'identity',
               action,
+              attemptRef: toolCallId,
               ...(action === 'update_persona'
                 ? { enforcementPosture: 'audit_only' as const }
                 : {}),

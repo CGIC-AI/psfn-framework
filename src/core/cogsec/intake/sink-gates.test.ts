@@ -166,11 +166,13 @@ describe('evaluateSinkAccess (htm9.3)', () => {
         });
 
         const first = gate.evaluate(sink, [envelope], {}, {
+          attemptRef: `invocation-${sink}-1`,
           correlationRef: `attempt-${sink}`,
           sourceChannelId: 'discord:room-1',
           logicalSessionId: 'session-1',
         });
         const replay = gate.evaluate(sink, [envelope], {}, {
+          attemptRef: `invocation-${sink}-1`,
           correlationRef: `attempt-${sink}`,
           sourceChannelId: 'discord:room-1',
           logicalSessionId: 'session-1',
@@ -199,6 +201,17 @@ describe('evaluateSinkAccess (htm9.3)', () => {
           affectedLogicalSessionIds: ['session-1'],
         });
         expect(events[0].safeAgentSummary).toContain('Operator alert delivery: delivered.');
+
+        gate.evaluate(sink, [envelope], {}, {
+          attemptRef: `invocation-${sink}-2`,
+          correlationRef: `attempt-${sink}`,
+          sourceChannelId: 'discord:room-1',
+          logicalSessionId: 'session-1',
+        });
+        await vi.waitFor(() => {
+          expect(new CogSecEventStore(eventStorePath).listEvents()).toHaveLength(2);
+          expect(notify).toHaveBeenCalledTimes(2);
+        });
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }
@@ -219,7 +232,7 @@ describe('evaluateSinkAccess (htm9.3)', () => {
         sink,
         [makeSnapshot({ state: 'quarantined' })],
         {},
-        { correlationRef: `shadow-${sink}` },
+        { attemptRef: `shadow-invocation-${sink}`, correlationRef: `shadow-${sink}` },
       );
 
       expect(decision).toMatchObject({ verdict: 'deny', allowed: true, mode: 'shadow' });
@@ -247,7 +260,7 @@ describe('evaluateSinkAccess (htm9.3)', () => {
           sink,
           [makeSnapshot({ envelopeId: `failed-${sink}`, state: 'quarantined' })],
           {},
-          { correlationRef: `failed-${sink}` },
+          { attemptRef: `failed-invocation-${sink}`, correlationRef: `failed-${sink}` },
         );
 
         expect(decision).toMatchObject({ verdict: 'deny', allowed: false });
@@ -266,7 +279,10 @@ describe('evaluateSinkAccess (htm9.3)', () => {
     const onOrdinarySinkDenial = vi.fn(() => ({
       caseId: 'cogsec_sinkdenial_0123456789abcdef0123456789abcdef01234567',
       incident: 'created' as const,
-      notification: Promise.resolve({ status: 'delivered' as const }),
+      notification: Promise.resolve({
+        status: 'delivered' as const,
+        durableEvidence: 'recorded' as const,
+      }),
     }));
     const gate = createIntakeSinkGate({
       policy: makePolicy('strict'),
@@ -277,6 +293,7 @@ describe('evaluateSinkAccess (htm9.3)', () => {
     gate.evaluate('memory_write', [makeSnapshot({ state: 'quarantined' })], {
       unsafeAuditOnlyValue: 'secret payload must not cross the incident seam',
     }, {
+      attemptRef: 'invocation-1',
       correlationRef: 'attempt-1',
       sourceChannelId: 'discord:room-1',
       logicalSessionId: 'session-1',
@@ -289,6 +306,21 @@ describe('evaluateSinkAccess (htm9.3)', () => {
       logicalSessionId: 'session-1',
     });
     expect(JSON.stringify(denial)).not.toContain('secret payload');
+  });
+
+  it('rejects an empty per-attempt reference before recording a durable denial', () => {
+    const gate = createIntakeSinkGate({
+      policy: makePolicy('strict'),
+      actor: 'test:missing-attempt',
+      onOrdinarySinkDenial: vi.fn(),
+    });
+
+    expect(() => gate.evaluate(
+      'memory_write',
+      [makeSnapshot({ state: 'quarantined' })],
+      {},
+      { attemptRef: '   ', correlationRef: 'write:1' },
+    )).toThrow(/empty attemptRef/);
   });
 
   it('denies quarantined content at EVERY sink in enforce mode (quarantine invisibility)', () => {

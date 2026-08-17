@@ -404,6 +404,7 @@ describe('ShardFoldReviewController', () => {
       shardId,
       decision: 'approve',
       actor: 'operator:test',
+      attemptRef: 'fold-review-request-1',
     });
     expect(resolved?.memoryItems.map(item => item.reviewState)).toEqual(['blocked', 'approved']);
     expect(write).toHaveBeenCalledTimes(1);
@@ -414,5 +415,15 @@ describe('ShardFoldReviewController', () => {
         parent,
       ],
     }));
+    expect(sinkGate.evaluate).toHaveBeenLastCalledWith(
+      'memory_write',
+      expect.any(Array),
+      expect.objectContaining({ phase: 'operator_approval' }),
+      {
+        attemptRef: 'fold-review-request-1',
+        correlationRef: `fold:${shardId}:${outputs[1]?.outputId}`,
+        sourceChannelId: 'api:review',
+      },
+    );
   });
 });

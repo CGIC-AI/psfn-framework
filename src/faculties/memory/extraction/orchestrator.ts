@@ -241,7 +241,12 @@ export async function runExtractionOrchestration(
     const latestTurnContext = resolveLatestTurnContext(recentEntries);
     const turnId = options.turnId ?? latestTurnContext?.turnId;
     resolvedTurnId = turnId;
-    const requestId = latestTurnContext?.requestId ?? `memory-extraction:${options.channelId}:${options.triggerReason}`;
+    const requestId = latestTurnContext?.requestId
+      ?? `memory-extraction:${options.channelId}:${options.triggerReason}`;
+    const attemptRef = latestTurnContext?.requestId
+      ?? options.welfareGrantJobId
+      ?? (turnId ? `${turnId}:memory-extraction` : undefined)
+      ?? `memory-extraction:${options.channelId}:${options.triggerReason}:${recentEntries.map(entry => entry.id).join(',')}`;
     await options.emitExtractionStart(options.channelId, options.triggerReason, turnId);
 
     const channelVisibility = resolveExtractionChannelVisibility(options.channelId, recentEntries);
@@ -437,6 +442,7 @@ export async function runExtractionOrchestration(
       companionAuthorIds: options.companionAuthorIds ?? [],
       requireStructuredAddressing: groupRoomExtraction,
       channelId: options.channelId,
+      attemptRef,
       triggerReason: options.triggerReason,
       telemetryEnabled: options.telemetryEnabled,
     });

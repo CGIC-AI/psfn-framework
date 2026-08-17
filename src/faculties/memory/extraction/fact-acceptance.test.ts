@@ -84,7 +84,9 @@ async function buildInput(
     speakerRouting: await buildSpeakerRoutingContext(recentEntries),
     canonicalContactId: 'contact-alex',
     companionNames: ['Lyra'],
+    companionAuthorIds: [],
     channelId: 'api:test',
+    attemptRef: 'memory-extraction-request-1',
     triggerReason: 'manual',
     telemetryEnabled: false,
     ...overrides,
@@ -218,6 +220,7 @@ describe('buildAcceptedFactCandidates', () => {
       factIndex: 0,
       factType: 'semantic',
     }, {
+      attemptRef: 'memory-extraction-request-1',
       correlationRef: 'fact:0',
       sourceChannelId: 'api:test',
     });

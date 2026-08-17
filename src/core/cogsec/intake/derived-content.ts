@@ -6,7 +6,11 @@ import type {
 } from '../../../shared/contracts/intake-envelope.js';
 import { INTAKE_FIREWALL_NOTICE_TEMPLATES } from '../intake-firewall-notice-templates.js';
 import type { IntakeScreeningService } from './screening.js';
-import type { IntakeSinkGate, IntakeSinkGateDecision } from './sink-gates.js';
+import type {
+  IntakeSinkDenialRouteContext,
+  IntakeSinkGate,
+  IntakeSinkGateDecision,
+} from './sink-gates.js';
 
 export interface DerivedContentIntakeDisposition {
   sourceClass: Extract<IntakeSourceClass, 'subagent_output' | 'shard_foldback'>;
@@ -36,6 +40,8 @@ export async function screenDerivedContent(input: {
   screening?: IntakeScreeningService | null;
   sinkGate?: IntakeSinkGate | null;
   auditContext?: Readonly<Record<string, unknown>>;
+  /** Content-free stable identity for an enforce-mode durable denial. */
+  denialRoute: IntakeSinkDenialRouteContext;
 }): Promise<ScreenDerivedContentResult> {
   const screening = input.screening ?? null;
   const sinkGate = input.sinkGate ?? null;
@@ -65,7 +71,7 @@ export async function screenDerivedContent(input: {
     sourceClass: input.sourceClass,
     origin: input.origin,
     ...(input.auditContext ?? {}),
-  });
+  }, input.denialRoute);
   if (sink.mode !== sinkGate.mode || sink.sink !== input.sink) {
     throw new Error('Derived-content sink gate returned a mismatched decision');
   }

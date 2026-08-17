@@ -66,10 +66,10 @@ async function invoke(input: {
 describe('admin ICP autonomy routes', () => {
   it('strictly validates and audits operator test initiations', async () => {
     const triggerTestInitiation = vi.fn(async () => ({
-      outcome: 'sent' as const,
+      outcome: 'accepted' as const,
       candidateId: CANDIDATE_ID,
-      status: 'consumed' as const,
-      deliveryDisposition: 'delivered' as const,
+      status: 'pending' as const,
+      deliveryDisposition: 'pending' as const,
     }));
     const audit = vi.fn<AdminAuditTimelineAppender>();
 

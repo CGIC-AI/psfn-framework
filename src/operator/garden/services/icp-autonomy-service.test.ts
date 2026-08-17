@@ -249,10 +249,10 @@ describe('truthful quiet attribution (psfn-framework-hrmrq.34)', () => {
 describe('AdminIcpAutonomyDataService', () => {
   it('delegates operator test initiation to the model-independent runtime port', async () => {
     const expected = {
-      outcome: 'sent' as const,
+      outcome: 'accepted' as const,
       candidateId: CANDIDATE_ID,
-      status: 'consumed' as const,
-      deliveryDisposition: 'delivered' as const,
+      status: 'pending' as const,
+      deliveryDisposition: 'pending' as const,
     };
     const trigger = vi.fn(async () => expected);
     const service = new AdminIcpAutonomyDataService({

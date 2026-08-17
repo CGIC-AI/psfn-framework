@@ -1,0 +1,280 @@
+import { spawnSync } from 'node:child_process';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
+import { describeStartupOwnerFileChecks } from '../../src/system/config/startup-owner-files.js';
+
+const repoRoot = resolve(import.meta.dirname, '../..');
+const seedScript = join(repoRoot, 'scripts/ops/psfn-compose-smoke-seed.sh');
+const temporaryRoots: string[] = [];
+
+function temporaryRoot(): string {
+  const root = mkdtempSync(join(tmpdir(), 'psfn-compose-bootstrap-test-'));
+  temporaryRoots.push(root);
+  return root;
+}
+
+function writeSeed(configDir: string, owner: string): void {
+  writeFileSync(join(configDir, `${owner}.seed.json`), '{}\n', 'utf8');
+}
+
+describe('Compose smoke bootstrap', () => {
+  afterEach(() => {
+    for (const root of temporaryRoots.splice(0)) {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('fails with the missing required owner name when automata-policy is absent', () => {
+    const root = temporaryRoot();
+    const configDir = join(root, 'config');
+    mkdirSync(configDir);
+    for (const owner of [
+      'settings',
+      'models',
+      'providers',
+      'trust-policy',
+      'intake-policy',
+      'backup',
+      'partner-affect-shadow',
+      'places',
+      'runtime-prompt-layers',
+      'scheduler',
+      'capability-tier',
+      'charge-policy',
+      'skills',
+    ]) {
+      writeSeed(configDir, owner);
+    }
+
+    const result = spawnSync('sh', [seedScript], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        SYSTEM_DATA_DIR: join(root, 'system-data'),
+        COMPANION_DATA_DIR: join(root, 'companion-data'),
+        WORKSPACE_PATH: join(root, 'workspace'),
+        GATEWAY_SOCKET: join(root, 'run/gateway.sock'),
+        PSFN_SMOKE_AGENT_AUTH_DIR: join(root, 'agent-auth'),
+        PSFN_SMOKE_MODEL_CACHE_ROOT: join(root, 'model-cache'),
+        PSFN_SEED_CONFIG_DIR: configDir,
+        PSFN_RUNTIME_UID: String(process.getuid?.() ?? 999),
+        PSFN_RUNTIME_GID: String(process.getgid?.() ?? 999),
+        COMPANION_ID: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        GATEWAY_SESSION_HMAC_KEY: '',
+        POSTGRES_DATABASE_URL: 'postgresql://fixture.invalid/psfn',
+      },
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      `[smoke-seed] missing seed template: ${join(configDir, 'automata-policy.seed.json')}`,
+    );
+  });
+
+  it('fails before network access when offline mode has no model-cache input', () => {
+    const root = temporaryRoot();
+    const cacheDir = join(root, 'cache');
+    const inputDir = join(root, 'input');
+    mkdirSync(cacheDir);
+    mkdirSync(inputDir);
+
+    const result = spawnSync('node', [
+      join(repoRoot, 'scripts/ops/psfn-compose-smoke-prefetch.mjs'),
+    ], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      timeout: 5_000,
+      env: {
+        ...process.env,
+        HF_HUB_OFFLINE: '1',
+        TRANSFORMERS_OFFLINE: '1',
+        PSFN_SMOKE_MODEL_PREFETCH_OFFLINE: '1',
+        PSFN_SMOKE_MODEL_CACHE_DIR: cacheDir,
+        PSFN_SMOKE_MODEL_CACHE_INPUT_DIR: inputDir,
+        PSFN_SMOKE_TEXT_EMOTION_MODEL_REVISION: '1111111111111111111111111111111111111111',
+        PSFN_SMOKE_EMBEDDING_MODEL_REVISION: '2222222222222222222222222222222222222222',
+      },
+    });
+
+    expect(result.signal).toBeNull();
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain('[model-prefetch] offline cache input is empty');
+    expect(result.stderr).toContain('PSFN_SMOKE_MODEL_CACHE_SOURCE');
+  });
+
+  it('reports how to repair a missing offline cache-input path', () => {
+    const root = temporaryRoot();
+    const result = spawnSync('node', [
+      join(repoRoot, 'scripts/ops/psfn-compose-smoke-prefetch.mjs'),
+    ], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      timeout: 5_000,
+      env: {
+        ...process.env,
+        PSFN_SMOKE_MODEL_PREFETCH_OFFLINE: '1',
+        PSFN_SMOKE_MODEL_CACHE_DIR: join(root, 'cache'),
+        PSFN_SMOKE_MODEL_CACHE_INPUT_DIR: join(root, 'missing-input'),
+        PSFN_SMOKE_TEXT_EMOTION_MODEL_REVISION: '1111111111111111111111111111111111111111',
+        PSFN_SMOKE_EMBEDDING_MODEL_REVISION: '2222222222222222222222222222222222222222',
+      },
+    });
+
+    expect(result.signal).toBeNull();
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain('configured cache input does not exist or is not a directory');
+    expect(result.stderr).toContain('PSFN_SMOKE_MODEL_CACHE_SOURCE');
+  });
+
+  it('rejects an unknown offline-mode value instead of enabling network access', () => {
+    const root = temporaryRoot();
+    const result = spawnSync('node', [
+      join(repoRoot, 'scripts/ops/psfn-compose-smoke-prefetch.mjs'),
+    ], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      timeout: 5_000,
+      env: {
+        ...process.env,
+        PSFN_SMOKE_MODEL_PREFETCH_OFFLINE: 'sometimes',
+        PSFN_SMOKE_MODEL_CACHE_DIR: join(root, 'cache'),
+        PSFN_SMOKE_MODEL_CACHE_INPUT_DIR: join(root, 'input'),
+        PSFN_SMOKE_TEXT_EMOTION_MODEL_REVISION: '1111111111111111111111111111111111111111',
+        PSFN_SMOKE_EMBEDDING_MODEL_REVISION: '2222222222222222222222222222222222222222',
+      },
+    });
+
+    expect(result.signal).toBeNull();
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain(
+      'PSFN_SMOKE_MODEL_PREFETCH_OFFLINE must be 0 or 1; received "sometimes"',
+    );
+  });
+
+  it('fails actionably when a pinned model revision is missing', () => {
+    const root = temporaryRoot();
+    const result = spawnSync('node', [
+      join(repoRoot, 'scripts/ops/psfn-compose-smoke-prefetch.mjs'),
+    ], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      timeout: 5_000,
+      env: {
+        ...process.env,
+        PSFN_SMOKE_MODEL_PREFETCH_OFFLINE: '1',
+        PSFN_SMOKE_MODEL_CACHE_DIR: join(root, 'cache'),
+        PSFN_SMOKE_MODEL_CACHE_INPUT_DIR: join(root, 'input'),
+        PSFN_SMOKE_TEXT_EMOTION_MODEL_REVISION: '',
+        PSFN_SMOKE_EMBEDDING_MODEL_REVISION: '2222222222222222222222222222222222222222',
+      },
+    });
+
+    expect(result.signal).toBeNull();
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain(
+      'PSFN_SMOKE_TEXT_EMOTION_MODEL_REVISION must be an exact 40-character lowercase commit SHA',
+    );
+  });
+
+  it('replaces stale cache contents with the supplied offline input before model loading', () => {
+    const root = temporaryRoot();
+    const cacheDir = join(root, 'cache');
+    const inputDir = join(root, 'input');
+    mkdirSync(cacheDir);
+    mkdirSync(inputDir);
+    const emotionRevision = '1111111111111111111111111111111111111111';
+    const embeddingRevision = '2222222222222222222222222222222222222222';
+    const staleModelDir = join(cacheDir, 'SamLowe/roberta-base-go_emotions-onnx');
+    const emotionInput = join(
+      inputDir,
+      'SamLowe/roberta-base-go_emotions-onnx',
+      emotionRevision,
+    );
+    const embeddingInput = join(inputDir, 'Xenova/all-MiniLM-L6-v2', embeddingRevision);
+    mkdirSync(staleModelDir, { recursive: true });
+    mkdirSync(emotionInput, { recursive: true });
+    mkdirSync(embeddingInput, { recursive: true });
+    writeFileSync(join(staleModelDir, 'stale-artifact'), 'stale', 'utf8');
+    writeFileSync(join(cacheDir, 'unrelated-owner-file'), 'preserve', 'utf8');
+    writeFileSync(join(emotionInput, 'config.json'), '{}', 'utf8');
+    writeFileSync(join(embeddingInput, 'config.json'), '{}', 'utf8');
+
+    const result = spawnSync('node', [
+      join(repoRoot, 'scripts/ops/psfn-compose-smoke-prefetch.mjs'),
+    ], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      timeout: 5_000,
+      env: {
+        ...process.env,
+        HF_HUB_OFFLINE: '1',
+        TRANSFORMERS_OFFLINE: '1',
+        PSFN_SMOKE_MODEL_PREFETCH_OFFLINE: '1',
+        PSFN_SMOKE_MODEL_CACHE_DIR: cacheDir,
+        PSFN_SMOKE_MODEL_CACHE_INPUT_DIR: inputDir,
+        PSFN_SMOKE_TEXT_EMOTION_MODEL_REVISION: emotionRevision,
+        PSFN_SMOKE_EMBEDDING_MODEL_REVISION: embeddingRevision,
+      },
+    });
+
+    expect(result.signal).toBeNull();
+    expect(result.status).toBe(1);
+    expect(existsSync(join(staleModelDir, 'stale-artifact'))).toBe(false);
+    expect(existsSync(join(cacheDir, 'unrelated-owner-file'))).toBe(true);
+    expect(existsSync(join(staleModelDir, emotionRevision, 'config.json'))).toBe(true);
+    expect(existsSync(join(staleModelDir, 'config.json'))).toBe(true);
+    expect(existsSync(join(
+      cacheDir,
+      'Xenova/all-MiniLM-L6-v2',
+      embeddingRevision,
+      'config.json',
+    ))).toBe(true);
+  });
+
+  it('seeds the current required system owners into a clean Compose root', () => {
+    const root = temporaryRoot();
+    const systemDataDir = join(root, 'system-data');
+    const result = spawnSync('sh', [seedScript], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        SYSTEM_DATA_DIR: systemDataDir,
+        COMPANION_DATA_DIR: join(root, 'companion-data'),
+        WORKSPACE_PATH: join(root, 'workspace'),
+        GATEWAY_SOCKET: join(root, 'run/gateway.sock'),
+        PSFN_SMOKE_AGENT_AUTH_DIR: join(root, 'agent-auth'),
+        PSFN_SMOKE_MODEL_CACHE_ROOT: join(root, 'model-cache'),
+        PSFN_SEED_CONFIG_DIR: join(repoRoot, 'config'),
+        PSFN_RUNTIME_UID: String(process.getuid?.() ?? 999),
+        PSFN_RUNTIME_GID: String(process.getgid?.() ?? 999),
+        COMPANION_ID: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        GATEWAY_SESSION_HMAC_KEY: '',
+        POSTGRES_DATABASE_URL: 'postgresql://fixture.invalid/psfn',
+      },
+    });
+
+    expect(result.status, result.stderr || result.stdout).toBe(0);
+    expect(existsSync(join(systemDataDir, 'automata-policy.json'))).toBe(true);
+    expect(JSON.parse(
+      readFileSync(join(root, 'companion-data/capability-tier.json'), 'utf8'),
+    )).toMatchObject({ tier: 'autonomous' });
+    for (const owner of describeStartupOwnerFileChecks()) {
+      if (owner.optionalWhenMissing) continue;
+      const ownerRoot = owner.scope === 'system'
+        ? systemDataDir
+        : join(root, 'companion-data');
+      expect(existsSync(join(ownerRoot, owner.ownerFileName)), owner.label).toBe(true);
+    }
+  });
+});

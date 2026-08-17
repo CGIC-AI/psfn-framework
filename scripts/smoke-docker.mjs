@@ -20,6 +20,7 @@
 //     --keep-up   leave the stack running on exit (default: compose down -v)
 
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { dirname, resolve } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
@@ -31,6 +32,9 @@ const API_PORT = process.env.PSFN_SMOKE_API_PORT || '13000';
 const API_BASE = `http://127.0.0.1:${API_PORT}`;
 const API_KEY = process.env.PSFN_SMOKE_API_KEY || 'psfn-smoke-api-key-please-rotate';
 const AUTH_HEADERS = { Authorization: `Bearer ${API_KEY}` };
+const SMOKE_SESSION_ID = 'compose-persistence';
+const API_PRINCIPAL_ID = `api-key-${createHash('sha256').update(API_KEY.trim()).digest('hex').slice(0, 24)}`;
+const SMOKE_CHANNEL_ID = `api:${API_PRINCIPAL_ID}:${SMOKE_SESSION_ID}`;
 const HAS_PROVIDER_KEY = (process.env.OPENROUTER_API_KEY || '').trim().length > 0;
 
 function log(msg) {
@@ -140,9 +144,9 @@ function isProviderBoundary(status, bodyText) {
   return providerSignals.some((s) => body.includes(s));
 }
 
-async function queryPersistedRows() {
-  // Best-effort, non-fatal: count session-entry rows to corroborate that the
-  // turn persisted through the Postgres store.
+async function queryPublicTableCount() {
+  // Best-effort migration signal; conversation persistence is asserted against
+  // the agent's canonical L0 session journal after the successful turn.
   const res = compose(
     ['exec', '-T', 'postgres', 'psql', '-U', 'psfn', '-d', 'psfn', '-tAc',
       "SELECT count(*) FROM information_schema.tables WHERE table_schema='public';"],
@@ -150,6 +154,31 @@ async function queryPersistedRows() {
   );
   if (res.status !== 0) return null;
   return (res.stdout || '').trim();
+}
+
+function verifyPersistedTurn(userContent, assistantContent) {
+  const verifier = String.raw`
+    const fs = require('node:fs');
+    const path = require('node:path');
+    const [channelId, userContent, assistantContent] = process.argv.slice(1);
+    const sessionsDir = '/app/companion-data/state/sessions';
+    const index = JSON.parse(fs.readFileSync(path.join(sessionsDir, '_channel_index.json'), 'utf8'));
+    const entry = index.channels?.[channelId];
+    if (!entry || !Array.isArray(entry.filenames) || entry.filenames.length === 0) process.exit(2);
+    const rows = entry.filenames.flatMap(filename =>
+      fs.readFileSync(path.join(sessionsDir, filename), 'utf8')
+        .split('\n').filter(Boolean).map(line => JSON.parse(line)));
+    const hasUser = rows.some(row => row.type === 'message'
+      && row.role === 'user' && row.content === userContent);
+    const hasAssistant = rows.some(row => row.type === 'message'
+      && row.role === 'assistant' && row.content === assistantContent);
+    if (!hasUser || !hasAssistant) process.exit(3);
+  `;
+  const result = compose([
+    'exec', '-T', 'agent', 'node', '-e', verifier,
+    SMOKE_CHANNEL_ID, userContent, assistantContent,
+  ], { capture: true });
+  return result.status === 0;
 }
 
 async function main() {
@@ -183,7 +212,7 @@ async function main() {
     // Agent RPC connectivity: the agent container is healthy only once its
     // gateway socket peer is connectable, and the health payload reflects the
     // agent-backed scheduler. Report the table count as a migration signal.
-    const tableCount = await queryPersistedRows();
+    const tableCount = await queryPublicTableCount();
     if (tableCount) pass(`Postgres reachable; public schema has ${tableCount} tables (runtime migrations ran)`);
 
     log('Driving one chat turn: POST /v1/chat/completions ...');
@@ -191,7 +220,12 @@ async function main() {
     try {
       res = await fetchWithTimeout(`${API_BASE}/v1/chat/completions`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Accept: 'application/json', ...AUTH_HEADERS },
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+          'X-Session-Id': SMOKE_SESSION_ID,
+          ...AUTH_HEADERS,
+        },
         body: JSON.stringify({
           model: 'companion',
           messages: [{ role: 'user', content: opts.message }],
@@ -209,9 +243,12 @@ async function main() {
       try { payload = JSON.parse(bodyText); } catch { payload = null; }
       const content = payload?.choices?.[0]?.message?.content;
       if (typeof content === 'string' && content.trim().length > 0) {
-        pass(`full turn: assistant reply persisted and returned: ${content.slice(0, 160)}`);
-        const rows = await queryPersistedRows();
-        if (rows) pass(`Postgres persistence corroborated (public tables: ${rows})`);
+        if (!verifyPersistedTurn(opts.message, content)) {
+          fail(`chat reply returned but the exact user/assistant turn was not found in ${SMOKE_CHANNEL_ID}`);
+          return 1;
+        }
+        pass(`full Autonomous turn persisted and returned: ${content.slice(0, 160)}`);
+        pass(`canonical L0 session journal contains the exact user/assistant pair (${SMOKE_CHANNEL_ID})`);
         return 0;
       }
       fail(`chat returned ${res.status} but no assistant content: ${bodyText.slice(0, 240)}`);

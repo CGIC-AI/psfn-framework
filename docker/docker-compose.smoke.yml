@@ -119,11 +119,22 @@ services:
       seed:
         condition: service_completed_successfully
     entrypoint: ["node", "/app/scripts/ops/psfn-compose-smoke-prefetch.mjs"]
+    environment:
+      # /cache-input is a deterministic, operator-supplied Hugging Face cache.
+      # Offline mode rejects an empty input before attempting model loading.
+      PSFN_SMOKE_MODEL_CACHE_INPUT_DIR: /cache-input
+      PSFN_SMOKE_MODEL_PREFETCH_OFFLINE: ${PSFN_SMOKE_MODEL_PREFETCH_OFFLINE:-0}
+      PSFN_SMOKE_TEXT_EMOTION_MODEL_REVISION: ${PSFN_SMOKE_TEXT_EMOTION_MODEL_REVISION:-90ee0c1c4796d370e68968687b8ba51fc11224f4}
+      PSFN_SMOKE_EMBEDDING_MODEL_REVISION: ${PSFN_SMOKE_EMBEDDING_MODEL_REVISION:-751bff37182d3f1213fa05d7196b954e230abad9}
     networks:
       - psfn-smoke-egress
     volumes:
       - ../scripts/ops:/app/scripts/ops:ro
       - model-cache:/app/models
+      - type: bind
+        source: ${PSFN_SMOKE_MODEL_CACHE_SOURCE:-../models/transformers}
+        target: /cache-input
+        read_only: true
     restart: "no"
 
   gateway:

@@ -277,7 +277,6 @@ def _load_psfn_satellite_claim(tls: ClientCertificateConfig | None) -> Satellite
         location_mode=_parse_location_mode(os.getenv("PSFN_LOCATION_MODE")) or defaults.location_mode,
         capability_profile=capability_profile,
         telemetry=TelemetryConfig(mode=telemetry_mode, categories=telemetry_categories),
-        addressed_companion_id=os.getenv("PSFN_COMPANION_ID") or None,
         tls=tls,
     )
 

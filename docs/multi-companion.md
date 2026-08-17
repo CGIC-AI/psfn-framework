@@ -530,7 +530,11 @@ Multi-companion layers on top of the single-companion locations/world surface
   a canonical peer companion UUID plus an idempotent request UUID and is durably
   marked `operator_test`; it cannot supply peer-visible content or bypass broker
   capability, identity, trust/block, availability, fatigue, charge, cost, or
-  one-use-permit policy. These controls cannot target another cluster.
+  one-use-permit policy. After canonical-peer validation, the route returns the
+  deterministic candidate identity as accepted/pending without waiting for the
+  provider-backed turn; delivery continues through the ordinary broker path and
+  terminal state remains observable through bounded lifecycle telemetry. These
+  controls cannot target another cluster.
 - **Private-room delivery is presence-windowed.** A place carries an optional
   `privacy` field (`PlacePrivacy = 'public' | 'private'`,
   `src/shared/contracts/places-registry.ts`; absent = `public`, byte-identical to

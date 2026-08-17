@@ -37,6 +37,7 @@ export type CogSecCaseType =
 export type CogSecSeverity = 'low' | 'medium' | 'high' | 'critical';
 export type CogSecStatus = 'open' | 'planned' | 'applying' | 'applied' | 'failed' | 'superseded';
 export type CogSecAction = 'seal' | 'tombstone' | 'search_exclude' | 'revoke' | 'regenerate' | 'epoch_cut';
+export type CogSecOperatorAlertDeliveryStatus = 'pending' | 'delivered' | 'failed' | 'unconfigured';
 
 export type CogSecArtifactClass =
   | 'memories'
@@ -103,6 +104,8 @@ export interface CogSecEvent {
   updatedAt: string;
   appliedAt?: string;
   safeAgentSummary: string;
+  /** Typed durable evidence; presentation text is never parsed as state. */
+  operatorAlertDeliveryStatus?: CogSecOperatorAlertDeliveryStatus;
   failureDetails?: string;
   resultCounters: CogSecResultCounters;
   epochCuts: CogSecEpochCutRef[];
@@ -130,6 +133,7 @@ export interface CogSecCreateEventInput {
   actions?: CogSecAction[];
   actor?: string;
   safeAgentSummary: string;
+  operatorAlertDeliveryStatus?: CogSecOperatorAlertDeliveryStatus;
   failureDetails?: string;
   resultCounters?: CogSecResultCounters;
   epochCuts?: CogSecEpochCutRef[];
@@ -147,6 +151,7 @@ export interface CogSecUpdateEventInput {
   actions?: CogSecAction[];
   appliedAt?: string;
   safeAgentSummary?: string;
+  operatorAlertDeliveryStatus?: CogSecOperatorAlertDeliveryStatus;
   failureDetails?: string;
   resultCounters?: CogSecResultCounters;
   epochCuts?: CogSecEpochCutRef[];
@@ -172,6 +177,7 @@ const EVENT_KEYS = new Set([
   'updatedAt',
   'appliedAt',
   'safeAgentSummary',
+  'operatorAlertDeliveryStatus',
   'failureDetails',
   'resultCounters',
   'epochCuts',
@@ -245,6 +251,12 @@ const ACTIONS: ReadonlySet<CogSecAction> = new Set([
   'revoke',
   'regenerate',
   'epoch_cut',
+]);
+const OPERATOR_ALERT_DELIVERY_STATUSES: ReadonlySet<CogSecOperatorAlertDeliveryStatus> = new Set([
+  'pending',
+  'delivered',
+  'failed',
+  'unconfigured',
 ]);
 const ARTIFACT_CLASSES: ReadonlySet<CogSecArtifactClass> = new Set([
   'memories',
@@ -590,6 +602,15 @@ function parseEvent(value: unknown, key: string): CogSecEvent {
     updatedAt: parseIsoInstant(value.updatedAt, `CogSec event "${key}".updatedAt`),
     ...(value.appliedAt !== undefined ? { appliedAt: parseIsoInstant(value.appliedAt, `CogSec event "${key}".appliedAt`) } : {}),
     safeAgentSummary: normalizeSafeText(value.safeAgentSummary, `CogSec event "${key}".safeAgentSummary`),
+    ...(value.operatorAlertDeliveryStatus !== undefined
+      ? {
+          operatorAlertDeliveryStatus: parseEnumValue(
+            value.operatorAlertDeliveryStatus,
+            `CogSec event "${key}".operatorAlertDeliveryStatus`,
+            OPERATOR_ALERT_DELIVERY_STATUSES,
+          ),
+        }
+      : {}),
     ...(value.failureDetails !== undefined
       ? { failureDetails: normalizeSafeText(value.failureDetails, `CogSec event "${key}".failureDetails`) }
       : {}),
@@ -723,6 +744,15 @@ function normalizeCreateInput(input: CogSecCreateEventInput, now: Date): CogSecE
     createdAt,
     updatedAt: createdAt,
     safeAgentSummary: normalizeSafeText(input.safeAgentSummary, 'safeAgentSummary'),
+    ...(input.operatorAlertDeliveryStatus
+      ? {
+          operatorAlertDeliveryStatus: parseEnumValue(
+            input.operatorAlertDeliveryStatus,
+            'operatorAlertDeliveryStatus',
+            OPERATOR_ALERT_DELIVERY_STATUSES,
+          ),
+        }
+      : {}),
     ...(input.failureDetails ? { failureDetails: normalizeSafeText(input.failureDetails, 'failureDetails') } : {}),
     resultCounters,
     epochCuts: input.epochCuts?.map((ref, index) => parseEpochCutRef(ref, `epochCuts[${index}]`)) ?? [],
@@ -875,6 +905,15 @@ export class CogSecEventStore {
       ...(input.actions ? { actions: parseActions(input.actions, 'actions') } : {}),
       ...(input.appliedAt ? { appliedAt: parseIsoInstant(input.appliedAt, 'appliedAt') } : {}),
       ...(input.safeAgentSummary ? { safeAgentSummary: normalizeSafeText(input.safeAgentSummary, 'safeAgentSummary') } : {}),
+      ...(input.operatorAlertDeliveryStatus
+        ? {
+            operatorAlertDeliveryStatus: parseEnumValue(
+              input.operatorAlertDeliveryStatus,
+              'operatorAlertDeliveryStatus',
+              OPERATOR_ALERT_DELIVERY_STATUSES,
+            ),
+          }
+        : {}),
       ...(input.failureDetails ? { failureDetails: normalizeSafeText(input.failureDetails, 'failureDetails') } : {}),
       resultCounters: mergeResultCounters(existing.resultCounters, input.resultCounters),
       ...(input.epochCuts ? { epochCuts: parseEpochCuts(input.epochCuts, 'epochCuts') } : {}),

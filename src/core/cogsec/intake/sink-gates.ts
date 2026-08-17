@@ -93,7 +93,10 @@ export interface OrdinaryIntakeSinkDenialEvidence {
   caseId: string;
   incident: 'created' | 'deduplicated';
   /** Settles after the canonical NotificationPort attempt and durable evidence update. */
-  notification: Promise<{ status: OrdinaryIntakeSinkDenialNotificationStatus }>;
+  notification: Promise<{
+    status: OrdinaryIntakeSinkDenialNotificationStatus;
+    durableEvidence: 'recorded' | 'failed';
+  }>;
 }
 
 /**
@@ -102,6 +105,9 @@ export interface OrdinaryIntakeSinkDenialEvidence {
  * is absent, the denied envelope ids provide the stable replay correlation.
  */
 export interface IntakeSinkDenialRouteContext {
+  /** Stable identity of this invocation/turn/request. True replays reuse it. */
+  attemptRef: string;
+  /** Stable identity of one operation within the attempt (for example fact index). */
   correlationRef?: string;
   sourceChannelId?: string;
   logicalSessionId?: string;
@@ -468,9 +474,15 @@ function buildOrdinaryDenialContext(
   route: IntakeSinkDenialRouteContext | undefined,
 ): OrdinaryIntakeSinkDenialContext {
   const correlationRef = optionalContextId(route?.correlationRef, 'correlationRef');
+  const attemptRef = optionalContextId(route?.attemptRef, 'attemptRef');
   const sourceChannelId = optionalContextId(route?.sourceChannelId, 'sourceChannelId');
   const logicalSessionId = optionalContextId(route?.logicalSessionId, 'logicalSessionId');
   const envelopeCorrelation = [...decision.deniedEnvelopeIds].sort().join('\u0000');
+  if (!attemptRef) {
+    throw new Error(
+      `Ordinary enforce-mode ${decision.sink} denial is missing a stable per-attempt reference`,
+    );
+  }
   if (!correlationRef && !envelopeCorrelation) {
     throw new Error(
       `Ordinary enforce-mode ${decision.sink} denial is missing a stable correlation reference`,
@@ -478,6 +490,8 @@ function buildOrdinaryDenialContext(
   }
   const digest = createHash('sha256')
     .update(decision.sink, 'utf8')
+    .update('\u0000', 'utf8')
+    .update(attemptRef, 'utf8')
     .update('\u0000', 'utf8')
     .update(correlationRef ?? '', 'utf8')
     .update('\u0000', 'utf8')

@@ -371,9 +371,12 @@ export class MemoryWriter {
         sourceType: opts.sourceType,
         memoryType: opts.type,
       }, {
-        correlationRef: opts.sourceRef
+        attemptRef: opts.provenance?.toolCallId
           ?? opts.provenance?.requestId
           ?? opts.provenance?.turnId
+          ?? uuidv7(),
+        correlationRef: opts.sourceRef
+          ?? opts.provenance?.toolName
           ?? 'unrouted-memory-write',
         ...(opts.provenance?.channelId
           ? { sourceChannelId: opts.provenance.channelId }

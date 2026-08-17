@@ -147,6 +147,54 @@ describe('MemoryWriter', () => {
       expect(store.insertMemory).not.toHaveBeenCalled();
     });
 
+    it('threads the tool invocation separately from the write operation correlation', async () => {
+      const evaluate = vi.fn().mockReturnValue({
+        sink: 'memory_write',
+        allowed: false,
+        verdict: 'deny',
+        mode: 'enforce',
+        reason: 'held',
+        unscreened: false,
+        deniedEnvelopeIds: ['held-envelope-002'],
+      });
+      writer.intakeSinkGateProvider = () => ({
+        mode: 'enforce',
+        evaluate,
+        assessEgressTrifecta: vi.fn(),
+      });
+
+      await expect(writer.write({
+        text: 'Another derived fact.',
+        type: 'semantic',
+        sourceRef: 'source:tool:memory_write|item:2',
+        provenance: {
+          toolName: 'memory_write',
+          toolCallId: 'memory-call-2',
+          channelId: 'api:memory',
+          sessionId: 'session-memory',
+        },
+        intakeEnvelopes: [{
+          envelopeId: 'held-envelope-002',
+          sourceClass: 'web_fetch',
+          sourceRiskTier: 'untrusted',
+          state: 'quarantined',
+          riskLabels: ['injection/override_attempt'],
+          subject: { kind: 'body' },
+        }],
+      })).rejects.toBeInstanceOf(MemoryCandidacyPolicyError);
+      expect(evaluate).toHaveBeenCalledWith(
+        'memory_write',
+        expect.any(Array),
+        expect.any(Object),
+        {
+          attemptRef: 'memory-call-2',
+          correlationRef: 'source:tool:memory_write|item:2',
+          sourceChannelId: 'api:memory',
+          logicalSessionId: 'session-memory',
+        },
+      );
+    });
+
     it('never blocks in shadow mode and honors the explicit unscreened policy default', async () => {
       writer.intakeSinkGateProvider = () => seedGate('shadow');
       const shadowResult = await writer.write({ text: 'Ordinary fact.', type: 'semantic' });

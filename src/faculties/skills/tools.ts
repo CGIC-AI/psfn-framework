@@ -262,6 +262,7 @@ async function screenSkillWrite(
     description?: string;
   },
   intake: SkillWriteIntakeRuntime | undefined,
+  attemptRef: string,
 ): Promise<ScreenedSkillWrite> {
   if (!intake) {
     return { allowed: true, ...input };
@@ -283,6 +284,7 @@ async function screenSkillWrite(
       action,
       screening: 'unavailable',
     }, {
+      attemptRef,
       correlationRef: turnIdentity
         ? `${turnIdentity.logicalSessionId}:${action}`
         : `unrouted:${action}`,
@@ -321,6 +323,7 @@ async function screenSkillWrite(
     activeTurnEnvelopeCount: activeTurnEnvelopes.length,
     screenedFieldCount: screenedDescription ? 2 : 1,
   }, {
+    attemptRef,
     correlationRef: `${action}:${turnIdentity?.logicalSessionId ?? 'unrouted'}`,
     ...(turnIdentity
       ? {
@@ -650,7 +653,7 @@ export function createSkillTool(
         description: 'Optional short rationale recorded as provenance for action=create|update|rollback.',
       })),
     }),
-    execute: async (_toolCallId: string, params: SkillToolParams) => {
+    execute: async (toolCallId: string, params: SkillToolParams) => {
       try {
         switch (normalizeSkillAction(params)) {
           case 'list':
@@ -701,7 +704,7 @@ export function createSkillTool(
               ...(params.description !== undefined
                 ? { description: params.description }
                 : {}),
-            }, intake);
+            }, intake, toolCallId);
             if (!screened.allowed) {
               return textResult(INTAKE_FIREWALL_NOTICE_TEMPLATES.sinkHeld);
             }
@@ -765,7 +768,7 @@ export function createSkillTool(
               ...(params.description !== undefined
                 ? { description: params.description }
                 : {}),
-            }, intake);
+            }, intake, toolCallId);
             if (!screened.allowed) {
               return textResult(INTAKE_FIREWALL_NOTICE_TEMPLATES.sinkHeld);
             }

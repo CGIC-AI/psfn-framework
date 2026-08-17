@@ -186,6 +186,12 @@ export async function emitCompletionHandoff(input: {
           handoffId: handoff.handoffId,
           taskId: handoff.task.id,
         },
+        denialRoute: {
+          attemptRef: handoff.handoffId,
+          correlationRef: `completion:${handoff.task.id}`,
+          sourceChannelId: targetChannelId,
+          logicalSessionId,
+        },
       });
       handoff = {
         ...handoff,

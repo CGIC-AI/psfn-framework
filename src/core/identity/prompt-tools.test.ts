@@ -336,7 +336,10 @@ describe('Prompt Layer Tools', () => {
           action: 'update_persona',
           enforcementPosture: 'audit_only',
         }),
-        { correlationRef: 'identity:update_persona' },
+        {
+          attemptRef: 'identity-audited-persona-update',
+          correlationRef: 'identity:update_persona',
+        },
       );
       expect(evaluate.mock.calls[0]?.[1]).not.toEqual([]);
     });
@@ -386,7 +389,10 @@ describe('Prompt Layer Tools', () => {
           action: 'update_layer',
           enforcementPosture: 'enforce',
         }),
-        { correlationRef: 'identity:update_layer' },
+        {
+          attemptRef: 'identity-held-runtime-layer-update',
+          correlationRef: 'identity:update_layer',
+        },
       );
     });
 

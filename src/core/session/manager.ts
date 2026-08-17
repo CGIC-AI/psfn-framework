@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { getRequestContext } from '../../primitives/llm/request-context.js';
 import type { AgentResponse, LLMContext, TurnRecord } from '../../shared/contracts/runtime.js';
 import type { SessionRestartBehavior, SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { MemoryScopeQuery } from '../../faculties/memory/types.js';
@@ -2145,7 +2146,11 @@ export class SessionManager implements SessionManagerTypeSurface {
     const promptAssemblyGate = applyPromptAssemblySinkGate(
       boundedEntries,
       this.intakeSinkGate,
-      { channelId: resolvedChannelId },
+      {
+        channelId: resolvedChannelId,
+        attemptRef: getRequestContext()?.requestId
+          ?? randomUUID(),
+      },
     );
     return {
       entries: promptAssemblyGate.entries,

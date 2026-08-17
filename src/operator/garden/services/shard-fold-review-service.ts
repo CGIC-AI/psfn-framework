@@ -13,6 +13,7 @@ import type {
 } from './types.js';
 import type { AdminShardSummary } from './types/shards.js';
 import type { GardenRequestContext } from '../garden-request-context.js';
+import { randomUUID } from 'node:crypto';
 
 const SHARD_FOLD_REVIEW_UNAVAILABLE = 'Shard fold review controller unavailable';
 const SHARD_CONFIGURATION_UNAVAILABLE = 'Shard configuration controller unavailable';
@@ -179,6 +180,7 @@ export class AdminShardFoldReviewDataService implements AdminShardFoldReviewServ
     const review = await port.resolveFoldReview({
       ...input,
       actor: resolveActor(context, input.actor),
+      attemptRef: context.requestId ?? randomUUID(),
     });
     if (!review) {
       return {

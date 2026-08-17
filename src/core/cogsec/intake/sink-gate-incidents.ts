@@ -6,15 +6,162 @@
 // contains only structural routing facts and fixed safe text; envelope ids,
 // tool arguments, and content never cross this seam.
 
-import type { CogSecEventStore } from '../events.js';
+import type { NotificationPort } from '../../../boundary/gateway/notification-port.js';
+import { createComponentLogger } from '../../../shared/logger.js';
+import { toErrorMessage } from '../../../shared/utils/errors.js';
+import type { CogSecEvent, CogSecEventStore } from '../events.js';
 import type {
   BlockedEgressTrifectaContext,
   BlockedEgressTrifectaIncident,
+  OrdinaryIntakeSinkDenial,
+  OrdinaryIntakeSinkDenialEvidence,
+  OrdinaryIntakeSinkDenialNotificationStatus,
+  OrdinaryIntakeSinkDenialRecorder,
 } from './sink-gates.js';
+
+const log = createComponentLogger('IntakeSinkGateIncidents');
+const ORDINARY_DENIAL_ALERT_SENDER = Object.freeze({
+  kind: 'system' as const,
+  provenance: 'system.operator_alert.intake_sink_denial',
+});
 
 export interface IntakeSinkGateIncidentRecorderDeps {
   /** Narrow provider keeps persistence construction outside the CogSec decision layer. */
   cogSecEvents: () => Pick<CogSecEventStore, 'createEvent'>;
+}
+
+export interface OrdinaryIntakeSinkDenialRecorderDeps {
+  cogSecEvents: () => Pick<CogSecEventStore, 'upsertEvent' | 'updateEvent'>;
+  notifier: NotificationPort;
+  companionName: string;
+}
+
+function ordinaryDenialSummary(
+  sink: OrdinaryIntakeSinkDenial['decision']['sink'],
+  delivery: OrdinaryIntakeSinkDenialNotificationStatus | 'pending',
+): string {
+  return `The intake firewall denied an enforce-mode ${sink} operation. `
+    + `Operator alert delivery: ${delivery}.`;
+}
+
+function existingDeliveryStatus(
+  event: CogSecEvent,
+): OrdinaryIntakeSinkDenialNotificationStatus | 'pending' {
+  for (const status of ['delivered', 'failed', 'unconfigured'] as const) {
+    if (event.safeAgentSummary.endsWith(`Operator alert delivery: ${status}.`)) return status;
+  }
+  return 'pending';
+}
+
+function notificationFailureStatus(error: unknown): Exclude<
+OrdinaryIntakeSinkDenialNotificationStatus,
+'delivered'
+> {
+  return toErrorMessage(error).includes('zero configured sinks') ? 'unconfigured' : 'failed';
+}
+
+/**
+ * Records one deterministic incident per logical ordinary denial, then uses
+ * the canonical system-only NotificationPort. Notification failures resolve
+ * as typed evidence and update the incident with a fixed status; transport
+ * errors and payload content never enter the CogSec store.
+ */
+export function createOrdinaryIntakeSinkDenialRecorder(
+  deps: OrdinaryIntakeSinkDenialRecorderDeps,
+): OrdinaryIntakeSinkDenialRecorder {
+  const companionName = deps.companionName.trim();
+  if (!companionName) throw new Error('Ordinary intake sink denial alerts require a companion name');
+  const inFlight = new Map<string, OrdinaryIntakeSinkDenialEvidence['notification']>();
+
+  return (denial): OrdinaryIntakeSinkDenialEvidence => {
+    const { decision, context } = denial;
+    if (
+      decision.mode !== 'enforce'
+      || decision.verdict !== 'deny'
+      || decision.allowed
+    ) {
+      throw new Error('Ordinary intake sink incident recorder requires an enforce-mode denial');
+    }
+
+    const sourceChannelId = context.sourceChannelId ?? `intake-sink:${decision.sink}`;
+    const affectedLogicalSessionIds = context.logicalSessionId
+      ? [context.logicalSessionId]
+      : [];
+    let incident: OrdinaryIntakeSinkDenialEvidence['incident'] = 'created';
+    const store = deps.cogSecEvents();
+    const recorded = store.upsertEvent({
+      caseId: context.correlationId,
+      type: 'intake_firewall',
+      severity: 'high',
+      status: 'open',
+      sourceChannelId,
+      affectedLogicalSessionIds,
+      actor: 'system:intake-sink-gate',
+      safeAgentSummary: ordinaryDenialSummary(decision.sink, 'pending'),
+    }, (_existing) => {
+      incident = 'deduplicated';
+      return {};
+    });
+    const priorDelivery = existingDeliveryStatus(recorded);
+
+    const activeNotification = inFlight.get(context.correlationId);
+    if (activeNotification) {
+      return { caseId: context.correlationId, incident, notification: activeNotification };
+    }
+    if (priorDelivery !== 'pending') {
+      return {
+        caseId: context.correlationId,
+        incident,
+        notification: Promise.resolve({ status: priorDelivery }),
+      };
+    }
+
+    const notification = (async (): Promise<{
+      status: OrdinaryIntakeSinkDenialNotificationStatus;
+    }> => {
+      let status: OrdinaryIntakeSinkDenialNotificationStatus;
+      try {
+        await deps.notifier.notify({
+          sender: ORDINARY_DENIAL_ALERT_SENDER,
+          title: `${companionName} intake firewall denial`,
+          priority: 5,
+          message: [
+            `${companionName} blocked an operation at the cognition intake firewall.`,
+            `Sink: ${decision.sink}`,
+            `Correlation: ${context.correlationId}`,
+            `Source channel: ${context.sourceChannelId ?? 'unavailable'}`,
+            `Logical session: ${context.logicalSessionId ?? 'unavailable'}`,
+            `Reason: ${decision.reason}`,
+          ].join('\n'),
+        });
+        status = 'delivered';
+      } catch (error) {
+        status = notificationFailureStatus(error);
+        log.error('Failed to deliver ordinary intake sink denial alert', {
+          caseId: context.correlationId,
+          sink: decision.sink,
+          status,
+          error: toErrorMessage(error),
+        });
+      }
+      try {
+        deps.cogSecEvents().updateEvent(context.correlationId, {
+          safeAgentSummary: ordinaryDenialSummary(decision.sink, status),
+        });
+      } catch (error) {
+        log.error('Failed to persist ordinary intake sink notification evidence', {
+          caseId: context.correlationId,
+          sink: decision.sink,
+          status,
+          error: toErrorMessage(error),
+        });
+      }
+      return { status };
+    })();
+    inFlight.set(context.correlationId, notification);
+    void notification.finally(() => inFlight.delete(context.correlationId));
+    return { caseId: context.correlationId, incident, notification };
+  };
 }
 
 function requireContextString(

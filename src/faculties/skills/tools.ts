@@ -277,10 +277,21 @@ async function screenSkillWrite(
   }
 
   if (!screening) {
+    const turnIdentity = intake.getActiveTurnSessionIdentity?.() ?? null;
     const unscreenedDecision = gate.evaluate('skill_write', [], {
       tool: 'skill',
       action,
       screening: 'unavailable',
+    }, {
+      correlationRef: turnIdentity
+        ? `${turnIdentity.logicalSessionId}:${action}`
+        : `unrouted:${action}`,
+      ...(turnIdentity
+        ? {
+            sourceChannelId: turnIdentity.sourceChannelId,
+            logicalSessionId: turnIdentity.logicalSessionId,
+          }
+        : {}),
     });
     return { allowed: unscreenedDecision.allowed, ...input };
   }
@@ -303,11 +314,20 @@ async function screenSkillWrite(
     screenedContent.snapshot,
     ...(screenedDescription ? [screenedDescription.snapshot] : []),
   ];
+  const turnIdentity = intake.getActiveTurnSessionIdentity?.() ?? null;
   const decision = gate.evaluate('skill_write', proposedContentEnvelopes, {
     tool: 'skill',
     action,
     activeTurnEnvelopeCount: activeTurnEnvelopes.length,
     screenedFieldCount: screenedDescription ? 2 : 1,
+  }, {
+    correlationRef: `${action}:${turnIdentity?.logicalSessionId ?? 'unrouted'}`,
+    ...(turnIdentity
+      ? {
+          sourceChannelId: turnIdentity.sourceChannelId,
+          logicalSessionId: turnIdentity.logicalSessionId,
+        }
+      : {}),
   });
   return {
     allowed: decision.allowed,

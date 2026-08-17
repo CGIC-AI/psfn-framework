@@ -221,14 +221,19 @@ export interface AdminIcpTestInitiationInput {
   requestId: string;
 }
 
-export interface AdminIcpTestInitiationResult {
+export type AdminIcpTestInitiationResult = {
+  outcome: 'accepted';
+  candidateId: string;
+  status: 'pending';
+  deliveryDisposition: 'pending';
+} | {
   outcome: 'sent' | 'suppressed' | 'deferred' | 'declined' | 'rejected' | 'deduped';
   candidateId: string;
   status: IcpInitiationCandidateStatus;
   reasonCode?: IcpAutonomyReasonCode;
   deliveryDisposition?: 'delivered' | 'suppressed';
   retryEligibleAtMs?: number;
-}
+};
 
 export interface AdminIcpTestInitiationPort {
   trigger(input: AdminIcpTestInitiationInput): Promise<AdminIcpTestInitiationResult>;

@@ -224,6 +224,14 @@ function sourceIdentity(input: {
   ].join('\0');
 }
 
+export function deriveIcpInitiationCandidateId(input: {
+  localCompanionId: string;
+  peerCompanionId: string;
+  request: IcpInitiationSourceRequest;
+}): string {
+  return deterministicUuid('icp-candidate', sourceIdentity(input));
+}
+
 function sameCandidate(left: IcpInitiationCandidate, right: IcpInitiationCandidate): boolean {
   return left.candidateId === right.candidateId
     && left.rootInitiationId === right.rootInitiationId
@@ -617,12 +625,12 @@ export function createIcpInitiationSourceRuntime(
   return {
     async submit(request) {
       const peer = await resolvePeer(request.peerContactId);
-      const identity = sourceIdentity({
+      const identityInput = {
         localCompanionId: dependencies.localCompanionId,
         peerCompanionId: peer.peerCompanionId,
         request,
-      });
-      const candidateId = deterministicUuid('icp-candidate', identity);
+      };
+      const candidateId = deriveIcpInitiationCandidateId(identityInput);
       const existing = inFlight.get(candidateId);
       if (existing) return await existing;
       const pending = run(request, peer, candidateId);

@@ -25,7 +25,10 @@ import {
   terminalIcpSourceOutcome,
   toIcpCandidateOrigin,
   toIcpSourceResult,
+  type IcpInitiationCause as IcpInitiationCauseContract,
   type IcpInitiationSourceAcceptance,
+  type IcpInitiationSourceGatewayPort as IcpInitiationSourceGatewayPortContract,
+  type IcpInitiationSourcePeerPort as IcpInitiationSourcePeerPortContract,
   type IcpInitiationSourceRequest,
   type IcpInitiationSourceResult,
   type IcpInitiationSourceRuntime,
@@ -33,19 +36,19 @@ import {
 } from './initiation-source-support.js';
 
 export type {
-  IcpInitiationCause,
   IcpInitiationConsent,
   IcpInitiationConsentEvaluator,
-  IcpInitiationSourceGatewayPort,
   IcpInitiationSourceOutcome,
-  IcpInitiationSourcePeerPort,
-  IcpInitiationSourceAcceptance,
   IcpInitiationSourceAcceptanceRuntime,
   IcpInitiationSourceRequest,
   IcpInitiationSourceResult,
   IcpInitiationSourceRuntime,
   IcpInitiationSourceRuntimeDependencies,
 } from './initiation-source-support.js';
+
+export type IcpInitiationCause = IcpInitiationCauseContract;
+export type IcpInitiationSourceGatewayPort = IcpInitiationSourceGatewayPortContract;
+export type IcpInitiationSourcePeerPort = IcpInitiationSourcePeerPortContract;
 
 const log = createComponentLogger('IcpInitiationSource');
 const DEFAULT_CANDIDATE_TTL_MS = 24 * 60 * 60_000;
@@ -54,7 +57,7 @@ export const ICP_INITIATION_RETRY_COOLDOWN_MS = 5 * 60_000;
 export const MAX_ICP_INITIATION_RETRY_ATTEMPTS = 3;
 const MAX_SOURCE_RECORD_ID_CHARS = 1_024;
 
-export function deriveIcpInitiationCandidateId(input: {
+function deriveIcpInitiationCandidateId(input: {
   localCompanionId: string;
   peerCompanionId: string;
   request: IcpInitiationSourceRequest;

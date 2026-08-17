@@ -114,7 +114,7 @@ export interface IntakeSinkDenialRouteContext {
 }
 
 /** Validated, content-free context delivered to the incident recorder. */
-export interface OrdinaryIntakeSinkDenialContext {
+interface OrdinaryIntakeSinkDenialContext {
   correlationId: string;
   sourceChannelId?: string;
   logicalSessionId?: string;

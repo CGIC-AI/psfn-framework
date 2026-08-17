@@ -565,6 +565,15 @@ function normalizeModelRegistryEntry(value: unknown, fieldPath: string): ModelRe
   if (capabilities?.maxOutputTokens !== undefined && capabilityMaxTokens === undefined) {
     throw new Error(`Invalid model registry at ${fieldPath}.capabilities.maxOutputTokens: expected positive integer`);
   }
+  if (
+    tuningMaxTokens !== undefined
+    && capabilityMaxTokens !== undefined
+    && tuningMaxTokens > capabilityMaxTokens
+  ) {
+    throw new Error(
+      `Invalid model registry at ${fieldPath}: tuning.maxOutputTokens must not exceed capabilities.maxOutputTokens`,
+    );
+  }
 
   const capabilityContextWindow = toPositiveInteger(capabilities?.contextWindow);
   const tuningContextWindow = toPositiveInteger(tuning?.contextWindow);

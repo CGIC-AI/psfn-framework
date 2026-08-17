@@ -65,6 +65,21 @@ describe('normalizeCanonicalModelRegistry endpoint metadata', () => {
       .toThrow('routing.providerOrder: expected non-empty strings');
   });
 
+  it('rejects a completion tuning override above the model capability', () => {
+    const registry = makeRegistry();
+    const model = (registry.models as Array<Record<string, unknown>>)[0];
+    model.capabilities = {
+      maxOutputTokens: 8192,
+      contextWindow: 262_144,
+    };
+    model.tuning = {
+      maxOutputTokens: 214_404,
+    };
+
+    expect(() => normalizeCanonicalModelRegistry(registry))
+      .toThrow('tuning.maxOutputTokens must not exceed capabilities.maxOutputTokens');
+  });
+
   it('requires complete USD rates for every enabled model when budget enforcement is enabled', () => {
     const incomplete = makeRegistry();
     incomplete.budgetPolicy = {

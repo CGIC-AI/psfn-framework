@@ -10115,21 +10115,21 @@
     },
     {
       "file": "src/primitives/llm/routing.ts",
-      "name": "capabilityWeightsForPurpose.maxTokens@L512",
+      "name": "capabilityWeightsForPurpose.maxTokens@L515",
       "value": "0.2",
       "form": "object-member",
       "note": "Existing mutable policy candidate capabilityWeightsForPurpose.maxTokens; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/primitives/llm/routing.ts",
-      "name": "capabilityWeightsForPurpose.maxTokens@L515",
+      "name": "capabilityWeightsForPurpose.maxTokens@L518",
       "value": "0.65",
       "form": "object-member",
       "note": "Existing mutable policy candidate capabilityWeightsForPurpose.maxTokens; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/primitives/llm/routing.ts",
-      "name": "capabilityWeightsForPurpose.maxTokens@L517",
+      "name": "capabilityWeightsForPurpose.maxTokens@L520",
       "value": "0.5",
       "form": "object-member",
       "note": "Existing mutable policy candidate capabilityWeightsForPurpose.maxTokens; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."

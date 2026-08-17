@@ -93,6 +93,7 @@ describe('PiProviderRuntime auth', () => {
         provider: 'shared-router',
         api: 'openai-responses',
         baseUrl: 'https://router.example.test/v1',
+        maxTokens: 8192,
         reasoning: true,
         cost: expect.objectContaining({ input: 1, output: 2 }),
       }),
@@ -100,6 +101,7 @@ describe('PiProviderRuntime auth', () => {
         id: 'nitro/test-model',
         provider: 'shared-router',
         api: 'openai-completions',
+        maxTokens: 4096,
         reasoning: false,
       }),
     ]);

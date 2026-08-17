@@ -133,7 +133,7 @@ export class FallbackRunner {
       );
     }
 
-    if (explicitNonRecoverable || classification.category === 'abort' || classification.category === 'context_overflow') {
+    if (explicitNonRecoverable || !classification.retryable) {
       log.warn('Stopping fallback due to non-recoverable classification', {
         purpose,
         category: explicitNonRecoverable ? 'explicit_non_recoverable' : classification.category,

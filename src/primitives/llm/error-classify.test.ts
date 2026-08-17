@@ -34,6 +34,29 @@ describe('classifyLLMError', () => {
     expect(result.statusCode).toBe(429);
   });
 
+  it('classifies payment-required errors as explicit and non-retryable', () => {
+    const error = Object.assign(new Error('insufficient provider credits'), {
+      response: { status: 402 },
+    });
+
+    const result = classifyLLMError(error);
+    expect(result.category).toBe('payment_required');
+    expect(result.retryable).toBe(false);
+    expect(result.statusCode).toBe(402);
+  });
+
+  it('preserves payment-required truth when an outer gateway reports 500', () => {
+    const error = Object.assign(
+      new Error('OpenRouter 402: requested completion exceeds the credits this account can afford'),
+      { status: 500 },
+    );
+
+    const result = classifyLLMError(error);
+    expect(result.category).toBe('payment_required');
+    expect(result.retryable).toBe(false);
+    expect(result.statusCode).toBe(500);
+  });
+
   it('classifies timeout errors as retryable', () => {
     const error = Object.assign(new Error('request timed out'), {
       code: 'ETIMEDOUT',

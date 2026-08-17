@@ -68,7 +68,7 @@ export interface SessionIntegrityRepairAuditSink {
  */
 export const SESSION_INTEGRITY_REPAIR_AUDIT_EVENT = 'session_integrity_repair';
 
-export interface SessionIntegrityRepairJournalTarget {
+interface SessionIntegrityRepairJournalTarget {
   /** Trusted physical channel identity, separate from any routed logical owner. */
   channelId: string;
   /** Exact discovered L0 file chain selected for repair. */

@@ -535,7 +535,9 @@ Multi-companion layers on top of the single-companion locations/world surface
   accepted/pending without waiting for the provider-backed turn; a persistence
   failure rejects the request. Delivery continues through the ordinary broker
   path and terminal state remains observable through bounded lifecycle
-  telemetry. These controls cannot target another cluster.
+  telemetry. A terminal idempotent replay reports `deduped` with the current
+  candidate status rather than claiming new work. These controls cannot target
+  another cluster.
 - **Private-room delivery is presence-windowed.** A place carries an optional
   `privacy` field (`PlacePrivacy = 'public' | 'private'`,
   `src/shared/contracts/places-registry.ts`; absent = `public`, byte-identical to

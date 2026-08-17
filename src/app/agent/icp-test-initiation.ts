@@ -32,7 +32,7 @@ export function createIcpTestInitiationTrigger(input: {
       };
       const accepted = await input.sourceRuntime.accept(sourceRequest);
       return {
-        outcome: 'accepted',
+        outcome: accepted.outcome,
         candidateId: accepted.candidateId,
         status: accepted.status,
         deliveryDisposition: accepted.deliveryDisposition ?? 'pending',

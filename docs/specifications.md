@@ -507,7 +507,9 @@ Both gateway and agent startup run canonical hydration through `hydrateCanonical
   identity with an `accepted`/`pending` disposition while provider-backed
   delivery continues in the background; durable candidate lifecycle telemetry
   carries the terminal outcome. Candidate persistence failure rejects the
-  request instead of acknowledging work that cannot be projected.
+  request instead of acknowledging work that cannot be projected. Replaying a
+  terminal idempotent request returns `deduped` with the candidate's current
+  status instead of claiming that new background work was accepted.
 - Not shipped: cross-cluster communication, cluster-wide/cross-companion control,
   message puppeteering, private transcript/reasoning inspection, and any Garden
   exposure of chain-of-thought.

@@ -1149,19 +1149,13 @@ describe('Garden operator surface', () => {
 
   it('returns an accepted ICP test initiation before background delivery reaches the transport deadline', async () => {
     await destroyHarness(harness);
-    let settleOutreach!: () => void;
-    const outreachSettled = new Promise<void>(resolve => {
-      settleOutreach = resolve;
-    });
     const trigger = createIcpTestInitiationTrigger({
       sourceRuntime: {
-        accept: vi.fn(async () => {
-          void outreachSettled;
-          return {
-            candidateId: '33333333-3333-5333-8333-333333333333',
-            status: 'pending',
-          };
-        }),
+        accept: vi.fn(async () => ({
+          outcome: 'accepted',
+          candidateId: '33333333-3333-5333-8333-333333333333',
+          status: 'pending',
+        })),
       },
       peers: {
         listKnownPeerAvailability: vi.fn(async () => [{
@@ -1210,7 +1204,6 @@ describe('Garden operator surface', () => {
       status: 'pending',
       deliveryDisposition: 'pending',
     });
-    settleOutreach();
   });
 
   it('proxies GET, POST, health, and telemetry over an explicit mTLS HTTPS/WSS admin transport', async () => {

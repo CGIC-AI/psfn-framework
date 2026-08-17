@@ -156,7 +156,10 @@ export function createIcpInitiationSourceRuntime(
     initialPeer: KnownCompanionPeer,
     candidateId: string,
     recoveryClaim?: IcpInitiationCandidateClaim,
-    onAccepted?: (candidate: IcpInitiationCandidate) => void,
+    onAccepted?: (
+      candidate: IcpInitiationCandidate,
+      outcome: IcpInitiationSourceAcceptance['outcome'],
+    ) => void,
   ): Promise<IcpInitiationSourceResult> => {
     const currentNow = now();
     if (request.pendingFollowUpId !== undefined && request.source !== 'intention') {
@@ -168,6 +171,7 @@ export function createIcpInitiationSourceRuntime(
     );
     let peer = initialPeer;
     let candidate: IcpInitiationCandidate;
+    let createdCandidate = false;
     const existingCandidate = recoveryClaim?.candidate
       ?? await dependencies.store.getCandidate(candidateId);
     if (request.source === 'felt_impulse'
@@ -221,6 +225,7 @@ export function createIcpInitiationSourceRuntime(
     } else {
       try {
         candidate = await dependencies.store.createCandidate(proposed);
+        createdCandidate = true;
         await emitLifecycle(candidate, null);
       } catch (error) {
         const racedCandidate = await dependencies.store.getCandidate(candidateId);
@@ -242,7 +247,16 @@ export function createIcpInitiationSourceRuntime(
       // invariant violation. Never silently reuse another private motivation.
       throw new Error(`ICP candidate identity conflict for ${candidateId}`);
     }
-    onAccepted?.(candidate);
+    let acceptanceSignalled = false;
+    const signalAcceptance = (
+      acceptedCandidate: IcpInitiationCandidate,
+      outcome: IcpInitiationSourceAcceptance['outcome'],
+    ) => {
+      if (acceptanceSignalled) return;
+      acceptanceSignalled = true;
+      onAccepted?.(acceptedCandidate, outcome);
+    };
+    if (createdCandidate) signalAcceptance(candidate, 'accepted');
     if (candidate.expiresAtMs <= now()
       && ['pending', 'deferred', 'permitted'].includes(candidate.status)) {
       const expired = await transition(
@@ -252,11 +266,13 @@ export function createIcpInitiationSourceRuntime(
         undefined,
         recoveryClaim?.claimToken,
       );
+      signalAcceptance(expired, 'deduped');
       return toIcpSourceResult('deduped', expired, 'candidate_expired');
     }
     if (candidate.status === 'deferred') {
       const retryNow = now();
       if (candidate.retryEligibleAtMs === undefined || retryNow < candidate.retryEligibleAtMs) {
+        signalAcceptance(candidate, 'deduped');
         return toIcpSourceResult('deduped', candidate, candidate.reasonCode ?? 'candidate_deferred');
       }
       const pendingInput: IcpInitiationCandidateTransitionInput = {
@@ -270,7 +286,11 @@ export function createIcpInitiationSourceRuntime(
       candidate = pending;
     }
     const terminal = terminalIcpSourceOutcome(candidate);
-    if (terminal) return terminal;
+    if (terminal) {
+      signalAcceptance(candidate, 'deduped');
+      return terminal;
+    }
+    signalAcceptance(candidate, 'accepted');
     if (!dependencies.isExternalCompanionAuthorized()) {
       if (candidate.status === 'pending') {
         const rejected = await transition(
@@ -553,6 +573,54 @@ export function createIcpInitiationSourceRuntime(
     ),
   });
 
+  const recordAcceptedBackgroundFailure = async (
+    acceptance: IcpInitiationSourceAcceptance,
+    error: unknown,
+  ): Promise<void> => {
+    let durableStatus: IcpInitiationCandidateStatus | 'missing' = acceptance.status;
+    try {
+      const candidate = await dependencies.store.getCandidate(acceptance.candidateId);
+      durableStatus = candidate?.status ?? 'missing';
+      if (candidate?.status === 'pending') {
+        const completedRetryAttempts = candidate.retryAttempt ?? 0;
+        const failureNow = now();
+        const transitioned = completedRetryAttempts >= policy.maxRetryAttempts
+          ? await dependencies.store.transitionCandidate({
+              candidateId: candidate.candidateId,
+              expectedStatus: candidate.status,
+              expectedRevision: candidate.revision,
+              status: 'cancelled',
+              reasonCode: 'delivery_failed',
+              retryAttempt: completedRetryAttempts,
+            })
+          : await dependencies.store.transitionCandidate({
+              candidateId: candidate.candidateId,
+              expectedStatus: candidate.status,
+              expectedRevision: candidate.revision,
+              status: 'deferred',
+              reasonCode: 'delivery_failed',
+              retryAttempt: completedRetryAttempts + 1,
+              retryEligibleAtMs: Math.min(
+                candidate.expiresAtMs,
+                failureNow + policy.retryCadenceMs,
+              ),
+            });
+        await emitLifecycle(transitioned, candidate.status);
+        durableStatus = transitioned.status;
+      }
+    } catch (recordError) {
+      log.error('Failed to record accepted ICP background failure durably', {
+        candidateId: acceptance.candidateId,
+        error: recordError instanceof Error ? recordError.message : String(recordError),
+      });
+    }
+    log.error('Accepted ICP initiation failed during background execution', {
+      candidateId: acceptance.candidateId,
+      durableStatus,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  };
+
   const beginSubmission = async (request: IcpInitiationSourceRequest) => {
     const peer = await resolvePeer(request.peerContactId);
     const candidateId = deriveIcpInitiationCandidateId({
@@ -573,8 +641,9 @@ export function createIcpInitiationSourceRuntime(
     // acceptance promise; attach a rejection observer so a fail-closed identity
     // or store error cannot become an unhandled rejection on that path.
     void acceptance.catch(() => undefined);
-    const completion = run(request, peer, candidateId, undefined, candidate => {
+    const completion = run(request, peer, candidateId, undefined, (candidate, outcome) => {
       resolveAcceptance({
+        outcome,
         candidateId: candidate.candidateId,
         status: candidate.status,
         ...(candidate.deliveryDisposition
@@ -601,10 +670,7 @@ export function createIcpInitiationSourceRuntime(
       const submission = await beginSubmission(request);
       const acceptance = await submission.acceptance;
       void submission.completion.catch(error => {
-        log.error('Accepted ICP initiation failed during background execution', {
-          candidateId: acceptance.candidateId,
-          error: error instanceof Error ? error.message : String(error),
-        });
+        return recordAcceptedBackgroundFailure(acceptance, error);
       });
       return acceptance;
     },

@@ -153,7 +153,7 @@ describe('ICP initiation source runtime', () => {
 
     const acceptance = await runtime.accept(request('operator_test'));
 
-    expect(acceptance).toMatchObject({ status: 'pending' });
+    expect(acceptance).toMatchObject({ outcome: 'accepted', status: 'pending' });
     await expect(deps.store.getCandidate(acceptance.candidateId)).resolves.toMatchObject({
       candidateId: acceptance.candidateId,
       source: 'operator_test',
@@ -170,6 +170,76 @@ describe('ICP initiation source runtime', () => {
     });
   });
 
+  it('accepts a durable candidate without waiting for broker preflight', async () => {
+    let releasePreflight!: () => void;
+    const preflightReleased = new Promise<void>(resolve => {
+      releasePreflight = resolve;
+    });
+    const { deps } = dependencies({
+      gateway: {
+        companionInitiationPreflight: vi.fn(async () => {
+          await preflightReleased;
+          return { eligible: true };
+        }),
+        companionIssueInitiationPermit: vi.fn().mockImplementation(async ({ candidate }) => ({
+          decision: { eligible: true },
+          permit: {
+            permitId: '33333333-3333-4333-8333-333333333333',
+            candidateId: candidate.candidateId,
+            conversationId: '44444444-4444-4444-8444-444444444444',
+            senderCompanionId: LOCAL,
+            recipientCompanionId: PEER,
+            channelId: `companion-dm:${LOCAL}:${PEER}`,
+            provenanceRef: candidate.provenanceRef,
+            issuedAtMs: 1_700_000_000_000,
+            expiresAtMs: 1_700_000_300_000,
+            status: 'issued',
+            revision: 1,
+          },
+        })),
+      },
+    });
+    const runtime = createIcpInitiationSourceRuntime(deps);
+
+    const acceptance = await Promise.race([
+      runtime.accept(request('operator_test')),
+      new Promise<'timed_out'>(resolve => setTimeout(() => resolve('timed_out'), 25)),
+    ]);
+
+    expect(acceptance).not.toBe('timed_out');
+    expect(acceptance).toMatchObject({ outcome: 'accepted', status: 'pending' });
+    expect(deps.gateway.companionIssueInitiationPermit).not.toHaveBeenCalled();
+    releasePreflight();
+    await vi.waitFor(() => {
+      expect(deps.peers.executeCompanionOutreach).toHaveBeenCalledOnce();
+    });
+  });
+
+  it('durably defers a pending candidate when detached broker work fails', async () => {
+    const { deps } = dependencies({
+      gateway: {
+        companionInitiationPreflight: vi.fn().mockRejectedValue(
+          new Error('gateway preflight unavailable'),
+        ),
+        companionIssueInitiationPermit: vi.fn(),
+      },
+    });
+    const runtime = createIcpInitiationSourceRuntime(deps);
+
+    const acceptance = await runtime.accept(request('operator_test'));
+
+    await vi.waitFor(async () => {
+      await expect(deps.store.getCandidate(acceptance.candidateId)).resolves.toMatchObject({
+        status: 'deferred',
+        reasonCode: 'delivery_failed',
+        retryAttempt: 1,
+        retryEligibleAtMs: 1_700_000_300_000,
+      });
+    });
+    expect(deps.gateway.companionIssueInitiationPermit).not.toHaveBeenCalled();
+    expect(deps.peers.executeCompanionOutreach).not.toHaveBeenCalled();
+  });
+
   it('rejects acceptance when durable candidate creation fails', async () => {
     const store = createStore();
     store.createCandidate = vi.fn(async () => {
@@ -182,6 +252,23 @@ describe('ICP initiation source runtime', () => {
       .rejects.toThrow('candidate store unavailable');
     expect(deps.gateway.companionInitiationPreflight).not.toHaveBeenCalled();
     expect(deps.peers.executeCompanionOutreach).not.toHaveBeenCalled();
+  });
+
+  it('reports an idempotent terminal replay instead of claiming new work was accepted', async () => {
+    const { deps } = dependencies();
+    const runtime = createIcpInitiationSourceRuntime(deps);
+    const requestInput = request('operator_test');
+    const completed = await runtime.submit(requestInput);
+
+    const replay = await runtime.accept(requestInput);
+
+    expect(replay).toMatchObject({
+      outcome: 'deduped',
+      candidateId: completed.candidateId,
+      status: 'consumed',
+      deliveryDisposition: 'delivered',
+    });
+    expect(deps.peers.executeCompanionOutreach).toHaveBeenCalledOnce();
   });
 
   it('treats authenticated operator-test initiation as consent while retaining broker gates', async () => {

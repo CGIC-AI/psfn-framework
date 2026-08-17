@@ -122,6 +122,7 @@ export interface IcpInitiationSourceResult {
 }
 
 export interface IcpInitiationSourceAcceptance {
+  outcome: 'accepted' | 'deduped';
   candidateId: string;
   status: IcpInitiationCandidateStatus;
   deliveryDisposition?: IcpInitiationCandidate['deliveryDisposition'];

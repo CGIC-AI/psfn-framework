@@ -146,6 +146,47 @@ describe('admin ICP autonomy routes', () => {
     );
   });
 
+  it('audits a terminal idempotent replay without claiming new work was triggered', async () => {
+    const audit = vi.fn<AdminAuditTimelineAppender>();
+    const result = await invoke({
+      method: 'POST',
+      path: '/api/admin/icp-autonomy/test-initiations',
+      body: { peerCompanionId: PEER_ID, requestId: REQUEST_ID },
+      service: {
+        triggerTestInitiation: vi.fn(async () => ({
+          outcome: 'deduped',
+          candidateId: CANDIDATE_ID,
+          status: 'consumed',
+          deliveryDisposition: 'delivered',
+        })),
+      },
+      audit,
+    });
+
+    expect(result).toMatchObject({
+      statusCode: 200,
+      body: { outcome: 'deduped', status: 'consumed' },
+    });
+    expect(audit).toHaveBeenCalledWith(
+      'autonomy_control',
+      'allowed',
+      expect.stringContaining('replayed'),
+      expect.arrayContaining([
+        'outcome=deduped',
+        'status=consumed',
+        'deliveryDisposition=delivered',
+      ]),
+      'operator',
+    );
+    expect(audit).not.toHaveBeenCalledWith(
+      'autonomy_control',
+      'allowed',
+      expect.stringContaining('accepted'),
+      expect.anything(),
+      'operator',
+    );
+  });
+
   it('returns the bounded service projection, including content-free delivery telemetry', async () => {
     const data = {
       available: true,

@@ -19,6 +19,7 @@ import {
   hasSatelliteClaimHeaders,
   resolveSatelliteClaim,
 } from '../backplane/satellite-registry.js';
+import { createCompanionId, type CompanionId } from '../../shared/routing/companion-id.js';
 
 const DEFAULT_GATEWAY_CHAT_REQUEST_TIMEOUT_MS = 95_000;
 const GATEWAY_CHAT_REQUEST_TIMEOUT_BUFFER_MS = 5_000;
@@ -152,10 +153,12 @@ export class GatewayApiRuntime implements ApiServerRuntime {
         if (!this.gateway.requestSharedSatelliteChatCompletion) {
           throw new Error('Shared-satellite chat arbitration is not configured');
         }
+        const explicitHumanInboundCompanionId = resolveHubDeviceCompanionAuthority(input);
         return await this.gateway.requestSharedSatelliteChatCompletion({
           satellite: sharedSatellite,
           canonicalContactId: activeSatelliteClaim.canonicalContactId,
           channelId: activeSatelliteClaim.channelId,
+          ...(explicitHumanInboundCompanionId ? { explicitHumanInboundCompanionId } : {}),
           params: params as Parameters<
             GatewayServer['requestSharedSatelliteChatCompletion']
           >[0]['params'],
@@ -262,6 +265,28 @@ export class GatewayApiRuntime implements ApiServerRuntime {
       this.chatRequestTimeoutMs,
     );
   }
+}
+
+function resolveHubDeviceCompanionAuthority(
+  input: ApiRuntimeChatRequest,
+): CompanionId | undefined {
+  if (!input.hubDevicePrincipal && !input.hubDeviceAttachment) return undefined;
+  const companionId = input.companionId
+    ? createCompanionId(input.companionId, 'Hub-device fleet companionId')
+    : undefined;
+  const principal = input.hubDevicePrincipal;
+  const attachment = input.hubDeviceAttachment;
+  if (!companionId || !principal || !attachment) {
+    throw new Error('Authenticated Hub-device chat requires complete companion authority');
+  }
+  const attachmentActorCompanionId = attachment.actor.companionId;
+  if (principal.companionId !== companionId
+    || attachment.deviceActor.principal.companionId !== companionId
+    || attachmentActorCompanionId !== companionId
+    || attachment.channel.companionId !== companionId) {
+    throw new Error('Authenticated Hub-device companion authority changed before arbitration');
+  }
+  return companionId;
 }
 
 function computeAgentChatTurnTimeoutMs(gatewayTimeoutMs: number): number {

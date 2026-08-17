@@ -105,6 +105,7 @@ describe('ApiServer authenticated Hub device ingress', () => {
   async function start(
     verifyAndConsume: HubDeviceAssertionVerifierPort['verifyAndConsume'],
     satelliteRegistry = registry(),
+    useProvider = false,
   ) {
     const requests: ApiRuntimeChatRequest[] = [];
     const connectionIds: string[] = [];
@@ -122,7 +123,11 @@ describe('ApiServer authenticated Hub device ingress', () => {
       port, host: '127.0.0.1',
       agentLoop: {} as SubstrateAgent,
       eventBus: new EventBus(), sessionManager: {} as SessionManager,
-      runtime, satelliteRegistry, satelliteApiKeys: [TOKEN],
+      runtime,
+      ...(useProvider
+        ? { satelliteRegistryProvider: () => satelliteRegistry }
+        : { satelliteRegistry }),
+      satelliteApiKeys: [TOKEN],
       companionId: COMPANION_ID,
       fleetAuthBootstrapOnly: true, fleetAuthHttpRoutes: fleetRoutes,
       hubDeviceCompanionId: COMPANION_ID,
@@ -190,6 +195,7 @@ describe('ApiServer authenticated Hub device ingress', () => {
       actor: { kind: 'guest', companionId: COMPANION_ID },
       channel: { source: 'server', companionId: COMPANION_ID },
     });
+    expect(requests[0]?.companionId).toBe(COMPANION_ID);
     expect(requests[0]?.headers.authorization).toBeUndefined();
     expect(requests[0]?.headers['x-psfn-hub-device-assertion']).toBeUndefined();
     expect(requests[0]?.headers['x-channel-privacy']).toBeUndefined();
@@ -197,6 +203,26 @@ describe('ApiServer authenticated Hub device ingress', () => {
     expect(requests[0]?.headers['x-canonical-contact-id']).toBeUndefined();
     expect(requests[0]?.request.messages[0]).not.toHaveProperty('name');
     expect(requests[0]).not.toHaveProperty('humanPrincipal');
+  });
+
+  it('admits Hub devices from the canonical live registry provider', async () => {
+    const verifier = vi.fn(async (_assertion: string, expected: {
+      deviceId: string; enrollmentVersion: number; companionId: string; sessionId: string; placeId?: string;
+    }) => ({
+      kind: 'hub_device' as const, issuer: 'psfn-satellite-hub', keyId: 'hub-key',
+      deviceId: expected.deviceId, enrollmentVersion: expected.enrollmentVersion,
+      enrollmentAssurance: 'device_credential' as const, placeId: expected.placeId,
+      audience: 'https://fleet.example.test', companionId: expected.companionId,
+      sessionId: expected.sessionId, issuedAt: new Date(), expiresAt: new Date(Date.now() + 30_000),
+      jti: '018f0f10-79b2-4cc7-8c99-0242ac120002',
+    }));
+    const { port, requests } = await start(verifier, registry(), true);
+
+    await expect(post(port, {
+      model: 'companion', messages: [{ role: 'user', content: 'hello' }],
+    })).resolves.toMatchObject({ status: 200 });
+    expect(requests).toHaveLength(1);
+    expect(verifier).toHaveBeenCalledOnce();
   });
 
   it('binds attachment authority to the exact server socket connection', async () => {

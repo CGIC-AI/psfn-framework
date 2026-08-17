@@ -436,6 +436,105 @@ describe('GatewayApiRuntime', () => {
     );
   });
 
+  it('pins authenticated Hub-device chat to its server-owned companion authority', async () => {
+    const companionId = createCompanionId('11111111-1111-4111-8111-111111111111');
+    const hubDevicePrincipal = {
+      kind: 'hub_device' as const,
+      issuer: 'psfn-satellite-hub',
+      keyId: 'hub-key',
+      deviceId: 'bedroom-device',
+      enrollmentVersion: 1,
+      enrollmentAssurance: 'device_credential' as const,
+      audience: 'https://fleet.example.test',
+      companionId,
+      sessionId: 'realtime:bedroom-device:session',
+      issuedAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 30_000).toISOString(),
+      jti: '018f0f10-79b2-4cc7-8c99-0242ac120002',
+    };
+    const hubDeviceAttachment = {
+      attachmentId: '018f0f10-79b2-4cc7-8c99-0242ac120003',
+      disposition: 'guest_created' as const,
+      deviceActor: {
+        kind: 'hub_device' as const,
+        principal: hubDevicePrincipal,
+        connectionId: 'authenticated-connection',
+      },
+      actor: { kind: 'guest' as const, companionId },
+      channel: {
+        source: 'server' as const,
+        id: `hub-device:${'a'.repeat(64)}`,
+        companionId,
+      },
+    };
+    const requestSharedSatelliteChatCompletion = vi.fn(async () => ({
+      ok: true as const,
+      response: {
+        content: 'awake response',
+        channelId: hubDeviceAttachment.channel.id,
+        inputTokens: 2,
+        outputTokens: 2,
+      },
+    }));
+    const runtime = new GatewayApiRuntime({
+      requestAgent: vi.fn(),
+      requestCompanionAgent: vi.fn(),
+      requestSharedSatelliteChatCompletion,
+      subscribeApiStream: vi.fn(() => () => {}),
+    }, {
+      satelliteRegistryProvider: () => ({
+        schemaVersion: 1,
+        enabled: true,
+        satellites: [{
+          satelliteId: 'sat-1',
+          displayName: 'Bedroom',
+          mobility: 'static',
+          sharedDevice: {
+            primaryCompanionId: companionId,
+            observationRecipients: [],
+            emanationMemberIds: [companionId],
+            responseLease: { durationMs: 5_000, activeConversationTtlMs: 60_000 },
+          },
+          endpoints: [{
+            endpointId: 'voice',
+            displayName: 'Voice',
+            claimTypes: ['voice'],
+            promptChannelType: 'api',
+            auth: { mode: 'api_key', apiKeyPrincipalIds: ['sensor-key'] },
+            defaultIdentity: {
+              authorId: 'partner',
+              authorName: 'Partner',
+              canonicalContactId: 'contact-partner',
+              channelPrivacy: 'private',
+            },
+            maxCapabilities: ['audio_input', 'audio_output'],
+            telemetryScopes: [],
+          }],
+        }],
+      }),
+    });
+
+    const result = await runtime.handleChatCompletion({
+      ...createChatRequest(),
+      request: { ...createChatRequest().request, stream: false },
+      principal: { id: 'sensor-key', mode: 'api_key', scope: 'satellite' },
+      companionId,
+      hubDevicePrincipal,
+      hubDeviceAttachment,
+      headers: {
+        'x-psfn-satellite-claim-type': 'voice',
+        'x-psfn-satellite-id': 'sat-1',
+        'x-psfn-satellite-endpoint-id': 'voice',
+        'x-psfn-satellite-session-id': hubDevicePrincipal.sessionId,
+      },
+    });
+
+    expect(result).toMatchObject({ ok: true, response: { content: 'awake response' } });
+    expect(requestSharedSatelliteChatCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({ explicitHumanInboundCompanionId: companionId }),
+    );
+  });
+
   it('brokers chat completions and forwards stream deltas', async () => {
     const onDelta = vi.fn();
     let streamListener: ((text: string) => void) | undefined;

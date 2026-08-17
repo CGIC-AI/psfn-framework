@@ -16,6 +16,8 @@ def test_load_runtime_config_reads_psfn_and_project_env(tmp_path: Path, monkeypa
         "ESPHOME_EXPECTED_NAME",
         "DEEPGRAM_API_KEY",
         "ELEVENLABS_API_KEY",
+        "AUDIO_SERVER_PORT",
+        "AUDIO_PUBLIC_PORT",
         "AUDIO_PUBLIC_HOST",
         "PSFN_API_BASE_URL",
         "PSFN_API_KEY",
@@ -36,6 +38,11 @@ def test_load_runtime_config_reads_psfn_and_project_env(tmp_path: Path, monkeypa
         "PSFN_CLIENT_KEY_PATH",
         "PSFN_CA_CERT_PATH",
         "VOICE_CONVERSATION_ID",
+        "HUB_DEVICE_ASSERTION_FLEET_AUTH_PATH",
+        "HUB_DEVICE_ASSERTION_SATELLITE_REGISTRY_PATH",
+        "HUB_DEVICE_ASSERTION_PRIVATE_KEY_PATH",
+        "HUB_DEVICE_ASSERTION_TTL_SECONDS",
+        "PSFN_COMPANION_ID",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -44,6 +51,8 @@ def test_load_runtime_config_reads_psfn_and_project_env(tmp_path: Path, monkeypa
         "ESPHOME_PORT=6053\n"
         "ESPHOME_EXPECTED_NAME=Opanhome-Voice-Pi\n"
         "AUDIO_PUBLIC_HOST=voice.example\n"
+        "AUDIO_SERVER_PORT=8100\n"
+        "AUDIO_PUBLIC_PORT=8099\n"
         "DEEPGRAM_API_KEY=project-deepgram\n"
         "ELEVENLABS_API_KEY=project-eleven\n"
         "PSFN_API_BASE_URL=http://psfn.example:3100/v1\n"
@@ -60,6 +69,8 @@ def test_load_runtime_config_reads_psfn_and_project_env(tmp_path: Path, monkeypa
     assert config.deepgram_api_key == "project-deepgram"
     assert config.elevenlabs_api_key == "project-eleven"
     assert config.audio_public_host == "voice.example"
+    assert config.audio_port == 8100
+    assert config.audio_public_port == 8099
     assert config.psfn_api_base_url == "http://psfn.example:3100/v1"
     assert config.psfn_api_key is None
     assert config.psfn_provider == "openrouter"
@@ -69,6 +80,7 @@ def test_load_runtime_config_reads_psfn_and_project_env(tmp_path: Path, monkeypa
     assert config.psfn_satellite_claim.capability_profile == "voice-only"
     assert config.psfn_satellite_claim.telemetry.mode == "disabled"
     assert config.voice_conversation_id == "hub"
+    assert config.hub_device_assertion is None
     assert config.elevenlabs_model_id == "eleven_flash_v2_5"
     assert config.reply_timeout_seconds == 30.0
     assert config.voice_initial_silence_timeout_seconds == 4.0
@@ -218,6 +230,33 @@ def test_load_runtime_config_requires_public_host_in_realtime_mode(tmp_path: Pat
         load_runtime_config(tmp_path)
 
 
+def test_load_runtime_config_requires_complete_hub_device_assertion_authority(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    for name in (
+        "HUB_DEVICE_ASSERTION_FLEET_AUTH_PATH",
+        "HUB_DEVICE_ASSERTION_SATELLITE_REGISTRY_PATH",
+        "HUB_DEVICE_ASSERTION_PRIVATE_KEY_PATH",
+        "HUB_DEVICE_ASSERTION_TTL_SECONDS",
+        "PSFN_COMPANION_ID",
+        "PSFN_CLIENT_CERT_PATH",
+        "PSFN_CLIENT_KEY_PATH",
+        "PSFN_CA_CERT_PATH",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("HUB_DEVICE_ASSERTION_PRIVATE_KEY_PATH", "/run/secrets/hub-private.pem")
+    (tmp_path / ".env").write_text(
+        "ESPHOME_HOST=esphome.example\n"
+        "DEEPGRAM_API_KEY=project-deepgram\n"
+        "ELEVENLABS_API_KEY=project-eleven\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="configuration is incomplete"):
+        load_runtime_config(tmp_path)
+
+
 def test_load_runtime_config_requires_concrete_model_with_provider(tmp_path: Path, monkeypatch) -> None:
     for name in (
         "ESPHOME_HOST",
@@ -255,9 +294,13 @@ def test_static_audio_server_uses_public_host_for_urls(tmp_path: Path) -> None:
         port=8099,
         root=root,
         public_host="192.0.2.50",
+        public_port=18099,
     )
 
-    assert server.url_for(audio_path) == "http://192.0.2.50:8099/reply.mp3"
+    assert server.url_for(audio_path) == "http://192.0.2.50:18099/reply.mp3"
+    stream = server.open_stream()
+    assert stream.url.startswith("http://192.0.2.50:18099/streams/")
+    stream.close()
 
 
 def test_static_audio_server_open_stream_uses_stream_endpoint(tmp_path: Path) -> None:

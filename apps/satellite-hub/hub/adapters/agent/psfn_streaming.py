@@ -9,6 +9,7 @@ from typing import Any, Literal
 import httpx
 
 from hub.adapters.interfaces import AgentReply
+from hub.security.device_assertion import HubDeviceAssertionIssuer
 from hub.satellite_claims import (
     ClientCertificateConfig,
     SatelliteClaimConfig,
@@ -38,6 +39,7 @@ class PsfnStreamingProvider:
         author_name: str | None = None,
         claim_config: SatelliteClaimConfig | None = None,
         client_certificate: ClientCertificateConfig | None = None,
+        device_assertion_issuer: HubDeviceAssertionIssuer | None = None,
         client: httpx.AsyncClient | None = None,
         timeout_seconds: float = 60.0,
     ) -> None:
@@ -67,6 +69,7 @@ class PsfnStreamingProvider:
         self._provider_name = (provider_name or "").strip().lower() or None
         self._author_id = author_id.strip() if author_id else None
         self._author_name = author_name.strip() if author_name else None
+        self._device_assertion_issuer = device_assertion_issuer
         self._history_by_conversation: dict[str, list[dict[str, str]]] = {}
         self._history_lock = asyncio.Lock()
 
@@ -131,7 +134,7 @@ class PsfnStreamingProvider:
         response = await self._client.post(
             "/companion/stimuli",
             json=payload,
-            headers=self._request_headers,
+            headers=self._with_device_assertion(self._request_headers, conversation_id),
         )
         if response.status_code >= 400:
             raise RuntimeError(_format_http_error(response))
@@ -235,11 +238,12 @@ class PsfnStreamingProvider:
             "stream": stream,
             "system_prompt_mode": "default",
             "response_style": "concise",
-            "user": conversation_id,
             "satellite_claim": satellite_claim,
         }
-        if self._provider_name:
-            payload["provider"] = self._provider_name
+        if self._device_assertion_issuer is None:
+            payload["user"] = conversation_id
+            if self._provider_name:
+                payload["provider"] = self._provider_name
         return payload
 
     def _build_satellite_claim(self, conversation_id: str) -> dict[str, object]:
@@ -279,7 +283,13 @@ class PsfnStreamingProvider:
             if self._author_id and self._author_name:
                 headers["X-PSFN-Author-ID"] = self._author_id
                 headers["X-PSFN-Author-Name"] = self._author_name
-        return headers
+        return self._with_device_assertion(headers, conversation_id)
+
+    def _with_device_assertion(self, headers: dict[str, str], conversation_id: str) -> dict[str, str]:
+        result = dict(headers)
+        if self._device_assertion_issuer is not None:
+            result["X-PSFN-Hub-Device-Assertion"] = self._device_assertion_issuer.issue(conversation_id)
+        return result
 
     def _derive_channel_id(self, conversation_id: str) -> str | None:
         normalized = conversation_id.strip()

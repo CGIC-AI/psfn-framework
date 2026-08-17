@@ -21,6 +21,7 @@ from hub.devices.realtime_server import RealtimeVoiceServer
 from hub.devices.voice_runtime_streaming import StreamingVoiceAssistantRuntime
 from hub.media.http_audio import StaticAudioServer
 from hub.runtime import load_runtime_config
+from hub.security.device_assertion import HubDeviceAssertionIssuer
 from hub.storage.session_cache import SessionCache
 
 
@@ -46,6 +47,11 @@ async def _run_esphome_runtime(
         author_name=config.psfn_author_name,
         claim_config=config.psfn_satellite_claim,
         client_certificate=config.psfn_client_certificate,
+        device_assertion_issuer=(
+            HubDeviceAssertionIssuer(config.hub_device_assertion)
+            if config.hub_device_assertion is not None
+            else None
+        ),
     )
     interaction_tasks: set[asyncio.Task[None]] = set()
 
@@ -166,6 +172,7 @@ async def _run_realtime_runtime(
         psfn_author_name=config.psfn_author_name,
         psfn_satellite_claim=config.psfn_satellite_claim,
         psfn_client_certificate=config.psfn_client_certificate,
+        hub_device_assertion=config.hub_device_assertion,
     ):
         while True:
             await asyncio.sleep(3600)
@@ -178,6 +185,7 @@ async def _run_runtime(project_root: Path) -> None:
         port=config.audio_port,
         root=config.audio_root,
         public_host=config.audio_public_host,
+        public_port=config.audio_public_port,
     )
     audio_server.start()
     session_cache = SessionCache(ttl=timedelta(seconds=config.session_ttl_seconds))
@@ -189,7 +197,7 @@ async def _run_runtime(project_root: Path) -> None:
     typer.echo(f"PSFN model: {config.psfn_model}")
     if config.psfn_author_id and config.psfn_author_name:
         typer.echo(f"PSFN author assertion: {config.psfn_author_name} ({config.psfn_author_id})")
-    typer.echo(f"Audio server: http://{config.audio_public_host}:{config.audio_port}/")
+    typer.echo(f"Audio server: http://{config.audio_public_host}:{config.audio_public_port}/")
     if config.device_transport in {"realtime", "hybrid"}:
         realtime_host = config.realtime_target.public_host or config.realtime_target.bind_host
         typer.echo(f"Realtime voice server: ws://{realtime_host}:{config.realtime_target.port}/")

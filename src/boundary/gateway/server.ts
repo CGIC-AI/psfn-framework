@@ -2721,6 +2721,8 @@ export class GatewayServer {
     };
     canonicalContactId: string;
     channelId: string;
+    /** Exact gateway-authenticated target for an inbound human Hub-device turn. */
+    explicitHumanInboundCompanionId?: CompanionId;
     params: ApiChatCompletionRpcParams;
     timeoutMs: number;
   }): Promise<ApiChatCompletionRpcResult> {
@@ -2730,12 +2732,17 @@ export class GatewayServer {
       policy,
       canonicalContactId: input.canonicalContactId,
       channelId: input.channelId,
+      ...(input.explicitHumanInboundCompanionId
+        ? { explicitHumanInboundCompanionId: input.explicitHumanInboundCompanionId }
+        : {}),
     });
     const excludedCompanionIds = new Set<CompanionId>();
     const conversationKey = JSON.stringify([
       input.canonicalContactId,
       satellite.sessionId,
     ]);
+    const explicitAddressedCompanionId = input.explicitHumanInboundCompanionId
+      ?? satellite.addressedCompanionId;
 
     for (;;) {
       const acquisition = this.sharedSatelliteResponseArbiter.acquire({
@@ -2743,8 +2750,8 @@ export class GatewayServer {
         conversationKey,
         policy,
         eligibility,
-        ...(satellite.addressedCompanionId
-          ? { explicitAddressedCompanionId: satellite.addressedCompanionId }
+        ...(explicitAddressedCompanionId
+          ? { explicitAddressedCompanionId }
           : {}),
         excludedCompanionIds,
       });
@@ -3150,6 +3157,7 @@ export class GatewayServer {
       policy: NonNullable<SatelliteRoutingMetadata['sharedDevice']>;
       canonicalContactId: string;
       channelId: string;
+      explicitHumanInboundCompanionId?: CompanionId;
     },
   ): Promise<SharedSatelliteEligibility[]> {
     this.refreshConnectionHealth();
@@ -3163,6 +3171,12 @@ export class GatewayServer {
       const connection = this.resolveReadyCompanionConnection(companionId);
       const client = connection ? this.rpcClients.get(connection) : undefined;
       const nowMs = Date.now();
+      const isExplicitHumanInbound = input.explicitHumanInboundCompanionId === companionId;
+      const availabilityLeaseIsAbsent = availability?.control === 'missing'
+        || availability?.control === 'expired';
+      const explicitHumanAvailabilityAllows = isExplicitHumanInbound
+        && availability !== undefined
+        && (availabilityLeaseIsAbsent || availabilityState === 'resting');
       let fatigueAllows = false;
       if (client) {
         let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
@@ -3192,11 +3206,15 @@ export class GatewayServer {
       }
       return {
         companionId,
-        availabilityAllows: connection !== null && availability?.eligible === true,
+        availabilityAllows: connection !== null
+          && (availability?.eligible === true
+            || explicitHumanAvailabilityAllows),
         fatigueAllows,
-        quietHoursAllows: this.options.sharedSatelliteQuietHoursAllows?.(nowMs) === true,
-        restAllows: availabilityState !== 'resting'
-          && availabilityState !== 'do_not_disturb',
+        quietHoursAllows: isExplicitHumanInbound
+          || this.options.sharedSatelliteQuietHoursAllows?.(nowMs) === true,
+        restAllows: availabilityLeaseIsAbsent
+          || ((isExplicitHumanInbound || availabilityState !== 'resting')
+            && availabilityState !== 'do_not_disturb'),
         // This is an explicit human-partner turn, not an autonomous Pack Task.
         taskAllows: true,
         deviceAllows: input.policy.emanationMemberIds.includes(companionId),

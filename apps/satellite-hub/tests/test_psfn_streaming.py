@@ -1,12 +1,22 @@
 from __future__ import annotations
 
 import json
+from typing import Any, cast
 
 import httpx
 import pytest
 
 from hub.adapters.agent.psfn_streaming import PsfnStreamingProvider
 from hub.satellite_claims import normalize_claim_config
+
+
+class _AssertionIssuer:
+    def __init__(self) -> None:
+        self.sessions: list[str] = []
+
+    def issue(self, session_id: str) -> str:
+        self.sessions.append(session_id)
+        return f"assertion-{len(self.sessions)}"
 
 
 @pytest.mark.anyio
@@ -30,6 +40,7 @@ async def test_psfn_streaming_provider_streams_deltas_and_persists_history() -> 
             "x-psfn-satellite-claim": request.headers.get("x-psfn-satellite-claim", ""),
             "x-psfn-author-id": request.headers.get("x-psfn-author-id", ""),
             "x-psfn-author-name": request.headers.get("x-psfn-author-name", ""),
+            "x-psfn-hub-device-assertion": request.headers.get("x-psfn-hub-device-assertion", ""),
         })
         if len(requests) == 1:
             stream = (
@@ -58,9 +69,11 @@ async def test_psfn_streaming_provider_streams_deltas_and_persists_history() -> 
         base_url="http://psfn.test/v1",
         transport=httpx.MockTransport(handler),
     )
+    assertion_issuer = _AssertionIssuer()
     provider = PsfnStreamingProvider(
         api_base_url="http://psfn.test/v1",
         api_key=None,
+        provider_name="openrouter",
         model_name="psfn",
         claim_config=normalize_claim_config(
             capability_profile="voice-only",
@@ -69,6 +82,7 @@ async def test_psfn_streaming_provider_streams_deltas_and_persists_history() -> 
             display_name="Pi West",
         ),
         client=client,
+        device_assertion_issuer=cast(Any, assertion_issuer),
     )
 
     first_chunks = [chunk async for chunk in provider.stream_reply(text="hello", conversation_id="realtime:pi-w")]
@@ -82,7 +96,8 @@ async def test_psfn_streaming_provider_streams_deltas_and_persists_history() -> 
     assert requests[0]["system_prompt_mode"] == "default"
     assert "system_prompt" not in requests[0]
     assert requests[0]["response_style"] == "concise"
-    assert requests[0]["user"] == "realtime:pi-w"
+    assert "user" not in requests[0]
+    assert "provider" not in requests[0]
     assert requests[0]["messages"] == [{"role": "user", "content": "hello"}]
     assert requests[0]["satellite_claim"]["claim"] == {
         "namespace": "satellite.endpoint",
@@ -109,7 +124,10 @@ async def test_psfn_streaming_provider_streams_deltas_and_persists_history() -> 
         "x-psfn-satellite-claim": json.dumps(requests[0]["satellite_claim"], separators=(",", ":")),
         "x-psfn-author-id": "",
         "x-psfn-author-name": "",
+        "x-psfn-hub-device-assertion": "assertion-1",
     }
+    assert request_headers[1]["x-psfn-hub-device-assertion"] == "assertion-2"
+    assert assertion_issuer.sessions == ["realtime:pi-w", "realtime:pi-w"]
     assert requests[1]["messages"] == [
         {"role": "user", "content": "hello"},
         {"role": "assistant", "content": "Hello"},

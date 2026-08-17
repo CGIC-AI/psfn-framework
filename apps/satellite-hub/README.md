@@ -529,7 +529,8 @@ tests/
 - The repo now supports a custom TypeScript realtime client path, a Voxta/VaM facade, and an ESPHome fallback path.
 - The checked-in TypeScript path is the primary conversation path now.
 - Historical `.agent/` scaffolding exists in this repo, but it is not the main deployment target right now.
-- The Python fallback bridge still serves streamed audio on `AUDIO_SERVER_PORT` for announcement playback back to the device.
+- The Python fallback bridge still serves streamed audio on `AUDIO_SERVER_PORT` for announcement playback back to the device. Set `AUDIO_PUBLIC_PORT` when a host proxy exposes that listener on a different device-facing port.
+- Physical Python fallback turns can use the same Fleet Hub-device authority as the TypeScript Hub. Set `PSFN_COMPANION_ID`, `HUB_DEVICE_ASSERTION_FLEET_AUTH_PATH`, `HUB_DEVICE_ASSERTION_SATELLITE_REGISTRY_PATH`, `HUB_DEVICE_ASSERTION_PRIVATE_KEY_PATH`, and `HUB_DEVICE_ASSERTION_TTL_SECONDS` as one complete set. The bridge re-reads the exact endpoint's active `hubDeviceEnrollment` before every turn, requires the private key to match the active Fleet verifier, and sends a fresh assertion without persisting it.
 - Turn artifacts are intentionally kept for debugging transport, latency, and failure recovery.
 
 ## Upstream Plan

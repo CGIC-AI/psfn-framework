@@ -569,6 +569,10 @@ export function createIcpInitiationSourceRuntime(
       resolveAcceptance = resolve;
       rejectAcceptance = reject;
     });
+    // `submit()` callers observe completion directly and do not await the
+    // acceptance promise; attach a rejection observer so a fail-closed identity
+    // or store error cannot become an unhandled rejection on that path.
+    void acceptance.catch(() => undefined);
     const completion = run(request, peer, candidateId, undefined, candidate => {
       resolveAcceptance({
         candidateId: candidate.candidateId,

@@ -6,6 +6,7 @@ import type {
   AutomataBusIndexLagStage,
   AutomataBusVectorIndexPort,
 } from './query-ports.js';
+import { RUNTIME_LANE_CLASSES } from '../../../shared/contracts/runtime-lanes.js';
 
 export type AutomataBusIndexingResult =
   | {
@@ -86,7 +87,19 @@ export class AutomataBusIndexingService {
 
     let embedding: Float32Array;
     try {
-      embedding = await this.embeddings.embed(finding.claim);
+      embedding = await this.embeddings.embed(finding.claim, {
+        usageProvenance: {
+          callType: 'background',
+          purpose: 'automata_bus.indexing',
+          originType: 'background',
+          originStage: 'automata_bus.indexing',
+          service: 'automata_bus',
+          process: 'finding-index',
+          runtimeLaneClass: RUNTIME_LANE_CLASSES.backgroundContinuation,
+          workloadType: 'automata_bus_indexing',
+          workloadId: finding.eventId,
+        },
+      });
       if (embedding.length !== this.embeddings.identity.dimensions) {
         return await this.lag(finding, 'embedding');
       }

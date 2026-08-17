@@ -99,6 +99,23 @@ describe('normalizeModelUsageAttribution', () => {
     }).chargeLane).toBe('background');
   });
 
+  it.each([
+    ['foreground_chat', 'interactive'],
+    ['post_turn_appraisal', 'background'],
+    ['background_continuation', 'background'],
+    ['maintenance_reflection', 'maintenance'],
+  ] as const)('maps the already-resolved runtime class %s to reporting lane %s', (
+    runtimeLaneClass,
+    chargeLane,
+  ) => {
+    expect(normalizeModelUsageAttribution({
+      companionId: 'companion-alpha',
+      callType: 'background',
+      purpose: 'sessionless.embedding',
+      runtimeLaneClass,
+    }).chargeLane).toBe(chargeLane);
+  });
+
   it('never records foreground chat as unknown even without session metadata', () => {
     expect(normalizeModelUsageAttribution({
       companionId: 'companion-alpha',

@@ -1785,6 +1785,54 @@ describe('GatewayClient streaming', () => {
     });
     await expect(batchPromise).resolves.toHaveLength(1);
   });
+
+  it('transports explicit embedding usage provenance without charge lineage', async () => {
+    const attributedClient = new GatewayClient(conn.conn, 1024, {
+      companionId: '11111111-1111-4111-8111-111111111111',
+    });
+    const usageProvenance = {
+      callType: 'background' as const,
+      purpose: 'automata_bus.indexing',
+      originType: 'background' as const,
+      originStage: 'automata_bus.indexing',
+      service: 'automata_bus',
+      process: 'finding-index',
+      runtimeLaneClass: 'background_continuation' as const,
+      workloadType: 'automata_bus_indexing',
+      workloadId: 'finding-7',
+    };
+
+    const embedPromise = attributedClient.embed('canonical finding', { usageProvenance });
+    const request = conn.sent[0] as {
+      id: number;
+      method: string;
+      params: Record<string, unknown>;
+    };
+    expect(request).toMatchObject({
+      method: 'llm.embed',
+      params: {
+        companionId: '11111111-1111-4111-8111-111111111111',
+        texts: ['canonical finding'],
+        usageProvenance,
+      },
+    });
+    for (const field of [
+      'chargeLane',
+      'chargeSurface',
+      'chargeEventId',
+      'chargeRunId',
+      'chargeRootRunId',
+      'chargeParentRunId',
+    ]) {
+      expect(request.params).not.toHaveProperty(field);
+    }
+    conn._emit({
+      id: request.id,
+      jsonrpc: '2.0',
+      result: { embeddings: [[0.1, 0.2]] },
+    });
+    await expect(embedPromise).resolves.toBeInstanceOf(Float32Array);
+  });
 });
 
 describe('GatewayClient per-companion model selection transport (23pp)', () => {

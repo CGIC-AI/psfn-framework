@@ -109,6 +109,7 @@ import type {
   KubeSelfManagementResponse,
 } from '../../system/lifecycle/kube-self-management.js';
 import type { SensitivityLevel } from '../../system/trust/types.js';
+import type { EmbeddingUsageProvenance } from '../../shared/contracts/embedding-provider.js';
 export type {
   KubeSelfManagementRequest,
   KubeSelfManagementResponse,
@@ -274,6 +275,7 @@ export interface LLMCompleteParams extends GatewayCorrelationParams, GatewayLLMC
 
 export interface LLMEmbedParams extends GatewayCorrelationParams {
   texts: string[];
+  usageProvenance?: EmbeddingUsageProvenance;
 }
 
 export type LLMDiscoverModelsParams = Record<string, never>;

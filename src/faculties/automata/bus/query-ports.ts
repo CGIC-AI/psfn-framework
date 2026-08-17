@@ -1,4 +1,5 @@
 import type { SensitivityLevel } from '../../../system/trust/types.js';
+import type { EmbeddingProviderCallOptions } from '../../../shared/contracts/embedding-provider.js';
 import type {
   AutomataBusProvenance,
   AutomataBusVerificationStatus,
@@ -82,7 +83,7 @@ export interface AutomataBusEmbeddingIdentity {
 /** Supply the configured, usage-accounted gateway embedding provider here. */
 export interface AutomataBusEmbeddingPort {
   readonly identity: AutomataBusEmbeddingIdentity;
-  embed(text: string, options?: { signal?: AbortSignal }): Promise<Float32Array>;
+  embed(text: string, options?: EmbeddingProviderCallOptions): Promise<Float32Array>;
 }
 
 export type AutomataBusIndexState = 'building' | 'degraded' | 'ready' | 'unavailable';

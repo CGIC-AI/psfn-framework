@@ -1078,9 +1078,21 @@ describe('registerLLMMethods', () => {
       })),
     };
     const harness = createHarness({ embeddingService, usageEvents });
+    const usageProvenance = {
+      callType: 'background' as const,
+      purpose: 'automata_bus.indexing',
+      originType: 'background' as const,
+      originStage: 'automata_bus.indexing',
+      service: 'automata_bus',
+      process: 'finding-index',
+      runtimeLaneClass: 'background_continuation' as const,
+      workloadType: 'automata_bus_indexing',
+      workloadId: 'finding-7',
+    };
 
     await expect(harness.invoke('llm.embed', {
       texts: ['first'],
+      usageProvenance,
       companionId: 'companion-a',
       sessionId: 'session-1',
       channelId: 'shard:shard-1',
@@ -1097,9 +1109,9 @@ describe('registerLLMMethods', () => {
       embeddings: [[1, 2, 3]],
     });
 
-    // zn2iy: llm.embed now forwards an optional cancellation option; with no
-    // caller signal it is undefined (deliberate non-cancellation).
-    expect(embeddingService.embedBatchWithUsage).toHaveBeenCalledWith(['first'], undefined);
+    expect(embeddingService.embedBatchWithUsage).toHaveBeenCalledWith(['first'], {
+      usageProvenance,
+    });
     expect(embeddingService.embedBatch).not.toHaveBeenCalled();
     expect(usageEvents).toMatchObject([{
       attempt: 1,
@@ -1111,9 +1123,16 @@ describe('registerLLMMethods', () => {
         sessionId: 'session-1',
         channelId: 'shard:shard-1',
         channelType: 'api',
+        callType: 'background',
+        purpose: 'automata_bus.indexing',
+        originType: 'background',
+        originStage: 'automata_bus.indexing',
+        service: 'automata_bus',
+        process: 'finding-index',
+        runtimeLaneClass: 'background_continuation',
         shardId: 'shard-1',
-        workloadType: 'shard',
-        workloadId: 'shard-1',
+        workloadType: 'automata_bus_indexing',
+        workloadId: 'finding-7',
       },
       provider: 'api',
       model: 'text-embedding-3-small',

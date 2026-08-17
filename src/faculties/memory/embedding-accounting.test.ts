@@ -336,4 +336,62 @@ describe('withEmbeddingUsageAccounting', () => {
     expect(events[0]?.effectiveCost).toEqual({});
     expect(events[0]?.costSource).toBe('none');
   });
+
+  it('captures explicit local embedding provenance without fabricating spend', async () => {
+    const events: ModelUsageEventInput[] = [];
+    const provider = {
+      kind: 'transformers' as const,
+      model: 'local-test-embedding',
+      dims: 2,
+      embed: vi.fn(),
+      embedBatch: vi.fn(async () => [new Float32Array([1, 2])]),
+    };
+    const accounted = withEmbeddingUsageAccounting(provider, {
+      async recordUsageEvent(event) {
+        events.push(event);
+      },
+    }, { companionId: 'companion-a' });
+
+    await accounted.embed('canonical finding', {
+      usageProvenance: {
+        callType: 'background',
+        purpose: 'automata_bus.indexing',
+        originType: 'background',
+        originStage: 'automata_bus.indexing',
+        service: 'automata_bus',
+        process: 'finding-index',
+        runtimeLaneClass: 'background_continuation',
+        workloadType: 'automata_bus_indexing',
+        workloadId: 'finding-7',
+      },
+    });
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      status: 'success',
+      settlement: 'unknown',
+      callKind: 'embedding',
+      attribution: {
+        companionId: 'companion-a',
+        callType: 'background',
+        purpose: 'automata_bus.indexing',
+        originType: 'background',
+        originStage: 'automata_bus.indexing',
+        service: 'automata_bus',
+        process: 'finding-index',
+        runtimeLaneClass: 'background_continuation',
+        workloadType: 'automata_bus_indexing',
+        workloadId: 'finding-7',
+      },
+      provider: 'transformers',
+      model: 'local-test-embedding',
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+    });
+    expect(events[0]?.providerCostUsd).toBeUndefined();
+    expect(events[0]?.estimatedCostUsd).toBeUndefined();
+    expect(events[0]?.effectiveCostUsd).toBeUndefined();
+    expect(events[0]?.costSource).toBeUndefined();
+  });
 });

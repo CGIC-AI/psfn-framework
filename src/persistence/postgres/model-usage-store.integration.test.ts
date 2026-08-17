@@ -315,6 +315,87 @@ describe('PostgresModelUsageStore private telemetry', () => {
 });
 
 describe('PostgresModelUsageStore per-lane spend attribution (mmo9.7.3)', () => {
+  it('projects and exports sessionless local embedding usage under its originating lane', async () => {
+    if (!harness) throw new Error('Postgres integration harness is unavailable');
+    const database = await harness.createDatabase();
+    const pool = createPostgresPool(database.databaseUrl, {
+      applicationName: 'model-usage-local-embedding-attribution-test',
+      allowExitOnIdle: true,
+      max: 2,
+    });
+    try {
+      const store = new PostgresModelUsageStore(pool, { companionId: 'companion-a' });
+      const accountedEmbedding = withEmbeddingUsageAccounting({
+        kind: 'transformers' as const,
+        model: 'local-test-embedding',
+        dims: 2,
+        async embed() { return new Float32Array([1, 2]); },
+        async embedBatch() { return [new Float32Array([1, 2])]; },
+      }, store, { companionId: 'companion-a' });
+
+      await accountedEmbedding.embed('canonical finding', {
+        usageProvenance: {
+          callType: 'background',
+          purpose: 'automata_bus.indexing',
+          originType: 'background',
+          originStage: 'automata_bus.indexing',
+          service: 'automata_bus',
+          process: 'finding-index',
+          runtimeLaneClass: 'background_continuation',
+          workloadType: 'automata_bus_indexing',
+          workloadId: 'finding-7',
+        },
+      });
+
+      const projection = await store.getUsageData({
+        workloadType: 'automata_bus_indexing',
+        groupBy: ['chargeLane', 'workloadType'],
+      });
+      expect(projection.totals).toMatchObject({ calls: 1, totalTokens: 0, totalCostUsd: 0 });
+      expect(projection.recentEvents[0]).toMatchObject({
+        provider: 'transformers',
+        model: 'local-test-embedding',
+        costSource: 'none',
+        attribution: {
+          companionId: 'companion-a',
+          service: 'automata_bus',
+          purpose: 'automata_bus.indexing',
+          process: 'finding-index',
+          runtimeLaneClass: 'background_continuation',
+          chargeLane: 'background',
+          workloadType: 'automata_bus_indexing',
+          workloadId: 'finding-7',
+        },
+      });
+      expect(projection.groups).toEqual([
+        expect.objectContaining({
+          dimensions: {
+            chargeLane: 'background',
+            workloadType: 'automata_bus_indexing',
+          },
+          metrics: expect.objectContaining({ calls: 1, totalCostUsd: 0 }),
+        }),
+      ]);
+
+      const exported = await store.exportUsageEvents({ workloadType: 'automata_bus_indexing' });
+      expect(exported.rows).toHaveLength(1);
+      expect(exported.rows[0]).toMatchObject({
+        provider: 'transformers',
+        model: 'local-test-embedding',
+        costSource: 'none',
+        effectiveCost: {},
+        attribution: {
+          runtimeLaneClass: 'background_continuation',
+          chargeLane: 'background',
+          workloadType: 'automata_bus_indexing',
+          workloadId: 'finding-7',
+        },
+      });
+    } finally {
+      await pool.end();
+    }
+  }, INTEGRATION_TIMEOUT_MS);
+
   it('persists, filters, and aggregates per-companion x lane x model spend', async () => {
     if (!harness) throw new Error('Postgres integration harness is unavailable');
     const database = await harness.createDatabase();

@@ -446,6 +446,19 @@ describe('AutomataBusIndexingService', () => {
     const result = await service.indexCurrentFinding(finding('indexed'));
 
     expect(result.status).toBe('indexed');
+    expect(ports.embeddings.embed).toHaveBeenCalledWith('claim indexed', {
+      usageProvenance: {
+        callType: 'background',
+        purpose: 'automata_bus.indexing',
+        originType: 'background',
+        originStage: 'automata_bus.indexing',
+        service: 'automata_bus',
+        process: 'finding-index',
+        runtimeLaneClass: 'background_continuation',
+        workloadType: 'automata_bus_indexing',
+        workloadId: 'indexed',
+      },
+    });
     expect(ports.vector.upsert).toHaveBeenCalledWith(expect.objectContaining({
       eventId: 'indexed',
       modelIdentity: MODEL,

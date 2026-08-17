@@ -63,6 +63,10 @@ import {
 import { runWithRequestContext } from '../../../primitives/llm/request-context.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import { abortError } from '../../../shared/utils/errors.js';
+import type {
+  EmbeddingProviderCallOptions,
+  EmbeddingUsageProvenance,
+} from '../../../shared/contracts/embedding-provider.js';
 import {
   normalizeModelHint,
   OPTIONAL_MODEL_HINT_NORMALIZATION,
@@ -543,18 +547,25 @@ const cancellableLlmDescriptors = [
       const logicalCallId = `embedding:${randomUUID()}`;
       const recordsUsageInternally = embeddingRecordsUsageInternally(runtime);
       const nativeParams = stripChargeAttribution(params);
+      const usageProvenance = nativeParams.usageProvenance;
       const correlation = buildCorrelation({
         ...nativeParams,
-        callType: nativeParams.callType ?? 'memory',
-        purpose: nativeParams.purpose ?? 'embedding',
-        originType: nativeParams.originType ?? 'memory',
-        originStage: nativeParams.originStage ?? 'embedding',
+        ...(usageProvenance ?? {}),
+        callType: usageProvenance?.callType ?? nativeParams.callType ?? 'memory',
+        purpose: usageProvenance?.purpose ?? nativeParams.purpose ?? 'embedding',
+        originType: usageProvenance?.originType ?? nativeParams.originType ?? 'memory',
+        originStage: usageProvenance?.originStage ?? nativeParams.originStage ?? 'embedding',
       });
       let result: EmbeddingBatchProviderUsageResult;
       try {
         result = await runWithRequestContext(
           correlation,
-          async () => await embedBatchWithProviderUsage(runtime, params.texts, signal),
+          async () => await embedBatchWithProviderUsage(
+            runtime,
+            params.texts,
+            signal,
+            usageProvenance,
+          ),
         );
       } catch (error) {
         if (!recordsUsageInternally) {
@@ -736,14 +747,20 @@ async function embedBatchWithProviderUsage(
   runtime: GatewayMethodRuntime,
   texts: string[],
   signal: AbortSignal | undefined,
+  usageProvenance?: EmbeddingUsageProvenance,
 ): Promise<EmbeddingBatchProviderUsageResult> {
   const provider = runtime.embeddingService as GatewayMethodRuntime['embeddingService'] & {
     embedBatchWithUsage?: (
       input: string[],
-      options?: { signal?: AbortSignal },
+      options?: EmbeddingProviderCallOptions,
     ) => Promise<EmbeddingBatchProviderUsageResult>;
   };
-  const options = signal ? { signal } : undefined;
+  const options: EmbeddingProviderCallOptions | undefined = signal || usageProvenance
+    ? {
+        ...(signal ? { signal } : {}),
+        ...(usageProvenance ? { usageProvenance } : {}),
+      }
+    : undefined;
   if (provider.embedBatchWithUsage) {
     return await provider.embedBatchWithUsage(texts, options);
   }
@@ -761,6 +778,7 @@ async function recordEmbeddingUsage(
 ): Promise<void> {
   const recorder = runtime.modelUsageRecorder;
   if (!recorder) return;
+  const usageProvenance = params.usageProvenance;
   const completedAtMs = Date.now();
   const embeddingMetadata = runtime.embeddingService as unknown as { kind?: unknown; model?: unknown };
   const provider = typeof embeddingMetadata.kind === 'string'
@@ -786,12 +804,12 @@ async function recordEmbeddingUsage(
       ...(params.sessionId ? { sessionId: params.sessionId } : {}),
       ...(params.channelId ? { channelId: params.channelId } : {}),
       ...(params.channelType ? { channelType: params.channelType } : {}),
-      callType: params.callType ?? 'memory',
-      purpose: params.purpose ?? 'embedding',
-      originType: params.originType ?? 'memory',
-      originStage: params.originStage ?? 'embedding',
-      service: params.service ?? 'memory',
-      process: params.process ?? 'embedding',
+      callType: usageProvenance?.callType ?? params.callType ?? 'memory',
+      purpose: usageProvenance?.purpose ?? params.purpose ?? 'embedding',
+      originType: usageProvenance?.originType ?? params.originType ?? 'memory',
+      originStage: usageProvenance?.originStage ?? params.originStage ?? 'embedding',
+      service: usageProvenance?.service ?? params.service ?? 'memory',
+      process: usageProvenance?.process ?? params.process ?? 'embedding',
       ...(params.turnId ? { turnId: params.turnId } : {}),
       ...(params.requestId ? { requestId: params.requestId } : {}),
       ...(params.toolName ? { toolName: params.toolName } : {}),
@@ -800,8 +818,15 @@ async function recordEmbeddingUsage(
       ...(params.subagentId ? { subagentId: params.subagentId } : {}),
       ...(params.conversationId ? { conversationId: params.conversationId } : {}),
       ...(params.rootInitiationId ? { rootInitiationId: params.rootInitiationId } : {}),
-      ...(params.workloadType ? { workloadType: params.workloadType } : {}),
-      ...(params.workloadId ? { workloadId: params.workloadId } : {}),
+      ...(usageProvenance?.runtimeLaneClass
+        ? { runtimeLaneClass: usageProvenance.runtimeLaneClass }
+        : {}),
+      ...(usageProvenance?.workloadType
+        ? { workloadType: usageProvenance.workloadType }
+        : (params.workloadType ? { workloadType: params.workloadType } : {})),
+      ...(usageProvenance?.workloadId
+        ? { workloadId: usageProvenance.workloadId }
+        : (params.workloadId ? { workloadId: params.workloadId } : {})),
     },
     provider,
     model,

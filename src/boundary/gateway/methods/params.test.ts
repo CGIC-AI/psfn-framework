@@ -236,4 +236,30 @@ describe('gateway RPC parameter decoder catalog', () => {
       texts: ['hello'],
     });
   });
+
+  it('admits complete embedding provenance and rejects partial or invented lanes', () => {
+    const usageProvenance = {
+      callType: 'background',
+      purpose: 'automata_bus.indexing',
+      originType: 'background',
+      originStage: 'automata_bus.indexing',
+      service: 'automata_bus',
+      process: 'finding-index',
+      runtimeLaneClass: 'background_continuation',
+      workloadType: 'automata_bus_indexing',
+      workloadId: 'finding-7',
+    };
+    const valid = { texts: ['hello'], usageProvenance };
+
+    expect(gatewayMethodParamDecoders['llm.embed'](valid)).toBe(valid);
+    expectInvalid(gatewayMethodParamDecoders['llm.embed'], {
+      texts: ['hello'],
+      usageProvenance: { ...usageProvenance, runtimeLaneClass: 'invented_lane' },
+    });
+    const { workloadId: _missing, ...partial } = usageProvenance;
+    expectInvalid(gatewayMethodParamDecoders['llm.embed'], {
+      texts: ['hello'],
+      usageProvenance: partial,
+    });
+  });
 });

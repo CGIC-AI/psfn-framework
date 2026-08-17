@@ -94,6 +94,9 @@ describe('admin ICP autonomy routes', () => {
         `peerCompanionId=${PEER_ID}`,
         `requestId=${REQUEST_ID}`,
         `candidateId=${CANDIDATE_ID}`,
+        'outcome=accepted',
+        'status=pending',
+        'deliveryDisposition=pending',
       ]),
       'operator',
     );
@@ -107,6 +110,40 @@ describe('admin ICP autonomy routes', () => {
     });
     expect(invalid.statusCode).toBe(400);
     expect(triggerTestInitiation).toHaveBeenCalledTimes(1);
+  });
+
+  it('denies instead of acknowledging when durable candidate acceptance fails', async () => {
+    const triggerTestInitiation = vi.fn(async () => {
+      throw new Error('candidate store unavailable');
+    });
+    const audit = vi.fn<AdminAuditTimelineAppender>();
+
+    const result = await invoke({
+      method: 'POST',
+      path: '/api/admin/icp-autonomy/test-initiations',
+      body: { peerCompanionId: PEER_ID, requestId: REQUEST_ID },
+      service: { triggerTestInitiation },
+      audit,
+    });
+
+    expect(result.statusCode).toBe(500);
+    expect(audit).toHaveBeenCalledWith(
+      'autonomy_control',
+      'denied',
+      expect.stringContaining('failed'),
+      expect.arrayContaining([
+        `peerCompanionId=${PEER_ID}`,
+        `requestId=${REQUEST_ID}`,
+      ]),
+      'operator',
+    );
+    expect(audit).not.toHaveBeenCalledWith(
+      'autonomy_control',
+      'allowed',
+      expect.anything(),
+      expect.anything(),
+      'operator',
+    );
   });
 
   it('returns the bounded service projection, including content-free delivery telemetry', async () => {

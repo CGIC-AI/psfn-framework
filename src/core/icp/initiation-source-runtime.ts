@@ -25,6 +25,7 @@ import {
   terminalIcpSourceOutcome,
   toIcpCandidateOrigin,
   toIcpSourceResult,
+  type IcpInitiationSourceAcceptance,
   type IcpInitiationSourceRequest,
   type IcpInitiationSourceResult,
   type IcpInitiationSourceRuntime,
@@ -38,6 +39,7 @@ export type {
   IcpInitiationSourceGatewayPort,
   IcpInitiationSourceOutcome,
   IcpInitiationSourcePeerPort,
+  IcpInitiationSourceAcceptance,
   IcpInitiationSourceRequest,
   IcpInitiationSourceResult,
   IcpInitiationSourceRuntime,
@@ -75,7 +77,10 @@ export function createIcpInitiationSourceRuntime(
     maxRetryAttempts: MAX_ICP_INITIATION_RETRY_ATTEMPTS,
     permitTtlMs: DEFAULT_PERMIT_TTL_MS,
   };
-  const inFlight = new Map<string, Promise<IcpInitiationSourceResult>>();
+  const inFlight = new Map<string, {
+    acceptance: Promise<IcpInitiationSourceAcceptance>;
+    completion: Promise<IcpInitiationSourceResult>;
+  }>();
   const resolvePeer = async (contactId: string): Promise<KnownCompanionPeer> => {
     const peer = await dependencies.peers.resolveKnownPeer(contactId);
     if (peer.contactId !== contactId) {
@@ -151,6 +156,7 @@ export function createIcpInitiationSourceRuntime(
     initialPeer: KnownCompanionPeer,
     candidateId: string,
     recoveryClaim?: IcpInitiationCandidateClaim,
+    onAccepted?: (candidate: IcpInitiationCandidate) => void,
   ): Promise<IcpInitiationSourceResult> => {
     const currentNow = now();
     if (request.pendingFollowUpId !== undefined && request.source !== 'intention') {
@@ -236,6 +242,7 @@ export function createIcpInitiationSourceRuntime(
       // invariant violation. Never silently reuse another private motivation.
       throw new Error(`ICP candidate identity conflict for ${candidateId}`);
     }
+    onAccepted?.(candidate);
     if (candidate.expiresAtMs <= now()
       && ['pending', 'deferred', 'permitted'].includes(candidate.status)) {
       const expired = await transition(
@@ -546,23 +553,60 @@ export function createIcpInitiationSourceRuntime(
     ),
   });
 
-  return {
-    async submit(request) {
-      const peer = await resolvePeer(request.peerContactId);
-      const candidateId = deriveIcpInitiationCandidateId({
-        localCompanionId: dependencies.localCompanionId,
-        peerCompanionId: peer.peerCompanionId,
-        request,
+  const beginSubmission = async (request: IcpInitiationSourceRequest) => {
+    const peer = await resolvePeer(request.peerContactId);
+    const candidateId = deriveIcpInitiationCandidateId({
+      localCompanionId: dependencies.localCompanionId,
+      peerCompanionId: peer.peerCompanionId,
+      request,
+    });
+    const existing = inFlight.get(candidateId);
+    if (existing) return existing;
+
+    let resolveAcceptance!: (acceptance: IcpInitiationSourceAcceptance) => void;
+    let rejectAcceptance!: (error: unknown) => void;
+    const acceptance = new Promise<IcpInitiationSourceAcceptance>((resolve, reject) => {
+      resolveAcceptance = resolve;
+      rejectAcceptance = reject;
+    });
+    const completion = run(request, peer, candidateId, undefined, candidate => {
+      resolveAcceptance({
+        candidateId: candidate.candidateId,
+        status: candidate.status,
+        ...(candidate.deliveryDisposition
+          ? { deliveryDisposition: candidate.deliveryDisposition }
+          : {}),
       });
-      const existing = inFlight.get(candidateId);
-      if (existing) return await existing;
-      const pending = run(request, peer, candidateId);
-      inFlight.set(candidateId, pending);
-      try {
-        return await pending;
-      } finally {
-        if (inFlight.get(candidateId) === pending) inFlight.delete(candidateId);
-      }
+    });
+    const submission = { acceptance, completion };
+    inFlight.set(candidateId, submission);
+    void completion.then(
+      () => {
+        if (inFlight.get(candidateId) === submission) inFlight.delete(candidateId);
+      },
+      error => {
+        rejectAcceptance(error);
+        if (inFlight.get(candidateId) === submission) inFlight.delete(candidateId);
+      },
+    );
+    return submission;
+  };
+
+  return {
+    async accept(request) {
+      const submission = await beginSubmission(request);
+      const acceptance = await submission.acceptance;
+      void submission.completion.catch(error => {
+        log.error('Accepted ICP initiation failed during background execution', {
+          candidateId: acceptance.candidateId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+      return acceptance;
+    },
+    async submit(request) {
+      const submission = await beginSubmission(request);
+      return await submission.completion;
     },
     resumeClaim,
   };

@@ -814,7 +814,6 @@ async function main(): Promise<void> {
   });
   const icpTestInitiation = icpInitiationSourceRuntime && coreRuntime.icpAutonomyRuntime
     ? createIcpTestInitiationTrigger({
-        localCompanionId: resolveCoreCompanionIdFromConfig(config),
         sourceRuntime: icpInitiationSourceRuntime,
         peers: coreRuntime.icpAutonomyRuntime,
       })

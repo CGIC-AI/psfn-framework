@@ -779,7 +779,7 @@ export function parseTurnRecordBackgroundWorkHandoffRecovery(
 }
 
 /** Re-prove the content-free IPC projection whose source fingerprint the worker already checked. */
-function parseWorkerValidatedTurnRecordBackgroundWorkHandoffRecovery(
+export function parseWorkerValidatedTurnRecordBackgroundWorkHandoffRecovery(
   record: TurnRecord,
 ): BackgroundWorkHandoffRecoveryInput {
   const input = parseTurnRecordBackgroundWorkHandoffRecoveryWithExpectedFingerprint(record, null);

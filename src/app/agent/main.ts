@@ -794,6 +794,7 @@ async function main(): Promise<void> {
     config: schedulerConfig.icpAutonomy,
     localCompanionId: config.companionId,
     candidateStore: persistenceRuntime.icpInitiationCandidateStore,
+    feltImpulseFunnelStore: persistenceRuntime.icpFeltImpulseFunnelStore,
     peers: coreRuntime.icpAutonomyRuntime,
     gateway,
     isExternalCompanionAuthorized: () => capabilityRuntime.has('external.companion'),
@@ -1466,6 +1467,7 @@ async function main(): Promise<void> {
     scheduler,
     schedulerConfig,
     icpInitiationCandidateStore: persistenceRuntime.icpInitiationCandidateStore,
+    icpFeltImpulseFunnelStore: persistenceRuntime.icpFeltImpulseFunnelStore,
     partnerAffectShadowStore: persistenceRuntime.partnerAffectShadowStore,
     icpRuntimeEnablement,
     ...(icpTestInitiation ? { icpTestInitiation } : {}),
@@ -1529,6 +1531,7 @@ async function main(): Promise<void> {
       await coreRuntime.closeWikiRuntime();
       await coreRuntime.closeBiographicalProjection();
       await persistenceRuntime.icpInitiationCandidateStore?.close();
+      await persistenceRuntime.icpFeltImpulseFunnelStore.close();
       await persistenceRuntime.socialPotStore?.close();
       await persistenceRuntime.speakingArbiterStore?.close();
       await persistenceRuntime.backgroundWorkStore.close();

@@ -26,6 +26,7 @@ export const POSTGRES_STORE_READINESS_CATALOG = {
   hub_identity_enrollment: { label: 'hub identity enrollment', requirement: 'required' },
   intention: { label: 'intention', requirement: 'required' },
   icp_initiation_candidates: { label: 'ICP initiation candidates', requirement: 'required' },
+  icp_felt_impulse_funnel: { label: 'ICP felt-impulse funnel', requirement: 'required' },
   internal_state: { label: 'internal state', requirement: 'required' },
   participant_trend: { label: 'participant trend', requirement: 'required' },
   reflection: { label: 'reflection mirror', requirement: 'required' },

@@ -159,6 +159,7 @@ import type { AdminToolHealthProvider } from './tool-health-provider.js';
 import type { GatewayCredentialPresenceResult } from '../../boundary/gateway/protocol.js';
 import type { IcpInitiationCandidateStorePort } from '../../core/icp/autonomy-store-ports.js';
 import type { IcpAutonomyRuntimeEnablement } from '../../core/icp/runtime-enablement.js';
+import type { IcpFeltImpulseFunnelStorePort } from '../../core/icp/felt-impulse-funnel.js';
 import type { IcpAdminProjectionStore } from '../../persistence/postgres/icp-admin-projection-store.js';
 import { AdminIcpAutonomyDataService } from './services/icp-autonomy-service.js';
 import type { SpeakingArbiterAdminStore } from '../../persistence/postgres/speaking-arbiter-admin-store.js';
@@ -167,7 +168,6 @@ import { AdminSharedWorkspaceService } from './services/shared-workspace-service
 import { requireAuditOpaqueIdKeyring } from './audit-opaque-id-keyring.js';
 import type { BackgroundWorkStorePort } from '../../core/agent/background-work/store-port.js';
 import type { OperatorAlertSinkConfiguration } from '../../shared/contracts/operator-alerting.js';
-
 const log = createComponentLogger('GardenAdminContract');
 
 export function buildEpisodicWatermarkLaneDefinitions(config: {
@@ -275,6 +275,7 @@ export interface InProcessGardenAdminContractOptions {
   logsDir?: string;
   effectiveSchedulerConfig?: import('../../system/config/scheduler-config.js').SchedulerRuntimeConfig;
   icpInitiationCandidateStore?: IcpInitiationCandidateStorePort | null;
+  icpFeltImpulseFunnelStore?: IcpFeltImpulseFunnelStorePort | null;
   icpAdminProjectionStore?: IcpAdminProjectionStore | null;
   /** Shadow-only Partner Affect observation store (docs/partner-affect.md slice 1). */
   partnerAffectShadowStore?: PartnerAffectShadowStorePort | null;
@@ -518,6 +519,7 @@ export function createInProcessGardenAdminContract(
     ? new AdminIcpAutonomyDataService({
       localCompanionId: options.config.companionId,
       candidateStore: options.icpInitiationCandidateStore ?? null,
+      feltImpulseFunnelStore: options.icpFeltImpulseFunnelStore ?? null,
       projectionStore: options.icpAdminProjectionStore ?? null,
       runtimeEnablement: options.icpRuntimeEnablement,
       ...(options.icpTestInitiation ? { testInitiation: options.icpTestInitiation } : {}),

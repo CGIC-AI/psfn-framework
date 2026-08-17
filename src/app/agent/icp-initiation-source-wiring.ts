@@ -2,6 +2,7 @@ import type { EventBus } from '../../shared/event-bus.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { createIcpFeltImpulseInitiationAdapter } from '../../core/icp/felt-impulse-initiation.js';
 import type { KnownCompanionPeerAvailability } from '../../core/icp/agent-facing-autonomy.js';
+import type { IcpFeltImpulseFunnelStorePort } from '../../core/icp/felt-impulse-funnel.js';
 import { createIcpInitiationSourceRuntime } from '../../core/icp/initiation-source-runtime.js';
 import { createLlmIcpInitiationConsentEvaluator } from '../../core/icp/initiation-consent-evaluator.js';
 import { createIcpIntentionCandidateAdapter } from '../../core/icp/intention-candidate-adapter.js';
@@ -23,6 +24,7 @@ export interface IcpInitiationSourceWiringInput {
   config: IcpAutonomySchedulerConfig;
   localCompanionId: string | undefined;
   candidateStore: SourceRuntimeOptions['store'] | undefined;
+  feltImpulseFunnelStore: IcpFeltImpulseFunnelStorePort;
   peers: SourceRuntimeOptions['peers'] | undefined;
   gateway: SourceRuntimeOptions['gateway'];
   isExternalCompanionAuthorized: SourceRuntimeOptions['isExternalCompanionAuthorized'];
@@ -145,6 +147,7 @@ export function wireIcpInitiationSources(
       sourceRuntime,
       peers: input.peerDirectory,
       isAuthorized,
+      funnelStore: input.feltImpulseFunnelStore,
       eventBus: input.eventBus,
     });
     unregisterFeltImpulseAdapter = input.eventBus.on('icp.felt_impulse.lever', async (signal) => {
@@ -157,12 +160,22 @@ export function wireIcpInitiationSources(
     // that makes the observer retry and log the same qualified impulse on each
     // later observation.
     const outcome = input.config.enabled ? 'suppressed' : 'not_authorized';
+    const durableOutcome = input.config.enabled ? 'no_eligible_peer' : 'not_authorized';
     const reasonCode = !input.config.enabled
       ? 'autonomy_disabled'
       : sourceRuntime
         ? 'peer_directory_unavailable'
         : 'source_runtime_unavailable';
     unregisterFeltImpulseAdapter = input.eventBus.on('icp.felt_impulse.lever', async (signal) => {
+      const existing = await input.feltImpulseFunnelStore.getOutcome(signal.correlationId);
+      if (!existing) {
+        await input.feltImpulseFunnelStore.recordOutcome({
+          correlationId: signal.correlationId,
+          firedAtMs: signal.firedAtMs,
+          recordedAtMs: Date.now(),
+          outcome: durableOutcome,
+        });
+      }
       const emitTransition = async (
         stage: 'felt_impulse' | 'final_disposition',
         transitionOutcome: 'received' | 'suppressed' | 'not_authorized',

@@ -131,6 +131,59 @@ function request(
 }
 
 describe('ICP initiation source runtime', () => {
+  it('accepts only after the candidate is durable, then continues outreach in the background', async () => {
+    let settleOutreach!: () => void;
+    const outreachSettled = new Promise<void>(resolve => {
+      settleOutreach = resolve;
+    });
+    const { deps } = dependencies({
+      peers: {
+        resolveKnownPeer: vi.fn().mockResolvedValue({
+          contactId: 'peer-contact',
+          displayName: 'Peer',
+          peerCompanionId: PEER,
+        }),
+        executeCompanionOutreach: vi.fn(async () => {
+          await outreachSettled;
+          return { disposition: 'delivered' };
+        }),
+      },
+    });
+    const runtime = createIcpInitiationSourceRuntime(deps);
+
+    const acceptance = await runtime.accept(request('operator_test'));
+
+    expect(acceptance).toMatchObject({ status: 'pending' });
+    await expect(deps.store.getCandidate(acceptance.candidateId)).resolves.toMatchObject({
+      candidateId: acceptance.candidateId,
+      source: 'operator_test',
+    });
+    await vi.waitFor(() => {
+      expect(deps.peers.executeCompanionOutreach).toHaveBeenCalledOnce();
+    });
+    settleOutreach();
+    await vi.waitFor(async () => {
+      await expect(deps.store.getCandidate(acceptance.candidateId)).resolves.toMatchObject({
+        status: 'consumed',
+        deliveryDisposition: 'delivered',
+      });
+    });
+  });
+
+  it('rejects acceptance when durable candidate creation fails', async () => {
+    const store = createStore();
+    store.createCandidate = vi.fn(async () => {
+      throw new Error('candidate store unavailable');
+    });
+    const { deps } = dependencies({ store });
+    const runtime = createIcpInitiationSourceRuntime(deps);
+
+    await expect(runtime.accept(request('operator_test')))
+      .rejects.toThrow('candidate store unavailable');
+    expect(deps.gateway.companionInitiationPreflight).not.toHaveBeenCalled();
+    expect(deps.peers.executeCompanionOutreach).not.toHaveBeenCalled();
+  });
+
   it('treats authenticated operator-test initiation as consent while retaining broker gates', async () => {
     const { deps, consent } = dependencies();
     vi.mocked(consent.evaluate).mockResolvedValue({ action: 'decline' });

@@ -224,8 +224,8 @@ export interface AdminIcpTestInitiationInput {
 export interface AdminIcpTestInitiationResult {
   outcome: 'accepted';
   candidateId: string;
-  status: 'pending';
-  deliveryDisposition: 'pending';
+  status: IcpInitiationCandidateStatus;
+  deliveryDisposition: 'pending' | 'delivered' | 'suppressed';
 }
 
 export interface AdminIcpTestInitiationPort {

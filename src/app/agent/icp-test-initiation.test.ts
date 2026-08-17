@@ -4,26 +4,15 @@ import { createIcpTestInitiationTrigger } from './icp-test-initiation.js';
 
 const PEER_ID = '22222222-2222-4222-8222-222222222222';
 const REQUEST_ID = '44444444-4444-4444-8444-444444444444';
-const LOCAL_ID = '11111111-1111-4111-8111-111111111111';
 
 describe('ICP operator test initiation trigger', () => {
-  it('accepts a validated request before provider-backed outreach settles', async () => {
-    let settleOutreach!: () => void;
-    const outreachSettled = new Promise<void>(resolve => {
-      settleOutreach = resolve;
-    });
-    const submit = vi.fn(async () => {
-      await outreachSettled;
-      return {
-        outcome: 'sent' as const,
-        candidateId: '33333333-3333-4333-8333-333333333333',
-        status: 'consumed' as const,
-        deliveryDisposition: 'delivered' as const,
-      };
-    });
+  it('does not acknowledge a request when durable candidate creation fails', async () => {
     const trigger = createIcpTestInitiationTrigger({
-      localCompanionId: LOCAL_ID,
-      sourceRuntime: { submit },
+      sourceRuntime: {
+        accept: vi.fn(async () => {
+          throw new Error('candidate store unavailable');
+        }),
+      },
       peers: {
         listKnownPeerAvailability: vi.fn(async () => [{
           contactId: 'peer-contact',
@@ -34,31 +23,46 @@ describe('ICP operator test initiation trigger', () => {
       },
     });
 
-    const result = await Promise.race([
-      trigger.trigger({ peerCompanionId: PEER_ID, requestId: REQUEST_ID }),
-      new Promise<'timed_out'>(resolve => setTimeout(() => resolve('timed_out'), 25)),
-    ]);
+    await expect(trigger.trigger({
+      peerCompanionId: PEER_ID,
+      requestId: REQUEST_ID,
+    })).rejects.toThrow('candidate store unavailable');
+  });
+
+  it('returns the runtime durable-candidate acceptance', async () => {
+    const accept = vi.fn(async () => ({
+      candidateId: '33333333-3333-5333-8333-333333333333',
+      status: 'pending' as const,
+    }));
+    const trigger = createIcpTestInitiationTrigger({
+      sourceRuntime: { accept },
+      peers: {
+        listKnownPeerAvailability: vi.fn(async () => [{
+          contactId: 'peer-contact',
+          displayName: 'Peer',
+          peerCompanionId: PEER_ID,
+          availability: { available: true },
+        }] as never),
+      },
+    });
+
+    const result = await trigger.trigger({ peerCompanionId: PEER_ID, requestId: REQUEST_ID });
 
     expect(result).toMatchObject({
       outcome: 'accepted',
       status: 'pending',
       deliveryDisposition: 'pending',
     });
-    expect(result).not.toBe('timed_out');
-    expect(submit).toHaveBeenCalledOnce();
-    settleOutreach();
+    expect(accept).toHaveBeenCalledOnce();
   });
 
   it('resolves a canonical peer and submits a provenance-marked broker request', async () => {
-    const submit = vi.fn(async () => ({
-      outcome: 'sent' as const,
-      candidateId: '33333333-3333-4333-8333-333333333333',
-      status: 'consumed' as const,
-      deliveryDisposition: 'delivered' as const,
+    const accept = vi.fn(async () => ({
+      candidateId: '33333333-3333-5333-8333-333333333333',
+      status: 'pending' as const,
     }));
     const trigger = createIcpTestInitiationTrigger({
-      localCompanionId: LOCAL_ID,
-      sourceRuntime: { submit },
+      sourceRuntime: { accept },
       peers: {
         listKnownPeerAvailability: vi.fn(async () => [{
           contactId: 'peer-contact',
@@ -71,7 +75,7 @@ describe('ICP operator test initiation trigger', () => {
 
     await trigger.trigger({ peerCompanionId: PEER_ID, requestId: REQUEST_ID });
 
-    expect(submit).toHaveBeenCalledWith({
+    expect(accept).toHaveBeenCalledWith({
       source: 'operator_test',
       peerContactId: 'peer-contact',
       preferredChannel: 'dm',
@@ -82,10 +86,9 @@ describe('ICP operator test initiation trigger', () => {
   });
 
   it('rejects an unknown peer instead of guessing a contact', async () => {
-    const submit = vi.fn();
+    const accept = vi.fn();
     const trigger = createIcpTestInitiationTrigger({
-      localCompanionId: LOCAL_ID,
-      sourceRuntime: { submit },
+      sourceRuntime: { accept },
       peers: { listKnownPeerAvailability: vi.fn(async () => []) },
     });
 
@@ -93,6 +96,6 @@ describe('ICP operator test initiation trigger', () => {
       peerCompanionId: PEER_ID,
       requestId: REQUEST_ID,
     })).rejects.toThrow('known canonical peer');
-    expect(submit).not.toHaveBeenCalled();
+    expect(accept).not.toHaveBeenCalled();
   });
 });

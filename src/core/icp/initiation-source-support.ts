@@ -121,7 +121,15 @@ export interface IcpInitiationSourceResult {
   retryEligibleAtMs?: number;
 }
 
+export interface IcpInitiationSourceAcceptance {
+  candidateId: string;
+  status: IcpInitiationCandidateStatus;
+  deliveryDisposition?: IcpInitiationCandidate['deliveryDisposition'];
+}
+
 export interface IcpInitiationSourceRuntime {
+  /** Resolve only after the candidate is durably stored; completion continues asynchronously. */
+  accept(request: IcpInitiationSourceRequest): Promise<IcpInitiationSourceAcceptance>;
   submit(request: IcpInitiationSourceRequest): Promise<IcpInitiationSourceResult>;
   /** Resume exact Postgres-leased lifecycle work without source resubmission. */
   resumeClaim(claim: IcpInitiationCandidateClaim): Promise<IcpInitiationSourceResult>;

@@ -1,24 +1,18 @@
 import type { AgentFacingIcpAutonomyRuntime } from '../../core/icp/agent-facing-autonomy.js';
 import {
-  deriveIcpInitiationCandidateId,
+  type IcpInitiationSourceAcceptanceRuntime,
   type IcpInitiationSourceRequest,
-  type IcpInitiationSourceRuntime,
 } from '../../core/icp/initiation-source-runtime.js';
 import type { AdminIcpTestInitiationPort } from '../../operator/garden/services/types.js';
-import { createComponentLogger } from '../../shared/logger.js';
 import { isRfc4122Uuid } from '../../shared/utils/types.js';
 
-const log = createComponentLogger('IcpTestInitiation');
-
 export function createIcpTestInitiationTrigger(input: {
-  localCompanionId: string;
-  sourceRuntime: IcpInitiationSourceRuntime;
+  sourceRuntime: IcpInitiationSourceAcceptanceRuntime;
   peers: Pick<AgentFacingIcpAutonomyRuntime, 'listKnownPeerAvailability'>;
 }): AdminIcpTestInitiationPort {
   return {
     async trigger(request) {
-      if (!isRfc4122Uuid(input.localCompanionId)
-        || !isRfc4122Uuid(request.peerCompanionId)
+      if (!isRfc4122Uuid(request.peerCompanionId)
         || !isRfc4122Uuid(request.requestId)) {
         throw new Error('ICP operator test initiation requires lowercase RFC-4122 identities');
       }
@@ -36,23 +30,12 @@ export function createIcpTestInitiationTrigger(input: {
         reasonSummary: 'Authenticated operator requested an ICP test initiation.',
         cause: { kind: 'independent' },
       };
-      const candidateId = deriveIcpInitiationCandidateId({
-        localCompanionId: input.localCompanionId,
-        peerCompanionId: peer.peerCompanionId,
-        request: sourceRequest,
-      });
-      void input.sourceRuntime.submit(sourceRequest).catch(error => {
-        log.error('Accepted ICP operator test initiation failed in background', {
-          candidateId,
-          requestId: request.requestId,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      });
+      const accepted = await input.sourceRuntime.accept(sourceRequest);
       return {
         outcome: 'accepted',
-        candidateId,
-        status: 'pending',
-        deliveryDisposition: 'pending',
+        candidateId: accepted.candidateId,
+        status: accepted.status,
+        deliveryDisposition: accepted.deliveryDisposition ?? 'pending',
       };
     },
   };

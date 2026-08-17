@@ -753,6 +753,7 @@ describe('applyL3ScreeningOutcome', () => {
     expect(result.envelope.decision?.reason).toContain('via=');
     expect(result.action).toBe('quarantine');
     expect(result.withheld).toBe(true);
+    expect(result.snapshot.enforcementPosture).toBe('enforce');
     // The companion-visible substitute is the fixed htm9.12 soft notice —
     // covered by the existing emotion/memory exclusions.
     expect(result.effectiveText).toBe(renderIntakeWithheldContentPlaceholder());
@@ -805,6 +806,7 @@ describe('applyL3ScreeningOutcome', () => {
         riskLabels: expect.arrayContaining(['injection/override_attempt']),
       },
     });
+    expect(result.snapshot.enforcementPosture).toBe('shadow');
     expect(result.envelope.scores[L3_SCREENER_SCANNER_ID]).toBe(0.97);
     expect(hold).not.toHaveBeenCalled();
     expect(events.getEvent(result.cogSecCaseId)).toMatchObject({

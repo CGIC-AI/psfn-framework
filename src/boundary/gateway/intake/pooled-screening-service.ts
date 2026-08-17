@@ -148,7 +148,7 @@ export function synthesizeFailClosedScreeningResult(
   });
 
   const subject: IntakeEnvelopeSubject = input.subject ?? { kind: 'body' };
-  const snapshot: IntakeEnvelopeSnapshot = snapshotIntakeEnvelope(envelope, subject);
+  const snapshot: IntakeEnvelopeSnapshot = snapshotIntakeEnvelope(envelope, subject, mode);
   const effectiveText = withheld ? renderIntakeWithheldContentPlaceholder() : text;
   const provenance = resolveCogSecProvenanceClass({
     sourceClass,

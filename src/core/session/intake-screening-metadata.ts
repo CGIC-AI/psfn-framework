@@ -20,6 +20,7 @@ import {
   isIntakeRiskLabel,
   isIntakeSourceClass,
   isIntakeSourceRiskTier,
+  resolveIntakeSnapshotEnforcementPosture,
   type IntakeEnvelopeSnapshot,
 } from '../../shared/contracts/intake-envelope.js';
 import {
@@ -47,6 +48,18 @@ export interface IntakeScreeningSessionMetadata {
 
 interface SessionMetadataEnvelope {
   [key: string]: unknown;
+}
+
+export function resolveIntakeScreeningSessionOutcome(
+  envelopes: readonly IntakeEnvelopeSnapshot[],
+  fallbackMode: 'shadow' | 'enforce',
+): Pick<IntakeScreeningSessionMetadata, 'mode' | 'withheld'> {
+  const mode = resolveIntakeSnapshotEnforcementPosture(envelopes, fallbackMode);
+  const withheld = envelopes.some(snapshot => (
+    snapshot.state === 'quarantined'
+    && (snapshot.enforcementPosture ?? fallbackMode) === 'enforce'
+  ));
+  return { mode, withheld };
 }
 
 function parseMetadataEnvelope(metadata: string | undefined): SessionMetadataEnvelope {

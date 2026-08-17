@@ -107,7 +107,10 @@ import {
   normalizeToolObservation,
   type ToolObservationInput,
 } from './tool-observation.js';
-import { buildSessionMetadataWithIntakeScreening } from './intake-screening-metadata.js';
+import {
+  buildSessionMetadataWithIntakeScreening,
+  resolveIntakeScreeningSessionOutcome,
+} from './intake-screening-metadata.js';
 import { buildSessionMetadataWithMessageAddressing } from './message-addressing.js';
 import type { IntakeEnvelopeSnapshot } from '../../shared/contracts/intake-envelope.js';
 // Type-only structural port: the session layer never imports cogsec runtime code.
@@ -843,10 +846,12 @@ export class SessionManager implements SessionManagerTypeSurface {
           + 'refusing to persist unattributable screening state (fail closed)',
         );
       }
+      const screeningOutcome = resolveIntakeScreeningSessionOutcome(
+        options.intakeEnvelopes,
+        this.intakeScreening.mode,
+      );
       metadata = buildSessionMetadataWithIntakeScreening(previewMetadata, {
-        mode: this.intakeScreening.mode,
-        withheld: this.intakeScreening.mode === 'enforce'
-          && options.intakeEnvelopes.some((snapshot) => snapshot.state === 'quarantined'),
+        ...screeningOutcome,
         envelopes: options.intakeEnvelopes,
       });
     }
@@ -1076,10 +1081,12 @@ export class SessionManager implements SessionManagerTypeSurface {
           + 'refusing to persist unattributable screening state (fail closed)',
         );
       }
+      const screeningOutcome = resolveIntakeScreeningSessionOutcome(
+        options.intakeEnvelopes,
+        this.intakeScreening.mode,
+      );
       metadata = buildSessionMetadataWithIntakeScreening(previewMetadata, {
-        mode: this.intakeScreening.mode,
-        withheld: this.intakeScreening.mode === 'enforce'
-          && options.intakeEnvelopes.some(snapshot => snapshot.state === 'quarantined'),
+        ...screeningOutcome,
         envelopes: options.intakeEnvelopes,
       });
     }

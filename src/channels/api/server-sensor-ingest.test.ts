@@ -2,10 +2,11 @@ import http from 'node:http';
 import net from 'node:net';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fromAny } from '@total-typescript/shoehorn';
-import { EventBus } from '../../shared/event-bus.js';
+import { EventBus, type ExternalTelemetryEvent } from '../../shared/event-bus.js';
 import { ApiServer } from './server.js';
 import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import type { SessionManager } from '../../core/session/manager.js';
+import type { FleetAuthHttpRoutes } from './server/fleet-auth-routes.js';
 
 const TEST_COMPANION_ID = '11111111-1111-4111-8111-111111111111';
 
@@ -73,7 +74,7 @@ describe('ApiServer sensor ingest wiring', () => {
     const port = await allocatePort();
     const eventBus = new EventBus();
     const sensorIngest = {
-      ingestTelemetry: vi.fn(async (event: any) => ({
+      ingestTelemetry: vi.fn(async (event: ExternalTelemetryEvent) => ({
         id: event.id,
         acceptedEventType: event.eventType,
         event,
@@ -112,6 +113,52 @@ describe('ApiServer sensor ingest wiring', () => {
       channelId: 'ops-room',
       scope: 'cluster-a',
       nonce: 'nonce-telemetry-port',
+    }));
+  });
+
+  it('admits the scoped satellite telemetry surface during fleet-auth bootstrap', async () => {
+    const port = await allocatePort();
+    const eventBus = new EventBus();
+    const sensorIngest = {
+      ingestTelemetry: vi.fn(async (event: ExternalTelemetryEvent) => ({
+        id: event.id,
+        acceptedEventType: event.eventType,
+        event,
+      })),
+    };
+    server = new ApiServer({
+      port,
+      companionId: TEST_COMPANION_ID,
+      agentLoop: fromAny<SubstrateAgent>({}),
+      eventBus,
+      sessionManager: fromAny<SessionManager>({}),
+      sensorIngest,
+      satelliteApiKeys: ['dedicated-satellite-key'],
+      fleetAuthBootstrapOnly: true,
+      fleetAuthHttpRoutes: fromAny<FleetAuthHttpRoutes>({
+        applyLifecycleCorsPolicy: () => 'not_applicable',
+        matches: () => false,
+      }),
+    });
+    await server.init();
+    await server.start();
+
+    const res = await request(port, 'POST', '/v1/telemetry/ingest', {
+      source: 'sensor-a',
+      eventType: 'external.telemetry.status',
+      timestamp: new Date().toISOString(),
+      nonce: 'nonce-fleet-telemetry-port',
+      payload: { status: 'green' },
+    }, {
+      Authorization: 'Bearer dedicated-satellite-key',
+    });
+
+    expect(res.status).toBe(202);
+    expect(sensorIngest.ingestTelemetry).toHaveBeenCalledOnce();
+    expect(sensorIngest.ingestTelemetry).toHaveBeenCalledWith(expect.objectContaining({
+      auth: expect.objectContaining({
+        satelliteScoped: true,
+      }),
     }));
   });
 });

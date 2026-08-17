@@ -1033,9 +1033,10 @@ export function createIntakeScreeningService(
     envelope: IntakeEnvelope,
     action: IntakeDecisionAction,
     semanticTrace: IntakeSemanticScreeningTrace,
+    confirmedFinding: boolean,
     cogSecCaseId?: string,
   ): void {
-    if (!input.surface || action === 'pass') return;
+    if (!input.surface || !confirmedFinding) return;
     const surfacePosture = resolveCogSecSurfacePosture(policy.surfacePostures, input.surface);
     if (surfacePosture.profile !== 'shadow_full') return;
     const sourceChannelId = input.sourceChannelId?.trim();
@@ -1339,11 +1340,14 @@ export function createIntakeScreeningService(
       priorSignals,
     );
     if (!postEscalationPass) {
+      const semanticFailure = observability.semanticTrace.l2.status === 'failed_closed'
+        || observability.semanticTrace.l3.status === 'failed_closed';
       emitInlineShadowFinding(
         input,
         envelope,
         screenedDecision.action,
         observability.semanticTrace,
+        screenedDecision.action !== 'pass' && !semanticFailure,
       );
     }
 
@@ -1647,6 +1651,7 @@ export function createIntakeScreeningService(
           final.envelope,
           final.action,
           observability.semanticTrace,
+          observability.semanticTrace.l3.status === 'flagged',
           final.cogSecCaseId,
         );
         return {

@@ -41,6 +41,8 @@ export interface IcpInitiationSourceRequest {
   currentRoomChannelId?: string;
   /** Durable source owner identity (thought/follow-up/turn/tool-call tuple). */
   sourceRecordId: string;
+  /** Actual sustained fire time; valid only for the felt_impulse source. */
+  feltImpulseFiredAtMs?: number;
   /** Durable intention owner; stable when a scheduler action is recreated. */
   pendingFollowUpId?: string;
   /** Private companion-local motivation. Never projected to the gateway. */

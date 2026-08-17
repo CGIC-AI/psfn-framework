@@ -19,7 +19,7 @@ import {
   type IcpInitiationCandidateStatus,
 } from './initiation-candidate.js';
 import { createIcpCandidateClaimRecovery } from './candidate-lifecycle-recovery.js';
-import { parseFeltImpulseCorrelationFiredAtMs } from './felt-impulse-funnel.js';
+import { parseFeltImpulseCorrelationFirstCrossingMs } from './felt-impulse-funnel.js';
 import {
   deriveIcpSourceIdentity,
   deterministicIcpUuid,
@@ -362,16 +362,31 @@ export function createIcpInitiationSourceRuntime(
             claimToken,
             claimExpiresAtMs: Date.now() + producerClaimLeaseMs,
           };
-          candidate = request.source === 'felt_impulse'
-            ? await claimStore.createFeltImpulse(proposed, claim, {
+          if (request.feltImpulseFiredAtMs !== undefined && request.source !== 'felt_impulse') {
+            throw new Error('feltImpulseFiredAtMs is valid only for felt_impulse initiation');
+          }
+          if (request.source === 'felt_impulse') {
+            const firstCrossingMs = parseFeltImpulseCorrelationFirstCrossingMs(
+              request.sourceRecordId,
+            );
+            const firedAtMs = request.feltImpulseFiredAtMs;
+            if (typeof firedAtMs !== 'number'
+              || !Number.isSafeInteger(firedAtMs)
+              || firedAtMs < firstCrossingMs) {
+              throw new Error('Felt-impulse initiation requires its bounded sustained fire time');
+            }
+            candidate = await claimStore.createFeltImpulse(proposed, claim, {
                 correlationId: request.sourceRecordId,
-                firedAtMs: parseFeltImpulseCorrelationFiredAtMs(request.sourceRecordId),
+                firstCrossingMs,
+                firedAtMs,
                 recordedAtMs: currentNow,
                 outcome: 'candidate_linked',
                 candidateId: proposed.candidateId,
                 candidateOutcome: 'submitted',
-              })
-            : await claimStore.create(proposed, claim);
+              });
+          } else {
+            candidate = await claimStore.create(proposed, claim);
+          }
           lifecycleClaim = claim;
         } else {
           candidate = await dependencies.store.createCandidate(proposed);

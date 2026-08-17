@@ -4,6 +4,7 @@ const FELT_IMPULSE_CORRELATION_PREFIX = 'felt-impulse:would_message:';
 
 interface IcpFeltImpulseFunnelRecordBase {
   correlationId: string;
+  firstCrossingMs: number;
   firedAtMs: number;
   recordedAtMs: number;
 }
@@ -65,11 +66,11 @@ function requireTimestamp(value: number, field: string): number {
 }
 
 export function requireFeltImpulseCorrelationId(value: string): string {
-  parseFeltImpulseCorrelationFiredAtMs(value);
+  parseFeltImpulseCorrelationFirstCrossingMs(value);
   return value;
 }
 
-export function parseFeltImpulseCorrelationFiredAtMs(value: string): number {
+export function parseFeltImpulseCorrelationFirstCrossingMs(value: string): number {
   const suffix = value.startsWith(FELT_IMPULSE_CORRELATION_PREFIX)
     ? value.slice(FELT_IMPULSE_CORRELATION_PREFIX.length)
     : '';
@@ -84,12 +85,17 @@ export function parseIcpFeltImpulseFunnelRecord(
   input: IcpFeltImpulseFunnelRecord,
 ): IcpFeltImpulseFunnelRecord {
   const correlationId = requireFeltImpulseCorrelationId(input.correlationId);
+  const firstCrossingMs = requireTimestamp(input.firstCrossingMs, 'firstCrossingMs');
   const firedAtMs = requireTimestamp(input.firedAtMs, 'firedAtMs');
-  if (parseFeltImpulseCorrelationFiredAtMs(correlationId) !== firedAtMs) {
-    throw new Error('Felt-impulse correlationId must encode firedAtMs');
+  if (parseFeltImpulseCorrelationFirstCrossingMs(correlationId) !== firstCrossingMs) {
+    throw new Error('Felt-impulse correlationId must encode firstCrossingMs');
+  }
+  if (firedAtMs < firstCrossingMs) {
+    throw new Error('Felt-impulse firedAtMs must not precede firstCrossingMs');
   }
   const base = {
     correlationId,
+    firstCrossingMs,
     firedAtMs,
     recordedAtMs: requireTimestamp(input.recordedAtMs, 'recordedAtMs'),
   };

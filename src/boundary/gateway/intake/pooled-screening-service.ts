@@ -52,7 +52,9 @@ import { COGSEC_DECISION_REASON_MAX_CHARS } from '../../../core/cogsec/intake/sc
 import {
   cogSecVectorForProvenance,
   resolveCogSecProvenanceClass,
+  resolveCogSecSurfacePosture,
   type CogSecMode,
+  type IntakeEnforcementPosture,
 } from '../../../shared/contracts/cogsec-mode.js';
 import {
   ScreeningPoolCancelledError,
@@ -238,6 +240,14 @@ export function createPooledIntakeScreeningService(
         );
       } catch (error) {
         const reason = describePoolFailure(error);
+        let failureMode: IntakeEnforcementPosture = mode;
+        if (input.surface) {
+          const surfacePosture = resolveCogSecSurfacePosture(
+            policy.surfacePostures,
+            input.surface,
+          );
+          failureMode = surfacePosture.enforces ? 'enforce' : 'shadow';
+        }
         options.onFailClosed?.({
           stage: 'escalation',
           sourceClass: input.sourceClass,
@@ -247,7 +257,7 @@ export function createPooledIntakeScreeningService(
         return synthesizeFailClosedScreeningResult(
           text,
           input,
-          mode,
+          failureMode,
           underlying.globalMode,
           reason,
           now,

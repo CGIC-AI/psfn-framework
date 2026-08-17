@@ -3,6 +3,7 @@ import { createComponentLogger } from '../../shared/logger.js';
 import { createIcpFeltImpulseInitiationAdapter } from '../../core/icp/felt-impulse-initiation.js';
 import type { KnownCompanionPeerAvailability } from '../../core/icp/agent-facing-autonomy.js';
 import type { IcpFeltImpulseFunnelStorePort } from '../../core/icp/felt-impulse-funnel.js';
+import { parseFeltImpulseCorrelationFirstCrossingMs } from '../../core/icp/felt-impulse-funnel.js';
 import { createIcpInitiationSourceRuntime } from '../../core/icp/initiation-source-runtime.js';
 import { createLlmIcpInitiationConsentEvaluator } from '../../core/icp/initiation-consent-evaluator.js';
 import { createIcpIntentionCandidateAdapter } from '../../core/icp/intention-candidate-adapter.js';
@@ -171,6 +172,7 @@ export function wireIcpInitiationSources(
       if (!existing) {
         await input.feltImpulseFunnelStore.recordOutcome({
           correlationId: signal.correlationId,
+          firstCrossingMs: parseFeltImpulseCorrelationFirstCrossingMs(signal.correlationId),
           firedAtMs: signal.firedAtMs,
           recordedAtMs: Date.now(),
           outcome: durableOutcome,

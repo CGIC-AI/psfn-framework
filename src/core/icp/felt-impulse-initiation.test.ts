@@ -100,6 +100,7 @@ describe('felt-impulse ICP initiation (psfn-framework-hrmrq.34, operator ruling 
     await expect(first.onLeverSignal(signal())).resolves.toMatchObject({ kind: 'submitted' });
     expect(funnelStore.recordOutcome).toHaveBeenCalledWith({
       correlationId: `felt-impulse:would_message:${T0}`,
+      firstCrossingMs: T0,
       firedAtMs: T0,
       recordedAtMs: T0,
       outcome: 'candidate_linked',
@@ -129,6 +130,7 @@ describe('felt-impulse ICP initiation (psfn-framework-hrmrq.34, operator ruling 
     const candidateId = '44444444-4444-4444-8444-444444444444';
     const durable = {
       correlationId: `felt-impulse:would_message:${T0}`,
+      firstCrossingMs: T0,
       firedAtMs: T0,
       recordedAtMs: T0,
       outcome: 'candidate_linked' as const,
@@ -195,6 +197,7 @@ describe('felt-impulse ICP initiation (psfn-framework-hrmrq.34, operator ruling 
     await expect(first.onLeverSignal(signal())).resolves.toEqual({ kind: 'no_eligible_peer' });
     expect(funnelStore.recordOutcome).toHaveBeenCalledWith({
       correlationId: `felt-impulse:would_message:${T0}`,
+      firstCrossingMs: T0,
       firedAtMs: T0,
       recordedAtMs: T0,
       outcome: 'no_eligible_peer',
@@ -219,22 +222,27 @@ describe('felt-impulse ICP initiation (psfn-framework-hrmrq.34, operator ruling 
   });
 
   it('submits an ICP candidate with source felt_impulse when the lever fires', async () => {
+    const firedAtMs = T0 + 30 * 60_000;
     const submit = vi.fn(async () => submittedResult());
     const adapter = createIcpFeltImpulseInitiationAdapter({
       sourceRuntime: { accept: submit },
       peers: { listKnownPeerAvailability: async () => [peerOf('peer-a')] },
       isAuthorized: () => true,
       funnelStore: volatileFunnelStore(),
-      now: () => T0,
+      now: () => firedAtMs,
     });
 
-    const outcome = await adapter.onLeverSignal(signal());
+    const outcome = await adapter.onLeverSignal(signal(
+      firedAtMs,
+      `felt-impulse:would_message:${T0}`,
+    ));
     expect(outcome.kind).toBe('submitted');
     expect(submit).toHaveBeenCalledWith({
       source: 'felt_impulse',
       peerContactId: 'peer-a',
       preferredChannel: 'dm',
       sourceRecordId: `felt-impulse:would_message:${T0}`,
+      feltImpulseFiredAtMs: firedAtMs,
       reasonSummary: 'Felt social impulse: the affect model sustained wanting to reach out.',
       cause: { kind: 'independent' },
     });
@@ -330,6 +338,7 @@ describe('felt-impulse ICP initiation (psfn-framework-hrmrq.34, operator ruling 
     expect(list).not.toHaveBeenCalled();
     expect(funnelStore.recordOutcome).toHaveBeenCalledWith({
       correlationId: `felt-impulse:would_message:${T0}`,
+      firstCrossingMs: T0,
       firedAtMs: T0,
       recordedAtMs: T0,
       outcome: 'not_authorized',
@@ -365,6 +374,7 @@ describe('felt-impulse ICP initiation (psfn-framework-hrmrq.34, operator ruling 
     expect(submit).toHaveBeenCalledTimes(1);
     expect(records.get(`felt-impulse:would_message:${nowMs}`)).toEqual({
       correlationId: `felt-impulse:would_message:${nowMs}`,
+      firstCrossingMs: nowMs,
       firedAtMs: nowMs,
       recordedAtMs: nowMs,
       outcome: 'throttled',

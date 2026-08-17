@@ -185,11 +185,12 @@ export class PostgresIcpInitiationCandidateStore implements IcpInitiationCandida
       if (!row) throw new Error(`Failed to create ICP candidate ${candidate.candidateId}`);
       await client.query(`
         INSERT INTO icp_felt_impulse_funnel_outcomes (
-          correlation_id, fired_at_ms, recorded_at_ms, outcome,
+          correlation_id, first_crossing_ms, fired_at_ms, recorded_at_ms, outcome,
           next_eligible_at_ms, candidate_id, candidate_outcome
-        ) VALUES ($1, $2, $3, 'candidate_linked', NULL, $4, 'submitted')
+        ) VALUES ($1, $2, $3, $4, 'candidate_linked', NULL, $5, 'submitted')
       `, [
         outcome.correlationId,
+        outcome.firstCrossingMs,
         outcome.firedAtMs,
         outcome.recordedAtMs,
         outcome.candidateId,

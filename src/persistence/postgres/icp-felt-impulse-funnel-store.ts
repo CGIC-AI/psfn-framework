@@ -21,6 +21,7 @@ import { requireSafeInteger } from './row-guards.js';
 
 interface FunnelRow extends QueryResultRow {
   correlation_id: string;
+  first_crossing_ms: string | number;
   fired_at_ms: string | number;
   recorded_at_ms: string | number;
   outcome: string;
@@ -41,12 +42,13 @@ interface FunnelCountRow extends QueryResultRow {
 }
 
 const FUNNEL_COLUMNS = `
-  correlation_id, fired_at_ms, recorded_at_ms, outcome,
+  correlation_id, first_crossing_ms, fired_at_ms, recorded_at_ms, outcome,
   next_eligible_at_ms, candidate_id, candidate_outcome
 `;
 
 const FUNNEL_PROJECTION_COLUMNS = `
-  funnel.correlation_id, funnel.fired_at_ms, funnel.recorded_at_ms, funnel.outcome,
+  funnel.correlation_id, funnel.first_crossing_ms, funnel.fired_at_ms,
+  funnel.recorded_at_ms, funnel.outcome,
   funnel.next_eligible_at_ms, funnel.candidate_id, funnel.candidate_outcome
 `;
 
@@ -65,6 +67,10 @@ const LIFECYCLE_OUTCOMES = new Set<IcpFeltImpulseLifecycleOutcome>([
 function mapRecord(row: FunnelRow): IcpFeltImpulseFunnelRecord {
   const base = {
     correlationId: row.correlation_id,
+    firstCrossingMs: requireSafeInteger(
+      row.first_crossing_ms,
+      'feltImpulse.firstCrossingMs',
+    ),
     firedAtMs: requireSafeInteger(row.fired_at_ms, 'feltImpulse.firedAtMs'),
     recordedAtMs: requireSafeInteger(row.recorded_at_ms, 'feltImpulse.recordedAtMs'),
   };
@@ -154,14 +160,15 @@ export class PostgresIcpFeltImpulseFunnelStore implements IcpFeltImpulseFunnelSt
     const record = parseIcpFeltImpulseFunnelRecord(input);
     const row = await queryOne<FunnelRow>(this.pool, `
       INSERT INTO icp_felt_impulse_funnel_outcomes (
-        correlation_id, fired_at_ms, recorded_at_ms, outcome,
+        correlation_id, first_crossing_ms, fired_at_ms, recorded_at_ms, outcome,
         next_eligible_at_ms, candidate_id, candidate_outcome
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
       ON CONFLICT (correlation_id) DO UPDATE
       SET correlation_id = EXCLUDED.correlation_id
       RETURNING ${FUNNEL_COLUMNS}
     `, [
       record.correlationId,
+      record.firstCrossingMs,
       record.firedAtMs,
       record.recordedAtMs,
       record.outcome,

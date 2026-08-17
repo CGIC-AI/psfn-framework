@@ -2467,6 +2467,81 @@ describe('GatewayServer multi-companion routing (flag on)', () => {
     }
   });
 
+  it('wakes only the server-addressed companion for authenticated inbound Hub chat', async () => {
+    const companionId = '22222222-2222-4222-8222-222222222222';
+    const { server, connect } = await setupServer({
+      ...withSharedSatelliteEligibility(createMinimalOptions()),
+      icpAutonomyStore: fromAny({
+        getAvailability: vi.fn(async () => ({
+          companionId,
+          state: 'resting',
+          issuedAtMs: Date.now() - 1_000,
+          expiresAtMs: Date.now() + 60_000,
+          source: 'runtime',
+          revision: 1,
+        })),
+      }),
+      sharedSatelliteQuietHoursAllows: () => false,
+      multiCompanion: multiCompanion({ api: companionId }),
+    });
+    const connection = await connect((message, emit) => {
+      if (!message.id || typeof message.method !== 'string') return;
+      if (message.method === 'satellite.response.eligibility') {
+        emit({ jsonrpc: '2.0', id: message.id, result: { fatigueAllows: true } });
+      }
+      if (message.method === 'api.chat.completion') {
+        emit({
+          jsonrpc: '2.0',
+          id: message.id,
+          result: {
+            ok: true,
+            response: {
+              content: 'awake response',
+              channelId: 'satellite:voice:session-sat-app',
+              inputTokens: 2,
+              outputTokens: 2,
+            },
+          },
+        });
+      }
+    });
+    await identifyAgent(connection, companionId, 1);
+    const satellite = makeSatelliteVoiceMessage('sat-app', companionId).routing.satellite;
+    const params = (requestId: string) => ({
+      requestId,
+      request: {
+        model: 'test-model',
+        messages: [{ role: 'user' as const, content: 'hello' }],
+      },
+      principal: { id: 'principal-1', mode: 'api_key' as const },
+      headers: {},
+    });
+
+    await expect(server.requestSharedSatelliteChatCompletion({
+      satellite,
+      explicitHumanInboundCompanionId: companionId,
+      canonicalContactId: 'contact-partner',
+      channelId: 'satellite:voice:session-sat-app',
+      params: params('authenticated-hub-turn'),
+      timeoutMs: 250,
+    })).resolves.toMatchObject({
+      ok: true,
+      response: { content: 'awake response' },
+    });
+
+    await expect(server.requestSharedSatelliteChatCompletion({
+      satellite,
+      canonicalContactId: 'contact-partner',
+      channelId: 'satellite:voice:session-sat-app',
+      params: params('ordinary-shared-turn'),
+      timeoutMs: 250,
+    })).resolves.toMatchObject({
+      ok: true,
+      response: { disposition: 'no_op', content: '' },
+    });
+    expect(methodFrames(connection, 'api.chat.completion')).toHaveLength(1);
+  });
+
   it('fails closed when multi-companion satellite voice has no shared-device policy', async () => {
     const { server, connect } = await setupServer({
       ...createMinimalOptions(),

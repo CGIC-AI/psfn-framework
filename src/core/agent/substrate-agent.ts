@@ -1140,6 +1140,11 @@ export class SubstrateAgent {
     return this.toolRuntimeFacade.getActiveTurnIntakeEnvelopes();
   }
 
+  /** Content-free route identity for sink-denial correlation during the active turn. */
+  getActiveTurnSessionIdentity(): TurnSessionIdentity | null {
+    return this.turnSupportRuntime.getActiveTurnSessionIdentity();
+  }
+
   getToolCatalogSnapshot(): RuntimeToolCatalogSnapshot {
     return this.toolRuntimeFacade.getToolCatalogSnapshot();
   }

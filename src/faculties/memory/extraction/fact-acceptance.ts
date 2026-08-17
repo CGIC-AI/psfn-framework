@@ -176,6 +176,9 @@ export function buildAcceptedFactCandidates(
         triggerReason: input.triggerReason,
         factIndex: index,
         factType: fact.type,
+      }, {
+        correlationRef: `fact:${String(index)}`,
+        sourceChannelId: input.channelId,
       });
     }
 

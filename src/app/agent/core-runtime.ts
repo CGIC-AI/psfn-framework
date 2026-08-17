@@ -116,7 +116,10 @@ import { IntrospectionConsentStore } from '../../faculties/introspection/consent
 import { IntrospectionTurnSensitivityDecisions } from '../../faculties/introspection/turn-sensitivity.js';
 import { ContactBlockListStore } from '../../core/cogsec/contact-block-list.js';
 import { CogSecEventStore } from '../../core/cogsec/events.js';
-import { createIntakeSinkGateIncidentRecorder } from '../../core/cogsec/intake/sink-gate-incidents.js';
+import {
+  createIntakeSinkGateIncidentRecorder,
+  createOrdinaryIntakeSinkDenialRecorder,
+} from '../../core/cogsec/intake/sink-gate-incidents.js';
 import { maybeCreateIntakeSinkGate } from '../../core/cogsec/intake/sink-gates.js';
 import { maybeCreateIntakeScreeningService } from '../../core/cogsec/intake/screening.js';
 import { loadIntakePolicyConfig } from '../../system/config/intake-policy-config.js';
@@ -471,6 +474,13 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   const intakeSinkGate = maybeCreateIntakeSinkGate({
     policy: intakePolicy,
     actor: 'agent:intake-sink-gate',
+    onOrdinarySinkDenial: createOrdinaryIntakeSinkDenialRecorder({
+      cogSecEvents: () => new CogSecEventStore(
+        resolveCogSecEventsPath(pathSnapshot.companionDataDir),
+      ),
+      notifier: operatorNotifier,
+      companionName: card.data.name,
+    }),
     onBlockedEgressTrifecta: createIntakeSinkGateIncidentRecorder({
       cogSecEvents: () => new CogSecEventStore(
         resolveCogSecEventsPath(pathSnapshot.companionDataDir),
@@ -489,6 +499,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     // persona, wiki, and trust mutations all share that canonical instance.
     getIntakeScreening: () => sessionManager.intakeScreening,
     getActiveTurnIntakeEnvelopes: () => agentLoop.getActiveTurnIntakeEnvelopes(),
+    getActiveTurnSessionIdentity: () => agentLoop.getActiveTurnSessionIdentity(),
   };
   if (intakeSinkGate) {
     log.info('Intake sink gates wired across consequential sinks', {
@@ -709,6 +720,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
       getIntakeSinkGate: () => intakeSinkGate,
       getIntakeScreening: () => skillWriteIntakeScreening,
       getActiveTurnIntakeEnvelopes: () => agentLoop.getActiveTurnIntakeEnvelopes(),
+      getActiveTurnSessionIdentity: () => agentLoop.getActiveTurnSessionIdentity(),
     },
   );
   registerWebTools(agentLoop, new GatewayWebFetchOps(gatewayOps), {

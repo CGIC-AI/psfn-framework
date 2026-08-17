@@ -587,6 +587,9 @@ export class ShardFoldReviewController implements ShardFoldReviewPort {
       shardId: record.shardId,
       outputId: item.output.outputId,
       phase: 'operator_approval',
+    }, {
+      correlationRef: `fold:${record.shardId}:${item.output.outputId}`,
+      sourceChannelId: record.channelId,
     });
     item.intake = {
       ...item.intake,

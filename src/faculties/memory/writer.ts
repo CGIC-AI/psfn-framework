@@ -370,6 +370,17 @@ export class MemoryWriter {
         sourceRef: opts.sourceRef,
         sourceType: opts.sourceType,
         memoryType: opts.type,
+      }, {
+        correlationRef: opts.sourceRef
+          ?? opts.provenance?.requestId
+          ?? opts.provenance?.turnId
+          ?? 'unrouted-memory-write',
+        ...(opts.provenance?.channelId
+          ? { sourceChannelId: opts.provenance.channelId }
+          : {}),
+        ...(opts.provenance?.sessionId
+          ? { logicalSessionId: opts.provenance.sessionId }
+          : {}),
       })
       : undefined;
     const decision = evaluateCogSecMemoryCandidacy({

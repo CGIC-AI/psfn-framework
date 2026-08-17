@@ -41,11 +41,21 @@ export function buildEgressToolGuard(deps: EgressToolGuardDeps): EgressToolGuard
     evaluate: ({ toolName, requiredTokens, params }) => {
       if (!requiredTokens.some(isEgressCapabilityToken)) return null;
       const envelopes = deps.getActiveTurnIntakeEnvelopes();
-      const access = gate.evaluate('tool_egress', envelopes, { toolName });
+      const turnIdentity = deps.getActiveTurnSessionIdentity();
+      const access = gate.evaluate('tool_egress', envelopes, { toolName }, {
+        correlationRef: turnIdentity
+          ? `${turnIdentity.logicalSessionId}:${toolName}`
+          : `unrouted:${toolName}`,
+        ...(turnIdentity
+          ? {
+              sourceChannelId: turnIdentity.sourceChannelId,
+              logicalSessionId: turnIdentity.logicalSessionId,
+            }
+          : {}),
+      });
       let sinkAllowed = access.allowed;
       let sinkReason = access.reason;
       if (sinkAllowed) {
-        const turnIdentity = deps.getActiveTurnSessionIdentity();
         let trifecta;
         try {
           trifecta = gate.assessEgressTrifecta({

@@ -26,7 +26,10 @@ import { createIntakeScreeningService } from './screening.js';
 import { createIntakeL1Scanner } from './scanners/index.js';
 import { CogSecEventStore } from '../events.js';
 import { listOperatorVisibleCogSecEvents } from '../safe-log.js';
-import { createIntakeSinkGateIncidentRecorder } from './sink-gate-incidents.js';
+import {
+  createIntakeSinkGateIncidentRecorder,
+  createOrdinaryIntakeSinkDenialRecorder,
+} from './sink-gate-incidents.js';
 import {
   createIntakeSinkGate,
   evaluateEgressTrifecta,
@@ -140,6 +143,153 @@ describe('evaluateSinkAccess (htm9.3)', () => {
       }));
     },
   );
+
+  it.each(INTAKE_SINKS)(
+    'records and alerts once for a replayed enforce-mode denial at %s',
+    async (sink) => {
+      const dir = mkdtempSync(join(tmpdir(), 'psfn-ordinary-sink-denial-'));
+      try {
+        const eventStorePath = join(dir, 'cogsec-events.json');
+        const notify = vi.fn(async () => ({ status: 'sent' as const, topic: 'operator-alerts' }));
+        const gate = createIntakeSinkGate({
+          policy: makePolicy('strict'),
+          actor: 'test:per-sink-enforce',
+          onOrdinarySinkDenial: createOrdinaryIntakeSinkDenialRecorder({
+            cogSecEvents: () => new CogSecEventStore(eventStorePath),
+            notifier: { notify },
+            companionName: 'Test Companion',
+          }),
+        });
+        const envelope = makeSnapshot({
+          envelopeId: `deny-${sink}`,
+          state: 'quarantined',
+        });
+
+        const first = gate.evaluate(sink, [envelope], {}, {
+          correlationRef: `attempt-${sink}`,
+          sourceChannelId: 'discord:room-1',
+          logicalSessionId: 'session-1',
+        });
+        const replay = gate.evaluate(sink, [envelope], {}, {
+          correlationRef: `attempt-${sink}`,
+          sourceChannelId: 'discord:room-1',
+          logicalSessionId: 'session-1',
+        });
+
+        expect(first).toMatchObject({ verdict: 'deny', allowed: false });
+        expect(replay).toMatchObject({ verdict: 'deny', allowed: false });
+        await vi.waitFor(() => {
+          const events = new CogSecEventStore(eventStorePath).listEvents();
+          expect(events[0]?.safeAgentSummary).toContain('Operator alert delivery: delivered.');
+        });
+        expect(notify).toHaveBeenCalledOnce();
+        expect(notify).toHaveBeenCalledWith(expect.objectContaining({
+          sender: {
+            kind: 'system',
+            provenance: 'system.operator_alert.intake_sink_denial',
+          },
+        }));
+        const events = new CogSecEventStore(eventStorePath).listEvents();
+        expect(events).toHaveLength(1);
+        expect(events[0]).toMatchObject({
+          type: 'intake_firewall',
+          severity: 'high',
+          status: 'open',
+          sourceChannelId: 'discord:room-1',
+          affectedLogicalSessionIds: ['session-1'],
+        });
+        expect(events[0].safeAgentSummary).toContain('Operator alert delivery: delivered.');
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each(INTAKE_SINKS)(
+    'keeps shadow-mode denial telemetry-only at %s',
+    (sink) => {
+      const onOrdinarySinkDenial = vi.fn();
+      const gate = createIntakeSinkGate({
+        policy: makePolicy('shadow'),
+        actor: 'test:per-sink-shadow',
+        onOrdinarySinkDenial,
+      });
+
+      const decision = gate.evaluate(
+        sink,
+        [makeSnapshot({ state: 'quarantined' })],
+        {},
+        { correlationRef: `shadow-${sink}` },
+      );
+
+      expect(decision).toMatchObject({ verdict: 'deny', allowed: true, mode: 'shadow' });
+      expect(onOrdinarySinkDenial).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(INTAKE_SINKS)(
+    'records failed operator-alert evidence at %s without changing the deny decision',
+    async (sink) => {
+      const dir = mkdtempSync(join(tmpdir(), 'psfn-ordinary-sink-alert-failure-'));
+      try {
+        const eventStorePath = join(dir, 'cogsec-events.json');
+        const gate = createIntakeSinkGate({
+          policy: makePolicy('strict'),
+          actor: 'test:per-sink-failed-alert',
+          onOrdinarySinkDenial: createOrdinaryIntakeSinkDenialRecorder({
+            cogSecEvents: () => new CogSecEventStore(eventStorePath),
+            notifier: { notify: vi.fn().mockRejectedValue(new Error('transport offline')) },
+            companionName: 'Test Companion',
+          }),
+        });
+
+        const decision = gate.evaluate(
+          sink,
+          [makeSnapshot({ envelopeId: `failed-${sink}`, state: 'quarantined' })],
+          {},
+          { correlationRef: `failed-${sink}` },
+        );
+
+        expect(decision).toMatchObject({ verdict: 'deny', allowed: false });
+        await vi.waitFor(() => {
+          const events = new CogSecEventStore(eventStorePath).listEvents();
+          expect(events).toHaveLength(1);
+          expect(events[0]?.safeAgentSummary).toContain('Operator alert delivery: failed.');
+        });
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it('passes only validated content-free denial context to the recorder', () => {
+    const onOrdinarySinkDenial = vi.fn(() => ({
+      caseId: 'cogsec_sinkdenial_0123456789abcdef0123456789abcdef01234567',
+      incident: 'created' as const,
+      notification: Promise.resolve({ status: 'delivered' as const }),
+    }));
+    const gate = createIntakeSinkGate({
+      policy: makePolicy('strict'),
+      actor: 'test:content-free-context',
+      onOrdinarySinkDenial,
+    });
+
+    gate.evaluate('memory_write', [makeSnapshot({ state: 'quarantined' })], {
+      unsafeAuditOnlyValue: 'secret payload must not cross the incident seam',
+    }, {
+      correlationRef: 'attempt-1',
+      sourceChannelId: 'discord:room-1',
+      logicalSessionId: 'session-1',
+    });
+
+    const denial = onOrdinarySinkDenial.mock.calls[0]?.[0];
+    expect(denial?.context).toEqual({
+      correlationId: expect.stringMatching(/^cogsec_sinkdenial_[a-f0-9]{40}$/u),
+      sourceChannelId: 'discord:room-1',
+      logicalSessionId: 'session-1',
+    });
+    expect(JSON.stringify(denial)).not.toContain('secret payload');
+  });
 
   it('denies quarantined content at EVERY sink in enforce mode (quarantine invisibility)', () => {
     const policy = makePolicy('strict');

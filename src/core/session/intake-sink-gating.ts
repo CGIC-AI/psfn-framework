@@ -46,6 +46,10 @@ export interface SelfAuthoredMutationIntakeRuntime {
   getIntakeSinkGate: () => IntakeSinkGate | null;
   getIntakeScreening: () => IntakeScreeningService | null;
   getActiveTurnIntakeEnvelopes: () => readonly IntakeEnvelopeSnapshot[];
+  getActiveTurnSessionIdentity?: () => {
+    readonly sourceChannelId: string;
+    readonly logicalSessionId: string;
+  } | null;
 }
 
 /** Explicit dependency for tool compositions where the intake firewall is off. */
@@ -170,12 +174,21 @@ export async function screenSelfAuthoredMutation(
 
   const activeTurnEnvelopes = intake.getActiveTurnIntakeEnvelopes();
   const envelopes = [...activeTurnEnvelopes, ...proposedContentEnvelopes];
+  const turnIdentity = intake.getActiveTurnSessionIdentity?.() ?? null;
   const decision = gate.evaluate(sink, envelopes, {
     tool: context.tool,
     action: context.action,
     enforcementPosture: personaAuditOnly ? 'audit_only' : 'enforce',
     activeTurnEnvelopeCount: activeTurnEnvelopes.length,
     screenedFieldCount: proposedContentEnvelopes.length,
+  }, {
+    correlationRef: `${context.tool}:${context.action}`,
+    ...(turnIdentity
+      ? {
+          sourceChannelId: turnIdentity.sourceChannelId,
+          logicalSessionId: turnIdentity.logicalSessionId,
+        }
+      : {}),
   });
   if (decision.unscreened) {
     throw new Error(
@@ -252,6 +265,9 @@ export function applyPromptAssemblySinkGate(
       entryId: entry.id,
       entryRole: entry.role,
       recordedMode: screening.mode,
+    }, {
+      correlationRef: `entry:${String(entry.id)}`,
+      sourceChannelId: context.channelId,
     });
     if (decision.verdict === 'deny') {
       summary.deniedEntryIds.push(entry.id);

@@ -50,7 +50,7 @@ export const COGSEC_CHANNEL_CLASSES = [
   'group_chat',
   'public_channel',
 ] as const;
-export type CogSecChannelClass = typeof COGSEC_CHANNEL_CLASSES[number];
+type CogSecChannelClass = typeof COGSEC_CHANNEL_CLASSES[number];
 
 /** Closed set of non-channel workflows governed by the CogSec owner file. */
 export const COGSEC_WORKFLOWS = [
@@ -58,7 +58,7 @@ export const COGSEC_WORKFLOWS = [
   'web_fetch',
   'web_search',
 ] as const;
-export type CogSecWorkflow = typeof COGSEC_WORKFLOWS[number];
+type CogSecWorkflow = typeof COGSEC_WORKFLOWS[number];
 
 /**
  * Surface profiles intentionally combine enforcement and deep-screen timing:

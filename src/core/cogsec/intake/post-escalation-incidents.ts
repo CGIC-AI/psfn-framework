@@ -17,7 +17,7 @@ export interface PostEscalationIncidentRecorderDeps {
   companionName: string;
 }
 
-export interface PostEscalationIncidentEvidence {
+interface PostEscalationIncidentEvidence {
   caseId: string | null;
   notification: 'delivered' | 'failed' | 'unconfigured' | 'not_required';
   durableEvidence: 'recorded' | 'failed' | 'not_required';

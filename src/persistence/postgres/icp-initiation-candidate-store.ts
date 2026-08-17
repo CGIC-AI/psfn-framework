@@ -11,7 +11,7 @@ import type {
 } from '../../core/icp/autonomy-store-ports.js';
 import {
   ICP_INITIATION_CANDIDATE_STATUSES,
-  MAX_ICP_CANDIDATE_CLAIM_LEASE_MS,
+  MAX_ICP_CANDIDATE_TTL_MS,
   assertIcpInitiationCandidateStatusTransition,
   parseIcpInitiationCandidate,
   type IcpInitiationCandidate,
@@ -233,9 +233,9 @@ export class PostgresIcpInitiationCandidateStore implements IcpInitiationCandida
     }
     if (!Number.isSafeInteger(options.claimLeaseMs)
       || options.claimLeaseMs < 1
-      || options.claimLeaseMs > MAX_ICP_CANDIDATE_CLAIM_LEASE_MS) {
+      || options.claimLeaseMs > MAX_ICP_CANDIDATE_TTL_MS) {
       throw new Error(
-        `ICP candidate claim lease must be between 1ms and ${MAX_ICP_CANDIDATE_CLAIM_LEASE_MS}ms`,
+        `ICP candidate claim lease must be between 1ms and ${MAX_ICP_CANDIDATE_TTL_MS}ms`,
       );
     }
     const maximumClaimBatchSize = ICP_INITIATION_CANDIDATE_STATUSES.length * 25;

@@ -37,7 +37,7 @@ export type CogSecCaseType =
 export type CogSecSeverity = 'low' | 'medium' | 'high' | 'critical';
 export type CogSecStatus = 'open' | 'planned' | 'applying' | 'applied' | 'failed' | 'superseded';
 export type CogSecAction = 'seal' | 'tombstone' | 'search_exclude' | 'revoke' | 'regenerate' | 'epoch_cut';
-export type CogSecOperatorAlertDeliveryStatus = 'pending' | 'delivered' | 'failed' | 'unconfigured';
+type CogSecOperatorAlertDeliveryStatus = 'pending' | 'delivered' | 'failed' | 'unconfigured';
 
 export type CogSecArtifactClass =
   | 'memories'

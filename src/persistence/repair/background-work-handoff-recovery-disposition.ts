@@ -17,7 +17,7 @@ const log = createComponentLogger('BackgroundWorkHandoffRecoveryDisposition');
 export const BACKGROUND_WORK_HANDOFF_RECOVERY_DISPOSITION_AUDIT_EVENT =
   'background_work_handoff_recovery_disposition';
 
-export class BackgroundWorkHandoffRecoveryDispositionUnresolvedError extends Error {
+class BackgroundWorkHandoffRecoveryDispositionUnresolvedError extends Error {
   readonly code = 'EUNRESOLVED';
 
   constructor() {

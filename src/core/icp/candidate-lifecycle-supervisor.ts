@@ -13,7 +13,7 @@ export interface IcpCandidateLifecycleSupervisorOptions {
   now?: () => number;
 }
 
-export interface IcpCandidateLifecycleSupervisorPass {
+interface IcpCandidateLifecycleSupervisorPass {
   claimed: number;
   completed: number;
   failed: number;

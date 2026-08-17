@@ -25,6 +25,7 @@ import { createFilesystemSessionArchivePort } from '../journals/journal/port.js'
 import type { QuarantinedJournalEntry } from '../journals/journal/types.js';
 import { primeChannelIndexFromDisk } from '../sessions/store/channel-index.js';
 import { discoverSessionFileChains } from '../sessions/store/session-file-chains.js';
+import { fingerprintJournalArchiveGeneration } from '../sessions/store/journal-chain-runtime.js';
 import { withSessionJournalWriteLock } from '../sessions/store/session-journal-write-lock.js';
 import { CHANNEL_INDEX_FILENAME } from '../sessions/store-primitives.js';
 
@@ -67,6 +68,15 @@ export interface SessionIntegrityRepairAuditSink {
  */
 export const SESSION_INTEGRITY_REPAIR_AUDIT_EVENT = 'session_integrity_repair';
 
+export interface SessionIntegrityRepairJournalTarget {
+  /** Trusted physical channel identity, separate from any routed logical owner. */
+  channelId: string;
+  /** Exact discovered L0 file chain selected for repair. */
+  filePaths: readonly string[];
+  /** Content-free generation identity that must still match under the write lock. */
+  expectedArchiveFingerprint: string;
+}
+
 interface RepairParamsBase {
   sessionsDir: string;
   backupDir: string;
@@ -77,6 +87,12 @@ interface RepairParamsBase {
    * background-work recovery repair to every session journal.
    */
   targetChannelIds?: readonly string[];
+  /**
+   * Exact-chain mode for an evidence-bound automatic repair. Mutually exclusive
+   * with `targetChannelIds`; unlike the channel allowlist it cannot widen to a
+   * sibling session chain owned by the same physical channel.
+   */
+  targetJournalChain?: SessionIntegrityRepairJournalTarget;
   /**
    * Required operator reason for this run (fail closed on blank). Recorded in
    * the durable audit event so every re-sign carries its justification.
@@ -105,6 +121,56 @@ function normalizeTargetChannelIds(
     throw new Error('Target channel ids must contain at least one non-empty channel id');
   }
   return new Set(normalized);
+}
+
+interface NormalizedSessionIntegrityRepairJournalTarget {
+  channelId: string;
+  filePaths: readonly string[];
+  expectedArchiveFingerprint: string;
+}
+
+function normalizeTargetJournalChain(
+  target: SessionIntegrityRepairJournalTarget | undefined,
+): NormalizedSessionIntegrityRepairJournalTarget | null {
+  if (!target) return null;
+  const channelId = target.channelId.trim();
+  if (
+    !channelId
+    || target.filePaths.length === 0
+    || target.filePaths.some(path => typeof path !== 'string' || path.trim().length === 0)
+  ) {
+    throw new Error('Exact journal target must contain a physical channel and file chain');
+  }
+  const filePaths = target.filePaths.map(path => resolve(path));
+  if (new Set(filePaths).size !== filePaths.length) {
+    throw new Error('Exact journal target must not contain duplicate archive paths');
+  }
+  if (!/^[a-f0-9]{64}$/u.test(target.expectedArchiveFingerprint)) {
+    throw new Error('Exact journal target must contain a valid archive fingerprint');
+  }
+  return {
+    channelId,
+    filePaths,
+    expectedArchiveFingerprint: target.expectedArchiveFingerprint,
+  };
+}
+
+function hasExactFileChain(
+  actualPaths: readonly string[],
+  expectedPaths: readonly string[],
+): boolean {
+  return actualPaths.length === expectedPaths.length
+    && actualPaths.every((path, index) => resolve(path) === expectedPaths[index]);
+}
+
+function staleJournalTargetError(cause?: unknown): NodeJS.ErrnoException {
+  const error = new Error(
+    'Exact journal repair target changed before mutation',
+    cause === undefined ? undefined : { cause },
+  ) as NodeJS.ErrnoException;
+  error.name = 'SessionIntegrityRepairTargetChangedError';
+  error.code = 'ESTALE';
+  return error;
 }
 
 function syncFileDurable(filePath: string): void {
@@ -325,6 +391,7 @@ function rewriteJournalChainUnderLockWithProvider(
   sessionsDir: string,
   archivePort: ReturnType<typeof createFilesystemSessionArchivePort>,
   renewLease: () => void,
+  physicalChannelId?: string,
 ): { modifiedEntries: number; modifiedFiles: number; quarantinedRows: number } {
   const parsedByFile = filePaths.map((filePath) => {
     const parsed = parseJournalText(readFileSync(filePath, 'utf-8'));
@@ -399,7 +466,7 @@ function rewriteJournalChainUnderLockWithProvider(
     return signed;
   }));
   const archives = filePaths.map(filePath => archivePort.openArchive(
-    firstEntry.channelId,
+    physicalChannelId ?? firstEntry.channelId,
     filePath,
   ));
   // The chain-rewrite guard re-derives malformed rows from disk and hands them
@@ -447,11 +514,27 @@ function rewriteJournalChain(
   integrityProvider: SessionIntegrityProvider,
   backupDir: string,
   sessionsDir: string,
+  exactTarget?: NormalizedSessionIntegrityRepairJournalTarget,
 ): { modifiedEntries: number; modifiedFiles: number; quarantinedRows: number } {
   const rootPath = filePaths[0];
   if (!rootPath) return { modifiedEntries: 0, modifiedFiles: 0, quarantinedRows: 0 };
   const archivePort = createFilesystemSessionArchivePort();
   return withSessionJournalWriteLock(rootPath, (renewLease) => {
+    if (exactTarget) {
+      let currentFingerprint: string | null;
+      try {
+        const archives = filePaths.map(filePath => (
+          archivePort.openArchive(exactTarget.channelId, filePath)
+        ));
+        currentFingerprint = fingerprintJournalArchiveGeneration(archivePort, archives);
+      } catch (error) {
+        throw staleJournalTargetError(error);
+      }
+      if (currentFingerprint !== exactTarget.expectedArchiveFingerprint) {
+        throw staleJournalTargetError();
+      }
+      renewLease();
+    }
     archivePort.recoverJournalChainRewrite(rootPath);
     return rewriteJournalChainUnderLockWithProvider(
       filePaths,
@@ -460,6 +543,7 @@ function rewriteJournalChain(
       sessionsDir,
       archivePort,
       renewLease,
+      exactTarget?.channelId,
     );
   });
 }
@@ -487,6 +571,10 @@ export function runSessionIntegrityRepair(params: RepairParams): SessionIntegrit
     throw new Error('Session integrity repair requires an integrity provider');
   }
   const targetChannelIds = normalizeTargetChannelIds(params.targetChannelIds);
+  const targetJournalChain = normalizeTargetJournalChain(params.targetJournalChain);
+  if (targetChannelIds && targetJournalChain) {
+    throw new Error('Session integrity repair accepts either channel targets or one exact chain');
+  }
 
   // Accumulators declared before the work so the audit record captures partial
   // progress even when a later chain aborts the run.
@@ -515,21 +603,37 @@ export function runSessionIntegrityRepair(params: RepairParams): SessionIntegrit
       quarantinedRows: journalReport.quarantinedRows,
       rebuiltChannelIndex,
       ...(targetChannelIds ? { targetChannelIds: [...targetChannelIds] } : {}),
+      ...(targetJournalChain ? {
+        targetJournalChain: {
+          channelId: targetJournalChain.channelId,
+          fileCount: targetJournalChain.filePaths.length,
+        },
+      } : {}),
       ...extra,
     });
   };
 
   try {
     const discovered = discoverSessionFileChains(params.sessionsDir);
-    const incompleteChains = targetChannelIds
+    const incompleteChains = targetJournalChain
+      ? []
+      : targetChannelIds
       ? discovered.incompleteChains.filter(chain => targetChannelIds.has(chain.channelId))
       : discovered.incompleteChains;
     if (incompleteChains.length > 0) {
       throw new Error(`Refusing integrity repair with incomplete L0 chains: ${JSON.stringify(incompleteChains)}`);
     }
-    const repairChains = targetChannelIds
+    const repairChains = targetJournalChain
+      ? discovered.chains.filter(chain => (
+        chain.channelId === targetJournalChain.channelId
+        && hasExactFileChain(chain.filePaths, targetJournalChain.filePaths)
+      ))
+      : targetChannelIds
       ? discovered.chains.filter(chain => targetChannelIds.has(chain.channelId))
       : discovered.chains;
+    if (targetJournalChain && repairChains.length !== 1) {
+      throw staleJournalTargetError();
+    }
     if (targetChannelIds) {
       const resolvedChannelIds = new Set(repairChains.map(chain => chain.channelId));
       const missingChannelIds = [...targetChannelIds]
@@ -558,6 +662,7 @@ export function runSessionIntegrityRepair(params: RepairParams): SessionIntegrit
         integrityProvider,
         params.backupDir,
         params.sessionsDir,
+        targetJournalChain ?? undefined,
       );
       journalReport.modifiedFiles += modified.modifiedFiles;
       journalReport.modifiedEntries += modified.modifiedEntries;

@@ -67,8 +67,9 @@ export function createBackgroundWorkHandoffRecoveryDisposition(
     isCorruptOwnerRetired: skip => dispositionStore.has(skip),
     quarantineCorruptOwner: async (skip) => {
       const ownerSessionId = skip.ownerSessionId.trim();
-      if (!ownerSessionId) {
-        throw new Error('Corrupt background-work recovery owner must be non-empty');
+      const sourceChannelId = skip.sourceChannelId.trim();
+      if (!ownerSessionId || !sourceChannelId) {
+        throw new Error('Corrupt background-work recovery owner identities must be non-empty');
       }
       assertSourceArchivesContained(options.sessionsDir, skip);
 
@@ -82,7 +83,11 @@ export function createBackgroundWorkHandoffRecoveryDisposition(
           sessionsDir: options.sessionsDir,
           backupDir,
           reason: 'Automatic EBADMSG background-work handoff recovery quarantine',
-          targetChannelIds: [ownerSessionId],
+          targetJournalChain: {
+            channelId: sourceChannelId,
+            filePaths: skip.sourceArchivePaths,
+            expectedArchiveFingerprint: skip.sourceArchiveFingerprint,
+          },
           ...(options.audit ? { audit: options.audit } : {}),
           ...(options.integrityProvider !== undefined
             ? { integrityProvider: options.integrityProvider }
@@ -95,6 +100,7 @@ export function createBackgroundWorkHandoffRecoveryDisposition(
           withSessionJournalWriteLock(skip.sourceArchivePaths[0]!, () => {
             const current = readCorruptTurnRecordRecoveryEvidence(
               ownerSessionId,
+              sourceChannelId,
               skip.sourceArchivePaths,
             );
             if (!current || current.sourceFingerprint !== skip.sourceFingerprint) {

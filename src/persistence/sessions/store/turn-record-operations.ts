@@ -10,6 +10,7 @@ import { createComponentLogger } from '../../../shared/logger.js';
 import { journalToTurnTombstoneEntry } from '../../journals/journal-utils.js';
 import { readTurnTombstoneAuthoritySnapshot } from '../turn-tombstone-authority.js';
 import { createCorruptTurnRecordRecoveryEvidence } from '../background-work-handoff-recovery-owner-evidence.js';
+import { fingerprintJournalArchiveGenerationIdentity } from './journal-chain-runtime.js';
 import {
   slimTurnRecordSessionEntriesForAppend,
   resolveTurnRecordSessionEntries,
@@ -668,8 +669,9 @@ export class SessionTurnRecordOperations {
       if (!before) return false;
       const corruptOwnerEvidence = createCorruptTurnRecordRecoveryEvidence(
         ownerSessionId,
+        before.channelId,
         before.filePaths,
-        before.archiveFingerprint,
+        fingerprintJournalArchiveGenerationIdentity(before.archiveFingerprint),
       );
       let retired = retiredEvidenceChecks.get(corruptOwnerEvidence.sourceFingerprint);
       if (retired === undefined) {
@@ -677,6 +679,20 @@ export class SessionTurnRecordOperations {
         retiredEvidenceChecks.set(corruptOwnerEvidence.sourceFingerprint, retired);
       }
       if (retired) {
+        const after = resolveEvidence();
+        if (
+          !after
+          || after.sessionId !== before.sessionId
+          || after.channelId !== before.channelId
+          || after.archiveFingerprint !== before.archiveFingerprint
+          || after.baselineFingerprint !== before.baselineFingerprint
+        ) {
+          if (attempt === 0) continue;
+          throw this.recoveryAuthorityError(
+            `L0 tombstone authority for ${ownerSessionId} changed repeatedly during recovery`,
+            'ESTALE',
+          );
+        }
         options.onEvidenceOwnerSkipped?.({ ...corruptOwnerEvidence, retired: true });
         return false;
       }
@@ -713,6 +729,7 @@ export class SessionTurnRecordOperations {
           if (
             !after
             || after.sessionId !== before.sessionId
+            || after.channelId !== before.channelId
             || after.archiveFingerprint !== before.archiveFingerprint
             || after.baselineFingerprint !== before.baselineFingerprint
           ) {
@@ -734,6 +751,7 @@ export class SessionTurnRecordOperations {
       if (
         !after
         || after.sessionId !== before.sessionId
+        || after.channelId !== before.channelId
         || after.archiveFingerprint !== before.archiveFingerprint
         || after.baselineFingerprint !== before.baselineFingerprint
       ) {

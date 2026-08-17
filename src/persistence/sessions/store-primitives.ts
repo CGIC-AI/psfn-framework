@@ -13,6 +13,7 @@ import type { TranscriptSearchPort } from './transcript-search-port.js';
 import type { TurnRecordStorePort } from './turn-record-store-port.js';
 import type { TurnRecordEligibilityFencePort } from './turn-record-eligibility-fence-port.js';
 import type { SessionIntegrityObserver } from '../../shared/contracts/session-integrity.js';
+import type { BackgroundWorkHandoffRecoveryDisposition } from '../../core/agent/background-work/recovery-contract.js';
 export {
   IMPORT_MANIFEST_FILENAME,
   READABLE_SESSION_FILENAME,
@@ -120,6 +121,8 @@ export interface SessionStoreOptions {
   integrityObserver?: SessionIntegrityObserver | null;
   /** Test/observability seam after recovery pins an owner L0 snapshot. */
   recoveryAuthoritySnapshotHook?: (ownerSessionId: string) => void | Promise<void>;
+  /** Terminal disposition for corrupt recovery authority; transient evidence stays retryable. */
+  backgroundWorkHandoffRecoveryDisposition?: BackgroundWorkHandoffRecoveryDisposition | null;
   /** Durable exact-session seal checked at every journal and TurnRecord commit. */
   automataRetentionWriteBarrier?: {
     assertWritable(sessionIdentities: readonly string[]): void;

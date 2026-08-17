@@ -599,7 +599,7 @@ function failClosed(
     withheld,
     error,
     envelope,
-    snapshot: snapshotIntakeEnvelope(envelope, input.subject ?? { kind: 'body' }),
+    snapshot: snapshotIntakeEnvelope(envelope, input.subject ?? { kind: 'body' }, mode),
     ...(withheld ? { noticeText: INTAKE_FIREWALL_NOTICE_TEMPLATES.withheldImage } : {}),
     ...(quarantineHoldError ? { quarantineHoldError } : {}),
   };

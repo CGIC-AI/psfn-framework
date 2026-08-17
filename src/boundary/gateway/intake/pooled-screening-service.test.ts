@@ -150,6 +150,7 @@ describe('createPooledIntakeScreeningService', () => {
     const result = await pooled.screen('secret bytes', baseInput());
     expect(result.action).toBe('quarantine');
     expect(result.withheld).toBe(true);
+    expect(result.snapshot.enforcementPosture).toBe('enforce');
     expect(result.effectiveText).toBe(renderIntakeWithheldContentPlaceholder());
     expect(result.envelope.state).toBe('quarantined');
     // Release the stuck underlying work so dispose drains cleanly.

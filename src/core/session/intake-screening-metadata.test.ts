@@ -5,6 +5,7 @@ import type { IntakeEnvelopeSnapshot } from '../../shared/contracts/intake-envel
 import {
   buildSessionMetadataWithIntakeScreening,
   parseIntakeScreeningMetadata,
+  resolveIntakeScreeningSessionOutcome,
 } from './intake-screening-metadata.js';
 
 const snapshot: IntakeEnvelopeSnapshot = {
@@ -61,5 +62,39 @@ describe('intake screening session metadata', () => {
       withheld: false,
       envelopes: [],
     })).toThrow(/at least one envelope/);
+  });
+
+  it('derives mode and withholding from each snapshot posture', () => {
+    const enforcingReleased = {
+      ...snapshot,
+      state: 'released' as const,
+      enforcementPosture: 'enforce' as const,
+    };
+    const shadowQuarantined = {
+      ...snapshot,
+      enforcementPosture: 'shadow' as const,
+    };
+
+    expect(resolveIntakeScreeningSessionOutcome([shadowQuarantined], 'enforce')).toEqual({
+      mode: 'shadow',
+      withheld: false,
+    });
+    expect(resolveIntakeScreeningSessionOutcome([
+      shadowQuarantined,
+      enforcingReleased,
+    ], 'shadow')).toEqual({
+      mode: 'enforce',
+      withheld: false,
+    });
+    expect(resolveIntakeScreeningSessionOutcome([
+      { ...snapshot, enforcementPosture: 'enforce' },
+    ], 'shadow')).toEqual({
+      mode: 'enforce',
+      withheld: true,
+    });
+    expect(resolveIntakeScreeningSessionOutcome([snapshot], 'enforce')).toEqual({
+      mode: 'enforce',
+      withheld: true,
+    });
   });
 });

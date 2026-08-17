@@ -1214,3 +1214,23 @@ export function snapshotIntakeEnvelope(
     subject,
   };
 }
+
+/**
+ * Resolves the effective posture carried by one persisted item. Surface-level
+ * screening stamps each snapshot; older unstamped snapshots retain the
+ * service-wide fallback. One enforcing snapshot keeps a mixed item enforcing,
+ * while an entirely shadow-stamped set remains observe-only.
+ */
+export function resolveIntakeSnapshotEnforcementPosture(
+  snapshots: readonly IntakeEnvelopeSnapshot[],
+  fallback: 'shadow' | 'enforce',
+): 'shadow' | 'enforce' {
+  if (snapshots.length === 0) return fallback;
+  if (snapshots.every(snapshot => snapshot.enforcementPosture === 'shadow')) {
+    return 'shadow';
+  }
+  if (snapshots.some(snapshot => snapshot.enforcementPosture === 'enforce')) {
+    return 'enforce';
+  }
+  return fallback;
+}

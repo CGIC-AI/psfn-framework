@@ -1116,7 +1116,7 @@ export function applyL3ScreeningOutcome(
 
   return {
     envelope,
-    snapshot: snapshotIntakeEnvelope(envelope, input.subject ?? { kind: 'body' }),
+    snapshot: snapshotIntakeEnvelope(envelope, input.subject ?? { kind: 'body' }, posture),
     action,
     mode: posture,
     effectiveText,

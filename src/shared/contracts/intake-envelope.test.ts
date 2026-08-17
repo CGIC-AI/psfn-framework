@@ -15,6 +15,7 @@ import {
   maxIntakeSourceRiskTier,
   parseIntakeEnvelopeIdFromProvenanceRef,
   postScreeningStateForDecision,
+  resolveIntakeSnapshotEnforcementPosture,
   snapshotIntakeEnvelope,
   transitionIntakeEnvelope,
   validateIntakeEnvelope,
@@ -712,5 +713,19 @@ describe('snapshotIntakeEnvelope', () => {
     });
     expect(() => snapshotIntakeEnvelope(env, { kind: 'attachment', index: -1 }))
       .toThrow(/subject.index/);
+  });
+
+  it('resolves persisted per-surface posture before the legacy fallback', () => {
+    const base = snapshotIntakeEnvelope(received(), { kind: 'body' });
+
+    expect(resolveIntakeSnapshotEnforcementPosture([
+      { ...base, enforcementPosture: 'shadow' },
+    ], 'enforce')).toBe('shadow');
+    expect(resolveIntakeSnapshotEnforcementPosture([
+      { ...base, enforcementPosture: 'shadow' },
+      { ...base, enforcementPosture: 'enforce' },
+    ], 'shadow')).toBe('enforce');
+    expect(resolveIntakeSnapshotEnforcementPosture([base], 'enforce')).toBe('enforce');
+    expect(resolveIntakeSnapshotEnforcementPosture([], 'enforce')).toBe('enforce');
   });
 });

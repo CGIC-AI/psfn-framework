@@ -508,6 +508,7 @@ describe('evaluateVisionIntake (htm9.8 pipeline)', () => {
     expect(enforce.kind).toBe('failed_closed');
     if (enforce.kind !== 'failed_closed') throw new Error('unreachable');
     expect(enforce.withheld).toBe(true);
+    expect(enforce.snapshot.enforcementPosture).toBe('enforce');
     expect(enforce.noticeText).toBe(INTAKE_FIREWALL_NOTICE_TEMPLATES.withheldImage);
     expect(enforce.envelope.state).toBe('quarantined');
     expect(enforce.envelope.sourceClass).toBe('image_ocr');
@@ -523,6 +524,7 @@ describe('evaluateVisionIntake (htm9.8 pipeline)', () => {
     if (shadow.kind !== 'failed_closed') throw new Error('unreachable');
     // Shadow: audited (envelope quarantined) but the image passes through.
     expect(shadow.withheld).toBe(false);
+    expect(shadow.snapshot.enforcementPosture).toBe('shadow');
     expect(shadow.envelope.state).toBe('quarantined');
   });
 

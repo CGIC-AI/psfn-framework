@@ -857,7 +857,11 @@ export function createIntakeScreeningService(
       reason: 'released per clean-bubble policy (boundary internal vector)',
       atMs,
     });
-    const snapshot = snapshotIntakeEnvelope(envelope, input.subject ?? { kind: 'body' });
+    const snapshot = snapshotIntakeEnvelope(
+      envelope,
+      input.subject ?? { kind: 'body' },
+      'shadow',
+    );
     emitDecisionTelemetry({
       vector,
       posture: 'shadow',

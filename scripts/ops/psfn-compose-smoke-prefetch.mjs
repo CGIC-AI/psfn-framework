@@ -20,7 +20,8 @@ import {
   rmSync,
   statSync,
 } from 'node:fs';
-import { isAbsolute, join, relative, resolve } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import process from 'node:process';
 
 class OfflineCacheInputError extends Error {}
@@ -32,6 +33,9 @@ const EMBEDDING_MODEL = process.env.PSFN_SMOKE_EMBEDDING_MODEL || 'Xenova/all-Mi
 const EMBEDDING_DTYPE = process.env.PSFN_SMOKE_EMBEDDING_DTYPE || 'fp32';
 const CACHE_INPUT_DIR = process.env.PSFN_SMOKE_MODEL_CACHE_INPUT_DIR?.trim() || null;
 const OFFLINE_VALUE = process.env.PSFN_SMOKE_MODEL_PREFETCH_OFFLINE?.trim() ?? '';
+const INJECTION_MODEL_DIR = process.env.PSFN_SMOKE_INJECTION_MODEL_DIR?.trim() || null;
+const INJECTION_PROVISION_SCRIPT = process.env.PSFN_SMOKE_INJECTION_PROVISION_SCRIPT?.trim()
+  || '/app/dist/provision-injection-model.js';
 
 function log(msg) {
   console.log(`[model-prefetch] ${msg}`);
@@ -139,6 +143,52 @@ function prepareCacheInput(offline, emotionRevision, embeddingRevision) {
   }
 }
 
+function prepareInjectionModel(offline) {
+  if (!INJECTION_MODEL_DIR) return;
+  const modelCacheRoot = resolve(dirname(CACHE_DIR));
+  const injectionDir = resolve(INJECTION_MODEL_DIR);
+  const relativeDestination = relative(modelCacheRoot, injectionDir);
+  if (
+    relativeDestination.length === 0
+    || relativeDestination.startsWith('..')
+    || isAbsolute(relativeDestination)
+  ) {
+    throw new OfflineCacheInputError(
+      'PSFN_SMOKE_INJECTION_MODEL_DIR must be a strict child of the model-cache root',
+    );
+  }
+
+  if (offline) {
+    if (!CACHE_INPUT_DIR) {
+      throw new OfflineCacheInputError('offline injection provisioning requires cache input');
+    }
+    const source = join(CACHE_INPUT_DIR, 'prompt-injection-v2');
+    if (cacheEntries(source).length === 0) {
+      throw new OfflineCacheInputError(
+        'offline cache input is missing prompt-injection-v2. Transfer the complete model cache.',
+      );
+    }
+    rmSync(injectionDir, { recursive: true, force: true });
+    cpSync(source, injectionDir, { recursive: true, force: true });
+  }
+
+  const result = spawnSync(process.execPath, [
+    INJECTION_PROVISION_SCRIPT,
+    '--dest',
+    injectionDir,
+  ], {
+    stdio: 'inherit',
+    env: {
+      ...process.env,
+      PSFN_INJECTION_MODEL_OFFLINE: offline ? '1' : '0',
+    },
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0) {
+    throw new Error(`injection-model provisioning exited with status ${String(result.status)}`);
+  }
+}
+
 async function main() {
   const offline = resolveOfflineMode();
   const emotionRevision = requiredRevision('PSFN_SMOKE_TEXT_EMOTION_MODEL_REVISION');
@@ -169,6 +219,9 @@ async function main() {
   await embedder('prefetch embedding model', { pooling: 'mean', normalize: true });
   replaceRuntimeModelAlias(modelDirectory(CACHE_DIR, EMBEDDING_MODEL), embeddingRevision);
   log(`embedding model cached: ${EMBEDDING_MODEL}@${embeddingRevision}`);
+
+  prepareInjectionModel(offline);
+  log(`injection model ready: ${INJECTION_MODEL_DIR ?? 'not requested'}`);
 
   log('done');
 }

@@ -10,10 +10,12 @@ import {
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { parse as parseYaml } from 'yaml';
 import { describeStartupOwnerFileChecks } from '../../src/system/config/startup-owner-files.js';
 
 const repoRoot = resolve(import.meta.dirname, '../..');
 const seedScript = join(repoRoot, 'scripts/ops/psfn-compose-smoke-seed.sh');
+const composeFile = join(repoRoot, 'docker/docker-compose.smoke.yml');
 const temporaryRoots: string[] = [];
 
 function temporaryRoot(): string {
@@ -31,6 +33,42 @@ describe('Compose smoke bootstrap', () => {
     for (const root of temporaryRoots.splice(0)) {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it('wires a healthy internal-only operator alert sink before Gateway startup', () => {
+    const compose = parseYaml(readFileSync(composeFile, 'utf8')) as {
+      services?: Record<string, {
+        depends_on?: Record<string, { condition?: string }>;
+        environment?: Record<string, string>;
+        healthcheck?: unknown;
+        networks?: string[];
+        ports?: unknown;
+      }>;
+    };
+    const alertSink = compose.services?.['operator-alert-sink'];
+    const gateway = compose.services?.gateway;
+    const agent = compose.services?.agent;
+
+    expect(alertSink).toMatchObject({
+      networks: ['psfn-smoke-internal'],
+    });
+    expect(alertSink?.healthcheck).toBeDefined();
+    expect(alertSink?.ports).toBeUndefined();
+    expect(compose.services?.['model-prefetch']?.environment).toMatchObject({
+      PSFN_SMOKE_INJECTION_MODEL_DIR: '/app/models/prompt-injection-v2',
+      PSFN_SMOKE_INJECTION_PROVISION_SCRIPT: '/app/dist/provision-injection-model.js',
+    });
+    expect(gateway?.depends_on?.['operator-alert-sink']).toEqual({
+      condition: 'service_healthy',
+    });
+    expect(gateway?.environment).toMatchObject({
+      NTFY_BASE_URL: 'http://operator-alert-sink:3000',
+      NTFY_TOPIC: 'smoke-operator-alerts',
+    });
+    expect(agent?.environment).toMatchObject({
+      NTFY_BASE_URL: 'http://operator-alert-sink:3000',
+      NTFY_TOPIC: 'smoke-operator-alerts',
+    });
   });
 
   it('fails with the missing required owner name when automata-policy is absent', () => {

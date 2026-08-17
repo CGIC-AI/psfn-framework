@@ -29,6 +29,36 @@ npm run smoke:docker
 
 Use this to verify a checkout. It is not a production deployment template.
 
+### Compose model cache
+
+The isolated agent cannot download its embedding and text-emotion models. The
+`model-prefetch` service normally downloads the pinned models before the agent
+starts. If the Docker host cannot reach Hugging Face, prepare the cache on a
+reachable machine from the same checkout:
+
+```bash
+PSFN_SMOKE_MODEL_CACHE_DIR="$PWD/models/transformers" \
+PSFN_SMOKE_TEXT_EMOTION_MODEL_REVISION=90ee0c1c4796d370e68968687b8ba51fc11224f4 \
+PSFN_SMOKE_EMBEDDING_MODEL_REVISION=751bff37182d3f1213fa05d7196b954e230abad9 \
+  node scripts/ops/psfn-compose-smoke-prefetch.mjs
+```
+
+Transfer that directory without changing its contents, then use it as the
+read-only Compose cache input:
+
+```bash
+PSFN_SMOKE_MODEL_CACHE_SOURCE=/absolute/path/to/transformers \
+PSFN_SMOKE_MODEL_PREFETCH_OFFLINE=1 \
+  npm run smoke:docker
+```
+
+Offline mode fails before startup when the supplied directory is empty and
+prints the exact variables needed to repair the input. It also requires both
+exact revision directories, replaces only those two owned model directories in
+the disposable cache volume, and rejects a partial input before model loading.
+The Compose defaults pin the same revisions shown above. Keep model cache
+contents out of Git.
+
 ## Configuration model
 
 Copy `.env.example` to `.env` for local development and fill only the wiring and

@@ -32,6 +32,15 @@ rather than maintaining another list. `npm run verify:startup-owner-files` and
 private operations authority owns collection of effective deployment
 fingerprints.
 
+For a Docker Compose candidate, record whether model provisioning used direct
+Hugging Face reachability or the offline cache-input contract documented in
+[`setup.md`](./setup.md#compose-model-cache). When an offline input is used,
+record the two exact model revisions and a content fingerprint in the private
+round evidence; do not publish its operator filesystem path or copy the cache
+into this repository. A full-turn pass also requires the harness's exact
+user/assistant pair assertion in the canonical L0 session journal; a returned
+reply or a Postgres table count is not persistence evidence.
+
 Any source, build, or owner change invalidates later evidence that depended on
 the earlier fingerprint. Start a new round or rerun the affected coverage; do
 not silently update the candidate under an open scorecard.

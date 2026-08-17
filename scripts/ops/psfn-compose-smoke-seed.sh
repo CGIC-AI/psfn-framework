@@ -35,7 +35,7 @@ RUNTIME_GID="${PSFN_RUNTIME_GID:-999}"
 # Cluster-global owner files (SYSTEM_DATA_DIR). Startup no longer copies seed
 # templates into runtime state, so every owner the runtime requires must be laid
 # down here or the process fails closed on the first missing one.
-SYSTEM_OWNERS="settings models providers trust-policy intake-policy backup partner-affect-shadow places runtime-prompt-layers"
+SYSTEM_OWNERS="settings models providers trust-policy intake-policy backup partner-affect-shadow places runtime-prompt-layers automata-policy mcp-servers"
 # Per-companion owner files (COMPANION_DATA_DIR) — startup never reads a
 # system-root copy of these as a fallback.
 COMPANION_OWNERS="scheduler capability-tier charge-policy skills"
@@ -70,6 +70,23 @@ done
 for owner in $COMPANION_OWNERS; do
   seed_owner "$COMPANION_DATA_DIR" "$owner"
   seed_owner "$SYSTEM_DATA_DIR" "$owner"
+done
+
+# This harness certifies the Autonomous runtime path. Keep the general-purpose
+# seed at its safe nursery default, but make the disposable Compose owners
+# explicit so a green smoke cannot accidentally certify only nursery behavior.
+for capability_owner in \
+  "${COMPANION_DATA_DIR}/capability-tier.json" \
+  "${SYSTEM_DATA_DIR}/capability-tier.json"; do
+  node -e '
+    const fs = require("node:fs");
+    const path = process.argv[1];
+    const owner = JSON.parse(fs.readFileSync(path, "utf8"));
+    owner.tier = "autonomous";
+    if (!Array.isArray(owner.customTokens)) owner.customTokens = [];
+    fs.writeFileSync(path, `${JSON.stringify(owner, null, 2)}\n`);
+  ' "$capability_owner"
+  echo "[smoke-seed] configured Autonomous capability tier: $capability_owner"
 done
 
 # ── Fleet manifest ──

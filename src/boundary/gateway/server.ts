@@ -3172,6 +3172,11 @@ export class GatewayServer {
       const client = connection ? this.rpcClients.get(connection) : undefined;
       const nowMs = Date.now();
       const isExplicitHumanInbound = input.explicitHumanInboundCompanionId === companionId;
+      const availabilityLeaseIsAbsent = availability?.control === 'missing'
+        || availability?.control === 'expired';
+      const explicitHumanAvailabilityAllows = isExplicitHumanInbound
+        && availability !== undefined
+        && (availabilityLeaseIsAbsent || availabilityState === 'resting');
       let fatigueAllows = false;
       if (client) {
         let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
@@ -3203,12 +3208,13 @@ export class GatewayServer {
         companionId,
         availabilityAllows: connection !== null
           && (availability?.eligible === true
-            || (isExplicitHumanInbound && availabilityState === 'resting')),
+            || explicitHumanAvailabilityAllows),
         fatigueAllows,
         quietHoursAllows: isExplicitHumanInbound
           || this.options.sharedSatelliteQuietHoursAllows?.(nowMs) === true,
-        restAllows: (isExplicitHumanInbound || availabilityState !== 'resting')
-          && availabilityState !== 'do_not_disturb',
+        restAllows: availabilityLeaseIsAbsent
+          || ((isExplicitHumanInbound || availabilityState !== 'resting')
+            && availabilityState !== 'do_not_disturb'),
         // This is an explicit human-partner turn, not an autonomous Pack Task.
         taskAllows: true,
         deviceAllows: input.policy.emanationMemberIds.includes(companionId),

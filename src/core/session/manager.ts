@@ -20,6 +20,7 @@ import {
 import type { TranscriptSearchPort } from '../../persistence/sessions/transcript-search-port.js';
 import type { TranscriptSearchOptions } from '../../persistence/sessions/transcript-projection-port.js';
 import type {
+  CorruptTurnRecordRecoveryEvidenceSkip,
   TurnRecordRecoveryEvidenceSkip,
 } from '../agent/background-work/recovery-contract.js';
 import type { UserContinuityStore } from './continuity.js';
@@ -1366,7 +1367,7 @@ export class SessionManager implements SessionManagerTypeSurface {
   }
 
   async quarantineCorruptBackgroundWorkHandoffRecoveryOwner(
-    skip: TurnRecordRecoveryEvidenceSkip,
+    skip: CorruptTurnRecordRecoveryEvidenceSkip,
   ): Promise<void> {
     await this.store.quarantineCorruptBackgroundWorkHandoffRecoveryOwner(skip);
   }

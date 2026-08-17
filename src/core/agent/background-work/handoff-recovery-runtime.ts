@@ -10,7 +10,9 @@ import {
   TURN_RECORD_RECOVERY_CORRUPT_EVIDENCE_CODE,
   TURN_RECORD_RECOVERY_STRUCTURAL_EVIDENCE_CODE,
   TurnRecordRecoveryEvidenceError,
+  isCorruptTurnRecordRecoveryEvidenceSkip,
   isTurnRecordRecoveryEvidenceError,
+  type CorruptTurnRecordRecoveryEvidenceSkip,
   type TurnRecordRecoveryEvidenceSkip,
 } from './recovery-contract.js';
 import { recoverHistoricalBackgroundWorkHandoffs } from './tick-runtime.js';
@@ -27,7 +29,7 @@ export interface BackgroundWorkHandoffRecoverySessionPort {
     signal?: AbortSignal,
   ): Promise<number>;
   quarantineCorruptBackgroundWorkHandoffRecoveryOwner(
-    skip: TurnRecordRecoveryEvidenceSkip,
+    skip: CorruptTurnRecordRecoveryEvidenceSkip,
   ): Promise<void>;
 }
 
@@ -110,12 +112,19 @@ export class BackgroundWorkHandoffRecoveryRuntime {
     }
     if (!this.historicalSnapshotRecovered) {
       const enumerationState = { complete: false, evidenceOwnerSkipped: false };
-      const corruptOwners = new Map<string, TurnRecordRecoveryEvidenceSkip>();
+      const corruptOwners = new Map<string, CorruptTurnRecordRecoveryEvidenceSkip>();
       const records = this.sessions.streamRecoverableBackgroundWorkTurnRecords(
         signal,
         (skip) => {
           enumerationState.evidenceOwnerSkipped = true;
           if (skip.errno === TURN_RECORD_RECOVERY_CORRUPT_EVIDENCE_CODE) {
+            if (!isCorruptTurnRecordRecoveryEvidenceSkip(skip)) {
+              throw new TurnRecordRecoveryEvidenceError(
+                'EBADMSG recovery owner is missing exact physical source evidence',
+                { code: TURN_RECORD_RECOVERY_CORRUPT_EVIDENCE_CODE },
+              );
+            }
+            if (skip.retired) return;
             corruptOwners.set(skip.ownerSessionId, skip);
           }
         },

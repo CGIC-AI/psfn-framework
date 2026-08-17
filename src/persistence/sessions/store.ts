@@ -104,7 +104,9 @@ import {
 } from './store/cogsec-operations.js';
 import { SessionCursorOperations } from './store/cursor-operations.js';
 import type { LatestSessionSummary, SessionActivitySummary } from './store/cursor-operations.js';
-import type { TurnRecordRecoveryEvidenceSkip } from '../../core/agent/background-work/recovery-contract.js';
+import type {
+  CorruptTurnRecordRecoveryEvidenceSkip,
+} from '../../core/agent/background-work/recovery-contract.js';
 
 const log = createComponentLogger('SessionStore');
 
@@ -265,6 +267,9 @@ export class SessionStore implements TranscriptSearchPort {
       turnRecordStore: this.turnRecordStore,
       turnRecordEligibilityFence: this.turnRecordEligibilityFence,
       recoveryAuthoritySnapshotHook: this.recoveryAuthoritySnapshotHook,
+      isCorruptRecoveryOwnerRetired: skip => (
+        this.backgroundWorkHandoffRecoveryDisposition?.isCorruptOwnerRetired(skip) ?? false
+      ),
       resolveSessionId: this.resolveSessionId.bind(this),
       resolveExistingSession: this.resolveExistingSession.bind(this),
       getChannelIndexEntry: (sessionId) => this.channelIndex.get(sessionId),
@@ -989,7 +994,7 @@ export class SessionStore implements TranscriptSearchPort {
   }
 
   async quarantineCorruptBackgroundWorkHandoffRecoveryOwner(
-    skip: TurnRecordRecoveryEvidenceSkip,
+    skip: CorruptTurnRecordRecoveryEvidenceSkip,
   ): Promise<void> {
     if (!this.backgroundWorkHandoffRecoveryDisposition) {
       throw new Error('Corrupt background-work handoff recovery disposition is unavailable');

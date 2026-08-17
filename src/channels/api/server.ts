@@ -971,7 +971,7 @@ export class ApiServer implements ChannelAdapterPort {
         assertion,
         connection,
         ingress: this.hubDeviceIngress,
-      });
+      }, { companionId: this.hubDeviceCompanionId });
     } catch (error) {
       if (error instanceof HubDeviceIngressRequestError) {
         if (assertion && error.connectionId) {

@@ -128,9 +128,12 @@ export interface IcpInitiationSourceAcceptance {
   deliveryDisposition?: IcpInitiationCandidate['deliveryDisposition'];
 }
 
-export interface IcpInitiationSourceRuntime {
+export interface IcpInitiationSourceAcceptanceRuntime {
   /** Resolve only after the candidate is durably stored; completion continues asynchronously. */
   accept(request: IcpInitiationSourceRequest): Promise<IcpInitiationSourceAcceptance>;
+}
+
+export interface IcpInitiationSourceRuntime extends IcpInitiationSourceAcceptanceRuntime {
   submit(request: IcpInitiationSourceRequest): Promise<IcpInitiationSourceResult>;
   /** Resume exact Postgres-leased lifecycle work without source resubmission. */
   resumeClaim(claim: IcpInitiationCandidateClaim): Promise<IcpInitiationSourceResult>;

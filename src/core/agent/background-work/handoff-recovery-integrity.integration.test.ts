@@ -259,7 +259,7 @@ describe('background-work handoff integrity recovery', () => {
 
     await expect(new BackgroundWorkHandoffRecoveryRuntime(manager).recover(enqueue))
       .resolves.toBeUndefined();
-    expect(enqueue.mock.calls.flatMap(call => call[0]).map(job => job.sourceChannelId).sort())
+    expect(enqueue.mock.calls.flatMap(call => call[0].jobs).map(job => job.sourceChannelId).sort())
       .toEqual([corruptChannelId, healthyChannelId].sort());
 
     const quarantinePath = `${turnRecordPath}.quarantine`;
@@ -282,7 +282,7 @@ describe('background-work handoff integrity recovery', () => {
     await expect(new BackgroundWorkHandoffRecoveryRuntime(restartedManager)
       .recover(restartedEnqueue)).resolves.toBeUndefined();
 
-    expect(restartedEnqueue.mock.calls.flatMap(call => call[0])
+    expect(restartedEnqueue.mock.calls.flatMap(call => call[0].jobs)
       .map(job => job.sourceChannelId).sort())
       .toEqual([corruptChannelId, healthyChannelId].sort());
     expect(readFileSync(quarantinePath, 'utf8')).toBe(firstEvidence);
@@ -344,7 +344,7 @@ describe('background-work handoff integrity recovery', () => {
 
     await expect(runtime.recover(preRepairEnqueue)).resolves.toBeUndefined();
     expect(preRepairEnqueue).toHaveBeenCalledOnce();
-    expect(preRepairEnqueue.mock.calls[0]?.[0][0]?.sourceChannelId).toBe(healthyChannelId);
+    expect(preRepairEnqueue.mock.calls[0]?.[0].jobs[0]?.sourceChannelId).toBe(healthyChannelId);
     expect(ebadmsgWarnings(channelId)).toHaveLength(1);
 
     const dispositionDir = join(backupRootDir, readdirSync(backupRootDir)[0]!);
@@ -373,7 +373,7 @@ describe('background-work handoff integrity recovery', () => {
     await expect(restartedRuntime.recover(enqueue)).resolves.toBeUndefined();
 
     expect(enqueue).toHaveBeenCalledTimes(2);
-    expect(enqueue.mock.calls.flatMap(call => call[0]).map(job => job.sourceChannelId).sort())
+    expect(enqueue.mock.calls.flatMap(call => call[0].jobs).map(job => job.sourceChannelId).sort())
       .toEqual([channelId, healthyChannelId].sort());
     expect(ebadmsgWarnings(channelId)).toEqual([]);
     expect(readdirSync(backupRootDir)).toHaveLength(1);

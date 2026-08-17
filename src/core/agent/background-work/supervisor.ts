@@ -4,13 +4,18 @@ import type { EventBus } from '../../../shared/event-bus.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import { emitTurnPerformance } from '../../../shared/telemetry/turn-performance.js';
 import type { TurnPerformanceDeferReason } from '../../../shared/telemetry/turn-performance.js';
-import type { BackgroundWorkStorePort, BackgroundWorkWelfarePolicy } from './store-port.js';
+import type {
+  BackgroundWorkEnqueueResult,
+  BackgroundWorkStorePort,
+  BackgroundWorkWelfarePolicy,
+} from './store-port.js';
 import type { BackgroundWorkSupervisorTuning } from './config.js';
 import {
   BACKGROUND_WORK_KINDS,
   assertClaimedBackgroundWorkBinding,
   parseBackgroundWorkPayload,
   type BackgroundWorkKind,
+  type BackgroundWorkHandoffRecoveryInput,
   type BackgroundWorkPayload,
   type ClaimedBackgroundWorkJob,
   type EnqueueBackgroundWorkInput,
@@ -296,6 +301,19 @@ export class BackgroundWorkSupervisor {
   async enqueue(inputs: readonly EnqueueBackgroundWorkInput[]): Promise<void> {
     if (this.stopping) throw new Error('Background work supervisor is stopping');
     const results = await this.store.enqueueBatch(inputs);
+    await this.handleEnqueueResults(inputs, results);
+  }
+
+  async recoverHandoff(input: BackgroundWorkHandoffRecoveryInput): Promise<void> {
+    if (this.stopping) throw new Error('Background work supervisor is stopping');
+    const results = await this.store.recoverBatch(input);
+    await this.handleEnqueueResults(input.jobs, results);
+  }
+
+  private async handleEnqueueResults(
+    inputs: readonly EnqueueBackgroundWorkInput[],
+    results: readonly BackgroundWorkEnqueueResult[],
+  ): Promise<void> {
     for (let index = 0; index < inputs.length; index += 1) {
       const result = results[index]!;
       if (result.outcome === 'already_accepted') continue;

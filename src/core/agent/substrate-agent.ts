@@ -1503,7 +1503,7 @@ export class SubstrateAgent {
     }
     await runBackgroundWorkTick({
       recoverHandoffs: () => this.backgroundWorkHandoffRecoveryRuntime.recover(
-        jobs => supervisor.enqueue(jobs),
+        input => supervisor.recoverHandoff(input),
       ),
       tick: () => supervisor.tick(),
     });

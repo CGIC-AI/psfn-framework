@@ -1,4 +1,5 @@
 import type {
+  BackgroundWorkHandoffRecoveryInput,
   BackgroundWorkReasonCode,
   ClaimedBackgroundWorkJob,
   EnqueueBackgroundWorkInput,
@@ -49,6 +50,8 @@ export interface BackgroundWorkStorePort {
   enqueue(input: EnqueueBackgroundWorkInput): Promise<BackgroundWorkJobEnqueueResult>;
   /** Atomic all-or-nothing enqueue for one canonical TurnRecord handoff. */
   enqueueBatch(inputs: readonly EnqueueBackgroundWorkInput[]): Promise<BackgroundWorkEnqueueResult[]>;
+  /** Restart-only enqueue authorized by the exact pre-repair receipt identity. */
+  recoverBatch(input: BackgroundWorkHandoffRecoveryInput): Promise<BackgroundWorkEnqueueResult[]>;
   /**
    * Record turn presence as a lease row only — O(1) with respect to queue
    * depth, never touching job rows (hrmrq.119). The lease excludes only the

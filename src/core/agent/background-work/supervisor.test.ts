@@ -20,6 +20,7 @@ import {
 } from './supervisor.js';
 import type { BackgroundWorkSupervisorTuning } from './config.js';
 import type {
+  BackgroundWorkHandoffRecoveryInput,
   BackgroundWorkReasonCode,
   ClaimedBackgroundWorkJob,
   EnqueueBackgroundWorkInput,
@@ -220,6 +221,12 @@ class MemoryBackgroundWorkStore implements BackgroundWorkStorePort {
     inputs: readonly EnqueueBackgroundWorkInput[],
   ): Promise<BackgroundWorkEnqueueResult[]> {
     return Promise.all(inputs.map(input => this.enqueue(input)));
+  }
+
+  async recoverBatch(
+    input: BackgroundWorkHandoffRecoveryInput,
+  ): Promise<BackgroundWorkEnqueueResult[]> {
+    return this.enqueueBatch(input.jobs);
   }
 
   async beginForeground(input: {

@@ -274,11 +274,13 @@ async function run(): Promise<void> {
         if (!line) return;
         assertNotAborted();
         let record: TurnRecord;
+        let recoveryOriginalManifestFingerprint: string | undefined;
         try {
           record = normalizeTurnRecord(JSON.parse(line) as unknown, sourceChannelId);
           if (record.status === 'completed' && record.backgroundWorkHandoff) {
             const repair = repairLegacyTurnRecordBackgroundWorkHandoffForRecovery(record);
             record = repair.record;
+            recoveryOriginalManifestFingerprint = repair.originalManifestFingerprint;
             stats.legacyEmotionAppraisalJobsRetired =
               (stats.legacyEmotionAppraisalJobsRetired ?? 0)
               + repair.retiredLegacyEmotionAppraisalJobs;
@@ -307,7 +309,12 @@ async function run(): Promise<void> {
         }
         stats.rowsScanned += 1;
         const candidate = record.status === 'completed' && record.backgroundWorkHandoff
-          ? JSON.stringify(projectTurnRecordRecoveryCandidate(record))
+          ? JSON.stringify({
+              ...projectTurnRecordRecoveryCandidate(record),
+              ...(recoveryOriginalManifestFingerprint
+                ? { recoveryOriginalManifestFingerprint }
+                : {}),
+            })
           : null;
         indexRecord.run(
           sourceChannelId,

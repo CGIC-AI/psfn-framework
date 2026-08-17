@@ -9,7 +9,10 @@ import type {
   LLMProviderStreamOptions,
   LLMProviderCompletionOptions,
 } from '../../core/agent/contracts.js';
-import type { EmbeddingProviderPort } from '../../shared/contracts/embedding-provider.js';
+import type {
+  EmbeddingProviderCallOptions,
+  EmbeddingProviderPort,
+} from '../../shared/contracts/embedding-provider.js';
 import { toWorkSpecWireParams } from '../../primitives/llm/work-spec-wire.js';
 import type { Attachment, CompletionPurpose, CorrelationMetadata, LLMContext, LLMModelHint, LLMResponse, ModelBudgetBlockedEvent, ModelPurposeSelection, StreamCallbacks, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type {
@@ -895,7 +898,7 @@ export class GatewayClient implements
     return this.transportRuntime.serializedTransportStats;
   }
 
-  async embed(text: string, options: { signal?: AbortSignal } = {}): Promise<Float32Array> {
+  async embed(text: string, options: EmbeddingProviderCallOptions = {}): Promise<Float32Array> {
     const results = await this.embedBatch([text], options);
     const first = results[0];
     if (!first) throw new Error('Embedding returned no results');
@@ -904,12 +907,13 @@ export class GatewayClient implements
 
   async embedBatch(
     texts: string[],
-    options: { signal?: AbortSignal } = {},
+    options: EmbeddingProviderCallOptions = {},
   ): Promise<Float32Array[]> {
     const result = await this.requestWithAbortSignal<LLMEmbedResult>(
       'llm.embed',
       {
         texts,
+        ...(options.usageProvenance ? { usageProvenance: options.usageProvenance } : {}),
         ...stripChargeAttribution(
           buildOutboundUsageCorrelation(this.companionId, getRequestContext()),
         ),

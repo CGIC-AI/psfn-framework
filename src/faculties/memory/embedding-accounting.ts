@@ -1,5 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import type { LLMUsageDetails } from '../../shared/contracts/runtime.js';
+import type {
+  EmbeddingProviderCallOptions,
+  EmbeddingUsageProvenance,
+} from '../../shared/contracts/embedding-provider.js';
 import type { ModelUsageRecorder } from '../../shared/telemetry/model-usage.js';
 import {
   reconcileModelUsageAccounting,
@@ -14,15 +18,10 @@ import { hasProviderCostEvidenceConflict } from '../../shared/telemetry/provider
 import { getRequestContext } from '../../primitives/llm/request-context.js';
 import { stripChargeAttribution } from '../../shared/telemetry/model-usage-attribution.js';
 
-/** zn2iy: optional per-call cancellation, forwarded to the wrapped provider. */
-interface EmbeddingUsageCancellation {
-  signal?: AbortSignal;
-}
-
 interface EmbeddingProviderWithUsage extends EmbeddingRuntimeProvider {
   embedBatchWithUsage?(
     texts: string[],
-    options?: EmbeddingUsageCancellation,
+    options?: EmbeddingProviderCallOptions,
   ): Promise<EmbeddingBatchWithUsageResult>;
 }
 
@@ -30,7 +29,7 @@ export interface AccountedEmbeddingRuntimeProvider extends EmbeddingRuntimeProvi
   readonly recordsModelUsageInternally: true;
   embedBatchWithUsage(
     texts: string[],
-    options?: EmbeddingUsageCancellation,
+    options?: EmbeddingProviderCallOptions,
   ): Promise<EmbeddingBatchWithUsageResult>;
 }
 
@@ -51,6 +50,7 @@ export function withEmbeddingUsageAccounting(
     texts: string[],
     usageDetails?: LLMUsageDetails,
     error?: unknown,
+    usageProvenance?: EmbeddingUsageProvenance,
   ): Promise<void> => {
     const completedAtMs = Date.now();
     const correlation = stripChargeAttribution(getRequestContext() ?? {});
@@ -86,12 +86,15 @@ export function withEmbeddingUsageAccounting(
         ...(correlation.sessionId ? { sessionId: correlation.sessionId } : {}),
         ...(correlation.channelId ? { channelId: correlation.channelId } : {}),
         ...(correlation.channelType ? { channelType: correlation.channelType } : {}),
-        callType: 'memory',
-        purpose: 'embedding',
-        originType: correlation.originType ?? correlation.callType ?? 'memory',
-        originStage: correlation.originStage ?? 'embedding',
-        service: 'memory',
-        process: 'embedding',
+        callType: usageProvenance?.callType ?? 'memory',
+        purpose: usageProvenance?.purpose ?? 'embedding',
+        originType: usageProvenance?.originType
+          ?? correlation.originType
+          ?? correlation.callType
+          ?? 'memory',
+        originStage: usageProvenance?.originStage ?? correlation.originStage ?? 'embedding',
+        service: usageProvenance?.service ?? 'memory',
+        process: usageProvenance?.process ?? 'embedding',
         ...(correlation.turnId ? { turnId: correlation.turnId } : {}),
         ...(correlation.requestId ? { requestId: correlation.requestId } : {}),
         ...(correlation.toolName ? { toolName: correlation.toolName } : {}),
@@ -100,8 +103,15 @@ export function withEmbeddingUsageAccounting(
         ...(correlation.subagentId ? { subagentId: correlation.subagentId } : {}),
         ...(correlation.conversationId ? { conversationId: correlation.conversationId } : {}),
         ...(correlation.rootInitiationId ? { rootInitiationId: correlation.rootInitiationId } : {}),
-        ...(correlation.workloadType ? { workloadType: correlation.workloadType } : {}),
-        ...(correlation.workloadId ? { workloadId: correlation.workloadId } : {}),
+        ...(usageProvenance?.runtimeLaneClass
+          ? { runtimeLaneClass: usageProvenance.runtimeLaneClass }
+          : {}),
+        ...(usageProvenance?.workloadType
+          ? { workloadType: usageProvenance.workloadType }
+          : (correlation.workloadType ? { workloadType: correlation.workloadType } : {})),
+        ...(usageProvenance?.workloadId
+          ? { workloadId: usageProvenance.workloadId }
+          : (correlation.workloadId ? { workloadId: correlation.workloadId } : {})),
       },
       provider: provider.kind,
       model: provider.model,
@@ -145,7 +155,7 @@ export function withEmbeddingUsageAccounting(
 
   const embedBatchWithUsage = async (
     texts: string[],
-    options?: EmbeddingUsageCancellation,
+    options?: EmbeddingProviderCallOptions,
   ): Promise<EmbeddingBatchWithUsageResult> => {
     if (texts.length === 0) return { embeddings: [] };
     const logicalCallId = `embedding:${randomUUID()}`;
@@ -163,10 +173,19 @@ export function withEmbeddingUsageAccounting(
         texts,
         extractProviderAttemptUsageDetails(error),
         error,
+        options?.usageProvenance,
       );
       throw error;
     }
-    await record(logicalCallId, startedAtMs, 'success', texts, result.usageDetails);
+    await record(
+      logicalCallId,
+      startedAtMs,
+      'success',
+      texts,
+      result.usageDetails,
+      undefined,
+      options?.usageProvenance,
+    );
     return result;
   };
 
@@ -175,13 +194,13 @@ export function withEmbeddingUsageAccounting(
     model: provider.model,
     dims: provider.dims,
     recordsModelUsageInternally: true,
-    async embed(text: string, options?: EmbeddingUsageCancellation): Promise<Float32Array> {
+    async embed(text: string, options?: EmbeddingProviderCallOptions): Promise<Float32Array> {
       const result = await embedBatchWithUsage([text], options);
       const first = result.embeddings[0];
       if (!first) throw new Error('Embedding returned no results');
       return first;
     },
-    async embedBatch(texts: string[], options?: EmbeddingUsageCancellation): Promise<Float32Array[]> {
+    async embedBatch(texts: string[], options?: EmbeddingProviderCallOptions): Promise<Float32Array[]> {
       return (await embedBatchWithUsage(texts, options)).embeddings;
     },
     embedBatchWithUsage,

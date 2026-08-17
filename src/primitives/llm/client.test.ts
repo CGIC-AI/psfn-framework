@@ -6017,7 +6017,7 @@ describe('LLMClient autonomous spend accounting (mmo9.7.3)', () => {
         companionId: 'companion-x',
         sessionId: 'session-x',
         runtimeLaneClass: 'maintenance_reflection',
-        chargeLane: 'background',
+        chargeLane: 'maintenance',
         originStage: 'memory.extraction',
       }),
     }));
@@ -6094,7 +6094,7 @@ describe('LLMClient autonomous spend accounting (mmo9.7.3)', () => {
     }));
   });
 
-  it('leaves the session-less active health-probe shape unresolved for anomaly accounting', async () => {
+  it('attributes the session-less active health probe to its gate-resolved foreground lane', async () => {
     const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
     const client = new LLMClient(makeConfig({ companionId: 'companion-x' }), { usageRecorder });
     mocks.completeSimple.mockResolvedValue({
@@ -6122,7 +6122,7 @@ describe('LLMClient autonomous spend accounting (mmo9.7.3)', () => {
       purpose: 'reasoning',
     });
     expect(event?.attribution).not.toHaveProperty('sessionId');
-    expect(event?.attribution).not.toHaveProperty('chargeLane');
+    expect(event?.attribution).toHaveProperty('chargeLane', 'interactive');
   });
 
   it('attributes the declared work-spec lane across the provider seam (psfn-framework-d8vq.2: spec.lane in == lane out)', async () => {

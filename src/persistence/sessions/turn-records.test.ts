@@ -1046,7 +1046,7 @@ describe('turn-records', () => {
     expect(stats.bytesRead).toBeGreaterThan(16 * 1024 * 1024);
   });
 
-  it('rejects semantically poisoned recovery handoffs before yielding', async () => {
+  it('quarantines semantically poisoned recovery handoffs before yielding', async () => {
     const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-recovery-poison-'));
     const store = createFilesystemTurnRecordStorePort(sessionsDir);
     const poisoned = withRecoveryHandoff(createTurnRecord());
@@ -1058,13 +1058,21 @@ describe('turn-records', () => {
       for await (const candidate of store.streamTurnRecordsForRecovery!([poisoned.channelId])) {
         yielded.push(candidate);
       }
-    })()).rejects.toMatchObject({
-      name: 'TurnRecordRecoveryEvidenceError',
-      code: 'ESTRUCTURAL',
-      message: expect.stringContaining('payload_fingerprint'),
-    });
+    })()).resolves.toBeUndefined();
 
     expect(yielded).toEqual([]);
+    const quarantinePath = `${activeSegmentPathFor(sessionsDir, poisoned.channelId)}.quarantine`;
+    const firstEvidence = readFileSync(quarantinePath, 'utf8');
+    expect(firstEvidence).not.toContain('payloadFingerprint');
+    expect(JSON.parse(firstEvidence)).toMatchObject({
+      channelId: poisoned.channelId,
+      reason: 'invalid_turn_record_recovery_row',
+    });
+
+    for await (const _candidate of store.streamTurnRecordsForRecovery!([poisoned.channelId])) {
+      // A terminally quarantined row never becomes recoverable work.
+    }
+    expect(readFileSync(quarantinePath, 'utf8')).toBe(firstEvidence);
   });
 
   it('retires an exact pre-drift appraisal without poisoning sibling recovery jobs', async () => {
@@ -1096,22 +1104,39 @@ describe('turn-records', () => {
     expect(stats.legacyEmotionAppraisalJobsRetired).toBe(1);
   });
 
-  it('fails closed on malformed rows and rows beyond the declared byte cap', async () => {
+  it('quarantines malformed rows and fails closed on rows beyond the declared byte cap', async () => {
     const malformedDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-recovery-malformed-'));
     const malformedStore = createFilesystemTurnRecordStorePort(malformedDir);
     const record = withRecoveryHandoff(createTurnRecord());
     malformedStore.appendTurnRecord(record);
     appendFileSync(activeSegmentPathFor(malformedDir, record.channelId), '{"broken":\n');
 
+    const recovered: TurnRecord[] = [];
+    const quarantineStats: TurnRecordRecoveryScanStats = {
+      bytesRead: 0,
+      rowsScanned: 0,
+      filesScanned: 0,
+      candidatesYielded: 0,
+      peakIdentityRowsInMemory: 0,
+      sqliteCacheBytes: 0,
+      maxRowBytes: 0,
+    };
     await expect((async () => {
-      for await (const _candidate of malformedStore.streamTurnRecordsForRecovery!(
+      for await (const candidate of malformedStore.streamTurnRecordsForRecovery!(
         [record.channelId],
+        { stats: quarantineStats },
       )) {
-        // The complete physical snapshot must validate before the first yield.
+        recovered.push(candidate);
       }
-    })()).rejects.toMatchObject({
-      name: 'TurnRecordRecoveryEvidenceError',
-      code: 'ESTRUCTURAL',
+    })()).resolves.toBeUndefined();
+    expect(recovered.map(candidate => candidate.turnId)).toEqual([record.turnId]);
+    expect(quarantineStats.quarantinedTurnRecordRows).toBe(1);
+    expect(JSON.parse(readFileSync(
+      `${activeSegmentPathFor(malformedDir, record.channelId)}.quarantine`,
+      'utf8',
+    ))).toMatchObject({
+      channelId: record.channelId,
+      reason: 'invalid_turn_record_recovery_row',
     });
 
     const cappedDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-recovery-row-cap-'));

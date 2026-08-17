@@ -23,6 +23,7 @@ import {
   projectTurnRecordRecoveryCandidate,
   withTurnRecordRotationLock,
 } from './turn-records.js';
+import { quarantineTurnRecordRecoveryLine } from './turn-record-recovery-quarantine.js';
 import type { TurnRecordRecoveryScanStats } from './turn-record-store-port.js';
 
 interface WorkerInput {
@@ -62,6 +63,7 @@ const stats: TurnRecordRecoveryScanStats = {
   sqliteCacheBytes: input.sqliteCacheBytes,
   maxRowBytes: input.maxRowBytes,
   legacyEmotionAppraisalJobsRetired: 0,
+  quarantinedTurnRecordRows: 0,
 };
 
 function assertNotAborted(): void {
@@ -221,6 +223,7 @@ async function run(): Promise<void> {
     const scanFile = (
       snapshot: SnapshotFile,
       sourceChannelId: string,
+      activePath: string,
       originKind: 'active' | 'segment',
       segmentNumber?: number,
     ): void => {
@@ -254,7 +257,9 @@ async function run(): Promise<void> {
       let buffered: Buffer[] = [];
       let bufferedBytes = 0;
       let position = 0;
+      let physicalRowNumber = 0;
       const consumeLine = (tail: Buffer): void => {
+        physicalRowNumber += 1;
         const rowBytes = bufferedBytes + tail.length;
         if (rowBytes > input.maxRowBytes) {
           throw evidenceError(
@@ -278,12 +283,27 @@ async function run(): Promise<void> {
               (stats.legacyEmotionAppraisalJobsRetired ?? 0)
               + repair.retiredLegacyEmotionAppraisalJobs;
           }
-        } catch (error) {
-          throw evidenceError(
-            `Invalid TurnRecord recovery row in ${snapshot.path}: `
-            + `${error instanceof Error ? error.message : String(error)}`,
-            error,
-          );
+        } catch {
+          try {
+            withTurnRecordRotationLock(
+              activePath,
+              () => quarantineTurnRecordRecoveryLine(
+                activePath,
+                sourceChannelId,
+                line,
+                `${identity}:${String(physicalRowNumber)}`,
+                input.scanChunkBytes,
+              ),
+              assertNotAborted,
+            );
+          } catch (quarantineError) {
+            throw evidenceError(
+              `TurnRecord recovery could not durably quarantine an invalid row for ${sourceChannelId}`,
+              quarantineError,
+            );
+          }
+          stats.quarantinedTurnRecordRows = (stats.quarantinedTurnRecordRows ?? 0) + 1;
+          return;
         }
         stats.rowsScanned += 1;
         const candidate = record.status === 'completed' && record.backgroundWorkHandoff
@@ -343,7 +363,7 @@ async function run(): Promise<void> {
       assertNotAborted();
       if (activeSnapshot) {
         try {
-          scanFile(activeSnapshot, sourceChannelId, 'active');
+          scanFile(activeSnapshot, sourceChannelId, activePath, 'active');
         } finally {
           closeSync(activeSnapshot.fd);
           activeSnapshot = null;
@@ -366,7 +386,7 @@ async function run(): Promise<void> {
           );
         }
         try {
-          scanFile(snapshot, sourceChannelId, 'segment', segmentNumber);
+          scanFile(snapshot, sourceChannelId, activePath, 'segment', segmentNumber);
         } finally {
           closeSync(snapshot.fd);
         }

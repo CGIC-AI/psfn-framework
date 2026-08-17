@@ -6,8 +6,12 @@ export const TURN_RECORD_RECOVERY_CORRUPT_EVIDENCE_CODE = 'EBADMSG';
 export interface TurnRecordRecoveryEvidenceSkip {
   errno: string;
   ownerSessionId: string;
+  /** Exact trusted physical channel that owns the selected L0 chain. */
+  sourceChannelId?: string;
   /** Exact content-free identity of the physical L0 generation that failed. */
   sourceFingerprint?: string;
+  /** Content-free identity of the selected physical archive generation itself. */
+  sourceArchiveFingerprint?: string;
   /** Trusted in-process paths used only to re-prove that exact generation before disposition. */
   sourceArchivePaths?: readonly string[];
   /** True when this exact generation already has an fsync-durable terminal disposition. */
@@ -16,7 +20,9 @@ export interface TurnRecordRecoveryEvidenceSkip {
 
 export interface CorruptTurnRecordRecoveryEvidenceSkip extends TurnRecordRecoveryEvidenceSkip {
   errno: typeof TURN_RECORD_RECOVERY_CORRUPT_EVIDENCE_CODE;
+  sourceChannelId: string;
   sourceFingerprint: string;
+  sourceArchiveFingerprint: string;
   sourceArchivePaths: readonly string[];
 }
 
@@ -57,8 +63,12 @@ export function isCorruptTurnRecordRecoveryEvidenceSkip(
   skip: TurnRecordRecoveryEvidenceSkip,
 ): skip is CorruptTurnRecordRecoveryEvidenceSkip {
   return skip.errno === TURN_RECORD_RECOVERY_CORRUPT_EVIDENCE_CODE
+    && typeof skip.sourceChannelId === 'string'
+    && skip.sourceChannelId.trim().length > 0
     && typeof skip.sourceFingerprint === 'string'
     && /^[a-f0-9]{64}$/u.test(skip.sourceFingerprint)
+    && typeof skip.sourceArchiveFingerprint === 'string'
+    && /^[a-f0-9]{64}$/u.test(skip.sourceArchiveFingerprint)
     && Array.isArray(skip.sourceArchivePaths)
     && skip.sourceArchivePaths.length > 0
     && skip.sourceArchivePaths.every(path => typeof path === 'string' && path.length > 0);

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { backfillLegacyTurnId } from '../../../core/turns/id.js';
 import {
@@ -135,6 +136,24 @@ export function fingerprintJournalArchiveChain(
     fingerprints.push(`${archivePort.resolveArchivePath(archive)}=${fingerprint}`);
   }
   return fingerprints.join('|');
+}
+
+/** Content-free exact identity for one physical L0 archive generation. */
+export function fingerprintJournalArchiveGeneration(
+  archivePort: SessionArchivePort,
+  archives: readonly SessionArchiveHandle[],
+): string | null {
+  const fingerprint = fingerprintJournalArchiveChain(archivePort, archives);
+  if (!fingerprint) return null;
+  return fingerprintJournalArchiveGenerationIdentity(fingerprint);
+}
+
+export function fingerprintJournalArchiveGenerationIdentity(
+  archiveFingerprint: string,
+): string {
+  return createHash('sha256')
+    .update(JSON.stringify(['l0-archive-generation-v1', archiveFingerprint]))
+    .digest('hex');
 }
 
 function loadJournalArchiveChainAttempt(

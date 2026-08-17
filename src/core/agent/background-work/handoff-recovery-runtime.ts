@@ -116,7 +116,6 @@ export class BackgroundWorkHandoffRecoveryRuntime {
       const records = this.sessions.streamRecoverableBackgroundWorkTurnRecords(
         signal,
         (skip) => {
-          enumerationState.evidenceOwnerSkipped = true;
           if (skip.errno === TURN_RECORD_RECOVERY_CORRUPT_EVIDENCE_CODE) {
             if (!isCorruptTurnRecordRecoveryEvidenceSkip(skip)) {
               throw new TurnRecordRecoveryEvidenceError(
@@ -127,6 +126,7 @@ export class BackgroundWorkHandoffRecoveryRuntime {
             if (skip.retired) return;
             corruptOwners.set(skip.ownerSessionId, skip);
           }
+          enumerationState.evidenceOwnerSkipped = true;
         },
       );
       const completionTrackedRecords = (async function* () {

@@ -1,9 +1,11 @@
 import {
   appendFileSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
   rmSync,
+  writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -97,13 +99,17 @@ function createSerialTurnRecordEligibilityFence(): TurnRecordEligibilityFencePor
   };
 }
 
-function makeBackgroundHandoffTurnRecord(channelId: string, completedAt: number): TurnRecord {
+function makeBackgroundHandoffTurnRecord(
+  channelId: string,
+  completedAt: number,
+  logicalSessionId = channelId,
+): TurnRecord {
   const turnId = createTurnId(completedAt);
   const record: TurnRecord = {
     schemaVersion: 1,
     turnId,
     requestId: `request-${turnId}`,
-    sessionId: channelId,
+    sessionId: logicalSessionId,
     channelId,
     channelType: 'api',
     startedAt: completedAt - 10,
@@ -123,7 +129,7 @@ function makeBackgroundHandoffTurnRecord(channelId: string, completedAt: number)
     kind: 'memory_extraction',
     source: {
       schemaVersion: 1,
-      logicalSessionId: channelId,
+      logicalSessionId,
       channelId,
       turnId,
       requestId: record.requestId,
@@ -135,11 +141,11 @@ function makeBackgroundHandoffTurnRecord(channelId: string, completedAt: number)
     schemaVersion: 1,
     jobs: [{
       ...createBackgroundWorkIdentity({
-        logicalSessionId: channelId,
+        logicalSessionId,
         turnId,
         kind: payload.kind,
       }),
-      logicalSessionId: channelId,
+      logicalSessionId,
       kind: payload.kind,
       payload,
       payloadFingerprint: fingerprintBackgroundWorkPayload(payload),
@@ -151,6 +157,14 @@ function makeBackgroundHandoffTurnRecord(channelId: string, completedAt: number)
     }],
   };
   return record;
+}
+
+function signedJournalEntry(
+  integrityProvider: NonNullable<ReturnType<typeof createKeyringIntegrityProvider>>,
+  input: JournalEntry,
+  previousHmac: string | null,
+): JournalEntry {
+  return integrityProvider.sign(input, previousHmac);
 }
 
 function findSessionJournalPath(sessionsDir: string, channelFragment: string): string {
@@ -286,7 +300,7 @@ describe('background-work handoff integrity recovery', () => {
     await expect(restartedRuntime.recover(restartedEnqueue)).resolves.toBeUndefined();
     await expect(restartedRuntime.recover(restartedEnqueue)).resolves.toBeUndefined();
     expect(restartedEnqueue.mock.calls.flatMap(call => call[0].jobs)
-      .map(job => job.sourceChannelId)).toEqual([healthyChannelId, healthyChannelId]);
+      .map(job => job.sourceChannelId)).toEqual([healthyChannelId]);
     expect(ebadmsgWarnings(corruptChannelId)).toEqual([]);
     expect(readFileSync(dispositionPath, 'utf8')).toBe(firstDisposition);
     expect(readFileSync(journalPath, 'utf8')).toBe(rawCorruptOwner);
@@ -319,6 +333,171 @@ describe('background-work handoff integrity recovery', () => {
     expect(ebadmsgWarnings(corruptChannelId)).toHaveLength(1);
     expect(readFileSync(journalPath, 'utf8')).toBe(laterRawOwner);
     expect(readFileSync(dispositionPath, 'utf8').trim().split('\n')).toHaveLength(2);
+  });
+
+  it('retires only the routed logical owner chain when a physical channel has siblings', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'handoff-routed-owner-'));
+    rootsToDelete.push(root);
+    const sessionsDir = join(root, 'sessions');
+    const backupRootDir = join(root, 'repair-backups');
+    const physicalChannelId = 'api:shared-physical-owner';
+    const selectedPath = join(
+      sessionsDir,
+      '20260817_api-shared-physical-owner_partner_000001.jsonl',
+    );
+    const siblingPath = join(
+      sessionsDir,
+      '20260817_api-shared-physical-owner_partner_000002.jsonl',
+    );
+    mkdirSync(sessionsDir, { recursive: true });
+    const keyring = buildSessionHmacKeyring({
+      serializedKeys: 'v1:routed-owner-key',
+      activeVersion: 'v1',
+    })!;
+    const integrityProvider = createKeyringIntegrityProvider(keyring)!;
+    const selectedFirst = signedJournalEntry(integrityProvider, {
+      type: 'message',
+      id: 1,
+      channelId: physicalChannelId,
+      role: 'user',
+      content: 'selected physical history',
+      timestamp: 1_775_060_000_000,
+    }, null);
+    const selectedMismatch = signedJournalEntry(integrityProvider, {
+      type: 'message',
+      id: 2,
+      channelId: 'api:wrong-routed-owner',
+      role: 'system',
+      content: 'selected raw mismatch remains preserved',
+      timestamp: 1_775_060_000_010,
+    }, selectedFirst._hmac ?? null);
+    const siblingFirst = signedJournalEntry(integrityProvider, {
+      type: 'message',
+      id: 1,
+      channelId: physicalChannelId,
+      role: 'user',
+      content: 'sibling repairable history',
+      timestamp: 1_775_060_000_100,
+    }, null);
+    writeFileSync(selectedPath, `${JSON.stringify(selectedFirst)}\n${JSON.stringify(selectedMismatch)}\n`);
+    writeFileSync(siblingPath, `${JSON.stringify(siblingFirst)}\n{not-json}\n`);
+    const selectedBefore = readFileSync(selectedPath, 'utf8');
+    const siblingBefore = readFileSync(siblingPath, 'utf8');
+    const disposition = createBackgroundWorkHandoffRecoveryDisposition({
+      sessionsDir,
+      backupRootDir,
+      integrityProvider,
+    });
+    const store = new SessionStore(sessionsDir, {
+      integrityKeyring: keyring,
+      turnRecordEligibilityFence: createSerialTurnRecordEligibilityFence(),
+      backgroundWorkHandoffRecoveryDisposition: disposition,
+    });
+    const routedOwner = store.listChannels().find(channel => (
+      channel.channelId === physicalChannelId
+      && channel.sessionId.includes('000001')
+    ));
+    expect(routedOwner).toBeDefined();
+    expect(routedOwner!.sessionId).not.toBe(physicalChannelId);
+    const record = makeBackgroundHandoffTurnRecord(
+      physicalChannelId,
+      1_775_060_000_000,
+      routedOwner!.sessionId,
+    );
+    const manager = new SessionManager(store, makeConfig(root));
+    await manager.recordTurn(record);
+    clearDiagnosticLogRingBufferForTests();
+
+    await expect(new BackgroundWorkHandoffRecoveryRuntime(manager)
+      .recover(async () => undefined)).resolves.toBeUndefined();
+
+    expect(readFileSync(selectedPath, 'utf8')).toBe(selectedBefore);
+    expect(readFileSync(siblingPath, 'utf8')).toBe(siblingBefore);
+    const dispositionPath = join(
+      backupRootDir,
+      'background-work-handoff-recovery-dispositions.jsonl',
+    );
+    expect(readFileSync(dispositionPath, 'utf8').trim().split('\n')).toHaveLength(1);
+  });
+
+  it('does not latch a replacement generation written during the retirement lookup', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'handoff-retired-owner-race-'));
+    rootsToDelete.push(root);
+    const sessionsDir = join(root, 'sessions');
+    const channelId = 'api:retired-owner-race';
+    const keyring = buildSessionHmacKeyring({
+      serializedKeys: 'v1:retired-owner-race-key',
+      activeVersion: 'v1',
+    })!;
+    const integrityProvider = createKeyringIntegrityProvider(keyring)!;
+    let journalPath = '';
+    let replacementEntry: JournalEntry | null = null;
+    let generationAFingerprint = '';
+    let replacementWritten = false;
+    const retirementChecks = vi.fn((skip: { sourceFingerprint: string }) => {
+      if (!replacementWritten) {
+        generationAFingerprint = skip.sourceFingerprint;
+        appendFileSync(journalPath, `${JSON.stringify(replacementEntry)}\n`);
+        replacementWritten = true;
+        return true;
+      }
+      return false;
+    });
+    const quarantine = vi.fn(async () => undefined);
+    const store = new SessionStore(sessionsDir, {
+      integrityKeyring: keyring,
+      turnRecordEligibilityFence: createSerialTurnRecordEligibilityFence(),
+      backgroundWorkHandoffRecoveryDisposition: {
+        isCorruptOwnerRetired: retirementChecks,
+        quarantineCorruptOwner: quarantine,
+      },
+    });
+    const manager = new SessionManager(store, makeConfig(root));
+    const record = makeBackgroundHandoffTurnRecord(channelId, 1_775_070_000_000);
+    manager.recordUserMessage(
+      channelId,
+      'retained source',
+      'partner',
+      'Partner',
+      true,
+      undefined,
+      { turnId: record.turnId, requestId: record.requestId },
+    );
+    await manager.recordTurn(record);
+    journalPath = findSessionJournalPath(sessionsDir, 'retired-owner-race');
+    const lastEntry = JSON.parse(
+      readFileSync(journalPath, 'utf8').trim().split('\n').at(-1)!,
+    ) as JournalEntry;
+    const generationAEntry = signedJournalEntry(integrityProvider, {
+      type: 'message',
+      id: lastEntry.id + 1,
+      channelId: 'api:retired-owner-race-wrong',
+      role: 'system',
+      content: 'generation A structural poison',
+      timestamp: 1_775_070_000_010,
+    }, lastEntry._hmac ?? null);
+    appendFileSync(journalPath, `${JSON.stringify(generationAEntry)}\n`);
+    replacementEntry = signedJournalEntry(integrityProvider, {
+      type: 'message',
+      id: generationAEntry.id + 1,
+      channelId,
+      role: 'system',
+      content: 'generation B replacement evidence',
+      timestamp: 1_775_070_000_020,
+    }, generationAEntry._hmac ?? null);
+    const runtime = new BackgroundWorkHandoffRecoveryRuntime(manager);
+
+    await expect(runtime.recover(async () => undefined)).resolves.toBeUndefined();
+    await expect(runtime.recover(async () => undefined)).resolves.toBeUndefined();
+
+    expect(retirementChecks).toHaveBeenCalledTimes(3);
+    expect(quarantine).toHaveBeenCalledTimes(2);
+    const quarantinedFingerprints = quarantine.mock.calls
+      .map(([skip]) => skip.sourceFingerprint);
+    expect(generationAFingerprint).toMatch(/^[a-f0-9]{64}$/u);
+    expect(quarantinedFingerprints[0]).not.toBe(generationAFingerprint);
+    expect(quarantinedFingerprints[0]).toBe(quarantinedFingerprints[1]);
+    expect(readFileSync(journalPath, 'utf8')).toContain('generation B replacement evidence');
   });
 
   it('quarantines a structurally invalid TurnRecord row and continues healthy handoffs', async () => {

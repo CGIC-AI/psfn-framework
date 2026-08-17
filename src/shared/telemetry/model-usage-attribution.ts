@@ -144,16 +144,28 @@ export interface ModelUsageChargeLaneResolutionInput {
 /**
  * Resolve the ledger's charge lane from canonical call attribution.
  *
- * Explicit charge context always wins. Otherwise foreground work is
- * interactive, session-attributed companion cognition is background (including
- * extraction/embedding work whose scheduler runtime class is maintenance), and
- * scheduled session work is maintenance. Genuinely session-less system work
- * remains unresolved so the durable ledger records the loud `unknown` anomaly.
+ * Explicit charge context always wins. Otherwise an already-resolved runtime
+ * class maps directly to its reporting lane. Without one, foreground work is
+ * interactive, session-attributed companion cognition is background, and
+ * scheduled session work is maintenance. Genuinely unclassified session-less
+ * system work remains unresolved so the ledger records the loud `unknown` anomaly.
  */
 export function resolveModelUsageChargeLane(
   input: ModelUsageChargeLaneResolutionInput,
 ): ChargePolicyRuntimeLane | undefined {
   if (input.explicitChargeLane) return input.explicitChargeLane;
+  if (input.runtimeLaneClass === RUNTIME_LANE_CLASSES.foregroundChat) {
+    return 'interactive';
+  }
+  if (input.runtimeLaneClass === RUNTIME_LANE_CLASSES.maintenanceReflection) {
+    return 'maintenance';
+  }
+  if (
+    input.runtimeLaneClass === RUNTIME_LANE_CLASSES.postTurnAppraisal
+    || input.runtimeLaneClass === RUNTIME_LANE_CLASSES.backgroundContinuation
+  ) {
+    return 'background';
+  }
   if (input.callType === 'chat') {
     return 'interactive';
   }
@@ -162,10 +174,7 @@ export function resolveModelUsageChargeLane(
   }
   const hasSessionAttribution = Boolean(input.sessionId?.trim() || input.channelId?.trim());
   if (!hasSessionAttribution) return undefined;
-  if (
-    input.callType === 'tool'
-    || input.runtimeLaneClass === RUNTIME_LANE_CLASSES.foregroundChat
-  ) {
+  if (input.callType === 'tool') {
     return 'interactive';
   }
 

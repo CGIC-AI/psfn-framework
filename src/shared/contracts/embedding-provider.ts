@@ -1,20 +1,33 @@
+import type { ObservabilityCallType } from './observability-call-types.js';
+import type { RuntimeLaneClass } from './runtime-lanes.js';
+
+/** Content-free, caller-authored identity for one embedding workload. */
+export interface EmbeddingUsageProvenance {
+  callType: ObservabilityCallType;
+  purpose: string;
+  originType: ObservabilityCallType;
+  originStage: string;
+  service: string;
+  process: string;
+  /** The originating runtime's already-resolved lane; capture never reclassifies it. */
+  runtimeLaneClass: RuntimeLaneClass;
+  workloadType: string;
+  workloadId: string;
+}
+
 /**
- * zn2iy: optional cancellation for a single embedding call. Foreground callers
- * (retrieval, Analysis Workbench) forward their request/turn lifetime signal so a
- * caller abort — or, in the split runtime, a client disconnect — tears down the
- * upstream provider work instead of leaving a zombie that finishes and records
- * cost after the caller is gone. Durable background jobs (extraction, sleeptime)
- * deliberately omit the signal and own a bounded independent lifetime.
- *
- * The field is optional so every existing caller compiles unchanged and simply
- * expresses deliberate non-cancellation by not passing a signal.
+ * Options for one embedding call. Foreground callers forward their lifetime
+ * signal; durable background callers omit it. Sessionless services also stamp
+ * explicit usage provenance so the canonical usage ledger records their real
+ * service, purpose, and already-resolved runtime lane instead of `unknown`.
  */
-export interface EmbeddingProviderCancellation {
+export interface EmbeddingProviderCallOptions {
   signal?: AbortSignal;
+  usageProvenance?: EmbeddingUsageProvenance;
 }
 
 export interface EmbeddingProviderPort {
-  embed(text: string, options?: EmbeddingProviderCancellation): Promise<Float32Array>;
-  embedBatch(texts: string[], options?: EmbeddingProviderCancellation): Promise<Float32Array[]>;
+  embed(text: string, options?: EmbeddingProviderCallOptions): Promise<Float32Array>;
+  embedBatch(texts: string[], options?: EmbeddingProviderCallOptions): Promise<Float32Array[]>;
   readonly dims: number;
 }

@@ -1,4 +1,5 @@
 import { Type } from '@sinclair/typebox';
+import { RUNTIME_LANE_CLASSES } from '../../../../shared/contracts/runtime-lanes.js';
 
 import {
   correlationProperties,
@@ -6,6 +7,7 @@ import {
   emptyParams,
   enumSchema,
   gatewayDecoder,
+  nonEmptyCanonicalString,
   optionalBoolean,
   optionalCanonicalUuid,
   optionalNumber,
@@ -13,6 +15,18 @@ import {
   strictObject,
   unknownRecord,
 } from './schema.js';
+
+const embeddingUsageProvenance = strictObject({
+  callType: enumSchema(['chat', 'tool', 'memory', 'summary', 'background', 'scheduled']),
+  purpose: nonEmptyCanonicalString,
+  originType: enumSchema(['chat', 'tool', 'memory', 'summary', 'background', 'scheduled']),
+  originStage: nonEmptyCanonicalString,
+  service: nonEmptyCanonicalString,
+  process: nonEmptyCanonicalString,
+  runtimeLaneClass: enumSchema(Object.values(RUNTIME_LANE_CLASSES)),
+  workloadType: nonEmptyCanonicalString,
+  workloadId: nonEmptyCanonicalString,
+});
 
 const gatewayLLMContentBlock = Type.Union([
   strictObject({
@@ -134,6 +148,7 @@ export const llmMethodParamDecoders = {
   'llm.embed': gatewayDecoder('llm.embed', correlatedParams({
     texts: Type.Array(Type.String()),
     cancellationId: optionalCanonicalUuid(),
+    usageProvenance: Type.Optional(embeddingUsageProvenance),
   })),
   'llm.cancel': gatewayDecoder('llm.cancel', strictObject({
     cancellationId: Type.String(),

@@ -178,6 +178,7 @@ async def _run_runtime(project_root: Path) -> None:
         port=config.audio_port,
         root=config.audio_root,
         public_host=config.audio_public_host,
+        public_port=config.audio_public_port,
     )
     audio_server.start()
     session_cache = SessionCache(ttl=timedelta(seconds=config.session_ttl_seconds))
@@ -189,7 +190,7 @@ async def _run_runtime(project_root: Path) -> None:
     typer.echo(f"PSFN model: {config.psfn_model}")
     if config.psfn_author_id and config.psfn_author_name:
         typer.echo(f"PSFN author assertion: {config.psfn_author_name} ({config.psfn_author_id})")
-    typer.echo(f"Audio server: http://{config.audio_public_host}:{config.audio_port}/")
+    typer.echo(f"Audio server: http://{config.audio_public_host}:{config.audio_public_port}/")
     if config.device_transport in {"realtime", "hybrid"}:
         realtime_host = config.realtime_target.public_host or config.realtime_target.bind_host
         typer.echo(f"Realtime voice server: ws://{realtime_host}:{config.realtime_target.port}/")

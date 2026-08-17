@@ -113,11 +113,20 @@ class _AudioRequestHandler(SimpleHTTPRequestHandler):
 
 
 class StaticAudioServer:
-    def __init__(self, *, host: str, port: int, root: Path, public_host: str | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        host: str,
+        port: int,
+        root: Path,
+        public_host: str | None = None,
+        public_port: int | None = None,
+    ) -> None:
         self._host = host
         self._port = port
         self._root = root
         self._public_host = public_host or host
+        self._public_port = public_port if public_port is not None else port
         self._httpd: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
         self._streams: dict[str, _RegisteredStream] = {}
@@ -152,7 +161,7 @@ class StaticAudioServer:
 
     def url_for(self, path: Path) -> str:
         relative = path.relative_to(self._root).as_posix()
-        return f"http://{self._public_host}:{self._port}/{relative}"
+        return f"http://{self._public_host}:{self._public_port}/{relative}"
 
     def open_stream(self, *, content_type: str = "audio/mpeg") -> LiveAudioStream:
         stream_id = uuid.uuid4().hex
@@ -162,7 +171,7 @@ class StaticAudioServer:
             self._streams[stream_id] = registered
         return LiveAudioStream(
             stream_id=stream_id,
-            url=f"http://{self._public_host}:{self._port}/streams/{stream_id}",
+            url=f"http://{self._public_host}:{self._public_port}/streams/{stream_id}",
             content_type=content_type,
             queue_obj=chunks,
         )

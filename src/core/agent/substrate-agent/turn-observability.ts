@@ -1,4 +1,5 @@
 import type { CorrelationMetadata, ObservabilityCallType, SubstrateMessage, TurnID } from '../../../shared/contracts/runtime.js';
+import { resolveRuntimeLaneClassForTurn } from '../worker-lanes.js';
 
 export type TurnStageName = 'trust' | 'memory' | 'fatigue' | 'context' | 'prompt' | 'first-token' | 'end';
 
@@ -65,6 +66,10 @@ export function buildTurnCorrelation(
     channelType: message.channelType,
     callType,
     purpose: 'agent.turn',
+    runtimeLaneClass: resolveRuntimeLaneClassForTurn({
+      callType,
+      channelId: message.channelId,
+    }),
     originType: callType,
     originStage: 'agent.turn',
     ...(icpCorrelation ? { icpCorrelation, chargeLane: icpCorrelation.chargeLane } : {}),

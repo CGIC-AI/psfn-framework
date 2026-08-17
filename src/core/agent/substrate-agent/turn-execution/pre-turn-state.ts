@@ -47,6 +47,7 @@ import {
   COMPANION_SELF_CREATION_RETRIEVAL_PURPOSE,
 } from '../../../../faculties/memory/retrieval/access-scope.js';
 import type { ArtifactSensitivitySource } from '../../../../shared/contracts/artifact-sensitivity.js';
+import { RUNTIME_LANE_CLASSES } from '../../../../shared/contracts/runtime-lanes.js';
 import type { CapturedSessionReads } from '../../../session/manager/captured-session-owner.js';
 import type {
   DisclosureSourceContribution,
@@ -875,6 +876,7 @@ export async function computePreTurnState(input: {
           originType: 'background',
           originStage: COMPANION_SELF_CREATION_RETRIEVAL_PURPOSE,
           purpose: COMPANION_SELF_CREATION_RETRIEVAL_PURPOSE,
+          runtimeLaneClass: RUNTIME_LANE_CLASSES.backgroundContinuation,
           requesterProvenance: 'self_directed',
           requestAudience: 'self',
         }
@@ -885,6 +887,7 @@ export async function computePreTurnState(input: {
           originType: 'memory',
           originStage: 'memory.active_context.refresh',
           purpose: 'memory.active_context.refresh',
+          runtimeLaneClass: RUNTIME_LANE_CLASSES.maintenanceReflection,
         };
     const refreshPromise = runWithRequestContext(refreshCorrelation, refresh);
     void refreshPromise.catch((error: unknown) => {

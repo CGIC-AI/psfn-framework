@@ -130,6 +130,19 @@ describe('AdminMemoryDataService', () => {
 
     expect(memoryStore.getAdminMemoryPrivacySummary).toHaveBeenCalledTimes(1);
     expect(memoryStore.getAllActiveMemories).not.toHaveBeenCalled();
+    expect(embeddingService.embed).toHaveBeenCalledWith('memory', {
+      usageProvenance: {
+        callType: 'scheduled',
+        purpose: 'garden.memory_search',
+        originType: 'scheduled',
+        originStage: 'garden.memory_search',
+        service: 'garden',
+        process: 'memory-search',
+        runtimeLaneClass: 'maintenance_reflection',
+        workloadType: 'operator_memory_search',
+        workloadId: 'garden-memory-search',
+      },
+    });
     expect(result.results.map(memory => memory.id)).toEqual(['visible-search-result']);
     expect(result.privacySummary).toMatchObject({
       activeMemoryCount: 4,

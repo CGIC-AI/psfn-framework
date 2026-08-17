@@ -19,6 +19,7 @@ import {
   type PurrMemory,
 } from '../../../faculties/memory/types.js';
 import { createComponentLogger } from '../../../shared/logger.js';
+import { createMaintenanceEmbeddingUsageProvenance } from '../../../core/agent/embedding-usage-provenance.js';
 import { VALID_SENSITIVITY_LEVELS, type SensitivityLevel } from '../../../system/trust/types.js';
 import {
   collectSharedBackgroundUnion,
@@ -761,7 +762,15 @@ export class AdminMemoryDataService implements AdminMemoryService {
         elevation: this.elevationStatusForResponse(sessionKey),
       };
     }
-    const embedding = await embeddingService.embed(query);
+    const embedding = await embeddingService.embed(query, {
+      usageProvenance: createMaintenanceEmbeddingUsageProvenance({
+        purpose: 'garden.memory_search',
+        service: 'garden',
+        process: 'memory-search',
+        workloadType: 'operator_memory_search',
+        workloadId: 'garden-memory-search',
+      }),
+    });
     // Operator admin memory search. For fleet principals `memoryStore` is the
     // subject-authorized projection (see forRequest), which enforces regardless
     // of this stance; the standalone operator session uses the raw store behind the

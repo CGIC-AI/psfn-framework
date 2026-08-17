@@ -118,6 +118,39 @@ describe('withEmbeddingUsageAccounting', () => {
     }]);
   });
 
+  it('does not relabel a gateway-default sessionless health probe as maintenance', async () => {
+    const events: ModelUsageEventInput[] = [];
+    const provider = {
+      kind: 'transformers' as const,
+      model: 'local-health-embedding',
+      dims: 2,
+      embed: vi.fn(),
+      embedBatch: vi.fn(async () => [new Float32Array([1, 2])]),
+    };
+    const accounted = withEmbeddingUsageAccounting(provider, {
+      async recordUsageEvent(event) {
+        events.push(event);
+      },
+    });
+
+    await runWithRequestContext({
+      callType: 'memory',
+      purpose: 'embedding',
+      originType: 'memory',
+      originStage: 'embedding',
+    }, async () => await accounted.embed('health probe'));
+
+    expect(events).toHaveLength(1);
+    expect(events[0]?.attribution).toMatchObject({
+      callType: 'memory',
+      purpose: 'embedding',
+      originStage: 'embedding',
+    });
+    expect(events[0]?.attribution).not.toHaveProperty('runtimeLaneClass');
+    expect(events[0]?.attribution).not.toHaveProperty('workloadType');
+    expect(events[0]?.attribution).not.toHaveProperty('workloadId');
+  });
+
   it('settles known usage and cost when a billable embedding response has an invalid vector count', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
       data: [{ index: 0, embedding: [1, 2] }],
@@ -393,5 +426,44 @@ describe('withEmbeddingUsageAccounting', () => {
     expect(events[0]?.estimatedCostUsd).toBeUndefined();
     expect(events[0]?.effectiveCostUsd).toBeUndefined();
     expect(events[0]?.costSource).toBeUndefined();
+  });
+
+  it('keeps companion-private embedding usage out of operator-visible telemetry', async () => {
+    const events: ModelUsageEventInput[] = [];
+    const provider = {
+      kind: 'transformers' as const,
+      model: 'local-private-embedding',
+      dims: 2,
+      embed: vi.fn(),
+      embedBatch: vi.fn(async () => [new Float32Array([1, 2])]),
+    };
+    const accounted = withEmbeddingUsageAccounting(provider, {
+      async recordUsageEvent(event) {
+        events.push(event);
+      },
+    });
+
+    await runWithRequestContext({
+      callType: 'background',
+      purpose: 'companion_private.background',
+      originType: 'background',
+      originStage: 'companion_private.background',
+      telemetryVisibility: 'companion_private',
+    }, async () => await accounted.embed('private reflection', {
+      usageProvenance: {
+        callType: 'background',
+        purpose: 'companion_private.background',
+        originType: 'background',
+        originStage: 'companion_private.background',
+        service: 'introspection',
+        process: 'blinded-audit',
+        runtimeLaneClass: 'background_continuation',
+        workloadType: 'companion_private_embedding',
+        workloadId: 'introspection:blinded-audit',
+      },
+    }));
+
+    expect(events).toHaveLength(1);
+    expect(events[0]?.telemetryVisibility).toBe('companion_private');
   });
 });

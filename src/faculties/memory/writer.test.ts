@@ -12,6 +12,7 @@ import { InactiveMemoryUpdateError } from './memory-store-port.js';
 import { InMemoryMemoryStore } from '../../test-support/in-memory-memory-store.js';
 import type { PurrMemory } from './types.js';
 import { DEDUP_THRESHOLD, MEMORY_CONFIG } from './types.js';
+import { runWithRequestContext } from '../../primitives/llm/request-context.js';
 
 // ── Mock factories ──
 
@@ -115,6 +116,39 @@ describe('MemoryWriter', () => {
     store = mockMemoryStore();
     embeddings = mockEmbeddingService();
     writer = new MemoryWriter(store as unknown as MemoryStorePort, embeddings);
+  });
+
+  it('preserves a durable background workload when embedding a memory write', async () => {
+    await runWithRequestContext({
+      sessionId: 'session-1',
+      turnId: 'turn-1',
+      requestId: 'request-1',
+      channelId: 'discord:room-1',
+      callType: 'background',
+      purpose: 'extraction',
+      originType: 'background',
+      originStage: 'extraction',
+      runtimeLaneClass: 'maintenance_reflection',
+      workloadType: 'background_work',
+      workloadId: 'memory-extraction:job-1',
+    }, async () => await writer.write({
+      text: 'A fact extracted after the turn.',
+      type: 'semantic',
+    }));
+
+    expect(embeddings.embed).toHaveBeenCalledWith('A fact extracted after the turn.', {
+      usageProvenance: {
+        callType: 'background',
+        purpose: 'memory.write',
+        originType: 'background',
+        originStage: 'extraction',
+        service: 'memory',
+        process: 'write',
+        runtimeLaneClass: 'maintenance_reflection',
+        workloadType: 'background_work',
+        workloadId: 'memory-extraction:job-1',
+      },
+    });
   });
 
   describe('intake sink gate (htm9.3)', () => {
@@ -304,7 +338,14 @@ describe('MemoryWriter', () => {
       expect(result.memory.id).toBeDefined();
 
       // Verify embedding was fetched and memory was inserted
-      expect(embeddings.embed).toHaveBeenCalledWith('Morgan loves cats');
+      expect(embeddings.embed).toHaveBeenCalledWith('Morgan loves cats', {
+        usageProvenance: expect.objectContaining({
+          runtimeLaneClass: 'maintenance_reflection',
+          workloadId: expect.stringMatching(/^memory-write:[a-f0-9]{64}$/),
+        }),
+      });
+      const embeddingOptions = embeddings.embed.mock.calls[0]?.[1];
+      expect(embeddingOptions?.usageProvenance?.workloadId).not.toContain('test:manual');
       expect(store.insertMemory).toHaveBeenCalledOnce();
       const [insertedMemory, insertedEmbedding] = store.insertMemory.mock.calls[0];
       expect(insertedMemory.text).toBe('Morgan loves cats');
@@ -1318,6 +1359,12 @@ describe('MemoryWriter', () => {
 
       expect(embeddings.embed).toHaveBeenCalledWith(
         'The operator can inspect memories and logs, even though trust filtering still protects ordinary participants.',
+        {
+          usageProvenance: expect.objectContaining({
+            runtimeLaneClass: 'maintenance_reflection',
+            workloadId: expect.stringMatching(/^memory-correction:[a-f0-9]{64}$/),
+          }),
+        },
       );
       expect(store.runInTransaction).toHaveBeenCalledOnce();
       expect(store.updateMemory).toHaveBeenCalledWith('privacy-fear-1', expect.objectContaining({
@@ -1488,9 +1535,36 @@ describe('MemoryWriter', () => {
       expect(result.results).toHaveLength(3);
 
       expect(embeddings.embedBatch).toHaveBeenCalledTimes(1);
-      expect(embeddings.embedBatch).toHaveBeenCalledWith(records.map(record => record.text));
+      expect(embeddings.embedBatch).toHaveBeenCalledWith(records.map(record => record.text), {
+        usageProvenance: expect.objectContaining({
+          runtimeLaneClass: 'maintenance_reflection',
+          workloadId: expect.stringMatching(/^memory-import:[a-f0-9]{64}$/),
+        }),
+      });
       expect(embeddings.embed).not.toHaveBeenCalled();
       expect(store.insertMemory).toHaveBeenCalledTimes(3);
+    });
+
+    it('uses one content-free batch identity for records with mixed provenance', async () => {
+      const records: MemoryWriteOptions[] = [
+        {
+          text: 'Fact from the first request',
+          type: 'semantic',
+          provenance: { requestId: 'revealing-request-one' },
+        },
+        {
+          text: 'Fact from the second request',
+          type: 'semantic',
+          provenance: { requestId: 'revealing-request-two' },
+        },
+      ];
+
+      await writer.importBatch(records);
+
+      const options = embeddings.embedBatch.mock.calls[0]?.[1];
+      expect(options?.usageProvenance?.workloadId).toMatch(/^memory-import:[a-f0-9]{64}$/);
+      expect(options?.usageProvenance?.workloadId).not.toContain('revealing-request-one');
+      expect(options?.usageProvenance?.workloadId).not.toContain('revealing-request-two');
     });
 
     it('preserves imported timestamps when provided', async () => {
@@ -1587,7 +1661,15 @@ describe('MemoryWriter', () => {
       expect(result.errors).toBe(1);
       expect(result.results).toHaveLength(1);
       expect(embeddings.embedBatch).toHaveBeenCalledTimes(1);
-      expect(embeddings.embedBatch).toHaveBeenCalledWith(['Morgan prefers garden debugging notes.']);
+      expect(embeddings.embedBatch).toHaveBeenCalledWith(
+        ['Morgan prefers garden debugging notes.'],
+        {
+          usageProvenance: expect.objectContaining({
+            runtimeLaneClass: 'maintenance_reflection',
+            workloadId: expect.stringMatching(/^memory-import:[a-f0-9]{64}$/),
+          }),
+        },
+      );
       expect(store.insertMemory).toHaveBeenCalledTimes(1);
       expect(store.insertMemory).toHaveBeenCalledWith(expect.objectContaining({
         text: 'Morgan prefers garden debugging notes.',
@@ -1706,7 +1788,12 @@ describe('MemoryWriter', () => {
       });
 
       expect(result?.memory.text).toBe('New corrected text');
-      expect(embeddings.embed).toHaveBeenCalledWith('New corrected text');
+      expect(embeddings.embed).toHaveBeenCalledWith('New corrected text', {
+        usageProvenance: expect.objectContaining({
+          runtimeLaneClass: 'maintenance_reflection',
+          workloadId: expect.stringMatching(/^memory-patch:[a-f0-9]{64}$/),
+        }),
+      });
       expect(store.updateMemory).toHaveBeenCalledWith('memory-patch-2', expect.objectContaining({
         text: 'New corrected text',
         embedding: expect.any(Float32Array),

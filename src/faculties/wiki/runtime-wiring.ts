@@ -35,6 +35,11 @@ import { PersonalWishlist } from './personal-wishlist.js';
 import type { GatewaySystemDataWriterPort } from '../../boundary/gateway/system-data-writer.js';
 import { createGatewaySharedWorldWikiDocumentWriter } from './gateway-shared-world-writer.js';
 import { awaitPostgresStoreReadiness } from '../../persistence/postgres/runtime-readiness.js';
+import { getRequestContext } from '../../primitives/llm/request-context.js';
+import {
+  createMaintenanceEmbeddingUsageProvenance,
+  embeddingUsageProvenanceFromRequestContext,
+} from '../../core/agent/embedding-usage-provenance.js';
 
 const log = createComponentLogger('WikiRuntime');
 
@@ -248,7 +253,16 @@ export async function wireWikiRuntime(
     const activeProjection = projection;
     semanticSearch = async (query: string, limit: number): Promise<WikiSemanticSearchResult> => {
       try {
-        const vector = await embedding.embed(query);
+        const vector = await embedding.embed(query, {
+          usageProvenance: embeddingUsageProvenanceFromRequestContext(getRequestContext())
+            ?? createMaintenanceEmbeddingUsageProvenance({
+            purpose: 'wiki.semantic_search',
+            service: 'wiki',
+            process: 'semantic-search',
+            workloadType: 'wiki_semantic_search',
+            workloadId: 'manual-search',
+            }),
+        });
         // Manual search surface uses a permissive threshold (>= 0 similarity) so
         // the operator/agent can browse the whole projection; the gated chat RAG
         // path applies its own stricter, config-owned thresholds separately.

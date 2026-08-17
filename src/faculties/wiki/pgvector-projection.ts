@@ -12,6 +12,10 @@ import { POSTGRES_WIKI_PROJECTION_MIGRATIONS } from '../../persistence/postgres/
 import type { SensitivityLevel } from '../../system/trust/types.js';
 import { resolveWikiScope, type WikiScope } from './scope.js';
 import type { WikiDocument, WikiSourceClass } from './types.js';
+import {
+  createContentFreeEmbeddingWorkloadId,
+  createMaintenanceEmbeddingUsageProvenance,
+} from '../../core/agent/embedding-usage-provenance.js';
 
 const log = createComponentLogger('WikiPgvectorProjection');
 
@@ -252,7 +256,15 @@ export class WikiPgvectorProjectionStore implements WikiProjectionPort {
     }
     let embeddings: Float32Array[];
     try {
-      embeddings = await this.embedding.embedBatch(chunks);
+      embeddings = await this.embedding.embedBatch(chunks, {
+        usageProvenance: createMaintenanceEmbeddingUsageProvenance({
+          purpose: 'wiki.projection',
+          service: 'wiki',
+          process: 'personal-projection',
+          workloadType: 'wiki_projection',
+          workloadId: createContentFreeEmbeddingWorkloadId('wiki-projection', document.id),
+        }),
+      });
       if (embeddings.length !== chunks.length) {
         throw new Error(`expected ${chunks.length} embeddings, received ${embeddings.length}`);
       }

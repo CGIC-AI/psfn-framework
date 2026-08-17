@@ -26,6 +26,7 @@ import {
   reconcileProviderCostEvidence,
 } from '../../shared/telemetry/provider-cost-evidence.js';
 import { ProviderResponseValidationError } from '../../shared/telemetry/provider-attempt-error.js';
+import { createMaintenanceEmbeddingUsageProvenance } from '../../core/agent/embedding-usage-provenance.js';
 
 export type EmbeddingProviderKind = 'ollama' | 'transformers' | 'api';
 
@@ -537,7 +538,15 @@ export async function warmupEmbeddingProvider(
   }
 
   try {
-    const embedding = await embeddingProvider.embed(normalizedText);
+    const embedding = await embeddingProvider.embed(normalizedText, {
+      usageProvenance: createMaintenanceEmbeddingUsageProvenance({
+        purpose: 'embedding.bootstrap.warmup',
+        service: 'startup',
+        process: 'embedding-warmup',
+        workloadType: 'embedding_bootstrap',
+        workloadId: 'startup-warmup',
+      }),
+    });
     if (!(embedding instanceof Float32Array)) {
       throw new Error('embedding warmup must return a Float32Array');
     }

@@ -75,6 +75,7 @@ import type {
   MemoryDeletionApprovalResult,
 } from '../../faculties/memory/deletion-proposals.js';
 import { stripChargeAttribution } from '../../shared/telemetry/model-usage-attribution.js';
+import { embeddingUsageProvenanceFromRequestContext } from '../../core/agent/embedding-usage-provenance.js';
 import type {
   GitCommitResult,
   GitDiffResult,
@@ -909,13 +910,16 @@ export class GatewayClient implements
     texts: string[],
     options: EmbeddingProviderCallOptions = {},
   ): Promise<Float32Array[]> {
+    const requestContext = getRequestContext();
+    const usageProvenance = options.usageProvenance
+      ?? embeddingUsageProvenanceFromRequestContext(requestContext);
     const result = await this.requestWithAbortSignal<LLMEmbedResult>(
       'llm.embed',
       {
         texts,
-        ...(options.usageProvenance ? { usageProvenance: options.usageProvenance } : {}),
+        ...(usageProvenance ? { usageProvenance } : {}),
         ...stripChargeAttribution(
-          buildOutboundUsageCorrelation(this.companionId, getRequestContext()),
+          buildOutboundUsageCorrelation(this.companionId, requestContext),
         ),
       },
       options.signal,

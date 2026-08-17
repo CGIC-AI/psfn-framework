@@ -9,6 +9,7 @@ import {
 import { POSTGRES_MEMORY_MIGRATIONS } from '../../persistence/postgres/migrations.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { chunk } from '../../shared/utils/arrays.js';
+import { createMaintenanceEmbeddingUsageProvenance } from '../../core/agent/embedding-usage-provenance.js';
 
 interface RetrievalRow {
   memory_id: string;
@@ -201,7 +202,15 @@ export async function runRetrievalValidation(
 
   const normalizedTopK = normalizePositiveInt(topK, DEFAULT_VALIDATION_TOP_K, 'validationTopK');
   const queryTexts = queries.map(query => query.query);
-  const queryEmbeddings = await embeddingService.embedBatch(queryTexts);
+  const queryEmbeddings = await embeddingService.embedBatch(queryTexts, {
+    usageProvenance: createMaintenanceEmbeddingUsageProvenance({
+      purpose: 'memory.retrieval_validation',
+      service: 'memory',
+      process: 'retrieval-validation',
+      workloadType: 'memory_retrieval_validation',
+      workloadId: 'validation-batch',
+    }),
+  });
 
   if (queryEmbeddings.length !== queryTexts.length) {
     throw new Error(
@@ -322,7 +331,15 @@ export async function migratePostgresMemoryEmbeddings(
           }
 
           try {
-            const embeddings = await embeddingService.embedBatch(batch.map(row => row.text));
+            const embeddings = await embeddingService.embedBatch(batch.map(row => row.text), {
+              usageProvenance: createMaintenanceEmbeddingUsageProvenance({
+                purpose: 'memory.embedding_migration',
+                service: 'memory',
+                process: 'embedding-migration',
+                workloadType: 'memory_embedding_migration',
+                workloadId: `batch-${batchIndex}`,
+              }),
+            });
             if (embeddings.length !== batch.length) {
               throw new Error(
                 `Embedding service returned ${embeddings.length} embeddings for ${batch.length} records`,

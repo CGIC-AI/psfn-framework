@@ -502,7 +502,10 @@ Both gateway and agent startup run canonical hydration through `hydrateCanonical
   `operator_test`; the authenticated request supplies test consent, but the
   ordinary capability, identity, trust/block, availability, fatigue, charge,
   cost, preflight, one-use permit, and target-turn path remains mandatory. The
-  route accepts no message or motivation text.
+  route accepts no message or motivation text. After canonical-peer validation,
+  it returns the deterministic candidate identity with an `accepted`/`pending`
+  disposition while provider-backed delivery continues in the background;
+  durable candidate lifecycle telemetry carries the terminal outcome.
 - Not shipped: cross-cluster communication, cluster-wide/cross-companion control,
   message puppeteering, private transcript/reasoning inspection, and any Garden
   exposure of chain-of-thought.

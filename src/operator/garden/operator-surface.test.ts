@@ -17,8 +17,10 @@ import type { SubstrateConfig } from '../../system/config/runtime-config-contrac
 import { resetRuntimeTrustPolicy } from '../../system/trust/runtime-policy.js';
 import { GardenAdminTransportServer } from './transport-server.js';
 import { createGatewayDisconnectRecovery } from '../../app/agent/gateway-disconnect-recovery.js';
+import { createIcpTestInitiationTrigger } from '../../app/agent/icp-test-initiation.js';
 import { GardenOperatorSurface } from './operator-surface.js';
 import type { GardenAdminDomainServices } from './admin-contract.js';
+import type { AdminIcpAutonomyService } from './services/types.js';
 import type { ModelUsageAttributionCoverage } from '../../shared/telemetry/model-usage.js';
 import { MODEL_USAGE_GROUP_DIMENSIONS } from '../../shared/telemetry/model-usage-attribution.js';
 import type {
@@ -561,6 +563,7 @@ interface OperatorOnlyHarness {
 }
 
 interface CreateHarnessOptions {
+  icpAutonomyService?: AdminIcpAutonomyService;
   transportMode?: 'socket' | 'network-mtls';
   serverIdentity?: 'valid' | 'missing-spiffe';
   timeoutMs?: number;
@@ -900,6 +903,7 @@ async function createHarness(options: CreateHarnessOptions = {}): Promise<Harnes
   const config = createTestConfig(tempDir, options.fleetAuth);
   const eventBus = new EventBus();
   const services = createTestServices();
+  if (options.icpAutonomyService) services.icpAutonomy = options.icpAutonomyService;
   const timeoutMs = options.timeoutMs ?? 15_000;
 
   const socketPath = join(tempDir, 'garden-admin.sock');
@@ -1141,6 +1145,75 @@ describe('Garden operator surface', () => {
     expect(res.status).toBe(200);
     const payload = JSON.parse(res.body) as { stats: { sessionCount: number } };
     expect(payload.stats.sessionCount).toBeTypeOf('number');
+  });
+
+  it('returns an accepted ICP test initiation before background delivery reaches the transport deadline', async () => {
+    await destroyHarness(harness);
+    let settleOutreach!: () => void;
+    const outreachSettled = new Promise<void>(resolve => {
+      settleOutreach = resolve;
+    });
+    const trigger = createIcpTestInitiationTrigger({
+      localCompanionId: FLEET_COMPANION_ID,
+      sourceRuntime: {
+        submit: vi.fn(async () => {
+          await outreachSettled;
+          return {
+            outcome: 'sent',
+            candidateId: '33333333-3333-4333-8333-333333333333',
+            status: 'consumed',
+            deliveryDisposition: 'delivered',
+          };
+        }),
+      },
+      peers: {
+        listKnownPeerAvailability: vi.fn(async () => [{
+          contactId: 'peer-contact',
+          displayName: 'Peer',
+          peerCompanionId: '22222222-2222-4222-8222-222222222222',
+          availability: { available: true },
+        }] as never),
+      },
+    });
+    const unavailable = vi.fn(async () => {
+      throw new Error('not used');
+    });
+    harness = await createHarness({
+      timeoutMs: 250,
+      icpAutonomyService: {
+        getData: unavailable,
+        cancelCandidate: unavailable,
+        setDoNotDisturb: unavailable,
+        emergencyDisable: unavailable,
+        triggerTestInitiation: request => trigger.trigger(request),
+      },
+    });
+
+    const body = JSON.stringify({
+      peerCompanionId: '22222222-2222-4222-8222-222222222222',
+      requestId: '44444444-4444-4444-8444-444444444444',
+    });
+    const response = await requestPort(
+      harness.port,
+      'POST',
+      '/api/admin/icp-autonomy/test-initiations',
+      body,
+      {
+        'content-length': String(Buffer.byteLength(body)),
+        'content-type': 'application/json',
+      },
+    );
+
+    expect(response.status).toBe(200);
+    expect(JSON.parse(response.body)).toMatchObject({
+      outcome: 'accepted',
+      candidateId: expect.stringMatching(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
+      ),
+      status: 'pending',
+      deliveryDisposition: 'pending',
+    });
+    settleOutreach();
   });
 
   it('proxies GET, POST, health, and telemetry over an explicit mTLS HTTPS/WSS admin transport', async () => {

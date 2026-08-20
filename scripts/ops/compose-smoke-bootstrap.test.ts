@@ -304,6 +304,7 @@ describe('Compose smoke bootstrap', () => {
 
     expect(result.status, result.stderr || result.stdout).toBe(0);
     expect(existsSync(join(systemDataDir, 'automata-policy.json'))).toBe(true);
+    expect(existsSync(join(systemDataDir, 'partner-affect-shadow.json'))).toBe(false);
     expect(JSON.parse(
       readFileSync(join(root, 'companion-data/capability-tier.json'), 'utf8'),
     )).toMatchObject({ tier: 'autonomous' });

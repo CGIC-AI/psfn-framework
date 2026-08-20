@@ -38,3 +38,17 @@ test('Automata is discoverable beside the scheduler in live operations', () => {
     groupId: 'operate',
   });
 });
+
+test('Places is the only world-location destination in the operator navigation', () => {
+  const locationItems = navItems.filter(item => (
+    item.id === 'places' || item.id === 'satellites' || item.id === 'rooms'
+  ));
+
+  assert.deepEqual(locationItems, [{
+    id: 'places',
+    path: '/places',
+    defaultLabel: 'Places',
+    icon: '\u{1F5FA}\u{FE0F}',
+    groupId: 'operate',
+  }]);
+});

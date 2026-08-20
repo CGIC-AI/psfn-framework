@@ -4557,6 +4557,7 @@ describe('AdminServer JSON API routes', () => {
         maxArcsPerRun: 12,
         maxEpisodesPerRun: 60,
       },
+      intentionFollowUp: schedulerBaseline.intentionFollowUp,
       icpAutonomy: schedulerBaseline.icpAutonomy,
     });
     const expectedSkills = saveSkillsConfig(tempDir, {

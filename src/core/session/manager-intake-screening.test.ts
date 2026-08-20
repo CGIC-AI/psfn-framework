@@ -92,7 +92,7 @@ describe('SessionManager tool observation intake screening (htm9.2)', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('persists private-direct enforcement on the user session entry', async () => {
+  it('keeps private-direct findings observational under the global shadow ceiling', async () => {
     const mgr = new SessionManager(store, makeConfig(dir));
     const screening = makeScreening('shadow');
     mgr.intakeScreening = screening;
@@ -107,19 +107,21 @@ describe('SessionManager tool observation intake screening (htm9.2)', () => {
       channelTopology: 'direct',
     });
 
-    expect(screened.snapshot?.enforcementPosture).toBe('enforce');
+    expect(screened.snapshot?.enforcementPosture).toBe('shadow');
+    expect(screened.content).toBe(content);
     mgr.recordUserMessage('telegram:1', screened.content, 'user-1', 'User', true, undefined, {
       intakeEnvelopes: screened.snapshot ? [screened.snapshot] : [],
     });
 
     const entry = mgr.getRecentMessages('telegram:1', 1)[0]!;
-    expect(entry.content).toBe(renderIntakeWithheldContentPlaceholder());
+    expect(entry.content).toBe(content);
     expect(parseIntakeScreeningMetadata(entry.metadata)).toMatchObject({
-      mode: 'enforce',
-      withheld: true,
+      mode: 'shadow',
+      withheld: false,
       envelopes: [{
         sourceClass: 'regular_contact',
-        state: 'quarantined',
+        state: 'released',
+        enforcementPosture: 'shadow',
         riskLabels: expect.arrayContaining(['injection/override_attempt']),
         subject: { kind: 'body' },
       }],
@@ -159,7 +161,7 @@ describe('SessionManager tool observation intake screening (htm9.2)', () => {
       withheld: false,
       envelopes: [{
         sourceClass: 'operator',
-        state: 'quarantined',
+        state: 'released',
         enforcementPosture: 'shadow',
       }],
     });
@@ -270,7 +272,7 @@ describe('SessionManager tool observation intake screening (htm9.2)', () => {
     const screeningMetadata = parseIntakeScreeningMetadata(entry.metadata);
     expect(screeningMetadata?.mode).toBe('shadow');
     expect(screeningMetadata?.withheld).toBe(false);
-    expect(screeningMetadata?.envelopes[0]?.state).toBe('quarantined');
+    expect(screeningMetadata?.envelopes[0]?.state).toBe('released');
   });
 
   // hrmrq.54: results screened at the scheduler seam arrive with the outcome

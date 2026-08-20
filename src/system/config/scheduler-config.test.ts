@@ -10,6 +10,7 @@ import {
   DEFAULT_TEMPORAL_WAKEUP_CONFIG,
   DEFAULT_WEIGHTED_THOUGHT_OUTREACH_CONFIG,
   loadSchedulerSeedDefaults,
+  MAX_NEAR_TERM_FOLLOW_UP_HORIZON_MS,
   SCHEDULER_SEED_FILE_NAME,
   validateSchedulerConfig,
 } from './scheduler-config.js';
@@ -110,6 +111,9 @@ function buildValidSchedulerConfig(): Record<string, unknown> {
       coPresenceWindowMinutes: 720,
       scanMemoryLimit: 250,
     },
+    intentionFollowUp: {
+      nearTermHorizonMs: 259_200_000,
+    },
     icpAutonomy: DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG,
   };
 }
@@ -126,6 +130,25 @@ function withSeedDir(run: (seedDir: string) => void): void {
 }
 
 describe('config validators', () => {
+  it('requires a bounded near-term intention follow-up horizon', () => {
+    const missing = buildValidSchedulerConfig();
+    delete missing.intentionFollowUp;
+    expect(() => validateSchedulerConfig(missing, 'test')).toThrow(
+      'intentionFollowUp must be an object',
+    );
+
+    const tooLong = buildValidSchedulerConfig();
+    tooLong.intentionFollowUp = {
+      nearTermHorizonMs: MAX_NEAR_TERM_FOLLOW_UP_HORIZON_MS + 1,
+    };
+    expect(() => validateSchedulerConfig(tooLong, 'test')).toThrow(
+      'intentionFollowUp.nearTermHorizonMs',
+    );
+
+    expect(validateSchedulerConfig(buildValidSchedulerConfig(), 'test').intentionFollowUp)
+      .toEqual({ nearTermHorizonMs: 259_200_000 });
+  });
+
   it('fails closed above the short ICP policy-hold safety ceilings', () => {
     for (const [field, value] of [
       ['ttlMs', MAX_ICP_POLICY_HOLD_TTL_MS + 1],

@@ -167,6 +167,35 @@ describe('schedule tool', () => {
     }));
   });
 
+  it('routes a far-future follow-up to the durable scheduled-prompt lane', async () => {
+    const pendingFollowUpStore = createPendingFollowUpStore();
+    const routeLongHorizonFollowUp = vi.fn(async () => 'scheduled:intention:far');
+    const { tool } = createTool({
+      pendingFollowUpStore,
+      intentionFollowUpHorizonMs: 3 * 24 * 60 * 60_000,
+      routeLongHorizonFollowUp,
+    });
+    const dueAt = new Date(Date.now() + 30 * 24 * 60 * 60_000).toISOString();
+
+    const result = await executeScheduleCall(tool, {
+      action: 'create_follow_up',
+      content: 'Review this at the right future time.',
+      channel_id: '123456789012345678',
+      channel_type: 'discord',
+      due_at: dueAt,
+    });
+
+    expect(result.isError).toBe(false);
+    expect(pendingFollowUpStore.enqueue).not.toHaveBeenCalled();
+    expect(routeLongHorizonFollowUp).toHaveBeenCalledWith(expect.objectContaining({
+      dueAt,
+      channelId: '123456789012345678',
+      channelType: 'discord',
+      content: 'Review this at the right future time.',
+    }));
+    expect(resultText(result)).toContain('scheduled:intention:far');
+  });
+
   it.each([
     ['a prefixed destination', 'discord:dm:not-a-snowflake'],
     ['a value outside the unsigned 64-bit range', '18446744073709551616'],

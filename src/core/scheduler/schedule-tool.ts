@@ -1,4 +1,5 @@
 import { Type, type Static } from '@sinclair/typebox';
+import { createHash } from 'node:crypto';
 import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from '../agent/tool-surface/descriptions.js';
 import type { AgentToolResult } from '../../boundary/pi-agent/index.js';
 import type { SubstrateAgentTool } from '../../boundary/pi-agent/index.js';
@@ -24,6 +25,7 @@ import {
   type PendingFollowUpWakeCondition,
 } from '../intention/pending-follow-ups.js';
 import type { PendingFollowUpStorePort } from '../intention/pending-follow-up-store-port.js';
+import type { LongHorizonFollowUpInput } from '../intention/runtime-wiring.js';
 import {
   CHANNEL_TYPES,
   type ChannelType,
@@ -133,6 +135,8 @@ export interface ScheduleToolOptions {
     PendingFollowUpStorePort,
     'enqueue' | 'list' | 'dequeue'
   > | null;
+  intentionFollowUpHorizonMs?: number;
+  routeLongHorizonFollowUp?: (input: LongHorizonFollowUpInput) => Promise<string>;
   careReminderStore?: Pick<
     CareReminderStorePort,
     'create' | 'list' | 'markTriggered'
@@ -148,6 +152,20 @@ function formatMs(ms: number): string {
   if (ms < 3_600_000) return `${Math.round(ms / 60_000)}m`;
   if (ms < 86_400_000) return `${(ms / 3_600_000).toFixed(1)}h`;
   return `${(ms / 86_400_000).toFixed(1)}d`;
+}
+
+function scheduleToolFollowUpSourceId(input: {
+  channelId: string;
+  dueAt: string;
+  content: string;
+}): string {
+  return `schedule-tool:${createHash('sha256')
+    .update(input.channelId)
+    .update('\0')
+    .update(input.dueAt)
+    .update('\0')
+    .update(input.content)
+    .digest('hex')}`;
 }
 
 function formatDeliberation(config?: ReflectionDeliberationConfig): string {
@@ -642,8 +660,42 @@ export function createScheduleTool(options: ScheduleToolOptions): SubstrateAgent
             const dueAt = normalizeOptionalIsoTimestamp(params.due_at, 'due_at');
             const channelType = normalizeChannelType(params.channel_type, 'channel_type');
             const channelId = normalizeFollowUpChannelId(params.channel_id, channelType);
+            const content = normalizeNonEmptyString(params.content, 'content');
+            const contactId = normalizeOptionalString(params.contact_id);
+            const sourceMessageId = normalizeOptionalString(params.source_message_id);
+            const contextSummary = normalizeOptionalString(params.context_summary);
+            if (
+              dueAt
+              && options.intentionFollowUpHorizonMs !== undefined
+              && Date.parse(dueAt) > Date.now() + options.intentionFollowUpHorizonMs
+            ) {
+              if (!options.routeLongHorizonFollowUp) {
+                throw new Error('Long-horizon follow-up scheduler is unavailable');
+              }
+              const scheduledPromptId = await options.routeLongHorizonFollowUp({
+                content,
+                reason: 'schedule tool follow-up crossed the active intention horizon',
+                dueAt,
+                channelId,
+                channelType,
+                authorId: 'system:intention',
+                authorName: 'Whisper',
+                ...(contactId ? { contactId } : {}),
+                sourceMessageId: sourceMessageId ?? scheduleToolFollowUpSourceId({
+                  channelId,
+                  dueAt,
+                  content,
+                }),
+                ...(contextSummary ? { contextSummary } : {}),
+              });
+              return textResult(JSON.stringify({
+                action: 'create_follow_up',
+                disposition: 'scheduled_prompt',
+                scheduledPromptId,
+              }, null, 2));
+            }
             const created = await options.pendingFollowUpStore.enqueue({
-              content: normalizeNonEmptyString(params.content, 'content'),
+              content,
               priority: normalizePriority(params.priority),
               timing: normalizeTiming(params.timing, dueAt),
               channelId,
@@ -651,13 +703,9 @@ export function createScheduleTool(options: ScheduleToolOptions): SubstrateAgent
               authorId: 'system:intention',
               authorName: 'Whisper',
               ...(dueAt ? { dueAt } : {}),
-              ...(normalizeOptionalString(params.contact_id) ? { contactId: normalizeOptionalString(params.contact_id) } : {}),
-              ...(normalizeOptionalString(params.source_message_id)
-                ? { sourceMessageId: normalizeOptionalString(params.source_message_id) }
-                : {}),
-              ...(normalizeOptionalString(params.context_summary)
-                ? { contextSummary: normalizeOptionalString(params.context_summary) }
-                : {}),
+              ...(contactId ? { contactId } : {}),
+              ...(sourceMessageId ? { sourceMessageId } : {}),
+              ...(contextSummary ? { contextSummary } : {}),
               ...(normalizeWakeConditions(params.wake_conditions)
                 ? { wakeConditions: normalizeWakeConditions(params.wake_conditions) }
                 : {}),

@@ -75,6 +75,10 @@ import {
   type ToolUsageEvaluatorConfig,
 } from './scheduler-config/tool-usage.js';
 import {
+  validateIntentionFollowUpSchedulerConfig,
+  type IntentionFollowUpSchedulerConfig,
+} from './scheduler-config/intention-follow-up.js';
+import {
   toInterval,
 } from './scheduler-config/primitives.js';
 
@@ -159,6 +163,10 @@ export {
   type ToolUsageEvaluatorConfig,
   type ToolUsageEvaluatorWindow,
 } from './scheduler-config/tool-usage.js';
+export {
+  MAX_NEAR_TERM_FOLLOW_UP_HORIZON_MS,
+  type IntentionFollowUpSchedulerConfig,
+} from './scheduler-config/intention-follow-up.js';
 
 export const SCHEDULER_FILE_NAME = 'scheduler.json';
 export const SCHEDULER_SEED_FILE_NAME = 'scheduler.seed.json';
@@ -183,6 +191,7 @@ export interface SchedulerRuntimeConfig {
   socialAutonomy: SocialAutonomyConfig;
   weightedThoughtOutreach: WeightedThoughtOutreachConfig;
   socialDesire: SocialDesireConfig;
+  intentionFollowUp: IntentionFollowUpSchedulerConfig;
   icpAutonomy: IcpAutonomySchedulerConfig;
   introspectionAudit?: IntrospectionAuditConfig;
   backgroundWorkWelfare?: BackgroundWorkWelfareConfig;
@@ -283,6 +292,10 @@ export function validateSchedulerConfig(raw: unknown, sourcePath: string): Sched
     socialAutonomy: validateSocialAutonomyConfig(raw.socialAutonomy, sourcePath),
     weightedThoughtOutreach: validateWeightedThoughtOutreachConfig(raw.weightedThoughtOutreach, sourcePath),
     socialDesire: validateSocialDesireConfig(raw.socialDesire, sourcePath),
+    intentionFollowUp: validateIntentionFollowUpSchedulerConfig(
+      raw.intentionFollowUp,
+      sourcePath,
+    ),
     icpAutonomy: parseIcpAutonomySchedulerConfig(raw.icpAutonomy),
     ...(raw.introspectionAudit === undefined
       ? {}

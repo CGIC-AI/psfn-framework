@@ -83,6 +83,10 @@ import { registerWorldTools } from '../../boundary/integrations/world/runtime-wi
 import { GatewayWorldOps } from '../../boundary/integrations/world/gateway-ops.js';
 import { createBehavioralPatternMemoryPromotionHook } from '../../core/intention/patterns.js';
 import {
+  createLongHorizonFollowUpRouter,
+} from '../../core/intention/long-horizon-follow-up.js';
+import type { LongHorizonFollowUpInput } from '../../core/intention/runtime-wiring.js';
+import {
   wireOperatorHookRuntime,
   wireShardAndThinkRuntime,
 } from '../startup/composition/composition.js';
@@ -492,6 +496,22 @@ async function main(): Promise<void> {
     throw new Error('Agent core runtime requires POSTGRES_DATABASE_URL');
   }
 
+  // Core appraisal hooks are composed before the scheduler because the
+  // scheduler itself needs the finished agent loop. Keep a fail-closed bridge
+  // during that short startup interval, then bind it to the real durable
+  // scheduled-prompt runtime immediately after scheduler composition.
+  let longHorizonFollowUpRouter:
+    | ((input: LongHorizonFollowUpInput) => Promise<string>)
+    | null = null;
+  const routeLongHorizonFollowUp = async (
+    input: LongHorizonFollowUpInput,
+  ): Promise<string> => {
+    if (!longHorizonFollowUpRouter) {
+      throw new Error('Long-horizon intention follow-up scheduler is not ready');
+    }
+    return longHorizonFollowUpRouter(input);
+  };
+
   const {
     card,
     systemPrompt,
@@ -517,6 +537,8 @@ async function main(): Promise<void> {
     contactStore: persistedContactStore,
     intentionRuntime: persistedIntentionRuntime,
     intentionProviders,
+    intentionFollowUpHorizonMs: schedulerConfig.intentionFollowUp.nearTermHorizonMs,
+    routeLongHorizonFollowUp,
     capabilityRuntime,
     contactTrackingGate,
     satelliteRegistryConfig,
@@ -1299,6 +1321,14 @@ async function main(): Promise<void> {
     loadedModules: moduleSummary.loaded,
     failedModules: moduleSummary.failed,
   });
+  longHorizonFollowUpRouter = createLongHorizonFollowUpRouter({
+    store: persistenceRuntime.scheduledPromptStore,
+    scheduler,
+    agentLoop,
+    sender: {
+      send: (channelId: string, content: string) => gateway.discordSend(channelId, content),
+    },
+  });
   agentLoop.validateToolWiring('gateway', gateway, DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE);
 
   // ── API backend (gateway-hosted edge) ──
@@ -1775,6 +1805,8 @@ async function main(): Promise<void> {
       onIntentionFollowUpDampened: intentionAppraisalHooks.onIntentionFollowUpDampened,
       onBehavioralPatternOutcome: intentionBehavioralHooks.onBehavioralPatternOutcome,
       pendingFollowUpStore: intentionRuntime.pendingFollowUpStore,
+      intentionFollowUpHorizonMs: schedulerConfig.intentionFollowUp.nearTermHorizonMs,
+      routeLongHorizonFollowUp,
       ...(icpIntentionCandidateAdapter ? { icpIntentionCandidateAdapter } : {}),
       scheduledPromptStore: persistenceRuntime.scheduledPromptStore,
       coreMemoryStore,

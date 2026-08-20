@@ -33,6 +33,17 @@ export async function wireReflectionRuntime(
   heartbeatChannelId?: string,
   runtimeOptions: ReflectionRuntimeOptions = {},
 ): Promise<void> {
+  if (
+    runtimeOptions.pendingFollowUpStore
+    && (
+      runtimeOptions.intentionFollowUpHorizonMs === undefined
+      || !runtimeOptions.routeLongHorizonFollowUp
+    )
+  ) {
+    throw new Error(
+      'Pending follow-up tooling requires the bounded long-horizon scheduler',
+    );
+  }
   const templateRuntime: ReflectionTemplateRuntime = createReflectionTemplateRuntime({
     scheduler,
     agentLoop,
@@ -71,6 +82,8 @@ export async function wireReflectionRuntime(
     heartbeatChannelId,
     memoryWriter: runtimeOptions.memoryWriter,
     pendingFollowUpStore: runtimeOptions.pendingFollowUpStore ?? null,
+    intentionFollowUpHorizonMs: runtimeOptions.intentionFollowUpHorizonMs,
+    routeLongHorizonFollowUp: runtimeOptions.routeLongHorizonFollowUp,
     careReminderStore: runtimeOptions.careReminderStore ?? null,
     scheduledPromptStore: runtimeOptions.scheduledPromptStore ?? null,
   }), 'core');

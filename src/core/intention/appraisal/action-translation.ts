@@ -147,7 +147,7 @@ export function decisionsToPostTurnActionCandidates(
   const originIcpRootInitiationId = resolveOriginIcpRootInitiationId(context.message);
 
   for (const decision of decisions) {
-    if (decision.type === 'followUp') {
+    if (decision.type === 'followUp' && !decision.followUp?.scheduledPromptId) {
       const content = decision.followUp?.content.trim() ?? '';
       if (!content) continue;
       const hasStateWakeConditions = Array.isArray(decision.followUp?.wakeConditions)

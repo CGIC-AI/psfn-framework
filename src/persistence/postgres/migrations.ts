@@ -1530,7 +1530,7 @@ export const POSTGRES_SCHEDULED_PROMPT_MIGRATIONS = [
     status TEXT NOT NULL DEFAULT 'pending',
     delivery_channel_id TEXT,
     completed_at TEXT,
-    CHECK (source = 'schedule_tool'),
+    CHECK (source IN ('schedule_tool', 'intention_appraisal')),
     CHECK (channel_type IN ('discord', 'terminal', 'api', 'telegram', 'psfn-amica')),
     CHECK (status IN ('pending', 'completed')),
     CHECK (
@@ -1538,6 +1538,15 @@ export const POSTGRES_SCHEDULED_PROMPT_MIGRATIONS = [
       OR (status = 'completed' AND completed_at IS NOT NULL)
     )
   );
+  `,
+  `
+  ALTER TABLE scheduler_scheduled_prompts
+    DROP CONSTRAINT IF EXISTS scheduler_scheduled_prompts_source_check;
+  `,
+  `
+  ALTER TABLE scheduler_scheduled_prompts
+    ADD CONSTRAINT scheduler_scheduled_prompts_source_check
+    CHECK (source IN ('schedule_tool', 'intention_appraisal'));
   `,
   `
   CREATE INDEX IF NOT EXISTS idx_scheduler_scheduled_prompts_pending_due

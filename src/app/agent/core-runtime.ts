@@ -61,6 +61,7 @@ import {
   createIntentionAppraisalHooks,
   createIntentionBehavioralPatternHooks,
   wireIntentionRuntimeStores,
+  type LongHorizonFollowUpInput,
 } from '../../core/intention/runtime-wiring.js';
 import {
   createAutomatedConcernRuntime,
@@ -224,6 +225,8 @@ export interface AgentCoreRuntimeOptions {
   operatorNotifier: NotificationPort;
   intentionRuntime?: IntentionRuntimeWiring;
   intentionProviders?: IntentionRuntimeProviders;
+  intentionFollowUpHorizonMs: number;
+  routeLongHorizonFollowUp: (input: LongHorizonFollowUpInput) => Promise<string>;
   identityCoolingOff?: ReturnType<typeof createIdentityCoolingOffManagerFromEnv>;
   primaryUserId?: string;
   primaryTelegramUserId?: string;
@@ -961,6 +964,8 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
         agentLoop.getCurrentInternalState(),
         asOf,
       ),
+      nearTermFollowUpHorizonMs: options.intentionFollowUpHorizonMs,
+      routeLongHorizonFollowUp: options.routeLongHorizonFollowUp,
     },
   );
   const intentionBehavioralHooks = createIntentionBehavioralPatternHooks(

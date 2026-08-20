@@ -17,6 +17,11 @@
   } from '$lib/api/endpoints/sessions';
   import ConfirmationModal from '$lib/components/ConfirmationModal.svelte';
   import { scopeGardenPath } from '$lib/fleet/companion-scope';
+  import {
+    listOpenSessionIntegrityIncidents,
+    listRemediationSourceChannelOptions,
+    resolveIntegrityIncidentSelection,
+  } from './incident-selection';
   import type {
     AdminCogSecEventListData,
     AdminCogSecRemediationApplyData,
@@ -31,6 +36,7 @@
   let routes = $state<AdminSessionRouteView[]>([]);
   let channels = $state<ChannelInfo[]>([]);
   let selectedSourceChannelId = $state('');
+  let selectedIncidentCaseId = $state('');
   let loading = $state(true);
   let error = $state('');
   let cogSecEvents = $state<AdminCogSecEventListData['events']>([]);
@@ -60,12 +66,12 @@
   let browserSearching = $state(false);
   let browserSearchResults = $state<AdminSessionSearchData | null>(null);
 
-  const sourceChannelOptions = $derived(
-    [...new Set([
-      ...routes.map(route => route.sourceChannelId),
-      ...channels.map(channel => channel.channelId),
-    ])].sort((left, right) => left.localeCompare(right)),
-  );
+  const openIntegrityIncidents = $derived(listOpenSessionIntegrityIncidents(cogSecEvents));
+  const sourceChannelOptions = $derived(listRemediationSourceChannelOptions({
+    routes,
+    channels,
+    incidents: openIntegrityIncidents,
+  }));
   const selectedRoute = $derived(
     routes.find(route => route.sourceChannelId === selectedSourceChannelId) ?? null,
   );
@@ -85,6 +91,20 @@
     if (channel?.displayLabel) return `${channel.displayLabel} (${channelId})`;
     if (channel?.linkedContactName) return `${channel.linkedContactName} (${channelId})`;
     return channelId;
+  }
+
+  function selectIntegrityIncident(event: AdminCogSecEventListData['events'][number]): void {
+    const selection = resolveIntegrityIncidentSelection(event);
+    selectedIncidentCaseId = selection.caseId;
+    selectedSourceChannelId = selection.sourceChannelId;
+    cogSecLogicalSessionId = selection.logicalSessionId;
+    cogSecMessageIds = '';
+    cogSecStartEntryId = selection.startEntryId?.toString() ?? '';
+    cogSecEndEntryId = selection.endEntryId?.toString() ?? '';
+    cogSecType = 'session_integrity';
+    cogSecSeverity = selection.severity;
+    cogSecPreview = null;
+    cogSecApplyResult = null;
   }
 
   async function loadRoutes(): Promise<void> {
@@ -294,6 +314,7 @@
       throw new Error('Enter message IDs or a start/end entry range.');
     }
     return {
+      ...(selectedIncidentCaseId ? { caseId: selectedIncidentCaseId } : {}),
       sourceChannelId,
       affectedLogicalSessionIds: [logicalSessionId],
       affectedMessageRanges: [{
@@ -345,6 +366,7 @@
       cogSecMessageIds = '';
       cogSecStartEntryId = '';
       cogSecEndEntryId = '';
+      selectedIncidentCaseId = '';
       browserLoadedSessionId = '';
       const cogSecData = await listCogSecEvents();
       cogSecEvents = cogSecData.events;
@@ -383,6 +405,44 @@
 
     <section class="garden-split-view grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(320px,420px)]">
       <div class="flex min-w-0 flex-col gap-4">
+        <div class="card-garden p-4">
+          <div class="mb-4">
+            <h2 class="text-lg font-semibold">Open Session Integrity Incidents</h2>
+            <p class="text-sm text-shadow-600">
+              {openIntegrityIncidents.length} journal integrity incident{openIntegrityIncidents.length === 1 ? '' : 's'} awaiting review. These are the items counted by the navigation badge.
+            </p>
+          </div>
+
+          {#if loading}
+            <p class="text-sm text-shadow-600">Loading integrity incidents...</p>
+          {:else if openIntegrityIncidents.length === 0}
+            <p class="text-sm text-shadow-600">No open session-integrity incidents.</p>
+          {:else}
+            <div class="max-h-[28rem] overflow-y-auto rounded-xl border border-bark-200">
+              {#each openIntegrityIncidents as incident (incident.caseId)}
+                <div class="border-b border-bark-100 p-3 last:border-b-0 {selectedIncidentCaseId === incident.caseId ? 'bg-wilt-50' : 'bg-surface'}">
+                  <div class="flex flex-wrap items-start justify-between gap-3">
+                    <div class="min-w-0 flex-1">
+                      <p class="break-all font-mono text-xs text-shadow-800">{incident.sourceChannelId}</p>
+                      <p class="mt-1 text-xs text-shadow-600">
+                        {incident.severity} · updated {formatDate(incident.updatedAt)}
+                      </p>
+                      <p class="mt-2 text-sm text-shadow-700">{incident.safeSummary}</p>
+                    </div>
+                    <button
+                      class="shrink-0 rounded border border-bark-300 px-3 py-2 text-sm font-medium text-shadow-700 hover:bg-bark-100"
+                      type="button"
+                      onclick={() => selectIntegrityIncident(incident)}
+                    >
+                      Review rows
+                    </button>
+                  </div>
+                </div>
+              {/each}
+            </div>
+          {/if}
+        </div>
+
         <div class="card-garden p-4">
           <div class="mb-4 flex items-center justify-between gap-3">
             <div>
@@ -603,6 +663,7 @@
                 <option value="persona_poisoning">Persona poisoning</option>
                 <option value="memory_poisoning">Memory poisoning</option>
                 <option value="policy_drift">Policy drift</option>
+                <option value="session_integrity">Session integrity</option>
                 <option value="unknown">Unknown</option>
               </select>
             </label>

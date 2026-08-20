@@ -326,7 +326,7 @@ export async function runLLMStreamAttempt(
     const deferredContractError = deferredMissingRequiredCallError(input, response.toolCalls);
     try {
       response.toolCalls = selectExplicitToolContractCall({
-        choice: input.requestOptions.toolChoice,
+        choice: input.requestOptions.explicitToolContract?.choice,
         ...(input.requestOptions.requiredToolName
           ? { requiredToolName: input.requestOptions.requiredToolName }
           : {}),
@@ -421,7 +421,7 @@ export async function runLLMStreamAttempt(
     incompleteResponse.toolCalls,
   );
   incompleteResponse.toolCalls = selectExplicitToolContractCall({
-    choice: input.requestOptions.toolChoice,
+    choice: input.requestOptions.explicitToolContract?.choice,
     ...(input.requestOptions.requiredToolName
       ? { requiredToolName: input.requestOptions.requiredToolName }
       : {}),

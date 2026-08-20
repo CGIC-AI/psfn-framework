@@ -7,6 +7,41 @@ import { toPiTools } from '../../../primitives/llm/conversion.js';
 import type { ToolSchema } from '../../../shared/contracts/runtime.js';
 
 describe('readActiveTurnToolSchemas', () => {
+  it('prefers a model-facing schema while leaving the execution schema on the tool', () => {
+    const executionParameters = {
+      anyOf: [{
+        type: 'object',
+        properties: { action: { const: 'send' }, message: { type: 'string' } },
+        required: ['action', 'message'],
+        additionalProperties: false,
+      }],
+    };
+    const modelParameters = {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['send'] },
+        message: { type: 'string' },
+      },
+      required: ['action'],
+      additionalProperties: false,
+    };
+    const tool = {
+      name: 'notify',
+      description: 'Notify an operator.',
+      parameters: executionParameters,
+      modelParameters,
+    };
+
+    const schemas = readActiveTurnToolSchemas({ state: { tools: [tool] } });
+
+    expect(schemas).toEqual([{
+      name: 'notify',
+      description: 'Notify an operator.',
+      inputSchema: modelParameters,
+    }]);
+    expect(tool.parameters).toBe(executionParameters);
+  });
+
   it('returns deduped tool schemas in canonical name order', () => {
     const schemas = readActiveTurnToolSchemas({
       state: {

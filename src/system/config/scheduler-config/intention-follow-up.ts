@@ -16,6 +16,11 @@ export interface IntentionFollowUpSchedulerConfig {
   nearTermHorizonMs: number;
 }
 
+export const DEFAULT_INTENTION_FOLLOW_UP_SCHEDULER_CONFIG:
+  IntentionFollowUpSchedulerConfig = Object.freeze({
+  nearTermHorizonMs: 3 * DAY_MS,
+});
+
 export function validateIntentionFollowUpSchedulerConfig(
   raw: unknown,
   sourcePath: string,

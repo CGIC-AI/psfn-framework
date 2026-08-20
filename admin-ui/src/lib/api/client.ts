@@ -5,7 +5,6 @@ import {
   isFleetOverviewPath,
   onCompanionScopeChange,
   scopeGardenDataPath,
-  scopeGardenPath,
 } from '$lib/fleet/companion-scope';
 import { throwIfAborted } from './abort';
 import { ApiError } from './errors';
@@ -36,9 +35,13 @@ function authHeaders(): Record<string, string> {
 
 function redirectToLogin(): void {
   if (typeof window !== 'undefined') {
-    window.location.href = scopeGardenPath('/login') === '/login'
-      ? '/login'
-      : '/fleet/login';
+    const pathname = window.location.pathname;
+    if (currentCompanionGardenScope(pathname) || isFleetOverviewPath(pathname)) {
+      const returnPath = `${pathname}${window.location.search ?? ''}`;
+      window.location.href = `/v1/fleet-auth/login?return_to=${encodeURIComponent(returnPath)}`;
+      return;
+    }
+    window.location.href = '/login';
   }
 }
 

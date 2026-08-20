@@ -34,6 +34,7 @@ import {
 } from './confirmation-resolve-request.js';
 import type { ConfirmationOperatorAuthContext } from './admin-contract.js';
 import type { GatewayOperatorConfirmationClient } from '../../app/startup/support/gateway-operator-confirmation-client.js';
+import { isResolvedConfirmationDecision } from '../../system/capabilities/confirmation-queue.js';
 import {
   GardenRequestTargetError,
   validateGardenRequestMetadata,
@@ -505,7 +506,7 @@ export class GardenOperatorSurface implements Lifecycle {
             return;
           }
           sendJson(res, 200, {
-            ok: result.status === 'approved' || result.status === 'modified',
+            ok: isResolvedConfirmationDecision(result.status),
             message: result.message,
             status: result.status,
             executed: result.executed,

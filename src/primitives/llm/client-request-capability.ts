@@ -59,7 +59,7 @@ export interface LLMRequestOptions extends SimpleStreamOptions {
   repetitionPenalty?: number;
   /** Provider-facing choice serialized by pi-ai. */
   toolChoice?: ExplicitToolChoice | 'auto';
-  /** PSFN postcondition, deliberately separate from provider wire formatting. */
+  /** Runtime postcondition, deliberately separate from provider wire formatting. */
   explicitToolContract?: ExplicitToolContract;
   /** Exact tool contract paired with a provider-generic `required` choice. */
   requiredToolName?: string;
@@ -261,7 +261,7 @@ export class LLMRequestCapability {
     if (contract.requiredToolName) {
       // The context exposes exactly one function, so the provider-generic
       // required choice asks pi-ai to format a mandatory call without coupling
-      // PSFN to a provider-specific named-tool payload.
+      // the runtime to a provider-specific named-tool payload.
       requestOptions.toolChoice = 'required';
     }
     return contract;

@@ -97,8 +97,8 @@ describe('AgentApiBackend testing-harness provenance', () => {
       },
       principal: { id: 'testing-harness', mode: 'api_key', scope: 'testing_harness' },
       headers: {
-        'x-psfn-test-run-id': 'run-tool-matrix',
-        'x-psfn-test-manifest-id': 'manifest-tool-matrix',
+        'x-testing-harness-run-id': 'run-tool-matrix',
+        'x-testing-harness-manifest-id': 'manifest-tool-matrix',
       },
     });
 

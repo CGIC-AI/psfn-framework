@@ -20,6 +20,7 @@ export interface ExplicitToolContract {
 
 export type ExplicitToolContractViolation =
   | 'missing_required_call'
+  | 'corrupt_empty_arguments'
   | 'unexpected_tool_call'
   | 'mismatched_tool_call';
 

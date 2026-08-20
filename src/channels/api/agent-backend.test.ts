@@ -72,6 +72,83 @@ describe('AgentApiBackend health RPC', () => {
   });
 });
 
+describe('AgentApiBackend testing-harness provenance', () => {
+  it('stamps the split agent turn and seeded evidence with exact run provenance', async () => {
+    const handleMessage = vi.fn(async (message) => ({
+      content: 'probe complete',
+      channelId: message.channelId,
+      metadata: { inputTokens: 1, outputTokens: 1 },
+    }));
+    const sessionManager = createSessionManagerStub();
+    const backend = new AgentApiBackend({
+      agentLoop: fromAny({ handleMessage, abort: vi.fn() }),
+      eventBus: new EventBus(),
+      sessionManager,
+    });
+
+    const result = await backend.handleChatCompletion({
+      requestId: 'harness-request-1',
+      request: {
+        model: 'test-model',
+        messages: [
+          { role: 'assistant', content: 'prior test evidence' },
+          { role: 'user', content: 'run tool probe' },
+        ],
+      },
+      principal: { id: 'testing-harness', mode: 'api_key', scope: 'testing_harness' },
+      headers: {
+        'x-psfn-test-run-id': 'run-tool-matrix',
+        'x-psfn-test-manifest-id': 'manifest-tool-matrix',
+      },
+    });
+
+    expect(result).toMatchObject({ ok: true });
+    expect(handleMessage).toHaveBeenCalledWith(expect.objectContaining({
+      channelId: 'api:testing-harness',
+      routing: expect.objectContaining({
+        testingHarness: {
+          schemaVersion: 1,
+          kind: 'testing_harness',
+          runId: 'run-tool-matrix',
+          manifestId: 'manifest-tool-matrix',
+        },
+      }),
+    }), undefined, undefined);
+    const seedOptions = sessionManager.recordAssistantMessage.mock.calls[0]?.[5];
+    expect(JSON.parse(seedOptions.metadata).testingHarness).toEqual({
+      schemaVersion: 1,
+      kind: 'testing_harness',
+      runId: 'run-tool-matrix',
+      manifestId: 'manifest-tool-matrix',
+    });
+  });
+
+  it('rejects an unattributed harness turn before the agent runs', async () => {
+    const handleMessage = vi.fn();
+    const backend = new AgentApiBackend({
+      agentLoop: fromAny({ handleMessage, abort: vi.fn() }),
+      eventBus: new EventBus(),
+      sessionManager: createSessionManagerStub(),
+    });
+
+    const result = await backend.handleChatCompletion({
+      requestId: 'harness-request-missing-provenance',
+      request: {
+        model: 'test-model',
+        messages: [{ role: 'user', content: 'unattributed probe' }],
+      },
+      principal: { id: 'testing-harness', mode: 'api_key', scope: 'testing_harness' },
+      headers: {},
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { type: 'testing_harness_provenance_required' },
+    });
+    expect(handleMessage).not.toHaveBeenCalled();
+  });
+});
+
 describe('AgentApiBackend model contract failures', () => {
   it('returns a classified upstream-model error for an explicit tool violation', async () => {
     const backend = new AgentApiBackend({

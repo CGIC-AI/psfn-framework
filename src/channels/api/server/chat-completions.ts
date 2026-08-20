@@ -77,8 +77,11 @@ import {
   type BearerCompanionRoutingConfig,
 } from './bearer-companion-selector.js';
 import { screenChatMessageBody } from '../../../core/cogsec/intake/chat-message-screening.js';
+import { normalizeTestingHarnessRunProvenance } from '../../../shared/contracts/testing-harness.js';
 
 const IDENTITY_LINK_CHALLENGE_TTL_MS = 5 * 60_000;
+const TEST_RUN_ID_HEADER = 'x-psfn-test-run-id';
+const TEST_MANIFEST_ID_HEADER = 'x-psfn-test-manifest-id';
 
 const IDENTITY_CLAIM_HEADERS = {
   canonicalContactId: 'x-canonical-contact-id',
@@ -200,6 +203,44 @@ export class ApiChatCompletionsHandler {
   ): Promise<void> {
     let parsed = await readChatCompletionRequest(req, res, this.logger);
     if (!parsed) return;
+
+    const runId = singleApiHeader(req.headers[TEST_RUN_ID_HEADER]);
+    const manifestId = singleApiHeader(req.headers[TEST_MANIFEST_ID_HEADER]);
+    if (principal.scope === 'testing_harness') {
+      if (!runId || !manifestId) {
+        sendApiError(
+          res,
+          400,
+          'testing_harness_provenance_required',
+          'Testing-harness chat requests require exact run and manifest identifiers',
+        );
+        return;
+      }
+      try {
+        normalizeTestingHarnessRunProvenance({
+          schemaVersion: 1,
+          kind: 'testing_harness',
+          runId,
+          manifestId,
+        });
+      } catch {
+        sendApiError(
+          res,
+          400,
+          'testing_harness_provenance_invalid',
+          'Testing-harness run and manifest identifiers are invalid',
+        );
+        return;
+      }
+    } else if (runId !== undefined || manifestId !== undefined) {
+      sendApiError(
+        res,
+        403,
+        'testing_harness_provenance_not_allowed',
+        'Only the authenticated testing-harness principal may attach test-run provenance',
+      );
+      return;
+    }
 
     let effectiveFleetRouting = fleetRouting;
     if (!effectiveFleetRouting && this.bearerCompanionRouting) {
@@ -754,6 +795,14 @@ export class ApiChatCompletionsHandler {
     principal: ApiAuthPrincipal,
     clientCert: SatelliteClientCertIdentity | undefined,
   ): Promise<PendingTurn | null> {
+    const testingHarness = principal.scope === 'testing_harness'
+      ? normalizeTestingHarnessRunProvenance({
+          schemaVersion: 1,
+          kind: 'testing_harness',
+          runId: singleApiHeader(req.headers[TEST_RUN_ID_HEADER]),
+          manifestId: singleApiHeader(req.headers[TEST_MANIFEST_ID_HEADER]),
+        })
+      : undefined;
     const routingOverrides = parseTurnRoutingOverrides(request);
     if (!routingOverrides.ok) {
       sendApiError(res, 400, 'invalid_request', routingOverrides.error);
@@ -891,6 +940,7 @@ export class ApiChatCompletionsHandler {
         ...(screenedBody.snapshot ? [screenedBody.snapshot] : []),
         ...ingestedFiles.intakeEnvelopes,
       ],
+      ...(testingHarness ? { testingHarness } : {}),
     });
 
     const acquiredChannel = await this.acquireChannel(channelId, req, res);
@@ -903,6 +953,7 @@ export class ApiChatCompletionsHandler {
       authorId,
       authorName,
       channelPrivacy: resolvedChannelPrivacy,
+      ...(testingHarness ? { testingHarness } : {}),
     });
 
     return {

@@ -11,9 +11,25 @@ import type { AutomataBusProductionRuntime } from './production-runtime.js';
 import type { PostgresAutomataBusRuntimeStore } from './runtime-store.js';
 import {
   CanonicalAutomataBusWriter,
+  createProductionAutomataBusWorkerAccess,
   createSubagentAutomataLifecycleAdapter,
 } from './production-worker-adapter.js';
 import { createAutomataBusReviewerModelAdapter } from './production-reviewer-adapters.js';
+import {
+  buildAutomataBusWorkerScope,
+  resolveAutomataBusWorkerFormation,
+} from './worker-access.js';
+
+const WORKER_BOUNDS = {
+  maxQueryChars: 120,
+  maxTextChars: 240,
+  maxArrayItems: 8,
+  maxSearchResults: 10,
+  maxRunResults: 20,
+  maxBriefingChars: 400,
+  maxBriefingItems: 4,
+  maxToolResultChars: 1_000,
+} as const;
 
 function createHarness() {
   const events = new Map<string, {
@@ -127,6 +143,49 @@ async function createRegistry() {
 }
 
 describe('production Automata Bus lifecycle composition', () => {
+  it('forms a worker spawn from a production briefing with internal query diagnostics', async () => {
+    const harness = createHarness();
+    const registry = await createRegistry();
+    const createSpawnBriefing = vi.fn(async () => ({
+      text: 'Automata Bus briefing\n- Production finding.',
+      itemCount: 1,
+      diagnostics: {
+        cache: 'miss' as const,
+        semanticPath: 'ann' as const,
+        indexState: 'ready' as const,
+        reindexState: 'idle' as const,
+        modelIdentity: { provider: 'test', model: 'test', dimensions: 2 },
+        indexingLag: { pendingCount: 0 },
+      },
+    }));
+    const access = createProductionAutomataBusWorkerAccess({
+      companionId: 'companion-a',
+      registry,
+      store: harness.store,
+      runtime: {
+        query: { createSpawnBriefing },
+      } as unknown as AutomataBusProductionRuntime,
+      writer: harness.writer,
+      bounds: WORKER_BOUNDS,
+    });
+    const workerScope = buildAutomataBusWorkerScope(access, {
+      automatonClass: 'subagent.bounded',
+      runId: 'subagent-1',
+      taskId: 'task-1',
+    });
+
+    const formation = await resolveAutomataBusWorkerFormation({
+      access,
+      scope: workerScope,
+      query: 'Inspect production runtime',
+    });
+
+    expect(formation?.briefing).toEqual({
+      text: 'Automata Bus briefing\n- Production finding.',
+      itemCount: 1,
+    });
+  });
+
   it('marks attributed findings with the required negotiated feature', async () => {
     const harness = createHarness();
     const registry = await createRegistry();

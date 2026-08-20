@@ -2,6 +2,53 @@ import { isAbsolute, relative, resolve } from 'node:path';
 import type { RuntimePathSnapshot } from '../../persistence/layout.js';
 import type { SubstrateConfig } from './runtime-config-contracts.js';
 
+/**
+ * Bind identity-bearing observer runtime fields to the selected companion's
+ * immutable fleet tuple. Shared settings may tune the observer, but in a
+ * multi-companion process they can never choose which sidecar/session/agent
+ * or storage root owns the state.
+ */
+export function bindCompanionObserverEvalSidecar(
+  config: Pick<
+    SubstrateConfig,
+    'multiCompanion' | 'companionId' | 'companionRuntimeIdentity' | 'observerEvalSidecar'
+  >,
+): void {
+  const sidecar = config.observerEvalSidecar;
+  if (config.multiCompanion !== true || sidecar?.enabled !== true) return;
+
+  const identity = config.companionRuntimeIdentity;
+  const companionId = config.companionId;
+  if (!identity?.observerEvalSidecar) {
+    throw new Error(
+      'Enabled multi-companion observerEvalSidecar requires an exact '
+      + 'companionRuntimeIdentity.observerEvalSidecar binding; refusing shared or primary fallback',
+    );
+  }
+  if (!companionId || identity.companionId !== companionId) {
+    throw new Error(
+      'Enabled multi-companion observerEvalSidecar identity does not match config.companionId',
+    );
+  }
+
+  const binding = identity.observerEvalSidecar;
+  config.observerEvalSidecar = {
+    ...sidecar,
+    sidecarId: binding.sidecarId,
+    adapter: {
+      ...sidecar.adapter,
+      kind: 'emosim_server',
+      serverUrl: binding.serverUrl,
+      sessionLabel: binding.sessionLabel,
+      agentName: binding.agentName,
+    },
+    persistence: {
+      ...sidecar.persistence,
+      rootDir: binding.persistenceRootDir,
+    },
+  };
+}
+
 function isSameOrNestedPath(candidate: string, root: string): boolean {
   const relativePath = relative(resolve(root), resolve(candidate));
   return relativePath === '' || (

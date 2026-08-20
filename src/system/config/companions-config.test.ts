@@ -149,6 +149,51 @@ describe('companions owner-file config', () => {
         .toThrow(/shared migration role must be distinct/);
     });
 
+    it('rejects reuse of every observer identity field across three companions', () => {
+      const createFleet = () => {
+        const fleet = clone(VALID_FLEET) as unknown as {
+          companions: Array<Record<string, unknown>>;
+        };
+        fleet.companions.push({
+          ...structuredClone(fleet.companions[1]),
+          companionId: '33333333-3333-4333-8333-333333333333',
+          companionDataDir: 'companions/sol',
+          characterCardPath: 'companions/sol/character-card.json',
+          postgresSchema: 'companion_sol',
+          postgresRole: 'companion_sol_runtime',
+          postgresDatabaseUrlRef: { kind: 'env', envName: 'COMPANION_SOL_DATABASE_URL' },
+        });
+        fleet.companions.forEach((companion, index) => {
+          const ordinal = String(index + 1);
+          companion.observerEvalSidecar = {
+            sidecarId: `observer-${ordinal}`,
+            serverUrl: `http://observer-${ordinal}.internal:17342`,
+            sessionLabel: `observer-session-${ordinal}`,
+            agentName: `observer-agent-${ordinal}`,
+            persistenceRootDir: `/var/lib/observer-${ordinal}`,
+          };
+        });
+        return fleet;
+      };
+      const fields = [
+        'sidecarId',
+        'serverUrl',
+        'sessionLabel',
+        'agentName',
+        'persistenceRootDir',
+      ] as const;
+
+      expect(() => validateCompanionsConfig(createFleet(), 'companions.json')).not.toThrow();
+      for (const field of fields) {
+        const fleet = createFleet();
+        const primaryBinding = fleet.companions[0].observerEvalSidecar as Record<string, unknown>;
+        const siblingBinding = fleet.companions[2].observerEvalSidecar as Record<string, unknown>;
+        siblingBinding[field] = primaryBinding[field];
+        expect(() => validateCompanionsConfig(fleet, 'companions.json'))
+          .toThrow(`duplicate observerEvalSidecar.${field}`);
+      }
+    });
+
     it('rejects an uppercase postgresSchema', () => {
       const fleet = clone(VALID_FLEET);
       fleet.companions[0].postgresSchema = 'Companion_Flagship';

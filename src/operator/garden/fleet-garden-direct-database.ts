@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { CompanionId } from '../../shared/routing/companion-id.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import { bindCompanionObserverEvalSidecar } from '../../system/config/observer-eval-sidecar-config.js';
 import {
   compileGardenRouteDeclarations,
 } from '../../boundary/fleet-auth/garden-route-capabilities.js';
@@ -69,9 +70,28 @@ export class FleetGardenDirectDatabase implements FleetGardenDirectDatabasePort 
       if (this.routesByCompanion.has(companionId)) {
         throw new Error(`Fleet Garden direct database companion is duplicated: ${companionId}`);
       }
-      const services = createServices(options.config, companionId);
+      const identity = options.config.companionFleet?.companions.find(
+        entry => entry.companionId === companionId,
+      );
+      if (!identity) {
+        throw new Error(
+          `Fleet Garden direct database companion ${companionId} has no exact fleet identity`,
+        );
+      }
+      const companionConfig: SubstrateConfig = {
+        ...options.config,
+        companionId,
+        companionRuntimeIdentity: identity,
+        companionDataDir: identity.companionDataDir,
+        characterCardPath: identity.characterCardPath,
+        workspacePath: identity.personalWorkspacePath,
+        postgresSchema: identity.postgresSchema,
+        postgresRole: identity.postgresRole,
+      };
+      bindCompanionObserverEvalSidecar(companionConfig);
+      const services = createServices(companionConfig, companionId);
       const declarations = buildAdminOverviewRoutes({
-        config: { ...options.config, companionId },
+        config: companionConfig,
         dashboardService: UNREACHABLE_DASHBOARD,
         modelUsageService: services.modelUsage,
         observerEvalSidecarService: services.observerEvalSidecar,

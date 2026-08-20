@@ -305,7 +305,13 @@ export function createFleetGardenDirectDatabaseServices(
   if (!modelUsageStore) {
     throw new Error('Fleet Garden model usage access requires PostgreSQL persistence');
   }
-  const observerEvalSidecar = createObserverEvalSidecarAdminService({ config });
+  const observerEvalSidecar = createObserverEvalSidecarAdminService({
+    config,
+    // Fleet direct-database services are constructed from the selected
+    // companion tuple. Pin this read pool to that schema/role exactly; an
+    // unscoped pool would resolve against the primary/public tenant.
+    tenant: resolveConfigTenantPoolScope(config),
+  });
   return {
     modelUsage: new AdminModelUsageDataService(modelUsageStore),
     observerEvalSidecar,
@@ -913,9 +919,8 @@ export function createObserverEvalSidecarAdminService(input: {
   /**
    * Tenant boundary for the sidecar's own pool. The sidecar tables are
    * companion-local, so the agent's in-process Garden pins its companion
-   * schema/role here (psfn-framework-cc3v7). The fleet Garden operator process
-   * serves every companion from one config and carries no per-companion role,
-   * so it passes nothing and stays on the pre-existing unscoped pool.
+   * schema/role here (psfn-framework-cc3v7). The fleet Garden constructs one
+   * exact companion config per admitted route and pins that schema/role too.
    */
   tenant?: TenantPoolScope;
 }): AdminObserverEvalSidecarService {

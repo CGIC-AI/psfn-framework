@@ -69,13 +69,15 @@ export type SettingsFieldType =
  * sleepConsolidation) is per-companion (dnll.3); charge-policy.json is
  * per-companion so fatigue and charge budgets share the companion ledger root
  * (dnll.8); skills.json is per-companion so enabled sets remain individuated
- * while operator-owned (dnll.9).
+ * while operator-owned (dnll.9); partner-affect-shadow.json is per-companion so
+ * one companion cannot inherit another companion's co-emotion subject or policy.
  */
 export const PER_COMPANION_OWNER_FILES: ReadonlySet<string> = new Set<string>([
   CAPABILITY_TIER_FILE_NAME,
   SCHEDULER_FILE_NAME,
   CHARGE_POLICY_FILE_NAME,
   SKILLS_FILE_NAME,
+  PARTNER_AFFECT_SHADOW_FILE_NAME,
 ]);
 
 /** Ownership scope for a whole owner file, derived from its rooting. */

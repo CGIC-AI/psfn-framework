@@ -362,6 +362,9 @@ describe('startup owner-file loaders', () => {
       },
       socialAutonomy: DEFAULT_SOCIAL_AUTONOMY_CONFIG,
       socialDesire: DEFAULT_SOCIAL_DESIRE_CONFIG,
+      intentionFollowUp: {
+        nearTermHorizonMs: 259_200_000,
+      },
       icpAutonomy: DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG,
     };
     saveSchedulerConfig(rootDir, scheduler);

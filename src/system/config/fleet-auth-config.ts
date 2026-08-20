@@ -112,6 +112,7 @@ export const FLEET_AUTH_ACTIONS = [
   'action_pipe.manage',
   'audit.read',
   'automata.read',
+  'automata.manage',
   'autonomy.read',
   'autonomy.manage',
   'charges.read',

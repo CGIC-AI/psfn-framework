@@ -43,6 +43,7 @@ interface AutomataBusVectorIdentityRow {
   provider: unknown;
   model: unknown;
   dimensions: unknown;
+  reindex_state?: unknown;
 }
 
 interface AutomataBusVectorSearchRow {
@@ -430,20 +431,173 @@ export class PostgresAutomataBusVectorIndexAdapter implements
     }
     const eventId = requireAutomataBusNonEmptyString(input.eventId, 'eventId');
     const identity = normalizeAutomataBusEmbeddingIdentity(input.modelIdentity);
-    await this.pool.query(`
-      DELETE FROM automata_bus_vector_lag
+    await withWriteTransaction(this.pool, async (client) => {
+      await client.query(`
+        DELETE FROM automata_bus_vector_lag
+        WHERE companion_id = $1
+          AND event_id = $2
+          AND provider = $3
+          AND model = $4
+          AND dimensions = $5
+      `, [
+        this.companionId,
+        eventId,
+        identity.provider,
+        identity.model,
+        identity.dimensions,
+      ]);
+      await client.query(`
+        UPDATE automata_bus_vector_state state
+        SET index_state = 'ready', updated_at = CURRENT_TIMESTAMP
+        WHERE state.companion_id = $1
+          AND state.provider = $2
+          AND state.model = $3
+          AND state.dimensions = $4
+          AND state.reindex_state = 'current'
+          AND NOT EXISTS (
+            SELECT 1
+            FROM automata_bus_vector_lag lag
+            WHERE lag.companion_id = state.companion_id
+          )
+      `, [
+        this.companionId,
+        identity.provider,
+        identity.model,
+        identity.dimensions,
+      ]);
+    });
+  }
+
+  async beginReindex(input: {
+    companionId: string;
+    modelIdentity: AutomataBusEmbeddingIdentity;
+  }): Promise<void> {
+    if (input.companionId !== this.companionId) {
+      throw new Error('Automata Bus reindex companion scope mismatch');
+    }
+    const identity = normalizeAutomataBusEmbeddingIdentity(input.modelIdentity);
+    await withWriteTransaction(this.pool, async (client) => {
+      await client.query(
+        'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+        [`automata-bus-reindex:${this.companionId}`],
+      );
+      const incumbent = await client.query<AutomataBusVectorIdentityRow>(`
+        SELECT provider, model, dimensions, reindex_state
+        FROM automata_bus_vector_state
+        WHERE companion_id = $1
+        FOR UPDATE
+      `, [this.companionId]);
+      const row = incumbent.rows[0];
+      if (row?.reindex_state === 'running') {
+        throw new Error('Automata Bus reindex is already running');
+      }
+      const written = await client.query<{ companion_id: unknown }>(`
+        INSERT INTO automata_bus_vector_state (
+          companion_id, provider, model, dimensions, index_state, reindex_state, updated_at
+        ) VALUES ($1, $2, $3, $4, 'building', 'running', CURRENT_TIMESTAMP)
+        ON CONFLICT (companion_id) DO UPDATE SET
+          provider = EXCLUDED.provider,
+          model = EXCLUDED.model,
+          dimensions = EXCLUDED.dimensions,
+          index_state = 'building',
+          reindex_state = 'running',
+          updated_at = CURRENT_TIMESTAMP
+        RETURNING companion_id
+      `, [
+        this.companionId,
+        identity.provider,
+        identity.model,
+        identity.dimensions,
+      ]);
+      if (written.rows.length !== 1) {
+        throw new Error('Automata Bus reindex did not acquire exact companion state');
+      }
+    });
+  }
+
+  async completeReindex(input: {
+    companionId: string;
+    modelIdentity: AutomataBusEmbeddingIdentity;
+    eventIds: readonly string[];
+  }): Promise<void> {
+    if (input.companionId !== this.companionId) {
+      throw new Error('Automata Bus reindex companion scope mismatch');
+    }
+    const identity = normalizeAutomataBusEmbeddingIdentity(input.modelIdentity);
+    const eventIds = input.eventIds.map((eventId, index) => (
+      requireAutomataBusNonEmptyString(eventId, `eventIds[${index}]`)
+    ));
+    if (new Set(eventIds).size !== eventIds.length) {
+      throw new Error('Automata Bus reindex eventIds must not contain duplicates');
+    }
+    await withWriteTransaction(this.pool, async (client) => {
+      await client.query(`
+        DELETE FROM automata_bus_finding_vectors
+        WHERE companion_id = $1
+          AND (
+            provider <> $2
+            OR model <> $3
+            OR dimensions <> $4
+            OR NOT (event_id = ANY($5::text[]))
+          )
+      `, [
+        this.companionId,
+        identity.provider,
+        identity.model,
+        identity.dimensions,
+        eventIds,
+      ]);
+      await client.query(`
+        DELETE FROM automata_bus_vector_lag
+        WHERE companion_id = $1
+      `, [this.companionId]);
+      const written = await client.query<{ companion_id: unknown }>(`
+        UPDATE automata_bus_vector_state
+        SET index_state = 'ready', reindex_state = 'current', updated_at = CURRENT_TIMESTAMP
+        WHERE companion_id = $1
+          AND provider = $2
+          AND model = $3
+          AND dimensions = $4
+          AND reindex_state = 'running'
+        RETURNING companion_id
+      `, [
+        this.companionId,
+        identity.provider,
+        identity.model,
+        identity.dimensions,
+      ]);
+      if (written.rows.length !== 1) {
+        throw new Error('Automata Bus reindex completion lost exact companion state');
+      }
+    });
+  }
+
+  async failReindex(input: {
+    companionId: string;
+    modelIdentity: AutomataBusEmbeddingIdentity;
+  }): Promise<void> {
+    if (input.companionId !== this.companionId) {
+      throw new Error('Automata Bus reindex companion scope mismatch');
+    }
+    const identity = normalizeAutomataBusEmbeddingIdentity(input.modelIdentity);
+    const written = await this.pool.query<{ companion_id: unknown }>(`
+      UPDATE automata_bus_vector_state
+      SET index_state = 'degraded', reindex_state = 'required', updated_at = CURRENT_TIMESTAMP
       WHERE companion_id = $1
-        AND event_id = $2
-        AND provider = $3
-        AND model = $4
-        AND dimensions = $5
+        AND provider = $2
+        AND model = $3
+        AND dimensions = $4
+        AND reindex_state = 'running'
+      RETURNING companion_id
     `, [
       this.companionId,
-      eventId,
       identity.provider,
       identity.model,
       identity.dimensions,
     ]);
+    if (written.rows.length !== 1) {
+      throw new Error('Automata Bus reindex failure lost exact companion state');
+    }
   }
 
   async setState(input: SetAutomataBusVectorStateInput): Promise<void> {

@@ -55,6 +55,50 @@ function policy() {
 }
 
 describe('AutomataRunRegistry', () => {
+  it('keeps three companions independent across restart, including identical run ids and artifacts', async () => {
+    const companionIds = ['companion-a', 'companion-b', 'companion-c'];
+    const stores = companionIds.map(() => new InMemoryAutomataRunStore());
+    for (const [index, companionId] of companionIds.entries()) {
+      const registry = await AutomataRunRegistry.hydrate({
+        companionId,
+        policy: policy(),
+        store: stores[index]!,
+        nowMs: 100,
+      });
+      await registry.register({
+        runId: 'same-logical-run',
+        automatonClass: 'subagent.bounded',
+        workerId: `worker-${companionId}`,
+        taskId: `task-${companionId}`,
+        taskLabel: `Task ${companionId}`,
+        taskSummary: `Private work for ${companionId}`,
+        artifacts: [{
+          kind: 'report',
+          ref: `artifact:${companionId}`,
+          custody: 'durable',
+        }],
+        createdAtMs: 100,
+      });
+    }
+
+    for (const [index, companionId] of companionIds.entries()) {
+      const restarted = await AutomataRunRegistry.hydrate({
+        companionId,
+        policy: policy(),
+        store: stores[index]!,
+        nowMs: 101,
+      });
+      expect(restarted.getCompanionId()).toBe(companionId);
+      expect(restarted.getRun('same-logical-run')).toMatchObject({
+        companionId,
+        taskId: `task-${companionId}`,
+        artifacts: [{ ref: `artifact:${companionId}` }],
+      });
+      expect(JSON.stringify(restarted.listRetainedRunsForRuntime()))
+        .not.toContain(`artifact:${companionIds[(index + 1) % companionIds.length]}`);
+    }
+  });
+
   it('hydrates retained active and recent runs and preserves task-to-session discovery', async () => {
     const store = new InMemoryAutomataRunStore();
     const first = await AutomataRunRegistry.hydrate({ companionId: 'companion-a', policy: policy(), store, nowMs: 100 });

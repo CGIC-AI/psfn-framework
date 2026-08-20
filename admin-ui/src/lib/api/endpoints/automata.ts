@@ -192,6 +192,18 @@ export function getAutomataSnapshot(query: AutomataQuery = {}): Promise<Automata
   return apiGet<AutomataSnapshot>(buildAutomataPath(query));
 }
 
+export interface AutomataReindexResult {
+  companionId: string;
+  status: 'completed';
+  processed: number;
+  indexed: number;
+  lagging: number;
+}
+
+export function reindexAutomataBus(): Promise<AutomataReindexResult> {
+  return apiPost<AutomataReindexResult>('/api/admin/automata/reindex');
+}
+
 export type AutomataPageState = 'loading' | 'error' | 'empty' | 'ready' | 'stale' | 'degraded';
 
 export function resolveAutomataPageState(input: {

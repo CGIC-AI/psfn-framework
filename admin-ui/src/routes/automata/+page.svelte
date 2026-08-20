@@ -5,6 +5,7 @@
   import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
   import {
     getAutomataSnapshot,
+    reindexAutomataBus,
     resolveAutomataPageState,
     type AutomataQuery,
     type AutomataRunStatus,
@@ -33,6 +34,8 @@
   let error = $state('');
   let lastLoadedAt = $state<number | null>(null);
   let requestSequence = 0;
+  let reindexing = $state(false);
+  let reindexMessage = $state('');
 
   let classId = $state('');
   let taskId = $state('');
@@ -104,6 +107,20 @@
     const pageLimit = snapshot?.bus.page.limit ?? 0;
     busOffset = Math.max(0, busOffset + direction * pageLimit);
     void loadData('refresh');
+  }
+
+  async function runReindex(): Promise<void> {
+    reindexing = true;
+    reindexMessage = '';
+    try {
+      const result = await reindexAutomataBus();
+      reindexMessage = `Reindexed ${result.indexed} of ${result.processed} current findings.`;
+      await loadData('refresh');
+    } catch (cause) {
+      reindexMessage = cause instanceof Error ? cause.message : 'Automata Bus reindex failed.';
+    } finally {
+      reindexing = false;
+    }
   }
 
   function formatDate(value: string | number | null | undefined): string {
@@ -214,6 +231,16 @@
           <h2 id="bus-health-heading" class="text-lg font-semibold text-shadow-900">Health and freshness</h2>
         </div>
         <div class="flex gap-2">
+          {#if snapshot.bus.health.reindexState !== 'current' || snapshot.bus.health.indexState !== 'ready'}
+            <button
+              type="button"
+              class="garden-action garden-action--primary"
+              onclick={runReindex}
+              disabled={reindexing || refreshing}
+            >
+              {reindexing ? 'Reindexing…' : 'Rebuild this companion index'}
+            </button>
+          {/if}
           <span class="rounded-full bg-bark-100 px-2.5 py-1 text-xs font-semibold uppercase text-shadow-700">
             {snapshot.bus.health.condition}
           </span>
@@ -244,6 +271,9 @@
         <div class="garden-metric p-3"><dt>Pending index work</dt><dd>{snapshot.bus.health.pendingIndexCount}</dd></div>
         <div class="garden-metric p-3"><dt>Observed</dt><dd class="text-sm">{formatDate(snapshot.bus.health.observedAt)}</dd></div>
       </dl>
+      {#if reindexMessage}
+        <p class="mt-3 text-sm text-shadow-700" role="status">{reindexMessage}</p>
+      {/if}
     </section>
 
     <section class="garden-section card-garden p-5" aria-labelledby="classes-heading">

@@ -18,6 +18,8 @@ describe('Automata Garden page', () => {
     expect(source).toContain('Bus reads are unavailable');
     expect(source).toContain('Bus data is stale');
     expect(source).toContain('Bus reads are degraded');
+    expect(source).toContain('Rebuild this companion index');
+    expect(source).toContain('reindexAutomataBus');
     expect(source).toContain('No retained runs match these filters');
     expect(source).toContain('Bus: {run.busEligibility}');
     expect(source).toContain('Parent: {run.parentRunId');

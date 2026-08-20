@@ -15,6 +15,7 @@ import { CogSecEventStore } from '../../../core/cogsec/events.js';
 import type {
   CogSecAffectedMessageRange,
   CogSecCaseType,
+  CogSecEvent,
   CogSecSeverity,
 } from '../../../core/cogsec/events.js';
 import { CogSecForensicArchive } from '../../../core/cogsec/forensic-archive.js';
@@ -120,6 +121,7 @@ const COGSEC_CASE_TYPES: ReadonlySet<CogSecCaseType> = new Set([
   'policy_drift',
   'content_poisoning',
   'intake_firewall',
+  'session_integrity',
   'unknown',
 ]);
 const COGSEC_SEVERITIES: ReadonlySet<CogSecSeverity> = new Set(['low', 'medium', 'high', 'critical']);
@@ -273,6 +275,48 @@ function normalizeCaseId(value: string | undefined): string {
     throw new Error('caseId must match cogsec_[A-Za-z0-9_-]+');
   }
   return caseId;
+}
+
+function sameOptionalNumberArray(left: readonly number[] | undefined, right: readonly number[] | undefined): boolean {
+  if (left === undefined || right === undefined) return left === right;
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function sameOptionalStringArray(left: readonly string[] | undefined, right: readonly string[] | undefined): boolean {
+  if (left === undefined || right === undefined) return left === right;
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function sameCogSecRange(left: CogSecAffectedMessageRange, right: CogSecAffectedMessageRange): boolean {
+  return left.sourceChannelId === right.sourceChannelId
+    && left.logicalSessionId === right.logicalSessionId
+    && left.startEntryId === right.startEntryId
+    && left.endEntryId === right.endEntryId
+    && sameOptionalNumberArray(left.messageIds, right.messageIds)
+    && sameOptionalStringArray(left.sourceMessageIds, right.sourceMessageIds)
+    && sameOptionalStringArray(left.discordMessageIds, right.discordMessageIds);
+}
+
+function assertOpenIntegrityIncidentRemediation(
+  existing: CogSecEvent,
+  draft: AdminCogSecCaseDraftView,
+): void {
+  if (existing.type !== 'session_integrity' || existing.status !== 'open') {
+    throw new Error(`CogSec event cannot be reused for remediation: ${draft.caseId}`);
+  }
+  if (
+    draft.type !== existing.type
+    || draft.severity !== existing.severity
+    || draft.sourceChannelId !== existing.sourceChannelId
+    || draft.affectedLogicalSessionIds.length !== existing.affectedLogicalSessionIds.length
+    || !draft.affectedLogicalSessionIds.every(sessionId => existing.affectedLogicalSessionIds.includes(sessionId))
+    || draft.affectedMessageRanges.length !== existing.affectedMessageRanges.length
+    || !draft.affectedMessageRanges.every((range, index) => (
+      sameCogSecRange(range, existing.affectedMessageRanges[index]!)
+    ))
+  ) {
+    throw new Error(`CogSec integrity remediation must exactly match incident ${draft.caseId}`);
+  }
 }
 
 function previewCounts(preview: CogSecLineagePreview): AdminCogSecPreviewCounts {
@@ -855,22 +899,27 @@ export class AdminSessionDataService implements AdminSessionService {
     const eventStore = this.requireCogSecEventStore();
     const forensicArchive = this.requireCogSecForensicArchive();
     const draft = this.buildCogSecDraft(input);
-    if (eventStore.getEvent(draft.caseId)) {
-      throw new Error(`CogSec event already exists: ${draft.caseId}`);
+    const existingEvent = eventStore.getEvent(draft.caseId);
+    if (existingEvent) {
+      assertOpenIntegrityIncidentRemediation(existingEvent, draft);
+      eventStore.updateEvent(draft.caseId, {
+        status: 'applying',
+        actions: ['seal', 'tombstone', 'search_exclude', 'revoke', 'regenerate'],
+      });
+    } else {
+      eventStore.createEvent({
+        caseId: draft.caseId,
+        type: draft.type,
+        severity: draft.severity,
+        status: 'applying',
+        sourceChannelId: draft.sourceChannelId,
+        affectedLogicalSessionIds: draft.affectedLogicalSessionIds,
+        affectedMessageRanges: draft.affectedMessageRanges,
+        actions: ['seal', 'tombstone', 'search_exclude', 'revoke', 'regenerate'],
+        actor: draft.actor,
+        safeAgentSummary: draft.safeSummary,
+      });
     }
-
-    eventStore.createEvent({
-      caseId: draft.caseId,
-      type: draft.type,
-      severity: draft.severity,
-      status: 'applying',
-      sourceChannelId: draft.sourceChannelId,
-      affectedLogicalSessionIds: draft.affectedLogicalSessionIds,
-      affectedMessageRanges: draft.affectedMessageRanges,
-      actions: ['seal', 'tombstone', 'search_exclude', 'revoke', 'regenerate'],
-      actor: draft.actor,
-      safeAgentSummary: draft.safeSummary,
-    });
 
     const tombstones = [];
     for (const range of draft.affectedMessageRanges) {

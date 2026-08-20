@@ -794,6 +794,72 @@ describe('AdminSessionDataService', () => {
     expect(serializedEvents).not.toContain('sealedForensicPayloadRefs');
   });
 
+  it('applies an exact open session-integrity incident and removes it from operator attention', async () => {
+    const channelId = 'api:historical-integrity-incident';
+    const affectedId = store.append({
+      channelId,
+      role: 'user',
+      content: 'historical row selected by structural integrity evidence',
+      timestamp: 1,
+      authorName: 'Operator',
+    });
+    store.append({
+      channelId,
+      role: 'assistant',
+      content: 'clean response remains',
+      timestamp: 2,
+      authorName: 'Companion',
+    });
+    const config = makeConfig({ dataDir: dir });
+    const eventsPath = resolveCogSecEventsPath(resolveConfiguredCompanionDataDir(config));
+    createSessionIntegrityIncidentObserver({
+      cogSecEvents: () => new CogSecEventStore(eventsPath),
+    }).recordIntegrityFailure({
+      channelId,
+      failedEntryCount: 1,
+      firstFailedEntryId: affectedId,
+      lastFailedEntryId: affectedId,
+      contiguousRunCount: 1,
+      detectedAtMs: Date.now(),
+    });
+    const caseId = sessionIntegrityCaseId(channelId);
+    const service = new AdminSessionDataService({
+      sessionStore: store,
+      sessionManager: new SessionManager(store, config),
+      eventBus: new EventBus(),
+      config,
+    });
+    const exactInput = {
+      caseId,
+      sourceChannelId: channelId,
+      affectedLogicalSessionIds: [channelId],
+      affectedMessageRanges: [{
+        sourceChannelId: channelId,
+        logicalSessionId: channelId,
+        startEntryId: affectedId,
+        endEntryId: affectedId,
+      }],
+      type: 'session_integrity' as const,
+      severity: 'high' as const,
+      reason: 'review and remediate the exact recorded integrity range',
+      cutEpoch: false,
+    };
+
+    await expect(service.applyCogSecRemediation({
+      ...exactInput,
+      severity: 'critical',
+    })).rejects.toThrow(/must exactly match incident/u);
+    expect(new CogSecEventStore(eventsPath).getEvent(caseId)?.status).toBe('open');
+
+    const applied = await service.applyCogSecRemediation(exactInput);
+    expect(applied.event).toMatchObject({ caseId, type: 'session_integrity', status: 'applied' });
+    const listed = await service.listCogSecEvents();
+    expect(listed.events).toHaveLength(1);
+    expect(listed.events.filter(event => (
+      event.type === 'session_integrity' && event.status === 'open'
+    ))).toHaveLength(0);
+  });
+
   it('resolves structural transport message provenance to one surgical L0 tombstone range', async () => {
     const channelId = 'discord:room:post-escalation';
     const sourceMessageId = 'transport-message-77';

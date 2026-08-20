@@ -77,7 +77,7 @@ import { createPostgresAnalysisWorkbenchTraceStoreFromConfig } from '../../persi
 import { createPostgresObserverEvalSidecarStore } from '../../core/eval/observer-sidecar/persistence.js';
 import { createOwnerFileConfigStore } from '../../system/config/config-store.js';
 import { AdminPartnerAffectShadowDataService } from './services/partner-affect-shadow-service.js';
-import { AdminAutomataDataService, type AdminAutomataBusReadPort, type AdminAutomataLessonReadPort } from './services/automata-service.js';
+import { AdminAutomataDataService, type AdminAutomataBusReadPort, type AdminAutomataLessonReadPort, type AdminAutomataReindexPort } from './services/automata-service.js';
 import type { PartnerAffectShadowStorePort } from '../../core/emotion/partner-affect/shadow-store-port.js';
 import {
   createDefaultObserverEvalSidecarSettings,
@@ -219,6 +219,8 @@ export interface InProcessGardenAdminContractOptions {
   automataBusReadPort?: AdminAutomataBusReadPort | null;
   /** Optional content-safe current-finding lesson projection. */
   automataLessonReadPort?: AdminAutomataLessonReadPort | null;
+  /** Companion-bound, owner-policy-bounded rebuild of disposable Bus index state. */
+  automataReindexPort?: AdminAutomataReindexPort | null;
   biographicalReviewService?: GardenAdminDomainServices['biographicalReview'];
   /** Fixed legacy-mode scope; fleet requests always use signed request context. */
   legacyMemorySubjectAccessContext?: Readonly<MemorySubjectAccessContext>;
@@ -684,6 +686,7 @@ export function createInProcessGardenAdminContract(
       },
       bus: options.automataBusReadPort ?? null,
       lessons: options.automataLessonReadPort ?? null,
+      reindex: options.automataReindexPort ?? null,
     });
   }
 

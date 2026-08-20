@@ -22,6 +22,7 @@ import type {
   AutomataRunStatus,
   EffectiveAutomataClassDescriptor,
 } from '../../../faculties/automata/registry-contract.js';
+import type { AutomataBusReindexResult } from '../../../faculties/automata/bus/reindex-service.js';
 import type { AutomataRunRegistry } from '../../../faculties/automata/run-registry.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
@@ -85,6 +86,10 @@ export interface AdminAutomataBusReadPort {
 
 export interface AdminAutomataLessonReadPort {
   query(scope: AutomataLessonReadScope): Promise<AutomataLessonProjection>;
+}
+
+export interface AdminAutomataReindexPort {
+  reindex(input: { companionId: string }): Promise<AutomataBusReindexResult>;
 }
 
 export interface AdminAutomataReadPolicy {
@@ -216,10 +221,12 @@ export interface AdminAutomataSnapshotOptions {
 
 export interface AdminAutomataService {
   getSnapshot(options?: AdminAutomataSnapshotOptions): Promise<AdminAutomataSnapshot>;
+  reindex?(): Promise<AutomataBusReindexResult>;
 }
 
 export class AdminAutomataQueryError extends Error {}
 export class AdminAutomataNotFoundError extends Error {}
+export class AdminAutomataUnavailableError extends Error {}
 
 const VERIFICATION_STATUSES: readonly AutomataBusVerificationStatus[] = [
   'pending',
@@ -397,6 +404,7 @@ export class AdminAutomataDataService implements AdminAutomataService {
     readPolicy: AdminAutomataReadPolicy;
     bus?: AdminAutomataBusReadPort | null;
     lessons?: AdminAutomataLessonReadPort | null;
+    reindex?: AdminAutomataReindexPort | null;
     managementPanels?: readonly AdminAutomataPanelExtension[];
     logger?: AdminAutomataReadLogger;
   }) {
@@ -407,6 +415,29 @@ export class AdminAutomataDataService implements AdminAutomataService {
       'Automata default page limit',
     );
     requireText(options.companionId, 'Automata companionId');
+    if (options.registry.getCompanionId() !== options.companionId) {
+      throw new Error('Automata registry companion scope mismatch');
+    }
+  }
+
+  async reindex(): Promise<AutomataBusReindexResult> {
+    const reindex = this.options.reindex;
+    if (!reindex) throw new AdminAutomataUnavailableError('Automata Bus reindex unavailable');
+    const result = await reindex.reindex({ companionId: this.options.companionId });
+    if (result.companionId !== this.options.companionId) {
+      throw new Error('Automata Bus reindex returned a cross-companion receipt');
+    }
+    if (!Number.isSafeInteger(result.processed)
+      || !Number.isSafeInteger(result.indexed)
+      || !Number.isSafeInteger(result.lagging)
+      || result.processed < 0
+      || result.indexed < 0
+      || result.lagging < 0
+      || result.processed > this.options.readPolicy.maxPageLimit
+      || result.indexed + result.lagging !== result.processed) {
+      throw new Error('Automata Bus reindex returned an invalid bounded receipt');
+    }
+    return { ...result };
   }
 
   async getSnapshot(input: AdminAutomataSnapshotOptions = {}): Promise<AdminAutomataSnapshot> {

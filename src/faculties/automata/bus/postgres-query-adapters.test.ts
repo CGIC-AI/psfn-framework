@@ -409,6 +409,12 @@ describe('PostgresAutomataBusVectorIndexAdapter', () => {
       .toBe(true);
     expect(pool.queries.some(query => query.text.startsWith('DELETE FROM automata_bus_vector_lag')))
       .toBe(true);
+    expect(pool.queries.some(query => (
+      query.text.startsWith('UPDATE automata_bus_vector_state state')
+      && query.text.includes("index_state = 'ready'")
+      && query.text.includes("reindex_state = 'current'")
+      && query.values.includes('companion-a')
+    ))).toBe(true);
   });
 
   it('requires explicit reindex state before changing model identity', async () => {
@@ -451,5 +457,43 @@ describe('PostgresAutomataBusVectorIndexAdapter', () => {
     ))).toBe(true);
     expect(pool.queries.some(query => query.text.startsWith('INSERT INTO automata_bus_vector_lag')))
       .toBe(true);
+  });
+
+  it('owns the complete reindex lifecycle under one immutable companion scope', async () => {
+    const pool = new RecordingPool();
+    const adapter = new PostgresAutomataBusVectorIndexAdapter(pool, {
+      companionId: 'companion-a',
+      maxCandidateLimit: 5,
+    });
+
+    await expect(adapter.beginReindex({
+      companionId: 'companion-b',
+      modelIdentity: MODEL,
+    })).rejects.toThrow('companion scope mismatch');
+    expect(pool.queries).toEqual([]);
+
+    await adapter.beginReindex({ companionId: 'companion-a', modelIdentity: MODEL });
+    await adapter.completeReindex({
+      companionId: 'companion-a',
+      modelIdentity: MODEL,
+      eventIds: ['event-a'],
+    });
+
+    const mutations = pool.queries.filter(query => (
+      query.text.startsWith('INSERT INTO automata_bus_vector_state')
+      || query.text.startsWith('UPDATE automata_bus_vector_state')
+      || query.text.startsWith('DELETE FROM automata_bus_finding_vectors')
+      || query.text.startsWith('DELETE FROM automata_bus_vector_lag')
+    ));
+    expect(mutations.length).toBeGreaterThan(0);
+    expect(mutations.every(query => query.values.includes('companion-a'))).toBe(true);
+    expect(mutations.every(query => !query.values.includes('companion-b'))).toBe(true);
+
+    await adapter.beginReindex({ companionId: 'companion-a', modelIdentity: MODEL });
+    await adapter.failReindex({ companionId: 'companion-a', modelIdentity: MODEL });
+    expect(pool.queries.some(query => (
+      query.text.startsWith('UPDATE automata_bus_vector_state')
+      && query.text.includes("reindex_state = 'required'")
+    ))).toBe(true);
   });
 });

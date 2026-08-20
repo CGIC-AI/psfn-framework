@@ -50,6 +50,7 @@ import type { AutomataRunRegistry } from '../../faculties/automata/run-registry.
 import type {
   AdminAutomataBusReadPort,
   AdminAutomataLessonReadPort,
+  AdminAutomataReindexPort,
 } from '../../operator/garden/services/automata-service.js';
 import type { AdminIcpTestInitiationPort } from '../../operator/garden/services/types.js';
 
@@ -67,6 +68,7 @@ export interface StartOptionalAdminTransportServerOptions {
   automataRunRegistry: AutomataRunRegistry;
   automataBusReadPort: AdminAutomataBusReadPort;
   automataLessonReadPort: AdminAutomataLessonReadPort;
+  automataReindexPort?: AdminAutomataReindexPort;
   scheduler: Scheduler;
   schedulerConfig: SchedulerRuntimeConfig;
   icpInitiationCandidateStore?: IcpInitiationCandidateStorePort | null;
@@ -207,6 +209,7 @@ export async function startOptionalAdminTransportServer(
     automataRunRegistry: options.automataRunRegistry,
     automataBusReadPort: options.automataBusReadPort,
     automataLessonReadPort: options.automataLessonReadPort,
+    automataReindexPort: options.automataReindexPort,
     biographicalReviewService,
     subsystemOutputRefStore: options.subsystemOutputRefStore,
     episodicStore: options.episodicStore ?? null,

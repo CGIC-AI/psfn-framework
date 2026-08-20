@@ -1129,6 +1129,53 @@ describe('createSubstrateStreamFn', () => {
     expect(JSON.stringify(events)).not.toContain('notify-invalid');
   });
 
+  it('falls back before dispatch when a provider changes exact requested arguments', async () => {
+    const config = makeChatFallbackConfig({
+      retryMaxAttempts: 0,
+      retryBaseDelayMs: 0,
+    });
+    streamAdapterMocks.transportStream.mockImplementation(async (context: LLMContext) => (
+      context.modelHint?.model === 'deepseek/deepseek-v3.2'
+        ? {
+            content: '',
+            toolCalls: [{ id: 'repo-drifted', name: 'repo', input: { action: 'inspect' } }],
+            model: 'openrouter/deepseek/deepseek-v3.2',
+            inputTokens: 6,
+            outputTokens: 2,
+            stopReason: 'toolUse',
+          }
+        : {
+            content: '',
+            toolCalls: [{ id: 'repo-exact', name: 'repo', input: { action: 'branch' } }],
+            model: 'openrouter/moonshotai/kimi-k2.5',
+            inputTokens: 7,
+            outputTokens: 3,
+            stopReason: 'toolUse',
+          }
+    ));
+
+    const streamFn = makeStreamFn(config);
+    const stream = await streamFn(resolveModel(config, makeRuntime(), 'chat'), fromAny({
+      systemPrompt: 'System',
+      messages: [{
+        role: 'user',
+        content: 'Call repo exactly once with arguments {"action":"branch"}.',
+      }],
+      tools: [{
+        name: 'repo',
+        description: 'Repository operations.',
+        parameters: Type.Object({
+          action: Type.Union([Type.Literal('inspect'), Type.Literal('branch')]),
+        }),
+      }],
+    }), {});
+    const events = await collectStreamEvents(stream as AsyncIterable<unknown>);
+
+    expect(streamAdapterMocks.transportStream).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(events.at(-1))).toContain('repo-exact');
+    expect(JSON.stringify(events)).not.toContain('repo-drifted');
+  });
+
   it('leads chat with the companion-selected slot and transports that slot to the gateway', async () => {
     const config = makeCompanionSelectedChatConfig();
     streamAdapterMocks.transportStream.mockResolvedValue({

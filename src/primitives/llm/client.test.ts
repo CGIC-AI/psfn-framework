@@ -2488,7 +2488,7 @@ describe('LLMClient completion model hints', () => {
       'notify',
     ]);
     expect(mocks.streamSimple.mock.calls[0]?.[2]).toMatchObject({
-      toolChoice: 'auto',
+      toolChoice: 'required',
       explicitToolContract: {
         choice: { type: 'function', function: { name: 'notify' } },
         requiredToolName: 'notify',

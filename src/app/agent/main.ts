@@ -188,6 +188,7 @@ import {
   type AgentIcpRuntimeAvailability,
 } from './icp-runtime-availability.js';
 import { PostgresAdminAutomataBusReadAdapter } from '../../operator/garden/services/automata-bus-read-adapter.js';
+import { createProductionAutomataBusReindexService } from '../../faculties/automata/bus/production-reindex.js';
 
 const log = createComponentLogger('Agent');
 ensureActiveTimezone();
@@ -570,6 +571,12 @@ async function main(): Promise<void> {
     vector: automataBusRuntime.vector,
     companionId: resolveCoreCompanionIdFromConfig(config),
     maxPageLimit: config.automataPolicy!.operatorMutationLimit,
+  });
+  const automataBusReindexPort = createProductionAutomataBusReindexService({
+    pool: persistenceRuntime.automataBusStore.getQueryPool(),
+    runtime: automataBusRuntime,
+    companionId: resolveCoreCompanionIdFromConfig(config),
+    maxFindings: config.automataPolicy!.operatorMutationLimit,
   });
   agentLoop.setBackgroundWorkExecutionScope(
     handler => companionAvailability.run('do_not_disturb', handler),
@@ -1464,6 +1471,7 @@ async function main(): Promise<void> {
     automataRunRegistry: persistenceRuntime.automataRunRegistry,
     automataBusReadPort,
     automataLessonReadPort: automataBusReadPort,
+    automataReindexPort: automataBusReindexPort,
     scheduler,
     schedulerConfig,
     icpInitiationCandidateStore: persistenceRuntime.icpInitiationCandidateStore,

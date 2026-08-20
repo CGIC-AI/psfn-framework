@@ -130,6 +130,11 @@ export class AutomataRunRegistry {
     return this.classes.map(entry => ({ ...entry }));
   }
 
+  /** Immutable runtime authority used to prove composition stays in one tenant. */
+  getCompanionId(): string {
+    return this.companionId;
+  }
+
   async register(input: RegisterAutomataRunInput): Promise<AutomataRunRecord> {
     const runId = requiredText(input.runId, 'runId');
     if (this.runs.has(runId)) throw new Error(`Automata run "${runId}" already exists.`);

@@ -23,6 +23,7 @@ describe('canonical fleet role/action policy', () => {
         'action_pipe.manage',
         'audit.read',
         'automata.read',
+        'automata.manage',
         'autonomy.read',
         'autonomy.manage',
         'charges.read',

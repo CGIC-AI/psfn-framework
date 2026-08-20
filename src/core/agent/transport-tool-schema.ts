@@ -54,6 +54,6 @@ export function normalizeTransportTools(tools: unknown): ToolSchema[] | undefine
 export function normalizeExecutionTools(tools: unknown): ToolSchema[] | undefined {
   return normalizeTools(
     tools,
-    candidate => candidate.parameters ?? candidate.inputSchema ?? candidate.modelParameters,
+    candidate => candidate.parameters ?? candidate.inputSchema,
   );
 }

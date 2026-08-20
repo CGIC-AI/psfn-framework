@@ -31,6 +31,7 @@ import type {
   HybridEpisodeSearchPort,
 } from '../../../faculties/memory/retrieval/episode-search.js';
 import { resolveMemoryVisibility } from '../../../faculties/memory/tools/visibility.js';
+import { isMemoryOwnedByCompanion } from '../../../faculties/memory/companion-provenance.js';
 
 export interface SessionSearchOptions {
   channelId?: SessionSearchViewerContext['channelId'];
@@ -113,6 +114,7 @@ interface CreateMemoryCapabilitiesOptions {
   episodeSearch?: HybridEpisodeSearchPort | null;
   sessionManager: MemoryCapabilitySessionPort | null;
   pushEvidence: (entry: AnalysisWorkbenchEvidence) => void;
+  companionId?: string;
 }
 
 function resolveTranscriptSearchPort(
@@ -257,7 +259,9 @@ export function createMemoryCapabilities(options: CreateMemoryCapabilitiesOption
     : null;
   const memoryStore = createCompatibleMemoryStore(subjectStore);
   const writer = (options.embeddingService && memoryStore)
-    ? new MemoryWriter(memoryStore, options.embeddingService)
+    ? new MemoryWriter(memoryStore, options.embeddingService, {
+        ...(options.companionId ? { companionId: options.companionId } : {}),
+      })
     : null;
 
   const memory_search = async (
@@ -281,7 +285,7 @@ export function createMemoryCapabilities(options: CreateMemoryCapabilitiesOption
       await memoryStore.searchByEmbedding(embedding, 0.3, limit, undefined, {
         authorization: 'subject-enforced',
       }),
-    ).memories;
+    ).memories.filter(memory => isMemoryOwnedByCompanion(memory, options.companionId));
 
     addEvidence(options.pushEvidence, {
       source: 'memory_search',
@@ -537,7 +541,9 @@ export function createMemoryCapabilities(options: CreateMemoryCapabilitiesOption
     }
 
     const memory = await memoryStore.getById(id);
-    if (!memory || isMemoryQuarantined(sessionQuarantineFilter, memory)) {
+    if (!memory
+      || isMemoryQuarantined(sessionQuarantineFilter, memory)
+      || !isMemoryOwnedByCompanion(memory, options.companionId)) {
       return null;
     }
 

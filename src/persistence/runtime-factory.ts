@@ -80,6 +80,7 @@ import {
 import { PostgresAutomataRetentionStore } from '../faculties/automata/retention-postgres-store.js';
 import { AutomataSessionClassificationService } from '../faculties/automata/session-classification.js';
 import { PostgresExactSessionPurgeSagaStore } from './postgres/automata-exact-session-purge-store.js';
+import { resolveConfigTenantPoolScope } from './postgres/tenant-pool-scope.js';
 
 export interface AgentPersistenceRuntime {
   backend: PersistenceBackend;
@@ -194,12 +195,9 @@ export async function createAgentPersistenceRuntime(
   // search_path to the explicitly provisioned tenant boundary. Startup checks
   // that boundary but never creates or repairs it. When unset, `schema` stays
   // undefined and behavior is byte-identical to single-companion public mode.
-  const schema = options.config.postgresSchema?.trim() || undefined;
-  const tenantRole = options.config.multiCompanion === true
-    ? options.config.postgresRole?.trim() || (() => {
-        throw new Error('Multi-companion Postgres persistence requires config.postgresRole');
-      })()
-    : undefined;
+  const tenantScope = resolveConfigTenantPoolScope(options.config);
+  const schema = tenantScope?.schema ?? (options.config.postgresSchema?.trim() || undefined);
+  const tenantRole = tenantScope?.role;
   if (schema && options.config.multiCompanion === true) {
     // Deployment provisioning is explicit. Startup only verifies the boundary
     // and refuses to repair/migrate tenant roles, schemas, or extensions.

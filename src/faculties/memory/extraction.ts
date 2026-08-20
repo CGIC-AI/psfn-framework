@@ -232,7 +232,10 @@ export class MemoryExtractor {
     this.memoryStore = memoryStore;
     this.writer = new MemoryWriter(memoryStore, embeddingService, {
       ...(config && 'primaryModel' in config
-        ? { memoryRetrievalPolicy: () => config.memoryRetrievalPolicy }
+        ? {
+            memoryRetrievalPolicy: () => config.memoryRetrievalPolicy,
+            ...(config.companionId ? { companionId: config.companionId } : {}),
+          }
         : {}),
     });
     // htm9.3: the extractor's writes gate at the memory_write sink. The gate

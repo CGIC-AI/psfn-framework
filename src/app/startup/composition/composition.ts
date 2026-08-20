@@ -134,6 +134,7 @@ import { createBackgroundWorkHandoffRecoveryDisposition } from '../../../persist
 import { createDefaultPostgresSessionAdapters } from '../../../persistence/sessions/postgres-adapters.js';
 import { FilesystemAutomataRetentionWriteBarrier } from '../../../persistence/sessions/automata-retention-write-barrier.js';
 import { awaitPostgresStoreReadiness } from '../../../persistence/postgres/runtime-readiness.js';
+import { resolveConfigTenantPoolScope } from '../../../persistence/postgres/tenant-pool-scope.js';
 import { CogSecEventStore } from '../../../core/cogsec/events.js';
 import { createSessionIntegrityIncidentObserver } from '../../../core/cogsec/session-integrity-incident.js';
 import { createProjectionDriftIncidentObserver } from '../../../core/cogsec/projection-drift-incident.js';
@@ -308,12 +309,9 @@ export async function composeSessionRuntimeAsync(
   if (!databaseUrl) {
     throw new Error('PostgreSQL session composition requires config.postgresDatabaseUrl');
   }
-  const postgresSchema = options.config.postgresSchema?.trim();
-  const postgresRole = options.config.multiCompanion === true && postgresSchema
-    ? options.config.postgresRole?.trim() || (() => {
-        throw new Error('Multi-companion session composition requires config.postgresRole');
-      })()
-    : undefined;
+  const tenantScope = resolveConfigTenantPoolScope(options.config);
+  const postgresSchema = tenantScope?.schema ?? options.config.postgresSchema?.trim();
+  const postgresRole = tenantScope?.role;
   // Redaction projection-drift incident seam (bead 6oott): a failed
   // redaction-driven projection write records one operator-only CogSec
   // incident (session_integrity class, projectiondrift caseId prefix) in the
@@ -367,6 +365,8 @@ export async function composeMemoryStoreAsync(
   if (!databaseUrl) {
     throw new Error('PostgreSQL memory composition requires config.postgresDatabaseUrl');
   }
+  const tenantScope = resolveConfigTenantPoolScope(config);
+  const postgresSchema = tenantScope?.schema ?? config.postgresSchema?.trim();
 
   return await awaitPostgresStoreReadiness(
     'memory',
@@ -374,16 +374,10 @@ export async function composeMemoryStoreAsync(
       notesDir: resolveNotesDir(companionDataDir),
       scratchpadMirrorPath: resolveScratchpadMirrorPath(companionDataDir),
       journal: new MemoryJournal(resolveMemoryJournalPath(companionDataDir)),
-      ...(config.postgresSchema?.trim()
+      ...(postgresSchema
         ? {
-            schema: config.postgresSchema.trim(),
-            ...(config.multiCompanion === true
-              ? {
-                  role: config.postgresRole?.trim() || (() => {
-                    throw new Error('Multi-companion memory composition requires config.postgresRole');
-                  })(),
-                }
-              : {}),
+            schema: postgresSchema,
+            ...(tenantScope ? { role: tenantScope.role } : {}),
           }
         : {}),
     }),
@@ -753,6 +747,7 @@ export function wireShardAndThinkRuntime(options: ToolRuntimeOptions): ShardExec
   // gate is late-bound onto the session manager by composition.
   const foldReviewMemoryWriter = new MemoryWriter(options.memoryStore, options.embeddingService, {
     memoryRetrievalPolicy: () => options.config.memoryRetrievalPolicy,
+    ...(options.config.companionId ? { companionId: options.config.companionId } : {}),
   });
   foldReviewMemoryWriter.intakeSinkGateProvider = () => options.sessionManager.intakeSinkGate;
   const foldReviewController = new ShardFoldReviewController(

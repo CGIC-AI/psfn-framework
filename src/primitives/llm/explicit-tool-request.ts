@@ -120,7 +120,7 @@ export function assertExplicitToolContractSatisfied(input: {
   );
 }
 
-export function assertExplicitToolArgumentsValid(input: {
+function assertExplicitToolArgumentsValid(input: {
   contract: ExplicitToolContract | undefined;
   corruptToolNames: readonly string[];
   toolCalls: ReadonlyArray<{ id: string; name: string; input: Record<string, unknown> }>;

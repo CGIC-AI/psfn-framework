@@ -24,7 +24,7 @@ export interface GatewayOperatorConfirmationClient {
   ): Promise<ConfirmationResolveResult>;
 }
 
-export type GatewayOperatorConfirmationAuthority =
+type GatewayOperatorConfirmationAuthority =
   | Readonly<{
       kind: 'standalone_operator';
       authorization?: string;

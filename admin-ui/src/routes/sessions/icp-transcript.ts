@@ -9,7 +9,7 @@ interface IcpCorrelationSummary {
   deliveryStatus?: string;
 }
 
-export interface IcpTransportEvidenceGroup {
+interface IcpTransportEvidenceGroup {
   rootInitiationId: string;
   conversationId: string;
   entryCount: number;

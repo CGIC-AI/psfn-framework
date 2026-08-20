@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import type { TestingHarnessRunProvenance } from '../../shared/contracts/testing-harness.js';
 import { normalizeTestingHarnessRunProvenance } from '../../shared/contracts/testing-harness.js';
 
-export const SHAKEDOWN_ARTIFACT_KINDS = [
+const SHAKEDOWN_ARTIFACT_KINDS = [
   'session',
   'channel',
   'task',
@@ -10,9 +10,9 @@ export const SHAKEDOWN_ARTIFACT_KINDS = [
   'event',
 ] as const;
 
-export type ShakedownArtifactKind = typeof SHAKEDOWN_ARTIFACT_KINDS[number];
+type ShakedownArtifactKind = typeof SHAKEDOWN_ARTIFACT_KINDS[number];
 
-export interface ShakedownArtifactTarget {
+interface ShakedownArtifactTarget {
   kind: ShakedownArtifactKind;
   id: string;
 }
@@ -35,7 +35,7 @@ export interface ShakedownCleanupInventoryPort {
   inspectExact(manifest: ShakedownArtifactManifest): Promise<readonly ShakedownArtifactInventoryRecord[]>;
 }
 
-export interface ShakedownCleanupBackupReceipt {
+interface ShakedownCleanupBackupReceipt {
   backupRef: string;
   backupDigest: string;
   rollbackRef: string;
@@ -62,7 +62,7 @@ export interface ShakedownCleanupMutationPort {
   }): Promise<void>;
 }
 
-export interface ShakedownCleanupAuditRecord {
+interface ShakedownCleanupAuditRecord {
   schemaVersion: 1;
   companionId: string;
   runId: string;

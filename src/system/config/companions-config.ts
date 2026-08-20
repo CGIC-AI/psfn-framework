@@ -117,7 +117,7 @@ export interface CompanionFleetEntry {
   avatarRef?: string;
 }
 
-export interface CompanionObserverEvalSidecarBinding {
+interface CompanionObserverEvalSidecarBinding {
   sidecarId: string;
   serverUrl: string;
   sessionLabel: string;

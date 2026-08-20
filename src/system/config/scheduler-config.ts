@@ -165,7 +165,6 @@ export {
 } from './scheduler-config/tool-usage.js';
 export {
   MAX_NEAR_TERM_FOLLOW_UP_HORIZON_MS,
-  type IntentionFollowUpSchedulerConfig,
 } from './scheduler-config/intention-follow-up.js';
 
 export const SCHEDULER_FILE_NAME = 'scheduler.json';

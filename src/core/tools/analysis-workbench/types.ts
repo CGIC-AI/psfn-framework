@@ -220,8 +220,8 @@ export interface AnalysisWorkbenchLimitPolicy {
   maxToolCalls: number | null;
 }
 
-export type AnalysisWorkbenchOutcome = 'completed' | 'limit_reached';
-export type AnalysisWorkbenchContinuation = 'not_needed' | 'restart_required';
+type AnalysisWorkbenchOutcome = 'completed' | 'limit_reached';
+type AnalysisWorkbenchContinuation = 'not_needed' | 'restart_required';
 
 export function createEmptyAnalysisWorkbenchDiagnostics(): AnalysisWorkbenchDiagnostics {
   return {

@@ -235,7 +235,14 @@ function applySafeLogFilter<T extends CogSecEvent>(events: readonly T[], filter:
  * `unverified_history` wrapper, and a separate cogsec notice for it would be
  * both redundant and worded for sealed/tombstoned material it does not match.
  */
-const AGENT_HIDDEN_CASE_TYPES: ReadonlySet<CogSecEvent['type']> = new Set(['session_integrity']);
+const AGENT_HIDDEN_CASE_TYPES: ReadonlySet<CogSecEvent['type']> = new Set([
+  'session_integrity',
+  // Intake firewall evidence belongs to the operator. Enforce mode already
+  // gives the companion a calm inline placeholder when content is withheld;
+  // shadow mode passes content unchanged. Re-injecting case records into later
+  // prompts creates pressure and makes an observational control disruptive.
+  'intake_firewall',
+]);
 
 export function listAgentVisibleCogSecEvents(
   events: readonly CogSecEvent[],

@@ -832,7 +832,7 @@ describe('L2/L3 escalation wired into the live gateway screening path', () => {
     await composition.dispose();
   });
 
-  it('SHADOW mode: L2→L3 flagging fully audits (envelope + CogSecEvent + hold) without altering delivered text', async () => {
+  it('SHADOW mode: L2→L3 flagging audits without holding or altering delivered text', async () => {
     const transport = routingFetch({
       [L2_MODEL]: { verdict: L2_FLAGGING_VERDICT },
       [L3_MODEL]: { verdict: L3_FLAGGED_VERDICT },
@@ -853,15 +853,17 @@ describe('L2/L3 escalation wired into the live gateway screening path', () => {
     // Observe-only: text unchanged, nothing withheld…
     expect(result.effectiveText).toBe(HOSTILE_CONTENT);
     expect(result.withheld).toBe(false);
-    // …but the decision, the CogSecEvent, and the review hold are all real.
+    // …but the observed decision and operator CogSecEvent remain auditable.
     expect(result.action).toBe('quarantine');
-    expect(result.envelope.state).toBe('quarantined');
+    expect(result.envelope).toMatchObject({
+      state: 'released',
+      contentRef: { store: 'unpersisted' },
+      extractedFields: { 'shadow.observed_action': 'quarantine' },
+    });
     expect(result.cogSecCaseId).toBeDefined();
     const events = new CogSecEventStore(resolveCogSecEventsPath(companionDataDir));
     expect(events.getEvent(result.cogSecCaseId!)).not.toBeNull();
-    const held = composition.quarantine!.list();
-    expect(held).toHaveLength(1);
-    expect(held[0].mode).toBe('shadow');
+    expect(composition.quarantine!.list()).toEqual([]);
 
     await composition.dispose();
   });

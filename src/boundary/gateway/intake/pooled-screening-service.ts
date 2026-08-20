@@ -99,8 +99,10 @@ function buildUnpersistedContentRef(text: string): {
 /**
  * Synthesizes a fail-closed screening result for a pool-level failure (caller
  * cancellation, hard deadline, pool disposal, or an isolated worker crash).
- * Mirrors the underlying service's quarantine decision shape so downstream sink
- * gates and audit read it identically, but writes no durable quarantine hold.
+ * Mirrors the underlying service's observed quarantine action for audit. In
+ * enforce posture it produces a quarantined envelope; in shadow posture it
+ * records the observed action on a released envelope. It never writes a
+ * durable hold because the pool wrapper does not own that store.
  */
 export function synthesizeFailClosedScreeningResult(
   text: string,
@@ -117,8 +119,9 @@ export function synthesizeFailClosedScreeningResult(
   const sourceRiskTier: IntakeSourceRiskTier = 'hostile';
   const withheld = mode === 'enforce';
   const decision: IntakeDecision = {
-    action: 'quarantine',
-    reason: reason.slice(0, COGSEC_DECISION_REASON_MAX_CHARS),
+    action: mode === 'shadow' ? 'pass' : 'quarantine',
+    reason: (mode === 'shadow' ? `shadow-observation:${reason}` : reason)
+      .slice(0, COGSEC_DECISION_REASON_MAX_CHARS),
     decidedBy: 'screening',
     decidedAtMs: atMs,
   };
@@ -140,12 +143,15 @@ export function synthesizeFailClosedScreeningResult(
     scores: {},
     extractedFields: {
       'screening_pool.fail_closed': reason.slice(0, COGSEC_DECISION_REASON_MAX_CHARS),
+      ...(mode === 'shadow' ? { 'shadow.observed_action': 'quarantine' } : {}),
     },
   });
   envelope = transitionIntakeEnvelope(envelope, {
-    to: postScreeningStateForDecision('quarantine'),
+    to: postScreeningStateForDecision(decision.action),
     actor: 'gateway:intake-screening-pool',
-    reason: 'routed per pool fail-closed screening decision',
+    reason: mode === 'shadow'
+      ? 'released after observational pool fail-closed screening decision'
+      : 'routed per pool fail-closed screening decision',
     atMs,
   });
 

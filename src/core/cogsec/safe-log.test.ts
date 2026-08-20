@@ -204,6 +204,14 @@ describe('CogSec safe event log', () => {
     expect(buildCogSecEventNoticeBlock([integrity])).toBe('');
   });
 
+  it('keeps intake-firewall findings operator-only so shadow telemetry never pressures the companion', () => {
+    const event = makeEvent({ type: 'intake_firewall' });
+
+    expect(listOperatorVisibleCogSecEvents([event])).toHaveLength(1);
+    expect(listAgentVisibleCogSecEvents([event])).toHaveLength(0);
+    expect(buildCogSecEventNoticeBlock([event])).toBe('');
+  });
+
   it('formats prompt notices without sealed refs, dirty text, or attack mechanics', () => {
     const block = buildCogSecEventNoticeBlock([makeEvent()], {
       channelIds: ['discord-channel-1'],

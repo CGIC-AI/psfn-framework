@@ -59,6 +59,38 @@ function parseIcpCorrelationSummary(metadata: string | undefined): IcpCorrelatio
   };
 }
 
+function parseIcpDeliverySystemNode(content: string): IcpCorrelationSummary | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    return null;
+  }
+  const delivery = record(parsed);
+  const status = nonEmptyString(delivery?.status);
+  if (
+    delivery?.schemaVersion !== 1
+    || delivery.kind !== 'icp_delivery'
+    || !status
+    || !['prepared', 'delivered', 'suppressed'].includes(status)
+  ) {
+    return null;
+  }
+  const recoveryResponse = record(delivery.recoveryResponse);
+  const metadata = record(recoveryResponse?.metadata);
+  const correlation = record(metadata?.icpCorrelation);
+  const rootInitiationId = nonEmptyString(correlation?.rootInitiationId);
+  const conversationId = nonEmptyString(correlation?.conversationId);
+  const turnId = nonEmptyString(correlation?.turnId);
+  if (!rootInitiationId || !conversationId || !turnId) return null;
+  return {
+    rootInitiationId,
+    conversationId,
+    turnId,
+    deliveryStatus: status,
+  };
+}
+
 /**
  * Keeps ICP speech in the ordinary transcript while moving exact
  * operator-only transport nodes behind one collapsed evidence group per
@@ -80,7 +112,8 @@ export function buildIcpTranscriptPresentation(
   }>();
 
   for (const message of messages) {
-    const correlation = parseIcpCorrelationSummary(message.metadata);
+    const correlation = parseIcpCorrelationSummary(message.metadata)
+      ?? parseIcpDeliverySystemNode(message.content);
     const ontology = ontologyById.get(message.id);
     if (!correlation || ontology?.promptVisibility !== 'operator_only') {
       conversationMessages.push(message);

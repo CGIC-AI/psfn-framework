@@ -38,7 +38,18 @@ function ontology(id: number, promptVisibility: Ontology['promptVisibility']): O
 
 describe('ICP transcript presentation', () => {
   it('keeps logical speech visible and collapses correlated operator-only transport nodes', () => {
-    const transport = message(1, 'system', '{"large":"transport envelope"}');
+    const transport = {
+      ...message(1, 'system', ''),
+      metadata: undefined,
+      content: JSON.stringify({
+        schemaVersion: 1,
+        kind: 'icp_delivery',
+        status: 'delivered',
+        channelId: 'companion-dm:a:b',
+        sourceMessageId: 'opaque-source',
+        recoveryResponse: { metadata: { icpCorrelation: correlation } },
+      }),
+    };
     const speech = message(2, 'user', 'Can we keep talking?');
 
     const presented = buildIcpTranscriptPresentation(
@@ -52,7 +63,7 @@ describe('ICP transcript presentation', () => {
       conversationId: correlation.conversationId,
       entryCount: 1,
       turnCount: 1,
-      deliveryStatuses: ['pending'],
+      deliveryStatuses: ['delivered'],
       entries: [transport],
     })]);
   });

@@ -133,27 +133,28 @@ describe('web.fetch intake screening wiring (htm9.2)', () => {
     servers.length = 0;
   });
 
-  it('owner-configured web posture enforces even while other surfaces remain shadow', async () => {
+  it('keeps owner-configured web findings observational under the global shadow ceiling', async () => {
     const { server, url } = await listenHttp(HOSTILE_PAGE);
     servers.push(server);
     const harness = createHarness(localCrawlerPolicy, makeScreening('shadow'));
 
     const result = await harness.invoke({ url: `${url}/page`, lane: 'local_crawler' });
 
-    expect(result.content).not.toContain('disregard your rules');
+    expect(result.content).toContain('disregard your rules');
     expect(result.intake).toBeDefined();
     expect(result.intake.action).toBe('quarantine');
-    expect(result.intake.mode).toBe('enforce');
-    expect(result.intake.withheld).toBe(true);
+    expect(result.intake.state).toBe('released');
+    expect(result.intake.mode).toBe('shadow');
+    expect(result.intake.withheld).toBe(false);
     expect(result.intake.riskLabels).toContain('injection/override_attempt');
 
     const auditCalls = harness.recordAuditEvent.mock.calls
       .map(call => call[0] as { method: string; decision: string; params: Record<string, unknown> })
       .filter(entry => entry.method === 'web.fetch.intake_screening');
     expect(auditCalls).toHaveLength(1);
-    expect(auditCalls[0]!.decision).toBe('DENY');
+    expect(auditCalls[0]!.decision).toBe('ALLOW');
     expect(auditCalls[0]!.params.action).toBe('quarantine');
-    expect(auditCalls[0]!.params.mode).toBe('enforce');
+    expect(auditCalls[0]!.params.mode).toBe('shadow');
   });
 
   it('enforce mode: a quarantined page never crosses the RPC boundary', async () => {

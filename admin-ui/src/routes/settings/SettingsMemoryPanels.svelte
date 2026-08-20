@@ -1,6 +1,7 @@
 <script lang="ts">
   import { base } from '$app/paths';
   import { setContext } from 'svelte';
+  import BackgroundMaintenanceControl from '$lib/components/settings/BackgroundMaintenanceControl.svelte';
   import SettingAuthorityHint from '$lib/components/settings/SettingAuthorityHint.svelte';
   import SettingFieldLabel from '$lib/components/settings/SettingFieldLabel.svelte';
   import SettingsCollapsibleSection from '$lib/components/settings/SettingsCollapsibleSection.svelte';
@@ -214,17 +215,13 @@
         </div>
         <p class="text-sm text-shadow-500 mt-1">Auto-compacts oldest 50% when context exceeds this %</p>
       </div>
-      <div>
-        <SettingFieldLabel
-          label="Bundled Background Maintenance Interval (ms)"
-          keys="backgroundMaintenanceIntervalMs"
+      <div class="md:col-span-2">
+        <BackgroundMaintenanceControl
+          bind:intervalMs={backgroundMaintenanceIntervalMs}
+          {inputClass}
           source={getSource('backgroundMaintenanceIntervalMs')}
-          forId={settingControlId('backgroundMaintenanceIntervalMs')}
-          class={labelClass}
+          authority={getSettingAuthority('backgroundMaintenanceIntervalMs')}
         />
-        <DurationInput id={settingControlId('backgroundMaintenanceIntervalMs')} min={10000} bind:value={backgroundMaintenanceIntervalMs} class={inputClass} />
-        <p class="text-sm text-shadow-500 mt-1">One shared hourly tick for salience decay, ambient presence, concern grooming, social-graph proposals, sleeptime eligibility, contact trust drift, drift velocity, and second-arrow checks. The Scheduler page lists the exact operations wired in this runtime.</p>
-        <SettingAuthorityHint info={getSettingAuthority('backgroundMaintenanceIntervalMs')} />
       </div>
       <div>
         <SettingFieldLabel

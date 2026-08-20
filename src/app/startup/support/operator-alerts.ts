@@ -34,6 +34,10 @@ const REPEATED_SCREENING_FAILURE_SENDER: NotificationSenderMetadata = Object.fre
   kind: 'system',
   provenance: 'system.operator_alert.repeated_screening_failure',
 });
+const MODEL_BUDGET_THRESHOLD_SENDER: NotificationSenderMetadata = Object.freeze({
+  kind: 'system',
+  provenance: 'system.operator_alert.model_budget_threshold',
+});
 
 export function createPromptGenerationFailureAlertHandler(
   notifier: NotificationPort,
@@ -164,6 +168,8 @@ type ScheduledTaskFailureEvent = EventMap['schedule.task.failed'];
 type SleepConsolidationFailureEvent = EventMap['memory.sleep_consolidation.failure'];
 type QuarantineExpiryEvent = EventMap['intake.quarantine.expired'];
 type FailClosedScreeningEvent = EventMap['intake.screening.fail_closed'];
+type ModelBudgetThresholdEvent = EventMap['model.budget.threshold_exceeded'];
+type ModelBudgetAlertDeliveryEvent = EventMap['model.budget.alert_delivery'];
 
 export function createBackupFailureAlertHandler(
   notifier: NotificationPort,
@@ -290,6 +296,89 @@ export function createRepeatedScreeningFailureAlertHandler(options: {
     }, { alertKind: 'repeated_screening_failure', stage: event.stage });
     if (delivered) alerted.add(key);
   };
+}
+
+export function createModelBudgetThresholdAlertHandler(options: {
+  notifier: NotificationPort;
+  companionName: string;
+  recordDelivery: (event: ModelBudgetAlertDeliveryEvent) => void | Promise<void>;
+}): (event: ModelBudgetThresholdEvent) => Promise<void> {
+  const companionName = requireOperatorAlertCompanionName(options.companionName);
+  const deliveredKeys = new Set<string>();
+
+  return async (event) => {
+    const alertSubject = event.companionId?.trim() || companionName;
+    const windowKey = event.reason === 'daily_budget_exceeded'
+      ? event.budget.dayKey
+      : event.budget.monthKey;
+    const dedupeKey = `${alertSubject}:${event.reason}:${windowKey}`;
+    if (deliveredKeys.has(dedupeKey)) return;
+
+    const periodLabel = event.reason === 'daily_budget_exceeded' ? 'daily' : 'monthly';
+    const spent = event.reason === 'daily_budget_exceeded'
+      ? event.budget.dailySpentUsd
+      : event.budget.monthlySpentUsd;
+    const limit = event.reason === 'daily_budget_exceeded'
+      ? event.budget.dailyLimitUsd
+      : event.budget.monthlyLimitUsd;
+    const mode = event.enforcementEnabled
+      ? 'Blocking mode: this request was denied at the configured limit.'
+      : 'Tracking mode: requests continue after this alert.';
+
+    try {
+      const result = await options.notifier.notify({
+        sender: MODEL_BUDGET_THRESHOLD_SENDER,
+        title: `${alertSubject} ${periodLabel} model budget threshold`,
+        message: [
+          `${alertSubject} crossed the configured ${periodLabel} model budget threshold.`,
+          `Window: ${windowKey}`,
+          `Recorded spend: $${spent.toFixed(4)} / $${limit.toFixed(4)}`,
+          `Projected request: $${event.estimatedRequestCostUsd.toFixed(4)}`,
+          `Route: ${event.provider}/${event.model} (${event.purpose})`,
+          mode,
+        ].join('\n'),
+      });
+      deliveredKeys.add(dedupeKey);
+      await recordModelBudgetAlertDelivery(options.recordDelivery, {
+        timestampMs: Date.now(),
+        dedupeKey,
+        thresholdReason: event.reason,
+        windowKey,
+        status: result.status,
+        topic: result.topic,
+        ...(result.messageId ? { messageId: result.messageId } : {}),
+      });
+    } catch (error) {
+      await recordModelBudgetAlertDelivery(options.recordDelivery, {
+        timestampMs: Date.now(),
+        dedupeKey,
+        thresholdReason: event.reason,
+        windowKey,
+        status: 'failed',
+        error: toErrorMessage(error),
+      });
+      log.error('Failed to deliver model budget threshold operator alert', {
+        companionName: alertSubject,
+        dedupeKey,
+        error: toErrorMessage(error),
+      });
+    }
+  };
+}
+
+async function recordModelBudgetAlertDelivery(
+  recordDelivery: (event: ModelBudgetAlertDeliveryEvent) => void | Promise<void>,
+  event: ModelBudgetAlertDeliveryEvent,
+): Promise<void> {
+  try {
+    await recordDelivery(event);
+  } catch (error) {
+    log.error('Failed to record model budget alert delivery evidence', {
+      dedupeKey: event.dedupeKey,
+      status: event.status,
+      error: toErrorMessage(error),
+    });
+  }
 }
 
 async function deliverOperatorAlert(

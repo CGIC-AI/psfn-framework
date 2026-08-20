@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   createActiveMemoryRefreshFailureAlertHandler,
   createBackupFailureAlertHandler,
+  createModelBudgetThresholdAlertHandler,
   createPromptGenerationFailureAlertHandler,
   createQuarantineExpiryAlertHandler,
   createRepeatedScreeningFailureAlertHandler,
@@ -268,6 +269,99 @@ describe('scheduled operator alerts', () => {
       message: expect.stringMatching(
         /expired before operator review.*Envelope: env-expired-001.*quarantine TTL elapsed/s,
       ),
+    }));
+  });
+});
+
+describe('model budget threshold alerts', () => {
+  const thresholdEvent = {
+    timestampMs: Date.parse('2026-08-20T16:00:00.000Z'),
+    reason: 'daily_budget_exceeded' as const,
+    purpose: 'chat',
+    provider: 'openrouter',
+    model: 'provider/model',
+    service: 'chat',
+    process: 'agent.turn.prompt',
+    estimatedRequestCostUsd: 0.02,
+    enforcementEnabled: false,
+    budget: {
+      dayKey: '2026-08-20',
+      monthKey: '2026-08',
+      dailySpentUsd: 5.01,
+      dailyLimitUsd: 5,
+      monthlySpentUsd: 80,
+      monthlyLimitUsd: 100,
+      dailyUnknownCostAttempts: 0,
+      monthlyUnknownCostAttempts: 0,
+    },
+  };
+
+  it('delivers once per threshold window and records successful delivery evidence', async () => {
+    const { notifier, notify } = makeFakeNotifier();
+    const recordDelivery = vi.fn();
+    const handler = createModelBudgetThresholdAlertHandler({
+      notifier,
+      companionName: 'PSFN',
+      recordDelivery,
+    });
+
+    await handler(thresholdEvent);
+    await handler({ ...thresholdEvent, timestampMs: thresholdEvent.timestampMs + 1_000 });
+
+    expect(notify).toHaveBeenCalledOnce();
+    expect(notify).toHaveBeenCalledWith(expect.objectContaining({
+      sender: {
+        kind: 'system',
+        provenance: 'system.operator_alert.model_budget_threshold',
+      },
+      title: 'PSFN daily model budget threshold',
+      message: expect.stringContaining('Tracking mode: requests continue after this alert.'),
+    }));
+    expect(recordDelivery).toHaveBeenCalledOnce();
+    expect(recordDelivery).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'sent',
+      topic: 'ops',
+      dedupeKey: 'PSFN:daily_budget_exceeded:2026-08-20',
+    }));
+  });
+
+  it('does not burn the dedupe key when delivery fails', async () => {
+    const notify = vi.fn()
+      .mockRejectedValueOnce(new Error('ntfy unavailable'))
+      .mockResolvedValueOnce({ status: 'sent' as const, topic: 'ops' });
+    const recordDelivery = vi.fn();
+    const handler = createModelBudgetThresholdAlertHandler({
+      notifier: { notify } as unknown as NotificationPort,
+      companionName: 'PSFN',
+      recordDelivery,
+    });
+
+    await handler(thresholdEvent);
+    await handler(thresholdEvent);
+
+    expect(notify).toHaveBeenCalledTimes(2);
+    expect(recordDelivery).toHaveBeenNthCalledWith(1, expect.objectContaining({ status: 'failed' }));
+    expect(recordDelivery).toHaveBeenNthCalledWith(2, expect.objectContaining({ status: 'sent' }));
+  });
+
+  it('deduplicates independently for each authenticated companion in a shared gateway', async () => {
+    const { notifier, notify } = makeFakeNotifier();
+    const handler = createModelBudgetThresholdAlertHandler({
+      notifier,
+      companionName: 'fallback-name',
+      recordDelivery: vi.fn(),
+    });
+
+    await handler({ ...thresholdEvent, companionId: 'companion-a' });
+    await handler({ ...thresholdEvent, companionId: 'companion-b' });
+    await handler({ ...thresholdEvent, companionId: 'companion-a' });
+
+    expect(notify).toHaveBeenCalledTimes(2);
+    expect(notify).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      title: 'companion-a daily model budget threshold',
+    }));
+    expect(notify).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      title: 'companion-b daily model budget threshold',
     }));
   });
 });

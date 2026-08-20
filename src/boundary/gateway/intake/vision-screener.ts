@@ -26,11 +26,11 @@
 //
 // FAIL CLOSED: vision model unreachable/timeout/unparseable in enforce mode
 // means the image is WITHHELD (fixed soft-notice template, htm9.12 wording
-// contract) — never delivered unscreened. Shadow mode audits the failure
-// (envelope + quarantine record) and passes the image through (observe-only
-// rollout). Nothing here feeds the emotion model: the notice text carries the
-// operator-reviewed signature phrase, so the existing emotion/memory
-// exclusions apply automatically.
+// contract) — never delivered unscreened. Shadow mode audits the failure in a
+// released envelope and passes the image through without a quarantine record
+// (observe-only rollout). Nothing here feeds the emotion model: the notice
+// text carries the operator-reviewed signature phrase, so the existing
+// emotion/memory exclusions apply automatically.
 
 import { createHash } from 'node:crypto';
 import { createComponentLogger } from '../../../shared/logger.js';
@@ -529,7 +529,7 @@ function failClosed(
     sourceRiskTier: input.policy.sourceRiskTiers.image_ocr,
     contentRef: buildFailClosedContentRef(
       input.image,
-      input.quarantine ? 'intake-quarantine' : 'unpersisted',
+      input.quarantine && mode === 'enforce' ? 'intake-quarantine' : 'unpersisted',
     ),
     origin: input.origin,
     atMs,
@@ -539,15 +539,24 @@ function failClosed(
     actor,
     reason,
     atMs,
-    decision: { action: 'quarantine', reason, decidedBy: 'screening', decidedAtMs: atMs },
+    decision: {
+      action: mode === 'shadow' ? 'pass' : 'quarantine',
+      reason: (mode === 'shadow' ? `shadow-observation:${reason}` : reason).slice(
+        0,
+        COGSEC_DECISION_REASON_MAX_CHARS,
+      ),
+      decidedBy: 'screening',
+      decidedAtMs: atMs,
+    },
     riskLabels: [],
     scores: {},
     extractedFields: {
       [VISION_FIELD_ERROR]: error.slice(0, COGSEC_EVIDENCE_FIELD_MAX_CHARS),
+      ...(mode === 'shadow' ? { 'shadow.observed_action': 'quarantine' } : {}),
     },
   });
   envelope = transitionIntakeEnvelope(envelope, {
-    to: 'quarantined',
+    to: mode === 'shadow' ? 'released' : 'quarantined',
     actor,
     reason: "routed per screening decision 'quarantine'",
     atMs,
@@ -558,7 +567,7 @@ function failClosed(
   // screening-service posture: recorded and logged, never swallowed — and the
   // image stays withheld in enforce mode regardless (fail closed).
   let quarantineHoldError: string | undefined;
-  if (input.quarantine) {
+  if (input.quarantine && mode === 'enforce') {
     try {
       input.quarantine.hold({
         envelope,

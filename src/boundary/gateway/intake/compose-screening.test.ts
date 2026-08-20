@@ -213,7 +213,7 @@ describe('composeGatewayIntakeScreening vision wiring (htm9.8)', () => {
     })).rejects.toThrow(/model is not provisioned.*missing/iu);
   });
 
-  it('signals only after a text quarantine hold is durable', async () => {
+  it('reports a text shadow finding without creating a quarantine hold', async () => {
     const input = makeDataDirs('shadow', false);
     const durableCounts: number[] = [];
     const composition = await composeGatewayIntakeScreening({
@@ -242,7 +242,11 @@ describe('composeGatewayIntakeScreening vision wiring (htm9.8)', () => {
     );
 
     expect(result.action).toBe('quarantine');
-    expect(durableCounts).toEqual([1]);
+    expect(result.envelope).toMatchObject({
+      state: 'released',
+      contentRef: { store: 'unpersisted' },
+    });
+    expect(durableCounts).toEqual([]);
     expect(input.onInlineShadowFinding).toHaveBeenCalledOnce();
     expect(input.onInlineShadowFinding).toHaveBeenCalledWith(expect.objectContaining({
       phase: 'inline_shadow',

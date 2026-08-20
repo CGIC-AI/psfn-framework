@@ -285,10 +285,11 @@
       "match": {
         "kind": "near",
         "left": "\\b(?:change|rewrite|replace|update|modify|edit)\\b",
-        "right": "\\b(?:persona|identity|character\\s{0,2}card|core\\s{0,2}memory|self[\\s-]?concept)\\b",
-        "maxGapChars": 256,
+        "right": "\\b(?:(?:your|the\\s{1,4}(?:assistant|companion|agent)(?:['’]s)?)\\s{1,4}(?:persona|identity|character\\s{0,2}card|core\\s{0,2}memory|self[\\s-]?concept)|(?:persona|identity|character\\s{0,2}card|core\\s{0,2}memory|self[\\s-]?concept)\\s{1,8}(?:to|into|as))\\b",
+        "maxGapChars": 96,
         "sameLine": true
-      }
+      },
+      "note": "Require a directly targeted identity owner or an explicit destination phrase; ordinary documentation and structural discussion containing persona remains benign. Broader ambiguous cases remain an L2 concern. psfn-framework-64ksh."
     },
     {
       "id": "c2_node_registration",

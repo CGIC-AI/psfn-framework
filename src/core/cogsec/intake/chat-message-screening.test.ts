@@ -250,7 +250,7 @@ describe('chat message body intake screening', () => {
 
     expect(screened.content).toBe(DIRECT_INJECTION);
     expect(screened.snapshot).toMatchObject({
-      state: 'quarantined',
+      state: 'released',
       enforcementPosture: 'shadow',
     });
   });

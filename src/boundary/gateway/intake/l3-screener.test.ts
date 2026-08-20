@@ -951,16 +951,26 @@ describe('applyL3ScreeningOutcome', () => {
     });
   });
 
-  it('shadow mode: observe-only text passthrough, but envelope + CogSecEvent are still written', async () => {
+  it('shadow mode is the observational ceiling even when an item requests enforcement', async () => {
     const config = testPolicy({ mode: 'shadow' });
     const events = makeEventStore();
     const outcome = await screenedOutcome(FLAGGED_RESPONSE, config);
-    const result = applyL3ScreeningOutcome(applyInput(outcome, config, events));
+    const hold = vi.fn();
+    const result = applyL3ScreeningOutcome(applyInput(outcome, config, events, {
+      enforcementPosture: 'enforce',
+      quarantine: { hold } as unknown as IntakeQuarantineHoldPort,
+    }));
 
     expect(result.mode).toBe('shadow');
     expect(result.effectiveText).toBe(HOSTILE_CONTENT);
     expect(result.withheld).toBe(false);
-    expect(result.envelope.state).toBe('quarantined');
+    expect(result.action).toBe('quarantine');
+    expect(result.envelope).toMatchObject({
+      state: 'released',
+      contentRef: { store: 'unpersisted' },
+      extractedFields: { 'shadow.observed_action': 'quarantine' },
+    });
+    expect(hold).not.toHaveBeenCalled();
     expect(events.getEvent(result.cogSecCaseId)).not.toBeNull();
   });
 
@@ -980,7 +990,7 @@ describe('applyL3ScreeningOutcome', () => {
       outcome as Exclude<L3ScreeningOutcome, { kind: 'skipped' }>, config, events,
     ));
     expect(result.effectiveText).toBe(HOSTILE_CONTENT);
-    expect(result.envelope.state).toBe('quarantined');
+    expect(result.envelope.state).toBe('released');
     const event = events.getEvent(result.cogSecCaseId);
     expect(event?.failureDetails).toBeDefined();
   });

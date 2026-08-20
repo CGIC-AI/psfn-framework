@@ -178,6 +178,42 @@ describe('AdminSessionDataService', () => {
     }]);
   });
 
+  it('hides the authenticated testing-harness evidence room from ordinary session surfaces', async () => {
+    store.append({
+      channelId: 'api:testing-harness',
+      role: 'user',
+      content: 'exact shakedown evidence',
+      timestamp: 1_700_000_000_001,
+      metadata: JSON.stringify({
+        testingHarness: {
+          schemaVersion: 1,
+          kind: 'testing_harness',
+          runId: 'run-a',
+          manifestId: 'manifest-a',
+        },
+      }),
+    });
+    store.append({
+      channelId: 'api:real-companion-activity',
+      role: 'user',
+      content: 'genuine conversation',
+      timestamp: 1_700_000_000_002,
+    });
+    const service = new AdminSessionDataService({
+      sessionStore: store,
+      sessionManager: new SessionManager(store, makeConfig({ dataDir: dir })),
+      eventBus: new EventBus(),
+    });
+
+    await expect(service.listSessions()).resolves.toEqual({
+      channels: [expect.objectContaining({ channelId: 'api:real-companion-activity' })],
+    });
+    await expect(service.listSessionRoutes()).resolves.toEqual({
+      channels: [expect.objectContaining({ channelId: 'api:real-companion-activity' })],
+      routes: [],
+    });
+  });
+
   it('lists session routes without recursively issuing a session-list request', async () => {
     store.append({
       channelId: 'api:route-list',

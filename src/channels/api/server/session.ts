@@ -8,6 +8,7 @@ import type {
   SubstrateMessage,
 } from '../../../shared/contracts/runtime.js';
 import type { IntakeEnvelopeSnapshot } from '../../../shared/contracts/intake-envelope.js';
+import type { TestingHarnessRunProvenance } from '../../../shared/contracts/testing-harness.js';
 import type { IntakeScreeningService } from '../../../core/cogsec/intake/screening.js';
 import {
   appendDocumentIngestToContent,
@@ -20,6 +21,7 @@ import {
 } from '../../../faculties/file-ingest/index.js';
 import type { SatelliteRoutingMetadata } from '../../../shared/contracts/satellite-registry.js';
 import type { SessionManager } from '../../../core/session/manager.js';
+import { buildSessionMetadataWithTestingHarnessProvenance } from '../../../core/session/testing-harness-provenance.js';
 import type { ChannelPrivacy } from '../../../system/trust/context-envelope.js';
 import type { ApiAuthPrincipal } from '../../backplane/http/auth.js';
 import type { ChatCompletionRequest } from '../types.js';
@@ -288,6 +290,7 @@ export function seedSession(params: {
   authorId: string;
   authorName: string;
   channelPrivacy?: ChannelPrivacy;
+  testingHarness?: TestingHarnessRunProvenance;
 }): void {
   const {
     sessionManager,
@@ -296,7 +299,11 @@ export function seedSession(params: {
     authorId,
     authorName,
     channelPrivacy,
+    testingHarness,
   } = params;
+  const testingHarnessMetadata = testingHarness
+    ? buildSessionMetadataWithTestingHarnessProvenance(undefined, testingHarness)
+    : undefined;
 
   // Only seed if this session has no prior messages.
   const count = sessionManager.getMessageCount(channelId);
@@ -317,11 +324,24 @@ export function seedSession(params: {
           undefined,
           {
             channelMeta: { privacyLevel: channelPrivacy },
+            ...(testingHarnessMetadata ? { metadata: testingHarnessMetadata } : {}),
           },
         );
         continue;
       }
-      sessionManager.recordUserMessage(channelId, content, authorId, msg.name ?? authorName);
+      if (testingHarnessMetadata) {
+        sessionManager.recordUserMessage(
+          channelId,
+          content,
+          authorId,
+          msg.name ?? authorName,
+          undefined,
+          undefined,
+          { metadata: testingHarnessMetadata },
+        );
+      } else {
+        sessionManager.recordUserMessage(channelId, content, authorId, msg.name ?? authorName);
+      }
     } else if (msg.role === 'assistant') {
       if (channelPrivacy) {
         sessionManager.recordAssistantMessage(
@@ -332,11 +352,23 @@ export function seedSession(params: {
           undefined,
           {
             channelMeta: { privacyLevel: channelPrivacy },
+            ...(testingHarnessMetadata ? { metadata: testingHarnessMetadata } : {}),
           },
         );
         continue;
       }
-      sessionManager.recordAssistantMessage(channelId, content);
+      if (testingHarnessMetadata) {
+        sessionManager.recordAssistantMessage(
+          channelId,
+          content,
+          undefined,
+          undefined,
+          undefined,
+          { metadata: testingHarnessMetadata },
+        );
+      } else {
+        sessionManager.recordAssistantMessage(channelId, content);
+      }
     }
     // system messages are handled via systemPrompt, skip
   }
@@ -359,6 +391,7 @@ export function buildSubstrateMessage(params: {
   attachments?: Attachment[];
   /** Intake-firewall snapshots for the body and screened document attachments. */
   intakeEnvelopes?: IntakeEnvelopeSnapshot[];
+  testingHarness?: TestingHarnessRunProvenance;
 }): SubstrateMessage {
   const {
     channelId,
@@ -375,6 +408,7 @@ export function buildSubstrateMessage(params: {
     satellite,
     attachments,
     intakeEnvelopes,
+    testingHarness,
   } = params;
   const approvalToken = clampApiHeader(
     singleApiHeader(req.headers['x-broadcast-approval-token']),
@@ -389,6 +423,7 @@ export function buildSubstrateMessage(params: {
     : undefined;
   const routing: MessageRoutingMetadata = {
     source,
+    ...(testingHarness ? { testingHarness } : {}),
     ...(approvalToken || visibilityScope
       ? {
         broadcast: {
@@ -406,6 +441,7 @@ export function buildSubstrateMessage(params: {
     ...(intakeEnvelopes && intakeEnvelopes.length > 0 ? { intakeEnvelopes } : {}),
   };
   const hasRouting = source !== 'api'
+    || routing.testingHarness
     || routing.broadcast
     || routing.satellite
     || routing.channelPrivacy

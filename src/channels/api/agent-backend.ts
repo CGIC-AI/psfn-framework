@@ -61,6 +61,9 @@ import {
   type ApiDocumentIngestConfig,
 } from './server/session.js';
 import type { IntakeEnvelopeSnapshot } from '../../shared/contracts/intake-envelope.js';
+import type { TestingHarnessRunProvenance } from '../../shared/contracts/testing-harness.js';
+import { normalizeTestingHarnessRunProvenance } from '../../shared/contracts/testing-harness.js';
+import { buildSessionMetadataWithTestingHarnessProvenance } from '../../core/session/testing-harness-provenance.js';
 import { screenChatMessageBody } from '../../core/cogsec/intake/chat-message-screening.js';
 import { buildApiHealthResponse } from './server-health.js';
 import {
@@ -1071,11 +1074,15 @@ export class AgentApiBackend {
     authorId: string,
     authorName: string,
     channelPrivacy?: ChannelPrivacy,
+    testingHarness?: TestingHarnessRunProvenance,
   ): void {
     const count = this.sessionManager.getMessageCount(channelId);
     if (count > 0) return;
 
     const prior = messages.slice(0, -1);
+    const testingHarnessMetadata = testingHarness
+      ? buildSessionMetadataWithTestingHarnessProvenance(undefined, testingHarness)
+      : undefined;
     for (const msg of prior) {
       const content = getMessageTextContent(msg);
       if (msg.role === 'user') {
@@ -1089,7 +1096,18 @@ export class AgentApiBackend {
             undefined,
             {
               channelMeta: { privacyLevel: channelPrivacy },
+              ...(testingHarnessMetadata ? { metadata: testingHarnessMetadata } : {}),
             },
+          );
+        } else if (testingHarnessMetadata) {
+          this.sessionManager.recordUserMessage(
+            channelId,
+            content,
+            authorId,
+            msg.name ?? authorName,
+            undefined,
+            undefined,
+            { metadata: testingHarnessMetadata },
           );
         } else {
           this.sessionManager.recordUserMessage(channelId, content, authorId, msg.name ?? authorName);
@@ -1104,7 +1122,17 @@ export class AgentApiBackend {
             undefined,
             {
               channelMeta: { privacyLevel: channelPrivacy },
+              ...(testingHarnessMetadata ? { metadata: testingHarnessMetadata } : {}),
             },
+          );
+        } else if (testingHarnessMetadata) {
+          this.sessionManager.recordAssistantMessage(
+            channelId,
+            content,
+            undefined,
+            undefined,
+            undefined,
+            { metadata: testingHarnessMetadata },
           );
         } else {
           this.sessionManager.recordAssistantMessage(channelId, content);
@@ -1508,6 +1536,7 @@ export class AgentApiBackend {
     attachments?: Attachment[];
     /** Intake-firewall snapshots for the body and screened document attachments. */
     intakeEnvelopes?: IntakeEnvelopeSnapshot[];
+    testingHarness?: TestingHarnessRunProvenance;
   }): SubstrateMessage {
     const approvalToken = this.readHeader(params.headers, 'x-broadcast-approval-token', 256);
     const requestedScope = this.readHeader(params.headers, 'x-broadcast-visibility-scope', 64);
@@ -1516,6 +1545,7 @@ export class AgentApiBackend {
       : undefined;
     const routing: MessageRoutingMetadata = {
       source: params.source,
+      ...(params.testingHarness ? { testingHarness: params.testingHarness } : {}),
       ...(approvalToken || visibilityScope
         ? {
           broadcast: {
@@ -1536,6 +1566,7 @@ export class AgentApiBackend {
         : {}),
     };
     const hasRouting = params.source !== 'api'
+      || routing.testingHarness
       || routing.broadcast
       || routing.satellite
       || routing.hubDeviceAttachment
@@ -1579,6 +1610,47 @@ export class AgentApiBackend {
       return {
         ok: false,
         error: this.fail(499, 'request_cancelled', 'Request cancelled before turn started'),
+      };
+    }
+    const runId = this.readHeader(headers, 'x-psfn-test-run-id', 256);
+    const manifestId = this.readHeader(headers, 'x-psfn-test-manifest-id', 256);
+    let testingHarness: TestingHarnessRunProvenance | undefined;
+    if (principal.scope === 'testing_harness') {
+      if (!runId || !manifestId) {
+        return {
+          ok: false,
+          error: this.fail(
+            400,
+            'testing_harness_provenance_required',
+            'Testing-harness chat requests require exact run and manifest identifiers',
+          ),
+        };
+      }
+      try {
+        testingHarness = normalizeTestingHarnessRunProvenance({
+          schemaVersion: 1,
+          kind: 'testing_harness',
+          runId,
+          manifestId,
+        });
+      } catch {
+        return {
+          ok: false,
+          error: this.fail(
+            400,
+            'testing_harness_provenance_invalid',
+            'Testing-harness run and manifest identifiers are invalid',
+          ),
+        };
+      }
+    } else if (runId !== undefined || manifestId !== undefined) {
+      return {
+        ok: false,
+        error: this.fail(
+          403,
+          'testing_harness_provenance_not_allowed',
+          'Only the authenticated testing-harness principal may attach test-run provenance',
+        ),
       };
     }
     const routingOverrides = this.parseTurnRoutingOverrides(request);
@@ -1795,6 +1867,7 @@ export class AgentApiBackend {
         ...(screenedBody.snapshot ? [screenedBody.snapshot] : []),
         ...ingestedFiles.intakeEnvelopes,
       ],
+      ...(testingHarness ? { testingHarness } : {}),
     });
     const releaseChannel = await this.acquireChannel(channelId, requestId, signal);
     if (!releaseChannel) {
@@ -1807,7 +1880,14 @@ export class AgentApiBackend {
       // Session seeding is a mutation. Keep it behind queue admission so an
       // abandoned request cannot leave conversation residue while waiting for
       // another turn to finish.
-      this.seedSession(channelId, request.messages, authorId, authorName, resolvedChannelPrivacy);
+      this.seedSession(
+        channelId,
+        request.messages,
+        authorId,
+        authorName,
+        resolvedChannelPrivacy,
+        testingHarness,
+      );
     } catch (error) {
       releaseChannel();
       throw error;

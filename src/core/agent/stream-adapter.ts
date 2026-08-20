@@ -24,6 +24,7 @@ import type {
   ModelPurpose,
   StreamCallbacks,
   ToolCall,
+  ToolSchema,
 } from '../../shared/contracts/runtime.js';
 import type { CoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { createOpenAICompatibleEndpointModel, resolveRegisteredModel } from '../../primitives/llm/models.js';
@@ -65,6 +66,7 @@ import {
   findCorruptEmptyToolCalls,
 } from '../../primitives/llm/client-response-helpers.js';
 import {
+  applyExactExplicitToolArguments,
   assertExplicitToolResponseSatisfied,
   isMissingRequiredToolCallError,
   resolveExplicitToolContract,
@@ -328,6 +330,8 @@ function executeStreamCandidate(params: ExecuteStreamCandidateParams): AsyncGene
             attempt: params.nextPhysicalAttempt(),
             retryOwner: 'caller',
           },
+          ...(explicitToolContract ? { explicitToolContract } : {}),
+          ...(executionTools ? { executionTools } : {}),
           onProviderFirstOutput: params.onProviderFirstOutput,
           ...(streamSignal ? { signal: streamSignal } : {}),
           onProviderPayloadCaptured: params.onProviderPayloadCaptured,
@@ -495,6 +499,8 @@ interface TransportEventStreamParams {
   requestOptions: Record<string, unknown>;
   transport: SubstrateStreamTransport;
   accounting: NonNullable<LLMContext['accounting']>;
+  explicitToolContract?: ReturnType<typeof resolveExplicitToolContract>;
+  executionTools?: readonly ToolSchema[];
   onProviderFirstOutput?: (event: ProviderFirstOutputEvent) => void | Promise<void>;
   /** mmo9.6.1: run-scoped abort signal threaded to the provider transport. */
   signal?: AbortSignal;
@@ -558,6 +564,11 @@ function createTransportEventStream(
         const response = params.signal
           ? await params.transport.stream(transportContext, transportCallbacks, { signal: params.signal })
           : await params.transport.stream(transportContext, transportCallbacks);
+        const responseToolCalls = applyExactExplicitToolArguments({
+          contract: params.explicitToolContract,
+          toolCalls: response.toolCalls,
+          tools: params.executionTools,
+        });
 
         const capturedWirePayload = response.providerObservability?.capturedWirePayload;
         if (capturedWirePayload && params.onProviderPayloadCaptured) {
@@ -576,7 +587,7 @@ function createTransportEventStream(
         applyTerminalResponse(state, response);
         enqueueThinkingEvents(queue, state, response.reasoning);
         enqueueMissingTextEvents(queue, state, response.content);
-        enqueueToolCallEvents(queue, state, response.toolCalls, resolveContextTools(params.context));
+        enqueueToolCallEvents(queue, state, responseToolCalls, resolveContextTools(params.context));
         queue.push({
           type: 'done',
           reason: response.stopReason,

@@ -140,29 +140,12 @@ export function assertExplicitToolArgumentsValid(input: {
     throw new Error(`Explicit tool schema unavailable for ${requiredToolName}`);
   }
 
-  try {
-    validateToolArguments(
-      {
-        name: tool.name,
-        description: tool.description,
-        parameters: tool.inputSchema as Tool['parameters'],
-      },
-      {
-        type: 'toolCall',
-        id: toolCall.id,
-        name: toolCall.name,
-        arguments: toolCall.input,
-      } satisfies PiToolCall,
-    );
-  } catch (error) {
-    if (!(error instanceof Error) || !error.message.startsWith('Validation failed for tool ')) {
-      throw error;
-    }
-    throw new ExplicitToolContractError(
-      `Provider returned schema-invalid arguments for required tool call: ${requiredToolName}`,
-      'invalid_arguments',
-    );
-  }
+  validateExplicitToolArguments({
+    requiredToolName,
+    tool,
+    toolCall,
+    failureSubject: 'Provider returned',
+  });
   if (
     input.contract?.expectedArguments
     && !exactToolArgumentsMatch(toolCall.input, input.contract.expectedArguments)
@@ -172,6 +155,81 @@ export function assertExplicitToolArgumentsValid(input: {
       'invalid_arguments',
     );
   }
+}
+
+function validateExplicitToolArguments(input: {
+  requiredToolName: string;
+  tool: ToolSchema;
+  toolCall: { id: string; name: string; input: Record<string, unknown> };
+  failureSubject: 'Provider returned' | 'Requested exact arguments are';
+}): void {
+  try {
+    validateToolArguments(
+      {
+        name: input.tool.name,
+        description: input.tool.description,
+        parameters: input.tool.inputSchema as Tool['parameters'],
+      },
+      {
+        type: 'toolCall',
+        id: input.toolCall.id,
+        name: input.toolCall.name,
+        arguments: input.toolCall.input,
+      } satisfies PiToolCall,
+    );
+  } catch (error) {
+    if (!(error instanceof Error) || !error.message.startsWith('Validation failed for tool ')) {
+      throw error;
+    }
+    throw new ExplicitToolContractError(
+      `${input.failureSubject} schema-invalid for required tool call: ${input.requiredToolName}`,
+      'invalid_arguments',
+    );
+  }
+}
+
+/**
+ * Make an unambiguous participant-supplied exact argument object authoritative.
+ *
+ * The model still has to select the one required tool. Before replacing its
+ * argument copy, validate the participant's JSON against the canonical execution
+ * schema so an invalid prompt can never gain execution authority.
+ */
+export function applyExactExplicitToolArguments<
+  T extends { id: string; name: string; input: Record<string, unknown> },
+>(input: {
+  contract: ExplicitToolContract | undefined;
+  toolCalls: readonly T[];
+  tools: readonly ToolSchema[] | undefined;
+}): T[] {
+  const requiredToolName = input.contract?.requiredToolName;
+  const expectedArguments = input.contract?.expectedArguments;
+  if (!requiredToolName || !expectedArguments) return [...input.toolCalls];
+  if (
+    input.toolCalls.length !== 1
+    || input.toolCalls[0]?.name !== requiredToolName
+  ) {
+    return [...input.toolCalls];
+  }
+  const tool = input.tools?.find(candidate => candidate.name === requiredToolName);
+  if (!tool) {
+    throw new Error(`Explicit tool schema unavailable for ${requiredToolName}`);
+  }
+  const toolCall = input.toolCalls[0];
+  validateExplicitToolArguments({
+    requiredToolName,
+    tool,
+    toolCall: {
+      id: toolCall.id,
+      name: toolCall.name,
+      input: expectedArguments,
+    },
+    failureSubject: 'Requested exact arguments are',
+  });
+  return [{
+    ...toolCall,
+    input: structuredClone(expectedArguments),
+  }];
 }
 
 export function assertExplicitToolResponseSatisfied(input: {

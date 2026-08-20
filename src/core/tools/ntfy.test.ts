@@ -35,6 +35,39 @@ function resultText(result: { content: Array<{ type: string; text: string }> }):
 }
 
 describe('notify tool', () => {
+  it('keeps strict execution branches while exposing a flat model-facing schema', () => {
+    const tool = createNotifyTool({ dispatch: vi.fn() });
+
+    expect(tool.parameters).toHaveProperty('anyOf');
+    expect(tool.modelParameters).toMatchObject({
+      type: 'object',
+      properties: {
+        action: {
+          anyOf: expect.arrayContaining([
+            expect.objectContaining({ const: 'brief' }),
+            expect.objectContaining({ const: 'send' }),
+            expect.objectContaining({ const: 'consider' }),
+            expect.objectContaining({ const: 'approval_request' }),
+            expect.objectContaining({ const: 'clarify' }),
+          ]),
+        },
+      },
+      required: ['action'],
+      additionalProperties: false,
+    });
+    expect(tool.modelParameters).not.toHaveProperty('anyOf');
+    expect(Value.Check(tool.parameters, {
+      action: 'send',
+      delivery_channel: 'discord',
+      delivery_target: '123',
+    })).toBe(false);
+    expect(Value.Check(tool.modelParameters, {
+      action: 'send',
+      delivery_channel: 'discord',
+      delivery_target: '123',
+    })).toBe(true);
+  });
+
   it('returns explicit success text when a brief is sent', async () => {
     const notifier: NotificationPort = {
       notify: vi.fn().mockResolvedValue({

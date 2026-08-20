@@ -6,6 +6,7 @@ interface ToolSchemaCandidate {
   name?: unknown;
   description?: unknown;
   inputSchema?: unknown;
+  modelParameters?: unknown;
   parameters?: unknown;
 }
 
@@ -23,10 +24,16 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
 
 function toToolSchema(candidate: unknown): ToolSchema | null {
   if (!isPlainRecord(candidate)) return null;
-  const { name, description, inputSchema, parameters } = candidate as ToolSchemaCandidate;
+  const {
+    name,
+    description,
+    inputSchema,
+    modelParameters,
+    parameters,
+  } = candidate as ToolSchemaCandidate;
   if (typeof name !== 'string' || name.trim().length === 0) return null;
   if (typeof description !== 'string' || description.trim().length === 0) return null;
-  const schema = inputSchema ?? parameters;
+  const schema = inputSchema ?? modelParameters ?? parameters;
   if (!isPlainRecord(schema)) return null;
   return cloneToolSchema({
     name: name.trim(),

@@ -2484,8 +2484,15 @@ describe('LLMClient completion model hints', () => {
 
     expect(mocks.streamSimple).toHaveBeenCalledTimes(2);
     expect(onText).not.toHaveBeenCalled();
+    expect(mocks.streamSimple.mock.calls[0]?.[1].tools?.map(tool => tool.name)).toEqual([
+      'notify',
+    ]);
     expect(mocks.streamSimple.mock.calls[0]?.[2]).toMatchObject({
-      toolChoice: { type: 'function', function: { name: 'notify' } },
+      toolChoice: 'auto',
+      explicitToolContract: {
+        choice: { type: 'function', function: { name: 'notify' } },
+        requiredToolName: 'notify',
+      },
       requiredToolName: 'notify',
     });
   });

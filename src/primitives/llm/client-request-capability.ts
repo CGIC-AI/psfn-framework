@@ -37,7 +37,10 @@ import {
 } from '../../boundary/custody/credential-vault.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { resolveExplicitToolContract } from './explicit-tool-request.js';
-import type { ExplicitToolChoice } from './explicit-tool-request.js';
+import type {
+  ExplicitToolChoice,
+  ExplicitToolContract,
+} from './explicit-tool-request.js';
 
 const log = createComponentLogger('LLMClient');
 
@@ -54,7 +57,10 @@ export interface LLMRequestOptions extends SimpleStreamOptions {
   topK?: number;
   frequencyPenalty?: number;
   repetitionPenalty?: number;
-  toolChoice?: ExplicitToolChoice;
+  /** Provider-facing choice serialized by pi-ai. */
+  toolChoice?: ExplicitToolChoice | 'auto';
+  /** PSFN postcondition, deliberately separate from provider wire formatting. */
+  explicitToolContract?: ExplicitToolContract;
   /** Exact tool contract paired with a provider-generic `required` choice. */
   requiredToolName?: string;
 }
@@ -208,11 +214,25 @@ export class LLMRequestCapability {
     };
   }
 
-  buildPiContext(context: LLMContext): PiContext {
+  buildPiContext(
+    context: LLMContext,
+    explicitToolContract?: ExplicitToolContract,
+  ): PiContext {
+    let tools = context.tools;
+    if (explicitToolContract?.requiredToolName) {
+      tools = context.tools?.filter(tool => tool.name === explicitToolContract.requiredToolName);
+      if (tools?.length !== 1) {
+        throw new Error(
+          `Explicit tool schema unavailable for ${explicitToolContract.requiredToolName}`,
+        );
+      }
+    } else if (explicitToolContract?.choice === 'none') {
+      tools = undefined;
+    }
     return {
       systemPrompt: mergeSystemContextIntoSystemPrompt(context.systemPrompt, context.messages),
       messages: contextMessagesToPiMessages(context.messages),
-      ...(context.tools?.length ? { tools: toPiTools(context.tools) } : {}),
+      ...(tools?.length ? { tools: toPiTools(tools) } : {}),
     };
   }
 
@@ -222,87 +242,27 @@ export class LLMRequestCapability {
     correlation: ResolvedCorrelationMetadata | undefined,
     model: Model<any>,
     candidate?: RoutingCandidate,
-  ): void {
+  ): ExplicitToolContract | undefined {
     const contract = resolveExplicitToolContract({
       context,
       originStage: correlation?.originStage,
       modelApi: String(model.api),
     });
-    if (!contract) return;
-    const { choice: toolChoice } = contract;
-    requestOptions.toolChoice = toolChoice;
+    if (!contract) return undefined;
+    requestOptions.explicitToolContract = contract;
     if (contract.requiredToolName) requestOptions.requiredToolName = contract.requiredToolName;
-    if (candidate?.provider === 'openrouter') {
-      requestOptions.provider = {
-        ...(requestOptions.provider ?? {}),
-        require_parameters: true,
-      };
-    }
 
-    // pi-ai's SimpleStreamOptions contract does not type provider-specific
-    // toolChoice, even though the OpenAI completions adapter currently forwards
-    // it. Inject the provider-native field at the final payload seam as well so
-    // an adapter/model-registry wrapper cannot silently drop a required call.
-    if (String(model.api) === 'openai-completions') {
+    if (contract.requiredToolName) {
       const directZai = typeof model.baseUrl === 'string'
         && usesDirectZaiEndpoint(model.baseUrl);
-      const wireToolChoice = directZai && contract.requiredToolName
+      // OpenRouter cannot guarantee that every routed endpoint accepts a named
+      // forced choice. Expose only the requested function in the pi-ai Context,
+      // ask the adapter for `auto`, and retain exactness as a PSFN postcondition.
+      requestOptions.toolChoice = directZai || candidate?.provider === 'openrouter'
         ? 'auto'
-        : toolChoice;
-      const priorOnPayload = requestOptions.onPayload;
-      requestOptions.onPayload = async (payload, payloadModel) => {
-        const prior = await priorOnPayload?.(payload, payloadModel);
-        const outgoing = prior ?? payload;
-        if (!outgoing || typeof outgoing !== 'object' || Array.isArray(outgoing)) {
-          throw new Error('OpenAI completions payload must be an object before tool choice injection');
-        }
-        const outgoingRecord = outgoing as Record<string, unknown>;
-        const tools = requestOptions.requiredToolName && Array.isArray(outgoingRecord.tools)
-          ? outgoingRecord.tools.filter((tool: unknown) => (
-              !!tool
-              && typeof tool === 'object'
-              && !Array.isArray(tool)
-              && (tool as { function?: { name?: unknown } }).function?.name === requestOptions.requiredToolName
-            ))
-          : outgoingRecord.tools;
-        if (requestOptions.requiredToolName && (!Array.isArray(tools) || tools.length !== 1)) {
-          throw new Error(
-            `OpenAI completions payload is missing required tool ${JSON.stringify(requestOptions.requiredToolName)}`,
-          );
-        }
-        if (directZai && toolChoice === 'none') {
-          const {
-            tools: _tools,
-            tool_choice: _toolChoice,
-            parallel_tool_calls: _parallelToolCalls,
-            ...payloadWithoutTools
-          } = outgoingRecord;
-          return payloadWithoutTools;
-        }
-        return {
-          ...outgoing,
-          ...(tools !== undefined ? { tools } : {}),
-          ...(candidate?.provider === 'openrouter'
-            ? {
-                provider: {
-                  ...(
-                    outgoingRecord.provider
-                    && typeof outgoingRecord.provider === 'object'
-                    && !Array.isArray(outgoingRecord.provider)
-                      ? outgoingRecord.provider
-                      : {}
-                  ),
-                  require_parameters: true,
-                },
-              }
-            : {}),
-          // Direct Z.AI documents only `auto`; exactness is retained as a
-          // client postcondition after exposing only the requested tool.
-          tool_choice: wireToolChoice,
-          ...(requestOptions.requiredToolName ? { parallel_tool_calls: false } : {}),
-        };
-      };
+        : contract.choice;
     }
+    return contract;
   }
 
   resolveRouteKind(candidate: RoutingCandidate): LLMProviderObservability['routeKind'] {

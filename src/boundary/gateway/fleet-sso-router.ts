@@ -661,7 +661,7 @@ export class GatewayFleetSsoRouter {
   matches(rawTarget: string): boolean {
     try {
       const { rawPath } = parseOuterPath(rawTarget);
-      return rawPath === FLEET_PATH || rawPath === `${FLEET_PATH}/`
+      return rawPath === '/' || rawPath === FLEET_PATH || rawPath === `${FLEET_PATH}/`
         || rawPath.startsWith(`${FLEET_PATH}/_app/`)
         || rawPath.startsWith('/_app/')
         || rawPath === FLEET_LOGIN_PATH || rawPath.startsWith(FLEET_PORTAL_API_PATH)
@@ -669,7 +669,7 @@ export class GatewayFleetSsoRouter {
         || rawPath.startsWith(COMPANION_PREFIX)
         || rawPath === COMPANION_UI_PREFIX || rawPath.startsWith(`${COMPANION_UI_PREFIX}/`);
     } catch {
-      return rawTarget.startsWith(FLEET_PATH) || rawTarget.startsWith(FLEET_PORTAL_API_PATH)
+      return rawTarget === '/' || rawTarget.startsWith(FLEET_PATH) || rawTarget.startsWith(FLEET_PORTAL_API_PATH)
         || rawTarget.startsWith('/_app/')
         || rawTarget.startsWith(FLEET_MODEL_USAGE_API_PATH)
         || rawTarget.startsWith(COMPANION_PREFIX)
@@ -693,6 +693,17 @@ export class GatewayFleetSsoRouter {
         throw new FleetSsoRequestError(400, 'Browser origin is invalid');
       }
       const { rawPath, rawQuery } = parseOuterPath(request.url ?? '/');
+      if (rawPath === '/') {
+        if (request.method !== 'GET' || rawQuery) {
+          throw new FleetSsoRequestError(404, 'Resource not found');
+        }
+        response.writeHead(302, {
+          'Cache-Control': 'no-store',
+          Location: FLEET_PATH,
+        });
+        response.end();
+        return;
+      }
       if (rawPath === FLEET_LOGIN_PATH) {
         if (request.method !== 'GET' || rawQuery) throw new FleetSsoRequestError(404, 'Resource not found');
         this.loginLanding.send(response);

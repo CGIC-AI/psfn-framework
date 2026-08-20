@@ -1,6 +1,8 @@
 import { isRecord } from '../../shared/utils/types.js';
 import type { ConfirmationResolveParams } from '../../boundary/gateway/protocol.js';
 
+export const CONFIRMATION_RESOLVE_PATH = '/api/admin/confirmations/resolve';
+
 /**
  * Parsed operator confirmation-resolution request.
  *

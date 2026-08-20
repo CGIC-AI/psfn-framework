@@ -171,7 +171,17 @@ function createDefaultReadService(
         maxHeldItems: intakePolicy.quarantine.maxHeldItems,
       },
     );
-    service = createAdminIntakeQuarantineReadService({ store });
+    service = createAdminIntakeQuarantineReadService({
+      store,
+      firewallStatusProvider: heldCount => ({
+        mode: intakePolicy.mode,
+        queueEmptyDoesNotMeanFirewallOff: true,
+        note: 'This is the shared gateway firewall policy; queue size does not change its mode.',
+        heldCount,
+        quarantineItemTtlHours: intakePolicy.quarantine.itemTtlHours,
+        quarantineMaxHeldItems: intakePolicy.quarantine.maxHeldItems,
+      }),
+    });
     return service;
   };
   return {

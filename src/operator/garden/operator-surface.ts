@@ -28,7 +28,10 @@ import type { GardenAdminTransportClientEndpoint } from './transport-paths.js';
 import { validateAdminAuthStartupPolicy } from './auth-policy.js';
 import { assertFleetAuthStandaloneSurfacesUnavailable } from '../../system/config/fleet-auth-standalone-surface-guard.js';
 import { parseAdminJsonBody } from './request-body.js';
-import { parseConfirmationResolveRequest } from './confirmation-resolve-request.js';
+import {
+  CONFIRMATION_RESOLVE_PATH,
+  parseConfirmationResolveRequest,
+} from './confirmation-resolve-request.js';
 import type { ConfirmationOperatorAuthContext } from './admin-contract.js';
 import type { GatewayOperatorConfirmationClient } from '../../app/startup/support/gateway-operator-confirmation-client.js';
 import {
@@ -54,7 +57,6 @@ import type { PostgresRuntimeReadinessSnapshot } from '../../persistence/postgre
 
 const log = createComponentLogger('GardenOperatorSurface');
 const ADMIN_MAX_BODY_SIZE = 65_536;
-const CONFIRMATION_RESOLVE_PATH = '/api/admin/confirmations/resolve';
 const MAX_OPERATOR_AUTHORIZATION_LENGTH = 1_024;
 const MAX_OPERATOR_COOKIE_TOKEN_LENGTH = 512;
 
@@ -138,6 +140,9 @@ export class GardenOperatorSurface implements Lifecycle {
         : {}),
       ...(config.fleetChildAssertions
         ? { fleetChildAssertions: config.fleetChildAssertions }
+        : {}),
+      ...(config.operatorConfirmationResolver
+        ? { operatorConfirmationResolver: config.operatorConfirmationResolver }
         : {}),
     });
     this.transport = new AdminServerTransport(log);
@@ -490,7 +495,7 @@ export class GardenOperatorSurface implements Lifecycle {
         return;
       }
 
-      resolver.resolve(parsed.params, auth).then(
+      resolver.resolve(parsed.params, { kind: 'standalone_operator', ...auth }).then(
         (result) => {
           if (res.writableEnded || res.destroyed) return;
           if (result.status === 'not_found') {

@@ -30,6 +30,7 @@ import {
 } from './transport-client.js';
 import type { GardenAdminTransportClientEndpoint } from './transport-paths.js';
 import type { FleetModelUsageRouteService } from './routes/fleet-model-usage-routes.js';
+import type { GatewayOperatorConfirmationClient } from '../../app/startup/support/gateway-operator-confirmation-client.js';
 
 const log = createComponentLogger('GardenOperatorRouting');
 
@@ -43,6 +44,7 @@ export interface GardenOperatorRoutingOptions {
   readonly fleetDirectDatabase?: FleetGardenDirectDatabasePort;
   readonly fleetIntakeQuarantineReads?: FleetGardenIntakeQuarantineReadPort;
   readonly fleetModelUsage?: FleetModelUsageRouteService;
+  readonly operatorConfirmationResolver?: GatewayOperatorConfirmationClient;
 }
 
 export type GardenOperatorTransportProbe =
@@ -85,6 +87,9 @@ export class GardenOperatorRouting {
           : {}),
         ...(options.fleetModelUsage
           ? { fleetModelUsage: options.fleetModelUsage }
+          : {}),
+        ...(options.operatorConfirmationResolver
+          ? { operatorConfirmationResolver: options.operatorConfirmationResolver }
           : {}),
       });
       this.fixedProxy = undefined;

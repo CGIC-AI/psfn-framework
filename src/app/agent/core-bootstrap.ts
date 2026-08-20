@@ -38,6 +38,7 @@ import type { HubIdentityEnrollmentStorePort } from '../../core/enrollment/enrol
 import type {
   IntentionRuntimeProviders,
   IntentionRuntimeWiring,
+  LongHorizonFollowUpInput,
 } from '../../core/intention/runtime-wiring.js';
 import type { BackgroundWorkStorePort } from '../../core/agent/background-work/store-port.js';
 import type { BackgroundWorkRuntimeTuning } from '../../core/agent/background-work/config.js';
@@ -84,6 +85,8 @@ export interface BootstrapAgentCoreRuntimeOptions {
   hubIdentityEnrollmentStore?: HubIdentityEnrollmentStorePort;
   intentionRuntime?: IntentionRuntimeWiring;
   intentionProviders?: IntentionRuntimeProviders;
+  intentionFollowUpHorizonMs: number;
+  routeLongHorizonFollowUp: (input: LongHorizonFollowUpInput) => Promise<string>;
   capabilityRuntime: CapabilityRuntime;
   /** Contact-tracking policy gate (E3.4). Absent gate behaves as 'auto' everywhere. */
   contactTrackingGate?: ContactTrackingGate | null;
@@ -117,6 +120,8 @@ export async function bootstrapAgentCoreRuntime(
     contactStore,
     intentionRuntime,
     intentionProviders,
+    intentionFollowUpHorizonMs,
+    routeLongHorizonFollowUp,
     capabilityRuntime,
   } = options;
 
@@ -187,6 +192,8 @@ export async function bootstrapAgentCoreRuntime(
     operatorNotifier,
     intentionRuntime,
     intentionProviders,
+    intentionFollowUpHorizonMs,
+    routeLongHorizonFollowUp,
     identityCoolingOff,
     primaryUserId: config.voiceTargetUserId?.trim() || process.env.PRIMARY_USER_ID,
     primaryTelegramUserId: (

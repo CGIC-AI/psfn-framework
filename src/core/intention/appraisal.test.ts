@@ -862,6 +862,28 @@ describe('IntentionAppraisal', () => {
 });
 
 describe('intention appraisal action mapping', () => {
+  it('does not consume a post-turn action slot after a follow-up is handed to durable scheduled work', () => {
+    const candidates = decisionsToPostTurnActionCandidates([{
+      type: 'followUp',
+      priority: 'medium',
+      reason: 'Long-horizon work has a dedicated scheduler.',
+      timing: 'scheduled',
+      dueAt: Date.parse('2026-09-19T12:00:00.000Z'),
+      followUp: {
+        content: 'Revisit the long-range commitment.',
+        scheduledPromptId: 'scheduled-prompt-1',
+      },
+    }], {
+      message: {
+        id: 'msg-long-horizon',
+        channelId: 'api:test',
+        channelType: 'api',
+      },
+    });
+
+    expect(candidates).toEqual([]);
+  });
+
   it('maps actionable decisions into inferred post-turn actions', () => {
     const nowSpy = vi.spyOn(Date, 'now');
     try {

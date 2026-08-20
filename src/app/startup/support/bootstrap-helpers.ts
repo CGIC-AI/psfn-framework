@@ -384,6 +384,7 @@ export function hydrateCanonicalStartupConfig(
         budget: { ...persistedScheduler.socialDesire.outreach.budget },
       },
     },
+    intentionFollowUp: { ...persistedScheduler.intentionFollowUp },
     icpAutonomy: {
       enabled: persistedScheduler.icpAutonomy.enabled,
       candidate: { ...persistedScheduler.icpAutonomy.candidate },

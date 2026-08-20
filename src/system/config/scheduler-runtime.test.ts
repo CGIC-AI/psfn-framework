@@ -69,6 +69,10 @@ const MEMORY_LANE_BLOCKS = {
   },
 } as const;
 
+const INTENTION_FOLLOW_UP_BLOCK = {
+  intentionFollowUp: { nearTermHorizonMs: 259_200_000 },
+} as const;
+
 function backgroundMaintenance(intervalMs: number) {
   return {
     intervalMs,
@@ -120,6 +124,7 @@ describe('resolveRuntimeSchedulerConfig', () => {
           inactivityThresholdMinutes: 45,
         },
         ...MEMORY_LANE_BLOCKS,
+        ...INTENTION_FOLLOW_UP_BLOCK,
         icpAutonomy: DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG,
       });
 
@@ -146,6 +151,7 @@ describe('resolveRuntimeSchedulerConfig', () => {
           inactivityThresholdMinutes: 45,
         },
         ...MEMORY_LANE_BLOCKS,
+        ...INTENTION_FOLLOW_UP_BLOCK,
         socialGraphBuilder: {
           coPresenceMinSessions: 3,
           coPresenceWindowMinutes: 1440,
@@ -191,6 +197,7 @@ describe('resolveRuntimeSchedulerConfig', () => {
           inactivityThresholdMinutes: 15,
         },
         ...MEMORY_LANE_BLOCKS,
+        ...INTENTION_FOLLOW_UP_BLOCK,
         icpAutonomy: DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG,
       });
 
@@ -217,6 +224,7 @@ describe('resolveRuntimeSchedulerConfig', () => {
           inactivityThresholdMinutes: 15,
         },
         ...MEMORY_LANE_BLOCKS,
+        ...INTENTION_FOLLOW_UP_BLOCK,
         socialGraphBuilder: {
           coPresenceMinSessions: 3,
           coPresenceWindowMinutes: 1440,

@@ -108,6 +108,8 @@ export interface IntentionFollowUpDecision {
   requiresActiveConcern?: boolean;
   /** 'internal' (default) keeps the whisper-to-self path; 'external' requests policy-gated outbound delivery. */
   delivery?: 'internal' | 'external';
+  /** Runtime-only proof that the durable scheduled-work lane owns this decision. */
+  scheduledPromptId?: string;
 }
 
 export interface IntentionConcernDecision {

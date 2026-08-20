@@ -255,6 +255,9 @@
       }
     }
   },
+  "intentionFollowUp": {
+    "nearTermHorizonMs": 259200000
+  },
   "icpAutonomy": {
     "enabled": true,
     "candidate": {

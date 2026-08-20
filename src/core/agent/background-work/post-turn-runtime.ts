@@ -21,6 +21,7 @@ import {
   type BackgroundWorkPayload,
   type BackgroundWorkSourceRef,
 } from './types.js';
+import { assertMemorySourceIsNotTestingHarness } from '../../session/testing-harness-provenance.js';
 import type { BackgroundWorkPostTurnTuning } from './config.js';
 import { buildSubsystemOutputRef } from '../../../shared/contracts/subsystem-output-refs.js';
 import { extractTurnRecordSelfSnapshotRef } from '../../../shared/contracts/turn-record-internal-state-ref.js';
@@ -305,6 +306,7 @@ async function runPostTurnBackgroundWork(
       ),
       async (recentEntries) => {
         await input.effects.assertOwned();
+        assertMemorySourceIsNotTestingHarness(recentEntries);
         const record = await requireCanonicalTurnRecord(payload.source, dependencies);
         requireSourceSessionEntry(recentEntries, maxSessionEntryId);
         try {

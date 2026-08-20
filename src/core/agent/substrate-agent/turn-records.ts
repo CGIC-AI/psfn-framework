@@ -17,6 +17,7 @@ import { normalizeRoleEnvelopeRefs } from '../../internal-role-envelopes/project
 import { normalizeToolArguments } from '../../../shared/tool-argument-normalization.js';
 import { buildSessionMetadataWithIcpCorrelation } from '../../session/icp-correlation-metadata.js';
 import { buildSessionMetadataWithReflectionTurn } from '../../session/reflection-turn-provenance.js';
+import { buildSessionMetadataWithTestingHarnessProvenance } from '../../session/testing-harness-provenance.js';
 import type { SessionActorKind } from '../../session/turn-provenance.js';
 import type { IntrospectionTurnSensitivityDecision } from '../../../faculties/introspection/turn-sensitivity.js';
 import { resolveMessagePlaceId } from './message-location.js';
@@ -156,9 +157,15 @@ export function recordUserMessage(input: {
   // the routing metadata; persisting them onto the session entry lets the
   // prompt_assembly and memory_write sink gates consult them downstream.
   const intakeEnvelopes = input.message.routing?.intakeEnvelopes;
-  const icpMetadata = input.message.routing?.icpCorrelation
+  let metadata = input.message.routing?.icpCorrelation
     ? buildSessionMetadataWithIcpCorrelation(undefined, input.message.routing.icpCorrelation)
     : undefined;
+  if (input.message.routing?.testingHarness) {
+    metadata = buildSessionMetadataWithTestingHarnessProvenance(
+      metadata,
+      input.message.routing.testingHarness,
+    );
+  }
   const recordOptions = {
     trustLevel: input.trustLevel,
     turnId: input.turnId,
@@ -172,7 +179,7 @@ export function recordUserMessage(input: {
       ? { addressing: input.message.routing.addressing }
       : {}),
     channelMeta: resolveSessionChannelMeta(input.message),
-    ...(icpMetadata ? { metadata: icpMetadata } : {}),
+    ...(metadata ? { metadata } : {}),
     ...(intakeEnvelopes && intakeEnvelopes.length > 0 ? { intakeEnvelopes } : {}),
   };
   if (input.continuityUserId) {
@@ -234,6 +241,12 @@ export function recordAssistantMessage(input: {
     metadata = buildSessionMetadataWithReflectionTurn(
       metadata,
       input.message.routing.reflectionTurn,
+    );
+  }
+  if (input.message.routing?.testingHarness) {
+    metadata = buildSessionMetadataWithTestingHarnessProvenance(
+      metadata,
+      input.message.routing.testingHarness,
     );
   }
 
@@ -301,6 +314,12 @@ export function recordToolObservations(input: {
     // side-effecting screen (and without doubling a quarantine hold).
     const schedulerScreening = getToolResultIntakeScreening(entry);
     const invocationAudit = getToolResultInvocationAudit(entry);
+    const testingHarnessMetadata = input.message.routing?.testingHarness
+      ? buildSessionMetadataWithTestingHarnessProvenance(
+          undefined,
+          input.message.routing.testingHarness,
+        )
+      : undefined;
     const result = input.sessionManager.recordToolObservation(
       input.turnSessionIdentity.logicalSessionId,
       {
@@ -322,6 +341,7 @@ export function recordToolObservations(input: {
         sourceMessageId: input.message.id,
         sourceChannelId: input.turnSessionIdentity.sourceChannelId,
         channelMeta: resolveSessionChannelMeta(input.message),
+        ...(testingHarnessMetadata ? { metadata: testingHarnessMetadata } : {}),
         ...(schedulerScreening
           ? {
             precomputedToolIntakeScreening: {

@@ -44,6 +44,7 @@ import {
   type ObservedMemoryResolver,
 } from '../../../persistence/sessions/turn-record-memory-refs.js';
 import type { TurnRecord } from '../../../shared/contracts/runtime.js';
+import { TESTING_HARNESS_SESSION_CHANNEL_ID } from '../../../shared/contracts/testing-harness.js';
 import {
   buildCompactionSourceBlock,
   computeCompactionSourceSha256,
@@ -677,14 +678,16 @@ export class AdminSessionDataService implements AdminSessionService {
         .listSessionsByRecentActivity(Number.MAX_SAFE_INTEGER)
         .map(summary => [summary.sessionId, summary]),
     );
-    return channels.map((channel) => {
+    return channels
+      .filter(channel => channel.channelId !== TESTING_HARNESS_SESSION_CHANNEL_ID)
+      .map((channel) => {
       const sessionActivity = activityBySessionId.get(channel.sessionId);
       return (
         typeof sessionActivity?.lastActivityAt === 'number' && Number.isFinite(sessionActivity.lastActivityAt)
       )
         ? { ...channel, lastActivityAt: sessionActivity.lastActivityAt }
         : channel;
-    });
+      });
   }
 
   /**

@@ -4215,6 +4215,50 @@ describe('handleMessageForTurn compaction scheduling', () => {
     expect(emotionPayload?.appraisalState).not.toHaveProperty('attention.salientEntities');
   });
 
+  it('records authenticated testing-harness evidence without scheduling companion side effects', async () => {
+    const eventBus = new EventBus();
+    const reserveNarrativeEmotionAppraisal = vi.fn();
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {} as SessionManager,
+      buildContext: vi.fn(async () => ({
+        systemPrompt: 'System prompt',
+        messages: [],
+        manifest: makeContextManifestFixture(),
+      })),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage: vi.fn(() => 2),
+      emotionSelfModelRuntimeOverrides: { reserveNarrativeEmotionAppraisal } as never,
+    });
+    runtime.memoryExtractor = { maybeExtract: vi.fn() };
+    const message = createMessage('testing-harness-message', {
+      channelId: 'api:testing-harness',
+      channelType: 'api',
+      routing: {
+        source: 'api',
+        testingHarness: {
+          schemaVersion: 1,
+          kind: 'testing_harness',
+          runId: 'run-tool-call-matrix',
+          manifestId: 'manifest-tool-call-matrix',
+        },
+      },
+    });
+
+    await handleMessageForTurn(runtime, message);
+
+    expect(runtime.inferPostTurnActions).not.toHaveBeenCalled();
+    expect(reserveNarrativeEmotionAppraisal).not.toHaveBeenCalled();
+    expect(runtime.enqueuePostTurnBackgroundWork).not.toHaveBeenCalled();
+    expect(runtime.sessionManager.recordTurn).toHaveBeenCalledWith(expect.objectContaining({
+      extractedMemoryIds: [],
+      concernDeltaRefs: [],
+      contactDeltaRefs: [],
+    }));
+    expect(runtime.sessionManager.recordTurn.mock.calls[0]?.[0])
+      .not.toHaveProperty('backgroundWorkHandoff');
+  });
+
   it('starts foreground identity work without a process-global post-turn drain', async () => {
     const eventBus = new EventBus();
     const performanceEvents: Array<EventMap['agent.turn.performance']> = [];

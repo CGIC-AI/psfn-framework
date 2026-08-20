@@ -4,12 +4,6 @@ import type { LLMContext } from '../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { LLMRequestCapability, type LLMRequestOptions } from './client-request-capability.js';
 import type { ProviderRuntime } from './provider-runtime.js';
-import type { RoutingCandidate } from './routing.js';
-
-const openRouterCandidate = {
-  provider: 'openrouter',
-  model: 'example',
-} as RoutingCandidate;
 
 function makeCapability(): LLMRequestCapability {
   return new LLMRequestCapability(
@@ -30,7 +24,7 @@ function makeRequiredContext(): LLMContext {
 }
 
 describe('LLMRequestCapability explicit tool dispatch', () => {
-  it('lets pi-ai format an OpenRouter auto choice after exposing only the required tool', () => {
+  it('lets pi-ai require the sole exposed OpenRouter tool', () => {
     const capability = makeCapability();
     const priorOnPayload = vi.fn(async (payload: unknown) => payload);
     const requestOptions: LLMRequestOptions = {
@@ -44,7 +38,6 @@ describe('LLMRequestCapability explicit tool dispatch', () => {
       context,
       { originStage: 'agent.turn.prompt' },
       { api: 'openai-completions' } as Model<'openai-completions'>,
-      openRouterCandidate,
     );
     const piContext = capability.buildPiContext(context, contract);
 
@@ -53,7 +46,7 @@ describe('LLMRequestCapability explicit tool dispatch', () => {
       requiredToolName: 'notify',
     });
     expect(requestOptions).toMatchObject({
-      toolChoice: 'auto',
+      toolChoice: 'required',
       requiredToolName: 'notify',
       explicitToolContract: contract,
       provider: { order: ['example-provider'] },
@@ -62,7 +55,7 @@ describe('LLMRequestCapability explicit tool dispatch', () => {
     expect(piContext.tools?.map(tool => tool.name)).toEqual(['notify']);
   });
 
-  it('lets pi-ai format direct Z.AI auto choice without a payload rewrite', () => {
+  it('lets pi-ai require the sole exposed direct Z.AI tool without a payload rewrite', () => {
     const capability = makeCapability();
     const requestOptions: LLMRequestOptions = {};
     const context = makeRequiredContext();
@@ -75,14 +68,55 @@ describe('LLMRequestCapability explicit tool dispatch', () => {
         api: 'openai-completions',
         baseUrl: 'https://api.z.ai/api/paas/v4',
       } as Model<'openai-completions'>,
-      { provider: 'vega-testing', model: 'zai-code/zai/glm-5.2' } as RoutingCandidate,
     );
 
-    expect(requestOptions.toolChoice).toBe('auto');
+    expect(requestOptions.toolChoice).toBe('required');
     expect(requestOptions.onPayload).toBeUndefined();
     expect(capability.buildPiContext(context, contract).tools?.map(tool => tool.name)).toEqual([
       'notify',
     ]);
+  });
+
+  it('gives pi-ai an exact model schema for an exact-arguments request', () => {
+    const capability = makeCapability();
+    const requestOptions: LLMRequestOptions = {};
+    const context: LLMContext = {
+      systemPrompt: 'system',
+      messages: [{
+        role: 'user',
+        content: 'Call repo exactly once with arguments {"action":"branch"}.',
+      }],
+      tools: [{
+        name: 'repo',
+        description: 'Repository operations',
+        inputSchema: {
+          anyOf: [
+            { type: 'object', properties: { action: { const: 'inspect' } } },
+            { type: 'object', properties: { action: { const: 'branch' } } },
+          ],
+        },
+      }],
+    };
+
+    const contract = capability.applyExplicitToolChoice(
+      requestOptions,
+      context,
+      { originStage: 'agent.turn.prompt' },
+      { api: 'openai-completions' } as Model<'openai-completions'>,
+    );
+
+    expect(contract).toMatchObject({
+      requiredToolName: 'repo',
+      expectedArguments: { action: 'branch' },
+    });
+    expect(capability.buildPiContext(context, contract).tools?.[0]?.parameters).toEqual({
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['branch'] },
+      },
+      required: ['action'],
+      additionalProperties: false,
+    });
   });
 
   it('removes tools and omits provider tool choice after the explicit sequence completes', () => {
@@ -109,7 +143,6 @@ describe('LLMRequestCapability explicit tool dispatch', () => {
       context,
       { originStage: 'agent.turn.prompt' },
       { api: 'openai-completions' } as Model<'openai-completions'>,
-      openRouterCandidate,
     );
 
     expect(contract).toEqual({ choice: 'none' });

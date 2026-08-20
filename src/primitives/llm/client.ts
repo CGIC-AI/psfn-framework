@@ -892,7 +892,6 @@ export class LLMClient {
             context,
             correlation,
             model,
-            candidateTarget,
           );
           const requestPiContext = this.requestCapability.buildPiContext(
             context,
@@ -1123,7 +1122,6 @@ export class LLMClient {
           context,
           correlation,
           model,
-          candidateTarget,
         );
         const requestPiContext = this.requestCapability.buildPiContext(
           context,

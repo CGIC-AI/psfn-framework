@@ -8,6 +8,10 @@ import {
 } from '../../shared/contracts/tool-call-outcome.js';
 import { resolveExplicitToolRequestSequence } from '../../shared/tools/explicit-tool-request.js';
 import { isRecord } from '../../shared/utils/types.js';
+import {
+  exactToolArgumentsMatch,
+  resolveExactExplicitToolArguments,
+} from './explicit-tool-arguments.js';
 
 export interface ExplicitNamedToolChoice {
   type: 'function';
@@ -18,6 +22,7 @@ export type ExplicitToolChoice = ExplicitNamedToolChoice | 'required' | 'none';
 export interface ExplicitToolContract {
   choice: ExplicitToolChoice;
   requiredToolName?: string;
+  expectedArguments?: Record<string, unknown>;
 }
 
 export type ExplicitToolContractViolation =
@@ -158,6 +163,15 @@ export function assertExplicitToolArgumentsValid(input: {
       'invalid_arguments',
     );
   }
+  if (
+    input.contract?.expectedArguments
+    && !exactToolArgumentsMatch(toolCall.input, input.contract.expectedArguments)
+  ) {
+    throw new ExplicitToolContractError(
+      `Provider changed exact requested arguments for required tool call: ${requiredToolName}`,
+      'invalid_arguments',
+    );
+  }
 }
 
 export function assertExplicitToolResponseSatisfied(input: {
@@ -271,9 +285,17 @@ export function resolveExplicitToolContract(input: {
     input.modelApi,
     nextToolName,
   );
+  const expectedArguments = nextToolName && requestedToolSequence.length === 1
+    ? resolveExactExplicitToolArguments(requestText, nextToolName)
+    : undefined;
   return {
     choice,
-    ...(nextToolName ? { requiredToolName: nextToolName } : {}),
+    ...(nextToolName
+      ? {
+          requiredToolName: nextToolName,
+          ...(expectedArguments ? { expectedArguments } : {}),
+        }
+      : {}),
   };
 }
 

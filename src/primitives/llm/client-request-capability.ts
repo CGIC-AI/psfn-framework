@@ -18,7 +18,6 @@ import {
   createOpenAICompatibleEndpointModel,
   resolveRegisteredModel,
   resolveSystemRoleCapabilityMetadata,
-  usesDirectZaiEndpoint,
   type OpenAICompatibleApi,
 } from './models.js';
 import type { ProviderRuntime } from './provider-runtime.js';
@@ -41,6 +40,7 @@ import type {
   ExplicitToolChoice,
   ExplicitToolContract,
 } from './explicit-tool-request.js';
+import { buildExactToolArgumentsModelSchema } from './explicit-tool-arguments.js';
 
 const log = createComponentLogger('LLMClient');
 
@@ -226,6 +226,13 @@ export class LLMRequestCapability {
           `Explicit tool schema unavailable for ${explicitToolContract.requiredToolName}`,
         );
       }
+      const expectedArguments = explicitToolContract.expectedArguments;
+      if (expectedArguments) {
+        tools = tools.map(tool => ({
+          ...tool,
+          inputSchema: buildExactToolArgumentsModelSchema(expectedArguments),
+        }));
+      }
     } else if (explicitToolContract?.choice === 'none') {
       tools = undefined;
     }
@@ -241,7 +248,6 @@ export class LLMRequestCapability {
     context: LLMContext,
     correlation: ResolvedCorrelationMetadata | undefined,
     model: Model<any>,
-    candidate?: RoutingCandidate,
   ): ExplicitToolContract | undefined {
     const contract = resolveExplicitToolContract({
       context,
@@ -253,14 +259,10 @@ export class LLMRequestCapability {
     if (contract.requiredToolName) requestOptions.requiredToolName = contract.requiredToolName;
 
     if (contract.requiredToolName) {
-      const directZai = typeof model.baseUrl === 'string'
-        && usesDirectZaiEndpoint(model.baseUrl);
-      // OpenRouter cannot guarantee that every routed endpoint accepts a named
-      // forced choice. Expose only the requested function in the pi-ai Context,
-      // ask the adapter for `auto`, and retain exactness as a PSFN postcondition.
-      requestOptions.toolChoice = directZai || candidate?.provider === 'openrouter'
-        ? 'auto'
-        : contract.choice;
+      // The context exposes exactly one function, so the provider-generic
+      // required choice asks pi-ai to format a mandatory call without coupling
+      // PSFN to a provider-specific named-tool payload.
+      requestOptions.toolChoice = 'required';
     }
     return contract;
   }

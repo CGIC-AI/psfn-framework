@@ -6,7 +6,7 @@ import {
 } from '$lib/models/registry';
 import { providerIsEnabled } from '$lib/providers/registry';
 
-export type PurposeRoutingStatus =
+type PurposeRoutingStatus =
   | 'ready'
   | 'missing_primary'
   | 'conflicting_primaries'

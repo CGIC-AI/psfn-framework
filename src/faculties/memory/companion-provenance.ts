@@ -9,7 +9,7 @@ import type { MemoryProvenance, PurrMemory } from './types.js';
 
 const EXTRACTION_SOURCE_CHANNEL_SUFFIX = ':extract|';
 
-export type CompanionMemoryProvenanceRejectionReason =
+type CompanionMemoryProvenanceRejectionReason =
   | 'missing_companion_authority'
   | 'missing_companion_channel_provenance'
   | 'mismatched_companion_channel_provenance'
@@ -29,7 +29,7 @@ export interface CompanionMemoryProvenanceInput {
   provenance?: MemoryProvenance;
 }
 
-export class CompanionMemoryProvenanceError extends Error {
+class CompanionMemoryProvenanceError extends Error {
   override readonly name = 'CompanionMemoryProvenanceError';
   readonly reason: CompanionMemoryProvenanceRejectionReason;
 
@@ -129,7 +129,7 @@ export interface CompanionMemoryAuditInput extends Pick<PurrMemory, 'id' | 'sour
   state?: 'active' | 'deleted' | 'superseded';
 }
 
-export interface CompanionMemoryAuditFinding {
+interface CompanionMemoryAuditFinding {
   memoryId: string;
   state: 'active' | 'deleted' | 'superseded';
   reason: CompanionMemoryProvenanceRejectionReason;

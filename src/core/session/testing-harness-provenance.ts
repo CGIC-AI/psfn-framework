@@ -3,7 +3,7 @@ import { normalizeTestingHarnessRunProvenance } from '../../shared/contracts/tes
 import { isRecord } from '../../shared/utils/types.js';
 import type { SessionEntry } from './types.js';
 
-export const SESSION_METADATA_TESTING_HARNESS_KEY = 'testingHarness';
+const SESSION_METADATA_TESTING_HARNESS_KEY = 'testingHarness';
 
 function parseEnvelope(metadata: string | undefined): Record<string, unknown> {
   if (!metadata) return {};

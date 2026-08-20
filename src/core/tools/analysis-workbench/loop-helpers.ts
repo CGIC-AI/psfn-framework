@@ -4,6 +4,7 @@ import {
   type AnalysisWorkbenchBudget,
   type AnalysisWorkbenchDiagnostics,
   type AnalysisWorkbenchEvidence,
+  type AnalysisWorkbenchLimitPolicy,
   type AnalysisWorkbenchResult,
   type AnalysisWorkbenchStep,
 } from './types.js';
@@ -31,6 +32,7 @@ export interface BudgetResultInput {
   durationMs: number;
   truncated: boolean;
   budgetStatus: BudgetStatus;
+  limitPolicy: AnalysisWorkbenchLimitPolicy;
   steps?: AnalysisWorkbenchStep[];
   evidence?: AnalysisWorkbenchEvidence[];
   diagnostics?: AnalysisWorkbenchDiagnostics;
@@ -186,6 +188,9 @@ export function flattenEvidence(steps: AnalysisWorkbenchStep[]): AnalysisWorkben
 export function makeBudgetResult(input: BudgetResultInput): AnalysisWorkbenchResult {
   return {
     answer: input.answer,
+    outcome: input.truncated ? 'limit_reached' : 'completed',
+    continuation: input.truncated ? 'restart_required' : 'not_needed',
+    limitPolicy: input.limitPolicy,
     iterations: input.iterations,
     totalInputTokens: input.totalInputTokens,
     totalOutputTokens: input.totalOutputTokens,

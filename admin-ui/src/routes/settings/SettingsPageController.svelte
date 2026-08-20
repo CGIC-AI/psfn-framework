@@ -251,9 +251,10 @@
   let profileSynthesisMinSourceMemories = $state(2);
 
   // ── Analysis Workbench ──
-  let analysisWorkbenchMaxTokens = $state(76000);
-  let analysisWorkbenchMaxWallTimeMs = $state(300000);
-  let analysisWorkbenchMaxSubQueries = $state(12);
+  let analysisWorkbenchMaxIterations = $state(60);
+  let analysisWorkbenchMaxTokens = $state(256000);
+  let analysisWorkbenchMaxWallTimeMs = $state(600000);
+  let analysisWorkbenchMaxSubQueries = $state(60);
 
   // ── Raw editor states ──
   let modelsJson = $state('');
@@ -322,6 +323,7 @@
       profileSynthesisMinNovelty,
       profileSynthesisSourceMemoryLimit,
       profileSynthesisMinSourceMemories,
+      analysisWorkbenchMaxIterations,
       analysisWorkbenchMaxTokens,
       analysisWorkbenchMaxWallTimeMs,
       analysisWorkbenchMaxSubQueries,
@@ -390,6 +392,7 @@
     if (next.profileSynthesisMinNovelty !== undefined) profileSynthesisMinNovelty = next.profileSynthesisMinNovelty;
     if (next.profileSynthesisSourceMemoryLimit !== undefined) profileSynthesisSourceMemoryLimit = next.profileSynthesisSourceMemoryLimit;
     if (next.profileSynthesisMinSourceMemories !== undefined) profileSynthesisMinSourceMemories = next.profileSynthesisMinSourceMemories;
+    if (next.analysisWorkbenchMaxIterations !== undefined) analysisWorkbenchMaxIterations = next.analysisWorkbenchMaxIterations;
     if (next.analysisWorkbenchMaxTokens !== undefined) analysisWorkbenchMaxTokens = next.analysisWorkbenchMaxTokens;
     if (next.analysisWorkbenchMaxWallTimeMs !== undefined) analysisWorkbenchMaxWallTimeMs = next.analysisWorkbenchMaxWallTimeMs;
     if (next.analysisWorkbenchMaxSubQueries !== undefined) analysisWorkbenchMaxSubQueries = next.analysisWorkbenchMaxSubQueries;
@@ -1464,7 +1467,7 @@
             bind:profileSynthesisEnabled bind:profileSynthesisRefreshIntervalMs bind:profileSynthesisCooldownMs
             bind:profileSynthesisMinWrites bind:profileSynthesisMinImportance bind:profileSynthesisMinConfidence
             bind:profileSynthesisMinNovelty bind:profileSynthesisSourceMemoryLimit bind:profileSynthesisMinSourceMemories
-            bind:analysisWorkbenchMaxTokens bind:analysisWorkbenchMaxWallTimeMs bind:analysisWorkbenchMaxSubQueries
+            bind:analysisWorkbenchMaxIterations bind:analysisWorkbenchMaxTokens bind:analysisWorkbenchMaxWallTimeMs bind:analysisWorkbenchMaxSubQueries
           />
         {:else if activeTabId === 'runtime'}
           <SettingsRuntimePanels

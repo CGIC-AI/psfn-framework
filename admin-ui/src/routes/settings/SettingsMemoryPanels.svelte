@@ -53,9 +53,10 @@
     profileSynthesisMinNovelty = $bindable(0.12),
     profileSynthesisSourceMemoryLimit = $bindable(16),
     profileSynthesisMinSourceMemories = $bindable(2),
-    analysisWorkbenchMaxTokens = $bindable(76000),
-    analysisWorkbenchMaxWallTimeMs = $bindable(300000),
-    analysisWorkbenchMaxSubQueries = $bindable(12),
+    analysisWorkbenchMaxIterations = $bindable(60),
+    analysisWorkbenchMaxTokens = $bindable(256000),
+    analysisWorkbenchMaxWallTimeMs = $bindable(600000),
+    analysisWorkbenchMaxSubQueries = $bindable(60),
   } = $props<{
     openSections: Set<string>;
     sessionRestartBehaviorOptions: string[];
@@ -91,6 +92,7 @@
     profileSynthesisMinNovelty: number;
     profileSynthesisSourceMemoryLimit: number;
     profileSynthesisMinSourceMemories: number;
+    analysisWorkbenchMaxIterations: number;
     analysisWorkbenchMaxTokens: number;
     analysisWorkbenchMaxWallTimeMs: number;
     analysisWorkbenchMaxSubQueries: number;
@@ -372,9 +374,14 @@
     onToggle={() => toggleSection('analysis-workbench')}
   >
     {#snippet summary()}
-      <span class="text-sm text-shadow-500">Max: {fmtTokens(analysisWorkbenchMaxTokens)} tokens, {fmtMs(analysisWorkbenchMaxWallTimeMs)}, {analysisWorkbenchMaxSubQueries} queries</span>
+      <span class="text-sm text-shadow-500">Max: {analysisWorkbenchMaxIterations} iterations, {fmtTokens(analysisWorkbenchMaxTokens)} tokens, {fmtMs(analysisWorkbenchMaxWallTimeMs)}, {analysisWorkbenchMaxSubQueries} queries</span>
     {/snippet}
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-5">
+    <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-5">
+      <div>
+        <SettingFieldLabel label="Max Iterations" keys="analysisWorkbenchMaxIterations" forId={settingControlId('analysisWorkbenchMaxIterations')} class={labelClass} />
+        <input id={settingControlId('analysisWorkbenchMaxIterations')} type="number" min="1" max="60" step="1" bind:value={analysisWorkbenchMaxIterations} class={inputClass} />
+        <p class="text-sm text-shadow-500 mt-1">Owner ceiling for a bounded run (1-60)</p>
+      </div>
       <div>
         <SettingFieldLabel label="Max Tokens" keys="analysisWorkbenchMaxTokens" forId={settingControlId('analysisWorkbenchMaxTokens')} class={labelClass} />
         <input id={settingControlId('analysisWorkbenchMaxTokens')} type="number" min="1000" max="1000000" step="1000" bind:value={analysisWorkbenchMaxTokens} class={inputClass} />

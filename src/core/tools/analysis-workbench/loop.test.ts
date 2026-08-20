@@ -215,6 +215,34 @@ describe('runRLMLoop', () => {
     expect(result.budgetStatus).toBeDefined();
     expect(result.budgetStatus.exceeded).toBeNull();
     expect(result.budgetStatus.iterations).toBe(1);
+    expect(result.outcome).toBe('completed');
+    expect(result.continuation).toBe('not_needed');
+    expect(result.limitPolicy).toEqual({
+      maxIterations: 60,
+      maxTokens: 256_000,
+      maxWallTimeMs: 600_000,
+      maxSubQueries: 60,
+      maxToolCalls: 50,
+    });
+  });
+
+  it('allows a bounded autonomous analysis to finish after more than 40 iterations', async () => {
+    const llm = sequentialLLM([
+      ...Array.from(
+        { length: 44 },
+        (_, index) => `\`\`\`repl\nprint("step ${String(index + 1)}");\n\`\`\``,
+      ),
+      'FINAL("long analysis complete")',
+    ]);
+
+    const result = await runRLMLoop('Long bounded analysis', makeDeps(llm));
+
+    expect(result.answer).toBe('long analysis complete');
+    expect(result.iterations).toBe(45);
+    expect(result.outcome).toBe('completed');
+    expect(result.continuation).toBe('not_needed');
+    expect(result.truncated).toBe(false);
+    expect(result.budgetStatus.exceeded).toBeNull();
   });
 
   it('routes analysis workbench completions through reasoning purpose', async () => {
@@ -243,6 +271,7 @@ describe('runRLMLoop', () => {
     }));
 
     expect(result.iterations).toBe(2);
+    expect(result.outcome).toBe('completed');
     expect(emitted).toHaveLength(1);
     expect(emitted[0][0]).toBe('agent.charge');
     expect((fromAny(emitted[0][1])).surface).toBe('analysisWorkbenchExtensionBand');
@@ -542,6 +571,9 @@ describe('runRLMLoop', () => {
     expect(result.iterations).toBe(3);
     expect(result.budgetStatus.exceeded).toBe('max iterations');
     expect(result.answer).toBe('[Analysis workbench loop stopped: max iterations]');
+    expect(result.outcome).toBe('limit_reached');
+    expect(result.continuation).toBe('restart_required');
+    expect(result.limitPolicy.maxIterations).toBe(3);
   });
 
   it('accumulates tokens across iterations', async () => {
@@ -1251,7 +1283,7 @@ describe('runRLMLoop', () => {
 
   it('applies tier-dependent iteration limits', async () => {
     const makeTierDeps = (tier: 'nursery' | 'apprentice' | 'autonomous') => makeDeps(
-      sequentialLLM(Array(20).fill('```repl\nprint("still going");\n```')),
+      sequentialLLM(Array(55).fill('```repl\nprint("still going");\n```')),
       {
         getCapabilityTier: () => tier,
         config: makeConfig({
@@ -1268,7 +1300,7 @@ describe('runRLMLoop', () => {
 
     expect(nursery.iterations).toBe(5);
     expect(apprentice.iterations).toBe(10);
-    expect(autonomous.iterations).toBe(15);
+    expect(autonomous.iterations).toBe(50);
   });
 
   it('clamps configured sub-query budget to active tier ceilings with finite stop reasons', async () => {
@@ -1278,7 +1310,7 @@ describe('runRLMLoop', () => {
     }> = [
       { tier: 'nursery', expectedMaxSubQueries: 10 },
       { tier: 'apprentice', expectedMaxSubQueries: 15 },
-      { tier: 'autonomous', expectedMaxSubQueries: 24 },
+      { tier: 'autonomous', expectedMaxSubQueries: 60 },
     ];
 
     for (const { tier, expectedMaxSubQueries } of scenarios) {

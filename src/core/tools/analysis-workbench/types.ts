@@ -25,10 +25,10 @@ export type {
 } from '../../../shared/contracts/sandbox-analysis-contracts.js';
 
 export interface AnalysisWorkbenchBudget {
-  maxIterations: number;      // default 15
-  maxTokens?: number;         // total input+output tokens, default 100_000
-  maxWallTimeMs?: number;     // total elapsed before tier clamp, default 300_000 (5 min)
-  maxSubQueries?: number;     // llm_query calls, default 24
+  maxIterations: number;      // default 60
+  maxTokens?: number;         // total input+output tokens, default 256_000
+  maxWallTimeMs?: number;     // total elapsed before tier clamp, default 600_000 (10 min)
+  maxSubQueries?: number;     // llm_query calls, default 60
   maxToolCalls?: number;      // sandbox tool calls (file/web helpers), default 50
 }
 
@@ -104,9 +104,9 @@ export const DEFAULT_REPL_TIER_BUDGETS: REPLConfig['tierBudgets'] = {
     memoryCeilingMb: 192,
   },
   autonomous: {
-    maxIterations: 15,
-    maxWallTimeMs: 300_000,
-    maxSubQueries: 24,
+    maxIterations: 60,
+    maxWallTimeMs: 600_000,
+    maxSubQueries: 60,
     maxToolCalls: 50,
     memoryCeilingMb: 256,
   },
@@ -125,10 +125,10 @@ export function validateAnalysisWorkbenchDirectResponseTimeoutMs(value: number):
 
 export const DEFAULT_REPL_CONFIG: REPLConfig = {
   budget: {
-    maxIterations: 15,
-    maxTokens: 100_000,
-    maxWallTimeMs: 300_000,
-    maxSubQueries: 24,
+    maxIterations: 60,
+    maxTokens: 256_000,
+    maxWallTimeMs: 600_000,
+    maxSubQueries: 60,
     maxToolCalls: 50,
   },
   tierBudgets: DEFAULT_REPL_TIER_BUDGETS,
@@ -212,6 +212,17 @@ export interface AnalysisWorkbenchDiagnostics {
   maxNestedAnalysisDepthReached: number;
 }
 
+export interface AnalysisWorkbenchLimitPolicy {
+  maxIterations: number;
+  maxTokens: number | null;
+  maxWallTimeMs: number | null;
+  maxSubQueries: number | null;
+  maxToolCalls: number | null;
+}
+
+export type AnalysisWorkbenchOutcome = 'completed' | 'limit_reached';
+export type AnalysisWorkbenchContinuation = 'not_needed' | 'restart_required';
+
 export function createEmptyAnalysisWorkbenchDiagnostics(): AnalysisWorkbenchDiagnostics {
   return {
     nestedAnalysisCallCount: 0,
@@ -223,6 +234,9 @@ export function createEmptyAnalysisWorkbenchDiagnostics(): AnalysisWorkbenchDiag
 
 export interface AnalysisWorkbenchResult {
   answer: string;
+  outcome: AnalysisWorkbenchOutcome;
+  continuation: AnalysisWorkbenchContinuation;
+  limitPolicy: AnalysisWorkbenchLimitPolicy;
   iterations: number;
   totalInputTokens: number;
   totalOutputTokens: number;

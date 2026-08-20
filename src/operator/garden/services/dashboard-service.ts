@@ -108,6 +108,10 @@ export class AdminDashboardDataService implements AdminDashboardService {
       const trace: AnalysisWorkbenchTraceView = {
         timestamp,
         task,
+        outcome: result.outcome,
+        continuation: result.continuation,
+        sessionCostUsd: result.sessionCostUsd,
+        limitPolicy: result.limitPolicy,
         iterations: result.iterations,
         totalTokens: result.totalInputTokens + result.totalOutputTokens,
         durationMs: result.durationMs,

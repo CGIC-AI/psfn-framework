@@ -8,7 +8,7 @@ import type { ContextBudgetTurnCharacteristics } from '../../../../shared/contex
 import { resolveBroadcastVisibilityScope, type BroadcastVisibilityScope } from '../../../../system/trust/broadcast-safety.js';
 import { getVisibilityDisclosureCeiling, type ChannelMeta } from '../../../../system/trust/policy.js';
 import { normalizeChannelPrivacy, type ChannelPrivacy, type ContextEnvelope } from '../../../../system/trust/context-envelope.js';
-import type { TrustLevel } from '../../../../system/trust/types.js';
+import type { SensitivityLevel, TrustLevel } from '../../../../system/trust/types.js';
 import type { MemoryScopeQuery, RetrievalCallerContext, RetrievalModeInput } from '../../../../faculties/memory/types.js';
 import type {
   ActiveMemoryContextRequest,
@@ -106,6 +106,15 @@ function resolveObserverEvalRoutingSource(message: SubstrateMessage): ObserverEv
     return message.channelType;
   }
   return 'unspecified';
+}
+
+export function resolveObserverEvalPrivacyContext(
+  conversationScope: Pick<ConversationScope, 'envelope'>,
+): { channelPrivacy: ChannelPrivacy; sensitivity: SensitivityLevel } {
+  return {
+    channelPrivacy: conversationScope.envelope.channelPrivacy,
+    sensitivity: getVisibilityDisclosureCeiling(conversationScope.envelope),
+  };
 }
 
 export interface PreparedTurnIdentityState {
@@ -940,6 +949,7 @@ export async function computePreTurnState(input: {
     message.timestamp.getTime(),
     runtime.emotionSelfModelRuntime.getActiveConcernCount(authorContext.canonicalContactKey),
   );
+  const observerEvalPrivacyContext = resolveObserverEvalPrivacyContext(conversationScope);
   const observerEvalLifecycleState = await dispatchObserverEvalTurn({
     sidecarRuntime: runtime.observerEvalSidecar,
     logger: log,
@@ -957,7 +967,7 @@ export async function computePreTurnState(input: {
       source: {
         routingSource: resolveObserverEvalRoutingSource(message),
         isDirectMessage: message.isDirectMessage ?? false,
-        ...(channelMeta.privacyLevel ? { channelPrivacy: channelMeta.privacyLevel } : {}),
+        channelPrivacy: observerEvalPrivacyContext.channelPrivacy,
       },
       emotion: {
         snapshot: emotionSnapshot,
@@ -971,7 +981,7 @@ export async function computePreTurnState(input: {
         contentLength: message.content.length,
         attachmentCount: message.attachments?.length ?? 0,
         hasVisionInput: bypassMemoryForVisionTurn,
-        sensitivity: getVisibilityDisclosureCeiling(conversationScope.envelope),
+        sensitivity: observerEvalPrivacyContext.sensitivity,
       },
       provenance: {
         seam: 'substrate-agent.pre-turn.emotion-observed',

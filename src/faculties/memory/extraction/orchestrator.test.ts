@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import {
   ExtractionIntegrityError,
@@ -13,6 +14,12 @@ import {
   GROUP_EXTRACTION_PROMPT_KEY,
 } from '../../../core/identity/prompt-registry.js';
 import { buildSessionMetadataWithMessageAddressing } from '../../../core/session/message-addressing.js';
+import { parseAutomataOwnerPolicy } from '../../automata/registry-contract.js';
+import {
+  AutomataRunRegistry,
+  InMemoryAutomataRunStore,
+} from '../../automata/run-registry.js';
+import type { AutomataBusWorkerAccess } from '../../automata/bus/worker-access.js';
 
 type LlmCompletionContext = Parameters<ExtractionRunOptions['llmClient']['complete']>[0];
 type LlmCompletionResponse = Awaited<ReturnType<ExtractionRunOptions['llmClient']['complete']>>;
@@ -149,7 +156,74 @@ function factResponse(text: string): string {
 </response>`;
 }
 
+async function createAutomataRunRegistry(): Promise<AutomataRunRegistry> {
+  const policy = parseAutomataOwnerPolicy(JSON.parse(readFileSync(
+    new URL('../../../../config/automata-policy.seed.json', import.meta.url),
+    'utf8',
+  )));
+  return await AutomataRunRegistry.hydrate({
+    companionId: 'companion-a',
+    policy,
+    store: new InMemoryAutomataRunStore(),
+    nowMs: 100,
+  });
+}
+
+function createAutomataBusAccess(
+  registry: AutomataRunRegistry,
+): AutomataBusWorkerAccess {
+  return {
+    identity: {
+      companionId: 'companion-a',
+      audience: 'eligible-automata',
+      maxSensitivity: 'personal',
+    },
+    bounds: {
+      maxQueryChars: 512,
+      maxTextChars: 512,
+      maxArrayItems: 8,
+      maxSearchResults: 20,
+      maxRunResults: 20,
+      maxBriefingChars: 4_000,
+      maxBriefingItems: 8,
+      maxToolResultChars: 4_000,
+    },
+    port: {
+      isClassEligible: classId => classId === 'memory.extraction',
+      brief: vi.fn(async ({ scope }) => {
+        expect(registry.getRun(scope.runId)?.status).toBe('running');
+        return { text: '', itemCount: 0 };
+      }),
+      search: vi.fn(),
+      append: vi.fn(),
+      correct: vi.fn(),
+      handoff: vi.fn(),
+      runs: vi.fn(),
+      inspect: vi.fn(),
+    },
+  };
+}
+
 describe('runExtractionOrchestration durable children', () => {
+  it('registers the memory-extraction run before requesting its Bus briefing', async () => {
+    const registry = await createAutomataRunRegistry();
+    const automataBusWorkerAccess = createAutomataBusAccess(registry);
+
+    await runExtractionOrchestration(buildOptions({
+      automataBusWorkerAccess,
+      automataRunRegistry: registry,
+    }));
+
+    expect(automataBusWorkerAccess.port.brief).toHaveBeenCalledOnce();
+    expect(registry.findByTask('api:test')).toEqual([
+      expect.objectContaining({
+        automatonClass: 'memory.extraction',
+        status: 'completed',
+        taskId: 'api:test',
+      }),
+    ]);
+  });
+
   it('routes group extraction through the dedicated group memory-automaton prompt', async () => {
     const defaults = createDefaultGroupMemorySettings();
     const getPrompt = vi.fn((key: string) => (

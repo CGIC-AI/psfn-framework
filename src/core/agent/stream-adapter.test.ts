@@ -587,6 +587,11 @@ describe('createSubstrateStreamFn', () => {
     const selfieSchema = Type.Object({
       prompt: Type.String(),
     });
+    const selfieModelSchema = Type.Object({
+      prompt: Type.Optional(Type.String({
+        description: 'Required image prompt; execution validation remains strict.',
+      })),
+    });
     const psfnSchema = {
       type: 'object',
       properties: {
@@ -603,6 +608,7 @@ describe('createSubstrateStreamFn', () => {
           name: 'selfie_create',
           description: 'Create a self-image.',
           parameters: selfieSchema,
+          modelParameters: selfieModelSchema,
         },
         {
           name: 'memory_lookup',
@@ -618,7 +624,7 @@ describe('createSubstrateStreamFn', () => {
       {
         name: 'selfie_create',
         description: 'Create a self-image.',
-        inputSchema: selfieSchema,
+        inputSchema: selfieModelSchema,
       },
       {
         name: 'memory_lookup',
@@ -1057,10 +1063,10 @@ describe('createSubstrateStreamFn', () => {
       context.modelHint?.model === 'deepseek/deepseek-v3.2'
         ? {
             content: '',
-            toolCalls: [{
+          toolCalls: [{
               id: 'notify-invalid',
               name: 'notify',
-              input: { action: 'unsupported', message: 'hello' },
+              input: { action: 'send' },
             }],
             model: 'openrouter/deepseek/deepseek-v3.2',
             inputTokens: 6,
@@ -1072,7 +1078,12 @@ describe('createSubstrateStreamFn', () => {
             toolCalls: [{
               id: 'notify-fallback',
               name: 'notify',
-              input: { action: 'consider', message: 'hello' },
+              input: {
+                action: 'send',
+                message: 'hello',
+                delivery_channel: 'discord',
+                delivery_target: 'operator-test',
+              },
             }],
             model: 'openrouter/moonshotai/kimi-k2.5',
             inputTokens: 7,
@@ -1089,9 +1100,19 @@ describe('createSubstrateStreamFn', () => {
         name: 'notify',
         description: 'Notify the operator.',
         parameters: Type.Union([
-          Type.Object({ action: Type.Literal('consider'), message: Type.String() }),
-          Type.Object({ action: Type.Literal('send'), message: Type.String() }),
+          Type.Object({
+            action: Type.Literal('send'),
+            message: Type.String(),
+            delivery_channel: Type.Literal('discord'),
+            delivery_target: Type.String(),
+          }),
         ]),
+        modelParameters: Type.Object({
+          action: Type.Union([Type.Literal('send')]),
+          message: Type.Optional(Type.String()),
+          delivery_channel: Type.Optional(Type.Literal('discord')),
+          delivery_target: Type.Optional(Type.String()),
+        }),
       }],
     }), {});
     const events = await collectStreamEvents(stream as AsyncIterable<unknown>);
@@ -1100,6 +1121,10 @@ describe('createSubstrateStreamFn', () => {
     expect(streamAdapterMocks.transportStream.mock.calls.map(
       call => (call[0] as LLMContext).modelHint?.model,
     )).toEqual(['deepseek/deepseek-v3.2', 'moonshotai/kimi-k2.5']);
+    expect(streamAdapterMocks.transportStream.mock.calls[0]?.[0].tools?.[0]?.inputSchema)
+      .toMatchObject({ properties: { message: expect.objectContaining({}) } });
+    expect(streamAdapterMocks.transportStream.mock.calls[0]?.[0].tools?.[0]?.inputSchema)
+      .not.toHaveProperty('anyOf');
     expect(JSON.stringify(events.at(-1))).toContain('notify-fallback');
     expect(JSON.stringify(events)).not.toContain('notify-invalid');
   });

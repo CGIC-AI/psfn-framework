@@ -24,7 +24,6 @@ import type {
   ModelPurpose,
   StreamCallbacks,
   ToolCall,
-  ToolSchema,
 } from '../../shared/contracts/runtime.js';
 import type { CoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { createOpenAICompatibleEndpointModel, resolveRegisteredModel } from '../../primitives/llm/models.js';
@@ -70,6 +69,10 @@ import {
   isMissingRequiredToolCallError,
   resolveExplicitToolContract,
 } from '../../primitives/llm/explicit-tool-request.js';
+import {
+  normalizeExecutionTools,
+  normalizeTransportTools,
+} from './transport-tool-schema.js';
 
 const log = createComponentLogger('StreamAdapter');
 const FULL_KNOB_PASSTHROUGH_PROVIDERS = new Set(['openrouter', 'local_endpoint']);
@@ -288,12 +291,13 @@ function executeStreamCandidate(params: ExecuteStreamCandidateParams): AsyncGene
     ? Math.max(0, Math.floor(retryConfig.baseDelayMs!))
     : DEFAULT_BASE_DELAY_MS;
   const holdEventsUntilTerminal = hasExplicitToolExecutionRequest(params.context);
-  const normalizedTools = normalizeTransportTools((params.context as { tools?: unknown }).tools);
+  const contextTools = (params.context as { tools?: unknown }).tools;
+  const executionTools = normalizeExecutionTools(contextTools);
   const explicitToolContract = holdEventsUntilTerminal
     ? resolveExplicitToolContract({
         context: {
           ...(params.context as LLMContext),
-          ...(normalizedTools ? { tools: normalizedTools } : {}),
+          ...(executionTools ? { tools: executionTools } : {}),
         },
         originStage: 'agent.turn.prompt',
         modelApi: String((params.model as { api?: unknown }).api ?? ''),
@@ -345,7 +349,7 @@ function executeStreamCandidate(params: ExecuteStreamCandidateParams): AsyncGene
             const terminalToolCalls = extractToolCallsFromContentBlocks(event.message.content);
             const corruptEmptyCalls = findCorruptEmptyToolCalls(
               terminalToolCalls,
-              normalizedTools,
+              executionTools,
             );
             if (
               corruptEmptyCalls.length > 0
@@ -362,7 +366,7 @@ function executeStreamCandidate(params: ExecuteStreamCandidateParams): AsyncGene
                 contract: explicitToolContract,
                 corruptToolNames: corruptEmptyCalls.map(call => call.name),
                 toolCalls: terminalToolCalls,
-                tools: normalizedTools,
+                tools: executionTools,
               });
             } catch (error) {
               if (
@@ -630,44 +634,6 @@ function buildTransportContext(
     modelHint: buildStreamTransportModelHint(candidate, requestOptions, transportSlotKey),
     accounting,
     ...(requestContext ? { correlation: requestContext as CorrelationMetadata } : {}),
-  };
-}
-
-interface StreamToolCandidate {
-  name?: unknown;
-  description?: unknown;
-  inputSchema?: unknown;
-  parameters?: unknown;
-}
-
-function normalizeTransportTools(tools: unknown): ToolSchema[] | undefined {
-  if (tools === undefined) return undefined;
-  if (!Array.isArray(tools)) {
-    throw new Error('Invalid stream context tools: tools must be an array');
-  }
-  if (tools.length === 0) return undefined;
-  return tools.map(normalizeTransportTool);
-}
-
-function normalizeTransportTool(tool: unknown): ToolSchema {
-  if (!isRecord(tool)) {
-    throw new Error('Invalid stream tool schema: tool must be an object');
-  }
-  const candidate = tool as StreamToolCandidate;
-  if (typeof candidate.name !== 'string' || candidate.name.trim().length === 0) {
-    throw new Error('Invalid stream tool schema: tool.name must be a non-empty string');
-  }
-  if (typeof candidate.description !== 'string' || candidate.description.trim().length === 0) {
-    throw new Error(`Invalid stream tool schema for ${candidate.name}: tool.description must be a non-empty string`);
-  }
-  const inputSchema = candidate.inputSchema ?? candidate.parameters;
-  if (!isRecord(inputSchema)) {
-    throw new Error(`Invalid stream tool schema for ${candidate.name}: inputSchema or parameters must be an object`);
-  }
-  return {
-    name: candidate.name,
-    description: candidate.description,
-    inputSchema,
   };
 }
 

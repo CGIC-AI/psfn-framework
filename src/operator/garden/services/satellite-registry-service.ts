@@ -35,6 +35,7 @@ export function buildAdminSatelliteRegistryView(
       ? { productivityCompanionId: registry.productivityCompanionId }
       : {}),
     satelliteCount: satellites.length,
+    retiredSatelliteCount: registry?.retiredSatellites?.length ?? 0,
     endpointCount,
     liveObservationStatus: 'not_implemented',
     liveObservationDetail: LIVE_OBSERVATION_DETAIL,
@@ -42,6 +43,13 @@ export function buildAdminSatelliteRegistryView(
       satelliteId: satellite.satelliteId,
       displayName: satellite.displayName,
       mobility: satellite.mobility,
+      synthetic: satellite.testProvenance !== undefined,
+      ...(satellite.testProvenance
+        ? {
+            testRunId: satellite.testProvenance.runId,
+            testManifestId: satellite.testProvenance.manifestId,
+          }
+        : {}),
       ...(satellite.staticLocationLabel ? { staticLocationLabel: satellite.staticLocationLabel } : {}),
       ...(satellite.sharedDevice ? { sharedDevice: satellite.sharedDevice } : {}),
       endpoints: satellite.endpoints.map(endpoint => ({

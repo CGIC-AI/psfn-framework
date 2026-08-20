@@ -156,10 +156,24 @@ describe('unified-origin fleet portal routing', () => {
 
   it('renders the login landing without fleet disclosure and authenticates both portal surfaces', async () => {
     const harness = await start();
+    expect(harness.router.matches('/')).toBe(true);
     expect(harness.router.matches('/v1/fleet/portal')).toBe(true);
     expect(harness.router.matches('/v1/fleet/portal/')).toBe(true);
     expect(harness.router.matches('/v1/fleet/model-usage')).toBe(true);
     expect(harness.router.matches('/fleet/status.json')).toBe(false);
+
+    const root = await request(harness.port, '/');
+    expect(root.status).toBe(302);
+    expect(root.headers.location).toBe('/fleet');
+    expect(root.headers['cache-control']).toBe('no-store');
+    expect(root.body).toBe('');
+
+    const authenticatedRoot = await request(harness.port, '/', { session: SESSION_TOKEN });
+    expect(authenticatedRoot.status).toBe(302);
+    expect(authenticatedRoot.headers.location).toBe('/fleet');
+
+    expect((await request(harness.port, '/?unexpected=true')).status).toBe(404);
+    expect((await request(harness.port, '/', { method: 'POST' })).status).toBe(404);
 
     const fleet = await request(harness.port, '/fleet');
     expect(fleet.status).toBe(200);

@@ -8,6 +8,8 @@ describe('structural tool-result CogSec provenance', () => {
     expect(classifyToolResultCogSecProvenance('journal')).toBe('journal');
     expect(classifyToolResultCogSecProvenance('fs.search')).toBe('local_fs_read');
     expect(classifyToolResultCogSecProvenance('shell.exec')).toBe('self_directed_shell');
+    expect(classifyToolResultCogSecProvenance('tool_search')).toBe('local_database_read');
+    expect(classifyToolResultCogSecProvenance('toolset')).toBe('local_database_read');
   });
 
   it('keeps web, MCP, and unknown tool results external', () => {

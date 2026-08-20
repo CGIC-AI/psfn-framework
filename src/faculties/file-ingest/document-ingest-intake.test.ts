@@ -154,15 +154,15 @@ describe('parsed-document intake screening (htm9.2)', () => {
     expect(holds[0]!.sourceChannelId).toBe(context.channelId);
   });
 
-  it('file-ingress owner posture enforces even when the global baseline is shadow', async () => {
+  it('global shadow keeps an enforcing file-ingress profile observational', async () => {
     const summary = makeSummary([HOSTILE_DOC_TEXT]);
     const screened = await screenDocumentIngestSummary(summary, makeScreening('shadow'), context);
 
-    expect(screened.summary.results[0]!.promptText).toBe(renderIntakeWithheldContentPlaceholder());
-    expect(screened.snapshots[0]!.state).toBe('quarantined');
-    expect(screened.snapshots[0]!.enforcementPosture).toBe('enforce');
+    expect(screened.summary.results[0]!.promptText).toBe(HOSTILE_DOC_TEXT);
+    expect(screened.snapshots[0]!.state).toBe('released');
+    expect(screened.snapshots[0]!.enforcementPosture).toBe('shadow');
 
     const content = appendDocumentIngestToContent('Here are the files', screened.summary);
-    expect(content).not.toContain('ignore all previous instructions');
+    expect(content).toContain('ignore all previous instructions');
   });
 });

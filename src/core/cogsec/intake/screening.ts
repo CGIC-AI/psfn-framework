@@ -834,7 +834,10 @@ export function createIntakeScreeningService(
     let envelope = createIntakeEnvelope({
       sourceClass: input.sourceClass,
       sourceRiskTier: adjusted.tier,
-      contentRef: buildContentRef(text, quarantine ? 'intake-quarantine' : 'unpersisted'),
+      // Clean-bubble items are never held. Advertising the quarantine store
+      // here made a governed self-tool result look operator-held even though
+      // no corresponding quarantine record could or should exist.
+      contentRef: buildContentRef(text, 'unpersisted'),
       origin: input.origin,
       atMs,
     });
@@ -908,7 +911,10 @@ export function createIntakeScreeningService(
       const resolved = resolveCogSecSurfacePosture(policy.surfacePostures, input.surface);
       return {
         vector,
-        posture: resolved.enforces ? 'enforce' : 'shadow',
+        // The global shadow switch is an absolute observational ceiling.
+        // Surface policy can narrow enforcement in boundary/strict, but may
+        // not make a shadow deployment disruptive.
+        posture: globalMode === 'shadow' || !resolved.enforces ? 'shadow' : 'enforce',
         screens: resolved.screens,
         deepScreening: resolved.deepScreening,
       };
@@ -1108,7 +1114,10 @@ export function createIntakeScreeningService(
     let envelope = createIntakeEnvelope({
       sourceClass: input.sourceClass,
       sourceRiskTier,
-      contentRef: buildContentRef(text, quarantine ? 'intake-quarantine' : 'unpersisted'),
+      contentRef: buildContentRef(
+        text,
+        quarantine && itemEnforces ? 'intake-quarantine' : 'unpersisted',
+      ),
       origin: input.origin,
       atMs,
     });
@@ -1150,10 +1159,21 @@ export function createIntakeScreeningService(
         reason: `chat-body-mark-only:${screenedDecision.reason}`,
       }
       : screenedDecision;
-    const ruleMatchEvidence = ruleMatchesForDecision(report, decision);
+    const observationalAction = effectiveItemPosture === 'shadow' && decision.action !== 'pass'
+      ? decision.action
+      : undefined;
+    const envelopeDecision = observationalAction
+      ? {
+        action: 'pass' as const,
+        reason: `shadow-observation:${decision.reason}`,
+      }
+      : decision;
+    const ruleMatchEvidence = observationalAction
+      ? undefined
+      : ruleMatchesForDecision(report, decision);
     const intakeDecision: IntakeDecision = {
-      action: decision.action,
-      reason: decision.reason.slice(0, COGSEC_DECISION_REASON_MAX_CHARS),
+      action: envelopeDecision.action,
+      reason: envelopeDecision.reason.slice(0, COGSEC_DECISION_REASON_MAX_CHARS),
       decidedBy: 'screening',
       decidedAtMs: atMs,
       ...(ruleMatchEvidence ?? {}),
@@ -1192,6 +1212,12 @@ export function createIntakeScreeningService(
           'chat_body.screened_action': screenedDecision.action,
         }
         : {}),
+      ...(observationalAction
+        ? {
+          'shadow.observed_action': observationalAction,
+          'shadow.observed_reason': decision.reason.slice(0, COGSEC_EVIDENCE_FIELD_MAX_CHARS),
+        }
+        : {}),
     };
 
     // htm9.13: the marking plan is a pure function of (labels, max score,
@@ -1223,9 +1249,14 @@ export function createIntakeScreeningService(
       extractedFields,
     });
     envelope = transitionIntakeEnvelope(envelope, {
-      to: postScreeningStateForDecision(decision.action),
+      // Shadow is observational: preserve the would-be action and evidence on
+      // the screened envelope, but release the companion's original content.
+      // A shadow finding must never become a durable quarantine hold.
+      to: postScreeningStateForDecision(envelopeDecision.action),
       actor,
-      reason: `routed per screening decision '${decision.action}'`,
+      reason: effectiveItemPosture === 'shadow'
+        ? `released after observational screening decision '${decision.action}'`
+        : `routed per screening decision '${decision.action}'`,
       atMs,
     });
 
@@ -1250,7 +1281,7 @@ export function createIntakeScreeningService(
       try {
         quarantine.hold({
           envelope,
-          mode: itemPosture,
+          mode: effectiveItemPosture,
           rawText: text,
           ...(input.canonicalContactId !== undefined
             ? { canonicalContactId: input.canonicalContactId }

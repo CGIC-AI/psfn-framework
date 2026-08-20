@@ -468,7 +468,7 @@ describe('evaluateVisionIntake (htm9.8 pipeline)', () => {
     expect(toVisionIntakeImageScreenResult(outcome).flagged).toBe(true);
   });
 
-  it('stays observe-only in shadow mode: flagged but never withheld, envelope + hold recorded', async () => {
+  it('stays observe-only in shadow mode: flagged but never withheld or held', async () => {
     const policy = makePolicy('shadow');
     const quarantine = makeQuarantineStub();
     const outcome = await evaluateVisionIntake(makeEvaluateInput(
@@ -489,8 +489,8 @@ describe('evaluateVisionIntake (htm9.8 pipeline)', () => {
     expect(outcome.noticeText).toBeUndefined();
     // Shadow is strictly observe-only: no transcript is attached either.
     expect(outcome.promptBlock).toBeUndefined();
-    expect(outcome.screening.envelope.state).toBe('quarantined');
-    expect(quarantine.holds).toHaveLength(1);
+    expect(outcome.screening.envelope.state).toBe('released');
+    expect(quarantine.holds).toHaveLength(0);
   });
 
   it('fails closed when the vision model is unreachable: enforce withholds, shadow passes through', async () => {
@@ -522,10 +522,10 @@ describe('evaluateVisionIntake (htm9.8 pipeline)', () => {
     ));
     expect(shadow.kind).toBe('failed_closed');
     if (shadow.kind !== 'failed_closed') throw new Error('unreachable');
-    // Shadow: audited (envelope quarantined) but the image passes through.
+    // Shadow: audited as an observational pass; the image passes through.
     expect(shadow.withheld).toBe(false);
     expect(shadow.snapshot.enforcementPosture).toBe('shadow');
-    expect(shadow.envelope.state).toBe('quarantined');
+    expect(shadow.envelope.state).toBe('released');
   });
 
   it('fails closed when a remote image cannot be securely materialized', async () => {

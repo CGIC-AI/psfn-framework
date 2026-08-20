@@ -33,6 +33,11 @@ const TOOL_RESULT_PROVENANCE: Readonly<Record<string, CogSecProvenanceClass>> = 
   'beads.show': 'local_database_read',
   'beads.sync': 'local_database_read',
   'beads.update': 'local_database_read',
+  // Canonical local catalog reads. These results are assembled from the
+  // already-registered first-party tool surface, not fetched from an external
+  // source, so boundary mode must not let the firewall block its own tooling.
+  tool_search: 'local_database_read',
+  toolset: 'local_database_read',
   // Journal work — companion-owned reflective store.
   journal: 'journal',
   // Local filesystem read/search (read-only surfaces).

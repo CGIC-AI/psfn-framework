@@ -83,6 +83,7 @@ export class AdminSubjectVisibleAuditService {
       expectedRouteId,
       actionLabel: input.action,
       reason: input.reason,
+      companionNotice: false,
     });
   }
 
@@ -102,6 +103,7 @@ export class AdminSubjectVisibleAuditService {
       expectedRouteId: MEMORY_REVEAL_CATEGORY.routeId,
       actionLabel: 'reveal',
       reason: input.reason,
+      companionNotice: true,
     });
   }
 
@@ -122,6 +124,9 @@ export class AdminSubjectVisibleAuditService {
       expectedRouteId: QUARANTINE_DECIDE_CATEGORY.routeId,
       actionLabel: input.action,
       reason: input.reason,
+      // Release changes the companion's conversation. Discard only removes an
+      // operator queue item and must not become companion-visible pressure.
+      companionNotice: input.action !== 'discard',
     });
   }
 
@@ -131,6 +136,7 @@ export class AdminSubjectVisibleAuditService {
     expectedRouteId: string;
     actionLabel: string;
     reason: string;
+    companionNotice: boolean;
   }): void {
     const { context, category, expectedRouteId, actionLabel } = input;
     if (context.action !== category.action
@@ -170,15 +176,17 @@ export class AdminSubjectVisibleAuditService {
       timestamp,
     });
 
-    const sessionId = readLastActiveSession(this.options.companionDataDir)?.sessionId
-      ?? this.options.sessionManager.listRecentSessions(1).at(0)?.sessionId
-      ?? COMPANION_HOME_SESSION;
-    this.options.sessionManager.appendContextSystemNote(
-      sessionId,
-      `[System notice: protected administration] ${narrative} `
-        + `Time: ${occurredAt}. Stated justification: ${JSON.stringify(reason)}. `
-        + category.contentFreeSuffix,
-      SUBJECT_NOTICE_SOURCE,
-    );
+    if (input.companionNotice) {
+      const sessionId = readLastActiveSession(this.options.companionDataDir)?.sessionId
+        ?? this.options.sessionManager.listRecentSessions(1).at(0)?.sessionId
+        ?? COMPANION_HOME_SESSION;
+      this.options.sessionManager.appendContextSystemNote(
+        sessionId,
+        `[System notice: protected administration] ${narrative} `
+          + `Time: ${occurredAt}. Stated justification: ${JSON.stringify(reason)}. `
+          + category.contentFreeSuffix,
+        SUBJECT_NOTICE_SOURCE,
+      );
+    }
   }
 }

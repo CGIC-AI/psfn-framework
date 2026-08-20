@@ -160,13 +160,12 @@ describe('intake-firewall notice rendering via the safe-notice path (htm9.12)', 
     expect(rendered).not.toContain(event.caseId);
   });
 
-  it('is truthful: it is only produced for an event that actually held an item', () => {
+  it('keeps durable intake-firewall evidence out of later companion prompts', () => {
     const event = makeIntakeFirewallEvent();
     // The event attests a held item (an affected message range with one message).
     expect(event.affectedMessageRanges[0].messageIds).toEqual([42]);
     const block = buildCogSecEventNoticeBlock([event]);
-    expect(block).toContain('<cogsec_notices>');
-    expect(block).toContain(INTAKE_FIREWALL_NOTICE_SIGNATURE);
+    expect(block).toBe('');
   });
 
   it('uses plural wording when multiple items were held', () => {

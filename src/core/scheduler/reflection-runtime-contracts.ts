@@ -40,6 +40,10 @@ import type {
   IntentionActionDecision,
 } from '../intention/appraisal.js';
 import type { PendingFollowUp } from '../intention/pending-follow-ups.js';
+import type {
+  IntentionFollowUpDisposition,
+  LongHorizonFollowUpInput,
+} from '../intention/runtime-wiring.js';
 import type { PendingFollowUpStorePort } from '../intention/pending-follow-up-store-port.js';
 import type { CareReminderStorePort } from '../intention/care-reminders.js';
 import type { ScheduledPromptStorePort } from './scheduled-prompt-store-port.js';
@@ -132,7 +136,7 @@ export interface ReflectionRuntimeOptions {
     sourceMessageId: string;
     formationVAD?: { valence: number; arousal: number; dominance: number };
     originIcpRootInitiationId?: string;
-  }) => Promise<string | undefined> | string | undefined;
+  }) => Promise<IntentionFollowUpDisposition | undefined> | IntentionFollowUpDisposition | undefined;
   getPendingFollowUpsForResurfacing?: (input: {
     channelId: string;
     canonicalContactKey?: string;
@@ -177,6 +181,8 @@ export interface ReflectionRuntimeOptions {
     nextDueAt?: string;
   } | undefined;
   pendingFollowUpStore?: PendingFollowUpStorePort | null;
+  intentionFollowUpHorizonMs?: number;
+  routeLongHorizonFollowUp?: (input: LongHorizonFollowUpInput) => Promise<string>;
   icpIntentionCandidateAdapter?: IcpIntentionCandidateAdapter | null;
   careReminderStore?: CareReminderStorePort | null;
   scheduledPromptStore?: ScheduledPromptStorePort | null;

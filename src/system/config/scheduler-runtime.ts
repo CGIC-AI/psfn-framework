@@ -101,6 +101,7 @@ export function resolveRuntimeSchedulerConfig(
         budget: { ...persisted.socialDesire.outreach.budget },
       },
     },
+    intentionFollowUp: { ...persisted.intentionFollowUp },
     icpAutonomy: {
       enabled: persisted.icpAutonomy.enabled,
       candidate: { ...persisted.icpAutonomy.candidate },

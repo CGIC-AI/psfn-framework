@@ -76,8 +76,8 @@ function normalizeIsoTimestamp(value: unknown, fieldName: string): string {
 }
 
 function normalizeSource(value: unknown): ScheduledPromptSource {
-  if (value !== 'schedule_tool') {
-    throw new Error('Scheduled prompt source must be schedule_tool');
+  if (value !== 'schedule_tool' && value !== 'intention_appraisal') {
+    throw new Error('Scheduled prompt source must be schedule_tool or intention_appraisal');
   }
   return value;
 }
@@ -190,6 +190,18 @@ export class PostgresScheduledPromptStore implements ScheduledPromptStorePort {
       throw new Error(`Failed to create scheduled prompt "${id}"`);
     }
     return mapRow(row);
+  }
+
+  async getById(id: string): Promise<ScheduledPromptRecord | null> {
+    const normalizedId = normalizeRequiredText(id, 'id', MAX_ID_CHARS);
+    const row = await queryOne<ScheduledPromptRow>(this.pool, `
+      SELECT
+        id, name, prompt, run_at, created_at, source, channel_id, channel_type,
+        author_id, author_name, status, delivery_channel_id, completed_at
+      FROM scheduler_scheduled_prompts
+      WHERE id = $1
+    `, [normalizedId]);
+    return row ? mapRow(row) : null;
   }
 
   async listPending(options: { limit?: number } = {}): Promise<ScheduledPromptRecord[]> {

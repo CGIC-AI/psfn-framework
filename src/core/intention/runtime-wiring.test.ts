@@ -425,6 +425,78 @@ describe('intention runtime port hooks', () => {
     });
   });
 
+  it('routes a long-horizon follow-up to durable scheduled work without consuming a pending slot', async () => {
+    const now = Date.parse('2026-08-20T12:00:00.000Z');
+    const pendingFollowUpStore = makePendingFollowUpStore();
+    const routeLongHorizonFollowUp = vi.fn(async () => 'scheduled-prompt-1');
+    const hooks = createIntentionAppraisalHooks(makeConcernStore(), pendingFollowUpStore, {
+      now: () => now,
+      nearTermFollowUpHorizonMs: 3 * 24 * 60 * 60_000,
+      routeLongHorizonFollowUp,
+    });
+
+    const disposition = await hooks.onIntentionFollowUpDecision({
+      decision: {
+        type: 'followUp',
+        priority: 'medium',
+        reason: 'Keep the long-range commitment durable without occupying attention.',
+        timing: 'scheduled',
+        dueAt: now + 30 * 24 * 60 * 60_000,
+        followUp: {
+          content: 'Revisit the long-range commitment.',
+          channelType: 'api',
+          contextSummary: 'Long-range commitment context.',
+        },
+      },
+      channelId: 'api:test',
+      channelType: 'api',
+      canonicalContactKey: 'contact-a',
+      sourceMessageId: 'msg-long-horizon',
+    });
+
+    expect(disposition).toEqual({
+      kind: 'scheduled_prompt',
+      scheduledPromptId: 'scheduled-prompt-1',
+    });
+    expect(pendingFollowUpStore.enqueue).not.toHaveBeenCalled();
+    expect(routeLongHorizonFollowUp).toHaveBeenCalledWith({
+      content: 'Revisit the long-range commitment.',
+      reason: 'Keep the long-range commitment durable without occupying attention.',
+      dueAt: '2026-09-19T12:00:00.000Z',
+      channelId: 'api:test',
+      channelType: 'api',
+      authorId: 'system:intention',
+      authorName: 'Whisper',
+      contactId: 'contact-a',
+      sourceMessageId: 'msg-long-horizon',
+      contextSummary: 'Long-range commitment context.',
+    });
+  });
+
+  it('fails closed instead of parking long-horizon work when no scheduled-work router is wired', async () => {
+    const now = Date.parse('2026-08-20T12:00:00.000Z');
+    const pendingFollowUpStore = makePendingFollowUpStore();
+    const hooks = createIntentionAppraisalHooks(makeConcernStore(), pendingFollowUpStore, {
+      now: () => now,
+      nearTermFollowUpHorizonMs: 3 * 24 * 60 * 60_000,
+    });
+
+    await expect(hooks.onIntentionFollowUpDecision({
+      decision: {
+        type: 'followUp',
+        priority: 'medium',
+        reason: 'Long-range commitment.',
+        timing: 'soon',
+        dueAt: now + 30 * 24 * 60 * 60_000,
+        followUp: { content: 'Do not occupy the near-term queue.' },
+      },
+      channelId: 'api:test',
+      channelType: 'api',
+      sourceMessageId: 'msg-no-router',
+    })).rejects.toThrow('Long-horizon follow-up requires the durable scheduled-work router');
+    expect(pendingFollowUpStore.enqueue).not.toHaveBeenCalled();
+  });
+
   it('bounds over-long follow-up content to the enqueue contract (psfn-framework-ktvo)', async () => {
     const pendingFollowUpStore = makePendingFollowUpStore();
     const hooks = createIntentionAppraisalHooks(makeConcernStore(), pendingFollowUpStore);

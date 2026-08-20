@@ -324,7 +324,7 @@ export function wirePostTurnRuntime(
         if (runtimeOptions.onIntentionFollowUpDecision) {
           for (const decision of decisions) {
             if (decision.type !== 'followUp') continue;
-            const pendingFollowUpId = await runtimeOptions.onIntentionFollowUpDecision({
+            const disposition = await runtimeOptions.onIntentionFollowUpDecision({
               decision,
               channelId: resolvedSessionId,
               channelType: context.message.channelType,
@@ -333,13 +333,25 @@ export function wirePostTurnRuntime(
               formationVAD: { ...internalState.emotional.vad },
               ...(originIcpRootInitiationId ? { originIcpRootInitiationId } : {}),
             });
-            if (pendingFollowUpId) {
+            if (typeof disposition === 'string' && disposition) {
               if (!decision.followUp) {
                 continue;
               }
               decision.followUp = {
                 ...decision.followUp,
-                pendingFollowUpId,
+                pendingFollowUpId: disposition,
+              };
+            } else if (typeof disposition === 'object') {
+              const scheduledPromptId = disposition.scheduledPromptId.trim();
+              if (!scheduledPromptId) {
+                throw new Error('Scheduled follow-up disposition requires scheduledPromptId');
+              }
+              if (!decision.followUp) {
+                throw new Error('Scheduled follow-up disposition requires followUp payload');
+              }
+              decision.followUp = {
+                ...decision.followUp,
+                scheduledPromptId,
               };
             }
           }

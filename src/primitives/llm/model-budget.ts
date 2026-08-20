@@ -278,6 +278,23 @@ function buildBlockedEvent(
   };
 }
 
+function buildThresholdEvent(
+  budgetEvent: ModelBudgetBlockedEvent,
+  enforcementEnabled: boolean,
+): ModelBudgetThresholdExceededEvent {
+  if (
+    budgetEvent.reason !== 'daily_budget_exceeded'
+    && budgetEvent.reason !== 'monthly_budget_exceeded'
+  ) {
+    throw new Error('Model budget threshold event requires a threshold reason');
+  }
+  return {
+    ...budgetEvent,
+    reason: budgetEvent.reason,
+    enforcementEnabled,
+  };
+}
+
 export function normalizeModelIdForProvider(provider: string, model: string): string {
   const normalizedProvider = provider.trim().toLowerCase();
   const trimmedModel = model.trim();
@@ -432,11 +449,7 @@ export class ModelBudgetController {
       const budgetEvent = buildBlockedEvent(
         'daily_budget_exceeded', nowMs, params, estimatedRequestCostUsd, snapshot,
       );
-      const thresholdEvent: ModelBudgetThresholdExceededEvent = {
-        ...budgetEvent,
-        reason: 'daily_budget_exceeded',
-        enforcementEnabled: policy.enabled,
-      };
+      const thresholdEvent = buildThresholdEvent(budgetEvent, policy.enabled);
       return {
         allowed: !policy.enabled,
         estimatedRequestCostUsd,
@@ -449,11 +462,7 @@ export class ModelBudgetController {
       const budgetEvent = buildBlockedEvent(
         'monthly_budget_exceeded', nowMs, params, estimatedRequestCostUsd, snapshot,
       );
-      const thresholdEvent: ModelBudgetThresholdExceededEvent = {
-        ...budgetEvent,
-        reason: 'monthly_budget_exceeded',
-        enforcementEnabled: policy.enabled,
-      };
+      const thresholdEvent = buildThresholdEvent(budgetEvent, policy.enabled);
       return {
         allowed: !policy.enabled,
         estimatedRequestCostUsd,

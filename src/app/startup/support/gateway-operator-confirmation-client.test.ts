@@ -25,6 +25,7 @@ describe('createGatewayOperatorConfirmationClient', () => {
       id: 'kube-approval',
       decision: 'approve',
     }, {
+      kind: 'standalone_operator',
       authorization: 'Bearer garden-admin-token',
       cookie: 'garden-session=browser-credential',
     });
@@ -62,7 +63,32 @@ describe('createGatewayOperatorConfirmationClient', () => {
     await expect(client.resolve({
       id: 'kube-approval',
       decision: 'approve',
-    }, {})).rejects.toThrow('Authenticated Garden operator credentials are required');
+    }, { kind: 'standalone_operator' })).rejects.toThrow(
+      'Authenticated Garden operator credentials are required',
+    );
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('fails closed with incomplete Fleet admission evidence', async () => {
+    const fetchImpl = vi.fn();
+    const client = createGatewayOperatorConfirmationClient(
+      'http://psfn-gateway:10053/v1',
+      {
+        fetchImpl,
+        operatorToken: 'internal-operator-token',
+        requestTimeoutMs: 5_000,
+      },
+    );
+
+    await expect(client.resolve({
+      id: 'kube-approval',
+      decision: 'approve',
+    }, {
+      kind: 'fleet_principal',
+      companionId: '',
+      requestId: 'request-1',
+      decisionId: 'decision-1',
+    })).rejects.toThrow('Admitted Fleet Garden authority is required');
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 

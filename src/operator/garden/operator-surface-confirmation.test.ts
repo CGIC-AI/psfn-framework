@@ -199,7 +199,11 @@ describe('Garden operator confirmation resolution (x5rt.10)', () => {
     expect(resolver.resolve).toHaveBeenCalledTimes(1);
     expect(resolver.resolve).toHaveBeenCalledWith(
       { id: 'kube-1', decision: 'approve' },
-      { authorization: 'Bearer super-secret-admin-token', cookie: 'psfn_token=super-secret-admin-token' },
+      {
+        kind: 'standalone_operator',
+        authorization: 'Bearer super-secret-admin-token',
+        cookie: 'psfn_token=super-secret-admin-token',
+      },
     );
     // The agent (upstream) was never asked to resolve an operator-owned entry.
     expect(harness.upstream.requests).toHaveLength(0);

@@ -15,6 +15,8 @@
   import { pushToast } from '$lib/stores/toast.svelte';
   import { createRosterLoader } from './roster-loader';
 
+  let { embedded = false } = $props<{ embedded?: boolean }>();
+
   const ROSTER_PAGE_SIZE = 50;
 
   // ── State ──
@@ -117,26 +119,21 @@
   }
 
   onMount(() => {
-    void refreshAll();
+    if (embedded) void refreshAll();
   });
 </script>
 
-<div class="garden-page space-y-5 pb-8">
-  <GardenPageHeader
-    eyebrow="Memory & Identity"
-    title="Rooms"
-    description="Known conversation channels, virtual spaces, and their observed rosters. This operational data is never loaded into prompts."
-  >
-    {#snippet actions()}
+<div class={embedded ? 'space-y-5 pb-8' : 'garden-page space-y-5 pb-8'}>
+  {#if embedded}
+    <div class="flex justify-end">
       <button
         onclick={refreshAll}
         disabled={roomsLoading || placesLoading}
-        class="rounded-xl border border-bark-300 px-3 py-2 text-sm font-medium text-shadow-700 transition-colors hover:bg-bark-100 disabled:cursor-not-allowed disabled:opacity-50"
+        class="garden-action min-h-11 rounded-xl border border-bark-300 px-3 py-2 text-sm font-medium text-shadow-700 transition-colors hover:bg-bark-100 disabled:cursor-not-allowed disabled:opacity-50"
       >
-        {roomsLoading || placesLoading ? 'Loading...' : 'Refresh'}
+        {roomsLoading || placesLoading ? 'Loading...' : 'Refresh virtual environment'}
       </button>
-    {/snippet}
-  </GardenPageHeader>
+    </div>
 
   <section class="garden-section space-y-4 p-4 sm:p-5" aria-labelledby="virtual-spaces-heading">
     <div>
@@ -321,4 +318,11 @@
     </div>
   {/if}
   </section>
+  {:else}
+    <GardenPageHeader
+      eyebrow="World Model"
+      title="Places"
+      description="Rooms now live in the Virtual tab under Places. Redirecting…"
+    />
+  {/if}
 </div>

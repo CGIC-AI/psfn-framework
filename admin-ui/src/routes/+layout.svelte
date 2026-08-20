@@ -53,6 +53,7 @@
   import { createVisibilityAwarePoller } from '$lib/polling/visibility-aware-poller';
   import { reconcilePollingSnapshot } from '$lib/polling/silent-background-revalidation';
   import { logoutFleetSession } from '$lib/api/fleet-session';
+  import { canonicalGardenDestination } from '$lib/nav/canonical-routes';
 
   let { children } = $props();
 
@@ -178,6 +179,17 @@
   const activeFleetView = $derived(resolveFleetView($page.url.search, $page.url.hash));
 
   // Redirect to login if not authenticated (except on login page itself)
+  $effect(() => {
+    const destination = canonicalGardenDestination(
+      $page.url.pathname,
+      $page.url.search,
+      $page.url.hash,
+    );
+    if (destination && typeof window !== 'undefined') {
+      window.location.replace(destination);
+    }
+  });
+
   $effect(() => {
     const pathname = $page.url.pathname;
     void activateSessionScopeFromPath(pathname).catch((error: unknown) => {

@@ -2,8 +2,10 @@ import assert from 'node:assert/strict';
 import { test } from 'vitest';
 import {
   countDashboardTools,
+  DASHBOARD_SECTIONS,
   filterDashboardTools,
   memorySharePercent,
+  resolveDashboardSection,
   type DashboardTool,
 } from './dashboard-view';
 
@@ -50,4 +52,18 @@ test('memorySharePercent is finite and bounded for unavailable or inconsistent t
   assert.equal(memorySharePercent(200, 100), 100);
   assert.equal(memorySharePercent(25, 0), 0);
   assert.equal(memorySharePercent(Number.NaN, 100), 0);
+});
+
+test('dashboard section links resolve every visible deep link and reject unknown hashes', () => {
+  assert.deepEqual(DASHBOARD_SECTIONS, [
+    { id: 'overview', label: 'Overview', href: '#overview' },
+    { id: 'health', label: 'Health', href: '#health' },
+    { id: 'memory', label: 'Memory', href: '#memory' },
+    { id: 'cost', label: 'Cost', href: '#cost' },
+    { id: 'traces', label: 'Traces', href: '#traces' },
+  ]);
+  assert.equal(resolveDashboardSection('#memory'), 'memory');
+  assert.equal(resolveDashboardSection('#traces'), 'traces');
+  assert.equal(resolveDashboardSection('#missing'), 'overview');
+  assert.equal(resolveDashboardSection(''), 'overview');
 });

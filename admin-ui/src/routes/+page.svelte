@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import { getDashboard } from '$lib/api/endpoints/dashboard';
   import {
     beginDashboardCostWindowSelection,
@@ -27,6 +27,7 @@
   import RuntimeStrip from '$lib/components/dashboard/RuntimeStrip.svelte';
   import TokenUsagePanel from '$lib/components/dashboard/TokenUsagePanel.svelte';
   import ToolStatusPanel from '$lib/components/dashboard/ToolStatusPanel.svelte';
+  import { resolveDashboardSection } from '$lib/components/dashboard/dashboard-view';
 
   let data = $state<AdminDashboardData | null>(null);
   let error = $state('');
@@ -35,6 +36,7 @@
   let costWindowLoading = $state(false);
   let backgroundRefreshLoading = $state(false);
   let costWindowRefreshError = $state('');
+  let pendingDashboardHash = $state<string | null>(null);
   let latestDashboardRequestId = 0;
 
   function costWindowHint(window: DashboardCostWindow): string {
@@ -96,13 +98,21 @@
   }
 
   onMount(() => {
+    const captureDashboardHash = () => {
+      pendingDashboardHash = window.location.hash || null;
+    };
+    captureDashboardHash();
+    window.addEventListener('hashchange', captureDashboardHash);
     void loadDashboard(costWindowSelection.committed, 'initial');
     const refreshTimer = window.setInterval(() => {
       if (!loading && !costWindowLoading && !backgroundRefreshLoading) {
         void loadDashboard(costWindowSelection.committed, 'poll');
       }
     }, DASHBOARD_MODEL_USAGE_POLL_INTERVAL_MS);
-    return () => window.clearInterval(refreshTimer);
+    return () => {
+      window.clearInterval(refreshTimer);
+      window.removeEventListener('hashchange', captureDashboardHash);
+    };
   });
 
   function formatTokens(value: number): string {
@@ -128,6 +138,13 @@
   function formatFreshnessTimestamp(value: number | null): string {
     return typeof value === 'number' && Number.isFinite(value) ? new Date(value).toLocaleTimeString() : 'never';
   }
+
+  $effect(() => {
+    if (!data || !pendingDashboardHash) return;
+    const sectionId = resolveDashboardSection(pendingDashboardHash);
+    pendingDashboardHash = null;
+    void tick().then(() => document.getElementById(sectionId)?.scrollIntoView());
+  });
 </script>
 
 <div class="space-y-4">
@@ -243,23 +260,29 @@
 
     <div class="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_22rem]">
       <div class="min-w-0 space-y-4">
-        <ToolStatusPanel tools={stats.toolStatus} />
+        <div id="health" class="scroll-mt-4">
+          <ToolStatusPanel tools={stats.toolStatus} />
+        </div>
 
         <div class="grid items-start gap-4 xl:grid-cols-2">
-          <MemoryBreakdownPanel
-            memoryByType={stats.memoryByType}
-            total={stats.memoryTotal}
-            avgSalience={stats.avgSalience}
-          />
-          <TokenUsagePanel
-            usage={selectedCostWindowUsage}
-            window={committedCostWindow}
-            loading={costWindowLoading || backgroundRefreshLoading}
-            transientTelemetry={transientSessionTelemetry}
-            {formatTokens}
-            {formatCost}
-            formatDuration={formatOptionalDuration}
-          />
+          <div id="memory" class="scroll-mt-4">
+            <MemoryBreakdownPanel
+              memoryByType={stats.memoryByType}
+              total={stats.memoryTotal}
+              avgSalience={stats.avgSalience}
+            />
+          </div>
+          <div id="cost" class="scroll-mt-4">
+            <TokenUsagePanel
+              usage={selectedCostWindowUsage}
+              window={committedCostWindow}
+              loading={costWindowLoading || backgroundRefreshLoading}
+              transientTelemetry={transientSessionTelemetry}
+              {formatTokens}
+              {formatCost}
+              formatDuration={formatOptionalDuration}
+            />
+          </div>
         </div>
 
         <LatencyWaterfalls
@@ -268,11 +291,13 @@
           formatTimestamp={formatFreshnessTimestamp}
         />
 
-        <AnalysisTracesTable
-          traces={stats.recentAnalysisWorkbenchTraces}
-          {formatTokens}
-          {formatDuration}
-        />
+        <div id="traces" class="scroll-mt-4">
+          <AnalysisTracesTable
+            traces={stats.recentAnalysisWorkbenchTraces}
+            {formatTokens}
+            {formatDuration}
+          />
+        </div>
       </div>
 
       <aside class="space-y-4" aria-label="Runtime and companion context">

@@ -127,6 +127,7 @@ describe('GatewaySystemDataWriter', () => {
       schemaVersion: 1 as const,
       enabled: false,
       satellites: [],
+      retiredSatellites: [],
     };
 
     await expect(writer.writeSystemData({

@@ -284,6 +284,14 @@ describe('Garden route capability catalogue', () => {
     }
   });
 
+  it('keeps the read-only Automata registry grantable by the testing harness', () => {
+    const action = resolveGardenRouteCapability('GET', '/api/admin/automata')
+      ?.capability.authorization.action;
+
+    expect(action).toBe('automata.read');
+    expect(TESTING_HARNESS_GARDEN_ADMIN_ACTIONS).toContain(action);
+  });
+
   it('fails construction for an active route without an exact catalogue declaration', () => {
     expect(() => compileGardenRouteDeclarations([{
       method: 'GET',

@@ -357,7 +357,7 @@ export async function runExtractionOrchestration(
         triggerReason: options.triggerReason,
       });
       if (!run.execute) return emptyExtractionOutputs();
-      activeAutomataRunId = run.runId;
+      activeAutomataRunId = run.ownsLifecycle ? run.runId : undefined;
     }
     const automataBusScope = automataBusEligible
       ? buildAutomataBusWorkerScope(options.automataBusWorkerAccess!, {

@@ -386,6 +386,11 @@ export function resolveFleetSsoBrowserOrigin(
   const forwardedProto = singleHeader(request.headers['x-forwarded-proto']);
   const forwardedPort = singleHeader(request.headers['x-forwarded-port']);
   const forwardedFor = singleHeader(request.headers['x-forwarded-for'])?.trim();
+  const forwardedWebSocket = forwardedProto === 'wss'
+    && singleHeader(request.headers.upgrade)?.toLowerCase() === 'websocket'
+    && (singleHeader(request.headers.connection) ?? '')
+      .split(',')
+      .some(token => token.trim().toLowerCase() === 'upgrade');
   if (directTls) {
     if (hasAnyHeader(request.headers, FORWARDED_HEADERS.slice(1))) {
       throw new FleetSsoRequestError(400, 'Forwarded origin metadata is forbidden on direct TLS');
@@ -394,7 +399,7 @@ export function resolveFleetSsoBrowserOrigin(
   }
   if (!options.trustProxy
     || forwardedHost !== canonical.host
-    || forwardedProto !== 'https'
+    || (forwardedProto !== 'https' && !forwardedWebSocket)
     || (forwardedPort !== undefined && forwardedPort !== (canonical.port || '443'))
     || !forwardedFor
     || isIP(forwardedFor) === 0) {

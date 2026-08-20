@@ -132,6 +132,28 @@ describe('unified Fleet SSO origin provenance', () => {
     )).toThrow(/provenance is invalid/u);
   });
 
+  it('accepts trusted wss provenance only for an exact WebSocket upgrade', () => {
+    const headers = {
+      host: 'fleet.example.test',
+      origin: canonicalOrigin,
+      connection: 'Upgrade',
+      upgrade: 'websocket',
+      'x-forwarded-host': 'fleet.example.test',
+      'x-forwarded-proto': 'wss',
+      'x-forwarded-port': '443',
+      'x-forwarded-for': '198.51.100.9',
+    };
+
+    expect(resolveFleetSsoBrowserOrigin(
+      request(headers),
+      { canonicalOrigin, trustProxy: true },
+    )).toBe(canonicalOrigin);
+    expect(() => resolveFleetSsoBrowserOrigin(
+      request({ ...headers, upgrade: undefined }),
+      { canonicalOrigin, trustProxy: true },
+    )).toThrow(/Trusted HTTPS proxy provenance is invalid/u);
+  });
+
   it('serves the login landing before an unauthenticated Companion UI request can reach upstream', async () => {
     const companionId = createCompanionId('11111111-1111-4111-8111-111111111111');
     const { privateKey, publicKey } = generateKeyPairSync('ed25519');

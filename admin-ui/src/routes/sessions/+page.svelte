@@ -14,6 +14,7 @@
     loadSelectedSessionData,
     loadSessionIndex,
   } from './session-data-loader';
+  import { buildIcpTranscriptPresentation } from './icp-transcript';
   import { getCompanionName } from '$lib/stores/companion.svelte';
   import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
   import type {
@@ -438,7 +439,6 @@
     return sorted;
   });
 
-  const filteredMessages = $derived.by(() => filterMessages(messages, messageSearch));
   const messageOntologyById = $derived.by(() => {
     const views = new Map<number, SessionMessageOntologyView>();
     for (const view of messageOntologyViews) {
@@ -446,6 +446,12 @@
     }
     return views;
   });
+  const icpTranscriptPresentation = $derived.by(() => (
+    buildIcpTranscriptPresentation(messages, messageOntologyViews)
+  ));
+  const filteredMessages = $derived.by(() => (
+    filterMessages(icpTranscriptPresentation.conversationMessages, messageSearch)
+  ));
 
   onMount(() => {
     loadChannels();
@@ -569,7 +575,10 @@
             {/if}
           </div>
           <span class="text-sm text-shadow-600">
-            {filteredMessages.length} of {messages.length} loaded
+            {filteredMessages.length} conversation messages
+            {#if icpTranscriptPresentation.transportEvidence.length > 0}
+              · {icpTranscriptPresentation.transportEvidence.reduce((count, group) => count + group.entryCount, 0)} transport nodes collapsed
+            {/if}
             {#if selectedChannel?.messageCount}
               / {selectedChannel.messageCount} total
             {/if}
@@ -602,6 +611,39 @@
                 {/each}
               </div>
             </details>
+          </div>
+        {/if}
+
+        {#if icpTranscriptPresentation.transportEvidence.length > 0}
+          <div class="space-y-2 border-b border-bark-300 bg-sky-50/50 p-2" aria-label="ICP transport evidence">
+            {#each icpTranscriptPresentation.transportEvidence as evidence}
+              <details class="rounded-lg border border-sky-200 bg-bark-50/80 px-3 py-2">
+                <summary class="cursor-pointer text-sm font-medium text-sky-800 hover:text-sky-700">
+                  ICP transport evidence · {evidence.entryCount} node{evidence.entryCount === 1 ? '' : 's'} across {evidence.turnCount} turn{evidence.turnCount === 1 ? '' : 's'}
+                </summary>
+                <div class="mt-2 space-y-2 text-xs text-shadow-700">
+                  <div class="grid gap-1 sm:grid-cols-2">
+                    <p>Conversation: <span class="font-mono">{evidence.conversationId}</span></p>
+                    <p>Root initiation: <span class="font-mono">{evidence.rootInitiationId}</span></p>
+                    <p>Observed: {formatTimestamp(evidence.firstTimestamp)} – {formatTimestamp(evidence.lastTimestamp)}</p>
+                    {#if evidence.deliveryStatuses.length > 0}
+                      <p>Delivery state: {evidence.deliveryStatuses.join(', ')}</p>
+                    {/if}
+                  </div>
+                  {#each evidence.entries as entry}
+                    <details class="rounded border border-bark-300 bg-bark-100 p-2">
+                      <summary class="cursor-pointer font-medium text-shadow-800">
+                        Exact operator evidence · entry {entry.id}
+                      </summary>
+                      <pre class="mt-2 max-h-64 overflow-auto whitespace-pre-wrap rounded bg-bark-200 p-2 text-shadow-700">{entry.content}</pre>
+                      {#if entry.metadata}
+                        <pre class="mt-2 max-h-64 overflow-auto whitespace-pre-wrap rounded bg-bark-200 p-2 text-shadow-700">{entry.metadata}</pre>
+                      {/if}
+                    </details>
+                  {/each}
+                </div>
+              </details>
+            {/each}
           </div>
         {/if}
 

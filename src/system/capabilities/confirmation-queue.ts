@@ -84,6 +84,12 @@ export type ConfirmationResolutionStatus =
   | 'failed'
   | 'not_found';
 
+export function isResolvedConfirmationDecision(
+  status: ConfirmationResolutionStatus,
+): status is 'approved' | 'denied' | 'modified' {
+  return status === 'approved' || status === 'denied' || status === 'modified';
+}
+
 export interface ConfirmationQueueEntry {
   id: string;
   method: string;

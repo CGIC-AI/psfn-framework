@@ -94,7 +94,10 @@ import type {
   ConfirmationQueueAdminApi,
 } from './admin-contract.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
-import type { ConfirmationQueueEntry } from '../../system/capabilities/confirmation-queue.js';
+import {
+  isResolvedConfirmationDecision,
+  type ConfirmationQueueEntry,
+} from '../../system/capabilities/confirmation-queue.js';
 import {
   projectPublicationProvenance,
   type PublicationProvenanceView,
@@ -118,8 +121,11 @@ import { privacyBreakGlassResourceSelectorDigest } from '../../shared/contracts/
 import { buildAdminPrivacyBreakGlassRoutes } from './routes/privacy-break-glass-routes.js';
 import type { AdminPrivacyBreakGlassService } from './services/privacy-break-glass-service.js';
 import { buildAdminJournalStatus } from './services/journal-status-service.js';
+import { createComponentLogger } from '../../shared/logger.js';
 
 export type { AdminApiRoute, AuthorizedAdminApiRoute } from './routes/types.js';
+
+const log = createComponentLogger('AdminApiRoutes');
 
 const ADMIN_MODELS_API_PATH = '/api/admin/models';
 const ADMIN_MODELS_REFRESH_API_PATH = '/api/admin/models/refresh';
@@ -1342,7 +1348,7 @@ export function buildAdminApiRoutes(options: {
                 context,
               );
               sendJson(res, 200, {
-                ok: result.status === 'approved' || result.status === 'modified',
+                ok: isResolvedConfirmationDecision(result.status),
                 message: result.message,
                 status: result.status,
                 executed: result.executed,
@@ -1368,13 +1374,23 @@ export function buildAdminApiRoutes(options: {
       method: 'GET',
       match: exactPath('/api/admin/values/status'),
       handle: (_req, res) => {
-        sendJson(res, 200, buildAdminJournalStatus({
-          valuesJournal,
-          reflectionMetacognitionJournal,
-          reflectionDailyJournal,
-          reflectionJournal,
-          scheduler,
-        }), { 'Cache-Control': 'no-store' });
+        try {
+          sendJson(res, 200, buildAdminJournalStatus({
+            valuesJournal,
+            reflectionMetacognitionJournal,
+            reflectionDailyJournal,
+            reflectionJournal,
+            scheduler,
+          }), { 'Cache-Control': 'no-store' });
+        } catch (error) {
+          log.error('Companion journal status read failed', {
+            error: toSanitizedMessage(error, 'unknown error'),
+          });
+          sendJson(res, 503, {
+            error: 'Companion journal status unavailable',
+            code: 'journal_status_unavailable',
+          }, { 'Cache-Control': 'no-store' });
+        }
       },
     },
     {

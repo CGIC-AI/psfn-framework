@@ -25,7 +25,7 @@ function listen(server: Server): Promise<number> {
 function request(
   port: number,
   path: string,
-  options: { method?: string; session?: string; origin?: string } = {},
+  options: { method?: string; session?: string; origin?: string; accept?: string } = {},
 ): Promise<{ status: number; headers: IncomingHttpHeaders; body: string }> {
   return new Promise((resolve, reject) => {
     const outgoing = httpRequest({
@@ -41,6 +41,7 @@ function request(
         'x-forwarded-for': '198.51.100.9',
         ...(options.session ? { cookie: `__Host-psfn_session=${options.session}` } : {}),
         ...(options.origin ? { origin: options.origin } : {}),
+        ...(options.accept ? { accept: options.accept } : {}),
       },
     }, (response) => {
       const chunks: Buffer[] = [];
@@ -175,26 +176,25 @@ describe('unified-origin fleet portal routing', () => {
     expect((await request(harness.port, '/?unexpected=true')).status).toBe(404);
     expect((await request(harness.port, '/', { method: 'POST' })).status).toBe(404);
 
-    const fleet = await request(harness.port, '/fleet');
-    expect(fleet.status).toBe(200);
-    expect(fleet.headers.location).toBeUndefined();
+    const fleet = await request(harness.port, '/fleet', { accept: 'text/html' });
+    expect(fleet.status).toBe(302);
+    expect(fleet.headers.location).toBe('/v1/fleet-auth/login?return_to=%2Ffleet');
     expect(fleet.headers['cache-control']).toBe('no-store');
-    expect(fleet.headers['content-security-policy']).toContain("default-src 'none'");
-    expect(fleet.body).toContain('PSFN');
-    expect(fleet.body).toContain('Login with Discord');
-    expect(fleet.body).toContain('href="/v1/fleet-auth/login?return_to=%2Ffleet"');
-    expect(fleet.body).not.toMatch(/Emergency administrator login|companion|version/iu);
+    expect(fleet.body).toBe('');
     expect(harness.resolveProjection).not.toHaveBeenCalled();
 
     const login = await request(harness.port, '/fleet/login');
     expect(login.status).toBe(200);
-    expect(login.body).toBe(fleet.body);
+    expect(login.body).toContain('PSFN');
+    expect(login.body).toContain('Login with Discord');
+    expect(login.body).toContain('href="/v1/fleet-auth/login?return_to=%2Ffleet"');
+    expect(login.body).not.toMatch(/Emergency administrator login|companion|version/iu);
 
     const authenticatedLogin = await request(harness.port, '/fleet/login', {
       session: SESSION_TOKEN,
     });
     expect(authenticatedLogin.status).toBe(200);
-    expect(authenticatedLogin.body).toBe(fleet.body);
+    expect(authenticatedLogin.body).toBe(login.body);
     expect(harness.resolveProjection).not.toHaveBeenCalled();
 
     const api = await request(harness.port, '/v1/fleet/portal');
@@ -243,6 +243,27 @@ describe('unified-origin fleet portal routing', () => {
       sessionToken: SESSION_TOKEN,
       query: { range: 'today', timezone: 'UTC' },
     });
+  });
+
+  it('redirects an unauthenticated Garden page through login with its exact companion path', async () => {
+    const harness = await start();
+    const returnPath = `/companions/${COMPANION_ID}/garden/subsystem-health?tab=observer`;
+    const page = await request(harness.port, returnPath, { accept: 'text/html' });
+
+    expect(page.status).toBe(302);
+    expect(page.headers.location).toBe(
+      `/v1/fleet-auth/login?return_to=${encodeURIComponent(returnPath)}`,
+    );
+    expect(page.headers['cache-control']).toBe('no-store');
+    expect(page.body).toBe('');
+
+    const api = await request(
+      harness.port,
+      `/companions/${COMPANION_ID}/garden/api/admin/subsystem-health`,
+      { accept: 'application/json' },
+    );
+    expect(api.status).toBe(401);
+    expect(api.headers.location).toBeUndefined();
   });
 
   it('renders the break-glass entry only for an explicit login registration', async () => {

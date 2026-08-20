@@ -319,4 +319,21 @@ describe('admin api client errors', () => {
     expect(error.statusText).toBe('Unauthorized');
     expect(error.body).toBeUndefined();
   });
+
+  it('returns an expired fleet session to the exact companion page through SSO login', async () => {
+    const pathname = `/companions/${COMPANION_A}/garden/subsystem-health`;
+    const windowRef = { location: { href: '', pathname, search: '?tab=observer' } };
+    vi.stubGlobal('window', windowRef);
+    mockFetch(new Response(JSON.stringify({ error: 'session expired' }), {
+      status: 401,
+      statusText: 'Unauthorized',
+      headers: { 'content-type': 'application/json' },
+    }));
+
+    await expectApiError(apiGet('/api/admin/subsystem-health'));
+
+    expect(windowRef.location.href).toBe(
+      `/v1/fleet-auth/login?return_to=${encodeURIComponent(`${pathname}?tab=observer`)}`,
+    );
+  });
 });

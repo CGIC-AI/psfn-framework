@@ -74,6 +74,8 @@ import { Scheduler } from '../../core/scheduler/scheduler.js';
 import { ShardManager } from '../../faculties/shards/manager.js';
 import { saveModelsConfig } from '../../system/config/models-config.js';
 import { resetRuntimeTrustPolicy } from '../../system/trust/runtime-policy.js';
+import { ValuesJournalStore } from '../../faculties/values/store.js';
+import { resolveValuesJournalPath } from '../../persistence/layout.js';
 import type { CharacterCardV2 } from '../../core/identity/types.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { LLMProviderPort } from '../../core/agent/contracts.js';
@@ -456,6 +458,17 @@ async function buildAgentFixture(input: {
     characterCardPath: input.characterCardPath,
   });
   writeModelsFixture(input.companionDataDir, config.defaultContextWindow);
+  const journal = new ValuesJournalStore(resolveValuesJournalPath(input.companionDataDir));
+  const journalEntryCount = input.companionId === COMPANION_A ? 1 : 2;
+  for (let index = 0; index < journalEntryCount; index += 1) {
+    journal.append({
+      templateId: 'garden-route-certification',
+      templateName: 'Garden route certification',
+      prompt: 'Verify exact companion journal ownership.',
+      reflection: `private-${input.companionId}-${index}`,
+      createdAt: `2026-08-20T12:00:0${index}.000Z`,
+    });
+  }
 
   const eventBus = new EventBus();
   const memoryStore = new InMemoryMemoryStore().asPort();
@@ -946,6 +959,39 @@ describe('fleet Garden cutover certification: assembled production composition',
     expect(bare.body).not.toContain('backgroundMaintenance');
   });
 
+  it('serves live subsystem, observer, and journal status from the exact selected companion', async () => {
+    const endpoints = [
+      '/api/admin/subsystem-health',
+      '/api/admin/evals/observer-sidecar/health',
+      '/api/admin/values/status',
+    ] as const;
+    const read = (companionId: string, session: string, endpoint: string) => edgeRequest(
+      fixture.edgePort,
+      'GET',
+      `/companions/${companionId}/garden${endpoint}`,
+      session,
+    );
+    const [subsystemA, observerA, journalA, subsystemB, observerB, journalB] = await Promise.all([
+      ...endpoints.map(endpoint => read(COMPANION_A, SESSION_A, endpoint)),
+      ...endpoints.map(endpoint => read(COMPANION_B, SESSION_B, endpoint)),
+    ]);
+
+    for (const response of [subsystemA, observerA, journalA, subsystemB, observerB, journalB]) {
+      expect(response.status).toBe(200);
+    }
+    expect(subsystemA.headers['cache-control']).toBe('private, no-cache');
+    expect(subsystemB.headers['cache-control']).toBe('private, no-cache');
+    for (const response of [observerA, journalA, observerB, journalB]) {
+      expect(response.headers['cache-control']).toBe('no-store');
+    }
+    expect(JSON.parse(observerA.body)).toHaveProperty('status');
+    expect(JSON.parse(observerB.body)).toHaveProperty('status');
+    expect(JSON.parse(journalA.body).streams.values.count).toBe(1);
+    expect(JSON.parse(journalB.body).streams.values.count).toBe(2);
+    expect(journalA.body).not.toContain(`private-${COMPANION_A}`);
+    expect(journalB.body).not.toContain(`private-${COMPANION_B}`);
+  });
+
   it('mutates the canonical owner file of exactly the selected companion', async () => {
     const initialA = await readScheduler(COMPANION_A, SESSION_A);
     const initialB = await readScheduler(COMPANION_B, SESSION_B);
@@ -1195,6 +1241,20 @@ describe('fleet Garden cutover certification: assembled production composition',
     const afterCutover = await edgeRequest(newEdgePort, 'GET', sameUrl, SESSION_A);
     expect(afterCutover.status).toBe(200);
     expect(JSON.parse(afterCutover.body).backgroundMaintenance.intervalMs).toBe(111_000);
+
+    for (const endpoint of [
+      '/api/admin/subsystem-health',
+      '/api/admin/evals/observer-sidecar/health',
+      '/api/admin/values/status',
+    ]) {
+      const restored = await edgeRequest(
+        newEdgePort,
+        'GET',
+        `/companions/${COMPANION_A}/garden${endpoint}`,
+        SESSION_A,
+      );
+      expect(restored.status).toBe(200);
+    }
 
     // Topology swap moved no owner data and rewrote no owner files.
     expect(readFileSync(ownerFile, 'utf-8')).toBe(ownerBytesBefore);

@@ -6,6 +6,7 @@ import {
   getCompanionCacheScope,
   onCompanionScopeChange,
   parseCompanionGardenScope,
+  resolveGardenBrowserPathname,
   scopeGardenDataPath,
   scopeGardenPath,
 } from './companion-scope';
@@ -58,6 +59,32 @@ describe('companion Garden browser scope', () => {
     expect(companionGardenRoot(COMPANION_B))
       .toBe(`/companions/${COMPANION_B}/garden`);
     expect(getCompanionCacheScope(pathname)).toBe(COMPANION_A);
+  });
+
+  it('restores the exact browser companion scope when SvelteKit strips the mounted base', () => {
+    const browserPath = `/companions/${COMPANION_A}/garden/subsystem-health`;
+    const pathname = resolveGardenBrowserPathname('/subsystem-health', browserPath);
+
+    expect(pathname).toBe(browserPath);
+    expect(scopeGardenPath('/values', pathname))
+      .toBe(`/companions/${COMPANION_A}/garden/values`);
+    expect(scopeGardenDataPath('/api/admin/subsystem-health', pathname))
+      .toBe(`/companions/${COMPANION_A}/garden/api/admin/subsystem-health`);
+  });
+
+  it('never borrows browser companion authority for a mismatched or invalid route', () => {
+    expect(resolveGardenBrowserPathname(
+      '/values',
+      `/companions/${COMPANION_A}/garden/subsystem-health`,
+    )).toBe('/values');
+    expect(resolveGardenBrowserPathname(
+      '/subsystem-health',
+      '/companions/not-a-companion/garden/subsystem-health',
+    )).toBe('/subsystem-health');
+    expect(resolveGardenBrowserPathname(
+      `/companions/${COMPANION_B}/garden/subsystem-health`,
+      `/companions/${COMPANION_A}/garden/subsystem-health`,
+    )).toBe(`/companions/${COMPANION_B}/garden/subsystem-health`);
   });
 
   it('keeps rejecting malformed data pathnames at the fleet scoping boundary', () => {

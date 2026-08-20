@@ -96,6 +96,20 @@ export interface AnalysisWorkbenchTraceStepView {
 export interface AnalysisWorkbenchTraceView {
   timestamp: number;
   task: string;
+  /** Absent only on trace rows persisted before the explicit outcome contract. */
+  outcome?: 'completed' | 'limit_reached';
+  /** Absent only on trace rows persisted before the explicit outcome contract. */
+  continuation?: 'not_needed' | 'restart_required';
+  /** Absent only on trace rows persisted before cost projection was recorded. */
+  sessionCostUsd?: number;
+  /** Absent only on trace rows persisted before limit-policy projection was recorded. */
+  limitPolicy?: {
+    maxIterations: number;
+    maxTokens: number | null;
+    maxWallTimeMs: number | null;
+    maxSubQueries: number | null;
+    maxToolCalls: number | null;
+  };
   iterations: number;
   totalTokens: number;
   durationMs: number;

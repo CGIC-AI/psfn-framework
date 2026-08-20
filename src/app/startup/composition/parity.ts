@@ -169,19 +169,32 @@ export function buildReplConfig(config: SubstrateConfig): REPLConfig {
   }
   if (config.analysisWorkbenchMaxSubQueries !== undefined) replConfig.budget.maxSubQueries = config.analysisWorkbenchMaxSubQueries;
   if (config.analysisWorkbenchMaxIterations !== undefined) {
-    const maxIterations = config.analysisWorkbenchMaxIterations;
-    replConfig.budget.maxIterations = maxIterations;
-    // Lift every tier ceiling so the loop's Math.min(base, tier.maxIterations)
-    // clamp honors the operator's explicit value. Copy per tier: DEFAULT_REPL_CONFIG
-    // shares its tierBudgets object, so in-place mutation would leak globally.
-    const liftTierCeiling = (tier: TierAnalysisWorkbenchBudget): TierAnalysisWorkbenchBudget => ({
+    replConfig.budget.maxIterations = config.analysisWorkbenchMaxIterations;
+  }
+  if (
+    config.analysisWorkbenchMaxIterations !== undefined
+    || config.analysisWorkbenchMaxWallTimeMs !== undefined
+    || config.analysisWorkbenchMaxSubQueries !== undefined
+  ) {
+    // Owner-set limits are the real loop ceilings. Lift every matching tier
+    // clamp so production execution does not silently truncate below the
+    // settings contract. Copy per tier to avoid mutating the shared defaults.
+    const liftTierCeilings = (tier: TierAnalysisWorkbenchBudget): TierAnalysisWorkbenchBudget => ({
       ...tier,
-      maxIterations: Math.max(tier.maxIterations, maxIterations),
+      maxIterations: config.analysisWorkbenchMaxIterations === undefined
+        ? tier.maxIterations
+        : Math.max(tier.maxIterations, config.analysisWorkbenchMaxIterations),
+      maxWallTimeMs: config.analysisWorkbenchMaxWallTimeMs === undefined
+        ? tier.maxWallTimeMs
+        : Math.max(tier.maxWallTimeMs, config.analysisWorkbenchMaxWallTimeMs),
+      maxSubQueries: config.analysisWorkbenchMaxSubQueries === undefined
+        ? tier.maxSubQueries
+        : Math.max(tier.maxSubQueries, config.analysisWorkbenchMaxSubQueries),
     });
     replConfig.tierBudgets = {
-      nursery: liftTierCeiling(replConfig.tierBudgets.nursery),
-      apprentice: liftTierCeiling(replConfig.tierBudgets.apprentice),
-      autonomous: liftTierCeiling(replConfig.tierBudgets.autonomous),
+      nursery: liftTierCeilings(replConfig.tierBudgets.nursery),
+      apprentice: liftTierCeilings(replConfig.tierBudgets.apprentice),
+      autonomous: liftTierCeilings(replConfig.tierBudgets.autonomous),
     };
   }
   if (config.analysisWorkbenchExecutionTimeoutMs !== undefined) replConfig.executionTimeoutMs = config.analysisWorkbenchExecutionTimeoutMs;

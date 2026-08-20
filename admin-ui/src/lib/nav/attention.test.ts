@@ -6,6 +6,7 @@ vi.mock('$lib/api/client', () => ({ apiGet: (path: string) => apiGet(path) }));
 import {
   ATTENTION_SOURCES,
   mergeAttentionPollResults,
+  shouldResetAttentionCounts,
   updateAttentionCountsIfChanged,
 } from './attention';
 
@@ -93,5 +94,16 @@ describe('attention count reconciliation', () => {
       '/confirmations': 3,
       '/cognitive-security/approvals': 4,
     });
+  });
+
+  it('retains verified counts across inner-route navigation for the same companion', () => {
+    expect(shouldResetAttentionCounts('companion-a', 'companion-a')).toBe(false);
+  });
+
+  it('clears counts only after an established companion or auth scope changes', () => {
+    expect(shouldResetAttentionCounts(undefined, 'companion-a')).toBe(false);
+    expect(shouldResetAttentionCounts('companion-a', 'companion-b')).toBe(true);
+    expect(shouldResetAttentionCounts('companion-a', null)).toBe(true);
+    expect(shouldResetAttentionCounts(null, 'companion-a')).toBe(true);
   });
 });

@@ -6,6 +6,7 @@ import type { BeadsActionResult } from '../../gateway/protocol.js';
 import type { BeadsOperations } from './ops.js';
 import { textResult, textResultWithError } from '../../../core/tools/results.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
+import { isRecord } from '../../../shared/utils/types.js';
 import { ALL_BEADS_ACTIONS, type BeadsAction } from './enablement.js';
 
 type BeadsActionName =
@@ -49,15 +50,62 @@ export interface BeadsToolParams {
   actor?: string;
 }
 
+const REDACTED_TRACKER_ACTOR = '[redacted tracker actor]';
+
+function isEmailShapedTrackerActor(value: string): boolean {
+  const trimmed = value.trim();
+  const separator = trimmed.indexOf('@');
+  if (separator <= 0 || separator !== trimmed.lastIndexOf('@')) return false;
+  const local = trimmed.slice(0, separator);
+  const domain = trimmed.slice(separator + 1);
+  const finalDomainSeparator = domain.lastIndexOf('.');
+  if (finalDomainSeparator <= 0 || finalDomainSeparator === domain.length - 1) return false;
+  const suffix = domain.slice(finalDomainSeparator + 1);
+  return /^[A-Za-z0-9._%+-]+$/u.test(local)
+    && /^[A-Za-z0-9.-]+$/u.test(domain)
+    && /^[A-Za-z]{2,24}$/u.test(suffix);
+}
+
+function projectTrackerActorsForCompanion(
+  value: unknown,
+  ancestors: WeakSet<object>,
+): unknown {
+  if (Array.isArray(value)) {
+    if (ancestors.has(value)) throw new Error('Beads result payload must be acyclic');
+    ancestors.add(value);
+    const projected = value.map(entry => projectTrackerActorsForCompanion(entry, ancestors));
+    ancestors.delete(value);
+    return projected;
+  }
+  if (!isRecord(value)) return value;
+  if (ancestors.has(value)) throw new Error('Beads result payload must be acyclic');
+  ancestors.add(value);
+  const projected: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (key === 'metadata') {
+      projected[key] = entry;
+    } else if ((key === 'owner' || key === 'created_by' || key === 'assignee')
+      && typeof entry === 'string'
+      && isEmailShapedTrackerActor(entry)) {
+      projected[key] = REDACTED_TRACKER_ACTOR;
+    } else {
+      projected[key] = projectTrackerActorsForCompanion(entry, ancestors);
+    }
+  }
+  ancestors.delete(value);
+  return projected;
+}
+
 function formatActionResult(result: BeadsActionResult): string {
-  return JSON.stringify({
+  const companionProjection = projectTrackerActorsForCompanion({
     actor: result.actor,
     action: result.action,
     target: result.target,
     result: result.result,
     payload: result.payload,
     ...(result.sync ? { sync: result.sync } : {}),
-  }, null, 2);
+  }, new WeakSet());
+  return JSON.stringify(companionProjection, null, 2);
 }
 
 function normalizeBeadsAction(params: BeadsToolParams, actionHelp: string): BeadsAction {

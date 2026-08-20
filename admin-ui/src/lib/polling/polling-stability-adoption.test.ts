@@ -12,6 +12,8 @@ describe('Garden polling stability adoption', () => {
     expect(layout).not.toContain('window.setInterval(');
     expect(layout).not.toContain('{#key activeCompanionId');
     expect(layout).toContain('{@render children()}');
+    expect(layout).toContain('shouldResetAttentionCounts');
+    expect(layout).toContain('clearAttentionCounts');
   });
 
   it.each([

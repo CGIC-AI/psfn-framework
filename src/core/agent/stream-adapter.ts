@@ -67,6 +67,7 @@ import {
 } from '../../primitives/llm/client-response-helpers.js';
 import {
   assertExplicitToolContractSatisfied,
+  ExplicitToolContractError,
   isMissingRequiredToolCallError,
   resolveExplicitToolContract,
 } from '../../primitives/llm/explicit-tool-request.js';
@@ -380,6 +381,12 @@ function executeStreamCandidate(params: ExecuteStreamCandidateParams): AsyncGene
                 corruptEmptyCalls.map(call => call.name),
               );
             }
+            if (corruptEmptyCalls.length > 0 && explicitToolContract) {
+              throw new ExplicitToolContractError(
+                `Provider returned empty arguments for required tool call(s): ${corruptEmptyCalls.map(call => call.name).join(', ')}`,
+                'corrupt_empty_arguments',
+              );
+            }
             if (!committed) {
               committed = true;
               for (const bufferedEvent of bufferedEvents) {
@@ -435,7 +442,7 @@ function executeStreamCandidate(params: ExecuteStreamCandidateParams): AsyncGene
         }
 
         if (isMissingRequiredToolCallError(err)) {
-          throw new NonRecoverableFallbackError(err);
+          throw err;
         }
 
         const canRetry = retryAttempt < maxRetries

@@ -1129,7 +1129,7 @@ describe('createSubstrateStreamFn', () => {
     expect(JSON.stringify(events)).not.toContain('notify-invalid');
   });
 
-  it('falls back before dispatch when a provider changes exact requested arguments', async () => {
+  it('uses validated exact requested arguments when the provider changes its argument copy', async () => {
     const config = makeChatFallbackConfig({
       retryMaxAttempts: 0,
       retryBaseDelayMs: 0,
@@ -1171,9 +1171,10 @@ describe('createSubstrateStreamFn', () => {
     }), {});
     const events = await collectStreamEvents(stream as AsyncIterable<unknown>);
 
-    expect(streamAdapterMocks.transportStream).toHaveBeenCalledTimes(2);
-    expect(JSON.stringify(events.at(-1))).toContain('repo-exact');
-    expect(JSON.stringify(events)).not.toContain('repo-drifted');
+    expect(streamAdapterMocks.transportStream).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(events.at(-1))).toContain('repo-drifted');
+    expect(JSON.stringify(events.at(-1))).toContain('"action":"branch"');
+    expect(JSON.stringify(events.at(-1))).not.toContain('"action":"inspect"');
   });
 
   it('leads chat with the companion-selected slot and transports that slot to the gateway', async () => {

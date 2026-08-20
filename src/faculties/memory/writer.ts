@@ -83,6 +83,7 @@ import {
   shouldConsiderDuplicateForScope,
   validateEmbeddingDimensions,
 } from './writer/write-normalization.js';
+import { assertCompanionMemoryProvenance } from './companion-provenance.js';
 
 const log = createComponentLogger('MemoryWriter');
 const IMPORT_BATCH_EMBED_CHUNK_SIZE = 200;
@@ -189,6 +190,8 @@ export interface MemoryWriterOptions {
   maintenanceNow?: MemoryMaintenanceSchedulerOptions['now'];
   onMaintenanceError?: MemoryMaintenanceSchedulerOptions['onError'];
   memoryRetrievalPolicy?: MemoryRetrievalPolicy | (() => MemoryRetrievalPolicy | undefined);
+  /** Exact runtime identity used to reject foreign companion-channel provenance. */
+  companionId?: string;
 }
 
 export type MemoryWritePolicyReason =
@@ -274,6 +277,7 @@ export class MemoryWriter {
     | MemoryRetrievalPolicy
     | (() => MemoryRetrievalPolicy | undefined)
     | undefined;
+  private readonly companionId: string | undefined;
   /**
    * Intake sink gate provider (htm9.3), late-bound by composition (the gate
    * is constructed from intake-policy.json after stores exist). Null means
@@ -288,6 +292,7 @@ export class MemoryWriter {
     private embeddingService: EmbeddingProviderPort,
     options: MemoryWriterOptions = {},
   ) {
+    this.companionId = options.companionId?.trim() || undefined;
     this.memoryRetrievalPolicy = options.memoryRetrievalPolicy;
     this.maintenanceScheduler = options.maintenanceScheduler === undefined
       ? new MemoryMaintenanceScheduler(memoryStore, {
@@ -421,6 +426,13 @@ export class MemoryWriter {
     }
   }
 
+  private assertCompanionProvenance(
+    opts: Pick<MemoryWriteOptions, 'sourceRef' | 'provenance'>
+      | Pick<MemoryPatchOptions, 'sourceRef' | 'provenance'>,
+  ): void {
+    assertCompanionMemoryProvenance(opts, this.companionId);
+  }
+
   /**
    * Write a single memory with dedup/contradiction handling.
    *
@@ -431,6 +443,7 @@ export class MemoryWriter {
    */
   async write(opts: MemoryWriteOptions): Promise<WriteResult> {
     this.assertTestingSessionExcluded(opts);
+    this.assertCompanionProvenance(opts);
     this.assertCogSecCandidacy(opts);
     const embedding = await this.embeddingService.embed(
       opts.text,
@@ -444,6 +457,7 @@ export class MemoryWriter {
     embedding: Float32Array,
   ): Promise<WriteResult> {
     this.assertTestingSessionExcluded(opts);
+    this.assertCompanionProvenance(opts);
     this.assertCogSecCandidacy(opts);
     this.validateEmbedding(embedding, 'write');
 
@@ -783,6 +797,7 @@ export class MemoryWriter {
    */
   async upsert(opts: MemoryWriteOptions): Promise<WriteResult> {
     this.assertTestingSessionExcluded(opts);
+    this.assertCompanionProvenance(opts);
     const {
       text,
       type,
@@ -967,6 +982,7 @@ export class MemoryWriter {
 
   async patchMemory(opts: MemoryPatchOptions): Promise<MemoryPatchResult | null> {
     this.assertTestingSessionExcluded(opts);
+    this.assertCompanionProvenance(opts);
     const memoryId = opts.memoryId.trim();
     if (!memoryId) {
       throw new Error('memoryId is required');
@@ -1149,6 +1165,7 @@ export class MemoryWriter {
 
   async patch(opts: MemoryPatchOptions): Promise<MemoryCorrectionResult | null> {
     this.assertTestingSessionExcluded(opts);
+    this.assertCompanionProvenance(opts);
     const memoryId = opts.memoryId.trim();
     if (!memoryId) {
       throw new Error('memoryId is required');
@@ -1374,6 +1391,7 @@ export class MemoryWriter {
     const acceptedRecords: MemoryWriteOptions[] = [];
     for (const record of records) {
       this.assertTestingSessionExcluded(record);
+      this.assertCompanionProvenance(record);
       try {
         this.assertCogSecCandidacy(record, { logRejection: false });
         acceptedRecords.push(record);

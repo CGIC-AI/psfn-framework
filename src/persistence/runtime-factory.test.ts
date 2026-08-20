@@ -308,6 +308,49 @@ describe('createAgentPersistenceRuntime', () => {
     expect(runtimeFactoryMocks.connectPostgresReflectionMirror).not.toHaveBeenCalled();
   });
 
+  it('rejects a sibling tenant schema before opening any persistence store', async () => {
+    await expect(createAgentPersistenceRuntime({
+      config: {
+        databasePath: '/tmp/ignored.db',
+        persistenceBackend: 'postgres',
+        postgresDatabaseUrl: 'postgres://postgres:secret@localhost:5432/psfn',
+        postgresSchema: 'companion_y',
+        postgresRole: 'companion_y_runtime',
+        multiCompanion: true,
+        companionId: 'companion-x',
+        automataPolicy: loadAutomataPolicySeedDefaults(),
+        companionFleet: {
+          companions: [
+            {
+              companionId: 'companion-x',
+              postgresSchema: 'companion_x',
+              postgresRole: 'companion_x_runtime',
+            },
+            {
+              companionId: 'companion-y',
+              postgresSchema: 'companion_y',
+              postgresRole: 'companion_y_runtime',
+            },
+          ],
+        } as never,
+      },
+      pathSnapshot: {
+        systemDataDir: '/tmp/system-data',
+        companionDataDir: '/tmp/companion-data',
+        workspacePath: '/tmp/workspace',
+        tempDir: '/tmp/tmp',
+        logsDir: '/tmp/logs',
+        backupRootDir: '/tmp/backups',
+      },
+      embeddingDims: 1536,
+    })).rejects.toThrow('does not match the exact companion tenant authority');
+
+    expect(runtimeFactoryMocks.createPostgresPool).not.toHaveBeenCalled();
+    expect(runtimeFactoryMocks.createPostgresMemoryStore).not.toHaveBeenCalled();
+    expect(runtimeFactoryMocks.createPostgresEpisodicStore).not.toHaveBeenCalled();
+    expect(runtimeFactoryMocks.connectPostgresBackgroundWorkStore).not.toHaveBeenCalled();
+  });
+
   it('selects postgres-backed memory, reflections, contacts, and intention stores through the factory', async () => {
     const runtime = await createAgentPersistenceRuntime({
       config: {
@@ -452,8 +495,16 @@ describe('createAgentPersistenceRuntime', () => {
           workspacesRoot: '/tmp/workspaces',
           sharedWorkspacePath: '/tmp/workspaces/shared',
           companions: [
-            { postgresSchema: 'companion_x' },
-            { postgresSchema: 'companion_y' },
+            {
+              companionId: 'companion-x',
+              postgresSchema: 'companion_x',
+              postgresRole: 'companion_x_runtime',
+            },
+            {
+              companionId: 'companion-y',
+              postgresSchema: 'companion_y',
+              postgresRole: 'companion_y_runtime',
+            },
           ],
         } as never,
       },

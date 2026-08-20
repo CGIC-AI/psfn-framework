@@ -270,9 +270,16 @@
                   {item.satellite.satelliteId}:{item.endpoint.endpointId}
                 </p>
               </div>
-              <span class="rounded-full bg-bark-100 px-3 py-1 text-xs font-semibold text-shadow-700">
-                {labelize(item.endpoint.auth.mode)}
-              </span>
+              <div class="flex flex-wrap justify-end gap-2">
+                {#if item.satellite.synthetic}
+                  <span class="rounded-full bg-gold-50 px-3 py-1 text-xs font-semibold text-gold-700">
+                    Test fixture
+                  </span>
+                {/if}
+                <span class="rounded-full bg-bark-100 px-3 py-1 text-xs font-semibold text-shadow-700">
+                  {labelize(item.endpoint.auth.mode)}
+                </span>
+              </div>
             </div>
 
             <dl class="mt-5 grid gap-3 text-sm md:grid-cols-2">
@@ -306,6 +313,14 @@
                 <dt class="text-xs uppercase tracking-[0.14em] text-shadow-500">Live State</dt>
                 <dd class="mt-1 text-shadow-700">{labelize(item.endpoint.live.status)}</dd>
               </div>
+              {#if item.satellite.synthetic}
+                <div>
+                  <dt class="text-xs uppercase tracking-[0.14em] text-shadow-500">Test provenance</dt>
+                  <dd class="mt-1 font-mono text-xs text-shadow-700">
+                    {item.satellite.testRunId} / {item.satellite.testManifestId}
+                  </dd>
+                </div>
+              {/if}
               {#if item.endpoint.hubDeviceEnrollment}
                 <div>
                   <dt class="text-xs uppercase tracking-[0.14em] text-shadow-500">Hub Device Enrollment</dt>

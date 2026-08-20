@@ -222,10 +222,13 @@ export function createProductionAutomataBusWorkerAccess(options: {
     isClassEligible: classId => options.registry.listClasses().some(candidate => (
       candidate.id === classId && candidate.busEligibility === 'eligible'
     )),
-    brief: async input => await options.runtime.query.createSpawnBriefing({
-      query: input.query ?? options.registry.getRun(input.scope.runId)?.taskSummary ?? input.scope.taskId,
-      visibility: visibility(input.scope),
-    }),
+    brief: async input => {
+      const { text, itemCount } = await options.runtime.query.createSpawnBriefing({
+        query: input.query ?? options.registry.getRun(input.scope.runId)?.taskSummary ?? input.scope.taskId,
+        visibility: visibility(input.scope),
+      });
+      return { text, itemCount };
+    },
     search: async input => await options.runtime.query.search({
       query: input.query,
       visibility: visibility(input.scope),

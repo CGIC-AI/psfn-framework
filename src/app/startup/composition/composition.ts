@@ -597,6 +597,8 @@ export interface MemoryRuntimeOptions {
   biographicalRebuild?: MemoryExtractorFormationOptions['biographicalRebuild'];
   /** Eligible extraction-only Bus access; foreground MemoryRetriever never receives it. */
   automataBusWorkerAccess?: AutomataBusWorkerAccess | null;
+  /** Authoritative lifecycle for extraction workers admitted to the Bus. */
+  automataRunRegistry?: AutomataRunRegistry | null;
 }
 
 export function wireMemoryRuntime(options: MemoryRuntimeOptions): MemoryExtractor {
@@ -642,6 +644,9 @@ export function wireMemoryRuntime(options: MemoryRuntimeOptions): MemoryExtracto
       : {}),
     ...(options.automataBusWorkerAccess
       ? { automataBusWorkerAccess: options.automataBusWorkerAccess }
+      : {}),
+    ...(options.automataRunRegistry
+      ? { automataRunRegistry: options.automataRunRegistry }
       : {}),
   };
   const memoryExtractor = options.config

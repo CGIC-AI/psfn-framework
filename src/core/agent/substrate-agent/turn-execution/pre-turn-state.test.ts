@@ -4,7 +4,24 @@ import type { TurnSessionContextSnapshot } from '../../../turns/snapshot.js';
 import {
   enforceAtomicBiographicalProjection,
   healStaleCapturedSessionWindow,
+  resolveObserverEvalPrivacyContext,
 } from './pre-turn-state.js';
+
+describe('observer sidecar privacy projection', () => {
+  it('uses the admitted conversation envelope when optional channel metadata is absent', () => {
+    expect(resolveObserverEvalPrivacyContext({
+      envelope: {
+        channelPrivacy: 'private',
+        audienceScope: 'one',
+        audienceKnowledge: 'all_known',
+        broadcast: false,
+      },
+    })).toEqual({
+      channelPrivacy: 'private',
+      sensitivity: 'confidential',
+    });
+  });
+});
 
 describe('atomic biographical projection', () => {
   it('preserves a prompt and its exact 1:1 CogSec contributions', () => {

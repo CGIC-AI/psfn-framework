@@ -1003,6 +1003,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
       : null,
     personaPreamble,
     automataBusWorkerAccess: automataBus?.workerAccess,
+    automataRunRegistry: options.automataRuntime?.registry,
   });
   const promptState = createPromptStatePort({
     layers: promptStore,

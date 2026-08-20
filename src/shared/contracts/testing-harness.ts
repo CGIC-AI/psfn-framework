@@ -8,6 +8,8 @@ export interface TestingHarnessRunProvenance {
 }
 
 export const TESTING_HARNESS_SESSION_CHANNEL_ID = 'api:testing-harness';
+export const TESTING_HARNESS_RUN_ID_HEADER = 'x-testing-harness-run-id';
+export const TESTING_HARNESS_MANIFEST_ID_HEADER = 'x-testing-harness-manifest-id';
 
 const PROVENANCE_KEYS: readonly string[] = ['schemaVersion', 'kind', 'runId', 'manifestId'];
 const CANONICAL_IDENTIFIER = /^[a-zA-Z0-9][a-zA-Z0-9._:-]*$/u;

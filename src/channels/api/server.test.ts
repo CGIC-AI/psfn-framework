@@ -804,8 +804,8 @@ describe('ApiServer', () => {
         }, {
           Authorization: 'Bearer dedicated-testing-harness-key',
           'X-Session-ID': sessionId,
-          'X-PSFN-Test-Run-ID': 'run-tool-call-matrix',
-          'X-PSFN-Test-Manifest-ID': 'manifest-tool-call-matrix',
+          'X-Testing-Harness-Run-ID': 'run-tool-call-matrix',
+          'X-Testing-Harness-Manifest-ID': 'manifest-tool-call-matrix',
         });
         expect(res.status).toBe(200);
       }
@@ -852,7 +852,7 @@ describe('ApiServer', () => {
         messages: [{ role: 'user', content: 'unattributed probe' }],
       }, {
         Authorization: 'Bearer dedicated-testing-harness-key',
-        'X-PSFN-Test-Run-ID': 'run-without-manifest',
+        'X-Testing-Harness-Run-ID': 'run-without-manifest',
       });
 
       expect(response.status).toBe(400);

@@ -62,7 +62,11 @@ import {
 } from './server/session.js';
 import type { IntakeEnvelopeSnapshot } from '../../shared/contracts/intake-envelope.js';
 import type { TestingHarnessRunProvenance } from '../../shared/contracts/testing-harness.js';
-import { normalizeTestingHarnessRunProvenance } from '../../shared/contracts/testing-harness.js';
+import {
+  normalizeTestingHarnessRunProvenance,
+  TESTING_HARNESS_MANIFEST_ID_HEADER,
+  TESTING_HARNESS_RUN_ID_HEADER,
+} from '../../shared/contracts/testing-harness.js';
 import { buildSessionMetadataWithTestingHarnessProvenance } from '../../core/session/testing-harness-provenance.js';
 import { screenChatMessageBody } from '../../core/cogsec/intake/chat-message-screening.js';
 import { buildApiHealthResponse } from './server-health.js';
@@ -1612,8 +1616,8 @@ export class AgentApiBackend {
         error: this.fail(499, 'request_cancelled', 'Request cancelled before turn started'),
       };
     }
-    const runId = this.readHeader(headers, 'x-psfn-test-run-id', 256);
-    const manifestId = this.readHeader(headers, 'x-psfn-test-manifest-id', 256);
+    const runId = this.readHeader(headers, TESTING_HARNESS_RUN_ID_HEADER, 256);
+    const manifestId = this.readHeader(headers, TESTING_HARNESS_MANIFEST_ID_HEADER, 256);
     let testingHarness: TestingHarnessRunProvenance | undefined;
     if (principal.scope === 'testing_harness') {
       if (!runId || !manifestId) {

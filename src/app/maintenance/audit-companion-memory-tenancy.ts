@@ -107,7 +107,7 @@ async function run(options: CliOptions): Promise<void> {
   }
 
   const pool = createPostgresPool(databaseUrl, {
-    applicationName: 'psfn-companion-memory-tenancy-audit',
+    applicationName: 'companion-memory-tenancy-audit',
     allowExitOnIdle: true,
     max: 1,
     readOnly: true,

@@ -77,11 +77,13 @@ import {
   type BearerCompanionRoutingConfig,
 } from './bearer-companion-selector.js';
 import { screenChatMessageBody } from '../../../core/cogsec/intake/chat-message-screening.js';
-import { normalizeTestingHarnessRunProvenance } from '../../../shared/contracts/testing-harness.js';
+import {
+  normalizeTestingHarnessRunProvenance,
+  TESTING_HARNESS_MANIFEST_ID_HEADER,
+  TESTING_HARNESS_RUN_ID_HEADER,
+} from '../../../shared/contracts/testing-harness.js';
 
 const IDENTITY_LINK_CHALLENGE_TTL_MS = 5 * 60_000;
-const TEST_RUN_ID_HEADER = 'x-psfn-test-run-id';
-const TEST_MANIFEST_ID_HEADER = 'x-psfn-test-manifest-id';
 
 const IDENTITY_CLAIM_HEADERS = {
   canonicalContactId: 'x-canonical-contact-id',
@@ -204,8 +206,8 @@ export class ApiChatCompletionsHandler {
     let parsed = await readChatCompletionRequest(req, res, this.logger);
     if (!parsed) return;
 
-    const runId = singleApiHeader(req.headers[TEST_RUN_ID_HEADER]);
-    const manifestId = singleApiHeader(req.headers[TEST_MANIFEST_ID_HEADER]);
+    const runId = singleApiHeader(req.headers[TESTING_HARNESS_RUN_ID_HEADER]);
+    const manifestId = singleApiHeader(req.headers[TESTING_HARNESS_MANIFEST_ID_HEADER]);
     if (principal.scope === 'testing_harness') {
       if (!runId || !manifestId) {
         sendApiError(
@@ -799,8 +801,8 @@ export class ApiChatCompletionsHandler {
       ? normalizeTestingHarnessRunProvenance({
           schemaVersion: 1,
           kind: 'testing_harness',
-          runId: singleApiHeader(req.headers[TEST_RUN_ID_HEADER]),
-          manifestId: singleApiHeader(req.headers[TEST_MANIFEST_ID_HEADER]),
+          runId: singleApiHeader(req.headers[TESTING_HARNESS_RUN_ID_HEADER]),
+          manifestId: singleApiHeader(req.headers[TESTING_HARNESS_MANIFEST_ID_HEADER]),
         })
       : undefined;
     const routingOverrides = parseTurnRoutingOverrides(request);

@@ -38,6 +38,7 @@ import {
   startPostgresTestHarness,
   type PostgresTestHarness,
 } from '../../test-support/postgres-test-harness.js';
+import { DEFAULT_INTENTION_FOLLOW_UP_SCHEDULER_CONFIG } from '../../system/config/scheduler-config/intention-follow-up.js';
 
 const INTEGRATION_TIMEOUT_MS = 120_000;
 const LOCAL_COMPANION_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
@@ -187,6 +188,9 @@ async function wireOutboundHandler(options: {
       postTurnActions,
       llmProvider,
       pendingFollowUpStore: options.pendingFollowUpStore,
+      intentionFollowUpHorizonMs:
+        DEFAULT_INTENTION_FOLLOW_UP_SCHEDULER_CONFIG.nearTermHorizonMs,
+      routeLongHorizonFollowUp: vi.fn(async () => 'scheduled:intention:test'),
       onIntentionFollowUpActivated: options.onIntentionFollowUpActivated,
       outreachOutbox: options.outreachOutbox,
       icpIntentionCandidateAdapter: options.adapter,

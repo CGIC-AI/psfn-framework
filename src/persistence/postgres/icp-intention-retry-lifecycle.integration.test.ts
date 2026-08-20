@@ -40,6 +40,7 @@ import {
   startPostgresTestHarness,
   type PostgresTestHarness,
 } from '../../test-support/postgres-test-harness.js';
+import { DEFAULT_INTENTION_FOLLOW_UP_SCHEDULER_CONFIG } from '../../system/config/scheduler-config/intention-follow-up.js';
 
 const INTEGRATION_TIMEOUT_MS = 120_000;
 const RETRY_COOLDOWN_MS = 5 * 60_000;
@@ -137,6 +138,9 @@ async function wireOutboundHandler(options: {
       postTurnActions,
       llmProvider,
       pendingFollowUpStore: options.pendingFollowUpStore,
+      intentionFollowUpHorizonMs:
+        DEFAULT_INTENTION_FOLLOW_UP_SCHEDULER_CONFIG.nearTermHorizonMs,
+      routeLongHorizonFollowUp: vi.fn(async () => 'scheduled:intention:test'),
       onIntentionFollowUpActivated: options.onIntentionFollowUpActivated,
       onIntentionFollowUpDampened: options.onIntentionFollowUpDampened,
       outreachOutbox: createFileOutreachOutboxStore(
@@ -192,6 +196,9 @@ async function wireOutboundQueue(options: {
       postTurnActions,
       llmProvider: { stream: vi.fn(), complete: vi.fn() },
       pendingFollowUpStore: options.pendingFollowUpStore,
+      intentionFollowUpHorizonMs:
+        DEFAULT_INTENTION_FOLLOW_UP_SCHEDULER_CONFIG.nearTermHorizonMs,
+      routeLongHorizonFollowUp: vi.fn(async () => 'scheduled:intention:test'),
       onIntentionFollowUpActivated: options.onIntentionFollowUpActivated,
       onIntentionFollowUpDampened: options.onIntentionFollowUpDampened,
       outreachOutbox: createFileOutreachOutboxStore(

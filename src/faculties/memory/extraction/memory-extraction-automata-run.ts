@@ -18,6 +18,11 @@ export interface BeginMemoryExtractionAutomataRunInput {
 export interface BeginMemoryExtractionAutomataRunResult {
   runId: string;
   execute: boolean;
+  ownsLifecycle: boolean;
+}
+
+function isBackgroundWorkOwnedRun(run: AutomataRunRecord): boolean {
+  return run.workerId.startsWith('background-work:');
 }
 
 function assertExactMemoryExtractionRun(
@@ -26,10 +31,9 @@ function assertExactMemoryExtractionRun(
 ): void {
   if (
     run.automatonClass !== 'memory.extraction'
-    || run.workerId !== MEMORY_EXTRACTION_WORKER_ID
+    || (run.workerId !== MEMORY_EXTRACTION_WORKER_ID && !isBackgroundWorkOwnedRun(run))
     || run.taskId !== input.taskId
-    || run.sessionIds.length !== 1
-    || run.sessionIds[0] !== input.sessionId
+    || !run.sessionIds.includes(input.sessionId)
   ) {
     throw new Error('Memory extraction Automata run lineage does not match the authoritative request');
   }
@@ -53,9 +57,10 @@ export async function beginMemoryExtractionAutomataRun(
     });
   }
   assertExactMemoryExtractionRun(run, input);
+  const ownsLifecycle = !isBackgroundWorkOwnedRun(run);
 
   if (run.status === 'completed') {
-    return { runId: run.runId, execute: false };
+    return { runId: run.runId, execute: false, ownsLifecycle };
   }
   if (run.status === 'failed' || run.status === 'cancelled') {
     throw new Error(`Memory extraction Automata run is a terminal ${run.status} run`);
@@ -67,7 +72,7 @@ export async function beginMemoryExtractionAutomataRun(
       ...(input.createdAtMs === undefined ? {} : { atMs: input.createdAtMs }),
     });
   }
-  return { runId: run.runId, execute: true };
+  return { runId: run.runId, execute: true, ownsLifecycle };
 }
 
 export async function completeMemoryExtractionAutomataRun(

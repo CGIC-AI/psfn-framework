@@ -86,6 +86,7 @@ describe('memory extraction Automata run lifecycle', () => {
     await expect(beginMemoryExtractionAutomataRun(runs, input)).resolves.toEqual({
       runId: input.runId,
       execute: true,
+      ownsLifecycle: true,
     });
     expect(runs.getRun(input.runId)).toMatchObject({
       automatonClass: 'memory.extraction',
@@ -96,6 +97,7 @@ describe('memory extraction Automata run lifecycle', () => {
     await expect(beginMemoryExtractionAutomataRun(runs, input)).resolves.toEqual({
       runId: input.runId,
       execute: true,
+      ownsLifecycle: true,
     });
 
     await completeMemoryExtractionAutomataRun(runs, input.runId, 200);
@@ -104,6 +106,7 @@ describe('memory extraction Automata run lifecycle', () => {
     await expect(beginMemoryExtractionAutomataRun(runs, input)).resolves.toEqual({
       runId: input.runId,
       execute: false,
+      ownsLifecycle: true,
     });
   });
 
@@ -127,5 +130,41 @@ describe('memory extraction Automata run lifecycle', () => {
     await expect(beginMemoryExtractionAutomataRun(runs, input)).rejects.toThrow(
       'terminal failed run',
     );
+  });
+
+  it('uses an exact running background-work run without taking over its lifecycle', async () => {
+    const runs = await registry();
+    await runs.register({
+      runId: 'request-1',
+      automatonClass: 'memory.extraction',
+      workerId: 'background-work:bgw_job-1',
+      taskId: 'room-1',
+      taskLabel: 'Memory extraction',
+      taskSummary: 'Extract durable memory from a canonical source turn',
+      sessionIds: ['room-1', 'channel-1'],
+      createdAtMs: 100,
+    });
+    await runs.transition('request-1', {
+      status: 'running',
+      reason: 'background_work_claimed',
+      atMs: 100,
+    });
+
+    await expect(beginMemoryExtractionAutomataRun(runs, {
+      runId: 'request-1',
+      taskId: 'room-1',
+      sessionId: 'room-1',
+      triggerReason: 'interval',
+      createdAtMs: 101,
+    })).resolves.toEqual({
+      runId: 'request-1',
+      execute: true,
+      ownsLifecycle: false,
+    });
+    expect(runs.getRun('request-1')).toMatchObject({
+      workerId: 'background-work:bgw_job-1',
+      status: 'running',
+      statusReason: 'background_work_claimed',
+    });
   });
 });

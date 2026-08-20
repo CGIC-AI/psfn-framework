@@ -680,7 +680,7 @@ async function main(): Promise<void> {
   // no path into prompts, appraisal, memory, scheduling, or world actions,
   // and stays fully inert unless the JSON owner file enables it with an
   // exact canonical partner binding.
-  const partnerAffectShadowPolicy = loadPartnerAffectShadowConfig(pathSnapshot.systemDataDir);
+  const partnerAffectShadowPolicy = loadPartnerAffectShadowConfig(pathSnapshot.companionDataDir);
   const partnerAffectShadowBridge = createPartnerAffectShadowIngestBridge({
     eventBus,
     policy: partnerAffectShadowPolicy,

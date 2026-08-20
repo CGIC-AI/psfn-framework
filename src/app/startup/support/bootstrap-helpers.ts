@@ -33,7 +33,10 @@ import {
   assertPersistenceCutoverReady,
   buildPersistenceCutoverOptionsFromConfig,
 } from '../../../persistence/cutover.js';
-import { validateObserverEvalSidecarStartupConfig } from '../../../system/config/observer-eval-sidecar-config.js';
+import {
+  bindCompanionObserverEvalSidecar,
+  validateObserverEvalSidecarStartupConfig,
+} from '../../../system/config/observer-eval-sidecar-config.js';
 import { resolveEffectiveRuntimeSettings } from '../../../system/config/settings-overlay.js';
 import { assertModelPurposeSelectionResolvable } from '../../../system/config/model-selection-config.js';
 import type { GatewaySystemDataWriterPort } from '../../../boundary/gateway/system-data-writer.js';
@@ -273,6 +276,7 @@ export function hydrateCanonicalStartupConfig(
     companionDataDir,
   );
   applySettings(config, effectiveRuntimeSettings);
+  bindCompanionObserverEvalSidecar(config);
   validateObserverEvalSidecarStartupConfig(config, pathSnapshot);
   if (secretAuthority === 'gateway') {
     assertSecuritySensitiveStartupConfig(config);

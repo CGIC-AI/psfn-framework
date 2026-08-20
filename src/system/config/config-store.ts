@@ -151,8 +151,8 @@ export interface OwnerFileConfigStoreOptions {
   dataDir: string;
   /**
    * Companion-owned config root (companionDataDir). Roots the per-companion
-   * owner files — capability-tier.json (bead dnll.2) and scheduler.json (bead
-   * dnll.3). When
+   * owner files, including capability tier, scheduler, charge, skills, and
+   * partner-affect shadow policy. When
    * omitted it resolves to {@link OwnerFileConfigStoreOptions.dataDir}, matching
    * the legacy shared-root layout where systemDataDir === companionDataDir. This
    * mirrors `resolveConfiguredCompanionDataDir` and is NOT a config fallback:
@@ -218,8 +218,8 @@ export function createOwnerFileConfigStore(
     saveTrustPolicy: (nextConfig) => saveTrustPolicyConfig(options.dataDir, nextConfig),
     loadIntakePolicy: () => loadIntakePolicyConfig(options.dataDir, loadOptions),
     saveIntakePolicy: (nextConfig) => saveIntakePolicyConfig(options.dataDir, nextConfig),
-    loadPartnerAffectShadow: () => loadPartnerAffectShadowConfig(options.dataDir, loadOptions),
-    savePartnerAffectShadow: (nextConfig) => savePartnerAffectShadowConfig(options.dataDir, nextConfig),
+    loadPartnerAffectShadow: () => loadPartnerAffectShadowConfig(companionDataDir, loadOptions),
+    savePartnerAffectShadow: (nextConfig) => savePartnerAffectShadowConfig(companionDataDir, nextConfig),
     loadMcpServers: () => loadMcpServersConfig(options.dataDir, loadOptions),
     saveMcpServers: (nextConfig) => saveMcpServersConfig(options.dataDir, nextConfig),
     loadFleetAuthOwnerFile: () => (

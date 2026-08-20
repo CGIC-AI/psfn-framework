@@ -5,6 +5,8 @@
 > the fail-closed observation guard, exact-partner binding, the
 > `partner-affect-shadow.json` owner file, Postgres shadow persistence, and
 > the Garden inspection surface. All outputs remain shadow-only.
+> The owner file is companion-owned and lives in each `companionDataDir`; the
+> system-data root is never a fallback for another companion's co-emotion policy.
 >
 > The rest of this document defines intended behavior. PSFN does not yet ship
 > the composite estimate, support-posture state machine, or affect-advisory

@@ -1,4 +1,5 @@
 import { apiPost } from '$lib/api/client';
+import { isAbortError } from '$lib/api/abort';
 import {
   createQueuePageCache,
   isAdminConfirmationsData,
@@ -30,14 +31,22 @@ export function loadConfirmationsLocalFirst(
  * Resolve (approve/deny/modify) a pending confirmation.
  * Endpoint: POST /api/admin/confirmations/resolve
  */
-export function resolveConfirmation(
+export async function resolveConfirmation(
   id: string,
   decision: ConfirmationDecision,
   modifiedParams?: Record<string, unknown>,
 ): Promise<AdminConfirmationResolveResult> {
-  return apiPost<AdminConfirmationResolveResult>('/api/admin/confirmations/resolve', {
+  const result = await apiPost<AdminConfirmationResolveResult>('/api/admin/confirmations/resolve', {
     id,
     decision,
     modifiedParams,
   });
+  try {
+    await confirmationQueueCache.remove();
+  } catch (error) {
+    // A scope transition removes the original companion's entry before the
+    // local-first guard aborts publication into the newly selected companion.
+    if (!isAbortError(error)) throw error;
+  }
+  return result;
 }

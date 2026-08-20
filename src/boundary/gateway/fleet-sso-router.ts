@@ -101,6 +101,7 @@ const MAX_PROXY_BODY_BYTES = 1_048_576;
 const MAX_CAPABILITY_HEADER_BYTES = 65_536;
 const FLEET_PATH = '/fleet';
 const FLEET_LOGIN_PATH = '/fleet/login';
+const FLEET_AUTH_LOGIN_PATH = '/v1/fleet-auth/login';
 const FLEET_GARDEN_CHAT_PATH = '/v1/chat/completions';
 const COMPANION_PREFIX = FLEET_SSO_COMPANION_ROUTE_PREFIX;
 const COMPANION_UI_PREFIX = '/companion-ui';
@@ -330,6 +331,21 @@ function sendJson(response: ServerResponse, status: number, value: unknown): voi
     'Content-Length': String(body.byteLength),
   });
   response.end(body);
+}
+
+function isHtmlNavigation(request: IncomingMessage): boolean {
+  if (request.method !== 'GET') return false;
+  const accept = singleHeader(request.headers.accept);
+  return accept?.split(',').some(value => value.trim().split(';', 1)[0] === 'text/html') ?? false;
+}
+
+function sendFleetLoginRedirect(response: ServerResponse, returnPath: string): void {
+  response.writeHead(302, {
+    'Cache-Control': 'no-store',
+    Location: `${FLEET_AUTH_LOGIN_PATH}?return_to=${encodeURIComponent(returnPath)}`,
+    'Referrer-Policy': 'no-referrer',
+  });
+  response.end();
 }
 
 function writeSocketError(socket: Duplex, status: 400 | 401 | 403 | 404 | 413 | 502 | 503): void {
@@ -739,11 +755,18 @@ export class GatewayFleetSsoRouter {
       }
       const sessionToken = readOpaqueSessionCookie(request);
       if (!sessionToken) {
-        if (request.method === 'GET' && (
+        if (isHtmlNavigation(request) && (
           rawPath === FLEET_PATH
           || rawPath === `${FLEET_PATH}/`
-          || companionUiRequest
         )) {
+          sendFleetLoginRedirect(response, request.url ?? FLEET_PATH);
+          return;
+        }
+        if (isHtmlNavigation(request) && parseGardenRoute(request.url ?? '/')) {
+          sendFleetLoginRedirect(response, request.url ?? '/');
+          return;
+        }
+        if (request.method === 'GET' && companionUiRequest) {
           this.loginLanding.send(response);
           return;
         }

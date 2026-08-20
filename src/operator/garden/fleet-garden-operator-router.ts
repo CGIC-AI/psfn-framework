@@ -5,6 +5,7 @@ import { createComponentLogger } from '../../shared/logger.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { createCompanionId } from '../../shared/routing/companion-id.js';
 import type { GatewayOperatorConfirmationClient } from '../../app/startup/support/gateway-operator-confirmation-client.js';
+import { isResolvedConfirmationDecision } from '../../system/capabilities/confirmation-queue.js';
 import { buildGardenCapabilityHeaders } from './garden-admission.js';
 import {
   CONFIRMATION_RESOLVE_PATH,
@@ -275,7 +276,7 @@ export class FleetGardenOperatorRouter {
       });
       if (result.status === 'not_found') return false;
       sendJson(res, 200, {
-        ok: result.status === 'approved' || result.status === 'modified',
+        ok: isResolvedConfirmationDecision(result.status),
         message: result.message,
         status: result.status,
         executed: result.executed,

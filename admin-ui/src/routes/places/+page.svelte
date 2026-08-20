@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { goto } from '$app/navigation';
+  import { page } from '$app/stores';
   import {
     getPlaces,
     rebindSatellite,
@@ -10,11 +11,24 @@
   } from '$lib/api/endpoints/places';
   import { pushToast } from '$lib/stores/toast.svelte';
   import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
+  import GardenTabBar, { type GardenTabItem } from '$lib/components/garden/GardenTabBar.svelte';
+  import { scopeGardenPath } from '$lib/fleet/companion-scope';
+  import {
+    canonicalPlacesPath,
+    PLACES_TABS,
+    resolvePlacesTab,
+  } from '$lib/nav/canonical-routes';
+  import RoomsPage from '../rooms/+page.svelte';
+  import SatellitesPage from '../satellites/+page.svelte';
+
+  const placesTabs: GardenTabItem[] = PLACES_TABS.map(tab => ({ ...tab }));
+  const activeTab = $derived(resolvePlacesTab($page.url.searchParams));
 
   let data = $state<AdminPlacesData | null>(null);
   let loading = $state(true);
   let refreshing = $state(false);
   let errorMessage = $state('');
+  let physicalLoadStarted = false;
 
   // Per-satellite pending re-bind selection ('' = unbind) and in-flight guard.
   let pendingBinding = $state<Record<string, string>>({});
@@ -127,7 +141,18 @@
       : 'bg-gold-50 text-gold-700';
   }
 
-  onMount(() => {
+  function selectPlacesTab(id: string): void {
+    const tab = PLACES_TABS.find(candidate => candidate.id === id)?.id;
+    if (!tab || tab === activeTab) return;
+    void goto(scopeGardenPath(canonicalPlacesPath(tab)), {
+      keepFocus: true,
+      noScroll: true,
+    });
+  }
+
+  $effect(() => {
+    if (activeTab !== 'physical' || physicalLoadStarted) return;
+    physicalLoadStarted = true;
     void loadData();
   });
 </script>
@@ -136,24 +161,38 @@
   <GardenPageHeader
     eyebrow="World Model"
     title="Places"
-    description="Sites, physical and virtual places, affordances, and authoritative satellite bindings."
+    description="Physical environment, virtual spaces, room rosters, and satellite presence in one world surface."
   >
     {#snippet actions()}
-      <button
-        onclick={refreshData}
-        disabled={refreshing}
-        class="garden-action min-h-11 rounded-lg border border-bark-300 px-4 py-2 text-sm font-medium text-shadow-700 transition-colors hover:bg-bark-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-400 disabled:cursor-not-allowed disabled:opacity-50"
-      >
-        {refreshing ? 'Refreshing...' : 'Refresh'}
-      </button>
+      {#if activeTab === 'physical'}
+        <button
+          onclick={refreshData}
+          disabled={refreshing}
+          class="garden-action min-h-11 rounded-lg border border-bark-300 px-4 py-2 text-sm font-medium text-shadow-700 transition-colors hover:bg-bark-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-400 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {refreshing ? 'Refreshing...' : 'Refresh physical environment'}
+        </button>
+      {/if}
     {/snippet}
   </GardenPageHeader>
 
-  {#if errorMessage}
+  <GardenTabBar
+    tabs={placesTabs}
+    activeId={activeTab}
+    onSelect={selectPlacesTab}
+    label="Places views"
+  />
+
+  {#if activeTab === 'virtual'}
+    <RoomsPage embedded />
+  {:else if activeTab === 'satellites'}
+    <SatellitesPage embedded />
+  {:else}
+    {#if errorMessage}
     <div class="garden-error card-garden border-l-4 border-l-wilt-400 p-4" role="alert">
       <p class="text-sm font-medium text-wilt-700">{errorMessage}</p>
     </div>
-  {/if}
+    {/if}
 
   <section class="garden-metric-grid grid gap-4 sm:grid-cols-2 lg:grid-cols-4" aria-label="Place registry summary">
     <div class="garden-metric card-garden p-5">
@@ -193,7 +232,7 @@
       {/each}
     </div>
   {:else if data}
-    {#each placesBySite as site}
+    {#each physicalBindingSites as site}
       <section class="garden-section space-y-4" aria-label={`Site ${site.displayName}`}>
         <div class="flex items-baseline gap-3 flex-wrap">
           <h2 class="text-lg font-serif font-semibold text-shadow-900">{site.displayName}</h2>
@@ -410,6 +449,7 @@
           {/each}
         </div>
       </section>
+    {/if}
     {/if}
   {/if}
 </div>

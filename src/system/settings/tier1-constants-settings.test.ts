@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { parseSettingsForm } from './form.js';
 import { applySettings, getRuntimeSettingsSnapshot } from './runtime.js';
+import { parseRuntimeSettingsOwnerPayload } from './schema.js';
 import type { SubstrateConfig } from '../config/runtime-config-contracts.js';
 
 // bead zet.6 — Tier 1 non-memory policy constants migrated to owner settings.
@@ -12,7 +13,7 @@ function parse(entries: Record<string, string>) {
 }
 
 const VALID = {
-  analysisWorkbenchMaxIterations: '40',
+  analysisWorkbenchMaxIterations: '60',
   analysisWorkbenchExecutionTimeoutMs: '8000',
   analysisWorkbenchOutputTruncation: '16384',
   voiceSessionTimeoutMs: '60000',
@@ -24,7 +25,7 @@ describe('Tier 1 non-memory settings — form validation (fail closed)', () => {
   it('accepts in-range values and parses them as integers', () => {
     const [settings, errors] = parse({ ...VALID });
     expect(errors).toEqual([]);
-    expect(settings.analysisWorkbenchMaxIterations).toBe(40);
+    expect(settings.analysisWorkbenchMaxIterations).toBe(60);
     expect(settings.analysisWorkbenchExecutionTimeoutMs).toBe(8000);
     expect(settings.analysisWorkbenchOutputTruncation).toBe(16384);
     expect(settings.voiceSessionTimeoutMs).toBe(60000);
@@ -34,7 +35,7 @@ describe('Tier 1 non-memory settings — form validation (fail closed)', () => {
 
   it.each([
     ['analysisWorkbenchMaxIterations', '0'],
-    ['analysisWorkbenchMaxIterations', '201'],
+    ['analysisWorkbenchMaxIterations', '61'],
     ['analysisWorkbenchMaxIterations', 'abc'],
     ['analysisWorkbenchExecutionTimeoutMs', '10'],
     ['analysisWorkbenchExecutionTimeoutMs', '9999999'],
@@ -50,6 +51,18 @@ describe('Tier 1 non-memory settings — form validation (fail closed)', () => {
 });
 
 describe('Tier 1 non-memory settings — owner-file → config → snapshot wiring', () => {
+  it('accepts 60 iterations in the canonical owner file and rejects unsafe or unknown values', () => {
+    expect(parseRuntimeSettingsOwnerPayload({
+      analysisWorkbenchMaxIterations: 60,
+    }).analysisWorkbenchMaxIterations).toBe(60);
+    expect(() => parseRuntimeSettingsOwnerPayload({
+      analysisWorkbenchMaxIterations: 61,
+    })).toThrow(/analysisWorkbenchMaxIterations.*1-60/);
+    expect(() => parseRuntimeSettingsOwnerPayload({
+      analysisWorkbenchUnknownLimit: 60,
+    })).toThrow(/unknown keys: analysisWorkbenchUnknownLimit/);
+  });
+
   it('threads operator values into SubstrateConfig and back out through the snapshot', () => {
     const [settings, errors] = parse({ ...VALID });
     expect(errors).toEqual([]);
@@ -57,7 +70,7 @@ describe('Tier 1 non-memory settings — owner-file → config → snapshot wiri
     const config = {} as SubstrateConfig;
     applySettings(config, settings);
 
-    expect(config.analysisWorkbenchMaxIterations).toBe(40);
+    expect(config.analysisWorkbenchMaxIterations).toBe(60);
     expect(config.analysisWorkbenchExecutionTimeoutMs).toBe(8000);
     expect(config.analysisWorkbenchOutputTruncation).toBe(16384);
     expect(config.voiceSessionTimeoutMs).toBe(60000);
@@ -65,7 +78,7 @@ describe('Tier 1 non-memory settings — owner-file → config → snapshot wiri
     expect(config.voiceMaxPendingFrames).toBe(16);
 
     const snapshot = getRuntimeSettingsSnapshot(config);
-    expect(snapshot.analysisWorkbenchMaxIterations).toBe(40);
+    expect(snapshot.analysisWorkbenchMaxIterations).toBe(60);
     expect(snapshot.analysisWorkbenchExecutionTimeoutMs).toBe(8000);
     expect(snapshot.analysisWorkbenchOutputTruncation).toBe(16384);
     expect(snapshot.voiceSessionTimeoutMs).toBe(60000);

@@ -541,6 +541,15 @@ async function emitTrace(eventBus: EventBus, timestamp: number, task: string): P
     timestamp,
     task,
     result: {
+      outcome: 'completed',
+      continuation: 'not_needed',
+      limitPolicy: {
+        maxIterations: 60,
+        maxTokens: 256_000,
+        maxWallTimeMs: 600_000,
+        maxSubQueries: 60,
+        maxToolCalls: 50,
+      },
       iterations: 1,
       totalInputTokens: 10,
       totalOutputTokens: 5,
@@ -549,7 +558,7 @@ async function emitTrace(eventBus: EventBus, timestamp: number, task: string): P
       budgetStop: null,
       subQueries: 0,
       toolCalls: 0,
-      sessionCostUsd: 0,
+      sessionCostUsd: 0.25,
       warnings: [],
       nestedAnalysis: {
         nestedAnalysisCallCount: 0,
@@ -586,6 +595,18 @@ describe('AdminDashboardDataService analysis-workbench trace persistence (vb11)'
 
     expect(store.rows.map((row) => row.task)).toEqual(['second', 'first']);
     expect(service.listAnalysisWorkbenchTraces().map((row) => row.task)).toEqual(['second', 'first']);
+    expect(service.listAnalysisWorkbenchTraces()[0]).toMatchObject({
+      outcome: 'completed',
+      continuation: 'not_needed',
+      sessionCostUsd: 0.25,
+      limitPolicy: {
+        maxIterations: 60,
+        maxTokens: 256_000,
+        maxWallTimeMs: 600_000,
+        maxSubQueries: 60,
+        maxToolCalls: 50,
+      },
+    });
   });
 
   it('rehydrates the ring from the durable store after a restart', async () => {

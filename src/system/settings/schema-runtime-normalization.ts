@@ -816,6 +816,15 @@ function normalizeBudgetAndThresholdSettings(
     deleteSetting(normalized, key);
   }
 
+  if ('analysisWorkbenchMaxIterations' in settings) {
+    normalized.analysisWorkbenchMaxIterations = expectIntegerInRange(
+      settings.analysisWorkbenchMaxIterations,
+      'analysisWorkbenchMaxIterations',
+      1,
+      60,
+    );
+  }
+
   normalizeIntegerRangeSetting(
     normalized,
     settings,

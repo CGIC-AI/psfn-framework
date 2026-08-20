@@ -709,6 +709,15 @@ export interface EventMap {
     timestamp: number;
     task: string;
     result: {
+      outcome: 'completed' | 'limit_reached';
+      continuation: 'not_needed' | 'restart_required';
+      limitPolicy: {
+        maxIterations: number;
+        maxTokens: number | null;
+        maxWallTimeMs: number | null;
+        maxSubQueries: number | null;
+        maxToolCalls: number | null;
+      };
       iterations: number;
       totalInputTokens: number;
       totalOutputTokens: number;

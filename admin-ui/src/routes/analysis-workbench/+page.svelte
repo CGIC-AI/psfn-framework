@@ -3,6 +3,10 @@
   import { apiGet } from '$lib/api/client';
   import BoundedList from '$lib/components/garden/BoundedList.svelte';
   import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
+  import {
+    projectAnalysisTraceOutcome,
+    type AnalysisTraceLimitPolicy,
+  } from './trace-view.js';
 
   interface TraceStep {
     iteration: number;
@@ -19,6 +23,10 @@
   interface Trace {
     timestamp: number;
     task: string;
+    outcome?: 'completed' | 'limit_reached';
+    continuation?: 'not_needed' | 'restart_required';
+    sessionCostUsd?: number;
+    limitPolicy?: AnalysisTraceLimitPolicy;
     iterations: number;
     totalTokens: number;
     durationMs: number;
@@ -36,6 +44,13 @@
     ? traces.reduce((sum, trace) => sum + trace.durationMs, 0) / traces.length
     : 0);
   let constrainedTraceCount = $derived(traces.filter((trace) => trace.truncated || trace.budgetStop).length);
+  let recordedCostUsd = $derived(traces.reduce(
+    (sum, trace) => sum + (trace.sessionCostUsd ?? 0),
+    0,
+  ));
+  let recordedCostCount = $derived(traces.filter(
+    (trace) => trace.sessionCostUsd !== undefined,
+  ).length);
 
   function formatTokens(value: number): string {
     if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(2)}M`;
@@ -73,7 +88,7 @@
   <GardenPageHeader
     eyebrow="Runtime & Tools · Analysis"
     title="Analysis Workbench"
-    description="Recent REPL traces for this process lifetime. Traces are in-memory and reset on restart."
+    description="Recent durable REPL traces with explicit completion, limiting policy, progress, and run cost."
     class="border-b border-bark-300 pb-4"
   >
     {#snippet actions()}
@@ -83,7 +98,7 @@
     {/snippet}
   </GardenPageHeader>
 
-  <section class="garden-metric-grid grid grid-cols-2 gap-3 lg:grid-cols-4" aria-label="Analysis trace summary">
+  <section class="garden-metric-grid grid grid-cols-2 gap-3 lg:grid-cols-5" aria-label="Analysis trace summary">
     <div class="garden-metric card-garden p-4">
       <p class="text-[0.65rem] font-semibold uppercase tracking-[0.15em] text-shadow-500">Traces</p>
       <p class="mt-2 font-serif text-2xl font-semibold text-shadow-900 tabular-nums">{traces.length}</p>
@@ -99,6 +114,12 @@
     <div class="garden-metric card-garden p-4">
       <p class="text-[0.65rem] font-semibold uppercase tracking-[0.15em] text-shadow-500">Constrained</p>
       <p class="mt-2 font-serif text-2xl font-semibold {constrainedTraceCount > 0 ? 'text-wilt-600' : 'text-moss-600'} tabular-nums">{constrainedTraceCount}</p>
+    </div>
+    <div class="garden-metric card-garden p-4">
+      <p class="text-[0.65rem] font-semibold uppercase tracking-[0.15em] text-shadow-500">Recorded cost</p>
+      <p class="mt-2 font-serif text-2xl font-semibold text-gold-700 tabular-nums">
+        {recordedCostCount > 0 ? `$${recordedCostUsd.toFixed(4)}` : 'unavailable'}
+      </p>
     </div>
   </section>
 
@@ -126,6 +147,7 @@
     <BoundedList maxHeight="40rem" label="Analysis workbench traces" class="p-4">
       <ul class="space-y-3 pr-1">
         {#each traces as trace, index}
+          {@const outcomeView = projectAnalysisTraceOutcome(trace)}
           <li class="rounded-xl border border-bark-200 bg-bark-50 transition-colors hover:border-gold-300">
             <button
               type="button"
@@ -141,12 +163,9 @@
                 </p>
               </div>
               <div class="flex shrink-0 items-center gap-1.5">
-                {#if trace.truncated}
-                  <span class="rounded border border-wilt-300 bg-wilt-50 px-1.5 py-0.5 text-xs font-medium text-wilt-700">truncated</span>
-                {/if}
-                {#if trace.budgetStop}
-                  <span class="rounded border border-gold-300 bg-gold-50 px-1.5 py-0.5 text-xs font-medium text-gold-700">budget stop</span>
-                {/if}
+                <span class="rounded border px-1.5 py-0.5 text-xs font-medium {trace.outcome === 'completed' ? 'border-moss-300 bg-moss-50 text-moss-700' : trace.outcome === 'limit_reached' ? 'border-wilt-300 bg-wilt-50 text-wilt-700' : 'border-bark-300 bg-bark-100 text-shadow-600'}">
+                  {outcomeView.status}
+                </span>
                 <svg
                   xmlns="http://www.w3.org/2000/svg"
                   class="h-4 w-4 text-shadow-400 transition-transform {expandedTask === index ? 'rotate-180' : ''}"
@@ -159,6 +178,11 @@
 
             {#if expandedTask === index}
               <div class="space-y-3 border-t border-bark-200 p-4">
+                <div class="rounded-lg border border-bark-200 bg-bark-50 p-3 text-xs text-shadow-700">
+                  <p><span class="font-semibold">Progress:</span> {outcomeView.progress}</p>
+                  <p class="mt-1"><span class="font-semibold">Continuation:</span> {outcomeView.continuation}</p>
+                  <p class="mt-1"><span class="font-semibold">Run cost:</span> {outcomeView.cost}</p>
+                </div>
                 {#if trace.budgetStop}
                   <p class="text-xs text-gold-700">Budget stop: {trace.budgetStop}</p>
                 {/if}

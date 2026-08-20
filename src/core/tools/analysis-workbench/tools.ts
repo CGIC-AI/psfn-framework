@@ -19,8 +19,15 @@ export function createAnalysisWorkbenchTool(deps: REPLDeps): SubstrateAgentTool 
     label: 'analysis_workbench',
     parameters: Type.Object({
       task: Type.String({ description: 'The analytical task or question to reason through' }),
-      maxIterations: Type.Optional(Type.Number({ description: 'Override max iterations (default 15)' })),
-      maxTokens: Type.Optional(Type.Number({ description: 'Override max tokens (default 100000)' })),
+      maxIterations: Type.Optional(Type.Integer({
+        minimum: 1,
+        maximum: 60,
+        description: 'Optional lower iteration limit; cannot exceed the owner-controlled ceiling (maximum 60)',
+      })),
+      maxTokens: Type.Optional(Type.Integer({
+        minimum: 1,
+        description: 'Optional lower token limit; cannot exceed the owner-controlled ceiling',
+      })),
     }),
     execute: async (
       toolCallId: string,
@@ -28,6 +35,33 @@ export function createAnalysisWorkbenchTool(deps: REPLDeps): SubstrateAgentTool 
       signal?: AbortSignal,
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
       try {
+        if (
+          params.maxIterations !== undefined
+          && (
+            !Number.isSafeInteger(params.maxIterations)
+            || params.maxIterations < 1
+            || params.maxIterations > deps.config.budget.maxIterations
+          )
+        ) {
+          throw new Error(
+            `maxIterations cannot exceed the owner-controlled ceiling of ${deps.config.budget.maxIterations}`,
+          );
+        }
+        if (
+          params.maxTokens !== undefined
+          && (
+            !Number.isSafeInteger(params.maxTokens)
+            || params.maxTokens < 1
+            || (
+              deps.config.budget.maxTokens !== undefined
+              && params.maxTokens > deps.config.budget.maxTokens
+            )
+          )
+        ) {
+          throw new Error(
+            'maxTokens must be a positive integer no greater than the owner-controlled ceiling',
+          );
+        }
         // Merge budget overrides from tool input
         const effectiveDeps: REPLDeps = { ...deps };
         if (params.maxIterations !== undefined || params.maxTokens !== undefined) {
@@ -66,6 +100,9 @@ export function createAnalysisWorkbenchTool(deps: REPLDeps): SubstrateAgentTool 
             originType: 'tool',
             originStage: 'repl.analysis_workbench.tool',
             result: {
+              outcome: result.outcome,
+              continuation: result.continuation,
+              limitPolicy: result.limitPolicy,
               iterations: result.iterations,
               totalInputTokens: result.totalInputTokens,
               totalOutputTokens: result.totalOutputTokens,
@@ -99,17 +136,23 @@ export function createAnalysisWorkbenchTool(deps: REPLDeps): SubstrateAgentTool 
         }
 
         const totalTokens = result.totalInputTokens + result.totalOutputTokens;
-        const tokenBudget = effectiveDeps.config.budget.maxTokens ?? 100_000;
+        const tokenProgress = result.limitPolicy.maxTokens === null
+          ? `${totalTokens} tokens`
+          : `${totalTokens}/${result.limitPolicy.maxTokens} tokens`;
+        const wallTimeProgress = result.limitPolicy.maxWallTimeMs === null
+          ? `${result.durationMs}ms`
+          : `${result.durationMs}/${result.limitPolicy.maxWallTimeMs}ms`;
         const evidenceCount = result.evidence.length;
         const nestedAnalysisCount = result.diagnostics.nestedAnalysisSuccessCount;
         const header =
-          `[Analysis workbench: ${result.iterations} iter${result.iterations !== 1 ? 's' : ''}, ` +
-          `${totalTokens}/${tokenBudget} tokens, ` +
-          `${result.durationMs}ms` +
+          `[Analysis workbench outcome: ${result.outcome}; ` +
+          `continuation: ${result.continuation}; ` +
+          `progress: ${result.iterations}/${result.limitPolicy.maxIterations} iterations, ` +
+          `${tokenProgress}, ${wallTimeProgress}; ` +
+          `cost: $${result.budgetStatus.sessionCostUsd.toFixed(4)}` +
           `${nestedAnalysisCount > 0 ? `, ${nestedAnalysisCount} nested analysis` : ''}` +
           `${evidenceCount > 0 ? `, ${evidenceCount} evidence` : ''}` +
-          `${result.truncated ? ', truncated' : ''}` +
-          `${result.budgetStatus.exceeded ? `, stopped: ${result.budgetStatus.exceeded}` : ''}]`;
+          `${result.budgetStatus.exceeded ? `; stopped: ${result.budgetStatus.exceeded}` : ''}]`;
         const isError = result.truncated || result.budgetStatus.exceeded !== null;
 
         return {

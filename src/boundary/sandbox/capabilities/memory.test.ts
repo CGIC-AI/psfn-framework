@@ -215,6 +215,73 @@ describe('createMemoryCapabilities session_search', () => {
     });
   });
 
+  it('keeps a foreign companion DM out of search and exact-id introspection', async () => {
+    const companionA = '11111111-1111-4111-8111-111111111111';
+    const companionB = '22222222-2222-4222-8222-222222222222';
+    const companionC = '33333333-3333-4333-8333-333333333333';
+    const localChannel = `companion-dm:${companionA}:${companionB}`;
+    const foreignChannel = `companion-dm:${companionB}:${companionC}`;
+    const base: MemorySearchResult = {
+      id: 'local-memory',
+      text: 'Local ICP memory',
+      type: 'semantic',
+      importance: 0.8,
+      confidence: 0.9,
+      emotionalValence: 0,
+      salience: 0.8,
+      sourceRef: `${localChannel}:extract|source:session|session:local-ab|operation:extract`,
+      provenance: { channelId: localChannel, sessionId: 'local-ab' },
+      extractedAt: 1,
+      lastAccessed: 1,
+      accessCount: 0,
+      tags: [],
+      sensitivity: 'personal',
+      similarity: 0.9,
+    };
+    const foreign: MemorySearchResult = {
+      ...base,
+      id: 'foreign-memory',
+      text: 'Foreign private ICP memory',
+      sourceRef: `${foreignChannel}:extract|source:session|session:foreign-bc|operation:extract`,
+      provenance: { channelId: foreignChannel, sessionId: 'foreign-bc' },
+      similarity: 0.99,
+    };
+    const memoryStore = new SubjectAuthorizedIntrospectionMemoryStore([foreign, base]).asPort();
+    const capabilities = createMemoryCapabilities({
+      llmProvider: mockLLM(),
+      embeddingService: {
+        embed: vi.fn(async () => new Float32Array([1, 0, 0])),
+        embedBatch: vi.fn(async () => []),
+        dims: 3,
+      },
+      memoryStore,
+      sessionManager: {
+        isSessionRetiredOrQuarantined: vi.fn(() => false),
+        getRetiredLogicalSessionIds: vi.fn(() => new Set<string>()),
+        getRecentMessages: vi.fn(() => []),
+        appendSystemNote: vi.fn(),
+      },
+      pushEvidence: vi.fn(),
+      companionId: companionA,
+    });
+
+    await runWithRequestContext({
+      channelId: localChannel,
+      viewerTrustLevel: 'primary',
+      viewerChannelPrivacy: 'private',
+      viewerMemorySubjectContactId: 'contact:primary',
+      requesterProvenance: 'human',
+      callType: 'chat',
+      originType: 'user',
+    }, async () => {
+      await expect(capabilities.memory_search('ICP memory', 5)).resolves.toEqual([
+        expect.objectContaining({ text: base.text }),
+      ]);
+      await expect(capabilities.memory_get_by_id(foreign.id)).resolves.toBeNull();
+      await expect(capabilities.memory_get_by_id(base.id)).resolves.toMatchObject({ text: base.text });
+    });
+  });
+
   it('fails closed when self-directed reflection lacks a session-quarantine dependency', async () => {
     const fresh: MemorySearchResult = {
       id: 'unfiltered-memory',

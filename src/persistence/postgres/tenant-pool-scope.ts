@@ -28,7 +28,14 @@ export interface TenantPoolScope {
  * and the pool stays unscoped (byte-identical to the pre-tenancy behavior).
  */
 export function resolveConfigTenantPoolScope(
-  config: Pick<SubstrateConfig, 'multiCompanion' | 'postgresSchema' | 'postgresRole'>,
+  config: Pick<
+    SubstrateConfig,
+    | 'multiCompanion'
+    | 'companionId'
+    | 'companionFleet'
+    | 'postgresSchema'
+    | 'postgresRole'
+  >,
 ): TenantPoolScope | undefined {
   if (config.multiCompanion !== true) return undefined;
   const schema = config.postgresSchema?.trim();
@@ -41,6 +48,29 @@ export function resolveConfigTenantPoolScope(
   if (!role) {
     throw new Error(
       'Multi-companion per-companion Postgres pools require config.postgresRole; refusing to default to public',
+    );
+  }
+  const companionId = config.companionId?.trim();
+  if (!companionId) {
+    throw new Error(
+      'Multi-companion per-companion Postgres pools require an exact config.companionId',
+    );
+  }
+  const fleet = config.companionFleet;
+  if (!fleet) {
+    throw new Error(
+      'Multi-companion per-companion Postgres pools require config.companionFleet',
+    );
+  }
+  const identity = fleet.companions.find(companion => companion.companionId === companionId);
+  if (!identity) {
+    throw new Error(
+      'Multi-companion config.companionId is not present in config.companionFleet',
+    );
+  }
+  if (identity.postgresSchema.trim() !== schema || identity.postgresRole.trim() !== role) {
+    throw new Error(
+      'Multi-companion Postgres scope does not match the exact companion tenant authority',
     );
   }
   return { schema, role };

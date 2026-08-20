@@ -54,6 +54,7 @@
     "memory:repair:subject-attribution": "node --import tsx src/app/maintenance/reattribute-memory-subjects.ts",
     "migrate:prompt-layer-identifiers": "tsx src/app/maintenance/backfill-prompt-layer-identifiers.ts",
     "audit:core-memory-scopes": "tsx src/app/maintenance/audit-core-memory-scopes.ts",
+    "audit:companion-memory-tenancy": "tsx src/app/maintenance/audit-companion-memory-tenancy.ts",
     "audit:prompt-macros": "tsx src/app/maintenance/audit-prompt-layer-macros.ts",
     "docs:prompt-macros": "tsx scripts/generate-prompt-macros-doc.ts",
     "map:places": "tsx scripts/generate-world-map.ts",

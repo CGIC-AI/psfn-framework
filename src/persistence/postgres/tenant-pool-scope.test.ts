@@ -43,6 +43,33 @@ const BASE_CONFIG = {
   companionId: 'companion-under-test',
 } as const;
 
+const COMPANION_A = '11111111-1111-4111-8111-111111111111';
+const COMPANION_B = '22222222-2222-4222-8222-222222222222';
+
+function exactTenantConfig(overrides: Record<string, unknown> = {}) {
+  return {
+    multiCompanion: true,
+    companionId: COMPANION_A,
+    postgresSchema: 'companion_alpha',
+    postgresRole: 'companion_alpha_runtime',
+    companionFleet: {
+      companions: [
+        {
+          companionId: COMPANION_A,
+          postgresSchema: 'companion_alpha',
+          postgresRole: 'companion_alpha_runtime',
+        },
+        {
+          companionId: COMPANION_B,
+          postgresSchema: 'companion_beta',
+          postgresRole: 'companion_beta_runtime',
+        },
+      ],
+    },
+    ...overrides,
+  };
+}
+
 describe('resolveConfigTenantPoolScope (fail-closed tenant boundary)', () => {
   it('returns undefined in single-companion mode (public is the sole tenant)', () => {
     expect(resolveConfigTenantPoolScope({ multiCompanion: false })).toBeUndefined();
@@ -50,19 +77,34 @@ describe('resolveConfigTenantPoolScope (fail-closed tenant boundary)', () => {
   });
 
   it('pins the companion schema and role in multi-companion mode', () => {
-    expect(
-      resolveConfigTenantPoolScope({
-        multiCompanion: true,
-        postgresSchema: 'companion_follower',
-        postgresRole: 'companion_follower_runtime',
-      }),
-    ).toEqual({ schema: 'companion_follower', role: 'companion_follower_runtime' });
+    expect(resolveConfigTenantPoolScope(exactTenantConfig())).toEqual({
+      schema: 'companion_alpha',
+      role: 'companion_alpha_runtime',
+    });
+  });
+
+  it('rejects a valid sibling schema and role instead of treating any tenant as local', () => {
+    expect(() => resolveConfigTenantPoolScope(exactTenantConfig({
+      postgresSchema: 'companion_beta',
+      postgresRole: 'companion_beta_runtime',
+    }))).toThrow(/does not match the exact companion tenant authority/u);
+  });
+
+  it('rejects missing or unknown companion identity before a tenant pool opens', () => {
+    expect(() => resolveConfigTenantPoolScope(exactTenantConfig({
+      companionId: undefined,
+    }))).toThrow(/exact config\.companionId/u);
+    expect(() => resolveConfigTenantPoolScope(exactTenantConfig({
+      companionId: '33333333-3333-4333-8333-333333333333',
+    }))).toThrow(/not present in config\.companionFleet/u);
   });
 
   it('refuses to default to public when the tenant schema is missing', () => {
     expect(() =>
       resolveConfigTenantPoolScope({
         multiCompanion: true,
+        companionId: COMPANION_A,
+        companionFleet: exactTenantConfig().companionFleet,
         postgresRole: 'companion_follower_runtime',
       }),
     ).toThrow(/postgresSchema/);
@@ -72,6 +114,8 @@ describe('resolveConfigTenantPoolScope (fail-closed tenant boundary)', () => {
     expect(() =>
       resolveConfigTenantPoolScope({
         multiCompanion: true,
+        companionId: COMPANION_A,
+        companionFleet: exactTenantConfig().companionFleet,
         postgresSchema: 'companion_follower',
       }),
     ).toThrow(/postgresRole/);

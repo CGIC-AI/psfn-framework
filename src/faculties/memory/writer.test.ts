@@ -260,6 +260,48 @@ describe('MemoryWriter', () => {
       expect(store.insertMemory).not.toHaveBeenCalled();
     });
 
+    it('rejects foreign or unbound companion-DM provenance before embedding or persistence', async () => {
+      const companionA = '11111111-1111-4111-8111-111111111111';
+      const companionB = '22222222-2222-4222-8222-222222222222';
+      const companionC = '33333333-3333-4333-8333-333333333333';
+      const channelId = `companion-dm:${companionA}:${companionB}`;
+      const foreignWriter = new MemoryWriter(store as unknown as MemoryStorePort, embeddings, {
+        companionId: companionC,
+      });
+      const input = {
+        text: 'Private participant memory.',
+        type: 'semantic' as const,
+        sourceRef: `${channelId}:extract|source:session|session:private-ab|operation:extract`,
+        provenance: { channelId, sessionId: 'private-ab' },
+      };
+
+      await expect(foreignWriter.write(input)).rejects.toThrow('foreign_companion_dm');
+      await expect(writer.write(input)).rejects.toThrow('missing_companion_authority');
+
+      expect(embeddings.embed).not.toHaveBeenCalled();
+      expect(store.searchByEmbedding).not.toHaveBeenCalled();
+      expect(store.persistMemoryWrite).not.toHaveBeenCalled();
+      expect(store.insertMemory).not.toHaveBeenCalled();
+    });
+
+    it('writes a private companion-DM memory for an exact participant', async () => {
+      const companionA = '11111111-1111-4111-8111-111111111111';
+      const companionB = '22222222-2222-4222-8222-222222222222';
+      const channelId = `companion-dm:${companionA}:${companionB}`;
+      const participantWriter = new MemoryWriter(store as unknown as MemoryStorePort, embeddings, {
+        companionId: companionA,
+      });
+
+      await expect(participantWriter.write({
+        text: 'Private participant memory.',
+        type: 'semantic',
+        sourceRef: `${channelId}:extract|source:session|session:private-ab|operation:extract`,
+        provenance: { channelId, sessionId: 'private-ab' },
+      })).resolves.toMatchObject({ action: 'created' });
+
+      expect(store.insertMemory).toHaveBeenCalledOnce();
+    });
+
     it.each([
       ['upsert', () => writer.upsert({
         text: 'Testing-session upsert content.',

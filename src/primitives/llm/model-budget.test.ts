@@ -263,10 +263,14 @@ describe('ModelBudgetController', () => {
     expect(preflight.blockedEvent?.reason).toBe('missing_cost_metadata');
   });
 
-  it('does not query canonical spend when budget policy is disabled', async () => {
+  it('keeps tracking-only calls allowed while reporting configured threshold crossings', async () => {
     const dataDir = '/tmp/psfn-model-budget-disabled';
     const baseRegistry = makeConfig(dataDir).modelRegistry!;
-    const query = makeQuery();
+    const query = makeQuery({
+      ...zeroSpend,
+      dailyEstimatedCostUsd: 1,
+      monthlyEstimatedCostUsd: 3,
+    });
     const controller = new ModelBudgetController(makeConfig(dataDir, {
       modelRegistry: {
         ...baseRegistry,
@@ -279,13 +283,15 @@ describe('ModelBudgetController', () => {
       },
     }), query);
 
-    expect(controller.requiresPreflightEstimate()).toBe(false);
+    expect(controller.requiresPreflightEstimate()).toBe(true);
     await expect(controller.evaluatePreflight(preflightInput)).resolves.toMatchObject({
       allowed: true,
-      estimatedRequestCostUsd: 0,
-      snapshot: null,
+      thresholdEvent: {
+        reason: 'daily_budget_exceeded',
+        enforcementEnabled: false,
+      },
     });
-    expect(query.getModelBudgetSpend).not.toHaveBeenCalled();
+    expect(query.getModelBudgetSpend).toHaveBeenCalledOnce();
   });
 });
 

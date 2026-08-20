@@ -376,4 +376,47 @@ describe('audit event collector actor attribution', () => {
     expect(extEntry).toBeDefined();
     expect(extEntry!.actor).toBe('companion');
   });
+
+  it('records model-budget alert delivery evidence without notification content', () => {
+    const eventBus = createMockEventBus();
+    const entries: Array<{
+      actionType: string;
+      decision: string;
+      narrative: string;
+      details?: Array<string | null | undefined>;
+    }> = [];
+    const appender: AuditTimelineAppender = (actionType, decision, narrative, details) => {
+      entries.push({ actionType, decision, narrative, details });
+    };
+
+    registerAuditTimelineSources({
+      eventBus,
+      activeToolInvocations: new Map(),
+      appendAuditTimelineEntry: appender,
+    });
+
+    (eventBus as unknown as { emit: (event: string, payload: unknown) => void }).emit(
+      'model.budget.alert_delivery',
+      {
+        timestampMs: 1,
+        dedupeKey: 'daily_budget_exceeded:2026-08-20',
+        thresholdReason: 'daily_budget_exceeded',
+        windowKey: '2026-08-20',
+        status: 'sent',
+        topic: 'operator-alerts',
+        messageId: 'message-1',
+      },
+    );
+
+    expect(entries).toContainEqual(expect.objectContaining({
+      actionType: 'charge_decision',
+      decision: 'allowed',
+      narrative: 'Model budget operator alert delivery recorded.',
+      details: expect.arrayContaining([
+        'dedupeKey=daily_budget_exceeded:2026-08-20',
+        'status=sent',
+        'messageId=message-1',
+      ]),
+    }));
+  });
 });

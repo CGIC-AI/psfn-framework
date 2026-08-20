@@ -1532,6 +1532,23 @@ export interface ModelBudgetBlockedEvent extends Partial<CorrelationMetadata> {
   budget: ModelBudgetWindowSnapshot;
 }
 
+export interface ModelBudgetThresholdExceededEvent extends ModelBudgetBlockedEvent {
+  reason: Extract<ModelBudgetBlockReason, 'daily_budget_exceeded' | 'monthly_budget_exceeded'>;
+  /** False means alert-only tracking: the routed request continues. */
+  enforcementEnabled: boolean;
+}
+
+export interface ModelBudgetAlertDeliveryEvent {
+  timestampMs: number;
+  dedupeKey: string;
+  thresholdReason: ModelBudgetThresholdExceededEvent['reason'];
+  windowKey: string;
+  status: 'sent' | 'debounced' | 'failed';
+  topic?: string;
+  messageId?: string;
+  error?: string;
+}
+
 export type ModelPurpose = 'chat' | 'background' | 'memory' | 'context' | 'reasoning' | 'longContext' | 'vision' | 'moa';
 /**
  * Canonical set of completion purposes. `CompletionPurpose` is derived from this

@@ -177,6 +177,16 @@ export async function buildGatewayPrivilegedCore(
           });
         });
       },
+      onBudgetThresholdExceeded: (event) => {
+        eventBus.emit('model.budget.threshold_exceeded', event).catch((error) => {
+          input.logger.error('Failed to emit model budget threshold telemetry', {
+            error: error instanceof Error ? error.message : String(error),
+            provider: event.provider,
+            model: event.model,
+            reason: event.reason,
+          });
+        });
+      },
       onIcpConversationCostDecision: (event) => {
         eventBus.emit('icp.conversation.cost.decision', event).catch((error) => {
           input.logger.error('Failed to emit ICP conversation cost decision telemetry', {

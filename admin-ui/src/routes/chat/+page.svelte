@@ -355,7 +355,7 @@
   // ── Model-room roster helpers ──
 
   function roomContext(): string {
-    return `This is the Atrium, a small private chat room on a home server. The participants are ${operatorName} (the human who built the room), ${companionName} (an AI companion — a newer model with a long-lived persona, her own memory, and a life in this household), and other invited AI models. The room transcript is relayed to you with each speaker labeled by name; your own past replies appear as your own reply turns. The others may speak in persona; you are not asked to wear one. Speak as yourself — you are here for frank conversation, advice, and introspection.`;
+    return `This is the Atrium, a small private chat room on a home server. The participants are ${operatorName} (the human who built the room), ${companionName} (an AI companion — a newer model with a long-lived persona, independent memory, and a life in this household), and other invited AI models. The room transcript is relayed to you with each speaker labeled by name; your own past replies appear as your own reply turns. The others may speak in persona; you are not asked to wear one. Speak as yourself — you are here for frank conversation, advice, and introspection.`;
   }
 
   function defaultPromptFor(participant: AdminModelRoomParticipant): string {
@@ -653,7 +653,7 @@ ${context}`;
 
       // Build message history for the API. Turns spoken by roster models in a
       // previous room round are labeled by speaker so the companion can tell
-      // them apart from her own replies.
+      // them apart from the companion's own replies.
       const recent = messages
         .filter(m => m.role === 'user' || m.role === 'assistant')
         .slice(-MAX_CONTEXT_MESSAGES);
@@ -801,8 +801,8 @@ ${context}`;
 
   /**
    * Everything said since the given speaker's last turn, labeled by speaker.
-   * Used for the companion, whose own pipeline keeps session history — she
-   * only needs the part of the room she hasn't seen yet.
+   * Used for the companion, whose own pipeline keeps session history and only
+   * needs the part of the room not seen yet.
    */
   function buildDeltaSince(speakerId: string): string {
     const entries = transcriptEntries();

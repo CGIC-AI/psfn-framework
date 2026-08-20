@@ -11,12 +11,9 @@
 
 <section class="garden-section card-garden p-5 space-y-3" aria-labelledby="effective-chat-model-heading">
   <div class="garden-section-header flex flex-wrap items-start justify-between gap-3">
-    <div>
-    <p class="text-xs uppercase tracking-[0.16em] text-shadow-500">Runtime truth</p>
     <h2 id="effective-chat-model-heading" class="garden-section-title mt-1 font-serif text-lg font-semibold text-shadow-900">
       Effective chat model
     </h2>
-    </div>
     {#if effectiveChat}
       <span class="garden-status garden-status--success rounded-full border border-moss-300 bg-moss-50 px-2.5 py-1 text-xs font-semibold text-moss-700">resolved</span>
     {/if}
@@ -46,7 +43,4 @@
       <span class="text-xs"> · {fleetDefault.provider} · slot {fleetDefault.slotKey}</span>
     </p>
   {/if}
-  <p class="text-xs text-shadow-500">
-    This read-only runtime view includes the companion's settings overlay. Editing the registry below still updates the fleet-wide models.json catalog.
-  </p>
 </section>

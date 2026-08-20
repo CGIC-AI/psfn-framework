@@ -98,6 +98,7 @@ import {
 import { resolveOperatorAlertSinkConfiguration } from '../../shared/contracts/operator-alerting.js';
 import {
   createBackupFailureAlertHandler,
+  createModelBudgetThresholdAlertHandler,
   createQuarantineExpiryAlertHandler,
   createRepeatedScreeningFailureAlertHandler,
   createScheduledTaskFailureAlertHandler,
@@ -747,11 +748,27 @@ async function main(): Promise<void> {
   );
   const gatewayOperatorNotifier: NotificationPort = {
     notify: async (params) => {
-      await gateway.notifyOperator(params);
-      return { status: 'sent', topic: 'operator-alert-sinks' };
+      const result = await gateway.notifyOperator(params);
+      const delivery = result.deliveries.find(candidate => candidate.status !== 'failed');
+      if (!delivery || delivery.status === 'failed') {
+        throw new Error('Operator alert delivery returned no successful sink');
+      }
+      return {
+        status: delivery.status,
+        topic: delivery.target ?? delivery.sink,
+        ...(delivery.messageId ? { messageId: delivery.messageId } : {}),
+      };
     },
   };
   const operatorAlertCompanionName = resolveCompanionNameFromConfig(config);
+  eventBus.on(
+    'model.budget.threshold_exceeded',
+    createModelBudgetThresholdAlertHandler({
+      notifier: gatewayOperatorNotifier,
+      companionName: operatorAlertCompanionName,
+      recordDelivery: event => eventBus.emit('model.budget.alert_delivery', event),
+    }),
+  );
   eventBus.on(
     'backup.failed',
     createBackupFailureAlertHandler(gatewayOperatorNotifier, operatorAlertCompanionName),

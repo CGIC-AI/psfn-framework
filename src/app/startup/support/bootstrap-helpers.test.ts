@@ -43,6 +43,7 @@ import {
 } from './bootstrap-helpers.js';
 import { registerStreamingSttProvider } from '../../../primitives/voice/connectors/stt/index.js';
 import { registerStreamingTtsProvider } from '../../../primitives/voice/connectors/tts/index.js';
+import { createCompanionId } from '../../../shared/routing/companion-id.js';
 
 function createMutableEligibilityGate(initialTokens: CapabilityToken[]) {
   let grantedTokens = new Set(initialTokens);
@@ -1399,6 +1400,186 @@ describe('hydrateCanonicalStartupConfig', () => {
 
     expect(result.settingsDomains.runtime.observerEvalSidecar).toEqual(observerEvalSidecar);
     expect(config.observerEvalSidecar).toEqual(observerEvalSidecar);
+  });
+
+  it('fails before runtime composition when multi-companion EmoSim lacks an exact manifest binding', () => {
+    const rootDir = mkdtempSync(join(tmpdir(), 'psfn-startup-hydration-sidecar-unbound-'));
+    const systemDataDir = join(rootDir, 'system-data');
+    const companionDataDir = join(rootDir, 'companion-data');
+    const legacyDataDir = join(rootDir, 'legacy-data-empty');
+    mkdirSync(systemDataDir, { recursive: true });
+    mkdirSync(companionDataDir, { recursive: true });
+    mkdirSync(legacyDataDir, { recursive: true });
+    tempDirs.push(rootDir);
+    writeHydrationOwnerExamples(systemDataDir, companionDataDir);
+    saveSettings(systemDataDir, {
+      observerEvalSidecar: {
+        ...createDefaultObserverEvalSidecarSettings(),
+        enabled: true,
+        adapter: {
+          kind: 'emosim_server',
+          serverUrl: 'http://shared-observer.test:17342',
+          sessionLabel: 'shared-session',
+          agentName: 'shared-agent',
+          includeWorldState: false,
+        },
+      },
+    });
+
+    const config = makeStartupHydrationConfig(systemDataDir, companionDataDir);
+    config.multiCompanion = true;
+
+    expect(() => hydrateCanonicalStartupConfig(config, {
+      env: {
+        ...process.env,
+        CONFIG_DIR: './config',
+        PSFN_RUNTIME_LAYOUT_MODE: 'continuous',
+        DATA_DIR: legacyDataDir,
+      },
+    })).toThrow(/requires an exact companionRuntimeIdentity\.observerEvalSidecar binding/);
+  });
+
+  it('fails before runtime composition when the observer binding belongs to another companion', () => {
+    const rootDir = mkdtempSync(join(tmpdir(), 'psfn-startup-hydration-sidecar-mismatch-'));
+    const systemDataDir = join(rootDir, 'system-data');
+    const companionDataDir = join(rootDir, 'companion-data');
+    const legacyDataDir = join(rootDir, 'legacy-data-empty');
+    mkdirSync(systemDataDir, { recursive: true });
+    mkdirSync(companionDataDir, { recursive: true });
+    mkdirSync(legacyDataDir, { recursive: true });
+    tempDirs.push(rootDir);
+    writeHydrationOwnerExamples(systemDataDir, companionDataDir);
+    saveSettings(systemDataDir, {
+      observerEvalSidecar: {
+        ...createDefaultObserverEvalSidecarSettings(),
+        enabled: true,
+        adapter: {
+          kind: 'emosim_server',
+          serverUrl: 'http://shared-observer.test:17342',
+          sessionLabel: 'shared-session',
+          agentName: 'shared-agent',
+          includeWorldState: false,
+        },
+      },
+    });
+
+    const selectedCompanionId = createCompanionId('11111111-1111-4111-8111-111111111111');
+    const otherCompanionId = createCompanionId('22222222-2222-4222-8222-222222222222');
+    const config = makeStartupHydrationConfig(systemDataDir, companionDataDir);
+    config.multiCompanion = true;
+    config.companionId = selectedCompanionId;
+    config.companionRuntimeIdentity = {
+      companionId: otherCompanionId,
+      companionDataDir,
+      characterCardPath: join(companionDataDir, 'character.json'),
+      personalWorkspacePath: join(rootDir, 'workspaces', 'personal', otherCompanionId),
+      postgresSchema: 'companion_other',
+      postgresRole: 'companion_other_runtime',
+      postgresDatabaseUrlRef: {
+        kind: 'env',
+        envName: 'COMPANION_OTHER_DATABASE_URL',
+      },
+      observerEvalSidecar: {
+        sidecarId: 'observer-other',
+        serverUrl: 'http://observer-other.test:17342',
+        sessionLabel: 'observer-other-session',
+        agentName: 'observer-other-agent',
+        persistenceRootDir: join(rootDir, 'observer-other-storage'),
+      },
+    };
+
+    expect(() => hydrateCanonicalStartupConfig(config, {
+      env: {
+        ...process.env,
+        CONFIG_DIR: './config',
+        PSFN_RUNTIME_LAYOUT_MODE: 'continuous',
+        DATA_DIR: legacyDataDir,
+      },
+    })).toThrow(/identity does not match config\.companionId/);
+  });
+
+  it('binds three companions to distinct manifest-owned emotion runtimes over shared settings', () => {
+    const rootDir = mkdtempSync(join(tmpdir(), 'psfn-startup-hydration-sidecar-fleet-'));
+    const systemDataDir = join(rootDir, 'system-data');
+    const legacyDataDir = join(rootDir, 'legacy-data-empty');
+    const companionIds = [
+      createCompanionId('11111111-1111-4111-8111-111111111111'),
+      createCompanionId('22222222-2222-4222-8222-222222222222'),
+      createCompanionId('33333333-3333-4333-8333-333333333333'),
+    ] as const;
+    mkdirSync(systemDataDir, { recursive: true });
+    mkdirSync(legacyDataDir, { recursive: true });
+    tempDirs.push(rootDir);
+    const companionDataDirs = companionIds.map((companionId) => {
+      const companionDataDir = join(rootDir, 'companions', companionId);
+      mkdirSync(companionDataDir, { recursive: true });
+      writeHydrationOwnerExamples(systemDataDir, companionDataDir);
+      return companionDataDir;
+    });
+    saveSettings(systemDataDir, {
+      observerEvalSidecar: {
+        ...createDefaultObserverEvalSidecarSettings(),
+        enabled: true,
+        adapter: {
+          kind: 'emosim_server',
+          serverUrl: 'http://shared-primary.test:17342',
+          sessionLabel: 'shared-primary-session',
+          agentName: 'shared-primary-agent',
+          includeWorldState: false,
+        },
+        persistence: {
+          enabled: true,
+          rootDir: join(rootDir, 'shared-primary-observer'),
+          retentionDays: 14,
+          maxStoredObservations: 10_000,
+        },
+      },
+    });
+
+    const effective = companionIds.map((companionId, index) => {
+      const companionDataDir = companionDataDirs[index]!;
+      const config = makeStartupHydrationConfig(systemDataDir, companionDataDir);
+      config.multiCompanion = true;
+      config.companionId = companionId;
+      config.companionRuntimeIdentity = {
+        companionId,
+        companionDataDir,
+        characterCardPath: join(companionDataDir, 'character.json'),
+        personalWorkspacePath: join(rootDir, 'workspaces', 'personal', companionId),
+        postgresSchema: `companion_${String(index + 1)}`,
+        postgresRole: `companion_${String(index + 1)}_runtime`,
+        postgresDatabaseUrlRef: {
+          kind: 'env',
+          envName: `COMPANION_${String(index + 1)}_DATABASE_URL`,
+        },
+        observerEvalSidecar: {
+          sidecarId: `observer-${String(index + 1)}`,
+          serverUrl: `http://observer-${String(index + 1)}.test:17342`,
+          sessionLabel: `observer-session-${String(index + 1)}`,
+          agentName: `observer-agent-${String(index + 1)}`,
+          persistenceRootDir: join(rootDir, `observer-storage-${String(index + 1)}`),
+        },
+      };
+      hydrateCanonicalStartupConfig(config, {
+        env: {
+          ...process.env,
+          CONFIG_DIR: './config',
+          PSFN_RUNTIME_LAYOUT_MODE: 'continuous',
+          DATA_DIR: legacyDataDir,
+        },
+      });
+      return config.observerEvalSidecar!;
+    });
+
+    expect(effective.map(settings => settings.sidecarId)).toEqual([
+      'observer-1',
+      'observer-2',
+      'observer-3',
+    ]);
+    expect(new Set(effective.map(settings => settings.adapter.serverUrl)).size).toBe(3);
+    expect(new Set(effective.map(settings => settings.adapter.sessionLabel)).size).toBe(3);
+    expect(new Set(effective.map(settings => settings.adapter.agentName)).size).toBe(3);
+    expect(new Set(effective.map(settings => settings.persistence.rootDir)).size).toBe(3);
   });
 
   it('accepts production observer levers at the canonical per-companion Kubernetes mount', () => {

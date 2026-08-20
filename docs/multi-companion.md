@@ -90,6 +90,7 @@ carries exactly:
 | `postgresSchema` | Postgres schema owning this companion's tenant tables | lowercase identifier, ≤63 chars, no `pg_` prefix |
 | `postgresRole` | dedicated owner/runtime role for that schema | safe PostgreSQL role name, unique across the cluster and distinct from the shared migration role |
 | `postgresDatabaseUrlRef` | launcher-resolved credential reference delivered to this agent through an inherited file descriptor | valid credential reference, unique across the cluster and never `POSTGRES_DATABASE_URL` |
+| `observerEvalSidecar` | optional immutable identity for this companion's EmoSim sidecar, session, agent, and persistence root | when present, required for every companion; every `sidecarId`, `serverUrl`, `sessionLabel`, `agentName`, and absolute `persistenceRootDir` must be unique across the cluster |
 | `displayName` | optional human-facing roster label (display-only, no authority) | non-empty string, ≤120 chars, no control characters |
 | `avatarRef` | optional opaque avatar reference for the roster (display-only) | non-empty string, ≤512 chars, no control characters |
 
@@ -102,7 +103,9 @@ is read at request time.
 
 Cross-entry validation rejects duplicate `companionId`, `postgresSchema`,
 `postgresRole`, database credential reference, and overlapping
-`companionDataDir`.
+`companionDataDir`. It also rejects partial or reused observer-sidecar identities,
+so an enabled multi-companion runtime cannot fall back to the primary companion's
+EmoSim session, agent, server, or storage root.
 Before any process is spawned, the supervisor resolves both path fields to
 canonical absolute strict subpaths of the runtime root. Existing symlink
 ancestors are resolved and an escape outside that root is rejected. Each agent
@@ -141,9 +144,11 @@ whitelist of keys with an **optional** `settings.overlay.json` in its own
   falls back to global settings for a broken overlay.
 - **Deep-merged, re-validated.** Whitelisted keys are deep-merged over the global
   runtime settings (nested objects merge; arrays/scalars replace) and the result
-  is re-validated through the existing settings normalizer. This is how two cluster
-  companions hold, e.g., different `observerEvalSidecar.adapter.sessionLabel`
-  values (fixing the shared emo_sim session) or different `activeTimezone` clocks.
+  is re-validated through the existing settings normalizer. The overlay may tune
+  observer behavior, but an enabled multi-companion runtime takes `sidecarId`,
+  server URL, session label, agent name, and persistence root only from that
+  companion's immutable `companions.json` entry. It may still provide different
+  `activeTimezone` clocks and other whitelisted tuning.
 - **Absent overlay = byte-identical** to today's global-only behavior. The merge
   runs in both startup config-hydration paths (`hydrateCanonicalStartupConfig` in
   `src/app/startup/support/bootstrap-helpers.ts` and `hydrateJsonBackedRuntimeConfig`
@@ -166,7 +171,11 @@ scheduler file fails startup closed, the settings contract marks the `scheduler`
 subsystem `perCompanion`, and the file rides the `companion-tree` backup slice,
 not the cluster-global `system-config` slice. `charge-policy.json` and
 `skills.json` are likewise relocated: fatigue/charge budgets are co-rooted with
-their companion ledger, and enabled skill sets remain individuated. All four
+their companion ledger, and enabled skill sets remain individuated.
+`partner-affect-shadow.json` is also companion-owned so its exact partner binding
+and co-emotion policy cannot fall back to another companion's system-root file.
+Existing deployments must install a reviewed copy in every companion root before
+starting this build; startup intentionally fails if one is absent. All five
 files are enumerated in
 `PER_COMPANION_OWNER_FILES` (`src/system/config/settings-contract.ts`), which the
 owner-file config store and startup verification consult to root them at

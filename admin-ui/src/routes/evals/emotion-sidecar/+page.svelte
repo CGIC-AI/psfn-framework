@@ -733,7 +733,7 @@
     {:else if activeTab === 'levers'}
       <section class="card-garden p-5" aria-label="Lever event filters">
         <p class="text-sm text-shadow-600">
-          Shadow WOULD-ACT telemetry: when the simulated temporal state says she would have acted.
+          Shadow WOULD-ACT telemetry: when the simulated temporal state says the companion would have acted.
           Tracking only; nothing acts on these events.
         </p>
         <div class="mt-4 grid gap-3 md:grid-cols-4">

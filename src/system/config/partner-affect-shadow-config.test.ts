@@ -8,6 +8,8 @@ import {
   savePartnerAffectShadowConfig,
   validatePartnerAffectShadowConfig,
 } from './partner-affect-shadow-config.js';
+import { createOwnerFileConfigStore } from './config-store.js';
+import { PER_COMPANION_OWNER_FILES, ownerFileScope } from './settings-contract.js';
 
 const tempDirs: string[] = [];
 
@@ -212,5 +214,43 @@ describe('load/save round trip', () => {
     const dataDir = tempDir();
     writeFileSync(join(dataDir, PARTNER_AFFECT_SHADOW_FILE_NAME), '{"enabled": true}', 'utf8');
     expect(() => loadPartnerAffectShadowConfig(dataDir, { seedDir: tempDir() })).toThrow();
+  });
+});
+
+describe('per-companion co-emotion ownership', () => {
+  it('loads each companion policy from its own root rather than the shared system root', () => {
+    const systemDataDir = tempDir();
+    const companionADataDir = tempDir();
+    const companionBDataDir = tempDir();
+    savePartnerAffectShadowConfig(systemDataDir, validConfig({
+      enabled: true,
+      partnerContactId: 'shared-primary-contact',
+      policyRevision: 'shared-primary-policy',
+    }));
+    savePartnerAffectShadowConfig(companionADataDir, validConfig({
+      enabled: true,
+      partnerContactId: 'companion-a-contact',
+      policyRevision: 'companion-a-policy',
+    }));
+    savePartnerAffectShadowConfig(companionBDataDir, validConfig({
+      enabled: true,
+      partnerContactId: 'companion-b-contact',
+      policyRevision: 'companion-b-policy',
+    }));
+
+    const policyA = createOwnerFileConfigStore({
+      dataDir: systemDataDir,
+      companionDataDir: companionADataDir,
+    }).loadPartnerAffectShadow();
+    const policyB = createOwnerFileConfigStore({
+      dataDir: systemDataDir,
+      companionDataDir: companionBDataDir,
+    }).loadPartnerAffectShadow();
+
+    expect(policyA.partnerContactId).toBe('companion-a-contact');
+    expect(policyB.partnerContactId).toBe('companion-b-contact');
+    expect(policyA.policyRevision).not.toBe(policyB.policyRevision);
+    expect(PER_COMPANION_OWNER_FILES.has(PARTNER_AFFECT_SHADOW_FILE_NAME)).toBe(true);
+    expect(ownerFileScope(PARTNER_AFFECT_SHADOW_FILE_NAME)).toBe('perCompanion');
   });
 });

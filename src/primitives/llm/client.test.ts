@@ -4627,6 +4627,75 @@ describe('LLMClient model budget gates and usage metering', () => {
     expect((blockedEvents[0].estimatedRequestCostUsd as number)).toBeGreaterThan(0);
   });
 
+  it('continues tracking-only calls while emitting the configured threshold event', async () => {
+    const config = makeConfig();
+    const baseRegistry = config.modelRegistry!;
+    config.modelRegistry = {
+      ...baseRegistry,
+      budgetPolicy: {
+        enabled: false,
+        dailyUsdLimit: 0.001,
+        monthlyUsdLimit: 1,
+        currency: 'USD',
+      },
+      models: baseRegistry.models.map((entry) => (
+        entry.id === 'chat'
+          ? {
+            ...entry,
+            cost: { inputPer1MUsd: 100, outputPer1MUsd: 100, currency: 'USD' },
+          }
+          : entry
+      )),
+    };
+    const thresholdEvents: Array<Record<string, unknown>> = [];
+    const blockedEvents: Array<Record<string, unknown>> = [];
+    const client = new LLMClient(config, {
+      onBudgetThresholdExceeded: event => (
+        thresholdEvents.push(event as unknown as Record<string, unknown>)
+      ),
+      onBudgetBlocked: event => blockedEvents.push(event as unknown as Record<string, unknown>),
+      usageBudgetQuery: {
+        async getModelBudgetSpend() {
+          return {
+            dayKey: '2026-07-13',
+            monthKey: '2026-07',
+            dailyEstimatedCostUsd: 0.001,
+            monthlyEstimatedCostUsd: 0.01,
+            dailyUnknownCostAttempts: 0,
+            monthlyUnknownCostAttempts: 0,
+          };
+        },
+      },
+    });
+
+    mocks.streamSimple.mockImplementation(() => (async function* streamOk() {
+      yield {
+        type: 'done',
+        message: {
+          model: 'z-ai/glm-5',
+          usage: { input: 5, output: 3 },
+          content: [{ type: 'text', text: 'continued' }],
+        },
+        reason: 'stop',
+      };
+    })());
+
+    const response = await client.stream({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'Continue in tracking mode' }],
+    });
+
+    expect(response.content).toBe('continued');
+    expect(mocks.streamSimple).toHaveBeenCalledOnce();
+    expect(blockedEvents).toHaveLength(0);
+    expect(thresholdEvents).toEqual([
+      expect.objectContaining({
+        reason: 'daily_budget_exceeded',
+        enforcementEnabled: false,
+      }),
+    ]);
+  });
+
   it('stops all fallback candidates when canonical budget accounting is unavailable', async () => {
     const config = makeConfig();
     const baseRegistry = config.modelRegistry!;
@@ -5132,7 +5201,7 @@ describe('LLMClient model budget gates and usage metering', () => {
     }));
   });
 
-  it('skips preflight token estimation when model budget policy is disabled', async () => {
+  it('estimates tracking-only calls so configured thresholds remain observable', async () => {
     const config = makeConfig();
     const baseRegistry = config.modelRegistry!;
     config.modelRegistry = {
@@ -5165,7 +5234,7 @@ describe('LLMClient model budget gates and usage metering', () => {
       { disableRetry: true },
     );
 
-    expect(estimateSpy).not.toHaveBeenCalled();
+    expect(estimateSpy).toHaveBeenCalledOnce();
     expect(usageRecorder.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({
       inputTokens: 13,
       outputTokens: 7,

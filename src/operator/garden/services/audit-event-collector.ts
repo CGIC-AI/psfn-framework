@@ -198,6 +198,25 @@ export function registerAuditTimelineSources(options: {
     );
   });
 
+  eventBus.on('model.budget.alert_delivery', (event) => {
+    appendAuditTimelineEntry(
+      'charge_decision',
+      event.status === 'failed' ? 'denied' : 'allowed',
+      event.status === 'failed'
+        ? 'Model budget operator alert delivery failed.'
+        : 'Model budget operator alert delivery recorded.',
+      [
+        `dedupeKey=${event.dedupeKey}`,
+        `thresholdReason=${event.thresholdReason}`,
+        `windowKey=${event.windowKey}`,
+        `status=${event.status}`,
+        event.topic ? `topic=${event.topic}` : null,
+        event.messageId ? `messageId=${event.messageId}` : null,
+        event.error ? `error=${event.error}` : null,
+      ],
+    );
+  });
+
   eventBus.on('icp.conversation.cost.decision', (event) => {
     appendAuditTimelineEntry(
       'charge_decision',

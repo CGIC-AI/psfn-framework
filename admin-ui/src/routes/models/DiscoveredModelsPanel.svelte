@@ -55,8 +55,14 @@
   {:else if filteredDiscoveredModels.length === 0}
     <p class="garden-empty rounded-lg border border-dashed border-bark-300 bg-bark-50 p-6 text-center text-sm text-shadow-500">No discovered models match the current search.</p>
   {:else}
-    <div>
-      <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+    <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+    <div
+      class="max-w-full overflow-x-auto pb-1"
+      role="region"
+      aria-label="Discovered model results"
+      tabindex="0"
+    >
+      <div class="grid grid-flow-col grid-rows-2 auto-cols-[minmax(16rem,22rem)] gap-3">
         {#each filteredDiscoveredModels as discovered}
           <article class="flex min-w-0 flex-col rounded-xl border border-bark-200 bg-bark-50 px-3 py-3 transition-colors hover:border-gold-300">
             <div class="flex items-start justify-between gap-2">

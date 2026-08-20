@@ -4,6 +4,7 @@
   import FailureRow from '$lib/components/tools/FailureRow.svelte';
   import ServiceHealthPanel from '$lib/components/tools/ServiceHealthPanel.svelte';
   import ToolCard from '$lib/components/tools/ToolCard.svelte';
+  import ToolDiscoveryCard from '$lib/components/tools/ToolDiscoveryCard.svelte';
   import BoundedList from '$lib/components/garden/BoundedList.svelte';
   import CardGrid from '$lib/components/garden/CardGrid.svelte';
   import CollapsibleSection from '$lib/components/garden/CollapsibleSection.svelte';
@@ -109,6 +110,20 @@
   let filteredInventoryGroups = $derived.by(() => (
     filterInventoryGroups(inventoryGroups, inventoryFilters)
   ));
+  let filteredToolSearch = $derived.by(() => (
+    filteredInventoryGroups.flatMap((group) => group.tools).find((tool) => tool.name === 'tool_search')
+  ));
+  let filteredToolset = $derived.by(() => (
+    filteredInventoryGroups.flatMap((group) => group.tools).find((tool) => tool.name === 'toolset')
+  ));
+  let filteredRegularInventoryGroups = $derived.by(() => (
+    filteredInventoryGroups
+      .map((group) => ({
+        ...group,
+        tools: group.tools.filter((tool) => tool.name !== 'tool_search' && tool.name !== 'toolset'),
+      }))
+      .filter((group) => group.tools.length > 0)
+  ));
 
   let inventoryTotalCount = $derived.by(() => countInventoryTools(inventoryGroups));
   let inventoryFilteredCount = $derived.by(() => countInventoryTools(filteredInventoryGroups));
@@ -185,6 +200,21 @@
   }
 
   onMount(() => {
+    const params = new URLSearchParams(window.location.search);
+    const legacySurface = params.get('surface');
+    if (
+      window.location.hash === '#toolsets'
+      || window.location.hash === '#tool-search'
+      || legacySurface === 'toolsets'
+      || legacySurface === 'tool-search'
+    ) {
+      activeTab = 'tools';
+      window.history.replaceState(
+        window.history.state,
+        '',
+        `${window.location.pathname}?tab=tools#tools-search`,
+      );
+    }
     void loadData();
   });
 </script>
@@ -347,7 +377,7 @@
       </CollapsibleSection>
     </section>
   {:else if activeTab === 'tools'}
-    <section class="garden-section space-y-5" aria-labelledby="tools-inventory-heading">
+    <section id="tools-search" class="garden-section scroll-mt-24 space-y-5" aria-labelledby="tools-inventory-heading">
       <div class="garden-section-header flex items-baseline gap-3">
         <div>
           <p class="text-xs font-semibold uppercase tracking-[0.2em] text-shadow-500">Inventory</p>
@@ -386,7 +416,7 @@
 
           <div class="garden-field-grid grid gap-4 md:grid-cols-2 xl:grid-cols-3">
             <label class="garden-field block md:col-span-2 xl:col-span-1">
-              <span class="text-xs font-semibold uppercase tracking-[0.16em] text-shadow-500">Search</span>
+              <span class="text-xs font-semibold uppercase tracking-[0.16em] text-shadow-500">Search tools and toolset actions</span>
               <input
                 data-search-shortcut
                 type="search"
@@ -489,7 +519,10 @@
           {/each}
         </div>
       {:else if filteredInventoryGroups.length}
-        {#each filteredInventoryGroups as group}
+        {#if filteredToolSearch || filteredToolset}
+          <ToolDiscoveryCard toolSearch={filteredToolSearch} toolset={filteredToolset} />
+        {/if}
+        {#each filteredRegularInventoryGroups as group}
           <section class="space-y-3">
             <div class="flex items-center justify-between gap-3 flex-wrap">
               <div class="flex items-center gap-3">

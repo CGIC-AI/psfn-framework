@@ -421,7 +421,7 @@
 
           {#if selectedEpisode.episode.meaning}
             <div class="rounded-xl border border-moss-200 bg-moss-50 p-4">
-              <p class="text-xs uppercase tracking-[0.16em] text-moss-700">meaning <span class="normal-case tracking-normal">(her own take)</span></p>
+              <p class="text-xs uppercase tracking-[0.16em] text-moss-700">meaning <span class="normal-case tracking-normal">(the companion's own take)</span></p>
               <p class="mt-1 text-sm leading-relaxed text-shadow-800">{selectedEpisode.episode.meaning.text}</p>
             </div>
           {/if}

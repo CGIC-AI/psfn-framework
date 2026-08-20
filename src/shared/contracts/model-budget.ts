@@ -29,6 +29,7 @@ const EVENT_KEYS = new Set([
   'turnId',
   'requestId',
   'channelId',
+  'companionId',
   'toolName',
   'toolCallId',
   'callType',
@@ -171,6 +172,10 @@ export function parseModelBudgetBlockedEvent(value: unknown): ModelBudgetBlocked
   const turnId = optionalNonEmptyString(event.turnId, 'Model budget blocked event.turnId');
   const requestId = optionalNonEmptyString(event.requestId, 'Model budget blocked event.requestId');
   const channelId = optionalNonEmptyString(event.channelId, 'Model budget blocked event.channelId');
+  const companionId = optionalNonEmptyString(
+    event.companionId,
+    'Model budget blocked event.companionId',
+  );
   const toolName = optionalNonEmptyString(event.toolName, 'Model budget blocked event.toolName');
   const toolCallId = optionalNonEmptyString(event.toolCallId, 'Model budget blocked event.toolCallId');
   const originStage = optionalNonEmptyString(event.originStage, 'Model budget blocked event.originStage');
@@ -191,6 +196,7 @@ export function parseModelBudgetBlockedEvent(value: unknown): ModelBudgetBlocked
     ...(turnId ? { turnId } : {}),
     ...(requestId ? { requestId } : {}),
     ...(channelId ? { channelId } : {}),
+    ...(companionId ? { companionId } : {}),
     ...(toolName ? { toolName } : {}),
     ...(toolCallId ? { toolCallId } : {}),
     ...(callType ? { callType } : {}),

@@ -2,6 +2,7 @@ import type {
   CorrelationMetadata,
   ModelBudgetBlockedEvent,
   ModelBudgetBlockReason,
+  ModelBudgetThresholdExceededEvent,
   ModelBudgetWindowSnapshot,
   ModelRegistryEntry,
 } from '../../shared/contracts/runtime.js';
@@ -30,6 +31,7 @@ export interface BudgetPreflightResult {
   estimatedRequestCostUsd: number;
   snapshot: ModelBudgetWindowSnapshot | null;
   blockedEvent?: ModelBudgetBlockedEvent;
+  thresholdEvent?: ModelBudgetThresholdExceededEvent;
   accountingError?: Error;
 }
 
@@ -269,6 +271,7 @@ function buildBlockedEvent(
     ...(correlation?.turnId ? { turnId: correlation.turnId } : {}),
     ...(correlation?.requestId ? { requestId: correlation.requestId } : {}),
     ...(correlation?.channelId ? { channelId: correlation.channelId } : {}),
+    ...(correlation?.companionId ? { companionId: correlation.companionId } : {}),
     ...(correlation?.callType ? { callType: correlation.callType } : {}),
     ...(correlation?.originType ? { originType: correlation.originType } : {}),
     ...(correlation?.originStage ? { originStage: correlation.originStage } : {}),
@@ -318,13 +321,13 @@ export class ModelBudgetController {
   ) {}
 
   requiresPreflightEstimate(): boolean {
-    return this.config.modelRegistry?.budgetPolicy?.enabled === true;
+    return this.config.modelRegistry?.budgetPolicy !== undefined;
   }
 
   async evaluatePreflight(params: BudgetPreflightParams): Promise<BudgetPreflightResult> {
     const nowMs = params.nowMs ?? Date.now();
     const policy = this.config.modelRegistry?.budgetPolicy;
-    if (!this.requiresPreflightEstimate() || !policy) {
+    if (!policy) {
       return { allowed: true, estimatedRequestCostUsd: 0, snapshot: null };
     }
 
@@ -338,10 +341,12 @@ export class ModelBudgetController {
         'Model budget accountingStartMs cannot be later than the preflight timestamp',
       );
       return {
-        allowed: false,
+        allowed: !policy.enabled,
         estimatedRequestCostUsd: 0,
         snapshot,
-        blockedEvent: buildBlockedEvent('accounting_unavailable', nowMs, params, 0, snapshot),
+        ...(policy.enabled
+          ? { blockedEvent: buildBlockedEvent('accounting_unavailable', nowMs, params, 0, snapshot) }
+          : {}),
         accountingError,
       };
     }
@@ -353,10 +358,12 @@ export class ModelBudgetController {
         policy.monthlyUsdLimit,
       );
       return {
-        allowed: false,
+        allowed: !policy.enabled,
         estimatedRequestCostUsd: 0,
         snapshot,
-        blockedEvent: buildBlockedEvent('accounting_unavailable', nowMs, params, 0, snapshot),
+        ...(policy.enabled
+          ? { blockedEvent: buildBlockedEvent('accounting_unavailable', nowMs, params, 0, snapshot) }
+          : {}),
       };
     }
 
@@ -381,10 +388,12 @@ export class ModelBudgetController {
         policy.monthlyUsdLimit,
       );
       return {
-        allowed: false,
+        allowed: !policy.enabled,
         estimatedRequestCostUsd: 0,
         snapshot,
-        blockedEvent: buildBlockedEvent('accounting_unavailable', nowMs, params, 0, snapshot),
+        ...(policy.enabled
+          ? { blockedEvent: buildBlockedEvent('accounting_unavailable', nowMs, params, 0, snapshot) }
+          : {}),
         accountingError,
       };
     }
@@ -392,10 +401,12 @@ export class ModelBudgetController {
     const snapshot = toWindowSnapshot(spend, policy.dailyUsdLimit, policy.monthlyUsdLimit);
     if (spend.dailyUnknownCostAttempts > 0 || spend.monthlyUnknownCostAttempts > 0) {
       return {
-        allowed: false,
+        allowed: !policy.enabled,
         estimatedRequestCostUsd: 0,
         snapshot,
-        blockedEvent: buildBlockedEvent('unknown_historical_cost', nowMs, params, 0, snapshot),
+        ...(policy.enabled
+          ? { blockedEvent: buildBlockedEvent('unknown_historical_cost', nowMs, params, 0, snapshot) }
+          : {}),
       };
     }
 
@@ -403,10 +414,12 @@ export class ModelBudgetController {
     const rates = resolveUsdCostRates(entry);
     if (!rates) {
       return {
-        allowed: false,
+        allowed: !policy.enabled,
         estimatedRequestCostUsd: 0,
         snapshot,
-        blockedEvent: buildBlockedEvent('missing_cost_metadata', nowMs, params, 0, snapshot),
+        ...(policy.enabled
+          ? { blockedEvent: buildBlockedEvent('missing_cost_metadata', nowMs, params, 0, snapshot) }
+          : {}),
       };
     }
 
@@ -416,23 +429,37 @@ export class ModelBudgetController {
       rates,
     );
     if (snapshot.dailySpentUsd + estimatedRequestCostUsd > snapshot.dailyLimitUsd) {
+      const budgetEvent = buildBlockedEvent(
+        'daily_budget_exceeded', nowMs, params, estimatedRequestCostUsd, snapshot,
+      );
+      const thresholdEvent: ModelBudgetThresholdExceededEvent = {
+        ...budgetEvent,
+        reason: 'daily_budget_exceeded',
+        enforcementEnabled: policy.enabled,
+      };
       return {
-        allowed: false,
+        allowed: !policy.enabled,
         estimatedRequestCostUsd,
         snapshot,
-        blockedEvent: buildBlockedEvent(
-          'daily_budget_exceeded', nowMs, params, estimatedRequestCostUsd, snapshot,
-        ),
+        thresholdEvent,
+        ...(policy.enabled ? { blockedEvent: budgetEvent } : {}),
       };
     }
     if (snapshot.monthlySpentUsd + estimatedRequestCostUsd > snapshot.monthlyLimitUsd) {
+      const budgetEvent = buildBlockedEvent(
+        'monthly_budget_exceeded', nowMs, params, estimatedRequestCostUsd, snapshot,
+      );
+      const thresholdEvent: ModelBudgetThresholdExceededEvent = {
+        ...budgetEvent,
+        reason: 'monthly_budget_exceeded',
+        enforcementEnabled: policy.enabled,
+      };
       return {
-        allowed: false,
+        allowed: !policy.enabled,
         estimatedRequestCostUsd,
         snapshot,
-        blockedEvent: buildBlockedEvent(
-          'monthly_budget_exceeded', nowMs, params, estimatedRequestCostUsd, snapshot,
-        ),
+        thresholdEvent,
+        ...(policy.enabled ? { blockedEvent: budgetEvent } : {}),
       };
     }
     return { allowed: true, estimatedRequestCostUsd, snapshot };

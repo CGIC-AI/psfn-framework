@@ -13,6 +13,8 @@
     ATTENTION_SOURCES,
     mergeAttentionPollResults,
     type AttentionCounts,
+    type AttentionScopeKey,
+    shouldResetAttentionCounts,
     updateAttentionCountsIfChanged,
   } from '$lib/nav/attention';
   import { resolveThemeMenuLabel, resolveThemeTemplate } from '$lib/theme/loader';
@@ -69,6 +71,12 @@
   // ── Human-in-the-loop attention badges (polled, fail-quiet) ──
   let attentionCounts = $state<AttentionCounts>({});
   let attentionPollGeneration = 0;
+  let attentionScopeKey: AttentionScopeKey | undefined;
+
+  function clearAttentionCounts(): void {
+    attentionPollGeneration += 1;
+    attentionCounts = {};
+  }
 
   async function refreshAttentionCounts(): Promise<void> {
     if (!isAuthenticated()) return;
@@ -113,7 +121,7 @@
       if (!result.companions.some(companion => (
         companion.companionId === activeCompanionId && companion.gardenPath
       ))) {
-        attentionCounts = {};
+        clearAttentionCounts();
         clearToasts();
         await activateCompanionScopeFromPath('/fleet');
         window.location.assign('/fleet');
@@ -130,7 +138,7 @@
       companion.companionId === target.value
     ));
     if (!selected?.gardenPath || selected.companionId === activeCompanionId) return;
-    attentionCounts = {};
+    clearAttentionCounts();
     clearToasts();
     try {
       await activateCompanionScopeFromPath(selected.gardenPath);
@@ -175,7 +183,13 @@
     void activateSessionScopeFromPath(pathname).catch((error: unknown) => {
       console.warn('Garden session scope activation failed.', error);
     });
-    attentionCounts = {};
+    const nextAttentionScopeKey = isLoginPage || isFleetPage
+      ? null
+      : (activeCompanionId ?? 'single-companion');
+    if (shouldResetAttentionCounts(attentionScopeKey, nextAttentionScopeKey)) {
+      clearAttentionCounts();
+    }
+    attentionScopeKey = nextAttentionScopeKey;
     clearToasts();
     if (isLoginPage || isFleetPage) return;
     if (!isAuthResolved()) {
@@ -207,6 +221,7 @@
         await logoutFleetSession();
         clearJournalDisclosures();
         clearToken();
+        clearAttentionCounts();
         window.location.assign('/fleet/login');
         return;
       } catch {
@@ -229,6 +244,7 @@
     }
     clearJournalDisclosures();
     clearToken();
+    clearAttentionCounts();
     goto(`${base}/login`);
   }
 

@@ -9,6 +9,15 @@ export interface AttentionSource {
 
 export type AttentionCounts = Record<string, number>;
 
+export type AttentionScopeKey = string | null;
+
+export function shouldResetAttentionCounts(
+  previousScope: AttentionScopeKey | undefined,
+  nextScope: AttentionScopeKey,
+): boolean {
+  return previousScope !== undefined && previousScope !== nextScope;
+}
+
 export type AttentionPollResult =
   | { path: string; count: number }
   | { path: string; count?: never };

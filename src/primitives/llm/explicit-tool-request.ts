@@ -1,4 +1,6 @@
+import { validateToolArguments, type Tool, type ToolCall as PiToolCall } from '@earendil-works/pi-ai';
 import type { LLMContext } from '../../shared/contracts/runtime.js';
+import type { ToolSchema } from '../../shared/contracts/runtime.js';
 import {
   isHeldToolCallResult,
   isToolResultOutcomeProjection,
@@ -21,6 +23,7 @@ export interface ExplicitToolContract {
 export type ExplicitToolContractViolation =
   | 'missing_required_call'
   | 'corrupt_empty_arguments'
+  | 'invalid_arguments'
   | 'unexpected_tool_call'
   | 'mismatched_tool_call';
 
@@ -110,6 +113,67 @@ export function assertExplicitToolContractSatisfied(input: {
   throw new ExplicitToolContractError(
     `Provider violated explicit tool contract: expected exactly one ${JSON.stringify(expectedName)} call, received ${JSON.stringify(input.toolCalls.map(call => call.name))}`,
   );
+}
+
+export function assertExplicitToolArgumentsValid(input: {
+  contract: ExplicitToolContract | undefined;
+  corruptToolNames: readonly string[];
+  toolCalls: ReadonlyArray<{ id: string; name: string; input: Record<string, unknown> }>;
+  tools: readonly ToolSchema[] | undefined;
+}): void {
+  if (input.contract && input.corruptToolNames.length > 0) {
+    throw new ExplicitToolContractError(
+      `Provider returned empty arguments for required tool call(s): ${input.corruptToolNames.join(', ')}`,
+      'corrupt_empty_arguments',
+    );
+  }
+  const requiredToolName = input.contract?.requiredToolName;
+  if (!requiredToolName) return;
+  const toolCall = input.toolCalls[0];
+  const tool = input.tools?.find(candidate => candidate.name === requiredToolName);
+  if (!toolCall || !tool) {
+    throw new Error(`Explicit tool schema unavailable for ${requiredToolName}`);
+  }
+
+  try {
+    validateToolArguments(
+      {
+        name: tool.name,
+        description: tool.description,
+        parameters: tool.inputSchema as Tool['parameters'],
+      },
+      {
+        type: 'toolCall',
+        id: toolCall.id,
+        name: toolCall.name,
+        arguments: toolCall.input,
+      } satisfies PiToolCall,
+    );
+  } catch (error) {
+    if (!(error instanceof Error) || !error.message.startsWith('Validation failed for tool ')) {
+      throw error;
+    }
+    throw new ExplicitToolContractError(
+      `Provider returned schema-invalid arguments for required tool call: ${requiredToolName}`,
+      'invalid_arguments',
+    );
+  }
+}
+
+export function assertExplicitToolResponseSatisfied(input: {
+  contract: ExplicitToolContract | undefined;
+  corruptToolNames: readonly string[];
+  toolCalls: ReadonlyArray<{ id: string; name: string; input: Record<string, unknown> }>;
+  tools: readonly ToolSchema[] | undefined;
+}): void {
+  assertExplicitToolContractSatisfied({
+    choice: input.contract?.choice,
+    ...(input.contract?.requiredToolName
+      ? { requiredToolName: input.contract.requiredToolName }
+      : {}),
+    toolCalls: input.toolCalls,
+  });
+  assertExplicitToolArgumentsValid(input);
 }
 
 /**

@@ -168,6 +168,10 @@ describe('resolveSystemRoleCapabilityMetadata', () => {
         baseUrl: 'https://api.moonshot.ai/v1',
       },
       {
+        provider: 'kimi-code',
+        baseUrl: 'https://api.kimi.com/coding/v1',
+      },
+      {
         provider: 'cloudflare-ai-gateway',
         baseUrl: 'https://gateway.ai.cloudflare.com/v1/account/gateway/compat',
       },

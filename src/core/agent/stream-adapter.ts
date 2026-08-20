@@ -66,8 +66,7 @@ import {
   findCorruptEmptyToolCalls,
 } from '../../primitives/llm/client-response-helpers.js';
 import {
-  assertExplicitToolContractSatisfied,
-  ExplicitToolContractError,
+  assertExplicitToolResponseSatisfied,
   isMissingRequiredToolCallError,
   resolveExplicitToolContract,
 } from '../../primitives/llm/explicit-tool-request.js';
@@ -344,13 +343,26 @@ function executeStreamCandidate(params: ExecuteStreamCandidateParams): AsyncGene
           if (event.type === 'done') {
             assertTerminalDidNotFail(event.message, candidate);
             const terminalToolCalls = extractToolCallsFromContentBlocks(event.message.content);
+            const corruptEmptyCalls = findCorruptEmptyToolCalls(
+              terminalToolCalls,
+              normalizedTools,
+            );
+            if (
+              corruptEmptyCalls.length > 0
+              && corruptEmptyArgumentRetries < MAX_EMPTY_TOOL_ARGS_COMPLETION_RETRIES
+            ) {
+              corruptEmptyArgumentRetries += 1;
+              throw new SemanticToolRetrySignal(
+                'corrupt_empty_arguments',
+                corruptEmptyCalls.map(call => call.name),
+              );
+            }
             try {
-              assertExplicitToolContractSatisfied({
-                choice: explicitToolContract?.choice,
-                ...(explicitToolContract?.requiredToolName
-                  ? { requiredToolName: explicitToolContract.requiredToolName }
-                  : {}),
+              assertExplicitToolResponseSatisfied({
+                contract: explicitToolContract,
+                corruptToolNames: corruptEmptyCalls.map(call => call.name),
                 toolCalls: terminalToolCalls,
+                tools: normalizedTools,
               });
             } catch (error) {
               if (
@@ -367,26 +379,6 @@ function executeStreamCandidate(params: ExecuteStreamCandidateParams): AsyncGene
               throw error;
             }
             assertTerminalHasUsableContent(event.message, candidate);
-            const corruptEmptyCalls = findCorruptEmptyToolCalls(
-              terminalToolCalls,
-              normalizedTools,
-            );
-            if (
-              corruptEmptyCalls.length > 0
-              && corruptEmptyArgumentRetries < MAX_EMPTY_TOOL_ARGS_COMPLETION_RETRIES
-            ) {
-              corruptEmptyArgumentRetries += 1;
-              throw new SemanticToolRetrySignal(
-                'corrupt_empty_arguments',
-                corruptEmptyCalls.map(call => call.name),
-              );
-            }
-            if (corruptEmptyCalls.length > 0 && explicitToolContract) {
-              throw new ExplicitToolContractError(
-                `Provider returned empty arguments for required tool call(s): ${corruptEmptyCalls.map(call => call.name).join(', ')}`,
-                'corrupt_empty_arguments',
-              );
-            }
             if (!committed) {
               committed = true;
               for (const bufferedEvent of bufferedEvents) {
@@ -439,10 +431,6 @@ function executeStreamCandidate(params: ExecuteStreamCandidateParams): AsyncGene
             ...params.correlationFields,
           });
           continue;
-        }
-
-        if (isMissingRequiredToolCallError(err)) {
-          throw err;
         }
 
         const canRetry = retryAttempt < maxRetries

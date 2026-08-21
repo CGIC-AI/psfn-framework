@@ -177,8 +177,7 @@ describe('gateway RPC parameter decoder catalog', () => {
   it('preserves canonical operator-alert idempotency through the RPC boundary', () => {
     const params = {
       message: 'Budget threshold crossed',
-      idempotencyKey:
-        '11111111-1111-4111-8111-111111111111:daily_budget_exceeded:2026-08-20',
+      idempotencyKey: 'model-budget-alert-test-key',
       sender: {
         kind: 'system' as const,
         provenance: 'system.operator_alert.model_budget_threshold',

@@ -158,7 +158,10 @@ import {
   type MemoryQuarantineCandidate,
   type MemorySessionQuarantineFilter,
 } from './retrieval/session-quarantine.js';
-import { isMemoryOwnedByCompanion } from './companion-provenance.js';
+import {
+  isMemoryOwnedByCompanion,
+  type CompanionRoomMembershipAuthority,
+} from './companion-provenance.js';
 import {
   applySocialContextRankingAdjustments,
   attachEvolutionChains,
@@ -263,6 +266,7 @@ export class MemoryRetriever implements MemoryProvider {
   private fallbackMemoryPresentationProfile: MemoryPresentationProfile | undefined;
   private enforceSubjectAuthorization: boolean;
   private biographicalProjection: Pick<MemoryProvider, 'projectBiographicalContext'> | null;
+  private roomMembershipAuthority: CompanionRoomMembershipAuthority | null;
 
   constructor(
     memoryStore: MemoryStorePort,
@@ -275,6 +279,7 @@ export class MemoryRetriever implements MemoryProvider {
     sessionQuarantineFilter?: MemorySessionQuarantineFilter | null,
     enforceSubjectAuthorization = false,
     biographicalProjection?: Pick<MemoryProvider, 'projectBiographicalContext'> | null,
+    roomMembershipAuthority?: CompanionRoomMembershipAuthority | null,
   ) {
     this.memoryStore = memoryStore;
     this.embeddingService = embeddingService;
@@ -309,6 +314,7 @@ export class MemoryRetriever implements MemoryProvider {
     this.sessionQuarantineFilter = sessionQuarantineFilter ?? null;
     this.enforceSubjectAuthorization = enforceSubjectAuthorization;
     this.biographicalProjection = biographicalProjection ?? null;
+    this.roomMembershipAuthority = roomMembershipAuthority ?? null;
     this.activeMemoryContexts = new Map();
     this.activeMemoryRefreshLoops = new Map();
   }
@@ -361,7 +367,11 @@ export class MemoryRetriever implements MemoryProvider {
     const owned: T[] = [];
     const withheldIds = new Set(quarantine.withheldIds);
     for (const memory of quarantine.memories) {
-      if (isMemoryOwnedByCompanion(memory, this.runtimeConfig?.companionId)) {
+      if (isMemoryOwnedByCompanion(
+        memory,
+        this.runtimeConfig?.companionId,
+        this.roomMembershipAuthority,
+      )) {
         owned.push(memory);
       } else {
         withheldIds.add(memory.id);
@@ -376,7 +386,11 @@ export class MemoryRetriever implements MemoryProvider {
 
   private isMemoryUnavailable(memory: MemoryQuarantineCandidate): boolean {
     return isMemoryQuarantined(this.sessionQuarantineFilter, memory)
-      || !isMemoryOwnedByCompanion(memory, this.runtimeConfig?.companionId);
+      || !isMemoryOwnedByCompanion(
+        memory,
+        this.runtimeConfig?.companionId,
+        this.roomMembershipAuthority,
+      );
   }
 
   /**
@@ -411,15 +425,27 @@ export class MemoryRetriever implements MemoryProvider {
         memoryStore: {
           getById: async (id) => {
             const memory = await productStore.getById(id);
-            return memory && isMemoryOwnedByCompanion(memory, this.runtimeConfig?.companionId)
+            return memory && isMemoryOwnedByCompanion(
+              memory,
+              this.runtimeConfig?.companionId,
+              this.roomMembershipAuthority,
+            )
               ? memory
               : undefined;
           },
           getByIds: async ids => (await productStore.getByIds(ids)).filter(memory => (
-            isMemoryOwnedByCompanion(memory, this.runtimeConfig?.companionId)
+            isMemoryOwnedByCompanion(
+              memory,
+              this.runtimeConfig?.companionId,
+              this.roomMembershipAuthority,
+            )
           )),
           listMemories: async options => (await productStore.listMemories(options)).filter(memory => (
-            isMemoryOwnedByCompanion(memory, this.runtimeConfig?.companionId)
+            isMemoryOwnedByCompanion(
+              memory,
+              this.runtimeConfig?.companionId,
+              this.roomMembershipAuthority,
+            )
           )),
         },
         contactStore: this.contactStore,

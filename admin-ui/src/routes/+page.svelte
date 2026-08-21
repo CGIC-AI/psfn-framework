@@ -20,6 +20,7 @@
   import Sparkline from '$lib/components/accounting/charts/Sparkline.svelte';
   import AnalysisTracesTable from '$lib/components/dashboard/AnalysisTracesTable.svelte';
   import ContextAllocationPanel from '$lib/components/dashboard/ContextAllocationPanel.svelte';
+  import IntentionFollowUpRoutingCard from '$lib/components/dashboard/IntentionFollowUpRoutingCard.svelte';
   import DashboardHeader from '$lib/components/dashboard/DashboardHeader.svelte';
   import DashboardStatCard from '$lib/components/dashboard/DashboardStatCard.svelte';
   import LatencyWaterfalls from '$lib/components/dashboard/LatencyWaterfalls.svelte';
@@ -308,6 +309,7 @@
           lastTtft={formatOptionalDuration(transientSessionTelemetry.lastTtftMs)}
           averageTtft={formatOptionalDuration(transientSessionTelemetry.averageTtftMs)}
         />
+        <IntentionFollowUpRoutingCard routing={stats.intentionFollowUpRouting} />
         <ContextAllocationPanel />
         <ActiveConcernsCard />
       </aside>

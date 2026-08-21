@@ -1506,6 +1506,7 @@ async function main(): Promise<void> {
     automataReindexPort: automataBusReindexPort,
     scheduler,
     schedulerConfig,
+    scheduledPromptStore: persistenceRuntime.scheduledPromptStore,
     icpInitiationCandidateStore: persistenceRuntime.icpInitiationCandidateStore,
     icpFeltImpulseFunnelStore: persistenceRuntime.icpFeltImpulseFunnelStore,
     partnerAffectShadowStore: persistenceRuntime.partnerAffectShadowStore,

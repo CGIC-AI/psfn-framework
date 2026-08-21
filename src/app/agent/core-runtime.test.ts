@@ -30,6 +30,32 @@ describe('agent core runtime builder', () => {
     expect(agentMainSource).toContain('contactLifecycleRecovery?.stop()');
   });
 
+  it('wires authoritative intention handoff and scheduled stores into the Garden dashboard', () => {
+    const agentMainSource = readSource('main.ts');
+    const adminStart = agentMainSource.indexOf('startOptionalAdminTransportServer({');
+    const adminEnd = agentMainSource.indexOf('if (adminTransport)', adminStart);
+    const adminSurfaceSource = readSource('admin-surface.ts');
+    const gardenContractSource = readFileSync(
+      join(SRC_DIR, '../../operator/garden/local-admin-contract.ts'),
+      'utf-8',
+    );
+
+    expect(adminStart).toBeGreaterThan(-1);
+    expect(adminEnd).toBeGreaterThan(adminStart);
+    expect(agentMainSource.slice(adminStart, adminEnd)).toContain(
+      'scheduledPromptStore: persistenceRuntime.scheduledPromptStore',
+    );
+    expect(adminSurfaceSource).toContain(
+      'pendingFollowUpStore: options.coreRuntime.intentionRuntime.pendingFollowUpStore',
+    );
+    expect(adminSurfaceSource).toContain(
+      'scheduledPromptStore: options.scheduledPromptStore',
+    );
+    expect(gardenContractSource).toContain(
+      'nearTermHorizonMs: options.effectiveSchedulerConfig.intentionFollowUp.nearTermHorizonMs',
+    );
+  });
+
   it('core-runtime owns the prompt/session/memory wiring seam', () => {
     const coreRuntimeSource = readSource('core-runtime.ts');
     expect(coreRuntimeSource).toContain('registerWebTools(');

@@ -83,7 +83,10 @@ import {
   shouldConsiderDuplicateForScope,
   validateEmbeddingDimensions,
 } from './writer/write-normalization.js';
-import { assertCompanionMemoryProvenance } from './companion-provenance.js';
+import {
+  assertCompanionMemoryProvenance,
+  bindLocalCompanionRoomProvenance,
+} from './companion-provenance.js';
 
 const log = createComponentLogger('MemoryWriter');
 const IMPORT_BATCH_EMBED_CHUNK_SIZE = 200;
@@ -442,23 +445,29 @@ export class MemoryWriter {
    * 4. Insert new memory
    */
   async write(opts: MemoryWriteOptions): Promise<WriteResult> {
-    this.assertTestingSessionExcluded(opts);
-    this.assertCompanionProvenance(opts);
-    this.assertCogSecCandidacy(opts);
+    const authorizedOpts = bindLocalCompanionRoomProvenance(opts, this.companionId);
+    this.assertTestingSessionExcluded(authorizedOpts);
+    this.assertCompanionProvenance(authorizedOpts);
+    this.assertCogSecCandidacy(authorizedOpts);
     const embedding = await this.embeddingService.embed(
-      opts.text,
-      createMemoryEmbeddingCallOptions('write', opts.provenance, opts.sourceRef ?? 'memory-write'),
+      authorizedOpts.text,
+      createMemoryEmbeddingCallOptions(
+        'write',
+        authorizedOpts.provenance,
+        authorizedOpts.sourceRef ?? 'memory-write',
+      ),
     );
-    return this.writeWithEmbedding(opts, embedding);
+    return this.writeWithEmbedding(authorizedOpts, embedding);
   }
 
   private async writeWithEmbedding(
     opts: MemoryWriteOptions,
     embedding: Float32Array,
   ): Promise<WriteResult> {
-    this.assertTestingSessionExcluded(opts);
-    this.assertCompanionProvenance(opts);
-    this.assertCogSecCandidacy(opts);
+    const authorizedOpts = bindLocalCompanionRoomProvenance(opts, this.companionId);
+    this.assertTestingSessionExcluded(authorizedOpts);
+    this.assertCompanionProvenance(authorizedOpts);
+    this.assertCogSecCandidacy(authorizedOpts);
     this.validateEmbedding(embedding, 'write');
 
     const {
@@ -482,7 +491,7 @@ export class MemoryWriter {
       scopeRef,
       scopeTags,
       extractedAt,
-    } = opts;
+    } = authorizedOpts;
 
     // Validate type
     if (!VALID_MEMORY_TYPES.includes(type)) {
@@ -509,7 +518,7 @@ export class MemoryWriter {
     });
     const normalizedSourceRef = normalizedSource.sourceRef;
     const incomingProvenanceRefs = normalizeProvenanceRefs(
-      appendIntakeEnvelopeProvenanceRef(provenanceRefs, opts.intakeEnvelopeId),
+      appendIntakeEnvelopeProvenanceRef(provenanceRefs, authorizedOpts.intakeEnvelopeId),
       normalizedSourceRef,
     );
     const normalizedScopeRef = normalizeMemoryScopeRef(scopeRef);
@@ -751,6 +760,7 @@ export class MemoryWriter {
       consentFlags: normalizedConsentFlags,
       contactId,
     };
+    this.assertCompanionProvenance(memory);
 
     await this.memoryStore.persistMemoryWrite({
       memory,
@@ -796,8 +806,9 @@ export class MemoryWriter {
    * on dedup, upsert always replaces the old memory.
    */
   async upsert(opts: MemoryWriteOptions): Promise<WriteResult> {
-    this.assertTestingSessionExcluded(opts);
-    this.assertCompanionProvenance(opts);
+    const authorizedOpts = bindLocalCompanionRoomProvenance(opts, this.companionId);
+    this.assertTestingSessionExcluded(authorizedOpts);
+    this.assertCompanionProvenance(authorizedOpts);
     const {
       text,
       type,
@@ -819,7 +830,7 @@ export class MemoryWriter {
       scopeRef,
       scopeTags,
       extractedAt,
-    } = opts;
+    } = authorizedOpts;
 
     if (!VALID_MEMORY_TYPES.includes(type)) {
       throw new Error(`Invalid memory type: ${type}. Must be one of: ${VALID_MEMORY_TYPES.join(', ')}`);
@@ -842,7 +853,7 @@ export class MemoryWriter {
     });
     const normalizedSourceRef = normalizedSource.sourceRef;
     const normalizedProvenanceRefs = normalizeProvenanceRefs(
-      appendIntakeEnvelopeProvenanceRef(provenanceRefs, opts.intakeEnvelopeId),
+      appendIntakeEnvelopeProvenanceRef(provenanceRefs, authorizedOpts.intakeEnvelopeId),
       normalizedSourceRef,
     );
     const normalizedScopeRef = normalizeMemoryScopeRef(scopeRef);
@@ -944,6 +955,7 @@ export class MemoryWriter {
       consentFlags: mergedIncomingConsentFlags,
       contactId,
     };
+    this.assertCompanionProvenance(memory);
 
     await this.memoryStore.persistMemoryWrite({
       memory,
@@ -981,6 +993,7 @@ export class MemoryWriter {
   }
 
   async patchMemory(opts: MemoryPatchOptions): Promise<MemoryPatchResult | null> {
+    opts = bindLocalCompanionRoomProvenance(opts, this.companionId);
     this.assertTestingSessionExcluded(opts);
     this.assertCompanionProvenance(opts);
     const memoryId = opts.memoryId.trim();
@@ -995,6 +1008,7 @@ export class MemoryWriter {
     if (!existing || existing.supersededBy !== undefined || existing.deletedAt !== undefined) {
       return null;
     }
+    this.assertCompanionProvenance(existing);
 
     const updates: Partial<PurrMemory> = {};
     const previousValues: Record<string, unknown> = {};
@@ -1093,6 +1107,20 @@ export class MemoryWriter {
       throw new Error('patchMemory produced no changes');
     }
 
+    const authorizedUpdatedMemory: PurrMemory = {
+      ...existing,
+      ...updates,
+      text: updates.text ?? existing.text,
+      importance: updates.importance ?? existing.importance,
+      confidence: updates.confidence ?? existing.confidence,
+      emotionalValence: updates.emotionalValence ?? existing.emotionalValence,
+      formationVAD: Object.prototype.hasOwnProperty.call(updates, 'formationVAD')
+        ? updates.formationVAD
+        : existing.formationVAD,
+      tags: updates.tags ?? existing.tags,
+    };
+    this.assertCompanionProvenance(authorizedUpdatedMemory);
+
     let embedding: Float32Array | undefined;
     if (updates.text !== undefined) {
       this.assertCogSecCandidacy({
@@ -1121,18 +1149,8 @@ export class MemoryWriter {
       patch.reason = opts.reason.trim();
     }
 
-    const updatedMemory: PurrMemory = {
-      ...existing,
-      ...updates,
-      text: updates.text ?? existing.text,
-      importance: updates.importance ?? existing.importance,
-      confidence: updates.confidence ?? existing.confidence,
-      emotionalValence: updates.emotionalValence ?? existing.emotionalValence,
-      formationVAD: Object.prototype.hasOwnProperty.call(updates, 'formationVAD')
-        ? updates.formationVAD
-        : existing.formationVAD,
-      tags: updates.tags ?? existing.tags,
-    };
+    const updatedMemory: PurrMemory = { ...authorizedUpdatedMemory, ...updates };
+    this.assertCompanionProvenance(updatedMemory);
     const patchEventId = uuidv7();
 
     try {
@@ -1164,6 +1182,7 @@ export class MemoryWriter {
   }
 
   async patch(opts: MemoryPatchOptions): Promise<MemoryCorrectionResult | null> {
+    opts = bindLocalCompanionRoomProvenance(opts, this.companionId);
     this.assertTestingSessionExcluded(opts);
     this.assertCompanionProvenance(opts);
     const memoryId = opts.memoryId.trim();
@@ -1175,6 +1194,7 @@ export class MemoryWriter {
     if (!existing || existing.deletedAt !== undefined) {
       return null;
     }
+    this.assertCompanionProvenance(existing);
 
     const nextText = opts.text?.trim();
     if (!nextText) {
@@ -1203,11 +1223,6 @@ export class MemoryWriter {
       sourceType: opts.sourceType,
       provenance: opts.provenance,
     });
-    const embedding = await this.embeddingService.embed(
-      nextText,
-      createMemoryEmbeddingCallOptions('correction', opts.provenance, existing.id),
-    );
-    this.validateEmbedding(embedding, 'patch');
     const replacementRetention = applyRetentionSemantics({
       text: nextText,
       type: existing.type,
@@ -1226,6 +1241,18 @@ export class MemoryWriter {
       `superseded_by:${replacementId}`,
       ...(referenceRef ? [referenceRef] : []),
     ]);
+    const replacementProvenance = existing.provenance || auditContext.provenance
+      ? {
+          ...existing.provenance,
+          ...auditContext.provenance,
+          ...(existing.provenance?.channelId
+            ? { channelId: existing.provenance.channelId }
+            : {}),
+          ...(existing.provenance?.companionId
+            ? { companionId: existing.provenance.companionId }
+            : {}),
+        }
+      : undefined;
     const replacementMemory: PurrMemory = {
       ...existing,
       id: replacementId,
@@ -1238,7 +1265,7 @@ export class MemoryWriter {
         : normalizeFormationVAD(opts.formationVAD) ?? existing.formationVAD,
       sourceRef: auditContext.sourceRef,
       sourceType: auditContext.sourceType,
-      ...(auditContext.provenance ? { provenance: auditContext.provenance } : {}),
+      ...(replacementProvenance ? { provenance: replacementProvenance } : {}),
       extractedAt: now,
       lastAccessed: now,
       accessCount: 1,
@@ -1250,6 +1277,12 @@ export class MemoryWriter {
       deletedBy: undefined,
       deleteReason: undefined,
     };
+    this.assertCompanionProvenance(replacementMemory);
+    const embedding = await this.embeddingService.embed(
+      nextText,
+      createMemoryEmbeddingCallOptions('correction', replacementMemory.provenance, existing.id),
+    );
+    this.validateEmbedding(embedding, 'patch');
 
     await this.memoryStore.runInTransaction(async () => {
       await this.memoryStore.updateMemory(existing.id, {
@@ -1292,6 +1325,7 @@ export class MemoryWriter {
     if (!source || source.deletedAt !== undefined) {
       return null;
     }
+    this.assertCompanionProvenance(source);
 
     const behavior = resolveConsentRedactionBehavior(
       source.consentFlags,
@@ -1333,6 +1367,7 @@ export class MemoryWriter {
       confidence: abstractionConfidence,
       tags: normalizeMemoryTags([...source.tags, 'abstracted', 'lesson']),
       sourceRef: abstractionSourceRef,
+      ...(source.provenance ? { provenance: source.provenance } : {}),
       provenanceRefs: [externalRef],
       sensitivity: abstractionSensitivity,
       consentFlags: source.consentFlags,
@@ -1390,11 +1425,12 @@ export class MemoryWriter {
 
     const acceptedRecords: MemoryWriteOptions[] = [];
     for (const record of records) {
-      this.assertTestingSessionExcluded(record);
-      this.assertCompanionProvenance(record);
+      const authorizedRecord = bindLocalCompanionRoomProvenance(record, this.companionId);
+      this.assertTestingSessionExcluded(authorizedRecord);
+      this.assertCompanionProvenance(authorizedRecord);
       try {
-        this.assertCogSecCandidacy(record, { logRejection: false });
-        acceptedRecords.push(record);
+        this.assertCogSecCandidacy(authorizedRecord, { logRejection: false });
+        acceptedRecords.push(authorizedRecord);
       } catch (err) {
         errors++;
         if (err instanceof MemoryCandidacyPolicyError) {

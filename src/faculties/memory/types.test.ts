@@ -78,6 +78,7 @@ describe('memory import normalization policy', () => {
   it('normalizes structured group attribution provenance', () => {
     expect(normalizeMemoryProvenance({
       channelId: 'discord-room',
+      companionId: '11111111-1111-4111-8111-111111111111',
       triggerContactId: 'contact-trigger',
       routedContactId: 'contact-morgan',
       sourceContactId: 'contact-dragon',
@@ -92,6 +93,7 @@ describe('memory import normalization policy', () => {
       sourceSpanEndMessageId: 14,
     })).toEqual({
       channelId: 'discord-room',
+      companionId: '11111111-1111-4111-8111-111111111111',
       triggerContactId: 'contact-trigger',
       routedContactId: 'contact-morgan',
       sourceContactId: 'contact-dragon',

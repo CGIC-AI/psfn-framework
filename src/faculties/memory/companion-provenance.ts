@@ -14,7 +14,9 @@ type CompanionMemoryProvenanceRejectionReason =
   | 'missing_companion_channel_provenance'
   | 'mismatched_companion_channel_provenance'
   | 'malformed_companion_channel'
-  | 'foreign_companion_dm';
+  | 'foreign_companion_dm'
+  | 'missing_companion_room_membership'
+  | 'foreign_companion_room';
 
 export type CompanionMemoryProvenanceDecision =
   | { allowed: true; channelKind: 'non_companion' | 'room' | 'dm' }
@@ -27,6 +29,40 @@ export type CompanionMemoryProvenanceDecision =
 export interface CompanionMemoryProvenanceInput {
   sourceRef?: string;
   provenance?: MemoryProvenance;
+}
+
+/**
+ * Stamp a companion-room write from the runtime's canonical companion
+ * identity. A caller-provided binding is never repaired: the authorization
+ * check must reject a conflicting or malformed claim.
+ */
+export function bindLocalCompanionRoomProvenance<
+  T extends CompanionMemoryProvenanceInput,
+>(
+  input: T,
+  localCompanionId: string | undefined,
+): T {
+  const sourceChannelId = companionChannelFromSourceRef(input.sourceRef);
+  const provenanceChannelId = isCompanionChannelCandidate(input.provenance?.channelId)
+    ? input.provenance.channelId
+    : undefined;
+  const channelId = provenanceChannelId ?? sourceChannelId;
+  const parsedChannel = channelId ? parseCompanionChannelId(channelId) : null;
+  if (
+    parsedChannel?.kind !== 'room'
+    || input.provenance?.companionId !== undefined
+  ) {
+    return input;
+  }
+  const companionId = localCompanionId ? parseCompanionId(localCompanionId) : null;
+  if (!companionId) return input;
+  return {
+    ...input,
+    provenance: {
+      ...input.provenance,
+      companionId,
+    },
+  };
 }
 
 class CompanionMemoryProvenanceError extends Error {
@@ -106,6 +142,25 @@ export function evaluateCompanionMemoryProvenance(
       channelKind: 'dm',
       reason: 'foreign_companion_dm',
     };
+  }
+  if (parsedChannel.kind === 'room') {
+    const roomCompanionId = input.provenance?.companionId
+      ? parseCompanionId(input.provenance.companionId)
+      : null;
+    if (!roomCompanionId) {
+      return {
+        allowed: false,
+        channelKind: 'room',
+        reason: 'missing_companion_room_membership',
+      };
+    }
+    if (roomCompanionId !== companionId) {
+      return {
+        allowed: false,
+        channelKind: 'room',
+        reason: 'foreign_companion_room',
+      };
+    }
   }
   return { allowed: true, channelKind: parsedChannel.kind };
 }

@@ -63,6 +63,7 @@ function projectProvenance(value: unknown): MemoryProvenance | undefined {
   if (!isRecord(value)) return undefined;
   return {
     ...(typeof value.channelId === 'string' ? { channelId: value.channelId } : {}),
+    ...(typeof value.companionId === 'string' ? { companionId: value.companionId } : {}),
     ...(typeof value.sessionId === 'string' ? { sessionId: value.sessionId } : {}),
   };
 }

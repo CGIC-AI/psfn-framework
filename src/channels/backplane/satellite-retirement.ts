@@ -21,7 +21,10 @@ export interface SatelliteRegistryBackupPort {
 }
 
 export interface SatelliteRegistryWritePort {
-  save(config: SatelliteRegistryConfig): Promise<void>;
+  save(input: {
+    config: SatelliteRegistryConfig;
+    expectedBackupDigest: string;
+  }): Promise<void>;
 }
 
 export interface SyntheticSatelliteRetirementReceipt {
@@ -101,6 +104,10 @@ export class SyntheticSatelliteRetirementService {
     target: SyntheticSatelliteRetirementTarget;
     dryRun: boolean;
     retiredAt: string;
+    approval?: {
+      operatorApproved: boolean;
+      approvalId: string;
+    };
   }): Promise<SyntheticSatelliteRetirementReceipt> {
     const target = canonicalTarget(input.target);
     const registry = this.ports.read();
@@ -133,6 +140,10 @@ export class SyntheticSatelliteRetirementService {
       throw new Error('retiredAt must be a canonical ISO timestamp');
     }
     if (input.dryRun) return receipt('would_retire', target);
+    if (input.approval?.operatorApproved !== true) {
+      throw new Error('Synthetic satellite retirement requires explicit operator approval');
+    }
+    requiredId(input.approval.approvalId, 'approvalId');
 
     const backup = await this.ports.backup.create({ registry, target: input.target });
     const backupRef = requiredId(backup.backupRef, 'backupRef');
@@ -152,7 +163,10 @@ export class SyntheticSatelliteRetirementService {
       satellites: registry.satellites.filter(candidate => candidate.satelliteId !== target.satelliteId),
       retiredSatellites: [...(registry.retiredSatellites ?? []), retired],
     };
-    await this.ports.writer.save(next);
+    await this.ports.writer.save({
+      config: next,
+      expectedBackupDigest: backup.backupDigest,
+    });
     return receipt('retired', target, { backupRef, backupDigest: backup.backupDigest });
   }
 }

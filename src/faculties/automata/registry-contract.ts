@@ -221,7 +221,7 @@ export interface AutomataBusQueryOwnerPolicy {
   modelIdentityPolicy: 'configured-provider-strict';
 }
 
-export interface AutomataBusReindexOwnerPolicy {
+interface AutomataBusReindexOwnerPolicy {
   leaseDurationMs: number;
 }
 

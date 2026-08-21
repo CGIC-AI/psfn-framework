@@ -26,7 +26,7 @@ export interface ModelBudgetOperatorAlertClaimStorePort {
   ): Promise<ModelBudgetOperatorAlertClaim | null>;
 }
 
-export interface ModelBudgetOperatorAlertEvidenceQueryPort {
+interface ModelBudgetOperatorAlertEvidenceQueryPort {
   listModelBudgetOperatorAlertEvidence(
     identity: ModelBudgetOperatorAlertIdentity,
   ): Promise<ModelBudgetAlertDeliveryEvent[]>;

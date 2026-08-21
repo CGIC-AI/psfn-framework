@@ -394,11 +394,32 @@ function assertObserverEvalSidecarBindingsIsolated(
   assertNoDuplicateField(configured, entry => entry.observerEvalSidecar.serverUrl, 'observerEvalSidecar.serverUrl');
   assertNoDuplicateField(configured, entry => entry.observerEvalSidecar.sessionLabel, 'observerEvalSidecar.sessionLabel');
   assertNoDuplicateField(configured, entry => entry.observerEvalSidecar.agentName, 'observerEvalSidecar.agentName');
-  assertNoDuplicateField(
-    configured,
-    entry => entry.observerEvalSidecar.persistenceRootDir,
-    'observerEvalSidecar.persistenceRootDir',
-  );
+  assertNoOverlappingObserverPersistenceRoots(configured);
+}
+
+function assertNoOverlappingObserverPersistenceRoots(
+  companions: readonly (CompanionFleetEntry & {
+    observerEvalSidecar: CompanionObserverEvalSidecarBinding;
+  })[],
+): void {
+  for (let firstIndex = 0; firstIndex < companions.length; firstIndex += 1) {
+    const first = companions[firstIndex]?.observerEvalSidecar.persistenceRootDir;
+    if (!first) continue;
+    for (let secondIndex = firstIndex + 1; secondIndex < companions.length; secondIndex += 1) {
+      const second = companions[secondIndex]?.observerEvalSidecar.persistenceRootDir;
+      if (!second) continue;
+      if (
+        resolve(first) === resolve(second)
+        || isStrictSubpath(first, second)
+        || isStrictSubpath(second, first)
+      ) {
+        throw new Error(
+          `${COMPANIONS_ERROR_PREFIX}: observerEvalSidecar.persistenceRootDir must not overlap `
+          + `between companions[${firstIndex}] and companions[${secondIndex}]`,
+        );
+      }
+    }
+  }
 }
 
 function assertNoDuplicateField<T>(

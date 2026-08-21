@@ -190,8 +190,44 @@ describe('companions owner-file config', () => {
         const siblingBinding = fleet.companions[2].observerEvalSidecar as Record<string, unknown>;
         siblingBinding[field] = primaryBinding[field];
         expect(() => validateCompanionsConfig(fleet, 'companions.json'))
-          .toThrow(`duplicate observerEvalSidecar.${field}`);
+          .toThrow(field === 'persistenceRootDir'
+            ? /observerEvalSidecar\.persistenceRootDir must not overlap/
+            : `duplicate observerEvalSidecar.${field}`);
       }
+    });
+
+    it('rejects nested observer persistence roots in either fleet order', () => {
+      const createFleet = (firstRoot: string, secondRoot: string) => {
+        const fleet = clone(VALID_FLEET);
+        fleet.companions[0].observerEvalSidecar = {
+          sidecarId: 'observer-one',
+          serverUrl: 'http://observer-one.internal:17342',
+          sessionLabel: 'observer-session-one',
+          agentName: 'observer-agent-one',
+          persistenceRootDir: firstRoot,
+        };
+        fleet.companions[1].observerEvalSidecar = {
+          sidecarId: 'observer-two',
+          serverUrl: 'http://observer-two.internal:17342',
+          sessionLabel: 'observer-session-two',
+          agentName: 'observer-agent-two',
+          persistenceRootDir: secondRoot,
+        };
+        return fleet;
+      };
+
+      expect(() => validateCompanionsConfig(
+        createFleet('/var/lib/observer-one', '/var/lib/observer-one/child'),
+        'companions.json',
+      )).toThrow(/observerEvalSidecar\.persistenceRootDir.*must not overlap/);
+      expect(() => validateCompanionsConfig(
+        createFleet('/var/lib/observer-one/child', '/var/lib/observer-one'),
+        'companions.json',
+      )).toThrow(/observerEvalSidecar\.persistenceRootDir.*must not overlap/);
+      expect(() => validateCompanionsConfig(
+        createFleet('/var/lib/observer-one', '/var/lib/observer-one/../observer-two'),
+        'companions.json',
+      )).not.toThrow();
     });
 
     it('rejects an uppercase postgresSchema', () => {

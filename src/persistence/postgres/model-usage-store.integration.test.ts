@@ -222,6 +222,136 @@ describe('PostgresModelUsageStore fleet token summary', () => {
       await pool.end();
     }
   }, INTEGRATION_TIMEOUT_MS);
+
+  it('serializes model-budget alert claims and remembers durable delivery across restart', async () => {
+    if (!harness) throw new Error('Postgres test harness is unavailable');
+    const { databaseUrl } = await harness.createDatabase();
+    const pool = createPostgresPool(databaseUrl, {
+      applicationName: 'psfn-model-budget-alert-claim',
+      allowExitOnIdle: true,
+      max: 4,
+    });
+    const identity = {
+      companionId: '11111111-1111-4111-8111-111111111111',
+      thresholdReason: 'daily_budget_exceeded' as const,
+      windowKey: '2026-08-20',
+    };
+    try {
+      const firstStore = new PostgresModelUsageStore(pool, { fleetAggregation: true });
+      const concurrentStore = new PostgresModelUsageStore(pool, { fleetAggregation: true });
+      await Promise.all([firstStore.waitUntilReady(), concurrentStore.waitUntilReady()]);
+
+      const firstClaim = await firstStore.claimModelBudgetOperatorAlert(identity);
+      expect(firstClaim).not.toBeNull();
+      let concurrentClaimSettled = false;
+      const concurrentClaimPromise = concurrentStore.claimModelBudgetOperatorAlert(identity)
+        .then((claim) => {
+          concurrentClaimSettled = true;
+          return claim;
+        });
+      await new Promise(resolve => setImmediate(resolve));
+      expect(concurrentClaimSettled).toBe(false);
+
+      await firstClaim!.recordDelivery({
+        timestampMs: Date.parse('2026-08-20T16:00:00.000Z'),
+        dedupeKey: `${identity.companionId}:daily_budget_exceeded:2026-08-20`,
+        thresholdReason: identity.thresholdReason,
+        windowKey: identity.windowKey,
+        status: 'sent',
+        topic: 'operator-alerts',
+        messageId: 'message-1',
+      });
+
+      expect(await concurrentClaimPromise).toBeNull();
+      const restartedStore = new PostgresModelUsageStore(pool, { fleetAggregation: true });
+      expect(await restartedStore.claimModelBudgetOperatorAlert(identity)).toBeNull();
+      expect(await restartedStore.listModelBudgetOperatorAlertEvidence(identity)).toEqual([
+        expect.objectContaining({
+          status: 'sent',
+          messageId: 'message-1',
+        }),
+      ]);
+      await expect(pool.query(
+        `
+          UPDATE model_budget_operator_alert_delivery_events
+          SET topic = 'rewritten'
+          WHERE companion_id = $1
+            AND threshold_reason = $2
+            AND window_key = $3
+        `,
+        [identity.companionId, identity.thresholdReason, identity.windowKey],
+      )).rejects.toThrow('append-only');
+    } finally {
+      await pool.end();
+    }
+  }, INTEGRATION_TIMEOUT_MS);
+
+  it('keeps failed and rejected evidence attempts durably retryable', async () => {
+    if (!harness) throw new Error('Postgres test harness is unavailable');
+    const { databaseUrl } = await harness.createDatabase();
+    const pool = createPostgresPool(databaseUrl, {
+      applicationName: 'psfn-model-budget-alert-retry',
+      allowExitOnIdle: true,
+      max: 2,
+    });
+    const identity = {
+      companionId: '11111111-1111-4111-8111-111111111111',
+      thresholdReason: 'monthly_budget_exceeded' as const,
+      windowKey: '2026-08',
+    };
+    const dedupeKey = `${identity.companionId}:monthly_budget_exceeded:2026-08`;
+    try {
+      const store = new PostgresModelUsageStore(pool, { fleetAggregation: true });
+      const failedClaim = await store.claimModelBudgetOperatorAlert(identity);
+      expect(failedClaim?.attempt).toBe(1);
+      await failedClaim!.recordDelivery({
+        timestampMs: Date.parse('2026-08-20T16:00:00.000Z'),
+        dedupeKey,
+        thresholdReason: identity.thresholdReason,
+        windowKey: identity.windowKey,
+        status: 'failed',
+        error: 'Operator alerting has zero configured sinks',
+      });
+
+      const retryClaim = await store.claimModelBudgetOperatorAlert(identity);
+      expect(retryClaim?.attempt).toBe(2);
+      await retryClaim!.recordDelivery({
+        timestampMs: Date.parse('2026-08-20T16:01:00.000Z'),
+        dedupeKey,
+        thresholdReason: identity.thresholdReason,
+        windowKey: identity.windowKey,
+        status: 'sent',
+        topic: 'operator-alerts',
+      });
+      expect(await store.listModelBudgetOperatorAlertEvidence(identity)).toEqual([
+        expect.objectContaining({
+          status: 'failed',
+          error: 'Operator alerting has zero configured sinks',
+        }),
+        expect.objectContaining({ status: 'sent', topic: 'operator-alerts' }),
+      ]);
+
+      const rejectedIdentity = {
+        ...identity,
+        windowKey: '2026-09',
+      };
+      const rejectedClaim = await store.claimModelBudgetOperatorAlert(rejectedIdentity);
+      await expect(rejectedClaim!.recordDelivery({
+        timestampMs: Date.parse('2026-09-01T00:00:00.000Z'),
+        dedupeKey: `${identity.companionId}:monthly_budget_exceeded:2026-09`,
+        thresholdReason: rejectedIdentity.thresholdReason,
+        windowKey: rejectedIdentity.windowKey,
+        status: 'sent',
+        error: 'invalid success evidence',
+      })).rejects.toThrow();
+      expect(await store.listModelBudgetOperatorAlertEvidence(rejectedIdentity)).toEqual([]);
+      const recoveredClaim = await store.claimModelBudgetOperatorAlert(rejectedIdentity);
+      expect(recoveredClaim?.attempt).toBe(1);
+      await recoveredClaim!.release();
+    } finally {
+      await pool.end();
+    }
+  }, INTEGRATION_TIMEOUT_MS);
 });
 
 describe('PostgresModelUsageStore attribution anomalies', () => {

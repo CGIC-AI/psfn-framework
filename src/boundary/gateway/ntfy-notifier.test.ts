@@ -26,8 +26,7 @@ describe('gateway ntfy provider idempotency', () => {
         provenance: 'system.operator_alert.model_budget_threshold',
       },
       message: 'Budget threshold crossed',
-      idempotencyKey:
-        '11111111-1111-4111-8111-111111111111:daily_budget_exceeded:2026-08-20',
+      idempotencyKey: 'model-budget-alert-test-key',
     };
 
     await notifier.send(alert);
@@ -39,7 +38,7 @@ describe('gateway ntfy provider idempotency', () => {
       expect.objectContaining({
         headers: expect.objectContaining({
           'X-Sequence-ID':
-            '881eae7f9202c64ca3df210656c882b3e56129fb8e2336a5ae13b9f3c889a484',
+            'f769470f01667f3602212364430725d8fe308d3b0d3579c59eb3c81d3d35aa45',
         }),
       }),
     );

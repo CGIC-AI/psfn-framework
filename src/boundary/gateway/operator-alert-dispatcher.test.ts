@@ -160,8 +160,7 @@ describe('GatewayOperatorAlertDispatcher', () => {
 
     await expect(dispatcher.dispatch({
       ...ALERT,
-      idempotencyKey:
-        '11111111-1111-4111-8111-111111111111:daily_budget_exceeded:2026-08-20',
+      idempotencyKey: 'model-budget-alert-test-key',
     })).rejects.toThrow('Operator alert delivery failed for every configured sink');
     expect(telegram.sendText).not.toHaveBeenCalled();
   });

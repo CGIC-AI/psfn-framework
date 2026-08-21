@@ -12,6 +12,7 @@ import { attachCompanionEventForwarder } from '../../channels/backplane/companio
 import { createPolicyGovernedShardParentIcpDelivery } from '../../channels/backplane/shard-parent-icp-ingress.js';
 import { parsePositiveIntEnv } from '../../shared/utils/env.js';
 import { MemoryWriter } from '../../faculties/memory/writer.js';
+import { createCompanionRoomMembershipAuthority } from '../../faculties/memory/companion-provenance.js';
 import { resolveDocumentIngestLimits } from '../../faculties/file-ingest/index.js';
 import {
   EpisodicSynthesizer,
@@ -958,9 +959,11 @@ async function main(): Promise<void> {
   }));
 
   // Memory write/import tools — intentional memory creation
+  const roomMembershipAuthority = createCompanionRoomMembershipAuthority(sessionStore);
   const memoryWriter = new MemoryWriter(memoryStore, gateway, {
     memoryRetrievalPolicy: () => config.memoryRetrievalPolicy,
     ...(config.companionId ? { companionId: config.companionId } : {}),
+    roomMembershipAuthority,
   });
   // htm9.3: direct memory-write tools gate at the memory_write sink (explicit
   // unscreened path until envelopes flow into tool params).
@@ -1185,6 +1188,7 @@ async function main(): Promise<void> {
   const toolMemoryWriter = new MemoryWriter(toolMemoryStore, gateway, {
     memoryRetrievalPolicy: () => config.memoryRetrievalPolicy,
     ...(config.companionId ? { companionId: config.companionId } : {}),
+    roomMembershipAuthority,
   });
   toolMemoryWriter.intakeSinkGateProvider = () => sessionManager.intakeSinkGate;
   registerMemoryTools(agentLoop, {

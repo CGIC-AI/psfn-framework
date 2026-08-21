@@ -86,6 +86,7 @@ import {
 import {
   assertCompanionMemoryProvenance,
   bindLocalCompanionRoomProvenance,
+  type CompanionRoomMembershipAuthority,
 } from './companion-provenance.js';
 
 const log = createComponentLogger('MemoryWriter');
@@ -195,6 +196,8 @@ export interface MemoryWriterOptions {
   memoryRetrievalPolicy?: MemoryRetrievalPolicy | (() => MemoryRetrievalPolicy | undefined);
   /** Exact runtime identity used to reject foreign companion-channel provenance. */
   companionId?: string;
+  /** Independent local session authority for companion-room membership. */
+  roomMembershipAuthority?: CompanionRoomMembershipAuthority | null;
 }
 
 export type MemoryWritePolicyReason =
@@ -281,6 +284,7 @@ export class MemoryWriter {
     | (() => MemoryRetrievalPolicy | undefined)
     | undefined;
   private readonly companionId: string | undefined;
+  private readonly roomMembershipAuthority: CompanionRoomMembershipAuthority | null;
   /**
    * Intake sink gate provider (htm9.3), late-bound by composition (the gate
    * is constructed from intake-policy.json after stores exist). Null means
@@ -296,6 +300,7 @@ export class MemoryWriter {
     options: MemoryWriterOptions = {},
   ) {
     this.companionId = options.companionId?.trim() || undefined;
+    this.roomMembershipAuthority = options.roomMembershipAuthority ?? null;
     this.memoryRetrievalPolicy = options.memoryRetrievalPolicy;
     this.maintenanceScheduler = options.maintenanceScheduler === undefined
       ? new MemoryMaintenanceScheduler(memoryStore, {
@@ -433,7 +438,11 @@ export class MemoryWriter {
     opts: Pick<MemoryWriteOptions, 'sourceRef' | 'provenance'>
       | Pick<MemoryPatchOptions, 'sourceRef' | 'provenance'>,
   ): void {
-    assertCompanionMemoryProvenance(opts, this.companionId);
+    assertCompanionMemoryProvenance(
+      opts,
+      this.companionId,
+      this.roomMembershipAuthority,
+    );
   }
 
   /**
@@ -445,7 +454,11 @@ export class MemoryWriter {
    * 4. Insert new memory
    */
   async write(opts: MemoryWriteOptions): Promise<WriteResult> {
-    const authorizedOpts = bindLocalCompanionRoomProvenance(opts, this.companionId);
+    const authorizedOpts = bindLocalCompanionRoomProvenance(
+      opts,
+      this.companionId,
+      this.roomMembershipAuthority,
+    );
     this.assertTestingSessionExcluded(authorizedOpts);
     this.assertCompanionProvenance(authorizedOpts);
     this.assertCogSecCandidacy(authorizedOpts);
@@ -464,7 +477,11 @@ export class MemoryWriter {
     opts: MemoryWriteOptions,
     embedding: Float32Array,
   ): Promise<WriteResult> {
-    const authorizedOpts = bindLocalCompanionRoomProvenance(opts, this.companionId);
+    const authorizedOpts = bindLocalCompanionRoomProvenance(
+      opts,
+      this.companionId,
+      this.roomMembershipAuthority,
+    );
     this.assertTestingSessionExcluded(authorizedOpts);
     this.assertCompanionProvenance(authorizedOpts);
     this.assertCogSecCandidacy(authorizedOpts);
@@ -806,7 +823,11 @@ export class MemoryWriter {
    * on dedup, upsert always replaces the old memory.
    */
   async upsert(opts: MemoryWriteOptions): Promise<WriteResult> {
-    const authorizedOpts = bindLocalCompanionRoomProvenance(opts, this.companionId);
+    const authorizedOpts = bindLocalCompanionRoomProvenance(
+      opts,
+      this.companionId,
+      this.roomMembershipAuthority,
+    );
     this.assertTestingSessionExcluded(authorizedOpts);
     this.assertCompanionProvenance(authorizedOpts);
     const {
@@ -993,7 +1014,11 @@ export class MemoryWriter {
   }
 
   async patchMemory(opts: MemoryPatchOptions): Promise<MemoryPatchResult | null> {
-    opts = bindLocalCompanionRoomProvenance(opts, this.companionId);
+    opts = bindLocalCompanionRoomProvenance(
+      opts,
+      this.companionId,
+      this.roomMembershipAuthority,
+    );
     this.assertTestingSessionExcluded(opts);
     this.assertCompanionProvenance(opts);
     const memoryId = opts.memoryId.trim();
@@ -1182,7 +1207,11 @@ export class MemoryWriter {
   }
 
   async patch(opts: MemoryPatchOptions): Promise<MemoryCorrectionResult | null> {
-    opts = bindLocalCompanionRoomProvenance(opts, this.companionId);
+    opts = bindLocalCompanionRoomProvenance(
+      opts,
+      this.companionId,
+      this.roomMembershipAuthority,
+    );
     this.assertTestingSessionExcluded(opts);
     this.assertCompanionProvenance(opts);
     const memoryId = opts.memoryId.trim();
@@ -1425,7 +1454,11 @@ export class MemoryWriter {
 
     const acceptedRecords: MemoryWriteOptions[] = [];
     for (const record of records) {
-      const authorizedRecord = bindLocalCompanionRoomProvenance(record, this.companionId);
+      const authorizedRecord = bindLocalCompanionRoomProvenance(
+        record,
+        this.companionId,
+        this.roomMembershipAuthority,
+      );
       this.assertTestingSessionExcluded(authorizedRecord);
       this.assertCompanionProvenance(authorizedRecord);
       try {

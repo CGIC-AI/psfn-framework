@@ -29,6 +29,7 @@ import type { ExtractedFact, MemoryFormationVAD } from './types.js';
 import { MEMORY_CONFIG } from './types.js';
 import { RECOVERY_CONTEXT_MESSAGE_LIMIT } from './extraction/types.js';
 import { MemoryWriter, type WriteResult } from './writer.js';
+import { createCompanionRoomMembershipAuthority } from './companion-provenance.js';
 import {
   DEFAULT_EMOTIONAL_INTENSITY_IMPORTANCE_WEIGHT,
   DEFAULT_MAX_WRITES,
@@ -235,6 +236,9 @@ export class MemoryExtractor {
         ? {
             memoryRetrievalPolicy: () => config.memoryRetrievalPolicy,
             ...(config.companionId ? { companionId: config.companionId } : {}),
+            ...(sessionStore
+              ? { roomMembershipAuthority: createCompanionRoomMembershipAuthority(sessionStore) }
+              : {}),
           }
         : {}),
     });

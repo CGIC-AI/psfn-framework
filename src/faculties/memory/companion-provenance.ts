@@ -31,6 +31,34 @@ export interface CompanionMemoryProvenanceInput {
   provenance?: MemoryProvenance;
 }
 
+export interface CompanionRoomMembershipAuthority {
+  /**
+   * Return true only when the local runtime has an independently authenticated
+   * session binding for this exact room source. Caller provenance is data, not
+   * evidence of membership.
+   */
+  isAuthenticatedMember(input: {
+    channelId: string;
+    sessionId?: string;
+  }): boolean;
+}
+
+export interface CompanionRoomSessionIndex {
+  listChannels(): ReadonlyArray<{ sessionId: string; channelId: string }>;
+}
+
+/** Build room membership authority from the local, gateway-populated session index. */
+export function createCompanionRoomMembershipAuthority(
+  sessions: CompanionRoomSessionIndex,
+): CompanionRoomMembershipAuthority {
+  return {
+    isAuthenticatedMember: ({ channelId, sessionId }) => Boolean(sessionId)
+      && sessions.listChannels().some(
+        (binding) => binding.channelId === channelId && binding.sessionId === sessionId,
+      ),
+  };
+}
+
 /**
  * Stamp a companion-room write from the runtime's canonical companion
  * identity. A caller-provided binding is never repaired: the authorization
@@ -41,6 +69,7 @@ export function bindLocalCompanionRoomProvenance<
 >(
   input: T,
   localCompanionId: string | undefined,
+  roomMembershipAuthority?: CompanionRoomMembershipAuthority | null,
 ): T {
   const sourceChannelId = companionChannelFromSourceRef(input.sourceRef);
   const provenanceChannelId = isCompanionChannelCandidate(input.provenance?.channelId)
@@ -49,9 +78,16 @@ export function bindLocalCompanionRoomProvenance<
   const channelId = provenanceChannelId ?? sourceChannelId;
   const parsedChannel = channelId ? parseCompanionChannelId(channelId) : null;
   if (
-    parsedChannel?.kind !== 'room'
+    !channelId
+    || parsedChannel?.kind !== 'room'
     || input.provenance?.companionId !== undefined
   ) {
+    return input;
+  }
+  if (!roomMembershipAuthority?.isAuthenticatedMember({
+    channelId,
+    ...(input.provenance?.sessionId ? { sessionId: input.provenance.sessionId } : {}),
+  })) {
     return input;
   }
   const companionId = localCompanionId ? parseCompanionId(localCompanionId) : null;
@@ -96,6 +132,7 @@ function companionChannelFromSourceRef(sourceRef: string | undefined): string | 
 export function evaluateCompanionMemoryProvenance(
   input: CompanionMemoryProvenanceInput,
   localCompanionId: string | undefined,
+  roomMembershipAuthority?: CompanionRoomMembershipAuthority | null,
 ): CompanionMemoryProvenanceDecision {
   const sourceChannelId = companionChannelFromSourceRef(input.sourceRef);
   const provenanceChannelId = isCompanionChannelCandidate(input.provenance?.channelId)
@@ -121,7 +158,7 @@ export function evaluateCompanionMemoryProvenance(
 
   const channelId = provenanceChannelId ?? sourceChannelId;
   const parsedChannel = channelId ? parseCompanionChannelId(channelId) : null;
-  if (!parsedChannel) {
+  if (!channelId || !parsedChannel) {
     return {
       allowed: false,
       channelKind: 'malformed',
@@ -161,6 +198,16 @@ export function evaluateCompanionMemoryProvenance(
         reason: 'foreign_companion_room',
       };
     }
+    if (!roomMembershipAuthority?.isAuthenticatedMember({
+      channelId,
+      ...(input.provenance?.sessionId ? { sessionId: input.provenance.sessionId } : {}),
+    })) {
+      return {
+        allowed: false,
+        channelKind: 'room',
+        reason: 'missing_companion_room_membership',
+      };
+    }
   }
   return { allowed: true, channelKind: parsedChannel.kind };
 }
@@ -168,16 +215,26 @@ export function evaluateCompanionMemoryProvenance(
 export function assertCompanionMemoryProvenance(
   input: CompanionMemoryProvenanceInput,
   localCompanionId: string | undefined,
+  roomMembershipAuthority?: CompanionRoomMembershipAuthority | null,
 ): void {
-  const decision = evaluateCompanionMemoryProvenance(input, localCompanionId);
+  const decision = evaluateCompanionMemoryProvenance(
+    input,
+    localCompanionId,
+    roomMembershipAuthority,
+  );
   if (!decision.allowed) throw new CompanionMemoryProvenanceError(decision.reason);
 }
 
 export function isMemoryOwnedByCompanion(
   memory: Pick<PurrMemory, 'sourceRef' | 'provenance'>,
   localCompanionId: string | undefined,
+  roomMembershipAuthority?: CompanionRoomMembershipAuthority | null,
 ): boolean {
-  return evaluateCompanionMemoryProvenance(memory, localCompanionId).allowed;
+  return evaluateCompanionMemoryProvenance(
+    memory,
+    localCompanionId,
+    roomMembershipAuthority,
+  ).allowed;
 }
 
 export interface CompanionMemoryAuditInput extends Pick<PurrMemory, 'id' | 'sourceRef' | 'provenance'> {
@@ -214,11 +271,22 @@ function digest(value: string | undefined): string | undefined {
 export function auditCompanionMemoryProvenance(
   memories: readonly CompanionMemoryAuditInput[],
   localCompanionId: string | undefined,
+  roomMembershipAuthority?: CompanionRoomMembershipAuthority | null,
 ): CompanionMemoryAuditReport {
+  // The standalone maintenance audit historically has only durable row
+  // provenance, not the local session index. Preserve that report's tenancy
+  // scope unless a caller explicitly supplies the stronger session authority.
+  const auditRoomAuthority = roomMembershipAuthority ?? {
+    isAuthenticatedMember: () => true,
+  };
   const findings: CompanionMemoryAuditFinding[] = [];
   const reasonCounts: CompanionMemoryAuditReport['reasonCounts'] = {};
   for (const memory of memories) {
-    const decision = evaluateCompanionMemoryProvenance(memory, localCompanionId);
+    const decision = evaluateCompanionMemoryProvenance(
+      memory,
+      localCompanionId,
+      auditRoomAuthority,
+    );
     if (decision.allowed) continue;
     const sourceRefDigest = digest(memory.sourceRef);
     const sessionRefDigest = digest(memory.provenance?.sessionId);

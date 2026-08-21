@@ -2,6 +2,7 @@ import type {
   ConfirmationResolveRequest,
   ConfirmationResolveResult,
 } from '../../../system/capabilities/confirmation-queue.js';
+import { createCompanionId } from '../../../shared/routing/companion-id.js';
 import { isRecord } from '../../../shared/utils/types.js';
 
 const OPERATOR_CONFIRMATION_PATH = '/operator/confirmations/resolve';
@@ -142,6 +143,10 @@ export function createGatewayOperatorConfirmationClient(
   const fetchImpl = deps.fetchImpl ?? fetch;
   return {
     resolve: async (params, authority) => {
+      if (isRecord(params) && 'companionId' in params) {
+        throw new Error('Confirmation params cannot assert companion authority.');
+      }
+      let companionId: string | undefined;
       if (authority.kind === 'standalone_operator') {
         const authorization = boundedCredential(
           authority.authorization,
@@ -158,6 +163,11 @@ export function createGatewayOperatorConfirmationClient(
         || !authority.requestId.trim()
         || !authority.decisionId.trim()) {
         throw new Error('Admitted Fleet Garden authority is required for gateway resolution.');
+      } else {
+        companionId = createCompanionId(
+          authority.companionId,
+          'Fleet Garden confirmation companionId',
+        );
       }
 
       const response = await fetchImpl(endpoint, {
@@ -169,7 +179,10 @@ export function createGatewayOperatorConfirmationClient(
           'Content-Type': 'application/json',
           Authorization: `Bearer ${operatorToken}`,
         },
-        body: JSON.stringify(params),
+        body: JSON.stringify({
+          ...params,
+          ...(companionId ? { companionId } : {}),
+        }),
       });
       const responseText = await readBoundedText(response);
       if (!response.ok) {

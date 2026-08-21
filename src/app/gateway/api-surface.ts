@@ -119,6 +119,7 @@ export interface StartOptionalGatewayApiServerOptions extends GatewayApiSurfaceB
     | 'invalidateIcpAutonomyForCompanion'
     | 'isIcpAutonomyConfigured'
     | 'resolveOperatorApproval'
+    | 'resolveOperatorApprovalForOwner'
     | 'listOperatorConfirmations'
     | 'ownerOfConfirmation'
     | 'listCompanionUiConfirmations'
@@ -1054,7 +1055,21 @@ export async function startOptionalGatewayApiServer(
         }
       : {}),
     confirmationOperator: {
-      resolve: async params => await options.gateway.resolveOperatorApproval(params),
+      resolve: async (params, authority) => {
+        if (authority.kind === 'fleet_companion') {
+          if (!fleetAuthBootstrapOnly) {
+            throw new Error('Fleet companion confirmation authority is unavailable outside Fleet mode');
+          }
+          return await options.gateway.resolveOperatorApprovalForOwner(
+            authority.companionId,
+            params,
+          );
+        }
+        if (fleetAuthBootstrapOnly) {
+          throw new Error('Fleet operator confirmation resolution requires companion authority');
+        }
+        return await options.gateway.resolveOperatorApproval(params);
+      },
     },
     ...(options.fleetAuthBroker && options.config.fleetAuth
       ? {

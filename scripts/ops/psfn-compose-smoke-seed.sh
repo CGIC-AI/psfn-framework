@@ -4,7 +4,7 @@
 # runtime image (which ships config/*.seed.json) as root, before the gateway and
 # agent start, and:
 #   * lays the split-root owner files into their canonical roots — cluster-global
-#     owners under SYSTEM_DATA_DIR, the four per-companion owners under
+#     owners under SYSTEM_DATA_DIR, per-companion owners under
 #     COMPANION_DATA_DIR (setup.md "What Goes In JSON Owner Files"),
 #   * writes a first-run starter companion card at CHARACTER_CARD_PATH,
 #   * chowns the shared named volumes to the runtime UID (999) so the non-root
@@ -35,10 +35,11 @@ RUNTIME_GID="${PSFN_RUNTIME_GID:-999}"
 # Cluster-global owner files (SYSTEM_DATA_DIR). Startup no longer copies seed
 # templates into runtime state, so every owner the runtime requires must be laid
 # down here or the process fails closed on the first missing one.
-SYSTEM_OWNERS="settings models providers trust-policy intake-policy backup partner-affect-shadow places runtime-prompt-layers automata-policy mcp-servers"
+SYSTEM_OWNERS="settings models providers trust-policy intake-policy backup places runtime-prompt-layers automata-policy mcp-servers"
 # Per-companion owner files (COMPANION_DATA_DIR) — startup never reads a
 # system-root copy of these as a fallback.
 COMPANION_OWNERS="scheduler capability-tier charge-policy skills"
+COMPANION_ONLY_OWNERS="partner-affect-shadow"
 
 mkdir -p "$SYSTEM_DATA_DIR" "$COMPANION_DATA_DIR" "$WORKSPACE_PATH" "$GATEWAY_SOCKET_DIR" "$MODEL_CACHE_DIR"
 
@@ -70,6 +71,9 @@ done
 for owner in $COMPANION_OWNERS; do
   seed_owner "$COMPANION_DATA_DIR" "$owner"
   seed_owner "$SYSTEM_DATA_DIR" "$owner"
+done
+for owner in $COMPANION_ONLY_OWNERS; do
+  seed_owner "$COMPANION_DATA_DIR" "$owner"
 done
 
 # This harness certifies the Autonomous runtime path. Keep the general-purpose

@@ -12,6 +12,7 @@ import { attachCompanionEventForwarder } from '../../channels/backplane/companio
 import { createPolicyGovernedShardParentIcpDelivery } from '../../channels/backplane/shard-parent-icp-ingress.js';
 import { parsePositiveIntEnv } from '../../shared/utils/env.js';
 import { MemoryWriter } from '../../faculties/memory/writer.js';
+import { createCompanionRoomMembershipAuthority } from '../../faculties/memory/companion-provenance.js';
 import { resolveDocumentIngestLimits } from '../../faculties/file-ingest/index.js';
 import {
   EpisodicSynthesizer,
@@ -82,6 +83,10 @@ import { GatewayBeadsOps } from '../../boundary/integrations/beads/gateway-ops.j
 import { registerWorldTools } from '../../boundary/integrations/world/runtime-wiring.js';
 import { GatewayWorldOps } from '../../boundary/integrations/world/gateway-ops.js';
 import { createBehavioralPatternMemoryPromotionHook } from '../../core/intention/patterns.js';
+import {
+  createLongHorizonFollowUpRouter,
+} from '../../core/intention/long-horizon-follow-up.js';
+import type { LongHorizonFollowUpInput } from '../../core/intention/runtime-wiring.js';
 import {
   wireOperatorHookRuntime,
   wireShardAndThinkRuntime,
@@ -188,6 +193,7 @@ import {
   type AgentIcpRuntimeAvailability,
 } from './icp-runtime-availability.js';
 import { PostgresAdminAutomataBusReadAdapter } from '../../operator/garden/services/automata-bus-read-adapter.js';
+import { createProductionAutomataBusReindexService } from '../../faculties/automata/bus/production-reindex.js';
 
 const log = createComponentLogger('Agent');
 ensureActiveTimezone();
@@ -491,6 +497,22 @@ async function main(): Promise<void> {
     throw new Error('Agent core runtime requires POSTGRES_DATABASE_URL');
   }
 
+  // Core appraisal hooks are composed before the scheduler because the
+  // scheduler itself needs the finished agent loop. Keep a fail-closed bridge
+  // during that short startup interval, then bind it to the real durable
+  // scheduled-prompt runtime immediately after scheduler composition.
+  let longHorizonFollowUpRouter:
+    | ((input: LongHorizonFollowUpInput) => Promise<string>)
+    | null = null;
+  const routeLongHorizonFollowUp = async (
+    input: LongHorizonFollowUpInput,
+  ): Promise<string> => {
+    if (!longHorizonFollowUpRouter) {
+      throw new Error('Long-horizon intention follow-up scheduler is not ready');
+    }
+    return longHorizonFollowUpRouter(input);
+  };
+
   const {
     card,
     systemPrompt,
@@ -516,6 +538,8 @@ async function main(): Promise<void> {
     contactStore: persistedContactStore,
     intentionRuntime: persistedIntentionRuntime,
     intentionProviders,
+    intentionFollowUpHorizonMs: schedulerConfig.intentionFollowUp.nearTermHorizonMs,
+    routeLongHorizonFollowUp,
     capabilityRuntime,
     contactTrackingGate,
     satelliteRegistryConfig,
@@ -570,6 +594,12 @@ async function main(): Promise<void> {
     vector: automataBusRuntime.vector,
     companionId: resolveCoreCompanionIdFromConfig(config),
     maxPageLimit: config.automataPolicy!.operatorMutationLimit,
+  });
+  const automataBusReindexPort = createProductionAutomataBusReindexService({
+    pool: persistenceRuntime.automataBusStore.getQueryPool(),
+    runtime: automataBusRuntime,
+    companionId: resolveCoreCompanionIdFromConfig(config),
+    maxFindings: config.automataPolicy!.operatorMutationLimit,
   });
   agentLoop.setBackgroundWorkExecutionScope(
     handler => companionAvailability.run('do_not_disturb', handler),
@@ -680,7 +710,7 @@ async function main(): Promise<void> {
   // no path into prompts, appraisal, memory, scheduling, or world actions,
   // and stays fully inert unless the JSON owner file enables it with an
   // exact canonical partner binding.
-  const partnerAffectShadowPolicy = loadPartnerAffectShadowConfig(pathSnapshot.systemDataDir);
+  const partnerAffectShadowPolicy = loadPartnerAffectShadowConfig(pathSnapshot.companionDataDir);
   const partnerAffectShadowBridge = createPartnerAffectShadowIngestBridge({
     eventBus,
     policy: partnerAffectShadowPolicy,
@@ -929,8 +959,11 @@ async function main(): Promise<void> {
   }));
 
   // Memory write/import tools — intentional memory creation
+  const roomMembershipAuthority = createCompanionRoomMembershipAuthority(sessionStore);
   const memoryWriter = new MemoryWriter(memoryStore, gateway, {
     memoryRetrievalPolicy: () => config.memoryRetrievalPolicy,
+    ...(config.companionId ? { companionId: config.companionId } : {}),
+    roomMembershipAuthority,
   });
   // htm9.3: direct memory-write tools gate at the memory_write sink (explicit
   // unscreened path until envelopes flow into tool params).
@@ -1154,6 +1187,8 @@ async function main(): Promise<void> {
   );
   const toolMemoryWriter = new MemoryWriter(toolMemoryStore, gateway, {
     memoryRetrievalPolicy: () => config.memoryRetrievalPolicy,
+    ...(config.companionId ? { companionId: config.companionId } : {}),
+    roomMembershipAuthority,
   });
   toolMemoryWriter.intakeSinkGateProvider = () => sessionManager.intakeSinkGate;
   registerMemoryTools(agentLoop, {
@@ -1289,6 +1324,14 @@ async function main(): Promise<void> {
     wiringMode: 'gateway',
     loadedModules: moduleSummary.loaded,
     failedModules: moduleSummary.failed,
+  });
+  longHorizonFollowUpRouter = createLongHorizonFollowUpRouter({
+    store: persistenceRuntime.scheduledPromptStore,
+    scheduler,
+    agentLoop,
+    sender: {
+      send: (channelId: string, content: string) => gateway.discordSend(channelId, content),
+    },
   });
   agentLoop.validateToolWiring('gateway', gateway, DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE);
 
@@ -1464,8 +1507,10 @@ async function main(): Promise<void> {
     automataRunRegistry: persistenceRuntime.automataRunRegistry,
     automataBusReadPort,
     automataLessonReadPort: automataBusReadPort,
+    automataReindexPort: automataBusReindexPort,
     scheduler,
     schedulerConfig,
+    scheduledPromptStore: persistenceRuntime.scheduledPromptStore,
     icpInitiationCandidateStore: persistenceRuntime.icpInitiationCandidateStore,
     icpFeltImpulseFunnelStore: persistenceRuntime.icpFeltImpulseFunnelStore,
     partnerAffectShadowStore: persistenceRuntime.partnerAffectShadowStore,
@@ -1765,6 +1810,8 @@ async function main(): Promise<void> {
       onIntentionFollowUpDampened: intentionAppraisalHooks.onIntentionFollowUpDampened,
       onBehavioralPatternOutcome: intentionBehavioralHooks.onBehavioralPatternOutcome,
       pendingFollowUpStore: intentionRuntime.pendingFollowUpStore,
+      intentionFollowUpHorizonMs: schedulerConfig.intentionFollowUp.nearTermHorizonMs,
+      routeLongHorizonFollowUp,
       ...(icpIntentionCandidateAdapter ? { icpIntentionCandidateAdapter } : {}),
       scheduledPromptStore: persistenceRuntime.scheduledPromptStore,
       coreMemoryStore,

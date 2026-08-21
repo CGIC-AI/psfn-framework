@@ -51,6 +51,28 @@ function clone<T>(value: T): T {
   return structuredClone(value);
 }
 
+function createFleetWithObserverRoots(
+  firstRoot: string,
+  secondRoot: string,
+): CompanionsFleetConfig {
+  const fleet = clone(VALID_FLEET);
+  fleet.companions[0].observerEvalSidecar = {
+    sidecarId: 'observer-one',
+    serverUrl: 'http://observer-one.internal:17342',
+    sessionLabel: 'observer-session-one',
+    agentName: 'observer-agent-one',
+    persistenceRootDir: firstRoot,
+  };
+  fleet.companions[1].observerEvalSidecar = {
+    sidecarId: 'observer-two',
+    serverUrl: 'http://observer-two.internal:17342',
+    sessionLabel: 'observer-session-two',
+    agentName: 'observer-agent-two',
+    persistenceRootDir: secondRoot,
+  };
+  return fleet;
+}
+
 describe('companions owner-file config', () => {
   const tempDirs: string[] = [];
 
@@ -147,6 +169,88 @@ describe('companions owner-file config', () => {
       sharedRole.postgres.sharedMigrationRole = sharedRole.companions[0].postgresRole;
       expect(() => validateCompanionsConfig(sharedRole, 'companions.json'))
         .toThrow(/shared migration role must be distinct/);
+    });
+
+    it('rejects reuse of every observer identity field across three companions', () => {
+      const createFleet = () => {
+        const fleet = clone(VALID_FLEET) as unknown as {
+          companions: Array<Record<string, unknown>>;
+        };
+        fleet.companions.push({
+          ...structuredClone(fleet.companions[1]),
+          companionId: '33333333-3333-4333-8333-333333333333',
+          companionDataDir: 'companions/sol',
+          characterCardPath: 'companions/sol/character-card.json',
+          postgresSchema: 'companion_sol',
+          postgresRole: 'companion_sol_runtime',
+          postgresDatabaseUrlRef: { kind: 'env', envName: 'COMPANION_SOL_DATABASE_URL' },
+        });
+        fleet.companions.forEach((companion, index) => {
+          const ordinal = String(index + 1);
+          companion.observerEvalSidecar = {
+            sidecarId: `observer-${ordinal}`,
+            serverUrl: `http://observer-${ordinal}.internal:17342`,
+            sessionLabel: `observer-session-${ordinal}`,
+            agentName: `observer-agent-${ordinal}`,
+            persistenceRootDir: `/var/lib/observer-${ordinal}`,
+          };
+        });
+        return fleet;
+      };
+      const fields = [
+        'sidecarId',
+        'serverUrl',
+        'sessionLabel',
+        'agentName',
+        'persistenceRootDir',
+      ] as const;
+
+      expect(() => validateCompanionsConfig(createFleet(), 'companions.json')).not.toThrow();
+      for (const field of fields) {
+        const fleet = createFleet();
+        const primaryBinding = fleet.companions[0].observerEvalSidecar as Record<string, unknown>;
+        const siblingBinding = fleet.companions[2].observerEvalSidecar as Record<string, unknown>;
+        siblingBinding[field] = primaryBinding[field];
+        expect(() => validateCompanionsConfig(fleet, 'companions.json'))
+          .toThrow(field === 'persistenceRootDir'
+            ? /observerEvalSidecar\.persistenceRootDir must not overlap/
+            : `duplicate observerEvalSidecar.${field}`);
+      }
+    });
+
+    it('rejects nested observer persistence roots in either fleet order', () => {
+      expect(() => validateCompanionsConfig(
+        createFleetWithObserverRoots('/var/lib/observer-one', '/var/lib/observer-one/child'),
+        'companions.json',
+      )).toThrow(/observerEvalSidecar\.persistenceRootDir.*must not overlap/);
+      expect(() => validateCompanionsConfig(
+        createFleetWithObserverRoots('/var/lib/observer-one/child', '/var/lib/observer-one'),
+        'companions.json',
+      )).toThrow(/observerEvalSidecar\.persistenceRootDir.*must not overlap/);
+      expect(() => validateCompanionsConfig(
+        createFleetWithObserverRoots('/var/lib/observer-one', '/var/lib/observer-one/../observer-two'),
+        'companions.json',
+      )).not.toThrow();
+    });
+
+    it('rejects observer persistence roots that overlap through a symlinked existing ancestor', () => {
+      const dataDir = makeDataDir();
+      const canonicalParent = join(dataDir, 'observer-storage');
+      const aliasParent = join(dataDir, 'observer-storage-alias');
+      mkdirSync(canonicalParent);
+      symlinkSync(canonicalParent, aliasParent, 'dir');
+
+      const canonicalFutureRoot = join(canonicalParent, 'future-root');
+      const aliasedNestedFutureRoot = join(aliasParent, 'future-root', 'nested');
+
+      expect(() => validateCompanionsConfig(
+        createFleetWithObserverRoots(canonicalFutureRoot, aliasedNestedFutureRoot),
+        'companions.json',
+      )).toThrow(/observerEvalSidecar\.persistenceRootDir.*must not overlap/);
+      expect(() => validateCompanionsConfig(
+        createFleetWithObserverRoots(aliasedNestedFutureRoot, canonicalFutureRoot),
+        'companions.json',
+      )).toThrow(/observerEvalSidecar\.persistenceRootDir.*must not overlap/);
     });
 
     it('rejects an uppercase postgresSchema', () => {

@@ -780,11 +780,11 @@ describe('ApiServer', () => {
   describe('POST /v1/chat/completions (non-streaming)', () => {
     it('pins testing-harness requests with different session headers to one API room', async () => {
       await server.stop();
-      const observedChannels: string[] = [];
+      const observedMessages: SubstrateMessage[] = [];
       server = createApiServer({
         port,
         agentLoop: createMockAgentLoop(eventBus, message => {
-          observedChannels.push(message.channelId);
+          observedMessages.push(message);
         }),
         eventBus,
         sessionManager: createMockSessionManager(),
@@ -804,14 +804,60 @@ describe('ApiServer', () => {
         }, {
           Authorization: 'Bearer dedicated-testing-harness-key',
           'X-Session-ID': sessionId,
+          'X-Testing-Harness-Run-ID': 'run-tool-call-matrix',
+          'X-Testing-Harness-Manifest-ID': 'manifest-tool-call-matrix',
         });
         expect(res.status).toBe(200);
       }
 
-      expect(observedChannels).toEqual([
+      expect(observedMessages.map(message => message.channelId)).toEqual([
         'api:testing-harness',
         'api:testing-harness',
       ]);
+      expect(observedMessages.map(message => message.routing?.testingHarness)).toEqual([
+        {
+          schemaVersion: 1,
+          kind: 'testing_harness',
+          runId: 'run-tool-call-matrix',
+          manifestId: 'manifest-tool-call-matrix',
+        },
+        {
+          schemaVersion: 1,
+          kind: 'testing_harness',
+          runId: 'run-tool-call-matrix',
+          manifestId: 'manifest-tool-call-matrix',
+        },
+      ]);
+    });
+
+    it('requires complete run provenance from the authenticated testing harness', async () => {
+      await server.stop();
+      const agentLoop = createMockAgentLoop(eventBus);
+      server = createApiServer({
+        port,
+        agentLoop,
+        eventBus,
+        sessionManager: createMockSessionManager(),
+        apiKey: 'shared-api-key-for-test',
+        testingHarnessPrincipal: {
+          principalId: 'testing-harness',
+          apiKey: 'dedicated-testing-harness-key',
+        },
+      });
+      await server.init();
+      await server.start();
+
+      const response = await request(port, 'POST', '/v1/chat/completions', {
+        model: DEFAULT_COMPANION_ID,
+        messages: [{ role: 'user', content: 'unattributed probe' }],
+      }, {
+        Authorization: 'Bearer dedicated-testing-harness-key',
+        'X-Testing-Harness-Run-ID': 'run-without-manifest',
+      });
+
+      expect(response.status).toBe(400);
+      expect(JSON.parse(response.body).error.type).toBe('testing_harness_provenance_required');
+      expect(agentLoop.handleMessage).not.toHaveBeenCalled();
     });
 
     it('returns valid OpenAI response shape', async () => {

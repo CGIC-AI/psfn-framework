@@ -2,8 +2,8 @@ import type {
   ConfirmationResolveRequest,
   ConfirmationResolveResult,
 } from '../../../system/capabilities/confirmation-queue.js';
+import { createCompanionId } from '../../../shared/routing/companion-id.js';
 import { isRecord } from '../../../shared/utils/types.js';
-import type { ConfirmationOperatorAuthContext } from '../../../operator/garden/admin-contract.js';
 
 const OPERATOR_CONFIRMATION_PATH = '/operator/confirmations/resolve';
 const MAX_RESPONSE_BYTES = 64 * 1024;
@@ -21,9 +21,22 @@ const RESOLUTION_STATUSES = new Set([
 export interface GatewayOperatorConfirmationClient {
   resolve(
     params: ConfirmationResolveRequest,
-    auth: ConfirmationOperatorAuthContext,
+    authority: GatewayOperatorConfirmationAuthority,
   ): Promise<ConfirmationResolveResult>;
 }
+
+type GatewayOperatorConfirmationAuthority =
+  | Readonly<{
+      kind: 'standalone_operator';
+      authorization?: string;
+      cookie?: string;
+    }>
+  | Readonly<{
+      kind: 'fleet_principal';
+      companionId: string;
+      requestId: string;
+      decisionId: string;
+    }>;
 
 interface GatewayOperatorConfirmationClientDeps {
   operatorToken: string;
@@ -129,11 +142,32 @@ export function createGatewayOperatorConfirmationClient(
   const endpoint = resolveEndpoint(baseUrl);
   const fetchImpl = deps.fetchImpl ?? fetch;
   return {
-    resolve: async (params, auth) => {
-      const authorization = boundedCredential(auth.authorization, MAX_AUTHORIZATION_LENGTH);
-      const cookie = boundedCredential(auth.cookie, MAX_COOKIE_LENGTH);
-      if (!authorization && !cookie) {
-        throw new Error('Authenticated Garden operator credentials are required for gateway resolution.');
+    resolve: async (params, authority) => {
+      if (isRecord(params) && 'companionId' in params) {
+        throw new Error('Confirmation params cannot assert companion authority.');
+      }
+      let companionId: string | undefined;
+      if (authority.kind === 'standalone_operator') {
+        const authorization = boundedCredential(
+          authority.authorization,
+          MAX_AUTHORIZATION_LENGTH,
+        );
+        const cookie = boundedCredential(authority.cookie, MAX_COOKIE_LENGTH);
+        if (!authorization && !cookie) {
+          throw new Error('Authenticated Garden operator credentials are required for gateway resolution.');
+        }
+      } else if (typeof authority.companionId !== 'string'
+        || typeof authority.requestId !== 'string'
+        || typeof authority.decisionId !== 'string'
+        || !authority.companionId.trim()
+        || !authority.requestId.trim()
+        || !authority.decisionId.trim()) {
+        throw new Error('Admitted Fleet Garden authority is required for gateway resolution.');
+      } else {
+        companionId = createCompanionId(
+          authority.companionId,
+          'Fleet Garden confirmation companionId',
+        );
       }
 
       const response = await fetchImpl(endpoint, {
@@ -145,7 +179,10 @@ export function createGatewayOperatorConfirmationClient(
           'Content-Type': 'application/json',
           Authorization: `Bearer ${operatorToken}`,
         },
-        body: JSON.stringify(params),
+        body: JSON.stringify({
+          ...params,
+          ...(companionId ? { companionId } : {}),
+        }),
       });
       const responseText = await readBoundedText(response);
       if (!response.ok) {

@@ -84,6 +84,12 @@ export interface MemoryEmotionalTexture {
 }
 export interface MemoryProvenance {
   channelId?: string;
+  /**
+   * Runtime companion that owned a companion-room source when the memory was
+   * formed. Room channel ids identify only a place, so this topology-derived
+   * binding is the durable membership proof used by tenant authorization.
+   */
+  companionId?: string;
   turnId?: string;
   requestId?: string;
   toolName?: string;
@@ -486,6 +492,7 @@ export function normalizeMemoryProvenance(value: unknown): MemoryProvenance | un
   const record = value as Record<string, unknown>;
   const provenance: MemoryProvenance = {
     ...(normalizeOptionalString(record.channelId) ? { channelId: normalizeOptionalString(record.channelId) } : {}),
+    ...(normalizeOptionalString(record.companionId) ? { companionId: normalizeOptionalString(record.companionId) } : {}),
     ...(normalizeOptionalString(record.turnId) ? { turnId: normalizeOptionalString(record.turnId) } : {}),
     ...(normalizeOptionalString(record.requestId) ? { requestId: normalizeOptionalString(record.requestId) } : {}),
     ...(normalizeOptionalString(record.toolName) ? { toolName: normalizeOptionalString(record.toolName) } : {}),

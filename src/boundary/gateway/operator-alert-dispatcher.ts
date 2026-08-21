@@ -64,6 +64,13 @@ export class GatewayOperatorAlertDispatcher {
     if (!message) {
       throw new Error('notify.operator requires a non-empty message');
     }
+    const idempotencyKey = params.idempotencyKey?.trim();
+    if (params.idempotencyKey !== undefined && !idempotencyKey) {
+      throw new Error('notify.operator idempotencyKey must be non-empty when provided');
+    }
+    const normalizedParams = idempotencyKey
+      ? { ...params, idempotencyKey, sender, message }
+      : { ...params, sender, message };
 
     const configuration = this.configuration();
     if (configuration.status === 'unconfigured') {
@@ -73,7 +80,7 @@ export class GatewayOperatorAlertDispatcher {
     const attempts: Array<Promise<OperatorAlertDelivery>> = [];
     if (this.ntfy.isConfigured()) {
       attempts.push(
-        this.ntfy.send({ ...params, sender, message })
+        this.ntfy.send(normalizedParams)
           .then(result => ({
             sink: 'ntfy' as const,
             status: result.status,
@@ -88,11 +95,19 @@ export class GatewayOperatorAlertDispatcher {
       const target = `telegram:${this.telegramChatId}`;
       const title = params.title?.trim();
       const content = escapeTelegramMarkdown(title ? `${title}\n\n${message}` : message);
-      attempts.push(
-        this.telegramDock.outbound.sendText({ channelId: target }, content)
-          .then(() => ({ sink: 'telegram' as const, status: 'sent' as const, target }))
-          .catch(error => this.recordFailure('telegram', error, sender.provenance)),
-      );
+      if (idempotencyKey) {
+        attempts.push(Promise.resolve(this.recordFailure(
+          'telegram',
+          new Error('Telegram operator alerts do not support provider idempotency'),
+          sender.provenance,
+        )));
+      } else {
+        attempts.push(
+          this.telegramDock.outbound.sendText({ channelId: target }, content)
+            .then(() => ({ sink: 'telegram' as const, status: 'sent' as const, target }))
+            .catch(error => this.recordFailure('telegram', error, sender.provenance)),
+        );
+      }
     }
 
     const deliveries = await Promise.all(attempts);

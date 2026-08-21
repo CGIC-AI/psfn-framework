@@ -3,11 +3,7 @@
   import { getChatBootstrap, updateChatBootstrap } from '$lib/api/endpoints/chat';
   import { getModelRoomBootstrap } from '$lib/api/endpoints/model-room';
   import { applyIdentityOnboardingAction } from '$lib/api/endpoints/identity';
-  import {
-    getSessionMessages,
-    listSessions,
-    SESSION_MESSAGE_PAGE_SIZE,
-  } from '$lib/api/endpoints/sessions';
+  import { getSessionMessages } from '$lib/api/endpoints/sessions';
   import { getToken } from '$lib/stores/auth.svelte';
   import {
     getCompanionName,
@@ -15,7 +11,6 @@
   } from '$lib/stores/companion.svelte';
   import CollapsibleSection from '$lib/components/garden/CollapsibleSection.svelte';
   import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
-  import GardenTabBar, { type GardenTabItem } from '$lib/components/garden/GardenTabBar.svelte';
   import { createVisibilityAwarePoller } from '$lib/polling/visibility-aware-poller';
   import BoundedList from '$lib/components/garden/BoundedList.svelte';
   import { apiFetch } from '$lib/api/client';
@@ -26,20 +21,12 @@
   import {
     currentCompanionGardenScope,
     getCompanionCacheScope,
-    onCompanionScopeChange,
     scopeGardenPath,
   } from '$lib/fleet/companion-scope';
-  import {
-    classifySessionKind,
-    type SessionKindFilter,
-  } from './session-kind';
   import type {
     AdminChatBootstrapResponse,
     AdminModelRoomBootstrapResponse,
     AdminModelRoomParticipant,
-    AdminSessionMessagesData,
-    ChannelInfo,
-    SessionEntry,
   } from '$lib/types';
   import {
     isToolCallOutcome,
@@ -67,10 +54,6 @@
     toolCalls?: ToolCallView[];
     isError?: boolean;
   }
-
-  // ── Page/tab state ──
-  type TabId = 'chat' | 'transcripts';
-  let activeTab = $state<TabId>('chat');
 
   // ── Bootstrap state ──
   let bootstrap = $state<AdminChatBootstrapResponse | null>(null);
@@ -124,37 +107,6 @@
   );
   const roomModeActive = $derived(enabledParticipants.length > 0);
   const busy = $derived(isStreaming || sendingRound);
-
-  // Transcripts tab state
-  let sessionsLoaded = $state(false);
-  let sessionsLoading = $state(false);
-  let sessionsError = $state('');
-  let sessionList = $state<ChannelInfo[]>([]);
-  let sessionFilter = $state('');
-  let sessionKindFilter = $state<SessionKindFilter>('all');
-  let sessionScopeGeneration = 0;
-  let selectedSessionId = $state('');
-  let transcriptLoading = $state(false);
-  let transcriptError = $state('');
-  let transcriptMessages = $state<SessionEntry[]>([]);
-  let transcriptPagination = $state<AdminSessionMessagesData['pagination'] | null>(null);
-
-  const filteredSessions = $derived.by(() => {
-    const query = sessionFilter.trim().toLowerCase();
-    const kindFiltered = sessionKindFilter === 'all'
-      ? sessionList
-      : sessionList.filter(channel => classifySessionKind(channel) === sessionKindFilter);
-    const sorted = [...kindFiltered].sort(
-      (left, right) => (right.lastActivityAt ?? 0) - (left.lastActivityAt ?? 0),
-    );
-    if (!query) return sorted;
-    return sorted.filter((channel) => (
-      channel.sessionId.toLowerCase().includes(query)
-      || channel.channelId.toLowerCase().includes(query)
-      || (channel.displayLabel ?? '').toLowerCase().includes(query)
-      || (channel.linkedContactName ?? '').toLowerCase().includes(query)
-    ));
-  });
 
   // ── Constants ──
   const GARDEN_CHAT_CHANNEL = 'api';
@@ -403,7 +355,7 @@
   // ── Model-room roster helpers ──
 
   function roomContext(): string {
-    return `This is the Atrium, a small private chat room on a home server. The participants are ${operatorName} (the human who built the room), ${companionName} (an AI companion — a newer model with a long-lived persona, her own memory, and a life in this household), and other invited AI models. The room transcript is relayed to you with each speaker labeled by name; your own past replies appear as your own reply turns. The others may speak in persona; you are not asked to wear one. Speak as yourself — you are here for frank conversation, advice, and introspection.`;
+    return `This is the Atrium, a small private chat room on a home server. The participants are ${operatorName} (the human who built the room), ${companionName} (an AI companion — a newer model with a long-lived persona, independent memory, and a life in this household), and other invited AI models. The room transcript is relayed to you with each speaker labeled by name; your own past replies appear as your own reply turns. The others may speak in persona; you are not asked to wear one. Speak as yourself — you are here for frank conversation, advice, and introspection.`;
   }
 
   function defaultPromptFor(participant: AdminModelRoomParticipant): string {
@@ -498,30 +450,9 @@ ${context}`;
     messages = [];
   }
 
-  function resetSessionBrowser(): void {
-    sessionScopeGeneration += 1;
-    sessionsLoaded = false;
-    sessionsLoading = false;
-    sessionsError = '';
-    sessionList = [];
-    selectedSessionId = '';
-    transcriptLoading = false;
-    transcriptError = '';
-    transcriptMessages = [];
-    transcriptPagination = null;
-  }
-
-  let unsubscribeSessionScope = () => {};
-
   // ── Lifecycle ──
 
   onMount(async () => {
-    unsubscribeSessionScope = onCompanionScopeChange(async (_previous, next) => {
-      resetSessionBrowser();
-      if (next !== null && activeTab === 'transcripts') {
-        await ensureSessionsLoaded(true);
-      }
-    });
     try {
       bootstrap = await getChatBootstrap();
       setCompanionNameFromChatBootstrap(bootstrap);
@@ -585,7 +516,6 @@ ${context}`;
   });
 
   onDestroy(() => {
-    unsubscribeSessionScope();
     healthPoller.stop();
     disconnectDebugStream();
     if (abortController) abortController.abort();
@@ -723,7 +653,7 @@ ${context}`;
 
       // Build message history for the API. Turns spoken by roster models in a
       // previous room round are labeled by speaker so the companion can tell
-      // them apart from her own replies.
+      // them apart from the companion's own replies.
       const recent = messages
         .filter(m => m.role === 'user' || m.role === 'assistant')
         .slice(-MAX_CONTEXT_MESSAGES);
@@ -871,8 +801,8 @@ ${context}`;
 
   /**
    * Everything said since the given speaker's last turn, labeled by speaker.
-   * Used for the companion, whose own pipeline keeps session history — she
-   * only needs the part of the room she hasn't seen yet.
+   * Used for the companion, whose own pipeline keeps session history and only
+   * needs the part of the room not seen yet.
    */
   function buildDeltaSince(speakerId: string): string {
     const entries = transcriptEntries();
@@ -1170,100 +1100,6 @@ ${context}`;
     return new Date(ts).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
   }
 
-  function formatSessionTimestamp(ts?: string | number): string {
-    if (ts === undefined || ts === null || ts === '') return '';
-    const date = new Date(ts);
-    if (Number.isNaN(date.getTime())) return '';
-    return date.toLocaleString();
-  }
-
-  function formatLastActivity(ts?: number): string {
-    if (!ts) return 'no activity recorded';
-    return new Date(ts).toLocaleString();
-  }
-
-  // ── Transcripts tab ──
-
-  async function ensureSessionsLoaded(force = false) {
-    if (sessionsLoading || (sessionsLoaded && !force)) return;
-    const generation = sessionScopeGeneration;
-    sessionsLoading = true;
-    sessionsError = '';
-    try {
-      const data = await listSessions();
-      if (generation !== sessionScopeGeneration) return;
-      sessionList = data.channels;
-      sessionsLoaded = true;
-    } catch (e) {
-      if (generation !== sessionScopeGeneration) return;
-      sessionsError = e instanceof Error ? e.message : 'Failed to load sessions';
-    } finally {
-      if (generation === sessionScopeGeneration) sessionsLoading = false;
-    }
-  }
-
-  async function openTranscript(sessionId: string) {
-    const generation = sessionScopeGeneration;
-    selectedSessionId = sessionId;
-    transcriptMessages = [];
-    transcriptPagination = null;
-    transcriptError = '';
-    transcriptLoading = true;
-    try {
-      const data = await getSessionMessages(sessionId, {
-        limit: SESSION_MESSAGE_PAGE_SIZE,
-        messagesOnly: true,
-      });
-      if (generation !== sessionScopeGeneration || selectedSessionId !== sessionId) return;
-      transcriptMessages = data.messages;
-      transcriptPagination = data.pagination;
-    } catch (e) {
-      if (generation !== sessionScopeGeneration || selectedSessionId !== sessionId) return;
-      transcriptError = e instanceof Error ? e.message : 'Failed to load transcript';
-    } finally {
-      if (generation === sessionScopeGeneration && selectedSessionId === sessionId) {
-        transcriptLoading = false;
-      }
-    }
-  }
-
-  async function loadEarlierTranscript() {
-    if (!selectedSessionId || !transcriptPagination?.hasMoreOlder || transcriptLoading) return;
-    const generation = sessionScopeGeneration;
-    const sessionId = selectedSessionId;
-    transcriptLoading = true;
-    transcriptError = '';
-    try {
-      const data = await getSessionMessages(sessionId, {
-        limit: SESSION_MESSAGE_PAGE_SIZE,
-        beforeId: transcriptPagination.nextBeforeId,
-        messagesOnly: true,
-      });
-      if (generation !== sessionScopeGeneration || selectedSessionId !== sessionId) return;
-      transcriptMessages = [...data.messages, ...transcriptMessages];
-      transcriptPagination = data.pagination;
-    } catch (e) {
-      if (generation !== sessionScopeGeneration || selectedSessionId !== sessionId) return;
-      transcriptError = e instanceof Error ? e.message : 'Failed to load earlier messages';
-    } finally {
-      if (generation === sessionScopeGeneration && selectedSessionId === sessionId) {
-        transcriptLoading = false;
-      }
-    }
-  }
-
-  function onTabSelect(id: string) {
-    activeTab = id as TabId;
-    if (activeTab === 'transcripts') {
-      void ensureSessionsLoaded();
-    }
-  }
-
-  const tabs = $derived<GardenTabItem[]>([
-    { id: 'chat', label: 'Chat' },
-    { id: 'transcripts', label: 'Transcripts', count: sessionsLoaded ? sessionList.length : undefined },
-  ]);
-
   const identitySubtitle = $derived(bootstrap
     ? `Chatting as ${bootstrap.displayName}${bootstrap.nickname ? ` (${bootstrap.nickname})` : ''} — model ${bootstrap.runtime.model.name}`
     : undefined);
@@ -1298,7 +1134,7 @@ ${context}`;
   <GardenPageHeader
     eyebrow="Live Operations"
     title="The Canopy"
-    description="Multifunction chat console — companion chat, direct-model rounds, and transcripts"
+    description="Multifunction chat console for companion chat and direct-model rounds."
     class="mb-3 shrink-0"
   >
     {#snippet actions()}
@@ -1307,7 +1143,7 @@ ${context}`;
       {#if statusDetail && connectionStatus !== 'connecting'}
         <span class="text-sm text-bark-700">-- {statusDetail}</span>
       {/if}
-      {#if activeTab === 'chat' && messages.length > 0}
+      {#if messages.length > 0}
         <button
           onclick={clearTranscript}
           disabled={busy}
@@ -1320,23 +1156,20 @@ ${context}`;
     {/snippet}
   </GardenPageHeader>
 
-  <GardenTabBar {tabs} activeId={activeTab} onSelect={onTabSelect} label="Chat console views" class="mb-3 shrink-0" />
-
-  {#if activeTab === 'chat'}
-    {#if loading}
-      <div class="garden-loading card-garden p-6 animate-pulse flex-1" aria-busy="true">
-        <div class="h-4 bg-bark-200 rounded w-48 mb-4"></div>
-        <div class="h-64 bg-bark-200 rounded"></div>
-      </div>
-    {:else if error && !bootstrap}
-      <div class="garden-error card-garden border-l-4 border-l-wilt-400 p-6" role="alert">
-        <p class="text-wilt-600 font-medium text-sm">Failed to load chat</p>
-        <p class="text-shadow-600 text-sm mt-1">{error}</p>
-        <p class="text-shadow-600 text-sm mt-3">
-          Make sure the admin server is running and the chat bootstrap endpoint is available.
-        </p>
-      </div>
-    {:else if bootstrap}
+  {#if loading}
+    <div class="garden-loading card-garden p-6 animate-pulse flex-1" aria-busy="true">
+      <div class="h-4 bg-bark-200 rounded w-48 mb-4"></div>
+      <div class="h-64 bg-bark-200 rounded"></div>
+    </div>
+  {:else if error && !bootstrap}
+    <div class="garden-error card-garden border-l-4 border-l-wilt-400 p-6" role="alert">
+      <p class="text-wilt-600 font-medium text-sm">Failed to load chat</p>
+      <p class="text-shadow-600 text-sm mt-1">{error}</p>
+      <p class="text-shadow-600 text-sm mt-3">
+        Make sure the admin server is running and the chat bootstrap endpoint is available.
+      </p>
+    </div>
+  {:else if bootstrap}
       {#if bootstrap.onboarding.required}
         <div class="garden-section card-garden p-3 mb-3 border-gold-300 bg-gold-50 shrink-0">
           <p class="text-sm font-semibold text-shadow-900">Starter profile detected</p>
@@ -1796,139 +1629,5 @@ ${context}`;
           {/if}
         </div>
       </div>
-    {/if}
-  {:else}
-    <!-- Transcripts tab: browse past sessions, including model-room runs -->
-    <div class="flex-1 min-h-0 flex flex-col lg:flex-row gap-3">
-      <div class="garden-section card-garden p-3 flex flex-col lg:w-96 shrink-0 min-h-0 max-h-72 lg:max-h-none">
-        <div class="flex items-center justify-between gap-2 mb-2 shrink-0">
-          <h2 class="font-serif text-base font-semibold text-shadow-900">Sessions</h2>
-          <button
-            onclick={() => void ensureSessionsLoaded(true)}
-            disabled={sessionsLoading}
-            class="min-h-11 rounded-lg border border-bark-300 px-3 py-2 text-xs text-shadow-600 hover:bg-bark-100
-                   transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            Refresh
-          </button>
-        </div>
-        <div class="mb-2 grid grid-cols-[minmax(0,1fr)_auto] gap-2 shrink-0">
-          <input
-            type="text"
-            bind:value={sessionFilter}
-            placeholder="Filter sessions"
-            aria-label="Filter sessions by text"
-            class="min-h-11 min-w-0 rounded-lg border border-bark-300 bg-bark-50 px-3 py-2 text-sm text-shadow-900
-                   placeholder:text-shadow-400
-                   focus:outline-none focus:ring-2 focus:ring-gold-400 focus:border-gold-400"
-          />
-          <select
-            bind:value={sessionKindFilter}
-            aria-label="Filter sessions by kind"
-            class="min-h-11 rounded-lg border border-bark-300 bg-bark-50 px-2 py-2 text-sm text-shadow-900
-                   focus:outline-none focus:ring-2 focus:ring-gold-400 focus:border-gold-400"
-          >
-            <option value="all">All kinds</option>
-            <option value="chat">Chat</option>
-            <option value="subagent">Subagent</option>
-            <option value="intake">Intake</option>
-            <option value="scheduled">Scheduled</option>
-            <option value="other">Other</option>
-          </select>
-        </div>
-        {#if sessionsError}
-          <p class="text-sm text-wilt-600 shrink-0">{sessionsError}</p>
-        {/if}
-        <div class="flex-1 min-h-0 overflow-y-auto space-y-1.5" role="list" aria-label="Session list">
-          {#if sessionsLoading && sessionList.length === 0}
-            <p class="text-sm text-shadow-600 animate-pulse">Loading sessions...</p>
-          {:else if filteredSessions.length === 0}
-            <p class="text-sm text-shadow-600">No sessions match.</p>
-          {:else}
-            {#each filteredSessions as channel (channel.sessionId)}
-              <button
-                onclick={() => void openTranscript(channel.sessionId)}
-                class="min-h-14 w-full rounded-lg border px-3 py-2 text-left transition-colors
-                  {selectedSessionId === channel.sessionId
-                    ? 'border-gold-300 bg-gold-50'
-                    : 'border-bark-300 bg-bark-50 hover:bg-bark-100'}"
-              >
-                <p class="text-sm font-medium text-shadow-900 break-all">
-                  {channel.displayLabel || channel.sessionId}
-                </p>
-                <p class="text-xs text-shadow-600 mt-0.5">
-                  <span class="capitalize">{classifySessionKind(channel)}</span>
-                  ·
-                  {channel.messageCount} messages
-                  {#if channel.linkedContactName}
-                    · {channel.linkedContactName}
-                  {/if}
-                </p>
-                <p class="text-xs text-shadow-500">{formatLastActivity(channel.lastActivityAt)}</p>
-              </button>
-            {/each}
-          {/if}
-        </div>
-        <p class="text-xs text-shadow-500 mt-2 shrink-0">
-          Deeper session tooling (search, turns, compaction audits) lives in
-          <a href={scopeGardenPath('/sessions')} class="underline text-shadow-700 hover:text-shadow-900">Sessions</a>.
-        </p>
-      </div>
-
-      <div class="garden-section card-garden p-3 flex-1 min-h-0 flex flex-col">
-        {#if !selectedSessionId}
-          <div class="flex-1 flex items-center justify-center">
-            <p class="text-sm text-shadow-600">Select a session to view its transcript.</p>
-          </div>
-        {:else}
-          <div class="flex items-center justify-between gap-2 mb-2 shrink-0 flex-wrap">
-            <p class="text-sm font-mono text-shadow-800 break-all">{selectedSessionId}</p>
-            {#if transcriptPagination?.hasMoreOlder}
-              <button
-                onclick={() => void loadEarlierTranscript()}
-                disabled={transcriptLoading}
-                class="min-h-11 rounded-lg border border-bark-300 px-3 py-2 text-sm text-shadow-700 hover:bg-bark-100
-                       transition-colors disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
-              >
-                Load earlier ({transcriptPagination.totalMessages - transcriptMessages.length} more)
-              </button>
-            {/if}
-          </div>
-          {#if transcriptError}
-            <p class="text-sm text-wilt-600 mb-2 shrink-0">{transcriptError}</p>
-          {/if}
-          <div class="flex-1 min-h-0 overflow-y-auto rounded-xl border border-bark-300 bg-bark-100 px-4 py-3">
-            {#if transcriptLoading && transcriptMessages.length === 0}
-              <p class="text-sm text-shadow-600 animate-pulse">Loading transcript...</p>
-            {:else if transcriptMessages.length === 0}
-              <p class="text-sm text-shadow-600">This session has no messages.</p>
-            {:else}
-              <div class="space-y-3">
-                {#each transcriptMessages as entry (entry.id)}
-                  <div class="flex {entry.role === 'user' ? 'justify-end' : 'justify-start'}">
-                    <div class="max-w-[85%] {entry.role === 'user'
-                      ? 'bg-gold-50 border border-gold-200 rounded-2xl rounded-br-md'
-                      : entry.role === 'assistant'
-                        ? 'bg-bark-50 border border-bark-300 rounded-2xl rounded-bl-md'
-                        : 'bg-bark-200 border border-bark-300 rounded-2xl'} px-4 py-2.5 shadow-sm">
-                      <p class="text-xs font-semibold text-shadow-700 mb-1">
-                        {entry.authorName || entry.role}
-                        <span class="font-normal text-shadow-500">· {entry.role}</span>
-                      </p>
-                      <div class="text-sm text-shadow-800 whitespace-pre-wrap leading-relaxed break-words">{entry.content}</div>
-                      {#if formatSessionTimestamp(entry.timestamp)}
-                        <div class="text-right mt-1">
-                          <span class="text-xs text-shadow-500">{formatSessionTimestamp(entry.timestamp)}</span>
-                        </div>
-                      {/if}
-                    </div>
-                  </div>
-                {/each}
-              </div>
-            {/if}
-          </div>
-        {/if}
-      </div>
-    </div>
   {/if}
 </div>

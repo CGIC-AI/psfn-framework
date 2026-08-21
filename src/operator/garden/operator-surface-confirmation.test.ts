@@ -199,9 +199,40 @@ describe('Garden operator confirmation resolution (x5rt.10)', () => {
     expect(resolver.resolve).toHaveBeenCalledTimes(1);
     expect(resolver.resolve).toHaveBeenCalledWith(
       { id: 'kube-1', decision: 'approve' },
-      { authorization: 'Bearer super-secret-admin-token', cookie: 'psfn_token=super-secret-admin-token' },
+      {
+        kind: 'standalone_operator',
+        authorization: 'Bearer super-secret-admin-token',
+        cookie: 'psfn_token=super-secret-admin-token',
+      },
     );
     // The agent (upstream) was never asked to resolve an operator-owned entry.
+    expect(harness.upstream.requests).toHaveLength(0);
+  });
+
+  it('reports an operator denial as a successful terminal queue decision', async () => {
+    const resolver = mockResolver({
+      id: 'kube-deny-1',
+      status: 'denied',
+      message: 'Denied by operator.',
+      executed: false,
+    });
+    const harness = await createHarness(resolver);
+
+    const res = await requestPort(
+      harness.port,
+      'POST',
+      '/api/admin/confirmations/resolve',
+      JSON.stringify({ id: 'kube-deny-1', decision: 'deny' }),
+      { 'content-type': 'application/json', authorization: 'Bearer operator-token' },
+    );
+
+    expect(res.status).toBe(200);
+    expect(JSON.parse(res.body)).toEqual({
+      ok: true,
+      message: 'Denied by operator.',
+      status: 'denied',
+      executed: false,
+    });
     expect(harness.upstream.requests).toHaveLength(0);
   });
 

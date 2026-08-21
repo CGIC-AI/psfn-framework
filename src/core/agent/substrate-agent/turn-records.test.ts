@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { fromAny } from '@total-typescript/shoehorn';
 import {
   buildTurnRecord,
+  recordAssistantMessage,
+  recordUserMessage,
   recordToolObservations,
   resolveTurnRecordAuditPrivacy,
   sanitizePersistedReasoningText,
@@ -103,6 +105,51 @@ async function buildScheduledFallbackToolRecord(input: {
 }
 
 describe('turn-records tool persistence', () => {
+  it('persists authenticated testing-harness provenance on user and assistant evidence rows', () => {
+    const sessionManager = {
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage: vi.fn(() => 2),
+    } as unknown as TurnSessionWriteManager;
+    const message = fromAny({
+      id: 'harness-message',
+      channelId: 'api:testing-harness',
+      channelType: 'api',
+      authorId: 'testing-harness',
+      authorName: 'Harness',
+      content: 'test evidence',
+      timestamp: new Date(),
+      routing: {
+        source: 'api',
+        testingHarness: {
+          schemaVersion: 1,
+          kind: 'testing_harness',
+          runId: 'run-a',
+          manifestId: 'manifest-a',
+        },
+      },
+    });
+    const identity = {
+      logicalSessionId: 'api:testing-harness',
+      sourceChannelId: 'api:testing-harness',
+    };
+    const common = {
+      sessionManager,
+      message,
+      turnSessionIdentity: identity,
+      turnId: fromAny('turn-a'),
+      requestId: 'request-a',
+      trustLevel: 'regular' as const,
+    };
+
+    recordUserMessage({ ...common, actorKind: 'human' });
+    recordAssistantMessage({ ...common, responseText: 'test response' });
+
+    const userMetadata = JSON.parse(fromAny(sessionManager.recordUserMessage).mock.calls[0][6].metadata);
+    const assistantMetadata = JSON.parse(fromAny(sessionManager.recordAssistantMessage).mock.calls[0][5].metadata);
+    expect(userMetadata.testingHarness).toEqual(message.routing.testingHarness);
+    expect(assistantMetadata.testingHarness).toEqual(message.routing.testingHarness);
+  });
+
   it('captures verbatim audit eligibility only for explicitly public non-DM turns', () => {
     expect(resolveTurnRecordAuditPrivacy({
       id: 'message-public',

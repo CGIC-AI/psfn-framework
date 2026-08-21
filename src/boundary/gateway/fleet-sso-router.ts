@@ -101,6 +101,7 @@ const MAX_PROXY_BODY_BYTES = 1_048_576;
 const MAX_CAPABILITY_HEADER_BYTES = 65_536;
 const FLEET_PATH = '/fleet';
 const FLEET_LOGIN_PATH = '/fleet/login';
+const FLEET_AUTH_LOGIN_PATH = '/v1/fleet-auth/login';
 const FLEET_GARDEN_CHAT_PATH = '/v1/chat/completions';
 const COMPANION_PREFIX = FLEET_SSO_COMPANION_ROUTE_PREFIX;
 const COMPANION_UI_PREFIX = '/companion-ui';
@@ -332,6 +333,21 @@ function sendJson(response: ServerResponse, status: number, value: unknown): voi
   response.end(body);
 }
 
+function isHtmlNavigation(request: IncomingMessage): boolean {
+  if (request.method !== 'GET') return false;
+  const accept = singleHeader(request.headers.accept);
+  return accept?.split(',').some(value => value.trim().split(';', 1)[0] === 'text/html') ?? false;
+}
+
+function sendFleetLoginRedirect(response: ServerResponse, returnPath: string): void {
+  response.writeHead(302, {
+    'Cache-Control': 'no-store',
+    Location: `${FLEET_AUTH_LOGIN_PATH}?return_to=${encodeURIComponent(returnPath)}`,
+    'Referrer-Policy': 'no-referrer',
+  });
+  response.end();
+}
+
 function writeSocketError(socket: Duplex, status: 400 | 401 | 403 | 404 | 413 | 502 | 503): void {
   const label = status === 400 ? 'Bad Request'
     : status === 401 ? 'Unauthorized'
@@ -386,6 +402,11 @@ export function resolveFleetSsoBrowserOrigin(
   const forwardedProto = singleHeader(request.headers['x-forwarded-proto']);
   const forwardedPort = singleHeader(request.headers['x-forwarded-port']);
   const forwardedFor = singleHeader(request.headers['x-forwarded-for'])?.trim();
+  const forwardedWebSocket = forwardedProto === 'wss'
+    && singleHeader(request.headers.upgrade)?.toLowerCase() === 'websocket'
+    && (singleHeader(request.headers.connection) ?? '')
+      .split(',')
+      .some(token => token.trim().toLowerCase() === 'upgrade');
   if (directTls) {
     if (hasAnyHeader(request.headers, FORWARDED_HEADERS.slice(1))) {
       throw new FleetSsoRequestError(400, 'Forwarded origin metadata is forbidden on direct TLS');
@@ -394,7 +415,7 @@ export function resolveFleetSsoBrowserOrigin(
   }
   if (!options.trustProxy
     || forwardedHost !== canonical.host
-    || forwardedProto !== 'https'
+    || (forwardedProto !== 'https' && !forwardedWebSocket)
     || (forwardedPort !== undefined && forwardedPort !== (canonical.port || '443'))
     || !forwardedFor
     || isIP(forwardedFor) === 0) {
@@ -656,7 +677,7 @@ export class GatewayFleetSsoRouter {
   matches(rawTarget: string): boolean {
     try {
       const { rawPath } = parseOuterPath(rawTarget);
-      return rawPath === FLEET_PATH || rawPath === `${FLEET_PATH}/`
+      return rawPath === '/' || rawPath === FLEET_PATH || rawPath === `${FLEET_PATH}/`
         || rawPath.startsWith(`${FLEET_PATH}/_app/`)
         || rawPath.startsWith('/_app/')
         || rawPath === FLEET_LOGIN_PATH || rawPath.startsWith(FLEET_PORTAL_API_PATH)
@@ -664,7 +685,7 @@ export class GatewayFleetSsoRouter {
         || rawPath.startsWith(COMPANION_PREFIX)
         || rawPath === COMPANION_UI_PREFIX || rawPath.startsWith(`${COMPANION_UI_PREFIX}/`);
     } catch {
-      return rawTarget.startsWith(FLEET_PATH) || rawTarget.startsWith(FLEET_PORTAL_API_PATH)
+      return rawTarget === '/' || rawTarget.startsWith(FLEET_PATH) || rawTarget.startsWith(FLEET_PORTAL_API_PATH)
         || rawTarget.startsWith('/_app/')
         || rawTarget.startsWith(FLEET_MODEL_USAGE_API_PATH)
         || rawTarget.startsWith(COMPANION_PREFIX)
@@ -688,6 +709,17 @@ export class GatewayFleetSsoRouter {
         throw new FleetSsoRequestError(400, 'Browser origin is invalid');
       }
       const { rawPath, rawQuery } = parseOuterPath(request.url ?? '/');
+      if (rawPath === '/') {
+        if (request.method !== 'GET' || rawQuery) {
+          throw new FleetSsoRequestError(404, 'Resource not found');
+        }
+        response.writeHead(302, {
+          'Cache-Control': 'no-store',
+          Location: FLEET_PATH,
+        });
+        response.end();
+        return;
+      }
       if (rawPath === FLEET_LOGIN_PATH) {
         if (request.method !== 'GET' || rawQuery) throw new FleetSsoRequestError(404, 'Resource not found');
         this.loginLanding.send(response);
@@ -723,11 +755,18 @@ export class GatewayFleetSsoRouter {
       }
       const sessionToken = readOpaqueSessionCookie(request);
       if (!sessionToken) {
-        if (request.method === 'GET' && (
+        if (isHtmlNavigation(request) && (
           rawPath === FLEET_PATH
           || rawPath === `${FLEET_PATH}/`
-          || companionUiRequest
         )) {
+          sendFleetLoginRedirect(response, request.url ?? FLEET_PATH);
+          return;
+        }
+        if (isHtmlNavigation(request) && parseGardenRoute(request.url ?? '/')) {
+          sendFleetLoginRedirect(response, request.url ?? '/');
+          return;
+        }
+        if (request.method === 'GET' && companionUiRequest) {
           this.loginLanding.send(response);
           return;
         }

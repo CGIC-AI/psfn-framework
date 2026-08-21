@@ -23,6 +23,7 @@ import {
 } from './scheduler-config.js';
 import { migrateLegacySchedulerOwner } from './scheduler-owner-migration.js';
 import { DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG } from './icp-autonomy-scheduler-config.js';
+import { DEFAULT_INTENTION_FOLLOW_UP_SCHEDULER_CONFIG } from './scheduler-config/intention-follow-up.js';
 
 const fixturePath = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -244,6 +245,8 @@ describe('migrateLegacySchedulerOwner', () => {
     expect(migratedRaw.temporalWakeup).toEqual(original.temporalWakeup);
     expect(migratedRaw.operatorExtension).toEqual(original.operatorExtension);
     expect(loadSchedulerConfig(dataDir).backgroundMaintenance.intervalMs).toBe(3_600_000);
+    expect(loadSchedulerConfig(dataDir).intentionFollowUp)
+      .toEqual(DEFAULT_INTENTION_FOLLOW_UP_SCHEDULER_CONFIG);
 
     const inodeAfterApply = statSync(filePath).ino;
     const bytesAfterApply = readFileSync(filePath, 'utf8');
@@ -269,14 +272,22 @@ describe('migrateLegacySchedulerOwner', () => {
     expect(migrateLegacySchedulerOwner({ dataDir })).toMatchObject({
       mode: 'dry-run',
       status: 'planned',
-      addedPaths: ['backgroundWork.postTurn.maxAttempts', 'icpAutonomy.policyHolds'],
+      addedPaths: [
+        'backgroundWork.postTurn.maxAttempts',
+        'icpAutonomy.policyHolds',
+        'intentionFollowUp',
+      ],
     });
     expect(readFileSync(filePath, 'utf8')).toBe(before);
 
     expect(migrateLegacySchedulerOwner({ dataDir, apply: true })).toMatchObject({
       mode: 'apply',
       status: 'applied',
-      addedPaths: ['backgroundWork.postTurn.maxAttempts', 'icpAutonomy.policyHolds'],
+      addedPaths: [
+        'backgroundWork.postTurn.maxAttempts',
+        'icpAutonomy.policyHolds',
+        'intentionFollowUp',
+      ],
     });
     expect(loadSchedulerConfig(dataDir).icpAutonomy.policyHolds)
       .toEqual(DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG.policyHolds);
@@ -305,6 +316,7 @@ describe('migrateLegacySchedulerOwner', () => {
         'backgroundMaintenance.sharedWorldWikiCaretaker',
         'backgroundWork.postTurn.maxAttempts',
         'icpAutonomy.policyHolds',
+        'intentionFollowUp',
       ],
     });
     expect(readFileSync(filePath, 'utf8')).toBe(before);
@@ -316,6 +328,7 @@ describe('migrateLegacySchedulerOwner', () => {
         'backgroundMaintenance.sharedWorldWikiCaretaker',
         'backgroundWork.postTurn.maxAttempts',
         'icpAutonomy.policyHolds',
+        'intentionFollowUp',
       ],
     });
     const migratedRaw = JSON.parse(readFileSync(filePath, 'utf8')) as Record<string, unknown>;
@@ -348,12 +361,12 @@ describe('migrateLegacySchedulerOwner', () => {
     expect(migrateLegacySchedulerOwner({ dataDir })).toMatchObject({
       mode: 'dry-run',
       status: 'planned',
-      addedPaths: ['backgroundWork', 'icpAutonomy.policyHolds'],
+      addedPaths: ['backgroundWork', 'icpAutonomy.policyHolds', 'intentionFollowUp'],
     });
     expect(migrateLegacySchedulerOwner({ dataDir, apply: true })).toMatchObject({
       mode: 'apply',
       status: 'applied',
-      addedPaths: ['backgroundWork', 'icpAutonomy.policyHolds'],
+      addedPaths: ['backgroundWork', 'icpAutonomy.policyHolds', 'intentionFollowUp'],
     });
     const migratedRaw = JSON.parse(readFileSync(filePath, 'utf8')) as Record<string, unknown>;
     expect(migratedRaw.backgroundWork).toEqual(DEFAULT_BACKGROUND_WORK_TUNING);
@@ -378,12 +391,20 @@ describe('migrateLegacySchedulerOwner', () => {
     expect(migrateLegacySchedulerOwner({ dataDir })).toMatchObject({
       mode: 'dry-run',
       status: 'planned',
-      addedPaths: ['backgroundWork.postTurn.maxAttempts', 'icpAutonomy.policyHolds'],
+      addedPaths: [
+        'backgroundWork.postTurn.maxAttempts',
+        'icpAutonomy.policyHolds',
+        'intentionFollowUp',
+      ],
     });
     expect(migrateLegacySchedulerOwner({ dataDir, apply: true })).toMatchObject({
       mode: 'apply',
       status: 'applied',
-      addedPaths: ['backgroundWork.postTurn.maxAttempts', 'icpAutonomy.policyHolds'],
+      addedPaths: [
+        'backgroundWork.postTurn.maxAttempts',
+        'icpAutonomy.policyHolds',
+        'intentionFollowUp',
+      ],
     });
     expect(loadSchedulerConfig(dataDir).backgroundWork.postTurn.maxAttempts).toBe(5);
     expect(JSON.parse(readFileSync(filePath, 'utf8'))).toMatchObject({

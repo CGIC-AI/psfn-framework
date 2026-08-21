@@ -490,6 +490,8 @@ export interface CompanionAvailabilitySnapshot {
 
 export interface MessageRoutingMetadata {
   source?: 'wyoming' | 'discord' | 'telegram' | 'api' | 'terminal' | 'psfn-amica' | 'satellite' | 'companion' | 'companion-ui' | 'unknown';
+  /** Server-authored provenance for the dedicated authenticated shakedown harness. */
+  testingHarness?: import('./testing-harness.js').TestingHarnessRunProvenance;
   /**
    * Transport-level response disposition. `observe` messages are recorded as
    * context but must not trigger model response generation or channel egress.
@@ -1530,6 +1532,23 @@ export interface ModelBudgetBlockedEvent extends Partial<CorrelationMetadata> {
   process: string;
   estimatedRequestCostUsd: number;
   budget: ModelBudgetWindowSnapshot;
+}
+
+export interface ModelBudgetThresholdExceededEvent extends ModelBudgetBlockedEvent {
+  reason: Extract<ModelBudgetBlockReason, 'daily_budget_exceeded' | 'monthly_budget_exceeded'>;
+  /** False means alert-only tracking: the routed request continues. */
+  enforcementEnabled: boolean;
+}
+
+export interface ModelBudgetAlertDeliveryEvent {
+  timestampMs: number;
+  dedupeKey: string;
+  thresholdReason: ModelBudgetThresholdExceededEvent['reason'];
+  windowKey: string;
+  status: 'sent' | 'debounced' | 'failed';
+  topic?: string;
+  messageId?: string;
+  error?: string;
 }
 
 export type ModelPurpose = 'chat' | 'background' | 'memory' | 'context' | 'reasoning' | 'longContext' | 'vision' | 'moa';

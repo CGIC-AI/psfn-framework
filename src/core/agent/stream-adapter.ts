@@ -66,10 +66,15 @@ import {
   findCorruptEmptyToolCalls,
 } from '../../primitives/llm/client-response-helpers.js';
 import {
-  assertExplicitToolContractSatisfied,
+  applyExactExplicitToolArguments,
+  assertExplicitToolResponseSatisfied,
   isMissingRequiredToolCallError,
   resolveExplicitToolContract,
 } from '../../primitives/llm/explicit-tool-request.js';
+import {
+  normalizeExecutionTools,
+  normalizeTransportTools,
+} from './transport-tool-schema.js';
 
 const log = createComponentLogger('StreamAdapter');
 const FULL_KNOB_PASSTHROUGH_PROVIDERS = new Set(['openrouter', 'local_endpoint']);
@@ -288,12 +293,13 @@ function executeStreamCandidate(params: ExecuteStreamCandidateParams): AsyncGene
     ? Math.max(0, Math.floor(retryConfig.baseDelayMs!))
     : DEFAULT_BASE_DELAY_MS;
   const holdEventsUntilTerminal = hasExplicitToolExecutionRequest(params.context);
-  const normalizedTools = normalizeTransportTools((params.context as { tools?: unknown }).tools);
+  const contextTools = (params.context as { tools?: unknown }).tools;
+  const executionTools = normalizeExecutionTools(contextTools);
   const explicitToolContract = holdEventsUntilTerminal
     ? resolveExplicitToolContract({
         context: {
           ...(params.context as LLMContext),
-          ...(normalizedTools ? { tools: normalizedTools } : {}),
+          ...(executionTools ? { tools: executionTools } : {}),
         },
         originStage: 'agent.turn.prompt',
         modelApi: String((params.model as { api?: unknown }).api ?? ''),
@@ -324,6 +330,8 @@ function executeStreamCandidate(params: ExecuteStreamCandidateParams): AsyncGene
             attempt: params.nextPhysicalAttempt(),
             retryOwner: 'caller',
           },
+          ...(explicitToolContract ? { explicitToolContract } : {}),
+          ...(executionTools ? { executionTools } : {}),
           onProviderFirstOutput: params.onProviderFirstOutput,
           ...(streamSignal ? { signal: streamSignal } : {}),
           onProviderPayloadCaptured: params.onProviderPayloadCaptured,
@@ -343,13 +351,26 @@ function executeStreamCandidate(params: ExecuteStreamCandidateParams): AsyncGene
           if (event.type === 'done') {
             assertTerminalDidNotFail(event.message, candidate);
             const terminalToolCalls = extractToolCallsFromContentBlocks(event.message.content);
+            const corruptEmptyCalls = findCorruptEmptyToolCalls(
+              terminalToolCalls,
+              executionTools,
+            );
+            if (
+              corruptEmptyCalls.length > 0
+              && corruptEmptyArgumentRetries < MAX_EMPTY_TOOL_ARGS_COMPLETION_RETRIES
+            ) {
+              corruptEmptyArgumentRetries += 1;
+              throw new SemanticToolRetrySignal(
+                'corrupt_empty_arguments',
+                corruptEmptyCalls.map(call => call.name),
+              );
+            }
             try {
-              assertExplicitToolContractSatisfied({
-                choice: explicitToolContract?.choice,
-                ...(explicitToolContract?.requiredToolName
-                  ? { requiredToolName: explicitToolContract.requiredToolName }
-                  : {}),
+              assertExplicitToolResponseSatisfied({
+                contract: explicitToolContract,
+                corruptToolNames: corruptEmptyCalls.map(call => call.name),
                 toolCalls: terminalToolCalls,
+                tools: executionTools,
               });
             } catch (error) {
               if (
@@ -366,20 +387,6 @@ function executeStreamCandidate(params: ExecuteStreamCandidateParams): AsyncGene
               throw error;
             }
             assertTerminalHasUsableContent(event.message, candidate);
-            const corruptEmptyCalls = findCorruptEmptyToolCalls(
-              terminalToolCalls,
-              normalizedTools,
-            );
-            if (
-              corruptEmptyCalls.length > 0
-              && corruptEmptyArgumentRetries < MAX_EMPTY_TOOL_ARGS_COMPLETION_RETRIES
-            ) {
-              corruptEmptyArgumentRetries += 1;
-              throw new SemanticToolRetrySignal(
-                'corrupt_empty_arguments',
-                corruptEmptyCalls.map(call => call.name),
-              );
-            }
             if (!committed) {
               committed = true;
               for (const bufferedEvent of bufferedEvents) {
@@ -432,10 +439,6 @@ function executeStreamCandidate(params: ExecuteStreamCandidateParams): AsyncGene
             ...params.correlationFields,
           });
           continue;
-        }
-
-        if (isMissingRequiredToolCallError(err)) {
-          throw new NonRecoverableFallbackError(err);
         }
 
         const canRetry = retryAttempt < maxRetries
@@ -496,6 +499,8 @@ interface TransportEventStreamParams {
   requestOptions: Record<string, unknown>;
   transport: SubstrateStreamTransport;
   accounting: NonNullable<LLMContext['accounting']>;
+  explicitToolContract?: ReturnType<typeof resolveExplicitToolContract>;
+  executionTools?: readonly ToolSchema[];
   onProviderFirstOutput?: (event: ProviderFirstOutputEvent) => void | Promise<void>;
   /** mmo9.6.1: run-scoped abort signal threaded to the provider transport. */
   signal?: AbortSignal;
@@ -559,6 +564,11 @@ function createTransportEventStream(
         const response = params.signal
           ? await params.transport.stream(transportContext, transportCallbacks, { signal: params.signal })
           : await params.transport.stream(transportContext, transportCallbacks);
+        const responseToolCalls = applyExactExplicitToolArguments({
+          contract: params.explicitToolContract,
+          toolCalls: response.toolCalls,
+          tools: params.executionTools,
+        });
 
         const capturedWirePayload = response.providerObservability?.capturedWirePayload;
         if (capturedWirePayload && params.onProviderPayloadCaptured) {
@@ -577,7 +587,7 @@ function createTransportEventStream(
         applyTerminalResponse(state, response);
         enqueueThinkingEvents(queue, state, response.reasoning);
         enqueueMissingTextEvents(queue, state, response.content);
-        enqueueToolCallEvents(queue, state, response.toolCalls, resolveContextTools(params.context));
+        enqueueToolCallEvents(queue, state, responseToolCalls, resolveContextTools(params.context));
         queue.push({
           type: 'done',
           reason: response.stopReason,
@@ -635,44 +645,6 @@ function buildTransportContext(
     modelHint: buildStreamTransportModelHint(candidate, requestOptions, transportSlotKey),
     accounting,
     ...(requestContext ? { correlation: requestContext as CorrelationMetadata } : {}),
-  };
-}
-
-interface StreamToolCandidate {
-  name?: unknown;
-  description?: unknown;
-  inputSchema?: unknown;
-  parameters?: unknown;
-}
-
-function normalizeTransportTools(tools: unknown): ToolSchema[] | undefined {
-  if (tools === undefined) return undefined;
-  if (!Array.isArray(tools)) {
-    throw new Error('Invalid stream context tools: tools must be an array');
-  }
-  if (tools.length === 0) return undefined;
-  return tools.map(normalizeTransportTool);
-}
-
-function normalizeTransportTool(tool: unknown): ToolSchema {
-  if (!isRecord(tool)) {
-    throw new Error('Invalid stream tool schema: tool must be an object');
-  }
-  const candidate = tool as StreamToolCandidate;
-  if (typeof candidate.name !== 'string' || candidate.name.trim().length === 0) {
-    throw new Error('Invalid stream tool schema: tool.name must be a non-empty string');
-  }
-  if (typeof candidate.description !== 'string' || candidate.description.trim().length === 0) {
-    throw new Error(`Invalid stream tool schema for ${candidate.name}: tool.description must be a non-empty string`);
-  }
-  const inputSchema = candidate.inputSchema ?? candidate.parameters;
-  if (!isRecord(inputSchema)) {
-    throw new Error(`Invalid stream tool schema for ${candidate.name}: inputSchema or parameters must be an object`);
-  }
-  return {
-    name: candidate.name,
-    description: candidate.description,
-    inputSchema,
   };
 }
 

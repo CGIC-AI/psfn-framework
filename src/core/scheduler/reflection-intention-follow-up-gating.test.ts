@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { wireReflectionRuntime } from '../../app/startup/composition/parity.js';
 import { EventBus } from '../../shared/event-bus.js';
+import { DEFAULT_INTENTION_FOLLOW_UP_SCHEDULER_CONFIG } from '../../system/config/scheduler-config/intention-follow-up.js';
 import type { PendingFollowUp } from '../intention/pending-follow-ups.js';
 import { INTENTION_FOLLOW_UP_ACTION_KIND } from '../intention/appraisal.js';
 import { Scheduler } from './scheduler.js';
@@ -113,6 +114,9 @@ function wire(
         getRecentMessages: vi.fn().mockReturnValue([]),
       }),
       pendingFollowUpStore: fromAny(pendingFollowUpStore),
+      intentionFollowUpHorizonMs:
+        DEFAULT_INTENTION_FOLLOW_UP_SCHEDULER_CONFIG.nearTermHorizonMs,
+      routeLongHorizonFollowUp: vi.fn(async () => 'scheduled:intention:test'),
       onIntentionFollowUpActivated,
       icpIntentionCandidateAdapter: fromAny({
         submit: vi.fn(),

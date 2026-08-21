@@ -203,6 +203,31 @@ function makeCompanionSelectedChatConfig(): SubstrateConfig {
   });
 }
 
+function makeChatFallbackConfig(overrides: Partial<SubstrateConfig> = {}): SubstrateConfig {
+  const config = makeConfig(overrides);
+  return {
+    ...config,
+    modelRegistry: {
+      ...config.modelRegistry!,
+      models: [
+        ...config.modelRegistry!.models,
+        {
+          id: 'chat-fallback',
+          rank: 500,
+          identity: {
+            provider: 'openrouter',
+            model: 'moonshotai/kimi-k2.5',
+            source: { type: 'openrouter' },
+          },
+          purposes: [{ purpose: 'chat', primary: false }],
+          capabilities: { maxOutputTokens: 8192, contextWindow: 128_000 },
+          tuning: { maxOutputTokens: 8192, contextWindow: 128_000 },
+        },
+      ],
+    },
+  };
+}
+
 async function collectStreamEvents(stream: AsyncIterable<unknown>): Promise<unknown[]> {
   const events: unknown[] = [];
   for await (const event of stream) {
@@ -562,6 +587,11 @@ describe('createSubstrateStreamFn', () => {
     const selfieSchema = Type.Object({
       prompt: Type.String(),
     });
+    const selfieModelSchema = Type.Object({
+      prompt: Type.Optional(Type.String({
+        description: 'Required image prompt; execution validation remains strict.',
+      })),
+    });
     const psfnSchema = {
       type: 'object',
       properties: {
@@ -578,6 +608,7 @@ describe('createSubstrateStreamFn', () => {
           name: 'selfie_create',
           description: 'Create a self-image.',
           parameters: selfieSchema,
+          modelParameters: selfieModelSchema,
         },
         {
           name: 'memory_lookup',
@@ -593,7 +624,7 @@ describe('createSubstrateStreamFn', () => {
       {
         name: 'selfie_create',
         description: 'Create a self-image.',
-        inputSchema: selfieSchema,
+        inputSchema: selfieModelSchema,
       },
       {
         name: 'memory_lookup',
@@ -841,29 +872,10 @@ describe('createSubstrateStreamFn', () => {
     expect(JSON.stringify(events.at(-1))).toContain('notify');
   });
 
-  it('hard-fails blank responses after one semantic retry without transport retries or fallback', async () => {
-    const baseConfig = makeConfig();
-    const config = makeConfig({
+  it('falls back after the primary exhausts its missing-required-call retry before committing output', async () => {
+    const config = makeChatFallbackConfig({
       retryMaxAttempts: 2,
       retryBaseDelayMs: 0,
-      modelRegistry: {
-        ...baseConfig.modelRegistry!,
-        models: [
-          ...baseConfig.modelRegistry!.models,
-          {
-            id: 'chat-fallback',
-            rank: 500,
-            identity: {
-              provider: 'openrouter',
-              model: 'moonshotai/kimi-k2.5',
-              source: { type: 'openrouter' },
-            },
-            purposes: [{ purpose: 'chat', primary: false }],
-            capabilities: { maxOutputTokens: 8192, contextWindow: 128_000 },
-            tuning: { maxOutputTokens: 8192, contextWindow: 128_000 },
-          },
-        ],
-      },
     });
     streamAdapterMocks.transportStream.mockImplementation(async (context: LLMContext) => (
       context.modelHint?.model === 'deepseek/deepseek-v3.2'
@@ -896,15 +908,20 @@ describe('createSubstrateStreamFn', () => {
       }],
     }), {});
 
-    await expect(collectStreamEvents(stream as AsyncIterable<unknown>))
-      .rejects.toThrow('expected exactly one "notify" call, received []');
-    expect(streamAdapterMocks.transportStream).toHaveBeenCalledTimes(2);
+    const events = await collectStreamEvents(stream as AsyncIterable<unknown>);
+
+    expect(streamAdapterMocks.transportStream).toHaveBeenCalledTimes(3);
     expect(streamAdapterMocks.transportStream.mock.calls.map(
       call => (call[0] as LLMContext).modelHint?.model,
-    )).toEqual(['deepseek/deepseek-v3.2', 'deepseek/deepseek-v3.2']);
+    )).toEqual([
+      'deepseek/deepseek-v3.2',
+      'deepseek/deepseek-v3.2',
+      'moonshotai/kimi-k2.5',
+    ]);
     expect(streamAdapterMocks.transportStream.mock.calls.map(
       call => (call[0] as LLMContext).accounting?.attempt,
-    )).toEqual([1, 2]);
+    )).toEqual([1, 2, 3]);
+    expect(JSON.stringify(events.at(-1))).toContain('notify-fallback');
   });
 
   it.each(['error', 'aborted'] as const)(
@@ -978,6 +995,186 @@ describe('createSubstrateStreamFn', () => {
     )).toEqual([1, 2]);
     expect(JSON.stringify(events.at(-1))).toContain('notify-valid');
     expect(JSON.stringify(events.at(-1))).not.toContain('notify-empty');
+  });
+
+  it('falls back after corrupt empty required arguments exhaust the primary candidate retries', async () => {
+    const config = makeChatFallbackConfig({
+      retryMaxAttempts: 0,
+      retryBaseDelayMs: 0,
+    });
+    streamAdapterMocks.transportStream.mockImplementation(async (context: LLMContext) => (
+      context.modelHint?.model === 'deepseek/deepseek-v3.2'
+        ? {
+            content: '',
+            toolCalls: [{ id: 'notify-empty', name: 'notify', input: {} }],
+            model: 'openrouter/deepseek/deepseek-v3.2',
+            inputTokens: 6,
+            outputTokens: 2,
+            stopReason: 'toolUse',
+          }
+        : {
+            content: '',
+            toolCalls: [{
+              id: 'notify-fallback',
+              name: 'notify',
+              input: { action: 'consider', message: 'hello' },
+            }],
+            model: 'openrouter/moonshotai/kimi-k2.5',
+            inputTokens: 7,
+            outputTokens: 3,
+            stopReason: 'toolUse',
+          }
+    ));
+
+    const streamFn = makeStreamFn(config);
+    const stream = await streamFn(resolveModel(config, makeRuntime(), 'chat'), fromAny({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'Call notify exactly once.' }],
+      tools: [{
+        name: 'notify',
+        description: 'Notify the operator.',
+        parameters: Type.Union([
+          Type.Object({ action: Type.Literal('consider'), message: Type.String() }),
+          Type.Object({ action: Type.Literal('send'), message: Type.String() }),
+        ]),
+      }],
+    }), {});
+    const events = await collectStreamEvents(stream as AsyncIterable<unknown>);
+
+    expect(streamAdapterMocks.transportStream).toHaveBeenCalledTimes(4);
+    expect(streamAdapterMocks.transportStream.mock.calls.map(
+      call => (call[0] as LLMContext).modelHint?.model,
+    )).toEqual([
+      'deepseek/deepseek-v3.2',
+      'deepseek/deepseek-v3.2',
+      'deepseek/deepseek-v3.2',
+      'moonshotai/kimi-k2.5',
+    ]);
+    expect(JSON.stringify(events.at(-1))).toContain('notify-fallback');
+    expect(JSON.stringify(events)).not.toContain('notify-empty');
+  });
+
+  it('falls back before dispatch when required tool arguments are non-empty but schema-invalid', async () => {
+    const config = makeChatFallbackConfig({
+      retryMaxAttempts: 0,
+      retryBaseDelayMs: 0,
+    });
+    streamAdapterMocks.transportStream.mockImplementation(async (context: LLMContext) => (
+      context.modelHint?.model === 'deepseek/deepseek-v3.2'
+        ? {
+            content: '',
+          toolCalls: [{
+              id: 'notify-invalid',
+              name: 'notify',
+              input: { action: 'send' },
+            }],
+            model: 'openrouter/deepseek/deepseek-v3.2',
+            inputTokens: 6,
+            outputTokens: 2,
+            stopReason: 'toolUse',
+          }
+        : {
+            content: '',
+            toolCalls: [{
+              id: 'notify-fallback',
+              name: 'notify',
+              input: {
+                action: 'send',
+                message: 'hello',
+                delivery_channel: 'discord',
+                delivery_target: 'operator-test',
+              },
+            }],
+            model: 'openrouter/moonshotai/kimi-k2.5',
+            inputTokens: 7,
+            outputTokens: 3,
+            stopReason: 'toolUse',
+          }
+    ));
+
+    const streamFn = makeStreamFn(config);
+    const stream = await streamFn(resolveModel(config, makeRuntime(), 'chat'), fromAny({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'Call notify exactly once.' }],
+      tools: [{
+        name: 'notify',
+        description: 'Notify the operator.',
+        parameters: Type.Union([
+          Type.Object({
+            action: Type.Literal('send'),
+            message: Type.String(),
+            delivery_channel: Type.Literal('discord'),
+            delivery_target: Type.String(),
+          }),
+        ]),
+        modelParameters: Type.Object({
+          action: Type.Union([Type.Literal('send')]),
+          message: Type.Optional(Type.String()),
+          delivery_channel: Type.Optional(Type.Literal('discord')),
+          delivery_target: Type.Optional(Type.String()),
+        }),
+      }],
+    }), {});
+    const events = await collectStreamEvents(stream as AsyncIterable<unknown>);
+
+    expect(streamAdapterMocks.transportStream).toHaveBeenCalledTimes(2);
+    expect(streamAdapterMocks.transportStream.mock.calls.map(
+      call => (call[0] as LLMContext).modelHint?.model,
+    )).toEqual(['deepseek/deepseek-v3.2', 'moonshotai/kimi-k2.5']);
+    expect(streamAdapterMocks.transportStream.mock.calls[0]?.[0].tools?.[0]?.inputSchema)
+      .toMatchObject({ properties: { message: expect.objectContaining({}) } });
+    expect(streamAdapterMocks.transportStream.mock.calls[0]?.[0].tools?.[0]?.inputSchema)
+      .not.toHaveProperty('anyOf');
+    expect(JSON.stringify(events.at(-1))).toContain('notify-fallback');
+    expect(JSON.stringify(events)).not.toContain('notify-invalid');
+  });
+
+  it('uses validated exact requested arguments when the provider changes its argument copy', async () => {
+    const config = makeChatFallbackConfig({
+      retryMaxAttempts: 0,
+      retryBaseDelayMs: 0,
+    });
+    streamAdapterMocks.transportStream.mockImplementation(async (context: LLMContext) => (
+      context.modelHint?.model === 'deepseek/deepseek-v3.2'
+        ? {
+            content: '',
+            toolCalls: [{ id: 'repo-drifted', name: 'repo', input: { action: 'inspect' } }],
+            model: 'openrouter/deepseek/deepseek-v3.2',
+            inputTokens: 6,
+            outputTokens: 2,
+            stopReason: 'toolUse',
+          }
+        : {
+            content: '',
+            toolCalls: [{ id: 'repo-exact', name: 'repo', input: { action: 'branch' } }],
+            model: 'openrouter/moonshotai/kimi-k2.5',
+            inputTokens: 7,
+            outputTokens: 3,
+            stopReason: 'toolUse',
+          }
+    ));
+
+    const streamFn = makeStreamFn(config);
+    const stream = await streamFn(resolveModel(config, makeRuntime(), 'chat'), fromAny({
+      systemPrompt: 'System',
+      messages: [{
+        role: 'user',
+        content: 'Call repo exactly once with arguments {"action":"branch"}.',
+      }],
+      tools: [{
+        name: 'repo',
+        description: 'Repository operations.',
+        parameters: Type.Object({
+          action: Type.Union([Type.Literal('inspect'), Type.Literal('branch')]),
+        }),
+      }],
+    }), {});
+    const events = await collectStreamEvents(stream as AsyncIterable<unknown>);
+
+    expect(streamAdapterMocks.transportStream).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(events.at(-1))).toContain('repo-drifted');
+    expect(JSON.stringify(events.at(-1))).toContain('"action":"branch"');
+    expect(JSON.stringify(events.at(-1))).not.toContain('"action":"inspect"');
   });
 
   it('leads chat with the companion-selected slot and transports that slot to the gateway', async () => {

@@ -1,6 +1,6 @@
 import type { ChannelType } from '../../shared/contracts/runtime.js';
 
-export type ScheduledPromptSource = 'schedule_tool';
+export type ScheduledPromptSource = 'schedule_tool' | 'intention_appraisal';
 export type ScheduledPromptStatus = 'pending' | 'completed';
 
 export interface ScheduledPromptRecord {
@@ -35,6 +35,7 @@ export interface ScheduledPromptCreateInput {
 
 export interface ScheduledPromptListOptions {
   limit?: number;
+  source?: ScheduledPromptSource;
 }
 
 export interface ScheduledPromptCompletionOptions {
@@ -43,6 +44,7 @@ export interface ScheduledPromptCompletionOptions {
 
 export interface ScheduledPromptStorePort {
   create(input: ScheduledPromptCreateInput): Promise<ScheduledPromptRecord>;
+  getById(id: string): Promise<ScheduledPromptRecord | null>;
   listPending(options?: ScheduledPromptListOptions): Promise<ScheduledPromptRecord[]>;
   markCompleted(
     id: string,

@@ -64,6 +64,19 @@ const TEST_COMPANIONS_BYTES = `${JSON.stringify({
   }],
 }, null, 2)}\n`;
 
+const EXPECTED_SYSTEM_OWNER_FILES = [
+  'settings.json',
+  'models.json',
+  'providers.json',
+  'trust-policy.json',
+  'backup.json',
+  'companions.json',
+  'intake-policy.json',
+  'mcp-servers.json',
+  'automata-policy.json',
+  'channels.json',
+];
+
 function makeBackupRuntimeConfig(rootDir: string, verifyRestore = false) {
   return {
     intervalMs: 60_000,
@@ -664,9 +677,16 @@ describe('runBackupCycle', () => {
       now: () => Date.UTC(2026, 5, 28, 11, 12, 13, 123),
     });
 
+    const manifest = JSON.parse(readFileSync(
+      join(result.backupDir, SYSTEM_CONFIG_MANIFEST_NAME),
+      'utf8',
+    )) as { files: Array<{ path: string }> };
+
     expect(result.systemConfig).toBeDefined();
-    expect(result.systemConfig?.fileCount).toBe(11);
-    expect(result.systemConfigVerification?.verifiedFileCount).toBe(11);
+    expect(manifest.files.map(file => file.path)).toEqual(EXPECTED_SYSTEM_OWNER_FILES);
+    expect(result.systemConfig?.fileCount).toBe(EXPECTED_SYSTEM_OWNER_FILES.length);
+    expect(result.systemConfigVerification?.verifiedFileCount)
+      .toBe(EXPECTED_SYSTEM_OWNER_FILES.length);
     expect(existsSync(join(result.backupDir, SYSTEM_CONFIG_MANIFEST_NAME))).toBe(true);
     expect(existsSync(join(result.backupDir, SYSTEM_CONFIG_DIR_NAME, 'settings.json'))).toBe(true);
     expect(readFileSync(
@@ -677,8 +697,14 @@ describe('runBackupCycle', () => {
       join(result.backupDir, SYSTEM_CONFIG_DIR_NAME, 'companions.json'),
       'utf-8',
     )).toBe(TEST_COMPANIONS_BYTES);
+    expect(existsSync(join(
+      result.backupDir,
+      SYSTEM_CONFIG_DIR_NAME,
+      'partner-affect-shadow.json',
+    ))).toBe(false);
     expect(existsSync(join(result.backupDir, SYSTEM_CONFIG_DIR_NAME, '.env'))).toBe(false);
-    expect(verifySystemConfigSnapshot(result.backupDir).verifiedFileCount).toBe(11);
+    expect(verifySystemConfigSnapshot(result.backupDir).verifiedFileCount)
+      .toBe(EXPECTED_SYSTEM_OWNER_FILES.length);
 
     writeFileSync(
       join(result.backupDir, SYSTEM_CONFIG_DIR_NAME, 'mcp-servers.json'),
@@ -743,7 +769,8 @@ describe('runBackupCycle', () => {
 
     expect(result.encryptedBackup).toBeDefined();
     expect(result.postgresDumpVerification?.tocEntryCount).toBe(2);
-    expect(result.systemConfigVerification?.verifiedFileCount).toBe(11);
+    expect(result.systemConfigVerification?.verifiedFileCount)
+      .toBe(EXPECTED_SYSTEM_OWNER_FILES.length);
     expect(result.kubernetesHelmVerification?.chart.verifiedFileCount).toBe(4);
     expect(result.backupContentsVerification?.kubernetesHelmRecovery).toBe('required');
     expect(existsSync(join(result.backupDir, ENCRYPTED_BACKUP_MANIFEST_NAME))).toBe(true);

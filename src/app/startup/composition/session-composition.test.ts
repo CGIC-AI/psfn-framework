@@ -79,6 +79,14 @@ describe('session runtime composition transcript projection wiring', () => {
         postgresSchema: 'companion_alpha',
         postgresRole: 'companion_alpha_runtime',
         multiCompanion: true,
+        companionId: 'companion-alpha',
+        companionFleet: {
+          companions: [{
+            companionId: 'companion-alpha',
+            postgresSchema: 'companion_alpha',
+            postgresRole: 'companion_alpha_runtime',
+          }],
+        },
       }),
       automataRetentionCompanionId: 'companion-test',
     });
@@ -91,6 +99,42 @@ describe('session runtime composition transcript projection wiring', () => {
         role: 'companion_alpha_runtime',
       }),
     );
+  });
+
+  it('rejects a sibling transcript tenant before opening session adapters', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'psfn-session-composition-sibling-'));
+    dirs.push(root);
+    const companionDataDir = join(root, 'companion-data');
+
+    await expect(composeSessionRuntimeAsync({
+      config: fromAny({
+        companionDataDir,
+        dataDir: companionDataDir,
+        persistenceBackend: 'postgres',
+        postgresDatabaseUrl: 'postgres://postgres:secret@localhost:5432/psfn_test',
+        postgresSchema: 'companion_beta',
+        postgresRole: 'companion_beta_runtime',
+        multiCompanion: true,
+        companionId: 'companion-alpha',
+        companionFleet: {
+          companions: [
+            {
+              companionId: 'companion-alpha',
+              postgresSchema: 'companion_alpha',
+              postgresRole: 'companion_alpha_runtime',
+            },
+            {
+              companionId: 'companion-beta',
+              postgresSchema: 'companion_beta',
+              postgresRole: 'companion_beta_runtime',
+            },
+          ],
+        },
+      }),
+      automataRetentionCompanionId: 'companion-alpha',
+    })).rejects.toThrow('does not match the exact companion tenant authority');
+
+    expect(createDefaultPostgresSessionAdapters).not.toHaveBeenCalled();
   });
 
   it('does not create the legacy sqlite search projection in postgres composition', async () => {
@@ -270,6 +314,14 @@ describe('session runtime composition transcript projection wiring', () => {
       postgresSchema: 'companion_alpha',
       postgresRole: 'companion_alpha_runtime',
       multiCompanion: true,
+      companionId: 'companion-alpha',
+      companionFleet: {
+        companions: [{
+          companionId: 'companion-alpha',
+          postgresSchema: 'companion_alpha',
+          postgresRole: 'companion_alpha_runtime',
+        }],
+      },
     }), 1536);
 
     expect(existsSync(join(companionDataDir, 'state', 'companion.db'))).toBe(false);
@@ -283,6 +335,39 @@ describe('session runtime composition transcript projection wiring', () => {
       schema: 'companion_alpha',
       role: 'companion_alpha_runtime',
     });
+  });
+
+  it('rejects a sibling memory tenant before opening the store', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'psfn-memory-composition-sibling-'));
+    dirs.push(root);
+    const companionDataDir = join(root, 'companion-data');
+
+    await expect(composeMemoryStoreAsync(fromAny({
+      companionDataDir,
+      dataDir: companionDataDir,
+      persistenceBackend: 'postgres',
+      postgresDatabaseUrl: 'postgres://postgres:secret@localhost:5432/psfn_test',
+      postgresSchema: 'companion_beta',
+      postgresRole: 'companion_beta_runtime',
+      multiCompanion: true,
+      companionId: 'companion-alpha',
+      companionFleet: {
+        companions: [
+          {
+            companionId: 'companion-alpha',
+            postgresSchema: 'companion_alpha',
+            postgresRole: 'companion_alpha_runtime',
+          },
+          {
+            companionId: 'companion-beta',
+            postgresSchema: 'companion_beta',
+            postgresRole: 'companion_beta_runtime',
+          },
+        ],
+      },
+    }), 1536)).rejects.toThrow('does not match the exact companion tenant authority');
+
+    expect(postgresStoreMocks.createPostgresMemoryStore).not.toHaveBeenCalled();
   });
 
   it('fails closed for postgres memory composition without postgresDatabaseUrl', async () => {

@@ -90,6 +90,42 @@ describe('PostgresScheduledPromptStore', () => {
     });
   });
 
+  it('persists and retrieves an intention-appraisal scheduled prompt', async () => {
+    const intentionRow = {
+      ...ROW,
+      id: 'intention-scheduled:1',
+      source: 'intention_appraisal',
+      delivery_channel_id: null,
+    };
+    storeMocks.queryOne
+      .mockResolvedValueOnce(intentionRow)
+      .mockResolvedValueOnce(intentionRow);
+    const store = await PostgresScheduledPromptStore.connect('postgres://x@localhost:5432/psfn');
+
+    const created = await store.create({
+      id: intentionRow.id,
+      name: intentionRow.name,
+      prompt: intentionRow.prompt,
+      runAt: intentionRow.run_at,
+      createdAt: intentionRow.created_at,
+      source: 'intention_appraisal',
+      channelId: intentionRow.channel_id,
+      channelType: 'terminal',
+      authorId: intentionRow.author_id,
+      authorName: intentionRow.author_name,
+    });
+    const loaded = await store.getById(intentionRow.id);
+
+    expect(created.source).toBe('intention_appraisal');
+    expect(loaded).toMatchObject({
+      id: intentionRow.id,
+      source: 'intention_appraisal',
+      status: 'pending',
+    });
+    expect(storeMocks.queryOne.mock.calls[1]?.[1]).toContain('WHERE id = $1');
+    expect(storeMocks.queryOne.mock.calls[1]?.[2]).toEqual([intentionRow.id]);
+  });
+
   it('lists pending rows ordered by due time', async () => {
     storeMocks.queryRows.mockResolvedValue([ROW]);
     const store = await PostgresScheduledPromptStore.connect('postgres://x@localhost:5432/psfn');
@@ -101,6 +137,18 @@ describe('PostgresScheduledPromptStore', () => {
     expect(sql).toContain('ORDER BY run_at ASC, created_at ASC, id ASC');
     expect(params).toEqual([25]);
     expect(rows).toHaveLength(1);
+  });
+
+  it('filters intention-appraisal rows in storage before applying the read limit', async () => {
+    const store = await PostgresScheduledPromptStore.connect('postgres://x@localhost:5432/psfn');
+
+    await store.listPending({ source: 'intention_appraisal', limit: 25 });
+
+    const [, sql, params] = storeMocks.queryRows.mock.calls[0];
+    expect(sql).toMatch(
+      /WHERE status = 'pending'\s+AND source = \$1\s+ORDER BY[\s\S]+LIMIT \$2/u,
+    );
+    expect(params).toEqual(['intention_appraisal', 25]);
   });
 
   it('marks only pending rows complete', async () => {

@@ -4,30 +4,63 @@ import type { LLMContext } from '../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { LLMRequestCapability, type LLMRequestOptions } from './client-request-capability.js';
 import type { ProviderRuntime } from './provider-runtime.js';
-import type { RoutingCandidate } from './routing.js';
 
-const openRouterCandidate = {
-  provider: 'openrouter',
-  model: 'example',
-} as RoutingCandidate;
+function makeCapability(): LLMRequestCapability {
+  return new LLMRequestCapability(
+    {} as SubstrateConfig,
+    {} as ProviderRuntime,
+  );
+}
 
-describe('LLMRequestCapability explicit tool payload', () => {
-  it('uses Z.AI auto choice with one exposed tool and retains the exact postcondition', async () => {
-    const capability = new LLMRequestCapability(
-      {} as SubstrateConfig,
-      {} as ProviderRuntime,
-    );
-    const requestOptions: LLMRequestOptions = {};
-    const context: LLMContext = {
-      systemPrompt: 'system',
-      messages: [{ role: 'user', content: 'Use notify to send this.' }],
-      tools: [
-        { name: 'notify', description: 'Notify', inputSchema: { type: 'object' } },
-        { name: 'memory', description: 'Memory', inputSchema: { type: 'object' } },
-      ],
+function makeRequiredContext(): LLMContext {
+  return {
+    systemPrompt: 'system',
+    messages: [{ role: 'user', content: 'Use notify to send this.' }],
+    tools: [
+      { name: 'notify', description: 'Notify', inputSchema: { type: 'object' } },
+      { name: 'memory', description: 'Memory', inputSchema: { type: 'object' } },
+    ],
+  };
+}
+
+describe('LLMRequestCapability explicit tool dispatch', () => {
+  it('lets pi-ai require the sole exposed OpenRouter tool', () => {
+    const capability = makeCapability();
+    const priorOnPayload = vi.fn(async (payload: unknown) => payload);
+    const requestOptions: LLMRequestOptions = {
+      onPayload: priorOnPayload,
+      provider: { order: ['example-provider'] },
     };
+    const context = makeRequiredContext();
 
-    capability.applyExplicitToolChoice(
+    const contract = capability.applyExplicitToolChoice(
+      requestOptions,
+      context,
+      { originStage: 'agent.turn.prompt' },
+      { api: 'openai-completions' } as Model<'openai-completions'>,
+    );
+    const piContext = capability.buildPiContext(context, contract);
+
+    expect(contract).toEqual({
+      choice: { type: 'function', function: { name: 'notify' } },
+      requiredToolName: 'notify',
+    });
+    expect(requestOptions).toMatchObject({
+      toolChoice: 'required',
+      requiredToolName: 'notify',
+      explicitToolContract: contract,
+      provider: { order: ['example-provider'] },
+    });
+    expect(requestOptions.onPayload).toBe(priorOnPayload);
+    expect(piContext.tools?.map(tool => tool.name)).toEqual(['notify']);
+  });
+
+  it('lets pi-ai require the sole exposed direct Z.AI tool without a payload rewrite', () => {
+    const capability = makeCapability();
+    const requestOptions: LLMRequestOptions = {};
+    const context = makeRequiredContext();
+
+    const contract = capability.applyExplicitToolChoice(
       requestOptions,
       context,
       { originStage: 'agent.turn.prompt' },
@@ -35,88 +68,59 @@ describe('LLMRequestCapability explicit tool payload', () => {
         api: 'openai-completions',
         baseUrl: 'https://api.z.ai/api/paas/v4',
       } as Model<'openai-completions'>,
-      { provider: 'vega-testing', model: 'zai-code/zai/glm-5.2' } as RoutingCandidate,
     );
 
-    expect(requestOptions.toolChoice).toEqual({
-      type: 'function',
-      function: { name: 'notify' },
-    });
-    expect(requestOptions.requiredToolName).toBe('notify');
-    expect(await requestOptions.onPayload?.({
-      model: 'zai-code/zai/glm-5.2',
-      messages: [],
-      tools: [
-        { type: 'function', function: { name: 'notify' } },
-        { type: 'function', function: { name: 'memory' } },
-      ],
-    }, {
-      api: 'openai-completions',
-    } as Model<'openai-completions'>)).toEqual({
-      model: 'zai-code/zai/glm-5.2',
-      messages: [],
-      tools: [{ type: 'function', function: { name: 'notify' } }],
-      tool_choice: 'auto',
-      parallel_tool_calls: false,
-    });
+    expect(requestOptions.toolChoice).toBe('required');
+    expect(requestOptions.onPayload).toBeUndefined();
+    expect(capability.buildPiContext(context, contract).tools?.map(tool => tool.name)).toEqual([
+      'notify',
+    ]);
   });
 
-  it('injects the named choice into the final OpenAI completions wire payload', async () => {
-    const capability = new LLMRequestCapability(
-      {} as SubstrateConfig,
-      {} as ProviderRuntime,
-    );
-    const priorOnPayload = vi.fn(async (payload: unknown) => ({
-      ...(payload as Record<string, unknown>),
-      transformed: true,
-    }));
-    const requestOptions: LLMRequestOptions = { onPayload: priorOnPayload };
+  it('gives pi-ai an exact model schema for an exact-arguments request', () => {
+    const capability = makeCapability();
+    const requestOptions: LLMRequestOptions = {};
     const context: LLMContext = {
       systemPrompt: 'system',
-      messages: [{ role: 'user', content: 'Use notify to send this.' }],
-      tools: [{ name: 'notify', description: 'Notify', inputSchema: { type: 'object' } }],
+      messages: [{
+        role: 'user',
+        content: 'Call repo exactly once with arguments {"action":"branch"}.',
+      }],
+      tools: [{
+        name: 'repo',
+        description: 'Repository operations',
+        inputSchema: {
+          anyOf: [
+            { type: 'object', properties: { action: { const: 'inspect' } } },
+            { type: 'object', properties: { action: { const: 'branch' } } },
+          ],
+        },
+      }],
     };
 
-    capability.applyExplicitToolChoice(
+    const contract = capability.applyExplicitToolChoice(
       requestOptions,
       context,
       { originStage: 'agent.turn.prompt' },
       { api: 'openai-completions' } as Model<'openai-completions'>,
-      openRouterCandidate,
     );
 
-    expect(requestOptions.toolChoice).toEqual({
-      type: 'function',
-      function: { name: 'notify' },
+    expect(contract).toMatchObject({
+      requiredToolName: 'repo',
+      expectedArguments: { action: 'branch' },
     });
-    expect(requestOptions.requiredToolName).toBe('notify');
-    expect(await requestOptions.onPayload?.(
-      {
-        model: 'example',
-        messages: [],
-        tools: [
-          { type: 'function', function: { name: 'notify' } },
-          { type: 'function', function: { name: 'north_star' } },
-        ],
+    expect(capability.buildPiContext(context, contract).tools?.[0]?.parameters).toEqual({
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['branch'] },
       },
-      { api: 'openai-completions' } as Model<'openai-completions'>,
-    )).toEqual({
-      model: 'example',
-      messages: [],
-      tools: [{ type: 'function', function: { name: 'notify' } }],
-      transformed: true,
-      provider: { require_parameters: true },
-      tool_choice: { type: 'function', function: { name: 'notify' } },
-      parallel_tool_calls: false,
+      required: ['action'],
+      additionalProperties: false,
     });
-    expect(priorOnPayload).toHaveBeenCalledOnce();
   });
 
-  it('injects none after the requested tool sequence is complete', async () => {
-    const capability = new LLMRequestCapability(
-      {} as SubstrateConfig,
-      {} as ProviderRuntime,
-    );
+  it('removes tools and omits provider tool choice after the explicit sequence completes', () => {
+    const capability = makeCapability();
     const requestOptions: LLMRequestOptions = {};
     const context: LLMContext = {
       systemPrompt: 'system',
@@ -134,70 +138,17 @@ describe('LLMRequestCapability explicit tool payload', () => {
       tools: [{ name: 'notify', description: 'Notify', inputSchema: { type: 'object' } }],
     };
 
-    capability.applyExplicitToolChoice(
+    const contract = capability.applyExplicitToolChoice(
       requestOptions,
       context,
       { originStage: 'agent.turn.prompt' },
       { api: 'openai-completions' } as Model<'openai-completions'>,
-      openRouterCandidate,
     );
 
-    expect(requestOptions.toolChoice).toBe('none');
-    expect(await requestOptions.onPayload?.(
-      { model: 'example', messages: [] },
-      { api: 'openai-completions' } as Model<'openai-completions'>,
-    )).toEqual({
-      model: 'example',
-      messages: [],
-      provider: { require_parameters: true },
-      tool_choice: 'none',
-    });
-  });
-
-  it('removes tools and unsupported none choice after a direct Z.AI sequence completes', async () => {
-    const capability = new LLMRequestCapability(
-      {} as SubstrateConfig,
-      {} as ProviderRuntime,
-    );
-    const requestOptions: LLMRequestOptions = {};
-    const context: LLMContext = {
-      systemPrompt: 'system',
-      messages: [
-        { role: 'user', content: 'Use notify to send this.' },
-        {
-          role: 'toolResult',
-          toolCallId: 'notify-1',
-          toolName: 'notify',
-          content: 'sent',
-          outcome: 'success',
-          isError: false,
-        },
-      ] as LLMContext['messages'],
-      tools: [{ name: 'notify', description: 'Notify', inputSchema: { type: 'object' } }],
-    };
-
-    capability.applyExplicitToolChoice(
-      requestOptions,
-      context,
-      { originStage: 'agent.turn.prompt' },
-      {
-        api: 'openai-completions',
-        baseUrl: 'https://api.z.ai/api/paas/v4',
-      } as Model<'openai-completions'>,
-      { provider: 'vega-testing', model: 'zai-code/zai/glm-5.2' } as RoutingCandidate,
-    );
-
-    expect(requestOptions.toolChoice).toBe('none');
-    expect(await requestOptions.onPayload?.({
-      model: 'zai-code/zai/glm-5.2',
-      messages: [],
-      tools: [{ type: 'function', function: { name: 'notify' } }],
-      tool_choice: 'none',
-    }, {
-      api: 'openai-completions',
-    } as Model<'openai-completions'>)).toEqual({
-      model: 'zai-code/zai/glm-5.2',
-      messages: [],
-    });
+    expect(contract).toEqual({ choice: 'none' });
+    expect(requestOptions.toolChoice).toBeUndefined();
+    expect(requestOptions.explicitToolContract).toEqual({ choice: 'none' });
+    expect(requestOptions.onPayload).toBeUndefined();
+    expect(capability.buildPiContext(context, contract).tools).toBeUndefined();
   });
 });

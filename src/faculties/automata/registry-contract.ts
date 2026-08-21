@@ -221,12 +221,17 @@ export interface AutomataBusQueryOwnerPolicy {
   modelIdentityPolicy: 'configured-provider-strict';
 }
 
+interface AutomataBusReindexOwnerPolicy {
+  leaseDurationMs: number;
+}
+
 export interface AutomataOwnerPolicy {
   schemaVersion: 1;
   bus: {
     eligibleClasses: ProductionAutomataClassId[];
     excludedClasses: ProductionAutomataClassId[];
     query: AutomataBusQueryOwnerPolicy;
+    reindex: AutomataBusReindexOwnerPolicy;
     reviewer: AutomataBusReviewerPolicy;
     lessonProposal: AutomataLessonProposalPolicy;
   };
@@ -362,6 +367,14 @@ function parseLessonProposalPolicy(value: unknown, path: string): AutomataLesson
   };
 }
 
+function parseBusReindexPolicy(value: unknown, path: string): AutomataBusReindexOwnerPolicy {
+  if (!isRecord(value)) throw new Error(`${path} must be an object`);
+  assertExactKeys(value, ['leaseDurationMs'], path);
+  return {
+    leaseDurationMs: requirePositiveInteger(value.leaseDurationMs, `${path}.leaseDurationMs`),
+  };
+}
+
 function parseClassList(value: unknown, path: string): ProductionAutomataClassId[] {
   if (!Array.isArray(value)) throw new Error(`${path} must be an array`);
   const classes = value.map((entry, index) => {
@@ -393,7 +406,7 @@ export function parseAutomataOwnerPolicy(value: unknown, source = 'automata-poli
   );
   assertExactKeys(
     value.bus,
-    ['eligibleClasses', 'excludedClasses', 'query', 'reviewer', 'lessonProposal'],
+    ['eligibleClasses', 'excludedClasses', 'query', 'reindex', 'reviewer', 'lessonProposal'],
     `${source}.bus`,
   );
   assertExactKeys(retentionValues, RETENTION_CLASSES, `${source}.retentionMs`);
@@ -405,6 +418,7 @@ export function parseAutomataOwnerPolicy(value: unknown, source = 'automata-poli
   const missing = PRODUCTION_AUTOMATA_CLASSES.map(entry => entry.id).filter(classId => !accounted.has(classId));
   if (missing.length > 0) throw new Error(`${source} does not assign bus policy for: ${missing.join(', ')}`);
   const query = parseBusQueryPolicy(value.bus.query, `${source}.bus.query`);
+  const reindex = parseBusReindexPolicy(value.bus.reindex, `${source}.bus.reindex`);
   const reviewer = parseAutomataBusReviewerPolicy(value.bus.reviewer, `${source}.bus.reviewer`);
   const lessonProposal = parseLessonProposalPolicy(
     value.bus.lessonProposal,
@@ -416,7 +430,7 @@ export function parseAutomataOwnerPolicy(value: unknown, source = 'automata-poli
   ])) as Record<AutomataRetentionClass, number>;
   return {
     schemaVersion: 1,
-    bus: { eligibleClasses, excludedClasses, query, reviewer, lessonProposal },
+    bus: { eligibleClasses, excludedClasses, query, reindex, reviewer, lessonProposal },
     rawSessionRetentionMs: requirePositiveInteger(
       value.rawSessionRetentionMs,
       `${source}.rawSessionRetentionMs`,

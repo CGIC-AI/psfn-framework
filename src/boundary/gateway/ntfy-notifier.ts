@@ -1,4 +1,5 @@
 import { JSONRPCErrorException } from 'json-rpc-2.0';
+import { createHash } from 'node:crypto';
 import type { ConfirmationQueueEntry } from '../../system/capabilities/confirmation-queue.js';
 import type { ChannelOutboundDock } from '../../channels/backplane/types.js';
 import { createComponentLogger } from '../../shared/logger.js';
@@ -69,6 +70,7 @@ export class GatewayNtfyNotifier {
 
     const title = params.title?.trim();
     const priority = this.normalizePriority(params.priority);
+    const sequenceId = this.resolveSequenceId(params.idempotencyKey);
 
     const fingerprint = JSON.stringify({
       sender,
@@ -77,7 +79,7 @@ export class GatewayNtfyNotifier {
       priority,
       message,
     });
-    if (this.isDebouncedAlert(fingerprint, config.debounceWindowMs)) {
+    if (!sequenceId && this.isDebouncedAlert(fingerprint, config.debounceWindowMs)) {
       return { status: 'debounced', topic };
     }
 
@@ -91,6 +93,9 @@ export class GatewayNtfyNotifier {
     }
     if (priority !== undefined) {
       headers.Priority = String(priority);
+    }
+    if (sequenceId) {
+      headers['X-Sequence-ID'] = sequenceId;
     }
     if (config.token) {
       headers.Authorization = `Bearer ${config.token}`;
@@ -111,6 +116,18 @@ export class GatewayNtfyNotifier {
 
     const messageId = response.headers.get('x-message-id') ?? undefined;
     return { status: 'sent', topic, ...(messageId ? { messageId } : {}) };
+  }
+
+  private resolveSequenceId(idempotencyKey: string | undefined): string | undefined {
+    if (idempotencyKey === undefined) return undefined;
+    const normalized = idempotencyKey.trim();
+    if (!normalized) {
+      throw new JSONRPCErrorException(
+        'notify.ntfy idempotencyKey must be non-empty when provided',
+        GatewayErrors.PROVIDER_ERROR,
+      );
+    }
+    return createHash('sha256').update(normalized).digest('hex');
   }
 
   private normalizePriority(priority: number | undefined): number | undefined {

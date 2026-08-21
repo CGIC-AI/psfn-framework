@@ -61,13 +61,20 @@ import { selectExtractionRecentEntries } from './recovered-entries.js';
 import { parseSessionMessageAddressing } from '../../../core/session/message-addressing.js';
 import {
   buildAutomataBusWorkerScope,
+  isAutomataBusWorkerEligible,
   resolveAutomataBusWorkerFormation,
   type AutomataBusWorkerAccess,
 } from '../../automata/bus/worker-access.js';
+import type { AutomataRunRegistry } from '../../automata/run-registry.js';
 import {
   completeExtractionChunkWithAutomataBus,
   type ExtractionAutomataBusBinding,
 } from './automata-bus-completion.js';
+import {
+  beginMemoryExtractionAutomataRun,
+  completeMemoryExtractionAutomataRun,
+  failMemoryExtractionAutomataRun,
+} from './memory-extraction-automata-run.js';
 
 export { ExtractionIntegrityError } from './integrity-error.js';
 
@@ -147,6 +154,8 @@ export interface ExtractionRunOptions {
   personaPreamble?: PersonaPreamblePort | null;
   /** Companion-bound Bus adapter; owner policy decides memory.extraction eligibility. */
   automataBusWorkerAccess?: AutomataBusWorkerAccess | null;
+  /** Authoritative run lifecycle paired with the production Bus adapter. */
+  automataRunRegistry?: AutomataRunRegistry | null;
   gateConfig: ExtractionGateConfig;
   maxWrites: number;
   groupWriteCaps?: GroupMemoryWriteCapSettings;
@@ -212,6 +221,7 @@ export async function runExtractionOrchestration(
   options: ExtractionRunOptions,
 ): Promise<MemoryExtractionOutputs> {
   let resolvedTurnId: TurnID | undefined = options.turnId;
+  let activeAutomataRunId: string | undefined;
   try {
     if (
       isTestingSessionId(options.channelId)
@@ -331,10 +341,28 @@ export async function runExtractionOrchestration(
     const extractionPrompt = options.promptRegistry?.getPrompt(extractionPromptKey)
       ?? getDefaultPromptText(extractionPromptKey);
     const compositionalMode = options.useCompositionalExtraction ? 'chunk_compose' : 'single_pass';
-    const automataBusScope = options.automataBusWorkerAccess
-      ? buildAutomataBusWorkerScope(options.automataBusWorkerAccess, {
+    const automataBusEligible = isAutomataBusWorkerEligible(
+      options.automataBusWorkerAccess,
+      'memory.extraction',
+    );
+    if (automataBusEligible && !options.automataRunRegistry) {
+      throw new Error('Memory extraction Automata Bus formation requires the authoritative run registry');
+    }
+    const automataRunId = latestTurnContext?.requestId ?? attemptRef;
+    if (automataBusEligible) {
+      const run = await beginMemoryExtractionAutomataRun(options.automataRunRegistry!, {
+        runId: automataRunId,
+        taskId: options.channelId,
+        sessionId: options.sourceSessionId ?? options.channelId,
+        triggerReason: options.triggerReason,
+      });
+      if (!run.execute) return emptyExtractionOutputs();
+      activeAutomataRunId = run.ownsLifecycle ? run.runId : undefined;
+    }
+    const automataBusScope = automataBusEligible
+      ? buildAutomataBusWorkerScope(options.automataBusWorkerAccess!, {
         automatonClass: 'memory.extraction',
-        runId: requestId,
+        runId: automataRunId,
         taskId: options.channelId,
       })
       : undefined;
@@ -421,6 +449,12 @@ export async function runExtractionOrchestration(
         crossChunkDeduplicatedCount,
         boundaryFactCount: normalization.boundaryFactCount,
       });
+      if (activeAutomataRunId) {
+        await completeMemoryExtractionAutomataRun(
+          options.automataRunRegistry!,
+          activeAutomataRunId,
+        );
+      }
       return emptyExtractionOutputs();
     }
 
@@ -541,6 +575,12 @@ export async function runExtractionOrchestration(
       maybeRefreshRecentContactShape: options.maybeRefreshRecentContactShape,
       assertEffectAllowed: options.assertEffectAllowed,
     });
+    if (activeAutomataRunId) {
+      await completeMemoryExtractionAutomataRun(
+        options.automataRunRegistry!,
+        activeAutomataRunId,
+      );
+    }
     return {
       memoryIds: [...durableMemoryIds],
       concernIds: [...new Set(sideEffects.concernIds)],
@@ -553,8 +593,22 @@ export async function runExtractionOrchestration(
     // (u5bv.11, hrmrq.90).
     if (error instanceof ExtractionDrainRequeueError) throw error;
     if (error instanceof Error && error.name === 'ModelCallPreemptedError') throw error;
-    const wrapped = error instanceof ExtractionIntegrityError
-      ? error
+    let failure: unknown = error;
+    if (activeAutomataRunId) {
+      try {
+        await failMemoryExtractionAutomataRun(
+          options.automataRunRegistry!,
+          activeAutomataRunId,
+        );
+      } catch (runError) {
+        failure = new AggregateError(
+          [error, runError],
+          'Memory extraction and Automata run failure recording both failed',
+        );
+      }
+    }
+    const wrapped = failure instanceof ExtractionIntegrityError
+      ? failure
       : new ExtractionIntegrityError(
         'Extraction orchestration failed',
         {
@@ -563,7 +617,7 @@ export async function runExtractionOrchestration(
           triggerReason: options.triggerReason,
           ...(resolvedTurnId ? { turnId: resolvedTurnId } : {}),
         },
-        error,
+        failure,
       );
     log.error('Extraction integrity failure', {
       context: wrapped.context,

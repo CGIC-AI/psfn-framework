@@ -3,6 +3,27 @@ import type { AdminDashboardData } from '$lib/types';
 export type DashboardTool = AdminDashboardData['stats']['toolStatus'][number];
 export type DashboardToolFilter = 'issues' | 'all';
 
+export const DASHBOARD_SECTIONS = [
+  { id: 'overview', label: 'Overview', href: '#overview' },
+  { id: 'health', label: 'Health', href: '#health' },
+  { id: 'memory', label: 'Memory', href: '#memory' },
+  { id: 'cost', label: 'Cost', href: '#cost' },
+  { id: 'traces', label: 'Traces', href: '#traces' },
+] as const;
+
+export type DashboardSectionId = (typeof DASHBOARD_SECTIONS)[number]['id'];
+
+const DASHBOARD_SECTION_IDS = new Set<DashboardSectionId>(
+  DASHBOARD_SECTIONS.map(section => section.id),
+);
+
+export function resolveDashboardSection(hash: string): DashboardSectionId {
+  const sectionId = hash.startsWith('#') ? hash.slice(1) : hash;
+  return DASHBOARD_SECTION_IDS.has(sectionId as DashboardSectionId)
+    ? sectionId as DashboardSectionId
+    : 'overview';
+}
+
 export interface DashboardToolCounts {
   healthy: number;
   degraded: number;

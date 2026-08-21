@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { InMemoryAutomataRunStore, AutomataRunRegistry } from '../../../faculties/automata/run-registry.js';
 import { loadAutomataPolicySeedDefaults } from '../../../system/config/automata-policy-config.js';
 import {
@@ -116,6 +116,59 @@ describe('GET /api/admin/automata', () => {
     expect(captured).toEqual({
       status: 500,
       body: { error: 'Failed to load Automata data' },
+    });
+  });
+});
+
+describe('POST /api/admin/automata/reindex', () => {
+  it('runs one bounded reindex through the companion-bound Automata service', async () => {
+    const reindex = vi.fn(async () => ({
+      companionId: 'companion-test',
+      status: 'completed' as const,
+      processed: 2,
+      indexed: 2,
+      lagging: 0,
+    }));
+    const routes = buildAdminAutomataRoutes({
+      automataService: {
+        async getSnapshot() {
+          throw new Error('snapshot should not be read during reindex');
+        },
+        reindex,
+      },
+    });
+    const route = routes.find(candidate => (
+      candidate.method === 'POST'
+      && candidate.match.capabilityPattern === '/api/admin/automata/reindex'
+    ));
+    expect(route).toBeDefined();
+    const captured: CapturedResponse = { status: 0, body: undefined };
+    let complete: (() => void) | undefined;
+    const completed = new Promise<void>(resolve => { complete = resolve; });
+    const response = fakeResponse(captured);
+    response.end = ((payload?: string) => {
+      captured.body = payload ? JSON.parse(payload) : undefined;
+      complete?.();
+      return response;
+    }) as ServerResponse['end'];
+
+    route!.handle(
+      { method: 'POST', url: '/api/admin/automata/reindex', headers: {} } as IncomingMessage,
+      response,
+      {},
+    );
+    await completed;
+
+    expect(reindex).toHaveBeenCalledOnce();
+    expect(captured).toEqual({
+      status: 200,
+      body: {
+        companionId: 'companion-test',
+        status: 'completed',
+        processed: 2,
+        indexed: 2,
+        lagging: 0,
+      },
     });
   });
 });

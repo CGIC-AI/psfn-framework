@@ -158,6 +158,7 @@ export class GardenAdminTransportServer implements Lifecycle {
     };
     this.routes = buildAdminApiRoutes({
       config: config.config,
+      automataService: config.services.automata,
       dashboardService: config.services.dashboard,
       imagesService: config.services.images,
       auditHistoryService: config.services.auditHistory,

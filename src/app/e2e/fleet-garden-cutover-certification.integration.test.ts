@@ -18,7 +18,7 @@
  * session broker itself is certified by the fleet-auth suites.
  *
  * Certified here because no per-bead test could prove the composite:
- * two-companion concurrency/isolation, denial indistinguishability, outage
+ * multi-companion concurrency/isolation, denial indistinguishability, outage
  * without fallback, canonical owner mutation through the full chain,
  * capability replay/expiry/digest-mismatch at the Garden origin, WebSocket
  * switching and revocation, and redeploy (pinned rollback posture) without
@@ -74,6 +74,8 @@ import { Scheduler } from '../../core/scheduler/scheduler.js';
 import { ShardManager } from '../../faculties/shards/manager.js';
 import { saveModelsConfig } from '../../system/config/models-config.js';
 import { resetRuntimeTrustPolicy } from '../../system/trust/runtime-policy.js';
+import { ValuesJournalStore } from '../../faculties/values/store.js';
+import { resolveValuesJournalPath } from '../../persistence/layout.js';
 import type { CharacterCardV2 } from '../../core/identity/types.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { LLMProviderPort } from '../../core/agent/contracts.js';
@@ -85,9 +87,11 @@ import {
 
 const COMPANION_A = createCompanionId('11111111-1111-4111-8111-111111111111');
 const COMPANION_B = createCompanionId('22222222-2222-4222-8222-222222222222');
+const COMPANION_C = createCompanionId('33333333-3333-4333-8333-333333333333');
 const UNKNOWN_COMPANION = createCompanionId('55555555-5555-4555-8555-555555555555');
 const SESSION_A = 'a'.repeat(43);
 const SESSION_B = 'b'.repeat(43);
+const SESSION_C = 'c'.repeat(43);
 const CANONICAL_ORIGIN = 'https://fleet.example.test';
 const ISSUER = 'fleet-cert-e2e';
 const KID = 'cert-active';
@@ -135,7 +139,9 @@ function authorizationContext(
   return Object.freeze({
     principalId: companionId === COMPANION_A
       ? 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
-      : 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      : companionId === COMPANION_B
+        ? 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
+        : 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
     providerSubject: Object.freeze({ provider: 'discord', subjectId: `subject-${companionId}` }),
     companionId,
     contact: Object.freeze({
@@ -147,7 +153,9 @@ function authorizationContext(
     session: Object.freeze({
       recordId: companionId === COMPANION_A
         ? 'aaaaaaaa-0000-4000-8000-000000000001'
-        : 'bbbbbbbb-0000-4000-8000-000000000001',
+        : companionId === COMPANION_B
+          ? 'bbbbbbbb-0000-4000-8000-000000000001'
+          : 'cccccccc-0000-4000-8000-000000000001',
       audience: 'fleet',
       assurance: 'oauth',
       authnVersion: 1,
@@ -456,6 +464,17 @@ async function buildAgentFixture(input: {
     characterCardPath: input.characterCardPath,
   });
   writeModelsFixture(input.companionDataDir, config.defaultContextWindow);
+  const journal = new ValuesJournalStore(resolveValuesJournalPath(input.companionDataDir));
+  const journalEntryCount = input.companionId === COMPANION_A ? 1 : 2;
+  for (let index = 0; index < journalEntryCount; index += 1) {
+    journal.append({
+      templateId: 'garden-route-certification',
+      templateName: 'Garden route certification',
+      prompt: 'Verify exact companion journal ownership.',
+      reflection: `private-${input.companionId}-${index}`,
+      createdAt: `2026-08-20T12:00:0${index}.000Z`,
+    });
+  }
 
   const eventBus = new EventBus();
   const memoryStore = new InMemoryMemoryStore().asPort();
@@ -540,7 +559,9 @@ function buildRouter(input: {
         }
         const expected = brokerInput.sessionToken === SESSION_A
           ? COMPANION_A
-          : brokerInput.sessionToken === SESSION_B ? COMPANION_B : undefined;
+          : brokerInput.sessionToken === SESSION_B
+            ? COMPANION_B
+            : brokerInput.sessionToken === SESSION_C ? COMPANION_C : undefined;
         if (!expected
           || expected !== brokerInput.companionId
           || input.revoked.has(brokerInput.sessionToken)) {
@@ -795,6 +816,14 @@ beforeAll(async () => {
         postgresRole: 'companion_beta_runtime',
         postgresDatabaseUrlRef: { kind: 'env', envName: 'COMPANION_BETA_DATABASE_URL' },
       },
+      {
+        companionId: COMPANION_C,
+        companionDataDir: 'companions/gamma',
+        characterCardPath: 'companions/gamma/character-card.json',
+        postgresSchema: 'companion_gamma',
+        postgresRole: 'companion_gamma_runtime',
+        postgresDatabaseUrlRef: { kind: 'env', envName: 'COMPANION_GAMMA_DATABASE_URL' },
+      },
     ],
   })}\n`);
 
@@ -817,7 +846,9 @@ beforeAll(async () => {
       companionId: entry.companionId,
       companionDataDir: entry.companionDataDir,
       characterCardPath: entry.characterCardPath,
-      cardName: entry.companionId === COMPANION_A ? 'Cert Alpha' : 'Cert Beta',
+      cardName: entry.companionId === COMPANION_A
+        ? 'Cert Alpha'
+        : entry.companionId === COMPANION_B ? 'Cert Beta' : 'Cert Gamma',
       fleetEnv,
     }));
   }
@@ -928,11 +959,15 @@ describe('fleet Garden cutover certification: assembled production composition',
       env: {},
     });
     expect(upstreams.map(upstream => upstream.companionId).sort()).toEqual(
-      [COMPANION_A, COMPANION_B].sort(),
+      [COMPANION_A, COMPANION_B, COMPANION_C].sort(),
     );
     const origins = new Set(upstreams.map(upstream => upstream.origin.href));
     expect(origins.size).toBe(1);
-    expect(fixture.runtime.targetRegistry.companionIds()).toEqual([COMPANION_A, COMPANION_B]);
+    expect(fixture.runtime.targetRegistry.companionIds()).toEqual([
+      COMPANION_A,
+      COMPANION_B,
+      COMPANION_C,
+    ]);
   });
 
   it('fails closed at the dark Garden origin: no gateway capability, no admin access', async () => {
@@ -944,6 +979,39 @@ describe('fleet Garden cutover certification: assembled production composition',
     );
     expect(bare.status).toBeGreaterThanOrEqual(400);
     expect(bare.body).not.toContain('backgroundMaintenance');
+  });
+
+  it('serves live subsystem, observer, and journal status from the exact selected companion', async () => {
+    const endpoints = [
+      '/api/admin/subsystem-health',
+      '/api/admin/evals/observer-sidecar/health',
+      '/api/admin/values/status',
+    ] as const;
+    const read = (companionId: string, session: string, endpoint: string) => edgeRequest(
+      fixture.edgePort,
+      'GET',
+      `/companions/${companionId}/garden${endpoint}`,
+      session,
+    );
+    const [subsystemA, observerA, journalA, subsystemB, observerB, journalB] = await Promise.all([
+      ...endpoints.map(endpoint => read(COMPANION_A, SESSION_A, endpoint)),
+      ...endpoints.map(endpoint => read(COMPANION_B, SESSION_B, endpoint)),
+    ]);
+
+    for (const response of [subsystemA, observerA, journalA, subsystemB, observerB, journalB]) {
+      expect(response.status).toBe(200);
+    }
+    expect(subsystemA.headers['cache-control']).toBe('private, no-cache');
+    expect(subsystemB.headers['cache-control']).toBe('private, no-cache');
+    for (const response of [observerA, journalA, observerB, journalB]) {
+      expect(response.headers['cache-control']).toBe('no-store');
+    }
+    expect(JSON.parse(observerA.body)).toHaveProperty('status');
+    expect(JSON.parse(observerB.body)).toHaveProperty('status');
+    expect(JSON.parse(journalA.body).streams.values.count).toBe(1);
+    expect(JSON.parse(journalB.body).streams.values.count).toBe(2);
+    expect(journalA.body).not.toContain(`private-${COMPANION_A}`);
+    expect(journalB.body).not.toContain(`private-${COMPANION_B}`);
   });
 
   it('mutates the canonical owner file of exactly the selected companion', async () => {
@@ -1099,7 +1167,7 @@ describe('fleet Garden cutover certification: assembled production composition',
     expect(afterFile).toBe(beforeFile);
   });
 
-  it('switches WebSocket event streams per companion without cross-delivery, and denies after revocation', async () => {
+  it('keeps three concurrent Prompt Loom streams companion-scoped through production routing', async () => {
     const wsA = await openEdgeWebSocket(
       fixture.edgePort,
       `/companions/${COMPANION_A}/garden/api/admin/events`,
@@ -1110,18 +1178,68 @@ describe('fleet Garden cutover certification: assembled production composition',
       `/companions/${COMPANION_B}/garden/api/admin/events`,
       SESSION_B,
     );
+    const wsC = await openEdgeWebSocket(
+      fixture.edgePort,
+      `/companions/${COMPANION_C}/garden/api/admin/events`,
+      SESSION_C,
+    );
     try {
-      const strayOnB: unknown[] = [];
-      wsB.on('message', raw => strayOnB.push(raw));
+      const observedMarkers = new Map<WebSocket, string[]>([
+        [wsA, []],
+        [wsB, []],
+        [wsC, []],
+      ]);
+      for (const [ws, markers] of observedMarkers) {
+        ws.on('message', (raw: WebSocket.RawData) => {
+          const telemetry = JSON.parse(raw.toString()) as {
+            type: string;
+            data?: { message?: { id?: string } };
+          };
+          if (telemetry.type === 'agent.turn.usage' && telemetry.data?.message?.id) {
+            markers.push(telemetry.data.message.id);
+          }
+        });
+      }
+      const receivedA = nextWebSocketMessage<{
+        type: string;
+        data: { message: { id: string } };
+      }>(wsA);
+      const receivedB = nextWebSocketMessage<{
+        type: string;
+        data: { message: { id: string } };
+      }>(wsB);
+      const receivedC = nextWebSocketMessage<{
+        type: string;
+        data: { message: { id: string } };
+      }>(wsC);
 
-      const received = nextWebSocketMessage<{ type: string; message?: { id?: string } }>(wsA);
-      await emitUsageTelemetry(fixture.agents.get(COMPANION_A)!.eventBus, 'usage-alpha-1');
-      const telemetry = await received;
-      expect(telemetry.type).toBe('agent.turn.usage');
+      await Promise.all([
+        emitUsageTelemetry(fixture.agents.get(COMPANION_A)!.eventBus, 'usage-alpha-1'),
+        emitUsageTelemetry(fixture.agents.get(COMPANION_B)!.eventBus, 'usage-beta-1'),
+        emitUsageTelemetry(fixture.agents.get(COMPANION_C)!.eventBus, 'usage-gamma-1'),
+      ]);
 
-      // Companion B's stream must not observe companion A's telemetry.
-      await new Promise(resolve => setTimeout(resolve, 250));
-      expect(strayOnB).toHaveLength(0);
+      const [telemetryA, telemetryB, telemetryC] = await Promise.all([
+        receivedA,
+        receivedB,
+        receivedC,
+      ]);
+      expect(telemetryA).toMatchObject({
+        type: 'agent.turn.usage',
+        data: { message: { id: 'usage-alpha-1' } },
+      });
+      expect(telemetryB).toMatchObject({
+        type: 'agent.turn.usage',
+        data: { message: { id: 'usage-beta-1' } },
+      });
+      expect(telemetryC).toMatchObject({
+        type: 'agent.turn.usage',
+        data: { message: { id: 'usage-gamma-1' } },
+      });
+      await new Promise(resolve => setTimeout(resolve, 50));
+      expect(observedMarkers.get(wsA)).toEqual(['usage-alpha-1']);
+      expect(observedMarkers.get(wsB)).toEqual(['usage-beta-1']);
+      expect(observedMarkers.get(wsC)).toEqual(['usage-gamma-1']);
 
       // Revocation: the same session that just switched streams can no longer
       // open a new one once the gateway denies it.
@@ -1136,6 +1254,7 @@ describe('fleet Garden cutover certification: assembled production composition',
       fixture.revoked.delete(SESSION_A);
       wsA.terminate();
       wsB.terminate();
+      wsC.terminate();
     }
   });
 
@@ -1195,6 +1314,20 @@ describe('fleet Garden cutover certification: assembled production composition',
     const afterCutover = await edgeRequest(newEdgePort, 'GET', sameUrl, SESSION_A);
     expect(afterCutover.status).toBe(200);
     expect(JSON.parse(afterCutover.body).backgroundMaintenance.intervalMs).toBe(111_000);
+
+    for (const endpoint of [
+      '/api/admin/subsystem-health',
+      '/api/admin/evals/observer-sidecar/health',
+      '/api/admin/values/status',
+    ]) {
+      const restored = await edgeRequest(
+        newEdgePort,
+        'GET',
+        `/companions/${COMPANION_A}/garden${endpoint}`,
+        SESSION_A,
+      );
+      expect(restored.status).toBe(200);
+    }
 
     // Topology swap moved no owner data and rewrote no owner files.
     expect(readFileSync(ownerFile, 'utf-8')).toBe(ownerBytesBefore);

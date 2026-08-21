@@ -93,6 +93,130 @@ function deferred<T>(): {
 }
 
 describe('AdminDashboardDataService', () => {
+  it('projects bounded content-free evidence from the live intention handoff and scheduler stores', async () => {
+    const nowMs = Date.parse('2026-08-20T12:00:00.000Z');
+    const listPendingFollowUps = vi.fn(async (options?: { includeExpired?: boolean }) => [
+      {
+        id: 'handoff-later',
+        content: 'private handoff content',
+        priority: 'medium',
+        timing: 'soon',
+        createdAt: '2026-08-20T10:00:00.000Z',
+        dueAt: '2026-08-21T12:00:00.000Z',
+        channelId: 'private:channel',
+        channelType: 'api',
+        authorId: 'system:intention',
+        authorName: 'Whisper',
+      },
+      {
+        id: 'handoff-first',
+        content: 'more private handoff content',
+        priority: 'high',
+        timing: 'immediate',
+        createdAt: '2026-08-20T09:00:00.000Z',
+        dueAt: '2026-08-20T13:00:00.000Z',
+        channelId: 'private:channel',
+        channelType: 'api',
+        authorId: 'system:intention',
+        authorName: 'Whisper',
+      },
+      ...(options?.includeExpired
+        ? [{
+          id: 'handoff-expired',
+          content: 'expired private handoff content',
+          priority: 'low' as const,
+          timing: 'soon' as const,
+          createdAt: '2026-08-19T00:00:00.000Z',
+          dueAt: '2026-08-19T01:00:00.000Z',
+          channelId: 'private:channel',
+          channelType: 'api' as const,
+          authorId: 'system:intention',
+          authorName: 'Whisper',
+        }]
+        : []),
+    ] as const);
+    const scheduledRecords = [
+      {
+        id: 'scheduled-intention',
+        name: 'Scheduled intention follow-up',
+        prompt: 'private scheduled content',
+        runAt: '2026-09-20T12:00:00.000Z',
+        createdAt: '2026-08-20T11:00:00.000Z',
+        source: 'intention_appraisal',
+        channelId: 'private:channel',
+        channelType: 'api',
+        authorId: 'system:intention',
+        authorName: 'Whisper',
+        status: 'pending',
+      },
+      {
+        id: 'scheduled-tool',
+        name: 'Unrelated schedule tool work',
+        prompt: 'not intention evidence',
+        runAt: '2026-08-22T12:00:00.000Z',
+        createdAt: '2026-08-20T11:30:00.000Z',
+        source: 'schedule_tool',
+        channelId: 'private:channel',
+        channelType: 'api',
+        authorId: 'system:scheduler',
+        authorName: 'Scheduler',
+        status: 'pending',
+      },
+    ] as const;
+    const listScheduledPrompts = vi.fn(async (options?: { source?: string }) => (
+      scheduledRecords.filter(record => options?.source === undefined || record.source === options.source)
+    ));
+    const service = new AdminDashboardDataService({
+      ...makeBaseDeps(),
+      now: () => nowMs,
+      intentionFollowUpRuntime: {
+        nearTermHorizonMs: 259_200_000,
+        pendingFollowUpStore: { list: listPendingFollowUps },
+        scheduledPromptStore: { listPending: listScheduledPrompts },
+      },
+    });
+
+    const dashboard = await service.getDashboardData();
+
+    expect(listPendingFollowUps).toHaveBeenCalledWith({
+      includeActivated: false,
+      includeExpired: false,
+      asOf: '2026-08-20T12:00:00.000Z',
+      limit: 200,
+    });
+    expect(listScheduledPrompts).toHaveBeenCalledWith({
+      source: 'intention_appraisal',
+      limit: 200,
+    });
+    expect(dashboard.stats.intentionFollowUpRouting).toEqual({
+      horizonSource: 'effective_scheduler_config',
+      nearTermHorizonMs: 259_200_000,
+      evidenceLimit: 200,
+      observedAtMs: nowMs,
+      handoff: {
+        disposition: 'handoff',
+        reason: 'active_pending_follow_up',
+        available: true,
+        observedCount: 2,
+        earliestDueAtMs: Date.parse('2026-08-20T13:00:00.000Z'),
+        atReadLimit: false,
+      },
+      scheduled: {
+        disposition: 'scheduled',
+        reason: 'pending_intention_scheduled_prompt',
+        available: true,
+        observedCount: 1,
+        earliestDueAtMs: Date.parse('2026-09-20T12:00:00.000Z'),
+        atReadLimit: false,
+      },
+    });
+    const serializedProjection = JSON.stringify(dashboard.stats.intentionFollowUpRouting);
+    expect(serializedProjection).not.toContain('private handoff content');
+    expect(serializedProjection).not.toContain('private scheduled content');
+    expect(serializedProjection).not.toContain('private:channel');
+    expect(serializedProjection).not.toContain('system:intention');
+  });
+
   it('reads memory stats through the exact admitted request context', async () => {
     const deps = makeBaseDeps();
     const context = { kind: 'fleet_principal' } as GardenRequestContext;
@@ -541,6 +665,15 @@ async function emitTrace(eventBus: EventBus, timestamp: number, task: string): P
     timestamp,
     task,
     result: {
+      outcome: 'completed',
+      continuation: 'not_needed',
+      limitPolicy: {
+        maxIterations: 60,
+        maxTokens: 256_000,
+        maxWallTimeMs: 600_000,
+        maxSubQueries: 60,
+        maxToolCalls: 50,
+      },
       iterations: 1,
       totalInputTokens: 10,
       totalOutputTokens: 5,
@@ -549,7 +682,7 @@ async function emitTrace(eventBus: EventBus, timestamp: number, task: string): P
       budgetStop: null,
       subQueries: 0,
       toolCalls: 0,
-      sessionCostUsd: 0,
+      sessionCostUsd: 0.25,
       warnings: [],
       nestedAnalysis: {
         nestedAnalysisCallCount: 0,
@@ -586,6 +719,18 @@ describe('AdminDashboardDataService analysis-workbench trace persistence (vb11)'
 
     expect(store.rows.map((row) => row.task)).toEqual(['second', 'first']);
     expect(service.listAnalysisWorkbenchTraces().map((row) => row.task)).toEqual(['second', 'first']);
+    expect(service.listAnalysisWorkbenchTraces()[0]).toMatchObject({
+      outcome: 'completed',
+      continuation: 'not_needed',
+      sessionCostUsd: 0.25,
+      limitPolicy: {
+        maxIterations: 60,
+        maxTokens: 256_000,
+        maxWallTimeMs: 600_000,
+        maxSubQueries: 60,
+        maxToolCalls: 50,
+      },
+    });
   });
 
   it('rehydrates the ring from the durable store after a restart', async () => {

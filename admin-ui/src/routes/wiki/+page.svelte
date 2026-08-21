@@ -14,6 +14,8 @@
   import CardGrid from '$lib/components/garden/CardGrid.svelte';
   import CollapsibleSection from '$lib/components/garden/CollapsibleSection.svelte';
   import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
+  import WikiScopeTabs from './WikiScopeTabs.svelte';
+  import { resolveWikiDeepLink } from './wiki-navigation';
   import type { WikiDocument, WikiDocumentListEntry, WikiSearchMatch } from '../../../../src/faculties/wiki/types';
   import {
     parseNamedWardrobeLookDocument,
@@ -41,10 +43,6 @@
   let sharedScopes = $derived(scopes.filter((scope) => scope.scope !== 'personal'));
   let selectedId = $derived(selected?.id ?? '');
 
-  function scopeTabKey(scope: WikiScopeSummary): string {
-    return scope.scope === 'personal' ? 'personal' : (scope.siteId ?? scope.scope);
-  }
-
   async function loadDocuments() {
     errorMessage = '';
     try {
@@ -70,6 +68,15 @@
       if (!selected && data.documents[0]) {
         await selectDocument(data.documents[0].id);
       }
+      const sharedSiteIds = scopes
+        .filter((scope) => scope.scope !== 'personal')
+        .map((scope) => scope.siteId ?? scope.scope);
+      const deepLink = resolveWikiDeepLink(window.location.search, sharedSiteIds);
+      if (deepLink.scopeKey !== 'personal') {
+        await selectScope(deepLink.scopeKey, false);
+      }
+      const canonicalUrl = `${window.location.pathname}${deepLink.canonicalSearch}${window.location.hash}`;
+      window.history.replaceState(window.history.state, '', canonicalUrl);
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : 'Failed to load wiki documents.';
     } finally {
@@ -97,12 +104,18 @@
     }
   }
 
-  async function selectScope(key: string) {
+  async function selectScope(key: string, updateUrl = true) {
     if (key === activeScopeKey) return;
     activeScopeKey = key;
     selected = null;
     errorMessage = '';
-    if (key === 'personal') return;
+    if (key === 'personal') {
+      if (updateUrl) {
+        window.history.replaceState(window.history.state, '', `${window.location.pathname}?scope=personal`);
+      }
+      if (data?.documents[0]) await selectDocument(data.documents[0].id);
+      return;
+    }
     loading = true;
     try {
       const payload = await listSharedWorldWikiDocuments(key);
@@ -110,6 +123,13 @@
       sharedDocuments = payload.documents;
       if (payload.documents[0]) {
         await selectDocument(payload.documents[0].id);
+      }
+      if (updateUrl) {
+        window.history.replaceState(
+          window.history.state,
+          '',
+          `${window.location.pathname}?scope=shared&site=${encodeURIComponent(key)}`,
+        );
       }
     } catch (error) {
       sharedSiteId = '';
@@ -200,31 +220,13 @@
     </div>
   {/if}
 
-  <div class="flex flex-wrap gap-2" role="tablist" aria-label="Wiki scopes">
-    <button
-      type="button"
-      role="tab"
-      aria-selected={activeScopeKey === 'personal'}
-      onclick={() => void selectScope('personal')}
-      class="rounded-full border px-3 py-1.5 text-sm font-medium transition-colors {activeScopeKey === 'personal' ? 'border-gold-400 bg-gold-50 text-gold-800' : 'border-bark-300 text-shadow-700 hover:bg-bark-100'}"
-    >
-      Personal
-      <span class="ml-1 text-xs text-shadow-500">{data?.documents.length ?? 0}</span>
-    </button>
-    {#each sharedScopes as scope}
-      <button
-        type="button"
-        role="tab"
-        aria-selected={activeScopeKey === scopeTabKey(scope)}
-        onclick={() => void selectScope(scopeTabKey(scope))}
-        class="rounded-full border px-3 py-1.5 text-sm font-medium transition-colors {activeScopeKey === scopeTabKey(scope) ? 'border-gold-400 bg-gold-50 text-gold-800' : 'border-bark-300 text-shadow-700 hover:bg-bark-100'}"
-      >
-        {scope.displayName}
-        <span class="ml-1 rounded-full border border-moss-300 bg-moss-50 px-1.5 py-0.5 text-[0.65rem] font-semibold uppercase tracking-wide text-moss-800">World</span>
-        <span class="ml-1 text-xs text-shadow-500">{scope.documentCount}</span>
-      </button>
-    {/each}
-  </div>
+  <WikiScopeTabs
+    {activeScopeKey}
+    personalCount={data?.documents.length ?? 0}
+    {sharedScopes}
+    onSelectPersonal={() => void selectScope('personal')}
+    onSelectShared={(siteId) => void selectScope(siteId)}
+  />
 
   {#if data}
     <CollapsibleSection title="Workspace" subtitle={data.boundary} count={documents.length}>
@@ -261,7 +263,7 @@
               </div>
               <span class="rounded-full border border-bark-200 px-2 py-0.5 text-xs text-shadow-600">{project.status}</span>
             </div>
-            <p class="mt-3 text-xs uppercase tracking-[0.14em] text-shadow-500">Her next intention</p>
+            <p class="mt-3 text-xs uppercase tracking-[0.14em] text-shadow-500">Next intention</p>
             <p class="mt-1 text-sm text-shadow-700">{project.nextStep}</p>
             <p class="mt-3 text-xs text-shadow-500">
               {project.artifacts.length} artifact{project.artifacts.length === 1 ? '' : 's'} · resumed {project.resumeCount} time{project.resumeCount === 1 ? '' : 's'} · visibility {project.visibility}

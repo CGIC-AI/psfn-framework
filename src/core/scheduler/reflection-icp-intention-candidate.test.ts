@@ -21,6 +21,7 @@ import type { PendingFollowUp } from '../intention/pending-follow-ups.js';
 import type { PendingFollowUpStorePort } from '../intention/pending-follow-up-store-port.js';
 import { ProactiveOutboundDispatcher } from '../intention/proactive-outbound.js';
 import { ExternalCommunicationRateLimiter } from '../../system/capabilities/safeguards.js';
+import { DEFAULT_INTENTION_FOLLOW_UP_SCHEDULER_CONFIG } from '../../system/config/scheduler-config/intention-follow-up.js';
 import type { ReflectionAgent } from './reflection-runtime-contracts.js';
 import { Scheduler } from './scheduler.js';
 
@@ -217,6 +218,9 @@ function wire(
       postTurnActions,
       llmProvider,
       pendingFollowUpStore,
+      intentionFollowUpHorizonMs:
+        DEFAULT_INTENTION_FOLLOW_UP_SCHEDULER_CONFIG.nearTermHorizonMs,
+      routeLongHorizonFollowUp: vi.fn(async () => 'scheduled:intention:test'),
       ...(options.activation === 'missing' ? {} : { onIntentionFollowUpActivated }),
       onIntentionFollowUpDampened,
       proactiveOutbound,

@@ -61,6 +61,7 @@ import {
   createIntentionAppraisalHooks,
   createIntentionBehavioralPatternHooks,
   wireIntentionRuntimeStores,
+  type LongHorizonFollowUpInput,
 } from '../../core/intention/runtime-wiring.js';
 import {
   createAutomatedConcernRuntime,
@@ -224,6 +225,8 @@ export interface AgentCoreRuntimeOptions {
   operatorNotifier: NotificationPort;
   intentionRuntime?: IntentionRuntimeWiring;
   intentionProviders?: IntentionRuntimeProviders;
+  intentionFollowUpHorizonMs: number;
+  routeLongHorizonFollowUp: (input: LongHorizonFollowUpInput) => Promise<string>;
   identityCoolingOff?: ReturnType<typeof createIdentityCoolingOffManagerFromEnv>;
   primaryUserId?: string;
   primaryTelegramUserId?: string;
@@ -353,6 +356,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
           embeddingIdentity: resolveEmbeddingProviderProvenanceFromConfig(config, gateway.dims),
           appCache,
           policy: policy.bus.query,
+          reindexLeaseDurationMs: policy.bus.reindex.leaseDurationMs,
         });
         const writer = new CanonicalAutomataBusWriter({
           companionId,
@@ -961,6 +965,8 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
         agentLoop.getCurrentInternalState(),
         asOf,
       ),
+      nearTermFollowUpHorizonMs: options.intentionFollowUpHorizonMs,
+      routeLongHorizonFollowUp: options.routeLongHorizonFollowUp,
     },
   );
   const intentionBehavioralHooks = createIntentionBehavioralPatternHooks(
@@ -1003,6 +1009,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
       : null,
     personaPreamble,
     automataBusWorkerAccess: automataBus?.workerAccess,
+    automataRunRegistry: options.automataRuntime?.registry,
   });
   const promptState = createPromptStatePort({
     layers: promptStore,

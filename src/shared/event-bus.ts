@@ -3,6 +3,8 @@ import type {
   AgentResponse,
   IntentionalNoReplyMetadata,
   ModelBudgetBlockedEvent,
+  ModelBudgetThresholdExceededEvent,
+  ModelBudgetAlertDeliveryEvent,
   ParentTurnContinuationStop,
   TurnUsage,
   InferredPostTurnAction,
@@ -709,6 +711,15 @@ export interface EventMap {
     timestamp: number;
     task: string;
     result: {
+      outcome: 'completed' | 'limit_reached';
+      continuation: 'not_needed' | 'restart_required';
+      limitPolicy: {
+        maxIterations: number;
+        maxTokens: number | null;
+        maxWallTimeMs: number | null;
+        maxSubQueries: number | null;
+        maxToolCalls: number | null;
+      };
       iterations: number;
       totalInputTokens: number;
       totalOutputTokens: number;
@@ -1210,6 +1221,8 @@ export interface EventMap {
   'social_desire.consent.declined': { contactId: string; reason?: string; dampenedPressure: number; timestamp: number };
   'social_desire.consent.blocked': { contactId: string; reason: string; timestamp: number };
   'model.budget.blocked': ModelBudgetBlockedEvent;
+  'model.budget.threshold_exceeded': ModelBudgetThresholdExceededEvent;
+  'model.budget.alert_delivery': ModelBudgetAlertDeliveryEvent;
   'icp.conversation.cost.decision': IcpConversationCostBreakerEvent;
   'channel.voice.start': { guildId: string; channelId: string; userId: string };
   'channel.voice.end': { guildId: string; channelId: string; userId: string; reason: string };

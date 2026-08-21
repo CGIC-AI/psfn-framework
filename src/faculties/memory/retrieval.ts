@@ -155,8 +155,13 @@ import {
   filterQuarantinedEpisodicChains,
   filterQuarantinedMemories,
   isMemoryQuarantined,
+  type MemoryQuarantineCandidate,
   type MemorySessionQuarantineFilter,
 } from './retrieval/session-quarantine.js';
+import {
+  isMemoryOwnedByCompanion,
+  type CompanionRoomMembershipAuthority,
+} from './companion-provenance.js';
 import {
   applySocialContextRankingAdjustments,
   attachEvolutionChains,
@@ -261,6 +266,7 @@ export class MemoryRetriever implements MemoryProvider {
   private fallbackMemoryPresentationProfile: MemoryPresentationProfile | undefined;
   private enforceSubjectAuthorization: boolean;
   private biographicalProjection: Pick<MemoryProvider, 'projectBiographicalContext'> | null;
+  private roomMembershipAuthority: CompanionRoomMembershipAuthority | null;
 
   constructor(
     memoryStore: MemoryStorePort,
@@ -273,6 +279,7 @@ export class MemoryRetriever implements MemoryProvider {
     sessionQuarantineFilter?: MemorySessionQuarantineFilter | null,
     enforceSubjectAuthorization = false,
     biographicalProjection?: Pick<MemoryProvider, 'projectBiographicalContext'> | null,
+    roomMembershipAuthority?: CompanionRoomMembershipAuthority | null,
   ) {
     this.memoryStore = memoryStore;
     this.embeddingService = embeddingService;
@@ -307,6 +314,7 @@ export class MemoryRetriever implements MemoryProvider {
     this.sessionQuarantineFilter = sessionQuarantineFilter ?? null;
     this.enforceSubjectAuthorization = enforceSubjectAuthorization;
     this.biographicalProjection = biographicalProjection ?? null;
+    this.roomMembershipAuthority = roomMembershipAuthority ?? null;
     this.activeMemoryContexts = new Map();
     this.activeMemoryRefreshLoops = new Map();
   }
@@ -352,6 +360,39 @@ export class MemoryRetriever implements MemoryProvider {
     });
   }
 
+  private filterIneligibleMemories<T extends MemoryQuarantineCandidate>(
+    memories: readonly T[],
+  ): { memories: T[]; summary?: MemoryWithheldSummary; withheldIds: string[] } {
+    const quarantine = filterQuarantinedMemories(this.sessionQuarantineFilter, memories);
+    const owned: T[] = [];
+    const withheldIds = new Set(quarantine.withheldIds);
+    for (const memory of quarantine.memories) {
+      if (isMemoryOwnedByCompanion(
+        memory,
+        this.runtimeConfig?.companionId,
+        this.roomMembershipAuthority,
+      )) {
+        owned.push(memory);
+      } else {
+        withheldIds.add(memory.id);
+      }
+    }
+    return {
+      memories: owned,
+      ...(quarantine.summary ? { summary: quarantine.summary } : {}),
+      withheldIds: [...withheldIds],
+    };
+  }
+
+  private isMemoryUnavailable(memory: MemoryQuarantineCandidate): boolean {
+    return isMemoryQuarantined(this.sessionQuarantineFilter, memory)
+      || !isMemoryOwnedByCompanion(
+        memory,
+        this.runtimeConfig?.companionId,
+        this.roomMembershipAuthority,
+      );
+  }
+
   /**
    * Shared-background retrieval mode (E4.5): the union of memories that link two
    * contacts (edge-evidence, co-mention, shared-room), gated by the asking
@@ -378,9 +419,35 @@ export class MemoryRetriever implements MemoryProvider {
         limit: input.limit ?? SHARED_BACKGROUND_DEFAULT_LIMIT,
       };
     }
-    return computeSharedBackground(
+    const productStore = this.productMemoryStore(input.access.canonicalContactId);
+    const result = await computeSharedBackground(
       {
-        memoryStore: this.productMemoryStore(input.access.canonicalContactId),
+        memoryStore: {
+          getById: async (id) => {
+            const memory = await productStore.getById(id);
+            return memory && isMemoryOwnedByCompanion(
+              memory,
+              this.runtimeConfig?.companionId,
+              this.roomMembershipAuthority,
+            )
+              ? memory
+              : undefined;
+          },
+          getByIds: async ids => (await productStore.getByIds(ids)).filter(memory => (
+            isMemoryOwnedByCompanion(
+              memory,
+              this.runtimeConfig?.companionId,
+              this.roomMembershipAuthority,
+            )
+          )),
+          listMemories: async options => (await productStore.listMemories(options)).filter(memory => (
+            isMemoryOwnedByCompanion(
+              memory,
+              this.runtimeConfig?.companionId,
+              this.roomMembershipAuthority,
+            )
+          )),
+        },
         contactStore: this.contactStore,
       },
       {
@@ -390,6 +457,7 @@ export class MemoryRetriever implements MemoryProvider {
         ...(input.limit !== undefined ? { limit: input.limit } : {}),
       },
     );
+    return result;
   }
 
   private resolveRetrievalBudget(
@@ -851,7 +919,7 @@ export class MemoryRetriever implements MemoryProvider {
           collectProactiveRecallCandidates(productMemoryStore, proactiveChannelId, proactiveContactId)
         ),
         resolveEpisodicChains: episodicInput => this.resolveEpisodicChains(episodicInput),
-        filterQuarantinedMemories: memories => filterQuarantinedMemories(this.sessionQuarantineFilter, memories),
+        filterQuarantinedMemories: memories => this.filterIneligibleMemories(memories),
         filterQuarantinedEpisodicChains: chains => (
           filterQuarantinedEpisodicChains(this.sessionQuarantineFilter, chains)
         ),
@@ -880,11 +948,8 @@ export class MemoryRetriever implements MemoryProvider {
       memoryRetrievalPolicy: this.resolveMemoryRetrievalPolicy(),
       memoryPresentationProfile: this.resolveMemoryPresentationProfile(),
       eventBus: this.eventBus,
-      isMemoryQuarantined: memory => isMemoryQuarantined(this.sessionQuarantineFilter, memory),
-      filterQuarantinedMemories: memories => filterQuarantinedMemories(
-        this.sessionQuarantineFilter,
-        memories,
-      ).memories,
+      isMemoryQuarantined: memory => this.isMemoryUnavailable(memory),
+      filterQuarantinedMemories: memories => this.filterIneligibleMemories(memories).memories,
       filterQuarantinedEpisodicChains: chains => filterQuarantinedEpisodicChains(
         this.sessionQuarantineFilter,
         chains,
@@ -1002,14 +1067,12 @@ export class MemoryRetriever implements MemoryProvider {
         ? await resolveEmotionalSnapshot(this.contactStore, canonicalContactId)
         : undefined;
       telemetry.emotionalSnapshotIncluded = !!emotionalSnapshot;
-      const contactQuarantine = filterQuarantinedMemories(
-        this.sessionQuarantineFilter,
+      const contactQuarantine = this.filterIneligibleMemories(
         turnSnapshot?.contactEmotionalMemories.map(cloneMemory)
         ?? (canonicalContactId ? await collectContactEmotionalMemories(productMemoryStore, canonicalContactId) : []),
       );
       const contactEmotionalSource = contactQuarantine.memories;
-      const proactiveQuarantine = filterQuarantinedMemories(
-        this.sessionQuarantineFilter,
+      const proactiveQuarantine = this.filterIneligibleMemories(
         turnSnapshot?.proactiveCandidates.map(cloneMemory) ?? [],
       );
       const proactiveSource = proactiveQuarantine.memories;
@@ -1047,7 +1110,7 @@ export class MemoryRetriever implements MemoryProvider {
         channelMeta,
         contactEmotionalSource,
         roomVisibility,
-        memories => filterQuarantinedMemories(this.sessionQuarantineFilter, memories).memories,
+        memories => this.filterIneligibleMemories(memories).memories,
         effectiveAccessScope,
       )
       : [];
@@ -1110,7 +1173,7 @@ export class MemoryRetriever implements MemoryProvider {
           addRetrievalStageTiming(telemetry, 'vector_search', vectorSearchStartedAt);
           semanticMemories = semanticMemories.filter(memory => !isInternalMemoryArtifact(memory));
         }
-        const semanticQuarantine = filterQuarantinedMemories(this.sessionQuarantineFilter, semanticMemories);
+        const semanticQuarantine = this.filterIneligibleMemories(semanticMemories);
         semanticMemories = semanticQuarantine.memories;
         if (!turnSnapshot) {
           const recentLexicalStartedAt = performance.now();
@@ -1124,7 +1187,7 @@ export class MemoryRetriever implements MemoryProvider {
           });
           addRetrievalStageTiming(telemetry, 'lexical_search', recentLexicalStartedAt);
           semanticMemories = mergeScoredMemoryCandidates(semanticMemories, recentLexicalCandidates);
-          const mergedSemanticQuarantine = filterQuarantinedMemories(this.sessionQuarantineFilter, semanticMemories);
+          const mergedSemanticQuarantine = this.filterIneligibleMemories(semanticMemories);
           semanticMemories = mergedSemanticQuarantine.memories;
           withheldSummary = mergeMemoryWithheldSummaries(
             withheldSummary,
@@ -1145,7 +1208,7 @@ export class MemoryRetriever implements MemoryProvider {
               normalizedScopeQuery,
             )).filter(memory => !isInternalMemoryArtifact(memory));
           addRetrievalStageTiming(telemetry, 'lexical_search', lexicalSearchStartedAt);
-          const lexicalQuarantine = filterQuarantinedMemories(this.sessionQuarantineFilter, lexicalMemories);
+          const lexicalQuarantine = this.filterIneligibleMemories(lexicalMemories);
           const visibleLexicalMemories = lexicalQuarantine.memories;
           withheldSummary = mergeMemoryWithheldSummaries(withheldSummary, lexicalQuarantine.summary);
           telemetry.lexicalCandidateCount = visibleLexicalMemories.length;
@@ -1581,7 +1644,7 @@ export class MemoryRetriever implements MemoryProvider {
           channelMeta,
           turnSnapshot?.contactEmotionalMemories,
           roomVisibility,
-          memories => filterQuarantinedMemories(this.sessionQuarantineFilter, memories).memories,
+          memories => this.filterIneligibleMemories(memories).memories,
           effectiveAccessScope,
         )
         : [];
@@ -1608,7 +1671,7 @@ export class MemoryRetriever implements MemoryProvider {
           operatorApproval,
           roomVisibility,
         },
-        memory => isMemoryQuarantined(this.sessionQuarantineFilter, memory),
+        memory => this.isMemoryUnavailable(memory),
       );
       const selectedContactContextById = await buildSelectedContactContext(
         this.contactStore,

@@ -68,6 +68,31 @@ export interface DashboardToolStatus {
   detail?: string;
 }
 
+type DashboardIntentionFollowUpDisposition = 'handoff' | 'scheduled';
+
+type DashboardIntentionFollowUpReason =
+  | 'active_pending_follow_up'
+  | 'pending_intention_scheduled_prompt';
+
+interface DashboardIntentionFollowUpEvidence {
+  disposition: DashboardIntentionFollowUpDisposition;
+  reason: DashboardIntentionFollowUpReason;
+  available: boolean;
+  observedCount: number | null;
+  earliestDueAtMs: number | null;
+  /** True when the bounded read filled its window, so more records may exist. */
+  atReadLimit: boolean;
+}
+
+interface DashboardIntentionFollowUpRouting {
+  horizonSource: 'effective_scheduler_config' | 'unavailable';
+  nearTermHorizonMs: number | null;
+  evidenceLimit: number;
+  observedAtMs: number;
+  handoff: DashboardIntentionFollowUpEvidence;
+  scheduled: DashboardIntentionFollowUpEvidence;
+}
+
 export interface DashboardStats {
   memoryTotal: number;
   memoryByType: Record<string, number>;
@@ -77,6 +102,7 @@ export interface DashboardStats {
   activeShards: number;
   modelUsage: DashboardModelUsageProjection;
   transientSessionTelemetry: DashboardTransientSessionTelemetry;
+  intentionFollowUpRouting: DashboardIntentionFollowUpRouting;
   toolStatus: DashboardToolStatus[];
   recentAnalysisWorkbenchTraces: AnalysisWorkbenchTraceView[];
 }
@@ -96,6 +122,20 @@ export interface AnalysisWorkbenchTraceStepView {
 export interface AnalysisWorkbenchTraceView {
   timestamp: number;
   task: string;
+  /** Absent only on trace rows persisted before the explicit outcome contract. */
+  outcome?: 'completed' | 'limit_reached';
+  /** Absent only on trace rows persisted before the explicit outcome contract. */
+  continuation?: 'not_needed' | 'restart_required';
+  /** Absent only on trace rows persisted before cost projection was recorded. */
+  sessionCostUsd?: number;
+  /** Absent only on trace rows persisted before limit-policy projection was recorded. */
+  limitPolicy?: {
+    maxIterations: number;
+    maxTokens: number | null;
+    maxWallTimeMs: number | null;
+    maxSubQueries: number | null;
+    maxToolCalls: number | null;
+  };
   iterations: number;
   totalTokens: number;
   durationMs: number;

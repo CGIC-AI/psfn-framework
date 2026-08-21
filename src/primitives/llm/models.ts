@@ -109,7 +109,8 @@ function supportsOpenAIDeveloperRole(model: Model<any>): boolean {
   const isZai = provider === 'zai' || baseUrl.includes('api.z.ai');
   const isMoonshot = provider === 'moonshotai'
     || provider === 'moonshotai-cn'
-    || baseUrl.includes('api.moonshot.');
+    || baseUrl.includes('api.moonshot.')
+    || baseUrl.includes('api.kimi.com');
   const isCloudflareWorkersAI = provider === 'cloudflare-workers-ai'
     || baseUrl.includes('api.cloudflare.com');
   const isCloudflareAiGateway = provider === 'cloudflare-ai-gateway'

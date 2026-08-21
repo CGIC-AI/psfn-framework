@@ -29,6 +29,9 @@ import { TurnPerformanceTracker } from '../../../shared/telemetry/turn-performan
 import type { AnalysisWorkbenchTraceStorePort } from '../../../persistence/postgres/analysis-workbench-trace-store.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 import type { GardenRequestContext } from '../garden-request-context.js';
+import type { PendingFollowUpStorePort } from '../../../core/intention/pending-follow-up-store-port.js';
+import { MAX_LIST_LIMIT as INTENTION_EVIDENCE_LIMIT } from '../../../core/intention/list-limit.js';
+import type { ScheduledPromptStorePort } from '../../../core/scheduler/scheduled-prompt-store-port.js';
 
 interface CachedDashboardModelUsage {
   usage: NonNullable<DashboardModelUsageProjection['usage']>;
@@ -78,6 +81,11 @@ export class AdminDashboardDataService implements AdminDashboardService {
     analysisWorkbenchTraceStore?: AnalysisWorkbenchTraceStorePort | null;
     resolveLastActiveSessionId?: () => string | null;
     now?: () => number;
+    intentionFollowUpRuntime?: {
+      nearTermHorizonMs: number;
+      pendingFollowUpStore: Pick<PendingFollowUpStorePort, 'list'>;
+      scheduledPromptStore: Pick<ScheduledPromptStorePort, 'listPending'>;
+    } | null;
   }) {
     this.deps.eventBus.on('agent.turn.usage', ({ message, usage }) => {
       const contextUtilization = AdminDashboardDataService.normalizeContextUtilization(usage.contextUtilization);
@@ -108,6 +116,10 @@ export class AdminDashboardDataService implements AdminDashboardService {
       const trace: AnalysisWorkbenchTraceView = {
         timestamp,
         task,
+        outcome: result.outcome,
+        continuation: result.continuation,
+        sessionCostUsd: result.sessionCostUsd,
+        limitPolicy: result.limitPolicy,
         iterations: result.iterations,
         totalTokens: result.totalInputTokens + result.totalOutputTokens,
         durationMs: result.durationMs,
@@ -249,6 +261,105 @@ export class AdminDashboardDataService implements AdminDashboardService {
     return this.deps.now?.() ?? Date.now();
   }
 
+  private static earliestTimestamp(
+    values: readonly (string | undefined)[],
+  ): number | null {
+    let earliest: number | null = null;
+    for (const value of values) {
+      if (!value) continue;
+      const timestamp = Date.parse(value);
+      if (!Number.isFinite(timestamp)) continue;
+      earliest = earliest === null ? timestamp : Math.min(earliest, timestamp);
+    }
+    return earliest;
+  }
+
+  private async getIntentionFollowUpRouting() {
+    const observedAtMs = this.now();
+    const runtime = this.deps.intentionFollowUpRuntime;
+    if (!runtime) {
+      return {
+        horizonSource: 'unavailable' as const,
+        nearTermHorizonMs: null,
+        evidenceLimit: INTENTION_EVIDENCE_LIMIT,
+        observedAtMs,
+        handoff: {
+          disposition: 'handoff' as const,
+          reason: 'active_pending_follow_up' as const,
+          available: false,
+          observedCount: null,
+          earliestDueAtMs: null,
+          atReadLimit: false,
+        },
+        scheduled: {
+          disposition: 'scheduled' as const,
+          reason: 'pending_intention_scheduled_prompt' as const,
+          available: false,
+          observedCount: null,
+          earliestDueAtMs: null,
+          atReadLimit: false,
+        },
+      };
+    }
+
+    const [handoffResult, scheduledResult] = await Promise.allSettled([
+      runtime.pendingFollowUpStore.list({
+        includeActivated: false,
+        includeExpired: false,
+        asOf: new Date(observedAtMs).toISOString(),
+        limit: INTENTION_EVIDENCE_LIMIT,
+      }),
+      runtime.scheduledPromptStore.listPending({
+        source: 'intention_appraisal',
+        limit: INTENTION_EVIDENCE_LIMIT,
+      }),
+    ]);
+    if (handoffResult.status === 'rejected') {
+      log.warn('Failed to read pending intention handoff evidence', {
+        error: toErrorMessage(handoffResult.reason),
+      });
+    }
+    if (scheduledResult.status === 'rejected') {
+      log.warn('Failed to read scheduled intention evidence', {
+        error: toErrorMessage(scheduledResult.reason),
+      });
+    }
+    const handoffs = handoffResult.status === 'fulfilled' ? handoffResult.value : null;
+    const pendingScheduledPrompts = scheduledResult.status === 'fulfilled'
+      ? scheduledResult.value
+      : null;
+
+    return {
+      horizonSource: 'effective_scheduler_config' as const,
+      nearTermHorizonMs: runtime.nearTermHorizonMs,
+      evidenceLimit: INTENTION_EVIDENCE_LIMIT,
+      observedAtMs,
+      handoff: {
+        disposition: 'handoff' as const,
+        reason: 'active_pending_follow_up' as const,
+        available: handoffs !== null,
+        observedCount: handoffs?.length ?? null,
+        earliestDueAtMs: handoffs
+          ? AdminDashboardDataService.earliestTimestamp(handoffs.map(record => record.dueAt))
+          : null,
+        atReadLimit: handoffs?.length === INTENTION_EVIDENCE_LIMIT,
+      },
+      scheduled: {
+        disposition: 'scheduled' as const,
+        reason: 'pending_intention_scheduled_prompt' as const,
+        available: pendingScheduledPrompts !== null,
+        observedCount: pendingScheduledPrompts?.length ?? null,
+        earliestDueAtMs: pendingScheduledPrompts
+          ? AdminDashboardDataService.earliestTimestamp(
+            pendingScheduledPrompts.map(record => record.runAt),
+          )
+          : null,
+        atReadLimit: scheduledResult.status === 'fulfilled'
+          && scheduledResult.value.length === INTENTION_EVIDENCE_LIMIT,
+      },
+    };
+  }
+
   private unavailableModelUsage(selected: DashboardCostWindow): DashboardModelUsageProjection {
     return {
       selected,
@@ -343,10 +454,11 @@ export class AdminDashboardDataService implements AdminDashboardService {
     context?: GardenRequestContext,
   ): Promise<AdminDashboardData> {
     const selectedCostWindow = options.costWindow ?? 'today';
-    const [modelUsage, memStats, toolStatus] = await Promise.all([
+    const [modelUsage, memStats, toolStatus, intentionFollowUpRouting] = await Promise.all([
       this.getModelUsage(selectedCostWindow),
       this.deps.getMemoryStatsForRequest(context),
       this.getToolStatus(),
+      this.getIntentionFollowUpRouting(),
     ]);
     const channels = this.deps.sessionStore.listChannels();
     return {
@@ -369,6 +481,7 @@ export class AdminDashboardDataService implements AdminDashboardService {
           recentLatencyWaterfalls: this.turnPerformance.recentWaterfalls(),
           activeSessionContextPressure: this.getActiveSessionContextPressure(),
         },
+        intentionFollowUpRouting,
         toolStatus,
         recentAnalysisWorkbenchTraces: this.analysisWorkbenchTraces.slice(
           0,

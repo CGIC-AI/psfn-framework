@@ -16,6 +16,8 @@ export const TESTING_HARNESS_GARDEN_ADMIN_ACTIONS = Object.freeze([
   'action_pipe.manage',
   'autonomy.read',
   'autonomy.manage',
+  'automata.read',
+  'automata.manage',
   'cogsec.read',
   'cogsec.manage',
   'confirmations.read',

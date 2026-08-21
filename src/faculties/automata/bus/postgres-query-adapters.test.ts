@@ -127,6 +127,12 @@ class RecordingPool implements AutomataBusSqlPool {
   ): Promise<AutomataBusSqlQueryResult<Row>> {
     const normalized = text.replaceAll(/\s+/gu, ' ').trim();
     this.queries.push({ text: normalized, values, viaClient });
+    if (normalized.includes('MAX(sequence)')) {
+      return result([{ snapshot_sequence: '0' }] as Row[]);
+    }
+    if (normalized.startsWith('SELECT companion_id FROM automata_bus_vector_state')) {
+      return result([{ companion_id: 'companion-a' }] as Row[]);
+    }
     if (normalized.includes('FROM automata_bus_vector_state')) {
       return result(this.stateRows as Row[]);
     }
@@ -137,7 +143,12 @@ class RecordingPool implements AutomataBusSqlPool {
       return result(this.searchRows as Row[]);
     }
     if (normalized.startsWith('INSERT INTO automata_bus_vector_state')) {
-      return result(this.writeRowCount > 0 ? ([{ companion_id: 'companion-a' }] as Row[]) : []);
+      return result(this.writeRowCount > 0 ? ([{
+        companion_id: 'companion-a',
+        reindex_lease_token: values[5],
+        reindex_snapshot_sequence: values[7],
+        reindex_snapshot_mutation_fence: values[8],
+      }] as Row[]) : []);
     }
     if (normalized.startsWith('INSERT INTO automata_bus_finding_vectors')) {
       return result(this.writeRowCount > 0 ? ([{ event_id: 'event-a' }] as Row[]) : []);
@@ -146,7 +157,10 @@ class RecordingPool implements AutomataBusSqlPool {
       return result(this.writeRowCount > 0 ? ([{ event_id: 'event-a' }] as Row[]) : []);
     }
     if (normalized.startsWith('UPDATE automata_bus_vector_state')) {
-      return result(this.writeRowCount > 0 ? ([{ companion_id: 'companion-a' }] as Row[]) : []);
+      return result(this.writeRowCount > 0 ? ([{
+        companion_id: 'companion-a',
+        mutation_fence: '1',
+      }] as Row[]) : []);
     }
     if (normalized.startsWith('DELETE FROM automata_bus_vector_lag')) {
       return { rows: [], rowCount: this.writeRowCount };
@@ -288,6 +302,7 @@ describe('PostgresAutomataBusVectorIndexAdapter', () => {
     const adapter = new PostgresAutomataBusVectorIndexAdapter(pool, {
       companionId: 'companion-a',
       maxCandidateLimit: 5,
+      reindexLeaseDurationMs: 60_000,
     });
 
     await expect(adapter.readState()).resolves.toEqual({
@@ -308,6 +323,7 @@ describe('PostgresAutomataBusVectorIndexAdapter', () => {
     const adapter = new PostgresAutomataBusVectorIndexAdapter(pool, {
       companionId: 'companion-a',
       maxCandidateLimit: 5,
+      reindexLeaseDurationMs: 60_000,
     });
 
     const rows = await adapter.searchApproximate({
@@ -344,6 +360,7 @@ describe('PostgresAutomataBusVectorIndexAdapter', () => {
     const adapter = new PostgresAutomataBusVectorIndexAdapter(pool, {
       companionId: 'companion-a',
       maxCandidateLimit: 5,
+      reindexLeaseDurationMs: 60_000,
     });
 
     await expect(adapter.searchExact({
@@ -369,6 +386,7 @@ describe('PostgresAutomataBusVectorIndexAdapter', () => {
     const adapter = new PostgresAutomataBusVectorIndexAdapter(pool, {
       companionId: 'companion-a',
       maxCandidateLimit: 5,
+      reindexLeaseDurationMs: 60_000,
     });
 
     await adapter.upsert({
@@ -391,6 +409,7 @@ describe('PostgresAutomataBusVectorIndexAdapter', () => {
     const adapter = new PostgresAutomataBusVectorIndexAdapter(pool, {
       companionId: 'companion-a',
       maxCandidateLimit: 5,
+      reindexLeaseDurationMs: 60_000,
     });
 
     await adapter.markLagging({
@@ -409,6 +428,12 @@ describe('PostgresAutomataBusVectorIndexAdapter', () => {
       .toBe(true);
     expect(pool.queries.some(query => query.text.startsWith('DELETE FROM automata_bus_vector_lag')))
       .toBe(true);
+    expect(pool.queries.some(query => (
+      query.text.startsWith('UPDATE automata_bus_vector_state state')
+      && query.text.includes("index_state = 'ready'")
+      && query.text.includes("reindex_state = 'current'")
+      && query.values.includes('companion-a')
+    ))).toBe(true);
   });
 
   it('requires explicit reindex state before changing model identity', async () => {
@@ -421,6 +446,7 @@ describe('PostgresAutomataBusVectorIndexAdapter', () => {
     const adapter = new PostgresAutomataBusVectorIndexAdapter(pool, {
       companionId: 'companion-a',
       maxCandidateLimit: 5,
+      reindexLeaseDurationMs: 60_000,
     });
 
     await expect(adapter.setState({
@@ -436,6 +462,7 @@ describe('PostgresAutomataBusVectorIndexAdapter', () => {
     const adapter = new PostgresAutomataBusVectorIndexAdapter(pool, {
       companionId: 'companion-a',
       maxCandidateLimit: 5,
+      reindexLeaseDurationMs: 60_000,
     });
 
     await adapter.markLagging({
@@ -447,9 +474,60 @@ describe('PostgresAutomataBusVectorIndexAdapter', () => {
 
     expect(pool.queries.some(query => (
       query.text.startsWith('UPDATE automata_bus_vector_state')
-      && query.text.includes("reindex_state = 'required'")
+      && query.text.includes("ELSE 'required'")
+      && query.text.includes("WHEN reindex_state = 'running' THEN 'running'")
     ))).toBe(true);
     expect(pool.queries.some(query => query.text.startsWith('INSERT INTO automata_bus_vector_lag')))
       .toBe(true);
+  });
+
+  it('owns the complete reindex lifecycle under one immutable companion scope', async () => {
+    const pool = new RecordingPool();
+    const adapter = new PostgresAutomataBusVectorIndexAdapter(pool, {
+      companionId: 'companion-a',
+      maxCandidateLimit: 5,
+      reindexLeaseDurationMs: 60_000,
+    });
+
+    await expect(adapter.beginReindex({
+      companionId: 'companion-b',
+      modelIdentity: MODEL,
+    })).rejects.toThrow('companion scope mismatch');
+    expect(pool.queries).toEqual([]);
+
+    const completedLease = await adapter.beginReindex({
+      companionId: 'companion-a',
+      modelIdentity: MODEL,
+    });
+    await adapter.completeReindex({
+      companionId: 'companion-a',
+      modelIdentity: MODEL,
+      ...completedLease,
+      eventIds: ['event-a'],
+    });
+
+    const mutations = pool.queries.filter(query => (
+      query.text.startsWith('INSERT INTO automata_bus_vector_state')
+      || query.text.startsWith('UPDATE automata_bus_vector_state')
+      || query.text.startsWith('DELETE FROM automata_bus_finding_vectors')
+      || query.text.startsWith('DELETE FROM automata_bus_vector_lag')
+    ));
+    expect(mutations.length).toBeGreaterThan(0);
+    expect(mutations.every(query => query.values.includes('companion-a'))).toBe(true);
+    expect(mutations.every(query => !query.values.includes('companion-b'))).toBe(true);
+
+    const failedLease = await adapter.beginReindex({
+      companionId: 'companion-a',
+      modelIdentity: MODEL,
+    });
+    await adapter.failReindex({
+      companionId: 'companion-a',
+      modelIdentity: MODEL,
+      ...failedLease,
+    });
+    expect(pool.queries.some(query => (
+      query.text.startsWith('UPDATE automata_bus_vector_state')
+      && query.text.includes("reindex_state = 'required'")
+    ))).toBe(true);
   });
 });

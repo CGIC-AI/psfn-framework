@@ -15,6 +15,7 @@ describe('GardenAdminTransportServer route service wiring', () => {
   it('supplies every residual Fleet Garden service to the agent route table', () => {
     const services = {
       auditHistory: { appendGardenEntry: vi.fn() },
+      automata: { name: 'automata' },
       wishlist: { name: 'wishlist' },
       concerns: { name: 'concerns' },
       subjectAudit: { name: 'subject-audit' },
@@ -36,6 +37,7 @@ describe('GardenAdminTransportServer route service wiring', () => {
 
     expect(buildAdminApiRoutes).toHaveBeenCalledOnce();
     expect(buildAdminApiRoutes).toHaveBeenCalledWith(expect.objectContaining({
+      automataService: services.automata,
       wishlistService: services.wishlist,
       concernService: services.concerns,
       subjectAuditService: services.subjectAudit,

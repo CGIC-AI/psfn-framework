@@ -146,7 +146,7 @@
   {:else if visibleWishes.length === 0}
     <div class="garden-empty card-garden p-10 text-center">
       <p class="font-serif text-lg text-shadow-800">{showCompleted ? 'No wishes yet' : 'No active wishes'}</p>
-      <p class="mt-1 text-sm text-shadow-600">New wishes will appear here after she saves them through her canonical wiki tool.</p>
+      <p class="mt-1 text-sm text-shadow-600">New wishes will appear here after the companion saves them through the canonical wiki tool.</p>
     </div>
   {:else}
     <BoundedList maxHeight="46rem" label="Companion wishlist">
@@ -187,7 +187,7 @@
               {#if wish.state !== 'done'}
                 <div class="space-y-3 border-t border-bark-100 pt-4">
                   <label class="block">
-                    <span class="text-xs uppercase tracking-[0.14em] text-shadow-500">Reply without changing her words</span>
+                    <span class="text-xs uppercase tracking-[0.14em] text-shadow-500">Reply without changing the companion's words</span>
                     <textarea
                       bind:value={responses[wish.id]}
                       rows="2"

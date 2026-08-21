@@ -34,6 +34,7 @@
   import DiscoveredModelsPanel from './DiscoveredModelsPanel.svelte';
   import ProviderWiringPanel from './ProviderWiringPanel.svelte';
   import EffectiveChatModelCard from './EffectiveChatModelCard.svelte';
+  import { derivePurposeRoutingCoverage } from './routing-coverage';
   import CollapsibleSection from '$lib/components/garden/CollapsibleSection.svelte';
   import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
   import {
@@ -132,20 +133,9 @@
   let enabledModelCount = $derived.by(() => (
     ownModelEntries.filter(({ entry }) => modelIsEnabled(entry)).length
   ));
-  let purposePrimaryCounts = $derived.by(() => {
-    const counts = Object.fromEntries(
-      CANONICAL_PURPOSES.map((purpose) => [purpose, 0]),
-    ) as Record<CanonicalModelPurpose, number>;
-    for (const { entry: model } of ownModelEntries) {
-      if (!modelIsEnabled(model)) continue;
-      for (const tag of model.purposes) {
-        if (tag.primary) {
-          counts[tag.purpose] = (counts[tag.purpose] ?? 0) + 1;
-        }
-      }
-    }
-    return counts;
-  });
+  let purposeRoutingCoverage = $derived.by(() => (
+    derivePurposeRoutingCoverage(ownModelEntries.map(({ entry }) => entry), providerRegistry)
+  ));
 
   let budgetInlineError = $derived.by(() => {
     if (!Number.isFinite(budgetPolicy.dailyUsdLimit) || budgetPolicy.dailyUsdLimit <= 0) {
@@ -977,14 +967,6 @@
     {/each}
   </nav>
 
-  <div class="card-garden border-l-4 border-l-gold-400 px-4 py-3 text-sm text-shadow-700">
-    <p class="text-[0.65rem] font-semibold uppercase tracking-[0.16em] text-gold-700">Owner-file boundary</p>
-    <p class="mt-1">
-      Model config is JSON-owned in <span class="font-mono">models.json</span>. Secrets stay in environment variables and are not edited here
-      (for example <span class="font-mono">OPENROUTER_API_KEY</span> and <span class="font-mono">SHARED_ROUTER_API_KEY</span>).
-    </p>
-  </div>
-
   <EffectiveChatModelCard />
 
   <section id="models-providers" class="garden-section scroll-mt-24">
@@ -1006,19 +988,34 @@
   </section>
 
   <section class="garden-section card-garden space-y-3 p-4">
-    <div>
-      <p class="text-[0.65rem] font-semibold uppercase tracking-[0.16em] text-shadow-500">Routing coverage</p>
-        <h2 class="garden-section-title mt-1 font-serif text-lg font-semibold text-shadow-900">Purpose primaries</h2>
+    <div class="flex flex-wrap items-center justify-between gap-3">
+      <h2 class="garden-section-title font-serif text-lg font-semibold text-shadow-900">Route readiness</h2>
+      <span class="text-xs text-shadow-500">Model · provider · purpose</span>
     </div>
-    <div class="flex flex-wrap gap-2">
-      {#each CANONICAL_PURPOSES as purpose}
-        {@const count = purposePrimaryCounts[purpose] ?? 0}
-        <span class="px-2.5 py-1 rounded-full text-sm border {count === 1 ? 'bg-moss-50 border-moss-300 text-moss-700' : 'bg-wilt-50 border-wilt-300 text-wilt-600'}">
-          {PURPOSE_LABELS[purpose]} primary: {count}
-        </span>
+    <div class="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+      {#each purposeRoutingCoverage as route}
+        <article class="rounded-xl border px-3 py-2.5 {route.status === 'ready' ? 'border-moss-300 bg-moss-50' : 'border-wilt-300 bg-wilt-50'}">
+          <div class="flex items-start justify-between gap-2">
+            <div class="min-w-0">
+              <p class="text-sm font-semibold {route.status === 'ready' ? 'text-moss-800' : 'text-wilt-800'}">{PURPOSE_LABELS[route.purpose]}</p>
+              <p class="mt-1 truncate text-xs text-shadow-600">{route.detail}</p>
+            </div>
+            <span class="rounded-full border border-current px-2 py-0.5 text-[0.65rem] font-semibold uppercase tracking-wide {route.status === 'ready' ? 'text-moss-700' : 'text-wilt-700'}">
+              {route.status.replaceAll('_', ' ')}
+            </span>
+          </div>
+          <a
+            href={route.actionHref}
+            onclick={() => {
+              if (route.modelId) selectedModelId = route.modelId;
+            }}
+            class="mt-2 inline-flex text-xs font-semibold text-gold-700 hover:text-gold-800"
+          >
+            {route.actionLabel} →
+          </a>
+        </article>
       {/each}
     </div>
-    <p class="text-sm text-shadow-600">Each purpose must have exactly one primary model before save. The memory recall purpose is the dedicated model route for memory retrieval, synthesis, and improvement work. Purpose chips cycle off → standard → primary.</p>
   </section>
 
   <section id="models-budget" class="garden-section card-garden scroll-mt-24 space-y-4 overflow-hidden p-5">
@@ -1028,7 +1025,7 @@
         <h2 class="garden-section-title mt-1 font-serif text-lg font-semibold text-shadow-900">Budget policy (USD)</h2>
       </div>
       <span class="rounded-full border px-2.5 py-1 text-xs font-semibold {budgetPolicy.enabled ? 'border-moss-300 bg-moss-50 text-moss-700' : 'border-bark-300 bg-bark-100 text-shadow-600'}">
-        {budgetPolicy.enabled ? 'gating enabled' : 'tracking only'}
+        {budgetPolicy.enabled ? 'alerts + blocking' : 'alerts only · no blocking'}
       </span>
     </div>
     <div class="flex flex-col gap-3">
@@ -1039,7 +1036,7 @@
           onchange={(event) => setBudgetPolicyEnabled((event.currentTarget as HTMLInputElement).checked)}
           class="rounded border-bark-300 text-gold-600 focus:ring-gold-500"
         />
-        Budget gating enabled
+        Block requests at configured limits
       </label>
       <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
         <label class="text-sm text-shadow-700">
@@ -1088,9 +1085,11 @@
         </label>
       </div>
     </div>
-    <p class="text-sm text-shadow-600">
-      Budget policy is saved to <span class="font-mono">models.json</span> and enforced on both completion and stream routing paths.
-    </p>
+    <div class="rounded-xl border border-gold-200 bg-gold-50 px-3 py-2 text-sm text-shadow-700">
+      Configured limits always raise one deduplicated operator alert per UTC budget window. With blocking off,
+      requests continue after the alert; with blocking on, completion and stream routes fail closed at the limit.
+      <a href={`${base}/fleet-costs`} class="ml-1 font-semibold text-gold-700 hover:text-gold-800">Review spend</a>
+    </div>
     {#if budgetInlineError}
       <p class="text-sm text-wilt-700">{budgetInlineError}</p>
     {/if}

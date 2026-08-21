@@ -11,6 +11,8 @@
   } from '$lib/api/endpoints/places';
   import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
 
+  let { embedded = false } = $props<{ embedded?: boolean }>();
+
   const EMPTY_LABEL = 'None';
 
   let data = $state<AdminSatelliteRegistryView | null>(null);
@@ -86,26 +88,21 @@
   }
 
   onMount(() => {
-    void loadData();
+    if (embedded) void loadData();
   });
 </script>
 
-<div class="garden-page space-y-6">
-  <GardenPageHeader
-    eyebrow="Emanation Ports"
-    title="Satellites"
-    description="Registered embodiments, physical presence, endpoint claims, and framework-owned capability ceilings."
-  >
-    {#snippet actions()}
+<div class={embedded ? 'space-y-6 pb-8' : 'garden-page space-y-6'}>
+  {#if embedded}
+    <div class="flex justify-end">
       <button
         onclick={refreshData}
         disabled={refreshing}
         class="garden-action min-h-11 rounded-lg border border-bark-300 px-4 py-2 text-sm font-medium text-shadow-700 transition-colors hover:bg-bark-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-400 disabled:cursor-not-allowed disabled:opacity-50"
       >
-        {refreshing ? 'Refreshing...' : 'Refresh'}
+        {refreshing ? 'Refreshing...' : 'Refresh satellites'}
       </button>
-    {/snippet}
-  </GardenPageHeader>
+    </div>
 
   {#if errorMessage}
     <div class="garden-error card-garden border-l-4 border-l-wilt-400 p-4" role="alert">
@@ -270,9 +267,16 @@
                   {item.satellite.satelliteId}:{item.endpoint.endpointId}
                 </p>
               </div>
-              <span class="rounded-full bg-bark-100 px-3 py-1 text-xs font-semibold text-shadow-700">
-                {labelize(item.endpoint.auth.mode)}
-              </span>
+              <div class="flex flex-wrap justify-end gap-2">
+                {#if item.satellite.synthetic}
+                  <span class="rounded-full bg-gold-50 px-3 py-1 text-xs font-semibold text-gold-700">
+                    Test fixture
+                  </span>
+                {/if}
+                <span class="rounded-full bg-bark-100 px-3 py-1 text-xs font-semibold text-shadow-700">
+                  {labelize(item.endpoint.auth.mode)}
+                </span>
+              </div>
             </div>
 
             <dl class="mt-5 grid gap-3 text-sm md:grid-cols-2">
@@ -306,6 +310,14 @@
                 <dt class="text-xs uppercase tracking-[0.14em] text-shadow-500">Live State</dt>
                 <dd class="mt-1 text-shadow-700">{labelize(item.endpoint.live.status)}</dd>
               </div>
+              {#if item.satellite.synthetic}
+                <div>
+                  <dt class="text-xs uppercase tracking-[0.14em] text-shadow-500">Test provenance</dt>
+                  <dd class="mt-1 font-mono text-xs text-shadow-700">
+                    {item.satellite.testRunId} / {item.satellite.testManifestId}
+                  </dd>
+                </div>
+              {/if}
               {#if item.endpoint.hubDeviceEnrollment}
                 <div>
                   <dt class="text-xs uppercase tracking-[0.14em] text-shadow-500">Hub Device Enrollment</dt>
@@ -339,4 +351,11 @@
       </div>
     {/if}
   </section>
+  {:else}
+    <GardenPageHeader
+      eyebrow="World Model"
+      title="Places"
+      description="Satellites now live in the Satellites tab under Places. Redirecting…"
+    />
+  {/if}
 </div>

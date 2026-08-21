@@ -93,6 +93,7 @@ import { extractTurnRecordSelfSnapshotRef } from '../../../shared/contracts/turn
 import { buildTurnRecord } from './turn-records.js';
 import { buildAuthenticityProvenance } from '../../../shared/authenticity-provenance.js';
 import { CAPABILITY_TIER_CHANGE_NOTICE_PROVENANCE_NOTE } from '../../../system/capabilities/change-notice.js';
+import type { ChannelMeta } from '../../../system/trust/policy.js';
 
 const TEST_FLEET_COMPANION_ID = '11111111-1111-4111-8111-111111111111';
 
@@ -666,12 +667,13 @@ function createRuntime(params: {
     getRecentConversationSpeakers: vi.fn(() => []),
     resolveConversationScope: vi.fn((input: {
       channelId: string;
-      channelMeta?: { isDirectMessage?: boolean };
+      channelMeta?: ChannelMeta;
       userId?: string;
       contact?: { contactId: string; displayName?: string };
     }) => resolveConversationScopeFromMetadata({
       channelId: input.channelId,
       isDirectMessage: input.channelMeta?.isDirectMessage,
+      ...(input.channelMeta ? { channelMeta: input.channelMeta } : {}),
       ...(input.contact ? { contact: input.contact } : {}),
       ...(input.userId ? { participantId: input.userId } : {}),
     })),
@@ -3737,7 +3739,7 @@ async function captureObserverSidecarInput(
 }
 
 describe('handleMessageForTurn observer eval sidecar seam', () => {
-  it('keeps internal scheduler terminal turns fail-closed and redacts their emotion snapshot', async () => {
+  it('uses the admitted private scope for internal scheduler observations', async () => {
     const receivedInput = await captureObserverSidecarInput({
       channelId: 'internal:reflection:temporal-wakeup',
       channelType: 'terminal',
@@ -3750,17 +3752,16 @@ describe('handleMessageForTurn observer eval sidecar seam', () => {
     expect(receivedInput.source).toEqual({
       routingSource: 'terminal',
       isDirectMessage: false,
+      channelPrivacy: 'private',
     });
     expect(sanitizeObserverEvalInput(receivedInput)).toMatchObject({
       privacy: {
-        privacyClass: 'fail_closed',
-        channelVisibility: null,
-        derivedTelemetryPermitted: false,
-        redactionReason: 'missing_channel_privacy_metadata',
+        channelVisibility: 'private',
+        derivedTelemetryPermitted: true,
       },
       emotion: {
-        snapshot: null,
-        snapshotRedacted: true,
+        snapshot: TEST_EMOTION_SNAPSHOT,
+        snapshotRedacted: false,
       },
     });
   });
@@ -3780,7 +3781,7 @@ describe('handleMessageForTurn observer eval sidecar seam', () => {
     });
     expect(sanitizeObserverEvalInput(receivedInput)).toMatchObject({
       privacy: {
-        privacyClass: 'private',
+        privacyClass: 'closed',
         channelVisibility: 'private',
         derivedTelemetryPermitted: true,
       },
@@ -3827,7 +3828,7 @@ describe('handleMessageForTurn observer eval sidecar seam', () => {
     });
   });
 
-  it('keeps an unclassified API session fail-closed instead of guessing privacy', async () => {
+  it('uses the admitted private scope when API routing omits optional privacy metadata', async () => {
     const receivedInput = await captureObserverSidecarInput({
       channelId: 'api:unclassified-session',
       channelType: 'api',
@@ -3838,12 +3839,11 @@ describe('handleMessageForTurn observer eval sidecar seam', () => {
     expect(receivedInput.source).toEqual({
       routingSource: 'api',
       isDirectMessage: false,
+      channelPrivacy: 'private',
     });
     expect(sanitizeObserverEvalInput(receivedInput).privacy).toMatchObject({
-      privacyClass: 'fail_closed',
-      channelVisibility: null,
-      derivedTelemetryPermitted: false,
-      redactionReason: 'missing_channel_privacy_metadata',
+      channelVisibility: 'private',
+      derivedTelemetryPermitted: true,
     });
   });
 
@@ -4213,6 +4213,50 @@ describe('handleMessageForTurn compaction scheduling', () => {
     expect(emotionPayload).not.toHaveProperty('internalState');
     expect(emotionPayload?.appraisalState).not.toHaveProperty('attention.activeConcerns');
     expect(emotionPayload?.appraisalState).not.toHaveProperty('attention.salientEntities');
+  });
+
+  it('records authenticated testing-harness evidence without scheduling companion side effects', async () => {
+    const eventBus = new EventBus();
+    const reserveNarrativeEmotionAppraisal = vi.fn();
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {} as SessionManager,
+      buildContext: vi.fn(async () => ({
+        systemPrompt: 'System prompt',
+        messages: [],
+        manifest: makeContextManifestFixture(),
+      })),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage: vi.fn(() => 2),
+      emotionSelfModelRuntimeOverrides: { reserveNarrativeEmotionAppraisal } as never,
+    });
+    runtime.memoryExtractor = { maybeExtract: vi.fn() };
+    const message = createMessage('testing-harness-message', {
+      channelId: 'api:testing-harness',
+      channelType: 'api',
+      routing: {
+        source: 'api',
+        testingHarness: {
+          schemaVersion: 1,
+          kind: 'testing_harness',
+          runId: 'run-tool-call-matrix',
+          manifestId: 'manifest-tool-call-matrix',
+        },
+      },
+    });
+
+    await handleMessageForTurn(runtime, message);
+
+    expect(runtime.inferPostTurnActions).not.toHaveBeenCalled();
+    expect(reserveNarrativeEmotionAppraisal).not.toHaveBeenCalled();
+    expect(runtime.enqueuePostTurnBackgroundWork).not.toHaveBeenCalled();
+    expect(runtime.sessionManager.recordTurn).toHaveBeenCalledWith(expect.objectContaining({
+      extractedMemoryIds: [],
+      concernDeltaRefs: [],
+      contactDeltaRefs: [],
+    }));
+    expect(runtime.sessionManager.recordTurn.mock.calls[0]?.[0])
+      .not.toHaveProperty('backgroundWorkHandoff');
   });
 
   it('starts foreground identity work without a process-global post-turn drain', async () => {

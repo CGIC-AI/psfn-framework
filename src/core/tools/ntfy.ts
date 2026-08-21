@@ -1022,6 +1022,98 @@ const notifyToolParameters = Type.Union([
   }, { additionalProperties: false }),
 ]);
 
+// Several otherwise tool-capable providers emit `{}` for a function whose
+// root schema is an action-discriminated `anyOf`. Keep that strict union as the
+// scheduler's execution contract, but give pi-ai a flat object schema that the
+// model can fill reliably. Every action-specific field remains optional here;
+// the canonical union above still rejects missing or cross-action fields before
+// `execute` can run.
+const notifyModelParameters = Type.Object({
+  action: Type.Union([
+    Type.Literal('brief'),
+    Type.Literal('send'),
+    Type.Literal('consider'),
+    Type.Literal('approval_request'),
+    Type.Literal('clarify'),
+  ], {
+    description: 'Required notify action. Supply every field required for the selected action.',
+  }),
+  message: Type.Optional(Type.String({
+    description: 'Required for action=brief or action=send. Notification body text.',
+  })),
+  title: Type.Optional(Type.String({ description: 'Optional title for action=brief.' })),
+  priority: Type.Optional(Type.Integer({
+    minimum: 1,
+    maximum: 5,
+    description: 'Optional priority for action=brief.',
+  })),
+  topic: Type.Optional(Type.String({ description: 'Optional ntfy topic for action=brief.' })),
+  budget_channel: Type.Optional(Type.Union([
+    Type.Literal('discord'),
+    Type.Literal('email'),
+  ], {
+    description: 'Optional safeguard budget for action=brief.',
+  })),
+  target_kind: Type.Optional(Type.Union([
+    Type.Literal('external'),
+    Type.Literal(COMPANION_NOTIFY_TARGET_KIND),
+  ], {
+    description: 'For action=send, use external or companion. Required for companion send and consider.',
+  })),
+  delivery_channel: Type.Optional(Type.Union([
+    Type.Literal('discord'),
+    Type.Literal('email'),
+  ], {
+    description: 'Required for action=send with an external target.',
+  })),
+  delivery_target: Type.Optional(Type.String({
+    description: 'Required for action=send with an external target.',
+  })),
+  contact_id: Type.Optional(Type.String({
+    description: 'Required for companion action=send or action=consider.',
+  })),
+  initiation_permit: Type.Optional(Type.String({
+    description: 'Required broker-issued permit for companion action=send.',
+  })),
+  reason_summary: Type.Optional(Type.String({
+    description: 'Required private reason for action=consider.',
+  })),
+  approval_id: Type.Optional(Type.String({
+    description: 'Required for action=approval_request.',
+  })),
+  approval_method: Type.Optional(Type.String({
+    description: 'Required for action=approval_request.',
+  })),
+  approval_action: Type.Optional(Type.String({
+    description: 'Required for action=approval_request.',
+  })),
+  approval_scope: Type.Optional(Type.String({
+    description: 'Required for action=approval_request.',
+  })),
+  approval_reason: Type.Optional(Type.String({
+    description: 'Required for action=approval_request.',
+  })),
+  approval_expires_at: Type.Optional(Type.Integer({
+    description: 'Optional expiry epoch milliseconds for action=approval_request.',
+  })),
+  review_path: Type.Optional(Type.String({
+    description: 'Optional admin review path for action=approval_request.',
+  })),
+  question: Type.Optional(Type.String({
+    maxLength: CLARIFY_MAX_QUESTION_LENGTH,
+    description: 'Required question for action=clarify.',
+  })),
+  choices: Type.Optional(Type.Array(
+    Type.String({ maxLength: CLARIFY_MAX_CHOICE_LENGTH }),
+    {
+      minItems: CLARIFY_MIN_CHOICES,
+      maxItems: CLARIFY_MAX_CHOICES,
+      uniqueItems: true,
+      description: 'Required distinct choices for action=clarify.',
+    },
+  )),
+}, { additionalProperties: false });
+
 type NotifyToolParams = Static<typeof notifyToolParameters>;
 
 export function createNotifyTool(
@@ -1033,6 +1125,7 @@ export function createNotifyTool(
     label: 'notify',
     description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.notify,
     parameters: notifyToolParameters,
+    modelParameters: notifyModelParameters,
     execute: async (
       _toolCallId: string,
       rawParams: NotifyToolParams,

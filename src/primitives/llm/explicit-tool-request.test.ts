@@ -1,7 +1,10 @@
 import type { LLMContext } from '../../shared/contracts/runtime.js';
 import { describe, expect, it } from 'vitest';
 import {
+  applyExactExplicitToolArguments,
   assertExplicitToolContractSatisfied,
+  assertExplicitToolResponseSatisfied,
+  resolveExplicitToolContract,
   resolveExplicitToolChoice,
   selectExplicitToolContractCall,
 } from './explicit-tool-request.js';
@@ -516,5 +519,58 @@ describe('explicit tool request choice', () => {
       choice: 'none',
       toolCalls: [{ name: 'notify' }],
     })).toThrow('after tool execution was disabled');
+  });
+
+  it('rejects a schema-valid call that changes exact requested arguments', () => {
+    const exactContext: LLMContext = {
+      systemPrompt: 'system',
+      messages: [{
+        role: 'user',
+        content: 'Call repo exactly once with arguments {"action":"branch"}.',
+      }],
+      tools: [{
+        name: 'repo',
+        description: 'Repository operations',
+        inputSchema: {
+          type: 'object',
+          properties: { action: { type: 'string', enum: ['inspect', 'branch'] } },
+          required: ['action'],
+          additionalProperties: false,
+        },
+      }],
+    };
+    const contract = resolveExplicitToolContract({
+      context: exactContext,
+      originStage: 'agent.turn.prompt',
+      modelApi: 'openai-completions',
+    });
+
+    expect(() => assertExplicitToolResponseSatisfied({
+      contract,
+      corruptToolNames: [],
+      toolCalls: [{ id: 'repo-1', name: 'repo', input: { action: 'inspect' } }],
+      tools: exactContext.tools,
+    })).toThrow('changed exact requested arguments for required tool call: repo');
+  });
+
+  it('rejects participant-supplied exact arguments that violate the execution schema', () => {
+    expect(() => applyExactExplicitToolArguments({
+      contract: {
+        choice: 'required',
+        requiredToolName: 'repo',
+        expectedArguments: { action: 'delete_everything' },
+      },
+      toolCalls: [{ id: 'repo-1', name: 'repo', input: { action: 'branch' } }],
+      tools: [{
+        name: 'repo',
+        description: 'Repository operations',
+        inputSchema: {
+          type: 'object',
+          properties: { action: { type: 'string', enum: ['inspect', 'branch'] } },
+          required: ['action'],
+          additionalProperties: false,
+        },
+      }],
+    })).toThrow('Requested exact arguments are schema-invalid for required tool call: repo');
   });
 });

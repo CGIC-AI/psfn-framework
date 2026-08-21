@@ -450,6 +450,7 @@ export interface SettingsSimpleFormState {
   profileSynthesisMinNovelty: number;
   profileSynthesisSourceMemoryLimit: number;
   profileSynthesisMinSourceMemories: number;
+  analysisWorkbenchMaxIterations: number;
   analysisWorkbenchMaxTokens: number;
   analysisWorkbenchMaxWallTimeMs: number;
   analysisWorkbenchMaxSubQueries: number;
@@ -492,7 +493,7 @@ export function buildAdvancedSettingsSections(input: {
     ),
     'extraction-tuning': () => `Min importance: ${state.memoryExtractionMinImportance}, Max writes: ${state.memoryExtractionMaxWrites}`,
     profile: () => state.profileSynthesisEnabled ? `Enabled, refresh ${Math.round(state.profileSynthesisRefreshIntervalMs / 60000)}min` : 'Disabled',
-    'analysis-workbench': () => `Max tokens: ${state.analysisWorkbenchMaxTokens.toLocaleString()}, Wall time: ${Math.round(state.analysisWorkbenchMaxWallTimeMs / 1000)}s`,
+    'analysis-workbench': () => `Max iterations: ${state.analysisWorkbenchMaxIterations}, Tokens: ${state.analysisWorkbenchMaxTokens.toLocaleString()}, Wall time: ${Math.round(state.analysisWorkbenchMaxWallTimeMs / 1000)}s`,
     compositional: () => input.compositionalPolicySummary,
     trust: () => `Tier: ${state.capabilityTier}`,
     llm: () => `Max retries: ${state.retryMaxAttempts}, Base delay: ${state.retryBaseDelayMs}ms`,
@@ -572,9 +573,10 @@ export function populateSimpleSettingsForm(settingsData: AdminSettingsData): Set
     profileSynthesisMinNovelty: Number(config.profileSynthesisMinNovelty ?? 0.12),
     profileSynthesisSourceMemoryLimit: Number(config.profileSynthesisSourceMemoryLimit ?? 16),
     profileSynthesisMinSourceMemories: Number(config.profileSynthesisMinSourceMemories ?? 2),
-    analysisWorkbenchMaxTokens: Number(config.analysisWorkbenchMaxTokens ?? 76000),
-    analysisWorkbenchMaxWallTimeMs: Number(config.analysisWorkbenchMaxWallTimeMs ?? 300000),
-    analysisWorkbenchMaxSubQueries: Number(config.analysisWorkbenchMaxSubQueries ?? 12),
+    analysisWorkbenchMaxIterations: Number(config.analysisWorkbenchMaxIterations ?? 60),
+    analysisWorkbenchMaxTokens: Number(config.analysisWorkbenchMaxTokens ?? 256000),
+    analysisWorkbenchMaxWallTimeMs: Number(config.analysisWorkbenchMaxWallTimeMs ?? 600000),
+    analysisWorkbenchMaxSubQueries: Number(config.analysisWorkbenchMaxSubQueries ?? 60),
     ttsProvider: providerSelection.ttsProvider,
     voiceId: String(config.voiceId ?? config.elevenLabsVoiceId ?? ''),
     echoTtsUrl: String(config.echoTtsUrl ?? ''),
@@ -649,6 +651,7 @@ export function syncCuratedSettingsField(
     case 'profileSynthesisMinNovelty': return { profileSynthesisMinNovelty: numberFromConfigValue(value, current.profileSynthesisMinNovelty) };
     case 'profileSynthesisSourceMemoryLimit': return { profileSynthesisSourceMemoryLimit: numberFromConfigValue(value, current.profileSynthesisSourceMemoryLimit) };
     case 'profileSynthesisMinSourceMemories': return { profileSynthesisMinSourceMemories: numberFromConfigValue(value, current.profileSynthesisMinSourceMemories) };
+    case 'analysisWorkbenchMaxIterations': return { analysisWorkbenchMaxIterations: numberFromConfigValue(value, current.analysisWorkbenchMaxIterations) };
     case 'analysisWorkbenchMaxTokens': return { analysisWorkbenchMaxTokens: numberFromConfigValue(value, current.analysisWorkbenchMaxTokens) };
     case 'analysisWorkbenchMaxWallTimeMs': return { analysisWorkbenchMaxWallTimeMs: numberFromConfigValue(value, current.analysisWorkbenchMaxWallTimeMs) };
     case 'analysisWorkbenchMaxSubQueries': return { analysisWorkbenchMaxSubQueries: numberFromConfigValue(value, current.analysisWorkbenchMaxSubQueries) };
@@ -715,6 +718,7 @@ export function collectSimpleSettingsPayload(
     profileSynthesisMinNovelty: state.profileSynthesisMinNovelty,
     profileSynthesisSourceMemoryLimit: state.profileSynthesisSourceMemoryLimit,
     profileSynthesisMinSourceMemories: state.profileSynthesisMinSourceMemories,
+    analysisWorkbenchMaxIterations: state.analysisWorkbenchMaxIterations,
     analysisWorkbenchMaxTokens: state.analysisWorkbenchMaxTokens,
     analysisWorkbenchMaxWallTimeMs: state.analysisWorkbenchMaxWallTimeMs,
     analysisWorkbenchMaxSubQueries: state.analysisWorkbenchMaxSubQueries,
@@ -887,6 +891,7 @@ export const CURATED_SETTINGS_FIELD_KEYS: ReadonlySet<string> = new Set<string>(
   'profileSynthesisMinNovelty',
   'profileSynthesisSourceMemoryLimit',
   'profileSynthesisMinSourceMemories',
+  'analysisWorkbenchMaxIterations',
   'analysisWorkbenchMaxTokens',
   'analysisWorkbenchMaxWallTimeMs',
   'analysisWorkbenchMaxSubQueries',

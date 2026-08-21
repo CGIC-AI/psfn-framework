@@ -79,6 +79,9 @@ export class REPLSandbox {
       episodeSearch: this.deps.episodeSearch ?? null,
       sessionManager: this.deps.sessionManager,
       pushEvidence,
+      ...(this.deps.requestMetadata?.companionId
+        ? { companionId: this.deps.requestMetadata.companionId }
+        : {}),
     });
 
     const scheduler = createSchedulerCapabilities({

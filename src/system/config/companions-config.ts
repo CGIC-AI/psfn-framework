@@ -1,5 +1,5 @@
-import { isAbsolute, join, normalize, resolve } from 'node:path';
-import { existsSync, realpathSync, statSync } from 'node:fs';
+import { dirname, isAbsolute, join, normalize, relative, resolve } from 'node:path';
+import { existsSync, lstatSync, realpathSync, statSync } from 'node:fs';
 import { loadRequiredJson } from './load-or-seed.js';
 import { assertNoUnknownKeys } from './validators.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
@@ -57,8 +57,17 @@ const COMPANION_ENTRY_KEYS = [
   'postgresSchema',
   'postgresRole',
   'postgresDatabaseUrlRef',
+  'observerEvalSidecar',
   'displayName',
   'avatarRef',
+] as const;
+
+const OBSERVER_EVAL_SIDECAR_BINDING_KEYS = [
+  'sidecarId',
+  'serverUrl',
+  'sessionLabel',
+  'agentName',
+  'persistenceRootDir',
 ] as const;
 
 const COMPANIONS_ROOT_KEYS = ['postgres', 'companions'] as const;
@@ -89,6 +98,12 @@ export interface CompanionFleetEntry {
   /** Launcher-resolved credential delivered only to this companion agent. */
   postgresDatabaseUrlRef: CredentialReference;
   /**
+   * Immutable companion-owned topology for the observer emotion runtime.
+   * Tuning remains settings-owned, but these identity-bearing fields may not
+   * fall back to a fleet-global primary companion.
+   */
+  observerEvalSidecar?: CompanionObserverEvalSidecarBinding;
+  /**
    * Optional human-facing roster label. Surfaced ONLY through the
    * authenticated fleet portal roster; carries no authority and is never a
    * routing key. When absent the roster falls back to the companionId (no
@@ -100,6 +115,14 @@ export interface CompanionFleetEntry {
    * URL the client resolves). Display-only; never interpreted server-side.
    */
   avatarRef?: string;
+}
+
+interface CompanionObserverEvalSidecarBinding {
+  sidecarId: string;
+  serverUrl: string;
+  sessionLabel: string;
+  agentName: string;
+  persistenceRootDir: string;
 }
 
 export interface CompanionsFleetConfig {
@@ -268,6 +291,90 @@ function requireRelativePath(value: unknown, field: string): string {
   return normalized;
 }
 
+function requireAbsoluteHttpUrl(value: unknown, field: string): string {
+  const raw = requireNonEmptyString(value, field);
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new Error(`${COMPANIONS_ERROR_PREFIX}: ${field} must be an absolute http(s) URL`);
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error(`${COMPANIONS_ERROR_PREFIX}: ${field} must use http or https`);
+  }
+  return parsed.toString().replace(/\/$/u, '');
+}
+
+function resolveObserverPersistenceRoot(pathValue: string, field: string): string {
+  const requested = resolve(pathValue);
+  let existingAncestor = requested;
+  for (;;) {
+    try {
+      const canonicalAncestor = realpathSync(existingAncestor);
+      if (!statSync(canonicalAncestor).isDirectory()) {
+        throw new Error(
+          `${COMPANIONS_ERROR_PREFIX}: ${field} must resolve through a directory ancestor`,
+        );
+      }
+      return resolve(canonicalAncestor, relative(existingAncestor, requested));
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== 'ENOENT' && code !== 'ENOTDIR') throw error;
+
+      try {
+        lstatSync(existingAncestor);
+      } catch (lstatError) {
+        const lstatCode = (lstatError as NodeJS.ErrnoException).code;
+        if (lstatCode !== 'ENOENT' && lstatCode !== 'ENOTDIR') throw lstatError;
+        const parent = dirname(existingAncestor);
+        if (parent === existingAncestor) {
+          throw new Error(
+            `${COMPANIONS_ERROR_PREFIX}: ${field} has no resolvable directory ancestor`,
+          );
+        }
+        existingAncestor = parent;
+        continue;
+      }
+
+      throw new Error(
+        `${COMPANIONS_ERROR_PREFIX}: ${field} must not resolve through a broken filesystem entry`,
+      );
+    }
+  }
+}
+
+function validateObserverEvalSidecarBinding(
+  raw: unknown,
+  field: string,
+): CompanionObserverEvalSidecarBinding | undefined {
+  if (raw === undefined) return undefined;
+  if (!isRecord(raw)) {
+    throw new Error(`${COMPANIONS_ERROR_PREFIX}: ${field} must be an object`);
+  }
+  assertNoUnknownKeys(raw, OBSERVER_EVAL_SIDECAR_BINDING_KEYS, field, {
+    errorPrefix: COMPANIONS_ERROR_PREFIX,
+  });
+  const persistenceRootDir = requireNonEmptyString(
+    raw.persistenceRootDir,
+    `${field}.persistenceRootDir`,
+  );
+  if (!isAbsolute(persistenceRootDir)) {
+    throw new Error(
+      `${COMPANIONS_ERROR_PREFIX}: ${field}.persistenceRootDir must be an absolute path`,
+    );
+  }
+  return {
+    sidecarId: requireNonEmptyString(raw.sidecarId, `${field}.sidecarId`),
+    serverUrl: requireAbsoluteHttpUrl(raw.serverUrl, `${field}.serverUrl`),
+    sessionLabel: requireNonEmptyString(raw.sessionLabel, `${field}.sessionLabel`),
+    agentName: requireNonEmptyString(raw.agentName, `${field}.agentName`),
+    persistenceRootDir: resolveObserverPersistenceRoot(
+      normalize(persistenceRootDir),
+      `${field}.persistenceRootDir`,
+    ),
+  };
+}
+
 function validateCompanionEntry(raw: unknown, index: number): CompanionFleetEntry {
   const label = `companions[${index}]`;
   if (!isRecord(raw)) {
@@ -290,6 +397,10 @@ function validateCompanionEntry(raw: unknown, index: number): CompanionFleetEntr
     `${label}.avatarRef`,
     AVATAR_REF_MAX_LENGTH,
   );
+  const observerEvalSidecar = validateObserverEvalSidecarBinding(
+    raw.observerEvalSidecar,
+    `${label}.observerEvalSidecar`,
+  );
   return {
     companionId: requireCompanionId(raw.companionId, `${label}.companionId`),
     companionDataDir: requireRelativePath(raw.companionDataDir, `${label}.companionDataDir`),
@@ -300,14 +411,61 @@ function validateCompanionEntry(raw: unknown, index: number): CompanionFleetEntr
       raw.postgresDatabaseUrlRef,
       `${label}.postgresDatabaseUrlRef`,
     ),
+    ...(observerEvalSidecar ? { observerEvalSidecar } : {}),
     ...(displayName !== undefined ? { displayName } : {}),
     ...(avatarRef !== undefined ? { avatarRef } : {}),
   };
 }
 
-function assertNoDuplicateField(
+function assertObserverEvalSidecarBindingsIsolated(
   companions: readonly CompanionFleetEntry[],
-  select: (entry: CompanionFleetEntry) => string,
+): void {
+  const configured = companions.filter(
+    (entry): entry is CompanionFleetEntry & { observerEvalSidecar: CompanionObserverEvalSidecarBinding } =>
+      entry.observerEvalSidecar !== undefined,
+  );
+  if (configured.length === 0) return;
+  if (configured.length !== companions.length) {
+    throw new Error(
+      `${COMPANIONS_ERROR_PREFIX}: observerEvalSidecar topology must be configured for every `
+      + 'companion or none; partial fleet bindings could fall back to another companion',
+    );
+  }
+  assertNoDuplicateField(configured, entry => entry.observerEvalSidecar.sidecarId, 'observerEvalSidecar.sidecarId');
+  assertNoDuplicateField(configured, entry => entry.observerEvalSidecar.serverUrl, 'observerEvalSidecar.serverUrl');
+  assertNoDuplicateField(configured, entry => entry.observerEvalSidecar.sessionLabel, 'observerEvalSidecar.sessionLabel');
+  assertNoDuplicateField(configured, entry => entry.observerEvalSidecar.agentName, 'observerEvalSidecar.agentName');
+  assertNoOverlappingObserverPersistenceRoots(configured);
+}
+
+function assertNoOverlappingObserverPersistenceRoots(
+  companions: readonly (CompanionFleetEntry & {
+    observerEvalSidecar: CompanionObserverEvalSidecarBinding;
+  })[],
+): void {
+  for (let firstIndex = 0; firstIndex < companions.length; firstIndex += 1) {
+    const first = companions[firstIndex]?.observerEvalSidecar.persistenceRootDir;
+    if (!first) continue;
+    for (let secondIndex = firstIndex + 1; secondIndex < companions.length; secondIndex += 1) {
+      const second = companions[secondIndex]?.observerEvalSidecar.persistenceRootDir;
+      if (!second) continue;
+      if (
+        resolve(first) === resolve(second)
+        || isStrictSubpath(first, second)
+        || isStrictSubpath(second, first)
+      ) {
+        throw new Error(
+          `${COMPANIONS_ERROR_PREFIX}: observerEvalSidecar.persistenceRootDir must not overlap `
+          + `between companions[${firstIndex}] and companions[${secondIndex}]`,
+        );
+      }
+    }
+  }
+}
+
+function assertNoDuplicateField<T>(
+  companions: readonly T[],
+  select: (entry: T) => string,
   fieldLabel: string,
 ): void {
   const seen = new Map<string, number>();
@@ -396,6 +554,7 @@ export function validateCompanionsConfig(raw: unknown, sourcePath: string): Comp
     );
   }
   assertNoOverlappingDataDirs(companions);
+  assertObserverEvalSidecarBindingsIsolated(companions);
 
   return { postgres, companions };
 }

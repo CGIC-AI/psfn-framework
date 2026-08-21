@@ -8,6 +8,7 @@ import type { CharacterCardVersionStore } from '../../core/identity/card-version
 import type { CharacterCardV2 } from '../../core/identity/types.js';
 import type { PostTurnActionRuntime } from '../../core/agent/post-turn-action-runtime.js';
 import type { OutreachOutboxStore } from '../../core/intention/outreach-outbox.js';
+import type { ScheduledPromptStorePort } from '../../core/scheduler/scheduled-prompt-store-port.js';
 import type { PendingContactApprovalStore } from '../../core/contacts/pending-contact-approvals.js';
 import type { SocialGraphProposalStore } from '../../faculties/memory/social-graph/proposals.js';
 import type { HubIdentityEnrollmentStorePort } from '../../core/enrollment/enrollment-store-port.js';
@@ -50,6 +51,7 @@ import type { AutomataRunRegistry } from '../../faculties/automata/run-registry.
 import type {
   AdminAutomataBusReadPort,
   AdminAutomataLessonReadPort,
+  AdminAutomataReindexPort,
 } from '../../operator/garden/services/automata-service.js';
 import type { AdminIcpTestInitiationPort } from '../../operator/garden/services/types.js';
 
@@ -67,8 +69,10 @@ export interface StartOptionalAdminTransportServerOptions {
   automataRunRegistry: AutomataRunRegistry;
   automataBusReadPort: AdminAutomataBusReadPort;
   automataLessonReadPort: AdminAutomataLessonReadPort;
+  automataReindexPort?: AdminAutomataReindexPort;
   scheduler: Scheduler;
   schedulerConfig: SchedulerRuntimeConfig;
+  scheduledPromptStore: Pick<ScheduledPromptStorePort, 'listPending'>;
   icpInitiationCandidateStore?: IcpInitiationCandidateStorePort | null;
   icpFeltImpulseFunnelStore?: IcpFeltImpulseFunnelStorePort | null;
   /** Shadow-only Partner Affect observation store (docs/partner-affect.md slice 1). */
@@ -207,6 +211,7 @@ export async function startOptionalAdminTransportServer(
     automataRunRegistry: options.automataRunRegistry,
     automataBusReadPort: options.automataBusReadPort,
     automataLessonReadPort: options.automataLessonReadPort,
+    automataReindexPort: options.automataReindexPort,
     biographicalReviewService,
     subsystemOutputRefStore: options.subsystemOutputRefStore,
     episodicStore: options.episodicStore ?? null,
@@ -215,6 +220,8 @@ export async function startOptionalAdminTransportServer(
     intakeReleaseConversationTurn,
     scheduler: options.scheduler,
     effectiveSchedulerConfig: options.schedulerConfig,
+    pendingFollowUpStore: options.coreRuntime.intentionRuntime.pendingFollowUpStore,
+    scheduledPromptStore: options.scheduledPromptStore,
     icpInitiationCandidateStore: options.icpInitiationCandidateStore ?? null,
     icpFeltImpulseFunnelStore: options.icpFeltImpulseFunnelStore ?? null,
     icpAdminProjectionStore,

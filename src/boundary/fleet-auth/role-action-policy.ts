@@ -32,6 +32,7 @@ export const FLEET_AUTH_ACTION_BASE_ROLE: Readonly<Record<FleetAuthAction, Fleet
     'action_pipe.manage': 'admin',
     'audit.read': 'admin',
     'automata.read': 'admin',
+    'automata.manage': 'admin',
     'autonomy.read': 'admin',
     'autonomy.manage': 'admin',
     'charges.read': 'admin',

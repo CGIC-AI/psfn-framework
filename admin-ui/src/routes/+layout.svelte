@@ -13,6 +13,8 @@
     ATTENTION_SOURCES,
     mergeAttentionPollResults,
     type AttentionCounts,
+    type AttentionScopeKey,
+    shouldResetAttentionCounts,
     updateAttentionCountsIfChanged,
   } from '$lib/nav/attention';
   import { resolveThemeMenuLabel, resolveThemeTemplate } from '$lib/theme/loader';
@@ -41,6 +43,7 @@
     activateCompanionScopeFromPath,
     isFleetOverviewPath,
     parseCompanionGardenScope,
+    resolveGardenBrowserPathname,
     scopeGardenPath,
   } from '$lib/fleet/companion-scope';
   import {
@@ -51,6 +54,7 @@
   import { createVisibilityAwarePoller } from '$lib/polling/visibility-aware-poller';
   import { reconcilePollingSnapshot } from '$lib/polling/silent-background-revalidation';
   import { logoutFleetSession } from '$lib/api/fleet-session';
+  import { canonicalGardenDestination } from '$lib/nav/canonical-routes';
 
   let { children } = $props();
 
@@ -59,7 +63,8 @@
   let fleetProjection = $state<FleetPortalProjection | null>(null);
   let fleetProjectionController: AbortController | null = null;
   let fleetProjectionError = $state('');
-  const companionScope = $derived(parseCompanionGardenScope($page.url.pathname));
+  const gardenPathname = $derived(resolveGardenBrowserPathname($page.url.pathname));
+  const companionScope = $derived(parseCompanionGardenScope(gardenPathname));
   const activeCompanionId = $derived(companionScope?.companionId ?? null);
   const companionName = $derived(getCompanionName());
   const activeTheme = $derived(getActiveThemePack());
@@ -69,6 +74,12 @@
   // ── Human-in-the-loop attention badges (polled, fail-quiet) ──
   let attentionCounts = $state<AttentionCounts>({});
   let attentionPollGeneration = 0;
+  let attentionScopeKey: AttentionScopeKey | undefined;
+
+  function clearAttentionCounts(): void {
+    attentionPollGeneration += 1;
+    attentionCounts = {};
+  }
 
   async function refreshAttentionCounts(): Promise<void> {
     if (!isAuthenticated()) return;
@@ -113,7 +124,7 @@
       if (!result.companions.some(companion => (
         companion.companionId === activeCompanionId && companion.gardenPath
       ))) {
-        attentionCounts = {};
+        clearAttentionCounts();
         clearToasts();
         await activateCompanionScopeFromPath('/fleet');
         window.location.assign('/fleet');
@@ -130,7 +141,7 @@
       companion.companionId === target.value
     ));
     if (!selected?.gardenPath || selected.companionId === activeCompanionId) return;
-    attentionCounts = {};
+    clearAttentionCounts();
     clearToasts();
     try {
       await activateCompanionScopeFromPath(selected.gardenPath);
@@ -150,8 +161,8 @@
         id: item.id,
         path: item.path,
         href: item.id === 'fleet-costs'
-          ? fleetCostNavigationPath($page.url.pathname)
-          : scopeGardenPath(item.path, $page.url.pathname),
+          ? fleetCostNavigationPath(gardenPathname)
+          : scopeGardenPath(item.path, gardenPathname),
         icon: item.icon,
         primaryLabel: labels.primaryLabel,
         secondaryLabel: labels.secondaryLabel,
@@ -164,18 +175,35 @@
   // Check if current path is the login page
   // SvelteKit strips the base path from $page.url.pathname, so we check for '/login'
   let isLoginPage = $derived(
-    $page.url.pathname === '/login' || companionScope?.innerPath === '/login',
+    gardenPathname === '/login' || companionScope?.innerPath === '/login',
   );
-  let isFleetPage = $derived(isFleetOverviewPath($page.url.pathname));
+  let isFleetPage = $derived(isFleetOverviewPath(gardenPathname));
   const activeFleetView = $derived(resolveFleetView($page.url.search, $page.url.hash));
 
   // Redirect to login if not authenticated (except on login page itself)
   $effect(() => {
-    const pathname = $page.url.pathname;
+    const destination = canonicalGardenDestination(
+      gardenPathname,
+      $page.url.search,
+      $page.url.hash,
+    );
+    if (destination && typeof window !== 'undefined') {
+      window.location.replace(destination);
+    }
+  });
+
+  $effect(() => {
+    const pathname = gardenPathname;
     void activateSessionScopeFromPath(pathname).catch((error: unknown) => {
       console.warn('Garden session scope activation failed.', error);
     });
-    attentionCounts = {};
+    const nextAttentionScopeKey = isLoginPage || isFleetPage
+      ? null
+      : (activeCompanionId ?? 'single-companion');
+    if (shouldResetAttentionCounts(attentionScopeKey, nextAttentionScopeKey)) {
+      clearAttentionCounts();
+    }
+    attentionScopeKey = nextAttentionScopeKey;
     clearToasts();
     if (isLoginPage || isFleetPage) return;
     if (!isAuthResolved()) {
@@ -207,6 +235,7 @@
         await logoutFleetSession();
         clearJournalDisclosures();
         clearToken();
+        clearAttentionCounts();
         window.location.assign('/fleet/login');
         return;
       } catch {
@@ -229,11 +258,12 @@
     }
     clearJournalDisclosures();
     clearToken();
+    clearAttentionCounts();
     goto(`${base}/login`);
   }
 
   function isActive(navPath: string): boolean {
-    const currentPath = companionScope?.innerPath ?? $page.url.pathname;
+    const currentPath = companionScope?.innerPath ?? gardenPathname;
     if (navPath === '/') {
       return currentPath === '/';
     }

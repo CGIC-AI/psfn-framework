@@ -98,11 +98,15 @@ import {
 import { resolveOperatorAlertSinkConfiguration } from '../../shared/contracts/operator-alerting.js';
 import {
   createBackupFailureAlertHandler,
+  createModelBudgetThresholdAlertHandler,
   createQuarantineExpiryAlertHandler,
   createRepeatedScreeningFailureAlertHandler,
   createScheduledTaskFailureAlertHandler,
 } from '../startup/support/operator-alerts.js';
-import { resolveCompanionNameFromConfig } from '../../core/identity/companion-runtime.js';
+import {
+  resolveCompanionNameFromConfig,
+  resolveCoreCompanionIdFromConfig,
+} from '../../core/identity/companion-runtime.js';
 import type { NotificationPort } from '../../core/tools/ntfy.js';
 import { createPostEscalationIncidentRecorder } from '../../core/cogsec/intake/post-escalation-incidents.js';
 import type { IntakeCogSecFindingEvent } from '../../core/cogsec/intake/screening.js';
@@ -747,11 +751,34 @@ async function main(): Promise<void> {
   );
   const gatewayOperatorNotifier: NotificationPort = {
     notify: async (params) => {
-      await gateway.notifyOperator(params);
-      return { status: 'sent', topic: 'operator-alert-sinks' };
+      const result = await gateway.notifyOperator(params);
+      const delivery = result.deliveries.find(candidate => candidate.status !== 'failed');
+      if (!delivery || delivery.status === 'failed') {
+        throw new Error('Operator alert delivery returned no successful sink');
+      }
+      return {
+        status: delivery.status,
+        topic: delivery.target ?? delivery.sink,
+        ...(delivery.messageId ? { messageId: delivery.messageId } : {}),
+      };
     },
   };
   const operatorAlertCompanionName = resolveCompanionNameFromConfig(config);
+  const modelBudgetAlertStore = privilegedServices.modelUsageStore;
+  if (!modelBudgetAlertStore) {
+    throw new Error('Model budget operator alerts require durable model-usage persistence');
+  }
+  await modelBudgetAlertStore.waitUntilReady();
+  eventBus.on(
+    'model.budget.threshold_exceeded',
+    createModelBudgetThresholdAlertHandler({
+      notifier: gatewayOperatorNotifier,
+      companionName: operatorAlertCompanionName,
+      companionId: resolveCoreCompanionIdFromConfig(config),
+      alertStore: modelBudgetAlertStore,
+      recordDelivery: event => eventBus.emit('model.budget.alert_delivery', event),
+    }),
+  );
   eventBus.on(
     'backup.failed',
     createBackupFailureAlertHandler(gatewayOperatorNotifier, operatorAlertCompanionName),

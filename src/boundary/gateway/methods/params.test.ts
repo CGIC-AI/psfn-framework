@@ -174,6 +174,19 @@ describe('gateway RPC parameter decoder catalog', () => {
     expect(agentMethodParamDecoders['voice.stream.chunk'](voiceParams)).toBe(voiceParams);
   });
 
+  it('preserves canonical operator-alert idempotency through the RPC boundary', () => {
+    const params = {
+      message: 'Budget threshold crossed',
+      idempotencyKey: 'model-budget-alert-test-key',
+      sender: {
+        kind: 'system' as const,
+        provenance: 'system.operator_alert.model_budget_threshold',
+      },
+    };
+
+    expect(gatewayMethodParamDecoders['notify.operator'](params)).toBe(params);
+  });
+
   it('accepts every exact GatewayLLMContentBlock variant', () => {
     const contentBlocks = [
       { type: 'text', text: 'hello', textSignature: 'text-signature' },

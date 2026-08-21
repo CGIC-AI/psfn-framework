@@ -186,6 +186,26 @@ describe('values reflection journal admin API routes', () => {
     expect(response.body).not.toContain('sealed');
   });
 
+  it('returns an actionable no-store error when canonical journal status cannot be read', async () => {
+    const routes = makeRoutes({
+      valuesJournal: {
+        list: () => { throw new Error('private storage detail'); },
+      },
+    });
+    const route = routes.find(candidate => candidate.match('/api/admin/values/status'));
+    expect(route).toBeDefined();
+
+    const response = await invokeRoute(route!, '/api/admin/values/status', oauthContext());
+
+    expect(response.status).toBe(503);
+    expect(response.headers['Cache-Control']).toBe('no-store');
+    expect(JSON.parse(response.body)).toEqual({
+      error: 'Companion journal status unavailable',
+      code: 'journal_status_unavailable',
+    });
+    expect(response.body).not.toContain('private storage detail');
+  });
+
   it('returns recent metacognition, daily, and free-form reflection entries', async () => {
     const metacognitionEntry: ReflectionMetacognitionJournalEntry = {
       id: 'meta-1',

@@ -352,15 +352,6 @@ function systemOwnerFileChecks(
       run: () => loadStartupMcpServersOwnerFile(options.dataDir, options.seedDir),
     },
     {
-      label: 'partner-affect-shadow',
-      dataPath: join(options.dataDir, PARTNER_AFFECT_SHADOW_FILE_NAME),
-      seedPath: join(seedDir, PARTNER_AFFECT_SHADOW_SEED_FILE_NAME),
-      run: () => loadPartnerAffectShadowConfig(
-        options.dataDir,
-        options.seedDir ? { seedDir: options.seedDir } : undefined,
-      ),
-    },
-    {
       label: 'automata-policy',
       dataPath: join(options.dataDir, AUTOMATA_FILE_NAME),
       seedPath: join(seedDir, AUTOMATA_SEED_FILE_NAME),
@@ -414,6 +405,15 @@ function companionOwnerFileChecks(input: {
       dataPath: join(input.companionDataDir, SKILLS_FILE_NAME),
       seedPath: join(input.seedDir, SKILLS_SEED_FILE_NAME),
       run: () => loadSkillsConfig(
+        input.companionDataDir,
+        input.configuredSeedDir ? { seedDir: input.configuredSeedDir } : undefined,
+      ),
+    },
+    {
+      label: `${labelPrefix}partner-affect-shadow`,
+      dataPath: join(input.companionDataDir, PARTNER_AFFECT_SHADOW_FILE_NAME),
+      seedPath: join(input.seedDir, PARTNER_AFFECT_SHADOW_SEED_FILE_NAME),
+      run: () => loadPartnerAffectShadowConfig(
         input.companionDataDir,
         input.configuredSeedDir ? { seedDir: input.configuredSeedDir } : undefined,
       ),

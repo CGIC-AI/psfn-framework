@@ -108,13 +108,12 @@ export class ReconnectingWebSocket {
         },
         (error: unknown) => {
           if (this.generation !== generation || !this.reconnectEnabled) return;
-          this.reconnectEnabled = false;
-          activeSockets.delete(this);
           this.setConnectionError({
             kind: 'authentication',
             code: null,
             reason: error instanceof Error ? error.message : String(error),
           });
+          this.scheduleReconnect();
         },
       ).finally(() => {
         if (this.generation === generation) this.preparing = false;

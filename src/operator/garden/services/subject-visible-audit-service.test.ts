@@ -83,7 +83,7 @@ function harness(input: { appendFails?: boolean } = {}) {
 }
 
 describe('AdminSubjectVisibleAuditService', () => {
-  it('records the actor, exact action, protected category, time, and reason without concern payload', () => {
+  it('records concern remediation in operator audit without injecting a companion message', () => {
     const { service, appendGardenEntry, appendContextSystemNote } = harness();
     const reason = 'Verify the remediation after a policy incident';
 
@@ -99,11 +99,7 @@ describe('AdminSubjectVisibleAuditService', () => {
       actor: 'operator',
       timestamp: NOW,
     }));
-    expect(appendContextSystemNote).toHaveBeenCalledWith(
-      'discord:subject-home',
-      expect.stringContaining('[System notice: protected administration]'),
-      'garden:protected-action-audit',
-    );
+    expect(appendContextSystemNote).not.toHaveBeenCalled();
 
     const visibleRecord = JSON.stringify({
       audit: appendGardenEntry.mock.calls,
@@ -196,7 +192,7 @@ describe('AdminSubjectVisibleAuditService', () => {
     expect(visibleRecord).not.toContain('protected-memory-id-must-not-be-visible');
   });
 
-  it('records a quarantine disposition without copying the held content or sender', () => {
+  it('records a quarantine discard in the operator audit without messaging the companion', () => {
     const { service, appendGardenEntry, appendContextSystemNote } = harness();
     const reason = 'Confirmed false positive; discard clears the queue without re-injection';
 
@@ -216,6 +212,7 @@ describe('AdminSubjectVisibleAuditService', () => {
     });
 
     expect(appendGardenEntry).toHaveBeenCalledTimes(1);
+    expect(appendContextSystemNote).not.toHaveBeenCalled();
     const visibleRecord = JSON.stringify({
       audit: appendGardenEntry.mock.calls,
       notice: appendContextSystemNote.mock.calls,
@@ -226,8 +223,8 @@ describe('AdminSubjectVisibleAuditService', () => {
     expect(visibleRecord).not.toContain('envelope-id-must-not-be-visible');
   });
 
-  it('keeps release-raw and discard as distinct audited outcomes under the same ceremony', () => {
-    const { service, appendGardenEntry } = harness();
+  it('keeps release-raw companion-visible while discard remains operator-only', () => {
+    const { service, appendGardenEntry, appendContextSystemNote } = harness();
     const baseResource = {
       routeId: 'POST /api/admin/intake/quarantine/:id/decide',
       scope: 'personal_workspace',
@@ -254,6 +251,35 @@ describe('AdminSubjectVisibleAuditService', () => {
     );
     expect(actions[0]).toContain('action=release_raw');
     expect(actions[1]).toContain('action=discard');
+    expect(appendContextSystemNote).toHaveBeenCalledTimes(1);
+    expect(appendContextSystemNote).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.stringContaining('release_raw'),
+      expect.any(String),
+    );
+  });
+
+  it('records two discarded items with zero companion-visible events', () => {
+    const { service, appendGardenEntry, appendContextSystemNote } = harness();
+    for (const id of ['env-one', 'env-two']) {
+      service.recordIntakeQuarantineDecision({
+        context: context({
+          resource: {
+            routeId: 'POST /api/admin/intake/quarantine/:id/decide',
+            scope: 'personal_workspace',
+            area: 'cognitive_security',
+            companionId: '11111111-1111-4111-8111-111111111111',
+            pathParams: { id },
+            query: {},
+          },
+        }),
+        action: 'discard',
+        reason: 'Operator discarded a false positive after review',
+      });
+    }
+
+    expect(appendGardenEntry).toHaveBeenCalledTimes(2);
+    expect(appendContextSystemNote).not.toHaveBeenCalled();
   });
 
   it('rejects a memory reveal on a non-memory route without writing', () => {

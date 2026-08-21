@@ -62,6 +62,16 @@ describe('Garden route capability catalogue', () => {
       });
     expect(resolveGardenRouteCapability('GET', '/automata')?.capability.authorization)
       .toMatchObject({ action: 'automata.read', baseRole: 'admin' });
+    expect(resolveGardenRouteCapability('POST', '/api/admin/automata/reindex')?.capability)
+      .toMatchObject({
+        body: { mode: 'forbidden' },
+        authorization: {
+          action: 'automata.manage',
+          baseRole: 'admin',
+          resource: { area: 'automata' },
+          requirements: { assurance: 'oauth', confirmation: 'explicit' },
+        },
+      });
     expect(resolveGardenRouteCapability('GET', '/api/admin/scheduler')?.capability.authorization)
       .toMatchObject({ action: 'scheduler.read', baseRole: 'admin' });
     expect(resolveGardenRouteCapability(
@@ -282,6 +292,18 @@ describe('Garden route capability catalogue', () => {
       expect(action).toBeDefined();
       expect(TESTING_HARNESS_GARDEN_ADMIN_ACTIONS).toContain(action);
     }
+  });
+
+  it('keeps the read-only Automata registry grantable by the testing harness', () => {
+    const action = resolveGardenRouteCapability('GET', '/api/admin/automata')
+      ?.capability.authorization.action;
+
+    expect(action).toBe('automata.read');
+    expect(TESTING_HARNESS_GARDEN_ADMIN_ACTIONS).toContain(action);
+    const reindexAction = resolveGardenRouteCapability('POST', '/api/admin/automata/reindex')
+      ?.capability.authorization.action;
+    expect(reindexAction).toBe('automata.manage');
+    expect(TESTING_HARNESS_GARDEN_ADMIN_ACTIONS).toContain(reindexAction);
   });
 
   it('fails construction for an active route without an exact catalogue declaration', () => {

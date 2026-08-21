@@ -82,8 +82,11 @@ A static boundary test forbids the live loop (`core/agent`, `core/scheduler`,
 
 ## Config knobs (disabled by default)
 
-Owned by `settings.json` under the key `observerEvalSidecar` (registered in
-`src/system/config/settings-contract.ts`). Contract:
+Tuning and enablement are owned by `settings.json` under the key
+`observerEvalSidecar` (registered in `src/system/config/settings-contract.ts`).
+In a multi-companion runtime, immutable sidecar/session/agent/storage identity is
+owned by each companion entry in `companions.json`; startup refuses missing,
+mismatched, partial-fleet, or reused bindings before runtime composition. Contract:
 `ObserverEvalSidecarSettings` (`src/shared/contracts/runtime-base.ts`).
 Defaults: `createDefaultObserverEvalSidecarSettings()`
 (`src/system/config/runtime-config-contracts.ts`). Startup normalization/validation:
@@ -103,8 +106,9 @@ Defaults: `createDefaultObserverEvalSidecarSettings()`
 | `levers` | object | `enabled: false`, `cooldownMs: 21600000`, plus `wouldMessage`/`wouldCheckIn`/`wouldRest`/`ruminationWatch` | `enabled: true` requires persistence + the context-coherence event bus. |
 
 Turning it on requires, at minimum, `enabled: true` and
-`adapter.kind: 'emosim_server'` with a reachable `adapter.serverUrl` (for
-example `http://psfn-emosim:17342`). The emo_sim API is unauthenticated by
+`adapter.kind: 'emosim_server'`. A cluster deployment additionally requires each
+`companions.json` entry to declare a distinct `observerEvalSidecar` binding,
+including its reachable `serverUrl`. The emo_sim API is unauthenticated by
 design and must stay cluster-internal (ClusterIP + NetworkPolicy).
 
 The Helm chart provides `/runtime/observer-eval-sidecar` as a durable writable

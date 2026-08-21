@@ -59,6 +59,7 @@ export interface CreateAutomataBusProductionRuntimeOptions {
   embeddingIdentity: AutomataBusEmbeddingIdentity;
   appCache?: AppCache;
   policy: AutomataBusQueryOwnerPolicy;
+  reindexLeaseDurationMs: number;
 }
 
 function createEmbeddingPort(
@@ -105,6 +106,7 @@ export function createAutomataBusProductionRuntime(
   const vector = new PostgresAutomataBusVectorIndexAdapter(options.pool, {
     companionId: options.companionId,
     maxCandidateLimit: options.policy.candidateLimit,
+    reindexLeaseDurationMs: options.reindexLeaseDurationMs,
   });
   const cache = options.policy.resultCacheEnabled && options.appCache
     ? createAutomataBusResultCache(options.appCache)

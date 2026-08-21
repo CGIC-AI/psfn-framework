@@ -14,6 +14,7 @@ import type { CapturedSessionReads } from '../session/manager/captured-session-o
 import type { SessionEntry } from '../session/types.js';
 import { INTENTION_OUTBOUND_MESSAGE_ACTION_KIND } from './appraisal.js';
 import type { OutreachOutboxAppendInput, OutreachOutboxRecord } from './outreach-outbox.js';
+import { MAX_NEAR_TERM_FOLLOW_UP_HORIZON_MS } from '../../system/config/scheduler-config.js';
 
 // Post-turn inferers run inside the turn's admitted captured-owner scope, so the
 // intention post-turn appraisal reads its transcript through the turn's
@@ -193,6 +194,8 @@ function registerOutboundHandlerHarness(options: {
         recordAssistantMessage: sessionAssistant,
       }),
       pendingFollowUpStore: fromAny(pendingFollowUpStore),
+      intentionFollowUpHorizonMs: MAX_NEAR_TERM_FOLLOW_UP_HORIZON_MS,
+      routeLongHorizonFollowUp: vi.fn(async () => 'scheduled:intention:test'),
       onIntentionFollowUpActivated,
       getActiveConcerns,
       ...(options.verifyPersonalProjectLive

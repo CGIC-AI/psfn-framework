@@ -32,6 +32,36 @@ describe('beads tool', () => {
     });
   });
 
+  it('redacts tracker actor emails without hiding non-email assignees or metadata', async () => {
+    const ops = createMockOps();
+    ops.ready = vi.fn().mockResolvedValue({
+      actor: 'companion-runtime',
+      action: 'ready',
+      target: 'ready',
+      result: 'success',
+      payload: [{
+        assignee: 'shard-runtime-1',
+        created_by: 'creator@example.test',
+        dependencies: [{
+          created_by: 'dependency-owner@example.test',
+          metadata: { owner: 'untrusted@example.test' },
+        }],
+        metadata: { owner: 'untrusted@example.test' },
+        owner: 'operator@example.test',
+      }],
+    });
+    const tool = createBeadsTool(ops);
+
+    const result = await tool.execute('call-ready-private-actors', { action: 'ready' });
+    const projected = resultText(result);
+
+    expect(projected).not.toContain('creator@example.test');
+    expect(projected).not.toContain('dependency-owner@example.test');
+    expect(projected).not.toContain('operator@example.test');
+    expect(projected).toContain('shard-runtime-1');
+    expect(projected).toContain('untrusted@example.test');
+  });
+
   it('shows issue details through action=show and accepts legacy aliases', async () => {
     const ops = createMockOps();
     const tool = createBeadsTool(ops);

@@ -18,6 +18,8 @@ import type {
   SatelliteMobility,
   SatelliteRegistryConfig,
   SatelliteRoutingMetadata,
+  SatelliteTestingHarnessProvenance,
+  RetiredSatelliteConfig,
   SatelliteTelemetryScope,
   SatelliteTransportMode,
 } from '../../shared/contracts/satellite-registry.js';
@@ -37,6 +39,7 @@ import { toErrorMessage } from '../../shared/utils/errors.js';
 import { isRecord } from '../../shared/utils/types.js';
 import { createCompanionId } from '../../shared/routing/companion-id.js';
 import { assertNoUnknownKeys } from './config-validation.js';
+import { withSessionJournalWriteLock } from '../../persistence/sessions/store/session-journal-write-lock.js';
 
 const ID_TOKEN_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 const CLAIM_TYPE_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/u;
@@ -53,6 +56,7 @@ export const EMPTY_SATELLITE_REGISTRY_CONFIG: SatelliteRegistryConfig = Object.f
   schemaVersion: 1,
   enabled: false,
   satellites: [],
+  retiredSatellites: [],
 });
 
 // NOTE (Sprint-10 C1): `X-PSFN-Client-Cert-*` headers are intentionally NOT
@@ -485,13 +489,94 @@ function parseHubDeviceEnrollment(
   return { deviceId, enrollmentVersion, enrollmentStatus: value.enrollmentStatus };
 }
 
+function parseTestingHarnessProvenance(
+  value: unknown,
+  fieldName: string,
+): SatelliteTestingHarnessProvenance | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) throw new Error(`${fieldName} must be an object`);
+  assertNoUnknownKeys(value, ['schemaVersion', 'kind', 'runId', 'manifestId'], fieldName);
+  if (value.schemaVersion !== 1 || value.kind !== 'testing_harness') {
+    throw new Error(`${fieldName} must be a schemaVersion 1 testing_harness provenance record`);
+  }
+  return {
+    schemaVersion: 1,
+    kind: 'testing_harness',
+    runId: assertIdToken(
+      parseConfiguredString(value.runId, `${fieldName}.runId`),
+      `${fieldName}.runId`,
+    ),
+    manifestId: assertIdToken(
+      parseConfiguredString(value.manifestId, `${fieldName}.manifestId`),
+      `${fieldName}.manifestId`,
+    ),
+  };
+}
+
+function parseRetiredSatellite(value: unknown, fieldName: string): RetiredSatelliteConfig {
+  if (!isRecord(value)) throw new Error(`${fieldName} must be an object`);
+  assertNoUnknownKeys(
+    value,
+    [
+      'satelliteId',
+      'endpointIds',
+      'testProvenance',
+      'retiredAt',
+      'backupRef',
+      'backupDigest',
+    ],
+    fieldName,
+  );
+  const endpointIds = parseStringArray(value.endpointIds, `${fieldName}.endpointIds`)
+    .map((entry, index) => assertIdToken(entry, `${fieldName}.endpointIds[${index}]`));
+  if (endpointIds.length !== (value.endpointIds as unknown[]).length) {
+    throw new Error(`${fieldName}.endpointIds must not contain duplicates`);
+  }
+  const retiredAt = parseConfiguredString(value.retiredAt, `${fieldName}.retiredAt`);
+  if (!Number.isFinite(Date.parse(retiredAt)) || new Date(retiredAt).toISOString() !== retiredAt) {
+    throw new Error(`${fieldName}.retiredAt must be a canonical ISO timestamp`);
+  }
+  const backupDigest = parseConfiguredString(value.backupDigest, `${fieldName}.backupDigest`);
+  if (!/^sha256:[a-f0-9]{64}$/u.test(backupDigest)) {
+    throw new Error(`${fieldName}.backupDigest must be a sha256 digest`);
+  }
+  const testProvenance = parseTestingHarnessProvenance(
+    value.testProvenance,
+    `${fieldName}.testProvenance`,
+  );
+  if (!testProvenance) throw new Error(`${fieldName}.testProvenance is required`);
+  return {
+    satelliteId: assertIdToken(
+      parseConfiguredString(value.satelliteId, `${fieldName}.satelliteId`),
+      `${fieldName}.satelliteId`,
+    ),
+    endpointIds,
+    testProvenance,
+    retiredAt,
+    backupRef: assertIdToken(
+      parseConfiguredString(value.backupRef, `${fieldName}.backupRef`),
+      `${fieldName}.backupRef`,
+    ),
+    backupDigest,
+  };
+}
+
 function parseSatelliteConfig(value: unknown, fieldName: string): SatelliteConfig {
   if (!isRecord(value)) {
     throw new Error(`${fieldName} must be an object`);
   }
   assertNoUnknownKeys(
     value,
-    ['satelliteId', 'displayName', 'mobility', 'staticLocationLabel', 'placeId', 'sharedDevice', 'endpoints'],
+    [
+      'satelliteId',
+      'displayName',
+      'mobility',
+      'staticLocationLabel',
+      'placeId',
+      'sharedDevice',
+      'testProvenance',
+      'endpoints',
+    ],
     fieldName,
   );
   const satelliteId = assertIdToken(
@@ -505,6 +590,10 @@ function parseSatelliteConfig(value: unknown, fieldName: string): SatelliteConfi
     ? undefined
     : assertIdToken(parseConfiguredString(value.placeId, `${fieldName}.placeId`), `${fieldName}.placeId`);
   const sharedDevice = parseSharedDevicePolicy(value.sharedDevice, `${fieldName}.sharedDevice`);
+  const testProvenance = parseTestingHarnessProvenance(
+    value.testProvenance,
+    `${fieldName}.testProvenance`,
+  );
   if (!Array.isArray(value.endpoints)) {
     throw new Error(`${fieldName}.endpoints must be an array`);
   }
@@ -535,6 +624,7 @@ function parseSatelliteConfig(value: unknown, fieldName: string): SatelliteConfi
     ...(staticLocationLabel ? { staticLocationLabel } : {}),
     ...(placeId ? { placeId } : {}),
     ...(sharedDevice ? { sharedDevice } : {}),
+    ...(testProvenance ? { testProvenance } : {}),
     endpoints,
   };
 }
@@ -651,6 +741,12 @@ function assertUniqueRegistryBindings(config: SatelliteRegistryConfig): void {
       }
     }
   }
+  for (const retired of config.retiredSatellites ?? []) {
+    if (satelliteIds.has(retired.satelliteId)) {
+      throw new Error(`satellites.json has duplicate active or retired satelliteId "${retired.satelliteId}"`);
+    }
+    satelliteIds.add(retired.satelliteId);
+  }
 }
 
 export function parseSatelliteRegistryConfig(
@@ -662,7 +758,7 @@ export function parseSatelliteRegistryConfig(
   }
   assertNoUnknownKeys(
     rawConfig,
-    ['schemaVersion', 'enabled', 'productivityCompanionId', 'satellites'],
+    ['schemaVersion', 'enabled', 'productivityCompanionId', 'satellites', 'retiredSatellites'],
     sourceLabel,
   );
   if (rawConfig.schemaVersion !== 1) {
@@ -676,6 +772,13 @@ export function parseSatelliteRegistryConfig(
     throw new Error(`${sourceLabel}.satellites must be an array`);
   }
   const satellites = rawConfig.satellites.map((satellite, index) => parseSatelliteConfig(satellite, `${sourceLabel}.satellites[${index}]`));
+  const retiredSatellites = rawConfig.retiredSatellites === undefined
+    ? []
+    : Array.isArray(rawConfig.retiredSatellites)
+      ? rawConfig.retiredSatellites.map((satellite, index) => (
+          parseRetiredSatellite(satellite, `${sourceLabel}.retiredSatellites[${index}]`)
+        ))
+      : (() => { throw new Error(`${sourceLabel}.retiredSatellites must be an array`); })();
   const productivityCompanionId = rawConfig.productivityCompanionId === undefined
     ? undefined
     : createCompanionId(
@@ -691,6 +794,7 @@ export function parseSatelliteRegistryConfig(
     enabled,
     ...(productivityCompanionId ? { productivityCompanionId } : {}),
     satellites,
+    retiredSatellites,
   };
   assertUniqueRegistryBindings(config);
   return config;
@@ -729,6 +833,7 @@ function toSerializableSatelliteRegistry(config: SatelliteRegistryConfig): unkno
       mobility: satellite.mobility,
       ...(satellite.staticLocationLabel ? { staticLocationLabel: satellite.staticLocationLabel } : {}),
       ...(satellite.sharedDevice ? { sharedDevice: satellite.sharedDevice } : {}),
+      ...(satellite.testProvenance ? { testProvenance: satellite.testProvenance } : {}),
       ...(satellite.placeId ? { placeId: satellite.placeId } : {}),
       endpoints: satellite.endpoints.map((endpoint) => ({
         endpointId: endpoint.endpointId,
@@ -743,21 +848,35 @@ function toSerializableSatelliteRegistry(config: SatelliteRegistryConfig): unkno
         ...(endpoint.runtime ? { runtime: endpoint.runtime } : {}),
       })),
     })),
+    retiredSatellites: config.retiredSatellites ?? [],
   };
 }
 
 export function saveSatelliteRegistryConfig(
   dataDir: string,
   config: SatelliteRegistryConfig,
+  options: {
+    expectedDigest?: string;
+  } = {},
 ): SatelliteRegistryConfig {
   const wire = toSerializableSatelliteRegistry(config);
   // Fail closed: the wire form must itself parse cleanly before it touches disk.
   const validated = parseSatelliteRegistryConfig(wire, SATELLITE_REGISTRY_FILE_NAME);
   const filePath = join(dataDir, SATELLITE_REGISTRY_FILE_NAME);
-  const tempPath = `${filePath}.tmp`;
-  writeFileSync(tempPath, `${JSON.stringify(wire, null, 2)}\n`, 'utf8');
-  renameSync(tempPath, filePath);
-  return validated;
+  return withSessionJournalWriteLock(filePath, () => {
+    if (options.expectedDigest !== undefined) {
+      const currentDigest = existsSync(filePath)
+        ? `sha256:${createHash('sha256').update(readFileSync(filePath)).digest('hex')}`
+        : undefined;
+      if (currentDigest !== options.expectedDigest) {
+        throw new Error('Synthetic satellite registry changed after backup; refusing stale retirement');
+      }
+    }
+    const tempPath = `${filePath}.tmp`;
+    writeFileSync(tempPath, `${JSON.stringify(wire, null, 2)}\n`, 'utf8');
+    renameSync(tempPath, filePath);
+    return validated;
+  });
 }
 
 export function loadSatelliteRegistryConfig(dataDir: string): SatelliteRegistryConfig {

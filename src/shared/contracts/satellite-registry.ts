@@ -352,6 +352,24 @@ export interface SatelliteEndpointConfig {
   runtime?: SatelliteEndpointRuntimeConfig;
 }
 
+/** Durable provenance minted by the testing harness; names never imply this authority. */
+export interface SatelliteTestingHarnessProvenance {
+  schemaVersion: 1;
+  kind: 'testing_harness';
+  runId: string;
+  manifestId: string;
+}
+
+/** Content-free lifecycle record retained after a synthetic satellite leaves claim authority. */
+export interface RetiredSatelliteConfig {
+  satelliteId: string;
+  endpointIds: string[];
+  testProvenance: SatelliteTestingHarnessProvenance;
+  retiredAt: string;
+  backupRef: string;
+  backupDigest: string;
+}
+
 export interface SatelliteConfig {
   satelliteId: string;
   displayName: string;
@@ -367,6 +385,8 @@ export interface SatelliteConfig {
   placeId?: string;
   /** Required authority split when this device is shared by a companion fleet. */
   sharedDevice?: SatelliteSharedDevicePolicy;
+  /** Present only when this exact registry entry was created by a named harness run. */
+  testProvenance?: SatelliteTestingHarnessProvenance;
   endpoints: SatelliteEndpointConfig[];
 }
 
@@ -376,6 +396,8 @@ export interface SatelliteRegistryConfig {
   /** Fleet-wide singleton designated by the owner file, never inferred. */
   productivityCompanionId?: CompanionId;
   satellites: SatelliteConfig[];
+  /** Non-routable audit records. Retired entries never participate in claim resolution. */
+  retiredSatellites?: RetiredSatelliteConfig[];
 }
 
 /** Reads the current canonical satellite owner state at an ingress boundary. */
@@ -410,6 +432,9 @@ export interface AdminSatelliteView {
   satelliteId: string;
   displayName: string;
   mobility: SatelliteMobility;
+  synthetic: boolean;
+  testRunId?: string;
+  testManifestId?: string;
   staticLocationLabel?: string;
   sharedDevice?: SatelliteSharedDevicePolicy;
   endpoints: AdminSatelliteEndpointView[];
@@ -420,6 +445,7 @@ export interface AdminSatelliteRegistryView {
   enabled: boolean;
   productivityCompanionId?: CompanionId;
   satelliteCount: number;
+  retiredSatelliteCount: number;
   endpointCount: number;
   liveObservationStatus: 'not_implemented';
   liveObservationDetail: string;

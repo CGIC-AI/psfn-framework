@@ -20,6 +20,7 @@ import {
   validateSchedulerConfig,
 } from './scheduler-config.js';
 import { DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG } from './icp-autonomy-scheduler-config.js';
+import { DEFAULT_INTENTION_FOLLOW_UP_SCHEDULER_CONFIG } from './scheduler-config/intention-follow-up.js';
 
 export interface SchedulerOwnerMigrationOptions {
   dataDir: string;
@@ -69,6 +70,17 @@ function addMissingBackgroundWorkMaxAttempts(
     },
   };
   addedPaths.push('backgroundWork.postTurn.maxAttempts');
+}
+
+function addMissingIntentionFollowUp(
+  candidate: Record<string, unknown>,
+  addedPaths: string[],
+): void {
+  if (candidate.intentionFollowUp !== undefined) return;
+  candidate.intentionFollowUp = structuredClone(
+    DEFAULT_INTENTION_FOLLOW_UP_SCHEDULER_CONFIG,
+  );
+  addedPaths.push('intentionFollowUp');
 }
 
 /**
@@ -151,6 +163,7 @@ export function migrateLegacySchedulerOwner(
       };
       addMissingBackgroundWorkMaxAttempts(candidate, addedPaths);
       addMissingIcpPolicyHolds(candidate, addedPaths);
+      addMissingIntentionFollowUp(candidate, addedPaths);
 
       const validated = validateSchedulerConfig(candidate, filePath);
       result = {
@@ -193,6 +206,7 @@ export function migrateLegacySchedulerOwner(
       }
       addMissingBackgroundWorkMaxAttempts(candidate, addedPaths);
       addMissingIcpPolicyHolds(candidate, addedPaths);
+      addMissingIntentionFollowUp(candidate, addedPaths);
       if (addedPaths.length === 0) {
         validateSchedulerConfig(raw, filePath);
         assertSourceStillCurrent();

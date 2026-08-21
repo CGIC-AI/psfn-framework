@@ -11,6 +11,7 @@ import type {
   LLMResponse,
   LLMWorkSpec,
   ModelBudgetBlockedEvent,
+  ModelBudgetThresholdExceededEvent,
   StreamCallbacks,
   ToolCall,
 } from '../../shared/contracts/runtime.js';
@@ -152,6 +153,7 @@ export interface LLMClientRuntimeOptions {
   eligibilityGate?: EligibilityGate;
   onEligibilityDecision?: (decision: EligibilityDecision) => void;
   onBudgetBlocked?: (event: ModelBudgetBlockedEvent) => void;
+  onBudgetThresholdExceeded?: (event: ModelBudgetThresholdExceededEvent) => void;
   usageRecorder?: ModelUsageRecorder;
   usageBudgetQuery?: ModelUsageBudgetQueryPort;
   icpConversationCostAccounting?: IcpConversationCostAccountingPort;
@@ -184,6 +186,7 @@ export class LLMClient {
   private eligibilityGate?: EligibilityGate;
   private onEligibilityDecision?: (decision: EligibilityDecision) => void;
   private onBudgetBlocked?: (event: ModelBudgetBlockedEvent) => void;
+  private onBudgetThresholdExceeded?: (event: ModelBudgetThresholdExceededEvent) => void;
   private modelCallGate: ModelCallGate;
   private usageRecorder?: ModelUsageRecorder;
   private icpConversationCostBreaker: IcpConversationCostBreaker;
@@ -209,6 +212,7 @@ export class LLMClient {
     this.eligibilityGate = options.eligibilityGate;
     this.onEligibilityDecision = options.onEligibilityDecision;
     this.onBudgetBlocked = options.onBudgetBlocked;
+    this.onBudgetThresholdExceeded = options.onBudgetThresholdExceeded;
     this.usageRecorder = options.usageRecorder;
     this.icpConversationCostBreaker = new IcpConversationCostBreaker(
       config,
@@ -516,6 +520,9 @@ export class LLMClient {
       process,
       correlation,
     });
+    if (preflight.thresholdEvent) {
+      this.onBudgetThresholdExceeded?.(preflight.thresholdEvent);
+    }
     if (preflight.allowed) return;
     if (preflight.accountingError) {
       log.error('Canonical model budget accounting query failed', {
@@ -887,12 +894,15 @@ export class LLMClient {
             signal: transportSignal,
             correlation,
           });
-          this.requestCapability.applyExplicitToolChoice(
+          const explicitToolContract = this.requestCapability.applyExplicitToolChoice(
             requestOptions,
             context,
             correlation,
             model,
-            candidateTarget,
+          );
+          const requestPiContext = this.requestCapability.buildPiContext(
+            context,
+            explicitToolContract,
           );
           const promptCaching = applyModelAgnosticPromptCache({
             promptCacheEnabled: candidateTarget.promptCacheEnabled,
@@ -905,7 +915,7 @@ export class LLMClient {
             modelApi: typeof (model as { api?: unknown }).api === 'string'
               ? (model as { api: string }).api
               : undefined,
-            systemPrompt: piContext.systemPrompt ?? '',
+            systemPrompt: requestPiContext.systemPrompt ?? '',
             boundaries: context.promptCacheBoundaries,
             correlation,
             requestOptions,
@@ -916,7 +926,7 @@ export class LLMClient {
           const providerObservability = this.requestCapability.buildProviderObservability(
             candidateTarget,
             model,
-            piContext,
+            requestPiContext,
             correlation,
             promptCaching ?? undefined,
           );
@@ -951,7 +961,7 @@ export class LLMClient {
                 const response = await runLLMStreamAttempt({
                   runtime: this.runtime,
                   model,
-                  context: piContext,
+                  context: requestPiContext,
                   requestOptions,
                   candidate: candidateTarget,
                   callbacks: buffered.callbacks,
@@ -1114,12 +1124,15 @@ export class LLMClient {
           signal: transportSignal,
           correlation,
         });
-        this.requestCapability.applyExplicitToolChoice(
+        const explicitToolContract = this.requestCapability.applyExplicitToolChoice(
           requestOptions,
           context,
           correlation,
           model,
-          candidateTarget,
+        );
+        const requestPiContext = this.requestCapability.buildPiContext(
+          context,
+          explicitToolContract,
         );
         const promptCaching = applyModelAgnosticPromptCache({
           promptCacheEnabled: candidateTarget.promptCacheEnabled,
@@ -1132,7 +1145,7 @@ export class LLMClient {
           modelApi: typeof (model as { api?: unknown }).api === 'string'
             ? (model as { api: string }).api
             : undefined,
-          systemPrompt: piContext.systemPrompt ?? '',
+          systemPrompt: requestPiContext.systemPrompt ?? '',
           boundaries: context.promptCacheBoundaries,
           correlation,
           requestOptions,
@@ -1143,7 +1156,7 @@ export class LLMClient {
         const providerObservability = this.requestCapability.buildProviderObservability(
           candidateTarget,
           model,
-          piContext,
+          requestPiContext,
           correlation,
           promptCaching ?? undefined,
         );
@@ -1170,7 +1183,7 @@ export class LLMClient {
           try {
             response = await this.runtime.complete(
               model,
-              piContext,
+              requestPiContext,
               requestOptions,
             );
           } catch (error) {
@@ -1263,7 +1276,7 @@ export class LLMClient {
           try {
             assertUsableProviderResponse(response, candidateTarget);
             assertExplicitToolContractSatisfied({
-              choice: requestOptions.toolChoice,
+              choice: requestOptions.explicitToolContract?.choice,
               ...(requestOptions.requiredToolName
                 ? { requiredToolName: requestOptions.requiredToolName }
                 : {}),

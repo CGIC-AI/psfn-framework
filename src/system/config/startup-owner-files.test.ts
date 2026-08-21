@@ -139,6 +139,7 @@ describe('startup owner-file loaders', () => {
       'capability-tier.json',
       'charge-policy.json',
       'skills.json',
+      'partner-affect-shadow.json',
     ]);
     for (const companionRoot of [companionA, companionB]) {
       for (const ownerFile of [
@@ -146,6 +147,7 @@ describe('startup owner-file loaders', () => {
         'capability-tier.json',
         'charge-policy.json',
         'skills.json',
+        'partner-affect-shadow.json',
       ] as const) {
         copyOwnerExample(companionRoot, ownerFile);
       }
@@ -360,6 +362,9 @@ describe('startup owner-file loaders', () => {
       },
       socialAutonomy: DEFAULT_SOCIAL_AUTONOMY_CONFIG,
       socialDesire: DEFAULT_SOCIAL_DESIRE_CONFIG,
+      intentionFollowUp: {
+        nearTermHorizonMs: 259_200_000,
+      },
       icpAutonomy: DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG,
     };
     saveSchedulerConfig(rootDir, scheduler);
@@ -508,6 +513,7 @@ describe('startup owner-file loaders', () => {
       'capability-tier.json',
       'charge-policy.json',
       'skills.json',
+      'partner-affect-shadow.json',
     ]) {
       writeFileSync(join(fixture.systemDataDir, ownerFile), '{"decoy":true}\n', 'utf8');
     }

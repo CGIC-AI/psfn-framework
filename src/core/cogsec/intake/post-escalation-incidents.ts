@@ -54,20 +54,20 @@ function safeSummary(
     return 'Post-pass CogSec escalation completed clear. Operator alert not required.';
   }
   const phase = event.phase === 'inline_shadow'
-    ? 'Inline shadow-full CogSec finding'
+    ? 'Inline shadow CogSec review signal'
     : 'Post-pass CogSec escalation';
   return `${phase} requires operator review. Operator alert delivery: ${status}.`;
 }
 
 function notificationTitle(companionName: string, event: IntakeCogSecFindingEvent): string {
   return event.phase === 'inline_shadow'
-    ? `${companionName} CogSec shadow finding`
+    ? `${companionName} CogSec shadow review`
     : `${companionName} CogSec post-escalation`;
 }
 
 function notificationLead(companionName: string, event: IntakeCogSecFindingEvent): string {
   return event.phase === 'inline_shadow'
-    ? `${companionName} confirmed an inline shadow-full finding and requires operator review.`
+    ? `${companionName} recorded an inline shadow review signal for operator review.`
     : `${companionName} deep-screened a pass-through stream and requires operator review.`;
 }
 

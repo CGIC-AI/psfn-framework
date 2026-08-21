@@ -77,7 +77,7 @@ import { createPostgresAnalysisWorkbenchTraceStoreFromConfig } from '../../persi
 import { createPostgresObserverEvalSidecarStore } from '../../core/eval/observer-sidecar/persistence.js';
 import { createOwnerFileConfigStore } from '../../system/config/config-store.js';
 import { AdminPartnerAffectShadowDataService } from './services/partner-affect-shadow-service.js';
-import { AdminAutomataDataService, type AdminAutomataBusReadPort, type AdminAutomataLessonReadPort } from './services/automata-service.js';
+import { AdminAutomataDataService, type AdminAutomataBusReadPort, type AdminAutomataLessonReadPort, type AdminAutomataReindexPort } from './services/automata-service.js';
 import type { PartnerAffectShadowStorePort } from '../../core/emotion/partner-affect/shadow-store-port.js';
 import {
   createDefaultObserverEvalSidecarSettings,
@@ -219,6 +219,8 @@ export interface InProcessGardenAdminContractOptions {
   automataBusReadPort?: AdminAutomataBusReadPort | null;
   /** Optional content-safe current-finding lesson projection. */
   automataLessonReadPort?: AdminAutomataLessonReadPort | null;
+  /** Companion-bound, owner-policy-bounded rebuild of disposable Bus index state. */
+  automataReindexPort?: AdminAutomataReindexPort | null;
   biographicalReviewService?: GardenAdminDomainServices['biographicalReview'];
   /** Fixed legacy-mode scope; fleet requests always use signed request context. */
   legacyMemorySubjectAccessContext?: Readonly<MemorySubjectAccessContext>;
@@ -239,6 +241,14 @@ export interface InProcessGardenAdminContractOptions {
   eventBus: EventBus;
   contactStore?: ContactStorePort | null;
   concernStore?: ConcernStorePort | null;
+  pendingFollowUpStore?: Pick<
+    import('../../core/intention/pending-follow-up-store-port.js').PendingFollowUpStorePort,
+    'list'
+  > | null;
+  scheduledPromptStore?: Pick<
+    import('../../core/scheduler/scheduled-prompt-store-port.js').ScheduledPromptStorePort,
+    'listPending'
+  > | null;
   characterCard: CharacterCardV2;
   config: SubstrateConfig;
   embeddingService: EmbeddingProviderPort | null;
@@ -305,7 +315,13 @@ export function createFleetGardenDirectDatabaseServices(
   if (!modelUsageStore) {
     throw new Error('Fleet Garden model usage access requires PostgreSQL persistence');
   }
-  const observerEvalSidecar = createObserverEvalSidecarAdminService({ config });
+  const observerEvalSidecar = createObserverEvalSidecarAdminService({
+    config,
+    // Fleet direct-database services are constructed from the selected
+    // companion tuple. Pin this read pool to that schema/role exactly; an
+    // unscoped pool would resolve against the primary/public tenant.
+    tenant: resolveConfigTenantPoolScope(config),
+  });
   return {
     modelUsage: new AdminModelUsageDataService(modelUsageStore),
     observerEvalSidecar,
@@ -645,6 +661,7 @@ export function createInProcessGardenAdminContract(
     fleetMemoryStore: options.memoryStore,
     contactStore: options.contactStore,
     embeddingService: options.embeddingService,
+    ...(options.config.companionId ? { companionId: options.config.companionId } : {}),
     resolveCompanionName: () => resolveCompanionNameFromConfig(options.config),
     appendAuditTimelineEntry: (actionType, decision, narrative, details, requestContext) => {
       const joinedDetails = details
@@ -678,6 +695,7 @@ export function createInProcessGardenAdminContract(
       },
       bus: options.automataBusReadPort ?? null,
       lessons: options.automataLessonReadPort ?? null,
+      reindex: options.automataReindexPort ?? null,
     });
   }
 
@@ -694,6 +712,17 @@ export function createInProcessGardenAdminContract(
       adaptiveToolsService: adaptiveTools,
       analysisWorkbenchTraceStore,
       resolveLastActiveSessionId,
+      ...(options.effectiveSchedulerConfig
+        && options.pendingFollowUpStore
+        && options.scheduledPromptStore
+        ? {
+          intentionFollowUpRuntime: {
+            nearTermHorizonMs: options.effectiveSchedulerConfig.intentionFollowUp.nearTermHorizonMs,
+            pendingFollowUpStore: options.pendingFollowUpStore,
+            scheduledPromptStore: options.scheduledPromptStore,
+          },
+        }
+        : {}),
     }),
     diagnostics: new AdminDiagnosticsDataService({
       eventBus: options.eventBus,
@@ -913,9 +942,8 @@ export function createObserverEvalSidecarAdminService(input: {
   /**
    * Tenant boundary for the sidecar's own pool. The sidecar tables are
    * companion-local, so the agent's in-process Garden pins its companion
-   * schema/role here (psfn-framework-cc3v7). The fleet Garden operator process
-   * serves every companion from one config and carries no per-companion role,
-   * so it passes nothing and stays on the pre-existing unscoped pool.
+   * schema/role here (psfn-framework-cc3v7). The fleet Garden constructs one
+   * exact companion config per admitted route and pins that schema/role too.
    */
   tenant?: TenantPoolScope;
 }): AdminObserverEvalSidecarService {

@@ -187,17 +187,20 @@ export async function schedulePostTurnWork(input: {
   } = input;
 
   const retrievalProvenanceRefs = observability.getRetrievalProvenanceRefs();
-  const inferredPostTurnActions = await runtime.inferPostTurnActions({
-    message,
-    response,
-    turnMessages,
-    turnId,
-    completedAt,
-    ...(taskKind ? { taskKind } : {}),
-    contextManifest: context.manifest,
-    ...(canonicalContactKey ? { canonicalContactKey } : {}),
-    capturedSessionReads: sessionReads,
-  });
+  const isTestingHarnessTurn = message.routing?.testingHarness !== undefined;
+  const inferredPostTurnActions = isTestingHarnessTurn
+    ? []
+    : await runtime.inferPostTurnActions({
+        message,
+        response,
+        turnMessages,
+        turnId,
+        completedAt,
+        ...(taskKind ? { taskKind } : {}),
+        contextManifest: context.manifest,
+        ...(canonicalContactKey ? { canonicalContactKey } : {}),
+        capturedSessionReads: sessionReads,
+      });
   observability.emitObservedTurnStage('end', {
     durationMs: completedAt - startTime,
     ...(firstTokenAt !== null ? { ttftMs: Math.max(0, firstTokenAt - startTime) } : {}),
@@ -312,14 +315,14 @@ export async function schedulePostTurnWork(input: {
   const hasBoundedSessionSource = userSessionEntryId !== null
     || assistantSessionEntryId !== null;
   const appraisalState = projectEmotionAppraisalState(internalState);
-  const narrativeAppraisalDrift = hasBoundedSessionSource
+  const narrativeAppraisalDrift = hasBoundedSessionSource && !isTestingHarnessTurn
     ? runtime.emotionSelfModelRuntime.reserveNarrativeEmotionAppraisal({
         sessionChannelId: emotionSessionId,
         appraisalState,
       })
     : null;
   const payloads: BackgroundWorkPayload[] = [];
-  if (runtime.memoryExtractor && hasBoundedSessionSource) {
+  if (!isTestingHarnessTurn && runtime.memoryExtractor && hasBoundedSessionSource) {
     payloads.push({
       schemaVersion: 1,
       kind: 'memory_extraction',
@@ -329,16 +332,16 @@ export async function schedulePostTurnWork(input: {
       ...(icpCorrelation ? { icpCorrelation } : {}),
     });
   }
-  payloads.push(
-    {
+  if (!isTestingHarnessTurn) {
+    payloads.push({
       schemaVersion: 1,
       kind: 'intention_post_turn_hooks',
       source,
       ...(canonicalContactKey ? { canonicalContactKey } : {}),
       ...(hasBoundedSessionSource ? { appraisalState } : {}),
-    },
-  );
-  if (hasBoundedSessionSource) {
+    });
+  }
+  if (hasBoundedSessionSource && !isTestingHarnessTurn) {
     if (narrativeAppraisalDrift) {
       payloads.push({
         schemaVersion: 1,
@@ -383,12 +386,15 @@ export async function schedulePostTurnWork(input: {
     turnRecord.concernDeltaRefs = [buildTurnSubsystemProjectionRef('concern', projectionBinding)];
     turnRecord.contactDeltaRefs = [buildTurnSubsystemProjectionRef('contact', projectionBinding)];
   }
-  turnRecord.backgroundWorkHandoff = createTurnRecordBackgroundWorkHandoff(backgroundWorkInputs);
+  if (backgroundWorkInputs.length > 0) {
+    turnRecord.backgroundWorkHandoff = createTurnRecordBackgroundWorkHandoff(backgroundWorkInputs);
+  }
   // Record first, then atomically enqueue the complete manifest. A crash on
   // either side is recoverable: no queue row can outlive its canonical source,
   // and delivery/startup replay can safely re-enqueue the stable turn IDs.
   await runtime.sessionManager.recordTurn(turnRecord);
   input.onTurnRecordPersisted?.();
+  if (backgroundWorkInputs.length === 0) return;
   try {
     await runtime.enqueuePostTurnBackgroundWork(backgroundWorkInputs);
   } catch (error) {

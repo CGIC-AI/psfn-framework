@@ -24,6 +24,13 @@ import type {
 
 export type SubstrateAgentTool<TDetails = any> = Omit<AgentTool<any, TDetails>, 'execute'> & {
   /**
+   * Optional model-facing JSON schema. The provider sees this through pi-ai,
+   * while the scheduler continues to validate execution against `parameters`.
+   * Use only when an equivalent strict schema shape is not broadly supported
+   * by model tool-call implementations (for example, a root action union).
+   */
+  modelParameters?: Record<string, unknown>;
+  /**
    * Execute the tool call. `params` has been validated against `parameters`
    * by the tool-call scheduler before invocation; implementations annotate
    * the concrete validated shape.

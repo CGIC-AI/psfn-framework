@@ -1,6 +1,7 @@
 <script lang="ts">
   import { base } from '$app/paths';
   import { setContext } from 'svelte';
+  import BackgroundMaintenanceControl from '$lib/components/settings/BackgroundMaintenanceControl.svelte';
   import SettingAuthorityHint from '$lib/components/settings/SettingAuthorityHint.svelte';
   import SettingFieldLabel from '$lib/components/settings/SettingFieldLabel.svelte';
   import SettingsCollapsibleSection from '$lib/components/settings/SettingsCollapsibleSection.svelte';
@@ -53,9 +54,10 @@
     profileSynthesisMinNovelty = $bindable(0.12),
     profileSynthesisSourceMemoryLimit = $bindable(16),
     profileSynthesisMinSourceMemories = $bindable(2),
-    analysisWorkbenchMaxTokens = $bindable(76000),
-    analysisWorkbenchMaxWallTimeMs = $bindable(300000),
-    analysisWorkbenchMaxSubQueries = $bindable(12),
+    analysisWorkbenchMaxIterations = $bindable(60),
+    analysisWorkbenchMaxTokens = $bindable(256000),
+    analysisWorkbenchMaxWallTimeMs = $bindable(600000),
+    analysisWorkbenchMaxSubQueries = $bindable(60),
   } = $props<{
     openSections: Set<string>;
     sessionRestartBehaviorOptions: string[];
@@ -91,6 +93,7 @@
     profileSynthesisMinNovelty: number;
     profileSynthesisSourceMemoryLimit: number;
     profileSynthesisMinSourceMemories: number;
+    analysisWorkbenchMaxIterations: number;
     analysisWorkbenchMaxTokens: number;
     analysisWorkbenchMaxWallTimeMs: number;
     analysisWorkbenchMaxSubQueries: number;
@@ -212,17 +215,13 @@
         </div>
         <p class="text-sm text-shadow-500 mt-1">Auto-compacts oldest 50% when context exceeds this %</p>
       </div>
-      <div>
-        <SettingFieldLabel
-          label="Bundled Background Maintenance Interval (ms)"
-          keys="backgroundMaintenanceIntervalMs"
+      <div class="md:col-span-2">
+        <BackgroundMaintenanceControl
+          bind:intervalMs={backgroundMaintenanceIntervalMs}
+          {inputClass}
           source={getSource('backgroundMaintenanceIntervalMs')}
-          forId={settingControlId('backgroundMaintenanceIntervalMs')}
-          class={labelClass}
+          authority={getSettingAuthority('backgroundMaintenanceIntervalMs')}
         />
-        <DurationInput id={settingControlId('backgroundMaintenanceIntervalMs')} min={10000} bind:value={backgroundMaintenanceIntervalMs} class={inputClass} />
-        <p class="text-sm text-shadow-500 mt-1">One shared hourly tick for salience decay, ambient presence, concern grooming, social-graph proposals, sleeptime eligibility, contact trust drift, drift velocity, and second-arrow checks. The Scheduler page lists the exact operations wired in this runtime.</p>
-        <SettingAuthorityHint info={getSettingAuthority('backgroundMaintenanceIntervalMs')} />
       </div>
       <div>
         <SettingFieldLabel
@@ -372,9 +371,14 @@
     onToggle={() => toggleSection('analysis-workbench')}
   >
     {#snippet summary()}
-      <span class="text-sm text-shadow-500">Max: {fmtTokens(analysisWorkbenchMaxTokens)} tokens, {fmtMs(analysisWorkbenchMaxWallTimeMs)}, {analysisWorkbenchMaxSubQueries} queries</span>
+      <span class="text-sm text-shadow-500">Max: {analysisWorkbenchMaxIterations} iterations, {fmtTokens(analysisWorkbenchMaxTokens)} tokens, {fmtMs(analysisWorkbenchMaxWallTimeMs)}, {analysisWorkbenchMaxSubQueries} queries</span>
     {/snippet}
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-5">
+    <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-5">
+      <div>
+        <SettingFieldLabel label="Max Iterations" keys="analysisWorkbenchMaxIterations" forId={settingControlId('analysisWorkbenchMaxIterations')} class={labelClass} />
+        <input id={settingControlId('analysisWorkbenchMaxIterations')} type="number" min="1" max="60" step="1" bind:value={analysisWorkbenchMaxIterations} class={inputClass} />
+        <p class="text-sm text-shadow-500 mt-1">Owner ceiling for a bounded run (1-60)</p>
+      </div>
       <div>
         <SettingFieldLabel label="Max Tokens" keys="analysisWorkbenchMaxTokens" forId={settingControlId('analysisWorkbenchMaxTokens')} class={labelClass} />
         <input id={settingControlId('analysisWorkbenchMaxTokens')} type="number" min="1000" max="1000000" step="1000" bind:value={analysisWorkbenchMaxTokens} class={inputClass} />

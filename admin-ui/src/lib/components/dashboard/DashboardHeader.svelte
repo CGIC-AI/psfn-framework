@@ -1,6 +1,12 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import type { DashboardCostWindow } from '$lib/types';
   import type { DashboardCostWindowOption } from '$lib/dashboard/cost-window';
+  import {
+    DASHBOARD_SECTIONS,
+    resolveDashboardSection,
+    type DashboardSectionId,
+  } from './dashboard-view';
 
   let {
     options,
@@ -24,15 +30,16 @@
     onSelectWindow: (window: DashboardCostWindow) => void;
   }>();
 
-  const tabs = [
-    { href: '#overview', label: 'Overview' },
-    { href: '#health', label: 'Health' },
-    { href: '#memory', label: 'Memory' },
-    { href: '#cost', label: 'Cost' },
-    { href: '#traces', label: 'Traces' },
-  ] as const;
+  let activeSection = $state<DashboardSectionId>('overview');
 
-  let activeTab = $state<(typeof tabs)[number]['href']>('#overview');
+  onMount(() => {
+    const syncActiveSection = () => {
+      activeSection = resolveDashboardSection(window.location.hash);
+    };
+    syncActiveSection();
+    window.addEventListener('hashchange', syncActiveSection);
+    return () => window.removeEventListener('hashchange', syncActiveSection);
+  });
 </script>
 
 <header class="rounded-xl border border-bark-300 bg-bark-50/95 shadow-sm backdrop-blur">
@@ -92,14 +99,14 @@
   </div>
 
   <nav aria-label="Dashboard sections" class="mt-3 flex gap-1 overflow-x-auto border-t border-bark-200 px-3 sm:px-4">
-    {#each tabs as tab (tab.href)}
+    {#each DASHBOARD_SECTIONS as tab (tab.id)}
       <a
         href={tab.href}
-        aria-current={activeTab === tab.href ? 'location' : undefined}
-        class="relative min-h-11 whitespace-nowrap px-3 py-3 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-gold-500 {activeTab === tab.href
+        aria-current={activeSection === tab.id ? 'location' : undefined}
+        class="relative min-h-11 whitespace-nowrap px-3 py-3 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-gold-500 {activeSection === tab.id
           ? 'font-medium text-shadow-900 after:absolute after:inset-x-2 after:bottom-0 after:h-0.5 after:rounded-full after:bg-gold-500'
           : 'text-shadow-600 hover:text-shadow-900'}"
-        onclick={() => (activeTab = tab.href)}
+        onclick={() => (activeSection = tab.id)}
       >
         {tab.label}
       </a>

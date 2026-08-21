@@ -57,6 +57,7 @@ import {
 } from '../../../faculties/memory/extraction.js';
 import type { ConcernCandidateExtractionSink } from '../../../faculties/memory/extraction/types.js';
 import { MemoryWriter } from '../../../faculties/memory/writer.js';
+import { createCompanionRoomMembershipAuthority } from '../../../faculties/memory/companion-provenance.js';
 import type {
   CoreMemoryStorePort,
   MemoryStorePort,
@@ -134,6 +135,7 @@ import { createBackgroundWorkHandoffRecoveryDisposition } from '../../../persist
 import { createDefaultPostgresSessionAdapters } from '../../../persistence/sessions/postgres-adapters.js';
 import { FilesystemAutomataRetentionWriteBarrier } from '../../../persistence/sessions/automata-retention-write-barrier.js';
 import { awaitPostgresStoreReadiness } from '../../../persistence/postgres/runtime-readiness.js';
+import { resolveConfigTenantPoolScope } from '../../../persistence/postgres/tenant-pool-scope.js';
 import { CogSecEventStore } from '../../../core/cogsec/events.js';
 import { createSessionIntegrityIncidentObserver } from '../../../core/cogsec/session-integrity-incident.js';
 import { createProjectionDriftIncidentObserver } from '../../../core/cogsec/projection-drift-incident.js';
@@ -308,12 +310,9 @@ export async function composeSessionRuntimeAsync(
   if (!databaseUrl) {
     throw new Error('PostgreSQL session composition requires config.postgresDatabaseUrl');
   }
-  const postgresSchema = options.config.postgresSchema?.trim();
-  const postgresRole = options.config.multiCompanion === true && postgresSchema
-    ? options.config.postgresRole?.trim() || (() => {
-        throw new Error('Multi-companion session composition requires config.postgresRole');
-      })()
-    : undefined;
+  const tenantScope = resolveConfigTenantPoolScope(options.config);
+  const postgresSchema = tenantScope?.schema ?? options.config.postgresSchema?.trim();
+  const postgresRole = tenantScope?.role;
   // Redaction projection-drift incident seam (bead 6oott): a failed
   // redaction-driven projection write records one operator-only CogSec
   // incident (session_integrity class, projectiondrift caseId prefix) in the
@@ -367,6 +366,8 @@ export async function composeMemoryStoreAsync(
   if (!databaseUrl) {
     throw new Error('PostgreSQL memory composition requires config.postgresDatabaseUrl');
   }
+  const tenantScope = resolveConfigTenantPoolScope(config);
+  const postgresSchema = tenantScope?.schema ?? config.postgresSchema?.trim();
 
   return await awaitPostgresStoreReadiness(
     'memory',
@@ -374,16 +375,10 @@ export async function composeMemoryStoreAsync(
       notesDir: resolveNotesDir(companionDataDir),
       scratchpadMirrorPath: resolveScratchpadMirrorPath(companionDataDir),
       journal: new MemoryJournal(resolveMemoryJournalPath(companionDataDir)),
-      ...(config.postgresSchema?.trim()
+      ...(postgresSchema
         ? {
-            schema: config.postgresSchema.trim(),
-            ...(config.multiCompanion === true
-              ? {
-                  role: config.postgresRole?.trim() || (() => {
-                    throw new Error('Multi-companion memory composition requires config.postgresRole');
-                  })(),
-                }
-              : {}),
+            schema: postgresSchema,
+            ...(tenantScope ? { role: tenantScope.role } : {}),
           }
         : {}),
     }),
@@ -597,10 +592,15 @@ export interface MemoryRuntimeOptions {
   biographicalRebuild?: MemoryExtractorFormationOptions['biographicalRebuild'];
   /** Eligible extraction-only Bus access; foreground MemoryRetriever never receives it. */
   automataBusWorkerAccess?: AutomataBusWorkerAccess | null;
+  /** Authoritative lifecycle for extraction workers admitted to the Bus. */
+  automataRunRegistry?: AutomataRunRegistry | null;
 }
 
 export function wireMemoryRuntime(options: MemoryRuntimeOptions): MemoryExtractor {
   const costTelemetry = createEventBusCostTelemetryPort(options.eventBus);
+  const roomMembershipAuthority = options.sessionStore
+    ? createCompanionRoomMembershipAuthority(options.sessionStore)
+    : null;
   options.agentLoop.memoryProvider = options.config
     ? new MemoryRetriever(
       options.memoryStore,
@@ -613,6 +613,7 @@ export function wireMemoryRuntime(options: MemoryRuntimeOptions): MemoryExtracto
 	      options.sessionManager,
 	      true,
 	      options.biographicalProjection ?? null,
+	      roomMembershipAuthority,
 	    )
 	    : new MemoryRetriever(
 	      options.memoryStore,
@@ -625,6 +626,7 @@ export function wireMemoryRuntime(options: MemoryRuntimeOptions): MemoryExtracto
 	      options.sessionManager,
 	      true,
 	      options.biographicalProjection ?? null,
+	      roomMembershipAuthority,
 	    );
 
   const extractorFormationOptions = {
@@ -642,6 +644,9 @@ export function wireMemoryRuntime(options: MemoryRuntimeOptions): MemoryExtracto
       : {}),
     ...(options.automataBusWorkerAccess
       ? { automataBusWorkerAccess: options.automataBusWorkerAccess }
+      : {}),
+    ...(options.automataRunRegistry
+      ? { automataRunRegistry: options.automataRunRegistry }
       : {}),
   };
   const memoryExtractor = options.config
@@ -748,6 +753,8 @@ export function wireShardAndThinkRuntime(options: ToolRuntimeOptions): ShardExec
   // gate is late-bound onto the session manager by composition.
   const foldReviewMemoryWriter = new MemoryWriter(options.memoryStore, options.embeddingService, {
     memoryRetrievalPolicy: () => options.config.memoryRetrievalPolicy,
+    ...(options.config.companionId ? { companionId: options.config.companionId } : {}),
+    roomMembershipAuthority: createCompanionRoomMembershipAuthority(options.sessionStore),
   });
   foldReviewMemoryWriter.intakeSinkGateProvider = () => options.sessionManager.intakeSinkGate;
   const foldReviewController = new ShardFoldReviewController(

@@ -875,10 +875,22 @@ export class GatewayServer {
       notifyRequester: (method, params) => this.notifyRequestingConnection(conn, method, params),
       listPendingConfirmations: () => this.approvalBoundary.listPendingConfirmations(),
       listConfirmationHistory: () => this.approvalBoundary.listConfirmationHistory(),
-      resolveConfirmation: (params) => this.approvalBoundary.resolveConfirmation(params, {
-        kind: 'companion',
-        id: this.authenticatedCompanionId(conn) ?? 'unidentified-agent-rpc',
-      }),
+      resolveConfirmation: (params) => {
+        const companionId = this.authenticatedCompanionId(conn);
+        if (!companionId) {
+          return Promise.resolve({
+            id: params.id,
+            status: 'not_found' as const,
+            message: 'Confirmation request not found.',
+            executed: false,
+          });
+        }
+        return this.approvalBoundary.resolveConfirmationForOwner(
+          companionId,
+          params,
+          { kind: 'companion', id: companionId },
+        );
+      },
       sendNtfy: (params) => this.ntfyNotifier.send(params),
       sendOperatorAlert: (params) => this.operatorAlertDispatcher.dispatch(params),
       getRuntimeHealth: () => this.getRuntimeHealth(this.authenticatedCompanionId(conn)),
@@ -1175,6 +1187,20 @@ export class GatewayServer {
     return this.approvalBoundary.resolveConfirmation(params, {
       kind: 'operator',
       id: 'garden-admin',
+    });
+  }
+
+  resolveOperatorApprovalForOwner(
+    companionId: string,
+    params: {
+      id: string;
+      decision: 'approve' | 'deny' | 'modify';
+      modifiedParams?: Record<string, unknown>;
+    },
+  ): Promise<ConfirmationResolveResult> {
+    return this.approvalBoundary.resolveConfirmationForOwner(companionId, params, {
+      kind: 'operator',
+      id: `garden-admin:${companionId}`,
     });
   }
 

@@ -26,6 +26,7 @@ import { __test as tokenTestUtils } from '../../primitives/llm/tokens.js';
 import { createDefaultMemoryRetrievalPolicy } from '../../system/config/memory-retrieval-policy.js';
 import { retrieveReflectionMemoryBlock } from '../../core/scheduler/reflection-template-runtime/reflection-contact-context.js';
 import { classifyMemorySubject } from './subject-classification.js';
+import { createCompanionId } from '../../shared/routing/companion-id.js';
 
 // ── Helpers ──
 
@@ -246,6 +247,117 @@ describe('MemoryRetriever active memory context', () => {
       authorization: expect.objectContaining({ action: 'update', viewerContactIds: ['contact-a'] }),
       memoryIds: ['subject-visible'],
     }));
+  });
+
+  it('never recalls a private companion DM into a third companion runtime', async () => {
+    const companionA = '11111111-1111-4111-8111-111111111111';
+    const companionB = '22222222-2222-4222-8222-222222222222';
+    const companionC = '33333333-3333-4333-8333-333333333333';
+    const localChannel = `companion-dm:${companionA}:${companionB}`;
+    const foreignChannel = `companion-dm:${companionB}:${companionC}`;
+    const local = makeMemory({
+      id: 'local-icp-memory',
+      text: 'local participant marker',
+      sourceRef: `${localChannel}:extract|source:session|session:local-ab|operation:extract`,
+      provenance: { channelId: localChannel, sessionId: 'local-ab' },
+      similarity: 0.96,
+    });
+    const foreign = makeMemory({
+      id: 'foreign-icp-memory',
+      text: 'foreign private marker',
+      sourceRef: `${foreignChannel}:extract|source:session|session:foreign-bc|operation:extract`,
+      provenance: { channelId: foreignChannel, sessionId: 'foreign-bc' },
+      similarity: 0.95,
+    });
+    const retriever = new MemoryRetriever(
+      makeMockStore([local, foreign]),
+      makeMockEmbedding(),
+      makeRuntimeConfig({ companionId: createCompanionId(companionA) }),
+    );
+
+    const output = await retriever.retrieve(
+      'participant marker',
+      localChannel,
+      'primary',
+      { isDirectMessage: true, privacyLevel: 'private' },
+    );
+
+    expect(output).toContain(local.text);
+    expect(output).not.toContain(foreign.text);
+  });
+
+  it('withholds a caller-stamped room memory from A while allowing authenticated member B', async () => {
+    const companionA = '11111111-1111-4111-8111-111111111111';
+    const companionB = '22222222-2222-4222-8222-222222222222';
+    const roomChannel = 'companion-room:kitchen';
+    const inaccessible = makeMemory({
+      id: 'room-bc-memory',
+      text: 'room B C only retrieval marker',
+      sourceRef: `${roomChannel}:extract|source:session|session:kitchen-bc|operation:extract`,
+      provenance: {
+        channelId: roomChannel,
+        companionId: companionA,
+        sessionId: 'kitchen-bc',
+      },
+      similarity: 0.96,
+    });
+    const retriever = new MemoryRetriever(
+      makeMockStore([inaccessible]),
+      makeMockEmbedding(),
+      makeRuntimeConfig({ companionId: createCompanionId(companionA) }),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      false,
+      undefined,
+      { isAuthenticatedMember: () => false },
+    );
+
+    const output = await retriever.retrieve(
+      'room B C only retrieval marker',
+      'api:private-a',
+      'primary',
+      { isDirectMessage: true, privacyLevel: 'private' },
+    );
+
+    expect(output).not.toContain(inaccessible.text);
+
+    const accessible = makeMemory({
+      ...inaccessible,
+      id: 'room-b-memory',
+      provenance: {
+        ...inaccessible.provenance,
+        companionId: companionB,
+      },
+    });
+    const memberRetriever = new MemoryRetriever(
+      makeMockStore([accessible]),
+      makeMockEmbedding(),
+      makeRuntimeConfig({ companionId: createCompanionId(companionB) }),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      false,
+      undefined,
+      {
+        isAuthenticatedMember: ({ channelId, sessionId }) => (
+          channelId === roomChannel && sessionId === 'kitchen-bc'
+        ),
+      },
+    );
+
+    const memberOutput = await memberRetriever.retrieve(
+      'room B C only retrieval marker',
+      roomChannel,
+      'primary',
+      { isDirectMessage: false, privacyLevel: 'private' },
+    );
+
+    expect(memberOutput).toContain(accessible.text);
   });
 
   it('lets a primary private conversation naturally recall a companion-private self experience', async () => {

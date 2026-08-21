@@ -1,10 +1,17 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Duplex } from 'node:stream';
-import { sendText } from '../../channels/backplane/http/primitives.js';
+import { sendJson, sendText } from '../../channels/backplane/http/primitives.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { createCompanionId } from '../../shared/routing/companion-id.js';
+import type { GatewayOperatorConfirmationClient } from '../../app/startup/support/gateway-operator-confirmation-client.js';
+import { isResolvedConfirmationDecision } from '../../system/capabilities/confirmation-queue.js';
 import { buildGardenCapabilityHeaders } from './garden-admission.js';
+import {
+  CONFIRMATION_RESOLVE_PATH,
+  parseConfirmationResolveRequest,
+} from './confirmation-resolve-request.js';
+import { parseAdminJsonBody } from './request-body.js';
 import type {
   GardenFleetChildAssertion,
   GardenFleetChildAssertionClient,
@@ -33,6 +40,7 @@ export interface FleetGardenOperatorRouterOptions {
   readonly directDatabase?: FleetGardenDirectDatabasePort;
   readonly intakeQuarantineReads?: FleetGardenIntakeQuarantineReadPort;
   readonly fleetModelUsage?: FleetModelUsageRouteService;
+  readonly operatorConfirmationResolver?: GatewayOperatorConfirmationClient;
 }
 
 export interface FleetGardenDirectDatabasePort {
@@ -88,6 +96,11 @@ export class FleetGardenOperatorRouter {
     if (admitted.kind === 'public'
       || !admitted.target.canonicalPath.startsWith('/api/admin/')) {
       input.dispatchLocal(admitted.target.canonicalRequestTarget);
+      return;
+    }
+    if (admitted.target.method === 'POST'
+      && admitted.target.canonicalPath === CONFIRMATION_RESOLVE_PATH
+      && await this.resolveOperatorConfirmation(admitted, input.res)) {
       return;
     }
     if (this.options.directDatabase?.handleHttp({
@@ -236,5 +249,45 @@ export class FleetGardenOperatorRouter {
           }
         : {}),
     });
+  }
+
+  private async resolveOperatorConfirmation(
+    admitted: FleetGardenAdmittedPrincipalRequest,
+    res: ServerResponse,
+  ): Promise<boolean> {
+    const resolver = this.options.operatorConfirmationResolver;
+    if (!resolver) return false;
+    const parsedBody = parseAdminJsonBody(admitted.target.body.toString('utf8'));
+    if (!parsedBody.ok) {
+      sendJson(res, 400, { ok: false, message: parsedBody.error });
+      return true;
+    }
+    const parsed = parseConfirmationResolveRequest(parsedBody.value);
+    if (!parsed.ok) {
+      sendJson(res, 400, { ok: false, message: parsed.error });
+      return true;
+    }
+    try {
+      const result = await resolver.resolve(parsed.params, {
+        kind: 'fleet_principal',
+        companionId: admitted.companionId,
+        requestId: admitted.context.requestId,
+        decisionId: admitted.context.decisionId,
+      });
+      if (result.status === 'not_found') return false;
+      sendJson(res, 200, {
+        ok: isResolvedConfirmationDecision(result.status),
+        message: result.message,
+        status: result.status,
+        executed: result.executed,
+      });
+      return true;
+    } catch (error) {
+      log.error('Operator confirmation resolution failed', {
+        error: toErrorMessage(error),
+      });
+      sendJson(res, 500, { ok: false, message: 'Confirmation resolve failed' });
+      return true;
+    }
   }
 }

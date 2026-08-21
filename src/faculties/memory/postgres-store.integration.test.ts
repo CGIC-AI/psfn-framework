@@ -1562,7 +1562,7 @@ describe('postgres memory store integration', () => {
     });
   }, INTEGRATION_TIMEOUT_MS);
 
-  it('keeps subject projections and authorization isolated between companion schemas', async () => {
+  it('keeps private ICP memories isolated across three companion schemas', async () => {
     if (!harness) throw new Error('Postgres integration harness is not available');
     const database = await harness.createDatabase();
     const admin = createPostgresPool(database.databaseUrl, { max: 1, allowExitOnIdle: true });
@@ -1576,20 +1576,49 @@ describe('postgres memory store integration', () => {
       max: 1,
       allowExitOnIdle: true,
     });
+    const poolC = createPostgresPool(database.databaseUrl, {
+      schema: 'companion_c',
+      max: 1,
+      allowExitOnIdle: true,
+    });
     try {
       await admin.query('CREATE SCHEMA companion_a');
       await admin.query('CREATE SCHEMA companion_b');
+      await admin.query('CREATE SCHEMA companion_c');
       const storeA = await createPostgresMemoryStoreFromPool(poolA, 4);
       const storeB = await createPostgresMemoryStoreFromPool(poolB, 4);
+      const storeC = await createPostgresMemoryStoreFromPool(poolC, 4);
+      const privateSessionRef = 'private-icp-session-ab';
       await storeA.insertMemory(makeMemory({
         id: 'same-memory-id',
-        provenance: { subjectContactId: 'contact-a' },
+        text: 'alphaprivateunique participant marker',
+        sourceRef: `session:${privateSessionRef}`,
+        sourceType: 'turn',
+        provenance: { sessionId: privateSessionRef, subjectContactId: 'contact-a' },
       }), DEFAULT_EMBEDDING);
       await storeB.insertMemory(makeMemory({
         id: 'same-memory-id',
-        provenance: { subjectContactId: 'contact-b' },
+        text: 'betaprivateunique participant marker',
+        sourceRef: `session:${privateSessionRef}`,
+        sourceType: 'turn',
+        provenance: { sessionId: privateSessionRef, subjectContactId: 'contact-b' },
       }), DEFAULT_EMBEDDING);
 
+      await expect(storeA.getById('same-memory-id')).resolves.toMatchObject({
+        text: 'alphaprivateunique participant marker',
+      });
+      await expect(storeB.getById('same-memory-id')).resolves.toMatchObject({
+        text: 'betaprivateunique participant marker',
+      });
+      await expect(storeC.getById('same-memory-id')).resolves.toBeUndefined();
+      await expect(storeA.searchByText('betaprivateunique', 10)).resolves.toEqual([]);
+      await expect(storeB.searchByText('alphaprivateunique', 10)).resolves.toEqual([]);
+      await expect(storeC.searchByText('alphaprivateunique', 10)).resolves.toEqual([]);
+      await expect(Promise.all([
+        storeA.countActiveMemories(),
+        storeB.countActiveMemories(),
+        storeC.countActiveMemories(),
+      ])).resolves.toEqual([1, 1, 0]);
       expect((await storeA.queryAuthorizedMemorySubjects({
         authorization: subjectAuthorization('contact-a', 'count'),
         selector: { kind: 'count' },
@@ -1602,11 +1631,16 @@ describe('postgres memory store integration', () => {
         authorization: subjectAuthorization('contact-b', 'count'),
         selector: { kind: 'count' },
       })).total).toBe(1);
+      expect((await storeC.queryAuthorizedMemorySubjects({
+        authorization: subjectAuthorization('contact-a', 'count'),
+        selector: { kind: 'count' },
+      })).total).toBe(0);
     } finally {
       await Promise.all([
         admin.end(),
         poolA.end(),
         poolB.end(),
+        poolC.end(),
       ]);
     }
   }, INTEGRATION_TIMEOUT_MS);

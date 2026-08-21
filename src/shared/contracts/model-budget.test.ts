@@ -33,6 +33,14 @@ describe('parseModelBudgetBlockedEvent', () => {
     expect(parseModelBudgetBlockedEvent(validEvent())).toEqual(validEvent());
   });
 
+  it('preserves the authenticated companion scope used by shared-gateway alerts', () => {
+    const event = {
+      ...validEvent(),
+      companionId: '11111111-1111-4111-8111-111111111111',
+    };
+    expect(parseModelBudgetBlockedEvent(event)).toEqual(event);
+  });
+
   it.each([
     ['empty budget', { ...validEvent(), budget: {} }],
     ['bogus reason', { ...validEvent(), reason: 'invented_budget_reason' }],

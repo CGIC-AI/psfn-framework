@@ -1,4 +1,6 @@
+import { validateToolArguments, type Tool, type ToolCall as PiToolCall } from '@earendil-works/pi-ai';
 import type { LLMContext } from '../../shared/contracts/runtime.js';
+import type { ToolSchema } from '../../shared/contracts/runtime.js';
 import {
   isHeldToolCallResult,
   isToolResultOutcomeProjection,
@@ -6,6 +8,10 @@ import {
 } from '../../shared/contracts/tool-call-outcome.js';
 import { resolveExplicitToolRequestSequence } from '../../shared/tools/explicit-tool-request.js';
 import { isRecord } from '../../shared/utils/types.js';
+import {
+  exactToolArgumentsMatch,
+  resolveExactExplicitToolArguments,
+} from './explicit-tool-arguments.js';
 
 export interface ExplicitNamedToolChoice {
   type: 'function';
@@ -16,10 +22,13 @@ export type ExplicitToolChoice = ExplicitNamedToolChoice | 'required' | 'none';
 export interface ExplicitToolContract {
   choice: ExplicitToolChoice;
   requiredToolName?: string;
+  expectedArguments?: Record<string, unknown>;
 }
 
 export type ExplicitToolContractViolation =
   | 'missing_required_call'
+  | 'corrupt_empty_arguments'
+  | 'invalid_arguments'
   | 'unexpected_tool_call'
   | 'mismatched_tool_call';
 
@@ -109,6 +118,134 @@ export function assertExplicitToolContractSatisfied(input: {
   throw new ExplicitToolContractError(
     `Provider violated explicit tool contract: expected exactly one ${JSON.stringify(expectedName)} call, received ${JSON.stringify(input.toolCalls.map(call => call.name))}`,
   );
+}
+
+function assertExplicitToolArgumentsValid(input: {
+  contract: ExplicitToolContract | undefined;
+  corruptToolNames: readonly string[];
+  toolCalls: ReadonlyArray<{ id: string; name: string; input: Record<string, unknown> }>;
+  tools: readonly ToolSchema[] | undefined;
+}): void {
+  if (input.contract && input.corruptToolNames.length > 0) {
+    throw new ExplicitToolContractError(
+      `Provider returned empty arguments for required tool call(s): ${input.corruptToolNames.join(', ')}`,
+      'corrupt_empty_arguments',
+    );
+  }
+  const requiredToolName = input.contract?.requiredToolName;
+  if (!requiredToolName) return;
+  const toolCall = input.toolCalls[0];
+  const tool = input.tools?.find(candidate => candidate.name === requiredToolName);
+  if (!toolCall || !tool) {
+    throw new Error(`Explicit tool schema unavailable for ${requiredToolName}`);
+  }
+
+  validateExplicitToolArguments({
+    requiredToolName,
+    tool,
+    toolCall,
+    failureSubject: 'Provider returned',
+  });
+  if (
+    input.contract?.expectedArguments
+    && !exactToolArgumentsMatch(toolCall.input, input.contract.expectedArguments)
+  ) {
+    throw new ExplicitToolContractError(
+      `Provider changed exact requested arguments for required tool call: ${requiredToolName}`,
+      'invalid_arguments',
+    );
+  }
+}
+
+function validateExplicitToolArguments(input: {
+  requiredToolName: string;
+  tool: ToolSchema;
+  toolCall: { id: string; name: string; input: Record<string, unknown> };
+  failureSubject: 'Provider returned' | 'Requested exact arguments are';
+}): void {
+  try {
+    validateToolArguments(
+      {
+        name: input.tool.name,
+        description: input.tool.description,
+        parameters: input.tool.inputSchema as Tool['parameters'],
+      },
+      {
+        type: 'toolCall',
+        id: input.toolCall.id,
+        name: input.toolCall.name,
+        arguments: input.toolCall.input,
+      } satisfies PiToolCall,
+    );
+  } catch (error) {
+    if (!(error instanceof Error) || !error.message.startsWith('Validation failed for tool ')) {
+      throw error;
+    }
+    throw new ExplicitToolContractError(
+      `${input.failureSubject} schema-invalid for required tool call: ${input.requiredToolName}`,
+      'invalid_arguments',
+    );
+  }
+}
+
+/**
+ * Make an unambiguous participant-supplied exact argument object authoritative.
+ *
+ * The model still has to select the one required tool. Before replacing its
+ * argument copy, validate the participant's JSON against the canonical execution
+ * schema so an invalid prompt can never gain execution authority.
+ */
+export function applyExactExplicitToolArguments<
+  T extends { id: string; name: string; input: Record<string, unknown> },
+>(input: {
+  contract: ExplicitToolContract | undefined;
+  toolCalls: readonly T[];
+  tools: readonly ToolSchema[] | undefined;
+}): T[] {
+  const requiredToolName = input.contract?.requiredToolName;
+  const expectedArguments = input.contract?.expectedArguments;
+  if (!requiredToolName || !expectedArguments) return [...input.toolCalls];
+  if (
+    input.toolCalls.length !== 1
+    || input.toolCalls[0]?.name !== requiredToolName
+  ) {
+    return [...input.toolCalls];
+  }
+  const tool = input.tools?.find(candidate => candidate.name === requiredToolName);
+  if (!tool) {
+    throw new Error(`Explicit tool schema unavailable for ${requiredToolName}`);
+  }
+  const toolCall = input.toolCalls[0];
+  validateExplicitToolArguments({
+    requiredToolName,
+    tool,
+    toolCall: {
+      id: toolCall.id,
+      name: toolCall.name,
+      input: expectedArguments,
+    },
+    failureSubject: 'Requested exact arguments are',
+  });
+  return [{
+    ...toolCall,
+    input: structuredClone(expectedArguments),
+  }];
+}
+
+export function assertExplicitToolResponseSatisfied(input: {
+  contract: ExplicitToolContract | undefined;
+  corruptToolNames: readonly string[];
+  toolCalls: ReadonlyArray<{ id: string; name: string; input: Record<string, unknown> }>;
+  tools: readonly ToolSchema[] | undefined;
+}): void {
+  assertExplicitToolContractSatisfied({
+    choice: input.contract?.choice,
+    ...(input.contract?.requiredToolName
+      ? { requiredToolName: input.contract.requiredToolName }
+      : {}),
+    toolCalls: input.toolCalls,
+  });
+  assertExplicitToolArgumentsValid(input);
 }
 
 /**
@@ -206,9 +343,17 @@ export function resolveExplicitToolContract(input: {
     input.modelApi,
     nextToolName,
   );
+  const expectedArguments = nextToolName && requestedToolSequence.length === 1
+    ? resolveExactExplicitToolArguments(requestText, nextToolName)
+    : undefined;
   return {
     choice,
-    ...(nextToolName ? { requiredToolName: nextToolName } : {}),
+    ...(nextToolName
+      ? {
+          requiredToolName: nextToolName,
+          ...(expectedArguments ? { expectedArguments } : {}),
+        }
+      : {}),
   };
 }
 

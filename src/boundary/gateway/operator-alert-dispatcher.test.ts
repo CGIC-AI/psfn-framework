@@ -146,6 +146,25 @@ describe('GatewayOperatorAlertDispatcher', () => {
     );
   });
 
+  it('fails closed instead of sending a keyed alert through a non-idempotent sink', async () => {
+    const telegram = telegramDock();
+    const dispatcher = new GatewayOperatorAlertDispatcher({
+      ntfy: {
+        isConfigured: () => false,
+        send: vi.fn(),
+      },
+      telegramDock: telegram.dock,
+      telegramChatId: '42',
+      logger: { error: vi.fn() },
+    });
+
+    await expect(dispatcher.dispatch({
+      ...ALERT,
+      idempotencyKey: 'model-budget-alert-test-key',
+    })).rejects.toThrow('Operator alert delivery failed for every configured sink');
+    expect(telegram.sendText).not.toHaveBeenCalled();
+  });
+
   it('rejects companion-authored traffic on the system-only alert route', async () => {
     const dispatcher = new GatewayOperatorAlertDispatcher({
       ntfy: {

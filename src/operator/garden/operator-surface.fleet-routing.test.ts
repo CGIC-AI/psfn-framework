@@ -1,5 +1,5 @@
 import { generateKeyPairSync } from 'node:crypto';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
@@ -19,7 +19,10 @@ import {
   createIntakeEnvelope,
   transitionIntakeEnvelope,
 } from '../../shared/contracts/intake-envelope.js';
-import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import {
+  createDefaultObserverEvalSidecarSettings,
+  type SubstrateConfig,
+} from '../../system/config/runtime-config-contracts.js';
 import {
   createIntakeQuarantineReadStore,
   createIntakeQuarantineStore,
@@ -41,6 +44,7 @@ import {
 
 const COMPANION_A = createCompanionId('11111111-1111-4111-8111-111111111111');
 const COMPANION_B = createCompanionId('22222222-2222-4222-8222-222222222222');
+const COMPANION_C = createCompanionId('33333333-3333-4333-8333-333333333333');
 const VERSIONS: RequestCapabilityAuthorityVersions = Object.freeze({
   authorityGeneration: 2,
   globalAuthEpoch: 3,
@@ -151,6 +155,9 @@ function config(): SubstrateConfig {
         characterCardPath: `/runtime/companions/${companionId}/companion.json`,
         personalWorkspacePath: `/runtime/workspaces/personal/${companionId}`,
         postgresSchema: companionId === COMPANION_A ? 'companion_a' : 'companion_b',
+        postgresRole: companionId === COMPANION_A
+          ? 'companion_a_runtime'
+          : 'companion_b_runtime',
       })),
     },
     fleetAuthVerifier: { requestCapabilities: verifierConfig } as SubstrateConfig['fleetAuthVerifier'],
@@ -189,6 +196,14 @@ interface RoutedFleetRequest {
 function createFleetProxySurface(
   routed: RoutedFleetRequest[],
   providerIdentities: unknown[] = [],
+  operatorConfirmationResolver?: {
+    resolve(params: { id: string; decision: string }): Promise<{
+      id: string;
+      status: 'approved' | 'not_found';
+      message: string;
+      executed: boolean;
+    }>;
+  },
 ): GardenOperatorSurface {
   const registry = new FleetGardenTargetRegistry([{
     companionId: COMPANION_A,
@@ -235,10 +250,189 @@ function createFleetProxySurface(
         };
       },
     },
+    ...(operatorConfirmationResolver ? { operatorConfirmationResolver } : {}),
   });
 }
 
 describe('GardenOperatorSurface fleet transport routing', () => {
+  it('resolves gateway-owned confirmations after Fleet admission without proxying them to an agent', async () => {
+    const routed: RoutedFleetRequest[] = [];
+    const resolved: Array<{ id: string; decision: string }> = [];
+    const surface = createFleetProxySurface(routed, [], {
+      resolve: async params => {
+        resolved.push(params);
+        return {
+          id: params.id,
+          status: 'approved',
+          message: 'approved',
+          executed: true,
+        };
+      },
+    });
+    const body = Buffer.from(JSON.stringify({ id: 'confirmation-1', decision: 'approve' }));
+    const response = new CapturingResponse();
+
+    await (
+      surface as unknown as {
+        handleFleetRequest(req: IncomingMessage, res: ServerResponse): Promise<void>;
+      }
+    ).handleFleetRequest(
+      signedRequestForTarget(
+        COMPANION_A,
+        '18',
+        '/api/admin/confirmations/resolve',
+        { method: 'POST', body },
+      ),
+      response as unknown as ServerResponse,
+    );
+
+    expect(resolved).toEqual([{ id: 'confirmation-1', decision: 'approve' }]);
+    expect(routed).toEqual([]);
+    expect(response.status).toBe(200);
+    expect(JSON.parse(response.body)).toMatchObject({
+      ok: true,
+      status: 'approved',
+      executed: true,
+    });
+  });
+
+  it('falls back to the exact admitted agent for an agent-local confirmation', async () => {
+    const routed: RoutedFleetRequest[] = [];
+    const surface = createFleetProxySurface(routed, [], {
+      resolve: async params => ({
+        id: params.id,
+        status: 'not_found',
+        message: 'not found',
+        executed: false,
+      }),
+    });
+    const body = Buffer.from(JSON.stringify({ id: 'agent-local-1', decision: 'deny' }));
+
+    await (
+      surface as unknown as {
+        handleFleetRequest(req: IncomingMessage, res: ServerResponse): Promise<void>;
+      }
+    ).handleFleetRequest(
+      signedRequestForTarget(
+        COMPANION_A,
+        '19',
+        '/api/admin/confirmations/resolve',
+        { method: 'POST', body },
+      ),
+      {} as ServerResponse,
+    );
+
+    expect(routed).toEqual([{
+      companionId: COMPANION_A,
+      requestPath: '/api/admin/confirmations/resolve',
+      body,
+    }]);
+  });
+
+  it('projects canonical shared firewall posture from the production quarantine read plane', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'garden-firewall-status-'));
+    const systemDataDir = join(root, 'system');
+    const companionDataDir = join(root, 'companion-a');
+    mkdirSync(systemDataDir, { recursive: true });
+    mkdirSync(companionDataDir, { recursive: true });
+    copyFileSync(
+      join(process.cwd(), 'config', 'intake-policy.seed.json'),
+      join(systemDataDir, 'intake-policy.json'),
+    );
+    const quarantinePath = join(companionDataDir, 'state', 'intake-quarantine.json');
+    const writer = createIntakeQuarantineStore(quarantinePath, {
+      itemTtlHours: 168,
+      maxHeldItems: 500,
+    });
+    const atMs = Date.now();
+    let envelope = createIntakeEnvelope({
+      sourceClass: 'document',
+      sourceRiskTier: 'untrusted',
+      contentRef: { store: 'intake-quarantine', ref: 'fixture-firewall-status' },
+      origin: { ref: 'attachment:firewall-status.md' },
+      atMs,
+    });
+    envelope = transitionIntakeEnvelope(envelope, {
+      to: 'screened',
+      actor: 'test:ingest',
+      reason: 'adversarial fixture',
+      atMs,
+      decision: {
+        action: 'quarantine',
+        reason: 'adversarial fixture',
+        decidedBy: 'screening',
+        decidedAtMs: atMs,
+      },
+    });
+    envelope = transitionIntakeEnvelope(envelope, {
+      to: 'quarantined',
+      actor: 'test:ingest',
+      reason: 'held',
+      atMs,
+    });
+    writer.hold({ envelope, mode: 'enforce', rawText: 'fixture', atMs });
+
+    const oneCompanionConfig: SubstrateConfig = {
+      ...config(),
+      dataDir: systemDataDir,
+      companionFleet: {
+        ...config().companionFleet!,
+        companions: [{
+          ...config().companionFleet!.companions[0]!,
+          companionDataDir,
+        }],
+      },
+    };
+    const registry = new FleetGardenTargetRegistry([{
+      companionId: COMPANION_A,
+      endpoint: { mode: 'socket', socketPath: '/run/admin-a.sock', timeoutMs: 1_000 },
+    }]);
+    const surface = new GardenOperatorSurface({
+      port: 1,
+      host: '127.0.0.1',
+      config: oneCompanionConfig,
+      fleetControlPlane: new FleetGardenControlPlane({
+        registry,
+        verifier: createRequestCapabilityVerifier(verifierConfig),
+        replay: new AtomicRequestCapabilityReplayPort(),
+      }),
+      fleetTransport: {
+        close: callback => callback(),
+        probeAll: async () => undefined,
+        proxyBufferedApiRequest: () => {
+          throw new Error('quarantine read must remain Garden-local');
+        },
+        handleTelemetryUpgrade: () => {
+          throw new Error('not used');
+        },
+      },
+      intakeQuarantineReads: new GardenIntakeQuarantineReads({ config: oneCompanionConfig }),
+    });
+    const response = new CapturingResponse();
+    try {
+      await (
+        surface as unknown as {
+          handleFleetRequest(req: IncomingMessage, res: ServerResponse): Promise<void>;
+        }
+      ).handleFleetRequest(
+        signedRequestForTarget(COMPANION_A, '20', '/api/admin/intake/quarantine'),
+        response as unknown as ServerResponse,
+      );
+      expect(response.status).toBe(200);
+      expect(JSON.parse(response.body)).toMatchObject({
+        firewallStatus: {
+          mode: 'shadow',
+          queueEmptyDoesNotMeanFirewallOff: true,
+          heldCount: 1,
+          quarantineItemTtlHours: expect.any(Number),
+          quarantineMaxHeldItems: expect.any(Number),
+        },
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('keeps twenty quarantine snapshot reads within budget while ingest repeatedly writes', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'garden-quarantine-load-'));
     const quarantinePath = join(dir, 'intake-quarantine.json');
@@ -530,6 +724,11 @@ describe('GardenOperatorSurface fleet transport routing', () => {
       replay: new AtomicRequestCapabilityReplayPort(),
     });
     const directBindings: string[] = [];
+    const directServiceBindings: Array<{
+      companionId: string | undefined;
+      postgresSchema: string | undefined;
+      postgresRole: string | undefined;
+    }> = [];
     const directDatabase = new FleetGardenDirectDatabase({
       config: {
         ...config(),
@@ -537,20 +736,27 @@ describe('GardenOperatorSurface fleet transport routing', () => {
         postgresDatabaseUrl: 'postgres://fleet-garden-test.invalid/psfn',
       },
       companionIds: [COMPANION_A, COMPANION_B],
-      createServices: (_config, companionId) => ({
-        modelUsage: {
-          getModelUsageData: async () => {
-            directBindings.push(companionId);
-            return {};
+      createServices: (selectedConfig, companionId) => {
+        directServiceBindings.push({
+          companionId: selectedConfig.companionId,
+          postgresSchema: selectedConfig.postgresSchema,
+          postgresRole: selectedConfig.postgresRole,
+        });
+        return {
+          modelUsage: {
+            getModelUsageData: async () => {
+              directBindings.push(companionId);
+              return {};
+            },
           },
-        },
-        observerEvalSidecar: {
-          queryObservations: async () => {
-            directBindings.push(companionId);
-            return {};
+          observerEvalSidecar: {
+            queryObservations: async () => {
+              directBindings.push(companionId);
+              return {};
+            },
           },
-        },
-      }) as unknown as FleetGardenDirectDatabaseServices,
+        } as unknown as FleetGardenDirectDatabaseServices;
+      },
     });
     const surface = new GardenOperatorSurface({
       port: 1,
@@ -599,6 +805,18 @@ describe('GardenOperatorSurface fleet transport routing', () => {
     await waitFor(() => observerResponse.body.length > 0 && modelUsageResponse.body.length > 0);
 
     expect(directBindings.sort()).toEqual([COMPANION_A, COMPANION_B].sort());
+    expect(directServiceBindings).toEqual([
+      {
+        companionId: COMPANION_A,
+        postgresSchema: 'companion_a',
+        postgresRole: 'companion_a_runtime',
+      },
+      {
+        companionId: COMPANION_B,
+        postgresSchema: 'companion_b',
+        postgresRole: 'companion_b_runtime',
+      },
+    ]);
     expect(observerResponse.status).toBe(200);
     expect(modelUsageResponse.status).toBe(200);
     expect(directDatabase.handleHttp({
@@ -608,6 +826,38 @@ describe('GardenOperatorSurface fleet transport routing', () => {
       req: {} as IncomingMessage,
       res: {} as ServerResponse,
     })).toBe(false);
+  });
+
+  it('refuses a direct-database companion without an exact fleet identity', () => {
+    expect(() => new FleetGardenDirectDatabase({
+      config: {
+        ...config(),
+        persistenceBackend: 'postgres',
+        postgresDatabaseUrl: 'postgres://fleet-garden-test.invalid/psfn',
+      },
+      companionIds: [COMPANION_C],
+      createServices: () => {
+        throw new Error('must fail before constructing primary-companion services');
+      },
+    })).toThrow(`companion ${COMPANION_C} has no exact fleet identity`);
+  });
+
+  it('refuses enabled fleet emotion telemetry without companion-owned sidecar bindings', () => {
+    expect(() => new FleetGardenDirectDatabase({
+      config: {
+        ...config(),
+        persistenceBackend: 'postgres',
+        postgresDatabaseUrl: 'postgres://fleet-garden-test.invalid/psfn',
+        observerEvalSidecar: {
+          ...createDefaultObserverEvalSidecarSettings(),
+          enabled: true,
+        },
+      },
+      companionIds: [COMPANION_A, COMPANION_B],
+      createServices: () => {
+        throw new Error('must fail before constructing primary-companion services');
+      },
+    })).toThrow(/requires an exact companionRuntimeIdentity\.observerEvalSidecar binding/);
   });
 
   it('binds quarantine snapshots to the admitted companion and keeps decisions agent-owned', async () => {

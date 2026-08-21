@@ -1530,7 +1530,7 @@ export const POSTGRES_SCHEDULED_PROMPT_MIGRATIONS = [
     status TEXT NOT NULL DEFAULT 'pending',
     delivery_channel_id TEXT,
     completed_at TEXT,
-    CHECK (source = 'schedule_tool'),
+    CHECK (source IN ('schedule_tool', 'intention_appraisal')),
     CHECK (channel_type IN ('discord', 'terminal', 'api', 'telegram', 'psfn-amica')),
     CHECK (status IN ('pending', 'completed')),
     CHECK (
@@ -1538,6 +1538,15 @@ export const POSTGRES_SCHEDULED_PROMPT_MIGRATIONS = [
       OR (status = 'completed' AND completed_at IS NOT NULL)
     )
   );
+  `,
+  `
+  ALTER TABLE scheduler_scheduled_prompts
+    DROP CONSTRAINT IF EXISTS scheduler_scheduled_prompts_source_check;
+  `,
+  `
+  ALTER TABLE scheduler_scheduled_prompts
+    ADD CONSTRAINT scheduler_scheduled_prompts_source_check
+    CHECK (source IN ('schedule_tool', 'intention_appraisal'));
   `,
   `
   CREATE INDEX IF NOT EXISTS idx_scheduler_scheduled_prompts_pending_due
@@ -2424,6 +2433,124 @@ export const POSTGRES_MODEL_USAGE_MIGRATIONS = [
   `
   CREATE INDEX IF NOT EXISTS idx_icp_conversation_cost_decisions_timeline
     ON icp_conversation_cost_decisions (conversation_id, root_initiation_id, recorded_at_ms DESC, decision_id DESC);
+  `,
+  `
+  CREATE TABLE IF NOT EXISTS model_budget_operator_alerts (
+    companion_id TEXT NOT NULL,
+    threshold_reason TEXT NOT NULL,
+    window_key TEXT NOT NULL,
+    created_at_ms BIGINT NOT NULL,
+    dedupe_key TEXT NOT NULL,
+    dispatch_state TEXT NOT NULL DEFAULT 'ready',
+    dispatch_attempt INTEGER NOT NULL DEFAULT 0,
+    last_claimed_at_ms BIGINT,
+    PRIMARY KEY (companion_id, threshold_reason, window_key),
+    CHECK (threshold_reason IN ('daily_budget_exceeded', 'monthly_budget_exceeded')),
+    CHECK (
+      (threshold_reason = 'daily_budget_exceeded' AND window_key ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+      OR (threshold_reason = 'monthly_budget_exceeded' AND window_key ~ '^[0-9]{4}-[0-9]{2}$')
+    ),
+    CHECK (created_at_ms >= 0)
+  );
+  `,
+  `ALTER TABLE model_budget_operator_alerts
+    ADD COLUMN IF NOT EXISTS dedupe_key TEXT;`,
+  `ALTER TABLE model_budget_operator_alerts
+    ADD COLUMN IF NOT EXISTS dispatch_state TEXT NOT NULL DEFAULT 'ready';`,
+  `ALTER TABLE model_budget_operator_alerts
+    ADD COLUMN IF NOT EXISTS dispatch_attempt INTEGER NOT NULL DEFAULT 0;`,
+  `ALTER TABLE model_budget_operator_alerts
+    ADD COLUMN IF NOT EXISTS last_claimed_at_ms BIGINT;`,
+  `UPDATE model_budget_operator_alerts
+    SET dedupe_key = companion_id || ':' || threshold_reason || ':' || window_key
+    WHERE dedupe_key IS NULL;`,
+  `ALTER TABLE model_budget_operator_alerts
+    ALTER COLUMN dedupe_key SET NOT NULL;`,
+  `ALTER TABLE model_budget_operator_alerts
+    DROP CONSTRAINT IF EXISTS model_budget_operator_alerts_outbox_check;`,
+  `ALTER TABLE model_budget_operator_alerts
+    ADD CONSTRAINT model_budget_operator_alerts_outbox_check CHECK (
+      dedupe_key = companion_id || ':' || threshold_reason || ':' || window_key
+      AND dispatch_state IN ('ready', 'dispatching', 'delivered')
+      AND dispatch_attempt >= 0
+      AND (dispatch_state = 'ready' OR dispatch_attempt >= 1)
+      AND (last_claimed_at_ms IS NULL OR last_claimed_at_ms >= 0)
+    );`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_model_budget_operator_alert_dedupe_key
+    ON model_budget_operator_alerts (dedupe_key);`,
+  `
+  CREATE TABLE IF NOT EXISTS model_budget_operator_alert_delivery_events (
+    companion_id TEXT NOT NULL,
+    threshold_reason TEXT NOT NULL,
+    window_key TEXT NOT NULL,
+    attempt INTEGER NOT NULL,
+    recorded_at_ms BIGINT NOT NULL,
+    dedupe_key TEXT NOT NULL,
+    status TEXT NOT NULL,
+    topic TEXT,
+    message_id TEXT,
+    error TEXT,
+    PRIMARY KEY (companion_id, threshold_reason, window_key, attempt),
+    FOREIGN KEY (companion_id, threshold_reason, window_key)
+      REFERENCES model_budget_operator_alerts(companion_id, threshold_reason, window_key)
+      ON DELETE RESTRICT,
+    CHECK (attempt >= 1),
+    CHECK (recorded_at_ms >= 0),
+    CHECK (status IN ('sent', 'debounced', 'failed')),
+    CHECK ((status = 'failed') = (error IS NOT NULL))
+  );
+  `,
+  `
+  CREATE INDEX IF NOT EXISTS idx_model_budget_operator_alert_delivery_timeline
+    ON model_budget_operator_alert_delivery_events (
+      companion_id, recorded_at_ms DESC, threshold_reason, window_key, attempt DESC
+    );
+  `,
+  `
+  CREATE OR REPLACE FUNCTION reject_model_budget_operator_alert_delivery_mutation()
+  RETURNS trigger
+  LANGUAGE plpgsql
+  AS $$
+  BEGIN
+    IF TG_OP IN ('UPDATE', 'DELETE', 'TRUNCATE') THEN
+      RAISE EXCEPTION '% is append-only: % is forbidden', TG_TABLE_NAME, TG_OP
+        USING ERRCODE = '55000';
+    END IF;
+    RETURN NULL;
+  END;
+  $$;
+  `,
+  `
+  DO $$
+  BEGIN
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_trigger
+      WHERE tgname = 'model_budget_operator_alert_delivery_append_only'
+        AND tgrelid = 'model_budget_operator_alert_delivery_events'::regclass
+        AND NOT tgisinternal
+    ) THEN
+      CREATE TRIGGER model_budget_operator_alert_delivery_append_only
+      BEFORE UPDATE OR DELETE ON model_budget_operator_alert_delivery_events
+      FOR EACH ROW EXECUTE FUNCTION reject_model_budget_operator_alert_delivery_mutation();
+    END IF;
+  END;
+  $$;
+  `,
+  `
+  DO $$
+  BEGIN
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_trigger
+      WHERE tgname = 'model_budget_operator_alert_delivery_no_truncate'
+        AND tgrelid = 'model_budget_operator_alert_delivery_events'::regclass
+        AND NOT tgisinternal
+    ) THEN
+      CREATE TRIGGER model_budget_operator_alert_delivery_no_truncate
+      BEFORE TRUNCATE ON model_budget_operator_alert_delivery_events
+      FOR EACH STATEMENT EXECUTE FUNCTION reject_model_budget_operator_alert_delivery_mutation();
+    END IF;
+  END;
+  $$;
   `,
 ];
 

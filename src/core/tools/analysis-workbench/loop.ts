@@ -11,6 +11,7 @@ import type {
   REPLConfig,
   AnalysisWorkbenchDiagnostics,
   AnalysisWorkbenchBudget,
+  AnalysisWorkbenchLimitPolicy,
   AnalysisWorkbenchResult,
   AnalysisWorkbenchStep,
 } from './types.js';
@@ -373,6 +374,17 @@ interface BuildResultOptions {
   budgetStatus: BudgetStatus;
   steps: AnalysisWorkbenchStep[];
   diagnostics: AnalysisWorkbenchDiagnostics;
+  budget: AnalysisWorkbenchBudget;
+}
+
+function projectLimitPolicy(budget: AnalysisWorkbenchBudget): AnalysisWorkbenchLimitPolicy {
+  return {
+    maxIterations: budget.maxIterations,
+    maxTokens: budget.maxTokens ?? null,
+    maxWallTimeMs: budget.maxWallTimeMs ?? null,
+    maxSubQueries: budget.maxSubQueries ?? null,
+    maxToolCalls: budget.maxToolCalls ?? null,
+  };
 }
 
 function buildAnalysisWorkbenchResult(options: BuildResultOptions): AnalysisWorkbenchResult {
@@ -386,6 +398,7 @@ function buildAnalysisWorkbenchResult(options: BuildResultOptions): AnalysisWork
       durationMs: Date.now() - options.startTime,
       truncated: options.truncated,
       budgetStatus: options.budgetStatus,
+      limitPolicy: projectLimitPolicy(options.budget),
       steps: options.steps,
       evidence: allEvidence,
       diagnostics: options.diagnostics,
@@ -594,6 +607,7 @@ export async function runRLMLoop(
         startTime,
         truncated: true,
         budgetStatus,
+        budget,
         steps: [],
         diagnostics: sharedState.diagnostics,
       });
@@ -615,6 +629,7 @@ export async function runRLMLoop(
       startTime,
       truncated: true,
       budgetStatus,
+      budget,
       steps: [],
       diagnostics: sharedState.diagnostics,
     });
@@ -895,6 +910,7 @@ export async function runRLMLoop(
           startTime,
           truncated: true,
           budgetStatus,
+          budget,
           steps,
           diagnostics: sharedState.diagnostics,
         });
@@ -1006,6 +1022,7 @@ export async function runRLMLoop(
           startTime,
           truncated: false,
           budgetStatus,
+          budget,
           steps,
           diagnostics: sharedState.diagnostics,
         });
@@ -1032,6 +1049,7 @@ export async function runRLMLoop(
           startTime,
           truncated: false,
           budgetStatus,
+          budget,
           steps,
           diagnostics: sharedState.diagnostics,
         });
@@ -1076,6 +1094,7 @@ export async function runRLMLoop(
             startTime,
             truncated: false,
             budgetStatus,
+            budget,
             steps,
             diagnostics: sharedState.diagnostics,
           });
@@ -1127,6 +1146,7 @@ export async function runRLMLoop(
     startTime,
     truncated: true,
     budgetStatus,
+    budget,
     steps,
     diagnostics: sharedState.diagnostics,
   });

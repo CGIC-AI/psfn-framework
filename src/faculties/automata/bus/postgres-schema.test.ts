@@ -28,6 +28,12 @@ describe('Automata Bus Postgres schema contract', () => {
     expect(migration).toContain('ON DELETE CASCADE');
     expect(migration).toContain('CREATE TABLE IF NOT EXISTS automata_bus_vector_state');
     expect(migration).toContain("reindex_state IN ('current', 'required', 'running')");
+    expect(migration).toContain('reindex_lease_token UUID');
+    expect(migration).toContain('reindex_lease_until TIMESTAMPTZ');
+    expect(migration).toContain('reindex_snapshot_sequence BIGINT');
+    expect(migration).toContain('reindex_snapshot_mutation_fence BIGINT');
+    expect(migration).toContain('mutation_fence BIGINT NOT NULL DEFAULT 0');
+    expect(migration).toContain('automata_bus_vector_reindex_lease_check');
     expect(migration).toContain('CREATE TABLE IF NOT EXISTS automata_bus_vector_lag');
     expect(AUTOMATA_BUS_POSTGRES_READINESS.requiredRelations).toEqual(
       AUTOMATA_BUS_POSTGRES_RELATIONS,

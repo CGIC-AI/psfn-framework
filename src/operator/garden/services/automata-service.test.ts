@@ -111,6 +111,20 @@ function busPort(overrides: Partial<Awaited<ReturnType<AdminAutomataBusReadPort[
 }
 
 describe('AdminAutomataDataService', () => {
+  it('rejects a registry owned by a different companion before serving Garden', async () => {
+    const registry = await AutomataRunRegistry.hydrate({
+      companionId: 'companion-other',
+      policy: loadAutomataPolicySeedDefaults(),
+      store: new InMemoryAutomataRunStore(),
+    });
+
+    expect(() => new AdminAutomataDataService({
+      registry,
+      companionId: 'companion-test',
+      readPolicy: { defaultPageLimit: 5, maxPageLimit: 20 },
+    })).toThrow('registry companion scope mismatch');
+  });
+
   it('projects bounded registry and Bus state without disclosing prompt, source, or raw references', async () => {
     const registry = await createRegistry();
     const { inputs, port } = busPort();
@@ -209,6 +223,47 @@ describe('AdminAutomataDataService', () => {
       available: false,
       health: { condition: 'unavailable', freshness: 'unknown' },
     });
+  });
+
+  it('runs reindex through the exact companion port and rejects mismatched receipts', async () => {
+    const registry = await createRegistry();
+    const reindex = vi.fn(async () => ({
+      companionId: 'companion-test',
+      status: 'completed' as const,
+      processed: 2,
+      indexed: 2,
+      lagging: 0,
+    }));
+    const service = new AdminAutomataDataService({
+      registry,
+      companionId: 'companion-test',
+      readPolicy: { defaultPageLimit: 5, maxPageLimit: 20 },
+      reindex: { reindex },
+    });
+
+    await expect(service.reindex()).resolves.toMatchObject({
+      companionId: 'companion-test',
+      processed: 2,
+    });
+    expect(reindex).toHaveBeenCalledWith({ companionId: 'companion-test' });
+
+    const mismatched = new AdminAutomataDataService({
+      registry,
+      companionId: 'companion-test',
+      readPolicy: { defaultPageLimit: 5, maxPageLimit: 20 },
+      reindex: {
+        async reindex() {
+          return {
+            companionId: 'companion-other',
+            status: 'completed',
+            processed: 0,
+            indexed: 0,
+            lagging: 0,
+          };
+        },
+      },
+    });
+    await expect(mismatched.reindex()).rejects.toThrow('cross-companion receipt');
   });
 
   it('logs Bus and lesson read failures before returning degraded operator state', async () => {

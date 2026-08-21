@@ -81,7 +81,7 @@ export interface IntentionAppraisalHooks {
     sourceMessageId: string;
     formationVAD?: ActiveConcernVAD;
     originIcpRootInitiationId?: string;
-  }): Promise<string | undefined>;
+  }): Promise<IntentionFollowUpDisposition | undefined>;
   getPendingFollowUpsForResurfacing(input: {
     channelId: string;
     canonicalContactKey?: string;
@@ -99,6 +99,24 @@ export interface IntentionAppraisalHooks {
     pendingFollowUpId: string;
     dampeningReason: string;
   }): Promise<boolean>;
+}
+
+export type IntentionFollowUpDisposition = string | {
+  kind: 'scheduled_prompt';
+  scheduledPromptId: string;
+};
+
+export interface LongHorizonFollowUpInput {
+  content: string;
+  reason: string;
+  dueAt: string;
+  channelId: string;
+  channelType: ChannelType;
+  authorId: 'system:intention';
+  authorName: 'Whisper';
+  contactId?: string;
+  sourceMessageId: string;
+  contextSummary?: string;
 }
 
 export interface IntentionBehavioralPatternHooks {
@@ -180,6 +198,12 @@ export interface IntentionAppraisalHookOptions {
     followUp: Pick<PendingFollowUp, 'id' | 'contactId'>,
     asOf: string,
   ) => ActiveConcernVAD | undefined;
+  /** Current time source shared by horizon classification and persistence. */
+  now?: () => number;
+  /** Maximum future distance allowed in the scarce pending-follow-up queue. */
+  nearTermFollowUpHorizonMs?: number;
+  /** Durable long-range scheduler. Required whenever a decision crosses the configured horizon. */
+  routeLongHorizonFollowUp?: (input: LongHorizonFollowUpInput) => Promise<string>;
 }
 
 export function createIntentionAppraisalHooks(
@@ -187,6 +211,15 @@ export function createIntentionAppraisalHooks(
   pendingFollowUpStore?: PendingFollowUpStorePort,
   options: IntentionAppraisalHookOptions = {},
 ): IntentionAppraisalHooks {
+  if (
+    options.nearTermFollowUpHorizonMs !== undefined
+    && (
+      !Number.isSafeInteger(options.nearTermFollowUpHorizonMs)
+      || options.nearTermFollowUpHorizonMs <= 0
+    )
+  ) {
+    throw new Error('nearTermFollowUpHorizonMs must be a positive safe integer');
+  }
   return {
     getActiveConcerns: async ({ canonicalContactKey }) => (
       await getActiveConcernSnapshots({
@@ -239,6 +272,33 @@ export function createIntentionAppraisalHooks(
         throw new Error('PendingFollowUpStorePort is required for follow-up decisions');
       }
       const content = resolveFollowUpDecisionContent(decision);
+      const nowMs = options.now?.() ?? Date.now();
+      const dueAtMs = decision.dueAt;
+      if (
+        options.nearTermFollowUpHorizonMs !== undefined
+        && typeof dueAtMs === 'number'
+        && Number.isFinite(dueAtMs)
+        && dueAtMs > nowMs + options.nearTermFollowUpHorizonMs
+      ) {
+        if (!options.routeLongHorizonFollowUp) {
+          throw new Error('Long-horizon follow-up requires the durable scheduled-work router');
+        }
+        const scheduledPromptId = await options.routeLongHorizonFollowUp({
+          content,
+          reason: decision.reason,
+          dueAt: new Date(Math.floor(dueAtMs)).toISOString(),
+          channelId: normalizeOptionalText(decision.followUp?.channelId) ?? channelId,
+          channelType: decision.followUp?.channelType ?? channelType,
+          authorId: 'system:intention',
+          authorName: 'Whisper',
+          ...(canonicalContactKey ? { contactId: canonicalContactKey } : {}),
+          sourceMessageId,
+          ...(decision.followUp?.contextSummary
+            ? { contextSummary: decision.followUp.contextSummary }
+            : {}),
+        });
+        return { kind: 'scheduled_prompt', scheduledPromptId };
+      }
       const followUp = await pendingFollowUpStore.enqueue({
         content,
         priority: decision.priority,

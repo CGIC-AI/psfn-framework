@@ -74,6 +74,30 @@ export function currentCompanionGardenScope(
   return parseCompanionGardenScope(pathname);
 }
 
+function normalizeTrailingSlash(pathname: string): string {
+  return pathname.length > 1 && pathname.endsWith('/')
+    ? pathname.slice(0, -1)
+    : pathname;
+}
+
+/**
+ * SvelteKit exposes a mounted Garden route without its public base while the
+ * browser keeps the authoritative companion prefix. Rejoin those views only
+ * when both describe the same inner page; a stale or malformed browser path
+ * must never supply companion authority to a different route.
+ */
+export function resolveGardenBrowserPathname(
+  routePathname: string,
+  browserPathname = typeof window === 'undefined' ? routePathname : window.location.pathname,
+): string {
+  if (parseCompanionGardenScope(routePathname)) return routePathname;
+  const browserScope = parseCompanionGardenScope(browserPathname);
+  if (!browserScope) return routePathname;
+  return normalizeTrailingSlash(browserScope.innerPath) === normalizeTrailingSlash(routePathname)
+    ? browserPathname
+    : routePathname;
+}
+
 export function scopeGardenPath(
   path: string,
   pathname = typeof window === 'undefined' ? '/' : window.location.pathname,

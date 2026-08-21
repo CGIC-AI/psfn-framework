@@ -186,7 +186,7 @@ describe('createInProcessGardenAdminContract per-companion dataDir rooting (dnll
     expect(existsSync(join(systemDataDir, 'garden-audit-history.jsonl'))).toBe(false);
   });
 
-  it('persists a content-free protected-action audit in the companion history and context', () => {
+  it('persists a content-free concern action in operator audit without pressuring companion context', () => {
     const services = buildContract();
     sessionManager.recordUserMessage(
       'api:companion-home',
@@ -238,13 +238,12 @@ describe('createInProcessGardenAdminContract per-companion dataDir rooting (dnll
     const durableAudit = readFileSync(join(companionDataDir, 'garden-audit-history.jsonl'), 'utf8');
     const contextNotices = sessionStore.getRecent('api:companion-home', 10)
       .filter(entry => entry.role === 'system' && entry.content.includes('protected administration'));
-    const subjectVisibleRecord = `${durableAudit}\n${contextNotices.map(entry => entry.content).join('\n')}`;
-    expect(contextNotices).toHaveLength(1);
-    expect(subjectVisibleRecord).toContain('principal-owner-a');
-    expect(subjectVisibleRecord).toContain('Cognitive Security concern');
-    expect(subjectVisibleRecord).toContain('Verify the remediation after a policy incident');
-    expect(subjectVisibleRecord).not.toContain('protected-concern-id-must-not-persist');
-    expect(subjectVisibleRecord).not.toContain('provider-subject-must-not-persist');
+    expect(contextNotices).toHaveLength(0);
+    expect(durableAudit).toContain('principal-owner-a');
+    expect(durableAudit).toContain('Cognitive Security concern');
+    expect(durableAudit).toContain('Verify the remediation after a policy incident');
+    expect(durableAudit).not.toContain('protected-concern-id-must-not-persist');
+    expect(durableAudit).not.toContain('provider-subject-must-not-persist');
   });
 
   it('uses nightly cadence rather than the wiki review window for watermark staleness', () => {

@@ -4,6 +4,7 @@ import { parseRequestUrl } from '../request-url.js';
 import {
   AdminAutomataNotFoundError,
   AdminAutomataQueryError,
+  AdminAutomataUnavailableError,
   type AdminAutomataService,
   type AdminAutomataSnapshotOptions,
 } from '../services/automata-service.js';
@@ -15,6 +16,7 @@ import {
 import type { AdminApiRoute } from './types.js';
 
 const AUTOMATA_PATH = '/api/admin/automata';
+const AUTOMATA_REINDEX_PATH = '/api/admin/automata/reindex';
 
 function parseOffset(params: URLSearchParams, name: string): { ok: true; value?: number } | { ok: false; error: string } {
   const raw = params.get(name);
@@ -101,6 +103,26 @@ export function buildAdminAutomataRoutes(options: {
       } catch {
         sendJson(res, 500, { error: 'Failed to load Automata data' });
       }
+    },
+  }, {
+    method: 'POST',
+    match: exactPath(AUTOMATA_REINDEX_PATH),
+    handle: (_req, res) => {
+      const reindex = options.automataService?.reindex;
+      if (!reindex) {
+        sendJson(res, 503, { error: 'Automata Bus reindex unavailable' });
+        return;
+      }
+      reindex.call(options.automataService).then(
+        result => sendJson(res, 200, result, ADMIN_DYNAMIC_JSON_HEADERS),
+        error => {
+          if (error instanceof AdminAutomataUnavailableError) {
+            sendJson(res, 503, { error: 'Automata Bus reindex unavailable' });
+            return;
+          }
+          sendJson(res, 500, { error: 'Automata Bus reindex failed' });
+        },
+      );
     },
   }];
 }

@@ -29,6 +29,7 @@ import type { ExtractedFact, MemoryFormationVAD } from './types.js';
 import { MEMORY_CONFIG } from './types.js';
 import { RECOVERY_CONTEXT_MESSAGE_LIMIT } from './extraction/types.js';
 import { MemoryWriter, type WriteResult } from './writer.js';
+import { createCompanionRoomMembershipAuthority } from './companion-provenance.js';
 import {
   DEFAULT_EMOTIONAL_INTENSITY_IMPORTANCE_WEIGHT,
   DEFAULT_MAX_WRITES,
@@ -89,6 +90,7 @@ import {
 import { parseFactsXml } from './extraction/parser.js';
 import type { MemoryExtractionSessionPort } from './extraction/session-port.js';
 import type { AutomataBusWorkerAccess } from '../automata/bus/worker-access.js';
+import type { AutomataRunRegistry } from '../automata/run-registry.js';
 import { projectFinalReflectionForExtraction } from './extraction/reflection-output.js';
 import type { BiographicalProfileStorePort } from './biographical/store-port.js';
 import type { BiographicalSubjectRef } from './biographical/types.js';
@@ -151,6 +153,8 @@ export interface MemoryExtractorFormationOptions {
   personaPreamble?: PersonaPreamblePort | null;
   /** Companion-bound Automata Bus worker adapter; owner policy gates extraction. */
   automataBusWorkerAccess?: AutomataBusWorkerAccess | null;
+  /** Authoritative durable run registry paired with the Bus worker adapter. */
+  automataRunRegistry?: AutomataRunRegistry | null;
   biographicalRebuild?: {
     profileStore: BiographicalProfileStorePort;
     companionSubject: Extract<BiographicalSubjectRef, { kind: 'companion' }>;
@@ -209,6 +213,7 @@ export class MemoryExtractor {
   private isAutoContactCreationAllowed: ((channelId: string) => boolean) | null = null;
   private personaPreamble: PersonaPreamblePort | null = null;
   private automataBusWorkerAccess: AutomataBusWorkerAccess | null = null;
+  private automataRunRegistry: AutomataRunRegistry | null = null;
   private biographicalRebuild: MemoryExtractorFormationOptions['biographicalRebuild'] = undefined;
 
   constructor(
@@ -228,7 +233,13 @@ export class MemoryExtractor {
     this.memoryStore = memoryStore;
     this.writer = new MemoryWriter(memoryStore, embeddingService, {
       ...(config && 'primaryModel' in config
-        ? { memoryRetrievalPolicy: () => config.memoryRetrievalPolicy }
+        ? {
+            memoryRetrievalPolicy: () => config.memoryRetrievalPolicy,
+            ...(config.companionId ? { companionId: config.companionId } : {}),
+            ...(sessionStore
+              ? { roomMembershipAuthority: createCompanionRoomMembershipAuthority(sessionStore) }
+              : {}),
+          }
         : {}),
     });
     // htm9.3: the extractor's writes gate at the memory_write sink. The gate
@@ -271,6 +282,7 @@ export class MemoryExtractor {
     this.isAutoContactCreationAllowed = formationOptions?.isAutoContactCreationAllowed ?? null;
     this.personaPreamble = formationOptions?.personaPreamble ?? null;
     this.automataBusWorkerAccess = formationOptions?.automataBusWorkerAccess ?? null;
+    this.automataRunRegistry = formationOptions?.automataRunRegistry ?? null;
     this.biographicalRebuild = formationOptions?.biographicalRebuild;
   }
 
@@ -745,6 +757,7 @@ export class MemoryExtractor {
       promptRegistry: this.promptRegistry,
       personaPreamble: this.personaPreamble,
       automataBusWorkerAccess: this.automataBusWorkerAccess,
+      automataRunRegistry: this.automataRunRegistry,
       gateConfig: resolveGateConfig(this.runtimeConfig, {
         minImportance: this.minImportance,
         minConfidence: this.minConfidence,

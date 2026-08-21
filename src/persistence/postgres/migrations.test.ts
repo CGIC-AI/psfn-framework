@@ -541,6 +541,24 @@ describe('Postgres live schema migrations', () => {
     expect(sql).toContain('CREATE TRIGGER psfn_model_usage_legacy_insert_bridge');
     expect(sql).toContain('BEFORE INSERT ON model_usage_events');
   });
+
+  it('keeps model-budget operator-alert identity exact and delivery evidence append-only', () => {
+    const sql = migrationSql(POSTGRES_MODEL_USAGE_MIGRATIONS);
+
+    expect(sql).toContain('CREATE TABLE IF NOT EXISTS model_budget_operator_alerts');
+    expect(sql).toContain('PRIMARY KEY (companion_id, threshold_reason, window_key)');
+    expect(sql).toContain("dispatch_state TEXT NOT NULL DEFAULT 'ready'");
+    expect(sql).toContain('dispatch_attempt INTEGER NOT NULL DEFAULT 0');
+    expect(sql).toContain(
+      'dedupe_key = companion_id || \':\' || threshold_reason || \':\' || window_key',
+    );
+    expect(sql).toContain(
+      'CREATE TABLE IF NOT EXISTS model_budget_operator_alert_delivery_events',
+    );
+    expect(sql).toContain('reject_model_budget_operator_alert_delivery_mutation()');
+    expect(sql).toContain('BEFORE UPDATE OR DELETE ON model_budget_operator_alert_delivery_events');
+    expect(sql).toContain('BEFORE TRUNCATE ON model_budget_operator_alert_delivery_events');
+  });
 });
 
 describe('Partner affect shadow migrations (docs/partner-affect.md slice 1)', () => {

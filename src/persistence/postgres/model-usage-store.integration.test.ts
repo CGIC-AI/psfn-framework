@@ -42,6 +42,12 @@ import type { AdminModelUsageService } from '../../operator/garden/services/type
 import { RunChargeLedger } from '../../shared/telemetry/charge-ledger.js';
 import { RUNTIME_LANE_CLASSES } from '../../shared/contracts/runtime-lanes.js';
 import { MODEL_USAGE_RUNTIME_LANE_CLASSES } from '../../shared/telemetry/model-usage-attribution.js';
+import { createModelBudgetThresholdAlertHandler } from '../../app/startup/support/operator-alerts.js';
+import type { NotificationPort } from '../../core/tools/ntfy.js';
+import type {
+  ModelBudgetOperatorAlertClaim,
+  ModelBudgetOperatorAlertClaimStorePort,
+} from '../../shared/contracts/model-budget-alert.js';
 
 const piMocks = vi.hoisted(() => ({
   completeSimple: vi.fn(),
@@ -348,6 +354,126 @@ describe('PostgresModelUsageStore fleet token summary', () => {
       const recoveredClaim = await store.claimModelBudgetOperatorAlert(rejectedIdentity);
       expect(recoveredClaim?.attempt).toBe(1);
       await recoveredClaim!.release();
+    } finally {
+      await pool.end();
+    }
+  }, INTEGRATION_TIMEOUT_MS);
+
+  it('reuses canonical provider idempotency after accepted delivery loses its evidence connection', async () => {
+    if (!harness) throw new Error('Postgres test harness is unavailable');
+    const { databaseUrl } = await harness.createDatabase();
+    const pool = createPostgresPool(databaseUrl, {
+      applicationName: 'psfn-model-budget-alert-crash-recovery',
+      allowExitOnIdle: true,
+      max: 4,
+    });
+    const companionId = '11111111-1111-4111-8111-111111111111';
+    const identity = {
+      companionId,
+      thresholdReason: 'daily_budget_exceeded' as const,
+      windowKey: '2026-08-20',
+    };
+    const dedupeKey = `${companionId}:daily_budget_exceeded:2026-08-20`;
+    const acceptedProviderKeys = new Set<string>();
+    let externalDeliveries = 0;
+    const notifier: NotificationPort = {
+      notify: vi.fn(async (params) => {
+        const providerKey = (params as typeof params & { idempotencyKey?: string })
+          .idempotencyKey?.trim();
+        if (!providerKey) throw new Error('canonical provider idempotency key is required');
+        if (!acceptedProviderKeys.has(providerKey)) {
+          acceptedProviderKeys.add(providerKey);
+          externalDeliveries += 1;
+        }
+        return { status: 'sent', topic: 'operator-alerts', messageId: providerKey };
+      }),
+    };
+    const thresholdEvent = {
+      timestampMs: Date.parse('2026-08-20T16:00:00.000Z'),
+      reason: 'daily_budget_exceeded' as const,
+      purpose: 'chat',
+      provider: 'provider-a',
+      model: 'model-a',
+      service: 'gateway',
+      process: 'model-budget',
+      estimatedRequestCostUsd: 0.1,
+      enforcementEnabled: false,
+      companionId,
+      budget: {
+        dayKey: '2026-08-20',
+        monthKey: '2026-08',
+        dailySpentUsd: 5.1,
+        dailyLimitUsd: 5,
+        monthlySpentUsd: 80,
+        monthlyLimitUsd: 100,
+        dailyUnknownCostAttempts: 0,
+        monthlyUnknownCostAttempts: 0,
+      },
+    };
+    try {
+      const firstStore = new PostgresModelUsageStore(pool, { fleetAggregation: true });
+      await firstStore.waitUntilReady();
+      const crashAfterAcceptanceStore: ModelBudgetOperatorAlertClaimStorePort = {
+        async claimModelBudgetOperatorAlert(claimIdentity) {
+          const claim = await firstStore.claimModelBudgetOperatorAlert(claimIdentity);
+          if (!claim) return null;
+          const durableClaim = claim as ModelBudgetOperatorAlertClaim & {
+            providerIdempotencyKey?: string;
+            recovered?: boolean;
+          };
+          return {
+            attempt: durableClaim.attempt,
+            providerIdempotencyKey: durableClaim.providerIdempotencyKey,
+            recovered: durableClaim.recovered,
+            async recordDelivery() {
+              await claim.release();
+              throw new Error('connection lost before evidence commit');
+            },
+            release: async () => claim.release(),
+          };
+        },
+      };
+      const firstHandler = createModelBudgetThresholdAlertHandler({
+        notifier,
+        companionName: 'PSFN',
+        companionId,
+        alertStore: crashAfterAcceptanceStore,
+        recordDelivery: vi.fn(),
+      });
+
+      await expect(firstHandler(thresholdEvent)).rejects.toThrow(
+        'connection lost before evidence commit',
+      );
+
+      const restartedStore = new PostgresModelUsageStore(pool, { fleetAggregation: true });
+      const recoveredClaims: Array<ModelBudgetOperatorAlertClaim | null> = [];
+      const recoveryStore: ModelBudgetOperatorAlertClaimStorePort = {
+        async claimModelBudgetOperatorAlert(claimIdentity) {
+          const claim = await restartedStore.claimModelBudgetOperatorAlert(claimIdentity);
+          recoveredClaims.push(claim);
+          return claim;
+        },
+      };
+      const restartedHandler = createModelBudgetThresholdAlertHandler({
+        notifier,
+        companionName: 'PSFN',
+        companionId,
+        alertStore: recoveryStore,
+        recordDelivery: vi.fn(),
+      });
+
+      await restartedHandler(thresholdEvent);
+
+      expect(recoveredClaims[0]).toMatchObject({
+        attempt: 1,
+        providerIdempotencyKey: dedupeKey,
+        recovered: true,
+      });
+      expect(notifier.notify).toHaveBeenCalledTimes(2);
+      expect(externalDeliveries).toBe(1);
+      expect(await restartedStore.listModelBudgetOperatorAlertEvidence(identity)).toEqual([
+        expect.objectContaining({ status: 'sent', messageId: dedupeKey }),
+      ]);
     } finally {
       await pool.end();
     }

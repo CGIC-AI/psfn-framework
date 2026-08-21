@@ -12,6 +12,10 @@ export interface ModelBudgetOperatorAlertIdentity {
 
 export interface ModelBudgetOperatorAlertClaim {
   readonly attempt: number;
+  /** Stable key passed to providers that can collapse an ambiguous retry. */
+  readonly providerIdempotencyKey: string;
+  /** True when this claim resumes a dispatch committed before process loss. */
+  readonly recovered: boolean;
   recordDelivery(event: ModelBudgetAlertDeliveryEvent): Promise<void>;
   release(): Promise<void>;
 }

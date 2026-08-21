@@ -85,10 +85,12 @@ export const gatewayOperationalParamDecoders = {
   })),
   'notify.ntfy': gatewayDecoder('notify.ntfy', strictObject({
     message: Type.String(), title: optionalString, priority: optionalNumber, topic: optionalString,
+    idempotencyKey: optionalString,
     sender: notificationSender,
   })),
   'notify.operator': gatewayDecoder('notify.operator', strictObject({
     message: Type.String(), title: optionalString, priority: optionalNumber, topic: optionalString,
+    idempotencyKey: optionalString,
     sender: notificationSender,
   })),
   'clarify.deliver': gatewayDecoder('clarify.deliver', strictObject({

@@ -303,6 +303,8 @@ describe('model budget threshold alerts', () => {
     const recordDelivery = vi.fn();
     const durableClaim = {
       attempt: 1,
+      providerIdempotencyKey: `${companionId}:daily_budget_exceeded:2026-08-20`,
+      recovered: false,
       recordDelivery: vi.fn(async () => {}),
       release: vi.fn(async () => {}),
     };
@@ -353,6 +355,7 @@ describe('model budget threshold alerts', () => {
         provenance: 'system.operator_alert.model_budget_threshold',
       },
       title: 'PSFN daily model budget threshold',
+      idempotencyKey: `${companionId}:daily_budget_exceeded:2026-08-20`,
       message: expect.stringContaining('Tracking mode: requests continue after this alert.'),
     }));
     expect(recordDelivery).toHaveBeenCalledOnce();
@@ -422,6 +425,8 @@ describe('model budget threshold alerts', () => {
       alertStore: {
         claimModelBudgetOperatorAlert: vi.fn(async () => ({
           attempt: 1,
+          providerIdempotencyKey: `${companionId}:daily_budget_exceeded:2026-08-20`,
+          recovered: false,
           recordDelivery: durableRecordDelivery,
           release,
         })),
@@ -450,6 +455,8 @@ function makeAlertStore(): ModelBudgetOperatorAlertClaimStorePort {
       attempt += 1;
       return {
         attempt,
+        providerIdempotencyKey: key,
+        recovered: false,
         async recordDelivery(event) {
           if (event.status !== 'failed') delivered.add(key);
         },

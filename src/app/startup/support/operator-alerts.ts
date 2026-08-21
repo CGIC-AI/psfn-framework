@@ -346,6 +346,7 @@ export function createModelBudgetThresholdAlertHandler(options: {
     try {
       result = await options.notifier.notify({
         sender: MODEL_BUDGET_THRESHOLD_SENDER,
+        idempotencyKey: claim.providerIdempotencyKey,
         title: `${alertSubject} ${periodLabel} model budget threshold`,
         message: [
           `${alertSubject} crossed the configured ${periodLabel} model budget threshold.`,

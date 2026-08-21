@@ -2440,6 +2440,10 @@ export const POSTGRES_MODEL_USAGE_MIGRATIONS = [
     threshold_reason TEXT NOT NULL,
     window_key TEXT NOT NULL,
     created_at_ms BIGINT NOT NULL,
+    dedupe_key TEXT NOT NULL,
+    dispatch_state TEXT NOT NULL DEFAULT 'ready',
+    dispatch_attempt INTEGER NOT NULL DEFAULT 0,
+    last_claimed_at_ms BIGINT,
     PRIMARY KEY (companion_id, threshold_reason, window_key),
     CHECK (threshold_reason IN ('daily_budget_exceeded', 'monthly_budget_exceeded')),
     CHECK (
@@ -2449,6 +2453,31 @@ export const POSTGRES_MODEL_USAGE_MIGRATIONS = [
     CHECK (created_at_ms >= 0)
   );
   `,
+  `ALTER TABLE model_budget_operator_alerts
+    ADD COLUMN IF NOT EXISTS dedupe_key TEXT;`,
+  `ALTER TABLE model_budget_operator_alerts
+    ADD COLUMN IF NOT EXISTS dispatch_state TEXT NOT NULL DEFAULT 'ready';`,
+  `ALTER TABLE model_budget_operator_alerts
+    ADD COLUMN IF NOT EXISTS dispatch_attempt INTEGER NOT NULL DEFAULT 0;`,
+  `ALTER TABLE model_budget_operator_alerts
+    ADD COLUMN IF NOT EXISTS last_claimed_at_ms BIGINT;`,
+  `UPDATE model_budget_operator_alerts
+    SET dedupe_key = companion_id || ':' || threshold_reason || ':' || window_key
+    WHERE dedupe_key IS NULL;`,
+  `ALTER TABLE model_budget_operator_alerts
+    ALTER COLUMN dedupe_key SET NOT NULL;`,
+  `ALTER TABLE model_budget_operator_alerts
+    DROP CONSTRAINT IF EXISTS model_budget_operator_alerts_outbox_check;`,
+  `ALTER TABLE model_budget_operator_alerts
+    ADD CONSTRAINT model_budget_operator_alerts_outbox_check CHECK (
+      dedupe_key = companion_id || ':' || threshold_reason || ':' || window_key
+      AND dispatch_state IN ('ready', 'dispatching', 'delivered')
+      AND dispatch_attempt >= 0
+      AND (dispatch_state = 'ready' OR dispatch_attempt >= 1)
+      AND (last_claimed_at_ms IS NULL OR last_claimed_at_ms >= 0)
+    );`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_model_budget_operator_alert_dedupe_key
+    ON model_budget_operator_alerts (dedupe_key);`,
   `
   CREATE TABLE IF NOT EXISTS model_budget_operator_alert_delivery_events (
     companion_id TEXT NOT NULL,

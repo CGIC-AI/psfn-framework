@@ -618,6 +618,8 @@ export interface NotifyNtfyParams {
   title?: string;
   priority?: number;
   topic?: string;
+  /** Stable caller key for providers that can collapse ambiguous retries. */
+  idempotencyKey?: string;
   sender: NotificationSenderMetadata;
 }
 

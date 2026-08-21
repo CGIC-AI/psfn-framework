@@ -51,6 +51,28 @@ function clone<T>(value: T): T {
   return structuredClone(value);
 }
 
+function createFleetWithObserverRoots(
+  firstRoot: string,
+  secondRoot: string,
+): CompanionsFleetConfig {
+  const fleet = clone(VALID_FLEET);
+  fleet.companions[0].observerEvalSidecar = {
+    sidecarId: 'observer-one',
+    serverUrl: 'http://observer-one.internal:17342',
+    sessionLabel: 'observer-session-one',
+    agentName: 'observer-agent-one',
+    persistenceRootDir: firstRoot,
+  };
+  fleet.companions[1].observerEvalSidecar = {
+    sidecarId: 'observer-two',
+    serverUrl: 'http://observer-two.internal:17342',
+    sessionLabel: 'observer-session-two',
+    agentName: 'observer-agent-two',
+    persistenceRootDir: secondRoot,
+  };
+  return fleet;
+}
+
 describe('companions owner-file config', () => {
   const tempDirs: string[] = [];
 
@@ -197,37 +219,38 @@ describe('companions owner-file config', () => {
     });
 
     it('rejects nested observer persistence roots in either fleet order', () => {
-      const createFleet = (firstRoot: string, secondRoot: string) => {
-        const fleet = clone(VALID_FLEET);
-        fleet.companions[0].observerEvalSidecar = {
-          sidecarId: 'observer-one',
-          serverUrl: 'http://observer-one.internal:17342',
-          sessionLabel: 'observer-session-one',
-          agentName: 'observer-agent-one',
-          persistenceRootDir: firstRoot,
-        };
-        fleet.companions[1].observerEvalSidecar = {
-          sidecarId: 'observer-two',
-          serverUrl: 'http://observer-two.internal:17342',
-          sessionLabel: 'observer-session-two',
-          agentName: 'observer-agent-two',
-          persistenceRootDir: secondRoot,
-        };
-        return fleet;
-      };
-
       expect(() => validateCompanionsConfig(
-        createFleet('/var/lib/observer-one', '/var/lib/observer-one/child'),
+        createFleetWithObserverRoots('/var/lib/observer-one', '/var/lib/observer-one/child'),
         'companions.json',
       )).toThrow(/observerEvalSidecar\.persistenceRootDir.*must not overlap/);
       expect(() => validateCompanionsConfig(
-        createFleet('/var/lib/observer-one/child', '/var/lib/observer-one'),
+        createFleetWithObserverRoots('/var/lib/observer-one/child', '/var/lib/observer-one'),
         'companions.json',
       )).toThrow(/observerEvalSidecar\.persistenceRootDir.*must not overlap/);
       expect(() => validateCompanionsConfig(
-        createFleet('/var/lib/observer-one', '/var/lib/observer-one/../observer-two'),
+        createFleetWithObserverRoots('/var/lib/observer-one', '/var/lib/observer-one/../observer-two'),
         'companions.json',
       )).not.toThrow();
+    });
+
+    it('rejects observer persistence roots that overlap through a symlinked existing ancestor', () => {
+      const dataDir = makeDataDir();
+      const canonicalParent = join(dataDir, 'observer-storage');
+      const aliasParent = join(dataDir, 'observer-storage-alias');
+      mkdirSync(canonicalParent);
+      symlinkSync(canonicalParent, aliasParent, 'dir');
+
+      const canonicalFutureRoot = join(canonicalParent, 'future-root');
+      const aliasedNestedFutureRoot = join(aliasParent, 'future-root', 'nested');
+
+      expect(() => validateCompanionsConfig(
+        createFleetWithObserverRoots(canonicalFutureRoot, aliasedNestedFutureRoot),
+        'companions.json',
+      )).toThrow(/observerEvalSidecar\.persistenceRootDir.*must not overlap/);
+      expect(() => validateCompanionsConfig(
+        createFleetWithObserverRoots(aliasedNestedFutureRoot, canonicalFutureRoot),
+        'companions.json',
+      )).toThrow(/observerEvalSidecar\.persistenceRootDir.*must not overlap/);
     });
 
     it('rejects an uppercase postgresSchema', () => {

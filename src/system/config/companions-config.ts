@@ -1,5 +1,5 @@
-import { isAbsolute, join, normalize, resolve } from 'node:path';
-import { existsSync, realpathSync, statSync } from 'node:fs';
+import { dirname, isAbsolute, join, normalize, relative, resolve } from 'node:path';
+import { existsSync, lstatSync, realpathSync, statSync } from 'node:fs';
 import { loadRequiredJson } from './load-or-seed.js';
 import { assertNoUnknownKeys } from './validators.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
@@ -305,6 +305,44 @@ function requireAbsoluteHttpUrl(value: unknown, field: string): string {
   return parsed.toString().replace(/\/$/u, '');
 }
 
+function resolveObserverPersistenceRoot(pathValue: string, field: string): string {
+  const requested = resolve(pathValue);
+  let existingAncestor = requested;
+  for (;;) {
+    try {
+      const canonicalAncestor = realpathSync(existingAncestor);
+      if (!statSync(canonicalAncestor).isDirectory()) {
+        throw new Error(
+          `${COMPANIONS_ERROR_PREFIX}: ${field} must resolve through a directory ancestor`,
+        );
+      }
+      return resolve(canonicalAncestor, relative(existingAncestor, requested));
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== 'ENOENT' && code !== 'ENOTDIR') throw error;
+
+      try {
+        lstatSync(existingAncestor);
+      } catch (lstatError) {
+        const lstatCode = (lstatError as NodeJS.ErrnoException).code;
+        if (lstatCode !== 'ENOENT' && lstatCode !== 'ENOTDIR') throw lstatError;
+        const parent = dirname(existingAncestor);
+        if (parent === existingAncestor) {
+          throw new Error(
+            `${COMPANIONS_ERROR_PREFIX}: ${field} has no resolvable directory ancestor`,
+          );
+        }
+        existingAncestor = parent;
+        continue;
+      }
+
+      throw new Error(
+        `${COMPANIONS_ERROR_PREFIX}: ${field} must not resolve through a broken filesystem entry`,
+      );
+    }
+  }
+}
+
 function validateObserverEvalSidecarBinding(
   raw: unknown,
   field: string,
@@ -330,7 +368,10 @@ function validateObserverEvalSidecarBinding(
     serverUrl: requireAbsoluteHttpUrl(raw.serverUrl, `${field}.serverUrl`),
     sessionLabel: requireNonEmptyString(raw.sessionLabel, `${field}.sessionLabel`),
     agentName: requireNonEmptyString(raw.agentName, `${field}.agentName`),
-    persistenceRootDir: normalize(persistenceRootDir),
+    persistenceRootDir: resolveObserverPersistenceRoot(
+      normalize(persistenceRootDir),
+      `${field}.persistenceRootDir`,
+    ),
   };
 }
 

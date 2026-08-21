@@ -68,6 +68,31 @@ export interface DashboardToolStatus {
   detail?: string;
 }
 
+export type DashboardIntentionFollowUpDisposition = 'handoff' | 'scheduled';
+
+export type DashboardIntentionFollowUpReason =
+  | 'active_pending_follow_up'
+  | 'pending_intention_scheduled_prompt';
+
+export interface DashboardIntentionFollowUpEvidence {
+  disposition: DashboardIntentionFollowUpDisposition;
+  reason: DashboardIntentionFollowUpReason;
+  available: boolean;
+  observedCount: number | null;
+  earliestDueAtMs: number | null;
+  /** True when the bounded read filled its window, so more records may exist. */
+  atReadLimit: boolean;
+}
+
+export interface DashboardIntentionFollowUpRouting {
+  horizonSource: 'effective_scheduler_config' | 'unavailable';
+  nearTermHorizonMs: number | null;
+  evidenceLimit: number;
+  observedAtMs: number;
+  handoff: DashboardIntentionFollowUpEvidence;
+  scheduled: DashboardIntentionFollowUpEvidence;
+}
+
 export interface DashboardStats {
   memoryTotal: number;
   memoryByType: Record<string, number>;
@@ -77,6 +102,7 @@ export interface DashboardStats {
   activeShards: number;
   modelUsage: DashboardModelUsageProjection;
   transientSessionTelemetry: DashboardTransientSessionTelemetry;
+  intentionFollowUpRouting: DashboardIntentionFollowUpRouting;
   toolStatus: DashboardToolStatus[];
   recentAnalysisWorkbenchTraces: AnalysisWorkbenchTraceView[];
 }

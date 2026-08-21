@@ -183,7 +183,7 @@
   // Redirect to login if not authenticated (except on login page itself)
   $effect(() => {
     const destination = canonicalGardenDestination(
-      $page.url.pathname,
+      gardenPathname,
       $page.url.search,
       $page.url.hash,
     );

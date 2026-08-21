@@ -68,8 +68,8 @@ describe('SyntheticSatelliteRetirementService', () => {
       })),
     };
     const writer: SatelliteRegistryWritePort = {
-      save: vi.fn(async next => {
-        current = next;
+      save: vi.fn(async input => {
+        current = input.config;
       }),
     };
     const service = new SyntheticSatelliteRetirementService({
@@ -96,6 +96,7 @@ describe('SyntheticSatelliteRetirementService', () => {
       target,
       dryRun: false,
       retiredAt: '2026-08-20T12:00:00.000Z',
+      approval: { operatorApproved: true, approvalId: 'approval-1' },
     })).resolves.toMatchObject({
       status: 'retired',
       satelliteId: 'ghost-smoke',
@@ -114,6 +115,7 @@ describe('SyntheticSatelliteRetirementService', () => {
       target,
       dryRun: false,
       retiredAt: '2026-08-20T12:00:00.000Z',
+      approval: { operatorApproved: true, approvalId: 'approval-1' },
     })).resolves.toMatchObject({ status: 'already_retired', satelliteId: 'ghost-smoke' });
     expect(backup.create).toHaveBeenCalledOnce();
     expect(writer.save).toHaveBeenCalledOnce();
@@ -153,5 +155,33 @@ describe('SyntheticSatelliteRetirementService', () => {
         manifestId: 'manifest-shakedown-001',
       },
     })).rejects.toThrow('endpoint identity mismatch');
+  });
+
+  it('requires explicit approval before a non-dry-run backup or write', async () => {
+    const backup = {
+      create: vi.fn(async () => ({
+        backupRef: 'backup:unused',
+        backupDigest: `sha256:${'c'.repeat(64)}`,
+      })),
+    };
+    const writer = { save: vi.fn(async () => undefined) };
+    const service = new SyntheticSatelliteRetirementService({
+      read: registry,
+      backup,
+      writer,
+    });
+
+    await expect(service.retire({
+      target: {
+        satelliteId: 'ghost-smoke',
+        endpointIds: ['smoke-voice'],
+        runId: 'run-shakedown-001',
+        manifestId: 'manifest-shakedown-001',
+      },
+      dryRun: false,
+      retiredAt: '2026-08-20T12:00:00.000Z',
+    })).rejects.toThrow('explicit operator approval');
+    expect(backup.create).not.toHaveBeenCalled();
+    expect(writer.save).not.toHaveBeenCalled();
   });
 });

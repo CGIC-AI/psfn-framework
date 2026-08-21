@@ -739,7 +739,15 @@ export class PostgresAutomataBusVectorIndexAdapter implements
             ) THEN 'degraded'
             ELSE 'ready'
           END,
-          reindex_state = 'current',
+          reindex_state = CASE
+            WHEN EXISTS (
+              SELECT 1
+              FROM automata_bus_vector_lag lag
+              WHERE lag.companion_id = automata_bus_vector_state.companion_id
+                AND lag.stage = 'model-identity'
+            ) THEN 'required'
+            ELSE 'current'
+          END,
           reindex_lease_token = NULL,
           reindex_lease_until = NULL,
           reindex_snapshot_sequence = NULL,

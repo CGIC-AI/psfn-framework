@@ -45,6 +45,13 @@ function parseSequence(value: unknown): number {
   return parsed;
 }
 
+function parseSnapshotSequence(value: number): number {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error('Automata Bus reindex snapshotSequence must be a non-negative safe integer');
+  }
+  return value;
+}
+
 function findingBody(event: AutomataBusEvent) {
   if (event.type === 'finding') return event.body;
   if (event.body.relation === 'retracts' || event.body.replacement === undefined) {
@@ -105,7 +112,11 @@ export class PostgresAutomataBusReindexSource implements AutomataBusReindexSourc
     this.maxFindings = requireAutomataBusPositiveInteger(options.maxFindings, 'maxFindings');
   }
 
-  async readCurrent(input: { companionId: string; limit: number }): Promise<{
+  async readCurrent(input: {
+    companionId: string;
+    limit: number;
+    snapshotSequence: number;
+  }): Promise<{
     companionId: string;
     findings: readonly AutomataBusCanonicalFinding[];
     hasMore: boolean;
@@ -114,6 +125,7 @@ export class PostgresAutomataBusReindexSource implements AutomataBusReindexSourc
       throw new Error('Automata Bus reindex source companion scope mismatch');
     }
     const limit = requireAutomataBusPositiveInteger(input.limit, 'limit');
+    const snapshotSequence = parseSnapshotSequence(input.snapshotSequence);
     if (limit > this.maxFindings) {
       throw new Error(`Automata Bus reindex source limit exceeds maxFindings (${this.maxFindings})`);
     }
@@ -121,11 +133,12 @@ export class PostgresAutomataBusReindexSource implements AutomataBusReindexSourc
       SELECT companion_id, event_id, sequence, audiences, sensitivity, event_json
       FROM automata_bus_current_findings
       WHERE companion_id = $1
+        AND sequence <= $2
         AND 'eligible-automata' = ANY(audiences)
-        AND sensitivity = ANY($2::text[])
+        AND sensitivity = ANY($3::text[])
       ORDER BY sequence ASC, event_id ASC
-      LIMIT $3
-    `, [this.companionId, [...SENSITIVITY_LEVELS], limit + 1]);
+      LIMIT $4
+    `, [this.companionId, snapshotSequence, [...SENSITIVITY_LEVELS], limit + 1]);
     const findings = rows.rows.slice(0, limit).map(row => parseFinding(row, this.companionId));
     return {
       companionId: this.companionId,

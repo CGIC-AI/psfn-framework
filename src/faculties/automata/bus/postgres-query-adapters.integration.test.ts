@@ -109,6 +109,169 @@ async function createTenantPool(): Promise<Pool> {
 }
 
 describe('Automata Bus concrete Postgres query adapters', () => {
+  it('blocks a second live reindex lease and fences a crashed worker after stale-run recovery', async () => {
+    const pool = await createTenantPool();
+    try {
+      const firstWorker = new PostgresAutomataBusVectorIndexAdapter(pool, {
+        companionId: 'companion-a',
+        maxCandidateLimit: 8,
+        reindexLeaseDurationMs: 60_000,
+      });
+      const recoveryWorker = new PostgresAutomataBusVectorIndexAdapter(pool, {
+        companionId: 'companion-a',
+        maxCandidateLimit: 8,
+        reindexLeaseDurationMs: 60_000,
+      });
+
+      const crashedLease = await firstWorker.beginReindex({
+        companionId: 'companion-a',
+        modelIdentity: MODEL,
+      });
+      await expect(recoveryWorker.beginReindex({
+        companionId: 'companion-a',
+        modelIdentity: MODEL,
+      })).rejects.toThrow('already running');
+
+      await pool.query(`
+        UPDATE automata_bus_vector_state
+        SET reindex_lease_until = clock_timestamp() - INTERVAL '1 second'
+        WHERE companion_id = $1
+      `, ['companion-a']);
+      const recoveryLease = await recoveryWorker.beginReindex({
+        companionId: 'companion-a',
+        modelIdentity: MODEL,
+      });
+
+      expect(recoveryLease.leaseToken).not.toBe(crashedLease.leaseToken);
+      await expect(firstWorker.completeReindex({
+        companionId: 'companion-a',
+        modelIdentity: MODEL,
+        ...crashedLease,
+        eventIds: [],
+      })).rejects.toThrow('lost exact companion lease');
+      await recoveryWorker.failReindex({
+        companionId: 'companion-a',
+        modelIdentity: MODEL,
+        ...recoveryLease,
+      });
+      await expect(recoveryWorker.readState()).resolves.toEqual(expect.objectContaining({
+        indexState: 'degraded',
+        reindexState: 'required',
+      }));
+    } finally {
+      await pool.end();
+    }
+  }, INTEGRATION_TIMEOUT_MS);
+
+  it('preserves concurrent canonical findings, vector upserts, and lag newer than the snapshot fence', async () => {
+    const pool = await createTenantPool();
+    try {
+      const store = createPostgresAutomataBusStore(pool);
+      const adapter = new PostgresAutomataBusVectorIndexAdapter(pool, {
+        companionId: 'companion-a',
+        maxCandidateLimit: 8,
+        reindexLeaseDurationMs: 60_000,
+      });
+      const beforeFence = finding('before-fence', 1);
+      await store.append({
+        companionId: 'companion-a',
+        event: beforeFence,
+        audiences: ['eligible-automata'],
+        sensitivity: 'personal',
+      });
+      await adapter.upsert({
+        ...canonical(beforeFence, 'eligible-automata'),
+        embedding: new Float32Array([1, 0, 0]),
+        modelIdentity: MODEL,
+      });
+      await adapter.markLagging({
+        eventId: beforeFence.eventId,
+        companionId: 'companion-a',
+        stage: 'embedding',
+        modelIdentity: MODEL,
+      });
+
+      const lease = await adapter.beginReindex({
+        companionId: 'companion-a',
+        modelIdentity: MODEL,
+      });
+      const afterFence = finding('after-fence', 2);
+      await store.append({
+        companionId: 'companion-a',
+        event: afterFence,
+        audiences: ['eligible-automata'],
+        sensitivity: 'personal',
+      });
+      await adapter.upsert({
+        ...canonical(afterFence, 'eligible-automata'),
+        embedding: new Float32Array([0, 1, 0]),
+        modelIdentity: MODEL,
+      });
+      await adapter.markLagging({
+        eventId: afterFence.eventId,
+        companionId: 'companion-a',
+        stage: 'embedding',
+        modelIdentity: MODEL,
+      });
+
+      const busBeforeCompletion = await pool.query<{
+        event_id: string;
+        sequence: string;
+      }>(`
+        SELECT event_id, sequence::text
+        FROM automata_bus_current_findings
+        WHERE companion_id = $1
+        ORDER BY sequence
+      `, ['companion-a']);
+      await adapter.completeReindex({
+        companionId: 'companion-a',
+        modelIdentity: MODEL,
+        ...lease,
+        eventIds: [beforeFence.eventId],
+      });
+
+      const busAfterCompletion = await pool.query<{
+        event_id: string;
+        sequence: string;
+      }>(`
+        SELECT event_id, sequence::text
+        FROM automata_bus_current_findings
+        WHERE companion_id = $1
+        ORDER BY sequence
+      `, ['companion-a']);
+      const vectors = await pool.query<{ event_id: string }>(`
+        SELECT event_id
+        FROM automata_bus_finding_vectors
+        WHERE companion_id = $1
+        ORDER BY event_id
+      `, ['companion-a']);
+      const lag = await pool.query<{ event_id: string }>(`
+        SELECT event_id
+        FROM automata_bus_vector_lag
+        WHERE companion_id = $1
+        ORDER BY event_id
+      `, ['companion-a']);
+
+      expect(busBeforeCompletion.rows).toEqual([
+        { event_id: 'before-fence', sequence: '1' },
+        { event_id: 'after-fence', sequence: '2' },
+      ]);
+      expect(busAfterCompletion.rows).toEqual(busBeforeCompletion.rows);
+      expect(vectors.rows).toEqual([
+        { event_id: 'after-fence' },
+        { event_id: 'before-fence' },
+      ]);
+      expect(lag.rows).toEqual([{ event_id: 'after-fence' }]);
+      await expect(adapter.readState()).resolves.toEqual(expect.objectContaining({
+        indexState: 'degraded',
+        reindexState: 'current',
+        indexingLag: expect.objectContaining({ pendingCount: 1 }),
+      }));
+    } finally {
+      await pool.end();
+    }
+  }, INTEGRATION_TIMEOUT_MS);
+
   it('keeps canonical visibility authoritative across lexical, ANN, exact, lag, and correction paths', async () => {
     const pool = await createTenantPool();
     try {
@@ -148,6 +311,7 @@ describe('Automata Bus concrete Postgres query adapters', () => {
       const vectorAdapter = new PostgresAutomataBusVectorIndexAdapter(pool, {
         companionId: 'companion-a',
         maxCandidateLimit: 8,
+        reindexLeaseDurationMs: 60_000,
       });
       await vectorAdapter.upsert({
         ...canonical(visible, 'eligible-automata'),

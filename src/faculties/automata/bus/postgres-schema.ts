@@ -96,8 +96,61 @@ export const AUTOMATA_BUS_POSTGRES_SCHEMA_STATEMENTS = [
       CHECK (index_state IN ('building', 'degraded', 'ready', 'unavailable')),
     reindex_state TEXT NOT NULL
       CHECK (reindex_state IN ('current', 'required', 'running')),
+    mutation_fence BIGINT NOT NULL DEFAULT 0 CHECK (mutation_fence >= 0),
+    reindex_lease_token UUID,
+    reindex_lease_until TIMESTAMPTZ,
+    reindex_snapshot_sequence BIGINT,
+    reindex_snapshot_mutation_fence BIGINT,
+    CONSTRAINT automata_bus_vector_reindex_lease_check CHECK (
+      (
+        reindex_state = 'running'
+        AND reindex_lease_token IS NOT NULL
+        AND reindex_lease_until IS NOT NULL
+        AND reindex_snapshot_sequence IS NOT NULL
+        AND reindex_snapshot_mutation_fence IS NOT NULL
+      )
+      OR (
+        reindex_state <> 'running'
+        AND reindex_lease_token IS NULL
+        AND reindex_lease_until IS NULL
+        AND reindex_snapshot_sequence IS NULL
+        AND reindex_snapshot_mutation_fence IS NULL
+      )
+    ),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
   )`,
+  `ALTER TABLE automata_bus_vector_state
+    ADD COLUMN IF NOT EXISTS mutation_fence BIGINT NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS reindex_lease_token UUID,
+    ADD COLUMN IF NOT EXISTS reindex_lease_until TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS reindex_snapshot_sequence BIGINT,
+    ADD COLUMN IF NOT EXISTS reindex_snapshot_mutation_fence BIGINT`,
+  `UPDATE automata_bus_vector_state
+    SET index_state = 'degraded', reindex_state = 'required'
+    WHERE reindex_state = 'running'
+      AND reindex_lease_token IS NULL`,
+  `ALTER TABLE automata_bus_vector_state
+    DROP CONSTRAINT IF EXISTS automata_bus_vector_reindex_lease_check`,
+  `ALTER TABLE automata_bus_vector_state
+    ADD CONSTRAINT automata_bus_vector_reindex_lease_check CHECK (
+      mutation_fence >= 0
+      AND (
+        (
+          reindex_state = 'running'
+          AND reindex_lease_token IS NOT NULL
+          AND reindex_lease_until IS NOT NULL
+          AND reindex_snapshot_sequence IS NOT NULL
+          AND reindex_snapshot_mutation_fence IS NOT NULL
+        )
+        OR (
+          reindex_state <> 'running'
+          AND reindex_lease_token IS NULL
+          AND reindex_lease_until IS NULL
+          AND reindex_snapshot_sequence IS NULL
+          AND reindex_snapshot_mutation_fence IS NULL
+        )
+      )
+    )`,
   `CREATE TABLE IF NOT EXISTS automata_bus_finding_vectors (
     companion_id TEXT NOT NULL,
     event_id TEXT NOT NULL,
@@ -105,6 +158,7 @@ export const AUTOMATA_BUS_POSTGRES_SCHEMA_STATEMENTS = [
     model TEXT NOT NULL CHECK (length(btrim(model)) > 0),
     dimensions INTEGER NOT NULL CHECK (dimensions > 0),
     embedding vector NOT NULL,
+    mutation_fence BIGINT NOT NULL DEFAULT 0 CHECK (mutation_fence >= 0),
     indexed_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (companion_id, event_id),
     FOREIGN KEY (companion_id, event_id)
@@ -112,6 +166,13 @@ export const AUTOMATA_BUS_POSTGRES_SCHEMA_STATEMENTS = [
       ON UPDATE RESTRICT ON DELETE CASCADE,
     CHECK (vector_dims(embedding) = dimensions)
   )`,
+  `ALTER TABLE automata_bus_finding_vectors
+    ADD COLUMN IF NOT EXISTS mutation_fence BIGINT NOT NULL DEFAULT 0`,
+  `ALTER TABLE automata_bus_finding_vectors
+    DROP CONSTRAINT IF EXISTS automata_bus_finding_vectors_mutation_fence_check`,
+  `ALTER TABLE automata_bus_finding_vectors
+    ADD CONSTRAINT automata_bus_finding_vectors_mutation_fence_check
+    CHECK (mutation_fence >= 0)`,
   `CREATE INDEX IF NOT EXISTS automata_bus_finding_vectors_identity_idx
     ON automata_bus_finding_vectors (companion_id, provider, model, dimensions)`,
   `CREATE TABLE IF NOT EXISTS automata_bus_vector_lag (
@@ -125,11 +186,19 @@ export const AUTOMATA_BUS_POSTGRES_SCHEMA_STATEMENTS = [
     first_failed_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     last_failed_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     attempts INTEGER NOT NULL DEFAULT 1 CHECK (attempts > 0),
+    mutation_fence BIGINT NOT NULL DEFAULT 0 CHECK (mutation_fence >= 0),
     PRIMARY KEY (companion_id, event_id),
     FOREIGN KEY (companion_id, event_id)
       REFERENCES automata_bus_current_findings (companion_id, event_id)
       ON UPDATE RESTRICT ON DELETE CASCADE
   )`,
+  `ALTER TABLE automata_bus_vector_lag
+    ADD COLUMN IF NOT EXISTS mutation_fence BIGINT NOT NULL DEFAULT 0`,
+  `ALTER TABLE automata_bus_vector_lag
+    DROP CONSTRAINT IF EXISTS automata_bus_vector_lag_mutation_fence_check`,
+  `ALTER TABLE automata_bus_vector_lag
+    ADD CONSTRAINT automata_bus_vector_lag_mutation_fence_check
+    CHECK (mutation_fence >= 0)`,
   `CREATE INDEX IF NOT EXISTS automata_bus_vector_lag_oldest_idx
     ON automata_bus_vector_lag (companion_id, first_failed_at)`,
 ] as const;

@@ -63,6 +63,7 @@ describe('createAutomataBusProductionRuntime', () => {
       embeddingIdentity: { provider: 'api', model: 'embedding-v1', dimensions: 3 },
       appCache: cache('redis'),
       policy,
+      reindexLeaseDurationMs: 60_000,
     });
     expect(configured.describeComposition()).toEqual({
       embeddingIdentity: { provider: 'api', model: 'embedding-v1', dimensions: 3 },
@@ -78,6 +79,7 @@ describe('createAutomataBusProductionRuntime', () => {
       embeddingProvider: embeddings(),
       embeddingIdentity: { provider: 'api', model: 'embedding-v1', dimensions: 3 },
       policy,
+      reindexLeaseDurationMs: 60_000,
     });
     expect(missingCache.describeComposition().resultCache).toBe('unavailable');
   });
@@ -90,6 +92,7 @@ describe('createAutomataBusProductionRuntime', () => {
       embeddingProvider: embeddings(2),
       embeddingIdentity: { provider: 'api', model: 'embedding-v1', dimensions: 3 },
       policy: loadAutomataPolicySeedDefaults().bus.query,
+      reindexLeaseDurationMs: 60_000,
     })).toThrow('dimension mismatch');
   });
 

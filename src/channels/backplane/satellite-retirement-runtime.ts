@@ -91,12 +91,9 @@ export function createFileSyntheticSatelliteRetirementService(input: {
     },
     writer: {
       save: async ({ config, expectedBackupDigest }) => {
-        const sourcePath = join(systemDataDir, SATELLITE_REGISTRY_FILE_NAME);
-        const currentDigest = `sha256:${sha256(readFileSync(sourcePath))}`;
-        if (currentDigest !== expectedBackupDigest) {
-          throw new Error('Synthetic satellite registry changed after backup; refusing stale retirement');
-        }
-        saveSatelliteRegistryConfig(systemDataDir, config);
+        saveSatelliteRegistryConfig(systemDataDir, config, {
+          expectedDigest: expectedBackupDigest,
+        });
       },
     },
   });

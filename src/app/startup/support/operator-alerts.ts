@@ -4,6 +4,12 @@ import type { NotificationPort } from '../../../core/tools/ntfy.js';
 import type { NotificationSenderMetadata } from '../../../boundary/gateway/notification-sender.js';
 import type { EventMap } from '../../../shared/event-bus.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
+import { createCompanionId, type CompanionId } from '../../../shared/routing/companion-id.js';
+import {
+  modelBudgetOperatorAlertDedupeKey,
+  type ModelBudgetOperatorAlertClaim,
+  type ModelBudgetOperatorAlertClaimStorePort,
+} from '../../../shared/contracts/model-budget-alert.js';
 
 const log = createComponentLogger('OperatorAlerts');
 const PROMPT_GENERATION_FAILURE_SENDER: NotificationSenderMetadata = Object.freeze({
@@ -301,18 +307,29 @@ export function createRepeatedScreeningFailureAlertHandler(options: {
 export function createModelBudgetThresholdAlertHandler(options: {
   notifier: NotificationPort;
   companionName: string;
+  companionId: CompanionId | string;
+  alertStore: ModelBudgetOperatorAlertClaimStorePort;
   recordDelivery: (event: ModelBudgetAlertDeliveryEvent) => void | Promise<void>;
 }): (event: ModelBudgetThresholdEvent) => Promise<void> {
   const companionName = requireOperatorAlertCompanionName(options.companionName);
-  const deliveredKeys = new Set<string>();
+  const defaultCompanionId = createCompanionId(options.companionId, 'model budget alert companionId');
 
   return async (event) => {
     const alertSubject = event.companionId?.trim() || companionName;
+    const exactCompanionId = event.companionId
+      ? createCompanionId(event.companionId, 'model budget alert event.companionId')
+      : defaultCompanionId;
     const windowKey = event.reason === 'daily_budget_exceeded'
       ? event.budget.dayKey
       : event.budget.monthKey;
-    const dedupeKey = `${alertSubject}:${event.reason}:${windowKey}`;
-    if (deliveredKeys.has(dedupeKey)) return;
+    const identity = {
+      companionId: exactCompanionId,
+      thresholdReason: event.reason,
+      windowKey,
+    };
+    const dedupeKey = modelBudgetOperatorAlertDedupeKey(identity);
+    const claim = await options.alertStore.claimModelBudgetOperatorAlert(identity);
+    if (!claim) return;
 
     const periodLabel = event.reason === 'daily_budget_exceeded' ? 'daily' : 'monthly';
     const spent = event.reason === 'daily_budget_exceeded'
@@ -325,8 +342,9 @@ export function createModelBudgetThresholdAlertHandler(options: {
       ? 'Blocking mode: this request was denied at the configured limit.'
       : 'Tracking mode: requests continue after this alert.';
 
+    let result: Awaited<ReturnType<NotificationPort['notify']>>;
     try {
-      const result = await options.notifier.notify({
+      result = await options.notifier.notify({
         sender: MODEL_BUDGET_THRESHOLD_SENDER,
         title: `${alertSubject} ${periodLabel} model budget threshold`,
         message: [
@@ -338,46 +356,62 @@ export function createModelBudgetThresholdAlertHandler(options: {
           mode,
         ].join('\n'),
       });
-      deliveredKeys.add(dedupeKey);
-      await recordModelBudgetAlertDelivery(options.recordDelivery, {
-        timestampMs: Date.now(),
-        dedupeKey,
-        thresholdReason: event.reason,
-        windowKey,
-        status: result.status,
-        topic: result.topic,
-        ...(result.messageId ? { messageId: result.messageId } : {}),
-      });
     } catch (error) {
-      await recordModelBudgetAlertDelivery(options.recordDelivery, {
+      const deliveryEvent: ModelBudgetAlertDeliveryEvent = {
         timestampMs: Date.now(),
         dedupeKey,
         thresholdReason: event.reason,
         windowKey,
         status: 'failed',
         error: toErrorMessage(error),
-      });
+      };
+      try {
+        await settleModelBudgetOperatorAlertClaim(claim, deliveryEvent);
+      } catch (evidenceError) {
+        throw new AggregateError(
+          [error, evidenceError],
+          `Model-budget alert delivery and durable evidence write failed: ${toErrorMessage(evidenceError)}`,
+        );
+      }
+      await options.recordDelivery(deliveryEvent);
       log.error('Failed to deliver model budget threshold operator alert', {
         companionName: alertSubject,
         dedupeKey,
         error: toErrorMessage(error),
       });
+      return;
     }
+
+    const deliveryEvent: ModelBudgetAlertDeliveryEvent = {
+      timestampMs: Date.now(),
+      dedupeKey,
+      thresholdReason: event.reason,
+      windowKey,
+      status: result.status,
+      topic: result.topic,
+      ...(result.messageId ? { messageId: result.messageId } : {}),
+    };
+    await settleModelBudgetOperatorAlertClaim(claim, deliveryEvent);
+    await options.recordDelivery(deliveryEvent);
   };
 }
 
-async function recordModelBudgetAlertDelivery(
-  recordDelivery: (event: ModelBudgetAlertDeliveryEvent) => void | Promise<void>,
+async function settleModelBudgetOperatorAlertClaim(
+  claim: ModelBudgetOperatorAlertClaim,
   event: ModelBudgetAlertDeliveryEvent,
 ): Promise<void> {
   try {
-    await recordDelivery(event);
+    await claim.recordDelivery(event);
   } catch (error) {
-    log.error('Failed to record model budget alert delivery evidence', {
-      dedupeKey: event.dedupeKey,
-      status: event.status,
-      error: toErrorMessage(error),
-    });
+    try {
+      await claim.release();
+    } catch (releaseError) {
+      throw new AggregateError(
+        [error, releaseError],
+        'Model-budget operator-alert evidence write and claim release both failed',
+      );
+    }
+    throw error;
   }
 }
 

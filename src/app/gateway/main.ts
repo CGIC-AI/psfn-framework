@@ -103,7 +103,10 @@ import {
   createRepeatedScreeningFailureAlertHandler,
   createScheduledTaskFailureAlertHandler,
 } from '../startup/support/operator-alerts.js';
-import { resolveCompanionNameFromConfig } from '../../core/identity/companion-runtime.js';
+import {
+  resolveCompanionNameFromConfig,
+  resolveCoreCompanionIdFromConfig,
+} from '../../core/identity/companion-runtime.js';
 import type { NotificationPort } from '../../core/tools/ntfy.js';
 import { createPostEscalationIncidentRecorder } from '../../core/cogsec/intake/post-escalation-incidents.js';
 import type { IntakeCogSecFindingEvent } from '../../core/cogsec/intake/screening.js';
@@ -761,11 +764,18 @@ async function main(): Promise<void> {
     },
   };
   const operatorAlertCompanionName = resolveCompanionNameFromConfig(config);
+  const modelBudgetAlertStore = privilegedServices.modelUsageStore;
+  if (!modelBudgetAlertStore) {
+    throw new Error('Model budget operator alerts require durable model-usage persistence');
+  }
+  await modelBudgetAlertStore.waitUntilReady();
   eventBus.on(
     'model.budget.threshold_exceeded',
     createModelBudgetThresholdAlertHandler({
       notifier: gatewayOperatorNotifier,
       companionName: operatorAlertCompanionName,
+      companionId: resolveCoreCompanionIdFromConfig(config),
+      alertStore: modelBudgetAlertStore,
       recordDelivery: event => eventBus.emit('model.budget.alert_delivery', event),
     }),
   );

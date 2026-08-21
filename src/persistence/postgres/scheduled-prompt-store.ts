@@ -12,6 +12,7 @@ import {
 import { POSTGRES_SCHEDULED_PROMPT_MIGRATIONS } from './migrations.js';
 import type {
   ScheduledPromptCreateInput,
+  ScheduledPromptListOptions,
   ScheduledPromptRecord,
   ScheduledPromptSource,
   ScheduledPromptStatus,
@@ -204,17 +205,20 @@ export class PostgresScheduledPromptStore implements ScheduledPromptStorePort {
     return row ? mapRow(row) : null;
   }
 
-  async listPending(options: { limit?: number } = {}): Promise<ScheduledPromptRecord[]> {
+  async listPending(options: ScheduledPromptListOptions = {}): Promise<ScheduledPromptRecord[]> {
     const limit = normalizeLimit(options.limit);
+    const source = options.source === undefined ? undefined : normalizeSource(options.source);
+    const sourcePredicate = source === undefined ? '' : '\n        AND source = $1';
+    const limitPlaceholder = source === undefined ? '$1' : '$2';
     const rows = await queryRows<ScheduledPromptRow>(this.pool, `
       SELECT
         id, name, prompt, run_at, created_at, source, channel_id, channel_type,
         author_id, author_name, status, delivery_channel_id, completed_at
       FROM scheduler_scheduled_prompts
-      WHERE status = 'pending'
+      WHERE status = 'pending'${sourcePredicate}
       ORDER BY run_at ASC, created_at ASC, id ASC
-      LIMIT $1
-    `, [limit]);
+      LIMIT ${limitPlaceholder}
+    `, source === undefined ? [limit] : [source, limit]);
     return rows.map(mapRow);
   }
 

@@ -35,6 +35,7 @@ export interface ScheduledPromptCreateInput {
 
 export interface ScheduledPromptListOptions {
   limit?: number;
+  source?: ScheduledPromptSource;
 }
 
 export interface ScheduledPromptCompletionOptions {

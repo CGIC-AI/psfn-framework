@@ -10,6 +10,14 @@ import { createCompanionId } from '../../shared/routing/companion-id.js';
 
 interface AlertAuthorityRow {
   companionId: string;
+  dedupeKey: string;
+  dispatchState: 'ready' | 'dispatching' | 'delivered';
+  dispatchAttempt: number | string;
+}
+
+interface AdvisoryLockRow {
+  acquired?: boolean;
+  unlocked?: boolean;
 }
 
 interface AlertEvidenceSummaryRow {
@@ -86,6 +94,20 @@ function validateDeliveryEvent(
   }
 }
 
+function modelBudgetAlertAdvisoryKey(dedupeKey: string): string {
+  return `model-budget-operator-alert:${dedupeKey}`;
+}
+
+async function unlockAdvisoryClaim(client: PoolClient, advisoryKey: string): Promise<void> {
+  const result = await client.query<AdvisoryLockRow>(
+    'SELECT pg_advisory_unlock(hashtextextended($1, 0)) AS unlocked',
+    [advisoryKey],
+  );
+  if (result.rows[0]?.unlocked !== true) {
+    throw new Error('Model-budget operator-alert advisory claim ownership was lost');
+  }
+}
+
 class PostgresModelBudgetOperatorAlertClaim implements ModelBudgetOperatorAlertClaim {
   private finished = false;
 
@@ -93,12 +115,16 @@ class PostgresModelBudgetOperatorAlertClaim implements ModelBudgetOperatorAlertC
     private readonly client: PoolClient,
     private readonly identity: ModelBudgetOperatorAlertIdentity,
     readonly attempt: number,
+    readonly providerIdempotencyKey: string,
+    readonly recovered: boolean,
+    private readonly advisoryKey: string,
   ) {}
 
   async recordDelivery(event: ModelBudgetAlertDeliveryEvent): Promise<void> {
     if (this.finished) throw new Error('Model-budget operator-alert claim is already settled');
     try {
       validateDeliveryEvent(this.identity, event);
+      await this.client.query('BEGIN');
       await this.client.query(
         `
           INSERT INTO model_budget_operator_alert_delivery_events (
@@ -119,41 +145,71 @@ class PostgresModelBudgetOperatorAlertClaim implements ModelBudgetOperatorAlertC
           event.error ?? null,
         ],
       );
+      const nextState = event.status === 'failed' ? 'ready' : 'delivered';
+      const settled = await this.client.query(
+        `
+          UPDATE model_budget_operator_alerts
+          SET dispatch_state = $4
+          WHERE companion_id = $1
+            AND threshold_reason = $2
+            AND window_key = $3
+            AND dispatch_state = 'dispatching'
+            AND dispatch_attempt = $5
+            AND dedupe_key = $6
+        `,
+        [
+          this.identity.companionId,
+          this.identity.thresholdReason,
+          this.identity.windowKey,
+          nextState,
+          this.attempt,
+          this.providerIdempotencyKey,
+        ],
+      );
+      if (settled.rowCount !== 1) {
+        throw new Error('Model-budget operator-alert committed outbox claim was lost');
+      }
       await this.client.query('COMMIT');
-      this.finished = true;
-      this.client.release();
     } catch (error) {
       await this.rollbackAndThrow(error);
     }
+    await this.unlockAndRelease();
   }
 
   async release(): Promise<void> {
     if (this.finished) return;
-    try {
-      await this.client.query('ROLLBACK');
-    } finally {
-      this.finished = true;
-      this.client.release();
-    }
+    await this.unlockAndRelease();
   }
 
   private async rollbackAndThrow(error: unknown): Promise<never> {
-    let rollbackError: unknown;
+    const failures = [error];
     try {
       await this.client.query('ROLLBACK');
     } catch (caught) {
-      rollbackError = caught;
-    } finally {
-      this.finished = true;
-      this.client.release();
+      failures.push(caught);
     }
-    if (rollbackError !== undefined) {
-      throw new AggregateError(
-        [error, rollbackError],
-        'Model-budget operator-alert evidence write and rollback both failed',
-      );
+    try {
+      await this.unlockAndRelease();
+    } catch (caught) {
+      failures.push(caught);
+    }
+    if (failures.length > 1) {
+      throw new AggregateError(failures, 'Model-budget operator-alert evidence settlement failed');
     }
     throw error;
+  }
+
+  private async unlockAndRelease(): Promise<void> {
+    if (this.finished) return;
+    try {
+      await unlockAdvisoryClaim(this.client, this.advisoryKey);
+      this.finished = true;
+      this.client.release();
+    } catch (error) {
+      this.finished = true;
+      this.client.release(true);
+      throw error;
+    }
   }
 }
 
@@ -168,22 +224,42 @@ export class PostgresModelBudgetOperatorAlertStore implements ModelBudgetOperato
   ): Promise<ModelBudgetOperatorAlertClaim | null> {
     await this.waitUntilReady();
     const identity = validateIdentity(input);
+    const dedupeKey = modelBudgetOperatorAlertDedupeKey(identity);
+    const advisoryKey = modelBudgetAlertAdvisoryKey(dedupeKey);
     const createdAtMs = Date.now();
     const client = await this.pool.connect();
+    let transactionOpen = false;
+    let advisoryClaimHeld = false;
     try {
+      await client.query(
+        'SELECT pg_advisory_lock(hashtextextended($1, 0))',
+        [advisoryKey],
+      );
+      advisoryClaimHeld = true;
       await client.query('BEGIN');
+      transactionOpen = true;
       await client.query(
         `
           INSERT INTO model_budget_operator_alerts (
-            companion_id, threshold_reason, window_key, created_at_ms
-          ) VALUES ($1, $2, $3, $4)
+            companion_id, threshold_reason, window_key, created_at_ms, dedupe_key
+          ) VALUES ($1, $2, $3, $4, $5)
           ON CONFLICT (companion_id, threshold_reason, window_key) DO NOTHING
         `,
-        [identity.companionId, identity.thresholdReason, identity.windowKey, createdAtMs],
+        [
+          identity.companionId,
+          identity.thresholdReason,
+          identity.windowKey,
+          createdAtMs,
+          dedupeKey,
+        ],
       );
       const locked = await client.query<AlertAuthorityRow>(
         `
-          SELECT companion_id AS "companionId"
+          SELECT
+            companion_id AS "companionId",
+            dedupe_key AS "dedupeKey",
+            dispatch_state AS "dispatchState",
+            dispatch_attempt AS "dispatchAttempt"
           FROM model_budget_operator_alerts
           WHERE companion_id = $1
             AND threshold_reason = $2
@@ -194,6 +270,9 @@ export class PostgresModelBudgetOperatorAlertStore implements ModelBudgetOperato
       );
       const row = locked.rows[0];
       if (!row) throw new Error('Model-budget operator-alert durable identity disappeared');
+      if (row.dedupeKey !== dedupeKey) {
+        throw new Error('Model-budget operator-alert durable idempotency key drifted');
+      }
       const evidence = await client.query<AlertEvidenceSummaryRow>(
         `
           SELECT
@@ -208,21 +287,93 @@ export class PostgresModelBudgetOperatorAlertStore implements ModelBudgetOperato
       );
       const summary = evidence.rows[0];
       if (!summary) throw new Error('Model-budget operator-alert evidence summary is unavailable');
+      const evidenceAttempt = Number(summary.attemptCount);
+      if (!Number.isSafeInteger(evidenceAttempt) || evidenceAttempt < 0) {
+        throw new Error('Model-budget operator-alert evidence attempt counter is invalid');
+      }
       if (summary.delivered) {
-        await client.query('ROLLBACK');
+        await client.query(
+          `
+            UPDATE model_budget_operator_alerts
+            SET dispatch_state = 'delivered',
+                dispatch_attempt = $4
+            WHERE companion_id = $1
+              AND threshold_reason = $2
+              AND window_key = $3
+          `,
+          [identity.companionId, identity.thresholdReason, identity.windowKey, evidenceAttempt],
+        );
+        await client.query('COMMIT');
+        transactionOpen = false;
+        await unlockAdvisoryClaim(client, advisoryKey);
+        advisoryClaimHeld = false;
         client.release();
         return null;
       }
-      const attempt = Number(summary.attemptCount) + 1;
+      if (row.dispatchState === 'delivered') {
+        throw new Error('Model-budget operator-alert outbox claims delivery without evidence');
+      }
+      const persistedAttempt = Number(row.dispatchAttempt);
+      if (!Number.isSafeInteger(persistedAttempt) || persistedAttempt < 0) {
+        throw new Error('Model-budget operator-alert outbox attempt counter is invalid');
+      }
+      const recovered = row.dispatchState === 'dispatching';
+      const attempt = recovered ? persistedAttempt : evidenceAttempt + 1;
       if (!Number.isSafeInteger(attempt) || attempt < 1) {
         throw new Error('Model-budget operator-alert attempt counter is invalid');
       }
-      return new PostgresModelBudgetOperatorAlertClaim(client, identity, attempt);
+      if (recovered && attempt !== evidenceAttempt + 1) {
+        throw new Error('Model-budget operator-alert committed outbox attempt is inconsistent');
+      }
+      const claimed = await client.query(
+        `
+          UPDATE model_budget_operator_alerts
+          SET dispatch_state = 'dispatching',
+              dispatch_attempt = $4,
+              last_claimed_at_ms = $5
+          WHERE companion_id = $1
+            AND threshold_reason = $2
+            AND window_key = $3
+            AND dedupe_key = $6
+        `,
+        [
+          identity.companionId,
+          identity.thresholdReason,
+          identity.windowKey,
+          attempt,
+          createdAtMs,
+          dedupeKey,
+        ],
+      );
+      if (claimed.rowCount !== 1) {
+        throw new Error('Model-budget operator-alert durable outbox claim disappeared');
+      }
+      await client.query('COMMIT');
+      transactionOpen = false;
+      return new PostgresModelBudgetOperatorAlertClaim(
+        client,
+        identity,
+        attempt,
+        dedupeKey,
+        recovered,
+        advisoryKey,
+      );
     } catch (error) {
+      const failures = [error];
       try {
-        await client.query('ROLLBACK');
-      } finally {
+        if (transactionOpen) await client.query('ROLLBACK');
+      } catch (caught) {
+        failures.push(caught);
+      }
+      try {
+        if (advisoryClaimHeld) await unlockAdvisoryClaim(client, advisoryKey);
         client.release();
+      } catch (caught) {
+        failures.push(caught);
+        client.release(true);
+      }
+      if (failures.length > 1) {
+        throw new AggregateError(failures, 'Model-budget operator-alert outbox claim failed');
       }
       throw error;
     }

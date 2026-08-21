@@ -547,6 +547,11 @@ describe('Postgres live schema migrations', () => {
 
     expect(sql).toContain('CREATE TABLE IF NOT EXISTS model_budget_operator_alerts');
     expect(sql).toContain('PRIMARY KEY (companion_id, threshold_reason, window_key)');
+    expect(sql).toContain("dispatch_state TEXT NOT NULL DEFAULT 'ready'");
+    expect(sql).toContain('dispatch_attempt INTEGER NOT NULL DEFAULT 0');
+    expect(sql).toContain(
+      'dedupe_key = companion_id || \':\' || threshold_reason || \':\' || window_key',
+    );
     expect(sql).toContain(
       'CREATE TABLE IF NOT EXISTS model_budget_operator_alert_delivery_events',
     );

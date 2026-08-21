@@ -44,6 +44,13 @@ import { assertModelUsageLedgerReadable } from '../model-usage-access.js';
 import { PostgresModelUsageCapture } from './capture.js';
 import { optionalText } from './common.js';
 import { PostgresModelUsageQueries } from './queries.js';
+import { PostgresModelBudgetOperatorAlertStore } from '../model-budget-operator-alert-store.js';
+import type {
+  ModelBudgetOperatorAlertClaim,
+  ModelBudgetOperatorAlertIdentity,
+  ModelBudgetOperatorAlertStorePort,
+} from '../../../shared/contracts/model-budget-alert.js';
+import type { ModelBudgetAlertDeliveryEvent } from '../../../shared/contracts/runtime.js';
 
 export type ModelUsageStoreScope =
   | { companionId: string; fleetAggregation?: never }
@@ -85,11 +92,12 @@ function resolveStoreCompanionId(scope: unknown): string | undefined {
   return undefined;
 }
 
-export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQueryPort, ModelUsageCostHydrationQueryPort, ModelUsageBudgetQueryPort, FleetModelUsageSummaryQueryPort, ModelUsageExportPort, ModelUsageReconciliationQueryPort, IcpConversationCostAccountingPort {
+export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQueryPort, ModelUsageCostHydrationQueryPort, ModelUsageBudgetQueryPort, FleetModelUsageSummaryQueryPort, ModelUsageExportPort, ModelUsageReconciliationQueryPort, IcpConversationCostAccountingPort, ModelBudgetOperatorAlertStorePort {
   private readonly readiness: PostgresStoreReadinessHandle;
   private readonly companionId?: string;
   private readonly capture: PostgresModelUsageCapture;
   private readonly queries: PostgresModelUsageQueries;
+  private readonly modelBudgetAlerts: PostgresModelBudgetOperatorAlertStore;
 
   constructor(
     private readonly pool: Pool,
@@ -118,6 +126,7 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
     const waitUntilReady = (): Promise<void> => this.waitUntilReady();
     this.capture = new PostgresModelUsageCapture(pool, this.companionId, waitUntilReady);
     this.queries = new PostgresModelUsageQueries(pool, this.companionId, waitUntilReady);
+    this.modelBudgetAlerts = new PostgresModelBudgetOperatorAlertStore(pool, waitUntilReady);
   }
 
   static connect(
@@ -190,6 +199,18 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
     pricing: readonly ModelUsageBudgetPricingRate[] = [],
   ): Promise<ModelUsageBudgetSpendSnapshot> {
     return await this.queries.getModelBudgetSpend(nowMs, scope, pricing);
+  }
+
+  async claimModelBudgetOperatorAlert(
+    identity: ModelBudgetOperatorAlertIdentity,
+  ): Promise<ModelBudgetOperatorAlertClaim | null> {
+    return await this.modelBudgetAlerts.claimModelBudgetOperatorAlert(identity);
+  }
+
+  async listModelBudgetOperatorAlertEvidence(
+    identity: ModelBudgetOperatorAlertIdentity,
+  ): Promise<ModelBudgetAlertDeliveryEvent[]> {
+    return await this.modelBudgetAlerts.listModelBudgetOperatorAlertEvidence(identity);
   }
 }
 

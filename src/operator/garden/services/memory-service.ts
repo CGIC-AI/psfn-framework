@@ -214,6 +214,8 @@ export class AdminMemoryDataService implements AdminMemoryService {
     fleetMemoryStore?: MemoryStorePort;
     contactStore?: ContactStorePort | null;
     embeddingService?: EmbeddingProviderPort | null;
+    /** Canonical local tenant identity used for companion-memory mutation checks. */
+    companionId?: string;
     resolveCompanionName?: () => string;
     appendAuditTimelineEntry?: (
       actionType: 'memory_mutation' | 'memory_access',
@@ -904,7 +906,14 @@ export class AdminMemoryDataService implements AdminMemoryService {
       ? `${reason ?? 'admin memory body edit'} (reference: ${referencePath})`
       : reason;
 
-    const writer = new MemoryWriter(this.deps.memoryStore, embeddingService);
+    const requestCompanionId = this.requestContext?.kind === 'fleet_principal'
+      ? this.requestContext.resource.companionId ?? undefined
+      : undefined;
+    const writer = new MemoryWriter(this.deps.memoryStore, embeddingService, {
+      ...(requestCompanionId || this.deps.companionId
+        ? { companionId: requestCompanionId ?? this.deps.companionId }
+        : {}),
+    });
     try {
       const result = await writer.patchMemory({
         memoryId: id,

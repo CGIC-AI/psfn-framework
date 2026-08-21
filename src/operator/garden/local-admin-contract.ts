@@ -653,6 +653,7 @@ export function createInProcessGardenAdminContract(
     fleetMemoryStore: options.memoryStore,
     contactStore: options.contactStore,
     embeddingService: options.embeddingService,
+    ...(options.config.companionId ? { companionId: options.config.companionId } : {}),
     resolveCompanionName: () => resolveCompanionNameFromConfig(options.config),
     appendAuditTimelineEntry: (actionType, decision, narrative, details, requestContext) => {
       const joinedDetails = details

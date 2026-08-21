@@ -57,6 +57,7 @@ import {
 } from '../../../faculties/memory/extraction.js';
 import type { ConcernCandidateExtractionSink } from '../../../faculties/memory/extraction/types.js';
 import { MemoryWriter } from '../../../faculties/memory/writer.js';
+import { createCompanionRoomMembershipAuthority } from '../../../faculties/memory/companion-provenance.js';
 import type {
   CoreMemoryStorePort,
   MemoryStorePort,
@@ -597,6 +598,9 @@ export interface MemoryRuntimeOptions {
 
 export function wireMemoryRuntime(options: MemoryRuntimeOptions): MemoryExtractor {
   const costTelemetry = createEventBusCostTelemetryPort(options.eventBus);
+  const roomMembershipAuthority = options.sessionStore
+    ? createCompanionRoomMembershipAuthority(options.sessionStore)
+    : null;
   options.agentLoop.memoryProvider = options.config
     ? new MemoryRetriever(
       options.memoryStore,
@@ -609,6 +613,7 @@ export function wireMemoryRuntime(options: MemoryRuntimeOptions): MemoryExtracto
 	      options.sessionManager,
 	      true,
 	      options.biographicalProjection ?? null,
+	      roomMembershipAuthority,
 	    )
 	    : new MemoryRetriever(
 	      options.memoryStore,
@@ -621,6 +626,7 @@ export function wireMemoryRuntime(options: MemoryRuntimeOptions): MemoryExtracto
 	      options.sessionManager,
 	      true,
 	      options.biographicalProjection ?? null,
+	      roomMembershipAuthority,
 	    );
 
   const extractorFormationOptions = {
@@ -748,6 +754,7 @@ export function wireShardAndThinkRuntime(options: ToolRuntimeOptions): ShardExec
   const foldReviewMemoryWriter = new MemoryWriter(options.memoryStore, options.embeddingService, {
     memoryRetrievalPolicy: () => options.config.memoryRetrievalPolicy,
     ...(options.config.companionId ? { companionId: options.config.companionId } : {}),
+    roomMembershipAuthority: createCompanionRoomMembershipAuthority(options.sessionStore),
   });
   foldReviewMemoryWriter.intakeSinkGateProvider = () => options.sessionManager.intakeSinkGate;
   const foldReviewController = new ShardFoldReviewController(

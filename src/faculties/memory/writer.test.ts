@@ -13,6 +13,7 @@ import { InMemoryMemoryStore } from '../../test-support/in-memory-memory-store.j
 import type { PurrMemory } from './types.js';
 import { DEDUP_THRESHOLD, MEMORY_CONFIG } from './types.js';
 import { runWithRequestContext } from '../../primitives/llm/request-context.js';
+import { createCompanionRoomMembershipAuthority } from './companion-provenance.js';
 
 // ── Mock factories ──
 
@@ -302,24 +303,50 @@ describe('MemoryWriter', () => {
       expect(store.insertMemory).toHaveBeenCalledOnce();
     });
 
-    it('topology-stamps a local companion-room memory before persistence', async () => {
+    it('requires an authenticated local room session before stamping companion-room provenance', async () => {
       const companionA = '11111111-1111-4111-8111-111111111111';
+      const companionB = '22222222-2222-4222-8222-222222222222';
+      const companionC = '33333333-3333-4333-8333-333333333333';
       const roomChannel = 'companion-room:kitchen';
-      const participantWriter = new MemoryWriter(store as unknown as MemoryStorePort, embeddings, {
-        companionId: companionA,
+      const roomSessions = new Map([
+        [companionA, []],
+        [companionB, [{ channelId: roomChannel, sessionId: 'kitchen-b' }]],
+        [companionC, [{ channelId: roomChannel, sessionId: 'kitchen-c' }]],
+      ]);
+      const authorityFor = (companionId: string) => createCompanionRoomMembershipAuthority({
+        listChannels: () => roomSessions.get(companionId) ?? [],
       });
+      const foreignWriter = new MemoryWriter(store as unknown as MemoryStorePort, embeddings, {
+        companionId: companionA,
+        roomMembershipAuthority: authorityFor(companionA),
+      });
+      const participantWriter = new MemoryWriter(store as unknown as MemoryStorePort, embeddings, {
+        companionId: companionB,
+        roomMembershipAuthority: authorityFor(companionB),
+      });
+
+      await expect(foreignWriter.write({
+        text: 'Caller-stamped content from a room A never joined.',
+        type: 'episodic',
+        sourceRef: `${roomChannel}:extract|source:session|session:kitchen-b|operation:extract`,
+        provenance: {
+          channelId: roomChannel,
+          companionId: companionA,
+          sessionId: 'kitchen-b',
+        },
+      })).rejects.toThrow('missing_companion_room_membership');
 
       await expect(participantWriter.write({
         text: 'A memory formed while present in the kitchen.',
         type: 'episodic',
-        sourceRef: `${roomChannel}:extract|source:session|session:kitchen-a|operation:extract`,
-        provenance: { channelId: roomChannel, sessionId: 'kitchen-a' },
+        sourceRef: `${roomChannel}:extract|source:session|session:kitchen-b|operation:extract`,
+        provenance: { channelId: roomChannel, sessionId: 'kitchen-b' },
       })).resolves.toMatchObject({ action: 'created' });
 
       expect(store.insertMemory).toHaveBeenCalledWith(expect.objectContaining({
         provenance: expect.objectContaining({
           channelId: roomChannel,
-          companionId: companionA,
+          companionId: companionB,
         }),
       }), expect.any(Float32Array));
     });
@@ -364,6 +391,49 @@ describe('MemoryWriter', () => {
       expect(store.insertMemory).not.toHaveBeenCalled();
       expect(store.recordPatchEvent).not.toHaveBeenCalled();
       expect(store.recordAbstractionLink).not.toHaveBeenCalled();
+      expect(store.softDeleteMemory).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['patchMemory', (writer: MemoryWriter) => writer.patchMemory({
+        memoryId: 'room-bc-memory',
+        text: 'Unauthorized in-place room mutation.',
+      })],
+      ['patch', (writer: MemoryWriter) => writer.patch({
+        memoryId: 'room-bc-memory',
+        text: 'Unauthorized room correction.',
+      })],
+      ['redact', (writer: MemoryWriter) => writer.redact({
+        memoryId: 'room-bc-memory',
+        operation: 'abstract',
+      })],
+    ])('rejects %s when the local companion lacks the stored room session', async (
+      _name,
+      mutate,
+    ) => {
+      const companionA = '11111111-1111-4111-8111-111111111111';
+      const roomChannel = 'companion-room:kitchen';
+      store.getById.mockReturnValue(makeExistingMemory({
+        id: 'room-bc-memory',
+        text: 'Room content delivered only to B and C.',
+        sourceRef: `${roomChannel}:extract|source:session|session:kitchen-bc|operation:extract`,
+        provenance: {
+          channelId: roomChannel,
+          companionId: companionA,
+          sessionId: 'kitchen-bc',
+        },
+        consentFlags: { deleteOnRequest: true, allowAbstraction: true },
+      }));
+      const writer = new MemoryWriter(store as unknown as MemoryStorePort, embeddings, {
+        companionId: companionA,
+        roomMembershipAuthority: { isAuthenticatedMember: () => false },
+      });
+
+      await expect(mutate(writer)).rejects.toThrow('missing_companion_room_membership');
+
+      expect(embeddings.embed).not.toHaveBeenCalled();
+      expect(store.updateMemory).not.toHaveBeenCalled();
+      expect(store.insertMemory).not.toHaveBeenCalled();
       expect(store.softDeleteMemory).not.toHaveBeenCalled();
     });
 
@@ -1616,6 +1686,11 @@ describe('MemoryWriter', () => {
       const roomChannel = 'companion-room:kitchen';
       const localWriter = new MemoryWriter(store as unknown as MemoryStorePort, embeddings, {
         companionId: companionA,
+        roomMembershipAuthority: {
+          isAuthenticatedMember: ({ channelId, sessionId }) => (
+            channelId === roomChannel && sessionId === 'kitchen-a'
+          ),
+        },
       });
       const source = makeExistingMemory({
         id: 'local-room-source',

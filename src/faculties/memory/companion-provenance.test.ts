@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   auditCompanionMemoryProvenance,
+  createCompanionRoomMembershipAuthority,
   evaluateCompanionMemoryProvenance,
 } from './companion-provenance.js';
 
@@ -66,18 +67,30 @@ describe('companion memory provenance', () => {
       },
     };
 
-    expect(evaluateCompanionMemoryProvenance(roomMemory, COMPANION_A)).toEqual({
+    const authority = createCompanionRoomMembershipAuthority({
+      listChannels: () => [{ channelId: ROOM_KITCHEN, sessionId: 'kitchen-ab' }],
+    });
+    expect(authority.isAuthenticatedMember({ channelId: ROOM_KITCHEN })).toBe(false);
+
+    expect(evaluateCompanionMemoryProvenance(roomMemory, COMPANION_A, authority)).toEqual({
       allowed: true,
       channelKind: 'room',
     });
-    expect(evaluateCompanionMemoryProvenance(roomMemory, COMPANION_C)).toMatchObject({
+    expect(evaluateCompanionMemoryProvenance(roomMemory, COMPANION_C, authority)).toMatchObject({
       allowed: false,
       reason: 'foreign_companion_room',
     });
     expect(evaluateCompanionMemoryProvenance({
       ...roomMemory,
       provenance: { channelId: ROOM_KITCHEN, sessionId: 'kitchen-ab' },
-    }, COMPANION_A)).toMatchObject({
+    }, COMPANION_A, authority)).toMatchObject({
+      allowed: false,
+      reason: 'missing_companion_room_membership',
+    });
+    expect(evaluateCompanionMemoryProvenance({
+      ...roomMemory,
+      provenance: { ...roomMemory.provenance, sessionId: 'kitchen-forged' },
+    }, COMPANION_A, authority)).toMatchObject({
       allowed: false,
       reason: 'missing_companion_room_membership',
     });
@@ -114,7 +127,9 @@ describe('companion memory provenance', () => {
           sessionId: 'kitchen-b',
         },
       },
-    ], COMPANION_C);
+    ], COMPANION_C, createCompanionRoomMembershipAuthority({
+      listChannels: () => [{ channelId: ROOM_KITCHEN, sessionId: 'kitchen-c' }],
+    }));
 
     expect(report).toMatchObject({
       inspectedCount: 4,

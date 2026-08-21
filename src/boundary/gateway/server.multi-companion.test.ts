@@ -1851,6 +1851,122 @@ describe('GatewayServer multi-companion identify (flag on)', () => {
 });
 
 describe('GatewayServer multi-companion routing (flag on)', () => {
+  it('scopes public confirmation resolution to the authenticated companion owner', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'psfn-confirmation-owner-rpc-'));
+    const companionA = '11111111-1111-4111-8111-111111111111';
+    const companionB = '22222222-2222-4222-8222-222222222222';
+    const personalA = join(root, 'personal-a');
+    const personalB = join(root, 'personal-b');
+    mkdirSync(personalA, { recursive: true });
+    mkdirSync(personalB, { recursive: true });
+    const routing = multiCompanion({});
+    routing.personalWorkspaceByCompanionId = {
+      [companionA]: personalA,
+      [companionB]: personalB,
+      '33333333-3333-4333-8333-333333333333': join(root, 'personal-c'),
+    };
+
+    try {
+      const { connect } = await setupServer({
+        ...createMinimalOptions(),
+        capabilityTierProvider: () => 'apprentice',
+        multiCompanion: routing,
+      });
+      const connA = await connect();
+      const connB = await connect();
+      await identifyAgent(connA, companionA, 1);
+      await identifyAgent(connB, companionB, 2);
+
+      const target = join(personalA, 'approved.txt');
+      const queued = await invokeRpc(connA, 3, 'fs.write', {
+        path: join(root, 'outside-personal-workspace.txt'),
+        content: 'owned by A',
+      });
+      expect(queued.error?.code).toBe(GatewayErrors.NEEDS_APPROVAL);
+      const listed = await invokeRpc(connA, 4, 'confirmation.list', {});
+      const confirmationId = listed.result.entries[0].id as string;
+
+      await expect(invokeRpc(connB, 5, 'confirmation.resolve', {
+        id: confirmationId,
+        decision: 'approve',
+      })).resolves.toMatchObject({
+        result: { id: confirmationId, status: 'not_found', executed: false },
+      });
+      expect(existsSync(target)).toBe(false);
+
+      await expect(invokeRpc(connA, 6, 'confirmation.resolve', {
+        id: confirmationId,
+        decision: 'modify',
+        modifiedParams: {
+          path: target,
+          content: 'owned by A',
+        },
+      })).resolves.toMatchObject({
+        result: { id: confirmationId, status: 'modified', executed: true },
+      });
+      expect(readFileSync(target, 'utf8')).toBe('owned by A');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('scopes direct Fleet operator resolution to the authenticated companion owner', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'psfn-confirmation-owner-operator-'));
+    const companionA = '11111111-1111-4111-8111-111111111111';
+    const companionB = '22222222-2222-4222-8222-222222222222';
+    const personalA = join(root, 'personal-a');
+    mkdirSync(personalA, { recursive: true });
+    const routing = multiCompanion({});
+    routing.personalWorkspaceByCompanionId = {
+      [companionA]: personalA,
+      [companionB]: join(root, 'personal-b'),
+      '33333333-3333-4333-8333-333333333333': join(root, 'personal-c'),
+    };
+
+    try {
+      const { server, connect } = await setupServer({
+        ...createMinimalOptions(),
+        capabilityTierProvider: () => 'apprentice',
+        multiCompanion: routing,
+      });
+      const connA = await connect();
+      await identifyAgent(connA, companionA, 1);
+      const queued = await invokeRpc(connA, 2, 'fs.write', {
+        path: join(root, 'outside-personal-workspace.txt'),
+        content: 'operator approved for A',
+      });
+      expect(queued.error?.code).toBe(GatewayErrors.NEEDS_APPROVAL);
+      const listed = await invokeRpc(connA, 3, 'confirmation.list', {});
+      const confirmationId = listed.result.entries[0].id as string;
+
+      await expect(server.resolveOperatorApprovalForOwner(companionB, {
+        id: confirmationId,
+        decision: 'approve',
+      })).resolves.toMatchObject({
+        id: confirmationId,
+        status: 'not_found',
+        executed: false,
+      });
+
+      const target = join(personalA, 'operator-approved.txt');
+      await expect(server.resolveOperatorApprovalForOwner(companionA, {
+        id: confirmationId,
+        decision: 'modify',
+        modifiedParams: {
+          path: target,
+          content: 'operator approved for A',
+        },
+      })).resolves.toMatchObject({
+        id: confirmationId,
+        status: 'modified',
+        executed: true,
+      });
+      expect(readFileSync(target, 'utf8')).toBe('operator approved for A');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('routes confirmation queue invalidations only to the authenticated companion', async () => {
     const eventBus = new EventBus();
     const { connect } = await setupServer({

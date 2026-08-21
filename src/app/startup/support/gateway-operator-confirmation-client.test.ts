@@ -92,6 +92,65 @@ describe('createGatewayOperatorConfirmationClient', () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
+  it('serializes the admitted Fleet companion as resolution authority', async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
+      id: 'fleet-approval',
+      status: 'approved',
+      message: 'Action approved and executed.',
+      executed: true,
+    }), { status: 200 }));
+    const client = createGatewayOperatorConfirmationClient(
+      'http://psfn-gateway:10053/v1',
+      {
+        fetchImpl,
+        operatorToken: 'internal-operator-token',
+        requestTimeoutMs: 5_000,
+      },
+    );
+
+    await client.resolve({
+      id: 'fleet-approval',
+      decision: 'approve',
+    }, {
+      kind: 'fleet_principal',
+      companionId: '11111111-1111-4111-8111-111111111111',
+      requestId: 'request-1',
+      decisionId: 'decision-1',
+    });
+
+    const [, init] = fetchImpl.mock.calls[0] ?? [];
+    expect(JSON.parse(String(init?.body))).toEqual({
+      id: 'fleet-approval',
+      decision: 'approve',
+      companionId: '11111111-1111-4111-8111-111111111111',
+    });
+  });
+
+  it('fails closed when resolution params conflict with admitted companion authority', async () => {
+    const fetchImpl = vi.fn();
+    const client = createGatewayOperatorConfirmationClient(
+      'http://psfn-gateway:10053/v1',
+      {
+        fetchImpl,
+        operatorToken: 'internal-operator-token',
+        requestTimeoutMs: 5_000,
+      },
+    );
+    const conflictingParams = {
+      id: 'fleet-approval',
+      decision: 'approve' as const,
+      companionId: '22222222-2222-4222-8222-222222222222',
+    };
+
+    await expect(client.resolve(conflictingParams, {
+      kind: 'fleet_principal',
+      companionId: '11111111-1111-4111-8111-111111111111',
+      requestId: 'request-1',
+      decisionId: 'decision-1',
+    })).rejects.toThrow('Confirmation params cannot assert companion authority');
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it('fails closed without an internal operator token', () => {
     expect(() => createGatewayOperatorConfirmationClient(
       'http://psfn-gateway:10053/v1',

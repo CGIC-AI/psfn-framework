@@ -165,7 +165,13 @@ export interface IcpAutonomyOperatorPort {
 }
 
 export interface ConfirmationOperatorPort {
-  resolve(params: ConfirmationResolveRequest): Promise<ConfirmationResolveResult>;
+  resolve(
+    params: ConfirmationResolveRequest,
+    authority: Readonly<
+      | { kind: 'standalone_operator' }
+      | { kind: 'fleet_companion'; companionId: string }
+    >,
+  ): Promise<ConfirmationResolveResult>;
 }
 
 const telemetryIngestSchema = Type.Object({
@@ -1078,13 +1084,18 @@ export class ApiServer implements ChannelAdapterPort {
       }
 
       const body = parsedBody.value;
+      const companionId = isRecord(body) && isRfc4122Uuid(body.companionId)
+        ? body.companionId
+        : undefined;
       if (!isRecord(body)
-        || Object.keys(body).some(key => !['id', 'decision', 'modifiedParams'].includes(key))
+        || Object.keys(body).some(key => !['id', 'decision', 'modifiedParams', 'companionId'].includes(key))
         || typeof body.id !== 'string'
         || !CONFIRMATION_ID_PATTERN.test(body.id)
         || (body.decision !== 'approve' && body.decision !== 'deny' && body.decision !== 'modify')
         || (body.decision === 'modify' && !isRecord(body.modifiedParams))
-        || (body.decision !== 'modify' && body.modifiedParams !== undefined)) {
+        || (body.decision !== 'modify' && body.modifiedParams !== undefined)
+        || (this.fleetAuthBootstrapOnly && companionId === undefined)
+        || (!this.fleetAuthBootstrapOnly && body.companionId !== undefined)) {
         sendApiError(res, 400, 'invalid_request', 'Confirmation resolution payload is invalid');
         return;
       }
@@ -1097,7 +1108,12 @@ export class ApiServer implements ChannelAdapterPort {
           : {}),
       };
       try {
-        const result = await this.confirmationOperator!.resolve(params);
+        const result = await this.confirmationOperator!.resolve(
+          params,
+          this.fleetAuthBootstrapOnly
+            ? { kind: 'fleet_companion', companionId: companionId! }
+            : { kind: 'standalone_operator' },
+        );
         sendJson(res, 200, result, API_DYNAMIC_JSON_HEADERS);
       } catch (error) {
         log.error('Operator confirmation resolution failed', { error: toErrorMessage(error) });

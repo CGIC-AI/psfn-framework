@@ -68,13 +68,13 @@ export interface DashboardToolStatus {
   detail?: string;
 }
 
-export type DashboardIntentionFollowUpDisposition = 'handoff' | 'scheduled';
+type DashboardIntentionFollowUpDisposition = 'handoff' | 'scheduled';
 
-export type DashboardIntentionFollowUpReason =
+type DashboardIntentionFollowUpReason =
   | 'active_pending_follow_up'
   | 'pending_intention_scheduled_prompt';
 
-export interface DashboardIntentionFollowUpEvidence {
+interface DashboardIntentionFollowUpEvidence {
   disposition: DashboardIntentionFollowUpDisposition;
   reason: DashboardIntentionFollowUpReason;
   available: boolean;
@@ -84,7 +84,7 @@ export interface DashboardIntentionFollowUpEvidence {
   atReadLimit: boolean;
 }
 
-export interface DashboardIntentionFollowUpRouting {
+interface DashboardIntentionFollowUpRouting {
   horizonSource: 'effective_scheduler_config' | 'unavailable';
   nearTermHorizonMs: number | null;
   evidenceLimit: number;

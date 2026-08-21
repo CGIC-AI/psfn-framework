@@ -112,7 +112,7 @@ describe('ApiServer operator confirmation route', () => {
     expect(resolve).toHaveBeenCalledWith({
       id: 'kube-approval',
       decision: 'approve',
-    });
+    }, { kind: 'standalone_operator' });
   });
 
   it('rejects malformed resolution bodies before invoking the operator resolver', async () => {
@@ -137,7 +137,30 @@ describe('ApiServer operator confirmation route', () => {
     expect(resolve).not.toHaveBeenCalled();
   });
 
-  it('keeps the ADMIN_TOKEN operator resolver reachable in fleet bootstrap mode', async () => {
+  it('rejects companion authority that conflicts with standalone mode', async () => {
+    const resolve = vi.fn();
+    server = new ApiServer({
+      port,
+      host: '127.0.0.1',
+      companionId: TEST_COMPANION_ID,
+      agentLoop: { handleMessage: vi.fn() } as unknown as SubstrateAgent,
+      eventBus: new EventBus(),
+      sessionManager: { recordAssistantMessage: vi.fn() } as unknown as SessionManager,
+      apiKey: API_TOKEN,
+      adminToken: ADMIN_TOKEN,
+      confirmationOperator: { resolve },
+    });
+    await server.start();
+
+    await expect(request(port, ADMIN_TOKEN, {
+      id: 'kube-approval',
+      decision: 'approve',
+      companionId: TEST_COMPANION_ID,
+    })).resolves.toMatchObject({ status: 400 });
+    expect(resolve).not.toHaveBeenCalled();
+  });
+
+  it('carries the authenticated companion into Fleet operator resolution', async () => {
     const resolve = vi.fn(async (params) => ({
       id: params.id,
       status: 'approved' as const,
@@ -166,10 +189,46 @@ describe('ApiServer operator confirmation route', () => {
     await expect(request(port, ADMIN_TOKEN, {
       id: 'fleet-memory-approval',
       decision: 'approve',
+      companionId: TEST_COMPANION_ID,
     })).resolves.toMatchObject({
       status: 200,
       body: { id: 'fleet-memory-approval', status: 'approved', executed: true },
     });
     expect(resolve).toHaveBeenCalledOnce();
+    expect(resolve).toHaveBeenCalledWith({
+      id: 'fleet-memory-approval',
+      decision: 'approve',
+    }, {
+      kind: 'fleet_companion',
+      companionId: TEST_COMPANION_ID,
+    });
+  });
+
+  it('fails closed when Fleet operator resolution omits companion authority', async () => {
+    const resolve = vi.fn();
+    server = new ApiServer({
+      port,
+      host: '127.0.0.1',
+      companionId: TEST_COMPANION_ID,
+      agentLoop: { handleMessage: vi.fn() } as unknown as SubstrateAgent,
+      eventBus: new EventBus(),
+      sessionManager: { recordAssistantMessage: vi.fn() } as unknown as SessionManager,
+      apiKey: API_TOKEN,
+      adminToken: ADMIN_TOKEN,
+      confirmationOperator: { resolve },
+      fleetAuthBootstrapOnly: true,
+      fleetAuthHttpRoutes: fromAny({
+        applyLifecycleCorsPolicy: () => 'not_applicable',
+        matches: () => false,
+        handle: vi.fn(),
+      }),
+    });
+    await server.start();
+
+    await expect(request(port, ADMIN_TOKEN, {
+      id: 'fleet-memory-approval',
+      decision: 'approve',
+    })).resolves.toMatchObject({ status: 400 });
+    expect(resolve).not.toHaveBeenCalled();
   });
 });

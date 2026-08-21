@@ -95,7 +95,7 @@ function deferred<T>(): {
 describe('AdminDashboardDataService', () => {
   it('projects bounded content-free evidence from the live intention handoff and scheduler stores', async () => {
     const nowMs = Date.parse('2026-08-20T12:00:00.000Z');
-    const listPendingFollowUps = vi.fn(async () => [
+    const listPendingFollowUps = vi.fn(async (options?: { includeExpired?: boolean }) => [
       {
         id: 'handoff-later',
         content: 'private handoff content',
@@ -120,8 +120,22 @@ describe('AdminDashboardDataService', () => {
         authorId: 'system:intention',
         authorName: 'Whisper',
       },
+      ...(options?.includeExpired
+        ? [{
+          id: 'handoff-expired',
+          content: 'expired private handoff content',
+          priority: 'low' as const,
+          timing: 'soon' as const,
+          createdAt: '2026-08-19T00:00:00.000Z',
+          dueAt: '2026-08-19T01:00:00.000Z',
+          channelId: 'private:channel',
+          channelType: 'api' as const,
+          authorId: 'system:intention',
+          authorName: 'Whisper',
+        }]
+        : []),
     ] as const);
-    const listScheduledPrompts = vi.fn(async () => [
+    const scheduledRecords = [
       {
         id: 'scheduled-intention',
         name: 'Scheduled intention follow-up',
@@ -148,7 +162,10 @@ describe('AdminDashboardDataService', () => {
         authorName: 'Scheduler',
         status: 'pending',
       },
-    ] as const);
+    ] as const;
+    const listScheduledPrompts = vi.fn(async (options?: { source?: string }) => (
+      scheduledRecords.filter(record => options?.source === undefined || record.source === options.source)
+    ));
     const service = new AdminDashboardDataService({
       ...makeBaseDeps(),
       now: () => nowMs,
@@ -163,11 +180,14 @@ describe('AdminDashboardDataService', () => {
 
     expect(listPendingFollowUps).toHaveBeenCalledWith({
       includeActivated: false,
-      includeExpired: true,
+      includeExpired: false,
       asOf: '2026-08-20T12:00:00.000Z',
       limit: 200,
     });
-    expect(listScheduledPrompts).toHaveBeenCalledWith({ limit: 200 });
+    expect(listScheduledPrompts).toHaveBeenCalledWith({
+      source: 'intention_appraisal',
+      limit: 200,
+    });
     expect(dashboard.stats.intentionFollowUpRouting).toEqual({
       horizonSource: 'effective_scheduler_config',
       nearTermHorizonMs: 259_200_000,

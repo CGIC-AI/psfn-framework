@@ -305,11 +305,14 @@ export class AdminDashboardDataService implements AdminDashboardService {
     const [handoffResult, scheduledResult] = await Promise.allSettled([
       runtime.pendingFollowUpStore.list({
         includeActivated: false,
-        includeExpired: true,
+        includeExpired: false,
         asOf: new Date(observedAtMs).toISOString(),
         limit: INTENTION_EVIDENCE_LIMIT,
       }),
-      runtime.scheduledPromptStore.listPending({ limit: INTENTION_EVIDENCE_LIMIT }),
+      runtime.scheduledPromptStore.listPending({
+        source: 'intention_appraisal',
+        limit: INTENTION_EVIDENCE_LIMIT,
+      }),
     ]);
     if (handoffResult.status === 'rejected') {
       log.warn('Failed to read pending intention handoff evidence', {
@@ -323,7 +326,7 @@ export class AdminDashboardDataService implements AdminDashboardService {
     }
     const handoffs = handoffResult.status === 'fulfilled' ? handoffResult.value : null;
     const pendingScheduledPrompts = scheduledResult.status === 'fulfilled'
-      ? scheduledResult.value.filter(record => record.source === 'intention_appraisal')
+      ? scheduledResult.value
       : null;
 
     return {

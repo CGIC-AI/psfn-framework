@@ -139,6 +139,18 @@ describe('PostgresScheduledPromptStore', () => {
     expect(rows).toHaveLength(1);
   });
 
+  it('filters intention-appraisal rows in storage before applying the read limit', async () => {
+    const store = await PostgresScheduledPromptStore.connect('postgres://x@localhost:5432/psfn');
+
+    await store.listPending({ source: 'intention_appraisal', limit: 25 });
+
+    const [, sql, params] = storeMocks.queryRows.mock.calls[0];
+    expect(sql).toMatch(
+      /WHERE status = 'pending'\s+AND source = \$1\s+ORDER BY[\s\S]+LIMIT \$2/u,
+    );
+    expect(params).toEqual(['intention_appraisal', 25]);
+  });
+
   it('marks only pending rows complete', async () => {
     storeMocks.queryOne.mockResolvedValue({
       ...ROW,

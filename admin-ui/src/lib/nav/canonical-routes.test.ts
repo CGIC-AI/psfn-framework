@@ -55,6 +55,6 @@ test('the shared Garden layout applies canonical redirects before old surfaces c
     'utf8',
   );
 
-  assert.match(layout, /canonicalGardenDestination\(/u);
+  assert.match(layout, /canonicalGardenDestination\(\s*gardenPathname,/u);
   assert.match(layout, /window\.location\.replace\(destination\)/u);
 });

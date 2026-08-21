@@ -241,6 +241,14 @@ export interface InProcessGardenAdminContractOptions {
   eventBus: EventBus;
   contactStore?: ContactStorePort | null;
   concernStore?: ConcernStorePort | null;
+  pendingFollowUpStore?: Pick<
+    import('../../core/intention/pending-follow-up-store-port.js').PendingFollowUpStorePort,
+    'list'
+  > | null;
+  scheduledPromptStore?: Pick<
+    import('../../core/scheduler/scheduled-prompt-store-port.js').ScheduledPromptStorePort,
+    'listPending'
+  > | null;
   characterCard: CharacterCardV2;
   config: SubstrateConfig;
   embeddingService: EmbeddingProviderPort | null;
@@ -704,6 +712,17 @@ export function createInProcessGardenAdminContract(
       adaptiveToolsService: adaptiveTools,
       analysisWorkbenchTraceStore,
       resolveLastActiveSessionId,
+      ...(options.effectiveSchedulerConfig
+        && options.pendingFollowUpStore
+        && options.scheduledPromptStore
+        ? {
+          intentionFollowUpRuntime: {
+            nearTermHorizonMs: options.effectiveSchedulerConfig.intentionFollowUp.nearTermHorizonMs,
+            pendingFollowUpStore: options.pendingFollowUpStore,
+            scheduledPromptStore: options.scheduledPromptStore,
+          },
+        }
+        : {}),
     }),
     diagnostics: new AdminDiagnosticsDataService({
       eventBus: options.eventBus,

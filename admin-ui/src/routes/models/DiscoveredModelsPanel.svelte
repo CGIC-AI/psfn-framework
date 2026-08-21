@@ -1,9 +1,11 @@
 <script lang="ts">
+  import { tick } from 'svelte';
   import type { DiscoveredModel } from '$lib/types';
   import {
     discoveryLimitSummary,
     discoveryZdrProviderSummary,
   } from './page-helpers';
+  import { resolveDiscoveredModelWindow } from './discovered-model-window';
 
   let {
     discoveryError,
@@ -20,6 +22,55 @@
     setDiscoverySearch: (value: string) => void;
     addDiscoveredModel: (discovered: DiscoveredModel) => void;
   }>();
+
+  let viewport = $state<HTMLDivElement | null>(null);
+  let modelGrid = $state<HTMLDivElement | null>(null);
+  let scrollLeft = $state(0);
+  let viewportWidth = $state(0);
+  let columnPitch = $state(0);
+
+  const virtualWindow = $derived(resolveDiscoveredModelWindow({
+    itemCount: filteredDiscoveredModels.length,
+    scrollLeft,
+    viewportWidth,
+    columnPitch,
+    itemsPerColumn: 2,
+    overscanColumns: 1,
+    bootstrapColumns: 3,
+  }));
+  const visibleModels = $derived(filteredDiscoveredModels.slice(
+    virtualWindow.startItem,
+    virtualWindow.endItem,
+  ));
+
+  function updateViewportGeometry(): void {
+    if (!viewport) return;
+    viewportWidth = viewport.clientWidth;
+    scrollLeft = viewport.scrollLeft;
+    const firstCard = modelGrid?.querySelector<HTMLElement>('[data-discovered-model-card]');
+    if (!firstCard || !modelGrid) return;
+    const gap = Number.parseFloat(window.getComputedStyle(modelGrid).columnGap);
+    const measuredPitch = firstCard.getBoundingClientRect().width
+      + (Number.isFinite(gap) ? gap : 0);
+    if (measuredPitch > 0) columnPitch = measuredPitch;
+  }
+
+  $effect(() => {
+    const currentViewport = viewport;
+    if (!currentViewport) return;
+    void tick().then(updateViewportGeometry);
+    const observer = new ResizeObserver(updateViewportGeometry);
+    observer.observe(currentViewport);
+    return () => observer.disconnect();
+  });
+
+  $effect(() => {
+    void discoverySearch;
+    void filteredDiscoveredModels;
+    scrollLeft = 0;
+    if (viewport) viewport.scrollLeft = 0;
+    void tick().then(updateViewportGeometry);
+  });
 </script>
 
 <section class="garden-section card-garden space-y-4 p-5" aria-labelledby="discovered-models-heading">
@@ -57,14 +108,32 @@
   {:else}
     <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
     <div
+      bind:this={viewport}
+      onscroll={updateViewportGeometry}
       class="max-w-full overflow-x-auto pb-1"
       role="region"
       aria-label="Discovered model results"
       tabindex="0"
     >
-      <div class="grid grid-flow-col grid-rows-2 auto-cols-[minmax(16rem,22rem)] gap-3">
-        {#each filteredDiscoveredModels as discovered}
-          <article class="flex min-w-0 flex-col rounded-xl border border-bark-200 bg-bark-50 px-3 py-3 transition-colors hover:border-gold-300">
+      <div
+        class="relative"
+        style:width={virtualWindow.totalWidthPx === null ? undefined : `${virtualWindow.totalWidthPx}px`}
+      >
+        <div
+          bind:this={modelGrid}
+          class="grid w-max grid-flow-col grid-rows-2 auto-cols-[minmax(16rem,22rem)] gap-3"
+          style:transform={`translateX(${virtualWindow.offsetPx}px)`}
+          role="list"
+          aria-label={`${filteredDiscoveredModels.length} discovered models`}
+        >
+        {#each visibleModels as discovered, visibleIndex (discovered.id)}
+          <article
+            data-discovered-model-card
+            role="listitem"
+            aria-setsize={filteredDiscoveredModels.length}
+            aria-posinset={virtualWindow.startItem + visibleIndex + 1}
+            class="flex min-w-0 flex-col rounded-xl border border-bark-200 bg-bark-50 px-3 py-3 transition-colors hover:border-gold-300"
+          >
             <div class="flex items-start justify-between gap-2">
               <p class="font-mono text-xs text-shadow-800 break-all">{discovered.id}</p>
               {#if discovered.zdrAvailable}
@@ -102,6 +171,7 @@
             </button>
           </article>
         {/each}
+        </div>
       </div>
     </div>
   {/if}

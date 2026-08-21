@@ -272,6 +272,55 @@ describe('Automata Bus concrete Postgres query adapters', () => {
     }
   }, INTEGRATION_TIMEOUT_MS);
 
+  it('preserves required lifecycle state when model-identity lag arrives after the reindex fence', async () => {
+    const pool = await createTenantPool();
+    try {
+      const store = createPostgresAutomataBusStore(pool);
+      const adapter = new PostgresAutomataBusVectorIndexAdapter(pool, {
+        companionId: 'companion-a',
+        maxCandidateLimit: 8,
+        reindexLeaseDurationMs: 60_000,
+      });
+      const current = finding('identity-race', 1);
+      await store.append({
+        companionId: 'companion-a',
+        event: current,
+        audiences: ['eligible-automata'],
+        sensitivity: 'personal',
+      });
+      await adapter.upsert({
+        ...canonical(current, 'eligible-automata'),
+        embedding: new Float32Array([1, 0, 0]),
+        modelIdentity: MODEL,
+      });
+
+      const lease = await adapter.beginReindex({
+        companionId: 'companion-a',
+        modelIdentity: MODEL,
+      });
+      await adapter.markLagging({
+        eventId: current.eventId,
+        companionId: 'companion-a',
+        stage: 'model-identity',
+        modelIdentity: { ...MODEL, model: 'replacement-model' },
+      });
+      await adapter.completeReindex({
+        companionId: 'companion-a',
+        modelIdentity: MODEL,
+        ...lease,
+        eventIds: [current.eventId],
+      });
+
+      await expect(adapter.readState()).resolves.toEqual(expect.objectContaining({
+        indexState: 'degraded',
+        reindexState: 'required',
+        indexingLag: expect.objectContaining({ pendingCount: 1 }),
+      }));
+    } finally {
+      await pool.end();
+    }
+  }, INTEGRATION_TIMEOUT_MS);
+
   it('keeps canonical visibility authoritative across lexical, ANN, exact, lag, and correction paths', async () => {
     const pool = await createTenantPool();
     try {

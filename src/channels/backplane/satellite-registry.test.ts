@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { principalFromApiKeyToken, principalFromSatelliteApiKeyToken } from './http/auth.js';
@@ -862,6 +863,32 @@ describe('saveSatelliteRegistryConfig', () => {
     saveSatelliteRegistryConfig(dataDir, next);
     const reloaded = loadSatelliteRegistryConfig(dataDir);
     expect(reloaded.satellites[0]?.placeId).toBe('kitchen');
+  });
+
+  it('rejects a stale compare-and-swap without overwriting a sibling registry update', () => {
+    const original = exampleRegistry();
+    saveSatelliteRegistryConfig(dataDir, original);
+    const originalDigest = `sha256:${createHash('sha256')
+      .update(readFileSync(join(dataDir, 'satellites.json')))
+      .digest('hex')}`;
+
+    const siblingUpdate = {
+      ...original,
+      satellites: original.satellites.map(satellite => ({
+        ...satellite,
+        displayName: 'Sibling writer update',
+      })),
+    };
+    saveSatelliteRegistryConfig(dataDir, siblingUpdate);
+
+    const staleRetirement = {
+      ...original,
+      enabled: false,
+    };
+    expect(() => saveSatelliteRegistryConfig(dataDir, staleRetirement, {
+      expectedDigest: originalDigest,
+    })).toThrow(/changed after backup/u);
+    expect(loadSatelliteRegistryConfig(dataDir)).toEqual(siblingUpdate);
   });
 });
 

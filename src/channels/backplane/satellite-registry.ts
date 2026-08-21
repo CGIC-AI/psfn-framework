@@ -39,6 +39,7 @@ import { toErrorMessage } from '../../shared/utils/errors.js';
 import { isRecord } from '../../shared/utils/types.js';
 import { createCompanionId } from '../../shared/routing/companion-id.js';
 import { assertNoUnknownKeys } from './config-validation.js';
+import { withSessionJournalWriteLock } from '../../persistence/sessions/store/session-journal-write-lock.js';
 
 const ID_TOKEN_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 const CLAIM_TYPE_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/u;
@@ -854,15 +855,28 @@ function toSerializableSatelliteRegistry(config: SatelliteRegistryConfig): unkno
 export function saveSatelliteRegistryConfig(
   dataDir: string,
   config: SatelliteRegistryConfig,
+  options: {
+    expectedDigest?: string;
+  } = {},
 ): SatelliteRegistryConfig {
   const wire = toSerializableSatelliteRegistry(config);
   // Fail closed: the wire form must itself parse cleanly before it touches disk.
   const validated = parseSatelliteRegistryConfig(wire, SATELLITE_REGISTRY_FILE_NAME);
   const filePath = join(dataDir, SATELLITE_REGISTRY_FILE_NAME);
-  const tempPath = `${filePath}.tmp`;
-  writeFileSync(tempPath, `${JSON.stringify(wire, null, 2)}\n`, 'utf8');
-  renameSync(tempPath, filePath);
-  return validated;
+  return withSessionJournalWriteLock(filePath, () => {
+    if (options.expectedDigest !== undefined) {
+      const currentDigest = existsSync(filePath)
+        ? `sha256:${createHash('sha256').update(readFileSync(filePath)).digest('hex')}`
+        : undefined;
+      if (currentDigest !== options.expectedDigest) {
+        throw new Error('Synthetic satellite registry changed after backup; refusing stale retirement');
+      }
+    }
+    const tempPath = `${filePath}.tmp`;
+    writeFileSync(tempPath, `${JSON.stringify(wire, null, 2)}\n`, 'utf8');
+    renameSync(tempPath, filePath);
+    return validated;
+  });
 }
 
 export function loadSatelliteRegistryConfig(dataDir: string): SatelliteRegistryConfig {

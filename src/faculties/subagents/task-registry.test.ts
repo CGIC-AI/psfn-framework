@@ -28,6 +28,7 @@ function automataPolicy() {
         exactFallbackEnabled: true,
         modelIdentityPolicy: 'configured-provider-strict',
       },
+      reindex: { leaseDurationMs: 60_000 },
       reviewer: {
         enabled: true,
         cadenceMs: 60_000,

@@ -356,6 +356,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
           embeddingIdentity: resolveEmbeddingProviderProvenanceFromConfig(config, gateway.dims),
           appCache,
           policy: policy.bus.query,
+          reindexLeaseDurationMs: policy.bus.reindex.leaseDurationMs,
         });
         const writer = new CanonicalAutomataBusWriter({
           companionId,

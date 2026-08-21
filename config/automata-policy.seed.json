@@ -33,6 +33,9 @@
       "exactFallbackEnabled": true,
       "modelIdentityPolicy": "configured-provider-strict"
     },
+    "reindex": {
+      "leaseDurationMs": 1800000
+    },
     "reviewer": {
       "enabled": true,
       "cadenceMs": 21600000,

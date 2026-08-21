@@ -27,6 +27,7 @@ function policy() {
         exactFallbackEnabled: true,
         modelIdentityPolicy: 'configured-provider-strict',
       },
+      reindex: { leaseDurationMs: 60_000 },
       reviewer: {
         enabled: true,
         cadenceMs: 60_000,
@@ -297,6 +298,17 @@ describe('AutomataRunRegistry', () => {
         query: { ...policy().bus.query, hiddenLimit: 1 },
       },
     })).toThrow('contains unknown keys');
+  });
+
+  it('requires an owner-supplied positive Bus reindex lease duration', () => {
+    expect(policy().bus.reindex).toEqual({ leaseDurationMs: 60_000 });
+    expect(() => parseAutomataOwnerPolicy({
+      ...policy(),
+      bus: {
+        ...policy().bus,
+        reindex: { leaseDurationMs: 0 },
+      },
+    })).toThrow('bus.reindex.leaseDurationMs must be a positive safe integer');
   });
 
   it('requires explicit owner bounds for governed lesson proposals', () => {

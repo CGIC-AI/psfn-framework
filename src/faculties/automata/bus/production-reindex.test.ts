@@ -7,6 +7,14 @@ import {
   type AutomataBusReindexProductionRuntime,
   PostgresAutomataBusReindexSource,
 } from './production-reindex.js';
+import type { AutomataBusReindexLease } from './reindex-service.js';
+
+const LEASE: AutomataBusReindexLease = {
+  companionId: 'companion-a',
+  leaseToken: 'a2b74a19-5c3c-4cee-aa8c-56d352fe73ae',
+  snapshotSequence: 7,
+  mutationFence: 11,
+};
 
 const event: AutomataBusFindingEvent = {
   schemaVersion: 1,
@@ -64,20 +72,30 @@ describe('PostgresAutomataBusReindexSource', () => {
       maxFindings: 3,
     });
 
-    await expect(source.readCurrent({ companionId: 'companion-a', limit: 2 }))
+    await expect(source.readCurrent({
+      companionId: 'companion-a',
+      limit: 2,
+      snapshotSequence: 7,
+    }))
       .resolves.toMatchObject({
         companionId: 'companion-a',
         findings: [{ eventId: 'event-a', companionId: 'companion-a' }],
         hasMore: false,
       });
     expect(database.query.mock.calls[0]?.[0]).toContain("'eligible-automata' = ANY(audiences)");
+    expect(database.query.mock.calls[0]?.[0]).toContain('sequence <= $2');
     expect(database.query.mock.calls[0]?.[1]).toEqual([
       'companion-a',
+      7,
       ['public', 'personal', 'intimate', 'confidential'],
       3,
     ]);
 
-    await expect(source.readCurrent({ companionId: 'companion-b', limit: 1 }))
+    await expect(source.readCurrent({
+      companionId: 'companion-b',
+      limit: 1,
+      snapshotSequence: 7,
+    }))
       .rejects.toThrow('companion scope mismatch');
     expect(database.query).toHaveBeenCalledOnce();
   });
@@ -90,7 +108,11 @@ describe('PostgresAutomataBusReindexSource', () => {
       maxFindings: 3,
     });
 
-    await expect(source.readCurrent({ companionId: 'companion-a', limit: 2 }))
+    await expect(source.readCurrent({
+      companionId: 'companion-a',
+      limit: 2,
+      snapshotSequence: 7,
+    }))
       .rejects.toThrow('cross-companion row');
   });
 });
@@ -99,7 +121,7 @@ describe('createProductionAutomataBusReindexService', () => {
   it('binds vector lifecycle and finding indexing to the same companion identity', async () => {
     const database = pool();
     const vector = {
-      beginReindex: vi.fn(async () => undefined),
+      beginReindex: vi.fn(async () => LEASE),
       completeReindex: vi.fn(async () => undefined),
       failReindex: vi.fn(async () => undefined),
     };
@@ -127,7 +149,7 @@ describe('createProductionAutomataBusReindexService', () => {
       modelIdentity: { provider: 'test', model: 'embed-v1', dimensions: 3 },
     });
     expect(vector.completeReindex).toHaveBeenCalledWith({
-      companionId: 'companion-a',
+      ...LEASE,
       modelIdentity: { provider: 'test', model: 'embed-v1', dimensions: 3 },
       eventIds: ['event-a'],
     });

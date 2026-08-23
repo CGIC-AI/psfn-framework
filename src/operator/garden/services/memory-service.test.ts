@@ -47,6 +47,44 @@ function makePrivacySummary(overrides: Partial<MemoryAdminPrivacySummary> = {}):
 }
 
 describe('AdminMemoryDataService', () => {
+  it('patches a companion-room memory when the local session index proves membership', async () => {
+    const companionId = '11111111-1111-4111-8111-111111111111';
+    const channelId = 'companion-room:kitchen';
+    const sessionId = 'room-kitchen-local';
+    const memory = makeMemory('room-memory', {
+      sourceRef: `${channelId}:extract|source:session|session:${sessionId}|operation:extract`,
+      provenance: { channelId, companionId, sessionId },
+    });
+    const memoryStore = {
+      getById: vi.fn(async () => memory),
+      updateMemory: vi.fn(async (_id: string, updates: Partial<PurrMemory>) => {
+        Object.assign(memory, updates);
+      }),
+      recordPatchEvent: vi.fn(async () => undefined),
+      runInTransaction: vi.fn(async (handler: () => Promise<unknown>) => handler()),
+    } as unknown as MemoryStorePort;
+    const embeddingService: EmbeddingProviderPort = {
+      dims: 3,
+      embed: vi.fn(async () => new Float32Array([0.1, 0.2, 0.3])),
+      embedBatch: vi.fn(async () => []),
+    };
+    const service = new AdminMemoryDataService({
+      memoryStore,
+      embeddingService,
+      companionId,
+      roomMembershipAuthority: {
+        isAuthenticatedMember: input => (
+          input.channelId === channelId && input.sessionId === sessionId
+        ),
+      },
+    });
+
+    await expect(service.forSession(OPERATOR_SESSION).patchMemory('room-memory', {
+      text: 'Corrected local room memory.',
+    })).resolves.toEqual({ ok: true });
+    expect(memory.text).toBe('Corrected local room memory.');
+  });
+
   it('delegates Garden list filters, count, ordering, and pagination to the memory store', async () => {
     const memory = makeMemory('page-memory');
     const memoryStore = {

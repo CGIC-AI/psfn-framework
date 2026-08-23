@@ -1,4 +1,6 @@
 import '../../shared/utils/load-dotenv.js';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type { QueryResultRow } from 'pg';
 import {
   createPostgresPool,
@@ -7,9 +9,22 @@ import {
 import { resolveConfigTenantPoolScope } from '../../persistence/postgres/tenant-pool-scope.js';
 import {
   auditCompanionMemoryProvenance,
+  createCompanionRoomMembershipAuthority,
+  type CompanionRoomMembershipAuthority,
   type CompanionMemoryAuditInput,
 } from '../../faculties/memory/companion-provenance.js';
 import type { MemoryProvenance } from '../../faculties/memory/types.js';
+import {
+  resolveConfiguredCompanionDataDir,
+  resolveSessionsDir,
+} from '../../persistence/layout.js';
+import {
+  CHANNEL_INDEX_FILENAME,
+  type ChannelIndexEntry,
+} from '../../persistence/sessions/store-primitives.js';
+import { loadChannelIndex } from '../../persistence/sessions/store/channel-index.js';
+import { indexedChannelId } from '../../persistence/sessions/store/session-index-keys.js';
+import { parseJournalText } from '../../persistence/journals/journal-utils.js';
 import { isRecord } from '../../shared/utils/types.js';
 import {
   bootstrapMaintenanceRuntime,
@@ -89,6 +104,46 @@ function projectRow(row: CompanionMemoryAuditRow): CompanionMemoryAuditInput {
   };
 }
 
+/**
+ * Read the same local channel/session bindings used by the gateway without
+ * repairing or rewriting the derived index. Missing, malformed, or incomplete
+ * bindings simply provide no room authority and therefore fail the audit
+ * closed.
+ */
+export function createAuditRoomMembershipAuthority(
+  companionDataDir: string,
+): CompanionRoomMembershipAuthority {
+  const sessionsDir = resolveSessionsDir(companionDataDir);
+  const index = new Map<string, ChannelIndexEntry>();
+  loadChannelIndex(join(sessionsDir, CHANNEL_INDEX_FILENAME), index, {
+    persistMigration: false,
+  });
+  return createCompanionRoomMembershipAuthority({
+    listChannels: () => [...index.entries()]
+      .filter(([sessionId, entry]) => {
+        const channelId = indexedChannelId(sessionId, entry);
+        let observedEntry = false;
+        for (const filename of entry.filenames) {
+          const journalPath = join(sessionsDir, filename);
+          if (!existsSync(journalPath)) return false;
+          const journal = parseJournalText(readFileSync(journalPath, 'utf8'));
+          if (
+            journal.quarantined.length > 0
+            || journal.entries.some(candidate => candidate.channelId !== channelId)
+          ) {
+            return false;
+          }
+          observedEntry ||= journal.entries.length > 0;
+        }
+        return observedEntry;
+      })
+      .map(([sessionId, entry]) => ({
+        sessionId,
+        channelId: indexedChannelId(sessionId, entry),
+      })),
+  });
+}
+
 async function run(options: CliOptions): Promise<void> {
   const { config } = await bootstrapMaintenanceRuntime();
   if (config.persistenceBackend !== 'postgres') {
@@ -121,7 +176,11 @@ async function run(options: CliOptions): Promise<void> {
       FROM l2_memories
       ORDER BY id ASC
     `);
-    const report = auditCompanionMemoryProvenance(rows.map(projectRow), companionId);
+    const report = auditCompanionMemoryProvenance(
+      rows.map(projectRow),
+      companionId,
+      createAuditRoomMembershipAuthority(resolveConfiguredCompanionDataDir(config)),
+    );
     if (options.json) {
       console.log(JSON.stringify(report, null, 2));
     } else {

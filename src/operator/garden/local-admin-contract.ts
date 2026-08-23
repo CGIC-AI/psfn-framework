@@ -6,10 +6,7 @@ import type { ContactStorePort } from '../../core/contacts/contact-store-port.js
 import type { PendingContactApprovalStore } from '../../core/contacts/pending-contact-approvals.js';
 import type { CharacterCardVersionStore } from '../../core/identity/card-versioning.js';
 import { resolveCompanionNameFromConfig } from '../../core/identity/companion-runtime.js';
-import {
-  createPromptStatePort,
-  type PromptStatePort,
-} from '../../core/identity/prompt-state-port.js';
+import { createPromptStatePort, type PromptStatePort } from '../../core/identity/prompt-state-port.js';
 import {
   PromptRuntimeLayoutStore,
   resolvePromptRuntimeLayoutPath,
@@ -26,6 +23,7 @@ import type { ConcernStorePort } from '../../core/intention/concern-store-port.j
 import type { OutreachOutboxStore } from '../../core/intention/outreach-outbox.js';
 import { NorthStarStore } from '../../faculties/north-star/store.js';
 import type { MemoryStorePort } from '../../faculties/memory/memory-store-port.js';
+import { createCompanionRoomMembershipAuthority } from '../../faculties/memory/companion-provenance.js';
 import {
   createSubjectAuthorizedMemoryStore,
   type MemorySubjectAccessContext,
@@ -168,8 +166,10 @@ import { AdminSharedWorkspaceService } from './services/shared-workspace-service
 import { requireAuditOpaqueIdKeyring } from './audit-opaque-id-keyring.js';
 import type { BackgroundWorkStorePort } from '../../core/agent/background-work/store-port.js';
 import type { OperatorAlertSinkConfiguration } from '../../shared/contracts/operator-alerting.js';
+
 const log = createComponentLogger('GardenAdminContract');
 
+/** Build the canonical operator-facing episodic watermark lanes. */
 export function buildEpisodicWatermarkLaneDefinitions(config: {
   episodeSynthesis: { timerIntervalMinutes: number };
   arcFormation: { passIntervalDays: number };
@@ -662,6 +662,7 @@ export function createInProcessGardenAdminContract(
     contactStore: options.contactStore,
     embeddingService: options.embeddingService,
     ...(options.config.companionId ? { companionId: options.config.companionId } : {}),
+    roomMembershipAuthority: createCompanionRoomMembershipAuthority(options.sessionStore),
     resolveCompanionName: () => resolveCompanionNameFromConfig(options.config),
     appendAuditTimelineEntry: (actionType, decision, narrative, details, requestContext) => {
       const joinedDetails = details

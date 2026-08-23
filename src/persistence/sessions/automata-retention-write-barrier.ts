@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { existsSync } from 'node:fs';
+import { existsSync, unlinkSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import type { ExactSessionPurgeInput } from '../../faculties/automata/retention-contract.js';
 import type { ExactSessionPurgeResolvedTarget } from '../../faculties/automata/production-exact-session-purge.js';
@@ -73,6 +73,31 @@ export class FilesystemAutomataRetentionWriteBarrier {
         }
         writeFileDurableAtomicSync(path, '', { exclusive: true });
       }
+    });
+  }
+
+  /** Release a completed maintenance seal after every exact surface is proven absent. */
+  unseal(input: ExactSessionPurgeInput, target: ExactSessionPurgeResolvedTarget): void {
+    if (input.companionId !== this.companionId) {
+      throw new Error('Exact-session write barrier companion scope mismatch');
+    }
+    const activeJournalFilename = requiredText(
+      target.activeJournalFilename,
+      'activeJournalFilename',
+    );
+    if (
+      activeJournalFilename !== basename(activeJournalFilename)
+      || !isSessionJournalFilename(activeJournalFilename)
+    ) {
+      throw new Error('Exact-session write barrier received an unsafe journal filename');
+    }
+    const activePath = join(this.sessionsDir, activeJournalFilename);
+    withSessionJournalWriteLock(activePath, () => {
+      for (const identity of new Set([input.sessionId, target.channelId])) {
+        const path = this.markerPath(requiredText(identity, 'session identity'));
+        if (existsSync(path)) unlinkSync(path);
+      }
+      fsyncDirectorySync(this.markerDir);
     });
   }
 

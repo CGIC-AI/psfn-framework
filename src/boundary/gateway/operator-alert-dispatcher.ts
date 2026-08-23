@@ -95,19 +95,11 @@ export class GatewayOperatorAlertDispatcher {
       const target = `telegram:${this.telegramChatId}`;
       const title = params.title?.trim();
       const content = escapeTelegramMarkdown(title ? `${title}\n\n${message}` : message);
-      if (idempotencyKey) {
-        attempts.push(Promise.resolve(this.recordFailure(
-          'telegram',
-          new Error('Telegram operator alerts do not support provider idempotency'),
-          sender.provenance,
-        )));
-      } else {
-        attempts.push(
-          this.telegramDock.outbound.sendText({ channelId: target }, content)
-            .then(() => ({ sink: 'telegram' as const, status: 'sent' as const, target }))
-            .catch(error => this.recordFailure('telegram', error, sender.provenance)),
-        );
-      }
+      attempts.push(
+        this.telegramDock.outbound.sendText({ channelId: target }, content)
+          .then(() => ({ sink: 'telegram' as const, status: 'sent' as const, target }))
+          .catch(error => this.recordFailure('telegram', error, sender.provenance)),
+      );
     }
 
     const deliveries = await Promise.all(attempts);

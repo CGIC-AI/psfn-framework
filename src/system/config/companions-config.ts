@@ -463,6 +463,35 @@ function assertNoOverlappingObserverPersistenceRoots(
   }
 }
 
+function assertObserverRootsOutsideCompanionPrivateBoundaries(
+  companions: readonly ResolvedCompanionFleetEntry[],
+): void {
+  for (let observerIndex = 0; observerIndex < companions.length; observerIndex += 1) {
+    const observerRoot = companions[observerIndex]?.observerEvalSidecar?.persistenceRootDir;
+    if (!observerRoot) continue;
+    for (let boundaryIndex = 0; boundaryIndex < companions.length; boundaryIndex += 1) {
+      const boundary = companions[boundaryIndex];
+      if (!boundary) continue;
+      const privateBoundaries = [
+        ['companionDataDir', boundary.companionDataDir],
+        ['personalWorkspacePath', boundary.personalWorkspacePath],
+      ] as const;
+      for (const [field, privateRoot] of privateBoundaries) {
+        if (
+          resolve(observerRoot) === resolve(privateRoot)
+          || isStrictSubpath(observerRoot, privateRoot)
+          || isStrictSubpath(privateRoot, observerRoot)
+        ) {
+          throw new Error(
+            `${COMPANIONS_ERROR_PREFIX}: companions[${observerIndex}].observerEvalSidecar.persistenceRootDir `
+            + `must not overlap companions[${boundaryIndex}].${field}`,
+          );
+        }
+      }
+    }
+  }
+}
+
 function assertNoDuplicateField<T>(
   companions: readonly T[],
   select: (entry: T) => string,
@@ -668,6 +697,7 @@ export function resolveCompanionFleetPaths(
     ...entry,
     personalWorkspacePath: workspaceLayout.personalWorkspaceByCompanionId.get(entry.companionId)!,
   }));
+  assertObserverRootsOutsideCompanionPrivateBoundaries(companions);
 
   return {
     postgres: fleet.postgres,

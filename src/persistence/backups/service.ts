@@ -4,6 +4,7 @@ import {
   copyFileSync,
   cpSync,
   existsSync,
+  lstatSync,
   mkdtempSync,
   mkdirSync,
   readdirSync,
@@ -12,7 +13,7 @@ import {
   statSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, isAbsolute, join, relative, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { createComponentLogger } from '../../shared/logger.js';
 import { recordBackupDiagnosticOutcome } from '../../shared/diagnostics/runtime-diagnostics.js';
@@ -116,6 +117,7 @@ function formatTimestamp(timestampMs: number): string {
 function copySessionSnapshotFiles(
   sourceDir: string,
   destinationDir: string,
+  additionalFiles: readonly string[] = [],
 ): string[] {
   mkdirSync(destinationDir, { recursive: true });
   const files = listSessionSnapshotFiles(sourceDir);
@@ -123,7 +125,25 @@ function copySessionSnapshotFiles(
   for (const file of files) {
     copyFileSync(join(sourceDir, file), join(destinationDir, file));
   }
-  return files;
+  const copied = new Set(files);
+  for (const relativePath of additionalFiles) {
+    const sourcePath = resolve(sourceDir, relativePath);
+    const normalizedRelative = relative(resolve(sourceDir), sourcePath);
+    if (
+      !normalizedRelative
+      || normalizedRelative.startsWith('..')
+      || isAbsolute(normalizedRelative)
+      || !existsSync(sourcePath)
+      || !lstatSync(sourcePath).isFile()
+    ) {
+      throw new Error(`Additional session snapshot file is unsafe or missing: ${relativePath}`);
+    }
+    const destinationPath = join(destinationDir, normalizedRelative);
+    mkdirSync(dirname(destinationPath), { recursive: true });
+    copyFileSync(sourcePath, destinationPath);
+    copied.add(normalizedRelative);
+  }
+  return [...copied].sort((a, b) => a.localeCompare(b));
 }
 
 function listSessionSnapshotFiles(directory: string): string[] {
@@ -346,6 +366,7 @@ export async function runBackupCycle(
     const copiedSessionFiles = copySessionSnapshotFiles(
       options.sessionsDir,
       sessionSnapshotDir,
+      options.additionalSessionSnapshotFiles,
     );
 
     // Back up the L0 memories journal (notes/memories.jsonl) if available.

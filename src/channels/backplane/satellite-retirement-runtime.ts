@@ -14,6 +14,7 @@ import {
 import { basename, dirname, join, resolve } from 'node:path';
 import {
   loadSatelliteRegistryConfig,
+  parseSatelliteRegistryConfig,
   saveSatelliteRegistryConfig,
 } from './satellite-registry.js';
 import {
@@ -67,6 +68,10 @@ export function createFileSyntheticSatelliteRetirementService(input: {
           throw new Error('Synthetic satellite retirement requires an existing satellites.json owner');
         }
         const bytes = readFileSync(sourcePath);
+        const registry = parseSatelliteRegistryConfig(
+          JSON.parse(bytes.toString('utf8')),
+          SATELLITE_REGISTRY_FILE_NAME,
+        );
         const digest = sha256(bytes);
         const backupName = `${SATELLITE_REGISTRY_FILE_NAME}.${digest}.backup`;
         const backupPath = join(backupDir, backupName);
@@ -84,6 +89,7 @@ export function createFileSyntheticSatelliteRetirementService(input: {
           manifestId: target.manifestId,
         })));
         return {
+          registry,
           backupRef: `satellite-registry:${basename(backupPath)}:${targetDigest.slice(0, 16)}`,
           backupDigest: `sha256:${digest}`,
         };

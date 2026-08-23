@@ -254,7 +254,10 @@ describe('runBackupCycle', () => {
     const characterCardPath = join(root, 'companion.json');
     const characterCardHistoryPath = join(root, 'character-card-history.jsonl');
     mkdirSync(sessionsDir, { recursive: true });
+    mkdirSync(join(sessionsDir, '_turn_records'), { recursive: true });
     writeFileSync(join(sessionsDir, 'alpha.jsonl'), '{"id":1}\n', 'utf-8');
+    writeFileSync(join(sessionsDir, '_channel_index.json'), '{"version":5,"channels":{}}\n', 'utf-8');
+    writeFileSync(join(sessionsDir, '_turn_records', 'alpha.jsonl'), '{"turnId":"one"}\n', 'utf-8');
     writeFileSync(join(sessionsDir, 'ignored.txt'), 'nope', 'utf-8');
     writeFileSync(characterCardPath, '{"name":"Companion"}\n', 'utf-8');
     writeFileSync(characterCardHistoryPath, '{"version":1}\n', 'utf-8');
@@ -265,6 +268,10 @@ describe('runBackupCycle', () => {
         pgDumpBinary: writeStubPgDump(root),
       },
       sessionsDir,
+      additionalSessionSnapshotFiles: [
+        '_channel_index.json',
+        '_turn_records/alpha.jsonl',
+      ],
       backupRootDir,
       characterCardPath,
       characterCardHistoryPath,
@@ -275,10 +282,16 @@ describe('runBackupCycle', () => {
     expect(result.backupDir).toContain('20260226T101112123Z');
     expect(existsSync(result.postgresDumpPath!)).toBe(true);
     expect(existsSync(join(result.sessionSnapshotDir, 'alpha.jsonl'))).toBe(true);
+    expect(existsSync(join(result.sessionSnapshotDir, '_channel_index.json'))).toBe(true);
+    expect(existsSync(join(result.sessionSnapshotDir, '_turn_records', 'alpha.jsonl'))).toBe(true);
     expect(existsSync(join(result.sessionSnapshotDir, 'ignored.txt'))).toBe(false);
     expect(existsSync(join(result.backupDir, 'companion', 'companion.json'))).toBe(true);
     expect(existsSync(join(result.backupDir, 'companion', 'character-card-history.jsonl'))).toBe(true);
-    expect(result.copiedSessionFiles).toEqual(['alpha.jsonl']);
+    expect(result.copiedSessionFiles).toEqual([
+      '_channel_index.json',
+      '_turn_records/alpha.jsonl',
+      'alpha.jsonl',
+    ]);
     expect(result.prunedBackupDirs).toEqual([]);
     expect(result.kubernetesHelm).toBeUndefined();
     expect(result.backupContents.kubernetesHelmRecovery).toBe('absent');

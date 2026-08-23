@@ -22,8 +22,22 @@ export const EXACT_SESSION_PURGE_SURFACE_ORDER = [
   'channel_index',
 ] as const satisfies readonly AutomataSessionPurgeSurface[];
 
+interface TestingHarnessExactSessionClassification {
+  schemaVersion: 1;
+  companionId: string;
+  sessionId: string;
+  ownership: 'testing_harness';
+  runId: string;
+  manifestId: string;
+  classifiedAtMs: number;
+}
+
+type ExactSessionPurgeClassification =
+  | SessionClassification
+  | TestingHarnessExactSessionClassification;
+
 export interface ExactSessionPurgeResolvedTarget {
-  classification: SessionClassification;
+  classification: ExactSessionPurgeClassification;
   channelId: string;
   tailChannelKey: string;
   turnRecordChannelId: string;
@@ -127,6 +141,62 @@ function exactKeys(value: Record<string, unknown>, expected: readonly string[], 
   }
 }
 
+function parseTargetClassification(
+  classification: Record<string, unknown>,
+): ExactSessionPurgeClassification {
+  if (classification.ownership === 'testing_harness') {
+    exactKeys(classification, [
+      'schemaVersion',
+      'companionId',
+      'sessionId',
+      'ownership',
+      'runId',
+      'manifestId',
+      'classifiedAtMs',
+    ], 'target.classification');
+    if (classification.schemaVersion !== 1) {
+      throw new Error('Exact-session purge testing-harness classification schema is unknown');
+    }
+    return {
+      schemaVersion: 1,
+      companionId: requiredText(classification.companionId as string, 'classification companionId'),
+      sessionId: requiredText(classification.sessionId as string, 'classification sessionId'),
+      ownership: 'testing_harness',
+      runId: requiredText(classification.runId as string, 'classification runId'),
+      manifestId: requiredText(classification.manifestId as string, 'classification manifestId'),
+      classifiedAtMs: safeInteger(classification.classifiedAtMs, 'classifiedAtMs'),
+    };
+  }
+  exactKeys(classification, [
+    'schemaVersion',
+    'companionId',
+    'sessionId',
+    'ownership',
+    'runId',
+    'automatonClass',
+    'workerGeneration',
+    'classifiedAtMs',
+    'retentionDeadlineMs',
+  ], 'target.classification');
+  if (classification.schemaVersion !== 1 || classification.ownership !== 'automata') {
+    throw new Error('Exact-session purge saga target must be an authorized purge classification');
+  }
+  return {
+    schemaVersion: 1,
+    companionId: requiredText(classification.companionId as string, 'classification companionId'),
+    sessionId: requiredText(classification.sessionId as string, 'classification sessionId'),
+    ownership: 'automata',
+    runId: requiredText(classification.runId as string, 'classification runId'),
+    automatonClass: requireAutomataClass(requiredText(
+      classification.automatonClass as string,
+      'classification automatonClass',
+    )),
+    workerGeneration: safeInteger(classification.workerGeneration, 'workerGeneration', 1),
+    classifiedAtMs: safeInteger(classification.classifiedAtMs, 'classifiedAtMs'),
+    retentionDeadlineMs: safeInteger(classification.retentionDeadlineMs, 'retentionDeadlineMs'),
+  };
+}
+
 /** Strict restart decoder for the Postgres saga store. */
 export function parseExactSessionPurgeSagaRecord(value: unknown): ExactSessionPurgeSagaRecord {
   if (!isRecord(value)) throw new Error('Exact-session purge saga must be an object');
@@ -161,20 +231,6 @@ export function parseExactSessionPurgeSagaRecord(value: unknown): ExactSessionPu
     'rolledJournalFilenames',
   ], 'target');
   const classification = value.target.classification;
-  exactKeys(classification, [
-    'schemaVersion',
-    'companionId',
-    'sessionId',
-    'ownership',
-    'runId',
-    'automatonClass',
-    'workerGeneration',
-    'classifiedAtMs',
-    'retentionDeadlineMs',
-  ], 'target.classification');
-  if (classification.schemaVersion !== 1 || classification.ownership !== 'automata') {
-    throw new Error('Exact-session purge saga target must be an automata classification');
-  }
   if (!Array.isArray(value.target.rolledJournalFilenames)) {
     throw new Error('Exact-session purge saga rolledJournalFilenames must be an array');
   }
@@ -219,20 +275,7 @@ export function parseExactSessionPurgeSagaRecord(value: unknown): ExactSessionPu
     targetRevision: requiredText(value.targetRevision as string, 'saga targetRevision'),
     preserveReferences: uniqueReferences(value.preserveReferences as string[]),
     target: {
-      classification: {
-        schemaVersion: 1,
-        companionId: requiredText(classification.companionId as string, 'classification companionId'),
-        sessionId: requiredText(classification.sessionId as string, 'classification sessionId'),
-        ownership: 'automata',
-        runId: requiredText(classification.runId as string, 'classification runId'),
-        automatonClass: requireAutomataClass(requiredText(
-          classification.automatonClass as string,
-          'classification automatonClass',
-        )),
-        workerGeneration: safeInteger(classification.workerGeneration, 'workerGeneration', 1),
-        classifiedAtMs: safeInteger(classification.classifiedAtMs, 'classifiedAtMs'),
-        retentionDeadlineMs: safeInteger(classification.retentionDeadlineMs, 'retentionDeadlineMs'),
-      },
+      classification: parseTargetClassification(classification),
       channelId: requiredText(value.target.channelId as string, 'target channelId'),
       tailChannelKey: requiredText(value.target.tailChannelKey as string, 'target tailChannelKey'),
       turnRecordChannelId: requiredText(
@@ -251,7 +294,7 @@ export function parseExactSessionPurgeSagaRecord(value: unknown): ExactSessionPu
     revision: safeInteger(value.revision, 'saga revision', 1),
     surfaces,
   };
-  assertAutomataTarget({
+  assertExactTarget({
     companionId: parsed.companionId,
     sessionId: parsed.sessionId,
     runId: parsed.runId,
@@ -305,12 +348,12 @@ function errorDigest(error: unknown): string {
   return createHash('sha256').update(detail).digest('hex');
 }
 
-function assertAutomataTarget(
+function assertExactTarget(
   input: ExactSessionPurgeInput,
   target: ExactSessionPurgeResolvedTarget,
 ): void {
   const classification = target.classification;
-  if (classification.ownership !== 'automata') {
+  if (classification.ownership !== 'automata' && classification.ownership !== 'testing_harness') {
     throw new Error(
       `Exact-session purge refuses protected ${classification.ownership} session ${input.sessionId}`,
     );
@@ -355,7 +398,7 @@ function assertSagaMatchesInput(
   if (!isDeepStrictEqual(actual, expected)) {
     throw new Error('Exact-session purge request conflicts with its durable saga');
   }
-  assertAutomataTarget(input, saga.target);
+  assertExactTarget(input, saga.target);
 }
 
 function validateDeleteResult(result: ExactSessionSurfaceDeleteResult): void {
@@ -461,7 +504,7 @@ export class ProductionExactSessionPurge implements ExactSessionPurgePort {
     let saga = await this.ports.sagaStore.load(input.companionId, input.sessionId);
     if (!saga) {
       const target = await this.ports.authority.resolveAndAuthorize(input);
-      assertAutomataTarget(input, target);
+      assertExactTarget(input, target);
       saga = initialSaga(input, target);
       await this.ports.sagaStore.create(saga);
     } else {

@@ -48,6 +48,8 @@ export interface BackupRunOptions {
   systemDataDir?: string;
   kubernetesHelm?: KubernetesHelmBackupConfig;
   sessionsDir: string;
+  /** Exact additional files below sessionsDir needed for a recovery operation. */
+  additionalSessionSnapshotFiles?: string[];
   backupRootDir: string;
   retentionCount?: number;
   maxRotatingBackups?: number;

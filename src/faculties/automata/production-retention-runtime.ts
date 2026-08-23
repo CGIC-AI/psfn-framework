@@ -24,7 +24,7 @@ import {
 } from './production-retention-authority.js';
 import { PostgresAutomataCompanionMutationFence } from './retention-mutation-fence.js';
 
-class PostgresExactSessionPurgeExclusiveFence implements ExactSessionPurgeExclusiveFencePort {
+export class PostgresExactSessionPurgeExclusiveFence implements ExactSessionPurgeExclusiveFencePort {
   private readonly fence: PostgresAutomataCompanionMutationFence;
 
   constructor(pool: Pool) {

@@ -63,6 +63,7 @@ describe('SyntheticSatelliteRetirementService', () => {
     let current = registry();
     const backup: SatelliteRegistryBackupPort = {
       create: vi.fn(async () => ({
+        registry: current,
         backupRef: 'backup:satellite-registry:001',
         backupDigest: `sha256:${'a'.repeat(64)}`,
       })),
@@ -121,12 +122,64 @@ describe('SyntheticSatelliteRetirementService', () => {
     expect(writer.save).toHaveBeenCalledOnce();
   });
 
+  it('builds retirement from the exact registry snapshot that was backed up', async () => {
+    const initial = registry();
+    const concurrent = parseSatelliteRegistryConfig({
+      schemaVersion: 1,
+      enabled: true,
+      satellites: [{
+        satelliteId: 'physical-concurrent',
+        displayName: 'Concurrent Physical Device',
+        mobility: 'static',
+        endpoints: [endpoint('physical-concurrent-voice', 'device-concurrent')],
+      }],
+    }).satellites[0]!;
+    const backedUp = {
+      ...initial,
+      satellites: [concurrent, ...initial.satellites],
+    };
+    let written = initial;
+    const service = new SyntheticSatelliteRetirementService({
+      read: () => initial,
+      backup: {
+        create: vi.fn(async () => ({
+          registry: backedUp,
+          backupRef: 'backup:satellite-registry:concurrent',
+          backupDigest: `sha256:${'d'.repeat(64)}`,
+        })),
+      },
+      writer: {
+        save: vi.fn(async input => {
+          written = input.config;
+        }),
+      },
+    });
+
+    await service.retire({
+      target: {
+        satelliteId: 'ghost-smoke',
+        endpointIds: ['smoke-voice'],
+        runId: 'run-shakedown-001',
+        manifestId: 'manifest-shakedown-001',
+      },
+      dryRun: false,
+      retiredAt: '2026-08-20T12:00:00.000Z',
+      approval: { operatorApproved: true, approvalId: 'approval-1' },
+    });
+
+    expect(written.satellites.map(satellite => satellite.satelliteId)).toEqual([
+      'physical-concurrent',
+      'physical-active',
+    ]);
+  });
+
   it('never treats names as provenance and protects the active physical device', async () => {
     const current = registry();
     const service = new SyntheticSatelliteRetirementService({
       read: () => current,
       backup: {
         create: vi.fn(async () => ({
+          registry: current,
           backupRef: 'backup:unused',
           backupDigest: `sha256:${'b'.repeat(64)}`,
         })),
@@ -160,6 +213,7 @@ describe('SyntheticSatelliteRetirementService', () => {
   it('requires explicit approval before a non-dry-run backup or write', async () => {
     const backup = {
       create: vi.fn(async () => ({
+        registry: registry(),
         backupRef: 'backup:unused',
         backupDigest: `sha256:${'c'.repeat(64)}`,
       })),

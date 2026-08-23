@@ -147,4 +147,22 @@ describe('companion memory provenance', () => {
     expect(JSON.stringify(report)).not.toContain('private-ab');
     expect(JSON.stringify(report)).not.toContain(DM_A_B);
   });
+
+  it('fails closed when a tenancy audit has no authenticated room-session authority', () => {
+    const report = auditCompanionMemoryProvenance([{
+      id: 'room-memory-unverified',
+      sourceRef: `${ROOM_KITCHEN}:extract|source:session|session:kitchen-a|operation:extract`,
+      provenance: {
+        channelId: ROOM_KITCHEN,
+        companionId: COMPANION_A,
+        sessionId: 'kitchen-a',
+      },
+    }], COMPANION_A);
+
+    expect(report).toMatchObject({
+      inspectedCount: 1,
+      contaminatedCount: 1,
+      reasonCounts: { missing_companion_room_membership: 1 },
+    });
+  });
 });

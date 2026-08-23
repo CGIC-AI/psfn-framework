@@ -273,19 +273,13 @@ export function auditCompanionMemoryProvenance(
   localCompanionId: string | undefined,
   roomMembershipAuthority?: CompanionRoomMembershipAuthority | null,
 ): CompanionMemoryAuditReport {
-  // The standalone maintenance audit historically has only durable row
-  // provenance, not the local session index. Preserve that report's tenancy
-  // scope unless a caller explicitly supplies the stronger session authority.
-  const auditRoomAuthority = roomMembershipAuthority ?? {
-    isAuthenticatedMember: () => true,
-  };
   const findings: CompanionMemoryAuditFinding[] = [];
   const reasonCounts: CompanionMemoryAuditReport['reasonCounts'] = {};
   for (const memory of memories) {
     const decision = evaluateCompanionMemoryProvenance(
       memory,
       localCompanionId,
-      auditRoomAuthority,
+      roomMembershipAuthority,
     );
     if (decision.allowed) continue;
     const sourceRefDigest = digest(memory.sourceRef);

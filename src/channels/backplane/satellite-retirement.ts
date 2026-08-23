@@ -15,9 +15,13 @@ export interface SyntheticSatelliteRetirementTarget {
 
 export interface SatelliteRegistryBackupPort {
   create(input: {
-    registry: SatelliteRegistryConfig;
     target: SyntheticSatelliteRetirementTarget;
-  }): Promise<{ backupRef: string; backupDigest: string }>;
+  }): Promise<{
+    /** Exact parsed owner snapshot represented by backupDigest. */
+    registry: SatelliteRegistryConfig;
+    backupRef: string;
+    backupDigest: string;
+  }>;
 }
 
 export interface SatelliteRegistryWritePort {
@@ -78,6 +82,36 @@ function sameProvenance(
   return left.runId === right.runId && left.manifestId === right.manifestId;
 }
 
+function resolveExactTarget(
+  registry: SatelliteRegistryConfig,
+  target: ReturnType<typeof canonicalTarget>,
+): { state: 'active' } | { state: 'retired'; record: RetiredSatelliteConfig } {
+  const active = registry.satellites.find(candidate => candidate.satelliteId === target.satelliteId);
+  if (!active) {
+    const retired = registry.retiredSatellites?.find(
+      candidate => candidate.satelliteId === target.satelliteId,
+    );
+    if (!retired) throw new Error('Synthetic satellite retirement target does not exist');
+    const retiredEndpointIds = [...retired.endpointIds].sort();
+    if (!sameStrings(retiredEndpointIds, target.endpointIds)
+      || !sameProvenance(retired.testProvenance, target.provenance)) {
+      throw new Error('Retired satellite identity or provenance does not match the exact target');
+    }
+    return { state: 'retired', record: retired };
+  }
+  if (!active.testProvenance) {
+    throw new Error('Satellite does not carry testing-harness provenance');
+  }
+  if (!sameProvenance(active.testProvenance, target.provenance)) {
+    throw new Error('Satellite testing-harness provenance does not match the exact target');
+  }
+  const activeEndpointIds = active.endpoints.map(endpoint => endpoint.endpointId).sort();
+  if (!sameStrings(activeEndpointIds, target.endpointIds)) {
+    throw new Error('Satellite endpoint identity mismatch');
+  }
+  return { state: 'active' };
+}
+
 function receipt(
   status: SyntheticSatelliteRetirementReceipt['status'],
   target: ReturnType<typeof canonicalTarget>,
@@ -111,29 +145,12 @@ export class SyntheticSatelliteRetirementService {
   }): Promise<SyntheticSatelliteRetirementReceipt> {
     const target = canonicalTarget(input.target);
     const registry = this.ports.read();
-    const active = registry.satellites.find(candidate => candidate.satelliteId === target.satelliteId);
-    if (!active) {
-      const retired = registry.retiredSatellites?.find(candidate => candidate.satelliteId === target.satelliteId);
-      if (!retired) throw new Error('Synthetic satellite retirement target does not exist');
-      const retiredEndpointIds = [...retired.endpointIds].sort();
-      if (!sameStrings(retiredEndpointIds, target.endpointIds)
-        || !sameProvenance(retired.testProvenance, target.provenance)) {
-        throw new Error('Retired satellite identity or provenance does not match the exact target');
-      }
+    const initialTarget = resolveExactTarget(registry, target);
+    if (initialTarget.state === 'retired') {
       return receipt('already_retired', target, {
-        backupRef: retired.backupRef,
-        backupDigest: retired.backupDigest,
+        backupRef: initialTarget.record.backupRef,
+        backupDigest: initialTarget.record.backupDigest,
       });
-    }
-    if (!active.testProvenance) {
-      throw new Error('Satellite does not carry testing-harness provenance');
-    }
-    if (!sameProvenance(active.testProvenance, target.provenance)) {
-      throw new Error('Satellite testing-harness provenance does not match the exact target');
-    }
-    const activeEndpointIds = active.endpoints.map(endpoint => endpoint.endpointId).sort();
-    if (!sameStrings(activeEndpointIds, target.endpointIds)) {
-      throw new Error('Satellite endpoint identity mismatch');
     }
     if (!Number.isFinite(Date.parse(input.retiredAt))
       || new Date(input.retiredAt).toISOString() !== input.retiredAt) {
@@ -145,10 +162,17 @@ export class SyntheticSatelliteRetirementService {
     }
     requiredId(input.approval.approvalId, 'approvalId');
 
-    const backup = await this.ports.backup.create({ registry, target: input.target });
+    const backup = await this.ports.backup.create({ target: input.target });
     const backupRef = requiredId(backup.backupRef, 'backupRef');
     if (!SHA256_DIGEST_PATTERN.test(backup.backupDigest)) {
       throw new Error('backupDigest must be a sha256 digest');
+    }
+    const backedTarget = resolveExactTarget(backup.registry, target);
+    if (backedTarget.state === 'retired') {
+      return receipt('already_retired', target, {
+        backupRef: backedTarget.record.backupRef,
+        backupDigest: backedTarget.record.backupDigest,
+      });
     }
     const retired: RetiredSatelliteConfig = {
       satelliteId: target.satelliteId,
@@ -159,9 +183,11 @@ export class SyntheticSatelliteRetirementService {
       backupDigest: backup.backupDigest,
     };
     const next: SatelliteRegistryConfig = {
-      ...registry,
-      satellites: registry.satellites.filter(candidate => candidate.satelliteId !== target.satelliteId),
-      retiredSatellites: [...(registry.retiredSatellites ?? []), retired],
+      ...backup.registry,
+      satellites: backup.registry.satellites.filter(
+        candidate => candidate.satelliteId !== target.satelliteId,
+      ),
+      retiredSatellites: [...(backup.registry.retiredSatellites ?? []), retired],
     };
     await this.ports.writer.save({
       config: next,

@@ -94,4 +94,40 @@ describe('FilesystemAutomataRetentionWriteBarrier', () => {
       rmSync(sessionsDir, { recursive: true, force: true });
     }
   });
+
+  it('releases a completed maintenance seal so the canonical test session can be reused', () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-automata-write-barrier-'));
+    const barrier = new FilesystemAutomataRetentionWriteBarrier(sessionsDir, 'companion-a');
+    const purgeInput = {
+      companionId: 'companion-a',
+      sessionId: 'api:testing-harness',
+      runId: 'run-one',
+      targetRevision: 'revision-one',
+      preserveReferences: [],
+    };
+    const target = {
+      classification: {
+        schemaVersion: 1 as const,
+        companionId: 'companion-a',
+        sessionId: 'api:testing-harness',
+        ownership: 'testing_harness' as const,
+        runId: 'run-one',
+        manifestId: 'manifest-one',
+        classifiedAtMs: 1,
+      },
+      channelId: 'api:testing-harness',
+      tailChannelKey: 'api:testing-harness',
+      turnRecordChannelId: 'api:testing-harness',
+      activeJournalFilename: 'api_testing-harness.jsonl',
+      rolledJournalFilenames: [],
+    };
+    try {
+      barrier.seal(purgeInput, target);
+      expect(() => barrier.assertWritable([purgeInput.sessionId])).toThrow('sealed');
+      barrier.unseal(purgeInput, target);
+      expect(() => barrier.assertWritable([purgeInput.sessionId])).not.toThrow();
+    } finally {
+      rmSync(sessionsDir, { recursive: true, force: true });
+    }
+  });
 });

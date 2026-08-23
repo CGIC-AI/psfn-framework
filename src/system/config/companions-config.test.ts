@@ -468,6 +468,31 @@ describe('companions owner-file config', () => {
         .toThrow(/Personal Workspace.*must not overlap.*companionDataDir/);
     });
 
+    it('rejects observer storage overlapping any companion data or personal workspace boundary', () => {
+      const root = makeDataDir();
+      const siblingDataRoot = join(root, 'companions/aria');
+      const siblingWorkspaceRoot = join(
+        root,
+        'workspaces/personal/22222222-2222-4222-8222-222222222222',
+      );
+
+      expect(() => resolveCompanionFleetPaths(
+        createFleetWithObserverRoots(
+          join(siblingDataRoot, 'observer'),
+          join(root, 'observer-two'),
+        ),
+        root,
+      )).toThrow(/observerEvalSidecar\.persistenceRootDir.*companionDataDir/);
+
+      expect(() => resolveCompanionFleetPaths(
+        createFleetWithObserverRoots(
+          join(root, 'observer-one'),
+          join(siblingWorkspaceRoot, 'observer'),
+        ),
+        root,
+      )).toThrow(/observerEvalSidecar\.persistenceRootDir.*personalWorkspacePath/);
+    });
+
     it('binds one runtime to the complete selected fleet tuple', () => {
       const fleet = resolveCompanionFleetPaths(VALID_FLEET, makeDataDir());
       const expected = fleet.companions[0];

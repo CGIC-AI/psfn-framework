@@ -213,6 +213,28 @@ describe('ProductionExactSessionPurge', () => {
     expect(test.assertResolvable).toHaveBeenCalledTimes(2);
   });
 
+  it('reuses the durable saga for an exact testing-harness run classification', async () => {
+    const target: ExactSessionPurgeResolvedTarget = {
+      ...automataTarget,
+      classification: {
+        schemaVersion: 1,
+        companionId: input.companionId,
+        sessionId: input.sessionId,
+        ownership: 'testing_harness',
+        runId: input.runId,
+        manifestId: 'manifest-a',
+        classifiedAtMs: 1,
+      },
+    };
+    const test = harness({ target });
+
+    await expect(test.purge.purgeExactSession(input)).resolves.toMatchObject({
+      status: 'purged',
+    });
+    expect((await test.sagaStore.load(input.companionId, input.sessionId))?.target.classification)
+      .toMatchObject({ ownership: 'testing_harness', manifestId: 'manifest-a' });
+  });
+
   it.each(EXACT_SESSION_PURGE_SURFACE_ORDER)(
     'recovers after a process dies immediately after deleting %s',
     async (failedSurface) => {

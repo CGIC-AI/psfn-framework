@@ -80,11 +80,11 @@ async function confirmNonTestingSession(sessionId: string): Promise<string> {
   }
 }
 
-async function createConfiguredTailPurgePort(input: {
+export async function createConfiguredTailPurgePort(input: {
   companionId: string | undefined;
   env: NodeJS.ProcessEnv;
   sessionId: string;
-}): Promise<(SessionTailPurgePort & { close(): Promise<void> }) | undefined> {
+}): Promise<(SessionTailPurgePort & RedisSessionTailCache) | undefined> {
   if (!input.env[REDIS_URL_ENV]?.trim()) return undefined;
   if (!input.companionId) {
     throw new TestingSessionPurgeCompanionResolutionError(

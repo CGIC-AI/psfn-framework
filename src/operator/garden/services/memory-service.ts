@@ -61,6 +61,7 @@ import {
   getSubjectAuthorizedAdminMemoryStats,
 } from '../../../faculties/memory/subject-authorized-store.js';
 import { MemoryWriter, MemoryCandidacyPolicyError } from '../../../faculties/memory/writer.js';
+import type { CompanionRoomMembershipAuthority } from '../../../faculties/memory/companion-provenance.js';
 import type { GardenRequestContext } from '../garden-request-context.js';
 import type { FleetGardenRequestContext } from '../garden-request-context.js';
 
@@ -216,6 +217,8 @@ export class AdminMemoryDataService implements AdminMemoryService {
     embeddingService?: EmbeddingProviderPort | null;
     /** Canonical local tenant identity used for companion-memory mutation checks. */
     companionId?: string;
+    /** Authenticated local room/session bindings used for room-memory mutations. */
+    roomMembershipAuthority?: CompanionRoomMembershipAuthority | null;
     resolveCompanionName?: () => string;
     appendAuditTimelineEntry?: (
       actionType: 'memory_mutation' | 'memory_access',
@@ -913,6 +916,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
       ...(requestCompanionId || this.deps.companionId
         ? { companionId: requestCompanionId ?? this.deps.companionId }
         : {}),
+      roomMembershipAuthority: this.deps.roomMembershipAuthority ?? null,
     });
     try {
       const result = await writer.patchMemory({

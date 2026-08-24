@@ -77,6 +77,39 @@ describe('LLMRequestCapability explicit tool dispatch', () => {
     ]);
   });
 
+  it('disables Kimi Code reasoning for a required tool without changing GLM', () => {
+    const capability = makeCapability();
+    const context = makeRequiredContext();
+    const kimiOptions: LLMRequestOptions = { reasoning: 'medium' };
+    const glmOptions: LLMRequestOptions = { reasoning: 'medium' };
+
+    capability.applyExplicitToolChoice(
+      kimiOptions,
+      context,
+      { originStage: 'agent.turn.prompt' },
+      {
+        api: 'openai-completions',
+        baseUrl: 'https://api.kimi.com/coding/v1',
+      } as Model<'openai-completions'>,
+    );
+    capability.applyExplicitToolChoice(
+      glmOptions,
+      context,
+      { originStage: 'agent.turn.prompt' },
+      {
+        api: 'openai-completions',
+        baseUrl: 'https://api.z.ai/api/coding/paas/v4',
+      } as Model<'openai-completions'>,
+    );
+
+    expect(kimiOptions.toolChoice).toBe('required');
+    expect(kimiOptions.reasoning).toBeUndefined();
+    expect(glmOptions).toMatchObject({
+      toolChoice: 'required',
+      reasoning: 'medium',
+    });
+  });
+
   it('gives pi-ai an exact model schema for an exact-arguments request', () => {
     const capability = makeCapability();
     const requestOptions: LLMRequestOptions = {};

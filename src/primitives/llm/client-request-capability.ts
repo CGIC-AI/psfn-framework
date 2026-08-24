@@ -16,6 +16,7 @@ import type { ResolvedCorrelationMetadata } from './correlation.js';
 import type { RoutingCandidate } from './routing.js';
 import {
   createOpenAICompatibleEndpointModel,
+  requiresThinkingDisabledForRequiredTools,
   resolveRegisteredModel,
   resolveSystemRoleCapabilityMetadata,
   type OpenAICompatibleApi,
@@ -263,6 +264,9 @@ export class LLMRequestCapability {
       // required choice asks pi-ai to format a mandatory call without coupling
       // the runtime to a provider-specific named-tool payload.
       requestOptions.toolChoice = 'required';
+      if (requiresThinkingDisabledForRequiredTools(model.api, model.baseUrl)) {
+        delete requestOptions.reasoning;
+      }
     }
     return contract;
   }

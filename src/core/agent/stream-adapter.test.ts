@@ -228,6 +228,47 @@ function makeChatFallbackConfig(overrides: Partial<SubstrateConfig> = {}): Subst
   };
 }
 
+function makeKimiCodeConfig(): SubstrateConfig {
+  const config = makeConfig({ retryMaxAttempts: 0, retryBaseDelayMs: 0 });
+  config.providerRegistry = {
+    schemaVersion: 1,
+    providers: [{
+      id: 'kimi-code',
+      type: 'generic_openai',
+      enabled: true,
+      label: 'Kimi Code',
+      apiBaseUrl: 'https://api.kimi.com/coding/v1',
+      apiKeyRef: { kind: 'env', envName: 'KIMI_API_KEY' },
+    }],
+  };
+  config.modelRegistry = {
+    schemaVersion: 1,
+    models: [{
+      id: 'kimi-code-chat',
+      rank: 1,
+      apiKind: 'openai-completions',
+      identity: {
+        provider: 'kimi-code',
+        model: 'kimi-for-coding',
+        source: { type: 'configured' },
+      },
+      purposes: [{ purpose: 'chat', primary: true }],
+      capabilities: {
+        maxOutputTokens: 8192,
+        contextWindow: 128_000,
+        supportsReasoning: true,
+      },
+      tuning: {
+        maxOutputTokens: 8192,
+        contextWindow: 128_000,
+        thinkingEnabled: true,
+        thinkingEffort: 'medium',
+      },
+    }],
+  };
+  return config;
+}
+
 async function collectStreamEvents(stream: AsyncIterable<unknown>): Promise<unknown[]> {
   const events: unknown[] = [];
   for await (const event of stream) {
@@ -758,6 +799,67 @@ describe('createSubstrateStreamFn', () => {
     });
     expect(() => validateToolArguments(fromAny(toolsetTool), fromAny(toolCall)))
       .toThrow('Validation failed for tool "toolset"');
+  });
+
+  it('disables Kimi Code thinking when transporting a required tool request', async () => {
+    const config = makeKimiCodeConfig();
+    streamAdapterMocks.transportStream.mockResolvedValue({
+      content: '',
+      toolCalls: [{ id: 'notify-kimi', name: 'notify', input: { message: 'done' } }],
+      model: 'kimi-for-coding',
+      inputTokens: 6,
+      outputTokens: 3,
+      stopReason: 'toolUse',
+    });
+
+    const streamFn = makeStreamFn(config);
+    const stream = await streamFn(resolveModel(config, makeRuntime(), 'chat'), fromAny({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'Call notify exactly once.' }],
+      tools: [{
+        name: 'notify',
+        description: 'Notify the operator.',
+        parameters: Type.Object({ message: Type.String() }),
+      }],
+    }), {});
+    await collectStreamEvents(stream as AsyncIterable<unknown>);
+
+    expect(streamAdapterMocks.transportStream).toHaveBeenCalledTimes(1);
+    expect((streamAdapterMocks.transportStream.mock.calls[0]?.[0] as LLMContext).modelHint)
+      .toMatchObject({
+        provider: 'kimi-code',
+        model: 'kimi-for-coding',
+        thinkingEnabled: false,
+      });
+    expect((streamAdapterMocks.transportStream.mock.calls[0]?.[0] as LLMContext).modelHint)
+      .not.toHaveProperty('thinkingEffort');
+  });
+
+  it('preserves configured Kimi Code thinking on an ordinary request', async () => {
+    const config = makeKimiCodeConfig();
+    streamAdapterMocks.transportStream.mockResolvedValue({
+      content: 'done',
+      toolCalls: [],
+      model: 'kimi-for-coding',
+      inputTokens: 4,
+      outputTokens: 2,
+      stopReason: 'stop',
+    });
+
+    const streamFn = makeStreamFn(config);
+    const stream = await streamFn(resolveModel(config, makeRuntime(), 'chat'), fromAny({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'Hello.' }],
+    }), {});
+    await collectStreamEvents(stream as AsyncIterable<unknown>);
+
+    expect((streamAdapterMocks.transportStream.mock.calls[0]?.[0] as LLMContext).modelHint)
+      .toMatchObject({
+        provider: 'kimi-code',
+        model: 'kimi-for-coding',
+        thinkingEnabled: true,
+        thinkingEffort: 'medium',
+      });
   });
 
   it('falls back to the next configured chat candidate when the primary stream errors before output commits', async () => {

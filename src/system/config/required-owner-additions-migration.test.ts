@@ -32,6 +32,7 @@ function prepareLegacyOwners(): {
   intakePath: string;
   automataPath: string;
   partnerAffectPath: string;
+  modelsPath: string;
 } {
   root = mkdtempSync(join(tmpdir(), 'required-owner-additions-'));
   const dataDir = join(root, 'system');
@@ -43,6 +44,7 @@ function prepareLegacyOwners(): {
   const intakePath = join(dataDir, 'intake-policy.json');
   const automataPath = join(dataDir, 'automata-policy.json');
   const partnerAffectPath = join(companionDataDir, 'partner-affect-shadow.json');
+  const modelsPath = join(dataDir, 'models.json');
   const intake = readJson('config/intake-policy.seed.json');
   const automata = readJson('config/automata-policy.seed.json');
   delete intake.surfacePostures;
@@ -52,9 +54,11 @@ function prepareLegacyOwners(): {
   writeJson(settingsPath, { sessionHistoryBudgetPct: 9 });
   writeJson(intakePath, intake);
   writeJson(automataPath, automata);
+  writeJson(modelsPath, { schemaVersion: 1, models: [] });
   chmodSync(settingsPath, 0o644);
   chmodSync(intakePath, 0o644);
   chmodSync(automataPath, 0o644);
+  chmodSync(modelsPath, 0o600);
   return {
     dataDir,
     companionDataDir,
@@ -62,6 +66,7 @@ function prepareLegacyOwners(): {
     intakePath,
     automataPath,
     partnerAffectPath,
+    modelsPath,
   };
 }
 
@@ -93,6 +98,7 @@ describe('migrateRequiredOwnerAdditions', () => {
         status: 'planned',
         addedPaths: ['partner-affect-shadow.json'],
       },
+      ownerModes: { status: 'planned' },
     });
     expect(readFileSync(fixture.settingsPath, 'utf8')).toBe(before.settings);
     expect(readFileSync(fixture.intakePath, 'utf8')).toBe(before.intake);
@@ -105,6 +111,7 @@ describe('migrateRequiredOwnerAdditions', () => {
       intakePolicy: { status: 'applied' },
       automataPolicy: { status: 'applied' },
       companionOwnerAdditions: { status: 'applied' },
+      ownerModes: { status: 'applied' },
     });
     const settings = readJson(fixture.settingsPath);
     expect(settings.sessionHistoryBudgetPct).toBe(9);
@@ -116,12 +123,14 @@ describe('migrateRequiredOwnerAdditions', () => {
     expect(statSync(fixture.intakePath).mode & 0o777).toBe(0o644);
     expect(statSync(fixture.automataPath).mode & 0o777).toBe(0o644);
     expect(statSync(fixture.partnerAffectPath).mode & 0o777).toBe(0o640);
+    expect(statSync(fixture.modelsPath).mode & 0o777).toBe(0o644);
 
     const settledBytes = {
       settings: readFileSync(fixture.settingsPath, 'utf8'),
       intake: readFileSync(fixture.intakePath, 'utf8'),
       automata: readFileSync(fixture.automataPath, 'utf8'),
       partnerAffect: readFileSync(fixture.partnerAffectPath, 'utf8'),
+      models: readFileSync(fixture.modelsPath, 'utf8'),
     };
     expect(migrateRequiredOwnerAdditions({ ...options, apply: true })).toMatchObject({
       mode: 'apply',
@@ -129,11 +138,13 @@ describe('migrateRequiredOwnerAdditions', () => {
       intakePolicy: { status: 'not_needed' },
       automataPolicy: { status: 'not_needed' },
       companionOwnerAdditions: { status: 'not_needed' },
+      ownerModes: { status: 'not_needed' },
     });
     expect(readFileSync(fixture.settingsPath, 'utf8')).toBe(settledBytes.settings);
     expect(readFileSync(fixture.intakePath, 'utf8')).toBe(settledBytes.intake);
     expect(readFileSync(fixture.automataPath, 'utf8')).toBe(settledBytes.automata);
     expect(readFileSync(fixture.partnerAffectPath, 'utf8')).toBe(settledBytes.partnerAffect);
+    expect(readFileSync(fixture.modelsPath, 'utf8')).toBe(settledBytes.models);
   });
 
   it('repairs mode-only drift on already current owners', () => {
@@ -150,6 +161,7 @@ describe('migrateRequiredOwnerAdditions', () => {
       fixture.intakePath,
       fixture.automataPath,
       fixture.partnerAffectPath,
+      fixture.modelsPath,
     ]) chmodSync(path, 0o600);
 
     expect(migrateRequiredOwnerAdditions({ ...options, apply: false })).toMatchObject({
@@ -157,17 +169,20 @@ describe('migrateRequiredOwnerAdditions', () => {
       intakePolicy: { status: 'planned', updatedPaths: ['mode'] },
       automataPolicy: { status: 'planned', updatedPaths: ['mode'] },
       companionOwnerAdditions: { status: 'planned' },
+      ownerModes: { status: 'planned' },
     });
     expect(migrateRequiredOwnerAdditions(options)).toMatchObject({
       settings: { status: 'applied', updatedPaths: ['mode'] },
       intakePolicy: { status: 'applied', updatedPaths: ['mode'] },
       automataPolicy: { status: 'applied', updatedPaths: ['mode'] },
       companionOwnerAdditions: { status: 'applied' },
+      ownerModes: { status: 'applied' },
     });
     expect(statSync(fixture.settingsPath).mode & 0o777).toBe(0o644);
     expect(statSync(fixture.intakePath).mode & 0o777).toBe(0o644);
     expect(statSync(fixture.automataPath).mode & 0o777).toBe(0o644);
     expect(statSync(fixture.partnerAffectPath).mode & 0o777).toBe(0o640);
+    expect(statSync(fixture.modelsPath).mode & 0o777).toBe(0o644);
   });
 
   it('fails preflight without mutating any owner when a present addition is malformed', () => {

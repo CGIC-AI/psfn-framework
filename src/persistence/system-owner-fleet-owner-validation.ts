@@ -47,5 +47,6 @@ export function validatePinnedMigrationOwner(
     device: pinned.device,
     inode: pinned.inode,
     linkCount: pinned.linkCount,
+    mode: pinned.mode,
   };
 }

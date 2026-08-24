@@ -345,6 +345,8 @@ export type RequestAudience = typeof REQUEST_AUDIENCE_VALUES[number];
 export interface CorrelationMetadata extends LLMRequestMetadata {
   callType: ObservabilityCallType;
   purpose: string;
+  /** Caller-owned completion ceiling propagated to the final provider request. */
+  requestedMaxOutputTokens?: number;
   viewerTrustLevel?: TrustLevel;
   /**
    * Origin of the requester driving this turn, independent of `viewerTrustLevel`.
@@ -404,6 +406,7 @@ export const CORRELATION_METADATA_KEYS = [
   'runtimeLaneClass',
   'callType',
   'purpose',
+  'requestedMaxOutputTokens',
   'viewerTrustLevel',
   'requesterProvenance',
   'requestAudience',
@@ -523,6 +526,8 @@ export interface MessageRoutingMetadata {
   };
   broadcast?: BroadcastRoutingMetadata;
   channelPrivacy?: ChannelPrivacy;
+  /** Validated OpenAI-compatible `max_tokens` limit for this turn. */
+  completionMaxTokens?: number;
   modelOverride?: MessageModelOverride;
   promptOverride?: MessagePromptOverride;
   responseStyle?: ResponseStyle;

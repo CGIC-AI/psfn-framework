@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from hub.adapters.interfaces import TranscriptResult
-from hub.devices.realtime_server import _RealtimeConnection
+from hub.devices.realtime_server import RealtimeVoiceServer, _RealtimeConnection
 from hub.satellite_claims import normalize_claim_config
 from hub.storage.session_cache import SessionCache
 
@@ -65,6 +65,32 @@ class _FakeTTS:
 
     async def aclose(self) -> None:
         return
+
+
+def test_unauthenticated_realtime_server_refuses_device_assertion_authority(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(TypeError, match="hub_device_assertion"):
+        RealtimeVoiceServer(
+            host="127.0.0.1",
+            port=8787,
+            artifacts_root=tmp_path,
+            audio_server=None,  # type: ignore[arg-type]
+            session_cache=SessionCache(),
+            deepgram_api_key="dg",
+            elevenlabs_api_key="el",
+            elevenlabs_voice_id=None,
+            elevenlabs_model_id="model",
+            psfn_api_base_url="http://127.0.0.1:3100/v1",
+            psfn_api_key=None,
+            psfn_provider=None,
+            psfn_model="psfn",
+            psfn_author_id=None,
+            psfn_author_name=None,
+            psfn_satellite_claim=normalize_claim_config(),
+            psfn_client_certificate=None,
+            **{"hub_device_assertion": object()},
+        )
 
 
 @pytest.mark.anyio

@@ -172,7 +172,6 @@ async def _run_realtime_runtime(
         psfn_author_name=config.psfn_author_name,
         psfn_satellite_claim=config.psfn_satellite_claim,
         psfn_client_certificate=config.psfn_client_certificate,
-        hub_device_assertion=config.hub_device_assertion,
     ):
         while True:
             await asyncio.sleep(3600)

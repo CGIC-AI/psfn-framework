@@ -883,6 +883,7 @@ describe('AgentApiBackend chat completion deadlines', () => {
         requestId: 'req-visible-complete',
         request: {
           model: 'test-model',
+          max_tokens: 128,
           messages: [{ role: 'user', content: 'Finish before cleanup' }],
         },
         principal: { id: 'principal-1', mode: 'api_key' },
@@ -910,7 +911,7 @@ describe('AgentApiBackend chat completion deadlines', () => {
       expect(handleMessage.mock.calls[0]?.[0]).toMatchObject({
         id: 'req-visible-complete',
         isDirectMessage: false,
-        routing: { channelPrivacy: 'public' },
+        routing: { channelPrivacy: 'public', completionMaxTokens: 128 },
       });
       expect(performanceEvents).toContainEqual(expect.objectContaining({
         traceId: 'req-visible-complete',

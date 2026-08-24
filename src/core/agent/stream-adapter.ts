@@ -168,7 +168,10 @@ export function createSubstrateStreamFn(
     const purpose = resolveStreamBudgetPurpose(requestContext);
     const processName = requestContext?.originStage ?? requestContext?.purpose ?? 'agent.stream.prompt';
     const service = requestContext?.callType ?? 'chat';
-    const callerMaxTokens = resolveCallerMaxTokens(options?.maxTokens);
+    const callerMaxTokens = resolveCallerMaxTokens(
+      options?.maxTokens,
+      requestContext?.requestedMaxOutputTokens,
+    );
     const candidates = resolveStreamCandidates(
       config,
       purpose,
@@ -951,11 +954,11 @@ class AsyncEventQueue<T> {
   }
 }
 
-function resolveCallerMaxTokens(optionsMaxTokens: unknown): number | undefined {
-  if (typeof optionsMaxTokens !== 'number' || !Number.isFinite(optionsMaxTokens) || optionsMaxTokens <= 0) {
-    return undefined;
-  }
-  return Math.floor(optionsMaxTokens);
+function resolveCallerMaxTokens(...values: unknown[]): number | undefined {
+  const limits = values
+    .filter((value): value is number => typeof value === 'number' && Number.isFinite(value) && value > 0)
+    .map(value => Math.floor(value));
+  return limits.length > 0 ? Math.min(...limits) : undefined;
 }
 
 function resolveStreamMaxTokens(model: Model<any>, optionsMaxTokens: unknown, fallback: number): number {

@@ -66,6 +66,9 @@ export function buildTurnCorrelation(
     channelType: message.channelType,
     callType,
     purpose: 'agent.turn',
+    ...(message.routing?.completionMaxTokens !== undefined
+      ? { requestedMaxOutputTokens: message.routing.completionMaxTokens }
+      : {}),
     runtimeLaneClass: resolveRuntimeLaneClassForTurn({
       callType,
       channelId: message.channelId,

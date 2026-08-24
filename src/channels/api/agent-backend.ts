@@ -150,6 +150,7 @@ interface TurnRoutingOverrides {
   modelOverride?: MessageModelOverride;
   promptOverride?: MessagePromptOverride;
   responseStyle?: ResponseStyle;
+  completionMaxTokens?: number;
 }
 
 interface ChannelPrivacyResolution {
@@ -1179,6 +1180,9 @@ export class AgentApiBackend {
     const model = typeof request.model === 'string'
       ? request.model.trim()
       : '';
+    const completionMaxTokens = typeof request.max_tokens === 'number' && Number.isFinite(request.max_tokens)
+      ? Math.max(1, Math.trunc(request.max_tokens))
+      : undefined;
 
     let modelOverride: MessageModelOverride | undefined;
     if (provider) {
@@ -1192,14 +1196,10 @@ export class AgentApiBackend {
         };
       }
 
-      const maxTokens = typeof request.max_tokens === 'number' && Number.isFinite(request.max_tokens)
-        ? Math.max(1, Math.trunc(request.max_tokens))
-        : undefined;
-
       modelOverride = {
         provider,
         model,
-        ...(maxTokens !== undefined ? { maxTokens } : {}),
+        ...(completionMaxTokens !== undefined ? { maxTokens: completionMaxTokens } : {}),
       };
     }
 
@@ -1244,6 +1244,7 @@ export class AgentApiBackend {
         ...(modelOverride ? { modelOverride } : {}),
         ...(promptOverride ? { promptOverride } : {}),
         ...(responseStyle ? { responseStyle } : {}),
+        ...(completionMaxTokens !== undefined ? { completionMaxTokens } : {}),
       },
     };
   }
@@ -1561,6 +1562,9 @@ export class AgentApiBackend {
       ...(params.satellite ? { satellite: params.satellite } : {}),
       ...(params.hubDeviceAttachment ? { hubDeviceAttachment: params.hubDeviceAttachment } : {}),
       ...(params.channelPrivacy ? { channelPrivacy: params.channelPrivacy } : {}),
+      ...(params.overrides.completionMaxTokens !== undefined
+        ? { completionMaxTokens: params.overrides.completionMaxTokens }
+        : {}),
       ...(params.overrides.modelOverride ? { modelOverride: params.overrides.modelOverride } : {}),
       ...(params.overrides.promptOverride ? { promptOverride: params.overrides.promptOverride } : {}),
       ...(params.overrides.responseStyle ? { responseStyle: params.overrides.responseStyle } : {}),
@@ -1575,6 +1579,7 @@ export class AgentApiBackend {
       || routing.satellite
       || routing.hubDeviceAttachment
       || routing.channelPrivacy
+      || routing.completionMaxTokens !== undefined
       || routing.modelOverride
       || routing.promptOverride
       || routing.responseStyle

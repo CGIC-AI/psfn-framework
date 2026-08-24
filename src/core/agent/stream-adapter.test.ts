@@ -1203,6 +1203,60 @@ describe('createSubstrateStreamFn', () => {
       });
   });
 
+  it('clamps every provider candidate to the API-requested completion limit', async () => {
+    const config = makeChatFallbackConfig({
+      retryMaxAttempts: 0,
+      retryBaseDelayMs: 0,
+    });
+    streamAdapterMocks.transportStream.mockImplementation((context: LLMContext) => {
+      if (context.modelHint?.model === 'deepseek/deepseek-v3.2') {
+        return Promise.reject(new Error('503 primary unavailable'));
+      }
+      return Promise.resolve({
+        content: 'bounded fallback',
+        toolCalls: [],
+        model: 'openrouter/moonshotai/kimi-k2.5',
+        inputTokens: 214_000,
+        outputTokens: 8,
+        stopReason: 'stop',
+      });
+    });
+
+    const streamFn = makeStreamFn(config);
+    const stream = await runWithRequestContext(
+      { callType: 'chat', purpose: 'agent.turn.prompt', requestedMaxOutputTokens: 128 },
+      () => streamFn(resolveModel(config, makeRuntime(), 'chat'), makePiContext(), {}),
+    );
+    await collectStreamEvents(stream as AsyncIterable<unknown>);
+
+    expect(streamAdapterMocks.transportStream).toHaveBeenCalledTimes(2);
+    expect(streamAdapterMocks.transportStream.mock.calls.map(
+      call => (call[0] as LLMContext).modelHint?.maxTokens,
+    )).toEqual([128, 128]);
+  });
+
+  it('uses a stricter internal completion limit below the API-requested ceiling', async () => {
+    const config = makeConfig();
+    streamAdapterMocks.transportStream.mockResolvedValue({
+      content: 'internally bounded',
+      toolCalls: [],
+      model: 'openrouter/deepseek/deepseek-v3.2',
+      inputTokens: 12,
+      outputTokens: 8,
+      stopReason: 'stop',
+    });
+
+    const streamFn = makeStreamFn(config);
+    const stream = await runWithRequestContext(
+      { callType: 'chat', purpose: 'agent.turn.prompt', requestedMaxOutputTokens: 128 },
+      () => streamFn(resolveModel(config, makeRuntime(), 'chat'), makePiContext(), { maxTokens: 64 }),
+    );
+    await collectStreamEvents(stream as AsyncIterable<unknown>);
+
+    expect((streamAdapterMocks.transportStream.mock.calls[0]?.[0] as LLMContext).modelHint)
+      .toMatchObject({ maxTokens: 64 });
+  });
+
   it('preserves the ordinary chat fallback chain after a companion-selected model fails', async () => {
     const config = makeCompanionSelectedChatConfig();
     streamAdapterMocks.transportStream.mockImplementation((context: LLMContext) => {

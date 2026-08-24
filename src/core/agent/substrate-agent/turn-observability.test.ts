@@ -14,7 +14,7 @@ describe('buildTurnCorrelation', () => {
       authorName: 'Author',
       content: 'private message body',
       timestamp: new Date(1_752_500_000_000),
-      routing: { wyoming: { sessionId: 'session-1' } },
+      routing: { wyoming: { sessionId: 'session-1' }, completionMaxTokens: 128 },
     };
 
     const correlation = buildTurnCorrelation(
@@ -37,6 +37,7 @@ describe('buildTurnCorrelation', () => {
       process: 'substrate-agent',
       conversationId: 'session-1',
       rootInitiationId: 'root-1',
+      requestedMaxOutputTokens: 128,
       shardId: 'shard-1',
       workloadType: 'shard',
       workloadId: 'shard-1',

@@ -12,6 +12,7 @@ import {
   pinAbsoluteDirectory,
   pinnedLeafPath,
   readPinnedRegularFile,
+  setPinnedRegularFileMode,
 } from '../../persistence/pinned-filesystem.js';
 import type {
   LifecycleKubernetesSettings,
@@ -20,6 +21,7 @@ import type {
 import { SETTINGS_FILE_NAME, type EditableSettings } from './contracts.js';
 import { normalizeEditableSettings } from './schema.js';
 import { loadRuntimeSettingsContractDefaults } from '../config/settings-contract-guard.js';
+import { canonicalOwnerFileMode } from '../config/owner-file-modes.js';
 
 export const DEFAULT_WIKI_STARTUP_HYDRATION_SETTINGS: WikiStartupHydrationSettings = {
   recentSessionLimit: 4,
@@ -55,6 +57,7 @@ export interface RequiredSettingsBlocksMigrationResult {
   status: 'not_needed' | 'planned' | 'applied';
   filePath: string;
   addedPaths?: string[];
+  updatedPaths?: string[];
 }
 
 /**
@@ -111,6 +114,27 @@ export function migrateRequiredSettingsBlocks(
     normalizeEditableSettings(candidate as EditableSettings);
     if (addedPaths.length === 0) {
       assertSourceStillCurrent();
+      const canonicalMode = canonicalOwnerFileMode({
+        ownerFileName: SETTINGS_FILE_NAME,
+        scope: 'system',
+      });
+      if (source.mode !== canonicalMode) {
+        if (options.apply) {
+          setPinnedRegularFileMode(
+            dataDirectory,
+            SETTINGS_FILE_NAME,
+            'Settings owner file',
+            canonicalMode,
+            source,
+          );
+        }
+        return {
+          mode,
+          status: options.apply ? 'applied' : 'planned',
+          filePath,
+          updatedPaths: ['mode'],
+        };
+      }
       return { mode, status: 'not_needed', filePath };
     }
     const result: RequiredSettingsBlocksMigrationResult = {
@@ -124,6 +148,7 @@ export function migrateRequiredSettingsBlocks(
         pinnedLeafPath(dataDirectory, SETTINGS_FILE_NAME),
         `${JSON.stringify(candidate, null, 2)}\n`,
         {
+          mode: canonicalOwnerFileMode({ ownerFileName: SETTINGS_FILE_NAME, scope: 'system' }),
           faultInjection: (stage) => {
             options.faultInjection?.(stage, filePath);
             if (stage !== 'after_file_sync') return;

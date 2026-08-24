@@ -58,6 +58,33 @@ export function usesDirectZaiEndpoint(baseUrl: string): boolean {
   return /^https?:\/\/(?:api\.z\.ai|open\.bigmodel\.cn)(?=[:/]|$)/iu.test(baseUrl.trim());
 }
 
+function supportsOpenAIDeveloperRoleAtEndpoint(provider: string, baseUrl: string): boolean {
+  const normalizedProvider = provider.trim().toLowerCase();
+  const normalizedBaseUrl = baseUrl.trim().toLowerCase();
+  const isZai = normalizedProvider === 'zai' || normalizedBaseUrl.includes('api.z.ai');
+  const isMoonshot = normalizedProvider === 'moonshotai'
+    || normalizedProvider === 'moonshotai-cn'
+    || normalizedBaseUrl.includes('api.moonshot.')
+    || normalizedBaseUrl.includes('api.kimi.com');
+  const isCloudflareWorkersAI = normalizedProvider === 'cloudflare-workers-ai'
+    || normalizedBaseUrl.includes('api.cloudflare.com');
+  const isCloudflareAiGateway = normalizedProvider === 'cloudflare-ai-gateway'
+    || normalizedBaseUrl.includes('gateway.ai.cloudflare.com');
+  const isNonStandard = normalizedProvider === 'cerebras'
+    || normalizedBaseUrl.includes('cerebras.ai')
+    || normalizedProvider === 'xai'
+    || normalizedBaseUrl.includes('api.x.ai')
+    || normalizedBaseUrl.includes('chutes.ai')
+    || normalizedBaseUrl.includes('deepseek.com')
+    || isZai
+    || isMoonshot
+    || normalizedProvider === 'opencode'
+    || normalizedBaseUrl.includes('opencode.ai')
+    || isCloudflareWorkersAI
+    || isCloudflareAiGateway;
+  return !isNonStandard;
+}
+
 export function resolveRegisteredModel(
   runtime: ModelLookupRuntime,
   provider: string,
@@ -95,6 +122,9 @@ export function createOpenAICompatibleEndpointModel(
     compat: {
       supportsStore: false,
       maxTokensField: 'max_tokens',
+      ...(!supportsOpenAIDeveloperRoleAtEndpoint(config.provider, config.baseUrl)
+        ? { supportsDeveloperRole: false }
+        : {}),
       ...(usesDirectZaiEndpoint(config.baseUrl) ? { zaiToolStream: true } : {}),
       ...(config.reasoning && thinkingFormat
         ? { thinkingFormat }
@@ -104,31 +134,11 @@ export function createOpenAICompatibleEndpointModel(
 }
 
 function supportsOpenAIDeveloperRole(model: Model<any>): boolean {
-  const provider = model.provider.trim().toLowerCase();
-  const baseUrl = typeof model.baseUrl === 'string' ? model.baseUrl.toLowerCase() : '';
-  const isZai = provider === 'zai' || baseUrl.includes('api.z.ai');
-  const isMoonshot = provider === 'moonshotai'
-    || provider === 'moonshotai-cn'
-    || baseUrl.includes('api.moonshot.')
-    || baseUrl.includes('api.kimi.com');
-  const isCloudflareWorkersAI = provider === 'cloudflare-workers-ai'
-    || baseUrl.includes('api.cloudflare.com');
-  const isCloudflareAiGateway = provider === 'cloudflare-ai-gateway'
-    || baseUrl.includes('gateway.ai.cloudflare.com');
-  const isNonStandard = provider === 'cerebras'
-    || baseUrl.includes('cerebras.ai')
-    || provider === 'xai'
-    || baseUrl.includes('api.x.ai')
-    || baseUrl.includes('chutes.ai')
-    || baseUrl.includes('deepseek.com')
-    || isZai
-    || isMoonshot
-    || provider === 'opencode'
-    || baseUrl.includes('opencode.ai')
-    || isCloudflareWorkersAI
-    || isCloudflareAiGateway;
   const compat = model.compat as { supportsDeveloperRole?: boolean } | undefined;
-  return compat?.supportsDeveloperRole ?? !isNonStandard;
+  return compat?.supportsDeveloperRole ?? supportsOpenAIDeveloperRoleAtEndpoint(
+    model.provider,
+    typeof model.baseUrl === 'string' ? model.baseUrl : '',
+  );
 }
 
 function resolveOpenAITransport(model: Model<any>): LLMSystemPromptTransport {

@@ -18,6 +18,7 @@ import {
   pinAbsoluteDirectory,
   pinnedLeafPath,
   readPinnedRegularFile,
+  setPinnedRegularFileMode,
 } from '../../persistence/pinned-filesystem.js';
 import {
   createSkillWriteSinkRule,
@@ -35,6 +36,7 @@ import {
   validateIntakeUrlScannerPolicy,
   type IntakeUrlScannerPolicyConfig,
 } from './intake-url-scanner-policy.js';
+import { canonicalOwnerFileMode } from './owner-file-modes.js';
 
 export interface IntakePolicyOwnerMigrationOptions {
   dataDir: string;
@@ -353,6 +355,10 @@ export function migrateIntakePolicyOwner(
           pinnedLeafPath(dataDirectory, INTAKE_POLICY_FILE_NAME),
           `${JSON.stringify(candidate, null, 2)}\n`,
           {
+            mode: canonicalOwnerFileMode({
+              ownerFileName: INTAKE_POLICY_FILE_NAME,
+              scope: 'system',
+            }),
             faultInjection: (stage) => {
               options.faultInjection?.(stage, filePath);
               if (stage !== 'after_file_sync') return;
@@ -422,6 +428,29 @@ export function migrateIntakePolicyOwner(
       }
       validateIntakePolicy(raw, filePath);
       assertSourceStillCurrent();
+      const canonicalMode = canonicalOwnerFileMode({
+        ownerFileName: INTAKE_POLICY_FILE_NAME,
+        scope: 'system',
+      });
+      if (source.mode !== canonicalMode) {
+        if (options.apply) {
+          setPinnedRegularFileMode(
+            dataDirectory,
+            INTAKE_POLICY_FILE_NAME,
+            'Intake policy owner file',
+            canonicalMode,
+            source,
+          );
+        }
+        return {
+          mode,
+          status: options.apply ? 'applied' : 'planned',
+          filePath,
+          fromSchemaVersion: INTAKE_POLICY_SCHEMA_VERSION,
+          toSchemaVersion: INTAKE_POLICY_SCHEMA_VERSION,
+          updatedPaths: ['mode'],
+        };
+      }
       return {
         mode,
         status: 'not_needed',

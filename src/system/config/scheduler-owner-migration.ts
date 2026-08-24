@@ -13,6 +13,7 @@ import {
   pinnedLeafPath,
   readPinnedRegularFile,
 } from '../../persistence/pinned-filesystem.js';
+import { canonicalOwnerFileMode } from './owner-file-modes.js';
 import {
   DEFAULT_BACKGROUND_WORK_TUNING,
   DEFAULT_BACKGROUND_MAINTENANCE_CONFIG,
@@ -229,6 +230,10 @@ export function migrateLegacySchedulerOwner(
         pinnedLeafPath(dataDirectory, SCHEDULER_FILE_NAME),
         `${JSON.stringify(candidate, null, 2)}\n`,
         {
+          mode: canonicalOwnerFileMode({
+            ownerFileName: SCHEDULER_FILE_NAME,
+            scope: 'companion',
+          }),
           faultInjection: (stage) => {
             options.faultInjection?.(stage, filePath);
             if (stage !== 'after_file_sync') return;

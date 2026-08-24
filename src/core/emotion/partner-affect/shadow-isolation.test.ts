@@ -56,6 +56,9 @@ const ALLOWED_IMPORTERS: ReadonlySet<string> = new Set([
   'src/system/config/config-store.ts',
   'src/system/config/settings-contract.ts',
   'src/system/config/startup-owner-files.ts',
+  // Additive owner migration validates/seeds the canonical config only.
+  'src/system/config/required-owner-additions-migration.ts',
+  'src/system/config/required-owner-additions-migration.test.ts',
   // Agent entrypoint wiring (bridge creation + shutdown only).
   'src/app/agent/main.ts',
   'src/app/agent/admin-surface.ts',

@@ -77,7 +77,7 @@ describe('LLMRequestCapability explicit tool dispatch', () => {
     ]);
   });
 
-  it('disables Kimi Code reasoning for a required tool without changing GLM', () => {
+  it('disables Kimi Code thinking on the required-tool wire payload without changing GLM', async () => {
     const capability = makeCapability();
     const context = makeRequiredContext();
     const kimiOptions: LLMRequestOptions = { reasoning: 'medium' };
@@ -104,10 +104,19 @@ describe('LLMRequestCapability explicit tool dispatch', () => {
 
     expect(kimiOptions.toolChoice).toBe('required');
     expect(kimiOptions.reasoning).toBeUndefined();
+    await expect(kimiOptions.onPayload?.({
+      model: 'kimi-for-coding',
+      tool_choice: 'required',
+    }, {} as Model<'openai-completions'>)).resolves.toEqual({
+      model: 'kimi-for-coding',
+      tool_choice: 'required',
+      thinking: { type: 'disabled' },
+    });
     expect(glmOptions).toMatchObject({
       toolChoice: 'required',
       reasoning: 'medium',
     });
+    expect(glmOptions.onPayload).toBeUndefined();
   });
 
   it('gives pi-ai an exact model schema for an exact-arguments request', () => {

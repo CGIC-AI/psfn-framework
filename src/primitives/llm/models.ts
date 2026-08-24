@@ -58,6 +58,14 @@ export function usesDirectZaiEndpoint(baseUrl: string): boolean {
   return /^https?:\/\/(?:api\.z\.ai|open\.bigmodel\.cn)(?=[:/]|$)/iu.test(baseUrl.trim());
 }
 
+export function requiresThinkingDisabledForRequiredTools(
+  api: unknown,
+  baseUrl: unknown,
+): boolean {
+  if (api !== 'openai-completions' || typeof baseUrl !== 'string') return false;
+  return /^https:\/\/api\.kimi\.com\/coding(?:\/|$)/iu.test(baseUrl.trim());
+}
+
 function supportsOpenAIDeveloperRoleAtEndpoint(provider: string, baseUrl: string): boolean {
   const normalizedProvider = provider.trim().toLowerCase();
   const normalizedBaseUrl = baseUrl.trim().toLowerCase();

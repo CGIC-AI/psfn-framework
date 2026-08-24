@@ -27,7 +27,11 @@ import type {
   ToolSchema,
 } from '../../shared/contracts/runtime.js';
 import type { CoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
-import { createOpenAICompatibleEndpointModel, resolveRegisteredModel } from '../../primitives/llm/models.js';
+import {
+  createOpenAICompatibleEndpointModel,
+  requiresThinkingDisabledForRequiredTools,
+  resolveRegisteredModel,
+} from '../../primitives/llm/models.js';
 import { resolveRoutingCandidates, type RoutingCandidate, type RoutingPurpose } from '../../primitives/llm/routing.js';
 import {
   buildStreamTransportModelHint,
@@ -283,18 +287,6 @@ function executeStreamCandidate(params: ExecuteStreamCandidateParams): AsyncGene
   // as options.signal; extract it here so it can be threaded to the provider
   // transport (it must not leak into the serialized model-hint requestOptions).
   const streamSignal = extractAbortSignal(params.options);
-  const requestOptions = buildStreamRequestOptions(
-    candidate,
-    params.options,
-    undefined,
-  );
-  const retryConfig = llmRetryConfig(params.config);
-  const maxRetries = Number.isFinite(retryConfig.maxRetries)
-    ? Math.max(0, Math.floor(retryConfig.maxRetries!))
-    : DEFAULT_MAX_RETRIES;
-  const baseDelayMs = Number.isFinite(retryConfig.baseDelayMs)
-    ? Math.max(0, Math.floor(retryConfig.baseDelayMs!))
-    : DEFAULT_BASE_DELAY_MS;
   const holdEventsUntilTerminal = hasExplicitToolExecutionRequest(params.context);
   const contextTools = (params.context as { tools?: unknown }).tools;
   const executionTools = normalizeExecutionTools(contextTools);
@@ -308,6 +300,25 @@ function executeStreamCandidate(params: ExecuteStreamCandidateParams): AsyncGene
         modelApi: String((params.model as { api?: unknown }).api ?? ''),
       })
     : undefined;
+  const requestCandidate = explicitToolContract?.requiredToolName
+    && requiresThinkingDisabledForRequiredTools(
+      candidate.apiKind ?? (params.model as { api?: unknown }).api,
+      candidate.requestBaseUrl ?? (params.model as { baseUrl?: unknown }).baseUrl,
+    )
+    ? { ...candidate, thinkingEnabled: false, thinkingEffort: undefined }
+    : candidate;
+  const requestOptions = buildStreamRequestOptions(
+    requestCandidate,
+    params.options,
+    undefined,
+  );
+  const retryConfig = llmRetryConfig(params.config);
+  const maxRetries = Number.isFinite(retryConfig.maxRetries)
+    ? Math.max(0, Math.floor(retryConfig.maxRetries!))
+    : DEFAULT_MAX_RETRIES;
+  const baseDelayMs = Number.isFinite(retryConfig.baseDelayMs)
+    ? Math.max(0, Math.floor(retryConfig.baseDelayMs!))
+    : DEFAULT_BASE_DELAY_MS;
 
   return (async function* executeWithRetry() {
     let retryAttempt = 0;
@@ -319,7 +330,7 @@ function executeStreamCandidate(params: ExecuteStreamCandidateParams): AsyncGene
 
       try {
         const stream = createTransportEventStream({
-          candidate,
+          candidate: requestCandidate,
           ...(resolveCompanionTransportSlotKey(params.config, params.purpose, candidate)
             ? { transportSlotKey: candidate.slotKey }
             : {}),

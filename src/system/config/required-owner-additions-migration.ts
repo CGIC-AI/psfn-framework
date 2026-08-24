@@ -41,7 +41,7 @@ export interface RequiredOwnerAdditionsMigrationOptions {
   faultInjection?: DurableWriteOptions['faultInjection'];
 }
 
-export interface RequiredCompanionOwnerAdditionsMigrationResult {
+interface RequiredCompanionOwnerAdditionsMigrationResult {
   mode: 'dry-run' | 'apply';
   status: 'not_needed' | 'planned' | 'applied';
   directoryPath: string;
@@ -58,7 +58,7 @@ export interface RequiredOwnerAdditionsMigrationResult {
   ownerModes: RequiredOwnerModesMigrationResult;
 }
 
-export interface RequiredOwnerModesMigrationResult {
+interface RequiredOwnerModesMigrationResult {
   mode: 'dry-run' | 'apply';
   status: 'not_needed' | 'planned' | 'applied';
   updatedPaths?: string[];

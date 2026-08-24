@@ -1,6 +1,7 @@
 import {
   closeSync,
   constants,
+  fchmodSync,
   fstatSync,
   fsyncSync,
   lstatSync,
@@ -27,6 +28,7 @@ export interface InspectedPinnedFile extends FilesystemIdentity {
   bytes: number;
   sha256: string;
   linkCount: number;
+  mode: number;
 }
 
 export interface ReadPinnedFile extends InspectedPinnedFile {
@@ -206,6 +208,7 @@ export function inspectPinnedRegularFile(
     device: inspected.device,
     inode: inspected.inode,
     linkCount: inspected.linkCount,
+    mode: inspected.mode,
   };
 }
 
@@ -231,11 +234,52 @@ export function readPinnedRegularFile(
       device: stats.dev.toString(),
       inode: stats.ino.toString(),
       linkCount: Number(stats.nlink),
+      mode: Number(stats.mode) & 0o777,
       content,
     };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ELOOP') {
       throw new Error(`${label} must be a regular file without symlinks: ${resolve(directory.logicalPath, leaf)}`);
+    }
+    throw error;
+  } finally {
+    if (descriptor !== null) closeSync(descriptor);
+  }
+}
+
+/** Change a pinned regular file's mode without following a replacement symlink. */
+export function setPinnedRegularFileMode(
+  directory: PinnedDirectory,
+  leaf: string,
+  label: string,
+  mode: number,
+  expectedIdentity?: FilesystemIdentity,
+): boolean {
+  const operationPath = pinnedLeafPath(directory, leaf);
+  let descriptor: number | null = null;
+  try {
+    descriptor = openSync(operationPath, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const stats = fstatSync(descriptor, { bigint: true });
+    if (!stats.isFile()) {
+      throw new Error(
+        `${label} must be a regular file without symlinks: ${resolve(directory.logicalPath, leaf)}`,
+      );
+    }
+    const actualIdentity = {
+      device: stats.dev.toString(),
+      inode: stats.ino.toString(),
+    };
+    if (expectedIdentity) assertFilesystemIdentity(actualIdentity, expectedIdentity, label);
+    const currentMode = Number(stats.mode) & 0o777;
+    if (currentMode === mode) return false;
+    fchmodSync(descriptor, mode);
+    fsyncSync(descriptor);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ELOOP') {
+      throw new Error(
+        `${label} must be a regular file without symlinks: ${resolve(directory.logicalPath, leaf)}`,
+      );
     }
     throw error;
   } finally {

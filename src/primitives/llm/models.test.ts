@@ -189,6 +189,10 @@ describe('resolveSystemRoleCapabilityMetadata', () => {
         reasoning: true,
       });
 
+      // pi-ai reads this flag while constructing the real OpenAI wire body.
+      // Metadata-only detection is insufficient: without the explicit compat
+      // value it defaults reasoning models to the rejected `developer` role.
+      expect(model.compat?.supportsDeveloperRole).toBe(false);
       expect(resolveSystemRoleCapabilityMetadata(model)).toEqual({
         transport: 'openai_system',
         supportsSystemRole: true,

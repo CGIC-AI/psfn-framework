@@ -19,6 +19,8 @@ export type DurableWriteStage = 'after_file_sync' | 'after_publish' | 'after_dir
 export interface DurableWriteOptions {
   /** Publish without replacing any existing final path. */
   exclusive?: boolean;
+  /** POSIX mode for the newly published file; defaults to owner-only. */
+  mode?: number;
   faultInjection?: (stage: DurableWriteStage, path: string) => void;
 }
 
@@ -70,7 +72,11 @@ export function writeFileDurableAtomicSync(
   const temporary = `${path}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`;
   let descriptor: number | null = null;
   try {
-    descriptor = openSync(temporary, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY, 0o600);
+    descriptor = openSync(
+      temporary,
+      constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY,
+      options.mode ?? 0o600,
+    );
     writeFileSync(descriptor, content);
     fsyncSync(descriptor);
     options.faultInjection?.('after_file_sync', path);

@@ -31,6 +31,7 @@ import {
   validatePartnerAffectShadowConfig,
 } from './partner-affect-shadow-config.js';
 import { canonicalOwnerFileMode } from './owner-file-modes.js';
+import { describeStartupOwnerFileChecks } from './startup-owner-files.js';
 
 export interface RequiredOwnerAdditionsMigrationOptions {
   dataDir: string;
@@ -54,6 +55,13 @@ export interface RequiredOwnerAdditionsMigrationResult {
   intakePolicy: ReturnType<typeof migrateIntakePolicyOwner> | RequiredSystemOwnerAdditionResult;
   automataPolicy: ReturnType<typeof migrateAutomataPolicyOwner> | RequiredSystemOwnerAdditionResult;
   companionOwnerAdditions?: RequiredCompanionOwnerAdditionsMigrationResult;
+  ownerModes: RequiredOwnerModesMigrationResult;
+}
+
+export interface RequiredOwnerModesMigrationResult {
+  mode: 'dry-run' | 'apply';
+  status: 'not_needed' | 'planned' | 'applied';
+  updatedPaths?: string[];
 }
 
 interface RequiredSystemOwnerAdditionResult {
@@ -237,6 +245,57 @@ function migrateRequiredCompanionOwnerAdditions(options: {
   }
 }
 
+function migrateRequiredOwnerModes(options: {
+  dataDir: string;
+  companionDataDir?: string;
+  apply: boolean;
+}): RequiredOwnerModesMigrationResult {
+  const mode = options.apply ? 'apply' : 'dry-run';
+  const systemDirectory = pinAbsoluteDirectory(options.dataDir, 'System owner data directory');
+  const companionDirectory = options.companionDataDir
+    ? pinAbsoluteDirectory(options.companionDataDir, 'Companion owner data directory')
+    : undefined;
+  try {
+    const updatedPaths: string[] = [];
+    for (const descriptor of describeStartupOwnerFileChecks()) {
+      const directory = descriptor.scope === 'system'
+        ? systemDirectory
+        : companionDirectory;
+      if (!directory || !pinnedLeafExists(directory, descriptor.ownerFileName)) continue;
+      const existing = readPinnedRegularFile(
+        directory,
+        descriptor.ownerFileName,
+        `${descriptor.label} owner file`,
+      );
+      if (existing.mode === descriptor.canonicalMode) continue;
+      const logicalPath = join(directory.logicalPath, descriptor.ownerFileName);
+      updatedPaths.push(logicalPath);
+      if (options.apply) {
+        setPinnedRegularFileMode(
+          directory,
+          descriptor.ownerFileName,
+          `${descriptor.label} owner file`,
+          descriptor.canonicalMode,
+          existing,
+        );
+      }
+    }
+    if (updatedPaths.length === 0) return { mode, status: 'not_needed' };
+    assertPinnedDirectoryAtLogicalPath(systemDirectory, 'System owner data directory');
+    if (companionDirectory) {
+      assertPinnedDirectoryAtLogicalPath(companionDirectory, 'Companion owner data directory');
+    }
+    return {
+      mode,
+      status: options.apply ? 'applied' : 'planned',
+      updatedPaths,
+    };
+  } finally {
+    closePinnedDirectory(companionDirectory);
+    closePinnedDirectory(systemDirectory);
+  }
+}
+
 function runRequiredOwnerAdditions(
   options: RequiredOwnerAdditionsMigrationOptions,
   apply: boolean,
@@ -290,6 +349,13 @@ function runRequiredOwnerAdditions(
         }),
       }
       : {}),
+    ownerModes: migrateRequiredOwnerModes({
+      dataDir: options.dataDir,
+      ...(options.companionDataDir
+        ? { companionDataDir: options.companionDataDir }
+        : {}),
+      apply,
+    }),
   };
 }
 

@@ -42,6 +42,7 @@ import type {
   ExplicitToolContract,
 } from './explicit-tool-request.js';
 import { buildExactToolArgumentsModelSchema } from './explicit-tool-arguments.js';
+import { isRecord } from '../../shared/utils/types.js';
 
 const log = createComponentLogger('LLMClient');
 
@@ -266,6 +267,18 @@ export class LLMRequestCapability {
       requestOptions.toolChoice = 'required';
       if (requiresThinkingDisabledForRequiredTools(model.api, model.baseUrl)) {
         delete requestOptions.reasoning;
+        const priorOnPayload = requestOptions.onPayload;
+        requestOptions.onPayload = async (payload, payloadModel) => {
+          const priorResult = await priorOnPayload?.(payload, payloadModel);
+          const outbound = priorResult ?? payload;
+          if (!isRecord(outbound)) {
+            throw new Error('Kimi Code required-tool payload must be an object');
+          }
+          return {
+            ...outbound,
+            thinking: { type: 'disabled' },
+          };
+        };
       }
     }
     return contract;

@@ -198,7 +198,8 @@ export async function createAgentPersistenceRuntime(
   const tenantScope = resolveConfigTenantPoolScope(options.config);
   const schema = tenantScope?.schema ?? (options.config.postgresSchema?.trim() || undefined);
   const tenantRole = tenantScope?.role;
-  if (schema && options.config.multiCompanion === true) {
+  const fleetTenancy = options.config.companionFleet !== undefined;
+  if (schema && fleetTenancy) {
     // Deployment provisioning is explicit. Startup only verifies the boundary
     // and refuses to repair/migrate tenant roles, schemas, or extensions.
     const bootstrapPool = createPostgresPool(databaseUrl, {
@@ -239,11 +240,11 @@ export async function createAgentPersistenceRuntime(
   // Every agent proves its ordinary credential has exact own-schema + shared
   // DML authority, reciprocal tenant isolation, and zero fleet_auth access
   // before opening a shared store.
-  if (options.config.multiCompanion === true) {
+  if (fleetTenancy) {
     const companionFleet = options.config.companionFleet;
     const modelUsagePrimary = companionFleet?.companions.at(0);
     if (!schema || !companionFleet || !modelUsagePrimary) {
-      throw new Error('Multi-companion shared persistence requires a complete fleet schema identity');
+      throw new Error('Fleet shared persistence requires a complete fleet schema identity');
     }
     await awaitPostgresStoreReadiness(
       'shared_runtime_authority',
@@ -256,13 +257,13 @@ export async function createAgentPersistenceRuntime(
       }),
     );
   }
-  const companionPresenceStore = options.config.multiCompanion === true
+  const companionPresenceStore = fleetTenancy
     ? await awaitPostgresStoreReadiness(
         'companion_presence',
         () => PostgresCompanionPresenceStore.connect(databaseUrl),
       )
     : undefined;
-  const icpInitiationCandidateStore = options.config.multiCompanion === true
+  const icpInitiationCandidateStore = fleetTenancy
     ? await awaitPostgresStoreReadiness(
         'icp_initiation_candidates',
         () => PostgresIcpInitiationCandidateStore.connect(databaseUrl, {
@@ -282,7 +283,7 @@ export async function createAgentPersistenceRuntime(
   );
   // Per-companion social pot lives in the shared schema (gateway-owned budget,
   // never a companion-local store). Multi-companion only, like presence above.
-  const socialPotStore = options.config.multiCompanion === true
+  const socialPotStore = fleetTenancy
     ? await awaitPostgresStoreReadiness(
         'social_pot',
         () => PostgresSocialPotStore.connect(databaseUrl),
@@ -290,7 +291,7 @@ export async function createAgentPersistenceRuntime(
     : undefined;
   // Speaking arbiter state (reservations, egress leases, room-episode pressure)
   // is gateway-owned in the shared schema, exactly like the social pot above.
-  const speakingArbiterStore = options.config.multiCompanion === true
+  const speakingArbiterStore = fleetTenancy
     ? await awaitPostgresStoreReadiness(
         'speaking_arbiter',
         () => PostgresSpeakingArbiterStore.connect(databaseUrl),

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join, relative, resolve } from 'node:path';
 import { loadAgentConfig, loadConfig, loadOperatorConfig } from './load-config.js';
 import {
   createDefaultObserverEvalSidecarSettings,
@@ -56,6 +56,8 @@ function clearRuntimePathEnv(): void {
   delete process.env.GATEWAY_COMPANION_AUTH_TOKEN;
   delete process.env.GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN;
   process.env.COMPANION_ID = '11111111-1111-4111-8111-111111111111';
+  process.env.COMPANION_PG_SCHEMA = 'public';
+  process.env.GATEWAY_COMPANION_AUTH_TOKEN = 'v1.agent-token';
   process.env.POSTGRES_DATABASE_URL = 'postgres://postgres:secret@localhost:5432/psfn_test';
 }
 
@@ -65,12 +67,19 @@ const seededManifestCleanups: Array<() => void> = [];
 /**
  * The companions.json fleet manifest is mandatory for every deployment, so
  * loadConfig now requires one at the resolved systemDataDir. Seed a one-entry
- * (single-companion) manifest so a test exercises the single-companion topology
- * (multiCompanion=false), matching the old flag-off behavior. Cleanup removes
- * only files/dirs this helper created.
+ * manifest whose path/schema tuple matches the runtime wiring under test.
+ * Cleanup removes only files/dirs this helper created.
  */
-function seedManifestAt(systemDataDir: string, companionId = DEFAULT_TEST_COMPANION_ID): void {
-  const abs = resolve(systemDataDir);
+function seedManifestAt(input: {
+  systemDataDir: string;
+  companionDataDir: string;
+  runtimeRoot?: string;
+  companionId?: string;
+}): void {
+  const companionId = input.companionId ?? DEFAULT_TEST_COMPANION_ID;
+  const runtimeRoot = resolve(input.runtimeRoot ?? '.');
+  const companionDataDir = resolve(input.companionDataDir);
+  const abs = resolve(input.systemDataDir);
   const firstCreatedDir = mkdirSync(abs, { recursive: true });
   const manifestPath = join(abs, 'companions.json');
   const manifestPreexisted = existsSync(manifestPath);
@@ -81,8 +90,8 @@ function seedManifestAt(systemDataDir: string, companionId = DEFAULT_TEST_COMPAN
     },
     companions: [{
       companionId,
-      companionDataDir: 'companion',
-      characterCardPath: 'companion/companion.json',
+      companionDataDir: relative(runtimeRoot, companionDataDir),
+      characterCardPath: relative(runtimeRoot, join(companionDataDir, 'companion.json')),
       postgresSchema: 'public',
       postgresRole: 'single_companion_runtime',
       postgresDatabaseUrlRef: { kind: 'env', envName: 'SINGLE_COMPANION_DATABASE_URL' },
@@ -108,20 +117,18 @@ afterEach(() => {
 describe('loadConfig path defaults', () => {
   const tempDirs: string[] = [];
 
-  // The companions.json manifest is mandatory. Seed a one-entry (single-
-  // companion) manifest at each relative data root these tests resolve to, so
-  // single-companion loadConfig paths boot as a fleet of one (multiCompanion=
-  // false). Multi-companion tests write their own two-entry manifest in a temp
-  // root. Cleanup removes only directories/files these seeds created.
+  // The companions.json manifest is mandatory. Seed a one-entry manifest at
+  // each relative data root these tests resolve to. Multi-companion tests write
+  // their own two-entry manifest in a temp root.
   beforeEach(() => {
-    for (const dir of [
-      './data',
-      './sandbox-data',
-      './system-data',
-      './runtime/production/system-data',
-    ]) {
-      seedManifestAt(dir);
-    }
+    seedManifestAt({ systemDataDir: './data', companionDataDir: './companion' });
+    seedManifestAt({ systemDataDir: './sandbox-data', companionDataDir: './sandbox-data' });
+    seedManifestAt({ systemDataDir: './system-data', companionDataDir: './companion-data' });
+    seedManifestAt({
+      systemDataDir: './runtime/production/system-data',
+      companionDataDir: './runtime/production/companion-data',
+      runtimeRoot: './runtime/production',
+    });
   });
 
   function configureMultiCompanionEnv(): {
@@ -200,12 +207,14 @@ describe('loadConfig path defaults', () => {
 
     const config = loadConfig();
     expect(config.systemDataDir).toBe('./data');
-    expect(config.companionDataDir).toBe('./companion');
-    expect(config.workspacePath).toBe('./workspace');
+    expect(config.companionDataDir).toBe(resolve('./companion'));
+    expect(config.workspacePath).toBe(resolve(
+      './workspaces/personal/11111111-1111-4111-8111-111111111111',
+    ));
     expect(config.dataDir).toBe('./data');
     expect(config.companionId).toBe('11111111-1111-4111-8111-111111111111');
-    expect(config.characterCardPath).toBe('./companion/companion.json');
-    expect(config.databasePath).toBe('companion/state/companion.db');
+    expect(config.characterCardPath).toBe(resolve('./companion/companion.json'));
+    expect(config.databasePath).toBe(resolve('./companion/state/companion.db'));
     expect(config.memoryRetrievalPolicy).toEqual(createDefaultMemoryRetrievalPolicy());
   });
 
@@ -224,25 +233,29 @@ describe('loadConfig path defaults', () => {
 
     const config = loadConfig();
     expect(config.systemDataDir).toBe('./sandbox-data');
-    expect(config.companionDataDir).toBe('./sandbox-data');
-    expect(config.workspacePath).toBe('./workspace');
+    expect(config.companionDataDir).toBe(resolve('./sandbox-data'));
+    expect(config.workspacePath).toBe(resolve(
+      './workspaces/personal/11111111-1111-4111-8111-111111111111',
+    ));
     expect(config.dataDir).toBe('./sandbox-data');
-    expect(config.characterCardPath).toBe('./sandbox-data/companion.json');
-    expect(config.databasePath).toBe('sandbox-data/state/companion.db');
+    expect(config.characterCardPath).toBe(resolve('./sandbox-data/companion.json'));
+    expect(config.databasePath).toBe(resolve('./sandbox-data/state/companion.db'));
   });
 
-  it('respects explicit CHARACTER_CARD_PATH and DATABASE_PATH overrides', () => {
+  it('rejects a character-card path that drifts from the one-entry manifest', () => {
     clearRuntimePathEnv();
     process.env.DATA_DIR = './sandbox-data';
     process.env.CHARACTER_CARD_PATH = './cards/main.json';
+
+    expect(() => loadConfig()).toThrow(/CHARACTER_CARD_PATH/);
+  });
+
+  it('respects an explicit non-authority DATABASE_PATH override', () => {
+    clearRuntimePathEnv();
+    process.env.DATA_DIR = './sandbox-data';
     process.env.DATABASE_PATH = './db/main.db';
 
-    const config = loadConfig();
-    expect(config.systemDataDir).toBe('./sandbox-data');
-    expect(config.companionDataDir).toBe('./sandbox-data');
-    expect(config.dataDir).toBe('./sandbox-data');
-    expect(config.characterCardPath).toBe('./cards/main.json');
-    expect(config.databasePath).toBe('./db/main.db');
+    expect(loadConfig().databasePath).toBe('./db/main.db');
   });
 
   it('derives database path from DATABASE_BASENAME when DATABASE_PATH is not set', () => {
@@ -251,7 +264,7 @@ describe('loadConfig path defaults', () => {
     process.env.DATABASE_BASENAME = 'Companion Prime';
 
     const config = loadConfig();
-    expect(config.databasePath).toBe('sandbox-data/state/companion-prime.db');
+    expect(config.databasePath).toBe(resolve('sandbox-data/state/companion-prime.db'));
   });
 
   it('supports explicit split system and companion roots', () => {
@@ -261,19 +274,23 @@ describe('loadConfig path defaults', () => {
 
     const config = loadConfig();
     expect(config.systemDataDir).toBe('./system-data');
-    expect(config.companionDataDir).toBe('./companion-data');
-    expect(config.workspacePath).toBe('./workspace');
+    expect(config.companionDataDir).toBe(resolve('./companion-data'));
+    expect(config.workspacePath).toBe(resolve(
+      './workspaces/personal/11111111-1111-4111-8111-111111111111',
+    ));
     expect(config.dataDir).toBe('./system-data');
-    expect(config.characterCardPath).toBe('./companion-data/companion.json');
-    expect(config.databasePath).toBe('companion-data/state/companion.db');
+    expect(config.characterCardPath).toBe(resolve('./companion-data/companion.json'));
+    expect(config.databasePath).toBe(resolve('./companion-data/state/companion.db'));
   });
 
-  it('carries explicit personal workspace wiring into runtime config', () => {
+  it('uses the manifest-derived personal workspace instead of an ad hoc gateway override', () => {
     clearRuntimePathEnv();
     process.env.WORKSPACE_PATH = './personal-files';
 
     const config = loadConfig();
-    expect(config.workspacePath).toBe('./personal-files');
+    expect(config.workspacePath).toBe(resolve(
+      './workspaces/personal/11111111-1111-4111-8111-111111111111',
+    ));
   });
 
   it('defaults persistence backend to postgres when the required database url is configured', () => {
@@ -314,6 +331,9 @@ describe('loadConfig path defaults', () => {
     delete process.env.POSTGRES_DATABASE_URL;
     process.env.POSTGRES_DATABASE_URL_FILE = credentialPath;
     process.env.GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN = 'v1.worker-proof';
+    process.env.WORKSPACE_PATH = resolve(
+      './workspaces/personal/11111111-1111-4111-8111-111111111111',
+    );
 
     const config = loadAgentConfig();
 
@@ -324,6 +344,9 @@ describe('loadConfig path defaults', () => {
   it('rejects a raw database credential in the agent process environment', () => {
     clearRuntimePathEnv();
     process.env.GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN = 'v1.worker-proof';
+    process.env.WORKSPACE_PATH = resolve(
+      './workspaces/personal/11111111-1111-4111-8111-111111111111',
+    );
 
     expect(() => loadAgentConfig()).toThrow(
       'POSTGRES_DATABASE_URL must not be present in the agent process environment',
@@ -336,11 +359,17 @@ describe('loadConfig path defaults', () => {
 
     const config = loadConfig();
     expect(config.systemDataDir).toBe('./runtime/production/system-data');
-    expect(config.companionDataDir).toBe('./runtime/production/companion-data');
-    expect(config.workspacePath).toBe('./runtime/production/workspace');
+    expect(config.companionDataDir).toBe(resolve('./runtime/production/companion-data'));
+    expect(config.workspacePath).toBe(resolve(
+      './runtime/production/workspaces/personal/11111111-1111-4111-8111-111111111111',
+    ));
     expect(config.dataDir).toBe('./runtime/production/system-data');
-    expect(config.characterCardPath).toBe('./runtime/production/companion-data/companion.json');
-    expect(config.databasePath).toBe('runtime/production/companion-data/state/companion.db');
+    expect(config.characterCardPath).toBe(resolve(
+      './runtime/production/companion-data/companion.json',
+    ));
+    expect(config.databasePath).toBe(resolve(
+      './runtime/production/companion-data/state/companion.db',
+    ));
   });
 
   it('rejects shared DATA_DIR fallback when runtime layout mode resolves to production', () => {
@@ -542,6 +571,9 @@ describe('loadConfig path defaults', () => {
     process.env.ELEVENLABS_API_KEY = 'eleven-secret';
     process.env.FAL_API_KEY = 'fal-secret';
     process.env.GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN = 'v1.worker-token';
+    process.env.WORKSPACE_PATH = resolve(
+      './workspaces/personal/11111111-1111-4111-8111-111111111111',
+    );
 
     const config = loadAgentConfig() as Record<string, unknown>;
 
@@ -556,6 +588,9 @@ describe('loadConfig path defaults', () => {
 
   it('requires the isolated session-integrity credential for every agent topology', () => {
     clearRuntimePathEnv();
+    process.env.WORKSPACE_PATH = resolve(
+      './workspaces/personal/11111111-1111-4111-8111-111111111111',
+    );
 
     expect(() => loadAgentConfig()).toThrow(/GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN/);
   });
@@ -578,6 +613,66 @@ describe('loadConfig path defaults', () => {
     );
     expect(config.gatewayCompanionAuthToken).toBe('v1.agent-token');
     expect(config.gatewaySessionIntegrityAuthToken).toBe('v1.worker-token');
+  });
+
+  it('binds a one-entry agent to its canonical fleet tuple', () => {
+    clearRuntimePathEnv();
+    const root = mkdtempSync(join(tmpdir(), 'psfn-load-config-one-entry-'));
+    tempDirs.push(root);
+    const systemDataDir = join(root, 'system-data');
+    const companionId = '11111111-1111-4111-8111-111111111111';
+    const companionDataDir = join(root, 'companions/main');
+    const characterCardPath = join(companionDataDir, 'companion.json');
+    const workspacePath = join(root, 'workspaces/personal', companionId);
+    mkdirSync(systemDataDir, { recursive: true });
+    mkdirSync(companionDataDir, { recursive: true });
+    mkdirSync(workspacePath, { recursive: true });
+    writeFileSync(join(systemDataDir, 'companions.json'), `${JSON.stringify({
+      postgres: {
+        sharedMigrationRole: 'shared_schema_migration',
+        sharedMigrationDatabaseUrlRef: { kind: 'env', envName: 'SHARED_MIGRATION_URL' },
+      },
+      companions: [{
+        companionId,
+        companionDataDir: 'companions/main',
+        characterCardPath: 'companions/main/companion.json',
+        postgresSchema: 'companion_main',
+        postgresRole: 'companion_main_runtime',
+        postgresDatabaseUrlRef: { kind: 'env', envName: 'COMPANION_MAIN_DATABASE_URL' },
+      }],
+    })}\n`);
+    const postgresCredentialPath = join(root, 'postgres-database-url');
+    writeFileSync(
+      postgresCredentialPath,
+      'postgres://companion_main_runtime:secret@localhost:5432/psfn_test\n',
+      'utf8',
+    );
+    process.env.PSFN_RUNTIME_ROOT = root;
+    process.env.SYSTEM_DATA_DIR = systemDataDir;
+    process.env.COMPANION_DATA_DIR = companionDataDir;
+    process.env.WORKSPACE_PATH = workspacePath;
+    process.env.CHARACTER_CARD_PATH = characterCardPath;
+    process.env.COMPANION_ID = companionId;
+    process.env.COMPANION_PG_SCHEMA = 'companion_main';
+    process.env.GATEWAY_COMPANION_AUTH_TOKEN = 'v1.agent-token';
+    process.env.GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN = 'v1.worker-token';
+    delete process.env.POSTGRES_DATABASE_URL;
+    process.env.POSTGRES_DATABASE_URL_FILE = postgresCredentialPath;
+
+    const config = loadAgentConfig();
+
+    expect(config.multiCompanion).toBe(false);
+    expect(config.companionFleet?.companions).toHaveLength(1);
+    expect(config.companionRuntimeIdentity).toMatchObject({
+      companionId,
+      companionDataDir,
+      characterCardPath,
+      postgresSchema: 'companion_main',
+      postgresRole: 'companion_main_runtime',
+      personalWorkspacePath: workspacePath,
+    });
+    expect(config.postgresSchema).toBe('companion_main');
+    expect(config.postgresRole).toBe('companion_main_runtime');
   });
 
   it('rejects direct multi-companion agent launches with tuple drift', () => {

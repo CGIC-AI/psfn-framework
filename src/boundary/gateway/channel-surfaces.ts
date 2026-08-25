@@ -78,6 +78,32 @@ export function resolveDiscordPrimaryUsers(
     }));
 }
 
+export interface ChannelSurfaceCompanionRoutingInput {
+  fleetRoutingEnabled: boolean;
+  companionFleet: SubstrateConfig['companionFleet'];
+  explicitCompanionId: CompanionId | undefined;
+  surface: string;
+}
+
+/**
+ * A one-entry fleet has exactly one valid route, so channel defaults may bind
+ * to that manifest identity. Larger fleets must keep naming every surface
+ * explicitly; choosing a companion implicitly would cross a tenancy boundary.
+ */
+export function resolveChannelSurfaceCompanionId(
+  input: ChannelSurfaceCompanionRoutingInput,
+): CompanionId | undefined {
+  if (input.explicitCompanionId || !input.fleetRoutingEnabled) {
+    return input.explicitCompanionId;
+  }
+  if (input.companionFleet?.companions.length === 1) {
+    return input.companionFleet.companions[0]!.companionId;
+  }
+  throw new Error(
+    `Multi-companion ${input.surface} surface is missing companionId routing`,
+  );
+}
+
 /** All discord adapter instances owned by the gateway, in configured order. */
 function listDiscordAdapters(surfaces: GatewayChannelSurfaces): DiscordAdapter[] {
   return surfaces.discordAccounts?.map(account => account.adapter) ?? [surfaces.discord];
@@ -202,6 +228,20 @@ export async function loadGatewayChannelSurfaces(
     // token env var is unset must stop gateway startup, never degrade.
     assertDiscordAccountTokensConfigured(discordChannelConfig);
   }
+  const singleDiscordCompanionId = multiAccount
+    ? undefined
+    : resolveChannelSurfaceCompanionId({
+      fleetRoutingEnabled: input.bootstrap.server.multiCompanion.enabled,
+      companionFleet: input.config.companionFleet,
+      explicitCompanionId: discordChannelConfig.companionId,
+      surface: 'discord',
+    });
+  const telegramCompanionId = resolveChannelSurfaceCompanionId({
+    fleetRoutingEnabled: input.bootstrap.server.multiCompanion.enabled,
+    companionFleet: input.config.companionFleet,
+    explicitCompanionId: input.bootstrap.channelsConfig.telegram.companionId,
+    surface: 'telegram',
+  });
 
   const gatewayChannelRegistry = new ChannelAdapterRegistry();
   const accountRegistryIds = accountConfigs.map(account => `discord:${account.accountId}`);
@@ -256,17 +296,17 @@ export async function loadGatewayChannelSurfaces(
         eligibilityGate: input.eligibilityGate,
         personalFilesDir: resolvePersonalFilesDir(
           input.bootstrap,
-          discordChannelConfig.companionId,
+          singleDiscordCompanionId,
           'discord',
         ),
         intakeScreening: resolveChannelIntakeScreening(
           intakeScreeningRouting,
-          discordChannelConfig.companionId,
+          singleDiscordCompanionId,
           'discord',
         ),
         primaryUsers: resolveDiscordPrimaryUsers(
           input.config,
-          discordChannelConfig.companionId,
+          singleDiscordCompanionId,
         ),
         enableDiscordEvidenceLifecycle: input.enableDiscordEvidenceLifecycle,
       }),
@@ -278,12 +318,12 @@ export async function loadGatewayChannelSurfaces(
       eventBus: input.eventBus,
       personalFilesDir: resolvePersonalFilesDir(
         input.bootstrap,
-        input.bootstrap.channelsConfig.telegram.companionId,
+        telegramCompanionId,
         'telegram',
       ),
       intakeScreening: resolveChannelIntakeScreening(
         intakeScreeningRouting,
-        input.bootstrap.channelsConfig.telegram.companionId,
+        telegramCompanionId,
         'telegram',
       ),
       // Owner-file backed ingest caps (zet.7); Discord resolves the same

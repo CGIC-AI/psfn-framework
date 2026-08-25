@@ -24,6 +24,10 @@ import {
   DEFAULT_COMPANION_CARD_FILE_NAME,
   DEFAULT_COMPANION_NAME,
 } from '../../src/core/identity/companion-naming.js';
+import {
+  companionsFileExists,
+  loadCompanionsConfig,
+} from '../../src/system/config/companions-config.js';
 import { assertValidCharacterCard } from '../../src/core/identity/loader.js';
 import { isRecord } from '../../src/shared/utils/types.js';
 import { resolveConfiguredCompanionFleet } from '../companion-fleet-runtime.js';
@@ -106,6 +110,21 @@ export function resolveOnboardingCompanionDataDir(plan: Pick<OnboardingPlan, 'ro
   return plan.roots.shared
     ? resolve(plan.roots.companionDataDir, 'companions', 'main')
     : resolve(plan.roots.companionDataDir, 'main');
+}
+
+/** Preserve the identity of an existing one-companion install during reconfiguration. */
+export function readExistingCompanionId(
+  plan: Pick<OnboardingPlan, 'roots' | 'seedDir'>,
+): string | undefined {
+  const systemDataDir = resolve(plan.roots.systemDataDir);
+  if (!companionsFileExists(systemDataDir)) return undefined;
+  const fleet = loadCompanionsConfig(systemDataDir, { seedDir: plan.seedDir });
+  if (fleet.companions.length !== 1) {
+    throw new Error(
+      'Interactive onboarding can update only a one-companion manifest; use the fleet deployment workflow for multiple companions.',
+    );
+  }
+  return fleet.companions[0]!.companionId;
 }
 
 function manifestPath(plan: OnboardingPlan, absolutePath: string, field: string): string {
@@ -200,6 +219,7 @@ export function buildModelsRegistry(plan: OnboardingPlan): unknown {
       const identity = isRecord(entry.identity) ? entry.identity : {};
       return {
         ...entry,
+        ...(sourceType === 'generic_openai' ? { apiKind: 'openai-completions' } : {}),
         identity: {
           ...identity,
           provider: providerId,

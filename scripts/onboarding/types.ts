@@ -80,7 +80,13 @@ export interface OnboardingPlan {
   voice: VoiceSelection;
   companionId: string;
   /** Non-secret and secret .env entries (name -> value). */
-  envEntries: Array<{ envName: string; value: string; comment?: string }>;
+  envEntries: Array<{
+    envName: string;
+    value: string;
+    comment?: string;
+    /** Keep an existing value during reconfiguration (used for persistent-stack secrets). */
+    preserveExisting?: boolean;
+  }>;
   /** When true, existing owner files may be overwritten (operator confirmed). */
   updateExisting: boolean;
   /**

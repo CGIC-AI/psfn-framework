@@ -204,6 +204,59 @@ describe('runOnboarding — kubernetes mode', () => {
   });
 });
 
+describe('runOnboarding — persistent Compose mode', () => {
+  it('writes generated infrastructure credentials without exposing them in owner files or logs', async () => {
+    const { root, envPath } = workspace();
+    const systemDataDir = join(root, 'data', 'system-data');
+    const companionDataDir = join(root, 'data', 'companion-data');
+    const prompter = new ScriptedPrompter({
+      choices: ['compose', 'generic_openai', 'fresh'],
+      texts: [
+        '',
+        'https://api.z.ai/api/coding/paas/v4',
+        'glm-4.7',
+        'glm-4.7-flash',
+        'glm-4.6v',
+        '',
+      ],
+      secrets: ['test-provider-secret'],
+      confirms: [false, false],
+    });
+
+    const outcome = await runOnboarding({
+      prompter,
+      seedDir: SEED_DIR,
+      envPath,
+      rootsOverride: { compose: { systemDataDir, companionDataDir, shared: false } },
+    });
+
+    const envText = readFileSync(envPath, 'utf8');
+    for (const envName of [
+      'PSFN_POSTGRES_SUPERUSER_PASSWORD',
+      'PSFN_COMPANION_DATABASE_PASSWORD',
+      'PSFN_SHARED_MIGRATION_DATABASE_PASSWORD',
+      'API_KEY',
+      'ADMIN_TOKEN',
+      'GATEWAY_SESSION_HMAC_KEY',
+      'PSFN_BACKUP_ENCRYPTION_KEY',
+    ]) {
+      expect(envText).toMatch(new RegExp(`^${envName}=[0-9a-f]{64}$`, 'mu'));
+    }
+    expect(envText).toContain('PSFN_PROVIDER_API_KEY=test-provider-secret');
+    expect(envText).toContain(`COMPANION_ID=${outcome.plan.companionId}`);
+    expect(envText).toContain('PSFN_GARDEN_PORT=10053');
+    expect(envText).toContain('PSFN_API_PORT=10054');
+    expect(prompter.log.join('\n')).toContain('npm run compose:up');
+    expect(prompter.log.join('\n')).not.toContain('test-provider-secret');
+
+    for (const file of readdirSync(systemDataDir).filter((name) => name.endsWith('.json'))) {
+      const contents = readFileSync(join(systemDataDir, file), 'utf8');
+      expect(contents).not.toContain('test-provider-secret');
+      expect(contents).not.toMatch(/[0-9a-f]{64}/u);
+    }
+  });
+});
+
 // Guard: an unrelated pre-existing .env is preserved/merged, not clobbered.
 describe('runOnboarding — .env merge safety', () => {
   it('preserves unrelated existing .env entries', async () => {

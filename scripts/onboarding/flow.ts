@@ -3,7 +3,7 @@
 // OnboardingPlan (no disk writes), then commits owner files + .env abort-safely.
 // Every prompt happens before any write, so aborting mid-flow leaves zero files.
 
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { basename, join, resolve } from 'node:path';
 import type {
   InstallMode,
@@ -23,6 +23,7 @@ import {
 import {
   commitOwnerFiles,
   detectExistingOwnerFiles,
+  readExistingCompanionId,
   resolveOnboardingRuntimeRoot,
 } from './config-generator.js';
 import { commitEnv, type EnvEntry } from './env-writer.js';
@@ -83,8 +84,12 @@ export async function runOnboarding(deps: OnboardingDeps): Promise<OnboardingOut
     updateExisting = true;
   }
 
-  const companionId = randomUUID();
-  const provider = await selectProvider(prompter, modeInfo.capturesHostSecret);
+  // Reconfiguration must retain the existing runtime identity. Rotating it
+  // would orphan the Personal Workspace, database schema, and session history.
+  const companionId = updateExisting
+    ? readExistingCompanionId(provisionalPlanForDetection) ?? randomUUID()
+    : randomUUID();
+  const provider = await selectProvider(prompter, modeInfo.capturesHostSecret, mode);
   const models = await selectModels(prompter, deps.seedDir, provider.type);
   const voice = await selectVoice(prompter, modeInfo.capturesHostSecret);
 
@@ -239,7 +244,11 @@ async function selectCompanion(prompter: Prompter): Promise<CompanionImportResul
   return result;
 }
 
-async function selectProvider(prompter: Prompter, capturesHostSecret: boolean): Promise<ProviderSelection> {
+async function selectProvider(
+  prompter: Prompter,
+  capturesHostSecret: boolean,
+  mode: InstallMode,
+): Promise<ProviderSelection> {
   const types = discoverProviderTypes();
   const chosenType = await prompter.choice(
     'Which LLM provider?',
@@ -256,9 +265,14 @@ async function selectProvider(prompter: Prompter, capturesHostSecret: boolean): 
   const modelsApiUrl = info.requiresModelsApiUrl
     ? await prompter.text('Models list URL', { default: info.defaultModelsApiUrl, allowEmpty: false })
     : undefined;
-  const apiKeyEnvName = (await prompter.text('Env var name for the API key', {
-    default: info.defaultApiKeyEnvName,
-  })).toUpperCase();
+  const apiKeyEnvName = mode === 'compose'
+    ? 'PSFN_PROVIDER_API_KEY'
+    : (await prompter.text('Env var name for the API key', {
+        default: info.defaultApiKeyEnvName,
+      })).toUpperCase();
+  if (mode === 'compose') {
+    prompter.info('  Docker Compose stores the selected provider credential as PSFN_PROVIDER_API_KEY.');
+  }
 
   let apiKeyValue = '';
   if (capturesHostSecret) {
@@ -350,6 +364,30 @@ export function buildEnvEntries(input: {
 }): OnboardingPlan['envEntries'] {
   if (!input.capturesHostSecret) return [];
   const entries: OnboardingPlan['envEntries'] = [];
+  if (input.mode === 'compose') {
+    for (const [envName, comment] of [
+      ['PSFN_POSTGRES_SUPERUSER_PASSWORD', 'Compose Postgres bootstrap credential'],
+      ['PSFN_COMPANION_DATABASE_PASSWORD', 'Compose companion database credential'],
+      ['PSFN_SHARED_MIGRATION_DATABASE_PASSWORD', 'Compose shared-schema migration credential'],
+      ['API_KEY', 'Compose gateway API bearer'],
+      ['ADMIN_TOKEN', 'Compose Garden login token'],
+      ['GATEWAY_SESSION_HMAC_KEY', 'Compose gateway session signing key'],
+      ['PSFN_BACKUP_ENCRYPTION_KEY', 'Compose encrypted-backup key'],
+    ] as const) {
+      entries.push({
+        envName,
+        value: randomBytes(32).toString('hex'),
+        comment,
+        preserveExisting: true,
+      });
+    }
+    for (const [envName, value, comment] of [
+      ['PSFN_GARDEN_PORT', '10053', 'Compose Garden host port'],
+      ['PSFN_API_PORT', '10054', 'Compose gateway API host port'],
+    ] as const) {
+      entries.push({ envName, value, comment, preserveExisting: true });
+    }
+  }
   if (input.mode === 'local') {
     entries.push({
       envName: 'DATA_DIR',
@@ -383,7 +421,12 @@ export function buildEnvEntries(input: {
 }
 
 function toEnvEntry(entry: OnboardingPlan['envEntries'][number]): EnvEntry {
-  return { envName: entry.envName, value: entry.value, ...(entry.comment ? { comment: entry.comment } : {}) };
+  return {
+    envName: entry.envName,
+    value: entry.value,
+    ...(entry.comment ? { comment: entry.comment } : {}),
+    ...(entry.preserveExisting ? { preserveExisting: true } : {}),
+  };
 }
 
 /** Minimal plan used only for existing-config detection (no secrets needed). */

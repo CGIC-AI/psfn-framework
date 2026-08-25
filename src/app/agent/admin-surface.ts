@@ -167,14 +167,23 @@ async function openBiographicalReviewServiceForGarden(
   )) ?? null;
 }
 
+export function isAdminTransportRequested(
+  adminPort: number | undefined,
+  env: NodeJS.ProcessEnv,
+): boolean {
+  return adminPort !== undefined
+    || Boolean(env.ADMIN_TRANSPORT_MODE?.trim())
+    || Boolean(env.ADMIN_TRANSPORT_SOCKET?.trim());
+}
+
 export async function startOptionalAdminTransportServer(
   options: StartOptionalAdminTransportServerOptions,
 ): Promise<GardenAdminTransportServer | undefined> {
   const env = options.env ?? process.env;
-  const transportMode = resolveAdminTransportMode(env);
-  if (!options.adminPort && transportMode === 'socket') {
+  if (!isAdminTransportRequested(options.adminPort, env)) {
     return undefined;
   }
+  resolveAdminTransportMode(env);
 
   const modelDiscovery = new GatewayModelDiscovery(options.gateway);
   const adminConfig: SubstrateConfig = {

@@ -16,6 +16,8 @@ import { describeStartupOwnerFileChecks } from '../../src/system/config/startup-
 const repoRoot = resolve(import.meta.dirname, '../..');
 const seedScript = join(repoRoot, 'scripts/ops/psfn-compose-smoke-seed.sh');
 const composeFile = join(repoRoot, 'docker/docker-compose.smoke.yml');
+const supportedComposeFile = join(repoRoot, 'docker/compose.yml');
+const supportedComposeBootstrap = join(repoRoot, 'scripts/ops/psfn-compose-bootstrap.mjs');
 const temporaryRoots: string[] = [];
 
 function temporaryRoot(): string {
@@ -315,5 +317,58 @@ describe('Compose smoke bootstrap', () => {
         : join(root, 'companion-data');
       expect(existsSync(join(ownerRoot, owner.ownerFileName)), owner.label).toBe(true);
     }
+  });
+});
+
+describe('Supported persistent Compose topology', () => {
+  it('deploys the complete product and keeps the isolated agent free of gateway secrets', () => {
+    const compose = parseYaml(readFileSync(supportedComposeFile, 'utf8')) as {
+      services: Record<string, {
+        command?: string[];
+        environment?: Record<string, string>;
+        ports?: string[];
+        networks?: string[];
+        volumes?: string[];
+        restart?: string;
+      }>;
+      volumes?: Record<string, unknown>;
+    };
+
+    expect(Object.keys(compose.services)).toEqual(expect.arrayContaining([
+      'postgres',
+      'bootstrap',
+      'model-prefetch',
+      'gateway',
+      'agent',
+      'garden',
+    ]));
+    expect(compose.services.gateway?.ports).toContain('127.0.0.1:${PSFN_API_PORT:-10054}:3000');
+    expect(compose.services.garden?.ports).toContain('127.0.0.1:${PSFN_GARDEN_PORT:-10053}:3001');
+    expect(compose.services.garden?.command).toEqual(['node', 'dist/operator-main.js']);
+    expect(compose.services.garden?.networks).toEqual(['internal', 'host-access']);
+    expect(compose.services.agent?.networks).toEqual(['internal']);
+    expect(compose.services.agent?.environment).not.toHaveProperty('API_KEY');
+    expect(compose.services.agent?.environment).not.toHaveProperty('ADMIN_TOKEN');
+    expect(compose.services.agent?.environment).not.toHaveProperty('PSFN_PROVIDER_API_KEY');
+    expect(compose.services.gateway?.environment).not.toHaveProperty('PSFN_POSTGRES_SUPERUSER_PASSWORD');
+    expect(compose.services.gateway?.restart).toBe('unless-stopped');
+    expect(compose.services.agent?.restart).toBe('unless-stopped');
+    expect(compose.services.garden?.restart).toBe('unless-stopped');
+    expect(compose.volumes).toHaveProperty('postgres-data');
+  });
+
+  it('provisions enough finite database connections for a full agent startup', () => {
+    const compose = parseYaml(readFileSync(supportedComposeFile, 'utf8')) as {
+      services: Record<string, { environment?: Record<string, string> }>;
+    };
+    const bootstrapSource = readFileSync(supportedComposeBootstrap, 'utf8');
+
+    expect(compose.services.bootstrap?.environment).toMatchObject({
+      PSFN_COMPANION_DATABASE_CONNECTION_LIMIT: '80',
+    });
+    expect(bootstrapSource).toMatch(
+      /parseNumericId\(\s*'PSFN_COMPANION_DATABASE_CONNECTION_LIMIT',?\s*\)/u,
+    );
+    expect(bootstrapSource).not.toContain('CONNECTION LIMIT 20');
   });
 });

@@ -1,0 +1,247 @@
+name: psfn
+
+# Supported persistent single-host deployment. Use the npm run compose:* commands;
+# docker/docker-compose.smoke.yml remains a disposable contributor test lane.
+
+x-runtime-image: &runtime-image
+  build:
+    context: ..
+    dockerfile: docker/Dockerfile.agent
+    args:
+      PSFN_GIT_COMMIT: ${PSFN_GIT_COMMIT:-local-checkout}
+  image: ${PSFN_IMAGE:-psfn-framework:local}
+
+x-runtime-env: &runtime-env
+  NODE_ENV: production
+  PSFN_RUNTIME_MODE: gateway-agent
+  PSFN_RUNTIME_LAYOUT_MODE: production
+  PSFN_RUNTIME_ROOT: /runtime
+  SYSTEM_DATA_DIR: /runtime/system-data
+  COMPANION_DATA_DIR: /runtime/companion-data/main
+  WORKSPACE_PATH: /runtime/workspaces/personal/${COMPANION_ID:?run npm run onboard first}
+  PSFN_LOGS_DIR: /runtime/logs
+  PSFN_TEMP_DIR: /runtime/tmp
+  BACKUP_ROOT_DIR: /runtime/backups
+  CONFIG_DIR: /app/config
+  PERSISTENCE_BACKEND: postgres
+  COMPANION_ID: ${COMPANION_ID:?run npm run onboard first}
+  COMPANION_PG_SCHEMA: companion_main
+  CHARACTER_CARD_PATH: /runtime/companion-data/main/companion.json
+  GATEWAY_SOCKET: /run/psfn/gateway.sock
+  ADMIN_TRANSPORT_MODE: socket
+  ADMIN_TRANSPORT_SOCKET: /run/psfn/garden-admin-${COMPANION_ID:?run npm run onboard first}.sock
+
+x-runtime-volumes: &runtime-volumes
+  - ${PSFN_DATA_ROOT:-../data}/system-data:/runtime/system-data
+  - ${PSFN_DATA_ROOT:-../data}/companion-data/main:/runtime/companion-data/main
+  - ${PSFN_DATA_ROOT:-../data}/workspaces:/runtime/workspaces
+  - ${PSFN_DATA_ROOT:-../data}/logs:/runtime/logs
+  - ${PSFN_DATA_ROOT:-../data}/tmp:/runtime/tmp
+  - ${PSFN_DATA_ROOT:-../data}/backups:/runtime/backups
+  - ${PSFN_DATA_ROOT:-../data}/models:/app/models
+  - runtime-sockets:/run/psfn
+
+x-companion-database-url: &companion-database-url postgresql://companion_main_runtime:${PSFN_COMPANION_DATABASE_PASSWORD:?run npm run onboard first}@postgres:5432/psfn
+x-shared-database-url: &shared-database-url postgresql://shared_schema_migration:${PSFN_SHARED_MIGRATION_DATABASE_PASSWORD:?run npm run onboard first}@postgres:5432/psfn
+
+services:
+  postgres:
+    image: docker.io/pgvector/pgvector:0.8.1-pg17@sha256:3e8b3adfd27b5707128f60956f62a793c3c9326ea8cfaf0eab7adccb5d700b21
+    environment:
+      POSTGRES_DB: psfn
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${PSFN_POSTGRES_SUPERUSER_PASSWORD:?run npm run onboard first}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    networks:
+      - internal
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d psfn"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+    restart: unless-stopped
+
+  bootstrap:
+    <<: *runtime-image
+    user: "0:0"
+    entrypoint: ["node", "/app/scripts/ops/psfn-compose-bootstrap.mjs"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      <<: *runtime-env
+      PSFN_RUNTIME_UID: ${PSFN_HOST_UID:?use npm run compose:up}
+      PSFN_RUNTIME_GID: ${PSFN_HOST_GID:?use npm run compose:up}
+      PSFN_COMPANION_DATABASE_CONNECTION_LIMIT: "80"
+      PSFN_AGENT_AUTH_DIR: /run/psfn-auth
+      POSTGRES_ADMIN_DATABASE_URL: postgresql://postgres:${PSFN_POSTGRES_SUPERUSER_PASSWORD:?run npm run onboard first}@postgres:5432/psfn
+      COMPANION_MAIN_DATABASE_URL: *companion-database-url
+      SHARED_SCHEMA_MIGRATION_DATABASE_URL: *shared-database-url
+      PSFN_COMPANION_DATABASE_PASSWORD: ${PSFN_COMPANION_DATABASE_PASSWORD:?run npm run onboard first}
+      PSFN_SHARED_MIGRATION_DATABASE_PASSWORD: ${PSFN_SHARED_MIGRATION_DATABASE_PASSWORD:?run npm run onboard first}
+      GATEWAY_SESSION_HMAC_KEY: ${GATEWAY_SESSION_HMAC_KEY:?run npm run onboard first}
+      PSFN_BACKUP_ENCRYPTION_KEY: ${PSFN_BACKUP_ENCRYPTION_KEY:?run npm run onboard first}
+    networks:
+      - internal
+    volumes:
+      - ${PSFN_DATA_ROOT:-../data}/system-data:/runtime/system-data:ro
+      - ${PSFN_DATA_ROOT:-../data}/companion-data/main:/runtime/companion-data/main:ro
+      - ${PSFN_DATA_ROOT:-../data}/workspaces:/runtime/workspaces
+      - runtime-sockets:/run/psfn
+      - agent-auth:/run/psfn-auth
+    restart: "no"
+
+  model-prefetch:
+    <<: *runtime-image
+    user: "${PSFN_HOST_UID:?use npm run compose:up}:${PSFN_HOST_GID:?use npm run compose:up}"
+    entrypoint: ["node", "/app/scripts/ops/psfn-compose-smoke-prefetch.mjs"]
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+    environment:
+      PSFN_SMOKE_MODEL_CACHE_DIR: /app/models/transformers
+      PSFN_SMOKE_MODEL_PREFETCH_OFFLINE: "0"
+      PSFN_SMOKE_TEXT_EMOTION_MODEL_REVISION: 90ee0c1c4796d370e68968687b8ba51fc11224f4
+      PSFN_SMOKE_EMBEDDING_MODEL_REVISION: 751bff37182d3f1213fa05d7196b954e230abad9
+      PSFN_SMOKE_INJECTION_MODEL_DIR: /app/models/prompt-injection-v2
+      PSFN_SMOKE_INJECTION_PROVISION_SCRIPT: /app/dist/provision-injection-model.js
+    networks:
+      - egress
+    volumes:
+      - ${PSFN_DATA_ROOT:-../data}/models:/app/models
+    restart: "no"
+
+  operator-alert-sink:
+    <<: *runtime-image
+    user: "${PSFN_HOST_UID:?use npm run compose:up}:${PSFN_HOST_GID:?use npm run compose:up}"
+    entrypoint: ["node", "/app/scripts/ops/psfn-compose-smoke-operator-alert-sink.mjs"]
+    environment:
+      PSFN_SMOKE_OPERATOR_ALERT_HOST: 0.0.0.0
+      PSFN_SMOKE_OPERATOR_ALERT_PORT: "3000"
+      PSFN_SMOKE_OPERATOR_ALERT_TOPIC: local-operator-alerts
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD", "node", "--input-type=module", "--eval", "const r=await fetch('http://127.0.0.1:3000/health');if(!r.ok)process.exit(1)"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 3s
+    restart: unless-stopped
+
+  gateway:
+    <<: *runtime-image
+    user: "${PSFN_HOST_UID:?use npm run compose:up}:${PSFN_HOST_GID:?use npm run compose:up}"
+    command: ["node", "dist/gateway-main.js"]
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+      model-prefetch:
+        condition: service_completed_successfully
+      operator-alert-sink:
+        condition: service_healthy
+    environment:
+      <<: *runtime-env
+      POSTGRES_DATABASE_URL: *companion-database-url
+      COMPANION_MAIN_DATABASE_URL: *companion-database-url
+      SHARED_SCHEMA_MIGRATION_DATABASE_URL: *shared-database-url
+      API_HOST: 0.0.0.0
+      API_PORT: "3000"
+      ADMIN_HOST: 127.0.0.1
+      ADMIN_PORT: "3001"
+      API_KEY: ${API_KEY:?run npm run onboard first}
+      ADMIN_TOKEN: ${ADMIN_TOKEN:?run npm run onboard first}
+      GATEWAY_SESSION_HMAC_KEY: ${GATEWAY_SESSION_HMAC_KEY:?run npm run onboard first}
+      PSFN_BACKUP_ENCRYPTION_KEY: ${PSFN_BACKUP_ENCRYPTION_KEY:?run npm run onboard first}
+      PSFN_PROVIDER_API_KEY: ${PSFN_PROVIDER_API_KEY:?run npm run onboard first}
+      DEEPGRAM_API_KEY: ${DEEPGRAM_API_KEY:-}
+      ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
+      NTFY_BASE_URL: ${NTFY_BASE_URL:-http://operator-alert-sink:3000}
+      NTFY_TOPIC: ${NTFY_TOPIC:-local-operator-alerts}
+    ports:
+      - "127.0.0.1:${PSFN_API_PORT:-10054}:3000"
+    networks:
+      - internal
+      - egress
+    volumes: *runtime-volumes
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('node:net').connect(3000,'127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    restart: unless-stopped
+
+  agent:
+    <<: *runtime-image
+    user: "${PSFN_HOST_UID:?use npm run compose:up}:${PSFN_HOST_GID:?use npm run compose:up}"
+    command: ["sh", "-c", ". /run/psfn-auth/agent-auth.env && exec node dist/agent-main.js"]
+    depends_on:
+      gateway:
+        condition: service_healthy
+      model-prefetch:
+        condition: service_completed_successfully
+    environment:
+      <<: *runtime-env
+      POSTGRES_DATABASE_URL_FILE: /run/psfn-auth/postgres-database-url
+      NTFY_BASE_URL: ${NTFY_BASE_URL:-http://operator-alert-sink:3000}
+      NTFY_TOPIC: ${NTFY_TOPIC:-local-operator-alerts}
+    networks:
+      - internal
+    volumes:
+      - ${PSFN_DATA_ROOT:-../data}/system-data:/runtime/system-data:ro
+      - ${PSFN_DATA_ROOT:-../data}/companion-data/main:/runtime/companion-data/main
+      - ${PSFN_DATA_ROOT:-../data}/workspaces:/runtime/workspaces
+      - ${PSFN_DATA_ROOT:-../data}/logs:/runtime/logs
+      - ${PSFN_DATA_ROOT:-../data}/tmp:/runtime/tmp
+      - ${PSFN_DATA_ROOT:-../data}/backups:/runtime/backups
+      - ${PSFN_DATA_ROOT:-../data}/models:/app/models:ro
+      - runtime-sockets:/run/psfn
+      - agent-auth:/run/psfn-auth:ro
+    restart: unless-stopped
+
+  garden:
+    <<: *runtime-image
+    user: "${PSFN_HOST_UID:?use npm run compose:up}:${PSFN_HOST_GID:?use npm run compose:up}"
+    command: ["node", "dist/operator-main.js"]
+    depends_on:
+      agent:
+        condition: service_started
+    environment:
+      <<: *runtime-env
+      POSTGRES_DATABASE_URL: *companion-database-url
+      ADMIN_HOST: 0.0.0.0
+      ADMIN_PORT: "3001"
+      ADMIN_TOKEN: ${ADMIN_TOKEN:?run npm run onboard first}
+      NTFY_BASE_URL: ${NTFY_BASE_URL:-http://operator-alert-sink:3000}
+      NTFY_TOPIC: ${NTFY_TOPIC:-local-operator-alerts}
+    ports:
+      - "127.0.0.1:${PSFN_GARDEN_PORT:-10053}:3001"
+    networks:
+      - internal
+      # Docker does not publish localhost ports for an internal-only network.
+      # This dedicated bridge makes Garden reachable without joining the
+      # provider-facing gateway network.
+      - host-access
+    volumes: *runtime-volumes
+    healthcheck:
+      test: ["CMD", "node", "--input-type=module", "--eval", "const r=await fetch('http://127.0.0.1:3001/health');if(!r.ok)process.exit(1)"]
+      interval: 5s
+      timeout: 5s
+      retries: 36
+      start_period: 30s
+    restart: unless-stopped
+
+networks:
+  internal:
+    internal: true
+  host-access: {}
+  egress: {}
+
+volumes:
+  postgres-data:
+  runtime-sockets:
+  agent-auth:

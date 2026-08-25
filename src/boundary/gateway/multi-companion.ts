@@ -66,19 +66,21 @@ export function resolveGatewaySurfaceForChannelType(
  * Build the gateway's multi-companion routing config.
  *
  * The topology authority is the canonical config resolution: `loadConfig()`
- * derives `config.multiCompanion` from the mandatory companions.json manifest
- * (multi-companion tenancy when the manifest enumerates more than one
- * companion; a one-entry manifest is the single-companion shape). This module
- * only derives the gateway's surface→companion routing table from channels.json
- * on top of that topology.
+ * projects the mandatory companions.json manifest onto `config.companionFleet`.
+ * A one-entry roster uses the same authenticated, companion-bound gateway path
+ * as a larger roster; only peer-to-peer behaviors depend on `multiCompanion`.
+ * This module derives the gateway's surface→companion routing table from
+ * channels.json on top of that topology.
  */
 export function resolveGatewayMultiCompanionConfig(
   config: Pick<SubstrateConfig, 'multiCompanion' | 'companionFleet' | 'fleetAuth'>,
   channelsConfig: RuntimeChannelsConfig,
   satelliteRegistryConfig: SatelliteRegistryConfig,
 ): GatewayMultiCompanionConfig {
-  const enabled = config.multiCompanion === true || config.fleetAuth !== undefined;
   const fleetCompanionIds = config.companionFleet?.companions.map(entry => entry.companionId) ?? [];
+  const enabled = config.companionFleet !== undefined
+    || config.multiCompanion === true
+    || config.fleetAuth !== undefined;
   if (enabled && fleetCompanionIds.length === 0) {
     throw new Error('Fleet gateway routing requires a non-empty resolved companions.json fleet');
   }
@@ -90,10 +92,17 @@ export function resolveGatewayMultiCompanionConfig(
     ]),
   );
 
+  const soleCompanionId = fleetCompanionIds.length === 1 ? fleetCompanionIds[0] : undefined;
   const channelRouting: Partial<Record<GatewayChannelSurface, CompanionId>> = {
-    ...(channelsConfig.discord.companionId ? { discord: channelsConfig.discord.companionId } : {}),
-    ...(channelsConfig.telegram.companionId ? { telegram: channelsConfig.telegram.companionId } : {}),
-    ...(channelsConfig.api.companionId ? { api: channelsConfig.api.companionId } : {}),
+    ...(channelsConfig.discord.companionId ?? soleCompanionId
+      ? { discord: channelsConfig.discord.companionId ?? soleCompanionId }
+      : {}),
+    ...(channelsConfig.telegram.companionId ?? soleCompanionId
+      ? { telegram: channelsConfig.telegram.companionId ?? soleCompanionId }
+      : {}),
+    ...(channelsConfig.api.companionId ?? soleCompanionId
+      ? { api: channelsConfig.api.companionId ?? soleCompanionId }
+      : {}),
   };
 
   const discordAccounts: Record<string, CompanionId> = {};

@@ -92,6 +92,24 @@ describe('config generation passes the real settings-contract guard', () => {
     expect(() => stageAndValidate(plan)).not.toThrow();
   });
 
+  it('makes generic OpenAI-compatible models executable through chat completions', () => {
+    const plan = makePlan({
+      provider: {
+        id: 'glm-code',
+        type: 'generic_openai',
+        label: 'GLM Code Plan',
+        apiBaseUrl: 'https://api.z.ai/api/coding/paas/v4',
+        apiKeyEnvName: 'PSFN_PROVIDER_API_KEY',
+        apiKeyValue: 'test-key',
+      },
+    });
+    const registry = buildModelsRegistry(plan) as {
+      models: Array<{ apiKind?: string }>;
+    };
+    expect(registry.models).not.toHaveLength(0);
+    expect(registry.models.every(model => model.apiKind === 'openai-completions')).toBe(true);
+  });
+
   it('re-points all selected models and preserves an explicit vision capability', () => {
     const plan = makePlan({
       provider: {

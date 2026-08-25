@@ -479,7 +479,7 @@ describe('createAgentPersistenceRuntime', () => {
     expect(runtime.speakingArbiterStore).toBeUndefined();
   });
 
-  it('connects the shared-schema companion presence store only when multi-companion is enabled', async () => {
+  it('connects tenant and shared-schema infrastructure for a one-entry fleet', async () => {
     const runtime = await createAgentPersistenceRuntime({
       config: {
         databasePath: '/tmp/ignored.db',
@@ -487,7 +487,7 @@ describe('createAgentPersistenceRuntime', () => {
         postgresDatabaseUrl: 'postgres://postgres:secret@localhost:5432/psfn',
         postgresSchema: 'companion_x',
         postgresRole: 'companion_x_runtime',
-        multiCompanion: true,
+        multiCompanion: false,
         companionId: 'companion-x',
         automataPolicy: loadAutomataPolicySeedDefaults(),
         companionFleet: {
@@ -499,11 +499,6 @@ describe('createAgentPersistenceRuntime', () => {
               companionId: 'companion-x',
               postgresSchema: 'companion_x',
               postgresRole: 'companion_x_runtime',
-            },
-            {
-              companionId: 'companion-y',
-              postgresSchema: 'companion_y',
-              postgresRole: 'companion_y_runtime',
             },
           ],
         } as never,
@@ -527,7 +522,7 @@ describe('createAgentPersistenceRuntime', () => {
       'postgres://postgres:secret@localhost:5432/psfn',
       {
         ownSchema: 'companion_x',
-        companionSchemas: ['companion_x', 'companion_y'],
+        companionSchemas: ['companion_x'],
         modelUsageLedgerSchema: 'companion_x',
       },
     );

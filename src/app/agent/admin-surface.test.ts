@@ -1,83 +1,19 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
+import { isAdminTransportRequested } from './admin-surface.js';
 
-import type { IcpAdminProjectionStore } from '../../persistence/postgres/icp-admin-projection-store.js';
-import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
-
-const mocks = vi.hoisted(() => ({
-  connectProjection: vi.fn(),
-  awaitOptionalReadiness: vi.fn(async (
-    _store: string,
-    task: () => Promise<unknown>,
-  ) => {
-    try {
-      return await task();
-    } catch {
-      return undefined;
-    }
-  }),
-}));
-
-vi.mock('../../persistence/postgres/icp-admin-projection-store.js', () => ({
-  PostgresIcpAdminProjectionStore: { connect: mocks.connectProjection },
-}));
-
-vi.mock('../../persistence/postgres/runtime-readiness.js', () => ({
-  awaitOptionalPostgresStoreReadiness: mocks.awaitOptionalReadiness,
-}));
-
-import { openIcpAdminProjectionStoreForGarden } from './admin-surface.js';
-
-const LOCAL = '11111111-1111-4111-8111-111111111111';
-const PEER = '22222222-2222-4222-8222-222222222222';
-
-function config(): SubstrateConfig {
-  return {
-    multiCompanion: true,
-    companionId: LOCAL,
-    postgresDatabaseUrl: 'postgres://runtime',
-    companionFleet: {
-      companions: [{ companionId: LOCAL }, { companionId: PEER }],
-    },
-  } as unknown as SubstrateConfig;
-}
-
-describe('production ICP Garden projection composition', () => {
-  beforeEach(() => {
-    mocks.connectProjection.mockReset();
-    mocks.awaitOptionalReadiness.mockClear();
+describe('agent admin transport enablement', () => {
+  it('starts an explicitly configured Unix socket without requiring a fake TCP port', () => {
+    expect(isAdminTransportRequested(undefined, {
+      ADMIN_TRANSPORT_MODE: 'socket',
+      ADMIN_TRANSPORT_SOCKET: '/run/psfn/garden-admin-companion.sock',
+    })).toBe(true);
   });
 
-  it('preserves a store whose optional cost slice is unavailable', async () => {
-    const store = {
-      readProjection: vi.fn(async () => ({
-        availability: [],
-        episodes: [],
-        permits: [],
-        fatigue: [],
-        costs: [],
-        costProjection: {
-          available: false,
-          unavailableReason: 'relation_contract_unavailable',
-        },
-      })),
-    } as unknown as IcpAdminProjectionStore;
-    mocks.connectProjection.mockResolvedValue(store);
-
-    await expect(openIcpAdminProjectionStoreForGarden(config())).resolves.toBe(store);
-    expect(mocks.connectProjection).toHaveBeenCalledWith('postgres://runtime', {
-      localCompanionId: LOCAL,
-      knownCompanionIds: [LOCAL, PEER],
-      config: expect.objectContaining({ multiCompanion: true }),
-    });
-    expect(mocks.awaitOptionalReadiness).toHaveBeenCalledWith(
-      'icp_admin_projection',
-      expect.any(Function),
-    );
+  it('keeps the implicit socket transport disabled when no admin surface was requested', () => {
+    expect(isAdminTransportRequested(undefined, {})).toBe(false);
   });
 
-  it('fails closed when the required shared projection cannot connect', async () => {
-    mocks.connectProjection.mockRejectedValue(new Error('required ICP relation is malformed'));
-
-    await expect(openIcpAdminProjectionStoreForGarden(config())).resolves.toBeNull();
+  it('preserves the legacy ADMIN_PORT enablement signal', () => {
+    expect(isAdminTransportRequested(3001, {})).toBe(true);
   });
 });

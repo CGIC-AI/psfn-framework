@@ -25,6 +25,7 @@ import {
   type IcpCertificationFixture,
 } from '../icp-certification/fixture.js';
 import { startIcpCertificationModelServer } from '../icp-certification/openai-fixture-server.js';
+import { provisionIcpCertificationDatabase } from '../icp-certification/process-harness.js';
 
 const PRODUCTION_AGENT_ENTRY = resolve('src/app/agent/main.ts');
 const START_TIMEOUT_MS = DEFAULT_ADMIN_TRANSPORT_TIMEOUT_MS * 6;
@@ -162,11 +163,13 @@ function parseSchedulerTaskIds(payload: unknown): readonly string[] {
 }
 
 export async function startIdlePurityRuntimeHarness(input: {
+  databaseUrl: string;
   fixture: IcpCertificationFixture;
 }): Promise<IdlePurityRuntimeHarness> {
   if (input.fixture.topology !== 'single_companion') {
     throw new Error('Idle-purity certification requires a single-companion fixture');
   }
+  await provisionIcpCertificationDatabase(input.databaseUrl, input.fixture);
   const previousOpenRouterApiKey = process.env.OPENROUTER_API_KEY;
   const modelServer = await startIcpCertificationModelServer();
   let gateway: GatewayServer | undefined;

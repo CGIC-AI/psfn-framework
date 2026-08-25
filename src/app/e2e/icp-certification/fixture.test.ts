@@ -28,6 +28,22 @@ describe('ICP certification production-shape fixture', () => {
     fixture = null;
   });
 
+  it('keeps a one-entry fixture bound to its canonical fleet tuple', () => {
+    fixture = createIcpCertificationFixture({
+      databaseUrl: 'postgres://certification:certification@127.0.0.1:5432/certification',
+      topology: 'single_companion',
+    });
+
+    const [companion] = fixture.companions;
+    expect(companion.env.COMPANION_PG_SCHEMA).toBe(CERTIFICATION_SCHEMA_A);
+    expect(loadAgentConfig(companion.env)).toMatchObject({
+      multiCompanion: false,
+      companionId: CERTIFICATION_COMPANION_A,
+      postgresSchema: CERTIFICATION_SCHEMA_A,
+      postgresRole: companion.postgresRole,
+    });
+  });
+
   it('loads two fleet-bound agents from canonical owner files and isolated roots', () => {
     fixture = createIcpCertificationFixture({
       databaseUrl: 'postgres://certification:certification@127.0.0.1:5432/certification',

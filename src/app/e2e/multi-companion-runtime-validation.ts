@@ -551,7 +551,7 @@ async function validateFlagOff(
   });
   let harness: IcpSingleCompanionFeatureOffHarness | null = null;
   try {
-    harness = await startIcpSingleCompanionFeatureOffHarness({ fixture });
+    harness = await startIcpSingleCompanionFeatureOffHarness({ databaseUrl, fixture });
     const ready = await harness.agent.ready();
     requireInvariant(ready.multiCompanion === false, 'flag_off_agent_resolved_multi_companion');
     requireInvariant(ready.runtimeClass === 'SubstrateAgent', 'flag_off_runtime_class_changed');

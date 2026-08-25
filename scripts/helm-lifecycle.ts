@@ -601,7 +601,7 @@ async function startConnection(context: HelmContext): Promise<void> {
     child.unref();
     return child.pid;
   };
-  const apiPid = start(`${context.release}-gateway-api`, context.apiPort, 10053);
+  const apiPid = start(`${context.release}-gateway`, context.apiPort, 10053);
   const gardenPid = start(`${context.release}-garden`, context.gardenPort, 10054);
   closeSync(logFd);
   writeConnection(context, {
@@ -616,6 +616,7 @@ async function startConnection(context: HelmContext): Promise<void> {
   const deadline = Date.now() + 30_000;
   do {
     if (!isProcessAlive(apiPid) || !isProcessAlive(gardenPid)) {
+      stopConnection(context);
       fail(`Kubernetes port-forward exited; inspect ${context.connectionLogPath}.`);
     }
     try {

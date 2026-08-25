@@ -28,6 +28,10 @@ import {
   getGardenDenialsLastHour,
 } from '../../operator/garden/garden-denial-observability.js';
 
+function unavailableGardenOrigin(): URL {
+  return new URL('http://127.0.0.1:0');
+}
+
 describe('Fleet Garden WebSocket rejection close contract', () => {
   it.each([
     [400, 4400, 'Invalid Garden stream request'],
@@ -71,7 +75,7 @@ describe('Fleet Garden WebSocket rejection close contract', () => {
       }),
       replay: { consume: vi.fn() },
       portalProjection: { resolve: vi.fn() },
-      upstreams: [{ companionId, origin: new URL('http://127.0.0.1:3211') }],
+      upstreams: [{ companionId, origin: unavailableGardenOrigin() }],
     });
     const rejectedUpgradeServer = (
       router as unknown as {
@@ -182,7 +186,7 @@ describe('unified Fleet SSO origin provenance', () => {
       }),
       replay: { consume: vi.fn() },
       portalProjection: { resolve: vi.fn() },
-      upstreams: [{ companionId, origin: new URL('http://127.0.0.1:3211') }],
+      upstreams: [{ companionId, origin: unavailableGardenOrigin() }],
       companionUi: {
         companionId,
         origin: new URL('http://127.0.0.1:3212'),
@@ -249,7 +253,7 @@ describe('unified Fleet SSO origin provenance', () => {
       }),
       replay: { consume: vi.fn() },
       portalProjection: { resolve: vi.fn() },
-      upstreams: [{ companionId, origin: new URL('http://127.0.0.1:3211') }],
+      upstreams: [{ companionId, origin: unavailableGardenOrigin() }],
       companionUi: {
         companionId,
         origin: new URL('http://127.0.0.1:3212'),
@@ -380,7 +384,7 @@ describe('unified Fleet SSO origin provenance', () => {
       verifier,
       replay: { consume: async input => ({ outcome: 'consumed', result: input.consumeResult }) },
       portalProjection: { resolve: vi.fn(async () => { throw new Error('not used'); }) },
-      upstreams: [{ companionId, origin: new URL('http://127.0.0.1:3211') }],
+      upstreams: [{ companionId, origin: unavailableGardenOrigin() }],
       nowSeconds: () => nowSeconds,
     });
     const body = Buffer.from(JSON.stringify({
@@ -427,7 +431,7 @@ describe('unified Fleet SSO origin provenance', () => {
       verifier,
       replay: { consume: async input => ({ outcome: 'consumed', result: input.consumeResult }) },
       portalProjection: { resolve: vi.fn(async () => { throw new Error('not used'); }) },
-      upstreams: [{ companionId, origin: new URL('http://127.0.0.1:3211') }],
+      upstreams: [{ companionId, origin: unavailableGardenOrigin() }],
       nowSeconds: () => nowSeconds,
     });
     const unavailableRequest = Readable.from([body]) as IncomingMessage;
@@ -537,7 +541,7 @@ describe('unified Fleet SSO origin provenance', () => {
       replay: { consume: replay },
       escalation: { consumeGrant },
       portalProjection: { resolve: vi.fn(async () => { throw new Error('not used'); }) },
-      upstreams: [{ companionId, origin: new URL('http://127.0.0.1:3211') }],
+      upstreams: [{ companionId, origin: unavailableGardenOrigin() }],
       nowSeconds: () => nowSeconds,
       denialLogger,
     });
@@ -731,7 +735,7 @@ describe('unified Fleet SSO origin provenance', () => {
       verifier: requestVerifier,
       replay: { consume: replay },
       portalProjection: { resolve: vi.fn(async () => { throw new Error('not used'); }) },
-      upstreams: [{ companionId, origin: new URL('http://127.0.0.1:3211') }],
+      upstreams: [{ companionId, origin: unavailableGardenOrigin() }],
       testingHarness: {
         apiKey: 'dedicated-testing-harness-key',
         policy: {
@@ -860,7 +864,7 @@ describe('unified Fleet SSO origin provenance', () => {
       }),
       replay: { consume: vi.fn() },
       portalProjection: { resolve: vi.fn() },
-      upstreams: [{ companionId, origin: new URL('http://127.0.0.1:3211') }],
+      upstreams: [{ companionId, origin: unavailableGardenOrigin() }],
       testingHarness: {
         apiKey: 'dedicated-testing-harness-key',
         policy: {

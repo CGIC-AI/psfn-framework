@@ -83,6 +83,15 @@ spec:
           protocol: UDP
         - port: 53
           protocol: TCP
+    {{- if .Values.operatorAlertSink.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "psfn.componentLabels" (dict "root" . "component" "operator-alert-sink") | nindent 14 }}
+      ports:
+        - port: {{ .Values.operatorAlertSink.port }}
+          protocol: TCP
+    {{- end }}
     {{- if and .Values.postgres.enabled (not .Values.postgres.external.enabled) }}
     - to:
         - podSelector:
@@ -184,6 +193,15 @@ spec:
           protocol: UDP
         - port: 53
           protocol: TCP
+    {{- if .Values.operatorAlertSink.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "psfn.componentLabels" (dict "root" . "component" "operator-alert-sink") | nindent 14 }}
+      ports:
+        - port: {{ .Values.operatorAlertSink.port }}
+          protocol: TCP
+    {{- end }}
     {{- /* Agent egress to the gateway is RPC only. The operator-confirmation
          relay was removed (x5rt.10), so the agent no longer reaches the gateway
          API. */}}
@@ -289,6 +307,15 @@ spec:
           protocol: UDP
         - port: 53
           protocol: TCP
+    {{- if .Values.operatorAlertSink.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "psfn.componentLabels" (dict "root" . "component" "operator-alert-sink") | nindent 14 }}
+      ports:
+        - port: {{ .Values.operatorAlertSink.port }}
+          protocol: TCP
+    {{- end }}
     - to:
         - podSelector:
             matchLabels:
@@ -328,6 +355,35 @@ spec:
         - port: {{ .Values.ports.postgres }}
           protocol: TCP
     {{- end }}
+{{- if .Values.operatorAlertSink.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "psfn.fullname" . }}-operator-alert-sink
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "psfn.componentLabels" (dict "root" . "component" "operator-alert-sink") | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "psfn.componentLabels" (dict "root" . "component" "gateway") | nindent 14 }}
+        - podSelector:
+            matchLabels:
+              {{- include "psfn.componentLabels" (dict "root" . "component" "agent") | nindent 14 }}
+        - podSelector:
+            matchLabels:
+              {{- include "psfn.componentLabels" (dict "root" . "component" "garden") | nindent 14 }}
+      ports:
+        - port: {{ .Values.operatorAlertSink.port }}
+          protocol: TCP
+{{- end }}
 {{- if and .Values.postgres.enabled (not .Values.postgres.external.enabled) }}
 ---
 apiVersion: networking.k8s.io/v1

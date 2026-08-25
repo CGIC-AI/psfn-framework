@@ -661,7 +661,7 @@ async function doctor(context: HelmContext): Promise<void> {
   ], { capture: true });
   const items = record(JSON.parse(workloads.stdout) as unknown)?.items;
   if (!Array.isArray(items)) fail('Kubernetes did not return workload status.');
-  const expected = new Set(['gateway', 'agent', 'garden', 'postgres']);
+  const expected = new Set(['gateway', 'agent', 'garden', 'operator-alert-sink', 'postgres']);
   for (const item of items) {
     const object = record(item);
     const metadata = record(object?.metadata);

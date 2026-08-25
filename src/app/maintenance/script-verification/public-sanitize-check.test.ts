@@ -222,6 +222,33 @@ describe('public-sanitize check', () => {
     ))).toBe(true);
   });
 
+  it('allows only the generic public Helm chart deployment surface', () => {
+    const result = scanPublicSanitizeTrackedFiles(
+      [
+        'deploy/helm/psfn/Chart.yaml',
+        'deploy/helm/psfn/templates/networkpolicy.yaml',
+        'deploy/private-values.yaml',
+        'deployment/live-overlay.yaml',
+      ],
+      {
+        localBlocklist: {
+          localPath: 'workspace/sanitize/local-blocklist.json',
+          forbiddenPathRegex: [],
+          textRuleRegex: [],
+          loaded: false,
+        },
+        readTextFile: (file) => file.endsWith('networkpolicy.yaml')
+          ? 'except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16]'
+          : 'generic content',
+      },
+    );
+
+    expect(result.violations.map(({ file, rule }) => ({ file, rule }))).toEqual([
+      { file: 'deploy/private-values.yaml', rule: 'local-only-repository-surface' },
+      { file: 'deployment/live-overlay.yaml', rule: 'local-only-repository-surface' },
+    ]);
+  });
+
   it('drops gitlink submodule entries from tracked-file scanning', () => {
     const trackedFiles = parseTrackedFilesFromGitLsStage([
       '100644 1111111111111111111111111111111111111111 0\tsrc/app/main.ts',

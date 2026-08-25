@@ -186,18 +186,7 @@ spec:
               value: {{ include "psfn.fullname" . | quote }}
             {{- end }}
             {{- include "psfn.helmBackupImageEnv" . | nindent 12 }}
-            {{- /* ntfy operator-notifier wiring (bead ge7g): port the gateway's
-                 own NTFY_BASE_URL/NTFY_TOPIC into the pod. Only emitted when
-                 both are set, mirroring the gateway bootstrap contract
-                 (ntfy = baseUrl && topic). NTFY_TOKEN arrives separately via
-                 the provider secret env. When absent, the notify tool fails
-                 closed with a clear message instead of surfacing a raw error. */}}
-            {{- if and .Values.ntfy.baseUrl .Values.ntfy.topic }}
-            - name: NTFY_BASE_URL
-              value: {{ .Values.ntfy.baseUrl | quote }}
-            - name: NTFY_TOPIC
-              value: {{ .Values.ntfy.topic | quote }}
-            {{- end }}
+            {{- include "psfn.operatorAlertEnv" . | nindent 12 }}
             {{- if and .Values.satelliteHub.enabled .Values.satelliteHub.homeAssistant.enabled }}
             - name: SATELLITE_HUB_CONTROL_BASE_URL
               value: {{ printf "http://%s:%v" (include "psfn.satelliteHubServiceName" .) .Values.ports.satelliteHubControl | quote }}
@@ -416,6 +405,7 @@ spec:
               value: {{ include "psfn.image" (dict "root" . "image" .Values.workloads.gateway.image) | quote }}
             {{- end }}
             {{- include "psfn.helmBackupImageEnv" . | nindent 12 }}
+            {{- include "psfn.operatorAlertEnv" . | nindent 12 }}
             - name: GATEWAY_RPC_ENDPOINT
               value: {{ include "psfn.gatewayRpcUrlForClient" . | quote }}
             - name: GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN
@@ -646,6 +636,7 @@ spec:
             {{- include "psfn.runtimeDatabaseCredentialEnv" . | nindent 12 }}
             {{- end }}
             {{- include "psfn.helmBackupImageEnv" . | nindent 12 }}
+            {{- include "psfn.operatorAlertEnv" . | nindent 12 }}
             - name: ADMIN_HOST
               value: 0.0.0.0
             - name: ADMIN_PORT

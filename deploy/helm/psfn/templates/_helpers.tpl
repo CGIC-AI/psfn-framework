@@ -717,6 +717,20 @@ uppercase env name plus exactly one of a Secret reference or a plain value.
   value: "/var/run/secrets/psfn-postgres/database-url"
 {{- end -}}
 
+{{- define "psfn.operatorAlertEnv" -}}
+{{- if .Values.operatorAlertSink.enabled }}
+- name: NTFY_BASE_URL
+  value: {{ printf "http://%s-operator-alert-sink:%v" (include "psfn.fullname" .) .Values.operatorAlertSink.port | quote }}
+- name: NTFY_TOPIC
+  value: {{ .Values.operatorAlertSink.topic | quote }}
+{{- else if and .Values.ntfy.baseUrl .Values.ntfy.topic }}
+- name: NTFY_BASE_URL
+  value: {{ .Values.ntfy.baseUrl | quote }}
+- name: NTFY_TOPIC
+  value: {{ .Values.ntfy.topic | quote }}
+{{- end }}
+{{- end -}}
+
 {{- define "psfn.providerSecretEnv" -}}
 - name: API_KEY
   valueFrom:

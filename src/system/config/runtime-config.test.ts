@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -8,6 +8,7 @@ import { makeTestFatiguePolicyConfig } from '../../test-support/charge-policy.js
 
 const ORIGINAL_ENV = { ...process.env };
 const TEMP_DIRS: string[] = [];
+const TEST_COMPANION_ID = '11111111-1111-4111-8111-111111111111';
 
 function restoreEnv(): void {
   for (const key of Object.keys(process.env)) {
@@ -39,21 +40,25 @@ describe('hydrateJsonBackedRuntimeConfig', () => {
     );
   }
 
-  // The companions.json manifest is mandatory. A one-entry manifest is the
-  // single-companion topology (multiCompanion=false), which loadConfig treats
-  // identically to the old single-companion behavior.
-  function writeSingleCompanionManifest(dataDir: string): void {
+  function createSingleCompanionRuntime(runtimeRoot: string): {
+    companionDataDir: string;
+    systemDataDir: string;
+  } {
+    const systemDataDir = join(runtimeRoot, 'system-data');
+    const companionDataDir = join(runtimeRoot, 'companion-data');
+    mkdirSync(systemDataDir, { recursive: true });
+    mkdirSync(companionDataDir, { recursive: true });
     writeFileSync(
-      join(dataDir, 'companions.json'),
+      join(systemDataDir, 'companions.json'),
       `${JSON.stringify({
         postgres: {
           sharedMigrationRole: 'shared_schema_migration',
           sharedMigrationDatabaseUrlRef: { kind: 'env', envName: 'SHARED_MIGRATION_URL' },
         },
         companions: [{
-          companionId: '11111111-1111-4111-8111-111111111111',
-          companionDataDir: 'companion',
-          characterCardPath: 'companion/companion.json',
+          companionId: TEST_COMPANION_ID,
+          companionDataDir: 'companion-data',
+          characterCardPath: 'companion-data/companion.json',
           postgresSchema: 'public',
           postgresRole: 'single_companion_runtime',
           postgresDatabaseUrlRef: { kind: 'env', envName: 'SINGLE_COMPANION_DATABASE_URL' },
@@ -61,33 +66,44 @@ describe('hydrateJsonBackedRuntimeConfig', () => {
       })}\n`,
       'utf8',
     );
+    return { companionDataDir, systemDataDir };
+  }
+
+  function configureSingleCompanionRuntime(
+    runtimeRoot: string,
+    layout: { companionDataDir: string; systemDataDir: string },
+  ): void {
+    delete process.env.DATA_DIR;
+    process.env.PSFN_RUNTIME_LAYOUT_MODE = 'continuous';
+    process.env.PSFN_RUNTIME_ROOT = runtimeRoot;
+    process.env.SYSTEM_DATA_DIR = layout.systemDataDir;
+    process.env.COMPANION_DATA_DIR = layout.companionDataDir;
+    process.env.WORKSPACE_PATH = join(runtimeRoot, 'workspaces', 'personal', TEST_COMPANION_ID);
+    process.env.CHARACTER_CARD_PATH = join(layout.companionDataDir, 'companion.json');
+    process.env.COMPANION_ID = TEST_COMPANION_ID;
+    process.env.COMPANION_PG_SCHEMA = 'public';
+    process.env.POSTGRES_DATABASE_URL = 'postgresql://test:test@127.0.0.1:5432/test';
+    process.env.CONFIG_DIR = 'config';
   }
 
   it('still validates the scheduler owner even though no scheduler field is projected onto config', () => {
-    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-runtime-config-scheduler-validation-'));
-    TEMP_DIRS.push(dataDir);
-    for (const ownerFile of [
-      'settings.json',
-      'models.json',
-      'providers.json',
-      'scheduler.json',
-      'capability-tier.json',
-      'charge-policy.json',
-    ]) {
-      copyOwnerExample(dataDir, ownerFile);
+    const runtimeRoot = mkdtempSync(join(tmpdir(), 'psfn-runtime-config-scheduler-validation-'));
+    TEMP_DIRS.push(runtimeRoot);
+    const layout = createSingleCompanionRuntime(runtimeRoot);
+    for (const ownerFile of ['settings.json', 'models.json', 'providers.json']) {
+      copyOwnerExample(layout.systemDataDir, ownerFile);
     }
-    writeSingleCompanionManifest(dataDir);
-    const schedulerPath = join(dataDir, 'scheduler.json');
+    for (const ownerFile of ['scheduler.json', 'capability-tier.json', 'charge-policy.json']) {
+      copyOwnerExample(layout.companionDataDir, ownerFile);
+    }
+    const schedulerPath = join(layout.companionDataDir, 'scheduler.json');
     const scheduler = JSON.parse(readFileSync(schedulerPath, 'utf8')) as Record<string, unknown>;
     scheduler.backgroundMaintenance = {
       ...(scheduler.backgroundMaintenance as Record<string, unknown>),
       intervalMs: 9 * 60 * 60_000,
     };
     writeFileSync(schedulerPath, `${JSON.stringify(scheduler, null, 2)}\n`, 'utf8');
-    process.env.DATA_DIR = dataDir;
-    process.env.COMPANION_ID = '11111111-1111-4111-8111-111111111111';
-    process.env.POSTGRES_DATABASE_URL = 'postgresql://test:test@127.0.0.1:5432/test';
-    process.env.CONFIG_DIR = 'config';
+    configureSingleCompanionRuntime(runtimeRoot, layout);
 
     expect(() => hydrateJsonBackedRuntimeConfig(loadConfig(), { seedDir: 'config' })).toThrow(
       /backgroundMaintenance\.intervalMs.*phase-lock/s,
@@ -95,19 +111,17 @@ describe('hydrateJsonBackedRuntimeConfig', () => {
   });
 
   it('prefers owner-file models and runtime settings over ignored env defaults', () => {
-    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-runtime-config-'));
-    TEMP_DIRS.push(dataDir);
-    for (const ownerFile of [
-      'providers.json',
-      'scheduler.json',
-      'capability-tier.json',
-      'trust-policy.json',
-    ]) {
-      copyOwnerExample(dataDir, ownerFile);
+    const runtimeRoot = mkdtempSync(join(tmpdir(), 'psfn-runtime-config-'));
+    TEMP_DIRS.push(runtimeRoot);
+    const layout = createSingleCompanionRuntime(runtimeRoot);
+    for (const ownerFile of ['providers.json', 'trust-policy.json']) {
+      copyOwnerExample(layout.systemDataDir, ownerFile);
     }
-    writeSingleCompanionManifest(dataDir);
+    for (const ownerFile of ['scheduler.json', 'capability-tier.json']) {
+      copyOwnerExample(layout.companionDataDir, ownerFile);
+    }
 
-    writeFileSync(join(dataDir, 'settings.json'), JSON.stringify({
+    writeFileSync(join(layout.systemDataDir, 'settings.json'), JSON.stringify({
       analysisWorkbenchMaxTokens: 180000,
       analysisWorkbenchMaxWallTimeMs: 180000,
       analysisWorkbenchMaxSubQueries: 24,
@@ -117,7 +131,7 @@ describe('hydrateJsonBackedRuntimeConfig', () => {
       imageSelfieEditModel: 'fal-ai/nano-banana-2/edit',
       modelPurposeSelection: { chat: 'extraction' },
     }), 'utf8');
-    writeFileSync(join(dataDir, 'models.json'), JSON.stringify({
+    writeFileSync(join(layout.systemDataDir, 'models.json'), JSON.stringify({
       schemaVersion: 1,
       models: [
         {
@@ -168,7 +182,7 @@ describe('hydrateJsonBackedRuntimeConfig', () => {
         },
       ],
     }), 'utf8');
-    writeFileSync(join(dataDir, 'charge-policy.json'), JSON.stringify({
+    writeFileSync(join(layout.companionDataDir, 'charge-policy.json'), JSON.stringify({
       schemaVersion: 1,
       runChargeQuotaByLane: {
         interactive: 20,
@@ -221,10 +235,7 @@ describe('hydrateJsonBackedRuntimeConfig', () => {
       fatigue: makeTestFatiguePolicyConfig(),
     }), 'utf8');
 
-    process.env.DATA_DIR = dataDir;
-    process.env.COMPANION_ID = '11111111-1111-4111-8111-111111111111';
-    process.env.POSTGRES_DATABASE_URL = 'postgresql://test:test@127.0.0.1:5432/test';
-    process.env.CONFIG_DIR = 'config';
+    configureSingleCompanionRuntime(runtimeRoot, layout);
     process.env.PRIMARY_MODEL = 'env-primary-should-be-ignored';
     process.env.THINK_MAX_TOKENS = '999999';
     process.env.THINK_MAX_WALL_TIME_MS = '999999';
@@ -248,7 +259,7 @@ describe('hydrateJsonBackedRuntimeConfig', () => {
 
     // 23pp fail-closed: a selection referencing an unknown models.json slot
     // stops hydration with an actionable message.
-    writeFileSync(join(dataDir, 'settings.json'), JSON.stringify({
+    writeFileSync(join(layout.systemDataDir, 'settings.json'), JSON.stringify({
       modelPurposeSelection: { vision: 'no-such-slot' },
     }), 'utf8');
     expect(() => hydrateJsonBackedRuntimeConfig(loadConfig(), { seedDir: 'config' })).toThrow(

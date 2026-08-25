@@ -1,0 +1,11 @@
+{{- if .Values.identity.seedStarterCard }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "psfn.fullname" . }}-identity-seed
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+data:
+  companion.json: |
+{{ .Values.identity.starterCard | toPrettyJson | indent 4 }}
+{{- end }}

@@ -1,0 +1,258 @@
+{{- if .Values.certificates.enabled }}
+{{- if .Values.certificates.issuer.create }}
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ include "psfn.fullname" . }}-selfsigned
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "psfn.fullname" . }}-ca
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+spec:
+  isCA: true
+  commonName: {{ include "psfn.fullname" . }}-ca
+  secretName: {{ include "psfn.caSecretName" . }}
+  duration: {{ .Values.certificates.duration | quote }}
+  renewBefore: {{ .Values.certificates.renewBefore | quote }}
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: {{ include "psfn.fullname" . }}-selfsigned
+    kind: Issuer
+    group: cert-manager.io
+---
+apiVersion: cert-manager.io/v1
+kind: {{ .Values.certificates.issuer.kind }}
+metadata:
+  name: {{ include "psfn.certIssuerName" . }}
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+spec:
+  ca:
+    secretName: {{ include "psfn.caSecretName" . }}
+---
+{{- end }}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "psfn.fullname" . }}-gateway-rpc
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+spec:
+  secretName: {{ include "psfn.gatewayRpcCertSecretName" . }}
+  duration: {{ .Values.certificates.duration | quote }}
+  renewBefore: {{ .Values.certificates.renewBefore | quote }}
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  dnsNames:
+    - {{ include "psfn.gatewayRpcServiceName" . | quote }}
+    - {{ printf "%s.%s" (include "psfn.gatewayRpcServiceName" .) .Release.Namespace | quote }}
+    - {{ include "psfn.gatewayRpcServerName" . | quote }}
+    - {{ printf "%s.%s.svc.cluster.local" (include "psfn.gatewayRpcServiceName" .) .Release.Namespace | quote }}
+  uris:
+    - {{ include "psfn.spiffeGateway" . | quote }}
+  issuerRef:
+    {{- include "psfn.certIssuerRef" . | nindent 4 }}
+{{ if not .Values.fleet.enabled }}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "psfn.fullname" . }}-agent-rpc-client
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+spec:
+  secretName: {{ include "psfn.agentRpcClientCertSecretName" . }}
+  duration: {{ .Values.certificates.duration | quote }}
+  renewBefore: {{ .Values.certificates.renewBefore | quote }}
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  uris:
+    - {{ include "psfn.spiffeAgent" . | quote }}
+  issuerRef:
+    {{- include "psfn.certIssuerRef" . | nindent 4 }}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "psfn.fullname" . }}-agent-admin
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+spec:
+  secretName: {{ include "psfn.agentAdminCertSecretName" . }}
+  duration: {{ .Values.certificates.duration | quote }}
+  renewBefore: {{ .Values.certificates.renewBefore | quote }}
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  dnsNames:
+    - {{ include "psfn.agentAdminServiceName" . | quote }}
+    - {{ printf "%s.%s" (include "psfn.agentAdminServiceName" .) .Release.Namespace | quote }}
+    - {{ include "psfn.agentAdminServerName" . | quote }}
+    - {{ printf "%s.%s.svc.cluster.local" (include "psfn.agentAdminServiceName" .) .Release.Namespace | quote }}
+  uris:
+    - {{ include "psfn.spiffeAgent" . | quote }}
+  usages:
+    - digital signature
+    - key encipherment
+    - server auth
+    - client auth
+  issuerRef:
+    {{- include "psfn.certIssuerRef" . | nindent 4 }}
+{{ else }}
+{{- $root := . -}}
+{{- range $companion := .Values.fleet.companions }}
+{{- $target := dict "root" $root "companionId" $companion.companionId -}}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "psfn.fullname" $root }}-agent-rpc-client-{{ $companion.companionId }}
+  labels:
+    {{- include "psfn.labels" $root | nindent 4 }}
+    psfn.io/companion-id: {{ $companion.companionId }}
+spec:
+  secretName: {{ include "psfn.fleetAgentRpcClientCertSecretName" $target }}
+  duration: {{ $root.Values.certificates.duration | quote }}
+  renewBefore: {{ $root.Values.certificates.renewBefore | quote }}
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  uris:
+    - {{ include "psfn.spiffeFleetAgent" $target | quote }}
+    # The gateway listener authenticates the fleet agent role at mTLS and
+    # binds the exact companion with its role proof during RPC registration.
+    - {{ include "psfn.spiffeAgent" $root | quote }}
+  issuerRef:
+    {{- include "psfn.certIssuerRef" $root | nindent 4 }}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "psfn.fullname" $root }}-agent-admin-{{ $companion.companionId }}
+  labels:
+    {{- include "psfn.labels" $root | nindent 4 }}
+    psfn.io/companion-id: {{ $companion.companionId }}
+spec:
+  secretName: {{ include "psfn.fleetAgentAdminCertSecretName" $target }}
+  duration: {{ $root.Values.certificates.duration | quote }}
+  renewBefore: {{ $root.Values.certificates.renewBefore | quote }}
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  dnsNames:
+    - {{ include "psfn.fleetAgentAdminServiceName" $target | quote }}
+    - {{ printf "%s.%s" (include "psfn.fleetAgentAdminServiceName" $target) $root.Release.Namespace | quote }}
+    - {{ printf "%s.%s.svc" (include "psfn.fleetAgentAdminServiceName" $target) $root.Release.Namespace | quote }}
+    - {{ printf "%s.%s.svc.cluster.local" (include "psfn.fleetAgentAdminServiceName" $target) $root.Release.Namespace | quote }}
+  uris:
+    - {{ include "psfn.spiffeFleetAgent" $target | quote }}
+  usages:
+    - digital signature
+    - key encipherment
+    - server auth
+    - client auth
+  issuerRef:
+    {{- include "psfn.certIssuerRef" $root | nindent 4 }}
+{{ end }}
+{{- end }}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "psfn.fullname" . }}-garden-admin-client
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+spec:
+  secretName: {{ include "psfn.gardenAdminClientCertSecretName" . }}
+  duration: {{ .Values.certificates.duration | quote }}
+  renewBefore: {{ .Values.certificates.renewBefore | quote }}
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  uris:
+    - {{ include "psfn.spiffeGarden" . | quote }}
+  issuerRef:
+    {{- include "psfn.certIssuerRef" . | nindent 4 }}
+{{- if .Values.fleetAuth.enabled }}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "psfn.fullname" . }}-garden-sso-server
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+spec:
+  secretName: {{ include "psfn.gardenSsoServerCertSecretName" . }}
+  duration: {{ .Values.certificates.duration | quote }}
+  renewBefore: {{ .Values.certificates.renewBefore | quote }}
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  dnsNames:
+    - {{ include "psfn.gardenServiceName" . | quote }}
+    - {{ printf "%s.%s" (include "psfn.gardenServiceName" .) .Release.Namespace | quote }}
+    - {{ include "psfn.gardenSsoServerName" . | quote }}
+    - {{ printf "%s.%s.svc.cluster.local" (include "psfn.gardenServiceName" .) .Release.Namespace | quote }}
+  uris:
+    - {{ include "psfn.spiffeGarden" . | quote }}
+  issuerRef:
+    {{- include "psfn.certIssuerRef" . | nindent 4 }}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "psfn.fullname" . }}-gateway-sso-client
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+spec:
+  secretName: {{ include "psfn.gatewaySsoClientCertSecretName" . }}
+  duration: {{ .Values.certificates.duration | quote }}
+  renewBefore: {{ .Values.certificates.renewBefore | quote }}
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  uris:
+    - {{ include "psfn.spiffeGateway" . | quote }}
+  issuerRef:
+    {{- include "psfn.certIssuerRef" . | nindent 4 }}
+{{- end }}
+{{- if .Values.satelliteHub.enabled }}
+---
+# Satellite-hub client identity for the mTLS satellite auth path (Sprint-10
+# C1/0061b5e2). Issued and auto-renewed by cert-manager and mounted into the
+# hub pod today; satellites.json binds the SPIFFE URI SAN (clientCertSan),
+# which stays stable across renewals, unlike fingerprint/SPKI pins that change
+# whenever cert-manager rotates the private key. Runtime auth remains the
+# scoped bearer key until the gateway /v1 edge terminates direct TLS
+# (API_TLS_*, gated on the TLS-reload hardening tracked in
+# psfn-framework-zlon); see docs/satellite-hub-kube.md.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "psfn.fullname" . }}-satellite-hub-client
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+spec:
+  secretName: {{ include "psfn.satelliteHubClientCertSecretName" . }}
+  duration: {{ .Values.certificates.duration | quote }}
+  renewBefore: {{ .Values.certificates.renewBefore | quote }}
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  uris:
+    - {{ include "psfn.spiffeSatelliteHub" . | quote }}
+  issuerRef:
+    {{- include "psfn.certIssuerRef" . | nindent 4 }}
+{{- end }}
+{{- end }}

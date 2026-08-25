@@ -1,0 +1,1149 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "psfn.gatewayApiServiceName" . }}
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: http-api
+      port: {{ .Values.ports.gatewayApi }}
+      targetPort: http-api
+  selector:
+    {{- include "psfn.componentLabels" (dict "root" . "component" "gateway") | nindent 4 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "psfn.gatewayRpcServiceName" . }}
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: gateway-rpc
+      port: {{ .Values.ports.gatewayRpc }}
+      targetPort: gateway-rpc
+  selector:
+    {{- include "psfn.componentLabels" (dict "root" . "component" "gateway") | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "psfn.fullname" . }}-gateway
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.workloads.gateway.replicaCount }}
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "psfn.componentLabels" (dict "root" . "component" "gateway") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "psfn.componentLabels" (dict "root" . "component" "gateway") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "psfn.gatewayServiceAccountName" . }}
+      automountServiceAccountToken: {{ .Values.kubeSelfManagement.enabled }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+        {{- include "psfn.sharedWorkspaceBootstrapInitContainer" . | nindent 8 }}
+        {{- include "psfn.fleetAuthAuthorityFloorInitContainer" . | nindent 8 }}
+        {{- include "psfn.seedInitContainer" . | nindent 8 }}
+        {{- include "psfn.runtimeBootstrapInitContainer" . | nindent 8 }}
+        {{- include "psfn.waitForPostgresInitContainer" (dict "root" . "image" .Values.workloads.gateway.image) | nindent 8 }}
+        {{- if and .Values.modelPrefetch.enabled .Values.modelPrefetch.injectionClassifier.enabled .Values.persistence.modelCache.enabled }}
+        # Keep the gateway process stopped while the concurrently-created
+        # prefetch Job atomically provisions the enforce-mode classifier.
+        - name: wait-for-injection-model
+          image: {{ include "psfn.image" (dict "root" . "image" .Values.workloads.gateway.image) | quote }}
+          imagePullPolicy: {{ default .Values.psfnAppImage.pullPolicy .Values.workloads.gateway.image.pullPolicy }}
+          command:
+            - node
+            - --input-type=module
+            - -e
+            - |
+              import { stat } from 'node:fs/promises';
+              import { join } from 'node:path';
+              import { setTimeout } from 'node:timers/promises';
+
+              const modelDir = process.env.PSFN_INJECTION_MODEL_DIR;
+              const required = [
+                'config.json',
+                'tokenizer.json',
+                'tokenizer_config.json',
+                'special_tokens_map.json',
+                'onnx/model.onnx',
+              ];
+              for (;;) {
+                const missing = [];
+                for (const file of required) {
+                  try {
+                    if ((await stat(join(modelDir, file))).size === 0) missing.push(file);
+                  } catch {
+                    missing.push(file);
+                  }
+                }
+                if (missing.length === 0) break;
+                console.log(`[wait-for-injection-model] waiting for: ${missing.join(', ')}`);
+                await setTimeout(2000);
+              }
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          env:
+            - name: PSFN_INJECTION_MODEL_DIR
+              value: {{ printf "%s/prompt-injection-v2" .Values.runtime.modelCacheDir | quote }}
+          volumeMounts:
+            - name: model-cache
+              mountPath: {{ .Values.runtime.modelCacheDir }}
+              readOnly: true
+        {{- end }}
+      containers:
+        - name: gateway
+          image: {{ include "psfn.image" (dict "root" . "image" .Values.workloads.gateway.image) | quote }}
+          imagePullPolicy: {{ default .Values.psfnAppImage.pullPolicy .Values.workloads.gateway.image.pullPolicy }}
+          command:
+            {{- toYaml .Values.workloads.gateway.command | nindent 12 }}
+          securityContext:
+            {{- include "psfn.appReadOnlySecurityContext" . | nindent 12 }}
+          ports:
+            - name: http-api
+              containerPort: {{ .Values.ports.gatewayApi }}
+              {{- if .Values.hostPorts.gatewayApi.enabled }}
+              hostPort: {{ .Values.hostPorts.gatewayApi.port }}
+              {{- with .Values.hostPorts.gatewayApi.hostIP }}
+              hostIP: {{ . | quote }}
+              {{- end }}
+              {{- end }}
+            - name: gateway-rpc
+              containerPort: {{ .Values.ports.gatewayRpc }}
+          env:
+            {{- include "psfn.commonEnv" . | nindent 12 }}
+            {{- include "psfn.runtimeDatabaseCredentialEnv" . | nindent 12 }}
+            {{- include "psfn.providerSecretEnv" . | nindent 12 }}
+            {{- if .Values.persistence.modelCache.enabled }}
+            - name: PSFN_INJECTION_MODEL_DIR
+              value: {{ printf "%s/prompt-injection-v2" .Values.runtime.modelCacheDir | quote }}
+            {{- end }}
+            - name: API_HOST
+              value: 0.0.0.0
+            - name: API_PORT
+              value: {{ .Values.ports.gatewayApi | quote }}
+            - name: ADMIN_HOST
+              value: {{ include "psfn.gardenServiceName" . | quote }}
+            - name: ADMIN_PORT
+              value: {{ .Values.ports.garden | quote }}
+            {{- if .Values.fleetAuth.enabled }}
+            - name: FLEET_AUTH_AUTHORITY_FLOOR_ROOT
+              value: {{ include "psfn.fleetAuthAuthorityFloorMountPath" . | quote }}
+            - name: FLEET_SSO_TRUST_PROXY
+              value: "true"
+            - name: FLEET_SSO_GARDEN_HOST
+              value: {{ include "psfn.gardenServiceName" . | quote }}
+            - name: FLEET_SSO_GARDEN_TLS_CA_PATH
+              value: {{ printf "%s/fleet-sso-garden/ca.crt" .Values.certificates.mountBasePath | quote }}
+            - name: FLEET_SSO_GARDEN_TLS_CERT_PATH
+              value: {{ printf "%s/fleet-sso-garden/tls.crt" .Values.certificates.mountBasePath | quote }}
+            - name: FLEET_SSO_GARDEN_TLS_KEY_PATH
+              value: {{ printf "%s/fleet-sso-garden/tls.key" .Values.certificates.mountBasePath | quote }}
+            - name: FLEET_SSO_GARDEN_TLS_EXPECTED_PEER_SPIFFE_URI
+              value: {{ include "psfn.spiffeGarden" . | quote }}
+            - name: FLEET_SSO_GARDEN_TLS_SERVER_NAME
+              value: {{ include "psfn.gardenSsoServerName" . | quote }}
+            {{- if .Values.fleetAuth.credentialEnv }}
+            {{- include "psfn.fleetAuthCredentialEnv" . | nindent 12 }}
+            {{- end }}
+            {{- if .Values.companionUiTest.enabled }}
+            - name: FLEET_SSO_COMPANION_UI_ORIGIN
+              value: {{ printf "http://%s:%v" (include "psfn.companionUiTestServiceName" .) .Values.ports.companionUiTest | quote }}
+            - name: FLEET_SSO_COMPANION_UI_GUEST_MODE
+              value: {{ .Values.companionUiTest.guestMode | quote }}
+            {{- with .Values.fleetAuth.companionUiCompanionId }}
+            - name: FLEET_SSO_COMPANION_UI_COMPANION_ID
+              value: {{ . | quote }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
+            - name: GATEWAY_SESSION_HMAC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "psfn.appSecretName" . }}
+                  key: {{ .Values.secrets.keys.gatewaySessionHmacKey }}
+            {{- if .Values.kubeSelfManagement.enabled }}
+            - name: PSFN_KUBE_SELF_MANAGEMENT_ENABLED
+              value: "true"
+            - name: PSFN_KUBE_CURRENT_IMAGE
+              value: {{ include "psfn.image" (dict "root" . "image" .Values.workloads.gateway.image) | quote }}
+            - name: PSFN_KUBE_RESOURCE_PREFIX
+              value: {{ include "psfn.fullname" . | quote }}
+            {{- end }}
+            {{- include "psfn.helmBackupImageEnv" . | nindent 12 }}
+            {{- /* ntfy operator-notifier wiring (bead ge7g): port the gateway's
+                 own NTFY_BASE_URL/NTFY_TOPIC into the pod. Only emitted when
+                 both are set, mirroring the gateway bootstrap contract
+                 (ntfy = baseUrl && topic). NTFY_TOKEN arrives separately via
+                 the provider secret env. When absent, the notify tool fails
+                 closed with a clear message instead of surfacing a raw error. */}}
+            {{- if and .Values.ntfy.baseUrl .Values.ntfy.topic }}
+            - name: NTFY_BASE_URL
+              value: {{ .Values.ntfy.baseUrl | quote }}
+            - name: NTFY_TOPIC
+              value: {{ .Values.ntfy.topic | quote }}
+            {{- end }}
+            {{- if and .Values.satelliteHub.enabled .Values.satelliteHub.homeAssistant.enabled }}
+            - name: SATELLITE_HUB_CONTROL_BASE_URL
+              value: {{ printf "http://%s:%v" (include "psfn.satelliteHubServiceName" .) .Values.ports.satelliteHubControl | quote }}
+            - name: SATELLITE_HUB_CONTROL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "psfn.appSecretName" . }}
+                  key: {{ .Values.secrets.keys.satelliteHubControlToken }}
+            {{- end }}
+            {{- /* Per-satellite bearer keys (Sprint-10 H4): each key yields a
+                 distinct satellite-scoped principal referenced by
+                 satellites.json auth.apiKeyPrincipalIds. Optional like the
+                 provider secrets: when absent, no satellite-scoped principal
+                 exists and satellite endpoints reject those credentials. */}}
+            - name: API_SATELLITE_KEYS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "psfn.appSecretName" . }}
+                  key: {{ .Values.secrets.keys.satelliteApiKeys }}
+                  optional: true
+            - name: GATEWAY_RPC_ENDPOINT
+              value: {{ include "psfn.gatewayRpcUrlForServer" . | quote }}
+            - name: GATEWAY_RPC_TLS_CA_PATH
+              value: {{ printf "%s/gateway-rpc/ca.crt" .Values.certificates.mountBasePath | quote }}
+            - name: GATEWAY_RPC_TLS_CERT_PATH
+              value: {{ printf "%s/gateway-rpc/tls.crt" .Values.certificates.mountBasePath | quote }}
+            - name: GATEWAY_RPC_TLS_KEY_PATH
+              value: {{ printf "%s/gateway-rpc/tls.key" .Values.certificates.mountBasePath | quote }}
+            - name: GATEWAY_RPC_TLS_EXPECTED_PEER_SPIFFE_URI
+              value: {{ include "psfn.spiffeAgent" . | quote }}
+          readinessProbe:
+            tcpSocket:
+              port: http-api
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: http-api
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.workloads.gateway.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: system-data
+              mountPath: {{ .Values.runtime.systemDataDir }}
+            {{- include "psfn.gatewayCompanionDataVolumeMounts" . | nindent 12 }}
+            - name: workspace
+              mountPath: {{ .Values.runtime.workspacePath }}
+            {{- include "psfn.sharedWorkspaceVolumeMount" . | nindent 12 }}
+            {{- if .Values.fleet.enabled }}
+            {{- include "psfn.gatewayAdditionalWorkspaceVolumeMounts" . | nindent 12 }}
+            {{- end }}
+            - name: runtime
+              mountPath: {{ .Values.runtime.logsDir }}
+              subPath: logs
+            - name: runtime
+              mountPath: {{ .Values.runtime.tempDir }}
+              subPath: tmp
+            # The gateway owns the fleet-auth consistent backup lane, so it needs
+            # the same runtime backups subPath the agents mount. Without it the
+            # lane has BACKUP_ROOT_DIR pointing at an unwritable container path
+            # and the runtime now refuses to start rather than pretend it is
+            # enabled (psfn-framework-vcyxv).
+            - name: runtime
+              mountPath: {{ .Values.runtime.backupsDir }}
+              subPath: backups
+            {{- if .Values.persistence.modelCache.enabled }}
+            - name: model-cache
+              mountPath: {{ .Values.runtime.modelCacheDir }}
+            {{- end }}
+            {{- include "psfn.repositoryCheckoutVolumeMount" . | nindent 12 }}
+            - name: gateway-rpc-tls
+              mountPath: {{ printf "%s/gateway-rpc" .Values.certificates.mountBasePath }}
+              readOnly: true
+            {{- if .Values.fleetAuth.enabled }}
+            - name: fleet-auth-authority-floor
+              mountPath: {{ include "psfn.fleetAuthAuthorityFloorMountPath" . }}
+            - name: fleet-sso-garden-tls
+              mountPath: {{ printf "%s/fleet-sso-garden" .Values.certificates.mountBasePath }}
+              readOnly: true
+            {{- end }}
+      volumes:
+        {{- include "psfn.commonVolumes" . | nindent 8 }}
+        {{- include "psfn.gatewayAdditionalCompanionDataVolumes" . | nindent 8 }}
+        {{- if .Values.fleet.enabled }}
+        {{- include "psfn.gatewayAdditionalWorkspaceVolumes" . | nindent 8 }}
+        {{- end }}
+        - name: gateway-rpc-tls
+          secret:
+            secretName: {{ include "psfn.gatewayRpcCertSecretName" . }}
+        {{- if .Values.fleetAuth.enabled }}
+        - name: fleet-auth-authority-floor
+          persistentVolumeClaim:
+            claimName: {{ include "psfn.fleetAuthAuthorityFloorClaimName" . }}
+        - name: fleet-sso-garden-tls
+          secret:
+            secretName: {{ include "psfn.gatewaySsoClientCertSecretName" . }}
+        {{- end }}
+---
+{{- if not .Values.fleet.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "psfn.agentAdminServiceName" . }}
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  # The agent may be semantically NotReady while its isolated capability-tier
+  # recovery route is still healthy. Keep that control endpoint routable so a
+  # failed case cannot strand the owner file at the test tier.
+  publishNotReadyAddresses: true
+  ports:
+    - name: admin-https
+      port: {{ .Values.ports.agentAdmin }}
+      targetPort: admin-https
+  selector:
+    {{- include "psfn.componentLabels" (dict "root" . "component" "agent") | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "psfn.fullname" . }}-agent
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.workloads.agent.replicaCount }}
+  # Recreate guarantees a single live agent instance: a RollingUpdate window
+  # briefly runs two agents against one gateway, risking double-handling of
+  # partner messages. Identity is single-instance by design.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "psfn.componentLabels" (dict "root" . "component" "agent") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "psfn.componentLabels" (dict "root" . "component" "agent") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "psfn.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+        {{- include "psfn.sharedWorkspaceBootstrapInitContainer" . | nindent 8 }}
+        {{- include "psfn.seedInitContainer" . | nindent 8 }}
+        {{- include "psfn.runtimeBootstrapInitContainer" . | nindent 8 }}
+        {{- include "psfn.waitForPostgresInitContainer" (dict "root" . "image" .Values.workloads.agent.image) | nindent 8 }}
+        {{- if .Values.modelPrefetch.enabled }}
+        - name: wait-for-model-assets
+          image: {{ include "psfn.image" (dict "root" . "image" .Values.workloads.agent.image) | quote }}
+          imagePullPolicy: {{ .Values.psfnAppImage.pullPolicy }}
+          command:
+            - node
+            - --input-type=module
+            - -e
+            - |
+              import { stat } from 'node:fs/promises';
+              import { join } from 'node:path';
+              import { setTimeout } from 'node:timers/promises';
+              const required = [
+                'SamLowe/roberta-base-go_emotions-onnx/onnx/model.onnx',
+                'Xenova/all-MiniLM-L6-v2/onnx/model.onnx',
+                'prompt-injection-v2/onnx/model.onnx',
+              ];
+              for (;;) {
+                const ready = await Promise.all(required.map(async file => {
+                  try { return (await stat(join(process.env.MODEL_CACHE_DIR, file))).size > 0; }
+                  catch { return false; }
+                }));
+                if (ready.every(Boolean)) break;
+                await setTimeout(2000);
+              }
+          env:
+            - name: MODEL_CACHE_DIR
+              value: {{ .Values.runtime.modelCacheDir | quote }}
+          securityContext:
+            {{- include "psfn.appReadOnlySecurityContext" . | nindent 12 }}
+          volumeMounts:
+            - name: model-cache
+              mountPath: {{ .Values.runtime.modelCacheDir }}
+              readOnly: true
+        {{- end }}
+      containers:
+        - name: agent
+          image: {{ include "psfn.image" (dict "root" . "image" .Values.workloads.agent.image) | quote }}
+          imagePullPolicy: {{ default .Values.psfnAppImage.pullPolicy .Values.workloads.agent.image.pullPolicy }}
+          command:
+            {{- toYaml .Values.workloads.agent.command | nindent 12 }}
+          securityContext:
+            {{- include "psfn.appReadOnlySecurityContext" . | nindent 12 }}
+          ports:
+            - name: admin-https
+              containerPort: {{ .Values.ports.agentAdmin }}
+          env:
+            {{- include "psfn.commonEnv" . | nindent 12 }}
+            {{- include "psfn.postgresDatabaseUrlFileEnv" . | nindent 12 }}
+            {{- if .Values.kubeSelfManagement.enabled }}
+            {{- /* Kube-aware lifecycle (x5rt.5): the agent detects the guarded
+                 Kubernetes deployment and routes restart/rebuild through the
+                 gateway's approval-gated controller. PSFN_KUBE_CURRENT_IMAGE must
+                 match the gateway's own value so the restart request validates
+                 against the controller's configured scope. The agent holds no kube
+                 RBAC (automountServiceAccountToken: false); the write path stays on
+                 the gateway ServiceAccount. */}}
+            - name: PSFN_KUBE_SELF_MANAGEMENT_ENABLED
+              value: "true"
+            - name: PSFN_KUBE_CURRENT_IMAGE
+              value: {{ include "psfn.image" (dict "root" . "image" .Values.workloads.gateway.image) | quote }}
+            {{- end }}
+            {{- include "psfn.helmBackupImageEnv" . | nindent 12 }}
+            - name: GATEWAY_RPC_ENDPOINT
+              value: {{ include "psfn.gatewayRpcUrlForClient" . | quote }}
+            - name: GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "psfn.appSecretName" . }}
+                  key: {{ .Values.secrets.keys.gatewaySessionIntegrityAuthToken }}
+            - name: GATEWAY_COMPANION_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "psfn.appSecretName" . }}
+                  key: {{ .Values.secrets.keys.gatewayCompanionAuthToken }}
+                  optional: true
+            - name: GATEWAY_RPC_TLS_CA_PATH
+              value: {{ printf "%s/gateway-rpc/ca.crt" .Values.certificates.mountBasePath | quote }}
+            - name: GATEWAY_RPC_TLS_CERT_PATH
+              value: {{ printf "%s/gateway-rpc/tls.crt" .Values.certificates.mountBasePath | quote }}
+            - name: GATEWAY_RPC_TLS_KEY_PATH
+              value: {{ printf "%s/gateway-rpc/tls.key" .Values.certificates.mountBasePath | quote }}
+            - name: GATEWAY_RPC_TLS_EXPECTED_PEER_SPIFFE_URI
+              value: {{ include "psfn.spiffeGateway" . | quote }}
+            - name: GATEWAY_RPC_TLS_SERVER_NAME
+              value: {{ include "psfn.gatewayRpcServerName" . | quote }}
+            - name: ADMIN_TRANSPORT_MODE
+              value: network
+            - name: ADMIN_TRANSPORT_LISTEN_HOST
+              value: 0.0.0.0
+            - name: ADMIN_TRANSPORT_LISTEN_PORT
+              value: {{ .Values.ports.agentAdmin | quote }}
+            - name: ADMIN_TRANSPORT_TLS_CA_PATH
+              value: {{ printf "%s/admin-transport/ca.crt" .Values.certificates.mountBasePath | quote }}
+            - name: ADMIN_TRANSPORT_TLS_CERT_PATH
+              value: {{ printf "%s/admin-transport/tls.crt" .Values.certificates.mountBasePath | quote }}
+            - name: ADMIN_TRANSPORT_TLS_KEY_PATH
+              value: {{ printf "%s/admin-transport/tls.key" .Values.certificates.mountBasePath | quote }}
+            - name: ADMIN_TRANSPORT_TLS_EXPECTED_PEER_SPIFFE_URI
+              value: {{ include "psfn.spiffeGarden" . | quote }}
+            {{- if .Values.redis.enabled }}
+            - name: PSFN_APP_CACHE_MODE
+              value: redis
+            - name: PSFN_REDIS_URL
+              value: {{ ternary .Values.redis.external.url (printf "redis://%s:%v" (include "psfn.redisServiceName" .) .Values.ports.redis) (eq .Values.redis.mode "external") | quote }}
+            - name: PSFN_REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "psfn.redisPasswordSecretName" . }}
+                  key: {{ include "psfn.redisPasswordSecretKey" . }}
+            {{- if and (eq .Values.redis.mode "external") .Values.redis.external.tls.enabled }}
+            - name: PSFN_REDIS_TLS_REJECT_UNAUTHORIZED
+              value: {{ .Values.redis.external.tls.rejectUnauthorized | quote }}
+            {{- end }}
+            {{- else }}
+            - name: PSFN_APP_CACHE_MODE
+              value: memory
+            {{- end }}
+          readinessProbe:
+            exec:
+              command:
+                - node
+                - -e
+                - |
+                  const fs = require('node:fs');
+                  const https = require('node:https');
+                  const { X509Certificate } = require('node:crypto');
+                  const cert = fs.readFileSync(process.env.ADMIN_TRANSPORT_TLS_CERT_PATH);
+                  const spiffeUris = value => (value || '')
+                    .split(',')
+                    .map(entry => entry.trim())
+                    .filter(entry => entry.startsWith('URI:spiffe://'))
+                    .map(entry => entry.slice(4));
+                  const ownSpiffeUris = spiffeUris(new X509Certificate(cert).subjectAltName);
+                  if (ownSpiffeUris.length !== 1) process.exit(1);
+                  const ownSpiffeUri = ownSpiffeUris[0];
+                  const request = https.get({
+                    host: '127.0.0.1',
+                    port: Number(process.env.ADMIN_TRANSPORT_LISTEN_PORT),
+                    path: '/api/admin/__transport_probe__',
+                    ca: fs.readFileSync(process.env.ADMIN_TRANSPORT_TLS_CA_PATH),
+                    cert,
+                    key: fs.readFileSync(process.env.ADMIN_TRANSPORT_TLS_KEY_PATH),
+                    rejectUnauthorized: true,
+                    checkServerIdentity: (_host, peer) => (
+                      spiffeUris(peer.subjectaltname).includes(ownSpiffeUri)
+                        ? undefined
+                        : new Error('agent readiness peer SPIFFE identity mismatch')
+                    ),
+                    timeout: 1500,
+                  }, response => {
+                    response.resume();
+                    process.exit(response.statusCode === 200 ? 0 : 1);
+                  });
+                  request.once('timeout', () => request.destroy(new Error('agent readiness timed out')));
+                  request.once('error', () => process.exit(1));
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            tcpSocket:
+              port: admin-https
+            initialDelaySeconds: 45
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.workloads.agent.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: postgres-database-url
+              mountPath: /var/run/secrets/psfn-postgres
+              readOnly: true
+            - name: system-data
+              mountPath: {{ .Values.runtime.systemDataDir }}
+              readOnly: true
+            - name: companion-data
+              mountPath: {{ .Values.runtime.companionDataDir }}
+            - name: companion-data
+              mountPath: {{ include "psfn.observerEvalSidecarPersistenceRootDir" . }}
+              subPath: observer-eval-sidecar
+            - name: workspace
+              mountPath: {{ .Values.runtime.workspacePath }}
+            {{- include "psfn.sharedWorkspaceVolumeMount" . | nindent 12 }}
+            - name: runtime
+              mountPath: {{ .Values.runtime.logsDir }}
+              subPath: logs
+            - name: runtime
+              mountPath: {{ .Values.runtime.tempDir }}
+              subPath: tmp
+            - name: runtime
+              mountPath: {{ .Values.runtime.backupsDir }}
+              subPath: backups
+            {{- if .Values.persistence.modelCache.enabled }}
+            - name: model-cache
+              mountPath: {{ .Values.runtime.modelCacheDir }}
+            {{- end }}
+            {{- include "psfn.repositoryCheckoutVolumeMount" . | nindent 12 }}
+            - name: gateway-rpc-client-tls
+              mountPath: {{ printf "%s/gateway-rpc" .Values.certificates.mountBasePath }}
+              readOnly: true
+            - name: admin-transport-tls
+              mountPath: {{ printf "%s/admin-transport" .Values.certificates.mountBasePath }}
+              readOnly: true
+      volumes:
+        {{- include "psfn.commonVolumes" . | nindent 8 }}
+        - name: gateway-rpc-client-tls
+          secret:
+            secretName: {{ include "psfn.agentRpcClientCertSecretName" . }}
+        - name: admin-transport-tls
+          secret:
+            secretName: {{ include "psfn.agentAdminCertSecretName" . }}
+{{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "psfn.gardenServiceName" . }}
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  {{- if .Values.fleet.enabled }}
+  # Fleet Garden readiness includes every agent's semantic readiness. Preserve
+  # the public recovery path while a not-ready agent is being restored.
+  publishNotReadyAddresses: true
+  {{- end }}
+  ports:
+    - name: {{ ternary "https-garden" "http-garden" .Values.fleetAuth.enabled }}
+      port: {{ .Values.ports.garden }}
+      targetPort: {{ ternary "https-garden" "http-garden" .Values.fleetAuth.enabled }}
+  selector:
+    {{- include "psfn.componentLabels" (dict "root" . "component" "garden") | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "psfn.fullname" . }}-garden
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.workloads.garden.replicaCount }}
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "psfn.componentLabels" (dict "root" . "component" "garden") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "psfn.componentLabels" (dict "root" . "component" "garden") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "psfn.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+        {{- include "psfn.sharedWorkspaceBootstrapInitContainer" . | nindent 8 }}
+        {{- if .Values.fleet.enabled }}
+        {{- include "psfn.waitForPostgresInitContainer" (dict "root" . "image" .Values.workloads.garden.image) | nindent 8 }}
+        {{- else }}
+        {{- include "psfn.seedInitContainer" . | nindent 8 }}
+        {{- end }}
+        {{- include "psfn.runtimeBootstrapInitContainer" . | nindent 8 }}
+      containers:
+        - name: garden
+          image: {{ include "psfn.image" (dict "root" . "image" .Values.workloads.garden.image) | quote }}
+          imagePullPolicy: {{ default .Values.psfnAppImage.pullPolicy .Values.workloads.garden.image.pullPolicy }}
+          command:
+            {{- toYaml .Values.workloads.garden.command | nindent 12 }}
+          securityContext:
+            {{- include "psfn.appReadOnlySecurityContext" . | nindent 12 }}
+          ports:
+            - name: {{ ternary "https-garden" "http-garden" .Values.fleetAuth.enabled }}
+              containerPort: {{ .Values.ports.garden }}
+              {{- if .Values.hostPorts.garden.enabled }}
+              hostPort: {{ .Values.hostPorts.garden.port }}
+              {{- with .Values.hostPorts.garden.hostIP }}
+              hostIP: {{ . | quote }}
+              {{- end }}
+              {{- end }}
+          env:
+            {{- if .Values.fleet.enabled }}
+            {{- include "psfn.fleetGardenEnv" . | nindent 12 }}
+            {{- include "psfn.postgresDatabaseUrlFileEnv" . | nindent 12 }}
+            {{- else }}
+            {{- include "psfn.commonEnv" . | nindent 12 }}
+            {{- include "psfn.runtimeDatabaseCredentialEnv" . | nindent 12 }}
+            {{- end }}
+            {{- include "psfn.helmBackupImageEnv" . | nindent 12 }}
+            - name: ADMIN_HOST
+              value: 0.0.0.0
+            - name: ADMIN_PORT
+              value: {{ .Values.ports.garden | quote }}
+            {{- if not .Values.fleetAuth.enabled }}
+            - name: ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "psfn.appSecretName" . }}
+                  key: {{ .Values.secrets.keys.adminToken }}
+            {{- end }}
+            {{- if .Values.fleetAuth.enabled }}
+            - name: FLEET_SSO_GARDEN_TLS_CA_PATH
+              value: {{ printf "%s/fleet-sso-gateway/ca.crt" .Values.certificates.mountBasePath | quote }}
+            - name: FLEET_SSO_GARDEN_TLS_CERT_PATH
+              value: {{ printf "%s/fleet-sso-gateway/tls.crt" .Values.certificates.mountBasePath | quote }}
+            - name: FLEET_SSO_GARDEN_TLS_KEY_PATH
+              value: {{ printf "%s/fleet-sso-gateway/tls.key" .Values.certificates.mountBasePath | quote }}
+            - name: FLEET_SSO_GARDEN_TLS_EXPECTED_PEER_SPIFFE_URI
+              value: {{ include "psfn.spiffeGateway" . | quote }}
+            {{- end }}
+            {{- /* The Garden operator process owns ADMIN_TOKEN and resolves
+                 operator-only gateway confirmations (e.g. kube self-management)
+                 directly against the gateway API, so the credential never
+                 traverses the agent (x5rt.10). */}}
+            - name: GATEWAY_OPERATOR_API_BASE_URL
+              value: {{ include "psfn.gatewayApiBaseUrl" . | quote }}
+            - name: ADMIN_TRANSPORT_MODE
+              value: network
+            - name: ADMIN_TRANSPORT_URL
+              value: {{ include "psfn.agentAdminUrl" . | quote }}
+            - name: ADMIN_TRANSPORT_TLS_CA_PATH
+              value: {{ printf "%s/admin-transport/ca.crt" .Values.certificates.mountBasePath | quote }}
+            - name: ADMIN_TRANSPORT_TLS_CERT_PATH
+              value: {{ printf "%s/admin-transport/tls.crt" .Values.certificates.mountBasePath | quote }}
+            - name: ADMIN_TRANSPORT_TLS_KEY_PATH
+              value: {{ printf "%s/admin-transport/tls.key" .Values.certificates.mountBasePath | quote }}
+            - name: ADMIN_TRANSPORT_TLS_EXPECTED_PEER_SPIFFE_URI
+              value: {{ include "psfn.spiffeAgent" . | quote }}
+            {{- if .Values.fleet.enabled }}
+            - name: FLEET_GARDEN_TARGET_IDS
+              value: {{ include "psfn.fleetCompanionIds" . | quote }}
+            - name: FLEET_GARDEN_ADMIN_SERVICE_BASE
+              value: {{ include "psfn.agentAdminServiceName" . | quote }}
+            - name: FLEET_GARDEN_ADMIN_DNS_SUFFIX
+              value: {{ printf ".%s.svc" .Release.Namespace | quote }}
+            {{- end }}
+          readinessProbe:
+            {{- if .Values.fleet.enabled }}
+            {{- /*
+              Couple the fleet Garden readiness exec probe's internal network
+              budget to the kubelet-facing outer timeout at render time so the
+              two can never drift back into the >inner-inside-1s-default
+              mismatch that caused live Ready=False flapping. See
+              deploy/helm/psfn/values.yaml (workloads.garden.readiness).
+            */}}
+            {{- $gardenReadiness := .Values.workloads.garden.readiness -}}
+            {{- $internalMs := $gardenReadiness.internalCheckTimeoutMs | int -}}
+            {{- $headroomSeconds := $gardenReadiness.timeoutHeadroomSeconds | int -}}
+            {{- $periodSeconds := $gardenReadiness.periodSeconds | int -}}
+            {{- $failureThreshold := $gardenReadiness.failureThreshold | int -}}
+            {{- $initialDelaySeconds := $gardenReadiness.initialDelaySeconds | int -}}
+            {{- /* ceil(internalMs / 1000) + headroom */ -}}
+            {{- $innerSeconds := div (add $internalMs 999) 1000 -}}
+            {{- $timeoutSeconds := add $innerSeconds $headroomSeconds -}}
+            {{- if le (mul $timeoutSeconds 1000) $internalMs -}}
+            {{- fail (printf "workloads.garden.readiness: derived outer timeoutSeconds (%d) must strictly exceed internalCheckTimeoutMs (%dms); raise timeoutHeadroomSeconds" $timeoutSeconds $internalMs) -}}
+            {{- end -}}
+            {{- if le $periodSeconds $timeoutSeconds -}}
+            {{- fail (printf "workloads.garden.readiness: periodSeconds (%d) must strictly exceed the derived outer timeoutSeconds (%d) so probes cannot overlap" $periodSeconds $timeoutSeconds) -}}
+            {{- end }}
+            exec:
+              command:
+                - node
+                - -e
+                - |
+                  const fs = require('node:fs');
+                  const https = require('node:https');
+                  const net = require('node:net');
+                  const tls = require('node:tls');
+                  const credentials = {
+                    ca: fs.readFileSync(process.env.ADMIN_TRANSPORT_TLS_CA_PATH),
+                    cert: fs.readFileSync(process.env.ADMIN_TRANSPORT_TLS_CERT_PATH),
+                    key: fs.readFileSync(process.env.ADMIN_TRANSPORT_TLS_KEY_PATH),
+                  };
+                  const localListener = new Promise((resolve, reject) => {
+                    const socket = net.connect(Number(process.env.ADMIN_PORT), '127.0.0.1');
+                    socket.setTimeout({{ $internalMs }});
+                    socket.once('connect', () => {
+                      socket.destroy();
+                      resolve();
+                    });
+                    socket.once('timeout', () => socket.destroy(new Error('Fleet Garden listener timed out')));
+                    socket.once('error', reject);
+                  });
+                  const targetIds = process.env.FLEET_GARDEN_TARGET_IDS.split(',').filter(Boolean);
+                  const targetChecks = targetIds.map(companionId => new Promise((resolve, reject) => {
+                    const host = `${process.env.FLEET_GARDEN_ADMIN_SERVICE_BASE}-${companionId}${process.env.FLEET_GARDEN_ADMIN_DNS_SUFFIX}`;
+                    const request = https.get({
+                      host,
+                      port: Number({{ .Values.ports.agentAdmin }}),
+                      path: '/api/admin/__transport_probe__',
+                      servername: host,
+                      ...credentials,
+                      checkServerIdentity: (serverName, certificate) => {
+                        const dnsError = tls.checkServerIdentity(serverName, certificate);
+                        if (dnsError) return dnsError;
+                        const expected = `URI:spiffe://{{ .Values.certificates.trustDomain }}/psfn/agent/${companionId}`;
+                        const identities = (certificate.subjectaltname || '').split(', ');
+                        return identities.includes(expected)
+                          ? undefined
+                          : new Error(`${companionId} certificate lacks ${expected}`);
+                      },
+                      timeout: {{ $internalMs }},
+                    }, response => {
+                      response.resume();
+                      if (response.statusCode === 200) resolve();
+                      else reject(new Error(`${companionId} returned ${response.statusCode}`));
+                    });
+                    request.once('timeout', () => request.destroy(new Error(`${companionId} timed out`)));
+                    request.once('error', reject);
+                  }));
+                  Promise.all([localListener, ...targetChecks])
+                    .then(() => process.exit(0))
+                    .catch(() => process.exit(1));
+            initialDelaySeconds: {{ $initialDelaySeconds }}
+            periodSeconds: {{ $periodSeconds }}
+            timeoutSeconds: {{ $timeoutSeconds }}
+            failureThreshold: {{ $failureThreshold }}
+            {{- else }}
+            tcpSocket:
+              port: {{ ternary "https-garden" "http-garden" .Values.fleetAuth.enabled }}
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            {{- end }}
+          livenessProbe:
+            tcpSocket:
+              port: {{ ternary "https-garden" "http-garden" .Values.fleetAuth.enabled }}
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.workloads.garden.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            {{- if .Values.fleet.enabled }}
+            {{- range $index, $companion := .Values.fleet.companions }}
+            - name: {{ printf "garden-companion-data-%d" $index }}
+              mountPath: {{ printf "%s/companions/%s" $.Values.fleet.runtimeRoot $companion.companionId }}
+              readOnly: true
+            {{- end }}
+            - name: postgres-database-url
+              mountPath: /var/run/secrets/psfn-postgres
+              readOnly: true
+            - name: system-data
+              mountPath: {{ .Values.runtime.systemDataDir }}
+              readOnly: true
+            {{- include "psfn.sharedWorkspaceVolumeMount" . | nindent 12 }}
+            - name: runtime
+              mountPath: {{ .Values.runtime.logsDir }}
+              subPath: logs
+            - name: runtime
+              mountPath: {{ .Values.runtime.tempDir }}
+              subPath: tmp
+            {{- else }}
+            - name: system-data
+              mountPath: {{ .Values.runtime.systemDataDir }}
+              readOnly: true
+            - name: companion-data
+              mountPath: {{ .Values.runtime.companionDataDir }}
+              readOnly: true
+            - name: workspace
+              mountPath: {{ .Values.runtime.workspacePath }}
+            - name: runtime
+              mountPath: {{ .Values.runtime.tempDir }}
+              subPath: tmp
+            {{- include "psfn.repositoryCheckoutVolumeMount" . | nindent 12 }}
+            {{- end }}
+            - name: admin-transport-client-tls
+              mountPath: {{ printf "%s/admin-transport" .Values.certificates.mountBasePath }}
+              readOnly: true
+            {{- if .Values.fleetAuth.enabled }}
+            - name: fleet-sso-gateway-tls
+              mountPath: {{ printf "%s/fleet-sso-gateway" .Values.certificates.mountBasePath }}
+              readOnly: true
+            {{- end }}
+      volumes:
+        {{- if .Values.fleet.enabled }}
+        # Fleet Garden still mounts /tmp under the read-only-root contract.
+        # The non-fleet branch gets this from psfn.commonVolumes; define the
+        # equivalent ephemeral volume explicitly for the fleet-specific set.
+        - name: tmp
+          emptyDir: {}
+        {{- range $index, $companion := .Values.fleet.companions }}
+        - name: {{ printf "garden-companion-data-%d" $index }}
+          persistentVolumeClaim:
+            claimName: {{ default (include "psfn.companionDataClaimName" $) $companion.companionDataClaim }}
+        {{- end }}
+        - name: postgres-database-url
+          secret:
+            secretName: {{ include "psfn.databaseUrlSecretName" . }}
+            items:
+              - key: {{ include "psfn.databaseUrlSecretKey" . }}
+                path: database-url
+        - name: system-data
+          persistentVolumeClaim:
+            claimName: {{ include "psfn.systemDataClaimName" . }}
+        - name: runtime
+          persistentVolumeClaim:
+            claimName: {{ include "psfn.runtimeClaimName" . }}
+        {{- else }}
+        {{- include "psfn.commonVolumes" . | nindent 8 }}
+        {{- end }}
+        - name: admin-transport-client-tls
+          secret:
+            secretName: {{ include "psfn.gardenAdminClientCertSecretName" . }}
+        {{- if .Values.fleetAuth.enabled }}
+        - name: fleet-sso-gateway-tls
+          secret:
+            secretName: {{ include "psfn.gardenSsoServerCertSecretName" . }}
+        {{- end }}
+{{- if .Values.satelliteHub.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "psfn.satelliteHubServiceName" . }}
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: hub-ws
+      port: {{ .Values.ports.satelliteHub }}
+      targetPort: hub-ws
+    {{- if .Values.satelliteHub.homeAssistant.enabled }}
+    - name: hub-control
+      port: {{ .Values.ports.satelliteHubControl }}
+      targetPort: hub-control
+    {{- end }}
+  selector:
+    {{- include "psfn.componentLabels" (dict "root" . "component" "satellite-hub") | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "psfn.fullname" . }}-satellite-hub
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  # Recreate keeps single-node hostPort rollouts from deadlocking (the old and
+  # new pod would otherwise both need hostPort {{ .Values.hostPorts.satelliteHub.port }}) and guarantees one
+  # live hub instance per satellite identity.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "psfn.componentLabels" (dict "root" . "component" "satellite-hub") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "psfn.componentLabels" (dict "root" . "component" "satellite-hub") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "psfn.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: satellite-hub
+          image: {{ include "psfn.satelliteHubImage" . | quote }}
+          imagePullPolicy: {{ .Values.satelliteHub.image.pullPolicy }}
+          {{- with .Values.satelliteHub.command }}
+          command:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: hub-ws
+              containerPort: {{ .Values.ports.satelliteHub }}
+              {{- if .Values.hostPorts.satelliteHub.enabled }}
+              hostPort: {{ .Values.hostPorts.satelliteHub.port }}
+              {{- with .Values.hostPorts.satelliteHub.hostIP }}
+              hostIP: {{ . | quote }}
+              {{- end }}
+              {{- end }}
+            {{- if .Values.satelliteHub.homeAssistant.enabled }}
+            - name: hub-control
+              containerPort: {{ .Values.ports.satelliteHubControl }}
+            {{- end }}
+          env:
+            - name: AGENT_RUNTIME
+              value: {{ .Values.satelliteHub.agentRuntime | quote }}
+            - name: REALTIME_VOICE_BIND_HOST
+              value: "0.0.0.0"
+            - name: REALTIME_VOICE_PORT
+              value: {{ .Values.ports.satelliteHub | quote }}
+            {{- if .Values.satelliteHub.textOnly }}
+            - name: HUB_TEXT_ONLY
+              value: "true"
+            {{- end }}
+            - name: PSFN_API_BASE_URL
+              value: {{ include "psfn.gatewayApiBaseUrl" . | quote }}
+            {{- /* Dedicated satellite-scoped credential (Sprint-10 H4); the
+                 shared operator API_KEY is never handed to the hub. */}}
+            - name: PSFN_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "psfn.appSecretName" . }}
+                  key: {{ .Values.secrets.keys.satelliteHubApiKey }}
+            - name: PSFN_MODEL
+              value: {{ .Values.satelliteHub.psfnModel | quote }}
+            - name: PSFN_SATELLITE_ID
+              value: {{ required "satelliteHub.identity.satelliteId is required when satelliteHub.enabled=true" .Values.satelliteHub.identity.satelliteId | quote }}
+            - name: PSFN_ENDPOINT_ID
+              value: {{ required "satelliteHub.identity.endpointId is required when satelliteHub.enabled=true" .Values.satelliteHub.identity.endpointId | quote }}
+            - name: PSFN_CLAIM_TYPE
+              value: {{ required "satelliteHub.identity.claimType is required when satelliteHub.enabled=true" .Values.satelliteHub.identity.claimType | quote }}
+            {{- with .Values.satelliteHub.capabilityProfile }}
+            - name: PSFN_CAPABILITY_PROFILE
+              value: {{ . | quote }}
+            {{- end }}
+            {{- if .Values.satelliteHub.companionBridge.enabled }}
+            {{- /* Companion event relay bridge: SSE + approval/artifact relay
+                 against the same in-cluster /v1 edge. The bridge API key
+                 falls back to PSFN_API_KEY inside the hub (documented hub
+                 behavior, commit 9999af5). */}}
+            - name: PSFN_COMPANION_BASE_URL
+              value: {{ include "psfn.gatewayApiBaseUrl" . | quote }}
+            {{- end }}
+            {{- if .Values.satelliteHub.homeAssistant.enabled }}
+            - name: HOME_ASSISTANT_ENABLED
+              value: "true"
+            - name: HOME_ASSISTANT_BASE_URL
+              value: {{ required "satelliteHub.homeAssistant.baseUrl is required when Home Assistant is enabled" .Values.satelliteHub.homeAssistant.baseUrl | quote }}
+            - name: HOME_ASSISTANT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "psfn.appSecretName" . }}
+                  key: {{ .Values.secrets.keys.homeAssistantToken }}
+            - name: HUB_CONTROL_BIND_HOST
+              value: "0.0.0.0"
+            - name: HUB_CONTROL_PORT
+              value: {{ .Values.ports.satelliteHubControl | quote }}
+            - name: HUB_CONTROL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "psfn.appSecretName" . }}
+                  key: {{ .Values.secrets.keys.satelliteHubControlToken }}
+            - name: HUB_DEVICE_REGISTRY_PATH
+              value: /app/config/hub-devices.json
+            {{- end }}
+            {{- if .Values.satelliteHub.textOnly }}
+            {{- /* Text-only mode: voice providers are genuinely optional
+                 (HUB_TEXT_ONLY, hub commit 2b8d234). */}}
+            - name: DEEPGRAM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "psfn.appSecretName" . }}
+                  key: {{ .Values.secrets.keys.deepgramApiKey }}
+                  optional: true
+            - name: ELEVENLABS_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "psfn.appSecretName" . }}
+                  key: {{ .Values.secrets.keys.elevenLabsApiKey }}
+                  optional: true
+            {{- with .Values.satelliteHub.elevenLabsVoiceId }}
+            - name: ELEVENLABS_VOICE_ID
+              value: {{ . | quote }}
+            {{- end }}
+            {{- else }}
+            - name: DEEPGRAM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "psfn.appSecretName" . }}
+                  key: {{ .Values.secrets.keys.deepgramApiKey }}
+            - name: ELEVENLABS_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "psfn.appSecretName" . }}
+                  key: {{ .Values.secrets.keys.elevenLabsApiKey }}
+            - name: ELEVENLABS_VOICE_ID
+              value: {{ required "satelliteHub.elevenLabsVoiceId is required when satelliteHub.enabled=true and satelliteHub.textOnly=false" .Values.satelliteHub.elevenLabsVoiceId | quote }}
+            {{- end }}
+            - name: ARTIFACT_ROOT
+              value: {{ .Values.satelliteHub.artifactRoot | quote }}
+          readinessProbe:
+            httpGet:
+              path: /
+              port: hub-ws
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: hub-ws
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.satelliteHub.resources | nindent 12 }}
+          volumeMounts:
+            - name: runtime
+              mountPath: /app/.artifacts
+              subPath: satellite-hub-artifacts
+            {{- /* Staged mTLS client identity: issued and auto-renewed by
+                 cert-manager now, consumed once the gateway /v1 edge runs
+                 direct TLS (API_TLS_*). Until then runtime auth is the scoped
+                 bearer key; see docs/satellite-hub-kube.md for the flip. */}}
+            - name: psfn-client-tls
+              mountPath: {{ printf "%s/psfn-client" .Values.certificates.mountBasePath }}
+              readOnly: true
+            {{- if .Values.satelliteHub.homeAssistant.enabled }}
+            - name: hub-device-registry
+              mountPath: /app/config/hub-devices.json
+              subPath: hub-devices.json
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: runtime
+          persistentVolumeClaim:
+            claimName: {{ include "psfn.fullname" . }}-runtime
+        - name: psfn-client-tls
+          secret:
+            secretName: {{ include "psfn.satelliteHubClientCertSecretName" . }}
+        {{- if .Values.satelliteHub.homeAssistant.enabled }}
+        - name: hub-device-registry
+          configMap:
+            name: {{ include "psfn.fullname" . }}-hub-devices
+        {{- end }}
+{{- end }}
+{{- if .Values.companionUiTest.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "psfn.companionUiTestServiceName" . }}
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: http-ui
+      port: {{ .Values.ports.companionUiTest }}
+      targetPort: http-ui
+  selector:
+    {{- include "psfn.componentLabels" (dict "root" . "component" "companion-ui-test") | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "psfn.fullname" . }}-companion-ui-test
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "psfn.componentLabels" (dict "root" . "component" "companion-ui-test") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "psfn.componentLabels" (dict "root" . "component" "companion-ui-test") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "psfn.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: companion-ui-test
+          image: {{ include "psfn.companionUiTestImage" . | quote }}
+          imagePullPolicy: {{ .Values.companionUiTest.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: http-ui
+              containerPort: {{ .Values.ports.companionUiTest }}
+          readinessProbe:
+            httpGet:
+              path: /companion-ui/
+              port: http-ui
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /companion-ui/
+              port: http-ui
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.companionUiTest.resources | nindent 12 }}
+{{- end }}

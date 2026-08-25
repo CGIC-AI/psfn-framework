@@ -46,6 +46,10 @@ describe('createIsolatedE2ERuntime', () => {
 
     try {
       expect(runtime.config.dataDir).toBe(runtime.systemDataDir);
+      expect(runtime.config.companionFleet?.persistenceRoot).toBe(runtime.rootDir);
+      expect(runtime.config.companionRuntimeIdentity?.companionDataDir).toBe(
+        runtime.companionDataDir,
+      );
       expect(runtime.systemDataDir).not.toBe(ambientDataDir);
       expect(runtime.companionDataDir).not.toBe(ambientDataDir);
       // scheduler.json is a per-companion owner file (dnll.3): the harness copies

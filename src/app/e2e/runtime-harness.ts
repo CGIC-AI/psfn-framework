@@ -14,6 +14,7 @@ const ISOLATED_E2E_ENV_KEYS = [
   'CHARACTER_CARD_PATH',
   'COMPANION_ID',
   'COMPANION_DATA_DIR',
+  'COMPANION_PG_SCHEMA',
   'DATA_DIR',
   'DATABASE_PATH',
   'PSFN_LOGS_DIR',
@@ -116,7 +117,10 @@ export function createIsolatedE2ERuntime(
 
   try {
     delete process.env.DATA_DIR;
-    delete process.env.PSFN_RUNTIME_ROOT;
+    // Fleet paths in companions.json are resolved from the runtime root. Keep
+    // that authority inside the same temporary tree as the copied owner files
+    // instead of allowing relative fleet paths to resolve from process.cwd().
+    process.env.PSFN_RUNTIME_ROOT = rootDir;
     process.env.SYSTEM_DATA_DIR = systemDataDir;
     process.env.COMPANION_DATA_DIR = companionDataDir;
     process.env.WORKSPACE_PATH = workspacePath;
@@ -127,6 +131,7 @@ export function createIsolatedE2ERuntime(
     process.env.DATABASE_PATH = databasePath;
     process.env.CHARACTER_CARD_PATH = characterCardPath;
     process.env.COMPANION_ID = '11111111-1111-4111-8111-111111111111';
+    process.env.COMPANION_PG_SCHEMA = 'public';
     // Postgres-only runtime persistence requires a URL at config load; e2e
     // runs may override with a real scratch database via the ambient env.
     process.env.POSTGRES_DATABASE_URL ??= 'postgresql://psfn:psfn-local@127.0.0.1:5432/psfn_e2e';

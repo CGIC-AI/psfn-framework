@@ -142,7 +142,9 @@ describe('PostgresBiographicalProfileStore — schema and roundtrip', () => {
         value: { kind: 'name', name: 'Someone else', role: 'primary' },
       })).rejects.toThrow();
       expect(await store.listClaims({ subject: contact('v', 2) })).toEqual([]);
+      expect(await store.listClaims({ offset: 1, limit: 1 })).toEqual([]);
       await expect(store.listClaims({ limit: 0 })).rejects.toThrow('positive integer');
+      await expect(store.listClaims({ offset: -1 })).rejects.toThrow('non-negative integer');
     });
   });
 });

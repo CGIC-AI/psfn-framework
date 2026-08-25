@@ -359,10 +359,11 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
   {
     action: 'memory.read', area: 'memory', routeIds: ids('GET', [
       '/api/admin/biographical-claims', '/api/admin/biographical-claims/:claimId',
-    ]),
+    ]), subjectRelation: 'self_or_co_subject',
   },
   {
     action: 'memory.read', area: 'memory', routeIds: pageIds(['/biographical-profile']),
+    subjectRelation: 'self_or_co_subject',
   },
   {
     action: 'memory.reveal', area: 'memory', routeIds: [
@@ -421,7 +422,7 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
   {
     action: 'memory.manage', area: 'memory', routeIds: ids('POST', [
       '/api/admin/biographical-claims/:claimId/review',
-    ]), confirmation: 'explicit',
+    ]), subjectRelation: 'self_or_co_subject', confirmation: 'explicit',
   },
   {
     action: 'models.read', area: 'models', routeIds: [

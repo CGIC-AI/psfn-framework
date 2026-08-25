@@ -70,7 +70,7 @@ export function buildAdminBiographicalReviewRoutes(options: {
           sendJson(res, 503, { error: 'Biographical review persistence is unavailable' });
           return;
         }
-        service.listClaims().then(
+        service.listClaims(context).then(
           result => sendJson(res, 200, result, ADMIN_POLLED_QUEUE_JSON_HEADERS),
           error => sendReviewError(res, error),
         );
@@ -94,7 +94,7 @@ export function buildAdminBiographicalReviewRoutes(options: {
           sendJson(res, 503, { error: 'Biographical review persistence is unavailable' });
           return;
         }
-        service.getClaim(claimId).then(
+        service.getClaim(claimId, context).then(
           result => sendJson(res, 200, result, ADMIN_DYNAMIC_JSON_HEADERS),
           error => sendReviewError(res, error),
         );
@@ -131,7 +131,7 @@ export function buildAdminBiographicalReviewRoutes(options: {
             sendJson(res, 400, { error: parsed.error });
             return;
           }
-          service.review(claimId, parsed.value, actor).then(
+          service.review(claimId, parsed.value, actor, context).then(
             result => sendJson(res, 200, result, ADMIN_DYNAMIC_JSON_HEADERS),
             error => {
               if (error instanceof BiographicalReviewError && error.reason === 'malformed') {

@@ -92,6 +92,8 @@ export interface BiographicalClaimListOptions {
   readonly status?: BiographicalClaimStatus;
   /** Include terminal (superseded/revoked) history rows. Defaults to false. */
   readonly includeTerminal?: boolean;
+  /** Skip this many matching rows in the stable claim ordering. Defaults to zero. */
+  readonly offset?: number;
   readonly limit?: number;
 }
 

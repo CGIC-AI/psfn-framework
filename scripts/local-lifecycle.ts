@@ -444,7 +444,7 @@ async function doctor(context: LocalContext, quiet = false): Promise<void> {
   }
   if (!quiet) {
     console.log('PASS: supervised gateway, agent, Garden, alert sink, and Postgres are healthy.');
-    console.log('PASS: Garden token login and authenticated UI both succeeded.');
+    console.log('PASS: Garden login challenge and authenticated UI both succeeded.');
     console.log(`Gateway: ${context.apiBase}`);
     console.log(`Garden:  ${context.gardenBase}/login`);
   }

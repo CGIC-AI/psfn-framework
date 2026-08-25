@@ -229,7 +229,7 @@ async function doctor(context: LifecycleContext): Promise<void> {
 
   console.log('PASS: Postgres, gateway, agent, and Garden are running.');
   console.log('PASS: Gateway memory, embeddings, and scheduler subsystems are healthy.');
-  console.log('PASS: Garden health, token login, and authenticated UI succeeded.');
+  console.log('PASS: Garden health, login challenge, and authenticated UI succeeded.');
   console.log(`Gateway: ${context.apiBase}`);
   console.log(`Garden:  ${context.gardenBase}/login`);
 }

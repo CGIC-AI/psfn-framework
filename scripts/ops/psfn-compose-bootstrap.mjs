@@ -324,7 +324,7 @@ async function main() {
     uid,
     gid,
   });
-  console.log('[runtime-bootstrap] configuration, database tenancy, and agent credential handoff are ready');
+  console.log('[runtime-bootstrap] configuration, database tenancy, and agent handoff are ready');
 }
 
 main().catch((error) => {

@@ -862,7 +862,7 @@ function scaleDown(context: HelmContext): void {
     '-l', `app.kubernetes.io/instance=${context.release}`,
     '--replicas=0',
   ]);
-  console.log('Stopped Kubernetes workloads. PVCs, Secrets, owner files, memories, and Postgres data were preserved.');
+  console.log('Stopped Kubernetes workloads. PVCs, owner files, memories, and Postgres data were preserved.');
 }
 
 function token(context: HelmContext): void {

@@ -216,7 +216,11 @@ describe('resolveGatewayBootstrapInput', () => {
     expect(flagOn.server.multiCompanion).toEqual({
       enabled: true,
       fleetCompanionIds: ['comp-a'],
-      channelRouting: {},
+      channelRouting: {
+        api: 'comp-a',
+        discord: 'comp-a',
+        telegram: 'comp-a',
+      },
       discordAccounts: {},
       personalWorkspaceByCompanionId: {
         'comp-a': '/runtime/workspaces/personal/comp-a',

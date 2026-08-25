@@ -67,7 +67,14 @@ export function findMatchingPersistedTurn(
   message: string,
 ): PersistedComposeTurn | undefined {
   if (!existsSync(path)) return undefined;
-  const lines = readFileSync(path, 'utf8').split(/\r?\n/u);
+  return findMatchingPersistedTurnInText(readFileSync(path, 'utf8'), message);
+}
+
+export function findMatchingPersistedTurnInText(
+  text: string,
+  message: string,
+): PersistedComposeTurn | undefined {
+  const lines = text.split(/\r?\n/u);
   for (let index = lines.length - 1; index >= 0; index -= 1) {
     const line = lines[index]?.trim();
     if (!line) continue;

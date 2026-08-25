@@ -1,0 +1,88 @@
+{{- define "psfn.modelPrefetchJobSpec" -}}
+backoffLimit: {{ .Values.modelPrefetch.backoffLimit }}
+activeDeadlineSeconds: {{ .Values.modelPrefetch.activeDeadlineSeconds }}
+ttlSecondsAfterFinished: {{ .Values.modelPrefetch.ttlSecondsAfterFinished }}
+template:
+  metadata:
+    labels:
+      {{- include "psfn.componentLabels" (dict "root" . "component" "model-prefetch") | nindent 6 }}
+  spec:
+    serviceAccountName: {{ include "psfn.serviceAccountName" . }}
+    automountServiceAccountToken: false
+    restartPolicy: Never
+    securityContext:
+      {{- toYaml .Values.podSecurityContext | nindent 6 }}
+    {{- with .Values.imagePullSecrets }}
+    imagePullSecrets:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+    containers:
+      - name: pinned-model-assets
+        image: {{ include "psfn.image" (dict "root" . "image" .Values.modelPrefetch.image) | quote }}
+        imagePullPolicy: {{ default .Values.psfnAppImage.pullPolicy .Values.modelPrefetch.image.pullPolicy }}
+        command:
+          - node
+          - /app/scripts/ops/psfn-compose-smoke-prefetch.mjs
+        securityContext:
+          {{- toYaml .Values.securityContext | nindent 10 }}
+        env:
+          - name: HOME
+            value: /app
+          - name: PSFN_SMOKE_MODEL_CACHE_DIR
+            value: {{ .Values.runtime.modelCacheDir | quote }}
+          - name: PSFN_SMOKE_MODEL_PREFETCH_OFFLINE
+            value: "0"
+          - name: PSFN_SMOKE_TEXT_EMOTION_MODEL
+            value: {{ .Values.modelPrefetch.textEmotion.model | quote }}
+          - name: PSFN_SMOKE_TEXT_EMOTION_DTYPE
+            value: {{ .Values.modelPrefetch.textEmotion.dtype | quote }}
+          - name: PSFN_SMOKE_TEXT_EMOTION_MODEL_REVISION
+            value: 90ee0c1c4796d370e68968687b8ba51fc11224f4
+          - name: PSFN_SMOKE_EMBEDDING_MODEL
+            value: {{ .Values.embeddings.transformers.model | quote }}
+          - name: PSFN_SMOKE_EMBEDDING_DTYPE
+            value: fp32
+          - name: PSFN_SMOKE_EMBEDDING_MODEL_REVISION
+            value: 751bff37182d3f1213fa05d7196b954e230abad9
+          - name: PSFN_SMOKE_INJECTION_MODEL_DIR
+            value: {{ printf "%s/prompt-injection-v2" .Values.runtime.modelCacheDir | quote }}
+          - name: PSFN_SMOKE_INJECTION_PROVISION_SCRIPT
+            value: /app/dist/provision-injection-model.js
+          - name: HF_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: {{ include "psfn.appSecretName" . }}
+                key: {{ .Values.secrets.keys.hfToken }}
+                optional: true
+        resources:
+          {{- toYaml .Values.modelPrefetch.resources | nindent 10 }}
+        volumeMounts:
+          - name: model-cache
+            mountPath: {{ .Values.runtime.modelCacheDir }}
+    volumes:
+      - name: model-cache
+        persistentVolumeClaim:
+          claimName: {{ include "psfn.modelCacheClaimName" . }}
+{{- end }}
+
+{{- define "psfn.modelPrefetchJobName" -}}
+{{- $jobSpec := include "psfn.modelPrefetchJobSpec" . -}}
+{{- $specHash := sha256sum $jobSpec | trunc 16 -}}
+{{- $nameBase := include "psfn.fullname" . | trunc 31 | trimSuffix "-" -}}
+{{- printf "%s-model-prefetch-%s" $nameBase $specHash -}}
+{{- end }}
+
+{{- if .Values.modelPrefetch.enabled }}
+{{- $jobSpec := include "psfn.modelPrefetchJobSpec" . }}
+{{- $specHash := sha256sum $jobSpec | trunc 16 }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "psfn.modelPrefetchJobName" . }}
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+    app.kubernetes.io/component: model-prefetch
+    psfn.io/model-prefetch-spec-hash: {{ $specHash | quote }}
+spec:
+  {{- $jobSpec | nindent 2 }}
+{{- end }}

@@ -1,0 +1,608 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "psfn.fullname" . }}-default-deny
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "psfn.fullname" . }}-gateway
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "psfn.componentLabels" (dict "root" . "component" "gateway") | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.ingressController.namespaceSelector | nindent 14 }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.ingressController.podSelector | nindent 14 }}
+        {{- if .Values.satelliteHub.enabled }}
+        - podSelector:
+            matchLabels:
+              {{- include "psfn.componentLabels" (dict "root" . "component" "satellite-hub") | nindent 14 }}
+        {{- end }}
+      ports:
+        - port: {{ .Values.ports.gatewayApi }}
+          protocol: TCP
+    {{- if and .Values.hostPorts.gatewayApi.enabled .Values.hostPorts.gatewayApi.sourceCIDRs }}
+    - from:
+        {{- range .Values.hostPorts.gatewayApi.sourceCIDRs }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+      ports:
+        - port: {{ .Values.ports.gatewayApi }}
+          protocol: TCP
+    {{- end }}
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "psfn.componentLabels" (dict "root" . "component" "agent") | nindent 14 }}
+              {{- if .Values.fleet.enabled }}
+              psfn.io/fleet-target: registered
+              {{- end }}
+      ports:
+        - port: {{ .Values.ports.gatewayRpc }}
+          protocol: TCP
+    {{- /* The Garden operator process resolves operator-only confirmations on a
+         direct operator → gateway API path (x5rt.10); the agent no longer
+         reaches the gateway API. */}}
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "psfn.componentLabels" (dict "root" . "component" "garden") | nindent 14 }}
+      ports:
+        - port: {{ .Values.ports.gatewayApi }}
+          protocol: TCP
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.dns.namespaceSelector | nindent 14 }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.dns.podSelector | nindent 14 }}
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    {{- if and .Values.postgres.enabled (not .Values.postgres.external.enabled) }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "psfn.componentLabels" (dict "root" . "component" "postgres") | nindent 14 }}
+      ports:
+        - port: {{ .Values.ports.postgres }}
+          protocol: TCP
+    {{- end }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "psfn.componentLabels" (dict "root" . "component" "garden") | nindent 14 }}
+      ports:
+        - port: {{ .Values.ports.garden }}
+          protocol: TCP
+    {{- if .Values.companionUiTest.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "psfn.componentLabels" (dict "root" . "component" "companion-ui-test") | nindent 14 }}
+      ports:
+        - port: {{ .Values.ports.companionUiTest }}
+          protocol: TCP
+    {{- end }}
+    {{- if and .Values.satelliteHub.enabled .Values.satelliteHub.homeAssistant.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "psfn.componentLabels" (dict "root" . "component" "satellite-hub") | nindent 14 }}
+      ports:
+        - port: {{ .Values.ports.satelliteHubControl }}
+          protocol: TCP
+    {{- end }}
+    {{- if .Values.kubeSelfManagement.enabled }}
+    - to:
+        {{- range .Values.kubeSelfManagement.apiServerCIDRs }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+      ports:
+        - port: 443
+          protocol: TCP
+    {{- end }}
+    {{- if .Values.networkPolicy.gateway.allowExternalEgress }}
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - port: 443
+          protocol: TCP
+        - port: 80
+          protocol: TCP
+    {{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "psfn.fullname" . }}-agent
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "psfn.componentLabels" (dict "root" . "component" "agent") | nindent 6 }}
+      {{- if .Values.fleet.enabled }}
+      psfn.io/fleet-target: registered
+      {{- end }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        {{- if not .Values.fleet.enabled }}
+        - podSelector:
+            matchLabels:
+              {{- include "psfn.componentLabels" (dict "root" . "component" "gateway") | nindent 14 }}
+        {{- end }}
+        - podSelector:
+            matchLabels:
+              {{- include "psfn.componentLabels" (dict "root" . "component" "garden") | nindent 14 }}
+      ports:
+        - port: {{ .Values.ports.agentAdmin }}
+          protocol: TCP
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.dns.namespaceSelector | nindent 14 }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.dns.podSelector | nindent 14 }}
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    {{- /* Agent egress to the gateway is RPC only. The operator-confirmation
+         relay was removed (x5rt.10), so the agent no longer reaches the gateway
+         API. */}}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "psfn.componentLabels" (dict "root" . "component" "gateway") | nindent 14 }}
+      ports:
+        - port: {{ .Values.ports.gatewayRpc }}
+          protocol: TCP
+    {{- if and .Values.postgres.enabled (not .Values.postgres.external.enabled) }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "psfn.componentLabels" (dict "root" . "component" "postgres") | nindent 14 }}
+      ports:
+        - port: {{ .Values.ports.postgres }}
+          protocol: TCP
+    {{- end }}
+    {{- if and .Values.redis.enabled (eq .Values.redis.mode "internal") }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "psfn.componentLabels" (dict "root" . "component" "redis") | nindent 14 }}
+      ports:
+        - port: {{ .Values.ports.redis }}
+          protocol: TCP
+    {{- end }}
+    {{- if .Values.emosim.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "psfn.componentLabels" (dict "root" . "component" "emosim") | nindent 14 }}
+      ports:
+        - port: {{ .Values.ports.emosimHttp }}
+          protocol: TCP
+    {{- end }}
+    {{- range $cidr := .Values.networkPolicy.agent.privateServiceEgressCIDRs }}
+    {{- if not (regexMatch `^([0-9]{1,3}\.){3}[0-9]{1,3}/32$` $cidr) }}
+    {{- fail "networkPolicy.agent.privateServiceEgressCIDRs entries must be exact IPv4 /32 CIDRs" }}
+    {{- end }}
+    - to:
+        - ipBlock:
+            cidr: {{ $cidr | quote }}
+      ports:
+        - port: {{ $.Values.networkPolicy.agent.privateServiceEgressPort }}
+          protocol: TCP
+    {{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "psfn.fullname" . }}-garden
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "psfn.componentLabels" (dict "root" . "component" "garden") | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "psfn.componentLabels" (dict "root" . "component" "gateway") | nindent 14 }}
+      ports:
+        - port: {{ .Values.ports.garden }}
+          protocol: TCP
+    {{- if and .Values.ingress.enabled .Values.ingress.garden.enabled (not .Values.fleetAuth.enabled) (not .Values.fleet.enabled) }}
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.ingressController.namespaceSelector | nindent 14 }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.ingressController.podSelector | nindent 14 }}
+      ports:
+        - port: {{ .Values.ports.garden }}
+          protocol: TCP
+    {{- end }}
+    {{- if and .Values.hostPorts.garden.enabled .Values.hostPorts.garden.sourceCIDRs }}
+    - from:
+        {{- range .Values.hostPorts.garden.sourceCIDRs }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+      ports:
+        - port: {{ .Values.ports.garden }}
+          protocol: TCP
+    {{- end }}
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.dns.namespaceSelector | nindent 14 }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.dns.podSelector | nindent 14 }}
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "psfn.componentLabels" (dict "root" . "component" "agent") | nindent 14 }}
+              {{- if .Values.fleet.enabled }}
+              psfn.io/fleet-target: registered
+              {{- end }}
+            {{- if .Values.fleet.enabled }}
+            matchExpressions:
+              - key: psfn.io/companion-id
+                operator: In
+                values:
+                  {{- range .Values.fleet.companions }}
+                  - {{ .companionId }}
+                  {{- end }}
+            {{- end }}
+      ports:
+        - port: {{ .Values.ports.agentAdmin }}
+          protocol: TCP
+    {{- /* Operator → gateway confirmation resolution: the Garden operator
+         process resolves operator-only confirmations directly against the
+         gateway API, carrying ADMIN_TOKEN so it never traverses the agent
+         (x5rt.10). */}}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "psfn.componentLabels" (dict "root" . "component" "gateway") | nindent 14 }}
+      ports:
+        - port: {{ .Values.ports.gatewayApi }}
+          protocol: TCP
+    {{- if and .Values.postgres.enabled (not .Values.postgres.external.enabled) }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "psfn.componentLabels" (dict "root" . "component" "postgres") | nindent 14 }}
+      ports:
+        - port: {{ .Values.ports.postgres }}
+          protocol: TCP
+    {{- end }}
+{{- if and .Values.postgres.enabled (not .Values.postgres.external.enabled) }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "psfn.fullname" . }}-postgres
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "psfn.componentLabels" (dict "root" . "component" "postgres") | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "psfn.componentLabels" (dict "root" . "component" "gateway") | nindent 14 }}
+        - podSelector:
+            matchLabels:
+              {{- include "psfn.componentLabels" (dict "root" . "component" "agent") | nindent 14 }}
+              {{- if .Values.fleet.enabled }}
+              psfn.io/fleet-target: registered
+              {{- end }}
+        - podSelector:
+            matchLabels:
+              {{- include "psfn.componentLabels" (dict "root" . "component" "garden") | nindent 14 }}
+        - podSelector:
+            matchLabels:
+              {{- include "psfn.componentLabels" (dict "root" . "component" "postgres-restore-verify") | nindent 14 }}
+      ports:
+        - port: {{ .Values.ports.postgres }}
+          protocol: TCP
+{{- end }}
+{{- if and .Values.postgres.enabled (not .Values.postgres.external.enabled) }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "psfn.fullname" . }}-postgres-restore-verify
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "psfn.componentLabels" (dict "root" . "component" "postgres-restore-verify") | nindent 6 }}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.dns.namespaceSelector | nindent 14 }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.dns.podSelector | nindent 14 }}
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "psfn.componentLabels" (dict "root" . "component" "postgres") | nindent 14 }}
+      ports:
+        - port: {{ .Values.ports.postgres }}
+          protocol: TCP
+{{- end }}
+{{- if and .Values.redis.enabled (eq .Values.redis.mode "internal") }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "psfn.fullname" . }}-redis
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "psfn.componentLabels" (dict "root" . "component" "redis") | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "psfn.componentLabels" (dict "root" . "component" "agent") | nindent 14 }}
+              {{- if .Values.fleet.enabled }}
+              psfn.io/fleet-target: registered
+              {{- end }}
+      ports:
+        - port: {{ .Values.ports.redis }}
+          protocol: TCP
+{{- end }}
+{{- if .Values.emosim.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "psfn.fullname" . }}-emosim
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "psfn.componentLabels" (dict "root" . "component" "emosim") | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "psfn.componentLabels" (dict "root" . "component" "agent") | nindent 14 }}
+      ports:
+        - port: {{ .Values.ports.emosimHttp }}
+          protocol: TCP
+  # The emo_sim engine needs no egress at all; the empty list denies it.
+  egress: []
+{{- end }}
+{{- if and .Values.modelPrefetch.enabled (or .Values.modelPrefetch.textEmotion.enabled .Values.modelPrefetch.injectionClassifier.enabled) }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "psfn.fullname" . }}-model-prefetch-egress
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "psfn.componentLabels" (dict "root" . "component" "model-prefetch") | nindent 6 }}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.dns.namespaceSelector | nindent 14 }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.dns.podSelector | nindent 14 }}
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    {{- if .Values.networkPolicy.modelPrefetch.allowExternalHttpsEgress }}
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - port: 443
+          protocol: TCP
+    {{- end }}
+{{- end }}
+{{- if .Values.satelliteHub.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "psfn.fullname" . }}-satellite-hub
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "psfn.componentLabels" (dict "root" . "component" "satellite-hub") | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.ingressController.namespaceSelector | nindent 14 }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.ingressController.podSelector | nindent 14 }}
+      ports:
+        - port: {{ .Values.ports.satelliteHub }}
+          protocol: TCP
+    {{- if .Values.satelliteHub.homeAssistant.enabled }}
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "psfn.componentLabels" (dict "root" . "component" "gateway") | nindent 14 }}
+      ports:
+        - port: {{ .Values.ports.satelliteHubControl }}
+          protocol: TCP
+    {{- end }}
+    {{- if and .Values.hostPorts.satelliteHub.enabled .Values.hostPorts.satelliteHub.sourceCIDRs }}
+    - from:
+        {{- range .Values.hostPorts.satelliteHub.sourceCIDRs }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+      ports:
+        - port: {{ .Values.ports.satelliteHub }}
+          protocol: TCP
+    {{- end }}
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.dns.namespaceSelector | nindent 14 }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.dns.podSelector | nindent 14 }}
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "psfn.componentLabels" (dict "root" . "component" "gateway") | nindent 14 }}
+      ports:
+        - port: {{ .Values.ports.gatewayApi }}
+          protocol: TCP
+    {{- if .Values.satelliteHub.homeAssistant.enabled }}
+    - to:
+        {{- range .Values.satelliteHub.homeAssistant.egressCIDRs }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+      ports:
+        - port: {{ .Values.satelliteHub.homeAssistant.egressPort }}
+          protocol: TCP
+    {{- end }}
+    {{- if .Values.networkPolicy.satelliteHub.allowExternalEgress }}
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - port: 443
+          protocol: TCP
+    {{- end }}
+{{- end }}
+{{- if .Values.companionUiTest.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "psfn.fullname" . }}-companion-ui-test
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "psfn.componentLabels" (dict "root" . "component" "companion-ui-test") | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "psfn.componentLabels" (dict "root" . "component" "gateway") | nindent 14 }}
+      ports:
+        - port: {{ .Values.ports.companionUiTest }}
+          protocol: TCP
+  # The static web surface serves files only. Browser ingress is mediated by
+  # the authenticated unified-origin gateway and the empty list denies egress.
+  egress: []
+{{- end }}
+{{- end }}

@@ -27,11 +27,16 @@ __pycache__/
 /working_docs/
 workspace/
 
-# Operator-owned deployment and validation material lives in a separate private
-# configuration repository, never in this public source tree.
+# Operator-owned deployment values and validation material live in a separate
+# private configuration repository. The generic public Helm chart is the sole
+# tracked exception; it contains no live names, addresses, or credentials.
 /.github/workflows/trivy-config.yml
 /.trivyignore.yaml
-/deploy/
+/deploy/*
+!/deploy/helm/
+/deploy/helm/*
+!/deploy/helm/psfn/
+!/deploy/helm/psfn/**
 /deployment/
 /docker/docker-compose.yml
 /docker/docker-compose.production.yml

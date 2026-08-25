@@ -1,0 +1,234 @@
+{{- if and .Values.postgres.enabled (not .Values.postgres.external.enabled) }}
+{{- $restoreVerifyDatabase := printf "%s_restore_verify" .Values.postgres.auth.database -}}
+{{- $restoreVerifyOwner := .Values.postgres.auth.username -}}
+{{- $restoreVerifyRoles := .Values.postgres.restoreVerify.roles -}}
+{{- $restoreVerifyConnectCreateRoles := concat (list $restoreVerifyRoles.fleetAuthMigration $restoreVerifyRoles.fleetAuthBackupRestore) $restoreVerifyRoles.companionSchemaOwners (list $restoreVerifyRoles.sharedMigration) -}}
+{{- $restoreVerifyExtensionUsageRoles := concat (list $restoreVerifyRoles.fleetAuthBackupRestore) $restoreVerifyRoles.companionSchemaOwners (list $restoreVerifyRoles.sharedMigration) -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "psfn.fullname" . }}-postgres-init
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+data:
+  00-pgvector.sql: |
+    CREATE SCHEMA IF NOT EXISTS extensions;
+    REVOKE ALL ON SCHEMA extensions FROM PUBLIC;
+    CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA extensions;
+{{- range $role := $restoreVerifyConnectCreateRoles }}
+    SELECT format(
+      'CREATE ROLE %I NOLOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS',
+      '{{ $role | replace "'" "''" }}'
+    )
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM pg_roles
+      WHERE rolname = '{{ $role | replace "'" "''" }}'
+    )
+    \gexec
+{{- end }}
+    SELECT format(
+      'CREATE DATABASE %I OWNER %I',
+      '{{ $restoreVerifyDatabase | replace "'" "''" }}',
+      '{{ $restoreVerifyOwner | replace "'" "''" }}'
+    )
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM pg_database
+      WHERE datname = '{{ $restoreVerifyDatabase | replace "'" "''" }}'
+    )
+    \gexec
+    GRANT CONNECT, CREATE ON DATABASE {{ $restoreVerifyDatabase | quote }} TO {{ range $index, $role := $restoreVerifyConnectCreateRoles }}{{ if $index }}, {{ end }}{{ $role | quote }}{{ end }};
+    \connect {{ $restoreVerifyDatabase | quote }}
+    CREATE SCHEMA IF NOT EXISTS extensions AUTHORIZATION {{ $restoreVerifyOwner | quote }};
+    ALTER SCHEMA extensions OWNER TO {{ $restoreVerifyOwner | quote }};
+    CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA extensions;
+    ALTER EXTENSION vector SET SCHEMA extensions;
+    REVOKE ALL ON SCHEMA extensions FROM PUBLIC;
+    GRANT USAGE ON SCHEMA extensions TO {{ range $index, $role := $restoreVerifyExtensionUsageRoles }}{{ if $index }}, {{ end }}{{ $role | quote }}{{ end }};
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "psfn.fullname" . }}-postgres-restore-verify
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+    app.kubernetes.io/component: postgres-restore-verify
+  annotations:
+    # docker-entrypoint-initdb.d only covers an empty PGDATA. This hook replays
+    # the same idempotent SQL on install and every upgrade so an existing PVC
+    # receives new restore-verification prerequisites before Helm succeeds.
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "10"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 180
+  template:
+    metadata:
+      labels:
+        {{- include "psfn.componentLabels" (dict "root" . "component" "postgres-restore-verify") | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: provision
+          image: {{ include "psfn.postgresImage" . | quote }}
+          imagePullPolicy: {{ .Values.postgres.image.pullPolicy }}
+          command:
+            - sh
+            - -ceu
+            - |
+              until pg_isready --host="$POSTGRES_HOST" --port="$POSTGRES_PORT" --username="$POSTGRES_USER" --dbname="$POSTGRES_DB"; do
+                sleep 2
+              done
+              psql --no-password --set=ON_ERROR_STOP=1 \
+                --host="$POSTGRES_HOST" \
+                --port="$POSTGRES_PORT" \
+                --username="$POSTGRES_USER" \
+                --dbname="$POSTGRES_DB" \
+                --file=/docker-entrypoint-initdb.d/00-pgvector.sql
+          securityContext:
+            allowPrivilegeEscalation: false
+            seccompProfile:
+              type: RuntimeDefault
+          env:
+            - name: POSTGRES_HOST
+              value: {{ include "psfn.postgresServiceName" . | quote }}
+            - name: POSTGRES_PORT
+              value: {{ .Values.ports.postgres | quote }}
+            - name: POSTGRES_DB
+              value: {{ .Values.postgres.auth.database | quote }}
+            - name: POSTGRES_USER
+              value: {{ .Values.postgres.auth.username | quote }}
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "psfn.postgresSecretName" . }}
+                  key: {{ .Values.postgres.auth.keys.password }}
+            - name: PGCONNECT_TIMEOUT
+              value: "5"
+          resources:
+            {{- toYaml .Values.postgres.primary.resources | nindent 12 }}
+          volumeMounts:
+            - name: init-sql
+              mountPath: /docker-entrypoint-initdb.d/00-pgvector.sql
+              subPath: 00-pgvector.sql
+              readOnly: true
+      volumes:
+        - name: init-sql
+          configMap:
+            name: {{ include "psfn.fullname" . }}-postgres-init
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "psfn.postgresServiceName" . }}
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: postgres
+      port: {{ .Values.ports.postgres }}
+      targetPort: postgres
+  selector:
+    {{- include "psfn.componentLabels" (dict "root" . "component" "postgres") | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "psfn.fullname" . }}-postgres
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "psfn.postgresServiceName" . }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "psfn.componentLabels" (dict "root" . "component" "postgres") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "psfn.componentLabels" (dict "root" . "component" "postgres") | nindent 8 }}
+    spec:
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: postgres
+          image: {{ include "psfn.postgresImage" . | quote }}
+          imagePullPolicy: {{ .Values.postgres.image.pullPolicy }}
+          # Explicit container security context (no default context). Capabilities
+          # are intentionally not dropped and the root filesystem is left writable:
+          # the upstream Postgres entrypoint switches user and writes its socket
+          # and PGDATA at runtime, so a read-only root or dropped caps would break
+          # startup. Hardening the writable root is tracked as a separate,
+          # live-validated follow-up (see .trivyignore.yaml AVD-KSV-0014).
+          securityContext:
+            allowPrivilegeEscalation: false
+            seccompProfile:
+              type: RuntimeDefault
+          ports:
+            - name: postgres
+              containerPort: {{ .Values.ports.postgres }}
+          env:
+            - name: POSTGRES_DB
+              value: {{ .Values.postgres.auth.database | quote }}
+            - name: POSTGRES_USER
+              value: {{ .Values.postgres.auth.username | quote }}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "psfn.postgresSecretName" . }}
+                  key: {{ .Values.postgres.auth.keys.password }}
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.postgres.primary.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            - name: init-sql
+              mountPath: /docker-entrypoint-initdb.d/00-pgvector.sql
+              subPath: 00-pgvector.sql
+      volumes:
+        - name: init-sql
+          configMap:
+            name: {{ include "psfn.fullname" . }}-postgres-init
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          {{- include "psfn.labels" . | nindent 10 }}
+      spec:
+        accessModes:
+          {{- toYaml .Values.persistence.accessModes | nindent 10 }}
+        {{- with .Values.persistence.storageClassName }}
+        storageClassName: {{ . | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.postgres.primary.persistence.size | quote }}
+{{- end }}

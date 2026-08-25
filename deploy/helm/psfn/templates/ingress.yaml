@@ -1,0 +1,104 @@
+{{- if .Values.ingress.enabled }}
+{{- if .Values.ingress.gateway.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "psfn.fullname" . }}-gateway
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . | quote }}
+  {{- end }}
+  {{- if .Values.ingress.gateway.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.ingress.gateway.host | quote }}
+      secretName: {{ .Values.ingress.gateway.tls.secretName | quote }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.gateway.host | quote }}
+      http:
+        paths:
+          {{- if and .Values.companionUiTest.enabled .Values.satelliteHub.enabled }}
+          # The enrolled Hub terminates the browser-facing realtime protocol,
+          # mints a fresh device assertion per connection, and reaches the
+          # gateway over its authenticated backchannel. The browser remains on
+          # the canonical fleet origin and never receives Hub credentials.
+          - path: /companion-ui/companions/
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "psfn.satelliteHubServiceName" . }}
+                port:
+                  name: hub-ws
+          {{- end }}
+          - path: {{ .Values.ingress.gateway.path | quote }}
+            pathType: {{ .Values.ingress.gateway.pathType }}
+            backend:
+              service:
+                name: {{ include "psfn.gatewayApiServiceName" . }}
+                port:
+                  name: http-api
+---
+{{- end }}
+{{- if and .Values.ingress.garden.enabled (not .Values.fleetAuth.enabled) (not .Values.fleet.enabled) }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "psfn.fullname" . }}-garden
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . | quote }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.garden.host | quote }}
+      http:
+        paths:
+          - path: {{ .Values.ingress.garden.path | quote }}
+            pathType: {{ .Values.ingress.garden.pathType }}
+            backend:
+              service:
+                name: {{ include "psfn.gardenServiceName" . }}
+                port:
+                  name: http-garden
+{{- end }}
+{{- if and .Values.satelliteHub.enabled .Values.ingress.satelliteHub.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "psfn.fullname" . }}-satellite-hub
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . | quote }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.satelliteHub.host | quote }}
+      http:
+        paths:
+          - path: {{ .Values.ingress.satelliteHub.path | quote }}
+            pathType: {{ .Values.ingress.satelliteHub.pathType }}
+            backend:
+              service:
+                name: {{ include "psfn.satelliteHubServiceName" . }}
+                port:
+                  name: hub-ws
+{{- end }}
+{{- end }}

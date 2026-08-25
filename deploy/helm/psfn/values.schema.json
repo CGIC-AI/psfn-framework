@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "fleet": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        }
+      }
+    },
+    "fleetAuth": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "authorityFloor": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "existingClaim",
+            "size",
+            "storageClassName",
+            "mountPath"
+          ],
+          "properties": {
+            "existingClaim": {
+              "type": "string"
+            },
+            "size": {
+              "type": "string",
+              "minLength": 1
+            },
+            "storageClassName": {
+              "type": "string"
+            },
+            "mountPath": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^/"
+            }
+          }
+        }
+      },
+      "required": [
+        "enabled",
+        "authorityFloor"
+      ]
+    }
+  }
+}

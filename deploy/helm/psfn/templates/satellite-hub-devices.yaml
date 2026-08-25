@@ -1,0 +1,14 @@
+{{- if and .Values.satelliteHub.enabled .Values.satelliteHub.homeAssistant.enabled }}
+{{- if not .Values.satelliteHub.homeAssistant.devices }}
+{{- fail "satelliteHub.homeAssistant.devices is required when Home Assistant is enabled" }}
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "psfn.fullname" . }}-hub-devices
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+data:
+  hub-devices.json: |
+    {{ dict "schemaVersion" 1 "devices" .Values.satelliteHub.homeAssistant.devices | toJson | nindent 4 }}
+{{- end }}

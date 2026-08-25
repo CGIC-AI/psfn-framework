@@ -193,13 +193,14 @@ describe('runOnboarding — kubernetes mode', () => {
     const { root, envPath } = workspace();
     const systemDataDir = join(root, 'system-data');
     const companionDataDir = join(root, 'companion-data');
+    const prompter = new ScriptedPrompter({
+      choices: ['kubernetes', 'openrouter', 'fresh'],
+      texts: ['', '', '', '', '', '', ''],
+      confirms: [false], // voice off (no connectivity prompt in k8s mode)
+    });
 
     const outcome = await runOnboarding({
-      prompter: new ScriptedPrompter({
-        choices: ['kubernetes', 'openrouter', 'fresh'],
-        texts: ['', '', '', '', '', '', ''],
-        confirms: [false], // voice off (no connectivity prompt in k8s mode)
-      }),
+      prompter,
       seedDir: SEED_DIR,
       envPath,
       rootsOverride: { kubernetes: { systemDataDir, companionDataDir, shared: false } },
@@ -210,6 +211,9 @@ describe('runOnboarding — kubernetes mode', () => {
     expect(existsSync(join(systemDataDir, 'providers.json'))).toBe(true);
     expect(existsSync(join(systemDataDir, 'mcp-servers.json'))).toBe(true);
     expect(existsSync(join(companionDataDir, 'main', 'scheduler.json'))).toBe(true);
+    expect(prompter.log.join('\n')).toContain('npm run helm:up');
+    expect(prompter.log.join('\n')).toContain('provisions the chart-managed PostgreSQL roles and URLs');
+    expect(prompter.log.join('\n')).not.toContain('private deployment configuration');
   });
 });
 

@@ -72,12 +72,11 @@ runtime:
   # Empty means no authoritative checkout is available (reported as unavailable).
   repositoryDir: ""
 
-# Fleet Kubernetes topology. This is the only deployment shape: one gateway,
-# one fleet Garden, and one separately addressed agent workload for every
-# registered companion. A deployment with one entry is a fleet of one; adding
-# entries is the only topology change. The system-data PVC must contain the
-# matching canonical companions.json; these values describe workload wiring
-# only and never replace that owner file.
+# Advanced fleet topology. The supported public lifecycle leaves this disabled
+# and deploys one gateway, one agent, and one Garden for the one companion in
+# generated companions.json. Enabling fleet renders a separately addressed
+# agent workload for every entry below; these values describe workload wiring
+# only and never replace the canonical owner file.
 fleet:
   enabled: false
   runtimeRoot: /runtime

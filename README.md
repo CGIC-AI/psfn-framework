@@ -71,38 +71,54 @@ builds by is [`docs/PSFN_PROJECT_CHARTER.md`](./docs/PSFN_PROJECT_CHARTER.md).
 
 ## Getting Started
 
-**Fastest path — one command from a clean checkout** (Docker + Docker Compose,
-plus Node 24 LTS (24.19.0 or newer 24.x) to invoke the harness). This brings up the real split runtime
-(Postgres + gateway + agent), self-seeds every owner file and a starter card, and
-drives one chat turn — exit `0` means a persisted assistant reply:
+PSFN has exactly three supported deployment paths. All three run the complete
+persistent split runtime: Postgres, gateway, isolated agent, Garden, model
+provisioning, and an internal operator-alert sink.
+
+| Path | Use it when | Lifecycle |
+| --- | --- | --- |
+| Docker Compose | You want the simplest self-contained install | `compose:*` |
+| Repository-native | You want host processes and already have PostgreSQL | `local:*` |
+| Helm / Kubernetes | You operate a Kubernetes cluster | `helm:*` |
+
+Start every path the same way:
 
 ```bash
 git clone <repo-url> && cd psfn-framework
-export OPENROUTER_API_KEY=sk-or-...   # the single real secret a full turn needs
-npm run smoke:docker                  # exit 0 = deployment done; exit 2 = no key set
+npm ci
+npm run onboard
 ```
 
-This is the ratified "deployment done" bar for newcomers; the definition and
-pass criteria are in [`docs/setup.md`](./docs/setup.md#deployment-done-the-public-on-ramp-definition).
+The onboarding flow asks for the deployment path, provider and models, and
+companion definition. It writes validated owner files and tells you what secret
+must be supplied; it does not require a particular model provider.
 
-For a manual split runtime, provision Postgres and the owner files, then start
-the components in separate terminals:
+Then use the lifecycle for the selected path:
 
 ```bash
-git clone <repo-url> && cd psfn-framework
-npm install
-cp .env.example .env   # secrets and bootstrap wiring only
-# then lay the owner files — see docs/setup.md → First Local Bring-Up
-npm run gateway
-npm run agent
-npm run operator
+# Docker Compose
+npm run compose:up && npm run compose:verify
+
+# Repository-native
+npm run local:up && npm run local:verify
+
+# Kubernetes (set the exact context and a pinned image first)
+PSFN_KUBE_CONTEXT=my-context \
+PSFN_IMAGE=registry.example/psfn:0.1.0 \
+  npm run helm:up
+PSFN_KUBE_CONTEXT=my-context npm run helm:verify
 ```
 
-Configuration lives in canonical JSON owner files, never `.env` sprawl. The
-full bring-up — owner files, embeddings, runtime modes, optional surfaces —
-is [`docs/setup.md`](./docs/setup.md). Generic backup and runtime operations are
-documented in [`docs/operations.md`](./docs/operations.md). Live deployment
-configuration is intentionally external to this public repository.
+`*:up` starts and diagnoses the whole installation. `*:verify` goes further:
+it performs a real provider turn, proves the exact turn reached canonical
+persistent storage, restarts the runtime, and proves the same record and Garden
+remain available. Garden listens on `127.0.0.1:10053` by default.
+
+See [`docs/setup.md`](./docs/setup.md) for prerequisites and first install, and
+[`docs/operations.md`](./docs/operations.md) for update, restart, recovery,
+access, and data-retention behavior. The public chart is in
+[`deploy/helm/psfn/`](./deploy/helm/psfn/); live values, kubeconfigs, addresses,
+and infrastructure inventory remain external to this public repository.
 
 ## Documentation
 
@@ -152,6 +168,9 @@ tools/
   evals/         # offline evaluation, calibration, and model-probe toolkit
 admin-ui/        # Garden operator UI
 companion-ui/    # companion PWA
+docker/
+  compose.yml    # persistent Docker Compose deployment
+deploy/helm/psfn/# generic public Kubernetes chart
 resources/       # public runtime seed resources
 tests/           # cross-package and type-level tests
 ```

@@ -1,117 +1,184 @@
 # Operations
 
-This document covers the runtime interfaces maintained by this repository. It
-does not prescribe an operator's hosts, cluster layout, service names, storage
-mounts, private addresses, or deployment automation. Keep those details in a
-separate private configuration repository.
+This repository owns complete lifecycle commands for three public deployment
+paths. A live installation's addresses, kubeconfig, Helm values, credentials,
+host inventory, and infrastructure automation remain operator-owned and must
+not be committed here.
 
-## Supported entrypoints
+## Lifecycle map
 
-Run components explicitly:
+| Operation | Docker Compose | Repository-native | Helm / Kubernetes |
+| --- | --- | --- | --- |
+| Start/install | `npm run compose:up` | `npm run local:up` | `npm run helm:up` |
+| Inspect | `npm run compose:status` | `npm run local:status` | `npm run helm:status` |
+| Diagnose | `npm run compose:doctor` | `npm run local:doctor` | `npm run helm:doctor` |
+| Full persistence proof | `npm run compose:verify` | `npm run local:verify` | `npm run helm:verify` |
+| Restart | `npm run compose:restart` | `npm run local:restart` | `npm run helm:restart` |
+| Update | `npm run compose:update` | `npm run local:update` | `npm run helm:update` |
+| Logs | `npm run compose:logs` | `npm run local:logs` | `npm run helm:logs` |
+| Stop, preserving data | `npm run compose:down` | `npm run local:down` | `npm run helm:down` |
+
+Run commands from the same checkout and environment used for installation.
+Lifecycle commands validate all required owner files and credentials before
+acting. They do not silently switch providers or deployment paths.
+
+## Access and readiness
+
+The default local endpoints are:
+
+- Garden login: `http://127.0.0.1:10053/login`
+- OpenAI-compatible API: `http://127.0.0.1:10054/v1`
+
+Compose and repository-native installations take the Garden `ADMIN_TOKEN` from
+their ignored `.env`. Kubernetes keeps it in the retained application Secret;
+retrieve it only when needed with `npm run helm:token`.
+
+Helm exposes neither service publicly by default. `helm:up` creates supervised
+loopback port-forwards. If cluster workloads are healthy but a page no longer
+loads after a reboot or shell exit, run:
 
 ```bash
-npm run gateway
-npm run agent
-npm run operator
+PSFN_KUBE_CONTEXT=my-cluster-context npm run helm:connect
 ```
 
-The gateway, agent, and operator may run as separate processes or workloads.
-Deployment tooling is responsible for supplying their environment, owner files,
-credentials, health checks, restart policy, and durable storage.
+`helm:disconnect` stops only those local forwards. It does not stop workloads.
 
-## Runtime roots
+Use `*:doctor` for routine readiness. It checks the supervisor/workloads,
+PostgreSQL, gateway subsystems, agent, Garden health, token login, and the
+authenticated Garden application. Use `*:verify` after first installation or a
+meaningful update: it adds a real provider turn, exact canonical TurnRecord
+proof, a full runtime restart, and post-restart persistence and Garden checks.
 
-Production mode requires non-overlapping system and companion roots:
+## Updates and recovery
+
+### Docker Compose
+
+`compose:update` rebuilds the current checkout and reconciles the persistent
+stack. Compose data roots and the PostgreSQL volume are not replaced. Run
+`compose:verify` after updating.
+
+### Repository-native
+
+`local:update` first verifies the running installation, retains the current
+built runtime as last-good, builds the checkout, and restarts it. A failed
+candidate is retained for diagnosis and the old build is restored
+automatically. `local:recover` explicitly restores the last-good build retained
+by the most recent update.
+
+Owner files, PostgreSQL, sessions, and workspaces are outside the build and are
+not rolled back with code. Use the product's owner revision/audit surfaces when
+configuration itself must be reversed.
+
+### Helm / Kubernetes
+
+Every command requires `PSFN_KUBE_CONTEXT`; there is no current-context
+fallback. For a registry-backed cluster, `PSFN_IMAGE` must contain an exact tag
+or digest. For local k3d, set the matching `PSFN_K3D_CLUSTER` and the lifecycle
+builds and imports an exact source-tagged image.
+
+`helm:update` performs an atomic Helm upgrade and waits for the complete
+release. Helm restores the previous release when readiness fails. Application
+PVCs, the PostgreSQL StatefulSet claim, generated runtime Secrets, and
+persisted owner files carry retention policy and survive failed installs,
+rollbacks, and `helm:down`.
+
+The lifecycle installs the chart's pinned cert-manager version when the cluster
+does not already provide its CRDs/controllers. It never changes kubeconfig or
+creates/selects a cluster.
+
+## Stop and resume
+
+All three `*:down` commands stop compute while retaining runtime data.
+
+- Compose stops and removes its containers and network, retaining named volumes
+  and bind-mounted data.
+- Repository-native stops the detached supervisor and all four host processes.
+- Helm stops local forwards and scales every release Deployment and StatefulSet
+  to zero, retaining PVCs, Secrets, and the Helm release.
+
+Resume with the corresponding `*:up`, then run `*:doctor`. Do not use manual
+volume deletion, `docker compose down --volumes`, or Helm uninstall as ordinary
+stop operations.
+
+## Runtime roots and ownership
+
+Production mode uses non-overlapping roots:
 
 ```text
 PSFN_RUNTIME_ROOT       parent for runtime-managed storage
-SYSTEM_DATA_DIR         system-owned configuration and state
-COMPANION_DATA_DIR      one companion's configuration and state
+SYSTEM_DATA_DIR         system owner files and system state
+COMPANION_DATA_DIR      one companion's owner files and continuity state
 WORKSPACE_PATH          that companion's Personal Workspace
 ```
 
-Set `SYSTEM_DATA_DIR` and `COMPANION_DATA_DIR` together. `WORKSPACE_PATH` must
-not overlap either runtime data root. The process fails closed when production
-roots overlap or are incomplete.
+`SYSTEM_DATA_DIR` and `COMPANION_DATA_DIR` must be set together.
+`WORKSPACE_PATH` must not overlap either one. Startup fails closed when the
+layout is incomplete or overlapping.
 
-Treat these roots as persistent data. Do not bake live owner files, identity
-cards, databases, credentials, sessions, telemetry, or backup payloads into an
-image or this repository.
+Mutable settings are owned by canonical JSON files, including
+`settings.json`, `models.json`, `providers.json`, `scheduler.json`,
+`capability-tier.json`, `channels.json`, `skills.json`, `trust-policy.json`,
+`intake-policy.json`, `charge-policy.json`, and `backup.json`. Environment
+variables own secrets and process/host wiring, not ordinary settings.
 
-## Configuration ownership
-
-Use environment variables for secrets and process wiring. Mutable settings are
-owned by JSON files under the configured data roots, including:
-
-- `settings.json`
-- `models.json`
-- `providers.json`
-- `scheduler.json`
-- `capability-tier.json`
-- `channels.json`
-- `skills.json`
-- `trust-policy.json`
-- `intake-policy.json`
-- `charge-policy.json`
-- `backup.json`
-
-Before promoting configuration changes, run:
-
-```bash
-npm run verify:settings-contract
-npm run build
-```
-
-Examples in `.env.example` are bootstrap documentation only. They are not a
-source of truth for a live installation.
+The Helm lifecycle stages the onboarding copies in a ConfigMap, then init
+containers copy only files absent from persistent storage. An upgrade therefore
+does not overwrite configuration changed through Garden.
 
 ## Credentials
 
-Prefer file- or descriptor-backed credentials where the runtime supports them.
-Give each process only the credentials it needs, keep credential files outside
-the source tree, and restrict filesystem permissions at creation time. Never
-commit populated environment files, Kubernetes Secrets, kubeconfigs, TLS private
-keys, database URLs, provider tokens, or generated identity material.
+Never commit populated `.env` files, credential files, Kubernetes Secrets,
+kubeconfigs, private keys, database URLs, tokens, or identity material.
 
-## Health and logs
-
-Supervise each component independently. Capture stdout/stderr in the deployment
-platform and retain enough history to diagnose startup failure and request
-correlation. A supervisor should use the component's documented health surface,
-not the presence of a process name, as its readiness signal.
-
-When startup fails, verify in this order:
-
-1. runtime-root separation and write permissions;
-2. required owner files and their schema versions;
-3. credential-file presence and permissions;
-4. database connectivity and migration authority;
-5. gateway transport and companion authentication wiring;
-6. provider and channel configuration.
+Compose and repository-native onboarding keep secrets in the ignored `.env`.
+The Helm lifecycle reads the selected provider variable from the process
+environment, creates or updates Kubernetes Secrets without passing values on
+the Helm command line, and reuses previously generated runtime/database
+credentials. Secret values are not printed by status, doctor, or verify.
 
 ## Backups
 
-Backup behavior is configured through `backup.json` and `BACKUP_ROOT_DIR`.
-Operators are responsible for mounting durable backup storage and supplying the
-encryption key through a secret channel. A configured backup lane must be able to
-write its root or startup fails.
+Backup behavior is governed by `backup.json`, `BACKUP_ROOT_DIR`, and an
+encryption key supplied through the deployment's secret channel. The backup
+root must be durable and writable or startup fails.
 
-Validate backup and restore behavior before relying on it:
+Before depending on a backup lane, validate the generic backup/restore contract:
 
 ```bash
 npm run verify:backup-restore
 ```
 
-Store restore procedures, retention policy, storage endpoints, and any
-deployment-specific recovery artifacts in the private deployment repository.
+A real recovery rehearsal must restore into an isolated target and prove owner
+fingerprints, PostgreSQL state, sessions, workspace content, and post-restore
+startup. Keep retention rules, storage endpoints, and recovery evidence in the
+operator's external configuration authority.
 
-## Deployment boundary
+## Diagnosis order
 
-This repository intentionally does not track live Helm values, rendered
-manifests, cluster scripts, system service units, host inventories, hardware
-profiles, or operator-specific CI. A deployment repository may consume the
-published application images and invoke the entrypoints above. The application
-repository must remain publishable without exposing that deployment repository.
+When `*:doctor` fails, inspect in this order:
 
-Use reserved documentation addresses and placeholder hostnames in public tests
-and examples. Keep real operational evidence outside this checkout.
+1. the lifecycle's status output and component/workload logs;
+2. persistent-root separation, volume attachment, ownership, and free space;
+3. required owner files and settings-contract versions;
+4. PostgreSQL/pgvector readiness and migration-role access;
+5. gateway-to-agent transport and role-bound authentication;
+6. model-prefetch completion and provider authentication/quota/model access;
+7. Garden loopback forwarding for Helm.
+
+Do not weaken policy or add a second configuration path to make a failed health
+check green. Repair the owning file, credential, volume, or workload and rerun
+the same lifecycle command.
+
+## Public/private deployment boundary
+
+The generic, public deployment authorities are:
+
+- `scripts/compose-lifecycle.ts` with `docker/compose.yml`;
+- `scripts/local-lifecycle.ts` with the runtime entrypoints; and
+- `scripts/helm-lifecycle.ts` with `deploy/helm/psfn`.
+
+There are no parallel Kustomize, proxy, or deployment trees. Private operators
+may wrap these public lifecycles, but their values, overlays, service names,
+addresses, cluster definitions, credentials, and run evidence stay outside the
+application repository. The public source never identifies or infers a live
+deployment.

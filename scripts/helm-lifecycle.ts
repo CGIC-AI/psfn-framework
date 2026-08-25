@@ -189,6 +189,20 @@ export function parsePinnedImageReference(raw: string): ImageReference {
   return { repository, tag, full };
 }
 
+export function resolveDeploymentImageReference(
+  env: NodeJS.ProcessEnv,
+  head: string,
+): ImageReference {
+  const configured = env.PSFN_IMAGE?.trim();
+  if (configured) return parsePinnedImageReference(configured);
+  const localBuild = env.PSFN_HELM_LOCAL_BUILD?.trim() === '1'
+    || Boolean(env.PSFN_K3D_CLUSTER?.trim());
+  if (!localBuild) {
+    fail('PSFN_IMAGE is required unless PSFN_K3D_CLUSTER or PSFN_HELM_LOCAL_BUILD=1 selects a local image build.');
+  }
+  return parsePinnedImageReference(`psfn-framework:s11-${head.slice(0, 12)}`);
+}
+
 export function resolveSingleCompanionOwnerContract(
   systemDataDir: string,
 ): { companionId: string; providerEnvName: string } {
@@ -253,8 +267,7 @@ export function loadHelmContext(): HelmContext {
     fail(`Export ${owners.providerEnvName} before helm:up; provider credentials never enter Helm values.`);
   }
   const head = gitHead();
-  const defaultImage = `psfn-framework:s11-${head.slice(0, 12)}`;
-  const image = parsePinnedImageReference(env.PSFN_IMAGE?.trim() || defaultImage);
+  const image = resolveDeploymentImageReference(env, head);
   const apiPort = positivePort(env.PSFN_API_PORT, 10054, 'PSFN_API_PORT');
   const gardenPort = positivePort(env.PSFN_GARDEN_PORT, 10053, 'PSFN_GARDEN_PORT');
   const identity = createHash('sha256')

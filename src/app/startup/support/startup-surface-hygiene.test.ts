@@ -48,9 +48,12 @@ describe('startup surface hygiene', () => {
     expect(Object.keys(scripts)).not.toContain('single');
     expect(Object.keys(scripts)).not.toContain('runtime');
 
-    expect(readme).toContain('npm run gateway');
-    expect(readme).toContain('npm run agent');
-    expect(readme).toContain('npm run operator');
+    // The raw split entrypoints remain available to lifecycle supervisors, but
+    // the public README hands operators to the three complete deployment paths.
+    expect(readme).toContain('npm run compose:up && npm run compose:verify');
+    expect(readme).toContain('npm run local:up && npm run local:verify');
+    expect(readme).toContain('npm run helm:up');
+    expect(readme).toContain('npm run helm:verify');
     expect(specifications).toContain('split gateway + agent');
     expect(specifications).toContain('`src/app/startup/index.ts` is disabled');
     expect(architecture).toContain('`src/app/startup/index.ts` is disabled');

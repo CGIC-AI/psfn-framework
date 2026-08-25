@@ -346,15 +346,12 @@ path stays outside every runtime root that the observer isolation guard rejects.
 {{- end -}}
 
 {{- define "psfn.sharedWorkspaceVolumeMount" -}}
-{{- if .Values.fleet.enabled }}
 - name: runtime
   mountPath: {{ printf "%s/workspaces/shared" .Values.fleet.runtimeRoot }}
   subPath: workspaces-shared
-{{- end }}
 {{- end -}}
 
 {{- define "psfn.sharedWorkspaceBootstrapInitContainer" -}}
-{{- if .Values.fleet.enabled }}
 - name: bootstrap-shared-workspace
   image: {{ include "psfn.image" (dict "root" . "image" .Values.workloads.agent.image) | quote }}
   imagePullPolicy: {{ .Values.psfnAppImage.pullPolicy }}
@@ -370,7 +367,6 @@ path stays outside every runtime root that the observer isolation guard rejects.
     - name: runtime
       mountPath: /bootstrap/runtime
       readOnly: false
-{{- end }}
 {{- end -}}
 
 {{- define "psfn.helmBackupImageEnv" -}}

@@ -947,7 +947,7 @@ describe('ICP certification real process harness', () => {
       autonomyEnabled: false,
       topology: 'single_companion',
     });
-    singleProcess = await startIcpSingleCompanionFeatureOffHarness({ fixture });
+    singleProcess = await startIcpSingleCompanionFeatureOffHarness({ databaseUrl, fixture });
 
     await expect(singleProcess.agent.ready()).resolves.toMatchObject({
       companionId: CERTIFICATION_COMPANION_A,

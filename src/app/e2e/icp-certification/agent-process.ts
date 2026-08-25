@@ -399,7 +399,7 @@ async function main(): Promise<void> {
       placesRegistry: startup.placesRegistryConfig,
     });
   }
-  const projectionStore = candidateStore
+  const projectionStore = candidateStore && startup.config.multiCompanion === true
     ? await PostgresIcpAdminProjectionStore.connect(databaseUrl, {
         localCompanionId: companionId,
         knownCompanionIds: startup.config.companionFleet?.companions.map(entry => entry.companionId)

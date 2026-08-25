@@ -562,6 +562,15 @@ async function provisionCertificationTenantBoundaries(
   }
 }
 
+/** Establish the production-shaped shared and per-companion database boundaries for a fixture. */
+export async function provisionIcpCertificationDatabase(
+  databaseUrl: string,
+  fixture: IcpCertificationFixture,
+): Promise<void> {
+  await bootstrapSharedSchema(databaseUrl);
+  await provisionCertificationTenantBoundaries(databaseUrl, fixture);
+}
+
 export async function startIcpCertificationProcessHarness(input: {
   databaseUrl: string;
   fixture: IcpCertificationFixture;
@@ -576,8 +585,7 @@ export async function startIcpCertificationProcessHarness(input: {
   // This hand-composed harness stands in for the production gateway migration
   // authority. Establish both the shared and companion schemas before loading
   // the primary agent credential used by the canonical model-usage owner.
-  await bootstrapSharedSchema(input.databaseUrl);
-  await provisionCertificationTenantBoundaries(input.databaseUrl, input.fixture);
+  await provisionIcpCertificationDatabase(input.databaseUrl, input.fixture);
   const config = hydrateJsonBackedRuntimeConfig(
     loadAgentConfig(input.fixture.companions[0].env),
     { seedDir: input.fixture.companions[0].env.CONFIG_DIR },
@@ -912,11 +920,13 @@ export async function startIcpCertificationProcessHarness(input: {
 }
 
 export async function startIcpSingleCompanionFeatureOffHarness(input: {
+  databaseUrl: string;
   fixture: IcpCertificationFixture;
 }): Promise<IcpSingleCompanionFeatureOffHarness> {
   if (input.fixture.topology !== 'single_companion') {
     throw new Error('Single-companion certification requires a single-companion fixture');
   }
+  await provisionIcpCertificationDatabase(input.databaseUrl, input.fixture);
   const modelServer = await startIcpCertificationModelServer();
   const artifacts = new IcpCertificationArtifactRecorder(input.fixture.artifactsPath);
   configureIcpCertificationModelEndpoint(input.fixture, modelServer.baseUrl);

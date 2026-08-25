@@ -536,10 +536,9 @@ export function createIcpCertificationFixture(input: {
   ] as const;
   const topology = input.topology ?? 'multi_companion';
   if (topology === 'single_companion') {
-    delete companions[0].env.COMPANION_PG_SCHEMA;
     // Single-companion topology is a one-entry fleet: the manifest is still
-    // mandatory, but a lone entry makes multiCompanion derive false (behavior
-    // identical to the old single-companion topology).
+    // mandatory, and the process remains bound to the entry's complete
+    // persistence tuple even though multiCompanion derives false.
     writeJson(join(systemDataDir, 'companions.json'), {
       postgres: supportContract.postgres,
       companions: [supportContract.companions[0]],

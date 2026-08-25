@@ -105,7 +105,7 @@ describe('idle-purity real quiet-runtime certification', () => {
       autonomyEnabled: true,
       topology: 'single_companion',
     });
-    processHarness = await startIdlePurityRuntimeHarness({ fixture });
+    processHarness = await startIdlePurityRuntimeHarness({ databaseUrl, fixture });
     await expect(processHarness.schedulerTaskIds()).resolves.toEqual(
       expect.arrayContaining(CERTIFIED_AUTOMATA_TASK_IDS),
     );

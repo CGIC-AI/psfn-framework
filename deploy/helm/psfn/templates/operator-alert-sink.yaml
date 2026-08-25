@@ -1,0 +1,78 @@
+{{- if .Values.operatorAlertSink.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "psfn.fullname" . }}-operator-alert-sink
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: http-alerts
+      port: {{ .Values.operatorAlertSink.port }}
+      targetPort: http-alerts
+  selector:
+    {{- include "psfn.componentLabels" (dict "root" . "component" "operator-alert-sink") | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "psfn.fullname" . }}-operator-alert-sink
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "psfn.componentLabels" (dict "root" . "component" "operator-alert-sink") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "psfn.componentLabels" (dict "root" . "component" "operator-alert-sink") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "psfn.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: operator-alert-sink
+          image: {{ include "psfn.image" (dict "root" . "image" .Values.workloads.gateway.image) | quote }}
+          imagePullPolicy: {{ default .Values.psfnAppImage.pullPolicy .Values.workloads.gateway.image.pullPolicy }}
+          command:
+            - node
+            - /app/scripts/ops/psfn-compose-smoke-operator-alert-sink.mjs
+          securityContext:
+            {{- include "psfn.appReadOnlySecurityContext" . | nindent 12 }}
+          env:
+            - name: PSFN_SMOKE_OPERATOR_ALERT_HOST
+              value: 0.0.0.0
+            - name: PSFN_SMOKE_OPERATOR_ALERT_PORT
+              value: {{ .Values.operatorAlertSink.port | quote }}
+            - name: PSFN_SMOKE_OPERATOR_ALERT_TOPIC
+              value: {{ .Values.operatorAlertSink.topic | quote }}
+          ports:
+            - name: http-alerts
+              containerPort: {{ .Values.operatorAlertSink.port }}
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http-alerts
+            initialDelaySeconds: 1
+            periodSeconds: 3
+            timeoutSeconds: 2
+            failureThreshold: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http-alerts
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+{{- end }}

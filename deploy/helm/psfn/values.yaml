@@ -358,14 +358,22 @@ beads:
   toolsEnabled: null
   allowActions: []
 
-# ntfy push-notification wiring for the gateway's operator notifier (bead ge7g).
+# The public lifecycle includes a private, in-cluster alert sink so CogSec never
+# starts without an operator-alert route. It acknowledges and discards alerts;
+# operators who want delivery can disable it and configure ntfy below.
+operatorAlertSink:
+  enabled: true
+  port: 3000
+  topic: local-operator-alerts
+
+# External ntfy push-notification wiring for the operator notifier (bead ge7g).
 # The host watchdog uses a separate CONTINUITY_WATCHDOG_* namespace; these are
 # the gateway process's own NTFY_BASE_URL/NTFY_TOPIC (the auth token, when the
 # topic is protected, is supplied through secrets.values.ntfyToken -> NTFY_TOKEN).
 # The gateway advertises the notify tool as configured only when BOTH baseUrl
 # and topic are set; leave them empty to keep ntfy off, in which case a notify
 # call fails closed with a clear "ntfy is not configured" message rather than
-# crashing. This restores the config that was dropped in the k3s cutover.
+# crashing. These values are used only when operatorAlertSink.enabled=false.
 ntfy:
   baseUrl: ""
   topic: ""

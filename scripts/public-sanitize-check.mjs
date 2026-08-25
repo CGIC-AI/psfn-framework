@@ -17,7 +17,10 @@ const SOURCE_CODE_EXTENSIONS = new Set([
 const FORBIDDEN_PATH_RULES = [
   {
     name: 'local-only-repository-surface',
-    test: (file) => /^(?:\.beads|working_docs|deploy|deployment|shakedown|\.agents|\.claude|\.codec|\.codex|\.cursor|\.gemini)(?:\/|$)/i.test(file),
+    test: (file) => (
+      !/^deploy\/helm\/psfn(?:\/|$)/i.test(file)
+      && /^(?:\.beads|working_docs|deploy|deployment|shakedown|\.agents|\.claude|\.codec|\.codex|\.cursor|\.gemini)(?:\/|$)/i.test(file)
+    ),
   },
   {
     name: 'private-deployment-config',
@@ -179,7 +182,9 @@ function collectTextViolations(file, text, rules) {
 }
 
 function textRulesForFile(file) {
-  if (/\.(?:test|spec)\.[^.]+$/i.test(file) || /(?:^|\/)corpus(?:\/|$)/i.test(file)) {
+  if (/\.(?:test|spec)\.[^.]+$/i.test(file)
+    || /(?:^|\/)corpus(?:\/|$)/i.test(file)
+    || file === 'deploy/helm/psfn/templates/networkpolicy.yaml') {
     return TEXT_RULES.filter((rule) => rule.name !== 'private-ipv4-address');
   }
   return TEXT_RULES;

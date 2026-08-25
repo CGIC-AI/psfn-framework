@@ -656,8 +656,12 @@ async function doctor(context: HelmContext): Promise<void> {
   const releaseStatus = record(record(JSON.parse(status.stdout) as unknown)?.info)?.status;
   if (releaseStatus !== 'deployed') fail(`Helm release status is ${String(releaseStatus)}, not deployed.`);
   const workloads = kubectl(context, [
-    'get', 'deployment,statefulset',
-    '-l', `app.kubernetes.io/instance=${context.release}`,
+    'get',
+    `deployment/${context.release}-gateway`,
+    `deployment/${context.release}-agent`,
+    `deployment/${context.release}-garden`,
+    `deployment/${context.release}-operator-alert-sink`,
+    `statefulset/${context.release}-postgres`,
     '-o', 'json',
   ], { capture: true });
   const items = record(JSON.parse(workloads.stdout) as unknown)?.items;
@@ -666,9 +670,9 @@ async function doctor(context: HelmContext): Promise<void> {
   for (const item of items) {
     const object = record(item);
     const metadata = record(object?.metadata);
-    const labels = record(metadata?.labels);
-    const component = typeof labels?.['app.kubernetes.io/component'] === 'string'
-      ? labels['app.kubernetes.io/component']
+    const name = typeof metadata?.name === 'string' ? metadata.name : '';
+    const component = name.startsWith(`${context.release}-`)
+      ? name.slice(context.release.length + 1)
       : '';
     if (!expected.has(component)) continue;
     const spec = record(object?.spec);

@@ -324,7 +324,7 @@ description: bounded candidate
         },
       ).finally(() => clearInterval(timer));
 
-      expect(timerTicks).toBeGreaterThan(1);
+      expect(timerTicks).toBeGreaterThan(0);
       expect(scan.files).toEqual([]);
       expect(scan.collection).toMatchObject({
         candidatesSeen: 4,

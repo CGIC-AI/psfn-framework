@@ -1829,6 +1829,54 @@
       "contains": "psfn-compose-smoke-seed.sh",
       "reason": "Repository file path in the terminology scanner's exemption list; the product slug appears as part of a filename, not as a companion identity literal.",
       "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "scripts/compose-lifecycle.ts",
+      "contains": "psfn",
+      "reason": "Persistent Compose lifecycle uses the product slug only for deployment-scoped service, image, database, and diagnostic identifiers.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "scripts/compose-verification.ts",
+      "contains": "PSFN",
+      "reason": "Deployment verification request text names the framework under test and does not define a companion identity.",
+      "pattern": "identity-proper-name"
+    },
+    {
+      "path": "scripts/helm-lifecycle.ts",
+      "contains": "psfn",
+      "reason": "Public Helm lifecycle uses the product slug only for chart, release, namespace, image, database, and temporary connection identifiers.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "scripts/helm-lifecycle.ts",
+      "contains": "PSFN",
+      "reason": "Deployment verification request text names the framework under test and does not define a companion identity.",
+      "pattern": "identity-proper-name"
+    },
+    {
+      "path": "scripts/local-lifecycle.ts",
+      "contains": "psfn",
+      "reason": "Repository-native lifecycle uses the product slug only for supervised process, database, and temporary release identifiers.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "scripts/onboarding/flow.ts",
+      "contains": "psfn",
+      "reason": "Onboarding uses the product slug in generated local database names and deployment-scoped credential defaults, never as companion identity.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "scripts/ops/psfn-compose-bootstrap.mjs",
+      "contains": "psfn",
+      "reason": "Compose bootstrap uses the product slug only for database roles, schemas, and operational connection labels.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "scripts/public-sanitize-check.mjs",
+      "contains": "psfn",
+      "reason": "Public sanitizer allow rules name the repository's generic Helm chart path and project-scoped network-policy file.",
+      "pattern": "identity-legacy-slug"
     }
   ]
 }

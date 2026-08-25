@@ -582,7 +582,15 @@ function stopConnection(context: HelmContext): void {
 async function startConnection(context: HelmContext): Promise<void> {
   const existing = readConnection(context);
   if (existing && isProcessAlive(existing.apiPid) && isProcessAlive(existing.gardenPid)
-    && existing.apiPort === context.apiPort && existing.gardenPort === context.gardenPort) return;
+    && existing.apiPort === context.apiPort && existing.gardenPort === context.gardenPort) {
+    try {
+      const [api, garden] = await Promise.all([
+        fetch(`${context.apiBase}/health`, { signal: AbortSignal.timeout(2_000) }),
+        fetch(`${context.gardenBase}/health`, { signal: AbortSignal.timeout(2_000) }),
+      ]);
+      if (api.status < 500 && garden.ok) return;
+    } catch { /* stale port-forward after a workload restart */ }
+  }
   stopConnection(context);
   await assertPortAvailable(context.apiPort, 'Gateway');
   await assertPortAvailable(context.gardenPort, 'Garden');

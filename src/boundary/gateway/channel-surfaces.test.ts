@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { fromAny } from '@total-typescript/shoehorn';
 import {
   resolveDiscordPrimaryUsers,
+  resolveChannelSurfaceCompanionId,
   resolveChannelIntakeScreening,
   wireGatewayChannelMessages,
   type WireGatewayChannelMessagesInput,
@@ -280,5 +281,49 @@ describe('gateway channel intake ownership', () => {
       singleton: null,
       forCompanion: () => null,
     }, companion, 'discord')).toThrow(/mode=strict has no matching service/u);
+  });
+});
+
+describe('gateway channel surface routing', () => {
+  const soleCompanion = createCompanionId('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
+  const secondCompanion = createCompanionId('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb');
+
+  it('uses the manifest identity for an unannotated one-companion fleet surface', () => {
+    expect(resolveChannelSurfaceCompanionId({
+      fleetRoutingEnabled: true,
+      companionFleet: fromAny({
+        companions: [{ companionId: soleCompanion }],
+      }),
+      explicitCompanionId: undefined,
+      surface: 'discord',
+    })).toBe(soleCompanion);
+  });
+
+  it('keeps an explicit surface route authoritative', () => {
+    expect(resolveChannelSurfaceCompanionId({
+      fleetRoutingEnabled: true,
+      companionFleet: fromAny({
+        companions: [
+          { companionId: soleCompanion },
+          { companionId: secondCompanion },
+        ],
+      }),
+      explicitCompanionId: secondCompanion,
+      surface: 'telegram',
+    })).toBe(secondCompanion);
+  });
+
+  it('fails closed when an unannotated surface has more than one fleet candidate', () => {
+    expect(() => resolveChannelSurfaceCompanionId({
+      fleetRoutingEnabled: true,
+      companionFleet: fromAny({
+        companions: [
+          { companionId: soleCompanion },
+          { companionId: secondCompanion },
+        ],
+      }),
+      explicitCompanionId: undefined,
+      surface: 'discord',
+    })).toThrow('Multi-companion discord surface is missing companionId routing');
   });
 });

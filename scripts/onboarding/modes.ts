@@ -17,8 +17,8 @@ export interface InstallModeInfo {
 export const INSTALL_MODES: Record<InstallMode, InstallModeInfo> = {
   compose: {
     mode: 'compose',
-    label: 'Docker Compose (guided, ends at the smoke lane)',
-    hint: 'Most guidance. Boots the split runtime via docker/docker-compose.smoke.yml.',
+    label: 'Docker Compose (persistent supported install)',
+    hint: 'Runs Postgres, gateway, agent, and Garden with persistent data and safe lifecycle commands.',
     defaultRoots: {
       systemDataDir: './data/system-data',
       companionDataDir: './data/companion-data',
@@ -57,17 +57,17 @@ export function modeGuidance(mode: InstallMode, provider: { apiKeyEnvName: strin
       return [
         'Docker Compose next steps:',
         `  1. Your provider key was written to .env as ${provider.apiKeyEnvName}.`,
-        '  2. Bring up the split stack and drive one chat turn:',
+        '  2. Start the persistent split stack:',
         '',
-        '       npm run smoke:docker',
+        '       npm run compose:up',
         '',
-        '     Exit 0 = a full provider-backed turn; exit 2 = the stack is healthy but',
-        '     the provider egress was not reached (e.g. an unset/incorrect key).',
+        '  3. Open the Garden login page shown by compose:up, then use the ADMIN_TOKEN',
+        '     stored in .env. Check the complete runtime at any time with:',
         '',
-        '  Note: the compose smoke stack seeds owner files INSIDE its containers from',
-        '  the image\'s baked config/*.seed.json and reads OPENROUTER_API_KEY from your',
-        '  .env. The owner files generated here on the host capture your chosen',
-        '  provider/model for local dev or a custom (non-smoke) compose run.',
+        '       npm run compose:doctor',
+        '',
+        '  Updates rebuild the image while retaining owner files, workspace, memories,',
+        '  and Postgres data. npm run compose:down also preserves all data.',
       ];
     case 'local':
       return [

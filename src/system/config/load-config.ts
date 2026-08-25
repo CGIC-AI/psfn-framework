@@ -379,27 +379,24 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
     seedDir: parseOptionalStringEnv(env.CONFIG_DIR),
   });
   const multiCompanion = rawCompanionFleet.companions.length > 1;
-  const usesFleetControlPlane = mode === 'operator'
-    || multiCompanion
-    || fleetAuthProjection !== undefined;
-  const companionId = mode === 'operator' && usesFleetControlPlane
-    ? undefined
-    : requireCompanionId(env);
+  const companionId = mode === 'operator' ? undefined : requireCompanionId(env);
   const configuredCompanionDataDir = runtimePathLayout.companionDataDir;
   const configuredCharacterCardPath = env.CHARACTER_CARD_PATH
     ?? `${configuredCompanionDataDir}/${DEFAULT_COMPANION_CARD_FILE_NAME}`;
   const configuredPostgresSchema = parsePostgresSchemaEnv(env.COMPANION_PG_SCHEMA);
 
-  const companionFleet = usesFleetControlPlane
-    ? resolveCompanionFleetPaths(rawCompanionFleet, runtimePathLayout.runtimeRootDir, [
+  const companionFleet = resolveCompanionFleetPaths(
+    rawCompanionFleet,
+    runtimePathLayout.runtimeRootDir,
+    [
       { label: 'systemDataDir', path: runtimePathLayout.systemDataDir },
       { label: 'companionDataDir', path: runtimePathLayout.companionDataDir },
       { label: 'logsDir', path: runtimePathLayout.logsDir },
       { label: 'tempDir', path: runtimePathLayout.tempDir },
       { label: 'backupsDir', path: runtimePathLayout.backupsDir },
-    ])
-    : undefined;
-  const companionRuntimeIdentity = companionFleet && companionId
+    ],
+  );
+  const companionRuntimeIdentity = companionId
     ? resolveCompanionRuntimeIdentity({
       fleet: companionFleet,
       companionId,
@@ -423,7 +420,7 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
       `${GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN_ENV} is required for the isolated session-integrity role`,
     );
   }
-  if (usesFleetControlPlane && mode === 'agent' && !gatewayCompanionAuthToken) {
+  if (mode === 'agent' && !gatewayCompanionAuthToken) {
     throw new Error(
       `${GATEWAY_COMPANION_AUTH_TOKEN_ENV} is required for fleet agent authentication`,
     );
@@ -449,7 +446,7 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
 
   return {
     multiCompanion,
-    ...(companionFleet ? { companionFleet } : {}),
+    companionFleet,
     ...(companionRuntimeIdentity ? { companionRuntimeIdentity } : {}),
     primaryModel,
     primaryProvider,
@@ -469,13 +466,13 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
     ...(gatewaySessionIntegrityAuthToken ? { gatewaySessionIntegrityAuthToken } : {}),
     systemDataDir: runtimePathLayout.systemDataDir,
     companionDataDir,
-    ...(mode === 'operator' && companionFleet
+    ...(mode === 'operator'
       ? {}
       : {
           workspacePath:
             companionRuntimeIdentity?.personalWorkspacePath ?? runtimePathLayout.workspacePath,
         }),
-    ...(companionFleet ? { sharedWorkspacePath: companionFleet.sharedWorkspacePath } : {}),
+    sharedWorkspacePath: companionFleet.sharedWorkspacePath,
     dataDir,
     databasePath,
     persistenceBackend,

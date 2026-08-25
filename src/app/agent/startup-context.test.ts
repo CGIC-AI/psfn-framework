@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
 import { saveModelsConfig } from '../../system/config/models-config.js';
 import { saveProvidersConfig } from '../../system/config/providers-config.js';
+import { PER_COMPANION_OWNER_FILES } from '../../system/config/settings-contract.js';
 import { prepareAgentStartupContext } from './startup-context.js';
 
 const ORIGINAL_ENV = { ...process.env };
@@ -36,9 +37,16 @@ afterEach(() => {
   }
 });
 
-function copyOwnerExample(systemDataDir: string, ownerFile: typeof REQUIRED_OWNER_EXAMPLES[number]): void {
+function copyOwnerExample(
+  systemDataDir: string,
+  companionDataDir: string,
+  ownerFile: typeof REQUIRED_OWNER_EXAMPLES[number],
+): void {
+  const ownerDir = PER_COMPANION_OWNER_FILES.has(ownerFile)
+    ? companionDataDir
+    : systemDataDir;
   writeFileSync(
-    join(systemDataDir, ownerFile),
+    join(ownerDir, ownerFile),
     readFileSync(join(process.cwd(), 'config', ownerFile.replace(/\.json$/, '.seed.json')), 'utf8'),
     'utf-8',
   );
@@ -49,13 +57,14 @@ describe('prepareAgentStartupContext', () => {
     const rootDir = mkdtempSync(join(tmpdir(), 'psfn-agent-startup-context-'));
     TEMP_DIRS.push(rootDir);
     const systemDataDir = join(rootDir, 'system-data');
-    const companionDataDir = join(rootDir, 'companion-data');
-    const workspaceDir = join(rootDir, 'workspace');
+    const companionDataDir = join(rootDir, 'companions', 'main');
+    const companionId = '11111111-1111-4111-8111-111111111111';
+    const workspaceDir = join(rootDir, 'workspaces', 'personal', companionId);
     mkdirSync(systemDataDir, { recursive: true });
     mkdirSync(companionDataDir, { recursive: true });
     mkdirSync(workspaceDir, { recursive: true });
     for (const ownerFile of REQUIRED_OWNER_EXAMPLES) {
-      copyOwnerExample(systemDataDir, ownerFile);
+      copyOwnerExample(systemDataDir, companionDataDir, ownerFile);
     }
     // The companions.json fleet manifest is mandatory. A one-entry manifest is
     // the single-companion topology (multiCompanion=false).
@@ -65,11 +74,11 @@ describe('prepareAgentStartupContext', () => {
         sharedMigrationDatabaseUrlRef: { kind: 'env', envName: 'SHARED_MIGRATION_URL' },
       },
       companions: [{
-        companionId: '11111111-1111-4111-8111-111111111111',
-        companionDataDir: 'companion',
-        characterCardPath: 'companion/companion.json',
-        postgresSchema: 'public',
-        postgresRole: 'single_companion_runtime',
+        companionId,
+        companionDataDir: 'companions/main',
+        characterCardPath: 'companions/main/companion.json',
+        postgresSchema: 'companion_main',
+        postgresRole: 'companion_main_runtime',
         postgresDatabaseUrlRef: { kind: 'env', envName: 'SINGLE_COMPANION_DATABASE_URL' },
       }],
     })}\n`, 'utf8');
@@ -188,12 +197,16 @@ describe('prepareAgentStartupContext', () => {
       ],
     });
 
-    process.env.DATA_DIR = systemDataDir;
-    delete process.env.SYSTEM_DATA_DIR;
-    delete process.env.COMPANION_DATA_DIR;
+    delete process.env.DATA_DIR;
+    process.env.PSFN_RUNTIME_LAYOUT_MODE = 'production';
+    process.env.PSFN_RUNTIME_ROOT = rootDir;
+    process.env.SYSTEM_DATA_DIR = systemDataDir;
+    process.env.COMPANION_DATA_DIR = companionDataDir;
     process.env.WORKSPACE_PATH = workspaceDir;
-    process.env.CHARACTER_CARD_PATH = join(systemDataDir, 'companion.json');
-    process.env.COMPANION_ID = '11111111-1111-4111-8111-111111111111';
+    process.env.CHARACTER_CARD_PATH = join(companionDataDir, 'companion.json');
+    process.env.COMPANION_ID = companionId;
+    process.env.COMPANION_PG_SCHEMA = 'companion_main';
+    process.env.ADMIN_TRANSPORT_SOCKET = join(rootDir, 'run', `garden-admin-${companionId}.sock`);
     const postgresCredentialPath = join(rootDir, 'postgres-database-url');
     writeFileSync(
       postgresCredentialPath,
@@ -202,6 +215,7 @@ describe('prepareAgentStartupContext', () => {
     );
     delete process.env.POSTGRES_DATABASE_URL;
     process.env.POSTGRES_DATABASE_URL_FILE = postgresCredentialPath;
+    process.env.GATEWAY_COMPANION_AUTH_TOKEN = 'test-companion-proof';
     process.env.GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN = 'v1.worker-proof';
     process.env.SHARED_ROUTER_API_KEY = 'test-shared-router-key';
     process.env.OPENROUTER_API_KEY = 'test-openrouter-key';

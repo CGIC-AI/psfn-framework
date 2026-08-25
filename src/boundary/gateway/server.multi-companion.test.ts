@@ -634,14 +634,18 @@ describe('resolveGatewayMultiCompanionConfig', () => {
       .toThrow(/non-empty resolved companions\.json fleet/);
   });
 
-  it('enables fleet-bound routing for a Fleet Auth roster with one entry', () => {
+  it('enables fleet-bound routing for a one-entry roster without requiring Fleet Auth', () => {
     expect(resolveGatewayMultiCompanionConfig({
       multiCompanion: false,
-      fleetAuth: {} as never,
       companionFleet: resolvedFleet(['11111111-1111-4111-8111-111111111111']),
     }, baseChannels(), EMPTY_SATELLITE_REGISTRY)).toMatchObject({
       enabled: true,
       fleetCompanionIds: ['11111111-1111-4111-8111-111111111111'],
+      channelRouting: {
+        api: '11111111-1111-4111-8111-111111111111',
+        discord: '11111111-1111-4111-8111-111111111111',
+        telegram: '11111111-1111-4111-8111-111111111111',
+      },
       personalWorkspaceByCompanionId: {
         '11111111-1111-4111-8111-111111111111':
           '/runtime/workspaces/personal/11111111-1111-4111-8111-111111111111',

@@ -11,6 +11,8 @@ export interface EnvEntry {
   value: string;
   /** Optional comment written directly above a newly-added key. */
   comment?: string;
+  /** Do not rotate an already-present value when merging. */
+  preserveExisting?: boolean;
 }
 
 const ENV_LINE = /^\s*([A-Z][A-Z0-9_]*)\s*=/u;
@@ -31,6 +33,7 @@ export function mergeEnvContent(currentText: string, entries: readonly EnvEntry[
     const entry = remaining.get(key);
     if (!entry) return line;
     remaining.delete(key);
+    if (entry.preserveExisting) return line;
     return `${key}=${serializeValue(entry.value)}`;
   });
 

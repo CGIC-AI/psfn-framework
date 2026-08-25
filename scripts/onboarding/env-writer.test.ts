@@ -36,6 +36,16 @@ describe('mergeEnvContent', () => {
     const next = mergeEnvContent('', [{ envName: 'K', value: 'v' }]);
     expect(next).toBe('K=v\n');
   });
+
+  it('preserves an existing persistent credential instead of rotating it', () => {
+    const next = mergeEnvContent('API_KEY=existing-secret\n', [{
+      envName: 'API_KEY',
+      value: 'new-random-value',
+      preserveExisting: true,
+    }]);
+    expect(next).toContain('API_KEY=existing-secret');
+    expect(next).not.toContain('new-random-value');
+  });
 });
 
 describe('commitEnv', () => {

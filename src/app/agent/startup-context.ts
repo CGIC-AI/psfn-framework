@@ -96,7 +96,7 @@ export function prepareAgentStartupContext(input: {
   log: AgentStartupLogger;
 }): AgentStartupContext {
   const config = loadAgentConfig(input.env);
-  if (config.multiCompanion === true) {
+  if (config.companionFleet) {
     assertCompanionAdminTransportIsolation(config.companionId ?? '', input.env);
   }
   const {

@@ -71,8 +71,25 @@ function exactTenantConfig(overrides: Record<string, unknown> = {}) {
 }
 
 describe('resolveConfigTenantPoolScope (fail-closed tenant boundary)', () => {
-  it('returns undefined in single-companion mode (public is the sole tenant)', () => {
-    expect(resolveConfigTenantPoolScope({ multiCompanion: false })).toBeUndefined();
+  it('pins the manifest tenant in a one-entry deployment', () => {
+    const oneEntry = exactTenantConfig({
+      multiCompanion: false,
+      companionFleet: {
+        companions: [{
+          companionId: COMPANION_A,
+          postgresSchema: 'companion_alpha',
+          postgresRole: 'companion_alpha_runtime',
+        }],
+      },
+    });
+
+    expect(resolveConfigTenantPoolScope(oneEntry)).toEqual({
+      schema: 'companion_alpha',
+      role: 'companion_alpha_runtime',
+    });
+  });
+
+  it('returns undefined only when no fleet manifest has been projected', () => {
     expect(resolveConfigTenantPoolScope({})).toBeUndefined();
   });
 

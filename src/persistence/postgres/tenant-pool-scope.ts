@@ -12,20 +12,22 @@ export interface TenantPoolScope {
 
 /**
  * Resolve the tenant boundary a per-companion runtime pool must pin, or
- * `undefined` when there is no tenant boundary to pin (single-companion mode).
+ * `undefined` only when no fleet manifest has been projected onto the config.
  *
- * Multi-companion followers own only their companion schema; `public` belongs
- * to the primary tenant role. A per-companion pool that omits the tenant scope
+ * Every manifest entry owns only its companion schema. A per-companion pool
+ * that omits the tenant scope
  * silently defaults to the libpq `"$user", public` search_path, which is unsafe
  * two ways: an unqualified CREATE fails at boot with
  * `no schema has been selected to create in` (the reported crash), and — worse —
  * any unqualified READ would resolve against the primary tenant's `public`
- * schema instead of the follower's own data. So in multi-companion mode this
+ * schema instead of the companion's own data. So whenever a fleet manifest is
+ * present this
  * fails closed: the pool is scoped to the companion boundary or the call is
  * refused, never defaulted to `public`.
  *
- * In single-companion mode there is exactly one tenant, `public` is its own,
- * and the pool stays unscoped (byte-identical to the pre-tenancy behavior).
+ * A one-entry manifest uses the same exact schema/role binding as a larger
+ * fleet. Legacy callers that have not loaded a manifest remain unscoped only so
+ * pure helpers and migration tooling can represent their pre-cutover input.
  */
 export function resolveConfigTenantPoolScope(
   config: Pick<
@@ -37,40 +39,35 @@ export function resolveConfigTenantPoolScope(
     | 'postgresRole'
   >,
 ): TenantPoolScope | undefined {
-  if (config.multiCompanion !== true) return undefined;
+  if (!config.companionFleet) return undefined;
   const schema = config.postgresSchema?.trim();
   if (!schema) {
     throw new Error(
-      'Multi-companion per-companion Postgres pools require config.postgresSchema; refusing to default to public',
+      'Fleet per-companion Postgres pools require config.postgresSchema; refusing to default to public',
     );
   }
   const role = config.postgresRole?.trim();
   if (!role) {
     throw new Error(
-      'Multi-companion per-companion Postgres pools require config.postgresRole; refusing to default to public',
+      'Fleet per-companion Postgres pools require config.postgresRole; refusing to default to public',
     );
   }
   const companionId = config.companionId?.trim();
   if (!companionId) {
     throw new Error(
-      'Multi-companion per-companion Postgres pools require an exact config.companionId',
+      'Fleet per-companion Postgres pools require an exact config.companionId',
     );
   }
   const fleet = config.companionFleet;
-  if (!fleet) {
-    throw new Error(
-      'Multi-companion per-companion Postgres pools require config.companionFleet',
-    );
-  }
   const identity = fleet.companions.find(companion => companion.companionId === companionId);
   if (!identity) {
     throw new Error(
-      'Multi-companion config.companionId is not present in config.companionFleet',
+      'Fleet config.companionId is not present in config.companionFleet',
     );
   }
   if (identity.postgresSchema.trim() !== schema || identity.postgresRole.trim() !== role) {
     throw new Error(
-      'Multi-companion Postgres scope does not match the exact companion tenant authority',
+      'Fleet Postgres scope does not match the exact companion tenant authority',
     );
   }
   return { schema, role };

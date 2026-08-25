@@ -2,7 +2,7 @@
 // Interactive, fail-closed onboarding: install-mode selection, provider/model
 // selection, optional voice, optional connectivity check, then abort-safe
 // generation of the canonical JSON owner files (validated against the real
-// settings-contract guard) plus a .env bootstrap for secrets.
+// settings-contract guard) plus a .env bootstrap for host-mode secrets.
 
 import { resolve } from 'node:path';
 import { createReadlinePrompter, OnboardingAbort } from './prompter.js';
@@ -25,19 +25,21 @@ spelled --env-path. If you pass --env-file, node itself will try to LOAD that
 file (and exit if it does not exist) before onboarding starts.
 
 What it does:
-  1. Asks the install mode — Docker Compose, Kubernetes, or local dev.
+  1. Asks the install mode — Docker Compose, repository-native, or Kubernetes / Helm.
   2. Asks the LLM provider + models (and optional voice STT/TTS).
   3. Optionally runs a connectivity check against the provider.
   4. Imports an existing companion (Character Card V3, SoulMD, or plain persona
      markdown) or scaffolds a fresh one, with a preview/confirm before writing.
   5. Generates the canonical JSON owner files for the chosen mode, validated
      against the settings-contract guard, writes the companion card, and writes
-     secrets to .env.
+     host-mode secrets to .env. Kubernetes provider secrets stay in the caller's
+     environment for the Helm lifecycle.
 
 Guarantees:
   - Abort-safe: aborting at any prompt writes zero files.
   - Idempotent: an existing config offers update vs abort, never a silent overwrite.
-  - Secrets are entered masked and written only to .env, never to owner files.
+  - Host-mode secrets are entered masked and written only to .env, never to owner
+    files. Kubernetes onboarding does not capture the provider secret.
   - Malformed companion definitions are rejected with a specific error before
     anything is written.
 `;

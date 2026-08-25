@@ -173,8 +173,9 @@ export async function runOnboarding(deps: OnboardingDeps): Promise<OnboardingOut
 
 /**
  * Post-generation "what remains before first chat" note (wckv.1.3 review rider),
- * grounded in what the chosen install mode actually needs. Docker Compose
- * self-provides Postgres; local dev and Kubernetes do not.
+ * grounded in what the chosen install mode actually needs. Docker Compose and
+ * the public Helm chart self-provide Postgres; repository-native uses the
+ * administrator URL selected during onboarding.
  */
 export function firstChatGapNotes(input: {
   mode: InstallMode;
@@ -186,7 +187,7 @@ export function firstChatGapNotes(input: {
   if (input.capturesHostSecret) {
     lines.push(`  - COMPANION_ID was written to .env (${input.companionId}); it binds this runtime to the fleet manifest.`);
   } else {
-    lines.push(`  - Set COMPANION_ID=${input.companionId} in the runtime environment (it binds to the fleet manifest).`);
+    lines.push(`  - The Helm lifecycle derives COMPANION_ID=${input.companionId} from the generated fleet manifest.`);
   }
   switch (input.mode) {
     case 'compose':
@@ -200,9 +201,8 @@ export function firstChatGapNotes(input: {
       break;
     case 'kubernetes':
       lines.push(
-        `  - Provide the provider key (${input.provider.apiKeyEnvName}) and the database credentials `
-        + '(COMPANION_MAIN_DATABASE_URL / SHARED_SCHEMA_MIGRATION_DATABASE_URL, and POSTGRES_DATABASE_URL) '
-        + 'as cluster Secrets per the Helm chart.',
+        `  - Export the provider key (${input.provider.apiKeyEnvName}); helm:up stages it as a Secret `
+        + 'and provisions the chart-managed PostgreSQL roles and URLs.',
       );
       break;
     default:
@@ -286,7 +286,7 @@ async function selectProvider(
   if (capturesHostSecret) {
     apiKeyValue = await prompter.secret(`API key value for ${apiKeyEnvName} (input hidden)`);
   } else {
-    prompter.info(`  (Kubernetes mode: provide ${apiKeyEnvName} as a cluster Secret; no key captured here.)`);
+    prompter.info(`  (Kubernetes mode: export ${apiKeyEnvName} before helm:up; the lifecycle stages the Secret.)`);
   }
 
   return {

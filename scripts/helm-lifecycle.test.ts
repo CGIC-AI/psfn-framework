@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   parsePinnedImageReference,
+  resolveDeploymentImageReference,
   resolveSingleCompanionOwnerContract,
 } from './helm-lifecycle.js';
 
@@ -21,6 +22,16 @@ describe('public Helm lifecycle contracts', () => {
     });
     expect(() => parsePinnedImageReference('psfn:latest')).toThrow(/pinned tag/u);
     expect(() => parsePinnedImageReference('psfn')).toThrow(/exact tag/u);
+  });
+
+  it('requires an explicit image unless a local image build is selected', () => {
+    expect(() => resolveDeploymentImageReference({}, 'a'.repeat(40)))
+      .toThrow(/PSFN_IMAGE is required/u);
+    expect(resolveDeploymentImageReference({ PSFN_K3D_CLUSTER: 'psfn-local' }, 'a'.repeat(40)).full)
+      .toBe(`psfn-framework:s11-${'a'.repeat(12)}`);
+    expect(resolveDeploymentImageReference({
+      PSFN_IMAGE: 'registry.example/psfn:v1.2.3',
+    }, 'a'.repeat(40)).full).toBe('registry.example/psfn:v1.2.3');
   });
 
   it('binds a one-entry manifest to exactly one provider env reference', () => {

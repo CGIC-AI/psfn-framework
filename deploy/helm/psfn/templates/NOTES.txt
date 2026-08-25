@@ -13,9 +13,10 @@ Internal mTLS transports:
 - Gateway RPC: {{ include "psfn.gatewayRpcUrlForClient" . }}
 - Agent admin transport: {{ include "psfn.agentAdminUrl" . }}
 
-Before using this install, replace CHANGE_ME_* values in Kubernetes Secrets or
-set secrets.existingSecret to an operator-managed Secret. Secret values are not
-printed here.
+The supported `npm run helm:up` lifecycle stages owner files and Secrets before
+rendering this chart. Direct Helm users must set secrets.existingSecret to an
+operator-managed Secret and provide ownerFiles.existingConfigMap. Secret values
+are not printed here or passed through lifecycle Helm arguments.
 
 Required cluster prerequisites:
 - cert-manager CRDs/controllers

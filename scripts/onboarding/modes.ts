@@ -39,8 +39,8 @@ export const INSTALL_MODES: Record<InstallMode, InstallModeInfo> = {
   },
   kubernetes: {
     mode: 'kubernetes',
-    label: 'External orchestrator (owner-file generation only)',
-    hint: 'Generates and validates owner files without writing host deployment configuration.',
+    label: 'Kubernetes / Helm (persistent supported install)',
+    hint: 'Runs Postgres, gateway, agent, and Garden with retained PVCs and safe lifecycle commands.',
     defaultRoots: {
       systemDataDir: './data/system-data',
       companionDataDir: './data/companion-data',
@@ -83,12 +83,17 @@ export function modeGuidance(mode: InstallMode, provider: { apiKeyEnvName: strin
       ];
     case 'kubernetes':
       return [
-        'External orchestrator next steps:',
-        '  1. Owner files were generated and validated against the settings-contract',
-        '     guard. Import them through your private deployment configuration.',
-        `  2. Provide provider/runtime secrets through your orchestrator (key env: ${provider.apiKeyEnvName}).`,
-        '     No host .env was written for this mode.',
-        '  3. See docs/operations.md for the public runtime integration contract.',
+        'Kubernetes / Helm next steps:',
+        `  1. Export ${provider.apiKeyEnvName} in the shell that runs the Helm lifecycle.`,
+        '     No provider key was written to a host .env for this mode.',
+        '  2. Select the target explicitly with PSFN_KUBE_CONTEXT and provide either',
+        '     a pinned PSFN_IMAGE or PSFN_K3D_CLUSTER for a local k3d build.',
+        '  3. Start the complete persistent release:',
+        '',
+        '       npm run helm:up',
+        '',
+        '  Use helm:status, helm:doctor, helm:verify, helm:update, helm:restart,',
+        '  helm:logs, helm:connect, helm:token, and helm:down for operation.',
       ];
     default:
       return [];

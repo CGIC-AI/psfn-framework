@@ -903,6 +903,11 @@ async function main(): Promise<void> {
     case 'up':
     case 'update':
       deploy(context);
+      // kubectl port-forward selects one backing pod when it starts. A healthy
+      // pre-upgrade forward can therefore remain attached to a pod Helm is
+      // terminating and disappear between startConnection() and doctor().
+      // Replace both forwards after every deployment before validating it.
+      stopConnection(context);
       await startConnection(context);
       await doctor(context);
       console.log('The public Helm deployment is ready; helm:down preserves its data.');

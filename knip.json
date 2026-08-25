@@ -28,7 +28,9 @@
       ],
       "ignoreBinaries": [
         "gh",
+        "kubectl",
         "rg",
+        "tail",
         "uv"
       ]
     },

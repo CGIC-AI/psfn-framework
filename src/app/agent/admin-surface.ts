@@ -111,7 +111,7 @@ export interface StartOptionalAdminTransportServerOptions {
   operatorAlerting: OperatorAlertSinkConfiguration;
 }
 
-export async function openIcpAdminProjectionStoreForGarden(
+async function openIcpAdminProjectionStoreForGarden(
   config: SubstrateConfig,
 ): Promise<PostgresIcpAdminProjectionStore | null> {
   const fleetCompanionIds = config.companionFleet?.companions

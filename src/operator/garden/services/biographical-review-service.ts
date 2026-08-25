@@ -18,6 +18,10 @@ import type {
   BiographicalReviewReason,
 } from '../../../faculties/memory/biographical/review-audit.js';
 import type { BiographicalProfileStorePort } from '../../../faculties/memory/biographical/store-port.js';
+import {
+  soleAdminFleetActor,
+  type GardenRequestContext,
+} from '../garden-request-context.js';
 
 interface AdminBiographicalSourceView {
   readonly ref: string;
@@ -184,6 +188,41 @@ function sourceView(source: BiographicalClaimSource): AdminBiographicalSourceVie
   };
 }
 
+interface BiographicalSubjectAccess {
+  readonly viewerContactId: string;
+  readonly role: 'owner' | 'admin' | 'member' | 'guest';
+  readonly accessMode: 'sole_admin' | 'multi_admin';
+  readonly escalated: boolean;
+}
+
+function claimContactIds(claim: BiographicalClaim): string[] {
+  return [claim.subject, claim.relatedSubject]
+    .filter((subject): subject is Extract<NonNullable<typeof subject>, { kind: 'contact' }> => (
+      subject?.kind === 'contact'
+    ))
+    .map(subject => subject.contactId);
+}
+
+function claimVisibleToSubject(
+  claim: BiographicalClaim,
+  pendingRebuilds: readonly BiographicalRebuildRequest[],
+  access: BiographicalSubjectAccess,
+): boolean {
+  const contactIds = claimContactIds(claim);
+  const viewerIsSubject = contactIds.includes(access.viewerContactId);
+  const adminClass = access.role === 'owner' || access.role === 'admin';
+  if (!adminClass) return viewerIsSubject;
+  if (access.accessMode === 'sole_admin' || viewerIsSubject || contactIds.length === 0) return true;
+  if (access.escalated) return true;
+  const sourceSetDrifted = pendingRebuilds.some(rebuild =>
+    rebuild.currentSourceSetDigest !== undefined
+    && rebuild.currentSourceSetDigest !== claim.sourceSetDigest
+  );
+  if (sourceSetDrifted) return false;
+  return claim.effectiveSensitivity !== 'intimate'
+    && claim.effectiveSensitivity !== 'confidential';
+}
+
 function claimView(
   claim: BiographicalClaim,
   rebuilds: readonly BiographicalRebuildRequest[],
@@ -262,28 +301,108 @@ export class AdminBiographicalReviewService {
     return this.deps.now?.() ?? new Date();
   }
 
+  /**
+   * Fleet requests carry the authenticated contact into the D1 projection.
+   * Sole-admin operators see the complete companion view; multi-admin
+   * operators see companion-only, self/co-subject, and non-intimate foreign
+   * claims, while intimate/confidential foreign-human claims require audited
+   * escalation. Any fleet call lacking the route's signed subject relation
+   * fails closed even if a caller bypasses the HTTP service boundary.
+   */
+  private subjectAccessForRequest(
+    context: GardenRequestContext | undefined,
+  ): BiographicalSubjectAccess | null {
+    if (context === undefined || context.kind !== 'fleet_principal') return null;
+    if (context.resource.area !== 'memory'
+      || (context.subjectRelation !== 'self'
+        && context.subjectRelation !== 'self_or_co_subject')) {
+      throw new BiographicalReviewError(
+        'unauthorized',
+        'biographical review requires an exact request-local subject relation',
+      );
+    }
+    return {
+      viewerContactId: context.actor.contactId,
+      role: context.actor.role,
+      accessMode: soleAdminFleetActor(context) ? 'sole_admin' : context.actor.accessMode,
+      escalated: context.actor.sessionAssurance === 'escalated',
+    };
+  }
+
   async close(): Promise<void> {
     await this.deps.close?.();
   }
 
-  async listClaims(): Promise<AdminBiographicalClaimList> {
-    const claims = await this.deps.store.listClaims({
-      includeTerminal: true,
-      limit: this.deps.queryLimit,
-    });
-    const views = await Promise.all(claims.map(async claim => {
-      const [rebuilds, grants] = await Promise.all([
-        this.deps.store.listRebuilds({ claimId: claim.id, limit: this.deps.queryLimit }),
-        this.deps.store.listGrantsForClaim(claim.id),
-      ]);
+  async listClaims(context?: GardenRequestContext): Promise<AdminBiographicalClaimList> {
+    const access = this.subjectAccessForRequest(context);
+    if (access === null) {
+      const claims = await this.deps.store.listClaims({
+        includeTerminal: true,
+        limit: this.deps.queryLimit,
+      });
+      const views = await Promise.all(claims.map(async claim => {
+        const [rebuilds, grants] = await Promise.all([
+          this.deps.store.listRebuilds({ claimId: claim.id, limit: this.deps.queryLimit }),
+          this.deps.store.listGrantsForClaim(claim.id),
+        ]);
+        return claimView(claim, rebuilds, grants, this.now());
+      }));
+      return { claims: views };
+    }
+
+    const authorized: Array<{
+      readonly claim: BiographicalClaim;
+      readonly rebuilds: readonly BiographicalRebuildRequest[];
+    }> = [];
+    let offset = 0;
+    while (authorized.length < this.deps.queryLimit) {
+      const candidates = await this.deps.store.listClaims({
+        includeTerminal: true,
+        offset,
+        limit: this.deps.queryLimit,
+      });
+      if (candidates.length === 0) break;
+      const evaluated = await Promise.all(candidates.map(async claim => ({
+        claim,
+        rebuilds: await this.deps.store.listRebuilds({
+          claimId: claim.id,
+          status: 'pending',
+          limit: this.deps.queryLimit,
+        }),
+      })));
+      for (const candidate of evaluated) {
+        if (claimVisibleToSubject(candidate.claim, candidate.rebuilds, access)) {
+          authorized.push(candidate);
+          if (authorized.length === this.deps.queryLimit) break;
+        }
+      }
+      offset += candidates.length;
+      if (candidates.length < this.deps.queryLimit) break;
+    }
+    const views = await Promise.all(authorized.map(async ({ claim, rebuilds }) => {
+      const grants = await this.deps.store.listGrantsForClaim(claim.id);
       return claimView(claim, rebuilds, grants, this.now());
     }));
     return { claims: views };
   }
 
-  async getClaim(claimId: string): Promise<AdminBiographicalClaimDetail> {
+  async getClaim(
+    claimId: string,
+    context?: GardenRequestContext,
+  ): Promise<AdminBiographicalClaimDetail> {
+    const access = this.subjectAccessForRequest(context);
     const claim = await this.deps.store.getClaim(claimId);
     if (claim === undefined) {
+      throw new BiographicalReviewError('claim-not-found', 'biographical claim not found');
+    }
+    const pendingRebuilds = access === null
+      ? []
+      : await this.deps.store.listRebuilds({
+        claimId: claim.id,
+        status: 'pending',
+        limit: this.deps.queryLimit,
+      });
+    if (access !== null && !claimVisibleToSubject(claim, pendingRebuilds, access)) {
       throw new BiographicalReviewError('claim-not-found', 'biographical claim not found');
     }
     const [grants, rebuilds, audits] = await Promise.all([
@@ -318,11 +437,26 @@ export class AdminBiographicalReviewService {
     claimId: string,
     value: unknown,
     actor: AdminBiographicalReviewActor,
+    context?: GardenRequestContext,
   ): Promise<AdminBiographicalClaimDetail> {
     const input = parseReviewInput(claimId, value, actor);
+    const access = this.subjectAccessForRequest(context);
     const initial = await this.deps.store.getClaim(input.claimId);
     if (initial === undefined) {
       await this.recordDenied(input, 'claim-not-found');
+      throw new BiographicalReviewError('claim-not-found', 'biographical claim not found');
+    }
+    const initialPendingRebuilds = access === null
+      ? []
+      : await this.deps.store.listRebuilds({
+        claimId: initial.id,
+        status: 'pending',
+        limit: this.deps.queryLimit,
+      });
+    // Return the same not-found shape as an absent claim and do not append a
+    // biography audit: otherwise an unrelated claim id becomes an existence
+    // oracle across fleet principals.
+    if (access !== null && !claimVisibleToSubject(initial, initialPendingRebuilds, access)) {
       throw new BiographicalReviewError('claim-not-found', 'biographical claim not found');
     }
     try {
@@ -331,13 +465,19 @@ export class AdminBiographicalReviewService {
         if (claim === undefined) {
           throw new BiographicalReviewError('claim-not-found', 'biographical claim not found');
         }
+        const pendingRebuilds = await store.listRebuilds({
+          claimId: claim.id,
+          status: 'pending',
+          limit: this.deps.queryLimit,
+        });
+        if (access !== null && !claimVisibleToSubject(claim, pendingRebuilds, access)) {
+          throw new BiographicalReviewError('claim-not-found', 'biographical claim not found');
+        }
         if (claim.claimDigest !== input.claimDigest) {
           throw new BiographicalReviewError('stale-claim-digest', 'stale claim digest');
         }
-        const rebuilds = await store.listRebuilds({ claimId: claim.id, limit: this.deps.queryLimit });
-        const pendingDigestDrift = rebuilds.find(rebuild =>
-          rebuild.status === 'pending'
-          && rebuild.currentSourceSetDigest !== undefined
+        const pendingDigestDrift = pendingRebuilds.find(rebuild =>
+          rebuild.currentSourceSetDigest !== undefined
           && rebuild.currentSourceSetDigest !== claim.sourceSetDigest
         );
         const expectedSourceSetDigest = input.action === 'regrant'
@@ -429,11 +569,11 @@ export class AdminBiographicalReviewService {
         await store.recordReviewAudit(audit);
       });
     } catch (error) {
-      if (error instanceof BiographicalReviewError) {
+      if (error instanceof BiographicalReviewError && error.reason !== 'claim-not-found') {
         await this.recordDenied(input, error.reason);
       }
       throw error;
     }
-    return await this.getClaim(input.claimId);
+    return await this.getClaim(input.claimId, context);
   }
 }

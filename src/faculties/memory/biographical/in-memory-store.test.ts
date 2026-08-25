@@ -157,6 +157,7 @@ describe('InMemoryBiographicalProfileStore — writeClaim', () => {
     });
     expect(await s.listClaims({ subject: contact('v', 2) })).toEqual([]);
     await expect(s.listClaims({ limit: 0 })).rejects.toThrow('positive integer');
+    await expect(s.listClaims({ offset: -1 })).rejects.toThrow('non-negative integer');
   });
 
   it('orders same-time claims by id like the Postgres adapter', async () => {
@@ -174,6 +175,8 @@ describe('InMemoryBiographicalProfileStore — writeClaim', () => {
       });
     }
     expect((await s.listClaims()).map(claim => claim.id)).toEqual(['claim-a', 'claim-b']);
+    expect((await s.listClaims({ offset: 1, limit: 1 })).map(claim => claim.id))
+      .toEqual(['claim-b']);
   });
 });
 

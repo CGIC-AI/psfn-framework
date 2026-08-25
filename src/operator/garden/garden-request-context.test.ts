@@ -292,7 +292,7 @@ describe('request-bound Garden principal isolation', () => {
     expect(gardenRequestServiceBoundaryDenial(recoveryPage)).toMatch(/subject-bound/u);
   });
 
-  it('admits subject-authorized episodic routes while group memory stays denied', () => {
+  it('admits declared subject-authorized memory routes while unprojected memory stays denied', () => {
     const episodicRouteIds = [
       'GET /api/admin/episodic-memory/episodes',
       'GET /api/admin/episodic-memory/episodes/:id',
@@ -308,6 +308,18 @@ describe('request-bound Garden principal isolation', () => {
         .toBeNull();
     }
 
+    const biographicalRouteIds = [
+      'GET /api/admin/biographical-claims',
+      'GET /api/admin/biographical-claims/:claimId',
+      'POST /api/admin/biographical-claims/:claimId/review',
+      'GET /biographical-profile',
+      'HEAD /biographical-profile',
+    ];
+    for (const routeId of biographicalRouteIds) {
+      expect(gardenRequestServiceBoundaryDenial(context('principal-a', 'contact-a', { routeId })))
+        .toBeNull();
+    }
+
     const undeclaredEpisodicRoute = context('principal-a', 'contact-a', {
       routeId: 'GET /api/admin/episodic-memory/future-unscoped-view',
     });
@@ -319,6 +331,13 @@ describe('request-bound Garden principal isolation', () => {
       routeId: 'GET /api/admin/episodic-memory/episodes',
     });
     expect(gardenRequestServiceBoundaryDenial(episodicWithoutSubject))
+      .toMatch(/subject-authorized/u);
+
+    const biographyWithoutSubject = context('principal-a', 'contact-a', {
+      subjectRelation: 'none',
+      routeId: 'GET /api/admin/biographical-claims',
+    });
+    expect(gardenRequestServiceBoundaryDenial(biographyWithoutSubject))
       .toMatch(/subject-authorized/u);
 
     const groupMemory = context('principal-a', 'contact-a', {

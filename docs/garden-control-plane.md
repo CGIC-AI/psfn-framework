@@ -219,8 +219,7 @@ Beyond route authorization, `gardenRequestServiceBoundaryDenial`
 principal's request against a Garden service whose subject selectors are not
 explicit. The projected services key their row scoping on the signed
 capability's contact binding (`actor.contactId`) — never on request
-parameters — and role never widens visibility (an `owner` sees the same rows
-a `member` with the same contact binding would):
+parameters — and apply the domain policy described below:
 
 - **Sessions** (`GET /api/admin/sessions*`, the `/sessions` page): served by
   the subject-bound session projection inside `AdminSessionDataService`. A
@@ -238,7 +237,9 @@ a `member` with the same contact binding would):
   are dropped from fleet reads entirely. The service also re-asserts the
   Invariant 11 companion scope against its bound companion, so a context
   admitted for companion A can never read companion B's session stores even
-  if a dispatch gate were bypassed.
+  if a dispatch gate were bypassed. Role never widens this session
+  visibility: an `owner` sees the same rows as a `member` with the same
+  contact binding.
 - **Memory** (`/api/admin/memory*`, the `/memory` page): served through the
   subject-authorized memory store (`createSubjectAuthorizedMemoryStore`).
 - **Episodic memory** (`GET /api/admin/episodic-memory/*`, the
@@ -247,6 +248,15 @@ a `member` with the same contact binding would):
   when the viewer contact is one of its explicitly attributed participants;
   arcs require both endpoint episodes visible; unattributed episodes are
   invisible fail-closed.
+- **Biographical profile** (`GET /api/admin/biographical-claims*`, review
+  mutations, and the `/biographical-profile` page): served through the D1
+  subject projection in `AdminBiographicalReviewService`. Sole-admin access
+  remains unpartitioned. In multi-admin mode, self/co-subject and
+  companion-only claims remain visible, as do unrelated-human public/personal
+  claims; unrelated-human intimate/confidential claims and claims with a stale
+  sensitivity snapshot fail closed without an existence or review-audit leak.
+  Review mutations recheck the same projection inside the serialized claim
+  transaction.
 
 Everything else in the `sessions` and `memory` areas stays denied for fleet
 principals until it gets its own explicit subject selector: session route

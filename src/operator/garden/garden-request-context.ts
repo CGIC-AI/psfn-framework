@@ -291,6 +291,20 @@ const SUBJECT_AUTHORIZED_EPISODIC_ROUTE_IDS: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * Biographical review routes whose service filters every claim through the
+ * authenticated contact subject (including relational co-subject claims).
+ * Keep this exact allowlist separate from the broad memory route family so a
+ * newly declared route cannot bypass the service boundary accidentally.
+ */
+const SUBJECT_AUTHORIZED_BIOGRAPHICAL_ROUTE_IDS: ReadonlySet<string> = new Set([
+  'GET /api/admin/biographical-claims',
+  'GET /api/admin/biographical-claims/:claimId',
+  'POST /api/admin/biographical-claims/:claimId/review',
+  'GET /biographical-profile',
+  'HEAD /biographical-profile',
+]);
+
+/**
  * A request-local subject relation is the explicit selector the projected
  * services key their row scoping on; `current_companion`/`none` routes carry
  * no subject and must never reach a subject-scoped service.
@@ -307,6 +321,11 @@ function isSubjectBoundSessionRoute(context: GardenRequestContext): boolean {
 function isSubjectAuthorizedEpisodicRoute(context: GardenRequestContext): boolean {
   if (!hasExplicitSubjectRelation(context)) return false;
   return SUBJECT_AUTHORIZED_EPISODIC_ROUTE_IDS.has(context.resource.routeId);
+}
+
+function isSubjectAuthorizedBiographicalRoute(context: GardenRequestContext): boolean {
+  if (!hasExplicitSubjectRelation(context)) return false;
+  return SUBJECT_AUTHORIZED_BIOGRAPHICAL_ROUTE_IDS.has(context.resource.routeId);
 }
 
 /**
@@ -345,6 +364,7 @@ export function gardenRequestServiceBoundaryDenial(
     && !context.resource.routeId.includes('/api/admin/memory')
     && !context.resource.routeId.endsWith(' /memory')
     && !isSubjectAuthorizedEpisodicRoute(context)
+    && !isSubjectAuthorizedBiographicalRoute(context)
     && privacyBreakGlassResourceKindForRoute(context.resource.routeId) !== 'memory') {
     return 'Fleet memory access requires the subject-authorized memory service';
   }

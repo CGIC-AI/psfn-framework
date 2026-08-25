@@ -288,10 +288,20 @@ export class PostgresBiographicalProfileStore implements BiographicalProfileStor
     ) {
       throw new Error('biographical claim list limit must be a positive integer');
     }
+    if (
+      options.offset !== undefined
+      && (!Number.isSafeInteger(options.offset) || options.offset < 0)
+    ) {
+      throw new Error('biographical claim list offset must be a non-negative integer');
+    }
     let paginationClause = '';
     if (options.limit !== undefined) {
       params.push(options.limit);
       paginationClause = `LIMIT $${params.length}`;
+    }
+    if (options.offset !== undefined) {
+      params.push(options.offset);
+      paginationClause += ` OFFSET $${params.length}`;
     }
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
     const rows = await this.queryRows<ClaimRow>(

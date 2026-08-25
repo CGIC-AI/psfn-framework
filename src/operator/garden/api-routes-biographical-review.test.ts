@@ -77,19 +77,32 @@ describe('Garden biographical review routes', () => {
     const list = requireGardenRouteCapability('GET /api/admin/biographical-claims');
     const detail = requireGardenRouteCapability('GET /api/admin/biographical-claims/:claimId');
     const review = requireGardenRouteCapability('POST /api/admin/biographical-claims/:claimId/review');
+    const page = requireGardenRouteCapability('GET /biographical-profile');
     expect([list, detail].map(route => ({
       action: route.authorization.action,
       role: route.authorization.baseRole,
       body: route.body.mode,
+      subjectRelation: route.authorization.subjectRelation,
     }))).toEqual([
-      { action: 'memory.read', role: 'admin', body: 'forbidden' },
-      { action: 'memory.read', role: 'admin', body: 'forbidden' },
+      {
+        action: 'memory.read', role: 'admin', body: 'forbidden',
+        subjectRelation: 'self_or_co_subject',
+      },
+      {
+        action: 'memory.read', role: 'admin', body: 'forbidden',
+        subjectRelation: 'self_or_co_subject',
+      },
     ]);
     expect(review).toMatchObject({
       body: { mode: 'required' },
       authorization: {
-        action: 'memory.manage', baseRole: 'admin', requirements: { confirmation: 'explicit' },
+        action: 'memory.manage', baseRole: 'admin', subjectRelation: 'self_or_co_subject',
+        requirements: { confirmation: 'explicit' },
       },
+    });
+    expect(page.authorization).toMatchObject({
+      action: 'memory.read',
+      subjectRelation: 'self_or_co_subject',
     });
   });
 

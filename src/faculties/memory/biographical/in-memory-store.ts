@@ -172,7 +172,15 @@ export class InMemoryBiographicalProfileStore implements BiographicalProfileStor
     ) {
       throw new Error('biographical claim list limit must be a positive integer');
     }
+    if (
+      options.offset !== undefined
+      && (!Number.isSafeInteger(options.offset) || options.offset < 0)
+    ) {
+      throw new Error('biographical claim list offset must be a non-negative integer');
+    }
     const limit = options.limit ?? Number.POSITIVE_INFINITY;
+    const offset = options.offset ?? 0;
+    let skipped = 0;
     const results: BiographicalClaim[] = [];
     const readAt = this.now();
     const ordered = [...this.claims.values()]
@@ -194,6 +202,10 @@ export class InMemoryBiographicalProfileStore implements BiographicalProfileStor
         options.includeTerminal !== true
         && (claim.status === 'superseded' || claim.status === 'revoked')
       ) {
+        continue;
+      }
+      if (skipped < offset) {
+        skipped += 1;
         continue;
       }
       results.push(claim);

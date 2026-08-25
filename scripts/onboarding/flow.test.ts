@@ -13,10 +13,16 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { loadCharacterCard } from '../../src/core/identity/loader.js';
 import { resolveConfiguredCompanionFleet } from '../companion-fleet-runtime.js';
 import type { Prompter, PrompterChoiceOption } from './types.js';
-import { OnboardingCancelled, runOnboarding } from './flow.js';
+import {
+  buildEnvEntries,
+  OnboardingCancelled,
+  parseLocalPostgresAdminUrl,
+  runOnboarding,
+} from './flow.js';
 import { CompanionImportError } from './companion-import.js';
 
 const SEED_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '../../config');
+const LOCAL_POSTGRES_ADMIN_URL = 'postgresql://postgres:admin@127.0.0.1:5432/psfn';
 
 class ScriptedPrompter implements Prompter {
   readonly log: string[] = [];
@@ -80,7 +86,7 @@ describe('runOnboarding — local dev happy path', () => {
       choices: ['local', 'openrouter', 'fresh'],
       // id, apiBaseUrl, modelsApiUrl, apiKeyEnvName, primary, extraction, vision
       texts: ['', '', '', '', '', '', ''],
-      secrets: ['sk-or-flow-secret'],
+      secrets: ['sk-or-flow-secret', LOCAL_POSTGRES_ADMIN_URL],
       confirms: [false, false], // voice off, connectivity off
     });
 
@@ -101,12 +107,15 @@ describe('runOnboarding — local dev happy path', () => {
 
     const envText = readFileSync(envPath, 'utf-8');
     expect(envText).toContain('OPENROUTER_API_KEY=sk-or-flow-secret');
-    expect(envText).toContain('DATA_DIR=');
+    expect(envText).toContain(`SYSTEM_DATA_DIR=${dataDir}`);
+    expect(envText).toContain(`COMPANION_DATA_DIR=${join(dataDir, 'companions', 'main')}`);
     expect(envText).toContain(`PSFN_RUNTIME_ROOT=${root}`);
-    expect(prompter.log.join('\n')).toContain('companion_main_runtime');
-    expect(prompter.log.join('\n')).toContain('shared_schema_migration');
-    expect(prompter.log.join('\n')).toContain('COMPANION_MAIN_DATABASE_URL');
-    expect(prompter.log.join('\n')).toContain('SHARED_SCHEMA_MIGRATION_DATABASE_URL');
+    expect(envText).toContain('POSTGRES_ADMIN_DATABASE_URL=postgresql://postgres:admin@127.0.0.1:5432/psfn');
+    expect(envText).toMatch(/^COMPANION_MAIN_DATABASE_URL=postgresql:\/\/companion_main_runtime:[0-9a-f]{64}@127\.0\.0\.1:5432\/psfn$/mu);
+    expect(envText).toMatch(/^SHARED_SCHEMA_MIGRATION_DATABASE_URL=postgresql:\/\/shared_schema_migration:[0-9a-f]{64}@127\.0\.0\.1:5432\/psfn$/mu);
+    expect(envText).toContain('ADMIN_PORT=10053');
+    expect(envText).toContain('API_PORT=10054');
+    expect(prompter.log.join('\n')).toContain('npm run local:up');
 
     const fleet = resolveConfiguredCompanionFleet({
       PSFN_RUNTIME_ROOT: root,
@@ -140,7 +149,7 @@ describe('runOnboarding — idempotency and abort', () => {
       prompter: new ScriptedPrompter({
         choices: ['local', 'openrouter', 'fresh'],
         texts: ['', '', '', '', '', '', ''],
-        secrets: ['sk-first'],
+        secrets: ['sk-first', LOCAL_POSTGRES_ADMIN_URL],
         confirms: [false, false],
       }),
       seedDir: SEED_DIR,
@@ -165,7 +174,7 @@ describe('runOnboarding — idempotency and abort', () => {
       prompter: new ScriptedPrompter({
         choices: ['local', 'openrouter'],
         texts: ['', '', '', '', '', '', ''],
-        secrets: ['sk-bad'],
+        secrets: ['sk-bad', LOCAL_POSTGRES_ADMIN_URL],
         confirms: [false, true, false], // voice off, run check = true, proceed-anyway = false
       }),
       seedDir: SEED_DIR,
@@ -268,7 +277,7 @@ describe('runOnboarding — .env merge safety', () => {
       prompter: new ScriptedPrompter({
         choices: ['local', 'openrouter', 'fresh'],
         texts: ['', '', '', '', '', '', ''],
-        secrets: ['sk-merge'],
+        secrets: ['sk-merge', LOCAL_POSTGRES_ADMIN_URL],
         confirms: [false, false],
       }),
       seedDir: SEED_DIR,
@@ -320,7 +329,7 @@ describe('runOnboarding — companion import (wckv.1.3)', () => {
       prompter: new ScriptedPrompter({
         choices: ['local', 'openrouter', input.source],
         texts,
-        secrets: ['sk-import'],
+        secrets: ['sk-import', LOCAL_POSTGRES_ADMIN_URL],
         confirms: [false, false, true], // voice off, connectivity off, import confirm
       }),
       seedDir: SEED_DIR,
@@ -405,7 +414,7 @@ describe('runOnboarding — companion import (wckv.1.3)', () => {
       prompter: new ScriptedPrompter({
         choices: ['local', 'openrouter', 'fresh'],
         texts: ['', '', '', '', '', '', '', 'Willow'],
-        secrets: ['sk-fresh'],
+        secrets: ['sk-fresh', LOCAL_POSTGRES_ADMIN_URL],
         confirms: [false, false],
       }),
       seedDir: SEED_DIR,
@@ -416,5 +425,47 @@ describe('runOnboarding — companion import (wckv.1.3)', () => {
     const written = loadCharacterCard(cardPath(dataDir));
     expect(written.data.name).toBe('Willow');
     expect(written.data.tags).toContain('bootstrap');
+  });
+});
+
+describe('repository-native PostgreSQL URL validation', () => {
+  it('accepts only a credentialed postgres authority, retaining connection options', () => {
+    expect(parseLocalPostgresAdminUrl(`${LOCAL_POSTGRES_ADMIN_URL}?sslmode=disable#ignored`))
+      .toBe(`${LOCAL_POSTGRES_ADMIN_URL}?sslmode=disable`);
+    expect(() => parseLocalPostgresAdminUrl('postgresql://other:admin@127.0.0.1/psfn'))
+      .toThrow(/authenticate as postgres/u);
+    expect(() => parseLocalPostgresAdminUrl('not-a-url')).toThrow(/valid URL/u);
+  });
+
+  it('keeps retained role passwords synchronized with regenerated database URLs', () => {
+    const entries = buildEnvEntries({
+      mode: 'local',
+      roots: {
+        systemDataDir: '/tmp/psfn-test/system-data',
+        companionDataDir: '/tmp/psfn-test/companion-data',
+        shared: false,
+      },
+      provider: {
+        id: 'provider',
+        type: 'generic_openai',
+        label: 'Provider',
+        apiBaseUrl: 'https://example.invalid/v1',
+        apiKeyEnvName: 'PROVIDER_API_KEY',
+        apiKeyValue: 'provider-key',
+      },
+      voice: { enabled: false, secrets: [] },
+      companionId: '11111111-1111-4111-8111-111111111111',
+      capturesHostSecret: true,
+      localPostgresAdminUrl: LOCAL_POSTGRES_ADMIN_URL,
+      existingEnv: {
+        PSFN_COMPANION_DATABASE_PASSWORD: 'retained-companion-password',
+        PSFN_SHARED_MIGRATION_DATABASE_PASSWORD: 'retained-shared-password',
+      },
+    });
+    const values = Object.fromEntries(entries.map(entry => [entry.envName, entry.value]));
+    expect(values.COMPANION_MAIN_DATABASE_URL).toContain('retained-companion-password');
+    expect(values.SHARED_SCHEMA_MIGRATION_DATABASE_URL).toContain('retained-shared-password');
+    expect(entries.find(entry => entry.envName === 'COMPANION_MAIN_DATABASE_URL')?.preserveExisting)
+      .toBe(false);
   });
 });

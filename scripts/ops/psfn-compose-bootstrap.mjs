@@ -49,14 +49,14 @@ const REQUIRED_COMPANION_FILES = [
 
 function requiredEnv(name) {
   const value = process.env[name]?.trim();
-  if (!value) throw new Error(`${name} is required; run npm run onboard before compose:up`);
+  if (!value) throw new Error(`${name} is required; run npm run onboard before starting the runtime`);
   return value;
 }
 
 function safeSecret(name) {
   const value = requiredEnv(name);
   if (!SAFE_SECRET_PATTERN.test(value)) {
-    throw new Error(`${name} contains characters unsupported by the Compose credential handoff`);
+    throw new Error(`${name} contains characters unsupported by the runtime credential handoff`);
   }
   return value;
 }
@@ -126,13 +126,13 @@ function validateGeneratedLayout({ runtimeRoot, systemDataDir, companionDataDir,
     ? manifest.companions[0]
     : undefined;
   if (!entry || entry.companionId !== companionId) {
-    throw new Error('Compose requires one companions.json entry matching COMPANION_ID');
+    throw new Error('Runtime bootstrap requires one companions.json entry matching COMPANION_ID');
   }
   if (entry.postgresSchema !== COMPANION_SCHEMA || entry.postgresRole !== COMPANION_ROLE) {
-    throw new Error(`Compose companions.json must use ${COMPANION_SCHEMA}/${COMPANION_ROLE}`);
+    throw new Error(`Runtime companions.json must use ${COMPANION_SCHEMA}/${COMPANION_ROLE}`);
   }
   if (manifest?.postgres?.sharedMigrationRole !== SHARED_ROLE) {
-    throw new Error(`Compose companions.json must use shared migration role ${SHARED_ROLE}`);
+    throw new Error(`Runtime companions.json must use shared migration role ${SHARED_ROLE}`);
   }
   assertPath(
     companionDataDir,
@@ -188,7 +188,7 @@ async function assertRoleIsolation(client) {
       )
   `, [[COMPANION_ROLE, SHARED_ROLE]]);
   if (result.rows.length > 0) {
-    throw new Error('Compose database roles have unexpected memberships; refusing to repair authority drift');
+    throw new Error('Runtime database roles have unexpected memberships; refusing to repair authority drift');
   }
 }
 
@@ -299,7 +299,7 @@ async function main() {
     targetIdentity(companionCredential.url),
     targetIdentity(sharedCredential.url),
   ]).size !== 1) {
-    throw new Error('Compose PostgreSQL credentials must target the same exact database');
+    throw new Error('Runtime PostgreSQL credentials must target the same exact database');
   }
   validateGeneratedLayout({
     runtimeRoot,
@@ -324,10 +324,10 @@ async function main() {
     uid,
     gid,
   });
-  console.log('[compose-bootstrap] configuration, database tenancy, and agent credential handoff are ready');
+  console.log('[runtime-bootstrap] configuration, database tenancy, and agent credential handoff are ready');
 }
 
 main().catch((error) => {
-  console.error(`[compose-bootstrap] ${error instanceof Error ? error.message : String(error)}`);
+  console.error(`[runtime-bootstrap] ${error instanceof Error ? error.message : String(error)}`);
   process.exit(1);
 });

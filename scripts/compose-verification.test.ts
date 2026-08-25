@@ -6,6 +6,7 @@ import {
   assertCompletedPersistedTurn,
   composeApiPrincipalId,
   composeTurnRecordPath,
+  deploymentTurnRecordPath,
   findMatchingPersistedTurn,
 } from './compose-verification.js';
 
@@ -24,6 +25,16 @@ describe('Compose functional verification', () => {
       'companion-data/main/state/sessions/_turn_records',
       `${encodeURIComponent(`api:${composeApiPrincipalId('test-only-api-key')}:session-one`)}.jsonl`,
     ));
+  });
+
+  it('resolves a repository-native TurnRecord from its exact companion root', () => {
+    const companionDataDir = join(tmpdir(), 'custom-runtime', 'companions', 'main');
+    expect(deploymentTurnRecordPath(companionDataDir, 'test-only-api-key', 'session-two'))
+      .toBe(join(
+        companionDataDir,
+        'state/sessions/_turn_records',
+        `${encodeURIComponent(`api:${composeApiPrincipalId('test-only-api-key')}:session-two`)}.jsonl`,
+      ));
   });
 
   it('binds the exact HTTP reply to the exact completed persisted turn', () => {

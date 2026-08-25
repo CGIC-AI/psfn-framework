@@ -207,6 +207,17 @@ async function doctor(context: LifecycleContext): Promise<void> {
   if (login.status !== 302 || !login.headers.get('set-cookie')?.includes('psfn_token=')) {
     fail(`Garden rejected the configured ADMIN_TOKEN (HTTP ${login.status}).`);
   }
+  const sessionCookie = login.headers.get('set-cookie')?.split(';', 1)[0];
+  const dashboard = await fetch(`${context.gardenBase}/`, {
+    redirect: 'manual',
+    headers: { Cookie: sessionCookie! },
+    signal: AbortSignal.timeout(10_000),
+  });
+  const dashboardBody = await dashboard.text();
+  if (!dashboard.ok || !dashboard.headers.get('content-type')?.includes('text/html')
+    || !dashboardBody.toLowerCase().includes('<!doctype html')) {
+    fail(`Garden authenticated UI is unavailable (HTTP ${dashboard.status}).`);
+  }
 
   const database = compose(context, [
     'exec', '-T', 'postgres', 'psql', '-U', 'postgres', '-d', 'psfn', '-Atc',
@@ -218,7 +229,7 @@ async function doctor(context: LifecycleContext): Promise<void> {
 
   console.log('PASS: Postgres, gateway, agent, and Garden are running.');
   console.log('PASS: Gateway memory, embeddings, and scheduler subsystems are healthy.');
-  console.log('PASS: Garden health and token login both succeeded.');
+  console.log('PASS: Garden health, token login, and authenticated UI succeeded.');
   console.log(`Gateway: ${context.apiBase}`);
   console.log(`Garden:  ${context.gardenBase}/login`);
 }

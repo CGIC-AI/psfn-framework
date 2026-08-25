@@ -28,8 +28,8 @@ export const INSTALL_MODES: Record<InstallMode, InstallModeInfo> = {
   },
   local: {
     mode: 'local',
-    label: 'Local development (explicit component entrypoints)',
-    hint: 'Generates separate system and companion roots for host-side development.',
+    label: 'Repository-native (supervised persistent install)',
+    hint: 'Runs the full split runtime from this checkout against your PostgreSQL server.',
     defaultRoots: {
       systemDataDir: './data/system-data',
       companionDataDir: './data/companion-data',
@@ -71,15 +71,15 @@ export function modeGuidance(mode: InstallMode, provider: { apiKeyEnvName: strin
       ];
     case 'local':
       return [
-        'Local dev next steps:',
+        'Repository-native next steps:',
         `  1. Your provider key was written to .env as ${provider.apiKeyEnvName}.`,
-        '  2. Start the gateway, agent, and operator in separate terminals:',
+        '  2. Start the complete supervised runtime:',
         '',
-        '       npm run gateway',
-        '       npm run agent',
-        '       npm run operator',
+        '       npm run local:up',
         '',
-        '  Owner files were written under separate ./data roots.',
+        '  The command provisions isolated PostgreSQL roles, starts gateway, agent, and',
+        '  Garden, then validates health and login. Use local:status, local:doctor,',
+        '  local:verify, local:update, local:restart, local:logs, and local:down for operation.',
       ];
     case 'kubernetes':
       return [

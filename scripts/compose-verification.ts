@@ -20,6 +20,13 @@ export interface ComposeVerificationResult {
   turnRecordPath: string;
 }
 
+export interface DeploymentVerificationOptions {
+  apiBase: string;
+  apiKey: string;
+  companionDataDir: string;
+  proofLabel: string;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -37,11 +44,17 @@ export function composeTurnRecordPath(
   apiKey: string,
   sessionId: string,
 ): string {
+  return deploymentTurnRecordPath(join(dataRoot, 'companion-data', 'main'), apiKey, sessionId);
+}
+
+export function deploymentTurnRecordPath(
+  companionDataDir: string,
+  apiKey: string,
+  sessionId: string,
+): string {
   const channelId = `api:${composeApiPrincipalId(apiKey)}:${sessionId}`;
   return join(
-    dataRoot,
-    'companion-data',
-    'main',
+    companionDataDir,
     'state',
     'sessions',
     '_turn_records',
@@ -111,9 +124,21 @@ export async function runComposeChatVerification(options: {
   apiKey: string;
   dataRoot: string;
 }): Promise<ComposeVerificationResult> {
+  return runDeploymentChatVerification({
+    apiBase: options.apiBase,
+    apiKey: options.apiKey,
+    companionDataDir: join(options.dataRoot, 'companion-data', 'main'),
+    proofLabel: 'Compose',
+  });
+}
+
+export async function runDeploymentChatVerification(
+  options: DeploymentVerificationOptions,
+): Promise<ComposeVerificationResult> {
   const proofId = randomUUID();
-  const sessionId = `compose-verify-${proofId}`;
-  const message = `PSFN Compose persistence proof ${proofId}. Reply with a brief acknowledgement.`;
+  const slug = options.proofLabel.toLowerCase().replace(/[^a-z0-9]+/gu, '-').replace(/^-|-$/gu, '');
+  const sessionId = `${slug}-verify-${proofId}`;
+  const message = `PSFN ${options.proofLabel} persistence proof ${proofId}. Reply with a brief acknowledgement.`;
   const response = await fetch(`${options.apiBase}/v1/chat/completions`, {
     method: 'POST',
     headers: {
@@ -151,7 +176,7 @@ export async function runComposeChatVerification(options: {
     throw new Error(`chat completion failed (HTTP ${response.status}): ${detail}`);
   }
 
-  const turnRecordPath = composeTurnRecordPath(options.dataRoot, options.apiKey, sessionId);
+  const turnRecordPath = deploymentTurnRecordPath(options.companionDataDir, options.apiKey, sessionId);
   await waitForPersistedTurn(turnRecordPath, message, assistantContent);
   return { assistantContent, message, sessionId, turnRecordPath };
 }

@@ -569,6 +569,19 @@ async function assertPortAvailable(port: number, name: string): Promise<void> {
   });
 }
 
+async function waitForPortAvailable(port: number, name: string): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  do {
+    try {
+      await assertPortAvailable(port, name);
+      return;
+    } catch {
+      await new Promise(resolvePromise => setTimeout(resolvePromise, 100));
+    }
+  } while (Date.now() <= deadline);
+  await assertPortAvailable(port, name);
+}
+
 function stopConnection(context: HelmContext): void {
   const state = readConnection(context);
   if (state) {
@@ -592,8 +605,8 @@ async function startConnection(context: HelmContext): Promise<void> {
     } catch { /* stale port-forward after a workload restart */ }
   }
   stopConnection(context);
-  await assertPortAvailable(context.apiPort, 'Gateway');
-  await assertPortAvailable(context.gardenPort, 'Garden');
+  await waitForPortAvailable(context.apiPort, 'Gateway');
+  await waitForPortAvailable(context.gardenPort, 'Garden');
   const logFd = openSync(context.connectionLogPath, 'a');
   const start = (service: string, localPort: number, remotePort: number) => {
     const child = spawn('kubectl', kubeArgs(context, [

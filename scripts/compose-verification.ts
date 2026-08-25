@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { isRecord } from '../src/shared/utils/types.js';
 
 const API_KEY_PRINCIPAL_DIGEST_LENGTH = 24;
 const CHAT_TIMEOUT_MS = 180_000;
@@ -25,10 +26,6 @@ export interface DeploymentVerificationOptions {
   apiKey: string;
   companionDataDir: string;
   proofLabel: string;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 export function composeApiPrincipalId(apiKey: string): string {

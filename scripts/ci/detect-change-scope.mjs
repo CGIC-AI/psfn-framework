@@ -4,19 +4,13 @@ import { execFileSync } from 'node:child_process';
 import { appendFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
-// Complete root file graph reached by the fast eval TypeScript build and test
-// entries. The scope contract test derives this graph and fails if a new root
-// import is introduced without updating this manifest.
-export const EVALS_INPUT_PATTERNS = Object.freeze([
-  /^tools\/evals\//,
-  /^src\/core\/emotion\/(?:calibration|state)\.ts$/,
-  /^src\/shared\/contracts\/emotion-contracts\.ts$/,
-  /^src\/shared\/utils\/(?:load-dotenv|numeric|types)\.ts$/,
-]);
+import {
+  ROOT_DTS_ENTRYPOINTS,
+  affectsEvals,
+  isRootTestPath,
+} from './change-scope-policy.mjs';
 
-export function affectsEvals(paths) {
-  return paths.some((path) => EVALS_INPUT_PATTERNS.some((pattern) => pattern.test(path)));
-}
+export { EVALS_INPUT_PATTERNS, ROOT_DTS_ENTRYPOINTS, affectsEvals } from './change-scope-policy.mjs';
 
 export function detectChangeScope(paths) {
   const matches = (pattern) => paths.some((path) => pattern.test(path));
@@ -27,16 +21,19 @@ export function detectChangeScope(paths) {
   );
   const rootSourcePaths = paths.filter((path) => /^src\//.test(path));
   const rootScriptPaths = paths.filter((path) => /^scripts\/(?!ci\/)/.test(path));
-  const isRootTestPath = (path) => /(?:\.test|\.test-fixtures)\.[cm]?[jt]sx?$/.test(path);
   const rootProduct = rootSourcePaths.some((path) => !isRootTestPath(path));
   const rootScriptProduct = rootScriptPaths.some((path) => !isRootTestPath(path));
   const rootToolchain = matches(
-    /^(?:package-lock\.json$|tsconfig[^/]*\.json$|vitest[^/]*\.[cm]?[jt]s$|eslint[^/]*\.[cm]?[jt]s$)/,
-  );
-  const rootBuildContract = matches(/^(?:tsup\.config\.ts|tsconfig\.tsup\.json)$/);
+    /^(?:package-lock\.json$|vitest[^/]*\.[cm]?[jt]s$|eslint[^/]*\.[cm]?[jt]s$)/,
+  ) || paths.some((path) => (
+    /^tsconfig[^/]*\.json$/.test(path) && path !== 'tsconfig.companion-id-types.json'
+  ));
+  const rootBuildContract = matches(/^(?:tsup\.config\.ts|tsconfig\.tsup\.json)$/)
+    || paths.some((path) => ROOT_DTS_ENTRYPOINTS.includes(path));
   const rootRuntime = rootProduct || rootScriptProduct || rootToolchain;
   const rootTestOnly = [...rootSourcePaths, ...rootScriptPaths].some(isRootTestPath) && !rootRuntime;
-  const rootValidation = rootRuntime || rootTestOnly || rootBuildContract;
+  const rootCompileContract = matches(/^tests\//);
+  const rootValidation = rootRuntime || rootTestOnly || rootBuildContract || rootCompileContract;
   const evals = affectsEvals(paths);
   return {
     settings: matches(

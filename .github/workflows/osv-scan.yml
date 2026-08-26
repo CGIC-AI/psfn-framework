@@ -3,6 +3,12 @@ name: OSV Dependency Scan
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - "**/package-lock.json"
+      - "**/Dockerfile*"
+      - ".github/workflows/osv-scan.yml"
+      - "scripts/ci/npm-project-contract.mjs"
+      - "scripts/ci/run-osv-scan.mjs"
   schedule:
     - cron: "23 6 * * *"
   workflow_dispatch:
@@ -24,7 +30,6 @@ jobs:
       - name: Check out exact revision
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
-          fetch-depth: 0
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 

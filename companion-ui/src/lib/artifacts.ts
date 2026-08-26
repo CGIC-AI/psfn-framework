@@ -54,7 +54,7 @@ export const ARTIFACT_PREVIEW_NOT_PREVIEWABLE_REASON =
  * Artifacts are only shown once the hub has acked our `artifact` output
  * capability on this session; otherwise the shelf stays fail-closed.
  */
-export function artifactCapabilityAcked(stream: HubStreamState): boolean {
+function artifactCapabilityAcked(stream: HubStreamState): boolean {
   return stream.session?.capabilities?.output?.includes('artifact') ?? false;
 }
 

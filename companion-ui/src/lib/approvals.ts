@@ -40,7 +40,7 @@ export const APPROVALS_UNSUPPORTED_REASON =
  * families only to satellites that advertise them, so an absent ack means the
  * surface stays fail-closed regardless of any events that may have arrived.
  */
-export function approvalsCapabilityAcked(stream: HubStreamState): boolean {
+function approvalsCapabilityAcked(stream: HubStreamState): boolean {
   return (stream.session?.capabilities?.control?.includes('approvals') ?? false)
     && (stream.session?.eventCapabilities?.includes(COMPANION_APPROVALS_V2_CAPABILITY) ?? false);
 }

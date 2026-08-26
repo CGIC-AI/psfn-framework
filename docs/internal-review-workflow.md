@@ -94,19 +94,26 @@ git rebase origin/main
 npm run gate:pre-pr
 ```
 
-The sequential gate always owns delivery rules and budgets, changed-file lint,
-Semgrep diff scanning, and changed-file UBS 5.3.7. Full root lint, build,
-baselined typecheck, repository hygiene, and product tests capped at eight
-workers with fail-fast enabled run only for root runtime/build-graph or root
-lockfile changes. UI changes use their focused checks instead
-of the backend/Postgres suite; Semgrep rule tests and changed-workflow
+The gate always owns delivery rules and budgets, changed-file lint, Semgrep diff
+scanning, and changed-file UBS 5.3.7. Independent low-memory policy checks run
+as one explicitly allowlisted parallel pool. Lint, typecheck, hygiene, builds,
+specialist checks, and test processes remain serial so their heaps do not
+compete. Full root lint, DTS build, and the whole product suite are reserved for
+the clean-main canary or build-contract changes. Ordinary product changes use
+changed-file lint, incremental typecheck, the runtime build, unit tests, and
+risk-scoped integration tests. UI changes use their focused checks instead of
+the backend/Postgres suite; Semgrep rule tests and changed-workflow
 actionlint/zizmor run only when their own files change.
 
 The publication gate refuses dirty, detached, `main`, empty, or non-rebased
 delivery. Attestation and logs live under the worktree Git directory in
-`local-delivery-gate/`, never in tracked files. The cache matches only the exact
-head and base. `npm run pr:publish` runs and verifies the same gate before
-publishing the exact head; never use `--no-verify` in the normal flow.
+`local-delivery-gate/`, never in tracked files. The final attestation always
+matches only the exact head, base, and command plan. Individual passed stages
+with complete input manifests may be reused across later heads when their base,
+command, gate version, and committed-input content hash are unchanged; stages
+without a complete manifest remain exact-head-bound. `npm run pr:publish` runs
+and verifies the same exact-head gate before publishing; never use
+`--no-verify` in the normal flow.
 
 Greptile is not part of ordinary publication. Its repository config reviews only
 PRs explicitly labeled `review:greptile` and does not rescan later pushes. Never

@@ -3,7 +3,11 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import test from 'node:test';
 
-import { affectsEvals, detectChangeScope } from './detect-change-scope.mjs';
+import {
+  ROOT_DTS_ENTRYPOINTS,
+  affectsEvals,
+  detectChangeScope,
+} from './detect-change-scope.mjs';
 
 const REPOSITORY_ROOT = resolve(import.meta.dirname, '../..');
 const EVAL_ROOT = join(REPOSITORY_ROOT, 'tools/evals/eval');
@@ -95,6 +99,7 @@ test('leaves unrelated source changes on the core CI path', () => {
 test('test-only root changes avoid product build and typecheck scopes', () => {
   for (const path of [
     'src/core/session/manager.test.ts',
+    'src/core/session/manager.test-fixtures.ts',
     'scripts/onboarding/flow.test.ts',
   ]) {
     const scope = detectChangeScope([path]);
@@ -105,12 +110,34 @@ test('test-only root changes avoid product build and typecheck scopes', () => {
   }
 });
 
-test('build contracts retain the full root build scope', () => {
-  for (const path of ['tsup.config.ts', 'tsconfig.tsup.json']) {
+test('compile-only type contracts select validation without becoming product runtime', () => {
+  const scope = detectChangeScope(['tests/types/companion-id.type-test.ts']);
+  assert.equal(scope.root_runtime, false);
+  assert.equal(scope.root_test_only, false);
+  assert.equal(scope.root_validation, true);
+  assert.equal(scope.clean_environment, true);
+});
+
+test('build contracts and bundle entrypoints retain the full root build scope', () => {
+  for (const path of [
+    'tsup.config.ts',
+    'tsconfig.tsup.json',
+    'src/app/gateway/main.ts',
+    'scripts/preflight-startup-owner-files.ts',
+  ]) {
     const scope = detectChangeScope([path]);
     assert.equal(scope.root_build_contract, true, path);
     assert.equal(scope.root_validation, true, path);
   }
+});
+
+test('DTS entrypoint scope stays synchronized with tsup', () => {
+  const tsup = readFileSync(join(REPOSITORY_ROOT, 'tsup.config.ts'), 'utf8');
+  const configuredEntries = [...tsup.matchAll(/['"]((?:src|scripts)\/[^'"]+\.ts)['"]/gu)]
+    .map((match) => match[1])
+    .filter((path, index, all) => all.indexOf(path) === index)
+    .sort();
+  assert.deepEqual([...ROOT_DTS_ENTRYPOINTS].sort(), configuredEntries);
 });
 
 test('keeps docs and workflow metadata on the cheap path', () => {

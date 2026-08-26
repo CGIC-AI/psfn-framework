@@ -24,6 +24,8 @@ import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
+import { NPM_LOCKFILES } from './npm-project-contract.mjs';
+
 export const OSV_IMAGE =
   'ghcr.io/google/osv-scanner@sha256:bcb04b6bab5ab578898b3ff8b81b381e7961b1eac6aa87639b53aaea0d266003';
 export const OSV_VERSION = '2.4.0';
@@ -31,13 +33,7 @@ export const OSV_VERSION = '2.4.0';
 // The exact, complete set of committed npm lockfiles this gate owns. Every one is
 // named explicitly and scanned on every run; a missing or unreadable lockfile is
 // a loud failure, never a silent skip.
-export const OSV_LOCKFILES = Object.freeze([
-  'package-lock.json',
-  'admin-ui/package-lock.json',
-  'companion-ui/package-lock.json',
-  'apps/satellite-hub/package-lock.json',
-  'tools/evals/package-lock.json',
-]);
+export const OSV_LOCKFILES = NPM_LOCKFILES;
 
 const FORMATS = new Set(['table', 'json', 'sarif']);
 

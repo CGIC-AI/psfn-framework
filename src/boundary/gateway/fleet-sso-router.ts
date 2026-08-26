@@ -347,13 +347,10 @@ function isHtmlNavigation(request: IncomingMessage): boolean {
 function sendFleetLoginRedirect(
   response: ServerResponse,
   returnPath: string,
-  localOperatorLogin: boolean,
 ): void {
   response.writeHead(302, {
     'Cache-Control': 'no-store',
-    Location: localOperatorLogin
-      ? FLEET_LOGIN_PATH
-      : `${FLEET_AUTH_LOGIN_PATH}?return_to=${encodeURIComponent(returnPath)}`,
+    Location: `${FLEET_AUTH_LOGIN_PATH}?return_to=${encodeURIComponent(returnPath)}`,
     'Referrer-Policy': 'no-referrer',
   });
   response.end();
@@ -768,18 +765,13 @@ export class GatewayFleetSsoRouter {
           rawPath === FLEET_PATH
           || rawPath === `${FLEET_PATH}/`
         )) {
-          sendFleetLoginRedirect(
-            response,
-            request.url ?? FLEET_PATH,
-            this.options.localOperatorLogin !== undefined,
-          );
+          sendFleetLoginRedirect(response, request.url ?? FLEET_PATH);
           return;
         }
         if (isHtmlNavigation(request) && parseGardenRoute(request.url ?? '/')) {
           sendFleetLoginRedirect(
             response,
             request.url ?? '/',
-            this.options.localOperatorLogin !== undefined,
           );
           return;
         }

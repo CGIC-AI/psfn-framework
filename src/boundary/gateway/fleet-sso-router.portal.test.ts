@@ -291,7 +291,7 @@ describe('unified-origin fleet portal routing', () => {
     })).rejects.toThrow('requires a strict same-origin path');
   });
 
-  it('makes local operator login primary and accepts its opaque loopback session', async () => {
+  it('keeps canonical SSO primary and offers local operator login as a loopback fallback', async () => {
     const harness = await start({
       localOperatorLogin: {
         loginPath: '/v1/fleet-auth/local-operator-login',
@@ -301,12 +301,23 @@ describe('unified-origin fleet portal routing', () => {
 
     const fleet = await request(harness.port, '/fleet', { accept: 'text/html' });
     expect(fleet.status).toBe(302);
-    expect(fleet.headers.location).toBe('/fleet/login');
+    expect(fleet.headers.location).toBe('/v1/fleet-auth/login?return_to=%2Ffleet');
+
+    const gardenPath = `/companions/${COMPANION_ID}/garden/subsystem-health`;
+    const garden = await request(harness.port, gardenPath, { accept: 'text/html' });
+    expect(garden.status).toBe(302);
+    expect(garden.headers.location).toBe(
+      `/v1/fleet-auth/login?return_to=${encodeURIComponent(gardenPath)}`,
+    );
 
     const login = await request(harness.port, '/fleet/login');
     expect(login.status).toBe(200);
+    const ssoIndex = login.body.indexOf('href="/v1/fleet-auth/login?return_to=%2Ffleet"');
+    const localIndex = login.body.indexOf('href="/v1/fleet-auth/local-operator-login"');
+    expect(ssoIndex).toBeGreaterThan(-1);
+    expect(localIndex).toBeGreaterThan(ssoIndex);
     expect(login.body).toContain('href="/v1/fleet-auth/local-operator-login"');
-    expect(login.body).toContain('Sign in with admin token');
+    expect(login.body).toContain('Local administrator login');
     expect(login.body).toContain('Login with Discord');
 
     const portal = await request(harness.port, '/fleet', {

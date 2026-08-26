@@ -211,15 +211,9 @@ function pageBody(
         <a href="${escapeHtml(registration.loginPath)}">Emergency administrator login</a>
       </div>`
     : '';
-  const primaryLogin = localOperatorLogin
-    ? `<a class="primary" href="${escapeHtml(localOperatorLogin.loginPath)}"><span>Sign in with admin token</span></a>
-      <p class="privacy">${LOCK_ICON}<span>The token is exchanged locally for a bounded operator session.</span></p>
-      <div class="emergency"><a href="${DISCORD_LOGIN_PATH}">Login with Discord</a></div>`
-    : `<a class="primary" href="${DISCORD_LOGIN_PATH}">${DISCORD_MARK}<span>Login with Discord</span></a>
-      <p class="privacy">${LOCK_ICON}<span>Authentication is handled securely through Discord.</span></p>`;
-  const introduction = localOperatorLogin
-    ? 'Use the administrator token configured for this local cluster.'
-    : 'Sign in to continue to the PSFN Cluster Portal. Operator identity is verified through Discord, then bound to your session.';
+  const localOperatorFallback = localOperatorLogin
+    ? `<div class="emergency"><a href="${escapeHtml(localOperatorLogin.loginPath)}">Local administrator login</a></div>`
+    : '';
   return Buffer.from(`<!doctype html>
 <html lang="en">
 <head>
@@ -241,8 +235,9 @@ function pageBody(
       </div>
       <div class="rule" aria-hidden="true"></div>
       <h1 id="login-title">Welcome back.</h1>
-      <p class="intro">${introduction}</p>
-      ${primaryLogin}${breakGlass}
+      <p class="intro">Sign in to continue to the PSFN Cluster Portal. Operator identity is verified through Discord, then bound to your session.</p>
+      <a class="primary" href="${DISCORD_LOGIN_PATH}">${DISCORD_MARK}<span>Login with Discord</span></a>
+      <p class="privacy">${LOCK_ICON}<span>Authentication is handled securely through Discord.</span></p>${localOperatorFallback}${breakGlass}
     </section>
   </main>
 </body>

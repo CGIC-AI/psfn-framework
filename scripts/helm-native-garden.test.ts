@@ -6,6 +6,7 @@ import {
   parseConnectedTailnetStatus,
   parseK3dClusters,
   reconcileNativeGardenEdge,
+  requestNativeGarden,
   verifyTokenLoginRedirect,
   type CommandRunner,
   type CommandResult,
@@ -228,5 +229,34 @@ describe('native Tailscale Garden edge', () => {
       timeoutMs: 10_000,
       url: 'https://127.0.0.1:10053/',
     })).toThrow(/standalone token login/u);
+  });
+});
+
+describe('native Garden HTTPS request boundary', () => {
+  it('keeps the login token on stdin while accepting only loopback cluster TLS', () => {
+    let captured: { args: readonly string[]; stdin?: string } | undefined;
+    const response = requestNativeGarden({
+      cwd: '/repo',
+      gardenPort: 10053,
+      method: 'POST',
+      path: '/login',
+      run: (_command, args, options) => {
+        captured = { args, ...(options.stdin ? { stdin: options.stdin } : {}) };
+        return result([
+          'HTTP/1.1 302 Found\r',
+          'Set-Cookie: psfn_token=signed; Path=/\r',
+          '\r',
+          '',
+          '__PSFN_NATIVE_GARDEN_STATUS__:302',
+        ].join('\n'));
+      },
+      timeoutMs: 10_000,
+      token: 'private-login-token',
+    });
+    expect(response.status).toBe(302);
+    expect(response.setCookie).toBe('psfn_token=signed; Path=/');
+    expect(captured?.args).toContain('--insecure');
+    expect(captured?.args.join(' ')).not.toContain('private-login-token');
+    expect(captured?.stdin).toBe('private-login-token');
   });
 });

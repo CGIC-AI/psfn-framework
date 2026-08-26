@@ -10,7 +10,7 @@ export interface CommandResult {
 export type CommandRunner = (
   command: string,
   args: readonly string[],
-  options: { cwd: string; timeoutMs: number },
+  options: { cwd: string; timeoutMs: number; stdin?: string },
 ) => CommandResult;
 
 interface K3dPortBinding {
@@ -38,12 +38,13 @@ export interface TailnetConnection {
 function defaultRun(
   command: string,
   args: readonly string[],
-  options: { cwd: string; timeoutMs: number },
+  options: { cwd: string; timeoutMs: number; stdin?: string },
 ): CommandResult {
   const result = spawnSync(command, [...args], {
     cwd: options.cwd,
     encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
+    input: options.stdin,
+    stdio: [options.stdin === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
     timeout: options.timeoutMs,
   });
   if (result.error) {
@@ -67,7 +68,7 @@ function runRequired(
   run: CommandRunner,
   command: string,
   args: readonly string[],
-  options: { cwd: string; timeoutMs: number },
+  options: { cwd: string; timeoutMs: number; stdin?: string },
 ): CommandResult {
   const result = run(command, args, options);
   if (result.status !== 0) throw commandFailure(command, args, result);
@@ -239,6 +240,64 @@ export function verifyTokenLoginRedirect(input: {
       + `Location: ${location || '<none>'}).`,
     );
   }
+}
+
+export function requestNativeGarden(input: {
+  cookie?: string;
+  cwd: string;
+  gardenPort: number;
+  method?: 'GET' | 'POST';
+  path: string;
+  run?: CommandRunner;
+  timeoutMs: number;
+  token?: string;
+}): { status: number; ok: boolean; text: string; setCookie?: string } {
+  if (!/^\/[^\r\n]*$/u.test(input.path)) throw new Error('Native Garden request path must be an absolute HTTP path.');
+  if (input.cookie?.includes('\n') || input.cookie?.includes('\r')) {
+    throw new Error('Native Garden session cookie contains an invalid line break.');
+  }
+  if (input.cookie && input.token) throw new Error('Native Garden requests cannot send a token and cookie together.');
+  const run = input.run ?? defaultRun;
+  const maxTimeSeconds = String(Math.max(1, Math.ceil(input.timeoutMs / 1_000)));
+  const statusMarker = '\n__PSFN_NATIVE_GARDEN_STATUS__:';
+  const args = [
+    '--silent', '--show-error', '--max-time', maxTimeSeconds,
+    '--insecure',
+    '--dump-header', '-',
+    '--output', '-',
+    '--write-out', `${statusMarker}%{http_code}`,
+    '--request', input.method ?? 'GET',
+    ...(input.token
+      ? ['--header', 'Content-Type: application/x-www-form-urlencoded', '--data-urlencode', 'token@-']
+      : []),
+    ...(input.cookie ? ['--header', '@-'] : []),
+    `https://127.0.0.1:${input.gardenPort}${input.path}`,
+  ];
+  const stdin = input.token ?? (input.cookie ? `Cookie: ${input.cookie}\n` : undefined);
+  const result = run('curl', args, { cwd: input.cwd, timeoutMs: input.timeoutMs, ...(stdin ? { stdin } : {}) });
+  if (result.status !== 0) throw commandFailure('curl', args, result);
+  const markerIndex = result.stdout.lastIndexOf(statusMarker);
+  if (markerIndex < 0) throw new Error('Native Garden curl response did not include its HTTP status marker.');
+  const status = Number(result.stdout.slice(markerIndex + statusMarker.length).trim());
+  if (!Number.isInteger(status)) throw new Error('Native Garden curl returned an invalid HTTP status.');
+  const responseText = result.stdout.slice(0, markerIndex);
+  const separator = /\r?\n\r?\n/u.exec(responseText);
+  if (!separator || separator.index === undefined) {
+    throw new Error('Native Garden curl response did not include HTTP headers.');
+  }
+  const headerText = responseText.slice(0, separator.index);
+  const text = responseText.slice(separator.index + separator[0].length);
+  const setCookie = headerText
+    .split(/\r?\n/u)
+    .find((line) => line.toLowerCase().startsWith('set-cookie:'))
+    ?.slice('set-cookie:'.length)
+    .trim();
+  return {
+    status,
+    ok: status >= 200 && status < 300,
+    text,
+    ...(setCookie ? { setCookie } : {}),
+  };
 }
 
 export function inspectTailnetHttpsRoot(

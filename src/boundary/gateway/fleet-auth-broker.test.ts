@@ -72,6 +72,24 @@ const mappedConfig: FleetAuthConfig = {
   }],
 };
 
+const localOperatorConfig: FleetAuthConfig = {
+  ...config,
+  accountRoster: [
+    {
+      providerSubjectId: '123456789012345679',
+      companionId: '00000000-0000-4000-8000-000000000201',
+      contactId: '00000000-0000-4000-8000-000000000211',
+      role: 'owner',
+    },
+    {
+      providerSubjectId: '123456789012345679',
+      companionId: '00000000-0000-4000-8000-000000000202',
+      contactId: '00000000-0000-4000-8000-000000000212',
+      role: 'owner',
+    },
+  ],
+};
+
 function mappedLoginFetch() {
   return vi.fn<typeof fetch>()
     .mockResolvedValueOnce(response(200, {
@@ -171,6 +189,22 @@ class FakeStore implements FleetAuthBrokerStore {
       csrfToken: input.csrfToken,
       idleExpiresAt: new Date(input.now.getTime() + config.ttls.sessionIdleMs),
       absoluteExpiresAt: new Date(input.now.getTime() + config.ttls.sessionAbsoluteMs),
+    };
+    return this.session;
+  }
+
+  async createLocalOperatorSession(
+    input: Parameters<FleetAuthBrokerStore['createLocalOperatorSession']>[0],
+  ) {
+    this.lastProviderSubject = input.providerSubjectId;
+    this.session = {
+      recordId: '00000000-0000-4000-8000-000000000111',
+      principalId: '00000000-0000-4000-8000-000000000112',
+      principalStatus: this.principalStatus,
+      token: input.token,
+      csrfToken: input.csrfToken,
+      idleExpiresAt: new Date(input.now.getTime() + input.idleTtlMs),
+      absoluteExpiresAt: new Date(input.now.getTime() + input.absoluteTtlMs),
     };
     return this.session;
   }
@@ -280,6 +314,59 @@ function makeBroker(
 }
 
 describe('gateway fleet auth broker', () => {
+  it('creates a bounded fleet session for the one uniquely rostered local owner', async () => {
+    const { broker, store } = makeBroker(new FakeStore(), vi.fn<typeof fetch>(), {
+      config: localOperatorConfig,
+    });
+
+    const session = await broker.completeLocalOperatorLogin();
+
+    expect(session).toMatchObject({
+      principalStatus: 'pending',
+      token: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/u),
+      csrfToken: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/u),
+    });
+    expect(store.lastProviderSubject).toBe('123456789012345679');
+    expect(session.absoluteExpiresAt.getTime() - new Date('2026-07-15T12:00:00.000Z').getTime())
+      .toBe(localOperatorConfig.ttls.sessionAbsoluteMs);
+  });
+
+  it('rejects local operator login when the owner roster is absent, ambiguous, or evidence-gated', async () => {
+    await expect(makeBroker().broker.completeLocalOperatorLogin())
+      .rejects.toMatchObject({ code: 'local_operator_login_unavailable', status: 503 });
+
+    const ambiguous: FleetAuthConfig = {
+      ...localOperatorConfig,
+      accountRoster: [
+        ...localOperatorConfig.accountRoster!,
+        {
+          providerSubjectId: '223456789012345679',
+          companionId: '00000000-0000-4000-8000-000000000203',
+          contactId: '00000000-0000-4000-8000-000000000213',
+          role: 'owner',
+        },
+      ],
+    };
+    await expect(makeBroker(new FakeStore(), vi.fn<typeof fetch>(), {
+      config: ambiguous,
+    }).broker.completeLocalOperatorLogin())
+      .rejects.toMatchObject({ code: 'local_operator_login_unavailable', status: 503 });
+
+    const evidenceGated: FleetAuthConfig = {
+      ...mappedConfig,
+      accountRoster: localOperatorConfig.accountRoster,
+    };
+    await expect(makeBroker(new FakeStore(), vi.fn<typeof fetch>(), {
+      config: evidenceGated,
+      discordEvidenceLifecycle: {
+        recordActiveOAuthSession: vi.fn(async () => ({ status: 'admitted' as const })),
+        recordSessionRotation: vi.fn(async () => ({ status: 'admitted' as const })),
+        commitGlobalAuthorityReset: vi.fn(async reset => await reset()),
+      },
+    }).broker.completeLocalOperatorLogin())
+      .rejects.toMatchObject({ code: 'local_operator_login_unavailable', status: 503 });
+  });
+
   it('produces lifecycle-scoped OAuth proof without creating a login session', async () => {
     const { broker, store } = makeBroker(new FakeStore(), vi.fn<typeof fetch>()
       .mockResolvedValueOnce(response(200, {

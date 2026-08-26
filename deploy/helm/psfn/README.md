@@ -107,5 +107,11 @@ The chart contains advanced fleet, ingress, Redis, Satellite Hub, Kubernetes
 self-management, and observer-eval values for operator-owned deployments. They
 are disabled by default and are not additional public installation modes.
 
+Fleet deployments may enable `fleetAuth.localOperatorLogin` with exact
+loopback origins such as `http://127.0.0.1:10053`. The Gateway then accepts the
+existing `ADMIN_TOKEN` at `/fleet/login`, exchanges it for an opaque bounded
+session, and continues to proxy Garden only through signed fleet capabilities.
+Garden remains internal; no Garden Ingress or host port is created.
+
 Live values files, kubeconfigs, cluster names, infrastructure addresses, and
 credentials do not belong in this repository.

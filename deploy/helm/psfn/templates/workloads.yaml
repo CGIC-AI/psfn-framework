@@ -158,6 +158,12 @@ spec:
               value: {{ include "psfn.spiffeGarden" . | quote }}
             - name: FLEET_SSO_GARDEN_TLS_SERVER_NAME
               value: {{ include "psfn.gardenSsoServerName" . | quote }}
+            {{- if .Values.fleetAuth.localOperatorLogin.enabled }}
+            - name: PSFN_FLEET_LOCAL_OPERATOR_LOGIN
+              value: "true"
+            - name: PSFN_FLEET_LOCAL_OPERATOR_ORIGINS
+              value: {{ join "," .Values.fleetAuth.localOperatorLogin.allowedOrigins | quote }}
+            {{- end }}
             {{- if .Values.fleetAuth.credentialEnv }}
             {{- include "psfn.fleetAuthCredentialEnv" . | nindent 12 }}
             {{- end }}

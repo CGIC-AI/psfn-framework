@@ -25,7 +25,13 @@ function listen(server: Server): Promise<number> {
 function request(
   port: number,
   path: string,
-  options: { method?: string; session?: string; origin?: string; accept?: string } = {},
+  options: {
+    method?: string;
+    session?: string;
+    localSession?: string;
+    origin?: string;
+    accept?: string;
+  } = {},
 ): Promise<{ status: number; headers: IncomingHttpHeaders; body: string }> {
   return new Promise((resolve, reject) => {
     const outgoing = httpRequest({
@@ -40,6 +46,9 @@ function request(
         'x-forwarded-port': '443',
         'x-forwarded-for': '198.51.100.9',
         ...(options.session ? { cookie: `__Host-psfn_session=${options.session}` } : {}),
+        ...(options.localSession
+          ? { cookie: `psfn_local_operator_session=${options.localSession}` }
+          : {}),
         ...(options.origin ? { origin: options.origin } : {}),
         ...(options.accept ? { accept: options.accept } : {}),
       },
@@ -68,6 +77,7 @@ describe('unified-origin fleet portal routing', () => {
 
   async function start(options: {
     breakGlassLogin?: { loginPath: string };
+    localOperatorLogin?: { loginPath: string; allowedOrigins: readonly string[] };
   } = {}): Promise<{
     port: number;
     resolveProjection: ReturnType<typeof vi.fn>;
@@ -279,6 +289,40 @@ describe('unified-origin fleet portal routing', () => {
     await expect(start({
       breakGlassLogin: { loginPath: 'https://attacker.example.test/login' },
     })).rejects.toThrow('requires a strict same-origin path');
+  });
+
+  it('makes local operator login primary and accepts its opaque loopback session', async () => {
+    const harness = await start({
+      localOperatorLogin: {
+        loginPath: '/v1/fleet-auth/local-operator-login',
+        allowedOrigins: ['http://127.0.0.1:10053'],
+      },
+    });
+
+    const fleet = await request(harness.port, '/fleet', { accept: 'text/html' });
+    expect(fleet.status).toBe(302);
+    expect(fleet.headers.location).toBe('/fleet/login');
+
+    const login = await request(harness.port, '/fleet/login');
+    expect(login.status).toBe(200);
+    expect(login.body).toContain('href="/v1/fleet-auth/local-operator-login"');
+    expect(login.body).toContain('Sign in with admin token');
+    expect(login.body).toContain('Login with Discord');
+
+    const portal = await request(harness.port, '/fleet', {
+      accept: 'text/html',
+      localSession: SESSION_TOKEN,
+      origin: 'http://127.0.0.1:10053',
+    });
+    expect(portal.status).toBe(200);
+    expect(harness.resolveProjection).toHaveBeenCalledWith({ sessionToken: SESSION_TOKEN });
+
+    const denied = await request(harness.port, '/fleet', {
+      accept: 'text/html',
+      localSession: SESSION_TOKEN,
+      origin: 'http://127.0.0.1:10054',
+    });
+    expect(denied.status).toBe(400);
   });
 
   it('rejects cross-origin reads, aliases, and mutations before portal projection', async () => {

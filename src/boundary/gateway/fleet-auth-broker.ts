@@ -110,6 +110,15 @@ export interface FleetAuthBrokerStore extends DiscordEvidenceAdmissionStore {
     refreshToken?: string;
     providerTokenExpiresAt?: Date;
   }): Promise<FleetAuthSessionRecord>;
+  createLocalOperatorSession(input: {
+    providerSubjectId: string;
+    token: string;
+    csrfToken: string;
+    audience: 'fleet';
+    now: Date;
+    idleTtlMs: number;
+    absoluteTtlMs: number;
+  }): Promise<FleetAuthSessionRecord>;
   rotateSession(input: {
     token: string;
     csrfToken: string;
@@ -221,6 +230,29 @@ function parseReturnPath(value: string, canonicalOrigin: string): string {
     throw new FleetAuthBrokerError('invalid_return_path', 400, 'Return path is not allowlisted');
   }
   return normalized;
+}
+
+export function resolveFleetLocalOperatorSubject(config: FleetAuthConfig): string {
+  if (config.discordEvidenceMappings.length > 0) {
+    throw new FleetAuthBrokerError(
+      'local_operator_login_unavailable',
+      503,
+      'Local operator login is unavailable for evidence-gated Fleet authentication',
+    );
+  }
+  const ownerSubjects = new Set(
+    (config.accountRoster ?? [])
+      .filter(entry => entry.role === 'owner')
+      .map(entry => entry.providerSubjectId),
+  );
+  if (ownerSubjects.size !== 1) {
+    throw new FleetAuthBrokerError(
+      'local_operator_login_unavailable',
+      503,
+      'Local operator login requires exactly one rostered owner identity',
+    );
+  }
+  return [...ownerSubjects][0]!;
 }
 
 export class GatewayFleetAuthBroker {
@@ -433,6 +465,19 @@ export class GatewayFleetAuthBroker {
     });
     await this.discordEvidence.admitActiveOAuthSession(session, identity.subjectId, providerMembershipEvidence);
     return { returnPath: transaction.returnPath, session };
+  }
+
+  async completeLocalOperatorLogin(): Promise<FleetAuthSessionRecord> {
+    const now = this.now();
+    return await this.store.createLocalOperatorSession({
+      providerSubjectId: resolveFleetLocalOperatorSubject(this.config),
+      token: opaqueToken(this.randomBytes),
+      csrfToken: opaqueToken(this.randomBytes),
+      audience: 'fleet',
+      now,
+      idleTtlMs: this.config.ttls.sessionIdleMs,
+      absoluteTtlMs: this.config.ttls.sessionAbsoluteMs,
+    });
   }
 
   async completeLifecycleOAuthCallback(input: OAuthCallbackInput): Promise<{

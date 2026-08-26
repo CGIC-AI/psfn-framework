@@ -168,3 +168,76 @@ export async function createLoginSession(
     client.release();
   }
 }
+
+export async function createLocalOperatorSession(
+  dependencies: LoginSessionCreationDependencies,
+  input: Parameters<FleetAuthBrokerStore['createLocalOperatorSession']>[0],
+): Promise<FleetAuthSessionRecord> {
+  const client = await dependencies.pool.connect();
+  try {
+    await client.query('BEGIN');
+    const authorityResult = await client.query<{
+      authority_generation: string;
+      global_auth_epoch: string;
+    }>(`
+      SELECT authority_generation, global_auth_epoch
+      FROM ${FLEET_AUTH_LOCK_AUTHORITY_STATE_FUNCTION_NAME}()
+    `);
+    const authority = authorityResult.rows.at(0);
+    if (!authority) throw new Error('fleet_auth authority_state singleton is missing');
+    const authorityGeneration = requireFleetAuthInteger(
+      authority.authority_generation,
+      'authority_generation',
+    );
+    const globalAuthEpoch = requireFleetAuthInteger(
+      authority.global_auth_epoch,
+      'global_auth_epoch',
+    );
+    const pendingPrincipal = await dependencies.resolvePrincipal(
+      client,
+      input.providerSubjectId,
+      {},
+      authorityGeneration,
+    );
+    const activation = await activateRosteredFirstOwner(client, {
+      accountRoster: dependencies.accountRoster,
+      principal: pendingPrincipal,
+      providerSubjectId: input.providerSubjectId,
+      authorityGeneration,
+      globalAuthEpoch,
+      now: input.now,
+    });
+    const session = await dependencies.insertSession(client, {
+      principal: activation.principal,
+      audience: input.audience,
+      token: input.token,
+      csrfToken: input.csrfToken,
+      now: input.now,
+      idleExpiresAt: new Date(input.now.getTime() + input.idleTtlMs),
+      absoluteExpiresAt: new Date(input.now.getTime() + input.absoluteTtlMs),
+      globalAuthEpoch,
+      providerSubjectId: input.providerSubjectId,
+    });
+    await client.query(`
+      INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.authorization_audit_events
+        (event_id, actor_context, action, resource, decision, reason_code,
+         principal_id, authority_generation, global_auth_epoch, occurred_at)
+      VALUES ($1, $2::jsonb, 'session.local_operator_login', 'fleet', 'allow',
+              'local_operator_token_authenticated', $3, $4, $5, $6)
+    `, [
+      randomUUID(),
+      JSON.stringify({ kind: 'local_operator_token' }),
+      activation.principal.principal_id,
+      authority.authority_generation,
+      authority.global_auth_epoch,
+      input.now,
+    ]);
+    await client.query('COMMIT');
+    return session;
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
+}

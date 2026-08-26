@@ -38,6 +38,9 @@ function response(): ServerResponse & CapturedResponse {
       captured.headers.set(name.toLowerCase(), value);
       return this;
     },
+    getHeader(name: string) {
+      return captured.headers.get(name.toLowerCase());
+    },
     writeHead(statusCode: number, headers?: Record<string, string>) {
       captured.statusCode = statusCode;
       for (const [name, value] of Object.entries(headers ?? {})) {
@@ -69,9 +72,17 @@ function jsonRequest(body: unknown, headers: IncomingMessage['headers']): Incomi
   }) as unknown as IncomingMessage;
 }
 
+function formRequest(body: string, headers: IncomingMessage['headers']): IncomingMessage {
+  return Object.assign(Readable.from([body]), {
+    method: 'POST',
+    headers,
+    socket: {},
+  }) as unknown as IncomingMessage;
+}
+
 function routes(
   overrides: Partial<Record<keyof GatewayFleetAuthBroker, unknown>> = {},
-  options: { trustProxy?: boolean } = {},
+  options: { trustProxy?: boolean; localOperatorLogin?: boolean } = {},
 ) {
   const broker = {
     beginLogin: vi.fn(async () => ({
@@ -102,6 +113,15 @@ function routes(
         },
       };
     }),
+    completeLocalOperatorLogin: vi.fn(async () => ({
+      recordId: 'local-record',
+      principalId: 'local-principal',
+      principalStatus: 'active' as const,
+      token: 'l'.repeat(43),
+      csrfToken: 'm'.repeat(43),
+      idleExpiresAt: new Date('2026-07-15T12:30:00.000Z'),
+      absoluteExpiresAt: new Date('2099-07-15T20:00:00.000Z'),
+    })),
     issueCsrf: vi.fn(async () => 'b'.repeat(43)),
     rotateSession: vi.fn(async () => ({
       recordId: 'rotated',
@@ -129,12 +149,160 @@ function routes(
       canonicalOrigin: 'https://fleet.example.test',
       callbackPath: '/auth/discord/callback',
       ...(options.trustProxy ? { trustProxy: true } : {}),
+      ...(options.localOperatorLogin ? {
+        localOperatorLogin: {
+          adminToken: 'local-admin-token-at-least-32-bytes',
+          allowedOrigins: ['http://127.0.0.1:10053'],
+        },
+      } : {}),
       companionUi: { companionId: COMPANION_ID, guestMode: 'disabled' },
     }),
   };
 }
 
 describe('gateway-only fleet auth HTTP routes', () => {
+  it('serves the local operator token form only when explicitly configured', async () => {
+    const disabled = routes();
+    expect(disabled.handler.matches('GET', '/v1/fleet-auth/local-operator-login')).toBe(false);
+
+    const { handler } = routes({}, { localOperatorLogin: true });
+    expect(handler.matches('GET', '/v1/fleet-auth/local-operator-login')).toBe(true);
+    const res = response();
+    await handler.handle(
+      request('GET'),
+      res,
+      new URL('https://fleet.example.test/v1/fleet-auth/local-operator-login'),
+    );
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toContain('Sign in with your admin token');
+    expect(res.body).not.toContain('local-admin-token-at-least-32-bytes');
+    expect(res.headers.get('cache-control')).toBe('no-store');
+    expect(res.headers.get('content-security-policy')).toContain("form-action 'self'");
+  });
+
+  it('exchanges the exact admin token and loopback origin for an opaque local session cookie', async () => {
+    const { handler, broker } = routes({}, { localOperatorLogin: true });
+    const res = response();
+    await handler.handle(
+      formRequest('token=local-admin-token-at-least-32-bytes', {
+        origin: 'http://127.0.0.1:10053',
+        'content-type': 'application/x-www-form-urlencoded',
+      }),
+      res,
+      new URL('https://fleet.example.test/v1/fleet-auth/local-operator-login'),
+    );
+
+    expect(broker.completeLocalOperatorLogin).toHaveBeenCalledOnce();
+    expect(res.statusCode).toBe(303);
+    expect(res.headers.get('location')).toBe('/fleet');
+    expect(res.headers.get('set-cookie')).toMatch(
+      /^psfn_local_operator_session=l{43}; Path=\/; Max-Age=\d+; HttpOnly; SameSite=Strict$/u,
+    );
+    expect(String(res.headers.get('set-cookie'))).not.toContain('local-admin-token');
+  });
+
+  it('denies wrong tokens, non-loopback origins, duplicate fields, and mixed session cookies', async () => {
+    const { handler, broker } = routes({}, { localOperatorLogin: true });
+    for (const input of [
+      { body: 'token=wrong', origin: 'http://127.0.0.1:10053' },
+      { body: 'token=local-admin-token-at-least-32-bytes', origin: 'https://attacker.example.test' },
+      {
+        body: 'token=local-admin-token-at-least-32-bytes&token=local-admin-token-at-least-32-bytes',
+        origin: 'http://127.0.0.1:10053',
+      },
+    ]) {
+      const res = response();
+      await handler.handle(
+        formRequest(input.body, {
+          origin: input.origin,
+          'content-type': 'application/x-www-form-urlencoded',
+        }),
+        res,
+        new URL('https://fleet.example.test/v1/fleet-auth/local-operator-login'),
+      );
+      expect(res.statusCode).toBe(input.origin.includes('attacker') ? 403 : 401);
+      expect(res.headers.get('set-cookie')).toBeUndefined();
+    }
+    expect(broker.completeLocalOperatorLogin).not.toHaveBeenCalled();
+
+    const mixed = response();
+    await handler.handle(
+      request('GET', {
+        cookie: `__Host-psfn_session=${'a'.repeat(43)}; psfn_local_operator_session=${'l'.repeat(43)}`,
+      }),
+      mixed,
+      new URL('https://fleet.example.test/v1/fleet-auth/session/status'),
+    );
+    expect(JSON.parse(mixed.body)).toMatchObject({ state: 'signed_out' });
+  });
+
+  it('rotates local sessions with the allowlisted loopback origin and preserves local cookie scope', async () => {
+    const { handler, broker } = routes({}, { localOperatorLogin: true });
+    const res = response();
+    await handler.handle(
+      request('POST', {
+        cookie: `psfn_local_operator_session=${'a'.repeat(43)}`,
+        origin: 'http://127.0.0.1:10053',
+        'x-psfn-csrf': 'b'.repeat(43),
+      }),
+      res,
+      new URL('https://fleet.example.test/v1/fleet-auth/session/refresh'),
+    );
+
+    expect(broker.rotateSession).toHaveBeenCalledWith({
+      token: 'a'.repeat(43),
+      csrfToken: 'b'.repeat(43),
+      requestOrigin: 'https://fleet.example.test',
+    });
+    expect(res.headers.get('set-cookie')).toMatch(
+      /^psfn_local_operator_session=c{43}; Path=\/; Max-Age=\d+; HttpOnly; SameSite=Strict$/u,
+    );
+  });
+
+  it('allows lifecycle CORS only from configured local operator origins', () => {
+    const { handler } = routes({}, { localOperatorLogin: true });
+    const accepted = response();
+    expect(handler.applyLifecycleCorsPolicy(
+      request('POST', { origin: 'http://127.0.0.1:10053' }),
+      accepted,
+      '/v1/fleet-auth/lifecycle/oauth',
+    )).toBe('continue');
+    expect(accepted.headers.get('access-control-allow-origin'))
+      .toBe('http://127.0.0.1:10053');
+    expect(accepted.headers.get('access-control-allow-credentials')).toBe('true');
+
+    const denied = response();
+    expect(handler.applyLifecycleCorsPolicy(
+      request('POST', { origin: 'http://127.0.0.1:10054' }),
+      denied,
+      '/v1/fleet-auth/lifecycle/oauth',
+    )).toBe('handled');
+    expect(denied.statusCode).toBe(403);
+  });
+
+  it('labels a local operator session without changing its fleet authority', async () => {
+    const { handler, broker } = routes({}, { localOperatorLogin: true });
+    const res = response();
+    await handler.handle(
+      request('GET', { cookie: `psfn_local_operator_session=${'a'.repeat(43)}` }),
+      res,
+      new URL('https://fleet.example.test/v1/fleet-auth/session/status'),
+    );
+
+    expect(broker.resolveAuthorizationContext).toHaveBeenCalledWith({
+      sessionToken: 'a'.repeat(43),
+      audience: 'fleet',
+      companionId: COMPANION_ID,
+      action: 'companion.read',
+    });
+    expect(JSON.parse(res.body).human).toEqual({
+      provider: 'discord',
+      label: 'Local operator',
+      role: 'member',
+    });
+  });
+
   it('returns an exact no-store signed-out status without exposing authority identifiers', async () => {
     const { handler, broker } = routes();
     const res = response();

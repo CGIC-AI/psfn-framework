@@ -88,11 +88,12 @@ This repository opts into the **team-maintainer** profile.
 - Run `npm run hooks:install` once in every clone. It configures the shared Git
   directory so linked worktrees inherit the tracked hooks automatically.
   Publication fails closed unless the tracked pre-push hook is active.
-- The tracked post-checkout hook automatically installs lockfile-exact,
-  worktree-local dependencies for every committed npm project when a fresh
-  worktree is created or a lockfile changes. It prepares and proves the shared
-  npm cache when needed, then installs offline. Never link or share mutable
-  `node_modules` directories between worktrees.
+- The tracked post-checkout hook automatically installs only the root project's
+  lockfile-exact, worktree-local dependencies when a fresh worktree is created
+  or the root lockfile changes. Specialist gates install their own project
+  dependencies lazily when selected. The bootstrap prepares and proves the
+  shared npm cache when needed, then installs offline. Never link or share
+  mutable `node_modules` directories between worktrees.
 - Before publication, run `npm run gate:pre-pr` once on the exact final committed
   head and publish through `npm run pr:publish`.
 - Never manually force-push or rewrite a shared branch. Rebase before publication

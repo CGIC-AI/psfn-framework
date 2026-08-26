@@ -16,6 +16,7 @@ import test from 'node:test';
 const REPOSITORY_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const VERIFIER_PATH = join(REPOSITORY_ROOT, 'scripts/verify-knip-baseline.mjs');
 const NPX_MARKER = 'npx-ran';
+const NPX_CWD = 'npx-cwd';
 
 function emptyCounts(overrides = {}) {
   return {
@@ -75,6 +76,7 @@ function makeFixture({ knipBaseline, issues = [] } = {}) {
     [
       '#!/bin/sh',
       `echo ran > ${JSON.stringify(join(cwd, NPX_MARKER))}`,
+      `pwd > ${JSON.stringify(join(cwd, NPX_CWD))}`,
       `cat ${JSON.stringify(join(cwd, 'report.json'))}`,
       '',
     ].join('\n'),
@@ -118,6 +120,30 @@ test('fails for a missing baseline before starting knip', () => {
   assert.equal(result.status, 1);
   assert.match(result.stderr, /Missing config\/knip-baseline\.json/u);
   assertKnipDidNotRun(cwd);
+});
+
+test('rejects an unknown project before starting knip', () => {
+  const cwd = makeFixture({ knipBaseline: baseline() });
+
+  const result = runVerifier(cwd, ['--project', '../outside']);
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /Unknown Knip project/u);
+  assertKnipDidNotRun(cwd);
+});
+
+test('runs a specialist Knip project from its own dependency root', () => {
+  const cwd = makeFixture({ knipBaseline: baseline() });
+  mkdirSync(join(cwd, 'companion-ui'), { recursive: true });
+  writeFileSync(
+    join(cwd, 'config/knip-companion-ui-baseline.json'),
+    `${JSON.stringify(baseline(), null, 2)}\n`,
+  );
+
+  const result = runVerifier(cwd, ['--project', 'companion-ui']);
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(readFileSync(join(cwd, NPX_CWD), 'utf8').trim(), join(cwd, 'companion-ui'));
 });
 
 test('fails for knip version drift before starting knip', () => {
@@ -168,7 +194,7 @@ test('passes when findings match the baseline', () => {
   const result = runVerifier(cwd);
 
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /\[verify-knip-baseline\] PASS/u);
+  assert.match(result.stdout, /\[verify-knip-baseline:root\] PASS/u);
   assert.equal(existsSync(join(cwd, NPX_MARKER)), true);
 });
 
@@ -227,7 +253,7 @@ test('update rewrites the baseline when findings shrink', () => {
   const result = runVerifier(cwd, ['--update']);
 
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /\[verify-knip-baseline\] wrote config\/knip-baseline\.json/u);
+  assert.match(result.stdout, /\[verify-knip-baseline:root\] wrote config\/knip-baseline\.json/u);
   const written = readWrittenBaseline(cwd);
   assert.deepEqual(written.files, []);
   assert.equal(written.counts.exports, 0);

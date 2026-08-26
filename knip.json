@@ -22,6 +22,12 @@
         "src/**/*.ts",
         "scripts/**/*.{ts,mjs}"
       ],
+      "ignore": [
+        "admin-ui/**",
+        "companion-ui/**",
+        "apps/satellite-hub/**",
+        "tools/evals/**"
+      ],
       "ignoreDependencies": [
         "@snazzah/davey",
         "sherpa-onnx-node"
@@ -32,29 +38,6 @@
         "rg",
         "tail",
         "uv"
-      ]
-    },
-    "admin-ui": {
-      "entry": [
-        "src/hooks.ts"
-      ],
-      "project": [
-        "src/**/*.{ts,svelte}"
-      ],
-      "svelte": true
-    },
-    "companion-ui": {
-      "entry": [
-        "index.html",
-        "src/main.tsx",
-        "vite.config.ts",
-        "playwright.config.ts",
-        "e2e/fixtures/legacy-main.tsx"
-      ],
-      "project": [
-        "src/**/*.{ts,tsx}",
-        "e2e/**/*.{ts,tsx}",
-        "vite/**/*.{ts,tsx}"
       ]
     }
   }

@@ -4,6 +4,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -39,7 +40,7 @@ function makeFixture({ typecheckBaseline } = {}) {
     join(cwd, 'node_modules/typescript/bin/tsc'),
     [
       "const { writeFileSync } = require('node:fs');",
-      `writeFileSync(${JSON.stringify(COMPILER_MARKER)}, 'ran\\n');`,
+      `writeFileSync(${JSON.stringify(COMPILER_MARKER)}, JSON.stringify(process.argv.slice(2)));`,
       '',
     ].join('\n'),
   );
@@ -117,4 +118,13 @@ test('starts TypeScript after a valid baseline passes preflight', () => {
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /\[verify-typecheck-baseline\] PASS/u);
   assert.equal(existsSync(join(cwd, COMPILER_MARKER)), true);
+  const compilerArgs = JSON.parse(readFileSync(join(cwd, COMPILER_MARKER), 'utf8'));
+  assert.ok(compilerArgs.includes('--incremental'));
+  assert.deepEqual(
+    compilerArgs.slice(compilerArgs.indexOf('--tsBuildInfoFile'), compilerArgs.indexOf('--tsBuildInfoFile') + 2),
+    [
+      '--tsBuildInfoFile',
+      join(cwd, 'node_modules/.cache/psfn/typecheck.tsbuildinfo'),
+    ],
+  );
 });

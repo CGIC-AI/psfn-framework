@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import {
   createWriteStream,
   existsSync,
@@ -89,11 +90,6 @@ export function resolveLocalGateState({ cwd = process.cwd(), baseRef = 'origin/m
     scannablePaths,
     stateDir,
     attestationPath: join(stateDir, 'attestation.json'),
-    // Per-stage records live under a directory keyed by the exact head, so a
-    // changed head (which is a changed commit) can never collide with an older
-    // head's records. The git dir is per-worktree, so concurrent worktrees never
-    // share a state dir.
-    stageDir: join(stateDir, 'stages', head),
     logDir: join(stateDir, 'logs', head),
   };
 }
@@ -130,8 +126,53 @@ export function resolveCanaryState({ cwd = process.cwd(), mainRef = 'origin/main
   };
 }
 
-export function stageRecordPath(state, gateName) {
-  return join(state.stageDir, `${gateName}.json`);
+export function stageRecordPath(state, gateName, inputHash = null) {
+  const identity = inputHash ?? `head-${state.head}`;
+  return join(state.stateDir, 'stage-cache', gateName, `${identity}.json`);
+}
+
+function readTrackedTree(state) {
+  if (state.trackedTree) return state.trackedTree;
+  const output = gitRaw(['ls-tree', '-r', '-z', state.head], state.cwd);
+  state.trackedTree = output.split('\0').filter(Boolean).map((record) => {
+    const separator = record.indexOf('\t');
+    if (separator === -1) throw new Error(`Malformed git tree record: ${record}`);
+    const metadata = record.slice(0, separator).split(/\s+/u);
+    const mode = metadata[0];
+    const type = metadata[1];
+    const object = metadata[2];
+    if (!mode || !type || !object) throw new Error(`Malformed git tree object: ${record}`);
+    return { mode, type, object, path: record.slice(separator + 1) };
+  });
+  return state.trackedTree;
+}
+
+function patternMatches(pattern, path) {
+  pattern.lastIndex = 0;
+  return pattern.test(path);
+}
+
+export function contentInputHash(gate, state) {
+  const selector = gate.contentInputs;
+  if (!selector) return null;
+  if (!Array.isArray(selector.include) || selector.include.length === 0) {
+    throw new Error(`${gate.name} has an invalid empty content-input manifest.`);
+  }
+  const exclude = selector.exclude ?? [];
+  const hash = createHash('sha256');
+  hash.update('local-delivery-gate-inputs-v1\0');
+  for (const pattern of selector.include) {
+    hash.update(`include:${pattern.source}/${pattern.flags}\0`);
+  }
+  for (const pattern of exclude) hash.update(`exclude:${pattern.source}/${pattern.flags}\0`);
+  for (const entry of readTrackedTree(state)) {
+    const included = selector.include.some((pattern) => patternMatches(pattern, entry.path));
+    const excluded = exclude.some((pattern) => patternMatches(pattern, entry.path));
+    if (included && !excluded) {
+      hash.update(`${entry.path}\0${entry.mode}\0${entry.type}\0${entry.object}\0`);
+    }
+  }
+  return hash.digest('hex');
 }
 
 export function readStageRecord(path) {
@@ -154,7 +195,7 @@ export function writeStageRecord(path, record) {
   renameSync(temporary, path);
 }
 
-function stageRecordFor(gate, state) {
+function stageRecordFor(gate, state, inputHash) {
   return {
     schemaVersion: STAGE_SCHEMA_VERSION,
     gateVersion: GATE_VERSION,
@@ -162,6 +203,7 @@ function stageRecordFor(gate, state) {
     base: state.base,
     name: gate.name,
     command: gateCommandString(gate),
+    inputHash,
     completedAt: new Date().toISOString(),
   };
 }
@@ -542,32 +584,61 @@ export async function runHeavyPhase({ heavy, state, runGate, needsRun, lockConfi
   });
 }
 
+// Only gates explicitly marked parallel-safe enter this pool. Heap-heavy lint,
+// typecheck, hygiene, build, specialist projects, and product tests remain
+// serial. Wait for every pooled check to settle before surfacing the first
+// failure so no child process is left running behind a failed gate.
+export async function runPreflightPhase({ preflight, runGate }) {
+  const parallel = preflight.filter((gate) => gate.parallelSafe);
+  const serial = preflight.filter((gate) => !gate.parallelSafe);
+  const results = await Promise.allSettled(parallel.map((gate) => runGate(gate)));
+  const failure = results.find((result) => result.status === 'rejected');
+  if (failure) throw failure.reason;
+  for (const gate of serial) await runGate(gate);
+}
+
 // Build the per-gate orchestrator that layers stage-level reuse over the raw
-// executor. A non-skipped gate whose passing stage record is provably current
-// (same head+base+gate-version+command) is reused without re-executing; every
-// other gate runs, and a passing run records a fresh stage result so a later
-// rerun on the same head can skip it. Skipped gates never record (nothing ran).
-function makeGateOrchestrator(state, execute) {
+// executor. A gate with a complete content manifest can reuse a pass from a
+// different head when those inputs are identical; unmanifested gates retain
+// exact-head reuse. The final attestation remains exact-HEAD.
+function makeGateOrchestrator(state, execute, { force = false } = {}) {
+  const inputHashes = new Map();
+  const inputHashFor = (gate) => {
+    if (!inputHashes.has(gate.name)) inputHashes.set(gate.name, contentInputHash(gate, state));
+    return inputHashes.get(gate.name);
+  };
+  const recordFor = (gate) => readStageRecord(
+    stageRecordPath(state, gate.name, inputHashFor(gate)),
+  );
   const reusable = (gate) => {
-    if (gate.skip) return false;
-    const record = readStageRecord(stageRecordPath(state, gate.name));
-    return isStageReusable(record, {
+    if (gate.skip || force) return false;
+    const inputHash = inputHashFor(gate);
+    return isStageReusable(recordFor(gate), {
       head: state.head,
       base: state.base,
       gateVersion: GATE_VERSION,
       command: gateCommandString(gate),
+      inputHash,
+      name: gate.name,
     });
   };
   const needsRun = (gate) => !gate.skip && !reusable(gate);
   const runGate = async (gate) => {
     if (!gate.skip && reusable(gate)) {
+      const inputHash = inputHashFor(gate);
       console.log(
-        `==> ${gate.name}: reused (stage passed for ${state.head.slice(0, 12)} base ${state.base.slice(0, 12)} gate v${GATE_VERSION})`,
+        `==> ${gate.name}: reused (${inputHash ? `inputs ${inputHash.slice(0, 12)}` : `exact head ${state.head.slice(0, 12)}`}, base ${state.base.slice(0, 12)}, gate v${GATE_VERSION})`,
       );
       return;
     }
     await execute(gate, state);
-    if (!gate.skip) writeStageRecord(stageRecordPath(state, gate.name), stageRecordFor(gate, state));
+    if (!gate.skip) {
+      const inputHash = inputHashFor(gate);
+      writeStageRecord(
+        stageRecordPath(state, gate.name, inputHash),
+        stageRecordFor(gate, state, inputHash),
+      );
+    }
   };
   return { needsRun, runGate };
 }
@@ -607,8 +678,8 @@ export async function runLocalGate({
   // Every gate flows through the orchestrator so a passing stage from a prior
   // partial run on this same head+base+gate-version is reused, not rerun.
   const { preflight, heavy } = partitionGatePlan(plan);
-  const { needsRun, runGate } = makeGateOrchestrator(state, execute);
-  for (const gate of preflight) await runGate(gate);
+  const { needsRun, runGate } = makeGateOrchestrator(state, execute, { force });
+  await runPreflightPhase({ preflight, runGate });
   await runHeavyPhase({ heavy, state, runGate, needsRun, lockConfig: heavyLock });
 
   const attestation = createAttestation({
@@ -654,7 +725,7 @@ export async function runCanaryGate({
   // executes and every diff-scoped gate is skipped explicitly (see buildGatePlan).
   const { preflight, heavy } = partitionGatePlan(plan);
   const runGate = (gate) => execute(gate, state);
-  for (const gate of preflight) await runGate(gate);
+  await runPreflightPhase({ preflight, runGate });
   await runHeavyPhase({ heavy, state, runGate, needsRun: (gate) => !gate.skip, lockConfig: heavyLock });
 
   const attestation = createCanaryAttestation({ base: state.base, mainRef });

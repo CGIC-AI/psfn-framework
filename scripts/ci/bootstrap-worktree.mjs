@@ -18,6 +18,45 @@ import {
 } from '../prewarm-worktree.mjs';
 import { NPM_PROJECT_PATHS } from './npm-project-contract.mjs';
 
+const DEFAULT_PROJECT_PATHS = Object.freeze(['.']);
+
+function assertKnownProjectPath(projectPath) {
+  if (!NPM_PROJECT_PATHS.includes(projectPath)) {
+    throw new Error(
+      `Unknown npm project ${projectPath}; expected one of ${NPM_PROJECT_PATHS.join(', ')}`,
+    );
+  }
+}
+
+export function parseBootstrapArguments(argv, cwd = process.cwd()) {
+  const args = [...argv];
+  let repositoryRoot = cwd;
+  if (args[0] && !args[0].startsWith('-')) repositoryRoot = args.shift();
+  const projectPaths = [];
+
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = args[index];
+    if (argument === '--project') {
+      const projectPath = args[index + 1];
+      if (!projectPath) throw new Error('--project requires a repository-relative npm project');
+      assertKnownProjectPath(projectPath);
+      projectPaths.push(projectPath);
+      index += 1;
+      continue;
+    }
+    if (argument === '--all') {
+      projectPaths.push(...NPM_PROJECT_PATHS);
+      continue;
+    }
+    throw new Error(`Unknown worktree bootstrap argument: ${argument}`);
+  }
+
+  return {
+    repositoryRoot,
+    projectPaths: projectPaths.length > 0 ? [...new Set(projectPaths)] : [...DEFAULT_PROJECT_PATHS],
+  };
+}
+
 function requiredNodeVersion(repositoryRoot) {
   const versionPath = join(repositoryRoot, '.node-version');
   const version = readFileSync(versionPath, 'utf8').trim();
@@ -108,7 +147,7 @@ export function bootstrapWorktree({
   repositoryRoot = process.cwd(),
   nodeVersion = process.version,
   prewarm = prewarmWorktree,
-  projectPaths = NPM_PROJECT_PATHS,
+  projectPaths = DEFAULT_PROJECT_PATHS,
   runNpm = defaultRunNpm,
   logger = console,
 } = {}) {
@@ -120,6 +159,7 @@ export function bootstrapWorktree({
     );
   }
 
+  for (const projectPath of projectPaths) assertKnownProjectPath(projectPath);
   const results = projectPaths.map((projectPath) => bootstrapProject({
     cacheDir,
     projectRoot: resolve(root, projectPath),
@@ -132,7 +172,7 @@ export function bootstrapWorktree({
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   try {
-    bootstrapWorktree({ repositoryRoot: process.argv[2] ?? process.cwd() });
+    bootstrapWorktree(parseBootstrapArguments(process.argv.slice(2)));
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;

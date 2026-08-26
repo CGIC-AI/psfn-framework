@@ -529,6 +529,14 @@ describe('resolveGatewayMultiCompanionConfig', () => {
       webhook: { url: '', secret: '', host: '0.0.0.0', port: 8080, path: '/telegram/webhook' },
     },
     api: {},
+    multica: {
+      enabled: false,
+      baseUrl: '',
+      workspaceId: '',
+      tokenEnvVar: '',
+      token: '',
+      pollIntervalMs: 1000,
+    },
     psfnAmica: { enabled: false },
     contextEnvelope: { channels: {} },
     ...overrides,
@@ -549,13 +557,22 @@ describe('resolveGatewayMultiCompanionConfig', () => {
     channels.discord.companionId = '11111111-1111-4111-8111-111111111111';
     channels.telegram.companionId = '22222222-2222-4222-8222-222222222222';
     channels.api.companionId = '22222222-2222-4222-8222-222222222222';
+    channels.multica = {
+      enabled: true,
+      baseUrl: 'http://127.0.0.1:8080',
+      workspaceId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      companionId: '11111111-1111-4111-8111-111111111111',
+      tokenEnvVar: 'MULTICA_GATEWAY_TOKEN',
+      token: 'owner-token',
+      pollIntervalMs: 1000,
+    };
     expect(resolveGatewayMultiCompanionConfig({
       multiCompanion: true,
       companionFleet: resolvedFleet(['11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222']),
     }, channels, EMPTY_SATELLITE_REGISTRY)).toEqual({
       enabled: true,
       fleetCompanionIds: ['11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222'],
-      channelRouting: { discord: '11111111-1111-4111-8111-111111111111', telegram: '22222222-2222-4222-8222-222222222222', api: '22222222-2222-4222-8222-222222222222' },
+      channelRouting: { discord: '11111111-1111-4111-8111-111111111111', telegram: '22222222-2222-4222-8222-222222222222', api: '22222222-2222-4222-8222-222222222222', multica: '11111111-1111-4111-8111-111111111111' },
       discordAccounts: {},
       personalWorkspaceByCompanionId: {
         '11111111-1111-4111-8111-111111111111': '/runtime/workspaces/personal/11111111-1111-4111-8111-111111111111',
@@ -662,6 +679,26 @@ describe('resolveGatewayMultiCompanionConfig', () => {
     }, channels, EMPTY_SATELLITE_REGISTRY)).toThrow(/absent from companions\.json/);
   });
 
+  it('fails closed when Multica names a companion outside the fleet', () => {
+    const channels = baseChannels({
+      multica: {
+        enabled: true,
+        baseUrl: 'http://127.0.0.1:8080',
+        workspaceId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        companionId: '22222222-2222-4222-8222-222222222222',
+        tokenEnvVar: 'MULTICA_GATEWAY_TOKEN',
+        token: 'owner-token',
+        pollIntervalMs: 1000,
+      },
+    });
+    expect(() => resolveGatewayMultiCompanionConfig({
+      multiCompanion: true,
+      companionFleet: resolvedFleet(['11111111-1111-4111-8111-111111111111']),
+    }, channels, EMPTY_SATELLITE_REGISTRY)).toThrow(
+      /channels\.json routes multica.*absent from companions\.json/,
+    );
+  });
+
   it('fails closed when a shared satellite names a companion outside the fleet', () => {
     expect(() => resolveGatewayMultiCompanionConfig({
       multiCompanion: true,
@@ -727,6 +764,7 @@ describe('resolveGatewayMultiCompanionConfig', () => {
     expect(resolveGatewaySurfaceForChannelType('discord')).toBe('discord');
     expect(resolveGatewaySurfaceForChannelType('telegram')).toBe('telegram');
     expect(resolveGatewaySurfaceForChannelType('api')).toBe('api');
+    expect(resolveGatewaySurfaceForChannelType('multica')).toBe('multica');
     expect(resolveGatewaySurfaceForChannelType('terminal')).toBeNull();
     expect(resolveGatewaySurfaceForChannelType('psfn-amica')).toBeNull();
   });

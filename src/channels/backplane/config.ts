@@ -11,7 +11,7 @@ import {
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { parseBooleanEnv } from '../../shared/utils/env.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
-import { isRecord } from '../../shared/utils/types.js';
+import { isRecord, isRfc4122Uuid } from '../../shared/utils/types.js';
 import {
   normalizeChannelPrivacy,
   type ChannelPrivacy,
@@ -57,6 +57,9 @@ const DEFAULT_TELEGRAM_POLL_INTERVAL_MS = 1_000;
 const DEFAULT_TELEGRAM_WEBHOOK_HOST = '0.0.0.0';
 const DEFAULT_TELEGRAM_WEBHOOK_PORT = 8_080;
 const DEFAULT_TELEGRAM_WEBHOOK_PATH = '/telegram/webhook';
+const DEFAULT_MULTICA_POLL_INTERVAL_MS = 1_000;
+const MIN_MULTICA_POLL_INTERVAL_MS = 250;
+const MAX_MULTICA_POLL_INTERVAL_MS = 60_000;
 
 export type TelegramMode = 'polling' | 'webhook';
 
@@ -146,6 +149,18 @@ export interface ApiChannelConfig {
   };
 }
 
+/** Gateway-owned Multica work channel. The bearer credential remains env-only. */
+export interface MulticaChannelConfig {
+  enabled: boolean;
+  baseUrl: string;
+  workspaceId: string;
+  companionId?: CompanionId;
+  tokenEnvVar: string;
+  token: string;
+  pollIntervalMs: number;
+  runtimeName?: string;
+}
+
 export interface ExternalChannelProfileConfig {
   authorId?: string;
   authorName?: string;
@@ -197,6 +212,7 @@ export interface RuntimeChannelsConfig {
   discord: DiscordChannelConfig;
   telegram: TelegramChannelConfig;
   api: ApiChannelConfig;
+  multica: MulticaChannelConfig;
   psfnAmica: PsfnAmicaChannelConfig;
   companionUi: CompanionUiChannelConfig;
   contextEnvelope: ChannelContextEnvelopeConfig;
@@ -237,6 +253,15 @@ const DEFAULT_PSFN_AMICA_CHANNEL_CONFIG: PsfnAmicaChannelConfig = {
 
 const DEFAULT_COMPANION_UI_CHANNEL_CONFIG: CompanionUiChannelConfig = {
   channelPrivacy: 'private',
+};
+
+const DEFAULT_MULTICA_CHANNEL_CONFIG: MulticaChannelConfig = {
+  enabled: false,
+  baseUrl: '',
+  workspaceId: '',
+  tokenEnvVar: '',
+  token: '',
+  pollIntervalMs: DEFAULT_MULTICA_POLL_INTERVAL_MS,
 };
 
 const COMPANION_UI_ALLOWED_KEYS = ['channelPrivacy'] as const;
@@ -793,6 +818,7 @@ export function saveChannelsOwnerFile(
   // invalid privacy level is rejected fail-closed rather than persisted.
   parseCompanionUiSection(scopedRoot);
   parseApiChannelSection(scopedRoot, {});
+  parseMulticaChannelSection(scopedRoot, {});
   // W1-P2: structural validation of discord.accounts on save (secrets are env
   // resolved at load, so an empty env here only skips token presence checks).
   const discordSection = parseSectionObject(scopedRoot, 'discord');
@@ -826,6 +852,125 @@ function resolveCredentialValue(
     reference,
     env,
   ) ?? '';
+}
+
+const MULTICA_ALLOWED_KEYS = new Set([
+  'enabled',
+  'baseUrl',
+  'workspaceId',
+  'companionId',
+  'tokenRef',
+  'pollIntervalMs',
+  'runtimeName',
+]);
+
+function parseMulticaBaseUrl(value: unknown): string | undefined {
+  const configured = parseConfiguredString(value, 'channels.json.multica.baseUrl');
+  if (!configured) return undefined;
+  let parsed: URL;
+  try {
+    parsed = new URL(configured);
+  } catch {
+    throw new Error('channels.json.multica.baseUrl must be an absolute HTTP(S) URL');
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error('channels.json.multica.baseUrl must be an absolute HTTP(S) URL');
+  }
+  if (parsed.username || parsed.password || parsed.pathname !== '/' || parsed.search || parsed.hash) {
+    throw new Error(
+      'channels.json.multica.baseUrl must not contain credentials, a path, query, or fragment',
+    );
+  }
+  return parsed.origin;
+}
+
+function parseMulticaChannelSection(
+  scopedRoot: Record<string, unknown>,
+  env: NodeJS.ProcessEnv,
+  credentialVault?: CredentialVaultPort,
+): MulticaChannelConfig {
+  const section = parseSectionObject(scopedRoot, 'multica');
+  if (!section) return { ...DEFAULT_MULTICA_CHANNEL_CONFIG };
+
+  rejectInlineSecretField(section, 'token', 'channels.json.multica.tokenRef');
+  const unknownKeys = Object.keys(section).filter(key => !MULTICA_ALLOWED_KEYS.has(key));
+  if (unknownKeys.length > 0) {
+    throw new Error(`channels.json.multica has unsupported keys: ${unknownKeys.join(', ')}`);
+  }
+  if (!Object.hasOwn(section, 'enabled')) {
+    throw new Error(
+      'channels.json.multica.enabled must be configured when multica settings are present',
+    );
+  }
+
+  const enabled = parseConfiguredBoolean(
+    section.enabled,
+    'channels.json.multica.enabled',
+  ) ?? false;
+  const baseUrl = parseMulticaBaseUrl(section.baseUrl) ?? '';
+  const workspaceId = parseConfiguredString(
+    section.workspaceId,
+    'channels.json.multica.workspaceId',
+  ) ?? '';
+  if (workspaceId && !isRfc4122Uuid(workspaceId)) {
+    throw new Error('channels.json.multica.workspaceId must be a lowercase RFC-4122 UUID');
+  }
+  const rawCompanionId = parseConfiguredString(
+    section.companionId,
+    'channels.json.multica.companionId',
+  );
+  const companionId = rawCompanionId
+    ? createCompanionId(rawCompanionId, 'channels.json.multica.companionId')
+    : undefined;
+  const tokenRef = parseConfiguredCredentialReference(
+    section.tokenRef,
+    'channels.json.multica.tokenRef',
+  );
+  const pollIntervalMs = parseConfiguredPositiveInteger(
+    section.pollIntervalMs,
+    'channels.json.multica.pollIntervalMs',
+  ) ?? DEFAULT_MULTICA_POLL_INTERVAL_MS;
+  if (pollIntervalMs < MIN_MULTICA_POLL_INTERVAL_MS
+    || pollIntervalMs > MAX_MULTICA_POLL_INTERVAL_MS) {
+    throw new Error(
+      `channels.json.multica.pollIntervalMs must be between ${MIN_MULTICA_POLL_INTERVAL_MS} and ${MAX_MULTICA_POLL_INTERVAL_MS}`,
+    );
+  }
+  const runtimeName = parseConfiguredString(
+    section.runtimeName,
+    'channels.json.multica.runtimeName',
+  );
+
+  if (enabled) {
+    if (!baseUrl) throw new Error('channels.json.multica.baseUrl must be configured when multica is enabled');
+    if (!workspaceId) throw new Error('channels.json.multica.workspaceId must be configured when multica is enabled');
+    if (!companionId) throw new Error('channels.json.multica.companionId must be configured when multica is enabled');
+    if (!tokenRef) throw new Error('channels.json.multica.tokenRef must be configured when multica is enabled');
+    if (!Object.hasOwn(section, 'pollIntervalMs')) {
+      throw new Error(
+        'channels.json.multica.pollIntervalMs must be configured when multica is enabled',
+      );
+    }
+  }
+
+  return {
+    enabled,
+    baseUrl,
+    workspaceId,
+    ...(companionId ? { companionId } : {}),
+    tokenEnvVar: tokenRef?.envName ?? '',
+    token: resolveCredentialValue(tokenRef, env, credentialVault).trim(),
+    pollIntervalMs,
+    ...(runtimeName ? { runtimeName } : {}),
+  };
+}
+
+/** Gateway-side assertion: an enabled Multica adapter never starts without its owner token. */
+export function assertMulticaTokenConfigured(multica: MulticaChannelConfig): void {
+  if (!multica.enabled || multica.token) return;
+  throw new Error(
+    `Multica gateway token missing: env var ${multica.tokenEnvVar || '<unconfigured>'} is required`,
+  );
 }
 
 function parseApiChannelSection(
@@ -945,6 +1090,7 @@ export function loadRuntimeChannelsConfig(
     options.credentialVault,
   );
   const api = parseApiChannelSection(scopedRoot, env, options.credentialVault);
+  const multica = parseMulticaChannelSection(scopedRoot, env, options.credentialVault);
   const psfnAmicaConfig = parseSectionObject(scopedRoot, 'psfnAmica') ?? {};
   if (Object.keys(psfnAmicaConfig).length > 0 && !Object.hasOwn(psfnAmicaConfig, 'enabled')) {
     throw new Error('channels.json.psfnAmica.enabled must be configured when psfnAmica settings are present');
@@ -1098,6 +1244,7 @@ export function loadRuntimeChannelsConfig(
       ...(discordAccounts ? { accounts: discordAccounts } : {}),
     },
     api,
+    multica,
     psfnAmica: {
       enabled: psfnAmicaEnabled,
       ...(psfnAmicaDefaultIdentity && psfnAmicaEnabled ? { defaultIdentity: psfnAmicaDefaultIdentity } : {}),

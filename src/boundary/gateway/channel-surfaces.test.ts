@@ -14,9 +14,11 @@ function createInput(): {
   input: WireGatewayChannelMessagesInput;
   discordHandler: ((message: any) => Promise<any>) | undefined;
   telegramHandler: ((message: any) => Promise<any>) | undefined;
+  multicaHandler: ((message: any) => Promise<any>) | undefined;
 } {
   let discordHandler: ((message: any) => Promise<any>) | undefined;
   let telegramHandler: ((message: any) => Promise<any>) | undefined;
+  let multicaHandler: ((message: any) => Promise<any>) | undefined;
 
   return {
     input: {
@@ -28,6 +30,11 @@ function createInput(): {
       telegram: fromAny({
         onMessage: (handler) => {
           telegramHandler = handler as (message: any) => Promise<any>;
+        },
+      }),
+      multica: fromAny({
+        onMessage: (handler) => {
+          multicaHandler = handler as (message: any) => Promise<any>;
         },
       }),
       gateway: fromAny({
@@ -47,6 +54,9 @@ function createInput(): {
     },
     get telegramHandler() {
       return telegramHandler;
+    },
+    get multicaHandler() {
+      return multicaHandler;
     },
   };
 }
@@ -123,6 +133,24 @@ describe('wireGatewayChannelMessages', () => {
         outputTokens: 0,
         durationMs: 42,
       },
+    });
+  });
+
+  it('routes Multica work through the same companion request pipeline', async () => {
+    const setup = createInput();
+
+    wireGatewayChannelMessages(setup.input);
+
+    await setup.multicaHandler?.({
+      channelId: 'multica:issue:42',
+      channelType: 'multica',
+      content: 'manage the squad',
+    });
+
+    expect(setup.input.gateway.requestAgentVoiceStream).toHaveBeenCalledWith({
+      channelId: 'multica:issue:42',
+      channelType: 'multica',
+      content: 'manage the squad',
     });
   });
 });

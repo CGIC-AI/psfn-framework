@@ -8,7 +8,11 @@ import {
   type DiscordAdapterAccountBinding,
   type DiscordPrimaryUserBinding,
 } from '../discord/adapter.js';
-import type { DiscordChannelConfig, TelegramChannelConfig } from './config.js';
+import type {
+  DiscordChannelConfig,
+  MulticaChannelConfig,
+  TelegramChannelConfig,
+} from './config.js';
 import type { CustomEmojiMeaningsByGuild } from '../shared/reaction-surface.js';
 import { TelegramAdapter } from '../telegram/adapter.js';
 import type {
@@ -20,6 +24,10 @@ import type { ChannelAdapterRegistryPort } from './registry-port.js';
 import type { SessionStore } from '../../persistence/sessions/store.js';
 import type { IntakeScreeningService } from '../../core/cogsec/intake/screening.js';
 import type { DocumentIngestLimits } from '../../faculties/file-ingest/index.js';
+import {
+  MulticaAdapter,
+  type MulticaAdapterLogger,
+} from '../multica/adapter.js';
 
 export interface DiscordChannelAdapterFactoryOptions {
   config: SubstrateConfig;
@@ -126,6 +134,37 @@ export function createTelegramChannelAdapterFactoryEntry(
       if (options.onMessage) {
         adapter.onMessage(options.onMessage);
       }
+      await adapter.init();
+      return adapter;
+    },
+  };
+}
+
+export interface MulticaChannelAdapterFactoryOptions {
+  config: MulticaChannelConfig;
+  log?: MulticaAdapterLogger;
+}
+
+export function createMulticaChannelAdapterFactoryEntry(
+  options: MulticaChannelAdapterFactoryOptions,
+): ChannelAdapterFactoryPort {
+  return {
+    manifest: {
+      id: 'multica',
+      label: 'Multica',
+      enabled: options.config.enabled,
+      required: options.config.enabled,
+      eligibility: {},
+    },
+    create: async (): Promise<ChannelAdapterPort> => {
+      const companionId = options.config.companionId;
+      if (!companionId) {
+        throw new Error('Enabled Multica channel requires a companionId');
+      }
+      const adapter = new MulticaAdapter({
+        ...options.config,
+        companionId,
+      }, options.log ? { log: options.log } : {});
       await adapter.init();
       return adapter;
     },

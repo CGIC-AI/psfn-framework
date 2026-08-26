@@ -635,13 +635,15 @@ export function resolveMorningWakeSnapshot(input: {
 
 // Channel types that are never a live conversational partner surface for
 // autonomous wake fan-out: the local dev terminal, the internal subagent lane,
-// and the inter-companion lane. Group chats/DMs (discord, telegram, api),
+// the inter-companion lane, and the claimed Multica work lane. Group chats/DMs
+// (discord, telegram, api),
 // satellites (voice/PWA, which infer to an undefined channelType), and
 // companion-ui remain eligible.
 const NON_LIVE_WAKEUP_CHANNEL_TYPES: ReadonlySet<string> = new Set([
   'terminal',
   'subagent',
   'companion',
+  'multica',
 ]);
 
 /**

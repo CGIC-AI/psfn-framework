@@ -875,6 +875,7 @@ async function main(): Promise<void> {
       ? { discordAccounts: channelSurfaces.discordAccounts }
       : {}),
     telegram,
+    multica: channelSurfaces.multica,
     gateway,
     serializeMessage,
     blockGate: contactBlockGate,

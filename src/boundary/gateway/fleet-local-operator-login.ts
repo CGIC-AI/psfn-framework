@@ -3,11 +3,9 @@ import { isLoopbackHost } from '../../shared/net/hosts.js';
 import type { FleetAuthConfig } from '../../system/config/fleet-auth-config.js';
 import { resolveFleetLocalOperatorSubject } from './fleet-auth-broker.js';
 
-export const FLEET_AUTH_SESSION_COOKIE_NAME = '__Host-psfn_session';
+const FLEET_AUTH_SESSION_COOKIE_NAME = '__Host-psfn_session';
 export const FLEET_LOCAL_OPERATOR_SESSION_COOKIE_NAME = 'psfn_local_operator_session';
 export const FLEET_LOCAL_OPERATOR_LOGIN_PATH = '/v1/fleet-auth/local-operator-login';
-export const FLEET_LOCAL_OPERATOR_LOGIN_ENABLED_ENV = 'PSFN_FLEET_LOCAL_OPERATOR_LOGIN';
-export const FLEET_LOCAL_OPERATOR_LOGIN_ORIGINS_ENV = 'PSFN_FLEET_LOCAL_OPERATOR_ORIGINS';
 
 const OPAQUE_SESSION_PATTERN = /^[A-Za-z0-9_-]{43}$/u;
 

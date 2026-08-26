@@ -13,6 +13,8 @@ export interface EnvEntry {
   comment?: string;
   /** Do not rotate an already-present value when merging. */
   preserveExisting?: boolean;
+  /** Remove this key if present and do not append it. */
+  remove?: boolean;
 }
 
 const ENV_LINE = /^\s*([A-Z][A-Z0-9_]*)\s*=/u;
@@ -26,20 +28,21 @@ export function mergeEnvContent(currentText: string, entries: readonly EnvEntry[
   const lines = currentText.length > 0 ? currentText.split('\n') : [];
   const remaining = new Map(entries.map((entry) => [entry.envName, entry]));
 
-  const nextLines = lines.map((line) => {
+  const nextLines = lines.flatMap((line) => {
     const match = ENV_LINE.exec(line);
-    if (!match) return line;
+    if (!match) return [line];
     const key = match[1];
     const entry = remaining.get(key);
-    if (!entry) return line;
+    if (!entry) return [line];
     remaining.delete(key);
-    if (entry.preserveExisting) return line;
-    return `${key}=${serializeValue(entry.value)}`;
+    if (entry.remove) return [];
+    if (entry.preserveExisting) return [line];
+    return [`${key}=${serializeValue(entry.value)}`];
   });
 
   const additions: string[] = [];
   for (const entry of entries) {
-    if (!remaining.has(entry.envName)) continue;
+    if (!remaining.has(entry.envName) || entry.remove) continue;
     if (entry.comment) additions.push(`# ${entry.comment}`);
     additions.push(`${entry.envName}=${serializeValue(entry.value)}`);
   }

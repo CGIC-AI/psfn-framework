@@ -9,15 +9,22 @@ import type { CompanionSource } from './companion-import.js';
 /** Install target the operator picks first. */
 export type InstallMode = 'compose' | 'kubernetes' | 'local';
 
-export interface KubernetesTargetPlan {
-  kind: 'local-k3d' | 'existing-context';
+interface KubernetesTargetBase {
   kubeContext: string;
   gardenPort: number;
-  nativeGarden: boolean;
-  publishTailnet: boolean;
-  k3dCluster?: string;
-  tailnetHost?: string;
 }
+
+export type KubernetesTargetPlan = KubernetesTargetBase & ({
+  kind: 'local-k3d';
+  nativeGarden: true;
+  publishTailnet: boolean;
+  k3dCluster: string;
+  tailnetHost?: string;
+} | {
+  kind: 'existing-context';
+  nativeGarden: false;
+  publishTailnet: false;
+});
 
 /**
  * A single question/answer surface. The readline-backed implementation lives in
@@ -97,6 +104,8 @@ export interface OnboardingPlan {
     comment?: string;
     /** Keep an existing value during reconfiguration (used for persistent-stack secrets). */
     preserveExisting?: boolean;
+    /** Remove obsolete process wiring when switching deployment targets. */
+    remove?: boolean;
   }>;
   /** When true, existing owner files may be overwritten (operator confirmed). */
   updateExisting: boolean;

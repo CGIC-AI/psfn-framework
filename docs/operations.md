@@ -94,12 +94,18 @@ recreates an existing cluster. Cluster creation is limited to an explicitly
 onboarded local k3d name; if that name already exists with a different port
 mapping, startup fails without deleting or changing it.
 
-New local k3d installs map `127.0.0.1:10053` directly to Traefik HTTP ingress.
+New local k3d installs map `https://127.0.0.1:10053` directly to server 0's
+Traefik HTTPS ingress, bypassing k3d's load-balancer hop. The local certificate
+is cluster-issued, so lifecycle validation accepts it only on that exact
+loopback route. Tailscale terminates browser-trusted HTTPS and forwards to the
+same local route with backend certificate verification explicitly disabled.
 When `PSFN_TAILSCALE_SERVE=1`, the lifecycle requires `PSFN_TAILNET_HOST` to
 match the currently connected node before reconciling Tailscale Serve. Both the
 loopback and Tailnet roots must return exactly `302 Location: /login`, preserving
-standalone Garden token authentication. Existing Kubernetes-context installs
-retain the supervised Garden port-forward path.
+standalone Garden token authentication. The lifecycle leaves an existing,
+different HTTPS root handler untouched; if verification fails after it adds a
+new handler, it removes that handler again. Existing Kubernetes-context
+installs retain the supervised Garden port-forward path.
 
 ## Stop and resume
 

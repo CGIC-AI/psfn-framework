@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { isRecord } from '../src/shared/utils/types.js';
 
 export interface CommandResult {
   status: number;
@@ -87,8 +88,8 @@ export function parseK3dClusters(raw: string): K3dCluster[] {
 function nativeGardenBinding(cluster: K3dCluster, gardenPort: number): boolean {
   if (!Array.isArray(cluster.nodes)) return false;
   return (cluster.nodes as K3dNode[]).some((node) => {
-    if (node.role !== 'loadbalancer' || !node.portMappings) return false;
-    const bindings = node.portMappings['80/tcp'];
+    if (node.role !== 'server' || !node.portMappings) return false;
+    const bindings = node.portMappings['443/tcp'];
     return Array.isArray(bindings) && (bindings as K3dPortBinding[]).some((binding) => (
       binding.HostIp === '127.0.0.1' && binding.HostPort === String(gardenPort)
     ));
@@ -135,19 +136,27 @@ export function ensureNativeK3dGarden(input: {
       '--agents', '0',
       '--image', 'rancher/k3s:v1.35.5-k3s1',
       '--wait',
-      '--port', `127.0.0.1:${input.gardenPort}:80/tcp@loadbalancer`,
+      '--port', `127.0.0.1:${input.gardenPort}:443/tcp@server:0:direct`,
     ], options);
     outcome = 'created';
     cluster = list().find((candidate) => candidate.name === input.clusterName);
-  } else if (!clusterRunning(cluster)) {
-    runRequired(run, 'k3d', ['cluster', 'start', input.clusterName, '--wait'], options);
-    cluster = list().find((candidate) => candidate.name === input.clusterName);
+  } else {
+    if (!nativeGardenBinding(cluster, input.gardenPort)) {
+      throw new Error(
+        `Existing cluster ${input.clusterName} does not map 127.0.0.1:${input.gardenPort} `
+        + 'directly to server 0 Traefik HTTPS. Choose an unused cluster name; existing clusters are never changed automatically.',
+      );
+    }
+    if (!clusterRunning(cluster)) {
+      runRequired(run, 'k3d', ['cluster', 'start', input.clusterName, '--wait'], options);
+      cluster = list().find((candidate) => candidate.name === input.clusterName);
+    }
   }
   if (!cluster) throw new Error(`k3d did not report cluster ${input.clusterName} after creation.`);
   if (!nativeGardenBinding(cluster, input.gardenPort)) {
     throw new Error(
       `Existing cluster ${input.clusterName} does not map 127.0.0.1:${input.gardenPort} `
-      + 'to its Traefik HTTP ingress. Choose an unused cluster name; existing clusters are never recreated automatically.',
+      + 'directly to server 0 Traefik HTTPS. Choose an unused cluster name; existing clusters are never changed automatically.',
     );
   }
   return outcome;
@@ -157,10 +166,10 @@ export function parseConnectedTailnetStatus(raw: string): string | undefined {
   let value: unknown;
   try {
     value = JSON.parse(raw) as unknown;
-  } catch {
-    return undefined;
+  } catch (error) {
+    throw new Error(`Tailscale returned malformed status JSON: ${error instanceof Error ? error.message : String(error)}`);
   }
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+  if (!isRecord(value)) throw new Error('Tailscale status must be a JSON object.');
   const status = value as { BackendState?: unknown; Self?: { Online?: unknown; DNSName?: unknown } };
   if (status.BackendState !== 'Running' || status.Self?.Online !== true) return undefined;
   const dnsName = typeof status.Self.DNSName === 'string'
@@ -179,8 +188,15 @@ export function discoverConnectedTailnet(input: {
   const env = input.env ?? process.env;
   const run = input.run ?? defaultRun;
   const timeoutMs = input.timeoutMs ?? 10_000;
+  const explicitCli = env.PSFN_TAILSCALE_CLI?.trim();
+  if (explicitCli) {
+    const result = run(explicitCli, ['status', '--json'], { cwd, timeoutMs });
+    if (result.status !== 0) throw commandFailure(explicitCli, ['status'], result);
+    const dnsName = parseConnectedTailnetStatus(result.stdout);
+    if (!dnsName) throw new Error(`Explicit Tailscale CLI ${explicitCli} is not connected on this node.`);
+    return { cli: explicitCli, dnsName, windowsHost: explicitCli.startsWith('/mnt/') };
+  }
   const candidates = [
-    env.PSFN_TAILSCALE_CLI?.trim(),
     'tailscale',
     '/mnt/c/Program Files/Tailscale/tailscale.exe',
   ].filter((candidate, index, values): candidate is string => (
@@ -199,6 +215,7 @@ export function verifyTokenLoginRedirect(input: {
   curlCommand: string;
   cwd: string;
   headers?: readonly string[];
+  insecureLocalTls?: boolean;
   run?: CommandRunner;
   timeoutMs: number;
   url: string;
@@ -209,6 +226,7 @@ export function verifyTokenLoginRedirect(input: {
     '--silent', '--show-error', '--max-time', maxTimeSeconds,
     '--output', '/dev/null',
     '--write-out', '%{http_code}\n%header{location}',
+    ...(input.insecureLocalTls ? ['--insecure'] : []),
     ...(input.headers?.flatMap((header) => ['--header', header]) ?? []),
     input.url,
   ];
@@ -221,6 +239,38 @@ export function verifyTokenLoginRedirect(input: {
       + `Location: ${location || '<none>'}).`,
     );
   }
+}
+
+export function inspectTailnetHttpsRoot(
+  raw: string,
+  dnsName: string,
+  expectedProxy: string,
+): 'available' | 'current' {
+  let value: unknown;
+  try {
+    value = JSON.parse(raw) as unknown;
+  } catch (error) {
+    throw new Error(`Tailscale returned malformed Serve status JSON: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (!isRecord(value)) throw new Error('Tailscale Serve status must be a JSON object.');
+  const tcp = value.TCP === undefined ? {} : value.TCP;
+  const web = value.Web === undefined ? {} : value.Web;
+  if (!isRecord(tcp) || !isRecord(web)) {
+    throw new Error('Tailscale Serve status TCP and Web fields must be objects.');
+  }
+  const web443 = Object.entries(web).filter(([host]) => host.toLowerCase().endsWith(':443'));
+  if (tcp['443'] === undefined && web443.length === 0) return 'available';
+  const tcp443 = tcp['443'];
+  const exactWeb = Object.entries(web).find(([host]) => host.toLowerCase() === `${dnsName.toLowerCase()}:443`)?.[1];
+  if (!isRecord(tcp443) || tcp443.HTTPS !== true || !isRecord(exactWeb)) {
+    throw new Error('Tailscale HTTPS port 443 already has an operator-owned Serve configuration; refusing to replace it.');
+  }
+  const handlers = exactWeb.Handlers;
+  const root = isRecord(handlers) ? handlers['/'] : undefined;
+  if (!isRecord(root) || root.Proxy !== expectedProxy) {
+    throw new Error('Tailscale HTTPS root already has an operator-owned Serve configuration; refusing to replace it.');
+  }
+  return 'current';
 }
 
 export function reconcileNativeGardenEdge(input: {
@@ -237,9 +287,10 @@ export function reconcileNativeGardenEdge(input: {
   verifyTokenLoginRedirect({
     curlCommand: 'curl',
     cwd: input.cwd,
+    insecureLocalTls: true,
     run,
     timeoutMs: input.timeoutMs,
-    url: `http://127.0.0.1:${input.gardenPort}/`,
+    url: `https://127.0.0.1:${input.gardenPort}/`,
   });
   if (!input.publishTailnet) return undefined;
 
@@ -256,21 +307,44 @@ export function reconcileNativeGardenEdge(input: {
     );
   }
   const options = { cwd: input.cwd, timeoutMs: input.timeoutMs };
-  if (input.configureServe !== false) {
-    runRequired(run, connected.cli, [
-      'serve', '--bg', '--yes', `http://127.0.0.1:${input.gardenPort}`,
-    ], options);
-  }
+  const serveTarget = `https+insecure://127.0.0.1:${input.gardenPort}`;
+  const serveStatus = runRequired(
+    run,
+    connected.cli,
+    ['serve', 'status', '--json'],
+    options,
+  );
+  const rootState = inspectTailnetHttpsRoot(serveStatus.stdout, connected.dnsName, serveTarget);
   const curlCommand = connected.windowsHost
     ? '/mnt/c/WINDOWS/System32/curl.exe'
     : 'curl';
-  verifyTokenLoginRedirect({
-    curlCommand,
-    cwd: input.cwd,
-    headers: ['Accept: text/html,application/xhtml+xml'],
-    run,
-    timeoutMs: input.timeoutMs,
-    url: `https://${connected.dnsName}/`,
-  });
+  let addedRoot = false;
+  try {
+    if (input.configureServe !== false && rootState === 'available') {
+      addedRoot = true;
+      runRequired(run, connected.cli, [
+        'serve', '--bg', '--yes', '--https=443', serveTarget,
+      ], options);
+    }
+    verifyTokenLoginRedirect({
+      curlCommand,
+      cwd: input.cwd,
+      headers: ['Accept: text/html,application/xhtml+xml'],
+      run,
+      timeoutMs: input.timeoutMs,
+      url: `https://${connected.dnsName}/`,
+    });
+  } catch (error) {
+    if (addedRoot) {
+      const rollback = run(connected.cli, ['serve', '--yes', '--https=443', 'off'], options);
+      if (rollback.status !== 0) {
+        throw new Error(
+          `${error instanceof Error ? error.message : String(error)}; Tailscale Serve rollback also failed: `
+          + `${rollback.stderr.trim() || rollback.stdout.trim() || `exit ${rollback.status}`}`,
+        );
+      }
+    }
+    throw error;
+  }
   return connected.dnsName;
 }

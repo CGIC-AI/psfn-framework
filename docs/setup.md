@@ -142,7 +142,9 @@ same standalone Garden token login remains in force.
 The default namespace and release are `psfn`; override them with
 `PSFN_HELM_NAMESPACE` and `PSFN_HELM_RELEASE`. New local k3d installs publish
 Garden natively on loopback port `10053`; the API retains its supervised
-loopback forward on `10054`. `helm:connect` restores the API forward after a
+loopback forward on `10054`. The native local URL is
+`https://127.0.0.1:10053/login`; its cluster-issued certificate is expected on
+loopback. `helm:connect` restores the API forward after a
 restart and revalidates the native Garden/Tailscale route, but Garden itself no
 longer depends on that command.
 

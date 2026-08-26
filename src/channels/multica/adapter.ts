@@ -76,6 +76,7 @@ export interface MulticaAdapterOptions {
 
 class MulticaWorkspaceBoundaryError extends Error {}
 class MulticaTaskInterruptedError extends Error {}
+class MulticaTaskStartReconciliationError extends Error {}
 
 function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === 'AbortError';
@@ -535,6 +536,10 @@ export class MulticaAdapter implements ChannelAdapterPort {
             { output: response.content }, this.multica.token, attemptSignal,
           ), taskSignal);
         } catch (error) {
+          if (
+            signalWasAborted(taskController.signal)
+            && taskController.signal.reason instanceof MulticaTaskInterruptedError
+          ) return;
           if (!signal.aborted) await this.failRuntime('completion-settlement', error, task.id);
         }
       } finally {
@@ -544,6 +549,10 @@ export class MulticaAdapter implements ChannelAdapterPort {
     } catch (error) {
       if (signalWasAborted(signal)) return;
       if (error instanceof MulticaTaskInterruptedError) return;
+      if (error instanceof MulticaTaskStartReconciliationError) {
+        await this.failRuntime('start-reconciliation', error, task.id);
+        return;
+      }
       const message = toErrorMessage(error);
       this.log.error('Multica task handling failed', { taskId: task.id, error: message });
       if (error instanceof MulticaWorkspaceBoundaryError) {
@@ -583,7 +592,7 @@ export class MulticaAdapter implements ChannelAdapterPort {
       } catch (error) {
         if (isAbortError(error) || signal.aborted) throw error;
         lastError = error;
-        const status = await this.getTaskStatus(taskId, signal);
+        const status = await this.reconcileClaimedTaskStart(taskId, signal);
         if (status === 'running') return;
         if (isTerminalTaskStatus(status)) {
           throw new MulticaTaskInterruptedError(
@@ -602,6 +611,33 @@ export class MulticaAdapter implements ChannelAdapterPort {
     }
     throw new Error(
       `Multica task ${taskId} start failed after ${MULTICA_MAX_OPERATION_ATTEMPTS} reconciled attempts: ${toErrorMessage(lastError)}`,
+    );
+  }
+
+  private async reconcileClaimedTaskStart(taskId: string, signal: AbortSignal): Promise<string> {
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= MULTICA_MAX_OPERATION_ATTEMPTS; attempt += 1) {
+      signal.throwIfAborted();
+      try {
+        return await this.getTaskStatus(taskId, signal);
+      } catch (error) {
+        if (
+          isAbortError(error)
+          || signal.aborted
+          || error instanceof MulticaTaskInterruptedError
+        ) throw error;
+        lastError = error;
+        if (attempt < MULTICA_MAX_OPERATION_ATTEMPTS) {
+          this.log.warn(`Multica task ${taskId} start status reconciliation failed; retrying`, {
+            attempt,
+            maxAttempts: MULTICA_MAX_OPERATION_ATTEMPTS,
+            error: toErrorMessage(error),
+          });
+        }
+      }
+    }
+    throw new MulticaTaskStartReconciliationError(
+      `Multica task ${taskId} could not reconcile an ambiguous start after ${MULTICA_MAX_OPERATION_ATTEMPTS} attempts: ${toErrorMessage(lastError)}`,
     );
   }
 

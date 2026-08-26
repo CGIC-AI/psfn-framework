@@ -357,6 +357,54 @@ describe('MulticaAdapter', () => {
     expect(startAttempts).toBe(1);
   });
 
+  it('does not fail a task when an ambiguous start cannot be reconciled', async () => {
+    let claimed = false;
+    let statusAttempts = 0;
+    const paths: string[] = [];
+    const handler = vi.fn(async (message: SubstrateMessage) => okResponse(message.channelId));
+    const alert = vi.fn(async () => undefined);
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      const path = new URL(
+        typeof input === 'string' ? input : input instanceof URL ? input : input.url,
+      ).pathname;
+      paths.push(path);
+      if (path === '/api/daemon/register') {
+        return jsonResponse({ runtimes: [{ id: RUNTIME_ID, provider: 'psfn' }] });
+      }
+      if (path.endsWith('/recover-orphans')) return jsonResponse({ orphaned: 0, retried: 0 });
+      if (path.endsWith('/tasks/claim')) {
+        if (claimed) return jsonResponse({ task: null });
+        claimed = true;
+        return jsonResponse({
+          task: { id: TASK_ID, runtime_id: RUNTIME_ID, workspace_id: WORKSPACE_ID },
+        });
+      }
+      if (path.endsWith('/start')) throw new TypeError('connection lost after commit');
+      if (path.endsWith('/status')) {
+        statusAttempts += 1;
+        throw new TypeError('status endpoint unavailable');
+      }
+      if (path === '/api/daemon/heartbeat' || path === '/api/daemon/deregister') {
+        return jsonResponse({ status: 'ok' });
+      }
+      throw new Error(`Unexpected Multica request: ${path}`);
+    }) as unknown as typeof fetch;
+    const adapter = new MulticaAdapter(makeConfig(), makeOptions({ fetchImpl }));
+    adapter.onMessage(handler);
+    adapter.onOperatorAlert(alert);
+
+    await adapter.start();
+    await vi.waitFor(() => expect(alert).toHaveBeenCalledOnce());
+    await expect(adapter.stop()).rejects.toThrow('could not reconcile');
+
+    expect(statusAttempts).toBe(3);
+    expect(handler).not.toHaveBeenCalled();
+    expect(paths).not.toContain(`/api/daemon/tasks/${TASK_ID}/fail`);
+    expect(alert).toHaveBeenCalledWith(expect.objectContaining({
+      idempotencyKey: expect.stringContaining('start-reconciliation'),
+    }));
+  });
+
   it.each([
     ['cancels', jsonResponse({ status: 'cancelled' })],
     ['deletes or reassigns', new Response('task not found', { status: 404 })],
@@ -404,6 +452,64 @@ describe('MulticaAdapter', () => {
 
     expect(paths).not.toContain(`/api/daemon/tasks/${TASK_ID}/complete`);
     expect(paths).not.toContain(`/api/daemon/tasks/${TASK_ID}/fail`);
+  });
+
+  it('ends only the task when cancellation arrives during completion', async () => {
+    let claimed = false;
+    let completionInFlight = false;
+    const paths: string[] = [];
+    const alert = vi.fn(async () => undefined);
+    const fetchImpl = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const path = new URL(
+        typeof input === 'string' ? input : input instanceof URL ? input : input.url,
+      ).pathname;
+      paths.push(path);
+      if (path === '/api/daemon/register') {
+        return jsonResponse({ runtimes: [{ id: RUNTIME_ID, provider: 'psfn' }] });
+      }
+      if (path.endsWith('/recover-orphans')) return jsonResponse({ orphaned: 0, retried: 0 });
+      if (path.endsWith('/tasks/claim')) {
+        if (claimed) return jsonResponse({ task: null });
+        claimed = true;
+        return jsonResponse({
+          task: { id: TASK_ID, runtime_id: RUNTIME_ID, workspace_id: WORKSPACE_ID },
+        });
+      }
+      if (path.endsWith('/start')) return jsonResponse({ status: 'running' });
+      if (path.endsWith('/status')) {
+        return jsonResponse({ status: completionInFlight ? 'cancelled' : 'running' });
+      }
+      if (path.endsWith('/complete')) {
+        completionInFlight = true;
+        return await new Promise<Response>((_resolve, reject) => {
+          const rejectForAbort = (): void => reject(init?.signal?.reason);
+          if (init?.signal?.aborted) rejectForAbort();
+          else init?.signal?.addEventListener('abort', rejectForAbort, { once: true });
+        });
+      }
+      if (path === '/api/daemon/heartbeat' || path === '/api/daemon/deregister') {
+        return jsonResponse({ status: 'ok' });
+      }
+      throw new Error(`Unexpected Multica request: ${path}`);
+    }) as unknown as typeof fetch;
+    const adapter = new MulticaAdapter(makeConfig({ pollIntervalMs: 1 }), makeOptions({
+      fetchImpl,
+      heartbeatIntervalMs: 60_000,
+    }));
+    adapter.onMessage(async message => okResponse(message.channelId));
+    adapter.onOperatorAlert(alert);
+
+    await adapter.start();
+    await vi.waitFor(() => expect(completionInFlight).toBe(true));
+    await vi.waitFor(() => {
+      expect(paths.filter(path => path.endsWith('/tasks/claim')).length).toBeGreaterThan(1);
+    });
+
+    expect(alert).not.toHaveBeenCalled();
+    expect(paths).not.toContain(`/api/daemon/tasks/${TASK_ID}/fail`);
+    expect(paths).not.toContain('/api/daemon/deregister');
+
+    await adapter.stop();
   });
 
   it('hands one stable runtime from an old gateway pod to its rolling replacement', async () => {

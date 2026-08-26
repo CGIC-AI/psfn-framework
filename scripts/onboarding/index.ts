@@ -32,14 +32,15 @@ What it does:
      markdown) or scaffolds a fresh one, with a preview/confirm before writing.
   5. Generates the canonical JSON owner files for the chosen mode, validated
      against the settings-contract guard, writes the companion card, and writes
-     host-mode secrets to .env. Kubernetes provider secrets stay in the caller's
-     environment for the Helm lifecycle.
+     host-mode secrets to .env. Kubernetes writes non-secret target/edge wiring
+     to .env while provider secrets stay in the caller's environment.
 
 Guarantees:
   - Abort-safe: aborting at any prompt writes zero files.
   - Idempotent: an existing config offers update vs abort, never a silent overwrite.
   - Host-mode secrets are entered masked and written only to .env, never to owner
-    files. Kubernetes onboarding does not capture the provider secret.
+    files. Kubernetes onboarding does not capture the provider secret; it records
+    only non-secret deployment coordinates in .env.
   - Malformed companion definitions are rejected with a specific error before
     anything is written.
 `;

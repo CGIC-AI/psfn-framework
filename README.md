@@ -79,7 +79,7 @@ provisioning, and an internal operator-alert sink.
 | --- | --- | --- |
 | Docker Compose | You want the simplest self-contained install | `compose:*` |
 | Repository-native | You want host processes and already have PostgreSQL | `local:*` |
-| Helm / Kubernetes | You operate a Kubernetes cluster | `helm:*` |
+| Helm / Kubernetes | You want local k3d or operate a Kubernetes cluster | `helm:*` |
 
 Start every path the same way:
 
@@ -102,17 +102,17 @@ npm run compose:up && npm run compose:verify
 # Repository-native
 npm run local:up && npm run local:verify
 
-# Kubernetes (set the exact context and a pinned image first)
-PSFN_KUBE_CONTEXT=my-context \
-PSFN_IMAGE=registry.example/psfn:0.1.0 \
-  npm run helm:up
-PSFN_KUBE_CONTEXT=my-context npm run helm:verify
+# Kubernetes: onboarding records an existing context or configures local k3d
+PROVIDER_API_KEY='<provider credential>' npm run helm:up
+npm run helm:verify
 ```
 
 `*:up` starts and diagnoses the whole installation. `*:verify` goes further:
 it performs a real provider turn, proves the exact turn reached canonical
 persistent storage, restarts the runtime, and proves the same record and Garden
-remain available. Garden listens on `127.0.0.1:10053` by default.
+remain available. Garden listens on `127.0.0.1:10053` by default; new local k3d
+installs keep that port connected through native ingress and can publish the
+same token-login page through the connected Tailscale HTTPS hostname.
 
 See [`docs/setup.md`](./docs/setup.md) for prerequisites and first install, and
 [`docs/operations.md`](./docs/operations.md) for update, restart, recovery,

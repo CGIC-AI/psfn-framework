@@ -8,7 +8,7 @@ different paths.
 | --- | --- | --- |
 | Docker Compose | PostgreSQL, gateway, agent, Garden, model prefetch, alert sink | Docker with Compose v2 |
 | Repository-native | Supervised host processes for gateway, agent, Garden, alert sink | PostgreSQL 17 with pgvector |
-| Helm / Kubernetes | PostgreSQL, gateway, agent, Garden, model prefetch, alert sink, mTLS | Kubernetes, `kubectl`, Helm, a default StorageClass |
+| Helm / Kubernetes | PostgreSQL, gateway, agent, Garden, model prefetch, alert sink, mTLS | `kubectl`, Helm, and either Docker+k3d or an existing cluster with a default StorageClass |
 
 All paths require Node.js 24.19 or newer within the Node 24 LTS line, npm, a
 supported provider credential, and network access to that provider. A first
@@ -32,9 +32,10 @@ The interactive flow asks for:
 
 It generates and validates the canonical owner files. Compose and
 repository-native onboarding also write the selected provider credential and
-generated runtime credentials to the ignored `.env` file. Kubernetes
-onboarding does not write the provider key: export the environment variable
-named in the generated `providers.json` before running a `helm:*` command.
+generated runtime credentials to the ignored `.env` file. Kubernetes writes
+only non-secret target and edge coordinates there; it does not write the
+provider key. Export the environment variable named in generated
+`providers.json` before running a `helm:*` command.
 
 Rerun onboarding to change providers or regenerate configuration. Existing
 owner files are shown as updates and are not silently replaced.
@@ -118,22 +119,32 @@ npm run helm:verify
 `PROVIDER_API_KEY` is an example. Export the exact name referenced by your
 generated `providers.json`.
 
-For a local k3d cluster, the lifecycle can build and import the current checkout
-instead of using a registry:
+For a new local install, run onboarding and choose **Kubernetes / Helm**, then
+**Local k3d cluster**. Onboarding writes the non-secret context, cluster, native
+Garden port, and optional connected Tailnet hostname to the ignored `.env`.
+`helm:up` creates the pinned local cluster on first use, builds and imports the
+current checkout, and keeps Garden connected through the cluster's Traefik
+ingress without a Garden port-forward:
 
 ```bash
-export PSFN_KUBE_CONTEXT=k3d-psfn-local
-export PSFN_K3D_CLUSTER=psfn-local
 export PROVIDER_API_KEY='<provider credential>'
 
 npm run helm:up
 npm run helm:verify
 ```
 
+`PROVIDER_API_KEY` is the example name; use the exact environment-variable name
+shown by onboarding. When a connected Tailscale node is detected, onboarding
+offers to publish Garden at `https://<node>.<tailnet>.ts.net/login`. Tailscale
+terminates HTTPS on port 443 and forwards to the native loopback ingress. The
+same standalone Garden token login remains in force.
+
 The default namespace and release are `psfn`; override them with
-`PSFN_HELM_NAMESPACE` and `PSFN_HELM_RELEASE`. Garden and the API are forwarded
-to loopback ports `10053` and `10054`. `helm:up` starts the forwards; use
-`helm:connect` after a shell or machine restart.
+`PSFN_HELM_NAMESPACE` and `PSFN_HELM_RELEASE`. New local k3d installs publish
+Garden natively on loopback port `10053`; the API retains its supervised
+loopback forward on `10054`. `helm:connect` restores the API forward after a
+restart and revalidates the native Garden/Tailscale route, but Garden itself no
+longer depends on that command.
 
 ```bash
 npm run helm:status
@@ -200,12 +211,14 @@ downloaded model content out of Git.
 ## Common failures
 
 - If Garden does not load, run the path's `*:status` and `*:doctor`; for Helm,
-  also run `helm:connect` to recreate loopback forwards.
+  also run `helm:connect` to restore supervised forwards and revalidate native
+  k3d/Tailscale ingress.
 - If onboarding reports a provider/model mismatch, use model identifiers served
   by the selected provider. No provider is assumed.
 - If model prefetch fails, confirm outbound HTTPS access and retry `*:up`; it is
   safe against the existing persistent volumes.
 - If repository-native startup cannot provision roles, verify the administrator
   URL authenticates as PostgreSQL user `postgres` and pgvector is installed.
-- If Helm refuses to start, set `PSFN_KUBE_CONTEXT` explicitly and supply either
-  `PSFN_IMAGE` or the matching `PSFN_K3D_CLUSTER` local-build target.
+- If Helm refuses to start, run onboarding to record an exact context. Existing
+  clusters need a pinned `PSFN_IMAGE`; local k3d needs the matching onboarded
+  `PSFN_K3D_CLUSTER` target.

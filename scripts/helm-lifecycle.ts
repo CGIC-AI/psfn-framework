@@ -22,6 +22,10 @@ import {
   composeApiPrincipalId,
   findMatchingPersistedTurnInText,
 } from './compose-verification.js';
+import {
+  ensureNativeK3dGarden,
+  reconcileNativeGardenEdge,
+} from './helm-native-garden.js';
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const REPO_ROOT = resolve(dirname(SCRIPT_PATH), '..');
@@ -30,6 +34,7 @@ const CERT_MANAGER_VERSION = 'v1.20.3';
 const AUTH_CONTEXT = 'substrate-gateway-companion-auth-v1';
 const CHAT_TIMEOUT_MS = 180_000;
 const COMMAND_TIMEOUT_MS = 1_800_000;
+const EDGE_TIMEOUT_MS = COMMAND_TIMEOUT_MS / 180;
 const REQUIRED_SYSTEM_FILES = [
   'settings.json',
   'models.json',
@@ -70,6 +75,10 @@ interface HelmContext {
   gardenPort: number;
   apiBase: string;
   gardenBase: string;
+  k3dCluster?: string;
+  nativeGarden: boolean;
+  publishTailnet: boolean;
+  tailnetHost?: string;
   connectionStatePath: string;
   connectionLogPath: string;
 }
@@ -86,7 +95,8 @@ interface ConnectionState {
   namespace: string;
   release: string;
   apiPid: number;
-  gardenPid: number;
+  gardenPid?: number;
+  nativeGarden: boolean;
   apiPort: number;
   gardenPort: number;
 }
@@ -141,6 +151,12 @@ function positivePort(raw: string | undefined, fallback: number, name: string): 
     fail(`${name} must be an integer from 1 to 65535.`);
   }
   return value;
+}
+
+function enabledFlag(raw: string | undefined, name: string): boolean {
+  if (raw === undefined || raw.trim() === '' || raw.trim() === '0') return false;
+  if (raw.trim() === '1') return true;
+  fail(`${name} must be exactly 0 or 1.`);
 }
 
 function readJson(path: string): unknown {
@@ -270,6 +286,16 @@ export function loadHelmContext(): HelmContext {
   const image = resolveDeploymentImageReference(env, head);
   const apiPort = positivePort(env.PSFN_API_PORT, 10054, 'PSFN_API_PORT');
   const gardenPort = positivePort(env.PSFN_GARDEN_PORT, 10053, 'PSFN_GARDEN_PORT');
+  const k3dCluster = env.PSFN_K3D_CLUSTER?.trim();
+  const nativeGarden = enabledFlag(env.PSFN_K3D_NATIVE_GARDEN, 'PSFN_K3D_NATIVE_GARDEN');
+  const publishTailnet = enabledFlag(env.PSFN_TAILSCALE_SERVE, 'PSFN_TAILSCALE_SERVE');
+  const tailnetHost = env.PSFN_TAILNET_HOST?.trim().toLowerCase();
+  if (nativeGarden && !k3dCluster) {
+    fail('PSFN_K3D_NATIVE_GARDEN=1 requires PSFN_K3D_CLUSTER.');
+  }
+  if (publishTailnet && (!nativeGarden || !tailnetHost?.endsWith('.ts.net'))) {
+    fail('PSFN_TAILSCALE_SERVE=1 requires native k3d Garden and the connected PSFN_TAILNET_HOST (*.ts.net).');
+  }
   const identity = createHash('sha256')
     .update(`${kubeContext}\0${namespace}\0${release}`)
     .digest('hex')
@@ -292,6 +318,10 @@ export function loadHelmContext(): HelmContext {
     gardenPort,
     apiBase: `http://127.0.0.1:${apiPort}`,
     gardenBase: `http://127.0.0.1:${gardenPort}`,
+    ...(k3dCluster ? { k3dCluster } : {}),
+    nativeGarden,
+    publishTailnet,
+    ...(tailnetHost ? { tailnetHost } : {}),
     connectionStatePath: `/tmp/psfn-helm-${identity}.json`,
     connectionLogPath: `/tmp/psfn-helm-${identity}.log`,
   };
@@ -450,7 +480,7 @@ function ensureCertManager(context: HelmContext): void {
 }
 
 function prepareImage(context: HelmContext): void {
-  const k3dCluster = context.env.PSFN_K3D_CLUSTER?.trim();
+  const k3dCluster = context.k3dCluster;
   const localBuild = context.env.PSFN_HELM_LOCAL_BUILD?.trim() === '1' || Boolean(k3dCluster);
   if (!localBuild) return;
   if (context.image.digest) fail('Local Helm image builds require a pinned tag, not a digest reference.');
@@ -506,6 +536,7 @@ function helmSetArgs(context: HelmContext): string[] {
     ['postgres.auth.username', 'postgres'],
     ['postgres.auth.existingSecret', context.postgresSecret],
     ['postgres.restoreVerify.roles.companionSchemaOwners[0]', 'companion_main_runtime'],
+    ['ingress.garden.host', context.nativeGarden ? '' : 'psfn-garden.local'],
   ];
   const booleans: Array<[string, boolean]> = [
     ['fleet.enabled', false],
@@ -515,8 +546,9 @@ function helmSetArgs(context: HelmContext): string[] {
     ['redis.enabled', false],
     ['emosim.enabled', false],
     ['modelPrefetch.enabled', true],
-    ['ingress.enabled', false],
+    ['ingress.enabled', context.nativeGarden],
     ['ingress.gateway.enabled', false],
+    ['ingress.garden.enabled', context.nativeGarden],
     ['hostPorts.gatewayApi.enabled', false],
     ['hostPorts.garden.enabled', false],
   ];
@@ -527,6 +559,17 @@ function helmSetArgs(context: HelmContext): string[] {
 }
 
 function deploy(context: HelmContext): void {
+  if (context.nativeGarden) {
+    requiredTool('k3d');
+    const outcome = ensureNativeK3dGarden({
+      clusterName: context.k3dCluster as string,
+      cwd: REPO_ROOT,
+      gardenPort: context.gardenPort,
+      kubeContext: context.kubeContext,
+      timeoutMs: COMMAND_TIMEOUT_MS,
+    });
+    console.log(`${outcome === 'created' ? 'Created' : 'Using'} native k3d Garden binding on ${context.gardenBase}.`);
+  }
   requiredTool('kubectl');
   requiredTool('helm');
   ensureCertManager(context);
@@ -599,15 +642,21 @@ function stopConnection(context: HelmContext): void {
   const state = readConnection(context);
   if (state) {
     for (const pid of [state.apiPid, state.gardenPid]) {
-      if (isProcessAlive(pid)) process.kill(pid, 'SIGTERM');
+      if (typeof pid === 'number' && isProcessAlive(pid)) process.kill(pid, 'SIGTERM');
     }
   }
   if (existsSync(context.connectionStatePath)) unlinkSync(context.connectionStatePath);
 }
 
+function connectionProcessesReady(context: HelmContext, state: ConnectionState): boolean {
+  if (!isProcessAlive(state.apiPid) || state.nativeGarden !== context.nativeGarden) return false;
+  return context.nativeGarden
+    || (typeof state.gardenPid === 'number' && isProcessAlive(state.gardenPid));
+}
+
 async function startConnection(context: HelmContext): Promise<void> {
   const existing = readConnection(context);
-  if (existing && isProcessAlive(existing.apiPid) && isProcessAlive(existing.gardenPid)
+  if (existing && connectionProcessesReady(context, existing)
     && existing.apiPort === context.apiPort && existing.gardenPort === context.gardenPort) {
     try {
       const [api, garden] = await Promise.all([
@@ -619,7 +668,7 @@ async function startConnection(context: HelmContext): Promise<void> {
   }
   stopConnection(context);
   await waitForPortAvailable(context.apiPort, 'Gateway');
-  await waitForPortAvailable(context.gardenPort, 'Garden');
+  if (!context.nativeGarden) await waitForPortAvailable(context.gardenPort, 'Garden');
   const logFd = openSync(context.connectionLogPath, 'a');
   const start = (service: string, localPort: number, remotePort: number) => {
     const child = spawn('kubectl', kubeArgs(context, [
@@ -636,20 +685,23 @@ async function startConnection(context: HelmContext): Promise<void> {
     return child.pid;
   };
   const apiPid = start(`${context.release}-gateway`, context.apiPort, 10053);
-  const gardenPid = start(`${context.release}-garden`, context.gardenPort, 10054);
+  const gardenPid = context.nativeGarden
+    ? undefined
+    : start(`${context.release}-garden`, context.gardenPort, 10054);
   closeSync(logFd);
   writeConnection(context, {
     kubeContext: context.kubeContext,
     namespace: context.namespace,
     release: context.release,
     apiPid,
-    gardenPid,
+    ...(gardenPid ? { gardenPid } : {}),
+    nativeGarden: context.nativeGarden,
     apiPort: context.apiPort,
     gardenPort: context.gardenPort,
   });
   const deadline = Date.now() + 30_000;
   do {
-    if (!isProcessAlive(apiPid) || !isProcessAlive(gardenPid)) {
+    if (!isProcessAlive(apiPid) || (gardenPid !== undefined && !isProcessAlive(gardenPid))) {
       stopConnection(context);
       fail(`Kubernetes port-forward exited; inspect ${context.connectionLogPath}.`);
     }
@@ -672,6 +724,21 @@ async function fetchJson(url: string, init: RequestInit = {}): Promise<{ respons
   let body: unknown;
   try { body = JSON.parse(text); } catch { body = text; }
   return { response, body };
+}
+
+function reconcileGardenEdge(context: HelmContext, configureServe: boolean): void {
+  if (!context.nativeGarden) return;
+  const tailnetHost = reconcileNativeGardenEdge({
+    configureServe,
+    cwd: REPO_ROOT,
+    env: context.env,
+    gardenPort: context.gardenPort,
+    publishTailnet: context.publishTailnet,
+    ...(context.tailnetHost ? { tailnetHost: context.tailnetHost } : {}),
+    timeoutMs: EDGE_TIMEOUT_MS,
+  });
+  console.log(`Garden:  ${context.gardenBase}/login (native k3d ingress)`);
+  if (tailnetHost) console.log(`Garden:  https://${tailnetHost}/login (Tailscale HTTPS)`);
 }
 
 function appSecrets(context: HelmContext): Record<string, string> {
@@ -718,6 +785,7 @@ async function doctor(context: HelmContext): Promise<void> {
   }
   if (expected.size > 0) fail(`Required Kubernetes workloads are missing: ${[...expected].join(', ')}`);
   await startConnection(context);
+  reconcileGardenEdge(context, false);
   const secrets = appSecrets(context);
   const gateway = await fetchJson(`${context.apiBase}/health`, {
     headers: { Authorization: `Bearer ${secrets.API_KEY}` },
@@ -836,7 +904,7 @@ function status(context: HelmContext): void {
   ]);
   kubectl(context, ['get', 'pods,pvc']);
   const connection = readConnection(context);
-  console.log(`Local connection: ${connection && isProcessAlive(connection.apiPid) && isProcessAlive(connection.gardenPid) ? 'running' : 'stopped'}`);
+  console.log(`Local connection: ${connection && connectionProcessesReady(context, connection) ? 'running' : 'stopped'}`);
 }
 
 function logs(context: HelmContext): void {
@@ -882,8 +950,8 @@ Commands:
   up          build/import or deploy the pinned image, then validate the complete release
   update      atomic upgrade of the current checkout; Helm rolls back a failed rollout
   status      show Helm, pod, PVC, and local connection state
-  connect     expose Garden and API on loopback using supervised port-forwards
-  disconnect  stop only the local port-forwards
+  connect     reconcile native Garden ingress (local k3d) and expose the API on loopback
+  disconnect  stop only supervised port-forwards; native Garden ingress remains available
   doctor      validate workloads, runtime health, and authenticated Garden UI
   verify      real provider chat + PVC TurnRecord + restart/recovery proof
   restart     restart gateway, agent, and Garden and wait for readiness
@@ -906,9 +974,10 @@ async function main(): Promise<void> {
       // kubectl port-forward selects one backing pod when it starts. A healthy
       // pre-upgrade forward can therefore remain attached to a pod Helm is
       // terminating and disappear between startConnection() and doctor().
-      // Replace both forwards after every deployment before validating it.
+      // Replace supervised forwards after every deployment before validating it.
       stopConnection(context);
       await startConnection(context);
+      reconcileGardenEdge(context, true);
       await doctor(context);
       console.log('The public Helm deployment is ready; helm:down preserves its data.');
       return;
@@ -917,12 +986,13 @@ async function main(): Promise<void> {
       return;
     case 'connect':
       await startConnection(context);
+      reconcileGardenEdge(context, true);
       console.log(`Garden: ${context.gardenBase}/login`);
       console.log(`API:    ${context.apiBase}`);
       return;
     case 'disconnect':
       stopConnection(context);
-      console.log('Stopped local Kubernetes port-forwards; cluster workloads remain running.');
+      console.log('Stopped supervised Kubernetes port-forwards; cluster workloads and native Garden ingress remain running.');
       return;
     case 'doctor':
       await doctor(context);
@@ -933,6 +1003,7 @@ async function main(): Promise<void> {
     case 'restart':
       rollout(context);
       await startConnection(context);
+      reconcileGardenEdge(context, true);
       await doctor(context);
       return;
     case 'logs':

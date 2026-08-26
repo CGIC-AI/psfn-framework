@@ -62,7 +62,9 @@ spec:
   ingressClassName: {{ . | quote }}
   {{- end }}
   rules:
-    - host: {{ .Values.ingress.garden.host | quote }}
+    - {{- with .Values.ingress.garden.host }}
+      host: {{ . | quote }}
+      {{- end }}
       http:
         paths:
           - path: {{ .Values.ingress.garden.path | quote }}

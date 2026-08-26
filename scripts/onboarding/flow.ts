@@ -9,6 +9,7 @@ import { basename, join, resolve } from 'node:path';
 import { parseEnv } from 'node:util';
 import type {
   InstallMode,
+  KubernetesTargetPlan,
   OnboardingPlan,
   PersistenceRootPlan,
   Prompter,
@@ -38,6 +39,10 @@ import {
   type CompanionImportResult,
 } from './companion-import.js';
 import { DEFAULT_COMPANION_NAME } from '../../src/core/identity/companion-naming.js';
+import {
+  discoverConnectedTailnet,
+  type TailnetConnection,
+} from '../helm-native-garden.js';
 
 export interface OnboardingDeps {
   prompter: Prompter;
@@ -48,6 +53,8 @@ export interface OnboardingDeps {
   rootsOverride?: Partial<Record<InstallMode, PersistenceRootPlan>>;
   /** Injected connectivity probe (tests). */
   connectivity?: (provider: ProviderSelection) => Promise<ConnectivityResult>;
+  /** Injected connected-Tailnet discovery (tests). */
+  discoverTailnet?: () => TailnetConnection | undefined;
 }
 
 export interface OnboardingOutcome {
@@ -92,6 +99,12 @@ export async function runOnboarding(deps: OnboardingDeps): Promise<OnboardingOut
   const companionId = updateExisting
     ? readExistingCompanionId(provisionalPlanForDetection) ?? randomUUID()
     : randomUUID();
+  const kubernetesTarget = mode === 'kubernetes'
+    ? await selectKubernetesTarget(
+      prompter,
+      deps.discoverTailnet ?? (() => discoverConnectedTailnet()),
+    )
+    : undefined;
   const provider = await selectProvider(prompter, modeInfo.capturesHostSecret, mode);
   const models = await selectModels(prompter, deps.seedDir, provider.type);
   const voice = await selectVoice(prompter, modeInfo.capturesHostSecret);
@@ -136,6 +149,7 @@ export async function runOnboarding(deps: OnboardingDeps): Promise<OnboardingOut
     companionId,
     capturesHostSecret: modeInfo.capturesHostSecret,
     existingEnv: parseExistingEnv(deps.envPath),
+    ...(kubernetesTarget ? { kubernetesTarget } : {}),
     ...(localPostgresAdminUrl ? { localPostgresAdminUrl } : {}),
   });
 
@@ -147,6 +161,7 @@ export async function runOnboarding(deps: OnboardingDeps): Promise<OnboardingOut
     models,
     voice,
     companionId,
+    ...(kubernetesTarget ? { kubernetesTarget } : {}),
     envEntries,
     updateExisting,
     companionSource: companion.source,
@@ -156,19 +171,89 @@ export async function runOnboarding(deps: OnboardingDeps): Promise<OnboardingOut
   // Commit: owner files first (validated internally), then .env.
   const { writtenPaths } = commitOwnerFiles(plan);
   let envWritten = false;
-  if (modeInfo.capturesHostSecret && envEntries.length > 0) {
+  if (envEntries.length > 0) {
     commitEnv(deps.envPath, envEntries.map(toEnvEntry));
     envWritten = true;
   }
 
   prompter.info(`\nWrote ${writtenPaths.length} file(s) (owner files + companion card).`);
   if (envWritten) prompter.info(`Updated ${deps.envPath} with ${envEntries.length} entry/entries (secrets not shown).`);
-  for (const line of modeGuidance(mode, provider)) prompter.info(line);
+  for (const line of modeGuidance(mode, provider, kubernetesTarget)) prompter.info(line);
   for (const line of firstChatGapNotes({ mode, companionId, provider, capturesHostSecret: modeInfo.capturesHostSecret })) {
     prompter.info(line);
   }
 
   return { plan, writtenPaths, envWritten };
+}
+
+async function selectKubernetesTarget(
+  prompter: Prompter,
+  discoverTailnet: () => TailnetConnection | undefined,
+): Promise<KubernetesTargetPlan> {
+  const kind = await prompter.choice('Which Kubernetes target should onboarding configure?', [
+    {
+      value: 'local-k3d',
+      label: 'Local k3d cluster (recommended)',
+      hint: 'Creates the cluster on first helm:up and keeps Garden reachable without a port-forward.',
+    },
+    {
+      value: 'existing-context',
+      label: 'Existing Kubernetes context',
+      hint: 'Uses an exact context and retains the existing port-forward lifecycle.',
+    },
+  ]);
+  const gardenPort = parseOnboardingPort(await prompter.text(
+    'Garden loopback port',
+    { default: '10053', allowEmpty: false },
+  ));
+  if (kind === 'existing-context') {
+    const kubeContext = (await prompter.text(
+      'Exact kubectl context',
+      { allowEmpty: false },
+    )).trim();
+    return {
+      kind,
+      kubeContext,
+      gardenPort,
+      nativeGarden: false,
+      publishTailnet: false,
+    };
+  }
+
+  const k3dCluster = (await prompter.text(
+    'Local k3d cluster name',
+    { default: 'psfn-local', allowEmpty: false },
+  )).trim();
+  if (!/^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$/u.test(k3dCluster)) {
+    throw new Error('The local k3d cluster name must be a lowercase Kubernetes label.');
+  }
+  const tailnet = discoverTailnet();
+  const publishTailnet = tailnet
+    ? await prompter.confirm(
+      `Publish Garden at https://${tailnet.dnsName}/ through Tailscale?`,
+      { default: true },
+    )
+    : false;
+  if (!tailnet) {
+    prompter.info('  No connected Tailscale node detected; Garden will remain on the native loopback port.');
+  }
+  return {
+    kind,
+    kubeContext: `k3d-${k3dCluster}`,
+    gardenPort,
+    nativeGarden: true,
+    publishTailnet,
+    k3dCluster,
+    ...(publishTailnet ? { tailnetHost: tailnet?.dnsName } : {}),
+  };
+}
+
+function parseOnboardingPort(raw: string): number {
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 1 || value > 65_535) {
+    throw new Error('Garden loopback port must be an integer from 1 to 65535.');
+  }
+  return value;
 }
 
 /**
@@ -369,11 +454,31 @@ export function buildEnvEntries(input: {
   voice: VoiceSelection;
   companionId: string;
   capturesHostSecret: boolean;
+  kubernetesTarget?: KubernetesTargetPlan;
   localPostgresAdminUrl?: string;
   existingEnv?: NodeJS.ProcessEnv;
 }): OnboardingPlan['envEntries'] {
-  if (!input.capturesHostSecret) return [];
   const entries: OnboardingPlan['envEntries'] = [];
+  if (input.mode === 'kubernetes') {
+    if (!input.kubernetesTarget) throw new Error('Kubernetes onboarding requires a deployment target.');
+    const target = input.kubernetesTarget;
+    for (const [envName, value, comment] of [
+      ['PSFN_KUBE_CONTEXT', target.kubeContext, 'Exact Kubernetes context selected by onboarding'],
+      ['PSFN_GARDEN_PORT', String(target.gardenPort), 'Garden loopback port'],
+      ['PSFN_K3D_NATIVE_GARDEN', target.nativeGarden ? '1' : '0', 'Persistent native k3d Garden ingress'],
+      ['PSFN_TAILSCALE_SERVE', target.publishTailnet ? '1' : '0', 'Opt-in Tailscale HTTPS publication'],
+      ...(target.k3dCluster
+        ? [['PSFN_K3D_CLUSTER', target.k3dCluster, 'Local k3d cluster managed by helm:up']]
+        : []),
+      ...(target.tailnetHost
+        ? [['PSFN_TAILNET_HOST', target.tailnetHost, 'Connected Tailnet hostname validated by onboarding']]
+        : []),
+    ] as Array<[string, string, string]>) {
+      entries.push({ envName, value, comment });
+    }
+    return entries;
+  }
+  if (!input.capturesHostSecret) return entries;
   if (input.mode === 'compose') {
     for (const [envName, comment] of [
       ['PSFN_POSTGRES_SUPERUSER_PASSWORD', 'Compose Postgres bootstrap credential'],

@@ -689,8 +689,9 @@ ingress:
       enabled: true
       # Existing public/browser-trusted TLS Secret for the exact gateway host.
       secretName: psfn-public-origin-tls
-  # Garden is reached only through the authenticated fleet portal on the
-  # gateway origin. This legacy field remains disabled in the fleet shape.
+  # Standalone single-companion installs may expose Garden directly through an
+  # ingress while retaining its token login. Fleet installs keep this disabled
+  # because the authenticated gateway is their sole browser origin.
   garden:
     enabled: false
     host: psfn-garden.local

@@ -189,14 +189,15 @@ describe('runOnboarding — idempotency and abort', () => {
 });
 
 describe('runOnboarding — kubernetes mode', () => {
-  it('generates and validates owner files without capturing a host secret or .env', async () => {
+  it('writes native local target wiring without capturing a provider secret', async () => {
     const { root, envPath } = workspace();
     const systemDataDir = join(root, 'system-data');
     const companionDataDir = join(root, 'companion-data');
     const prompter = new ScriptedPrompter({
-      choices: ['kubernetes', 'openrouter', 'fresh'],
-      texts: ['', '', '', '', '', '', ''],
-      confirms: [false], // voice off (no connectivity prompt in k8s mode)
+      choices: ['kubernetes', 'local-k3d', 'openrouter', 'fresh'],
+      // Garden port, cluster, provider id/base/models URL/key env, three model slugs, companion name.
+      texts: ['', '', '', '', '', '', '', '', ''],
+      confirms: [true, false], // Tailscale publication on, voice off.
     });
 
     const outcome = await runOnboarding({
@@ -204,16 +205,63 @@ describe('runOnboarding — kubernetes mode', () => {
       seedDir: SEED_DIR,
       envPath,
       rootsOverride: { kubernetes: { systemDataDir, companionDataDir, shared: false } },
+      discoverTailnet: () => ({
+        cli: '/opt/tailscale',
+        dnsName: 'demo-node.example.ts.net',
+        windowsHost: false,
+      }),
     });
 
-    expect(outcome.envWritten).toBe(false);
-    expect(existsSync(envPath)).toBe(false);
+    expect(outcome.envWritten).toBe(true);
+    const envText = readFileSync(envPath, 'utf8');
+    expect(envText).toContain('PSFN_KUBE_CONTEXT=k3d-psfn-local');
+    expect(envText).toContain('PSFN_K3D_CLUSTER=psfn-local');
+    expect(envText).toContain('PSFN_K3D_NATIVE_GARDEN=1');
+    expect(envText).toContain('PSFN_GARDEN_PORT=10053');
+    expect(envText).toContain('PSFN_TAILSCALE_SERVE=1');
+    expect(envText).toContain('PSFN_TAILNET_HOST=demo-node.example.ts.net');
+    expect(envText).not.toContain('OPENROUTER_API_KEY');
     expect(existsSync(join(systemDataDir, 'providers.json'))).toBe(true);
     expect(existsSync(join(systemDataDir, 'mcp-servers.json'))).toBe(true);
     expect(existsSync(join(companionDataDir, 'main', 'scheduler.json'))).toBe(true);
     expect(prompter.log.join('\n')).toContain('npm run helm:up');
+    expect(prompter.log.join('\n')).toContain('local k3d target wiring was written to .env');
     expect(prompter.log.join('\n')).toContain('provisions the chart-managed PostgreSQL roles and URLs');
     expect(prompter.log.join('\n')).not.toContain('private deployment configuration');
+  });
+
+  it('records an exact existing context without enabling native or Tailscale mutation', async () => {
+    const { root, envPath } = workspace();
+    const prompter = new ScriptedPrompter({
+      choices: ['kubernetes', 'existing-context', 'openrouter', 'fresh'],
+      // Garden port, exact context, provider id/base/models URL/key env, model slugs, companion name.
+      texts: ['', 'example-context', '', '', '', '', '', '', ''],
+      confirms: [false],
+    });
+
+    const outcome = await runOnboarding({
+      prompter,
+      seedDir: SEED_DIR,
+      envPath,
+      rootsOverride: {
+        kubernetes: {
+          systemDataDir: join(root, 'system-data'),
+          companionDataDir: join(root, 'companion-data'),
+          shared: false,
+        },
+      },
+      discoverTailnet: () => {
+        throw new Error('existing-context onboarding must not inspect Tailscale');
+      },
+    });
+
+    expect(outcome.envWritten).toBe(true);
+    const envText = readFileSync(envPath, 'utf8');
+    expect(envText).toContain('PSFN_KUBE_CONTEXT=example-context');
+    expect(envText).toContain('PSFN_K3D_NATIVE_GARDEN=0');
+    expect(envText).toContain('PSFN_TAILSCALE_SERVE=0');
+    expect(envText).not.toContain('PSFN_K3D_CLUSTER');
+    expect(envText).not.toContain('PSFN_TAILNET_HOST');
   });
 });
 

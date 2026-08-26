@@ -9,6 +9,16 @@ import type { CompanionSource } from './companion-import.js';
 /** Install target the operator picks first. */
 export type InstallMode = 'compose' | 'kubernetes' | 'local';
 
+export interface KubernetesTargetPlan {
+  kind: 'local-k3d' | 'existing-context';
+  kubeContext: string;
+  gardenPort: number;
+  nativeGarden: boolean;
+  publishTailnet: boolean;
+  k3dCluster?: string;
+  tailnetHost?: string;
+}
+
 /**
  * A single question/answer surface. The readline-backed implementation lives in
  * `prompter.ts`; tests supply a scripted stub. `secret` must never echo the
@@ -79,6 +89,7 @@ export interface OnboardingPlan {
   models: ModelSelection;
   voice: VoiceSelection;
   companionId: string;
+  kubernetesTarget?: KubernetesTargetPlan;
   /** Non-secret and secret .env entries (name -> value). */
   envEntries: Array<{
     envName: string;

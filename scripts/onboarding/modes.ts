@@ -2,7 +2,7 @@
 // Per-mode default persistence roots and post-generation guidance. The roots
 // are defaults only; the operator may override them at the prompt.
 
-import type { InstallMode, PersistenceRootPlan } from './types.js';
+import type { InstallMode, KubernetesTargetPlan, PersistenceRootPlan } from './types.js';
 
 export interface InstallModeInfo {
   mode: InstallMode;
@@ -51,7 +51,11 @@ export const INSTALL_MODES: Record<InstallMode, InstallModeInfo> = {
 };
 
 /** Post-generation guidance shown after a successful commit. */
-export function modeGuidance(mode: InstallMode, provider: { apiKeyEnvName: string }): string[] {
+export function modeGuidance(
+  mode: InstallMode,
+  provider: { apiKeyEnvName: string },
+  kubernetesTarget?: KubernetesTargetPlan,
+): string[] {
   switch (mode) {
     case 'compose':
       return [
@@ -85,15 +89,15 @@ export function modeGuidance(mode: InstallMode, provider: { apiKeyEnvName: strin
       return [
         'Kubernetes / Helm next steps:',
         `  1. Export ${provider.apiKeyEnvName} in the shell that runs the Helm lifecycle.`,
-        '     No provider key was written to a host .env for this mode.',
-        '  2. Select the target explicitly with PSFN_KUBE_CONTEXT and provide either',
-        '     a pinned PSFN_IMAGE or PSFN_K3D_CLUSTER for a local k3d build.',
-        '  3. Start the complete persistent release:',
+        '     No provider key was written to the host .env.',
+        `  2. The ${kubernetesTarget?.kind === 'local-k3d' ? 'local k3d' : 'existing-context'} target wiring was written to .env.`,
+        '  3. Start the complete persistent release; local k3d is created automatically:',
         '',
         '       npm run helm:up',
         '',
-        '  Use helm:status, helm:doctor, helm:verify, helm:update, helm:restart,',
-        '  helm:logs, helm:connect, helm:token, and helm:down for operation.',
+        '  Garden is published natively for new local k3d installs. Use helm:status,',
+        '  helm:doctor, helm:verify, helm:update, helm:restart, helm:logs, helm:connect,',
+        '  helm:token, and helm:down for operation.',
       ];
     default:
       return [];

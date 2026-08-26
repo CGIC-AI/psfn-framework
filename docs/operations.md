@@ -33,15 +33,18 @@ Compose and repository-native installations take the Garden `ADMIN_TOKEN` from
 their ignored `.env`. Kubernetes keeps it in the retained application Secret;
 retrieve it only when needed with `npm run helm:token`.
 
-Helm exposes neither service publicly by default. `helm:up` creates supervised
-loopback port-forwards. If cluster workloads are healthy but a page no longer
-loads after a reboot or shell exit, run:
+Existing-context Helm installs expose neither service publicly by default and
+use supervised loopback port-forwards. New local k3d installs keep Garden on a
+persistent native loopback ingress; only the API uses a supervised forward. If
+the API forward is absent after a reboot or shell exit, or the native/Tailscale
+Garden route needs revalidation, run:
 
 ```bash
 PSFN_KUBE_CONTEXT=my-cluster-context npm run helm:connect
 ```
 
-`helm:disconnect` stops only those local forwards. It does not stop workloads.
+`helm:disconnect` stops only supervised forwards. It does not stop workloads,
+the native k3d Garden binding, or the configured Tailscale Serve route.
 
 Use `*:doctor` for routine readiness. It checks the supervisor/workloads,
 PostgreSQL, gateway subsystems, agent, Garden health, token login, and the
@@ -72,9 +75,12 @@ configuration itself must be reversed.
 ### Helm / Kubernetes
 
 Every command requires `PSFN_KUBE_CONTEXT`; there is no current-context
-fallback. For a registry-backed cluster, `PSFN_IMAGE` must contain an exact tag
-or digest. For local k3d, set the matching `PSFN_K3D_CLUSTER` and the lifecycle
-builds and imports an exact source-tagged image.
+fallback. Public onboarding records that exact context in ignored `.env`. For a
+registry-backed cluster, `PSFN_IMAGE` must contain an exact tag or digest. For a
+new local k3d target, onboarding also records `PSFN_K3D_CLUSTER` and
+`PSFN_K3D_NATIVE_GARDEN=1`; the lifecycle creates a pinned cluster when absent,
+builds/imports an exact source-tagged image, and verifies its persistent
+loopback-to-Traefik Garden binding.
 
 `helm:update` performs an atomic Helm upgrade and waits for the complete
 release. Helm restores the previous release when readiness fails. Application
@@ -83,8 +89,17 @@ persisted owner files carry retention policy and survive failed installs,
 rollbacks, and `helm:down`.
 
 The lifecycle installs the chart's pinned cert-manager version when the cluster
-does not already provide its CRDs/controllers. It never changes kubeconfig or
-creates/selects a cluster.
+does not already provide its CRDs/controllers. It never guesses a context or
+recreates an existing cluster. Cluster creation is limited to an explicitly
+onboarded local k3d name; if that name already exists with a different port
+mapping, startup fails without deleting or changing it.
+
+New local k3d installs map `127.0.0.1:10053` directly to Traefik HTTP ingress.
+When `PSFN_TAILSCALE_SERVE=1`, the lifecycle requires `PSFN_TAILNET_HOST` to
+match the currently connected node before reconciling Tailscale Serve. Both the
+loopback and Tailnet roots must return exactly `302 Location: /login`, preserving
+standalone Garden token authentication. Existing Kubernetes-context installs
+retain the supervised Garden port-forward path.
 
 ## Stop and resume
 
@@ -93,8 +108,9 @@ All three `*:down` commands stop compute while retaining runtime data.
 - Compose stops and removes its containers and network, retaining named volumes
   and bind-mounted data.
 - Repository-native stops the detached supervisor and all four host processes.
-- Helm stops local forwards and scales every release Deployment and StatefulSet
-  to zero, retaining PVCs, Secrets, and the Helm release.
+- Helm stops supervised forwards and scales every release Deployment and
+  StatefulSet to zero, retaining PVCs, Secrets, the Helm release, and the local
+  k3d ingress/Tailscale publication coordinates.
 
 Resume with the corresponding `*:up`, then run `*:doctor`. Do not use manual
 volume deletion, `docker compose down --volumes`, or Helm uninstall as ordinary
@@ -163,7 +179,7 @@ When `*:doctor` fails, inspect in this order:
 4. PostgreSQL/pgvector readiness and migration-role access;
 5. gateway-to-agent transport and role-bound authentication;
 6. model-prefetch completion and provider authentication/quota/model access;
-7. Garden loopback forwarding for Helm.
+7. Garden native ingress or existing-context loopback forwarding for Helm.
 
 Do not weaken policy or add a second configuration path to make a failed health
 check green. Repair the owning file, credential, volume, or workload and rerun

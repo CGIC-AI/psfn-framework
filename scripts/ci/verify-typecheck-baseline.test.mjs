@@ -124,7 +124,7 @@ test('starts TypeScript after a valid baseline passes preflight', () => {
     compilerArgs.slice(compilerArgs.indexOf('--tsBuildInfoFile'), compilerArgs.indexOf('--tsBuildInfoFile') + 2),
     [
       '--tsBuildInfoFile',
-      join(cwd, 'node_modules/.cache/psfn/typecheck.tsbuildinfo'),
+      join(cwd, 'node_modules/.cache/typecheck-baseline/root.tsbuildinfo'),
     ],
   );
 });

@@ -5,6 +5,9 @@ import type {
 } from '../../channels/discord/adapter.js';
 import type { TelegramAdapter } from '../../channels/telegram/adapter.js';
 import type { MulticaAdapter } from '../../channels/multica/adapter.js';
+import type { MulticaRuntimeLease } from '../../channels/multica/runtime-lease.js';
+import { createPostgresPool } from '../../persistence/postgres.js';
+import { PostgresMulticaRuntimeLease } from '../../persistence/postgres/multica-runtime-lease.js';
 import { ChannelAdapterRegistry } from '../../channels/backplane/registry-port.js';
 import { startDiscordWithRetry } from './discord-startup.js';
 import type { EventBus } from '../../shared/event-bus.js';
@@ -155,6 +158,8 @@ export interface LoadGatewayChannelSurfacesInput {
   ) => IntakeScreeningService | null;
   log: RuntimeChannelLifecycleLogger;
   enableDiscordEvidenceLifecycle?: boolean;
+  /** Test seam; production derives the cross-pod lease from gateway PostgreSQL. */
+  multicaRuntimeLease?: MulticaRuntimeLease;
 }
 
 export interface GatewayChannelStartupLogger extends RuntimeChannelLifecycleLogger {
@@ -251,6 +256,19 @@ export async function loadGatewayChannelSurfaces(
 
   const gatewayChannelRegistry = new ChannelAdapterRegistry();
   const accountRegistryIds = accountConfigs.map(account => `discord:${account.accountId}`);
+  const multicaRuntimeLease = input.bootstrap.channelsConfig.multica.enabled
+    ? input.multicaRuntimeLease ?? (() => {
+        const databaseUrl = input.config.postgresDatabaseUrl?.trim();
+        if (!databaseUrl) {
+          throw new Error('Enabled Multica channel requires config.postgresDatabaseUrl for runtime ownership');
+        }
+        return new PostgresMulticaRuntimeLease(createPostgresPool(databaseUrl, {
+          applicationName: 'psfn-multica-runtime-lease',
+          connectionTimeoutMillis: 5_000,
+          max: 1,
+        }));
+      })()
+    : undefined;
   const discordEntries = multiAccount
     ? accountConfigs.map((account, index) => {
       const selfRegistryId = accountRegistryIds[index]!;
@@ -338,6 +356,8 @@ export async function loadGatewayChannelSurfaces(
     }),
     createMulticaChannelAdapterFactoryEntry({
       config: input.bootstrap.channelsConfig.multica,
+      ...(multicaRuntimeLease ? { runtimeLease: multicaRuntimeLease } : {}),
+      shutdownTimeoutMs: Math.ceil(input.bootstrap.shutdownForceExitTimeoutMs / 2),
       log: input.log,
       intakeScreening: input.bootstrap.channelsConfig.multica.enabled
         ? resolveChannelIntakeScreening(

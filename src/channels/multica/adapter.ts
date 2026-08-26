@@ -12,6 +12,7 @@ import type {
 } from '../backplane/types.js';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
+import { isRecord } from '../../shared/utils/types.js';
 
 const MULTICA_RUNTIME_PROVIDER = 'psfn';
 const MULTICA_RUNTIME_VERSION = 'gateway-channel-v1';
@@ -100,10 +101,6 @@ interface MulticaIssue {
   description?: string | null;
   status?: string;
   priority?: string;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function isAbortError(error: unknown): boolean {

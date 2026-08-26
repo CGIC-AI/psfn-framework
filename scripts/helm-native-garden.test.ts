@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   discoverConnectedTailnet,
   ensureNativeK3dGarden,
+  inspectTailnetHttpsRoot,
   parseConnectedTailnetStatus,
   parseK3dClusters,
   reconcileNativeGardenEdge,
@@ -18,11 +19,11 @@ function cluster(name: string, port: number, running = true): string {
   return JSON.stringify([{
     name,
     nodes: [{
-      role: 'loadbalancer',
-      State: { Running: running },
-      portMappings: { '80/tcp': [{ HostIp: '127.0.0.1', HostPort: String(port) }] },
-    }, {
       role: 'server',
+      State: { Running: running },
+      portMappings: { '443/tcp': [{ HostIp: '127.0.0.1', HostPort: String(port) }] },
+    }, {
+      role: 'loadbalancer',
       State: { Running: running },
     }],
   }]);
@@ -69,7 +70,7 @@ describe('native k3d Garden binding', () => {
       'cluster', 'create', 'example-local',
       '--servers', '1', '--agents', '0',
       '--image', 'rancher/k3s:v1.35.5-k3s1',
-      '--wait', '--port', '127.0.0.1:10053:80/tcp@loadbalancer',
+      '--wait', '--port', '127.0.0.1:10053:443/tcp@server:0:direct',
     ]);
   });
 
@@ -82,7 +83,24 @@ describe('native k3d Garden binding', () => {
       kubeContext: 'k3d-example-local',
       timeoutMs: 30_000,
       run,
-    })).toThrow(/never recreated automatically/u);
+    })).toThrow(/never changed automatically/u);
+  });
+
+  it('does not start a stopped cluster until its direct binding is verified', () => {
+    const calls: string[][] = [];
+    const run: CommandRunner = (_command, args) => {
+      calls.push([...args]);
+      return result(cluster('example-local', 10054, false));
+    };
+    expect(() => ensureNativeK3dGarden({
+      clusterName: 'example-local',
+      cwd: '/repo',
+      gardenPort: 10053,
+      kubeContext: 'k3d-example-local',
+      timeoutMs: 30_000,
+      run,
+    })).toThrow(/never changed automatically/u);
+    expect(calls).toEqual([['cluster', 'list', '--output', 'json']]);
   });
 
   it('fails closed on malformed cluster inventory', () => {
@@ -94,6 +112,10 @@ describe('native Tailscale Garden edge', () => {
   const connectedStatus = JSON.stringify({
     BackendState: 'Running',
     Self: { Online: true, DNSName: 'demo-node.example.ts.net.' },
+  });
+  const availableServeStatus = JSON.stringify({
+    TCP: { 8787: { TCPForward: '127.0.0.1:8787' } },
+    Web: {},
   });
 
   it('discovers only an online connected Tailnet identity', () => {
@@ -120,6 +142,7 @@ describe('native Tailscale Garden edge', () => {
     const run: CommandRunner = (command, args) => {
       calls.push({ command, args: [...args] });
       if (args[0] === 'status') return result(connectedStatus);
+      if (args[0] === 'serve' && args[1] === 'status') return result(availableServeStatus);
       if (args[0] === 'serve') return result();
       return result('302\n/login');
     };
@@ -134,10 +157,52 @@ describe('native Tailscale Garden edge', () => {
     })).toBe('demo-node.example.ts.net');
     expect(calls).toContainEqual({
       command: cli,
-      args: ['serve', '--bg', '--yes', 'http://127.0.0.1:10053'],
+      args: ['serve', '--bg', '--yes', '--https=443', 'https+insecure://127.0.0.1:10053'],
     });
     expect(calls.at(-1)?.command).toBe('/mnt/c/WINDOWS/System32/curl.exe');
     expect(calls.at(-1)?.args.at(-1)).toBe('https://demo-node.example.ts.net/');
+  });
+
+  it('refuses to replace an operator-owned HTTPS root', () => {
+    expect(() => inspectTailnetHttpsRoot(JSON.stringify({
+      TCP: { 443: { HTTPS: true } },
+      Web: {
+        'demo-node.example.ts.net:443': {
+          Handlers: { '/': { Proxy: 'http://127.0.0.1:9999' } },
+        },
+      },
+    }), 'demo-node.example.ts.net', 'https+insecure://127.0.0.1:10053'))
+      .toThrow(/operator-owned/u);
+  });
+
+  it('removes only the newly-added HTTPS root when public verification fails', () => {
+    const calls: string[][] = [];
+    const run: CommandRunner = (_command, args) => {
+      calls.push([...args]);
+      if (args[0] === 'status') return result(connectedStatus);
+      if (args[0] === 'serve' && args[1] === 'status') return result(availableServeStatus);
+      if (args[0] === 'serve') return result();
+      return result(args.at(-1)?.startsWith('https://demo-node') ? '502\n' : '302\n/login');
+    };
+    expect(() => reconcileNativeGardenEdge({
+      cwd: '/repo',
+      env: { PSFN_TAILSCALE_CLI: '/opt/tailscale' },
+      gardenPort: 10053,
+      publishTailnet: true,
+      run,
+      tailnetHost: 'demo-node.example.ts.net',
+      timeoutMs: 10_000,
+    })).toThrow(/HTTP 502/u);
+    expect(calls).toContainEqual(['serve', '--yes', '--https=443', 'off']);
+  });
+
+  it('fails closed when an explicit Tailscale CLI cannot provide connected status', () => {
+    expect(() => discoverConnectedTailnet({
+      cwd: '/repo',
+      env: { PSFN_TAILSCALE_CLI: '/opt/tailscale' },
+      timeoutMs: 10_000,
+      run: () => result('', 1, 'not connected'),
+    })).toThrow(/not connected/u);
   });
 
   it('rejects a configured hostname that is not the connected node', () => {
@@ -161,7 +226,7 @@ describe('native Tailscale Garden edge', () => {
       cwd: '/repo',
       run: () => result('302\n/v1/fleet-auth/login'),
       timeoutMs: 10_000,
-      url: 'http://127.0.0.1:10053/',
+      url: 'https://127.0.0.1:10053/',
     })).toThrow(/standalone token login/u);
   });
 });

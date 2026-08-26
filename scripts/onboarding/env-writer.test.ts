@@ -46,6 +46,15 @@ describe('mergeEnvContent', () => {
     expect(next).toContain('API_KEY=existing-secret');
     expect(next).not.toContain('new-random-value');
   });
+
+  it('removes obsolete wiring without appending an empty replacement', () => {
+    const next = mergeEnvContent('PSFN_K3D_CLUSTER=stale\nOTHER=keep\n', [{
+      envName: 'PSFN_K3D_CLUSTER',
+      value: '',
+      remove: true,
+    }]);
+    expect(next).toBe('OTHER=keep\n');
+  });
 });
 
 describe('commitEnv', () => {

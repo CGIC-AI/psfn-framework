@@ -467,14 +467,27 @@ export function buildEnvEntries(input: {
       ['PSFN_GARDEN_PORT', String(target.gardenPort), 'Garden loopback port'],
       ['PSFN_K3D_NATIVE_GARDEN', target.nativeGarden ? '1' : '0', 'Persistent native k3d Garden ingress'],
       ['PSFN_TAILSCALE_SERVE', target.publishTailnet ? '1' : '0', 'Opt-in Tailscale HTTPS publication'],
-      ...(target.k3dCluster
-        ? [['PSFN_K3D_CLUSTER', target.k3dCluster, 'Local k3d cluster managed by helm:up']]
-        : []),
-      ...(target.tailnetHost
-        ? [['PSFN_TAILNET_HOST', target.tailnetHost, 'Connected Tailnet hostname validated by onboarding']]
-        : []),
     ] as Array<[string, string, string]>) {
       entries.push({ envName, value, comment });
+    }
+    if (target.kind === 'local-k3d') {
+      entries.push({
+        envName: 'PSFN_K3D_CLUSTER',
+        value: target.k3dCluster,
+        comment: 'Local k3d cluster managed by helm:up',
+      });
+      entries.push(target.tailnetHost
+        ? {
+            envName: 'PSFN_TAILNET_HOST',
+            value: target.tailnetHost,
+            comment: 'Connected Tailnet hostname validated by onboarding',
+          }
+        : { envName: 'PSFN_TAILNET_HOST', value: '', remove: true });
+    } else {
+      entries.push(
+        { envName: 'PSFN_K3D_CLUSTER', value: '', remove: true },
+        { envName: 'PSFN_TAILNET_HOST', value: '', remove: true },
+      );
     }
     return entries;
   }
@@ -651,6 +664,7 @@ function toEnvEntry(entry: OnboardingPlan['envEntries'][number]): EnvEntry {
     value: entry.value,
     ...(entry.comment ? { comment: entry.comment } : {}),
     ...(entry.preserveExisting ? { preserveExisting: true } : {}),
+    ...(entry.remove ? { remove: true } : {}),
   };
 }
 

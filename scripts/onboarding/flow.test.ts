@@ -232,6 +232,14 @@ describe('runOnboarding — kubernetes mode', () => {
 
   it('records an exact existing context without enabling native or Tailscale mutation', async () => {
     const { root, envPath } = workspace();
+    writeFileSync(envPath, [
+      'PSFN_KUBE_CONTEXT=k3d-stale-local',
+      'PSFN_K3D_CLUSTER=stale-local',
+      'PSFN_K3D_NATIVE_GARDEN=1',
+      'PSFN_TAILSCALE_SERVE=1',
+      'PSFN_TAILNET_HOST=stale-node.example.ts.net',
+      '',
+    ].join('\n'));
     const prompter = new ScriptedPrompter({
       choices: ['kubernetes', 'existing-context', 'openrouter', 'fresh'],
       // Garden port, exact context, provider id/base/models URL/key env, model slugs, companion name.

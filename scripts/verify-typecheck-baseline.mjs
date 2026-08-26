@@ -38,7 +38,7 @@ const DEFAULT_PROJECT_PATH = resolve(REPOSITORY_ROOT, 'tsconfig.json');
 const TSC_PATH = resolve(REPOSITORY_ROOT, 'node_modules/typescript/bin/tsc');
 const BUILD_INFO_PATH = resolve(
   REPOSITORY_ROOT,
-  'node_modules/.cache/psfn/typecheck.tsbuildinfo',
+  'node_modules/.cache/typecheck-baseline/root.tsbuildinfo',
 );
 const FILE_DIAGNOSTIC_PATTERN = /^(.+?)\((\d+),(\d+)\): error (TS\d+):/gmu;
 const GLOBAL_DIAGNOSTIC_PATTERN = /^error (TS\d+):/gmu;

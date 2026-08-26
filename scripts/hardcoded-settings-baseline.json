@@ -2349,6 +2349,12 @@
     },
     {
       "file": "src/channels/backplane/config.ts",
+      "name": "DEFAULT_MULTICA_POLL_INTERVAL_MS",
+      "value": "1_000",
+      "note": "Channel-local configuration default for channels.json.multica.pollIntervalMs; operators can override it in the connector contract without changing global system settings."
+    },
+    {
+      "file": "src/channels/backplane/config.ts",
       "name": "DEFAULT_TELEGRAM_POLL_INTERVAL_MS",
       "value": "1_000"
     },
@@ -2358,6 +2364,18 @@
       "value": "/^[A-Z][A-Z0-9_]*$/",
       "form": "regex",
       "note": "Immutable parser/wire/schema contract ENV_CREDENTIAL_NAME_PATTERN; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning."
+    },
+    {
+      "file": "src/channels/backplane/config.ts",
+      "name": "MAX_MULTICA_POLL_INTERVAL_MS",
+      "value": "60_000",
+      "note": "Immutable validation bound for the channels.json.multica.pollIntervalMs connector contract, preventing an effectively stalled gateway poll loop."
+    },
+    {
+      "file": "src/channels/backplane/config.ts",
+      "name": "MIN_MULTICA_POLL_INTERVAL_MS",
+      "value": "250",
+      "note": "Immutable validation bound for the channels.json.multica.pollIntervalMs connector contract, preventing abusive request rates against Multica."
     },
     {
       "file": "src/channels/backplane/http/auth.ts",
@@ -2460,6 +2478,19 @@
       "file": "src/channels/discord/voice-types.ts",
       "name": "STREAM_ERROR_MAX_FAILURES",
       "value": "10"
+    },
+    {
+      "file": "src/channels/multica/adapter.ts",
+      "name": "DEFAULT_MULTICA_HEARTBEAT_INTERVAL_MS",
+      "value": "15_000",
+      "note": "Code-owned Multica runtime liveness cadence; tests can override it through adapter options and operators do not tune protocol heartbeats."
+    },
+    {
+      "file": "src/channels/multica/adapter.ts",
+      "name": "MulticaAdapter.constructor.this.outbound.textChunkLimit",
+      "value": "100_000",
+      "form": "object-member",
+      "note": "Code-owned defensive envelope for an internal task-result handoff; Multica completion is atomic and does not expose configurable message chunking."
     },
     {
       "file": "src/channels/shared/long-running-tool-status.ts",

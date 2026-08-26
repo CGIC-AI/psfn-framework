@@ -17,14 +17,13 @@ export function buildRootValidationScope({ paths, fullRoot }) {
   const rootProductSource = paths.some((path) => /^src\//.test(path) && !isRootTestPath(path));
   const rootScriptSource = paths.some((path) => /^scripts\/(?!ci\/)/.test(path) && !isRootTestPath(path));
   const packageLock = paths.includes('package-lock.json');
-  const vitestConfig = paths.some((path) => /^vitest[^/]*\.[cm]?[jt]s$/.test(path));
   const rootTypecheck = fullRoot || rootProductSource || packageLock
     || paths.some((path) => /^tests\//.test(path) || isGeneralRootTsconfig(path));
   const rootRuntimeBuild = !fullRoot && (
     rootProductSource || packageLock || paths.some(isGeneralRootTsconfig)
   );
-  const rootProductTests = !fullRoot && (rootProductSource || packageLock || vitestConfig);
-  const rootScriptTests = !fullRoot && (rootScriptSource || packageLock || vitestConfig);
+  const rootProductTests = !fullRoot && rootProductSource;
+  const rootScriptTests = !fullRoot && rootScriptSource;
   const rootIntegrationTests = rootProductTests && paths.some((path) => (
     ROOT_INTEGRATION_RISK_PATTERN.test(path)
   ));

@@ -1877,6 +1877,18 @@
       "contains": "psfn",
       "reason": "Public sanitizer allow rules name the repository's generic Helm chart path and project-scoped network-policy file.",
       "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/channels/multica/adapter.ts",
+      "contains": "PSFN",
+      "reason": "Multica registration labels and protocol errors name the framework runtime boundary, not a companion identity or persona default (psfn-framework-87nkt).",
+      "pattern": "identity-proper-name"
+    },
+    {
+      "path": "src/channels/multica/adapter.ts",
+      "contains": "psfn",
+      "reason": "The Multica wire contract requires the honest fixed provider discriminator and daemon namespace; this product protocol identifier is not a companion identity (psfn-framework-87nkt).",
+      "pattern": "identity-legacy-slug"
     }
   ]
 }

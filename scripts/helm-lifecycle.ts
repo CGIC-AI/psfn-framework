@@ -17,7 +17,6 @@ import { dirname, join, resolve } from 'node:path';
 import process from 'node:process';
 import { parseEnv } from 'node:util';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { Agent, fetch as undiciFetch, type RequestInit as UndiciRequestInit } from 'undici';
 import {
   assertCompletedPersistedTurn,
   composeApiPrincipalId,
@@ -26,6 +25,7 @@ import {
 import {
   ensureNativeK3dGarden,
   reconcileNativeGardenEdge,
+  requestNativeGarden,
 } from './helm-native-garden.js';
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
@@ -658,29 +658,40 @@ function connectionProcessesReady(context: HelmContext, state: ConnectionState):
 async function requestGarden(
   context: HelmContext,
   path: string,
-  init: UndiciRequestInit = {},
-  timeoutMs = 10_000,
+  input: { cookie?: string; method?: 'GET' | 'POST'; timeoutMs?: number; token?: string } = {},
 ): Promise<{ status: number; ok: boolean; text: string; setCookie?: string }> {
-  const dispatcher = context.nativeGarden
-    ? new Agent({ connect: { rejectUnauthorized: false } })
-    : undefined;
-  try {
-    const response = await undiciFetch(`${context.gardenBase}${path}`, {
-      ...init,
-      ...(dispatcher ? { dispatcher } : {}),
-      signal: AbortSignal.timeout(timeoutMs),
+  const timeoutMs = input.timeoutMs ?? 10_000;
+  if (context.nativeGarden) {
+    return requestNativeGarden({
+      cwd: REPO_ROOT,
+      gardenPort: context.gardenPort,
+      method: input.method,
+      path,
+      timeoutMs,
+      ...(input.token ? { token: input.token } : {}),
+      ...(input.cookie ? { cookie: input.cookie } : {}),
     });
-    const text = await response.text();
-    const setCookie = response.headers.get('set-cookie');
-    return {
-      status: response.status,
-      ok: response.ok,
-      text,
-      ...(setCookie ? { setCookie } : {}),
-    };
-  } finally {
-    if (dispatcher) await dispatcher.close();
   }
+  const response = await fetch(`${context.gardenBase}${path}`, {
+    method: input.method,
+    redirect: 'manual',
+    ...(input.token
+      ? {
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({ token: input.token }),
+        }
+      : {}),
+    ...(input.cookie ? { headers: { Cookie: input.cookie } } : {}),
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  const text = await response.text();
+  const setCookie = response.headers.get('set-cookie');
+  return {
+    status: response.status,
+    ok: response.ok,
+    text,
+    ...(setCookie ? { setCookie } : {}),
+  };
 }
 
 async function startConnection(context: HelmContext): Promise<void> {
@@ -690,7 +701,7 @@ async function startConnection(context: HelmContext): Promise<void> {
     try {
       const [api, garden] = await Promise.all([
         fetch(`${context.apiBase}/health`, { signal: AbortSignal.timeout(2_000) }),
-        requestGarden(context, '/health', {}, 2_000),
+        requestGarden(context, '/health', { timeoutMs: 2_000 }),
       ]);
       if (api.status < 500 && garden.ok) return;
     } catch { /* stale port-forward after a workload restart */ }
@@ -737,7 +748,7 @@ async function startConnection(context: HelmContext): Promise<void> {
     try {
       const [api, garden] = await Promise.all([
         fetch(`${context.apiBase}/health`, { signal: AbortSignal.timeout(2_000) }),
-        requestGarden(context, '/health', {}, 2_000),
+        requestGarden(context, '/health', { timeoutMs: 2_000 }),
       ]);
       if (api.status < 500 && garden.ok) return;
     } catch { /* port-forward startup */ }
@@ -831,17 +842,14 @@ async function doctor(context: HelmContext): Promise<void> {
   }
   const login = await requestGarden(context, '/login', {
     method: 'POST',
-    redirect: 'manual',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ token: secrets.ADMIN_TOKEN }),
+    token: secrets.ADMIN_TOKEN,
   });
   const cookie = login.setCookie?.split(';', 1)[0];
   if (login.status !== 302 || !cookie?.includes('psfn_token=')) {
     fail(`Garden rejected the runtime Secret token (HTTP ${login.status}).`);
   }
   const dashboard = await requestGarden(context, '/', {
-    headers: { Cookie: cookie },
-    redirect: 'manual',
+    cookie,
   });
   const body = dashboard.text;
   if (!dashboard.ok || !body.toLowerCase().includes('<!doctype html')) {

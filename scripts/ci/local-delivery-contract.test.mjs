@@ -723,13 +723,14 @@ test('gate plan splits the heavy product suite from parallel-safe preflight', ()
   });
   const { preflight, heavy } = partitionGatePlan(plan);
 
-  // Test processes are heavy; everything else is preflight.
+  // Product test processes are heavy; cheap script contracts stay preflight.
   assert.deepEqual(
     heavy.filter(({ skip }) => !skip).map(({ name }) => name),
     ['unit-tests', 'integration-tests'],
   );
   assert.equal(plan.find(({ name }) => name === 'unit-tests').phase, GATE_PHASE.HEAVY);
   assert.ok(!preflight.some(({ name }) => name === 'unit-tests'));
+  assert.ok(preflight.some(({ name }) => name === 'script-tests'));
 
   // Cheap contracts (settings/supply-chain) are preflight, so they
   // fire before the heavy suite — the PR-190 ordering regression stays fixed.

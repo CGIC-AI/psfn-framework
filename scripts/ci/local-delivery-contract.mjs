@@ -264,7 +264,6 @@ export function buildGatePlan({
     }),
     command('script-tests', 'npm', ['run', 'test:scripts', '--', '--maxWorkers=8', '--bail=1'], {
       skip: fullRoot || !rootScriptTests,
-      phase: GATE_PHASE.HEAVY,
       contentInputs: SCRIPT_TEST_INPUTS,
     }),
     command(

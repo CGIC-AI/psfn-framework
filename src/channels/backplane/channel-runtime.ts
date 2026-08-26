@@ -143,6 +143,7 @@ export function createTelegramChannelAdapterFactoryEntry(
 export interface MulticaChannelAdapterFactoryOptions {
   config: MulticaChannelConfig;
   log?: MulticaAdapterLogger;
+  intakeScreening?: IntakeScreeningService | null;
 }
 
 export function createMulticaChannelAdapterFactoryEntry(
@@ -164,7 +165,10 @@ export function createMulticaChannelAdapterFactoryEntry(
       const adapter = new MulticaAdapter({
         ...options.config,
         companionId,
-      }, options.log ? { log: options.log } : {});
+      }, {
+        ...(options.log ? { log: options.log } : {}),
+        ...(options.intakeScreening ? { intakeScreening: options.intakeScreening } : {}),
+      });
       await adapter.init();
       return adapter;
     },

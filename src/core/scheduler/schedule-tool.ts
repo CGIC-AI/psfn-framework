@@ -31,6 +31,7 @@ import {
   type ChannelType,
   type PostTurnActionCandidate,
 } from '../../shared/contracts/runtime.js';
+import { supportsScheduledContinuity } from '../../shared/contracts/channel-types.js';
 import type { MessageSender } from '../../system/lifecycle/notifications.js';
 import { textResult, textResultWithError } from '../tools/results.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
@@ -58,20 +59,7 @@ const ISO_DATETIME_WITH_TIMEZONE_PATTERN =
 const DISCORD_SNOWFLAKE_PATTERN = /^[1-9]\d{16,19}$/;
 const MAX_DISCORD_SNOWFLAKE = 18_446_744_073_709_551_615n;
 
-// Inter-companion continuity does not use the reminder/follow-up destination
-// fields. Keep this surface at its existing scope while deriving every
-// supported value from the canonical runtime channel contract.
-// `companion` (inter-companion lane), `companion-ui` (live 1:1 PWA surface,
-// bead 8ora), and `multica` (claimed work-item request/response lane) are
-// excluded: none is an addressable reminder/scheduled-prompt
-// destination, and the scheduled_prompts / follow-up tables' channel_type CHECK
-// constraints deliberately omit all three — offering them here would let a valid
-// tool call fail at the database write.
-const SCHEDULE_CONTINUITY_CHANNEL_TYPES = CHANNEL_TYPES.filter(
-  channelType => channelType !== 'companion'
-    && channelType !== 'companion-ui'
-    && channelType !== 'multica',
-);
+const SCHEDULE_CONTINUITY_CHANNEL_TYPES = CHANNEL_TYPES.filter(supportsScheduledContinuity);
 
 const SCHEDULE_TOOL_ACTIONS = [
   'list',

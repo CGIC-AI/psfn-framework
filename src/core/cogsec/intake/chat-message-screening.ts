@@ -16,7 +16,7 @@ import type { IntakeScreeningService } from './screening.js';
 
 const log = createComponentLogger('ChatMessageIntakeScreening');
 
-export type ChatMessageSurface = 'api' | 'discord' | 'telegram';
+export type ChatMessageSurface = 'api' | 'discord' | 'telegram' | 'multica';
 
 export interface ScreenChatMessageBodyInput {
   content: string;

@@ -143,6 +143,18 @@ describe('loadRuntimeChannelsConfig', () => {
 
       writeMultica({
         enabled: true,
+        baseUrl: 'http://multica.example.test',
+        workspaceId: '11111111-1111-4111-8111-111111111111',
+        companionId: '22222222-2222-4222-8222-222222222222',
+        tokenRef: { kind: 'env', envName: 'MULTICA_GATEWAY_TOKEN' },
+        pollIntervalMs: 1000,
+      });
+      expect(() => loadRuntimeChannelsConfig(dataDir, {})).toThrow(
+        'channels.json.multica.baseUrl must use HTTPS unless the host is loopback',
+      );
+
+      writeMultica({
+        enabled: true,
         baseUrl: 'http://127.0.0.1:8080',
         workspaceId: '11111111-1111-4111-8111-111111111111',
         companionId: '22222222-2222-4222-8222-222222222222',

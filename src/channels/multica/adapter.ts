@@ -540,7 +540,25 @@ export class MulticaAdapter implements ChannelAdapterPort {
             signalWasAborted(taskController.signal)
             && taskController.signal.reason instanceof MulticaTaskInterruptedError
           ) return;
-          if (!signal.aborted) await this.failRuntime('completion-settlement', error, task.id);
+          if (signalWasAborted(signal)) return;
+          let completionError = error;
+          try {
+            const status = await this.getTaskStatus(task.id, signal);
+            if (isTerminalTaskStatus(status)) return;
+          } catch (statusError) {
+            if (statusError instanceof MulticaTaskInterruptedError || isAbortError(statusError)) return;
+            completionError = combineErrors(
+              `Multica task ${task.id} completion and status reconciliation failed`,
+              [completionError, statusError],
+            );
+          }
+          if (
+            signalWasAborted(taskController.signal)
+            && taskController.signal.reason instanceof MulticaTaskInterruptedError
+          ) return;
+          if (!signalWasAborted(signal)) {
+            await this.failRuntime('completion-settlement', completionError, task.id);
+          }
         }
       } finally {
         watcherController.abort(new DOMException('Multica task watcher stopped', 'AbortError'));

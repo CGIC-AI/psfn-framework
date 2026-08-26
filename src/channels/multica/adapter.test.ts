@@ -454,12 +454,13 @@ describe('MulticaAdapter', () => {
     expect(paths).not.toContain(`/api/daemon/tasks/${TASK_ID}/fail`);
   });
 
-  it('ends only the task when cancellation arrives during completion', async () => {
+  it('reconciles cancellation after completion fails before the watcher polls', async () => {
     let claimed = false;
-    let completionInFlight = false;
+    let completionAttempts = 0;
+    let reconciledAfterCompletionFailure = false;
     const paths: string[] = [];
     const alert = vi.fn(async () => undefined);
-    const fetchImpl = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
       const path = new URL(
         typeof input === 'string' ? input : input instanceof URL ? input : input.url,
       ).pathname;
@@ -477,22 +478,20 @@ describe('MulticaAdapter', () => {
       }
       if (path.endsWith('/start')) return jsonResponse({ status: 'running' });
       if (path.endsWith('/status')) {
-        return jsonResponse({ status: completionInFlight ? 'cancelled' : 'running' });
+        if (completionAttempts === 0) return jsonResponse({ status: 'running' });
+        reconciledAfterCompletionFailure = true;
+        return jsonResponse({ status: 'cancelled' });
       }
       if (path.endsWith('/complete')) {
-        completionInFlight = true;
-        return await new Promise<Response>((_resolve, reject) => {
-          const rejectForAbort = (): void => reject(init?.signal?.reason);
-          if (init?.signal?.aborted) rejectForAbort();
-          else init?.signal?.addEventListener('abort', rejectForAbort, { once: true });
-        });
+        completionAttempts += 1;
+        return new Response('task is cancelled', { status: 409 });
       }
       if (path === '/api/daemon/heartbeat' || path === '/api/daemon/deregister') {
         return jsonResponse({ status: 'ok' });
       }
       throw new Error(`Unexpected Multica request: ${path}`);
     }) as unknown as typeof fetch;
-    const adapter = new MulticaAdapter(makeConfig({ pollIntervalMs: 1 }), makeOptions({
+    const adapter = new MulticaAdapter(makeConfig({ pollIntervalMs: 60_000 }), makeOptions({
       fetchImpl,
       heartbeatIntervalMs: 60_000,
     }));
@@ -500,11 +499,9 @@ describe('MulticaAdapter', () => {
     adapter.onOperatorAlert(alert);
 
     await adapter.start();
-    await vi.waitFor(() => expect(completionInFlight).toBe(true));
-    await vi.waitFor(() => {
-      expect(paths.filter(path => path.endsWith('/tasks/claim')).length).toBeGreaterThan(1);
-    });
+    await vi.waitFor(() => expect(reconciledAfterCompletionFailure).toBe(true));
 
+    expect(completionAttempts).toBe(3);
     expect(alert).not.toHaveBeenCalled();
     expect(paths).not.toContain(`/api/daemon/tasks/${TASK_ID}/fail`);
     expect(paths).not.toContain('/api/daemon/deregister');

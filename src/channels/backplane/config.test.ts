@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
   assertDiscordAccountTokensConfigured,
+  assertMulticaTokenConfigured,
   buildExternalChannelProfiles,
   loadRuntimeChannelsConfig,
   loadChannelsOwnerFile,
@@ -34,11 +35,123 @@ describe('loadRuntimeChannelsConfig', () => {
         port: 8080,
         path: '/telegram/webhook',
       });
+      expect(config.multica).toEqual({
+        enabled: false,
+        baseUrl: '',
+        workspaceId: '',
+        tokenEnvVar: '',
+        token: '',
+        pollIntervalMs: 1000,
+      });
       expect(config.psfnAmica).toEqual({ enabled: false });
       expect(config.companionUi).toEqual({ channelPrivacy: 'private' });
       expect(buildExternalChannelProfiles(config)).toEqual({
         'companion-ui': { channelPrivacy: 'private' },
       });
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('loads fail-closed Multica gateway channel config from the owner file', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
+    try {
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        multica: {
+          enabled: true,
+          baseUrl: 'http://127.0.0.1:8080/',
+          workspaceId: '11111111-1111-4111-8111-111111111111',
+          companionId: '22222222-2222-4222-8222-222222222222',
+          tokenRef: { kind: 'env', envName: 'MULTICA_GATEWAY_TOKEN' },
+          pollIntervalMs: 2500,
+          runtimeName: 'V Unit 00',
+        },
+      }));
+
+      const config = loadRuntimeChannelsConfig(dataDir, {
+        MULTICA_GATEWAY_TOKEN: ' owner-token ',
+      });
+
+      expect(config.multica).toEqual({
+        enabled: true,
+        baseUrl: 'http://127.0.0.1:8080',
+        workspaceId: '11111111-1111-4111-8111-111111111111',
+        companionId: '22222222-2222-4222-8222-222222222222',
+        tokenEnvVar: 'MULTICA_GATEWAY_TOKEN',
+        token: 'owner-token',
+        pollIntervalMs: 2500,
+        runtimeName: 'V Unit 00',
+      });
+      expect(() => assertMulticaTokenConfigured(config.multica)).not.toThrow();
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('parses Multica without gateway secrets but fails the gateway assertion', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
+    try {
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        multica: {
+          enabled: true,
+          baseUrl: 'http://127.0.0.1:8080',
+          workspaceId: '11111111-1111-4111-8111-111111111111',
+          companionId: '22222222-2222-4222-8222-222222222222',
+          tokenRef: { kind: 'env', envName: 'MULTICA_GATEWAY_TOKEN' },
+          pollIntervalMs: 1000,
+        },
+      }));
+
+      const config = loadRuntimeChannelsConfig(dataDir, {});
+      expect(config.multica.token).toBe('');
+      expect(() => assertMulticaTokenConfigured(config.multica)).toThrow(
+        'Multica gateway token missing: env var MULTICA_GATEWAY_TOKEN is required',
+      );
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects unsafe or incomplete Multica channel config', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
+    try {
+      const writeMultica = (multica: Record<string, unknown>): void => {
+        writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({ multica }));
+      };
+
+      writeMultica({ enabled: true, token: 'inline-secret' });
+      expect(() => loadRuntimeChannelsConfig(dataDir, {})).toThrow(
+        'channels.json.multica.tokenRef must be used instead',
+      );
+
+      writeMultica({ enabled: true, unknown: true });
+      expect(() => loadRuntimeChannelsConfig(dataDir, {})).toThrow(
+        'channels.json.multica has unsupported keys: unknown',
+      );
+
+      writeMultica({
+        enabled: true,
+        baseUrl: 'http://user:pass@127.0.0.1:8080/path',
+        workspaceId: '11111111-1111-4111-8111-111111111111',
+        companionId: '22222222-2222-4222-8222-222222222222',
+        tokenRef: { kind: 'env', envName: 'MULTICA_GATEWAY_TOKEN' },
+        pollIntervalMs: 1000,
+      });
+      expect(() => loadRuntimeChannelsConfig(dataDir, {})).toThrow(
+        'channels.json.multica.baseUrl must not contain credentials, a path, query, or fragment',
+      );
+
+      writeMultica({
+        enabled: true,
+        baseUrl: 'http://127.0.0.1:8080',
+        workspaceId: '11111111-1111-4111-8111-111111111111',
+        companionId: '22222222-2222-4222-8222-222222222222',
+        tokenRef: { kind: 'env', envName: 'MULTICA_GATEWAY_TOKEN' },
+        pollIntervalMs: 100,
+      });
+      expect(() => loadRuntimeChannelsConfig(dataDir, {})).toThrow(
+        'channels.json.multica.pollIntervalMs must be between 250 and 60000',
+      );
     } finally {
       rmSync(dataDir, { recursive: true, force: true });
     }

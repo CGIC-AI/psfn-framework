@@ -4,6 +4,7 @@ import type {
   DiscordPrimaryUserBinding,
 } from '../../channels/discord/adapter.js';
 import type { TelegramAdapter } from '../../channels/telegram/adapter.js';
+import type { MulticaAdapter } from '../../channels/multica/adapter.js';
 import { ChannelAdapterRegistry } from '../../channels/backplane/registry-port.js';
 import { startDiscordWithRetry } from './discord-startup.js';
 import type { EventBus } from '../../shared/event-bus.js';
@@ -24,6 +25,7 @@ import type { CompanionId } from '../../shared/routing/companion-id.js';
 import type { FleetAuthAccountRosterEntry } from '../../system/config/fleet-auth-config.js';
 import {
   createDiscordChannelAdapterFactoryEntry,
+  createMulticaChannelAdapterFactoryEntry,
   createTelegramChannelAdapterFactoryEntry,
   getOptionalChannelAdapter,
   requireChannelAdapter,
@@ -51,6 +53,7 @@ export interface GatewayChannelSurfaces {
   /** Present only in multi-account mode; includes the primary account. */
   discordAccounts?: GatewayDiscordAccountSurface[];
   telegram?: TelegramAdapter;
+  multica?: MulticaAdapter;
 }
 
 interface DiscordPrimaryUserAuthority {
@@ -204,6 +207,9 @@ export async function initGatewayChannelSurfaces(
   if (surfaces.telegram) {
     await surfaces.telegram.init();
   }
+  if (surfaces.multica) {
+    await surfaces.multica.init();
+  }
   for (const discord of listDiscordAdapters(surfaces)) {
     await discord.init();
   }
@@ -330,6 +336,10 @@ export async function loadGatewayChannelSurfaces(
       // limits internally from its SubstrateConfig.
       documentIngestLimits: resolveDocumentIngestLimits(input.config),
     }),
+    createMulticaChannelAdapterFactoryEntry({
+      config: input.bootstrap.channelsConfig.multica,
+      log: input.log,
+    }),
   ]);
 
   await loadChannelAdaptersFromManifest(
@@ -350,12 +360,14 @@ export async function loadGatewayChannelSurfaces(
       discord: discordAccounts[0]!.adapter,
       discordAccounts,
       telegram: getOptionalChannelAdapter<TelegramAdapter>(gatewayChannelRegistry, 'telegram') ?? undefined,
+      multica: getOptionalChannelAdapter<MulticaAdapter>(gatewayChannelRegistry, 'multica') ?? undefined,
     };
   }
 
   return {
     discord: requireChannelAdapter<DiscordAdapter>(gatewayChannelRegistry, 'discord'),
     telegram: getOptionalChannelAdapter<TelegramAdapter>(gatewayChannelRegistry, 'telegram') ?? undefined,
+    multica: getOptionalChannelAdapter<MulticaAdapter>(gatewayChannelRegistry, 'multica') ?? undefined,
   };
 }
 
@@ -369,6 +381,7 @@ export interface WireGatewayChannelMessagesInput {
    */
   discordAccounts?: Array<{ accountId: string; adapter: Pick<DiscordAdapter, 'onMessage'> }>;
   telegram?: Pick<TelegramAdapter, 'onMessage'>;
+  multica?: Pick<MulticaAdapter, 'onMessage'>;
   gateway: Pick<GatewayServer, 'notifyChannelMessage' | 'requestAgentVoiceStream'>;
   serializeMessage: (message: SubstrateMessage) => Record<string, unknown>;
   /**
@@ -448,37 +461,41 @@ export function wireGatewayChannelMessages(input: WireGatewayChannelMessagesInpu
     wireDiscordInbound(input.discord);
   }
 
-  if (!input.telegram) {
-    return;
-  }
-  if (typeof input.telegram.onMessage !== 'function') {
-    throw new Error('Telegram adapter is missing onMessage bootstrap hook');
-  }
-
-  input.telegram.onMessage(async (message) => {
-    // htm9.16 backstop: a blocked telegram DM is dropped before it reaches the
-    // agent. Group observe-downgrade is not modeled on the telegram
-    // request/response path; blocked group messages fall through unchanged.
-    if (input.blockGate) {
-      const decision = input.blockGate.evaluate(message);
-      if (decision.action === 'drop') {
-        input.blockGate.recordSoftBlockEnforcement(message, decision);
-        return notificationAck(message.channelId, 'blocked_by_policy');
-      }
+  const routeRequestResponseChannel = (
+    adapter: Pick<TelegramAdapter | MulticaAdapter, 'onMessage'>,
+    label: 'Telegram' | 'Multica',
+  ): void => {
+    if (typeof adapter.onMessage !== 'function') {
+      throw new Error(`${label} adapter is missing onMessage bootstrap hook`);
     }
-    const result = await input.gateway.requestAgentVoiceStream(message);
-    return {
-      content: result.content,
-      channelId: result.channelId,
-      ...(result.attachments ? { attachments: result.attachments } : {}),
-      metadata: {
-        model: result.model,
-        inputTokens: 0,
-        outputTokens: 0,
-        durationMs: result.durationMs,
-      },
-    };
-  });
+    adapter.onMessage(async (message) => {
+      // htm9.16 backstop: a blocked telegram DM is dropped before it reaches the
+      // agent. Group observe-downgrade is not modeled on the telegram
+      // request/response path; blocked group messages fall through unchanged.
+      if (label === 'Telegram' && input.blockGate) {
+        const decision = input.blockGate.evaluate(message);
+        if (decision.action === 'drop') {
+          input.blockGate.recordSoftBlockEnforcement(message, decision);
+          return notificationAck(message.channelId, 'blocked_by_policy');
+        }
+      }
+      const result = await input.gateway.requestAgentVoiceStream(message);
+      return {
+        content: result.content,
+        channelId: result.channelId,
+        ...(result.attachments ? { attachments: result.attachments } : {}),
+        metadata: {
+          model: result.model,
+          inputTokens: 0,
+          outputTokens: 0,
+          durationMs: result.durationMs,
+        },
+      };
+    });
+  };
+
+  if (input.telegram) routeRequestResponseChannel(input.telegram, 'Telegram');
+  if (input.multica) routeRequestResponseChannel(input.multica, 'Multica');
 }
 
 export async function startGatewayChannelSurfaces(
@@ -530,20 +547,28 @@ export async function startGatewayChannelSurfaces(
     });
   }
 
-  if (!surfaces.telegram) {
-    return;
+  if (surfaces.telegram) {
+    await surfaces.telegram.start();
+    log.info('Telegram gateway bridge enabled', {
+      mode: bootstrap.channelsConfig.telegram.mode,
+      allowlistSize: bootstrap.channelsConfig.telegram.allowedUsers.length,
+    });
   }
 
-  await surfaces.telegram.start();
-  log.info('Telegram gateway bridge enabled', {
-    mode: bootstrap.channelsConfig.telegram.mode,
-    allowlistSize: bootstrap.channelsConfig.telegram.allowedUsers.length,
-  });
+  if (surfaces.multica) {
+    await surfaces.multica.start();
+    log.info('Multica gateway channel enabled', {
+      baseUrl: bootstrap.channelsConfig.multica.baseUrl,
+      workspaceId: bootstrap.channelsConfig.multica.workspaceId,
+      companionId: bootstrap.channelsConfig.multica.companionId,
+    });
+  }
 }
 
 export async function stopGatewayChannelSurfaces(
   surfaces: GatewayChannelSurfaces,
 ): Promise<void> {
+  await surfaces.multica?.stop();
   await surfaces.telegram?.stop();
   for (const discord of [...listDiscordAdapters(surfaces)].reverse()) {
     await discord.stop();

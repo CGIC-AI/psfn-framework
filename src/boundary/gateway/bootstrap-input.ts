@@ -4,6 +4,7 @@ import type { CanonicalProviderRegistry } from '../../shared/contracts/runtime.j
 import { getIgnoredJsonBackedConfigEnvKeys } from '../../system/config/legacy-env.js';
 import {
   assertDiscordAccountTokensConfigured,
+  assertMulticaTokenConfigured,
   loadRuntimeChannelsConfig,
   type RuntimeChannelsConfig,
   type RuntimeChannelsConfigOverrides,
@@ -412,6 +413,7 @@ export function resolveGatewayBootstrapInput(
   // W1-P2: the gateway is the secret holder — every configured discord bot
   // account must have resolved its token from env, or startup stops here.
   assertDiscordAccountTokensConfigured(channelsConfig.discord);
+  assertMulticaTokenConfigured(channelsConfig.multica);
   // E3.2: publish channel-owned Context Envelope labels so gateway-side
   // classification consumers see the same precedence as the agent process.
   setRuntimeChannelEnvelopeLabels(channelsConfig.contextEnvelope.channels);

@@ -11,7 +11,7 @@ import type { CompanionId } from '../../shared/routing/companion-id.js';
 import type { SatelliteRegistryConfig } from '../../shared/contracts/satellite-registry.js';
 
 /** Gateway-facing channel surfaces that can be routed to a companion. */
-export const GATEWAY_CHANNEL_SURFACES = ['discord', 'telegram', 'api'] as const;
+export const GATEWAY_CHANNEL_SURFACES = ['discord', 'telegram', 'api', 'multica'] as const;
 export type GatewayChannelSurface = (typeof GATEWAY_CHANNEL_SURFACES)[number];
 
 export interface GatewayMultiCompanionConfig {
@@ -57,6 +57,8 @@ export function resolveGatewaySurfaceForChannelType(
       return 'telegram';
     case 'api':
       return 'api';
+    case 'multica':
+      return 'multica';
     default:
       return null;
   }
@@ -102,6 +104,9 @@ export function resolveGatewayMultiCompanionConfig(
       : {}),
     ...(channelsConfig.api.companionId ?? soleCompanionId
       ? { api: channelsConfig.api.companionId ?? soleCompanionId }
+      : {}),
+    ...(channelsConfig.multica.enabled && channelsConfig.multica.companionId
+      ? { multica: channelsConfig.multica.companionId }
       : {}),
   };
 

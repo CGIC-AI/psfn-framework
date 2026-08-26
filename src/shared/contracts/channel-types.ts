@@ -8,5 +8,5 @@
 // and the companion-ui WebSocket, authenticated server-side by their hub-device
 // attachment (never a client-supplied channel-type header). Discord-SSO'd humans
 // land bound to their canonical contact via the attachment's contact binding.
-export const CHANNEL_TYPES = ['discord', 'terminal', 'api', 'telegram', 'psfn-amica', 'companion', 'companion-ui'] as const;
+export const CHANNEL_TYPES = ['discord', 'terminal', 'api', 'telegram', 'multica', 'psfn-amica', 'companion', 'companion-ui'] as const;
 export type ChannelType = typeof CHANNEL_TYPES[number];

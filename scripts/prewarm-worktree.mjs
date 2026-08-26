@@ -15,8 +15,9 @@
  *   npm run prewarm -- --check
  *   npm run prewarm -- --help
  *
- * After a successful prewarm, each worktree can install without network access:
- *   npm ci --offline --ignore-scripts
+ * After a successful prewarm, the tracked post-checkout hook installs each
+ * worktree's isolated dependencies without network access. The manual fallback
+ * is `npm ci --offline --ignore-scripts`.
  *
  * A new package-lock.json hash selects a new attestation and forces a rewarm.
  * Missing attestations fail in --check mode; corrupt or mismatched attestations
@@ -292,7 +293,7 @@ export function prewarmWorktree({
   }
   readAttestation(markerPath, expected);
   logger.log(
-    `[prewarm] PASS: npm cache is complete for ${lockfileHash}. Fresh worktrees may run npm ci --offline --ignore-scripts.`,
+    `[prewarm] PASS: npm cache is complete for ${lockfileHash}. Fresh worktrees install isolated dependencies automatically.`,
   );
   return {
     action: warmed ? 'warmed' : 'verified',
@@ -303,7 +304,7 @@ export function prewarmWorktree({
 }
 
 function helpText() {
-  return `Usage: npm run prewarm -- [--check]\n\nPopulate npm's shared cache from the repository package-lock.json, then prove it\nwith a clean offline install. All installs happen in disposable directories; no\nnode_modules or other mutable output is shared between worktrees.\n\nOptions:\n  --check  Require the current lock hash to be attested and verify it offline.\n  -h, --help  Show this help.\n\nAfter PASS, run this in each fresh worktree:\n  npm ci --offline --ignore-scripts`;
+  return `Usage: npm run prewarm -- [--check]\n\nPopulate npm's shared cache from the repository package-lock.json, then prove it\nwith a clean offline install. All installs happen in disposable directories; no\nnode_modules or other mutable output is shared between worktrees.\n\nOptions:\n  --check  Require the current lock hash to be attested and verify it offline.\n  -h, --help  Show this help.\n\nAfter PASS, the tracked post-checkout hook installs isolated dependencies in each\nfresh worktree automatically.`;
 }
 
 export function main(args = process.argv.slice(2)) {

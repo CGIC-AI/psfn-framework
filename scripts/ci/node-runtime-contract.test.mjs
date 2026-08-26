@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import { test } from 'node:test';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -21,6 +21,8 @@ test('framework, UI builders, and CI share the exact Node 24 LTS standard', () =
 
   assert.equal(read('.node-version').trim(), nodeVersion);
   assert.match(read('.githooks/pre-push'), /run-repository-node\.sh/u);
+  assert.match(read('.githooks/post-checkout'), /bootstrap-worktree\.mjs/u);
+  assert.notEqual(statSync(join(repoRoot, '.githooks/post-checkout')).mode & 0o111, 0);
   assert.match(read('.npmrc'), /^engine-strict=true$/mu);
   assert.equal(rootPackage.packageManager, 'npm@11.17.0');
   assert.equal(rootPackage.engines.node, `>=${nodeVersion} <25`);

@@ -28,6 +28,7 @@ import {
   MulticaAdapter,
   type MulticaAdapterLogger,
 } from '../multica/adapter.js';
+import type { MulticaRuntimeLease } from '../multica/runtime-lease.js';
 
 export interface DiscordChannelAdapterFactoryOptions {
   config: SubstrateConfig;
@@ -142,6 +143,8 @@ export function createTelegramChannelAdapterFactoryEntry(
 
 export interface MulticaChannelAdapterFactoryOptions {
   config: MulticaChannelConfig;
+  runtimeLease?: MulticaRuntimeLease;
+  shutdownTimeoutMs?: number;
   log?: MulticaAdapterLogger;
   intakeScreening?: IntakeScreeningService | null;
 }
@@ -162,10 +165,15 @@ export function createMulticaChannelAdapterFactoryEntry(
       if (!companionId) {
         throw new Error('Enabled Multica channel requires a companionId');
       }
+      if (!options.runtimeLease) {
+        throw new Error('Enabled Multica channel requires a cross-process runtime lease');
+      }
       const adapter = new MulticaAdapter({
         ...options.config,
         companionId,
       }, {
+        runtimeLease: options.runtimeLease,
+        ...(options.shutdownTimeoutMs ? { shutdownTimeoutMs: options.shutdownTimeoutMs } : {}),
         ...(options.log ? { log: options.log } : {}),
         ...(options.intakeScreening ? { intakeScreening: options.intakeScreening } : {}),
       });

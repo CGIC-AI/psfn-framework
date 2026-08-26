@@ -49,15 +49,15 @@ export const TOOL_DONE_HOLD_MS = 5_000;
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** |valence| at/above this counts as clearly positive or negative. */
-export const VALENCE_MARGIN = 0.15;
+const VALENCE_MARGIN = 0.15;
 /** |arousal| below this (with flat valence) is treated as flat/at-rest. */
-export const AROUSAL_FLAT = 0.15;
+const AROUSAL_FLAT = 0.15;
 /** Negative valence with arousal below this reads as drowsy -> tired. */
-export const AROUSAL_DROWSY = 0;
+const AROUSAL_DROWSY = 0;
 /** Arousal below this (given clear valence) is the calm band. */
-export const AROUSAL_CALM = 0.35;
+const AROUSAL_CALM = 0.35;
 /** Arousal at/above this is the high-energy band. */
-export const AROUSAL_HIGH = 0.6;
+const AROUSAL_HIGH = 0.6;
 
 export function vadQuadrantBase(vector: EmotionVector): EmotionalBase {
   const { valence, arousal, dominance } = vector;

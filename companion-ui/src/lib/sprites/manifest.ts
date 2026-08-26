@@ -21,8 +21,8 @@ import {
   type SheetName,
 } from './taxonomy.js';
 
-export const SPRITE_MANIFEST_VERSION = 1 as const;
-export const SPRITE_ASSET_DIR = 'sprites';
+const SPRITE_MANIFEST_VERSION = 1 as const;
+const SPRITE_ASSET_DIR = 'sprites';
 export const SPRITE_MANIFEST_PATH = `${SPRITE_ASSET_DIR}/manifest.json`;
 
 export type SpriteEntryKind = 'expression' | 'tool' | 'touch';

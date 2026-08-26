@@ -77,6 +77,11 @@ function pushUpdate(remoteRef, localSha = HEAD, remoteSha = BASE) {
   return { localSha, localRef: localSha === '0'.repeat(40) ? '(delete)' : 'HEAD', remoteRef, remoteSha };
 }
 
+function contentInputsMatch({ include, exclude = [] }, path) {
+  return include.some((pattern) => pattern.test(path))
+    && !exclude.some((pattern) => pattern.test(path));
+}
+
 function makeGateRepository() {
   const cwd = mkdtempSync(join(tmpdir(), 'local-delivery-gate-'));
   git(cwd, 'init', '--quiet');
@@ -296,6 +301,35 @@ test('delivery and product gates validate only their owned change surface', () =
     '--bail=1',
   ]);
 
+  const fixturePlan = buildGatePlan({ paths: ['src/core/session/manager.test-fixtures.ts'] });
+  const fixtureNames = fixturePlan.filter(({ skip }) => !skip).map(({ name }) => name);
+  assert.ok(fixtureNames.includes('related-tests'));
+  assert.ok(!fixtureNames.includes('targeted-tests'));
+  assert.deepEqual(fixturePlan.find(({ name }) => name === 'related-tests').args, [
+    'exec',
+    '--',
+    'vitest',
+    'related',
+    'src/core/session/manager.test-fixtures.ts',
+    '--run',
+    '--maxWorkers=8',
+    '--bail=1',
+  ]);
+  for (const unrelated of ['runtime-build', 'typecheck', 'unit-tests']) {
+    assert.ok(!fixtureNames.includes(unrelated), `test fixture must not run ${unrelated}`);
+  }
+
+  const typeContractPlan = buildGatePlan({
+    paths: ['tests/types/companion-id.type-test.ts'],
+  });
+  const typeContractNames = typeContractPlan.filter(({ skip }) => !skip).map(({ name }) => name);
+  for (const required of ['lint-changed', 'typecheck', 'companion-id-types', 'repository-hygiene']) {
+    assert.ok(typeContractNames.includes(required), `compile contract must run ${required}`);
+  }
+  for (const unrelated of ['runtime-build', 'build', 'targeted-tests', 'unit-tests']) {
+    assert.ok(!typeContractNames.includes(unrelated), `compile contract must not run ${unrelated}`);
+  }
+
   const scriptTestPlan = buildGatePlan({ paths: ['scripts/onboarding/flow.test.ts'] });
   const scriptTestNames = scriptTestPlan.filter(({ skip }) => !skip).map(({ name }) => name);
   assert.ok(scriptTestNames.includes('targeted-tests'));
@@ -311,11 +345,13 @@ test('delivery and product gates validate only their owned change surface', () =
     assert.ok(!scriptSourceNames.includes(unrelated), `script source change must not run ${unrelated}`);
   }
 
-  const buildContractNames = buildGatePlan({ paths: ['tsup.config.ts'] })
-    .filter(({ skip }) => !skip)
-    .map(({ name }) => name);
-  for (const required of ['lint', 'build', 'repository-hygiene', 'tests', 'evals']) {
-    assert.ok(buildContractNames.includes(required), `build contract must run ${required}`);
+  for (const path of ['tsup.config.ts', 'src/app/gateway/main.ts']) {
+    const buildContractNames = buildGatePlan({ paths: [path] })
+      .filter(({ skip }) => !skip)
+      .map(({ name }) => name);
+    for (const required of ['lint', 'build', 'repository-hygiene', 'tests', 'evals']) {
+      assert.ok(buildContractNames.includes(required), `${path} must run ${required}`);
+    }
   }
 
   const catalogueOnlyNames = buildGatePlan({
@@ -392,6 +428,20 @@ test('delivery and product gates validate only their owned change surface', () =
     '--bail=1',
   ]);
   assert.equal(plan.find(({ name }) => name === 'unit-tests').skip, false);
+
+  const fullBuildInputs = buildGatePlan({ paths: ['tsup.config.ts'] })
+    .find(({ name }) => name === 'build').contentInputs;
+  assert.equal(
+    contentInputsMatch(fullBuildInputs, 'tests/types/companion-id.type-test.ts'),
+    true,
+    'the build cache must include its compile-only type-test input',
+  );
+  const semgrepInputs = plan.find(({ name }) => name === 'semgrep-rules').contentInputs;
+  assert.equal(
+    contentInputsMatch(semgrepInputs, 'scripts/ci/run-semgrep.sh'),
+    true,
+    'the Semgrep rules cache must include the executed runner',
+  );
 
   const deletionPlan = buildGatePlan({
     paths: ['src/removed.ts', 'src/retained.ts'],
@@ -485,6 +535,21 @@ test('local gate writes one exact-head attestation and reuses it without rerunni
   for (const expensive of ['runtime-build', 'typecheck', 'unit-tests']) {
     assert.ok(sourceRuns.includes(expensive), `${expensive} must rerun when its inputs change`);
   }
+
+  mkdirSync(join(cwd, 'tests/types'), { recursive: true });
+  writeFileSync(
+    join(cwd, 'tests/types/companion-id.type-test.ts'),
+    'export type CompanionIdContract = string;\n',
+  );
+  git(cwd, 'add', 'tests/types/companion-id.type-test.ts');
+  git(cwd, 'commit', '--quiet', '-m', 'type contract follow-up');
+  const beforeTypeContract = executed.length;
+  await runLocalGate({ cwd, baseRef: base, execute, heavyLock });
+  const typeContractRuns = executed.slice(beforeTypeContract);
+  assert.ok(
+    typeContractRuns.includes('runtime-build'),
+    'runtime build must not reuse when its compile-only type-test input changes',
+  );
 });
 
 test('a stage record is reusable only for the exact head, base, gate version, and command', () => {
@@ -1235,6 +1300,28 @@ test('GitHub CI trusts the exact local gate and runs only cheap host policy chec
   );
   assert.match(workflow, /node scripts\/ci\/check-change-budget\.mjs/);
   assert.match(workflow, /run: node scripts\/public-sanitize-check\.mjs/);
+});
+
+test('specialist security workflows avoid irrelevant PR runs and full-history checkout', () => {
+  const osv = readFileSync('.github/workflows/osv-scan.yml', 'utf8');
+  for (const ownedInput of [
+    '**/package-lock.json',
+    '**/Dockerfile*',
+    '.github/workflows/osv-scan.yml',
+    'scripts/ci/npm-project-contract.mjs',
+    'scripts/ci/run-osv-scan.mjs',
+  ]) {
+    assert.ok(osv.includes(`- "${ownedInput}"`), `OSV PR filter must include ${ownedInput}`);
+  }
+  for (const workflowPath of [
+    '.github/workflows/osv-scan.yml',
+    '.github/workflows/trivy-image.yml',
+    '.github/workflows/semgrep-full.yml',
+    '.github/workflows/zizmor-audit.yml',
+  ]) {
+    assert.doesNotMatch(readFileSync(workflowPath, 'utf8'), /fetch-depth:\s*0/u, workflowPath);
+  }
+  assert.match(readFileSync('.github/workflows/ci.yml', 'utf8'), /fetch-depth:\s*0/u);
 });
 
 test('agent contracts enforce close-on-main and avoid floating tool installers', () => {

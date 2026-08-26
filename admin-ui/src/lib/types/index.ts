@@ -100,21 +100,9 @@ import type {
 } from '../../../../src/shared/contracts/runtime.js';
 
 export type {
-  CredentialReference,
-  EnvCredentialReference,
-} from '../../../../src/boundary/custody/credential-vault.js';
-export type {
   DashboardCostWindow,
   DashboardCostWindowUsage,
-  DashboardModelUsageFreshness,
-  DashboardModelUsageProjection,
-  DashboardModelUsageSparklinePoint,
-  DashboardModelUsageState,
   DashboardSessionContextPressure,
-  DashboardStats,
-  DashboardTransientSessionTelemetry,
-  AnalysisWorkbenchTraceStepView,
-  AnalysisWorkbenchTraceView,
 } from '../../../../src/operator/garden/types.js';
 export type {
   CanonicalProviderRegistry,
@@ -124,45 +112,31 @@ export type {
 export type { ProvidersRuntimeConfig } from '../../../../src/system/config/providers-config.js';
 export type {
   ConfirmationDecision,
-  ConfirmationQueueEntry,
   ConfirmationResolveResult,
 } from '../../../../src/system/capabilities/confirmation-queue.js';
 export type {
-  ProvenanceDestinationView,
-  ProvenanceFieldStatus,
   ProvenanceSourceKind,
-  ProvenanceSourceKindCount,
-  ProvenanceSourceView,
   PublicationProvenanceView,
 } from '../../../../src/core/cogsec/disclosure/publication-provenance.js';
 export type {
   SettingsContractData,
   SettingsContractField,
-  SettingsContractSubsystem,
 } from '../../../../src/system/config/settings-contract.js';
 export type {
-  Episode,
-  EpisodeAffect,
-  EpisodeArc,
-  EpisodeArcKind,
   EpisodeArtifactRef,
   EpisodeProvenanceRef,
-  EpisodeSalience,
   EpisodeSpanRef,
 } from '../../../../src/shared/contracts/episodic-memory.js';
 export type {
   AdminEpisodicEpisodeDetailData,
   AdminEpisodicEpisodeListData,
-  AdminEpisodicEpisodeProvenanceData,
   AdminEpisodicRelatedArcView,
   AdminEpisodicThreadDetailData,
   AdminEpisodicThreadListData,
   AdminEpisodicThreadSummary,
 } from '../../../../src/operator/garden/services/types.js';
 export type {
-  AdminIntakeQuarantineDecisionRequest,
   AdminIntakeQuarantineFirewallStatus,
-  AdminIntakeQuarantineFlywheelTarget,
   AdminIntakeQuarantineItemDetail,
   AdminIntakeQuarantineItemView,
   AdminIntakeQuarantineSourceListAction,
@@ -172,19 +146,11 @@ export type {
   FleetCogSecOverview,
 } from '../../../../src/operator/garden/services/types.js';
 export type {
-  AdminDriftReviewListData,
   DriftReviewCard,
   DriftReviewCardResolution,
-  SecondArrowReviewCard,
 } from '../../../../src/operator/garden/services/types.js';
-export type { DriftSignalResult } from '../../../../src/core/cogsec/drift/drift-signals.js';
-export type {
-  SecondArrowClusterMember,
-  SecondArrowSignalResult,
-} from '../../../../src/core/cogsec/drift/second-arrow-signals.js';
 export type {
   IntakePolicyConfig,
-  IntakeSourceListEntry,
   IntakeSourceListName,
   IntakeSourceListsConfig,
 } from '../../../../src/system/config/intake-policy-config.js';
@@ -204,7 +170,6 @@ export type {
   AdminSessionRouteResetInput,
   AdminSessionRouteView,
   AdminSessionSearchData,
-  AdminSessionSearchHitView,
   AdminSessionTurnData,
   AdminSessionTurnDetailData,
   AdminPromptLoomData,
@@ -215,7 +180,6 @@ export type {
   AdminTurnRetrievalTelemetry,
   AdminTurnStageTelemetry,
   AdminSettingsData,
-  EffectiveModelSelectionProjection,
   EffectiveModelSelectionView,
   EffectiveFleetAuthOwnerProjection,
   ConfigUpdateResult,
@@ -223,22 +187,16 @@ export type {
   FoundationUpdateResult,
   NorthStarUpdateResult,
   PromptUpdateResult,
-  SettingsConfigEditors,
-  SettingsValidationError,
 } from '../../../../src/operator/garden/services/types.js';
 export type {
   AdminChatBootstrapResponse,
   AdminModelRoomBootstrapResponse,
   AdminModelRoomParticipant,
 } from '../../../../src/operator/garden/chat/types.js';
-export type { PromptRegistryHistoryEntry } from '../../../../src/core/identity/prompt-registry.js';
 export type { PromptRuntimeMacroHint } from '../../../../src/core/identity/prompt-runtime.js';
-export type { PromptHistoryEntry, PromptLayer } from '../../../../src/core/identity/prompt-types.js';
+export type { PromptLayer } from '../../../../src/core/identity/prompt-types.js';
 export type {
-  DailyRecurringCadence,
-  HourlyRecurringCadence,
   RecurringCadence,
-  RelativeRecurringCadence,
   TaskState,
   TaskType,
 } from '../../../../src/core/scheduler/types.js';

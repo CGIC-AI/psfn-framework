@@ -12,7 +12,6 @@
 import type { SpriteState } from '../../ui/types.js';
 import {
   EMOTIONAL_BASES,
-  TOOL_DOMAINS,
   expressionEntryId,
   toolEntryId,
   touchEntryId,
@@ -77,5 +76,3 @@ export function resolveSpriteEntryId(input: SpriteResolveInput): string {
     : STATE_BASE[input.state] ?? 'neutral';
   return expressionEntryId(base, crop);
 }
-
-export { EMOTIONAL_BASES, TOOL_DOMAINS, STATE_BASE };

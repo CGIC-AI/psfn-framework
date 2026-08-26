@@ -1,28 +1,35 @@
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { detectChangeScope, EVALS_INPUT_PATTERNS } from './detect-change-scope.mjs';
+import { detectChangeScope } from './detect-change-scope.mjs';
+import {
+  EVALS_INPUTS,
+  ROOT_BUILD_INPUTS,
+  ROOT_LINT_INPUTS,
+  ROOT_TEST_INPUTS,
+  ROOT_TYPECHECK_INPUTS,
+  SCRIPT_TEST_INPUTS,
+  SEMGREP_RULE_INPUTS,
+  specialistInputs,
+} from './local-delivery-inputs.mjs';
+import { buildRootValidationScope } from './local-delivery-scope.mjs';
 
-const SHA = /^[0-9a-f]{40}$/;
-const ZERO_SHA = '0'.repeat(40);
-
-// Bumped to 3 when whole-gate attestations became command-plan-bound. Older
-// attestations recorded only gate names and could be reused across option
-// changes that altered a command without altering membership.
-export const LOCAL_GATE_SCHEMA_VERSION = 3;
-export const REMOTE_ATTESTATION_CONTEXT = 'local-gate/v1';
-
-// Identity of the gate's own logic and command shapes. Bump this whenever the
-// gate plan's semantics change (gates added/removed, a gate's command changes,
-// or the meaning of a pass changes) so that every previously recorded stage
-// result and whole-gate attestation is invalidated and forced to rerun. It is
-// embedded in every stage record and in the final attestation; a mismatch is a
-// hard reuse invalidation.
-export const GATE_VERSION = 9;
-
-// Schema version for a single per-stage record on disk. Independent of the
-// whole-gate attestation schema so the two can evolve separately.
-export const STAGE_SCHEMA_VERSION = 2;
+export {
+  GATE_VERSION,
+  LOCAL_GATE_SCHEMA_VERSION,
+  REMOTE_ATTESTATION_CONTEXT,
+  STAGE_SCHEMA_VERSION,
+  buildValidatedPushRefspec,
+  createAttestation,
+  createCanaryAttestation,
+  evaluateRequiredChecks,
+  gateCommandString,
+  isStageReusable,
+  parsePrePushUpdates,
+  planPrePush,
+  validateAttestation,
+  validateRemoteAttestation,
+} from './local-delivery-attestation.mjs';
 
 // Two-phase execution of the local gate. Preflight gates are cheap and
 // parallel-safe across independent worktrees (they take no machine lock).
@@ -48,268 +55,8 @@ export const HEAVY_PHASE_LOCK_DIR = join(tmpdir(), 'local-delivery-gate-heavy.lo
 // local-gate attestation and deliberately does not repeat this build remotely.
 export const ROOT_BUILD_NODE_HEAP_MB = 12288;
 
-function assertSha(value, name) {
-  if (!SHA.test(value)) throw new Error(`${name} must be a lowercase 40-character git SHA`);
-}
-
-export function createAttestation({ head, base, baseRef, gates, gatePlan = gates }) {
-  assertSha(head, 'head');
-  assertSha(base, 'base');
-  if (!baseRef) throw new Error('baseRef is required');
-  if (!Array.isArray(gates) || gates.length === 0) throw new Error('gates must be non-empty');
-  if (!Array.isArray(gatePlan) || gatePlan.length !== gates.length) {
-    throw new Error('gatePlan must contain one command identity for every gate');
-  }
-  return {
-    schemaVersion: LOCAL_GATE_SCHEMA_VERSION,
-    gateVersion: GATE_VERSION,
-    head,
-    base,
-    baseRef,
-    gates: [...gates],
-    gatePlan: [...gatePlan],
-    completedAt: new Date().toISOString(),
-  };
-}
-
-export function validateAttestation(attestation, {
-  head,
-  base,
-  gates,
-  gatePlan = gates,
-  gateVersion = GATE_VERSION,
-}) {
-  if (!attestation || attestation.schemaVersion !== LOCAL_GATE_SCHEMA_VERSION) {
-    return { valid: false, reason: 'Local gate attestation schema is missing or unsupported.' };
-  }
-  if (attestation.gateVersion !== gateVersion) {
-    return { valid: false, reason: 'Local gate attestation gate version is stale.' };
-  }
-  if (attestation.head !== head) {
-    return { valid: false, reason: 'Local gate attestation head does not match the exact HEAD.' };
-  }
-  if (attestation.base !== base) {
-    return { valid: false, reason: 'Local gate attestation base is stale.' };
-  }
-  if (!Array.isArray(gates) || JSON.stringify(attestation.gates) !== JSON.stringify(gates)) {
-    return { valid: false, reason: 'Local gate attestation does not contain the exact gate plan.' };
-  }
-  if (!Array.isArray(gatePlan) || JSON.stringify(attestation.gatePlan) !== JSON.stringify(gatePlan)) {
-    return {
-      valid: false,
-      reason: 'Local gate attestation does not contain the exact gate command plan.',
-    };
-  }
-  return { valid: true, reason: '' };
-}
-
-// A canary attestation records that the FULL gate passed against origin/main
-// itself (base == head, an empty diff). It is a distinct kind so it can never be
-// mistaken for a branch attestation by validateAttestation, which requires a
-// gates array this shape deliberately omits.
-export function createCanaryAttestation({ base, mainRef }) {
-  assertSha(base, 'base');
-  if (!mainRef) throw new Error('mainRef is required');
-  return {
-    schemaVersion: LOCAL_GATE_SCHEMA_VERSION,
-    kind: 'canary',
-    gateVersion: GATE_VERSION,
-    base,
-    mainRef,
-    completedAt: new Date().toISOString(),
-  };
-}
-
-// Deterministic string identity of a gate's command, embedded in its stage
-// record. Same head+base+gate-version already implies the same command, so this
-// is defense in depth: any drift in the command shape (args, executable) that is
-// not accompanied by a GATE_VERSION bump still invalidates reuse.
-export function gateCommandString(gate) {
-  return `${gate.executable} ${gate.args.join(' ')}`;
-}
-
-// A gate with a complete input manifest may reuse a pass across commits when
-// the base, command, and content fingerprint are unchanged. Gates without a
-// manifest retain the stricter exact-head fallback. The final attestation is
-// always exact-HEAD regardless of stage reuse.
-export function isStageReusable(record, {
-  head,
-  base,
-  gateVersion,
-  command,
-  inputHash = null,
-  name,
-}) {
-  return Boolean(
-    record &&
-      record.schemaVersion === STAGE_SCHEMA_VERSION &&
-      record.gateVersion === gateVersion &&
-      record.base === base &&
-      record.command === command &&
-      (!name || record.name === name) &&
-      (inputHash ? record.inputHash === inputHash : record.head === head),
-  );
-}
-
-export function validateRemoteAttestation(statuses, base, expectedActor) {
-  assertSha(base, 'base');
-  if (!expectedActor) throw new Error('Trusted local-gate status issuer is not configured');
-  const expectedDescription = `base=${base}`;
-  const status = statuses.find(({ context }) => context === REMOTE_ATTESTATION_CONTEXT);
-  if (!status) throw new Error(`Missing ${REMOTE_ATTESTATION_CONTEXT} commit status`);
-  if (status.creator?.login !== expectedActor) {
-    throw new Error(`${REMOTE_ATTESTATION_CONTEXT} was not created by the trusted issuer`);
-  }
-  if (status.state !== 'success' || status.description !== expectedDescription) {
-    throw new Error(`${REMOTE_ATTESTATION_CONTEXT} does not attest the exact base`);
-  }
-  return status;
-}
-
-export function buildValidatedPushRefspec(head, branch) {
-  assertSha(head, 'head');
-  if (!branch || branch === 'main' || /\s/.test(branch)) {
-    throw new Error('A valid PR branch is required for the attested push');
-  }
-  return `${head}:refs/heads/${branch}`;
-}
-
-export function parsePrePushUpdates(input) {
-  return input
-    .trim()
-    .split('\n')
-    .filter(Boolean)
-    .map((line) => {
-      const [localRef, localSha, remoteRef, remoteSha] = line.trim().split(/\s+/);
-      if (!localRef || !localSha || !remoteRef || !remoteSha) {
-        throw new Error(`Malformed pre-push update: ${line}`);
-      }
-      return { localRef, localSha, remoteRef, remoteSha };
-    });
-}
-
-export function planPrePush({
-  updates,
-  head,
-  currentBranch,
-  isAncestor,
-  attestedPublication = false,
-}) {
-  const branchUpdates = updates.filter(({ remoteRef }) => remoteRef.startsWith('refs/heads/'));
-  if (branchUpdates.length === 0) {
-    return { action: 'allow', reason: 'No branch update requires validation.' };
-  }
-  if (branchUpdates.some(({ remoteRef }) => remoteRef === 'refs/heads/main')) {
-    return { action: 'block', reason: 'Direct pushes to main are prohibited.' };
-  }
-  if (branchUpdates.some(({ localSha }) => localSha === ZERO_SHA)) {
-    return {
-      action: 'block',
-      reason: 'Remote branch deletions are prohibited; preserve pushed checkpoints.',
-    };
-  }
-  if (
-    branchUpdates.length !== 1 ||
-    branchUpdates[0].localSha !== head ||
-    branchUpdates[0].remoteRef !== `refs/heads/${currentBranch}`
-  ) {
-    return {
-      action: 'block',
-      reason: 'Push exactly the checked-out branch HEAD to its same-name remote branch.',
-    };
-  }
-  const [{ localSha, remoteSha }] = branchUpdates;
-  if (remoteSha !== ZERO_SHA && !isAncestor(remoteSha, localSha)) {
-    if (attestedPublication) {
-      return {
-        action: 'allow',
-        reason: 'Exact-head attested publication may update the branch with force-with-lease.',
-      };
-    }
-    return {
-      action: 'block',
-      reason: 'Non-fast-forward checkpoint pushes are prohibited; pull/rebase without rewriting shared history.',
-    };
-  }
-  return {
-    action: 'allow',
-    reason: 'Checkpoint push is a fast-forward update of the checked-out non-main branch.',
-  };
-}
-
 function command(name, executable, args, options = {}) {
   return { name, executable, args, phase: GATE_PHASE.PREFLIGHT, ...options };
-}
-
-const ROOT_TEST_PATH_PATTERN = /(?:\.test|\.test-fixtures)\.[cm]?[jt]sx?$/;
-const ROOT_BUILD_INPUTS = Object.freeze({
-  include: [
-    /^src\//,
-    /^package(?:-lock)?\.json$/,
-    /^tsconfig[^/]*\.json$/,
-    /^tsup\.config\.ts$/,
-  ],
-  exclude: [ROOT_TEST_PATH_PATTERN],
-});
-const ROOT_TYPECHECK_INPUTS = Object.freeze({
-  include: [
-    /^src\//,
-    /^tests\//,
-    /^config\//,
-    /^package(?:-lock)?\.json$/,
-    /^tsconfig[^/]*\.json$/,
-    /^scripts\/verify-typecheck-baseline\.mjs$/,
-  ],
-  exclude: [ROOT_TEST_PATH_PATTERN],
-});
-const ROOT_TEST_INPUTS = Object.freeze({
-  include: [
-    /^src\//,
-    /^tests\//,
-    /^config\//,
-    /^docker\//,
-    /^models\//,
-    /^resources\//,
-    /^scripts\//,
-    /^skills\//,
-    /^README\.md$/,
-    /^package(?:-lock)?\.json$/,
-    /^tsconfig[^/]*\.json$/,
-    /^vitest[^/]*\.[cm]?[jt]s$/,
-  ],
-});
-const SCRIPT_TEST_INPUTS = Object.freeze({
-  include: [
-    /^scripts\//,
-    /^src\//,
-    /^config\//,
-    /^docker\//,
-    /^package(?:-lock)?\.json$/,
-    /^tsconfig[^/]*\.json$/,
-    /^vitest[^/]*\.[cm]?[jt]s$/,
-  ],
-});
-const ROOT_LINT_INPUTS = Object.freeze({
-  include: [
-    /^(?:src|tests|scripts|admin-ui|companion-ui)\//,
-    /^eslint\.config\.[cm]?[jt]s$/,
-    /^package(?:-lock)?\.json$/,
-    /^tsconfig[^/]*\.json$/,
-  ],
-});
-const EVALS_INPUTS = Object.freeze({ include: EVALS_INPUT_PATTERNS });
-
-function specialistInputs(projectPath, { rootSource = true } = {}) {
-  const escapedProjectPath = projectPath.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
-  return {
-    include: [
-      new RegExp(`^${escapedProjectPath}\\/`),
-      ...(rootSource ? [/^src\//] : []),
-      /^package\.json$/,
-      /^scripts\/ci\/bootstrap-worktree\.mjs$/,
-      /^scripts\/verify-knip-baseline\.mjs$/,
-    ],
-  };
 }
 
 // Split a built gate plan into its execution phases without changing the
@@ -361,9 +108,6 @@ export function buildGatePlan({
 }) {
   const matches = (pattern) => paths.some((path) => pattern.test(path));
   const scope = detectChangeScope(paths);
-  const isRootTestPath = (path) => /^(?:src|scripts)\//.test(path)
-    && ROOT_TEST_PATH_PATTERN.test(path);
-  const changedRootTests = paths.filter(isRootTestPath);
   // Canary validates origin/main itself against an empty diff (base == head).
   // The whole-repo gates (lint, build, typecheck, repository-hygiene,
   // startup-owner-files, tests, ci-rules, and the semgrep ruleset self-test)
@@ -371,22 +115,17 @@ export function buildGatePlan({
   // diff-scoped gate is meaningless on an empty diff and is skipped EXPLICITLY
   // with a logged reason — never silently.
   const fullRoot = canary || scope.root_build_contract;
-  const rootTypecheck = fullRoot || paths.some((path) => (
-    /^src\//.test(path) && !isRootTestPath(path)
-  ) || /^(?:package-lock\.json$|tsconfig[^/]*\.json$)/.test(path));
-  const rootRuntimeBuild = !fullRoot && rootTypecheck;
+  const {
+    changedRootTestFixtures,
+    changedRootTests,
+    companionIdTypes,
+    rootIntegrationTests,
+    rootProductTests,
+    rootRuntimeBuild,
+    rootScriptTests,
+    rootTypecheck,
+  } = buildRootValidationScope({ paths, fullRoot });
   const rootHygiene = fullRoot || scope.root_validation;
-  const rootProductTests = !fullRoot && paths.some((path) => (
-    (/^src\//.test(path) && !isRootTestPath(path))
-    || /^(?:package-lock\.json$|tsconfig[^/]*\.json$|vitest[^/]*\.[cm]?[jt]s$)/.test(path)
-  ));
-  const rootScriptTests = !fullRoot && paths.some((path) => (
-    (/^scripts\/(?!ci\/)/.test(path) && !isRootTestPath(path))
-    || /^(?:package-lock\.json$|vitest[^/]*\.[cm]?[jt]s$)/.test(path)
-  ));
-  const rootIntegrationTests = rootProductTests && matches(
-    /^(?:src\/(?:app\/(?:e2e|startup)\/|boundary\/gateway\/|core\/(?:agent\/(?:arbiter|background-work)\/|contacts\/postgres-adapter|eval\/observer-sidecar\/)|faculties\/(?:automata|introspection|memory|wiki)\/|operator\/garden\/routes\/|persistence\/|system\/config\/|test-support\/)|vitest[^/]*\.[cm]?[jt]s$|package-lock\.json$)/,
-  );
   const fullLint = fullRoot || matches(/^eslint[^/]*\.[cm]?[jt]s$/);
   const adminUi = canary || scope.admin_ui;
   const companionUi = canary || scope.companion_ui;
@@ -445,6 +184,10 @@ export function buildGatePlan({
       skip: !rootTypecheck,
       contentInputs: ROOT_TYPECHECK_INPUTS,
     }),
+    command('companion-id-types', 'npm', ['run', 'verify:companion-id-types'], {
+      skip: fullRoot || !companionIdTypes,
+      contentInputs: ROOT_BUILD_INPUTS,
+    }),
     command('repository-hygiene', 'npm', ['run', 'verify:repository-hygiene:structural'], {
       skip: !rootHygiene,
     }),
@@ -465,7 +208,7 @@ export function buildGatePlan({
     // committed rules, not a diff); otherwise it runs only when the rules change.
     command('semgrep-rules', 'npm', ['run', 'semgrep:test'], {
       skip: canary ? false : !matches(/^config\/semgrep\//),
-      contentInputs: { include: [/^config\/semgrep\//, /^package(?:-lock)?\.json$/] },
+      contentInputs: SEMGREP_RULE_INPUTS,
     }),
     command(
       'semgrep-diff',
@@ -496,7 +239,21 @@ export function buildGatePlan({
       '--maxWorkers=8',
       '--bail=1',
     ], {
-      skip: fullRoot || !scope.root_test_only,
+      skip: fullRoot || changedRootTests.length === 0,
+      phase: GATE_PHASE.HEAVY,
+      contentInputs: ROOT_TEST_INPUTS,
+    }),
+    command('related-tests', 'npm', [
+      'exec',
+      '--',
+      'vitest',
+      'related',
+      ...changedRootTestFixtures,
+      '--run',
+      '--maxWorkers=8',
+      '--bail=1',
+    ], {
+      skip: fullRoot || changedRootTestFixtures.length === 0,
       phase: GATE_PHASE.HEAVY,
       contentInputs: ROOT_TEST_INPUTS,
     }),
@@ -596,33 +353,4 @@ export function assessHookInstallation({ hooksPath, existingHooks }) {
     };
   }
   return { allowed: true, reason: '' };
-}
-
-export function evaluateRequiredChecks({
-  expectedHead,
-  actualHead,
-  checks,
-  requireGreptile = false,
-}) {
-  if (actualHead !== expectedHead) {
-    return {
-      state: 'failed',
-      reason: `PR head changed from ${expectedHead.slice(0, 12)} to ${actualHead.slice(0, 12)} while waiting.`,
-    };
-  }
-
-  const requiredChecks = ['ci-required', ...(requireGreptile ? ['Greptile Review'] : [])];
-  for (const requiredName of requiredChecks) {
-    const check = checks.find(({ name }) => name === requiredName);
-    if (!check || check.status !== 'COMPLETED') {
-      return { state: 'pending', reason: `${requiredName} has not completed.` };
-    }
-    if (check.conclusion !== 'SUCCESS') {
-      return {
-        state: 'failed',
-        reason: `${requiredName} concluded ${check.conclusion || 'without a result'}.`,
-      };
-    }
-  }
-  return { state: 'passed', reason: `${requiredChecks.join(' and ')} passed.` };
 }

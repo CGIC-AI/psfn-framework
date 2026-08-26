@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import test from 'node:test';
@@ -8,6 +8,7 @@ import {
   bootstrapWorktree,
   dependencyMarkerPath,
   lockfileSha256,
+  parseBootstrapArguments,
 } from './bootstrap-worktree.mjs';
 import { markerPathFor } from '../prewarm-worktree.mjs';
 
@@ -39,15 +40,11 @@ function fixture(t, { attested = true } = {}) {
   return { addProject, attest, cacheDir, repositoryRoot };
 }
 
-function rootOnly(options) {
-  return { ...options, projectPaths: ['.'] };
-}
-
 test('a fresh worktree receives an isolated offline lockfile install', (t) => {
   const { cacheDir, repositoryRoot } = fixture(t);
   const calls = [];
 
-  const result = bootstrapWorktree(rootOnly({
+  const result = bootstrapWorktree({
     repositoryRoot,
     cacheDir,
     nodeVersion: 'v24.19.0',
@@ -55,7 +52,7 @@ test('a fresh worktree receives an isolated offline lockfile install', (t) => {
       calls.push(args);
       mkdirSync(join(repositoryRoot, 'node_modules'), { recursive: true });
     },
-  }));
+  });
 
   assert.equal(result, 'installed');
   assert.deepEqual(calls, [[
@@ -68,16 +65,54 @@ test('a fresh worktree receives an isolated offline lockfile install', (t) => {
   );
 });
 
-test('every lockfile-owned project receives its own isolated install', (t) => {
+test('default bootstrap leaves unrelated specialist projects uninstalled', (t) => {
   const { addProject, cacheDir, repositoryRoot } = fixture(t);
-  const nested = addProject('nested-ui', 'nested-ui-fixture');
+  const specialist = addProject('companion-ui', 'companion-ui-fixture');
   const installed = [];
 
   const result = bootstrapWorktree({
     repositoryRoot,
     cacheDir,
     nodeVersion: 'v24.19.0',
-    projectPaths: ['.', 'nested-ui'],
+    runNpm(_args, { repositoryRoot: projectRoot }) {
+      installed.push(projectRoot);
+      mkdirSync(join(projectRoot, 'node_modules'), { recursive: true });
+    },
+  });
+
+  assert.equal(result, 'installed');
+  assert.deepEqual(installed, [repositoryRoot]);
+  assert.equal(existsSync(join(specialist.projectRoot, 'node_modules')), false);
+});
+
+test('CLI selects only explicitly requested specialist projects', () => {
+  assert.deepEqual(parseBootstrapArguments(['/repo']), {
+    projectPaths: ['.'],
+    repositoryRoot: '/repo',
+  });
+  assert.deepEqual(
+    parseBootstrapArguments(['/repo', '--project', 'companion-ui', '--project', 'tools/evals']),
+    {
+      projectPaths: ['companion-ui', 'tools/evals'],
+      repositoryRoot: '/repo',
+    },
+  );
+  assert.throws(
+    () => parseBootstrapArguments(['/repo', '--project', '../outside']),
+    /Unknown npm project/u,
+  );
+});
+
+test('every explicitly selected lockfile-owned project receives its own isolated install', (t) => {
+  const { addProject, cacheDir, repositoryRoot } = fixture(t);
+  const nested = addProject('companion-ui', 'companion-ui-fixture');
+  const installed = [];
+
+  const result = bootstrapWorktree({
+    repositoryRoot,
+    cacheDir,
+    nodeVersion: 'v24.19.0',
+    projectPaths: ['.', 'companion-ui'],
     runNpm(_args, { repositoryRoot: projectRoot }) {
       installed.push(projectRoot);
       mkdirSync(join(projectRoot, 'node_modules'), { recursive: true });
@@ -98,12 +133,12 @@ test('an exact lockfile marker makes repeated checkouts a no-op', (t) => {
   writeFileSync(dependencyMarkerPath(repositoryRoot), `${lockfileSha256(repositoryRoot)}\n`);
   let invoked = false;
 
-  const result = bootstrapWorktree(rootOnly({
+  const result = bootstrapWorktree({
     repositoryRoot,
     cacheDir,
     nodeVersion: 'v24.19.0',
     runNpm() { invoked = true; },
-  }));
+  });
 
   assert.equal(result, 'ready');
   assert.equal(invoked, false);
@@ -114,12 +149,12 @@ test('bootstrap fails before npm when the executing Node is not the repository v
   let invoked = false;
 
   assert.throws(
-    () => bootstrapWorktree(rootOnly({
+    () => bootstrapWorktree({
       repositoryRoot,
       cacheDir,
       nodeVersion: 'v22.22.2',
       runNpm() { invoked = true; },
-    })),
+    }),
     /requires Node v24\.19\.0; bootstrap is running under v22\.22\.2/u,
   );
   assert.equal(invoked, false);
@@ -129,12 +164,12 @@ test('bootstrap refuses to attest an install that did not create node_modules', 
   const { cacheDir, repositoryRoot } = fixture(t);
 
   assert.throws(
-    () => bootstrapWorktree(rootOnly({
+    () => bootstrapWorktree({
       repositoryRoot,
       cacheDir,
       nodeVersion: 'v24.19.0',
       runNpm() {},
-    })),
+    }),
     /npm ci completed without creating node_modules/u,
   );
 });
@@ -143,7 +178,7 @@ test('bootstrap automatically prepares an unattested cache before installing', (
   const { attest, cacheDir, repositoryRoot } = fixture(t, { attested: false });
   const events = [];
 
-  const result = bootstrapWorktree(rootOnly({
+  const result = bootstrapWorktree({
     repositoryRoot,
     cacheDir,
     nodeVersion: 'v24.19.0',
@@ -155,7 +190,7 @@ test('bootstrap automatically prepares an unattested cache before installing', (
       events.push('install');
       mkdirSync(join(repositoryRoot, 'node_modules'));
     },
-  }));
+  });
 
   assert.equal(result, 'installed');
   assert.deepEqual(events, ['prewarm', 'install']);
@@ -165,12 +200,12 @@ test('bootstrap refuses an install when cache preparation does not attest it', (
   const { cacheDir, repositoryRoot } = fixture(t, { attested: false });
   let invoked = false;
 
-  assert.throws(() => bootstrapWorktree(rootOnly({
+  assert.throws(() => bootstrapWorktree({
     repositoryRoot,
     cacheDir,
     nodeVersion: 'v24.19.0',
     prewarm() {},
     runNpm() { invoked = true; },
-  })), /did not create an attestation/u);
+  }), /did not create an attestation/u);
   assert.equal(invoked, false);
 });

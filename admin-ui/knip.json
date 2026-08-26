@@ -1,0 +1,11 @@
+{
+  "$schema": "https://unpkg.com/knip@6.23.0/schema.json",
+  "entry": [
+    "src/hooks.ts",
+    "src/lib/index.ts"
+  ],
+  "project": [
+    "src/**/*.{ts,svelte}"
+  ],
+  "svelte": true
+}

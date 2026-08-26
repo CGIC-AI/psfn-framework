@@ -1,0 +1,15 @@
+{
+  "$schema": "https://unpkg.com/knip@6.23.0/schema.json",
+  "entry": [
+    "index.html",
+    "src/main.tsx",
+    "vite.config.ts",
+    "playwright.config.ts",
+    "e2e/fixtures/legacy-main.tsx"
+  ],
+  "project": [
+    "src/**/*.{ts,tsx}",
+    "e2e/**/*.{ts,tsx}",
+    "vite/**/*.{ts,tsx}"
+  ]
+}

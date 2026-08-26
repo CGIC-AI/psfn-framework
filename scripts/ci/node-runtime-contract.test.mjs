@@ -72,3 +72,40 @@ test('active runtime and operator docs do not retain the Node 22 split', () => {
   assert.match(activeSurfaces, /Node(?:\.js)? 24/u);
   assert.doesNotMatch(activeSurfaces, /Node(?:\.js)? 22|node:22|node22|24\.13\.1|22\.22\.2/u);
 });
+
+test('root installation stays small and specialist dependencies are lazy', () => {
+  const rootPackage = JSON.parse(read('package.json'));
+
+  assert.equal(rootPackage.scripts.postinstall, undefined);
+  assert.match(rootPackage.scripts['verify:garden-ui'], /deps:ensure -- --project admin-ui/u);
+  assert.match(
+    rootPackage.scripts['verify:companion-ui'],
+    /deps:ensure -- --project companion-ui/u,
+  );
+  assert.match(
+    rootPackage.scripts['install:satellite-hub'],
+    /deps:ensure -- --project apps\/satellite-hub/u,
+  );
+  assert.match(rootPackage.scripts['verify:evals'], /deps:ensure -- --project tools\/evals/u);
+
+  for (const script of [
+    rootPackage.scripts['verify:garden-ui'],
+    rootPackage.scripts['verify:companion-ui'],
+    rootPackage.scripts['install:satellite-hub'],
+    rootPackage.scripts['verify:evals'],
+  ]) {
+    assert.doesNotMatch(script, /npm ci/u);
+  }
+});
+
+test('local hygiene can avoid repeating the separately owned public scan', () => {
+  const rootPackage = JSON.parse(read('package.json'));
+  assert.equal(
+    rootPackage.scripts['verify:repository-hygiene'],
+    'npm run verify:public-sanitize && npm run verify:repository-hygiene:structural',
+  );
+  assert.doesNotMatch(
+    rootPackage.scripts['verify:repository-hygiene:structural'],
+    /verify:public-sanitize/u,
+  );
+});

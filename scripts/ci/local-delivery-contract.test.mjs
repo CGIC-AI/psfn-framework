@@ -34,6 +34,7 @@ import {
   releaseHeavyPhaseLock,
   runCanaryGate,
   runLocalGate,
+  runPreflightPhase,
   withHeavyPhaseLock,
 } from './run-local-gate.mjs';
 import { validateZizmorInputs } from './run-zizmor-changed.mjs';
@@ -41,6 +42,19 @@ import { waitForRemoteAttestation } from './verify-pr-attestation.mjs';
 
 const HEAD = '1111111111111111111111111111111111111111';
 const BASE = '2222222222222222222222222222222222222222';
+const VITEST_CONFIG_URL = new URL('../../vitest.config.ts', import.meta.url);
+
+async function loadVitestProfile(profile) {
+  const previous = process.env.PSFN_VITEST_PROFILE;
+  try {
+    if (profile) process.env.PSFN_VITEST_PROFILE = profile;
+    else delete process.env.PSFN_VITEST_PROFILE;
+    return (await import(`${VITEST_CONFIG_URL.href}?profile=${profile || 'full'}`)).default.test;
+  } finally {
+    if (previous === undefined) delete process.env.PSFN_VITEST_PROFILE;
+    else process.env.PSFN_VITEST_PROFILE = previous;
+  }
+}
 
 test('change-budget gates default to explicit no-exception metadata and honor overrides', () => {
   const previous = process.env.CHANGE_BUDGET_EXCEPTION;
@@ -194,7 +208,7 @@ test('pre-push allows durable branch checkpoints but blocks main, mismatched, an
   );
 });
 
-test('delivery-only gate stays fast while product changes retain full validation', () => {
+test('delivery and product gates validate only their owned change surface', () => {
   const deliveryPlan = buildGatePlan({
     paths: [
       '.github/workflows/ci.yml',
@@ -236,13 +250,72 @@ test('delivery-only gate stays fast while product changes retain full validation
     for (const rootGate of [
       'lint',
       'build',
+      'runtime-build',
       'typecheck',
       'repository-hygiene',
       'tests',
+      'targeted-tests',
+      'unit-tests',
+      'script-tests',
+      'integration-tests',
     ]) {
       assert.ok(!names.includes(rootGate), `${path} must not run root ${rootGate}`);
     }
     assert.ok(names.includes('startup-owner-files'), `${path} must run startup-owner-files`);
+  }
+
+  const productNames = buildGatePlan({ paths: ['src/core/session/manager.ts'] })
+    .filter(({ skip }) => !skip)
+    .map(({ name }) => name);
+  for (const required of [
+    'lint-changed',
+    'typecheck',
+    'repository-hygiene',
+    'runtime-build',
+    'unit-tests',
+  ]) {
+    assert.ok(productNames.includes(required), `product change must run ${required}`);
+  }
+  for (const unrelated of ['lint', 'build', 'evals', 'integration-tests']) {
+    assert.ok(!productNames.includes(unrelated), `product change must not run ${unrelated}`);
+  }
+
+  const testOnlyPlan = buildGatePlan({ paths: ['src/core/session/manager.test.ts'] });
+  const testOnlyNames = testOnlyPlan.filter(({ skip }) => !skip).map(({ name }) => name);
+  assert.ok(testOnlyNames.includes('lint-changed'));
+  assert.ok(testOnlyNames.includes('repository-hygiene'));
+  assert.ok(testOnlyNames.includes('targeted-tests'));
+  for (const unrelated of ['lint', 'build', 'runtime-build', 'typecheck', 'unit-tests', 'evals']) {
+    assert.ok(!testOnlyNames.includes(unrelated), `test-only change must not run ${unrelated}`);
+  }
+  assert.deepEqual(testOnlyPlan.find(({ name }) => name === 'targeted-tests').args, [
+    'test',
+    '--',
+    'src/core/session/manager.test.ts',
+    '--maxWorkers=8',
+    '--bail=1',
+  ]);
+
+  const scriptTestPlan = buildGatePlan({ paths: ['scripts/onboarding/flow.test.ts'] });
+  const scriptTestNames = scriptTestPlan.filter(({ skip }) => !skip).map(({ name }) => name);
+  assert.ok(scriptTestNames.includes('targeted-tests'));
+  for (const unrelated of ['runtime-build', 'typecheck', 'unit-tests', 'script-tests']) {
+    assert.ok(!scriptTestNames.includes(unrelated), `script test-only change must not run ${unrelated}`);
+  }
+
+  const scriptSourceNames = buildGatePlan({ paths: ['scripts/onboarding/flow.ts'] })
+    .filter(({ skip }) => !skip)
+    .map(({ name }) => name);
+  assert.ok(scriptSourceNames.includes('script-tests'));
+  for (const unrelated of ['runtime-build', 'typecheck', 'unit-tests']) {
+    assert.ok(!scriptSourceNames.includes(unrelated), `script source change must not run ${unrelated}`);
+  }
+
+  const buildContractNames = buildGatePlan({ paths: ['tsup.config.ts'] })
+    .filter(({ skip }) => !skip)
+    .map(({ name }) => name);
+  for (const required of ['lint', 'build', 'repository-hygiene', 'tests', 'evals']) {
+    assert.ok(buildContractNames.includes(required), `build contract must run ${required}`);
   }
 
   const catalogueOnlyNames = buildGatePlan({
@@ -259,12 +332,12 @@ test('delivery-only gate stays fast while product changes retain full validation
     .filter(({ skip }) => !skip)
     .map(({ name }) => name);
   for (const rootGate of [
-    'lint',
-    'build',
+    'lint-changed',
+    'runtime-build',
     'typecheck',
     'repository-hygiene',
     'startup-owner-files',
-    'tests',
+    'unit-tests',
   ]) {
     assert.ok(lockfileNames.includes(rootGate), `root lockfile must run ${rootGate}`);
   }
@@ -279,7 +352,7 @@ test('delivery-only gate stays fast while product changes retain full validation
   });
   const names = plan.map(({ name }) => name);
 
-  assert.equal(plan.find(({ name }) => name === 'build').nodeHeapMb, ROOT_BUILD_NODE_HEAP_MB);
+  assert.equal(plan.find(({ name }) => name === 'runtime-build').nodeHeapMb, undefined);
   assert.equal(plan.find(({ name }) => name === 'typecheck').nodeHeapMb, 4096);
 
   assert.deepEqual(names.slice(0, 5), [
@@ -287,20 +360,21 @@ test('delivery-only gate stays fast while product changes retain full validation
     'change-budget',
     'commit-identities',
     'public-sanitize',
-    'lint',
+    'lint-changed',
   ]);
   for (const required of [
-    'build',
+    'runtime-build',
     'typecheck',
     'repository-hygiene',
     'startup-owner-files',
     'semgrep-rules',
     'semgrep-diff',
     'ubs',
-    'tests',
+    'unit-tests',
+    'script-tests',
+    'integration-tests',
     'settings-contract',
     'supply-chain',
-    'evals',
     'changed-workflow-analysis',
   ]) {
     assert.ok(names.includes(required), `missing local gate: ${required}`);
@@ -310,13 +384,14 @@ test('delivery-only gate stays fast while product changes retain full validation
     '--skip-js=4,7',
     'src/system/config/load-config.ts',
   ]);
-  assert.deepEqual(plan.find(({ name }) => name === 'tests').args, [
-    'test',
+  assert.deepEqual(plan.find(({ name }) => name === 'unit-tests').args, [
+    'run',
+    'test:unit',
     '--',
     '--maxWorkers=8',
     '--bail=1',
   ]);
-  assert.equal(plan.find(({ name }) => name === 'tests').skip, false);
+  assert.equal(plan.find(({ name }) => name === 'unit-tests').skip, false);
 
   const deletionPlan = buildGatePlan({
     paths: ['src/removed.ts', 'src/retained.ts'],
@@ -369,25 +444,47 @@ test('hook installer refuses to overwrite an unrelated hook configuration', () =
 test('local gate writes one exact-head attestation and reuses it without rerunning tools', async () => {
   const { cwd, base } = makeGateRepository();
   const executed = [];
-  const execute = async (gate) => executed.push(gate.name);
+  const execute = async (gate) => {
+    if (!gate.skip) executed.push(gate.name);
+  };
   const heavyLock = { lockDir: makeLockDir() };
 
   const first = await runLocalGate({ cwd, baseRef: base, execute, heavyLock });
   assert.equal(first.head, git(cwd, 'rev-parse', 'HEAD'));
   assert.equal(first.base, base);
-  assert.ok(executed.includes('tests'));
+  assert.ok(executed.includes('unit-tests'));
   const firstCount = executed.length;
 
   const second = await runLocalGate({ cwd, baseRef: base, execute, heavyLock });
   assert.deepEqual(second, first);
   assert.equal(executed.length, firstCount);
 
+  await runLocalGate({ cwd, baseRef: base, execute, heavyLock, force: true });
+  assert.ok(executed.length > firstCount, '--force must bypass stage reuse as well as attestation reuse');
+
+  mkdirSync(join(cwd, 'docs'));
+  writeFileSync(join(cwd, 'docs/architecture.md'), 'No gate input changed.\n');
+  git(cwd, 'add', 'docs/architecture.md');
+  git(cwd, 'commit', '--quiet', '-m', 'docs follow-up');
+  const beforeDocs = executed.length;
+  const docsAttestation = await runLocalGate({ cwd, baseRef: base, execute, heavyLock });
+  assert.notEqual(docsAttestation.head, first.head);
+  const docsRuns = executed.slice(beforeDocs);
+  for (const expensive of ['runtime-build', 'typecheck', 'unit-tests']) {
+    assert.ok(!docsRuns.includes(expensive), `${expensive} must reuse content-identical inputs`);
+  }
+  assert.ok(docsRuns.includes('ci-rules'), 'unmanifested policy checks retain exact-head reuse');
+
   writeFileSync(join(cwd, 'src/next.ts'), 'export const next = true;\n');
   git(cwd, 'add', 'src/next.ts');
   git(cwd, 'commit', '--quiet', '-m', 'next');
+  const beforeSource = executed.length;
   const third = await runLocalGate({ cwd, baseRef: base, execute, heavyLock });
-  assert.notEqual(third.head, first.head);
-  assert.ok(executed.length > firstCount);
+  assert.notEqual(third.head, docsAttestation.head);
+  const sourceRuns = executed.slice(beforeSource);
+  for (const expensive of ['runtime-build', 'typecheck', 'unit-tests']) {
+    assert.ok(sourceRuns.includes(expensive), `${expensive} must rerun when its inputs change`);
+  }
 });
 
 test('a stage record is reusable only for the exact head, base, gate version, and command', () => {
@@ -412,6 +509,32 @@ test('a stage record is reusable only for the exact head, base, gate version, an
   assert.equal(isStageReusable(record, { ...context, command: 'npm test -- --bail' }), false);
   assert.equal(isStageReusable(null, context), false);
   assert.equal(isStageReusable({ ...record, schemaVersion: STAGE_SCHEMA_VERSION + 1 }, context), false);
+});
+
+test('a manifested stage reuses content-identical inputs across heads but not changed inputs', () => {
+  const inputHash = 'a'.repeat(64);
+  const record = {
+    schemaVersion: STAGE_SCHEMA_VERSION,
+    gateVersion: GATE_VERSION,
+    head: HEAD,
+    base: BASE,
+    name: 'unit-tests',
+    command: 'npm run test:unit',
+    inputHash,
+  };
+  const context = {
+    head: `0${HEAD.slice(1)}`,
+    base: BASE,
+    gateVersion: GATE_VERSION,
+    name: 'unit-tests',
+    command: 'npm run test:unit',
+    inputHash,
+  };
+
+  assert.equal(isStageReusable(record, context), true);
+  assert.equal(isStageReusable(record, { ...context, inputHash: 'b'.repeat(64) }), false);
+  assert.equal(isStageReusable(record, { ...context, base: `0${BASE.slice(1)}` }), false);
+  assert.equal(isStageReusable(record, { ...context, name: 'integration-tests' }), false);
 });
 
 test('the whole-gate attestation carries the gate version and stays exact-head bound', () => {
@@ -476,7 +599,7 @@ test('a partial gate run reuses passed stages and reruns only the failed stage o
   const execute = async (gate) => {
     if (gate.skip) return;
     runs.push(gate.name);
-    if (gate.name === 'tests' && failTests) throw new Error('tests failed');
+    if (gate.name === 'unit-tests' && failTests) throw new Error('tests failed');
   };
   const heavyLock = { lockDir: makeLockDir(), isAlive: () => true, sleep: async () => {} };
 
@@ -485,7 +608,7 @@ test('a partial gate run reuses passed stages and reruns only the failed stage o
     /tests failed/,
   );
   assert.ok(runs.includes('ci-rules'), 'preflight stages ran on the first pass');
-  assert.ok(runs.includes('tests'), 'the heavy stage ran and failed on the first pass');
+  assert.ok(runs.includes('unit-tests'), 'the heavy stage ran and failed on the first pass');
   // The whole-gate attestation is not written when a stage fails.
   assert.equal(
     existsSync(join(cwd, '.git', 'local-delivery-gate', 'attestation.json')),
@@ -496,9 +619,9 @@ test('a partial gate run reuses passed stages and reruns only the failed stage o
   runs.length = 0;
   failTests = false;
   const attestation = await runLocalGate({ cwd, baseRef: base, execute, heavyLock });
-  assert.ok(runs.includes('tests'), 'the previously failed stage reruns');
+  assert.ok(runs.includes('unit-tests'), 'the previously failed stage reruns');
   assert.ok(!runs.includes('ci-rules'), 'a previously passed stage is reused, not rerun');
-  assert.ok(!runs.includes('lint'), 'a previously passed stage is reused, not rerun');
+  assert.ok(!runs.includes('lint-changed'), 'a previously passed stage is reused, not rerun');
   assert.equal(attestation.head, git(cwd, 'rev-parse', 'HEAD'));
   assert.equal(attestation.gateVersion, GATE_VERSION);
 });
@@ -523,10 +646,13 @@ test('gate plan splits the heavy product suite from parallel-safe preflight', ()
   });
   const { preflight, heavy } = partitionGatePlan(plan);
 
-  // Only the product/Postgres suite is heavy; everything else is preflight.
-  assert.deepEqual(heavy.map(({ name }) => name), ['tests']);
-  assert.equal(plan.find(({ name }) => name === 'tests').phase, GATE_PHASE.HEAVY);
-  assert.ok(!preflight.some(({ name }) => name === 'tests'));
+  // Test processes are heavy; everything else is preflight.
+  assert.deepEqual(
+    heavy.filter(({ skip }) => !skip).map(({ name }) => name),
+    ['unit-tests', 'script-tests', 'integration-tests'],
+  );
+  assert.equal(plan.find(({ name }) => name === 'unit-tests').phase, GATE_PHASE.HEAVY);
+  assert.ok(!preflight.some(({ name }) => name === 'unit-tests'));
 
   // Cheap contracts (settings/supply-chain) are preflight, so they
   // fire before the heavy suite — the PR-190 ordering regression stays fixed.
@@ -541,6 +667,50 @@ test('gate plan splits the heavy product suite from parallel-safe preflight', ()
     [...preflight, ...heavy].map(({ name }) => name).sort(),
     plan.map(({ name }) => name).sort(),
   );
+});
+
+test('preflight pools only explicitly cheap gates and leaves fat gates serial', async () => {
+  let active = 0;
+  let maxActive = 0;
+  const serialStarts = [];
+  const preflight = [
+    { name: 'ci-rules', parallelSafe: true },
+    { name: 'public-sanitize', parallelSafe: true },
+    { name: 'lint' },
+    { name: 'typecheck' },
+  ];
+  const runGate = async (gate) => {
+    if (!gate.parallelSafe) {
+      assert.equal(active, 0, `${gate.name} must start after the cheap pool settles`);
+      serialStarts.push(gate.name);
+      return;
+    }
+    active += 1;
+    maxActive = Math.max(maxActive, active);
+    await new Promise((resolvePromise) => setImmediate(resolvePromise));
+    active -= 1;
+  };
+
+  await runPreflightPhase({ preflight, runGate });
+
+  assert.equal(maxActive, 2);
+  assert.deepEqual(serialStarts, ['lint', 'typecheck']);
+});
+
+test('Vitest profiles partition source, script, and Postgres-heavy tests', async () => {
+  const unit = await loadVitestProfile('unit');
+  const scripts = await loadVitestProfile('scripts');
+  const integration = await loadVitestProfile('integration');
+  const full = await loadVitestProfile('');
+
+  assert.deepEqual(unit.include, ['src/**/*.test.ts']);
+  assert.ok(unit.exclude.includes('src/**/*.integration.test.ts'));
+  assert.deepEqual(scripts.include, ['scripts/**/*.test.ts']);
+  assert.deepEqual(integration.exclude, []);
+  assert.ok(integration.include.includes('src/**/*.integration.test.ts'));
+  assert.ok(integration.include.includes('src/test-support/postgres-test-harness.test.ts'));
+  assert.deepEqual(full.include, ['src/**/*.test.ts', 'scripts/**/*.test.ts']);
+  assert.deepEqual(full.exclude, []);
 });
 
 function makeCanaryRepository() {
@@ -691,9 +861,9 @@ test('heavy-phase lock: preflight runs lock-free while the heavy suite holds the
     heavyLock: { lockDir, isAlive: () => true, sleep: async () => {} },
   });
 
-  assert.equal(lockPresent.tests, true, 'heavy suite must run while the lock is held');
+  assert.equal(lockPresent['unit-tests'], true, 'heavy suite must run while the lock is held');
   assert.equal(lockPresent['ci-rules'], false, 'preflight must run without the lock');
-  assert.equal(lockPresent['lint'], false, 'preflight must run without the lock');
+  assert.equal(lockPresent['lint-changed'], false, 'preflight must run without the lock');
   assert.equal(existsSync(lockDir), false, 'lock must be released after the heavy phase');
 });
 

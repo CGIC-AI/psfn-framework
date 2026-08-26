@@ -1,7 +1,7 @@
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { detectChangeScope } from './detect-change-scope.mjs';
+import { detectChangeScope, EVALS_INPUT_PATTERNS } from './detect-change-scope.mjs';
 
 const SHA = /^[0-9a-f]{40}$/;
 const ZERO_SHA = '0'.repeat(40);
@@ -18,11 +18,11 @@ export const REMOTE_ATTESTATION_CONTEXT = 'local-gate/v1';
 // result and whole-gate attestation is invalidated and forced to rerun. It is
 // embedded in every stage record and in the final attestation; a mismatch is a
 // hard reuse invalidation.
-export const GATE_VERSION = 8;
+export const GATE_VERSION = 9;
 
 // Schema version for a single per-stage record on disk. Independent of the
 // whole-gate attestation schema so the two can evolve separately.
-export const STAGE_SCHEMA_VERSION = 1;
+export const STAGE_SCHEMA_VERSION = 2;
 
 // Two-phase execution of the local gate. Preflight gates are cheap and
 // parallel-safe across independent worktrees (they take no machine lock).
@@ -128,20 +128,26 @@ export function gateCommandString(gate) {
   return `${gate.executable} ${gate.args.join(' ')}`;
 }
 
-// A recorded stage result is reusable ONLY when it provably ran against the same
-// exact head, base, gate version, AND command. Anything else — a changed head
-// (a changed worktree produces a different head; the clean-tree guard forces
-// commit-before-gate), a moved base, a bumped gate version, a corrupt/older
-// record, or a drifted command — forces a rerun. There is no path-level
-// cleverness: head-exact matching is the provable baseline.
-export function isStageReusable(record, { head, base, gateVersion, command }) {
+// A gate with a complete input manifest may reuse a pass across commits when
+// the base, command, and content fingerprint are unchanged. Gates without a
+// manifest retain the stricter exact-head fallback. The final attestation is
+// always exact-HEAD regardless of stage reuse.
+export function isStageReusable(record, {
+  head,
+  base,
+  gateVersion,
+  command,
+  inputHash = null,
+  name,
+}) {
   return Boolean(
     record &&
       record.schemaVersion === STAGE_SCHEMA_VERSION &&
       record.gateVersion === gateVersion &&
-      record.head === head &&
       record.base === base &&
-      record.command === command,
+      record.command === command &&
+      (!name || record.name === name) &&
+      (inputHash ? record.inputHash === inputHash : record.head === head),
   );
 }
 
@@ -235,6 +241,77 @@ function command(name, executable, args, options = {}) {
   return { name, executable, args, phase: GATE_PHASE.PREFLIGHT, ...options };
 }
 
+const ROOT_TEST_PATH_PATTERN = /(?:\.test|\.test-fixtures)\.[cm]?[jt]sx?$/;
+const ROOT_BUILD_INPUTS = Object.freeze({
+  include: [
+    /^src\//,
+    /^package(?:-lock)?\.json$/,
+    /^tsconfig[^/]*\.json$/,
+    /^tsup\.config\.ts$/,
+  ],
+  exclude: [ROOT_TEST_PATH_PATTERN],
+});
+const ROOT_TYPECHECK_INPUTS = Object.freeze({
+  include: [
+    /^src\//,
+    /^tests\//,
+    /^config\//,
+    /^package(?:-lock)?\.json$/,
+    /^tsconfig[^/]*\.json$/,
+    /^scripts\/verify-typecheck-baseline\.mjs$/,
+  ],
+  exclude: [ROOT_TEST_PATH_PATTERN],
+});
+const ROOT_TEST_INPUTS = Object.freeze({
+  include: [
+    /^src\//,
+    /^tests\//,
+    /^config\//,
+    /^docker\//,
+    /^models\//,
+    /^resources\//,
+    /^scripts\//,
+    /^skills\//,
+    /^README\.md$/,
+    /^package(?:-lock)?\.json$/,
+    /^tsconfig[^/]*\.json$/,
+    /^vitest[^/]*\.[cm]?[jt]s$/,
+  ],
+});
+const SCRIPT_TEST_INPUTS = Object.freeze({
+  include: [
+    /^scripts\//,
+    /^src\//,
+    /^config\//,
+    /^docker\//,
+    /^package(?:-lock)?\.json$/,
+    /^tsconfig[^/]*\.json$/,
+    /^vitest[^/]*\.[cm]?[jt]s$/,
+  ],
+});
+const ROOT_LINT_INPUTS = Object.freeze({
+  include: [
+    /^(?:src|tests|scripts|admin-ui|companion-ui)\//,
+    /^eslint\.config\.[cm]?[jt]s$/,
+    /^package(?:-lock)?\.json$/,
+    /^tsconfig[^/]*\.json$/,
+  ],
+});
+const EVALS_INPUTS = Object.freeze({ include: EVALS_INPUT_PATTERNS });
+
+function specialistInputs(projectPath, { rootSource = true } = {}) {
+  const escapedProjectPath = projectPath.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+  return {
+    include: [
+      new RegExp(`^${escapedProjectPath}\\/`),
+      ...(rootSource ? [/^src\//] : []),
+      /^package\.json$/,
+      /^scripts\/ci\/bootstrap-worktree\.mjs$/,
+      /^scripts\/verify-knip-baseline\.mjs$/,
+    ],
+  };
+}
+
 // Split a built gate plan into its execution phases without changing the
 // membership or ordering of either subset relative to the plan. Every gate
 // carries a phase; anything not explicitly tagged heavy is preflight.
@@ -284,21 +361,43 @@ export function buildGatePlan({
 }) {
   const matches = (pattern) => paths.some((path) => pattern.test(path));
   const scope = detectChangeScope(paths);
+  const isRootTestPath = (path) => /^(?:src|scripts)\//.test(path)
+    && ROOT_TEST_PATH_PATTERN.test(path);
+  const changedRootTests = paths.filter(isRootTestPath);
   // Canary validates origin/main itself against an empty diff (base == head).
   // The whole-repo gates (lint, build, typecheck, repository-hygiene,
   // startup-owner-files, tests, ci-rules, and the semgrep ruleset self-test)
   // are meaningful independent of any diff, so canary forces them on. Every
   // diff-scoped gate is meaningless on an empty diff and is skipped EXPLICITLY
   // with a logged reason — never silently.
-  const rootRuntime = canary || scope.root_runtime;
+  const fullRoot = canary || scope.root_build_contract;
+  const rootTypecheck = fullRoot || paths.some((path) => (
+    /^src\//.test(path) && !isRootTestPath(path)
+  ) || /^(?:package-lock\.json$|tsconfig[^/]*\.json$)/.test(path));
+  const rootRuntimeBuild = !fullRoot && rootTypecheck;
+  const rootHygiene = fullRoot || scope.root_validation;
+  const rootProductTests = !fullRoot && paths.some((path) => (
+    (/^src\//.test(path) && !isRootTestPath(path))
+    || /^(?:package-lock\.json$|tsconfig[^/]*\.json$|vitest[^/]*\.[cm]?[jt]s$)/.test(path)
+  ));
+  const rootScriptTests = !fullRoot && paths.some((path) => (
+    (/^scripts\/(?!ci\/)/.test(path) && !isRootTestPath(path))
+    || /^(?:package-lock\.json$|vitest[^/]*\.[cm]?[jt]s$)/.test(path)
+  ));
+  const rootIntegrationTests = rootProductTests && matches(
+    /^(?:src\/(?:app\/(?:e2e|startup)\/|boundary\/gateway\/|core\/(?:agent\/(?:arbiter|background-work)\/|contacts\/postgres-adapter|eval\/observer-sidecar\/)|faculties\/(?:automata|introspection|memory|wiki)\/|operator\/garden\/routes\/|persistence\/|system\/config\/|test-support\/)|vitest[^/]*\.[cm]?[jt]s$|package-lock\.json$)/,
+  );
+  const fullLint = fullRoot || matches(/^eslint[^/]*\.[cm]?[jt]s$/);
+  const adminUi = canary || scope.admin_ui;
+  const companionUi = canary || scope.companion_ui;
   const satelliteHub = canary || scope.satellite_hub;
-  const evals = canary || scope.evals;
+  const evals = fullRoot || scope.evals;
   const ubsPaths = scannablePaths.filter((path) => /\.(?:[cm]?[jt]s|[jt]sx|svelte)$/.test(path));
   const workflowPaths = paths.filter((path) =>
     /^\.github\/(?:workflows\/.*\.ya?ml|actions\/.*\.ya?ml|dependabot\.yml)$/.test(path),
   );
   const plan = [
-    command('ci-rules', 'npm', ['run', 'test:ci-rules']),
+    command('ci-rules', 'npm', ['run', 'test:ci-rules'], { parallelSafe: true }),
     command(
       'change-budget',
       'npm',
@@ -312,7 +411,10 @@ export function buildGatePlan({
         head,
         ...(changeBudgetException ? ['--exception'] : []),
       ],
-      canary ? { skip: true, skipReason: 'canary: origin/main has no diff to budget' } : {},
+      {
+        parallelSafe: true,
+        ...(canary ? { skip: true, skipReason: 'canary: origin/main has no diff to budget' } : {}),
+      },
     ),
     command(
       'commit-identities',
@@ -326,44 +428,98 @@ export function buildGatePlan({
         '--head',
         head,
       ],
-      canary ? { skip: true, skipReason: 'canary: origin/main has no commit range' } : {},
+      {
+        parallelSafe: true,
+        ...(canary ? { skip: true, skipReason: 'canary: origin/main has no commit range' } : {}),
+      },
     ),
-    command('public-sanitize', 'npm', ['run', 'verify:public-sanitize']),
-    rootRuntime
-      ? command('lint', 'npm', ['run', 'lint'], { nodeHeapMb: 6144 })
+    command('public-sanitize', 'npm', ['run', 'verify:public-sanitize'], { parallelSafe: true }),
+    fullLint
+      ? command('lint', 'npm', ['run', 'lint'], {
+          nodeHeapMb: 6144,
+          contentInputs: ROOT_LINT_INPUTS,
+        })
       : command('lint-changed', 'npm', ['run', 'lint:changed', '--', '--base', base]),
-    ...(rootRuntime
-      ? [
-          command('build', 'npm', ['run', 'build'], { nodeHeapMb: ROOT_BUILD_NODE_HEAP_MB }),
-          command('typecheck', 'npm', ['run', 'verify:typecheck-baseline'], {
-            nodeHeapMb: 4096,
-          }),
-          command('repository-hygiene', 'npm', ['run', 'verify:repository-hygiene']),
-        ]
-      : []),
-    command('startup-owner-files', 'npm', ['run', 'verify:startup-owner-files']),
+    command('typecheck', 'npm', ['run', 'verify:typecheck-baseline'], {
+      nodeHeapMb: 4096,
+      skip: !rootTypecheck,
+      contentInputs: ROOT_TYPECHECK_INPUTS,
+    }),
+    command('repository-hygiene', 'npm', ['run', 'verify:repository-hygiene:structural'], {
+      skip: !rootHygiene,
+    }),
+    command(
+      fullRoot ? 'build' : 'runtime-build',
+      'npm',
+      ['run', fullRoot ? 'build' : 'build:runtime'],
+      {
+        ...(fullRoot ? { nodeHeapMb: ROOT_BUILD_NODE_HEAP_MB } : {}),
+        skip: !fullRoot && !rootRuntimeBuild,
+        contentInputs: ROOT_BUILD_INPUTS,
+      },
+    ),
+    command('startup-owner-files', 'npm', ['run', 'verify:startup-owner-files'], {
+      parallelSafe: true,
+    }),
     // Canary runs the semgrep ruleset self-test unconditionally (it validates the
     // committed rules, not a diff); otherwise it runs only when the rules change.
     command('semgrep-rules', 'npm', ['run', 'semgrep:test'], {
       skip: canary ? false : !matches(/^config\/semgrep\//),
+      contentInputs: { include: [/^config\/semgrep\//, /^package(?:-lock)?\.json$/] },
     }),
     command(
       'semgrep-diff',
       'npm',
       ['run', 'semgrep:diff', '--', base],
-      canary ? { skip: true, skipReason: 'canary: empty diff, nothing to scan' } : {},
+      {
+        parallelSafe: true,
+        ...(canary ? { skip: true, skipReason: 'canary: empty diff, nothing to scan' } : {}),
+      },
     ),
     // Semgrep is the blocking security scanner. UBS remains complementary for
     // runtime bug classes without re-flagging literals and ordinary equality
     // throughout every touched file as security-critical false positives.
     command('ubs', 'ubs', ['--no-auto-update', '--skip-js=4,7', ...ubsPaths], {
       skip: ubsPaths.length === 0,
+      parallelSafe: true,
       ...(canary ? { skipReason: 'canary: empty diff, no changed files to scan' } : {}),
     }),
     command('tests', 'npm', ['test', '--', '--maxWorkers=8', '--bail=1'], {
-      skip: !rootRuntime,
+      skip: !fullRoot,
       phase: GATE_PHASE.HEAVY,
+      contentInputs: ROOT_TEST_INPUTS,
     }),
+    command('targeted-tests', 'npm', [
+      'test',
+      '--',
+      ...changedRootTests,
+      '--maxWorkers=8',
+      '--bail=1',
+    ], {
+      skip: fullRoot || !scope.root_test_only,
+      phase: GATE_PHASE.HEAVY,
+      contentInputs: ROOT_TEST_INPUTS,
+    }),
+    command('unit-tests', 'npm', ['run', 'test:unit', '--', '--maxWorkers=8', '--bail=1'], {
+      skip: fullRoot || !rootProductTests,
+      phase: GATE_PHASE.HEAVY,
+      contentInputs: ROOT_TEST_INPUTS,
+    }),
+    command('script-tests', 'npm', ['run', 'test:scripts', '--', '--maxWorkers=8', '--bail=1'], {
+      skip: fullRoot || !rootScriptTests,
+      phase: GATE_PHASE.HEAVY,
+      contentInputs: SCRIPT_TEST_INPUTS,
+    }),
+    command(
+      'integration-tests',
+      'npm',
+      ['run', 'test:integration', '--', '--maxWorkers=8', '--bail=1'],
+      {
+        skip: fullRoot || !rootIntegrationTests,
+        phase: GATE_PHASE.HEAVY,
+        contentInputs: ROOT_TEST_INPUTS,
+      },
+    ),
   ];
 
   if (
@@ -382,8 +538,10 @@ export function buildGatePlan({
       command('supply-chain', 'npm', ['run', 'verify:supply-chain', '--', '--ref', base]),
     );
   }
-  if (matches(/^admin-ui\//)) {
-    plan.push(command('garden-ui', 'npm', ['run', 'verify:garden-ui']));
+  if (adminUi) {
+    plan.push(command('garden-ui', 'npm', ['run', 'verify:garden-ui'], {
+      contentInputs: specialistInputs('admin-ui'),
+    }));
   }
   if (
     matches(
@@ -398,14 +556,20 @@ export function buildGatePlan({
       ),
     );
   }
-  if (matches(/^companion-ui\//)) {
-    plan.push(command('companion-ui', 'npm', ['run', 'verify:companion-ui']));
+  if (companionUi) {
+    plan.push(command('companion-ui', 'npm', ['run', 'verify:companion-ui'], {
+      contentInputs: specialistInputs('companion-ui'),
+    }));
   }
   if (satelliteHub) {
-    plan.push(command('satellite-hub', 'npm', ['run', 'verify:satellite-hub']));
+    plan.push(command('satellite-hub', 'npm', ['run', 'verify:satellite-hub'], {
+      contentInputs: specialistInputs('apps/satellite-hub', { rootSource: false }),
+    }));
   }
   if (evals) {
-    plan.push(command('evals', 'npm', ['run', 'verify:evals']));
+    plan.push(command('evals', 'npm', ['run', 'verify:evals'], {
+      contentInputs: EVALS_INPUTS,
+    }));
   }
   if (matches(/^\.github\/(?:workflows\/|actions\/)|^\.github\/dependabot\.yml$/)) {
     plan.push(

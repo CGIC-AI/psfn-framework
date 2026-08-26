@@ -33,7 +33,20 @@ import process from 'node:process';
 import { isRecord } from '../src/shared/utils/types.ts';
 
 const REPOSITORY_ROOT = process.cwd();
-const DEFAULT_BASELINE_PATH = resolve(REPOSITORY_ROOT, 'config/knip-baseline.json');
+const PROJECTS = Object.freeze({
+  root: {
+    baseline: 'config/knip-baseline.json',
+    directory: '.',
+  },
+  'admin-ui': {
+    baseline: 'config/knip-admin-ui-baseline.json',
+    directory: 'admin-ui',
+  },
+  'companion-ui': {
+    baseline: 'config/knip-companion-ui-baseline.json',
+    directory: 'companion-ui',
+  },
+});
 const KNIP_VERSION = '6.23.0';
 const KNIP_PACKAGE = `knip@${KNIP_VERSION}`;
 const KNIP_ERROR_PATTERN = /^\s*ERROR:/mu;
@@ -58,18 +71,30 @@ function printUsage() {
   console.log(`Runs ${KNIP_PACKAGE} and rejects dead-code findings beyond the baseline.`);
   console.log('');
   console.log('Options:');
+  console.log('  --project <name>   Select root, admin-ui, or companion-ui (default: root)');
   console.log('  --baseline <path>  Override the baseline JSON path');
   console.log('  --update           Rewrite the baseline, but only when findings shrink');
   console.log('  -h, --help         Show this help');
 }
 
 function parseArgs(argv) {
-  let baselinePath = DEFAULT_BASELINE_PATH;
+  let baselinePath;
+  let project = 'root';
   let update = false;
 
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
     if (argument === '--') {
+      continue;
+    }
+    if (argument === '--project') {
+      const value = argv[index + 1];
+      if (!value) throw new Error('Missing value for --project');
+      if (!Object.hasOwn(PROJECTS, value)) {
+        throw new Error(`Unknown Knip project ${value}; expected ${Object.keys(PROJECTS).join(', ')}`);
+      }
+      project = value;
+      index += 1;
       continue;
     }
     if (argument === '--baseline') {
@@ -92,7 +117,13 @@ function parseArgs(argv) {
     throw new Error(`Unknown argument: ${argument}`);
   }
 
-  return { baselinePath, update };
+  const projectConfig = PROJECTS[project];
+  return {
+    baselinePath: baselinePath ?? resolve(REPOSITORY_ROOT, projectConfig.baseline),
+    project,
+    projectRoot: resolve(REPOSITORY_ROOT, projectConfig.directory),
+    update,
+  };
 }
 
 function normalizePath(pathValue) {
@@ -100,12 +131,12 @@ function normalizePath(pathValue) {
   return relative(REPOSITORY_ROOT, absolutePath).replaceAll('\\', '/');
 }
 
-function runKnip() {
+function runKnip(projectRoot) {
   const result = spawnSync(
     'npx',
     ['--yes', KNIP_PACKAGE, '--reporter', 'json'],
     {
-      cwd: REPOSITORY_ROOT,
+      cwd: projectRoot,
       encoding: 'utf8',
       maxBuffer: 64 * 1024 * 1024,
     },
@@ -310,7 +341,7 @@ async function main() {
     assertMatchingKnipVersion(existingBaseline);
   }
 
-  const findings = aggregateReport(runKnip());
+  const findings = aggregateReport(runKnip(options.projectRoot));
 
   if (options.update) {
     if (existingBaseline) {
@@ -326,7 +357,7 @@ async function main() {
     const baseline = buildBaseline(findings);
     writeBaseline(options.baselinePath, baseline);
     console.log(
-      `[verify-knip-baseline] wrote ${normalizePath(options.baselinePath)}: `
+      `[verify-knip-baseline:${options.project}] wrote ${normalizePath(options.baselinePath)}: `
       + `${baseline.files.length} unused file(s) and ${totalFindings(baseline.counts)} counted finding(s)`,
     );
     return;
@@ -344,7 +375,7 @@ async function main() {
   const currentTotal = totalFindings(findings.counts);
   const baselineTotal = totalFindings(baseline.counts);
   console.log(
-    `[verify-knip-baseline] PASS: ${findings.files.length} unused file(s) and `
+    `[verify-knip-baseline:${options.project}] PASS: ${findings.files.length} unused file(s) and `
     + `${currentTotal} counted finding(s); baseline allows `
     + `${baseline.files.length} file(s) and ${baselineTotal} finding(s).`,
   );
@@ -352,7 +383,7 @@ async function main() {
   const removedFiles = baseline.files.filter(file => !findings.files.includes(file));
   if (removedFiles.length > 0 || currentTotal < baselineTotal) {
     console.log(
-      '[verify-knip-baseline] Nice: baseline findings were removed. '
+      `[verify-knip-baseline:${options.project}] Nice: baseline findings were removed. `
       + 'After reviewing the removals, run node scripts/verify-knip-baseline.mjs -- --update.',
     );
   }

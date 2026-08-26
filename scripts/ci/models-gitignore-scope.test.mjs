@@ -19,6 +19,7 @@ test('ignores only the root ML-model directory', () => {
 });
 
 test('does not need a Knip entry workaround for the admin models route', () => {
-  const knip = JSON.parse(readFileSync('knip.json', 'utf8'));
-  assert.deepEqual(knip.workspaces?.['admin-ui']?.entry, ['src/hooks.ts']);
+  const knip = JSON.parse(readFileSync('admin-ui/knip.json', 'utf8'));
+  assert.deepEqual(knip.entry, ['src/hooks.ts', 'src/lib/index.ts']);
+  assert.ok(!knip.entry.includes('src/routes/models/+page.svelte'));
 });

@@ -4,6 +4,20 @@ import { execFileSync } from 'node:child_process';
 import { appendFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
+// Complete root file graph reached by the fast eval TypeScript build and test
+// entries. The scope contract test derives this graph and fails if a new root
+// import is introduced without updating this manifest.
+export const EVALS_INPUT_PATTERNS = Object.freeze([
+  /^tools\/evals\//,
+  /^src\/core\/emotion\/(?:calibration|state)\.ts$/,
+  /^src\/shared\/contracts\/emotion-contracts\.ts$/,
+  /^src\/shared\/utils\/(?:load-dotenv|numeric|types)\.ts$/,
+]);
+
+export function affectsEvals(paths) {
+  return paths.some((path) => EVALS_INPUT_PATTERNS.some((pattern) => pattern.test(path)));
+}
+
 export function detectChangeScope(paths) {
   const matches = (pattern) => paths.some((path) => pattern.test(path));
   const adminUi = matches(/^admin-ui\//);
@@ -11,9 +25,19 @@ export function detectChangeScope(paths) {
   const satelliteHub = matches(
     /^(?:apps\/satellite-hub\/|docker\/satellite-hub\/|companion-ui\/src\/lib\/protocol\/)/,
   );
-  const rootRuntime = matches(
-    /^(?:src\/|scripts\/(?!ci\/)|package-lock\.json$|tsconfig[^/]*\.json$|vitest[^/]*\.[cm]?[jt]s$|eslint[^/]*\.[cm]?[jt]s$)/,
+  const rootSourcePaths = paths.filter((path) => /^src\//.test(path));
+  const rootScriptPaths = paths.filter((path) => /^scripts\/(?!ci\/)/.test(path));
+  const isRootTestPath = (path) => /(?:\.test|\.test-fixtures)\.[cm]?[jt]sx?$/.test(path);
+  const rootProduct = rootSourcePaths.some((path) => !isRootTestPath(path));
+  const rootScriptProduct = rootScriptPaths.some((path) => !isRootTestPath(path));
+  const rootToolchain = matches(
+    /^(?:package-lock\.json$|tsconfig[^/]*\.json$|vitest[^/]*\.[cm]?[jt]s$|eslint[^/]*\.[cm]?[jt]s$)/,
   );
+  const rootBuildContract = matches(/^(?:tsup\.config\.ts|tsconfig\.tsup\.json)$/);
+  const rootRuntime = rootProduct || rootScriptProduct || rootToolchain;
+  const rootTestOnly = [...rootSourcePaths, ...rootScriptPaths].some(isRootTestPath) && !rootRuntime;
+  const rootValidation = rootRuntime || rootTestOnly || rootBuildContract;
+  const evals = affectsEvals(paths);
   return {
     settings: matches(
       /^(?:\.env\.example|src\/shared\/contracts\/runtime\.ts|src\/system\/config\/|src\/system\/settings(?:\.ts|\/)|src\/operator\/garden\/.*settings|admin-ui\/src\/.*settings|scripts\/(?:verify-settings-contract|hardcoded-settings))/,
@@ -24,10 +48,13 @@ export function detectChangeScope(paths) {
     admin_ui: adminUi,
     companion_ui: companionUi,
     satellite_hub: satelliteHub,
-    evals: matches(/^tools\/evals\//) || rootRuntime,
+    evals,
+    root_build_contract: rootBuildContract,
     root_runtime: rootRuntime,
+    root_test_only: rootTestOnly,
+    root_validation: rootValidation,
     clean_environment:
-      rootRuntime ||
+      rootValidation ||
       adminUi ||
       companionUi ||
       satelliteHub ||

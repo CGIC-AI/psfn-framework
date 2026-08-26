@@ -22,12 +22,13 @@
 
 import {
   existsSync,
+  mkdirSync,
   readFileSync,
   renameSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import { relative, resolve } from 'node:path';
+import { dirname, relative, resolve } from 'node:path';
 import process from 'node:process';
 import { Worker } from 'node:worker_threads';
 
@@ -35,6 +36,10 @@ const REPOSITORY_ROOT = process.cwd();
 const DEFAULT_BASELINE_PATH = resolve(REPOSITORY_ROOT, 'config/typecheck-baseline.json');
 const DEFAULT_PROJECT_PATH = resolve(REPOSITORY_ROOT, 'tsconfig.json');
 const TSC_PATH = resolve(REPOSITORY_ROOT, 'node_modules/typescript/bin/tsc');
+const BUILD_INFO_PATH = resolve(
+  REPOSITORY_ROOT,
+  'node_modules/.cache/psfn/typecheck.tsbuildinfo',
+);
 const FILE_DIAGNOSTIC_PATTERN = /^(.+?)\((\d+),(\d+)\): error (TS\d+):/gmu;
 const GLOBAL_DIAGNOSTIC_PATTERN = /^error (TS\d+):/gmu;
 const TYPESCRIPT_CODE_PATTERN = /^TS\d+$/u;
@@ -137,9 +142,19 @@ function readTypeScriptVersion() {
 }
 
 function runTypeScriptCli(projectPath) {
+  mkdirSync(dirname(BUILD_INFO_PATH), { recursive: true });
   return new Promise((resolvePromise, reject) => {
     const worker = new Worker(TSC_PATH, {
-      argv: ['--noEmit', '-p', projectPath, '--pretty', 'false'],
+      argv: [
+        '--noEmit',
+        '-p',
+        projectPath,
+        '--pretty',
+        'false',
+        '--incremental',
+        '--tsBuildInfoFile',
+        BUILD_INFO_PATH,
+      ],
       stderr: true,
       stdout: true,
     });

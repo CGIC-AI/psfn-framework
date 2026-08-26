@@ -10,7 +10,7 @@ function isRootSourceOrScript(path) {
 }
 
 export function isRunnableRootTestPath(path) {
-  return isRootSourceOrScript(path) && ROOT_RUNNABLE_TEST_PATTERN.test(path);
+  return /^(?:src\/|scripts\/(?!ci\/))/.test(path) && ROOT_RUNNABLE_TEST_PATTERN.test(path);
 }
 
 export function isRootTestFixturePath(path) {
@@ -18,7 +18,8 @@ export function isRootTestFixturePath(path) {
 }
 
 export function isRootTestPath(path) {
-  return isRunnableRootTestPath(path) || isRootTestFixturePath(path);
+  return isRootSourceOrScript(path)
+    && (ROOT_RUNNABLE_TEST_PATTERN.test(path) || ROOT_TEST_FIXTURE_PATTERN.test(path));
 }
 
 // Complete root file graph reached by the fast eval TypeScript build and test

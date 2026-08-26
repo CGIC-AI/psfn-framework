@@ -337,6 +337,12 @@ test('delivery and product gates validate only their owned change surface', () =
     assert.ok(!scriptTestNames.includes(unrelated), `script test-only change must not run ${unrelated}`);
   }
 
+  const ciRuleTestNames = buildGatePlan({ paths: ['scripts/ci/example.test.mjs'] })
+    .filter(({ skip }) => !skip)
+    .map(({ name }) => name);
+  assert.ok(ciRuleTestNames.includes('ci-rules'));
+  assert.ok(!ciRuleTestNames.includes('targeted-tests'));
+
   const scriptSourceNames = buildGatePlan({ paths: ['scripts/onboarding/flow.ts'] })
     .filter(({ skip }) => !skip)
     .map(({ name }) => name);

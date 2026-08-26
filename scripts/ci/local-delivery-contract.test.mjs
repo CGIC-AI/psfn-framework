@@ -379,9 +379,15 @@ test('delivery and product gates validate only their owned change surface', () =
     'typecheck',
     'repository-hygiene',
     'startup-owner-files',
-    'unit-tests',
+    'supply-chain',
   ]) {
     assert.ok(lockfileNames.includes(rootGate), `root lockfile must run ${rootGate}`);
+  }
+  for (const unrelatedTest of ['unit-tests', 'script-tests', 'integration-tests']) {
+    assert.ok(
+      !lockfileNames.includes(unrelatedTest),
+      `root lockfile alone must not run ${unrelatedTest}`,
+    );
   }
 
   const plan = buildGatePlan({
@@ -720,7 +726,7 @@ test('gate plan splits the heavy product suite from parallel-safe preflight', ()
   // Test processes are heavy; everything else is preflight.
   assert.deepEqual(
     heavy.filter(({ skip }) => !skip).map(({ name }) => name),
-    ['unit-tests', 'script-tests', 'integration-tests'],
+    ['unit-tests', 'integration-tests'],
   );
   assert.equal(plan.find(({ name }) => name === 'unit-tests').phase, GATE_PHASE.HEAVY);
   assert.ok(!preflight.some(({ name }) => name === 'unit-tests'));

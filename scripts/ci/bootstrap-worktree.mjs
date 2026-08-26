@@ -31,7 +31,7 @@ export function lockfileSha256(repositoryRoot) {
 }
 
 export function dependencyMarkerPath(repositoryRoot) {
-  return join(repositoryRoot, 'node_modules', '.psfn-lock-sha256');
+  return join(repositoryRoot, 'node_modules', '.worktree-lock-sha256');
 }
 
 function hasIsolatedDependencies(repositoryRoot) {

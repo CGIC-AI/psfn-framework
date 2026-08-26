@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 
 import { spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
 import {
   existsSync,
   lstatSync,
@@ -11,15 +10,12 @@ import {
 } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-
-const INSTALL_ARGS = [
-  'ci',
-  '--offline',
-  '--ignore-scripts',
-  '--no-audit',
-  '--no-fund',
-  '--loglevel=error',
-];
+import {
+  hashLockfile,
+  inspectPrewarmAttestation,
+  offlineInstallArgs,
+  prewarmWorktree,
+} from '../prewarm-worktree.mjs';
 
 function requiredNodeVersion(repositoryRoot) {
   const versionPath = join(repositoryRoot, '.node-version');
@@ -31,9 +27,7 @@ function requiredNodeVersion(repositoryRoot) {
 }
 
 export function lockfileSha256(repositoryRoot) {
-  return createHash('sha256')
-    .update(readFileSync(join(repositoryRoot, 'package-lock.json')))
-    .digest('hex');
+  return hashLockfile(readFileSync(join(repositoryRoot, 'package-lock.json')));
 }
 
 export function dependencyMarkerPath(repositoryRoot) {
@@ -64,8 +58,10 @@ function defaultRunNpm(args, { repositoryRoot }) {
 }
 
 export function bootstrapWorktree({
+  cacheDir,
   repositoryRoot = process.cwd(),
   nodeVersion = process.version,
+  prewarm = prewarmWorktree,
   runNpm = defaultRunNpm,
   logger = console,
 } = {}) {
@@ -77,7 +73,25 @@ export function bootstrapWorktree({
     );
   }
 
-  const expectedMarker = `${lockfileSha256(root)}\n`;
+  let cacheState = inspectPrewarmAttestation({ cacheDir, repositoryRoot: root });
+  if (!cacheState.attestation) {
+    logger.log('[worktree] Preparing and attesting the npm cache for this lockfile.');
+    prewarm({
+      cacheDir: cacheState.cacheDir,
+      repositoryRoot: root,
+    });
+    cacheState = inspectPrewarmAttestation({
+      cacheDir: cacheState.cacheDir,
+      repositoryRoot: root,
+    });
+  }
+  if (!cacheState.attestation) {
+    throw new Error(
+      `Automatic cache preparation did not create an attestation for lockfile SHA-256 `
+      + `${cacheState.lockfileHash} at ${cacheState.markerPath}.`,
+    );
+  }
+  const expectedMarker = `${cacheState.lockfileHash}\n`;
   const markerPath = dependencyMarkerPath(root);
   if (hasIsolatedDependencies(root)
     && existsSync(markerPath)
@@ -86,7 +100,7 @@ export function bootstrapWorktree({
   }
 
   logger.log('[worktree] Installing isolated dependencies from the attested offline npm cache.');
-  runNpm([...INSTALL_ARGS], { repositoryRoot: root });
+  runNpm([...offlineInstallArgs(cacheState.cacheDir), '--loglevel=error'], { repositoryRoot: root });
   if (!hasIsolatedDependencies(root)) {
     throw new Error('npm ci completed without creating node_modules in the worktree.');
   }

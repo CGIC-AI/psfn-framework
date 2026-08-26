@@ -30,6 +30,7 @@
 import { createComponentLogger } from '../../shared/logger.js';
 import { resolveActiveTimezone } from '../../shared/time/active-timezone.js';
 import { CHANNEL_TYPES, type ChannelType } from '../../shared/contracts/runtime.js';
+import { supportsLiveWakeup } from '../../shared/contracts/channel-types.js';
 import type { TemporalWakeupConfig } from '../../system/config/scheduler-config.js';
 import { classifyChannelDisclosure } from '../../system/trust/policy.js';
 import {
@@ -633,19 +634,6 @@ export function resolveMorningWakeSnapshot(input: {
   return buildWakeWindowSnapshot({ morning, partnerTimestampsMs, nowMs, timeZone });
 }
 
-// Channel types that are never a live conversational partner surface for
-// autonomous wake fan-out: the local dev terminal, the internal subagent lane,
-// the inter-companion lane, and the claimed Multica work lane. Group chats/DMs
-// (discord, telegram, api),
-// satellites (voice/PWA, which infer to an undefined channelType), and
-// companion-ui remain eligible.
-const NON_LIVE_WAKEUP_CHANNEL_TYPES: ReadonlySet<string> = new Set([
-  'terminal',
-  'subagent',
-  'companion',
-  'multica',
-]);
-
 /**
  * Fail-closed gate for wake fan-out: a channel receives an autonomous wake note
  * only when it is an actively-used live conversational surface — an active group
@@ -660,9 +648,7 @@ function isLiveWakeupFanoutChannel(channel: StartupSessionMetadata): boolean {
   if (isTestingSessionId(sessionId)) return false;
   if (isInternalSessionId(sessionId)) return false;
   if (classifyChannelDisclosure(sessionId).channelPrivacy === 'public') return false;
-  if (channel.channelType !== undefined && NON_LIVE_WAKEUP_CHANNEL_TYPES.has(channel.channelType)) {
-    return false;
-  }
+  if (!supportsLiveWakeup(channel.channelType)) return false;
   return true;
 }
 

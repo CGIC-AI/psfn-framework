@@ -14,11 +14,13 @@ function createInput(): {
   input: WireGatewayChannelMessagesInput;
   discordHandler: ((message: any) => Promise<any>) | undefined;
   telegramHandler: ((message: any) => Promise<any>) | undefined;
-  multicaHandler: ((message: any) => Promise<any>) | undefined;
+  multicaHandler: ((message: any, options?: any) => Promise<any>) | undefined;
+  multicaAlertHandler: ((alert: any) => Promise<void>) | undefined;
 } {
   let discordHandler: ((message: any) => Promise<any>) | undefined;
   let telegramHandler: ((message: any) => Promise<any>) | undefined;
-  let multicaHandler: ((message: any) => Promise<any>) | undefined;
+  let multicaHandler: ((message: any, options?: any) => Promise<any>) | undefined;
+  let multicaAlertHandler: ((alert: any) => Promise<void>) | undefined;
 
   return {
     input: {
@@ -34,7 +36,10 @@ function createInput(): {
       }),
       multica: fromAny({
         onMessage: (handler) => {
-          multicaHandler = handler as (message: any) => Promise<any>;
+          multicaHandler = handler as (message: any, options?: any) => Promise<any>;
+        },
+        onOperatorAlert: (handler) => {
+          multicaAlertHandler = handler as (alert: any) => Promise<void>;
         },
       }),
       gateway: fromAny({
@@ -46,6 +51,7 @@ function createInput(): {
           durationMs: 42,
           attachments: [{ kind: 'audio' }],
         })),
+        notifyOperator: vi.fn(async () => ({ deliveries: [{ sink: 'ntfy', status: 'sent' }] })),
       }),
       serializeMessage: (message) => ({ ...message, serialized: true }),
     },
@@ -57,6 +63,9 @@ function createInput(): {
     },
     get multicaHandler() {
       return multicaHandler;
+    },
+    get multicaAlertHandler() {
+      return multicaAlertHandler;
     },
   };
 }
@@ -141,16 +150,39 @@ describe('wireGatewayChannelMessages', () => {
 
     wireGatewayChannelMessages(setup.input);
 
+    const controller = new AbortController();
     await setup.multicaHandler?.({
       channelId: 'multica:issue:42',
       channelType: 'multica',
       content: 'manage the squad',
+    }, { signal: controller.signal });
+
+    expect(setup.input.gateway.requestAgentVoiceStream).toHaveBeenCalledWith(
+      {
+        channelId: 'multica:issue:42',
+        channelType: 'multica',
+        content: 'manage the squad',
+      },
+      { signal: controller.signal },
+    );
+  });
+
+  it('routes terminal Multica failures to the operator alert dispatcher', async () => {
+    const setup = createInput();
+    wireGatewayChannelMessages(setup.input);
+
+    await setup.multicaAlertHandler?.({
+      title: 'Multica channel stopped',
+      message: 'Heartbeat failed after 3 attempts',
+      idempotencyKey: 'multica-channel:heartbeat',
     });
 
-    expect(setup.input.gateway.requestAgentVoiceStream).toHaveBeenCalledWith({
-      channelId: 'multica:issue:42',
-      channelType: 'multica',
-      content: 'manage the squad',
+    expect(setup.input.gateway.notifyOperator).toHaveBeenCalledWith({
+      sender: { kind: 'system', provenance: 'system.channels.multica_failure' },
+      title: 'Multica channel stopped',
+      message: 'Heartbeat failed after 3 attempts',
+      priority: 5,
+      idempotencyKey: 'multica-channel:heartbeat',
     });
   });
 });

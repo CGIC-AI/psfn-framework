@@ -2487,6 +2487,12 @@
     },
     {
       "file": "src/channels/multica/adapter.ts",
+      "name": "MULTICA_MAX_OPERATION_ATTEMPTS",
+      "value": "3",
+      "note": "Code-owned safety ceiling required by the Multica adapter failure contract; it bounds auth, schema, heartbeat, settlement, deregistration, and alert delivery instead of creating an operator-tunable retry loop."
+    },
+    {
+      "file": "src/channels/multica/adapter.ts",
       "name": "MulticaAdapter.constructor.this.outbound.textChunkLimit",
       "value": "100_000",
       "form": "object-member",

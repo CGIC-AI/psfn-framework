@@ -16,14 +16,22 @@ The authority split is deliberate:
 ## Runtime flow
 
 1. The PSFN gateway registers one Multica daemon runtime with provider `psfn`.
-2. It heartbeats that runtime and serially claims assigned work.
+2. It recovers tasks orphaned by an interrupted prior gateway process, then
+   heartbeats that runtime and serially claims assigned work.
 3. For issue work, it uses the task-scoped credential only to fetch the current
    issue context. That credential is never inserted into model-visible content.
-4. It emits a deterministic `channelType: "multica"` message and routes the turn
-   to the companion pinned by `companionId`.
-5. It completes the Multica task with the companion response, or reports the
-   turn failure to Multica.
-6. Gateway shutdown aborts polling and deregisters the runtime.
+4. It rejects tasks or issues outside the configured workspace, screens the
+   prompt through CogSec intake, and emits a deterministic
+   `channelType: "multica"` message tagged as a system-origin contact.
+5. It routes the turn to the companion pinned by `companionId`, preserving
+   shutdown cancellation through the gateway request path.
+6. It completes the Multica task with the companion response, or reports the
+   turn failure to Multica. Idempotent settlement calls are attempted at most
+   three times.
+7. Three consecutive polling or heartbeat failures stop and deregister the
+   runtime and send a system operator alert; the adapter does not retry forever.
+8. Gateway shutdown aborts polling and the in-flight companion turn before
+   deregistering the runtime.
 
 ## Configuration
 
@@ -47,8 +55,9 @@ the bearer token itself remains in the gateway environment.
 }
 ```
 
-`baseUrl` must be an HTTP(S) origin without credentials, a path, query, or
-fragment. `pollIntervalMs` must be between 250 and 60000. Enabled configuration
+`baseUrl` must be an HTTPS origin without credentials, a path, query, or
+fragment. Plain HTTP is accepted only for `localhost`, `127.0.0.1`, or `::1`.
+`pollIntervalMs` must be between 250 and 60000. Enabled configuration
 requires all routing fields and a structurally valid environment reference.
 Gateway startup then fails closed if the referenced token is absent.
 

@@ -41,6 +41,7 @@ import {
   parseTestingHarnessGardenAdminConfig,
   type TestingHarnessGardenAdminConfig,
 } from './testing-harness-garden-config.js';
+import { normalizeMulticaOrigin } from '../multica/origin.js';
 
 export {
   TESTING_HARNESS_GARDEN_ADMIN_ACTIONS,
@@ -867,21 +868,7 @@ const MULTICA_ALLOWED_KEYS = new Set([
 function parseMulticaBaseUrl(value: unknown): string | undefined {
   const configured = parseConfiguredString(value, 'channels.json.multica.baseUrl');
   if (!configured) return undefined;
-  let parsed: URL;
-  try {
-    parsed = new URL(configured);
-  } catch {
-    throw new Error('channels.json.multica.baseUrl must be an absolute HTTP(S) URL');
-  }
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    throw new Error('channels.json.multica.baseUrl must be an absolute HTTP(S) URL');
-  }
-  if (parsed.username || parsed.password || parsed.pathname !== '/' || parsed.search || parsed.hash) {
-    throw new Error(
-      'channels.json.multica.baseUrl must not contain credentials, a path, query, or fragment',
-    );
-  }
-  return parsed.origin;
+  return normalizeMulticaOrigin(configured, 'channels.json.multica.baseUrl');
 }
 
 function parseMulticaChannelSection(

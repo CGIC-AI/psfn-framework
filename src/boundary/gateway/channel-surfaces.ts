@@ -339,6 +339,13 @@ export async function loadGatewayChannelSurfaces(
     createMulticaChannelAdapterFactoryEntry({
       config: input.bootstrap.channelsConfig.multica,
       log: input.log,
+      intakeScreening: input.bootstrap.channelsConfig.multica.enabled
+        ? resolveChannelIntakeScreening(
+          intakeScreeningRouting,
+          input.bootstrap.channelsConfig.multica.companionId,
+          'multica',
+        )
+        : null,
     }),
   ]);
 
@@ -381,8 +388,8 @@ export interface WireGatewayChannelMessagesInput {
    */
   discordAccounts?: Array<{ accountId: string; adapter: Pick<DiscordAdapter, 'onMessage'> }>;
   telegram?: Pick<TelegramAdapter, 'onMessage'>;
-  multica?: Pick<MulticaAdapter, 'onMessage'>;
-  gateway: Pick<GatewayServer, 'notifyChannelMessage' | 'requestAgentVoiceStream'>;
+  multica?: Pick<MulticaAdapter, 'onMessage' | 'onOperatorAlert'>;
+  gateway: Pick<GatewayServer, 'notifyChannelMessage' | 'requestAgentVoiceStream' | 'notifyOperator'>;
   serializeMessage: (message: SubstrateMessage) => Record<string, unknown>;
   /**
    * Companion-initiated block gate (htm9.16). When present, inbound from a
@@ -468,7 +475,7 @@ export function wireGatewayChannelMessages(input: WireGatewayChannelMessagesInpu
     if (typeof adapter.onMessage !== 'function') {
       throw new Error(`${label} adapter is missing onMessage bootstrap hook`);
     }
-    adapter.onMessage(async (message) => {
+    adapter.onMessage(async (message, options) => {
       // htm9.16 backstop: a blocked telegram DM is dropped before it reaches the
       // agent. Group observe-downgrade is not modeled on the telegram
       // request/response path; blocked group messages fall through unchanged.
@@ -479,7 +486,9 @@ export function wireGatewayChannelMessages(input: WireGatewayChannelMessagesInpu
           return notificationAck(message.channelId, 'blocked_by_policy');
         }
       }
-      const result = await input.gateway.requestAgentVoiceStream(message);
+      const result = options?.signal
+        ? await input.gateway.requestAgentVoiceStream(message, { signal: options.signal })
+        : await input.gateway.requestAgentVoiceStream(message);
       return {
         content: result.content,
         channelId: result.channelId,
@@ -495,7 +504,18 @@ export function wireGatewayChannelMessages(input: WireGatewayChannelMessagesInpu
   };
 
   if (input.telegram) routeRequestResponseChannel(input.telegram, 'Telegram');
-  if (input.multica) routeRequestResponseChannel(input.multica, 'Multica');
+  if (input.multica) {
+    input.multica.onOperatorAlert(async alert => {
+      await input.gateway.notifyOperator({
+        sender: { kind: 'system', provenance: 'system.channels.multica_failure' },
+        title: alert.title,
+        message: alert.message,
+        priority: 5,
+        idempotencyKey: alert.idempotencyKey,
+      });
+    });
+    routeRequestResponseChannel(input.multica, 'Multica');
+  }
 }
 
 export async function startGatewayChannelSurfaces(

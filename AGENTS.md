@@ -87,6 +87,10 @@ This repository opts into the **team-maintainer** profile.
   broad gates or review passed.
 - Run `npm run hooks:install` once in every new checkout or worktree. Publication
   fails closed unless the tracked pre-push hook is active.
+- The tracked post-checkout hook automatically installs lockfile-exact,
+  worktree-local dependencies from the attested offline npm cache when a fresh
+  worktree is created or its lockfile changes. Never link or share mutable
+  `node_modules` directories between worktrees.
 - Before publication, run `npm run gate:pre-pr` once on the exact final committed
   head and publish through `npm run pr:publish`.
 - Never manually force-push or rewrite a shared branch. Rebase before publication

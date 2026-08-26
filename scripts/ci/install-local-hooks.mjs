@@ -28,9 +28,11 @@ export function normalizeAliasValue(value) {
 export function installLocalHooks({ cwd = process.cwd() } = {}) {
   const repositoryRoot = run('git', ['rev-parse', '--show-toplevel'], { cwd });
   run(process.execPath, ['scripts/ci/check-local-tools.mjs'], { cwd: repositoryRoot });
-  const trackedHook = resolve(repositoryRoot, '.githooks/pre-push');
-  if (!existsSync(trackedHook) || (statSync(trackedHook).mode & 0o111) === 0) {
-    throw new Error('.githooks/pre-push is missing or is not executable');
+  for (const hookName of ['pre-push', 'post-checkout']) {
+    const trackedHook = resolve(repositoryRoot, `.githooks/${hookName}`);
+    if (!existsSync(trackedHook) || (statSync(trackedHook).mode & 0o111) === 0) {
+      throw new Error(`.githooks/${hookName} is missing or is not executable`);
+    }
   }
 
   const hooksPath = run('git', ['config', '--get', '--default', '', 'core.hooksPath'], {
@@ -67,7 +69,7 @@ export function installLocalHooks({ cwd = process.cwd() } = {}) {
     });
   }
 
-  console.log('Installed repo pre-push hook and gh gated-pr alias.');
+  console.log('Installed repo pre-push/post-checkout hooks and gh gated-pr alias.');
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {

@@ -31,7 +31,6 @@ import type { FleetAuthAccountRosterEntry } from '../../../system/config/fleet-a
 import { requireFleetAuthInteger as safeInteger } from '../row-guards.js';
 import {
   createLoginSession,
-  createLocalOperatorSession,
   type SessionInsertInput,
 } from './login-session-creation.js';
 import { fleetAuthPersistenceBoundaryValues } from './boundary-values-port.js';
@@ -214,25 +213,6 @@ export class PostgresFleetAuthBrokerStore implements FleetAuthBrokerStore {
     input: Parameters<FleetAuthBrokerStore['createLoginSession']>[0],
   ): Promise<FleetAuthSessionRecord> {
     return await createLoginSession({
-      pool: this.pool,
-      codec: this.codec,
-      resolvePrincipal: (client, providerSubjectId, providerMetadata, authorityGeneration) => (
-        this.resolveOrCreatePendingPrincipal(
-          client,
-          providerSubjectId,
-          providerMetadata,
-          authorityGeneration,
-        )
-      ),
-      insertSession: (client, sessionInput) => this.insertSession(client, sessionInput),
-      accountRoster: this.accountRoster,
-    }, input);
-  }
-
-  async createLocalOperatorSession(
-    input: Parameters<FleetAuthBrokerStore['createLocalOperatorSession']>[0],
-  ): Promise<FleetAuthSessionRecord> {
-    return await createLocalOperatorSession({
       pool: this.pool,
       codec: this.codec,
       resolvePrincipal: (client, providerSubjectId, providerMetadata, authorityGeneration) => (

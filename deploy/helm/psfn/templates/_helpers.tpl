@@ -740,7 +740,7 @@ uppercase env name plus exactly one of a Secret reference or a plain value.
       name: {{ include "psfn.appSecretName" . }}
       key: {{ .Values.secrets.keys.testingHarnessApiKey }}
       optional: true
-{{- if or (not .Values.fleetAuth.enabled) .Values.fleetAuth.localOperatorLogin.enabled }}
+{{- if not .Values.fleetAuth.enabled }}
 - name: ADMIN_TOKEN
   valueFrom:
     secretKeyRef:

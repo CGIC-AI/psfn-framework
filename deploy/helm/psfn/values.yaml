@@ -606,15 +606,6 @@ certificates:
 # this value enables the matching process/deployment wiring.
 fleetAuth:
   enabled: false
-  # Optional loopback-only operator login for a local deployment. The Gateway
-  # exchanges the existing ADMIN_TOKEN for a bounded, opaque fleet session and
-  # still signs every Garden request through the ordinary fleet capability
-  # path. This never exposes Garden directly and is disabled unless explicitly
-  # configured with exact loopback browser origins.
-  localOperatorLogin:
-    enabled: false
-    allowedOrigins: []
-    # - http://127.0.0.1:10053
   # Independent Garden-side key for the synthetic testing-harness provider.
   # Keep false in production values; enabling it still requires a complete
   # channels.json api.testingHarness.gardenAdmin policy and the dedicated

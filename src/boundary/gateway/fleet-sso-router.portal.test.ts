@@ -25,13 +25,7 @@ function listen(server: Server): Promise<number> {
 function request(
   port: number,
   path: string,
-  options: {
-    method?: string;
-    session?: string;
-    localSession?: string;
-    origin?: string;
-    accept?: string;
-  } = {},
+  options: { method?: string; session?: string; origin?: string; accept?: string } = {},
 ): Promise<{ status: number; headers: IncomingHttpHeaders; body: string }> {
   return new Promise((resolve, reject) => {
     const outgoing = httpRequest({
@@ -46,9 +40,6 @@ function request(
         'x-forwarded-port': '443',
         'x-forwarded-for': '198.51.100.9',
         ...(options.session ? { cookie: `__Host-psfn_session=${options.session}` } : {}),
-        ...(options.localSession
-          ? { cookie: `psfn_local_operator_session=${options.localSession}` }
-          : {}),
         ...(options.origin ? { origin: options.origin } : {}),
         ...(options.accept ? { accept: options.accept } : {}),
       },
@@ -77,7 +68,6 @@ describe('unified-origin fleet portal routing', () => {
 
   async function start(options: {
     breakGlassLogin?: { loginPath: string };
-    localOperatorLogin?: { loginPath: string; allowedOrigins: readonly string[] };
   } = {}): Promise<{
     port: number;
     resolveProjection: ReturnType<typeof vi.fn>;
@@ -289,51 +279,6 @@ describe('unified-origin fleet portal routing', () => {
     await expect(start({
       breakGlassLogin: { loginPath: 'https://attacker.example.test/login' },
     })).rejects.toThrow('requires a strict same-origin path');
-  });
-
-  it('keeps canonical SSO primary and offers local operator login as a loopback fallback', async () => {
-    const harness = await start({
-      localOperatorLogin: {
-        loginPath: '/v1/fleet-auth/local-operator-login',
-        allowedOrigins: ['http://127.0.0.1:10053'],
-      },
-    });
-
-    const fleet = await request(harness.port, '/fleet', { accept: 'text/html' });
-    expect(fleet.status).toBe(302);
-    expect(fleet.headers.location).toBe('/v1/fleet-auth/login?return_to=%2Ffleet');
-
-    const gardenPath = `/companions/${COMPANION_ID}/garden/subsystem-health`;
-    const garden = await request(harness.port, gardenPath, { accept: 'text/html' });
-    expect(garden.status).toBe(302);
-    expect(garden.headers.location).toBe(
-      `/v1/fleet-auth/login?return_to=${encodeURIComponent(gardenPath)}`,
-    );
-
-    const login = await request(harness.port, '/fleet/login');
-    expect(login.status).toBe(200);
-    const ssoIndex = login.body.indexOf('href="/v1/fleet-auth/login?return_to=%2Ffleet"');
-    const localIndex = login.body.indexOf('href="/v1/fleet-auth/local-operator-login"');
-    expect(ssoIndex).toBeGreaterThan(-1);
-    expect(localIndex).toBeGreaterThan(ssoIndex);
-    expect(login.body).toContain('href="/v1/fleet-auth/local-operator-login"');
-    expect(login.body).toContain('Local administrator login');
-    expect(login.body).toContain('Login with Discord');
-
-    const portal = await request(harness.port, '/fleet', {
-      accept: 'text/html',
-      localSession: SESSION_TOKEN,
-      origin: 'http://127.0.0.1:10053',
-    });
-    expect(portal.status).toBe(200);
-    expect(harness.resolveProjection).toHaveBeenCalledWith({ sessionToken: SESSION_TOKEN });
-
-    const denied = await request(harness.port, '/fleet', {
-      accept: 'text/html',
-      localSession: SESSION_TOKEN,
-      origin: 'http://127.0.0.1:10054',
-    });
-    expect(denied.status).toBe(400);
   });
 
   it('rejects cross-origin reads, aliases, and mutations before portal projection', async () => {

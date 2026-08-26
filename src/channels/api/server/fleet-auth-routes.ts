@@ -1,7 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import {
   FleetAuthBrokerError,
-  type FleetAuthSessionRecord,
   type GatewayFleetAuthBroker,
 } from '../../../boundary/gateway/fleet-auth-broker.js';
 import { readJsonBodyWithLimit, sendJson } from '../../backplane/http/primitives.js';
@@ -12,16 +11,6 @@ import {
 } from '../../../shared/contracts/fleet-auth-lifecycle-oauth.js';
 import { isRecord } from '../../../shared/utils/types.js';
 import { FLEET_AUTH_SESSION_COOKIE_NAME } from './fleet-auth-cookie.js';
-import {
-  readFleetBrowserSession,
-  type FleetBrowserSession,
-  type FleetLocalOperatorLoginConfig,
-} from '../../../boundary/gateway/fleet-local-operator-login.js';
-import {
-  clearLocalOperatorSessionCookie,
-  FleetLocalOperatorLoginRoutes,
-  localOperatorSessionCookie,
-} from './fleet-local-operator-login-routes.js';
 import { resolveFleetSsoBrowserOrigin } from '../../../boundary/gateway/fleet-sso-router.js';
 import {
   FleetAuthEscalationHttpRoutes,
@@ -82,6 +71,10 @@ function readOpaqueCookie(request: IncomingMessage, name: string): string | unde
   }
   if (matches.length !== 1 || !/^[A-Za-z0-9_-]{43}$/u.test(matches[0]!)) return undefined;
   return matches[0];
+}
+
+function readSessionCookie(request: IncomingMessage): string | undefined {
+  return readOpaqueCookie(request, FLEET_AUTH_SESSION_COOKIE_NAME);
 }
 
 function requireSingleQuery(url: URL, name: string): string | undefined {
@@ -160,7 +153,6 @@ export class FleetAuthHttpRoutes {
   private readonly approvalsSource?: FleetAuthApprovalsSource;
   private readonly recoveryRoutes?: FleetAuthRecoveryHttpRoutes;
   private readonly lifecycleCeremonyRoutes?: FleetAuthLifecycleCeremonyHttpRoutes;
-  private readonly localOperatorLoginRoutes?: FleetLocalOperatorLoginRoutes;
 
   constructor(options: {
     broker: GatewayFleetAuthBroker;
@@ -181,7 +173,6 @@ export class FleetAuthHttpRoutes {
     rosterSource?: FleetAuthRosterSource;
     /** Pending-approval source for the fleet-wide approvals view. */
     approvalsSource?: FleetAuthApprovalsSource;
-    localOperatorLogin?: FleetLocalOperatorLoginConfig;
   }) {
     this.broker = options.broker;
     this.canonicalOrigin = options.canonicalOrigin;
@@ -199,19 +190,10 @@ export class FleetAuthHttpRoutes {
     this.lifecycleCeremonyRoutes = options.lifecycleCeremonies
       ? new FleetAuthLifecycleCeremonyHttpRoutes(options.lifecycleCeremonies)
       : undefined;
-    this.localOperatorLoginRoutes = options.localOperatorLogin
-      ? new FleetLocalOperatorLoginRoutes({
-          broker: options.broker,
-          adminToken: options.localOperatorLogin.adminToken,
-          allowedOrigins: options.localOperatorLogin.allowedOrigins,
-          maxBodyBytes: MUTATION_BODY_LIMIT,
-        })
-      : undefined;
   }
 
   matches(method: string | undefined, path: string): boolean {
-    return (this.localOperatorLoginRoutes?.matches(method, path) ?? false)
-      || (this.escalationRoutes?.matches(method, path) ?? false)
+    return (this.escalationRoutes?.matches(method, path) ?? false)
       || (this.recoveryRoutes?.matches(method, path) ?? false)
       || (this.lifecycleCeremonyRoutes?.matches(method, path) ?? false)
       || (method === 'GET' && (
@@ -225,31 +207,6 @@ export class FleetAuthHttpRoutes {
           || path === LOGOUT_PATH || path === PROVIDER_REVOKE_PATH));
   }
 
-  private readSession(request: IncomingMessage): FleetBrowserSession | undefined {
-    return readFleetBrowserSession(request, this.localOperatorLoginRoutes !== undefined);
-  }
-
-  private mutationOrigin(request: IncomingMessage, session: FleetBrowserSession): string {
-    const origin = mutationOrigin(request);
-    if (session.kind === 'local_operator'
-      && this.localOperatorLoginRoutes?.allowedOrigins.includes(origin)) {
-      return this.canonicalOrigin;
-    }
-    return origin;
-  }
-
-  private sessionCookie(session: FleetAuthSessionRecord, kind: FleetBrowserSession['kind']): string {
-    return kind === 'local_operator'
-      ? localOperatorSessionCookie(session)
-      : sessionCookie(session.token, session.absoluteExpiresAt);
-  }
-
-  private clearSessionCookie(kind: FleetBrowserSession['kind']): string {
-    return kind === 'local_operator'
-      ? clearLocalOperatorSessionCookie()
-      : clearSessionCookie();
-  }
-
   private async handleCompanionRoster(
     request: IncomingMessage,
     response: ServerResponse,
@@ -259,12 +216,12 @@ export class FleetAuthHttpRoutes {
       throw new FleetAuthBrokerError('fleet_auth_route_not_found', 404);
     }
     response.setHeader('Vary', 'Cookie');
-    const session = this.readSession(request);
-    if (!session) {
+    const sessionToken = readSessionCookie(request);
+    if (!sessionToken) {
       throw new FleetAuthBrokerError('invalid_session', 401, 'Session is invalid or expired');
     }
     try {
-      const roster = await this.rosterSource.resolveRoster({ sessionToken: session.token });
+      const roster = await this.rosterSource.resolveRoster({ sessionToken });
       sendJson(response, 200, roster, { 'Cache-Control': 'no-store, private' });
     } catch (error) {
       throw this.normalizeSessionScopedFailure(error);
@@ -280,8 +237,8 @@ export class FleetAuthHttpRoutes {
       throw new FleetAuthBrokerError('fleet_auth_route_not_found', 404);
     }
     response.setHeader('Vary', 'Cookie');
-    const session = this.readSession(request);
-    if (!session) {
+    const sessionToken = readSessionCookie(request);
+    if (!sessionToken) {
       throw new FleetAuthBrokerError('invalid_session', 401, 'Session is invalid or expired');
     }
     const approvalsSource = this.approvalsSource;
@@ -290,7 +247,7 @@ export class FleetAuthHttpRoutes {
       // companions the session may reach get display names here, so any
       // approval owned by a companion outside that set is dropped below
       // (non-enumeration) alongside any ownerless entry (fail closed).
-      const roster = await this.rosterSource.resolveRoster({ sessionToken: session.token });
+      const roster = await this.rosterSource.resolveRoster({ sessionToken });
       const approvals = buildFleetApprovalsView(roster, approvalsSource);
       sendJson(response, 200, { schemaVersion: 1, approvals }, {
         'Cache-Control': 'no-store, private',
@@ -329,11 +286,7 @@ export class FleetAuthHttpRoutes {
       || (request.method !== 'POST' && request.method !== 'OPTIONS')) {
       return 'not_applicable';
     }
-    const requestOrigin = singleHeader(request.headers.origin);
-    const allowedOrigin = requestOrigin === this.canonicalOrigin
-      || (requestOrigin !== undefined
-        && this.localOperatorLoginRoutes?.allowedOrigins.includes(requestOrigin) === true);
-    if (!allowedOrigin) {
+    if (singleHeader(request.headers.origin) !== this.canonicalOrigin) {
       sendJson(response, 403, {
         error: {
           type: 'cors_origin_not_allowed',
@@ -344,7 +297,7 @@ export class FleetAuthHttpRoutes {
     }
 
     let vary = appendVaryValue(response.getHeader('Vary'), 'Origin');
-    response.setHeader('Access-Control-Allow-Origin', requestOrigin);
+    response.setHeader('Access-Control-Allow-Origin', this.canonicalOrigin);
     response.setHeader('Access-Control-Allow-Credentials', 'true');
     if (request.method === 'POST') {
       response.setHeader('Vary', vary);
@@ -377,10 +330,6 @@ export class FleetAuthHttpRoutes {
     response.setHeader('Referrer-Policy', 'no-referrer');
     const isCallback = request.method === 'GET' && url.pathname === this.callbackPath;
     try {
-      if (this.localOperatorLoginRoutes?.matches(request.method, url.pathname)) {
-        await this.localOperatorLoginRoutes.handle(request, response, url);
-        return;
-      }
       if (this.recoveryRoutes?.matches(request.method, url.pathname)) {
         await this.recoveryRoutes.handle(request, response, url);
         return;
@@ -438,8 +387,8 @@ export class FleetAuthHttpRoutes {
           throw new FleetAuthBrokerError('fleet_auth_route_not_found', 404);
         }
         response.setHeader('Vary', 'Cookie');
-        const statusSession = this.readSession(request);
-        if (!statusSession) {
+        const statusToken = readSessionCookie(request);
+        if (!statusToken) {
           sendJson(response, 200, {
             schemaVersion: 1,
             state: 'signed_out',
@@ -452,7 +401,7 @@ export class FleetAuthHttpRoutes {
         }
         try {
           const context = await this.broker.resolveAuthorizationContext({
-            sessionToken: statusSession.token,
+            sessionToken: statusToken,
             audience: 'fleet',
             companionId: this.companionUi.companionId,
             action: 'companion.read',
@@ -468,7 +417,7 @@ export class FleetAuthHttpRoutes {
             websocketPath: `/companion-ui/companions/${this.companionUi.companionId}/ws`,
             human: {
               provider: context.providerSubject.provider,
-              label: statusSession.kind === 'local_operator' ? 'Local operator' : 'Discord user',
+              label: 'Discord user',
               role: context.operator.role,
             },
           }, { 'Cache-Control': 'no-store, private' });
@@ -502,17 +451,14 @@ export class FleetAuthHttpRoutes {
         await this.handleFleetApprovals(request, response, url);
         return;
       }
-      const session = this.readSession(request);
-      if (!session) {
+      const token = readSessionCookie(request);
+      if (!token) {
         throw new FleetAuthBrokerError('invalid_session', 401, 'Session is invalid or expired');
       }
-      const token = session.token;
       if (request.method === 'GET' && url.pathname === CSRF_PATH) {
         const csrfToken = await this.broker.issueCsrf({
           token,
-          requestOrigin: session.kind === 'local_operator'
-            ? this.mutationOrigin(request, session)
-            : requestCallbackOrigin(request, this.canonicalOrigin, this.trustProxy),
+          requestOrigin: requestCallbackOrigin(request, this.canonicalOrigin, this.trustProxy),
         });
         sendJson(response, 200, { csrfToken }, { 'Cache-Control': 'no-store' });
         return;
@@ -528,7 +474,7 @@ export class FleetAuthHttpRoutes {
           path: url.pathname,
           token,
           csrfToken,
-          requestOrigin: this.mutationOrigin(request, session),
+          requestOrigin: mutationOrigin(request),
         });
         return;
       }
@@ -539,7 +485,7 @@ export class FleetAuthHttpRoutes {
           path: url.pathname,
           token,
           csrfToken,
-          requestOrigin: this.mutationOrigin(request, session),
+          requestOrigin: mutationOrigin(request),
         });
         return;
       }
@@ -562,7 +508,7 @@ export class FleetAuthHttpRoutes {
         const started = await this.broker.beginLifecycleOAuth({
           token,
           csrfToken,
-          requestOrigin: this.mutationOrigin(request, session),
+          requestOrigin: mutationOrigin(request),
           returnPath: body.value.returnPath,
           ceremonyId: body.value.ceremonyId,
           action: body.value.action,
@@ -581,9 +527,9 @@ export class FleetAuthHttpRoutes {
         const rotated = await this.broker.rotateSession({
           token,
           csrfToken,
-          requestOrigin: this.mutationOrigin(request, session),
+          requestOrigin: mutationOrigin(request),
         });
-        response.setHeader('Set-Cookie', this.sessionCookie(rotated, session.kind));
+        response.setHeader('Set-Cookie', sessionCookie(rotated.token, rotated.absoluteExpiresAt));
         sendJson(response, 200, {
           csrfToken: rotated.csrfToken,
           principalStatus: rotated.principalStatus,
@@ -593,12 +539,8 @@ export class FleetAuthHttpRoutes {
         return;
       }
       if (request.method === 'POST' && url.pathname === LOGOUT_PATH) {
-        await this.broker.logout({
-          token,
-          csrfToken,
-          requestOrigin: this.mutationOrigin(request, session),
-        });
-        response.setHeader('Set-Cookie', this.clearSessionCookie(session.kind));
+        await this.broker.logout({ token, csrfToken, requestOrigin: mutationOrigin(request) });
+        response.setHeader('Set-Cookie', clearSessionCookie());
         response.statusCode = 204;
         response.end();
         return;
@@ -615,10 +557,10 @@ export class FleetAuthHttpRoutes {
         await this.broker.revokeProvider({
           token,
           csrfToken,
-          requestOrigin: this.mutationOrigin(request, session),
+          requestOrigin: mutationOrigin(request),
           reason: body.value.reason,
         });
-        response.setHeader('Set-Cookie', this.clearSessionCookie(session.kind));
+        response.setHeader('Set-Cookie', clearSessionCookie());
         response.statusCode = 204;
         response.end();
         return;
@@ -633,11 +575,7 @@ export class FleetAuthHttpRoutes {
         } else if (isCallback) {
           response.setHeader('Set-Cookie', clearPreauthCookie());
         } else if (reauthenticationRequired) {
-          const session = this.readSession(request);
-          response.setHeader(
-            'Set-Cookie',
-            session ? this.clearSessionCookie(session.kind) : clearSessionCookie(),
-          );
+          response.setHeader('Set-Cookie', clearSessionCookie());
         }
         sendRouteError(response, error);
       }

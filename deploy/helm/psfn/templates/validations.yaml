@@ -407,23 +407,6 @@ never back a ClusterIssuer. */ -}}
 {{- fail "secrets.values.extraSatelliteApiKeys entries must each be at least 16 characters" -}}
 {{- end -}}
 {{- end -}}
-{{- if .Values.fleetAuth.localOperatorLogin.enabled -}}
-{{- if not .Values.fleetAuth.enabled -}}
-{{- fail "fleetAuth.localOperatorLogin.enabled=true requires fleetAuth.enabled=true" -}}
-{{- end -}}
-{{- if not .Values.fleetAuth.localOperatorLogin.allowedOrigins -}}
-{{- fail "fleetAuth.localOperatorLogin.enabled=true requires at least one exact loopback browser origin" -}}
-{{- end -}}
-{{- range $origin := .Values.fleetAuth.localOperatorLogin.allowedOrigins -}}
-{{- if not (regexMatch "^http://(127\\.0\\.0\\.1|localhost):[1-9][0-9]{0,4}$" $origin) -}}
-{{- fail (printf "fleetAuth.localOperatorLogin.allowedOrigins entry must be an exact loopback HTTP origin with a port: %s" $origin) -}}
-{{- end -}}
-{{- $port := atoi (regexFind "[0-9]+$" $origin) -}}
-{{- if gt $port 65535 -}}
-{{- fail (printf "fleetAuth.localOperatorLogin.allowedOrigins port is out of range: %s" $origin) -}}
-{{- end -}}
-{{- end -}}
-{{- end -}}
 {{- if .Values.fleetAuth.enabled -}}
 {{- $authorityFloor := .Values.fleetAuth.authorityFloor | default dict -}}
 {{- if not $authorityFloor -}}

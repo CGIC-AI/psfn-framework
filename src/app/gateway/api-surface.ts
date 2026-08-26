@@ -65,10 +65,6 @@ import type { RequestCapabilityReplayPort } from '../../boundary/fleet-auth/requ
 import {
   GatewayFleetSsoRouter,
 } from '../../boundary/gateway/fleet-sso-router.js';
-import {
-  FLEET_LOCAL_OPERATOR_LOGIN_PATH,
-  resolveFleetLocalOperatorLoginConfig,
-} from '../../boundary/gateway/fleet-local-operator-login.js';
 import type { TestingHarnessGardenAuthorizationAuditPort } from '../../boundary/gateway/testing-harness-garden-door.js';
 import {
   requireFleetSsoFleetManifest,
@@ -606,19 +602,6 @@ export async function startOptionalGatewayApiServer(
       : {}),
     ...(options.fleetModelUsage ? { usage: options.fleetModelUsage } : {}),
   });
-  const localOperatorLoginEnabled = isExplicitTrue(env.PSFN_FLEET_LOCAL_OPERATOR_LOGIN);
-  if (localOperatorLoginEnabled && !options.config.fleetAuth) {
-    throw new Error('PSFN_FLEET_LOCAL_OPERATOR_LOGIN requires Fleet authentication');
-  }
-  const localOperatorLogin = options.config.fleetAuth
-    ? resolveFleetLocalOperatorLoginConfig({
-        enabled: localOperatorLoginEnabled,
-        trustProxy: isExplicitTrue(env.FLEET_SSO_TRUST_PROXY),
-        adminToken: env.ADMIN_TOKEN,
-        rawAllowedOrigins: env.PSFN_FLEET_LOCAL_OPERATOR_ORIGINS,
-        fleetAuth: options.config.fleetAuth,
-      })
-    : undefined;
   const testingHarnessGardenAdmin = options.channelsConfig?.api.testingHarness?.gardenAdmin;
   if (options.config.fleetAuth
     && testingHarnessGardenAdmin
@@ -652,12 +635,6 @@ export async function startOptionalGatewayApiServer(
             }
           : {}),
         ...(options.fleetAuthEscalation ? { escalation: options.fleetAuthEscalation } : {}),
-        ...(localOperatorLogin ? {
-          localOperatorLogin: {
-            loginPath: FLEET_LOCAL_OPERATOR_LOGIN_PATH,
-            allowedOrigins: localOperatorLogin.allowedOrigins,
-          },
-        } : {}),
         ...(options.config.fleetAuth.accountRoster
           ? { accountRoster: options.config.fleetAuth.accountRoster }
           : {}),
@@ -678,10 +655,7 @@ export async function startOptionalGatewayApiServer(
     throw new Error('Fleet authentication requires the complete unified-origin router wiring');
   }
   const corsAllowedOrigins = resolveApiCorsAllowedOrigins({
-    explicitAllowlist: [...new Set([
-      ...parseCommaSeparatedEnv(env.API_CORS_ALLOWLIST),
-      ...(localOperatorLogin?.allowedOrigins ?? []),
-    ])],
+    explicitAllowlist: parseCommaSeparatedEnv(env.API_CORS_ALLOWLIST),
     adminHost: options.adminHost,
     adminPort: options.adminPort,
   });
@@ -1111,7 +1085,6 @@ export async function startOptionalGatewayApiServer(
               ? { lifecycleCeremonies: options.fleetAuthLifecycleCeremonies }
               : {}),
             trustProxy: isExplicitTrue(env.FLEET_SSO_TRUST_PROXY),
-            ...(localOperatorLogin ? { localOperatorLogin } : {}),
             ...(fleetSsoCompanionUi ? {
               companionUi: {
                 companionId: fleetSsoCompanionUi.companionId,

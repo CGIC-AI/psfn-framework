@@ -16,27 +16,6 @@
         "enabled": {
           "type": "boolean"
         },
-        "localOperatorLogin": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "enabled",
-            "allowedOrigins"
-          ],
-          "properties": {
-            "enabled": {
-              "type": "boolean"
-            },
-            "allowedOrigins": {
-              "type": "array",
-              "uniqueItems": true,
-              "items": {
-                "type": "string",
-                "pattern": "^http://(127\\.0\\.0\\.1|localhost):[1-9][0-9]{0,4}$"
-              }
-            }
-          }
-        },
         "authorityFloor": {
           "type": "object",
           "additionalProperties": false,
@@ -67,7 +46,6 @@
       },
       "required": [
         "enabled",
-        "localOperatorLogin",
         "authorityFloor"
       ]
     }

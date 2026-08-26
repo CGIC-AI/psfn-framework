@@ -84,11 +84,6 @@ import {
   type FleetBreakGlassLoginRegistration,
 } from './fleet-login-landing.js';
 import {
-  readFleetBrowserSession,
-  validateFleetLocalOperatorOrigins,
-  type FleetLocalOperatorLoginRegistration,
-} from './fleet-local-operator-login.js';
-import {
   TestingHarnessGardenDoor,
   TestingHarnessGardenDoorDeniedError,
   type TestingHarnessGardenDoorOptions,
@@ -101,6 +96,7 @@ import {
   type GardenDenialLogger,
 } from '../../shared/observability/garden-denial-observability.js';
 
+const SESSION_COOKIE_NAME = '__Host-psfn_session';
 const MAX_PROXY_BODY_BYTES = 1_048_576;
 const MAX_CAPABILITY_HEADER_BYTES = 65_536;
 const FLEET_PATH = '/fleet';
@@ -177,7 +173,6 @@ export interface GatewayFleetSsoRouterOptions extends FleetSsoTrustedOriginOptio
     readonly origin: URL;
   };
   readonly breakGlassLogin?: FleetBreakGlassLoginRegistration;
-  readonly localOperatorLogin?: FleetLocalOperatorLoginRegistration;
   readonly nowSeconds?: () => number;
   readonly testingHarness?: TestingHarnessGardenDoorOptions;
   readonly denialLogger?: GardenDenialLogger;
@@ -344,10 +339,7 @@ function isHtmlNavigation(request: IncomingMessage): boolean {
   return accept?.split(',').some(value => value.trim().split(';', 1)[0] === 'text/html') ?? false;
 }
 
-function sendFleetLoginRedirect(
-  response: ServerResponse,
-  returnPath: string,
-): void {
+function sendFleetLoginRedirect(response: ServerResponse, returnPath: string): void {
   response.writeHead(302, {
     'Cache-Control': 'no-store',
     Location: `${FLEET_AUTH_LOGIN_PATH}?return_to=${encodeURIComponent(returnPath)}`,
@@ -430,6 +422,20 @@ export function resolveFleetSsoBrowserOrigin(
     throw new FleetSsoRequestError(400, 'Trusted HTTPS proxy provenance is invalid');
   }
   return canonical.origin;
+}
+
+function readOpaqueSessionCookie(request: IncomingMessage): string | undefined {
+  const raw = singleHeader(request.headers.cookie);
+  if (!raw) return undefined;
+  const values: string[] = [];
+  for (const part of raw.split(';')) {
+    const separator = part.indexOf('=');
+    if (separator <= 0 || part.slice(0, separator).trim() !== SESSION_COOKIE_NAME) continue;
+    const value = part.slice(separator + 1).trim();
+    if (value) values.push(value);
+  }
+  if (values.length !== 1 || !/^[A-Za-z0-9_-]{43}$/u.test(values[0]!)) return undefined;
+  return values[0];
 }
 
 /**
@@ -612,7 +618,6 @@ export class GatewayFleetSsoRouter {
   private readonly modelUsageRoutes: GatewayFleetModelUsageHttpRoutes;
   private readonly testingHarnessDoor?: TestingHarnessGardenDoor;
   private readonly denialLogger: GardenDenialLogger;
-  private readonly localOperatorOrigins: readonly string[];
   private readonly rejectedUpgradeServer = new WebSocketServer({
     noServer: true,
     clientTracking: false,
@@ -634,13 +639,7 @@ export class GatewayFleetSsoRouter {
       projection: options.portalProjection,
       ui: options.portalUi ?? new FleetGardenUiAssets(),
     });
-    this.localOperatorOrigins = options.localOperatorLogin
-      ? validateFleetLocalOperatorOrigins(options.localOperatorLogin.allowedOrigins)
-      : Object.freeze([]);
-    this.loginLanding = new GatewayFleetLoginLanding(
-      options.breakGlassLogin,
-      options.localOperatorLogin,
-    );
+    this.loginLanding = new GatewayFleetLoginLanding(options.breakGlassLogin);
     this.modelUsageRoutes = new GatewayFleetModelUsageHttpRoutes({
       projection: options.modelUsageProjection,
     });
@@ -706,9 +705,7 @@ export class GatewayFleetSsoRouter {
     try {
       resolveFleetSsoBrowserOrigin(request, this.options);
       const browserOrigin = singleHeader(request.headers.origin);
-      if (browserOrigin !== undefined
-        && browserOrigin !== this.options.canonicalOrigin
-        && !this.localOperatorOrigins.includes(browserOrigin)) {
+      if (browserOrigin !== undefined && browserOrigin !== this.options.canonicalOrigin) {
         throw new FleetSsoRequestError(400, 'Browser origin is invalid');
       }
       const { rawPath, rawQuery } = parseOuterPath(request.url ?? '/');
@@ -756,10 +753,7 @@ export class GatewayFleetSsoRouter {
         await this.proxyHttp(request, response, upstream, route, body, issued);
         return;
       }
-      const sessionToken = readFleetBrowserSession(
-        request,
-        this.options.localOperatorLogin !== undefined,
-      )?.token;
+      const sessionToken = readOpaqueSessionCookie(request);
       if (!sessionToken) {
         if (isHtmlNavigation(request) && (
           rawPath === FLEET_PATH
@@ -769,10 +763,7 @@ export class GatewayFleetSsoRouter {
           return;
         }
         if (isHtmlNavigation(request) && parseGardenRoute(request.url ?? '/')) {
-          sendFleetLoginRedirect(
-            response,
-            request.url ?? '/',
-          );
+          sendFleetLoginRedirect(response, request.url ?? '/');
           return;
         }
         if (request.method === 'GET' && companionUiRequest) {
@@ -1355,15 +1346,10 @@ export class GatewayFleetSsoRouter {
 
   private async proxyUpgrade(request: IncomingMessage, socket: Duplex, head: Buffer): Promise<void> {
     resolveFleetSsoBrowserOrigin(request, this.options);
-    const browserOrigin = singleHeader(request.headers.origin);
-    if (browserOrigin !== this.options.canonicalOrigin
-      && !this.localOperatorOrigins.includes(browserOrigin ?? '')) {
+    if (singleHeader(request.headers.origin) !== this.options.canonicalOrigin) {
       throw new FleetSsoRequestError(400, 'WebSocket origin is invalid');
     }
-    const sessionToken = readFleetBrowserSession(
-      request,
-      this.options.localOperatorLogin !== undefined,
-    )?.token;
+    const sessionToken = readOpaqueSessionCookie(request);
     if (!sessionToken) throw new FleetSsoRequestError(401, 'Authentication required');
     const route = parseGardenRoute(request.url ?? '/');
     if (!route) throw new FleetSsoRequestError(404, 'Resource not found');

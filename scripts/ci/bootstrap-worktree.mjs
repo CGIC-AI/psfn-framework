@@ -16,6 +16,7 @@ import {
   offlineInstallArgs,
   prewarmWorktree,
 } from '../prewarm-worktree.mjs';
+import { NPM_PROJECT_PATHS } from './npm-project-contract.mjs';
 
 function requiredNodeVersion(repositoryRoot) {
   const versionPath = join(repositoryRoot, '.node-version');
@@ -52,9 +53,54 @@ function defaultRunNpm(args, { repositoryRoot }) {
   if (result.status !== 0) {
     throw new Error(
       `Automatic worktree dependency install failed with exit code ${String(result.status)}. `
-      + 'Run npm run prewarm in a prepared checkout, then retry the worktree checkout.',
+      + 'The next checkout will retry the automatic cache preparation and install.',
     );
   }
+}
+
+function bootstrapProject({
+  cacheDir,
+  projectRoot,
+  prewarm = prewarmWorktree,
+  runNpm = defaultRunNpm,
+  logger = console,
+}) {
+  let cacheState = inspectPrewarmAttestation({ cacheDir, repositoryRoot: projectRoot });
+  if (!cacheState.attestation) {
+    logger.log('[worktree] Preparing and attesting the npm cache for this lockfile.');
+    prewarm({
+      cacheDir: cacheState.cacheDir,
+      repositoryRoot: projectRoot,
+    });
+    cacheState = inspectPrewarmAttestation({
+      cacheDir: cacheState.cacheDir,
+      repositoryRoot: projectRoot,
+    });
+  }
+  if (!cacheState.attestation) {
+    throw new Error(
+      `Automatic cache preparation did not create an attestation for lockfile SHA-256 `
+      + `${cacheState.lockfileHash} at ${cacheState.markerPath}.`,
+    );
+  }
+  const expectedMarker = `${cacheState.lockfileHash}\n`;
+  const markerPath = dependencyMarkerPath(projectRoot);
+  if (hasIsolatedDependencies(projectRoot)
+    && existsSync(markerPath)
+    && readFileSync(markerPath, 'utf8') === expectedMarker) {
+    return 'ready';
+  }
+
+  logger.log('[worktree] Installing isolated dependencies from the attested offline npm cache.');
+  runNpm([...offlineInstallArgs(cacheState.cacheDir), '--loglevel=error'], {
+    repositoryRoot: projectRoot,
+  });
+  if (!hasIsolatedDependencies(projectRoot)) {
+    throw new Error('npm ci completed without creating node_modules in the worktree.');
+  }
+  writeFileSync(markerPath, expectedMarker, { encoding: 'utf8', mode: 0o600 });
+  logger.log('[worktree] Dependencies are ready.');
+  return 'installed';
 }
 
 export function bootstrapWorktree({
@@ -62,6 +108,7 @@ export function bootstrapWorktree({
   repositoryRoot = process.cwd(),
   nodeVersion = process.version,
   prewarm = prewarmWorktree,
+  projectPaths = NPM_PROJECT_PATHS,
   runNpm = defaultRunNpm,
   logger = console,
 } = {}) {
@@ -73,40 +120,14 @@ export function bootstrapWorktree({
     );
   }
 
-  let cacheState = inspectPrewarmAttestation({ cacheDir, repositoryRoot: root });
-  if (!cacheState.attestation) {
-    logger.log('[worktree] Preparing and attesting the npm cache for this lockfile.');
-    prewarm({
-      cacheDir: cacheState.cacheDir,
-      repositoryRoot: root,
-    });
-    cacheState = inspectPrewarmAttestation({
-      cacheDir: cacheState.cacheDir,
-      repositoryRoot: root,
-    });
-  }
-  if (!cacheState.attestation) {
-    throw new Error(
-      `Automatic cache preparation did not create an attestation for lockfile SHA-256 `
-      + `${cacheState.lockfileHash} at ${cacheState.markerPath}.`,
-    );
-  }
-  const expectedMarker = `${cacheState.lockfileHash}\n`;
-  const markerPath = dependencyMarkerPath(root);
-  if (hasIsolatedDependencies(root)
-    && existsSync(markerPath)
-    && readFileSync(markerPath, 'utf8') === expectedMarker) {
-    return 'ready';
-  }
-
-  logger.log('[worktree] Installing isolated dependencies from the attested offline npm cache.');
-  runNpm([...offlineInstallArgs(cacheState.cacheDir), '--loglevel=error'], { repositoryRoot: root });
-  if (!hasIsolatedDependencies(root)) {
-    throw new Error('npm ci completed without creating node_modules in the worktree.');
-  }
-  writeFileSync(markerPath, expectedMarker, { encoding: 'utf8', mode: 0o600 });
-  logger.log('[worktree] Dependencies are ready.');
-  return 'installed';
+  const results = projectPaths.map((projectPath) => bootstrapProject({
+    cacheDir,
+    projectRoot: resolve(root, projectPath),
+    prewarm,
+    runNpm,
+    logger,
+  }));
+  return results.every((result) => result === 'ready') ? 'ready' : 'installed';
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {

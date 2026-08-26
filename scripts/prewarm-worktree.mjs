@@ -15,9 +15,9 @@
  *   npm run prewarm -- --check
  *   npm run prewarm -- --help
  *
- * After a successful prewarm, the tracked post-checkout hook installs each
- * worktree's isolated dependencies without network access. The manual fallback
- * is `npm ci --offline --ignore-scripts`.
+ * The tracked worktree hooks call this automatically when the current lockfile
+ * has not been attested, then install isolated dependencies without network
+ * access. The manual fallback is `npm ci --offline --ignore-scripts`.
  *
  * A new package-lock.json hash selects a new attestation and forces a rewarm.
  * Missing attestations fail in --check mode; corrupt or mismatched attestations
@@ -157,6 +157,41 @@ function resolveCacheDir({ cacheDir, repositoryRoot, runNpm }) {
   return isAbsolute(configured) ? configured : resolve(repositoryRoot, configured);
 }
 
+export function inspectPrewarmAttestation({
+  cacheDir,
+  repositoryRoot = DEFAULT_REPOSITORY_ROOT,
+  runNpm = defaultRunNpm,
+} = {}) {
+  const resolvedRepositoryRoot = resolve(repositoryRoot);
+  const packageJsonPath = join(resolvedRepositoryRoot, 'package.json');
+  const lockfilePath = join(resolvedRepositoryRoot, 'package-lock.json');
+  const projectName = readProjectName(packageJsonPath);
+  const lockfileContents = readFileSync(lockfilePath);
+  parseJson(lockfileContents, 'package-lock.json');
+  const lockfileHash = hashLockfile(lockfileContents);
+  const resolvedCacheDir = resolveCacheDir({
+    cacheDir,
+    repositoryRoot: resolvedRepositoryRoot,
+    runNpm,
+  });
+  const markerPath = markerPathFor({
+    cacheDir: resolvedCacheDir,
+    lockfileHash,
+    projectName,
+  });
+  const expected = { lockfileHash, projectName };
+  return {
+    attestation: readAttestation(markerPath, expected),
+    cacheDir: resolvedCacheDir,
+    expected,
+    lockfileHash,
+    lockfilePath,
+    markerPath,
+    projectName,
+    repositoryRoot: resolvedRepositoryRoot,
+  };
+}
+
 function assertLockfileUnchanged(lockfilePath, expectedHash) {
   const actualHash = hashLockfile(readFileSync(lockfilePath));
   if (actualHash !== expectedHash) {
@@ -191,6 +226,10 @@ function installArgs(cacheDir, offline) {
   ];
 }
 
+export function offlineInstallArgs(cacheDir) {
+  return installArgs(cacheDir, true);
+}
+
 function writeAttestation(markerPath, attestation) {
   mkdirSync(dirname(markerPath), { recursive: true });
   const temporaryPath = `${markerPath}.${process.pid}.${randomUUID()}.tmp`;
@@ -214,25 +253,21 @@ export function prewarmWorktree({
   runNpm = defaultRunNpm,
   tempRoot = tmpdir(),
 } = {}) {
-  const resolvedRepositoryRoot = resolve(repositoryRoot);
-  const packageJsonPath = join(resolvedRepositoryRoot, 'package.json');
-  const lockfilePath = join(resolvedRepositoryRoot, 'package-lock.json');
-  const projectName = readProjectName(packageJsonPath);
-  const lockfileContents = readFileSync(lockfilePath);
-  parseJson(lockfileContents, 'package-lock.json');
-  const lockfileHash = hashLockfile(lockfileContents);
-  const resolvedCacheDir = resolveCacheDir({
+  const cacheState = inspectPrewarmAttestation({
     cacheDir,
-    repositoryRoot: resolvedRepositoryRoot,
+    repositoryRoot,
     runNpm,
   });
-  const markerPath = markerPathFor({
+  const {
+    attestation,
     cacheDir: resolvedCacheDir,
+    expected,
     lockfileHash,
+    lockfilePath,
+    markerPath,
     projectName,
-  });
-  const expected = { lockfileHash, projectName };
-  const attestation = readAttestation(markerPath, expected);
+    repositoryRoot: resolvedRepositoryRoot,
+  } = cacheState;
   let warmed = false;
 
   const populateCache = () => {
@@ -304,7 +339,7 @@ export function prewarmWorktree({
 }
 
 function helpText() {
-  return `Usage: npm run prewarm -- [--check]\n\nPopulate npm's shared cache from the repository package-lock.json, then prove it\nwith a clean offline install. All installs happen in disposable directories; no\nnode_modules or other mutable output is shared between worktrees.\n\nOptions:\n  --check  Require the current lock hash to be attested and verify it offline.\n  -h, --help  Show this help.\n\nAfter PASS, the tracked post-checkout hook installs isolated dependencies in each\nfresh worktree automatically.`;
+  return `Usage: npm run prewarm -- [--check]\n\nPopulate npm's shared cache from the repository package-lock.json, then prove it\nwith a clean offline install. All installs happen in disposable directories; no\nnode_modules or other mutable output is shared between worktrees. Worktree hooks\nrun this automatically when the current lockfile is not yet attested.\n\nOptions:\n  --check  Require the current lock hash to be attested and verify it offline.\n  -h, --help  Show this help.`;
 }
 
 export function main(args = process.argv.slice(2)) {

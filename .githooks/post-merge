@@ -1,8 +1,5 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Git passes 1 for branch/worktree checkouts and 0 for file-only checkouts.
-[[ "${3:-0}" == 1 ]] || exit 0
-
 repo_root="$(git rev-parse --show-toplevel)"
 exec "$repo_root/scripts/ci/bootstrap-worktree-hook.sh"

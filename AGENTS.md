@@ -85,12 +85,14 @@ This repository opts into the **team-maintainer** profile.
   current operator explicitly authorizes a direct-main exception.
 - A checkpoint push is remote backup, not publication. It does not claim that
   broad gates or review passed.
-- Run `npm run hooks:install` once in every new checkout or worktree. Publication
-  fails closed unless the tracked pre-push hook is active.
+- Run `npm run hooks:install` once in every clone. It configures the shared Git
+  directory so linked worktrees inherit the tracked hooks automatically.
+  Publication fails closed unless the tracked pre-push hook is active.
 - The tracked post-checkout hook automatically installs lockfile-exact,
-  worktree-local dependencies from the attested offline npm cache when a fresh
-  worktree is created or its lockfile changes. Never link or share mutable
-  `node_modules` directories between worktrees.
+  worktree-local dependencies when a fresh worktree is created or its lockfile
+  changes. It prepares and proves the shared npm cache when needed, then installs
+  offline. Never link or share mutable `node_modules` directories between
+  worktrees.
 - Before publication, run `npm run gate:pre-pr` once on the exact final committed
   head and publish through `npm run pr:publish`.
 - Never manually force-push or rewrite a shared branch. Rebase before publication

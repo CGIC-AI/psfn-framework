@@ -28,7 +28,7 @@ export function normalizeAliasValue(value) {
 export function installLocalHooks({ cwd = process.cwd() } = {}) {
   const repositoryRoot = run('git', ['rev-parse', '--show-toplevel'], { cwd });
   run(process.execPath, ['scripts/ci/check-local-tools.mjs'], { cwd: repositoryRoot });
-  for (const hookName of ['pre-push', 'post-checkout']) {
+  for (const hookName of ['pre-push', 'post-checkout', 'post-merge', 'post-rewrite']) {
     const trackedHook = resolve(repositoryRoot, `.githooks/${hookName}`);
     if (!existsSync(trackedHook) || (statSync(trackedHook).mode & 0o111) === 0) {
       throw new Error(`.githooks/${hookName} is missing or is not executable`);
@@ -47,6 +47,14 @@ export function installLocalHooks({ cwd = process.cwd() } = {}) {
     : [];
   const assessment = assessHookInstallation({ hooksPath, existingHooks });
   if (!assessment.allowed) throw new Error(assessment.reason);
+  const commonHooksPath = run(
+    'git',
+    ['config', '--local', '--get', '--default', '', 'core.hooksPath'],
+    { cwd: repositoryRoot },
+  );
+  if (commonHooksPath && commonHooksPath !== '.githooks') {
+    throw new Error(`Refusing to replace common core.hooksPath: ${commonHooksPath}`);
+  }
 
   const aliases = run('gh', ['alias', 'list'], { cwd: repositoryRoot });
   const currentAlias = aliases
@@ -60,16 +68,14 @@ export function installLocalHooks({ cwd = process.cwd() } = {}) {
     throw new Error(`Refusing to replace existing gh alias gated-pr: ${currentAlias}`);
   }
   if (!normalizedAlias) run('gh', ['alias', 'set', 'gated-pr', expectedAlias], { cwd: repositoryRoot });
-  if (hooksPath !== '.githooks') {
-    run('git', ['config', '--local', 'extensions.worktreeConfig', 'true'], {
-      cwd: repositoryRoot,
-    });
-    run('git', ['config', '--worktree', 'core.hooksPath', '.githooks'], {
-      cwd: repositoryRoot,
-    });
-  }
+  run('git', ['config', '--local', 'extensions.worktreeConfig', 'true'], {
+    cwd: repositoryRoot,
+  });
+  run('git', ['config', '--local', 'core.hooksPath', '.githooks'], {
+    cwd: repositoryRoot,
+  });
 
-  console.log('Installed repo pre-push/post-checkout hooks and gh gated-pr alias.');
+  console.log('Installed repo pre-push and automatic worktree hooks, plus the gh gated-pr alias.');
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {

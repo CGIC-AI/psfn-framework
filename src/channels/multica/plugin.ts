@@ -61,7 +61,7 @@ export function createMulticaChannelPlugin(
   };
 }
 
-export function parseMulticaChannelConfig(raw: unknown): ChannelPluginParseResult<MulticaChannelConfig> {
+function parseMulticaChannelConfig(raw: unknown): ChannelPluginParseResult<MulticaChannelConfig> {
   if (!isRecord(raw)) {
     throw new Error('channels.json.multica must be an object');
   }

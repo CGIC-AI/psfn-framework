@@ -2,7 +2,7 @@ import { createMulticaChannelPlugin } from '../multica/plugin.js';
 import { createChannelPluginRegistry } from './registry.js';
 import type { ChannelPlugin, ChannelPluginRegistry } from './types.js';
 
-export function createBuiltinChannelPlugins(): ChannelPlugin[] {
+function createBuiltinChannelPlugins(): ChannelPlugin[] {
   return [createMulticaChannelPlugin()];
 }
 

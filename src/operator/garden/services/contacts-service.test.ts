@@ -139,6 +139,8 @@ describe('AdminContactsDataService', () => {
       expect(await contactStore.setMachineIntelligence(source.id, true, 'operator:test')).toBe(true);
     }
     await contactStore.linkChannelIdentity(source.id, 'multica', 'workspace-system');
+    const targetBefore = await contactStore.getById(target.id);
+    const sourceBefore = await contactStore.getById(source.id);
 
     const result = await service.mergeContacts(
       target.id,
@@ -151,9 +153,32 @@ describe('AdminContactsDataService', () => {
     });
     expect(await contactStore.getByChannelIdentity('multica', 'workspace-system'))
       .toMatchObject({ id: source.id });
-    const unchangedSource = await contactStore.getById(source.id);
-    expect(unchangedSource).toMatchObject({ id: source.id });
-    expect(unchangedSource?.archivedAt).toBeUndefined();
+    expect(await contactStore.getById(target.id)).toEqual(targetBefore);
+    expect(await contactStore.getById(source.id)).toEqual(sourceBefore);
+  });
+
+  it.each([
+    { label: 'human contacts', isMachineIntelligence: false },
+    { label: 'machine-intelligence contacts', isMachineIntelligence: true },
+  ])('still merges $label', async ({ isMachineIntelligence }) => {
+    const { contactStore, service } = await createServiceHarness();
+    const target = await contactStore.upsert({ displayName: 'Merge target' });
+    const source = await contactStore.upsert({ displayName: 'Merge source' });
+    if (isMachineIntelligence) {
+      expect(await contactStore.setMachineIntelligence(target.id, true, 'operator:test')).toBe(true);
+      expect(await contactStore.setMachineIntelligence(source.id, true, 'operator:test')).toBe(true);
+    }
+    await contactStore.linkChannelIdentity(source.id, 'api', 'source-identity');
+
+    const result = await service.mergeContacts(
+      target.id,
+      JSON.stringify({ sourceId: source.id }),
+    );
+
+    expect(result).toMatchObject({ ok: true, message: 'Contacts merged' });
+    expect(await contactStore.getByChannelIdentity('api', 'source-identity'))
+      .toMatchObject({ id: target.id });
+    expect((await contactStore.getById(source.id))?.archivedAt).toBeTruthy();
   });
 
   it('does not expose another contact through fleet list projections', async () => {

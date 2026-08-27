@@ -593,6 +593,10 @@ export class AdminContactsDataService implements AdminContactsService {
       return { ok: false, message: 'Source contact not found' };
     }
 
+    if (Boolean(source.isMachineIntelligence) !== Boolean(target.isMachineIntelligence)) {
+      return { ok: false, message: 'Cannot merge human and machine-intelligence contacts' };
+    }
+
     if (!await contactStore.mergeContacts(sourceId, targetId)) {
       return { ok: false, message: 'Merge failed' };
     }

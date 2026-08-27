@@ -120,6 +120,42 @@ describe('AdminContactsDataService', () => {
     expect(result).toMatchObject({ ok: false, failureKind: 'immutability' });
     expect((await contactStore.getById(primary.id))?.trustLevel).toBe('primary');
   });
+
+  it.each([
+    { label: 'machine source into human target', sourceIsMachine: true, targetIsMachine: false },
+    { label: 'human source into machine target', sourceIsMachine: false, targetIsMachine: true },
+  ])('rejects $label without moving its channel identity', async ({ sourceIsMachine, targetIsMachine }) => {
+    const { contactStore, service } = await createServiceHarness();
+    const target = await contactStore.upsert({
+      displayName: 'Merge target',
+    });
+    const source = await contactStore.upsert({
+      displayName: 'Merge source',
+    });
+    if (targetIsMachine) {
+      expect(await contactStore.setMachineIntelligence(target.id, true, 'operator:test')).toBe(true);
+    }
+    if (sourceIsMachine) {
+      expect(await contactStore.setMachineIntelligence(source.id, true, 'operator:test')).toBe(true);
+    }
+    await contactStore.linkChannelIdentity(source.id, 'multica', 'workspace-system');
+
+    const result = await service.mergeContacts(
+      target.id,
+      JSON.stringify({ sourceId: source.id }),
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      message: 'Cannot merge human and machine-intelligence contacts',
+    });
+    expect(await contactStore.getByChannelIdentity('multica', 'workspace-system'))
+      .toMatchObject({ id: source.id });
+    const unchangedSource = await contactStore.getById(source.id);
+    expect(unchangedSource).toMatchObject({ id: source.id });
+    expect(unchangedSource?.archivedAt).toBeUndefined();
+  });
+
   it('does not expose another contact through fleet list projections', async () => {
     const { contactStore, service, profiles } = await createServiceHarness();
     const current = await contactStore.upsert({ displayName: 'Current Contact' });

@@ -169,6 +169,8 @@ export interface SessionCompositionOptions {
   enableContinuity?: boolean;
   /** Exact channels.json registry ids eligible for cross-channel continuity. */
   continuityChannelIds?: readonly string[];
+  /** Exact enabled-plugin channel-id prefixes eligible for cross-channel continuity. */
+  continuityChannelPrefixes?: readonly string[];
   promptRegistry?: PromptRegistryStatePort | null;
   sessionIntegrityProvider?: SessionIntegrityProvider | null;
   /** Runtime-owned backup root for automatic corrupt-handoff quarantine evidence. */
@@ -275,15 +277,20 @@ function createSessionComposition(
 
   let continuityStore: UserContinuityStore | null = null;
   if (options.enableContinuity) {
-    if (!options.continuityChannelIds) {
-      throw new Error('Enabled cross-channel continuity requires configured channels.json channel ids');
+    if (!options.continuityChannelIds && !options.continuityChannelPrefixes) {
+      throw new Error('Enabled cross-channel continuity requires configured channels.json channel ids or channel plugin prefixes');
     }
-    const continuityChannelIds = new Set(options.continuityChannelIds);
+    const continuityChannelIds = new Set(options.continuityChannelIds ?? []);
+    const continuityChannelPrefixes = options.continuityChannelPrefixes ?? [];
+    if (continuityChannelPrefixes.some(prefix => prefix.length === 0)) {
+      throw new Error('Cross-channel continuity channel prefixes must be non-empty');
+    }
     continuityStore = new UserContinuityStore(resolveContinuityDir(companionDataDir));
     sessionManager.crossChannelContinuity = createUserContinuityPort(
       continuityStore,
       (channelId, minId, maxId) => sessionStore.getEntriesInRange(channelId, minId, maxId),
-      channelId => continuityChannelIds.has(channelId),
+      channelId => continuityChannelIds.has(channelId)
+        || continuityChannelPrefixes.some(prefix => channelId.startsWith(prefix)),
     );
   } else {
     sessionManager.crossChannelContinuity = createDisabledCrossChannelContinuityPort();

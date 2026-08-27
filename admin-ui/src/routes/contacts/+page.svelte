@@ -7,6 +7,7 @@
     createContact,
     deleteContact,
     mergeContacts,
+    transferChannelIdentity,
     deleteConversationChannel,
     unlinkChannelIdentity,
   } from '$lib/api/endpoints/contacts';
@@ -96,6 +97,7 @@
 
   // Merge contact
   let mergeSourceId = $state('');
+  let transferIdentityKey = $state('');
 
   const KNOWN_CHANNEL_TYPES = [
     'discord',
@@ -105,6 +107,7 @@
     'twitter',
     'rss',
     'sillytavern',
+    'multica',
   ];
 
   const TRUST_BADGE_STYLES: Record<string, { cls: string; label: string }> = {
@@ -174,6 +177,22 @@
   function contactNameForId(contactId: string): string {
     const contact = data?.contacts.find(c => c.id === contactId);
     return contact ? contactDisplayName(contact) : contactId;
+  }
+
+  function multicaMemberIdentityOptions(targetId: string) {
+    return (data?.contacts ?? []).flatMap(source => {
+      if (source.id === targetId || source.archivedAt || source.isMachineIntelligence === true) return [];
+      return (source.channels ?? [])
+        .filter(identity => (
+          identity.channel === 'multica' && identity.userId.startsWith('multica:member:')
+        ))
+        .map(identity => ({
+          key: `${source.id}\n${identity.userId}`,
+          sourceContactId: source.id,
+          sourceName: contactDisplayName(source),
+          userId: identity.userId,
+        }));
+    });
   }
 
   function trustBadge(trust: string) {
@@ -345,6 +364,7 @@
     editPronouns = contact.pronouns ?? '';
     editAge = typeof contact.age === 'number' ? String(contact.age) : '';
     showAddChannel = false;
+    transferIdentityKey = '';
     newChannelName = '';
     newChannelUserId = '';
     newChannelPrivacy = 'private';
@@ -586,6 +606,36 @@
       }
     } catch (e) {
       flash(false, e instanceof Error ? e.message : 'Failed to merge contacts');
+    } finally {
+      saving = false;
+    }
+  }
+
+  async function handleTransferIdentity(targetId: string) {
+    const selected = multicaMemberIdentityOptions(targetId)
+      .find(option => option.key === transferIdentityKey);
+    if (!selected) {
+      flash(false, 'Select a Multica member channel to move');
+      return;
+    }
+    if (!confirm(`Move ${selected.userId} from ${selected.sourceName} onto this contact?`)) return;
+    saving = true;
+    try {
+      const result = await transferChannelIdentity(
+        targetId,
+        selected.sourceContactId,
+        'multica',
+        selected.userId,
+      );
+      if (result.ok) {
+        data = await listContacts();
+        transferIdentityKey = '';
+        flash(true, result.message || 'Multica member channel moved');
+      } else {
+        flash(false, result.message || 'Channel move failed');
+      }
+    } catch (e) {
+      flash(false, e instanceof Error ? e.message : 'Failed to move Multica member channel');
     } finally {
       saving = false;
     }
@@ -1492,6 +1542,39 @@
                   </div>
                 {/if}
               </div>
+
+              <!-- Move one Multica member identity without merging contacts. -->
+              {#if contact.isMachineIntelligence !== true && multicaMemberIdentityOptions(contact.id).length > 0}
+                <div>
+                  <details class="group">
+                    <summary class="text-sm font-medium text-gold-700 hover:text-gold-600 transition-colors cursor-pointer">
+                      Move a Multica Member Channel Into This Contact
+                    </summary>
+                    <div class="mt-2 p-3 border border-bark-300 rounded-lg bg-bark-50 space-y-2">
+                      <p class="text-sm text-shadow-600">
+                        Future Multica sessions from this member will use this contact's memories, trust, and permissions. The source contact and Multica system identity stay separate.
+                      </p>
+                      <div>
+                        <label for="transfer-identity-{contact.id}" class="text-sm text-shadow-700">Multica member channel</label>
+                        <select id="transfer-identity-{contact.id}" bind:value={transferIdentityKey}
+                          class="w-full px-2 py-1 text-sm rounded border border-bark-300 bg-bark-50 text-shadow-900
+                                 focus:outline-none focus:ring-1 focus:ring-gold-300">
+                          <option value="">Select...</option>
+                          {#each multicaMemberIdentityOptions(contact.id) as option}
+                            <option value={option.key}>{option.sourceName} — {option.userId}</option>
+                          {/each}
+                        </select>
+                      </div>
+                      <button onclick={() => handleTransferIdentity(contact.id)}
+                        disabled={saving || !transferIdentityKey}
+                        class="px-3 py-1.5 text-sm font-medium rounded-lg bg-gold-600 text-white
+                               hover:bg-gold-700 disabled:opacity-50 transition-colors">
+                        {saving ? 'Moving...' : 'Move Channel'}
+                      </button>
+                    </div>
+                  </details>
+                </div>
+              {/if}
 
               <!-- Merge Contacts -->
               <div>

@@ -105,6 +105,18 @@ describe('Garden route capability catalogue', () => {
           approvals: ['contact_approval'],
         },
       });
+    expect(resolveGardenRouteCapability(
+      'POST',
+      '/api/admin/contacts/contact-a/channel-identity/transfer',
+    )?.capability.authorization).toMatchObject({
+      action: 'contacts.manage',
+      baseRole: 'admin',
+      requirements: {
+        assurance: 'oauth',
+        confirmation: 'explicit',
+        approvals: ['contact_approval'],
+      },
+    });
     expect(
       resolveGardenRouteCapability(
         'POST',

@@ -61,6 +61,17 @@ export interface ContactTrustDriftApplyResult {
 
 export type ContactLifecycleDiagnosticState = 'prepared' | 'over_fenced' | 'manual_hold';
 
+export type ContactChannelIdentityTransferResult =
+  | 'transferred'
+  | 'already_owned'
+  | 'source_contact_not_found'
+  | 'target_contact_not_found'
+  | 'contact_archived'
+  | 'incompatible_contact_kinds'
+  | 'identity_not_found'
+  | 'identity_not_transferable'
+  | 'identity_source_mismatch';
+
 /**
  * Bounded operator projection of durable contact-authority work. Deliberately
  * omits intent, contact, companion, and provider-subject identifiers.
@@ -194,6 +205,14 @@ export interface ContactStorePort {
   /** Total known-member count for a room (for roster pagination). */
   countRoomRoster(channelId: string, options?: Pick<RoomQueryOptions, 'channel'>): Awaitable<number>;
   mergeContacts(sourceContactId: string, targetContactId: string): Awaitable<boolean>;
+  /** Atomically reassign one exact existing channel identity without merging either contact. */
+  transferChannelIdentity(
+    sourceContactId: string,
+    targetContactId: string,
+    channel: ContactChannel,
+    channelUserId: string,
+    actor?: string,
+  ): Awaitable<ContactChannelIdentityTransferResult>;
   updateNotes(id: string, notes: string, actor?: string): Awaitable<boolean>;
   /**
    * Set structured demographic fields (bead fnyb). Only keys present in

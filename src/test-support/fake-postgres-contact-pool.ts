@@ -44,6 +44,8 @@ export class FakePostgresPool {
   afterNextChannelIdentityLookup: (() => void) | null = null;
   private transactionSnapshot?: {
     contacts: Map<string, ContactRow>;
+    contactChannelIds: Map<string, ContactIdentityRow>;
+    contactChannelActivity: Map<string, ContactChannelActivityRow>;
     contactMutationAudit: ContactMutationAuditRow[];
   };
 
@@ -73,6 +75,8 @@ export class FakePostgresPool {
     if (normalized === 'begin') {
       this.transactionSnapshot = {
         contacts: new Map([...this.contacts].map(([id, row]) => [id, { ...row }])),
+        contactChannelIds: new Map([...this.contactChannelIds].map(([id, row]) => [id, { ...row }])),
+        contactChannelActivity: new Map([...this.contactChannelActivity].map(([id, row]) => [id, { ...row }])),
         contactMutationAudit: this.contactMutationAudit.map(row => ({ ...row })),
       };
       return result();
@@ -84,6 +88,8 @@ export class FakePostgresPool {
     if (normalized === 'rollback') {
       if (this.transactionSnapshot) {
         this.contacts = this.transactionSnapshot.contacts;
+        this.contactChannelIds = this.transactionSnapshot.contactChannelIds;
+        this.contactChannelActivity = this.transactionSnapshot.contactChannelActivity;
         this.contactMutationAudit = this.transactionSnapshot.contactMutationAudit;
         this.transactionSnapshot = undefined;
       }
@@ -121,6 +127,32 @@ export class FakePostgresPool {
     if (normalized.startsWith('select trust_level from contacts where id = $1 for update')) {
       const row = this.contacts.get(String(values[0] ?? ''));
       return result(row ? [{ trust_level: row.trust_level }] : []);
+    }
+
+    if (normalized.startsWith('select id, archived_at, is_machine_intelligence from contacts where id = $1 for update')) {
+      const row = this.contacts.get(String(values[0] ?? ''));
+      return result(row ? [{
+        id: row.id,
+        archived_at: row.archived_at ?? null,
+        is_machine_intelligence: row.is_machine_intelligence === true,
+      }] : []);
+    }
+
+    if (normalized.startsWith('select contact_id, privacy_level, ownership_state, restore_state from contact_channel_ids where channel = $1 and channel_user_id = $2 for update')) {
+      const row = this.contactChannelIds.get(this.contactKey(String(values[0] ?? ''), String(values[1] ?? '')));
+      return result(row ? [{
+        contact_id: row.contact_id,
+        privacy_level: row.privacy_level,
+        ownership_state: row.ownership_state ?? 'unverified',
+        restore_state: row.restore_state ?? 'live',
+      }] : []);
+    }
+
+    if (normalized.startsWith('select count(*)::text as count from contact_channel_ids where contact_id = $1 and channel = $2')) {
+      const count = [...this.contactChannelIds.values()].filter(row => (
+        row.contact_id === String(values[0] ?? '') && row.channel === String(values[1] ?? '')
+      )).length;
+      return result([{ count: String(count) }]);
     }
 
     if (normalized.startsWith('update l2_memories set contact_id = $1 where contact_id = $2')) {
@@ -430,6 +462,13 @@ export class FakePostgresPool {
       return result();
     }
 
+    if (normalized.startsWith('update contact_channel_ids set contact_id = $1 where channel = $2 and channel_user_id = $3 and contact_id = $4')) {
+      const row = this.contactChannelIds.get(this.contactKey(String(values[1] ?? ''), String(values[2] ?? '')));
+      if (!row || row.contact_id !== String(values[3] ?? '')) return result();
+      row.contact_id = String(values[0] ?? '');
+      return result([row]);
+    }
+
     if (normalized.startsWith('update contact_channel_activity set contact_id = $1 where contact_id = $2')) {
       const targetId = String(values[0] ?? '');
       const sourceId = String(values[1] ?? '');
@@ -490,6 +529,26 @@ export class FakePostgresPool {
       return result();
     }
 
+    if (normalized.startsWith('insert into contact_channel_activity (')
+      && normalized.includes('select $1, channel, channel_id, privacy_level, first_seen, last_seen')) {
+      const targetId = String(values[0] ?? '');
+      const sourceId = String(values[1] ?? '');
+      const channel = String(values[2] ?? '');
+      for (const source of [...this.contactChannelActivity.values()]) {
+        if (source.contact_id !== sourceId || source.channel !== channel) continue;
+        const key = this.contactKey(targetId, `${source.channel}:${source.channel_id}`);
+        const existing = this.contactChannelActivity.get(key);
+        if (existing) {
+          existing.privacy_level ??= source.privacy_level;
+          existing.first_seen = existing.first_seen < source.first_seen ? existing.first_seen : source.first_seen;
+          existing.last_seen = existing.last_seen > source.last_seen ? existing.last_seen : source.last_seen;
+        } else {
+          this.contactChannelActivity.set(key, { ...source, contact_id: targetId });
+        }
+      }
+      return result();
+    }
+
     if (normalized.startsWith('insert into contact_channel_activity (')) {
       const row: ContactChannelActivityRow = {
         contact_id: String(values[0] ?? ''),
@@ -501,6 +560,19 @@ export class FakePostgresPool {
       };
       this.contactChannelActivity.set(this.contactKey(row.contact_id, `${row.channel}:${row.channel_id}`), row);
       return result();
+    }
+
+    if (normalized.startsWith('delete from contact_channel_activity where contact_id = $1 and channel = $2')
+      && !normalized.includes('channel_id = $3')) {
+      const contactId = String(values[0] ?? '');
+      const channel = String(values[1] ?? '');
+      const deleted: ContactChannelActivityRow[] = [];
+      for (const [key, row] of [...this.contactChannelActivity.entries()]) {
+        if (row.contact_id !== contactId || row.channel !== channel) continue;
+        deleted.push(row);
+        this.contactChannelActivity.delete(key);
+      }
+      return result(deleted);
     }
 
     if (normalized.startsWith('insert into contact_mutation_audit')) {

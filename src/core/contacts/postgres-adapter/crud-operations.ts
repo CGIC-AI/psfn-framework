@@ -24,7 +24,11 @@ import {
   isManualRelationshipMutationAuthorized,
   requiresManualRelationshipMutation,
 } from '../relationship-progression.js';
-import type { ContactUpsertMutationOptions, MachineIntelligenceObservationMarkResult } from '../contact-store-port.js';
+import type {
+  ContactChannelIdentityTransferResult,
+  ContactUpsertMutationOptions,
+  MachineIntelligenceObservationMarkResult,
+} from '../contact-store-port.js';
 import { isDeliberateMachineIntelligenceCorrection } from '../observed-machine-intelligence.js';
 import { haveCompatibleContactIntelligenceKinds } from '../contact-merge-policy.js';
 import type { EmotionalSnapshot, EmotionalTimeSeriesPoint } from '../store/emotional-baseline.js';
@@ -894,6 +898,117 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
     });
     if (merged) await this.syncContactExports();
     return merged;
+  },
+
+  async transferChannelIdentity(
+    sourceContactId: string,
+    targetContactId: string,
+    channel: ContactChannel,
+    channelUserId: string,
+    actor?: string,
+  ): Promise<ContactChannelIdentityTransferResult> {
+    const normalizedIdentity = normalizeIdentity(channel, channelUserId);
+    const transferred = await withPostgresClient(this.pool, async (client) => {
+      const contactKinds = new Map<string, boolean>();
+      for (const contactId of [sourceContactId, targetContactId].sort()) {
+        const contact = await client.query<{
+          id: string;
+          archived_at: string | null;
+          is_machine_intelligence: boolean;
+        }>(`
+          SELECT id, archived_at, is_machine_intelligence FROM contacts WHERE id = $1 FOR UPDATE
+        `, [contactId]);
+        const row = contact.rows.at(0);
+        if (!row) {
+          return contactId === sourceContactId
+            ? 'source_contact_not_found'
+            : 'target_contact_not_found';
+        }
+        if (row.archived_at) return 'contact_archived';
+        contactKinds.set(contactId, row.is_machine_intelligence === true);
+      }
+      if (!haveCompatibleContactIntelligenceKinds(
+        contactKinds.get(sourceContactId),
+        contactKinds.get(targetContactId),
+      )) {
+        return 'incompatible_contact_kinds';
+      }
+
+      const ownership = await client.query<{
+        contact_id: string;
+        privacy_level: string | null;
+        ownership_state: string;
+        restore_state: string;
+      }>(`
+        SELECT contact_id, privacy_level, ownership_state, restore_state
+        FROM contact_channel_ids
+        WHERE channel = $1 AND channel_user_id = $2
+        FOR UPDATE
+      `, [normalizedIdentity.channel, normalizedIdentity.userId]);
+      const owner = ownership.rows.at(0);
+      if (!owner) return 'identity_not_found';
+      if (owner.contact_id === targetContactId) return 'already_owned';
+      if (owner.contact_id !== sourceContactId) return 'identity_source_mismatch';
+      if (owner.ownership_state !== 'unverified' || owner.restore_state !== 'live') {
+        return 'identity_not_transferable';
+      }
+
+      const result = await client.query(`
+        UPDATE contact_channel_ids
+        SET contact_id = $1
+        WHERE channel = $2 AND channel_user_id = $3 AND contact_id = $4
+      `, [targetContactId, normalizedIdentity.channel, normalizedIdentity.userId, sourceContactId]);
+      if ((result.rowCount ?? 0) !== 1) return 'identity_source_mismatch';
+
+      const remainingChannelIdentities = await client.query<{ count: string }>(`
+        SELECT COUNT(*)::text AS count
+        FROM contact_channel_ids
+        WHERE contact_id = $1 AND channel = $2
+      `, [sourceContactId, normalizedIdentity.channel]);
+      if (remainingChannelIdentities.rows.at(0)?.count === '0') {
+        await client.query(`
+          INSERT INTO contact_channel_activity (
+            contact_id, channel, channel_id, privacy_level, first_seen, last_seen
+          )
+          SELECT $1, channel, channel_id, privacy_level, first_seen, last_seen
+          FROM contact_channel_activity
+          WHERE contact_id = $2 AND channel = $3
+          ON CONFLICT (contact_id, channel, channel_id) DO UPDATE
+          SET privacy_level = COALESCE(contact_channel_activity.privacy_level, EXCLUDED.privacy_level),
+              first_seen = LEAST(contact_channel_activity.first_seen, EXCLUDED.first_seen),
+              last_seen = GREATEST(contact_channel_activity.last_seen, EXCLUDED.last_seen)
+        `, [targetContactId, sourceContactId, normalizedIdentity.channel]);
+        await client.query(`
+          DELETE FROM contact_channel_activity
+          WHERE contact_id = $1 AND channel = $2
+        `, [sourceContactId, normalizedIdentity.channel]);
+      }
+
+      const auditValue = JSON.stringify({
+        channel: normalizedIdentity.channel,
+        userId: normalizedIdentity.userId,
+        privacyLevel: owner.privacy_level,
+      });
+      await this.appendMutationAuditEntry(
+        sourceContactId,
+        'channel_link',
+        auditValue,
+        null,
+        actor,
+        client,
+      );
+      await this.appendMutationAuditEntry(
+        targetContactId,
+        'channel_link',
+        null,
+        auditValue,
+        actor,
+        client,
+      );
+      return 'transferred';
+    });
+    if (transferred === 'transferred') await this.syncContactExports();
+    return transferred;
   },
 
   async updateNotes(id: string, notes: string, actor?: string): Promise<boolean> {

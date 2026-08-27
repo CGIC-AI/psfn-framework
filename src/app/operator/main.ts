@@ -36,6 +36,7 @@ import {
   getPostgresStoreReadinessSnapshot,
   sealPostgresStoreReadinessBeforeReady,
 } from '../../persistence/postgres/runtime-readiness.js';
+import { resolveGatewayAuthPlan } from './gateway-auth-plan.js';
 
 const log = createComponentLogger('OperatorSurface');
 const DEFAULT_SHUTDOWN_FORCE_EXIT_TIMEOUT_MS = 15_000;
@@ -56,16 +57,11 @@ async function main(): Promise<void> {
     throw new Error('ADMIN_PORT is required for the operator Garden surface');
   }
 
-  // The operator process owns ADMIN_TOKEN and resolves operator-only gateway
-  // confirmations directly against the gateway, so the credential never
-  // traverses the agent (x5rt.10).
-  const operatorConfirmationBaseUrl = process.env.GATEWAY_OPERATOR_API_BASE_URL?.trim();
-  const operatorConfirmationToken = process.env.ADMIN_TOKEN?.trim();
-  if (operatorConfirmationBaseUrl && !operatorConfirmationToken) {
-    throw new Error(
-      'Garden operator confirmation routing requires ADMIN_TOKEN for the internal gateway hop',
-    );
-  }
+  const gatewayAuthPlan = resolveGatewayAuthPlan({
+    fleetSsoEnabled: config.fleetAuthVerifier !== undefined,
+    gatewayBaseUrl: process.env.GATEWAY_OPERATOR_API_BASE_URL,
+    adminToken: process.env.ADMIN_TOKEN,
+  });
   const fleetSsoTls = config.fleetAuthVerifier
     ? resolveFleetSsoGardenTls(process.env)
     : undefined;
@@ -97,11 +93,6 @@ async function main(): Promise<void> {
       companionIds: config.companionFleet.companions.map(companion => companion.companionId),
     });
   }
-  if (fleetControlPlane && !operatorConfirmationBaseUrl) {
-    throw new Error(
-      'Fleet Garden startup requires GATEWAY_OPERATOR_API_BASE_URL for child assertions',
-    );
-  }
   const admissionMode = config.fleetAuthVerifier
     ? 'fleet-principal'
     : (process.env.ADMIN_TOKEN?.trim() ? 'standalone-token' : 'standalone-insecure');
@@ -126,17 +117,21 @@ async function main(): Promise<void> {
         }
       : { transportEndpoint: resolveAdminTransportClientEndpoint(process.env) }),
     ...(fleetSsoTls ? { fleetSsoTls } : {}),
-    ...(operatorConfirmationBaseUrl
+    ...(gatewayAuthPlan.tokenConfirmation
       ? {
           operatorConfirmationResolver:
-            createGatewayOperatorConfirmationClient(operatorConfirmationBaseUrl, {
-              operatorToken: operatorConfirmationToken!,
+            createGatewayOperatorConfirmationClient(gatewayAuthPlan.tokenConfirmation.baseUrl, {
+              operatorToken: gatewayAuthPlan.tokenConfirmation.token,
               requestTimeoutMs: lifecycleKubernetes.operatorConfirmationRequestTimeoutMs,
             }),
         }
       : {}),
-    ...(config.fleetAuthVerifier && operatorConfirmationBaseUrl
-      ? { fleetChildAssertions: createGardenFleetChildAssertionClient(operatorConfirmationBaseUrl) }
+    ...(gatewayAuthPlan.fleetChildAssertionsBaseUrl
+      ? {
+          fleetChildAssertions: createGardenFleetChildAssertionClient(
+            gatewayAuthPlan.fleetChildAssertionsBaseUrl,
+          ),
+        }
       : {}),
     postgresReadiness: getPostgresStoreReadinessSnapshot,
   });

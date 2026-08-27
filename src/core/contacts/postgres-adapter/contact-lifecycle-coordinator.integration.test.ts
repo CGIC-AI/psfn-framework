@@ -350,6 +350,27 @@ describe('authenticated contact lifecycle coordinator', () => {
     }
   }, TIMEOUT_MS);
 
+  it('rejects mixed-intelligence merges before creating a lifecycle intent', async () => {
+    const gateway = new RecordingGateway();
+    const { pool, store } = await fixture(gateway);
+    try {
+      await store.upsert({ id: 'contact-machine', displayName: 'Machine Contact' });
+      await expect(store.setMachineIntelligence('contact-machine', true, 'operator:test'))
+        .resolves.toBe(true);
+
+      await expect(store.mergeContacts('contact-machine', 'contact-a')).resolves.toBe(false);
+      expect(gateway.calls).toEqual([]);
+      const intents = await pool.query<{ count: string }>(`
+        SELECT COUNT(*)::text AS count FROM contact_lifecycle_intents
+        WHERE action = 'contact.merge'
+      `);
+      expect(intents.rows).toEqual([{ count: '0' }]);
+      expect((await store.getById('contact-machine'))?.archivedAt).toBeUndefined();
+    } finally {
+      await pool.end();
+    }
+  }, TIMEOUT_MS);
+
   it('routes direct verified Discord link conflicts through the same suspension saga', async () => {
     const gateway = new RecordingGateway();
     const { pool, store } = await fixture(gateway);

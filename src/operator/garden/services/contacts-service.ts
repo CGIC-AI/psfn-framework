@@ -563,7 +563,8 @@ export class AdminContactsDataService implements AdminContactsService {
     body: string,
     context?: GardenRequestContext,
   ): Promise<ContactUpdateResult> {
-    if (context?.kind === 'fleet_principal') {
+    const fleetMergeUnavailable = context?.kind === 'fleet_principal';
+    if (fleetMergeUnavailable && !soleAdminFleetActor(context)) {
       return { ok: false, message: 'Fleet contact merging is unavailable' };
     }
     const contactStore = this.deps.contactStore;
@@ -602,6 +603,10 @@ export class AdminContactsDataService implements AdminContactsService {
       target.isMachineIntelligence,
     )) {
       return { ok: false, message: MIXED_INTELLIGENCE_CONTACT_MERGE_ERROR };
+    }
+
+    if (fleetMergeUnavailable) {
+      return { ok: false, message: 'Fleet contact merging is unavailable' };
     }
 
     if (!await contactStore.mergeContacts(sourceId, targetId)) {

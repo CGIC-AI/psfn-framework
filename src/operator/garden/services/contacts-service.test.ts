@@ -158,6 +158,53 @@ describe('AdminContactsDataService', () => {
   });
 
   it.each([
+    { label: 'machine source into human target', sourceIsMachine: true, targetIsMachine: false },
+    { label: 'human source into machine target', sourceIsMachine: false, targetIsMachine: true },
+  ])('surfaces the mixed-kind error to a sole-admin Fleet $label request', async ({
+    sourceIsMachine,
+    targetIsMachine,
+  }) => {
+    const { contactStore, service } = await createServiceHarness();
+    const target = await contactStore.upsert({ displayName: 'Merge target' });
+    const source = await contactStore.upsert({ displayName: 'Merge source' });
+    if (targetIsMachine) {
+      expect(await contactStore.setMachineIntelligence(target.id, true, 'operator:test')).toBe(true);
+    }
+    if (sourceIsMachine) {
+      expect(await contactStore.setMachineIntelligence(source.id, true, 'operator:test')).toBe(true);
+    }
+
+    const result = await service.mergeContacts(
+      target.id,
+      JSON.stringify({ sourceId: source.id }),
+      authenticatedContactMutationContext({ contactId: target.id }),
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      message: 'Cannot merge human and machine-intelligence contacts',
+    });
+    expect((await contactStore.getById(target.id))?.archivedAt).toBeUndefined();
+    expect((await contactStore.getById(source.id))?.archivedAt).toBeUndefined();
+  });
+
+  it('keeps same-kind Fleet merging disabled', async () => {
+    const { contactStore, service } = await createServiceHarness();
+    const target = await contactStore.upsert({ displayName: 'Merge target' });
+    const source = await contactStore.upsert({ displayName: 'Merge source' });
+
+    const result = await service.mergeContacts(
+      target.id,
+      JSON.stringify({ sourceId: source.id }),
+      authenticatedContactMutationContext({ contactId: target.id }),
+    );
+
+    expect(result).toEqual({ ok: false, message: 'Fleet contact merging is unavailable' });
+    expect((await contactStore.getById(target.id))?.archivedAt).toBeUndefined();
+    expect((await contactStore.getById(source.id))?.archivedAt).toBeUndefined();
+  });
+
+  it.each([
     { label: 'human contacts', isMachineIntelligence: false },
     { label: 'machine-intelligence contacts', isMachineIntelligence: true },
   ])('still merges $label', async ({ isMachineIntelligence }) => {

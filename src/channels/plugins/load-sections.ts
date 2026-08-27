@@ -1,7 +1,7 @@
 import { isRecord } from '../../shared/utils/types.js';
 import type { ChannelPluginLoadedSection, ChannelPluginRegistry } from './types.js';
 
-export const FIRST_CLASS_CHANNEL_CONFIG_KEYS: Record<string, true> = {
+const FIRST_CLASS_CHANNEL_CONFIG_KEYS: Record<string, true> = {
   discord: true,
   telegram: true,
   api: true,

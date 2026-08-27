@@ -4,13 +4,13 @@ import type { CompanionId } from '../../shared/routing/companion-id.js';
 import type { RuntimeChannelLifecycleLogger } from '../backplane/channel-lifecycle.js';
 import type { ChannelAdapterPort } from '../backplane/types.js';
 
-export interface ChannelPluginCredentialNeed {
+interface ChannelPluginCredentialNeed {
   id: string;
   reference: CredentialReference;
   description: string;
 }
 
-export interface ChannelPluginManifest {
+interface ChannelPluginManifest {
   id: string;
   label: string;
 }
@@ -26,7 +26,7 @@ export interface ChannelPluginLoadedSection<TConfig = unknown> extends ChannelPl
   id: string;
 }
 
-export interface ChannelPluginOperatorAlert {
+interface ChannelPluginOperatorAlert {
   title: string;
   message: string;
   idempotencyKey: string;

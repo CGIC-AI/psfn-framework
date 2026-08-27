@@ -42,6 +42,17 @@ export function disabledGatewayMultiCompanionConfig(): GatewayMultiCompanionConf
   };
 }
 
+function pluginChannelRouting(
+  channelsConfig: RuntimeChannelsConfig,
+): Partial<Record<GatewayChannelSurface, CompanionId>> {
+  const routing: Partial<Record<GatewayChannelSurface, CompanionId>> = {};
+  for (const section of Object.values(channelsConfig.plugins)) {
+    if (!section.enabled || !section.companionId) continue;
+    routing[section.id as GatewayChannelSurface] = section.companionId;
+  }
+  return routing;
+}
+
 /**
  * Maps an inbound message channel type onto a routable gateway surface.
  * Returns null for channel types that have no multi-companion routing lane —
@@ -105,9 +116,7 @@ export function resolveGatewayMultiCompanionConfig(
     ...(channelsConfig.api.companionId ?? soleCompanionId
       ? { api: channelsConfig.api.companionId ?? soleCompanionId }
       : {}),
-    ...(channelsConfig.multica.enabled && channelsConfig.multica.companionId
-      ? { multica: channelsConfig.multica.companionId }
-      : {}),
+    ...pluginChannelRouting(channelsConfig),
   };
 
   const discordAccounts: Record<string, CompanionId> = {};

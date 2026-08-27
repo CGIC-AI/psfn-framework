@@ -9,18 +9,51 @@ import {
 } from './channel-surfaces.js';
 import { createCompanionId } from '../../shared/routing/companion-id.js';
 import type { IntakeScreeningService } from '../../core/cogsec/intake/screening.js';
+import { createStaticCredentialVault } from '../custody/credential-vault.js';
+import { ChannelPluginHost } from '../../channels/plugins/host.js';
+import { createChannelPluginRegistry } from '../../channels/plugins/registry.js';
+import type { ChannelAdapterPort } from '../../channels/backplane/types.js';
+import type { ChannelPlugin } from '../../channels/plugins/types.js';
 
-function createInput(): {
+async function createInput(): Promise<{
   input: WireGatewayChannelMessagesInput;
   discordHandler: ((message: any) => Promise<any>) | undefined;
   telegramHandler: ((message: any) => Promise<any>) | undefined;
   multicaHandler: ((message: any, options?: any) => Promise<any>) | undefined;
   multicaAlertHandler: ((alert: any) => Promise<void>) | undefined;
-} {
+}> {
   let discordHandler: ((message: any) => Promise<any>) | undefined;
   let telegramHandler: ((message: any) => Promise<any>) | undefined;
   let multicaHandler: ((message: any, options?: any) => Promise<any>) | undefined;
   let multicaAlertHandler: ((alert: any) => Promise<void>) | undefined;
+
+  const plugin: ChannelPlugin = {
+    manifest: { id: 'multica', label: 'Multica' },
+    parseConfig: () => ({ enabled: true, credentials: [], config: {} }),
+    create: () => ({
+      adapter: {
+        id: 'multica',
+        start: async () => undefined,
+        stop: async () => undefined,
+        onMessage: (handler) => {
+          multicaHandler = handler as (message: any, options?: any) => Promise<any>;
+        },
+      } as ChannelAdapterPort,
+      onOperatorAlert: (handler) => {
+        multicaAlertHandler = handler;
+      },
+    }),
+  };
+  const plugins = await ChannelPluginHost.load({
+    registry: createChannelPluginRegistry([plugin]),
+    sections: { multica: { id: 'multica', enabled: true, credentials: [], config: {} } },
+    vault: createStaticCredentialVault({}),
+    contextFor: () => ({
+      log: { error: vi.fn(), warn: vi.fn() },
+      shutdownTimeoutMs: 1_000,
+      intakeScreening: null,
+    }),
+  });
 
   return {
     input: {
@@ -34,14 +67,7 @@ function createInput(): {
           telegramHandler = handler as (message: any) => Promise<any>;
         },
       }),
-      multica: fromAny({
-        onMessage: (handler) => {
-          multicaHandler = handler as (message: any, options?: any) => Promise<any>;
-        },
-        onOperatorAlert: (handler) => {
-          multicaAlertHandler = handler as (alert: any) => Promise<void>;
-        },
-      }),
+      plugins,
       gateway: fromAny({
         notifyChannelMessage: vi.fn(() => 1),
         requestAgentVoiceStream: vi.fn(async () => ({
@@ -72,7 +98,7 @@ function createInput(): {
 
 describe('wireGatewayChannelMessages', () => {
   it('forwards Discord inbound messages and returns an explicit non-delivery acknowledgement', async () => {
-    const setup = createInput();
+    const setup = await createInput();
 
     wireGatewayChannelMessages(setup.input);
 
@@ -106,7 +132,7 @@ describe('wireGatewayChannelMessages', () => {
   });
 
   it('does not acknowledge forwarding when the gateway delivers to zero agents', async () => {
-    const setup = createInput();
+    const setup = await createInput();
     vi.mocked(setup.input.gateway.notifyChannelMessage).mockReturnValue(0);
 
     wireGatewayChannelMessages(setup.input);
@@ -119,7 +145,7 @@ describe('wireGatewayChannelMessages', () => {
   });
 
   it('routes telegram inbound messages through requestAgentVoiceStream', async () => {
-    const setup = createInput();
+    const setup = await createInput();
 
     wireGatewayChannelMessages(setup.input);
 
@@ -146,7 +172,7 @@ describe('wireGatewayChannelMessages', () => {
   });
 
   it('routes Multica work through the same companion request pipeline', async () => {
-    const setup = createInput();
+    const setup = await createInput();
 
     wireGatewayChannelMessages(setup.input);
 
@@ -168,7 +194,7 @@ describe('wireGatewayChannelMessages', () => {
   });
 
   it('routes terminal Multica failures to the operator alert dispatcher', async () => {
-    const setup = createInput();
+    const setup = await createInput();
     wireGatewayChannelMessages(setup.input);
 
     await setup.multicaAlertHandler?.({
@@ -233,7 +259,7 @@ describe('wireGatewayChannelMessages multi-account discord (W1-P2)', () => {
   });
 
   it('keeps the single-account call shape without a trailing accountId (parity)', async () => {
-    const setup = createInput();
+    const setup = await createInput();
     wireGatewayChannelMessages(setup.input);
 
     await setup.discordHandler?.({ channelId: 'ch-3', content: 'single mode' });

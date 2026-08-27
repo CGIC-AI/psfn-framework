@@ -4,7 +4,6 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
   assertDiscordAccountTokensConfigured,
-  assertMulticaTokenConfigured,
   buildExternalChannelProfiles,
   loadRuntimeChannelsConfig,
   loadChannelsOwnerFile,
@@ -35,14 +34,7 @@ describe('loadRuntimeChannelsConfig', () => {
         port: 8080,
         path: '/telegram/webhook',
       });
-      expect(config.multica).toEqual({
-        enabled: false,
-        baseUrl: '',
-        workspaceId: '',
-        tokenEnvVar: '',
-        token: '',
-        pollIntervalMs: 1000,
-      });
+      expect(config.plugins).toEqual({});
       expect(config.psfnAmica).toEqual({ enabled: false });
       expect(config.companionUi).toEqual({ channelPrivacy: 'private' });
       expect(buildExternalChannelProfiles(config)).toEqual({
@@ -72,23 +64,31 @@ describe('loadRuntimeChannelsConfig', () => {
         MULTICA_GATEWAY_TOKEN: ' owner-token ',
       });
 
-      expect(config.multica).toEqual({
+      expect(config.plugins.multica).toEqual({
+        id: 'multica',
         enabled: true,
-        baseUrl: 'http://127.0.0.1:8080',
-        workspaceId: '11111111-1111-4111-8111-111111111111',
         companionId: '22222222-2222-4222-8222-222222222222',
-        tokenEnvVar: 'MULTICA_GATEWAY_TOKEN',
-        token: 'owner-token',
-        pollIntervalMs: 2500,
-        runtimeName: 'V Unit 00',
+        credentials: [{
+          id: 'token',
+          reference: { kind: 'env', envName: 'MULTICA_GATEWAY_TOKEN' },
+          description: 'Multica gateway token',
+        }],
+        config: {
+          enabled: true,
+          baseUrl: 'http://127.0.0.1:8080',
+          workspaceId: '11111111-1111-4111-8111-111111111111',
+          companionId: '22222222-2222-4222-8222-222222222222',
+          tokenRef: { kind: 'env', envName: 'MULTICA_GATEWAY_TOKEN' },
+          pollIntervalMs: 2500,
+          runtimeName: 'V Unit 00',
+        },
       });
-      expect(() => assertMulticaTokenConfigured(config.multica)).not.toThrow();
     } finally {
       rmSync(dataDir, { recursive: true, force: true });
     }
   });
 
-  it('parses Multica without gateway secrets but fails the gateway assertion', () => {
+  it('keeps Multica credential references unresolved at config load', () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
     try {
       writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
@@ -103,9 +103,25 @@ describe('loadRuntimeChannelsConfig', () => {
       }));
 
       const config = loadRuntimeChannelsConfig(dataDir, {});
-      expect(config.multica.token).toBe('');
-      expect(() => assertMulticaTokenConfigured(config.multica)).toThrow(
-        'Multica gateway token missing: env var MULTICA_GATEWAY_TOKEN is required',
+      expect(config.plugins.multica?.credentials).toEqual([{
+        id: 'token',
+        reference: { kind: 'env', envName: 'MULTICA_GATEWAY_TOKEN' },
+        description: 'Multica gateway token',
+      }]);
+      expect(config.plugins.multica?.config).not.toHaveProperty('token');
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects unknown channel plugin ids', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
+    try {
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        slack: { enabled: true },
+      }));
+      expect(() => loadRuntimeChannelsConfig(dataDir, {})).toThrow(
+        'Unknown channel plugin "slack"',
       );
     } finally {
       rmSync(dataDir, { recursive: true, force: true });

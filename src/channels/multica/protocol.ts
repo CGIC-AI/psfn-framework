@@ -1,4 +1,4 @@
-import { isRecord } from '../../shared/utils/types.js';
+import { isRecord, isRfc4122Uuid } from '../../shared/utils/types.js';
 
 export interface MulticaRuntimeRegistration {
   id: string;
@@ -36,6 +36,9 @@ export interface MulticaClaimedTask {
   autopilot_title?: string;
   autopilot_description?: string;
   quick_create_prompt?: string;
+  initiator_type?: 'member' | 'agent';
+  initiator_id?: string;
+  initiator_name?: string;
   auth_token?: string;
   agent?: MulticaTaskAgent;
 }
@@ -144,6 +147,7 @@ export function parseClaimResponse(value: unknown): MulticaClaimedTask | null {
     autopilot_title: read('autopilot_title'),
     autopilot_description: read('autopilot_description'),
     quick_create_prompt: read('quick_create_prompt'),
+    initiator_name: read('initiator_name'),
     auth_token: read('auth_token'),
   };
   const definedStrings = Object.fromEntries(
@@ -153,6 +157,17 @@ export function parseClaimResponse(value: unknown): MulticaClaimedTask | null {
   const leaderRoleResolved = optionalBoolean(task.leader_role_resolved, 'task.leader_role_resolved');
   const comments = parseCoalescedComments(task.coalesced_comments);
   const agent = parseTaskAgent(task.agent);
+  const initiatorType = read('initiator_type');
+  const initiatorId = read('initiator_id');
+  if ((initiatorType === undefined) !== (initiatorId === undefined)) {
+    throw new Error('Multica response fields task.initiator_type and task.initiator_id must be provided together');
+  }
+  if (initiatorType !== undefined && initiatorType !== 'member' && initiatorType !== 'agent') {
+    throw new Error('Multica response field task.initiator_type must be member or agent');
+  }
+  if (initiatorId !== undefined && !isRfc4122Uuid(initiatorId)) {
+    throw new Error('Multica response field task.initiator_id must be a lowercase RFC-4122 UUID');
+  }
   return {
     id: requiredString(task.id, 'task.id'),
     runtime_id: requiredString(task.runtime_id, 'task.runtime_id'),
@@ -160,6 +175,9 @@ export function parseClaimResponse(value: unknown): MulticaClaimedTask | null {
     ...definedStrings,
     ...(isLeaderTask === undefined ? {} : { is_leader_task: isLeaderTask }),
     ...(leaderRoleResolved === undefined ? {} : { leader_role_resolved: leaderRoleResolved }),
+    ...(initiatorType && initiatorId
+      ? { initiator_type: initiatorType, initiator_id: initiatorId }
+      : {}),
     ...(comments ? { coalesced_comments: comments } : {}),
     ...(agent ? { agent } : {}),
   };

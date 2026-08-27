@@ -45,6 +45,7 @@ import {
   type GardenRequestContext,
 } from '../garden-request-context.js';
 import { createSubjectAuthorizedMemoryStore } from '../../../faculties/memory/subject-authorized-store.js';
+import { isRecord, isRfc4122Uuid } from '../../../shared/utils/types.js';
 
 function requestActor(context: GardenRequestContext | undefined): string {
   if (context?.kind !== 'fleet_principal') return 'admin:api';
@@ -96,6 +97,11 @@ interface AddChannelLink {
 interface ConversationChannelDeletePayload {
   channel?: string;
   channelId?: string;
+}
+
+function isMulticaMemberUserId(userId: string): boolean {
+  const prefix = 'multica:member:';
+  return userId.startsWith(prefix) && isRfc4122Uuid(userId.slice(prefix.length));
 }
 
 interface ChannelBondingUpdate {
@@ -673,6 +679,83 @@ export class AdminContactsDataService implements AdminContactsService {
           sessionStore: this.deps.sessionStore,
         }).get(updated.id) ?? []
         : [],
+    };
+  }
+
+  async transferChannelIdentity(
+    targetContactId: string,
+    body: string,
+    context?: GardenRequestContext,
+  ): Promise<ContactUpdateResult> {
+    const contactStore = this.deps.contactStore;
+    if (!contactStore) return { ok: false, message: 'Contact store not available' };
+    if (context?.kind === 'fleet_principal'
+      && (!soleAdminFleetActor(context) || context.actor.contactId !== targetContactId)) {
+      return {
+        ok: false,
+        message: 'Channel identities can only be moved onto your own contact',
+        failureKind: 'authorization',
+      };
+    }
+
+    let payload: Record<string, unknown>;
+    try {
+      const parsed: unknown = JSON.parse(body);
+      if (!isRecord(parsed)) {
+        return { ok: false, message: 'Request body must be a JSON object' };
+      }
+      payload = parsed;
+    } catch {
+      return { ok: false, message: 'Request body must be valid JSON' };
+    }
+    const sourceContactId = typeof payload.sourceContactId === 'string'
+      ? payload.sourceContactId.trim()
+      : undefined;
+    const channel = typeof payload.channel === 'string' ? payload.channel.trim() : undefined;
+    const userId = typeof payload.userId === 'string' ? payload.userId.trim() : undefined;
+    if (!sourceContactId || !channel || !userId) {
+      return { ok: false, message: 'sourceContactId, channel, and userId are required' };
+    }
+    if (sourceContactId === targetContactId) {
+      return { ok: false, message: 'Source and target contacts must be different' };
+    }
+    if (channel !== 'multica' || !isMulticaMemberUserId(userId)) {
+      return { ok: false, message: 'Only Multica member identities can move between human contacts' };
+    }
+
+    const [source, target, owner] = await Promise.all([
+      contactStore.getById(sourceContactId),
+      contactStore.getById(targetContactId),
+      contactStore.getByChannelIdentity(channel, userId),
+    ]);
+    if (!source || !target || source.archivedAt || target.archivedAt) {
+      return { ok: false, message: 'Source or target contact not found', failureKind: 'not_found' };
+    }
+    if (source.isMachineIntelligence === true || target.isMachineIntelligence === true) {
+      return { ok: false, message: 'Multica member identities can only move between human contacts' };
+    }
+    if (!owner || owner.id !== sourceContactId) {
+      return { ok: false, message: 'Multica member identity is not linked to the source contact' };
+    }
+
+    const result = await contactStore.transferChannelIdentity(
+      sourceContactId,
+      targetContactId,
+      channel,
+      userId,
+      requestActor(context),
+    );
+    if (result !== 'transferred' && result !== 'already_owned') {
+      return {
+        ok: false,
+        message: 'Channel identity changed concurrently; refresh and try again',
+        failureKind: 'conflict',
+      };
+    }
+    return {
+      ok: true,
+      message: 'Multica member channel moved to this contact',
+      contact: await contactStore.getById(targetContactId),
     };
   }
 

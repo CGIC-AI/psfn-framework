@@ -1037,6 +1037,60 @@ describe('runtime subject identity', () => {
     });
   });
 
+  it('gives a linked Multica member session the canonical human contact context', async () => {
+    const memberUserId = 'multica:member:99999999-9999-4999-8999-999999999999';
+    const authorContext = await resolveAuthorContext({
+      message: makeMessage({
+        channelId: 'multica:11111111-1111-4111-8111-111111111111:chat:session-a',
+        channelType: 'multica',
+        authorId: memberUserId,
+        authorName: 'Operator',
+        routing: {
+          source: 'multica',
+          channelPrivacy: 'invite_only',
+          authorIsMachineIntelligence: false,
+        },
+      }),
+      contactStore: {
+        resolveChannelIdentity: (channel: string, channelUserId: string) => {
+          expect(channel).toBe('multica');
+          expect(channelUserId).toBe(memberUserId);
+          return {
+            id: 'contact-canonical-owner',
+            discordUserId: 'discord-owner',
+            displayName: 'Canonical owner',
+            nickname: 'Owner',
+            trustLevel: 'primary',
+            relationshipType: 'partner',
+            channelIdentities: [
+              { channel: 'discord', userId: 'discord-owner' },
+              { channel: 'multica', userId: memberUserId },
+            ],
+            firstSeen: '2026-03-17T12:00:00Z',
+            lastSeen: '2026-03-17T12:00:00Z',
+          };
+        },
+        getConversationChannelPrivacy: () => undefined,
+        updateLastSeen: () => undefined,
+        recordChannelActivity: () => undefined,
+        getEmotionalTimeSeries: () => [],
+      } as never,
+      logger: { warn: () => undefined, debug: () => undefined },
+      companionIdentityKey: DEFAULT_COMPANION_ID,
+      companionDisplayName: 'Companion',
+    });
+
+    expect(authorContext).toMatchObject({
+      canonicalContactKey: 'contact-canonical-owner',
+      continuitySubjectKey: 'contact-canonical-owner',
+      continuityFallbackKeys: ['discord-owner', memberUserId],
+      trustLevel: 'primary',
+      relationshipType: 'partner',
+      resolvedUserName: 'Owner',
+      actorKind: 'human',
+    });
+  });
+
   it('activates the channel bond only when the current exact identity is bonded', async () => {
     const makeStore = (channels: Array<{ channel: string; userId: string; privacyLevel: string; bonded?: boolean }>) => ({
       resolveChannelIdentity: () => ({

@@ -53,12 +53,39 @@ function timestampForTask(task: MulticaClaimedTask): Date {
   return new Date();
 }
 
+function authorForTask(task: MulticaClaimedTask): {
+  authorId: string;
+  authorName: string;
+  authorIsMachineIntelligence: boolean;
+} {
+  if (task.initiator_type === 'member' && task.initiator_id) {
+    return {
+      authorId: `multica:member:${task.initiator_id}`,
+      authorName: task.initiator_name || 'Multica member',
+      authorIsMachineIntelligence: false,
+    };
+  }
+  if (task.initiator_type === 'agent' && task.initiator_id) {
+    return {
+      authorId: `multica:agent:${task.initiator_id}`,
+      authorName: task.initiator_name || 'Multica agent',
+      authorIsMachineIntelligence: true,
+    };
+  }
+  return {
+    authorId: `multica:system:${task.workspace_id}`,
+    authorName: 'Multica system',
+    authorIsMachineIntelligence: true,
+  };
+}
+
 export async function toMulticaSubstrateMessage(
   task: MulticaClaimedTask,
   issue: MulticaIssue | null,
   intakeScreening: IntakeScreeningService | null,
 ): Promise<SubstrateMessage> {
   const channelId = channelIdForTask(task);
+  const author = authorForTask(task);
   const screened = await screenChatMessageBody({
     content: formatTaskContent(task, issue),
     screening: intakeScreening,
@@ -73,8 +100,8 @@ export async function toMulticaSubstrateMessage(
     id: task.id,
     channelId,
     channelType: 'multica',
-    authorId: `multica:system:${task.workspace_id}`,
-    authorName: 'Multica system',
+    authorId: author.authorId,
+    authorName: author.authorName,
     content: screened.content,
     timestamp: timestampForTask(task),
     isDirectMessage: false,
@@ -82,7 +109,7 @@ export async function toMulticaSubstrateMessage(
     routing: {
       source: 'multica',
       channelPrivacy: 'invite_only',
-      authorIsMachineIntelligence: true,
+      authorIsMachineIntelligence: author.authorIsMachineIntelligence,
       ...(screened.snapshot ? { intakeEnvelopes: [screened.snapshot] } : {}),
     },
   };

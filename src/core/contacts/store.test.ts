@@ -629,6 +629,137 @@ describe('Postgres contact store behavior', () => {
     });
   });
 
+  describe('transferChannelIdentity', () => {
+    it('atomically moves only the exact identity and its sole-owner channel activity', async () => {
+      const target = await store.upsert({ displayName: 'Canonical human' });
+      const source = await store.upsert({ displayName: 'Multica duplicate' });
+      const other = await store.upsert({ displayName: 'Multica system' });
+      const memberUserId = 'multica:member:99999999-9999-4999-8999-999999999999';
+      const systemUserId = 'multica:system:11111111-1111-4111-8111-111111111111';
+      await store.linkChannelIdentity(source.id, 'multica', memberUserId);
+      await store.linkChannelIdentity(other.id, 'multica', systemUserId);
+      await store.recordChannelActivity(
+        source.id,
+        'multica',
+        'multica:11111111-1111-4111-8111-111111111111:chat:chat-a',
+      );
+
+      await expect(store.transferChannelIdentity(
+        source.id,
+        target.id,
+        'multica',
+        memberUserId,
+        'admin:test',
+      )).resolves.toBe('transferred');
+
+      expect(await store.getByChannelIdentity('multica', memberUserId)).toMatchObject({ id: target.id });
+      expect(await store.getByChannelIdentity('multica', systemUserId)).toMatchObject({ id: other.id });
+      expect((await store.getById(target.id))?.conversationChannels).toEqual([
+        expect.objectContaining({
+          channel: 'multica',
+          channelId: 'multica:11111111-1111-4111-8111-111111111111:chat:chat-a',
+        }),
+      ]);
+      expect((await store.getById(source.id))?.conversationChannels).toBeUndefined();
+      expect(await store.getById(source.id)).toMatchObject({ id: source.id });
+    });
+
+    it('fails closed when the exact identity no longer belongs to the stated source', async () => {
+      const target = await store.upsert({ displayName: 'Canonical human' });
+      const source = await store.upsert({ displayName: 'Stale source' });
+      const actualOwner = await store.upsert({ displayName: 'Actual owner' });
+      const memberUserId = 'multica:member:99999999-9999-4999-8999-999999999999';
+      await store.linkChannelIdentity(actualOwner.id, 'multica', memberUserId);
+
+      await expect(store.transferChannelIdentity(
+        source.id,
+        target.id,
+        'multica',
+        memberUserId,
+      )).resolves.toBe('identity_source_mismatch');
+      expect(await store.getByChannelIdentity('multica', memberUserId)).toMatchObject({ id: actualOwner.id });
+    });
+
+    it('does not move ambiguous channel activity while another same-channel identity remains', async () => {
+      const target = await store.upsert({ displayName: 'Canonical human' });
+      const source = await store.upsert({ displayName: 'Shared member source' });
+      const movedUserId = 'multica:member:99999999-9999-4999-8999-999999999999';
+      const remainingUserId = 'multica:member:77777777-7777-4777-8777-777777777777';
+      await store.linkChannelIdentity(source.id, 'multica', movedUserId);
+      await store.linkChannelIdentity(source.id, 'multica', remainingUserId);
+      await store.recordChannelActivity(source.id, 'multica', 'multica:workspace:chat:shared');
+
+      await expect(store.transferChannelIdentity(
+        source.id,
+        target.id,
+        'multica',
+        movedUserId,
+      )).resolves.toBe('transferred');
+
+      expect((await store.getById(target.id))?.conversationChannels).toBeUndefined();
+      expect((await store.getById(source.id))?.conversationChannels).toEqual([
+        expect.objectContaining({ channelId: 'multica:workspace:chat:shared' }),
+      ]);
+    });
+
+    it('rolls back identity and activity movement when its audit write fails', async () => {
+      const target = await store.upsert({ displayName: 'Canonical human' });
+      const source = await store.upsert({ displayName: 'Multica duplicate' });
+      const memberUserId = 'multica:member:99999999-9999-4999-8999-999999999999';
+      await store.linkChannelIdentity(source.id, 'multica', memberUserId);
+      await store.recordChannelActivity(source.id, 'multica', 'multica:workspace:chat:rollback');
+      pool.failNextMutationAudit = true;
+
+      await expect(store.transferChannelIdentity(
+        source.id,
+        target.id,
+        'multica',
+        memberUserId,
+      )).rejects.toThrow('forced mutation audit failure');
+
+      expect(await store.getByChannelIdentity('multica', memberUserId)).toMatchObject({ id: source.id });
+      expect((await store.getById(source.id))?.conversationChannels).toEqual([
+        expect.objectContaining({ channelId: 'multica:workspace:chat:rollback' }),
+      ]);
+      expect((await store.getById(target.id))?.conversationChannels).toBeUndefined();
+    });
+
+    it('refuses to bypass verified identity authority', async () => {
+      const target = await store.upsert({ displayName: 'Canonical human' });
+      const source = await store.upsert({ displayName: 'Verified source' });
+      await store.linkChannelIdentity(source.id, 'discord', 'verified-discord-user');
+      const row = pool.contactChannelIds.get('discord::verified-discord-user');
+      if (!row) throw new Error('Missing seeded identity');
+      row.ownership_state = 'verified';
+      row.restore_state = 'live';
+
+      await expect(store.transferChannelIdentity(
+        source.id,
+        target.id,
+        'discord',
+        'verified-discord-user',
+      )).resolves.toBe('identity_not_transferable');
+      expect(await store.getByChannelIdentity('discord', 'verified-discord-user'))
+        .toMatchObject({ id: source.id });
+    });
+
+    it('refuses to move an identity across the human-machine boundary', async () => {
+      const target = await store.upsert({ displayName: 'Canonical human' });
+      const source = await store.upsert({ displayName: 'Machine source' });
+      expect(await store.setMachineIntelligence(source.id, true, 'system:test')).toBe(true);
+      await store.linkChannelIdentity(source.id, 'multica', 'multica:system:workspace');
+
+      await expect(store.transferChannelIdentity(
+        source.id,
+        target.id,
+        'multica',
+        'multica:system:workspace',
+      )).resolves.toBe('incompatible_contact_kinds');
+      expect(await store.getByChannelIdentity('multica', 'multica:system:workspace'))
+        .toMatchObject({ id: source.id });
+    });
+  });
+
   describe('updateNotes', () => {
     it('updates notes field', async () => {
       const contact = await store.upsert({ displayName: 'Heidi' });

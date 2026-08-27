@@ -263,6 +263,7 @@ describe('session runtime composition transcript projection wiring', () => {
       automataRetentionCompanionId: 'companion-test',
       enableContinuity: true,
       continuityChannelIds: ['discord:configured-room'],
+      continuityChannelPrefixes: ['multica:11111111-1111-4111-8111-111111111111:'],
     });
     // Continuity content only renders when it resolves against a live L0
     // journal row, so seed through the manager (which stamps sourceEntryId)
@@ -283,13 +284,32 @@ describe('session runtime composition transcript projection wiring', () => {
       true,
       'contact-1',
     )).not.toBeNull();
+    expect(composition.sessionManager.recordUserMessage(
+      'multica:11111111-1111-4111-8111-111111111111:chat:member-session',
+      'Configured Multica workspace entry',
+      'contact-1',
+      'Contact',
+      true,
+      'contact-1',
+    )).not.toBeNull();
+    expect(composition.sessionManager.recordUserMessage(
+      'multica:22222222-2222-4222-8222-222222222222:chat:foreign-session',
+      'Foreign Multica workspace entry',
+      'contact-1',
+      'Contact',
+      true,
+      'contact-1',
+    )).not.toBeNull();
 
     expect(composition.sessionManager.crossChannelContinuity.getMerged({
       canonicalUserId: 'contact-1',
       fallbackUserIds: [],
       limit: 10,
       channelId: 'api:current',
-    }).map(entry => entry.content)).toEqual(['Configured room entry']);
+    }).map(entry => entry.content)).toEqual([
+      'Configured room entry',
+      'Configured Multica workspace entry',
+    ]);
   });
 
   it('fails closed when continuity is enabled without a channels.json registry', async () => {

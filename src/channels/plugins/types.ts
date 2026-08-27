@@ -20,6 +20,8 @@ export interface ChannelPluginParseResult<TConfig = unknown> {
   enabled: boolean;
   companionId?: CompanionId;
   credentials: readonly ChannelPluginCredentialNeed[];
+  /** Exact runtime-derived channel-id prefixes eligible for continuity while this plugin is enabled. */
+  continuityChannelPrefixes?: readonly string[];
   instances?: readonly ChannelPluginParsedInstance<TConfig>[];
 }
 

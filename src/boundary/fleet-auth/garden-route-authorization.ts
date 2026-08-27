@@ -276,7 +276,8 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
   {
     action: 'contacts.manage', area: 'contacts', routeIds: [
       ...ids('POST', [
-        '/api/admin/contacts', '/api/admin/contacts/:id/merge', '/api/admin/contacts/:id/unlink',
+        '/api/admin/contacts', '/api/admin/contacts/:id/merge',
+        '/api/admin/contacts/:id/channel-identity/transfer', '/api/admin/contacts/:id/unlink',
         '/api/admin/contacts/:id/conversation-channel/delete',
       ]),
       ...ids(['PUT', 'PATCH', 'DELETE'], ['/api/admin/contacts/:id']),

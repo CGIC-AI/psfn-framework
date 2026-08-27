@@ -549,6 +549,9 @@ async function main(): Promise<void> {
   } = await bootstrapAgentCoreRuntime({
     config: coreConfig,
     continuityChannelIds: Object.keys(channelsConfig.contextEnvelope.channels),
+    continuityChannelPrefixes: Object.values(channelsConfig.plugins)
+      .filter(section => section.enabled)
+      .flatMap(section => section.continuityChannelPrefixes ?? []),
     postgresDatabaseUrl,
     emosimProactivityStateStore: persistenceRuntime.emosimProactivityStateStore,
     pathSnapshot,

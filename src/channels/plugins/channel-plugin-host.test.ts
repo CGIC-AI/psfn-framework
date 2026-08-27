@@ -486,6 +486,9 @@ describe('ChannelPluginHost', () => {
       }),
       contextFor: () => makeContext(),
     });
+    expect(sections.multica?.continuityChannelPrefixes).toEqual([
+      'multica:11111111-1111-4111-8111-111111111111:',
+    ]);
     expect(host.list().map(entry => entry.id)).toEqual(['multica', 'probe']);
     expect(created).toEqual(['probe']);
     expect(host.get('multica')?.adapter.id).toBe('multica');

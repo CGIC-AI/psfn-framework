@@ -116,13 +116,56 @@ export function buildAdminContactRoutes(options: {
           contactsService.mergeContacts(id, JSON.stringify(parsed.value), context).then(
             (result) => {
               if (!result.ok) {
-                sendJson(res, result.message.includes('not found') ? 404 : 400, { error: result.message });
+                const status = result.failureKind === 'authorization'
+                  ? 403
+                  : result.failureKind === 'conflict'
+                    ? 409
+                    : result.failureKind === 'not_found' || result.message.includes('not found')
+                      ? 404
+                      : 400;
+                sendJson(res, status, { error: result.message });
                 return;
               }
               sendJson(res, 200, result);
             },
             (error) => {
               sendInternalError(res, error, 'Failed to merge contacts');
+            },
+          );
+        });
+      },
+    },
+    {
+      method: 'POST',
+      match: paramWithSuffix('/api/admin/contacts/', 'id', '/channel-identity/transfer'),
+      handle: (req, res, { id }, context) => {
+        if (!id) {
+          sendJson(res, 400, { error: 'Contact id is required' });
+          return;
+        }
+        withBody(req, res, (body) => {
+          const parsed = parseAdminJsonBody(body);
+          if (!parsed.ok) {
+            sendJson(res, 400, { error: parsed.error });
+            return;
+          }
+          contactsService.transferChannelIdentity(id, JSON.stringify(parsed.value), context).then(
+            (result) => {
+              if (!result.ok) {
+                const status = result.failureKind === 'authorization'
+                  ? 403
+                  : result.failureKind === 'conflict'
+                    ? 409
+                    : result.failureKind === 'not_found' || result.message.includes('not found')
+                      ? 404
+                      : 400;
+                sendJson(res, status, { error: result.message });
+                return;
+              }
+              sendJson(res, 200, result);
+            },
+            (error) => {
+              sendInternalError(res, error, 'Failed to transfer contact identity');
             },
           );
         });

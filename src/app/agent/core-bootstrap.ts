@@ -70,6 +70,8 @@ export interface BootstrapAgentCoreRuntimeOptions {
   config: CoreSubstrateConfig;
   /** Exact channels.json context-envelope registry ids allowed into merged continuity. */
   continuityChannelIds: readonly string[];
+  /** Exact enabled-plugin channel-id prefixes allowed into merged continuity. */
+  continuityChannelPrefixes?: readonly string[];
   /** Database credential kept outside the secret-sanitized core config. */
   postgresDatabaseUrl: string;
   emosimProactivityStateStore: EmoSimProactivityStateStorePort;
@@ -167,6 +169,7 @@ export async function bootstrapAgentCoreRuntime(
   const coreRuntime = await buildAgentCoreRuntime({
     config,
     continuityChannelIds: options.continuityChannelIds,
+    continuityChannelPrefixes: options.continuityChannelPrefixes,
     postgresDatabaseUrl,
     emosimProactivityStateStore,
     pathSnapshot,

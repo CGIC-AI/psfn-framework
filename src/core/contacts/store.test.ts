@@ -586,6 +586,30 @@ describe('Postgres contact store behavior', () => {
       expect((await store.getById(target.id))?.trustLevel).toBe('trusted');
     });
 
+    it.each([
+      { label: 'machine source into human target', sourceIsMachine: true, targetIsMachine: false },
+      { label: 'human source into machine target', sourceIsMachine: false, targetIsMachine: true },
+    ])('refuses to merge a $label', async ({ sourceIsMachine, targetIsMachine }) => {
+      const target = await store.upsert({ displayName: 'Target' });
+      const source = await store.upsert({ displayName: 'Source' });
+      if (targetIsMachine) {
+        expect(await store.setMachineIntelligence(target.id, true, 'operator:test')).toBe(true);
+      }
+      if (sourceIsMachine) {
+        expect(await store.setMachineIntelligence(source.id, true, 'operator:test')).toBe(true);
+      }
+      await store.linkChannelIdentity(source.id, 'multica', 'workspace-system');
+      const targetBefore = await store.getById(target.id);
+      const sourceBefore = await store.getById(source.id);
+
+      expect(await store.mergeContacts(source.id, target.id)).toBe(false);
+
+      expect(await store.getById(target.id)).toEqual(targetBefore);
+      expect(await store.getById(source.id)).toEqual(sourceBefore);
+      expect(await store.getByChannelIdentity('multica', 'workspace-system'))
+        .toMatchObject({ id: source.id });
+    });
+
     it('prefers human-readable display name when target uses opaque identifier text', async () => {
       const target = await store.upsert({
         displayName: 'YOUR_DISCORD_USER_ID',

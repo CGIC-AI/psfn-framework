@@ -26,6 +26,7 @@ import {
 } from '../relationship-progression.js';
 import type { ContactUpsertMutationOptions, MachineIntelligenceObservationMarkResult } from '../contact-store-port.js';
 import { isDeliberateMachineIntelligenceCorrection } from '../observed-machine-intelligence.js';
+import { haveCompatibleContactIntelligenceKinds } from '../contact-merge-policy.js';
 import type { EmotionalSnapshot, EmotionalTimeSeriesPoint } from '../store/emotional-baseline.js';
 import {
   appendEmotionalObservationToTimeSeries,
@@ -645,6 +646,10 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
       const sourceRow = lockedRows.get(sourceContactId);
       const targetRow = lockedRows.get(targetContactId);
       if (!sourceRow || !targetRow) return false;
+      if (!haveCompatibleContactIntelligenceKinds(
+        sourceRow.is_machine_intelligence,
+        targetRow.is_machine_intelligence,
+      )) return false;
 
       // bead psfn-framework-qgqw.6 (adjudication R10.3): a merge folds the source
       // into the target but must NOT hard-delete the source row. Snapshot the

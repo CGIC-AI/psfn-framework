@@ -1,4 +1,8 @@
 import type { ContactStorePort } from '../../../core/contacts/contact-store-port.js';
+import {
+  haveCompatibleContactIntelligenceKinds,
+  MIXED_INTELLIGENCE_CONTACT_MERGE_ERROR,
+} from '../../../core/contacts/contact-merge-policy.js';
 import type {
   RecentContactShapeArtifact,
   MemoryStorePort,
@@ -593,8 +597,11 @@ export class AdminContactsDataService implements AdminContactsService {
       return { ok: false, message: 'Source contact not found' };
     }
 
-    if (Boolean(source.isMachineIntelligence) !== Boolean(target.isMachineIntelligence)) {
-      return { ok: false, message: 'Cannot merge human and machine-intelligence contacts' };
+    if (!haveCompatibleContactIntelligenceKinds(
+      source.isMachineIntelligence,
+      target.isMachineIntelligence,
+    )) {
+      return { ok: false, message: MIXED_INTELLIGENCE_CONTACT_MERGE_ERROR };
     }
 
     if (!await contactStore.mergeContacts(sourceId, targetId)) {

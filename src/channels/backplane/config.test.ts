@@ -1118,6 +1118,17 @@ describe('loadRuntimeChannelsConfig', () => {
     }
   });
 
+  it('rejects an unknown api key on save fail-closed', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
+    try {
+      expect(() => saveChannelsOwnerFile(dataDir, {
+        api: { foo: 'bar' },
+      })).toThrow('channels.json.api has unsupported keys: foo');
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
   it('keeps telegram behavior in file/override ownership while allowing secret refs to resolve from env', () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
     try {

@@ -93,7 +93,10 @@ export class ChannelPluginHost {
         await entry.instance.adapter.start();
         this.#started += 1;
       } catch (error) {
-        await this.stop();
+        // Stop the adapter whose start just failed plus every adapter that
+        // started before it, mirroring the initialize() rollback contract.
+        await stopInstances(this.#instances.slice(0, this.#started + 1));
+        this.#started = 0;
         throw new Error(
           `Channel plugin "${entry.id}" failed to start: ${String(error)}`,
           { cause: error },
@@ -103,7 +106,7 @@ export class ChannelPluginHost {
   }
 
   async stop(): Promise<void> {
-    const running = this.#instances.slice(0, Math.max(this.#started, this.#instances.length));
+    const running = this.#instances.slice(0, this.#started);
     this.#started = 0;
     await stopInstances(running);
   }

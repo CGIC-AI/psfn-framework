@@ -2349,12 +2349,6 @@
     },
     {
       "file": "src/channels/backplane/config.ts",
-      "name": "DEFAULT_MULTICA_POLL_INTERVAL_MS",
-      "value": "1_000",
-      "note": "Channel-local configuration default for channels.json.multica.pollIntervalMs; operators can override it in the connector contract without changing global system settings."
-    },
-    {
-      "file": "src/channels/backplane/config.ts",
       "name": "DEFAULT_TELEGRAM_POLL_INTERVAL_MS",
       "value": "1_000"
     },
@@ -2364,18 +2358,6 @@
       "value": "/^[A-Z][A-Z0-9_]*$/",
       "form": "regex",
       "note": "Immutable parser/wire/schema contract ENV_CREDENTIAL_NAME_PATTERN; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning."
-    },
-    {
-      "file": "src/channels/backplane/config.ts",
-      "name": "MAX_MULTICA_POLL_INTERVAL_MS",
-      "value": "60_000",
-      "note": "Immutable validation bound for the channels.json.multica.pollIntervalMs connector contract, preventing an effectively stalled gateway poll loop."
-    },
-    {
-      "file": "src/channels/backplane/config.ts",
-      "name": "MIN_MULTICA_POLL_INTERVAL_MS",
-      "value": "250",
-      "note": "Immutable validation bound for the channels.json.multica.pollIntervalMs connector contract, preventing abusive request rates against Multica."
     },
     {
       "file": "src/channels/backplane/http/auth.ts",
@@ -2497,6 +2479,35 @@
       "value": "100_000",
       "form": "object-member",
       "note": "Code-owned defensive envelope for an internal task-result handoff; Multica completion is atomic and does not expose configurable message chunking."
+    },
+    {
+      "file": "src/channels/multica/plugin.ts",
+      "name": "createGatewayMulticaRuntimeLease.createPostgresPool.arg1.connectionTimeoutMillis",
+      "value": "5_000",
+      "form": "object-member",
+      "note": "Code-owned safety/resource guard for the internal single-connection Multica runtime-lease pool; a fixed connect timeout bounds startup failure latency independently of operator tuning (moved from channel-surfaces.ts by psfn-framework-lj32q)."
+    },
+    {
+      "file": "src/channels/multica/plugin.ts",
+      "name": "DEFAULT_MULTICA_POLL_INTERVAL_MS",
+      "value": "1_000"
+    },
+    {
+      "file": "src/channels/multica/plugin.ts",
+      "name": "ENV_CREDENTIAL_NAME_PATTERN",
+      "value": "/^[A-Z][A-Z0-9_]*$/",
+      "form": "regex",
+      "note": "Immutable parser/wire/schema contract ENV_CREDENTIAL_NAME_PATTERN; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning (moved from channels/backplane/config.ts by psfn-framework-lj32q)."
+    },
+    {
+      "file": "src/channels/multica/plugin.ts",
+      "name": "MAX_MULTICA_POLL_INTERVAL_MS",
+      "value": "60_000"
+    },
+    {
+      "file": "src/channels/multica/plugin.ts",
+      "name": "MIN_MULTICA_POLL_INTERVAL_MS",
+      "value": "250"
     },
     {
       "file": "src/channels/shared/long-running-tool-status.ts",
@@ -6047,21 +6058,21 @@
     {
       "file": "src/core/tools/analysis-workbench/types.ts",
       "name": "DEFAULT_REPL_CONFIG.budget.maxIterations",
-      "value": "15",
+      "value": "60",
       "form": "object-member",
       "note": "Existing mutable policy candidate DEFAULT_REPL_CONFIG.budget.maxIterations; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/core/tools/analysis-workbench/types.ts",
       "name": "DEFAULT_REPL_CONFIG.budget.maxSubQueries",
-      "value": "24",
+      "value": "60",
       "form": "object-member",
       "note": "Existing mutable policy candidate DEFAULT_REPL_CONFIG.budget.maxSubQueries; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/core/tools/analysis-workbench/types.ts",
       "name": "DEFAULT_REPL_CONFIG.budget.maxTokens",
-      "value": "100_000",
+      "value": "256_000",
       "form": "object-member",
       "note": "Existing mutable policy candidate DEFAULT_REPL_CONFIG.budget.maxTokens; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
@@ -6075,7 +6086,7 @@
     {
       "file": "src/core/tools/analysis-workbench/types.ts",
       "name": "DEFAULT_REPL_CONFIG.budget.maxWallTimeMs",
-      "value": "300_000",
+      "value": "600_000",
       "form": "object-member",
       "note": "Existing mutable policy candidate DEFAULT_REPL_CONFIG.budget.maxWallTimeMs; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
@@ -6131,14 +6142,14 @@
     {
       "file": "src/core/tools/analysis-workbench/types.ts",
       "name": "DEFAULT_REPL_TIER_BUDGETS.autonomous.maxIterations",
-      "value": "15",
+      "value": "60",
       "form": "object-member",
       "note": "Existing mutable policy candidate DEFAULT_REPL_TIER_BUDGETS.autonomous.maxIterations; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/core/tools/analysis-workbench/types.ts",
       "name": "DEFAULT_REPL_TIER_BUDGETS.autonomous.maxSubQueries",
-      "value": "24",
+      "value": "60",
       "form": "object-member",
       "note": "Existing mutable policy candidate DEFAULT_REPL_TIER_BUDGETS.autonomous.maxSubQueries; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
@@ -6152,7 +6163,7 @@
     {
       "file": "src/core/tools/analysis-workbench/types.ts",
       "name": "DEFAULT_REPL_TIER_BUDGETS.autonomous.maxWallTimeMs",
-      "value": "300_000",
+      "value": "600_000",
       "form": "object-member",
       "note": "Existing mutable policy candidate DEFAULT_REPL_TIER_BUDGETS.autonomous.maxWallTimeMs; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
@@ -9510,6 +9521,11 @@
       "file": "src/persistence/postgres/model-usage-store/query-input.ts",
       "name": "MAX_TOP_N",
       "value": "100"
+    },
+    {
+      "file": "src/persistence/postgres/multica-runtime-lease.ts",
+      "name": "MULTICA_RUNTIME_LEASE_OPERATION_TIMEOUT_MS",
+      "value": "5_000"
     },
     {
       "file": "src/persistence/postgres/partner-affect-shadow-store.ts",
@@ -13130,7 +13146,7 @@
     {
       "file": "src/system/settings/form.ts",
       "name": "SETTINGS_VALIDATION.analysisWorkbenchMaxIterations",
-      "value": "{ min: 1, max: 200 }",
+      "value": "{ min: 1, max: 60 }",
       "form": "object-member",
       "note": "Canonical owner-file/schema metadata SETTINGS_VALIDATION.analysisWorkbenchMaxIterations; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
     },

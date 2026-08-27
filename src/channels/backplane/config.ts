@@ -798,6 +798,9 @@ export function saveChannelsOwnerFile(
   // 8ora: validate the companionUi section on save so an unknown key or an
   // invalid privacy level is rejected fail-closed rather than persisted.
   parseCompanionUiSection(scopedRoot);
+  // api is a first-class section (not a plugin), so validate it on save too —
+  // writes that would fail the runtime load are rejected fail-closed.
+  parseApiChannelSection(scopedRoot, {});
   parseChannelPluginSections(
     scopedRoot,
     createBuiltinChannelPluginRegistry(),

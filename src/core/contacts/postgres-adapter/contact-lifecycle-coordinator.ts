@@ -10,6 +10,7 @@ import type {
   ContactLifecycleRecoveryLease,
 } from '../../../shared/contracts/contact-lifecycle-ledger.js';
 import type { ChannelPrivacyLevel, ContactIdentityLinkVerificationResult } from '../types.js';
+import { haveCompatibleContactIntelligenceKinds } from '../contact-merge-policy.js';
 import {
   beginContactLifecycleMutationCommit,
   completeContactLifecycleMutationCommit,
@@ -281,16 +282,23 @@ const postgresContactLifecycleCoordinatorOperations: PostgresContactOperationMap
       contactId: sourceContactId,
       canonicalContactId: targetContactId,
     };
-    if (await resumeMatchingPendingLifecycle(this, lifecycleTarget)) return true;
-    const versions = await this.pool.query<{
+    const contacts = await this.pool.query<{
       id: string;
       contact_authority_version: string;
+      is_machine_intelligence: boolean | null;
     }>(`
-      SELECT id, contact_authority_version FROM contacts
+      SELECT id, contact_authority_version, is_machine_intelligence FROM contacts
       WHERE id = ANY($1::text[])
       ORDER BY id
     `, [[sourceContactId, targetContactId]]);
-    const byId = new Map(versions.rows.map(row => [row.id, row.contact_authority_version]));
+    const byId = new Map(contacts.rows.map(row => [row.id, row]));
+    const source = byId.get(sourceContactId);
+    const target = byId.get(targetContactId);
+    if (source && target && !haveCompatibleContactIntelligenceKinds(
+      source.is_machine_intelligence,
+      target.is_machine_intelligence,
+    )) return false;
+    if (await resumeMatchingPendingLifecycle(this, lifecycleTarget)) return true;
     if (!byId.has(sourceContactId)
       && await matchingLifecycleIsFinalized(this, lifecycleTarget)) return true;
     const request = {
@@ -298,9 +306,9 @@ const postgresContactLifecycleCoordinatorOperations: PostgresContactOperationMap
       intentId: deterministicIntentId([
         'merge',
         sourceContactId,
-        versionToken(byId.get(sourceContactId), 'merge source version'),
+        versionToken(source?.contact_authority_version, 'merge source version'),
         targetContactId,
-        versionToken(byId.get(targetContactId), 'merge target version'),
+        versionToken(target?.contact_authority_version, 'merge target version'),
       ]),
       phase: 'prepare',
       action: 'contact.merge',

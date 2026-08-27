@@ -76,6 +76,7 @@ export class PostgresContactStore implements ContactStorePort {
   declare listRoomRoster: ContactStorePort['listRoomRoster'];
   declare countRoomRoster: ContactStorePort['countRoomRoster'];
   declare mergeContacts: ContactStorePort['mergeContacts'];
+  declare transferChannelIdentity: ContactStorePort['transferChannelIdentity'];
   declare updateNotes: ContactStorePort['updateNotes'];
   declare updateDemographics: ContactStorePort['updateDemographics'];
   declare updateEmotionalBaseline: ContactStorePort['updateEmotionalBaseline'];

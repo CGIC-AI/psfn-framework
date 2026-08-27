@@ -16,6 +16,7 @@ const COMPANION_ID = '22222222-2222-4222-8222-222222222222';
 const RUNTIME_ID = '33333333-3333-4333-8333-333333333333';
 const TASK_ID = '44444444-4444-4444-8444-444444444444';
 const ISSUE_ID = '55555555-5555-4555-8555-555555555555';
+const MEMBER_ID = '99999999-9999-4999-8999-999999999999';
 
 function makeConfig(overrides: Partial<MulticaAdapterConfig> = {}): MulticaAdapterConfig {
   return {
@@ -190,7 +191,7 @@ describe('MulticaAdapter', () => {
             squad_name: 'Framework Squad',
             handoff_note: 'Keep the squad moving and report blockers.',
             initiator_type: 'member',
-            initiator_id: '99999999-9999-4999-8999-999999999999',
+            initiator_id: MEMBER_ID,
             initiator_name: 'Operator',
             auth_token: 'task-scoped-token',
             agent: {
@@ -279,14 +280,14 @@ describe('MulticaAdapter', () => {
       id: TASK_ID,
       channelId: `multica:${WORKSPACE_ID}:issue:${ISSUE_ID}`,
       channelType: 'multica',
-      authorId: `multica:system:${WORKSPACE_ID}`,
-      authorName: 'Multica system',
+      authorId: `multica:member:${MEMBER_ID}`,
+      authorName: 'Operator',
       isDirectMessage: false,
       content: expect.stringContaining('Wire Multica into the gateway'),
       routing: expect.objectContaining({
         source: 'multica',
         channelPrivacy: 'invite_only',
-        authorIsMachineIntelligence: true,
+        authorIsMachineIntelligence: false,
         intakeEnvelopes: [{ envelopeId: 'multica-intake-envelope' }],
       }),
     })]);

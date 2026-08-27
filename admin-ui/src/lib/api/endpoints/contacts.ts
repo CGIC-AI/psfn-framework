@@ -68,6 +68,18 @@ export function mergeContacts(targetId: string, sourceId: string): Promise<Conta
   );
 }
 
+export function transferChannelIdentity(
+  targetId: string,
+  sourceContactId: string,
+  channel: string,
+  userId: string,
+): Promise<ContactUpdateResult> {
+  return apiPost<ContactUpdateResult>(
+    `/api/admin/contacts/${encodeURIComponent(targetId)}/channel-identity/transfer`,
+    { sourceContactId, channel, userId },
+  );
+}
+
 export function unlinkChannelIdentity(
   contactId: string,
   channel: string,

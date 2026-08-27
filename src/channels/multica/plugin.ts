@@ -112,6 +112,7 @@ function parseMulticaChannelConfig(raw: unknown): ChannelPluginParseResult<Multi
   return {
     enabled,
     companionId,
+    ...(enabled ? { continuityChannelPrefixes: [`multica:${workspaceId}:`] } : {}),
     credentials: enabled && tokenRef
       ? [{
         id: 'token',

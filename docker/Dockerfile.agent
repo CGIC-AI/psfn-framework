@@ -32,7 +32,8 @@ FROM native-toolchain AS build
 
 COPY package*.json ./
 COPY admin-ui/package*.json ./admin-ui/
-RUN npm_config_nodedir=/usr/local npm ci
+RUN npm_config_nodedir=/usr/local npm ci \
+    && npm_config_nodedir=/usr/local npm --prefix admin-ui ci
 
 COPY tsconfig.json tsconfig.companion-id-types.json tsconfig.tsup.json tsup.config.ts ./
 COPY tests/types/companion-id.type-test.ts ./tests/types/

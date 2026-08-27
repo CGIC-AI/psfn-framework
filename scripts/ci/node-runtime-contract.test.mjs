@@ -98,6 +98,19 @@ test('root installation stays small and specialist dependencies are lazy', () =>
   }
 });
 
+test('the agent image installs Garden dependencies before building Garden', () => {
+  const dockerfile = read('docker/Dockerfile.agent');
+  const packageCopy = 'COPY admin-ui/package*.json ./admin-ui/';
+  const dependencyInstall = 'npm --prefix admin-ui ci';
+  const sourceCopy = 'COPY admin-ui/ ./admin-ui/';
+  const gardenBuild = 'RUN npm run garden:build';
+
+  assert.match(dockerfile, /npm --prefix admin-ui ci/u);
+  assert.ok(dockerfile.indexOf(packageCopy) < dockerfile.indexOf(dependencyInstall));
+  assert.ok(dockerfile.indexOf(dependencyInstall) < dockerfile.indexOf(sourceCopy));
+  assert.ok(dockerfile.indexOf(sourceCopy) < dockerfile.indexOf(gardenBuild));
+});
+
 test('local hygiene can avoid repeating the separately owned public scan', () => {
   const rootPackage = JSON.parse(read('package.json'));
   assert.equal(

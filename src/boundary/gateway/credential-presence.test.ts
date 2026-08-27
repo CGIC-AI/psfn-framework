@@ -28,6 +28,7 @@ function channels(): RuntimeChannelsConfig {
       webhook: { url: '', secret: '', host: '127.0.0.1', port: 8080, path: '/telegram' },
     },
     api: {},
+    plugins: {},
     psfnAmica: { enabled: false },
     contextEnvelope: { channels: {} },
   } as RuntimeChannelsConfig;

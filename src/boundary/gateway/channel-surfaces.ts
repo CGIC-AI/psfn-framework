@@ -4,11 +4,11 @@ import type {
   DiscordPrimaryUserBinding,
 } from '../../channels/discord/adapter.js';
 import type { TelegramAdapter } from '../../channels/telegram/adapter.js';
-import type { MulticaAdapter } from '../../channels/multica/adapter.js';
-import type { MulticaRuntimeLease } from '../../channels/multica/runtime-lease.js';
-import { createPostgresPool } from '../../persistence/postgres.js';
-import { PostgresMulticaRuntimeLease } from '../../persistence/postgres/multica-runtime-lease.js';
 import { ChannelAdapterRegistry } from '../../channels/backplane/registry-port.js';
+import { createBuiltinChannelPluginRegistry } from '../../channels/plugins/builtin.js';
+import { ChannelPluginHost } from '../../channels/plugins/host.js';
+import type { ChannelPluginRegistry } from '../../channels/plugins/types.js';
+import { createStaticCredentialVault } from '../custody/credential-vault.js';
 import { startDiscordWithRetry } from './discord-startup.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import type { GatewayBootstrapInput } from './bootstrap-input.js';
@@ -28,7 +28,6 @@ import type { CompanionId } from '../../shared/routing/companion-id.js';
 import type { FleetAuthAccountRosterEntry } from '../../system/config/fleet-auth-config.js';
 import {
   createDiscordChannelAdapterFactoryEntry,
-  createMulticaChannelAdapterFactoryEntry,
   createTelegramChannelAdapterFactoryEntry,
   getOptionalChannelAdapter,
   requireChannelAdapter,
@@ -56,7 +55,7 @@ export interface GatewayChannelSurfaces {
   /** Present only in multi-account mode; includes the primary account. */
   discordAccounts?: GatewayDiscordAccountSurface[];
   telegram?: TelegramAdapter;
-  multica?: MulticaAdapter;
+  plugins: ChannelPluginHost;
 }
 
 interface DiscordPrimaryUserAuthority {
@@ -158,8 +157,8 @@ export interface LoadGatewayChannelSurfacesInput {
   ) => IntakeScreeningService | null;
   log: RuntimeChannelLifecycleLogger;
   enableDiscordEvidenceLifecycle?: boolean;
-  /** Test seam; production derives the cross-pod lease from gateway PostgreSQL. */
-  multicaRuntimeLease?: MulticaRuntimeLease;
+  /** Test seam; production uses the builtin channel plugin registry. */
+  pluginRegistry?: ChannelPluginRegistry;
 }
 
 export interface GatewayChannelStartupLogger extends RuntimeChannelLifecycleLogger {
@@ -212,9 +211,7 @@ export async function initGatewayChannelSurfaces(
   if (surfaces.telegram) {
     await surfaces.telegram.init();
   }
-  if (surfaces.multica) {
-    await surfaces.multica.init();
-  }
+  await surfaces.plugins.initialize();
   for (const discord of listDiscordAdapters(surfaces)) {
     await discord.init();
   }
@@ -256,19 +253,6 @@ export async function loadGatewayChannelSurfaces(
 
   const gatewayChannelRegistry = new ChannelAdapterRegistry();
   const accountRegistryIds = accountConfigs.map(account => `discord:${account.accountId}`);
-  const multicaRuntimeLease = input.bootstrap.channelsConfig.multica.enabled
-    ? input.multicaRuntimeLease ?? (() => {
-        const databaseUrl = input.config.postgresDatabaseUrl?.trim();
-        if (!databaseUrl) {
-          throw new Error('Enabled Multica channel requires config.postgresDatabaseUrl for runtime ownership');
-        }
-        return new PostgresMulticaRuntimeLease(createPostgresPool(databaseUrl, {
-          applicationName: 'psfn-multica-runtime-lease',
-          connectionTimeoutMillis: 5_000,
-          max: 1,
-        }));
-      })()
-    : undefined;
   const discordEntries = multiAccount
     ? accountConfigs.map((account, index) => {
       const selfRegistryId = accountRegistryIds[index]!;
@@ -354,19 +338,6 @@ export async function loadGatewayChannelSurfaces(
       // limits internally from its SubstrateConfig.
       documentIngestLimits: resolveDocumentIngestLimits(input.config),
     }),
-    createMulticaChannelAdapterFactoryEntry({
-      config: input.bootstrap.channelsConfig.multica,
-      ...(multicaRuntimeLease ? { runtimeLease: multicaRuntimeLease } : {}),
-      shutdownTimeoutMs: Math.ceil(input.bootstrap.shutdownForceExitTimeoutMs / 2),
-      log: input.log,
-      intakeScreening: input.bootstrap.channelsConfig.multica.enabled
-        ? resolveChannelIntakeScreening(
-          intakeScreeningRouting,
-          input.bootstrap.channelsConfig.multica.companionId,
-          'multica',
-        )
-        : null,
-    }),
   ]);
 
   await loadChannelAdaptersFromManifest(
@@ -376,6 +347,32 @@ export async function loadGatewayChannelSurfaces(
     input.log,
     input.eligibilityGate,
   );
+
+  const enabledPlugins = Object.values(input.bootstrap.channelsConfig.plugins)
+    .some(section => section.enabled);
+  const vault = input.config.credentialVault;
+  if (enabledPlugins && !vault) {
+    throw new Error('Channel plugins require a credential vault');
+  }
+  const plugins = await ChannelPluginHost.load({
+    registry: input.pluginRegistry ?? createBuiltinChannelPluginRegistry(),
+    sections: input.bootstrap.channelsConfig.plugins,
+    vault: vault ?? createStaticCredentialVault({}),
+    contextFor: (pluginId, section) => ({
+      log: input.log,
+      shutdownTimeoutMs: Math.ceil(input.bootstrap.shutdownForceExitTimeoutMs / 2),
+      intakeScreening: section.enabled
+        ? resolveChannelIntakeScreening(
+          intakeScreeningRouting,
+          section.companionId,
+          pluginId,
+        )
+        : null,
+      ...(input.config.postgresDatabaseUrl
+        ? { postgresDatabaseUrl: input.config.postgresDatabaseUrl }
+        : {}),
+    }),
+  });
 
   if (multiAccount) {
     const discordAccounts: GatewayDiscordAccountSurface[] = accountConfigs.map((account, index) => ({
@@ -387,14 +384,14 @@ export async function loadGatewayChannelSurfaces(
       discord: discordAccounts[0]!.adapter,
       discordAccounts,
       telegram: getOptionalChannelAdapter<TelegramAdapter>(gatewayChannelRegistry, 'telegram') ?? undefined,
-      multica: getOptionalChannelAdapter<MulticaAdapter>(gatewayChannelRegistry, 'multica') ?? undefined,
+      plugins,
     };
   }
 
   return {
     discord: requireChannelAdapter<DiscordAdapter>(gatewayChannelRegistry, 'discord'),
     telegram: getOptionalChannelAdapter<TelegramAdapter>(gatewayChannelRegistry, 'telegram') ?? undefined,
-    multica: getOptionalChannelAdapter<MulticaAdapter>(gatewayChannelRegistry, 'multica') ?? undefined,
+    plugins,
   };
 }
 
@@ -408,7 +405,7 @@ export interface WireGatewayChannelMessagesInput {
    */
   discordAccounts?: Array<{ accountId: string; adapter: Pick<DiscordAdapter, 'onMessage'> }>;
   telegram?: Pick<TelegramAdapter, 'onMessage'>;
-  multica?: Pick<MulticaAdapter, 'onMessage' | 'onOperatorAlert'>;
+  plugins?: ChannelPluginHost;
   gateway: Pick<GatewayServer, 'notifyChannelMessage' | 'requestAgentVoiceStream' | 'notifyOperator'>;
   serializeMessage: (message: SubstrateMessage) => Record<string, unknown>;
   /**
@@ -489,8 +486,8 @@ export function wireGatewayChannelMessages(input: WireGatewayChannelMessagesInpu
   }
 
   const routeRequestResponseChannel = (
-    adapter: Pick<TelegramAdapter | MulticaAdapter, 'onMessage'>,
-    label: 'Telegram' | 'Multica',
+    adapter: Pick<TelegramAdapter, 'onMessage'>,
+    label: 'Telegram',
   ): void => {
     if (typeof adapter.onMessage !== 'function') {
       throw new Error(`${label} adapter is missing onMessage bootstrap hook`);
@@ -499,7 +496,7 @@ export function wireGatewayChannelMessages(input: WireGatewayChannelMessagesInpu
       // htm9.16 backstop: a blocked telegram DM is dropped before it reaches the
       // agent. Group observe-downgrade is not modeled on the telegram
       // request/response path; blocked group messages fall through unchanged.
-      if (label === 'Telegram' && input.blockGate) {
+      if (input.blockGate) {
         const decision = input.blockGate.evaluate(message);
         if (decision.action === 'drop') {
           input.blockGate.recordSoftBlockEnforcement(message, decision);
@@ -524,18 +521,14 @@ export function wireGatewayChannelMessages(input: WireGatewayChannelMessagesInpu
   };
 
   if (input.telegram) routeRequestResponseChannel(input.telegram, 'Telegram');
-  if (input.multica) {
-    input.multica.onOperatorAlert(async alert => {
-      await input.gateway.notifyOperator({
-        sender: { kind: 'system', provenance: 'system.channels.multica_failure' },
-        title: alert.title,
-        message: alert.message,
-        priority: 5,
-        idempotencyKey: alert.idempotencyKey,
-      });
-    });
-    routeRequestResponseChannel(input.multica, 'Multica');
-  }
+  input.plugins?.wireMessages({
+    requestAgentVoiceStream: (message, options) => (
+      options
+        ? input.gateway.requestAgentVoiceStream(message, options)
+        : input.gateway.requestAgentVoiceStream(message)
+    ),
+    notifyOperator: input.gateway.notifyOperator,
+  });
 }
 
 export async function startGatewayChannelSurfaces(
@@ -595,20 +588,16 @@ export async function startGatewayChannelSurfaces(
     });
   }
 
-  if (surfaces.multica) {
-    await surfaces.multica.start();
-    log.info('Multica gateway channel enabled', {
-      baseUrl: bootstrap.channelsConfig.multica.baseUrl,
-      workspaceId: bootstrap.channelsConfig.multica.workspaceId,
-      companionId: bootstrap.channelsConfig.multica.companionId,
-    });
+  await surfaces.plugins.start();
+  for (const entry of surfaces.plugins.list()) {
+    log.info('Channel plugin started', { pluginId: entry.id });
   }
 }
 
 export async function stopGatewayChannelSurfaces(
   surfaces: GatewayChannelSurfaces,
 ): Promise<void> {
-  await surfaces.multica?.stop();
+  await surfaces.plugins.stop();
   await surfaces.telegram?.stop();
   for (const discord of [...listDiscordAdapters(surfaces)].reverse()) {
     await discord.stop();

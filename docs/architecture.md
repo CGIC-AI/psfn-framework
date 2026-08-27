@@ -81,7 +81,7 @@ Those helpers keep the split runtime and shared wiring aligned on core wiring:
 - The native external MCP client, credential custody, TLS transport, system-trust
   policy, and CogSec boundary all live in the gateway.
 - Optional operator-facing support surfaces live here too: ntfy notifications, confirmation queue, beads tools, vault tools, shell execution, and git-backed mutations.
-- Discord, Telegram, Multica, and Wyoming host-facing adapters are started from the gateway side when enabled.
+- Discord, Telegram, Wyoming, and installable channel plugins (Multica) are started from the gateway side when enabled.
 
 ### Gateway RPC trust and approval classes
 
@@ -260,8 +260,7 @@ ceilings both apply; the tool ceiling may narrow but never widen server trust.
 
 ### Channels and voice
 
-- Channel adapters are manifest-driven and loaded through `src/app/startup/support/channel-lifecycle.ts`.
-- Current runtime surfaces include Discord, Telegram, Multica, the gateway-hosted OpenAI-compatible API, the operator-hosted Garden surface, and the Satellite Hub claim/config boundary. Multica is a gateway-owned work channel and never transits Satellite Hub. Endpoint transports such as Wyoming/OpenHome are owned by the Satellite Hub repository.
+- First-class adapters (Discord, Telegram, API) load through the gateway channel-surface composition. Additional text channels register as plugins via `ChannelPluginHost` (`src/channels/plugins/`, [`docs/channel-plugins.md`](./channel-plugins.md)). Multica is the tracer plugin and never transits Satellite Hub. Endpoint transports such as Wyoming/OpenHome are owned by the Satellite Hub repository.
 - Voice connectors are plugin-style STT/TTS adapters resolved from runtime settings and capability eligibility.
 - Same-cluster companion↔companion conversation runs through the normal turn
   pipeline as ordinary channels (`src/shared/contracts/companion-channels.ts`):

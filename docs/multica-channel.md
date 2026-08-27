@@ -1,6 +1,7 @@
 # Multica gateway channel
 
-Multica is a native, gateway-owned companion channel. It lets a Multica agent
+Multica is a native, gateway-owned companion channel installed through the
+generic [channel plugin host](channel-plugins.md). It lets a Multica agent
 assignment invoke one configured PSFN companion through the same canonical turn
 pipeline used by the other request/response channels.
 

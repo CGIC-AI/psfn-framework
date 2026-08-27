@@ -529,14 +529,7 @@ describe('resolveGatewayMultiCompanionConfig', () => {
       webhook: { url: '', secret: '', host: '0.0.0.0', port: 8080, path: '/telegram/webhook' },
     },
     api: {},
-    multica: {
-      enabled: false,
-      baseUrl: '',
-      workspaceId: '',
-      tokenEnvVar: '',
-      token: '',
-      pollIntervalMs: 1000,
-    },
+    plugins: {},
     psfnAmica: { enabled: false },
     contextEnvelope: { channels: {} },
     ...overrides,
@@ -557,14 +550,14 @@ describe('resolveGatewayMultiCompanionConfig', () => {
     channels.discord.companionId = '11111111-1111-4111-8111-111111111111';
     channels.telegram.companionId = '22222222-2222-4222-8222-222222222222';
     channels.api.companionId = '22222222-2222-4222-8222-222222222222';
-    channels.multica = {
-      enabled: true,
-      baseUrl: 'http://127.0.0.1:8080',
-      workspaceId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
-      companionId: '11111111-1111-4111-8111-111111111111',
-      tokenEnvVar: 'MULTICA_GATEWAY_TOKEN',
-      token: 'owner-token',
-      pollIntervalMs: 1000,
+    channels.plugins = {
+      multica: {
+        id: 'multica',
+        enabled: true,
+        companionId: '11111111-1111-4111-8111-111111111111',
+        credentials: [],
+        config: {},
+      },
     };
     expect(resolveGatewayMultiCompanionConfig({
       multiCompanion: true,
@@ -681,14 +674,14 @@ describe('resolveGatewayMultiCompanionConfig', () => {
 
   it('fails closed when Multica names a companion outside the fleet', () => {
     const channels = baseChannels({
-      multica: {
-        enabled: true,
-        baseUrl: 'http://127.0.0.1:8080',
-        workspaceId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
-        companionId: '22222222-2222-4222-8222-222222222222',
-        tokenEnvVar: 'MULTICA_GATEWAY_TOKEN',
-        token: 'owner-token',
-        pollIntervalMs: 1000,
+      plugins: {
+        multica: {
+          id: 'multica',
+          enabled: true,
+          companionId: '22222222-2222-4222-8222-222222222222',
+          credentials: [],
+          config: {},
+        },
       },
     });
     expect(() => resolveGatewayMultiCompanionConfig({

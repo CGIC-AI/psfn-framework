@@ -1889,6 +1889,12 @@
       "contains": "psfn",
       "reason": "The Multica wire contract requires the honest fixed provider discriminator and daemon namespace; this product protocol identifier is not a companion identity (psfn-framework-87nkt).",
       "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/channels/multica/plugin.ts",
+      "contains": "psfn",
+      "reason": "The Postgres application_name for the Multica runtime lease names the framework runtime boundary for connection attribution, not a companion identity or persona default (psfn-framework-lj32q).",
+      "pattern": "identity-legacy-slug"
     }
   ]
 }

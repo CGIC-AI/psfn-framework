@@ -9,18 +9,22 @@ import {
   type IcpPermitConsumptionResult,
   type IcpSharedAutonomyStorePort,
   type IcpConversationTransitionInput,
+  type IcpDyadTransitionInput,
 } from '../../core/icp/autonomy-store-ports.js';
 import {
   ICP_AUTONOMY_REASON_CODES,
   assertIcpConversationActivityTransition,
   assertIcpConversationStatusTransition,
+  assertIcpDyadStatusTransition,
   parseIcpAvailabilityLease,
   parseIcpConversationEpisode,
+  parseIcpDyad,
   parseIcpInitiationPermit,
   type IcpAutonomyReasonCode,
   type IcpAvailabilityLease,
   type IcpAvailabilitySource,
   type IcpConversationEpisode,
+  type IcpDyad,
   type IcpInitiationPermit,
 } from '../../shared/contracts/icp-autonomy.js';
 import { parseCompanionChannelId } from '../../shared/contracts/companion-channels.js';
@@ -63,6 +67,19 @@ interface ConversationRow extends QueryResultRow {
   revision: string | number;
 }
 
+interface DyadRow extends QueryResultRow {
+  dyad_id: string;
+  channel_id: string;
+  first_companion_id: string;
+  second_companion_id: string;
+  status: string;
+  created_at_ms: string | number;
+  closed_at_ms: string | number | null;
+  close_reason_code: string | null;
+  provenance_conversation_ids: unknown;
+  revision: string | number;
+}
+
 interface PermitRow extends QueryResultRow {
   permit_id: string;
   candidate_id: string;
@@ -93,6 +110,10 @@ const CONVERSATION_COLUMNS = `
   conversation_id, channel_id, participant_companion_ids, root_initiation_id,
   initiated_by_companion_id, initiation_source, provenance_ref, opened_at_ms,
   last_activity_at_ms, status, close_reason_code, revision
+`;
+const DYAD_COLUMNS = `
+  dyad_id, channel_id, first_companion_id, second_companion_id, status,
+  created_at_ms, closed_at_ms, close_reason_code, provenance_conversation_ids, revision
 `;
 const PERMIT_COLUMNS = `
   permit_id, candidate_id, conversation_id, sender_companion_id,
@@ -231,6 +252,70 @@ function mapConversation(
     ...(row.close_reason_code !== null ? { closeReasonCode: row.close_reason_code } : {}),
     revision: safeInteger(row.revision, 'episode.revision'),
   }, { knownCompanionIds });
+}
+
+function mapDyad(row: DyadRow, knownCompanionIds: ReadonlySet<string>): IcpDyad {
+  return parseIcpDyad({
+    dyadId: row.dyad_id,
+    channelId: row.channel_id,
+    participantCompanionIds: [row.first_companion_id, row.second_companion_id],
+    status: row.status,
+    createdAtMs: safeInteger(row.created_at_ms, 'dyad.createdAtMs'),
+    ...(row.closed_at_ms !== null
+      ? { closedAtMs: safeInteger(row.closed_at_ms, 'dyad.closedAtMs') }
+      : {}),
+    ...(row.close_reason_code !== null ? { closeReasonCode: row.close_reason_code } : {}),
+    provenanceConversationIds: row.provenance_conversation_ids,
+    revision: safeInteger(row.revision, 'dyad.revision'),
+  }, { knownCompanionIds });
+}
+
+async function ensureOpenDyadWithClient(
+  client: PoolClient,
+  episode: IcpConversationEpisode,
+  knownCompanionIds: ReadonlySet<string>,
+): Promise<IcpDyad> {
+  const parsedChannel = parseCompanionChannelId(episode.channelId);
+  if (parsedChannel?.kind !== 'dm' || episode.participantCompanionIds.length !== 2) {
+    throw new Error('ICP dyads require a canonical two-companion DM episode');
+  }
+  const [firstCompanionId, secondCompanionId] = episode.participantCompanionIds;
+  const result = await client.query<DyadRow>(`
+    INSERT INTO icp_dyads (
+      dyad_id, channel_id, first_companion_id, second_companion_id, status,
+      created_at_ms, closed_at_ms, close_reason_code, provenance_conversation_ids, revision
+    ) VALUES ($1, $2, $3, $4, 'open', $5, NULL, NULL, ARRAY[$1::uuid], 1)
+    ON CONFLICT (first_companion_id, second_companion_id) DO UPDATE SET
+      provenance_conversation_ids = CASE
+        WHEN $1::uuid = ANY(icp_dyads.provenance_conversation_ids)
+          THEN icp_dyads.provenance_conversation_ids
+        ELSE ARRAY(
+          SELECT value
+          FROM unnest(icp_dyads.provenance_conversation_ids || $1::uuid) AS value
+          ORDER BY value
+        )
+      END,
+      revision = CASE
+        WHEN $1::uuid = ANY(icp_dyads.provenance_conversation_ids)
+          THEN icp_dyads.revision
+        ELSE icp_dyads.revision + 1
+      END
+    WHERE icp_dyads.channel_id = EXCLUDED.channel_id
+    RETURNING ${DYAD_COLUMNS}
+  `, [
+    episode.conversationId,
+    episode.channelId,
+    firstCompanionId,
+    secondCompanionId,
+    episode.openedAtMs,
+  ]);
+  const row = result.rows.at(0);
+  if (!row) throw new Error('ICP dyad pair/channel ownership is ambiguous');
+  const dyad = mapDyad(row, knownCompanionIds);
+  if (dyad.status !== 'open') {
+    throw new Error(`ICP dyad relationship is explicitly ${dyad.status}`);
+  }
+  return dyad;
 }
 
 function mapPermit(row: PermitRow): IcpInitiationPermit {
@@ -543,29 +628,76 @@ export class PostgresIcpSharedAutonomyStore implements IcpSharedAutonomyStorePor
     if (episode.status !== 'invited' || episode.revision !== 1) {
       throw new Error('A new ICP conversation episode must start invited at revision 1');
     }
-    const row = await queryOne<ConversationRow>(this.pool, `
-      INSERT INTO icp_conversation_episodes (
-        conversation_id, channel_id, participant_companion_ids, root_initiation_id,
-        initiated_by_companion_id, initiation_source, provenance_ref, opened_at_ms,
-        last_activity_at_ms, status, close_reason_code, revision
-      ) VALUES ($1, $2, $3::uuid[], $4, $5, $6, $7, $8, $9, $10, $11, $12)
-      RETURNING ${CONVERSATION_COLUMNS}
+    return await withPostgresClient(this.pool, async client => {
+      const dyad = await ensureOpenDyadWithClient(client, episode, this.knownCompanionIds);
+      const result = await client.query<ConversationRow>(`
+        INSERT INTO icp_conversation_episodes (
+          conversation_id, dyad_id, channel_id, participant_companion_ids, root_initiation_id,
+          initiated_by_companion_id, initiation_source, provenance_ref, opened_at_ms,
+          last_activity_at_ms, status, close_reason_code, revision
+        ) VALUES ($1, $13, $2, $3::uuid[], $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        RETURNING ${CONVERSATION_COLUMNS}
+      `, [
+        episode.conversationId,
+        episode.channelId,
+        episode.participantCompanionIds,
+        episode.rootInitiationId,
+        episode.initiatedByCompanionId,
+        episode.initiationSource,
+        episode.provenanceRef,
+        episode.openedAtMs,
+        episode.lastActivityAtMs,
+        episode.status,
+        episode.closeReasonCode ?? null,
+        episode.revision,
+        dyad.dyadId,
+      ]);
+      const row = result.rows.at(0);
+      if (!row) throw new Error(`Failed to create ICP conversation ${episode.conversationId}`);
+      return mapConversation(row, this.knownCompanionIds);
+    });
+  }
+
+  async getDyad(dyadId: string): Promise<IcpDyad | null> {
+    const row = await queryOne<DyadRow>(this.pool, `
+      SELECT ${DYAD_COLUMNS}
+      FROM icp_dyads
+      WHERE dyad_id = $1
+    `, [requireUuid(dyadId, 'dyadId')]);
+    return row ? mapDyad(row, this.knownCompanionIds) : null;
+  }
+
+  async getDyadBetween(firstCompanionId: string, secondCompanionId: string): Promise<IcpDyad | null> {
+    const pair = [
+      requireUuid(firstCompanionId, 'firstCompanionId'),
+      requireUuid(secondCompanionId, 'secondCompanionId'),
+    ].sort();
+    if (pair[0] === pair[1]) throw new Error('ICP dyad lookup requires distinct companions');
+    const row = await queryOne<DyadRow>(this.pool, `
+      SELECT ${DYAD_COLUMNS}
+      FROM icp_dyads
+      WHERE first_companion_id = $1 AND second_companion_id = $2
+    `, pair);
+    return row ? mapDyad(row, this.knownCompanionIds) : null;
+  }
+
+  async transitionDyad(input: IcpDyadTransitionInput): Promise<IcpDyad> {
+    assertIcpDyadStatusTransition(input.expectedStatus, input.status);
+    const row = await queryOne<DyadRow>(this.pool, `
+      UPDATE icp_dyads
+      SET status = $4, closed_at_ms = $5, close_reason_code = $6, revision = revision + 1
+      WHERE dyad_id = $1 AND status = $2 AND revision = $3
+      RETURNING ${DYAD_COLUMNS}
     `, [
-      episode.conversationId,
-      episode.channelId,
-      episode.participantCompanionIds,
-      episode.rootInitiationId,
-      episode.initiatedByCompanionId,
-      episode.initiationSource,
-      episode.provenanceRef,
-      episode.openedAtMs,
-      episode.lastActivityAtMs,
-      episode.status,
-      episode.closeReasonCode ?? null,
-      episode.revision,
+      requireUuid(input.dyadId, 'dyadId'),
+      input.expectedStatus,
+      requirePositiveInteger(input.expectedRevision, 'expectedRevision'),
+      input.status,
+      requireTimestamp(input.closedAtMs, 'closedAtMs'),
+      requireReasonCode(input.closeReasonCode, 'closeReasonCode'),
     ]);
-    if (!row) throw new Error(`Failed to create ICP conversation ${episode.conversationId}`);
-    return mapConversation(row, this.knownCompanionIds);
+    if (!row) throw new Error(`ICP dyad transition conflict for ${input.dyadId}`);
+    return mapDyad(row, this.knownCompanionIds);
   }
 
   async getEpisode(conversationId: string): Promise<IcpConversationEpisode | null> {
@@ -705,7 +837,7 @@ export class PostgresIcpSharedAutonomyStore implements IcpSharedAutonomyStorePor
     episode: IcpConversationEpisode;
     permit: IcpInitiationPermit;
     expectedInvalidationFence: IcpAutonomyInvalidationFence;
-  }): Promise<{ episode: IcpConversationEpisode; permit: IcpInitiationPermit }> {
+  }): Promise<{ dyad: IcpDyad; episode: IcpConversationEpisode; permit: IcpInitiationPermit }> {
     const episode = parseIcpConversationEpisode(input.episode, {
       knownCompanionIds: this.knownCompanionIds,
     });
@@ -742,12 +874,14 @@ export class PostgresIcpSharedAutonomyStore implements IcpSharedAutonomyStorePor
           AND GREATEST(sender_companion_id, recipient_companion_id) = GREATEST($1::uuid, $2::uuid)
       `, [permit.senderCompanionId, permit.recipientCompanionId, permit.issuedAtMs]);
 
+      const dyad = await ensureOpenDyadWithClient(client, episode, this.knownCompanionIds);
+
       const episodeResult = await client.query<ConversationRow>(`
         INSERT INTO icp_conversation_episodes (
-          conversation_id, channel_id, participant_companion_ids, root_initiation_id,
+          conversation_id, dyad_id, channel_id, participant_companion_ids, root_initiation_id,
           initiated_by_companion_id, initiation_source, provenance_ref, opened_at_ms,
           last_activity_at_ms, status, close_reason_code, revision
-        ) VALUES ($1, $2, $3::uuid[], $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        ) VALUES ($1, $13, $2, $3::uuid[], $4, $5, $6, $7, $8, $9, $10, $11, $12)
         RETURNING ${CONVERSATION_COLUMNS}
       `, [
         episode.conversationId,
@@ -762,6 +896,7 @@ export class PostgresIcpSharedAutonomyStore implements IcpSharedAutonomyStorePor
         episode.status,
         episode.closeReasonCode ?? null,
         episode.revision,
+        dyad.dyadId,
       ]);
 
       const permitResult = await client.query<PermitRow>(`
@@ -818,6 +953,7 @@ export class PostgresIcpSharedAutonomyStore implements IcpSharedAutonomyStorePor
       const episodeRow = episodeResult.rows.at(0);
       if (!episodeRow) throw new Error('Failed to create ICP conversation episode atomically');
       return {
+        dyad,
         episode: mapConversation(episodeRow, this.knownCompanionIds),
         permit: mapPermit(permitRow),
       };

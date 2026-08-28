@@ -865,6 +865,7 @@ describe('ICP target-channel initiation', () => {
       channelId: CHANNEL,
       rootInitiationId: ROOT,
       peerContactId: CONTACT_ID,
+      terminalReasonCode: 'conversation_ended',
     });
     expect(harness.sendInitiation).not.toHaveBeenCalled();
     expect(harness.recordDeliveryObservation).toHaveBeenCalledWith(expect.objectContaining({

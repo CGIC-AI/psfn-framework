@@ -1175,6 +1175,7 @@ export interface IcpPermitConsumeParams {
   channelId: string;
   rootInitiationId: string;
   peerContactId: string;
+  terminalReasonCode?: IcpAutonomyReasonCode;
   companionId?: string;
 }
 

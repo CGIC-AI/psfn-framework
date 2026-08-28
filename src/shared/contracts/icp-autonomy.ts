@@ -63,6 +63,9 @@ export const ICP_CONVERSATION_STATUSES = [
 ] as const;
 export type IcpConversationStatus = typeof ICP_CONVERSATION_STATUSES[number];
 
+export const ICP_DYAD_STATUSES = ['open', 'closed', 'revoked'] as const;
+export type IcpDyadStatus = typeof ICP_DYAD_STATUSES[number];
+
 export const ICP_PERMIT_STATUSES = ['issued', 'consumed', 'revoked', 'expired'] as const;
 export type IcpPermitStatus = typeof ICP_PERMIT_STATUSES[number];
 
@@ -101,6 +104,7 @@ export const ICP_AUTONOMY_REASON_CODES = [
   'conversation_suppressed',
   'operator_cancelled',
   'delivery_failed',
+  'inactivity_timeout',
 ] as const;
 export type IcpAutonomyReasonCode = typeof ICP_AUTONOMY_REASON_CODES[number];
 
@@ -127,6 +131,20 @@ export interface IcpConversationEpisode {
   lastActivityAtMs: number;
   status: IcpConversationStatus;
   closeReasonCode?: IcpAutonomyReasonCode;
+  revision: number;
+}
+
+/** Durable relationship authority for one canonical companion DM pair. */
+export interface IcpDyad {
+  dyadId: string;
+  channelId: string;
+  participantCompanionIds: [string, string];
+  status: IcpDyadStatus;
+  createdAtMs: number;
+  closedAtMs?: number;
+  closeReasonCode?: IcpAutonomyReasonCode;
+  /** Episode conversation IDs retained as content-free historical provenance. */
+  provenanceConversationIds: string[];
   revision: number;
 }
 
@@ -230,6 +248,10 @@ const EPISODE_KEYS = [
   'initiatedByCompanionId', 'initiationSource', 'provenanceRef', 'openedAtMs',
   'lastActivityAtMs', 'status', 'closeReasonCode', 'revision',
 ] as const;
+const DYAD_KEYS = [
+  'dyadId', 'channelId', 'participantCompanionIds', 'status', 'createdAtMs',
+  'closedAtMs', 'closeReasonCode', 'provenanceConversationIds', 'revision',
+] as const;
 const PERMIT_KEYS = [
   'permitId', 'candidateId', 'conversationId', 'senderCompanionId',
   'recipientCompanionId', 'channelId', 'provenanceRef', 'issuedAtMs',
@@ -249,6 +271,11 @@ const CONVERSATION_TRANSITIONS: Readonly<Record<IcpConversationStatus, readonly 
   declined: [],
   ended: [],
   suppressed: [],
+};
+const DYAD_TRANSITIONS: Readonly<Record<IcpDyadStatus, readonly IcpDyadStatus[]>> = {
+  open: ['closed', 'revoked'],
+  closed: [],
+  revoked: [],
 };
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
@@ -311,9 +338,9 @@ function requireOptionalTimestamp(value: unknown, field: string): number | undef
   return value === undefined ? undefined : requireTimestamp(value, field);
 }
 
-function requireUuidArray(value: unknown, field: string): string[] {
-  if (!Array.isArray(value) || value.length < 2) {
-    throw new Error(`${field} must contain at least two companion UUIDs`);
+function requireUuidArray(value: unknown, field: string, minimumLength = 2): string[] {
+  if (!Array.isArray(value) || value.length < minimumLength) {
+    throw new Error(`${field} must contain at least ${minimumLength} UUIDs`);
   }
   const participants = value.map((entry, index) => requireUuid(entry, `${field}[${index}]`));
   if (new Set(participants).size !== participants.length) {
@@ -449,6 +476,60 @@ export function parseIcpConversationEpisode(
     ...(closeReasonCode !== undefined ? { closeReasonCode } : {}),
     revision: requireRevision(raw.revision, 'ICP conversation episode.revision'),
   };
+}
+
+export function parseIcpDyad(
+  value: unknown,
+  options: IcpEpisodeValidationOptions = {},
+): IcpDyad {
+  const raw = requireRecord(value, 'ICP dyad');
+  assertNoUnknownKeys(raw, DYAD_KEYS, 'ICP dyad');
+  const participants = requireUuidArray(raw.participantCompanionIds, 'ICP dyad.participantCompanionIds');
+  if (participants.length !== 2) throw new Error('ICP dyad must contain exactly two companions');
+  const channelId = requireString(raw.channelId, 'ICP dyad.channelId');
+  const channelKind = assertChannelPairBinding(channelId, participants[0]!, participants[1]!, 'ICP dyad');
+  if (channelKind !== 'dm') throw new Error('ICP dyad.channelId must be a companion DM');
+  if (options.knownCompanionIds) {
+    for (const participant of participants) {
+      if (!options.knownCompanionIds.has(participant)) {
+        throw new Error(`ICP dyad has unknown participant ${participant}`);
+      }
+    }
+  }
+  const status = requireEnum(raw.status, ICP_DYAD_STATUSES, 'ICP dyad.status');
+  const createdAtMs = requireTimestamp(raw.createdAtMs, 'ICP dyad.createdAtMs');
+  const closedAtMs = requireOptionalTimestamp(raw.closedAtMs, 'ICP dyad.closedAtMs');
+  const closeReasonCode = requireOptionalReason(raw.closeReasonCode, 'ICP dyad.closeReasonCode');
+  if (status === 'open'
+    ? closedAtMs !== undefined || closeReasonCode !== undefined
+    : closedAtMs === undefined || closeReasonCode === undefined) {
+    throw new Error('Only a closed or revoked ICP dyad may carry closure facts');
+  }
+  if (closedAtMs !== undefined && closedAtMs < createdAtMs) {
+    throw new Error('ICP dyad.closedAtMs must not predate createdAtMs');
+  }
+  const provenanceConversationIds = requireUuidArray(
+    raw.provenanceConversationIds,
+    'ICP dyad.provenanceConversationIds',
+    1,
+  );
+  return {
+    dyadId: requireUuid(raw.dyadId, 'ICP dyad.dyadId'),
+    channelId,
+    participantCompanionIds: [participants[0]!, participants[1]!],
+    status,
+    createdAtMs,
+    ...(closedAtMs !== undefined ? { closedAtMs } : {}),
+    ...(closeReasonCode !== undefined ? { closeReasonCode } : {}),
+    provenanceConversationIds,
+    revision: requireRevision(raw.revision, 'ICP dyad.revision'),
+  };
+}
+
+export function assertIcpDyadStatusTransition(from: IcpDyadStatus, to: IcpDyadStatus): void {
+  if (!DYAD_TRANSITIONS[from].includes(to)) {
+    throw new Error(`Invalid ICP dyad status transition: ${from} -> ${to}`);
+  }
 }
 
 export function assertIcpConversationStatusTransition(

@@ -4,6 +4,8 @@ import type {
   IcpAvailabilityLease,
   IcpConversationEpisode,
   IcpConversationStatus,
+  IcpDyad,
+  IcpDyadStatus,
   IcpInitiationPermit,
 } from '../../shared/contracts/icp-autonomy.js';
 import type {
@@ -83,6 +85,21 @@ export interface IcpConversationEpisodeStorePort {
   transitionEpisode(input: IcpConversationTransitionInput): Promise<IcpConversationEpisode>;
 }
 
+export interface IcpDyadTransitionInput {
+  dyadId: string;
+  expectedStatus: IcpDyadStatus;
+  expectedRevision: number;
+  status: Extract<IcpDyadStatus, 'closed' | 'revoked'>;
+  closedAtMs: number;
+  closeReasonCode: IcpAutonomyReasonCode;
+}
+
+export interface IcpDyadStorePort {
+  getDyad(dyadId: string): Promise<IcpDyad | null>;
+  getDyadBetween(firstCompanionId: string, secondCompanionId: string): Promise<IcpDyad | null>;
+  transitionDyad(input: IcpDyadTransitionInput): Promise<IcpDyad>;
+}
+
 export interface IcpPermitConsumptionInput {
   permitId: string;
   conversationId: string;
@@ -144,6 +161,7 @@ export interface IcpInitiationPermitStorePort {
 
 export interface IcpSharedAutonomyStorePort extends
   IcpAvailabilityStorePort,
+  IcpDyadStorePort,
   IcpConversationEpisodeStorePort,
   IcpInitiationPermitStorePort {
   publishAvailabilityAndInvalidate(
@@ -160,7 +178,7 @@ export interface IcpSharedAutonomyStorePort extends
     episode: IcpConversationEpisode;
     permit: IcpInitiationPermit;
     expectedInvalidationFence: IcpAutonomyInvalidationFence;
-  }): Promise<{ episode: IcpConversationEpisode; permit: IcpInitiationPermit }>;
+  }): Promise<{ dyad: IcpDyad; episode: IcpConversationEpisode; permit: IcpInitiationPermit }>;
   close(): Promise<void>;
 }
 

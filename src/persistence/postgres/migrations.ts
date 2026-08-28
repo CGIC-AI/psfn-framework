@@ -2889,15 +2889,16 @@ export const POSTGRES_OBSERVER_EVAL_SIDECAR_MIGRATIONS = [
 //  11 — speaking arbiter charge association
 //  12 — icp felt_impulse initiation source (hrmrq.34, operator ruling D4)
 //  13 — authenticated operator/harness ICP test initiation source (ph0mw)
+//  14 — durable canonical ICP dyads with bounded activity episodes (84g0z.1)
 export const SHARED_SCHEMA_NAME = 'shared';
 
 /** Ledger versions installed by POSTGRES_SHARED_MIGRATIONS (excluding wiki versions 3 and 8). */
 export const POSTGRES_SHARED_BASE_MIGRATION_VERSIONS = [
-  1, 2, 4, 5, 6, 7, 9, 10, 11, 12, 13,
+  1, 2, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14,
 ] as const;
 /** Complete ledger across the base and shared-wiki chains. */
 export const POSTGRES_SHARED_ALL_MIGRATION_VERSIONS = [
-  1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13,
+  1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14,
 ] as const;
 
 export const POSTGRES_SHARED_MIGRATIONS: readonly string[] = [
@@ -3366,6 +3367,102 @@ export const POSTGRES_SHARED_MIGRATIONS: readonly string[] = [
   `
   INSERT INTO shared_schema_migrations (version, name)
   VALUES (13, 'icp-operator-test-initiation-source')
+  ON CONFLICT (version) DO NOTHING;
+  `,
+  // Version 14 (84g0z.1): one durable relationship row owns the canonical DM
+  // channel while conversation episodes remain bounded activity/accounting
+  // segments. Validation precedes every mutation so ambiguous historical
+  // ownership aborts the transaction without moving transcript content.
+  `
+  DO $migration$
+  BEGIN
+    IF EXISTS (
+      SELECT 1
+      FROM icp_conversation_episodes
+      WHERE cardinality(participant_companion_ids) <> 2
+        OR participant_companion_ids[1] >= participant_companion_ids[2]
+        OR channel_id <> 'companion-dm:' || participant_companion_ids[1]::text
+          || ':' || participant_companion_ids[2]::text
+    ) THEN
+      RAISE EXCEPTION 'ICP dyad backfill rejected ambiguous pair/channel ownership';
+    END IF;
+
+    IF EXISTS (
+      SELECT 1
+      FROM icp_conversation_episodes
+      GROUP BY participant_companion_ids[1], participant_companion_ids[2]
+      HAVING count(DISTINCT channel_id) <> 1
+    ) THEN
+      RAISE EXCEPTION 'ICP dyad backfill rejected multiple channels for one companion pair';
+    END IF;
+  END
+  $migration$;
+  `,
+  `
+  CREATE TABLE IF NOT EXISTS icp_dyads (
+    dyad_id UUID PRIMARY KEY,
+    channel_id TEXT NOT NULL UNIQUE,
+    first_companion_id UUID NOT NULL,
+    second_companion_id UUID NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('open', 'closed', 'revoked')),
+    created_at_ms BIGINT NOT NULL CHECK (created_at_ms >= 0),
+    closed_at_ms BIGINT,
+    close_reason_code TEXT,
+    provenance_conversation_ids UUID[] NOT NULL,
+    revision BIGINT NOT NULL CHECK (revision >= 1),
+    UNIQUE (first_companion_id, second_companion_id),
+    CHECK (first_companion_id < second_companion_id),
+    CHECK (channel_id = 'companion-dm:' || first_companion_id::text || ':' || second_companion_id::text),
+    CHECK (cardinality(provenance_conversation_ids) >= 1),
+    CHECK (array_position(provenance_conversation_ids, NULL) IS NULL),
+    CHECK (
+      (status = 'open' AND closed_at_ms IS NULL AND close_reason_code IS NULL)
+      OR (status <> 'open' AND closed_at_ms IS NOT NULL AND close_reason_code IS NOT NULL)
+    ),
+    CHECK (closed_at_ms IS NULL OR closed_at_ms >= created_at_ms)
+  );
+  `,
+  `
+  INSERT INTO icp_dyads (
+    dyad_id, channel_id, first_companion_id, second_companion_id, status,
+    created_at_ms, closed_at_ms, close_reason_code, provenance_conversation_ids, revision
+  )
+  SELECT
+    (array_agg(conversation_id ORDER BY opened_at_ms, conversation_id))[1],
+    channel_id,
+    participant_companion_ids[1],
+    participant_companion_ids[2],
+    'open',
+    min(opened_at_ms),
+    NULL,
+    NULL,
+    array_agg(conversation_id ORDER BY conversation_id),
+    1
+  FROM icp_conversation_episodes
+  GROUP BY channel_id, participant_companion_ids[1], participant_companion_ids[2]
+  ON CONFLICT (first_companion_id, second_companion_id) DO NOTHING;
+  `,
+  `ALTER TABLE icp_conversation_episodes ADD COLUMN IF NOT EXISTS dyad_id UUID;`,
+  `
+  UPDATE icp_conversation_episodes AS episode
+  SET dyad_id = dyad.dyad_id
+  FROM icp_dyads AS dyad
+  WHERE episode.dyad_id IS NULL
+    AND episode.channel_id = dyad.channel_id
+    AND episode.participant_companion_ids[1] = dyad.first_companion_id
+    AND episode.participant_companion_ids[2] = dyad.second_companion_id;
+  `,
+  `ALTER TABLE icp_conversation_episodes ALTER COLUMN dyad_id SET NOT NULL;`,
+  `ALTER TABLE icp_conversation_episodes
+    DROP CONSTRAINT IF EXISTS icp_conversation_episodes_dyad_id_fkey;`,
+  `ALTER TABLE icp_conversation_episodes
+    ADD CONSTRAINT icp_conversation_episodes_dyad_id_fkey
+    FOREIGN KEY (dyad_id) REFERENCES icp_dyads(dyad_id) ON DELETE RESTRICT;`,
+  `CREATE INDEX IF NOT EXISTS idx_icp_conversation_episodes_dyad
+    ON icp_conversation_episodes (dyad_id, opened_at_ms, conversation_id);`,
+  `
+  INSERT INTO shared_schema_migrations (version, name)
+  VALUES (14, 'icp-durable-dyads')
   ON CONFLICT (version) DO NOTHING;
   `,
 ];

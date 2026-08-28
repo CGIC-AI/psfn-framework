@@ -282,6 +282,7 @@ export function parseIcpPermitConsumeParams(value: unknown): {
   channelId: string;
   rootInitiationId: string;
   peerContactId: string;
+  terminalReasonCode?: IcpAutonomyReasonCode;
 } {
   if (!isRecord(value)) throw new Error('ICP permit consume params must be an object');
   assertNoUnknownKeys(
@@ -293,10 +294,21 @@ export function parseIcpPermitConsumeParams(value: unknown): {
       'channelId',
       'rootInitiationId',
       'peerContactId',
+      'terminalReasonCode',
       'companionId',
     ],
     'ICP permit consume params',
   );
+  const terminalReasonCode = value.terminalReasonCode;
+  if (terminalReasonCode !== undefined && ![
+    'fatigue_exhausted',
+    'charge_pressure',
+    'cost_hard_stop',
+    'inactivity_timeout',
+    'conversation_ended',
+  ].includes(String(terminalReasonCode))) {
+    throw new Error('ICP permit consume terminalReasonCode is not an activity terminal reason');
+  }
   return {
     permitId: requireUuid(value.permitId, 'permitId'),
     conversationId: requireUuid(value.conversationId, 'conversationId'),
@@ -304,6 +316,9 @@ export function parseIcpPermitConsumeParams(value: unknown): {
     channelId: requireTrimmedString(value.channelId, 'channelId'),
     rootInitiationId: requireUuid(value.rootInitiationId, 'rootInitiationId'),
     peerContactId: requireTrimmedString(value.peerContactId, 'peerContactId'),
+    ...(terminalReasonCode !== undefined
+      ? { terminalReasonCode: terminalReasonCode as IcpAutonomyReasonCode }
+      : {}),
   };
 }
 

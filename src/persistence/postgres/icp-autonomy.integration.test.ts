@@ -21,7 +21,7 @@ import { EventBus } from '../../shared/event-bus.js';
 import { PostgresIcpInitiationCandidateStore } from './icp-initiation-candidate-store.js';
 import { PostgresIcpInitiationPolicyAuthority } from './icp-initiation-policy-authority.js';
 import { PostgresIcpSharedAutonomyStore } from './icp-shared-autonomy-store.js';
-import { SHARED_SCHEMA_NAME } from './migrations.js';
+import { POSTGRES_SHARED_MIGRATIONS, SHARED_SCHEMA_NAME } from './migrations.js';
 import { bootstrapSharedSchema } from './shared-schema.js';
 
 const TIMEOUT_MS = 120_000;
@@ -80,6 +80,92 @@ function deferred(): { reached: Promise<void>; release: () => void; wait: () => 
 }
 
 describe('ICP autonomy Postgres persistence', () => {
+  it('backfills valid legacy episodes into one dyad and rejects ambiguous ownership', async () => {
+    if (!harness) throw new Error('Postgres integration harness is unavailable');
+    const installLegacySharedSchema = async (databaseUrl: string) => {
+      const pool = createPostgresPool(databaseUrl, { max: 1, allowExitOnIdle: true });
+      await pool.query(`CREATE SCHEMA ${SHARED_SCHEMA_NAME}`);
+      await pool.query(`SET search_path TO ${SHARED_SCHEMA_NAME}`);
+      const dyadMigrationIndex = POSTGRES_SHARED_MIGRATIONS.findIndex(statement =>
+        statement.includes('ICP dyad backfill rejected ambiguous pair/channel ownership'));
+      if (dyadMigrationIndex < 0) throw new Error('dyad migration boundary missing');
+      for (const statement of POSTGRES_SHARED_MIGRATIONS.slice(0, dyadMigrationIndex)) {
+        await pool.query(statement);
+      }
+      return { pool, dyadMigrationIndex };
+    };
+
+    const validUrl = (await harness.createDatabase()).databaseUrl;
+    const valid = await installLegacySharedSchema(validUrl);
+    try {
+      await valid.pool.query(
+        'CREATE TABLE transcript_sentinel (conversation_id UUID PRIMARY KEY, body TEXT NOT NULL)',
+      );
+      await valid.pool.query(`
+        INSERT INTO icp_conversation_episodes (
+          conversation_id, channel_id, participant_companion_ids, root_initiation_id,
+          initiated_by_companion_id, initiation_source, provenance_ref, opened_at_ms,
+          last_activity_at_ms, status, revision
+        ) VALUES
+          ($1, $3, ARRAY[$4::uuid, $5::uuid], $6, $4, 'foreground', $7, 1000, 1000, 'ended', 1),
+          ($2, $3, ARRAY[$4::uuid, $5::uuid], $6, $5, 'foreground', $8, 2000, 2000, 'invited', 1)
+      `, [
+        CONVERSATION_ID,
+        SECOND_CONVERSATION_ID,
+        CHANNEL,
+        A,
+        B,
+        ROOT_ID,
+        PROVENANCE_HANDLE,
+        SECOND_PROVENANCE_HANDLE,
+      ]);
+      await valid.pool.query(
+        "INSERT INTO transcript_sentinel VALUES ($1, 'legacy transcript stays put')",
+        [CONVERSATION_ID],
+      );
+      for (const statement of POSTGRES_SHARED_MIGRATIONS.slice(valid.dyadMigrationIndex)) {
+        await valid.pool.query(statement);
+      }
+      const dyads = await valid.pool.query<{
+        dyad_id: string;
+        channel_id: string;
+        provenance_conversation_ids: string[];
+      }>('SELECT dyad_id, channel_id, provenance_conversation_ids FROM icp_dyads');
+      expect(dyads.rows).toEqual([{
+        dyad_id: CONVERSATION_ID,
+        channel_id: CHANNEL,
+        provenance_conversation_ids: [CONVERSATION_ID, SECOND_CONVERSATION_ID],
+      }]);
+      const links = await valid.pool.query<{ count: number }>(
+        'SELECT count(DISTINCT dyad_id)::int AS count FROM icp_conversation_episodes',
+      );
+      expect(links.rows[0]?.count).toBe(1);
+      await expect(valid.pool.query('SELECT body FROM transcript_sentinel'))
+        .resolves.toMatchObject({ rows: [{ body: 'legacy transcript stays put' }] });
+    } finally {
+      await valid.pool.end();
+    }
+
+    const ambiguousUrl = (await harness.createDatabase()).databaseUrl;
+    const ambiguous = await installLegacySharedSchema(ambiguousUrl);
+    try {
+      await ambiguous.pool.query(`
+        INSERT INTO icp_conversation_episodes (
+          conversation_id, channel_id, participant_companion_ids, root_initiation_id,
+          initiated_by_companion_id, initiation_source, provenance_ref, opened_at_ms,
+          last_activity_at_ms, status, revision
+        ) VALUES ($1, 'companion-room:ambiguous', ARRAY[$2::uuid, $3::uuid], $4, $2,
+          'foreground', $5, 1000, 1000, 'invited', 1)
+      `, [CONVERSATION_ID, A, B, ROOT_ID, PROVENANCE_HANDLE]);
+      await expect(ambiguous.pool.query(POSTGRES_SHARED_MIGRATIONS[ambiguous.dyadMigrationIndex]!))
+        .rejects.toThrow('ambiguous pair/channel ownership');
+      await expect(ambiguous.pool.query("SELECT to_regclass('icp_dyads')::text AS relation"))
+        .resolves.toMatchObject({ rows: [{ relation: null }] });
+    } finally {
+      await ambiguous.pool.end();
+    }
+  }, TIMEOUT_MS);
+
   it('enforces operator over companion over runtime availability precedence', async () => {
     const databaseUrl = await freshDatabaseUrl();
     const store = await PostgresIcpSharedAutonomyStore.connect(databaseUrl, {
@@ -456,6 +542,12 @@ describe('ICP autonomy Postgres persistence', () => {
         status: 'invited',
         revision: 1,
       });
+      await expect(storeB.getDyadBetween(B, A)).resolves.toMatchObject({
+        dyadId: CONVERSATION_ID,
+        channelId: CHANNEL,
+        status: 'open',
+        provenanceConversationIds: [CONVERSATION_ID],
+      });
       await storeA.issuePermit({
         permit: {
           permitId: PERMIT_ID,
@@ -519,6 +611,11 @@ describe('ICP autonomy Postgres persistence', () => {
         lastActivityAtMs: 20_000,
         status: 'invited',
         revision: 1,
+      });
+      await expect(storeB.getDyadBetween(A, B)).resolves.toMatchObject({
+        dyadId: CONVERSATION_ID,
+        status: 'open',
+        provenanceConversationIds: [CONVERSATION_ID, SECOND_CONVERSATION_ID],
       });
       await storeA.issuePermit({
         permit: {
@@ -1235,6 +1332,20 @@ describe('ICP autonomy Postgres persistence', () => {
         storeA.getEpisode(RACE_CONVERSATION_B),
       ]);
       expect(raceEpisodes.filter(Boolean)).toHaveLength(1);
+      const orderedDyad = await storeA.getDyadBetween(A, B);
+      const reversedDyad = await storeB.getDyadBetween(B, A);
+      expect(reversedDyad).toEqual(orderedDyad);
+      expect(orderedDyad).toMatchObject({
+        dyadId: CONVERSATION_ID,
+        channelId: CHANNEL,
+        status: 'open',
+      });
+      expect(orderedDyad?.provenanceConversationIds).toHaveLength(3);
+      expect(orderedDyad?.provenanceConversationIds).toEqual(expect.arrayContaining([
+        CONVERSATION_ID,
+        SECOND_CONVERSATION_ID,
+        (raceEpisodes.find(Boolean) as { conversationId: string }).conversationId,
+      ]));
       expect(await storeA.findOutstandingPermitBetween(A, B, 31_000)).not.toBeNull();
       const invalidated = await storeB.revokeOutstandingPermitsForCompanion(
         B,
@@ -1255,6 +1366,11 @@ describe('ICP autonomy Postgres persistence', () => {
       knownCompanionIds: [A, B],
     });
     try {
+      await expect(restarted.getDyadBetween(B, A)).resolves.toMatchObject({
+        dyadId: CONVERSATION_ID,
+        channelId: CHANNEL,
+        status: 'open',
+      });
       expect((await restarted.getEpisode(CONVERSATION_ID))?.status).toBe('active');
       expect((await restarted.getPermit(PERMIT_ID))?.status).toBe('consumed');
       expect(await restarted.findOutstandingPermitBetween(A, B, 31_001)).toBeNull();

@@ -946,7 +946,6 @@ export class GatewayClient implements
   async invalidateModelDiscoveryCache(): Promise<void> {
     await this.transportRuntime.request('llm.invalidate_model_discovery', {}) as LLMInvalidateModelDiscoveryResult;
   }
-
   // ── Channel methods ──
   async channelSend(channelType: 'buzz', channelId: string, content: string): Promise<void> {
     await this.transportRuntime.request('channel.send', { channelType, channelId, content });
@@ -1895,7 +1894,6 @@ export class GatewayClient implements
       handler(chunk.text);
       return;
     }
-
   }
 
   private handleFirstOutputNotification(params: unknown): void {

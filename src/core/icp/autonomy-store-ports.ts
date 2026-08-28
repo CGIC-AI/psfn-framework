@@ -178,7 +178,7 @@ export interface IcpSharedAutonomyStorePort extends
     episode: IcpConversationEpisode;
     permit: IcpInitiationPermit;
     expectedInvalidationFence: IcpAutonomyInvalidationFence;
-  }): Promise<{ dyad: IcpDyad; episode: IcpConversationEpisode; permit: IcpInitiationPermit }>;
+  }): Promise<{ dyad: IcpDyad | null; episode: IcpConversationEpisode; permit: IcpInitiationPermit }>;
   close(): Promise<void>;
 }
 

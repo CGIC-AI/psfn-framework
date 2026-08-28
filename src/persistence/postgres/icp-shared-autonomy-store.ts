@@ -853,7 +853,7 @@ export class PostgresIcpSharedAutonomyStore implements IcpSharedAutonomyStorePor
     episode: IcpConversationEpisode;
     permit: IcpInitiationPermit;
     expectedInvalidationFence: IcpAutonomyInvalidationFence;
-  }): Promise<{ dyad: IcpDyad; episode: IcpConversationEpisode; permit: IcpInitiationPermit }> {
+  }): Promise<{ dyad: IcpDyad | null; episode: IcpConversationEpisode; permit: IcpInitiationPermit }> {
     const episode = parseIcpConversationEpisode(input.episode, {
       knownCompanionIds: this.knownCompanionIds,
     });
@@ -890,7 +890,21 @@ export class PostgresIcpSharedAutonomyStore implements IcpSharedAutonomyStorePor
           AND GREATEST(sender_companion_id, recipient_companion_id) = GREATEST($1::uuid, $2::uuid)
       `, [permit.senderCompanionId, permit.recipientCompanionId, permit.issuedAtMs]);
 
-      const dyad = await ensureOpenDyadWithClient(client, episode, this.knownCompanionIds);
+      const dyadId = await resolveEpisodeDyadIdWithClient(
+        client,
+        episode,
+        this.knownCompanionIds,
+      );
+      const dyad = dyadId === null
+        ? null
+        : mapDyad(
+          (await client.query<DyadRow>(`
+            SELECT ${DYAD_COLUMNS}
+            FROM icp_dyads
+            WHERE dyad_id = $1
+          `, [dyadId])).rows.at(0) ?? (() => { throw new Error('ICP dyad disappeared after insert'); })(),
+          this.knownCompanionIds,
+        );
 
       const episodeResult = await client.query<ConversationRow>(`
         INSERT INTO icp_conversation_episodes (
@@ -912,7 +926,7 @@ export class PostgresIcpSharedAutonomyStore implements IcpSharedAutonomyStorePor
         episode.status,
         episode.closeReasonCode ?? null,
         episode.revision,
-        dyad.dyadId,
+        dyadId,
       ]);
 
       const permitResult = await client.query<PermitRow>(`

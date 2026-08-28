@@ -285,9 +285,9 @@ export const VALID_MEMORY_TYPES: MemoryType[] = [
   ...MEMORY_POLICY_TYPES,
 ];
 
-export const PERSISTED_MEMORY_TYPE_REPAIR_VERSION = 1;
+const PERSISTED_MEMORY_TYPE_REPAIR_VERSION = 1;
 
-export type PersistedMemoryTypeResolution =
+type PersistedMemoryTypeResolution =
   | { disposition: 'valid'; type: MemoryType }
   | {
       disposition: 'mapped';
@@ -303,7 +303,7 @@ export type PersistedMemoryTypeResolution =
       reason: 'unsupported_memory_type';
     };
 
-export function isMemoryType(value: unknown): value is MemoryType {
+function isMemoryType(value: unknown): value is MemoryType {
   return typeof value === 'string'
     && VALID_MEMORY_TYPES.includes(value as MemoryType);
 }

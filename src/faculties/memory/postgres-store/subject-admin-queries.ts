@@ -8,7 +8,7 @@ import {
   type AdminMemoryPrivacyAggregateRow,
   type MemoryRow,
   type SensitivityCountRow,
-  fromMemoryRow,
+  tryFromMemoryRow,
   parsePgNumber,
 } from './rows.js';
 import { clampLimit } from './utils.js';
@@ -224,7 +224,10 @@ async function queryAdminPage(
   }
   const memories = rows.rows
     .filter(hasAdminPage)
-    .map(row => ({ ...fromMemoryRow(row), similarity: 1 }));
+    .flatMap(row => {
+      const memory = tryFromMemoryRow(row);
+      return memory ? [{ ...memory, similarity: 1 }] : [];
+    });
   return {
     kind: 'memories',
     memories,
@@ -252,7 +255,10 @@ async function querySourcePrefixSlice(
   `,
     [...values, safeLimit],
   );
-  const memories = rows.rows.map(row => ({ ...fromMemoryRow(row), similarity: 1 }));
+  const memories = rows.rows.flatMap(row => {
+    const memory = tryFromMemoryRow(row);
+    return memory ? [{ ...memory, similarity: 1 }] : [];
+  });
   return { kind: 'memories', memories, total: memories.length };
 }
 

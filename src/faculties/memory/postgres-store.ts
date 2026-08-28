@@ -115,7 +115,7 @@ import {
   decodeEmbedding,
   decodeStringArray,
   encodeEmbeddingLiteral,
-  fromMemoryRow,
+  tryFromMemoryRow,
   parseOptionalPgNumber,
   parsePgNumber,
   serializeJsonValue,
@@ -463,7 +463,8 @@ class PostgresMemoryStore implements PostgresMemoryStorePort {
       ORDER BY extracted_at DESC, id DESC
     `);
     for (const row of memoryRows) {
-      this.memories.set(row.id, fromMemoryRow(row));
+      const memory = tryFromMemoryRow(row);
+      if (memory) this.memories.set(row.id, memory);
     }
 
     const deleteRows = await queryRows<MemoryDeleteVersionRow>(this.pool, `
@@ -1025,7 +1026,11 @@ class PostgresMemoryStore implements PostgresMemoryStorePort {
     );
 
     return rows
-      .map((row) => ({ ...fromMemoryRow(row), similarity: parsePgNumber(row.similarity, 'similarity') }))
+      .flatMap((row) => {
+        const memory = tryFromMemoryRow(row);
+        if (!memory) return [];
+        return [{ ...memory, similarity: parsePgNumber(row.similarity, 'similarity') }];
+      })
       .filter((memory) => {
         if (!normalizedScopeQuery) return true;
         const refs = normalizedScopeQuery.refs ?? [];
@@ -1085,7 +1090,9 @@ class PostgresMemoryStore implements PostgresMemoryStorePort {
       `, [id]);
       const currentRow = rows.at(0);
       if (!currentRow) return;
-      const next = { ...fromMemoryRow(currentRow) };
+      const decoded = tryFromMemoryRow(currentRow);
+      if (!decoded) return;
+      const next = { ...decoded };
       if (options.requireActive && (next.supersededBy !== undefined || next.deletedAt !== undefined)) {
         throw new InactiveMemoryUpdateError(id);
       }
@@ -1185,7 +1192,8 @@ class PostgresMemoryStore implements PostgresMemoryStorePort {
         throw new Error(`PostgreSQL memory schema returned an unreadable pgvector embedding for memory ${row.id}`);
       }
       validateEmbeddingDimensions(embedding, this.embeddingDims, 'evidence');
-      const memory = fromMemoryRow(row);
+      const memory = tryFromMemoryRow(row);
+      if (!memory) continue;
       samples.push({
         id: memory.id,
         text: memory.text,
@@ -1274,7 +1282,10 @@ class PostgresMemoryStore implements PostgresMemoryStorePort {
       LIMIT $${values.length}
     `, values);
     return {
-      memories: rows.slice(0, limit).map(fromMemoryRow),
+      memories: rows.slice(0, limit).flatMap((row) => {
+        const memory = tryFromMemoryRow(row);
+        return memory ? [memory] : [];
+      }),
       saturated: rows.length > limit,
     };
   }
@@ -1310,7 +1321,10 @@ class PostgresMemoryStore implements PostgresMemoryStorePort {
       WHERE ${where.sql}
     `, where.values);
     return {
-      memories: rows.map(fromMemoryRow),
+      memories: rows.flatMap((row) => {
+        const memory = tryFromMemoryRow(row);
+        return memory ? [memory] : [];
+      }),
       total: totalRows[0] ? parsePgNumber(totalRows[0].count, 'count') : 0,
       privacySummary: await this.getAdminMemoryPrivacySummary(),
     };
@@ -1439,7 +1453,9 @@ class PostgresMemoryStore implements PostgresMemoryStorePort {
    */
   private hydrateLockedMemoryRows(rows: readonly MemoryRow[], operation: string): void {
     for (const row of rows) {
-      this.memories.set(row.id, fromMemoryRow(row));
+      const memory = tryFromMemoryRow(row);
+      if (!memory) continue;
+      this.memories.set(row.id, memory);
       const embedding = decodeEmbedding(row.embedding);
       if (embedding) {
         validateEmbeddingDimensions(embedding, this.embeddingDims, operation);
@@ -1525,7 +1541,8 @@ class PostgresMemoryStore implements PostgresMemoryStorePort {
       `, [memoryId, ...predicate.values]);
       const row = rows.at(0);
       if (!row) return null;
-      const memory = fromMemoryRow(row);
+      const memory = tryFromMemoryRow(row);
+      if (!memory) return null;
       const embedding = decodeEmbedding(row.embedding);
       if (embedding) validateEmbeddingDimensions(embedding, this.embeddingDims, 'authorized delete');
       const deleteId = input.options?.deleteId ?? randomUUID();
@@ -1580,7 +1597,8 @@ class PostgresMemoryStore implements PostgresMemoryStorePort {
       `, [version.memoryId, ...predicate.values]);
       const row = rows.at(0);
       if (!row) return null;
-      const current = fromMemoryRow(row);
+      const current = tryFromMemoryRow(row);
+      if (!current) return null;
       const embedding = decodeEmbedding(row.embedding);
       if (embedding) validateEmbeddingDimensions(embedding, this.embeddingDims, 'authorized restore');
       const restoredAt = input.options?.restoredAt ?? Date.now();

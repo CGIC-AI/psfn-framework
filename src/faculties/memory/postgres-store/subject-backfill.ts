@@ -6,7 +6,7 @@ import type {
 } from '../memory-store-port.js';
 import {
   decodeEmbedding,
-  fromMemoryRow,
+  tryFromMemoryRow,
   parsePgNumber,
   validateEmbeddingDimensions,
   type MemoryRow,
@@ -109,7 +109,8 @@ export async function backfillMemorySubjectClassifications(
   `, [checkpoint.cursor_memory_id, batchSize]);
   const reasonCounts: Record<string, number> = {};
   for (const row of rows.rows) {
-    const memory = fromMemoryRow(row);
+    const memory = tryFromMemoryRow(row);
+    if (!memory) continue;
     const embedding = row.embedding ? decodeEmbedding(row.embedding) : undefined;
     if (embedding && embeddingDims !== undefined) {
       validateEmbeddingDimensions(embedding, embeddingDims, 'subject backfill');

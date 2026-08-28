@@ -77,7 +77,7 @@ export class PostgresBuzzRecoveryStore implements BuzzRecoveryStore {
 
   static connect(databaseUrl: string, scope: BuzzRecoveryScope): PostgresBuzzRecoveryStore {
     const pool = createPostgresPool(databaseUrl, {
-      applicationName: 'psfn-buzz-recovery',
+      applicationName: 'buzz-recovery',
       allowExitOnIdle: true,
       max: 2,
     });

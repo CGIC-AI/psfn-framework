@@ -94,7 +94,7 @@ export interface IcpDyadTransitionInput {
   closeReasonCode: IcpAutonomyReasonCode;
 }
 
-export interface IcpDyadStorePort {
+interface IcpDyadStorePort {
   getDyad(dyadId: string): Promise<IcpDyad | null>;
   getDyadBetween(firstCompanionId: string, secondCompanionId: string): Promise<IcpDyad | null>;
   transitionDyad(input: IcpDyadTransitionInput): Promise<IcpDyad>;

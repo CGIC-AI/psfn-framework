@@ -13,6 +13,7 @@ import type { SessionArchivePort } from '../journals/journal/port.js';
 import { createFilesystemSessionArchivePort } from '../journals/journal/port.js';
 import { isCogSecTombstoneSessionEntry } from '../../core/cogsec/tombstones.js';
 import { createComponentLogger } from '../../shared/logger.js';
+import { isRecord } from '../../shared/utils/types.js';
 import type { RedactionProjectionDriftObserver } from '../../shared/contracts/projection-drift.js';
 import type {
   KeywordSearchableTranscriptProjection,
@@ -86,6 +87,7 @@ interface ProjectionRecord {
   content: string;
   timestamp: number;
   channelVisibility: ChannelPrivacy;
+  metadataJson: Record<string, unknown>;
 }
 
 export interface PostgresTranscriptProjectionOptions {
@@ -152,6 +154,20 @@ function normalizeTimestamp(value: number): number {
   return Math.max(0, Math.floor(value));
 }
 
+function parseProjectionMetadata(metadata: string | undefined): Record<string, unknown> {
+  if (metadata === undefined) return {};
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(metadata);
+  } catch {
+    throw new Error('Session projection metadata must be valid JSON');
+  }
+  if (!isRecord(parsed)) {
+    throw new Error('Session projection metadata must be a JSON object');
+  }
+  return parsed;
+}
+
 function toProjectionRecord(
   entry: import('../../core/session/types.js').SessionEntry,
   options: { channelId?: string } = {},
@@ -166,6 +182,7 @@ function toProjectionRecord(
     content: entry.content,
     timestamp: normalizeTimestamp(entry.timestamp),
     channelVisibility: normalizeChannelVisibility(entry.channelVisibility, channelId),
+    metadataJson: parseProjectionMetadata(entry.metadata),
   };
 }
 
@@ -256,16 +273,18 @@ async function upsertProjectionRecord(client: PoolClient, record: ProjectionReco
         author_name,
         content,
         timestamp,
-        channel_visibility
+        channel_visibility,
+        metadata_json
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
       ON CONFLICT (channel_id, message_id) DO UPDATE SET
         role = EXCLUDED.role,
         author_id = EXCLUDED.author_id,
         author_name = EXCLUDED.author_name,
         content = EXCLUDED.content,
         timestamp = EXCLUDED.timestamp,
-        channel_visibility = EXCLUDED.channel_visibility
+        channel_visibility = EXCLUDED.channel_visibility,
+        metadata_json = EXCLUDED.metadata_json
       RETURNING (xmax = 0) AS inserted
     `,
     [
@@ -277,6 +296,7 @@ async function upsertProjectionRecord(client: PoolClient, record: ProjectionReco
       record.content,
       record.timestamp,
       record.channelVisibility,
+      record.metadataJson,
     ],
   );
   return result.rows[0]?.inserted === true;

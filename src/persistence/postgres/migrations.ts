@@ -1505,6 +1505,19 @@ export const POSTGRES_TRANSCRIPT_MIGRATIONS = [
   `,
   `CREATE INDEX IF NOT EXISTS idx_session_messages_projection_channel_timestamp ON session_messages_projection(channel_id, timestamp DESC, message_id DESC);`,
   `CREATE INDEX IF NOT EXISTS idx_session_messages_projection_search_vector ON session_messages_projection USING GIN(search_vector);`,
+  `ALTER TABLE session_messages_projection ADD COLUMN IF NOT EXISTS metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb;`,
+  `
+  CREATE TABLE IF NOT EXISTS session_message_addressing_quarantine (
+    channel_id TEXT NOT NULL,
+    message_id BIGINT NOT NULL,
+    reason TEXT NOT NULL,
+    addressing_fingerprint TEXT NOT NULL,
+    schema_version TEXT NOT NULL,
+    PRIMARY KEY (channel_id, message_id)
+  );
+  `,
+  `CREATE INDEX IF NOT EXISTS idx_session_message_addressing_quarantine_reason
+    ON session_message_addressing_quarantine(reason, channel_id, message_id);`,
   `
   CREATE TABLE IF NOT EXISTS session_projection_drift (
     channel_id TEXT PRIMARY KEY,

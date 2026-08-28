@@ -15,6 +15,7 @@ import {
   POSTGRES_ANALYSIS_WORKBENCH_TRACE_MIGRATIONS,
   POSTGRES_AUTOMATA_MIGRATIONS,
   POSTGRES_AUTOMATA_ROLLBACK_MIGRATIONS,
+  POSTGRES_BUZZ_RECOVERY_MIGRATIONS,
 } from './migrations.js';
 import { MODEL_USAGE_RUNTIME_LANE_CLASSES } from '../../shared/telemetry/model-usage-attribution.js';
 import { RUNTIME_LANE_CLASSES } from '../../shared/contracts/runtime-lanes.js';
@@ -28,6 +29,18 @@ function expectAddColumn(sql: string, table: string, column: string): void {
 }
 
 describe('Postgres live schema migrations', () => {
+  it('creates scoped Buzz recovery, causal-edge, cursor, and membership authorities', () => {
+    const sql = migrationSql(POSTGRES_BUZZ_RECOVERY_MIGRATIONS);
+
+    expect(sql).toContain('CREATE TABLE IF NOT EXISTS buzz_inbound_recovery');
+    expect(sql).toContain('PRIMARY KEY (community, companion_id, event_id)');
+    expect(sql).toContain("state IN ('processing', 'ready', 'completed', 'suppressed')");
+    expect(sql).toContain('CREATE TABLE IF NOT EXISTS buzz_causal_roots');
+    expect(sql).toContain('CREATE TABLE IF NOT EXISTS buzz_causal_edges');
+    expect(sql).toContain('CREATE TABLE IF NOT EXISTS buzz_replay_checkpoints');
+    expect(sql).toContain('CREATE TABLE IF NOT EXISTS buzz_room_memberships');
+  });
+
   it('keeps the combined shared-schema ledger unique and sequential across both chains', () => {
     const registeredVersions = [
       ...POSTGRES_SHARED_MIGRATIONS,

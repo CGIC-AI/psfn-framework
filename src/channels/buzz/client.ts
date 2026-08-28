@@ -1,16 +1,22 @@
+import { setTimeout as delay } from 'node:timers/promises';
 import { WebSocket, type RawData } from 'ws';
+import type { Event as NostrEvent } from 'nostr-tools';
 import { toError } from '../../shared/utils/errors.js';
 import type { RuntimeChannelLifecycleLogger } from '../backplane/channel-lifecycle.js';
 import {
+  BUZZ_MEMBER_ADDED_KIND,
+  BUZZ_MEMBER_REMOVED_KIND,
+  BUZZ_MEMBERSHIP_SNAPSHOT_KIND,
   BUZZ_STREAM_KIND,
   acceptsBuzzStreamEvent,
   companionPubkeyForPrivateKey,
   createBuzzAuthEvent,
   createBuzzStreamEvent,
   isNostrEvent,
+  parseBuzzMembershipChange,
+  parseBuzzMembershipSnapshot,
   parseBuzzRelayFrame,
 } from './protocol.js';
-import type { Event as NostrEvent } from 'nostr-tools';
 
 interface PendingPublish {
   resolve: () => void;
@@ -20,108 +26,133 @@ interface PendingPublish {
 
 export interface BuzzRelayClientConfig {
   relayUrl: string;
+  relayPubkey: string;
   companionId: string;
   privateKey: Uint8Array;
   channelIds: readonly string[];
   allowedAuthorPubkeys: readonly string[];
+  machineAuthorPubkeys: readonly string[];
+  maxAutonomousReplyHops: number;
+  replayWindowSeconds: number;
+  reconnectBaseDelayMs: number;
+  reconnectMaxDelayMs: number;
+  maxReconnectAttempts: number;
   operationTimeoutMs: number;
 }
 
 export interface BuzzRelayClientCallbacks {
   onEvent: (event: NostrEvent) => Promise<void>;
+  onMembershipSnapshot: (channelIds: readonly string[], observedAtMs: number) => Promise<void>;
+  onMembershipChange: (channelId: string, active: boolean, observedAtMs: number) => Promise<void>;
+  onConnected: () => Promise<void>;
   onTerminalFailure: (kind: string, title: string, error: Error) => Promise<void>;
 }
 
 export class BuzzRelayClient {
   readonly companionPubkey: string;
-  private readonly config: BuzzRelayClientConfig;
-  private readonly callbacks: BuzzRelayClientCallbacks;
-  private readonly log: RuntimeChannelLifecycleLogger;
-  private readonly channelAllowlist: ReadonlySet<string>;
+  private readonly configuredChannels: ReadonlySet<string>;
   private readonly authorAllowlist: ReadonlySet<string>;
-  private readonly subscriptionId: string;
+  private readonly machineAuthorPubkeys: ReadonlySet<string>;
+  private readonly membershipSubscriptionId: string;
+  private readonly membershipChangesSubscriptionId: string;
+  private readonly streamSubscriptionId: string;
   private readonly pendingPublishes = new Map<string, PendingPublish>();
+  private readonly locallyClosedSubscriptions = new Set<string>();
+  private readonly eligibleChannels = new Set<string>();
+  private readonly discoveredChannels = new Set<string>();
   private socket: WebSocket | null = null;
-  private startPromise: Promise<void> | null = null;
-  private startupResolve: (() => void) | null = null;
-  private startupReject: ((error: Error) => void) | null = null;
-  private startupTimer: ReturnType<typeof setTimeout> | null = null;
+  private connectionPromise: Promise<void> | null = null;
+  private connectionResolve: (() => void) | null = null;
+  private connectionReject: ((error: Error) => void) | null = null;
+  private connectionTimer: ReturnType<typeof setTimeout> | null = null;
+  private reconnectController: AbortController | null = null;
+  private reconnectTask: Promise<void> | null = null;
+  private reconnectLossResolve: (() => void) | null = null;
   private pendingAuthEventId: string | null = null;
+  private replayCursor: number | null = null;
+  private membershipQuerySince = 0;
   private subscribedSince = 0;
-  private started = false;
+  private running = false;
+  private connected = false;
   private stopping = false;
 
   constructor(
-    config: BuzzRelayClientConfig,
-    callbacks: BuzzRelayClientCallbacks,
-    log: RuntimeChannelLifecycleLogger,
+    private readonly config: BuzzRelayClientConfig,
+    private readonly callbacks: BuzzRelayClientCallbacks,
+    private readonly log: RuntimeChannelLifecycleLogger,
   ) {
-    this.config = config;
-    this.callbacks = callbacks;
-    this.log = log;
     this.companionPubkey = companionPubkeyForPrivateKey(config.privateKey);
-    this.channelAllowlist = new Set(config.channelIds);
+    this.configuredChannels = new Set(config.channelIds);
     this.authorAllowlist = new Set(config.allowedAuthorPubkeys);
-    this.subscriptionId = `buzz-companion-${config.companionId}`;
+    this.machineAuthorPubkeys = new Set(config.machineAuthorPubkeys);
+    this.membershipSubscriptionId = `buzz-membership-${config.companionId}`;
+    this.membershipChangesSubscriptionId = `buzz-membership-live-${config.companionId}`;
+    this.streamSubscriptionId = `buzz-stream-${config.companionId}`;
+  }
+
+  setReplayCursor(cursor: number | null): void {
+    if (cursor !== null) this.replayCursor = Math.max(this.replayCursor ?? 0, cursor);
   }
 
   async start(): Promise<void> {
-    if (this.started) return;
-    if (this.startPromise) return await this.startPromise;
+    if (this.running && this.connected) return;
+    this.running = true;
     this.stopping = false;
-    const startPromise = new Promise<void>((resolve, reject) => {
-      this.startupResolve = resolve;
-      this.startupReject = reject;
-      this.startupTimer = setTimeout(() => {
-        this.failStartup(new Error('Buzz relay timed out waiting for NIP-42 authentication'));
-      }, this.config.operationTimeoutMs);
-      const socket = new WebSocket(this.config.relayUrl);
-      this.socket = socket;
-      socket.on('message', raw => this.onSocketMessage(raw));
-      socket.on('error', error => this.onSocketError(error));
-      socket.on('close', () => this.onSocketClose());
-    });
-    this.startPromise = startPromise;
     try {
-      await startPromise;
-    } finally {
-      if (this.startPromise === startPromise) this.startPromise = null;
+      await this.connectOnce();
+    } catch (error) {
+      this.running = false;
+      throw error;
     }
   }
 
   async stop(): Promise<void> {
     this.stopping = true;
-    this.started = false;
+    this.running = false;
+    this.connected = false;
+    this.reconnectController?.abort(new Error('Buzz adapter stopped'));
+    this.reconnectController = null;
     this.rejectPendingPublishes(new Error('Buzz adapter stopped before publish acknowledgement'));
-    if (this.startupReject) this.failStartup(new Error('Buzz adapter stopped during startup'));
     const socket = this.socket;
     this.socket = null;
-    if (!socket || socket.readyState === WebSocket.CLOSED) return;
-    if (socket.readyState !== WebSocket.OPEN) {
-      socket.terminate();
-      return;
-    }
-    socket.send(JSON.stringify(['CLOSE', this.subscriptionId]));
-    socket.close();
-    await new Promise<void>(resolve => {
-      const timer = setTimeout(() => {
-        socket.terminate();
-        resolve();
-      }, this.config.operationTimeoutMs);
-      socket.once('close', () => {
-        clearTimeout(timer);
-        resolve();
+    if (this.connectionTimer) clearTimeout(this.connectionTimer);
+    this.connectionTimer = null;
+    const rejectConnection = this.connectionReject;
+    this.connectionResolve = null;
+    this.connectionReject = null;
+    rejectConnection?.(new Error('Buzz adapter stopped during connection'));
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      for (const subscriptionId of this.subscriptionIds()) {
+        socket.send(JSON.stringify(['CLOSE', subscriptionId]));
+      }
+      socket.close();
+      await new Promise<void>(resolve => {
+        const timer = setTimeout(() => {
+          socket.terminate();
+          resolve();
+        }, this.config.operationTimeoutMs);
+        socket.once('close', () => {
+          clearTimeout(timer);
+          resolve();
+        });
       });
-    });
+    } else if (socket && socket.readyState !== WebSocket.CLOSED) {
+      socket.terminate();
+    }
+    await this.reconnectTask?.catch(() => undefined);
+    this.reconnectTask = null;
   }
 
-  async publishStreamEvent(input: {
+  createStreamEvent(input: {
     channelId: string;
     content: string;
     tags: string[][];
-  }): Promise<void> {
-    if (!this.started) throw new Error('Buzz adapter is not connected');
-    const event = createBuzzStreamEvent({ ...input, privateKey: this.config.privateKey });
+  }): NostrEvent {
+    return createBuzzStreamEvent({ ...input, privateKey: this.config.privateKey });
+  }
+
+  async publishEvent(event: NostrEvent): Promise<void> {
+    if (!this.running || !this.connected) throw new Error('Buzz adapter is not connected');
     await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pendingPublishes.delete(event.id);
@@ -138,15 +169,41 @@ export class BuzzRelayClient {
     });
   }
 
-  private onSocketMessage(raw: RawData): void {
+  private async connectOnce(): Promise<void> {
+    if (this.connectionPromise) return await this.connectionPromise;
+    this.connected = false;
+    this.discoveredChannels.clear();
+    this.locallyClosedSubscriptions.clear();
+    const promise = new Promise<void>((resolve, reject) => {
+      this.connectionResolve = resolve;
+      this.connectionReject = reject;
+      this.connectionTimer = setTimeout(() => {
+        this.failConnection(new Error('Buzz relay timed out loading authenticated membership'));
+      }, this.config.operationTimeoutMs);
+      const socket = new WebSocket(this.config.relayUrl);
+      this.socket = socket;
+      socket.on('message', raw => this.onSocketMessage(socket, raw));
+      socket.on('error', error => this.onSocketError(socket, error));
+      socket.on('close', () => this.onSocketClose(socket));
+    });
+    this.connectionPromise = promise;
+    try {
+      await promise;
+    } finally {
+      if (this.connectionPromise === promise) this.connectionPromise = null;
+    }
+  }
+
+  private onSocketMessage(socket: WebSocket, raw: RawData): void {
+    if (socket !== this.socket) return;
     const frame = parseBuzzRelayFrame(raw.toString());
     if (!frame) {
       this.log.warn('Buzz relay sent a malformed frame');
       return;
     }
     void this.handleFrame(frame).catch(error => {
-      if (!this.started) {
-        this.failStartup(toError(error));
+      if (!this.connected) {
+        this.failConnection(toError(error));
         return;
       }
       void this.callbacks.onTerminalFailure(
@@ -161,7 +218,9 @@ export class BuzzRelayClient {
     const command = frame[0];
     if (command === 'AUTH') {
       const challenge = frame[1];
-      if (typeof challenge !== 'string' || !challenge) throw new Error('Buzz relay sent an invalid AUTH challenge');
+      if (typeof challenge !== 'string' || !challenge) {
+        throw new Error('Buzz relay sent an invalid AUTH challenge');
+      }
       const event = createBuzzAuthEvent(this.config.relayUrl, challenge, this.config.privateKey);
       this.pendingAuthEventId = event.id;
       this.sendFrame(['AUTH', event]);
@@ -175,11 +234,21 @@ export class BuzzRelayClient {
       await this.handleInboundEvent(frame);
       return;
     }
-    if (command === 'NOTICE' && !this.started) {
+    if (command === 'EOSE' && frame[1] === this.membershipSubscriptionId) {
+      await this.completeMembershipLoad();
+      return;
+    }
+    if (command === 'NOTICE' && !this.connected) {
       throw new Error(`Buzz relay rejected startup: ${typeof frame[1] === 'string' ? frame[1] : 'unknown notice'}`);
     }
-    if (command === 'CLOSED' && frame[1] === this.subscriptionId) {
-      throw new Error(`Buzz relay closed the Stream subscription: ${typeof frame[2] === 'string' ? frame[2] : 'unknown reason'}`);
+    if (command === 'CLOSED' && this.subscriptionIds().includes(String(frame[1]))) {
+      const subscriptionId = String(frame[1]);
+      if (this.stopping || this.locallyClosedSubscriptions.delete(subscriptionId)) return;
+      const error = new Error(`Buzz relay closed a required subscription: ${typeof frame[2] === 'string' ? frame[2] : 'unknown reason'}`);
+      if (!this.connected) throw error;
+      this.log.warn(error.message);
+      this.socket?.terminate();
+      return;
     }
   }
 
@@ -191,10 +260,11 @@ export class BuzzRelayClient {
     if (eventId === this.pendingAuthEventId) {
       this.pendingAuthEventId = null;
       if (!accepted) throw new Error(`Buzz relay rejected NIP-42 authentication: ${relayMessage}`);
-      if (!this.started) {
-        this.sendSubscription();
-        this.completeStartup();
-      }
+      this.membershipQuerySince = Math.floor(Date.now() / 1_000);
+      this.sendFrame(['REQ', this.membershipSubscriptionId, {
+        kinds: [BUZZ_MEMBERSHIP_SNAPSHOT_KIND],
+        '#p': [this.companionPubkey],
+      }]);
       return;
     }
     const pending = this.pendingPublishes.get(eventId);
@@ -205,47 +275,197 @@ export class BuzzRelayClient {
     else pending.reject(new Error(`Buzz relay rejected event ${eventId}: ${relayMessage}`));
   }
 
-  private sendSubscription(): void {
-    this.subscribedSince = Math.floor(Date.now() / 1_000);
-    this.sendFrame(['REQ', this.subscriptionId, {
+  private async handleInboundEvent(frame: unknown[]): Promise<void> {
+    const subscriptionId = frame[1];
+    if (typeof subscriptionId !== 'string' || !isNostrEvent(frame[2])) return;
+    const event = frame[2];
+    if (subscriptionId === this.membershipSubscriptionId && !this.connected) {
+      const channelId = parseBuzzMembershipSnapshot(
+        event,
+        this.config.relayPubkey,
+        this.companionPubkey,
+      );
+      if (channelId) this.discoveredChannels.add(channelId);
+      return;
+    }
+    if (subscriptionId === this.membershipChangesSubscriptionId && this.connected) {
+      const change = parseBuzzMembershipChange(
+        event,
+        this.config.relayPubkey,
+        this.companionPubkey,
+      );
+      if (!change) return;
+      await this.applyMembershipChange(change.channelId, change.active, Date.now());
+      return;
+    }
+    if (subscriptionId !== this.streamSubscriptionId || !this.connected) return;
+    if (!acceptsBuzzStreamEvent(event, {
+      companionPubkey: this.companionPubkey,
+      subscribedSince: this.subscribedSince,
+      channelAllowlist: this.eligibleChannels,
+      authorAllowlist: this.authorAllowlist,
+      machineAuthorPubkeys: this.machineAuthorPubkeys,
+      maxAutonomousReplyHops: this.config.maxAutonomousReplyHops,
+    })) return;
+    await this.callbacks.onEvent(event);
+  }
+
+  private async completeMembershipLoad(): Promise<void> {
+    this.refreshEligibleChannels();
+    await this.callbacks.onMembershipSnapshot([...this.eligibleChannels], Date.now());
+    this.closeSubscription(this.membershipSubscriptionId);
+    this.sendFrame(['REQ', this.membershipChangesSubscriptionId, {
+      kinds: [BUZZ_MEMBER_ADDED_KIND, BUZZ_MEMBER_REMOVED_KIND],
+      '#p': [this.companionPubkey],
+      since: this.membershipQuerySince,
+    }]);
+    this.connected = true;
+    this.sendStreamSubscription();
+    try {
+      await this.callbacks.onConnected();
+    } catch (error) {
+      this.connected = false;
+      throw error;
+    }
+    if (this.connectionTimer) clearTimeout(this.connectionTimer);
+    this.connectionTimer = null;
+    const resolve = this.connectionResolve;
+    this.connectionResolve = null;
+    this.connectionReject = null;
+    resolve?.();
+  }
+
+  private async applyMembershipChange(
+    channelId: string,
+    active: boolean,
+    observedAtMs: number,
+  ): Promise<void> {
+    if (active) this.discoveredChannels.add(channelId);
+    else this.discoveredChannels.delete(channelId);
+    const wasEligible = this.eligibleChannels.has(channelId);
+    const isEligible = active && this.isConfiguredChannel(channelId);
+    if (wasEligible === isEligible) return;
+    if (isEligible) this.eligibleChannels.add(channelId);
+    else this.eligibleChannels.delete(channelId);
+    await this.callbacks.onMembershipChange(channelId, isEligible, observedAtMs);
+    this.closeSubscription(this.streamSubscriptionId);
+    this.sendStreamSubscription();
+  }
+
+  private refreshEligibleChannels(): void {
+    this.eligibleChannels.clear();
+    for (const channelId of this.discoveredChannels) {
+      if (this.isConfiguredChannel(channelId)) this.eligibleChannels.add(channelId);
+    }
+  }
+
+  private isConfiguredChannel(channelId: string): boolean {
+    return this.configuredChannels.size === 0 || this.configuredChannels.has(channelId);
+  }
+
+  private sendStreamSubscription(): void {
+    if (this.eligibleChannels.size === 0) return;
+    const nowSeconds = Math.floor(Date.now() / 1_000);
+    this.subscribedSince = Math.max(
+      0,
+      (this.replayCursor ?? nowSeconds) - this.config.replayWindowSeconds,
+    );
+    this.sendFrame(['REQ', this.streamSubscriptionId, {
       kinds: [BUZZ_STREAM_KIND],
-      '#h': [...this.channelAllowlist],
+      '#h': [...this.eligibleChannels],
       '#p': [this.companionPubkey],
       since: this.subscribedSince,
     }]);
   }
 
-  private completeStartup(): void {
-    this.started = true;
-    if (this.startupTimer) clearTimeout(this.startupTimer);
-    this.startupTimer = null;
-    const resolve = this.startupResolve;
-    this.startupResolve = null;
-    this.startupReject = null;
-    resolve?.();
-  }
-
-  private failStartup(error: Error): void {
-    if (this.startupTimer) clearTimeout(this.startupTimer);
-    this.startupTimer = null;
-    const reject = this.startupReject;
-    this.startupResolve = null;
-    this.startupReject = null;
+  private failConnection(error: Error): void {
+    if (this.connectionTimer) clearTimeout(this.connectionTimer);
+    this.connectionTimer = null;
+    const reject = this.connectionReject;
+    this.connectionResolve = null;
+    this.connectionReject = null;
     const socket = this.socket;
+    this.socket = null;
     if (socket && socket.readyState !== WebSocket.CLOSED) socket.terminate();
     reject?.(error);
   }
 
-  private async handleInboundEvent(frame: unknown[]): Promise<void> {
-    if (!this.started || frame[1] !== this.subscriptionId || !isNostrEvent(frame[2])) return;
-    const event = frame[2];
-    if (!acceptsBuzzStreamEvent(event, {
-      companionPubkey: this.companionPubkey,
-      subscribedSince: this.subscribedSince,
-      channelAllowlist: this.channelAllowlist,
-      authorAllowlist: this.authorAllowlist,
-    })) return;
-    await this.callbacks.onEvent(event);
+  private onSocketError(socket: WebSocket, error: Error): void {
+    if (socket !== this.socket) return;
+    if (!this.connected) {
+      this.failConnection(new Error(`Buzz relay connection failed: ${error.message}`));
+      return;
+    }
+    this.log.warn('Buzz relay connection error; waiting for reconnect', { error: error.message });
+    socket.terminate();
+  }
+
+  private onSocketClose(socket: WebSocket): void {
+    if (socket !== this.socket) return;
+    this.socket = null;
+    if (this.stopping) return;
+    if (!this.connected) {
+      this.failConnection(new Error('Buzz relay connection closed during startup'));
+      return;
+    }
+    this.connected = false;
+    this.rejectPendingPublishes(new Error('Buzz relay connection closed before publish acknowledgement'));
+    this.reconnectLossResolve?.();
+    this.scheduleReconnect();
+  }
+
+  private scheduleReconnect(): void {
+    if (this.reconnectTask || !this.running || this.stopping) return;
+    const controller = new AbortController();
+    this.reconnectController = controller;
+    this.reconnectTask = this.runReconnectLoop(controller.signal)
+      .finally(() => {
+        if (this.reconnectController === controller) this.reconnectController = null;
+        this.reconnectTask = null;
+      });
+  }
+
+  private async runReconnectLoop(signal: AbortSignal): Promise<void> {
+    let lastError = new Error('Buzz relay connection closed');
+    for (let attempt = 1; attempt <= this.config.maxReconnectAttempts; attempt += 1) {
+      try {
+        const exponentialDelay = this.config.reconnectBaseDelayMs * (2 ** (attempt - 1));
+        await delay(Math.min(exponentialDelay, this.config.reconnectMaxDelayMs), undefined, { signal });
+        signal.throwIfAborted();
+        await this.connectOnce();
+        if (!(await this.waitForReconnectStability(signal))) {
+          throw new Error('Buzz relay connection closed before reconnect stabilized');
+        }
+        return;
+      } catch (error) {
+        if (signal.aborted) return;
+        lastError = toError(error);
+      }
+    }
+    this.running = false;
+    await this.callbacks.onTerminalFailure(
+      'reconnect-exhausted',
+      'Buzz relay reconnect attempts exhausted',
+      lastError,
+    );
+  }
+
+  private async waitForReconnectStability(signal: AbortSignal): Promise<boolean> {
+    let resolveLoss!: () => void;
+    const connectionLost = new Promise<void>(resolve => {
+      resolveLoss = resolve;
+    });
+    this.reconnectLossResolve = resolveLoss;
+    try {
+      if (!this.connected) return false;
+      const stable = await Promise.race([
+        delay(this.config.operationTimeoutMs, undefined, { signal }).then(() => true),
+        connectionLost.then(() => false),
+      ]);
+      return stable && this.connected;
+    } finally {
+      if (this.reconnectLossResolve === resolveLoss) this.reconnectLossResolve = null;
+    }
   }
 
   private sendFrame(frame: unknown[]): void {
@@ -255,28 +475,17 @@ export class BuzzRelayClient {
     this.socket.send(JSON.stringify(frame));
   }
 
-  private onSocketError(error: Error): void {
-    if (!this.started) {
-      this.failStartup(new Error(`Buzz relay connection failed: ${error.message}`));
-      return;
-    }
-    void this.callbacks.onTerminalFailure('connection-error', 'Buzz relay connection failed', error);
+  private closeSubscription(subscriptionId: string): void {
+    this.locallyClosedSubscriptions.add(subscriptionId);
+    this.sendFrame(['CLOSE', subscriptionId]);
   }
 
-  private onSocketClose(): void {
-    this.socket = null;
-    if (this.stopping) return;
-    if (!this.started) {
-      this.failStartup(new Error('Buzz relay connection closed during startup'));
-      return;
-    }
-    this.started = false;
-    this.rejectPendingPublishes(new Error('Buzz relay connection closed before publish acknowledgement'));
-    void this.callbacks.onTerminalFailure(
-      'connection-closed',
-      'Buzz relay connection closed',
-      new Error('WebSocket closed'),
-    );
+  private subscriptionIds(): string[] {
+    return [
+      this.membershipSubscriptionId,
+      this.membershipChangesSubscriptionId,
+      this.streamSubscriptionId,
+    ];
   }
 
   private rejectPendingPublishes(error: Error): void {

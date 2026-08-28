@@ -5,16 +5,34 @@ import { createBuzzChannelPlugin } from './plugin.js';
 const COMPANION_ID = '11111111-1111-4111-8111-111111111111';
 const CHANNEL_ID = '22222222-2222-4222-8222-222222222222';
 const AUTHOR_PUBKEY = 'a'.repeat(64);
+const RELAY_PUBKEY = 'b'.repeat(64);
+const MACHINE_PUBKEY = 'c'.repeat(64);
+
+const LOOP_POLICY = {
+  maxAutonomousReplyHops: 6,
+  noInformationAcknowledgements: ['acknowledged', 'noted'],
+};
+
+const RECOVERY_POLICY = {
+  replayWindowSeconds: 120,
+  reconnectBaseDelayMs: 250,
+  reconnectMaxDelayMs: 4_000,
+  maxReconnectAttempts: 5,
+};
 
 describe('Buzz channel plugin config', () => {
   it('normalizes an enabled loopback relay and declares only an env credential', () => {
     const parsed = createBuzzChannelPlugin().parseConfig({
       enabled: true,
       relayUrl: 'ws://127.0.0.1:3100/',
+      relayPubkey: RELAY_PUBKEY,
       companionId: COMPANION_ID,
       privateKeyRef: { kind: 'env', envName: 'BUZZ_V_UNIT_00_NSEC' },
       channelIds: [CHANNEL_ID],
-      allowedAuthorPubkeys: [AUTHOR_PUBKEY],
+      allowedAuthorPubkeys: [AUTHOR_PUBKEY, MACHINE_PUBKEY],
+      machineAuthorPubkeys: [MACHINE_PUBKEY],
+      loopPolicy: LOOP_POLICY,
+      recoveryPolicy: RECOVERY_POLICY,
     });
 
     expect(parsed).toEqual({
@@ -28,10 +46,14 @@ describe('Buzz channel plugin config', () => {
       config: {
         enabled: true,
         relayUrl: 'ws://127.0.0.1:3100',
+        relayPubkey: RELAY_PUBKEY,
         companionId: COMPANION_ID,
         privateKeyRef: { kind: 'env', envName: 'BUZZ_V_UNIT_00_NSEC' },
         channelIds: [CHANNEL_ID],
-        allowedAuthorPubkeys: [AUTHOR_PUBKEY],
+        allowedAuthorPubkeys: [AUTHOR_PUBKEY, MACHINE_PUBKEY],
+        machineAuthorPubkeys: [MACHINE_PUBKEY],
+        loopPolicy: LOOP_POLICY,
+        recoveryPolicy: RECOVERY_POLICY,
       },
     });
   });
@@ -40,6 +62,47 @@ describe('Buzz channel plugin config', () => {
     expect(createBuiltinChannelPluginRegistry().get('buzz')?.manifest).toEqual({
       id: 'buzz',
       label: 'Buzz',
+    });
+  });
+
+  it('rejects machine authors outside the author allowlist and inverted reconnect bounds', () => {
+    const base = {
+      enabled: true,
+      relayUrl: 'wss://relay.example.test',
+      relayPubkey: RELAY_PUBKEY,
+      companionId: COMPANION_ID,
+      privateKeyRef: { kind: 'env', envName: 'BUZZ_NSEC' },
+      channelIds: [],
+      allowedAuthorPubkeys: [AUTHOR_PUBKEY],
+      machineAuthorPubkeys: [MACHINE_PUBKEY],
+      loopPolicy: LOOP_POLICY,
+      recoveryPolicy: RECOVERY_POLICY,
+    };
+    expect(() => createBuzzChannelPlugin().parseConfig(base)).toThrow(
+      'machineAuthorPubkeys must be a subset of allowedAuthorPubkeys',
+    );
+    expect(() => createBuzzChannelPlugin().parseConfig({
+      ...base,
+      allowedAuthorPubkeys: [AUTHOR_PUBKEY, MACHINE_PUBKEY],
+      recoveryPolicy: {
+        ...RECOVERY_POLICY,
+        reconnectBaseDelayMs: 5_000,
+      },
+    })).toThrow('reconnectMaxDelayMs must be at least reconnectBaseDelayMs');
+  });
+
+  it('keeps disabled Buzz free of invented policy defaults', () => {
+    expect(createBuzzChannelPlugin().parseConfig({ enabled: false })).toEqual({
+      enabled: false,
+      credentials: [],
+      config: {
+        enabled: false,
+        relayUrl: '',
+        relayPubkey: '',
+        channelIds: [],
+        allowedAuthorPubkeys: [],
+        machineAuthorPubkeys: [],
+      },
     });
   });
 

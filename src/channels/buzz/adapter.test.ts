@@ -11,6 +11,7 @@ import { WebSocket, WebSocketServer, type RawData } from 'ws';
 import type { RuntimeChannelLifecycleLogger } from '../backplane/channel-lifecycle.js';
 import type { AgentResponse, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import { BuzzAdapter, type BuzzAdapterConfig } from './adapter.js';
+import { InMemoryBuzzRecoveryStore } from './recovery-store.js';
 
 const COMPANION_ID = '11111111-1111-4111-8111-111111111111';
 const CHANNEL_ID = '22222222-2222-4222-8222-222222222222';
@@ -19,6 +20,8 @@ const OTHER_CHANNEL_ID = '33333333-3333-4333-8333-333333333333';
 interface TestRelay {
   server: WebSocketServer;
   url: string;
+  relaySecretKey: Uint8Array;
+  relayPubkey: string;
   companionSecretKey: Uint8Array;
   companionPubkey: string;
   authorSecretKey: Uint8Array;
@@ -42,9 +45,12 @@ async function createTestRelay(): Promise<TestRelay> {
   if (!address || typeof address === 'string') throw new Error('Test relay did not bind TCP');
   const companionSecretKey = generateSecretKey();
   const authorSecretKey = generateSecretKey();
+  const relaySecretKey = generateSecretKey();
   return {
     server,
     url: `ws://127.0.0.1:${address.port}`,
+    relaySecretKey,
+    relayPubkey: getPublicKey(relaySecretKey),
     companionSecretKey,
     companionPubkey: getPublicKey(companionSecretKey),
     authorSecretKey,
@@ -56,10 +62,29 @@ function makeConfig(relay: TestRelay): BuzzAdapterConfig {
   return {
     enabled: true,
     relayUrl: relay.url,
+    relayPubkey: relay.relayPubkey,
     companionId: COMPANION_ID,
     privateKey: Buffer.from(relay.companionSecretKey).toString('hex'),
     channelIds: [CHANNEL_ID],
     allowedAuthorPubkeys: [relay.authorPubkey],
+    machineAuthorPubkeys: [],
+    maxAutonomousReplyHops: 4,
+    noInformationAcknowledgements: ['acknowledged'],
+    replayWindowSeconds: 30,
+    reconnectBaseDelayMs: 5,
+    reconnectMaxDelayMs: 10,
+    maxReconnectAttempts: 1,
+  };
+}
+
+function makeOptions(
+  shutdownTimeoutMs: number,
+  log?: RuntimeChannelLifecycleLogger,
+): ConstructorParameters<typeof BuzzAdapter>[1] {
+  return {
+    shutdownTimeoutMs,
+    recoveryStore: new InMemoryBuzzRecoveryStore(),
+    ...(log ? { log } : {}),
   };
 }
 
@@ -96,14 +121,42 @@ function signStreamEvent(input: {
   }, input.secretKey);
 }
 
+function signMachineStreamEvent(input: {
+  relay: TestRelay;
+  hop: number;
+  content?: string;
+  rootEventId?: string;
+  parentEventId?: string;
+}): Event {
+  const rootEventId = input.rootEventId ?? 'd'.repeat(64);
+  return signStreamEvent({
+    secretKey: input.relay.authorSecretKey,
+    companionPubkey: input.relay.companionPubkey,
+    content: input.content,
+    extraTags: [
+      ['e', input.parentEventId ?? 'e'.repeat(64), '', 'reply'],
+      ['agent-root', rootEventId],
+      ['agent-chain', rootEventId],
+      ['agent-hop', String(input.hop)],
+      ['agent-recipient', input.relay.companionPubkey],
+    ],
+  });
+}
+
 function startAuthenticatedRelay(
   relay: TestRelay,
   onSubscribed: (socket: WebSocket, subscriptionId: string) => void,
   onPublished: (event: Event) => void,
-  publishAcknowledgement: { accepted: boolean; message: string } | null = {
+  publishAcknowledgement: { accepted: boolean; message: string }
+    | ((event: Event) => { accepted: boolean; message: string } | null)
+    | null = {
     accepted: true,
     message: 'stored',
   },
+  options: {
+    initialChannelIds?: readonly string[];
+    onMembershipSubscription?: (socket: WebSocket, subscriptionId: string) => void;
+  } = {},
 ): void {
   relay.server.on('connection', socket => {
     socket.send(JSON.stringify(['AUTH', 'test-challenge']));
@@ -121,6 +174,24 @@ function startAuthenticatedRelay(
       }
       if (frame[0] === 'REQ') {
         const subscriptionId = frame[1] as string;
+        const filter = frame[2] as { kinds?: number[] };
+        if (filter.kinds?.[0] === 39_002) {
+          for (const channelId of options.initialChannelIds ?? [CHANNEL_ID]) {
+            const membership = finalizeEvent({
+              kind: 39_002,
+              created_at: Math.floor(Date.now() / 1_000),
+              content: '',
+              tags: [['d', channelId], ['p', relay.companionPubkey]],
+            }, relay.relaySecretKey);
+            socket.send(JSON.stringify(['EVENT', subscriptionId, membership]));
+          }
+          socket.send(JSON.stringify(['EOSE', subscriptionId]));
+          return;
+        }
+        if (filter.kinds?.[0] === 44_100) {
+          options.onMembershipSubscription?.(socket, subscriptionId);
+          return;
+        }
         expect(frame[2]).toMatchObject({
           kinds: [9],
           '#h': [CHANNEL_ID],
@@ -133,14 +204,21 @@ function startAuthenticatedRelay(
       if (frame[0] === 'EVENT') {
         const event = frame[1] as Event;
         onPublished(event);
-        if (publishAcknowledgement) {
+        const acknowledgement = typeof publishAcknowledgement === 'function'
+          ? publishAcknowledgement(event)
+          : publishAcknowledgement;
+        if (acknowledgement) {
           socket.send(JSON.stringify([
             'OK',
             event.id,
-            publishAcknowledgement.accepted,
-            publishAcknowledgement.message,
+            acknowledgement.accepted,
+            acknowledgement.message,
           ]));
         }
+        return;
+      }
+      if (frame[0] === 'CLOSE' && typeof frame[1] === 'string') {
+        socket.send(JSON.stringify(['CLOSED', frame[1], '']));
       }
     });
   });
@@ -159,7 +237,7 @@ describe('BuzzAdapter', () => {
     }, event => published.push(event));
 
     const handled: SubstrateMessage[] = [];
-    const adapter = new BuzzAdapter(makeConfig(relay), { shutdownTimeoutMs: 2_000 });
+    const adapter = new BuzzAdapter(makeConfig(relay), makeOptions(2_000));
     adapter.onOperatorAlert(async () => undefined);
     adapter.onMessage(async message => {
       handled.push(message);
@@ -207,6 +285,10 @@ describe('BuzzAdapter', () => {
       ['h', CHANNEL_ID],
       ['e', inbound.id, '', 'reply'],
       ['p', relay.authorPubkey],
+      ['agent-root', inbound.id],
+      ['agent-chain', inbound.id],
+      ['agent-hop', '1'],
+      ['agent-recipient', relay.authorPubkey],
     ]);
   });
 
@@ -255,7 +337,7 @@ describe('BuzzAdapter', () => {
     }, () => undefined);
 
     const handler = vi.fn(async (message: SubstrateMessage) => responseFor(message));
-    const adapter = new BuzzAdapter(makeConfig(relay), { shutdownTimeoutMs: 2_000 });
+    const adapter = new BuzzAdapter(makeConfig(relay), makeOptions(2_000));
     adapter.onOperatorAlert(async () => undefined);
     adapter.onMessage(handler);
 
@@ -267,6 +349,231 @@ describe('BuzzAdapter', () => {
       id: accepted.id,
       content: 'the only accepted event',
     });
+  });
+
+  it('claims concurrent relay replays once and publishes one reply', async () => {
+    const relay = await createTestRelay();
+    const inbound = signStreamEvent({
+      secretKey: relay.authorSecretKey,
+      companionPubkey: relay.companionPubkey,
+    });
+    const published: Event[] = [];
+    startAuthenticatedRelay(relay, (socket, subscriptionId) => {
+      socket.send(JSON.stringify(['EVENT', subscriptionId, inbound]));
+      socket.send(JSON.stringify(['EVENT', subscriptionId, inbound]));
+    }, event => published.push(event));
+
+    let release!: (response: AgentResponse) => void;
+    const response = new Promise<AgentResponse>(resolve => {
+      release = resolve;
+    });
+    const handler = vi.fn(async () => await response);
+    const adapter = new BuzzAdapter(makeConfig(relay), makeOptions(2_000));
+    adapter.onOperatorAlert(async () => undefined);
+    adapter.onMessage(handler);
+
+    await adapter.start();
+    await vi.waitFor(() => expect(handler).toHaveBeenCalledOnce());
+    release(responseFor(handler.mock.calls[0]![0]));
+    await vi.waitFor(() => expect(published).toHaveLength(1));
+    await adapter.stop();
+  });
+
+  it('reuses the exact signed reply after restart without rerunning cognition', async () => {
+    const relay = await createTestRelay();
+    const inbound = signStreamEvent({
+      secretKey: relay.authorSecretKey,
+      companionPubkey: relay.companionPubkey,
+    });
+    const published: Event[] = [];
+    let acknowledge = false;
+    startAuthenticatedRelay(relay, (socket, subscriptionId) => {
+      socket.send(JSON.stringify(['EVENT', subscriptionId, inbound]));
+    }, event => published.push(event), () => acknowledge
+      ? { accepted: true, message: 'stored' }
+      : null);
+    const recoveryStore = new InMemoryBuzzRecoveryStore();
+
+    const firstHandler = vi.fn(async (message: SubstrateMessage) => responseFor(message));
+    const first = new BuzzAdapter(makeConfig(relay), {
+      shutdownTimeoutMs: 50,
+      recoveryStore,
+    });
+    first.onOperatorAlert(async () => undefined);
+    first.onMessage(firstHandler);
+    await first.start();
+    await vi.waitFor(() => expect(published).toHaveLength(1));
+    await first.stop();
+
+    acknowledge = true;
+    const secondHandler = vi.fn(async (message: SubstrateMessage) => responseFor(message));
+    const second = new BuzzAdapter(makeConfig(relay), {
+      shutdownTimeoutMs: 2_000,
+      recoveryStore,
+    });
+    second.onOperatorAlert(async () => undefined);
+    second.onMessage(secondHandler);
+    await second.start();
+    await vi.waitFor(() => expect(published).toHaveLength(2));
+    await second.stop();
+
+    expect(firstHandler).toHaveBeenCalledOnce();
+    expect(secondHandler).not.toHaveBeenCalled();
+    expect(published[1]).toEqual(published[0]);
+  });
+
+  it('terminates machine acknowledgement and hop-limit events without cognition or publication', async () => {
+    const relay = await createTestRelay();
+    const events = [
+      signMachineStreamEvent({ relay, hop: 1, content: 'acknowledged' }),
+      signMachineStreamEvent({
+        relay,
+        hop: 4,
+        rootEventId: 'a'.repeat(64),
+        parentEventId: 'b'.repeat(64),
+      }),
+    ];
+    const published: Event[] = [];
+    startAuthenticatedRelay(relay, (socket, subscriptionId) => {
+      for (const event of events) socket.send(JSON.stringify(['EVENT', subscriptionId, event]));
+    }, event => published.push(event));
+    const config = makeConfig(relay);
+    config.machineAuthorPubkeys = [relay.authorPubkey];
+    const log: RuntimeChannelLifecycleLogger = { error: vi.fn(), warn: vi.fn() };
+    const handler = vi.fn(async (message: SubstrateMessage) => responseFor(message));
+    const adapter = new BuzzAdapter(config, makeOptions(2_000, log));
+    adapter.onOperatorAlert(async () => undefined);
+    adapter.onMessage(handler);
+
+    await adapter.start();
+    await vi.waitFor(() => expect(log.warn).toHaveBeenCalledTimes(2));
+    await adapter.stop();
+
+    expect(handler).not.toHaveBeenCalled();
+    expect(published).toEqual([]);
+    expect(log.warn).toHaveBeenCalledWith(
+      'Buzz autonomous reply terminated without publication',
+      expect.objectContaining({ reason: 'no_information_acknowledgement' }),
+    );
+    expect(log.warn).toHaveBeenCalledWith(
+      'Buzz autonomous reply terminated without publication',
+      expect.objectContaining({ reason: 'autonomous_hop_limit' }),
+    );
+  });
+
+  it('treats fatigue suppression as terminal silence', async () => {
+    const relay = await createTestRelay();
+    const inbound = signStreamEvent({
+      secretKey: relay.authorSecretKey,
+      companionPubkey: relay.companionPubkey,
+    });
+    const published: Event[] = [];
+    const log: RuntimeChannelLifecycleLogger = { error: vi.fn(), warn: vi.fn() };
+    startAuthenticatedRelay(relay, (socket, subscriptionId) => {
+      socket.send(JSON.stringify(['EVENT', subscriptionId, inbound]));
+    }, event => published.push(event));
+    const adapter = new BuzzAdapter(makeConfig(relay), makeOptions(2_000, log));
+    adapter.onOperatorAlert(async () => undefined);
+    adapter.onMessage(async message => {
+      const response = responseFor(message);
+      response.metadata.fatigue = {
+        modelDisposition: 'suppressed',
+      } as AgentResponse['metadata']['fatigue'];
+      return response;
+    });
+
+    await adapter.start();
+    await vi.waitFor(() => expect(log.warn).toHaveBeenCalledWith(
+      'Buzz autonomous reply terminated without publication',
+      expect.objectContaining({ reason: 'fatigue_suppressed' }),
+    ));
+    await adapter.stop();
+
+    expect(published).toEqual([]);
+  });
+
+  it('rejects a machine chain whose claimed human root was never observed', async () => {
+    const relay = await createTestRelay();
+    const inbound = signMachineStreamEvent({
+      relay,
+      hop: 1,
+      content: 'Please continue this chain.',
+    });
+    const published: Event[] = [];
+    const config = makeConfig(relay);
+    config.machineAuthorPubkeys = [relay.authorPubkey];
+    const log: RuntimeChannelLifecycleLogger = { error: vi.fn(), warn: vi.fn() };
+    startAuthenticatedRelay(relay, (socket, subscriptionId) => {
+      socket.send(JSON.stringify(['EVENT', subscriptionId, inbound]));
+    }, event => published.push(event));
+    const handler = vi.fn(async (message: SubstrateMessage) => responseFor(message));
+    const adapter = new BuzzAdapter(config, makeOptions(2_000, log));
+    adapter.onOperatorAlert(async () => undefined);
+    adapter.onMessage(handler);
+
+    await adapter.start();
+    await vi.waitFor(() => expect(log.warn).toHaveBeenCalledWith(
+      'Buzz autonomous reply terminated without publication',
+      expect.objectContaining({ reason: 'unknown_causal_root' }),
+    ));
+    await adapter.stop();
+
+    expect(handler).not.toHaveBeenCalled();
+    expect(published).toEqual([]);
+  });
+
+  it('subscribes after a signed membership add and cancels the turn on removal', async () => {
+    const relay = await createTestRelay();
+    const inbound = signStreamEvent({
+      secretKey: relay.authorSecretKey,
+      companionPubkey: relay.companionPubkey,
+    });
+    let membershipSocket: WebSocket | undefined;
+    let membershipSubscriptionId: string | undefined;
+    const log: RuntimeChannelLifecycleLogger = { error: vi.fn(), warn: vi.fn() };
+    startAuthenticatedRelay(relay, (socket, subscriptionId) => {
+      socket.send(JSON.stringify(['EVENT', subscriptionId, inbound]));
+    }, () => undefined, { accepted: true, message: 'stored' }, {
+      initialChannelIds: [],
+      onMembershipSubscription: (socket, subscriptionId) => {
+        membershipSocket = socket;
+        membershipSubscriptionId = subscriptionId;
+      },
+    });
+    const adapter = new BuzzAdapter(makeConfig(relay), makeOptions(2_000, log));
+    adapter.onOperatorAlert(async () => undefined);
+    adapter.onMessage(async (_message, options) => {
+      const signal = options?.signal;
+      if (!signal || !membershipSocket || !membershipSubscriptionId) {
+        throw new Error('Buzz membership cancellation test was not initialized');
+      }
+      const removal = finalizeEvent({
+        kind: 44_101,
+        created_at: Math.floor(Date.now() / 1_000),
+        content: '',
+        tags: [['p', relay.companionPubkey], ['h', CHANNEL_ID]],
+      }, relay.relaySecretKey);
+      membershipSocket.send(JSON.stringify(['EVENT', membershipSubscriptionId, removal]));
+      return await new Promise<AgentResponse>((_resolve, reject) => {
+        signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+      });
+    });
+
+    await adapter.start();
+    await vi.waitFor(() => expect(membershipSocket).toBeDefined());
+    if (!membershipSocket || !membershipSubscriptionId) throw new Error('Buzz membership subscription was not established');
+    const addition = finalizeEvent({
+      kind: 44_100,
+      created_at: Math.floor(Date.now() / 1_000),
+      content: '',
+      tags: [['p', relay.companionPubkey], ['h', CHANNEL_ID]],
+    }, relay.relaySecretKey);
+    membershipSocket.send(JSON.stringify(['EVENT', membershipSubscriptionId, addition]));
+    await vi.waitFor(() => expect(log.warn).toHaveBeenCalledWith(
+      'Buzz autonomous reply terminated without publication',
+      expect.objectContaining({ reason: 'turn_cancelled' }),
+    ));
+    await adapter.stop();
   });
 
   it('fails startup when NIP-42 authentication is rejected', async () => {
@@ -281,7 +588,7 @@ describe('BuzzAdapter', () => {
         }
       });
     });
-    const adapter = new BuzzAdapter(makeConfig(relay), { shutdownTimeoutMs: 2_000 });
+    const adapter = new BuzzAdapter(makeConfig(relay), makeOptions(2_000));
     adapter.onOperatorAlert(async () => undefined);
     adapter.onMessage(async message => responseFor(message));
 
@@ -302,7 +609,7 @@ describe('BuzzAdapter', () => {
     }, () => undefined, { accepted: false, message: 'room became read-only' });
 
     const alertHandler = vi.fn(async () => undefined);
-    const adapter = new BuzzAdapter(makeConfig(relay), { shutdownTimeoutMs: 2_000 });
+    const adapter = new BuzzAdapter(makeConfig(relay), makeOptions(2_000));
     adapter.onOperatorAlert(alertHandler);
     adapter.onMessage(async message => responseFor(message));
 
@@ -326,7 +633,7 @@ describe('BuzzAdapter', () => {
     }, () => undefined, null);
 
     const alertHandler = vi.fn(async () => undefined);
-    const adapter = new BuzzAdapter(makeConfig(relay), { shutdownTimeoutMs: 50 });
+    const adapter = new BuzzAdapter(makeConfig(relay), makeOptions(50));
     adapter.onOperatorAlert(alertHandler);
     adapter.onMessage(async message => responseFor(message));
 
@@ -347,13 +654,13 @@ describe('BuzzAdapter', () => {
     const alertHandler = vi.fn(async () => {
       throw new Error('operator sink offline');
     });
-    const adapter = new BuzzAdapter(makeConfig(relay), { shutdownTimeoutMs: 2_000, log });
+    const adapter = new BuzzAdapter(makeConfig(relay), makeOptions(2_000, log));
     adapter.onOperatorAlert(alertHandler);
     adapter.onMessage(async message => responseFor(message));
 
     await adapter.start();
     await vi.waitFor(() => expect(alertHandler).toHaveBeenCalledWith(expect.objectContaining({
-      title: 'Buzz relay connection closed',
+      title: 'Buzz relay reconnect attempts exhausted',
     })));
     await vi.waitFor(() => expect(log.error).toHaveBeenCalledWith(
       'Buzz operator alert delivery failed',
@@ -364,7 +671,7 @@ describe('BuzzAdapter', () => {
 
   it('rejects generic top-level outbound outside an authenticated Stream trigger', async () => {
     const relay = await createTestRelay();
-    const adapter = new BuzzAdapter(makeConfig(relay), { shutdownTimeoutMs: 2_000 });
+    const adapter = new BuzzAdapter(makeConfig(relay), makeOptions(2_000));
 
     await expect(adapter.send(
       `buzz:${encodeURIComponent(relay.url)}:${CHANNEL_ID}`,

@@ -9,6 +9,7 @@ import {
 import { WebSocket, type RawData } from 'ws';
 import { BuzzAdapter } from '../src/channels/buzz/adapter.js';
 import { NIP_42_AUTH_KIND } from '../src/channels/buzz/protocol.js';
+import { InMemoryBuzzRecoveryStore } from '../src/channels/buzz/recovery-store.js';
 import type { SubstrateMessage } from '../src/shared/contracts/runtime.js';
 
 const SMOKE_TIMEOUT_MS = 10_000;
@@ -133,6 +134,7 @@ class SmokeNostrClient {
 async function main(): Promise<void> {
   const relayUrl = process.env.BUZZ_LIVE_RELAY_URL?.trim();
   if (!relayUrl) throw new Error('BUZZ_LIVE_RELAY_URL is required');
+  const relayPubkey = await discoverRelayPubkey(relayUrl);
   const companionSecretKey = generateSecretKey();
   const companionPubkey = getPublicKey(companionSecretKey);
   const authorSecretKey = generateSecretKey();
@@ -153,6 +155,12 @@ async function main(): Promise<void> {
     ],
   }, authorSecretKey);
   await authorClient.publish(createChannel);
+  await authorClient.publish(finalizeEvent({
+    kind: 9_000,
+    created_at: Math.floor(Date.now() / 1_000),
+    content: '',
+    tags: [['h', channelId], ['p', companionPubkey]],
+  }, authorSecretKey));
 
   const reply = deferred<NostrEvent>();
   authorClient.subscribe({
@@ -166,11 +174,22 @@ async function main(): Promise<void> {
   const adapter = new BuzzAdapter({
     enabled: true,
     relayUrl,
+    relayPubkey,
     companionId: COMPANION_ID,
     privateKey: Buffer.from(companionSecretKey).toString('hex'),
     channelIds: [channelId],
     allowedAuthorPubkeys: [authorPubkey],
-  }, { shutdownTimeoutMs: SMOKE_TIMEOUT_MS });
+    machineAuthorPubkeys: [],
+    maxAutonomousReplyHops: 4,
+    noInformationAcknowledgements: ['acknowledged'],
+    replayWindowSeconds: 30,
+    reconnectBaseDelayMs: 250,
+    reconnectMaxDelayMs: 1_000,
+    maxReconnectAttempts: 3,
+  }, {
+    shutdownTimeoutMs: SMOKE_TIMEOUT_MS,
+    recoveryStore: new InMemoryBuzzRecoveryStore(),
+  });
   adapter.onOperatorAlert(async alert => {
     throw new Error(`${alert.title}: ${alert.message}`);
   });
@@ -219,6 +238,18 @@ async function main(): Promise<void> {
     await authorClient.publish(deleteChannel);
     authorClient.close();
   }
+}
+
+async function discoverRelayPubkey(relayUrl: string): Promise<string> {
+  const infoUrl = new URL(relayUrl);
+  infoUrl.protocol = infoUrl.protocol === 'wss:' ? 'https:' : 'http:';
+  const response = await fetch(infoUrl, { headers: { accept: 'application/nostr+json' } });
+  if (!response.ok) throw new Error(`Buzz relay info returned HTTP ${response.status}`);
+  const info = await response.json() as { self?: unknown };
+  if (typeof info.self !== 'string' || !/^[a-f0-9]{64}$/.test(info.self)) {
+    throw new Error('Buzz relay info does not expose a valid relay signing pubkey');
+  }
+  return info.self;
 }
 
 await main();

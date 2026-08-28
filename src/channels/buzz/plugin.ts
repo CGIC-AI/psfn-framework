@@ -18,15 +18,19 @@ import type { BuzzRecoveryStore } from './recovery-store.js';
 
 const BUZZ_ALLOWED_KEYS: Record<string, true> = {
   enabled: true,
+  accounts: true,
   relayUrl: true,
   relayPubkey: true,
-  companionId: true,
-  privateKeyRef: true,
   channelIds: true,
   allowedAuthorPubkeys: true,
   machineAuthorPubkeys: true,
   loopPolicy: true,
   recoveryPolicy: true,
+};
+
+const BUZZ_ACCOUNT_KEYS: Record<string, true> = {
+  companionId: true,
+  privateKeyRef: true,
 };
 
 const BUZZ_LOOP_POLICY_KEYS: Record<string, true> = {
@@ -46,6 +50,7 @@ export interface BuzzChannelConfig {
   enabled: boolean;
   relayUrl: string;
   relayPubkey: string;
+  accounts: readonly BuzzChannelAccountConfig[];
   companionId?: CompanionId;
   privateKeyRef?: CredentialReference;
   channelIds: readonly string[];
@@ -64,8 +69,16 @@ export interface BuzzChannelConfig {
   };
 }
 
+export interface BuzzChannelAccountConfig {
+  companionId: CompanionId;
+  privateKeyRef: CredentialReference;
+}
+
 export interface BuzzChannelPluginOptions {
-  recoveryStore?: BuzzRecoveryStore;
+  recoveryStoreFactory?: (scope: {
+    community: string;
+    companionId: CompanionId;
+  }) => BuzzRecoveryStore;
 }
 
 export function createBuzzChannelPlugin(
@@ -74,7 +87,7 @@ export function createBuzzChannelPlugin(
   return {
     manifest: { id: 'buzz', label: 'Buzz' },
     parseConfig: parseBuzzChannelConfig,
-    create: input => createBuzzPluginInstance(input, options.recoveryStore),
+    create: input => createBuzzPluginInstance(input, options.recoveryStoreFactory),
   };
 }
 
@@ -101,16 +114,7 @@ function parseBuzzChannelConfig(raw: unknown): ChannelPluginParseResult<BuzzChan
   const relayPubkey = raw.relayPubkey === undefined
     ? ''
     : parseNostrPubkey(raw.relayPubkey, 'channels.json.buzz.relayPubkey');
-  const rawCompanionId = raw.companionId === undefined
-    ? undefined
-    : parseString(raw.companionId, 'channels.json.buzz.companionId');
-  const companionId = rawCompanionId
-    ? createCompanionId(rawCompanionId, 'channels.json.buzz.companionId')
-    : undefined;
-  const privateKeyRef = parseCredentialReference(
-    raw.privateKeyRef,
-    'channels.json.buzz.privateKeyRef',
-  );
+  const accounts = parseBuzzAccounts(raw.accounts);
   const channelIds = parseExactStringList(raw.channelIds, 'channels.json.buzz.channelIds', value => (
     isRfc4122Uuid(value)
       ? null
@@ -136,8 +140,9 @@ function parseBuzzChannelConfig(raw: unknown): ChannelPluginParseResult<BuzzChan
   if (enabled) {
     if (!relayUrl) throw new Error('channels.json.buzz.relayUrl must be configured when Buzz is enabled');
     if (!relayPubkey) throw new Error('channels.json.buzz.relayPubkey must be configured when Buzz is enabled');
-    if (!companionId) throw new Error('channels.json.buzz.companionId must be configured when Buzz is enabled');
-    if (!privateKeyRef) throw new Error('channels.json.buzz.privateKeyRef must be configured when Buzz is enabled');
+    if (accounts.length === 0) {
+      throw new Error('channels.json.buzz.accounts must not be empty when Buzz is enabled');
+    }
     if (allowedAuthorPubkeys.length === 0) {
       throw new Error('channels.json.buzz.allowedAuthorPubkeys must not be empty when Buzz is enabled');
     }
@@ -152,20 +157,38 @@ function parseBuzzChannelConfig(raw: unknown): ChannelPluginParseResult<BuzzChan
 
   return {
     enabled,
-    ...(companionId ? { companionId } : {}),
-    credentials: enabled && privateKeyRef
-      ? [{
-        id: 'privateKey',
-        reference: privateKeyRef,
-        description: 'Buzz Nostr private key',
-      }]
-      : [],
+    credentials: [],
+    ...(enabled && accounts.length > 0
+      ? {
+        instances: accounts.map(account => ({
+          id: account.companionId,
+          companionId: account.companionId,
+          credentials: [{
+            id: 'privateKey',
+            reference: account.privateKeyRef,
+            description: `Buzz Nostr private key for companion ${account.companionId}`,
+          }],
+          config: {
+            enabled,
+            relayUrl,
+            relayPubkey,
+            accounts,
+            companionId: account.companionId,
+            privateKeyRef: account.privateKeyRef,
+            channelIds,
+            allowedAuthorPubkeys,
+            machineAuthorPubkeys,
+            ...(loopPolicy ? { loopPolicy } : {}),
+            ...(recoveryPolicy ? { recoveryPolicy } : {}),
+          },
+        })),
+      }
+      : {}),
     config: {
       enabled,
       relayUrl,
       relayPubkey,
-      ...(companionId ? { companionId } : {}),
-      ...(privateKeyRef ? { privateKeyRef } : {}),
+      accounts,
       channelIds,
       allowedAuthorPubkeys,
       machineAuthorPubkeys,
@@ -175,9 +198,34 @@ function parseBuzzChannelConfig(raw: unknown): ChannelPluginParseResult<BuzzChan
   };
 }
 
+function parseBuzzAccounts(value: unknown): BuzzChannelAccountConfig[] {
+  const fieldName = 'channels.json.buzz.accounts';
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) throw new Error(`${fieldName} must be an array`);
+  const accounts = value.map((entry, index) => {
+    const accountField = `${fieldName}[${index}]`;
+    const account = parseExactObject(entry, accountField, BUZZ_ACCOUNT_KEYS);
+    const companionId = createCompanionId(
+      parseString(account.companionId, `${accountField}.companionId`),
+      `${accountField}.companionId`,
+    );
+    const privateKeyRef = parseCredentialReference(
+      account.privateKeyRef,
+      `${accountField}.privateKeyRef`,
+    );
+    if (!privateKeyRef) throw new Error(`${accountField}.privateKeyRef must be configured`);
+    return { companionId, privateKeyRef };
+  });
+  const companionIds = accounts.map(account => account.companionId);
+  if (new Set(companionIds).size !== companionIds.length) {
+    throw new Error(`${fieldName} must not contain duplicate companionId values`);
+  }
+  return accounts;
+}
+
 function createBuzzPluginInstance(
   input: ChannelPluginCreateInput<BuzzChannelConfig>,
-  injectedRecoveryStore?: BuzzRecoveryStore,
+  recoveryStoreFactory?: BuzzChannelPluginOptions['recoveryStoreFactory'],
 ): ChannelPluginInstance {
   if (!input.config.companionId) throw new Error('Enabled Buzz channel requires a companionId');
   const privateKey = input.secrets.privateKey;
@@ -186,7 +234,10 @@ function createBuzzPluginInstance(
   if (!loopPolicy) throw new Error('Enabled Buzz channel is missing loopPolicy');
   const recoveryPolicy = input.config.recoveryPolicy;
   if (!recoveryPolicy) throw new Error('Enabled Buzz channel is missing recoveryPolicy');
-  const recoveryStore = injectedRecoveryStore ?? createGatewayBuzzRecoveryStore(
+  const recoveryStore = recoveryStoreFactory?.({
+    community: input.config.relayUrl,
+    companionId: input.config.companionId,
+  }) ?? createGatewayBuzzRecoveryStore(
     input.context.postgresDatabaseUrl,
     input.config.relayUrl,
     input.config.companionId,

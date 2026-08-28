@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createStaticCredentialVault, envCredential } from '../../boundary/custody/credential-vault.js';
-import type { ChannelAdapterPort } from '../backplane/types.js';
+import type { ChannelAdapterPort, MessageHandler } from '../backplane/types.js';
 import { ChannelPluginHost } from './host.js';
 import { createChannelPluginRegistry } from './registry.js';
 import type {
@@ -127,6 +127,138 @@ describe('parseChannelPluginSections', () => {
 });
 
 describe('ChannelPluginHost', () => {
+  it('wires each plugin account with its host-derived gateway route', async () => {
+    const firstCompanionId = '11111111-1111-4111-8111-111111111111';
+    const secondCompanionId = '22222222-2222-4222-8222-222222222222';
+    const handlers: MessageHandler[] = [];
+    const plugin: ChannelPlugin = {
+      manifest: { id: 'probe', label: 'Probe' },
+      parseConfig: () => ({
+        enabled: true,
+        credentials: [],
+        config: {},
+        instances: [firstCompanionId, secondCompanionId].map(companionId => ({
+          id: companionId,
+          companionId,
+          credentials: [],
+          config: {},
+        })),
+      }),
+      create: () => ({
+        adapter: makeAdapter('probe', {
+          onMessage: handler => handlers.push(handler),
+        }),
+      }),
+    };
+    const registry = createChannelPluginRegistry([plugin]);
+    const host = await ChannelPluginHost.load({
+      registry,
+      sections: parseChannelPluginSections({ probe: { enabled: true } }, registry),
+      vault: createStaticCredentialVault({}),
+      contextFor: () => makeContext(),
+    });
+    const requestAgentVoiceStream = vi.fn(async () => ({
+      content: 'ok',
+      channelId: 'probe:room',
+      model: 'test',
+      durationMs: 1,
+    }));
+    host.wireMessages({
+      requestAgentVoiceStream,
+      notifyOperator: vi.fn(async () => undefined),
+    });
+
+    const message = {
+      id: 'event-1',
+      channelId: 'probe:room',
+      channelType: 'buzz' as const,
+      authorId: 'author',
+      authorName: 'Author',
+      content: 'hello',
+      timestamp: new Date(0),
+    };
+    await handlers[0]!(message);
+    await handlers[1]!(message);
+
+    expect(requestAgentVoiceStream).toHaveBeenNthCalledWith(1, message, {
+      channelAccountId: firstCompanionId,
+    });
+    expect(requestAgentVoiceStream).toHaveBeenNthCalledWith(2, message, {
+      channelAccountId: secondCompanionId,
+    });
+  });
+
+  it('instantiates one isolated lifecycle entry per declared plugin account', async () => {
+    const firstCompanionId = '11111111-1111-4111-8111-111111111111';
+    const secondCompanionId = '22222222-2222-4222-8222-222222222222';
+    const seen: Array<{ name: unknown; token: string | undefined; companionId: string | undefined }> = [];
+    const plugin: ChannelPlugin<{ name?: string }> = {
+      manifest: { id: 'probe', label: 'Probe' },
+      parseConfig: () => ({
+        enabled: true,
+        credentials: [],
+        config: {},
+        instances: [
+          {
+            id: firstCompanionId,
+            companionId: firstCompanionId,
+            credentials: [{
+              id: 'token',
+              reference: envCredential('ALPHA_TOKEN'),
+              description: 'Alpha token',
+            }],
+            config: { name: 'alpha' },
+          },
+          {
+            id: secondCompanionId,
+            companionId: secondCompanionId,
+            credentials: [{
+              id: 'token',
+              reference: envCredential('BETA_TOKEN'),
+              description: 'Beta token',
+            }],
+            config: { name: 'beta' },
+          },
+        ],
+      }),
+      create(input) {
+        seen.push({
+          name: input.config.name,
+          token: input.secrets.token,
+          companionId: input.context.intakeScreening === null
+            ? undefined
+            : 'unexpected',
+        });
+        return { adapter: makeAdapter('probe') };
+      },
+    };
+    const registry = createChannelPluginRegistry([plugin]);
+    const sections = parseChannelPluginSections({ probe: { enabled: true } }, registry);
+    const contextCompanions: Array<string | undefined> = [];
+    const host = await ChannelPluginHost.load({
+      registry,
+      sections,
+      vault: createStaticCredentialVault({
+        ALPHA_TOKEN: 'alpha-secret',
+        BETA_TOKEN: 'beta-secret',
+      }),
+      contextFor: (_pluginId, section) => {
+        contextCompanions.push(section.companionId);
+        return makeContext();
+      },
+    });
+
+    expect(host.list().map(entry => entry.id)).toEqual([
+      `probe:${firstCompanionId}`,
+      `probe:${secondCompanionId}`,
+    ]);
+    expect(seen.map(entry => ({ name: entry.name, token: entry.token }))).toEqual([
+      { name: 'alpha', token: 'alpha-secret' },
+      { name: 'beta', token: 'beta-secret' },
+    ]);
+    expect(contextCompanions).toEqual([firstCompanionId, secondCompanionId]);
+  });
+
   it('resolves only declared credentials and never shares them across plugins', async () => {
     const seen: Record<string, Readonly<Record<string, string>>> = {};
     const alpha: ChannelPlugin = {
@@ -236,6 +368,56 @@ describe('ChannelPluginHost', () => {
     });
     await expect(host.start()).rejects.toThrow('Channel plugin "second" failed to start');
     expect(events).toEqual(['start:first', 'start:second', 'stop:second', 'stop:first']);
+  });
+
+  it('rolls back earlier accounts when a later account of the same plugin fails', async () => {
+    const firstCompanionId = '11111111-1111-4111-8111-111111111111';
+    const secondCompanionId = '22222222-2222-4222-8222-222222222222';
+    const events: string[] = [];
+    const plugin: ChannelPlugin<{ account: string }> = {
+      manifest: { id: 'probe', label: 'Probe' },
+      parseConfig: () => ({
+        enabled: true,
+        credentials: [],
+        config: { account: 'unused' },
+        instances: [firstCompanionId, secondCompanionId].map(companionId => ({
+          id: companionId,
+          companionId,
+          credentials: [],
+          config: { account: companionId },
+        })),
+      }),
+      create({ config }) {
+        return {
+          adapter: makeAdapter('probe', {
+            start: async () => {
+              events.push(`start:${config.account}`);
+              if (config.account === secondCompanionId) throw new Error('second account exploded');
+            },
+            stop: async () => {
+              events.push(`stop:${config.account}`);
+            },
+          }),
+        };
+      },
+    };
+    const registry = createChannelPluginRegistry([plugin]);
+    const host = await ChannelPluginHost.load({
+      registry,
+      sections: parseChannelPluginSections({ probe: { enabled: true } }, registry),
+      vault: createStaticCredentialVault({}),
+      contextFor: () => makeContext(),
+    });
+
+    await expect(host.start()).rejects.toThrow(
+      `Channel plugin "probe:${secondCompanionId}" failed to start`,
+    );
+    expect(events).toEqual([
+      `start:${firstCompanionId}`,
+      `start:${secondCompanionId}`,
+      `stop:${secondCompanionId}`,
+      `stop:${firstCompanionId}`,
+    ]);
   });
 
   it('loads Multica through the same host as a probe plugin', async () => {

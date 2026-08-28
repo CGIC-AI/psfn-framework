@@ -60,6 +60,8 @@ export interface VoiceStreamRequestOptions {
   streamId?: string;
   metadata?: VoiceStreamMetadata;
   signal?: AbortSignal;
+  /** Gateway-internal plugin account route; never derived from message content. */
+  channelAccountId?: string;
   /**
    * Gateway-owned ingress transform that runs only after routing has selected
    * the exact companion receiving this attempt. Shared-satellite retries run

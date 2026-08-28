@@ -60,3 +60,19 @@ The host validates config, resolves declared references through
 `CredentialVaultPort`, constructs, then owns initialize/start/stop. Missing
 credentials, unknown plugin ids, invalid config, duplicate registrations, and
 lifecycle failures reject without fallback.
+
+## Register multiple companion accounts
+
+A plugin that supports several companion identities returns `instances` from
+`parseConfig`. Each instance declares a stable account id, one companion id,
+its instance-specific config, and only the credentials needed by that account.
+The host constructs and owns a separate adapter lifecycle for every instance.
+It also supplies the instance id as trusted gateway routing metadata, so an
+inbound message body cannot choose or impersonate another companion account.
+
+Use the companion UUID itself as the account id when the channel contract is
+one identity per companion. Reject duplicate account ids, duplicate companion
+ids, missing credentials, and legacy singular account fields in the plugin
+parser. Shared relay or policy configuration may be copied into each parsed
+instance, but mutable adapter and recovery state must never be shared between
+instances.

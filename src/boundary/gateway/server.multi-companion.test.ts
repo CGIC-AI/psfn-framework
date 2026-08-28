@@ -373,12 +373,14 @@ async function identifySessionIntegrityWorker(
 function multiCompanion(
   channelRouting: GatewayMultiCompanionConfig['channelRouting'],
   discordAccounts: GatewayMultiCompanionConfig['discordAccounts'] = {},
+  pluginAccounts: GatewayMultiCompanionConfig['pluginAccounts'] = {},
 ): GatewayMultiCompanionConfig {
   return {
     enabled: true,
     fleetCompanionIds: ['11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222', '33333333-3333-4333-8333-333333333333'],
     channelRouting,
     discordAccounts,
+    pluginAccounts,
     personalWorkspaceByCompanionId: {
       '11111111-1111-4111-8111-111111111111': '/workspace/11111111-1111-4111-8111-111111111111',
       '22222222-2222-4222-8222-222222222222': '/workspace/22222222-2222-4222-8222-222222222222',
@@ -421,7 +423,7 @@ function fleetPosture(updatedAt: number, utilizationPercent: number) {
   };
 }
 
-function makeChannelMessage(channelType: 'discord' | 'telegram' | 'api' | 'terminal') {
+function makeChannelMessage(channelType: 'discord' | 'telegram' | 'api' | 'buzz' | 'terminal') {
   return fromAny({
     id: `msg-${channelType}-1`,
     channelId: `${channelType}:test-channel`,
@@ -541,6 +543,7 @@ describe('resolveGatewayMultiCompanionConfig', () => {
       fleetCompanionIds: [],
       channelRouting: {},
       discordAccounts: {},
+      pluginAccounts: {},
       personalWorkspaceByCompanionId: {},
     });
   });
@@ -574,6 +577,7 @@ describe('resolveGatewayMultiCompanionConfig', () => {
       fleetCompanionIds: ['11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222'],
       channelRouting: { discord: '11111111-1111-4111-8111-111111111111', telegram: '22222222-2222-4222-8222-222222222222', api: '22222222-2222-4222-8222-222222222222', multica: '11111111-1111-4111-8111-111111111111', buzz: '22222222-2222-4222-8222-222222222222' },
       discordAccounts: {},
+      pluginAccounts: {},
       personalWorkspaceByCompanionId: {
         '11111111-1111-4111-8111-111111111111': '/runtime/workspaces/personal/11111111-1111-4111-8111-111111111111',
         '22222222-2222-4222-8222-222222222222': '/runtime/workspaces/personal/22222222-2222-4222-8222-222222222222',
@@ -612,12 +616,72 @@ describe('resolveGatewayMultiCompanionConfig', () => {
       fleetCompanionIds: ['11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222'],
       channelRouting: {},
       discordAccounts: { 'acct-a': '11111111-1111-4111-8111-111111111111', 'acct-b': '22222222-2222-4222-8222-222222222222' },
+      pluginAccounts: {},
       personalWorkspaceByCompanionId: {
         '11111111-1111-4111-8111-111111111111': '/runtime/workspaces/personal/11111111-1111-4111-8111-111111111111',
         '22222222-2222-4222-8222-222222222222': '/runtime/workspaces/personal/22222222-2222-4222-8222-222222222222',
       },
       sharedWorkspacePath: '/runtime/workspaces/shared',
     });
+  });
+
+  it('builds per-account plugin routing from Buzz instances when enabled', () => {
+    const firstCompanionId = '11111111-1111-4111-8111-111111111111';
+    const secondCompanionId = '22222222-2222-4222-8222-222222222222';
+    const channels = baseChannels({
+      plugins: {
+        buzz: {
+          id: 'buzz',
+          enabled: true,
+          credentials: [],
+          config: {},
+          instances: [
+            { id: firstCompanionId, companionId: firstCompanionId, credentials: [], config: {} },
+            { id: secondCompanionId, companionId: secondCompanionId, credentials: [], config: {} },
+          ],
+        },
+      },
+    });
+
+    expect(resolveGatewayMultiCompanionConfig({
+      multiCompanion: true,
+      companionFleet: resolvedFleet([firstCompanionId, secondCompanionId]),
+    }, channels, EMPTY_SATELLITE_REGISTRY)).toMatchObject({
+      channelRouting: {},
+      pluginAccounts: {
+        buzz: {
+          [firstCompanionId]: firstCompanionId,
+          [secondCompanionId]: secondCompanionId,
+        },
+      },
+    });
+  });
+
+  it('fails closed when a plugin account names a companion outside the fleet', () => {
+    const knownCompanionId = '11111111-1111-4111-8111-111111111111';
+    const unknownCompanionId = '22222222-2222-4222-8222-222222222222';
+    const channels = baseChannels({
+      plugins: {
+        buzz: {
+          id: 'buzz',
+          enabled: true,
+          credentials: [],
+          config: {},
+          instances: [{
+            id: unknownCompanionId,
+            companionId: unknownCompanionId,
+            credentials: [],
+            config: {},
+          }],
+        },
+      },
+    });
+    expect(() => resolveGatewayMultiCompanionConfig({
+      multiCompanion: true,
+      companionFleet: resolvedFleet([knownCompanionId]),
+    }, channels, EMPTY_SATELLITE_REGISTRY)).toThrow(
+      /routes buzz account.*absent from companions\.json/,
+    );
   });
 
   it('fails closed when routing is declared for a single-companion deployment', () => {
@@ -2295,6 +2359,46 @@ describe('GatewayServer multi-companion routing (flag on)', () => {
     expect(result.content).toBe('voice response');
     expect(methodFrames(connA, 'voice.transcript.begin')).toHaveLength(0);
     expect(methodFrames(connB, 'voice.transcript.begin')).toHaveLength(1);
+  });
+
+  it('routes a Buzz stream request through the exact configured plugin account', async () => {
+    const firstCompanionId = '11111111-1111-4111-8111-111111111111';
+    const secondCompanionId = '22222222-2222-4222-8222-222222222222';
+    const routed = { messages: fromAny([]) };
+    const { server, connect } = await setupServer({
+      ...createMinimalOptions(),
+      multiCompanion: multiCompanion({}, {}, {
+        buzz: { [firstCompanionId]: firstCompanionId, [secondCompanionId]: secondCompanionId },
+      }),
+    });
+    const connA = await connect();
+    const connB = await connect(voiceStreamResponder(routed));
+    await identifyAgent(connA, firstCompanionId, 1);
+    await identifyAgent(connB, secondCompanionId, 2);
+
+    const result = await server.requestAgentVoiceStream(makeChannelMessage('buzz'), {
+      channelAccountId: secondCompanionId,
+    });
+    expect(result.content).toBe('voice response');
+    expect(methodFrames(connA, 'voice.transcript.begin')).toHaveLength(0);
+    expect(methodFrames(connB, 'voice.transcript.begin')).toHaveLength(1);
+  });
+
+  it('fails closed when a Buzz stream request omits or invents its plugin account', async () => {
+    const companionId = '11111111-1111-4111-8111-111111111111';
+    const { server, connect } = await setupServer({
+      ...createMinimalOptions(),
+      multiCompanion: multiCompanion({}, {}, { buzz: { [companionId]: companionId } }),
+    });
+    const conn = await connect();
+    await identifyAgent(conn, companionId, 1);
+
+    await expect(server.requestAgentVoiceStream(makeChannelMessage('buzz')))
+      .rejects.toThrow('Multi-account buzz routing requires an accountId');
+    await expect(server.requestAgentVoiceStream(makeChannelMessage('buzz'), {
+      channelAccountId: 'unknown-account',
+    })).rejects.toThrow('no companion for buzz account "unknown-account"');
+    expect(methodFrames(conn, 'voice.transcript.begin')).toHaveLength(0);
   });
 
   it('routes a shared satellite voice lease only to its Primary', async () => {

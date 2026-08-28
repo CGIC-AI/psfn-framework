@@ -177,6 +177,7 @@ describe('resolveGatewayBootstrapInput', () => {
       fleetCompanionIds: [],
       channelRouting: {},
       discordAccounts: {},
+      pluginAccounts: {},
       personalWorkspaceByCompanionId: {},
     });
 
@@ -222,6 +223,7 @@ describe('resolveGatewayBootstrapInput', () => {
         telegram: 'comp-a',
       },
       discordAccounts: {},
+      pluginAccounts: {},
       personalWorkspaceByCompanionId: {
         'comp-a': '/runtime/workspaces/personal/comp-a',
       },

@@ -26,6 +26,8 @@ export interface GatewayMultiCompanionConfig {
    * (enforced by the channels.json parser).
    */
   discordAccounts: Record<string, CompanionId>;
+  /** Plugin id -> account id -> companion id, derived only from parsed plugin instances. */
+  pluginAccounts: Partial<Record<GatewayChannelSurface, Record<string, CompanionId>>>;
   /** Canonical Personal Workspace root for every fleet companion. */
   personalWorkspaceByCompanionId: Readonly<Record<string, string>>;
   /** Governed installation-shared workspace; never used as a personal root. */
@@ -38,6 +40,7 @@ export function disabledGatewayMultiCompanionConfig(): GatewayMultiCompanionConf
     fleetCompanionIds: [],
     channelRouting: {},
     discordAccounts: {},
+    pluginAccounts: {},
     personalWorkspaceByCompanionId: {},
   };
 }
@@ -49,6 +52,35 @@ function pluginChannelRouting(
   for (const section of Object.values(channelsConfig.plugins)) {
     if (!section.enabled || !section.companionId) continue;
     routing[section.id as GatewayChannelSurface] = section.companionId;
+  }
+  return routing;
+}
+
+function pluginAccountRouting(
+  channelsConfig: RuntimeChannelsConfig,
+): Partial<Record<GatewayChannelSurface, Record<string, CompanionId>>> {
+  const routing: Partial<Record<GatewayChannelSurface, Record<string, CompanionId>>> = {};
+  for (const section of Object.values(channelsConfig.plugins)) {
+    if (!section.enabled || !section.instances || section.instances.length === 0) continue;
+    if (!GATEWAY_CHANNEL_SURFACES.includes(section.id as GatewayChannelSurface)) {
+      throw new Error(`Channel plugin ${JSON.stringify(section.id)} has no gateway routing surface`);
+    }
+    const accounts: Record<string, CompanionId> = {};
+    for (const instance of section.instances) {
+      if (!instance.companionId) {
+        throw new Error(
+          `Channel plugin ${JSON.stringify(section.id)} account ${JSON.stringify(instance.id)} `
+          + 'is missing companionId routing',
+        );
+      }
+      if (Object.hasOwn(accounts, instance.id)) {
+        throw new Error(
+          `Channel plugin ${JSON.stringify(section.id)} has duplicate account ${JSON.stringify(instance.id)}`,
+        );
+      }
+      accounts[instance.id] = instance.companionId;
+    }
+    routing[section.id as GatewayChannelSurface] = accounts;
   }
   return routing;
 }
@@ -125,6 +157,7 @@ export function resolveGatewayMultiCompanionConfig(
   for (const account of channelsConfig.discord.accounts ?? []) {
     discordAccounts[account.accountId] = account.companionId;
   }
+  const pluginAccounts = pluginAccountRouting(channelsConfig);
 
   const routedSurfaces = Object.keys(channelRouting);
   if (!enabled && routedSurfaces.length > 0) {
@@ -140,6 +173,15 @@ export function resolveGatewayMultiCompanionConfig(
       `channels.json declares discord.accounts [${routedAccountIds.join(', ')}] but this is a `
       + 'single-companion (one-entry companions.json) deployment. Add the companions to companions.json '
       + 'or remove the accounts section — single-companion mode must not silently ignore per-companion bot identities.',
+    );
+  }
+  const routedPluginAccountIds = Object.entries(pluginAccounts)
+    .flatMap(([pluginId, accounts]) => Object.keys(accounts).map(accountId => `${pluginId}:${accountId}`));
+  if (!enabled && routedPluginAccountIds.length > 0) {
+    throw new Error(
+      `channels.json declares plugin accounts [${routedPluginAccountIds.join(', ')}] but this is a `
+      + 'single-companion (one-entry companions.json) deployment. Add the companions to companions.json '
+      + 'or remove the plugin accounts — single-companion mode must not silently ignore per-companion identities.',
     );
   }
 
@@ -182,6 +224,15 @@ export function resolveGatewayMultiCompanionConfig(
         );
       }
     }
+    for (const [pluginId, accounts] of Object.entries(pluginAccounts)) {
+      for (const [accountId, companionId] of Object.entries(accounts)) {
+        if (fleetIds.has(companionId)) continue;
+        throw new Error(
+          `channels.json routes ${pluginId} account ${JSON.stringify(accountId)} to companionId `
+          + `${JSON.stringify(companionId)}, which is absent from companions.json`,
+        );
+      }
+    }
     if (satelliteRegistryConfig.productivityCompanionId
       && !fleetIds.has(satelliteRegistryConfig.productivityCompanionId)) {
       throw new Error(
@@ -210,6 +261,7 @@ export function resolveGatewayMultiCompanionConfig(
     fleetCompanionIds,
     channelRouting,
     discordAccounts,
+    pluginAccounts,
     personalWorkspaceByCompanionId,
     ...(config.companionFleet?.sharedWorkspacePath
       ? { sharedWorkspacePath: config.companionFleet.sharedWorkspacePath }

@@ -25,7 +25,6 @@ import {
   type IcpTargetRecoveryBinding,
   type RecordedIcpInitiationTurn,
 } from './icp-target-channel-recovery.js';
-import type { IcpTargetChannelContinuation } from './icp-target-channel-continuation.js';
 
 export type { IcpDeliveryObservation } from '../../core/session/icp-delivery-recovery.js';
 export type { RecordedIcpInitiationTurn } from './icp-target-channel-recovery.js';
@@ -112,7 +111,7 @@ export type IcpTargetChannelInitiationResult =
       correlation: IcpConversationCorrelation;
     };
 
-export interface IcpTargetChannelInitiator extends IcpTargetChannelContinuation {
+export interface IcpTargetChannelInitiator {
   initiate(request: IcpTargetChannelInitiationRequest): Promise<IcpTargetChannelInitiationResult>;
 }
 

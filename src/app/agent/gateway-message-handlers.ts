@@ -40,7 +40,7 @@ import {
   type IcpTargetChannelInitiator,
   type RecordedIcpInitiationTurn,
 } from './icp-target-channel-initiation.js';
-import { createIcpTargetChannelContinuation } from './icp-target-channel-continuation.js';
+import { createIcpTargetChannelContinuation, type IcpTargetChannelContinuation } from './icp-target-channel-continuation.js';
 import {
   parseIcpConversationCorrelation,
   type IcpConversationCorrelation,
@@ -382,7 +382,7 @@ export interface GatewayMessageHandlersDeps {
 }
 
 export interface RegisteredGatewayMessageHandlers {
-  icpTargetChannelInitiator: IcpTargetChannelInitiator;
+  icpTargetChannelInitiator: IcpTargetChannelInitiator & IcpTargetChannelContinuation;
 }
 
 export function registerGatewayMessageHandlers(

@@ -1119,7 +1119,6 @@ export class GatewayClient implements
   companionTransitionDyad(params: Parameters<typeof companionTransitionDyad>[2]) {
     return companionTransitionDyad(this.transportRuntime, this.companionId, params);
   }
-
   companionPrepareDyadContinuation(params: Parameters<typeof companionPrepareDyadContinuation>[2]) {
     return companionPrepareDyadContinuation(this.transportRuntime, this.companionId, params); }
 

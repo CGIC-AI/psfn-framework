@@ -2766,6 +2766,56 @@ describe('registerGatewayMessageHandlers — reservation phase wiring (jp36.5.1.
     expect(JSON.stringify(events[0])).not.toContain('I wonder what');
   });
 
+  it('normalizes fractional monotonic time before durable arbiter phase calls', async () => {
+    const reservation = makeReservationSnapshot();
+    const appraiser = replyingAppraiser('reply');
+    const reservationPhase: ReservationPhasePort = {
+      reserve: vi.fn(async (): Promise<ReservationDecision> => ({
+        outcome: 'reserved',
+        reservation,
+        episode: makeEpisodeSnapshot(),
+        replayed: false,
+      })),
+      settleAfterAppraisal: vi.fn(async () => 'retained' as const),
+      releaseIgnored: vi.fn(),
+    };
+    const egressLeasePhase: EgressLeasePhasePort = {
+      grantReply: vi.fn(async (): Promise<EgressLeaseDecision> => ({
+        channelId: CHANNEL,
+        triggerEventId: SOURCE_MESSAGE_ID,
+        companionId: reservation.companionId,
+        outcome: 'delivered',
+        breakerState: 'closed',
+        drawOutcome: 'drawn',
+      })),
+      releaseReact: vi.fn(),
+    };
+    const harness = createHarness({
+      passiveNameCandidateBuilder: createdBuilder(makeCandidate()),
+      participationAppraiser: appraiser,
+      reservationPhase,
+      egressLeasePhase,
+      nowMonotonicMs: () => 1_000_100.75,
+    });
+
+    await harness.onDiscordMessage(observeMessage());
+
+    expect(reservationPhase.reserve).toHaveBeenCalledWith(
+      expect.objectContaining({ nowMs: 1_000_100 }),
+    );
+    expect(reservationPhase.settleAfterAppraisal).toHaveBeenCalledWith(
+      reservation,
+      'reply',
+      1_000_100,
+    );
+    expect(egressLeasePhase.grantReply).toHaveBeenCalledWith(
+      reservation,
+      expect.objectContaining({ action: 'reply' }),
+      expect.objectContaining({ sourceMessageId: SOURCE_MESSAGE_ID }),
+      1_000_100,
+    );
+  });
+
   it('surfaces the Law-36 breaker firing record on the audit trail and bus when a decision fires', async () => {
     const reservation = makeReservationSnapshot();
     const appraiser = replyingAppraiser('reply');

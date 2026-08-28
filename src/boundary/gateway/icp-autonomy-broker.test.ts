@@ -161,7 +161,7 @@ class MemoryStore implements IcpSharedAutonomyStorePort {
   }
 
   async createEpisode(episode: IcpConversationEpisode): Promise<IcpConversationEpisode> {
-    this.ensureDyad(episode);
+    if (episode.channelId.startsWith('companion-dm:')) this.ensureDyad(episode);
     this.episodes.set(episode.conversationId, episode);
     return episode;
   }
@@ -279,7 +279,7 @@ class MemoryStore implements IcpSharedAutonomyStorePort {
     episode: IcpConversationEpisode;
     permit: IcpInitiationPermit;
     expectedInvalidationFence: IcpAutonomyInvalidationFence;
-  }): Promise<{ dyad: IcpDyad; episode: IcpConversationEpisode; permit: IcpInitiationPermit }> {
+  }): Promise<{ dyad: IcpDyad | null; episode: IcpConversationEpisode; permit: IcpInitiationPermit }> {
     await this.beforeCreateEpisodeAndIssuePermit?.();
     this.assertInvalidationFence(input.expectedInvalidationFence);
     const episode = await this.createEpisode(input.episode);
@@ -292,7 +292,6 @@ class MemoryStore implements IcpSharedAutonomyStorePort {
         input.permit.senderCompanionId,
         input.permit.recipientCompanionId,
       );
-      if (!dyad) throw new Error('missing dyad');
       return { dyad, episode, permit };
     } catch (error) {
       this.episodes.delete(episode.conversationId);

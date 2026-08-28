@@ -462,6 +462,13 @@
       "note": "m8zdu follower welfare-verifier privilege repair suite against real containerized Postgres. Baseline 1.9s file wall (2 tests, warm tmpfs harness, this host, 2026-08-04); 120s is the repo-standard integration cap with headroom dominated by cold-start and harness-semaphore variance."
     },
     {
+      "file": "src/persistence/sessions/message-addressing-migration.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": 1020,
+      "baselineSource": "measured",
+      "note": "yqv0w.1 v1-to-v2 addressing migration against disposable Postgres. Baseline 1.02s file wall (2 tests, warm harness, this host, 2026-08-28); 120000/1020 = 117x headroom for cold-start and shared-heavy harness variance."
+    },
+    {
       "file": "src/persistence/sessions/testing-session-purge.integration.test.ts",
       "timeoutMs": 120000,
       "measuredBaselineMs": null,

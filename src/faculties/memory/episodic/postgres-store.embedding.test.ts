@@ -86,6 +86,7 @@ describe('PostgresEpisodicStore episode embedding index', () => {
     const query = vi.fn(async () => queryResult([{
       id: EPISODE.id,
       episode_json: serializeEpisode(EPISODE),
+      source_revision: '2026-08-09 10:00:00.123456+00',
       index_state: 'stale',
       embedding_last_error: null,
     }]));
@@ -94,10 +95,15 @@ describe('PostgresEpisodicStore episode embedding index', () => {
     await expect(store.listEpisodeEmbeddingTargets({
       profile: PROFILE,
       limit: 5,
-    })).resolves.toEqual([{ episode: EPISODE, reason: 'stale' }]);
+    })).resolves.toEqual([{
+      episode: EPISODE,
+      sourceRevision: '2026-08-09 10:00:00.123456+00',
+      reason: 'stale',
+    }]);
 
     const [sql, values] = query.mock.calls[0] ?? [];
     expect(String(sql)).toContain("status IN ('canonical', 'candidate')");
+    expect(String(sql)).toContain('updated_at::text AS source_revision');
     expect(String(sql)).toContain('embedding_document_schema IS DISTINCT FROM $1');
     expect(String(sql)).toContain('embedding_source_updated_at IS DISTINCT FROM updated_at');
     expect(String(sql)).toContain('ORDER BY embedding_attempted_at ASC NULLS FIRST, updated_at ASC, id ASC');
@@ -116,7 +122,7 @@ describe('PostgresEpisodicStore episode embedding index', () => {
 
     await expect(store.writeEpisodeEmbedding({
       episodeId: EPISODE.id,
-      sourceUpdatedAt: EPISODE.updatedAt,
+      sourceRevision: '2026-08-09 10:00:00.123456+00',
       profile: PROFILE,
       documentHash: 'a'.repeat(64),
       embedding: new Float32Array([0.1, 0.2, 0.3]),
@@ -127,17 +133,17 @@ describe('PostgresEpisodicStore episode embedding index', () => {
     expect(String(sql)).toContain('embedding = $3::vector');
     expect(String(sql)).toContain('embedding_source_updated_at = $8');
     expect(String(sql)).toContain('embedding_last_error = NULL');
-    expect(String(sql)).toContain('updated_at = $8');
+    expect(String(sql)).toContain('updated_at = $2');
     expect(String(sql)).toContain("status IN ('canonical', 'candidate')");
     expect(values).toEqual([
       EPISODE.id,
-      EPISODE.updatedAt,
+      '2026-08-09 10:00:00.123456+00',
       '[0.10000000149011612,0.20000000298023224,0.30000001192092896]',
       PROFILE.documentSchema,
       PROFILE.provider,
       PROFILE.model,
       PROFILE.dimensions,
-      EPISODE.updatedAt,
+      '2026-08-09 10:00:00.123456+00',
       'a'.repeat(64),
       '2026-08-10T12:00:00.000Z',
     ]);
@@ -149,7 +155,7 @@ describe('PostgresEpisodicStore episode embedding index', () => {
 
     await expect(store.recordEpisodeEmbeddingFailure({
       episodeId: EPISODE.id,
-      sourceUpdatedAt: EPISODE.updatedAt,
+      sourceRevision: '2026-08-09 10:00:00.123456+00',
       profile: PROFILE,
       error: 'provider unavailable',
       attemptedAt: '2026-08-10T12:00:00.000Z',
@@ -163,7 +169,7 @@ describe('PostgresEpisodicStore episode embedding index', () => {
     expect(String(sql)).toContain('updated_at = $2');
     expect(values).toEqual([
       EPISODE.id,
-      EPISODE.updatedAt,
+      '2026-08-09 10:00:00.123456+00',
       PROFILE.documentSchema,
       PROFILE.provider,
       PROFILE.model,

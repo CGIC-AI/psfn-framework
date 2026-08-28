@@ -87,6 +87,7 @@ describe('EpisodeSemanticIndexer', () => {
     const store: EpisodeEmbeddingIndexStorePort = {
       listEpisodeEmbeddingTargets: vi.fn(async () => [{
         episode: target,
+        sourceRevision: '2026-08-09 10:00:00.123456+00',
         reason: 'missing',
       }]),
       writeEpisodeEmbedding,
@@ -105,9 +106,11 @@ describe('EpisodeSemanticIndexer', () => {
 
     await expect(indexer.runBackfill({ limit: 4 })).resolves.toEqual({
       selected: 1,
-      indexed: 1,
+      written: 1,
+      concurrentlyChanged: [],
+      invalid: [],
       failed: [],
-      changedDuringIndex: [],
+      noProgress: false,
     });
     expect(store.listEpisodeEmbeddingTargets).toHaveBeenCalledWith({
       profile: {
@@ -133,7 +136,7 @@ describe('EpisodeSemanticIndexer', () => {
     });
     expect(writeEpisodeEmbedding).toHaveBeenCalledWith(expect.objectContaining({
       episodeId: 'episode-1',
-      sourceUpdatedAt: target.updatedAt,
+      sourceRevision: '2026-08-09 10:00:00.123456+00',
       embedding: new Float32Array([0.1, 0.2, 0.3]),
       indexedAt: '2026-08-10T12:00:00.000Z',
       documentHash: expect.stringMatching(/^[a-f0-9]{64}$/),
@@ -147,8 +150,8 @@ describe('EpisodeSemanticIndexer', () => {
     const writeEpisodeEmbedding = vi.fn(async () => true);
     const store: EpisodeEmbeddingIndexStorePort = {
       listEpisodeEmbeddingTargets: vi.fn(async () => [
-        { episode: first, reason: 'missing' },
-        { episode: second, reason: 'missing' },
+        { episode: first, sourceRevision: first.updatedAt, reason: 'missing' },
+        { episode: second, sourceRevision: second.updatedAt, reason: 'missing' },
       ]),
       writeEpisodeEmbedding,
       recordEpisodeEmbeddingFailure,
@@ -168,18 +171,59 @@ describe('EpisodeSemanticIndexer', () => {
 
     await expect(indexer.runBackfill({ limit: 2 })).resolves.toEqual({
       selected: 2,
-      indexed: 1,
+      written: 1,
+      concurrentlyChanged: [],
+      invalid: [],
       failed: [{ episodeId: 'episode-failed', error: 'provider unavailable' }],
-      changedDuringIndex: [],
+      noProgress: false,
     });
     expect(recordEpisodeEmbeddingFailure).toHaveBeenCalledWith({
       episodeId: 'episode-failed',
-      sourceUpdatedAt: first.updatedAt,
+      sourceRevision: first.updatedAt,
       profile: indexer.profile,
       error: 'provider unavailable',
       attemptedAt: '2026-08-10T12:00:00.000Z',
     });
     expect(writeEpisodeEmbedding).toHaveBeenCalledTimes(1);
+  });
+
+  it('distinguishes invalid, failed, concurrent-change, and no-progress outcomes', async () => {
+    const invalid = episode({ id: 'episode-invalid' });
+    const failed = episode({ id: 'episode-failed' });
+    const changed = episode({ id: 'episode-changed' });
+    const store: EpisodeEmbeddingIndexStorePort = {
+      listEpisodeEmbeddingTargets: vi.fn(async () => [
+        { episode: invalid, sourceRevision: invalid.updatedAt, reason: 'missing' },
+        { episode: failed, sourceRevision: failed.updatedAt, reason: 'failed' },
+        { episode: changed, sourceRevision: changed.updatedAt, reason: 'stale' },
+      ]),
+      writeEpisodeEmbedding: vi.fn(async () => false),
+      recordEpisodeEmbeddingFailure: vi.fn(async () => true),
+    };
+    const embedding: EmbeddingProviderPort = {
+      dims: 2,
+      embed: vi.fn()
+        .mockResolvedValueOnce(new Float32Array([0.1]))
+        .mockRejectedValueOnce(new Error('provider unavailable'))
+        .mockResolvedValueOnce(new Float32Array([0.4, 0.6])),
+      embedBatch: vi.fn(),
+    };
+    const indexer = new EpisodeSemanticIndexer(store, embedding, {
+      provider: 'api',
+      model: 'embed-v2',
+    });
+
+    await expect(indexer.runBackfill({ limit: 3 })).resolves.toEqual({
+      selected: 3,
+      written: 0,
+      concurrentlyChanged: ['episode-changed'],
+      invalid: [{
+        episodeId: 'episode-invalid',
+        error: 'Episode embedding dimension mismatch: expected 2, got 1',
+      }],
+      failed: [{ episodeId: 'episode-failed', error: 'provider unavailable' }],
+      noProgress: true,
+    });
   });
 });
 
@@ -222,7 +266,7 @@ describe('wireEpisodeSemanticIndexRuntime', () => {
       onBatch,
     });
 
-    await expect(runtime.startupBackfill).resolves.toMatchObject({ selected: 0, indexed: 0 });
+    await expect(runtime.startupBackfill).resolves.toMatchObject({ selected: 0, written: 0 });
     expect(attachEpisodeEmbeddingIndexer).toHaveBeenCalledWith(runtime.indexer, expect.any(Object));
     expect(registerOperation).toHaveBeenCalledWith(expect.objectContaining({
       id: EPISODE_EMBEDDING_MAINTENANCE_OPERATION_ID,

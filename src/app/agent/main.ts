@@ -1013,22 +1013,24 @@ async function main(): Promise<void> {
       const details = {
         source,
         selected: result.selected,
-        indexed: result.indexed,
+        written: result.written,
+        concurrentlyChanged: result.concurrentlyChanged.length,
+        invalid: result.invalid.length,
         failed: result.failed.length,
-        changedDuringIndex: result.changedDuringIndex.length,
+        noProgress: result.noProgress,
         current: health.current,
         missing: health.missing,
         stale: health.stale,
         persistedFailures: health.failed,
       };
-      if (result.failed.length > 0) {
-        log.warn('Episode semantic index batch completed with retryable failures', details);
+      if (result.failed.length > 0 || result.invalid.length > 0 || result.noProgress) {
+        log.warn('Episode semantic index batch completed without full progress', details);
       } else {
         log.info('Episode semantic index batch completed', details);
       }
     },
     onLiveResult: (result) => {
-      if (result.status === 'failed') {
+      if (result.status === 'failed' || result.status === 'invalid') {
         log.warn('Live episode semantic indexing failed; persisted for retry', {
           episodeId: result.episodeId,
           error: result.error,

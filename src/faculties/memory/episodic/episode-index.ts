@@ -36,10 +36,14 @@ export interface EpisodeSemanticIndexerOptions {
 
 export interface EpisodeBackfillResult {
   selected: number;
-  indexed: number;
+  written: number;
+  concurrentlyChanged: string[];
+  invalid: Array<{ episodeId: string; error: string }>;
   failed: Array<{ episodeId: string; error: string }>;
-  changedDuringIndex: string[];
+  noProgress: boolean;
 }
+
+class InvalidEpisodeEmbeddingError extends Error {}
 
 export class EpisodeSemanticIndexer {
   readonly profile: EpisodeEmbeddingProfile;
@@ -66,21 +70,29 @@ export class EpisodeSemanticIndexer {
     });
     const result: EpisodeBackfillResult = {
       selected: targets.length,
-      indexed: 0,
+      written: 0,
+      concurrentlyChanged: [],
+      invalid: [],
       failed: [],
-      changedDuringIndex: [],
+      noProgress: false,
     };
     for (const target of targets) {
-      const attempt = await this.indexEpisode(target.episode);
-      if (attempt.status === 'indexed') result.indexed += 1;
-      else if (attempt.status === 'failed') {
+      const attempt = await this.indexEpisode(target.episode, target.sourceRevision);
+      if (attempt.status === 'indexed') result.written += 1;
+      else if (attempt.status === 'invalid') {
+        result.invalid.push({ episodeId: attempt.episodeId, error: attempt.error });
+      } else if (attempt.status === 'failed') {
         result.failed.push({ episodeId: attempt.episodeId, error: attempt.error });
-      } else result.changedDuringIndex.push(attempt.episodeId);
+      } else result.concurrentlyChanged.push(attempt.episodeId);
     }
+    result.noProgress = result.selected > 0 && result.written === 0;
     return result;
   }
 
-  async indexEpisode(episode: Episode): Promise<EpisodeEmbeddingIndexAttempt> {
+  async indexEpisode(
+    episode: Episode,
+    sourceRevision: string = episode.updatedAt,
+  ): Promise<EpisodeEmbeddingIndexAttempt> {
     const document = buildEpisodeSearchDocument(episode);
     const attemptedAt = this.now().toISOString();
     try {
@@ -96,7 +108,7 @@ export class EpisodeSemanticIndexer {
       this.assertEmbedding(vector);
       const written = await this.store.writeEpisodeEmbedding({
         episodeId: episode.id,
-        sourceUpdatedAt: episode.updatedAt,
+        sourceRevision,
         profile: this.profile,
         documentHash: createHash('sha256').update(document).digest('hex'),
         embedding: vector,
@@ -109,28 +121,31 @@ export class EpisodeSemanticIndexer {
       const message = error instanceof Error ? error.message : String(error);
       const recorded = await this.store.recordEpisodeEmbeddingFailure({
         episodeId: episode.id,
-        sourceUpdatedAt: episode.updatedAt,
+        sourceRevision,
         profile: this.profile,
         error: message,
         attemptedAt,
       });
+      const invalid = error instanceof InvalidEpisodeEmbeddingError;
       return recorded
-        ? { episodeId: episode.id, status: 'failed', error: message }
+        ? { episodeId: episode.id, status: invalid ? 'invalid' : 'failed', error: message }
         : { episodeId: episode.id, status: 'changed_during_index' };
     }
   }
 
   private assertEmbedding(vector: Float32Array): void {
     if (!(vector instanceof Float32Array)) {
-      throw new Error('Episode embedding provider returned a non-Float32Array value');
+      throw new InvalidEpisodeEmbeddingError(
+        'Episode embedding provider returned a non-Float32Array value',
+      );
     }
     if (vector.length !== this.profile.dimensions) {
-      throw new Error(
+      throw new InvalidEpisodeEmbeddingError(
         `Episode embedding dimension mismatch: expected ${this.profile.dimensions}, got ${vector.length}`,
       );
     }
     if (Array.from(vector).some(value => !Number.isFinite(value))) {
-      throw new Error('Episode embedding provider returned non-finite values');
+      throw new InvalidEpisodeEmbeddingError('Episode embedding provider returned non-finite values');
     }
   }
 }
@@ -184,9 +199,9 @@ export function wireEpisodeSemanticIndexRuntime(
   const runBatch = async (source: 'startup' | 'scheduled'): Promise<EpisodeBackfillResult> => {
     const result = await indexer.runBackfill({ limit: options.backfillLimit });
     await options.onBatch?.(source, result);
-    if (result.failed.length > 0) {
+    if (result.failed.length > 0 || result.invalid.length > 0) {
       throw new Error(
-        `Episode semantic indexing failed for ${result.failed.length} of ${result.selected} episodes`,
+        `Episode semantic indexing failed for ${result.failed.length + result.invalid.length} of ${result.selected} episodes`,
       );
     }
     return result;

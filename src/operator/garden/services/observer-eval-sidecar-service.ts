@@ -30,14 +30,14 @@ import type { EmotionProactiveTransitionEvent } from '../../../shared/event-bus.
 
 export const ADMIN_OBSERVER_EVAL_EXPORT_VERSION = 'garden.observer-eval-sidecar.export.v1' as const;
 
-export type AdminObserverEvalProactivityOperatingState =
+type AdminObserverEvalProactivityOperatingState =
   | 'absent'
   | 'disabled'
   | 'shadow'
   | 'on'
   | 'unhealthy';
 
-export interface AdminObserverEvalSidecarBindingIdentity {
+interface AdminObserverEvalSidecarBindingIdentity {
   companionId: string;
   sidecarId: string;
   sessionLabel: string;

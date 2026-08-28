@@ -9,6 +9,7 @@ import type { ClarifyDeliverResult, PendingClarification } from '../../boundary/
 import type { EligibilityRequirements } from '../../system/capabilities/eligibility.js';
 import type { ResolvedReactionSurface } from '../shared/reaction-surface.js';
 import type { ConversationScope } from '../../core/session/conversation-scope.js';
+import type { PrecomputedNoReplyDisposition } from '../../core/participation/types.js';
 
 /**
  * mmo9.6.1: in-process turn-control options threaded alongside a dispatched
@@ -23,6 +24,8 @@ export interface MessageHandlerOptions {
   cancellationId?: string;
   /** Authenticated scope already consumed by pre-dispatch intake screening. */
   conversationScope?: ConversationScope;
+  /** Trusted local appraisal result; accepted only by authenticated inbound ICP turns. */
+  precomputedNoReplyDisposition?: PrecomputedNoReplyDisposition;
 }
 
 export type MessageHandler = (

@@ -15,7 +15,10 @@ import type { ChannelType } from '../../shared/contracts/runtime.js';
  * - `direct_mention` — the message opens by addressing the companion (a leading
  *                      platform mention or a message that starts with an alias).
  */
-export type ParticipationCandidateTrigger = 'direct_mention' | 'passive_name';
+export type ParticipationCandidateTrigger = 'direct_mention' | 'passive_name' | 'companion_message';
+
+/** The conversation surface on which the speaking decision is being made. */
+type ParticipationSurface = 'group_room' | 'companion_dm';
 
 /** A bounded preceding room message attached for same-name disambiguation. */
 export interface ParticipationContextMessage {
@@ -30,6 +33,8 @@ export interface ParticipationCandidate {
   schemaVersion: 1;
   channelId: string;
   channelType: ChannelType;
+  /** Defaults to `group_room` for candidates created before ICP reused this arbiter. */
+  participationSurface?: ParticipationSurface;
   /** The room message that triggered the candidate. */
   sourceMessageId: string;
   trigger: ParticipationCandidateTrigger;
@@ -106,4 +111,17 @@ export interface ParticipationAppraisalResult {
   appraisal: ParticipationAppraisal;
   failClosed: boolean;
   failClosedReason?: string;
+}
+
+/**
+ * Trusted in-process result threaded from the cheap participation appraiser to
+ * the ordinary turn runtime. It may suppress generation only for an
+ * authenticated inbound ICP turn; peer-controlled routing metadata can never
+ * construct this object.
+ */
+export interface PrecomputedNoReplyDisposition {
+  source: 'participation_appraiser';
+  reasonCode: string;
+  confidence: number;
+  failClosed: boolean;
 }

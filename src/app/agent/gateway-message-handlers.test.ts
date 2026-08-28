@@ -109,6 +109,14 @@ function createHarness(overrides?: {
       sourceAlreadyPersisted?: true;
       finalizeDelivery(response: AgentResponse): Promise<void>;
     },
+    turnControl?: {
+      precomputedNoReplyDisposition?: {
+        source: 'participation_appraiser';
+        reasonCode: string;
+        confidence: number;
+        failClosed: boolean;
+      };
+    },
   ) => Promise<AgentResponse>;
   observeMessage?: (message: SubstrateMessage) => Promise<void>;
   waitForIdle?: () => Promise<void>;
@@ -1319,7 +1327,13 @@ describe('registerGatewayMessageHandlers', () => {
       },
     };
     const harness = createHarness({
-      config: { companionId: ICP_B } as SubstrateConfig,
+      config: { companionId: ICP_B, multiCompanion: true } as SubstrateConfig,
+      participationAppraiser: {
+        appraise: vi.fn(async () => ({
+          appraisal: { action: 'reply', reasonCode: 'continue_conversation', confidence: 0.9 },
+          failClosed: false,
+        })),
+      },
       handleMessage: async (_message, lifecycle) => {
         if (!lifecycle) throw new Error('test expected delivery lifecycle');
         await lifecycle.finalizeDelivery(reply);
@@ -1351,6 +1365,68 @@ describe('registerGatewayMessageHandlers', () => {
       deliveredTo: [ICP_A],
       turnCompleted: true,
     }));
+  });
+
+  it('routes an inbound ICP turn through the existing appraiser and durably chooses no reply before generation', async () => {
+    const participationAppraiser: ParticipationAppraiserPort = {
+      appraise: vi.fn(async () => ({
+        appraisal: { action: 'ignore', reasonCode: 'conversation_complete', confidence: 0.94 },
+        failClosed: false,
+      })),
+    };
+    const suppressed = {
+      ...makeResponse(''),
+      channelId: ICP_CHANNEL,
+      metadata: {
+        ...makeResponse('').metadata,
+        turnId: replyIcpCorrelation.turnId,
+        requestId: replyIcpCorrelation.requestId,
+        icpCorrelation: replyIcpCorrelation,
+        noReply: {
+          schemaVersion: 1 as const,
+          disposition: 'intentional_no_reply' as const,
+          source: 'participation_appraiser' as const,
+          auditId: 'no-reply:appraiser',
+          decidedAt: Date.parse('2026-03-02T00:00:00.000Z'),
+          turnId: replyIcpCorrelation.turnId as TurnID,
+          requestId: replyIcpCorrelation.requestId,
+          channelId: ICP_CHANNEL,
+          reason: 'conversation_complete',
+        },
+      },
+    } as AgentResponse;
+    const harness = createHarness({
+      config: { companionId: ICP_B, multiCompanion: true } as SubstrateConfig,
+      participationAppraiser,
+      handleMessage: async (_message, lifecycle, turnControl) => {
+        expect(turnControl?.precomputedNoReplyDisposition).toEqual({
+          source: 'participation_appraiser',
+          reasonCode: 'conversation_complete',
+          confidence: 0.94,
+          failClosed: false,
+        });
+        if (!lifecycle) throw new Error('test expected delivery lifecycle');
+        await lifecycle.finalizeDelivery(suppressed);
+        return suppressed;
+      },
+    });
+
+    await harness.onCompanionMessage(makeCorrelatedCompanionMessage());
+
+    await vi.waitFor(() => {
+      expect(participationAppraiser.appraise).toHaveBeenCalledWith(expect.objectContaining({
+        participationSurface: 'companion_dm',
+        channelId: ICP_CHANNEL,
+        sourceMessageId: INBOUND_ICP_MESSAGE_ID,
+        triggerAuthorId: ICP_A,
+      }));
+      expect(harness.agentLoop.handleMessage).toHaveBeenCalledOnce();
+    });
+    expect(harness.gateway.companionSend).not.toHaveBeenCalled();
+    expect(harness.gateway.companionEndIcpEpisodeActivity).toHaveBeenCalledWith({
+      conversationId: inboundIcpCorrelation.conversationId,
+      reasonCode: 'conversation_ended',
+    });
   });
 
   it('persists a fresh fatigue-suppressed reply without an impossible prepared state', async () => {

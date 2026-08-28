@@ -1912,6 +1912,59 @@ describe('handleMessageForTurn fatigue enforcement', () => {
     });
   }
 
+  it('honors a precomputed ICP appraiser no-reply before model generation or fatigue charging', async () => {
+    const { fatigueBudget, history } = createFatigueBudgetHarness();
+    const localCompanionId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const peerCompanionId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    const recordTurn = vi.fn();
+    const { runtime } = createFatigueRuntime({
+      fatigueBudget,
+      configOverrides: { multiCompanion: true, companionId: localCompanionId },
+      sessionManager: { recordTurn },
+    });
+    const message = createInboundIcpFatigueMessage({
+      id: 'icp-appraiser-no-reply',
+      localCompanionId,
+      peerCompanionId,
+      turnId: '77777777-7777-4777-8777-777777777780',
+    });
+    const finalizeDelivery = vi.fn(async () => undefined);
+
+    const response = await handleMessageForTurn(
+      runtime,
+      message,
+      { finalizeDelivery },
+      undefined,
+      {
+        source: 'participation_appraiser',
+        reasonCode: 'conversation_complete',
+        confidence: 0.93,
+        failClosed: false,
+      },
+    );
+
+    expect(response).toMatchObject({
+      content: '',
+      metadata: {
+        model: 'participation-appraiser',
+        noReply: {
+          disposition: 'intentional_no_reply',
+          source: 'participation_appraiser',
+          reason: 'conversation_complete',
+        },
+      },
+    });
+    expect(runtime.agent.prompt).not.toHaveBeenCalled();
+    expect(finalizeDelivery).toHaveBeenCalledWith(response);
+    expect(recordTurn).toHaveBeenCalledOnce();
+    expect(history.events).toHaveLength(0);
+    expect(parseIcpRecoveryResponse(response, {
+      label: 'Appraiser no-reply recovery',
+      expectedChannelId: message.channelId,
+      expectedSourceMessageId: message.id,
+    })).toEqual(response);
+  });
+
   it('re-authorizes recovered private artifacts from current sidecars without duplicate delivery or approval', async () => {
     const { fatigueBudget } = createFatigueBudgetHarness();
     const localCompanionId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';

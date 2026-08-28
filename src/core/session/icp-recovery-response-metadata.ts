@@ -74,7 +74,7 @@ function parseNoReply(
   const channelId = optionalString(raw.channelId, `${label}.channelId`);
   if (raw.schemaVersion !== 1
     || raw.disposition !== 'intentional_no_reply'
-    || raw.source !== 'response_control_tool'
+    || (raw.source !== 'response_control_tool' && raw.source !== 'participation_appraiser')
     || !turnId
     || turnId !== expected.turnId
     || (requestId !== undefined && requestId !== expected.requestId)
@@ -86,7 +86,7 @@ function parseNoReply(
   return {
     schemaVersion: 1,
     disposition: 'intentional_no_reply',
-    source: 'response_control_tool',
+    source: raw.source,
     auditId: requireString(raw.auditId, `${label}.auditId`),
     decidedAt: requireFinite(raw.decidedAt, `${label}.decidedAt`),
     turnId,

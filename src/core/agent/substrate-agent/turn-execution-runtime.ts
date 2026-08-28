@@ -119,6 +119,7 @@ import { parseIcpRecoveryResponse } from '../../session/icp-delivery-recovery.js
 import { ParentTurnContinuationBudgetExceededError } from '../turn-limits.js';
 import { parseTurnRecordBackgroundWorkHandoff } from '../background-work/types.js';
 import type { ForegroundWorkLease } from '../background-work/supervisor.js';
+import type { PrecomputedNoReplyDisposition } from '../../participation/types.js';
 import type {
   TurnAdmissionRuntime,
   TurnExecutionRuntime,
@@ -366,11 +367,47 @@ function buildSuppressedFatigueResponse(input: {
   };
 }
 
+function buildPrecomputedNoReplyResponse(input: {
+  message: SubstrateMessage;
+  startTime: number;
+  completedAt: number;
+  turnId: TurnID;
+  requestId: string;
+  disposition: PrecomputedNoReplyDisposition;
+}): AgentResponse {
+  const correlation = parseIcpConversationCorrelation(input.message.routing?.icpCorrelation);
+  return {
+    content: '',
+    channelId: input.message.channelId,
+    metadata: {
+      model: 'participation-appraiser',
+      inputTokens: 0,
+      outputTokens: 0,
+      durationMs: input.completedAt - input.startTime,
+      turnId: input.turnId,
+      requestId: input.requestId,
+      icpCorrelation: correlation,
+      noReply: {
+        schemaVersion: 1,
+        disposition: 'intentional_no_reply',
+        source: input.disposition.source,
+        auditId: `no-reply:${input.turnId}:participation-appraiser`,
+        decidedAt: input.completedAt,
+        turnId: input.turnId,
+        requestId: input.requestId,
+        channelId: input.message.channelId,
+        reason: input.disposition.reasonCode,
+      },
+    },
+  };
+}
+
 export async function handleMessageForTurn(
   runtime: TurnAdmissionRuntime,
   message: SubstrateMessage,
   deliveryLifecycle?: TurnDeliveryLifecycle,
   authenticatedConversationScope?: import('../../session/conversation-scope.js').ConversationScope,
+  precomputedNoReplyDisposition?: PrecomputedNoReplyDisposition,
 ): Promise<AgentResponse> {
   const transportReceivedAt = monotonicEpochNowMs();
   const transportReceivedTimestamp = Date.now();
@@ -425,6 +462,19 @@ export async function handleMessageForTurn(
     && message.routing?.icpCorrelation
     ? parseIcpConversationCorrelation(message.routing.icpCorrelation)
     : null;
+  if (precomputedNoReplyDisposition) {
+    if (!inboundIcpCorrelation
+      || recoveredResponse
+      || message.channelType !== 'companion'
+      || !deliveryLifecycle
+      || !/^[\w.-]{1,64}$/u.test(precomputedNoReplyDisposition.reasonCode)
+      || !Number.isFinite(precomputedNoReplyDisposition.confidence)
+      || precomputedNoReplyDisposition.confidence < 0
+      || precomputedNoReplyDisposition.confidence > 1
+      || typeof precomputedNoReplyDisposition.failClosed !== 'boolean') {
+      throw new Error('Precomputed no-reply disposition is not bound to an authenticated inbound ICP turn');
+    }
+  }
   const deterministicReplyTurnId = inboundIcpCorrelation
     ? deriveDeterministicTurnId([
         'icp-reply',
@@ -692,6 +742,70 @@ export async function handleMessageForTurn(
   }
 
   try {
+    if (precomputedNoReplyDisposition) {
+      if (!deliveryLifecycle) {
+        throw new Error('Precomputed ICP no-reply lost its required delivery lifecycle');
+      }
+      const completedAt = Date.now();
+      const noReplyResponse = buildPrecomputedNoReplyResponse({
+        message,
+        startTime,
+        completedAt,
+        turnId,
+        requestId,
+        disposition: precomputedNoReplyDisposition,
+      });
+      await deliveryLifecycle.finalizeDelivery(noReplyResponse);
+      durableDeliveryFinalized = true;
+      durableRecoveryResponsePersisted = true;
+      observability.emitObservedTurnStage('end', {
+        durationMs: completedAt - startTime,
+        ttftMs: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        replyDisposition: 'intentional_no_reply',
+      });
+      runtime.emitTelemetry('agent.no_reply.intentional', {
+        ...noReplyResponse.metadata.noReply!,
+        failClosed: precomputedNoReplyDisposition.failClosed,
+        confidence: precomputedNoReplyDisposition.confidence,
+        ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.no_reply.intentional'),
+      });
+      const noReplyTurnRecord = runtime.buildTurnRecord({
+        message,
+        turnSessionIdentity,
+        turnId,
+        requestId,
+        startedAt: startTime,
+        completedAt,
+        userSessionEntryId,
+        assistantSessionEntryId,
+        response: noReplyResponse,
+        turnMessages: [],
+        promptMode,
+        promptText: fullPrompt,
+        contextMessageCount,
+        memoryContextChars,
+        trustLevel,
+        speakerRole,
+        canonicalContactKey,
+        retrievalProvenanceRefs: [],
+        turnObservability: {
+          stages: observability.getObservedTurnStages(),
+          retrievals: observability.getObservedTurnRetrievals(),
+          ...(observability.getObservedTurnSnapshot()
+            ? { snapshot: observability.getObservedTurnSnapshot() }
+            : {}),
+        },
+      }, sessionReads);
+      await runtime.eventBus.emit('agent.turn.end', {
+        message,
+        response: noReplyResponse,
+        ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.end'),
+      });
+      await runtime.sessionManager.recordTurn(noReplyTurnRecord);
+      return noReplyResponse;
+    }
     const channelType = runtime.resolveChannelType(message);
     if (recoveredResponse?.metadata.fatiguePendingSpend) {
       if (!message.routing?.icpCorrelation

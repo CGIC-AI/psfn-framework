@@ -291,11 +291,13 @@ function seedMachineIntelligenceFatigueSpend(input: {
   fatigueBudget: FatigueBudgetPort;
   count: number;
   channelId?: string;
+  icpCorrelation?: IcpConversationCorrelation;
+  localCompanionId?: string;
   peerContactId?: string;
 }): void {
   for (let index = 0; index < input.count; index += 1) {
     const evaluation = input.fatigueBudget.evaluate({
-      localCompanionId: TEST_FLEET_COMPANION_ID,
+      localCompanionId: input.localCompanionId ?? TEST_FLEET_COMPANION_ID,
       channelId: input.channelId ?? 'ch1',
       peer: {
         contactId: input.peerContactId ?? 'contact-mi',
@@ -316,6 +318,7 @@ function seedMachineIntelligenceFatigueSpend(input: {
         overchargeLimit: 2,
       },
       timestampMs: Date.now() + index,
+      ...(input.icpCorrelation ? { correlation: { icpCorrelation: input.icpCorrelation } } : {}),
     });
     input.fatigueBudget.recordFinalDecision(evaluation);
   }
@@ -325,11 +328,13 @@ function seedMachineIntelligenceOverchargeSpend(input: {
   fatigueBudget: FatigueBudgetPort;
   count: number;
   channelId?: string;
+  icpCorrelation?: IcpConversationCorrelation;
+  localCompanionId?: string;
   peerContactId?: string;
 }): void {
   for (let index = 0; index < input.count; index += 1) {
     const evaluation = input.fatigueBudget.evaluate({
-      localCompanionId: TEST_FLEET_COMPANION_ID,
+      localCompanionId: input.localCompanionId ?? TEST_FLEET_COMPANION_ID,
       channelId: input.channelId ?? 'ch1',
       peer: {
         contactId: input.peerContactId ?? 'contact-mi',
@@ -350,6 +355,7 @@ function seedMachineIntelligenceOverchargeSpend(input: {
         overchargeLimit: 2,
       },
       timestampMs: Date.now() + 10 + index,
+      ...(input.icpCorrelation ? { correlation: { icpCorrelation: input.icpCorrelation } } : {}),
     });
     input.fatigueBudget.recordFinalDecision(
       createOverchargeFatigueEvaluation(evaluation, 'overcharge_recent_human_participation'),
@@ -1855,6 +1861,19 @@ describe('handleMessageForTurn fatigue enforcement', () => {
     return { runtime, buildContext };
   }
 
+  it('allows a private internal terminal turn without ICP correlation', async () => {
+    const { fatigueBudget } = createFatigueBudgetHarness();
+    const { runtime } = createFatigueRuntime({ fatigueBudget });
+
+    await expect(handleMessageForTurn(runtime, createMessage('social-disposition-test', {
+      channelId: 'internal:social-outreach:test',
+      channelType: 'terminal',
+      authorId: 'system:social-outreach',
+      authorName: 'Social Outreach',
+      routing: { source: 'terminal', privateTurnTrigger: true },
+    }))).resolves.toMatchObject({ channelId: 'internal:social-outreach:test' });
+  });
+
   function createInboundIcpFatigueMessage(input: {
     id: string;
     localCompanionId: string;
@@ -2155,6 +2174,43 @@ describe('handleMessageForTurn fatigue enforcement', () => {
       fatigueReasonCode: 'fatigue_exhausted',
     });
     expect(history.events).toHaveLength(0);
+  });
+
+  it('marks an already-exhausted ICP reply with the terminal fatigue reason', async () => {
+    const { fatigueBudget } = createFatigueBudgetHarness();
+    const localCompanionId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const peerCompanionId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    const message = createInboundIcpFatigueMessage({
+      id: 'inbound-icp-already-exhausted',
+      localCompanionId,
+      peerCompanionId,
+      turnId: '77777777-7777-4777-8777-777777777789',
+    });
+    const icpCorrelation = message.routing!.icpCorrelation!;
+    seedMachineIntelligenceFatigueSpend({
+      fatigueBudget,
+      count: 5,
+      icpCorrelation,
+      localCompanionId,
+    });
+    seedMachineIntelligenceOverchargeSpend({
+      fatigueBudget,
+      count: 2,
+      icpCorrelation,
+      localCompanionId,
+    });
+    const { runtime } = createFatigueRuntime({
+      fatigueBudget,
+      configOverrides: { multiCompanion: true, companionId: localCompanionId },
+    });
+
+    const response = await handleMessageForTurn(runtime, message);
+
+    expect(runtime.agent.prompt).not.toHaveBeenCalled();
+    expect(response.metadata.icpCorrelation).toMatchObject({
+      fatigueDecision: 'suppress',
+      fatigueReasonCode: 'fatigue_exhausted',
+    });
   });
 
   it('rebases a fresh directional budget onto pair-shared pressure before prompt assembly', async () => {

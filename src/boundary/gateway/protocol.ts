@@ -99,6 +99,7 @@ import type {
   IcpAvailabilityState,
   IcpAutonomyReasonCode,
   IcpConversationCorrelation,
+  IcpConversationEpisode,
 } from '../../shared/contracts/icp-autonomy.js';
 import type { TurnPerformanceEvent } from '../../shared/telemetry/turn-performance.js';
 import type {
@@ -1199,6 +1200,14 @@ export interface IcpPermitConsumeParams {
   companionId?: string;
 }
 
+export interface IcpEpisodeActivityEndParams {
+  conversationId: string;
+  reasonCode: Extract<IcpAutonomyReasonCode,
+    'fatigue_exhausted' | 'charge_pressure' | 'cost_hard_stop'
+      | 'inactivity_timeout' | 'conversation_ended'>;
+  companionId?: string;
+}
+
 export interface IcpPermitRevokeParams {
   permitId: string;
   expectedRevision: number;
@@ -1271,6 +1280,7 @@ export interface GatewayMethods {
   'companion.initiation.permit.issue': [IcpInitiationPermitIssueParams, IcpInitiationPermitIssueResult];
   'companion.initiation.permit.prepare_handoff': [IcpInitiationHandoffPrepareParams, IcpInitiationHandoffPrepareResult];
   'companion.initiation.permit.consume': [IcpPermitConsumeParams, IcpPermitConsumeResult];
+  'companion.episode.end_activity': [IcpEpisodeActivityEndParams, IcpConversationEpisode];
   'companion.initiation.permit.revoke': [IcpPermitRevokeParams, IcpPermitRevokeResult];
   'companion.initiation.permit.invalidate_for_self': [IcpPermitInvalidateSelfParams, { revokedCount: number }];
   'companion.dyad.list_open': [IcpOpenDyadListParams, import('./icp-autonomy-contract.js').IcpOpenDyadProjection[]];

@@ -15,12 +15,15 @@ import { createGatewayFleetChargePolicyResolver } from '../../gateway/fleet-char
 import {
   CERTIFICATION_COMPANION_A,
   CERTIFICATION_COMPANION_B,
+  CERTIFICATION_COMPANION_C,
   CERTIFICATION_DM_CHANNEL,
   CERTIFICATION_PRIVATE_ROOM,
   CERTIFICATION_ROLE_A,
   CERTIFICATION_ROLE_B,
+  CERTIFICATION_ROLE_C,
   CERTIFICATION_SCHEMA_A,
   CERTIFICATION_SCHEMA_B,
+  CERTIFICATION_SCHEMA_C,
 } from './constants.js';
 import {
   createIcpCertificationFixture,
@@ -93,6 +96,24 @@ interface DyadLifecycle {
   dyadId: string;
   lifecycleRevision: number;
   status: 'blocked' | 'closed' | 'open' | 'paused';
+}
+
+interface GardenIcpProjection {
+  candidates: Array<Record<string, unknown>>;
+  delivery: {
+    initiation: { delivered: number };
+    messages: { delivered: number; observed: number };
+  };
+  dyads: Array<{ dyadId: string; status: string }>;
+  episodes: Array<{
+    closeReasonCode?: string;
+    conversationId: string;
+    initiationSource: string;
+    status: string;
+  }>;
+  localCompanionId: string;
+  permits: Array<Record<string, unknown>>;
+  redaction: Record<string, string>;
 }
 
 async function readOnlyDyad(
@@ -191,6 +212,21 @@ async function waitForPeerMessages(
   throw new Error(`Timed out waiting for ${minimum} peer messages from ${authorId}`);
 }
 
+async function waitForTurnRecordCount(
+  agent: IcpCertificationProcessHarness['agents'][number],
+  minimum: number,
+): Promise<TurnRecordsSnapshot> {
+  const deadline = Date.now() + 20_000;
+  while (Date.now() < deadline) {
+    const snapshot = await agent.turnRecordsSnapshot(
+      CERTIFICATION_DM_CHANNEL,
+    ) as unknown as TurnRecordsSnapshot;
+    if (snapshot.records.length >= minimum) return snapshot;
+    await new Promise(resolveWait => setTimeout(resolveWait, 25));
+  }
+  throw new Error(`Timed out waiting for ${minimum} durable ICP turn records`);
+}
+
 async function waitForExtractionMarker(
   agent: IcpCertificationProcessHarness['agents'][number],
   marker: 'A' | 'B',
@@ -267,13 +303,15 @@ describe('ICP certification real process harness', () => {
     postgres = null;
   }, TIMEOUT_MS);
 
-  it('boots one real socket gateway and two schema-isolated SubstrateAgent child processes', async () => {
+  it('boots every roster companion as a schema-isolated SubstrateAgent and keeps dyad data private', async () => {
     if (!postgres) throw new Error('Postgres certification harness is unavailable');
     const { databaseUrl } = await postgres.createDatabase();
     fixture = createIcpCertificationFixture({ databaseUrl });
     processes = await startIcpCertificationProcessHarness({ databaseUrl, fixture });
 
-    const [readyA, readyB] = await Promise.all(processes.agents.map(agent => agent.ready()));
+    const [readyA, readyB, readyC] = await Promise.all(
+      processes.agents.map(agent => agent.ready()),
+    );
     expect(readyA).toMatchObject({
       companionId: CERTIFICATION_COMPANION_A,
       postgresSchema: CERTIFICATION_SCHEMA_A,
@@ -284,6 +322,15 @@ describe('ICP certification real process harness', () => {
       postgresSchema: CERTIFICATION_SCHEMA_B,
       runtimeClass: 'SubstrateAgent',
     });
+    expect(readyC).toMatchObject({
+      companionId: CERTIFICATION_COMPANION_C,
+      postgresSchema: CERTIFICATION_SCHEMA_C,
+      runtimeClass: 'SubstrateAgent',
+    });
+    const expectedPeerCount = fixture.companions.length - 1;
+    expect(readyA.peerContactIds).toHaveLength(expectedPeerCount);
+    expect(readyB.peerContactIds).toHaveLength(expectedPeerCount);
+    expect(readyC.peerContactIds).toHaveLength(expectedPeerCount);
     expect(readyA.peerContactId).not.toBe(readyB.peerContactId);
 
     const pool = createPostgresPool(databaseUrl, {
@@ -296,10 +343,11 @@ describe('ICP certification real process harness', () => {
         FROM information_schema.schemata
         WHERE schema_name = ANY($1::text[])
         ORDER BY schema_name
-      `, [[CERTIFICATION_SCHEMA_A, CERTIFICATION_SCHEMA_B, 'shared']]);
+      `, [[CERTIFICATION_SCHEMA_A, CERTIFICATION_SCHEMA_B, CERTIFICATION_SCHEMA_C, 'shared']]);
       expect(schemas.rows.map(row => row.schema_name)).toEqual([
         CERTIFICATION_SCHEMA_A,
         CERTIFICATION_SCHEMA_B,
+        CERTIFICATION_SCHEMA_C,
         'shared',
       ]);
       const isolatedContacts = await pool.query<{ schema_name: string; peer_count: string }>(`
@@ -308,12 +356,17 @@ describe('ICP certification real process harness', () => {
         UNION ALL
         SELECT $2::text AS schema_name, COUNT(*)::text AS peer_count
         FROM ${CERTIFICATION_SCHEMA_B}.contacts
+        UNION ALL
+        SELECT $3::text AS schema_name, COUNT(*)::text AS peer_count
+        FROM ${CERTIFICATION_SCHEMA_C}.contacts
         ORDER BY schema_name
-      `, [CERTIFICATION_SCHEMA_A, CERTIFICATION_SCHEMA_B]);
-      expect(isolatedContacts.rows).toEqual([
-        { schema_name: CERTIFICATION_SCHEMA_A, peer_count: '1' },
-        { schema_name: CERTIFICATION_SCHEMA_B, peer_count: '1' },
-      ]);
+      `, [CERTIFICATION_SCHEMA_A, CERTIFICATION_SCHEMA_B, CERTIFICATION_SCHEMA_C]);
+      expect(isolatedContacts.rows).toEqual(fixture.companions
+        .map(companion => ({
+          schema_name: companion.postgresSchema,
+          peer_count: String(expectedPeerCount),
+        }))
+        .sort((left, right) => left.schema_name.localeCompare(right.schema_name)));
       const tenantBoundaries = await pool.query<{
         extension_schema: string | null;
         login_is_member: boolean;
@@ -326,7 +379,7 @@ describe('ICP certification real process harness', () => {
           expected.role_name,
           pg_has_role(current_user, expected.role_name, 'MEMBER') AS login_is_member,
           extension_namespace.nspname AS extension_schema
-        FROM (VALUES ($1::text, $2::text), ($3::text, $4::text))
+        FROM (VALUES ($1::text, $2::text), ($3::text, $4::text), ($5::text, $6::text))
           AS expected(schema_name, role_name)
         JOIN pg_namespace namespace ON namespace.nspname = expected.schema_name
         JOIN pg_roles owner ON owner.oid = namespace.nspowner
@@ -338,6 +391,8 @@ describe('ICP certification real process harness', () => {
         CERTIFICATION_ROLE_A,
         CERTIFICATION_SCHEMA_B,
         CERTIFICATION_ROLE_B,
+        CERTIFICATION_SCHEMA_C,
+        CERTIFICATION_ROLE_C,
       ]);
       expect(tenantBoundaries.rows).toEqual([
         {
@@ -354,14 +409,29 @@ describe('ICP certification real process harness', () => {
           schema_name: CERTIFICATION_SCHEMA_B,
           schema_owner: CERTIFICATION_ROLE_B,
         },
+        {
+          extension_schema: 'extensions',
+          login_is_member: true,
+          role_name: CERTIFICATION_ROLE_C,
+          schema_name: CERTIFICATION_SCHEMA_C,
+          schema_owner: CERTIFICATION_ROLE_C,
+        },
       ]);
     } finally {
       await pool.end();
     }
 
-    const [agentA, agentB] = processes.agents;
+    const [agentA, agentB, agentC] = processes.agents;
     await agentB.publishAvailability('open_to_chat');
-    await expect(agentA.runFreeTimeNotification()).resolves.toMatchObject({
+    const bootDelivery = await agentA.runFreeTimeNotification();
+    if (bootDelivery.status !== 'consumed') {
+      throw new Error(JSON.stringify({
+        result: bootDelivery,
+        sender: await agentA.failureObservationSnapshot(),
+        recipient: await agentB.failureObservationSnapshot(),
+      }));
+    }
+    expect(bootDelivery).toMatchObject({
       status: 'consumed',
       deliveryDisposition: 'delivered',
       postTurnStatus: 'succeeded',
@@ -381,6 +451,12 @@ describe('ICP certification real process harness', () => {
       entry.role === 'user' && entry.authorId === CERTIFICATION_COMPANION_A
     ))).toBe(true);
     expect(JSON.stringify({ sender, recipient })).not.toContain('Private free_time certification motivation');
+    await expect(agentC.runDyadCertificationAction('list')).resolves.toEqual({ dyads: [] });
+    await expect(agentC.channelSnapshot(CERTIFICATION_DM_CHANNEL)).resolves.toEqual({
+      entries: [],
+      memories: [],
+      summaries: [],
+    });
 
     const compactions = await Promise.all([
       agentA.forceCompaction(CERTIFICATION_DM_CHANNEL),
@@ -399,12 +475,18 @@ describe('ICP certification real process harness', () => {
     expect(restartedB.summaries.length).toBeGreaterThan(0);
     expect(restartedA.entries.some(entry => entry.role === 'assistant')).toBe(true);
     expect(restartedB.entries.some(entry => entry.authorId === CERTIFICATION_COMPANION_A)).toBe(true);
+    await expect(restarted[2].runDyadCertificationAction('list')).resolves.toEqual({ dyads: [] });
+    await expect(restarted[2].channelSnapshot(CERTIFICATION_DM_CHANNEL)).resolves.toEqual({
+      entries: [],
+      memories: [],
+      summaries: [],
+    });
   }, TIMEOUT_MS);
 
   it('requires first-contact consent and a permit, then continues the open dyad without one', async () => {
     if (!postgres) throw new Error('Postgres certification harness is unavailable');
     const { databaseUrl } = await postgres.createDatabase();
-    fixture = createIcpCertificationFixture({ databaseUrl, fatigueProfile: 'room_continuity' });
+    fixture = createIcpCertificationFixture({ databaseUrl });
     processes = await startIcpCertificationProcessHarness({ databaseUrl, fixture });
 
     const [agentA, agentB] = processes.agents;
@@ -428,12 +510,119 @@ describe('ICP certification real process harness', () => {
     const dyad = await readOnlyDyad(agentA);
     expect(dyad.status).toBe('open');
 
+    const gardenA = await agentA.gardenProjection() as unknown as GardenIcpProjection;
+    expect(gardenA).toMatchObject({
+      localCompanionId: CERTIFICATION_COMPANION_A,
+      redaction: {
+        privateMotivation: 'withheld',
+        peerContactIds: 'withheld',
+        permitBearerIds: 'withheld',
+        transcripts: 'not_collected',
+      },
+      delivery: { initiation: { delivered: 1 } },
+    });
+    expect(gardenA.dyads).toEqual([
+      expect.objectContaining({ dyadId: dyad.dyadId, status: 'open' }),
+    ]);
+    expect(JSON.stringify(gardenA)).not.toContain('Private free-time certification motivation');
+    expect(gardenA.candidates.every(candidate => (
+      !('reasonSummary' in candidate) && !('peerContactId' in candidate)
+    ))).toBe(true);
+    expect(gardenA.permits.every(permit => !('permitId' in permit))).toBe(true);
+
+    const gardenC = await processes.agents[2].gardenProjection() as unknown as GardenIcpProjection;
+    expect(gardenC.localCompanionId).toBe(CERTIFICATION_COMPANION_C);
+    expect(gardenC.dyads).toEqual([]);
+    expect(gardenC.episodes).toEqual([]);
+    expect(gardenC.candidates).toEqual([]);
+
     await expect(agentA.runDyadCertificationAction('continue', { dyadId: dyad.dyadId }))
       .resolves.toMatchObject({ disposition: 'delivered', deliveryId: expect.any(String) });
     const recipient = await waitForPeerMessages(agentB, CERTIFICATION_COMPANION_A, 2);
     expect(recipient.entries.filter(entry => (
       entry.role === 'user' && entry.authorId === CERTIFICATION_COMPANION_A
     ))).toHaveLength(2);
+    const gardenAfterContinuation = await agentA.gardenProjection() as unknown as GardenIcpProjection;
+    expect(gardenAfterContinuation.episodes).toHaveLength(2);
+    expect(new Set(gardenAfterContinuation.episodes.map(episode => episode.conversationId)).size)
+      .toBe(2);
+    expect(gardenAfterContinuation.dyads).toEqual([
+      expect.objectContaining({ dyadId: dyad.dyadId, status: 'open' }),
+    ]);
+  }, TIMEOUT_MS);
+
+  it('routes a durable intention into first contact and a felt impulse into the same open dyad', async () => {
+    if (!postgres) throw new Error('Postgres certification harness is unavailable');
+    const { databaseUrl } = await postgres.createDatabase();
+    fixture = createIcpCertificationFixture({ databaseUrl, fatigueProfile: 'room_continuity' });
+    processes = await startIcpCertificationProcessHarness({ databaseUrl, fixture });
+
+    const [agentA, agentB] = processes.agents;
+    await agentB.publishAvailability('open_to_chat');
+    processes.queueChatDisposition('intentional_no_reply', CERTIFICATION_COMPANION_B);
+    await expect(agentA.runIntentionNotification()).resolves.toMatchObject({
+      kind: 'submitted',
+      result: {
+        status: 'consumed',
+        deliveryDisposition: 'delivered',
+      },
+    });
+    const dyad = await readOnlyDyad(agentA);
+    const before = await waitForPeerMessages(agentB, CERTIFICATION_COMPANION_A, 1);
+    const turnsBeforeFeltImpulse = await waitForTurnRecordCount(agentB, 1);
+    expect(turnsBeforeFeltImpulse.records.at(-1)?.hasAssistantMessage).toBe(false);
+
+    processes.queueChatDisposition('intentional_no_reply', CERTIFICATION_COMPANION_B);
+    await expect(agentA.runFeltImpulseContinuation()).resolves.toMatchObject({
+      destinationKind: 'open_companion_dyad',
+      outcome: 'delivered',
+    });
+    const after = await waitForPeerMessages(agentB, CERTIFICATION_COMPANION_A, 2);
+    const turnsAfterFeltImpulse = await waitForTurnRecordCount(agentB, 2);
+    expect(turnsAfterFeltImpulse.records.at(-1)?.hasAssistantMessage).toBe(false);
+    expect(after.entries.length).toBeGreaterThan(before.entries.length);
+
+    const garden = await agentA.gardenProjection() as unknown as GardenIcpProjection;
+    expect(garden.dyads).toEqual([
+      expect.objectContaining({ dyadId: dyad.dyadId, status: 'open' }),
+    ]);
+    expect(garden.episodes.some(episode => episode.initiationSource === 'felt_impulse')).toBe(true);
+    expect(JSON.stringify(garden)).not.toContain(
+      'Send one ordinary felt-impulse continuation to the existing peer dyad.',
+    );
+  }, TIMEOUT_MS);
+
+  it('records an intentional no-response without closing the dyad or starting a reply loop', async () => {
+    if (!postgres) throw new Error('Postgres certification harness is unavailable');
+    const { databaseUrl } = await postgres.createDatabase();
+    fixture = createIcpCertificationFixture({ databaseUrl, fatigueProfile: 'room_continuity' });
+    processes = await startIcpCertificationProcessHarness({ databaseUrl, fixture });
+
+    const [agentA, agentB] = processes.agents;
+    await agentB.publishAvailability('open_to_chat');
+    processes.queueChatDisposition('intentional_no_reply', CERTIFICATION_COMPANION_B);
+    await agentA.runFreeTimeNotification();
+    const dyad = await readOnlyDyad(agentA);
+    const turns = await waitForTurnRecordCount(agentB, 1);
+    const senderBefore = await agentA.channelSnapshot(
+      CERTIFICATION_DM_CHANNEL,
+    ) as unknown as ChannelSnapshot;
+    const peerReplies = senderBefore.entries.filter(entry => (
+      entry.role === 'user' && entry.authorId === CERTIFICATION_COMPANION_B
+    ));
+    expect(turns.records.at(-1)).toMatchObject({
+      status: 'completed',
+      hasAssistantMessage: false,
+      correlation: {
+        localCompanionId: CERTIFICATION_COMPANION_B,
+        peerCompanionId: CERTIFICATION_COMPANION_A,
+      },
+    });
+    expect(peerReplies).toHaveLength(0);
+    await expect(readOnlyDyad(agentA)).resolves.toMatchObject({
+      dyadId: dyad.dyadId,
+      status: 'open',
+    });
   }, TIMEOUT_MS);
 
   it('fences queued sends after close/block and reopens the same dyad only through a permit', async () => {
@@ -461,6 +650,9 @@ describe('ICP certification real process harness', () => {
       action: 'close',
     }) as unknown as DyadLifecycle;
     expect(closed).toMatchObject({ status: 'closed' });
+    await expect(agentA.gardenProjection()).resolves.toMatchObject({
+      dyads: [expect.objectContaining({ dyadId: opened.dyadId, status: 'closed' })],
+    });
     await expect(agentA.runDyadCertificationAction('deliver_prepared'))
       .rejects.toThrow(/closed|lifecycle|fenced|unavailable/iu);
 
@@ -470,6 +662,9 @@ describe('ICP certification real process harness', () => {
       action: 'block',
     }) as unknown as DyadLifecycle;
     expect(blocked).toMatchObject({ status: 'blocked' });
+    await expect(agentB.gardenProjection()).resolves.toMatchObject({
+      dyads: [expect.objectContaining({ dyadId: opened.dyadId, status: 'blocked' })],
+    });
     await expect(agentA.runDyadCertificationAction('continue', { dyadId: opened.dyadId }))
       .rejects.toThrow(/open dyad is unavailable/iu);
     const unblocked = await agentB.runDyadCertificationAction('transition', {
@@ -490,6 +685,9 @@ describe('ICP certification real process harness', () => {
     const reopened = await readOnlyDyad(agentA);
     expect(reopened).toMatchObject({ dyadId: opened.dyadId, status: 'open' });
     expect(reopened.lifecycleRevision).toBeGreaterThan(unblocked.lifecycleRevision);
+    await expect(agentA.gardenProjection()).resolves.toMatchObject({
+      dyads: [expect.objectContaining({ dyadId: opened.dyadId, status: 'open' })],
+    });
   }, TIMEOUT_MS);
 
   it('relays only the bounded human capsule and cannot exfiltrate a sibling transcript', async () => {
@@ -636,24 +834,25 @@ describe('ICP certification real process harness', () => {
         FROM ${CERTIFICATION_SCHEMA_B}.contacts AS contact
         INNER JOIN ${CERTIFICATION_SCHEMA_B}.contact_channel_ids AS identity
           ON identity.contact_id = contact.id AND identity.channel = 'companion'
-        ORDER BY schema_name
+        ORDER BY schema_name, companion_user_id
       `, [CERTIFICATION_SCHEMA_A, CERTIFICATION_SCHEMA_B]);
-      expect(trust.rows).toEqual([
-        {
-          schema_name: CERTIFICATION_SCHEMA_A,
-          companion_user_id: CERTIFICATION_COMPANION_B,
-          trust_level: 'trusted',
-          relationship_type: 'ai_companion',
-          is_machine_intelligence: true,
-        },
-        {
-          schema_name: CERTIFICATION_SCHEMA_B,
-          companion_user_id: CERTIFICATION_COMPANION_A,
-          trust_level: 'trusted',
-          relationship_type: 'ai_companion',
-          is_machine_intelligence: true,
-        },
-      ]);
+      const exercisedSchemas = new Set([CERTIFICATION_SCHEMA_A, CERTIFICATION_SCHEMA_B]);
+      const companionRoster = fixture.companions;
+      expect(trust.rows).toEqual(companionRoster
+        .filter(companion => exercisedSchemas.has(companion.postgresSchema))
+        .flatMap(companion => companionRoster
+          .filter(peer => peer.companionId !== companion.companionId)
+          .map(peer => ({
+            schema_name: companion.postgresSchema,
+            companion_user_id: peer.companionId,
+            trust_level: 'trusted',
+            relationship_type: 'ai_companion',
+            is_machine_intelligence: true,
+          })))
+        .sort((left, right) => (
+          left.schema_name.localeCompare(right.schema_name)
+          || left.companion_user_id.localeCompare(right.companion_user_id)
+        )));
       const schemaMemories = await pool.query<{ schema_name: string; text: string }>(`
         SELECT $1::text AS schema_name, text
         FROM ${CERTIFICATION_SCHEMA_A}.l2_memories
@@ -942,6 +1141,15 @@ describe('ICP certification real process harness', () => {
     ));
     expect(suppressedTurns, JSON.stringify(exhaustedTurns.records)).not.toHaveLength(0);
     expect(suppressedTurns.every(record => record.status === 'completed')).toBe(true);
+    const fatigueDyad = await readOnlyDyad(exhaustedAgent);
+    expect(fatigueDyad.status).toBe('open');
+    const fatigueGarden = await exhaustedAgent.gardenProjection() as unknown as GardenIcpProjection;
+    expect(fatigueGarden.dyads).toEqual([
+      expect.objectContaining({ dyadId: fatigueDyad.dyadId, status: 'open' }),
+    ]);
+    expect(fatigueGarden.episodes.some(episode => (
+      episode.status === 'ended' && episode.closeReasonCode === 'fatigue_exhausted'
+    )), JSON.stringify(fatigueGarden.episodes)).toBe(true);
     const providerRequestsAfterConversation = await waitForModelRequestQuiescence(processes);
 
     await expect(exhaustedAgent.runRecursiveWeightedThoughtScheduler(rootInitiationId)).resolves

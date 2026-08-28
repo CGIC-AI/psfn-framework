@@ -1,4 +1,9 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import {
+  CERTIFICATION_COMPANION_A,
+  CERTIFICATION_COMPANION_B,
+  CERTIFICATION_COMPANION_C,
+} from './constants.js';
 
 interface OpenAIMessage {
   content?: unknown;
@@ -12,6 +17,8 @@ interface OpenAIRequest {
   stream?: boolean;
 }
 
+export type IcpCertificationChatDisposition = 'normal' | 'intentional_no_reply';
+
 export interface IcpCertificationModelRequest {
   model: string;
 }
@@ -19,11 +26,56 @@ export interface IcpCertificationModelRequest {
 export interface IcpCertificationModelServer {
   baseUrl: string;
   readonly requests: readonly IcpCertificationModelRequest[];
+  queueChatDisposition(
+    disposition: IcpCertificationChatDisposition,
+    companionId?: string,
+  ): void;
   queueConsentDecision(decision: IcpCertificationConsentDecision): void;
   stop(): Promise<void>;
 }
 
 export type IcpCertificationConsentDecision = 'send' | 'defer' | 'decline';
+
+const COMPANION_PROMPT_MARKERS = new Map<string, readonly string[]>([
+  [CERTIFICATION_COMPANION_A, [
+    'you are fixture alpha.',
+    'fixture alpha is a newly bootstrapped companion instance awaiting onboarding',
+  ]],
+  [CERTIFICATION_COMPANION_B, [
+    'you are fixture beta.',
+    'fixture beta is a newly bootstrapped companion instance awaiting onboarding',
+  ]],
+  [CERTIFICATION_COMPANION_C, [
+    'you are fixture gamma.',
+    'fixture gamma is a newly bootstrapped companion instance awaiting onboarding',
+  ]],
+]);
+
+function resolvePromptCompanionId(prompt: string): string | undefined {
+  let resolved: { companionId: string; offset: number } | undefined;
+  for (const [companionId, markers] of COMPANION_PROMPT_MARKERS) {
+    for (const marker of markers) {
+      const offset = prompt.indexOf(marker);
+      if (offset >= 0 && (!resolved || offset < resolved.offset)) {
+        resolved = { companionId, offset };
+      }
+    }
+  }
+  return resolved?.companionId;
+}
+
+function queuedChatDisposition(
+  queue: Array<{ companionId?: string; disposition: IcpCertificationChatDisposition }>,
+  prompt: string,
+): IcpCertificationChatDisposition {
+  const promptCompanionId = resolvePromptCompanionId(prompt);
+  const index = queue.findIndex(entry => {
+    if (!entry.companionId) return true;
+    return entry.companionId === promptCompanionId;
+  });
+  if (index < 0) return 'normal';
+  return queue.splice(index, 1)[0]!.disposition;
+}
 
 function normalizeText(value: unknown): string {
   if (typeof value === 'string') return value;
@@ -159,9 +211,56 @@ function sendStreamingResponse(
   response.end('data: [DONE]\n\n');
 }
 
+function sendStreamingNoReplyResponse(response: ServerResponse, model: string): void {
+  const id = `chatcmpl-certification-${Date.now()}`;
+  response.writeHead(200, {
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive',
+    'Content-Type': 'text/event-stream',
+  });
+  response.write(`data: ${JSON.stringify({
+    id,
+    object: 'chat.completion.chunk',
+    created: Math.floor(Date.now() / 1_000),
+    model,
+    choices: [{
+      index: 0,
+      delta: {
+        role: 'assistant',
+        tool_calls: [{
+          index: 0,
+          id: `call-certification-no-reply-${Date.now()}`,
+          type: 'function',
+          function: {
+            name: 'response_control',
+            arguments: JSON.stringify({
+              action: 'no_reply',
+              reason: 'Certification intentional no-response.',
+            }),
+          },
+        }],
+      },
+      finish_reason: null,
+    }],
+  })}\n\n`);
+  response.write(`data: ${JSON.stringify({
+    id,
+    object: 'chat.completion.chunk',
+    created: Math.floor(Date.now() / 1_000),
+    model,
+    choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }],
+    usage: { prompt_tokens: 128, completion_tokens: 8, total_tokens: 136 },
+  })}\n\n`);
+  response.end('data: [DONE]\n\n');
+}
+
 export async function startIcpCertificationModelServer(): Promise<IcpCertificationModelServer> {
   const requests: IcpCertificationModelRequest[] = [];
   const consentDecisions: IcpCertificationConsentDecision[] = [];
+  const chatDispositions: Array<{
+    companionId?: string;
+    disposition: IcpCertificationChatDisposition;
+  }> = [];
   // eslint-disable-next-line @typescript-eslint/no-misused-promises -- Callback API intentionally receives this Promise-returning lifecycle handler.
   const server = createServer(async (request, response) => {
     try {
@@ -179,6 +278,9 @@ export async function startIcpCertificationModelServer(): Promise<IcpCertificati
       const consentDecision = prompt.includes('private consent moment')
         ? (consentDecisions.shift() ?? 'send')
         : 'send';
+      const chatDisposition = !extraction && !prompt.includes('private consent moment')
+        ? queuedChatDisposition(chatDispositions, prompt)
+        : 'normal';
       const content = extraction
         ? renderExtractionXml(prompt)
         : renderChatResponse(prompt, consentDecision);
@@ -187,6 +289,10 @@ export async function startIcpCertificationModelServer(): Promise<IcpCertificati
         : undefined;
       const outputTokens = extraction ? 88 : Math.min(36, requestedOutputTokens ?? 36);
       if (body.stream === true) {
+        if (chatDisposition === 'intentional_no_reply') {
+          sendStreamingNoReplyResponse(response, model);
+          return;
+        }
         sendStreamingResponse(response, model, content, outputTokens);
         return;
       }
@@ -228,6 +334,9 @@ export async function startIcpCertificationModelServer(): Promise<IcpCertificati
     baseUrl: `http://127.0.0.1:${address.port}/v1`,
     get requests() {
       return requests;
+    },
+    queueChatDisposition(disposition, companionId) {
+      chatDispositions.push({ disposition, ...(companionId ? { companionId } : {}) });
     },
     queueConsentDecision(decision) {
       consentDecisions.push(decision);

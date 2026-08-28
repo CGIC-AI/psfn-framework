@@ -60,9 +60,11 @@ import { createAgentFleetPostureProvider } from '../../agent/fleet-posture.js';
 import { startIcpRuntimeAvailability } from '../../agent/icp-runtime-availability.js';
 import { createHumanRelayIntentCapsule } from '../../../core/icp/human-relay-capsule.js';
 import type { IcpDyadContinuationAuthorization } from '../../../boundary/gateway/icp-autonomy-contract.js';
+import type { SocialImpulseOutreachRuntime } from '../../../core/emotion/social-impulse-outreach.js';
+import { registerSocialImpulseOutreachLane } from '../../agent/startup/social-impulse-outreach-lane.js';
 type AgentProcessCommand = {
   id: number;
-  type: 'background_work_snapshot' | 'ping' | 'shutdown' | 'snapshot';
+  type: 'background_work_snapshot' | 'garden_projection' | 'ping' | 'shutdown' | 'snapshot';
 } | {
   id: number;
   type: 'publish_availability';
@@ -74,7 +76,9 @@ type AgentProcessCommand = {
   id: number;
   type: 'enter_private_room' | 'run_free_time_notification'
     | 'fail_next_companion_turn' | 'failure_observation_snapshot'
-    | 'run_room_weighted_thought_scheduler' | 'run_weighted_thought_scheduler';
+    | 'run_felt_impulse_continuation' | 'run_intention_notification'
+    | 'run_room_weighted_thought_scheduler'
+    | 'run_weighted_thought_scheduler';
 } | {
   action: 'continue' | 'deliver_prepared' | 'list' | 'prepare' | 'relay_probe' | 'transition';
   id: number;
@@ -113,11 +117,14 @@ interface AgentProcessReply {
 }
 
 const CERTIFICATION_CONTACT_FIXTURE_ACTOR = 'operator:e2e:icp-certification';
+let lastCertificationError: { message: string; metadata?: Record<string, unknown> } | undefined;
 
 const logger = {
   info: (_message: string, _meta?: Record<string, unknown>) => undefined,
   warn: (_message: string, _meta?: Record<string, unknown>) => undefined,
-  error: (_message: string, _meta?: Record<string, unknown>) => undefined,
+  error: (message: string, metadata?: Record<string, unknown>) => {
+    lastCertificationError = { message, ...(metadata ? { metadata } : {}) };
+  },
 };
 
 function reply(message: AgentProcessReply): void {
@@ -173,20 +180,19 @@ async function main(): Promise<void> {
   });
   const contactStore = persistence.contactStore;
   if (!contactStore) throw new Error('ICP certification agent requires the Postgres contact store');
-  const peer = startup.config.companionFleet?.companions.find(
+  const peers = startup.config.companionFleet?.companions.filter(
     candidate => candidate.companionId !== companionId,
-  );
-  if (startup.config.multiCompanion && !peer) {
-    throw new Error('ICP certification agent requires exactly one peer fixture');
+  ) ?? [];
+  if (startup.config.multiCompanion && peers.length === 0) {
+    throw new Error('ICP certification agent requires at least one peer fixture');
   }
-  const peerContact = peer
-    ? await contactStore.resolveChannelIdentity(
+  const peerContacts = new Map<string, Awaited<ReturnType<typeof contactStore.resolveChannelIdentity>>>();
+  for (const peer of peers) {
+    const peerContact = await contactStore.resolveChannelIdentity(
         'companion',
         peer.companionId,
         `Certification peer ${peer.companionId.slice(0, 4)}`,
-      )
-    : undefined;
-  if (peerContact) {
+      );
     const machineIntelligenceApplied = await contactStore.setMachineIntelligence(
       peerContact.id,
       true,
@@ -211,7 +217,10 @@ async function main(): Promise<void> {
     if (!relationshipApplied) {
       throw new Error(`ICP certification failed to establish AI companion relationship for ${peerContact.id}`);
     }
+    peerContacts.set(peer.companionId, peerContact);
   }
+  const peer = peers[0];
+  const peerContact = peer ? peerContacts.get(peer.companionId) : undefined;
 
   const llmProvider = createLLMProviderPort(gateway);
   const sessionRuntime = await composeSessionRuntimeAsync({
@@ -333,6 +342,7 @@ async function main(): Promise<void> {
   if (!intentionRuntime || !weightedThoughtStore) {
     throw new Error('ICP certification agent requires durable intention stores');
   }
+  let socialImpulseOutreachRuntime: SocialImpulseOutreachRuntime | undefined;
   const sourceWiring = wireIcpInitiationSources({
     config: startup.schedulerConfig.icpAutonomy,
     localCompanionId: companionId,
@@ -346,12 +356,40 @@ async function main(): Promise<void> {
     pendingFollowUpStore: intentionRuntime.pendingFollowUpStore,
     concernStore: intentionRuntime.concernStore,
     socialDesireStore: persistence.socialDesireStore,
+    handleFeltImpulse: async signal => {
+      if (!socialImpulseOutreachRuntime) {
+        throw new Error('Certification social impulse outreach runtime is not composed');
+      }
+      await socialImpulseOutreachRuntime.onImpulse(signal);
+    },
+    peerDirectory: autonomy,
     presenceEnabled: false,
     contactStore,
     weightedThoughtStore,
     lifecycleConfig: startup.schedulerConfig.weightedThoughtOutreach.lifecycle,
   });
-  const { runtimeEnablement, sourceRuntime, weightedThoughtCandidateAdapter } = sourceWiring;
+  const {
+    intentionCandidateAdapter,
+    runtimeEnablement,
+    sourceRuntime,
+    weightedThoughtCandidateAdapter,
+  } = sourceWiring;
+  socialImpulseOutreachRuntime = registerSocialImpulseOutreachLane({
+    companionId,
+    companionName: identity.card.data.name,
+    companionDataDir: startup.pathSnapshot.companionDataDir,
+    store: persistence.socialImpulseOutreachStore,
+    getMode: () => 'on',
+    agentLoop: agent,
+    contactStore,
+    sessionStore: sessionRuntime.sessionStore,
+    icpAutonomy: autonomy,
+    ...(sourceRuntime ? { icpInitiation: sourceRuntime } : {}),
+    capabilityRuntime: startup.capabilityRuntime,
+    availability: {
+      snapshot: () => ({ state: 'available', sinceMs: 0, revision: 0 }),
+    },
+  }).runtime;
   const scheduler = new Scheduler(startup.eventBus, { tickIntervalMs: 10 }, {
     eligibilityGate: startup.eligibilityGate,
   });
@@ -479,6 +517,7 @@ async function main(): Promise<void> {
     result: {
       companionId,
       ...(peerContact ? { peerContactId: peerContact.id } : {}),
+      peerContactIds: [...peerContacts.values()].map(contact => contact.id),
       postgresSchema: startup.config.postgresSchema,
       runtimeClass: agent.constructor.name,
       multiCompanion: startup.config.multiCompanion,
@@ -510,6 +549,13 @@ async function main(): Promise<void> {
           reply({ id: raw.id, ok: true, result: { pending } });
           return;
         }
+        if (raw.type === 'garden_projection') {
+          if (!gardenIcpAutonomy) {
+            throw new Error('Garden ICP projection requires multi-companion mode');
+          }
+          reply({ id: raw.id, ok: true, result: await gardenIcpAutonomy.getData() });
+          return;
+        }
         if (raw.type === 'publish_availability') {
           const current = await autonomy.readOwnAvailability();
           const lease = await autonomy.publishOwnAvailability({
@@ -530,7 +576,11 @@ async function main(): Promise<void> {
         }
         if (raw.type === 'failure_observation_snapshot') {
           await agent.waitForIdle();
-          reply({ id: raw.id, ok: true, result: { failureObservationCount } });
+          reply({
+            id: raw.id,
+            ok: true,
+            result: { failureObservationCount, lastCertificationError },
+          });
           return;
         }
         if (raw.type === 'enter_private_room') {
@@ -669,9 +719,108 @@ async function main(): Promise<void> {
             result: {
               ...projectCandidate(candidate),
               postTurnStatus: status?.state,
+              ...(status?.detail ? { postTurnDetail: status.detail } : {}),
               ...(senderExchange ? { senderExchange } : {}),
             },
           });
+          return;
+        }
+        if (raw.type === 'run_felt_impulse_continuation') {
+          if (!peerContact) {
+            throw new Error('Felt-impulse certification requires an assembled companion lane');
+          }
+          const firedAtMs = Date.now();
+          const correlationId = `felt-impulse:would_message:${firedAtMs}`;
+          await startup.eventBus.emitRequired('emotion.emosim.proactivity.impulse', {
+            schemaVersion: 1,
+            impulseVersion: 'emosim-proactivity.impulse.v1',
+            kind: 'would_message',
+            companionId,
+            source: { model: 'certification-derived-model', version: '1.0.0' },
+            lineage: {
+              schemaVersion: 1,
+              inputId: `certification-input-${firedAtMs}`,
+              projectionVersion: 'certification-projection-v1',
+              privacyClass: 'content_redacted',
+              rawContentRedacted: true,
+            },
+            firstCrossingMs: firedAtMs,
+            firedAtMs,
+            thresholdProfile: {
+              profileId: 'would-message-v1',
+              socialNeedThreshold: 0.7,
+              attachmentIntensityThreshold: 0.5,
+              sustainMs: 1_800_000,
+              cooldownMs: 21_600_000,
+            },
+            dedupeKey: correlationId,
+            correlationId,
+            confidence: 0.82,
+            availability: 'available',
+            authority: 'qualified_source_fire',
+          });
+          const inspected = await socialImpulseOutreachRuntime.inspect(correlationId);
+          const destination = inspected.destinations.find(candidate => (
+            candidate.kind === 'open_companion_dyad'
+            && candidate.contactId === peerContact.id
+          ));
+          if (!destination) {
+            throw new Error('Felt-impulse certification could not resolve the existing peer dyad');
+          }
+          const chosen = await socialImpulseOutreachRuntime.choose({
+            opportunityId: correlationId,
+            disposition: 'contact-companion',
+            destinationId: destination.destinationId,
+            intent: 'Send one ordinary felt-impulse continuation to the existing peer dyad.',
+          });
+          reply({
+            id: raw.id,
+            ok: true,
+            result: {
+              opportunityId: correlationId,
+              destinationKind: destination.kind,
+              outcome: chosen.outcome,
+              ...(chosen.reasonCode ? { reasonCode: chosen.reasonCode } : {}),
+            },
+          });
+          return;
+        }
+        if (raw.type === 'run_intention_notification') {
+          if (!intentionCandidateAdapter || !peer || !peerContact) {
+            throw new Error('Intention certification requires an assembled companion lane');
+          }
+          const sourceMessageId = randomUUID();
+          const followUp = await intentionRuntime.pendingFollowUpStore.enqueue({
+            content: 'Send one ordinary durable intention notification to this companion.',
+            priority: 'medium',
+            timing: 'soon',
+            channelId: composeCompanionDmChannelId(companionId, peer.companionId),
+            channelType: 'companion',
+            authorId: companionId,
+            authorName: identity.card.data.name,
+            contactId: peerContact.id,
+            sourceMessageId,
+            contextSummary: 'Certification of the durable intention-to-ICP source path.',
+            wakeConditions: ['background_recheck'],
+          });
+          if (!followUp) {
+            throw new Error('Intention certification follow-up was rejected by its durable owner');
+          }
+          const result = await intentionCandidateAdapter.submit({
+            action: {
+              id: randomUUID(),
+              dedupeKey: `certification-intention:${followUp.id}`,
+              sourceMessageId,
+            },
+            payload: {
+              channelId: composeCompanionDmChannelId(companionId, peer.companionId),
+              channelType: 'companion',
+              content: followUp.content,
+              reason: 'Certification durable intention notification.',
+              pendingFollowUpId: followUp.id,
+            },
+          });
+          reply({ id: raw.id, ok: true, result });
           return;
         }
         if (raw.type === 'run_dyad_certification_action') {
@@ -1092,6 +1241,8 @@ async function main(): Promise<void> {
         icpRuntimeAvailability?.stop();
         unregisterInitiationCandidates();
         sourceWiring.unregisterCoLocationThoughtAdapter();
+        sourceWiring.unregisterFeltImpulseAdapter();
+        await sourceWiring.stopCandidateLifecycleSupervisor();
         await scheduler.stop();
         await backgroundScheduler.stop();
         await agent.stopBackgroundWork();

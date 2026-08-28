@@ -1152,9 +1152,20 @@ export const POSTGRES_INTENTION_MIGRATIONS = [
     CHECK (timing IN ('immediate', 'soon', 'scheduled')),
     CHECK ((dampened_at IS NULL) = (dampening_reason IS NULL)),
     CHECK (activated_at IS NULL OR dampened_at IS NULL),
-    CHECK (channel_type IN ('terminal', 'api', 'discord', 'telegram', 'psfn-amica'))
+    CHECK (channel_type IN (
+      'discord', 'terminal', 'api', 'telegram', 'multica', 'buzz',
+      'psfn-amica', 'companion', 'companion-ui'
+    ))
   );
   `,
+  `ALTER TABLE intention_pending_follow_ups
+    DROP CONSTRAINT IF EXISTS intention_pending_follow_ups_channel_type_check;`,
+  `ALTER TABLE intention_pending_follow_ups
+    ADD CONSTRAINT intention_pending_follow_ups_channel_type_check
+    CHECK (channel_type IN (
+      'discord', 'terminal', 'api', 'telegram', 'multica', 'buzz',
+      'psfn-amica', 'companion', 'companion-ui'
+    ));`,
   `ALTER TABLE intention_pending_follow_ups ADD COLUMN IF NOT EXISTS context_summary TEXT;`,
   `ALTER TABLE intention_pending_follow_ups ADD COLUMN IF NOT EXISTS wake_conditions TEXT;`,
   `ALTER TABLE intention_pending_follow_ups ADD COLUMN IF NOT EXISTS origin_icp_root_initiation_id UUID;`,
@@ -1597,7 +1608,10 @@ export const POSTGRES_SCHEDULED_PROMPT_MIGRATIONS = [
     delivery_channel_id TEXT,
     completed_at TEXT,
     CHECK (source IN ('schedule_tool', 'intention_appraisal')),
-    CHECK (channel_type IN ('discord', 'terminal', 'api', 'telegram', 'psfn-amica')),
+    CHECK (channel_type IN (
+      'discord', 'terminal', 'api', 'telegram', 'multica', 'buzz',
+      'psfn-amica', 'companion', 'companion-ui'
+    )),
     CHECK (status IN ('pending', 'completed')),
     CHECK (
       (status = 'pending' AND completed_at IS NULL)
@@ -1605,6 +1619,14 @@ export const POSTGRES_SCHEDULED_PROMPT_MIGRATIONS = [
     )
   );
   `,
+  `ALTER TABLE scheduler_scheduled_prompts
+    DROP CONSTRAINT IF EXISTS scheduler_scheduled_prompts_channel_type_check;`,
+  `ALTER TABLE scheduler_scheduled_prompts
+    ADD CONSTRAINT scheduler_scheduled_prompts_channel_type_check
+    CHECK (channel_type IN (
+      'discord', 'terminal', 'api', 'telegram', 'multica', 'buzz',
+      'psfn-amica', 'companion', 'companion-ui'
+    ));`,
   `
   ALTER TABLE scheduler_scheduled_prompts
     DROP CONSTRAINT IF EXISTS scheduler_scheduled_prompts_source_check;

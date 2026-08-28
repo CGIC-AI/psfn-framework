@@ -18,6 +18,7 @@ import {
   parseIcpDyadLifecycleParams,
   parseIcpDyadContinuationPrepareParams,
   parseIcpDyadContinuationOutcomeParams,
+  parseIcpEpisodeActivityEndParams,
   parseIcpPeerAvailabilityReadParams,
   parseIcpPermitConsumeParams,
   parseIcpPermitInvalidateSelfParams,
@@ -187,6 +188,19 @@ export function registerGatewayIcpAutonomyRpc(input: RegisterGatewayIcpAutonomyR
       input.requireAuthenticatedCompanionId(),
       parseIcpDyadContinuationOutcomeParams(params),
     ),
+    () => ({ companionId: input.requireAuthenticatedCompanionId() }),
+  ));
+  input.target.addMethod('companion.episode.end_activity', input.audited(
+    'companion.episode.end_activity',
+    async (params: unknown) => {
+      const companionId = input.requireAuthenticatedCompanionId();
+      const parsed = parseIcpEpisodeActivityEndParams(params);
+      return await requireBroker().endEpisodeActivity(
+        companionId,
+        parsed.conversationId,
+        parsed.reasonCode,
+      );
+    },
     () => ({ companionId: input.requireAuthenticatedCompanionId() }),
   ));
   input.target.addMethod('companion.initiation.preflight', input.audited(

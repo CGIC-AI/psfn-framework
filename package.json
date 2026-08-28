@@ -115,6 +115,7 @@
     "e2e:multi-companion-runtime": "LOG_LEVEL=error tsx src/app/e2e/multi-companion-runtime-validation.ts",
     "e2e:emosim-fleet-parity": "vitest run --reporter=verbose src/app/e2e/emosim-fleet-parity.test.ts",
     "e2e:fleet-posture": "vitest run --reporter=verbose src/app/e2e/fleet-posture-runtime-validation.test.ts",
+    "e2e:icp-certification": "vitest run --reporter=verbose src/app/e2e/icp-certification/process-harness.integration.test.ts",
     "smoke:chat": "node scripts/chat-cockpit-smoke.mjs",
     "smoke:docker": "node scripts/smoke-docker.mjs",
     "smoke:cogsec": "tsx scripts/cogsec-remediation-smoke.ts",

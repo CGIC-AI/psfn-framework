@@ -37,8 +37,6 @@ import { loadPlacesRegistryConfig } from '../../../channels/backplane/places-reg
 import { createCompanionId, type CompanionId } from '../../../shared/routing/companion-id.js';
 import { LLMClient } from '../../../primitives/llm/client.js';
 import {
-  CERTIFICATION_COMPANION_A,
-  CERTIFICATION_COMPANION_B,
   CERTIFICATION_EMBEDDING_DIMS,
   CERTIFICATION_SESSION_KEYRING,
 } from './constants.js';
@@ -49,6 +47,7 @@ import type {
 import { configureIcpCertificationModelEndpoint } from './fixture.js';
 import { startIcpCertificationModelServer } from './openai-fixture-server.js';
 import type { IcpCertificationConsentDecision } from './openai-fixture-server.js';
+import type { IcpCertificationChatDisposition } from './openai-fixture-server.js';
 import { IcpCertificationArtifactRecorder } from './artifact-recorder.js';
 
 const AGENT_PROCESS_ENTRY = resolve('src/app/e2e/icp-certification/agent-process.ts');
@@ -71,9 +70,16 @@ export interface CertificationAgentReady {
   companionId: string;
   multiCompanion: boolean;
   peerContactId?: string;
+  peerContactIds?: string[];
   postgresSchema?: string;
   runtimeClass: string;
 }
+
+type CertificationAgentFleet = readonly [
+  IcpCertificationAgentProcess,
+  IcpCertificationAgentProcess,
+  ...IcpCertificationAgentProcess[],
+];
 
 export class IcpCertificationAgentProcess {
   private nextRequestId = 0;
@@ -158,6 +164,10 @@ export class IcpCertificationAgentProcess {
     return await this.request({ type: 'snapshot' }) as Record<string, unknown>;
   }
 
+  async gardenProjection(): Promise<Record<string, unknown>> {
+    return await this.request({ type: 'garden_projection' }) as Record<string, unknown>;
+  }
+
   async publishAvailability(
     state: 'open_to_chat' | 'busy' | 'do_not_disturb',
   ): Promise<Record<string, unknown>> {
@@ -200,6 +210,34 @@ export class IcpCertificationAgentProcess {
       ...(result.deliveryDisposition
         ? { deliveryDisposition: String(result.deliveryDisposition) }
         : {}),
+    });
+    return result;
+  }
+
+  async runFeltImpulseContinuation(): Promise<Record<string, unknown>> {
+    const result = await this.request({ type: 'run_felt_impulse_continuation' }) as
+      Record<string, unknown>;
+    this.artifacts.append({
+      kind: 'initiation',
+      companionId: this.fixture.companionId,
+      source: 'felt_impulse',
+      candidateId: String(result.opportunityId ?? 'unknown'),
+      status: String(result.outcome ?? 'unknown'),
+    });
+    return result;
+  }
+
+  async runIntentionNotification(): Promise<Record<string, unknown>> {
+    const result = await this.request({ type: 'run_intention_notification' }) as
+      Record<string, unknown>;
+    this.artifacts.append({
+      kind: 'initiation',
+      companionId: this.fixture.companionId,
+      source: 'intention',
+      candidateId: String(
+        (result.result as Record<string, unknown> | undefined)?.candidateId ?? 'unknown',
+      ),
+      status: String((result.result as Record<string, unknown> | undefined)?.status ?? result.kind),
     });
     return result;
   }
@@ -277,10 +315,18 @@ export class IcpCertificationAgentProcess {
   }
 
   async failureObservationCount(): Promise<number> {
-    const result = await this.request({ type: 'failure_observation_snapshot' }) as {
-      failureObservationCount: number;
-    };
+    const result = await this.failureObservationSnapshot();
     return result.failureObservationCount;
+  }
+
+  async failureObservationSnapshot(): Promise<{
+    failureObservationCount: number;
+    lastCertificationError?: unknown;
+  }> {
+    return await this.request({ type: 'failure_observation_snapshot' }) as {
+      failureObservationCount: number;
+      lastCertificationError?: unknown;
+    };
   }
 
   async retryCandidateDelivery(candidateId: string): Promise<Record<string, unknown>> {
@@ -415,17 +461,18 @@ export class IcpCertificationAgentProcess {
 }
 
 export interface IcpCertificationProcessHarness {
-  agents: readonly [IcpCertificationAgentProcess, IcpCertificationAgentProcess];
+  agents: CertificationAgentFleet;
   gateway: GatewayServer;
   readonly costDecisions: readonly IcpConversationCostBreakerEvent[];
   readonly modelRequestCount: number;
   queueConsentDecision(decision: IcpCertificationConsentDecision): void;
-  rejectAuthenticatedSpoof(index: 0 | 1): Promise<void>;
+  queueChatDisposition(disposition: IcpCertificationChatDisposition, companionId?: string): void;
+  rejectAuthenticatedSpoof(index: number): Promise<void>;
   rejectMalformedFrame(): Promise<void>;
-  restartAgent(index: 0 | 1): Promise<IcpCertificationAgentProcess>;
-  restartAgents(): Promise<readonly [IcpCertificationAgentProcess, IcpCertificationAgentProcess]>;
-  restartGatewayAndAgents(): Promise<readonly [IcpCertificationAgentProcess, IcpCertificationAgentProcess]>;
-  stopAgent(index: 0 | 1): Promise<void>;
+  restartAgent(index: number): Promise<IcpCertificationAgentProcess>;
+  restartAgents(): Promise<CertificationAgentFleet>;
+  restartGatewayAndAgents(): Promise<CertificationAgentFleet>;
+  stopAgent(index: number): Promise<void>;
   stop(): Promise<void>;
 }
 
@@ -442,6 +489,13 @@ function deterministicEmbedding(text: string): Float32Array {
     values[slot] = (values[slot] ?? 0) + (text.charCodeAt(index) % 31) / 31;
   }
   return values;
+}
+
+function assertAgentFleet(agents: IcpCertificationAgentProcess[]): CertificationAgentFleet {
+  if (agents.length < 2) {
+    throw new Error('ICP certification requires at least two running companion agents');
+  }
+  return agents as unknown as CertificationAgentFleet;
 }
 
 async function waitForSocket(path: string): Promise<void> {
@@ -496,13 +550,13 @@ async function waitForDestroyed(connection: GatewayRpcConnection): Promise<void>
  *
  *  - EVERY companion in the fleet manifest gets its own tenant schema owned by
  *    its configured `postgresRole` (companions.json), including support
- *    companions that never boot an agent — the agent's runtime-authority proof
- *    checks the full fleet schema set and reciprocal isolation.
+ *    companions in the roster; the agent's runtime-authority proof checks the
+ *    full fleet schema set and reciprocal isolation.
  *  - Each companion role is turned into the least-privilege LOGIN authority
  *    required by the production fleet topology: own-schema owner + DML-only
  *    shared access with a SELECT-only migrations ledger, NOINHERIT, finite
  *    connection limit, no cluster attributes, no role memberships. Credentials
- *    are written only for the two companions this process harness boots.
+ *    are written for every companion this process harness boots.
  */
 async function provisionCertificationTenantBoundaries(
   databaseUrl: string,
@@ -658,10 +712,9 @@ export async function startIcpCertificationProcessHarness(input: {
     },
     icpConversationChargePolicyResolver: resolveChargePolicy,
   });
-  const companionIds: CompanionId[] = [
-    createCompanionId(CERTIFICATION_COMPANION_A, 'certification companion A'),
-    createCompanionId(CERTIFICATION_COMPANION_B, 'certification companion B'),
-  ];
+  const companionIds: CompanionId[] = input.fixture.companions.map(companion =>
+    createCompanionId(companion.companionId, 'certification fleet companion'),
+  );
   const presence = await PostgresCompanionPresenceStore.connect(input.databaseUrl);
   const autonomy = await PostgresIcpSharedAutonomyStore.connect(input.databaseUrl, {
     knownCompanionIds: companionIds,
@@ -770,10 +823,7 @@ export async function startIcpCertificationProcessHarness(input: {
   let stopped = false;
   return {
     get agents() {
-      return agents as unknown as readonly [
-        IcpCertificationAgentProcess,
-        IcpCertificationAgentProcess,
-      ];
+      return assertAgentFleet(agents);
     },
     get gateway() {
       return gateway;
@@ -787,9 +837,16 @@ export async function startIcpCertificationProcessHarness(input: {
     queueConsentDecision(decision) {
       modelServer.queueConsentDecision(decision);
     },
+    queueChatDisposition(disposition, companionId) {
+      modelServer.queueChatDisposition(disposition, companionId);
+    },
     async rejectAuthenticatedSpoof(index) {
       const fixtureCompanion = input.fixture.companions[index];
-      const spoofedCompanion = input.fixture.companions[index === 0 ? 1 : 0];
+      if (!fixtureCompanion) throw new Error(`No fixture companion at index ${String(index)}`);
+      const spoofedCompanion = input.fixture.companions.find(
+        companion => companion.companionId !== fixtureCompanion.companionId,
+      );
+      if (!spoofedCompanion) throw new Error('Authenticated spoof probe requires a peer companion');
       const connection = await createSocketClient({
         socketPath: input.fixture.gatewaySocketPath,
         reconnect: false,
@@ -849,7 +906,7 @@ export async function startIcpCertificationProcessHarness(input: {
       if (!previous) throw new Error(`No agent at index ${String(index)} to restart`);
       await previous.stop().catch(() => previous.forceStop());
       const replacement = await IcpCertificationAgentProcess.start(
-        input.fixture.companions[index],
+        input.fixture.companions[index]!,
         artifacts,
       );
       agents[index] = replacement;
@@ -876,10 +933,7 @@ export async function startIcpCertificationProcessHarness(input: {
           runtimeClass: ready.runtimeClass,
         });
       }
-      return agents as unknown as readonly [
-        IcpCertificationAgentProcess,
-        IcpCertificationAgentProcess,
-      ];
+      return assertAgentFleet(agents);
     },
     async restartGatewayAndAgents() {
       await Promise.all(agents.map(agent => agent.stop().catch(() => agent.forceStop())));
@@ -899,10 +953,7 @@ export async function startIcpCertificationProcessHarness(input: {
           runtimeClass: ready.runtimeClass,
         });
       }
-      return agents as unknown as readonly [
-        IcpCertificationAgentProcess,
-        IcpCertificationAgentProcess,
-      ];
+      return assertAgentFleet(agents);
     },
     async stopAgent(index) {
       const agent = agents[index];

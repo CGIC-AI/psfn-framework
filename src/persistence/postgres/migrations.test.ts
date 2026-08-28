@@ -338,7 +338,8 @@ describe('Postgres live schema migrations', () => {
     expect(sharedSql).toContain("VALUES (14, 'icp-durable-dyads')");
     expect(sharedSql).toContain('provenance_conversation_ids UUID[] NOT NULL');
     expect(sharedSql).toContain('ICP dyad backfill rejected ambiguous pair/channel ownership');
-    expect(sharedSql).toContain('ALTER COLUMN dyad_id SET NOT NULL');
+    expect(sharedSql).toContain('ADD COLUMN IF NOT EXISTS dyad_id UUID');
+    expect(sharedSql).not.toContain('ALTER COLUMN dyad_id SET NOT NULL');
     expect(sharedSql).not.toMatch(/UPDATE\s+(?:[^;]*transcript|transcript[^;]*UPDATE)/iu);
     expect(sharedSql).toContain("'operator_test'");
     expect(localSql).toContain("'operator_test'");

@@ -12,18 +12,18 @@ const NOW_MS = 1_780_000_000_000;
 const COMPANIONS = Object.freeze([
   {
     companionId: '11111111-1111-4111-8111-111111111111',
-    displayName: 'Purrsephone',
-    sidecarId: 'emosim-purrsephone',
+    displayName: 'Nyx',
+    sidecarId: 'emosim-nyx',
   },
   {
     companionId: '22222222-2222-4222-8222-222222222222',
-    displayName: 'Artemis',
-    sidecarId: 'emosim-artemis',
+    displayName: 'Vesper',
+    sidecarId: 'emosim-vesper',
   },
   {
     companionId: '33333333-3333-4333-8333-333333333333',
-    displayName: 'V Unit 00',
-    sidecarId: 'emosim-v-unit-00',
+    displayName: 'Helix',
+    sidecarId: 'emosim-helix',
   },
 ]);
 
@@ -113,8 +113,8 @@ describe('three-companion EmoSim fleet parity', () => {
       [companion.companionId, healthService(companion, () => snapshots.get(companion.companionId)!)] as const
     )));
 
-    const artemis = COMPANIONS[1];
-    snapshots.set(artemis.companionId, healthSnapshot(artemis.sidecarId, 'unavailable'));
+    const peer = COMPANIONS[1];
+    snapshots.set(peer.companionId, healthSnapshot(peer.sidecarId, 'unavailable'));
     const outage = await Promise.all(COMPANIONS.map(async companion => ({
       companionId: companion.companionId,
       health: await services.get(companion.companionId)!.getHealth(),
@@ -125,22 +125,22 @@ describe('three-companion EmoSim fleet parity', () => {
       [COMPANIONS[2].companionId, 'on'],
     ]);
 
-    snapshots.set(artemis.companionId, healthSnapshot(artemis.sidecarId));
-    await expect(services.get(artemis.companionId)!.getHealth()).resolves.toMatchObject({
-      companionId: artemis.companionId,
+    snapshots.set(peer.companionId, healthSnapshot(peer.sidecarId));
+    await expect(services.get(peer.companionId)!.getHealth()).resolves.toMatchObject({
+      companionId: peer.companionId,
       operatingState: 'on',
-      runtime: { sidecarId: artemis.sidecarId },
+      runtime: { sidecarId: peer.sidecarId },
     });
-    await expect(healthService(artemis, () => snapshots.get(artemis.companionId)!).getHealth())
+    await expect(healthService(peer, () => snapshots.get(peer.companionId)!).getHealth())
       .resolves.toMatchObject({
-        companionId: artemis.companionId,
+        companionId: peer.companionId,
         operatingState: 'on',
-        binding: { sessionLabel: `${artemis.sidecarId}-session` },
+        binding: { sessionLabel: `${peer.sidecarId}-session` },
       });
 
     const primarySnapshot = snapshots.get(COMPANIONS[0].companionId)!;
-    await expect(healthService(artemis, () => primarySnapshot).getHealth()).resolves.toMatchObject({
-      companionId: artemis.companionId,
+    await expect(healthService(peer, () => primarySnapshot).getHealth()).resolves.toMatchObject({
+      companionId: peer.companionId,
       operatingState: 'unhealthy',
       runtime: null,
     });

@@ -405,6 +405,16 @@
       "exposeTelemetry": true
     }
   },
+  "emosimProactivity": {
+    "enabled": false,
+    "thresholdProfile": {
+      "profileId": "emosim-would-message-v1",
+      "socialNeedThreshold": 0.7,
+      "attachmentIntensityThreshold": 0.5,
+      "sustainMs": 1800000,
+      "cooldownMs": 21600000
+    }
+  },
   "importProcessingRouteMode": "background",
   "importProcessingStrictPolicy": false,
   "openRouterModelsApiUrl": "https://openrouter.ai/api/v1/models",

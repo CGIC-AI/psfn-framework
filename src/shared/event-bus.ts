@@ -45,6 +45,7 @@ import type {
 import type { RoomEpisodeCircuitBreakerFiring } from '../core/agent/fatigue/room-episode-circuit-breaker.js';
 import type { SocialPotEnforcementOutcome } from '../core/agent/fatigue/social-pot-enforcement.js';
 import type { PartnerAffectShadowTelemetryEvent } from './contracts/partner-affect.js';
+import type { EmoSimProactivityImpulse } from '../core/emotion/emosim-proactivity-port.js';
 import type { IcpConversationCostBreakerEvent } from './telemetry/model-usage.js';
 import type { TurnPerformanceEvent } from './telemetry/turn-performance.js';
 import type { ToolCallOutcome } from './contracts/tool-call-outcome.js';
@@ -1198,15 +1199,10 @@ export interface EventMap {
   'social_desire.outreach.gate': { desireCount: number; desiresEvaluated: number; consentMomentsEvaluated: number; timestamp: number };
   'social_desire.consent.accepted': { contactId: string; orientation: string; pressure: number; channelId: string; channelType: string; companionTarget: boolean; timestamp: number };
   'social_desire.consent.deferred': { contactId: string; reason?: string; dampenedPressure: number; timestamp: number };
-  // Affect-driven ICP initiation impulse (hrmrq.34, operator ruling D4): the
-  // emo-sim proactivity sidecar's would_message lever fired. The felt-impulse
-  // adapter (app wiring) is the ratified authoritative consumer; content-free.
-  'icp.felt_impulse.lever': {
-    lever: 'would_message';
-    correlationId: string;
-    firedAtMs: number;
-    timestamp: number;
-  };
+  // Companion-local production signal. This asserts only that the configured
+  // EmoSim source qualified; the ICP disposition/policy funnel retains all
+  // targeting and send authority.
+  'emotion.emosim.proactivity.impulse': EmoSimProactivityImpulse;
   'emotion.proactive.transition': EmotionProactiveTransitionEvent;
   // Outcome telemetry from the felt-impulse adapter, incl. the EXPLICIT
   // no-eligible-peer surface (missing channel='companion' sibling seed).

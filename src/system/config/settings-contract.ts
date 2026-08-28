@@ -371,6 +371,7 @@ const SETTINGS_OBJECT_FIELDS = new Set<string>([
   'emotionScoping',
   'narrativeEmotionAppraisal',
   'observerEvalSidecar',
+  'emosimProactivity',
   'sessionTailCache',
   'imageWorkflows',
   'modelCatalog',

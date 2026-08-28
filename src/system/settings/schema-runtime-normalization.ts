@@ -34,11 +34,13 @@ import {
   OBSERVER_EVAL_SIDECAR_ADAPTER_KINDS,
   OBSERVER_EVAL_SIDECAR_DEPLOYMENT_TARGETS,
   OBSERVER_EVAL_SIDECAR_MODES,
+  EMOSIM_WOULD_MESSAGE_V1,
   type ObserverEvalSidecarAdapterKind,
   type ObserverEvalSidecarDeploymentTarget,
   type ObserverEvalSidecarMode,
   type ObserverEvalSidecarOverflowPolicy,
   type ObserverEvalSidecarSettings,
+  type EmoSimProactivitySettings,
 } from '../../shared/contracts/runtime.js';
 import {
   normalizeSttProvider,
@@ -566,6 +568,44 @@ function normalizeObserverEvalSidecarSettings(
   };
 }
 
+function normalizeEmoSimProactivitySettings(
+  value: unknown,
+  fieldPath: string,
+): EmoSimProactivitySettings {
+  const root = expectRecord(value, fieldPath);
+  const profile = expectRecord(root.thresholdProfile, `${fieldPath}.thresholdProfile`);
+  return {
+    enabled: expectBoolean(root.enabled, `${fieldPath}.enabled`),
+    thresholdProfile: {
+      profileId: expectNonEmptyString(profile.profileId, `${fieldPath}.thresholdProfile.profileId`),
+      socialNeedThreshold: expectNumberInRange(
+        profile.socialNeedThreshold,
+        `${fieldPath}.thresholdProfile.socialNeedThreshold`,
+        0,
+        1,
+      ),
+      attachmentIntensityThreshold: expectNumberInRange(
+        profile.attachmentIntensityThreshold,
+        `${fieldPath}.thresholdProfile.attachmentIntensityThreshold`,
+        0,
+        1,
+      ),
+      sustainMs: expectIntegerInRange(
+        profile.sustainMs,
+        `${fieldPath}.thresholdProfile.sustainMs`,
+        0,
+        604_800_000,
+      ),
+      cooldownMs: expectIntegerInRange(
+        profile.cooldownMs,
+        `${fieldPath}.thresholdProfile.cooldownMs`,
+        60_000,
+        604_800_000,
+      ),
+    },
+  };
+}
+
 function hasSetting(settings: EditableSettings, key: string): boolean {
   return key in settings;
 }
@@ -680,6 +720,27 @@ function normalizeEndpointAndGardenSettings(
       settings.observerEvalSidecar,
       'observerEvalSidecar',
     );
+  }
+  if ('emosimProactivity' in settings) {
+    normalized.emosimProactivity = normalizeEmoSimProactivitySettings(
+      settings.emosimProactivity,
+      'emosimProactivity',
+    );
+  } else if (normalized.observerEvalSidecar?.levers?.enabled
+    && normalized.observerEvalSidecar.levers.wouldMessage.enabled) {
+    // One-way backward owner-data read: preserve an already-live qualified
+    // source during the settings split. New writes use emosimProactivity.
+    const legacy = normalized.observerEvalSidecar.levers;
+    normalized.emosimProactivity = {
+      enabled: true,
+      thresholdProfile: {
+        profileId: EMOSIM_WOULD_MESSAGE_V1,
+        socialNeedThreshold: legacy.wouldMessage.socialNeedThreshold,
+        attachmentIntensityThreshold: legacy.wouldMessage.attachmentIntensityThreshold,
+        sustainMs: legacy.wouldMessage.sustainMs,
+        cooldownMs: legacy.cooldownMs,
+      },
+    };
   }
   if ('sessionTailCache' in settings) {
     normalized.sessionTailCache = normalizeSessionTailCacheSettings(

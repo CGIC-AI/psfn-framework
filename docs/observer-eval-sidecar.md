@@ -6,7 +6,17 @@ privacy-sanitized copy of the companion's live PSFN `EmotionState`, projects it
 into an `emo_sim` appraisal stimulus, runs it against a long-lived `emo_sim`
 server, crosswalks the two emotion representations, computes divergence metrics,
 and writes the result to eval-owned Postgres tables that only the Garden admin
-surface reads. Nothing it produces feeds back into the live companion loop.
+surface reads. Nothing persisted or derived by this eval surface feeds back
+into the live companion loop.
+
+The same live, sanitized EmoSim result is also offered independently to the
+companion-local **EmoSim Proactivity Port**
+(`src/core/emotion/emosim-proactivity-port.ts`). That production port is not a
+reader of eval observations, crosswalks, divergence, calibration labels, or
+lever events. It may assert only that its configured `would_message` threshold
+profile qualified. The resulting versioned, content-free impulse enters the
+existing ICP disposition and policy funnel; EmoSim has no target selection or
+send authority.
 
 This page is the map: what it is, the `authoritative: false` boundary, the
 config knobs, the export API, where to find it in Garden, and the experiment
@@ -50,9 +60,17 @@ The worker drives these stages in order:
 6. **Persistence** — `persistence.ts`:
    `createPostgresObserverEvalSidecarStore(postgresDatabaseUrl)`.
 
-After an observation is persisted, an independent post-stage evaluates the
-**shadow levers** (`levers.ts` `ObserverLeverTracker`,
-`ObserverEvalLeverStage`); a lever failure is logged, never propagated.
+After an observation is persisted, two isolated consumers see the sanitized
+live result:
+
+- The production EmoSim Proactivity Port evaluates only its approved
+  `would_message` threshold and emits a provenance-bearing impulse or a typed
+  suppression. Its dedupe key retains the historical
+  `felt-impulse:would_message:<first-crossing-ms>` identity.
+- The **shadow lever** post-stage (`levers.ts` `ObserverLeverTracker`,
+  `ObserverEvalLeverStage`) writes fallible WOULD-ACT telemetry. It does not
+  publish or consume production impulses; a lever failure is logged and never
+  propagated.
 
 ## The `authoritative: false` boundary
 
@@ -77,12 +95,13 @@ It is enforced at three layers:
   `authoritative: false`
   (`src/operator/garden/services/observer-eval-sidecar-service.ts`).
 
-A static boundary test forbids the live loop (`core/agent`, `core/scheduler`,
-`core/tools`) from importing the sidecar or consuming its events.
+Static boundary tests forbid eval code from publishing/consuming the production
+impulse and forbid memory, prompt/identity, contact, concern, and personality
+paths from importing observer-eval modules.
 
 ## Config knobs (disabled by default)
 
-Tuning and enablement are owned by `settings.json` under the key
+Eval tuning and enablement are owned by `settings.json` under the key
 `observerEvalSidecar` (registered in `src/system/config/settings-contract.ts`).
 In a multi-companion runtime, immutable sidecar/session/agent/storage identity is
 owned by each companion entry in `companions.json`; startup refuses missing,
@@ -104,6 +123,16 @@ Defaults: `createDefaultObserverEvalSidecarSettings()`
 | `persistence` | object | `enabled: false`, `retentionDays: 14`, `maxStoredObservations: 10000` | `enabled: true` additionally requires a Postgres backend, an explicit URL, and `rootDir`. In the Helm deployment, set `rootDir` to `/runtime/observer-eval-sidecar`. |
 | `garden` | object | `exposeHealth: true`, `exposeTelemetry: true` | Gates the admin surface. |
 | `levers` | object | `enabled: false`, `cooldownMs: 21600000`, plus `wouldMessage`/`wouldCheckIn`/`wouldRest`/`ruminationWatch` | `enabled: true` requires persistence + the context-coherence event bus. |
+
+Production qualification is separately owned by the top-level
+`emosimProactivity` block. It defaults disabled and contains `enabled` plus the
+versioned `thresholdProfile` (`profileId`, social-need and attachment-intensity
+thresholds, sustain time, and cooldown). Enabling it requires the companion's
+EmoSim source runtime, explicit companion identity, and the production
+`emosim_proactivity_state` cursor.
+Existing owner data with enabled legacy `observerEvalSidecar.levers.wouldMessage`
+is read once into the equivalent production settings so migration neither drops
+nor duplicates a qualified crossing; new owner data uses `emosimProactivity`.
 
 Turning it on requires, at minimum, `enabled: true` and
 `adapter.kind: 'emosim_server'`. A cluster deployment additionally requires each
@@ -178,6 +207,12 @@ defaults to 100, max 1000.
   she WOULD have acted now." They are **tracking-only**: written to
   eval-owned non-authoritative tables and read only by the Garden admin service;
   nothing in the live loop consumes them (enforced by the boundary test).
+- **Production qualification.** The separately configured Proactivity Port may
+  qualify `would_message` from the live sanitized source result. Its impulse
+  carries companion identity, source model/version, sanitized-input lineage,
+  first crossing/fire times, threshold profile, dedupe key, confidence, and
+  availability. It contains no raw private text and is evidence of a source
+  fire—not ground truth about felt affect and not permission to deliver.
 - **Projection versions.** The appraisal projection is versioned so pre/post
   corpora are distinguishable without diffing code. Current
   `appraisal-projection.v3` (schema 2) is the "mood-free event appraisal": host
@@ -203,3 +238,11 @@ Migration array `POSTGRES_OBSERVER_EVAL_SIDECAR_MIGRATIONS`
 
 Every table enforces `eval_owner = 'observer_sidecar_eval'` and `authoritative =
 FALSE` via CHECK constraints.
+
+The companion-local production cursor is stored separately in
+`emosim_proactivity_state`; it contains only first-crossing and last-fire
+timestamps. On first read after upgrade, the production store may recover the
+content-free historical `would_message` cursor from
+`observer_eval_sidecar_lever_state`, but it never reads observation, crosswalk,
+divergence, export, or lever-event rows, and all subsequent writes go to the
+production table.

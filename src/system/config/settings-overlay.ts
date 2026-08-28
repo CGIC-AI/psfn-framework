@@ -49,7 +49,8 @@ export const COMPANION_MODEL_SELECTION_SETTINGS_OVERLAY_KEYS = [
 
 /**
  * The only settings.json keys a per-companion overlay may set:
- * activeTimezone (seam 3), voice* (seam 6), observerEvalSidecar (seam 1),
+ * activeTimezone (seam 3), voice* (seam 6), observerEvalSidecar and
+ * emosimProactivity (seam 1),
  * emotionScoping (seam 9), plus uiThemeId and discordTrigger* per the bead.
  *
  * Every entry is a runtime-owned key (see RUNTIME_SETTINGS_KEYS); no scheduler
@@ -63,6 +64,7 @@ export const COMPANION_MODEL_SELECTION_SETTINGS_OVERLAY_KEYS = [
 export const COMPANION_SETTINGS_OVERLAY_WHITELIST = [
   'activeTimezone',
   'observerEvalSidecar',
+  'emosimProactivity',
   'emotionScoping',
   'narrativeEmotionAppraisal',
   'cogSecPersonaConformance',

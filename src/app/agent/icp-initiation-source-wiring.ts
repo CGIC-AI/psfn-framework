@@ -58,7 +58,7 @@ export interface IcpInitiationSourceWiring {
     | undefined;
   intentionCandidateAdapter: ReturnType<typeof createIcpIntentionCandidateAdapter> | undefined;
   unregisterCoLocationThoughtAdapter: () => void;
-  /** Unsubscribe the felt-impulse lever listener (no-op when not wired). */
+  /** Unsubscribe the EmoSim proactivity listener (no-op when not wired). */
   unregisterFeltImpulseAdapter: () => void;
   /** Stops and drains the source-independent durable candidate owner. */
   stopCandidateLifecycleSupervisor: () => Promise<void>;
@@ -137,9 +137,8 @@ export function wireIcpInitiationSources(
     : () => undefined;
 
   // ── Affect-driven felt-impulse source (hrmrq.34, operator ruling D4) ──
-  // The emo-sim proactivity sidecar's would_message lever is the initiating
-  // impulse: the observer-sidecar lever stage publishes
-  // 'icp.felt_impulse.lever' on the bus, and this subscription turns it into
+  // The companion-local EmoSim Proactivity Port publishes a provenance-bearing
+  // qualified impulse, and this subscription turns it into
   // an ICP initiation candidate through the same source runtime every other
   // source uses (consent, preflight, permits, retry/TTL unchanged).
   let unregisterFeltImpulseAdapter: () => void = () => undefined;
@@ -151,10 +150,13 @@ export function wireIcpInitiationSources(
       funnelStore: input.feltImpulseFunnelStore,
       eventBus: input.eventBus,
     });
-    unregisterFeltImpulseAdapter = input.eventBus.on('icp.felt_impulse.lever', async (signal) => {
-      await feltImpulseAdapter.onLeverSignal(signal);
-    });
-    log.info('ICP felt-impulse initiation source wired to the emo-sim would_message lever');
+    unregisterFeltImpulseAdapter = input.eventBus.on(
+      'emotion.emosim.proactivity.impulse',
+      async (signal) => {
+        await feltImpulseAdapter.onImpulse(signal);
+      },
+    );
+    log.info('ICP felt-impulse initiation source wired to the EmoSim Proactivity Port');
   } else {
     // Always install one required-event consumer. A disabled or incomplete ICP
     // lane is a terminal fail-closed disposition, not an absent subscriber
@@ -167,7 +169,7 @@ export function wireIcpInitiationSources(
       : sourceRuntime
         ? 'peer_directory_unavailable'
         : 'source_runtime_unavailable';
-    unregisterFeltImpulseAdapter = input.eventBus.on('icp.felt_impulse.lever', async (signal) => {
+    unregisterFeltImpulseAdapter = input.eventBus.on('emotion.emosim.proactivity.impulse', async (signal) => {
       const existing = await input.feltImpulseFunnelStore.getOutcome(signal.correlationId);
       if (!existing) {
         await input.feltImpulseFunnelStore.recordOutcome({
@@ -185,7 +187,7 @@ export function wireIcpInitiationSources(
         try {
           await input.eventBus.emit('emotion.proactive.transition', {
             correlationId: signal.correlationId,
-            lever: signal.lever,
+            lever: signal.kind,
             stage,
             outcome: transitionOutcome,
             firedAtMs: signal.firedAtMs,

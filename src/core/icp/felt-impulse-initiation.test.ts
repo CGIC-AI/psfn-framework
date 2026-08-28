@@ -52,10 +52,32 @@ function signal(
   correlationId = `felt-impulse:would_message:${firedAtMs}`,
 ) {
   return {
-    lever: 'would_message' as const,
+    schemaVersion: 1 as const,
+    impulseVersion: 'psfn.emosim-proactivity.impulse.v1' as const,
+    kind: 'would_message' as const,
+    companionId: '11111111-1111-4111-8111-111111111111',
+    source: { model: 'emo_sim', version: 'emo_sim/server.py#http-api.v1' },
+    lineage: {
+      schemaVersion: 1 as const,
+      inputId: `turn:${firedAtMs}`,
+      projectionVersion: 'psfn.observer-sidecar.appraisal-projection.v3',
+      privacyClass: 'content_redacted',
+      rawContentRedacted: true as const,
+    },
+    firstCrossingMs: Number(correlationId.slice(correlationId.lastIndexOf(':') + 1)),
+    thresholdProfile: {
+      profileId: 'would-message-v1',
+      socialNeedThreshold: 0.7,
+      attachmentIntensityThreshold: 0.5,
+      sustainMs: 1_800_000,
+      cooldownMs: 21_600_000,
+    },
+    dedupeKey: correlationId,
     correlationId,
     firedAtMs,
-    timestamp: firedAtMs,
+    confidence: 0.82,
+    availability: 'available' as const,
+    authority: 'qualified_source_fire' as const,
   };
 }
 
@@ -97,7 +119,7 @@ describe('felt-impulse ICP initiation (psfn-framework-hrmrq.34, operator ruling 
       now: () => T0,
     });
 
-    await expect(first.onLeverSignal(signal())).resolves.toMatchObject({ kind: 'submitted' });
+    await expect(first.onImpulse(signal())).resolves.toMatchObject({ kind: 'submitted' });
     expect(funnelStore.recordOutcome).toHaveBeenCalledWith({
       correlationId: `felt-impulse:would_message:${T0}`,
       firstCrossingMs: T0,
@@ -117,7 +139,7 @@ describe('felt-impulse ICP initiation (psfn-framework-hrmrq.34, operator ruling 
       now: () => T0 + FELT_IMPULSE_MIN_INTERVAL_MS,
     });
 
-    await expect(restarted.onLeverSignal(signal())).resolves.toEqual({
+    await expect(restarted.onImpulse(signal())).resolves.toEqual({
       kind: 'deduped',
       candidateId: submittedResult().candidateId,
     });
@@ -155,7 +177,7 @@ describe('felt-impulse ICP initiation (psfn-framework-hrmrq.34, operator ruling 
       now: () => T0,
     });
 
-    await expect(adapter.onLeverSignal(signal())).resolves.toEqual({
+    await expect(adapter.onImpulse(signal())).resolves.toEqual({
       kind: 'deduped',
       candidateId,
     });
@@ -194,7 +216,7 @@ describe('felt-impulse ICP initiation (psfn-framework-hrmrq.34, operator ruling 
       now: () => T0,
     });
 
-    await expect(first.onLeverSignal(signal())).resolves.toEqual({ kind: 'no_eligible_peer' });
+    await expect(first.onImpulse(signal())).resolves.toEqual({ kind: 'no_eligible_peer' });
     expect(funnelStore.recordOutcome).toHaveBeenCalledWith({
       correlationId: `felt-impulse:would_message:${T0}`,
       firstCrossingMs: T0,
@@ -213,7 +235,7 @@ describe('felt-impulse ICP initiation (psfn-framework-hrmrq.34, operator ruling 
       now: () => T0 + FELT_IMPULSE_MIN_INTERVAL_MS,
     });
 
-    await expect(restarted.onLeverSignal(signal())).resolves.toEqual({
+    await expect(restarted.onImpulse(signal())).resolves.toEqual({
       kind: 'no_eligible_peer',
     });
     expect(submitAfterRestart).not.toHaveBeenCalled();
@@ -232,7 +254,7 @@ describe('felt-impulse ICP initiation (psfn-framework-hrmrq.34, operator ruling 
       now: () => firedAtMs,
     });
 
-    const outcome = await adapter.onLeverSignal(signal(
+    const outcome = await adapter.onImpulse(signal(
       firedAtMs,
       `felt-impulse:would_message:${T0}`,
     ));
@@ -263,7 +285,7 @@ describe('felt-impulse ICP initiation (psfn-framework-hrmrq.34, operator ruling 
       now: () => T0,
     });
 
-    await adapter.onLeverSignal(signal());
+    await adapter.onImpulse(signal());
     expect(submit.mock.calls[0]?.[0]).toMatchObject({ peerContactId: 'peer-b' });
   });
 
@@ -282,7 +304,7 @@ describe('felt-impulse ICP initiation (psfn-framework-hrmrq.34, operator ruling 
       now: () => T0,
     });
 
-    await expect(adapter.onLeverSignal(signal())).resolves.toEqual({
+    await expect(adapter.onImpulse(signal())).resolves.toEqual({
       kind: 'no_eligible_peer',
     });
     expect(submit).not.toHaveBeenCalled();
@@ -305,7 +327,7 @@ describe('felt-impulse ICP initiation (psfn-framework-hrmrq.34, operator ruling 
       now: () => T0,
     });
 
-    const outcome = await adapter.onLeverSignal(signal());
+    const outcome = await adapter.onImpulse(signal());
     expect(outcome).toEqual({ kind: 'no_eligible_peer' });
     expect(submit).not.toHaveBeenCalled();
     expect(outcomes).toEqual([
@@ -332,7 +354,7 @@ describe('felt-impulse ICP initiation (psfn-framework-hrmrq.34, operator ruling 
       now: () => T0,
     });
 
-    const outcome = await adapter.onLeverSignal(signal());
+    const outcome = await adapter.onImpulse(signal());
     expect(outcome).toEqual({ kind: 'not_authorized' });
     expect(submit).not.toHaveBeenCalled();
     expect(list).not.toHaveBeenCalled();
@@ -367,9 +389,9 @@ describe('felt-impulse ICP initiation (psfn-framework-hrmrq.34, operator ruling 
       now: () => nowMs,
     });
 
-    await adapter.onLeverSignal(signal(T0));
+    await adapter.onImpulse(signal(T0));
     nowMs = T0 + 60_000;
-    const second = await adapter.onLeverSignal(signal(nowMs));
+    const second = await adapter.onImpulse(signal(nowMs));
     expect(second).toEqual({ kind: 'throttled', nextEligibleAtMs: T0 + FELT_IMPULSE_MIN_INTERVAL_MS });
     expect(submit).toHaveBeenCalledTimes(1);
     expect(records.get(`felt-impulse:would_message:${nowMs}`)).toEqual({
@@ -382,7 +404,7 @@ describe('felt-impulse ICP initiation (psfn-framework-hrmrq.34, operator ruling 
     });
 
     nowMs = T0 + FELT_IMPULSE_MIN_INTERVAL_MS;
-    const third = await adapter.onLeverSignal(signal(nowMs));
+    const third = await adapter.onImpulse(signal(nowMs));
     expect(third.kind).toBe('submitted');
     expect(submit).toHaveBeenCalledTimes(2);
   });
@@ -398,9 +420,9 @@ describe('felt-impulse ICP initiation (psfn-framework-hrmrq.34, operator ruling 
       now: () => nowMs,
     });
 
-    const first = await adapter.onLeverSignal(signal(T0));
+    const first = await adapter.onImpulse(signal(T0));
     nowMs = T0 + FELT_IMPULSE_MIN_INTERVAL_MS;
-    const replay = await adapter.onLeverSignal(signal(
+    const replay = await adapter.onImpulse(signal(
       T0 + 5_000,
       `felt-impulse:would_message:${T0}`,
     ));
@@ -423,7 +445,7 @@ describe('felt-impulse ICP initiation (psfn-framework-hrmrq.34, operator ruling 
       now: () => T0,
     });
 
-    await adapter.onLeverSignal(signal());
+    await adapter.onImpulse(signal());
 
     expect(transitions.map(event => event.stage)).toEqual([
       'felt_impulse',

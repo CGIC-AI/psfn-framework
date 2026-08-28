@@ -96,6 +96,10 @@ import type { NotificationPort } from '../../core/tools/ntfy.js';
 import { resolveEmbeddingProviderProvenanceFromConfig } from '../../faculties/memory/embedding.js';
 import { createObserverEvalSidecarRuntimeFromConfig } from '../../core/eval/observer-sidecar/config.js';
 import type { ObserverEvalSidecarRuntime } from '../../core/eval/observer-sidecar/types.js';
+import type {
+  EmoSimProactivityImpulse,
+  EmoSimProactivityStateStorePort,
+} from '../../core/emotion/emosim-proactivity-port.js';
 import {
   resolveConcernResolutionArcJournalPath,
   resolveCogSecEventsPath,
@@ -206,6 +210,7 @@ export interface AgentCoreRuntimeOptions {
   continuityChannelIds: readonly string[];
   /** Database credential kept outside the secret-sanitized core config. */
   postgresDatabaseUrl: string;
+  emosimProactivityStateStore: EmoSimProactivityStateStorePort;
   pathSnapshot: RuntimePathSnapshot;
   eventBus: EventBus;
   gateway: GatewayClient;
@@ -418,6 +423,18 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     postgresDatabaseUrl,
     eventBus,
     tenant: resolveConfigTenantPoolScope(config),
+    emitProactivityImpulse: async (impulse: EmoSimProactivityImpulse) => {
+      await eventBus.emit('emotion.proactive.transition', {
+        correlationId: impulse.correlationId,
+        lever: impulse.kind,
+        stage: 'would_message',
+        outcome: 'qualified',
+        firedAtMs: impulse.firedAtMs,
+        timestamp: impulse.firedAtMs,
+      });
+      await eventBus.emitRequired('emotion.emosim.proactivity.impulse', impulse);
+    },
+    proactivityStateStore: options.emosimProactivityStateStore,
   });
   const sessionComposition = await composeSessionRuntimeAsync({
     config,

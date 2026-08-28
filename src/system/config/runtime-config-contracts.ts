@@ -41,10 +41,12 @@ import type {
   ModelRoleAssignments,
   ModelSlot,
   ObserverEvalSidecarSettings,
+  EmoSimProactivitySettings,
   ResponseStyleOverrides,
   RuntimeConfigHooks,
   TextEmotionDType,
 } from '../../shared/contracts/runtime.js';
+import { EMOSIM_WOULD_MESSAGE_V1 } from '../../shared/contracts/runtime.js';
 import type { CogSecPersonaConformanceSettings } from '../../shared/contracts/cogsec-persona-conformance.js';
 
 export type { CapabilityTier } from '../capabilities/tier-types.js';
@@ -127,6 +129,20 @@ export function createDefaultObserverEvalSidecarSettings(): ObserverEvalSidecarS
       exposeTelemetry: true,
     },
     levers: createDefaultObserverEvalSidecarLeverSettings(),
+  };
+}
+
+export function createDefaultEmoSimProactivitySettings(): EmoSimProactivitySettings {
+  const legacyThresholds = createDefaultObserverEvalSidecarLeverSettings();
+  return {
+    enabled: false,
+    thresholdProfile: {
+      profileId: EMOSIM_WOULD_MESSAGE_V1,
+      socialNeedThreshold: legacyThresholds.wouldMessage.socialNeedThreshold,
+      attachmentIntensityThreshold: legacyThresholds.wouldMessage.attachmentIntensityThreshold,
+      sustainMs: legacyThresholds.wouldMessage.sustainMs,
+      cooldownMs: legacyThresholds.cooldownMs,
+    },
   };
 }
 
@@ -325,6 +341,7 @@ export interface SubstrateConfig {
   capabilityTier?: CapabilityTier;
   compositionalPolicy?: CompositionalPolicyConfig;
   observerEvalSidecar?: ObserverEvalSidecarSettings;
+  emosimProactivity?: EmoSimProactivitySettings;
   sessionTailCache?: SessionTailCacheSettings;
   shardToolsets?: ShardToolsetConfig;
   /**

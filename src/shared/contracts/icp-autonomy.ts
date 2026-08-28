@@ -30,9 +30,9 @@ export const ICP_INITIATION_SOURCES = [
   'intention',
   'foreground',
   // Affect-driven initiation (operator ruling D4, psfn-framework-hrmrq.34):
-  // the emo-sim proactivity sidecar's would_message lever firing — "she would
-  // send a proactive message now" — creates the candidate, replacing any
-  // wall-clock initiating impulse. Retry/TTL plumbing is unchanged.
+  // the companion-local EmoSim Proactivity Port's qualified source fire
+  // creates the candidate, replacing any wall-clock initiating impulse.
+  // Retry/TTL plumbing and every disposition/delivery authority are unchanged.
   'felt_impulse',
   // Authenticated Garden/harness initiation. This marks operator-driven test
   // traffic durably while the ordinary broker gates and one-use permit remain

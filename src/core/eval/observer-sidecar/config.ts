@@ -1,14 +1,22 @@
 import { createComponentLogger } from '../../../shared/logger.js';
-import type { EventBus, EventMap } from '../../../shared/event-bus.js';
+import type { EventBus } from '../../../shared/event-bus.js';
 import type { ContextCoherenceEvent } from '../../../shared/contracts/context-coherence.js';
 import type { TurnID } from '../../../shared/contracts/runtime.js';
 import type { ObserverEvalSidecarLeverSettings } from '../../../shared/contracts/runtime.js';
 import { createDefaultObserverEvalSidecarSettings } from '../../../system/config/runtime-config-contracts.js';
+import { createDefaultEmoSimProactivitySettings } from '../../../system/config/runtime-config-contracts.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import type { TenantPoolScope } from '../../../persistence/postgres/tenant-pool-scope.js';
+import {
+  createEmoSimProactivityPort,
+  type EmoSimProactivityImpulse,
+  type EmoSimProactivityPort,
+  type EmoSimProactivityStateStorePort,
+} from '../../emotion/emosim-proactivity-port.js';
 import { createObserverEmotionCrosswalk } from './crosswalk.js';
 import {
   runEmoSimProjectedStimulus,
+  EMOSIM_INTEGRATION_SURFACE,
   type EmoSimAdapterOutput,
   type EmoSimRunner,
 } from './emosim-adapter.js';
@@ -45,11 +53,23 @@ const DAY_MS = 86_400_000;
 const OBSERVER_EVAL_LEVER_MIN_RETENTION_DAYS = 90;
 
 export function createObserverEvalSidecarRuntimeFromConfig(
-  config: Pick<SubstrateConfig, 'observerEvalSidecar' | 'persistenceBackend'>,
-  dependencies: { postgresDatabaseUrl?: string; eventBus?: EventBus; tenant?: TenantPoolScope },
+  config: Pick<
+    SubstrateConfig,
+    'observerEvalSidecar' | 'emosimProactivity' | 'persistenceBackend' | 'companionId'
+  >,
+  dependencies: {
+    postgresDatabaseUrl?: string;
+    eventBus?: EventBus;
+    tenant?: TenantPoolScope;
+    emitProactivityImpulse?: (impulse: EmoSimProactivityImpulse) => Promise<void>;
+    proactivityStateStore?: EmoSimProactivityStateStorePort;
+  },
 ): ObserverEvalSidecarRuntime {
   const settings = structuredClone(
     config.observerEvalSidecar ?? createDefaultObserverEvalSidecarSettings(),
+  );
+  const proactivitySettings = structuredClone(
+    config.emosimProactivity ?? createDefaultEmoSimProactivitySettings(),
   );
   const persistence = createObserverEvalSidecarPersistence(
     config,
@@ -60,7 +80,15 @@ export function createObserverEvalSidecarRuntimeFromConfig(
 
   return {
     config: settings,
-    observer: createObserverEvalSidecarPort(settings, persistence, dependencies.eventBus),
+    observer: createObserverEvalSidecarPort(
+      settings,
+      persistence,
+      dependencies.eventBus,
+      config.companionId,
+      dependencies.emitProactivityImpulse,
+      proactivitySettings,
+      dependencies.proactivityStateStore,
+    ),
   };
 }
 
@@ -68,6 +96,10 @@ function createObserverEvalSidecarPort(
   settings: ObserverEvalSidecarConfig,
   persistence: ObserverEvalSidecarPersistencePort | null,
   eventBus: EventBus | undefined,
+  companionIdInput: string | undefined,
+  emitProactivityImpulse: ((impulse: EmoSimProactivityImpulse) => Promise<void>) | undefined,
+  proactivitySettings: ReturnType<typeof createDefaultEmoSimProactivitySettings>,
+  proactivityStateStore: EmoSimProactivityStateStorePort | undefined,
 ): ObserverEvalSidecarPort | null {
   if (settings.enabled !== true || settings.adapter?.kind !== 'emosim_server') {
     return null;
@@ -86,6 +118,28 @@ function createObserverEvalSidecarPort(
   if (settings.levers?.enabled === true && !eventBus) {
     throw new Error('observerEvalSidecar.levers requires the context-coherence event bus');
   }
+  const companionId = companionIdInput?.trim();
+  if (proactivitySettings.enabled && !companionId) {
+    throw new Error('EmoSim Proactivity Port requires an explicit companionId');
+  }
+  if (proactivitySettings.enabled && (!emitProactivityImpulse || !proactivityStateStore)) {
+    throw new Error(
+      'EmoSim Proactivity Port requires its production impulse sink and companion-local state store',
+    );
+  }
+
+  const proactivityPort = proactivitySettings.enabled
+    && companionId
+    && emitProactivityImpulse
+    && proactivityStateStore
+    ? createEmoSimProactivityPort({
+        enabled: true,
+        companionId,
+        thresholdProfile: proactivitySettings.thresholdProfile,
+        stateStore: proactivityStateStore,
+        emitImpulse: emitProactivityImpulse,
+      })
+    : null;
 
   return new EmoSimObserverEvalSidecar({
     config: settings,
@@ -93,16 +147,7 @@ function createObserverEvalSidecarPort(
     ...(eventBus
       ? { emitContextCoherence: event => eventBus.emit('context.coherence.detected', event) }
       : {}),
-    // hrmrq.34 (D4): forward would_message lever fires to the affect-driven
-    // ICP initiation seam. The subscriber lives in app wiring (felt-impulse
-    // adapter). Required delivery makes a missing or failed consumer visible
-    // and leaves the crossing retryable instead of silently consuming it.
-    ...(eventBus
-      ? {
-          emitFeltImpulse: event => eventBus.emitRequired('icp.felt_impulse.lever', event),
-          emitProactiveTransition: event => eventBus.emit('emotion.proactive.transition', event),
-        }
-      : {}),
+    ...(proactivityPort ? { proactivityPort, companionId: companionId! } : {}),
     // One runner per sidecar: it caches the contract check and the persistent
     // session bootstrap across observations.
     runner: createEmoSimServerRunner({
@@ -150,16 +195,9 @@ interface EmoSimObserverEvalSidecarOptions {
   persistence: ObserverEvalSidecarPersistencePort | null;
   runner: EmoSimRunner;
   emitContextCoherence?: (event: ContextCoherenceEvent) => Promise<void>;
-  /**
-   * Affect-driven ICP initiation hand-off (hrmrq.34, operator ruling D4): a
-   * fired would_message lever — "she would send a proactive message now" — is
-   * forwarded so the app-side felt-impulse adapter can create an ICP
-   * initiation candidate. This is the ONE ratified authoritative consumer of
-   * lever output; everything else about the lever store stays eval-owned
-   * telemetry.
-   */
-  emitFeltImpulse?: (event: EventMap['icp.felt_impulse.lever']) => Promise<void>;
-  emitProactiveTransition?: (event: EventMap['emotion.proactive.transition']) => Promise<void>;
+  /** Production port is a sibling sink of the live EmoSim result, never an eval-row reader. */
+  proactivityPort?: EmoSimProactivityPort;
+  companionId?: string;
 }
 
 class EmoSimObserverEvalSidecar implements ObserverEvalSidecarPort {
@@ -184,12 +222,6 @@ class EmoSimObserverEvalSidecar implements ObserverEvalSidecarPort {
       ...(options.emitContextCoherence
         ? { emitContextCoherence: options.emitContextCoherence }
         : {}),
-      ...(options.emitFeltImpulse
-        ? { emitFeltImpulse: options.emitFeltImpulse }
-        : {}),
-      ...(options.emitProactiveTransition
-        ? { emitProactiveTransition: options.emitProactiveTransition }
-        : {}),
     });
   }
 
@@ -209,6 +241,46 @@ class EmoSimObserverEvalSidecar implements ObserverEvalSidecarPort {
       })
       : undefined;
     const error = buildObservationError(projection, emosim);
+    const leverSnapshot = toObserverLeverSnapshot(emosim?.ok ? emosim.output : undefined);
+
+    if (this.options.proactivityPort && this.options.companionId) {
+      try {
+        await this.options.proactivityPort.observe({
+          companionId: this.options.companionId,
+          observedAtMs: Date.now(),
+          source: {
+            model: 'emo_sim',
+            version: EMOSIM_INTEGRATION_SURFACE,
+            availability: emosim?.ok ? 'available' : 'unavailable',
+            confidence: projection.confidence,
+          },
+          lineage: {
+            schemaVersion: 1,
+            inputId: [
+              this.runId,
+              normalizeIdPart(String(rawInput.turn.turnId)),
+              String(rawInput.provenance.capturedAt),
+            ].join(':'),
+            projectionVersion: projection.projectionVersion,
+            privacyClass: projection.privacy.privacyClass,
+            rawContentRedacted: true,
+          },
+          snapshot: leverSnapshot,
+        });
+      } catch (proactivityError) {
+        // Required response loss leaves the production cursor unchanged, so
+        // the same first-crossing dedupe key is retried on the next live result.
+        createComponentLogger('EmoSimProactivityPort').error(
+          'EmoSim proactivity impulse handoff failed; crossing remains retryable',
+          {
+            companionId: this.options.companionId,
+            error: proactivityError instanceof Error
+              ? proactivityError.message
+              : String(proactivityError),
+          },
+        );
+      }
+    }
 
     let observationId: string | null = null;
     if (this.options.persistence) {
@@ -221,7 +293,7 @@ class EmoSimObserverEvalSidecar implements ObserverEvalSidecarPort {
       });
     }
 
-    if (this.leverStage && observationId) {
+    if (observationId && this.leverStage) {
       // Lever evaluation runs strictly AFTER the observation is persisted and
       // feeds on the same observation payload. Lever failure must not fail
       // the observation: it is logged through the sidecar's error channel and
@@ -230,7 +302,7 @@ class EmoSimObserverEvalSidecar implements ObserverEvalSidecarPort {
       await this.leverStage.evaluateObservation({
         runId: this.runId,
         observationId,
-        snapshot: toObserverLeverSnapshot(emosim?.ok ? emosim.output : undefined),
+        snapshot: leverSnapshot,
         observedAtMs: Date.now(),
         coherenceContext: {
           channelId: rawInput.turn.channelId,
@@ -389,9 +461,6 @@ interface ObserverEvalLeverStageOptions {
   sidecarId: string;
   retentionDays: number;
   emitContextCoherence?: (event: ContextCoherenceEvent) => Promise<void>;
-  /** hrmrq.34 (D4): forward fired would_message levers to the ICP felt-impulse seam. */
-  emitFeltImpulse?: (event: EventMap['icp.felt_impulse.lever']) => Promise<void>;
-  emitProactiveTransition?: (event: EventMap['emotion.proactive.transition']) => Promise<void>;
 }
 
 interface ObserverEvalCoherenceContext {
@@ -407,8 +476,6 @@ function createObserverEvalLeverStage(input: {
   sidecarId: string;
   retentionDays: number;
   emitContextCoherence?: (event: ContextCoherenceEvent) => Promise<void>;
-  emitFeltImpulse?: (event: EventMap['icp.felt_impulse.lever']) => Promise<void>;
-  emitProactiveTransition?: (event: EventMap['emotion.proactive.transition']) => Promise<void>;
 }): ObserverEvalLeverStage | null {
   if (input.settings?.enabled !== true) {
     return null;
@@ -426,12 +493,6 @@ function createObserverEvalLeverStage(input: {
     ...(input.emitContextCoherence
       ? { emitContextCoherence: input.emitContextCoherence }
       : {}),
-    ...(input.emitFeltImpulse
-      ? { emitFeltImpulse: input.emitFeltImpulse }
-      : {}),
-    ...(input.emitProactiveTransition
-      ? { emitProactiveTransition: input.emitProactiveTransition }
-      : {}),
   });
 }
 
@@ -448,9 +509,8 @@ function isLeverPersistencePort(
 
 /**
  * Lever stage: runs after each persisted observation and records WOULD-ACT
- * telemetry in eval-owned, non-authoritative tables. The would_message lever
- * additionally hands one content-free felt impulse to the app-owned ICP
- * candidate seam; all targeting, authorization, and delivery stay ICP-owned.
+ * telemetry in eval-owned, non-authoritative tables. It has no live consumer:
+ * the sibling EmoSim Proactivity Port independently owns production impulses.
  */
 export class ObserverEvalLeverStage {
   private tracker: ObserverLeverTracker | null = null;
@@ -487,30 +547,6 @@ export class ObserverEvalLeverStage {
           cooldown: event.cooldown,
           retention: this.makeLeverRetention(event.firedAtMs),
         });
-        // hrmrq.34 (operator ruling D4): a fired would_message lever IS the
-        // affect-driven initiating impulse for ICP. Forward it to the
-        // felt-impulse seam; the app-side adapter owns peer selection,
-        // authorization, and candidate creation. Content-free by construction
-        // (lever name + timestamps only).
-        if (event.lever === 'would_message' && this.options.emitFeltImpulse) {
-          const correlationId = `felt-impulse:would_message:${event.firstCrossingMs}`;
-          if (this.options.emitProactiveTransition) {
-            await this.options.emitProactiveTransition({
-              correlationId,
-              lever: 'would_message',
-              stage: 'would_message',
-              outcome: 'qualified',
-              firedAtMs: event.firedAtMs,
-              timestamp: input.observedAtMs,
-            });
-          }
-          await this.options.emitFeltImpulse({
-            lever: 'would_message',
-            correlationId,
-            firedAtMs: event.firedAtMs,
-            timestamp: input.observedAtMs,
-          });
-        }
         if (
           event.lever === 'rumination_watch'
           && input.coherenceContext
@@ -542,10 +578,8 @@ export class ObserverEvalLeverStage {
       // recorded on the persisted lever state (best effort).
       const message = error instanceof Error ? error.message : String(error);
       if (previousState) {
-        // A failed required handoff must not consume the crossing. Restore the
-        // pre-evaluation tracker so the next observation retries with the same
-        // firstCrossing-derived correlation id. The candidate source identity
-        // then deduplicates even across response-loss retries.
+        // A failed eval write must not consume the shadow crossing. Production
+        // state and delivery are outside this tracker.
         this.tracker = new ObserverLeverTracker(this.options.settings, previousState);
       }
       this.logger.error('Observer eval sidecar lever evaluation failed', {

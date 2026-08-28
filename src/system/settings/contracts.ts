@@ -1,4 +1,4 @@
-import type { CanonicalModelRegistry, ImportProcessingRouteMode, ModelCatalogEntry, ModelPurpose, ModelPurposeSelection, ModelRoleAssignments, ModelSlot, ObserverEvalSidecarSettings } from '../../shared/contracts/runtime.js';
+import type { CanonicalModelRegistry, EmoSimProactivitySettings, ImportProcessingRouteMode, ModelCatalogEntry, ModelPurpose, ModelPurposeSelection, ModelRoleAssignments, ModelSlot, ObserverEvalSidecarSettings } from '../../shared/contracts/runtime.js';
 import type { GroupMemorySettings } from '../config/group-memory-config.js';
 import type { EmotionScopingSettings } from '../config/emotion-scoping-config.js';
 import type { NarrativeEmotionAppraisalSettings } from '../config/narrative-emotion-appraisal-config.js';
@@ -223,6 +223,7 @@ export interface EditableSettings {
   embeddingApiDims?: number;
   compositionalPolicy?: CompositionalPolicyConfig;
   observerEvalSidecar?: ObserverEvalSidecarSettings;
+  emosimProactivity?: EmoSimProactivitySettings;
   sessionTailCache?: SessionTailCacheSettings;
   wyomingShardRouting?: SubstrateConfig['wyomingShardRouting'];
   shardToolsets?: SubstrateConfig['shardToolsets'];
@@ -399,6 +400,7 @@ export const RUNTIME_SETTINGS_KEYS = [
   'embeddingApiDims',
   'compositionalPolicy',
   'observerEvalSidecar',
+  'emosimProactivity',
   'sessionTailCache',
   'webFetchAllowHttp',
   'webFetchDomainAllowlist',
@@ -492,6 +494,7 @@ export type RuntimeSettingValue =
   | MemoryPresentationProfile
   | MemoryDeletionPolicy
   | ObserverEvalSidecarSettings
+  | EmoSimProactivitySettings
   | SessionTailCacheSettings
   | ShellExecSettings
   | WikiStartupHydrationSettings

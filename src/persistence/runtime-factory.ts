@@ -52,6 +52,8 @@ import { PostgresIcpInitiationCandidateStore } from './postgres/icp-initiation-c
 import type { IcpInitiationCandidateStorePort } from '../core/icp/autonomy-store-ports.js';
 import { PostgresIcpFeltImpulseFunnelStore } from './postgres/icp-felt-impulse-funnel-store.js';
 import type { IcpFeltImpulseFunnelStorePort } from '../core/icp/felt-impulse-funnel.js';
+import { PostgresEmoSimProactivityStateStore } from './postgres/emosim-proactivity-state-store.js';
+import type { EmoSimProactivityStateStorePort } from '../core/emotion/emosim-proactivity-port.js';
 import type { CompanionPresenceStorePort } from '../core/agent/companion-presence-store-port.js';
 import { PostgresSocialPotStore } from './postgres/social-pot-store.js';
 import type { SocialPotPort } from '../core/agent/fatigue/social-pot.js';
@@ -136,6 +138,8 @@ export interface AgentPersistenceRuntime {
   icpInitiationCandidateStore?: IcpInitiationCandidateStorePort;
   /** Content-free exactly-once provenance for qualified felt-impulse fires. */
   icpFeltImpulseFunnelStore: IcpFeltImpulseFunnelStorePort;
+  /** Companion-local production cursor; never stored in eval telemetry rows. */
+  emosimProactivityStateStore: EmoSimProactivityStateStorePort & { close(): Promise<void> };
   /**
    * Gateway-owned per-companion social pot (shared schema). The durable
    * authority for the fatigue-economy budget that funds group participation and
@@ -169,6 +173,7 @@ export interface CreateAgentPersistenceRuntimeOptions {
     | 'memoryDeletionPolicy'
     | 'companionId'
     | 'automataPolicy'
+    | 'observerEvalSidecar'
   >;
   pathSnapshot: RuntimePathSnapshot;
   embeddingDims: number;
@@ -279,6 +284,14 @@ export async function createAgentPersistenceRuntime(
     () => PostgresIcpFeltImpulseFunnelStore.connect(databaseUrl, {
       schema,
       role: tenantRole,
+    }),
+  );
+  const emosimProactivityStateStore = await awaitPostgresStoreReadiness(
+    'emosim_proactivity_state',
+    () => PostgresEmoSimProactivityStateStore.connect(databaseUrl, {
+      schema,
+      role: tenantRole,
+      legacySidecarId: options.config.observerEvalSidecar?.sidecarId,
     }),
   );
   // Per-companion social pot lives in the shared schema (gateway-owned budget,
@@ -422,6 +435,7 @@ export async function createAgentPersistenceRuntime(
       () => PostgresPartnerAffectShadowStore.connect(databaseUrl, { schema, role: tenantRole }),
     ),
     icpFeltImpulseFunnelStore,
+    emosimProactivityStateStore,
     ...(companionPresenceStore ? { companionPresenceStore } : {}),
     ...(icpInitiationCandidateStore ? { icpInitiationCandidateStore } : {}),
     ...(socialPotStore ? { socialPotStore } : {}),

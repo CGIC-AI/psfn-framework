@@ -81,6 +81,7 @@ describe('Postgres live schema migrations', () => {
     expect(sql).toContain("opportunity_id ~ '^felt-impulse:would_message:[0-9]+$'");
     expect(sql).toContain("destination_kind = 'open_companion_dyad'");
     expect(sql).toContain("channel_type IN ('discord', 'buzz')");
+    expect(sql).toContain("'psfn-amica', 'companion', 'companion-ui'");
     expect(tableSql).not.toContain('private_intent');
     expect(tableSql).not.toContain('message_content');
   });

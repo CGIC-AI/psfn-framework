@@ -26,8 +26,10 @@ import {
   CERTIFICATION_EMBEDDING_DIMS,
   CERTIFICATION_ROLE_A,
   CERTIFICATION_ROLE_B,
+  CERTIFICATION_ROLE_C,
   CERTIFICATION_SCHEMA_A,
   CERTIFICATION_SCHEMA_B,
+  CERTIFICATION_SCHEMA_C,
   CERTIFICATION_SESSION_KEYRING,
 } from './constants.js';
 
@@ -83,8 +85,8 @@ function createCertificationFleetContract() {
         companionId: CERTIFICATION_COMPANION_C,
         companionDataDir: 'companions/gamma/data',
         characterCardPath: 'companions/gamma/data/companion.json',
-        postgresSchema: 'certification_gamma',
-        postgresRole: 'certification_gamma_runtime',
+        postgresSchema: CERTIFICATION_SCHEMA_C,
+        postgresRole: CERTIFICATION_ROLE_C,
         postgresDatabaseUrlRef: {
           kind: 'env',
           envName: 'CERTIFICATION_GAMMA_DATABASE_URL',
@@ -109,7 +111,11 @@ export interface IcpCertificationCompanionFixture {
 
 export interface IcpCertificationFixture {
   artifactsPath: string;
-  companions: readonly [IcpCertificationCompanionFixture, IcpCertificationCompanionFixture];
+  companions: readonly [
+    IcpCertificationCompanionFixture,
+    IcpCertificationCompanionFixture,
+    ...IcpCertificationCompanionFixture[],
+  ];
   gatewaySocketPath: string;
   rootDir: string;
   runtimeRoot: string;
@@ -367,39 +373,26 @@ export function createIcpCertificationFixture(input: {
   const gatewaySocketPath = join(socketDir, 'gateway.sock');
   const seedDir = resolve(input.seedDir ?? 'config');
   const supportContract = createCertificationFleetContract();
-  const companionAContract = supportContract.companions[0]!;
-  const companionBContract = supportContract.companions[1]!;
-  if (
-    companionAContract.companionId !== CERTIFICATION_COMPANION_A
-    || companionAContract.postgresSchema !== CERTIFICATION_SCHEMA_A
-    || companionAContract.postgresRole !== CERTIFICATION_ROLE_A
-    || companionBContract.companionId !== CERTIFICATION_COMPANION_B
-    || companionBContract.postgresSchema !== CERTIFICATION_SCHEMA_B
-    || companionBContract.postgresRole !== CERTIFICATION_ROLE_B
-  ) {
+  const expectedIdentities = [
+    [CERTIFICATION_COMPANION_A, CERTIFICATION_SCHEMA_A, CERTIFICATION_ROLE_A],
+    [CERTIFICATION_COMPANION_B, CERTIFICATION_SCHEMA_B, CERTIFICATION_ROLE_B],
+    [CERTIFICATION_COMPANION_C, CERTIFICATION_SCHEMA_C, CERTIFICATION_ROLE_C],
+  ] as const;
+  if (supportContract.companions.length < 2 || expectedIdentities.some(
+    ([companionId, postgresSchema, postgresRole], index) => {
+      const companion = supportContract.companions[index];
+      return companion?.companionId !== companionId
+        || companion.postgresSchema !== postgresSchema
+        || companion.postgresRole !== postgresRole;
+    },
+  )) {
     throw new Error('Synthetic fixture contract drifted from ICP certification identities');
   }
-  const companionDataA = join(runtimeRoot, companionAContract.companionDataDir);
-  const companionDataB = join(runtimeRoot, companionBContract.companionDataDir);
   mkdirSync(systemDataDir, { recursive: true });
-  mkdirSync(companionDataA, { recursive: true });
-  mkdirSync(companionDataB, { recursive: true });
   mkdirSync(socketDir, { recursive: true });
   copyCanonicalOwners(seedDir, systemDataDir);
   configureSystemOwnerFiles(systemDataDir);
-  seedCompanionStartupOwnerFiles({ seedDir, companionDataDir: companionDataA });
-  seedCompanionStartupOwnerFiles({ seedDir, companionDataDir: companionDataB });
-  configureCompanionOwnerFiles(
-    companionDataA,
-    input.autonomyEnabled ?? true,
-    input.fatigueProfile ?? 'default',
-  );
-  configureCompanionOwnerFiles(
-    companionDataB,
-    input.autonomyEnabled ?? true,
-    input.fatigueProfile ?? 'default',
-  );
-  for (const support of supportContract.companions.slice(2)) {
+  for (const support of supportContract.companions) {
     const companionDataDir = join(runtimeRoot, support.companionDataDir);
     mkdirSync(companionDataDir, { recursive: true });
     seedCompanionStartupOwnerFiles({ seedDir, companionDataDir });
@@ -407,14 +400,6 @@ export function createIcpCertificationFixture(input: {
       companionDataDir,
       input.autonomyEnabled ?? true,
       input.fatigueProfile ?? 'default',
-    );
-    writeJson(
-      join(runtimeRoot, support.characterCardPath),
-      createBootstrapStarterCard(support.displayName ?? 'Fixture Companion'),
-    );
-    mkdirSync(
-      join(runtimeRoot, 'workspaces', 'personal', support.companionId),
-      { recursive: true },
     );
   }
   const modelsPath = join(systemDataDir, 'models.json');
@@ -467,7 +452,13 @@ export function createIcpCertificationFixture(input: {
     // The recipient (companion B) owns the lowered boundary. Companion A keeps
     // the permissive baseline so the certification proves identity-bound
     // resolution rather than two identical policies producing different cost.
-    const chargePath = join(companionDataB, 'charge-policy.json');
+    const loweredBoundary = supportContract.companions.find(
+      companion => companion.companionId === CERTIFICATION_COMPANION_B,
+    );
+    if (!loweredBoundary) {
+      throw new Error('Synthetic fixture is missing the lowered-boundary companion');
+    }
+    const chargePath = join(runtimeRoot, loweredBoundary.companionDataDir, 'charge-policy.json');
     const charge = readJson(chargePath);
     charge.icpCostBreaker = costProfile === 'lowered_hard'
       ? {
@@ -502,38 +493,27 @@ export function createIcpCertificationFixture(input: {
   }
   writeJson(join(systemDataDir, 'companions.json'), supportContract);
 
-  const companions = [
-    makeCompanion({
+  const companions = supportContract.companions.map(support => {
+    const companionDataDir = join(runtimeRoot, support.companionDataDir);
+    return makeCompanion({
       authSocketDir: socketDir,
-      characterCardPath: join(runtimeRoot, companionAContract.characterCardPath),
-      companionDataDir: companionDataA,
-      companionId: CERTIFICATION_COMPANION_A,
+      characterCardPath: join(runtimeRoot, support.characterCardPath),
+      companionDataDir,
+      companionId: support.companionId,
       configDir: seedDir,
       databaseUrl: input.databaseUrl,
       gatewaySocketPath,
-      name: companionAContract.displayName ?? 'FIXTURE COMPANION',
-      postgresSchema: CERTIFICATION_SCHEMA_A,
-      postgresRole: companionAContract.postgresRole,
+      name: support.displayName ?? 'Fixture Companion',
+      postgresSchema: support.postgresSchema,
+      postgresRole: support.postgresRole,
       runtimeRoot,
       systemDataDir,
-      workspacePath: join(runtimeRoot, 'workspaces', 'personal', CERTIFICATION_COMPANION_A),
-    }),
-    makeCompanion({
-      authSocketDir: socketDir,
-      characterCardPath: join(runtimeRoot, companionBContract.characterCardPath),
-      companionDataDir: companionDataB,
-      companionId: CERTIFICATION_COMPANION_B,
-      configDir: seedDir,
-      databaseUrl: input.databaseUrl,
-      gatewaySocketPath,
-      name: companionBContract.displayName ?? 'Fixture Beta',
-      postgresSchema: CERTIFICATION_SCHEMA_B,
-      postgresRole: companionBContract.postgresRole,
-      runtimeRoot,
-      systemDataDir,
-      workspacePath: join(runtimeRoot, 'workspaces', 'personal', CERTIFICATION_COMPANION_B),
-    }),
-  ] as const;
+      workspacePath: join(runtimeRoot, 'workspaces', 'personal', support.companionId),
+    });
+  });
+  if (companions.length < 2) {
+    throw new Error('Multi-companion certification requires at least two companions');
+  }
   const topology = input.topology ?? 'multi_companion';
   if (topology === 'single_companion') {
     // Single-companion topology is a one-entry fleet: the manifest is still
@@ -549,7 +529,11 @@ export function createIcpCertificationFixture(input: {
   let cleaned = false;
   return {
     artifactsPath,
-    companions,
+    companions: companions as [
+      IcpCertificationCompanionFixture,
+      IcpCertificationCompanionFixture,
+      ...IcpCertificationCompanionFixture[],
+    ],
     gatewaySocketPath,
     rootDir,
     runtimeRoot,

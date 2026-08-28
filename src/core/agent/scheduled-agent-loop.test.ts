@@ -104,6 +104,62 @@ describe('scheduled-agent-loop stream result contract', () => {
     },
   );
 
+  it('terminates the turn after a successful response_control no-reply result', async () => {
+    const toolCallMessage = fromAny({
+      ...makeAssistantMessage(''),
+      content: [{
+        type: 'toolCall',
+        id: 'call-no-reply',
+        name: 'response_control',
+        arguments: { action: 'no_reply' },
+      }],
+      stopReason: 'toolUse',
+    });
+    const streamFn = vi.fn(async () => fromAny({
+      async *[Symbol.asyncIterator]() {
+        yield { type: 'start', partial: toolCallMessage };
+        yield { type: 'done', message: toolCallMessage };
+      },
+      result: toolCallMessage,
+    }));
+    const noReplyTool = fromAny({
+      name: 'response_control',
+      label: 'response_control',
+      description: 'Record intentional silence.',
+      parameters: { type: 'object', properties: {} },
+      execute: async () => ({
+        content: [{ type: 'text', text: 'Intentional no-reply recorded.' }],
+        details: { noReply: true, auditId: 'no-reply:test' },
+      }),
+    });
+    const events: any[] = [];
+
+    const stream = agentLoopWithScheduler(
+      [fromAny({ role: 'user', content: [{ type: 'text', text: 'hello' }] })],
+      fromAny({
+        systemPrompt: 'system prompt',
+        messages: [],
+        tools: [noReplyTool],
+      }),
+      fromAny(makeLoopConfig()),
+      new AbortController().signal,
+      fromAny(streamFn),
+      { maxParallelToolCalls: 1 },
+    );
+
+    for await (const event of stream) events.push(event);
+
+    expect(streamFn).toHaveBeenCalledTimes(1);
+    expect(events.find(event => event.type === 'turn_end')?.toolResults).toEqual([
+      expect.objectContaining({
+        toolName: 'response_control',
+        isError: false,
+        details: expect.objectContaining({ noReply: true }),
+      }),
+    ]);
+    expect(events.at(-1)).toMatchObject({ type: 'agent_end' });
+  });
+
   it('uses done-event message when response.result is absent', async () => {
     const final = makeAssistantMessage('done payload final');
     const streamFn = vi.fn(async () => {

@@ -15,6 +15,7 @@ import type {
 } from '../../shared/contracts/embedding-provider.js';
 import { toWorkSpecWireParams } from '../../primitives/llm/work-spec-wire.js';
 import type { Attachment, CompletionPurpose, CorrelationMetadata, LLMContext, LLMModelHint, LLMResponse, ModelBudgetBlockedEvent, ModelPurposeSelection, StreamCallbacks, SubstrateMessage } from '../../shared/contracts/runtime.js';
+import type { IcpConversationEpisode } from '../../shared/contracts/icp-autonomy.js';
 import type {
   GatewayRpcConnection,
   GatewayRpcEndpoint,
@@ -168,6 +169,7 @@ import type {
   IcpInitiationHandoffPrepareParams,
   IcpPermitConsumeParams,
   IcpPermitConsumeResult,
+  IcpEpisodeActivityEndParams,
   IcpPermitRevokeParams,
   IcpPermitRevokeResult,
   IcpPermitInvalidateSelfParams,
@@ -1163,6 +1165,15 @@ export class GatewayClient implements
       ...params,
       ...(this.companionId ? { companionId: this.companionId } : {}),
     }) as IcpPermitConsumeResult;
+  }
+
+  async companionEndIcpEpisodeActivity(
+    params: Omit<IcpEpisodeActivityEndParams, 'companionId'>,
+  ): Promise<IcpConversationEpisode> {
+    return await this.transportRuntime.request('companion.episode.end_activity', {
+      ...params,
+      ...(this.companionId ? { companionId: this.companionId } : {}),
+    }) as IcpConversationEpisode;
   }
 
   async companionRevokeInitiationPermit(

@@ -13,6 +13,8 @@ import {
   AGENT_LOOP_ASSISTANT_STEP_CHECK_IN_AT,
   ParentTurnContinuationFuse,
 } from './turn-limits.js';
+import { RESPONSE_CONTROL_TOOL_NAME } from '../../shared/agent-response-disposition.js';
+import { isRecord } from '../../shared/utils/types.js';
 
 type LiveToolAgentContext = AgentContext & {
   getTools?: () => AgentTool<any>[] | undefined;
@@ -139,6 +141,13 @@ function isInternalFollowUpMessage(message: AgentMessage): boolean {
   return (message as { role?: unknown }).role === 'custom';
 }
 
+function isIntentionalNoReplyResult(result: ToolResultMessage): boolean {
+  return result.toolName === RESPONSE_CONTROL_TOOL_NAME
+    && result.isError !== true
+    && isRecord(result.details)
+    && result.details.noReply === true;
+}
+
 async function runLoop(
   currentContext: LiveToolAgentContext,
   newMessages: AgentMessage[],
@@ -241,6 +250,19 @@ async function runLoop(
           }
         }
         stream.push({ type: 'turn_end', message, toolResults });
+
+        // response_control(no_reply) is itself the terminal response. Asking
+        // the model for another assistant step after the tool succeeds either
+        // manufactures text (which demotes the no-reply) or requires an invalid
+        // empty provider response. End the run here and let turn execution
+        // persist/finalize the already-recorded structured no-reply decision.
+        // The outer finally requeues any held external follow-up so silence on
+        // this turn never drops a separately journaled user message.
+        if (toolResults.some(isIntentionalNoReplyResult)) {
+          stream.push({ type: 'agent_end', messages: newMessages });
+          stream.end(newMessages);
+          return;
+        }
 
         if (steeringAfterTools && steeringAfterTools.length > 0) {
           pendingMessages = steeringAfterTools;

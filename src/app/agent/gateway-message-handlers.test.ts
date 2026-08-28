@@ -202,6 +202,7 @@ function createHarness(overrides?: {
       permitOutcome: 'consumed',
     }))),
     companionConsumeInitiationPermit: vi.fn(async () => ({ outcome: 'consumed' })),
+    companionEndIcpEpisodeActivity: vi.fn(async () => ({})),
     companionReportFailure: vi.fn(overrides?.companionReportFailure ?? (async () => ({}))),
   };
   const agentLoop = {
@@ -1386,6 +1387,10 @@ describe('registerGatewayMessageHandlers', () => {
     expect(harness.agentLoop.recordIcpDeliveryObservation).not.toHaveBeenCalledWith(
       expect.objectContaining({ status: 'prepared' }),
     );
+    expect(harness.gateway.companionEndIcpEpisodeActivity).toHaveBeenCalledWith({
+      conversationId: suppressedCorrelation.conversationId,
+      reasonCode: 'fatigue_exhausted',
+    });
     expect(harness.gateway.companionSend).not.toHaveBeenCalled();
     expect(harness.gateway.companionReportFailure).not.toHaveBeenCalled();
   });

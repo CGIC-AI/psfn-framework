@@ -232,6 +232,11 @@ export interface GatewayMessageGateway {
     rootInitiationId: string;
     peerContactId: string;
   }): Promise<{ outcome: string }>;
+  companionEndIcpEpisodeActivity(input: {
+    conversationId: string;
+    reasonCode: 'fatigue_exhausted' | 'charge_pressure' | 'cost_hard_stop'
+      | 'inactivity_timeout' | 'conversation_ended';
+  }): Promise<unknown>;
   companionReportFailure(params: CompanionMessageFailureReportParams): Promise<unknown>;
   onCompanionDeliveryFailure(
     handler: (notification: CompanionMessageDeliveryFailureNotification) => void | Promise<void>,

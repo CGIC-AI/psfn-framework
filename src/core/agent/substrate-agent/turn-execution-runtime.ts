@@ -30,7 +30,10 @@ import type {
 } from '../../../shared/contracts/runtime.js';
 import { isTemporalContextBudgetTurn } from '../../../shared/context-budget.js';
 import { createTurnId, deriveDeterministicTurnId, parseTurnId } from '../../turns/id.js';
-import { parseIcpConversationCorrelation } from '../../../shared/contracts/icp-autonomy.js';
+import {
+  parseIcpConversationCorrelation,
+  type IcpConversationCorrelation,
+} from '../../../shared/contracts/icp-autonomy.js';
 import type { TurnSnapshot } from '../../turns/snapshot.js';
 import type { IcpFatigueReservationOutcome } from '../fatigue/regulation-reservation.js';
 import type { HumanAttentionPressureEvent } from '../fatigue/human-attention-pressure.js';
@@ -380,6 +383,7 @@ export async function handleMessageForTurn(
       })
     : undefined;
   const privateIcpCorrelation = message.routing?.privateTurnTrigger === true
+    && message.channelType === 'companion'
     ? parseIcpConversationCorrelation(message.routing.icpCorrelation)
     : null;
   if (privateIcpCorrelation && !deliveryLifecycle) {
@@ -736,18 +740,22 @@ export async function handleMessageForTurn(
           : fatigueDecision.metadata.decision === 'overcharge_charged'
             ? 'allow_overcharge'
             : 'allow';
+        const evaluatedCorrelation: IcpConversationCorrelation = {
+          ...icpCorrelation,
+          fatigueDecision: finalFatigueDecision,
+          chargeLane: fatigueDecision.metadata.socialRegulation.chargeLane,
+          ...(finalFatigueDecision === 'suppress'
+            ? { fatigueReasonCode: 'fatigue_exhausted' }
+            : {}),
+        };
         message.routing = {
           ...message.routing,
-          icpCorrelation: {
-            ...icpCorrelation,
-            fatigueDecision: finalFatigueDecision,
-            chargeLane: fatigueDecision.metadata.socialRegulation.chargeLane,
-          },
+          icpCorrelation: evaluatedCorrelation,
         };
         turnCorrelationBase = {
           ...turnCorrelationBase,
-          icpCorrelation,
-          chargeLane: icpCorrelation.chargeLane,
+          icpCorrelation: evaluatedCorrelation,
+          chargeLane: evaluatedCorrelation.chargeLane,
         };
       }
       if (fatigueDecision.shouldRecordSpend && message.routing?.icpCorrelation) {

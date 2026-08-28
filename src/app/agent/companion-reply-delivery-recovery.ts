@@ -18,6 +18,11 @@ interface CompanionReplyDeliveryGatewayPort {
     correlation: NonNullable<AgentResponse['metadata']['icpCorrelation']>,
     humanRelay?: HumanRelayTransportCustody,
   ): Promise<{ messageId: string; deliveredTo: string[] }>;
+  companionEndIcpEpisodeActivity(input: {
+    conversationId: string;
+    reasonCode: 'fatigue_exhausted' | 'charge_pressure' | 'cost_hard_stop'
+      | 'inactivity_timeout' | 'conversation_ended';
+  }): Promise<unknown>;
 }
 
 interface CompanionReplyDeliveryJournalPort {
@@ -89,6 +94,17 @@ export function createCompanionReplyDeliveryLifecycle(input: {
             recoveryResponse: response,
           };
           await input.agent.recordIcpDeliveryObservation(deliveryObservation);
+        }
+        const terminalReason = correlation.fatigueReasonCode;
+        if (terminalReason === 'fatigue_exhausted'
+          || terminalReason === 'charge_pressure'
+          || terminalReason === 'cost_hard_stop'
+          || terminalReason === 'inactivity_timeout'
+          || terminalReason === 'conversation_ended') {
+          await input.gateway.companionEndIcpEpisodeActivity({
+            conversationId: correlation.conversationId,
+            reasonCode: terminalReason,
+          });
         }
         return;
       }

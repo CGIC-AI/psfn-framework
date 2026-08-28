@@ -95,7 +95,9 @@ export function createCompanionReplyDeliveryLifecycle(input: {
           };
           await input.agent.recordIcpDeliveryObservation(deliveryObservation);
         }
-        const terminalReason = correlation.fatigueReasonCode;
+        const terminalReason = response.metadata.noReply
+          ? 'conversation_ended'
+          : correlation.fatigueReasonCode;
         if (terminalReason === 'fatigue_exhausted'
           || terminalReason === 'charge_pressure'
           || terminalReason === 'cost_hard_stop'

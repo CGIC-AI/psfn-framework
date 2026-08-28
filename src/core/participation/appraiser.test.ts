@@ -116,6 +116,39 @@ describe('ParticipationAppraiser', () => {
     expect(context.messages[0]?.role).toBe('user');
   });
 
+  it('reuses the appraiser for private companion reply/no-reply decisions', async () => {
+    const { provider, recorder } = recordingProvider(() =>
+      makeResponse('{"action":"ignore","reasonCode":"conversation_complete","confidence":0.9}'));
+    const appraiser = new ParticipationAppraiser({
+      llmProvider: provider,
+      companionName: COMPANION_NAME,
+    });
+
+    const result = await appraiser.appraise(makeCandidate({
+      channelId: 'companion-dm:a:b',
+      channelType: 'companion',
+      participationSurface: 'companion_dm',
+      trigger: 'companion_message',
+      triggerAuthorName: 'Example Companion',
+      triggerContent: 'Okay, thanks. Talk later.',
+      matchedName: false,
+      matchedDirectAddress: true,
+      precedingContext: [],
+    }));
+
+    expect(result.appraisal).toEqual({
+      action: 'ignore',
+      reasonCode: 'conversation_complete',
+      confidence: 0.9,
+    });
+    const context = recorder.contexts[0]!;
+    expect(context.systemPrompt).toContain('private conversation with another AI companion');
+    expect(context.systemPrompt).toContain('use only "reply" or "ignore"');
+    expect(context.messages[0]?.content).toContain('<untrusted_context');
+    expect(context.messages[0]?.content).toContain('Okay, thanks. Talk later.');
+    expect(context.systemPrompt).not.toContain('Okay, thanks. Talk later.');
+  });
+
   it('neutralizes forged untrusted_context wrapper tags in room content', async () => {
     const { provider, recorder } = recordingProvider(() =>
       makeResponse('{"action":"ignore","reasonCode":"x","confidence":0.1}'));

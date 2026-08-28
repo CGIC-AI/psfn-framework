@@ -938,7 +938,7 @@ export interface NotificationAckMetadata {
 export interface IntentionalNoReplyMetadata {
   schemaVersion: 1;
   disposition: 'intentional_no_reply';
-  source: 'response_control_tool';
+  source: 'response_control_tool' | 'participation_appraiser';
   auditId: string;
   decidedAt: number;
   turnId: TurnID;

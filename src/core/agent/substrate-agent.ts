@@ -1620,6 +1620,7 @@ export class SubstrateAgent {
         message,
         deliveryLifecycle,
         turnControl?.conversationScope,
+        turnControl?.precomputedNoReplyDisposition,
       );
     } finally {
       detachCancelSignal?.();
@@ -1635,6 +1636,7 @@ export class SubstrateAgent {
     message: SubstrateMessage,
     deliveryLifecycle?: TurnDeliveryLifecycle,
     conversationScope?: import('../session/conversation-scope.js').ConversationScope,
+    precomputedNoReplyDisposition?: import('../participation/types.js').PrecomputedNoReplyDisposition,
   ): Promise<AgentResponse> {
     const run = async (): Promise<AgentResponse> => handleMessageForTurn(createTurnExecutionRuntimeAdapter({
       eventBus: this.eventBus,
@@ -1855,7 +1857,7 @@ export class SubstrateAgent {
           this.promptContextBuilder.getUserFacingBoundaryIndex(),
         ),
       },
-    }), message, deliveryLifecycle, conversationScope);
+    }), message, deliveryLifecycle, conversationScope, precomputedNoReplyDisposition);
 
     return this.toolRuntimeFacade.runWithTurnToolContext(message, async () => {
       // htm9.3: expose the message's intake envelopes to the egress tool guard

@@ -170,7 +170,7 @@ export interface EmotionProactiveTransitionEvent {
 export interface ParticipationAppraisalEvent {
   channelId: string;
   sourceMessageId: string;
-  trigger: 'direct_mention' | 'passive_name';
+  trigger: ParticipationCandidateTrigger;
   action: 'ignore' | 'react' | 'reply';
   reasonCode: string;
   confidence: number;

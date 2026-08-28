@@ -8,6 +8,7 @@ import type { ObservedGroupMemoryScheduleDecision } from '../../faculties/memory
 import type {
   ParticipationAppraisalResult,
   ParticipationCandidate,
+  PrecomputedNoReplyDisposition,
   PassiveNameCandidateDecision,
 } from '../../core/participation/types.js';
 import type {
@@ -505,6 +506,68 @@ export function registerGatewayMessageHandlers(
   };
 
   /**
+   * Reuse the existing cheap participation arbiter for authenticated inbound
+   * ICP turns. A DM has no room-speaking lease to contend for: the semantic
+   * appraisal decides reply/no-reply, then an affirmative reply still enters
+   * the ordinary turn where ICP fatigue and every other policy gate apply.
+   */
+  const resolveInboundIcpNoReplyDisposition = async (
+    message: SubstrateMessage,
+  ): Promise<PrecomputedNoReplyDisposition | undefined> => {
+    const correlation = message.routing?.icpCorrelation;
+    if (config.multiCompanion !== true
+      || message.channelType !== 'companion'
+      || !correlation) {
+      return undefined;
+    }
+    const timestampMs = message.timestamp instanceof Date
+      ? message.timestamp.getTime()
+      : new Date(message.timestamp).getTime();
+    if (!Number.isFinite(timestampMs)) {
+      throw new Error('Inbound ICP participation appraisal timestamp is invalid');
+    }
+    const candidate: ParticipationCandidate = {
+      schemaVersion: 1,
+      channelId: message.channelId,
+      channelType: message.channelType,
+      participationSurface: correlation.surface === 'companion_dm'
+        ? 'companion_dm'
+        : 'group_room',
+      sourceMessageId: message.id,
+      trigger: 'companion_message',
+      triggerAuthorId: message.authorId,
+      triggerAuthorName: message.authorName,
+      triggerContent: message.content,
+      triggerTimestampMs: timestampMs,
+      matchedName: false,
+      matchedDirectAddress: correlation.surface === 'companion_dm',
+      precedingContext: [],
+      createdAtMs: nowArbiterMs(),
+    };
+    const result = await appraiseParticipationCandidate(candidate);
+    const appraisal = result?.appraisal ?? {
+      action: 'ignore' as const,
+      reasonCode: 'appraiser_unavailable',
+      confidence: 0,
+    };
+    safeguardAuditTrail.append('icp.reply_disposition', {
+      channelId: message.channelId,
+      sourceMessageId: message.id,
+      action: appraisal.action,
+      reasonCode: appraisal.reasonCode,
+      confidence: appraisal.confidence,
+      failClosed: result?.failClosed ?? true,
+    });
+    if (appraisal.action === 'reply') return undefined;
+    return {
+      source: 'participation_appraiser',
+      reasonCode: appraisal.reasonCode,
+      confidence: appraisal.confidence,
+      failClosed: result?.failClosed ?? true,
+    };
+  };
+
+  /**
    * Gate and reserve one created candidate before appraisal (bible §8.5/§12.2,
    * jp36.5.1.2), then appraise a reserved candidate and settle its reservation.
    * A gated candidate never reaches the appraiser (no model spend). A reserved
@@ -883,11 +946,15 @@ export function registerGatewayMessageHandlers(
       recoveredResponse?: AgentResponse;
       finalizeDelivery(response: AgentResponse): Promise<void>;
     },
+    turnControl?: MessageHandlerOptions,
   ): Promise<AgentResponse> => {
     for (let attempt = 1; ; attempt += 1) {
       try {
-        return deliveryLifecycle
-          ? await agentLoop.handleMessage(message, deliveryLifecycle)
+        if (deliveryLifecycle) {
+          return await agentLoop.handleMessage(message, deliveryLifecycle, turnControl);
+        }
+        return turnControl
+          ? await agentLoop.handleMessage(message, undefined, turnControl)
           : await agentLoop.handleMessage(message);
       } catch (err) {
         if (!(err instanceof Error) || !AGENT_BUSY_PATTERN.test(err.message)) throw err;
@@ -1379,8 +1446,9 @@ export function registerGatewayMessageHandlers(
   // extraction) via agentLoop.handleMessage; the reply — when there is one —
   // goes back through the gateway's companion lane addressed to the same
   // channel, so the peer receives it as its own ordinary inbound turn. A
-  // fatigue-suppressed turn returns empty content, which sends nothing: that
-  // is exactly how a bot↔bot exchange terminates. No side-channel dispatch.
+  // Before generation, correlated ICP turns reuse the participation appraiser
+  // to choose reply/no-reply. Fatigue remains a downstream safety bound; it is
+  // not the semantic conversation terminator. No side-channel dispatch.
   const companionPromptQueue: SubstrateMessage[] = [];
   let companionPumpActive = false;
 
@@ -1402,6 +1470,20 @@ export function registerGatewayMessageHandlers(
     getDisclosureLineage: () => agentLoop.getCurrentTurnDisclosureLineage(),
   });
 
+  const promptCompanionWhenIdle = async (
+    message: SubstrateMessage,
+    deliveryLifecycle?: ReturnType<typeof buildCompanionReplyDeliveryLifecycle>,
+  ): Promise<AgentResponse> => {
+    const precomputedNoReplyDisposition = deliveryLifecycle?.recoveredResponse
+      ? undefined
+      : await resolveInboundIcpNoReplyDisposition(message);
+    return await promptWhenIdle(
+      message,
+      deliveryLifecycle,
+      precomputedNoReplyDisposition ? { precomputedNoReplyDisposition } : undefined,
+    );
+  };
+
   const pumpCompanionQueue = async (): Promise<void> => {
     if (companionPumpActive) return;
     companionPumpActive = true;
@@ -1415,7 +1497,7 @@ export function registerGatewayMessageHandlers(
           const correlatedDeliveryLifecycle = message.routing?.icpCorrelation
             ? buildCompanionReplyDeliveryLifecycle(message)
             : undefined;
-          const response = await promptWhenIdle(message, correlatedDeliveryLifecycle);
+          const response = await promptCompanionWhenIdle(message, correlatedDeliveryLifecycle);
           await correlatedDeliveryLifecycle?.markTurnCompleted();
           if (response.attachments?.length) {
             // The companion lane carries text only for now; surface the drop
@@ -1610,7 +1692,7 @@ export function registerGatewayMessageHandlers(
               parsedRecoveryResponse,
               deliveryObservation,
             );
-            await promptWhenIdle(message, lifecycle);
+            await promptCompanionWhenIdle(message, lifecycle);
             await lifecycle.markTurnCompleted();
             return;
           } else {
@@ -1620,7 +1702,7 @@ export function registerGatewayMessageHandlers(
               deliveryObservation,
               true,
             );
-            await promptWhenIdle(message, lifecycle);
+            await promptCompanionWhenIdle(message, lifecycle);
             await lifecycle.markTurnCompleted();
             return;
           }

@@ -1038,6 +1038,7 @@ describe('Postgres schema tenancy plumbing', () => {
           { version: 12, name: 'icp-felt-impulse-initiation-source' },
           { version: 13, name: 'icp-operator-test-initiation-source' },
           { version: 14, name: 'icp-durable-dyads' },
+          { version: 15, name: 'icp-open-dyad-continuation' },
         ]);
 
         const sharedTables = await pool.query<{ table_name: string }>(
@@ -1049,6 +1050,7 @@ describe('Postgres schema tenancy plumbing', () => {
           'icp_autonomy_invalidation_fences',
           'icp_availability_leases',
           'icp_conversation_episodes',
+          'icp_dyad_deliveries',
           'icp_dyads',
           'icp_fatigue_turn_reservations',
           'icp_initiation_permits',
@@ -1064,7 +1066,7 @@ describe('Postgres schema tenancy plumbing', () => {
         const versionAgain = await pool.query<{ count: string }>(
           `SELECT COUNT(*)::text AS count FROM shared.shared_schema_migrations`,
         );
-        expect(versionAgain.rows[0]?.count).toBe('12');
+        expect(versionAgain.rows[0]?.count).toBe('13');
       } finally {
         await pool.end();
       }

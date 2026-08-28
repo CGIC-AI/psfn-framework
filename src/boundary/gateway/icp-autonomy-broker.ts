@@ -12,6 +12,9 @@ import {
   type IcpAvailabilityLease,
   type IcpAvailabilityState,
   type IcpConversationEpisode,
+  type IcpDyad,
+  type IcpDyadDelivery,
+  type IcpInitiationSource,
   type IcpInitiationPermit,
   type IcpConversationCorrelation,
 } from '../../shared/contracts/icp-autonomy.js';
@@ -25,6 +28,8 @@ import type {
   IcpInitiationPermitIssueResult,
   IcpInitiationPreflightInput,
   IcpInitiationHandoffPrepareResult,
+  IcpOpenDyadProjection,
+  IcpDyadContinuationPrepareResult,
   IcpOwnAvailabilityResult,
   IcpPeerAvailabilityResult,
 } from './icp-autonomy-contract.js';
@@ -49,6 +54,7 @@ export interface GatewayIcpAutonomyBrokerOptions {
   policyAuthority: Pick<
     GatewayIcpInitiationPolicyAuthority,
     'resolve' | 'authorizeHandoff' | 'runAuthorizedHandoff'
+      | 'authorizeDyadContinuation' | 'runAuthorizedDyadContinuation'
   >;
   eventBus: EventBus;
   alarm(event: string, message: string, details: Record<string, unknown>): void;
@@ -335,6 +341,227 @@ export class GatewayIcpAutonomyBroker {
       control: lease.source === 'operator' ? 'operator_override' : lease.source,
       mutableByCompanion: lease.source !== 'operator',
     };
+  }
+
+  async listOpenDyads(companionId: string): Promise<IcpOpenDyadProjection[]> {
+    this.requireFleetCompanion(companionId, 'dyad owner');
+    const dyads = await this.options.store.listDyadsForCompanion(companionId);
+    const projections: IcpOpenDyadProjection[] = [];
+    for (const dyad of dyads) {
+      if (dyad.status !== 'open' || !dyad.participantCompanionIds.includes(companionId)) continue;
+      const peerCompanionId = dyad.participantCompanionIds.find(id => id !== companionId);
+      if (!peerCompanionId || !this.options.fleetCompanionIds.has(peerCompanionId)) continue;
+      const policy = await this.options.policyAuthority.authorizeDyadContinuation({
+        senderCompanionId: companionId,
+        dyad,
+        nowMs: this.now(),
+      });
+      if (!policy.eligible) continue;
+      const [availability, lastDelivery] = await Promise.all([
+        this.readPeerAvailability(companionId, peerCompanionId),
+        this.options.store.getLatestDyadDelivery(dyad.dyadId),
+      ]);
+      projections.push({
+        dyadId: dyad.dyadId,
+        peerCompanionId,
+        channelId: dyad.channelId,
+        status: 'open',
+        availability,
+        ...(lastDelivery
+          ? {
+              lastDeliveryOutcome: lastDelivery.outcome,
+              lastDeliveryAtMs: lastDelivery.updatedAtMs,
+            }
+          : {}),
+      });
+    }
+    return projections;
+  }
+
+  async prepareDyadContinuation(
+    senderCompanionId: string,
+    input: {
+      dyadId: string;
+      deliveryId: string;
+      conversationId: string;
+      peerContactId: string;
+      initiationSource: IcpInitiationSource;
+      sourceDyadId?: string;
+    },
+  ): Promise<IcpDyadContinuationPrepareResult> {
+    this.requireFleetCompanion(senderCompanionId, 'dyad sender');
+    const dyad = await this.options.store.getDyad(input.dyadId);
+    if (!dyad || !dyad.participantCompanionIds.includes(senderCompanionId)) {
+      return { status: 'need_initiation', reasonCode: 'dyad_not_found' };
+    }
+    if (input.sourceDyadId !== undefined && input.sourceDyadId !== dyad.dyadId) {
+      return { status: 'unavailable', reasonCode: 'recursive_trigger' };
+    }
+    if (dyad.status === 'closed') return { status: 'need_initiation', reasonCode: 'dyad_closed' };
+    if (dyad.status === 'revoked') return { status: 'need_initiation', reasonCode: 'dyad_revoked' };
+    const peerCompanionId = dyad.participantCompanionIds.find(id => id !== senderCompanionId);
+    if (!peerCompanionId || !this.options.fleetCompanionIds.has(peerCompanionId)) {
+      return { status: 'unavailable', reasonCode: 'unknown_participant' };
+    }
+    const availability = await this.readPeerAvailability(senderCompanionId, peerCompanionId);
+    if (!availability.eligible) {
+      return {
+        status: 'unavailable',
+        reasonCode: availability.reasonCode ?? 'availability_missing',
+      };
+    }
+    const policyInput = {
+      senderCompanionId,
+      peerContactId: input.peerContactId,
+      dyad,
+      nowMs: this.now(),
+    };
+    const guarded = await this.options.policyAuthority.runAuthorizedDyadContinuation(
+      policyInput,
+      async () => {
+        const existingDelivery = await this.options.store.getDyadDelivery(input.deliveryId);
+        if (existingDelivery) {
+          const existingEpisode = await this.options.store.getEpisode(existingDelivery.conversationId);
+          if (existingDelivery.dyadId !== dyad.dyadId
+            || existingDelivery.conversationId !== input.conversationId
+            || existingDelivery.senderCompanionId !== senderCompanionId
+            || existingDelivery.recipientCompanionId !== peerCompanionId
+            || !existingEpisode || existingEpisode.channelId !== dyad.channelId
+            || existingEpisode.rootInitiationId !== input.deliveryId) {
+            throw new Error('ICP dyad continuation identity collision');
+          }
+          return { dyad, episode: existingEpisode, delivery: existingDelivery };
+        }
+        const nowMs = this.now();
+        const episode: IcpConversationEpisode = {
+          conversationId: input.conversationId,
+          channelId: dyad.channelId,
+          participantCompanionIds: [...dyad.participantCompanionIds],
+          rootInitiationId: input.deliveryId,
+          initiatedByCompanionId: senderCompanionId,
+          initiationSource: input.initiationSource,
+          provenanceRef: `icp-prov:${input.deliveryId}`,
+          openedAtMs: nowMs,
+          lastActivityAtMs: nowMs,
+          status: 'invited',
+          revision: 1,
+        };
+        const delivery: IcpDyadDelivery = {
+          deliveryId: input.deliveryId,
+          dyadId: dyad.dyadId,
+          conversationId: input.conversationId,
+          senderCompanionId,
+          recipientCompanionId: peerCompanionId,
+          outcome: 'queued',
+          createdAtMs: nowMs,
+          updatedAtMs: nowMs,
+          attempt: 0,
+          revision: 1,
+        };
+        return await this.options.store.createDyadContinuation({
+          dyadId: dyad.dyadId,
+          episode,
+          delivery,
+        });
+      },
+    );
+    if (!guarded.decision.eligible || !('result' in guarded)) {
+      return {
+        status: 'unavailable',
+        reasonCode: guarded.decision.reasonCode ?? 'policy_denied',
+      };
+    }
+    return {
+      status: 'authorized',
+      authorization: {
+        dyadId: guarded.result.dyad.dyadId,
+        deliveryId: guarded.result.delivery.deliveryId,
+        peerCompanionId,
+        channelId: guarded.result.dyad.channelId,
+        episode: guarded.result.episode,
+      },
+    };
+  }
+
+  async authorizeDyadContinuationDelivery(
+    senderCompanionId: string,
+    input: { dyadId: string; deliveryId: string; peerContactId: string },
+  ): Promise<{ dyad: IcpDyad; delivery: IcpDyadDelivery; episode: IcpConversationEpisode }> {
+    this.requireFleetCompanion(senderCompanionId, 'dyad sender');
+    const [dyad, delivery] = await Promise.all([
+      this.options.store.getDyad(input.dyadId),
+      this.options.store.getDyadDelivery(input.deliveryId),
+    ]);
+    if (!dyad || dyad.status !== 'open' || !delivery
+      || delivery.dyadId !== dyad.dyadId || delivery.senderCompanionId !== senderCompanionId
+      || !['queued', 'retrying', 'failed'].includes(delivery.outcome)) {
+      throw new Error('ICP dyad continuation delivery is unavailable');
+    }
+    const episode = await this.options.store.getEpisode(delivery.conversationId);
+    if (!episode || episode.channelId !== dyad.channelId
+      || delivery.recipientCompanionId === senderCompanionId
+      || !dyad.participantCompanionIds.includes(delivery.recipientCompanionId)) {
+      throw new Error('ICP dyad continuation delivery binding mismatch');
+    }
+    const policy = await this.options.policyAuthority.authorizeDyadContinuation({
+      senderCompanionId,
+      peerContactId: input.peerContactId,
+      dyad,
+      nowMs: this.now(),
+    });
+    if (!policy.eligible) {
+      throw new Error(`ICP dyad continuation delivery unavailable: ${policy.reasonCode ?? 'policy_denied'}`);
+    }
+    return { dyad, delivery, episode };
+  }
+
+  async recordDyadContinuationDelivery(
+    senderCompanionId: string,
+    input: {
+      dyadId: string;
+      deliveryId: string;
+      peerContactId: string;
+      outcome: 'delivered' | 'duplicate' | 'suppressed' | 'failed' | 'retrying';
+      attempt: number;
+      gatewayMessageId?: string;
+      reasonCode?: IcpAutonomyReasonCode;
+    },
+  ): Promise<IcpDyadDelivery> {
+    this.requireFleetCompanion(senderCompanionId, 'dyad delivery owner');
+    const [dyad, current] = await Promise.all([
+      this.options.store.getDyad(input.dyadId),
+      this.options.store.getDyadDelivery(input.deliveryId),
+    ]);
+    if (!dyad || !current || current.dyadId !== dyad.dyadId
+      || current.senderCompanionId !== senderCompanionId
+      || !dyad.participantCompanionIds.includes(senderCompanionId)) {
+      throw new Error('ICP dyad delivery outcome is not owned by the authenticated companion');
+    }
+    if (current.outcome === 'duplicate' && input.outcome === 'duplicate') return current;
+    if (current.outcome === 'delivered' && input.outcome === 'duplicate') {
+      return await this.options.store.transitionDyadDelivery({
+        deliveryId: input.deliveryId,
+        expectedOutcomes: ['delivered'],
+        outcome: 'duplicate',
+        updatedAtMs: this.now(),
+        attempt: input.attempt,
+        gatewayMessageId: input.gatewayMessageId ?? current.gatewayMessageId,
+      });
+    }
+    const updated = await this.options.store.transitionDyadDelivery({
+      deliveryId: input.deliveryId,
+      expectedOutcomes: [current.outcome],
+      outcome: input.outcome,
+      updatedAtMs: this.now(),
+      attempt: input.attempt,
+      ...(input.gatewayMessageId ? { gatewayMessageId: input.gatewayMessageId } : {}),
+      ...(input.reasonCode ? { reasonCode: input.reasonCode } : {}),
+    });
+    if (input.outcome === 'delivered' || input.outcome === 'duplicate' || input.outcome === 'suppressed') {
+      await this.recordEpisodeTurnCommitted(senderCompanionId, current.conversationId,
+        input.outcome === 'suppressed' ? 'conversation_ended' : undefined);
+    }
+    return updated;
   }
 
   async prepareInitiationHandoff(

@@ -6300,6 +6300,12 @@
     },
     {
       "file": "src/core/tools/notify-companion-handoff.ts",
+      "name": "COMPANION_PRIVATE_INTENT_MAX_LENGTH",
+      "value": "1_000",
+      "note": "Code-owned ICP continuation tool-protocol and DoS bound shared by schema, deferred payload validation, and target-turn execution; private intent is local plumbing rather than operator-tunable policy."
+    },
+    {
+      "file": "src/core/tools/notify-companion-handoff.ts",
       "name": "inferDeferredCompanionOutreachActions.actions.push.arg0.maxRetries",
       "value": "2",
       "form": "object-member",

@@ -20,11 +20,14 @@ import {
   parseIcpConversationEpisode,
   parseIcpDyad,
   parseIcpInitiationPermit,
+  ICP_DYAD_DELIVERY_OUTCOMES,
   type IcpAutonomyReasonCode,
   type IcpAvailabilityLease,
   type IcpAvailabilitySource,
   type IcpConversationEpisode,
   type IcpDyad,
+  type IcpDyadDelivery,
+  type IcpDyadDeliveryOutcome,
   type IcpInitiationPermit,
 } from '../../shared/contracts/icp-autonomy.js';
 import { parseCompanionChannelId } from '../../shared/contracts/companion-channels.js';
@@ -97,6 +100,21 @@ interface PermitRow extends QueryResultRow {
   revision: string | number;
 }
 
+interface DyadDeliveryRow extends QueryResultRow {
+  delivery_id: string;
+  dyad_id: string;
+  conversation_id: string;
+  sender_companion_id: string;
+  recipient_companion_id: string;
+  outcome: string;
+  created_at_ms: string | number;
+  updated_at_ms: string | number;
+  attempt: string | number;
+  gateway_message_id: string | null;
+  reason_code: string | null;
+  revision: string | number;
+}
+
 interface InvalidationFenceRow extends QueryResultRow {
   companion_id: string;
   generation: string | number;
@@ -122,6 +140,11 @@ const PERMIT_COLUMNS = `
 `;
 const INVALIDATION_FENCE_COLUMNS = `
   companion_id, generation, invalidated_at_ms, last_reason_code
+`;
+const DYAD_DELIVERY_COLUMNS = `
+  delivery_id, dyad_id, conversation_id, sender_companion_id,
+  recipient_companion_id, outcome, created_at_ms, updated_at_ms, attempt,
+  gateway_message_id, reason_code, revision
 `;
 
 function availabilitySourcePrioritySql(expression: string, unknownPriority: 0 | 4): string {
@@ -268,6 +291,41 @@ function mapDyad(row: DyadRow, knownCompanionIds: ReadonlySet<string>): IcpDyad 
     provenanceConversationIds: row.provenance_conversation_ids,
     revision: safeInteger(row.revision, 'dyad.revision'),
   }, { knownCompanionIds });
+}
+
+function requireDyadDeliveryOutcome(value: unknown, field: string): IcpDyadDeliveryOutcome {
+  if (typeof value !== 'string'
+    || !ICP_DYAD_DELIVERY_OUTCOMES.includes(value as IcpDyadDeliveryOutcome)) {
+    throw new Error(`${field} is invalid`);
+  }
+  return value as IcpDyadDeliveryOutcome;
+}
+
+function mapDyadDelivery(row: DyadDeliveryRow): IcpDyadDelivery {
+  const outcome = requireDyadDeliveryOutcome(row.outcome, 'dyadDelivery.outcome');
+  const gatewayMessageId = row.gateway_message_id?.trim() || undefined;
+  if ((outcome === 'delivered' || outcome === 'duplicate') !== (gatewayMessageId !== undefined)) {
+    throw new Error('ICP dyad delivery gateway receipt does not match its outcome');
+  }
+  return {
+    deliveryId: requireUuid(row.delivery_id, 'dyadDelivery.deliveryId'),
+    dyadId: requireUuid(row.dyad_id, 'dyadDelivery.dyadId'),
+    conversationId: requireUuid(row.conversation_id, 'dyadDelivery.conversationId'),
+    senderCompanionId: requireUuid(row.sender_companion_id, 'dyadDelivery.senderCompanionId'),
+    recipientCompanionId: requireUuid(row.recipient_companion_id, 'dyadDelivery.recipientCompanionId'),
+    outcome,
+    createdAtMs: safeInteger(row.created_at_ms, 'dyadDelivery.createdAtMs'),
+    updatedAtMs: safeInteger(row.updated_at_ms, 'dyadDelivery.updatedAtMs'),
+    attempt: safeInteger(row.attempt, 'dyadDelivery.attempt'),
+    ...(gatewayMessageId ? { gatewayMessageId } : {}),
+    ...(row.reason_code !== null
+      ? { reasonCode: requireReasonCode(
+          row.reason_code as IcpAutonomyReasonCode,
+          'dyadDelivery.reasonCode',
+        ) }
+      : {}),
+    revision: safeInteger(row.revision, 'dyadDelivery.revision'),
+  };
 }
 
 async function ensureOpenDyadWithClient(
@@ -695,6 +753,176 @@ export class PostgresIcpSharedAutonomyStore implements IcpSharedAutonomyStorePor
       WHERE first_companion_id = $1 AND second_companion_id = $2
     `, pair);
     return row ? mapDyad(row, this.knownCompanionIds) : null;
+  }
+
+  async listDyadsForCompanion(companionId: string): Promise<IcpDyad[]> {
+    const ownerId = requireUuid(companionId, 'companionId');
+    if (!this.knownCompanionIds.has(ownerId)) throw new Error('Unknown ICP dyad owner');
+    const rows = await queryRows<DyadRow>(this.pool, `
+      SELECT ${DYAD_COLUMNS}
+      FROM icp_dyads
+      WHERE first_companion_id = $1 OR second_companion_id = $1
+      ORDER BY created_at_ms, dyad_id
+    `, [ownerId]);
+    return rows.map(row => mapDyad(row, this.knownCompanionIds));
+  }
+
+  async createDyadContinuation(input: {
+    dyadId: string;
+    episode: IcpConversationEpisode;
+    delivery: IcpDyadDelivery;
+  }): Promise<{ dyad: IcpDyad; episode: IcpConversationEpisode; delivery: IcpDyadDelivery }> {
+    const dyadId = requireUuid(input.dyadId, 'dyadId');
+    const episode = parseIcpConversationEpisode(input.episode, {
+      knownCompanionIds: this.knownCompanionIds,
+    });
+    const delivery = input.delivery;
+    requireUuid(delivery.deliveryId, 'delivery.deliveryId');
+    if (delivery.dyadId !== dyadId || delivery.conversationId !== episode.conversationId
+      || delivery.outcome !== 'queued' || delivery.attempt !== 0 || delivery.revision !== 1
+      || delivery.createdAtMs !== delivery.updatedAtMs
+      || delivery.gatewayMessageId !== undefined || delivery.reasonCode !== undefined) {
+      throw new Error('New ICP dyad delivery must be a revision-1 queued continuation');
+    }
+    requireUuid(delivery.senderCompanionId, 'delivery.senderCompanionId');
+    requireUuid(delivery.recipientCompanionId, 'delivery.recipientCompanionId');
+    if (episode.status !== 'invited' || episode.revision !== 1
+      || episode.initiatedByCompanionId !== delivery.senderCompanionId
+      || episode.participantCompanionIds.length !== 2
+      || !episode.participantCompanionIds.includes(delivery.senderCompanionId)
+      || !episode.participantCompanionIds.includes(delivery.recipientCompanionId)) {
+      throw new Error('ICP dyad continuation episode/delivery binding is invalid');
+    }
+    return await withPostgresClient(this.pool, async client => {
+      const dyadRow = (await client.query<DyadRow>(`
+        SELECT ${DYAD_COLUMNS}
+        FROM icp_dyads
+        WHERE dyad_id = $1
+        FOR UPDATE
+      `, [dyadId])).rows.at(0);
+      if (!dyadRow) throw new Error('ICP dyad continuation requires an owned open dyad');
+      let dyad = mapDyad(dyadRow, this.knownCompanionIds);
+      if (dyad.status !== 'open'
+        || dyad.channelId !== episode.channelId
+        || !dyad.participantCompanionIds.includes(delivery.senderCompanionId)
+        || !dyad.participantCompanionIds.includes(delivery.recipientCompanionId)) {
+        throw new Error('ICP dyad continuation requires an owned open dyad');
+      }
+      const insertedEpisode = (await client.query<ConversationRow>(`
+        INSERT INTO icp_conversation_episodes (
+          conversation_id, dyad_id, channel_id, participant_companion_ids, root_initiation_id,
+          initiated_by_companion_id, initiation_source, provenance_ref, opened_at_ms,
+          last_activity_at_ms, status, close_reason_code, revision
+        ) VALUES ($1, $13, $2, $3::uuid[], $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        ON CONFLICT (conversation_id) DO NOTHING
+        RETURNING ${CONVERSATION_COLUMNS}
+      `, [
+        episode.conversationId, episode.channelId, episode.participantCompanionIds,
+        episode.rootInitiationId, episode.initiatedByCompanionId, episode.initiationSource,
+        episode.provenanceRef, episode.openedAtMs, episode.lastActivityAtMs, episode.status,
+        episode.closeReasonCode ?? null, episode.revision, dyadId,
+      ])).rows.at(0);
+      const persistedEpisode = insertedEpisode
+        ? mapConversation(insertedEpisode, this.knownCompanionIds)
+        : mapConversation((await client.query<ConversationRow>(`
+            SELECT ${CONVERSATION_COLUMNS} FROM icp_conversation_episodes
+            WHERE conversation_id = $1 AND dyad_id = $2
+          `, [episode.conversationId, dyadId])).rows.at(0)
+            ?? (() => { throw new Error('ICP dyad continuation episode collision'); })(),
+          this.knownCompanionIds);
+      if (JSON.stringify(persistedEpisode) !== JSON.stringify(episode)) {
+        throw new Error('ICP dyad continuation episode collision');
+      }
+      const insertedDelivery = (await client.query<DyadDeliveryRow>(`
+        INSERT INTO icp_dyad_deliveries (
+          delivery_id, dyad_id, conversation_id, sender_companion_id,
+          recipient_companion_id, outcome, created_at_ms, updated_at_ms, attempt,
+          gateway_message_id, reason_code, revision
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULL, NULL, $10)
+        ON CONFLICT (delivery_id) DO NOTHING
+        RETURNING ${DYAD_DELIVERY_COLUMNS}
+      `, [
+        delivery.deliveryId, dyadId, episode.conversationId, delivery.senderCompanionId,
+        delivery.recipientCompanionId, delivery.outcome, delivery.createdAtMs,
+        delivery.updatedAtMs, delivery.attempt, delivery.revision,
+      ])).rows.at(0);
+      const persistedDelivery = insertedDelivery
+        ? mapDyadDelivery(insertedDelivery)
+        : mapDyadDelivery((await client.query<DyadDeliveryRow>(`
+            SELECT ${DYAD_DELIVERY_COLUMNS} FROM icp_dyad_deliveries WHERE delivery_id = $1
+          `, [delivery.deliveryId])).rows.at(0)
+            ?? (() => { throw new Error('ICP dyad delivery collision'); })());
+      if (JSON.stringify(persistedDelivery) !== JSON.stringify(delivery)) {
+        throw new Error('ICP dyad delivery collision');
+      }
+      if (!dyad.provenanceConversationIds.includes(episode.conversationId)) {
+        const updated = (await client.query<DyadRow>(`
+          UPDATE icp_dyads
+          SET provenance_conversation_ids = ARRAY(
+                SELECT value FROM unnest(provenance_conversation_ids || $2::uuid) AS value ORDER BY value
+              ),
+              revision = revision + 1
+          WHERE dyad_id = $1
+          RETURNING ${DYAD_COLUMNS}
+        `, [dyadId, episode.conversationId])).rows.at(0);
+        if (!updated) throw new Error('ICP dyad disappeared during continuation creation');
+        dyad = mapDyad(updated, this.knownCompanionIds);
+      }
+      return { dyad, episode: persistedEpisode, delivery: persistedDelivery };
+    });
+  }
+
+  async getDyadDelivery(deliveryId: string): Promise<IcpDyadDelivery | null> {
+    const row = await queryOne<DyadDeliveryRow>(this.pool, `
+      SELECT ${DYAD_DELIVERY_COLUMNS} FROM icp_dyad_deliveries WHERE delivery_id = $1
+    `, [requireUuid(deliveryId, 'deliveryId')]);
+    return row ? mapDyadDelivery(row) : null;
+  }
+
+  async getLatestDyadDelivery(dyadId: string): Promise<IcpDyadDelivery | null> {
+    const row = await queryOne<DyadDeliveryRow>(this.pool, `
+      SELECT ${DYAD_DELIVERY_COLUMNS}
+      FROM icp_dyad_deliveries
+      WHERE dyad_id = $1
+      ORDER BY updated_at_ms DESC, delivery_id DESC
+      LIMIT 1
+    `, [requireUuid(dyadId, 'dyadId')]);
+    return row ? mapDyadDelivery(row) : null;
+  }
+
+  async transitionDyadDelivery(input: {
+    deliveryId: string;
+    expectedOutcomes: readonly IcpDyadDeliveryOutcome[];
+    outcome: IcpDyadDeliveryOutcome;
+    updatedAtMs: number;
+    attempt: number;
+    gatewayMessageId?: string;
+    reasonCode?: IcpAutonomyReasonCode;
+  }): Promise<IcpDyadDelivery> {
+    const expected = [...new Set(input.expectedOutcomes.map(outcome => (
+      requireDyadDeliveryOutcome(outcome, 'expectedOutcome')
+    )))];
+    if (expected.length === 0) throw new Error('ICP dyad delivery transition requires expected outcomes');
+    const outcome = requireDyadDeliveryOutcome(input.outcome, 'outcome');
+    const gatewayMessageId = input.gatewayMessageId?.trim() || undefined;
+    if ((outcome === 'delivered' || outcome === 'duplicate') !== (gatewayMessageId !== undefined)) {
+      throw new Error('ICP dyad delivery receipt does not match its outcome');
+    }
+    const row = await queryOne<DyadDeliveryRow>(this.pool, `
+      UPDATE icp_dyad_deliveries
+      SET outcome = $3, updated_at_ms = $4, attempt = $5,
+          gateway_message_id = $6, reason_code = $7, revision = revision + 1
+      WHERE delivery_id = $1 AND outcome = ANY($2::text[])
+        AND updated_at_ms <= $4 AND attempt <= $5
+      RETURNING ${DYAD_DELIVERY_COLUMNS}
+    `, [
+      requireUuid(input.deliveryId, 'deliveryId'), expected, outcome,
+      requireTimestamp(input.updatedAtMs, 'updatedAtMs'),
+      requireNonNegativeInteger(input.attempt, 'attempt'), gatewayMessageId ?? null,
+      input.reasonCode === undefined ? null : requireReasonCode(input.reasonCode, 'reasonCode'),
+    ]);
+    if (!row) throw new Error('ICP dyad delivery transition conflict');
+    return mapDyadDelivery(row);
   }
 
   async transitionDyad(input: IcpDyadTransitionInput): Promise<IcpDyad> {

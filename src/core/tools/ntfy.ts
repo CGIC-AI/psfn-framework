@@ -33,7 +33,7 @@ import { toErrorMessage } from '../../shared/utils/errors.js';
 import { getRequestContext } from '../../primitives/llm/request-context.js';
 import type { AgentFacingIcpAutonomyRuntime } from '../icp/agent-facing-autonomy.js';
 import {
-  COMPANION_NOTIFY_TARGET_KIND,
+  COMPANION_NOTIFY_TARGET_KIND, COMPANION_PRIVATE_INTENT_MAX_LENGTH,
   executeCompanionNotify,
 } from './notify-companion-handoff.js';
 import { executeCompanionCandidateConsider } from './notify-companion-candidate.js';
@@ -63,7 +63,7 @@ const SYSTEM_APPROVAL_REQUEST_SENDER = Object.freeze({
 
 export type { NotificationPort } from '../../boundary/gateway/notification-port.js';
 
-export type NotifyAction = 'brief' | 'send' | 'approval_request' | 'clarify';
+export type NotifyAction = 'brief' | 'send' | 'approval_request' | 'clarify' | 'list_dyads';
 export type NotifyDeliveryChannel = 'discord' | 'email';
 export type NotifyDelivery = 'ntfy' | NotifyDeliveryChannel;
 export type NtfyNotifier = NotificationPort;
@@ -688,7 +688,7 @@ function normalizeAction(value: string): NotifyAction {
       return 'brief';
     case 'send':
     case 'approval_request':
-    case 'clarify':
+    case 'clarify': case 'list_dyads':
       return value.trim() as NotifyAction;
     default:
       throw new Error(`unsupported notify action: ${value}`);
@@ -990,6 +990,21 @@ const notifyToolParameters = Type.Union([
     }),
   }, { additionalProperties: false }),
   Type.Object({
+    action: Type.Literal('send'),
+    target_kind: Type.Literal(COMPANION_NOTIFY_TARGET_KIND),
+    dyad_id: Type.String({
+      description: 'Exact dyad UUID returned by action=list_dyads.',
+    }),
+    private_intent: Type.String({
+      maxLength: COMPANION_PRIVATE_INTENT_MAX_LENGTH,
+      description: 'Private instruction for the ordinary target-channel turn; never sent to the peer.',
+    }),
+  }, { additionalProperties: false }),
+  Type.Object({
+    action: Type.Literal('list_dyads'),
+    target_kind: Type.Literal(COMPANION_NOTIFY_TARGET_KIND),
+  }, { additionalProperties: false }),
+  Type.Object({
     action: Type.Literal('approval_request'),
     approval_id: Type.String({ minLength: 1 }),
     approval_method: Type.String({ minLength: 1 }),
@@ -1035,6 +1050,7 @@ const notifyModelParameters = Type.Object({
     Type.Literal('consider'),
     Type.Literal('approval_request'),
     Type.Literal('clarify'),
+    Type.Literal('list_dyads'),
   ], {
     description: 'Required notify action. Supply every field required for the selected action.',
   }),
@@ -1074,6 +1090,13 @@ const notifyModelParameters = Type.Object({
   })),
   initiation_permit: Type.Optional(Type.String({
     description: 'Required broker-issued permit for companion action=send.',
+  })),
+  dyad_id: Type.Optional(Type.String({
+    description: 'Required for permit-free continuation of an established open dyad.',
+  })),
+  private_intent: Type.Optional(Type.String({
+    maxLength: COMPANION_PRIVATE_INTENT_MAX_LENGTH,
+    description: 'Required private target-turn instruction for an open-dyad continuation.',
   })),
   reason_summary: Type.Optional(Type.String({
     description: 'Required private reason for action=consider.',
@@ -1156,7 +1179,7 @@ export function createNotifyTool(
       }
 
       if (
-        action === 'send'
+        (action === 'send' || rawParams.action === 'list_dyads')
         && 'target_kind' in rawParams
         && rawParams.target_kind === COMPANION_NOTIFY_TARGET_KIND
       ) {
@@ -1227,6 +1250,8 @@ export function createNotifyTool(
         return ['external.discord', 'external.email'] as const;
       }
       case 'consider':
+        return 'external.companion';
+      case 'list_dyads':
         return 'external.companion';
       case 'approval_request':
         return 'external.web';

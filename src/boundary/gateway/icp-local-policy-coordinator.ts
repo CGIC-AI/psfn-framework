@@ -17,6 +17,7 @@ import type {
   IcpInitiationCausalityAuthority,
   IcpInitiationHandoffPolicyDecision,
   IcpInitiationHandoffPolicyInput,
+  IcpDyadContinuationPolicyInput,
   IcpInitiationPolicyAuthorityInput,
 } from './icp-initiation-policy-authority.js';
 
@@ -148,6 +149,71 @@ export class GatewayIcpLocalPolicyCoordinator implements GatewayIcpInitiationPol
     operation: () => Promise<T>,
   ): Promise<IcpAuthorizedHandoffOperationResult<T>> {
     return await this.withAuthorizedHandoff(input, operation);
+  }
+
+  async authorizeDyadContinuation(
+    input: IcpDyadContinuationPolicyInput,
+  ): Promise<IcpInitiationHandoffPolicyDecision> {
+    this.requireOpen();
+    const recipientCompanionId = input.dyad.participantCompanionIds.find(
+      companionId => companionId !== input.senderCompanionId,
+    );
+    if (!recipientCompanionId) return { eligible: false, reasonCode: 'invalid_identity' };
+    try {
+      const [sender, recipient] = await Promise.all([
+        this.inspect(input.senderCompanionId, {
+          role: 'sender',
+          senderCompanionId: input.senderCompanionId,
+          recipientCompanionId,
+          channelId: input.dyad.channelId,
+          nowMs: input.nowMs,
+          dyad: input.dyad,
+          ...(input.peerContactId ? { peerContactId: input.peerContactId } : {}),
+        }),
+        this.inspect(recipientCompanionId, {
+          role: 'recipient',
+          senderCompanionId: input.senderCompanionId,
+          recipientCompanionId,
+          channelId: input.dyad.channelId,
+          nowMs: input.nowMs,
+          dyad: input.dyad,
+        }),
+      ]);
+      if (!sender.ready || !recipient.ready
+        || !sender.canonicalPeerContact || !recipient.canonicalPeerContact) {
+        return { eligible: false, reasonCode: 'invalid_identity' };
+      }
+      if (!sender.trustAllows || !recipient.trustAllows) {
+        return { eligible: false, reasonCode: 'policy_denied' };
+      }
+      if (sender.blocksPeer || recipient.blocksPeer) {
+        return { eligible: false, reasonCode: 'peer_blocked' };
+      }
+      return { eligible: true };
+    } catch (error) {
+      this.options.reportUnavailable({
+        companionIds: [input.senderCompanionId, recipientCompanionId],
+        operation: 'inspect',
+        error,
+      });
+      return { eligible: false, reasonCode: 'policy_denied' };
+    }
+  }
+
+  async runAuthorizedDyadContinuation<T>(
+    input: IcpDyadContinuationPolicyInput,
+    operation: () => Promise<T>,
+  ): Promise<IcpAuthorizedHandoffOperationResult<T>> {
+    const decision = await this.authorizeDyadContinuation(input);
+    if (!decision.eligible) {
+      return {
+        decision: {
+          eligible: false,
+          ...(decision.reasonCode ? { reasonCode: decision.reasonCode } : {}),
+        },
+      };
+    }
+    return { decision: { eligible: true }, result: await operation() };
   }
 
   async close(): Promise<void> {

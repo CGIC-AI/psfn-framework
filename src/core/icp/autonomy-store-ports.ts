@@ -5,6 +5,8 @@ import type {
   IcpConversationEpisode,
   IcpConversationStatus,
   IcpDyad,
+  IcpDyadDelivery,
+  IcpDyadDeliveryOutcome,
   IcpDyadStatus,
   IcpInitiationPermit,
 } from '../../shared/contracts/icp-autonomy.js';
@@ -97,7 +99,24 @@ export interface IcpDyadTransitionInput {
 interface IcpDyadStorePort {
   getDyad(dyadId: string): Promise<IcpDyad | null>;
   getDyadBetween(firstCompanionId: string, secondCompanionId: string): Promise<IcpDyad | null>;
+  listDyadsForCompanion(companionId: string): Promise<IcpDyad[]>;
   transitionDyad(input: IcpDyadTransitionInput): Promise<IcpDyad>;
+  createDyadContinuation(input: {
+    dyadId: string;
+    episode: IcpConversationEpisode;
+    delivery: IcpDyadDelivery;
+  }): Promise<{ dyad: IcpDyad; episode: IcpConversationEpisode; delivery: IcpDyadDelivery }>;
+  getDyadDelivery(deliveryId: string): Promise<IcpDyadDelivery | null>;
+  getLatestDyadDelivery(dyadId: string): Promise<IcpDyadDelivery | null>;
+  transitionDyadDelivery(input: {
+    deliveryId: string;
+    expectedOutcomes: readonly IcpDyadDeliveryOutcome[];
+    outcome: IcpDyadDeliveryOutcome;
+    updatedAtMs: number;
+    attempt: number;
+    gatewayMessageId?: string;
+    reasonCode?: IcpAutonomyReasonCode;
+  }): Promise<IcpDyadDelivery>;
 }
 
 export interface IcpPermitConsumptionInput {

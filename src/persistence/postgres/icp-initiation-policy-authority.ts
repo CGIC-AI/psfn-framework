@@ -4,6 +4,7 @@ import type {
   GatewayIcpInitiationPolicyAuthority,
   IcpInitiationHandoffPolicyDecision,
   IcpInitiationHandoffPolicyInput,
+  IcpDyadContinuationPolicyInput,
   IcpAuthorizedHandoffOperationResult,
   IcpInitiationCapacityPolicyAuthority,
   IcpInitiationCausalityAuthority,
@@ -273,6 +274,61 @@ export class PostgresIcpInitiationPolicyAuthority implements GatewayIcpInitiatio
       const result = await operation();
       return { decision: { eligible: true }, result };
     });
+  }
+
+  async authorizeDyadContinuation(
+    input: IcpDyadContinuationPolicyInput,
+  ): Promise<IcpInitiationHandoffPolicyDecision> {
+    return await this.authorizeDyadContinuationWithQuery(this.pool, input, false);
+  }
+
+  async runAuthorizedDyadContinuation<T>(
+    input: IcpDyadContinuationPolicyInput,
+    operation: () => Promise<T>,
+  ): Promise<IcpAuthorizedHandoffOperationResult<T>> {
+    return await withPostgresClient(this.pool, async client => {
+      const decision = await this.authorizeDyadContinuationWithQuery(client, input, true);
+      if (!decision.eligible) {
+        return {
+          decision: {
+            eligible: false as const,
+            ...(decision.reasonCode ? { reasonCode: decision.reasonCode } : {}),
+          },
+        };
+      }
+      return { decision: { eligible: true }, result: await operation() };
+    });
+  }
+
+  private async authorizeDyadContinuationWithQuery(
+    query: Pool | PoolClient,
+    input: IcpDyadContinuationPolicyInput,
+    lockCanonicalRows: boolean,
+  ): Promise<IcpInitiationHandoffPolicyDecision> {
+    if (input.dyad.status !== 'open'
+      || !input.dyad.participantCompanionIds.includes(input.senderCompanionId)) {
+      return { eligible: false, reasonCode: 'invalid_identity' };
+    }
+    const peerCompanionId = input.dyad.participantCompanionIds.find(
+      companionId => companionId !== input.senderCompanionId,
+    );
+    if (!peerCompanionId) return { eligible: false, reasonCode: 'invalid_identity' };
+    const sender = this.requireOwner(input.senderCompanionId);
+    const peer = this.requireOwner(peerCompanionId);
+    const [senderContact, peerContact] = await Promise.all([
+      this.resolveContact(query, sender, input.peerContactId ?? null, peerCompanionId, lockCanonicalRows),
+      this.resolveContact(query, peer, null, input.senderCompanionId, lockCanonicalRows),
+    ]);
+    if (!senderContact || !peerContact) return { eligible: false, reasonCode: 'invalid_identity' };
+    if (!trustAtLeast(senderContact.trustLevel, 'regular')
+      || !trustAtLeast(peerContact.trustLevel, 'regular')) {
+      return { eligible: false, reasonCode: 'policy_denied' };
+    }
+    if (this.isBlocked(input.senderCompanionId, peerCompanionId, true)
+      || this.isBlocked(peerCompanionId, input.senderCompanionId, true)) {
+      return { eligible: false, reasonCode: 'peer_blocked' };
+    }
+    return { eligible: true };
   }
 
   private async authorizeHandoffWithQuery(

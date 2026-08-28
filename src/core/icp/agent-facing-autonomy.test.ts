@@ -7,6 +7,9 @@ import { createAgentFacingIcpAutonomyRuntime } from './agent-facing-autonomy.js'
 const A = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const B = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 const PERMIT_ID = '44444444-4444-4444-8444-444444444444';
+const DYAD_ID = '55555555-5555-4555-8555-555555555555';
+const DELIVERY_ID = '66666666-6666-4666-8666-666666666666';
+const CONTINUATION_ID = '77777777-7777-4777-8777-777777777777';
 const CANDIDATE_ORIGIN = {
   candidateId: '11111111-1111-4111-8111-111111111111',
   rootInitiationId: '22222222-2222-4222-8222-222222222222',
@@ -79,8 +82,42 @@ function setup(contacts: Contact[] = [contact()]) {
       permit: permit(),
       rootInitiationId: '22222222-2222-4222-8222-222222222222',
     }),
+    companionListOpenDyads: vi.fn().mockResolvedValue([{
+      dyadId: DYAD_ID,
+      peerCompanionId: B,
+      channelId: `companion-dm:${A}:${B}`,
+      status: 'open',
+      availability: { peerCompanionId: B, connectionState: 'online', eligible: true },
+      lastDeliveryOutcome: 'delivered',
+      lastDeliveryAtMs: 9_000,
+    }]),
+    companionPrepareDyadContinuation: vi.fn().mockResolvedValue({
+      status: 'authorized',
+      authorization: {
+        dyadId: DYAD_ID,
+        deliveryId: DELIVERY_ID,
+        peerCompanionId: B,
+        channelId: `companion-dm:${A}:${B}`,
+        episode: {
+          conversationId: CONTINUATION_ID,
+          channelId: `companion-dm:${A}:${B}`,
+          participantCompanionIds: [A, B],
+          rootInitiationId: DELIVERY_ID,
+          initiatedByCompanionId: A,
+          initiationSource: 'foreground',
+          provenanceRef: `icp-prov:${DELIVERY_ID}`,
+          openedAtMs: 10_000,
+          lastActivityAtMs: 10_000,
+          status: 'invited',
+          revision: 1,
+        },
+      },
+    }),
   };
-  const command = { execute: vi.fn().mockResolvedValue({ disposition: 'delivered' }) };
+  const command = {
+    execute: vi.fn().mockResolvedValue({ disposition: 'delivered' }),
+    executeContinuation: vi.fn().mockResolvedValue({ disposition: 'delivered' }),
+  };
   const runtime = createAgentFacingIcpAutonomyRuntime({ contactStore: store, gateway, command });
   return { runtime, store, gateway, command };
 }
@@ -157,6 +194,42 @@ describe('agent-facing ICP autonomy runtime', () => {
       peerContactId: 'peer-contact-b',
       continuationTaskKind: 'research',
     });
+  });
+
+  it('joins gateway-owned dyads to exact local contacts without exposing conversation content', async () => {
+    const { runtime } = setup();
+    await expect(runtime.listOpenDyads()).resolves.toEqual([expect.objectContaining({
+      dyadId: DYAD_ID,
+      peerCompanionId: B,
+      peerContactId: 'peer-contact-b',
+      peerDisplayLabel: 'Peer B',
+      lastDeliveryOutcome: 'delivered',
+    })]);
+    expect(JSON.stringify(await runtime.listOpenDyads()))
+      .not.toMatch(/message|summary|memory|reasoning|motivation|session/iu);
+  });
+
+  it('executes an authorized open-dyad continuation without preparing a first-contact permit', async () => {
+    const { runtime, gateway, command } = setup();
+    await expect(runtime.executeDyadContinuation({
+      dyadId: DYAD_ID,
+      deliveryId: DELIVERY_ID,
+      conversationId: CONTINUATION_ID,
+      privateIntent: 'Say hello naturally.',
+      initiationSource: 'foreground',
+    })).resolves.toEqual({ disposition: 'delivered' });
+    expect(gateway.companionPrepareDyadContinuation).toHaveBeenCalledWith({
+      dyadId: DYAD_ID,
+      deliveryId: DELIVERY_ID,
+      conversationId: CONTINUATION_ID,
+      peerContactId: 'peer-contact-b',
+      initiationSource: 'foreground',
+    });
+    expect(command.executeContinuation).toHaveBeenCalledWith(expect.objectContaining({
+      peerContactId: 'peer-contact-b',
+      privateIntent: 'Say hello naturally.',
+    }));
+    expect(gateway.companionPrepareInitiationHandoff).not.toHaveBeenCalled();
   });
 
   it.each([

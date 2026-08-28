@@ -2,6 +2,7 @@ import type { IcpInitiationCandidateSharedMetadata } from '../../core/icp/initia
 import type {
   IcpAutonomyReasonCode,
   IcpInitiationPermit,
+  IcpDyad,
 } from '../../shared/contracts/icp-autonomy.js';
 import type { IcpInitiationPolicySnapshot } from './icp-autonomy-contract.js';
 import type { RelationshipType } from '../../core/contacts/types.js';
@@ -27,6 +28,13 @@ export interface IcpInitiationHandoffPolicyDecision {
   reasonCode?: IcpAutonomyReasonCode;
 }
 
+export interface IcpDyadContinuationPolicyInput {
+  senderCompanionId: string;
+  peerContactId?: string;
+  dyad: IcpDyad;
+  nowMs: number;
+}
+
 export type IcpAuthorizedHandoffOperationResult<T> =
   | { decision: IcpInitiationHandoffPolicyDecision & { eligible: false } }
   | { decision: IcpInitiationHandoffPolicyDecision & { eligible: true }; result: T };
@@ -40,6 +48,13 @@ export interface GatewayIcpInitiationPolicyAuthority {
   /** Hold canonical candidate/contact/trust locks through the final permit operation. */
   runAuthorizedHandoff<T>(
     input: IcpInitiationHandoffPolicyInput,
+    operation: () => Promise<T>,
+  ): Promise<IcpAuthorizedHandoffOperationResult<T>>;
+  authorizeDyadContinuation(
+    input: IcpDyadContinuationPolicyInput,
+  ): Promise<IcpInitiationHandoffPolicyDecision>;
+  runAuthorizedDyadContinuation<T>(
+    input: IcpDyadContinuationPolicyInput,
     operation: () => Promise<T>,
   ): Promise<IcpAuthorizedHandoffOperationResult<T>>;
   close(): Promise<void>;

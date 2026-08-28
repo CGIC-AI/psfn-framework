@@ -25,6 +25,7 @@ import {
   type IcpTargetRecoveryBinding,
   type RecordedIcpInitiationTurn,
 } from './icp-target-channel-recovery.js';
+import type { IcpTargetChannelContinuation } from './icp-target-channel-continuation.js';
 
 export type { IcpDeliveryObservation } from '../../core/session/icp-delivery-recovery.js';
 export type { RecordedIcpInitiationTurn } from './icp-target-channel-recovery.js';
@@ -111,7 +112,7 @@ export type IcpTargetChannelInitiationResult =
       correlation: IcpConversationCorrelation;
     };
 
-export interface IcpTargetChannelInitiator {
+export interface IcpTargetChannelInitiator extends IcpTargetChannelContinuation {
   initiate(request: IcpTargetChannelInitiationRequest): Promise<IcpTargetChannelInitiationResult>;
 }
 
@@ -195,7 +196,7 @@ export function createIcpTargetChannelInitiator(input: {
   agent: IcpTargetChannelAgentPort;
   gateway: IcpTargetChannelGatewayPort;
   authorName?: string;
-}): IcpTargetChannelInitiator {
+}): Omit<IcpTargetChannelInitiator, 'continueDyad'> {
   const localCompanionId = input.localCompanionId.trim();
   if (!localCompanionId) throw new Error('ICP target-channel initiator requires localCompanionId');
 

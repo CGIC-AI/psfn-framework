@@ -1083,6 +1083,14 @@ export interface CompanionMessageSendParams {
     recipientCompanionId: string;
     correlation: IcpConversationCorrelation;
   };
+  /** Permit-free continuation bound to an existing open dyad delivery row. */
+  continuation?: {
+    dyadId: string;
+    deliveryId: string;
+    recipientCompanionId: string;
+    peerContactId: string;
+    correlation: IcpConversationCorrelation;
+  };
   /** Episode-bound lineage for a non-initial autonomous conversation reply. */
   correlation?: IcpConversationCorrelation;
   /**
@@ -1196,6 +1204,28 @@ export interface IcpPermitInvalidateSelfParams {
   companionId?: string;
 }
 
+interface IcpOpenDyadListParams { companionId?: string }
+
+interface IcpDyadContinuationPrepareParams {
+  dyadId: string;
+  deliveryId: string;
+  conversationId: string;
+  peerContactId: string;
+  initiationSource: import('../../shared/contracts/icp-autonomy.js').IcpInitiationSource;
+  sourceDyadId?: string;
+  companionId?: string;
+}
+
+interface IcpDyadContinuationOutcomeParams {
+  dyadId: string;
+  deliveryId: string;
+  peerContactId: string;
+  outcome: 'suppressed' | 'failed' | 'retrying';
+  attempt: number;
+  reasonCode?: 'delivery_failed' | 'conversation_ended';
+  companionId?: string;
+}
+
 // ── Method map for typed RPC ──
 
 export interface GatewayMethods {
@@ -1223,6 +1253,9 @@ export interface GatewayMethods {
   'companion.initiation.permit.consume': [IcpPermitConsumeParams, IcpPermitConsumeResult];
   'companion.initiation.permit.revoke': [IcpPermitRevokeParams, IcpPermitRevokeResult];
   'companion.initiation.permit.invalidate_for_self': [IcpPermitInvalidateSelfParams, { revokedCount: number }];
+  'companion.dyad.list_open': [IcpOpenDyadListParams, import('./icp-autonomy-contract.js').IcpOpenDyadProjection[]];
+  'companion.dyad.prepare_continuation': [IcpDyadContinuationPrepareParams, import('./icp-autonomy-contract.js').IcpDyadContinuationPrepareResult];
+  'companion.dyad.record_outcome': [IcpDyadContinuationOutcomeParams, import('../../shared/contracts/icp-autonomy.js').IcpDyadDelivery];
   'web.fetch': [WebFetchParams, WebFetchResult];
   'web.fetch_binary': [WebFetchBinaryParams, WebFetchBinaryResult];
   'web.request_binary': [WebRequestBinaryParams, WebRequestBinaryResult];

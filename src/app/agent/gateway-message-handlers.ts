@@ -40,6 +40,7 @@ import {
   type IcpTargetChannelInitiator,
   type RecordedIcpInitiationTurn,
 } from './icp-target-channel-initiation.js';
+import { createIcpTargetChannelContinuation } from './icp-target-channel-continuation.js';
 import {
   parseIcpConversationCorrelation,
   type IcpConversationCorrelation,
@@ -194,6 +195,21 @@ export interface GatewayMessageGateway {
     skippedOffline: string[];
     permitOutcome: 'consumed' | 'replayed';
   }>;
+  companionSendContinuation(input: {
+    authorization: import('../../boundary/gateway/icp-autonomy-contract.js').IcpDyadContinuationAuthorization;
+    peerContactId: string;
+    content: string;
+    authorName?: string;
+    correlation: IcpConversationCorrelation;
+  }): Promise<{ messageId: string; deliveredTo: string[]; duplicate: boolean }>;
+  companionRecordDyadContinuationOutcome(input: {
+    dyadId: string;
+    deliveryId: string;
+    peerContactId: string;
+    outcome: 'suppressed' | 'failed' | 'retrying';
+    attempt: number;
+    reasonCode?: 'delivery_failed' | 'conversation_ended';
+  }): Promise<unknown>;
   companionConsumeInitiationPermit(input: {
     permitId: string;
     conversationId: string;
@@ -1616,14 +1632,27 @@ export function registerGatewayMessageHandlers(
   });
 
   return {
-    icpTargetChannelInitiator: createIcpTargetChannelInitiator({
-      localCompanionId: resolveCompanionIdFromConfig(config),
-      agent: agentLoop,
-      gateway: {
-        sendInitiation: (input) => gateway.companionSendInitiation(input),
-        consumeInitiationPermit: (input) => gateway.companionConsumeInitiationPermit(input),
-      },
-      ...(companionAuthorName ? { authorName: companionAuthorName } : {}),
-    }),
+    icpTargetChannelInitiator: {
+      ...createIcpTargetChannelInitiator({
+        localCompanionId: resolveCompanionIdFromConfig(config),
+        agent: agentLoop,
+        gateway: {
+          sendInitiation: (input) => gateway.companionSendInitiation(input),
+          consumeInitiationPermit: (input) => gateway.companionConsumeInitiationPermit(input),
+        },
+        ...(companionAuthorName ? { authorName: companionAuthorName } : {}),
+      }),
+      ...createIcpTargetChannelContinuation({
+        localCompanionId: resolveCompanionIdFromConfig(config),
+        agent: agentLoop,
+        gateway: {
+          sendContinuation: (input) => gateway.companionSendContinuation(input),
+          recordContinuationOutcome: async (input) => {
+            await gateway.companionRecordDyadContinuationOutcome(input);
+          },
+        },
+        ...(companionAuthorName ? { authorName: companionAuthorName } : {}),
+      }),
+    },
   };
 }

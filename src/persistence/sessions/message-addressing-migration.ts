@@ -7,11 +7,11 @@ import type {
 import { parseMessageAddressingMetadata } from '../../shared/contracts/message-addressing.js';
 import { isRecord } from '../../shared/utils/types.js';
 
-export const MESSAGE_ADDRESSING_V1_TO_V2_MIGRATION_ID = 'message-addressing-v1-to-v2' as const;
+const MESSAGE_ADDRESSING_V1_TO_V2_MIGRATION_ID = 'message-addressing-v1-to-v2' as const;
 
-export type MessageAddressingMigrationMode = 'apply' | 'dry-run';
+type MessageAddressingMigrationMode = 'apply' | 'dry-run';
 
-export type MessageAddressingQuarantineReason =
+type MessageAddressingQuarantineReason =
   | 'invalid_v2'
   | 'legacy_v1_ambiguous_channel_scope'
   | 'legacy_v1_empty_mentions'

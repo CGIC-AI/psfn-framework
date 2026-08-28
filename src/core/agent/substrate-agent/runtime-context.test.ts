@@ -1000,6 +1000,43 @@ describe('runtime subject identity', () => {
     expect(authorContext.channelBond).toBeUndefined();
   });
 
+  it('binds an internal human outreach authoring turn to its authorized contact', async () => {
+    const authorContext = await resolveAuthorContext({
+      message: makeMessage({
+        channelId: 'discord:dm:trusted-person',
+        channelType: 'discord',
+        authorId: 'system:social-outreach',
+        authorName: 'Companion',
+        routing: {
+          source: 'discord',
+          canonicalContactId: 'contact-trusted-person',
+          privateTurnTrigger: true,
+        },
+      }),
+      contactStore: fromAny({
+        getById: () => ({
+          id: 'contact-trusted-person',
+          displayName: 'Trusted Person',
+          trustLevel: 'trusted',
+          relationshipType: 'friend',
+          firstSeen: '2026-03-17T12:00:00Z',
+          lastSeen: '2026-03-17T12:00:00Z',
+        }),
+      }),
+      logger: { warn: () => undefined, debug: () => undefined },
+      companionIdentityKey: DEFAULT_COMPANION_ID,
+      companionDisplayName: 'Companion',
+    });
+
+    expect(authorContext).toMatchObject({
+      trustLevel: 'trusted',
+      speakerRole: 'system',
+      actorKind: 'system',
+      canonicalContactKey: 'contact-trusted-person',
+      continuitySubjectKey: 'contact-trusted-person',
+    });
+  });
+
   it('activates the channel bond only when the current exact identity is bonded', async () => {
     const makeStore = (channels: Array<{ channel: string; userId: string; privacyLevel: string; bonded?: boolean }>) => ({
       resolveChannelIdentity: () => ({

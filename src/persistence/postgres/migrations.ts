@@ -1402,6 +1402,63 @@ export const POSTGRES_INTENTION_MIGRATIONS = [
     updated_at_ms BIGINT NOT NULL CHECK (updated_at_ms >= 0)
   );
   `,
+  // Companion-local, content-free disposition ledger for qualified social
+  // impulses. Local intent text is never persisted; binding_hash fences the
+  // exact choice/target/intent tuple. Durable dyad identity is valid only for
+  // an established companion DM. Human, first-contact, and room destinations
+  // deliberately keep dyad_id NULL.
+  `
+  CREATE TABLE IF NOT EXISTS social_impulse_outreach_opportunities (
+    opportunity_id TEXT PRIMARY KEY,
+    schema_version INTEGER NOT NULL DEFAULT 1 CHECK (schema_version = 1),
+    companion_id UUID NOT NULL,
+    impulse_dedupe_key TEXT NOT NULL,
+    first_crossing_ms BIGINT NOT NULL CHECK (first_crossing_ms >= 0),
+    fired_at_ms BIGINT NOT NULL CHECK (fired_at_ms >= first_crossing_ms),
+    mode_at_creation TEXT NOT NULL CHECK (mode_at_creation IN ('off', 'shadow', 'on')),
+    state TEXT NOT NULL CHECK (state IN (
+      'pending', 'chosen', 'off', 'ignore', 'defer', 'other',
+      'would_send', 'delivered', 'suppressed'
+    )),
+    disposition TEXT CHECK (disposition IN (
+      'ignore', 'defer', 'contact-human', 'contact-companion', 'join-room', 'other'
+    )),
+    destination_kind TEXT CHECK (destination_kind IN (
+      'human_dm', 'open_companion_dyad', 'companion_first_contact', 'room'
+    )),
+    destination_id TEXT,
+    contact_id TEXT,
+    display_label TEXT,
+    channel_id TEXT,
+    channel_type TEXT,
+    dyad_id UUID,
+    binding_hash TEXT CHECK (binding_hash IS NULL OR binding_hash ~ '^[0-9a-f]{64}$'),
+    reason_code TEXT,
+    created_at_ms BIGINT NOT NULL CHECK (created_at_ms >= 0),
+    updated_at_ms BIGINT NOT NULL CHECK (updated_at_ms >= created_at_ms),
+    CHECK (
+      opportunity_id = impulse_dedupe_key
+      AND opportunity_id ~ '^felt-impulse:would_message:[0-9]+$'
+      AND substring(
+        opportunity_id FROM char_length('felt-impulse:would_message:') + 1
+      ) = first_crossing_ms::TEXT
+    ),
+    CHECK ((state IN ('pending', 'off')) = (binding_hash IS NULL)),
+    CHECK ((binding_hash IS NULL) = (disposition IS NULL)),
+    CHECK ((destination_kind IS NULL) = (destination_id IS NULL)),
+    CHECK (
+      (destination_kind = 'open_companion_dyad'
+        AND dyad_id IS NOT NULL AND channel_type = 'companion'
+        AND channel_id ~ '^companion-dm:[0-9a-f-]+:[0-9a-f-]+$')
+      OR (destination_kind IS DISTINCT FROM 'open_companion_dyad' AND dyad_id IS NULL)
+    ),
+    CHECK (destination_kind IS DISTINCT FROM 'room' OR channel_type IN ('discord', 'buzz')),
+    CHECK (destination_kind IS DISTINCT FROM 'human_dm' OR channel_type = 'discord'),
+    CHECK (destination_kind IS DISTINCT FROM 'companion_first_contact' OR channel_id IS NULL)
+  );
+  `,
+  `CREATE INDEX IF NOT EXISTS idx_social_impulse_outreach_state
+    ON social_impulse_outreach_opportunities (state, fired_at_ms DESC, opportunity_id);`,
 ];
 
 export const POSTGRES_AUDIT_MIGRATIONS = [

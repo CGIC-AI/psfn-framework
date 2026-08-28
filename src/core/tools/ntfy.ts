@@ -64,7 +64,7 @@ const SYSTEM_APPROVAL_REQUEST_SENDER = Object.freeze({
 export type { NotificationPort } from '../../boundary/gateway/notification-port.js';
 
 export type NotifyAction = 'brief' | 'send' | 'approval_request' | 'clarify' | 'list_dyads'
-  | 'dyad_lifecycle';
+  | 'dyad_lifecycle' | 'outreach_list' | 'outreach_choose';
 export type NotifyDeliveryChannel = 'discord' | 'email';
 export type NotifyDelivery = 'ntfy' | NotifyDeliveryChannel;
 export type NtfyNotifier = NotificationPort;
@@ -689,7 +689,7 @@ function normalizeAction(value: string): NotifyAction {
       return 'brief';
     case 'send':
     case 'approval_request':
-    case 'clarify': case 'list_dyads': case 'dyad_lifecycle':
+    case 'clarify': case 'list_dyads': case 'dyad_lifecycle': case 'outreach_list': case 'outreach_choose':
       return value.trim() as NotifyAction;
     default:
       throw new Error(`unsupported notify action: ${value}`);
@@ -936,7 +936,7 @@ export interface NotifyToolOptions {
   gatewayMode?: boolean;
   companionOutreach?: AgentFacingIcpAutonomyRuntime;
   companionCandidateEnabled?: boolean;
-  isCompanionCandidateAuthorized?: () => boolean;
+  isCompanionCandidateAuthorized?: () => boolean; socialImpulseOutreach?: import('../emotion/social-impulse-outreach.js').SocialImpulseOutreachRuntime;
 }
 
 const notifyToolParameters = Type.Union([
@@ -1016,6 +1016,29 @@ const notifyToolParameters = Type.Union([
     ]),
   }, { additionalProperties: false }),
   Type.Object({
+    action: Type.Literal('outreach_list'),
+    opportunity_id: Type.String({
+      description: 'Exact qualified social-opportunity identity supplied by the runtime.',
+    }),
+  }, { additionalProperties: false }),
+  Type.Object({
+    action: Type.Literal('outreach_choose'),
+    opportunity_id: Type.String({
+      description: 'Exact qualified social-opportunity identity supplied by the runtime.',
+    }),
+    disposition: Type.Union([
+      Type.Literal('ignore'), Type.Literal('defer'), Type.Literal('contact-human'),
+      Type.Literal('contact-companion'), Type.Literal('join-room'), Type.Literal('other'),
+    ]),
+    destination_id: Type.Optional(Type.String({
+      description: 'Exact authorized destination identity returned by action=outreach_list.',
+    })),
+    intent: Type.Optional(Type.String({
+      maxLength: COMPANION_PRIVATE_INTENT_MAX_LENGTH,
+      description: 'Local instruction for the ordinary destination turn.',
+    })),
+  }, { additionalProperties: false }),
+  Type.Object({
     action: Type.Literal('approval_request'),
     approval_id: Type.String({ minLength: 1 }),
     approval_method: Type.String({ minLength: 1 }),
@@ -1063,6 +1086,8 @@ const notifyModelParameters = Type.Object({
     Type.Literal('clarify'),
     Type.Literal('list_dyads'),
     Type.Literal('dyad_lifecycle'),
+    Type.Literal('outreach_list'),
+    Type.Literal('outreach_choose'),
   ], {
     description: 'Required notify action. Supply every field required for the selected action.',
   }),
@@ -1117,6 +1142,20 @@ const notifyModelParameters = Type.Object({
   ])),
   reason_summary: Type.Optional(Type.String({
     description: 'Required private reason for action=consider.',
+  })),
+  opportunity_id: Type.Optional(Type.String({
+    description: 'Required for social outreach actions.',
+  })),
+  disposition: Type.Optional(Type.Union([
+    Type.Literal('ignore'), Type.Literal('defer'), Type.Literal('contact-human'),
+    Type.Literal('contact-companion'), Type.Literal('join-room'), Type.Literal('other'),
+  ])),
+  destination_id: Type.Optional(Type.String({
+    description: 'Required for a destination-bearing outreach choice.',
+  })),
+  intent: Type.Optional(Type.String({
+    maxLength: COMPANION_PRIVATE_INTENT_MAX_LENGTH,
+    description: 'Required for a destination-bearing outreach choice.',
   })),
   approval_id: Type.Optional(Type.String({
     description: 'Required for action=approval_request.',
@@ -1183,6 +1222,38 @@ export function createNotifyTool(
         action = normalizeAction(rawParams.action);
       } catch (error) {
         return textResultWithError(`notify: failure (${toErrorMessage(error)}).`, true);
+      }
+
+      if (action === 'outreach_list' || action === 'outreach_choose') {
+        if (!options.socialImpulseOutreach) {
+          return textResultWithError('notify: social outreach is not wired in this runtime.', true);
+        }
+        try {
+          if (action === 'outreach_list') {
+            const result = await options.socialImpulseOutreach.inspect(
+              String((rawParams as { opportunity_id?: unknown }).opportunity_id ?? ''),
+            );
+            return textResult(JSON.stringify(result));
+          }
+          const params = rawParams as {
+            opportunity_id: string;
+            disposition: import('../emotion/social-impulse-outreach.js').SocialImpulseDisposition;
+            destination_id?: string;
+            intent?: string;
+          };
+          const result = await options.socialImpulseOutreach.choose({
+            opportunityId: params.opportunity_id,
+            disposition: params.disposition,
+            ...(params.destination_id ? { destinationId: params.destination_id } : {}),
+            ...(params.intent ? { intent: params.intent } : {}),
+          });
+          return textResult(JSON.stringify(result));
+        } catch (error) {
+          return textResultWithError(
+            `notify: social outreach blocked (${toErrorMessage(error)}).`,
+            true,
+          );
+        }
       }
 
       if (action === 'brief' || action === 'clarify') {
@@ -1272,6 +1343,11 @@ export function createNotifyTool(
       case 'list_dyads':
       case 'dyad_lifecycle':
         return 'external.companion';
+      case 'outreach_list':
+      case 'outreach_choose':
+        // The disposition runtime performs destination-specific capability
+        // checks at commit, after re-resolving the exact authorized target.
+        return [] as const;
       case 'approval_request':
         return 'external.web';
       case 'clarify':

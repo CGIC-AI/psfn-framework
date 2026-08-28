@@ -892,6 +892,33 @@ export async function resolveAuthorContext(input: {
     };
   }
 
+  if (input.message.authorId === 'system:social-outreach'
+    && input.message.routing?.privateTurnTrigger === true) {
+    const contactId = input.message.routing.canonicalContactId?.trim();
+    if (!contactId || !input.contactStore) {
+      throw new Error('Internal outreach target turn requires a canonical contact');
+    }
+    const contact = await input.contactStore.getById(contactId);
+    if (!contact || contact.isMachineIntelligence) {
+      throw new Error('Internal human outreach target must resolve to a human contact');
+    }
+    return {
+      trustLevel: contact.trustLevel,
+      speakerRole: 'system',
+      actorKind: 'system',
+      resolvedUserName: resolvePromptUserName(input.message, contact),
+      relationshipType: contact.relationshipType,
+      ...(resolveContactRuntimeTimezone(contact) ? { timezone: resolveContactRuntimeTimezone(contact) } : {}),
+      canonicalContactKey: contact.id,
+      continuitySubjectKey: contact.id,
+      continuityFallbackKeys: collectContinuityFallbackKeys(
+        input.message.authorId,
+        contact.id,
+        contact,
+      ),
+    };
+  }
+
   if (input.message.authorId.startsWith('system:')) {
     return {
       trustLevel: 'regular',

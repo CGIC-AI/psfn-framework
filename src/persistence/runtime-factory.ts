@@ -54,6 +54,8 @@ import { PostgresIcpFeltImpulseFunnelStore } from './postgres/icp-felt-impulse-f
 import type { IcpFeltImpulseFunnelStorePort } from '../core/icp/felt-impulse-funnel.js';
 import { PostgresEmoSimProactivityStateStore } from './postgres/emosim-proactivity-state-store.js';
 import type { EmoSimProactivityStateStorePort } from '../core/emotion/emosim-proactivity-port.js';
+import { PostgresSocialImpulseOutreachStore } from './postgres/social-impulse-outreach-store.js';
+import type { SocialImpulseOutreachStorePort } from '../core/emotion/social-impulse-outreach.js';
 import type { CompanionPresenceStorePort } from '../core/agent/companion-presence-store-port.js';
 import { PostgresSocialPotStore } from './postgres/social-pot-store.js';
 import type { SocialPotPort } from '../core/agent/fatigue/social-pot.js';
@@ -140,6 +142,8 @@ export interface AgentPersistenceRuntime {
   icpFeltImpulseFunnelStore: IcpFeltImpulseFunnelStorePort;
   /** Companion-local production cursor; never stored in eval telemetry rows. */
   emosimProactivityStateStore: EmoSimProactivityStateStorePort & { close(): Promise<void> };
+  /** One companion's durable content-free social-impulse disposition ledger. */
+  socialImpulseOutreachStore: SocialImpulseOutreachStorePort & { close(): Promise<void> };
   /**
    * Gateway-owned per-companion social pot (shared schema). The durable
    * authority for the fatigue-economy budget that funds group participation and
@@ -294,6 +298,13 @@ export async function createAgentPersistenceRuntime(
       legacySidecarId: options.config.observerEvalSidecar?.sidecarId,
     }),
   );
+  const socialImpulseOutreachStore = await awaitPostgresStoreReadiness(
+    'social_impulse_outreach',
+    () => PostgresSocialImpulseOutreachStore.connect(databaseUrl, {
+      schema,
+      role: tenantRole,
+    }),
+  );
   // Per-companion social pot lives in the shared schema (gateway-owned budget,
   // never a companion-local store). Multi-companion only, like presence above.
   const socialPotStore = fleetTenancy
@@ -436,6 +447,7 @@ export async function createAgentPersistenceRuntime(
     ),
     icpFeltImpulseFunnelStore,
     emosimProactivityStateStore,
+    socialImpulseOutreachStore,
     ...(companionPresenceStore ? { companionPresenceStore } : {}),
     ...(icpInitiationCandidateStore ? { icpInitiationCandidateStore } : {}),
     ...(socialPotStore ? { socialPotStore } : {}),

@@ -30,6 +30,9 @@ import {
   createApprovedPrimaryChannelPolicy,
   ProactiveOutboundDispatcher,
 } from '../../core/intention/proactive-outbound.js';
+import type { SocialDesireHumanDeliveryPolicy } from '../../core/intention/social-desire-human-policy.js';
+import type { SocialImpulseOutreachRuntime } from '../../core/emotion/social-impulse-outreach.js';
+import { ContactBlockListStore } from '../../core/cogsec/contact-block-list.js';
 import {
   registerTemporalWakeupLane,
 } from './startup/temporal-wakeup-lane.js';
@@ -107,6 +110,7 @@ import {
 } from '../../core/agent/companion-availability.js';
 import {
   resolveChargeLedgerPath,
+  resolveContactBlockListPath,
   resolveIntakeQuarantinePath,
   resolveOutreachOutboxLedgerPath,
   resolvePendingContactApprovalsPath,
@@ -141,6 +145,7 @@ import type { AgentControlPlaneShutdownTargets } from './control-plane.js';
 import { createLLMProviderPort } from '../../core/agent/contracts.js';
 import { wireIcpInitiationSources } from './icp-initiation-source-wiring.js';
 import { createIcpTestInitiationTrigger } from './icp-test-initiation.js';
+import { createProductionSocialImpulseOutreachRuntime } from './social-impulse-outreach-runtime.js';
 import { wireCompanionPresenceContext } from './companion-presence-wiring.js';
 import { createGatewayOpsPortFromClient } from '../../boundary/gateway/gateway-ops-port.js';
 import { installPromotedToolsPersistenceHook } from '../startup/support/bootstrap-helpers.js';
@@ -813,6 +818,7 @@ async function main(): Promise<void> {
       log.warn('Episode search semantic mode degraded', diagnostic);
     },
   });
+  let socialImpulseOutreachRuntime: SocialImpulseOutreachRuntime | undefined;
   const {
     runtimeEnablement: icpRuntimeEnablement,
     sourceRuntime: icpInitiationSourceRuntime,
@@ -837,8 +843,14 @@ async function main(): Promise<void> {
     contactStore,
     weightedThoughtStore: persistenceRuntime.weightedThoughtStore,
     socialDesireStore: persistenceRuntime.socialDesireStore,
-    // hrmrq.34 (D4): affect-driven felt-impulse initiation targets canonical
-    // sibling peers via the agent-facing autonomy runtime's directory.
+    handleFeltImpulse: async signal => {
+      if (!socialImpulseOutreachRuntime) {
+        throw new Error('social impulse outreach runtime is not composed');
+      }
+      await socialImpulseOutreachRuntime.onImpulse(signal);
+    },
+    // Canonical peer discovery backs both the companion's bounded destination
+    // list and first-contact initiation after she makes an exact choice.
     ...(coreRuntime.icpAutonomyRuntime
       ? { peerDirectory: coreRuntime.icpAutonomyRuntime }
       : {}),
@@ -1553,6 +1565,48 @@ async function main(): Promise<void> {
 
   const heartbeatChannel = discordChannelView.heartbeatChannel ?? undefined;
   const heartbeatChannelId = heartbeatChannel?.channelId;
+  let proactiveOutbound: ProactiveOutboundDispatcher | null = null;
+  let socialDesireHumanDeliveryPolicy: SocialDesireHumanDeliveryPolicy | undefined;
+  let reservationPhase: ReturnType<typeof wireSpeakingArbiterLane>['reservationPhase'];
+  let egressLeasePhase: ReturnType<typeof wireSpeakingArbiterLane>['egressLeasePhase'];
+  const socialOutreachBlockList = new ContactBlockListStore(
+    resolveContactBlockListPath(pathSnapshot.companionDataDir),
+  );
+  socialImpulseOutreachRuntime = createProductionSocialImpulseOutreachRuntime({
+    companionId: resolveCoreCompanionIdFromConfig(config),
+    companionName: card.data.name,
+    store: persistenceRuntime.socialImpulseOutreachStore,
+    getMode: () => config.emosimProactivity?.enabled === true ? 'on' : 'off',
+    agentLoop,
+    contactStore,
+    sessionStore,
+    ...(primaryUserId ? { primaryDiscordUserId: primaryUserId } : {}),
+    ...(heartbeatChannelId
+      ? { heartbeatChannel: { channelId: heartbeatChannelId, channelType: 'discord' } }
+      : {}),
+    ...(coreRuntime.icpAutonomyRuntime
+      ? { icpAutonomy: coreRuntime.icpAutonomyRuntime }
+      : {}),
+    ...(icpInitiationSourceRuntime ? { icpInitiation: icpInitiationSourceRuntime } : {}),
+    capabilityRuntime,
+    availability: companionAvailability,
+    isHumanContactAllowed: async ({ contactId }) => {
+      if (!primaryUserId) return false;
+      const contact = await contactStore.getByDiscordUserId(primaryUserId);
+      return contact?.id === contactId
+        && socialOutreachBlockList.evaluate({
+          channelType: 'discord',
+          contactId: primaryUserId,
+          isDirectMessage: true,
+        }).action === 'allow';
+    },
+    getPhases: () => ({
+      proactiveOutbound,
+      humanPolicy: socialDesireHumanDeliveryPolicy,
+      reservationPhase,
+      egressLeasePhase,
+    }),
+  });
   const shutdownTargets: AgentControlPlaneShutdownTargets = {};
   const controlPlane = buildAgentControlPlane({
     heartbeatChannelId,
@@ -1579,6 +1633,7 @@ async function main(): Promise<void> {
       await persistenceRuntime.icpInitiationCandidateStore?.close();
       await persistenceRuntime.icpFeltImpulseFunnelStore.close();
       await persistenceRuntime.emosimProactivityStateStore.close();
+      await persistenceRuntime.socialImpulseOutreachStore.close();
       await persistenceRuntime.socialPotStore?.close();
       await persistenceRuntime.speakingArbiterStore?.close();
       await persistenceRuntime.backgroundWorkStore.close();
@@ -1603,6 +1658,7 @@ async function main(): Promise<void> {
       ? { icpAutonomyRuntime: coreRuntime.icpAutonomyRuntime }
       : {}),
     ...(icpInitiationSourceRuntime ? { icpInitiationSourceRuntime } : {}),
+    socialImpulseOutreach: socialImpulseOutreachRuntime,
   });
   // Control-plane tools are registered after module loading. Validate them
   // before restored durable actions can execute so a wiring-disabled notify
@@ -1650,7 +1706,7 @@ async function main(): Promise<void> {
   // First proactive-outreach slice: only the configured primary heartbeat DM
   // is an approved target. Contact-graph channel resolution arrives with the
   // durable outbox (1xb.2).
-  const proactiveOutbound = heartbeatChannelId
+  proactiveOutbound = heartbeatChannelId
     ? new ProactiveOutboundDispatcher({
       sender: gatewaySender,
       rateLimiter: externalRateLimiter,
@@ -1707,7 +1763,7 @@ async function main(): Promise<void> {
 
   // ── Social-desire consent-moment lane (epic oth4, bead oth4.2): extracted
   // to startup/social-desire-lane.ts (charter 12.1 split).
-  const { socialDesireOutbound, socialDesireHumanDeliveryPolicy } = registerSocialDesireLane({
+  const socialDesireLane = registerSocialDesireLane({
     schedulerConfig,
     scheduler,
     postTurnActions,
@@ -1727,6 +1783,8 @@ async function main(): Promise<void> {
       agentLoop.socialDesireFeltSignals = writer;
     },
   });
+  const { socialDesireOutbound } = socialDesireLane;
+  socialDesireHumanDeliveryPolicy = socialDesireLane.socialDesireHumanDeliveryPolicy;
 
   // Journal auto-publisher (for reflections -> markdown journal).
   const journalAutoPublisher = createOptionalJournalAutoPublisher(pathSnapshot.workspaceRoot, config);
@@ -1749,12 +1807,7 @@ async function main(): Promise<void> {
 
   // ── Social participation + speaking-arbiter wiring (bible §8, jp36):
   // extracted to startup/speaking-arbiter-lane.ts (charter 12.1 split).
-  const {
-    passiveNameCandidateBuilder,
-    participationAppraiser,
-    reservationPhase,
-    egressLeasePhase,
-  } = wireSpeakingArbiterLane({
+  const speakingArbiterLane = wireSpeakingArbiterLane({
     config,
     schedulerConfig,
     llmProvider,
@@ -1767,6 +1820,12 @@ async function main(): Promise<void> {
     gatewaySender,
     outboundReplyGuard,
   });
+  const {
+    passiveNameCandidateBuilder,
+    participationAppraiser,
+  } = speakingArbiterLane;
+  reservationPhase = speakingArbiterLane.reservationPhase;
+  egressLeasePhase = speakingArbiterLane.egressLeasePhase;
 
   // ── Drift review lanes (htm9.14/htm9.15) + emo_sim dyad advisory (oth4.6):
   // extracted to startup/drift-review-lanes.ts (charter 12.1 split).

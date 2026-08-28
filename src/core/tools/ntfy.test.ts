@@ -49,6 +49,8 @@ describe('notify tool', () => {
             expect.objectContaining({ const: 'consider' }),
             expect.objectContaining({ const: 'approval_request' }),
             expect.objectContaining({ const: 'clarify' }),
+            expect.objectContaining({ const: 'outreach_list' }),
+            expect.objectContaining({ const: 'outreach_choose' }),
           ]),
         },
       },
@@ -66,6 +68,53 @@ describe('notify tool', () => {
       delivery_channel: 'discord',
       delivery_target: '123',
     })).toBe(true);
+  });
+
+  it('exposes a qualified social opportunity without peer-visible content', async () => {
+    const inspect = vi.fn().mockResolvedValue({
+      record: { opportunityId: 'felt-impulse:would_message:1780000000000', state: 'pending' },
+      dispositions: [
+        'ignore', 'defer', 'contact-human', 'contact-companion', 'join-room', 'other',
+      ],
+      destinations: [{
+        kind: 'room', destinationId: 'room:buzz:example', displayLabel: 'A room',
+        channelId: 'example', channelType: 'buzz', dyadId: null,
+      }],
+    });
+    const tool = createNotifyTool({ dispatch: vi.fn() }, {
+      socialImpulseOutreach: fromAny({ inspect, choose: vi.fn(), onImpulse: vi.fn() }),
+    });
+    const result = await tool.execute('outreach-list-1', {
+      action: 'outreach_list',
+      opportunity_id: 'felt-impulse:would_message:1780000000000',
+    });
+    expect(inspect).toHaveBeenCalledWith('felt-impulse:would_message:1780000000000');
+    expect(resultText(fromAny(result))).toContain('contact-companion');
+    expect(resultText(fromAny(result))).not.toContain('message content');
+  });
+
+  it('records a bounded social disposition through its runtime', async () => {
+    const choose = vi.fn().mockResolvedValue({
+      outcome: 'would_send',
+      record: { opportunityId: 'felt-impulse:would_message:1780000000000', state: 'would_send' },
+    });
+    const tool = createNotifyTool({ dispatch: vi.fn() }, {
+      socialImpulseOutreach: fromAny({ inspect: vi.fn(), choose, onImpulse: vi.fn() }),
+    });
+    const result = await tool.execute('outreach-choose-1', {
+      action: 'outreach_choose',
+      opportunity_id: 'felt-impulse:would_message:1780000000000',
+      disposition: 'join-room',
+      destination_id: 'room:discord:example',
+      intent: 'Join in my own words.',
+    });
+    expect(choose).toHaveBeenCalledWith({
+      opportunityId: 'felt-impulse:would_message:1780000000000',
+      disposition: 'join-room',
+      destinationId: 'room:discord:example',
+      intent: 'Join in my own words.',
+    });
+    expect(resultText(fromAny(result))).toContain('would_send');
   });
 
   it('returns explicit success text when a brief is sent', async () => {

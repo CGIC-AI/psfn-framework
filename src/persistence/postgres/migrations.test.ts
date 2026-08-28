@@ -69,6 +69,22 @@ describe('Postgres live schema migrations', () => {
     );
   });
 
+  it('keeps social-impulse choices content-free and limits durable dyads to companion DMs', () => {
+    const sql = migrationSql(POSTGRES_INTENTION_MIGRATIONS);
+    const tableSql = POSTGRES_INTENTION_MIGRATIONS.find(statement => (
+      statement.includes('CREATE TABLE IF NOT EXISTS social_impulse_outreach_opportunities')
+    ));
+
+    expect(tableSql).toBeDefined();
+    expect(sql).toContain('CREATE TABLE IF NOT EXISTS social_impulse_outreach_opportunities');
+    expect(sql).toContain("mode_at_creation IN ('off', 'shadow', 'on')");
+    expect(sql).toContain("opportunity_id ~ '^felt-impulse:would_message:[0-9]+$'");
+    expect(sql).toContain("destination_kind = 'open_companion_dyad'");
+    expect(sql).toContain("channel_type IN ('discord', 'buzz')");
+    expect(tableSql).not.toContain('private_intent');
+    expect(tableSql).not.toContain('message_content');
+  });
+
   it('creates a companion-private leased background-work queue with fail-closed states', () => {
     const sql = migrationSql(POSTGRES_BACKGROUND_WORK_MIGRATIONS);
 

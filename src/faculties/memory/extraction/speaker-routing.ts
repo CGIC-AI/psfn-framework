@@ -53,6 +53,10 @@ export interface ExtractionFactRouting {
   sourceSpanEndMessageId?: number;
   /** Latest source-message instant (epoch ms) of the routed fact's conversation. */
   sourceConversationAt?: number;
+  /** Durable ICP relationship/activity lineage for the attributed source range. */
+  icpDyadId?: string;
+  sourceActivityIds?: string[];
+  sourceTurnIds?: string[];
   routingReason: ExtractionFactRoutingReason;
 }
 

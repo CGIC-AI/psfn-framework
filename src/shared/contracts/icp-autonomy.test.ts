@@ -22,6 +22,7 @@ const CONVERSATION_ID = '22222222-2222-4222-8222-222222222222';
 const ROOT_INITIATION_ID = '33333333-3333-4333-8333-333333333333';
 const PERMIT_ID = '44444444-4444-4444-8444-444444444444';
 const PROVENANCE_HANDLE = 'icp-prov:55555555-5555-4555-8555-555555555555';
+const DYAD_ID = '66666666-6666-4666-8666-666666666666';
 
 describe('ICP autonomy shared contracts', () => {
   it('strictly parses a bounded current availability lease', () => {
@@ -173,6 +174,7 @@ describe('ICP autonomy shared contracts', () => {
 
   it('round-trips complete typed conversation correlation and rejects generic bags', () => {
     const correlation = {
+      dyadId: DYAD_ID,
       conversationId: CONVERSATION_ID,
       rootInitiationId: ROOT_INITIATION_ID,
       initiatedByCompanionId: COMPANION_A,
@@ -202,6 +204,13 @@ describe('ICP autonomy shared contracts', () => {
       ...correlation,
       initiatedByCompanionId: COMPANION_C,
     })).toThrow('initiatedByCompanionId must be the local or peer companion');
+    expect(() => parseIcpConversationCorrelation({ ...correlation, dyadId: 'not-a-uuid' }))
+      .toThrow('dyadId');
+    expect(() => parseIcpConversationCorrelation({
+      ...correlation,
+      channelId: 'companion-room:library',
+      surface: 'companion_room',
+    })).toThrow('dyadId is restricted to companion DM traffic');
   });
 
   it('derives a child cost correlation without changing trusted conversation scope', () => {

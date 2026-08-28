@@ -84,6 +84,7 @@ function buildCorrelation(input: {
   const { authorization } = input;
   const sourceMessageId = `icp-continuation:${authorization.deliveryId}`;
   return parseIcpConversationCorrelation({
+    dyadId: authorization.dyadId,
     conversationId: authorization.episode.conversationId,
     rootInitiationId: authorization.episode.rootInitiationId,
     initiatedByCompanionId: input.localCompanionId,

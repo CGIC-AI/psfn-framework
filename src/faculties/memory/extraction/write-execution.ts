@@ -11,6 +11,9 @@ import type {
   ExtractionRejectionReason,
   ExtractionTriggerReason,
 } from './types.js';
+import { resolveIcpExtractionLineage } from './icp-lineage.js';
+import type { SessionEntry } from '../../../core/session/types.js';
+import type { IcpConversationCorrelation } from '../../../shared/contracts/icp-autonomy.js';
 
 const log = createComponentLogger('Extraction');
 
@@ -71,6 +74,8 @@ export interface FactWriteExecutionInput {
   channelId: string;
   triggerReason: ExtractionTriggerReason;
   turnId: TurnID | undefined;
+  sourceEntries: readonly SessionEntry[];
+  icpCorrelation?: IcpConversationCorrelation;
   telemetryEnabled: boolean;
   isAcceptingExtractions: () => boolean;
   processFact: (
@@ -127,9 +132,18 @@ export async function executeAcceptedFactWrites(
     const { routing } = candidate;
 
     const routingTelemetry = buildExtractionFactRoutingTelemetry(routing, canonicalContactId);
+    const icpLineage = resolveIcpExtractionLineage({
+      channelId: input.channelId,
+      entries: input.sourceEntries,
+      ...(routing.sourceMessageIds ? { sourceMessageIds: routing.sourceMessageIds } : {}),
+      ...(input.icpCorrelation ? { currentCorrelation: input.icpCorrelation } : {}),
+    });
 
     try {
-      const result = await input.processFact(fact, sourceRef, routing.contactId, routingTelemetry);
+      const result = await input.processFact(fact, sourceRef, routing.contactId, {
+        ...routingTelemetry,
+        ...icpLineage,
+      });
       durableMemoryIds.add(result.memory.id);
       for (const supersededMemoryId of result.supersededMemoryIds ?? []) {
         durableMemoryIds.add(supersededMemoryId);

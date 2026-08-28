@@ -84,6 +84,12 @@ export interface MemoryEmotionalTexture {
 }
 export interface MemoryProvenance {
   channelId?: string;
+  /** Durable ICP relationship containing the source turns. */
+  icpDyadId?: string;
+  /** Bounded ICP activity episodes represented by the source turns. */
+  sourceActivityIds?: string[];
+  /** Exact authored turns represented by the extraction source range. */
+  sourceTurnIds?: string[];
   /**
    * Runtime companion that owned a companion-room source when the memory was
    * formed. Room channel ids identify only a place, so this topology-derived
@@ -492,6 +498,7 @@ export function normalizeMemoryProvenance(value: unknown): MemoryProvenance | un
   const record = value as Record<string, unknown>;
   const provenance: MemoryProvenance = {
     ...(normalizeOptionalString(record.channelId) ? { channelId: normalizeOptionalString(record.channelId) } : {}),
+    ...(normalizeOptionalString(record.icpDyadId) ? { icpDyadId: normalizeOptionalString(record.icpDyadId) } : {}),
     ...(normalizeOptionalString(record.companionId) ? { companionId: normalizeOptionalString(record.companionId) } : {}),
     ...(normalizeOptionalString(record.turnId) ? { turnId: normalizeOptionalString(record.turnId) } : {}),
     ...(normalizeOptionalString(record.requestId) ? { requestId: normalizeOptionalString(record.requestId) } : {}),
@@ -516,6 +523,14 @@ export function normalizeMemoryProvenance(value: unknown): MemoryProvenance | un
   const subjectContactIds = normalizeOptionalStringArray(record.subjectContactIds);
   if (subjectContactIds.length > 0) {
     provenance.subjectContactIds = subjectContactIds;
+  }
+  const sourceActivityIds = normalizeOptionalStringArray(record.sourceActivityIds);
+  if (sourceActivityIds.length > 0) {
+    provenance.sourceActivityIds = sourceActivityIds;
+  }
+  const sourceTurnIds = normalizeOptionalStringArray(record.sourceTurnIds);
+  if (sourceTurnIds.length > 0) {
+    provenance.sourceTurnIds = sourceTurnIds;
   }
   const addressMode = normalizeOptionalString(record.addressMode);
   if (addressMode && GROUP_MEMORY_ADDRESS_MODES.includes(addressMode as GroupMemoryAddressMode)) {

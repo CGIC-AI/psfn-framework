@@ -2966,6 +2966,7 @@ describe('PostgresBackgroundWorkStore', () => {
           config,
           eventBus,
           inferPostTurnActions: async () => [],
+          getCurrentTurnDisclosureLineage: () => undefined,
           buildTurnRecord: () => turnRecord,
           backgroundWorkMaxAttempts: DEFAULT_BACKGROUND_WORK_TUNING.postTurn.maxAttempts,
           emotionSelfModelRuntime: {

@@ -27,6 +27,7 @@ import type {
   ObserverEvalSidecarHealthSnapshot,
 } from '../../../core/eval/observer-sidecar/types.js';
 import type { EmotionProactiveTransitionEvent } from '../../../shared/event-bus.js';
+import type { EmoSimProactivityMode } from '../../../shared/contracts/runtime.js';
 
 export const ADMIN_OBSERVER_EVAL_EXPORT_VERSION = 'garden.observer-eval-sidecar.export.v1' as const;
 
@@ -55,6 +56,7 @@ export interface AdminObserverEvalSidecarHealthData {
   status: ObserverEvalSidecarHealthSnapshot['status'] | 'unavailable';
   observedAt: number;
   runtime: ObserverEvalSidecarHealthSnapshot | null;
+  proactivityMode: EmoSimProactivityMode;
   persistence: {
     available: boolean;
     evalOwned: boolean;
@@ -228,7 +230,7 @@ export interface AdminObserverEvalSidecarDataServiceOptions {
   companionId?: string | null;
   binding?: AdminObserverEvalSidecarBindingIdentity | null;
   configuredEnabled?: boolean;
-  proactivityEnabled?: boolean;
+  proactivityMode?: EmoSimProactivityMode;
   getLastTransition?: (() => EmotionProactiveTransitionEvent | null) | null;
   nowMs?: () => number;
 }
@@ -255,7 +257,7 @@ export class AdminObserverEvalSidecarDataService implements AdminObserverEvalSid
     const operatingState = resolveOperatingState({
       binding,
       configuredEnabled: this.options.configuredEnabled === true,
-      proactivityEnabled: this.options.proactivityEnabled === true,
+      proactivityMode: this.options.proactivityMode ?? 'off',
       runtime,
     });
     return {
@@ -265,6 +267,7 @@ export class AdminObserverEvalSidecarDataService implements AdminObserverEvalSid
       status: runtime?.status ?? (operatingState === 'disabled' ? 'disabled' : 'unavailable'),
       observedAt: runtime?.observedAt ?? this.nowMs(),
       runtime,
+      proactivityMode: this.options.proactivityMode ?? 'off',
       persistence: {
         available: Boolean(this.options.persistence),
         evalOwned: Boolean(this.options.persistence),
@@ -370,7 +373,7 @@ export class AdminObserverEvalSidecarDataService implements AdminObserverEvalSid
 function resolveOperatingState(input: {
   binding: AdminObserverEvalSidecarBindingIdentity | null;
   configuredEnabled: boolean;
-  proactivityEnabled: boolean;
+  proactivityMode: EmoSimProactivityMode;
   runtime: ObserverEvalSidecarHealthSnapshot | null;
 }): AdminObserverEvalProactivityOperatingState {
   if (!input.binding) return 'absent';
@@ -381,7 +384,7 @@ function resolveOperatingState(input: {
     || !input.runtime.available) {
     return 'unhealthy';
   }
-  return input.proactivityEnabled ? 'on' : 'shadow';
+  return input.proactivityMode === 'on' ? 'on' : 'shadow';
 }
 
 export class ObserverEvalSidecarApiUnavailableError extends Error {

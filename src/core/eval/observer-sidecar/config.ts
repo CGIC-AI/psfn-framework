@@ -119,16 +119,17 @@ function createObserverEvalSidecarPort(
     throw new Error('observerEvalSidecar.levers requires the context-coherence event bus');
   }
   const companionId = companionIdInput?.trim();
-  if (proactivitySettings.enabled && !companionId) {
+  const proactivityEnabled = proactivitySettings.mode !== 'off';
+  if (proactivityEnabled && !companionId) {
     throw new Error('EmoSim Proactivity Port requires an explicit companionId');
   }
-  if (proactivitySettings.enabled && (!emitProactivityImpulse || !proactivityStateStore)) {
+  if (proactivityEnabled && (!emitProactivityImpulse || !proactivityStateStore)) {
     throw new Error(
       'EmoSim Proactivity Port requires its production impulse sink and companion-local state store',
     );
   }
 
-  const proactivityPort = proactivitySettings.enabled
+  const proactivityPort = proactivityEnabled
     && companionId
     && emitProactivityImpulse
     && proactivityStateStore

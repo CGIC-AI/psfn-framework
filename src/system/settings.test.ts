@@ -596,7 +596,7 @@ describe('settings', () => {
         }),
       });
       expect(normalized.emosimProactivity).toEqual({
-        enabled: true,
+        mode: 'on',
         thresholdProfile: {
           profileId: 'emosim-would-message-v1',
           socialNeedThreshold: levers.wouldMessage.socialNeedThreshold,
@@ -610,7 +610,7 @@ describe('settings', () => {
     it('normalizes the first-class EmoSim proactivity owner block', () => {
       const normalized = normalizeEditableSettings({
         emosimProactivity: fromAny({
-          enabled: true,
+          mode: 'shadow',
           thresholdProfile: {
             profileId: 'emosim-would-message-v1',
             socialNeedThreshold: 0.7,
@@ -620,7 +620,22 @@ describe('settings', () => {
           },
         }),
       });
-      expect(normalized.emosimProactivity?.enabled).toBe(true);
+      expect(normalized.emosimProactivity?.mode).toBe('shadow');
+    });
+
+    it('rejects the retired boolean EmoSim production posture', () => {
+      expect(() => normalizeEditableSettings({
+        emosimProactivity: fromAny({
+          enabled: true,
+          thresholdProfile: {
+            profileId: 'emosim-would-message-v1',
+            socialNeedThreshold: 0.7,
+            attachmentIntensityThreshold: 0.5,
+            sustainMs: 1_800_000,
+            cooldownMs: 21_600_000,
+          },
+        }),
+      })).toThrow(/emosimProactivity\.mode/);
     });
 
     it('normalizes session tail cache settings as a JSON-owned structured object', () => {

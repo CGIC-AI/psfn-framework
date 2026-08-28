@@ -78,6 +78,7 @@ import { AdminPartnerAffectShadowDataService } from './services/partner-affect-s
 import { AdminAutomataDataService, type AdminAutomataBusReadPort, type AdminAutomataLessonReadPort, type AdminAutomataReindexPort } from './services/automata-service.js';
 import type { PartnerAffectShadowStorePort } from '../../core/emotion/partner-affect/shadow-store-port.js';
 import {
+  createDefaultEmoSimProactivitySettings,
   createDefaultObserverEvalSidecarSettings,
   sanitizeCoreSubstrateConfig,
   type SubstrateConfig,
@@ -951,6 +952,7 @@ export function createObserverEvalSidecarAdminService(input: {
   tenant?: TenantPoolScope;
 }): AdminObserverEvalSidecarService {
   const settings = input.config.observerEvalSidecar ?? createDefaultObserverEvalSidecarSettings();
+  const proactivity = input.config.emosimProactivity ?? createDefaultEmoSimProactivitySettings();
   const companionId = input.config.companionId?.trim() || null;
   const manifestBinding = input.config.companionRuntimeIdentity?.observerEvalSidecar;
   let lastTransition: EventMap['emotion.proactive.transition'] | null = null;
@@ -982,7 +984,7 @@ export function createObserverEvalSidecarAdminService(input: {
         }
       : null,
     configuredEnabled: settings.enabled,
-    proactivityEnabled: settings.levers?.enabled === true,
+    proactivityMode: proactivity.mode,
     getLastTransition: () => lastTransition ? structuredClone(lastTransition) : null,
   });
 }

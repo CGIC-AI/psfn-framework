@@ -68,6 +68,7 @@ describe('AdminObserverEvalSidecarDataService', () => {
         evalOwned: false,
         authoritative: false,
       },
+      proactivityMode: 'off',
       lastTransition: null,
     });
   });
@@ -110,7 +111,7 @@ describe('AdminObserverEvalSidecarDataService', () => {
         agentName: 'emosim-agent-vesper',
       },
       configuredEnabled: true,
-      proactivityEnabled: true,
+      proactivityMode: 'on',
       getHealthSnapshot: () => runtime,
       getLastTransition: () => ({
         correlationId: `felt-impulse:would_message:${NOW_MS}`,
@@ -139,7 +140,7 @@ describe('AdminObserverEvalSidecarDataService', () => {
         agentName: 'emosim-agent-vesper',
       },
       configuredEnabled: true,
-      proactivityEnabled: true,
+      proactivityMode: 'on',
       getHealthSnapshot: () => ({ ...runtime, sidecarId: 'emosim-nyx' }),
       getLastTransition: () => ({
         correlationId: `felt-impulse:would_message:${NOW_MS}`,
@@ -159,11 +160,11 @@ describe('AdminObserverEvalSidecarDataService', () => {
   });
 
   it.each([
-    { configuredEnabled: false, proactivityEnabled: false, state: 'disabled', status: 'disabled' },
-    { configuredEnabled: true, proactivityEnabled: false, state: 'shadow', status: 'enabled' },
+    { configuredEnabled: false, proactivityMode: 'off', state: 'disabled', status: 'disabled' },
+    { configuredEnabled: true, proactivityMode: 'shadow', state: 'shadow', status: 'enabled' },
   ] as const)(
     'reports the $state operating state separately',
-    async ({ configuredEnabled, proactivityEnabled, state, status }) => {
+    async ({ configuredEnabled, proactivityMode, state, status }) => {
       const companionId = '22222222-2222-4222-8222-222222222222';
       const sidecarId = 'emosim-vesper';
       const service = new AdminObserverEvalSidecarDataService({
@@ -175,7 +176,7 @@ describe('AdminObserverEvalSidecarDataService', () => {
           agentName: 'emosim-agent-vesper',
         },
         configuredEnabled,
-        proactivityEnabled,
+        proactivityMode,
         getHealthSnapshot: () => configuredEnabled ? ({
           status: 'enabled',
           observedAt: NOW_MS,

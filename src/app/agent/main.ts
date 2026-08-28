@@ -1569,7 +1569,7 @@ async function main(): Promise<void> {
     companionName: card.data.name,
     companionDataDir: pathSnapshot.companionDataDir,
     store: persistenceRuntime.socialImpulseOutreachStore,
-    getMode: () => config.emosimProactivity?.enabled === true ? 'on' : 'off',
+    getMode: () => config.emosimProactivity?.mode ?? 'off',
     agentLoop,
     contactStore,
     sessionStore,

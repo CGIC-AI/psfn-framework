@@ -24,6 +24,9 @@ export interface IcpTargetChannelInitiationCommandPort {
   executeContinuation(
     request: IcpTargetChannelContinuationRequest,
   ): ReturnType<IcpTargetChannelContinuation['continueDyad']>;
+  executeHumanRelay(
+    request: Parameters<IcpTargetChannelContinuation['relayHumanIntent']>[0],
+  ): ReturnType<IcpTargetChannelContinuation['relayHumanIntent']>;
 }
 
 let activeInitiator: IcpTargetChannelCommand | null = null;
@@ -41,6 +44,11 @@ export const icpTargetChannelInitiationCommand: IcpTargetChannelInitiationComman
     const continueDyad = initiator?.continueDyad;
     if (!continueDyad) throw new Error('ICP target-channel continuation command is not registered');
     return await continueDyad(request);
+  },
+  async executeHumanRelay(request) {
+    const relayHumanIntent = activeInitiator?.relayHumanIntent;
+    if (!relayHumanIntent) throw new Error('ICP target-channel human relay command is not registered');
+    return await relayHumanIntent(request);
   },
 };
 

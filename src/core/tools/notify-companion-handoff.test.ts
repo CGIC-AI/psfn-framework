@@ -6,11 +6,13 @@ import type { AgentFacingIcpAutonomyRuntime } from '../icp/agent-facing-autonomy
 import type { PostTurnActionHandler } from '../agent/post-turn-action-runtime.js';
 import { createIcpAutonomyCandidateSchedulerMessage } from '../icp/candidate-scheduler-origin.js';
 import type { IcpInitiationCandidate } from '../icp/initiation-candidate.js';
+import type { DisclosureLineage } from '../cogsec/disclosure/contracts.js';
 import { createNotifyTool, type NotifyDispatcher } from './ntfy.js';
 import {
   COMPANION_NOTIFY_QUEUED_TEXT,
   DEFERRED_COMPANION_OUTREACH_ACTION_KIND,
   inferDeferredCompanionOutreachActions,
+  inferDeferredHumanRelayActions,
   isDeferredCompanionOutreachExecutionAuthorized,
   parseDeferredCompanionOutreachAuthorizationEvidence,
   registerDeferredCompanionOutreachRuntime,
@@ -61,19 +63,57 @@ function runtime(): AgentFacingIcpAutonomyRuntime {
       availability: { peerCompanionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', connectionState: 'online', eligible: true },
     }),
     executeDyadContinuation: vi.fn().mockResolvedValue({ disposition: 'delivered' }),
+    executeHumanRelay: vi.fn().mockResolvedValue({ disposition: 'delivered' }),
     prepareCompanionOutreach: vi.fn().mockResolvedValue(undefined),
     executeCompanionOutreach: vi.fn().mockResolvedValue({ disposition: 'delivered' }),
   };
 }
 
-function tool(owner: AgentFacingIcpAutonomyRuntime) {
+const RELAY_DISCLOSURE_LINEAGE: DisclosureLineage = {
+  provenanceRefs: ['turn:invented-human-request'],
+  sourceSnapshots: [{
+    ref: 'turn:invented-human-request',
+    sensitivity: 'personal',
+    permittedDestinations: [{ kind: 'contact_dm', contactIds: ['peer-contact-b'] }],
+    subjectContactIds: ['contact:invented-human'],
+    sourceChannelId: 'discord:owner',
+    classified: true,
+  }],
+  effectiveSensitivity: 'personal',
+  permittedDestinations: [{ kind: 'contact_dm', contactIds: ['peer-contact-b'] }],
+  subjectContactIds: ['contact:invented-human'],
+  sourceChannelIds: ['discord:owner'],
+  generationContextRef: 'generation:invented-human-request',
+  classification: 'restricted',
+  classifiedAt: '2026-08-28T12:00:00.000Z',
+  classifierVersion: 'test-invented',
+  sourceCount: 1,
+  hasUnclassifiedSource: false,
+};
+
+function tool(owner: AgentFacingIcpAutonomyRuntime, lineage?: DisclosureLineage) {
   const dispatcher: NotifyDispatcher = { dispatch: vi.fn() };
-  return createNotifyTool(dispatcher, { companionOutreach: owner });
+  return createNotifyTool(dispatcher, {
+    companionOutreach: owner,
+    ...(lineage ? { getDisclosureLineage: () => lineage } : {}),
+  });
 }
 
 function ordinaryContext<T>(fn: () => Promise<T>): Promise<T> {
   return runWithRequestContext({
     channelId: 'discord:owner',
+  }, fn);
+}
+
+function humanContext<T>(fn: () => Promise<T>): Promise<T> {
+  return runWithRequestContext({
+    companionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    channelId: 'discord:owner',
+    turnId: '018f22a2-52b8-7a3a-8c16-25b7b14f7082',
+    requestId: 'invented-source-request',
+    requesterProvenance: 'human',
+    viewerAuthorId: 'discord-user:invented-human',
+    viewerMemorySubjectContactId: 'contact:invented-human',
   }, fn);
 }
 
@@ -225,6 +265,88 @@ describe('permit-governed notify companion handoff', () => {
     });
     expect(actions[0]?.payload).not.toHaveProperty('permitId');
     expect(actions[0]?.payload).not.toHaveProperty('contactId');
+  });
+
+  it('exposes action=relay only for an attributable human turn with source disclosure authority', async () => {
+    const owner = runtime();
+    const params = {
+      action: 'relay' as const,
+      target_kind: 'companion' as const,
+      dyad_id: '77777777-7777-4777-8777-777777777777',
+      intent: 'Would you like to meet in the library tomorrow?',
+    };
+    expect(Value.Check(tool(owner).parameters, params)).toBe(true);
+    expect(Value.Check(tool(owner).parameters, { ...params, source_chat: 'forbidden' })).toBe(false);
+
+    const queued = await humanContext(async () => await tool(owner, RELAY_DISCLOSURE_LINEAGE)
+      .execute('call-relay', params));
+    expect(text(queued)).toBe(COMPANION_NOTIFY_QUEUED_TEXT);
+    expect(owner.inspectOpenDyad).toHaveBeenCalledWith(params.dyad_id);
+
+    const missingLineage = await humanContext(async () => await tool(owner).execute('call-relay', params));
+    expect(missingLineage.details?.isError).toBe(true);
+    expect(text(missingLineage)).toMatch(/source disclosure denied/i);
+
+    const nonHuman = await ordinaryContext(async () => await tool(owner, RELAY_DISCLOSURE_LINEAGE)
+      .execute('call-relay', params));
+    expect(nonHuman.details?.isError).toBe(true);
+    expect(text(nonHuman)).toMatch(/attributable human source turn/i);
+  });
+
+  it('creates the bounded capsule in post-turn inference without copying adjacent source chat', async () => {
+    const owner = runtime();
+    const params = {
+      action: 'relay' as const,
+      target_kind: 'companion' as const,
+      dyad_id: '77777777-7777-4777-8777-777777777777',
+      intent: 'Would you like to meet in the library tomorrow?',
+    };
+    const actions = await inferDeferredHumanRelayActions({
+      runtime: owner,
+      localCompanionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      originCatalogSource: 'extended',
+      context: {
+        message: {
+          id: 'invented-source-message',
+          channelId: 'discord:owner',
+          channelType: 'discord',
+          authorId: 'discord-user:invented-human',
+          authorName: 'Invented Human',
+          content: 'Please relay: Would you like to meet in the library tomorrow? Adjacent source secret.',
+          timestamp: new Date('2026-08-28T12:00:00.000Z'),
+        },
+        response: {
+          content: '',
+          channelId: 'discord:owner',
+          metadata: {
+            model: 'invented-test-model', inputTokens: 1, outputTokens: 1, durationMs: 1,
+            requestId: 'invented-source-request',
+          },
+        },
+        turnMessages: [
+          { role: 'assistant', content: [{ type: 'toolCall', id: 'call-relay', name: 'notify', arguments: params }] } as never,
+          { role: 'toolResult', toolCallId: 'call-relay', toolName: 'notify', isError: false,
+            content: [{ type: 'text', text: COMPANION_NOTIFY_QUEUED_TEXT }] } as never,
+        ],
+        turnId: '018f22a2-52b8-7a3a-8c16-25b7b14f7082' as never,
+        completedAt: Date.parse('2026-08-28T12:00:00.000Z'),
+        canonicalContactKey: 'contact:invented-human',
+        disclosureLineage: RELAY_DISCLOSURE_LINEAGE,
+        capturedSessionReads: {} as never,
+      },
+    });
+
+    expect(actions).toHaveLength(1);
+    expect(actions[0]?.payload).toMatchObject({
+      mode: 'human_relay',
+      dyadId: params.dyad_id,
+      capsule: {
+        intent: params.intent,
+        source: { humanParticipantId: 'discord-user:invented-human' },
+        target: { companionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' },
+      },
+    });
+    expect(JSON.stringify(actions[0]?.payload)).not.toContain('Adjacent source secret');
   });
 
   it('advertises an exact companion variant that excludes raw delivery fields', () => {
@@ -419,6 +541,7 @@ describe('permit-governed notify companion handoff', () => {
         }),
       } as never,
       runtime: owner,
+      localCompanionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
       resolveOriginCatalogSource: () => 'extended',
       isExecutionAuthorized: () => true,
     });
@@ -455,6 +578,7 @@ describe('permit-governed notify companion handoff', () => {
         }),
       } as never,
       runtime: owner,
+      localCompanionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
       resolveOriginCatalogSource: () => null,
       isExecutionAuthorized: () => false,
     });
@@ -482,6 +606,7 @@ describe('permit-governed notify companion handoff', () => {
         }),
       } as never,
       runtime: owner,
+      localCompanionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
       resolveOriginCatalogSource: () => null,
       isExecutionAuthorized: () => true,
     });
@@ -543,6 +668,7 @@ describe('permit-governed notify companion handoff', () => {
         }),
       } as never,
       runtime: owner,
+      localCompanionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
       resolveOriginCatalogSource: () => null,
       isExecutionAuthorized: () => true,
     });

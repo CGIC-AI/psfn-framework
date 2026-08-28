@@ -199,6 +199,9 @@ export async function schedulePostTurnWork(input: {
         ...(taskKind ? { taskKind } : {}),
         contextManifest: context.manifest,
         ...(canonicalContactKey ? { canonicalContactKey } : {}),
+        ...(runtime.getCurrentTurnDisclosureLineage()
+          ? { disclosureLineage: runtime.getCurrentTurnDisclosureLineage() }
+          : {}),
         capturedSessionReads: sessionReads,
       });
   observability.emitObservedTurnStage('end', {

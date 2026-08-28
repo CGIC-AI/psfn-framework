@@ -1,8 +1,8 @@
 import { isRfc4122Uuid } from '../../shared/utils/types.js';
 
-export const EMOSIM_PROACTIVITY_IMPULSE_VERSION =
+const EMOSIM_PROACTIVITY_IMPULSE_VERSION =
   'emosim-proactivity.impulse.v1' as const;
-export const EMOSIM_PROACTIVITY_SUPPRESSION_VERSION =
+const EMOSIM_PROACTIVITY_SUPPRESSION_VERSION =
   'emosim-proactivity.suppression.v1' as const;
 
 const ATTACHMENT_EMOTIONS: ReadonlySet<string> = new Set([
@@ -13,7 +13,7 @@ const ATTACHMENT_EMOTIONS: ReadonlySet<string> = new Set([
   'Sympathy',
 ]);
 
-export interface EmoSimProactivityThresholdProfile {
+interface EmoSimProactivityThresholdProfile {
   profileId: string;
   socialNeedThreshold: number;
   attachmentIntensityThreshold: number;
@@ -21,7 +21,7 @@ export interface EmoSimProactivityThresholdProfile {
   cooldownMs: number;
 }
 
-export interface EmoSimProactivityInputLineage {
+interface EmoSimProactivityInputLineage {
   schemaVersion: 1;
   /** Content-free identity of the sanitized turn projection. */
   inputId: string;
@@ -30,7 +30,7 @@ export interface EmoSimProactivityInputLineage {
   rawContentRedacted: true;
 }
 
-export interface EmoSimProactivityObservation {
+interface EmoSimProactivityObservation {
   companionId: string;
   observedAtMs: number;
   source: {
@@ -73,7 +73,7 @@ export interface EmoSimProactivityImpulse {
   authority: 'qualified_source_fire';
 }
 
-export type EmoSimProactivitySuppressionReason =
+type EmoSimProactivitySuppressionReason =
   | 'port_disabled'
   | 'source_unavailable'
   | 'inputs_unavailable'
@@ -81,7 +81,7 @@ export type EmoSimProactivitySuppressionReason =
   | 'sustain_pending'
   | 'cooldown_active';
 
-export interface EmoSimProactivitySuppression {
+interface EmoSimProactivitySuppression {
   schemaVersion: 1;
   suppressionVersion: typeof EMOSIM_PROACTIVITY_SUPPRESSION_VERSION;
   kind: 'suppressed';
@@ -94,7 +94,7 @@ export interface EmoSimProactivitySuppression {
   nextEligibleAtMs?: number;
 }
 
-export type EmoSimProactivityResult =
+type EmoSimProactivityResult =
   | { kind: 'emitted'; impulse: EmoSimProactivityImpulse }
   | EmoSimProactivitySuppression;
 

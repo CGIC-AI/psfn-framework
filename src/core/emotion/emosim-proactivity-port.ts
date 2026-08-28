@@ -27,7 +27,7 @@ interface EmoSimProactivityInputLineage {
   rawContentRedacted: true;
 }
 
-export interface EmoSimProactivityObservation {
+interface EmoSimProactivityObservation {
   companionId: string;
   observedAtMs: number;
   source: {
@@ -70,7 +70,7 @@ export interface EmoSimProactivityImpulse {
   authority: 'qualified_source_fire';
 }
 
-export type EmoSimProactivitySuppressionReason =
+type EmoSimProactivitySuppressionReason =
   | 'port_disabled'
   | 'source_unavailable'
   | 'inputs_unavailable'
@@ -81,7 +81,7 @@ export type EmoSimProactivitySuppressionReason =
   | 'sustain_pending'
   | 'cooldown_active';
 
-export interface EmoSimProactivitySuppression {
+interface EmoSimProactivitySuppression {
   schemaVersion: 1;
   suppressionVersion: typeof EMOSIM_PROACTIVITY_SUPPRESSION_VERSION;
   kind: 'suppressed';

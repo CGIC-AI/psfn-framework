@@ -364,6 +364,7 @@
   "shellExec": {
     "enabled": false,
     "allowlist": [],
+    "networkAllowlist": [],
     "envAllowlist": [],
     "mountRepositoryReadOnly": false,
     "defaultTimeoutMs": 600000,

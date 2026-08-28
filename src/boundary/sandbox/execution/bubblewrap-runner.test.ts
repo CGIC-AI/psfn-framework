@@ -14,6 +14,7 @@ function request(): ResolvedShellExecution {
     resourceLimitBinaryPath: '/usr/bin/prlimit',
     deadlineBinaryPath: '/usr/bin/timeout',
     sandboxPath: '/usr/local/bin:/usr/bin:/bin',
+    networkAccess: false,
     childEnv: {
       PATH: '/usr/local/bin:/usr/bin:/bin',
       HOME: '/workspace',
@@ -84,6 +85,25 @@ describe('buildBubblewrapArgs', () => {
     expect(rendered).not.toContain('/app/system-data');
     expect(rendered).not.toContain('/app/companion-data');
     expect(rendered).not.toContain('/var/run/secrets');
+  });
+
+  it('shares the gateway network only for a policy-resolved top-level command', () => {
+    const args = buildBubblewrapArgs({
+      ...request(),
+      command: 'multica',
+      executableCommand: '/usr/local/bin/multica',
+      args: ['workspace', 'list', '--output', 'json'],
+      networkAccess: true,
+    });
+
+    expect(args).not.toContain('--unshare-net');
+    expect(args.slice(-5)).toEqual([
+      '/usr/local/bin/multica',
+      'workspace',
+      'list',
+      '--output',
+      'json',
+    ]);
   });
 
   it('wraps the command in a kernel-enforced in-sandbox deadline after the rlimit stage', () => {

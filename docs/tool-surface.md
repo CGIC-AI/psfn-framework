@@ -167,12 +167,15 @@ The surface stays intentionally narrow while still supporting ordinary CLI work:
   enabling the toggle without a configured checkout fails closed, and the mount can never overlap the workspace
 - the agent image carries a documented analysis toolset for sandbox use — `bash`, `git`, `rg`, `jq`, `file`,
   `unzip`/`zip`, `sqlite3`, `pdftotext`/`pdfinfo` (poppler), `pandoc`, `python3` (+`venv`), and `uv` — because the
-  sandbox has no network, everything the companion can use must ship in the image
+  sandbox has no network by default, so everything the companion can use must ship in the image
   (`npm run verify:shell-sandbox-image` proves each tool runs inside the sandbox)
+- `shellExec.networkAllowlist` may retain the gateway network namespace for an exact top-level executable that also
+  appears in `shellExec.allowlist`; nested commands do not inherit the exception, so allowing `multica` does not give
+  `bash`, scripts, or another CLI network access
 - gateway policy projected from `settings.json` remains authoritative for enablement, executable allowlists, cwd bounds, and resource caps
 - confirmation, auditing, and fail-closed denial stay on the underlying `shell.exec` gateway path
-- enabled Linux/k3s commands run inside a Bubblewrap user/mount/PID/network namespace: image binaries are read-only, the
-  environment is cleared, networking is absent, only the companion's Personal Workspace is mounted writable, and
+- enabled Linux/k3s commands run inside a Bubblewrap user/mount/PID namespace: image binaries are read-only, the
+  environment is cleared, networking is absent unless the exact top-level executable is network-allowlisted, only the companion's Personal Workspace is mounted writable, and
   process count, address space, file size, CPU time, open files, wall time, and output are capped
 - the normal wall-time budget is ten minutes and the operator-owned ceiling is one hour, so builds and deliberate CLI
   exploration do not inherit a conversationally short timeout

@@ -10,6 +10,7 @@ import type {
 } from '../../core/icp/autonomy-store-ports.js';
 import {
   IcpAutonomyInvalidationConflictError,
+  IcpDyadLifecycleConflictError,
   IcpOutstandingInvitationConflictError,
 } from '../../core/icp/autonomy-store-ports.js';
 import type { IcpInitiationCandidateSharedMetadata } from '../../core/icp/initiation-candidate.js';
@@ -45,6 +46,13 @@ const SECOND_CONVERSATION_ID = '55555555-5555-4555-8555-555555555555';
 const SECOND_PERMIT_ID = '66666666-6666-4666-8666-666666666666';
 const CHANNEL = `companion-dm:${A}:${B}`;
 const PROVENANCE_HANDLE = `icp-prov:${CANDIDATE_ID}`;
+
+function openDyadStates(first: string, second: string, updatedAtMs: number) {
+  return [
+    { companionId: first, relationshipState: 'open' as const, blocked: false, updatedAtMs },
+    { companionId: second, relationshipState: 'open' as const, blocked: false, updatedAtMs },
+  ] as const;
+}
 
 const OPEN_POLICY: IcpInitiationPolicySnapshot = {
   canonicalPeerContact: true,
@@ -175,7 +183,6 @@ class MemoryStore implements IcpSharedAutonomyStorePort {
     const current = this.dyads.get(key);
     if (current) {
       if (current.channelId !== episode.channelId) throw new Error('ambiguous dyad channel');
-      if (current.status !== 'open') throw new Error(`dyad is ${current.status}`);
       if (!current.provenanceConversationIds.includes(episode.conversationId)) {
         const updated = {
           ...current,
@@ -192,8 +199,10 @@ class MemoryStore implements IcpSharedAutonomyStorePort {
       channelId: episode.channelId,
       participantCompanionIds: pair,
       status: 'open',
+      participantStates: [...openDyadStates(pair[0], pair[1], episode.openedAtMs)],
       createdAtMs: episode.openedAtMs,
       provenanceConversationIds: [episode.conversationId],
+      lifecycleRevision: 1,
       revision: 1,
     };
     this.dyads.set(key, created);
@@ -214,11 +223,13 @@ class MemoryStore implements IcpSharedAutonomyStorePort {
 
   async createDyadContinuation(input: {
     dyadId: string;
+    expectedLifecycleRevision: number;
     episode: IcpConversationEpisode;
     delivery: IcpDyadDelivery;
   }): Promise<{ dyad: IcpDyad; episode: IcpConversationEpisode; delivery: IcpDyadDelivery }> {
     const dyad = await this.getDyad(input.dyadId);
     if (!dyad || dyad.status !== 'open') throw new Error('dyad unavailable');
+    if (dyad.lifecycleRevision !== input.expectedLifecycleRevision) throw new Error('stale dyad');
     const existing = this.deliveries.get(input.delivery.deliveryId);
     if (existing) {
       return { dyad, episode: this.episodes.get(existing.conversationId)!, delivery: existing };
@@ -267,20 +278,45 @@ class MemoryStore implements IcpSharedAutonomyStorePort {
     return next;
   }
 
-  async transitionDyad(input: IcpDyadTransitionInput): Promise<IcpDyad> {
+  async transitionDyad(input: IcpDyadTransitionInput) {
     const entry = [...this.dyads.entries()].find(([, dyad]) => dyad.dyadId === input.dyadId);
-    if (!entry || entry[1].status !== input.expectedStatus || entry[1].revision !== input.expectedRevision) {
-      throw new Error('dyad transition conflict');
+    if (!entry || entry[1].lifecycleRevision !== input.expectedRevision) {
+      throw new IcpDyadLifecycleConflictError(
+        entry ? 'dyad_stale_revision' : 'dyad_not_found',
+      );
     }
+    const actorIndex = entry[1].participantStates.findIndex(
+      state => state.companionId === input.actorCompanionId,
+    );
+    if (actorIndex < 0) throw new Error('dyad owner mismatch');
+    const participantStates = [...entry[1].participantStates];
+    const actor = participantStates[actorIndex]!;
+    participantStates[actorIndex] = {
+      ...actor,
+      ...(input.action === 'block' ? { blocked: true }
+        : input.action === 'unblock' ? { blocked: false }
+          : { relationshipState: input.action === 'pause' ? 'paused' as const
+            : input.action === 'close' ? 'closed' as const : 'open' as const }),
+      updatedAtMs: input.transitionedAtMs,
+    };
+    const status = participantStates.some(state => state.blocked) ? 'blocked'
+      : participantStates.some(state => state.relationshipState === 'closed') ? 'closed'
+        : participantStates.some(state => state.relationshipState === 'paused') ? 'paused' : 'open';
     const next: IcpDyad = {
       ...entry[1],
-      status: input.status,
-      closedAtMs: input.closedAtMs,
-      closeReasonCode: input.closeReasonCode,
+      status,
+      participantStates: participantStates as IcpDyad['participantStates'],
+      lifecycleRevision: entry[1].lifecycleRevision + 1,
       revision: entry[1].revision + 1,
     };
     this.dyads.set(entry[0], next);
-    return next;
+    const revokedPermits = this.revokeOutstandingPermitsForCompanionNow(
+      input.actorCompanionId,
+      input.transitionedAtMs,
+      status === 'paused' ? 'dyad_paused' : status === 'closed' ? 'dyad_closed'
+        : status === 'blocked' ? 'dyad_blocked' : 'dyad_stale_revision',
+    );
+    return { dyad: next, revokedPermits, fencedDeliveries: [] };
   }
 
   async getEpisode(conversationId: string): Promise<IcpConversationEpisode | null> {
@@ -306,10 +342,13 @@ class MemoryStore implements IcpSharedAutonomyStorePort {
     secondCompanionId: string,
   ): Promise<IcpAutonomyInvalidationFence> {
     const pair = [firstCompanionId, secondCompanionId].sort();
+    const dyad = await this.getDyadBetween(firstCompanionId, secondCompanionId);
     return { companions: [
       { companionId: pair[0]!, generation: this.invalidationGenerations.get(pair[0]!) ?? 0 },
       { companionId: pair[1]!, generation: this.invalidationGenerations.get(pair[1]!) ?? 0 },
-    ] };
+    ], ...(dyad ? {
+      dyadLifecycle: { dyadId: dyad.dyadId, revision: dyad.lifecycleRevision },
+    } : {}) };
   }
 
   assertInvalidationFence(fence: IcpAutonomyInvalidationFence): void {
@@ -393,6 +432,26 @@ class MemoryStore implements IcpSharedAutonomyStorePort {
       revision: permit.revision + 1,
     };
     this.permits.set(permit.permitId, consumed);
+    const episode = this.episodes.get(input.conversationId);
+    const dyad = episode
+      ? await this.getDyadBetween(input.senderCompanionId, input.recipientCompanionId)
+      : null;
+    if (dyad?.status === 'blocked') {
+      throw new IcpAutonomyInvalidationConflictError('dyad_blocked');
+    }
+    if (dyad && dyad.status !== 'open') {
+      this.dyads.set(dyad.participantCompanionIds.join(':'), {
+        ...dyad,
+        status: 'open',
+        participantStates: dyad.participantStates.map(state => ({
+          ...state,
+          relationshipState: 'open' as const,
+          updatedAtMs: input.consumedAtMs,
+        })) as IcpDyad['participantStates'],
+        lifecycleRevision: dyad.lifecycleRevision + 1,
+        revision: dyad.revision + 1,
+      });
+    }
     return { outcome: 'consumed', permit: consumed };
   }
 
@@ -667,8 +726,10 @@ describe('GatewayIcpAutonomyBroker', () => {
       channelId: CHANNEL,
       participantCompanionIds: [A, B],
       status: 'open',
+      participantStates: [...openDyadStates(A, B, NOW - 20_000)],
       createdAtMs: NOW - 20_000,
       provenanceConversationIds: [CONVERSATION_ID],
+      lifecycleRevision: 1,
       revision: 1,
     });
     store.dyads.set(`${B}:${C}`, {
@@ -676,8 +737,10 @@ describe('GatewayIcpAutonomyBroker', () => {
       channelId: `companion-dm:${B}:${C}`,
       participantCompanionIds: [B, C],
       status: 'open',
+      participantStates: [...openDyadStates(B, C, NOW - 10_000)],
       createdAtMs: NOW - 10_000,
       provenanceConversationIds: [SECOND_CONVERSATION_ID],
+      lifecycleRevision: 1,
       revision: 1,
     });
     store.deliveries.set(SECOND_PERMIT_ID, {
@@ -690,6 +753,7 @@ describe('GatewayIcpAutonomyBroker', () => {
       createdAtMs: NOW - 5_000,
       updatedAtMs: NOW - 4_000,
       attempt: 0,
+      dyadLifecycleRevision: 1,
       revision: 2,
     });
 
@@ -713,8 +777,10 @@ describe('GatewayIcpAutonomyBroker', () => {
       channelId: CHANNEL,
       participantCompanionIds: [A, B],
       status: 'open',
+      participantStates: [...openDyadStates(A, B, NOW - 20_000)],
       createdAtMs: NOW - 20_000,
       provenanceConversationIds: [CANDIDATE_ID],
+      lifecycleRevision: 1,
       revision: 1,
     });
     const request = {
@@ -754,8 +820,10 @@ describe('GatewayIcpAutonomyBroker', () => {
       channelId: CHANNEL,
       participantCompanionIds: [A, B],
       status: 'open',
+      participantStates: [...openDyadStates(A, B, NOW - 20_000)],
       createdAtMs: NOW - 20_000,
       provenanceConversationIds: [CANDIDATE_ID],
+      lifecycleRevision: 1,
       revision: 1,
     };
     store.dyads.set(`${A}:${B}`, dyad);
@@ -776,12 +844,92 @@ describe('GatewayIcpAutonomyBroker', () => {
     store.dyads.set(`${A}:${B}`, {
       ...dyad,
       status: 'closed',
-      closedAtMs: NOW - 1,
-      closeReasonCode: 'conversation_ended',
+      participantStates: [
+        { ...dyad.participantStates[0], relationshipState: 'closed', updatedAtMs: NOW - 1 },
+        dyad.participantStates[1],
+      ],
+      lifecycleRevision: 2,
       revision: 2,
     });
     await expect(broker.prepareDyadContinuation(A, request)).resolves.toEqual({
       status: 'need_initiation', reasonCode: 'dyad_closed',
+    });
+  });
+
+  it('keeps pause, close, block, unblock, and permit-bound reopen distinct without reasons', async () => {
+    const { broker, store } = makeBroker();
+    await makeAvailable(store);
+    store.dyads.set(`${A}:${B}`, {
+      dyadId: CONVERSATION_ID,
+      channelId: CHANNEL,
+      participantCompanionIds: [A, B],
+      status: 'open',
+      participantStates: [...openDyadStates(A, B, NOW - 20_000)],
+      createdAtMs: NOW - 20_000,
+      provenanceConversationIds: [CANDIDATE_ID],
+      lifecycleRevision: 1,
+      revision: 1,
+    });
+
+    await expect(broker.transitionDyadLifecycle(A, {
+      dyadId: CONVERSATION_ID,
+      expectedRevision: 1,
+      action: 'pause',
+    })).resolves.toMatchObject({ outcome: 'updated', status: 'paused', lifecycleRevision: 2 });
+    await expect(broker.transitionDyadLifecycle(A, {
+      dyadId: CONVERSATION_ID,
+      expectedRevision: 1,
+      action: 'close',
+    })).resolves.toEqual({ outcome: 'unavailable', reasonCode: 'dyad_stale_revision' });
+    await expect(broker.prepareDyadContinuation(B, {
+      dyadId: CONVERSATION_ID,
+      deliveryId: SECOND_PERMIT_ID,
+      conversationId: SECOND_CONVERSATION_ID,
+      peerContactId: 'peer-contact-a',
+      initiationSource: 'foreground',
+    })).resolves.toEqual({ status: 'unavailable', reasonCode: 'dyad_paused' });
+    await broker.transitionDyadLifecycle(A, {
+      dyadId: CONVERSATION_ID,
+      expectedRevision: 2,
+      action: 'resume',
+    });
+    await broker.transitionDyadLifecycle(A, {
+      dyadId: CONVERSATION_ID,
+      expectedRevision: 3,
+      action: 'close',
+    });
+    await broker.transitionDyadLifecycle(B, {
+      dyadId: CONVERSATION_ID,
+      expectedRevision: 4,
+      action: 'block',
+    });
+    const unblocked = await broker.transitionDyadLifecycle(B, {
+      dyadId: CONVERSATION_ID,
+      expectedRevision: 5,
+      action: 'unblock',
+    });
+    expect(unblocked).toMatchObject({ status: 'closed', lifecycleRevision: 6 });
+    expect(JSON.stringify(unblocked)).not.toMatch(/reason|motivation|content/iu);
+
+    const reopenedPermit = await broker.issuePermit(A, {
+      candidate: candidate(),
+      channelId: CHANNEL,
+      permitExpiresAtMs: NOW + 30_000,
+    });
+    expect(reopenedPermit.permit).toBeDefined();
+    await broker.consumePermit(A, {
+      permitId: PERMIT_ID,
+      conversationId: CONVERSATION_ID,
+      recipientCompanionId: B,
+      channelId: CHANNEL,
+      rootInitiationId: ROOT_ID,
+      peerContactId: 'peer-contact-b',
+    });
+    await expect(store.getDyad(CONVERSATION_ID)).resolves.toMatchObject({
+      dyadId: CONVERSATION_ID,
+      channelId: CHANNEL,
+      status: 'open',
+      lifecycleRevision: 7,
     });
   });
 

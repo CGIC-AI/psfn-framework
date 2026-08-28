@@ -4,7 +4,7 @@ const mocks = vi.hoisted(() => ({
   poolQuery: vi.fn(async (text: string) => ({
     rows: text.includes('to_regclass')
       ? [{ ledger_table: 'shared.shared_schema_migrations' }]
-      : [{ versions: [1, 2, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15] }],
+      : [{ versions: [1, 2, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 16] }],
   })),
   poolEnd: vi.fn(async () => {}),
   createPostgresPool: vi.fn(() => ({

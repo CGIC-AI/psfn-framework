@@ -1039,6 +1039,7 @@ describe('Postgres schema tenancy plumbing', () => {
           { version: 13, name: 'icp-operator-test-initiation-source' },
           { version: 14, name: 'icp-durable-dyads' },
           { version: 15, name: 'icp-open-dyad-continuation' },
+          { version: 16, name: 'icp-dyad-participant-lifecycle' },
         ]);
 
         const sharedTables = await pool.query<{ table_name: string }>(
@@ -1066,7 +1067,7 @@ describe('Postgres schema tenancy plumbing', () => {
         const versionAgain = await pool.query<{ count: string }>(
           `SELECT COUNT(*)::text AS count FROM shared.shared_schema_migrations`,
         );
-        expect(versionAgain.rows[0]?.count).toBe('13');
+        expect(versionAgain.rows[0]?.count).toBe('14');
       } finally {
         await pool.end();
       }

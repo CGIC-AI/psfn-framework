@@ -17,6 +17,7 @@ import type {
   TelemetryVisibility,
   ToolSchema,
 } from '../../shared/contracts/runtime.js';
+import type { IcpDyadSideAction } from '../../shared/contracts/icp-autonomy.js';
 import type {
   ImageContent,
   TextContent,
@@ -1206,6 +1207,13 @@ export interface IcpPermitInvalidateSelfParams {
 
 interface IcpOpenDyadListParams { companionId?: string }
 
+interface IcpDyadLifecycleParams {
+  dyadId: string;
+  expectedRevision: number;
+  action: IcpDyadSideAction;
+  companionId?: string;
+}
+
 interface IcpDyadContinuationPrepareParams {
   dyadId: string;
   deliveryId: string;
@@ -1254,6 +1262,8 @@ export interface GatewayMethods {
   'companion.initiation.permit.revoke': [IcpPermitRevokeParams, IcpPermitRevokeResult];
   'companion.initiation.permit.invalidate_for_self': [IcpPermitInvalidateSelfParams, { revokedCount: number }];
   'companion.dyad.list_open': [IcpOpenDyadListParams, import('./icp-autonomy-contract.js').IcpOpenDyadProjection[]];
+  'companion.dyad.list': [IcpOpenDyadListParams, import('./icp-autonomy-contract.js').IcpDyadLifecycleProjection[]];
+  'companion.dyad.transition': [IcpDyadLifecycleParams, import('./icp-autonomy-contract.js').IcpDyadLifecycleResult];
   'companion.dyad.prepare_continuation': [IcpDyadContinuationPrepareParams, import('./icp-autonomy-contract.js').IcpDyadContinuationPrepareResult];
   'companion.dyad.record_outcome': [IcpDyadContinuationOutcomeParams, import('../../shared/contracts/icp-autonomy.js').IcpDyadDelivery];
   'web.fetch': [WebFetchParams, WebFetchResult];

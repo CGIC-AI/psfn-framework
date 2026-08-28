@@ -35,10 +35,9 @@ import { getMcpTurnDisclosureContext } from '../../core/cogsec/disclosure/mcp-tu
 import type { QueueOverflowPolicy } from './backpressure.js';
 import { GatewayClientTransportRuntime } from './client/transport-runtime.js';
 import {
-  companionListOpenDyads,
-  companionPrepareDyadContinuation,
+  companionListDyads, companionListOpenDyads, companionPrepareDyadContinuation,
   companionRecordDyadContinuationOutcome,
-  companionSendContinuation,
+  companionSendContinuation, companionTransitionDyad,
 } from './client/icp-dyad-continuation.js';
 import { GatewayClientSessionIntegrityRuntime } from './client/session-integrity-runtime.js';
 import {
@@ -1116,9 +1115,13 @@ export class GatewayClient implements
     return companionListOpenDyads(this.transportRuntime, this.companionId);
   }
 
-  companionPrepareDyadContinuation(params: Parameters<typeof companionPrepareDyadContinuation>[2]) {
-    return companionPrepareDyadContinuation(this.transportRuntime, this.companionId, params);
+  companionListDyads() { return companionListDyads(this.transportRuntime, this.companionId); }
+  companionTransitionDyad(params: Parameters<typeof companionTransitionDyad>[2]) {
+    return companionTransitionDyad(this.transportRuntime, this.companionId, params);
   }
+
+  companionPrepareDyadContinuation(params: Parameters<typeof companionPrepareDyadContinuation>[2]) {
+    return companionPrepareDyadContinuation(this.transportRuntime, this.companionId, params); }
 
   companionRecordDyadContinuationOutcome(
     params: Parameters<typeof companionRecordDyadContinuationOutcome>[2],

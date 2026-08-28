@@ -7,6 +7,7 @@ import {
   parseIcpInitiationPermit,
   type IcpAvailabilityLease,
   type IcpConversationEpisode,
+  type IcpDyad,
   type IcpInitiationPermit,
 } from '../../shared/contracts/icp-autonomy.js';
 import { parseIcpConversationCostBreakerDecisionReason } from '../../shared/contracts/icp-conversation-cost.js';
@@ -106,6 +107,7 @@ export interface IcpAdminCostProjection extends AdminIcpCostView {
 export interface IcpAdminSharedProjection {
   availability: IcpAvailabilityLease[];
   episodes: IcpConversationEpisode[];
+  dyads: IcpDyad[];
   permits: IcpInitiationPermit[];
   fatigue: AdminIcpFatigueView[];
   costs: IcpAdminCostProjection[];
@@ -473,7 +475,7 @@ export class PostgresIcpAdminProjectionStore implements IcpAdminProjectionStore 
 
   async readProjection(limit = 50): Promise<IcpAdminSharedProjection> {
     const boundedLimit = Math.min(MAX_ADMIN_ROWS, Math.max(1, Math.floor(limit)));
-    const [availabilityRows, episodeRows, permitRows, fatigueRows, costProjection] = await Promise.all([
+    const [availabilityRows, episodeRows, permitRows, fatigueRows, costProjection, dyads] = await Promise.all([
       queryRows<AvailabilityRow>(this.sharedPool, `
         SELECT companion_id, state, issued_at_ms, expires_at_ms, source, revision
         FROM icp_availability_leases
@@ -518,10 +520,12 @@ export class PostgresIcpAdminProjectionStore implements IcpAdminProjectionStore 
         LIMIT $2
       `, [this.localCompanionId, boundedLimit]),
       this.readCostProjection(boundedLimit),
+      this.shared.listDyadsForCompanion(this.localCompanionId),
     ]);
     return {
       availability: availabilityRows.map(mapAvailability),
       episodes: episodeRows.map(mapEpisode),
+      dyads,
       permits: permitRows.map(mapPermit),
       fatigue: fatigueRows.map(mapFatigue),
       ...costProjection,

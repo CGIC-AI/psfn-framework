@@ -15,6 +15,7 @@ import {
   parseIcpInitiationPreflightInput,
   parseIcpOwnAvailabilityReadParams,
   parseIcpOpenDyadListParams,
+  parseIcpDyadLifecycleParams,
   parseIcpDyadContinuationPrepareParams,
   parseIcpDyadContinuationOutcomeParams,
   parseIcpPeerAvailabilityReadParams,
@@ -154,6 +155,22 @@ export function registerGatewayIcpAutonomyRpc(input: RegisterGatewayIcpAutonomyR
       parseIcpOpenDyadListParams(params);
       return await requireBroker().listOpenDyads(input.requireAuthenticatedCompanionId());
     },
+    () => ({ companionId: input.requireAuthenticatedCompanionId() }),
+  ));
+  input.target.addMethod('companion.dyad.list', input.audited(
+    'companion.dyad.list',
+    async (params: unknown) => {
+      parseIcpOpenDyadListParams(params);
+      return await requireBroker().listDyadLifecycle(input.requireAuthenticatedCompanionId());
+    },
+    () => ({ companionId: input.requireAuthenticatedCompanionId() }),
+  ));
+  input.target.addMethod('companion.dyad.transition', input.audited(
+    'companion.dyad.transition',
+    async (params: unknown) => await requireBroker().transitionDyadLifecycle(
+      input.requireAuthenticatedCompanionId(),
+      parseIcpDyadLifecycleParams(params),
+    ),
     () => ({ companionId: input.requireAuthenticatedCompanionId() }),
   ));
   input.target.addMethod('companion.dyad.prepare_continuation', input.audited(

@@ -12,6 +12,7 @@ import {
   JSONRPCErrorException,
 } from 'json-rpc-2.0';
 import type { LLMProviderPort } from '../../core/agent/contracts.js';
+import { IcpDyadLifecycleConflictError } from '../../core/icp/autonomy-store-ports.js';
 import type { EmbeddingProviderPort } from '../../shared/contracts/embedding-provider.js';
 import { DEFAULT_COMPANION_ID } from '../../core/identity/companion-naming.js';
 import type { ChannelOutboundDock } from '../../channels/backplane/types.js';
@@ -1377,6 +1378,34 @@ export class GatewayServer {
     conn: GatewayRpcConnection,
     params: unknown,
   ): Promise<CompanionMessageSendResult> {
+    const parsed = parseCompanionMessageSendParams(params);
+    const senderCompanionId = this.connectionStatuses.get(conn)?.companionId;
+    let release: () => void = () => undefined;
+    if (senderCompanionId && this.icpAutonomyBroker) {
+      if (parsed.continuation) {
+        release = await this.icpAutonomyBroker.acquireDyadOperation(parsed.continuation.dyadId);
+      } else {
+        const peerCompanionId = parsed.initiation?.recipientCompanionId
+          ?? parsed.correlation?.peerCompanionId;
+        if (peerCompanionId) {
+          release = await this.icpAutonomyBroker.acquireDyadPairOperation(
+            senderCompanionId,
+            peerCompanionId,
+          );
+        }
+      }
+    }
+    try {
+      return await this.handleCompanionMessageSendUnderDyadFence(conn, params);
+    } finally {
+      release();
+    }
+  }
+
+  private async handleCompanionMessageSendUnderDyadFence(
+    conn: GatewayRpcConnection,
+    params: unknown,
+  ): Promise<CompanionMessageSendResult> {
     if (!this.multiCompanion.enabled) {
       throw new Error(
         'Inter-companion channels do not exist in single-companion topology '
@@ -1507,10 +1536,19 @@ export class GatewayServer {
           GatewayErrors.COMPANION_ROUTING_UNAVAILABLE,
         );
       }
-      messageCorrelation = await this.icpAutonomyBroker.bindConversationReplyCorrelation(
-        senderCompanionId,
-        correlation,
-      );
+      try {
+        messageCorrelation = await this.icpAutonomyBroker.bindConversationReplyCorrelation(
+          senderCompanionId,
+          correlation,
+        );
+      } catch (error) {
+        if (!(error instanceof IcpDyadLifecycleConflictError)) throw error;
+        throw new JSONRPCErrorException(
+          'ICP reply unavailable',
+          GatewayErrors.COMPANION_ROUTING_UNAVAILABLE,
+          { reasonCode: error.reasonCode },
+        );
+      }
     }
 
     const stableIcpMessageId = messageCorrelation

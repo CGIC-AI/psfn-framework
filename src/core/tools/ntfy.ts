@@ -63,7 +63,8 @@ const SYSTEM_APPROVAL_REQUEST_SENDER = Object.freeze({
 
 export type { NotificationPort } from '../../boundary/gateway/notification-port.js';
 
-export type NotifyAction = 'brief' | 'send' | 'approval_request' | 'clarify' | 'list_dyads';
+export type NotifyAction = 'brief' | 'send' | 'approval_request' | 'clarify' | 'list_dyads'
+  | 'dyad_lifecycle';
 export type NotifyDeliveryChannel = 'discord' | 'email';
 export type NotifyDelivery = 'ntfy' | NotifyDeliveryChannel;
 export type NtfyNotifier = NotificationPort;
@@ -688,7 +689,7 @@ function normalizeAction(value: string): NotifyAction {
       return 'brief';
     case 'send':
     case 'approval_request':
-    case 'clarify': case 'list_dyads':
+    case 'clarify': case 'list_dyads': case 'dyad_lifecycle':
       return value.trim() as NotifyAction;
     default:
       throw new Error(`unsupported notify action: ${value}`);
@@ -1005,6 +1006,16 @@ const notifyToolParameters = Type.Union([
     target_kind: Type.Literal(COMPANION_NOTIFY_TARGET_KIND),
   }, { additionalProperties: false }),
   Type.Object({
+    action: Type.Literal('dyad_lifecycle'),
+    target_kind: Type.Literal(COMPANION_NOTIFY_TARGET_KIND),
+    dyad_id: Type.String({ description: 'Exact dyad UUID returned by action=list_dyads.' }),
+    expected_revision: Type.Integer({ minimum: 1 }),
+    lifecycle_action: Type.Union([
+      Type.Literal('pause'), Type.Literal('resume'), Type.Literal('close'),
+      Type.Literal('block'), Type.Literal('unblock'),
+    ]),
+  }, { additionalProperties: false }),
+  Type.Object({
     action: Type.Literal('approval_request'),
     approval_id: Type.String({ minLength: 1 }),
     approval_method: Type.String({ minLength: 1 }),
@@ -1051,6 +1062,7 @@ const notifyModelParameters = Type.Object({
     Type.Literal('approval_request'),
     Type.Literal('clarify'),
     Type.Literal('list_dyads'),
+    Type.Literal('dyad_lifecycle'),
   ], {
     description: 'Required notify action. Supply every field required for the selected action.',
   }),
@@ -1098,6 +1110,11 @@ const notifyModelParameters = Type.Object({
     maxLength: COMPANION_PRIVATE_INTENT_MAX_LENGTH,
     description: 'Required private target-turn instruction for an open-dyad continuation.',
   })),
+  expected_revision: Type.Optional(Type.Integer({ minimum: 1 })),
+  lifecycle_action: Type.Optional(Type.Union([
+    Type.Literal('pause'), Type.Literal('resume'), Type.Literal('close'),
+    Type.Literal('block'), Type.Literal('unblock'),
+  ])),
   reason_summary: Type.Optional(Type.String({
     description: 'Required private reason for action=consider.',
   })),
@@ -1179,7 +1196,8 @@ export function createNotifyTool(
       }
 
       if (
-        (action === 'send' || rawParams.action === 'list_dyads')
+        (action === 'send' || rawParams.action === 'list_dyads'
+          || rawParams.action === 'dyad_lifecycle')
         && 'target_kind' in rawParams
         && rawParams.target_kind === COMPANION_NOTIFY_TARGET_KIND
       ) {
@@ -1252,6 +1270,7 @@ export function createNotifyTool(
       case 'consider':
         return 'external.companion';
       case 'list_dyads':
+      case 'dyad_lifecycle':
         return 'external.companion';
       case 'approval_request':
         return 'external.web';

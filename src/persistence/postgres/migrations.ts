@@ -2900,15 +2900,16 @@ export const POSTGRES_OBSERVER_EVAL_SIDECAR_MIGRATIONS = [
 //  13 — authenticated operator/harness ICP test initiation source (ph0mw)
 //  14 — durable canonical ICP dyads with bounded activity episodes (84g0z.1)
 //  15 — content-free open-dyad continuation delivery ledger (84g0z.2)
+//  16 — companion-owned dyad lifecycle boundaries and revision fencing (84g0z.3)
 export const SHARED_SCHEMA_NAME = 'shared';
 
 /** Ledger versions installed by POSTGRES_SHARED_MIGRATIONS (excluding wiki versions 3 and 8). */
 export const POSTGRES_SHARED_BASE_MIGRATION_VERSIONS = [
-  1, 2, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15,
+  1, 2, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 16,
 ] as const;
 /** Complete ledger across the base and shared-wiki chains. */
 export const POSTGRES_SHARED_ALL_MIGRATION_VERSIONS = [
-  1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+  1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
 ] as const;
 
 export const POSTGRES_SHARED_MIGRATIONS: readonly string[] = [
@@ -3536,6 +3537,78 @@ export const POSTGRES_SHARED_MIGRATIONS: readonly string[] = [
   VALUES (15, 'icp-open-dyad-continuation')
   ON CONFLICT (version) DO NOTHING;
   `,
+  // Version 16 (84g0z.3): each participant owns a reason-free relationship
+  // grant and an independent block flag. The lifecycle revision changes only
+  // for relationship boundaries, so queued work can be fenced without episode
+  // activity/provenance updates revoking otherwise valid authority.
+  `ALTER TABLE icp_dyads
+    ADD COLUMN IF NOT EXISTS first_relationship_state TEXT NOT NULL DEFAULT 'open',
+    ADD COLUMN IF NOT EXISTS second_relationship_state TEXT NOT NULL DEFAULT 'open',
+    ADD COLUMN IF NOT EXISTS first_blocked BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS second_blocked BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS first_state_updated_at_ms BIGINT,
+    ADD COLUMN IF NOT EXISTS second_state_updated_at_ms BIGINT,
+    ADD COLUMN IF NOT EXISTS lifecycle_revision BIGINT NOT NULL DEFAULT 1;`,
+  `ALTER TABLE icp_dyads DROP CONSTRAINT IF EXISTS icp_dyads_status_check;`,
+  `DO $migration$
+  DECLARE constraint_name TEXT;
+  BEGIN
+    FOR constraint_name IN
+      SELECT conname FROM pg_constraint
+      WHERE conrelid = 'icp_dyads'::regclass AND contype = 'c'
+        AND pg_get_constraintdef(oid) LIKE '%closed_at_ms%close_reason_code%'
+    LOOP
+      EXECUTE format('ALTER TABLE icp_dyads DROP CONSTRAINT %I', constraint_name);
+    END LOOP;
+  END
+  $migration$;`,
+  `UPDATE icp_dyads SET
+    first_relationship_state = CASE WHEN status = 'closed' THEN 'closed' ELSE 'open' END,
+    second_relationship_state = CASE WHEN status = 'closed' THEN 'closed' ELSE 'open' END,
+    first_blocked = status = 'revoked' AND close_reason_code <> 'conversation_suppressed',
+    second_blocked = status = 'revoked' AND close_reason_code <> 'conversation_suppressed',
+    first_state_updated_at_ms = COALESCE(closed_at_ms, created_at_ms),
+    second_state_updated_at_ms = COALESCE(closed_at_ms, created_at_ms),
+    status = CASE
+      WHEN status = 'revoked' AND close_reason_code <> 'conversation_suppressed' THEN 'blocked'
+      WHEN status = 'closed' THEN 'closed'
+      ELSE 'open'
+    END,
+    closed_at_ms = NULL,
+    close_reason_code = NULL
+  WHERE first_state_updated_at_ms IS NULL OR second_state_updated_at_ms IS NULL;`,
+  `ALTER TABLE icp_dyads ALTER COLUMN first_state_updated_at_ms SET NOT NULL;`,
+  `ALTER TABLE icp_dyads ALTER COLUMN second_state_updated_at_ms SET NOT NULL;`,
+  `ALTER TABLE icp_dyads DROP CONSTRAINT IF EXISTS icp_dyads_participant_state_check;`,
+  `ALTER TABLE icp_dyads ADD CONSTRAINT icp_dyads_status_check
+    CHECK (status IN ('open', 'paused', 'closed', 'blocked'));`,
+  `ALTER TABLE icp_dyads ADD CONSTRAINT icp_dyads_participant_state_check CHECK (
+    first_relationship_state IN ('open', 'paused', 'closed')
+    AND second_relationship_state IN ('open', 'paused', 'closed')
+    AND first_state_updated_at_ms >= created_at_ms
+    AND second_state_updated_at_ms >= created_at_ms
+    AND lifecycle_revision >= 1
+    AND status = CASE
+      WHEN first_blocked OR second_blocked THEN 'blocked'
+      WHEN first_relationship_state = 'closed' OR second_relationship_state = 'closed' THEN 'closed'
+      WHEN first_relationship_state = 'paused' OR second_relationship_state = 'paused' THEN 'paused'
+      ELSE 'open'
+    END
+  );`,
+  `ALTER TABLE icp_dyad_deliveries
+    ADD COLUMN IF NOT EXISTS dyad_lifecycle_revision BIGINT;`,
+  `UPDATE icp_dyad_deliveries AS delivery
+    SET dyad_lifecycle_revision = dyad.lifecycle_revision
+    FROM icp_dyads AS dyad
+    WHERE delivery.dyad_id = dyad.dyad_id AND delivery.dyad_lifecycle_revision IS NULL;`,
+  `ALTER TABLE icp_dyad_deliveries ALTER COLUMN dyad_lifecycle_revision SET NOT NULL;`,
+  `ALTER TABLE icp_dyad_deliveries
+    DROP CONSTRAINT IF EXISTS icp_dyad_deliveries_lifecycle_revision_check;`,
+  `ALTER TABLE icp_dyad_deliveries ADD CONSTRAINT icp_dyad_deliveries_lifecycle_revision_check
+    CHECK (dyad_lifecycle_revision >= 1);`,
+  `INSERT INTO shared_schema_migrations (version, name)
+    VALUES (16, 'icp-dyad-participant-lifecycle')
+    ON CONFLICT (version) DO NOTHING;`,
 ];
 
 // Version 3 (sprint 10, s10f9): shared-world wiki chunk projection. A

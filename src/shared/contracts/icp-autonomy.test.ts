@@ -9,6 +9,7 @@ import {
   parseIcpConversationCorrelation,
   parseIcpConversationEpisode,
   parseIcpDyad,
+  resolveIcpDyadStatus,
   parseIcpInitiationPermit,
   redactIcpInitiationPermit,
 } from './icp-autonomy.js';
@@ -87,20 +88,36 @@ describe('ICP autonomy shared contracts', () => {
       channelId: `companion-dm:${COMPANION_A}:${COMPANION_B}`,
       participantCompanionIds: [COMPANION_A, COMPANION_B],
       status: 'open',
+      participantStates: [
+        { companionId: COMPANION_A, relationshipState: 'open', blocked: false, updatedAtMs: 1_000 },
+        { companionId: COMPANION_B, relationshipState: 'open', blocked: false, updatedAtMs: 1_000 },
+      ],
       createdAtMs: 1_000,
       provenanceConversationIds: [CONVERSATION_ID],
+      lifecycleRevision: 1,
       revision: 1,
     });
     expect(dyad).toMatchObject({ status: 'open', provenanceConversationIds: [CONVERSATION_ID] });
     expect(() => parseIcpDyad({ ...dyad, channelId: 'companion-room:kitchen' }))
       .toThrow('must be a companion DM');
+    expect(resolveIcpDyadStatus([
+      { ...dyad.participantStates[0], relationshipState: 'paused' },
+      dyad.participantStates[1],
+    ])).toBe('paused');
+    expect(resolveIcpDyadStatus([
+      { ...dyad.participantStates[0], relationshipState: 'closed' },
+      { ...dyad.participantStates[1], blocked: true },
+    ])).toBe('blocked');
     expect(() => parseIcpDyad({
       ...dyad,
-      status: 'revoked',
-      closedAtMs: 2_000,
-    })).toThrow('closure facts');
-    expect(() => assertIcpDyadStatusTransition('open', 'revoked')).not.toThrow();
-    expect(() => assertIcpDyadStatusTransition('revoked', 'open')).toThrow('Invalid ICP dyad');
+      status: 'open',
+      participantStates: [
+        { ...dyad.participantStates[0], relationshipState: 'closed' },
+        dyad.participantStates[1],
+      ],
+    })).toThrow('effective status');
+    expect(() => assertIcpDyadStatusTransition('open', 'blocked')).not.toThrow();
+    expect(() => assertIcpDyadStatusTransition('blocked', 'open')).not.toThrow();
   });
 
   it('rejects invalid episode lifecycle transitions', () => {

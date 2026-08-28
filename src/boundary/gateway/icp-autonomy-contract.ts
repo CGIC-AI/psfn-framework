@@ -12,6 +12,9 @@ import {
   type IcpAvailabilityLease,
   type IcpAvailabilityState,
   type IcpDyadDeliveryOutcome,
+  type IcpDyadParticipantState,
+  type IcpDyadSideAction,
+  type IcpDyadStatus,
   type IcpConversationEpisode,
   type IcpInitiationPermit,
   type IcpPermitStatus,
@@ -26,9 +29,20 @@ export interface IcpOpenDyadProjection {
   peerCompanionId: string;
   channelId: string;
   status: 'open';
+  lifecycleRevision: number;
   availability: IcpPeerAvailabilityResult;
   lastDeliveryOutcome?: IcpDyadDeliveryOutcome;
   lastDeliveryAtMs?: number;
+}
+
+export interface IcpDyadLifecycleProjection {
+  dyadId: string;
+  peerCompanionId: string;
+  channelId: string;
+  status: IcpDyadStatus;
+  ownState: IcpDyadParticipantState;
+  peerState: IcpDyadParticipantState;
+  lifecycleRevision: number;
 }
 
 export interface IcpDyadContinuationAuthorization {
@@ -36,6 +50,7 @@ export interface IcpDyadContinuationAuthorization {
   deliveryId: string;
   peerCompanionId: string;
   channelId: string;
+  dyadLifecycleRevision: number;
   episode: IcpConversationEpisode;
 }
 
@@ -44,12 +59,29 @@ export type IcpDyadContinuationPrepareResult =
   | {
       status: 'need_initiation';
       reasonCode: Extract<IcpAutonomyReasonCode,
-        'dyad_not_found' | 'dyad_closed' | 'dyad_revoked' | 'stale_provenance'>;
+        'dyad_not_found' | 'dyad_closed' | 'stale_provenance'>;
     }
   | {
       status: 'unavailable';
       reasonCode: IcpAutonomyReasonCode;
     };
+
+interface IcpDyadLifecycleUpdatedResult {
+  outcome: 'updated';
+  dyadId: string;
+  status: IcpDyadStatus;
+  ownState: IcpDyadParticipantState;
+  peerState: IcpDyadParticipantState;
+  lifecycleRevision: number;
+  revokedPermitCount: number;
+  fencedDeliveryCount: number;
+}
+
+export type IcpDyadLifecycleResult = IcpDyadLifecycleUpdatedResult | {
+  outcome: 'unavailable';
+  reasonCode: Extract<IcpAutonomyReasonCode,
+    'dyad_not_found' | 'dyad_paused' | 'dyad_closed' | 'dyad_blocked' | 'dyad_stale_revision'>;
+};
 
 /** Strict content-free deterministic facts owned by the initiating runtime. */
 export interface IcpInitiationPolicySnapshot {
@@ -296,6 +328,28 @@ export function parseIcpOpenDyadListParams(value: unknown): Record<string, never
   if (!isRecord(value)) throw new Error('ICP open dyad list params must be an object');
   assertNoUnknownKeys(value, ['companionId'], 'ICP open dyad list params');
   return {};
+}
+
+export function parseIcpDyadLifecycleParams(value: unknown): {
+  dyadId: string;
+  expectedRevision: number;
+  action: IcpDyadSideAction;
+} {
+  if (!isRecord(value)) throw new Error('ICP dyad lifecycle params must be an object');
+  assertNoUnknownKeys(
+    value,
+    ['dyadId', 'expectedRevision', 'action', 'companionId'],
+    'ICP dyad lifecycle params',
+  );
+  if (value.action !== 'pause' && value.action !== 'resume' && value.action !== 'close'
+    && value.action !== 'block' && value.action !== 'unblock') {
+    throw new Error('ICP dyad lifecycle action is invalid');
+  }
+  return {
+    dyadId: requireUuid(value.dyadId, 'dyadId'),
+    expectedRevision: requirePositiveRevision(value.expectedRevision, 'expectedRevision'),
+    action: value.action,
+  };
 }
 
 export function parseIcpDyadContinuationPrepareParams(value: unknown): {

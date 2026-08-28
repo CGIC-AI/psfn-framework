@@ -164,6 +164,8 @@ class RpcMemoryStore implements IcpSharedAutonomyStorePort {
     return this.episodes.get(conversationId) ?? null;
   }
 
+  async getDyadBetween(): Promise<null> { return null; }
+
   async transitionEpisode(input: IcpConversationTransitionInput): Promise<IcpConversationEpisode> {
     const current = this.episodes.get(input.conversationId);
     if (!current) throw new Error('missing episode');

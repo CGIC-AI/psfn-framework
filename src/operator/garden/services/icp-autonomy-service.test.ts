@@ -131,6 +131,7 @@ function projectionStore(
     shared,
     readProjection: vi.fn(async () => ({
       availability: [],
+      dyads: [],
       episodes: [],
       permits: [{
         permitId: PERMIT_ID,

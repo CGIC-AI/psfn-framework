@@ -1,6 +1,8 @@
 import type { GatewayClient } from '../../boundary/gateway/client.js';
 import type {
   IcpInitiationHandoffPrepareResult,
+  IcpDyadLifecycleProjection,
+  IcpDyadLifecycleResult,
   IcpOpenDyadProjection,
   IcpOwnAvailabilityResult,
   IcpPeerAvailabilityResult,
@@ -12,6 +14,7 @@ import type {
   IcpAvailabilityState,
   IcpInitiationPermit,
   IcpInitiationSource,
+  IcpDyadSideAction,
 } from '../../shared/contracts/icp-autonomy.js';
 import type {
   IcpAutonomyCandidateOrigin,
@@ -55,6 +58,11 @@ interface KnownOpenIcpDyad extends IcpOpenDyadProjection {
   peerDisplayLabel: string;
 }
 
+interface KnownIcpDyadLifecycle extends IcpDyadLifecycleProjection {
+  peerContactId: string;
+  peerDisplayLabel: string;
+}
+
 export interface IcpAgentGatewayPort {
   companionReadOwnAvailability(): Promise<IcpOwnAvailabilityResult>;
   companionPublishAvailability(input: {
@@ -73,6 +81,12 @@ export interface IcpAgentGatewayPort {
     peerContactId: string;
   }): Promise<IcpInitiationHandoffPrepareResult>;
   companionListOpenDyads(): Promise<IcpOpenDyadProjection[]>;
+  companionListDyads(): Promise<IcpDyadLifecycleProjection[]>;
+  companionTransitionDyad(input: {
+    dyadId: string;
+    expectedRevision: number;
+    action: IcpDyadSideAction;
+  }): Promise<IcpDyadLifecycleResult>;
   companionPrepareDyadContinuation(input: {
     dyadId: string;
     deliveryId: string;
@@ -111,6 +125,12 @@ export interface AgentFacingIcpAutonomyRuntime {
   clearOwnAvailability(expectedRevision: number): Promise<{ cleared: boolean }>;
   prepareCompanionOutreach(contactId: string, permitId: string): Promise<void>;
   listOpenDyads(): Promise<KnownOpenIcpDyad[]>;
+  listDyads(): Promise<KnownIcpDyadLifecycle[]>;
+  transitionDyad(input: {
+    dyadId: string;
+    expectedRevision: number;
+    action: IcpDyadSideAction;
+  }): Promise<IcpDyadLifecycleResult>;
   inspectOpenDyad(dyadId: string): Promise<KnownOpenIcpDyad>;
   executeDyadContinuation(input: {
     dyadId: string;
@@ -275,6 +295,31 @@ export function createAgentFacingIcpAutonomyRuntime(input: {
     return dyads;
   };
 
+  const listDyads = async (): Promise<KnownIcpDyadLifecycle[]> => {
+    const [projections, contacts] = await Promise.all([
+      input.gateway.companionListDyads(),
+      input.contactStore.listAll(),
+    ]);
+    const peers = new Map<string, KnownCompanionPeer>();
+    for (const contact of contacts) {
+      try {
+        const peer = await resolveCanonicalKnownPeer(input.contactStore, contact);
+        if (peers.has(peer.peerCompanionId)) throw new Error('ambiguous canonical companion contact authority');
+        peers.set(peer.peerCompanionId, peer);
+      } catch (error) {
+        if (!(error instanceof CanonicalCompanionPeerValidationError)) throw error;
+      }
+    }
+    return projections.flatMap(projection => {
+      const peer = peers.get(projection.peerCompanionId);
+      return peer ? [{
+        ...projection,
+        peerContactId: peer.contactId,
+        peerDisplayLabel: peer.displayName,
+      }] : [];
+    });
+  };
+
   return {
     resolveKnownPeer,
     readKnownPeerAvailability,
@@ -294,6 +339,18 @@ export function createAgentFacingIcpAutonomyRuntime(input: {
       await prepare(contactId, permitId);
     },
     listOpenDyads,
+    listDyads,
+    async transitionDyad(transition) {
+      if (!isRfc4122Uuid(transition.dyadId)) {
+        throw new Error('dyad_id must be a lowercase RFC-4122 UUID');
+      }
+      const owned = (await listDyads()).find(dyad => dyad.dyadId === transition.dyadId);
+      if (!owned) return { outcome: 'unavailable', reasonCode: 'dyad_not_found' };
+      if (owned.lifecycleRevision !== transition.expectedRevision) {
+        return { outcome: 'unavailable', reasonCode: 'dyad_stale_revision' };
+      }
+      return await input.gateway.companionTransitionDyad(transition);
+    },
     async inspectOpenDyad(dyadId) {
       if (!isRfc4122Uuid(dyadId)) throw new Error('dyad_id must be a lowercase RFC-4122 UUID');
       const matches = (await listOpenDyads()).filter(dyad => dyad.dyadId === dyadId);

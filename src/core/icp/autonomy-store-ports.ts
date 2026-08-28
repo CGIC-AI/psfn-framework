@@ -7,7 +7,7 @@ import type {
   IcpDyad,
   IcpDyadDelivery,
   IcpDyadDeliveryOutcome,
-  IcpDyadStatus,
+  IcpDyadSideAction,
   IcpInitiationPermit,
 } from '../../shared/contracts/icp-autonomy.js';
 import type {
@@ -42,12 +42,24 @@ export interface IcpAutonomyInvalidationFence {
     IcpAutonomyInvalidationFenceEntry,
     IcpAutonomyInvalidationFenceEntry,
   ];
+  dyadLifecycle?: {
+    dyadId: string;
+    revision: number;
+  };
 }
 
 export class IcpAutonomyInvalidationConflictError extends Error {
   constructor(readonly reasonCode: IcpAutonomyReasonCode) {
     super(`ICP autonomy invalidated during permit operation: ${reasonCode}`);
     this.name = 'IcpAutonomyInvalidationConflictError';
+  }
+}
+
+export class IcpDyadLifecycleConflictError extends Error {
+  constructor(readonly reasonCode: Extract<IcpAutonomyReasonCode,
+    'dyad_not_found' | 'dyad_paused' | 'dyad_closed' | 'dyad_blocked' | 'dyad_stale_revision'>) {
+    super(`ICP dyad lifecycle conflict: ${reasonCode}`);
+    this.name = 'IcpDyadLifecycleConflictError';
   }
 }
 
@@ -89,20 +101,26 @@ export interface IcpConversationEpisodeStorePort {
 
 export interface IcpDyadTransitionInput {
   dyadId: string;
-  expectedStatus: IcpDyadStatus;
+  actorCompanionId: string;
   expectedRevision: number;
-  status: Extract<IcpDyadStatus, 'closed' | 'revoked'>;
-  closedAtMs: number;
-  closeReasonCode: IcpAutonomyReasonCode;
+  action: IcpDyadSideAction;
+  transitionedAtMs: number;
+}
+
+interface IcpDyadTransitionResult {
+  dyad: IcpDyad;
+  revokedPermits: IcpInitiationPermit[];
+  fencedDeliveries: IcpDyadDelivery[];
 }
 
 interface IcpDyadStorePort {
   getDyad(dyadId: string): Promise<IcpDyad | null>;
   getDyadBetween(firstCompanionId: string, secondCompanionId: string): Promise<IcpDyad | null>;
   listDyadsForCompanion(companionId: string): Promise<IcpDyad[]>;
-  transitionDyad(input: IcpDyadTransitionInput): Promise<IcpDyad>;
+  transitionDyad(input: IcpDyadTransitionInput): Promise<IcpDyadTransitionResult>;
   createDyadContinuation(input: {
     dyadId: string;
+    expectedLifecycleRevision: number;
     episode: IcpConversationEpisode;
     delivery: IcpDyadDelivery;
   }): Promise<{ dyad: IcpDyad; episode: IcpConversationEpisode; delivery: IcpDyadDelivery }>;

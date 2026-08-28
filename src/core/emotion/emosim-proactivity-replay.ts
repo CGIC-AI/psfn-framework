@@ -14,16 +14,16 @@ const REPLAY_LANES = [
   'outreach_timing',
 ] as const;
 
-export type EmoSimProactivityReplayLane = typeof REPLAY_LANES[number];
-export type EmoSimProactivityReplayExpectedOutcome = 'fire' | 'defer' | 'suppress';
-export type EmoSimProactivityReplayOutcome =
+type EmoSimProactivityReplayLane = typeof REPLAY_LANES[number];
+type EmoSimProactivityReplayExpectedOutcome = 'fire' | 'defer' | 'suppress';
+type EmoSimProactivityReplayOutcome =
   | 'fire'
   | 'defer'
   | 'suppress'
   | 'duplicate'
   | 'fatigue';
 
-export interface EmoSimProactivityReplayEvent {
+interface EmoSimProactivityReplayEvent {
   scenarioId: string;
   lane: EmoSimProactivityReplayLane;
   eventId: string;

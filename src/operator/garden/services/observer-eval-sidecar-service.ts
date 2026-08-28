@@ -84,13 +84,13 @@ export interface AdminRecentProactivityOutcomeCounts {
   other: number;
 }
 
-export interface AdminRecentProactivityOutcomeSnapshot {
+interface AdminRecentProactivityOutcomeSnapshot {
   sinceMs: number;
   total: number;
   counts: AdminRecentProactivityOutcomeCounts;
 }
 
-export interface AdminRecentProactivityOutcomes extends AdminRecentProactivityOutcomeSnapshot {
+interface AdminRecentProactivityOutcomes extends AdminRecentProactivityOutcomeSnapshot {
   rawContentRedacted: true;
   rates: {
     delivered: number;

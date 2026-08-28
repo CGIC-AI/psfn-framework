@@ -1317,6 +1317,80 @@ describe('runExtractionOrchestration naming fidelity', () => {
     }), 'extraction', expect.anything());
   });
 
+  it('extracts companion DM speech without treating control, presence, retry, or health entries as memories', async () => {
+    const channelId = 'companion-dm:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    const excludedEvents = [
+      ['icp_control', 'CONTROL EVENT MUST NOT BECOME MEMORY', 'internal'],
+      ['perception', 'PRESENCE EVENT MUST NOT BECOME MEMORY', 'system_note'],
+      ['icp_delivery_retry', 'RETRY EVENT MUST NOT BECOME MEMORY', 'internal'],
+      ['runtime_health', 'HEALTH EVENT MUST NOT BECOME MEMORY', 'internal'],
+    ] as const;
+    const recoveredEntries: NonNullable<ExtractionRunOptions['recoveredEntries']> = [
+      {
+        id: 1,
+        channelId,
+        role: 'user',
+        authorName: 'Aster',
+        content: 'My garden meeting moved to Thursday.',
+        timestamp: 1,
+      },
+      ...excludedEvents.map(([source, content, kind], index) => ({
+        id: index + 2,
+        channelId,
+        role: 'system' as const,
+        authorId: 'system',
+        authorName: 'System',
+        content,
+        timestamp: index + 2,
+        metadata: JSON.stringify({
+          sessionLane: { schemaVersion: 1, kind, source },
+        }),
+      })),
+      {
+        id: 6,
+        channelId,
+        role: 'assistant',
+        authorName: 'Briar',
+        content: 'I will remember the Thursday garden meeting.',
+        timestamp: 6,
+      },
+    ];
+    const llmClient = {
+      complete: vi.fn().mockResolvedValue({
+        content: `<response>
+<fact>
+<text>Aster's garden meeting moved to Thursday.</text>
+<type>semantic</type>
+<importance>0.8</importance>
+<confidence>0.95</confidence>
+</fact>
+</response>`,
+      }),
+    } as ExtractionRunOptions['llmClient'];
+    const processFact = vi.fn().mockResolvedValue({
+      action: 'created',
+      memory: { id: 'mem-companion-dm-speech' },
+    });
+
+    await runExtractionOrchestration(buildOptions({
+      channelId,
+      recoveredEntries,
+      llmClient,
+      processFact,
+    }));
+
+    expect(processFact).toHaveBeenCalledOnce();
+    expect(processFact).toHaveBeenCalledWith(expect.objectContaining({
+      text: "Aster's garden meeting moved to Thursday.",
+    }), expect.any(String), undefined, expect.any(Object));
+    const prompt = llmClient.complete.mock.calls[0]?.[0].systemPrompt ?? '';
+    expect(prompt).toContain('Aster: My garden meeting moved to Thursday.');
+    expect(prompt).toContain('Lyra: I will remember the Thursday garden meeting.');
+    for (const [, content] of excludedEvents) {
+      expect(prompt).not.toContain(content);
+    }
+  });
+
   it('uses neutral role labels when explicit participant names are unavailable', async () => {
     const llmClient = {
       complete: vi.fn().mockResolvedValue({

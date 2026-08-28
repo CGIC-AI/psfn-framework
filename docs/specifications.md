@@ -1,540 +1,469 @@
-# Specifications
+---
+type: "Reference"
+title: "Specifications: Config, Persistence, Fail-Closed Contracts"
+openwiki_generated: true
+sources:
+  - id: openwiki-source-527b36d63ce381efd5307fb6
+    resource: repo://config/settings.seed.json
+  - id: openwiki-source-1e344104bf825fedcf5a1773
+    resource: repo://docs/development-status.md
+  - id: openwiki-source-9884e1f228b9419287dea775
+    resource: repo://docs/PSFN_PROJECT_CHARTER.md
+  - id: openwiki-source-d91ae0f29835aa84dbc04713
+    resource: repo://docs/specifications.md
+  - id: openwiki-source-5b54a58d1b51cd490b0e7162
+    resource: repo://package.json
+  - id: openwiki-source-a6d1360d3d7bb2a6b2d9c14f
+    resource: repo://scripts/verify-postgres-only.mjs
+  - id: openwiki-source-379b9c740d1a6ae74d46f8dc
+    resource: repo://src/app/startup/index.ts
+  - id: openwiki-source-ad01a431b8fa0756c17e9d1b
+    resource: repo://src/app/startup/support/startup-preflight.ts
+  - id: openwiki-source-2135a5e1d5921cd1f1993b2a
+    resource: repo://src/persistence/cutover.test.ts
+  - id: openwiki-source-c358820e25e9d9fbc9b31c6a
+    resource: repo://src/persistence/layout.ts
+  - id: openwiki-source-8dbfefd55f8adff11f40aabc
+    resource: repo://src/persistence/postgres.ts
+  - id: openwiki-source-a7768497e35e16c65d10c4f1
+    resource: repo://src/persistence/postgres/runtime-readiness.ts
+  - id: openwiki-source-be7569cc8df580734535633b
+    resource: repo://src/persistence/postgres/tenant-pool-scope.ts
+  - id: openwiki-source-4ef3fef6dd44ba46844c2587
+    resource: repo://src/persistence/runtime-factory.ts
+  - id: openwiki-source-f8f3a275aaf621c33caa7515
+    resource: repo://src/shared/contracts/runtime-base.ts
+  - id: openwiki-source-0156ff799ec5ff28ab3a83a8
+    resource: repo://src/shared/runtime-layout-mode.ts
+  - id: openwiki-source-2cb54596553c9a3cd4236752
+    resource: repo://src/system/config/legacy-env.ts
+  - id: openwiki-source-f32b3e2f6d9f572b02c28fbf
+    resource: repo://src/system/config/load-config.test.ts
+  - id: openwiki-source-721576516afadb07bd2cf104
+    resource: repo://src/system/config/load-config.ts
+  - id: openwiki-source-432d967c9d0093410a5f9ced
+    resource: repo://src/system/config/load-or-seed.ts
+  - id: openwiki-source-678f4abb70f98243c0e235c1
+    resource: repo://src/system/config/owner-file-modes.ts
+  - id: openwiki-source-2beecf68753698c3c292c494
+    resource: repo://src/system/config/runtime-config-contracts.ts
+  - id: openwiki-source-68fb0a3d5d4f8ceb153e1a30
+    resource: repo://src/system/config/runtime-config.ts
+  - id: openwiki-source-e1241f98e181b3686211dfc2
+    resource: repo://src/system/config/settings-contract-guard.test.ts
+  - id: openwiki-source-a22b80d1fec144c952d69eca
+    resource: repo://src/system/config/settings-contract-guard.ts
+  - id: openwiki-source-5245d1794bbd289f59f1e469
+    resource: repo://src/system/config/settings-contract.ts
+  - id: openwiki-source-e77645ddf10b353d958e2301
+    resource: repo://src/system/config/settings-domain-registry.ts
+  - id: openwiki-source-716a48e1639dd81a1b9d1ceb
+    resource: repo://src/system/config/settings-overlay.ts
+generated: { by: "openwiki/0.4.3", at: "2026-08-28T13:30:04.287Z" }
+verified:
+  - by: openwiki/0.4.3
+    at: 2026-08-28T13:30:04.287Z
+---
 
-This document is the compact contract for how the live runtime is supposed to behave. When this file disagrees with code, prefer the code in the order listed below.
 
-Last updated: 2026-08-07.
+# Specifications: Config, Persistence, Fail-Closed Contracts
 
-## Source Of Truth Order
+This page is the compact contract for how the live runtime is supposed to
+behave: who owns configuration, where persistence lives, and which contracts
+fail closed. It is the wiki companion to the hand-maintained
+[`docs/specifications.md`](../docs/specifications.md) source-of-truth list and
+to [`architecture.md`](architecture.md) (runtime shape and composition),
+<!-- openwiki: broken internal link [memory-persistence-authority.md] file "memory-persistence-authority.md" does not exist. Fix the href or restore the target, then delete this comment. -->
+[`memory-persistence-authority.md`](memory-persistence-authority.md) (who may
+<!-- openwiki: broken internal link [cognitive-security.md] file "cognitive-security.md" does not exist. Fix the href or restore the target, then delete this comment. -->
+write canonical storage), [`cognitive-security.md`](cognitive-security.md)
+(trust, intake, and disclosure policy), [`setup.md`](setup.md) and
+[`operations.md`](operations.md) (install and lifecycle surfaces).
 
-1. Runtime entrypoints and composition
-   - `src/app/startup/index.ts`
-   - `src/app/gateway/main.ts`
-   - `src/app/agent/main.ts`
-   - `src/app/startup/composition/composition.ts`
-   - `src/app/startup/composition/parity.ts`
-2. Config and persistence contracts
-   - `src/shared/contracts/runtime.ts`
-   - `src/system/settings.ts`
-   - `src/system/settings/contracts.ts`
-   - `src/persistence/layout.ts`
-3. Bootstrap example only
-   - `.env.example`
+Architectural authority beyond this page is the project charter
+([`docs/PSFN_PROJECT_CHARTER.md`](../docs/PSFN_PROJECT_CHARTER.md)); this page
+describes how the runtime realizes it. The split runtime — privileged gateway,
+isolated agent (Companion Core), operator Garden plane — is the **only**
+supported shape, PostgreSQL is the **only** runtime persistence backend, and
+fail-closed contracts stay fail-closed: there are no compatibility shims,
+silent fallbacks, or SQLite runtime paths. When prose and code disagree, the
+code wins — entrypoints and contracts first.
 
-## Runtime Contract
+## Source-of-truth order
 
-- The canonical operational mode is split gateway + agent.
-- `src/app/startup/index.ts` is disabled and exits fail-closed.
-- `npm run gateway`, `npm run agent`, and `npm run operator` are the supported
-  component entrypoints.
+The repository treats these as canonical, in this order:
 
-### Cluster human and operator surfaces
+1. Runtime entrypoints and composition — `src/app/gateway/main.ts`,
+   `src/app/agent/main.ts`, `src/app/operator/main.ts`,
+   `src/app/startup/composition/*` (the legacy monolith
+   `src/app/startup/index.ts` is disabled and exits fail-closed).
+2. Config and persistence contracts — `src/shared/contracts/runtime.ts`,
+   `src/shared/contracts/runtime-base.ts`, `src/system/settings.ts`,
+   `src/system/config/*`, `src/persistence/layout.ts`,
+   `src/persistence/postgres.ts`, `src/persistence/runtime-factory.ts`.
+3. Bootstrap examples only — `.env.example` and `config/*.seed.json`.
 
-- The canonical HTTPS origin's `/fleet` route is the cluster overview inside the
-  same compiled Garden frontend used for companion administration.
-- `/fleet` and `/v1/fleet/portal` require a live gateway cluster session and
-  expose only the current principal's bounded authorized projection.
-- Authorized companion navigation always uses
-  `/companions/<companion-uuid>/garden/...`; the immutable URL target is the
-  sole browser authority for page, API, download, and WebSocket traffic.
-- **Standalone token admission** is a permanent supported mode for local testing
-  and for single-user, non-Kubernetes installations. When `fleet-auth.json` is
-  absent, the Garden operator surface admits browser requests with `ADMIN_TOKEN`
-  or the explicit loopback-only `ADMIN_ALLOW_INSECURE=true` bypass. This mode is
-  mutually exclusive with fleet-principal admission; a deployment with
-  `fleet-auth.json` enabled rejects `ADMIN_TOKEN` and `ADMIN_ALLOW_INSECURE`
-  before listen.
-- The former unauthenticated raw cluster-status listener and its
-  `FLEET_STATUS_PORT` / `FLEET_STATUS_HOST` wiring are retired. The public
-  origin does not expose `/fleet/status.json` or complete cluster-operational
-  metadata.
+## Config loading and ownership
 
-## Live Alpha Migration Boundary
+### One loader per runtime role
 
-Until beta, the live runtime may keep only the migration support listed here. New compatibility or fallback behavior in config, startup, persistence, or model-facing tool names must fail closed unless this section is updated with the supported scope, validation path, and beta-removal condition.
+The config layer exposes exactly three entrypoints
+(`src/system/config/load-config.ts`):
 
-Supported until beta:
+| Role | Loader | Notes |
+| --- | --- | --- |
+| Gateway | `loadConfig()` | Secret-bearing config: credential vault, Discord tokens, role-bound gateway tokens |
+| Isolated agent | `loadAgentConfig()` | Fleet-bound identity; requires role-bound gateway credentials; no secret-bearing startup fields |
+| Operator | `loadOperatorConfig()` | Sanitized core projection; no companion identity, no personal workspace |
 
-- Explicit model-budget ledger authority cutover through
-  `models.json` `budgetPolicy.accountingStartMs`. This may exclude only immutable
-  chat/completion attempts recorded before complete pricing became authoritative;
-  it never rewrites ledger rows. Validation requires a non-negative safe-integer
-  timestamp, rejects future cutovers fail closed, and confirms every event at or
-  after the cutover has resolvable pricing. Remove the owner-file setting once the
-  cutover predates the monthly accounting window; remove this compatibility field
-  at beta after no supported owner file still requires it.
-- Continuous/local shared-root layout through `DATA_DIR`. This is for local development and smoke testing only; production mode forbids shared-root operation.
-- Split-root persistence cutover through `npm run migrate:persistence-layout` and the installer `--migrate-data` path. The cutover tooling may read legacy shared roots, write manifests, and run existing intra-root cleanup, but production startup should stop until the plan is clean.
-- Explicit system-owner cluster re-rooting through
-  `npm run migrate:system-owner-fleet`. This one-time operator command may read
-  only legacy `charge-policy.json` and `skills.json` left at
-  `SYSTEM_DATA_DIR`, fan their exact approved bytes to the explicit
-  single-companion identity/root or to
-  every companion enumerated by `companions.json`, and retire each source only
-  after all destinations verify. Validation is the
-  exact source digest and filesystem identity per file, no-overwrite destination
-  checks, descriptor-pinned receipt/staging/destination directories, durable
-  receipt-owned source quarantine, and the durable schema-v4
-  `migrations/system-owner-fleet-reroot.json` receipt. The bootstrap receipt
-  records unpredictable quarantine, staging, and temporary identifiers before
-  those objects are created; created objects are fsynced and identity-bound
-  before use. Partial retries may resume only an identity-bound exact source
-  prefix. An unbound crash remnant is preserved and durably superseded under a
-  new recorded identifier, while unknown or replaced artifacts fail closed.
-  Retries must match the receipt, its pinned directory identities, and the
-  unchanged cluster. A Helm deployment may invoke the same compiled command only
-  through the explicit `ownerMigration` pre-upgrade hook: the rollout must set
-  `required=true`, disable bootstrap seeding, bind every source digest, mount
-  the exact system and backup claims plus either the one explicit
-  single-companion PVC or every manifest companion PVC at its canonical path,
-  select single-vs-multi topology explicitly (never from companion count), keep
-  the snapshot path beneath the PVC-mounted backup directory, capture the
-  whole-install snapshot first, and complete the mandatory packaged
-  per-companion readiness probes before Helm admits the new revision. Missing
-  claims, wrong paths, image-digest resolution failures, shared companion
-  claims, and an omitted required hook fail the upgrade while the old revision
-  remains deployed. Validate this path with `npm run verify:helm-chart` and
-  `npm run e2e:kube-owner-upgrade`. Remove the command, Helm hook, packaged
-  probe, and receipt reader before beta after
-  every split cluster has a completed receipt (or a plan proving no system-root
-  per-companion owners remain).
-- Explicit scheduler owner-shape migration through
-  `npm run migrate:scheduler-owner -- --data-dir <exact-companion-data-dir>`.
-  This operator-only command may migrate retired scheduler cadence keys in one
-  named companion root; it is never part of launcher startup and may not infer
-  `SYSTEM_DATA_DIR`, `DATA_DIR`, or another companion's root. Validate the
-  resulting `scheduler.json` through the canonical startup-owner preflight.
-  Remove the command before beta after every companion owner has the canonical
-  scheduler shape.
-- Explicit intake-policy owner migration through
-  `npm run migrate:intake-policy-owner -- --data-dir <exact-system-data-dir>`.
-  This operator-only command upgrades schema v1/v2/v3/v4/v5 to v6: v1 gains the
-  canonical `skill_write` sink rule, and legacy owners gain any missing URL
-  scanner, bounded screening-pool policy, and private-direct chat-body handling
-  from the distributed seed. It also adds `untrusted` to legacy L2 mandatory
-  tiers so external and derived content receives the intended semantic pass. It adds
-  or repairs the explicit trusted `companion_self` source class used for
-  screened self-authored mutations, remaps retired modes, and removes retired
-  screener model selectors. Persona/trust caps remain `standard`, preserving
-  the invariant that released untrusted external content may inform but never
-  instruct those sinks. The command also repairs current schema-v6 owners that
-  predate these remediations.
-  Dry-run is the default and `--apply` performs a validated durable atomic
-  replacement. Runtime loading never invokes the migrator and rejects legacy
-  or unremediated owners. Validate the result through the canonical
-  startup-owner preflight. Remove the command before beta after every system
-  owner uses canonical schema v6.
-- Startup owner-file hydration for currently supported legacy owner data. Hydration may seed missing owner files on first boot, migrate or warn on existing owner-file drift, and load model/provider registries with the existing migration paths, but it must not restore `.env` as mutable-settings authority.
-- Helm's one-time per-companion owner and scheduler-schema cutover for
-  `scheduler.json` and `capability-tier.json`. The chart init path may copy a legacy regular file
-  from `systemDataDir` to a missing `companionDataDir` target byte-for-byte and
-  retain a SHA-256 marker for the source, then use the canonical validated
-  atomic scheduler migrator to replace retired cadence fields with
-  `backgroundMaintenance`; it must never make the runtime read
-  the legacy path as a fallback, overwrite an evolved companion-owned target,
-  or choose between divergent unmarked files. Validate this boundary with
-  `npm run verify:helm-chart` and an exact-image local Helm rollout covering
-  agent, gateway, and Garden. Remove the legacy-source inspection, copy, and
-  marker compatibility before beta after every supported cluster has a
-  verified companion-owned target and the old-chart rollback window has been
-  retired.
-- Explicit session journal filename migration through
-  `npm run migrate:session-filenames -- --data-dir <exact-companion-data-dir> --apply`.
-  This operator-only command may rename retired L0 session filenames beneath
-  exactly one companion data root and rebuild that root's derived channel
-  index. Runtime startup never invokes the migration; an affected lookup fails
-  closed with the command to run. Validate the boundary with the command E2E,
-  SessionStore filename-boundary tests, and the persistence/sessions suites.
-  Remove the command, legacy filename engine, and lazy runtime detector before
-  beta after every supported companion session root uses readable filenames.
-- Bounded TurnRecord background-work repair for schema-v1 emotion-appraisal
-  handoffs written before `driftDecision` became mandatory. Startup recovery
-  recognizes only the exact former payload shape, revalidates its canonical
-  fields plus job identity, source-turn binding, turn fingerprint, and payload
-  fingerprint, and then retires that obsolete appraisal job because no honest
-  drift decision can be reconstructed after the turn. Current sibling jobs are
-  preserved; near-legacy, malformed-current, and mismatched records fail closed.
-  Recovery statistics expose the retirement count. Operators durably remove
-  affected derived rows with `migrate:turn-record-background-work`, passing the
-  exact companion data directory, an empty backup directory, and `--apply`;
-  dry-run is the default, apply plans the complete root before writing, keeps
-  byte-for-byte backups, and is idempotent. Validate this boundary with the
-  background-work contract, filesystem recovery-worker regressions, and command
-  E2E. Remove the runtime parser and migration command before beta after dry-run
-  reports zero remaining legacy jobs for every supported companion data root.
-- Explicit memory embedding re-index through
-  `npm run migrate:embeddings [-- --batch-size <n> --parallelism <n>]`.
-  This operator-only command re-embeds all L2 memories with the configured
-  in-process Transformers embedding provider after a provider or model change.
-  It requires `config.persistenceBackend=postgres` and never runs at startup.
-  Validate the boundary with a bounded retrieval smoke after migration.
-  Remove the command and its `src/faculties/memory/migration.ts` driver before
-  beta after every live installation has rebuilt its L2 embedding space with
-  the target provider/dimensions and passed the retrieval smoke.
-- Explicit prompt-layer identifier backfill through
-  `npm run migrate:prompt-layer-identifiers -- --apply`.
-  This operator-only command inserts the missing `identifier: "main"` property
-  into stored base prompt layers that predate the identifier field. It performs
-  a byte-surgical write and fails closed on multi-base or malformed layers.
-  Dry-run is the default; `--apply` performs the write. Validate the boundary
-  with the command's own tests and a live-snapshot smoke. Remove the command,
-  its backfill implementation, and the fail-closed coercion path in prompt
-  loading before beta after every companion's base prompt-layer records carry
-  an explicit identifier.
-- Explicit channel envelope label migration through
-  `npm run migrate:channel-envelope -- --apply`.
-  This operator-only command seeds `channels.json` channel-owned
-  `contextEnvelope` labels from contact conversation-channel rows, session
-  journals, and the demoted prefix heuristics. Dry-run report is the default;
-  `--apply` writes through the validated owner-file path. Conflicting or absent
-  evidence is reported, never guessed, and receives `invite_only` plus a
-  `needsReview` flag. Validate the boundary with the command E2E and the
-  Context Envelope golden tests. Remove the command and its planner/support
-  modules before beta after every companion's channels.json owns channel
-  envelope labels and no trust-policy override fallback remains active.
-- Existing companion persistence migrations for legacy continuity files,
-  opaque pre-cutover SQLite database placement, contact `discord_user_id`
-  identity rows, and the `core_memory.json` orientation filename. These flows
-  may preserve or move opaque files but do not open them through a SQLite
-  reader; they are not permission to add new parallel artifact names. Remove
-  the remaining move/warn paths before beta after every supported companion
-  root no longer contains the legacy filenames or placement that the migrator
-  recognizes.
-- Biographical typed-claim projection cutover for the legacy `contact_profiles`
-  summary (psfn-framework-o61vb). `biographical_claims`, grants, rebuild rows,
-  and review audits are the durable portable authority. Turn assembly obtains
-  typed claim rendering and its CogSec contributions through one atomic
-  projection result; a missing or mismatched contribution withholds the whole
-  projection, and no prompt path falls back to summary prose. Structured
-  candidates are synthesized only from live, current, exact-subject memory
-  rows, then rebound to runtime-owned subject and source snapshots before
-  admission. Legacy summary text is never an extraction source.
+`COMPANION_ID` is mandatory for gateway and agent startup and the operator
+carries no companion identity. Every agent additionally requires both
+`GATEWAY_COMPANION_AUTH_TOKEN` (fleet agent authentication) and
+`GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN` (isolated session-integrity role);
+startup aborts without either.
 
-  The memory migration renames `contact_profiles` to
-  `recent_contact_shapes`. Existing rows become `schema_version=0`, receive an
-  already-expired `fresh_until`, and are not loaded. Only a live-source rebuild
-  writes version-1 Recent Contact Shape rows. Their source memories must still
-  pass current source, subject, consent, room, destination, and Context Envelope
-  policy, and those sources contribute to outbound disclosure lineage. The
-  shape is therefore useful current interaction context, not durable biography
-  or portability authority.
+### `.env` vs JSON owner files
 
-  This is a one-way schema cutover: no compatibility view, dual read/write, or
-  pre-cutover application rollback is supported after migration. Rollback
-  requires restoring the pre-cutover Postgres dump. Retain version-0 rows only
-  until an exact-head o61vb.10 privacy-conformance run and a scratch
-  backup/restore verification both pass and the operator confirms that no
-  pre-cutover image rollback is required; then delete those expired rows and
-  remove the migration-only `contact_profiles` rename branch before beta.
-  Validate the boundary with migration SQL assertions, source-rebuild and
-  atomic-projection tests, Postgres adapter/parity checks, and the restore
-  verifier and the delivery tickets o61vb.3 through o61vb.10.
-- Forward-schema rollback bridges for the live-alpha Postgres memory and model
-  usage tables. `l2_memories.salience_decay_anchor_at` retains a current-time
-  default so an image from before the anchor column can insert a new live
-  memory without weakening the column's `NOT NULL` invariant. The
-  `model_usage_events` insert trigger converts only null or blank attribution
-  fields from the pre-attribution writer to the canonical `unknown` sentinel
-  and derives its missing fingerprint as
-  `legacy:rollback-writer:<event-id>`; all accounting, currency, token,
-  schema-version, and attribution constraints remain enforced. Validate this
-  boundary with the Postgres memory integration test and model-usage migration
-  certification against the exact older insert shapes, plus a bounded live
-  turn proving memory, embedding, chat, and reflection writes after any
-  rollback. Remove both bridges before beta after every deployment has retired
-  images that predate these columns and the supported Helm rollback window no
-  longer includes those writers.
-- Tool-surface migration aliases documented in `docs/tool-surface.md`. They preserve model-facing continuity while unified tools roll out, and should be removed after canonical actions have stable adoption.
-- One-time legacy Personal Workspace assignment during the multi-companion alpha
-  cutover. If legacy `WORKSPACE_PATH` contains data, startup stops and prints its
-  deterministic tree digest. An operator must select exactly one configured
-  companion with `PSFN_LEGACY_WORKSPACE_COMPANION_ID` and approve the exact
-  digest with `PSFN_LEGACY_WORKSPACE_SHA256`; migration copies without merging
-  or overwriting and retains the source. If the legacy and canonical paths
-  resolve to the same directory by realpath or device-and-inode identity,
-  startup records an explicit `not_needed` decision without requiring a receipt.
-  A completed migration is validated by the immutable receipt's internally
-  consistent entry manifest and configured source, destination, companion, and
-  approved digest identity; the mutable live Personal Workspace tree is not
-  re-hashed after completion. Once the retained legacy source is deliberately
-  removed, the receipt and canonical destination still validate without the
-  migration env inputs; partial env configuration remains an error.
-  Remove this startup migration and both env inputs before beta after every live
-  installation has a verified receipt.
+The ownership law is strict: **`.env` owns only secrets, host/port/socket
+wiring, runtime mode/layout wiring, and explicit bootstrap overrides. JSON
+owner files own all mutable runtime state.** Concretely:
 
-Out of boundary:
+- JSON-backed runtime setting env vars (`PRIMARY_MODEL`, `SESSION_MIRROR_ENABLED`,
+  `EMBEDDING_PROVIDER`, `THINK_MAX_TOKENS`, ...) are **ignored** by the loader:
+  they never override an owner file. The startup preflight logs a warning for
+  every ignored key (`getIgnoredJsonBackedConfigEnvKeys`), and the loader emits
+  canonical bootstrap defaults — including the `__owner_file_required__`
+  sentinel for model identity — until the JSON hydration pass replaces them.
+- The mutable owner files are `settings.json`, `models.json`, `providers.json`,
+  `scheduler.json`, `capability-tier.json`, `channels.json`, `skills.json`,
+  `trust-policy.json`, `mcp-servers.json`, `charge-policy.json`, `backup.json`
+  (plus topology/authority owners `companions.json`, `fleet-auth.json`,
+  `automata-policy.json`, `subagent-roles.json`, `partner-affect-shadow.json`,
+  `intake-policy.json`).
+- Missing required owner files **fail closed**: the loader never copies
+  distributed seed/example files into runtime state
+  (`Startup no longer copies distributed seed/example files into runtime state`).
+- Owner files carry canonical POSIX modes enforced against the runtime
+  identity: `fleet-auth.json` is owner-only `0600`, per-companion policy owners
+  are group-readable `0640`, and fleet-shared system owners are `0644`.
 
-- alternate config owner paths not listed in the owner-file contract
-- silent fallback from JSON owner files to `.env`
-- production fallback to `DATA_DIR` or to overlapping mutable roots
-- direct-provider bypass around the gateway/proxy security boundary
-- persistence backend fallbacks that change truth, such as app-side vector scans replacing required `pgvector`
-- new seed-loading behavior introduced as a compatibility workaround
+### Loading pipeline
 
-## Configuration Ownership
-
-### `.env` owns only
-
-- secrets
-- host/port/socket wiring
-- runtime mode/layout wiring
-- explicit bootstrap overrides
-
-### JSON owner files own mutable runtime state
-
-- `settings.json`
-- `models.json`
-- `providers.json`
-- `scheduler.json`
-- `capability-tier.json`
-- `channels.json`
-- `skills.json`
-- `trust-policy.json`
-- `mcp-servers.json`
-- `charge-policy.json`
-- `backup.json`
-
-When `models.json` enables `budgetPolicy`, every enabled model entry must declare
-complete non-negative USD rates for input, output, cache read, and cache write.
-Startup rejects incomplete pricing rather than admitting calls that the ledger
-cannot settle and then locking the budget on unknown historical cost.
-For an existing ledger whose older model identities cannot be priced honestly,
-operators may set `budgetPolicy.accountingStartMs` to the non-negative Unix epoch
-millisecond at which complete pricing became authoritative. Daily and monthly
-budget projections then exclude earlier events without rewriting or deleting
-them. A cutover later than the evaluated request timestamp fails closed.
-
-Legacy env values for JSON-owned settings are ignored, and startup hydration migrates or warns on drift where compatibility shims still exist.
-
-## External MCP Client Contract
-
-- PSFN is an MCP host/client. It does not expose companion internals as an MCP
-  server.
-- The gateway owns external MCP egress, credentials, transport, policy,
-  confirmation, and screening. The agent receives no MCP credential or raw
-  protocol result.
-- Transport is remote Streamable HTTP over verified HTTPS/TLS 1.2 or newer.
-  Plain HTTP, stdio subprocesses, legacy SSE transport, redirects, and global
-  TLS-verification bypasses are unsupported.
-- The exact official TypeScript client dependency performs protocol negotiation
-  and bounded calls. Server-initiated elicitation is not auto-fulfilled; PSFN
-  advertises no automatic roots/sampling authority.
-- Authentication is bearer, explicit API-key header, or OAuth client
-  credentials. Owner files contain only credential references. OAuth issuer and
-  token endpoint are HTTPS and same-origin.
-- The model-facing surface is one stable `mcp` tool with
-  `catalog|search|inspect|call|release`. The fixed provider tool payload never
-  contains remote tool definitions. Catalog is config-only; connection,
-  summaries, and one selected schema load progressively.
-- One client session is scoped to `(companion, server)`. Explicit release, idle
-  expiry, disconnect, and shutdown drop loaded schemas and close transport
-  resources. Later selection reconnects lazily.
-- Every server has explicit companion allowlisting, factual hosting/data/input
-  trust factors, a trust level that cannot exceed their minimum ceiling, an
-  outbound-sensitivity ceiling, and a deny-by-default per-tool effect/
-  confirmation policy. Unknown tools reject; destructive/control effects always
-  require confirmation; approvals bind to exact arguments.
-- MCP descriptions and schemas are canonicalized, SHA-256 hashed, and screened
-  through CogSec. An exact companion/hash hit may reuse its prior screened
-  artifact. A changed hash must be screened again. "Screened" never means
-  trusted.
-- Each classified tool policy binds effect, confirmation, a narrowing outbound
-  sensitivity ceiling, and the SHA-256 fingerprint of the exact screened tool
-  definition. Missing or changed fingerprints deny search/inspect/call until
-  operator reclassification. Calls validate arguments against the screened
-  discovered input schema before any external dispatch.
-- The model-facing tool and `mcp.execute` RPC cannot assert MCP sensitivity or
-  origin. The trusted turn runtime classifies the admitted generation context;
-  the provider request carries that classification and the gateway binds it to
-  one opaque, expiring, single-use permit for the exact provider-emitted MCP
-  tool call. Missing lineage, autonomous work specs, and shard-originated
-  generations receive no call permit. The gateway consumes the permit before
-  capability, trust, approval, or broker execution. Screened discovery metadata
-  does not raise the turn sensitivity; remote call results and other admitted
-  tool outputs tighten subsequent calls to confidential.
-- Every dynamic tool result is size-bounded and CogSec-screened on every call,
-  independent of trust and static-cache state. Only the screened projection may
-  cross the broker boundary.
-- Health and Garden lifecycle projections are content-free and companion-
-  scoped. They may reveal ids, policy, loaded state, and screening hash/time/
-  count, but never endpoints, credentials, descriptions, schemas, arguments, or
-  outputs.
-
-## Persistence Layout Contract
-
-### Continuous mode
-
-- Default when `PSFN_RUNTIME_LAYOUT_MODE` is unset and `NODE_ENV` is not `production`
-- Shared-root compatibility through `DATA_DIR`
-- Defaults to `./data`
-
-### Production mode
-
-- Activated by `PSFN_RUNTIME_LAYOUT_MODE=production` or `NODE_ENV=production`
-- Uses isolated mutable roots
-- Defaults to:
-  - `./runtime/production/system-data`
-  - `./runtime/production/companion-data`
-  - `./runtime/production/workspace`
-  - `./runtime/production/logs`
-  - `./runtime/production/tmp`
-  - `./runtime/production/backups`
-
-### Fail-closed rules
-
-- `SYSTEM_DATA_DIR` and `COMPANION_DATA_DIR` must be set together or not at all
-- production mode forbids `DATA_DIR` shared-root operation
-- production mutable roots must not overlap
-- companion and system roots must be different paths
-
-### Workspace scopes
-
-`WORKSPACE_PATH` means one companion's **Personal Workspace**: writable
-documents, journal, personal knowledge base, authored skills, modules,
-experiments, downloads, images, and other personal durable files. It is not a
-runtime-state root and not a general shared-files root.
-
-The multi-companion layout has one validated Personal Workspace per
-companion plus an installation-owned **Shared Companion Workspace** for
-explicitly published collaboration artifacts and common reference material. The
-shared-world wiki remains a narrower, site-scoped operator-owned knowledge
-surface—not a general shared filesystem.
-
-Cluster wiring deterministically derives personal roots from the runtime root and
-companion UUID, provisions them before process startup, and injects exactly one
-resolved Personal Workspace into each agent and Garden. The authenticated
-gateway connection selects the same root for filesystem, shell, image, beads,
-and channel attachment surfaces. There is no `SHARED_WORKSPACE_PATH` env setting
-or manifest override.
-
-Personal and shared workspace roots are canonicalized,
-non-overlapping with each other and with system/companion/runtime roots, and
-contained beneath the configured runtime root. Garden-mediated shared writes
-derive proposer, reviewer, and CogSec principals from three distinct
-credentials; body identity claims are rejected. Publication requires provenance,
-a revision-bound CogSec artifact, independent review, a crash-recoverable
-transaction, and containment checks. Shared material does not automatically reach prompts,
-wikis, memory, skills, or modules.
-
-## Artifact Ownership
-
-### System-owned
-
-- JSON owner files listed above
-- capability and runtime policy state
-- channel configuration
-
-### Companion-owned
-
-- character card
-- PostgreSQL-backed companion runtime state
-- append-only session JSONL archives
-- notes, reflections, scratchpad mirror, values evolution ledger
-- prompt layers and prompt registry
-- core memory and north-star state
-- images and identity assets
-- safeguard audit trail and post-turn queue
-
-### Personal-workspace-owned
-
-- one companion's authored documents, personal journal, personal knowledge base,
-  managed skills, modules, experiments, downloads, and saved artifacts
-- these files are companion-private by default and are not runtime state
-
-### Shared-workspace-owned (target contract)
-
-- installation-owned collaboration artifacts and common reference material
-- a Companion Library / Seed Bundle of approved documentation, templates, and
-  default skills
-- never personal memory, session archives, identity assets, credentials, or
-  mutable runtime configuration
-
-Path helpers for these artifacts live in `src/persistence/layout.ts`.
-
-## Startup Hydration Guarantees
-
-Both gateway and agent startup run canonical hydration through `hydrateCanonicalStartupConfig`, which:
-
-- resolves runtime path layout
-- loads settings and splits them by owner domain
-- loads model and provider registries with legacy migration support
-- loads trust-policy, scheduler, capability, charge-policy, backup, skills, and channel config
-- warns on legacy drift instead of silently re-authorizing `.env`
-
-## Same-Cluster Inter-Companion Autonomy
-
-- Autonomous initiation is same-cluster only, enabled by default, and started
-  only when `scheduler.json > icpAutonomy.enabled` is true. Its strict owner
-  block also owns candidate TTL/retry, permit TTL, and operator availability
-  lease TTL. There is no env shadow or compatibility reader.
-- `charge-policy.json` owns companion-social quota and continuation cost,
-  fatigue/social/overcharge reserve, structured continuation-evidence switches,
-  and the ICP conversation cost breaker. Existing `trust-policy.json`,
-  `channels.json`, capability tier, contact block/trust, and gateway policy
-  remain independent mandatory gates.
-- Operator quiet hours govern unsolicited companion-to-human outreach only.
-  They do not silence companion-to-companion initiation or the companions'
-  self-directed time; ICP remains governed by its own availability, fatigue,
-  charge, trust/block, provenance, capability, and cost controls.
-- Candidate motivation and peer-contact binding stay companion-local. Shared
-  arbitration stores only content-free availability, episode, provenance, and
-  permit control state. Permits are short-lived, single-use, candidate-bound,
-  recovery-safe, and invalidated when operator DND or emergency disable fences a
-  participant.
-- When ICP is enabled and `external.companion` is granted, each agent publishes
-  a coarse runtime availability lease at startup and renews it on the health
-  heartbeat. Healthy agents default to `available`; hard fatigue exhaustion
-  defaults to `resting` and remains an independent broker gate. Source authority
-  is `operator > companion > runtime`, so lifecycle renewal cannot erase an
-  explicit state. Disabling ICP or revoking the capability immediately fences
-  participation and suppresses a runtime-owned lease to `resting`; a preserved
-  higher-authority lease cannot reopen the closed runtime fence.
-- Peer-visible content is authored by the target ordinary channel turn. The
-  source handoff never accepts message content, and ICP-correlated turns cannot
-  recursively initiate another channel.
-- Garden `/autonomy` exposes only bounded/redacted local-participant
-  control-plane state and effective/on-disk/restart owner semantics. Unrelated
-  peer↔peer lifecycle, provenance, reason, fatigue, cost, and derived counts are
-  excluded. Audited local controls are
-  revision-checked candidate cancellation, operator DND, one-way live emergency
-  disable plus persisted owner disable, and a model-independent test initiation.
-  `POST /api/admin/icp-autonomy/test-initiations` accepts only a canonical peer
-  companion UUID and an idempotent request UUID. The durable source is
-  `operator_test`; the authenticated request supplies test consent, but the
-  ordinary capability, identity, trust/block, availability, fatigue, charge,
-  cost, preflight, one-use permit, and target-turn path remains mandatory. The
-  route accepts no message or motivation text. After canonical-peer validation
-  and durable candidate creation, it returns the deterministic candidate
-  identity with an `accepted`/`pending` disposition while provider-backed
-  delivery continues in the background; durable candidate lifecycle telemetry
-  carries the terminal outcome. Candidate persistence failure rejects the
-  request instead of acknowledging work that cannot be projected. Replaying a
-  terminal idempotent request returns `deduped` with the candidate's current
-  status instead of claiming that new background work was accepted.
-- Not shipped: cross-cluster communication, cluster-wide/cross-companion control,
-  message puppeteering, private transcript/reasoning inspection, and any Garden
-  exposure of chain-of-thought.
-
-## Security And Fail-Closed Posture
-
-- Gateway owns external egress and secrets.
-- Agent startup probes outbound reachability and aborts unless the operator explicitly overrides isolation.
-- URL fetches, filesystem access, and sensitive tool actions are policy-gated.
-- Capability eligibility and confirmation queues gate privileged actions.
-- External MCP calls are gateway-only, deny-by-default, sensitivity-bounded,
-  and screened on every dynamic response.
-- Trust-aware memory retrieval withholds data by default when policy does not allow disclosure.
-- Unknown or malformed provider/settings data should reject rather than silently coerce.
-
-## Validation Baseline
-
-Use the smallest relevant set, but these are the common contract checks:
-
-```bash
-npm run lint
-npm run build
-npm run verify:settings-contract
-npm run verify:repository-hygiene
-npm run verify:backup-restore
+```mermaid
+flowchart TD
+  ENV["process env"] --> LOAD["loadConfigForMode - gateway, agent, or operator"]
+  LOAD --> MODE["Mode gating - secrets and vault only for gateway"]
+  MODE --> LAYOUT["resolveRuntimePathLayout - mode, roots, workspace, logs, tmp, backups"]
+  LAYOUT --> FLEET["companions.json fleet manifest - required for every deployment"]
+  FLEET --> ID["COMPANION_ID plus role-bound gateway tokens for agent processes"]
+  ID --> PG["PERSISTENCE_BACKEND postgres-only and database URL per role"]
+  PG --> BASE["SubstrateConfig with bootstrap defaults and owner-file sentinels"]
+  BASE --> HYDRATE["hydrateJsonBackedRuntimeConfig"]
+  HYDRATE --> S1["settings.json plus settings.overlay.json whitelist merge"]
+  S1 --> S2["models.json registry - fail-closed purpose resolution"]
+  S2 --> S3["providers.json"]
+  S3 --> S4["scheduler, capability-tier, charge-policy at companion roots"]
+  S4 --> RUN["Runtime ready"]
 ```
 
-For runtime-specific surfaces, add the matching smoke or e2e command.
+*Config loading pipeline: env produces a bootstrapped `SubstrateConfig`, then the JSON hydration pass applies owner files in a fixed order.*
+
+`hydrateJsonBackedRuntimeConfig` (`src/system/config/runtime-config.ts`) is the
+owner-file pass that replaces the bootstrap defaults: it loads
+`settings.json` from system-data, merges the per-companion
+`settings.overlay.json` (whitelist-only, see below), applies `models.json`
+(validating every per-companion model-purpose selection against the hydrated
+registry **at startup, never at first call**), applies `providers.json`, and
+then roots `scheduler.json`, `capability-tier.json`, and `charge-policy.json`
+at the **companion data dir** so fleet companions hold distinct schedules,
+tiers, and ledgers.
+
+Mode-specific hardening:
+
+- **Gateway** requires `POSTGRES_DATABASE_URL`; it is the only mode that
+  materializes the credential vault and secret-bearing config keys
+  (`CORE_SECRET_BEARING_CONFIG_KEYS`: credential vault, Discord tokens, gateway
+  tokens, `postgresDatabaseUrl`, fleet-auth, API keys). Discord token and bot id
+  are mutually required when either is configured.
+- **Agent** resolves its database credential from env, secret file, or file
+  descriptor (`POSTGRES_DATABASE_URL` / `_FILE` / `_FD`) and rejects a raw
+  inline credential where the secret-file path is the contract; agent config
+  stays free of secret-bearing startup fields.
+- **Operator** may resolve the direct Garden database credential optionally —
+  absence is not fatal here, presence is enforced fail-closed at the point of
+  use — and its projection runs through `sanitizeCoreSubstrateConfig`, which
+  strips every secret-bearing key from the core config.
+- **Production runtime layout** rejects global TLS verification bypasses:
+  `GATEWAY_TLS_REJECT_UNAUTHORIZED=false` and `NODE_TLS_REJECT_UNAUTHORIZED=0`
+  both abort startup, forcing endpoint-scoped TLS trust
+  (`GATEWAY_TLS_CA_PATH`) instead. `WORKSPACE_PATH` is mandatory in production
+  layout (startup preflight throws when unset).
+
+## Settings contract and ownership scopes
+
+`src/system/config/settings-contract.ts` builds the versioned
+`SettingsContractData` (schemaVersion 1) that Garden and runtime resolution
+share: one **owner subsystem** and **owner file** per field, a closed field
+**type** (`string`, `boolean`, `integer`, `number`, `string_array`, `enum`,
+`object`), optional numeric ranges and enum values, deprecation, and a
+`global` vs `perCompanion` **scope**. Scope derives from the overlay whitelist:
+`isCompanionSettingsOverlayKey` tags a key `perCompanion` exactly when
+`settings.overlay.json` may override it.
+
+Two ownership rules matter operationally:
+
+- **Per-companion owner files** (`PER_COMPANION_OWNER_FILES`):
+  `capability-tier.json`, `scheduler.json`, `charge-policy.json`,
+  `skills.json`, `partner-affect-shadow.json` are rooted at each companion data
+  dir — one companion can never inherit another companion's circadian cadence,
+  maturation tier, charge ledger, enabled skill set, or co-emotion subject.
+- **Per-companion settings overlay** (`settings.overlay.json`): an absent
+  overlay is byte-identical behavior; a present overlay may set only keys in
+  `COMPANION_SETTINGS_OVERLAY_WHITELIST` (active timezone, voice identity,
+  model-purpose selection, observer sidecar, emotion scoping, CogSec baseline,
+  discord trigger policy, ...). Any non-whitelisted key fails startup closed —
+  it is never silently merged.
+
+## The eight-domain registry
+
+`src/system/config/settings-domain-registry.ts` is the single typed authority
+for exactly **eight operator-approved configuration domains**, in stable
+canonical (Garden tab) order:
+
+| Domain | Current owner files | Scope | Activation / failure | Apply |
+| --- | --- | --- | --- | --- |
+| core | `settings.json`, `backup.json` | global | boot_critical / runtime | live |
+| models | `models.json`, `providers.json` | global | boot_critical / runtime | live |
+| channels | `channels.json` | global | boot_critical / gateway | component_restart |
+| memory | `memory.json` (future), `partner-affect-shadow.json` | global | required_when_enabled / feature | live |
+| scheduler | `scheduler.json` | perCompanion | required_when_enabled / agent | live |
+| cogsec | `trust-policy.json`, `intake-policy.json` | global | boot_critical / runtime | live |
+| economy | `charge-policy.json` | perCompanion | required_when_enabled / feature | live |
+| capabilities | `capability-tier.json`, `skills.json`, `subagent-roles.json` | perCompanion | boot_critical / runtime | component_restart |
+
+Every descriptor records its canonical target file, the real owner files that
+feed it today, named schema validators, inheritance mode (`global_only` /
+`companion_override` / `companion_required`), and code-owned security bounds
+metadata (floors, ceilings, stricter-never-weaker). `verifySettingsDomainRegistry`
+fails closed on unknown/missing/duplicate domain ids, overlapping owner files,
+invalid metadata, Garden tab drift, and relations to unknown domains — and it is
+wired into `npm run verify:settings-contract` so the registry is continuously
+asserted. **Topology, authority, and namespaced-extension owner files**
+(`automata-policy.json`, `companions.json`, `fleet-auth.json`,
+`mcp-servers.json`, `satellites.json`) are explicitly
+`SETTINGS_NON_DOMAIN_OWNER_FILES` and may never be claimed by a domain; any
+field owned by a non-domain file fails the guard closed.
+
+The settings contract guard (`src/system/config/settings-contract-guard.ts`)
+continuously asserts backend schema, Garden field-exposure metadata, raw-editor
+subsystems, and owner-file inventories stay aligned, and fails closed when a
+schema field loses Garden exposure or a Garden field drifts to a non-runtime
+owner.
+
+`config/settings.seed.json` is the canonical default-bearing runtime settings
+file: `loadRuntimeSettingsContractDefaults` parses it through the runtime
+owner-file schema and requires every seed key to be a runtime-owned,
+non-deprecated `settings.json` contract field — an unknown seed key is a
+contract violation, not a warning.
+
+## Persistence layout
+
+### Two roots, never one
+
+`resolveRuntimePathLayout` / `resolvePersistenceRoots`
+(`src/persistence/layout.ts`) enforce:
+
+- `SYSTEM_DATA_DIR` and `COMPANION_DATA_DIR` must be set **together** — one
+  without the other throws.
+- They must be **distinct roots** — equal paths throw.
+- `DATA_DIR` (legacy shared root) is accepted **only in continuous layout
+  mode**; production forbids shared-root operation entirely.
+
+`resolveRuntimeLayoutMode` (`src/shared/runtime-layout-mode.ts`) maps
+`continuous | dev | development` to continuous and `production | prod | live`
+to production; an unknown explicit mode throws, and `NODE_ENV=production`
+resolves to production. Defaults: production uses
+`./runtime/production/{system-data,companion-data,workspace,logs,tmp,backups}`;
+continuous uses `./data` (system), `./companion` (companion), `./workspace`,
+`./logs`, `./tmp`.
+
+In production mode three assertions make the split enforceable rather than
+advisory — **no duplicate roots**, **no overlapping roots** (no root a strict
+subpath of another), and **workspace isolation** (the personal workspace must
+not overlap any runtime state root) — over system-data, companion-data,
+workspace, logs, tmp, and backups.
+
+### Where artifacts live
+
+- All companion-owned mutable state resolves under
+  `resolveCompanionStateDir(companionDataDir)` → `companion-data/state/`
+  (sessions, notes, contacts, reflection journals, prompt lineage, core memory,
+  ledgers, owner files).
+- System-owned operator state lives under `system-data/state/`
+  (tool-conformance runs, post-rollout validation verdicts, Helm rollback
+  act-once ledgers).
+- **Shared-world wiki documents are NOT companion-data**: they are
+  operator/caretaker-owned world knowledge under
+  `system-data/shared-world/wiki/sites/<siteId>`, one subtree per site, with a
+  containment check that rejects any site id escaping the sites root.
+
+`migrateLegacyPersistenceLayout` moves recognized legacy companion artifacts
+(sessions, notes, reflections, continuity files, charge/fatigue ledgers, ...)
+into the `state/` subtree and then ensures the canonical layout directories
+exist; `createAgentPersistenceRuntime` invokes it before opening any store.
+
+## Postgres runtime authority
+
+### The only backend
+
+`PersistenceBackend` is the literal type `'postgres'`. `PERSISTENCE_BACKEND`
+accepts only `postgres | postgresql | pg`; anything else aborts startup, and
+`createAgentPersistenceRuntime` refuses to build unless
+`config.persistenceBackend === 'postgres'` with a configured
+`postgresDatabaseUrl`. There is no SQLite runtime path and no
+app-side vector-scan fallback that changes truth.
+
+The repository gate `scripts/verify-postgres-only.mjs` (`npm run
+verify:postgres-only`) enforces the law mechanically: it fails on retired
+SQLite packages in `package.json`/`package-lock.json`, on any retired
+implementation path that still exists with content, on any unclassified
+retired-backend token reference in the scanned sources and docs, and on a
+stale allowlist entry whose classified contract text disappeared. The only
+sanctioned residual references are the network-less shell-sandbox `sqlite3`
+CLI toolset (local-file analysis tooling, not a store) and a disposable Node
+SQLite recovery-index worker under the OS temporary directory that never
+selects a persistence backend. The live alpha cutover boundary is
+preservation-without-opening: two-root layout/recovery flows may preserve or
+move opaque pre-cutover artifacts (for example a legacy shared-root
+`companion.db`) but never open them through a SQLite implementation — the gate
+classifies those fixtures and contract texts and fails closed if the boundary
+text disappears or an implementation returns.
+
+### Identifiers, pools, and the fail-closed seam
+
+- **Identifier validation** (`src/persistence/postgres.ts`): schema and role
+  names must match `^[a-z][a-z0-9_]*$` within the 63-byte NAMEDATALEN limit
+  (roles additionally reject `public`). Unvalidated identifiers are never
+  interpolated into `search_path` or DDL strings.
+- **Pool pinning**: `createPostgresPool` pins every connection's `search_path`
+  to the validated tenant schema plus the dedicated `extensions` schema via
+  libpq `options`, optionally with a least-privilege role and
+  `default_transaction_read_only=on`. A role is accepted only together with an
+  explicit schema. `public` is deliberately absent so a missing tenant table
+  fails instead of falling through to legacy data; when no schema is provided
+  behavior is byte-identical to the libpq default.
+- **NUL stripping**: Postgres rejects `0x00` in text/jsonb bind parameters
+  (`22021`), so NUL bytes are stripped from string bind parameters at the
+  shared pool/client boundary for every query — idempotently per pooled client.
+- **Migrations**: DDL chains run inside a transaction
+  (`withPostgresClient`) and, where concurrent processes race, under a stable
+  advisory lock (`ensurePostgresSchemaWithAdvisoryLock`) with signed 32-bit
+  lock keys; `ensurePostgresSchemaExists` checks `to_regnamespace` before
+  `CREATE SCHEMA IF NOT EXISTS`, always through the validated identifier.
+
+### Store readiness
+
+Every PostgreSQL store opened by a production workload is classified in
+`POSTGRES_STORE_READINESS_CATALOG` (`src/persistence/postgres/runtime-readiness.ts`)
+as `required` or `optional`. Startup waits on required stores and fails closed
+with a named `PostgresStoreReadinessError` when a required store cannot become
+ready; optional stores (ANN index, wiki projection, diagnostics, admin
+projections) degrade without taking the runtime down. The runtime factory
+opens the whole `AgentPersistenceRuntime` bundle — memory, episodic, reflection
+mirror, contacts, intention, internal state, participant trends, scheduled
+prompts, introspection landmarks, background work, Automata run/bus/retention —
+each through the readiness seam.
+
+```mermaid
+flowchart TD
+  CFG["SubstrateConfig - postgresDatabaseUrl, postgresSchema, companionFleet"] --> CHECK["persistenceBackend must be postgres - else throw"]
+  CHECK --> TENANT["resolveConfigTenantPoolScope - fleet requires exact schema plus role"]
+  TENANT --> PRE["Preflight - assertPostgresTenantAccessProvisioned or ensurePostgresSchemaExists"]
+  PRE --> SHARED{"fleet tenancy?"}
+  SHARED -->|yes| AUTH["assertSharedSchemaRuntimeAuthority - own schema plus shared DML only"]
+  SHARED -->|no| LOCAL["Per-companion stores in own schema or public"]
+  AUTH --> STORES["Store readiness - required stores from the catalog"]
+  LOCAL --> STORES
+  STORES --> RUNTIME["AgentPersistenceRuntime with store ports"]
+```
+
+*Persistence runtime selection: the factory fails closed on backend, pins the tenant boundary, preflights it, and only then opens readiness-catalogued stores.*
+
+### Tenancy and the shared schema
+
+- **Per-companion tenancy is an explicit opt-in** (`COMPANION_PG_SCHEMA`),
+  never derived from `COMPANION_ID` — auto-deriving would silently move
+  single-companion runtimes off `public` where their data lives. When the var
+  is present it must be a valid schema identifier or startup aborts; when
+  absent, runtime persistence uses `public` byte-identically to today.
+- In fleet deployments every agent pool is scoped to the exact manifest tenant
+  tuple by `resolveConfigTenantPoolScope`, which **fails closed rather than
+  defaulting to `public`** when the manifest is present, and refuses to repair
+  or migrate tenant roles, schemas, or extensions — startup only verifies the
+  provisioned boundary.
+- **Multi-companion shared-schema stores** (companion presence, per-companion
+  social pot, speaking arbiter) exist only when fleet tenancy is enabled, and
+  every agent must pass `assertSharedSchemaRuntimeAuthority` — proving exact
+  own-schema plus shared DML authority, reciprocal tenant isolation, and zero
+  `fleet_auth` access — before opening one. Flag-off never touches the shared
+  schema.
+
+## Runtime contracts (shared)
+
+`src/shared/contracts/runtime-base.ts` is the channel-agnostic contract core
+shared by gateway and agent: turn records, model slots and catalog entries,
+`CANONICAL_MODEL_PURPOSES`, and the canonical model registry shapes. Two
+contracts govern config-to-runtime handoff:
+
+- **Model purpose selection (23pp)**: `ModelPurposeSelection` maps a canonical
+  purpose (`chat`, `memory`, `summary`, `vision`, ...) to a models.json
+  registry entry id. The catalog and provider credentials stay gateway-global;
+  only the *selection* is companion-scoped through `settings.overlay.json`.
+  The `moa` purpose is not selectable — MoA choices are owned by
+  `moaReferenceModels`/`moaAggregatorModel`. Every selection must resolve to an
+  enabled registry entry or startup fails closed.
+- **Lifecycle and hooks**: `Lifecycle` is exactly `init`/`start`/`stop`;
+  `RuntimeConfigHooks` exposes `refreshModels`, `refreshCapabilities`,
+  `invalidatePromptPrefixCache`, and `persistPromotedExtendedTools`.
+
+## Fail-closed contract summary
+
+- No SQLite runtime path; no persistence backend fallbacks that change truth;
+  `PERSISTENCE_BACKEND` other than postgres aborts startup;
+  `scripts/verify-postgres-only.mjs` fails the repository gate on retired
+  packages, retired paths, unclassified references, or a dropped boundary
+  contract.
+- No silent fallback from JSON owner files to `.env`; JSON-backed env vars are
+  ignored and warned about; missing required owner files abort startup.
+- `DATA_DIR` shared-root is continuous-mode only; production demands isolated,
+  non-overlapping roots and a mandatory `WORKSPACE_PATH`.
+- Global TLS verification bypass (`GATEWAY_TLS_REJECT_UNAUTHORIZED=false`,
+  `NODE_TLS_REJECT_UNAUTHORIZED=0`) is rejected in production layout.
+- Unvalidated Postgres schema/role identifiers never reach SQL; tenant pools
+  never default to `public` when a fleet manifest is present; fleet startup
+  verifies but never repairs tenant boundaries.
+- Unknown settings-domain ids, non-domain owner claims, non-whitelisted
+  overlay keys, and unregistered seed defaults are contract violations, not
+  warnings.
+
+## Verification
+
+- `npm run verify:settings-contract` asserts the settings contract guard and
+  the eight-domain registry (`settings-contract-guard.test.ts`,
+  `settings-domain-registry.test.ts`).
+- `npm run verify:postgres-only` (`scripts/verify-postgres-only.mjs`) is the
+  mechanical Postgres-only persistence gate — retired SQLite packages, retired
+  implementation paths, unclassified retired-backend references, and stale
+  allowlist entries all fail — and runs inside
+  `npm run verify:repository-hygiene:structural`.
+- `load-config.test.ts` pins the fail-closed env behavior (ignored JSON env
+  vars, missing `POSTGRES_DATABASE_URL`, partial split roots, production TLS
+  rejects, agent credential/token requirements, operator secret-free
+  projection).
+- `runtime-config.test.ts` pins owner-file hydration and per-companion rooting
+  (`scheduler.json` phase-lock, models-over-env precedence).
+- `layout.test.ts` pins root resolution, production disjointness guards, and
+  the shared-world containment check.
+- `postgres.test.ts` pins identifier validation, search_path pinning, role
+  requirements, and NUL stripping; `runtime-factory.test.ts` pins the
+  postgres-only factory, tenant preflight, and store readiness failures.

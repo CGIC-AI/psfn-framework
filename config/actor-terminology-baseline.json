@@ -2,10 +2,16 @@
   "$comment": "Narrow exceptions to the Companion/Partner/Operator/Participant/primary vocabulary gate. Every entry must identify an actual technical or persisted-contract use and carry a review note; stale entries fail the gate.",
   "entries": [
     {
-      "path": "docs/self-eval-prompt-audit.md",
+      "path": "docs/process/maintenance-scripts.md",
       "pattern": "generic-user",
-      "contains": "The user prompt injects",
-      "note": "This audit names the provider-protocol user prompt, not the human relationship role."
+      "contains": "`{{user}}`, `the user`, `the companion`",
+      "note": "Documents the literal placeholder strings the participant-name repair query matches; it does not name the Partner role."
+    },
+    {
+      "path": "docs/process/maintenance-scripts.md",
+      "pattern": "generic-user",
+      "contains": "the definite labels `the user`, `Partner`, `the companion`,",
+      "note": "Documents the literal placeholder strings the participant-name repair query matches; it does not name the Partner role."
     },
     {
       "path": "src/core/cogsec/intake-firewall-notice-templates.ts",

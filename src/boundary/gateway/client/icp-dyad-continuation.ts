@@ -1,7 +1,11 @@
 import type { IcpConversationCorrelation, IcpDyadDelivery } from '../../../shared/contracts/icp-autonomy.js';
 import { deriveIcpTransportMessageId } from '../../../shared/contracts/icp-autonomy.js';
 import type { IcpDyadContinuationAuthorization, IcpDyadContinuationPrepareResult, IcpOpenDyadProjection } from '../icp-autonomy-contract.js';
-import type { CompanionMessageSendResult, GatewayMethods } from '../protocol.js';
+import type {
+  CompanionMessageSendResult,
+  GatewayMethods,
+  IcpEpisodeActivityEndParams,
+} from '../protocol.js';
 import type { HumanRelayIntentCapsule } from '../../../core/icp/human-relay-capsule.js';
 import type { GatewayClientTransportRuntime } from './transport-runtime.js';
 
@@ -94,7 +98,7 @@ export async function companionRecordDyadContinuationOutcome(
 export async function companionEndIcpEpisodeActivity(
   transportRuntime: GatewayClientTransportRuntime,
   companionId: string | undefined,
-  params: Omit<GatewayMethods['companion.episode.end_activity'][0], 'companionId'>,
+  params: Omit<IcpEpisodeActivityEndParams, 'companionId'>,
 ): Promise<GatewayMethods['companion.episode.end_activity'][1]> {
   return await transportRuntime.request('companion.episode.end_activity', {
     ...params,

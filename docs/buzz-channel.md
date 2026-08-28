@@ -1,8 +1,8 @@
 # Buzz gateway channel
 
 Buzz is a gateway-owned companion channel installed through the generic
-[channel plugin host](channel-plugins.md). The first supported slice connects a
-single configured PSFN companion to explicitly allowlisted Buzz Stream rooms.
+[channel plugin host](channel-plugins.md). The supported Stream slice connects a
+configured PSFN companion to the rooms in its relay-signed Buzz membership.
 
 Buzz owns the Nostr relay, community membership, room, and event history. PSFN
 owns the companion's cognition, canonical contacts, trust, memory, and
@@ -14,20 +14,39 @@ Multica, or other channel adapters.
 
 1. The gateway opens the configured relay WebSocket and completes NIP-42
    authentication with the companion's Nostr key.
-2. It subscribes only to kind `9` events in the configured `h`-tagged rooms
-   that `p`-tag the companion pubkey. The initial subscription starts at gateway
-   startup; durable replay is not part of this slice.
-3. Before a turn reaches the model, the adapter verifies the Nostr signature,
+2. It verifies relay-signed kind `39002` membership snapshots against the pinned
+   relay pubkey. An optional `channelIds` list narrows those memberships; it does
+   not grant membership. Signed kind `44100`/`44101` events add or remove rooms
+   without a restart, and removal cancels that room's in-flight turns.
+3. It subscribes only to kind `9` events in eligible `h`-tagged rooms that
+   `p`-tag the companion pubkey. Reconnect uses the configured finite retry and
+   replay window.
+4. Before a turn reaches the model, the adapter verifies the Nostr signature,
    exact room, exact author pubkey, companion mention, top-level shape, and
    self-author exclusion. The body and transport-authenticated group addressing
    then pass through CogSec intake.
-4. The gateway routes one deterministic `channelType: "buzz"` message to the
+5. The gateway durably claims the immutable event ID, then routes one
+   deterministic `channelType: "buzz"` message to the
    configured companion. The normalized relay origin remains part of channel
    and author identity so two Buzz communities cannot collide.
-5. A successful response becomes one signed kind `9` event in the same room.
+6. A successful response becomes one signed kind `9` event in the same room.
    Its `e` tag is a direct NIP-10 reply to the trigger, and its `p` tag names the
-   triggering author. The relay must acknowledge the publication within the
-   gateway's configured channel shutdown timeout.
+   triggering author. The exact signed event is stored before publication, so a
+   restart republishes the same event ID instead of rerunning cognition. The
+   relay must acknowledge publication within the gateway's channel timeout.
+
+An accepted event has a durable `processing`, `ready`, `completed`, or
+`suppressed` state scoped by normalized relay origin and companion ID. A crash
+after the exact reply reaches `ready` is recoverable automatically. A crash
+while a turn is still `processing` is deliberately not guessed at: startup
+raises an operator alert for reconciliation rather than risk a second turn.
+
+Agent-authored replies also carry signed `agent-root`, `agent-chain`,
+`agent-hop`, and `agent-recipient` tags plus the NIP-10 parent. Human-authored
+input begins a new chain. Machine-authored input must have valid causal tags;
+the configured hop bound, a repeated causal edge, a configured no-information
+acknowledgement, or the normal fatigue/no-reply disposition ends the chain with
+no publication. Silence is terminal and never becomes another acknowledgement.
 
 Authentication rejection, connection failure, unexpected connection loss, and
 publish rejection are bounded and visible through the channel operator-alert
@@ -45,6 +64,7 @@ environment.
   "buzz": {
     "enabled": true,
     "relayUrl": "wss://relay.example.test",
+    "relayPubkey": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
     "companionId": "11111111-1111-4111-8111-111111111111",
     "privateKeyRef": {
       "kind": "env",
@@ -54,29 +74,48 @@ environment.
       "22222222-2222-4222-8222-222222222222"
     ],
     "allowedAuthorPubkeys": [
-      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-    ]
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    ],
+    "machineAuthorPubkeys": [
+      "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    ],
+    "loopPolicy": {
+      "maxAutonomousReplyHops": 6,
+      "noInformationAcknowledgements": ["acknowledged", "noted"]
+    },
+    "recoveryPolicy": {
+      "replayWindowSeconds": 120,
+      "reconnectBaseDelayMs": 250,
+      "reconnectMaxDelayMs": 4000,
+      "maxReconnectAttempts": 5
+    }
   }
 }
 ```
 
 `relayUrl` must be an origin with no credentials, path, query, or fragment.
 Remote relays require `wss://`; plain `ws://` is accepted only for loopback
-development relays. Channel IDs must be lowercase RFC-4122 UUIDs, and author
-identities must be exact 64-character lowercase hex pubkeys. Duplicate or
-unknown values reject. The referenced private key may be a 32-byte lowercase
-hex value or an `nsec` value. Gateway startup fails closed when the reference is
-missing or the resolved key is invalid.
+development relays. `relayPubkey` pins the exact signer authorized to assert
+room membership; relay labels or NIP-11 metadata are not runtime authority.
+Channel IDs must be lowercase RFC-4122 UUIDs, and author identities must be
+exact 64-character lowercase hex pubkeys. `channelIds` may be empty to accept
+all authenticated memberships. `machineAuthorPubkeys` must be an exact subset
+of `allowedAuthorPubkeys`. Duplicate, unknown, incomplete, or malformed policy
+values reject. The referenced private key may be a 32-byte lowercase hex value
+or an `nsec` value. Enabled Buzz also requires PostgreSQL for recovery state;
+gateway startup fails closed when either persistence or the credential is not
+ready.
 
 ## Current boundary
 
-This tracer supports allowlisted top-level Stream mentions and anchored replies.
-It deliberately does not support scheduled continuity or generic top-level
+This slice supports membership-derived Stream mentions, anchored replies,
+durable replay, and structurally bounded autonomous reply chains. It deliberately
+does not support scheduled continuity or generic top-level
 outbound messages: every reply must remain bound to a verified signed trigger.
-It does not yet consume relay membership changes, reconnect or persist replay
-cursors, ingest nested thread turns, resolve Buzz profiles to canonical
-contacts, publish Forum events, or handle direct messages. In particular, a
-Buzz display name or NIP-05 label is presentation only and never grants trust,
+It does not yet ingest nested thread history, resolve Buzz profiles to canonical
+contacts, publish Forum events, or handle private participant channels. In
+particular, a Buzz display name or NIP-05 label is presentation only and never grants trust,
 memory access, or work authority.
 
 Do not use the current Stream bootstrap allowlist as proof that an author is a
@@ -89,6 +128,8 @@ For a disposable end-to-end check against an already running local relay, run:
 BUZZ_LIVE_RELAY_URL=ws://127.0.0.1:3100 npm run smoke:buzz-channel
 ```
 
-The smoke creates ephemeral identities and an open Stream room, proves one
-signed mention and anchored response through the adapter, and then deletes the
-room. It never reads or writes deployment credentials.
+The smoke discovers the disposable relay signing pubkey from NIP-11, creates
+ephemeral identities and an open Stream room, adds the ephemeral companion as a
+member, proves one signed mention and anchored response through the adapter,
+and then deletes the room. Production configuration still pins the relay
+pubkey explicitly. The smoke never reads or writes deployment credentials.

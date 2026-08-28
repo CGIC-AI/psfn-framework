@@ -5,10 +5,13 @@ import {
   verifyEvent,
   type Event as NostrEvent,
 } from 'nostr-tools';
-import { isRecord } from '../../shared/utils/types.js';
+import { isRecord, isRfc4122Uuid } from '../../shared/utils/types.js';
 
 export const BUZZ_STREAM_KIND = 9;
 export const NIP_42_AUTH_KIND = 22_242;
+export const BUZZ_MEMBERSHIP_SNAPSHOT_KIND = 39_002;
+export const BUZZ_MEMBER_ADDED_KIND = 44_100;
+export const BUZZ_MEMBER_REMOVED_KIND = 44_101;
 export const BUZZ_STREAM_TEXT_CHUNK_LIMIT = 64 * 1_024;
 const NOSTR_HEX_KEY_PATTERN = /^[0-9a-f]{64}$/;
 const BUZZ_SCOPED_ID_PREFIX = 'buzz:';
@@ -18,6 +21,21 @@ export interface BuzzStreamAcceptancePolicy {
   subscribedSince: number;
   channelAllowlist: ReadonlySet<string>;
   authorAllowlist: ReadonlySet<string>;
+  machineAuthorPubkeys: ReadonlySet<string>;
+  maxAutonomousReplyHops: number;
+}
+
+export interface BuzzCausalEnvelope {
+  rootEventId: string;
+  chainId: string;
+  parentEventId: string;
+  hop: number;
+  recipientPubkeys: readonly string[];
+}
+
+export interface BuzzMembershipChange {
+  channelId: string;
+  active: boolean;
 }
 
 export function isNostrHexKey(value: string): boolean {
@@ -85,7 +103,131 @@ export function acceptsBuzzStreamEvent(
     !mentionedPubkeys.includes(policy.companionPubkey)
     || mentionedPubkeys.some(pubkey => !isNostrHexKey(pubkey))
   ) return false;
-  return !event.tags.some(tag => tag[0] === 'e');
+  if (!policy.machineAuthorPubkeys.has(event.pubkey)) {
+    return !event.tags.some(tag => tag[0] === 'e' || tag[0]?.startsWith('agent-'));
+  }
+  return parseBuzzCausalEnvelope(event, policy.companionPubkey, policy.maxAutonomousReplyHops)
+    !== null;
+}
+
+export function parseBuzzCausalEnvelope(
+  event: NostrEvent,
+  companionPubkey: string,
+  maxAutonomousReplyHops: number,
+): BuzzCausalEnvelope | null {
+  const roots = buzzTagValues(event, 'agent-root');
+  const chains = buzzTagValues(event, 'agent-chain');
+  const hops = buzzTagValues(event, 'agent-hop');
+  const recipients = buzzTagValues(event, 'agent-recipient');
+  const eventReferences = event.tags.filter(tag => tag[0] === 'e');
+  const replyParents = eventReferences
+    .filter(tag => tag[3] === 'reply' && typeof tag[1] === 'string')
+    .map(tag => tag[1]!);
+  const mentionedPubkeys = buzzTagValues(event, 'p');
+  const hasUnknownAgentTag = event.tags.some(tag => (
+    tag[0]?.startsWith('agent-')
+    && tag[0] !== 'agent-root'
+    && tag[0] !== 'agent-chain'
+    && tag[0] !== 'agent-hop'
+    && tag[0] !== 'agent-recipient'
+  ));
+  if (
+    roots.length !== 1
+    || chains.length !== 1
+    || hops.length !== 1
+    || eventReferences.length !== 1
+    || replyParents.length !== 1
+    || recipients.length === 0
+    || new Set(recipients).size !== recipients.length
+    || new Set(mentionedPubkeys).size !== mentionedPubkeys.length
+    || !sameStringSet(recipients, mentionedPubkeys)
+    || hasUnknownAgentTag
+  ) return null;
+  const rootEventId = roots[0]!;
+  const chainId = chains[0]!;
+  const parentEventId = replyParents[0]!;
+  const hop = Number(hops[0]);
+  if (
+    !isNostrHexKey(rootEventId)
+    || chainId !== rootEventId
+    || !isNostrHexKey(parentEventId)
+    || !Number.isSafeInteger(hop)
+    || hop < 1
+    || hop > maxAutonomousReplyHops
+    || !recipients.includes(companionPubkey)
+    || recipients.some(recipient => !isNostrHexKey(recipient))
+  ) return null;
+  return { rootEventId, chainId, parentEventId, hop, recipientPubkeys: recipients };
+}
+
+function sameStringSet(left: readonly string[], right: readonly string[]): boolean {
+  if (left.length !== right.length) return false;
+  const rightValues = new Set(right);
+  return left.every(value => rightValues.has(value));
+}
+
+export function createBuzzCausalReplyTags(input: {
+  rootEventId: string;
+  parentEventId: string;
+  hop: number;
+  recipientPubkeys: readonly string[];
+}): string[][] {
+  return [
+    ['e', input.parentEventId, '', 'reply'],
+    ...input.recipientPubkeys.map(pubkey => ['p', pubkey]),
+    ['agent-root', input.rootEventId],
+    ['agent-chain', input.rootEventId],
+    ['agent-hop', String(input.hop)],
+    ...input.recipientPubkeys.map(pubkey => ['agent-recipient', pubkey]),
+  ];
+}
+
+export function parseBuzzMembershipSnapshot(
+  event: NostrEvent,
+  relayPubkey: string,
+  companionPubkey: string,
+): string | null {
+  if (!acceptsRelayAuthorityEvent(event, relayPubkey, BUZZ_MEMBERSHIP_SNAPSHOT_KIND)) return null;
+  const channelIds = buzzTagValues(event, 'd');
+  if (
+    channelIds.length !== 1
+    || !isRfc4122Uuid(channelIds[0]!)
+    || !buzzTagValues(event, 'p').includes(companionPubkey)
+  ) return null;
+  return channelIds[0]!;
+}
+
+export function parseBuzzMembershipChange(
+  event: NostrEvent,
+  relayPubkey: string,
+  companionPubkey: string,
+): BuzzMembershipChange | null {
+  if (
+    !acceptsRelayAuthorityEvent(event, relayPubkey, BUZZ_MEMBER_ADDED_KIND)
+    && !acceptsRelayAuthorityEvent(event, relayPubkey, BUZZ_MEMBER_REMOVED_KIND)
+  ) return null;
+  const channelIds = buzzTagValues(event, 'h');
+  const targets = buzzTagValues(event, 'p');
+  if (
+    channelIds.length !== 1
+    || !isRfc4122Uuid(channelIds[0]!)
+    || targets.length !== 1
+    || targets[0] !== companionPubkey
+  ) return null;
+  return { channelId: channelIds[0]!, active: event.kind === BUZZ_MEMBER_ADDED_KIND };
+}
+
+function acceptsRelayAuthorityEvent(
+  event: NostrEvent,
+  relayPubkey: string,
+  expectedKind: number,
+): boolean {
+  if (event.kind !== expectedKind || event.pubkey !== relayPubkey) return false;
+  try {
+    return verifyEvent(event);
+  } catch {
+    return false;
+  }
 }
 
 export function createBuzzAuthEvent(

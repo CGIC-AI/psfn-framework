@@ -3577,6 +3577,15 @@ export const POSTGRES_SHARED_MIGRATIONS: readonly string[] = [
     closed_at_ms = NULL,
     close_reason_code = NULL
   WHERE first_state_updated_at_ms IS NULL OR second_state_updated_at_ms IS NULL;`,
+  // Keep migration 16 compatible with an N-1 writer during a rolling upgrade.
+  // The legacy insert supplies created_at_ms but does not know these columns;
+  // the database clock is evaluated after that supplied timestamp and therefore
+  // remains valid under the participant-state >= created_at_ms constraint.
+  `ALTER TABLE icp_dyads
+    ALTER COLUMN first_state_updated_at_ms SET DEFAULT
+      ((EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::BIGINT),
+    ALTER COLUMN second_state_updated_at_ms SET DEFAULT
+      ((EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::BIGINT);`,
   `ALTER TABLE icp_dyads ALTER COLUMN first_state_updated_at_ms SET NOT NULL;`,
   `ALTER TABLE icp_dyads ALTER COLUMN second_state_updated_at_ms SET NOT NULL;`,
   `ALTER TABLE icp_dyads DROP CONSTRAINT IF EXISTS icp_dyads_participant_state_check;`,

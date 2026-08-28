@@ -340,6 +340,21 @@ describe('Postgres live schema migrations', () => {
     expect(sharedSql).toContain("VALUES (15, 'icp-open-dyad-continuation')");
     expect(sharedSql).toContain("VALUES (16, 'icp-dyad-participant-lifecycle')");
     expect(sharedSql).toContain('dyad_lifecycle_revision');
+    const firstStateDefault = sharedSql.search(
+      /ALTER COLUMN first_state_updated_at_ms\s+SET DEFAULT/u,
+    );
+    const secondStateDefault = sharedSql.search(
+      /ALTER COLUMN second_state_updated_at_ms\s+SET DEFAULT/u,
+    );
+    expect(firstStateDefault).toBeGreaterThanOrEqual(0);
+    expect(secondStateDefault).toBeGreaterThanOrEqual(0);
+    expect(sharedSql).toContain('EXTRACT(EPOCH FROM clock_timestamp())');
+    expect(firstStateDefault).toBeLessThan(
+      sharedSql.indexOf('ALTER COLUMN first_state_updated_at_ms SET NOT NULL'),
+    );
+    expect(secondStateDefault).toBeLessThan(
+      sharedSql.indexOf('ALTER COLUMN second_state_updated_at_ms SET NOT NULL'),
+    );
     expect(sharedSql).toContain('provenance_conversation_ids UUID[] NOT NULL');
     expect(sharedSql).toContain('ICP dyad backfill rejected ambiguous pair/channel ownership');
     expect(sharedSql).toContain('ADD COLUMN IF NOT EXISTS dyad_id UUID');

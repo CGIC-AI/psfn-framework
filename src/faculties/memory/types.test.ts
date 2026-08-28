@@ -6,9 +6,30 @@ import {
   initializeImportedMemorySalience,
   memoryMatchesScopeQuery,
   normalizeMemoryProvenance,
+  resolvePersistedMemoryType,
 } from './types.js';
 
 describe('memory import normalization policy', () => {
+  it('maps only the evidenced legacy fact type and quarantines other unsupported types', () => {
+    expect(resolvePersistedMemoryType('semantic')).toEqual({
+      disposition: 'valid',
+      type: 'semantic',
+    });
+    expect(resolvePersistedMemoryType('fact')).toEqual({
+      disposition: 'mapped',
+      originalType: 'fact',
+      type: 'semantic',
+      repairVersion: 1,
+      reason: 'legacy_fact_category_is_semantic',
+    });
+    expect(resolvePersistedMemoryType('profile_fact')).toEqual({
+      disposition: 'quarantine',
+      originalType: 'profile_fact',
+      repairVersion: 1,
+      reason: 'unsupported_memory_type',
+    });
+  });
+
   it('infers type from relational text signals when explicit type is missing', () => {
     const inferred = inferImportedMemoryType({
       text: 'My partner prefers direct communication and quiet evenings.',

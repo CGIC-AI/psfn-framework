@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { fromAny } from '@total-typescript/shoehorn';
 import { calculateEffectiveMemorySalience, SalienceDecay } from './decay.js';
 import { MEMORY_CONFIG } from './types.js';
 import type { PurrMemory } from './types.js';
@@ -424,6 +425,52 @@ describe('SalienceDecay', () => {
     expect(bulkSpy).toHaveBeenCalledWith([
       expect.objectContaining({ id: 'tx-check', salience: expect.any(Number) }),
     ]);
+  });
+
+  it('reports an unsupported row without its content and continues valid tracked decay', async () => {
+    const now = 1_800_000_000_000;
+    const oneHalfLifeAgo = now - 30 * 24 * 60 * 60_000;
+    const valid = makeMemory({
+      id: 'valid-decay-row',
+      type: 'episodic',
+      salience: 1,
+      extractedAt: oneHalfLifeAgo,
+      lastAccessed: oneHalfLifeAgo,
+    });
+    const invalid = makeMemory({
+      id: 'invalid-decay-row',
+      text: 'Private content must not enter the diagnostic.',
+      type: fromAny('profile_fact'),
+      salience: 1,
+      extractedAt: oneHalfLifeAgo - 1,
+      lastAccessed: oneHalfLifeAgo,
+    });
+    let revision = 1;
+    const bulkUpdateSalience = vi.fn(async () => {
+      revision += 1;
+      return 1;
+    });
+    const reports: unknown[] = [];
+    const isolatedDecay = new SalienceDecay({
+      getSalienceMaintenanceRevision: () => revision,
+      listActiveMemories: vi.fn(async () => [valid, invalid]),
+      bulkUpdateSalience,
+    } as unknown as MemoryStorePort, {
+      onInvalidMemoryType: report => reports.push(report),
+    });
+    vi.spyOn(Date, 'now').mockReturnValue(now);
+
+    await isolatedDecay.run();
+
+    expect(bulkUpdateSalience).toHaveBeenCalledWith([
+      expect.objectContaining({ id: 'valid-decay-row', salience: 0.5 }),
+    ]);
+    expect(reports).toEqual([{
+      memoryId: 'invalid-decay-row',
+      memoryType: 'profile_fact',
+      reason: 'unsupported_memory_type',
+    }]);
+    expect(JSON.stringify(reports)).not.toContain('Private content');
   });
 
   it('uses provided maintenance interval when starting timer', () => {

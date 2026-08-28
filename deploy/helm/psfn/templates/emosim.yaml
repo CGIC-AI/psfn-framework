@@ -1,114 +1,8 @@
 {{- if .Values.emosim.enabled }}
-{{- if .Values.fleet.enabled }}
-{{- $root := . -}}
-{{- range $companion := .Values.fleet.companions }}
-{{- $target := dict "root" $root "companionId" $companion.companionId -}}
----
-# One companion-owned emo_sim process. The companion id is present on every
-# selector and resource name so no primary/shared service can satisfy a
-# follower's immutable companions.json binding.
-apiVersion: v1
-kind: Service
-metadata:
-  name: {{ include "psfn.fleetEmosimServiceName" $target }}
-  labels:
-    {{- include "psfn.labels" $root | nindent 4 }}
-    app.kubernetes.io/component: emosim
-    psfn.io/companion-id: {{ $companion.companionId }}
-spec:
-  type: ClusterIP
-  ports:
-    - name: http
-      port: {{ $root.Values.ports.emosimHttp }}
-      targetPort: http
-    - name: tcp-push
-      port: {{ $root.Values.ports.emosimTcp }}
-      targetPort: tcp-push
-  selector:
-    {{- include "psfn.fleetEmosimLabels" $target | nindent 4 }}
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: {{ include "psfn.fleetEmosimStateClaimName" $target }}
-  labels:
-    {{- include "psfn.labels" $root | nindent 4 }}
-    app.kubernetes.io/component: emosim
-    psfn.io/companion-id: {{ $companion.companionId }}
-spec:
-  accessModes:
-    {{- toYaml $root.Values.persistence.accessModes | nindent 4 }}
-  {{- with $root.Values.persistence.storageClassName }}
-  storageClassName: {{ . | quote }}
-  {{- end }}
-  resources:
-    requests:
-      storage: {{ $root.Values.emosim.persistence.size | quote }}
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: {{ include "psfn.fleetEmosimServiceName" $target }}
-  labels:
-    {{- include "psfn.labels" $root | nindent 4 }}
-    app.kubernetes.io/component: emosim
-    psfn.io/companion-id: {{ $companion.companionId }}
-spec:
-  replicas: 1
-  strategy:
-    type: Recreate
-  selector:
-    matchLabels:
-      {{- include "psfn.fleetEmosimLabels" $target | nindent 6 }}
-  template:
-    metadata:
-      labels:
-        {{- include "psfn.fleetEmosimLabels" $target | nindent 8 }}
-    spec:
-      {{- with $root.Values.imagePullSecrets }}
-      imagePullSecrets:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
-      securityContext:
-        {{- toYaml $root.Values.podSecurityContext | nindent 8 }}
-      containers:
-        - name: emosim
-          image: {{ include "psfn.emosimImage" $root | quote }}
-          imagePullPolicy: {{ $root.Values.emosim.image.pullPolicy }}
-          securityContext:
-            {{- include "psfn.appReadOnlySecurityContext" $root | nindent 12 }}
-          args:
-            {{- toYaml (append $root.Values.emosim.extraArgs "--pidfile=/state/server.pid") | nindent 12 }}
-          ports:
-            - name: http
-              containerPort: 17342
-            - name: tcp-push
-              containerPort: 17341
-          readinessProbe:
-            httpGet:
-              path: /api/model
-              port: http
-            initialDelaySeconds: 5
-            periodSeconds: 10
-          livenessProbe:
-            httpGet:
-              path: /api/model
-              port: http
-            initialDelaySeconds: 20
-            periodSeconds: 20
-          resources:
-            {{- toYaml $root.Values.emosim.resources | nindent 12 }}
-          volumeMounts:
-            - name: state
-              mountPath: /state
-      volumes:
-        - name: state
-          persistentVolumeClaim:
-            claimName: {{ include "psfn.fleetEmosimStateClaimName" $target }}
-{{ end }}
-{{- else }}
----
-# Fleet-of-one form: one long-lived companion-owned emo_sim service.
+# emo_sim observer-eval engine: one long-lived session host so the observer
+# sidecar accumulates temporal emotion state across turns. The API is
+# unauthenticated by upstream design — ClusterIP only, never expose externally
+# (see networkpolicy.yaml for the agent-only ingress rule).
 apiVersion: v1
 kind: Service
 metadata:
@@ -150,6 +44,8 @@ metadata:
   labels:
     {{- include "psfn.labels" . | nindent 4 }}
 spec:
+  # Single replica with Recreate: the engine owns its state directory and the
+  # experiment requires exactly one continuously-ticking session world.
   replicas: 1
   strategy:
     type: Recreate
@@ -201,5 +97,4 @@ spec:
         - name: state
           persistentVolumeClaim:
             claimName: {{ include "psfn.fullname" . }}-emosim-state
-{{ end }}
-{{ end }}
+{{- end }}

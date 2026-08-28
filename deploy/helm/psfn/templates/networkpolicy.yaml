@@ -480,39 +480,7 @@ spec:
         - port: {{ .Values.ports.redis }}
           protocol: TCP
 {{- end }}
-{{ if .Values.emosim.enabled }}
-{{ if .Values.fleet.enabled }}
-{{- $root := . -}}
-{{- range $companion := .Values.fleet.companions }}
-{{- $target := dict "root" $root "companionId" $companion.companionId -}}
----
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: {{ include "psfn.fleetEmosimServiceName" $target }}
-  labels:
-    {{- include "psfn.labels" $root | nindent 4 }}
-    app.kubernetes.io/component: emosim
-    psfn.io/companion-id: {{ $companion.companionId }}
-spec:
-  podSelector:
-    matchLabels:
-      {{- include "psfn.fleetEmosimLabels" $target | nindent 6 }}
-  policyTypes:
-    - Ingress
-    - Egress
-  ingress:
-    - from:
-        - podSelector:
-            matchLabels:
-              {{- include "psfn.fleetAgentLabels" $target | nindent 14 }}
-      ports:
-        - port: {{ $root.Values.ports.emosimHttp }}
-          protocol: TCP
-  # The emo_sim engine needs no egress at all; the empty list denies it.
-  egress: []
-{{ end }}
-{{ else }}
+{{- if .Values.emosim.enabled }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -535,10 +503,10 @@ spec:
       ports:
         - port: {{ .Values.ports.emosimHttp }}
           protocol: TCP
+  # The emo_sim engine needs no egress at all; the empty list denies it.
   egress: []
-{{ end }}
-{{ end }}
-{{ if and .Values.modelPrefetch.enabled (or .Values.modelPrefetch.textEmotion.enabled .Values.modelPrefetch.injectionClassifier.enabled) }}
+{{- end }}
+{{- if and .Values.modelPrefetch.enabled (or .Values.modelPrefetch.textEmotion.enabled .Values.modelPrefetch.injectionClassifier.enabled) }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy

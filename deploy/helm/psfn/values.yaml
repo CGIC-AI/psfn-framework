@@ -515,10 +515,9 @@ redis:
         key: ca.crt
 
 emosim:
-  # Long-lived companion-owned emo_sim emotion-simulation engine consumed by
-  # the observer eval sidecar. A fleet renders one isolated Service,
-  # Deployment, and state claim per fleet.companions entry; a fleet of one
-  # uses http://<release>-emosim:17342. The emo_sim API is UNAUTHENTICATED by
+  # Long-lived emo_sim emotion-simulation engine consumed by the observer
+  # eval sidecar (observerEvalSidecar.adapter.kind=emosim_server pointed at
+  # http://<release>-emosim:17342). The emo_sim API is UNAUTHENTICATED by
   # upstream design: it is exposed ONLY as a ClusterIP service and guarded by
   # NetworkPolicy (agent pods only). Never expose these ports externally.
   # Stock-standard on every deployment: the emotion pipeline is part of the

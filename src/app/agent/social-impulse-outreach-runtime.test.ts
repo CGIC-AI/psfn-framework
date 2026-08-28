@@ -5,6 +5,7 @@ import type {
   SocialImpulseOutreachRecord,
   SocialImpulseOutreachStorePort,
 } from '../../core/emotion/social-impulse-outreach.js';
+import { runWithRequestContext } from '../../primitives/llm/request-context.js';
 import { createProductionSocialImpulseOutreachRuntime } from './social-impulse-outreach-runtime.js';
 
 const COMPANION_ID = '11111111-1111-4111-8111-111111111111';
@@ -90,7 +91,9 @@ function memoryStore(): SocialImpulseOutreachStorePort {
   };
 }
 
-function harness() {
+function harness(
+  isRoomTransportAvailable: (channelType: 'discord' | 'buzz') => boolean = () => true,
+) {
   const handleMessage = vi.fn(async () => fromAny({ content: 'A naturally authored message.' }));
   const executeDyadContinuation = vi.fn(async () => ({ disposition: 'delivered' as const }));
   const submit = vi.fn(async () => fromAny({
@@ -155,6 +158,7 @@ function harness() {
     icpInitiation: fromAny({ submit }),
     capabilityRuntime: fromAny({ has: () => true }),
     availability: fromAny({ snapshot: () => ({ state: 'available' }) }),
+    isRoomTransportAvailable,
     isHumanContactAllowed: async () => true,
     getPhases: () => fromAny({
       proactiveOutbound: { dispatch },
@@ -235,6 +239,24 @@ describe('production social impulse outreach routing', () => {
     expect(executeDyadContinuation).not.toHaveBeenCalled();
   });
 
+  it('preserves recursive ICP lineage when first-contact initiation is chosen inside an ICP turn', async () => {
+    const { runtime, submit } = harness();
+    await runtime.onImpulse(impulse());
+
+    await runWithRequestContext(fromAny({
+      icpCorrelation: { rootInitiationId: DYAD_ID },
+    }), async () => await runtime.choose({
+      opportunityId: impulse().correlationId,
+      disposition: 'contact-companion',
+      destinationId: 'companion-first:contact-peer-new',
+      intent: 'Consider a third-party introduction through the normal gate.',
+    }));
+
+    expect(submit).toHaveBeenCalledWith(expect.objectContaining({
+      cause: { kind: 'icp_conversation', rootInitiationId: DYAD_ID },
+    }));
+  });
+
   it('uses the human policy and canonical proactive dispatcher for a human DM', async () => {
     const { runtime, handleMessage, evaluateHuman, dispatch } = harness();
     await runtime.onImpulse(impulse());
@@ -280,5 +302,19 @@ describe('production social impulse outreach routing', () => {
       expect.objectContaining({ channelId, channelType }),
       expect.any(Number),
     );
+  });
+
+  it('does not advertise a room whose composed transport cannot carry it', async () => {
+    const { runtime } = harness(channelType => channelType === 'discord');
+    await runtime.onImpulse(impulse());
+
+    const result = await runtime.inspect(impulse().correlationId);
+
+    expect(result.destinations).toContainEqual(expect.objectContaining({
+      destinationId: 'room:discord:room-discord',
+    }));
+    expect(result.destinations).not.toContainEqual(expect.objectContaining({
+      destinationId: 'room:buzz:room-buzz',
+    }));
   });
 });

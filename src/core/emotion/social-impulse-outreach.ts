@@ -162,6 +162,10 @@ interface SocialImpulseOutreachRuntimeOptions {
     intent: string;
     bindingHash: string;
   }): Promise<SocialImpulseOutreachExecutionResult>;
+  onExecutionError?(error: unknown, context: {
+    opportunityId: string;
+    destinationKind: SocialImpulseOutreachDestination['kind'];
+  }): void;
   now?: () => number;
 }
 
@@ -352,7 +356,11 @@ export function createSocialImpulseOutreachRuntime(
             intent: intent!,
             bindingHash,
           });
-        } catch {
+        } catch (error) {
+          options.onExecutionError?.(error, {
+            opportunityId: record.opportunityId,
+            destinationKind: destination!.kind,
+          });
           execution = { outcome: 'suppressed', reasonCode: 'destination_execution_failed' };
         }
         if (execution.outcome === 'delivered') {

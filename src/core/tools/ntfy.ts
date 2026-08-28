@@ -936,9 +936,9 @@ export interface NotifyToolOptions {
   gatewayMode?: boolean;
   companionOutreach?: AgentFacingIcpAutonomyRuntime;
   companionCandidateEnabled?: boolean;
-  isCompanionCandidateAuthorized?: () => boolean; socialImpulseOutreach?: import('../emotion/social-impulse-outreach.js').SocialImpulseOutreachRuntime;
+  isCompanionCandidateAuthorized?: () => boolean;
+  socialImpulseOutreach?: import('../emotion/social-impulse-outreach.js').SocialImpulseOutreachRuntime;
 }
-
 const notifyToolParameters = Type.Union([
   Type.Object({
     action: Type.Literal('brief'),

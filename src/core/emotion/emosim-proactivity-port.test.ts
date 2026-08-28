@@ -67,7 +67,7 @@ describe('EmoSim Proactivity Port', () => {
       kind: 'emitted',
       impulse: expect.objectContaining({
         schemaVersion: 1,
-        impulseVersion: 'psfn.emosim-proactivity.impulse.v1',
+        impulseVersion: 'emosim-proactivity.impulse.v1',
         companionId: COMPANION_ID,
         source: {
           model: 'emo_sim',

@@ -1,9 +1,9 @@
 import { isRfc4122Uuid } from '../../shared/utils/types.js';
 
 export const EMOSIM_PROACTIVITY_IMPULSE_VERSION =
-  'psfn.emosim-proactivity.impulse.v1' as const;
+  'emosim-proactivity.impulse.v1' as const;
 export const EMOSIM_PROACTIVITY_SUPPRESSION_VERSION =
-  'psfn.emosim-proactivity.suppression.v1' as const;
+  'emosim-proactivity.suppression.v1' as const;
 
 const ATTACHMENT_EMOTIONS: ReadonlySet<string> = new Set([
   'Love',

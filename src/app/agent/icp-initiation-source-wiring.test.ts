@@ -252,7 +252,7 @@ describe('ICP felt-impulse startup wiring', () => {
 
     await expect(eventBus.emitRequired('emotion.emosim.proactivity.impulse', {
       schemaVersion: 1,
-      impulseVersion: 'psfn.emosim-proactivity.impulse.v1',
+      impulseVersion: 'emosim-proactivity.impulse.v1',
       kind: 'would_message',
       companionId: LOCAL,
       source: { model: 'emo_sim', version: 'emo_sim/server.py#http-api.v1' },

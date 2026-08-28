@@ -53,7 +53,7 @@ function signal(
 ) {
   return {
     schemaVersion: 1 as const,
-    impulseVersion: 'psfn.emosim-proactivity.impulse.v1' as const,
+    impulseVersion: 'emosim-proactivity.impulse.v1' as const,
     kind: 'would_message' as const,
     companionId: '11111111-1111-4111-8111-111111111111',
     source: { model: 'emo_sim', version: 'emo_sim/server.py#http-api.v1' },

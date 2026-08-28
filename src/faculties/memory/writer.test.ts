@@ -747,6 +747,8 @@ describe('MemoryWriter', () => {
       await expect(
         writer.write({ text: 'test', type: fromAny('invalid') }),
       ).rejects.toThrow('Invalid memory type: invalid');
+      expect(embeddings.embed).not.toHaveBeenCalled();
+      expect(store.persistMemoryWrite).not.toHaveBeenCalled();
     });
 
     it('deduplicates only when normalized text also matches', async () => {
@@ -1737,6 +1739,17 @@ describe('MemoryWriter', () => {
   });
 
   describe('importBatch()', () => {
+    it('rejects an unknown legacy type before embedding or persisting any records', async () => {
+      await expect(writer.importBatch([
+        { text: 'Valid record', type: 'semantic' },
+        { text: 'Unsupported record', type: fromAny('fact') },
+      ])).rejects.toThrow('Invalid memory type: fact');
+
+      expect(embeddings.embedBatch).not.toHaveBeenCalled();
+      expect(embeddings.embed).not.toHaveBeenCalled();
+      expect(store.persistMemoryWrite).not.toHaveBeenCalled();
+    });
+
     it('uses batch embeddings while processing records sequentially', async () => {
       const records: MemoryWriteOptions[] = [
         { text: 'Fact one', type: 'semantic', importance: 0.7 },

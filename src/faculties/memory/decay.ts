@@ -1,16 +1,28 @@
 import { setImmediate as yieldToEventLoop } from 'node:timers/promises';
 import type { MemoryStorePort } from './memory-store-port.js';
 import { createComponentLogger } from '../../shared/logger.js';
-import { MEMORY_CONFIG, getMemoryDecayProfile } from './types.js';
+import {
+  MEMORY_CONFIG,
+  assertMemoryType,
+  getMemoryDecayProfile,
+  resolvePersistedMemoryType,
+} from './types.js';
 import type { PurrMemory } from './types.js';
 import {
   resolveMemoryRetrievalPolicy,
   type MemoryRetrievalPolicy,
 } from '../../system/config/memory-retrieval-policy.js';
 
+export interface SalienceDecayInvalidMemoryTypeReport {
+  memoryId: string;
+  memoryType: string;
+  reason: 'legacy_fact_category_is_semantic' | 'unsupported_memory_type';
+}
+
 interface SalienceDecayOptions {
   batchSize?: number;
   memoryRetrievalPolicy?: MemoryRetrievalPolicy | (() => MemoryRetrievalPolicy | undefined);
+  onInvalidMemoryType?: (report: SalienceDecayInvalidMemoryTypeReport) => void;
 }
 
 const log = createComponentLogger('SalienceDecay');
@@ -32,6 +44,7 @@ export function calculateEffectiveMemorySalience(
   now: number = Date.now(),
   policyInput?: MemoryRetrievalPolicy,
 ): number {
+  assertMemoryType(memory.type);
   const decayAnchorAt = Number.isFinite(memory.salienceDecayAnchorAt)
     ? memory.salienceDecayAnchorAt!
     : memory.lastAccessed;
@@ -80,6 +93,9 @@ export class SalienceDecay {
     | MemoryRetrievalPolicy
     | (() => MemoryRetrievalPolicy | undefined)
     | undefined;
+  private readonly onInvalidMemoryType:
+    | ((report: SalienceDecayInvalidMemoryTypeReport) => void)
+    | undefined;
   private readonly activeRuns = new Set<object>();
   private readonly trackedAnchors = new Map<string, TrackedDecayAnchor>();
   private lastProcessedRevision: number | null = null;
@@ -90,6 +106,7 @@ export class SalienceDecay {
     this.memoryStore = memoryStore;
     this.batchSize = Math.max(1, Math.floor(options.batchSize ?? 500));
     this.memoryRetrievalPolicy = options.memoryRetrievalPolicy;
+    this.onInvalidMemoryType = options.onInvalidMemoryType;
   }
 
   start(intervalMs: number = MEMORY_CONFIG.maintenanceIntervalMs): void {
@@ -142,6 +159,19 @@ export class SalienceDecay {
     );
   }
 
+  private acceptsMemoryType(memory: PurrMemory): boolean {
+    const resolution = resolvePersistedMemoryType(memory.type);
+    if (resolution.disposition === 'valid') return true;
+    const report: SalienceDecayInvalidMemoryTypeReport = {
+      memoryId: memory.id,
+      memoryType: resolution.originalType,
+      reason: resolution.reason,
+    };
+    log.warn('Skipped unsupported memory type during salience decay', report);
+    this.onInvalidMemoryType?.(report);
+    return false;
+  }
+
   private async runEager(policy: MemoryRetrievalPolicy): Promise<void> {
     const runState = {};
     this.activeRuns.add(runState);
@@ -163,6 +193,7 @@ export class SalienceDecay {
           salienceDecayAnchorAt: number;
         }> = [];
         for (const memory of memories) {
+          if (!this.acceptsMemoryType(memory)) continue;
           const newSalience = calculateEffectiveMemorySalience(memory, now, policy);
 
           // Only update if meaningful change
@@ -260,6 +291,7 @@ export class SalienceDecay {
         const updatedAnchors: TrackedDecayAnchor[] = [];
         for (const memory of memories) {
           seenIds.add(memory.id);
+          if (!this.acceptsMemoryType(memory)) continue;
           const anchor = this.resolveTrackedAnchor(memory, policy);
           if (!anchor) continue;
           const newSalience = calculateDecayedSalience(anchor, now);

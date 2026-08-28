@@ -285,6 +285,64 @@ export const VALID_MEMORY_TYPES: MemoryType[] = [
   ...MEMORY_POLICY_TYPES,
 ];
 
+export const PERSISTED_MEMORY_TYPE_REPAIR_VERSION = 1;
+
+export type PersistedMemoryTypeResolution =
+  | { disposition: 'valid'; type: MemoryType }
+  | {
+      disposition: 'mapped';
+      originalType: string;
+      type: MemoryType;
+      repairVersion: typeof PERSISTED_MEMORY_TYPE_REPAIR_VERSION;
+      reason: 'legacy_fact_category_is_semantic';
+    }
+  | {
+      disposition: 'quarantine';
+      originalType: string;
+      repairVersion: typeof PERSISTED_MEMORY_TYPE_REPAIR_VERSION;
+      reason: 'unsupported_memory_type';
+    };
+
+export function isMemoryType(value: unknown): value is MemoryType {
+  return typeof value === 'string'
+    && VALID_MEMORY_TYPES.includes(value as MemoryType);
+}
+
+export function assertMemoryType(value: unknown, field = 'memory.type'): MemoryType {
+  if (!isMemoryType(value)) {
+    throw new Error(
+      `Invalid ${field}: expected one of ${VALID_MEMORY_TYPES.join(', ')}`,
+    );
+  }
+  return value;
+}
+
+/**
+ * Classify a persisted L2 type without reading memory content. `fact` is the
+ * sole legacy mapping: both the original registry documentation and the
+ * canonical type-hint table define facts as semantic memory. Any other value
+ * lacks evidence for a target category and must stay private in quarantine.
+ */
+export function resolvePersistedMemoryType(value: unknown): PersistedMemoryTypeResolution {
+  if (isMemoryType(value)) return { disposition: 'valid', type: value };
+  const originalType = typeof value === 'string' ? value : String(value);
+  if (originalType === 'fact') {
+    return {
+      disposition: 'mapped',
+      originalType,
+      type: 'semantic',
+      repairVersion: PERSISTED_MEMORY_TYPE_REPAIR_VERSION,
+      reason: 'legacy_fact_category_is_semantic',
+    };
+  }
+  return {
+    disposition: 'quarantine',
+    originalType,
+    repairVersion: PERSISTED_MEMORY_TYPE_REPAIR_VERSION,
+    reason: 'unsupported_memory_type',
+  };
+}
+
 export interface PurrMemory {
   id: string;
   text: string;

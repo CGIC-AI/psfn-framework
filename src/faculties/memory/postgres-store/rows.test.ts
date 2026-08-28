@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { fromAny } from '@total-typescript/shoehorn';
 import { toMemoryRow, fromMemoryRow } from './rows.js';
 import type { PurrMemory } from '../types.js';
 import { evaluateMemoryPolicy } from '../../../system/trust/policy.js';
@@ -23,6 +24,15 @@ function baseMemory(overrides: Partial<PurrMemory> = {}): PurrMemory {
 }
 
 describe('memory row emotional_texture round-trip (031.11.1)', () => {
+  it('rejects unknown memory types at both PostgreSQL write and read boundaries', () => {
+    expect(() => toMemoryRow(baseMemory({ type: fromAny('fact') })))
+      .toThrow('Invalid memory.type');
+
+    const row = { ...toMemoryRow(baseMemory()), type: 'profile_fact' };
+    expect(() => fromMemoryRow(fromAny(row)))
+      .toThrow('Invalid PostgreSQL memory row type');
+  });
+
   it('persists and restores the multi-signal emotional texture', () => {
     const memory = baseMemory({
       formationVAD: { valence: -0.4, arousal: 0.3, dominance: 0.1 },

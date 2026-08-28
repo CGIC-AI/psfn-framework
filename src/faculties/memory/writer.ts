@@ -92,6 +92,12 @@ import {
 const log = createComponentLogger('MemoryWriter');
 const IMPORT_BATCH_EMBED_CHUNK_SIZE = 200;
 
+function assertValidMemoryType(type: unknown): asserts type is MemoryType {
+  if (!VALID_MEMORY_TYPES.includes(type as MemoryType)) {
+    throw new Error(`Invalid memory type: ${String(type)}. Must be one of: ${VALID_MEMORY_TYPES.join(', ')}`);
+  }
+}
+
 export interface MemoryWriteOptions {
   text: string;
   type: MemoryType;
@@ -454,6 +460,7 @@ export class MemoryWriter {
    * 4. Insert new memory
    */
   async write(opts: MemoryWriteOptions): Promise<WriteResult> {
+    assertValidMemoryType(opts.type);
     const authorizedOpts = bindLocalCompanionRoomProvenance(
       opts,
       this.companionId,
@@ -511,9 +518,7 @@ export class MemoryWriter {
     } = authorizedOpts;
 
     // Validate type
-    if (!VALID_MEMORY_TYPES.includes(type)) {
-      throw new Error(`Invalid memory type: ${type}. Must be one of: ${VALID_MEMORY_TYPES.join(', ')}`);
-    }
+    assertValidMemoryType(type);
 
     const retention = applyRetentionSemantics({
       text,
@@ -853,9 +858,7 @@ export class MemoryWriter {
       extractedAt,
     } = authorizedOpts;
 
-    if (!VALID_MEMORY_TYPES.includes(type)) {
-      throw new Error(`Invalid memory type: ${type}. Must be one of: ${VALID_MEMORY_TYPES.join(', ')}`);
-    }
+    assertValidMemoryType(type);
 
     const retention = applyRetentionSemantics({
       text,
@@ -1451,6 +1454,8 @@ export class MemoryWriter {
       log.info('Batch import complete', { written, deduplicated, superseded, errors, total: records.length });
       return { written, deduplicated, superseded, errors, results };
     }
+
+    for (const record of records) assertValidMemoryType(record.type);
 
     const acceptedRecords: MemoryWriteOptions[] = [];
     for (const record of records) {

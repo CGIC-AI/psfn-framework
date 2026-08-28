@@ -1,5 +1,6 @@
 import {
   inferMemorySourceTypeFromSourceRef,
+  assertMemoryType,
   normalizeConsentFlags,
   normalizeEmotionalTexture,
   normalizeFormationVAD,
@@ -15,7 +16,7 @@ type PgNumeric = number | string;
 export interface MemoryRow {
   id: string;
   text: string;
-  type: PurrMemory['type'];
+  type: string;
   importance: PgNumeric;
   confidence: PgNumeric;
   emotional_valence: PgNumeric;
@@ -247,10 +248,11 @@ export function validateEmbeddingDimensions(embedding: Float32Array, expectedDim
 }
 
 export function toMemoryRow(memory: PurrMemory, embedding?: Float32Array): MemoryRow {
+  const type = assertMemoryType(memory.type);
   return {
     id: memory.id,
     text: memory.text,
-    type: memory.type,
+    type,
     importance: memory.importance,
     confidence: memory.confidence,
     emotional_valence: memory.emotionalValence,
@@ -286,6 +288,7 @@ export function toMemoryRow(memory: PurrMemory, embedding?: Float32Array): Memor
 }
 
 export function fromMemoryRow(row: MemoryRow): PurrMemory {
+  const type = assertMemoryType(row.type, 'PostgreSQL memory row type');
   const scopeRef = row.scope_ref_kind && row.scope_ref_id
     ? normalizeMemoryScopeRef({
       kind: row.scope_ref_kind,
@@ -298,7 +301,7 @@ export function fromMemoryRow(row: MemoryRow): PurrMemory {
   return {
     id: row.id,
     text: row.text,
-    type: row.type,
+    type,
     importance: parsePgNumber(row.importance, 'importance'),
     confidence: parsePgNumber(row.confidence, 'confidence'),
     emotionalValence: parsePgNumber(row.emotional_valence, 'emotional_valence'),

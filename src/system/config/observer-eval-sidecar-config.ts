@@ -21,13 +21,14 @@ export function bindCompanionObserverEvalSidecar(
   const companionId = config.companionId;
   if (!identity?.observerEvalSidecar) {
     throw new Error(
-      'Enabled multi-companion observerEvalSidecar requires an exact '
+      `Enabled observerEvalSidecar for companion ${JSON.stringify(companionId ?? 'unknown')} requires an exact `
       + 'companionRuntimeIdentity.observerEvalSidecar binding; refusing shared or primary fallback',
     );
   }
   if (!companionId || identity.companionId !== companionId) {
     throw new Error(
-      'Enabled multi-companion observerEvalSidecar identity does not match config.companionId',
+      `Enabled observerEvalSidecar for companion ${JSON.stringify(companionId ?? 'unknown')} `
+      + `received binding owner ${JSON.stringify(identity.companionId)}; identity does not match config.companionId`,
     );
   }
 

@@ -57,6 +57,9 @@ describe('AdminObserverEvalSidecarDataService', () => {
 
     await expect(service.queryObservations()).rejects.toBeInstanceOf(ObserverEvalSidecarApiUnavailableError);
     await expect(service.getHealth()).resolves.toEqual({
+      companionId: null,
+      operatingState: 'absent',
+      binding: null,
       status: 'unavailable',
       observedAt: NOW_MS,
       runtime: null,
@@ -65,8 +68,151 @@ describe('AdminObserverEvalSidecarDataService', () => {
         evalOwned: false,
         authoritative: false,
       },
+      lastTransition: null,
     });
   });
+
+  it('pins operating health and terminal transitions to the exact companion binding', async () => {
+    const companionId = '22222222-2222-4222-8222-222222222222';
+    const runtime = {
+      status: 'enabled' as const,
+      observedAt: NOW_MS,
+      sidecarId: 'emosim-artemis',
+      enabled: true,
+      available: true,
+      accepting: true,
+      queue: {
+        queuedCount: 0,
+        runningCount: 0,
+        maxQueuedTurns: 32,
+        overflowPolicy: 'drop_newest' as const,
+        shuttingDown: false,
+      },
+      counts: {
+        accepted: 1,
+        completed: 1,
+        dropped: 0,
+        failed: 0,
+        timedOut: 0,
+        retried: 0,
+        lifecycleHookFailed: 0,
+        shutdownTimedOut: 0,
+      },
+      dropCounts: {},
+      failureCounts: {},
+    };
+    const service = new AdminObserverEvalSidecarDataService({
+      companionId,
+      binding: {
+        companionId,
+        sidecarId: 'emosim-artemis',
+        sessionLabel: 'emosim-session-artemis',
+        agentName: 'emosim-agent-artemis',
+      },
+      configuredEnabled: true,
+      proactivityEnabled: true,
+      getHealthSnapshot: () => runtime,
+      getLastTransition: () => ({
+        correlationId: `felt-impulse:would_message:${NOW_MS}`,
+        lever: 'would_message',
+        stage: 'final_disposition',
+        outcome: 'delivered',
+        firedAtMs: NOW_MS,
+        timestamp: NOW_MS,
+      }),
+    });
+
+    await expect(service.getHealth()).resolves.toMatchObject({
+      companionId,
+      operatingState: 'on',
+      binding: { companionId, sidecarId: 'emosim-artemis' },
+      runtime: { sidecarId: 'emosim-artemis' },
+      lastTransition: { stage: 'final_disposition', outcome: 'delivered' },
+    });
+
+    const wrongOwner = new AdminObserverEvalSidecarDataService({
+      companionId,
+      binding: {
+        companionId,
+        sidecarId: 'emosim-artemis',
+        sessionLabel: 'emosim-session-artemis',
+        agentName: 'emosim-agent-artemis',
+      },
+      configuredEnabled: true,
+      proactivityEnabled: true,
+      getHealthSnapshot: () => ({ ...runtime, sidecarId: 'emosim-purrsephone' }),
+      getLastTransition: () => ({
+        correlationId: `felt-impulse:would_message:${NOW_MS}`,
+        lever: 'would_message',
+        stage: 'final_disposition',
+        outcome: 'delivered',
+        firedAtMs: NOW_MS,
+        timestamp: NOW_MS,
+      }),
+    });
+    await expect(wrongOwner.getHealth()).resolves.toMatchObject({
+      companionId,
+      operatingState: 'unhealthy',
+      runtime: null,
+      lastTransition: null,
+    });
+  });
+
+  it.each([
+    { configuredEnabled: false, proactivityEnabled: false, state: 'disabled', status: 'disabled' },
+    { configuredEnabled: true, proactivityEnabled: false, state: 'shadow', status: 'enabled' },
+  ] as const)(
+    'reports the $state operating state separately',
+    async ({ configuredEnabled, proactivityEnabled, state, status }) => {
+      const companionId = '22222222-2222-4222-8222-222222222222';
+      const sidecarId = 'emosim-artemis';
+      const service = new AdminObserverEvalSidecarDataService({
+        companionId,
+        binding: {
+          companionId,
+          sidecarId,
+          sessionLabel: 'emosim-session-artemis',
+          agentName: 'emosim-agent-artemis',
+        },
+        configuredEnabled,
+        proactivityEnabled,
+        getHealthSnapshot: () => configuredEnabled ? ({
+          status: 'enabled',
+          observedAt: NOW_MS,
+          sidecarId,
+          enabled: true,
+          available: true,
+          accepting: true,
+          queue: {
+            queuedCount: 0,
+            runningCount: 0,
+            maxQueuedTurns: 32,
+            overflowPolicy: 'drop_newest',
+            shuttingDown: false,
+          },
+          counts: {
+            accepted: 0,
+            completed: 0,
+            dropped: 0,
+            failed: 0,
+            timedOut: 0,
+            retried: 0,
+            lifecycleHookFailed: 0,
+            shutdownTimedOut: 0,
+          },
+          dropCounts: {},
+          failureCounts: {},
+        }) : null,
+        nowMs: () => NOW_MS,
+      });
+
+      await expect(service.getHealth()).resolves.toMatchObject({
+        companionId,
+        operatingState: state,
+        status,
+      });
+    },
+  );
 
   it('returns redacted export payloads with pagination metadata', async () => {
     const observation = makeObservation();

@@ -30,6 +30,12 @@ export interface ChannelPluginParsedInstance<TConfig = unknown> {
   credentials: readonly ChannelPluginCredentialNeed[];
 }
 
+/** Host-authenticated account route; message content cannot supply either field. */
+export interface ChannelPluginAccountRoute {
+  pluginId: string;
+  accountId: string;
+}
+
 export interface ChannelPluginLoadedSection<TConfig = unknown> extends ChannelPluginParseResult<TConfig> {
   id: string;
 }

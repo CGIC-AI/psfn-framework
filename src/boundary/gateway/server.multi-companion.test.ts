@@ -2377,7 +2377,7 @@ describe('GatewayServer multi-companion routing (flag on)', () => {
     await identifyAgent(connB, secondCompanionId, 2);
 
     const result = await server.requestAgentVoiceStream(makeChannelMessage('buzz'), {
-      channelAccountId: secondCompanionId,
+      channelAccountRoute: { pluginId: 'buzz', accountId: secondCompanionId },
     });
     expect(result.content).toBe('voice response');
     expect(methodFrames(connA, 'voice.transcript.begin')).toHaveLength(0);
@@ -2394,10 +2394,13 @@ describe('GatewayServer multi-companion routing (flag on)', () => {
     await identifyAgent(conn, companionId, 1);
 
     await expect(server.requestAgentVoiceStream(makeChannelMessage('buzz')))
-      .rejects.toThrow('Multi-account buzz routing requires an accountId');
+      .rejects.toThrow('Multi-account buzz routing requires an account route');
     await expect(server.requestAgentVoiceStream(makeChannelMessage('buzz'), {
-      channelAccountId: 'unknown-account',
+      channelAccountRoute: { pluginId: 'buzz', accountId: 'unknown-account' },
     })).rejects.toThrow('no companion for buzz account "unknown-account"');
+    await expect(server.requestAgentVoiceStream(makeChannelMessage('buzz'), {
+      channelAccountRoute: { pluginId: 'multica', accountId: companionId },
+    })).rejects.toThrow('Channel plugin "multica" cannot route channel surface "buzz"');
     expect(methodFrames(conn, 'voice.transcript.begin')).toHaveLength(0);
   });
 

@@ -35,10 +35,13 @@ import {
 } from './protocol.js';
 import {
   disabledGatewayMultiCompanionConfig,
+  resolveConfiguredGatewayCompanion,
   resolveGatewaySurfaceForChannelType,
+  type AuthenticatedGatewayAccountRoute,
   type GatewayChannelSurface,
   type GatewayMultiCompanionConfig,
 } from './multi-companion.js';
+import type { ChannelPluginAccountRoute } from '../../channels/plugins/types.js';
 import type { GatewayCompanionChannelLane } from './companion-channels.js';
 import { COMPANION_CHANNEL_TYPE } from '../../shared/contracts/companion-channels.js';
 import type { GitOperations } from '../integrations/git/ops.js';
@@ -2026,7 +2029,10 @@ export class GatewayServer {
       this.refreshConnectionHealth();
       return this.notifyAll(method, params);
     }
-    const companionId = this.resolveRoutedCompanionId(surface, discordAccountId);
+    const companionId = this.resolveRoutedCompanionId(
+      surface,
+      discordAccountId ? { kind: 'discord', accountId: discordAccountId } : undefined,
+    );
     this.refreshConnectionHealth();
     this.flushInboundChannelReplay(companionId);
 
@@ -2307,12 +2313,15 @@ export class GatewayServer {
    * accountId, and only that account's companion receives it. A missing or
    * unknown accountId fails closed — never a broadcast, never another account.
    */
-  private resolveCompanionAgent(surface: GatewayChannelSurface, accountId?: string): {
+  private resolveCompanionAgent(
+    surface: GatewayChannelSurface,
+    route?: AuthenticatedGatewayAccountRoute,
+  ): {
     conn: GatewayRpcConnection;
     client: JSONRPCServerAndClient;
     companionId: CompanionId;
   } {
-    const companionId = this.resolveRoutedCompanionId(surface, accountId);
+    const companionId = this.resolveRoutedCompanionId(surface, route);
     this.refreshConnectionHealth();
     return this.requireReadyCompanionRoute(surface, companionId);
   }
@@ -2355,85 +2364,16 @@ export class GatewayServer {
 
   private resolveRoutedCompanionId(
     surface: GatewayChannelSurface,
-    accountId?: string,
+    route?: AuthenticatedGatewayAccountRoute,
   ): CompanionId {
-    if (surface === 'discord' && this.discordAccountRoutingActive()) {
-      if (!accountId) {
-        this.alarmCompanionViolation(
-          'unrouted_discord_account',
-          'Discord surface uses per-account routing but the inbound message carries no accountId',
-          { surface },
-        );
-        throw new Error(
-          'Multi-account discord routing requires an accountId for the discord surface',
-        );
-      }
-      const companionId = this.multiCompanion.discordAccounts[accountId];
-      if (!companionId) {
-        this.alarmCompanionViolation(
-          'unrouted_discord_account',
-          `Discord account "${accountId}" has no companion routing entry in channels.json`,
-          { surface, discordAccountId: accountId },
-        );
-        throw new Error(
-          `Multi-companion routing has no companion for discord account "${accountId}"`,
-        );
-      }
-      return companionId;
-    }
-    const pluginAccounts = this.multiCompanion.pluginAccounts[surface];
-    if (pluginAccounts && Object.keys(pluginAccounts).length > 0) {
-      if (!accountId) {
-        this.alarmCompanionViolation(
-          'unrouted_plugin_account',
-          `Channel plugin "${surface}" uses per-account routing but the inbound request carries no accountId`,
-          { surface },
-        );
-        throw new Error(`Multi-account ${surface} routing requires an accountId`);
-      }
-      const companionId = pluginAccounts[accountId];
-      if (!companionId) {
-        this.alarmCompanionViolation(
-          'unrouted_plugin_account',
-          `Channel plugin "${surface}" account "${accountId}" has no companion routing entry`,
-          { surface, accountId },
-        );
-        throw new Error(
-          `Multi-companion routing has no companion for ${surface} account "${accountId}"`,
-        );
-      }
-      return companionId;
-    }
-    if (accountId) {
-      if (surface !== 'discord') {
-        this.alarmCompanionViolation(
-          'unrouted_plugin_account',
-          `Received ${surface} accountId "${accountId}" but no plugin account routing is configured`,
-          { surface, accountId },
-        );
-        throw new Error(`No ${surface} account routing configured for account "${accountId}"`);
-      }
+    return resolveConfiguredGatewayCompanion(this.multiCompanion, surface, route, violation => {
       this.alarmCompanionViolation(
-        'unrouted_discord_account',
-        `Received discord accountId "${accountId}" but no discord.accounts routing is configured`,
-        { surface, discordAccountId: accountId },
+        violation.code,
+        violation.message,
+        violation.details,
       );
-      throw new Error(
-        `No discord account routing configured for account "${accountId}"`,
-      );
-    }
-    const companionId = this.multiCompanion.channelRouting[surface];
-    if (!companionId) {
-      this.alarmCompanionViolation(
-        'unrouted_channel',
-        `Channel surface "${surface}" has no companion routing entry in channels.json`,
-        { surface },
-      );
-      throw new Error(
-        `Multi-companion routing has no companion for channel surface "${surface}"`,
-      );
-    }
-    return companionId;
+      throw new Error(violation.errorMessage);
+    });
   }
 
   private requireReadyCompanionRoute(surface: string, companionId: CompanionId): {
@@ -2997,17 +2937,28 @@ export class GatewayServer {
 
   async requestAgentVoiceStream(
     message: SubstrateMessage,
-    options: VoiceStreamRequestOptions = {},
+    options: VoiceStreamRequestOptions & {
+      channelAccountRoute?: ChannelPluginAccountRoute;
+    } = {},
   ): Promise<VoiceHandleMessageResult> {
+    const { channelAccountRoute, ...voiceOptions } = options;
     const sharedSatellite = this.multiCompanion.enabled
       && message.routing?.source === 'satellite'
       ? message.routing.satellite
       : undefined;
+    if (channelAccountRoute && message.routing?.source === 'satellite') {
+      this.alarmCompanionViolation(
+        'invalid_satellite_route',
+        `Channel plugin "${channelAccountRoute.pluginId}" cannot supply satellite routing metadata`,
+        { channelType: message.channelType, pluginId: channelAccountRoute.pluginId },
+      );
+      throw new Error('Channel plugin account routes cannot select a satellite companion');
+    }
     if (sharedSatellite?.sharedDevice) {
       return await this.requestSharedSatelliteVoiceStream(
         message,
         { ...sharedSatellite, sharedDevice: sharedSatellite.sharedDevice },
-        options,
+        voiceOptions,
       );
     }
     let client: JSONRPCServerAndClient;
@@ -3047,7 +2998,12 @@ export class GatewayServer {
             `Multi-companion routing cannot map channelType "${message.channelType}" to a companion`,
           );
         }
-        route = this.resolveCompanionAgent(surface, options.channelAccountId);
+        route = this.resolveCompanionAgent(
+          surface,
+          channelAccountRoute
+            ? { kind: 'plugin', ...channelAccountRoute }
+            : undefined,
+        );
       }
       client = route.client;
       conn = route.conn;
@@ -3064,13 +3020,13 @@ export class GatewayServer {
       );
     }
 
-    const screenedMessage = options.screenMessageForCompanion
-      ? await options.screenMessageForCompanion(message, companionId)
+    const screenedMessage = voiceOptions.screenMessageForCompanion
+      ? await voiceOptions.screenMessageForCompanion(message, companionId)
       : message;
     const result = await requestAgentVoiceStream({
       client,
       message: screenedMessage,
-      options,
+      options: voiceOptions,
       wyomingShardRouting: this.wyomingShardRouting,
       companionId,
       nextRequestCounter: () => ++this.streamRequestCounter,

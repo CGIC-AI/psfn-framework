@@ -56,7 +56,10 @@ import { registerIcpInitiationCandidatePostTurnRuntime } from '../../core/tools/
 import type { IcpInitiationSourceRuntime } from '../../core/icp/initiation-source-runtime.js';
 import type { SocialImpulseOutreachRuntime } from '../../core/emotion/social-impulse-outreach.js';
 import { createCompanionDisplayIdentityResolver } from '../../shared/companion-display-identity.js';
-import { resolveCompanionNameFromConfig } from '../../core/identity/companion-runtime.js';
+import {
+  resolveCompanionIdFromConfig,
+  resolveCompanionNameFromConfig,
+} from '../../core/identity/companion-runtime.js';
 
 const log = createComponentLogger('AgentControlPlane');
 const DEFAULT_EXTRACTION_DRAIN_TIMEOUT_MS = 10_000;
@@ -143,6 +146,7 @@ export function buildAgentControlPlane(
         agentLoop,
         postTurnActions,
         runtime: icpAutonomyRuntime,
+        localCompanionId: resolveCompanionIdFromConfig(config),
         resolveOriginCatalogSource: () => resolveCompanionOutreachOriginCatalogSource(
           deferredCompanionOutreachAuthorizationRuntime,
         ),
@@ -317,6 +321,7 @@ export function buildAgentControlPlane(
   }), {
     gatewayMode: true,
     ...(icpAutonomyRuntime ? { companionOutreach: icpAutonomyRuntime } : {}),
+    getDisclosureLineage: () => agentLoop.getCurrentTurnDisclosureLineage(),
     ...(socialImpulseOutreach ? { socialImpulseOutreach } : {}),
     companionCandidateEnabled: Boolean(icpInitiationSourceRuntime),
     isCompanionCandidateAuthorized: () => (

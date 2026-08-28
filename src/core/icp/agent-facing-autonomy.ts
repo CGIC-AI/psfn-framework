@@ -110,6 +110,11 @@ export interface IcpTargetChannelCommandPort {
     privateIntent: string;
     continuationTaskKind?: IcpContinuationTaskKind;
   }): Promise<IcpCompanionOutreachExecutionResult>;
+  executeHumanRelay?(input: {
+    authorization: import('../../boundary/gateway/icp-autonomy-contract.js').IcpDyadContinuationAuthorization;
+    peerContactId: string;
+    capsule: import('./human-relay-capsule.js').HumanRelayIntentCapsule;
+  }): Promise<IcpCompanionOutreachExecutionResult>;
 }
 
 export interface AgentFacingIcpAutonomyRuntime {
@@ -140,6 +145,12 @@ export interface AgentFacingIcpAutonomyRuntime {
     initiationSource: IcpInitiationSource;
     sourceDyadId?: string;
     continuationTaskKind?: IcpContinuationTaskKind;
+  }, isExecutionAuthorized?: () => boolean): Promise<IcpCompanionOutreachExecutionResult>;
+  executeHumanRelay(input: {
+    dyadId: string;
+    deliveryId: string;
+    conversationId: string;
+    capsule: import('./human-relay-capsule.js').HumanRelayIntentCapsule;
   }, isExecutionAuthorized?: () => boolean): Promise<IcpCompanionOutreachExecutionResult>;
   executeCompanionOutreach(
     contactId: string,
@@ -390,6 +401,37 @@ export function createAgentFacingIcpAutonomyRuntime(input: {
         ...(continuation.continuationTaskKind
           ? { continuationTaskKind: continuation.continuationTaskKind }
           : {}),
+      });
+    },
+    async executeHumanRelay(relay, isExecutionAuthorized) {
+      const dyad = await this.inspectOpenDyad(relay.dyadId);
+      if (isExecutionAuthorized && !isExecutionAuthorized()) {
+        throw new Error('human relay authorization changed before broker preparation');
+      }
+      const prepared = await input.gateway.companionPrepareDyadContinuation({
+        dyadId: dyad.dyadId,
+        deliveryId: relay.deliveryId,
+        conversationId: relay.conversationId,
+        peerContactId: dyad.peerContactId,
+        initiationSource: 'foreground',
+      });
+      if (prepared.status !== 'authorized') {
+        throw new Error(`human relay ${prepared.status}: ${prepared.reasonCode}`);
+      }
+      if (prepared.authorization.peerCompanionId !== dyad.peerCompanionId
+        || prepared.authorization.channelId !== dyad.channelId) {
+        throw new Error('human relay authorization changed its canonical destination');
+      }
+      if (isExecutionAuthorized && !isExecutionAuthorized()) {
+        throw new Error('human relay authorization changed before target-channel turn');
+      }
+      if (!input.command.executeHumanRelay) {
+        throw new Error('ICP target-channel human relay command is not registered');
+      }
+      return await input.command.executeHumanRelay({
+        authorization: prepared.authorization,
+        peerContactId: dyad.peerContactId,
+        capsule: relay.capsule,
       });
     },
     async executeCompanionOutreach(

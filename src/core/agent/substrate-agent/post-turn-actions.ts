@@ -4,6 +4,7 @@ import type { AgentResponse, InferredPostTurnAction, PostTurnActionCandidate, Su
 import type { IcpConversationCorrelation } from '../../../shared/contracts/icp-autonomy.js';
 import type { ContextManifest } from '../../session/context-manifest.js';
 import type { CapturedSessionReads } from '../../session/manager/captured-session-owner.js';
+import type { DisclosureLineage } from '../../cogsec/disclosure/contracts.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 
 export interface PostTurnInferenceContext {
@@ -16,6 +17,8 @@ export interface PostTurnInferenceContext {
   taskKind?: string;
   contextManifest?: ContextManifest;
   canonicalContactKey?: string;
+  /** Exact disclosure projection that governed the completed turn's output. */
+  disclosureLineage?: DisclosureLineage;
   /**
    * The admitted turn's owner-bound session reads. Inferers run inside the
    * turn's captured-owner scope, so any session-history read they perform (e.g.

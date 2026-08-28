@@ -37,6 +37,7 @@ import {
   executeCompanionNotify,
 } from './notify-companion-handoff.js';
 import { executeCompanionCandidateConsider } from './notify-companion-candidate.js';
+import type { DisclosureLineage } from '../cogsec/disclosure/contracts.js';
 
 const DEFAULT_NTFY_TIMEOUT_MS = 8_000;
 const DEFAULT_NTFY_DEBOUNCE_MS = 60_000;
@@ -64,7 +65,7 @@ const SYSTEM_APPROVAL_REQUEST_SENDER = Object.freeze({
 export type { NotificationPort } from '../../boundary/gateway/notification-port.js';
 
 export type NotifyAction = 'brief' | 'send' | 'approval_request' | 'clarify' | 'list_dyads'
-  | 'dyad_lifecycle' | 'outreach_list' | 'outreach_choose';
+  | 'dyad_lifecycle' | 'relay' | 'outreach_list' | 'outreach_choose';
 export type NotifyDeliveryChannel = 'discord' | 'email';
 export type NotifyDelivery = 'ntfy' | NotifyDeliveryChannel;
 export type NtfyNotifier = NotificationPort;
@@ -689,7 +690,8 @@ function normalizeAction(value: string): NotifyAction {
       return 'brief';
     case 'send':
     case 'approval_request':
-    case 'clarify': case 'list_dyads': case 'dyad_lifecycle': case 'outreach_list': case 'outreach_choose':
+    case 'clarify': case 'list_dyads': case 'dyad_lifecycle': case 'relay':
+    case 'outreach_list': case 'outreach_choose':
       return value.trim() as NotifyAction;
     default:
       throw new Error(`unsupported notify action: ${value}`);
@@ -938,6 +940,7 @@ export interface NotifyToolOptions {
   companionCandidateEnabled?: boolean;
   isCompanionCandidateAuthorized?: () => boolean;
   socialImpulseOutreach?: import('../emotion/social-impulse-outreach.js').SocialImpulseOutreachRuntime;
+  getDisclosureLineage?: () => DisclosureLineage | undefined;
 }
 const notifyToolParameters = Type.Union([
   Type.Object({
@@ -963,6 +966,17 @@ const notifyToolParameters = Type.Union([
     delivery_target: Type.String({
       minLength: 1,
       description: 'Explicit external channel id or address.',
+    }),
+  }, { additionalProperties: false }),
+  Type.Object({
+    action: Type.Literal('relay'),
+    target_kind: Type.Literal(COMPANION_NOTIFY_TARGET_KIND),
+    dyad_id: Type.String({
+      description: 'Exact already-authorized open dyad UUID returned by action=list_dyads.',
+    }),
+    intent: Type.String({
+      maxLength: COMPANION_PRIVATE_INTENT_MAX_LENGTH,
+      description: 'Exact question or instruction stated by the human in this turn; no adjacent context.',
     }),
   }, { additionalProperties: false }),
   Type.Object({
@@ -1086,6 +1100,7 @@ const notifyModelParameters = Type.Object({
     Type.Literal('clarify'),
     Type.Literal('list_dyads'),
     Type.Literal('dyad_lifecycle'),
+    Type.Literal('relay'),
     Type.Literal('outreach_list'),
     Type.Literal('outreach_choose'),
   ], {
@@ -1155,7 +1170,7 @@ const notifyModelParameters = Type.Object({
   })),
   intent: Type.Optional(Type.String({
     maxLength: COMPANION_PRIVATE_INTENT_MAX_LENGTH,
-    description: 'Required for a destination-bearing outreach choice.',
+    description: 'Required exact human-stated bytes for relay, or local intent for an outreach choice.',
   })),
   approval_id: Type.Optional(Type.String({
     description: 'Required for action=approval_request.',
@@ -1267,7 +1282,7 @@ export function createNotifyTool(
       }
 
       if (
-        (action === 'send' || rawParams.action === 'list_dyads'
+        (action === 'send' || action === 'relay' || rawParams.action === 'list_dyads'
           || rawParams.action === 'dyad_lifecycle')
         && 'target_kind' in rawParams
         && rawParams.target_kind === COMPANION_NOTIFY_TARGET_KIND
@@ -1278,6 +1293,7 @@ export function createNotifyTool(
         return await executeCompanionNotify({
           runtime: options.companionOutreach,
           params: rawParams,
+          sourceDisclosureLineage: options.getDisclosureLineage?.(),
         });
       }
 
@@ -1342,6 +1358,7 @@ export function createNotifyTool(
         return 'external.companion';
       case 'list_dyads':
       case 'dyad_lifecycle':
+      case 'relay':
         return 'external.companion';
       case 'outreach_list':
       case 'outreach_choose':

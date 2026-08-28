@@ -6,6 +6,7 @@ import type {
   PostTurnActionCandidate,
 } from '../../shared/contracts/runtime.js';
 import type { IcpDyadSideAction } from '../../shared/contracts/icp-autonomy.js';
+import { MAX_ICP_PERMIT_TTL_MS } from '../../shared/contracts/icp-autonomy.js';
 import type { PostTurnInferenceContext } from '../agent/substrate-agent/post-turn-actions.js';
 import { assertNoUnknownKeys, isRecord, isRfc4122Uuid, toRecordView } from '../../shared/utils/types.js';
 import { getRequestContext } from '../../primitives/llm/request-context.js';
@@ -15,6 +16,12 @@ import {
   resolveIcpAutonomyCandidateSchedulerOrigin,
 } from '../icp/candidate-scheduler-origin.js';
 import { textResult, textResultWithError } from './results.js';
+import { assessDisclosure } from '../cogsec/disclosure/decision.js';
+import type { DisclosureLineage } from '../cogsec/disclosure/contracts.js';
+import {
+  createHumanRelayIntentCapsule,
+  type HumanRelayIntentCapsule,
+} from '../icp/human-relay-capsule.js';
 
 export const COMPANION_NOTIFY_TARGET_KIND = 'companion' as const;
 export const COMPANION_PRIVATE_INTENT_MAX_LENGTH = 1_000;
@@ -35,6 +42,13 @@ export type CompanionNotifyParams =
       target_kind: 'companion';
       dyad_id: string;
       private_intent: string;
+    }
+  | {
+      mode: 'human_relay';
+      action: 'relay';
+      target_kind: 'companion';
+      dyad_id: string;
+      intent: string;
     }
   | {
       mode: 'list';
@@ -81,6 +95,13 @@ type DeferredCompanionOutreachPayload = ({
   conversationId: string;
   sourceDyadId?: string;
   continuationTaskKind?: import('../../shared/contracts/runtime.js').IcpContinuationTaskKind;
+  authorization: DeferredCompanionOutreachAuthorizationEvidence;
+} | {
+  mode: 'human_relay';
+  dyadId: string;
+  deliveryId: string;
+  conversationId: string;
+  capsule: HumanRelayIntentCapsule;
   authorization: DeferredCompanionOutreachAuthorizationEvidence;
 });
 
@@ -183,6 +204,23 @@ function parseCompanionNotifyParams(value: unknown): CompanionNotifyParams {
       lifecycle_action: value.lifecycle_action,
     };
   }
+  if (value.action === 'relay') {
+    assertNoUnknownKeys(value, ['action', 'target_kind', 'dyad_id', 'intent'], 'human relay params');
+    if (value.target_kind !== COMPANION_NOTIFY_TARGET_KIND || !isRfc4122Uuid(value.dyad_id)) {
+      throw new Error('human relay requires an exact open dyad_id');
+    }
+    if (typeof value.intent !== 'string' || !value.intent.trim()
+      || value.intent.length > COMPANION_PRIVATE_INTENT_MAX_LENGTH) {
+      throw new Error('human relay intent must contain 1-1000 exact stated characters');
+    }
+    return {
+      mode: 'human_relay',
+      action: 'relay',
+      target_kind: 'companion',
+      dyad_id: value.dyad_id,
+      intent: value.intent,
+    };
+  }
   if (value.action === 'send' && value.dyad_id !== undefined) {
     assertNoUnknownKeys(
       value,
@@ -237,6 +275,7 @@ function parseDeferredPayload(value: unknown): DeferredCompanionOutreachPayload 
       [
         'mode', 'contactId', 'permitId', 'candidateOrigin', 'dyadId', 'privateIntent',
         'deliveryId', 'conversationId', 'sourceDyadId', 'continuationTaskKind', 'authorization',
+        'capsule',
       ],
       'deferred companion outreach payload',
     );
@@ -261,6 +300,18 @@ function parseDeferredPayload(value: unknown): DeferredCompanionOutreachPayload 
     return {
       mode: 'initiation', contactId, permitId,
       ...(candidateOrigin ? { candidateOrigin } : {}), authorization,
+    };
+  }
+  if (value.mode === 'human_relay') {
+    if (!isRfc4122Uuid(value.dyadId) || !isRfc4122Uuid(value.deliveryId)
+      || !isRfc4122Uuid(value.conversationId) || !isRecord(value.capsule)) return null;
+    return {
+      mode: 'human_relay',
+      dyadId: value.dyadId,
+      deliveryId: value.deliveryId,
+      conversationId: value.conversationId,
+      capsule: value.capsule as unknown as HumanRelayIntentCapsule,
+      authorization,
     };
   }
   if (value.mode !== 'continuation' || !isRfc4122Uuid(value.dyadId)
@@ -288,6 +339,7 @@ function parseDeferredPayload(value: unknown): DeferredCompanionOutreachPayload 
 export async function executeCompanionNotify(input: {
   runtime: AgentFacingIcpAutonomyRuntime;
   params: unknown;
+  sourceDisclosureLineage?: DisclosureLineage;
 }) {
   try {
     const requestContext = getRequestContext();
@@ -306,6 +358,23 @@ export async function executeCompanionNotify(input: {
         action: params.lifecycle_action,
       });
       return textResult(JSON.stringify(result));
+    }
+    if (params.mode === 'human_relay') {
+      if (requestContext.requesterProvenance !== 'human'
+        || !requestContext.viewerAuthorId
+        || !requestContext.viewerMemorySubjectContactId
+        || requestContext.icpCorrelation) {
+        throw new Error('human relay requires an attributable human source turn outside ICP');
+      }
+      const dyad = await input.runtime.inspectOpenDyad(params.dyad_id);
+      const disclosure = assessDisclosure(input.sourceDisclosureLineage, {
+        kind: 'contact_dm',
+        contactId: dyad.peerContactId,
+      });
+      if (!disclosure.allowed) {
+        throw new Error(`human relay source disclosure denied: ${disclosure.reason}`);
+      }
+      return textResult(COMPANION_NOTIFY_QUEUED_TEXT);
     }
     if (params.mode === 'continuation') {
       const dyad = await input.runtime.inspectOpenDyad(params.dyad_id);
@@ -365,7 +434,7 @@ export function inferDeferredCompanionOutreachActions(
       }
       try {
         const params = parseCompanionNotifyParams(content.arguments);
-        if (params.mode === 'list' || params.mode === 'lifecycle') continue;
+        if (params.mode === 'list' || params.mode === 'lifecycle' || params.mode === 'human_relay') continue;
         const authorization = {
             version: 2,
             toolName: 'notify',
@@ -418,20 +487,130 @@ export function inferDeferredCompanionOutreachActions(
   return actions;
 }
 
+export async function inferDeferredHumanRelayActions(input: {
+  context: PostTurnInferenceContext;
+  runtime: AgentFacingIcpAutonomyRuntime;
+  localCompanionId: string;
+  originCatalogSource: CompanionNotifyCatalogSource | null;
+}): Promise<PostTurnActionCandidate[]> {
+  if (!input.originCatalogSource) return [];
+  const { context } = input;
+  if (!context.canonicalContactKey || !context.message.authorId
+    || context.message.channelType === 'companion'
+    || context.message.channelId.startsWith('internal:')) return [];
+
+  const requests = new Map<string, Extract<CompanionNotifyParams, { mode: 'human_relay' }>>();
+  for (const message of context.turnMessages) {
+    if (message.role !== 'assistant' || !Array.isArray(message.content)) continue;
+    for (const content of message.content) {
+      if (content.type !== 'toolCall' || content.name !== 'notify' || typeof content.id !== 'string') continue;
+      try {
+        const parsed = parseCompanionNotifyParams(content.arguments);
+        if (parsed.mode === 'human_relay') requests.set(content.id, parsed);
+      } catch {
+        // Invalid calls cannot have produced an authorized success marker.
+      }
+    }
+  }
+
+  const actions: PostTurnActionCandidate[] = [];
+  for (const message of context.turnMessages) {
+    if (!isSuccessfulCompanionNotifyResult(message) || !message.toolCallId) continue;
+    const request = requests.get(message.toolCallId);
+    if (!request) continue;
+    const dyad = await input.runtime.inspectOpenDyad(request.dyad_id);
+    const disclosure = assessDisclosure(context.disclosureLineage, {
+      kind: 'contact_dm',
+      contactId: dyad.peerContactId,
+    });
+    if (!disclosure.allowed || !context.disclosureLineage) continue;
+    const capsuleId = deriveContinuationUuid('human-relay-capsule', context.turnId, message.toolCallId);
+    const deliveryId = deriveContinuationUuid('human-relay-delivery', context.turnId, message.toolCallId);
+    const conversationId = deriveContinuationUuid('human-relay-conversation', context.turnId, message.toolCallId);
+    const provenanceRefs = [...new Set([
+      context.disclosureLineage.generationContextRef,
+      ...context.disclosureLineage.provenanceRefs,
+    ])];
+    const capsule = await createHumanRelayIntentCapsule({
+      capsuleId,
+      intent: request.intent,
+      sourceMessage: context.message.content,
+      source: {
+        companionId: input.localCompanionId,
+        channelId: context.message.channelId,
+        turnId: context.turnId,
+        requestId: context.response.metadata.requestId ?? context.message.id,
+        messageId: context.message.id,
+        humanParticipantId: context.message.authorId,
+        humanContactId: context.canonicalContactKey,
+        requesterKind: 'human',
+      },
+      target: {
+        companionId: dyad.peerCompanionId,
+        peerContactId: dyad.peerContactId,
+        dyadId: dyad.dyadId,
+        channelId: dyad.channelId,
+        participantCompanionIds: [input.localCompanionId, dyad.peerCompanionId],
+      },
+      issuedAtMs: context.completedAt,
+      expiresAtMs: context.completedAt + MAX_ICP_PERMIT_TTL_MS,
+      sourceGate: binding => ({
+        authorized: disclosure.allowed,
+        boundary: 'source_egress',
+        bindingHash: binding.bindingHash,
+        policyRef: `cogsec:disclosure:${disclosure.outcome}`,
+        provenanceRefs,
+        disclosureCeiling: 'stated_intent_only',
+        decidedAtMs: context.completedAt,
+      }),
+    });
+    const authorization = {
+      version: 2,
+      toolName: 'notify',
+      toolScope: 'extended',
+      catalogSource: input.originCatalogSource,
+      requiredCapability: 'external.companion',
+      originToolCallId: message.toolCallId,
+      originTurnId: context.turnId,
+    } as const;
+    actions.push({
+      kind: DEFERRED_COMPANION_OUTREACH_ACTION_KIND,
+      payload: toRecordView({
+        mode: 'human_relay',
+        dyadId: dyad.dyadId,
+        deliveryId,
+        conversationId,
+        capsule,
+        authorization,
+      }),
+      dedupeKey: `${DEFERRED_COMPANION_OUTREACH_ACTION_KIND}:${capsuleId}`,
+      maxRetries: 0,
+    });
+  }
+  return actions;
+}
+
 export function registerDeferredCompanionOutreachRuntime(input: {
   agentLoop: {
     registerPostTurnActionInferer?(
-      inferer: (context: PostTurnInferenceContext) => PostTurnActionCandidate[],
+      inferer: (context: PostTurnInferenceContext) => PostTurnActionCandidate[] | Promise<PostTurnActionCandidate[]>,
     ): () => void;
   };
   postTurnActions: PostTurnActionRuntime;
   runtime: AgentFacingIcpAutonomyRuntime;
+  localCompanionId: string;
   resolveOriginCatalogSource(): CompanionNotifyCatalogSource | null;
   isExecutionAuthorized(evidence: DeferredCompanionOutreachAuthorizationEvidence): boolean;
 }): () => void {
-  const unregisterInferer = input.agentLoop.registerPostTurnActionInferer?.((context) => (
-    inferDeferredCompanionOutreachActions(context, input.resolveOriginCatalogSource())
-  )) ?? (() => undefined);
+  const unregisterInferer = input.agentLoop.registerPostTurnActionInferer?.(async (context) => [
+    ...inferDeferredCompanionOutreachActions(context, input.resolveOriginCatalogSource()),
+    ...await inferDeferredHumanRelayActions({
+      context,
+      runtime: input.runtime,
+      localCompanionId: input.localCompanionId,
+      originCatalogSource: input.resolveOriginCatalogSource(),
+    }),
+  ]) ?? (() => undefined);
   const unregisterHandler = input.postTurnActions.registerHandler(
     DEFERRED_COMPANION_OUTREACH_ACTION_KIND,
     async (action) => {
@@ -445,7 +624,7 @@ export function registerDeferredCompanionOutreachRuntime(input: {
         await input.runtime.executeCompanionOutreach(
           payload.contactId, payload.permitId, payload.candidateOrigin, revalidate,
         );
-      } else {
+      } else if (payload.mode === 'continuation') {
         await input.runtime.executeDyadContinuation({
           dyadId: payload.dyadId,
           deliveryId: payload.deliveryId,
@@ -456,6 +635,13 @@ export function registerDeferredCompanionOutreachRuntime(input: {
           ...(payload.continuationTaskKind
             ? { continuationTaskKind: payload.continuationTaskKind }
             : {}),
+        }, revalidate);
+      } else {
+        await input.runtime.executeHumanRelay({
+          dyadId: payload.dyadId,
+          deliveryId: payload.deliveryId,
+          conversationId: payload.conversationId,
+          capsule: payload.capsule,
         }, revalidate);
       }
     },

@@ -252,6 +252,17 @@ export class IcpCertificationAgentProcess {
     return result;
   }
 
+  async runDyadCertificationAction(
+    action: 'continue' | 'deliver_prepared' | 'list' | 'prepare' | 'relay_probe' | 'transition',
+    input: Record<string, unknown> = {},
+  ): Promise<Record<string, unknown>> {
+    return await this.request({
+      type: 'run_dyad_certification_action',
+      action,
+      input,
+    }) as Record<string, unknown>;
+  }
+
   async activateGardenEmergencyDisable(): Promise<Record<string, unknown>> {
     const result = await this.request({ type: 'garden_emergency_disable' }) as Record<string, unknown>;
     this.artifacts.append({

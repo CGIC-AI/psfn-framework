@@ -99,6 +99,7 @@ export const correlationProperties = {
   workloadType: optionalString,
   workloadId: optionalString,
   icpCorrelation: Type.Optional(strictObject({
+    dyadId: optionalString,
     conversationId: Type.String(),
     rootInitiationId: Type.String(),
     initiatedByCompanionId: Type.String(),

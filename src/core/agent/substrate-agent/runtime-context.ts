@@ -858,7 +858,8 @@ export async function resolveAuthorContext(input: {
     };
   }
 
-  if (input.message.authorId === 'system:icp-initiation'
+  if ((input.message.authorId === 'system:icp-initiation'
+    || input.message.authorId === 'system:icp-continuation')
     && input.message.routing?.privateTurnTrigger === true) {
     const correlation = parseIcpConversationCorrelation(input.message.routing.icpCorrelation);
     if (correlation.localCompanionId !== input.companionIdentityKey

@@ -407,6 +407,12 @@ export function registerGatewayMessageHandlers(
     eventBus,
   } = deps;
   const nowMonotonicMs = deps.nowMonotonicMs ?? monotonicEpochNowMs;
+  // performance.timeOrigin + performance.now() preserves sub-millisecond
+  // precision for telemetry, but durable arbiter/social-pot timestamps are
+  // PostgreSQL BIGINT values and deliberately reject fractional milliseconds.
+  // Normalize only at that persistence boundary so observability keeps its
+  // higher-resolution clock.
+  const nowArbiterMs = (): number => Math.floor(nowMonotonicMs());
   const companionId = resolveCompanionIdFromConfig(config);
 
   const inFlightHandleMessages = new Map<string, Promise<AgentResponse>>();
@@ -492,7 +498,7 @@ export function registerGatewayMessageHandlers(
       channelId: candidate.channelId,
       triggerEventId: candidate.sourceMessageId,
       companionId,
-      nowMs: nowMonotonicMs(),
+      nowMs: nowArbiterMs(),
     });
     if (decision.outcome === 'gated') {
       safeguardAuditTrail.append('participation.reservation.gated', {
@@ -546,7 +552,7 @@ export function registerGatewayMessageHandlers(
       settlement = await phase.settleAfterAppraisal(
         decision.reservation,
         action,
-        nowMonotonicMs(),
+        nowArbiterMs(),
       );
       safeguardAuditTrail.append('participation.reservation.settled', {
         channelId: candidate.channelId,
@@ -619,12 +625,12 @@ export function registerGatewayMessageHandlers(
           decision.reservation,
           result.appraisal,
           trigger,
-          nowMonotonicMs(),
+          nowArbiterMs(),
         );
       } else if (result.appraisal.action === 'react') {
         egressDecision = await egressLeasePhase.releaseReact(
           decision.reservation,
-          nowMonotonicMs(),
+          nowArbiterMs(),
         );
       } else {
         return;

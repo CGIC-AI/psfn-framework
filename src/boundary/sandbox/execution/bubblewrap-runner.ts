@@ -34,10 +34,9 @@ export function buildBubblewrapArgs(request: ResolvedShellExecution): string[] {
     '--unshare-ipc',
     '--unshare-uts',
     '--unshare-cgroup',
-    '--unshare-net',
-    '--cap-drop', 'ALL',
-    '--clearenv',
   ];
+  if (!request.networkAccess) args.push('--unshare-net');
+  args.push('--cap-drop', 'ALL', '--clearenv');
   for (const [name, value] of Object.entries(request.childEnv).sort(([left], [right]) => (
     left.localeCompare(right)
   ))) {

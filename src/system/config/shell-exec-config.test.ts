@@ -25,6 +25,30 @@ describe('shell exec owner settings', () => {
     });
   });
 
+  it('accepts network access only for commands already in the executable allowlist', () => {
+    expect(normalizeShellExecSettings({
+      ...createDefaultShellExecSettings(),
+      enabled: true,
+      allowlist: ['bash', 'multica'],
+      networkAllowlist: ['multica'],
+    })).toMatchObject({
+      allowlist: ['bash', 'multica'],
+      networkAllowlist: ['multica'],
+    });
+
+    expect(() => normalizeShellExecSettings({
+      ...createDefaultShellExecSettings(),
+      enabled: true,
+      allowlist: ['bash'],
+      networkAllowlist: ['multica'],
+    })).toThrow('shellExec.networkAllowlist');
+  });
+
+  it('keeps legacy owner files network-isolated when networkAllowlist is absent', () => {
+    const { networkAllowlist: _omitted, ...legacyBlock } = createDefaultShellExecSettings();
+    expect(normalizeShellExecSettings(legacyBlock).networkAllowlist).toEqual([]);
+  });
+
   it('defaults the repository mount off and requires a real boolean when present', () => {
     expect(createDefaultShellExecSettings().mountRepositoryReadOnly).toBe(false);
     const { mountRepositoryReadOnly: _omitted, ...legacyBlock } = createDefaultShellExecSettings();

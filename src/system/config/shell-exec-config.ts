@@ -7,6 +7,8 @@ import {
 export interface ShellExecSettings {
   enabled: boolean;
   allowlist: string[];
+  /** Top-level commands that retain the gateway network namespace. */
+  networkAllowlist: string[];
   envAllowlist: string[];
   /**
    * Mount the deployment's repository checkout read-only at /repo inside the
@@ -39,6 +41,7 @@ export const SHELL_EXEC_SETTINGS_RANGES = {
 const SHELL_EXEC_SETTING_KEYS = [
   'enabled',
   'allowlist',
+  'networkAllowlist',
   'envAllowlist',
   'mountRepositoryReadOnly',
   'defaultTimeoutMs',
@@ -59,6 +62,7 @@ export function createDefaultShellExecSettings(): ShellExecSettings {
   return {
     enabled: false,
     allowlist: [],
+    networkAllowlist: [],
     envAllowlist: [],
     mountRepositoryReadOnly: false,
     defaultTimeoutMs: 600_000,
@@ -133,6 +137,22 @@ export function normalizeShellExecSettings(
     COMMAND_ALLOWLIST_ENTRY_PATTERN,
     32,
   );
+  const networkAllowlist = value.networkAllowlist === undefined
+    ? []
+    : normalizeBoundedList(
+      value.networkAllowlist,
+      `${fieldPath}.networkAllowlist`,
+      COMMAND_ALLOWLIST_ENTRY_PATTERN,
+      32,
+    );
+  const executableCommands = new Set(allowlist);
+  for (const command of networkAllowlist) {
+    if (!executableCommands.has(command)) {
+      throw new Error(
+        `Invalid settings at ${fieldPath}.networkAllowlist: ${JSON.stringify(command)} must also appear in allowlist`,
+      );
+    }
+  }
   const envAllowlist = normalizeBoundedList(
     value.envAllowlist,
     `${fieldPath}.envAllowlist`,
@@ -197,6 +217,7 @@ export function normalizeShellExecSettings(
   return {
     enabled,
     allowlist,
+    networkAllowlist,
     envAllowlist,
     mountRepositoryReadOnly,
     defaultTimeoutMs,

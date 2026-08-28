@@ -56,6 +56,8 @@ export interface ResolvedShellExecution {
    */
   deadlineBinaryPath: string;
   sandboxPath: string;
+  /** Whether this top-level executable retains the gateway network namespace. */
+  networkAccess: boolean;
   childEnv: NodeJS.ProcessEnv;
   /**
    * Sandbox-absolute file paths masked with a read-only /dev/null bind
@@ -163,6 +165,18 @@ function resolveAllowedCommandExecutable(
     throw new ShellExecPolicyError(`shell.exec command not allowlisted: ${command}`);
   }
   return canonicalCommand;
+}
+
+export function isShellExecutableNetworkAllowed(
+  executableCommand: string,
+  allowlist: readonly string[],
+  sandboxPath: string,
+): boolean {
+  const normalized = normalizeAllowlist(allowlist);
+  if (normalized.canonicalPaths.has(executableCommand)) return true;
+  const canonicalBase = basename(executableCommand).toLowerCase();
+  return normalized.names.has(canonicalBase)
+    && resolveExecutableFromPath(canonicalBase, sandboxPath) === executableCommand;
 }
 
 function resolveArgs(raw: unknown): string[] {
@@ -487,6 +501,11 @@ export function resolveShellExecution(
     options.policy.allowlist ?? [],
     sandboxPath,
   );
+  const networkAccess = isShellExecutableNetworkAllowed(
+    executableCommand,
+    options.policy.networkAllowlist ?? [],
+    sandboxPath,
+  );
   const args = resolveArgs(params.args);
   const cwd = resolveWorkingDirectory(params.cwd, workspacePath, options.policy);
   const cwdRelative = relative(workspacePath, cwd);
@@ -534,6 +553,7 @@ export function resolveShellExecution(
       'deadline enforcer',
     ),
     sandboxPath,
+    networkAccess,
     childEnv,
     ...limits,
     ...resolveResourceLimits(options.policy),

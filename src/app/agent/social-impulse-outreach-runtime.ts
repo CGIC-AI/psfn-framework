@@ -20,7 +20,11 @@ import type { CompanionAvailabilityRuntime } from '../../core/agent/companion-av
 import type { CapabilityRuntime } from '../../system/capabilities/runtime.js';
 import type { SessionStore } from '../../persistence/sessions/store.js';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
+import { createComponentLogger } from '../../shared/logger.js';
+import { getRequestContext } from '../../primitives/llm/request-context.js';
 import { classifyChannelDisclosure } from '../../system/trust/policy.js';
+
+const log = createComponentLogger('SocialImpulseOutreach');
 
 interface RuntimePhases {
   proactiveOutbound: ProactiveOutboundDispatcher | null;
@@ -47,6 +51,7 @@ export interface ProductionSocialImpulseOutreachOptions {
   capabilityRuntime: Pick<CapabilityRuntime, 'has'>;
   availability: Pick<CompanionAvailabilityRuntime, 'snapshot'>;
   isHumanContactAllowed(input: { contactId: string; channelType: 'discord' }): Promise<boolean>;
+  isRoomTransportAvailable(channelType: 'discord' | 'buzz'): boolean;
   getPhases(): RuntimePhases;
   now?: () => number;
 }
@@ -123,7 +128,8 @@ export function createProductionSocialImpulseOutreachRuntime(
       });
       for (const room of rooms) {
         if ((room.channel !== 'discord' && room.channel !== 'buzz')
-          || !memberships.has(room.channelId)) continue;
+          || !memberships.has(room.channelId)
+          || !options.isRoomTransportAvailable(room.channel)) continue;
         destinations.push({
           kind: 'room',
           destinationId: `room:${room.channel}:${room.channelId}`,
@@ -220,13 +226,16 @@ export function createProductionSocialImpulseOutreachRuntime(
         if (!options.icpInitiation || !options.capabilityRuntime.has('external.companion')) {
           return { outcome: 'suppressed', reasonCode: 'companion_initiation_unavailable' };
         }
+        const inheritedIcpRoot = getRequestContext()?.icpCorrelation?.rootInitiationId;
         const result = await options.icpInitiation.submit({
           source: 'felt_impulse',
           peerContactId: destination.contactId,
           preferredChannel: 'dm',
           sourceRecordId: execution.opportunityId,
           reasonSummary: execution.intent,
-          cause: { kind: 'independent' },
+          cause: inheritedIcpRoot
+            ? { kind: 'icp_conversation', rootInitiationId: inheritedIcpRoot }
+            : { kind: 'independent' },
           feltImpulseFiredAtMs: now(),
         });
         return (result.status === 'consumed' || result.status === 'permitted')
@@ -313,6 +322,12 @@ export function createProductionSocialImpulseOutreachRuntime(
       return roomResult.outcome === 'delivered'
         ? { outcome: 'delivered' }
         : { outcome: 'suppressed', reasonCode: `room_${roomResult.outcome}` };
+    },
+    onExecutionError: (error, context) => {
+      log.error('Social impulse destination execution failed closed', {
+        error,
+        action: context.destinationKind,
+      });
     },
   });
 }

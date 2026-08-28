@@ -311,4 +311,36 @@ describe('social impulse outreach disposition', () => {
     });
     expect(result).toMatchObject({ outcome: 'suppressed', reasonCode: 'room_arbiter_denied' });
   });
+
+  it('reports destination failures before recording fail-closed suppression', async () => {
+    const store = memoryStore();
+    const onExecutionError = vi.fn();
+    const runtime = createSocialImpulseOutreachRuntime({
+      companionId: COMPANION_ID,
+      store,
+      getMode: () => 'on',
+      listDestinations: async () => destinations(),
+      runDispositionOpportunity: async () => {},
+      execute: async () => { throw new Error('transport unavailable'); },
+      onExecutionError,
+      now: () => FIRED_AT_MS + 100,
+    });
+    await runtime.onImpulse(impulse());
+
+    const result = await runtime.choose({
+      opportunityId: impulse().correlationId,
+      disposition: 'contact-human',
+      destinationId: 'human:contact-a:discord:dm-a',
+      intent: 'Say hello in my own words.',
+    });
+
+    expect(onExecutionError).toHaveBeenCalledWith(expect.any(Error), {
+      opportunityId: impulse().correlationId,
+      destinationKind: 'human_dm',
+    });
+    expect(result).toMatchObject({
+      outcome: 'suppressed',
+      reasonCode: 'destination_execution_failed',
+    });
+  });
 });

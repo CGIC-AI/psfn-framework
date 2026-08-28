@@ -170,6 +170,7 @@ describe('shared_wiki_chunks shared-schema integration (s10f9)', () => {
           { version: 13, name: 'icp-operator-test-initiation-source' },
           { version: 14, name: 'icp-durable-dyads' },
           { version: 15, name: 'icp-open-dyad-continuation' },
+          { version: 16, name: 'icp-dyad-participant-lifecycle' },
         ]);
 
         // Idempotent re-provisioning (advisory-lock serialized).
@@ -177,7 +178,7 @@ describe('shared_wiki_chunks shared-schema integration (s10f9)', () => {
         const ledgerAgain = await pool.query<{ count: string }>(
           `SELECT COUNT(*)::text AS count FROM shared.shared_schema_migrations`,
         );
-        expect(ledgerAgain.rows[0]?.count).toBe('15');
+        expect(ledgerAgain.rows[0]?.count).toBe('16');
       } finally {
         await pool.end();
         await store.close();

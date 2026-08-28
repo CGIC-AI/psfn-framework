@@ -25,6 +25,7 @@ import type {
 } from './memory-store-port.js';
 import { buildSessionMetadataWithReflectionTurn } from '../../core/session/reflection-turn-provenance.js';
 import { ReflectionJournalStore } from '../../persistence/journals/reflection-journal.js';
+import { buildSessionMetadataWithIcpCorrelation } from '../../core/session/icp-correlation-metadata.js';
 
 const tempDirs: string[] = [];
 
@@ -1622,6 +1623,100 @@ describe('MemoryExtractor experiential self-memory extraction', () => {
 });
 
 describe('MemoryExtractor provenance and trust caps', () => {
+  it('persists canonical dyad, bounded activity, and exact turn lineage on extracted memories', async () => {
+    const local = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const peer = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    const channelId = `companion-dm:${local}:${peer}`;
+    const dyadId = '11111111-1111-4111-8111-111111111111';
+    const activityOne = '22222222-2222-4222-8222-222222222222';
+    const activityTwo = '33333333-3333-4333-8333-333333333333';
+    const makeCorrelation = (conversationId: string, turnId: string) => ({
+      dyadId,
+      conversationId,
+      rootInitiationId: '44444444-4444-4444-8444-444444444444',
+      initiatedByCompanionId: local,
+      localCompanionId: local,
+      peerCompanionId: peer,
+      peerContactId: 'contact-peer-fixture',
+      channelId,
+      turnId,
+      messageId: `message:${turnId}`,
+      requestId: `request:${turnId}`,
+      chargeLane: 'companion_social' as const,
+      surface: 'companion_dm' as const,
+      costPurpose: 'conversation_turn' as const,
+      costOriginStage: 'reply' as const,
+      fatigueDecision: 'allow' as const,
+    });
+    const recentEntries: SessionEntry[] = [
+      {
+        id: 1,
+        channelId,
+        role: 'user',
+        authorId: peer,
+        authorName: 'Aster',
+        content: 'I want us to remember the cedar garden plan next week.',
+        timestamp: 1_000,
+        metadata: buildSessionMetadataWithIcpCorrelation(
+          undefined,
+          makeCorrelation(activityOne, 'turn-one'),
+        ),
+      },
+      {
+        id: 2,
+        channelId,
+        role: 'assistant',
+        authorName: 'Lyra',
+        content: 'I will remember our cedar garden plan and revisit it with you.',
+        timestamp: 2_000,
+        metadata: buildSessionMetadataWithIcpCorrelation(
+          undefined,
+          makeCorrelation(activityTwo, 'turn-two'),
+        ),
+      },
+    ];
+    const extractor = new MemoryExtractor(
+      fromAny({
+        complete: vi.fn().mockResolvedValue({
+          content: `<response>
+<fact>
+<text>Aster and Lyra plan to revisit the cedar garden next week.</text>
+<type>relational</type>
+<importance>0.9</importance>
+<confidence>0.95</confidence>
+</fact>
+</response>`,
+        }),
+      }),
+      fromAny({
+        characterName: 'Lyra',
+        getRecentMessages: vi.fn().mockReturnValue(recentEntries),
+      }),
+      fromAny({ getMemoriesByChannel: vi.fn().mockResolvedValue([]) }),
+      fromAny({
+        embed: vi.fn().mockResolvedValue(new Float32Array(8)),
+        embedBatch: vi.fn(),
+        dims: 8,
+      }),
+      fromAny({ emit: vi.fn().mockResolvedValue(undefined) }),
+      { extractionInterval: 5 },
+    );
+    const write = vi.fn(async () => ({ action: 'created', memory: { id: 'memory-icp-lineage' } }));
+    (fromAny(extractor)).writer = { write };
+
+    await extractor.extract(channelId, 'contact-peer-fixture');
+
+    expect(write).toHaveBeenCalledWith(expect.objectContaining({
+      provenance: expect.objectContaining({
+        channelId,
+        sessionId: channelId,
+        icpDyadId: dyadId,
+        sourceActivityIds: [activityOne, activityTwo],
+        sourceTurnIds: ['turn-one', 'turn-two'],
+      }),
+    }));
+  });
+
   it('caps extracted importance to 0.5 on public channels', async () => {
     const defaultPolicy = getDefaultTrustPolicy();
     setRuntimeTrustPolicy({
@@ -2899,7 +2994,7 @@ describe('MemoryExtractor interval watermark coverage', () => {
   }
 
   function buildWatermarkHarness(channelId: string, options: {
-    llmClient?: any;
+    llmClient?: LLMProviderPort;
     entryCount?: number;
     extractionInterval?: number;
   } = {}) {

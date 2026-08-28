@@ -23,7 +23,7 @@ export interface ChannelPluginParseResult<TConfig = unknown> {
   instances?: readonly ChannelPluginParsedInstance<TConfig>[];
 }
 
-export interface ChannelPluginParsedInstance<TConfig = unknown> {
+interface ChannelPluginParsedInstance<TConfig = unknown> {
   id: string;
   config: TConfig;
   companionId?: CompanionId;

@@ -69,7 +69,7 @@ export interface BuzzChannelConfig {
   };
 }
 
-export interface BuzzChannelAccountConfig {
+interface BuzzChannelAccountConfig {
   companionId: CompanionId;
   privateKeyRef: CredentialReference;
 }

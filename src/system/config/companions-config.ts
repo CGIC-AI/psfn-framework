@@ -426,9 +426,13 @@ function assertObserverEvalSidecarBindingsIsolated(
   );
   if (configured.length === 0) return;
   if (configured.length !== companions.length) {
+    const missingCompanionIds = companions
+      .filter(entry => entry.observerEvalSidecar === undefined)
+      .map(entry => entry.companionId);
     throw new Error(
       `${COMPANIONS_ERROR_PREFIX}: observerEvalSidecar topology must be configured for every `
-      + 'companion or none; partial fleet bindings could fall back to another companion',
+      + 'companion or none; partial fleet bindings could fall back to another companion; '
+      + `missing companions: ${missingCompanionIds.join(', ')}`,
     );
   }
   assertNoDuplicateField(configured, entry => entry.observerEvalSidecar.sidecarId, 'observerEvalSidecar.sidecarId');
@@ -506,11 +510,20 @@ function assertNoDuplicateField<T>(
     if (previous !== undefined) {
       throw new Error(
         `${COMPANIONS_ERROR_PREFIX}: duplicate ${fieldLabel} "${value}" `
-        + `in companions[${previous}] and companions[${index}]`,
+        + `for companions ${JSON.stringify(companions[previous] && selectCompanionId(companions[previous]))} `
+        + `and ${JSON.stringify(selectCompanionId(entry))} `
+        + `(companions[${previous}] and companions[${index}])`,
       );
     }
     seen.set(value, index);
   }
+}
+
+function selectCompanionId(value: unknown): string {
+  if (isRecord(value) && typeof value.companionId === 'string') {
+    return value.companionId;
+  }
+  return 'unknown';
 }
 
 function assertNoOverlappingDataDirs(companions: readonly CompanionFleetEntry[]): void {

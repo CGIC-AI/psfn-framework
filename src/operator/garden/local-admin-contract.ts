@@ -753,6 +753,7 @@ export function createInProcessGardenAdminContract(
     observerEvalSidecar: createObserverEvalSidecarAdminService({
       config: options.config,
       runtime: options.observerEvalSidecar ?? null,
+      eventBus: options.eventBus,
       // Agent process: this Garden serves exactly one companion, so its sidecar
       // pool must stay inside that companion's tenant boundary.
       tenant: resolveConfigTenantPoolScope(options.config),
@@ -940,6 +941,7 @@ export function createInProcessGardenAdminContract(
 export function createObserverEvalSidecarAdminService(input: {
   config: SubstrateConfig;
   runtime?: ObserverEvalSidecarRuntime | null;
+  eventBus?: EventBus;
   /**
    * Tenant boundary for the sidecar's own pool. The sidecar tables are
    * companion-local, so the agent's in-process Garden pins its companion
@@ -949,6 +951,12 @@ export function createObserverEvalSidecarAdminService(input: {
   tenant?: TenantPoolScope;
 }): AdminObserverEvalSidecarService {
   const settings = input.config.observerEvalSidecar ?? createDefaultObserverEvalSidecarSettings();
+  const companionId = input.config.companionId?.trim() || null;
+  const manifestBinding = input.config.companionRuntimeIdentity?.observerEvalSidecar;
+  let lastTransition: EventMap['emotion.proactive.transition'] | null = null;
+  input.eventBus?.on('emotion.proactive.transition', (event) => {
+    lastTransition = structuredClone(event);
+  });
 
   const postgresDatabaseUrl = input.config.postgresDatabaseUrl?.trim();
   const persistence = settings.persistence.enabled
@@ -964,6 +972,18 @@ export function createObserverEvalSidecarAdminService(input: {
     // the Garden admin service is the ONLY reader of lever events.
     leverEvents: persistence,
     getHealthSnapshot: () => getObserverEvalSidecarHealthSnapshot(input.runtime),
+    companionId,
+    binding: companionId && manifestBinding
+      ? {
+          companionId,
+          sidecarId: manifestBinding.sidecarId,
+          sessionLabel: manifestBinding.sessionLabel,
+          agentName: manifestBinding.agentName,
+        }
+      : null,
+    configuredEnabled: settings.enabled,
+    proactivityEnabled: settings.levers?.enabled === true,
+    getLastTransition: () => lastTransition ? structuredClone(lastTransition) : null,
   });
 }
 

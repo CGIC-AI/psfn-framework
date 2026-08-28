@@ -26,14 +26,32 @@ import type {
   ObserverEvalLifecycleState,
   ObserverEvalSidecarHealthSnapshot,
 } from '../../../core/eval/observer-sidecar/types.js';
+import type { EmotionProactiveTransitionEvent } from '../../../shared/event-bus.js';
 
 export const ADMIN_OBSERVER_EVAL_EXPORT_VERSION = 'garden.observer-eval-sidecar.export.v1' as const;
+
+export type AdminObserverEvalProactivityOperatingState =
+  | 'absent'
+  | 'disabled'
+  | 'shadow'
+  | 'on'
+  | 'unhealthy';
+
+export interface AdminObserverEvalSidecarBindingIdentity {
+  companionId: string;
+  sidecarId: string;
+  sessionLabel: string;
+  agentName: string;
+}
 
 export interface AdminObserverEvalSidecarObservationFilters extends ObserverEvalSidecarObservationQuery {}
 export interface AdminObserverEvalSidecarRunFilters extends ObserverEvalSidecarRunQuery {}
 export interface AdminObserverEvalSidecarLeverEventFilters extends ObserverEvalSidecarLeverEventQuery {}
 
 export interface AdminObserverEvalSidecarHealthData {
+  companionId: string | null;
+  operatingState: AdminObserverEvalProactivityOperatingState;
+  binding: AdminObserverEvalSidecarBindingIdentity | null;
   status: ObserverEvalSidecarHealthSnapshot['status'] | 'unavailable';
   observedAt: number;
   runtime: ObserverEvalSidecarHealthSnapshot | null;
@@ -43,6 +61,7 @@ export interface AdminObserverEvalSidecarHealthData {
     authoritative: false;
   };
   latestLifecycleState?: ObserverEvalLifecycleState;
+  lastTransition: EmotionProactiveTransitionEvent | null;
 }
 
 export interface AdminObserverEvalSidecarObservationListData {
@@ -206,6 +225,11 @@ export interface AdminObserverEvalSidecarDataServiceOptions {
   persistence?: ObserverEvalSidecarPersistencePort | null;
   leverEvents?: ObserverEvalSidecarLeverPersistencePort | null;
   getHealthSnapshot?: (() => ObserverEvalSidecarHealthSnapshot | null) | null;
+  companionId?: string | null;
+  binding?: AdminObserverEvalSidecarBindingIdentity | null;
+  configuredEnabled?: boolean;
+  proactivityEnabled?: boolean;
+  getLastTransition?: (() => EmotionProactiveTransitionEvent | null) | null;
   nowMs?: () => number;
 }
 
@@ -217,9 +241,28 @@ export class AdminObserverEvalSidecarDataService implements AdminObserverEvalSid
   }
 
   async getHealth(): Promise<AdminObserverEvalSidecarHealthData> {
-    const runtime = this.options.getHealthSnapshot?.() ?? null;
+    const candidateRuntime = this.options.getHealthSnapshot?.() ?? null;
+    const binding = this.options.binding ?? null;
+    const companionId = this.options.companionId?.trim() || null;
+    const bindingSidecarId = binding?.sidecarId ?? null;
+    const bindingOwnerMatches = binding !== null && companionId === binding.companionId;
+    const runtimeOwnerMatches = candidateRuntime === null
+      || candidateRuntime.sidecarId === bindingSidecarId;
+    const bindingMatches = bindingOwnerMatches
+      && candidateRuntime !== null
+      && candidateRuntime.sidecarId === bindingSidecarId;
+    const runtime = bindingMatches ? candidateRuntime : null;
+    const operatingState = resolveOperatingState({
+      binding,
+      configuredEnabled: this.options.configuredEnabled === true,
+      proactivityEnabled: this.options.proactivityEnabled === true,
+      runtime,
+    });
     return {
-      status: runtime?.status ?? 'unavailable',
+      companionId,
+      operatingState,
+      binding,
+      status: runtime?.status ?? (operatingState === 'disabled' ? 'disabled' : 'unavailable'),
       observedAt: runtime?.observedAt ?? this.nowMs(),
       runtime,
       persistence: {
@@ -228,6 +271,9 @@ export class AdminObserverEvalSidecarDataService implements AdminObserverEvalSid
         authoritative: false,
       },
       ...(runtime?.lastLifecycleState ? { latestLifecycleState: runtime.lastLifecycleState } : {}),
+      lastTransition: bindingOwnerMatches && runtimeOwnerMatches
+        ? this.options.getLastTransition?.() ?? null
+        : null,
     };
   }
 
@@ -319,6 +365,23 @@ export class AdminObserverEvalSidecarDataService implements AdminObserverEvalSid
     }
     return this.options.leverEvents;
   }
+}
+
+function resolveOperatingState(input: {
+  binding: AdminObserverEvalSidecarBindingIdentity | null;
+  configuredEnabled: boolean;
+  proactivityEnabled: boolean;
+  runtime: ObserverEvalSidecarHealthSnapshot | null;
+}): AdminObserverEvalProactivityOperatingState {
+  if (!input.binding) return 'absent';
+  if (!input.configuredEnabled) return 'disabled';
+  if (!input.runtime
+    || input.runtime.status === 'degraded'
+    || input.runtime.status === 'unavailable'
+    || !input.runtime.available) {
+    return 'unhealthy';
+  }
+  return input.proactivityEnabled ? 'on' : 'shadow';
 }
 
 export class ObserverEvalSidecarApiUnavailableError extends Error {

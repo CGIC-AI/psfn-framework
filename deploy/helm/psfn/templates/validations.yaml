@@ -61,6 +61,17 @@
 {{- if or (gt (len $deploymentName) 63) (not (regexMatch "^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$" $deploymentName)) -}}
 {{- fail (printf "fleet companion %s derives invalid agent Deployment name %s" $companionId $deploymentName) -}}
 {{- end -}}
+{{- if $.Values.emosim.enabled -}}
+{{- $emosimTarget := dict "root" $ "companionId" $companionId -}}
+{{- $emosimServiceName := include "psfn.fleetEmosimServiceName" $emosimTarget -}}
+{{- $emosimClaimName := include "psfn.fleetEmosimStateClaimName" $emosimTarget -}}
+{{- if or (gt (len $emosimServiceName) 63) (not (regexMatch "^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$" $emosimServiceName)) -}}
+{{- fail (printf "fleet companion %s derives invalid EmoSim Service name %s" $companionId $emosimServiceName) -}}
+{{- end -}}
+{{- if or (gt (len $emosimClaimName) 63) (not (regexMatch "^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$" $emosimClaimName)) -}}
+{{- fail (printf "fleet companion %s derives invalid EmoSim state claim name %s" $companionId $emosimClaimName) -}}
+{{- end -}}
+{{- end -}}
 {{- $schema := $companion.postgresSchema | default "" -}}
 {{- if or (gt (len $schema) 63) (not (regexMatch "^[a-z_][a-z0-9_]*$" $schema)) (hasPrefix "pg_" $schema) -}}
 {{- fail (printf "fleet.companions[%d].postgresSchema must be a non-reserved lowercase Postgres identifier" $index) -}}

@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import {
   fetchFleetCardDetails,
   fetchFleetPortalProjection,
+  parseFleetEmosimHealth,
   parseFleetPortalProjection,
   resolveFleetCardHealth,
   selectFirstReferenceAvatar,
@@ -294,7 +295,10 @@ describe('Garden fleet portal client', () => {
       }],
     }).companions[0]!;
 
-    expect(resolveFleetCardHealth(companion, { adminTransport: 'down' })).toEqual({
+    expect(resolveFleetCardHealth(companion, {
+      adminTransport: 'down',
+      emosim: { state: 'unhealthy' },
+    })).toEqual({
       agentRpc: 'up',
       adminTransport: 'down',
       channels: 'up',
@@ -321,9 +325,20 @@ describe('Garden fleet portal client', () => {
   });
 
   it('uses authorized reference-image routes for avatar and admin health', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
-      references: [{ id: 'ref-1' }, { id: 'ref-2' }],
-    }), { status: 200, headers: { 'content-type': 'application/json' } })));
+    vi.stubGlobal('fetch', vi.fn(async (url: string | URL | Request) => new Response(JSON.stringify(
+      String(url).endsWith('/health')
+        ? {
+            companionId: COMPANION_A,
+            operatingState: 'on',
+            observedAt: 1_780_000_000_000,
+            lastTransition: {
+              stage: 'final_disposition',
+              outcome: 'delivered',
+              timestamp: 1_780_000_000_000,
+            },
+          }
+        : { references: [{ id: 'ref-1' }, { id: 'ref-2' }] },
+    ), { status: 200, headers: { 'content-type': 'application/json' } })));
     const companion = {
       companionId: COMPANION_A,
       displayName: 'Canopy',
@@ -338,6 +353,15 @@ describe('Garden fleet portal client', () => {
 
     await expect(fetchFleetCardDetails(companion)).resolves.toEqual({
       adminTransport: 'up',
+      emosim: {
+        state: 'on',
+        observedAt: 1_780_000_000_000,
+        lastTransition: {
+          stage: 'final_disposition',
+          outcome: 'delivered',
+          timestamp: 1_780_000_000_000,
+        },
+      },
       avatarUrl: `${companion.gardenPath}/api/admin/image-references/ref-1/blob`,
     });
     expect(fetch).toHaveBeenCalledWith(
@@ -349,8 +373,22 @@ describe('Garden fleet portal client', () => {
       vi.mocked(fetch).mockResolvedValueOnce(new Response(null, { status }));
       await expect(fetchFleetCardDetails(companion)).resolves.toEqual({
         adminTransport: 'down',
+        emosim: { state: 'unhealthy' },
       });
     }
+  });
+
+  it('never accepts a sibling EmoSim health response for the selected companion', () => {
+    expect(parseFleetEmosimHealth({
+      companionId: COMPANION_B,
+      operatingState: 'on',
+      observedAt: 1_780_000_000_000,
+      lastTransition: {
+        stage: 'final_disposition',
+        outcome: 'delivered',
+        timestamp: 1_780_000_000_000,
+      },
+    }, COMPANION_A)).toEqual({ state: 'unhealthy' });
   });
 
   it('degrades a malformed successful admin response without failing the fleet view', async () => {
@@ -372,6 +410,7 @@ describe('Garden fleet portal client', () => {
 
     await expect(fetchFleetCardDetails(companion)).resolves.toEqual({
       adminTransport: 'unknown',
+      emosim: { state: 'unhealthy' },
     });
   });
 

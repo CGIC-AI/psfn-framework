@@ -111,6 +111,14 @@ export interface AdminObserverEvalSidecarLeverEventListData {
 }
 
 export interface AdminObserverEvalSidecarHealthData {
+  companionId: string | null;
+  operatingState: 'absent' | 'disabled' | 'shadow' | 'on' | 'unhealthy';
+  binding: {
+    companionId: string;
+    sidecarId: string;
+    sessionLabel: string;
+    agentName: string;
+  } | null;
   status: ObserverEvalSidecarHealthStatus;
   observedAt: number;
   runtime: {
@@ -151,6 +159,18 @@ export interface AdminObserverEvalSidecarHealthData {
     sidecarId?: string;
     reason?: string;
   };
+  lastTransition: {
+    correlationId: string;
+    lever: 'would_message';
+    stage: string;
+    outcome: string;
+    firedAtMs: number;
+    timestamp: number;
+    peerContactId?: string;
+    candidateId?: string;
+    candidateStatus?: string;
+    reasonCode?: string;
+  } | null;
 }
 
 export interface AdminObserverEvalSidecarObservationListData {

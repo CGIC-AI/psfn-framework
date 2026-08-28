@@ -14,6 +14,8 @@ describe('EmoSim proactivity backward state read', () => {
     })).toEqual({
       firstCrossingMs: 1_780_000_000_000,
       lastFiredAtMs: null,
+      lastSampledAtMs: null,
+      lastInputId: null,
     });
   });
 

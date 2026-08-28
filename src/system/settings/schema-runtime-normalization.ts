@@ -1,5 +1,6 @@
 import {
   DEFAULT_UI_THEME_ID,
+  createDefaultEmoSimProactivitySettings,
   createDefaultObserverEvalSidecarLeverSettings,
   createDefaultObserverEvalSidecarSettings,
   PROMOTED_EXTENDED_TOOL_SLOTS_MAX,
@@ -35,6 +36,8 @@ import {
   OBSERVER_EVAL_SIDECAR_DEPLOYMENT_TARGETS,
   OBSERVER_EVAL_SIDECAR_MODES,
   EMOSIM_PROACTIVITY_MODES,
+  EMOSIM_PROACTIVITY_SOURCE_MODEL,
+  EMOSIM_PROACTIVITY_SOURCE_VERSION,
   EMOSIM_WOULD_MESSAGE_V1,
   type ObserverEvalSidecarAdapterKind,
   type ObserverEvalSidecarDeploymentTarget,
@@ -576,6 +579,103 @@ function normalizeEmoSimProactivitySettings(
 ): EmoSimProactivitySettings {
   const root = expectRecord(value, fieldPath);
   const profile = expectRecord(root.thresholdProfile, `${fieldPath}.thresholdProfile`);
+  const source = expectRecord(
+    profile.applicableSource,
+    `${fieldPath}.thresholdProfile.applicableSource`,
+  );
+  const calibration = expectRecord(
+    profile.calibration,
+    `${fieldPath}.thresholdProfile.calibration`,
+  );
+  const promotion = expectRecord(
+    profile.promotionCriteria,
+    `${fieldPath}.thresholdProfile.promotionCriteria`,
+  );
+  assertNoUnknownKeys(root, ['mode', 'thresholdProfile'], fieldPath, {
+    errorPrefix: 'Invalid settings',
+  });
+  assertNoUnknownKeys(profile, [
+    'schemaVersion',
+    'profileId',
+    'revision',
+    'applicableSource',
+    'reviewNote',
+    'calibration',
+    'promotionCriteria',
+    'rollbackProfileId',
+    'socialNeedThreshold',
+    'attachmentIntensityThreshold',
+    'samplingIntervalMs',
+    'minimumConfidence',
+    'abstainBelowMinimumConfidence',
+    'sustainMs',
+    'dedupeWindowMs',
+    'cooldownMs',
+  ], `${fieldPath}.thresholdProfile`, { errorPrefix: 'Invalid settings' });
+  assertNoUnknownKeys(source, ['model', 'version'], `${fieldPath}.thresholdProfile.applicableSource`, {
+    errorPrefix: 'Invalid settings',
+  });
+  assertNoUnknownKeys(calibration, [
+    'corpusVersion',
+    'metricsVersion',
+    'status',
+    'fireRate',
+    'falsePositiveRate',
+    'fatigueRate',
+  ], `${fieldPath}.thresholdProfile.calibration`, { errorPrefix: 'Invalid settings' });
+  assertNoUnknownKeys(promotion, [
+    'criteriaVersion',
+    'maximumFalsePositiveRate',
+    'maximumFatigueRate',
+  ], `${fieldPath}.thresholdProfile.promotionCriteria`, { errorPrefix: 'Invalid settings' });
+  const sourceModel = expectNonEmptyString(
+    source.model,
+    `${fieldPath}.thresholdProfile.applicableSource.model`,
+  );
+  const sourceVersion = expectNonEmptyString(
+    source.version,
+    `${fieldPath}.thresholdProfile.applicableSource.version`,
+  );
+  if (sourceModel !== EMOSIM_PROACTIVITY_SOURCE_MODEL
+    || sourceVersion !== EMOSIM_PROACTIVITY_SOURCE_VERSION) {
+    throw new Error(
+      `Invalid settings at ${fieldPath}.thresholdProfile.applicableSource: unknown EmoSim production model ${sourceModel}@${sourceVersion}`,
+    );
+  }
+  const calibrationStatus = expectEnumValue<'bootstrap_unmeasured' | 'measured'>(
+    calibration.status,
+    `${fieldPath}.thresholdProfile.calibration.status`,
+    new Set(['bootstrap_unmeasured', 'measured']),
+    'one of "bootstrap_unmeasured", "measured"',
+  );
+  const calibrationRates = {
+    fireRate: expectNullableNumberInRange(
+      calibration.fireRate,
+      `${fieldPath}.thresholdProfile.calibration.fireRate`,
+    ),
+    falsePositiveRate: expectNullableNumberInRange(
+      calibration.falsePositiveRate,
+      `${fieldPath}.thresholdProfile.calibration.falsePositiveRate`,
+    ),
+    fatigueRate: expectNullableNumberInRange(
+      calibration.fatigueRate,
+      `${fieldPath}.thresholdProfile.calibration.fatigueRate`,
+    ),
+  };
+  if (calibrationStatus === 'measured' && Object.values(calibrationRates).some(rate => rate === null)) {
+    throw new Error(
+      `Invalid settings at ${fieldPath}.thresholdProfile.calibration: measured profiles require all rates`,
+    );
+  }
+  const abstainBelowMinimumConfidence = expectBoolean(
+    profile.abstainBelowMinimumConfidence,
+    `${fieldPath}.thresholdProfile.abstainBelowMinimumConfidence`,
+  );
+  if (!abstainBelowMinimumConfidence) {
+    throw new Error(
+      `Invalid settings at ${fieldPath}.thresholdProfile.abstainBelowMinimumConfidence: production profiles must fail closed`,
+    );
+  }
   return {
     mode: expectEnumValue<EmoSimProactivityMode>(
       root.mode,
@@ -584,7 +684,58 @@ function normalizeEmoSimProactivitySettings(
       'one of "off", "shadow", "on"',
     ),
     thresholdProfile: {
+      schemaVersion: expectIntegerInRange(
+        profile.schemaVersion,
+        `${fieldPath}.thresholdProfile.schemaVersion`,
+        1,
+        1,
+      ) as 1,
       profileId: expectNonEmptyString(profile.profileId, `${fieldPath}.thresholdProfile.profileId`),
+      revision: expectNonEmptyString(profile.revision, `${fieldPath}.thresholdProfile.revision`),
+      applicableSource: {
+        model: EMOSIM_PROACTIVITY_SOURCE_MODEL,
+        version: EMOSIM_PROACTIVITY_SOURCE_VERSION,
+      },
+      reviewNote: expectNonEmptyString(
+        profile.reviewNote,
+        `${fieldPath}.thresholdProfile.reviewNote`,
+      ),
+      calibration: {
+        corpusVersion: expectNonEmptyString(
+          calibration.corpusVersion,
+          `${fieldPath}.thresholdProfile.calibration.corpusVersion`,
+        ),
+        metricsVersion: expectNonEmptyString(
+          calibration.metricsVersion,
+          `${fieldPath}.thresholdProfile.calibration.metricsVersion`,
+        ),
+        status: calibrationStatus,
+        ...calibrationRates,
+      },
+      promotionCriteria: {
+        criteriaVersion: expectNonEmptyString(
+          promotion.criteriaVersion,
+          `${fieldPath}.thresholdProfile.promotionCriteria.criteriaVersion`,
+        ),
+        maximumFalsePositiveRate: expectNumberInRange(
+          promotion.maximumFalsePositiveRate,
+          `${fieldPath}.thresholdProfile.promotionCriteria.maximumFalsePositiveRate`,
+          0,
+          1,
+        ),
+        maximumFatigueRate: expectNumberInRange(
+          promotion.maximumFatigueRate,
+          `${fieldPath}.thresholdProfile.promotionCriteria.maximumFatigueRate`,
+          0,
+          1,
+        ),
+      },
+      rollbackProfileId: profile.rollbackProfileId === null
+        ? null
+        : expectNonEmptyString(
+            profile.rollbackProfileId,
+            `${fieldPath}.thresholdProfile.rollbackProfileId`,
+          ),
       socialNeedThreshold: expectNumberInRange(
         profile.socialNeedThreshold,
         `${fieldPath}.thresholdProfile.socialNeedThreshold`,
@@ -597,11 +748,30 @@ function normalizeEmoSimProactivitySettings(
         0,
         1,
       ),
+      samplingIntervalMs: expectIntegerInRange(
+        profile.samplingIntervalMs,
+        `${fieldPath}.thresholdProfile.samplingIntervalMs`,
+        0,
+        86_400_000,
+      ),
+      minimumConfidence: expectNumberInRange(
+        profile.minimumConfidence,
+        `${fieldPath}.thresholdProfile.minimumConfidence`,
+        0,
+        1,
+      ),
+      abstainBelowMinimumConfidence: true,
       sustainMs: expectIntegerInRange(
         profile.sustainMs,
         `${fieldPath}.thresholdProfile.sustainMs`,
         0,
         604_800_000,
+      ),
+      dedupeWindowMs: expectIntegerInRange(
+        profile.dedupeWindowMs,
+        `${fieldPath}.thresholdProfile.dedupeWindowMs`,
+        0,
+        86_400_000,
       ),
       cooldownMs: expectIntegerInRange(
         profile.cooldownMs,
@@ -611,6 +781,10 @@ function normalizeEmoSimProactivitySettings(
       ),
     },
   };
+}
+
+function expectNullableNumberInRange(value: unknown, fieldPath: string): number | null {
+  return value === null ? null : expectNumberInRange(value, fieldPath, 0, 1);
 }
 
 function hasSetting(settings: EditableSettings, key: string): boolean {
@@ -741,7 +915,10 @@ function normalizeEndpointAndGardenSettings(
     normalized.emosimProactivity = {
       mode: 'on',
       thresholdProfile: {
+        ...createDefaultEmoSimProactivitySettings().thresholdProfile,
         profileId: EMOSIM_WOULD_MESSAGE_V1,
+        revision: 'legacy-owner-migration.v1',
+        reviewNote: 'One-way migration of the previously enabled production would_message owner block.',
         socialNeedThreshold: legacy.wouldMessage.socialNeedThreshold,
         attachmentIntensityThreshold: legacy.wouldMessage.attachmentIntensityThreshold,
         sustainMs: legacy.wouldMessage.sustainMs,

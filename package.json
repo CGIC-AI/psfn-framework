@@ -37,6 +37,7 @@
     "test:prompt-goldens": "vitest run src/core/session/group-chat-harness/prompt-shape-goldens.test.ts",
     "test:leak-matrix": "vitest run src/core/session/group-chat-harness/envelope-leak-matrix.test.ts",
     "test:watch": "vitest",
+    "replay:emosim-proactivity": "tsx scripts/replay-emosim-proactivity-profiles.ts",
     "tools:doctor": "node scripts/ci/check-local-tools.mjs",
     "hooks:install": "node scripts/ci/install-local-hooks.mjs",
     "gate:pre-pr": "PUBLIC_SANITIZE_REQUIRE_LOCAL_BLOCKLIST=1 node scripts/ci/run-local-gate.mjs",

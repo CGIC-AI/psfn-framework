@@ -12,6 +12,7 @@ import {
   OBSERVER_EVAL_SIDECAR_NON_AUTHORITATIVE_NOTICE,
 } from '../../../core/eval/observer-sidecar/persistence.js';
 import type { TurnID } from '../../../shared/contracts/runtime.js';
+import { createDefaultEmoSimProactivitySettings } from '../../../system/config/runtime-config-contracts.js';
 import {
   AdminObserverEvalSidecarDataService,
   ObserverEvalSidecarApiUnavailableError,
@@ -69,6 +70,8 @@ describe('AdminObserverEvalSidecarDataService', () => {
         authoritative: false,
       },
       proactivityMode: 'off',
+      proactivityProfile: null,
+      recentProactivityOutcomes: null,
       lastTransition: null,
     });
   });
@@ -112,6 +115,12 @@ describe('AdminObserverEvalSidecarDataService', () => {
       },
       configuredEnabled: true,
       proactivityMode: 'on',
+      proactivityProfile: createDefaultEmoSimProactivitySettings().thresholdProfile,
+      getRecentProactivityOutcomes: () => ({
+        sinceMs: NOW_MS - 1_000,
+        total: 4,
+        counts: { qualified: 1, delivered: 1, suppressed: 1, deferred: 0, deduped: 1, other: 0 },
+      }),
       getHealthSnapshot: () => runtime,
       getLastTransition: () => ({
         correlationId: `felt-impulse:would_message:${NOW_MS}`,
@@ -129,6 +138,17 @@ describe('AdminObserverEvalSidecarDataService', () => {
       binding: { companionId, sidecarId: 'emosim-vesper' },
       runtime: { sidecarId: 'emosim-vesper' },
       lastTransition: { stage: 'final_disposition', outcome: 'delivered' },
+      proactivityProfile: {
+        profileId: 'emosim-would-message-v1',
+        revision: 'public-bootstrap.v1',
+        rawContentRedacted: true,
+        deliveryAuthority: false,
+        applyBehavior: 'restart_required',
+      },
+      recentProactivityOutcomes: {
+        total: 4,
+        rates: { delivered: 0.25, suppressed: 0.25, deferred: 0, deduped: 0.25 },
+      },
     });
 
     const wrongOwner = new AdminObserverEvalSidecarDataService({

@@ -14,6 +14,7 @@ import { createDefaultGroupMemorySettings } from '../../../system/config/group-m
 import { createDefaultMemoryRetrievalPolicy } from '../../../system/config/memory-retrieval-policy.js';
 import { loadSettings } from '../../../system/settings.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
+import { createDefaultEmoSimProactivitySettings } from '../../../system/config/runtime-config-contracts.js';
 import { makeTestFatiguePolicyConfig } from '../../../test-support/charge-policy.js';
 import {
   AdminSettingsDataService,
@@ -879,6 +880,37 @@ describe('AdminSettingsDataService', () => {
     const persistedSettings = loadSettings(root);
     expect(persistedSettings.extractionThresholdPct).toBe(34);
     expect(persistedSettings.compactionThresholdPct).toBe(76);
+  });
+
+  it('persists an EmoSim profile only in the selected companion overlay', async () => {
+    const root = makeTempDir();
+    const config = buildConfig(root);
+    const service = buildService(config);
+    const baselineGlobal = loadSettings(root).emosimProactivity;
+    const profile = createDefaultEmoSimProactivitySettings().thresholdProfile;
+
+    const result = await service.updateSettings(JSON.stringify({
+      emosimProactivity: {
+        mode: 'shadow',
+        thresholdProfile: {
+          ...profile,
+          profileId: 'companion-profile-v2',
+          revision: 'companion-profile-v2.1',
+          reviewNote: 'Sanitized operator-reviewed companion calibration.',
+        },
+      },
+    }));
+
+    expect(result.ok).toBe(true);
+    expect(loadSettings(root).emosimProactivity).toEqual(baselineGlobal);
+    expect(loadCompanionSettingsOverlay(root)?.emosimProactivity).toMatchObject({
+      mode: 'shadow',
+      thresholdProfile: { profileId: 'companion-profile-v2' },
+    });
+    expect(config.emosimProactivity).toMatchObject({
+      mode: 'shadow',
+      thresholdProfile: { profileId: 'companion-profile-v2' },
+    });
   });
 
   it('rejects removed runtime settings instead of silently persisting dead knobs', async () => {

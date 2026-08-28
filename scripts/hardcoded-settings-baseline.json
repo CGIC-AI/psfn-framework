@@ -177,21 +177,21 @@
     },
     {
       "file": "src/app/e2e/icp-certification/agent-process.ts",
-      "name": "main.candidate.limit@L865",
+      "name": "main.candidate.limit@L1010",
       "value": "50",
       "form": "object-member",
       "note": "Deterministic test/certification fixture main.candidate.limit; code-owned only for harness behavior and not used as an unowned production setting."
     },
     {
       "file": "src/app/e2e/icp-certification/agent-process.ts",
-      "name": "main.candidate.limit@L901",
+      "name": "main.candidate.limit@L1046",
       "value": "50",
       "form": "object-member",
       "note": "Deterministic test/certification fixture main.candidate.limit; code-owned only for harness behavior and not used as an unowned production setting."
     },
     {
       "file": "src/app/e2e/icp-certification/agent-process.ts",
-      "name": "main.candidate.limit@L941",
+      "name": "main.candidate.limit@L1086",
       "value": "50",
       "form": "object-member",
       "note": "Deterministic test/certification fixture main.candidate.limit; code-owned only for harness behavior and not used as an unowned production setting."
@@ -205,28 +205,28 @@
     },
     {
       "file": "src/app/e2e/icp-certification/agent-process.ts",
-      "name": "main.candidateIdsBefore.limit@L561",
+      "name": "main.candidateIdsBefore.limit@L612",
       "value": "50",
       "form": "object-member",
       "note": "Deterministic test/certification fixture main.candidateIdsBefore.limit; code-owned only for harness behavior and not used as an unowned production setting."
     },
     {
       "file": "src/app/e2e/icp-certification/agent-process.ts",
-      "name": "main.candidateIdsBefore.limit@L850",
+      "name": "main.candidateIdsBefore.limit@L995",
       "value": "50",
       "form": "object-member",
       "note": "Deterministic test/certification fixture main.candidateIdsBefore.limit; code-owned only for harness behavior and not used as an unowned production setting."
     },
     {
       "file": "src/app/e2e/icp-certification/agent-process.ts",
-      "name": "main.candidateIdsBefore.limit@L882",
+      "name": "main.candidateIdsBefore.limit@L1027",
       "value": "50",
       "form": "object-member",
       "note": "Deterministic test/certification fixture main.candidateIdsBefore.limit; code-owned only for harness behavior and not used as an unowned production setting."
     },
     {
       "file": "src/app/e2e/icp-certification/agent-process.ts",
-      "name": "main.candidateIdsBefore.limit@L922",
+      "name": "main.candidateIdsBefore.limit@L1067",
       "value": "50",
       "form": "object-member",
       "note": "Deterministic test/certification fixture main.candidateIdsBefore.limit; code-owned only for harness behavior and not used as an unowned production setting."
@@ -289,24 +289,24 @@
     },
     {
       "file": "src/app/e2e/icp-certification/fixture.ts",
-      "name": "configureCompanionOwnerFiles.fatigue.relationshipBudgets.trusted_collaborator_mi.hardCap@L267",
+      "name": "configureCompanionOwnerFiles.fatigue.relationshipBudgets.trusted_collaborator_mi.hardCap@L273",
       "value": "1",
       "form": "object-member",
-      "note": "Deterministic test/certification fixture configureCompanionOwnerFiles.fatigue.relationshipBudgets.trusted_collaborator_mi.hardCap@L267; code-owned only for harness behavior and not used as an unowned production setting."
+      "note": "Deterministic test/certification fixture configureCompanionOwnerFiles.fatigue.relationshipBudgets.trusted_collaborator_mi.hardCap@L273; code-owned only for harness behavior and not used as an unowned production setting."
     },
     {
       "file": "src/app/e2e/icp-certification/fixture.ts",
-      "name": "configureCompanionOwnerFiles.fatigue.relationshipBudgets.trusted_collaborator_mi.hardCap@L269",
+      "name": "configureCompanionOwnerFiles.fatigue.relationshipBudgets.trusted_collaborator_mi.hardCap@L275",
       "value": "16",
       "form": "object-member",
-      "note": "Deterministic test/certification fixture configureCompanionOwnerFiles.fatigue.relationshipBudgets.trusted_collaborator_mi.hardCap@L269; code-owned only for harness behavior and not used as an unowned production setting."
+      "note": "Deterministic test/certification fixture configureCompanionOwnerFiles.fatigue.relationshipBudgets.trusted_collaborator_mi.hardCap@L275; code-owned only for harness behavior and not used as an unowned production setting."
     },
     {
       "file": "src/app/e2e/icp-certification/fixture.ts",
-      "name": "configureCompanionOwnerFiles.fatigue.relationshipBudgets.trusted_collaborator_mi.hardCap@L270",
+      "name": "configureCompanionOwnerFiles.fatigue.relationshipBudgets.trusted_collaborator_mi.hardCap@L276",
       "value": "3",
       "form": "object-member",
-      "note": "Deterministic test/certification fixture configureCompanionOwnerFiles.fatigue.relationshipBudgets.trusted_collaborator_mi.hardCap@L270; code-owned only for harness behavior and not used as an unowned production setting."
+      "note": "Deterministic test/certification fixture configureCompanionOwnerFiles.fatigue.relationshipBudgets.trusted_collaborator_mi.hardCap@L276; code-owned only for harness behavior and not used as an unowned production setting."
     },
     {
       "file": "src/app/e2e/icp-certification/fixture.ts",
@@ -359,17 +359,17 @@
     },
     {
       "file": "src/app/e2e/icp-certification/fixture.ts",
-      "name": "createIcpCertificationFixture.hardLimitUsd@L476",
+      "name": "createIcpCertificationFixture.hardLimitUsd@L467",
       "value": "0.0002",
       "form": "object-member",
-      "note": "Deterministic test/certification fixture createIcpCertificationFixture.hardLimitUsd@L476; code-owned only for harness behavior and not used as an unowned production setting."
+      "note": "Deterministic test/certification fixture createIcpCertificationFixture.hardLimitUsd@L467; code-owned only for harness behavior and not used as an unowned production setting."
     },
     {
       "file": "src/app/e2e/icp-certification/fixture.ts",
-      "name": "createIcpCertificationFixture.hardLimitUsd@L490",
+      "name": "createIcpCertificationFixture.hardLimitUsd@L481",
       "value": "0.0003",
       "form": "object-member",
-      "note": "Deterministic test/certification fixture createIcpCertificationFixture.hardLimitUsd@L490; code-owned only for harness behavior and not used as an unowned production setting."
+      "note": "Deterministic test/certification fixture createIcpCertificationFixture.hardLimitUsd@L481; code-owned only for harness behavior and not used as an unowned production setting."
     },
     {
       "file": "src/app/e2e/icp-certification/fixture.ts",
@@ -387,17 +387,17 @@
     },
     {
       "file": "src/app/e2e/icp-certification/fixture.ts",
-      "name": "createIcpCertificationFixture.warningThresholdUsd@L475",
+      "name": "createIcpCertificationFixture.warningThresholdUsd@L466",
       "value": "0.00015",
       "form": "object-member",
-      "note": "Deterministic test/certification fixture createIcpCertificationFixture.warningThresholdUsd@L475; code-owned only for harness behavior and not used as an unowned production setting."
+      "note": "Deterministic test/certification fixture createIcpCertificationFixture.warningThresholdUsd@L466; code-owned only for harness behavior and not used as an unowned production setting."
     },
     {
       "file": "src/app/e2e/icp-certification/fixture.ts",
-      "name": "createIcpCertificationFixture.warningThresholdUsd@L489",
+      "name": "createIcpCertificationFixture.warningThresholdUsd@L480",
       "value": "0.0001",
       "form": "object-member",
-      "note": "Deterministic test/certification fixture createIcpCertificationFixture.warningThresholdUsd@L489; code-owned only for harness behavior and not used as an unowned production setting."
+      "note": "Deterministic test/certification fixture createIcpCertificationFixture.warningThresholdUsd@L480; code-owned only for harness behavior and not used as an unowned production setting."
     },
     {
       "file": "src/app/e2e/icp-certification/process-harness.ts",

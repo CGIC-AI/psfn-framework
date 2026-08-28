@@ -90,3 +90,25 @@ export async function companionRecordDyadContinuationOutcome(
     ...(companionId ? { companionId } : {}),
   }) as IcpDyadDelivery;
 }
+
+export async function companionEndIcpEpisodeActivity(
+  transportRuntime: GatewayClientTransportRuntime,
+  companionId: string | undefined,
+  params: Omit<GatewayMethods['companion.episode.end_activity'][0], 'companionId'>,
+): Promise<GatewayMethods['companion.episode.end_activity'][1]> {
+  return await transportRuntime.request('companion.episode.end_activity', {
+    ...params,
+    ...(companionId ? { companionId } : {}),
+  }) as GatewayMethods['companion.episode.end_activity'][1];
+}
+
+export async function companionInitiationPreflight(
+  transportRuntime: GatewayClientTransportRuntime,
+  companionId: string | undefined,
+  params: Omit<GatewayMethods['companion.initiation.preflight'][0], 'companionId'>,
+): Promise<GatewayMethods['companion.initiation.preflight'][1]> {
+  return await transportRuntime.request('companion.initiation.preflight', {
+    ...params,
+    ...(companionId ? { companionId } : {}),
+  }) as GatewayMethods['companion.initiation.preflight'][1];
+}

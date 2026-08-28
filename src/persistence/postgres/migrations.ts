@@ -3379,10 +3379,13 @@ export const POSTGRES_SHARED_MIGRATIONS: readonly string[] = [
     IF EXISTS (
       SELECT 1
       FROM icp_conversation_episodes
-      WHERE cardinality(participant_companion_ids) <> 2
-        OR participant_companion_ids[1] >= participant_companion_ids[2]
-        OR channel_id <> 'companion-dm:' || participant_companion_ids[1]::text
-          || ':' || participant_companion_ids[2]::text
+      WHERE channel_id ~ '^companion-dm:[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}:[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+        AND (
+          cardinality(participant_companion_ids) <> 2
+          OR participant_companion_ids[1] >= participant_companion_ids[2]
+          OR channel_id <> 'companion-dm:' || participant_companion_ids[1]::text
+            || ':' || participant_companion_ids[2]::text
+        )
     ) THEN
       RAISE EXCEPTION 'ICP dyad backfill rejected ambiguous pair/channel ownership';
     END IF;
@@ -3390,6 +3393,10 @@ export const POSTGRES_SHARED_MIGRATIONS: readonly string[] = [
     IF EXISTS (
       SELECT 1
       FROM icp_conversation_episodes
+      WHERE channel_id = 'companion-dm:' || participant_companion_ids[1]::text
+        || ':' || participant_companion_ids[2]::text
+        AND cardinality(participant_companion_ids) = 2
+        AND participant_companion_ids[1] < participant_companion_ids[2]
       GROUP BY participant_companion_ids[1], participant_companion_ids[2]
       HAVING count(DISTINCT channel_id) <> 1
     ) THEN
@@ -3439,6 +3446,10 @@ export const POSTGRES_SHARED_MIGRATIONS: readonly string[] = [
     array_agg(conversation_id ORDER BY conversation_id),
     1
   FROM icp_conversation_episodes
+  WHERE cardinality(participant_companion_ids) = 2
+    AND participant_companion_ids[1] < participant_companion_ids[2]
+    AND channel_id = 'companion-dm:' || participant_companion_ids[1]::text
+      || ':' || participant_companion_ids[2]::text
   GROUP BY channel_id, participant_companion_ids[1], participant_companion_ids[2]
   ON CONFLICT (first_companion_id, second_companion_id) DO NOTHING;
   `,

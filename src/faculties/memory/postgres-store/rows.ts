@@ -7,6 +7,7 @@ import {
   normalizeMemoryProvenance,
   normalizeMemoryScopeRef,
   normalizeMemorySourceType,
+  resolvePersistedMemoryType,
   type MemoryEmotionalTexture,
   type PurrMemory,
 } from '../types.js';
@@ -287,8 +288,10 @@ export function toMemoryRow(memory: PurrMemory, embedding?: Float32Array): Memor
   };
 }
 
-export function fromMemoryRow(row: MemoryRow): PurrMemory {
-  const type = assertMemoryType(row.type, 'PostgreSQL memory row type');
+export function tryFromMemoryRow(row: MemoryRow): PurrMemory | null {
+  const resolution = resolvePersistedMemoryType(row.type);
+  if (resolution.disposition === 'quarantine') return null;
+  const type = resolution.type;
   const scopeRef = row.scope_ref_kind && row.scope_ref_id
     ? normalizeMemoryScopeRef({
       kind: row.scope_ref_kind,
@@ -335,4 +338,12 @@ export function fromMemoryRow(row: MemoryRow): PurrMemory {
     ...(row.deleted_by ? { deletedBy: row.deleted_by } : {}),
     ...(row.delete_reason ? { deleteReason: row.delete_reason } : {}),
   };
+}
+
+export function fromMemoryRow(row: MemoryRow): PurrMemory {
+  const memory = tryFromMemoryRow(row);
+  if (!memory) {
+    throw new Error(`Invalid PostgreSQL memory row type: ${String(row.type)}`);
+  }
+  return memory;
 }

@@ -473,6 +473,43 @@ describe('SalienceDecay', () => {
     expect(JSON.stringify(reports)).not.toContain('Private content');
   });
 
+  it('decays legacy fact rows as semantic instead of aborting the batch', async () => {
+    const now = 1_800_000_000_000;
+    const oneHalfLifeAgo = now - 120 * 24 * 60 * 60_000;
+    const valid = makeMemory({
+      id: 'valid-semantic-row',
+      type: 'semantic',
+      salience: 1,
+      extractedAt: oneHalfLifeAgo,
+      lastAccessed: oneHalfLifeAgo,
+    });
+    const legacyFact = makeMemory({
+      id: 'legacy-fact-row',
+      type: fromAny('fact'),
+      salience: 1,
+      extractedAt: oneHalfLifeAgo,
+      lastAccessed: oneHalfLifeAgo,
+    });
+    let revision = 1;
+    const bulkUpdateSalience = vi.fn(async () => {
+      revision += 1;
+      return 2;
+    });
+    const isolatedDecay = new SalienceDecay({
+      getSalienceMaintenanceRevision: () => revision,
+      listActiveMemories: vi.fn(async () => [valid, legacyFact]),
+      bulkUpdateSalience,
+    } as unknown as MemoryStorePort);
+    vi.spyOn(Date, 'now').mockReturnValue(now);
+
+    await isolatedDecay.run();
+
+    expect(bulkUpdateSalience).toHaveBeenCalledWith([
+      expect.objectContaining({ id: 'valid-semantic-row', salience: 0.5 }),
+      expect.objectContaining({ id: 'legacy-fact-row', salience: 0.5 }),
+    ]);
+  });
+
   it('uses provided maintenance interval when starting timer', () => {
     vi.useFakeTimers();
     const setIntervalSpy = vi.spyOn(globalThis, 'setInterval');

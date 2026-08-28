@@ -13,7 +13,7 @@ import type { MemoryDeleteVersion } from '../memory-store-port.js';
 import type { PurrMemory } from '../types.js';
 import {
   decodeEmbedding,
-  fromMemoryRow,
+  tryFromMemoryRow,
   parsePgNumber,
   type MemoryRow,
 } from './rows.js';
@@ -330,7 +330,10 @@ export class PostgresMemoryDeletionProposalStore implements MemoryDeletionPropos
         throw new Error(`Memory deletion proposal ${proposalId} is stale because its target changed after proposal`);
       }
 
-      const memory = fromMemoryRow(memoryRow);
+      const memory = tryFromMemoryRow(memoryRow);
+      if (!memory) {
+        throw new Error(`Memory deletion proposal target is no longer active: ${proposal.memoryId}`);
+      }
       const embedding = decodeEmbedding(memoryRow.embedding);
       if (embedding) this.deps.validateEmbedding(embedding, 'approved proposal delete');
       const deleteId = randomUUID();

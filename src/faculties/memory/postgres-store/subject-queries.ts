@@ -10,7 +10,7 @@ import type {
 import {
   decodeStringArray,
   encodeEmbeddingLiteral,
-  fromMemoryRow,
+  tryFromMemoryRow,
   parsePgNumber,
   validateEmbeddingDimensions,
 } from './rows.js';
@@ -286,10 +286,13 @@ export async function queryAuthorizedMemorySubjects(
   `, pageValues);
   const total = Number(rows.rows.at(0)?.authorized_total ?? 0);
   return {
-    memories: rows.rows.filter(hasAuthorizedPage).map(row => ({
-      ...fromMemoryRow(row),
+    memories: rows.rows.filter(hasAuthorizedPage).flatMap(row => {
+      const memory = tryFromMemoryRow(row);
+      return memory ? [{
+      ...memory,
       similarity: parsePgNumber(row.similarity, 'similarity'),
-    })),
+    }] : [];
+    }),
     total,
   };
 }
@@ -346,10 +349,13 @@ async function queryAuthorizedEmbeddingAnn(
   );
   const total = Number(rows.at(0)?.authorized_total ?? 0);
   return {
-    memories: rows.filter(hasAuthorizedPage).map(row => ({
-      ...fromMemoryRow(row),
+    memories: rows.filter(hasAuthorizedPage).flatMap(row => {
+      const memory = tryFromMemoryRow(row);
+      return memory ? [{
+      ...memory,
       similarity: parsePgNumber(row.similarity, 'similarity'),
-    })),
+    }] : [];
+    }),
     total,
   };
 }

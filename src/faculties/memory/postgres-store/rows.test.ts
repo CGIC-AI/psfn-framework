@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { fromAny } from '@total-typescript/shoehorn';
-import { toMemoryRow, fromMemoryRow } from './rows.js';
+import { toMemoryRow, fromMemoryRow, tryFromMemoryRow } from './rows.js';
 import type { PurrMemory } from '../types.js';
 import { evaluateMemoryPolicy } from '../../../system/trust/policy.js';
 
@@ -28,9 +28,14 @@ describe('memory row emotional_texture round-trip (031.11.1)', () => {
     expect(() => toMemoryRow(baseMemory({ type: fromAny('fact') })))
       .toThrow('Invalid memory.type');
 
+    const mapped = fromMemoryRow(fromAny({ ...toMemoryRow(baseMemory()), type: 'fact' }));
+    expect(mapped.type).toBe('semantic');
+    expect(mapped.text).toBe('a memory');
+
     const row = { ...toMemoryRow(baseMemory()), type: 'profile_fact' };
     expect(() => fromMemoryRow(fromAny(row)))
       .toThrow('Invalid PostgreSQL memory row type');
+    expect(tryFromMemoryRow(fromAny(row))).toBeNull();
   });
 
   it('persists and restores the multi-signal emotional texture', () => {

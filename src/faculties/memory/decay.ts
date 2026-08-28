@@ -39,21 +39,28 @@ interface TrackedDecayAnchor {
   salienceFloor: number;
 }
 
+function asDecayMemory(memory: PurrMemory): PurrMemory {
+  const resolution = resolvePersistedMemoryType(memory.type);
+  if (resolution.disposition === 'quarantine') return memory;
+  return { ...memory, type: resolution.type };
+}
+
 export function calculateEffectiveMemorySalience(
   memory: PurrMemory,
   now: number = Date.now(),
   policyInput?: MemoryRetrievalPolicy,
 ): number {
-  assertMemoryType(memory.type);
-  const decayAnchorAt = Number.isFinite(memory.salienceDecayAnchorAt)
-    ? memory.salienceDecayAnchorAt!
-    : memory.lastAccessed;
+  const typed = asDecayMemory(memory);
+  assertMemoryType(typed.type);
+  const decayAnchorAt = Number.isFinite(typed.salienceDecayAnchorAt)
+    ? typed.salienceDecayAnchorAt!
+    : typed.lastAccessed;
   if (!Number.isFinite(decayAnchorAt) || !Number.isFinite(now)) {
-    return memory.salience;
+    return typed.salience;
   }
   const policy = resolveMemoryRetrievalPolicy(policyInput);
-  const profile = getMemoryDecayProfile(memory, policy);
-  const halflife = policy.typePolicies[memory.type].halfLifeDays
+  const profile = getMemoryDecayProfile(typed, policy);
+  const halflife = policy.typePolicies[typed.type].halfLifeDays
     * DAY_MS
     * profile.halflifeMultiplier;
   if (!Number.isFinite(halflife) || halflife <= 0) return memory.salience;
@@ -161,7 +168,7 @@ export class SalienceDecay {
 
   private acceptsMemoryType(memory: PurrMemory): boolean {
     const resolution = resolvePersistedMemoryType(memory.type);
-    if (resolution.disposition === 'valid') return true;
+    if (resolution.disposition !== 'quarantine') return true;
     const report: SalienceDecayInvalidMemoryTypeReport = {
       memoryId: memory.id,
       memoryType: resolution.originalType,
@@ -223,8 +230,9 @@ export class SalienceDecay {
     memory: PurrMemory,
     policy: MemoryRetrievalPolicy,
   ): TrackedDecayAnchor | null {
-    const profile = getMemoryDecayProfile(memory, policy);
-    const halflife = policy.typePolicies[memory.type].halfLifeDays
+    const typed = asDecayMemory(memory);
+    const profile = getMemoryDecayProfile(typed, policy);
+    const halflife = policy.typePolicies[typed.type].halfLifeDays
       * DAY_MS
       * profile.halflifeMultiplier;
     if (!halflife || halflife <= 0) return null;

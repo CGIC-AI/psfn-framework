@@ -11,6 +11,7 @@ import {
   type IcpAutonomyReasonCode,
   type IcpAvailabilityLease,
   type IcpAvailabilityState,
+  type IcpConversationEpisode,
   type IcpInitiationPermit,
   type IcpConversationCorrelation,
 } from '../../shared/contracts/icp-autonomy.js';
@@ -362,8 +363,11 @@ export class GatewayIcpAutonomyBroker {
     }
 
     const episode = await this.options.store.getEpisode(permit.conversationId);
+    const recoverableEpisodeStatus = permit.status === 'consumed'
+      ? episode?.status === 'invited' || episode?.status === 'active' || episode?.status === 'ended'
+      : episode?.status === 'invited';
     const episodeMatches = episode !== null
-      && episode.status === 'invited'
+      && recoverableEpisodeStatus
       && episode.channelId === permit.channelId
       && episode.initiatedByCompanionId === senderCompanionId
       && episode.participantCompanionIds.length === 2
@@ -595,6 +599,7 @@ export class GatewayIcpAutonomyBroker {
       channelId: string;
       rootInitiationId: string;
       peerContactId: string;
+      terminalReasonCode?: IcpAutonomyReasonCode;
     },
   ) {
     this.requireDistinctFleetPair(senderCompanionId, input.recipientCompanionId);
@@ -683,6 +688,14 @@ export class GatewayIcpAutonomyBroker {
       throw new Error('ICP authorized handoff result is missing after eligible decision');
     }
     const result = guarded.result;
+    let committedEpisode = episode;
+    if (result.outcome === 'consumed' || result.outcome === 'replayed') {
+      committedEpisode = await this.recordEpisodeTurnCommitted(
+        senderCompanionId,
+        input.conversationId,
+        input.terminalReasonCode,
+      );
+    }
     await this.options.eventBus.emit('icp.permit.lifecycle', {
       candidateId: result.permit?.candidateId ?? '[unknown]',
       conversationId: input.conversationId,
@@ -701,7 +714,90 @@ export class GatewayIcpAutonomyBroker {
         channelId: input.channelId,
       });
     }
-    return { ...result, episode };
+    return { ...result, episode: committedEpisode };
+  }
+
+  /**
+   * Production commit hook for the first ordinary target-channel turn. Permit
+   * consumption occurs from durable delivery finalization, never before the
+   * ordinary turn has committed its recoverable response.
+   */
+  async recordEpisodeTurnCommitted(
+    companionId: string,
+    conversationId: string,
+    terminalReasonCode?: IcpAutonomyReasonCode,
+  ): Promise<IcpConversationEpisode> {
+    let episode = await this.requireOwnedEpisode(companionId, conversationId);
+    if (episode.status === 'invited') {
+      try {
+        episode = await this.options.store.transitionEpisode({
+          conversationId,
+          expectedStatus: 'invited',
+          expectedRevision: episode.revision,
+          expectedLastActivityAtMs: episode.lastActivityAtMs,
+          status: 'active',
+          lastActivityAtMs: Math.max(episode.lastActivityAtMs, this.now()),
+        });
+      } catch (error) {
+        const recovered = await this.requireOwnedEpisode(companionId, conversationId);
+        if (recovered.status === 'invited') throw error;
+        episode = recovered;
+      }
+    }
+    if (terminalReasonCode !== undefined) {
+      episode = await this.endEpisodeActivity(companionId, conversationId, terminalReasonCode);
+    }
+    return episode;
+  }
+
+  /** End a bounded activity segment without changing durable dyad authority. */
+  async endEpisodeActivity(
+    companionId: string,
+    conversationId: string,
+    reasonCode: IcpAutonomyReasonCode,
+  ): Promise<IcpConversationEpisode> {
+    const allowedReasons: readonly IcpAutonomyReasonCode[] = [
+      'fatigue_exhausted',
+      'charge_pressure',
+      'cost_hard_stop',
+      'inactivity_timeout',
+      'conversation_ended',
+    ];
+    if (!allowedReasons.includes(reasonCode)) {
+      throw new Error(`ICP activity cannot end for relationship/policy reason ${reasonCode}`);
+    }
+    let episode = await this.requireOwnedEpisode(companionId, conversationId);
+    if (episode.status === 'ended') return episode;
+    if (episode.status !== 'invited' && episode.status !== 'active') {
+      throw new Error(`ICP activity cannot end from ${episode.status}`);
+    }
+    try {
+      return await this.options.store.transitionEpisode({
+        conversationId,
+        expectedStatus: episode.status,
+        expectedRevision: episode.revision,
+        expectedLastActivityAtMs: episode.lastActivityAtMs,
+        status: 'ended',
+        lastActivityAtMs: Math.max(episode.lastActivityAtMs, this.now()),
+        closeReasonCode: reasonCode,
+      });
+    } catch (error) {
+      episode = await this.requireOwnedEpisode(companionId, conversationId);
+      if (episode.status !== 'ended') throw error;
+      return episode;
+    }
+  }
+
+  private async requireOwnedEpisode(
+    companionId: string,
+    conversationId: string,
+  ): Promise<IcpConversationEpisode> {
+    this.requireFleetCompanion(companionId, 'companion');
+    const episode = await this.options.store.getEpisode(conversationId);
+    if (!episode || !episode.participantCompanionIds.includes(companionId)) {
+      throw new Error('ICP conversation episode is not owned by the authenticated companion');
+    }
+    return episode;
   }
 
   /** Rebind any charged model work to gateway-owned episode identity and participants. */

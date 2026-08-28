@@ -3,10 +3,12 @@ import { describe, expect, it } from 'vitest';
 import {
   assertIcpConversationStatusTransition,
   assertIcpConversationActivityTransition,
+  assertIcpDyadStatusTransition,
   deriveChildIcpConversationCostCorrelation,
   parseIcpAvailabilityLease,
   parseIcpConversationCorrelation,
   parseIcpConversationEpisode,
+  parseIcpDyad,
   parseIcpInitiationPermit,
   redactIcpInitiationPermit,
 } from './icp-autonomy.js';
@@ -77,6 +79,28 @@ describe('ICP autonomy shared contracts', () => {
       ...episode,
       provenanceRef: 'icp-prov:private reason text',
     })).toThrow(/opaque provenance handle/i);
+  });
+
+  it('separates durable dyad authority from episode provenance', () => {
+    const dyad = parseIcpDyad({
+      dyadId: CONVERSATION_ID,
+      channelId: `companion-dm:${COMPANION_A}:${COMPANION_B}`,
+      participantCompanionIds: [COMPANION_A, COMPANION_B],
+      status: 'open',
+      createdAtMs: 1_000,
+      provenanceConversationIds: [CONVERSATION_ID],
+      revision: 1,
+    });
+    expect(dyad).toMatchObject({ status: 'open', provenanceConversationIds: [CONVERSATION_ID] });
+    expect(() => parseIcpDyad({ ...dyad, channelId: 'companion-room:kitchen' }))
+      .toThrow('must be a companion DM');
+    expect(() => parseIcpDyad({
+      ...dyad,
+      status: 'revoked',
+      closedAtMs: 2_000,
+    })).toThrow('closure facts');
+    expect(() => assertIcpDyadStatusTransition('open', 'revoked')).not.toThrow();
+    expect(() => assertIcpDyadStatusTransition('revoked', 'open')).toThrow('Invalid ICP dyad');
   });
 
   it('rejects invalid episode lifecycle transitions', () => {

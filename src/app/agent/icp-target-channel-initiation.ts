@@ -82,6 +82,8 @@ export interface IcpTargetChannelGatewayPort {
     channelId: string;
     rootInitiationId: string;
     peerContactId: string;
+    terminalReasonCode?: 'fatigue_exhausted' | 'charge_pressure' | 'cost_hard_stop'
+      | 'inactivity_timeout' | 'conversation_ended';
   }): Promise<{ outcome: 'consumed' | 'replayed' | string }>;
 }
 
@@ -285,6 +287,11 @@ export function createIcpTargetChannelInitiator(input: {
               channelId: permit.channelId,
               rootInitiationId: request.rootInitiationId,
               peerContactId,
+              terminalReasonCode: correlation.fatigueReasonCode === 'fatigue_exhausted'
+                || correlation.fatigueReasonCode === 'charge_pressure'
+                || correlation.fatigueReasonCode === 'cost_hard_stop'
+                ? correlation.fatigueReasonCode
+                : 'conversation_ended',
             });
             if (consumption.outcome !== 'consumed' && consumption.outcome !== 'replayed') {
               throw new Error(`ICP suppression permit consumption rejected: ${consumption.outcome}`);

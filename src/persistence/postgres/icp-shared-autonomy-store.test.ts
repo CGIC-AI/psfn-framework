@@ -53,6 +53,18 @@ const EPISODE_ROW = {
   close_reason_code: null,
   revision: '1',
 };
+const DYAD_ROW = {
+  dyad_id: CONVERSATION_ID,
+  channel_id: CHANNEL,
+  first_companion_id: A,
+  second_companion_id: B,
+  status: 'open',
+  created_at_ms: '10000',
+  closed_at_ms: null,
+  close_reason_code: null,
+  provenance_conversation_ids: [CONVERSATION_ID],
+  revision: '1',
+};
 const PERMIT_ROW = {
   permit_id: PERMIT_ID,
   candidate_id: '11111111-1111-4111-8111-111111111111',
@@ -281,8 +293,11 @@ describe('PostgresIcpSharedAutonomyStore', () => {
   });
 
   it('creates a channel-bound episode with optimistic transitions', async () => {
-    mocks.queryOne.mockResolvedValue(EPISODE_ROW);
     const store = await connect();
+    mocks.clientQuery.mockReset();
+    mocks.clientQuery
+      .mockResolvedValueOnce({ rows: [DYAD_ROW], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [EPISODE_ROW], rowCount: 1 });
     await store.createEpisode({
       conversationId: CONVERSATION_ID,
       channelId: CHANNEL,
@@ -296,7 +311,7 @@ describe('PostgresIcpSharedAutonomyStore', () => {
       status: 'invited',
       revision: 1,
     });
-    expect((mocks.queryOne.mock.calls[0] as [unknown, string])[1])
+    expect((mocks.clientQuery.mock.calls[1] as [string])[0])
       .toContain('INSERT INTO icp_conversation_episodes');
 
     mocks.queryOne.mockClear();
@@ -319,6 +334,51 @@ describe('PostgresIcpSharedAutonomyStore', () => {
     expect(sql).toContain('last_activity_at_ms = $4');
     expect(sql).toContain('$6 >= last_activity_at_ms');
     expect(active.revision).toBe(2);
+  });
+
+  it('looks up one canonical dyad from either pair ordering after reconnect', async () => {
+    const firstStore = await connect();
+    mocks.queryOne.mockResolvedValue(DYAD_ROW);
+    await expect(firstStore.getDyadBetween(A, B)).resolves.toMatchObject({
+      dyadId: CONVERSATION_ID,
+      channelId: CHANNEL,
+      participantCompanionIds: [A, B],
+      status: 'open',
+    });
+    const [, firstSql, firstValues] = mocks.queryOne.mock.calls.at(-1) as [unknown, string, unknown[]];
+    expect(firstSql).toContain('first_companion_id = $1 AND second_companion_id = $2');
+    expect(firstValues).toEqual([A, B]);
+
+    const restartedStore = await connect();
+    mocks.queryOne.mockResolvedValue(DYAD_ROW);
+    await expect(restartedStore.getDyadBetween(B, A)).resolves.toMatchObject({
+      dyadId: CONVERSATION_ID,
+      channelId: CHANNEL,
+    });
+    const [, , reversedValues] = mocks.queryOne.mock.calls.at(-1) as [unknown, string, unknown[]];
+    expect(reversedValues).toEqual([A, B]);
+  });
+
+  it('closes relationship authority independently from bounded episodes', async () => {
+    const store = await connect();
+    mocks.queryOne.mockResolvedValue({
+      ...DYAD_ROW,
+      status: 'revoked',
+      closed_at_ms: '12000',
+      close_reason_code: 'peer_blocked',
+      revision: '2',
+    });
+    await expect(store.transitionDyad({
+      dyadId: CONVERSATION_ID,
+      expectedStatus: 'open',
+      expectedRevision: 1,
+      status: 'revoked',
+      closedAtMs: 12_000,
+      closeReasonCode: 'peer_blocked',
+    })).resolves.toMatchObject({ status: 'revoked', closeReasonCode: 'peer_blocked' });
+    const [, sql] = mocks.queryOne.mock.calls.at(-1) as [unknown, string];
+    expect(sql).toContain('UPDATE icp_dyads');
+    expect(sql).not.toContain('icp_conversation_episodes');
   });
 
   it('issues only a content-free permit bound to an existing episode', async () => {

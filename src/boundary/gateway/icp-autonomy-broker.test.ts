@@ -6,6 +6,7 @@ import type {
   IcpPermitConsumptionResult,
   IcpSharedAutonomyStorePort,
   IcpConversationTransitionInput,
+  IcpDyadTransitionInput,
 } from '../../core/icp/autonomy-store-ports.js';
 import {
   IcpAutonomyInvalidationConflictError,
@@ -17,6 +18,7 @@ import type {
   IcpAvailabilityLease,
   IcpConversationCorrelation,
   IcpConversationEpisode,
+  IcpDyad,
   IcpInitiationPermit,
 } from '../../shared/contracts/icp-autonomy.js';
 import { EventBus } from '../../shared/event-bus.js';
@@ -37,6 +39,8 @@ const CANDIDATE_ID = '11111111-1111-4111-8111-111111111111';
 const ROOT_ID = '22222222-2222-4222-8222-222222222222';
 const CONVERSATION_ID = '33333333-3333-4333-8333-333333333333';
 const PERMIT_ID = '44444444-4444-4444-8444-444444444444';
+const SECOND_CONVERSATION_ID = '55555555-5555-4555-8555-555555555555';
+const SECOND_PERMIT_ID = '66666666-6666-4666-8666-666666666666';
 const CHANNEL = `companion-dm:${A}:${B}`;
 const PROVENANCE_HANDLE = `icp-prov:${CANDIDATE_ID}`;
 
@@ -73,6 +77,7 @@ function candidate(overrides: Partial<IcpInitiationCandidateSharedMetadata> = {}
 class MemoryStore implements IcpSharedAutonomyStorePort {
   availability = new Map<string, IcpAvailabilityLease>();
   episodes = new Map<string, IcpConversationEpisode>();
+  dyads = new Map<string, IcpDyad>();
   permits = new Map<string, IcpInitiationPermit>();
   invalidationGenerations = new Map<string, number>();
   invalidationReasons = new Map<string, IcpAutonomyReasonCode>();
@@ -156,8 +161,64 @@ class MemoryStore implements IcpSharedAutonomyStorePort {
   }
 
   async createEpisode(episode: IcpConversationEpisode): Promise<IcpConversationEpisode> {
+    this.ensureDyad(episode);
     this.episodes.set(episode.conversationId, episode);
     return episode;
+  }
+
+  private ensureDyad(episode: IcpConversationEpisode): IcpDyad {
+    const pair = [...episode.participantCompanionIds].sort() as [string, string];
+    const key = pair.join(':');
+    const current = this.dyads.get(key);
+    if (current) {
+      if (current.channelId !== episode.channelId) throw new Error('ambiguous dyad channel');
+      if (current.status !== 'open') throw new Error(`dyad is ${current.status}`);
+      if (!current.provenanceConversationIds.includes(episode.conversationId)) {
+        const updated = {
+          ...current,
+          provenanceConversationIds: [...current.provenanceConversationIds, episode.conversationId].sort(),
+          revision: current.revision + 1,
+        };
+        this.dyads.set(key, updated);
+        return updated;
+      }
+      return current;
+    }
+    const created: IcpDyad = {
+      dyadId: episode.conversationId,
+      channelId: episode.channelId,
+      participantCompanionIds: pair,
+      status: 'open',
+      createdAtMs: episode.openedAtMs,
+      provenanceConversationIds: [episode.conversationId],
+      revision: 1,
+    };
+    this.dyads.set(key, created);
+    return created;
+  }
+
+  async getDyad(dyadId: string): Promise<IcpDyad | null> {
+    return [...this.dyads.values()].find(dyad => dyad.dyadId === dyadId) ?? null;
+  }
+
+  async getDyadBetween(firstCompanionId: string, secondCompanionId: string): Promise<IcpDyad | null> {
+    return this.dyads.get([firstCompanionId, secondCompanionId].sort().join(':')) ?? null;
+  }
+
+  async transitionDyad(input: IcpDyadTransitionInput): Promise<IcpDyad> {
+    const entry = [...this.dyads.entries()].find(([, dyad]) => dyad.dyadId === input.dyadId);
+    if (!entry || entry[1].status !== input.expectedStatus || entry[1].revision !== input.expectedRevision) {
+      throw new Error('dyad transition conflict');
+    }
+    const next: IcpDyad = {
+      ...entry[1],
+      status: input.status,
+      closedAtMs: input.closedAtMs,
+      closeReasonCode: input.closeReasonCode,
+      revision: entry[1].revision + 1,
+    };
+    this.dyads.set(entry[0], next);
+    return next;
   }
 
   async getEpisode(conversationId: string): Promise<IcpConversationEpisode | null> {
@@ -218,7 +279,7 @@ class MemoryStore implements IcpSharedAutonomyStorePort {
     episode: IcpConversationEpisode;
     permit: IcpInitiationPermit;
     expectedInvalidationFence: IcpAutonomyInvalidationFence;
-  }): Promise<{ episode: IcpConversationEpisode; permit: IcpInitiationPermit }> {
+  }): Promise<{ dyad: IcpDyad; episode: IcpConversationEpisode; permit: IcpInitiationPermit }> {
     await this.beforeCreateEpisodeAndIssuePermit?.();
     this.assertInvalidationFence(input.expectedInvalidationFence);
     const episode = await this.createEpisode(input.episode);
@@ -227,7 +288,12 @@ class MemoryStore implements IcpSharedAutonomyStorePort {
         permit: input.permit,
         expectedInvalidationFence: input.expectedInvalidationFence,
       });
-      return { episode, permit };
+      const dyad = await this.getDyadBetween(
+        input.permit.senderCompanionId,
+        input.permit.recipientCompanionId,
+      );
+      if (!dyad) throw new Error('missing dyad');
+      return { dyad, episode, permit };
     } catch (error) {
       this.episodes.delete(episode.conversationId);
       throw error;
@@ -385,7 +451,7 @@ function makeBroker(input: {
   const store = input.store ?? new MemoryStore();
   const eventBus = input.eventBus ?? new EventBus();
   const alarm = input.alarm ?? vi.fn();
-  const ids = [CONVERSATION_ID, PERMIT_ID];
+  const ids = [CONVERSATION_ID, PERMIT_ID, SECOND_CONVERSATION_ID, SECOND_PERMIT_ID];
   const broker = new GatewayIcpAutonomyBroker({
     store,
     fleetCompanionIds: new Set([A, B, C]),
@@ -1028,6 +1094,12 @@ describe('GatewayIcpAutonomyBroker', () => {
     expect(store.permits.get(PERMIT_ID)).toMatchObject({ status: 'issued', revision: 1 });
     await expect(broker.consumePermit(A, consumeInput)).resolves.toMatchObject({ outcome: 'consumed' });
     await expect(broker.consumePermit(A, consumeInput)).resolves.toMatchObject({ outcome: 'replayed' });
+    await expect(store.getEpisode(CONVERSATION_ID)).resolves.toMatchObject({ status: 'active' });
+    await expect(store.getDyadBetween(B, A)).resolves.toMatchObject({
+      dyadId: CONVERSATION_ID,
+      channelId: CHANNEL,
+      status: 'open',
+    });
     await expect(broker.consumePermit(A, { ...consumeInput, conversationId: ROOT_ID }))
       .resolves.toMatchObject({ outcome: 'mismatch' });
     expect(alarm).toHaveBeenCalledWith(
@@ -1035,6 +1107,53 @@ describe('GatewayIcpAutonomyBroker', () => {
       expect.any(String),
       expect.objectContaining({ senderCompanionId: A }),
     );
+  });
+
+  it('ends bounded activity without closing the dyad and reuses it for the next initiation', async () => {
+    const { broker, store } = makeBroker();
+    await makeAvailable(store);
+    const first = await broker.issuePermit(A, {
+      candidate: candidate(),
+      channelId: CHANNEL,
+      permitExpiresAtMs: NOW + 30_000,
+    });
+    expect(first.permit).toBeDefined();
+    await broker.consumePermit(A, {
+      permitId: PERMIT_ID,
+      conversationId: CONVERSATION_ID,
+      recipientCompanionId: B,
+      channelId: CHANNEL,
+      rootInitiationId: ROOT_ID,
+      peerContactId: 'contact-b',
+      terminalReasonCode: 'fatigue_exhausted',
+    });
+    await expect(store.getEpisode(CONVERSATION_ID)).resolves.toMatchObject({
+      status: 'ended',
+      closeReasonCode: 'fatigue_exhausted',
+    });
+    await expect(store.getDyadBetween(A, B)).resolves.toMatchObject({ status: 'open' });
+
+    await makeAvailable(store, A);
+    await expect(broker.issuePermit(B, {
+      candidate: candidate({
+        candidateId: C,
+        rootInitiationId: C,
+        localCompanionId: B,
+        peerCompanionId: A,
+        provenanceRef: `icp-prov:${C}`,
+      }),
+      channelId: CHANNEL,
+      permitExpiresAtMs: NOW + 30_000,
+    })).resolves.toMatchObject({
+      decision: { eligible: true },
+      permit: { conversationId: SECOND_CONVERSATION_ID },
+    });
+    await expect(store.getDyadBetween(B, A)).resolves.toMatchObject({
+      dyadId: CONVERSATION_ID,
+      status: 'open',
+      provenanceConversationIds: [CONVERSATION_ID, SECOND_CONVERSATION_ID],
+    });
+    expect(store.dyads).toHaveLength(1);
   });
 
   it('revokes an issued permit when the recipient reaches maximum fatigue before consumption', async () => {

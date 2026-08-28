@@ -486,7 +486,7 @@ export async function createHumanRelayIntentCapsule(input: {
   capsuleId: string;
   intent: string;
   sourceMessage: string;
-  source: Omit<HumanRelayIntentSource, 'sourceTurnDigest'> & { requesterKind: 'human' | 'system' | 'self_directed' };
+  source: Omit<HumanRelayIntentSource, 'sourceTurnDigest' | 'requesterKind'> & { requesterKind: 'human' | 'system' | 'self_directed' };
   target: HumanRelayIntentTarget;
   issuedAtMs: number;
   expiresAtMs: number;

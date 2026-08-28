@@ -321,6 +321,7 @@ function serverOptions(
       ],
       channelRouting: {},
       discordAccounts: {},
+      pluginAccounts: {},
       personalWorkspaceByCompanionId: {
         [CERTIFICATION_COMPANION_A]: join(root, 'companion-a'),
         [CERTIFICATION_COMPANION_B]: join(root, 'companion-b'),

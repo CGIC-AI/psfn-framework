@@ -687,6 +687,7 @@ export async function startIcpCertificationProcessHarness(input: {
     fleetCompanionIds: companionIds,
     channelRouting: { ...(input.channelRouting ?? {}) },
     discordAccounts: {},
+    pluginAccounts: {},
     personalWorkspaceByCompanionId: Object.fromEntries(
       input.fixture.companions.map(companion => [
         companion.companionId,

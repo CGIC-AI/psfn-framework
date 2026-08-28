@@ -154,9 +154,9 @@ describe('ICP autonomy Postgres persistence', () => {
           conversation_id, channel_id, participant_companion_ids, root_initiation_id,
           initiated_by_companion_id, initiation_source, provenance_ref, opened_at_ms,
           last_activity_at_ms, status, revision
-        ) VALUES ($1, 'companion-room:ambiguous', ARRAY[$2::uuid, $3::uuid], $4, $2,
+        ) VALUES ($1, $6, ARRAY[$2::uuid, $3::uuid], $4, $2,
           'foreground', $5, 1000, 1000, 'invited', 1)
-      `, [CONVERSATION_ID, A, B, ROOT_ID, PROVENANCE_HANDLE]);
+      `, [CONVERSATION_ID, A, B, ROOT_ID, PROVENANCE_HANDLE, CHANNEL_AC]);
       await expect(ambiguous.pool.query(POSTGRES_SHARED_MIGRATIONS[ambiguous.dyadMigrationIndex]!))
         .rejects.toThrow('ambiguous pair/channel ownership');
       await expect(ambiguous.pool.query("SELECT to_regclass('icp_dyads')::text AS relation"))

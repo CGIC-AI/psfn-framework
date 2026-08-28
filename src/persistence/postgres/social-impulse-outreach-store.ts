@@ -191,7 +191,7 @@ function mapRow(row: OutreachRow): SocialImpulseOutreachRecord {
   return {
     schemaVersion: 1,
     opportunityId: row.opportunity_id,
-    companionId: requireUuid(row.companion_id, 'companion_id'),
+    companionId: requireOutreachUuid(row.companion_id, 'companion_id'),
     impulseDedupeKey: row.impulse_dedupe_key,
     firstCrossingMs: requireSafeInteger(row.first_crossing_ms, 'socialImpulse.firstCrossingMs'),
     firedAtMs: requireSafeInteger(row.fired_at_ms, 'socialImpulse.firedAtMs'),
@@ -233,7 +233,7 @@ function mapDestination(row: OutreachRow): SocialImpulseOutreachDestination | nu
         kind: 'open_companion_dyad', destinationId: row.destination_id,
         contactId: row.contact_id, displayLabel: row.display_label,
         channelId: row.channel_id, channelType: 'companion',
-        dyadId: requireUuid(row.dyad_id, 'dyad_id'),
+        dyadId: requireOutreachUuid(row.dyad_id, 'dyad_id'),
       };
     case 'companion_first_contact':
       if (!row.contact_id || row.channel_id !== null || row.channel_type !== 'companion') {
@@ -285,7 +285,7 @@ function parseMode(value: string): 'off' | 'shadow' | 'on' {
   return value;
 }
 
-function requireUuid(value: string, field: string): string {
+function requireOutreachUuid(value: string, field: string): string {
   if (!isRfc4122Uuid(value)) throw new Error(`persisted social impulse ${field} is invalid`);
   return value;
 }

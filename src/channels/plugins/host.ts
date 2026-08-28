@@ -18,13 +18,16 @@ export interface ChannelPluginHostOptions {
 
 export interface ChannelPluginWiredInstance {
   id: string;
+  pluginId: string;
+  accountId?: string;
+  companionId?: string;
   instance: ChannelPluginInstance;
 }
 
 export interface ChannelPluginMessageWiring {
   requestAgentVoiceStream: (
     message: SubstrateMessage,
-    options?: { signal?: AbortSignal },
+    options?: { signal?: AbortSignal; channelAccountId?: string },
   ) => Promise<Pick<AgentResponse, 'content' | 'channelId' | 'attachments'> & {
     model: string;
     durationMs: number;
@@ -52,8 +55,29 @@ export class ChannelPluginHost {
       for (const plugin of options.registry.list()) {
         const section = options.sections[plugin.manifest.id];
         if (!section?.enabled) continue;
+        if (section.instances && section.instances.length > 0) {
+          for (const account of section.instances) {
+            const loadedAccount: ChannelPluginLoadedSection = {
+              id: plugin.manifest.id,
+              enabled: true,
+              config: account.config,
+              credentials: account.credentials,
+              ...(account.companionId ? { companionId: account.companionId } : {}),
+            };
+            created.push({
+              id: `${plugin.manifest.id}:${account.id}`,
+              pluginId: plugin.manifest.id,
+              accountId: account.id,
+              ...(account.companionId ? { companionId: account.companionId } : {}),
+              instance: await instantiatePlugin(plugin, loadedAccount, options),
+            });
+          }
+          continue;
+        }
         created.push({
           id: plugin.manifest.id,
+          pluginId: plugin.manifest.id,
+          ...(section.companionId ? { companionId: section.companionId } : {}),
           instance: await instantiatePlugin(plugin, section, options),
         });
       }
@@ -112,10 +136,10 @@ export class ChannelPluginHost {
   }
 
   wireMessages(wiring: ChannelPluginMessageWiring): void {
-    for (const { id, instance } of this.#instances) {
+    for (const { id, pluginId, accountId, instance } of this.#instances) {
       instance.onOperatorAlert?.(async alert => {
         await wiring.notifyOperator({
-          sender: { kind: 'system', provenance: `system.channels.${id}_failure` },
+          sender: { kind: 'system', provenance: `system.channels.${pluginId}_failure` },
           title: alert.title,
           message: alert.message,
           priority: 5,
@@ -127,8 +151,12 @@ export class ChannelPluginHost {
         throw new Error(`Channel plugin "${id}" is missing onMessage bootstrap hook`);
       }
       onMessage.call(instance.adapter, async (message: SubstrateMessage, options?: MessageHandlerOptions) => {
-        const result = options?.signal
-          ? await wiring.requestAgentVoiceStream(message, { signal: options.signal })
+        const requestOptions = {
+          ...(options?.signal ? { signal: options.signal } : {}),
+          ...(accountId ? { channelAccountId: accountId } : {}),
+        };
+        const result = Object.keys(requestOptions).length > 0
+          ? await wiring.requestAgentVoiceStream(message, requestOptions)
           : await wiring.requestAgentVoiceStream(message);
         return {
           content: result.content,

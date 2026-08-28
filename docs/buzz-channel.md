@@ -56,8 +56,9 @@ exception.
 ## Configuration
 
 The system-owned `channels.json` file holds routing, bootstrap allowlists, and
-an environment credential reference. The key itself remains in the gateway
-environment.
+one environment credential reference per companion account. Each account is a
+distinct Buzz identity routed to exactly one existing companion. The keys
+themselves remain in the gateway environment.
 
 ```json
 {
@@ -65,11 +66,29 @@ environment.
     "enabled": true,
     "relayUrl": "wss://relay.example.test",
     "relayPubkey": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-    "companionId": "11111111-1111-4111-8111-111111111111",
-    "privateKeyRef": {
-      "kind": "env",
-      "envName": "BUZZ_COMPANION_NSEC"
-    },
+    "accounts": [
+      {
+        "companionId": "11111111-1111-4111-8111-111111111111",
+        "privateKeyRef": {
+          "kind": "env",
+          "envName": "BUZZ_PERSEPHONE_NSEC"
+        }
+      },
+      {
+        "companionId": "22222222-2222-4222-8222-222222222222",
+        "privateKeyRef": {
+          "kind": "env",
+          "envName": "BUZZ_ARTEMIS_NSEC"
+        }
+      },
+      {
+        "companionId": "33333333-3333-4333-8333-333333333333",
+        "privateKeyRef": {
+          "kind": "env",
+          "envName": "BUZZ_V_UNIT_00_NSEC"
+        }
+      }
+    ],
     "channelIds": [
       "22222222-2222-4222-8222-222222222222"
     ],
@@ -99,6 +118,12 @@ environment.
 Remote relays require `wss://`; plain `ws://` is accepted only for loopback
 development relays. `relayPubkey` pins the exact signer authorized to assert
 room membership; relay labels or NIP-11 metadata are not runtime authority.
+Enabled Buzz requires at least one account. Companion IDs must be unique, and
+the top-level singular `companionId` and `privateKeyRef` fields reject rather
+than silently creating a shared identity. The channel plugin host constructs an
+isolated adapter and recovery scope for every account, then supplies the
+account's companion ID as trusted routing metadata; message content cannot
+select a different companion.
 Channel IDs must be lowercase RFC-4122 UUIDs, and author identities must be
 exact 64-character lowercase hex pubkeys. `channelIds` may be empty to accept
 all authenticated memberships. `machineAuthorPubkeys` must be an exact subset

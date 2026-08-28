@@ -20,6 +20,14 @@ export interface ChannelPluginParseResult<TConfig = unknown> {
   enabled: boolean;
   companionId?: CompanionId;
   credentials: readonly ChannelPluginCredentialNeed[];
+  instances?: readonly ChannelPluginParsedInstance<TConfig>[];
+}
+
+export interface ChannelPluginParsedInstance<TConfig = unknown> {
+  id: string;
+  config: TConfig;
+  companionId?: CompanionId;
+  credentials: readonly ChannelPluginCredentialNeed[];
 }
 
 export interface ChannelPluginLoadedSection<TConfig = unknown> extends ChannelPluginParseResult<TConfig> {

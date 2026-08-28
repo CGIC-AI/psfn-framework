@@ -562,6 +562,7 @@ export class GatewayServer {
       log.info('Multi-companion gateway routing enabled', {
         channelRouting: this.multiCompanion.channelRouting,
         discordAccounts: this.multiCompanion.discordAccounts,
+        pluginAccounts: this.multiCompanion.pluginAccounts,
       });
       if (options.intakeScreening || options.visionIntake) {
         throw new Error(
@@ -2306,12 +2307,12 @@ export class GatewayServer {
    * accountId, and only that account's companion receives it. A missing or
    * unknown accountId fails closed — never a broadcast, never another account.
    */
-  private resolveCompanionAgent(surface: GatewayChannelSurface, discordAccountId?: string): {
+  private resolveCompanionAgent(surface: GatewayChannelSurface, accountId?: string): {
     conn: GatewayRpcConnection;
     client: JSONRPCServerAndClient;
     companionId: CompanionId;
   } {
-    const companionId = this.resolveRoutedCompanionId(surface, discordAccountId);
+    const companionId = this.resolveRoutedCompanionId(surface, accountId);
     this.refreshConnectionHealth();
     return this.requireReadyCompanionRoute(surface, companionId);
   }
@@ -2354,10 +2355,10 @@ export class GatewayServer {
 
   private resolveRoutedCompanionId(
     surface: GatewayChannelSurface,
-    discordAccountId?: string,
+    accountId?: string,
   ): CompanionId {
     if (surface === 'discord' && this.discordAccountRoutingActive()) {
-      if (!discordAccountId) {
+      if (!accountId) {
         this.alarmCompanionViolation(
           'unrouted_discord_account',
           'Discord surface uses per-account routing but the inbound message carries no accountId',
@@ -2367,27 +2368,58 @@ export class GatewayServer {
           'Multi-account discord routing requires an accountId for the discord surface',
         );
       }
-      const companionId = this.multiCompanion.discordAccounts[discordAccountId];
+      const companionId = this.multiCompanion.discordAccounts[accountId];
       if (!companionId) {
         this.alarmCompanionViolation(
           'unrouted_discord_account',
-          `Discord account "${discordAccountId}" has no companion routing entry in channels.json`,
-          { surface, discordAccountId },
+          `Discord account "${accountId}" has no companion routing entry in channels.json`,
+          { surface, discordAccountId: accountId },
         );
         throw new Error(
-          `Multi-companion routing has no companion for discord account "${discordAccountId}"`,
+          `Multi-companion routing has no companion for discord account "${accountId}"`,
         );
       }
       return companionId;
     }
-    if (discordAccountId) {
+    const pluginAccounts = this.multiCompanion.pluginAccounts[surface];
+    if (pluginAccounts && Object.keys(pluginAccounts).length > 0) {
+      if (!accountId) {
+        this.alarmCompanionViolation(
+          'unrouted_plugin_account',
+          `Channel plugin "${surface}" uses per-account routing but the inbound request carries no accountId`,
+          { surface },
+        );
+        throw new Error(`Multi-account ${surface} routing requires an accountId`);
+      }
+      const companionId = pluginAccounts[accountId];
+      if (!companionId) {
+        this.alarmCompanionViolation(
+          'unrouted_plugin_account',
+          `Channel plugin "${surface}" account "${accountId}" has no companion routing entry`,
+          { surface, accountId },
+        );
+        throw new Error(
+          `Multi-companion routing has no companion for ${surface} account "${accountId}"`,
+        );
+      }
+      return companionId;
+    }
+    if (accountId) {
+      if (surface !== 'discord') {
+        this.alarmCompanionViolation(
+          'unrouted_plugin_account',
+          `Received ${surface} accountId "${accountId}" but no plugin account routing is configured`,
+          { surface, accountId },
+        );
+        throw new Error(`No ${surface} account routing configured for account "${accountId}"`);
+      }
       this.alarmCompanionViolation(
         'unrouted_discord_account',
-        `Received discord accountId "${discordAccountId}" but no discord.accounts routing is configured`,
-        { surface, discordAccountId },
+        `Received discord accountId "${accountId}" but no discord.accounts routing is configured`,
+        { surface, discordAccountId: accountId },
       );
       throw new Error(
-        `No discord account routing configured for account "${discordAccountId}"`,
+        `No discord account routing configured for account "${accountId}"`,
       );
     }
     const companionId = this.multiCompanion.channelRouting[surface];
@@ -3015,7 +3047,7 @@ export class GatewayServer {
             `Multi-companion routing cannot map channelType "${message.channelType}" to a companion`,
           );
         }
-        route = this.resolveCompanionAgent(surface);
+        route = this.resolveCompanionAgent(surface, options.channelAccountId);
       }
       client = route.client;
       conn = route.conn;

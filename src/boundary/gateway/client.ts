@@ -15,7 +15,6 @@ import type {
 } from '../../shared/contracts/embedding-provider.js';
 import { toWorkSpecWireParams } from '../../primitives/llm/work-spec-wire.js';
 import type { Attachment, CompletionPurpose, CorrelationMetadata, LLMContext, LLMModelHint, LLMResponse, ModelBudgetBlockedEvent, ModelPurposeSelection, StreamCallbacks, SubstrateMessage } from '../../shared/contracts/runtime.js';
-import type { IcpConversationEpisode } from '../../shared/contracts/icp-autonomy.js';
 import type {
   GatewayRpcConnection,
   GatewayRpcEndpoint,
@@ -36,7 +35,10 @@ import { getMcpTurnDisclosureContext } from '../../core/cogsec/disclosure/mcp-tu
 import type { QueueOverflowPolicy } from './backpressure.js';
 import { GatewayClientTransportRuntime } from './client/transport-runtime.js';
 import {
-  companionListDyads, companionListOpenDyads, companionPrepareDyadContinuation,
+  companionEndIcpEpisodeActivity,
+  companionInitiationPreflight,
+  companionListDyads, companionListOpenDyads,
+  companionPrepareDyadContinuation,
   companionRecordDyadContinuationOutcome,
   companionSendContinuation, companionTransitionDyad,
 } from './client/icp-dyad-continuation.js';
@@ -164,12 +166,10 @@ import type {
   IcpRuntimeAvailabilityClearParams,
   IcpRuntimeAvailabilityRefreshParams,
   IcpPeerAvailabilityReadParams,
-  IcpInitiationPreflightParams,
   IcpInitiationPermitIssueParams,
   IcpInitiationHandoffPrepareParams,
   IcpPermitConsumeParams,
   IcpPermitConsumeResult,
-  IcpEpisodeActivityEndParams,
   IcpPermitRevokeParams,
   IcpPermitRevokeResult,
   IcpPermitInvalidateSelfParams,
@@ -193,7 +193,6 @@ import type {
 import type { ContactAuthorityLifecycleRequest } from '../../shared/contracts/contact-authority-lifecycle.js';
 import { parseContactAuthorityLifecycleResult } from '../../shared/contracts/contact-authority-lifecycle.js';
 import type {
-  IcpInitiationGateDecision,
   IcpInitiationHandoffPrepareResult,
   IcpInitiationPermitIssueResult,
   IcpOwnAvailabilityReadParams,
@@ -1131,13 +1130,8 @@ export class GatewayClient implements
     return companionRecordDyadContinuationOutcome(this.transportRuntime, this.companionId, params);
   }
 
-  async companionInitiationPreflight(
-    params: Omit<IcpInitiationPreflightParams, 'companionId'>,
-  ): Promise<IcpInitiationGateDecision> {
-    return await this.transportRuntime.request('companion.initiation.preflight', {
-      ...params,
-      ...(this.companionId ? { companionId: this.companionId } : {}),
-    }) as IcpInitiationGateDecision;
+  companionInitiationPreflight(params: Parameters<typeof companionInitiationPreflight>[2]) {
+    return companionInitiationPreflight(this.transportRuntime, this.companionId, params);
   }
 
   async companionIssueInitiationPermit(
@@ -1167,13 +1161,8 @@ export class GatewayClient implements
     }) as IcpPermitConsumeResult;
   }
 
-  async companionEndIcpEpisodeActivity(
-    params: Omit<IcpEpisodeActivityEndParams, 'companionId'>,
-  ): Promise<IcpConversationEpisode> {
-    return await this.transportRuntime.request('companion.episode.end_activity', {
-      ...params,
-      ...(this.companionId ? { companionId: this.companionId } : {}),
-    }) as IcpConversationEpisode;
+  companionEndIcpEpisodeActivity(params: Parameters<typeof companionEndIcpEpisodeActivity>[2]) {
+    return companionEndIcpEpisodeActivity(this.transportRuntime, this.companionId, params);
   }
 
   async companionRevokeInitiationPermit(

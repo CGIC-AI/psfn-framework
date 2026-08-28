@@ -23,16 +23,11 @@ export interface BuzzStreamAcceptancePolicy {
   maxFutureEventSkewSeconds: number;
   channelAllowlist: ReadonlySet<string>;
   authorAllowlist: ReadonlySet<string>;
-  machineAuthorPubkeys: ReadonlySet<string>;
-  maxAutonomousReplyHops: number;
 }
 
-export interface BuzzCausalEnvelope {
+export interface BuzzThreadReference {
   rootEventId: string;
-  chainId: string;
   parentEventId: string;
-  hop: number;
-  recipientPubkeys: readonly string[];
 }
 
 export interface BuzzMembershipChange {
@@ -123,87 +118,33 @@ export function acceptsBuzzStreamEvent(
   const channels = buzzTagValues(event, 'h');
   if (channels.length !== 1 || !policy.channelAllowlist.has(channels[0]!)) return false;
   const mentionedPubkeys = buzzTagValues(event, 'p');
-  if (
-    !mentionedPubkeys.includes(policy.companionPubkey)
-    || mentionedPubkeys.some(pubkey => !isNostrHexKey(pubkey))
-  ) return false;
-  if (!policy.machineAuthorPubkeys.has(event.pubkey)) {
-    return !event.tags.some(tag => tag[0] === 'e' || tag[0]?.startsWith('agent-'));
-  }
-  return parseBuzzCausalEnvelope(event, policy.companionPubkey, policy.maxAutonomousReplyHops)
-    !== null;
+  if (mentionedPubkeys.some(pubkey => !isNostrHexKey(pubkey))) return false;
+  const hasEventReferences = event.tags.some(tag => tag[0] === 'e');
+  const hasAgentTags = event.tags.some(tag => tag[0]?.startsWith('agent-'));
+  return !hasAgentTags
+    && (!hasEventReferences || parseBuzzThreadReference(event) !== null);
 }
 
-export function parseBuzzCausalEnvelope(
-  event: NostrEvent,
-  companionPubkey: string,
-  maxAutonomousReplyHops: number,
-): BuzzCausalEnvelope | null {
-  const roots = buzzTagValues(event, 'agent-root');
-  const chains = buzzTagValues(event, 'agent-chain');
-  const hops = buzzTagValues(event, 'agent-hop');
-  const recipients = buzzTagValues(event, 'agent-recipient');
-  const eventReferences = event.tags.filter(tag => tag[0] === 'e');
-  const replyParents = eventReferences
-    .filter(tag => tag[3] === 'reply' && typeof tag[1] === 'string')
-    .map(tag => tag[1]!);
-  const mentionedPubkeys = buzzTagValues(event, 'p');
-  const hasUnknownAgentTag = event.tags.some(tag => (
-    tag[0]?.startsWith('agent-')
-    && tag[0] !== 'agent-root'
-    && tag[0] !== 'agent-chain'
-    && tag[0] !== 'agent-hop'
-    && tag[0] !== 'agent-recipient'
-  ));
+/** Parse the strict NIP-10 root/reply pair used by Buzz room threads. */
+export function parseBuzzThreadReference(event: NostrEvent): BuzzThreadReference | null {
+  const references = event.tags.filter(tag => tag[0] === 'e');
+  const roots = references.filter(tag => tag[3] === 'root');
+  const replies = references.filter(tag => tag[3] === 'reply');
   if (
-    roots.length !== 1
-    || chains.length !== 1
-    || hops.length !== 1
-    || eventReferences.length !== 1
-    || replyParents.length !== 1
-    || recipients.length === 0
-    || new Set(recipients).size !== recipients.length
-    || new Set(mentionedPubkeys).size !== mentionedPubkeys.length
-    || !sameStringSet(recipients, mentionedPubkeys)
-    || hasUnknownAgentTag
+    references.length !== 2
+    || roots.length !== 1
+    || replies.length !== 1
+    || references.some(tag => tag.length < 4 || (tag[3] !== 'root' && tag[3] !== 'reply'))
   ) return null;
-  const rootEventId = roots[0]!;
-  const chainId = chains[0]!;
-  const parentEventId = replyParents[0]!;
-  const hop = Number(hops[0]);
+  const rootEventId = roots[0]?.[1];
+  const parentEventId = replies[0]?.[1];
   if (
-    !isNostrHexKey(rootEventId)
-    || chainId !== rootEventId
+    typeof rootEventId !== 'string'
+    || typeof parentEventId !== 'string'
+    || !isNostrHexKey(rootEventId)
     || !isNostrHexKey(parentEventId)
-    || !Number.isSafeInteger(hop)
-    || hop < 1
-    || hop > maxAutonomousReplyHops
-    || !recipients.includes(companionPubkey)
-    || recipients.some(recipient => !isNostrHexKey(recipient))
   ) return null;
-  return { rootEventId, chainId, parentEventId, hop, recipientPubkeys: recipients };
-}
-
-function sameStringSet(left: readonly string[], right: readonly string[]): boolean {
-  if (left.length !== right.length) return false;
-  const rightValues = new Set(right);
-  return left.every(value => rightValues.has(value));
-}
-
-export function createBuzzCausalReplyTags(input: {
-  rootEventId: string;
-  parentEventId: string;
-  hop: number;
-  recipientPubkeys: readonly string[];
-}): string[][] {
-  return [
-    ['e', input.parentEventId, '', 'reply'],
-    ...input.recipientPubkeys.map(pubkey => ['p', pubkey]),
-    ['agent-root', input.rootEventId],
-    ['agent-chain', input.rootEventId],
-    ['agent-hop', String(input.hop)],
-    ...input.recipientPubkeys.map(pubkey => ['agent-recipient', pubkey]),
-  ];
+  return { rootEventId, parentEventId };
 }
 
 export function parseBuzzMembershipSnapshot(

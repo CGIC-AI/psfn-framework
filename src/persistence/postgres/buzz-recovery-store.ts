@@ -8,8 +8,6 @@ import {
   queryRows,
 } from '../postgres.js';
 import type {
-  BuzzCausalEvent,
-  BuzzCausalClaimResult,
   BuzzInboundRecoveryRecord,
   BuzzInboundRecoveryState,
   BuzzRecoveryScope,
@@ -121,129 +119,25 @@ export class PostgresBuzzRecoveryStore implements BuzzRecoveryStore {
     return { claimed: false, record: existing };
   }
 
-  async registerHumanRoot(
-    input: Omit<BuzzCausalEvent, 'rootEventId' | 'parentEventId' | 'hop'>,
-  ): Promise<void> {
-    await this.waitUntilReady();
-    await executeQuery(this.pool, `
-      INSERT INTO buzz_causal_events (
-        community, companion_id, event_id, channel_id, root_event_id,
-        parent_event_id, hop, author_pubkey, observed_at_ms
-      ) VALUES ($1, $2, $3, $4, $3, NULL, 0, $5, $6)
-      ON CONFLICT (community, companion_id, event_id) DO NOTHING
-    `, [
-      this.scope.community,
-      this.scope.companionId,
-      input.eventId,
-      input.channelId,
-      input.authorPubkey,
-      Date.now(),
-    ]);
-  }
-
-  async claimCausalEvent(input: BuzzCausalEvent): Promise<BuzzCausalClaimResult> {
-    await this.waitUntilReady();
-    const parent = await queryOne<{ present: boolean }>(this.pool, `
-      SELECT true AS present
-      FROM buzz_causal_events
-      WHERE community = $1 AND companion_id = $2
-        AND event_id = $3 AND root_event_id = $4
-        AND channel_id = $5 AND hop + 1 = $6
-    `, [
-      this.scope.community,
-      this.scope.companionId,
-      input.parentEventId,
-      input.rootEventId,
-      input.channelId,
-      input.hop,
-    ]);
-    if (!parent) return 'invalid_parent';
-    const result = await this.pool.query(`
-      INSERT INTO buzz_causal_events (
-        community, companion_id, event_id, channel_id, root_event_id,
-        parent_event_id, hop, author_pubkey, observed_at_ms
-      )
-      SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9
-      FROM buzz_causal_events parent
-      WHERE parent.community = $1
-        AND parent.companion_id = $2
-        AND parent.event_id = $6
-        AND parent.root_event_id = $5
-        AND parent.channel_id = $4
-        AND parent.hop + 1 = $7
-      ON CONFLICT DO NOTHING
-      RETURNING event_id
-    `, [
-      this.scope.community,
-      this.scope.companionId,
-      input.eventId,
-      input.channelId,
-      input.rootEventId,
-      input.parentEventId,
-      input.hop,
-      input.authorPubkey,
-      Date.now(),
-    ]);
-    return result.rowCount === 1 ? 'claimed' : 'duplicate';
-  }
-
   async markReady(
     eventId: string,
     outboundEvent: NostrEvent,
-    causalEvent: BuzzCausalEvent,
   ): Promise<void> {
     await this.waitUntilReady();
-    const client = await this.pool.connect();
-    try {
-      await client.query('BEGIN');
-      const recovery = await client.query(`
-        UPDATE buzz_inbound_recovery
-        SET state = 'ready', outbound_event_json = $4::jsonb,
-          suppression_reason = NULL, updated_at_ms = $5
-        WHERE community = $1 AND companion_id = $2 AND event_id = $3 AND state = 'processing'
-        RETURNING event_id
-      `, [
-        this.scope.community,
-        this.scope.companionId,
-        eventId,
-        JSON.stringify(outboundEvent),
-        Date.now(),
-      ]);
-      const causal = await client.query(`
-        INSERT INTO buzz_causal_events (
-          community, companion_id, event_id, channel_id, root_event_id,
-          parent_event_id, hop, author_pubkey, observed_at_ms
-        )
-        SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9
-        FROM buzz_causal_events parent
-        WHERE parent.community = $1
-          AND parent.companion_id = $2
-          AND parent.event_id = $6
-          AND parent.root_event_id = $5
-          AND parent.channel_id = $4
-          AND parent.hop + 1 = $7
-        ON CONFLICT DO NOTHING
-        RETURNING event_id
-      `, [
-        this.scope.community,
-        this.scope.companionId,
-        causalEvent.eventId,
-        causalEvent.channelId,
-        causalEvent.rootEventId,
-        causalEvent.parentEventId,
-        causalEvent.hop,
-        causalEvent.authorPubkey,
-        Date.now(),
-      ]);
-      if (recovery.rowCount !== 1 || causal.rowCount !== 1) {
-        throw new Error(`Buzz recovery event ${eventId} could not become causally ready`);
-      }
-      await client.query('COMMIT');
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
-    } finally {
-      client.release();
+    const result = await this.pool.query(`
+      UPDATE buzz_inbound_recovery
+      SET state = 'ready', outbound_event_json = $4::jsonb,
+        suppression_reason = NULL, updated_at_ms = $5
+      WHERE community = $1 AND companion_id = $2 AND event_id = $3 AND state = 'processing'
+    `, [
+      this.scope.community,
+      this.scope.companionId,
+      eventId,
+      JSON.stringify(outboundEvent),
+      Date.now(),
+    ]);
+    if (result.rowCount !== 1) {
+      throw new Error(`Buzz recovery event ${eventId} could not become ready`);
     }
   }
 
@@ -253,38 +147,15 @@ export class PostgresBuzzRecoveryStore implements BuzzRecoveryStore {
 
   async markSuppressed(eventId: string, reason: BuzzSuppressionReason): Promise<void> {
     await this.waitUntilReady();
-    const client = await this.pool.connect();
-    try {
-      await client.query('BEGIN');
-      const prior = await client.query<{ outbound_event_id: string | null }>(`
-        SELECT outbound_event_json->>'id' AS outbound_event_id
-        FROM buzz_inbound_recovery
-        WHERE community = $1 AND companion_id = $2 AND event_id = $3
-          AND state IN ('processing', 'ready')
-        FOR UPDATE
-      `, [this.scope.community, this.scope.companionId, eventId]);
-      if (prior.rowCount !== 1) {
-        throw new Error(`Buzz recovery event ${eventId} cannot transition to suppressed`);
-      }
-      await client.query(`
-        UPDATE buzz_inbound_recovery
-        SET state = 'suppressed', outbound_event_json = NULL,
-          suppression_reason = $4, updated_at_ms = $5
-        WHERE community = $1 AND companion_id = $2 AND event_id = $3
-      `, [this.scope.community, this.scope.companionId, eventId, reason, Date.now()]);
-      const outboundEventId = prior.rows[0]?.outbound_event_id;
-      if (outboundEventId) {
-        await client.query(`
-          DELETE FROM buzz_causal_events
-          WHERE community = $1 AND companion_id = $2 AND event_id = $3
-        `, [this.scope.community, this.scope.companionId, outboundEventId]);
-      }
-      await client.query('COMMIT');
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
-    } finally {
-      client.release();
+    const result = await this.pool.query(`
+      UPDATE buzz_inbound_recovery
+      SET state = 'suppressed', outbound_event_json = NULL,
+        suppression_reason = $4, updated_at_ms = $5
+      WHERE community = $1 AND companion_id = $2 AND event_id = $3
+        AND state IN ('processing', 'ready')
+    `, [this.scope.community, this.scope.companionId, eventId, reason, Date.now()]);
+    if (result.rowCount !== 1) {
+      throw new Error(`Buzz recovery event ${eventId} cannot transition to suppressed`);
     }
   }
 

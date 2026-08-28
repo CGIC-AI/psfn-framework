@@ -692,6 +692,129 @@ export function registerGatewayMessageHandlers(
     }
   };
 
+  /**
+   * Observe one ambient group-room message through the shared social pipeline.
+   * Discord notifications and request/response channel plugins must converge
+   * here so memory scheduling, participation appraisal, fatigue, reservations,
+   * and egress arbitration do not depend on the transport adapter.
+   */
+  const observeGroupMessage = async (
+    message: SubstrateMessage,
+    observedAuditEvent: 'discord.message.observed' | 'gateway.message.observed',
+  ): Promise<void> => {
+    await agentLoop.observeMessage(message);
+    safeguardAuditTrail.append(observedAuditEvent, {
+      ...(observedAuditEvent === 'gateway.message.observed' ? { route: 'handle' } : {}),
+      channelId: message.channelId,
+      messageId: message.id,
+      authorId: message.authorId,
+    });
+    if (observedGroupMemoryScheduler) {
+      try {
+        const decision = await observedGroupMemoryScheduler.observeMessage(message);
+        if (decision.status === 'scheduled') {
+          safeguardAuditTrail.append('memory.group_observed.scheduled', {
+            channelId: decision.channelId,
+            messageId: message.id,
+            triggerReason: decision.triggerReason,
+            spanStartMessageId: decision.spanStartMessageId,
+            spanEndMessageId: decision.spanEndMessageId,
+            newEntryCount: decision.newEntryCount,
+            watermarkLagMessageIds: decision.watermarkLagMessageIds,
+            hasDeferredBacklog: decision.hasDeferredBacklog,
+          });
+        } else if (decision.reason === 'extraction_failed') {
+          log.warn('Observed group memory extraction failed', {
+            channelId: decision.channelId,
+            messageId: message.id,
+            watermarkLagMessageIds: decision.watermarkLagMessageIds,
+            error: decision.error,
+          });
+          safeguardAuditTrail.append('memory.group_observed.error', {
+            channelId: decision.channelId,
+            messageId: message.id,
+            reason: decision.reason,
+            error: decision.error,
+          });
+        }
+      } catch (schedulerError) {
+        const errorText = toErrorMessage(schedulerError);
+        log.warn('Observed group memory scheduling failed', {
+          channelId: message.channelId,
+          messageId: message.id,
+          error: errorText,
+        });
+        safeguardAuditTrail.append('memory.group_observed.error', {
+          channelId: message.channelId,
+          messageId: message.id,
+          error: errorText,
+        });
+      }
+    }
+    if (!passiveNameCandidateBuilder) return;
+    try {
+      const decision = await passiveNameCandidateBuilder.build(message);
+      if (decision.status === 'created') {
+        const { candidate } = decision;
+        safeguardAuditTrail.append('participation.candidate.created', {
+          channelId: candidate.channelId,
+          sourceMessageId: candidate.sourceMessageId,
+          trigger: candidate.trigger,
+          matchedName: candidate.matchedName,
+          matchedDirectAddress: candidate.matchedDirectAddress,
+          precedingContextCount: candidate.precedingContext.length,
+        });
+        await eventBus.emit('participation.candidate', {
+          channelId: candidate.channelId,
+          sourceMessageId: candidate.sourceMessageId,
+          outcome: 'created',
+          trigger: candidate.trigger,
+          matchedDirectAddress: candidate.matchedDirectAddress,
+          precedingContextCount: candidate.precedingContext.length,
+          timestamp: nowMonotonicMs(),
+        });
+        if (reservationPhase) {
+          await reserveAndAppraiseCandidate(candidate, reservationPhase);
+        } else if (participationAppraiser) {
+          await appraiseParticipationCandidate(candidate);
+        }
+        return;
+      }
+      safeguardAuditTrail.append('participation.candidate.suppressed', {
+        channelId: decision.channelId,
+        sourceMessageId: decision.sourceMessageId,
+        reason: decision.reason,
+        ...(decision.trigger ? { trigger: decision.trigger } : {}),
+      });
+      await eventBus.emit('participation.candidate', {
+        channelId: decision.channelId,
+        sourceMessageId: decision.sourceMessageId,
+        outcome: 'suppressed',
+        suppressionReason: decision.reason,
+        ...(decision.trigger ? { trigger: decision.trigger } : {}),
+        timestamp: nowMonotonicMs(),
+      });
+    } catch (candidateError) {
+      const errorText = toErrorMessage(candidateError);
+      log.warn('Passive-name candidate gate failed', {
+        channelId: message.channelId,
+        messageId: message.id,
+        error: errorText,
+      });
+      safeguardAuditTrail.append('participation.candidate.error', {
+        channelId: message.channelId,
+        messageId: message.id,
+        error: errorText,
+      });
+      await eventBus.emit('participation.candidate', {
+        channelId: message.channelId,
+        sourceMessageId: message.id,
+        outcome: 'error',
+        timestamp: nowMonotonicMs(),
+      });
+    }
+  };
+
   const pruneDuplicateCaches = (now: number): void => {
     const minTimestamp = now - DUPLICATE_MESSAGE_WINDOW_MS;
     for (const [key, cached] of recentHandleResponses.entries()) {
@@ -946,13 +1069,7 @@ export function registerGatewayMessageHandlers(
     const processMessage = async (): Promise<AgentResponse> => {
       trackSessionActivity(message);
       if (message.routing?.responseMode === 'observe') {
-        await agentLoop.observeMessage(message);
-        safeguardAuditTrail.append('gateway.message.observed', {
-          route: 'handle',
-          channelId: message.channelId,
-          messageId: message.id,
-          authorId: message.authorId,
-        });
+        await observeGroupMessage(message, 'gateway.message.observed');
         return {
           content: '',
           channelId: message.channelId,
@@ -1129,122 +1246,7 @@ export function registerGatewayMessageHandlers(
       let completed = false;
       try {
         trackSessionActivity(message);
-        await agentLoop.observeMessage(message);
-        safeguardAuditTrail.append('discord.message.observed', {
-          channelId: message.channelId,
-          messageId: message.id,
-          authorId: message.authorId,
-        });
-        if (observedGroupMemoryScheduler) {
-          try {
-            const decision = await observedGroupMemoryScheduler.observeMessage(message);
-            if (decision.status === 'scheduled') {
-              safeguardAuditTrail.append('memory.group_observed.scheduled', {
-                channelId: decision.channelId,
-                messageId: message.id,
-                triggerReason: decision.triggerReason,
-                spanStartMessageId: decision.spanStartMessageId,
-                spanEndMessageId: decision.spanEndMessageId,
-                newEntryCount: decision.newEntryCount,
-                watermarkLagMessageIds: decision.watermarkLagMessageIds,
-                hasDeferredBacklog: decision.hasDeferredBacklog,
-              });
-            } else if (decision.reason === 'extraction_failed') {
-              log.warn('Observed group memory extraction failed', {
-                channelId: decision.channelId,
-                messageId: message.id,
-                watermarkLagMessageIds: decision.watermarkLagMessageIds,
-                error: decision.error,
-              });
-              safeguardAuditTrail.append('memory.group_observed.error', {
-                channelId: decision.channelId,
-                messageId: message.id,
-                reason: decision.reason,
-                error: decision.error,
-              });
-            }
-          } catch (schedulerError) {
-            const errorText = toErrorMessage(schedulerError);
-            log.warn('Observed group memory scheduling failed', {
-              channelId: message.channelId,
-              messageId: message.id,
-              error: errorText,
-            });
-            safeguardAuditTrail.append('memory.group_observed.error', {
-              channelId: message.channelId,
-              messageId: message.id,
-              error: errorText,
-            });
-          }
-        }
-        if (passiveNameCandidateBuilder) {
-          try {
-            const decision = await passiveNameCandidateBuilder.build(message);
-            if (decision.status === 'created') {
-              const { candidate } = decision;
-              safeguardAuditTrail.append('participation.candidate.created', {
-                channelId: candidate.channelId,
-                sourceMessageId: candidate.sourceMessageId,
-                trigger: candidate.trigger,
-                matchedName: candidate.matchedName,
-                matchedDirectAddress: candidate.matchedDirectAddress,
-                precedingContextCount: candidate.precedingContext.length,
-              });
-              await eventBus.emit('participation.candidate', {
-                channelId: candidate.channelId,
-                sourceMessageId: candidate.sourceMessageId,
-                outcome: 'created',
-                trigger: candidate.trigger,
-                matchedDirectAddress: candidate.matchedDirectAddress,
-                precedingContextCount: candidate.precedingContext.length,
-                timestamp: nowMonotonicMs(),
-              });
-              if (reservationPhase) {
-                // Deterministic gate + reservation before appraisal (§8.5/§6.10):
-                // a gated candidate never reaches the model call, and a reserved
-                // candidate's reservation is released on an `ignore` outcome.
-                await reserveAndAppraiseCandidate(candidate, reservationPhase);
-              } else if (participationAppraiser) {
-                await appraiseParticipationCandidate(candidate);
-              }
-            } else {
-              safeguardAuditTrail.append('participation.candidate.suppressed', {
-                channelId: decision.channelId,
-                sourceMessageId: decision.sourceMessageId,
-                reason: decision.reason,
-                ...(decision.trigger ? { trigger: decision.trigger } : {}),
-              });
-              await eventBus.emit('participation.candidate', {
-                channelId: decision.channelId,
-                sourceMessageId: decision.sourceMessageId,
-                outcome: 'suppressed',
-                suppressionReason: decision.reason,
-                ...(decision.trigger ? { trigger: decision.trigger } : {}),
-                timestamp: nowMonotonicMs(),
-              });
-            }
-          } catch (candidateError) {
-            const errorText = toErrorMessage(candidateError);
-            log.warn('Passive-name candidate gate failed', {
-              channelId: message.channelId,
-              messageId: message.id,
-              error: errorText,
-            });
-            safeguardAuditTrail.append('participation.candidate.error', {
-              channelId: message.channelId,
-              messageId: message.id,
-              error: errorText,
-            });
-            // Content-free bus event: the forensic error text stays on the audit
-            // trail (§19 do-not-log list); the bus carries only the failed shape.
-            await eventBus.emit('participation.candidate', {
-              channelId: message.channelId,
-              sourceMessageId: message.id,
-              outcome: 'error',
-              timestamp: nowMonotonicMs(),
-            });
-          }
-        }
+        await observeGroupMessage(message, 'discord.message.observed');
         completed = true;
       } catch (err) {
         const errorText = toErrorMessage(err);

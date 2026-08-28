@@ -1764,7 +1764,13 @@ async function main(): Promise<void> {
     sessionStore,
     persistenceRuntime,
     coreRuntime,
-    gatewaySender,
+    gatewaySender: {
+      send: (channelType, channelId, content) => (
+        channelType === 'discord'
+          ? gateway.discordSend(channelId, content)
+          : gateway.channelSend(channelType, channelId, content)
+      ),
+    },
     outboundReplyGuard,
   });
 

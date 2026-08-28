@@ -184,6 +184,7 @@
       "minReserveDrawUnits": 1
     },
     "egressLease": {
+      "mode": "off",
       "leaseTtlMs": 60000,
       "egressDrawUnits": 1,
       "minReplyConfidence": 0.5

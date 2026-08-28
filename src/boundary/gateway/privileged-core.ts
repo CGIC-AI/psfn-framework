@@ -81,6 +81,12 @@ export interface GatewayPrivilegedCore {
     operatorTelegramChatId?: string;
     /** Multi-account discord (W1-P2): outbound dock per companionId. */
     discordAccountDocks?: ReadonlyMap<CompanionId, ChannelOutboundDock>;
+    pluginOutboundRoutes?: readonly {
+      pluginId: 'buzz';
+      accountId?: string;
+      companionId?: string;
+      dock: ChannelOutboundDock;
+    }[];
     /** Inter-companion channel lane (W6); multi-companion only. */
     companionChannels?: GatewayCompanionChannelLane;
     /** Shared durable authority for the ICP autonomy broker. */
@@ -382,6 +388,7 @@ export async function buildGatewayPrivilegedCore(
       telegramDock,
       operatorTelegramChatId,
       discordAccountDocks,
+      pluginOutboundRoutes,
       companionChannels,
       icpAutonomyStore,
       icpInitiationPolicyAuthority,
@@ -392,6 +399,7 @@ export async function buildGatewayPrivilegedCore(
       credentialPresence,
     }) => new GatewayServer({
       ...(discordAccountDocks ? { discordAccountDocks } : {}),
+      ...(pluginOutboundRoutes ? { pluginOutboundRoutes } : {}),
       ...(companionChannels ? { companionChannels } : {}),
       ...(icpAutonomyStore ? { icpAutonomyStore } : {}),
       ...(icpInitiationPolicyAuthority ? { icpInitiationPolicyAuthority } : {}),

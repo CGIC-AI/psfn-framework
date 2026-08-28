@@ -14,11 +14,6 @@ const AUTHOR_PUBKEY = 'a'.repeat(64);
 const RELAY_PUBKEY = 'b'.repeat(64);
 const MACHINE_PUBKEY = 'c'.repeat(64);
 
-const LOOP_POLICY = {
-  maxAutonomousReplyHops: 6,
-  noInformationAcknowledgements: ['acknowledged', 'noted'],
-};
-
 const RECOVERY_POLICY = {
   replayWindowSeconds: 120,
   reconnectBaseDelayMs: 250,
@@ -49,7 +44,6 @@ describe('Buzz channel plugin config', () => {
         channelIds: [CHANNEL_ID],
         allowedAuthorPubkeys: [AUTHOR_PUBKEY, MACHINE_PUBKEY],
         machineAuthorPubkeys: [MACHINE_PUBKEY],
-        loopPolicy: LOOP_POLICY,
         recoveryPolicy: RECOVERY_POLICY,
       },
     }, registry);
@@ -92,7 +86,6 @@ describe('Buzz channel plugin config', () => {
       channelIds: [CHANNEL_ID],
       allowedAuthorPubkeys: [AUTHOR_PUBKEY, MACHINE_PUBKEY],
       machineAuthorPubkeys: [MACHINE_PUBKEY],
-      loopPolicy: LOOP_POLICY,
       recoveryPolicy: RECOVERY_POLICY,
     });
 
@@ -138,7 +131,6 @@ describe('Buzz channel plugin config', () => {
         channelIds: [CHANNEL_ID],
         allowedAuthorPubkeys: [AUTHOR_PUBKEY, MACHINE_PUBKEY],
         machineAuthorPubkeys: [MACHINE_PUBKEY],
-        loopPolicy: LOOP_POLICY,
         recoveryPolicy: RECOVERY_POLICY,
       },
     });
@@ -159,7 +151,6 @@ describe('Buzz channel plugin config', () => {
       channelIds: [],
       allowedAuthorPubkeys: [AUTHOR_PUBKEY, MACHINE_PUBKEY],
       machineAuthorPubkeys: [MACHINE_PUBKEY],
-      loopPolicy: LOOP_POLICY,
       recoveryPolicy: RECOVERY_POLICY,
     };
     expect(() => createBuzzChannelPlugin().parseConfig({
@@ -192,7 +183,6 @@ describe('Buzz channel plugin config', () => {
       channelIds: [],
       allowedAuthorPubkeys: [AUTHOR_PUBKEY],
       machineAuthorPubkeys: [MACHINE_PUBKEY],
-      loopPolicy: LOOP_POLICY,
       recoveryPolicy: RECOVERY_POLICY,
     };
     expect(() => createBuzzChannelPlugin().parseConfig(base)).toThrow(

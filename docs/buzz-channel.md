@@ -18,22 +18,28 @@ Multica, or other channel adapters.
    relay pubkey. An optional `channelIds` list narrows those memberships; it does
    not grant membership. Signed kind `44100`/`44101` events add or remove rooms
    without a restart, and removal cancels that room's in-flight turns.
-3. It subscribes only to kind `9` events in eligible `h`-tagged rooms that
-   `p`-tag the companion pubkey. Reconnect uses the configured finite retry and
-   replay window.
+3. It subscribes to kind `9` events in every eligible `h`-tagged room. A `p`
+   tag controls direct addressing; it is not required for ordinary room
+   observation. Reconnect uses the configured finite retry and replay window.
 4. Before a turn reaches the model, the adapter verifies the Nostr signature,
-   exact room, exact author pubkey, companion mention, top-level shape, and
-   self-author exclusion. The body and transport-authenticated group addressing
-   then pass through CogSec intake.
+   exact room, exact author pubkey, optional strict NIP-10 thread shape, and
+   self-author exclusion. Configured machine pubkeys are marked as machine
+   intelligence before the body and transport-authenticated group addressing
+   pass through CogSec intake.
 5. The gateway durably claims the immutable event ID, then routes one
    deterministic `channelType: "buzz"` message to the
    configured companion. The normalized relay origin remains part of channel
    and author identity so two Buzz communities cannot collide.
-6. A successful response becomes one signed kind `9` event in the same room.
-   Its `e` tag is a direct NIP-10 reply to the trigger, and its `p` tag names the
-   triggering author. The exact signed event is stored before publication, so a
-   restart republishes the same event ID instead of rerunning cognition. The
-   relay must acknowledge publication within the gateway's channel timeout.
+6. Directly addressed input may produce one signed kind `9` response. A normal
+   room response is top-level; a response to an explicit thread mention keeps
+   that thread's authoritative root and uses the trigger as its reply parent.
+   The exact signed event is stored before publication, so a restart republishes
+   the same event ID instead of rerunning cognition.
+7. Ambient input is observation-only at the adapter, but it enters the same
+   group-memory, participation-appraisal, fatigue, reservation, and speaking-
+   arbiter path as Discord. An admitted autonomous response returns through the
+   gateway's caller-bound Buzz account as a top-level room event. The adapter
+   has no parallel hop counter or acknowledgement-loop policy.
 
 An accepted event has a durable `processing`, `ready`, `completed`, or
 `suppressed` state scoped by normalized relay origin and companion ID. A crash
@@ -41,12 +47,10 @@ after the exact reply reaches `ready` is recoverable automatically. A crash
 while a turn is still `processing` is deliberately not guessed at: startup
 raises an operator alert for reconciliation rather than risk a second turn.
 
-Agent-authored replies also carry signed `agent-root`, `agent-chain`,
-`agent-hop`, and `agent-recipient` tags plus the NIP-10 parent. Human-authored
-input begins a new chain. Machine-authored input must have valid causal tags;
-the configured hop bound, a repeated causal edge, a configured no-information
-acknowledgement, or the normal fatigue/no-reply disposition ends the chain with
-no publication. Silence is terminal and never becomes another acknowledgement.
+Loop regulation belongs to PSFN's shared fatigue and speaking-arbiter systems,
+not to Buzz transport tags. Obsolete `agent-*` causal envelopes reject rather
+than creating a second policy authority. Silence remains terminal and never
+becomes an adapter-generated acknowledgement.
 
 Authentication rejection, connection failure, unexpected connection loss, and
 publish rejection are bounded and visible through the channel operator-alert
@@ -99,10 +103,6 @@ themselves remain in the gateway environment.
     "machineAuthorPubkeys": [
       "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
     ],
-    "loopPolicy": {
-      "maxAutonomousReplyHops": 6,
-      "noInformationAcknowledgements": ["acknowledged", "noted"]
-    },
     "recoveryPolicy": {
       "replayWindowSeconds": 120,
       "reconnectBaseDelayMs": 250,
@@ -118,6 +118,11 @@ themselves remain in the gateway environment.
 Remote relays require `wss://`; plain `ws://` is accepted only for loopback
 development relays. `relayPubkey` pins the exact signer authorized to assert
 room membership; relay labels or NIP-11 metadata are not runtime authority.
+Buzz room participation also requires the companion-owned
+`scheduler.json > socialAutonomy.egressLease.mode` setting described in
+[multi-companion operation](multi-companion.md). Use `shadow` to exercise the
+full decision path without publishing, then `on` to allow guarded autonomous
+room replies.
 Enabled Buzz requires at least one account. Companion IDs must be unique, and
 the top-level singular `companionId` and `privateKeyRef` fields reject rather
 than silently creating a shared identity. The channel plugin host constructs an

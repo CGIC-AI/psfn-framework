@@ -27,7 +27,7 @@ afterAll(async () => {
 }, TIMEOUT_MS);
 
 describe('Postgres Buzz recovery store', () => {
-  it('persists claims, exact replies, cursors, memberships, and causal edges across instances', async () => {
+  it('persists claims, exact replies, cursors, and memberships across instances', async () => {
     if (!harness) throw new Error('Postgres integration harness is unavailable');
     const databaseUrl = (await harness.createDatabase()).databaseUrl;
     const pool = createPostgresPool(databaseUrl, { max: 3 });
@@ -55,49 +55,13 @@ describe('Postgres Buzz recovery store', () => {
         tags: [['e', EVENT_ID, '', 'reply']],
         privateKey: generateSecretKey(),
       });
-      await first.registerHumanRoot({
-        eventId: EVENT_ID,
-        channelId: CHANNEL_ID,
-        authorPubkey: 'f'.repeat(64),
-      });
-      await first.markReady(EVENT_ID, outbound, {
-        eventId: outbound.id,
-        channelId: CHANNEL_ID,
-        rootEventId: EVENT_ID,
-        parentEventId: EVENT_ID,
-        hop: 1,
-        authorPubkey: outbound.pubkey,
-      });
+      await first.markReady(EVENT_ID, outbound);
       await first.advanceReplayCursor(100);
       await first.advanceReplayCursor(90);
       await first.replaceMemberships([{
         channelId: CHANNEL_ID,
         position: { createdAt: 100, eventId: '1'.repeat(64) },
       }]);
-      await expect(first.claimCausalEvent({
-        rootEventId: EVENT_ID,
-        channelId: CHANNEL_ID,
-        parentEventId: outbound.id,
-        hop: 2,
-        authorPubkey: 'c'.repeat(64),
-        eventId: 'd'.repeat(64),
-      })).resolves.toBe('claimed');
-      await expect(first.claimCausalEvent({
-        rootEventId: EVENT_ID,
-        channelId: CHANNEL_ID,
-        parentEventId: outbound.id,
-        hop: 2,
-        authorPubkey: 'c'.repeat(64),
-        eventId: 'e'.repeat(64),
-      })).resolves.toBe('duplicate');
-      await expect(first.claimCausalEvent({
-        rootEventId: EVENT_ID,
-        channelId: CHANNEL_ID,
-        parentEventId: 'b'.repeat(64),
-        hop: 1,
-        authorPubkey: 'e'.repeat(64),
-        eventId: '9'.repeat(64),
-      })).resolves.toBe('invalid_parent');
       await first.setMembership({
         channelId: CHANNEL_ID,
         active: false,
@@ -119,31 +83,14 @@ describe('Postgres Buzz recovery store', () => {
         channelId: CHANNEL_ID,
         eventCreatedAt: 101,
       });
-      await first.registerHumanRoot({
-        eventId: CANCELLED_EVENT_ID,
-        channelId: CHANNEL_ID,
-        authorPubkey: '7'.repeat(64),
-      });
       const cancelledOutbound = createBuzzStreamEvent({
         channelId: CHANNEL_ID,
         content: 'must not publish',
         tags: [['e', CANCELLED_EVENT_ID, '', 'reply']],
         privateKey: generateSecretKey(),
       });
-      await first.markReady(CANCELLED_EVENT_ID, cancelledOutbound, {
-        eventId: cancelledOutbound.id,
-        channelId: CHANNEL_ID,
-        rootEventId: CANCELLED_EVENT_ID,
-        parentEventId: CANCELLED_EVENT_ID,
-        hop: 1,
-        authorPubkey: cancelledOutbound.pubkey,
-      });
+      await first.markReady(CANCELLED_EVENT_ID, cancelledOutbound);
       await first.markSuppressed(CANCELLED_EVENT_ID, 'turn_cancelled');
-      const cancelledCausalEvent = await pool.query(`
-        SELECT event_id FROM buzz_causal_events
-        WHERE community = $1 AND companion_id = $2 AND event_id = $3
-      `, [COMMUNITY, COMPANION_ID, cancelledOutbound.id]);
-      expect(cancelledCausalEvent.rowCount).toBe(0);
 
       const restarted = await PostgresBuzzRecoveryStore.fromPool(pool, {
         community: COMMUNITY,

@@ -15,6 +15,7 @@ const expectedGatewayMethods = [
   'llm.cancel',
   'llm.discover_models',
   'llm.invalidate_model_discovery',
+  'channel.send',
   'discord.send',
   'discord.sendMedia',
   'discord.typing',
@@ -90,10 +91,10 @@ function expectInvalid(decoder: UnknownDecoder, params: unknown): void {
 }
 
 describe('gateway RPC parameter decoder catalog', () => {
-  it('keeps the reviewed 52 gateway plus 17 reverse-agent decoder inventory exact', () => {
+  it('keeps the reviewed 53 gateway plus 17 reverse-agent decoder inventory exact', () => {
     expect(Object.keys(gatewayMethodParamDecoders)).toEqual(expectedGatewayMethods);
     expect(Object.keys(agentMethodParamDecoders)).toEqual(expectedAgentMethods);
-    expect(expectedGatewayMethods).toHaveLength(52);
+    expect(expectedGatewayMethods).toHaveLength(53);
     expect(expectedAgentMethods).toHaveLength(17);
   });
 

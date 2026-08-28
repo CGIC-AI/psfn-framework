@@ -20,6 +20,7 @@ import { CANARY_CARRIER_PARAM_KEY } from './canary-token.js';
  * self-trip.
  */
 export const EGRESS_CANARY_METHODS: ReadonlySet<string> = new Set([
+  'channel.send',
   'discord.send',
   'discord.sendMedia',
   // Outbound emoji reactions are a disclosure-bearing egress surface (jp36.1.3 /

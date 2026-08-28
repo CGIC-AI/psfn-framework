@@ -38,6 +38,10 @@ describe('evaluatePolicy', () => {
     expect(evaluatePolicy({ method: 'discord.send', params: {} }, policyConfig)).toBe('ALLOW');
   });
 
+  it('allows account-routed native channel sends', () => {
+    expect(evaluatePolicy({ method: 'channel.send', params: {} }, policyConfig)).toBe('ALLOW');
+  });
+
   it('allows discord.sendMedia', () => {
     expect(evaluatePolicy({ method: 'discord.sendMedia', params: {} }, policyConfig)).toBe('ALLOW');
   });

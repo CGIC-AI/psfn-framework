@@ -68,8 +68,6 @@ function makeConfig(relay: TestRelay): BuzzAdapterConfig {
     channelIds: [CHANNEL_ID],
     allowedAuthorPubkeys: [relay.authorPubkey],
     machineAuthorPubkeys: [],
-    maxAutonomousReplyHops: 4,
-    noInformationAcknowledgements: ['acknowledged'],
     replayWindowSeconds: 30,
     reconnectBaseDelayMs: 5,
     reconnectMaxDelayMs: 10,
@@ -121,28 +119,6 @@ function signStreamEvent(input: {
       ...(input.extraTags ?? []),
     ],
   }, input.secretKey);
-}
-
-function signMachineStreamEvent(input: {
-  relay: TestRelay;
-  hop: number;
-  content?: string;
-  rootEventId?: string;
-  parentEventId?: string;
-}): Event {
-  const rootEventId = input.rootEventId ?? 'd'.repeat(64);
-  return signStreamEvent({
-    secretKey: input.relay.authorSecretKey,
-    companionPubkey: input.relay.companionPubkey,
-    content: input.content,
-    extraTags: [
-      ['e', input.parentEventId ?? 'e'.repeat(64), '', 'reply'],
-      ['agent-root', rootEventId],
-      ['agent-chain', rootEventId],
-      ['agent-hop', String(input.hop)],
-      ['agent-recipient', input.relay.companionPubkey],
-    ],
-  });
 }
 
 function startAuthenticatedRelay(
@@ -198,9 +174,9 @@ function startAuthenticatedRelay(
         expect(frame[2]).toMatchObject({
           kinds: [9],
           '#h': [CHANNEL_ID],
-          '#p': [relay.companionPubkey],
           since: expect.any(Number),
         });
+        expect(frame[2]).not.toHaveProperty('#p');
         onSubscribed(socket, subscriptionId);
         return;
       }
@@ -232,7 +208,41 @@ function startAuthenticatedRelay(
 }
 
 describe('BuzzAdapter', () => {
-  it('authenticates, routes one allowed top-level mention, and publishes an anchored reply', async () => {
+  it('advertises native room-thread support', async () => {
+    const relay = await createTestRelay();
+    const adapter = new BuzzAdapter(makeConfig(relay), makeOptions(1_000));
+
+    expect(adapter.capabilities.threads).toBe(true);
+  });
+
+  it('observes one allowed ambient room message without publishing a reply', async () => {
+    const relay = await createTestRelay();
+    const inbound = signStreamEvent({
+      secretKey: relay.authorSecretKey,
+      content: 'The room is discussing next steps.',
+    });
+    const published: Event[] = [];
+    startAuthenticatedRelay(relay, (socket, subscriptionId) => {
+      socket.send(JSON.stringify(['EVENT', subscriptionId, inbound]));
+    }, event => published.push(event));
+
+    const handler = vi.fn(async (message: SubstrateMessage) => responseFor(message));
+    const adapter = new BuzzAdapter(makeConfig(relay), makeOptions(2_000));
+    adapter.onOperatorAlert(async () => undefined);
+    adapter.onMessage(handler);
+
+    await adapter.start();
+    await vi.waitFor(() => expect(handler).toHaveBeenCalledOnce());
+    await adapter.stop();
+
+    expect(handler.mock.calls[0]?.[0]).toMatchObject({
+      id: inbound.id,
+      routing: { source: 'buzz', responseMode: 'observe' },
+    });
+    expect(published).toHaveLength(0);
+  });
+
+  it('authenticates a direct room mention and publishes an ordinary top-level room reply', async () => {
     const relay = await createTestRelay();
     const inbound = signStreamEvent({
       secretKey: relay.authorSecretKey,
@@ -288,18 +298,116 @@ describe('BuzzAdapter', () => {
     expect(reply.pubkey).toBe(relay.companionPubkey);
     expect(reply.kind).toBe(9);
     expect(reply.content).toBe('I will coordinate that.');
-    expect(reply.tags).toEqual([
+    expect(reply.tags).toEqual([['h', CHANNEL_ID]]);
+  });
+
+  it('observes a valid human thread reply with authoritative root and parent context', async () => {
+    const relay = await createTestRelay();
+    const rootEventId = 'a'.repeat(64);
+    const parentEventId = 'b'.repeat(64);
+    const inbound = signStreamEvent({
+      secretKey: relay.authorSecretKey,
+      content: 'Adding this inside the existing thread.',
+      extraTags: [
+        ['e', rootEventId, '', 'root'],
+        ['e', parentEventId, '', 'reply'],
+      ],
+    });
+    const published: Event[] = [];
+    startAuthenticatedRelay(relay, (socket, subscriptionId) => {
+      socket.send(JSON.stringify(['EVENT', subscriptionId, inbound]));
+    }, event => published.push(event));
+    const handler = vi.fn(async (message: SubstrateMessage) => responseFor(message));
+    const adapter = new BuzzAdapter(makeConfig(relay), makeOptions(2_000));
+    adapter.onOperatorAlert(async () => undefined);
+    adapter.onMessage(handler);
+
+    await adapter.start();
+    await vi.waitFor(() => expect(handler).toHaveBeenCalledOnce());
+    await adapter.stop();
+
+    expect(handler.mock.calls[0]?.[0]).toMatchObject({
+      id: inbound.id,
+      replyToMessageId: parentEventId,
+      routing: {
+        source: 'buzz',
+        responseMode: 'observe',
+        addressing: {
+          channel: {
+            scope: 'group',
+            channelId: `buzz:${encodeURIComponent(relay.url)}:${CHANNEL_ID}`,
+            threadId: rootEventId,
+          },
+          replyTarget: { messageId: parentEventId },
+          resolvedAddressee: { kind: 'unresolved_reply', messageId: parentEventId },
+        },
+      },
+    });
+    expect(published).toEqual([]);
+  });
+
+  it('preserves an explicit Buzz thread only when replying to a direct mention inside it', async () => {
+    const relay = await createTestRelay();
+    const rootEventId = 'c'.repeat(64);
+    const inbound = signStreamEvent({
+      secretKey: relay.authorSecretKey,
+      companionPubkey: relay.companionPubkey,
+      content: 'Fixture companion, answer here in the thread.',
+      extraTags: [
+        ['e', rootEventId, '', 'root'],
+        ['e', 'd'.repeat(64), '', 'reply'],
+      ],
+    });
+    const published: Event[] = [];
+    startAuthenticatedRelay(relay, (socket, subscriptionId) => {
+      socket.send(JSON.stringify(['EVENT', subscriptionId, inbound]));
+    }, event => published.push(event));
+    const adapter = new BuzzAdapter(makeConfig(relay), makeOptions(2_000));
+    adapter.onOperatorAlert(async () => undefined);
+    adapter.onMessage(async message => responseFor(message));
+
+    await adapter.start();
+    await vi.waitFor(() => expect(published).toHaveLength(1));
+    await adapter.stop();
+
+    expect(published[0]?.tags).toEqual([
       ['h', CHANNEL_ID],
+      ['e', rootEventId, '', 'root'],
       ['e', inbound.id, '', 'reply'],
-      ['p', relay.authorPubkey],
-      ['agent-root', inbound.id],
-      ['agent-chain', inbound.id],
-      ['agent-hop', '1'],
-      ['agent-recipient', relay.authorPubkey],
     ]);
   });
 
-  it('rejects wrong channels, kinds, addressing, authors, signatures, threads, and self events', async () => {
+  it('marks configured machine authors on ordinary ambient room observations', async () => {
+    const relay = await createTestRelay();
+    const inbound = signStreamEvent({
+      secretKey: relay.authorSecretKey,
+      content: 'Fixture agent has finished the first pass.',
+    });
+    startAuthenticatedRelay(relay, (socket, subscriptionId) => {
+      socket.send(JSON.stringify(['EVENT', subscriptionId, inbound]));
+    }, () => undefined);
+    const config = makeConfig(relay);
+    config.machineAuthorPubkeys = [relay.authorPubkey];
+    const handler = vi.fn(async (message: SubstrateMessage) => responseFor(message));
+    const adapter = new BuzzAdapter(config, makeOptions(2_000));
+    adapter.onOperatorAlert(async () => undefined);
+    adapter.onMessage(handler);
+
+    await adapter.start();
+    await vi.waitFor(() => expect(handler).toHaveBeenCalledOnce());
+    await adapter.stop();
+
+    expect(handler.mock.calls[0]?.[0]).toMatchObject({
+      id: inbound.id,
+      routing: {
+        source: 'buzz',
+        responseMode: 'observe',
+        authorIsMachineIntelligence: true,
+      },
+    });
+  });
+
+  it('rejects wrong channels, kinds, addressing, authors, signatures, malformed threads, and self events', async () => {
     const relay = await createTestRelay();
     const strangerKey = generateSecretKey();
     const invalidSignature = signStreamEvent({
@@ -319,7 +427,10 @@ describe('BuzzAdapter', () => {
         companionPubkey: relay.companionPubkey,
         kind: 1,
       }),
-      signStreamEvent({ secretKey: relay.authorSecretKey }),
+      signStreamEvent({
+        secretKey: relay.authorSecretKey,
+        extraTags: [['p', 'not-a-pubkey']],
+      }),
       signStreamEvent({ secretKey: strangerKey, companionPubkey: relay.companionPubkey }),
       invalidSignature,
       signStreamEvent({
@@ -429,15 +540,18 @@ describe('BuzzAdapter', () => {
     expect(published[1]).toEqual(published[0]);
   });
 
-  it('terminates machine acknowledgement and hop-limit events without cognition or publication', async () => {
+  it('routes machine-authored room mentions through the normal response path', async () => {
     const relay = await createTestRelay();
     const events = [
-      signMachineStreamEvent({ relay, hop: 1, content: 'acknowledged' }),
-      signMachineStreamEvent({
-        relay,
-        hop: 4,
-        rootEventId: 'a'.repeat(64),
-        parentEventId: 'b'.repeat(64),
+      signStreamEvent({
+        secretKey: relay.authorSecretKey,
+        companionPubkey: relay.companionPubkey,
+        content: 'Fixture agent asks for a review.',
+      }),
+      signStreamEvent({
+        secretKey: relay.authorSecretKey,
+        companionPubkey: relay.companionPubkey,
+        content: 'Fixture agent has another update.',
       }),
     ];
     const published: Event[] = [];
@@ -447,25 +561,24 @@ describe('BuzzAdapter', () => {
     const config = makeConfig(relay);
     config.machineAuthorPubkeys = [relay.authorPubkey];
     const log: RuntimeChannelLifecycleLogger = { error: vi.fn(), warn: vi.fn() };
-    const handler = vi.fn(async (message: SubstrateMessage) => responseFor(message));
+    const handler = vi.fn(async (message: SubstrateMessage) => ({
+      ...responseFor(message),
+      content: `reply:${message.id}`,
+    }));
     const adapter = new BuzzAdapter(config, makeOptions(2_000, log));
     adapter.onOperatorAlert(async () => undefined);
     adapter.onMessage(handler);
 
     await adapter.start();
-    await vi.waitFor(() => expect(log.warn).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(handler).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(published).toHaveLength(2));
     await adapter.stop();
 
-    expect(handler).not.toHaveBeenCalled();
-    expect(published).toEqual([]);
-    expect(log.warn).toHaveBeenCalledWith(
-      'Buzz autonomous reply terminated without publication',
-      expect.objectContaining({ reason: 'no_information_acknowledgement' }),
-    );
-    expect(log.warn).toHaveBeenCalledWith(
-      'Buzz autonomous reply terminated without publication',
-      expect.objectContaining({ reason: 'autonomous_hop_limit' }),
-    );
+    expect(handler.mock.calls.map(call => call[0])).toEqual([
+      expect.objectContaining({ routing: expect.objectContaining({ authorIsMachineIntelligence: true }) }),
+      expect.objectContaining({ routing: expect.objectContaining({ authorIsMachineIntelligence: true }) }),
+    ]);
+    expect(published.every(event => event.tags.length === 1)).toBe(true);
   });
 
   it('treats fatigue suppression as terminal silence', async () => {
@@ -499,11 +612,11 @@ describe('BuzzAdapter', () => {
     expect(published).toEqual([]);
   });
 
-  it('rejects a machine chain whose claimed human root was never observed', async () => {
+  it('does not require adapter-local ancestry for a machine room message', async () => {
     const relay = await createTestRelay();
-    const inbound = signMachineStreamEvent({
-      relay,
-      hop: 1,
+    const inbound = signStreamEvent({
+      secretKey: relay.authorSecretKey,
+      companionPubkey: relay.companionPubkey,
       content: 'Please continue this chain.',
     });
     const published: Event[] = [];
@@ -519,14 +632,13 @@ describe('BuzzAdapter', () => {
     adapter.onMessage(handler);
 
     await adapter.start();
-    await vi.waitFor(() => expect(log.warn).toHaveBeenCalledWith(
-      'Buzz autonomous reply terminated without publication',
-      expect.objectContaining({ reason: 'invalid_causal_parent' }),
-    ));
+    await vi.waitFor(() => expect(handler).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(published).toHaveLength(1));
     await adapter.stop();
 
-    expect(handler).not.toHaveBeenCalled();
-    expect(published).toEqual([]);
+    expect(handler.mock.calls[0]?.[0]).toMatchObject({
+      routing: { authorIsMachineIntelligence: true },
+    });
   });
 
   it('subscribes after a signed membership add and cancels the turn on removal', async () => {
@@ -761,7 +873,7 @@ describe('BuzzAdapter', () => {
     expect(handler.mock.calls[0]?.[0]).toMatchObject({ id: accepted.id });
   });
 
-  it('rejects forged machine parents and reset hops after an authenticated human root', async () => {
+  it('rejects obsolete adapter-local causal tags instead of creating a parallel loop authority', async () => {
     const relay = await createTestRelay();
     const humanSecretKey = generateSecretKey();
     const humanPubkey = getPublicKey(humanSecretKey);
@@ -772,12 +884,17 @@ describe('BuzzAdapter', () => {
     });
     let streamSocket: WebSocket | undefined;
     let streamSubscriptionId: string | undefined;
-    const forged = signMachineStreamEvent({
-      relay,
-      hop: 1,
-      rootEventId: humanRoot.id,
-      parentEventId: '9'.repeat(64),
+    const forged = signStreamEvent({
+      secretKey: relay.authorSecretKey,
+      companionPubkey: relay.companionPubkey,
       content: 'I reset the chain.',
+      extraTags: [
+        ['e', '9'.repeat(64), '', 'reply'],
+        ['agent-root', humanRoot.id],
+        ['agent-chain', humanRoot.id],
+        ['agent-hop', '1'],
+        ['agent-recipient', relay.companionPubkey],
+      ],
     });
     startAuthenticatedRelay(relay, (socket, subscriptionId) => {
       streamSocket = socket;
@@ -791,16 +908,16 @@ describe('BuzzAdapter', () => {
     config.allowedAuthorPubkeys = [humanPubkey, relay.authorPubkey];
     config.machineAuthorPubkeys = [relay.authorPubkey];
     const log: RuntimeChannelLifecycleLogger = { error: vi.fn(), warn: vi.fn() };
-    const handler = vi.fn(async (message: SubstrateMessage) => responseFor(message));
+    const handler = vi.fn(async (message: SubstrateMessage) => ({
+      ...responseFor(message),
+      content: `reply:${message.id}`,
+    }));
     const adapter = new BuzzAdapter(config, makeOptions(2_000, log));
     adapter.onOperatorAlert(async () => undefined);
     adapter.onMessage(handler);
 
     await adapter.start();
-    await vi.waitFor(() => expect(log.warn).toHaveBeenCalledWith(
-      'Buzz autonomous reply terminated without publication',
-      expect.objectContaining({ reason: 'invalid_causal_parent' }),
-    ));
+    await vi.waitFor(() => expect(handler).toHaveBeenCalledOnce());
     await adapter.stop();
 
     expect(handler).toHaveBeenCalledOnce();
@@ -1034,13 +1151,28 @@ describe('BuzzAdapter', () => {
     expect(streamCount).toBeGreaterThanOrEqual(4);
   });
 
-  it('rejects generic top-level outbound outside an authenticated Stream trigger', async () => {
+  it('publishes generic top-level outbound to an allowlisted room', async () => {
     const relay = await createTestRelay();
+    const published: Event[] = [];
+    startAuthenticatedRelay(relay, () => undefined, event => published.push(event));
     const adapter = new BuzzAdapter(makeConfig(relay), makeOptions(2_000));
+    adapter.onOperatorAlert(async () => undefined);
+    adapter.onMessage(async message => responseFor(message));
+    await adapter.start();
 
-    await expect(adapter.send(
+    await adapter.send(
       `buzz:${encodeURIComponent(relay.url)}:${CHANNEL_ID}`,
       'unbound scheduled thought',
-    )).rejects.toThrow('Buzz top-level outbound is not supported by the Stream mention tracer');
+    );
+    await adapter.stop();
+
+    expect(published).toHaveLength(1);
+    expect(published[0]).toMatchObject({
+      pubkey: relay.companionPubkey,
+      kind: 9,
+      content: 'unbound scheduled thought',
+      tags: [['h', CHANNEL_ID]],
+    });
+    expect(verifyEvent(published[0]!)).toBe(true);
   });
 });

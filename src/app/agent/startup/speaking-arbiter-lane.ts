@@ -3,9 +3,8 @@
 // Passive-name candidates (§8.1) -> cheap participation appraiser (§8.2,
 // jp36.3.3) -> ICP-over-social precedence (jp36.5.2.1) -> reservation phase
 // (§8.5/§12.2, jp36.5.1.2) -> egress-lease phase (§8.5/§18/§20.1,
-// jp36.5.1.3). The egress lease is gated OFF by default and stays
-// code-pinned fail-closed (qgqw.3, P1): observe/appraise/reserve is live,
-// nothing sends autonomously.
+// jp36.5.1.3). Public defaults keep egress OFF; scheduler.json may explicitly
+// select shadow evaluation or the qgqw.3-hardened live sender.
 
 import type { SubstrateAgent } from '../../../core/agent/substrate-agent.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
@@ -17,7 +16,6 @@ import { SpeakingReservationPhase, type IcpSocialPrecedenceResolver } from '../.
 import { SpeakingEgressLeasePhase } from '../../../core/agent/arbiter/egress-lease-phase.js';
 import { createIcpSpeakingPrecedenceResolver } from '../../../core/icp/speaking-precedence-resolver.js';
 import { readRoomEpisodePressureFromLedger } from '../../../core/agent/fatigue/room-episode-pressure.js';
-import { createDefaultEgressLeasePhaseSettings } from '../../../system/config/participation-config.js';
 import { createAgentLoopEgressReplySender } from '../egress-reply-sender.js';
 import type { ObservedGroupMemoryScheduler } from '../../../faculties/memory/extraction/group-observed-scheduler.js';
 import type { SessionStore } from '../../../persistence/sessions/store.js';
@@ -36,7 +34,13 @@ export interface SpeakingArbiterLaneDeps {
   sessionStore: SessionStore;
   persistenceRuntime: Awaited<ReturnType<typeof createAgentPersistenceRuntime>>;
   coreRuntime: AgentCoreRuntime;
-  gatewaySender: { send: (channelId: string, content: string) => Promise<void> };
+  gatewaySender: {
+    send: (
+      channelType: 'discord' | 'buzz',
+      channelId: string,
+      content: string,
+    ) => Promise<void>;
+  };
   outboundReplyGuard: OutboundReplyDeduper;
 }
 
@@ -151,24 +155,16 @@ export function wireSpeakingArbiterLane(deps: SpeakingArbiterLaneDeps): Speaking
 
   // Speaking-arbiter egress-lease phase (bible §8.5/§12.2, §18, §20.1,
   // jp36.5.1.3): phase 2, the exclusive send-once binding at delivery. Promoting
-  // a retained candidate to a REAL autonomous room reply is a new,
-  // CogSec-sensitive surface, so it is gated OFF by default (the egress-lease
-  // settings `enabled` flag): with it disabled the observe/appraise/reserve path
-  // is unchanged and nothing is sent. The room-episode pressure gate reads the
+  // a retained candidate to a REAL autonomous room reply is operator-controlled
+  // through the explicit off/shadow/on owner posture. Off remains the public
+  // default; shadow evaluates and records admission without drawing or sending;
+  // on uses the qgqw.3-hardened sender. The room-episode pressure gate reads the
   // ONE reconciled ledger-derived source (jp36.5.4 seam) — never the arbiter
   // store's raw pressure scalar, which stays a write-only projection.
-  // Egress-lease TUNABLES (leaseTtlMs, egressDrawUnits, minReplyConfidence) are
-  // owned by scheduler.json socialAutonomy.egressLease (jp36.8.2). The `enabled`
-  // flag is DELIBERATELY not owner-file-exposed and stays code-pinned to the
-  // fail-closed default (false): promoting an observed candidate to a real
-  // autonomous send is blocked until qgqw.3 (P1), so no config path may enable
-  // it. Merging the tunables over the code default preserves enabled === false.
-  const egressLeaseSettings = {
-    ...createDefaultEgressLeasePhaseSettings(),
-    ...schedulerConfig.socialAutonomy.egressLease,
-  };
+  // Mode and tunables are owned by scheduler.json socialAutonomy.egressLease.
+  const egressLeaseSettings = schedulerConfig.socialAutonomy.egressLease;
   const egressLeasePhase = (
-    egressLeaseSettings.enabled
+    egressLeaseSettings.mode !== 'off'
     && config.multiCompanion === true
     && persistenceRuntime.speakingArbiterStore
     && persistenceRuntime.socialPotStore
@@ -203,6 +199,7 @@ export function wireSpeakingArbiterLane(deps: SpeakingArbiterLaneDeps): Speaking
         resolveDestinationDisclosure: (channelId) => classifyChannelDisclosure(channelId),
       }),
       config: {
+        mode: egressLeaseSettings.mode,
         leaseTtlMs: egressLeaseSettings.leaseTtlMs,
         egressDrawUnits: egressLeaseSettings.egressDrawUnits,
         minReplyConfidence: egressLeaseSettings.minReplyConfidence,

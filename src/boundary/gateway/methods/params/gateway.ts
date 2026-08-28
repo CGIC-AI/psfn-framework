@@ -67,6 +67,9 @@ const imageCommon = {
 };
 
 export const gatewayOperationalParamDecoders = {
+  'channel.send': gatewayDecoder('channel.send', strictObject({
+    channelType: enumSchema(['buzz']), channelId: Type.String(), content: Type.String(),
+  })),
   'discord.send': gatewayDecoder('discord.send', strictObject({
     channelId: Type.String(), content: Type.String(), companionId: optionalString,
   })),

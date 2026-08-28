@@ -1132,6 +1132,94 @@ describe('registerGatewayMessageHandlers', () => {
     });
   });
 
+  it('routes plugin room observations through group memory and the shared speaking arbiter', async () => {
+    const message = makeMessage({
+      id: 'buzz-observe-1',
+      channelId: 'buzz:relay.example:room-1',
+      channelType: 'buzz',
+      routing: { source: 'buzz', responseMode: 'observe' },
+    });
+    const candidate: ParticipationCandidate = {
+      schemaVersion: 1,
+      channelId: message.channelId,
+      channelType: 'buzz',
+      sourceMessageId: message.id,
+      trigger: 'direct_address',
+      triggerAuthorId: message.authorId,
+      triggerAuthorName: message.authorName,
+      triggerContent: message.content,
+      triggerTimestampMs: message.timestamp.getTime(),
+      matchedName: false,
+      matchedDirectAddress: true,
+      precedingContext: [],
+      createdAtMs: message.timestamp.getTime() + 1,
+    };
+    const reservation: SpeakingReservationSnapshot = {
+      reservationId: '99999999-9999-4999-8999-999999999999',
+      channelId: message.channelId,
+      triggerEventId: message.id,
+      companionId: '11111111-1111-4111-8111-111111111111',
+      episodeId: 'buzz-episode-1',
+      reservedAtMs: 1_000,
+      expiresAtMs: 2_000,
+      status: 'reserved',
+      reason: null,
+      finalizedAtMs: null,
+      revision: 1,
+    };
+    const observedGroupMemoryScheduler: ObservedGroupMemorySchedulerPort = {
+      observeMessage: vi.fn(async () => ({
+        status: 'skipped',
+        channelId: message.channelId,
+        reason: 'threshold_not_met',
+        watermarkLagMessageIds: 1,
+      })),
+    };
+    const passiveNameCandidateBuilder: PassiveNameCandidatePort = {
+      build: vi.fn(async () => ({ status: 'created', candidate })),
+    };
+    const participationAppraiser: ParticipationAppraiserPort = {
+      appraise: vi.fn(async () => ({
+        appraisal: { action: 'reply', reasonCode: 'asked_directly', confidence: 0.9 },
+        failClosed: false,
+      })),
+    };
+    const reservationPhase: ReservationPhasePort = {
+      reserve: vi.fn(async () => ({ outcome: 'reserved', reservation, replayed: false })),
+      settleAfterAppraisal: vi.fn(async () => 'retained'),
+      releaseIgnored: vi.fn(),
+    };
+    const egressLeasePhase: EgressLeasePhasePort = {
+      grantReply: vi.fn(async (): Promise<EgressLeaseDecision> => ({ outcome: 'delivered' })),
+      releaseReact: vi.fn(),
+    };
+    const harness = createHarness({
+      observedGroupMemoryScheduler,
+      passiveNameCandidateBuilder,
+      participationAppraiser,
+      reservationPhase,
+      egressLeasePhase,
+    });
+
+    const response = await harness.onHandleMessage(message);
+
+    expect(response.content).toBe('');
+    expect(observedGroupMemoryScheduler.observeMessage).toHaveBeenCalledWith(message);
+    expect(passiveNameCandidateBuilder.build).toHaveBeenCalledWith(message);
+    expect(participationAppraiser.appraise).toHaveBeenCalledWith(candidate);
+    expect(egressLeasePhase.grantReply).toHaveBeenCalledWith(
+      reservation,
+      expect.objectContaining({ action: 'reply' }),
+      expect.objectContaining({
+        channelId: message.channelId,
+        channelType: 'buzz',
+        sourceMessageId: message.id,
+      }),
+      expect.any(Number),
+    );
+    expect(harness.agentLoop.handleMessage).not.toHaveBeenCalled();
+  });
+
   // ── Inter-companion channel lane (sprint 10, W6) ──
 
   function makeCompanionMessage(overrides?: Record<string, unknown>): SubstrateMessage {

@@ -940,7 +940,7 @@ describe('social-autonomy owner-file config (jp36.8.2)', () => {
           },
           appraiser: { appraisalDeadlineMs: 5_000 },
           reservationPhase: { minReserveDrawUnits: 0 },
-          egressLease: { leaseTtlMs: 30_000, minReplyConfidence: 0 },
+          egressLease: { mode: 'on', leaseTtlMs: 30_000, minReplyConfidence: 0 },
           freeTimeChooser: { silencePersistenceMinutes: 0, projectListCap: 0 },
         },
       },
@@ -955,14 +955,25 @@ describe('social-autonomy owner-file config (jp36.8.2)', () => {
     expect(validated.socialAutonomy.passiveNameCandidate.debounceWindowMs).toBe(0);
     expect(validated.socialAutonomy.appraiser.appraisalDeadlineMs).toBe(5_000);
     expect(validated.socialAutonomy.reservationPhase.minReserveDrawUnits).toBe(0);
+    expect(validated.socialAutonomy.egressLease.mode).toBe('on');
     expect(validated.socialAutonomy.egressLease.leaseTtlMs).toBe(30_000);
     expect(validated.socialAutonomy.egressLease.minReplyConfidence).toBe(0);
     expect(validated.socialAutonomy.freeTimeChooser.silencePersistenceMinutes).toBe(0);
     expect(validated.socialAutonomy.freeTimeChooser.projectListCap).toBe(0);
   });
 
-  it('never exposes an egress-lease enablement override (qgqw.3)', () => {
+  it('defaults autonomous room egress off and exposes an explicit off/shadow/on mode', () => {
     expect(DEFAULT_SOCIAL_AUTONOMY_CONFIG.egressLease).not.toHaveProperty('enabled');
+    expect(DEFAULT_SOCIAL_AUTONOMY_CONFIG.egressLease.mode).toBe('off');
+    for (const mode of ['off', 'shadow', 'on'] as const) {
+      expect(validateSchedulerConfig(
+        {
+          ...buildValidSchedulerConfig(),
+          socialAutonomy: { egressLease: { mode } },
+        },
+        'test',
+      ).socialAutonomy.egressLease.mode).toBe(mode);
+    }
     expect(() =>
       validateSchedulerConfig(
         {
@@ -972,6 +983,15 @@ describe('social-autonomy owner-file config (jp36.8.2)', () => {
         'test',
       ),
     ).toThrow(/socialAutonomy\.egressLease contains unknown keys: enabled/u);
+    expect(() =>
+      validateSchedulerConfig(
+        {
+          ...buildValidSchedulerConfig(),
+          socialAutonomy: { egressLease: { mode: 'automatic' } },
+        },
+        'test',
+      ),
+    ).toThrow(/egressLease\.mode must be one of "off", "shadow", "on"/u);
   });
 
   it('fails closed on wrong types, unknown keys, and out-of-range values', () => {

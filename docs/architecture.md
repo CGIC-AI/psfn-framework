@@ -1,401 +1,512 @@
-# Architecture
+---
+type: concept
+title: Runtime Architecture
+description: The split runtime shape — privileged gateway, isolated agent (Companion Core), operator Garden plane, and optional cert-manager sidecar — plus startup composition, the gateway↔agent RPC contract, persistence and multi-companion topology, and subsystem ownership.
+tags: [runtime, split-runtime, gateway, agent, operator, cert-manager, composition, rpc, companion-core, garden, multi-companion, persistence, cogsec, voice]
+verified:
+  - by: openwiki/0.4.3
+    at: 2026-08-28T13:30:04.287Z
+sources:
+  - id: openwiki-source-9ae94fa82b40a718e3d046c1
+    resource: repo://src/app/agent/admin-surface.ts
+  - id: openwiki-source-b567b65b1d23df99ef1b850a
+    resource: repo://src/app/agent/main.ts
+  - id: openwiki-source-fb0757525b769c25cf3bbdcb
+    resource: repo://src/app/agent/startup-guards.ts
+  - id: openwiki-source-21ff185c06d95d03a0471b17
+    resource: repo://src/app/cert-manager/config.ts
+  - id: openwiki-source-6ad60579277f6f47366c3836
+    resource: repo://src/app/cert-manager/main.ts
+  - id: openwiki-source-23491c22ea41bce2dba9bfb2
+    resource: repo://src/app/cert-manager/server.ts
+  - id: openwiki-source-be77f550901e31642bfce318
+    resource: repo://src/app/cert-manager/service.ts
+  - id: openwiki-source-8f888319d1e5e3310de9c4e0
+    resource: repo://src/app/gateway/main.ts
+  - id: openwiki-source-9d14543ef75a97f03641ca5c
+    resource: repo://src/app/operator/main.ts
+  - id: openwiki-source-d345d4ad780aa8ec14d9e008
+    resource: repo://src/app/startup/composition/composition.ts
+  - id: openwiki-source-5a0749353bca8b5ba1b5c22f
+    resource: repo://src/app/startup/composition/parity.ts
+  - id: openwiki-source-379b9c740d1a6ae74d46f8dc
+    resource: repo://src/app/startup/index.ts
+  - id: openwiki-source-ad01a431b8fa0756c17e9d1b
+    resource: repo://src/app/startup/support/startup-preflight.ts
+  - id: openwiki-source-cef1a344a092eed01fc42339
+    resource: repo://src/boundary/gateway/client.ts
+  - id: openwiki-source-04a67cd4036455ad946518e1
+    resource: repo://src/boundary/gateway/companion-auth.ts
+  - id: openwiki-source-6592989a95b67daf4d630d55
+    resource: repo://src/boundary/gateway/methods/index.ts
+  - id: openwiki-source-7d788c405155584a1ac4541a
+    resource: repo://src/boundary/gateway/methods/mcp.ts
+  - id: openwiki-source-206fc7b67f36db1a9f91b298
+    resource: repo://src/boundary/gateway/methods/session-hmac.ts
+  - id: openwiki-source-3894e7d5c13b93a726eca7a1
+    resource: repo://src/boundary/gateway/multi-companion.ts
+  - id: openwiki-source-28a8cc16fdf3e76bf3506d8a
+    resource: repo://src/boundary/gateway/policy.ts
+  - id: openwiki-source-ef3ff93ef5161f950bf87d9a
+    resource: repo://src/boundary/gateway/privileged-core.ts
+  - id: openwiki-source-ab0e7d83819ca63e342987f5
+    resource: repo://src/boundary/gateway/protocol.ts
+  - id: openwiki-source-03bf9a64f12b857c69ec260f
+    resource: repo://src/boundary/gateway/runtime-health.ts
+  - id: openwiki-source-e1d26b64488f4fe84499b95c
+    resource: repo://src/boundary/gateway/server.ts
+  - id: openwiki-source-29302d84158f39512ad6789e
+    resource: repo://src/boundary/gateway/transport.ts
+  - id: openwiki-source-aff33f34c4064340f688f5fd
+    resource: repo://src/boundary/gateway/voice-surfaces.ts
+  - id: openwiki-source-1a476d65acd63773dd369788
+    resource: repo://src/operator/garden/fleet-garden-control-plane.ts
+  - id: openwiki-source-f956d26854857abfd34b256d
+    resource: repo://src/operator/garden/operator-surface.ts
+  - id: openwiki-source-6e521c040b10bd5c283bb0ca
+    resource: repo://src/operator/garden/transport-paths.ts
+  - id: openwiki-source-c358820e25e9d9fbc9b31c6a
+    resource: repo://src/persistence/layout.ts
+  - id: openwiki-source-4ef3fef6dd44ba46844c2587
+    resource: repo://src/persistence/runtime-factory.ts
+  - id: openwiki-source-a3e87fa27b5cd8b6ac49ed24
+    resource: repo://src/system/lifecycle/runtime-mode.ts
+generated: { by: "openwiki/0.4.3", at: "2026-08-28T13:30:04.287Z" }
+---
 
-Last updated: 2026-07-12.
+# Runtime Architecture
 
-This is the current runtime shape. For the component graph, see [`docs/architecture-diagram.mmd`](./architecture-diagram.mmd). For the end-to-end anatomy of a single chat turn (inbound queueing, in-turn continuations, reply disposition, post-turn lanes), see [`docs/chat-turn-lifecycle.md`](./chat-turn-lifecycle.md). For current feature status and active work, see [`docs/development-status.md`](./development-status.md). Historical sprint snapshots (Sprint 8 architecture report, Sprint 9 reviews) are archived off-repo with the working-docs archive.
+This page documents the current runtime shape: which OS processes exist, who
+owns which responsibility, how they compose at startup, and how they talk to
+each other. The component graph lives in the hand-maintained
+[`docs/architecture-diagram.mmd`](../docs/architecture-diagram.mmd); the
+end-to-end anatomy of one chat turn (inbound queueing, in-turn continuations,
+reply disposition, post-turn lanes) lives in
+<!-- openwiki: broken internal link [chat-turn-lifecycle.md] file "chat-turn-lifecycle.md" does not exist. Fix the href or restore the target, then delete this comment. -->
+[`chat-turn-lifecycle.md`](chat-turn-lifecycle.md). Current feature status and
+active work are in [`development-status.md`](development-status.md).
 
-## Canonical Runtime Model
+The architectural authority for Companion Core identity-and-continuity is the
+project charter ([`docs/PSFN_PROJECT_CHARTER.md`](../docs/PSFN_PROJECT_CHARTER.md));
+this page describes how the runtime realizes it. When prose and code disagree,
+the code wins — entrypoints and composition files first.
 
-- `src/app/startup/index.ts` is disabled and exits fail-closed.
-- `src/app/gateway/main.ts` is the host-side process. It owns secrets, outbound network access, policy checks, SSRF defense, confirmation queues, audit logging, gateway-backed tool execution, intake screening for boundary-crossing content, and the public OpenAI-compatible API edge.
-- `src/app/operator/main.ts` is the operator-plane process. It hosts Garden HTTP/UI and proxies admin traffic over the private admin transport.
-- `src/app/agent/main.ts` is the isolated agent process. It loads companion state, enforces startup network isolation, connects to the gateway over the Unix socket, and runs the companion loop plus the private admin transport.
-- `src/app/cert-manager/main.ts` is an optional sidecar process hosting the private CA for the satellite backplane: a token-authenticated loopback API (`npm run cert-manager`) that issues and auto-renews the mTLS certificates `satellites.json` client-cert bindings pin. It shares only `src/shared/` with the runtime. See [`docs/certificates.md`](./certificates.md).
+## Canonical runtime model
 
-```text
-External channels / API / Garden
-        |
-        v
-Gateway process
-  - secrets, provider credentials, outbound network
-  - LLM and embedding clients
-  - URL, filesystem, shell, git, vault, beads, media policy
-        |
-        | JSON-RPC over Unix socket
-        v
-Agent process
-  - companion loop, prompt stack, memory/retrieval
-  - scheduler, post-turn work, internal state
-  - private admin transport and model-facing tools
-        |
-        v
-PostgreSQL + JSONL/session files + owner-file roots
+The split runtime is the only supported shape. Four process roles exist:
+
+| Process | Entrypoint | Role |
+| --- | --- | --- |
+| Gateway | `src/app/gateway/main.ts` | Host-side privileged edge: secrets, provider credentials, outbound network, policy, approval queues, audit, gateway-backed tool execution, CogSec screening, OpenAI-compatible API edge |
+| Agent | `src/app/agent/main.ts` | Isolated Companion Core process: companion loop, prompt stack, memory/retrieval, scheduler, post-turn work, private admin transport |
+| Operator | `src/app/operator/main.ts` | Operator plane: Garden HTTP/UI, admin traffic proxied over the private admin transport |
+| Cert-manager | `src/app/cert-manager/main.ts` | Optional sidecar hosting the private CA for the satellite backplane |
+
+The legacy monolith entrypoint `src/app/startup/index.ts` is disabled and
+exits fail-closed with an error directing operators to the split entrypoints.
+
+```mermaid
+flowchart TD
+  subgraph External["External surfaces"]
+    CHANNELS_IN["Discord / Telegram / API / voice / companion-ui / Satellite Hub"]
+    GARDEN_BROWSER["Garden browser"]
+  end
+
+  subgraph Gateway["Gateway process — src/app/gateway/main.ts"]
+    GW_RPC["GatewayServer — NDJSON JSON-RPC socket"]
+    LLM["LLM + embedding clients — provider secrets stay here"]
+    POLICY["Gateway policy — URL/SSRF/fs/shell/git/web/media, capability tiers, approvals"]
+    HOST_TOOLS["Privileged host tools — fs, repo, shell, web, vault, beads, media, MCP broker"]
+    INTAKE["Intake firewall screening — L1 scanners, ONNX classifier, image screening"]
+    CHANNELS["Channel adapters — Discord, Telegram, API, voice, companion-ui, backplane"]
+  end
+
+  subgraph Agent["Agent process — src/app/agent/main.ts"]
+    AGENT_LOOP["SubstrateAgent — prompt/context/tool loop"]
+    SESSION["SessionManager — L0 JSONL context"]
+    MEMORY["Memory runtime — Postgres + pgvector, L0.1 episodes"]
+    SCHED["Scheduler — heartbeat, reflection, post-turn lanes, rest-window work"]
+    IDENTITY["Identity + prompt stack — character card, layers, north star"]
+    SINK_GATES["Intake firewall agent side — L1 in-process screening + sink gates"]
+    ADMIN_PRIVATE["Private admin surface — garden-admin transport"]
+  end
+
+  subgraph Operator["Operator process — src/app/operator/main.ts"]
+    GARDEN_HTTP["Garden HTTP/UI — /login, /garden, /api/admin/*"]
+    ADMIN_PROXY["Private admin transport proxy"]
+  end
+
+  subgraph Storage["Persistence"]
+    PG[("PostgreSQL + pgvector — runtime state, fleet auth, model usage")]
+    JSONL[("Session JSONL — canonical L0 archive")]
+    OWNER[("JSON owner files — settings, prompts, capability, trust, charge")]
+    WORKSPACE[("WORKSPACE_PATH — personal files, wiki, generated media")]
+  end
+
+  CHANNELS_IN --> CHANNELS
+  CHANNELS --> GW_RPC
+  HOST_TOOLS --> POLICY
+  HOST_TOOLS --> INTAKE
+  INTAKE --> GW_RPC
+  GW_RPC <--> AGENT_LOOP
+  AGENT_LOOP --> LLM
+  AGENT_LOOP --> POLICY
+  GARDEN_BROWSER --> GARDEN_HTTP
+  GARDEN_HTTP --> ADMIN_PROXY
+  ADMIN_PROXY <--> ADMIN_PRIVATE
+  AGENT_LOOP --> SESSION
+  AGENT_LOOP --> MEMORY
+  AGENT_LOOP --> SCHED
+  AGENT_LOOP --> IDENTITY
+  AGENT_LOOP --> SINK_GATES
+  MEMORY --> PG
+  SCHED --> PG
+  SESSION --> JSONL
+  IDENTITY --> OWNER
+  AGENT_LOOP --> WORKSPACE
 ```
+
+*Process topology of the split runtime: gateway holds the privileged edge, the agent runs the Companion Core loop in isolation, and the operator proxies Garden admin traffic to the agent's private admin surface.*
 
 ### Runtime terminology
 
 A **PSFN installation** may host one or more peer Companion Cores. A
 **Companion Core** owns the authoritative identity-and-continuity state of
-exactly one companion; the isolated OS process that runs it is an **agent
-process**. A peer companion has
-its own root identity and is not a shard, subagent, or satellite.
+exactly one companion (charter law, §6.2); the isolated OS process that runs it
+is an **agent process**. A peer companion has its own root identity — it is not
+a shard, subagent, or satellite. The **Gateway** is the Core's privileged
+policy/credential edge. The **Satellite Hub** is an endpoint transport and
+relay service; a **satellite** is a device/app endpoint, an **embodiment** is
+the form through which a companion is perceived, and **emanation** is that
+companion's active situated presence in an embodiment. CogSec is the
+cross-boundary cognitive-security system; its intake firewall is only its
+pre-hoc half.
 
-This is architectural authority, not a consciousness claim. The runtime can
-observe behavior and persisted state, store companion-authored self-reports,
-and derive explicitly labelled models; none of those alone proves inner
-experience.
+## Gateway responsibilities
 
-The **Gateway** is the Core's privileged policy/credential edge. The
-**Satellite Hub** is an endpoint transport and relay service; a **satellite** is
-a device/app endpoint, an **embodiment** is the form through which a companion
-is perceived, and **emanation** is that companion's active situated presence in
-an embodiment. CogSec is the cross-boundary cognitive-security system; its
-intake firewall is only its pre-hoc half.
+`src/app/gateway/main.ts` builds the privileged edge. It loads and hydrates the
+canonical config, applies TLS settings, resolves the startup preflight bundle
+and the runtime-mode contract, provisions fleet auth and backup schedulers, and
+then constructs the privileged core via `buildGatewayPrivilegedCore`
+(`src/boundary/gateway/privileged-core.ts`). The gateway process:
 
-Companion emotion proactivity has two explicit authorities. The companion-local
-EmoSim Proactivity Port may emit a versioned, content-free qualified-source
-impulse into the existing private disposition/policy funnel; it cannot select a
-destination or send. Observer-eval crosswalks, divergence metrics, calibration
-corpora, exports, observations, and shadow lever rows remain fallible derived
-telemetry with `authoritative=false` and are never memory, prompt, contact,
-concern, personality, or felt-affect inputs.
+- owns LLM and embedding clients so provider secrets stay out of the agent;
+- resolves gateway policy: filesystem scope, URL policy, SSRF checks, approval-gated actions, and per-companion capability tiers;
+- runs the CogSec intake firewall (L1 deterministic scanner pipeline plus the optional in-process ONNX injection classifier) and the `intake.screen_image` RPC;
+- hosts the native external MCP client broker, credential custody, TLS transport, and system-trust policy;
+- starts Discord, Telegram, and installable channel plugins when enabled, plus the voice module host (`GatewayVoiceModuleHost` with the Discord reverse-RPC voice module). Gateway-hosted Wyoming is retired: `createGatewayVoiceSurfaces` throws at startup if `WYOMING_ENABLED` is set, and Wyoming/OpenHome endpoints now run through the Satellite Hub — see [`channels/voice.md`](channels/voice.md) and [`apps/satellite-hub.md`](apps/satellite-hub.md);
+- hosts operator-facing support surfaces: ntfy notifications, confirmation queue, beads/vault tools, shell execution, git-backed mutations;
+- serves the public OpenAI-compatible API edge and the fleet portal bundle through `startOptionalGatewayApiServer`.
 
-## Composition Layer
+All agent-facing privileged operations are exposed as audited JSON-RPC methods
+registered through `registerGatewayMethods` (`src/boundary/gateway/methods/`):
+LLM chat/complete/embed, Discord, web fetch/search, shell, fs, git, vault,
+beads, image, intake-image, home-assistant, MCP, confirmation, session HMAC,
+notify, runtime health, and the connection lifecycle methods
+(`gateway.client.identify`, `gateway.client.ready`, `gateway.client.health`).
 
-Shared runtime construction is concentrated in:
+## Agent responsibilities
 
-- `src/app/startup/composition/composition.ts`
-- `src/app/startup/composition/parity.ts`
-- `src/app/startup/composition/post-turn-actions.ts`
-- `src/app/startup/composition/channel-runtime.ts`
+`src/app/agent/main.ts` builds the isolated Companion Core runtime:
 
-Those helpers keep the split runtime and shared wiring aligned on core wiring:
+1. Resolves the startup context, alerts configuration, and lifecycle runtime contract, then runs `enforceNetworkIsolationOnStartup` — a probe against a public endpoint that fails startup if outbound network is reachable, unless the operator explicitly sets `ALLOW_AGENT_OUTBOUND_NETWORK=true`.
+2. Connects to the gateway with `GatewayClient.connectEndpoint` (bounded retry budget) and self-identifies with `gateway.identifyAsAgent()` before any other traffic.
+3. Creates the PostgreSQL-backed agent persistence runtime through `createAgentPersistenceRuntime` (which fails closed unless `persistenceBackend=postgres` and `POSTGRES_DATABASE_URL` are set).
+4. Bootstraps the core runtime: `SessionManager`, `SubstrateAgent`, memory store/retriever/extractor, scheduler, gateway-routed API backend, contacts, values, skills, safeguards, core memory, subagents, shard internals, wiki/journal tools, post-turn actions, and the companion presence/availability runtimes.
+5. Starts the optional private admin transport (`startOptionalAdminTransportServer`) that the Garden operator surface proxies into, plus the OpenAI-compatible API backend handlers.
+6. Starts the scheduler and declares runtime ready only after every inbound notification handler is installed.
 
-- identity loading
-- session runtime
-- memory runtime
-- prompt/runtime settings surfaces
-- shard and analysis workbench tooling
-- heartbeat/scheduler wiring
-- channel adapter manifests
+The agent talks to the gateway through `GatewayClient`, a typed RPC wrapper that
+implements `LLMProviderPort` and `EmbeddingProviderPort`, so it acts as a
+drop-in provider inside the isolated process. A gateway disconnect outside the
+startup path triggers the disconnect-recovery exit through the supervised
+restart path.
 
-## Gateway Responsibilities
+If the bounded connect retry budget is exhausted before the gateway becomes
+ready, the agent exits through the lifecycle restart contract (supervised
+restart code) so a fresh process re-attempts the connection rather than dying
+with a generic fatal exit.
 
-`src/app/gateway/main.ts` builds the privileged edge:
+## Operator responsibilities
 
-- `GatewayServer` exposes JSON-RPC over the NDJSON Unix socket.
-- `LLMClient` and embedding creation happen on the gateway side so provider secrets stay out of the agent.
-- Gateway policy resolves filesystem scope, URL policy, SSRF checks, and approval-gated actions.
-- The native external MCP client, credential custody, TLS transport, system-trust
-  policy, and CogSec boundary all live in the gateway.
-- Optional operator-facing support surfaces live here too: ntfy notifications, confirmation queue, beads tools, vault tools, shell execution, and git-backed mutations.
-- Discord, Telegram, Wyoming, and installable channel plugins (Multica and Buzz) are started from the gateway side when enabled.
+`src/app/operator/main.ts` runs the operator plane. It requires `ADMIN_PORT`,
+resolves the operator config and lifecycle Kubernetes settings, and builds a
+`GardenOperatorSurface` (`src/operator/garden/operator-surface.ts`). Admission
+is either **fleet-principal** (when `fleet-auth.json` is configured: exact
+companion-bound request capabilities verified before transport selection) or
+**standalone** (`ADMIN_TOKEN`, or the explicit loopback-only
+`ADMIN_ALLOW_INSECURE=true` bypass). The surface proxies admin traffic to agent
+private admin transports over the authenticated private admin transport —
+`garden-admin.sock` by default, or a network endpoint with mTLS where the peer
+SPIFFE identity must be pinned to `/psfn/agent/<companionId>`.
 
-### Gateway RPC trust and approval classes
+## Cert-manager sidecar
 
-The default Unix-socket transport is a single-host trust boundary. The gateway
-sets the socket mode to `0770`; access is therefore delegated to the operating
-system owner/group assigned to that socket. Unix transport frames do not carry
-TLS identity or repeat caller credentials on every RPC. Processes with socket
-filesystem access are trusted to reach the connection protocol, so deployments
-must not grant that owner/group to unrelated workloads. WSS is the remote-host
-alternative and requires mutual TLS plus the configured peer SPIFFE identity.
+`src/app/cert-manager/main.ts` is an optional standalone process: it shares
+nothing with the gateway/agent runtimes except `src/shared/` utilities, the
+logger, and the persistence path discipline. `npm run cert-manager -- init`
+generates the root CA and default config; `npm run cert-manager` serves a
+token-authenticated loopback issuance API plus a background renewal loop
+(`CERT_MANAGER_TOKEN` is required — at least 32 characters, and there is no
+insecure mode). The CA key never leaves the state directory (mode 0600) and is
+never served; issued private keys are returned exactly once. The listener binds
+loopback by default and requires an explicit `listen.allowNonLoopback` opt-in
+otherwise. The full bootstrap walkthrough is in
+[`docs/certificates.md`](../docs/certificates.md).
 
-In a companion cluster, filesystem admission is not companion ownership. An
-agent connection must identify once with its role-bound companion credential;
-the gateway then binds that connection to exactly one manifest companion. An
-unknown companion, missing or wrong-role credential, duplicate live owner, or
-attempt to re-identify as a sibling is rejected. Subsequent RPC authorization
-uses that immutable connection binding rather than caller-supplied companion
-parameters.
+## Gateway↔agent RPC
 
-Gateway policy distinguishes two escalation decisions:
+The contract between the gateway (host) and agent (container) is JSON-RPC 2.0
+defined in `src/boundary/gateway/protocol.ts`, framed as NDJSON lines over the
+transport in `src/boundary/gateway/transport.ts`.
+
+- **Unix socket (default)** — `NdjsonConnection` wraps a `net.Socket` with
+  newline-delimited JSON frames plus transport-level heartbeat ping/pong
+  frames. The socket is `chmod`-ed to `0770`, so access is delegated to the OS
+  owner/group; processes with socket filesystem access are trusted to reach the
+  connection protocol, and deployments must not grant that owner/group to
+  unrelated workloads.
+- **WSS (remote-host alternative)** — requires mutual TLS plus the configured
+  peer SPIFFE identity (`GATEWAY_RPC_TLS_*` env), the `psfn-rpc-v1` subprotocol
+  at the `/rpc` path, and rejects peers whose certificate does not match the
+  expected SPIFFE URI. Plain `ws://` is not allowed.
+- **Endpoints** — resolved from `GATEWAY_RPC_ENDPOINT` (`unix:///path.sock` or
+  `wss://host:port/path`) or the legacy `GATEWAY_SOCKET`.
+
+Agent connections must identify once with `gateway.client.identify`: the role
+(`agent` or `internal_session_integrity`) plus, in fleet mode, the companion
+credential. The gateway binds that connection to exactly one manifest
+companion; an unknown companion, a missing or wrong-role credential, a
+duplicate live owner, or an attempt to re-identify as a sibling is rejected and
+alarmed. All subsequent RPC authorization uses the immutable connection binding
+rather than caller-supplied companion parameters.
+
+```mermaid
+sequenceDiagram
+    participant A as Agent process
+    participant RPC as GatewayServer (NDJSON JSON-RPC)
+    participant POL as Gateway policy
+    participant EXT as External world (LLM, web, fs, MCP)
+
+    A->>RPC: gateway.client.identify (role, companionId, authToken)
+    RPC->>RPC: verify companion credential, bind connection, reject duplicates
+    RPC-->>A: identified (immutable binding)
+    A->>RPC: llm.chat / web.fetch / fs.read / mcp.execute (correlation params)
+    RPC->>POL: evaluate policy, capability tier, approvals
+    alt allowed directly
+        POL-->>EXT: perform privileged operation (secrets stay gateway-side)
+        EXT-->>RPC: result
+        RPC-->>A: result (CogSec-screened)
+    else escalation required
+        POL-->>RPC: AUTONOMOUS_TIER_REQUIRED / REQUIRES_HUMAN_APPROVAL
+        RPC-->>A: NEEDS_APPROVAL (durable Garden queue entry)
+    end
+```
+
+*One agent RPC round trip: connection identity is bound once, every subsequent method is policy-checked gateway-side, and privileged work never executes inside the agent.*
+
+### Fail-closed frame authorization
+
+Every inbound method passes `enforceCompanionFrameIdentity`:
+
+- unidentified connections may call only `gateway.client.identify`;
+- `internal_session_integrity` connections may call only the HMAC sign/verify methods;
+- normal agents may not call those internal signing methods;
+- in fleet mode, a frame claiming a `companionId` different from the connection's
+  bound id is treated as identity spoofing → audit alarm + disconnect;
+- a malformed identity claim on any frame is rejected and disconnects the connection.
+
+### Escalation classes
+
+Gateway policy (`src/boundary/gateway/policy.ts`) distinguishes two escalation
+decisions:
 
 - `AUTONOMOUS_TIER_REQUIRED` may execute directly only for the authenticated
   companion's autonomous tier; lower tiers enter the durable Garden approval
   queue.
-- `REQUIRES_HUMAN_APPROVAL` enters that queue at every tier. Home Assistant
-  operations outside the explicit autonomous affordance and all generic git
-  mutations are in this class.
+- `REQUIRES_HUMAN_APPROVAL` enters that queue at every tier (for example Home
+  Assistant operations outside the explicit autonomous affordance and all
+  generic git mutations).
 
-Unknown policy decisions deny. If a queued confirmation cannot reach Discord or
-ntfy, the request remains inspectable in Garden and the Approval Notifications
-runtime-health subsystem becomes unavailable with the delivery error.
+Unknown policy decisions deny. If a queued confirmation cannot reach Discord
+or ntfy, the request remains inspectable in Garden and the
+`approval_notifications` runtime-health subsystem reports `unavailable` with
+the delivery error.
 
-## Agent Responsibilities
+## Composition layer
 
-`src/app/agent/main.ts` builds the companion runtime:
+Shared runtime construction is concentrated in
+`src/app/startup/composition/composition.ts` (session runtime, memory store,
+identity, substrate agent, fatigue budget, shard/think tooling),
+`src/app/startup/composition/parity.ts` (prompt stack, character card, REPL
+config, settings/session/fs tools, reflection runtime), and
+`src/app/startup/composition/post-turn-actions.ts`. These helpers keep the
+split-runtime entrypoints aligned on core wiring: identity loading, session
+runtime, memory runtime, prompt/runtime settings surfaces, shard and analysis
+workbench tooling, heartbeat/scheduler wiring, and channel adapter manifests.
 
-- loads config, owner-file state, and trust policy
-- initializes PostgreSQL-backed companion runtime stores through `createAgentPersistenceRuntime`
-- loads the character card and prompt registry
-- composes `SessionManager`, `SubstrateAgent`, `MemoryStore`, `MemoryRetriever`, `MemoryExtractor`, `Scheduler`, the gateway-routed API backend, and the private admin transport
-- wires contacts, values, skills, safeguards, core memory, subagents, shard internals, analysis workbench tools, media/journal/wiki tools, and post-turn actions
-- exposes the parent `repo` projection as read-only at every capability tier;
-  a future mutable repository or self-modification path requires its own
-  explicit authority contract rather than this generic approval queue
+Composition is fail-closed about persistence: `composeSessionRuntimeAsync` and
+`composeMemoryStoreAsync` throw unless `persistenceBackend=postgres` and a
+`postgresDatabaseUrl` are configured — there is no SQLite runtime path.
 
-The agent talks to the gateway through `GatewayClient`, which acts as the LLM and embeddings provider inside the isolated process.
+## Runtime mode and lifecycle contract
 
-## Core Subsystems
+`src/system/lifecycle/runtime-mode.ts` canonicalizes runtime modes across
+entrypoints (`PSFN_RUNTIME_MODE`: `split` | `gateway-agent`, with `yolo`,
+`gateway`, and `agent` accepted aliases) and resolves the restart strategy:
 
-### Sessions and context
+- the **split** entrypoint defaults to `reexec` restart with exit code 75;
+- the **gateway-agent** entrypoint defaults to `supervisor` restart.
 
-- L0 session history is append-only JSONL under `sessions/`.
-- The archive/projection split is intentional: canonical archive truth stays in JSONL, while fast-search copies belong behind projection/search ports.
-- `SessionManager` handles the sliding active context window, token budgeting, continuity, internal role envelopes, focus knowledge, observation masking, and prompt-aware context assembly.
-- Auto-compaction is a durable between-turn background job driven by the configured session-history budget. It summarizes older selected context into untrusted carry-forward notes, retains a recent verbatim tail, and leaves canonical L0 history intact. Foreground assembly never starts the rolling-summary model call; it uses the latest committed summary plus deterministic bounded history while work is pending.
-- Session integrity can be HMAC-backed in split mode through the gateway-provided integrity provider.
+The gateway entrypoint accepts both `gateway-agent` and `split` modes; the
+split entrypoint accepts only `split`. Unsupported modes fail closed before
+startup.
 
-### Memory
+## Persistence topology
 
-- Runtime memory/session composition requires PostgreSQL-backed ports.
-- SQLite-backed stores and migration readers are removed; runtime and maintenance composition use PostgreSQL-backed ports, while focused tests may use port fakes.
-- `EpisodicStore` owns the L0.1 `l01_episodes` and `l01_episode_arcs` tables. These records are bounded landmarks with L0 span/artifact provenance, not generic transcript summaries and not L2 typed memories.
-- `EpisodicSynthesizer` runs from the gated episode-synthesis lane (scheduler timer or turn threshold, then a deterministic new-messages + relevance-minimum gate). It can create multiple candidate episodes for one day and links longer themes as graph arcs; nightly rest-window sleeptime consolidates them.
-- `MemoryRetriever` combines L0.1 landmark-chain retrieval, semantic retrieval, lexical fallback, trust filtering, emotional continuity, and optional compositional reranking.
-- `MemoryExtractor` runs post-turn extraction, crash-recovery extraction, compaction extraction, Recent Contact Shape refresh, and typed biographical-candidate admission flows.
-- Garden exposes episodic memory through a dedicated operator page for episode, provenance, arc, and thread inspection.
-
-See [`docs/memory.md`](./memory.md) for the memory contract.
-
-### Identity and prompts
-
-- Character card loading and prompt composition live under `src/core/identity/`.
-- Prompt layers, prompt registry entries, north-star state, and core memory are persisted in companion-owned files.
-- Admin surfaces mutate prompt/runtime state through the JSON owner-file contract rather than through `.env`.
-
-### Trust, safeguards, and capabilities
-
-- Trust policy is loaded from `trust-policy.json`.
-- Channel privacy vocabulary is `private | invite_only | public` plus a `broadcast` flag; the Context Envelope contract (dimensions, derivation, precedence, migration) is documented in [context-envelope.md](./context-envelope.md).
-- Eligibility gates and capability tiers are enforced before privileged tools run.
-- Safeguards audit cooling-off, restart protection, and external communication rate limits.
-
-### Cognitive security (intake firewall)
-
-- Untrusted inbound content — web fetches, parsed documents, image OCR
-  transcripts, tool observations, and voice transcripts — is wrapped in a
-  taint-tracked `IntakeEnvelope` (`src/shared/contracts/intake-envelope.ts`)
-  and screened before it can reach prompt assembly, memory, wiki, persona,
-  trust state, or tool egress.
-- Screening composes on both sides of the socket: the gateway builds the full
-  L1 deterministic scanner pipeline plus the optional in-process ONNX
-  injection classifier (`src/boundary/gateway/intake/compose-screening.ts`);
-  the agent process runs an L1-only screening service for in-process surfaces
-  (`src/app/agent/main.ts`). Inbound images are screened through the
-  `intake.screen_image` gateway RPC.
-- Seven sink gates (`src/core/cogsec/intake/sink-gates.ts`,
-  `src/core/session/intake-sink-gating.ts`) consume envelope state/labels,
-  including strict managed-skill write screening and a lethal-trifecta
-  assessment on tool egress; a per-session canary token
-  (`src/core/cogsec/canary/`) plants an egress tripwire at the gateway.
-- Quarantined items are held in a durable store and resolve only through the
-  Garden Cognitive Security queue with a server-side double-confirm release.
-- Rollout mode is owned by `intake-policy.json` (`off`/`shadow`/`enforce`;
-  the seed ships `shadow`, which screens and journals but changes no delivered
-  content). Companion-facing firewall notices use fixed, operator-reviewed
-  wording and are structurally excluded from emotion appraisal and memory
-  candidacy.
-
-See [`docs/cognitive-security.md`](./cognitive-security.md) for the threat
-model, layer-by-layer contract, quarantine lifecycle, and operator runbook.
-
-### External MCP client
-
-PSFN is the MCP host and client; external MCP servers are untrusted capability
-providers, never an alternate way to expose companion internals. The gateway
-owns one protocol client per `(companion, server)` session and uses the official
-TypeScript SDK's Streamable HTTP transport over HTTPS/TLS. Gateway credential
-custody, DNS/IP policy, TLS verification, redirect denial, response bounds,
-authentication, companion authorization, capability checks, trust ceilings,
-per-tool allowlists, and confirmation all remain outside the agent process.
-
-The model sees one stable first-party tool named `mcp`, not one injected tool
-definition per remote server. Its actions form a staged-loading boundary:
-
-1. `catalog` reads operator-owned server summaries without connecting.
-2. `search` lazily connects only to eligible servers and returns screened tool
-   summaries.
-3. `inspect` returns one screened input schema only when selected.
-4. `call` rechecks server/tool/capability/sensitivity/confirmation policy and
-   returns only a CogSec-screened result.
-5. `release` closes the selected session and drops its loaded schemas. Idle TTL
-   and companion disconnect perform the same unload automatically.
-
-Remote schemas are therefore absent from the fixed provider tool payload and
-from later turns unless selected again. Explicit release clears protocol
-connections and loaded definitions; the content-free static screening cache is
-not conversational context and may remain until broker shutdown. This gives
-multiple configured servers a cheap catalog without dumping every schema into
-the context window.
-
-The gateway authorizes each action with a connection-scoped, single-use opaque
-permit minted only for the exact MCP tool call returned by the model provider.
-The permit binds the normalized server/tool/arguments payload, expires quickly,
-and is consumed once. The trusted turn runtime derives sensitivity from the
-sources already admitted into that generation; the agent-side gateway client
-carries it only on the provider request, and the gateway binds it into the
-returned permit before the MCP action exists. `mcp.execute` cannot choose or
-lower it. A missing lineage denies calls. Screened MCP catalog/search/inspect
-metadata preserves the existing sensitivity so progressive discovery remains
-usable; remote call results and all other admitted tool outputs immediately
-tighten the next model step to confidential. Autonomous work-spec or
-shard-originated generations receive no MCP permit.
-
-The label-integrity boundary is the trusted companion turn runtime versus
-model-, tool-, and server-authored content. Arbitrary code execution inside the
-authenticated agent process is not claimed as contained: that process already
-authors the complete provider-bound prompt. Even under that boundary, the
-gateway independently retains MCP credentials, server/tool allowlists,
-capability checks, approvals, exact-payload permit consumption, CogSec output
-screening, and network transport policy.
-
-All MCP ingress crosses CogSec. Tool descriptions and schemas are canonicalized
-and hashed with SHA-256. An exact `(companion, hash)` hit reuses the prior
-screening decision; any byte-level semantic change produces a new hash and is
-screened again. The hash means "screened at this content version," not trusted.
-Tool-call results are dynamic and are screened on every invocation regardless
-of server trust or prior hashes. Raw remote metadata/output never crosses the
-broker's returned port.
-
-An allowlist entry is effective only when its operator-recorded per-tool hash
-matches the current screened definition. `list_changed`, TTL refresh, or a
-reconnect that changes a same-name tool therefore removes its authorization.
-Before dispatch, arguments are validated locally against that exact screened
-JSON Schema using the SDK validator. Server trust and per-tool sensitivity
-ceilings both apply; the tool ceiling may narrow but never widen server trust.
-
-### Channels and voice
-
-- First-class adapters (Discord, Telegram, API) load through the gateway channel-surface composition. Additional text channels register as plugins via `ChannelPluginHost` (`src/channels/plugins/`, [`docs/channel-plugins.md`](./channel-plugins.md)). Multica is the tracer plugin and never transits Satellite Hub. Endpoint transports such as Wyoming/OpenHome are owned by the Satellite Hub repository.
-- Voice connectors are plugin-style STT/TTS adapters resolved from runtime settings and capability eligibility.
-- Same-cluster companion↔companion conversation runs through the normal turn
-  pipeline as ordinary channels (`src/shared/contracts/companion-channels.ts`):
-  a many-to-many room (`companion-room:<placeId>`) and a 1:1 DM
-  (`companion-dm:<a>:<b>`), routed by the gateway companion lane
-  (`src/boundary/gateway/companion-channels.ts`) and governed by the existing
-  fatigue budgets. Active only under multi-companion topology (a `companions.json`
-  with more than one entry); see [`docs/multi-companion.md`](./multi-companion.md).
-
-### Locations, presence, and world
-
-- A soft-registry `places.json` (`src/shared/contracts/places-registry.ts`,
-  loaded by `src/channels/backplane/places-registry.ts`) models sites, places,
-  and affordances (perceivers/effectors). An absent file degrades to no world
-  surface rather than failing boot; a malformed file fails closed.
-- A situated-presence context section
-  (`src/core/agent/substrate-agent/runtime-context-sections/situated-presence.ts`)
-  renders where the companion is, what it perceives, what it can act on, and who
-  else is co-present. A turn with no resolvable place renders no block — the
-  companion never fabricates a location.
-- Every turn is classified into one of two presence modes by device origin
-  (`turn-presence-mode.ts`): `physical` (a satellite/voice endpoint — the
-  companion emanates into a real room) or `mindspace` (a plain chat channel —
-  the companion is co-located with the partner in a virtual twin of the
-  last-known physical room, resolved via a place's `mirrorsPlaceId` twin link).
-- The last-known situated location is durable companion state inside the
-  Postgres `internal_state_snapshots` row. Restart hydration restores this
-  location independently even when the surrounding affect/attention snapshot
-  is older than the freshness window and is correctly withheld as stale. Turn
-  execution awaits each state write before advancing, so a completed turn
-  cannot outrun its latest snapshot; a failed write fails the turn boundary.
-- The `world` tool (`src/boundary/integrations/world/`) exposes
-  `perceive`/`list`/`move`, with `control` staged off by default
-  (`WORLD_CONTROL_RUNTIME_ENABLED = false`) until proven on hardware. HA control
-  is a privileged gateway method holding the token behind a scoped SSRF lane.
-- Cross-companion presence (`companion_presence` in the shared schema) and the
-  shared-world wiki are multi-companion deltas layered on this model — see
-  [`docs/multi-companion.md`](./multi-companion.md) and
-  [`docs/memory.md`](./memory.md).
-
-### Scheduler and background work
-
-- `Scheduler` handles heartbeat/reflection tasks, maintenance, one-shot tasks, backups, and deferred work.
-- Rest/me-time configuration owns sleeptime entirely: heavy passes (sleep consolidation, arc weaving, dream meaning, orientation rewrite) run only from the rest-window scheduler task, never from turn cadence. The lightweight near-turn lane and the gated episode-synthesis lane cover daytime work.
-- Post-turn actions and intention appraisal live outside the main response path but stay in the same audited runtime. Their outputs (whispers/pending follow-ups) re-enter later turns through the agent followUp queue behind the Participant-facing boundary — see [`docs/chat-turn-lifecycle.md`](./chat-turn-lifecycle.md) §2 and §4.
-
-## Persistence Topology
-
-- System-owned mutable config lives under `system-data/`.
-- Companion-owned state lives under `companion-data/`.
+- System-owned mutable config lives under `system-data/`; companion-owned state
+  lives under `companion-data/`.
 - `WORKSPACE_PATH` is one companion's Personal Workspace, not runtime state.
-- A governed Shared Companion Workspace is planned for explicitly shared files
-  and common reference material; the existing Shared-world Wiki is a narrower,
-  site-scoped operator-owned knowledge surface.
-- Continuous mode can still use the legacy shared `data/` root.
-- Production mode forbids overlapping mutable roots and fails closed on partial split-root configuration.
+- Continuous mode may use the legacy shared `data/` root; production mode
+  forbids overlapping mutable roots and fails closed on partial split-root
+  configuration (`src/persistence/layout.ts` asserts no duplicate roots).
+- L0 session history is the canonical archive, append-only JSONL under
+  `sessions/`; fast-search copies live behind projection/search ports.
+- Runtime memory/session composition requires PostgreSQL-backed ports
+  (`MemoryStorePort`, `ContactStorePort`, `SessionArchivePort`, `EpisodicStore`,
+  and the rest) — raw adapter code stays behind those ports and is not a
+  composition-root seam. SQLite implementations and migration readers are
+  removed.
 
-The path contract is defined in `src/persistence/layout.ts` and summarized in [`docs/specifications.md`](./specifications.md).
+The path contract is defined in `src/persistence/layout.ts` and summarized in
+[`specifications.md`](specifications.md).
 
-## Multi-Companion Topology
+## Multi-companion topology
 
-Every deployment is a cluster of one or more companions, enumerated by a mandatory
-system-owned `companions.json` manifest. The default topology is one gateway,
-one agent process, one Companion Core, and one companion — a one-entry manifest.
-A multi-companion topology (a manifest with more than one entry) runs N agent
-processes behind the one gateway, each running a peer Companion Core. Each
-companion has its own companion ID, data dir, character card, and Postgres
-schema, all connecting to the single gateway over the existing socket protocol.
-Topology is derived from the manifest entry count (there is no
-`PSFN_MULTI_COMPANION` flag); a one-entry cluster is byte-identical to the old
-single-companion behavior.
+Every deployment is a cluster of one or more companions enumerated by the
+mandatory system-owned `companions.json` manifest. The default topology is one
+gateway, one agent process, one Companion Core, and one companion — a
+one-entry manifest. A multi-companion topology (a manifest with more than one
+entry) runs N agent processes behind the one gateway, each running a peer
+Companion Core. Topology is derived from the manifest entry count; there is no
+`PSFN_MULTI_COMPANION` flag, and a one-entry cluster is byte-identical to the
+old single-companion behavior.
 
-Tenancy is schema-per-companion (`config.postgresSchema` pins each agent's
-Postgres `search_path`) plus one `shared` schema for cross-companion world data.
-Operability uses one authenticated Garden frontend for the cluster overview and
-authorized companion administration. The public canonical HTTPS origin serves
-that bundle at `/fleet` and at
-`/companions/<companion-uuid>/garden/...`; `/v1/fleet/portal` supplies only the
-current principal's bounded projection. Per-companion operator processes remain
-private upstreams behind the gateway. The former raw cluster-status listener is
-retired, and `/fleet/status.json` is not a browser surface. The full topology,
-flag/manifest contract, launcher supervisor mode, and cluster operations are
-documented in
-[`docs/multi-companion.md`](./multi-companion.md).
+Tenancy is schema-per-companion (each agent's Postgres `search_path` is pinned
+to its provisioned tenant boundary; startup verifies but never repairs tenant
+roles, schemas, or extensions) plus one `shared` schema for cross-companion
+world data. Same-cluster companion↔companion conversation runs through the
+normal turn pipeline as ordinary channels (`companion-room:<placeId>` and
+`companion-dm:<a>:<b>`), routed by the gateway companion lane and governed by
+the existing fatigue budgets — active only when the manifest has more than one
+entry. Operability uses one authenticated Garden frontend for the cluster
+overview and authorized companion administration at
+`/companions/<companion-uuid>/garden/...`. See
+<!-- openwiki: broken internal link [multi-companion.md] file "multi-companion.md" does not exist. Fix the href or restore the target, then delete this comment. -->
+[`multi-companion.md`](multi-companion.md).
 
-Workspace-backed files are isolated by a deterministic Personal Workspace per
-companion. The supervisor injects only the authenticated companion's root and
-the gateway binds filesystem-adjacent surfaces to that same root. The separate
-Shared Companion Workspace is Garden-governed, reviewed, and never an implicit
-skills/modules/prompt/memory source.
-Key files: `src/system/config/companions-config.ts`,
-`src/persistence/postgres.ts`, `src/persistence/runtime-factory.ts`,
-`src/boundary/gateway/fleet-portal-http-routes.ts`,
-`scripts/resolve-companion-fleet.ts`.
+## Core subsystems
 
-## Persistence Ports
+- **Sessions and context** — `SessionManager` handles the sliding active
+  context window, token budgeting, continuity, internal role envelopes, focus
+  knowledge, observation masking, and prompt-aware context assembly.
+  Auto-compaction is a durable between-turn background job driven by the
+  configured session-history budget; it summarizes older context into
+  untrusted carry-forward notes and leaves canonical L0 history intact.
+  Session integrity can be HMAC-backed through the gateway-provided integrity
+<!-- openwiki: broken internal link [chat-turn-lifecycle.md] file "chat-turn-lifecycle.md" does not exist. Fix the href or restore the target, then delete this comment. -->
+  provider. See [`chat-turn-lifecycle.md`](chat-turn-lifecycle.md).
+- **Memory** — `EpisodicStore` owns the L0.1 `l01_episodes` and
+  `l01_episode_arcs` tables; `EpisodicSynthesizer` runs from the gated
+  episode-synthesis lane; nightly rest-window sleeptime consolidates episodes.
+  `MemoryRetriever` combines L0.1 landmark-chain retrieval, semantic retrieval,
+  lexical fallback, trust filtering, emotional continuity, and optional
+  reranking; `MemoryExtractor` runs post-turn, crash-recovery, and compaction
+<!-- openwiki: broken internal link [memory.md] file "memory.md" does not exist. Fix the href or restore the target, then delete this comment. -->
+  extraction. See [`memory.md`](memory.md).
+- **Identity and prompts** — character card loading and prompt composition
+  live under `src/core/identity/`; prompt layers, registry entries, north-star
+  state, and core memory are persisted in companion-owned files; admin
+  surfaces mutate prompt/runtime state through the JSON owner-file contract.
+- **Trust, safeguards, capabilities** — trust policy loads from
+  `trust-policy.json`; channel privacy vocabulary is
+  `private | invite_only | public` plus a `broadcast` flag; eligibility gates
+  and capability tiers are enforced before privileged tools run; safeguards
+  audit cooling-off, restart protection, and external communication rate
+  limits.
+- **Cognitive security (intake firewall)** — untrusted inbound content is
+  wrapped in a taint-tracked `IntakeEnvelope` and screened before it can reach
+  prompt assembly, memory, wiki, persona, trust state, or tool egress.
+  Screening composes on both sides of the socket: the gateway builds the full
+  L1 deterministic scanner pipeline plus the optional in-process ONNX
+  injection classifier; the agent runs an L1-only screening service for
+  in-process surfaces and writes quarantine decisions to the same
+  companion-data store Garden reviews. Quarantined items resolve only through
+  the Garden Cognitive Security queue with a server-side double-confirm
+  release. Rollout mode is owned by `intake-policy.json`
+  (`off`/`shadow`/`enforce`; the seed ships `shadow`). See
+<!-- openwiki: broken internal link [cognitive-security.md] file "cognitive-security.md" does not exist. Fix the href or restore the target, then delete this comment. -->
+  [`cognitive-security.md`](cognitive-security.md).
+- **External MCP client** — the gateway owns one protocol client per
+  (companion, server) session over the official SDK's Streamable HTTP
+  transport; credential custody, DNS/IP policy, TLS verification, capability
+  checks, per-tool allowlists, and confirmation all remain gateway-side. The
+  model sees one stable first-party tool named `mcp` with staged actions
+  (`catalog`, `search`, `inspect`, `call`, `release`); remote schemas are
+  absent from the fixed provider payload and unloaded on release or idle TTL.
+  Each action is authorized with a connection-scoped, single-use opaque permit
+  minted only for the exact tool call returned by the model provider.
+- **Channels and voice** — first-class adapters (Discord, Telegram, API) load
+  through the gateway channel-surface composition; additional text channels
+  register as plugins via `ChannelPluginHost`. Voice is a plugin-style surface
+  composed gateway-side (`createGatewayVoiceSurfaces`); the gateway-hosted
+  Wyoming runtime has moved to the Satellite Hub, so setting `WYOMING_ENABLED`
+  now fails startup instead of enabling an endpoint. See
+  [`channels/voice.md`](channels/voice.md) and
+  [`apps/satellite-hub.md`](apps/satellite-hub.md).
+- **Locations, presence, world** — a soft-registry `places.json` models sites,
+  places, and affordances; an absent file degrades to no world surface, a
+  malformed file fails closed. The last-known situated location is durable
+  companion state in the Postgres `internal_state_snapshots` row; turn
+  execution awaits each state write so a completed turn cannot outrun its
+  latest snapshot.
+- **Scheduler and background work** — `Scheduler` handles heartbeat/reflection
+  tasks, maintenance, one-shot tasks, backups, and deferred work. Heavy
+  passes (sleep consolidation, arc weaving, dream meaning, orientation
+  rewrite) run only from the rest-window scheduler task, never from turn
+  cadence. Post-turn actions and intention appraisal live outside the main
+  response path but stay in the same audited runtime.
 
-Persistence is shaped around domain ports, not raw database adapters.
+## Extension surfaces
 
-- L0 archive operations belong to `SessionArchivePort` and continue to use JSONL as the canonical backing format.
-- Searchable transcript mirrors and projections belong to `TranscriptProjectionPort` and `TranscriptSearchPort`.
-- Durable state belongs behind async-safe domain ports such as `MemoryStorePort`, `ContactStorePort`, `ConcernStorePort`, `PendingFollowUpStorePort`, `BehavioralPatternStorePort`, `GatewayAuditStorePort`, and `TurnRecordStorePort`.
-- Raw adapter code stays behind those ports and is not a composition-root seam.
-- The live runtime and persistence-aware maintenance commands compose PostgreSQL implementations. No SQLite implementation or reader remains behind the domain ports.
+The main existing extension points:
 
-## Extension Surfaces
+- model/provider registries;
+- channel adapter factory manifests and the `ChannelPluginHost` plugin surface;
+- module registry and loader;
+- skills runtime;
+- native gateway MCP client broker and protocol-client port;
+- gateway-backed git, filesystem, vault, media, shell, web, journal, and beads
+  tool surfaces;
+- the agent private admin transport, which the Garden operator surface proxies
+  into with per-companion capability admission.
 
-These are the main extension points that already exist in code:
+## Related pages
 
-- model/provider registries
-- channel adapter factory manifests
-- module registry and loader
-- skills runtime
-- native gateway MCP client broker and protocol-client port
-- gateway-backed git, filesystem, vault, media, shell, web, journal, and beads tool surfaces
-
-## Current Model-Facing Surface
-
-The direct first-party surface is declared in `src/core/agent/tool-surface/registry.ts` and implemented by the agent/gateway composition roots. The current important surfaces are:
-
-- adaptive control: `tool_search`, `toolset`, and `response_control action=no_reply`
-- workspace and external primitives: `fs`, `repo`, `shell`, `web`, `analysis_workbench`
-- external integrations: `mcp` with `catalog|search|inspect|call|release`
-- companion state: `memory`, `scratchpad`, `contact`, `session`, `identity`, `orient`, `north_star`, `schedule`, `self_status`, `system`, `skill`, `wiki`, `journal`
-- operations and lifecycle: `beads`, `notify`, `generate_image`, `selfie_create`, `vault`
-- bounded workers: `subagent action=spawn|message|wait|cancel|status`
-
-Shard execution is implemented as an internal long-horizon runtime with fold-back lineage and review, but the direct model-facing `shard` surface is still a reserved extended control-plane entry. Use `subagent` for bounded worker control until the shard surface is fully registered and documented as live.
-
-If documentation and diagrams disagree with the code, prefer the entrypoints and composition files first.
+<!-- openwiki: broken internal link [chat-turn-lifecycle.md] file "chat-turn-lifecycle.md" does not exist. Fix the href or restore the target, then delete this comment. -->
+- [`chat-turn-lifecycle.md`](chat-turn-lifecycle.md) — one turn end to end
+- [`specifications.md`](specifications.md) — config, persistence, fail-closed contracts
+- [`setup.md`](setup.md) — supported install paths and lifecycle
+<!-- openwiki: broken internal link [multi-companion.md] file "multi-companion.md" does not exist. Fix the href or restore the target, then delete this comment. -->
+- [`multi-companion.md`](multi-companion.md) — fleet topology and isolation
+<!-- openwiki: broken internal link [garden-control-plane.md] file "garden-control-plane.md" does not exist. Fix the href or restore the target, then delete this comment. -->
+- [`garden-control-plane.md`](garden-control-plane.md) — operator plane
+<!-- openwiki: broken internal link [cognitive-security.md] file "cognitive-security.md" does not exist. Fix the href or restore the target, then delete this comment. -->
+- [`cognitive-security.md`](cognitive-security.md) — intake firewall, sink gates, quarantine
+<!-- openwiki: broken internal link [memory.md] file "memory.md" does not exist. Fix the href or restore the target, then delete this comment. -->
+- [`memory.md`](memory.md) — memory contract
+- [`channels/voice.md`](channels/voice.md) — voice surfaces, connectors, and the retired gateway-hosted Wyoming path
+- [`apps/satellite-hub.md`](apps/satellite-hub.md) — the Hub that owns Wyoming/OpenHome endpoints and satellite traffic
+- [`development-status.md`](development-status.md) — current feature status
+- [`docs/architecture-diagram.mmd`](../docs/architecture-diagram.mmd) — hand-maintained component graph
+- [`docs/PSFN_PROJECT_CHARTER.md`](../docs/PSFN_PROJECT_CHARTER.md) — charter law for Companion Core authority

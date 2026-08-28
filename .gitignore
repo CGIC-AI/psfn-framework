@@ -143,3 +143,8 @@ bus/runs/
 
 # CodeGraph local index (machine-generated, do not commit)
 /.codegraph/
+
+# OpenWiki generation artifact. Published pages are copied into docs/.
+# Keep the operator-authored brief tracked; ignore everything else.
+/openwiki/*
+!/openwiki/INSTRUCTIONS.md

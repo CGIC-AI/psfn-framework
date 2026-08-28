@@ -1,0 +1,24 @@
+# Read boundary for OpenWiki. Ignored paths are never scanned into generated docs.
+.env
+.env.*
+*.pem
+*.key
+*.p12
+data/
+workspace/
+models/
+.beads/
+.bv/
+working_docs/
+working_doc/
+history/
+.shakedown/
+deployment/
+certs/
+logs/
+import/
+.firecrawl/
+.fallow/
+.codegraph/
+config/identity-literal-scan-allowlist.json
+workspace/sanitize/

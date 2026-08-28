@@ -8,9 +8,9 @@ and configuration contracts win when prose has drifted.
 
 Load detailed workflow documents only when the task needs them:
 
-- Multi-bead or multi-PR implementation wave: [`docs/orchestration-process.md`](./docs/orchestration-process.md)
-- Portable gate/reviewer setup: [`docs/internal-review-workflow.md`](./docs/internal-review-workflow.md)
-- High-risk review practices: [`docs/adversarial-review-and-bugfixing-practices.md`](./docs/adversarial-review-and-bugfixing-practices.md)
+- Multi-bead or multi-PR implementation wave: [`docs/process/orchestration.md`](./docs/process/orchestration.md)
+- Portable gate/reviewer setup: [`docs/process/internal-review.md`](./docs/process/internal-review.md)
+- High-risk review practices: [`docs/process/adversarial-review.md`](./docs/process/adversarial-review.md)
 - Runtime and framework operations: [`docs/operations.md`](./docs/operations.md);
   deployment-specific live operations use the explicitly supplied external
   configuration location
@@ -184,7 +184,7 @@ Prefer these files when checking behavior:
    - `README.md`
    - `docs/specifications.md`
    - `docs/architecture.md`
-   - `docs/memory.md`
+   - `docs/memory/overview.md`
    - `docs/operations.md`
    - `docs/setup.md`
 4. Bootstrap examples only
@@ -406,3 +406,16 @@ Use `bd remember` for durable project memory; do not create ad hoc memory files.
 The managed Beads block is task-tracking guidance, not permission to override
 current operator or repository instructions.
 <!-- END BEADS CODEX SETUP -->
+
+<!-- OPENWIKI:START -->
+
+## OpenWiki
+
+This repository has a generated `openwiki/` evidence index. It is optional just-in-time context, not required startup reading.
+
+- Treat source code and tests as authoritative. A brief's unknowns and review items are verification gaps, not automatic requirements.
+- Prefer the narrowest quiet validation that proves the changed behavior. Preserve complete failure output.
+
+The scheduled OpenWiki GitHub Actions workflow refreshes the repository wiki. Do not hand-edit generated OpenWiki pages unless explicitly asked; prefer updating source code/docs and letting OpenWiki regenerate.
+
+<!-- OPENWIKI:END -->

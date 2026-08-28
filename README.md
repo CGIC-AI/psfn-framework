@@ -130,17 +130,20 @@ and infrastructure inventory remain external to this public repository.
 
 **Domain deep-dives**:
 
-- [`docs/memory.md`](./docs/memory.md) — the memory model
-- [`docs/cognitive-security.md`](./docs/cognitive-security.md) — the intake firewall and CogSec
-- [`docs/context-envelope.md`](./docs/context-envelope.md) — privacy classification
-- [`docs/chat-turn-lifecycle.md`](./docs/chat-turn-lifecycle.md) — anatomy of a turn
-- [`docs/tool-surface.md`](./docs/tool-surface.md) — canonical model-facing tools
-- [`docs/multi-companion.md`](./docs/multi-companion.md) — fleet topology
+- [`docs/memory/overview.md`](./docs/memory/overview.md) — L0 / L0.1 / L2 map ([L0](./docs/memory/l0-archive.md), [L0.1](./docs/memory/l01-episodes.md), [L2](./docs/memory/l2-typed.md))
+- [`docs/security/cognitive-security.md`](./docs/security/cognitive-security.md) — intake firewall and CogSec
+- [`docs/security/context-envelope.md`](./docs/security/context-envelope.md) — privacy classification
+- [`docs/runtime/chat-turn-lifecycle.md`](./docs/runtime/chat-turn-lifecycle.md) — anatomy of a turn
+- [`docs/runtime/tool-surface.md`](./docs/runtime/tool-surface.md) — canonical model-facing tools
+- [`docs/operator/multi-companion.md`](./docs/operator/multi-companion.md) — fleet topology
+- [`docs/apps/satellite-hub.md`](./docs/apps/satellite-hub.md) — Satellite Hub (ESPHome + realtime; not gateway Wyoming)
+- [`docs/tools/evals.md`](./docs/tools/evals.md) — offline eval toolkit
+- [`docs/faculties/automata.md`](./docs/faculties/automata.md) — automata (charter §6.28)
 
 **Operations and process**:
 
 - [`docs/setup.md`](./docs/setup.md), [`docs/operations.md`](./docs/operations.md)
-- [`docs/shakedown.md`](./docs/shakedown.md) — cumulative release recertification contract
+- [`docs/process/shakedown.md`](./docs/process/shakedown.md) — cumulative release recertification
 - [`docs/development-status.md`](./docs/development-status.md) — where the project stands
 - [`AGENTS.md`](./AGENTS.md) — the operating contract for coding agents
 
@@ -148,6 +151,7 @@ and infrastructure inventory remain external to this public repository.
 [`resources/companion-library/`](./resources/companion-library/):
 welcome documentation, philosophy, and privacy references for companions built
 on the framework.
+
 
 ## Project Structure
 

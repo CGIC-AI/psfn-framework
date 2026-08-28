@@ -899,7 +899,11 @@ export function wirePostTurnActionRuntime(
       .filter((candidate) => candidate.runtimeClass === entry.runtimeClass)
       .sort((left, right) => left.action.inferredAt - right.action.inferredAt || left.nextRunAt - right.nextRunAt);
     const overflow = Math.max(0, sameClassEntries.length - runtimeProfile.maxQueuedActions);
-    const droppedEntries = overflow > 0 ? sameClassEntries.slice(-overflow) : [];
+    // defer_until_idle is a durable-demand contract. Its capacity bounds the
+    // runnable admission window below; it must never delete valid demand.
+    const droppedEntries = overflow > 0 && runtimeProfile.degradationMode !== 'defer_until_idle'
+      ? sameClassEntries.slice(-overflow)
+      : [];
     if (overflow > 0) {
       for (const droppedEntry of droppedEntries) {
         candidateQueue.delete(droppedEntry.action.dedupeKey);
@@ -943,6 +947,26 @@ export function wirePostTurnActionRuntime(
     return 'dropped_budget';
   };
 
+  const resolveAdmittedDedupeKeys = (): Set<string> => {
+    const admittedDedupeKeys = new Set<string>();
+    for (const runtimeClass of RUNTIME_CLASS_ORDER) {
+      const runtimeProfile = resolveRuntimeLaneBudgetProfile(runtimeClass);
+      const laneEntries = [...queue.values()]
+        .filter((candidate) => candidate.runtimeClass === runtimeClass)
+        .sort((left, right) => (
+          left.nextRunAt - right.nextRunAt
+          || left.action.inferredAt - right.action.inferredAt
+        ));
+      const admittedEntries = runtimeProfile.degradationMode === 'defer_until_idle'
+        ? laneEntries.slice(0, runtimeProfile.maxQueuedActions)
+        : laneEntries;
+      for (const admittedEntry of admittedEntries) {
+        admittedDedupeKeys.add(admittedEntry.action.dedupeKey);
+      }
+    }
+    return admittedDedupeKeys;
+  };
+
   const runNextDueAction = async (
     classRunCounts: Partial<Record<RuntimeLaneClass, number>>,
   ): Promise<boolean> => {
@@ -951,7 +975,10 @@ export function wirePostTurnActionRuntime(
     }
 
     const now = Date.now();
+    const admittedDedupeKeys = resolveAdmittedDedupeKeys();
+
     const dueEntries = [...queue.values()]
+      .filter((entry) => admittedDedupeKeys.has(entry.action.dedupeKey))
       .filter((entry) => entry.nextRunAt <= now)
       .filter((entry) => {
         const classRuns = classRunCounts[entry.runtimeClass] ?? 0;
@@ -1169,9 +1196,13 @@ export function wirePostTurnActionRuntime(
   const resolveQueuedEntryState = (
     entry: DeferredQueueEntry,
     now: number,
+    admittedDedupeKeys: ReadonlySet<string>,
   ): PostTurnActionQueueEntryState => {
     if (runningDedupeKeys.has(entry.action.dedupeKey)) {
       return 'running';
+    }
+    if (!admittedDedupeKeys.has(entry.action.dedupeKey)) {
+      return 'deferred';
     }
     if (entry.nextRunAt > now) {
       return entry.attempt > 0 ? 'retry_scheduled' : 'scheduled';
@@ -1182,8 +1213,9 @@ export function wirePostTurnActionRuntime(
   const toQueuedEntryStatus = (
     entry: DeferredQueueEntry,
     now: number,
+    admittedDedupeKeys: ReadonlySet<string>,
   ): PostTurnActionQueuedEntryStatus => {
-    const state = resolveQueuedEntryState(entry, now);
+    const state = resolveQueuedEntryState(entry, now, admittedDedupeKeys);
     const status: PostTurnActionQueuedEntryStatus = {
       actionId: entry.action.id,
       actionKind: entry.action.kind,
@@ -1222,6 +1254,8 @@ export function wirePostTurnActionRuntime(
     const availableSlots = Math.max(0, runtimeProfile.maxQueuedActions - queueDepth);
     const nextRunAt = minimumNumber(queued.map((entry) => entry.nextRunAt));
     const oldestInferredAt = minimumNumber(queued.map((entry) => entry.inferredAt));
+    const deferred = queued.filter((entry) => entry.state === 'deferred');
+    const oldestDeferredAt = minimumNumber(deferred.map((entry) => entry.inferredAt));
     const status: PostTurnActionQueueLaneStatus = {
       runtimeClass,
       chargeLane: runtimeProfile.chargeLane,
@@ -1235,6 +1269,7 @@ export function wirePostTurnActionRuntime(
       scheduledCount: queued.filter((entry) => entry.state === 'scheduled').length,
       retryScheduledCount: queued.filter((entry) => entry.state === 'retry_scheduled').length,
       runningCount: queued.filter((entry) => entry.state === 'running').length,
+      deferredCount: deferred.length,
       droppedCount: droppedCountsByRuntimeClass.get(runtimeClass) ?? 0,
     };
     if (nextRunAt !== undefined) {
@@ -1243,6 +1278,10 @@ export function wirePostTurnActionRuntime(
     if (oldestInferredAt !== undefined) {
       status.oldestInferredAt = oldestInferredAt;
       status.oldestQueuedForMs = Math.max(0, now - oldestInferredAt);
+    }
+    if (oldestDeferredAt !== undefined) {
+      status.oldestDeferredAt = oldestDeferredAt;
+      status.oldestDeferredForMs = Math.max(0, now - oldestDeferredAt);
     }
     const lastDrop = recentDrops.find((drop) => drop.runtimeClass === runtimeClass);
     if (lastDrop) {
@@ -1253,7 +1292,8 @@ export function wirePostTurnActionRuntime(
 
   const getStatus = (): PostTurnActionQueueStatus => {
     const now = Date.now();
-    const queued = [...queue.values()].map((entry) => toQueuedEntryStatus(entry, now));
+    const admittedDedupeKeys = resolveAdmittedDedupeKeys();
+    const queued = [...queue.values()].map((entry) => toQueuedEntryStatus(entry, now, admittedDedupeKeys));
     const queuedByRuntimeClass = new Map<RuntimeLaneClass, PostTurnActionQueuedEntryStatus[]>();
     for (const runtimeClass of RUNTIME_CLASS_ORDER) {
       queuedByRuntimeClass.set(runtimeClass, []);
@@ -1356,7 +1396,7 @@ export function wirePostTurnActionRuntime(
     const queuedEntry = findQueuedEntry(normalizedRef);
     if (queuedEntry) {
       const now = Date.now();
-      const queued = toQueuedEntryStatus(queuedEntry, now);
+      const queued = toQueuedEntryStatus(queuedEntry, now, resolveAdmittedDedupeKeys());
       const status: PostTurnActionStatusRecord = {
         actionId: queued.actionId,
         actionKind: queued.actionKind,

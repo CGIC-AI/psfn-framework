@@ -33,7 +33,7 @@ export interface PostTurnActionHandlerOptions {
   runtimeClass?: RuntimeLaneClass;
 }
 
-export type PostTurnActionQueueEntryState = 'ready' | 'scheduled' | 'retry_scheduled' | 'running';
+export type PostTurnActionQueueEntryState = 'deferred' | 'ready' | 'scheduled' | 'retry_scheduled' | 'running';
 export type PostTurnActionQueuePersistenceLoadState =
   | 'not_configured'
   | 'not_found'
@@ -189,10 +189,13 @@ export interface PostTurnActionQueueLaneStatus {
   scheduledCount: number;
   retryScheduledCount: number;
   runningCount: number;
+  deferredCount: number;
   droppedCount: number;
   nextRunAt?: number;
   oldestInferredAt?: number;
   oldestQueuedForMs?: number;
+  oldestDeferredAt?: number;
+  oldestDeferredForMs?: number;
   lastDrop?: PostTurnActionQueueDropRecord;
 }
 

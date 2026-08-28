@@ -393,7 +393,7 @@ describe('wirePostTurnActionRuntime', () => {
     })).not.toThrow();
   });
 
-  it('keeps oldest maintenance work and drops the newest action when the lane budget is exceeded', async () => {
+  it('retains maintenance demand beyond the runnable admission window and eventually drains it', async () => {
     const nowSpy = vi.spyOn(Date, 'now');
     try {
       nowSpy.mockReturnValue(1_700_000_350_000);
@@ -410,7 +410,8 @@ describe('wirePostTurnActionRuntime', () => {
         },
         intervalMs: 10,
       });
-      runtime.registerHandler('heartbeat.run_template', vi.fn().mockResolvedValue(undefined), {
+      const handler = vi.fn().mockResolvedValue(undefined);
+      runtime.registerHandler('heartbeat.run_template', handler, {
         executionMode: 'background',
       });
 
@@ -438,32 +439,37 @@ describe('wirePostTurnActionRuntime', () => {
         'maintenance:0',
         'maintenance:1',
         'maintenance:2',
+        'maintenance:3',
       ]);
       expect(runtime.listQueued().map((entry) => entry.runtimeClass)).toEqual([
         MAINTENANCE_REFLECTION_RUNTIME_CLASS,
         MAINTENANCE_REFLECTION_RUNTIME_CLASS,
         MAINTENANCE_REFLECTION_RUNTIME_CLASS,
+        MAINTENANCE_REFLECTION_RUNTIME_CLASS,
       ]);
-      expect(phases).toEqual(expect.arrayContaining([
-        expect.objectContaining({
-          phase: 'dropped_budget',
-          dedupeKey: 'maintenance:3',
-          runtimeClass: MAINTENANCE_REFLECTION_RUNTIME_CLASS,
-          chargeLane: 'maintenance',
-        }),
-      ]));
-      expect(getRecentDiagnosticLogRecords()).toEqual(expect.arrayContaining([
-        expect.objectContaining({
-          level: 'warn',
-          message: expect.stringContaining('maintenance-3'),
-        }),
-      ]));
+      expect(runtime.getActionStatus('maintenance:3')).toMatchObject({
+        state: 'deferred',
+      });
+      expect(phases.filter(({ phase }) => phase === 'dropped_budget')).toEqual([]);
+      expect(getRecentDiagnosticLogRecords().filter(({ level }) => level === 'warn')).toEqual([]);
+
+      for (let tick = 0; tick < 4; tick += 1) {
+        nowSpy.mockReturnValue(1_700_000_350_100 + tick * 100);
+        await scheduler.tick();
+      }
+      expect(handler.mock.calls.map(([action]) => action.id)).toEqual([
+        'maintenance-0',
+        'maintenance-1',
+        'maintenance-2',
+        'maintenance-3',
+      ]);
+      expect(runtime.listQueued()).toEqual([]);
     } finally {
       nowSpy.mockRestore();
     }
   });
 
-  it('keeps queue status truthful when back-pressure rejects a newly inferred action', async () => {
+  it('reports overflow maintenance demand as deferred instead of dropped', async () => {
     const nowSpy = vi.spyOn(Date, 'now');
     try {
       nowSpy.mockReturnValue(1_700_000_355_000);
@@ -515,15 +521,10 @@ describe('wirePostTurnActionRuntime', () => {
       expect(runtime.listQueued().map((entry) => entry.dedupeKey)).toEqual([
         'maintenance:1',
         'maintenance:2',
+        'maintenance:3',
         'maintenance:old',
       ]);
-      expect(telemetry).toEqual(expect.arrayContaining([
-        expect.objectContaining({
-          phase: 'dropped_budget',
-          dedupeKey: 'maintenance:3',
-          queueDepth: 3,
-        }),
-      ]));
+      expect(telemetry.filter(({ phase }) => phase === 'dropped_budget')).toEqual([]);
       expect(telemetry).toEqual(expect.arrayContaining([
         expect.objectContaining({
           phase: 'queued',
@@ -535,31 +536,24 @@ describe('wirePostTurnActionRuntime', () => {
         (lane) => lane.runtimeClass === MAINTENANCE_REFLECTION_RUNTIME_CLASS,
       );
       expect(runtime.getStatus()).toMatchObject({
-        queueDepth: 3,
+        queueDepth: 4,
         maxQueueDepth: 19,
         saturated: true,
         backPressure: {
-          droppedCount: 1,
-          recentDrops: [
-            expect.objectContaining({
-              dedupeKey: 'maintenance:3',
-              queueDepth: 3,
-              maxQueuedActions: 3,
-              backPressureMode: 'defer_until_idle',
-            }),
-          ],
+          droppedCount: 0,
+          recentDrops: [],
         },
       });
       expect(maintenanceLane).toMatchObject({
-        queueDepth: 3,
+        queueDepth: 4,
         maxQueuedActions: 3,
         availableSlots: 0,
         saturated: true,
-        droppedCount: 1,
-        lastDrop: expect.objectContaining({
-          dedupeKey: 'maintenance:3',
-        }),
+        deferredCount: 1,
+        droppedCount: 0,
+        oldestDeferredAt: 1_700_000_355_003,
       });
+      expect(runtime.getActionStatus('maintenance:3')).toMatchObject({ state: 'deferred' });
     } finally {
       nowSpy.mockRestore();
     }
@@ -1203,7 +1197,7 @@ describe('wirePostTurnActionRuntime', () => {
     expect(handler).toHaveBeenCalledTimes(1);
   });
 
-  it('persists queued actions and reloads them on runtime restart', async () => {
+  it('persists overflow maintenance demand and reloads all of it on runtime restart', async () => {
     const nowSpy = vi.spyOn(Date, 'now');
     const tempDir = mkdtempSync(join(tmpdir(), 'psfn-post-turn-actions-'));
     const persistencePath = join(tempDir, 'queue.json');
@@ -1229,18 +1223,19 @@ describe('wirePostTurnActionRuntime', () => {
       await firstBus.emit('agent.post_turn.actions.inferred', {
         message: makeMessage(),
         response: makeResponse(),
-        actions: [
+        actions: Array.from({ length: 5 }, (_, index) => (
           makeAction({
-            id: 'persisted-action',
-            dedupeKey: 'persisted:key',
+            id: `persisted-action-${index}`,
+            dedupeKey: `persisted:key:${index}`,
+            inferredAt: 1_700_000_200_000 + index,
             runAt: 1_700_000_200_300,
-          }),
-        ],
+          })
+        )),
       });
 
       const persistedBeforeRestart = readPersistedQueue(persistencePath);
       expect(persistedBeforeRestart.version).toBe(1);
-      expect(persistedBeforeRestart.entries).toHaveLength(1);
+      expect(persistedBeforeRestart.entries).toHaveLength(5);
 
       const secondBus = new EventBus();
       const secondScheduler = new Scheduler(secondBus, {
@@ -1259,16 +1254,26 @@ describe('wirePostTurnActionRuntime', () => {
       const secondHandler = vi.fn().mockResolvedValue(undefined);
       secondRuntime.registerHandler('heartbeat.run_template', secondHandler);
 
-      expect(secondRuntime.listQueued()).toHaveLength(1);
+      expect(secondRuntime.listQueued()).toHaveLength(5);
       expect(secondRuntime.listQueued()[0]?.nextRunAt).toBe(1_700_000_200_300);
+      expect(secondRuntime.getActionStatus('persisted:key:3')).toMatchObject({ state: 'deferred' });
+      expect(secondRuntime.getActionStatus('persisted:key:4')).toMatchObject({ state: 'deferred' });
 
       nowSpy.mockReturnValue(1_700_000_200_250);
       await secondScheduler.tick();
       expect(secondHandler).toHaveBeenCalledTimes(0);
 
-      nowSpy.mockReturnValue(1_700_000_200_301);
-      await secondScheduler.tick();
-      expect(secondHandler).toHaveBeenCalledTimes(1);
+      for (let tick = 0; tick < 5; tick += 1) {
+        nowSpy.mockReturnValue(1_700_000_200_301 + tick * 100);
+        await secondScheduler.tick();
+      }
+      expect(secondHandler.mock.calls.map(([action]) => action.id)).toEqual([
+        'persisted-action-0',
+        'persisted-action-1',
+        'persisted-action-2',
+        'persisted-action-3',
+        'persisted-action-4',
+      ]);
 
       const persistedAfterDrain = readPersistedQueue(persistencePath);
       expect(persistedAfterDrain.entries).toHaveLength(0);

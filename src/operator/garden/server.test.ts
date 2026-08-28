@@ -811,7 +811,7 @@ describe('AdminServer Garden routing', () => {
       expect(payload.stats.sessionCount).toBeTypeOf('number');
     });
 
-    it('reports disabled observer sidecar health when persistence is unavailable', async () => {
+    it('reports unavailable observer sidecar health when persistence is unavailable', async () => {
       const healthRes = await request(harness.port, 'GET', '/api/admin/evals/observer-sidecar/health');
       expect(healthRes.status).toBe(200);
       const healthPayload = JSON.parse(healthRes.body) as {
@@ -819,11 +819,8 @@ describe('AdminServer Garden routing', () => {
         runtime: { status: string; enabled: boolean } | null;
         persistence: { available: boolean; authoritative: boolean };
       };
-      expect(healthPayload.status).toBe('disabled');
-      expect(healthPayload.runtime).toMatchObject({
-        status: 'disabled',
-        enabled: false,
-      });
+      expect(healthPayload.status).toBe('unavailable');
+      expect(healthPayload.runtime).toBeNull();
       expect(healthPayload.persistence).toEqual({
         available: false,
         evalOwned: false,

@@ -286,6 +286,99 @@ describe('MemoryRetriever active memory context', () => {
     expect(output).not.toContain(foreign.text);
   });
 
+  it('keeps confidential dyad memory inside its exact companion DM context', async () => {
+    const companionA = '11111111-1111-4111-8111-111111111111';
+    const companionB = '22222222-2222-4222-8222-222222222222';
+    const companionC = '33333333-3333-4333-8333-333333333333';
+    const dyadChannel = `companion-dm:${companionA}:${companionB}`;
+    const privateMemory = makeMemory({
+      id: 'dyad-private-memory',
+      text: 'Aster privately promised Briar a hand-carved lighthouse token.',
+      contactId: 'contact-briar',
+      sensitivity: 'confidential',
+      sourceRef: `${dyadChannel}:extract|source:session|session:${dyadChannel}|operation:extract`,
+      provenance: {
+        channelId: dyadChannel,
+        sessionId: dyadChannel,
+        icpDyadId: '44444444-4444-4444-8444-444444444444',
+      },
+      similarity: 0.99,
+    });
+    const retriever = new MemoryRetriever(
+      makeMockStore([privateMemory]),
+      makeMockEmbedding(),
+      makeRuntimeConfig({ companionId: createCompanionId(companionA) }),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      false,
+      undefined,
+      {
+        // Even authenticated presence in a companion room cannot authorize a
+        // memory sourced from a different, private dyad session.
+        isAuthenticatedMember: () => true,
+      },
+    );
+
+    const exactDyad = await retriever.retrieve(
+      'What did Aster promise about the lighthouse token?',
+      dyadChannel,
+      'primary',
+      { isDirectMessage: true, privacyLevel: 'private' },
+      'contact-briar',
+    );
+    expect(exactDyad).toContain(privateMemory.text);
+
+    const unauthorizedContexts = [
+      {
+        label: 'human DM',
+        channelId: 'discord:dm:invented-human',
+        trustLevel: 'primary' as const,
+        channelMeta: { isDirectMessage: true, privacyLevel: 'private' as const },
+        canonicalContactId: 'contact-invented-human',
+      },
+      {
+        label: 'group room',
+        channelId: 'discord:guild:invented-room',
+        trustLevel: 'primary' as const,
+        channelMeta: { isDirectMessage: false, privacyLevel: 'private' as const },
+      },
+      {
+        label: 'other companion dyad',
+        channelId: `companion-dm:${companionA}:${companionC}`,
+        trustLevel: 'primary' as const,
+        channelMeta: { isDirectMessage: true, privacyLevel: 'private' as const },
+        canonicalContactId: 'contact-companion-c',
+      },
+      {
+        label: 'authenticated companion room presence',
+        channelId: 'companion-room:invented-studio',
+        trustLevel: 'primary' as const,
+        channelMeta: { isDirectMessage: false, privacyLevel: 'private' as const },
+      },
+      {
+        label: 'insufficient dyad trust',
+        channelId: dyadChannel,
+        trustLevel: 'regular' as const,
+        channelMeta: { isDirectMessage: true, privacyLevel: 'private' as const },
+        canonicalContactId: 'contact-briar',
+      },
+    ];
+
+    for (const context of unauthorizedContexts) {
+      const output = await retriever.retrieve(
+        'What did Aster promise about the lighthouse token?',
+        context.channelId,
+        context.trustLevel,
+        context.channelMeta,
+        context.canonicalContactId,
+      );
+      expect(output, context.label).not.toContain(privateMemory.text);
+    }
+  });
+
   it('withholds a caller-stamped room memory from A while allowing authenticated member B', async () => {
     const companionA = '11111111-1111-4111-8111-111111111111';
     const companionB = '22222222-2222-4222-8222-222222222222';

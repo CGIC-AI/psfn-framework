@@ -12,6 +12,7 @@ import type { LLMProviderPort } from '../agent/contracts.js';
 const SENDER = '11111111-1111-4111-8111-111111111111';
 const RECIPIENT = '22222222-2222-4222-8222-222222222222';
 const CHANNEL = `companion-dm:${SENDER}:${RECIPIENT}`;
+const DYAD_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const SOURCE_ID = 'icp-initiation:33333333-3333-4333-8333-333333333333';
 const GATEWAY_ID = 'companion-initiation-33333333-3333-4333-8333-333333333333';
 const correlation = {
@@ -47,6 +48,7 @@ const recoveryResponse = {
 
 const roots: string[] = [];
 afterEach(() => {
+  vi.useRealTimers();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
@@ -74,6 +76,66 @@ function manager(root: string, companion: 'sender' | 'recipient'): SessionManage
 }
 
 describe('ICP L0 restart continuity', () => {
+  it('reuses one canonical DM session across bounded dyad activity episodes', () => {
+    vi.useFakeTimers();
+    const root = mkdtempSync(join(tmpdir(), 'psfn-icp-canonical-dyad-session-'));
+    roots.push(root);
+    const firstActivity = {
+      ...correlation,
+      dyadId: DYAD_ID,
+      costOriginStage: 'reply' as const,
+    };
+    const secondActivity = {
+      ...firstActivity,
+      conversationId: '55555555-5555-4555-8555-555555555555',
+      turnId: '018f22a2-52b8-7a3a-8c16-25b7b14f7084',
+      messageId: 'message:second-activity',
+      requestId: 'request:second-activity',
+    };
+    const sender = manager(root, 'sender');
+    const recipient = manager(root, 'recipient');
+
+    vi.setSystemTime(new Date('2026-08-20T09:00:00.000Z'));
+    sender.recordAssistantMessage(CHANNEL, 'First burst from sender', undefined, true, undefined, {
+      metadata: buildSessionMetadataWithIcpCorrelation(undefined, firstActivity),
+    });
+    recipient.recordUserMessage(CHANNEL, 'First burst from sender', SENDER, 'Aster', true, undefined, {
+      metadata: buildSessionMetadataWithIcpCorrelation(undefined, firstActivity),
+    });
+
+    vi.setSystemTime(new Date('2026-08-23T18:30:00.000Z'));
+    sender.recordUserMessage(CHANNEL, 'Reply in a later activity', RECIPIENT, 'Briar', true, undefined, {
+      metadata: buildSessionMetadataWithIcpCorrelation(undefined, secondActivity),
+    });
+    recipient.recordAssistantMessage(CHANNEL, 'Reply in a later activity', undefined, true, undefined, {
+      metadata: buildSessionMetadataWithIcpCorrelation(undefined, secondActivity),
+    });
+
+    for (const restarted of [manager(root, 'sender'), manager(root, 'recipient')]) {
+      expect(restarted.resolveSessionChannelId(CHANNEL)).toBe(CHANNEL);
+      expect(restarted.listRecentSessions()).toEqual([
+        expect.objectContaining({
+          sessionId: CHANNEL,
+          channelId: CHANNEL,
+          messageCount: 2,
+        }),
+      ]);
+      const entries = restarted.getRecentSessionEntries(CHANNEL, 10);
+      expect(entries.map(entry => entry.content)).toEqual([
+        'First burst from sender',
+        'Reply in a later activity',
+      ]);
+      expect(entries.map(entry => entry.timestamp)).toEqual([
+        Date.parse('2026-08-20T09:00:00.000Z'),
+        Date.parse('2026-08-23T18:30:00.000Z'),
+      ]);
+      expect(entries.map(entry => JSON.parse(entry.metadata ?? '{}').icpCorrelation.conversationId))
+        .toEqual([firstActivity.conversationId, secondActivity.conversationId]);
+      expect(entries.map(entry => JSON.parse(entry.metadata ?? '{}').icpCorrelation.dyadId))
+        .toEqual([DYAD_ID, DYAD_ID]);
+    }
+  });
+
   it('recovers sender assistant/delivery truth and recipient source attribution independently', () => {
     const root = mkdtempSync(join(tmpdir(), 'psfn-icp-session-restart-'));
     roots.push(root);

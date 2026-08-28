@@ -22,6 +22,7 @@ export async function toBuzzSubstrateMessage(
   context: BuzzMessageContext,
 ): Promise<SubstrateMessage> {
   const nativeChannelId = buzzTagValues(event, 'h')[0]!;
+  const channelId = buzzChannelId(context.relayUrl, nativeChannelId);
   const author = {
     authorId: buzzPrincipal(context.relayUrl, event.pubkey),
     authorName: buzzDisplayName(event.pubkey),
@@ -42,13 +43,12 @@ export async function toBuzzSubstrateMessage(
     author,
     observer,
     mentionedTargets,
-    channel: { scope: 'group', channelId: nativeChannelId },
+    channel: { scope: 'group', channelId },
     resolvedAddressee: {
       kind: 'participants',
       participants: mentionedTargets.map(participant => ({ ...participant, evidence: ['mention'] })),
     },
   });
-  const channelId = buzzChannelId(context.relayUrl, nativeChannelId);
   const screened = await screenChatMessageEnvelope({
     envelope: { content: event.content, addressing },
     screening: context.intakeScreening,

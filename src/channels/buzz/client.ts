@@ -1,4 +1,5 @@
 import { WebSocket, type RawData } from 'ws';
+import { toError } from '../../shared/utils/errors.js';
 import type { RuntimeChannelLifecycleLogger } from '../backplane/channel-lifecycle.js';
 import {
   BUZZ_STREAM_KIND,
@@ -29,10 +30,6 @@ export interface BuzzRelayClientConfig {
 export interface BuzzRelayClientCallbacks {
   onEvent: (event: NostrEvent) => Promise<void>;
   onTerminalFailure: (kind: string, title: string, error: Error) => Promise<void>;
-}
-
-function asError(value: unknown): Error {
-  return value instanceof Error ? value : new Error(String(value));
 }
 
 export class BuzzRelayClient {
@@ -136,7 +133,7 @@ export class BuzzRelayClient {
       } catch (error) {
         clearTimeout(timer);
         this.pendingPublishes.delete(event.id);
-        reject(asError(error));
+        reject(toError(error));
       }
     });
   }
@@ -149,13 +146,13 @@ export class BuzzRelayClient {
     }
     void this.handleFrame(frame).catch(error => {
       if (!this.started) {
-        this.failStartup(asError(error));
+        this.failStartup(toError(error));
         return;
       }
       void this.callbacks.onTerminalFailure(
         'message-processing',
         'Buzz message processing failed',
-        asError(error),
+        toError(error),
       );
     });
   }

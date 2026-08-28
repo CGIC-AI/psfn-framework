@@ -71,6 +71,8 @@ missing or the resolved key is invalid.
 ## Current boundary
 
 This tracer supports allowlisted top-level Stream mentions and anchored replies.
+It deliberately does not support scheduled continuity or generic top-level
+outbound messages: every reply must remain bound to a verified signed trigger.
 It does not yet consume relay membership changes, reconnect or persist replay
 cursors, ingest nested thread turns, resolve Buzz profiles to canonical
 contacts, publish Forum events, or handle direct messages. In particular, a

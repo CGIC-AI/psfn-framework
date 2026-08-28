@@ -12,8 +12,8 @@ import type {
 } from '../plugins/types.js';
 import { BuzzAdapter } from './adapter.js';
 import { normalizeBuzzRelayUrl } from './origin.js';
+import { isNostrHexKey } from './protocol.js';
 
-const NOSTR_PUBKEY_PATTERN = /^[0-9a-f]{64}$/;
 const BUZZ_ALLOWED_KEYS: Record<string, true> = {
   enabled: true,
   relayUrl: true,
@@ -78,7 +78,7 @@ function parseBuzzChannelConfig(raw: unknown): ChannelPluginParseResult<BuzzChan
   const allowedAuthorPubkeys = parseExactStringList(
     raw.allowedAuthorPubkeys,
     'channels.json.buzz.allowedAuthorPubkeys',
-    value => NOSTR_PUBKEY_PATTERN.test(value)
+    value => isNostrHexKey(value)
       ? null
       : 'must be a 64-character lowercase hex pubkey',
   );
@@ -154,6 +154,10 @@ function parseCredentialReference(
 ): CredentialReference | undefined {
   if (value === undefined) return undefined;
   if (!isRecord(value)) throw new Error(`${fieldName} must be an object`);
+  const unknownKeys = Object.keys(value).filter(key => key !== 'kind' && key !== 'envName');
+  if (unknownKeys.length > 0) {
+    throw new Error(`${fieldName} has unsupported keys: ${unknownKeys.join(', ')}`);
+  }
   if (value.kind !== 'env') throw new Error(`${fieldName}.kind must be "env"`);
   const envName = parseString(value.envName, `${fieldName}.envName`);
   try {

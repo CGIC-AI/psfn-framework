@@ -73,6 +73,18 @@ describe('Buzz channel plugin config', () => {
       enabled: true,
       relayUrl: 'wss://relay.example.test',
       companionId: COMPANION_ID,
+      privateKeyRef: {
+        kind: 'env',
+        envName: 'BUZZ_NSEC',
+        privateKey: 'do-not-accept-nested-inline-secrets',
+      },
+      channelIds: [CHANNEL_ID],
+      allowedAuthorPubkeys: [AUTHOR_PUBKEY],
+    }, 'privateKeyRef has unsupported keys: privateKey'],
+    [{
+      enabled: true,
+      relayUrl: 'wss://relay.example.test',
+      companionId: COMPANION_ID,
       privateKeyRef: { kind: 'env', envName: 'buzz_nsec' },
       channelIds: [CHANNEL_ID],
       allowedAuthorPubkeys: [AUTHOR_PUBKEY],

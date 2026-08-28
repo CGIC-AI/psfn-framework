@@ -558,6 +558,13 @@ describe('resolveGatewayMultiCompanionConfig', () => {
         credentials: [],
         config: {},
       },
+      buzz: {
+        id: 'buzz',
+        enabled: true,
+        companionId: '22222222-2222-4222-8222-222222222222',
+        credentials: [],
+        config: {},
+      },
     };
     expect(resolveGatewayMultiCompanionConfig({
       multiCompanion: true,
@@ -565,7 +572,7 @@ describe('resolveGatewayMultiCompanionConfig', () => {
     }, channels, EMPTY_SATELLITE_REGISTRY)).toEqual({
       enabled: true,
       fleetCompanionIds: ['11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222'],
-      channelRouting: { discord: '11111111-1111-4111-8111-111111111111', telegram: '22222222-2222-4222-8222-222222222222', api: '22222222-2222-4222-8222-222222222222', multica: '11111111-1111-4111-8111-111111111111' },
+      channelRouting: { discord: '11111111-1111-4111-8111-111111111111', telegram: '22222222-2222-4222-8222-222222222222', api: '22222222-2222-4222-8222-222222222222', multica: '11111111-1111-4111-8111-111111111111', buzz: '22222222-2222-4222-8222-222222222222' },
       discordAccounts: {},
       personalWorkspaceByCompanionId: {
         '11111111-1111-4111-8111-111111111111': '/runtime/workspaces/personal/11111111-1111-4111-8111-111111111111',
@@ -758,6 +765,7 @@ describe('resolveGatewayMultiCompanionConfig', () => {
     expect(resolveGatewaySurfaceForChannelType('telegram')).toBe('telegram');
     expect(resolveGatewaySurfaceForChannelType('api')).toBe('api');
     expect(resolveGatewaySurfaceForChannelType('multica')).toBe('multica');
+    expect(resolveGatewaySurfaceForChannelType('buzz')).toBe('buzz');
     expect(resolveGatewaySurfaceForChannelType('terminal')).toBeNull();
     expect(resolveGatewaySurfaceForChannelType('psfn-amica')).toBeNull();
   });

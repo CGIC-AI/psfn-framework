@@ -2,6 +2,7 @@ import {
   DEFAULT_MOOD_CONGRUENCE_WEIGHT,
   DEFAULT_UI_THEME_ID,
   createDefaultObserverEvalSidecarSettings,
+  createDefaultEmoSimProactivitySettings,
   createDefaultSessionTailCacheSettings,
   type SubstrateConfig,
 } from '../config/runtime-config-contracts.js';
@@ -327,6 +328,9 @@ function getMemorySettingsSnapshot(config: SubstrateConfig) {
     observerEvalSidecar: structuredClone(
       config.observerEvalSidecar ?? createDefaultObserverEvalSidecarSettings(),
     ),
+    emosimProactivity: structuredClone(
+      config.emosimProactivity ?? createDefaultEmoSimProactivitySettings(),
+    ),
     retryMaxAttempts: config.retryMaxAttempts ?? null,
     retryBaseDelayMs: config.retryBaseDelayMs ?? null,
   } satisfies SnapshotSection<
@@ -362,6 +366,7 @@ function getMemorySettingsSnapshot(config: SubstrateConfig) {
     | 'analysisWorkbenchExecutionTimeoutMs'
     | 'analysisWorkbenchOutputTruncation'
     | 'observerEvalSidecar'
+    | 'emosimProactivity'
     | 'retryMaxAttempts'
     | 'retryBaseDelayMs'
   >;
@@ -952,6 +957,9 @@ function applyWebAndGardenSettings(
   }
   if ('observerEvalSidecar' in settings) {
     config.observerEvalSidecar = structuredClone(settings.observerEvalSidecar);
+  }
+  if ('emosimProactivity' in settings) {
+    config.emosimProactivity = structuredClone(settings.emosimProactivity);
   }
   if ('activeTimezone' in settings) {
     const activeTimezone = settings.activeTimezone?.trim();

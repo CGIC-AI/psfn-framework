@@ -6,11 +6,7 @@ import {
   type PostgresTestHarness,
 } from '../../test-support/postgres-test-harness.js';
 import { createIcpFeltImpulseInitiationAdapter } from '../../core/icp/felt-impulse-initiation.js';
-import { ObserverEvalLeverStage } from '../../core/eval/observer-sidecar/config.js';
-import type {
-  ObserverEvalSidecarLeverPersistencePort,
-} from '../../core/eval/observer-sidecar/persistence.js';
-import { createDefaultObserverEvalSidecarLeverSettings } from '../../system/config/runtime-config-contracts.js';
+import { createEmoSimProactivityPort } from '../../core/emotion/emosim-proactivity-port.js';
 import { createPostgresPool } from '../postgres.js';
 import { PostgresIcpInitiationCandidateStore } from './icp-initiation-candidate-store.js';
 import { PostgresIcpFeltImpulseFunnelStore } from './icp-felt-impulse-funnel-store.js';
@@ -25,26 +21,6 @@ const T0 = Date.parse('2026-08-17T00:00:00.000Z');
 const MINUTE_MS = 60_000;
 
 let harness: PostgresTestHarness | null = null;
-
-function makeLeverPersistence(): ObserverEvalSidecarLeverPersistencePort {
-  return {
-    recordLeverEvent: async input => ({ ...input, retention: input.retention }),
-    queryLeverEvents: async () => [],
-    loadLeverState: async () => [],
-    saveLeverState: async () => undefined,
-    pruneExpiredLeverEvents: async () => ({ prunedEventIds: [] }),
-  } as unknown as ObserverEvalSidecarLeverPersistencePort;
-}
-
-function lonelySnapshot() {
-  return {
-    t: 0,
-    mood: { valence: 0.2, arousal: 0.1 },
-    dominant: 'Calmness',
-    emotions: { Calmness: 0.3 },
-    drives: { socialNeed: 0.8, sleepPressure: 0.2 },
-  };
-}
 
 beforeAll(async () => {
   harness = await startPostgresTestHarness({ image: DEFAULT_POSTGRES_TEST_IMAGE });
@@ -82,18 +58,44 @@ describe('Postgres felt-impulse funnel outcomes', () => {
         funnelStore: funnel,
         now: () => producerFiredAtMs,
       });
-      const producer = new ObserverEvalLeverStage({
-        settings: { ...createDefaultObserverEvalSidecarLeverSettings(), enabled: true },
-        persistence: makeLeverPersistence(),
-        sidecarId: 'sidecar-funnel-integration',
-        retentionDays: 14,
-        emitFeltImpulse: event => adapter.onLeverSignal(event).then(() => undefined),
+      let proactivityState = { firstCrossingMs: null as number | null, lastFiredAtMs: null as number | null };
+      const producer = createEmoSimProactivityPort({
+        enabled: true,
+        companionId: LOCAL_ID,
+        thresholdProfile: {
+          profileId: 'would-message-v1',
+          socialNeedThreshold: 0.7,
+          attachmentIntensityThreshold: 0.5,
+          sustainMs: 30 * MINUTE_MS,
+          cooldownMs: 6 * 60 * MINUTE_MS,
+        },
+        stateStore: {
+          load: async () => structuredClone(proactivityState),
+          save: async state => { proactivityState = structuredClone(state); },
+        },
+        emitImpulse: impulse => adapter.onImpulse(impulse).then(() => undefined),
       });
-      const observe = (observedAtMs: number) => producer.evaluateObservation({
-        runId: 'producer-funnel-regression',
-        observationId: `observation-${observedAtMs}`,
-        snapshot: lonelySnapshot(),
+      const observe = (observedAtMs: number) => producer.observe({
+        companionId: LOCAL_ID,
         observedAtMs,
+        source: {
+          model: 'emo_sim',
+          version: 'emo_sim/server.py#http-api.v1',
+          availability: 'available',
+          confidence: 0.82,
+        },
+        lineage: {
+          schemaVersion: 1,
+          inputId: `turn:${observedAtMs}`,
+          projectionVersion: 'psfn.observer-sidecar.appraisal-projection.v3',
+          privacyClass: 'content_redacted',
+          rawContentRedacted: true,
+        },
+        snapshot: {
+          dominant: 'Calmness',
+          emotions: { Calmness: 0.3 },
+          drives: { socialNeed: 0.8 },
+        },
       });
       await observe(firstCrossingMs);
       await observe(producerFiredAtMs);

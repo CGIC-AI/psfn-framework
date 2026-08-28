@@ -76,10 +76,16 @@ function assertDoesNotOverlapRuntimeRoot(input: {
 }
 
 export function validateObserverEvalSidecarStartupConfig(
-  config: Pick<SubstrateConfig, 'observerEvalSidecar'>,
+  config: Pick<SubstrateConfig, 'observerEvalSidecar' | 'emosimProactivity'>,
   pathSnapshot: RuntimePathSnapshot,
 ): void {
   const sidecar = config.observerEvalSidecar;
+  const proactivity = config.emosimProactivity;
+  if (proactivity?.enabled && !sidecar?.enabled) {
+    throw new Error(
+      'emosimProactivity.enabled requires the EmoSim source runtime to be enabled',
+    );
+  }
   if (!sidecar?.enabled) {
     return;
   }
@@ -136,7 +142,6 @@ export function validateObserverEvalSidecarStartupConfig(
       + 'lever events are persistence-only, non-authoritative telemetry',
     );
   }
-
   const persistenceRootDir = sidecar.persistence.rootDir?.trim();
   if (sidecar.persistence.enabled && !persistenceRootDir) {
     throw new Error(

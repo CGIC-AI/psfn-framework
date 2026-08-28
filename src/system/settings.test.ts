@@ -581,6 +581,48 @@ describe('settings', () => {
       })).toThrow(/lever tracking requires observerEvalSidecar\.persistence\.enabled=true/);
     });
 
+    it('migrates an enabled legacy would_message owner block without a delivery gap', () => {
+      const levers = createDefaultObserverEvalSidecarLeverSettings();
+      const normalized = normalizeEditableSettings({
+        observerEvalSidecar: fromAny({
+          ...createDefaultObserverEvalSidecarSettings(),
+          persistence: {
+            enabled: true,
+            rootDir: '/repo/runtime/eval/observer-sidecar',
+            retentionDays: 21,
+            maxStoredObservations: 7500,
+          },
+          levers: { ...levers, enabled: true },
+        }),
+      });
+      expect(normalized.emosimProactivity).toEqual({
+        enabled: true,
+        thresholdProfile: {
+          profileId: 'emosim-would-message-v1',
+          socialNeedThreshold: levers.wouldMessage.socialNeedThreshold,
+          attachmentIntensityThreshold: levers.wouldMessage.attachmentIntensityThreshold,
+          sustainMs: levers.wouldMessage.sustainMs,
+          cooldownMs: levers.cooldownMs,
+        },
+      });
+    });
+
+    it('normalizes the first-class EmoSim proactivity owner block', () => {
+      const normalized = normalizeEditableSettings({
+        emosimProactivity: fromAny({
+          enabled: true,
+          thresholdProfile: {
+            profileId: 'emosim-would-message-v1',
+            socialNeedThreshold: 0.7,
+            attachmentIntensityThreshold: 0.5,
+            sustainMs: 1_800_000,
+            cooldownMs: 21_600_000,
+          },
+        }),
+      });
+      expect(normalized.emosimProactivity?.enabled).toBe(true);
+    });
+
     it('normalizes session tail cache settings as a JSON-owned structured object', () => {
       const normalized = normalizeEditableSettings({
         sessionTailCache: fromAny({

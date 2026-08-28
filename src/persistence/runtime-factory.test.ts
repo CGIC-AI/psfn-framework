@@ -391,6 +391,7 @@ describe('createAgentPersistenceRuntime', () => {
       // mocked pool — asserted structurally, schema threading asserted below.
       hubIdentityEnrollmentStore: expect.any(Object),
       icpFeltImpulseFunnelStore: expect.any(Object),
+      emosimProactivityStateStore: expect.any(Object),
       intentionRuntime: runtimeFactoryMocks.postgresIntentionRuntime as IntentionRuntimeWiring,
       intentionProviders: runtimeFactoryMocks.postgresIntentionRuntime as IntentionRuntimeProviders,
       internalStateStore: runtimeFactoryMocks.postgresInternalStateStore,

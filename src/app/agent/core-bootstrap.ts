@@ -48,6 +48,7 @@ import type { PostgresAutomataBusRuntimeStore } from '../../faculties/automata/b
 import type { PostgresAutomataRetentionStore } from '../../faculties/automata/retention-postgres-store.js';
 import type { PostgresExactSessionPurgeSagaStore } from '../../persistence/postgres/automata-exact-session-purge-store.js';
 import type { AutomataSessionClassificationService } from '../../faculties/automata/session-classification.js';
+import type { EmoSimProactivityStateStorePort } from '../../core/emotion/emosim-proactivity-port.js';
 
 const log = createComponentLogger('Agent');
 
@@ -71,6 +72,7 @@ export interface BootstrapAgentCoreRuntimeOptions {
   continuityChannelIds: readonly string[];
   /** Database credential kept outside the secret-sanitized core config. */
   postgresDatabaseUrl: string;
+  emosimProactivityStateStore: EmoSimProactivityStateStorePort;
   pathSnapshot: RuntimePathSnapshot;
   eventBus: EventBus;
   gateway: GatewayClient;
@@ -110,6 +112,7 @@ export async function bootstrapAgentCoreRuntime(
   const {
     config,
     postgresDatabaseUrl,
+    emosimProactivityStateStore,
     pathSnapshot,
     eventBus,
     gateway,
@@ -165,6 +168,7 @@ export async function bootstrapAgentCoreRuntime(
     config,
     continuityChannelIds: options.continuityChannelIds,
     postgresDatabaseUrl,
+    emosimProactivityStateStore,
     pathSnapshot,
     eventBus,
     gateway,

@@ -526,6 +526,7 @@ async function main(): Promise<void> {
     config: coreConfig,
     continuityChannelIds: Object.keys(channelsConfig.contextEnvelope.channels),
     postgresDatabaseUrl,
+    emosimProactivityStateStore: persistenceRuntime.emosimProactivityStateStore,
     pathSnapshot,
     eventBus,
     gateway,
@@ -1577,6 +1578,7 @@ async function main(): Promise<void> {
       await coreRuntime.closeBiographicalProjection();
       await persistenceRuntime.icpInitiationCandidateStore?.close();
       await persistenceRuntime.icpFeltImpulseFunnelStore.close();
+      await persistenceRuntime.emosimProactivityStateStore.close();
       await persistenceRuntime.socialPotStore?.close();
       await persistenceRuntime.speakingArbiterStore?.close();
       await persistenceRuntime.backgroundWorkStore.close();

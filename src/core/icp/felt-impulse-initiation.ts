@@ -1,17 +1,16 @@
 // ── Affect-driven ICP initiation: the felt-impulse source (hrmrq.34, D4) ──
 //
 // Operator ruling D4 (2026-07-30): "ICP triggers on social need via emo-sim,
-// not by wall clock timers." The emo-sim proactivity sidecar's would_message
-// lever — "she would send a proactive message now" — is the initiating
-// impulse. This adapter is the ratified authoritative consumer of that
-// signal: on each fire it selects an eligible canonical companion peer and
+// not by wall clock timers." The companion-local EmoSim Proactivity Port is
+// the initiating signal source. On each qualified source fire this adapter
+// selects an eligible canonical companion peer and
 // submits an ICP initiation candidate through the EXISTING source runtime, so
 // consent, gateway preflight/arbitration, permits, retry/TTL plumbing, and
 // the capability-tier authorization all apply unchanged.
 //
-// This module deliberately does NOT import the observer-sidecar lever module:
-// it consumes only the content-free bus payload {lever, firedAtMs}. Rate
-// limiting is inherited from the lever's own sustain/cooldown configuration —
+// This module deliberately does NOT import observer-eval modules. It consumes
+// only the production port's typed, content-free impulse. Rate limiting is
+// inherited from the port's sustain/cooldown threshold profile —
 // the impulse cannot fire faster than the affect model sustains it — plus a
 // local floor so a misconfigured lever cannot flood the candidate store.
 //
@@ -23,6 +22,7 @@
 
 import { createComponentLogger } from '../../shared/logger.js';
 import type { EmotionProactiveTransitionEvent, EventBus } from '../../shared/event-bus.js';
+import type { EmoSimProactivityImpulse } from '../emotion/emosim-proactivity-port.js';
 import type { KnownCompanionPeerAvailability } from './agent-facing-autonomy.js';
 import type {
   IcpFeltImpulseFunnelRecord,
@@ -39,12 +39,7 @@ const log = createComponentLogger('IcpFeltImpulse');
 /** Local flood floor: at most one felt-impulse submission per window. */
 export const FELT_IMPULSE_MIN_INTERVAL_MS = 15 * 60_000;
 
-export interface FeltImpulseLeverSignal {
-  lever: 'would_message';
-  correlationId: string;
-  firedAtMs: number;
-  timestamp: number;
-}
+export type EmoSimProactivitySignal = EmoSimProactivityImpulse;
 
 export type IcpFeltImpulseOutcome =
   | { kind: 'submitted'; peerContactId: string; result: IcpInitiationSourceAcceptance }
@@ -54,7 +49,7 @@ export type IcpFeltImpulseOutcome =
   | { kind: 'not_authorized' };
 
 export interface IcpFeltImpulseInitiationAdapter {
-  onLeverSignal(signal: FeltImpulseLeverSignal): Promise<IcpFeltImpulseOutcome>;
+  onImpulse(signal: EmoSimProactivitySignal): Promise<IcpFeltImpulseOutcome>;
 }
 
 export interface IcpFeltImpulseInitiationDeps {
@@ -116,7 +111,7 @@ export function createIcpFeltImpulseInitiationAdapter(
   };
 
   const emitTransition = async (
-    signal: FeltImpulseLeverSignal,
+    signal: EmoSimProactivitySignal,
     payload: Omit<EmotionProactiveTransitionEvent,
       'correlationId' | 'lever' | 'firedAtMs' | 'timestamp'>,
   ): Promise<void> => {
@@ -124,7 +119,7 @@ export function createIcpFeltImpulseInitiationAdapter(
     try {
       await deps.eventBus.emit('emotion.proactive.transition', {
         correlationId: signal.correlationId,
-        lever: signal.lever,
+        lever: signal.kind,
         firedAtMs: signal.firedAtMs,
         timestamp: now(),
         ...payload,
@@ -137,7 +132,7 @@ export function createIcpFeltImpulseInitiationAdapter(
     }
   };
 
-  const processSignal = async (signal: FeltImpulseLeverSignal): Promise<IcpFeltImpulseOutcome> => {
+  const processSignal = async (signal: EmoSimProactivitySignal): Promise<IcpFeltImpulseOutcome> => {
     const durableOutcome = await deps.funnelStore.getOutcome(signal.correlationId);
     if (durableOutcome) return replayDurableOutcome(durableOutcome);
     const firstCrossingMs = parseFeltImpulseCorrelationFirstCrossingMs(signal.correlationId);
@@ -209,7 +204,7 @@ export function createIcpFeltImpulseInitiationAdapter(
         'Felt social impulse fired but no ICP-eligible companion peer exists: '
         + "no contact with a channel='companion' identity is seeded in this companion's schema. "
         + 'Run `npm run seed:sibling-contacts -- --apply` on the fleet to seed mutual sibling contacts (bead x5t4).',
-        { lever: signal.lever, firedAtMs: signal.firedAtMs },
+        { sourceKind: signal.kind, firedAtMs: signal.firedAtMs },
       );
       await emitOutcome({
         correlationId: signal.correlationId,
@@ -319,7 +314,7 @@ export function createIcpFeltImpulseInitiationAdapter(
   };
 
   return {
-    onLeverSignal: async (signal): Promise<IcpFeltImpulseOutcome> => {
+    onImpulse: async (signal): Promise<IcpFeltImpulseOutcome> => {
       const existing = inFlight.get(signal.correlationId);
       if (existing) return await existing;
       const pending = processSignal(signal);

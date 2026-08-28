@@ -1393,6 +1393,15 @@ export const POSTGRES_INTENTION_MIGRATIONS = [
     WHERE candidate_id IS NOT NULL;`,
   `CREATE INDEX IF NOT EXISTS idx_icp_felt_impulse_funnel_recent
     ON icp_felt_impulse_funnel_outcomes (fired_at_ms DESC, correlation_id);`,
+  `
+  CREATE TABLE IF NOT EXISTS emosim_proactivity_state (
+    source_kind TEXT PRIMARY KEY CHECK (source_kind = 'would_message'),
+    schema_version INTEGER NOT NULL DEFAULT 1 CHECK (schema_version = 1),
+    first_crossing_ms BIGINT CHECK (first_crossing_ms >= 0),
+    last_fired_at_ms BIGINT CHECK (last_fired_at_ms >= 0),
+    updated_at_ms BIGINT NOT NULL CHECK (updated_at_ms >= 0)
+  );
+  `,
 ];
 
 export const POSTGRES_AUDIT_MIGRATIONS = [

@@ -9,10 +9,8 @@ import type {
   IcpFeltImpulseFunnelRecord,
   IcpFeltImpulseFunnelStorePort,
 } from '../../core/icp/felt-impulse-funnel.js';
-import { ObserverEvalLeverStage } from '../../core/eval/observer-sidecar/config.js';
-import type { ObserverEvalSidecarLeverPersistencePort } from '../../core/eval/observer-sidecar/persistence.js';
+import { createEmoSimProactivityPort } from '../../core/emotion/emosim-proactivity-port.js';
 import { EventBus, type EmotionProactiveTransitionEvent } from '../../shared/event-bus.js';
-import { createDefaultObserverEvalSidecarLeverSettings } from '../../system/config/runtime-config-contracts.js';
 import { DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG } from '../../system/config/icp-autonomy-scheduler-config.js';
 import { wireIcpInitiationSources } from './icp-initiation-source-wiring.js';
 
@@ -80,16 +78,6 @@ function createCandidateStore(): {
       async close() {},
     },
   };
-}
-
-function createLeverPersistence(): ObserverEvalSidecarLeverPersistencePort {
-  return {
-    recordLeverEvent: vi.fn(async input => ({ ...input, retention: input.retention })) as never,
-    queryLeverEvents: vi.fn(async () => []),
-    loadLeverState: vi.fn(async () => []),
-    saveLeverState: vi.fn(async () => undefined),
-    pruneExpiredLeverEvents: vi.fn(async () => ({ prunedEventIds: [] })),
-  } as unknown as ObserverEvalSidecarLeverPersistencePort;
 }
 
 function createWiringInput(eventBus: EventBus, enabled = true) {
@@ -177,25 +165,54 @@ describe('ICP felt-impulse startup wiring', () => {
     const { input, rows, funnelRows } = createWiringInput(eventBus);
     wireIcpInitiationSources(input);
 
-    const stage = new ObserverEvalLeverStage({
-      settings: { ...createDefaultObserverEvalSidecarLeverSettings(), enabled: true },
-      persistence: createLeverPersistence(),
-      sidecarId: 'startup-wiring-test',
-      retentionDays: 14,
-      emitFeltImpulse: event => eventBus.emitRequired('icp.felt_impulse.lever', event),
-      emitProactiveTransition: event => eventBus.emit('emotion.proactive.transition', event),
+    let proactivityState = { firstCrossingMs: null as number | null, lastFiredAtMs: null as number | null };
+    const port = createEmoSimProactivityPort({
+      enabled: true,
+      companionId: LOCAL,
+      thresholdProfile: {
+        profileId: 'would-message-v1',
+        socialNeedThreshold: 0.7,
+        attachmentIntensityThreshold: 0.5,
+        sustainMs: 30 * MINUTE_MS,
+        cooldownMs: 6 * 60 * MINUTE_MS,
+      },
+      stateStore: {
+        load: async () => structuredClone(proactivityState),
+        save: async state => { proactivityState = structuredClone(state); },
+      },
+      emitImpulse: async impulse => {
+        await eventBus.emit('emotion.proactive.transition', {
+          correlationId: impulse.correlationId,
+          lever: impulse.kind,
+          stage: 'would_message',
+          outcome: 'qualified',
+          firedAtMs: impulse.firedAtMs,
+          timestamp: impulse.firedAtMs,
+        });
+        await eventBus.emitRequired('emotion.emosim.proactivity.impulse', impulse);
+      },
     });
-    const observe = (observedAtMs: number) => stage.evaluateObservation({
-      runId: 'run-startup-wiring',
-      observationId: `obs-${observedAtMs}`,
+    const observe = (observedAtMs: number) => port.observe({
+      companionId: LOCAL,
       snapshot: {
-        t: 0,
-        mood: { valence: 0.2, arousal: 0.1 },
         dominant: 'Calmness',
         emotions: { Calmness: 0.3 },
-        drives: { socialNeed: 0.8, sleepPressure: 0.2 },
+        drives: { socialNeed: 0.8 },
       },
       observedAtMs,
+      source: {
+        model: 'emo_sim',
+        version: 'emo_sim/server.py#http-api.v1',
+        availability: 'available',
+        confidence: 0.82,
+      },
+      lineage: {
+        schemaVersion: 1,
+        inputId: `turn:${observedAtMs}`,
+        projectionVersion: 'psfn.observer-sidecar.appraisal-projection.v3',
+        privacyClass: 'content_redacted',
+        rawContentRedacted: true,
+      },
     });
 
     await observe(NOW_MS);
@@ -233,11 +250,33 @@ describe('ICP felt-impulse startup wiring', () => {
     const { input, rows, funnelRows } = createWiringInput(eventBus, false);
     wireIcpInitiationSources(input);
 
-    await expect(eventBus.emitRequired('icp.felt_impulse.lever', {
-      lever: 'would_message',
+    await expect(eventBus.emitRequired('emotion.emosim.proactivity.impulse', {
+      schemaVersion: 1,
+      impulseVersion: 'psfn.emosim-proactivity.impulse.v1',
+      kind: 'would_message',
+      companionId: LOCAL,
+      source: { model: 'emo_sim', version: 'emo_sim/server.py#http-api.v1' },
+      lineage: {
+        schemaVersion: 1,
+        inputId: `turn:${NOW_MS}`,
+        projectionVersion: 'psfn.observer-sidecar.appraisal-projection.v3',
+        privacyClass: 'content_redacted',
+        rawContentRedacted: true,
+      },
+      firstCrossingMs: NOW_MS,
+      thresholdProfile: {
+        profileId: 'would-message-v1',
+        socialNeedThreshold: 0.7,
+        attachmentIntensityThreshold: 0.5,
+        sustainMs: 1_800_000,
+        cooldownMs: 21_600_000,
+      },
+      dedupeKey: `felt-impulse:would_message:${NOW_MS}`,
       correlationId: `felt-impulse:would_message:${NOW_MS}`,
       firedAtMs: NOW_MS,
-      timestamp: NOW_MS,
+      confidence: 0.82,
+      availability: 'available',
+      authority: 'qualified_source_fire',
     })).resolves.toBeUndefined();
 
     expect(rows.size).toBe(0);

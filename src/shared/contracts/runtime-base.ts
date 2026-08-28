@@ -1737,10 +1737,26 @@ export interface ObserverEvalSidecarGardenExposureSettings {
   exposeTelemetry: boolean;
 }
 
+export const EMOSIM_WOULD_MESSAGE_V1 =
+  'emosim-would-message-v1' as const;
+
+/** Companion-local production authority for qualifying EmoSim source fires. */
+export interface EmoSimProactivitySettings {
+  enabled: boolean;
+  thresholdProfile: {
+    profileId: string;
+    socialNeedThreshold: number;
+    attachmentIntensityThreshold: number;
+    sustainMs: number;
+    cooldownMs: number;
+  };
+}
+
 /**
  * Shadow trigger levers over the observer sidecar's simulated emotion state.
  * TRACKING ONLY: lever events are write-only telemetry for the Garden admin
- * surface. Nothing in the live companion loop may read or act on them.
+ * surface. Production qualification is separately configured by
+ * `emosimProactivity`; nothing may consume these eval rows.
  */
 export interface ObserverEvalSidecarLeverSettings {
   enabled: boolean;

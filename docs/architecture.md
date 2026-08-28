@@ -52,6 +52,14 @@ is perceived, and **emanation** is that companion's active situated presence in
 an embodiment. CogSec is the cross-boundary cognitive-security system; its
 intake firewall is only its pre-hoc half.
 
+Companion emotion proactivity has two explicit authorities. The companion-local
+EmoSim Proactivity Port may emit a versioned, content-free qualified-source
+impulse into the existing private disposition/policy funnel; it cannot select a
+destination or send. Observer-eval crosswalks, divergence metrics, calibration
+corpora, exports, observations, and shadow lever rows remain fallible derived
+telemetry with `authoritative=false` and are never memory, prompt, contact,
+concern, personality, or felt-affect inputs.
+
 ## Composition Layer
 
 Shared runtime construction is concentrated in:

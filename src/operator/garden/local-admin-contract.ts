@@ -124,6 +124,7 @@ import { AdminPrivacyBreakGlassService } from './services/privacy-break-glass-se
 import { AdminModelUsageDataService } from './services/model-usage-service.js';
 import {
   AdminObserverEvalSidecarDataService,
+  type AdminRecentProactivityOutcomeCounts,
   type AdminObserverEvalSidecarService,
 } from './services/observer-eval-sidecar-service.js';
 import { AdminPromptsDataService } from './services/prompts-service.js';
@@ -956,8 +957,31 @@ export function createObserverEvalSidecarAdminService(input: {
   const companionId = input.config.companionId?.trim() || null;
   const manifestBinding = input.config.companionRuntimeIdentity?.observerEvalSidecar;
   let lastTransition: EventMap['emotion.proactive.transition'] | null = null;
+  const recentSinceMs = Date.now();
+  let recentTotal = 0;
+  const recentCounts: AdminRecentProactivityOutcomeCounts = {
+    qualified: 0,
+    delivered: 0,
+    suppressed: 0,
+    deferred: 0,
+    deduped: 0,
+    other: 0,
+  };
   input.eventBus?.on('emotion.proactive.transition', (event) => {
     lastTransition = structuredClone(event);
+    recentTotal += 1;
+    if (event.outcome === 'qualified') recentCounts.qualified += 1;
+    else if (event.outcome === 'sent') recentCounts.delivered += 1;
+    else if (event.outcome === 'deferred' || event.outcome === 'throttled') {
+      recentCounts.deferred += 1;
+    } else if (event.outcome === 'deduped') recentCounts.deduped += 1;
+    else if (event.outcome === 'suppressed'
+      || event.outcome === 'declined'
+      || event.outcome === 'rejected'
+      || event.outcome === 'not_authorized'
+      || event.outcome === 'no_eligible_peer') {
+      recentCounts.suppressed += 1;
+    } else recentCounts.other += 1;
   });
 
   const postgresDatabaseUrl = input.config.postgresDatabaseUrl?.trim();
@@ -985,6 +1009,12 @@ export function createObserverEvalSidecarAdminService(input: {
       : null,
     configuredEnabled: settings.enabled,
     proactivityMode: proactivity.mode,
+    proactivityProfile: proactivity.thresholdProfile,
+    getRecentProactivityOutcomes: () => ({
+      sinceMs: recentSinceMs,
+      total: recentTotal,
+      counts: structuredClone(recentCounts),
+    }),
     getLastTransition: () => lastTransition ? structuredClone(lastTransition) : null,
   });
 }

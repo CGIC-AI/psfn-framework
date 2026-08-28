@@ -9,8 +9,48 @@ const COMPANION_ID = '11111111-1111-4111-8111-111111111111';
 const NOW_MS = 1_780_000_000_000;
 const MINUTE_MS = 60_000;
 
+function thresholdProfile() {
+  return {
+    schemaVersion: 1 as const,
+    profileId: 'would-message-v1',
+    revision: '2026-08-28.1',
+    applicableSource: {
+      model: 'emo_sim',
+      version: 'emo_sim/server.py#http-api.v1',
+    },
+    reviewNote: 'Sanitized deterministic test profile.',
+    calibration: {
+      corpusVersion: 'test-corpus.v1',
+      metricsVersion: 'emosim-proactivity.metrics.v1',
+      status: 'measured' as const,
+      fireRate: 0.2,
+      falsePositiveRate: 0.05,
+      fatigueRate: 0.1,
+    },
+    promotionCriteria: {
+      criteriaVersion: 'test-promotion.v1',
+      maximumFalsePositiveRate: 0.1,
+      maximumFatigueRate: 0.2,
+    },
+    rollbackProfileId: null,
+    socialNeedThreshold: 0.7,
+    attachmentIntensityThreshold: 0.5,
+    samplingIntervalMs: MINUTE_MS,
+    minimumConfidence: 0.6,
+    abstainBelowMinimumConfidence: true as const,
+    sustainMs: 30 * MINUTE_MS,
+    dedupeWindowMs: 5 * MINUTE_MS,
+    cooldownMs: 6 * 60 * MINUTE_MS,
+  };
+}
+
 function stateStore(initial?: { firstCrossingMs: number | null; lastFiredAtMs: number | null }) {
-  let state = initial ?? { firstCrossingMs: null, lastFiredAtMs: null };
+  let state = {
+    firstCrossingMs: initial?.firstCrossingMs ?? null,
+    lastFiredAtMs: initial?.lastFiredAtMs ?? null,
+    lastSampledAtMs: null,
+    lastInputId: null,
+  };
   const store: EmoSimProactivityStateStorePort = {
     load: vi.fn(async () => structuredClone(state)),
     save: vi.fn(async next => { state = structuredClone(next); }),
@@ -50,13 +90,7 @@ describe('EmoSim Proactivity Port', () => {
     const port = createEmoSimProactivityPort({
       enabled: true,
       companionId: COMPANION_ID,
-      thresholdProfile: {
-        profileId: 'would-message-v1',
-        socialNeedThreshold: 0.7,
-        attachmentIntensityThreshold: 0.5,
-        sustainMs: 30 * MINUTE_MS,
-        cooldownMs: 6 * 60 * MINUTE_MS,
-      },
+      thresholdProfile: thresholdProfile(),
       stateStore: store,
       emitImpulse,
     });
@@ -94,13 +128,7 @@ describe('EmoSim Proactivity Port', () => {
     const disabled = createEmoSimProactivityPort({
       enabled: false,
       companionId: COMPANION_ID,
-      thresholdProfile: {
-        profileId: 'would-message-v1',
-        socialNeedThreshold: 0.7,
-        attachmentIntensityThreshold: 0.5,
-        sustainMs: 30 * MINUTE_MS,
-        cooldownMs: 6 * 60 * MINUTE_MS,
-      },
+      thresholdProfile: thresholdProfile(),
       stateStore: stateStore().store,
       emitImpulse: vi.fn(),
     });
@@ -111,13 +139,7 @@ describe('EmoSim Proactivity Port', () => {
     const unavailable = createEmoSimProactivityPort({
       enabled: true,
       companionId: COMPANION_ID,
-      thresholdProfile: {
-        profileId: 'would-message-v1',
-        socialNeedThreshold: 0.7,
-        attachmentIntensityThreshold: 0.5,
-        sustainMs: 30 * MINUTE_MS,
-        cooldownMs: 6 * 60 * MINUTE_MS,
-      },
+      thresholdProfile: thresholdProfile(),
       stateStore: stateStore().store,
       emitImpulse: vi.fn(),
     });
@@ -138,13 +160,7 @@ describe('EmoSim Proactivity Port', () => {
     const port = createEmoSimProactivityPort({
       enabled: true,
       companionId: COMPANION_ID,
-      thresholdProfile: {
-        profileId: 'would-message-v1',
-        socialNeedThreshold: 0.7,
-        attachmentIntensityThreshold: 0.5,
-        sustainMs: 30 * MINUTE_MS,
-        cooldownMs: 6 * 60 * MINUTE_MS,
-      },
+      thresholdProfile: thresholdProfile(),
       stateStore: store,
       emitImpulse,
     });
@@ -153,7 +169,7 @@ describe('EmoSim Proactivity Port', () => {
     await expect(port.observe(observation(NOW_MS + 30 * MINUTE_MS))).rejects.toThrow(
       'ICP consumer unavailable',
     );
-    expect(read()).toEqual({ firstCrossingMs: NOW_MS, lastFiredAtMs: null });
+    expect(read()).toMatchObject({ firstCrossingMs: NOW_MS, lastFiredAtMs: null });
     await port.observe(observation(NOW_MS + 31 * MINUTE_MS));
     expect(emitImpulse.mock.calls.map(([impulse]) => impulse.dedupeKey)).toEqual([
       `felt-impulse:would_message:${NOW_MS}`,
@@ -167,13 +183,7 @@ describe('EmoSim Proactivity Port', () => {
     const port = createEmoSimProactivityPort({
       enabled: true,
       companionId: COMPANION_ID,
-      thresholdProfile: {
-        profileId: 'would-message-v1',
-        socialNeedThreshold: 0.7,
-        attachmentIntensityThreshold: 0.5,
-        sustainMs: 30 * MINUTE_MS,
-        cooldownMs: 6 * 60 * MINUTE_MS,
-      },
+      thresholdProfile: thresholdProfile(),
       stateStore: store,
       emitImpulse,
     });
@@ -181,5 +191,53 @@ describe('EmoSim Proactivity Port', () => {
     expect(emitImpulse).toHaveBeenCalledWith(expect.objectContaining({
       dedupeKey: `felt-impulse:would_message:${NOW_MS}`,
     }));
+  });
+
+  it('fails closed when a profile is applied to an unknown source model or version', async () => {
+    const port = createEmoSimProactivityPort({
+      enabled: true,
+      companionId: COMPANION_ID,
+      thresholdProfile: thresholdProfile(),
+      stateStore: stateStore().store,
+      emitImpulse: vi.fn(),
+    });
+
+    await expect(port.observe({
+      ...observation(NOW_MS),
+      source: { ...observation(NOW_MS).source, version: 'unexpected-version' },
+    })).rejects.toThrow(/profile .* source .*unexpected-version/i);
+  });
+
+  it('abstains below confidence and separates sample, duplicate, and fatigue outcomes', async () => {
+    const { store } = stateStore();
+    const emitImpulse = vi.fn(async () => undefined);
+    const port = createEmoSimProactivityPort({
+      enabled: true,
+      companionId: COMPANION_ID,
+      thresholdProfile: thresholdProfile(),
+      stateStore: store,
+      emitImpulse,
+    });
+
+    await expect(port.observe({
+      ...observation(NOW_MS),
+      source: { ...observation(NOW_MS).source, confidence: 0.4 },
+    })).resolves.toMatchObject({ kind: 'suppressed', reason: 'confidence_abstained' });
+
+    const first = observation(NOW_MS + MINUTE_MS);
+    await expect(port.observe(first)).resolves.toMatchObject({ reason: 'sustain_pending' });
+    await expect(port.observe({
+      ...first,
+      observedAtMs: first.observedAtMs + 1,
+    })).resolves.toMatchObject({ reason: 'duplicate_input' });
+    await expect(port.observe(observation(NOW_MS + MINUTE_MS + 30 * MINUTE_MS)))
+      .resolves.toMatchObject({ kind: 'emitted' });
+
+    const nextCrossingAt = NOW_MS + MINUTE_MS + 31 * MINUTE_MS;
+    await expect(port.observe(observation(nextCrossingAt)))
+      .resolves.toMatchObject({ reason: 'sustain_pending' });
+    await expect(port.observe(observation(nextCrossingAt + 30 * MINUTE_MS)))
+      .resolves.toMatchObject({ reason: 'cooldown_active' });
+    expect(emitImpulse).toHaveBeenCalledTimes(1);
   });
 });

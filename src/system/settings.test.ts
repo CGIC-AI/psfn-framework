@@ -16,6 +16,7 @@ import {
 } from './settings.js';
 import {
   createDefaultCompositionalPolicyConfig,
+  createDefaultEmoSimProactivitySettings,
   createDefaultObserverEvalSidecarLeverSettings,
   createDefaultObserverEvalSidecarSettings,
   createDefaultSessionTailCacheSettings,
@@ -598,7 +599,9 @@ describe('settings', () => {
       expect(normalized.emosimProactivity).toEqual({
         mode: 'on',
         thresholdProfile: {
-          profileId: 'emosim-would-message-v1',
+          ...createDefaultEmoSimProactivitySettings().thresholdProfile,
+          revision: 'legacy-owner-migration.v1',
+          reviewNote: 'One-way migration of the previously enabled production would_message owner block.',
           socialNeedThreshold: levers.wouldMessage.socialNeedThreshold,
           attachmentIntensityThreshold: levers.wouldMessage.attachmentIntensityThreshold,
           sustainMs: levers.wouldMessage.sustainMs,
@@ -612,7 +615,7 @@ describe('settings', () => {
         emosimProactivity: fromAny({
           mode: 'shadow',
           thresholdProfile: {
-            profileId: 'emosim-would-message-v1',
+            ...createDefaultEmoSimProactivitySettings().thresholdProfile,
             socialNeedThreshold: 0.7,
             attachmentIntensityThreshold: 0.5,
             sustainMs: 1_800_000,
@@ -628,14 +631,32 @@ describe('settings', () => {
         emosimProactivity: fromAny({
           enabled: true,
           thresholdProfile: {
-            profileId: 'emosim-would-message-v1',
+            ...createDefaultEmoSimProactivitySettings().thresholdProfile,
             socialNeedThreshold: 0.7,
             attachmentIntensityThreshold: 0.5,
             sustainMs: 1_800_000,
             cooldownMs: 21_600_000,
           },
         }),
-      })).toThrow(/emosimProactivity\.mode/);
+      })).toThrow(/emosimProactivity.*enabled/);
+    });
+
+    it('fails closed on partial or unknown-model EmoSim profiles', () => {
+      const profile = createDefaultEmoSimProactivitySettings().thresholdProfile;
+      const { cooldownMs: _omitted, ...partialProfile } = profile;
+      expect(() => normalizeEditableSettings({
+        emosimProactivity: fromAny({ mode: 'on', thresholdProfile: partialProfile }),
+      })).toThrow(/thresholdProfile\.cooldownMs/);
+
+      expect(() => normalizeEditableSettings({
+        emosimProactivity: fromAny({
+          mode: 'on',
+          thresholdProfile: {
+            ...profile,
+            applicableSource: { ...profile.applicableSource, model: 'unknown-model' },
+          },
+        }),
+      })).toThrow(/unknown EmoSim production model/);
     });
 
     it('normalizes session tail cache settings as a JSON-owned structured object', () => {

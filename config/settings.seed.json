@@ -409,10 +409,35 @@
   "emosimProactivity": {
     "mode": "off",
     "thresholdProfile": {
+      "schemaVersion": 1,
       "profileId": "emosim-would-message-v1",
+      "revision": "public-bootstrap.v1",
+      "applicableSource": {
+        "model": "emo_sim",
+        "version": "emo_sim/server.py#http-api.v1"
+      },
+      "reviewNote": "Conservative public bootstrap; production remains off until explicitly promoted.",
+      "calibration": {
+        "corpusVersion": "public-bootstrap-sanitized.v1",
+        "metricsVersion": "emosim-proactivity.metrics.v1",
+        "status": "bootstrap_unmeasured",
+        "fireRate": null,
+        "falsePositiveRate": null,
+        "fatigueRate": null
+      },
+      "promotionCriteria": {
+        "criteriaVersion": "emosim-proactivity-promotion.v1",
+        "maximumFalsePositiveRate": 0.1,
+        "maximumFatigueRate": 0.25
+      },
+      "rollbackProfileId": null,
       "socialNeedThreshold": 0.7,
       "attachmentIntensityThreshold": 0.5,
+      "samplingIntervalMs": 60000,
+      "minimumConfidence": 0.6,
+      "abstainBelowMinimumConfidence": true,
       "sustainMs": 1800000,
+      "dedupeWindowMs": 300000,
       "cooldownMs": 21600000
     }
   },

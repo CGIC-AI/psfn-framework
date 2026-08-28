@@ -12,6 +12,7 @@ import type {
 import { createEmoSimProactivityPort } from '../../core/emotion/emosim-proactivity-port.js';
 import { EventBus, type EmotionProactiveTransitionEvent } from '../../shared/event-bus.js';
 import { DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG } from '../../system/config/icp-autonomy-scheduler-config.js';
+import { createDefaultEmoSimProactivitySettings } from '../../system/config/runtime-config-contracts.js';
 import { wireIcpInitiationSources } from './icp-initiation-source-wiring.js';
 
 const LOCAL = '11111111-1111-4111-8111-111111111111';
@@ -207,11 +208,17 @@ describe('ICP felt-impulse startup wiring', () => {
     const { input, rows, funnelRows } = createWiringInput(eventBus);
     wireIcpInitiationSources(input);
 
-    let proactivityState = { firstCrossingMs: null as number | null, lastFiredAtMs: null as number | null };
+    let proactivityState = {
+      firstCrossingMs: null as number | null,
+      lastFiredAtMs: null as number | null,
+      lastSampledAtMs: null as number | null,
+      lastInputId: null as string | null,
+    };
     const port = createEmoSimProactivityPort({
       enabled: true,
       companionId: LOCAL,
       thresholdProfile: {
+        ...createDefaultEmoSimProactivitySettings().thresholdProfile,
         profileId: 'would-message-v1',
         socialNeedThreshold: 0.7,
         attachmentIntensityThreshold: 0.5,

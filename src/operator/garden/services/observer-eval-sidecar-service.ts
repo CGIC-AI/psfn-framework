@@ -27,7 +27,10 @@ import type {
   ObserverEvalSidecarHealthSnapshot,
 } from '../../../core/eval/observer-sidecar/types.js';
 import type { EmotionProactiveTransitionEvent } from '../../../shared/event-bus.js';
-import type { EmoSimProactivityMode } from '../../../shared/contracts/runtime.js';
+import type {
+  EmoSimProactivityMode,
+  EmoSimProactivityThresholdProfile,
+} from '../../../shared/contracts/runtime.js';
 
 export const ADMIN_OBSERVER_EVAL_EXPORT_VERSION = 'garden.observer-eval-sidecar.export.v1' as const;
 
@@ -57,6 +60,12 @@ export interface AdminObserverEvalSidecarHealthData {
   observedAt: number;
   runtime: ObserverEvalSidecarHealthSnapshot | null;
   proactivityMode: EmoSimProactivityMode;
+  proactivityProfile: (EmoSimProactivityThresholdProfile & {
+    rawContentRedacted: true;
+    deliveryAuthority: false;
+    applyBehavior: 'restart_required';
+  }) | null;
+  recentProactivityOutcomes: AdminRecentProactivityOutcomes | null;
   persistence: {
     available: boolean;
     evalOwned: boolean;
@@ -64,6 +73,31 @@ export interface AdminObserverEvalSidecarHealthData {
   };
   latestLifecycleState?: ObserverEvalLifecycleState;
   lastTransition: EmotionProactiveTransitionEvent | null;
+}
+
+export interface AdminRecentProactivityOutcomeCounts {
+  qualified: number;
+  delivered: number;
+  suppressed: number;
+  deferred: number;
+  deduped: number;
+  other: number;
+}
+
+export interface AdminRecentProactivityOutcomeSnapshot {
+  sinceMs: number;
+  total: number;
+  counts: AdminRecentProactivityOutcomeCounts;
+}
+
+export interface AdminRecentProactivityOutcomes extends AdminRecentProactivityOutcomeSnapshot {
+  rawContentRedacted: true;
+  rates: {
+    delivered: number;
+    suppressed: number;
+    deferred: number;
+    deduped: number;
+  };
 }
 
 export interface AdminObserverEvalSidecarObservationListData {
@@ -231,6 +265,8 @@ export interface AdminObserverEvalSidecarDataServiceOptions {
   binding?: AdminObserverEvalSidecarBindingIdentity | null;
   configuredEnabled?: boolean;
   proactivityMode?: EmoSimProactivityMode;
+  proactivityProfile?: EmoSimProactivityThresholdProfile | null;
+  getRecentProactivityOutcomes?: (() => AdminRecentProactivityOutcomeSnapshot) | null;
   getLastTransition?: (() => EmotionProactiveTransitionEvent | null) | null;
   nowMs?: () => number;
 }
@@ -268,6 +304,17 @@ export class AdminObserverEvalSidecarDataService implements AdminObserverEvalSid
       observedAt: runtime?.observedAt ?? this.nowMs(),
       runtime,
       proactivityMode: this.options.proactivityMode ?? 'off',
+      proactivityProfile: bindingOwnerMatches && this.options.proactivityProfile
+        ? {
+            ...structuredClone(this.options.proactivityProfile),
+            rawContentRedacted: true,
+            deliveryAuthority: false,
+            applyBehavior: 'restart_required',
+          }
+        : null,
+      recentProactivityOutcomes: bindingOwnerMatches
+        ? toRecentProactivityOutcomes(this.options.getRecentProactivityOutcomes?.() ?? null)
+        : null,
       persistence: {
         available: Boolean(this.options.persistence),
         evalOwned: Boolean(this.options.persistence),
@@ -368,6 +415,24 @@ export class AdminObserverEvalSidecarDataService implements AdminObserverEvalSid
     }
     return this.options.leverEvents;
   }
+}
+
+function toRecentProactivityOutcomes(
+  snapshot: AdminRecentProactivityOutcomeSnapshot | null,
+): AdminRecentProactivityOutcomes | null {
+  if (!snapshot) return null;
+  const denominator = snapshot.total;
+  const rate = (count: number) => denominator === 0 ? 0 : count / denominator;
+  return {
+    ...structuredClone(snapshot),
+    rawContentRedacted: true,
+    rates: {
+      delivered: rate(snapshot.counts.delivered),
+      suppressed: rate(snapshot.counts.suppressed),
+      deferred: rate(snapshot.counts.deferred),
+      deduped: rate(snapshot.counts.deduped),
+    },
+  };
 }
 
 function resolveOperatingState(input: {

@@ -7,6 +7,7 @@ import type {
 import type { ObserverEvalSidecarHealthSnapshot } from '../../core/eval/observer-sidecar/types.js';
 import { EventBus, type EmotionProactiveTransitionEvent } from '../../shared/event-bus.js';
 import { AdminObserverEvalSidecarDataService } from '../../operator/garden/services/observer-eval-sidecar-service.js';
+import { createDefaultEmoSimProactivitySettings } from '../../system/config/runtime-config-contracts.js';
 
 const NOW_MS = 1_780_000_000_000;
 const COMPANIONS = Object.freeze([
@@ -73,7 +74,8 @@ function healthService(
       agentName: `${companion.sidecarId}-agent`,
     },
     configuredEnabled: true,
-    proactivityEnabled: true,
+    proactivityMode: 'on',
+    proactivityProfile: createDefaultEmoSimProactivitySettings().thresholdProfile,
     getHealthSnapshot: read,
     nowMs: () => NOW_MS,
   });
@@ -175,6 +177,7 @@ describe('three-companion EmoSim fleet parity', () => {
         firstCrossingMs: firedAtMs,
         firedAtMs,
         thresholdProfile: {
+          ...createDefaultEmoSimProactivitySettings().thresholdProfile,
           profileId: 'would-message-v1',
           socialNeedThreshold: 0.7,
           attachmentIntensityThreshold: 0.5,

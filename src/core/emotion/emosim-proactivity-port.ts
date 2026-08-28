@@ -1,4 +1,9 @@
-import { isRfc4122Uuid } from '../../shared/utils/types.js';
+import { assertNoUnknownKeys, isRecord, isRfc4122Uuid } from '../../shared/utils/types.js';
+import {
+  EMOSIM_PROACTIVITY_SOURCE_MODEL,
+  EMOSIM_PROACTIVITY_SOURCE_VERSION,
+  type EmoSimProactivityThresholdProfile,
+} from '../../shared/contracts/runtime.js';
 
 const EMOSIM_PROACTIVITY_IMPULSE_VERSION =
   'emosim-proactivity.impulse.v1' as const;
@@ -13,14 +18,6 @@ const ATTACHMENT_EMOTIONS: ReadonlySet<string> = new Set([
   'Sympathy',
 ]);
 
-interface EmoSimProactivityThresholdProfile {
-  profileId: string;
-  socialNeedThreshold: number;
-  attachmentIntensityThreshold: number;
-  sustainMs: number;
-  cooldownMs: number;
-}
-
 interface EmoSimProactivityInputLineage {
   schemaVersion: 1;
   /** Content-free identity of the sanitized turn projection. */
@@ -30,7 +27,7 @@ interface EmoSimProactivityInputLineage {
   rawContentRedacted: true;
 }
 
-interface EmoSimProactivityObservation {
+export interface EmoSimProactivityObservation {
   companionId: string;
   observedAtMs: number;
   source: {
@@ -73,15 +70,18 @@ export interface EmoSimProactivityImpulse {
   authority: 'qualified_source_fire';
 }
 
-type EmoSimProactivitySuppressionReason =
+export type EmoSimProactivitySuppressionReason =
   | 'port_disabled'
   | 'source_unavailable'
   | 'inputs_unavailable'
+  | 'confidence_abstained'
+  | 'sampling_deferred'
+  | 'duplicate_input'
   | 'threshold_not_met'
   | 'sustain_pending'
   | 'cooldown_active';
 
-interface EmoSimProactivitySuppression {
+export interface EmoSimProactivitySuppression {
   schemaVersion: 1;
   suppressionVersion: typeof EMOSIM_PROACTIVITY_SUPPRESSION_VERSION;
   kind: 'suppressed';
@@ -94,13 +94,15 @@ interface EmoSimProactivitySuppression {
   nextEligibleAtMs?: number;
 }
 
-type EmoSimProactivityResult =
+export type EmoSimProactivityResult =
   | { kind: 'emitted'; impulse: EmoSimProactivityImpulse }
   | EmoSimProactivitySuppression;
 
 export interface EmoSimProactivityState {
   firstCrossingMs: number | null;
   lastFiredAtMs: number | null;
+  lastSampledAtMs: number | null;
+  lastInputId: string | null;
 }
 
 /**
@@ -129,7 +131,7 @@ export function createEmoSimProactivityPort(
   options: EmoSimProactivityPortOptions,
 ): EmoSimProactivityPort {
   const companionId = requireCompanionId(options.companionId);
-  const profile = normalizeThresholdProfile(options.thresholdProfile);
+  const profile = normalizeEmoSimProactivityThresholdProfile(options.thresholdProfile);
   let state: EmoSimProactivityState | null = null;
   let pending: Promise<void> = Promise.resolve();
 
@@ -147,9 +149,26 @@ export function createEmoSimProactivityPort(
       return suppression(observation, 'port_disabled', 'disabled', null);
     }
     const current = await loadState();
+    requireApplicableSource(observation, profile);
+    if (current.lastSampledAtMs !== null
+      && current.lastInputId === observation.lineage.inputId
+      && observation.observedAtMs - current.lastSampledAtMs <= profile.dedupeWindowMs) {
+      return suppression(observation, 'duplicate_input', 'available', current.firstCrossingMs);
+    }
+    if (current.lastSampledAtMs !== null
+      && observation.observedAtMs - current.lastSampledAtMs < profile.samplingIntervalMs) {
+      return suppression(observation, 'sampling_deferred', 'available', current.firstCrossingMs);
+    }
+    current.lastSampledAtMs = observation.observedAtMs;
+    current.lastInputId = observation.lineage.inputId;
+    await options.stateStore.save(current);
     if (observation.source.availability !== 'available') {
       await resetCrossing(current);
       return suppression(observation, 'source_unavailable', 'unavailable', null);
+    }
+    if (observation.source.confidence < profile.minimumConfidence) {
+      await resetCrossing(current);
+      return suppression(observation, 'confidence_abstained', 'available', null);
     }
     const condition = evaluateWouldMessage(observation, profile);
     if (condition === null) {
@@ -169,7 +188,6 @@ export function createEmoSimProactivityPort(
       return suppression(observation, 'sustain_pending', 'available', firstCrossingMs);
     }
     if (current.lastFiredAtMs !== null
-      && firstCrossingMs <= current.lastFiredAtMs
       && observation.observedAtMs - current.lastFiredAtMs < profile.cooldownMs) {
       return {
         ...suppression(observation, 'cooldown_active', 'available', firstCrossingMs),
@@ -200,6 +218,7 @@ export function createEmoSimProactivityPort(
     // the response is lost, the same first-crossing dedupe key is retried and
     // the durable disposition funnel decides the single winner.
     await options.emitImpulse(impulse);
+    current.firstCrossingMs = null;
     current.lastFiredAtMs = observation.observedAtMs;
     await options.stateStore.save(current);
     return { kind: 'emitted', impulse };
@@ -291,29 +310,145 @@ function requireObservation(
   }
 }
 
-function normalizeState(input: EmoSimProactivityState): EmoSimProactivityState {
+function normalizeState(input: unknown): EmoSimProactivityState {
+  const root = requireRecord(input, 'persisted state');
   return {
-    firstCrossingMs: nullableTimestamp(input.firstCrossingMs, 'firstCrossingMs'),
-    lastFiredAtMs: nullableTimestamp(input.lastFiredAtMs, 'lastFiredAtMs'),
+    firstCrossingMs: nullableTimestamp(root.firstCrossingMs, 'firstCrossingMs'),
+    lastFiredAtMs: nullableTimestamp(root.lastFiredAtMs, 'lastFiredAtMs'),
+    lastSampledAtMs: root.lastSampledAtMs === undefined
+      ? null
+      : nullableTimestamp(root.lastSampledAtMs, 'lastSampledAtMs'),
+    lastInputId: root.lastInputId === undefined
+      ? null
+      : nullableNonEmptyString(root.lastInputId, 'lastInputId'),
   };
 }
 
-function normalizeThresholdProfile(
-  input: EmoSimProactivityThresholdProfile,
+export function normalizeEmoSimProactivityThresholdProfile(
+  input: unknown,
 ): EmoSimProactivityThresholdProfile {
-  const profileId = input.profileId.trim();
-  if (!profileId) throw new Error('EmoSim proactivity threshold profileId is required');
-  for (const [field, value] of [
-    ['socialNeedThreshold', input.socialNeedThreshold],
-    ['attachmentIntensityThreshold', input.attachmentIntensityThreshold],
-  ] as const) {
-    if (!Number.isFinite(value) || value < 0 || value > 1) {
-      throw new Error(`EmoSim proactivity ${field} must be within 0..1`);
-    }
+  const root = requireRecord(input, 'threshold profile');
+  const applicableSourceInput = requireRecord(root.applicableSource, 'applicableSource');
+  const calibrationInput = requireRecord(root.calibration, 'calibration');
+  const promotionInput = requireRecord(root.promotionCriteria, 'promotionCriteria');
+  assertNoUnknownKeys(root, [
+    'schemaVersion',
+    'profileId',
+    'revision',
+    'applicableSource',
+    'reviewNote',
+    'calibration',
+    'promotionCriteria',
+    'rollbackProfileId',
+    'socialNeedThreshold',
+    'attachmentIntensityThreshold',
+    'samplingIntervalMs',
+    'minimumConfidence',
+    'abstainBelowMinimumConfidence',
+    'sustainMs',
+    'dedupeWindowMs',
+    'cooldownMs',
+  ], 'EmoSim proactivity threshold profile');
+  const profileId = requireNonEmptyString(root.profileId, 'profileId');
+  if (root.schemaVersion !== 1) {
+    throw new Error('EmoSim proactivity threshold profile schemaVersion must be 1');
   }
-  requireTimestamp(input.sustainMs, 'sustainMs');
-  requireTimestamp(input.cooldownMs, 'cooldownMs');
-  return { ...input, profileId };
+  const revision = requireNonEmptyString(root.revision, 'revision');
+  const applicableSourceModel = requireNonEmptyString(
+    applicableSourceInput.model,
+    'applicableSource.model',
+  );
+  const applicableSourceVersion = requireNonEmptyString(
+    applicableSourceInput.version,
+    'applicableSource.version',
+  );
+  if (applicableSourceModel !== EMOSIM_PROACTIVITY_SOURCE_MODEL
+    || applicableSourceVersion !== EMOSIM_PROACTIVITY_SOURCE_VERSION) {
+    throw new Error(
+      `EmoSim proactivity threshold profile has unknown source ${applicableSourceModel}@${applicableSourceVersion}`,
+    );
+  }
+  const applicableSource: EmoSimProactivityThresholdProfile['applicableSource'] = {
+    model: EMOSIM_PROACTIVITY_SOURCE_MODEL,
+    version: EMOSIM_PROACTIVITY_SOURCE_VERSION,
+  };
+  const reviewNote = requireNonEmptyString(root.reviewNote, 'reviewNote');
+  const calibration = {
+    corpusVersion: requireNonEmptyString(calibrationInput.corpusVersion, 'calibration.corpusVersion'),
+    metricsVersion: requireNonEmptyString(calibrationInput.metricsVersion, 'calibration.metricsVersion'),
+    status: requireCalibrationStatus(calibrationInput.status),
+    fireRate: nullableUnit(calibrationInput.fireRate, 'calibration.fireRate'),
+    falsePositiveRate: nullableUnit(
+      calibrationInput.falsePositiveRate,
+      'calibration.falsePositiveRate',
+    ),
+    fatigueRate: nullableUnit(calibrationInput.fatigueRate, 'calibration.fatigueRate'),
+  };
+  if (calibration.status === 'measured'
+    && (calibration.fireRate === null
+      || calibration.falsePositiveRate === null
+      || calibration.fatigueRate === null)) {
+    throw new Error('EmoSim proactivity measured calibration requires all outcome rates');
+  }
+  const promotionCriteria = {
+    criteriaVersion: requireNonEmptyString(
+      promotionInput.criteriaVersion,
+      'promotionCriteria.criteriaVersion',
+    ),
+    maximumFalsePositiveRate: requireUnit(
+      promotionInput.maximumFalsePositiveRate,
+      'promotionCriteria.maximumFalsePositiveRate',
+    ),
+    maximumFatigueRate: requireUnit(
+      promotionInput.maximumFatigueRate,
+      'promotionCriteria.maximumFatigueRate',
+    ),
+  };
+  const rollbackProfileId = nullableNonEmptyString(
+    root.rollbackProfileId,
+    'rollbackProfileId',
+  );
+  const samplingIntervalMs = requireTimestamp(root.samplingIntervalMs, 'samplingIntervalMs');
+  const minimumConfidence = requireUnit(root.minimumConfidence, 'minimumConfidence');
+  if (root.abstainBelowMinimumConfidence !== true) {
+    throw new Error('EmoSim proactivity abstainBelowMinimumConfidence must be true');
+  }
+  const sustainMs = requireTimestamp(root.sustainMs, 'sustainMs');
+  const dedupeWindowMs = requireTimestamp(root.dedupeWindowMs, 'dedupeWindowMs');
+  const cooldownMs = requireTimestamp(root.cooldownMs, 'cooldownMs');
+  return {
+    schemaVersion: 1,
+    profileId,
+    revision,
+    applicableSource,
+    reviewNote,
+    calibration,
+    promotionCriteria,
+    rollbackProfileId,
+    socialNeedThreshold: requireUnit(root.socialNeedThreshold, 'socialNeedThreshold'),
+    attachmentIntensityThreshold: requireUnit(
+      root.attachmentIntensityThreshold,
+      'attachmentIntensityThreshold',
+    ),
+    samplingIntervalMs,
+    minimumConfidence,
+    abstainBelowMinimumConfidence: true,
+    sustainMs,
+    dedupeWindowMs,
+    cooldownMs,
+  };
+}
+
+function requireApplicableSource(
+  observation: EmoSimProactivityObservation,
+  profile: EmoSimProactivityThresholdProfile,
+): void {
+  if (observation.source.model !== profile.applicableSource.model
+    || observation.source.version !== profile.applicableSource.version) {
+    throw new Error(
+      `EmoSim proactivity profile ${profile.profileId} does not apply to source ${observation.source.model}@${observation.source.version}`,
+    );
+  }
 }
 
 function requireCompanionId(value: string): string {
@@ -330,13 +465,48 @@ function finiteUnit(value: unknown): number | null {
     : null;
 }
 
-function requireTimestamp(value: number, field: string): number {
-  if (!Number.isSafeInteger(value) || value < 0) {
+function requireUnit(value: unknown, field: string): number {
+  const normalized = finiteUnit(value);
+  if (normalized === null) {
+    throw new Error(`EmoSim proactivity ${field} must be within 0..1`);
+  }
+  return normalized;
+}
+
+function nullableUnit(value: unknown, field: string): number | null {
+  return value === null ? null : requireUnit(value, field);
+}
+
+function requireCalibrationStatus(value: unknown): 'bootstrap_unmeasured' | 'measured' {
+  if (value !== 'bootstrap_unmeasured' && value !== 'measured') {
+    throw new Error('EmoSim proactivity calibration.status is invalid');
+  }
+  return value;
+}
+
+function requireNonEmptyString(value: unknown, field: string): string {
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new Error(`EmoSim proactivity ${field} is required`);
+  }
+  return value.trim();
+}
+
+function nullableNonEmptyString(value: unknown, field: string): string | null {
+  return value === null ? null : requireNonEmptyString(value, field);
+}
+
+function requireTimestamp(value: unknown, field: string): number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
     throw new Error(`EmoSim proactivity ${field} must be a non-negative safe integer`);
   }
   return value;
 }
 
-function nullableTimestamp(value: number | null, field: string): number | null {
+function nullableTimestamp(value: unknown, field: string): number | null {
   return value === null ? null : requireTimestamp(value, field);
+}
+
+function requireRecord(value: unknown, field: string): Record<string, unknown> {
+  if (!isRecord(value)) throw new Error(`EmoSim proactivity ${field} must be an object`);
+  return value;
 }

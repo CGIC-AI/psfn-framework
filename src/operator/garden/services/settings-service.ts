@@ -37,6 +37,7 @@ import {
   COMPANION_MODEL_SELECTION_SETTINGS_OVERLAY_KEYS,
   mergeCompanionSettingsOverlayPatch,
 } from '../../../system/config/settings-overlay.js';
+
 import {
   validateCompositionalPolicyConfig,
 } from '../../../system/capabilities/compositional-policy.js';
@@ -139,6 +140,10 @@ const REMOVED_RUNTIME_SETTINGS_MESSAGES: Partial<Record<string, string>> = {
     'discordHeartbeatChannel has been removed from runtime settings; use channels.json -> discord.heartbeatChannelId instead',
 };
 const log = createComponentLogger('AdminSettingsService');
+const COMPANION_GARDEN_SETTINGS_OVERLAY_KEYS = [
+  ...COMPANION_MODEL_SELECTION_SETTINGS_OVERLAY_KEYS,
+  'emosimProactivity',
+] as const;
 
 type SettingsMutationResult =
   | { ok: true; refreshedKeys: AdminSettingsDivergence['key'][]; divergences: AdminSettingsDivergence[] }
@@ -159,14 +164,14 @@ function toCapabilityGrantSnapshot(input: {
   };
 }
 
-function splitCompanionModelSelectionSettings(
+function splitCompanionScopedSettings(
   settings: EditableSettings,
 ): { global: EditableSettings; companion: EditableSettings } {
   const global = { ...settings };
   const companion: EditableSettings = {};
   const globalRecord = global as Record<string, unknown>;
   const companionRecord = companion as Record<string, unknown>;
-  for (const key of COMPANION_MODEL_SELECTION_SETTINGS_OVERLAY_KEYS) {
+  for (const key of COMPANION_GARDEN_SETTINGS_OVERLAY_KEYS) {
     if (!Object.hasOwn(globalRecord, key)) continue;
     companionRecord[key] = globalRecord[key];
     delete globalRecord[key];
@@ -358,7 +363,7 @@ export async function applyAdminSettingsMutation(options: {
 
   const currentRuntimeSettings = splitSettingsByDomain(configStore.loadRuntimeSettings()).runtime;
   const domainSplit = splitSettingsByDomain(settings);
-  const settingsByScope = splitCompanionModelSelectionSettings(domainSplit.runtime);
+  const settingsByScope = splitCompanionScopedSettings(domainSplit.runtime);
 
   const mergedRuntimeSettings = normalizeEditableSettings(
     { ...currentRuntimeSettings, ...settingsByScope.global },

@@ -71,7 +71,7 @@
     {
       "file": "src/app/agent/human-relay-response-path.ts",
       "name": "createTargetHumanRelayReturn.created.targetEgressGate.policyRef",
-      "value": "cogsec:human-relay:single-attributed-source",
+      "value": "'cogsec:human-relay:single-attributed-source'",
       "form": "object-member",
       "note": "Code-owned cogsec policy identity for the human-relay return path: the single-attributed-source gate is a fail-closed protocol constant, not a mutable owner-file setting."
     },
@@ -205,20 +205,6 @@
     },
     {
       "file": "src/app/e2e/icp-certification/agent-process.ts",
-      "name": "main.candidateIdsBefore.limit@L612",
-      "value": "50",
-      "form": "object-member",
-      "note": "Deterministic test/certification fixture main.candidateIdsBefore.limit; code-owned only for harness behavior and not used as an unowned production setting."
-    },
-    {
-      "file": "src/app/e2e/icp-certification/agent-process.ts",
-      "name": "main.candidateIdsBefore.limit@L995",
-      "value": "50",
-      "form": "object-member",
-      "note": "Deterministic test/certification fixture main.candidateIdsBefore.limit; code-owned only for harness behavior and not used as an unowned production setting."
-    },
-    {
-      "file": "src/app/e2e/icp-certification/agent-process.ts",
       "name": "main.candidateIdsBefore.limit@L1027",
       "value": "50",
       "form": "object-member",
@@ -233,8 +219,22 @@
     },
     {
       "file": "src/app/e2e/icp-certification/agent-process.ts",
+      "name": "main.candidateIdsBefore.limit@L612",
+      "value": "50",
+      "form": "object-member",
+      "note": "Deterministic test/certification fixture main.candidateIdsBefore.limit; code-owned only for harness behavior and not used as an unowned production setting."
+    },
+    {
+      "file": "src/app/e2e/icp-certification/agent-process.ts",
+      "name": "main.candidateIdsBefore.limit@L995",
+      "value": "50",
+      "form": "object-member",
+      "note": "Deterministic test/certification fixture main.candidateIdsBefore.limit; code-owned only for harness behavior and not used as an unowned production setting."
+    },
+    {
+      "file": "src/app/e2e/icp-certification/agent-process.ts",
       "name": "main.capsule.sourceGate.policyRef",
-      "value": "cogsec:invented-certification-source",
+      "value": "'cogsec:invented-certification-source'",
       "form": "object-member",
       "note": "Deterministic test/certification fixture policy identity for the human-relay isolation probe; invented and code-owned, not a production owner-file setting."
     },
@@ -8815,17 +8815,17 @@
     },
     {
       "file": "src/operator/garden/local-admin-contract.ts",
-      "name": "buildEpisodicWatermarkLaneDefinitions.intervalMs@L188",
+      "name": "buildEpisodicWatermarkLaneDefinitions.intervalMs@L190",
       "value": "24 * 60 * 60_000",
       "form": "object-member",
-      "note": "Existing mutable policy candidate buildEpisodicWatermarkLaneDefinitions.intervalMs@L188; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate buildEpisodicWatermarkLaneDefinitions.intervalMs; line identity shifted only, preserving psfn-framework-7qeo1.18 migration debt rather than approving immutable code ownership."
     },
     {
       "file": "src/operator/garden/local-admin-contract.ts",
-      "name": "buildEpisodicWatermarkLaneDefinitions.intervalMs@L200",
+      "name": "buildEpisodicWatermarkLaneDefinitions.intervalMs@L202",
       "value": "24 * 60 * 60_000",
       "form": "object-member",
-      "note": "Existing mutable policy candidate buildEpisodicWatermarkLaneDefinitions.intervalMs@L200; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate buildEpisodicWatermarkLaneDefinitions.intervalMs; line identity shifted only, preserving psfn-framework-7qeo1.18 migration debt rather than approving immutable code ownership."
     },
     {
       "file": "src/operator/garden/local-admin-contract.ts",
@@ -12406,6 +12406,13 @@
     },
     {
       "file": "src/system/config/runtime-config-contracts.ts",
+      "name": "createDefaultEmoSimProactivitySettings.thresholdProfile.samplingIntervalMs",
+      "value": "60_000",
+      "form": "object-member",
+      "note": "Canonical settings.json bootstrap metadata for the validated per-companion EmoSim profile; runtime authority is the owner file and Garden overlay, not this fallback literal."
+    },
+    {
+      "file": "src/system/config/runtime-config-contracts.ts",
       "name": "createDefaultObserverEvalSidecarLeverSettings.cooldownMs",
       "value": "21_600_000",
       "form": "object-member",
@@ -13511,6 +13518,13 @@
       "value": "{ min: 1, max: 1_000_000 } as const",
       "form": "object",
       "note": "Canonical owner-file/schema metadata MODEL_REGISTRY_THINKING_BUDGET_TOKENS_RANGE; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
+    },
+    {
+      "file": "src/system/settings/schema-runtime-normalization.ts",
+      "name": "normalizeEndpointAndGardenSettings.normalized.emosimProactivity.thresholdProfile",
+      "value": "{ ...createDefaultEmoSimProactivitySettings().thresholdProfile, profileId: EMOSIM_WOULD_MESSAGE_V1, revision: 'legacy-owner-migration.v1', reviewNote: 'One-way migration of the previously enabled production would_message owner block.', socialNeedThreshold: legacy.wouldMessage.socialNeedThreshold, attachmentIntensityThreshold: legacy.wouldMessage.attachmentIntensityThreshold, sustainMs: legacy.wouldMessage.sustainMs, cooldownMs: legacy.cooldownMs, }",
+      "form": "object-member",
+      "note": "One-way backward owner-data read preserves an already-enabled production source while filling the new validated profile metadata; new writes use the canonical settings.json profile."
     },
     {
       "file": "src/system/trust/broadcast-safety.ts",

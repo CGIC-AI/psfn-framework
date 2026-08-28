@@ -16,6 +16,8 @@ import { POSTGRES_INTENTION_MIGRATIONS } from './migrations.js';
 interface ProactivityStateRow extends QueryResultRow {
   first_crossing_ms: string | number | null;
   last_fired_at_ms: string | number | null;
+  last_sampled_at_ms: string | number | null;
+  last_input_id: string | null;
 }
 
 interface LegacyStateRow extends QueryResultRow {
@@ -54,7 +56,7 @@ implements EmoSimProactivityStateStorePort {
 
   async load(): Promise<EmoSimProactivityState> {
     const row = await queryOne<ProactivityStateRow>(this.pool, `
-      SELECT first_crossing_ms, last_fired_at_ms
+      SELECT first_crossing_ms, last_fired_at_ms, last_sampled_at_ms, last_input_id
       FROM emosim_proactivity_state
       WHERE source_kind = 'would_message'
     `);
@@ -66,13 +68,22 @@ implements EmoSimProactivityStateStorePort {
     const normalized = normalizeState(state);
     await this.pool.query(`
       INSERT INTO emosim_proactivity_state (
-        source_kind, schema_version, first_crossing_ms, last_fired_at_ms, updated_at_ms
-      ) VALUES ('would_message', 1, $1, $2, $3)
+        source_kind, schema_version, first_crossing_ms, last_fired_at_ms,
+        last_sampled_at_ms, last_input_id, updated_at_ms
+      ) VALUES ('would_message', 1, $1, $2, $3, $4, $5)
       ON CONFLICT (source_kind) DO UPDATE SET
         first_crossing_ms = excluded.first_crossing_ms,
         last_fired_at_ms = excluded.last_fired_at_ms,
+        last_sampled_at_ms = excluded.last_sampled_at_ms,
+        last_input_id = excluded.last_input_id,
         updated_at_ms = excluded.updated_at_ms
-    `, [normalized.firstCrossingMs, normalized.lastFiredAtMs, Date.now()]);
+    `, [
+      normalized.firstCrossingMs,
+      normalized.lastFiredAtMs,
+      normalized.lastSampledAtMs,
+      normalized.lastInputId,
+      Date.now(),
+    ]);
   }
 
   async close(): Promise<void> {
@@ -104,6 +115,8 @@ function mapState(row: ProactivityStateRow): EmoSimProactivityState {
   return normalizeState({
     firstCrossingMs: toNullableNumber(row.first_crossing_ms),
     lastFiredAtMs: toNullableNumber(row.last_fired_at_ms),
+    lastSampledAtMs: toNullableNumber(row.last_sampled_at_ms),
+    lastInputId: row.last_input_id,
   });
 }
 
@@ -111,6 +124,8 @@ function normalizeState(state: EmoSimProactivityState): EmoSimProactivityState {
   return {
     firstCrossingMs: requireNullableTimestamp(state.firstCrossingMs, 'firstCrossingMs'),
     lastFiredAtMs: requireNullableTimestamp(state.lastFiredAtMs, 'lastFiredAtMs'),
+    lastSampledAtMs: requireNullableTimestamp(state.lastSampledAtMs, 'lastSampledAtMs'),
+    lastInputId: requireNullableInputId(state.lastInputId),
   };
 }
 
@@ -127,7 +142,12 @@ function requireNullableTimestamp(value: number | null, field: string): number |
 }
 
 function emptyState(): EmoSimProactivityState {
-  return { firstCrossingMs: null, lastFiredAtMs: null };
+  return {
+    firstCrossingMs: null,
+    lastFiredAtMs: null,
+    lastSampledAtMs: null,
+    lastInputId: null,
+  };
 }
 
 export function parseLegacyEmoSimProactivityState(value: unknown): EmoSimProactivityState {
@@ -137,5 +157,14 @@ export function parseLegacyEmoSimProactivityState(value: unknown): EmoSimProacti
   return normalizeState({
     firstCrossingMs: value.firstCrossingMs as number | null,
     lastFiredAtMs: value.lastFiredAtMs as number | null,
+    lastSampledAtMs: null,
+    lastInputId: null,
   });
+}
+
+function requireNullableInputId(value: string | null): string | null {
+  if (value === null) return null;
+  const normalized = value.trim();
+  if (!normalized) throw new Error('Persisted EmoSim proactivity lastInputId is invalid');
+  return normalized;
 }

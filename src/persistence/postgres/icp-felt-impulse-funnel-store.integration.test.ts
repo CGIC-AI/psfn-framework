@@ -10,6 +10,7 @@ import { createEmoSimProactivityPort } from '../../core/emotion/emosim-proactivi
 import { createPostgresPool } from '../postgres.js';
 import { PostgresIcpInitiationCandidateStore } from './icp-initiation-candidate-store.js';
 import { PostgresIcpFeltImpulseFunnelStore } from './icp-felt-impulse-funnel-store.js';
+import { createDefaultEmoSimProactivitySettings } from '../../system/config/runtime-config-contracts.js';
 
 const TIMEOUT_MS = 120_000;
 const SCHEMA = 'companion_funnel';
@@ -58,11 +59,17 @@ describe('Postgres felt-impulse funnel outcomes', () => {
         funnelStore: funnel,
         now: () => producerFiredAtMs,
       });
-      let proactivityState = { firstCrossingMs: null as number | null, lastFiredAtMs: null as number | null };
+      let proactivityState = {
+        firstCrossingMs: null as number | null,
+        lastFiredAtMs: null as number | null,
+        lastSampledAtMs: null as number | null,
+        lastInputId: null as string | null,
+      };
       const producer = createEmoSimProactivityPort({
         enabled: true,
         companionId: LOCAL_ID,
         thresholdProfile: {
+          ...createDefaultEmoSimProactivitySettings().thresholdProfile,
           profileId: 'would-message-v1',
           socialNeedThreshold: 0.7,
           attachmentIntensityThreshold: 0.5,

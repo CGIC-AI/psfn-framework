@@ -1746,20 +1746,51 @@ export interface ObserverEvalSidecarGardenExposureSettings {
 
 export const EMOSIM_WOULD_MESSAGE_V1 =
   'emosim-would-message-v1' as const;
+export const EMOSIM_PROACTIVITY_SOURCE_MODEL = 'emo_sim' as const;
+export const EMOSIM_PROACTIVITY_SOURCE_VERSION =
+  'emo_sim/server.py#http-api.v1' as const;
 
 export const EMOSIM_PROACTIVITY_MODES = ['off', 'shadow', 'on'] as const;
 export type EmoSimProactivityMode = typeof EMOSIM_PROACTIVITY_MODES[number];
 
 /** Companion-local production authority for qualifying EmoSim source fires. */
+export interface EmoSimProactivityThresholdProfile {
+  schemaVersion: 1;
+  profileId: string;
+  revision: string;
+  applicableSource: {
+    model: typeof EMOSIM_PROACTIVITY_SOURCE_MODEL;
+    version: typeof EMOSIM_PROACTIVITY_SOURCE_VERSION;
+  };
+  reviewNote: string;
+  calibration: {
+    corpusVersion: string;
+    metricsVersion: string;
+    status: 'bootstrap_unmeasured' | 'measured';
+    fireRate: number | null;
+    falsePositiveRate: number | null;
+    fatigueRate: number | null;
+  };
+  promotionCriteria: {
+    criteriaVersion: string;
+    maximumFalsePositiveRate: number;
+    maximumFatigueRate: number;
+  };
+  rollbackProfileId: string | null;
+  socialNeedThreshold: number;
+  attachmentIntensityThreshold: number;
+  samplingIntervalMs: number;
+  minimumConfidence: number;
+  abstainBelowMinimumConfidence: true;
+  sustainMs: number;
+  dedupeWindowMs: number;
+  cooldownMs: number;
+}
+
+/** Companion-local production authority for qualifying EmoSim source fires. */
 export interface EmoSimProactivitySettings {
   mode: EmoSimProactivityMode;
-  thresholdProfile: {
-    profileId: string;
-    socialNeedThreshold: number;
-    attachmentIntensityThreshold: number;
-    sustainMs: number;
-    cooldownMs: number;
-  };
+  thresholdProfile: EmoSimProactivityThresholdProfile;
 }
 
 /**

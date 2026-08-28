@@ -46,7 +46,11 @@ import type {
   RuntimeConfigHooks,
   TextEmotionDType,
 } from '../../shared/contracts/runtime.js';
-import { EMOSIM_WOULD_MESSAGE_V1 } from '../../shared/contracts/runtime.js';
+import {
+  EMOSIM_PROACTIVITY_SOURCE_MODEL,
+  EMOSIM_PROACTIVITY_SOURCE_VERSION,
+  EMOSIM_WOULD_MESSAGE_V1,
+} from '../../shared/contracts/runtime.js';
 import type { CogSecPersonaConformanceSettings } from '../../shared/contracts/cogsec-persona-conformance.js';
 
 export type { CapabilityTier } from '../capabilities/tier-types.js';
@@ -137,10 +141,35 @@ export function createDefaultEmoSimProactivitySettings(): EmoSimProactivitySetti
   return {
     mode: 'off',
     thresholdProfile: {
+      schemaVersion: 1,
       profileId: EMOSIM_WOULD_MESSAGE_V1,
+      revision: 'public-bootstrap.v1',
+      applicableSource: {
+        model: EMOSIM_PROACTIVITY_SOURCE_MODEL,
+        version: EMOSIM_PROACTIVITY_SOURCE_VERSION,
+      },
+      reviewNote: 'Conservative public bootstrap; production remains off until explicitly promoted.',
+      calibration: {
+        corpusVersion: 'public-bootstrap-sanitized.v1',
+        metricsVersion: 'emosim-proactivity.metrics.v1',
+        status: 'bootstrap_unmeasured',
+        fireRate: null,
+        falsePositiveRate: null,
+        fatigueRate: null,
+      },
+      promotionCriteria: {
+        criteriaVersion: 'emosim-proactivity-promotion.v1',
+        maximumFalsePositiveRate: 0.1,
+        maximumFatigueRate: 0.25,
+      },
+      rollbackProfileId: null,
       socialNeedThreshold: legacyThresholds.wouldMessage.socialNeedThreshold,
       attachmentIntensityThreshold: legacyThresholds.wouldMessage.attachmentIntensityThreshold,
+      samplingIntervalMs: 60_000,
+      minimumConfidence: 0.6,
+      abstainBelowMinimumConfidence: true,
       sustainMs: legacyThresholds.wouldMessage.sustainMs,
+      dedupeWindowMs: 300_000,
       cooldownMs: legacyThresholds.cooldownMs,
     },
   };

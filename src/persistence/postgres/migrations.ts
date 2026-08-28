@@ -1410,6 +1410,10 @@ export const POSTGRES_INTENTION_MIGRATIONS = [
     updated_at_ms BIGINT NOT NULL CHECK (updated_at_ms >= 0)
   );
   `,
+  `ALTER TABLE emosim_proactivity_state
+    ADD COLUMN IF NOT EXISTS last_sampled_at_ms BIGINT CHECK (last_sampled_at_ms >= 0);`,
+  `ALTER TABLE emosim_proactivity_state
+    ADD COLUMN IF NOT EXISTS last_input_id TEXT CHECK (last_input_id IS NULL OR length(btrim(last_input_id)) > 0);`,
   // Companion-local, content-free disposition ledger for qualified social
   // impulses. Local intent text is never persisted; binding_hash fences the
   // exact choice/target/intent tuple. Durable dyad identity is valid only for

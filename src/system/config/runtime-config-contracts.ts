@@ -135,7 +135,7 @@ export function createDefaultObserverEvalSidecarSettings(): ObserverEvalSidecarS
 export function createDefaultEmoSimProactivitySettings(): EmoSimProactivitySettings {
   const legacyThresholds = createDefaultObserverEvalSidecarLeverSettings();
   return {
-    enabled: false,
+    mode: 'off',
     thresholdProfile: {
       profileId: EMOSIM_WOULD_MESSAGE_V1,
       socialNeedThreshold: legacyThresholds.wouldMessage.socialNeedThreshold,

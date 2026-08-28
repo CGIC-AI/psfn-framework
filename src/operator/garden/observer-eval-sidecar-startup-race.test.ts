@@ -93,4 +93,28 @@ describe('observer eval sidecar startup netpol race (psfn-framework-qicb.3)', ()
 
     expect(captured).toHaveLength(0);
   });
+
+  it('reports the production posture from emosimProactivity rather than eval levers', async () => {
+    const config = persistenceEnabledConfig(refusedDatabaseUrl());
+    config.observerEvalSidecar!.levers = {
+      ...config.observerEvalSidecar!.levers,
+      enabled: true,
+    };
+    config.emosimProactivity = {
+      mode: 'off',
+      thresholdProfile: {
+        profileId: 'emosim-would-message-v1',
+        socialNeedThreshold: 0.7,
+        attachmentIntensityThreshold: 0.5,
+        sustainMs: 1_800_000,
+        cooldownMs: 21_600_000,
+      },
+    };
+
+    const service = createObserverEvalSidecarAdminService({ config });
+
+    await expect(service.getHealth()).resolves.toMatchObject({
+      proactivityMode: 'off',
+    });
+  });
 });

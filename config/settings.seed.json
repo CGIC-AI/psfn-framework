@@ -407,7 +407,7 @@
     }
   },
   "emosimProactivity": {
-    "enabled": false,
+    "mode": "off",
     "thresholdProfile": {
       "profileId": "emosim-would-message-v1",
       "socialNeedThreshold": 0.7,

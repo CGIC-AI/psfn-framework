@@ -1747,9 +1747,12 @@ export interface ObserverEvalSidecarGardenExposureSettings {
 export const EMOSIM_WOULD_MESSAGE_V1 =
   'emosim-would-message-v1' as const;
 
+export const EMOSIM_PROACTIVITY_MODES = ['off', 'shadow', 'on'] as const;
+export type EmoSimProactivityMode = typeof EMOSIM_PROACTIVITY_MODES[number];
+
 /** Companion-local production authority for qualifying EmoSim source fires. */
 export interface EmoSimProactivitySettings {
-  enabled: boolean;
+  mode: EmoSimProactivityMode;
   thresholdProfile: {
     profileId: string;
     socialNeedThreshold: number;

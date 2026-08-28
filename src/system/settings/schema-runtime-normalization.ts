@@ -34,6 +34,7 @@ import {
   OBSERVER_EVAL_SIDECAR_ADAPTER_KINDS,
   OBSERVER_EVAL_SIDECAR_DEPLOYMENT_TARGETS,
   OBSERVER_EVAL_SIDECAR_MODES,
+  EMOSIM_PROACTIVITY_MODES,
   EMOSIM_WOULD_MESSAGE_V1,
   type ObserverEvalSidecarAdapterKind,
   type ObserverEvalSidecarDeploymentTarget,
@@ -41,6 +42,7 @@ import {
   type ObserverEvalSidecarOverflowPolicy,
   type ObserverEvalSidecarSettings,
   type EmoSimProactivitySettings,
+  type EmoSimProactivityMode,
 } from '../../shared/contracts/runtime.js';
 import {
   normalizeSttProvider,
@@ -575,7 +577,12 @@ function normalizeEmoSimProactivitySettings(
   const root = expectRecord(value, fieldPath);
   const profile = expectRecord(root.thresholdProfile, `${fieldPath}.thresholdProfile`);
   return {
-    enabled: expectBoolean(root.enabled, `${fieldPath}.enabled`),
+    mode: expectEnumValue<EmoSimProactivityMode>(
+      root.mode,
+      `${fieldPath}.mode`,
+      new Set(EMOSIM_PROACTIVITY_MODES),
+      'one of "off", "shadow", "on"',
+    ),
     thresholdProfile: {
       profileId: expectNonEmptyString(profile.profileId, `${fieldPath}.thresholdProfile.profileId`),
       socialNeedThreshold: expectNumberInRange(
@@ -732,7 +739,7 @@ function normalizeEndpointAndGardenSettings(
     // source during the settings split. New writes use emosimProactivity.
     const legacy = normalized.observerEvalSidecar.levers;
     normalized.emosimProactivity = {
-      enabled: true,
+      mode: 'on',
       thresholdProfile: {
         profileId: EMOSIM_WOULD_MESSAGE_V1,
         socialNeedThreshold: legacy.wouldMessage.socialNeedThreshold,

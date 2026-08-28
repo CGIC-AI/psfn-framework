@@ -77,6 +77,9 @@ export function registerSocialImpulseOutreachLane(
       if (!deps.primaryDiscordUserId) return false;
       const contact = await deps.contactStore.getByDiscordUserId(deps.primaryDiscordUserId);
       return contact?.id === contactId
+        && !contact.archivedAt
+        && !contact.isMachineIntelligence
+        && contact.trustLevel === 'primary'
         && blockList.evaluate({
           channelType: 'discord',
           contactId: deps.primaryDiscordUserId,

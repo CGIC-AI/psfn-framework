@@ -82,9 +82,9 @@ export function validateObserverEvalSidecarStartupConfig(
 ): void {
   const sidecar = config.observerEvalSidecar;
   const proactivity = config.emosimProactivity;
-  if (proactivity?.enabled && !sidecar?.enabled) {
+  if (proactivity?.mode !== undefined && proactivity.mode !== 'off' && !sidecar?.enabled) {
     throw new Error(
-      'emosimProactivity.enabled requires the EmoSim source runtime to be enabled',
+      'emosimProactivity.mode requires the EmoSim source runtime to be enabled when not off',
     );
   }
   if (!sidecar?.enabled) {

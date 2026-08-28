@@ -159,11 +159,33 @@ describe('three-companion EmoSim fleet parity', () => {
         status: 'pending' as const,
       }));
       const firedAtMs = NOW_MS + index;
-      const signal = {
-        lever: 'would_message' as const,
-        correlationId: `felt-impulse:would_message:${firedAtMs}`,
+      const impulse = {
+        schemaVersion: 1 as const,
+        impulseVersion: 'emosim-proactivity.impulse.v1' as const,
+        kind: 'would_message' as const,
+        companionId: companion.companionId,
+        source: { model: 'emo_sim', version: 'emo_sim/server.py#http-api.v1' },
+        lineage: {
+          schemaVersion: 1 as const,
+          inputId: `turn:${firedAtMs}`,
+          projectionVersion: 'observer.appraisal-projection.v3',
+          privacyClass: 'content_redacted',
+          rawContentRedacted: true as const,
+        },
+        firstCrossingMs: firedAtMs,
         firedAtMs,
-        timestamp: firedAtMs,
+        thresholdProfile: {
+          profileId: 'would-message-v1',
+          socialNeedThreshold: 0.7,
+          attachmentIntensityThreshold: 0.5,
+          sustainMs: 1_800_000,
+          cooldownMs: 21_600_000,
+        },
+        dedupeKey: `felt-impulse:would_message:${firedAtMs}`,
+        correlationId: `felt-impulse:would_message:${firedAtMs}`,
+        confidence: 0.82,
+        availability: 'available' as const,
+        authority: 'qualified_source_fire' as const,
       };
       const createAdapter = () => createIcpFeltImpulseInitiationAdapter({
         sourceRuntime: { accept: submit },
@@ -183,10 +205,11 @@ describe('three-companion EmoSim fleet parity', () => {
         funnelStore: funnel.store,
         eventBus,
         now: () => firedAtMs,
+        minIntervalMs: 0,
       });
 
-      const first = await createAdapter().onLeverSignal(signal);
-      const restarted = await createAdapter().onLeverSignal(signal);
+      const first = await createAdapter().onImpulse(impulse);
+      const restarted = await createAdapter().onImpulse(impulse);
       return {
         companionId: companion.companionId,
         first,

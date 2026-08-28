@@ -3,7 +3,12 @@ import type {
   IcpTargetChannelInitiationResult,
   IcpTargetChannelInitiator,
 } from './icp-target-channel-initiation.js';
-import type { IcpTargetChannelContinuationRequest } from './icp-target-channel-continuation.js';
+import type {
+  IcpTargetChannelContinuation,
+  IcpTargetChannelContinuationRequest,
+} from './icp-target-channel-continuation.js';
+
+type IcpTargetChannelCommand = IcpTargetChannelInitiator & Partial<IcpTargetChannelContinuation>;
 
 /**
  * Process-local command port for scheduler-owned ICP initiation work.
@@ -18,10 +23,10 @@ export interface IcpTargetChannelInitiationCommandPort {
   ): Promise<IcpTargetChannelInitiationResult>;
   executeContinuation(
     request: IcpTargetChannelContinuationRequest,
-  ): ReturnType<IcpTargetChannelInitiator['continueDyad']>;
+  ): ReturnType<IcpTargetChannelContinuation['continueDyad']>;
 }
 
-let activeInitiator: IcpTargetChannelInitiator | null = null;
+let activeInitiator: IcpTargetChannelCommand | null = null;
 
 export const icpTargetChannelInitiationCommand: IcpTargetChannelInitiationCommandPort = {
   async execute(request): Promise<IcpTargetChannelInitiationResult> {
@@ -33,14 +38,15 @@ export const icpTargetChannelInitiationCommand: IcpTargetChannelInitiationComman
   },
   async executeContinuation(request) {
     const initiator = activeInitiator;
-    if (!initiator) throw new Error('ICP target-channel continuation command is not registered');
-    return await initiator.continueDyad(request);
+    const continueDyad = initiator?.continueDyad;
+    if (!continueDyad) throw new Error('ICP target-channel continuation command is not registered');
+    return await continueDyad(request);
   },
 };
 
 /** Register the one authenticated agent-runtime implementation for this process. */
 export function registerIcpTargetChannelInitiationCommand(
-  initiator: IcpTargetChannelInitiator,
+  initiator: IcpTargetChannelCommand,
 ): () => void {
   if (activeInitiator) {
     throw new Error('ICP target-channel initiation command is already registered');

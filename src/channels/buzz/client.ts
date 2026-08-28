@@ -62,7 +62,7 @@ export class BuzzRelayClient {
     this.companionPubkey = companionPubkeyForPrivateKey(config.privateKey);
     this.channelAllowlist = new Set(config.channelIds);
     this.authorAllowlist = new Set(config.allowedAuthorPubkeys);
-    this.subscriptionId = `psfn-buzz-${config.companionId}`;
+    this.subscriptionId = `buzz-companion-${config.companionId}`;
   }
 
   async start(): Promise<void> {

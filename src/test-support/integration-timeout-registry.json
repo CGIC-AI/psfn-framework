@@ -210,6 +210,13 @@
       "note": "Background-work store suite; beforeAll 90s (harness+schema), per-test 30s. Inherited pending measurement."
     },
     {
+      "file": "src/persistence/postgres/buzz-recovery-store.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": 1000,
+      "baselineSource": "measured",
+      "note": "y2mqh.2 Buzz recovery persistence, causal-chain, membership-order, and cancellation suite against the real containerized Postgres harness. Worst observed full-file wall was 0.94s on this host (2026-08-27); the repo-standard 120s cap preserves ample headroom for cold-start and shared-heavy harness variance."
+    },
+    {
       "file": "src/persistence/postgres/companion-presence.integration.test.ts",
       "timeoutMs": 120000,
       "measuredBaselineMs": null,

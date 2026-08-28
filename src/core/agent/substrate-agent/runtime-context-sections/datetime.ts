@@ -101,7 +101,7 @@ function formatPromptRuntimeWeekday(now: Date): string {
   }).format(now);
 }
 
-function formatRelativeElapsed(now: Date, then: Date): string {
+export function formatRelativeElapsed(now: Date, then: Date): string {
   const deltaMs = Math.max(0, now.getTime() - then.getTime());
   const deltaMinutes = Math.floor(deltaMs / 60_000);
   if (deltaMinutes < 1) return 'just now';

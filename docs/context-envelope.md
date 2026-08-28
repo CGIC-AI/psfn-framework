@@ -343,6 +343,31 @@ cites the `channelPrivacy` value); `visibility.broadcast_restricted` is new and 
 the broadcast dimension (the retired broadcast-row denial). All other tags are
 unchanged.
 
+## Content-free relationship recency in group conversation_state
+
+For known human participants in a group turn, `current_message_author` and the
+bounded `recent_active_participants` roster may include the latest interaction
+time from a different private chat. The signal is deliberately narrow:
+
+```xml
+<current_message_author
+  name="Morgan"
+  id="discord:123456789"
+  last_direct_interaction_at="2026-03-27T21:42:00.000-04:00"
+  last_direct_interaction_ago="1 hour ago"
+  last_direct_interaction_context="another_chat" />
+```
+
+The session owner reads the canonical contact's continuity index, excludes the
+current source channel, and accepts only entries classified `private`. It
+projects only the timestamp across the channel boundary: transcript content and
+the private channel identifier never enter prompt assembly. Unknown contacts,
+peer machine identities, lookup failures, missing continuity wiring, invalid
+timestamps, and DM/internal turns render no cross-chat recency attributes. Room
+inactivity remains represented independently by the current channel's
+`last_message_received` fields, so it cannot be mistaken for relationship
+inactivity.
+
 ## Participant relationships in conversation_state (E4.4)
 
 A group turn may expose a compact, hard-capped view of how the CURRENTLY LISTED

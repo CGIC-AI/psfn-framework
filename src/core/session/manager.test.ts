@@ -1891,6 +1891,59 @@ describe('SessionManager', () => {
     });
   });
 
+  it('projects only the latest other-chat private activity through captured reads', () => {
+    const mgr = new SessionManager(store, makeConfig());
+    const continuityStore = new UserContinuityStore(join(dir, 'relationship-activity'));
+    wireTestContinuity(mgr, continuityStore);
+    const contactId = 'contact-alice';
+    const currentRoom = 'discord:room-current';
+
+    continuityStore.append(contactId, {
+      channelId: 'discord:dm-old',
+      originChannelId: 'discord:dm-old',
+      channelVisibility: 'private',
+      role: 'user',
+      content: 'older private content must not cross the facade',
+      timestamp: 1_000,
+    });
+    continuityStore.append(contactId, {
+      channelId: 'discord:dm-latest',
+      originChannelId: 'discord:dm-latest',
+      channelVisibility: 'private',
+      role: 'assistant',
+      content: 'latest private content must not cross the facade',
+      timestamp: 3_000,
+    });
+    continuityStore.append(contactId, {
+      channelId: 'discord:other-room',
+      originChannelId: 'discord:other-room',
+      channelVisibility: 'invite_only',
+      role: 'user',
+      content: 'newer room content is not a private interaction',
+      timestamp: 4_000,
+    });
+    continuityStore.append(contactId, {
+      channelId: currentRoom,
+      originChannelId: currentRoom,
+      channelVisibility: 'private',
+      role: 'user',
+      content: 'the current source must be excluded even if classified private',
+      timestamp: 5_000,
+    });
+
+    const sessionReads = mgr.createCapturedSessionReads({
+      logicalSessionId: currentRoom,
+      sourceChannelId: currentRoom,
+    });
+    sessionReads.run(() => {
+      const activity = sessionReads.getPrivateRelationshipActivity(contactId);
+      expect(activity).toEqual({ lastDirectInteractionAtMs: 3_000 });
+      expect(Object.keys(activity ?? {})).toEqual(['lastDirectInteractionAtMs']);
+      expect(sessionReads.getPrivateRelationshipActivity('unknown-contact')).toBeNull();
+      expect(sessionReads.getPrivateRelationshipActivity('  ')).toBeNull();
+    });
+  });
+
   it('fails at the facade method when admitted-turn context is lost', async () => {
     const mgr = new SessionManager(store, makeConfig());
     const sessionReads = mgr.createCapturedSessionReads({

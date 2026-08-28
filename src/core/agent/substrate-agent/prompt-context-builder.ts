@@ -27,6 +27,7 @@ import { resolveRuntimePromptGuidanceVariables } from './prompt-runtime-helpers.
 import { resolveSituatedPlaceRef } from './runtime-context-sections/situated-presence.js';
 import { resolveAvailableReactions as resolveAvailableReactionsForRuntime } from './channel-routing-runtime.js';
 import { resolveContextWindow as resolveContextWindowForRuntime } from './agent-state-runtime.js';
+import { resolveParticipantActivityProfilesForTurn } from './participant-activity.js';
 import {
   buildBehavioralNotesContextBlock as buildBehavioralNotesContextBlockForTurn,
   buildDynamicPromptTemplateVariables as buildDynamicPromptTemplateVariablesForTurn,
@@ -180,6 +181,21 @@ export class PromptContextBuilder {
     const capabilityGrant = this.deps.snapshotCapabilityGrant();
 
     const skillsContext = await this.deps.getSkillsRuntime()?.getPromptXml() ?? '';
+    const recentActiveParticipantRuntimeProfiles = await resolveParticipantActivityProfilesForTurn({
+      message,
+      conversationScope,
+      contactStore: this.deps.getContactStore(),
+      activityReader: capturedSessionReads,
+    });
+    const currentParticipantProfile = recentActiveParticipantRuntimeProfiles.find(
+      profile => profile.user_id === message.authorId,
+    );
+    const resolvedCurrentUserRuntimeProfile = (currentUserRuntimeProfile || currentParticipantProfile)
+      ? {
+        ...currentParticipantProfile,
+        ...currentUserRuntimeProfile,
+      } as UserRuntimeProfile
+      : undefined;
     return buildDynamicPromptTemplateVariablesForTurn({
       message,
       conversationScope,
@@ -207,7 +223,8 @@ export class PromptContextBuilder {
       behavioralNotesBlock: this.buildBehavioralNotesContextBlock(canonicalContactKey),
       lastMessageReceivedAtMs: latestPriorMessage?.timestamp ?? null,
       recentChannelEntries: recentMessages,
-      currentUserRuntimeProfile,
+      currentUserRuntimeProfile: resolvedCurrentUserRuntimeProfile,
+      recentActiveParticipantRuntimeProfiles,
       participantRelationshipEdges,
       analysisWorkbenchAvailable,
       internalStateContinuityGap: this.deps.getInternalStateContinuityGap(),

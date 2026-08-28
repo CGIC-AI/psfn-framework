@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createIcpFeltImpulseInitiationAdapter } from '../../core/icp/felt-impulse-initiation.js';
+import {
+  createEmoSimProactivityPort,
+  type EmoSimProactivityState,
+} from '../../core/emotion/emosim-proactivity-port.js';
 import type {
   IcpFeltImpulseFunnelRecord,
   IcpFeltImpulseFunnelStorePort,
@@ -160,36 +164,6 @@ describe('three-companion EmoSim fleet parity', () => {
         candidateId: companion.companionId,
         status: 'pending' as const,
       }));
-      const firedAtMs = NOW_MS + index;
-      const impulse = {
-        schemaVersion: 1 as const,
-        impulseVersion: 'emosim-proactivity.impulse.v1' as const,
-        kind: 'would_message' as const,
-        companionId: companion.companionId,
-        source: { model: 'emo_sim', version: 'emo_sim/server.py#http-api.v1' },
-        lineage: {
-          schemaVersion: 1 as const,
-          inputId: `turn:${firedAtMs}`,
-          projectionVersion: 'observer.appraisal-projection.v3',
-          privacyClass: 'content_redacted',
-          rawContentRedacted: true as const,
-        },
-        firstCrossingMs: firedAtMs,
-        firedAtMs,
-        thresholdProfile: {
-          ...createDefaultEmoSimProactivitySettings().thresholdProfile,
-          profileId: 'would-message-v1',
-          socialNeedThreshold: 0.7,
-          attachmentIntensityThreshold: 0.5,
-          sustainMs: 1_800_000,
-          cooldownMs: 21_600_000,
-        },
-        dedupeKey: `felt-impulse:would_message:${firedAtMs}`,
-        correlationId: `felt-impulse:would_message:${firedAtMs}`,
-        confidence: 0.82,
-        availability: 'available' as const,
-        authority: 'qualified_source_fire' as const,
-      };
       const createAdapter = () => createIcpFeltImpulseInitiationAdapter({
         sourceRuntime: { accept: submit },
         peers: {
@@ -207,14 +181,65 @@ describe('three-companion EmoSim fleet parity', () => {
         isAuthorized: () => true,
         funnelStore: funnel.store,
         eventBus,
-        now: () => firedAtMs,
+        now: () => NOW_MS,
         minIntervalMs: 0,
       });
 
-      const first = await createAdapter().onImpulse(impulse);
-      const restarted = await createAdapter().onImpulse(impulse);
+      let state: EmoSimProactivityState = {
+        firstCrossingMs: null,
+        lastFiredAtMs: null,
+        lastSampledAtMs: null,
+        lastInputId: null,
+      };
+      const firstOutcomes: Array<Awaited<ReturnType<ReturnType<typeof createAdapter>['onImpulse']>>> = [];
+      const profile = {
+        ...createDefaultEmoSimProactivitySettings().thresholdProfile,
+        profileId: `certified-${companion.sidecarId}`,
+        revision: `certified-${companion.sidecarId}.v1`,
+        samplingIntervalMs: 0,
+        sustainMs: 0,
+      };
+      const producer = createEmoSimProactivityPort({
+        enabled: true,
+        companionId: companion.companionId,
+        thresholdProfile: profile,
+        stateStore: {
+          load: async () => structuredClone(state),
+          save: async next => { state = structuredClone(next); },
+        },
+        emitImpulse: async impulse => {
+          firstOutcomes.push(await createAdapter().onImpulse(impulse));
+        },
+      });
+      const producerResult = await producer.observe({
+        companionId: companion.companionId,
+        observedAtMs: NOW_MS,
+        source: {
+          ...profile.applicableSource,
+          availability: 'available',
+          confidence: 0.82,
+        },
+        lineage: {
+          schemaVersion: 1,
+          inputId: 'same-sanitized-social-input',
+          projectionVersion: 'observer.appraisal-projection.v3',
+          privacyClass: 'content_redacted',
+          rawContentRedacted: true,
+        },
+        snapshot: {
+          dominant: 'Calmness',
+          emotions: { Calmness: 0.3 },
+          drives: { socialNeed: 0.9 },
+        },
+      });
+      const first = firstOutcomes[0];
+      if (producerResult.kind !== 'emitted' || !first) {
+        throw new Error(`Companion ${companion.companionId} did not emit its qualified impulse`);
+      }
+      const restarted = await createAdapter().onImpulse(producerResult.impulse);
       return {
         companionId: companion.companionId,
+        profileId: profile.profileId,
         first,
         restarted,
         records: [...funnel.records.values()],
@@ -225,10 +250,11 @@ describe('three-companion EmoSim fleet parity', () => {
     for (const [index, outcome] of outcomes.entries()) {
       const companion = COMPANIONS[index];
       expect(outcome.companionId).toBe(companion.companionId);
+      expect(outcome.profileId).toBe(`certified-${companion.sidecarId}`);
       expect(outcome.first).toMatchObject({ kind: 'submitted' });
       expect(outcome.restarted).toEqual({ kind: 'deduped', candidateId: companion.companionId });
       expect(outcome.records).toEqual([expect.objectContaining({
-        correlationId: `felt-impulse:would_message:${NOW_MS + index}`,
+        correlationId: `felt-impulse:would_message:${NOW_MS}`,
         outcome: 'candidate_linked',
         candidateId: companion.companionId,
       })]);

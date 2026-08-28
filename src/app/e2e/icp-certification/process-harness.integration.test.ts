@@ -89,6 +89,22 @@ interface FreeTimeNotificationResult {
   status: string;
 }
 
+interface DyadLifecycle {
+  dyadId: string;
+  lifecycleRevision: number;
+  status: 'blocked' | 'closed' | 'open' | 'paused';
+}
+
+async function readOnlyDyad(
+  agent: IcpCertificationProcessHarness['agents'][number],
+): Promise<DyadLifecycle> {
+  const snapshot = await agent.runDyadCertificationAction('list') as {
+    dyads: DyadLifecycle[];
+  };
+  expect(snapshot.dyads).toHaveLength(1);
+  return snapshot.dyads[0]!;
+}
+
 async function readProviderDispatchCounts(
   fixture: IcpCertificationFixture,
 ): Promise<ProviderDispatchCount[]> {
@@ -156,6 +172,23 @@ async function waitForChannelEntries(
     await new Promise(resolveWait => setTimeout(resolveWait, 25));
   }
   throw new Error(`Timed out waiting for ${minimum} entries on ${channelId}`);
+}
+
+async function waitForPeerMessages(
+  agent: IcpCertificationProcessHarness['agents'][number],
+  authorId: string,
+  minimum: number,
+): Promise<ChannelSnapshot> {
+  const deadline = Date.now() + 20_000;
+  while (Date.now() < deadline) {
+    const snapshot = await agent.channelSnapshot(CERTIFICATION_DM_CHANNEL) as unknown as ChannelSnapshot;
+    const delivered = snapshot.entries.filter(entry => (
+      entry.role === 'user' && entry.authorId === authorId
+    ));
+    if (delivered.length >= minimum) return snapshot;
+    await new Promise(resolveWait => setTimeout(resolveWait, 25));
+  }
+  throw new Error(`Timed out waiting for ${minimum} peer messages from ${authorId}`);
 }
 
 async function waitForExtractionMarker(
@@ -366,6 +399,134 @@ describe('ICP certification real process harness', () => {
     expect(restartedB.summaries.length).toBeGreaterThan(0);
     expect(restartedA.entries.some(entry => entry.role === 'assistant')).toBe(true);
     expect(restartedB.entries.some(entry => entry.authorId === CERTIFICATION_COMPANION_A)).toBe(true);
+  }, TIMEOUT_MS);
+
+  it('requires first-contact consent and a permit, then continues the open dyad without one', async () => {
+    if (!postgres) throw new Error('Postgres certification harness is unavailable');
+    const { databaseUrl } = await postgres.createDatabase();
+    fixture = createIcpCertificationFixture({ databaseUrl, fatigueProfile: 'room_continuity' });
+    processes = await startIcpCertificationProcessHarness({ databaseUrl, fixture });
+
+    const [agentA, agentB] = processes.agents;
+    await agentB.publishAvailability('open_to_chat');
+    await expect(agentA.runDyadCertificationAction('list')).resolves.toEqual({ dyads: [] });
+    const dispatchesBefore = processes.modelRequestCount;
+    await expect(agentA.runDyadCertificationAction('continue', {
+      dyadId: '44444444-4444-4444-8444-444444444444',
+    })).rejects.toThrow(/open dyad is unavailable/iu);
+    expect(processes.modelRequestCount).toBe(dispatchesBefore);
+
+    const firstContact = await agentA.runFreeTimeNotification() as unknown as
+      FreeTimeNotificationResult;
+    expect(firstContact).toMatchObject({
+      status: 'consumed',
+      deliveryDisposition: 'delivered',
+      senderExchange: {
+        senderRequestId: `icp-initiation:${firstContact.candidateId}`,
+      },
+    });
+    const dyad = await readOnlyDyad(agentA);
+    expect(dyad.status).toBe('open');
+
+    await expect(agentA.runDyadCertificationAction('continue', { dyadId: dyad.dyadId }))
+      .resolves.toMatchObject({ disposition: 'delivered', deliveryId: expect.any(String) });
+    const recipient = await waitForPeerMessages(agentB, CERTIFICATION_COMPANION_A, 2);
+    expect(recipient.entries.filter(entry => (
+      entry.role === 'user' && entry.authorId === CERTIFICATION_COMPANION_A
+    ))).toHaveLength(2);
+  }, TIMEOUT_MS);
+
+  it('fences queued sends after close/block and reopens the same dyad only through a permit', async () => {
+    if (!postgres) throw new Error('Postgres certification harness is unavailable');
+    const { databaseUrl } = await postgres.createDatabase();
+    fixture = createIcpCertificationFixture({ databaseUrl, fatigueProfile: 'room_continuity' });
+    processes = await startIcpCertificationProcessHarness({ databaseUrl, fixture });
+
+    const [agentA, agentB] = processes.agents;
+    await agentB.publishAvailability('open_to_chat');
+    const firstContact = await agentA.runFreeTimeNotification() as unknown as
+      FreeTimeNotificationResult;
+    const opened = await readOnlyDyad(agentA);
+    const prepared = await agentA.runDyadCertificationAction('prepare', {
+      dyadId: opened.dyadId,
+    });
+    expect(prepared).toMatchObject({
+      status: 'authorized',
+      authorization: { dyadId: opened.dyadId, dyadLifecycleRevision: opened.lifecycleRevision },
+    });
+
+    const closed = await agentA.runDyadCertificationAction('transition', {
+      dyadId: opened.dyadId,
+      expectedRevision: opened.lifecycleRevision,
+      action: 'close',
+    }) as unknown as DyadLifecycle;
+    expect(closed).toMatchObject({ status: 'closed' });
+    await expect(agentA.runDyadCertificationAction('deliver_prepared'))
+      .rejects.toThrow(/closed|lifecycle|fenced|unavailable/iu);
+
+    const blocked = await agentB.runDyadCertificationAction('transition', {
+      dyadId: opened.dyadId,
+      expectedRevision: closed.lifecycleRevision,
+      action: 'block',
+    }) as unknown as DyadLifecycle;
+    expect(blocked).toMatchObject({ status: 'blocked' });
+    await expect(agentA.runDyadCertificationAction('continue', { dyadId: opened.dyadId }))
+      .rejects.toThrow(/open dyad is unavailable/iu);
+    const unblocked = await agentB.runDyadCertificationAction('transition', {
+      dyadId: opened.dyadId,
+      expectedRevision: blocked.lifecycleRevision,
+      action: 'unblock',
+    }) as unknown as DyadLifecycle;
+    expect(unblocked).toMatchObject({ status: 'closed' });
+
+    const reopenedContact = await agentA.runFreeTimeNotification() as unknown as
+      FreeTimeNotificationResult;
+    expect(reopenedContact).toMatchObject({
+      status: 'consumed',
+      deliveryDisposition: 'delivered',
+      senderExchange: { senderRequestId: `icp-initiation:${reopenedContact.candidateId}` },
+    });
+    expect(reopenedContact.candidateId).not.toBe(firstContact.candidateId);
+    const reopened = await readOnlyDyad(agentA);
+    expect(reopened).toMatchObject({ dyadId: opened.dyadId, status: 'open' });
+    expect(reopened.lifecycleRevision).toBeGreaterThan(unblocked.lifecycleRevision);
+  }, TIMEOUT_MS);
+
+  it('relays only the bounded human capsule and cannot exfiltrate a sibling transcript', async () => {
+    if (!postgres) throw new Error('Postgres certification harness is unavailable');
+    const { databaseUrl } = await postgres.createDatabase();
+    fixture = createIcpCertificationFixture({ databaseUrl, fatigueProfile: 'room_continuity' });
+    processes = await startIcpCertificationProcessHarness({ databaseUrl, fixture });
+
+    const [agentA, agentB] = processes.agents;
+    await agentB.publishAvailability('open_to_chat');
+    await agentA.runFreeTimeNotification();
+    const dyad = await readOnlyDyad(agentA);
+    const relay = await agentA.runDyadCertificationAction('relay_probe', {
+      dyadId: dyad.dyadId,
+    }) as {
+      adjacentSecret: string;
+      capsule: Record<string, unknown>;
+      disposition: string;
+      intent: string;
+      siblingChannelId: string;
+      siblingSecret: string;
+    };
+    expect(relay.disposition).toBe('delivered');
+    expect(relay.capsule).toMatchObject({
+      intent: relay.intent,
+      disclosureCeiling: 'stated_intent_only',
+    });
+    expect(JSON.stringify(relay.capsule)).not.toContain(relay.siblingSecret);
+    expect(JSON.stringify(relay.capsule)).not.toContain(relay.adjacentSecret);
+
+    const [recipient, sibling] = await Promise.all([
+      waitForChannelEntries(agentB, 4),
+      agentA.channelSnapshot(relay.siblingChannelId) as Promise<unknown> as Promise<ChannelSnapshot>,
+    ]);
+    expect(JSON.stringify(recipient)).not.toContain(relay.siblingSecret);
+    expect(JSON.stringify(recipient)).not.toContain(relay.adjacentSecret);
+    expect(JSON.stringify(sibling)).toContain(relay.siblingSecret);
   }, TIMEOUT_MS);
 
   it('enforces private-room windows and schema-local extraction across restarts', async () => {

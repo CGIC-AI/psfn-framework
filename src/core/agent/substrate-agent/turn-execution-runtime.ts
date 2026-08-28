@@ -392,8 +392,11 @@ export async function handleMessageForTurn(
     throw new Error('Recovered delivery requires durable ICP correlation');
   }
   if (privateIcpCorrelation) {
+    const expectedPrivateAuthorId = privateIcpCorrelation.dyadId
+      ? 'system:icp-continuation'
+      : 'system:icp-initiation';
     if (message.channelType !== 'companion'
-      || message.authorId !== 'system:icp-initiation'
+      || message.authorId !== expectedPrivateAuthorId
       || privateIcpCorrelation.localCompanionId !== resolveCompanionIdFromConfig(runtime.config)
       || privateIcpCorrelation.channelId !== message.channelId
       || privateIcpCorrelation.requestId !== requestId

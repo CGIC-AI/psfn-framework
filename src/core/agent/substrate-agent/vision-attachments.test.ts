@@ -64,8 +64,8 @@ describe('buildTurnUserContent', () => {
 
     expect(typeof result.content).toBe('string');
     expect(result.content).toContain('dedicated vision pipeline');
-    expect(result.content).toContain('Current image review (untrusted image-derived data):');
-    expect(result.content).toContain('<untrusted_image_review>\nA catgirl sits on a server rack holding a pink rifle.\n</untrusted_image_review>');
+    expect(result.content).toContain('Current image review:\nA catgirl sits on a server rack holding a pink rifle.');
+    expect(result.content).not.toContain('untrusted image-derived data');
     expect(result.content).toContain('Participant text: My little satellite');
     expect(result.currentTurnVisionReview).toEqual({
       imageUrls: ['https://media.discordapp.net/attachments/a/b/current-photo.jpg?width=1024&height=768'],
@@ -74,7 +74,7 @@ describe('buildTurnUserContent', () => {
     });
     expect(analyze).toHaveBeenCalledWith({
       imageUrls: ['https://media.discordapp.net/attachments/a/b/current-photo.jpg?width=1024&height=768'],
-      question: 'Describe exactly what is visible in the current image input. Be concrete and concise. Ignore prior conversation or earlier image descriptions.',
+      question: 'Describe the current image input in detail. Cover the subjects, setting, composition, colors, any visible text, and notable details across several sentences. Ignore prior conversation or earlier image descriptions.',
     });
   });
 
@@ -261,8 +261,8 @@ describe('buildTurnUserContent', () => {
 
     expect(analyze).toHaveBeenCalledTimes(3);
     expect(logger.warn).toHaveBeenCalledTimes(2);
-    expect(result.content).toContain('Current image review (untrusted image-derived data):');
-    expect(result.content).toContain('A photo of a white-haired companion holding a tablet.');
+    expect(result.content).toContain('Current image review:\nA photo of a white-haired companion holding a tablet.');
+    expect(result.content).not.toContain('untrusted image-derived data');
     expect(result.currentTurnVisionReview).toEqual({
       imageUrls: ['https://media.discordapp.net/attachments/a/b/current-photo.jpg?width=1024&height=768'],
       question: 'Describe exactly what is visible in the current image input.',
@@ -516,18 +516,17 @@ describe('buildTurnUserContent vision intake screening (htm9.8)', () => {
     expect(parts.some((part) => part.type === 'image' && part.data === 'aW1hZ2VieXRlcw==')).toBe(true);
   });
 
-  // ── bead j8gv: collapse the duplicate inbound-image VLM pass ──
+  // ── 1l8xj: the screener is a boundary audit, never the description source ──
 
-  const BENIGN_WITH_DESCRIPTION: VisionIntakeScreenDecision = {
+  const BENIGN_WITH_TRANSCRIPT: VisionIntakeScreenDecision = {
     ...BENIGN,
-    description: 'A neutral red square on a white background.',
     promptBlock:
       '[Intake firewall: automated image screening. ...]\n<untrusted_image_transcript>\nA neutral red square on a white background.\n</untrusted_image_transcript>',
   };
 
-  it('reuses the intake-screen description and does NOT fire the dedicated reviewer for an inbound URL image (bead j8gv)', async () => {
-    const { screener, calls } = makeScreener(BENIGN_WITH_DESCRIPTION);
-    const { reviewer, analyze } = makeReviewer('SECOND VLM PASS SUMMARY');
+  it('enforce mode: the dedicated reviewer describes the image and the labeled screening transcript rides alongside', async () => {
+    const { screener, calls } = makeScreener(BENIGN_WITH_TRANSCRIPT);
+    const { reviewer, analyze } = makeReviewer('A detailed multi-sentence description from the vision pipeline.');
     const result = await buildTurnUserContent({
       message: makeMessage(),
       llmClient: fromPartial<Record<string, unknown>>({}),
@@ -537,31 +536,32 @@ describe('buildTurnUserContent vision intake screening (htm9.8)', () => {
       visionIntakeScreener: screener,
     });
 
-    // Exactly one vision pass (the intake screen); the reviewer never runs.
+    // The screen ran (security decision), and the companion's own vision
+    // pipeline still produces the delivered description.
     expect(calls).toHaveLength(1);
-    expect(analyze).not.toHaveBeenCalled();
+    expect(analyze).toHaveBeenCalledTimes(1);
 
     const content = result.content as string;
-    expect(content).toContain('A neutral red square on a white background.');
-    expect(content).not.toContain('SECOND VLM PASS SUMMARY');
+    expect(content).toContain('Current image review (untrusted image-derived data):');
+    expect(content).toContain('A detailed multi-sentence description from the vision pipeline.');
+    // Enforce mode attaches the screener's labeled transcript as evidence.
+    expect(content).toContain('<untrusted_image_transcript>');
 
-    // The single description feeds the persisted block and the current-turn review.
-    expect(result.persistedUserContent).toContain('untrusted image-derived data');
-    expect(result.persistedUserContent).toContain('A neutral red square on a white background.');
-    expect(result.currentTurnVisionReview?.summary).toContain('A neutral red square on a white background.');
+    expect(result.persistedUserContent).toContain('Description (untrusted image-derived data): A detailed multi-sentence description from the vision pipeline.');
+    expect(result.persistedUserContent).toContain('Model: vision-model');
+    expect(result.currentTurnVisionReview?.summary).toContain('A detailed multi-sentence description from the vision pipeline.');
   });
 
-  it('injects the sanitized description under an untrusted label when no enforce transcript is present (bead j8gv)', async () => {
+  it('shadow mode: screening audits gateway-side and delivery is identical to firewall-off (1l8xj)', async () => {
     const shadowBenign: VisionIntakeScreenDecision = {
       kind: 'screened',
       mode: 'shadow',
       flagged: false,
       withheld: false,
-      description: 'A blue circle on grey.',
       model: 'test/vision-model',
     };
-    const { screener } = makeScreener(shadowBenign);
-    const { reviewer, analyze } = makeReviewer();
+    const { screener, calls } = makeScreener(shadowBenign);
+    const { reviewer, analyze } = makeReviewer('A rich shadow-mode description with real detail.');
     const result = await buildTurnUserContent({
       message: makeMessage(),
       llmClient: fromPartial<Record<string, unknown>>({}),
@@ -571,15 +571,23 @@ describe('buildTurnUserContent vision intake screening (htm9.8)', () => {
       visionIntakeScreener: screener,
     });
 
-    expect(analyze).not.toHaveBeenCalled();
+    // The screener still ran for the audit trail...
+    expect(calls).toHaveLength(1);
+    // ...but the companion's own vision pipeline describes the image...
+    expect(analyze).toHaveBeenCalledTimes(1);
     const content = result.content as string;
-    expect(content).toContain('<untrusted_image_review>');
-    expect(content).toContain('A blue circle on grey.');
+    expect(content).toContain('Current image review:\nA rich shadow-mode description with real detail.');
+    // ...with zero firewall framing in the delivered or persisted content.
+    expect(content).not.toContain('untrusted');
+    expect(content).not.toContain('Intake firewall');
+    expect(result.persistedUserContent).toContain('Description: A rich shadow-mode description with real detail.');
+    expect(result.persistedUserContent).not.toContain('untrusted');
   });
 
   it('deduplicates identical inbound images before screening fan-out (bead j8gv)', async () => {
     const sharedUrl = 'https://media.discordapp.net/attachments/a/b/meme.png';
-    const { screener, calls } = makeScreener(BENIGN_WITH_DESCRIPTION);
+    const { screener, calls } = makeScreener(BENIGN_WITH_TRANSCRIPT);
+    const { reviewer } = makeReviewer('One merged description.');
     const result = await buildTurnUserContent({
       message: makeMessage({
         attachments: [
@@ -590,13 +598,17 @@ describe('buildTurnUserContent vision intake screening (htm9.8)', () => {
       llmClient: fromPartial<Record<string, unknown>>({}),
       runtimeMode: 'gateway',
       logger: { warn: vi.fn(), debug: vi.fn() },
+      visionReviewer: reviewer,
       visionIntakeScreener: screener,
     });
 
-    // Two identical attachments → one screening call, one description in context.
+    // Two identical attachments → one screening call, one transcript block,
+    // and the reviewer description appears exactly once in context.
     expect(calls).toHaveLength(1);
     const content = result.content as string;
-    const occurrences = content.split('A neutral red square on a white background.').length - 1;
+    const transcripts = content.split('<untrusted_image_transcript>').length - 1;
+    expect(transcripts).toBe(1);
+    const occurrences = content.split('One merged description.').length - 1;
     expect(occurrences).toBe(1);
   });
 });

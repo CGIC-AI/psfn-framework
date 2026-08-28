@@ -7169,19 +7169,19 @@ describe('handleMessageForTurn pre-response concurrency', () => {
 
     expect(analyze).toHaveBeenCalledWith({
       imageUrls: ['https://cdn.discordapp.com/attachments/1/2/current-image.png?ex=fresh'],
-      question: 'Describe exactly what is visible in the current image input. Be concrete and concise. Ignore prior conversation or earlier image descriptions.',
+      question: 'Describe the current image input in detail. Cover the subjects, setting, composition, colors, any visible text, and notable details across several sentences. Ignore prior conversation or earlier image descriptions.',
     });
     expect((runtime.agent.prompt as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]?.content).toContain(
-      'Current image review (untrusted image-derived data):',
+      'Current image review:\nA catgirl sits on a server rack holding a pink rifle.',
     );
-    expect((runtime.agent.prompt as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]?.content).toContain(
-      'A catgirl sits on a server rack holding a pink rifle.',
+    expect((runtime.agent.prompt as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]?.content).not.toContain(
+      'untrusted image-derived data',
     );
     expect(recordUserMessage).toHaveBeenCalledTimes(1);
     const persistedUserContent = recordUserMessage.mock.calls[0]?.[6] as string;
     expect(persistedUserContent).toContain('do you see it?');
     expect(persistedUserContent).toContain('---\nImage attachment:');
-    expect(persistedUserContent).toContain('Description (untrusted image-derived data): A catgirl sits on a server rack holding a pink rifle.');
+    expect(persistedUserContent).toContain('Description: A catgirl sits on a server rack holding a pink rifle.');
     expect(persistedUserContent).toContain('Model: vision-model');
     expect(persistedUserContent).toContain('Image count: 1');
     const buildTurnRecordMock = runtime.buildTurnRecord as unknown as ReturnType<typeof vi.fn>;

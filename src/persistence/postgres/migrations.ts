@@ -13,6 +13,9 @@ import {
   AUTOMATA_EXACT_SESSION_PURGE_POSTGRES_ROLLBACK_STATEMENTS,
   AUTOMATA_EXACT_SESSION_PURGE_POSTGRES_SCHEMA_STATEMENTS,
 } from './automata-exact-session-purge-store.js';
+import { CHANNEL_TYPES } from '../../shared/contracts/channel-types.js';
+
+const POSTGRES_CHANNEL_TYPE_VALUES = CHANNEL_TYPES.map(channelType => `'${channelType}'`).join(', ');
 
 export const POSTGRES_MEMORY_MIGRATIONS = [
   // Tenant search paths exclude public. Deployment provisioning creates the
@@ -1152,20 +1155,14 @@ export const POSTGRES_INTENTION_MIGRATIONS = [
     CHECK (timing IN ('immediate', 'soon', 'scheduled')),
     CHECK ((dampened_at IS NULL) = (dampening_reason IS NULL)),
     CHECK (activated_at IS NULL OR dampened_at IS NULL),
-    CHECK (channel_type IN (
-      'discord', 'terminal', 'api', 'telegram', 'multica', 'buzz',
-      'psfn-amica', 'companion', 'companion-ui'
-    ))
+    CHECK (channel_type IN (${POSTGRES_CHANNEL_TYPE_VALUES}))
   );
   `,
   `ALTER TABLE intention_pending_follow_ups
     DROP CONSTRAINT IF EXISTS intention_pending_follow_ups_channel_type_check;`,
   `ALTER TABLE intention_pending_follow_ups
     ADD CONSTRAINT intention_pending_follow_ups_channel_type_check
-    CHECK (channel_type IN (
-      'discord', 'terminal', 'api', 'telegram', 'multica', 'buzz',
-      'psfn-amica', 'companion', 'companion-ui'
-    ));`,
+    CHECK (channel_type IN (${POSTGRES_CHANNEL_TYPE_VALUES}));`,
   `ALTER TABLE intention_pending_follow_ups ADD COLUMN IF NOT EXISTS context_summary TEXT;`,
   `ALTER TABLE intention_pending_follow_ups ADD COLUMN IF NOT EXISTS wake_conditions TEXT;`,
   `ALTER TABLE intention_pending_follow_ups ADD COLUMN IF NOT EXISTS origin_icp_root_initiation_id UUID;`,
@@ -1608,10 +1605,7 @@ export const POSTGRES_SCHEDULED_PROMPT_MIGRATIONS = [
     delivery_channel_id TEXT,
     completed_at TEXT,
     CHECK (source IN ('schedule_tool', 'intention_appraisal')),
-    CHECK (channel_type IN (
-      'discord', 'terminal', 'api', 'telegram', 'multica', 'buzz',
-      'psfn-amica', 'companion', 'companion-ui'
-    )),
+    CHECK (channel_type IN (${POSTGRES_CHANNEL_TYPE_VALUES})),
     CHECK (status IN ('pending', 'completed')),
     CHECK (
       (status = 'pending' AND completed_at IS NULL)
@@ -1623,10 +1617,7 @@ export const POSTGRES_SCHEDULED_PROMPT_MIGRATIONS = [
     DROP CONSTRAINT IF EXISTS scheduler_scheduled_prompts_channel_type_check;`,
   `ALTER TABLE scheduler_scheduled_prompts
     ADD CONSTRAINT scheduler_scheduled_prompts_channel_type_check
-    CHECK (channel_type IN (
-      'discord', 'terminal', 'api', 'telegram', 'multica', 'buzz',
-      'psfn-amica', 'companion', 'companion-ui'
-    ));`,
+    CHECK (channel_type IN (${POSTGRES_CHANNEL_TYPE_VALUES}));`,
   `
   ALTER TABLE scheduler_scheduled_prompts
     DROP CONSTRAINT IF EXISTS scheduler_scheduled_prompts_source_check;

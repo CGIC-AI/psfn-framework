@@ -62,6 +62,7 @@ import { createHumanRelayIntentCapsule } from '../../../core/icp/human-relay-cap
 import type { IcpDyadContinuationAuthorization } from '../../../boundary/gateway/icp-autonomy-contract.js';
 import type { SocialImpulseOutreachRuntime } from '../../../core/emotion/social-impulse-outreach.js';
 import { registerSocialImpulseOutreachLane } from '../../agent/startup/social-impulse-outreach-lane.js';
+import { createDefaultEmoSimProactivitySettings } from '../../../system/config/runtime-config-contracts.js';
 type AgentProcessCommand = {
   id: number;
   type: 'background_work_snapshot' | 'garden_projection' | 'ping' | 'shutdown' | 'snapshot';
@@ -731,6 +732,7 @@ async function main(): Promise<void> {
           }
           const firedAtMs = Date.now();
           const correlationId = `felt-impulse:would_message:${firedAtMs}`;
+          const impulseThresholdProfile = createDefaultEmoSimProactivitySettings().thresholdProfile;
           await startup.eventBus.emitRequired('emotion.emosim.proactivity.impulse', {
             schemaVersion: 1,
             impulseVersion: 'emosim-proactivity.impulse.v1',
@@ -746,13 +748,7 @@ async function main(): Promise<void> {
             },
             firstCrossingMs: firedAtMs,
             firedAtMs,
-            thresholdProfile: {
-              profileId: 'would-message-v1',
-              socialNeedThreshold: 0.7,
-              attachmentIntensityThreshold: 0.5,
-              sustainMs: 1_800_000,
-              cooldownMs: 21_600_000,
-            },
+            thresholdProfile: impulseThresholdProfile,
             dedupeKey: correlationId,
             correlationId,
             confidence: 0.82,

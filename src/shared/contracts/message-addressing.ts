@@ -41,13 +41,13 @@ type MessageResolvedAddressee =
 
 /**
  * Transport-authoritative addressing captured before CogSec body
- * normalization. The schema deliberately carries the Discord payload fields
+ * normalization. The schema deliberately carries the channel payload fields
  * memory attribution needs; sanitized prose is never asked to reconstruct
  * author, channel, reply, mention, or addressee identity.
  */
 export interface MessageAddressingMetadata {
   schemaVersion: typeof MESSAGE_ADDRESSING_SCHEMA_VERSION;
-  source: 'discord';
+  source: 'discord' | 'buzz';
   author: MessageAddressingParticipant;
   observer: MessageAddressingParticipant;
   mentionedTargets: readonly MessageAddressingParticipant[];
@@ -234,8 +234,8 @@ export function parseMessageAddressingMetadata(value: unknown): MessageAddressin
   if (!isRecord(value) || value.schemaVersion !== MESSAGE_ADDRESSING_SCHEMA_VERSION) {
     throw new Error(`Message addressing must be a schemaVersion ${MESSAGE_ADDRESSING_SCHEMA_VERSION} object`);
   }
-  if (value.source !== 'discord') {
-    throw new Error('Message addressing source must be "discord"');
+  if (value.source !== 'discord' && value.source !== 'buzz') {
+    throw new Error('Message addressing source must be "discord" or "buzz"');
   }
   const author = parseParticipant(value.author, 'author');
   const observer = parseParticipant(value.observer, 'observer');
@@ -251,7 +251,7 @@ export function parseMessageAddressingMetadata(value: unknown): MessageAddressin
   );
   return {
     schemaVersion: MESSAGE_ADDRESSING_SCHEMA_VERSION,
-    source: 'discord',
+    source: value.source,
     author,
     observer,
     mentionedTargets,

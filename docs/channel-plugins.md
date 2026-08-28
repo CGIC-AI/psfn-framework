@@ -4,6 +4,9 @@ Installable gateway channels register through `ChannelPluginHost`. Discord,
 Telegram, the API surface, and Satellite Hub stay first-class; a new *text*
 channel should not add branches to gateway composition or lifecycle.
 
+Current built-in plugins are [Multica](multica-channel.md) and
+[Buzz](buzz-channel.md).
+
 Live owner files, environment values, and secrets stay outside this repository.
 `channels.json` may only hold credential *references*.
 

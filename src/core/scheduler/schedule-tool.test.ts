@@ -141,7 +141,7 @@ describe('schedule tool', () => {
 
     expect(schema.properties.channel_type).toEqual(expect.objectContaining({
       type: 'string',
-      enum: ['discord', 'terminal', 'api', 'telegram', 'psfn-amica'],
+      enum: ['discord', 'terminal', 'api', 'telegram', 'buzz', 'psfn-amica'],
     }));
     expect(schema.properties.channel_type).not.toHaveProperty('anyOf');
   });

@@ -34,6 +34,12 @@ import { createComponentLogger } from '../../shared/logger.js';
 import { getMcpTurnDisclosureContext } from '../../core/cogsec/disclosure/mcp-turn-context.js';
 import type { QueueOverflowPolicy } from './backpressure.js';
 import { GatewayClientTransportRuntime } from './client/transport-runtime.js';
+import {
+  companionListOpenDyads,
+  companionPrepareDyadContinuation,
+  companionRecordDyadContinuationOutcome,
+  companionSendContinuation,
+} from './client/icp-dyad-continuation.js';
 import { GatewayClientSessionIntegrityRuntime } from './client/session-integrity-runtime.js';
 import {
   GatewayClientReverseRpcRuntime,
@@ -1036,33 +1042,8 @@ export class GatewayClient implements
     }) as CompanionMessageSendResult & { permitOutcome: 'consumed' | 'replayed' };
   }
 
-  async companionSendContinuation(input: {
-    authorization: import('./icp-autonomy-contract.js').IcpDyadContinuationAuthorization;
-    peerContactId: string;
-    content: string;
-    authorName?: string;
-    correlation: IcpConversationCorrelation;
-  }): Promise<{ messageId: string; deliveredTo: string[]; duplicate: boolean }> {
-    const messageId = deriveIcpTransportMessageId(input.correlation);
-    const result = await this.transportRuntime.request('companion.message.send', {
-      channelId: input.authorization.channelId,
-      content: input.content,
-      ...(input.authorName ? { authorName: input.authorName } : {}),
-      continuation: {
-        dyadId: input.authorization.dyadId,
-        deliveryId: input.authorization.deliveryId,
-        recipientCompanionId: input.authorization.peerCompanionId,
-        peerContactId: input.peerContactId,
-        correlation: input.correlation,
-      },
-      messageId,
-      ...(this.companionId ? { companionId: this.companionId } : {}),
-    }) as CompanionMessageSendResult;
-    return {
-      messageId: result.messageId,
-      deliveredTo: result.deliveredTo,
-      duplicate: false,
-    };
+  companionSendContinuation(input: Parameters<typeof companionSendContinuation>[2]) {
+    return companionSendContinuation(this.transportRuntime, this.companionId, input);
   }
 
   /** Report a failed inbound companion turn without creating a reply turn. */
@@ -1131,28 +1112,18 @@ export class GatewayClient implements
       IcpOwnAvailabilityResult;
   }
 
-  async companionListOpenDyads(): Promise<import('./icp-autonomy-contract.js').IcpOpenDyadProjection[]> {
-    return await this.transportRuntime.request('companion.dyad.list_open', {
-      ...(this.companionId ? { companionId: this.companionId } : {}),
-    }) as import('./icp-autonomy-contract.js').IcpOpenDyadProjection[];
+  companionListOpenDyads() {
+    return companionListOpenDyads(this.transportRuntime, this.companionId);
   }
 
-  async companionPrepareDyadContinuation(
-    params: Omit<import('./protocol.js').GatewayMethods['companion.dyad.prepare_continuation'][0], 'companionId'>,
-  ): Promise<import('./icp-autonomy-contract.js').IcpDyadContinuationPrepareResult> {
-    return await this.transportRuntime.request('companion.dyad.prepare_continuation', {
-      ...params,
-      ...(this.companionId ? { companionId: this.companionId } : {}),
-    }) as import('./icp-autonomy-contract.js').IcpDyadContinuationPrepareResult;
+  companionPrepareDyadContinuation(params: Parameters<typeof companionPrepareDyadContinuation>[2]) {
+    return companionPrepareDyadContinuation(this.transportRuntime, this.companionId, params);
   }
 
-  async companionRecordDyadContinuationOutcome(
-    params: Omit<import('./protocol.js').GatewayMethods['companion.dyad.record_outcome'][0], 'companionId'>,
-  ): Promise<import('../../shared/contracts/icp-autonomy.js').IcpDyadDelivery> {
-    return await this.transportRuntime.request('companion.dyad.record_outcome', {
-      ...params,
-      ...(this.companionId ? { companionId: this.companionId } : {}),
-    }) as import('../../shared/contracts/icp-autonomy.js').IcpDyadDelivery;
+  companionRecordDyadContinuationOutcome(
+    params: Parameters<typeof companionRecordDyadContinuationOutcome>[2],
+  ) {
+    return companionRecordDyadContinuationOutcome(this.transportRuntime, this.companionId, params);
   }
 
   async companionInitiationPreflight(

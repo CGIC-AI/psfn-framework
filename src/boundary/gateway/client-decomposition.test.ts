@@ -24,5 +24,6 @@ describe('GatewayClient protocol-capability decomposition', () => {
     expect(source).toContain("from './client/transport-runtime.js'");
     expect(source).toContain("from './client/reverse-rpc-runtime.js'");
     expect(source).toContain("from './client/session-integrity-runtime.js'");
+    expect(source).toContain("from './client/icp-dyad-continuation.js'");
   });
 });

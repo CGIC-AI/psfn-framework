@@ -76,13 +76,13 @@ describe('full callable catalog schema token cost', () => {
       extendedTools: 7,
       totalTools: 31,
       includesLibrary: false,
-      beforeTokens: 18_798,
-      afterTokens: 22_767,
-      deltaTokens: 3_969,
-      beforeBytes: 88_537,
-      afterBytes: 106_307,
-      providerSchemaHash: 'c5d27e4b9d51c0a0f7ef6967407bafa0783c7ccee7fc11ba0c606f182a475e81',
-      parameterSchemaHash: '3c5dfc5e46d32148c50b86c8e840bf13e2f75fe5461ee593731d00a434913047',
+      beforeTokens: 18_899,
+      afterTokens: 22_914,
+      deltaTokens: 4_015,
+      beforeBytes: 89_009,
+      afterBytes: 106_986,
+      providerSchemaHash: 'ede098472f081d84dfb64d372cf5f62a0eee3c891228a53a8e60dd4b0ae0b086',
+      parameterSchemaHash: '7b841ba42135124f69535afc90d7ef0f1c3872cf4c9e3ead701006819f55b32a',
     });
 
     // The additional description tokens affect an uncached request. A stable

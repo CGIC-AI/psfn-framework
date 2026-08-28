@@ -4,15 +4,15 @@ import { MAX_ICP_PERMIT_TTL_MS } from '../../shared/contracts/icp-autonomy.js';
 import { isRecord } from '../../shared/utils/types.js';
 import { requireUuid } from '../../shared/utils/uuid.js';
 
-export const HUMAN_RELAY_CAPSULE_SCHEMA_VERSION = 1 as const;
+const HUMAN_RELAY_CAPSULE_SCHEMA_VERSION = 1 as const;
 
-export type HumanRelayBoundary =
+type HumanRelayBoundary =
   | 'source_egress'
   | 'target_intake'
   | 'target_egress'
   | 'source_intake';
 
-export type HumanRelayDisclosureCeiling =
+type HumanRelayDisclosureCeiling =
   | 'stated_intent_only'
   | 'target_authorized_content_only';
 

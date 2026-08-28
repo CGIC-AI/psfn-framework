@@ -176,6 +176,68 @@ describe('group-chat regression harness', () => {
       expect(variables.runtime_recent_active_participants_xml).not.toContain(DANA.authorId);
     });
 
+    it('distinguishes private relationship recency from room inactivity without exposing DM content', () => {
+      const carolDirectAt = Date.parse('2026-07-01T11:45:00.000Z');
+      const aliceDirectAt = Date.parse('2026-07-01T11:30:00.000Z');
+      const { prompt } = renderTurnRuntimePrompt(
+        makeGroupTurnMessage(CAROL),
+        CAROL,
+        'api',
+        {
+          recentChannelEntries: makeGroupRoomRecentEntries(),
+          currentUserRuntimeProfile: {
+            user_id: CAROL.authorId,
+            display_name: CAROL.name,
+            lastDirectInteractionAtMs: carolDirectAt,
+          },
+          recentActiveParticipantRuntimeProfiles: [
+            {
+              user_id: CAROL.authorId,
+              display_name: CAROL.name,
+              lastDirectInteractionAtMs: carolDirectAt,
+            },
+            {
+              user_id: ALICE.authorId,
+              display_name: ALICE.name,
+              lastDirectInteractionAtMs: aliceDirectAt,
+            },
+          ],
+        },
+      );
+
+      expect(prompt).toContain(
+        'current_message_author name="Carol" id="user-carol" trust="trusted" relationship="friend" '
+        + 'last_direct_interaction_at="2026-07-01T07:45:00.000-04:00" '
+        + 'last_direct_interaction_ago="15 minutes ago" '
+        + 'last_direct_interaction_context="another_chat"',
+      );
+      expect(prompt).toContain(
+        'participant name="Alice" id="user-alice" '
+        + 'last_direct_interaction_at="2026-07-01T07:30:00.000-04:00" '
+        + 'last_direct_interaction_ago="30 minutes ago" '
+        + 'last_direct_interaction_context="another_chat"',
+      );
+      expect(prompt).not.toContain('Quietly: can we revisit my raise conversation?');
+      expect(prompt).not.toContain('Of course, this stays between us.');
+    });
+
+    it('does not project cross-chat relationship recency into a DM turn', () => {
+      const { prompt } = renderTurnRuntimePrompt(
+        makeDmTurnMessage(ALICE),
+        ALICE,
+        'api',
+        {
+          currentUserRuntimeProfile: {
+            user_id: ALICE.authorId,
+            display_name: ALICE.name,
+            lastDirectInteractionAtMs: Date.parse('2026-07-01T11:30:00.000Z'),
+          },
+        },
+      );
+
+      expect(prompt).not.toContain('last_direct_interaction_');
+    });
+
     it('renders direct_message conversation_state without a participant roster on DM turns (correct)', () => {
       const { variables } = renderTurnRuntimePrompt(makeDmTurnMessage(ALICE), ALICE, 'api');
       expect(variables.runtime_chat_type).toBe('direct_message');

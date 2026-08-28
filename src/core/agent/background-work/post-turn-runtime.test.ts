@@ -310,6 +310,7 @@ function makeDependencies(input: {
       hasPendingAutoCompaction: () => false,
       getActiveFocusMemoryScopeQuery: () => null,
       getRecentConversationSpeakers: () => [],
+      getPrivateRelationshipActivity: () => null,
       resolveConversationScope: () => {
         throw new Error('Unexpected resolveConversationScope call');
       },

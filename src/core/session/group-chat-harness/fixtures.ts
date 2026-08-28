@@ -24,6 +24,7 @@ import {
   resolveAuthorContext,
   type ParticipantRelationshipEdgeInput,
   type ResolvedAuthorContext,
+  type UserRuntimeProfile,
 } from '../../agent/substrate-agent/runtime-context.js';
 import { renderFinalPromptSection } from '../../identity/prompt-runtime.js';
 import { getDefaultRuntimePromptSections } from '../../identity/runtime-prompt-layers.js';
@@ -453,6 +454,8 @@ export function renderTurnRuntimePrompt(
   channelType: string,
   options: {
     recentChannelEntries?: readonly SessionEntry[];
+    currentUserRuntimeProfile?: UserRuntimeProfile;
+    recentActiveParticipantRuntimeProfiles?: readonly UserRuntimeProfile[];
     /** Internal task kind for heartbeat/reflection turns (mirrors resolveTaskKind). */
     taskKind?: string;
     /** Pre-fetched participant-relationship edges (E4.4 orchestrator output). */
@@ -490,6 +493,12 @@ export function renderTurnRuntimePrompt(
     templateVariables,
     ...(options.taskKind ? { taskKind: options.taskKind } : {}),
     ...(options.recentChannelEntries ? { recentChannelEntries: options.recentChannelEntries } : {}),
+    ...(options.currentUserRuntimeProfile
+      ? { currentUserRuntimeProfile: options.currentUserRuntimeProfile }
+      : {}),
+    ...(options.recentActiveParticipantRuntimeProfiles
+      ? { recentActiveParticipantRuntimeProfiles: options.recentActiveParticipantRuntimeProfiles }
+      : {}),
     ...(options.participantRelationshipEdges
       ? { participantRelationshipEdges: options.participantRelationshipEdges }
       : {}),

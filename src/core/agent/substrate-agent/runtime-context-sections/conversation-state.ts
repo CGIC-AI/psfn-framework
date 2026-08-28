@@ -16,9 +16,11 @@ import {
   trimNonEmptyString,
 } from './section-format.js';
 import {
+  formatRelativeElapsed,
   formatPromptRuntimeTimeForTimezone,
   normalizeRuntimeTimezone,
 } from './datetime.js';
+import { formatActiveDateTimeIso } from '../../../../shared/time/active-timezone.js';
 
 const RECENT_ACTIVE_PARTICIPANT_LIMIT = 5;
 const PARTICIPANT_RELATIONSHIP_LIMIT = 5;
@@ -34,6 +36,8 @@ export interface UserRuntimeProfile {
   display_name: string;
   timezone?: string;
   local_time?: string;
+  /** Content-free timestamp of the latest private conversation with this person. */
+  lastDirectInteractionAtMs?: number;
 }
 
 /**
@@ -55,6 +59,14 @@ function normalizeUserRuntimeProfile(
 
   const timezone = normalizeRuntimeTimezone(profile?.timezone);
   const displayName = trimNonEmptyString(profile?.display_name) ?? userId;
+  const lastDirectInteractionAtMs = (
+    typeof profile?.lastDirectInteractionAtMs === 'number'
+    && Number.isFinite(profile.lastDirectInteractionAtMs)
+    && profile.lastDirectInteractionAtMs <= now.getTime()
+    && Number.isFinite(new Date(profile.lastDirectInteractionAtMs).getTime())
+  )
+    ? profile.lastDirectInteractionAtMs
+    : undefined;
   return {
     user_id: userId,
     display_name: displayName,
@@ -64,6 +76,21 @@ function normalizeUserRuntimeProfile(
         local_time: formatPromptRuntimeTimeForTimezone(now, timezone),
       }
       : {}),
+    ...(lastDirectInteractionAtMs !== undefined ? { lastDirectInteractionAtMs } : {}),
+  };
+}
+
+function relationshipActivityAttributes(
+  profile: UserRuntimeProfile | undefined,
+  now: Date,
+): Record<string, string> {
+  const timestampMs = profile?.lastDirectInteractionAtMs;
+  if (timestampMs === undefined) return {};
+  const timestamp = new Date(timestampMs);
+  return {
+    last_direct_interaction_at: formatActiveDateTimeIso(timestamp),
+    last_direct_interaction_ago: formatRelativeElapsed(now, timestamp),
+    last_direct_interaction_context: 'another_chat',
   };
 }
 
@@ -84,6 +111,7 @@ function formatRecentActiveParticipantsXml(input: {
   chatType: 'direct_message' | 'group';
   recentChannelEntries: readonly SessionEntry[];
   runtimeProfilesByUserId?: ReadonlyMap<string, UserRuntimeProfile>;
+  now: Date;
 }): string {
   if (input.chatType !== 'group') return '';
 
@@ -111,6 +139,7 @@ function formatRecentActiveParticipantsXml(input: {
       id: authorId,
       timezone: profile?.timezone ?? '',
       local_time: profile?.local_time ?? '',
+      ...relationshipActivityAttributes(profile, input.now),
     }));
     if (participantLines.length >= RECENT_ACTIVE_PARTICIPANT_LIMIT) break;
   }
@@ -241,8 +270,11 @@ export function buildConversationStatePromptVariables(input: {
   const currentAuthorName = trimNonEmptyString(input.message.authorName) ?? 'Unknown';
   const normalizedCurrentProfile = normalizeUserRuntimeProfile(input.currentUserRuntimeProfile, input.now);
   const currentProfile = normalizedCurrentProfile?.user_id === currentAuthorId
-    ? normalizedCurrentProfile
-    : undefined;
+    ? {
+      ...runtimeProfilesByUserId.get(currentAuthorId),
+      ...normalizedCurrentProfile,
+    }
+    : runtimeProfilesByUserId.get(currentAuthorId);
   if (currentProfile) {
     runtimeProfilesByUserId.set(currentProfile.user_id, currentProfile);
   }
@@ -250,6 +282,7 @@ export function buildConversationStatePromptVariables(input: {
     chatType,
     recentChannelEntries: input.recentChannelEntries ?? [],
     runtimeProfilesByUserId,
+    now: input.now,
   });
   const participantCount = recentActiveParticipantsXml
     ? String((recentActiveParticipantsXml.match(/<participant\b/gu) ?? []).length)
@@ -269,6 +302,7 @@ export function buildConversationStatePromptVariables(input: {
     relationship: input.relationshipType ?? '',
     timezone: currentProfile?.timezone ?? '',
     local_time: currentProfile?.local_time ?? '',
+    ...(chatType === 'group' ? relationshipActivityAttributes(currentProfile, input.now) : {}),
   });
 
   return {

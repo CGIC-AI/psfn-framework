@@ -554,6 +554,23 @@ export class SessionManager implements SessionManagerTypeSurface {
       getRecentConversationSpeakers: () => (
         this.scanRecentConversationSpeakers(logicalSessionId)
       ),
+      getPrivateRelationshipActivity: (continuityUserId) => {
+        const normalizedContinuityUserId = continuityUserId.trim();
+        if (!normalizedContinuityUserId) return null;
+        const latestPrivateActivity = this.crossChannelContinuity
+          .getActiveChannels(normalizedContinuityUserId, {
+            excludeChannelId: sourceChannelId,
+            withinMs: 0,
+          })
+          .find(activity => (
+            activity.channelVisibility === 'private'
+            && Number.isSafeInteger(activity.lastTimestamp)
+            && activity.lastTimestamp >= 0
+          ));
+        return latestPrivateActivity
+          ? { lastDirectInteractionAtMs: latestPrivateActivity.lastTimestamp }
+          : null;
+      },
       resolveConversationScope: (input) => (
         this.resolveConversationScopeForResolvedChannel(logicalSessionId, input)
       ),

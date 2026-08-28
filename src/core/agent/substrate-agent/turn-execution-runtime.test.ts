@@ -718,6 +718,7 @@ function createRuntime(params: {
     getRecentConversationSpeakers: () => (
       sessionManager.getRecentConversationSpeakers(owner.logicalSessionId)
     ),
+    getPrivateRelationshipActivity: () => null,
     resolveConversationScope: (input) => sessionManager.resolveConversationScope({
       ...input,
       channelId: owner.logicalSessionId,

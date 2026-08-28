@@ -14,6 +14,11 @@ export interface CapturedSessionOwnerIdentity {
   readonly sourceChannelId: string;
 }
 
+/** Content-free relationship activity safe to project across channel scopes. */
+export interface PrivateRelationshipActivitySummary {
+  readonly lastDirectInteractionAtMs: number;
+}
+
 interface CapturedSessionOwnerContext extends CapturedSessionOwnerIdentity {
   manager: object;
 }
@@ -93,6 +98,9 @@ export interface CapturedSessionReadOperations {
   hasPendingAutoCompaction: () => boolean;
   getActiveFocusMemoryScopeQuery: () => MemoryScopeQuery | null;
   getRecentConversationSpeakers: () => ConversationScopeSpeaker[];
+  getPrivateRelationshipActivity: (
+    continuityUserId: string,
+  ) => PrivateRelationshipActivitySummary | null;
   resolveConversationScope: (input: ResolveConversationScopeInput) => ConversationScope;
   reconcileSessionChannelFromDisk: (
   ) => ReturnType<SessionManagerTypeSurface['reconcileSessionChannelFromDisk']>;
@@ -313,6 +321,13 @@ export class CapturedSessionReads {
   getRecentConversationSpeakers(): ConversationScopeSpeaker[] {
     this.assertScope('CapturedSessionReads.getRecentConversationSpeakers');
     return this.operations.getRecentConversationSpeakers();
+  }
+
+  getPrivateRelationshipActivity(
+    continuityUserId: string,
+  ): PrivateRelationshipActivitySummary | null {
+    this.assertScope('CapturedSessionReads.getPrivateRelationshipActivity');
+    return this.operations.getPrivateRelationshipActivity(continuityUserId);
   }
 
   resolveConversationScope(input: ResolveConversationScopeInput): ConversationScope {

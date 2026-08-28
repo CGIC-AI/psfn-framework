@@ -1100,6 +1100,11 @@ export interface CompanionMessageSendParams {
   };
   /** Episode-bound lineage for a non-initial autonomous conversation reply. */
   correlation?: IcpConversationCorrelation;
+  /** Exact relay custody; accepted only on its bound ICP continuation/reply. */
+  humanRelay?: {
+    requestCapsule: import('../../core/icp/human-relay-capsule.js').HumanRelayIntentCapsule;
+    responseCapsule?: import('../../core/icp/human-relay-capsule.js').HumanRelayResponseCapsule;
+  };
   /**
    * Gateway-issued inbound message id this send directly answers. For room
    * messages, the gateway may use the matching delivery receipt as a

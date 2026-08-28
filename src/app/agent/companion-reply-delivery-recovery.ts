@@ -4,6 +4,11 @@ import {
   assertIcpRecoveryStatusBinding,
   type IcpDeliveryObservation,
 } from '../../core/session/icp-delivery-recovery.js';
+import type { DisclosureLineage } from '../../core/cogsec/disclosure/index.js';
+import {
+  createTargetHumanRelayReturn,
+  type HumanRelayTransportCustody,
+} from './human-relay-response-path.js';
 
 interface CompanionReplyDeliveryGatewayPort {
   companionSend(
@@ -11,6 +16,7 @@ interface CompanionReplyDeliveryGatewayPort {
     content: string,
     authorName: string | undefined,
     correlation: NonNullable<AgentResponse['metadata']['icpCorrelation']>,
+    humanRelay?: HumanRelayTransportCustody,
   ): Promise<{ messageId: string; deliveredTo: string[] }>;
 }
 
@@ -51,6 +57,9 @@ export function createCompanionReplyDeliveryLifecycle(input: {
   gateway: CompanionReplyDeliveryGatewayPort;
   authorName?: string;
   log: CompanionReplyDeliveryLogger;
+  localCompanionId: string;
+  getDisclosureLineage(): DisclosureLineage | undefined;
+  now?: () => number;
 }): CompanionReplyDeliveryLifecycle {
   let deliveryObservation = input.previousObservation ?? null;
   let recoveryResponse = input.recoveredResponse;
@@ -84,6 +93,28 @@ export function createCompanionReplyDeliveryLifecycle(input: {
         return;
       }
 
+      let humanRelay: HumanRelayTransportCustody | undefined;
+      if (input.message.routing?.humanRelay) {
+        const relay = await createTargetHumanRelayReturn({
+          message: input.message,
+          response,
+          localCompanionId: input.localCompanionId,
+          lineage: input.getDisclosureLineage(),
+          nowMs: input.now?.() ?? Date.now(),
+        });
+        if (relay.delivery === 'withheld') {
+          deliveryObservation = {
+            channelId: input.message.channelId,
+            sourceMessageId: input.message.id,
+            status: 'suppressed',
+            recoveryResponse: response,
+          };
+          await input.agent.recordIcpDeliveryObservation(deliveryObservation);
+          return;
+        }
+        humanRelay = relay.custody;
+      }
+
       let delivery: Awaited<ReturnType<CompanionReplyDeliveryGatewayPort['companionSend']>>;
       try {
         if (deliveryObservation?.status !== 'prepared'
@@ -96,12 +127,13 @@ export function createCompanionReplyDeliveryLifecycle(input: {
           };
           await input.agent.recordIcpDeliveryObservation(deliveryObservation);
         }
-        delivery = await input.gateway.companionSend(
-          input.message.channelId,
-          response.content,
-          input.authorName,
-          correlation,
-        );
+        delivery = humanRelay
+          ? await input.gateway.companionSend(
+            input.message.channelId, response.content, input.authorName, correlation, humanRelay,
+          )
+          : await input.gateway.companionSend(
+            input.message.channelId, response.content, input.authorName, correlation,
+          );
       } catch (error) {
         try {
           deliveryObservation = {

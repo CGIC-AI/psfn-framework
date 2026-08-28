@@ -2,6 +2,7 @@ import type { IcpConversationCorrelation, IcpDyadDelivery } from '../../../share
 import { deriveIcpTransportMessageId } from '../../../shared/contracts/icp-autonomy.js';
 import type { IcpDyadContinuationAuthorization, IcpDyadContinuationPrepareResult, IcpOpenDyadProjection } from '../icp-autonomy-contract.js';
 import type { CompanionMessageSendResult, GatewayMethods } from '../protocol.js';
+import type { HumanRelayIntentCapsule } from '../../../core/icp/human-relay-capsule.js';
 import type { GatewayClientTransportRuntime } from './transport-runtime.js';
 
 export async function companionSendContinuation(
@@ -13,6 +14,7 @@ export async function companionSendContinuation(
     content: string;
     authorName?: string;
     correlation: IcpConversationCorrelation;
+    humanRelayRequest?: HumanRelayIntentCapsule;
   },
 ): Promise<{ messageId: string; deliveredTo: string[]; duplicate: boolean }> {
   const messageId = deriveIcpTransportMessageId(input.correlation);
@@ -28,6 +30,7 @@ export async function companionSendContinuation(
       correlation: input.correlation,
     },
     messageId,
+    ...(input.humanRelayRequest ? { humanRelay: { requestCapsule: input.humanRelayRequest } } : {}),
     ...(companionId ? { companionId } : {}),
   }) as CompanionMessageSendResult;
   return {

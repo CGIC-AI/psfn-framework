@@ -997,6 +997,7 @@ export class GatewayClient implements
     content: string,
     authorName?: string,
     correlationOrReplyToMessageId?: IcpConversationCorrelation | string,
+    humanRelay?: import('./protocol.js').CompanionMessageSendParams['humanRelay'],
   ): Promise<CompanionMessageSendResult> {
     const correlation = typeof correlationOrReplyToMessageId === 'object'
       ? correlationOrReplyToMessageId
@@ -1012,6 +1013,7 @@ export class GatewayClient implements
       ...(correlation ? { correlation } : {}),
       ...(messageId ? { messageId } : {}),
       ...(replyToMessageId ? { replyToMessageId } : {}),
+      ...(humanRelay ? { humanRelay } : {}),
       ...(this.companionId ? { companionId: this.companionId } : {}),
     }) as CompanionMessageSendResult;
   }

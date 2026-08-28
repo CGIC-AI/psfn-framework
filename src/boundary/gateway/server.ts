@@ -25,6 +25,7 @@ import { createSocketServer, createWebSocketRpcServer } from './transport.js';
 import {
   GatewayErrors,
   type CompanionMessageDeliveryFailureNotification,
+  type CompanionMessageSendParams,
   type CompanionMessageFailureReportResult,
   type CompanionMessageSendResult,
   type GatewayCredentialPresenceResult,
@@ -479,6 +480,7 @@ export class GatewayServer {
   private readonly deliveredIcpMessages = new Map<string, {
     content: string;
     correlation: string;
+    humanRelay?: string;
     expiresAtMs: number;
     result: CompanionMessageSendResult;
   }>();
@@ -1487,6 +1489,7 @@ export class GatewayServer {
       continuation,
       correlation,
       replyToMessageId,
+      humanRelay,
     } = parseCompanionMessageSendParams(params);
     let initiationPermitOutcome: 'consumed' | 'replayed' | undefined;
     let initiationPermitExpiresAtMs: number | undefined;
@@ -1593,6 +1596,30 @@ export class GatewayServer {
       }
     }
 
+    if (humanRelay) {
+      const request = humanRelay.requestCapsule;
+      const response = humanRelay.responseCapsule;
+      if (!messageCorrelation
+        || request.source.companionId !== (continuation ? senderCompanionId : messageCorrelation.peerCompanionId)
+        || request.target.companionId !== (continuation
+          ? continuation.recipientCompanionId
+          : senderCompanionId)
+        || request.target.dyadId !== messageCorrelation.dyadId
+        || request.target.channelId !== channelId) {
+        throw new Error('Human relay custody does not match the authenticated ICP dyad');
+      }
+      if (continuation ? response !== undefined : !correlation || response === undefined) {
+        throw new Error('Human relay custody is on the wrong ICP transport stage');
+      }
+      if (response && (response.response.companionId !== senderCompanionId
+        || response.response.dyadId !== messageCorrelation.dyadId
+        || response.response.channelId !== channelId
+        || response.destination.companionId !== messageCorrelation.peerCompanionId
+        || response.content !== content)) {
+        throw new Error('Human relay response custody changed its source, destination, or exact bytes');
+      }
+    }
+
     const stableIcpMessageId = messageCorrelation
       ? deriveIcpTransportMessageId(messageCorrelation)
       : undefined;
@@ -1616,7 +1643,8 @@ export class GatewayServer {
       const delivered = this.deliveredIcpMessages.get(stableIcpMessageId);
       if (delivered) {
         if (delivered.content !== content
-          || delivered.correlation !== JSON.stringify(messageCorrelation)) {
+          || delivered.correlation !== JSON.stringify(messageCorrelation)
+          || delivered.humanRelay !== (humanRelay ? JSON.stringify(humanRelay) : undefined)) {
           this.alarmCompanionViolation(
             'icp_delivery_replay_mismatch',
             'Replayed ICP message changed its already-delivered content or correlation',
@@ -1712,6 +1740,7 @@ export class GatewayServer {
         source: 'companion',
         authorIsMachineIntelligence: true,
         ...(messageCorrelation ? { icpCorrelation: messageCorrelation } : {}),
+        ...(humanRelay ? { humanRelay } : {}),
         ...(resolution.kind === 'room'
           ? {
             channelPrivacy: resolution.roomPrivacy,
@@ -1814,6 +1843,7 @@ export class GatewayServer {
       this.deliveredIcpMessages.set(stableIcpMessageId, {
         content,
         correlation: JSON.stringify(messageCorrelation),
+        ...(humanRelay ? { humanRelay: JSON.stringify(humanRelay) } : {}),
         expiresAtMs: initiationPermitExpiresAtMs ?? (now + ICP_DELIVERY_REPLAY_CACHE_TTL_MS),
         result,
       });
@@ -3856,6 +3886,7 @@ function parseCompanionMessageSendParams(params: unknown): {
   };
   correlation?: IcpConversationCorrelation;
   replyToMessageId?: string;
+  humanRelay?: NonNullable<CompanionMessageSendParams['humanRelay']>;
 } {
   if (!isRecord(params)) {
     throw new Error('companion.message.send requires an object params payload');
@@ -3971,6 +4002,31 @@ function parseCompanionMessageSendParams(params: unknown): {
   const correlation = params.correlation === undefined
     ? undefined
     : parseIcpConversationCorrelation(params.correlation);
+  let humanRelay: NonNullable<CompanionMessageSendParams['humanRelay']> | undefined;
+  if (params.humanRelay !== undefined) {
+    if (!isRecord(params.humanRelay)) {
+      throw new Error('companion.message.send humanRelay must be an object');
+    }
+    assertNoUnknownKeys(
+      params.humanRelay,
+      ['requestCapsule', 'responseCapsule'] as const,
+      'companion.message.send humanRelay',
+    );
+    const requestCapsule = params.humanRelay.requestCapsule;
+    const responseCapsule = params.humanRelay.responseCapsule;
+    if (!isRecord(requestCapsule)
+      || requestCapsule.capsuleKind !== 'human_relay_intent'
+      || !isRecord(requestCapsule.source)
+      || !isRecord(requestCapsule.target)
+      || (responseCapsule !== undefined
+        && (!isRecord(responseCapsule)
+          || responseCapsule.capsuleKind !== 'human_relay_response'
+          || !isRecord(responseCapsule.response)
+          || !isRecord(responseCapsule.destination)))) {
+      throw new Error('companion.message.send humanRelay capsule shape is malformed');
+    }
+    humanRelay = params.humanRelay as unknown as NonNullable<CompanionMessageSendParams['humanRelay']>;
+  }
   if ((initiation !== undefined || continuation !== undefined || correlation !== undefined)
     !== (messageId !== undefined)) {
     throw new Error('companion.message.send correlated transports require a deterministic messageId');
@@ -3997,6 +4053,7 @@ function parseCompanionMessageSendParams(params: unknown): {
     ...(continuation ? { continuation } : {}),
     ...(correlation ? { correlation } : {}),
     ...(replyToMessageId ? { replyToMessageId } : {}),
+    ...(humanRelay ? { humanRelay } : {}),
   };
 }
 

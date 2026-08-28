@@ -73,7 +73,7 @@ class SmokeNostrClient {
   }
 
   subscribe(filter: Record<string, unknown>, onEvent: (event: NostrEvent) => void): string {
-    const id = `psfn-smoke-${randomUUID()}`;
+    const id = `buzz-smoke-${randomUUID()}`;
     this.subscriptions.set(id, onEvent);
     this.send(['REQ', id, filter]);
     return id;
@@ -147,7 +147,7 @@ async function main(): Promise<void> {
     content: '',
     tags: [
       ['h', channelId],
-      ['name', `psfn-buzz-smoke-${channelId}`],
+      ['name', `buzz-adapter-smoke-${channelId}`],
       ['channel_type', 'stream'],
       ['visibility', 'open'],
     ],
@@ -177,7 +177,7 @@ async function main(): Promise<void> {
   adapter.onMessage(async message => {
     handled.resolve(message);
     return {
-      content: 'PSFN Buzz round trip complete.',
+      content: 'Buzz adapter round trip complete.',
       channelId: message.channelId,
       metadata: { model: 'smoke', inputTokens: 0, outputTokens: 0, durationMs: 0 },
     };
@@ -189,19 +189,19 @@ async function main(): Promise<void> {
     mention = finalizeEvent({
       kind: 9,
       created_at: Math.floor(Date.now() / 1_000),
-      content: 'Run the PSFN Buzz live smoke.',
+      content: 'Run the Buzz adapter live smoke.',
       tags: [['h', channelId], ['p', companionPubkey]],
     }, authorSecretKey);
     await authorClient.publish(mention);
     const [message, response] = await Promise.all([
-      withTimeout(handled.promise, 'Timed out waiting for Buzz message to enter PSFN'),
-      withTimeout(reply.promise, 'Timed out waiting for PSFN Buzz reply'),
+      withTimeout(handled.promise, 'Timed out waiting for the inbound Buzz adapter message'),
+      withTimeout(reply.promise, 'Timed out waiting for the Buzz adapter reply'),
     ]);
     if (message.id !== mention.id || message.content !== mention.content) {
       throw new Error('Buzz smoke inbound message did not preserve the signed trigger');
     }
     if (
-      response.content !== 'PSFN Buzz round trip complete.'
+      response.content !== 'Buzz adapter round trip complete.'
       || !response.tags.some(tag => tag[0] === 'e' && tag[1] === mention?.id && tag[3] === 'reply')
       || !response.tags.some(tag => tag[0] === 'p' && tag[1] === authorPubkey)
     ) {

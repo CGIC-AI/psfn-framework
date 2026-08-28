@@ -81,7 +81,7 @@ Those helpers keep the split runtime and shared wiring aligned on core wiring:
 - The native external MCP client, credential custody, TLS transport, system-trust
   policy, and CogSec boundary all live in the gateway.
 - Optional operator-facing support surfaces live here too: ntfy notifications, confirmation queue, beads tools, vault tools, shell execution, and git-backed mutations.
-- Discord, Telegram, Wyoming, and installable channel plugins (Multica) are started from the gateway side when enabled.
+- Discord, Telegram, Wyoming, and installable channel plugins (Multica and Buzz) are started from the gateway side when enabled.
 
 ### Gateway RPC trust and approval classes
 

@@ -8,7 +8,7 @@
 // and the companion-ui WebSocket, authenticated server-side by their hub-device
 // attachment (never a client-supplied channel-type header). Discord-SSO'd humans
 // land bound to their canonical contact via the attachment's contact binding.
-export const CHANNEL_TYPES = ['discord', 'terminal', 'api', 'telegram', 'multica', 'psfn-amica', 'companion', 'companion-ui'] as const;
+export const CHANNEL_TYPES = ['discord', 'terminal', 'api', 'telegram', 'multica', 'buzz', 'psfn-amica', 'companion', 'companion-ui'] as const;
 export type ChannelType = typeof CHANNEL_TYPES[number];
 
 interface ChannelPolicy {
@@ -23,6 +23,7 @@ const CHANNEL_BEHAVIOR: Readonly<Record<ChannelType, ChannelPolicy>> = Object.fr
   api: { scheduledContinuity: true, liveWakeup: true },
   telegram: { scheduledContinuity: true, liveWakeup: true },
   multica: { scheduledContinuity: false, liveWakeup: false },
+  buzz: { scheduledContinuity: true, liveWakeup: true },
   'psfn-amica': { scheduledContinuity: true, liveWakeup: true },
   companion: { scheduledContinuity: false, liveWakeup: false },
   'companion-ui': { scheduledContinuity: false, liveWakeup: true },

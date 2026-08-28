@@ -2385,6 +2385,12 @@
       "value": "30_000"
     },
     {
+      "file": "src/channels/buzz/protocol.ts",
+      "name": "BUZZ_STREAM_TEXT_CHUNK_LIMIT",
+      "value": "64 * 1_024",
+      "note": "Immutable Buzz Stream kind-9 wire limit matching the relay SDK's 64 KiB content ceiling; code-owned because changing it requires a protocol release rather than operator tuning."
+    },
+    {
       "file": "src/channels/discord/adapter.ts",
       "name": "DISCORD_LISTEN_WINDOW_MAX_MS",
       "value": "600_000"

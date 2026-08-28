@@ -492,7 +492,7 @@ export interface CompanionAvailabilitySnapshot {
 }
 
 export interface MessageRoutingMetadata {
-  source?: 'wyoming' | 'discord' | 'telegram' | 'multica' | 'api' | 'terminal' | 'psfn-amica' | 'satellite' | 'companion' | 'companion-ui' | 'unknown';
+  source?: 'wyoming' | 'discord' | 'telegram' | 'multica' | 'buzz' | 'api' | 'terminal' | 'psfn-amica' | 'satellite' | 'companion' | 'companion-ui' | 'unknown';
   /** Server-authored provenance for the dedicated authenticated shakedown harness. */
   testingHarness?: import('./testing-harness.js').TestingHarnessRunProvenance;
   /**

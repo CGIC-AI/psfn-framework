@@ -6312,6 +6312,13 @@
       "note": "Existing mutable policy candidate inferDeferredCompanionOutreachActions.actions.push.arg0.maxRetries; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
+      "file": "src/core/tools/notify-companion-handoff.ts",
+      "name": "inferDeferredHumanRelayActions.actions.push.arg0.maxRetries",
+      "value": "0",
+      "form": "object-member",
+      "note": "Code-owned one-shot human-relay fence: maxRetries 0 is required so a replayed exact-byte capsule cannot be retried; retries would violate the capsule replay fail-closed contract."
+    },
+    {
       "file": "src/core/tools/ntfy.ts",
       "name": "CLARIFY_DELIVERY_TIMEOUT_MS",
       "value": "120_000",
@@ -6390,17 +6397,17 @@
     },
     {
       "file": "src/core/tools/ntfy.ts",
-      "name": "notifyToolParameters.contact_id.minLength@L972",
+      "name": "notifyToolParameters.contact_id.minLength@L986",
       "value": "1",
       "form": "object-member",
-      "note": "Existing mutable policy candidate notifyToolParameters.contact_id.minLength@L972; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate notifyToolParameters.contact_id.minLength@L986; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/core/tools/ntfy.ts",
-      "name": "notifyToolParameters.contact_id.minLength@L984",
+      "name": "notifyToolParameters.contact_id.minLength@L998",
       "value": "1",
       "form": "object-member",
-      "note": "Existing mutable policy candidate notifyToolParameters.contact_id.minLength@L984; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate notifyToolParameters.contact_id.minLength@L998; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/core/tools/ntfy.ts",

@@ -7,6 +7,7 @@ import type {
   ChannelPluginInstance,
   ChannelPluginLoadedSection,
   ChannelPluginRegistry,
+  ChannelPluginAccountRoute,
 } from './types.js';
 
 export interface ChannelPluginHostOptions {
@@ -27,7 +28,7 @@ export interface ChannelPluginWiredInstance {
 export interface ChannelPluginMessageWiring {
   requestAgentVoiceStream: (
     message: SubstrateMessage,
-    options?: { signal?: AbortSignal; channelAccountId?: string },
+    options?: { signal?: AbortSignal; channelAccountRoute?: ChannelPluginAccountRoute },
   ) => Promise<Pick<AgentResponse, 'content' | 'channelId' | 'attachments'> & {
     model: string;
     durationMs: number;
@@ -153,7 +154,7 @@ export class ChannelPluginHost {
       onMessage.call(instance.adapter, async (message: SubstrateMessage, options?: MessageHandlerOptions) => {
         const requestOptions = {
           ...(options?.signal ? { signal: options.signal } : {}),
-          ...(accountId ? { channelAccountId: accountId } : {}),
+          ...(accountId ? { channelAccountRoute: { pluginId, accountId } } : {}),
         };
         const result = Object.keys(requestOptions).length > 0
           ? await wiring.requestAgentVoiceStream(message, requestOptions)

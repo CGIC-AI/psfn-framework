@@ -181,10 +181,10 @@ describe('ChannelPluginHost', () => {
     await handlers[1]!(message);
 
     expect(requestAgentVoiceStream).toHaveBeenNthCalledWith(1, message, {
-      channelAccountId: firstCompanionId,
+      channelAccountRoute: { pluginId: 'probe', accountId: firstCompanionId },
     });
     expect(requestAgentVoiceStream).toHaveBeenNthCalledWith(2, message, {
-      channelAccountId: secondCompanionId,
+      channelAccountRoute: { pluginId: 'probe', accountId: secondCompanionId },
     });
   });
 
@@ -192,6 +192,7 @@ describe('ChannelPluginHost', () => {
     const firstCompanionId = '11111111-1111-4111-8111-111111111111';
     const secondCompanionId = '22222222-2222-4222-8222-222222222222';
     const seen: Array<{ name: unknown; token: string | undefined; companionId: string | undefined }> = [];
+    const lifecycle: string[] = [];
     const plugin: ChannelPlugin<{ name?: string }> = {
       manifest: { id: 'probe', label: 'Probe' },
       parseConfig: () => ({
@@ -229,7 +230,20 @@ describe('ChannelPluginHost', () => {
             ? undefined
             : 'unexpected',
         });
-        return { adapter: makeAdapter('probe') };
+        const accountName = String(input.config.name);
+        return {
+          adapter: makeAdapter('probe', {
+            init: async () => {
+              lifecycle.push(`init:${accountName}`);
+            },
+            start: async () => {
+              lifecycle.push(`start:${accountName}`);
+            },
+            stop: async () => {
+              lifecycle.push(`stop:${accountName}`);
+            },
+          }),
+        };
       },
     };
     const registry = createChannelPluginRegistry([plugin]);
@@ -257,6 +271,18 @@ describe('ChannelPluginHost', () => {
       { name: 'beta', token: 'beta-secret' },
     ]);
     expect(contextCompanions).toEqual([firstCompanionId, secondCompanionId]);
+
+    await host.initialize();
+    await host.start();
+    await host.stop();
+    expect(lifecycle).toEqual([
+      'init:alpha',
+      'init:beta',
+      'start:alpha',
+      'start:beta',
+      'stop:beta',
+      'stop:alpha',
+    ]);
   });
 
   it('resolves only declared credentials and never shares them across plugins', async () => {

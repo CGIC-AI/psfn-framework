@@ -67,8 +67,9 @@ A plugin that supports several companion identities returns `instances` from
 `parseConfig`. Each instance declares a stable account id, one companion id,
 its instance-specific config, and only the credentials needed by that account.
 The host constructs and owns a separate adapter lifecycle for every instance.
-It also supplies the instance id as trusted gateway routing metadata, so an
-inbound message body cannot choose or impersonate another companion account.
+It also supplies the plugin and instance ids together as trusted gateway
+routing metadata. The gateway verifies that plugin against the message surface,
+so an inbound body cannot choose or impersonate another companion account.
 
 Use the companion UUID itself as the account id when the channel contract is
 one identity per companion. Reject duplicate account ids, duplicate companion

@@ -122,8 +122,9 @@ Enabled Buzz requires at least one account. Companion IDs must be unique, and
 the top-level singular `companionId` and `privateKeyRef` fields reject rather
 than silently creating a shared identity. The channel plugin host constructs an
 isolated adapter and recovery scope for every account, then supplies the
-account's companion ID as trusted routing metadata; message content cannot
-select a different companion.
+plugin and account IDs as trusted routing metadata. The gateway verifies the
+plugin matches the message surface before mapping that account to a companion;
+message content cannot select a different route.
 Channel IDs must be lowercase RFC-4122 UUIDs, and author identities must be
 exact 64-character lowercase hex pubkeys. `channelIds` may be empty to accept
 all authenticated memberships. `machineAuthorPubkeys` must be an exact subset

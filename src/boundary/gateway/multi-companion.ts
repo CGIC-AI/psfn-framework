@@ -14,6 +14,17 @@ import type { SatelliteRegistryConfig } from '../../shared/contracts/satellite-r
 export const GATEWAY_CHANNEL_SURFACES = ['discord', 'telegram', 'api', 'multica', 'buzz'] as const;
 export type GatewayChannelSurface = (typeof GATEWAY_CHANNEL_SURFACES)[number];
 
+export type AuthenticatedGatewayAccountRoute =
+  | { kind: 'discord'; accountId: string }
+  | { kind: 'plugin'; pluginId: string; accountId: string };
+
+export interface GatewayCompanionRouteViolation {
+  code: 'unrouted_channel' | 'unrouted_discord_account' | 'unrouted_plugin_account';
+  message: string;
+  details: Readonly<Record<string, unknown>>;
+  errorMessage: string;
+}
+
 export interface GatewayMultiCompanionConfig {
   enabled: boolean;
   /** companions.json-owned identities accepted at the RPC authentication boundary. */
@@ -107,6 +118,96 @@ export function resolveGatewaySurfaceForChannelType(
     default:
       return null;
   }
+}
+
+/** Resolve one authenticated channel route without any connection or alarm side effects. */
+export function resolveConfiguredGatewayCompanion(
+  config: GatewayMultiCompanionConfig,
+  surface: GatewayChannelSurface,
+  route: AuthenticatedGatewayAccountRoute | undefined,
+  reject: (violation: GatewayCompanionRouteViolation) => never,
+): CompanionId {
+  if (surface === 'discord' && Object.keys(config.discordAccounts).length > 0) {
+    if (route?.kind !== 'discord') {
+      return reject({
+        code: route?.kind === 'plugin' ? 'unrouted_plugin_account' : 'unrouted_discord_account',
+        message: route?.kind === 'plugin'
+          ? `Channel plugin "${route.pluginId}" cannot route a discord message`
+          : 'Discord surface uses per-account routing but the inbound message carries no accountId',
+        details: { surface, ...(route?.kind === 'plugin' ? { pluginId: route.pluginId } : {}) },
+        errorMessage: route?.kind === 'plugin'
+          ? `Channel plugin "${route.pluginId}" cannot route channel surface "discord"`
+          : 'Multi-account discord routing requires an accountId for the discord surface',
+      });
+    }
+    const companionId = config.discordAccounts[route.accountId];
+    if (!companionId) {
+      return reject({
+        code: 'unrouted_discord_account',
+        message: `Discord account "${route.accountId}" has no companion routing entry in channels.json`,
+        details: { surface, discordAccountId: route.accountId },
+        errorMessage: `Multi-companion routing has no companion for discord account "${route.accountId}"`,
+      });
+    }
+    return companionId;
+  }
+
+  const pluginAccounts = config.pluginAccounts[surface];
+  if (pluginAccounts && Object.keys(pluginAccounts).length > 0) {
+    if (route?.kind !== 'plugin') {
+      return reject({
+        code: 'unrouted_plugin_account',
+        message: `Channel plugin "${surface}" uses per-account routing but the inbound request carries no account route`,
+        details: { surface },
+        errorMessage: `Multi-account ${surface} routing requires an account route`,
+      });
+    }
+    if (route.pluginId !== surface) {
+      return reject({
+        code: 'unrouted_plugin_account',
+        message: `Channel plugin "${route.pluginId}" cannot route a ${surface} message`,
+        details: { surface, pluginId: route.pluginId, accountId: route.accountId },
+        errorMessage: `Channel plugin "${route.pluginId}" cannot route channel surface "${surface}"`,
+      });
+    }
+    const companionId = pluginAccounts[route.accountId];
+    if (!companionId) {
+      return reject({
+        code: 'unrouted_plugin_account',
+        message: `Channel plugin "${surface}" account "${route.accountId}" has no companion routing entry`,
+        details: { surface, accountId: route.accountId },
+        errorMessage: `Multi-companion routing has no companion for ${surface} account "${route.accountId}"`,
+      });
+    }
+    return companionId;
+  }
+
+  if (route) {
+    const pluginRoute = route.kind === 'plugin';
+    return reject({
+      code: pluginRoute ? 'unrouted_plugin_account' : 'unrouted_discord_account',
+      message: pluginRoute
+        ? `Received ${surface} route for plugin "${route.pluginId}" account "${route.accountId}" but no plugin account routing is configured`
+        : `Received discord accountId "${route.accountId}" but no discord.accounts routing is configured`,
+      details: pluginRoute
+        ? { surface, pluginId: route.pluginId, accountId: route.accountId }
+        : { surface, discordAccountId: route.accountId },
+      errorMessage: pluginRoute
+        ? `No ${surface} account routing configured for plugin "${route.pluginId}" account "${route.accountId}"`
+        : `No discord account routing configured for account "${route.accountId}"`,
+    });
+  }
+
+  const companionId = config.channelRouting[surface];
+  if (!companionId) {
+    return reject({
+      code: 'unrouted_channel',
+      message: `Channel surface "${surface}" has no companion routing entry in channels.json`,
+      details: { surface },
+      errorMessage: `Multi-companion routing has no companion for channel surface "${surface}"`,
+    });
+  }
+  return companionId;
 }
 
 /**

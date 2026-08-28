@@ -1,6 +1,45 @@
 import type { Event as NostrEvent } from 'nostr-tools';
+import {
+  compareBuzzMembershipPositions,
+  type BuzzMembershipChange,
+  type BuzzMembershipSnapshot,
+} from './protocol.js';
 
 export type BuzzInboundRecoveryState = 'processing' | 'ready' | 'completed' | 'suppressed';
+
+export type BuzzSuppressionReason =
+  | 'autonomous_hop_limit'
+  | 'duplicate_causal_edge'
+  | 'invalid_causal_parent'
+  | 'no_information_acknowledgement'
+  | 'fatigue_suppressed'
+  | 'broadcast_approval_required'
+  | 'intentional_no_reply'
+  | 'empty_response'
+  | 'turn_cancelled';
+
+export function isBuzzSuppressionReason(value: unknown): value is BuzzSuppressionReason {
+  return value === 'autonomous_hop_limit'
+    || value === 'duplicate_causal_edge'
+    || value === 'invalid_causal_parent'
+    || value === 'no_information_acknowledgement'
+    || value === 'fatigue_suppressed'
+    || value === 'broadcast_approval_required'
+    || value === 'intentional_no_reply'
+    || value === 'empty_response'
+    || value === 'turn_cancelled';
+}
+
+export interface BuzzCausalEvent {
+  eventId: string;
+  channelId: string;
+  rootEventId: string;
+  parentEventId: string | null;
+  hop: number;
+  authorPubkey: string;
+}
+
+export type BuzzCausalClaimResult = 'claimed' | 'duplicate' | 'invalid_parent';
 
 export interface BuzzInboundRecoveryRecord {
   eventId: string;
@@ -8,7 +47,7 @@ export interface BuzzInboundRecoveryRecord {
   eventCreatedAt: number;
   state: BuzzInboundRecoveryState;
   outboundEvent?: NostrEvent;
-  suppressionReason?: string;
+  suppressionReason?: BuzzSuppressionReason;
 }
 
 export interface BuzzRecoveryScope {
@@ -23,31 +62,25 @@ export interface BuzzRecoveryStore {
     channelId: string;
     eventCreatedAt: number;
   }): Promise<{ claimed: boolean; record: BuzzInboundRecoveryRecord }>;
-  claimCausalEdge(input: {
-    chainId: string;
-    parentEventId: string;
-    authorPubkey: string;
-    eventId: string;
-  }): Promise<boolean>;
-  registerHumanRoot(rootEventId: string, authorPubkey: string): Promise<void>;
-  hasHumanRoot(rootEventId: string): Promise<boolean>;
-  markReady(eventId: string, outboundEvent: NostrEvent): Promise<void>;
+  registerHumanRoot(input: Omit<BuzzCausalEvent, 'rootEventId' | 'parentEventId' | 'hop'>): Promise<void>;
+  claimCausalEvent(input: BuzzCausalEvent): Promise<BuzzCausalClaimResult>;
+  markReady(eventId: string, outboundEvent: NostrEvent, causalEvent: BuzzCausalEvent): Promise<void>;
   markCompleted(eventId: string): Promise<void>;
-  markSuppressed(eventId: string, reason: string): Promise<void>;
+  markSuppressed(eventId: string, reason: BuzzSuppressionReason): Promise<void>;
   listRecoverable(): Promise<BuzzInboundRecoveryRecord[]>;
   loadReplayCursor(): Promise<number | null>;
   advanceReplayCursor(eventCreatedAt: number): Promise<void>;
-  replaceMemberships(channelIds: readonly string[], observedAtMs: number): Promise<void>;
-  setMembership(channelId: string, active: boolean, observedAtMs: number): Promise<void>;
+  replaceMemberships(memberships: readonly BuzzMembershipSnapshot[]): Promise<void>;
+  setMembership(change: BuzzMembershipChange): Promise<void>;
   close(): Promise<void>;
 }
 
 /** Deterministic test/embedding store with the same claim semantics as Postgres. */
 export class InMemoryBuzzRecoveryStore implements BuzzRecoveryStore {
   private readonly records = new Map<string, BuzzInboundRecoveryRecord>();
+  private readonly causalEvents = new Map<string, BuzzCausalEvent>();
   private readonly causalEdges = new Set<string>();
-  private readonly humanRoots = new Set<string>();
-  private readonly memberships = new Set<string>();
+  private readonly memberships = new Map<string, BuzzMembershipChange>();
   private cursor: number | null = null;
 
   async waitUntilReady(): Promise<void> {}
@@ -64,28 +97,36 @@ export class InMemoryBuzzRecoveryStore implements BuzzRecoveryStore {
     return { claimed: true, record: structuredClone(record) };
   }
 
-  async claimCausalEdge(input: {
-    chainId: string;
-    parentEventId: string;
-    authorPubkey: string;
-    eventId: string;
-  }): Promise<boolean> {
-    const edge = `${input.chainId}:${input.parentEventId}:${input.authorPubkey}`;
-    if (this.causalEdges.has(edge)) return false;
+  async registerHumanRoot(
+    input: Omit<BuzzCausalEvent, 'rootEventId' | 'parentEventId' | 'hop'>,
+  ): Promise<void> {
+    this.causalEvents.set(input.eventId, {
+      ...input,
+      rootEventId: input.eventId,
+      parentEventId: null,
+      hop: 0,
+    });
+  }
+
+  async claimCausalEvent(input: BuzzCausalEvent): Promise<BuzzCausalClaimResult> {
+    if (!this.hasValidCausalParent(input)) return 'invalid_parent';
+    const edge = `${input.rootEventId}:${input.parentEventId}:${input.authorPubkey}`;
+    if (this.causalEdges.has(edge) || this.causalEvents.has(input.eventId)) return 'duplicate';
     this.causalEdges.add(edge);
-    return true;
+    this.causalEvents.set(input.eventId, structuredClone(input));
+    return 'claimed';
   }
 
-  async registerHumanRoot(rootEventId: string, _authorPubkey: string): Promise<void> {
-    this.humanRoots.add(rootEventId);
-  }
-
-  async hasHumanRoot(rootEventId: string): Promise<boolean> {
-    return this.humanRoots.has(rootEventId);
-  }
-
-  async markReady(eventId: string, outboundEvent: NostrEvent): Promise<void> {
+  async markReady(
+    eventId: string,
+    outboundEvent: NostrEvent,
+    causalEvent: BuzzCausalEvent,
+  ): Promise<void> {
+    if (!this.hasValidCausalParent(causalEvent)) {
+      throw new Error(`Buzz outbound event ${causalEvent.eventId} has an invalid causal parent`);
+    }
     this.updateProcessing(eventId, { state: 'ready', outboundEvent: structuredClone(outboundEvent) });
+    this.causalEvents.set(causalEvent.eventId, structuredClone(causalEvent));
   }
 
   async markCompleted(eventId: string): Promise<void> {
@@ -96,8 +137,19 @@ export class InMemoryBuzzRecoveryStore implements BuzzRecoveryStore {
     this.records.set(eventId, { ...record, state: 'completed' });
   }
 
-  async markSuppressed(eventId: string, reason: string): Promise<void> {
-    this.updateProcessing(eventId, { state: 'suppressed', suppressionReason: reason });
+  async markSuppressed(eventId: string, reason: BuzzSuppressionReason): Promise<void> {
+    const record = this.requireRecord(eventId);
+    if (record.state !== 'processing' && record.state !== 'ready') {
+      throw new Error(`Buzz recovery event ${eventId} cannot suppress from ${record.state}`);
+    }
+    if (record.outboundEvent) this.causalEvents.delete(record.outboundEvent.id);
+    this.records.set(eventId, {
+      eventId: record.eventId,
+      channelId: record.channelId,
+      eventCreatedAt: record.eventCreatedAt,
+      state: 'suppressed',
+      suppressionReason: reason,
+    });
   }
 
   async listRecoverable(): Promise<BuzzInboundRecoveryRecord[]> {
@@ -114,14 +166,17 @@ export class InMemoryBuzzRecoveryStore implements BuzzRecoveryStore {
     this.cursor = Math.max(this.cursor ?? 0, eventCreatedAt);
   }
 
-  async replaceMemberships(channelIds: readonly string[], _observedAtMs: number): Promise<void> {
+  async replaceMemberships(memberships: readonly BuzzMembershipSnapshot[]): Promise<void> {
     this.memberships.clear();
-    for (const channelId of channelIds) this.memberships.add(channelId);
+    for (const membership of memberships) {
+      this.memberships.set(membership.channelId, { ...membership, active: true });
+    }
   }
 
-  async setMembership(channelId: string, active: boolean, _observedAtMs: number): Promise<void> {
-    if (active) this.memberships.add(channelId);
-    else this.memberships.delete(channelId);
+  async setMembership(change: BuzzMembershipChange): Promise<void> {
+    const current = this.memberships.get(change.channelId);
+    if (current && compareBuzzMembershipPositions(current.position, change.position) >= 0) return;
+    this.memberships.set(change.channelId, structuredClone(change));
   }
 
   async close(): Promise<void> {}
@@ -142,5 +197,14 @@ export class InMemoryBuzzRecoveryStore implements BuzzRecoveryStore {
       throw new Error(`Buzz recovery event ${eventId} cannot leave ${record.state}`);
     }
     this.records.set(eventId, { ...record, ...update });
+  }
+
+  private hasValidCausalParent(input: BuzzCausalEvent): boolean {
+    if (!input.parentEventId || input.hop < 1) return false;
+    const parent = this.causalEvents.get(input.parentEventId);
+    return parent !== undefined
+      && parent.rootEventId === input.rootEventId
+      && parent.channelId === input.channelId
+      && input.hop === parent.hop + 1;
   }
 }

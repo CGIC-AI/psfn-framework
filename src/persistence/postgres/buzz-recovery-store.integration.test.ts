@@ -14,6 +14,7 @@ const COMMUNITY = 'wss://relay.example.test';
 const COMPANION_ID = '11111111-1111-4111-8111-111111111111';
 const CHANNEL_ID = '22222222-2222-4222-8222-222222222222';
 const EVENT_ID = 'a'.repeat(64);
+const CANCELLED_EVENT_ID = '6'.repeat(64);
 
 let harness: PostgresTestHarness | null = null;
 
@@ -54,24 +55,95 @@ describe('Postgres Buzz recovery store', () => {
         tags: [['e', EVENT_ID, '', 'reply']],
         privateKey: generateSecretKey(),
       });
-      await first.markReady(EVENT_ID, outbound);
+      await first.registerHumanRoot({
+        eventId: EVENT_ID,
+        channelId: CHANNEL_ID,
+        authorPubkey: 'f'.repeat(64),
+      });
+      await first.markReady(EVENT_ID, outbound, {
+        eventId: outbound.id,
+        channelId: CHANNEL_ID,
+        rootEventId: EVENT_ID,
+        parentEventId: EVENT_ID,
+        hop: 1,
+        authorPubkey: outbound.pubkey,
+      });
       await first.advanceReplayCursor(100);
       await first.advanceReplayCursor(90);
-      await first.replaceMemberships([CHANNEL_ID], 1_000);
-      await first.registerHumanRoot(EVENT_ID, 'f'.repeat(64));
-      await expect(first.hasHumanRoot(EVENT_ID)).resolves.toBe(true);
-      await expect(first.claimCausalEdge({
-        chainId: EVENT_ID,
-        parentEventId: 'b'.repeat(64),
+      await first.replaceMemberships([{
+        channelId: CHANNEL_ID,
+        position: { createdAt: 100, eventId: '1'.repeat(64) },
+      }]);
+      await expect(first.claimCausalEvent({
+        rootEventId: EVENT_ID,
+        channelId: CHANNEL_ID,
+        parentEventId: outbound.id,
+        hop: 2,
         authorPubkey: 'c'.repeat(64),
         eventId: 'd'.repeat(64),
-      })).resolves.toBe(true);
-      await expect(first.claimCausalEdge({
-        chainId: EVENT_ID,
-        parentEventId: 'b'.repeat(64),
+      })).resolves.toBe('claimed');
+      await expect(first.claimCausalEvent({
+        rootEventId: EVENT_ID,
+        channelId: CHANNEL_ID,
+        parentEventId: outbound.id,
+        hop: 2,
         authorPubkey: 'c'.repeat(64),
         eventId: 'e'.repeat(64),
-      })).resolves.toBe(false);
+      })).resolves.toBe('duplicate');
+      await expect(first.claimCausalEvent({
+        rootEventId: EVENT_ID,
+        channelId: CHANNEL_ID,
+        parentEventId: 'b'.repeat(64),
+        hop: 1,
+        authorPubkey: 'e'.repeat(64),
+        eventId: '9'.repeat(64),
+      })).resolves.toBe('invalid_parent');
+      await first.setMembership({
+        channelId: CHANNEL_ID,
+        active: false,
+        position: { createdAt: 200, eventId: '2'.repeat(64) },
+      });
+      await first.setMembership({
+        channelId: CHANNEL_ID,
+        active: true,
+        position: { createdAt: 150, eventId: '3'.repeat(64) },
+      });
+      const membership = await pool.query<{ active: boolean }>(`
+        SELECT active FROM buzz_room_memberships
+        WHERE community = $1 AND companion_id = $2 AND channel_id = $3
+      `, [COMMUNITY, COMPANION_ID, CHANNEL_ID]);
+      expect(membership.rows[0]?.active).toBe(false);
+
+      await first.claimInbound({
+        eventId: CANCELLED_EVENT_ID,
+        channelId: CHANNEL_ID,
+        eventCreatedAt: 101,
+      });
+      await first.registerHumanRoot({
+        eventId: CANCELLED_EVENT_ID,
+        channelId: CHANNEL_ID,
+        authorPubkey: '7'.repeat(64),
+      });
+      const cancelledOutbound = createBuzzStreamEvent({
+        channelId: CHANNEL_ID,
+        content: 'must not publish',
+        tags: [['e', CANCELLED_EVENT_ID, '', 'reply']],
+        privateKey: generateSecretKey(),
+      });
+      await first.markReady(CANCELLED_EVENT_ID, cancelledOutbound, {
+        eventId: cancelledOutbound.id,
+        channelId: CHANNEL_ID,
+        rootEventId: CANCELLED_EVENT_ID,
+        parentEventId: CANCELLED_EVENT_ID,
+        hop: 1,
+        authorPubkey: cancelledOutbound.pubkey,
+      });
+      await first.markSuppressed(CANCELLED_EVENT_ID, 'turn_cancelled');
+      const cancelledCausalEvent = await pool.query(`
+        SELECT event_id FROM buzz_causal_events
+        WHERE community = $1 AND companion_id = $2 AND event_id = $3
+      `, [COMMUNITY, COMPANION_ID, cancelledOutbound.id]);
+      expect(cancelledCausalEvent.rowCount).toBe(0);
 
       const restarted = await PostgresBuzzRecoveryStore.fromPool(pool, {
         community: COMMUNITY,

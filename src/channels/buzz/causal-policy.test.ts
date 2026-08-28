@@ -1,10 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { generateSecretKey, getPublicKey } from 'nostr-tools';
-import {
-  buzzCausalReplyTags,
-  planBuzzCausalReply,
-} from './causal-policy.js';
-import { createBuzzStreamEvent } from './protocol.js';
+import { planBuzzCausalReply } from './causal-policy.js';
+import { createBuzzCausalReplyTags, createBuzzStreamEvent } from './protocol.js';
 import { InMemoryBuzzRecoveryStore } from './recovery-store.js';
 
 const CHANNEL_ID = '22222222-2222-4222-8222-222222222222';
@@ -20,7 +17,7 @@ describe('Buzz autonomous causal policy', () => {
     const first = createBuzzStreamEvent({
       channelId: CHANNEL_ID,
       content: 'Can you take this?',
-      tags: buzzCausalReplyTags({
+      tags: createBuzzCausalReplyTags({
         rootEventId,
         parentEventId: rootEventId,
         hop: 1,
@@ -40,7 +37,7 @@ describe('Buzz autonomous causal policy', () => {
     const second = createBuzzStreamEvent({
       channelId: CHANNEL_ID,
       content: 'I found one issue; can you check it?',
-      tags: buzzCausalReplyTags(secondPlan.plan!),
+      tags: createBuzzCausalReplyTags(secondPlan.plan!),
       privateKey: secondKey,
     });
     const thirdPlan = planBuzzCausalReply({
@@ -55,7 +52,7 @@ describe('Buzz autonomous causal policy', () => {
     const third = createBuzzStreamEvent({
       channelId: CHANNEL_ID,
       content: 'That issue is confirmed.',
-      tags: buzzCausalReplyTags(thirdPlan.plan!),
+      tags: createBuzzCausalReplyTags(thirdPlan.plan!),
       privateKey: firstKey,
     });
     expect(planBuzzCausalReply({
@@ -69,13 +66,22 @@ describe('Buzz autonomous causal policy', () => {
 
   it('claims one causal edge even when distinct events repeat it', async () => {
     const store = new InMemoryBuzzRecoveryStore();
+    const rootEventId = 'a'.repeat(64);
+    await store.registerHumanRoot({
+      eventId: rootEventId,
+      channelId: CHANNEL_ID,
+      authorPubkey: 'b'.repeat(64),
+    });
     const edge = {
-      chainId: 'a'.repeat(64),
-      parentEventId: 'b'.repeat(64),
+      rootEventId,
+      channelId: CHANNEL_ID,
+      parentEventId: rootEventId,
+      hop: 1,
       authorPubkey: 'c'.repeat(64),
       eventId: 'd'.repeat(64),
     };
-    await expect(store.claimCausalEdge(edge)).resolves.toBe(true);
-    await expect(store.claimCausalEdge({ ...edge, eventId: 'e'.repeat(64) })).resolves.toBe(false);
+    await expect(store.claimCausalEvent(edge)).resolves.toBe('claimed');
+    await expect(store.claimCausalEvent({ ...edge, eventId: 'e'.repeat(64) }))
+      .resolves.toBe('duplicate');
   });
 });

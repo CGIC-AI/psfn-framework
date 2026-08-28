@@ -88,7 +88,8 @@ environment.
       "replayWindowSeconds": 120,
       "reconnectBaseDelayMs": 250,
       "reconnectMaxDelayMs": 4000,
-      "maxReconnectAttempts": 5
+      "maxReconnectAttempts": 5,
+      "maxFutureEventSkewSeconds": 30
     }
   }
 }
@@ -105,7 +106,9 @@ of `allowedAuthorPubkeys`. Duplicate, unknown, incomplete, or malformed policy
 values reject. The referenced private key may be a 32-byte lowercase hex value
 or an `nsec` value. Enabled Buzz also requires PostgreSQL for recovery state;
 gateway startup fails closed when either persistence or the credential is not
-ready.
+ready. `maxFutureEventSkewSeconds` rejects signed Stream and membership events
+whose timestamps are too far ahead to advance a durable replay or membership
+cursor.
 
 ## Current boundary
 
@@ -113,6 +116,10 @@ This slice supports membership-derived Stream mentions, anchored replies,
 durable replay, and structurally bounded autonomous reply chains. It deliberately
 does not support scheduled continuity or generic top-level
 outbound messages: every reply must remain bound to a verified signed trigger.
+Machine-authored replies are accepted only when their signed parent is already
+in the same room and human-rooted chain and their hop is exactly the parent's
+hop plus one. Membership mutations use the signed `(created_at, event ID)`
+position, so delayed older events cannot reverse a newer add or removal.
 It does not yet ingest nested thread history, resolve Buzz profiles to canonical
 contacts, publish Forum events, or handle private participant channels. In
 particular, a Buzz display name or NIP-05 label is presentation only and never grants trust,

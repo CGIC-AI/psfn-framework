@@ -150,11 +150,12 @@ function bindRecordedCompanionSourceEnvelope(
   delete message.attachments;
   message.channelType = 'companion';
   message.isDirectMessage = expectedIsDirectMessage;
+  const humanRelay = message.routing.humanRelay;
   message.routing = {
     source: 'companion',
     authorIsMachineIntelligence: true,
     icpCorrelation: recorded.correlation,
-    ...(message.routing?.humanRelay ? { humanRelay: message.routing.humanRelay } : {}),
+    ...(humanRelay ? { humanRelay } : {}),
     ...(channelPrivacy ? { channelPrivacy } : {}),
     ...(room ? { room } : {}),
   };

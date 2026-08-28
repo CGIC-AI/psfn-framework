@@ -15,6 +15,7 @@ export const AGENCY_TOOL_CONTRACTS = {
       action('send', ['message', 'delivery_channel', 'delivery_target'], ['target_kind'], { id: 'send_external', rule: 'this is the explicit external-delivery form' }),
       action('send', ['target_kind', 'contact_id', 'initiation_permit'], [], { id: 'send_companion', rule: 'target_kind must be companion and peer-visible message content is forbidden' }),
       action('list_dyads', ['target_kind'], [], { id: 'list_companion_dyads', rule: 'returns only owned open dyad authorization metadata and never conversation content' }),
+      action('dyad_lifecycle', ['target_kind', 'dyad_id', 'expected_revision', 'lifecycle_action'], [], { id: 'companion_dyad_lifecycle', rule: 'pause, resume, close, block, or unblock an owned dyad without revealing a private reason; unblock does not reopen a closed dyad' }),
       action('send', ['target_kind', 'dyad_id', 'private_intent'], [], { id: 'continue_companion_dyad', rule: 'target_kind must be companion; private_intent stays local while an ordinary destination turn authors peer-visible content' }),
       action('consider', ['target_kind', 'contact_id', 'reason_summary'], [], { id: 'consider', rule: 'target_kind must be companion and the reason is never shared externally' }),
       action('approval_request', ['approval_id', 'approval_method', 'approval_action', 'approval_scope', 'approval_reason'], ['approval_expires_at', 'review_path']),

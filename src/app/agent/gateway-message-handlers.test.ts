@@ -2197,6 +2197,41 @@ describe('registerGatewayMessageHandlers — participation appraiser wiring (jp3
     expect(events[0]).toHaveProperty('timestamp');
   });
 
+  it('does not block participation appraisal behind observed group memory work', async () => {
+    const candidate = makeParticipationCandidate();
+    const deferredMemory = createDeferred<
+      Awaited<ReturnType<ObservedGroupMemorySchedulerPort['observeMessage']>>
+    >();
+    const observedGroupMemoryScheduler: ObservedGroupMemorySchedulerPort = {
+      observeMessage: vi.fn(async () => deferredMemory.promise),
+    };
+    const appraiser: ParticipationAppraiserPort = {
+      appraise: vi.fn(async (): Promise<ParticipationAppraisalResult> => ({
+        appraisal: { action: 'ignore', reasonCode: 'room_context', confidence: 0.7 },
+        failClosed: false,
+      })),
+    };
+    const harness = createHarness({
+      observedGroupMemoryScheduler,
+      passiveNameCandidateBuilder: createdBuilder(candidate),
+      participationAppraiser: appraiser,
+    });
+
+    const receipt = harness.onDiscordMessage(observeMessage());
+
+    await vi.waitFor(() => {
+      expect(appraiser.appraise).toHaveBeenCalledWith(candidate);
+    });
+
+    deferredMemory.resolve({
+      status: 'skipped',
+      channelId: CHANNEL,
+      reason: 'threshold_not_met',
+      watermarkLagMessageIds: 1,
+    });
+    await receipt;
+  });
+
   it('records a fail-closed appraisal on the audit trail and bus (no reply invented)', async () => {
     const candidate = makeParticipationCandidate();
     const appraiser: ParticipationAppraiserPort = {

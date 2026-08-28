@@ -709,49 +709,57 @@ export function registerGatewayMessageHandlers(
       messageId: message.id,
       authorId: message.authorId,
     });
-    if (observedGroupMemoryScheduler) {
-      try {
-        const decision = await observedGroupMemoryScheduler.observeMessage(message);
-        if (decision.status === 'scheduled') {
-          safeguardAuditTrail.append('memory.group_observed.scheduled', {
-            channelId: decision.channelId,
+    // Memory extraction can involve a slow background-model call. Start it now,
+    // but do not serialize the latency-sensitive participation decision behind
+    // it: both consumers already see the source entry recorded above.
+    const observedMemoryWork = (async (): Promise<void> => {
+      if (observedGroupMemoryScheduler) {
+        try {
+          const decision = await observedGroupMemoryScheduler.observeMessage(message);
+          if (decision.status === 'scheduled') {
+            safeguardAuditTrail.append('memory.group_observed.scheduled', {
+              channelId: decision.channelId,
+              messageId: message.id,
+              triggerReason: decision.triggerReason,
+              spanStartMessageId: decision.spanStartMessageId,
+              spanEndMessageId: decision.spanEndMessageId,
+              newEntryCount: decision.newEntryCount,
+              watermarkLagMessageIds: decision.watermarkLagMessageIds,
+              hasDeferredBacklog: decision.hasDeferredBacklog,
+            });
+          } else if (decision.reason === 'extraction_failed') {
+            log.warn('Observed group memory extraction failed', {
+              channelId: decision.channelId,
+              messageId: message.id,
+              watermarkLagMessageIds: decision.watermarkLagMessageIds,
+              error: decision.error,
+            });
+            safeguardAuditTrail.append('memory.group_observed.error', {
+              channelId: decision.channelId,
+              messageId: message.id,
+              reason: decision.reason,
+              error: decision.error,
+            });
+          }
+        } catch (schedulerError) {
+          const errorText = toErrorMessage(schedulerError);
+          log.warn('Observed group memory scheduling failed', {
+            channelId: message.channelId,
             messageId: message.id,
-            triggerReason: decision.triggerReason,
-            spanStartMessageId: decision.spanStartMessageId,
-            spanEndMessageId: decision.spanEndMessageId,
-            newEntryCount: decision.newEntryCount,
-            watermarkLagMessageIds: decision.watermarkLagMessageIds,
-            hasDeferredBacklog: decision.hasDeferredBacklog,
-          });
-        } else if (decision.reason === 'extraction_failed') {
-          log.warn('Observed group memory extraction failed', {
-            channelId: decision.channelId,
-            messageId: message.id,
-            watermarkLagMessageIds: decision.watermarkLagMessageIds,
-            error: decision.error,
+            error: errorText,
           });
           safeguardAuditTrail.append('memory.group_observed.error', {
-            channelId: decision.channelId,
+            channelId: message.channelId,
             messageId: message.id,
-            reason: decision.reason,
-            error: decision.error,
+            error: errorText,
           });
         }
-      } catch (schedulerError) {
-        const errorText = toErrorMessage(schedulerError);
-        log.warn('Observed group memory scheduling failed', {
-          channelId: message.channelId,
-          messageId: message.id,
-          error: errorText,
-        });
-        safeguardAuditTrail.append('memory.group_observed.error', {
-          channelId: message.channelId,
-          messageId: message.id,
-          error: errorText,
-        });
       }
+    })();
+    if (!passiveNameCandidateBuilder) {
+      await observedMemoryWork;
+      return;
     }
-    if (!passiveNameCandidateBuilder) return;
     try {
       const decision = await passiveNameCandidateBuilder.build(message);
       if (decision.status === 'created') {
@@ -778,6 +786,7 @@ export function registerGatewayMessageHandlers(
         } else if (participationAppraiser) {
           await appraiseParticipationCandidate(candidate);
         }
+        await observedMemoryWork;
         return;
       }
       safeguardAuditTrail.append('participation.candidate.suppressed', {
@@ -813,6 +822,7 @@ export function registerGatewayMessageHandlers(
         timestamp: nowMonotonicMs(),
       });
     }
+    await observedMemoryWork;
   };
 
   const pruneDuplicateCaches = (now: number): void => {

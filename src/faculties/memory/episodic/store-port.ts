@@ -404,6 +404,8 @@ type EpisodeEmbeddingTargetReason = 'missing' | 'stale' | 'failed';
 
 export interface EpisodeEmbeddingTarget {
   episode: Episode;
+  /** Opaque relational revision selected atomically with the episode body. */
+  sourceRevision: string;
   reason: EpisodeEmbeddingTargetReason;
   lastError?: string;
 }
@@ -415,7 +417,7 @@ export interface EpisodeEmbeddingTargetListInput {
 
 export interface EpisodeEmbeddingWriteInput {
   episodeId: string;
-  sourceUpdatedAt: string;
+  sourceRevision: string;
   profile: EpisodeEmbeddingProfile;
   documentHash: string;
   embedding: Float32Array;
@@ -424,7 +426,7 @@ export interface EpisodeEmbeddingWriteInput {
 
 export interface EpisodeEmbeddingFailureInput {
   episodeId: string;
-  sourceUpdatedAt: string;
+  sourceRevision: string;
   profile: EpisodeEmbeddingProfile;
   error: string;
   attemptedAt: string;
@@ -451,6 +453,7 @@ export interface EpisodeEmbeddingIndexHealth {
 
 export type EpisodeEmbeddingIndexAttempt =
   | { episodeId: string; status: 'indexed' }
+  | { episodeId: string; status: 'invalid'; error: string }
   | { episodeId: string; status: 'failed'; error: string }
   | { episodeId: string; status: 'changed_during_index' };
 

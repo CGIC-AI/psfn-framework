@@ -58,10 +58,11 @@ export class PostgresEpisodeEmbeddingIndex implements EpisodeEmbeddingStorePort 
     const profile = normalizeEmbeddingProfile(input.profile);
     const limit = normalizeLimit(input.limit);
     const rows = await queryRows<PostgresEpisodeRow & {
+      source_revision: string;
       index_state: string;
       embedding_last_error: string | null;
     }>(this.pool, `
-      SELECT id, episode_json, embedding_last_error,
+      SELECT id, episode_json, updated_at::text AS source_revision, embedding_last_error,
         CASE
           WHEN embedding_last_error IS NOT NULL THEN 'failed'
           WHEN embedding IS NULL THEN 'missing'
@@ -89,6 +90,7 @@ export class PostgresEpisodeEmbeddingIndex implements EpisodeEmbeddingStorePort 
     ]);
     return rows.map((row) => ({
       episode: mapEpisodeRow(row),
+      sourceRevision: parseRequiredText(row.source_revision, 'episode embedding source revision'),
       reason: row.index_state === 'missing' || row.index_state === 'failed'
         ? row.index_state
         : 'stale',
@@ -98,13 +100,13 @@ export class PostgresEpisodeEmbeddingIndex implements EpisodeEmbeddingStorePort 
 
   async writeEpisodeEmbedding(input: EpisodeEmbeddingWriteInput): Promise<boolean> {
     const episodeId = parseRequiredText(input.episodeId, 'episode embedding episode id');
-    const sourceUpdatedAt = normalizeInstant(
-      input.sourceUpdatedAt,
-      'episode embedding source updatedAt',
+    const sourceRevision = parseRequiredText(
+      input.sourceRevision,
+      'episode embedding source revision',
     );
     const indexedAt = normalizeInstant(input.indexedAt, 'episode embedding indexedAt');
-    if (sourceUpdatedAt === undefined || indexedAt === undefined) {
-      throw new Error('episode embedding timestamps are required');
+    if (indexedAt === undefined) {
+      throw new Error('episode embedding indexedAt is required');
     }
     const profile = normalizeEmbeddingProfile(input.profile);
     validateEmbeddingDimensions(input.embedding, profile.dimensions, 'write');
@@ -131,13 +133,13 @@ export class PostgresEpisodeEmbeddingIndex implements EpisodeEmbeddingStorePort 
         AND ${ACTIVE_CANONICAL_EPISODE_FILTER}
     `, [
       episodeId,
-      sourceUpdatedAt,
+      sourceRevision,
       encodeEmbeddingLiteral(input.embedding),
       profile.documentSchema,
       profile.provider,
       profile.model,
       profile.dimensions,
-      sourceUpdatedAt,
+      sourceRevision,
       input.documentHash,
       indexedAt,
     ]);
@@ -146,13 +148,13 @@ export class PostgresEpisodeEmbeddingIndex implements EpisodeEmbeddingStorePort 
 
   async recordEpisodeEmbeddingFailure(input: EpisodeEmbeddingFailureInput): Promise<boolean> {
     const episodeId = parseRequiredText(input.episodeId, 'episode embedding episode id');
-    const sourceUpdatedAt = normalizeInstant(
-      input.sourceUpdatedAt,
-      'episode embedding source updatedAt',
+    const sourceRevision = parseRequiredText(
+      input.sourceRevision,
+      'episode embedding source revision',
     );
     const attemptedAt = normalizeInstant(input.attemptedAt, 'episode embedding attemptedAt');
-    if (sourceUpdatedAt === undefined || attemptedAt === undefined) {
-      throw new Error('episode embedding timestamps are required');
+    if (attemptedAt === undefined) {
+      throw new Error('episode embedding attemptedAt is required');
     }
     const profile = normalizeEmbeddingProfile(input.profile);
     const error = parseRequiredText(input.error, 'episode embedding error');
@@ -169,7 +171,7 @@ export class PostgresEpisodeEmbeddingIndex implements EpisodeEmbeddingStorePort 
         AND ${ACTIVE_CANONICAL_EPISODE_FILTER}
     `, [
       episodeId,
-      sourceUpdatedAt,
+      sourceRevision,
       profile.documentSchema,
       profile.provider,
       profile.model,

@@ -8,13 +8,18 @@ import {
   queryRows,
 } from '../postgres.js';
 import type {
+  BuzzCausalEvent,
+  BuzzCausalClaimResult,
   BuzzInboundRecoveryRecord,
   BuzzInboundRecoveryState,
   BuzzRecoveryScope,
   BuzzRecoveryStore,
+  BuzzSuppressionReason,
 } from '../../channels/buzz/recovery-store.js';
+import { isBuzzSuppressionReason } from '../../channels/buzz/recovery-store.js';
+import type { BuzzMembershipChange, BuzzMembershipSnapshot } from '../../channels/buzz/protocol.js';
 import { isNostrEvent } from '../../channels/buzz/protocol.js';
-import { POSTGRES_BUZZ_RECOVERY_MIGRATIONS } from './migrations.js';
+import { POSTGRES_BUZZ_RECOVERY_MIGRATIONS } from './buzz-recovery-migrations.js';
 import {
   startPostgresStoreReadiness,
   type PostgresStoreReadinessHandle,
@@ -26,7 +31,7 @@ interface RecoveryRow extends QueryResultRow {
   event_created_at: string;
   state: BuzzInboundRecoveryState;
   outbound_event_json: unknown;
-  suppression_reason: string | null;
+  suppression_reason: unknown;
 }
 
 function toRecoveryRecord(row: RecoveryRow): BuzzInboundRecoveryRecord {
@@ -42,6 +47,9 @@ function toRecoveryRecord(row: RecoveryRow): BuzzInboundRecoveryRecord {
     && (!isNostrEvent(outboundEvent) || !verifyEvent(outboundEvent))
   ) {
     throw new Error('Persisted Buzz outbound event is invalid');
+  }
+  if (row.suppression_reason !== null && !isBuzzSuppressionReason(row.suppression_reason)) {
+    throw new Error('Persisted Buzz suppression reason is invalid');
   }
   return {
     eventId: row.event_id,
@@ -113,70 +121,171 @@ export class PostgresBuzzRecoveryStore implements BuzzRecoveryStore {
     return { claimed: false, record: existing };
   }
 
-  async claimCausalEdge(input: {
-    chainId: string;
-    parentEventId: string;
-    authorPubkey: string;
-    eventId: string;
-  }): Promise<boolean> {
+  async registerHumanRoot(
+    input: Omit<BuzzCausalEvent, 'rootEventId' | 'parentEventId' | 'hop'>,
+  ): Promise<void> {
     await this.waitUntilReady();
+    await executeQuery(this.pool, `
+      INSERT INTO buzz_causal_events (
+        community, companion_id, event_id, channel_id, root_event_id,
+        parent_event_id, hop, author_pubkey, observed_at_ms
+      ) VALUES ($1, $2, $3, $4, $3, NULL, 0, $5, $6)
+      ON CONFLICT (community, companion_id, event_id) DO NOTHING
+    `, [
+      this.scope.community,
+      this.scope.companionId,
+      input.eventId,
+      input.channelId,
+      input.authorPubkey,
+      Date.now(),
+    ]);
+  }
+
+  async claimCausalEvent(input: BuzzCausalEvent): Promise<BuzzCausalClaimResult> {
+    await this.waitUntilReady();
+    const parent = await queryOne<{ present: boolean }>(this.pool, `
+      SELECT true AS present
+      FROM buzz_causal_events
+      WHERE community = $1 AND companion_id = $2
+        AND event_id = $3 AND root_event_id = $4
+        AND channel_id = $5 AND hop + 1 = $6
+    `, [
+      this.scope.community,
+      this.scope.companionId,
+      input.parentEventId,
+      input.rootEventId,
+      input.channelId,
+      input.hop,
+    ]);
+    if (!parent) return 'invalid_parent';
     const result = await this.pool.query(`
-      INSERT INTO buzz_causal_edges (
-        community, companion_id, chain_id, parent_event_id,
-        author_pubkey, event_id, observed_at_ms
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+      INSERT INTO buzz_causal_events (
+        community, companion_id, event_id, channel_id, root_event_id,
+        parent_event_id, hop, author_pubkey, observed_at_ms
+      )
+      SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9
+      FROM buzz_causal_events parent
+      WHERE parent.community = $1
+        AND parent.companion_id = $2
+        AND parent.event_id = $6
+        AND parent.root_event_id = $5
+        AND parent.channel_id = $4
+        AND parent.hop + 1 = $7
       ON CONFLICT DO NOTHING
       RETURNING event_id
     `, [
       this.scope.community,
       this.scope.companionId,
-      input.chainId,
-      input.parentEventId,
-      input.authorPubkey,
       input.eventId,
+      input.channelId,
+      input.rootEventId,
+      input.parentEventId,
+      input.hop,
+      input.authorPubkey,
       Date.now(),
     ]);
-    return result.rowCount === 1;
+    return result.rowCount === 1 ? 'claimed' : 'duplicate';
   }
 
-  async registerHumanRoot(rootEventId: string, authorPubkey: string): Promise<void> {
+  async markReady(
+    eventId: string,
+    outboundEvent: NostrEvent,
+    causalEvent: BuzzCausalEvent,
+  ): Promise<void> {
     await this.waitUntilReady();
-    await executeQuery(this.pool, `
-      INSERT INTO buzz_causal_roots (
-        community, companion_id, root_event_id, human_author_pubkey, observed_at_ms
-      ) VALUES ($1, $2, $3, $4, $5)
-      ON CONFLICT (community, companion_id, root_event_id) DO NOTHING
-    `, [
-      this.scope.community,
-      this.scope.companionId,
-      rootEventId,
-      authorPubkey,
-      Date.now(),
-    ]);
-  }
-
-  async hasHumanRoot(rootEventId: string): Promise<boolean> {
-    await this.waitUntilReady();
-    const row = await queryOne<{ present: boolean }>(this.pool, `
-      SELECT true AS present
-      FROM buzz_causal_roots
-      WHERE community = $1 AND companion_id = $2 AND root_event_id = $3
-    `, [this.scope.community, this.scope.companionId, rootEventId]);
-    return row?.present === true;
-  }
-
-  async markReady(eventId: string, outboundEvent: NostrEvent): Promise<void> {
-    await this.transition(eventId, 'ready', {
-      outboundEventJson: JSON.stringify(outboundEvent),
-    });
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const recovery = await client.query(`
+        UPDATE buzz_inbound_recovery
+        SET state = 'ready', outbound_event_json = $4::jsonb,
+          suppression_reason = NULL, updated_at_ms = $5
+        WHERE community = $1 AND companion_id = $2 AND event_id = $3 AND state = 'processing'
+        RETURNING event_id
+      `, [
+        this.scope.community,
+        this.scope.companionId,
+        eventId,
+        JSON.stringify(outboundEvent),
+        Date.now(),
+      ]);
+      const causal = await client.query(`
+        INSERT INTO buzz_causal_events (
+          community, companion_id, event_id, channel_id, root_event_id,
+          parent_event_id, hop, author_pubkey, observed_at_ms
+        )
+        SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9
+        FROM buzz_causal_events parent
+        WHERE parent.community = $1
+          AND parent.companion_id = $2
+          AND parent.event_id = $6
+          AND parent.root_event_id = $5
+          AND parent.channel_id = $4
+          AND parent.hop + 1 = $7
+        ON CONFLICT DO NOTHING
+        RETURNING event_id
+      `, [
+        this.scope.community,
+        this.scope.companionId,
+        causalEvent.eventId,
+        causalEvent.channelId,
+        causalEvent.rootEventId,
+        causalEvent.parentEventId,
+        causalEvent.hop,
+        causalEvent.authorPubkey,
+        Date.now(),
+      ]);
+      if (recovery.rowCount !== 1 || causal.rowCount !== 1) {
+        throw new Error(`Buzz recovery event ${eventId} could not become causally ready`);
+      }
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async markCompleted(eventId: string): Promise<void> {
-    await this.transition(eventId, 'completed', { expectedState: 'ready' });
+    await this.transition(eventId, 'completed', 'ready');
   }
 
-  async markSuppressed(eventId: string, reason: string): Promise<void> {
-    await this.transition(eventId, 'suppressed', { suppressionReason: reason });
+  async markSuppressed(eventId: string, reason: BuzzSuppressionReason): Promise<void> {
+    await this.waitUntilReady();
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const prior = await client.query<{ outbound_event_id: string | null }>(`
+        SELECT outbound_event_json->>'id' AS outbound_event_id
+        FROM buzz_inbound_recovery
+        WHERE community = $1 AND companion_id = $2 AND event_id = $3
+          AND state IN ('processing', 'ready')
+        FOR UPDATE
+      `, [this.scope.community, this.scope.companionId, eventId]);
+      if (prior.rowCount !== 1) {
+        throw new Error(`Buzz recovery event ${eventId} cannot transition to suppressed`);
+      }
+      await client.query(`
+        UPDATE buzz_inbound_recovery
+        SET state = 'suppressed', outbound_event_json = NULL,
+          suppression_reason = $4, updated_at_ms = $5
+        WHERE community = $1 AND companion_id = $2 AND event_id = $3
+      `, [this.scope.community, this.scope.companionId, eventId, reason, Date.now()]);
+      const outboundEventId = prior.rows[0]?.outbound_event_id;
+      if (outboundEventId) {
+        await client.query(`
+          DELETE FROM buzz_causal_events
+          WHERE community = $1 AND companion_id = $2 AND event_id = $3
+        `, [this.scope.community, this.scope.companionId, outboundEventId]);
+      }
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async listRecoverable(): Promise<BuzzInboundRecoveryRecord[]> {
@@ -219,24 +328,27 @@ export class PostgresBuzzRecoveryStore implements BuzzRecoveryStore {
     `, [this.scope.community, this.scope.companionId, eventCreatedAt, Date.now()]);
   }
 
-  async replaceMemberships(channelIds: readonly string[], observedAtMs: number): Promise<void> {
+  async replaceMemberships(memberships: readonly BuzzMembershipSnapshot[]): Promise<void> {
     await this.waitUntilReady();
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
       await client.query(`
-        UPDATE buzz_room_memberships
-        SET active = false, observed_at_ms = $3
+        DELETE FROM buzz_room_memberships
         WHERE community = $1 AND companion_id = $2
-      `, [this.scope.community, this.scope.companionId, observedAtMs]);
-      for (const channelId of channelIds) {
+      `, [this.scope.community, this.scope.companionId]);
+      for (const membership of memberships) {
         await client.query(`
           INSERT INTO buzz_room_memberships (
-            community, companion_id, channel_id, active, observed_at_ms
-          ) VALUES ($1, $2, $3, true, $4)
-          ON CONFLICT (community, companion_id, channel_id) DO UPDATE SET
-            active = true, observed_at_ms = excluded.observed_at_ms
-        `, [this.scope.community, this.scope.companionId, channelId, observedAtMs]);
+            community, companion_id, channel_id, active, event_created_at, event_id
+          ) VALUES ($1, $2, $3, true, $4, $5)
+        `, [
+          this.scope.community,
+          this.scope.companionId,
+          membership.channelId,
+          membership.position.createdAt,
+          membership.position.eventId,
+        ]);
       }
       await client.query('COMMIT');
     } catch (error) {
@@ -247,17 +359,26 @@ export class PostgresBuzzRecoveryStore implements BuzzRecoveryStore {
     }
   }
 
-  async setMembership(channelId: string, active: boolean, observedAtMs: number): Promise<void> {
+  async setMembership(change: BuzzMembershipChange): Promise<void> {
     await this.waitUntilReady();
     await executeQuery(this.pool, `
       INSERT INTO buzz_room_memberships (
-        community, companion_id, channel_id, active, observed_at_ms
-      ) VALUES ($1, $2, $3, $4, $5)
+        community, companion_id, channel_id, active, event_created_at, event_id
+      ) VALUES ($1, $2, $3, $4, $5, $6)
       ON CONFLICT (community, companion_id, channel_id) DO UPDATE SET
         active = excluded.active,
-        observed_at_ms = excluded.observed_at_ms
-      WHERE buzz_room_memberships.observed_at_ms <= excluded.observed_at_ms
-    `, [this.scope.community, this.scope.companionId, channelId, active, observedAtMs]);
+        event_created_at = excluded.event_created_at,
+        event_id = excluded.event_id
+      WHERE (buzz_room_memberships.event_created_at, buzz_room_memberships.event_id)
+        < (excluded.event_created_at, excluded.event_id)
+    `, [
+      this.scope.community,
+      this.scope.companionId,
+      change.channelId,
+      change.active,
+      change.position.createdAt,
+      change.position.eventId,
+    ]);
   }
 
   async close(): Promise<void> {
@@ -278,28 +399,18 @@ export class PostgresBuzzRecoveryStore implements BuzzRecoveryStore {
   private async transition(
     eventId: string,
     nextState: BuzzInboundRecoveryState,
-    options: {
-      expectedState?: BuzzInboundRecoveryState;
-      outboundEventJson?: string;
-      suppressionReason?: string;
-    },
+    expectedState: BuzzInboundRecoveryState,
   ): Promise<void> {
     await this.waitUntilReady();
-    const expectedState = options.expectedState ?? 'processing';
     const result = await this.pool.query(`
       UPDATE buzz_inbound_recovery
-      SET state = $4,
-        outbound_event_json = COALESCE($5::jsonb, outbound_event_json),
-        suppression_reason = $6,
-        updated_at_ms = $7
-      WHERE community = $1 AND companion_id = $2 AND event_id = $3 AND state = $8
+      SET state = $4, updated_at_ms = $5
+      WHERE community = $1 AND companion_id = $2 AND event_id = $3 AND state = $6
     `, [
       this.scope.community,
       this.scope.companionId,
       eventId,
       nextState,
-      options.outboundEventJson ?? null,
-      options.suppressionReason ?? null,
       Date.now(),
       expectedState,
     ]);

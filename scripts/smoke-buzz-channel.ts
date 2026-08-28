@@ -186,6 +186,7 @@ async function main(): Promise<void> {
     reconnectBaseDelayMs: 250,
     reconnectMaxDelayMs: 1_000,
     maxReconnectAttempts: 3,
+    maxFutureEventSkewSeconds: 30,
   }, {
     shutdownTimeoutMs: SMOKE_TIMEOUT_MS,
     recoveryStore: new InMemoryBuzzRecoveryStore(),

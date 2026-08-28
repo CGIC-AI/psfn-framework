@@ -18,6 +18,7 @@ const RECOVERY_POLICY = {
   reconnectBaseDelayMs: 250,
   reconnectMaxDelayMs: 4_000,
   maxReconnectAttempts: 5,
+  maxFutureEventSkewSeconds: 30,
 };
 
 describe('Buzz channel plugin config', () => {

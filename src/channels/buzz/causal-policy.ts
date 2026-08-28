@@ -1,17 +1,6 @@
 import type { Event as NostrEvent } from 'nostr-tools';
-import {
-  createBuzzCausalReplyTags,
-  parseBuzzCausalEnvelope,
-} from './protocol.js';
-
-export type BuzzSuppressionReason =
-  | 'autonomous_hop_limit'
-  | 'duplicate_causal_edge'
-  | 'unknown_causal_root'
-  | 'no_information_acknowledgement'
-  | 'fatigue_suppressed'
-  | 'intentional_no_reply'
-  | 'empty_response';
+import { parseBuzzCausalEnvelope } from './protocol.js';
+import type { BuzzSuppressionReason } from './recovery-store.js';
 
 export interface BuzzCausalReplyPlan {
   rootEventId: string;
@@ -29,6 +18,7 @@ export function planBuzzCausalReply(input: {
 }): { plan?: BuzzCausalReplyPlan; suppress?: BuzzSuppressionReason; causalEdge?: {
   chainId: string;
   parentEventId: string;
+  hop: number;
   authorPubkey: string;
   eventId: string;
 } } {
@@ -64,14 +54,11 @@ export function planBuzzCausalReply(input: {
     causalEdge: {
       chainId: envelope.chainId,
       parentEventId: envelope.parentEventId,
+      hop: envelope.hop,
       authorPubkey: input.event.pubkey,
       eventId: input.event.id,
     },
   };
-}
-
-export function buzzCausalReplyTags(plan: BuzzCausalReplyPlan): string[][] {
-  return createBuzzCausalReplyTags(plan);
 }
 
 export function normalizeAcknowledgement(value: string): string {

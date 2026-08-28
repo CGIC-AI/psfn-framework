@@ -19,6 +19,8 @@ const BUZZ_SCOPED_ID_PREFIX = 'buzz:';
 export interface BuzzStreamAcceptancePolicy {
   companionPubkey: string;
   subscribedSince: number;
+  nowSeconds: number;
+  maxFutureEventSkewSeconds: number;
   channelAllowlist: ReadonlySet<string>;
   authorAllowlist: ReadonlySet<string>;
   machineAuthorPubkeys: ReadonlySet<string>;
@@ -36,6 +38,24 @@ export interface BuzzCausalEnvelope {
 export interface BuzzMembershipChange {
   channelId: string;
   active: boolean;
+  position: BuzzMembershipPosition;
+}
+
+export interface BuzzMembershipSnapshot {
+  channelId: string;
+  position: BuzzMembershipPosition;
+}
+
+export interface BuzzMembershipPosition {
+  createdAt: number;
+  eventId: string;
+}
+
+export interface BuzzRelayAuthorityPolicy {
+  relayPubkey: string;
+  companionPubkey: string;
+  nowSeconds: number;
+  maxFutureEventSkewSeconds: number;
 }
 
 export function isNostrHexKey(value: string): boolean {
@@ -93,7 +113,11 @@ export function acceptsBuzzStreamEvent(
   } catch {
     return false;
   }
-  if (event.kind !== BUZZ_STREAM_KIND || event.created_at < policy.subscribedSince) return false;
+  if (
+    event.kind !== BUZZ_STREAM_KIND
+    || event.created_at < policy.subscribedSince
+    || event.created_at > policy.nowSeconds + policy.maxFutureEventSkewSeconds
+  ) return false;
   if (event.pubkey === policy.companionPubkey || !policy.authorAllowlist.has(event.pubkey)) return false;
   if (Buffer.byteLength(event.content, 'utf8') > BUZZ_STREAM_TEXT_CHUNK_LIMIT) return false;
   const channels = buzzTagValues(event, 'h');
@@ -184,27 +208,28 @@ export function createBuzzCausalReplyTags(input: {
 
 export function parseBuzzMembershipSnapshot(
   event: NostrEvent,
-  relayPubkey: string,
-  companionPubkey: string,
-): string | null {
-  if (!acceptsRelayAuthorityEvent(event, relayPubkey, BUZZ_MEMBERSHIP_SNAPSHOT_KIND)) return null;
+  policy: BuzzRelayAuthorityPolicy,
+): BuzzMembershipSnapshot | null {
+  if (!acceptsRelayAuthorityEvent(event, policy, BUZZ_MEMBERSHIP_SNAPSHOT_KIND)) return null;
   const channelIds = buzzTagValues(event, 'd');
   if (
     channelIds.length !== 1
     || !isRfc4122Uuid(channelIds[0]!)
-    || !buzzTagValues(event, 'p').includes(companionPubkey)
+    || !buzzTagValues(event, 'p').includes(policy.companionPubkey)
   ) return null;
-  return channelIds[0]!;
+  return {
+    channelId: channelIds[0]!,
+    position: { createdAt: event.created_at, eventId: event.id },
+  };
 }
 
 export function parseBuzzMembershipChange(
   event: NostrEvent,
-  relayPubkey: string,
-  companionPubkey: string,
+  policy: BuzzRelayAuthorityPolicy,
 ): BuzzMembershipChange | null {
   if (
-    !acceptsRelayAuthorityEvent(event, relayPubkey, BUZZ_MEMBER_ADDED_KIND)
-    && !acceptsRelayAuthorityEvent(event, relayPubkey, BUZZ_MEMBER_REMOVED_KIND)
+    !acceptsRelayAuthorityEvent(event, policy, BUZZ_MEMBER_ADDED_KIND)
+    && !acceptsRelayAuthorityEvent(event, policy, BUZZ_MEMBER_REMOVED_KIND)
   ) return null;
   const channelIds = buzzTagValues(event, 'h');
   const targets = buzzTagValues(event, 'p');
@@ -212,22 +237,38 @@ export function parseBuzzMembershipChange(
     channelIds.length !== 1
     || !isRfc4122Uuid(channelIds[0]!)
     || targets.length !== 1
-    || targets[0] !== companionPubkey
+    || targets[0] !== policy.companionPubkey
   ) return null;
-  return { channelId: channelIds[0]!, active: event.kind === BUZZ_MEMBER_ADDED_KIND };
+  return {
+    channelId: channelIds[0]!,
+    active: event.kind === BUZZ_MEMBER_ADDED_KIND,
+    position: { createdAt: event.created_at, eventId: event.id },
+  };
 }
 
 function acceptsRelayAuthorityEvent(
   event: NostrEvent,
-  relayPubkey: string,
+  policy: BuzzRelayAuthorityPolicy,
   expectedKind: number,
 ): boolean {
-  if (event.kind !== expectedKind || event.pubkey !== relayPubkey) return false;
+  if (
+    event.kind !== expectedKind
+    || event.pubkey !== policy.relayPubkey
+    || event.created_at > policy.nowSeconds + policy.maxFutureEventSkewSeconds
+  ) return false;
   try {
     return verifyEvent(event);
   } catch {
     return false;
   }
+}
+
+export function compareBuzzMembershipPositions(
+  left: BuzzMembershipPosition,
+  right: BuzzMembershipPosition,
+): number {
+  if (left.createdAt !== right.createdAt) return left.createdAt - right.createdAt;
+  return left.eventId.localeCompare(right.eventId);
 }
 
 export function createBuzzAuthEvent(

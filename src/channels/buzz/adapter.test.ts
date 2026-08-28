@@ -74,6 +74,7 @@ function makeConfig(relay: TestRelay): BuzzAdapterConfig {
     reconnectBaseDelayMs: 5,
     reconnectMaxDelayMs: 10,
     maxReconnectAttempts: 1,
+    maxFutureEventSkewSeconds: 30,
   };
 }
 
@@ -107,11 +108,12 @@ function signStreamEvent(input: {
   companionPubkey?: string;
   content?: string;
   kind?: number;
+  createdAt?: number;
   extraTags?: string[][];
 }): Event {
   return finalizeEvent({
     kind: input.kind ?? 9,
-    created_at: Math.floor(Date.now() / 1_000),
+    created_at: input.createdAt ?? Math.floor(Date.now() / 1_000),
     content: input.content ?? 'Please take this work.',
     tags: [
       ['h', input.channelId ?? CHANNEL_ID],
@@ -156,6 +158,7 @@ function startAuthenticatedRelay(
   options: {
     initialChannelIds?: readonly string[];
     onMembershipSubscription?: (socket: WebSocket, subscriptionId: string) => void;
+    acknowledgeClose?: boolean;
   } = {},
 ): void {
   relay.server.on('connection', socket => {
@@ -217,7 +220,11 @@ function startAuthenticatedRelay(
         }
         return;
       }
-      if (frame[0] === 'CLOSE' && typeof frame[1] === 'string') {
+      if (
+        frame[0] === 'CLOSE'
+        && typeof frame[1] === 'string'
+        && options.acknowledgeClose !== false
+      ) {
         socket.send(JSON.stringify(['CLOSED', frame[1], '']));
       }
     });
@@ -403,7 +410,7 @@ describe('BuzzAdapter', () => {
     first.onMessage(firstHandler);
     await first.start();
     await vi.waitFor(() => expect(published).toHaveLength(1));
-    await first.stop();
+    await expect(first.stop()).rejects.toThrow('Buzz cancelled turn cleanup failed');
 
     acknowledge = true;
     const secondHandler = vi.fn(async (message: SubstrateMessage) => responseFor(message));
@@ -514,7 +521,7 @@ describe('BuzzAdapter', () => {
     await adapter.start();
     await vi.waitFor(() => expect(log.warn).toHaveBeenCalledWith(
       'Buzz autonomous reply terminated without publication',
-      expect.objectContaining({ reason: 'unknown_causal_root' }),
+      expect.objectContaining({ reason: 'invalid_causal_parent' }),
     ));
     await adapter.stop();
 
@@ -549,7 +556,7 @@ describe('BuzzAdapter', () => {
       }
       const removal = finalizeEvent({
         kind: 44_101,
-        created_at: Math.floor(Date.now() / 1_000),
+        created_at: Math.floor(Date.now() / 1_000) + 1,
         content: '',
         tags: [['p', relay.companionPubkey], ['h', CHANNEL_ID]],
       }, relay.relaySecretKey);
@@ -573,6 +580,55 @@ describe('BuzzAdapter', () => {
       'Buzz autonomous reply terminated without publication',
       expect.objectContaining({ reason: 'turn_cancelled' }),
     ));
+    await adapter.stop();
+  });
+
+  it('keeps a newer signed membership removal authoritative over an older replayed add', async () => {
+    const relay = await createTestRelay();
+    let membershipSocket: WebSocket | undefined;
+    let membershipSubscriptionId: string | undefined;
+    const onStreamSubscribed = vi.fn();
+    startAuthenticatedRelay(relay, (_socket, subscriptionId) => {
+      onStreamSubscribed(subscriptionId);
+    }, () => undefined, { accepted: true, message: 'stored' }, {
+      initialChannelIds: [],
+      onMembershipSubscription: (socket, subscriptionId) => {
+        membershipSocket = socket;
+        membershipSubscriptionId = subscriptionId;
+      },
+    });
+    const adapter = new BuzzAdapter(makeConfig(relay), makeOptions(2_000));
+    adapter.onOperatorAlert(async () => undefined);
+    adapter.onMessage(async message => responseFor(message));
+
+    await adapter.start();
+    if (!membershipSocket || !membershipSubscriptionId) throw new Error('membership stream was not ready');
+    const createdAt = Math.floor(Date.now() / 1_000);
+    const removal = finalizeEvent({
+      kind: 44_101,
+      created_at: createdAt + 2,
+      content: '',
+      tags: [['p', relay.companionPubkey], ['h', CHANNEL_ID]],
+    }, relay.relaySecretKey);
+    const staleAddition = finalizeEvent({
+      kind: 44_100,
+      created_at: createdAt + 1,
+      content: '',
+      tags: [['p', relay.companionPubkey], ['h', CHANNEL_ID]],
+    }, relay.relaySecretKey);
+    membershipSocket.send(JSON.stringify(['EVENT', membershipSubscriptionId, removal]));
+    membershipSocket.send(JSON.stringify(['EVENT', membershipSubscriptionId, staleAddition]));
+    await new Promise(resolve => setTimeout(resolve, 25));
+    expect(onStreamSubscribed).not.toHaveBeenCalled();
+
+    const currentAddition = finalizeEvent({
+      kind: 44_100,
+      created_at: createdAt + 3,
+      content: '',
+      tags: [['p', relay.companionPubkey], ['h', CHANNEL_ID]],
+    }, relay.relaySecretKey);
+    membershipSocket.send(JSON.stringify(['EVENT', membershipSubscriptionId, currentAddition]));
+    await vi.waitFor(() => expect(onStreamSubscribed).toHaveBeenCalledOnce());
     await adapter.stop();
   });
 
@@ -641,7 +697,7 @@ describe('BuzzAdapter', () => {
     await vi.waitFor(() => expect(alertHandler).toHaveBeenCalledWith(expect.objectContaining({
       message: expect.stringContaining('timed out acknowledging event'),
     })));
-    await adapter.stop();
+    await expect(adapter.stop()).rejects.toThrow('Buzz cancelled turn cleanup failed');
   });
 
   it('reports connection loss and preserves an operator-alert delivery failure in logs', async () => {
@@ -667,6 +723,315 @@ describe('BuzzAdapter', () => {
       { error: 'operator sink offline' },
     ));
     await adapter.stop();
+  });
+
+  it('rejects future-dated events without poisoning the durable replay cursor', async () => {
+    const relay = await createTestRelay();
+    const nowSeconds = Math.floor(Date.now() / 1_000);
+    const future = signStreamEvent({
+      secretKey: relay.authorSecretKey,
+      companionPubkey: relay.companionPubkey,
+      createdAt: nowSeconds + 3_600,
+      content: 'future poison',
+    });
+    const accepted = signStreamEvent({
+      secretKey: relay.authorSecretKey,
+      companionPubkey: relay.companionPubkey,
+      createdAt: nowSeconds,
+      content: 'current work',
+    });
+    startAuthenticatedRelay(relay, (socket, subscriptionId) => {
+      socket.send(JSON.stringify(['EVENT', subscriptionId, future]));
+      socket.send(JSON.stringify(['EVENT', subscriptionId, accepted]));
+    }, () => undefined);
+    const store = new InMemoryBuzzRecoveryStore();
+    const handler = vi.fn(async (message: SubstrateMessage) => responseFor(message));
+    const adapter = new BuzzAdapter(makeConfig(relay), {
+      shutdownTimeoutMs: 2_000,
+      recoveryStore: store,
+    });
+    adapter.onOperatorAlert(async () => undefined);
+    adapter.onMessage(handler);
+
+    await adapter.start();
+    await vi.waitFor(() => expect(handler).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(store.loadReplayCursor()).resolves.toBe(nowSeconds));
+    await adapter.stop();
+
+    expect(handler.mock.calls[0]?.[0]).toMatchObject({ id: accepted.id });
+  });
+
+  it('rejects forged machine parents and reset hops after an authenticated human root', async () => {
+    const relay = await createTestRelay();
+    const humanSecretKey = generateSecretKey();
+    const humanPubkey = getPublicKey(humanSecretKey);
+    const humanRoot = signStreamEvent({
+      secretKey: humanSecretKey,
+      companionPubkey: relay.companionPubkey,
+      content: 'Please investigate this.',
+    });
+    let streamSocket: WebSocket | undefined;
+    let streamSubscriptionId: string | undefined;
+    const forged = signMachineStreamEvent({
+      relay,
+      hop: 1,
+      rootEventId: humanRoot.id,
+      parentEventId: '9'.repeat(64),
+      content: 'I reset the chain.',
+    });
+    startAuthenticatedRelay(relay, (socket, subscriptionId) => {
+      streamSocket = socket;
+      streamSubscriptionId = subscriptionId;
+      socket.send(JSON.stringify(['EVENT', subscriptionId, humanRoot]));
+    }, () => {
+      if (!streamSocket || !streamSubscriptionId) throw new Error('stream was not ready');
+      streamSocket.send(JSON.stringify(['EVENT', streamSubscriptionId, forged]));
+    });
+    const config = makeConfig(relay);
+    config.allowedAuthorPubkeys = [humanPubkey, relay.authorPubkey];
+    config.machineAuthorPubkeys = [relay.authorPubkey];
+    const log: RuntimeChannelLifecycleLogger = { error: vi.fn(), warn: vi.fn() };
+    const handler = vi.fn(async (message: SubstrateMessage) => responseFor(message));
+    const adapter = new BuzzAdapter(config, makeOptions(2_000, log));
+    adapter.onOperatorAlert(async () => undefined);
+    adapter.onMessage(handler);
+
+    await adapter.start();
+    await vi.waitFor(() => expect(log.warn).toHaveBeenCalledWith(
+      'Buzz autonomous reply terminated without publication',
+      expect.objectContaining({ reason: 'invalid_causal_parent' }),
+    ));
+    await adapter.stop();
+
+    expect(handler).toHaveBeenCalledOnce();
+    expect(handler.mock.calls[0]?.[0]).toMatchObject({ id: humanRoot.id });
+  });
+
+  it('cancels an accepted event even when membership persistence is still blocked', async () => {
+    const relay = await createTestRelay();
+    const inbound = signStreamEvent({
+      secretKey: relay.authorSecretKey,
+      companionPubkey: relay.companionPubkey,
+    });
+    let membershipSocket: WebSocket | undefined;
+    let membershipSubscriptionId: string | undefined;
+    let membershipStarted!: () => void;
+    const started = new Promise<void>(resolve => { membershipStarted = resolve; });
+    let releaseMembership!: () => void;
+    const release = new Promise<void>(resolve => { releaseMembership = resolve; });
+    class SlowMembershipStore extends InMemoryBuzzRecoveryStore {
+      override async setMembership(change: Parameters<InMemoryBuzzRecoveryStore['setMembership']>[0]): Promise<void> {
+        membershipStarted();
+        await release;
+        await super.setMembership(change);
+      }
+    }
+    const published: Event[] = [];
+    startAuthenticatedRelay(relay, (socket, subscriptionId) => {
+      socket.send(JSON.stringify(['EVENT', subscriptionId, inbound]));
+    }, event => published.push(event), { accepted: true, message: 'stored' }, {
+      onMembershipSubscription: (socket, subscriptionId) => {
+        membershipSocket = socket;
+        membershipSubscriptionId = subscriptionId;
+      },
+    });
+    const log: RuntimeChannelLifecycleLogger = { error: vi.fn(), warn: vi.fn() };
+    const adapter = new BuzzAdapter(makeConfig(relay), {
+      shutdownTimeoutMs: 2_000,
+      recoveryStore: new SlowMembershipStore(),
+      log,
+    });
+    adapter.onOperatorAlert(async () => undefined);
+    adapter.onMessage(async message => {
+      if (!membershipSocket || !membershipSubscriptionId) throw new Error('membership stream was not ready');
+      const removal = finalizeEvent({
+        kind: 44_101,
+        created_at: Math.floor(Date.now() / 1_000) + 1,
+        content: '',
+        tags: [['p', relay.companionPubkey], ['h', CHANNEL_ID]],
+      }, relay.relaySecretKey);
+      membershipSocket.send(JSON.stringify(['EVENT', membershipSubscriptionId, removal]));
+      await started;
+      return responseFor(message);
+    });
+
+    await adapter.start();
+    await vi.waitFor(() => expect(log.warn).toHaveBeenCalledWith(
+      'Buzz autonomous reply terminated without publication',
+      expect.objectContaining({ reason: 'turn_cancelled' }),
+    ));
+    releaseMembership();
+    await adapter.stop();
+
+    expect(published).toEqual([]);
+  });
+
+  it('registers cancellation before blocked claims and surfaces rejected cleanup on stop', async () => {
+    const relay = await createTestRelay();
+    const inbound = signStreamEvent({
+      secretKey: relay.authorSecretKey,
+      companionPubkey: relay.companionPubkey,
+    });
+    let claimStarted!: () => void;
+    const started = new Promise<void>(resolve => { claimStarted = resolve; });
+    let rejectClaim!: (error: Error) => void;
+    const blocked = new Promise<never>((_resolve, reject) => { rejectClaim = reject; });
+    class FailingClaimStore extends InMemoryBuzzRecoveryStore {
+      override async claimInbound(
+        input: Parameters<InMemoryBuzzRecoveryStore['claimInbound']>[0],
+      ): ReturnType<InMemoryBuzzRecoveryStore['claimInbound']> {
+        claimStarted();
+        await blocked;
+        return await super.claimInbound(input);
+      }
+    }
+    startAuthenticatedRelay(relay, (socket, subscriptionId) => {
+      socket.send(JSON.stringify(['EVENT', subscriptionId, inbound]));
+    }, () => undefined);
+    const handler = vi.fn(async (message: SubstrateMessage) => responseFor(message));
+    const adapter = new BuzzAdapter(makeConfig(relay), {
+      shutdownTimeoutMs: 2_000,
+      recoveryStore: new FailingClaimStore(),
+    });
+    adapter.onOperatorAlert(async () => undefined);
+    adapter.onMessage(handler);
+
+    await adapter.start();
+    await started;
+    const stopping = adapter.stop();
+    rejectClaim(new Error('claim cleanup failed'));
+    await expect(stopping).rejects.toThrow('Buzz cancelled turn cleanup failed');
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('prevents cognition when shutdown occurs while an inbound claim is blocked', async () => {
+    const relay = await createTestRelay();
+    const inbound = signStreamEvent({
+      secretKey: relay.authorSecretKey,
+      companionPubkey: relay.companionPubkey,
+    });
+    let claimStarted!: () => void;
+    const started = new Promise<void>(resolve => { claimStarted = resolve; });
+    let releaseClaim!: () => void;
+    const blocked = new Promise<void>(resolve => { releaseClaim = resolve; });
+    class BlockingClaimStore extends InMemoryBuzzRecoveryStore {
+      override async claimInbound(
+        input: Parameters<InMemoryBuzzRecoveryStore['claimInbound']>[0],
+      ): ReturnType<InMemoryBuzzRecoveryStore['claimInbound']> {
+        claimStarted();
+        await blocked;
+        return await super.claimInbound(input);
+      }
+    }
+    startAuthenticatedRelay(relay, (socket, subscriptionId) => {
+      socket.send(JSON.stringify(['EVENT', subscriptionId, inbound]));
+    }, () => undefined);
+    const handler = vi.fn(async (message: SubstrateMessage) => responseFor(message));
+    const adapter = new BuzzAdapter(makeConfig(relay), {
+      shutdownTimeoutMs: 2_000,
+      recoveryStore: new BlockingClaimStore(),
+    });
+    adapter.onOperatorAlert(async () => undefined);
+    adapter.onMessage(handler);
+
+    await adapter.start();
+    await started;
+    const stopping = adapter.stop();
+    releaseClaim();
+    await stopping;
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('terminates and bounds reconnects when membership lifecycle persistence fails', async () => {
+    const relay = await createTestRelay();
+    let membershipSocket: WebSocket | undefined;
+    let membershipSubscriptionId: string | undefined;
+    class FailingMembershipStore extends InMemoryBuzzRecoveryStore {
+      override async setMembership(): Promise<void> {
+        throw new Error('membership persistence offline');
+      }
+    }
+    startAuthenticatedRelay(relay, (_socket) => {
+      if (!membershipSocket || !membershipSubscriptionId) return;
+      const removal = finalizeEvent({
+        kind: 44_101,
+        created_at: Math.floor(Date.now() / 1_000) + 1,
+        content: '',
+        tags: [['p', relay.companionPubkey], ['h', CHANNEL_ID]],
+      }, relay.relaySecretKey);
+      membershipSocket.send(JSON.stringify(['EVENT', membershipSubscriptionId, removal]));
+    }, () => undefined, { accepted: true, message: 'stored' }, {
+      onMembershipSubscription: (socket, subscriptionId) => {
+        membershipSocket = socket;
+        membershipSubscriptionId = subscriptionId;
+      },
+    });
+    const alerts = vi.fn(async () => undefined);
+    const adapter = new BuzzAdapter(makeConfig(relay), {
+      shutdownTimeoutMs: 100,
+      recoveryStore: new FailingMembershipStore(),
+    });
+    adapter.onOperatorAlert(alerts);
+    adapter.onMessage(async message => responseFor(message));
+
+    await adapter.start();
+    await vi.waitFor(() => expect(alerts).toHaveBeenCalledWith(expect.objectContaining({
+      title: 'Buzz relay reconnect attempts exhausted',
+    })));
+    await adapter.stop();
+    expect(alerts).toHaveBeenCalledWith(expect.objectContaining({
+      title: 'Buzz message processing failed',
+      message: 'membership persistence offline',
+    }));
+  });
+
+  it('does not mistake an unacknowledged old close for closure of its replacement stream', async () => {
+    const relay = await createTestRelay();
+    let membershipSocket: WebSocket | undefined;
+    let membershipSubscriptionId: string | undefined;
+    let streamCount = 0;
+    startAuthenticatedRelay(relay, (socket, subscriptionId) => {
+      streamCount += 1;
+      if (streamCount % 2 === 0) {
+        socket.send(JSON.stringify(['CLOSED', subscriptionId, 'required stream failed']));
+        return;
+      }
+      if (!membershipSocket || !membershipSubscriptionId) return;
+      const createdAt = Math.floor(Date.now() / 1_000);
+      const removal = finalizeEvent({
+        kind: 44_101,
+        created_at: createdAt + 1,
+        content: '',
+        tags: [['p', relay.companionPubkey], ['h', CHANNEL_ID]],
+      }, relay.relaySecretKey);
+      const addition = finalizeEvent({
+        kind: 44_100,
+        created_at: createdAt + 2,
+        content: '',
+        tags: [['p', relay.companionPubkey], ['h', CHANNEL_ID]],
+      }, relay.relaySecretKey);
+      membershipSocket.send(JSON.stringify(['EVENT', membershipSubscriptionId, removal]));
+      setTimeout(() => {
+        membershipSocket?.send(JSON.stringify(['EVENT', membershipSubscriptionId, addition]));
+      }, 10);
+    }, () => undefined, { accepted: true, message: 'stored' }, {
+      acknowledgeClose: false,
+      onMembershipSubscription: (socket, subscriptionId) => {
+        membershipSocket = socket;
+        membershipSubscriptionId = subscriptionId;
+      },
+    });
+    const alerts = vi.fn(async () => undefined);
+    const adapter = new BuzzAdapter(makeConfig(relay), makeOptions(100));
+    adapter.onOperatorAlert(alerts);
+    adapter.onMessage(async message => responseFor(message));
+
+    await adapter.start();
+    await vi.waitFor(() => expect(alerts).toHaveBeenCalledWith(expect.objectContaining({
+      title: 'Buzz relay reconnect attempts exhausted',
+    })));
+    await adapter.stop();
+    expect(streamCount).toBeGreaterThanOrEqual(4);
   });
 
   it('rejects generic top-level outbound outside an authenticated Stream trigger', async () => {

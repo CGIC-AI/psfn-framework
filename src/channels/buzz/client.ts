@@ -9,6 +9,7 @@ import {
   BUZZ_MEMBERSHIP_SNAPSHOT_KIND,
   BUZZ_STREAM_KIND,
   acceptsBuzzStreamEvent,
+  compareBuzzMembershipPositions,
   companionPubkeyForPrivateKey,
   createBuzzAuthEvent,
   createBuzzStreamEvent,
@@ -16,6 +17,9 @@ import {
   parseBuzzMembershipChange,
   parseBuzzMembershipSnapshot,
   parseBuzzRelayFrame,
+  type BuzzMembershipChange,
+  type BuzzMembershipPosition,
+  type BuzzMembershipSnapshot,
 } from './protocol.js';
 
 interface PendingPublish {
@@ -37,13 +41,14 @@ export interface BuzzRelayClientConfig {
   reconnectBaseDelayMs: number;
   reconnectMaxDelayMs: number;
   maxReconnectAttempts: number;
+  maxFutureEventSkewSeconds: number;
   operationTimeoutMs: number;
 }
 
 export interface BuzzRelayClientCallbacks {
   onEvent: (event: NostrEvent) => Promise<void>;
-  onMembershipSnapshot: (channelIds: readonly string[], observedAtMs: number) => Promise<void>;
-  onMembershipChange: (channelId: string, active: boolean, observedAtMs: number) => Promise<void>;
+  onMembershipSnapshot: (memberships: readonly BuzzMembershipSnapshot[]) => Promise<void>;
+  onMembershipChange: (change: BuzzMembershipChange) => Promise<void>;
   onConnected: () => Promise<void>;
   onTerminalFailure: (kind: string, title: string, error: Error) => Promise<void>;
 }
@@ -55,11 +60,12 @@ export class BuzzRelayClient {
   private readonly machineAuthorPubkeys: ReadonlySet<string>;
   private readonly membershipSubscriptionId: string;
   private readonly membershipChangesSubscriptionId: string;
-  private readonly streamSubscriptionId: string;
   private readonly pendingPublishes = new Map<string, PendingPublish>();
-  private readonly locallyClosedSubscriptions = new Set<string>();
+  private readonly activeSubscriptions = new Set<string>();
   private readonly eligibleChannels = new Set<string>();
-  private readonly discoveredChannels = new Set<string>();
+  private readonly discoveredChannels = new Map<string, BuzzMembershipSnapshot>();
+  private readonly membershipPositions = new Map<string, BuzzMembershipPosition>();
+  private readonly pendingMembershipChanges: BuzzMembershipChange[] = [];
   private socket: WebSocket | null = null;
   private connectionPromise: Promise<void> | null = null;
   private connectionResolve: (() => void) | null = null;
@@ -71,6 +77,8 @@ export class BuzzRelayClient {
   private pendingAuthEventId: string | null = null;
   private replayCursor: number | null = null;
   private membershipQuerySince = 0;
+  private streamSubscriptionId: string | null = null;
+  private streamSubscriptionRevision = 0;
   private subscribedSince = 0;
   private running = false;
   private connected = false;
@@ -87,11 +95,15 @@ export class BuzzRelayClient {
     this.machineAuthorPubkeys = new Set(config.machineAuthorPubkeys);
     this.membershipSubscriptionId = `buzz-membership-${config.companionId}`;
     this.membershipChangesSubscriptionId = `buzz-membership-live-${config.companionId}`;
-    this.streamSubscriptionId = `buzz-stream-${config.companionId}`;
   }
 
   setReplayCursor(cursor: number | null): void {
-    if (cursor !== null) this.replayCursor = Math.max(this.replayCursor ?? 0, cursor);
+    if (cursor === null) return;
+    const maximumCursor = Math.floor(Date.now() / 1_000) + this.config.maxFutureEventSkewSeconds;
+    if (cursor > maximumCursor) {
+      throw new Error('Persisted Buzz replay cursor is beyond the configured future-event bound');
+    }
+    this.replayCursor = Math.max(this.replayCursor ?? 0, cursor);
   }
 
   async start(): Promise<void> {
@@ -139,7 +151,7 @@ export class BuzzRelayClient {
     } else if (socket && socket.readyState !== WebSocket.CLOSED) {
       socket.terminate();
     }
-    await this.reconnectTask?.catch(() => undefined);
+    await this.reconnectTask;
     this.reconnectTask = null;
   }
 
@@ -149,6 +161,10 @@ export class BuzzRelayClient {
     tags: string[][];
   }): NostrEvent {
     return createBuzzStreamEvent({ ...input, privateKey: this.config.privateKey });
+  }
+
+  isChannelEligible(channelId: string): boolean {
+    return this.eligibleChannels.has(channelId);
   }
 
   async publishEvent(event: NostrEvent): Promise<void> {
@@ -173,7 +189,9 @@ export class BuzzRelayClient {
     if (this.connectionPromise) return await this.connectionPromise;
     this.connected = false;
     this.discoveredChannels.clear();
-    this.locallyClosedSubscriptions.clear();
+    this.activeSubscriptions.clear();
+    this.pendingMembershipChanges.length = 0;
+    this.streamSubscriptionId = null;
     const promise = new Promise<void>((resolve, reject) => {
       this.connectionResolve = resolve;
       this.connectionReject = reject;
@@ -201,12 +219,13 @@ export class BuzzRelayClient {
       this.log.warn('Buzz relay sent a malformed frame');
       return;
     }
-    void this.handleFrame(frame).catch(error => {
+    void this.handleFrame(frame).catch(async error => {
       if (!this.connected) {
         this.failConnection(toError(error));
         return;
       }
-      void this.callbacks.onTerminalFailure(
+      if (socket === this.socket) socket.terminate();
+      await this.callbacks.onTerminalFailure(
         'message-processing',
         'Buzz message processing failed',
         toError(error),
@@ -241,9 +260,10 @@ export class BuzzRelayClient {
     if (command === 'NOTICE' && !this.connected) {
       throw new Error(`Buzz relay rejected startup: ${typeof frame[1] === 'string' ? frame[1] : 'unknown notice'}`);
     }
-    if (command === 'CLOSED' && this.subscriptionIds().includes(String(frame[1]))) {
+    if (command === 'CLOSED') {
       const subscriptionId = String(frame[1]);
-      if (this.stopping || this.locallyClosedSubscriptions.delete(subscriptionId)) return;
+      if (this.stopping || !this.activeSubscriptions.has(subscriptionId)) return;
+      this.activeSubscriptions.delete(subscriptionId);
       const error = new Error(`Buzz relay closed a required subscription: ${typeof frame[2] === 'string' ? frame[2] : 'unknown reason'}`);
       if (!this.connected) throw error;
       this.log.warn(error.message);
@@ -261,10 +281,15 @@ export class BuzzRelayClient {
       this.pendingAuthEventId = null;
       if (!accepted) throw new Error(`Buzz relay rejected NIP-42 authentication: ${relayMessage}`);
       this.membershipQuerySince = Math.floor(Date.now() / 1_000);
-      this.sendFrame(['REQ', this.membershipSubscriptionId, {
+      this.openSubscription(this.membershipChangesSubscriptionId, {
+        kinds: [BUZZ_MEMBER_ADDED_KIND, BUZZ_MEMBER_REMOVED_KIND],
+        '#p': [this.companionPubkey],
+        since: this.membershipQuerySince,
+      });
+      this.openSubscription(this.membershipSubscriptionId, {
         kinds: [BUZZ_MEMBERSHIP_SNAPSHOT_KIND],
         '#p': [this.companionPubkey],
-      }]);
+      });
       return;
     }
     const pending = this.pendingPublishes.get(eventId);
@@ -280,28 +305,30 @@ export class BuzzRelayClient {
     if (typeof subscriptionId !== 'string' || !isNostrEvent(frame[2])) return;
     const event = frame[2];
     if (subscriptionId === this.membershipSubscriptionId && !this.connected) {
-      const channelId = parseBuzzMembershipSnapshot(
-        event,
-        this.config.relayPubkey,
-        this.companionPubkey,
-      );
-      if (channelId) this.discoveredChannels.add(channelId);
+      const membership = parseBuzzMembershipSnapshot(event, this.relayAuthorityPolicy());
+      if (!membership) return;
+      const current = this.discoveredChannels.get(membership.channelId);
+      if (!current || compareBuzzMembershipPositions(current.position, membership.position) < 0) {
+        this.discoveredChannels.set(membership.channelId, membership);
+      }
       return;
     }
-    if (subscriptionId === this.membershipChangesSubscriptionId && this.connected) {
-      const change = parseBuzzMembershipChange(
-        event,
-        this.config.relayPubkey,
-        this.companionPubkey,
-      );
+    if (subscriptionId === this.membershipChangesSubscriptionId) {
+      const change = parseBuzzMembershipChange(event, this.relayAuthorityPolicy());
       if (!change) return;
-      await this.applyMembershipChange(change.channelId, change.active, Date.now());
+      if (!this.connected) {
+        this.pendingMembershipChanges.push(change);
+        return;
+      }
+      await this.applyMembershipChange(change);
       return;
     }
     if (subscriptionId !== this.streamSubscriptionId || !this.connected) return;
     if (!acceptsBuzzStreamEvent(event, {
       companionPubkey: this.companionPubkey,
       subscribedSince: this.subscribedSince,
+      nowSeconds: Math.floor(Date.now() / 1_000),
+      maxFutureEventSkewSeconds: this.config.maxFutureEventSkewSeconds,
       channelAllowlist: this.eligibleChannels,
       authorAllowlist: this.authorAllowlist,
       machineAuthorPubkeys: this.machineAuthorPubkeys,
@@ -312,13 +339,21 @@ export class BuzzRelayClient {
 
   private async completeMembershipLoad(): Promise<void> {
     this.refreshEligibleChannels();
-    await this.callbacks.onMembershipSnapshot([...this.eligibleChannels], Date.now());
+    const eligibleMemberships = [...this.discoveredChannels.values()]
+      .filter(membership => this.eligibleChannels.has(membership.channelId));
+    this.membershipPositions.clear();
+    for (const membership of this.discoveredChannels.values()) {
+      this.membershipPositions.set(membership.channelId, membership.position);
+    }
+    await this.callbacks.onMembershipSnapshot(eligibleMemberships);
     this.closeSubscription(this.membershipSubscriptionId);
-    this.sendFrame(['REQ', this.membershipChangesSubscriptionId, {
-      kinds: [BUZZ_MEMBER_ADDED_KIND, BUZZ_MEMBER_REMOVED_KIND],
-      '#p': [this.companionPubkey],
-      since: this.membershipQuerySince,
-    }]);
+    while (this.pendingMembershipChanges.length > 0) {
+      const pendingChanges = this.pendingMembershipChanges.splice(0)
+        .sort((left, right) => compareBuzzMembershipPositions(left.position, right.position));
+      for (const change of pendingChanges) {
+        await this.applyMembershipChange(change, false);
+      }
+    }
     this.connected = true;
     this.sendStreamSubscription();
     try {
@@ -336,25 +371,33 @@ export class BuzzRelayClient {
   }
 
   private async applyMembershipChange(
-    channelId: string,
-    active: boolean,
-    observedAtMs: number,
+    change: BuzzMembershipChange,
+    resubscribe = true,
   ): Promise<void> {
-    if (active) this.discoveredChannels.add(channelId);
-    else this.discoveredChannels.delete(channelId);
-    const wasEligible = this.eligibleChannels.has(channelId);
-    const isEligible = active && this.isConfiguredChannel(channelId);
-    if (wasEligible === isEligible) return;
-    if (isEligible) this.eligibleChannels.add(channelId);
-    else this.eligibleChannels.delete(channelId);
-    await this.callbacks.onMembershipChange(channelId, isEligible, observedAtMs);
-    this.closeSubscription(this.streamSubscriptionId);
-    this.sendStreamSubscription();
+    const currentPosition = this.membershipPositions.get(change.channelId);
+    if (currentPosition && compareBuzzMembershipPositions(currentPosition, change.position) >= 0) {
+      return;
+    }
+    this.membershipPositions.set(change.channelId, change.position);
+    if (change.active) {
+      this.discoveredChannels.set(change.channelId, {
+        channelId: change.channelId,
+        position: change.position,
+      });
+    } else {
+      this.discoveredChannels.delete(change.channelId);
+    }
+    const wasEligible = this.eligibleChannels.has(change.channelId);
+    const isEligible = change.active && this.isConfiguredChannel(change.channelId);
+    if (isEligible) this.eligibleChannels.add(change.channelId);
+    else this.eligibleChannels.delete(change.channelId);
+    await this.callbacks.onMembershipChange({ ...change, active: isEligible });
+    if (resubscribe && wasEligible !== isEligible) this.replaceStreamSubscription();
   }
 
   private refreshEligibleChannels(): void {
     this.eligibleChannels.clear();
-    for (const channelId of this.discoveredChannels) {
+    for (const channelId of this.discoveredChannels.keys()) {
       if (this.isConfiguredChannel(channelId)) this.eligibleChannels.add(channelId);
     }
   }
@@ -365,17 +408,19 @@ export class BuzzRelayClient {
 
   private sendStreamSubscription(): void {
     if (this.eligibleChannels.size === 0) return;
+    this.streamSubscriptionRevision += 1;
+    this.streamSubscriptionId = `buzz-stream-${this.config.companionId}-${this.streamSubscriptionRevision}`;
     const nowSeconds = Math.floor(Date.now() / 1_000);
     this.subscribedSince = Math.max(
       0,
       (this.replayCursor ?? nowSeconds) - this.config.replayWindowSeconds,
     );
-    this.sendFrame(['REQ', this.streamSubscriptionId, {
+    this.openSubscription(this.streamSubscriptionId, {
       kinds: [BUZZ_STREAM_KIND],
       '#h': [...this.eligibleChannels],
       '#p': [this.companionPubkey],
       since: this.subscribedSince,
-    }]);
+    });
   }
 
   private failConnection(error: Error): void {
@@ -476,16 +521,37 @@ export class BuzzRelayClient {
   }
 
   private closeSubscription(subscriptionId: string): void {
-    this.locallyClosedSubscriptions.add(subscriptionId);
+    if (!this.activeSubscriptions.delete(subscriptionId)) return;
     this.sendFrame(['CLOSE', subscriptionId]);
   }
 
   private subscriptionIds(): string[] {
-    return [
-      this.membershipSubscriptionId,
-      this.membershipChangesSubscriptionId,
-      this.streamSubscriptionId,
-    ];
+    return [...this.activeSubscriptions];
+  }
+
+  private replaceStreamSubscription(): void {
+    if (this.streamSubscriptionId) this.closeSubscription(this.streamSubscriptionId);
+    this.streamSubscriptionId = null;
+    this.sendStreamSubscription();
+  }
+
+  private openSubscription(subscriptionId: string, filter: Record<string, unknown>): void {
+    this.activeSubscriptions.add(subscriptionId);
+    try {
+      this.sendFrame(['REQ', subscriptionId, filter]);
+    } catch (error) {
+      this.activeSubscriptions.delete(subscriptionId);
+      throw error;
+    }
+  }
+
+  private relayAuthorityPolicy() {
+    return {
+      relayPubkey: this.config.relayPubkey,
+      companionPubkey: this.companionPubkey,
+      nowSeconds: Math.floor(Date.now() / 1_000),
+      maxFutureEventSkewSeconds: this.config.maxFutureEventSkewSeconds,
+    };
   }
 
   private rejectPendingPublishes(error: Error): void {

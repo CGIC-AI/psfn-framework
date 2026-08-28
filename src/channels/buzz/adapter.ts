@@ -17,7 +17,6 @@ import type {
 import type { RuntimeChannelLifecycleLogger } from '../backplane/channel-lifecycle.js';
 import { BuzzRelayClient } from './client.js';
 import {
-  buzzCausalReplyTags,
   normalizeAcknowledgement,
   planBuzzCausalReply,
 } from './causal-policy.js';
@@ -26,10 +25,14 @@ import { normalizeBuzzRelayUrl } from './origin.js';
 import {
   BUZZ_STREAM_TEXT_CHUNK_LIMIT,
   buzzTagValues,
+  createBuzzCausalReplyTags,
   parseBuzzChannelId,
   parseBuzzPrivateKey,
 } from './protocol.js';
-import type { BuzzRecoveryStore } from './recovery-store.js';
+import type {
+  BuzzRecoveryStore,
+  BuzzSuppressionReason,
+} from './recovery-store.js';
 
 export interface BuzzAdapterConfig {
   enabled: boolean;
@@ -46,6 +49,7 @@ export interface BuzzAdapterConfig {
   reconnectBaseDelayMs: number;
   reconnectMaxDelayMs: number;
   maxReconnectAttempts: number;
+  maxFutureEventSkewSeconds: number;
 }
 
 interface BuzzOperatorAlert {
@@ -93,10 +97,12 @@ export class BuzzAdapter implements ChannelAdapterPort {
   private readonly inFlightByChannel = new Map<string, Set<AbortController>>();
   private readonly recoveredPublications = new Map<string, Promise<void>>();
   private readonly inFlightTasks = new Set<Promise<void>>();
+  private readonly shutdownFailures: unknown[] = [];
   private readonly shutdownTimeoutMs: number;
   private readonly client: BuzzRelayClient;
   private handler: MessageHandler | null = null;
   private operatorAlertHandler: BuzzOperatorAlertHandler | null = null;
+  private stopping = false;
 
   constructor(config: BuzzAdapterConfig, options: BuzzAdapterOptions) {
     const relayUrl = normalizeBuzzRelayUrl(config.relayUrl, 'Buzz adapter relayUrl');
@@ -114,6 +120,7 @@ export class BuzzAdapter implements ChannelAdapterPort {
       reconnectBaseDelayMs: config.reconnectBaseDelayMs,
       reconnectMaxDelayMs: config.reconnectMaxDelayMs,
       maxReconnectAttempts: config.maxReconnectAttempts,
+      maxFutureEventSkewSeconds: config.maxFutureEventSkewSeconds,
     };
     this.intakeScreening = options.intakeScreening ?? null;
     this.log = options.log ?? createComponentLogger('BuzzAdapter');
@@ -137,23 +144,33 @@ export class BuzzAdapter implements ChannelAdapterPort {
       reconnectBaseDelayMs: config.reconnectBaseDelayMs,
       reconnectMaxDelayMs: config.reconnectMaxDelayMs,
       maxReconnectAttempts: config.maxReconnectAttempts,
+      maxFutureEventSkewSeconds: config.maxFutureEventSkewSeconds,
       operationTimeoutMs: options.shutdownTimeoutMs,
     }, {
       onEvent: async event => {
-        const work = this.handleInboundEvent(event);
+        const channelId = buzzTagValues(event, 'h')[0]!;
+        const controller = this.registerInFlight(channelId);
+        if (this.stopping) controller.abort(new Error('Buzz adapter stopped'));
+        const work = this.handleInboundEvent(event, controller);
         this.inFlightTasks.add(work);
         try {
           await work;
+        } catch (error) {
+          if (this.stopping) this.shutdownFailures.push(error);
+          throw error;
         } finally {
           this.inFlightTasks.delete(work);
+          this.unregisterInFlight(channelId, controller);
         }
       },
-      onMembershipSnapshot: async (channelIds, observedAtMs) => {
-        await this.recoveryStore.replaceMemberships(channelIds, observedAtMs);
+      onMembershipSnapshot: async memberships => {
+        await this.recoveryStore.replaceMemberships(memberships);
       },
-      onMembershipChange: async (channelId, active, observedAtMs) => {
-        await this.recoveryStore.setMembership(channelId, active, observedAtMs);
-        if (!active) this.abortChannel(channelId, 'Buzz room membership was removed');
+      onMembershipChange: async change => {
+        if (!change.active) {
+          this.abortChannel(change.channelId, 'Buzz room membership was removed');
+        }
+        await this.recoveryStore.setMembership(change);
       },
       onConnected: async () => this.recoverDeliveries(),
       onTerminalFailure: async (kind, title, error) => this.alertOperator(kind, title, error),
@@ -197,12 +214,15 @@ export class BuzzAdapter implements ChannelAdapterPort {
     if (!this.buzz.enabled) return;
     if (!this.handler) throw new Error('Buzz adapter requires an inbound message handler before start');
     if (!this.operatorAlertHandler) throw new Error('Buzz adapter requires an operator alert handler before start');
+    this.stopping = false;
+    this.shutdownFailures.length = 0;
     await this.recoveryStore.waitUntilReady();
     this.client.setReplayCursor(await this.recoveryStore.loadReplayCursor());
     await this.client.start();
   }
 
   async stop(): Promise<void> {
+    this.stopping = true;
     for (const channelId of this.inFlightByChannel.keys()) {
       this.abortChannel(channelId, 'Buzz adapter stopped');
     }
@@ -215,7 +235,7 @@ export class BuzzAdapter implements ChannelAdapterPort {
     let inFlightTimer: ReturnType<typeof setTimeout> | undefined;
     try {
       await Promise.race([
-        Promise.allSettled([...this.inFlightTasks]).then(() => undefined),
+        this.waitForInFlightTasks(),
         new Promise<void>((_resolve, reject) => {
           inFlightTimer = setTimeout(() => {
             reject(new Error('Buzz adapter timed out waiting for cancelled turns'));
@@ -238,13 +258,20 @@ export class BuzzAdapter implements ChannelAdapterPort {
     if (stopError) throw stopError;
   }
 
-  private async handleInboundEvent(event: NostrEvent): Promise<void> {
+  private async handleInboundEvent(
+    event: NostrEvent,
+    controller: AbortController,
+  ): Promise<void> {
     const handler = this.handler;
     if (!handler) throw new Error('Buzz adapter lost its inbound message handler');
     const channelId = buzzTagValues(event, 'h')[0]!;
     const authorIsMachine = this.machineAuthorPubkeys.has(event.pubkey);
     if (!authorIsMachine) {
-      await this.recoveryStore.registerHumanRoot(event.id, event.pubkey);
+      await this.recoveryStore.registerHumanRoot({
+        eventId: event.id,
+        channelId,
+        authorPubkey: event.pubkey,
+      });
     }
     const claim = await this.recoveryStore.claimInbound({
       eventId: event.id,
@@ -252,12 +279,14 @@ export class BuzzAdapter implements ChannelAdapterPort {
       eventCreatedAt: event.created_at,
     });
     if (!claim.claimed) {
+      if (controller.signal.aborted) return;
       if (claim.record.state === 'ready' && claim.record.outboundEvent) {
         await this.publishRecovered(event.id, claim.record.outboundEvent);
         await this.advanceCursor(claim.record.eventCreatedAt);
       }
       return;
     }
+    if (await this.suppressIfCancelled(event, controller)) return;
     const causal = planBuzzCausalReply({
       event,
       companionPubkey: this.client.companionPubkey,
@@ -270,66 +299,90 @@ export class BuzzAdapter implements ChannelAdapterPort {
       return;
     }
     if (!causal.plan) throw new Error('Buzz causal reply policy returned no disposition');
-    if (authorIsMachine && !(await this.recoveryStore.hasHumanRoot(causal.plan.rootEventId))) {
-      await this.suppress(event, 'unknown_causal_root');
-      return;
-    }
-    if (causal.causalEdge && !(await this.recoveryStore.claimCausalEdge(causal.causalEdge))) {
-      await this.suppress(event, 'duplicate_causal_edge');
-      return;
-    }
-    const controller = this.registerInFlight(channelId);
-    try {
-      const message = await toBuzzSubstrateMessage(event, {
-        relayUrl: this.buzz.relayUrl,
-        companionId: this.buzz.companionId,
-        companionPubkey: this.client.companionPubkey,
-        intakeScreening: this.intakeScreening,
-      });
-      let response: Awaited<ReturnType<MessageHandler>>;
-      try {
-        response = await handler(message, {
-          signal: controller.signal,
-          cancellationId: `buzz:${event.id}`,
-        });
-      } catch (error) {
-        if (!controller.signal.aborted) throw error;
-        await this.suppress(event, 'turn_cancelled');
-        return;
-      }
-      const disposition = resolveAgentResponseDisposition(response);
-      if (disposition.kind !== 'send') {
-        const reason = disposition.kind === 'policy_suppressed'
-          ? disposition.reason
-          : disposition.kind === 'intentional_no_reply'
-            ? 'intentional_no_reply'
-            : disposition.kind === 'notification_ack'
-              ? 'empty_response'
-              : 'empty_response';
-        await this.suppress(event, reason);
-        return;
-      }
-      if (!response.content.trim()) {
-        await this.suppress(event, 'empty_response');
-        return;
-      }
-      const outboundEvent = this.client.createStreamEvent({
+    if (causal.causalEdge) {
+      const causalClaim = await this.recoveryStore.claimCausalEvent({
+        eventId: causal.causalEdge.eventId,
         channelId,
-        content: response.content,
-        tags: buzzCausalReplyTags(causal.plan),
+        rootEventId: causal.causalEdge.chainId,
+        parentEventId: causal.causalEdge.parentEventId,
+        hop: causal.causalEdge.hop,
+        authorPubkey: causal.causalEdge.authorPubkey,
       });
-      await this.recoveryStore.markReady(event.id, outboundEvent);
-      await this.client.publishEvent(outboundEvent);
-      await this.recoveryStore.markCompleted(event.id);
-      await this.advanceCursor(event.created_at);
-    } finally {
-      this.unregisterInFlight(channelId, controller);
+      if (causalClaim !== 'claimed') {
+        await this.suppress(
+          event,
+          causalClaim === 'duplicate' ? 'duplicate_causal_edge' : 'invalid_causal_parent',
+        );
+        return;
+      }
     }
+    if (await this.suppressIfCancelled(event, controller)) return;
+    const message = await toBuzzSubstrateMessage(event, {
+      relayUrl: this.buzz.relayUrl,
+      companionId: this.buzz.companionId,
+      companionPubkey: this.client.companionPubkey,
+      intakeScreening: this.intakeScreening,
+    });
+    if (await this.suppressIfCancelled(event, controller)) return;
+    let response: Awaited<ReturnType<MessageHandler>>;
+    try {
+      response = await handler(message, {
+        signal: controller.signal,
+        cancellationId: `buzz:${event.id}`,
+      });
+    } catch (error) {
+      if (!controller.signal.aborted) throw error;
+      await this.suppress(event, 'turn_cancelled');
+      return;
+    }
+    if (await this.suppressIfCancelled(event, controller)) return;
+    const disposition = resolveAgentResponseDisposition(response);
+    if (disposition.kind !== 'send') {
+      const reason = disposition.kind === 'policy_suppressed'
+        ? disposition.reason
+        : disposition.kind === 'intentional_no_reply'
+          ? 'intentional_no_reply'
+          : disposition.kind === 'notification_ack'
+            ? 'empty_response'
+            : 'empty_response';
+      await this.suppress(event, reason);
+      return;
+    }
+    if (!response.content.trim()) {
+      await this.suppress(event, 'empty_response');
+      return;
+    }
+    const outboundEvent = this.client.createStreamEvent({
+      channelId,
+      content: response.content,
+      tags: createBuzzCausalReplyTags(causal.plan),
+    });
+    await this.recoveryStore.markReady(event.id, outboundEvent, {
+      eventId: outboundEvent.id,
+      channelId,
+      rootEventId: causal.plan.rootEventId,
+      parentEventId: causal.plan.parentEventId,
+      hop: causal.plan.hop,
+      authorPubkey: outboundEvent.pubkey,
+    });
+    if (await this.suppressIfCancelled(event, controller)) return;
+    await this.client.publishEvent(outboundEvent);
+    await this.recoveryStore.markCompleted(event.id);
+    await this.advanceCursor(event.created_at);
   }
 
   private async recoverDeliveries(): Promise<void> {
     for (const record of await this.recoveryStore.listRecoverable()) {
       if (record.state === 'ready' && record.outboundEvent) {
+        if (!this.client.isChannelEligible(record.channelId)) {
+          await this.recoveryStore.markSuppressed(record.eventId, 'turn_cancelled');
+          await this.advanceCursor(record.eventCreatedAt);
+          this.log.warn('Buzz recovered reply was suppressed after membership loss', {
+            eventId: record.eventId,
+            channelId: record.channelId,
+          });
+          continue;
+        }
         await this.publishRecovered(record.eventId, record.outboundEvent);
         await this.advanceCursor(record.eventCreatedAt);
         continue;
@@ -359,7 +412,7 @@ export class BuzzAdapter implements ChannelAdapterPort {
     }
   }
 
-  private async suppress(event: NostrEvent, reason: string): Promise<void> {
+  private async suppress(event: NostrEvent, reason: BuzzSuppressionReason): Promise<void> {
     await this.recoveryStore.markSuppressed(event.id, reason);
     await this.advanceCursor(event.created_at);
     this.log.warn('Buzz autonomous reply terminated without publication', {
@@ -379,6 +432,26 @@ export class BuzzAdapter implements ChannelAdapterPort {
     controllers.add(controller);
     this.inFlightByChannel.set(channelId, controllers);
     return controller;
+  }
+
+  private async suppressIfCancelled(
+    event: NostrEvent,
+    controller: AbortController,
+  ): Promise<boolean> {
+    if (!controller.signal.aborted) return false;
+    await this.suppress(event, 'turn_cancelled');
+    return true;
+  }
+
+  private async waitForInFlightTasks(): Promise<void> {
+    const results = await Promise.allSettled([...this.inFlightTasks]);
+    const failures = results
+      .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
+      .map(result => result.reason);
+    failures.push(...this.shutdownFailures.splice(0));
+    if (failures.length > 0) {
+      throw new AggregateError(failures, 'Buzz cancelled turn cleanup failed');
+    }
   }
 
   private unregisterInFlight(channelId: string, controller: AbortController): void {

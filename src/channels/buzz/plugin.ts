@@ -39,6 +39,7 @@ const BUZZ_RECOVERY_POLICY_KEYS: Record<string, true> = {
   reconnectBaseDelayMs: true,
   reconnectMaxDelayMs: true,
   maxReconnectAttempts: true,
+  maxFutureEventSkewSeconds: true,
 };
 
 export interface BuzzChannelConfig {
@@ -59,6 +60,7 @@ export interface BuzzChannelConfig {
     reconnectBaseDelayMs: number;
     reconnectMaxDelayMs: number;
     maxReconnectAttempts: number;
+    maxFutureEventSkewSeconds: number;
   };
 }
 
@@ -204,6 +206,7 @@ function createBuzzPluginInstance(
     reconnectBaseDelayMs: recoveryPolicy.reconnectBaseDelayMs,
     reconnectMaxDelayMs: recoveryPolicy.reconnectMaxDelayMs,
     maxReconnectAttempts: recoveryPolicy.maxReconnectAttempts,
+    maxFutureEventSkewSeconds: recoveryPolicy.maxFutureEventSkewSeconds,
   }, {
     shutdownTimeoutMs: input.context.shutdownTimeoutMs,
     intakeScreening: input.context.intakeScreening,
@@ -280,6 +283,10 @@ function parseRecoveryPolicy(value: unknown): BuzzChannelConfig['recoveryPolicy'
     maxReconnectAttempts: parsePositiveInteger(
       policy.maxReconnectAttempts,
       `${fieldName}.maxReconnectAttempts`,
+    ),
+    maxFutureEventSkewSeconds: parsePositiveInteger(
+      policy.maxFutureEventSkewSeconds,
+      `${fieldName}.maxFutureEventSkewSeconds`,
     ),
   };
   if (recovery.reconnectMaxDelayMs < recovery.reconnectBaseDelayMs) {

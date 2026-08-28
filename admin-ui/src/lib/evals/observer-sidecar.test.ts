@@ -128,6 +128,9 @@ function makeHealth(input: {
 } = {}): AdminObserverEvalSidecarHealthData {
   const persistenceAvailable = input.persistenceAvailable ?? true;
   return {
+    companionId: null,
+    operatingState: 'absent',
+    binding: null,
     status: input.status ?? 'enabled',
     observedAt: NOW_MS,
     runtime: null,
@@ -136,6 +139,7 @@ function makeHealth(input: {
       evalOwned: persistenceAvailable,
       authoritative: false,
     },
+    lastTransition: null,
   };
 }
 

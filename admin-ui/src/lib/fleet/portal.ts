@@ -37,7 +37,20 @@ export interface FleetPortalProjection {
 
 export interface FleetCardDetails {
   adminTransport: FleetPortalHealthStatus;
+  emosim: FleetEmosimHealth;
   avatarUrl?: string;
+}
+
+export type FleetEmosimOperatingState = 'absent' | 'disabled' | 'shadow' | 'on' | 'unhealthy';
+
+export interface FleetEmosimHealth {
+  state: FleetEmosimOperatingState;
+  observedAt?: number;
+  lastTransition?: {
+    stage: string;
+    outcome: string;
+    timestamp: number;
+  };
 }
 
 export interface FleetPortalHealthDimensions {
@@ -195,44 +208,100 @@ export async function fetchFleetCardDetails(
   companion: FleetPortalCompanion,
   signal?: AbortSignal,
 ): Promise<FleetCardDetails> {
-  if (!companion.gardenPath) return { adminTransport: 'unknown' };
+  const gardenPath = companion.gardenPath;
+  if (!gardenPath) {
+    return { adminTransport: 'unknown', emosim: { state: 'unhealthy' } };
+  }
   try {
-    const response = await withFleetSessionRequestLock(async requestSignal => (
-      await fetch(`${companion.gardenPath}/api/admin/image-references`, {
+    return await withFleetSessionRequestLock(async requestSignal => {
+      const healthResponse = await fetch(
+        `${gardenPath}/api/admin/evals/observer-sidecar/health`,
+        {
+          cache: 'no-store',
+          credentials: 'include',
+          headers: { Accept: 'application/json' },
+          signal: requestSignal,
+        },
+      );
+      if (healthResponse.status === 502
+        || healthResponse.status === 503
+        || healthResponse.status === 504) {
+        return { adminTransport: 'down' as const, emosim: { state: 'unhealthy' as const } };
+      }
+      if (!healthResponse.ok) {
+        return { adminTransport: 'unknown' as const, emosim: { state: 'unhealthy' as const } };
+      }
+      const emosim = parseFleetEmosimHealth(await healthResponse.json(), companion.companionId);
+      const response = await fetch(`${gardenPath}/api/admin/image-references`, {
         cache: 'no-store',
         credentials: 'include',
         headers: { Accept: 'application/json' },
         signal: requestSignal,
-      })
-    ), signal);
-    if (response.status === 502 || response.status === 503 || response.status === 504) {
-      return { adminTransport: 'down' };
-    }
-    if (!response.ok) return { adminTransport: 'unknown' };
-    const value: unknown = await response.json();
-    if (!isRecord(value) || !Array.isArray(value.references)) {
-      return { adminTransport: 'up' };
-    }
-    const references = value.references.flatMap((reference): FleetReferencePhoto[] => (
-      isRecord(reference) && typeof reference.id === 'string' && reference.id.trim()
-        ? [{ id: reference.id }]
-        : []
-    ));
-    const avatarUrl = selectFirstReferenceAvatar(references, companion.gardenPath);
-    return {
-      adminTransport: 'up',
-      ...(avatarUrl ? { avatarUrl } : {}),
-    };
+      });
+      if (!response.ok) return { adminTransport: 'up' as const, emosim };
+      const value: unknown = await response.json();
+      if (!isRecord(value) || !Array.isArray(value.references)) {
+        return { adminTransport: 'up' as const, emosim };
+      }
+      const references = value.references.flatMap((reference): FleetReferencePhoto[] => (
+        isRecord(reference) && typeof reference.id === 'string' && reference.id.trim()
+          ? [{ id: reference.id }]
+          : []
+      ));
+      const avatarUrl = selectFirstReferenceAvatar(references, gardenPath);
+      return {
+        adminTransport: 'up' as const,
+        emosim,
+        ...(avatarUrl ? { avatarUrl } : {}),
+      };
+    }, signal);
   } catch (error) {
     if (signal?.aborted) throw error;
     if (error instanceof TypeError || error instanceof SyntaxError) {
       // Browser fetch reports a network-level transport failure as TypeError;
       // Response.json reports an unusable successful payload as SyntaxError.
       // Neither proves the companion transport is down.
-      return { adminTransport: 'unknown' };
+      return { adminTransport: 'unknown', emosim: { state: 'unhealthy' } };
     }
     throw error;
   }
+}
+
+export function parseFleetEmosimHealth(
+  value: unknown,
+  expectedCompanionId: string,
+): FleetEmosimHealth {
+  if (!isRecord(value) || value.companionId !== expectedCompanionId) {
+    return { state: 'unhealthy' };
+  }
+  const state = value.operatingState;
+  if (state !== 'absent'
+    && state !== 'disabled'
+    && state !== 'shadow'
+    && state !== 'on'
+    && state !== 'unhealthy') {
+    return { state: 'unhealthy' };
+  }
+  const observedAt = typeof value.observedAt === 'number' && Number.isFinite(value.observedAt)
+    ? value.observedAt
+    : undefined;
+  const transition = value.lastTransition;
+  const lastTransition = isRecord(transition)
+    && typeof transition.stage === 'string'
+    && typeof transition.outcome === 'string'
+    && typeof transition.timestamp === 'number'
+    && Number.isFinite(transition.timestamp)
+    ? {
+        stage: transition.stage,
+        outcome: transition.outcome,
+        timestamp: transition.timestamp,
+      }
+    : undefined;
+  return {
+    state,
+    ...(observedAt !== undefined ? { observedAt } : {}),
+    ...(lastTransition ? { lastTransition } : {}),
+  };
 }
 
 export async function fetchFleetPortalProjection(signal?: AbortSignal): Promise<FleetPortalProjection> {

@@ -43,6 +43,11 @@ psfn.io/companion-id: {{ .companionId }}
 psfn.io/fleet-target: registered
 {{- end -}}
 
+{{- define "psfn.fleetEmosimLabels" -}}
+{{ include "psfn.componentLabels" (dict "root" .root "component" "emosim") }}
+psfn.io/companion-id: {{ .companionId }}
+{{- end -}}
+
 {{- define "psfn.serviceAccountName" -}}
 {{- if .Values.serviceAccount.create -}}
 {{- default (include "psfn.fullname" .) .Values.serviceAccount.name -}}
@@ -283,6 +288,14 @@ path stays outside every runtime root that the observer isolation guard rejects.
 
 {{- define "psfn.emosimServiceName" -}}
 {{- printf "%s-emosim" (include "psfn.fullname" .) -}}
+{{- end -}}
+
+{{- define "psfn.fleetEmosimServiceName" -}}
+{{- printf "%s-emosim" (include "psfn.fullname" .root) | trunc 26 | trimSuffix "-" -}}-{{ .companionId }}
+{{- end -}}
+
+{{- define "psfn.fleetEmosimStateClaimName" -}}
+{{- printf "%s-emosim" (include "psfn.fullname" .root) | trunc 20 | trimSuffix "-" -}}-{{ .companionId }}-state
 {{- end -}}
 
 {{- define "psfn.satelliteHubServiceName" -}}

@@ -218,6 +218,20 @@ describe('companions owner-file config', () => {
       }
     });
 
+    it('names the missing companion when observer topology is partial', () => {
+      const fleet = clone(VALID_FLEET);
+      fleet.companions[0].observerEvalSidecar = {
+        sidecarId: 'observer-one',
+        serverUrl: 'http://observer-one.internal:17342',
+        sessionLabel: 'observer-session-one',
+        agentName: 'observer-agent-one',
+        persistenceRootDir: '/var/lib/observer-one',
+      };
+
+      expect(() => validateCompanionsConfig(fleet, 'companions.json'))
+        .toThrow(/missing companions: 22222222-2222-4222-8222-222222222222/);
+    });
+
     it('rejects nested observer persistence roots in either fleet order', () => {
       expect(() => validateCompanionsConfig(
         createFleetWithObserverRoots('/var/lib/observer-one', '/var/lib/observer-one/child'),

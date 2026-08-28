@@ -38,10 +38,17 @@
     let attention = 0;
     for (const companion of projection.companions) {
       const health = resolveFleetCardHealth(companion, cardDetails[companion.companionId]);
+      const emosimState = cardDetails[companion.companionId]?.emosim.state ?? 'unhealthy';
       if (companion.gardenPath && health.adminTransport === 'up') reachable += 1;
-      if (health.agentRpc === 'up' && health.adminTransport === 'up' && health.channels === 'up') {
+      if (health.agentRpc === 'up'
+        && health.adminTransport === 'up'
+        && health.channels === 'up'
+        && emosimState !== 'unhealthy') {
         healthy += 1;
-      } else if (health.agentRpc === 'down' || health.adminTransport === 'down' || health.channels === 'down') {
+      } else if (health.agentRpc === 'down'
+        || health.adminTransport === 'down'
+        || health.channels === 'down'
+        || emosimState === 'unhealthy') {
         attention += 1;
       }
     }
@@ -108,8 +115,15 @@
     if (!details?.avatarUrl) return;
     cardDetails = {
       ...cardDetails,
-      [companionId]: { adminTransport: details.adminTransport },
+      [companionId]: { adminTransport: details.adminTransport, emosim: details.emosim },
     };
+  }
+
+  function emosimClass(value: string): string {
+    if (value === 'on') return 'bg-moss-50 text-moss-700 border-moss-200';
+    if (value === 'shadow') return 'bg-gold-50 text-gold-700 border-gold-200';
+    if (value === 'unhealthy') return 'bg-wilt-50 text-wilt-700 border-wilt-200';
+    return 'bg-bark-100 text-shadow-600 border-bark-300';
   }
 
   function postureClass(value: string): string {
@@ -166,7 +180,7 @@
         <article class="garden-metric card-garden p-4">
           <p class="text-[0.68rem] font-semibold uppercase tracking-[0.14em] text-shadow-500">Fully healthy</p>
           <p class="mt-2 font-serif text-3xl font-semibold tabular-nums text-gold-700">{fleetSummary.healthy}</p>
-          <p class="mt-1 text-xs text-shadow-500">agent, admin, and channels up</p>
+          <p class="mt-1 text-xs text-shadow-500">agent, admin, channels, and EmoSim healthy</p>
         </article>
         <article class="garden-metric card-garden p-4">
           <p class="text-[0.68rem] font-semibold uppercase tracking-[0.14em] text-shadow-500">Needs attention</p>
@@ -253,7 +267,16 @@
               <span class={`rounded-full border px-2.5 py-1 text-xs font-medium ${healthClass(health.channels)}`}>
                 Channels {displayLabel(health.channels)}
               </span>
+              <span class={`rounded-full border px-2.5 py-1 text-xs font-medium ${emosimClass(details?.emosim.state ?? 'unhealthy')}`}>
+                EmoSim {displayLabel(details?.emosim.state ?? 'unhealthy')}
+              </span>
             </div>
+
+            {#if details?.emosim.lastTransition}
+              <p class="mt-2 text-xs text-shadow-500">
+                Last transition: {displayLabel(details.emosim.lastTransition.stage)} · {displayLabel(details.emosim.lastTransition.outcome)} · {new Date(details.emosim.lastTransition.timestamp).toLocaleString()}
+              </p>
+            {/if}
 
             <div class="mt-4 border-t border-bark-200 pt-4">
               {#if companion.posture.status === 'unavailable'}

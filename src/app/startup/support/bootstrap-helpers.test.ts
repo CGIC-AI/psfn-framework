@@ -1428,6 +1428,7 @@ describe('hydrateCanonicalStartupConfig', () => {
 
     const config = makeStartupHydrationConfig(systemDataDir, companionDataDir);
     config.multiCompanion = true;
+    config.companionId = createCompanionId('11111111-1111-4111-8111-111111111111');
 
     expect(() => hydrateCanonicalStartupConfig(config, {
       env: {
@@ -1436,7 +1437,7 @@ describe('hydrateCanonicalStartupConfig', () => {
         PSFN_RUNTIME_LAYOUT_MODE: 'continuous',
         DATA_DIR: legacyDataDir,
       },
-    })).toThrow(/requires an exact companionRuntimeIdentity\.observerEvalSidecar binding/);
+    })).toThrow(/companion "11111111-1111-4111-8111-111111111111" requires an exact companionRuntimeIdentity\.observerEvalSidecar binding/);
   });
 
   it('fails before runtime composition when the observer binding belongs to another companion', () => {
@@ -1495,7 +1496,9 @@ describe('hydrateCanonicalStartupConfig', () => {
         PSFN_RUNTIME_LAYOUT_MODE: 'continuous',
         DATA_DIR: legacyDataDir,
       },
-    })).toThrow(/identity does not match config\.companionId/);
+    })).toThrow(
+      /companion "11111111-1111-4111-8111-111111111111" received binding owner "22222222-2222-4222-8222-222222222222"/,
+    );
   });
 
   it('binds three companions to distinct manifest-owned emotion runtimes over shared settings', () => {

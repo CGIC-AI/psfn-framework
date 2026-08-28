@@ -86,6 +86,8 @@ export interface GatewayMethodRuntime {
   embeddingService: EmbeddingProviderPort;
   modelDiscovery?: ModelDiscoveryBackend;
   discordAdapter: ChannelOutboundDock;
+  /** Calling-companion-scoped outbound dock for a native channel plugin. */
+  resolveChannelOutboundDock(channelType: 'buzz'): ChannelOutboundDock;
   /**
    * vvf.5.2: single-account Telegram outbound dock, present only when Telegram is
    * configured. Used by clarify.deliver to render a numbered-list clarification

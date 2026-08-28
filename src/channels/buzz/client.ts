@@ -35,8 +35,6 @@ export interface BuzzRelayClientConfig {
   privateKey: Uint8Array;
   channelIds: readonly string[];
   allowedAuthorPubkeys: readonly string[];
-  machineAuthorPubkeys: readonly string[];
-  maxAutonomousReplyHops: number;
   replayWindowSeconds: number;
   reconnectBaseDelayMs: number;
   reconnectMaxDelayMs: number;
@@ -57,7 +55,6 @@ export class BuzzRelayClient {
   readonly companionPubkey: string;
   private readonly configuredChannels: ReadonlySet<string>;
   private readonly authorAllowlist: ReadonlySet<string>;
-  private readonly machineAuthorPubkeys: ReadonlySet<string>;
   private readonly membershipSubscriptionId: string;
   private readonly membershipChangesSubscriptionId: string;
   private readonly pendingPublishes = new Map<string, PendingPublish>();
@@ -92,7 +89,6 @@ export class BuzzRelayClient {
     this.companionPubkey = companionPubkeyForPrivateKey(config.privateKey);
     this.configuredChannels = new Set(config.channelIds);
     this.authorAllowlist = new Set(config.allowedAuthorPubkeys);
-    this.machineAuthorPubkeys = new Set(config.machineAuthorPubkeys);
     this.membershipSubscriptionId = `buzz-membership-${config.companionId}`;
     this.membershipChangesSubscriptionId = `buzz-membership-live-${config.companionId}`;
   }
@@ -331,8 +327,6 @@ export class BuzzRelayClient {
       maxFutureEventSkewSeconds: this.config.maxFutureEventSkewSeconds,
       channelAllowlist: this.eligibleChannels,
       authorAllowlist: this.authorAllowlist,
-      machineAuthorPubkeys: this.machineAuthorPubkeys,
-      maxAutonomousReplyHops: this.config.maxAutonomousReplyHops,
     })) return;
     await this.callbacks.onEvent(event);
   }
@@ -418,7 +412,6 @@ export class BuzzRelayClient {
     this.openSubscription(this.streamSubscriptionId, {
       kinds: [BUZZ_STREAM_KIND],
       '#h': [...this.eligibleChannels],
-      '#p': [this.companionPubkey],
       since: this.subscribedSince,
     });
   }

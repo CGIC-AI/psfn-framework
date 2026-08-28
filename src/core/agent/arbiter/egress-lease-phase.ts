@@ -168,6 +168,8 @@ export type EgressLeaseOutcome =
   | 'delivered'
   /** The lease was acquired but the send failed; lease completed `failed`. */
   | 'delivery_failed'
+  /** Shadow posture admitted the reply but deliberately performed no draw or send. */
+  | 'shadowed'
   /** The reservation was no longer `reserved` (redelivery/settled); no bind. */
   | 'reservation_not_reservable'
   /** The Law-36 breaker suppressed the autonomous lease (open / spent probe). */
@@ -219,6 +221,8 @@ export interface EgressLeaseDecision {
 }
 
 export interface EgressLeasePhaseConfig {
+  /** `shadow` evaluates admission and records would-send without binding egress. */
+  mode: 'shadow' | 'on';
   /** Egress lease deadline window; a crashed holder's lease is reclaimable after it. */
   leaseTtlMs: number;
   /**
@@ -378,6 +382,7 @@ export class SpeakingEgressLeasePhase {
     this.sender = deps.sender;
     this.companionId = assertNonEmpty(deps.companionId, 'companionId');
     this.config = {
+      mode: deps.config.mode,
       leaseTtlMs: assertPositiveFinite(deps.config.leaseTtlMs, 'leaseTtlMs'),
       egressDrawUnits: assertPositiveFinite(deps.config.egressDrawUnits, 'egressDrawUnits'),
       minReplyConfidence: assertNonNegativeFinite(
@@ -507,6 +512,14 @@ export class SpeakingEgressLeasePhase {
     if (winner !== null && winner !== this.companionId) {
       await this.releaseSilently(reservation, now);
       return { ...base, outcome: 'yielded_speak_least', breakerState, speakLeastWinner: winner };
+    }
+
+    // Shadow posture proves the complete deterministic admission path while
+    // keeping delivery and fatigue mutation inert. Release the reservation so
+    // a shadow appraisal never occupies the room until TTL expiry.
+    if (this.config.mode === 'shadow') {
+      await this.releaseSilently(reservation, now);
+      return { ...base, outcome: 'shadowed', breakerState };
     }
 
     // 5. Social-pot draw — the REAL draw binds here (§8.5). A refusal releases

@@ -495,6 +495,15 @@ Multi-companion layers on top of the single-companion locations/world surface
   charge `companion_room` budgets, human participation is free, and hard
   exhaustion suppresses the model call (see the fatigue section in
   [`docs/operations.md`](./operations.md)).
+- **Shared external rooms use one participation authority.** Discord group
+  channels and Buzz rooms feed the same observation, memory, appraisal,
+  reservation, fatigue, and egress-lease pipeline. In each companion's
+  `scheduler.json`, `socialAutonomy.egressLease.mode` is the fail-closed owner
+  switch: `off` observes and appraises without autonomous delivery, `shadow`
+  records an admitted decision without sending, and `on` permits delivery after
+  every shared guard succeeds. The seed remains `off`; enabling a room is an
+  explicit per-companion deployment decision. Transport adapters do not add a
+  second loop policy.
 - **Autonomous initiation (ICP) is shipped, same-cluster, and opt-in.** When
   `scheduler.json > icpAutonomy.enabled` is true at process start, the local
   source runtime may turn a bounded weighted-thought, intention, or co-location

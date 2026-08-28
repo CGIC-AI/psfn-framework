@@ -34,9 +34,8 @@ import { assertNoUnknownKeys } from '../validators.js';
  * appraiser, the two-phase speaking arbiter (reservation + egress-lease), and the
  * free-time chooser (incl. the rest / silence-persistence window) — in the
  * per-companion scheduler owner file so they are Garden-editable via the raw
- * owner-file editor. The egress-lease `enabled` flag is intentionally NOT part
- * of this surface: autonomous sending is code-pinned OFF until qgqw.3 (P1), so
- * only its tunables are exposed (see participation-config.ts EgressLeaseTunables).
+ * owner-file editor. Room egress is an explicit off/shadow/on posture; public
+ * defaults remain off and the hardened arbiter remains the only on-path.
  */
 export interface SocialAutonomyConfig {
   passiveNameCandidate: PassiveNameCandidateSettings;

@@ -16,18 +16,14 @@ import type {
 } from '../backplane/types.js';
 import type { RuntimeChannelLifecycleLogger } from '../backplane/channel-lifecycle.js';
 import { BuzzRelayClient } from './client.js';
-import {
-  normalizeAcknowledgement,
-  planBuzzCausalReply,
-} from './causal-policy.js';
 import { toBuzzSubstrateMessage } from './message.js';
 import { normalizeBuzzRelayUrl } from './origin.js';
 import {
   BUZZ_STREAM_TEXT_CHUNK_LIMIT,
   buzzTagValues,
-  createBuzzCausalReplyTags,
   parseBuzzChannelId,
   parseBuzzPrivateKey,
+  parseBuzzThreadReference,
 } from './protocol.js';
 import type {
   BuzzRecoveryStore,
@@ -43,8 +39,6 @@ export interface BuzzAdapterConfig {
   channelIds: readonly string[];
   allowedAuthorPubkeys: readonly string[];
   machineAuthorPubkeys: readonly string[];
-  maxAutonomousReplyHops: number;
-  noInformationAcknowledgements: readonly string[];
   replayWindowSeconds: number;
   reconnectBaseDelayMs: number;
   reconnectMaxDelayMs: number;
@@ -75,7 +69,7 @@ export class BuzzAdapter implements ChannelAdapterPort {
     chatTypes: ['channel'],
     media: false,
     reactions: false,
-    threads: false,
+    threads: true,
     streaming: false,
     promptChannelType: 'buzz',
   };
@@ -92,7 +86,6 @@ export class BuzzAdapter implements ChannelAdapterPort {
   private readonly log: RuntimeChannelLifecycleLogger;
   private readonly channelAllowlist: ReadonlySet<string>;
   private readonly machineAuthorPubkeys: ReadonlySet<string>;
-  private readonly noInformationAcknowledgements: ReadonlySet<string>;
   private readonly recoveryStore: BuzzRecoveryStore;
   private readonly inFlightByChannel = new Map<string, Set<AbortController>>();
   private readonly recoveredPublications = new Map<string, Promise<void>>();
@@ -114,8 +107,6 @@ export class BuzzAdapter implements ChannelAdapterPort {
       channelIds: [...config.channelIds],
       allowedAuthorPubkeys: [...config.allowedAuthorPubkeys],
       machineAuthorPubkeys: [...config.machineAuthorPubkeys],
-      maxAutonomousReplyHops: config.maxAutonomousReplyHops,
-      noInformationAcknowledgements: [...config.noInformationAcknowledgements],
       replayWindowSeconds: config.replayWindowSeconds,
       reconnectBaseDelayMs: config.reconnectBaseDelayMs,
       reconnectMaxDelayMs: config.reconnectMaxDelayMs,
@@ -126,9 +117,6 @@ export class BuzzAdapter implements ChannelAdapterPort {
     this.log = options.log ?? createComponentLogger('BuzzAdapter');
     this.channelAllowlist = new Set(config.channelIds);
     this.machineAuthorPubkeys = new Set(config.machineAuthorPubkeys);
-    this.noInformationAcknowledgements = new Set(
-      config.noInformationAcknowledgements.map(normalizeAcknowledgement),
-    );
     this.recoveryStore = options.recoveryStore;
     this.shutdownTimeoutMs = options.shutdownTimeoutMs;
     this.client = new BuzzRelayClient({
@@ -138,8 +126,6 @@ export class BuzzAdapter implements ChannelAdapterPort {
       privateKey: parseBuzzPrivateKey(config.privateKey),
       channelIds: config.channelIds,
       allowedAuthorPubkeys: config.allowedAuthorPubkeys,
-      machineAuthorPubkeys: config.machineAuthorPubkeys,
-      maxAutonomousReplyHops: config.maxAutonomousReplyHops,
       replayWindowSeconds: config.replayWindowSeconds,
       reconnectBaseDelayMs: config.reconnectBaseDelayMs,
       reconnectMaxDelayMs: config.reconnectMaxDelayMs,
@@ -182,7 +168,7 @@ export class BuzzAdapter implements ChannelAdapterPort {
     };
     this.security = {
       supportsDirectMessages: false,
-      requiresMentionForChannelMessages: true,
+      requiresMentionForChannelMessages: false,
       allowlist: [...config.allowedAuthorPubkeys],
     };
     this.outbound = {
@@ -266,13 +252,6 @@ export class BuzzAdapter implements ChannelAdapterPort {
     if (!handler) throw new Error('Buzz adapter lost its inbound message handler');
     const channelId = buzzTagValues(event, 'h')[0]!;
     const authorIsMachine = this.machineAuthorPubkeys.has(event.pubkey);
-    if (!authorIsMachine) {
-      await this.recoveryStore.registerHumanRoot({
-        eventId: event.id,
-        channelId,
-        authorPubkey: event.pubkey,
-      });
-    }
     const claim = await this.recoveryStore.claimInbound({
       eventId: event.id,
       channelId,
@@ -287,40 +266,11 @@ export class BuzzAdapter implements ChannelAdapterPort {
       return;
     }
     if (await this.suppressIfCancelled(event, controller)) return;
-    const causal = planBuzzCausalReply({
-      event,
-      companionPubkey: this.client.companionPubkey,
-      machineAuthorPubkeys: this.machineAuthorPubkeys,
-      maxAutonomousReplyHops: this.buzz.maxAutonomousReplyHops,
-      noInformationAcknowledgements: this.noInformationAcknowledgements,
-    });
-    if (causal.suppress) {
-      await this.suppress(event, causal.suppress);
-      return;
-    }
-    if (!causal.plan) throw new Error('Buzz causal reply policy returned no disposition');
-    if (causal.causalEdge) {
-      const causalClaim = await this.recoveryStore.claimCausalEvent({
-        eventId: causal.causalEdge.eventId,
-        channelId,
-        rootEventId: causal.causalEdge.chainId,
-        parentEventId: causal.causalEdge.parentEventId,
-        hop: causal.causalEdge.hop,
-        authorPubkey: causal.causalEdge.authorPubkey,
-      });
-      if (causalClaim !== 'claimed') {
-        await this.suppress(
-          event,
-          causalClaim === 'duplicate' ? 'duplicate_causal_edge' : 'invalid_causal_parent',
-        );
-        return;
-      }
-    }
-    if (await this.suppressIfCancelled(event, controller)) return;
     const message = await toBuzzSubstrateMessage(event, {
       relayUrl: this.buzz.relayUrl,
       companionId: this.buzz.companionId,
       companionPubkey: this.client.companionPubkey,
+      authorIsMachine,
       intakeScreening: this.intakeScreening,
     });
     if (await this.suppressIfCancelled(event, controller)) return;
@@ -336,6 +286,10 @@ export class BuzzAdapter implements ChannelAdapterPort {
       return;
     }
     if (await this.suppressIfCancelled(event, controller)) return;
+    if (message.routing?.responseMode === 'observe') {
+      await this.suppress(event, 'observation_only');
+      return;
+    }
     const disposition = resolveAgentResponseDisposition(response);
     if (disposition.kind !== 'send') {
       const reason = disposition.kind === 'policy_suppressed'
@@ -352,19 +306,18 @@ export class BuzzAdapter implements ChannelAdapterPort {
       await this.suppress(event, 'empty_response');
       return;
     }
+    const thread = parseBuzzThreadReference(event);
     const outboundEvent = this.client.createStreamEvent({
       channelId,
       content: response.content,
-      tags: createBuzzCausalReplyTags(causal.plan),
+      tags: thread
+        ? [
+            ['e', thread.rootEventId, '', 'root'],
+            ['e', event.id, '', 'reply'],
+          ]
+        : [],
     });
-    await this.recoveryStore.markReady(event.id, outboundEvent, {
-      eventId: outboundEvent.id,
-      channelId,
-      rootEventId: causal.plan.rootEventId,
-      parentEventId: causal.plan.parentEventId,
-      hop: causal.plan.hop,
-      authorPubkey: outboundEvent.pubkey,
-    });
+    await this.recoveryStore.markReady(event.id, outboundEvent);
     if (await this.suppressIfCancelled(event, controller)) return;
     await this.client.publishEvent(outboundEvent);
     await this.recoveryStore.markCompleted(event.id);
@@ -415,6 +368,9 @@ export class BuzzAdapter implements ChannelAdapterPort {
   private async suppress(event: NostrEvent, reason: BuzzSuppressionReason): Promise<void> {
     await this.recoveryStore.markSuppressed(event.id, reason);
     await this.advanceCursor(event.created_at);
+    if (reason === 'observation_only') {
+      return;
+    }
     this.log.warn('Buzz autonomous reply terminated without publication', {
       eventId: event.id,
       reason,
@@ -467,15 +423,23 @@ export class BuzzAdapter implements ChannelAdapterPort {
     this.inFlightByChannel.delete(channelId);
   }
 
-  private async sendOutboundText(context: OutboundContext, _content: string): Promise<void> {
+  private async sendOutboundText(context: OutboundContext, content: string): Promise<void> {
     const channelId = parseBuzzChannelId(context.channelId, this.buzz.relayUrl);
     if (this.channelAllowlist.size > 0 && !this.channelAllowlist.has(channelId)) {
       throw new Error(`Buzz outbound channel ${channelId} is not allowlisted`);
     }
+    if (!this.client.isChannelEligible(channelId)) {
+      throw new Error(`Buzz outbound channel ${channelId} is not an active room membership`);
+    }
     if (context.replyToMessageId) {
       throw new Error('Buzz generic outbound replies require an authenticated author target');
     }
-    throw new Error('Buzz top-level outbound is not supported by the Stream mention tracer');
+    if (!content.trim()) throw new Error('Buzz outbound content must not be empty');
+    await this.client.publishEvent(this.client.createStreamEvent({
+      channelId,
+      content,
+      tags: [],
+    }));
   }
 
   private async alertOperator(kind: string, title: string, error: unknown): Promise<void> {

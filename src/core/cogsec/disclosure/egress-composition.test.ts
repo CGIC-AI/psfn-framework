@@ -64,6 +64,7 @@ const resolveChannel: ChannelDisclosureResolver = (channelId) => {
 describe('deriveDisclosureDestination', () => {
   it('recognizes the social egress methods, including reactions', () => {
     expect(isDisclosureSocialEgressMethod('discord.send')).toBe(true);
+    expect(isDisclosureSocialEgressMethod('channel.send')).toBe(true);
     expect(isDisclosureSocialEgressMethod('discord.sendMedia')).toBe(true);
     expect(isDisclosureSocialEgressMethod('discord.sendReaction')).toBe(true);
     expect(isDisclosureSocialEgressMethod('notify')).toBe(true);

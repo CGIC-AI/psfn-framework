@@ -3318,6 +3318,73 @@ describe('GatewayServer multi-account discord routing (flag on, W1-P2)', () => {
     expect(dockB.sendText).toHaveBeenCalledWith({ channelId: 'ch-1' }, 'from companion b');
   });
 
+  it('sends channel.send through the calling companion\'s own Buzz plugin account', async () => {
+    const companionA = '11111111-1111-4111-8111-111111111111';
+    const companionB = '22222222-2222-4222-8222-222222222222';
+    const buzzA = createAccountDock('buzz:acct-a');
+    const buzzB = createAccountDock('buzz:acct-b');
+    const { connect } = await setupServer({
+      ...createMinimalOptions(),
+      pluginOutboundRoutes: [
+        { pluginId: 'buzz', accountId: 'acct-a', companionId: companionA, dock: buzzA.dock },
+        { pluginId: 'buzz', accountId: 'acct-b', companionId: companionB, dock: buzzB.dock },
+      ],
+      multiCompanion: multiCompanion({}, {}, {
+        buzz: { 'acct-a': companionA, 'acct-b': companionB },
+      }),
+    });
+    const connA = await connect();
+    const connB = await connect();
+    await identifyAgent(connA, companionA, 1);
+    await identifyAgent(connB, companionB, 2);
+
+    const responseA = await invokeRpc(connA, 10, 'channel.send', {
+      channelType: 'buzz',
+      channelId: 'buzz:relay:room-1',
+      content: 'from companion a',
+    });
+    const responseB = await invokeRpc(connB, 11, 'channel.send', {
+      channelType: 'buzz',
+      channelId: 'buzz:relay:room-1',
+      content: 'from companion b',
+    });
+
+    expect(responseA.result).toEqual({ success: true });
+    expect(responseB.result).toEqual({ success: true });
+    expect(buzzA.sendText).toHaveBeenCalledWith(
+      { channelId: 'buzz:relay:room-1' },
+      'from companion a',
+    );
+    expect(buzzB.sendText).toHaveBeenCalledWith(
+      { channelId: 'buzz:relay:room-1' },
+      'from companion b',
+    );
+  });
+
+  it('rejects channel.send when the calling companion owns no Buzz account', async () => {
+    const companionA = '11111111-1111-4111-8111-111111111111';
+    const companionB = '22222222-2222-4222-8222-222222222222';
+    const buzzA = createAccountDock('buzz:acct-a');
+    const { connect } = await setupServer({
+      ...createMinimalOptions(),
+      pluginOutboundRoutes: [
+        { pluginId: 'buzz', accountId: 'acct-a', companionId: companionA, dock: buzzA.dock },
+      ],
+      multiCompanion: multiCompanion({}, {}, { buzz: { 'acct-a': companionA } }),
+    });
+    const connB = await connect();
+    await identifyAgent(connB, companionB, 1);
+
+    const response = await invokeRpc(connB, 12, 'channel.send', {
+      channelType: 'buzz',
+      channelId: 'buzz:relay:room-1',
+      content: 'stolen egress',
+    });
+
+    expect(response.error?.message).toContain('does not own exactly one buzz account');
+    expect(buzzA.sendText).not.toHaveBeenCalled();
+  });
+
   it('rejects outbound discord sends from a companion that owns no bot account', async () => {
     const auditAppend = vi.fn(async () => 23);
     const { options, dockA, dockB } = createMultiAccountOptions();

@@ -200,7 +200,7 @@ export function createDefaultReservationPhaseSettings(): ReservationPhaseSetting
  * single-probe breaker gate, the lease-threshold-bias confidence bar, and
  * speak-least fairness admit the turn.
  */
-export interface EgressLeasePhaseSettings {
+interface EgressLeasePhaseSettings {
   /**
    * Whether the arbiter actually binds a lease and delivers autonomous room
    * replies. Defaults to OFF: promoting an observed candidate to a real
@@ -233,7 +233,7 @@ export interface EgressLeasePhaseSettings {
  * inside the function body — never as module-level tuning constants — so the
  * hardcoded-settings gate stays satisfied and Garden/config can own overrides.
  */
-export function createDefaultEgressLeasePhaseSettings(): EgressLeasePhaseSettings {
+function createDefaultEgressLeasePhaseSettings(): EgressLeasePhaseSettings {
   return {
     enabled: false,
     leaseTtlMs: 60 * 1000,
@@ -242,18 +242,21 @@ export function createDefaultEgressLeasePhaseSettings(): EgressLeasePhaseSetting
   };
 }
 
+/** Operator-owned room-egress posture. Public defaults stay fail-closed. */
+type EgressLeaseMode = 'off' | 'shadow' | 'on';
+
 /**
- * Owner-file-exposed egress-lease tunables (jp36.8.2). The `enabled` flag is
- * DELIBERATELY excluded from the owner-file surface: promoting an observed
- * candidate to a real autonomous send is code-pinned OFF and no enablement
- * override may exist until qgqw.3 (P1) lands. The tunables below are safe to
- * expose because they only shape a send that the code-pinned flag still gates.
+ * Owner-file-exposed egress-lease policy (jp36.8.2 / jp36.5). `mode` replaces
+ * the never-exposed boolean after qgqw.3 hardened the sender. `shadow` runs the
+ * decision path without delivering; `on` may bind and send through the arbiter.
  */
-export type EgressLeaseTunables = Omit<EgressLeasePhaseSettings, 'enabled'>;
+export interface EgressLeaseTunables extends Omit<EgressLeasePhaseSettings, 'enabled'> {
+  mode: EgressLeaseMode;
+}
 
 export function createDefaultEgressLeaseTunables(): EgressLeaseTunables {
   const { enabled: _enabled, ...tunables } = createDefaultEgressLeasePhaseSettings();
-  return tunables;
+  return { mode: 'off', ...tunables };
 }
 
 // ── Owner-file parsers (jp36.8.2) ────────────────────────────────────────────
@@ -333,6 +336,15 @@ function participationAutonomyLevel(value: unknown, fieldPath: string): Particip
     );
   }
   return value as ParticipationAutonomyLevel;
+}
+
+function participationEgressLeaseMode(value: unknown, fieldPath: string): EgressLeaseMode {
+  if (value !== 'off' && value !== 'shadow' && value !== 'on') {
+    throw new Error(
+      `${PARTICIPATION_ERROR_PREFIX}: ${fieldPath} must be one of "off", "shadow", "on"`,
+    );
+  }
+  return value;
 }
 
 function participationChannelAutonomyLevels(
@@ -479,16 +491,19 @@ export function parseEgressLeaseTunables(
     return defaults;
   }
   const record = participationRecord(raw, fieldPath);
-  // `enabled` is intentionally NOT accepted here — it stays code-pinned false
-  // until qgqw.3 (P1). Listing it as an unknown key keeps the fail-closed guard
-  // from silently letting an operator flip on autonomous egress via config.
+  // The legacy boolean stays rejected: explicit tri-state posture prevents an
+  // accidental truthy value from turning shadow evaluation into real egress.
   assertNoUnknownKeys(
     record,
-    ['leaseTtlMs', 'egressDrawUnits', 'minReplyConfidence'],
+    ['mode', 'leaseTtlMs', 'egressDrawUnits', 'minReplyConfidence'],
     fieldPath,
     { errorPrefix: PARTICIPATION_ERROR_PREFIX },
   );
   return {
+    mode: participationEgressLeaseMode(
+      record.mode ?? defaults.mode,
+      `${fieldPath}.mode`,
+    ),
     leaseTtlMs: participationPositiveInteger(
       record.leaseTtlMs ?? defaults.leaseTtlMs,
       `${fieldPath}.leaseTtlMs`,

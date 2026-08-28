@@ -85,7 +85,7 @@ describe('createAgentLoopEgressReplySender', () => {
     expect(genMessage?.content).toContain('<untrusted_context source="public">');
     expect(genMessage?.content).toContain('[Sam]: hey companion');
     // The trimmed reply is delivered to the REAL room channel.
-    expect(delivery.send).toHaveBeenCalledWith('discord:guild-1:general', 'Hi Sam!');
+    expect(delivery.send).toHaveBeenCalledWith('discord', 'discord:guild-1:general', 'Hi Sam!');
   });
 
   it('reports a non-delivery (never sends empty) when the model declines', async () => {
@@ -107,7 +107,24 @@ describe('createAgentLoopEgressReplySender', () => {
     expect(delivery.send).not.toHaveBeenCalled();
   });
 
-  it('fails closed for a non-discord channel (no generation, no send)', async () => {
+  it('routes a Buzz room reply through the same autonomous egress sender', async () => {
+    const generator = { handleMessage: vi.fn(async () => makeResponse('Buzz reply')) };
+    const delivery = { send: vi.fn(async () => undefined) };
+    const sender = makeSender(generator, delivery);
+    const result = await sender.deliver(makeRequest({
+      channelType: 'buzz',
+      channelId: 'buzz:wss%3A%2F%2Frelay.example:room-1',
+    }));
+
+    expect(result.outcome).toBe('delivered');
+    expect(delivery.send).toHaveBeenCalledWith(
+      'buzz',
+      'buzz:wss%3A%2F%2Frelay.example:room-1',
+      'Buzz reply',
+    );
+  });
+
+  it('fails closed for an unsupported channel (no generation, no send)', async () => {
     const generator = { handleMessage: vi.fn(async () => makeResponse('hi')) };
     const delivery = { send: vi.fn(async () => undefined) };
     const sender = makeSender(generator, delivery);
@@ -330,6 +347,7 @@ const TRIGGER_EVENT = 'evt-42';
 
 function makePhaseConfig(): EgressLeasePhaseConfig {
   return {
+    mode: 'on',
     leaseTtlMs: 60_000,
     egressDrawUnits: 1,
     minReplyConfidence: 0.5,

@@ -8,12 +8,14 @@ import {
   buzzDisplayName,
   buzzPrincipal,
   buzzTagValues,
+  parseBuzzThreadReference,
 } from './protocol.js';
 
 export interface BuzzMessageContext {
   relayUrl: string;
   companionId: string;
   companionPubkey: string;
+  authorIsMachine: boolean;
   intakeScreening: IntakeScreeningService | null;
 }
 
@@ -37,17 +39,29 @@ export async function toBuzzSubstrateMessage(
       ? context.companionId
       : buzzDisplayName(pubkey),
   }));
+  const companionMentioned = buzzTagValues(event, 'p').includes(context.companionPubkey);
+  const thread = parseBuzzThreadReference(event);
+  const channel = {
+    scope: 'group' as const,
+    channelId,
+    ...(thread ? { threadId: thread.rootEventId } : {}),
+  };
   const addressing = parseMessageAddressingMetadata({
     schemaVersion: 2,
     source: 'buzz',
     author,
     observer,
     mentionedTargets,
-    channel: { scope: 'group', channelId },
-    resolvedAddressee: {
-      kind: 'participants',
-      participants: mentionedTargets.map(participant => ({ ...participant, evidence: ['mention'] })),
-    },
+    ...(thread ? { replyTarget: { messageId: thread.parentEventId } } : {}),
+    channel,
+    resolvedAddressee: mentionedTargets.length > 0
+      ? {
+          kind: 'participants',
+          participants: mentionedTargets.map(participant => ({ ...participant, evidence: ['mention'] })),
+        }
+      : thread
+        ? { kind: 'unresolved_reply', messageId: thread.parentEventId }
+        : { kind: 'room', channelId },
   });
   const screened = await screenChatMessageEnvelope({
     envelope: { content: event.content, addressing },
@@ -68,9 +82,11 @@ export async function toBuzzSubstrateMessage(
     content: screened.envelope.content,
     timestamp: new Date(event.created_at * 1_000),
     isDirectMessage: false,
+    ...(thread ? { replyToMessageId: thread.parentEventId } : {}),
     routing: {
       source: 'buzz',
-      responseMode: 'respond',
+      responseMode: companionMentioned ? 'respond' : 'observe',
+      ...(context.authorIsMachine ? { authorIsMachineIntelligence: true } : {}),
       addressing: screened.envelope.addressing,
       channelPrivacy: 'invite_only',
       ...(screened.snapshot ? { intakeEnvelopes: [screened.snapshot] } : {}),

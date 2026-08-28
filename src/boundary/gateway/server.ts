@@ -264,6 +264,13 @@ export interface GatewayServerOptions extends OptionalCompanionRoutingBinding {
    * only, so one companion can never egress through another companion's bot.
    */
   discordAccountDocks?: ReadonlyMap<CompanionId, ChannelOutboundDock>;
+  /** Native channel-plugin outbound accounts, resolved only by authenticated caller identity. */
+  pluginOutboundRoutes?: readonly {
+    pluginId: 'buzz';
+    accountId?: string;
+    companionId?: string;
+    dock: ChannelOutboundDock;
+  }[];
   /**
    * vvf.5.2: single-account Telegram outbound dock for interactive clarify
    * delivery. Present only when Telegram is configured; clarify.deliver fails
@@ -826,6 +833,9 @@ export class GatewayServer {
       embeddingService: this.options.embeddingService,
       ...(this.options.modelDiscovery ? { modelDiscovery: this.options.modelDiscovery } : {}),
       discordAdapter: this.resolveConnectionDiscordDock(conn),
+      resolveChannelOutboundDock: channelType => (
+        this.resolveConnectionPluginOutboundDock(conn, channelType)
+      ),
       ...(this.options.telegramDock ? { telegramDock: this.options.telegramDock } : {}),
       gitOps: this.options.gitOps,
       imageConfig: this.options.imageConfig,
@@ -1348,6 +1358,38 @@ export class GatewayServer {
       );
     }
     return dock;
+  }
+
+  private resolveConnectionPluginOutboundDock(
+    conn: GatewayRpcConnection,
+    pluginId: 'buzz',
+  ): ChannelOutboundDock {
+    const routes = this.options.pluginOutboundRoutes ?? [];
+    const companionId = this.connectionStatuses.get(conn)?.companionId;
+    const ownedRoutes = this.multiCompanion.enabled
+      ? routes.filter(route => route.companionId === companionId)
+      : routes;
+    if (this.multiCompanion.enabled && !companionId) {
+      this.alarmCompanionViolation(
+        'channel_send_unidentified',
+        `${pluginId} outbound rejected: connection has no bound companionId`,
+        { pluginId },
+      );
+      throw new Error(`${pluginId} outbound requires an identified companion connection`);
+    }
+    if (ownedRoutes.length !== 1) {
+      this.alarmCompanionViolation(
+        'channel_send_no_account',
+        `${pluginId} outbound rejected: caller does not own exactly one account`,
+        { pluginId, ...(companionId ? { companionId } : {}), accountCount: ownedRoutes.length },
+      );
+      throw new Error(
+        companionId
+          ? `Companion "${companionId}" does not own exactly one ${pluginId} account`
+          : `${pluginId} outbound requires exactly one configured account`,
+      );
+    }
+    return ownedRoutes[0]!.dock;
   }
 
   private isConnectionAuthorizedForApiStream(

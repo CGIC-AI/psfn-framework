@@ -166,6 +166,22 @@ describe('group memory classifier', () => {
     });
   });
 
+  it('treats Buzz rooms as group-capable by default', async () => {
+    const classification = await classifyGroupMemoryChannel({
+      channelId: 'buzz-room',
+      channelType: 'buzz',
+      recentEntries: [],
+    });
+
+    expect(classification.mode).toBe('group_capable_direct_tail');
+    expect(classification.reason).toBe('group_capable_no_recent_humans');
+    expect(classification.topology).toMatchObject({
+      source: 'channel_type',
+      isDirect: false,
+      isGroupCapable: true,
+    });
+  });
+
   it('keeps group-capable one-speaker rooms on the direct-tail path', async () => {
     const classification = await classifyGroupMemoryChannel({
       channelId: 'discord-room',

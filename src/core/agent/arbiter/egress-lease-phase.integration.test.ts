@@ -56,6 +56,7 @@ function trigger(): EgressReplyTrigger {
 
 function makeConfig(): EgressLeasePhaseConfig {
   return {
+    mode: 'on',
     leaseTtlMs: TTL_MS,
     egressDrawUnits: 1,
     minReplyConfidence: 0.1,

@@ -24,18 +24,12 @@ const BUZZ_ALLOWED_KEYS: Record<string, true> = {
   channelIds: true,
   allowedAuthorPubkeys: true,
   machineAuthorPubkeys: true,
-  loopPolicy: true,
   recoveryPolicy: true,
 };
 
 const BUZZ_ACCOUNT_KEYS: Record<string, true> = {
   companionId: true,
   privateKeyRef: true,
-};
-
-const BUZZ_LOOP_POLICY_KEYS: Record<string, true> = {
-  maxAutonomousReplyHops: true,
-  noInformationAcknowledgements: true,
 };
 
 const BUZZ_RECOVERY_POLICY_KEYS: Record<string, true> = {
@@ -56,10 +50,6 @@ export interface BuzzChannelConfig {
   channelIds: readonly string[];
   allowedAuthorPubkeys: readonly string[];
   machineAuthorPubkeys: readonly string[];
-  loopPolicy?: {
-    maxAutonomousReplyHops: number;
-    noInformationAcknowledgements: readonly string[];
-  };
   recoveryPolicy?: {
     replayWindowSeconds: number;
     reconnectBaseDelayMs: number;
@@ -134,7 +124,6 @@ function parseBuzzChannelConfig(raw: unknown): ChannelPluginParseResult<BuzzChan
       ? null
       : 'must be a 64-character lowercase hex pubkey',
   );
-  const loopPolicy = parseLoopPolicy(raw.loopPolicy);
   const recoveryPolicy = parseRecoveryPolicy(raw.recoveryPolicy);
 
   if (enabled) {
@@ -149,7 +138,6 @@ function parseBuzzChannelConfig(raw: unknown): ChannelPluginParseResult<BuzzChan
     if (machineAuthorPubkeys.some(pubkey => !allowedAuthorPubkeys.includes(pubkey))) {
       throw new Error('channels.json.buzz.machineAuthorPubkeys must be a subset of allowedAuthorPubkeys');
     }
-    if (!loopPolicy) throw new Error('channels.json.buzz.loopPolicy must be configured when Buzz is enabled');
     if (!recoveryPolicy) {
       throw new Error('channels.json.buzz.recoveryPolicy must be configured when Buzz is enabled');
     }
@@ -178,7 +166,6 @@ function parseBuzzChannelConfig(raw: unknown): ChannelPluginParseResult<BuzzChan
             channelIds,
             allowedAuthorPubkeys,
             machineAuthorPubkeys,
-            ...(loopPolicy ? { loopPolicy } : {}),
             ...(recoveryPolicy ? { recoveryPolicy } : {}),
           },
         })),
@@ -192,7 +179,6 @@ function parseBuzzChannelConfig(raw: unknown): ChannelPluginParseResult<BuzzChan
       channelIds,
       allowedAuthorPubkeys,
       machineAuthorPubkeys,
-      ...(loopPolicy ? { loopPolicy } : {}),
       ...(recoveryPolicy ? { recoveryPolicy } : {}),
     },
   };
@@ -230,8 +216,6 @@ function createBuzzPluginInstance(
   if (!input.config.companionId) throw new Error('Enabled Buzz channel requires a companionId');
   const privateKey = input.secrets.privateKey;
   if (!privateKey) throw new Error('Enabled Buzz channel is missing resolved credential "privateKey"');
-  const loopPolicy = input.config.loopPolicy;
-  if (!loopPolicy) throw new Error('Enabled Buzz channel is missing loopPolicy');
   const recoveryPolicy = input.config.recoveryPolicy;
   if (!recoveryPolicy) throw new Error('Enabled Buzz channel is missing recoveryPolicy');
   const recoveryStore = recoveryStoreFactory?.({
@@ -251,8 +235,6 @@ function createBuzzPluginInstance(
     channelIds: input.config.channelIds,
     allowedAuthorPubkeys: input.config.allowedAuthorPubkeys,
     machineAuthorPubkeys: input.config.machineAuthorPubkeys,
-    maxAutonomousReplyHops: loopPolicy.maxAutonomousReplyHops,
-    noInformationAcknowledgements: loopPolicy.noInformationAcknowledgements,
     replayWindowSeconds: recoveryPolicy.replayWindowSeconds,
     reconnectBaseDelayMs: recoveryPolicy.reconnectBaseDelayMs,
     reconnectMaxDelayMs: recoveryPolicy.reconnectMaxDelayMs,
@@ -286,30 +268,6 @@ function parseNostrPubkey(value: unknown, fieldName: string): string {
   const parsed = parseString(value, fieldName);
   if (!isNostrHexKey(parsed)) throw new Error(`${fieldName} must be a 64-character lowercase hex pubkey`);
   return parsed;
-}
-
-function parseLoopPolicy(value: unknown): BuzzChannelConfig['loopPolicy'] | undefined {
-  const fieldName = 'channels.json.buzz.loopPolicy';
-  if (value === undefined) {
-    return undefined;
-  }
-  const policy = parseExactObject(value, fieldName, BUZZ_LOOP_POLICY_KEYS);
-  const maxAutonomousReplyHops = parsePositiveInteger(
-    policy.maxAutonomousReplyHops,
-    `${fieldName}.maxAutonomousReplyHops`,
-  );
-  const noInformationAcknowledgements = parseExactStringList(
-    policy.noInformationAcknowledgements,
-    `${fieldName}.noInformationAcknowledgements`,
-    () => null,
-  ).map(value => value.toLocaleLowerCase());
-  if (noInformationAcknowledgements.length === 0) {
-    throw new Error(`${fieldName}.noInformationAcknowledgements must not be empty`);
-  }
-  if (new Set(noInformationAcknowledgements).size !== noInformationAcknowledgements.length) {
-    throw new Error(`${fieldName}.noInformationAcknowledgements must not contain case-insensitive duplicates`);
-  }
-  return { maxAutonomousReplyHops, noInformationAcknowledgements };
 }
 
 function parseRecoveryPolicy(value: unknown): BuzzChannelConfig['recoveryPolicy'] | undefined {

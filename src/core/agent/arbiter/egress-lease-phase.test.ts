@@ -27,6 +27,7 @@ const LEASE_ID = '11111111-1111-4111-8111-111111111111';
 
 function makeConfig(overrides: Partial<EgressLeasePhaseConfig> = {}): EgressLeasePhaseConfig {
   return {
+    mode: 'on',
     leaseTtlMs: 60_000,
     egressDrawUnits: 1,
     minReplyConfidence: 0.5,
@@ -298,6 +299,26 @@ describe('SpeakingEgressLeasePhase.grantReply — happy path', () => {
     expect(store.persistRoomEpisodeBreakerState).toHaveBeenCalledOnce();
     // A delivered reply never releases the reservation as silence.
     expect(store.releaseReservation).not.toHaveBeenCalled();
+  });
+
+  it('records an admitted shadow reply without drawing, acquiring, or delivering', async () => {
+    const store = makeFakeStore();
+    const pot = makePot('drawn');
+    const sender = makeSender('delivered');
+    const phase = makePhase({
+      store,
+      pot,
+      sender,
+      config: makeConfig({ mode: 'shadow' }),
+    });
+
+    const decision = await phase.grantReply(makeReservation(), REPLY, TRIGGER_CTX, 10_000);
+
+    expect(decision.outcome).toBe('shadowed');
+    expect(store.releaseReservation).toHaveBeenCalledOnce();
+    expect(pot.draw).not.toHaveBeenCalled();
+    expect(store.acquireEgressLease).not.toHaveBeenCalled();
+    expect(sender.deliver).not.toHaveBeenCalled();
   });
 
   it('draws BEFORE acquiring (the real draw binds at egress)', async () => {

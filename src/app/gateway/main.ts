@@ -590,6 +590,14 @@ async function main(): Promise<void> {
   const discordAccountDocks = channelSurfaces.discordAccounts
     ? new Map(channelSurfaces.discordAccounts.map(account => [account.companionId, account.adapter]))
     : undefined;
+  const pluginOutboundRoutes = channelSurfaces.plugins.list()
+    .filter(entry => entry.pluginId === 'buzz')
+    .map(entry => ({
+      pluginId: 'buzz' as const,
+      ...(entry.accountId ? { accountId: entry.accountId } : {}),
+      ...(entry.companionId ? { companionId: entry.companionId } : {}),
+      dock: entry.instance.adapter,
+    }));
 
   // ── Inter-companion channel lane (sprint-10 W6) ──
   // Multi-companion only: the gateway owns cross-companion routing. Room
@@ -733,6 +741,7 @@ async function main(): Promise<void> {
       ? { operatorTelegramChatId: bootstrap.channelsConfig.telegram.operatorChatId }
       : {}),
     ...(discordAccountDocks ? { discordAccountDocks } : {}),
+    ...(pluginOutboundRoutes.length > 0 ? { pluginOutboundRoutes } : {}),
     ...(companionChannelLane ? { companionChannels: companionChannelLane } : {}),
     ...(icpAutonomyStore ? { icpAutonomyStore } : {}),
     ...(icpInitiationPolicyAuthority ? { icpInitiationPolicyAuthority } : {}),

@@ -721,6 +721,7 @@ describe('GatewayIcpAutonomyBroker', () => {
   it('lists only authenticated-owner open dyads with content-free delivery metadata', async () => {
     const { broker, store } = makeBroker();
     await makeAvailable(store);
+    const privateDyadMemory = 'PRIVATE DYAD MEMORY: invented lighthouse-token promise';
     store.dyads.set(`${A}:${B}`, {
       dyadId: CONVERSATION_ID,
       channelId: CHANNEL,
@@ -731,7 +732,11 @@ describe('GatewayIcpAutonomyBroker', () => {
       provenanceConversationIds: [CONVERSATION_ID],
       lifecycleRevision: 1,
       revision: 1,
-    });
+      // Simulate a contaminated storage adapter returning extra private
+      // material. The public discovery projection must remain an allowlist,
+      // never a spread of its backing row.
+      privateDyadMemory,
+    } as IcpDyad);
     store.dyads.set(`${B}:${C}`, {
       dyadId: SECOND_CONVERSATION_ID,
       channelId: `companion-dm:${B}:${C}`,
@@ -767,6 +772,7 @@ describe('GatewayIcpAutonomyBroker', () => {
       lastDeliveryAtMs: NOW - 4_000,
     })]);
     expect(JSON.stringify(result)).not.toMatch(/message|summary|memory|reasoning|motivation|session/iu);
+    expect(JSON.stringify(result)).not.toContain(privateDyadMemory);
   });
 
   it('creates and idempotently recovers permit-free continuation inside an owned open dyad', async () => {

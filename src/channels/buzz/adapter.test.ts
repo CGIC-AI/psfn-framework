@@ -8,6 +8,7 @@ import {
 } from 'nostr-tools';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WebSocket, WebSocketServer, type RawData } from 'ws';
+import type { RuntimeChannelLifecycleLogger } from '../backplane/channel-lifecycle.js';
 import type { AgentResponse, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import { BuzzAdapter, type BuzzAdapterConfig } from './adapter.js';
 
@@ -99,6 +100,10 @@ function startAuthenticatedRelay(
   relay: TestRelay,
   onSubscribed: (socket: WebSocket, subscriptionId: string) => void,
   onPublished: (event: Event) => void,
+  publishAcknowledgement: { accepted: boolean; message: string } | null = {
+    accepted: true,
+    message: 'stored',
+  },
 ): void {
   relay.server.on('connection', socket => {
     socket.send(JSON.stringify(['AUTH', 'test-challenge']));
@@ -128,7 +133,14 @@ function startAuthenticatedRelay(
       if (frame[0] === 'EVENT') {
         const event = frame[1] as Event;
         onPublished(event);
-        socket.send(JSON.stringify(['OK', event.id, true, 'stored']));
+        if (publishAcknowledgement) {
+          socket.send(JSON.stringify([
+            'OK',
+            event.id,
+            publishAcknowledgement.accepted,
+            publishAcknowledgement.message,
+          ]));
+        }
       }
     });
   });
@@ -171,7 +183,10 @@ describe('BuzzAdapter', () => {
         channelPrivacy: 'invite_only',
         addressing: expect.objectContaining({
           source: 'buzz',
-          channel: { scope: 'group', channelId: CHANNEL_ID },
+          channel: {
+            scope: 'group',
+            channelId: `buzz:${encodeURIComponent(relay.url)}:${CHANNEL_ID}`,
+          },
           resolvedAddressee: {
             kind: 'participants',
             participants: [expect.objectContaining({
@@ -274,5 +289,86 @@ describe('BuzzAdapter', () => {
       'Buzz relay rejected NIP-42 authentication: membership required',
     );
     await adapter.stop();
+  });
+
+  it('reports a rejected response publication through the operator-alert path', async () => {
+    const relay = await createTestRelay();
+    const inbound = signStreamEvent({
+      secretKey: relay.authorSecretKey,
+      companionPubkey: relay.companionPubkey,
+    });
+    startAuthenticatedRelay(relay, (socket, subscriptionId) => {
+      socket.send(JSON.stringify(['EVENT', subscriptionId, inbound]));
+    }, () => undefined, { accepted: false, message: 'room became read-only' });
+
+    const alertHandler = vi.fn(async () => undefined);
+    const adapter = new BuzzAdapter(makeConfig(relay), { shutdownTimeoutMs: 2_000 });
+    adapter.onOperatorAlert(alertHandler);
+    adapter.onMessage(async message => responseFor(message));
+
+    await adapter.start();
+    await vi.waitFor(() => expect(alertHandler).toHaveBeenCalledWith(expect.objectContaining({
+      title: 'Buzz message processing failed',
+      message: expect.stringContaining('room became read-only'),
+      idempotencyKey: `buzz:message-processing:${COMPANION_ID}`,
+    })));
+    await adapter.stop();
+  });
+
+  it('bounds a missing response acknowledgement and alerts the operator', async () => {
+    const relay = await createTestRelay();
+    const inbound = signStreamEvent({
+      secretKey: relay.authorSecretKey,
+      companionPubkey: relay.companionPubkey,
+    });
+    startAuthenticatedRelay(relay, (socket, subscriptionId) => {
+      socket.send(JSON.stringify(['EVENT', subscriptionId, inbound]));
+    }, () => undefined, null);
+
+    const alertHandler = vi.fn(async () => undefined);
+    const adapter = new BuzzAdapter(makeConfig(relay), { shutdownTimeoutMs: 50 });
+    adapter.onOperatorAlert(alertHandler);
+    adapter.onMessage(async message => responseFor(message));
+
+    await adapter.start();
+    await vi.waitFor(() => expect(alertHandler).toHaveBeenCalledWith(expect.objectContaining({
+      message: expect.stringContaining('timed out acknowledging event'),
+    })));
+    await adapter.stop();
+  });
+
+  it('reports connection loss and preserves an operator-alert delivery failure in logs', async () => {
+    const relay = await createTestRelay();
+    startAuthenticatedRelay(relay, socket => socket.close(), () => undefined);
+    const log: RuntimeChannelLifecycleLogger = {
+      error: vi.fn(),
+      warn: vi.fn(),
+    };
+    const alertHandler = vi.fn(async () => {
+      throw new Error('operator sink offline');
+    });
+    const adapter = new BuzzAdapter(makeConfig(relay), { shutdownTimeoutMs: 2_000, log });
+    adapter.onOperatorAlert(alertHandler);
+    adapter.onMessage(async message => responseFor(message));
+
+    await adapter.start();
+    await vi.waitFor(() => expect(alertHandler).toHaveBeenCalledWith(expect.objectContaining({
+      title: 'Buzz relay connection closed',
+    })));
+    await vi.waitFor(() => expect(log.error).toHaveBeenCalledWith(
+      'Buzz operator alert delivery failed',
+      { error: 'operator sink offline' },
+    ));
+    await adapter.stop();
+  });
+
+  it('rejects generic top-level outbound outside an authenticated Stream trigger', async () => {
+    const relay = await createTestRelay();
+    const adapter = new BuzzAdapter(makeConfig(relay), { shutdownTimeoutMs: 2_000 });
+
+    await expect(adapter.send(
+      `buzz:${encodeURIComponent(relay.url)}:${CHANNEL_ID}`,
+      'unbound scheduled thought',
+    )).rejects.toThrow('Buzz top-level outbound is not supported by the Stream mention tracer');
   });
 });

@@ -23,7 +23,7 @@ const CHANNEL_BEHAVIOR: Readonly<Record<ChannelType, ChannelPolicy>> = Object.fr
   api: { scheduledContinuity: true, liveWakeup: true },
   telegram: { scheduledContinuity: true, liveWakeup: true },
   multica: { scheduledContinuity: false, liveWakeup: false },
-  buzz: { scheduledContinuity: true, liveWakeup: true },
+  buzz: { scheduledContinuity: false, liveWakeup: true },
   'psfn-amica': { scheduledContinuity: true, liveWakeup: true },
   companion: { scheduledContinuity: false, liveWakeup: false },
   'companion-ui': { scheduledContinuity: false, liveWakeup: true },

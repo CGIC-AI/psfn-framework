@@ -1,6 +1,7 @@
 import type { Event as NostrEvent } from 'nostr-tools';
 import type { IntakeScreeningService } from '../../core/cogsec/intake/screening.js';
 import { createComponentLogger } from '../../shared/logger.js';
+import { toError } from '../../shared/utils/errors.js';
 import type {
   ChannelAdapterPort,
   ChannelCapabilities,
@@ -19,6 +20,7 @@ import { normalizeBuzzRelayUrl } from './origin.js';
 import {
   BUZZ_STREAM_TEXT_CHUNK_LIMIT,
   buzzTagValues,
+  parseBuzzChannelId,
   parseBuzzPrivateKey,
 } from './protocol.js';
 
@@ -43,10 +45,6 @@ export interface BuzzAdapterOptions {
   shutdownTimeoutMs: number;
   intakeScreening?: IntakeScreeningService | null;
   log?: RuntimeChannelLifecycleLogger;
-}
-
-function asError(value: unknown): Error {
-  return value instanceof Error ? value : new Error(String(value));
 }
 
 export class BuzzAdapter implements ChannelAdapterPort {
@@ -166,23 +164,19 @@ export class BuzzAdapter implements ChannelAdapterPort {
     });
   }
 
-  private async sendOutboundText(context: OutboundContext, content: string): Promise<void> {
-    const prefix = `buzz:${encodeURIComponent(this.buzz.relayUrl)}:`;
-    if (!context.channelId.startsWith(prefix)) {
-      throw new Error(`Buzz outbound channel ${context.channelId} does not belong to configured relay`);
-    }
-    const channelId = context.channelId.slice(prefix.length);
+  private async sendOutboundText(context: OutboundContext, _content: string): Promise<void> {
+    const channelId = parseBuzzChannelId(context.channelId, this.buzz.relayUrl);
     if (!this.channelAllowlist.has(channelId)) {
       throw new Error(`Buzz outbound channel ${channelId} is not allowlisted`);
     }
     if (context.replyToMessageId) {
       throw new Error('Buzz generic outbound replies require an authenticated author target');
     }
-    await this.client.publishStreamEvent({ channelId, content, tags: [] });
+    throw new Error('Buzz top-level outbound is not supported by the Stream mention tracer');
   }
 
   private async alertOperator(kind: string, title: string, error: unknown): Promise<void> {
-    const message = asError(error).message;
+    const message = toError(error).message;
     this.log.error(title, { error: message });
     if (!this.operatorAlertHandler) return;
     try {
@@ -192,7 +186,7 @@ export class BuzzAdapter implements ChannelAdapterPort {
         idempotencyKey: `buzz:${kind}:${this.buzz.companionId}`,
       });
     } catch (alertError) {
-      this.log.error('Buzz operator alert delivery failed', { error: asError(alertError).message });
+      this.log.error('Buzz operator alert delivery failed', { error: toError(alertError).message });
     }
   }
 }

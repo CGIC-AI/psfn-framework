@@ -8,9 +8,9 @@ import {
 } from 'nostr-tools';
 import { WebSocket, type RawData } from 'ws';
 import { BuzzAdapter } from '../src/channels/buzz/adapter.js';
+import { NIP_42_AUTH_KIND } from '../src/channels/buzz/protocol.js';
 import type { SubstrateMessage } from '../src/shared/contracts/runtime.js';
 
-const NIP_42_AUTH_KIND = 22_242;
 const SMOKE_TIMEOUT_MS = 10_000;
 const COMPANION_ID = '11111111-1111-4111-8111-111111111111';
 
@@ -216,7 +216,7 @@ async function main(): Promise<void> {
       content: '',
       tags: [['h', channelId]],
     }, authorSecretKey);
-    await authorClient.publish(deleteChannel).catch(() => undefined);
+    await authorClient.publish(deleteChannel);
     authorClient.close();
   }
 }

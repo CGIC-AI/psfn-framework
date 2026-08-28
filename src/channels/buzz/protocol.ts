@@ -11,6 +11,7 @@ export const BUZZ_STREAM_KIND = 9;
 export const NIP_42_AUTH_KIND = 22_242;
 export const BUZZ_STREAM_TEXT_CHUNK_LIMIT = 64 * 1_024;
 const NOSTR_HEX_KEY_PATTERN = /^[0-9a-f]{64}$/;
+const BUZZ_SCOPED_ID_PREFIX = 'buzz:';
 
 export interface BuzzStreamAcceptancePolicy {
   companionPubkey: string;
@@ -19,9 +20,13 @@ export interface BuzzStreamAcceptancePolicy {
   authorAllowlist: ReadonlySet<string>;
 }
 
+export function isNostrHexKey(value: string): boolean {
+  return NOSTR_HEX_KEY_PATTERN.test(value);
+}
+
 export function parseBuzzPrivateKey(value: string): Uint8Array {
   const normalized = value.trim();
-  if (NOSTR_HEX_KEY_PATTERN.test(normalized)) return Uint8Array.from(Buffer.from(normalized, 'hex'));
+  if (isNostrHexKey(normalized)) return Uint8Array.from(Buffer.from(normalized, 'hex'));
   try {
     const decoded = nip19.decode(normalized);
     if (decoded.type === 'nsec' && decoded.data instanceof Uint8Array) return decoded.data;
@@ -78,7 +83,7 @@ export function acceptsBuzzStreamEvent(
   const mentionedPubkeys = buzzTagValues(event, 'p');
   if (
     !mentionedPubkeys.includes(policy.companionPubkey)
-    || mentionedPubkeys.some(pubkey => !NOSTR_HEX_KEY_PATTERN.test(pubkey))
+    || mentionedPubkeys.some(pubkey => !isNostrHexKey(pubkey))
   ) return false;
   return !event.tags.some(tag => tag[0] === 'e');
 }
@@ -111,13 +116,27 @@ export function createBuzzStreamEvent(input: {
 }
 
 export function buzzPrincipal(relayUrl: string, pubkey: string): string {
-  return `buzz:${encodeURIComponent(relayUrl)}:${pubkey}`;
+  return encodeBuzzScopedId(relayUrl, pubkey);
 }
 
 export function buzzChannelId(relayUrl: string, channelId: string): string {
-  return `buzz:${encodeURIComponent(relayUrl)}:${channelId}`;
+  return encodeBuzzScopedId(relayUrl, channelId);
+}
+
+export function parseBuzzChannelId(value: string, expectedRelayUrl: string): string {
+  const prefix = `${BUZZ_SCOPED_ID_PREFIX}${encodeURIComponent(expectedRelayUrl)}:`;
+  if (!value.startsWith(prefix)) {
+    throw new Error(`Buzz outbound channel ${value} does not belong to configured relay`);
+  }
+  const channelId = value.slice(prefix.length);
+  if (!channelId) throw new Error('Buzz outbound channel is missing its native channel identifier');
+  return channelId;
 }
 
 export function buzzDisplayName(pubkey: string): string {
   return nip19.npubEncode(pubkey);
+}
+
+function encodeBuzzScopedId(relayUrl: string, nativeId: string): string {
+  return `${BUZZ_SCOPED_ID_PREFIX}${encodeURIComponent(relayUrl)}:${nativeId}`;
 }

@@ -41,7 +41,7 @@ export interface FleetCardDetails {
   avatarUrl?: string;
 }
 
-export type FleetEmosimOperatingState = 'absent' | 'disabled' | 'shadow' | 'on' | 'unhealthy';
+type FleetEmosimOperatingState = 'absent' | 'disabled' | 'shadow' | 'on' | 'unhealthy';
 
 export interface FleetEmosimHealth {
   state: FleetEmosimOperatingState;

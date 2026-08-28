@@ -211,6 +211,34 @@ export class PostgresIcpLocalPolicyAuthority {
     this.requireLocalRole(input);
     if (!this.ready || this.closed) return { role: input.role, ready: false };
     const decisionNowMs = this.now();
+    if ('dyad' in input && input.dyad) {
+      const peerCompanionId = input.role === 'sender'
+        ? input.recipientCompanionId
+        : input.senderCompanionId;
+      const relationship = await this.resolveContact(
+        this.pool,
+        input.role === 'sender' ? input.peerContactId ?? null : null,
+        peerCompanionId,
+        false,
+      );
+      const common = {
+        ready: true as const,
+        canonicalPeerContact: relationship !== null,
+        trustAllows: relationship !== null && trustAtLeast(relationship.trustLevel, 'regular'),
+        blocksPeer: this.isBlocked(peerCompanionId, input.channelId),
+      };
+      if (input.role === 'recipient') return { ...common, role: 'recipient' };
+      return {
+        ...common,
+        role: 'sender',
+        quietHours: false,
+        provenanceFresh: true,
+        socialPressureAllows: true,
+        chargeAllows: true,
+        fatigueAllows: true,
+        costAllows: true,
+      };
+    }
     if (input.role === 'recipient') {
       const relationship = await this.resolveContact(
         this.pool,

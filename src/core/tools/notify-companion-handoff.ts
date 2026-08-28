@@ -16,15 +16,30 @@ import {
 import { textResult, textResultWithError } from './results.js';
 
 export const COMPANION_NOTIFY_TARGET_KIND = 'companion' as const;
+export const COMPANION_PRIVATE_INTENT_MAX_LENGTH = 1_000;
 export const COMPANION_NOTIFY_QUEUED_TEXT = 'notify: companion outreach queued for the target-channel turn.';
 export const DEFERRED_COMPANION_OUTREACH_ACTION_KIND = 'notify.companion_outreach' as const;
 
-export interface CompanionNotifyParams {
-  action: 'send';
-  target_kind: 'companion';
-  contact_id: string;
-  initiation_permit: string;
-}
+export type CompanionNotifyParams =
+  | {
+      mode: 'initiation';
+      action: 'send';
+      target_kind: 'companion';
+      contact_id: string;
+      initiation_permit: string;
+    }
+  | {
+      mode: 'continuation';
+      action: 'send';
+      target_kind: 'companion';
+      dyad_id: string;
+      private_intent: string;
+    }
+  | {
+      mode: 'list';
+      action: 'list_dyads';
+      target_kind: 'companion';
+    };
 
 export type CompanionNotifyCatalogSource = 'extended';
 
@@ -43,12 +58,22 @@ export interface DeferredCompanionOutreachAuthorizationRuntime {
   isNotifyToolRegistered(): boolean;
 }
 
-interface DeferredCompanionOutreachPayload {
+type DeferredCompanionOutreachPayload = ({
+  mode: 'initiation';
   contactId: string;
   permitId: string;
   candidateOrigin?: IcpAutonomyCandidateOrigin;
   authorization: DeferredCompanionOutreachAuthorizationEvidence;
-}
+} | {
+  mode: 'continuation';
+  dyadId: string;
+  privateIntent: string;
+  deliveryId: string;
+  conversationId: string;
+  sourceDyadId?: string;
+  continuationTaskKind?: import('../../shared/contracts/runtime.js').IcpContinuationTaskKind;
+  authorization: DeferredCompanionOutreachAuthorizationEvidence;
+});
 
 function isExactNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0 && value.trim() === value;
@@ -118,6 +143,34 @@ export function isDeferredCompanionOutreachExecutionAuthorized(
 
 function parseCompanionNotifyParams(value: unknown): CompanionNotifyParams {
   if (!isRecord(value)) throw new Error('companion notify params must be an object');
+  if (value.action === 'list_dyads') {
+    assertNoUnknownKeys(value, ['action', 'target_kind'], 'companion dyad list params');
+    if (value.target_kind !== COMPANION_NOTIFY_TARGET_KIND) {
+      throw new Error('companion dyad list requires target_kind=companion');
+    }
+    return { mode: 'list', action: 'list_dyads', target_kind: 'companion' };
+  }
+  if (value.action === 'send' && value.dyad_id !== undefined) {
+    assertNoUnknownKeys(
+      value,
+      ['action', 'target_kind', 'dyad_id', 'private_intent'],
+      'companion continuation params',
+    );
+    if (value.target_kind !== COMPANION_NOTIFY_TARGET_KIND || !isRfc4122Uuid(value.dyad_id)) {
+      throw new Error('companion continuation requires an exact dyad_id');
+    }
+    if (typeof value.private_intent !== 'string' || !value.private_intent.trim()
+      || value.private_intent.trim() !== value.private_intent || value.private_intent.length > 1_000) {
+      throw new Error('private_intent must be an exact 1-1000 character private instruction');
+    }
+    return {
+      mode: 'continuation',
+      action: 'send',
+      target_kind: 'companion',
+      dyad_id: value.dyad_id,
+      private_intent: value.private_intent,
+    };
+  }
   assertNoUnknownKeys(
     value,
     ['action', 'target_kind', 'contact_id', 'initiation_permit'],
@@ -135,6 +188,7 @@ function parseCompanionNotifyParams(value: unknown): CompanionNotifyParams {
     throw new Error('initiation_permit must be a lowercase RFC-4122 UUID');
   }
   return {
+    mode: 'initiation',
     action: 'send',
     target_kind: 'companion',
     contact_id: value.contact_id,
@@ -147,7 +201,10 @@ function parseDeferredPayload(value: unknown): DeferredCompanionOutreachPayload 
   try {
     assertNoUnknownKeys(
       value,
-      ['contactId', 'permitId', 'candidateOrigin', 'authorization'],
+      [
+        'mode', 'contactId', 'permitId', 'candidateOrigin', 'dyadId', 'privateIntent',
+        'deliveryId', 'conversationId', 'sourceDyadId', 'continuationTaskKind', 'authorization',
+      ],
       'deferred companion outreach payload',
     );
   } catch {
@@ -164,13 +221,33 @@ function parseDeferredPayload(value: unknown): DeferredCompanionOutreachPayload 
     return null;
   }
   const authorization = parseDeferredCompanionOutreachAuthorizationEvidence(value.authorization);
-  if (typeof contactId !== 'string' || !contactId || contactId.trim() !== contactId) return null;
-  if (!isRfc4122Uuid(permitId)) return null;
   if (!authorization) return null;
+  if (value.mode === 'initiation' || value.mode === undefined) {
+    if (typeof contactId !== 'string' || !contactId || contactId.trim() !== contactId) return null;
+    if (!isRfc4122Uuid(permitId)) return null;
+    return {
+      mode: 'initiation', contactId, permitId,
+      ...(candidateOrigin ? { candidateOrigin } : {}), authorization,
+    };
+  }
+  if (value.mode !== 'continuation' || !isRfc4122Uuid(value.dyadId)
+    || !isRfc4122Uuid(value.deliveryId) || !isRfc4122Uuid(value.conversationId)
+    || typeof value.privateIntent !== 'string' || !value.privateIntent.trim()
+    || value.privateIntent.trim() !== value.privateIntent
+    || value.privateIntent.length > COMPANION_PRIVATE_INTENT_MAX_LENGTH
+    || (value.sourceDyadId !== undefined && !isRfc4122Uuid(value.sourceDyadId))) return null;
+  const continuationTaskKind = value.continuationTaskKind;
+  if (continuationTaskKind !== undefined
+    && continuationTaskKind !== 'work' && continuationTaskKind !== 'research'
+    && continuationTaskKind !== 'problem_solving') return null;
   return {
-    contactId,
-    permitId,
-    ...(candidateOrigin ? { candidateOrigin } : {}),
+    mode: 'continuation',
+    dyadId: value.dyadId,
+    privateIntent: value.privateIntent,
+    deliveryId: value.deliveryId,
+    conversationId: value.conversationId,
+    ...(value.sourceDyadId ? { sourceDyadId: value.sourceDyadId } : {}),
+    ...(continuationTaskKind ? { continuationTaskKind } : {}),
     authorization,
   };
 }
@@ -184,10 +261,22 @@ export async function executeCompanionNotify(input: {
     if (!requestContext) {
       throw new Error('companion outreach requires an attributable turn context');
     }
-    if (requestContext.icpCorrelation) {
-      throw new Error('companion outreach is blocked during an ICP-correlated turn');
-    }
     const params = parseCompanionNotifyParams(input.params);
+    if (params.mode === 'list') {
+      const dyads = await input.runtime.listOpenDyads();
+      return textResult(JSON.stringify({ dyads }));
+    }
+    if (params.mode === 'continuation') {
+      const dyad = await input.runtime.inspectOpenDyad(params.dyad_id);
+      if (requestContext.icpCorrelation
+        && requestContext.icpCorrelation.channelId !== dyad.channelId) {
+        throw new Error('an ICP turn may continue only its own dyad');
+      }
+      return textResult(COMPANION_NOTIFY_QUEUED_TEXT);
+    }
+    if (requestContext.icpCorrelation) {
+      throw new Error('first-contact outreach is blocked during an ICP-correlated turn');
+    }
     await input.runtime.prepareCompanionOutreach(
       params.contact_id,
       params.initiation_permit,
@@ -199,6 +288,11 @@ export async function executeCompanionNotify(input: {
       true,
     );
   }
+}
+
+function deriveContinuationUuid(kind: string, turnId: string, toolCallId: string): string {
+  const hex = createHash('sha256').update(`${kind}\0${turnId}\0${toolCallId}`).digest('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 }
 
 type ToolResultAgentMessage = Extract<AgentMessage, { role: 'toolResult' }>;
@@ -230,11 +324,8 @@ export function inferDeferredCompanionOutreachActions(
       }
       try {
         const params = parseCompanionNotifyParams(content.arguments);
-        requestedByToolCallId.set(content.id, {
-          contactId: params.contact_id,
-          permitId: params.initiation_permit,
-          ...(candidateOrigin ? { candidateOrigin } : {}),
-          authorization: {
+        if (params.mode === 'list') continue;
+        const authorization = {
             version: 2,
             toolName: 'notify',
             toolScope: 'extended',
@@ -242,8 +333,26 @@ export function inferDeferredCompanionOutreachActions(
             requiredCapability: 'external.companion',
             originToolCallId: content.id,
             originTurnId: context.turnId,
-          },
-        });
+        } as const;
+        requestedByToolCallId.set(content.id, params.mode === 'initiation'
+          ? {
+              mode: 'initiation', contactId: params.contact_id,
+              permitId: params.initiation_permit,
+              ...(candidateOrigin ? { candidateOrigin } : {}), authorization,
+            }
+          : {
+              mode: 'continuation', dyadId: params.dyad_id,
+              privateIntent: params.private_intent,
+              deliveryId: deriveContinuationUuid('delivery', context.turnId, content.id),
+              conversationId: deriveContinuationUuid('conversation', context.turnId, content.id),
+              ...(context.message.routing?.icpCorrelation
+                ? { sourceDyadId: params.dyad_id }
+                : {}),
+              ...(candidateOrigin?.continuationTaskKind
+                ? { continuationTaskKind: candidateOrigin.continuationTaskKind }
+                : {}),
+              authorization,
+            });
       } catch {
         // Invalid calls cannot produce a successful marker and are never queued.
       }
@@ -255,7 +364,9 @@ export function inferDeferredCompanionOutreachActions(
     if (!isSuccessfulCompanionNotifyResult(message) || !message.toolCallId) continue;
     const payload = requestedByToolCallId.get(message.toolCallId);
     if (!payload) continue;
-    const permitFingerprint = createHash('sha256').update(payload.permitId).digest('hex').slice(0, 20);
+    const permitFingerprint = createHash('sha256')
+      .update(payload.mode === 'initiation' ? payload.permitId : payload.deliveryId)
+      .digest('hex').slice(0, 20);
     actions.push({
       kind: DEFERRED_COMPANION_OUTREACH_ACTION_KIND,
       payload: toRecordView(payload),
@@ -289,12 +400,23 @@ export function registerDeferredCompanionOutreachRuntime(input: {
       if (!revalidate()) {
         throw new Error('Deferred companion outreach is no longer capability/tool-policy authorized');
       }
-      await input.runtime.executeCompanionOutreach(
-        payload.contactId,
-        payload.permitId,
-        payload.candidateOrigin,
-        revalidate,
-      );
+      if (payload.mode === 'initiation') {
+        await input.runtime.executeCompanionOutreach(
+          payload.contactId, payload.permitId, payload.candidateOrigin, revalidate,
+        );
+      } else {
+        await input.runtime.executeDyadContinuation({
+          dyadId: payload.dyadId,
+          deliveryId: payload.deliveryId,
+          conversationId: payload.conversationId,
+          privateIntent: payload.privateIntent,
+          initiationSource: 'foreground',
+          ...(payload.sourceDyadId ? { sourceDyadId: payload.sourceDyadId } : {}),
+          ...(payload.continuationTaskKind
+            ? { continuationTaskKind: payload.continuationTaskKind }
+            : {}),
+        }, revalidate);
+      }
     },
     { executionMode: 'background' },
   );

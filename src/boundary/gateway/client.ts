@@ -1036,6 +1036,35 @@ export class GatewayClient implements
     }) as CompanionMessageSendResult & { permitOutcome: 'consumed' | 'replayed' };
   }
 
+  async companionSendContinuation(input: {
+    authorization: import('./icp-autonomy-contract.js').IcpDyadContinuationAuthorization;
+    peerContactId: string;
+    content: string;
+    authorName?: string;
+    correlation: IcpConversationCorrelation;
+  }): Promise<{ messageId: string; deliveredTo: string[]; duplicate: boolean }> {
+    const messageId = deriveIcpTransportMessageId(input.correlation);
+    const result = await this.transportRuntime.request('companion.message.send', {
+      channelId: input.authorization.channelId,
+      content: input.content,
+      ...(input.authorName ? { authorName: input.authorName } : {}),
+      continuation: {
+        dyadId: input.authorization.dyadId,
+        deliveryId: input.authorization.deliveryId,
+        recipientCompanionId: input.authorization.peerCompanionId,
+        peerContactId: input.peerContactId,
+        correlation: input.correlation,
+      },
+      messageId,
+      ...(this.companionId ? { companionId: this.companionId } : {}),
+    }) as CompanionMessageSendResult;
+    return {
+      messageId: result.messageId,
+      deliveredTo: result.deliveredTo,
+      duplicate: false,
+    };
+  }
+
   /** Report a failed inbound companion turn without creating a reply turn. */
   async companionReportFailure(
     params: CompanionMessageFailureReportParams,
@@ -1100,6 +1129,30 @@ export class GatewayClient implements
     };
     return await this.transportRuntime.request('companion.availability.read_self', params) as
       IcpOwnAvailabilityResult;
+  }
+
+  async companionListOpenDyads(): Promise<import('./icp-autonomy-contract.js').IcpOpenDyadProjection[]> {
+    return await this.transportRuntime.request('companion.dyad.list_open', {
+      ...(this.companionId ? { companionId: this.companionId } : {}),
+    }) as import('./icp-autonomy-contract.js').IcpOpenDyadProjection[];
+  }
+
+  async companionPrepareDyadContinuation(
+    params: Omit<import('./protocol.js').GatewayMethods['companion.dyad.prepare_continuation'][0], 'companionId'>,
+  ): Promise<import('./icp-autonomy-contract.js').IcpDyadContinuationPrepareResult> {
+    return await this.transportRuntime.request('companion.dyad.prepare_continuation', {
+      ...params,
+      ...(this.companionId ? { companionId: this.companionId } : {}),
+    }) as import('./icp-autonomy-contract.js').IcpDyadContinuationPrepareResult;
+  }
+
+  async companionRecordDyadContinuationOutcome(
+    params: Omit<import('./protocol.js').GatewayMethods['companion.dyad.record_outcome'][0], 'companionId'>,
+  ): Promise<import('../../shared/contracts/icp-autonomy.js').IcpDyadDelivery> {
+    return await this.transportRuntime.request('companion.dyad.record_outcome', {
+      ...params,
+      ...(this.companionId ? { companionId: this.companionId } : {}),
+    }) as import('../../shared/contracts/icp-autonomy.js').IcpDyadDelivery;
   }
 
   async companionInitiationPreflight(

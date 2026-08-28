@@ -2899,15 +2899,16 @@ export const POSTGRES_OBSERVER_EVAL_SIDECAR_MIGRATIONS = [
 //  12 — icp felt_impulse initiation source (hrmrq.34, operator ruling D4)
 //  13 — authenticated operator/harness ICP test initiation source (ph0mw)
 //  14 — durable canonical ICP dyads with bounded activity episodes (84g0z.1)
+//  15 — content-free open-dyad continuation delivery ledger (84g0z.2)
 export const SHARED_SCHEMA_NAME = 'shared';
 
 /** Ledger versions installed by POSTGRES_SHARED_MIGRATIONS (excluding wiki versions 3 and 8). */
 export const POSTGRES_SHARED_BASE_MIGRATION_VERSIONS = [
-  1, 2, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14,
+  1, 2, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15,
 ] as const;
 /** Complete ledger across the base and shared-wiki chains. */
 export const POSTGRES_SHARED_ALL_MIGRATION_VERSIONS = [
-  1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14,
+  1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
 ] as const;
 
 export const POSTGRES_SHARED_MIGRATIONS: readonly string[] = [
@@ -3482,6 +3483,57 @@ export const POSTGRES_SHARED_MIGRATIONS: readonly string[] = [
   `
   INSERT INTO shared_schema_migrations (version, name)
   VALUES (14, 'icp-durable-dyads')
+  ON CONFLICT (version) DO NOTHING;
+  `,
+  // Version 15 (84g0z.2): established-dyad continuation is authorized from
+  // content-free relationship state, and its asynchronous delivery lifecycle
+  // survives gateway and agent restarts. Historical pairs whose newest episode
+  // was suppressed are revoked before dyads become authorization-bearing.
+  `
+  WITH latest AS (
+    SELECT DISTINCT ON (episode.dyad_id)
+      episode.dyad_id, episode.status, episode.last_activity_at_ms
+    FROM icp_conversation_episodes AS episode
+    WHERE episode.dyad_id IS NOT NULL
+    ORDER BY episode.dyad_id, episode.last_activity_at_ms DESC, episode.conversation_id DESC
+  )
+  UPDATE icp_dyads AS dyad
+  SET status = 'revoked',
+      closed_at_ms = latest.last_activity_at_ms,
+      close_reason_code = 'conversation_suppressed',
+      revision = dyad.revision + 1
+  FROM latest
+  WHERE latest.dyad_id = dyad.dyad_id
+    AND dyad.status = 'open' AND latest.status = 'suppressed';
+  `,
+  `
+  CREATE TABLE IF NOT EXISTS icp_dyad_deliveries (
+    delivery_id UUID PRIMARY KEY,
+    dyad_id UUID NOT NULL REFERENCES icp_dyads(dyad_id) ON DELETE RESTRICT,
+    conversation_id UUID NOT NULL REFERENCES icp_conversation_episodes(conversation_id) ON DELETE RESTRICT,
+    sender_companion_id UUID NOT NULL,
+    recipient_companion_id UUID NOT NULL,
+    outcome TEXT NOT NULL CHECK (outcome IN (
+      'queued', 'delayed', 'delivered', 'ignored', 'declined', 'failed',
+      'retrying', 'duplicate', 'suppressed'
+    )),
+    created_at_ms BIGINT NOT NULL CHECK (created_at_ms >= 0),
+    updated_at_ms BIGINT NOT NULL CHECK (updated_at_ms >= created_at_ms),
+    attempt INTEGER NOT NULL CHECK (attempt >= 0),
+    gateway_message_id TEXT,
+    reason_code TEXT,
+    revision BIGINT NOT NULL CHECK (revision >= 1),
+    CHECK (sender_companion_id <> recipient_companion_id),
+    CHECK ((outcome IN ('delivered', 'duplicate')) = (gateway_message_id IS NOT NULL))
+  );
+  `,
+  `CREATE INDEX IF NOT EXISTS idx_icp_dyad_deliveries_latest
+    ON icp_dyad_deliveries (dyad_id, updated_at_ms DESC, delivery_id DESC);`,
+  `CREATE INDEX IF NOT EXISTS idx_icp_dyad_deliveries_sender
+    ON icp_dyad_deliveries (sender_companion_id, updated_at_ms DESC);`,
+  `
+  INSERT INTO shared_schema_migrations (version, name)
+  VALUES (15, 'icp-open-dyad-continuation')
   ON CONFLICT (version) DO NOTHING;
   `,
 ];

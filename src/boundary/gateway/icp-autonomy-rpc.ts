@@ -14,6 +14,9 @@ import {
   parseIcpInitiationPermitIssueInput,
   parseIcpInitiationPreflightInput,
   parseIcpOwnAvailabilityReadParams,
+  parseIcpOpenDyadListParams,
+  parseIcpDyadContinuationPrepareParams,
+  parseIcpDyadContinuationOutcomeParams,
   parseIcpPeerAvailabilityReadParams,
   parseIcpPermitConsumeParams,
   parseIcpPermitInvalidateSelfParams,
@@ -33,6 +36,7 @@ interface GatewayIcpAutonomyRpcOptions {
   policyAuthority: Pick<
     GatewayIcpInitiationPolicyAuthority,
     'resolve' | 'authorizeHandoff' | 'runAuthorizedHandoff'
+      | 'authorizeDyadContinuation' | 'runAuthorizedDyadContinuation'
   >;
   eventBus: EventBus;
   alarm(event: string, message: string, details: Record<string, unknown>): void;
@@ -142,6 +146,30 @@ export function registerGatewayIcpAutonomyRpc(input: RegisterGatewayIcpAutonomyR
       parseIcpOwnAvailabilityReadParams(params);
       return await requireBroker().readOwnAvailability(input.requireAuthenticatedCompanionId());
     },
+    () => ({ companionId: input.requireAuthenticatedCompanionId() }),
+  ));
+  input.target.addMethod('companion.dyad.list_open', input.audited(
+    'companion.dyad.list_open',
+    async (params: unknown) => {
+      parseIcpOpenDyadListParams(params);
+      return await requireBroker().listOpenDyads(input.requireAuthenticatedCompanionId());
+    },
+    () => ({ companionId: input.requireAuthenticatedCompanionId() }),
+  ));
+  input.target.addMethod('companion.dyad.prepare_continuation', input.audited(
+    'companion.dyad.prepare_continuation',
+    async (params: unknown) => await requireBroker().prepareDyadContinuation(
+      input.requireAuthenticatedCompanionId(),
+      parseIcpDyadContinuationPrepareParams(params),
+    ),
+    () => ({ companionId: input.requireAuthenticatedCompanionId() }),
+  ));
+  input.target.addMethod('companion.dyad.record_outcome', input.audited(
+    'companion.dyad.record_outcome',
+    async (params: unknown) => await requireBroker().recordDyadContinuationDelivery(
+      input.requireAuthenticatedCompanionId(),
+      parseIcpDyadContinuationOutcomeParams(params),
+    ),
     () => ({ companionId: input.requireAuthenticatedCompanionId() }),
   ));
   input.target.addMethod('companion.initiation.preflight', input.audited(

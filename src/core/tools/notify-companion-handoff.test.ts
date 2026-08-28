@@ -48,6 +48,17 @@ function runtime(): AgentFacingIcpAutonomyRuntime {
     readOwnAvailability: vi.fn(),
     publishOwnAvailability: vi.fn(),
     clearOwnAvailability: vi.fn(),
+    listOpenDyads: vi.fn().mockResolvedValue([]),
+    inspectOpenDyad: vi.fn().mockResolvedValue({
+      dyadId: '77777777-7777-4777-8777-777777777777',
+      peerCompanionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      peerContactId: 'peer-contact-b',
+      peerDisplayLabel: 'Peer',
+      channelId: 'companion-dm:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      status: 'open',
+      availability: { peerCompanionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', connectionState: 'online', eligible: true },
+    }),
+    executeDyadContinuation: vi.fn().mockResolvedValue({ disposition: 'delivered' }),
     prepareCompanionOutreach: vi.fn().mockResolvedValue(undefined),
     executeCompanionOutreach: vi.fn().mockResolvedValue({ disposition: 'delivered' }),
   };
@@ -96,6 +107,83 @@ function candidateSchedulerMessage() {
 }
 
 describe('permit-governed notify companion handoff', () => {
+  it('advertises content-free open-dyad discovery and private-intent continuation', () => {
+    const schema = tool(runtime()).parameters;
+    expect(Value.Check(schema, { action: 'list_dyads', target_kind: 'companion' })).toBe(true);
+    expect(Value.Check(schema, {
+      action: 'send',
+      target_kind: 'companion',
+      dyad_id: '77777777-7777-4777-8777-777777777777',
+      private_intent: 'Check in naturally.',
+    })).toBe(true);
+    expect(Value.Check(schema, {
+      action: 'send',
+      target_kind: 'companion',
+      dyad_id: '77777777-7777-4777-8777-777777777777',
+      private_intent: 'Check in naturally.',
+      message: 'raw peer-visible content',
+    })).toBe(false);
+  });
+
+  it('returns only the redacted dyad projection supplied by companion authority', async () => {
+    const owner = runtime();
+    vi.mocked(owner.listOpenDyads).mockResolvedValueOnce([{
+      dyadId: '77777777-7777-4777-8777-777777777777',
+      peerCompanionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      peerContactId: 'peer-contact-b',
+      peerDisplayLabel: 'Peer',
+      channelId: 'companion-dm:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      status: 'open',
+      availability: { peerCompanionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', connectionState: 'online', eligible: true },
+      lastDeliveryOutcome: 'delivered',
+      lastDeliveryAtMs: 2_000,
+    }]);
+    const result = await ordinaryContext(async () => await tool(owner).execute('call-list', {
+      action: 'list_dyads', target_kind: 'companion',
+    }));
+    expect(JSON.parse(text(result))).toEqual({
+      dyads: [expect.objectContaining({
+        dyadId: '77777777-7777-4777-8777-777777777777',
+        peerDisplayLabel: 'Peer',
+        lastDeliveryOutcome: 'delivered',
+      })],
+    });
+    expect(text(result)).not.toMatch(/message|summary|memory|reasoning|motivation|session/iu);
+  });
+
+  it('queues an owned open-dyad continuation without an initiation permit', async () => {
+    const owner = runtime();
+    const params = {
+      action: 'send' as const,
+      target_kind: 'companion' as const,
+      dyad_id: '77777777-7777-4777-8777-777777777777',
+      private_intent: 'Check in naturally.',
+    };
+    const result = await ordinaryContext(async () => await tool(owner).execute('call-dyad', params));
+    expect(text(result)).toBe(COMPANION_NOTIFY_QUEUED_TEXT);
+    expect(owner.inspectOpenDyad).toHaveBeenCalledWith(params.dyad_id);
+    expect(owner.prepareCompanionOutreach).not.toHaveBeenCalled();
+
+    const actions = inferDeferredCompanionOutreachActions({
+      message: { id: 'source-1', channelId: 'discord:owner', routing: {} } as never,
+      turnMessages: [
+        { role: 'assistant', content: [{ type: 'toolCall', id: 'call-dyad', name: 'notify', arguments: params }] } as never,
+        { role: 'toolResult', toolCallId: 'call-dyad', toolName: 'notify', isError: false,
+          content: [{ type: 'text', text: COMPANION_NOTIFY_QUEUED_TEXT }] } as never,
+      ],
+      turnId: 'turn-dyad' as never,
+      completedAt: 1_000,
+    }, 'extended');
+    expect(actions).toHaveLength(1);
+    expect(actions[0]?.payload).toMatchObject({
+      mode: 'continuation',
+      dyadId: params.dyad_id,
+      privateIntent: params.private_intent,
+    });
+    expect(actions[0]?.payload).not.toHaveProperty('permitId');
+    expect(actions[0]?.payload).not.toHaveProperty('contactId');
+  });
+
   it('advertises an exact companion variant that excludes raw delivery fields', () => {
     const schema = tool(runtime()).parameters;
     const exact = {

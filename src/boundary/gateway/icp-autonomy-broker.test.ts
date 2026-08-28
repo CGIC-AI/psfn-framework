@@ -19,6 +19,8 @@ import type {
   IcpConversationCorrelation,
   IcpConversationEpisode,
   IcpDyad,
+  IcpDyadDelivery,
+  IcpDyadDeliveryOutcome,
   IcpInitiationPermit,
 } from '../../shared/contracts/icp-autonomy.js';
 import { EventBus } from '../../shared/event-bus.js';
@@ -78,6 +80,7 @@ class MemoryStore implements IcpSharedAutonomyStorePort {
   availability = new Map<string, IcpAvailabilityLease>();
   episodes = new Map<string, IcpConversationEpisode>();
   dyads = new Map<string, IcpDyad>();
+  deliveries = new Map<string, IcpDyadDelivery>();
   permits = new Map<string, IcpInitiationPermit>();
   invalidationGenerations = new Map<string, number>();
   invalidationReasons = new Map<string, IcpAutonomyReasonCode>();
@@ -203,6 +206,65 @@ class MemoryStore implements IcpSharedAutonomyStorePort {
 
   async getDyadBetween(firstCompanionId: string, secondCompanionId: string): Promise<IcpDyad | null> {
     return this.dyads.get([firstCompanionId, secondCompanionId].sort().join(':')) ?? null;
+  }
+
+  async listDyadsForCompanion(companionId: string): Promise<IcpDyad[]> {
+    return [...this.dyads.values()].filter(dyad => dyad.participantCompanionIds.includes(companionId));
+  }
+
+  async createDyadContinuation(input: {
+    dyadId: string;
+    episode: IcpConversationEpisode;
+    delivery: IcpDyadDelivery;
+  }): Promise<{ dyad: IcpDyad; episode: IcpConversationEpisode; delivery: IcpDyadDelivery }> {
+    const dyad = await this.getDyad(input.dyadId);
+    if (!dyad || dyad.status !== 'open') throw new Error('dyad unavailable');
+    const existing = this.deliveries.get(input.delivery.deliveryId);
+    if (existing) {
+      return { dyad, episode: this.episodes.get(existing.conversationId)!, delivery: existing };
+    }
+    this.episodes.set(input.episode.conversationId, input.episode);
+    this.deliveries.set(input.delivery.deliveryId, input.delivery);
+    this.dyads.set(dyad.participantCompanionIds.join(':'), {
+      ...dyad,
+      provenanceConversationIds: [...dyad.provenanceConversationIds, input.episode.conversationId].sort(),
+      revision: dyad.revision + 1,
+    });
+    return { dyad: (await this.getDyad(input.dyadId))!, episode: input.episode, delivery: input.delivery };
+  }
+
+  async getDyadDelivery(deliveryId: string): Promise<IcpDyadDelivery | null> {
+    return this.deliveries.get(deliveryId) ?? null;
+  }
+
+  async getLatestDyadDelivery(dyadId: string): Promise<IcpDyadDelivery | null> {
+    return [...this.deliveries.values()]
+      .filter(delivery => delivery.dyadId === dyadId)
+      .sort((left, right) => right.updatedAtMs - left.updatedAtMs)[0] ?? null;
+  }
+
+  async transitionDyadDelivery(input: {
+    deliveryId: string;
+    expectedOutcomes: readonly IcpDyadDeliveryOutcome[];
+    outcome: IcpDyadDeliveryOutcome;
+    updatedAtMs: number;
+    attempt: number;
+    gatewayMessageId?: string;
+    reasonCode?: IcpAutonomyReasonCode;
+  }): Promise<IcpDyadDelivery> {
+    const current = this.deliveries.get(input.deliveryId);
+    if (!current || !input.expectedOutcomes.includes(current.outcome)) throw new Error('delivery conflict');
+    const next: IcpDyadDelivery = {
+      ...current,
+      outcome: input.outcome,
+      updatedAtMs: input.updatedAtMs,
+      attempt: input.attempt,
+      ...(input.gatewayMessageId ? { gatewayMessageId: input.gatewayMessageId } : {}),
+      ...(input.reasonCode ? { reasonCode: input.reasonCode } : {}),
+      revision: current.revision + 1,
+    };
+    this.deliveries.set(input.deliveryId, next);
+    return next;
   }
 
   async transitionDyad(input: IcpDyadTransitionInput): Promise<IcpDyad> {
@@ -495,6 +557,27 @@ function makeBroker(input: {
         }
         return { decision: { eligible: true as const }, result: await operation() };
       },
+      authorizeDyadContinuation: async () => ({
+        eligible: input.policy?.canonicalPeerContact !== false
+          && input.policy?.trustAllows !== false
+          && input.policy?.senderBlocksPeer !== true
+          && input.policy?.peerBlocksSender !== true,
+        ...(input.policy?.senderBlocksPeer === true || input.policy?.peerBlocksSender === true
+          ? { reasonCode: 'peer_blocked' as const }
+          : input.policy?.canonicalPeerContact === false
+            ? { reasonCode: 'invalid_identity' as const }
+            : input.policy?.trustAllows === false
+              ? { reasonCode: 'policy_denied' as const }
+              : {}),
+      }),
+      runAuthorizedDyadContinuation: async (_input, operation) => {
+        const eligible = input.policy?.canonicalPeerContact !== false
+          && input.policy?.trustAllows !== false
+          && input.policy?.senderBlocksPeer !== true
+          && input.policy?.peerBlocksSender !== true;
+        if (!eligible) return { decision: { eligible: false as const, reasonCode: 'policy_denied' as const } };
+        return { decision: { eligible: true as const }, result: await operation() };
+      },
     },
     eventBus,
     alarm,
@@ -576,6 +659,132 @@ async function triggerInvalidationRace(
 }
 
 describe('GatewayIcpAutonomyBroker', () => {
+  it('lists only authenticated-owner open dyads with content-free delivery metadata', async () => {
+    const { broker, store } = makeBroker();
+    await makeAvailable(store);
+    store.dyads.set(`${A}:${B}`, {
+      dyadId: CONVERSATION_ID,
+      channelId: CHANNEL,
+      participantCompanionIds: [A, B],
+      status: 'open',
+      createdAtMs: NOW - 20_000,
+      provenanceConversationIds: [CONVERSATION_ID],
+      revision: 1,
+    });
+    store.dyads.set(`${B}:${C}`, {
+      dyadId: SECOND_CONVERSATION_ID,
+      channelId: `companion-dm:${B}:${C}`,
+      participantCompanionIds: [B, C],
+      status: 'open',
+      createdAtMs: NOW - 10_000,
+      provenanceConversationIds: [SECOND_CONVERSATION_ID],
+      revision: 1,
+    });
+    store.deliveries.set(SECOND_PERMIT_ID, {
+      deliveryId: SECOND_PERMIT_ID,
+      dyadId: CONVERSATION_ID,
+      conversationId: CONVERSATION_ID,
+      senderCompanionId: A,
+      recipientCompanionId: B,
+      outcome: 'delayed',
+      createdAtMs: NOW - 5_000,
+      updatedAtMs: NOW - 4_000,
+      attempt: 0,
+      revision: 2,
+    });
+
+    const result = await broker.listOpenDyads(A);
+    expect(result).toEqual([expect.objectContaining({
+      dyadId: CONVERSATION_ID,
+      peerCompanionId: B,
+      channelId: CHANNEL,
+      status: 'open',
+      lastDeliveryOutcome: 'delayed',
+      lastDeliveryAtMs: NOW - 4_000,
+    })]);
+    expect(JSON.stringify(result)).not.toMatch(/message|summary|memory|reasoning|motivation|session/iu);
+  });
+
+  it('creates and idempotently recovers permit-free continuation inside an owned open dyad', async () => {
+    const { broker, store } = makeBroker();
+    await makeAvailable(store);
+    store.dyads.set(`${A}:${B}`, {
+      dyadId: CONVERSATION_ID,
+      channelId: CHANNEL,
+      participantCompanionIds: [A, B],
+      status: 'open',
+      createdAtMs: NOW - 20_000,
+      provenanceConversationIds: [CANDIDATE_ID],
+      revision: 1,
+    });
+    const request = {
+      dyadId: CONVERSATION_ID,
+      deliveryId: SECOND_PERMIT_ID,
+      conversationId: SECOND_CONVERSATION_ID,
+      peerContactId: 'peer-contact-b',
+      initiationSource: 'foreground' as const,
+    };
+
+    const first = await broker.prepareDyadContinuation(A, request);
+    const recovered = await broker.prepareDyadContinuation(A, request);
+    expect(first).toEqual(recovered);
+    expect(first).toMatchObject({
+      status: 'authorized',
+      authorization: {
+        dyadId: CONVERSATION_ID,
+        deliveryId: SECOND_PERMIT_ID,
+        peerCompanionId: B,
+        channelId: CHANNEL,
+        episode: {
+          conversationId: SECOND_CONVERSATION_ID,
+          rootInitiationId: SECOND_PERMIT_ID,
+          status: 'invited',
+        },
+      },
+    });
+    expect(store.permits).toHaveLength(0);
+    expect(store.deliveries.get(SECOND_PERMIT_ID)).toMatchObject({ outcome: 'queued', attempt: 0 });
+  });
+
+  it('fails closed for foreign, closed, and recursive third-party dyad continuation', async () => {
+    const { broker, store } = makeBroker();
+    await makeAvailable(store);
+    const dyad: IcpDyad = {
+      dyadId: CONVERSATION_ID,
+      channelId: CHANNEL,
+      participantCompanionIds: [A, B],
+      status: 'open',
+      createdAtMs: NOW - 20_000,
+      provenanceConversationIds: [CANDIDATE_ID],
+      revision: 1,
+    };
+    store.dyads.set(`${A}:${B}`, dyad);
+    const request = {
+      dyadId: CONVERSATION_ID,
+      deliveryId: SECOND_PERMIT_ID,
+      conversationId: SECOND_CONVERSATION_ID,
+      peerContactId: 'peer-contact-b',
+      initiationSource: 'foreground' as const,
+    };
+    await expect(broker.prepareDyadContinuation(C, request)).resolves.toEqual({
+      status: 'need_initiation', reasonCode: 'dyad_not_found',
+    });
+    await expect(broker.prepareDyadContinuation(A, {
+      ...request,
+      sourceDyadId: ROOT_ID,
+    })).resolves.toEqual({ status: 'unavailable', reasonCode: 'recursive_trigger' });
+    store.dyads.set(`${A}:${B}`, {
+      ...dyad,
+      status: 'closed',
+      closedAtMs: NOW - 1,
+      closeReasonCode: 'conversation_ended',
+      revision: 2,
+    });
+    await expect(broker.prepareDyadContinuation(A, request)).resolves.toEqual({
+      status: 'need_initiation', reasonCode: 'dyad_closed',
+    });
+  });
+
   it('authorizes charged background work only for the authenticated durable episode participant', async () => {
     const { broker, store, alarm } = makeBroker();
     store.episodes.set(CONVERSATION_ID, {

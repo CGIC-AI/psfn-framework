@@ -3,6 +3,7 @@ import type {
   IcpTargetChannelInitiationResult,
   IcpTargetChannelInitiator,
 } from './icp-target-channel-initiation.js';
+import type { IcpTargetChannelContinuationRequest } from './icp-target-channel-continuation.js';
 
 /**
  * Process-local command port for scheduler-owned ICP initiation work.
@@ -15,6 +16,9 @@ export interface IcpTargetChannelInitiationCommandPort {
   execute(
     request: IcpTargetChannelInitiationRequest,
   ): Promise<IcpTargetChannelInitiationResult>;
+  executeContinuation(
+    request: IcpTargetChannelContinuationRequest,
+  ): ReturnType<IcpTargetChannelInitiator['continueDyad']>;
 }
 
 let activeInitiator: IcpTargetChannelInitiator | null = null;
@@ -26,6 +30,11 @@ export const icpTargetChannelInitiationCommand: IcpTargetChannelInitiationComman
       throw new Error('ICP target-channel initiation command is not registered');
     }
     return await initiator.initiate(request);
+  },
+  async executeContinuation(request) {
+    const initiator = activeInitiator;
+    if (!initiator) throw new Error('ICP target-channel continuation command is not registered');
+    return await initiator.continueDyad(request);
   },
 };
 

@@ -146,6 +146,37 @@ describe('ICP autonomy Postgres persistence', () => {
       await valid.pool.end();
     }
 
+    const suppressedUrl = (await harness.createDatabase()).databaseUrl;
+    const suppressed = await installLegacySharedSchema(suppressedUrl);
+    try {
+      await suppressed.pool.query(`
+        INSERT INTO icp_conversation_episodes (
+          conversation_id, channel_id, participant_companion_ids, root_initiation_id,
+          initiated_by_companion_id, initiation_source, provenance_ref, opened_at_ms,
+          last_activity_at_ms, status, close_reason_code, revision
+        ) VALUES
+          ($1, $3, ARRAY[$4::uuid, $5::uuid], $6, $4, 'foreground', $7,
+            1000, 1000, 'ended', 'conversation_ended', 1),
+          ($2, $3, ARRAY[$4::uuid, $5::uuid], $6, $4, 'foreground', $8,
+            2000, 2000, 'suppressed', 'fatigue_exhausted', 1)
+      `, [
+        CONVERSATION_ID, SECOND_CONVERSATION_ID, CHANNEL, A, B, ROOT_ID,
+        PROVENANCE_HANDLE, SECOND_PROVENANCE_HANDLE,
+      ]);
+      for (const statement of POSTGRES_SHARED_MIGRATIONS.slice(suppressed.dyadMigrationIndex)) {
+        await suppressed.pool.query(statement);
+      }
+      await expect(suppressed.pool.query(`
+        SELECT status, closed_at_ms::text, close_reason_code FROM icp_dyads
+      `)).resolves.toMatchObject({ rows: [{
+        status: 'revoked',
+        closed_at_ms: '2000',
+        close_reason_code: 'conversation_suppressed',
+      }] });
+    } finally {
+      await suppressed.pool.end();
+    }
+
     const ambiguousUrl = (await harness.createDatabase()).databaseUrl;
     const ambiguous = await installLegacySharedSchema(ambiguousUrl);
     try {
@@ -217,6 +248,103 @@ describe('ICP autonomy Postgres persistence', () => {
       await store.close();
     }
   });
+
+  it('recovers open-dyad discovery and distinct continuation delivery outcomes after restart', async () => {
+    const databaseUrl = await freshDatabaseUrl();
+    const first = await PostgresIcpSharedAutonomyStore.connect(databaseUrl, {
+      knownCompanionIds: [A, B],
+    });
+    await first.createEpisode({
+      conversationId: CONVERSATION_ID,
+      channelId: CHANNEL,
+      participantCompanionIds: [A, B],
+      rootInitiationId: ROOT_ID,
+      initiatedByCompanionId: A,
+      initiationSource: 'foreground',
+      provenanceRef: PROVENANCE_HANDLE,
+      openedAtMs: 1_000,
+      lastActivityAtMs: 1_000,
+      status: 'invited',
+      revision: 1,
+    });
+    await first.createDyadContinuation({
+      dyadId: CONVERSATION_ID,
+      episode: {
+        conversationId: RACE_CONVERSATION_A,
+        channelId: CHANNEL,
+        participantCompanionIds: [A, B],
+        rootInitiationId: RACE_PERMIT_A,
+        initiatedByCompanionId: A,
+        initiationSource: 'foreground',
+        provenanceRef: `icp-prov:${RACE_PERMIT_A}`,
+        openedAtMs: 2_000,
+        lastActivityAtMs: 2_000,
+        status: 'invited',
+        revision: 1,
+      },
+      delivery: {
+        deliveryId: RACE_PERMIT_A,
+        dyadId: CONVERSATION_ID,
+        conversationId: RACE_CONVERSATION_A,
+        senderCompanionId: A,
+        recipientCompanionId: B,
+        outcome: 'queued',
+        createdAtMs: 2_000,
+        updatedAtMs: 2_000,
+        attempt: 0,
+        revision: 1,
+      },
+    });
+    await first.transitionDyadDelivery({
+      deliveryId: RACE_PERMIT_A,
+      expectedOutcomes: ['queued'],
+      outcome: 'failed',
+      updatedAtMs: 2_100,
+      attempt: 1,
+      reasonCode: 'delivery_failed',
+    });
+    await first.transitionDyadDelivery({
+      deliveryId: RACE_PERMIT_A,
+      expectedOutcomes: ['failed'],
+      outcome: 'retrying',
+      updatedAtMs: 2_200,
+      attempt: 2,
+    });
+    await first.close();
+
+    const restarted = await PostgresIcpSharedAutonomyStore.connect(databaseUrl, {
+      knownCompanionIds: [A, B],
+    });
+    try {
+      await expect(restarted.listDyadsForCompanion(A)).resolves.toEqual([
+        expect.objectContaining({
+          dyadId: CONVERSATION_ID,
+          channelId: CHANNEL,
+          status: 'open',
+          provenanceConversationIds: [CONVERSATION_ID, RACE_CONVERSATION_A].sort(),
+        }),
+      ]);
+      await expect(restarted.listDyadsForCompanion(C)).rejects.toThrow('Unknown ICP dyad owner');
+      await expect(restarted.getLatestDyadDelivery(CONVERSATION_ID)).resolves.toMatchObject({
+        deliveryId: RACE_PERMIT_A,
+        outcome: 'retrying',
+        attempt: 2,
+      });
+      await expect(restarted.transitionDyadDelivery({
+        deliveryId: RACE_PERMIT_A,
+        expectedOutcomes: ['retrying'],
+        outcome: 'delivered',
+        updatedAtMs: 2_300,
+        attempt: 2,
+        gatewayMessageId: 'companion-continuation-recovered',
+      })).resolves.toMatchObject({
+        outcome: 'delivered',
+        gatewayMessageId: 'companion-continuation-recovered',
+      });
+    } finally {
+      await restarted.close();
+    }
+  }, TIMEOUT_MS);
 
   it('preserves a concurrent higher-authority choice while runtime availability is suppressed', async () => {
     const databaseUrl = await freshDatabaseUrl();

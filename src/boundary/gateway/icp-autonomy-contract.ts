@@ -5,11 +5,14 @@ import {
 } from '../../core/icp/initiation-candidate.js';
 import {
   ICP_AVAILABILITY_STATES,
+  ICP_INITIATION_SOURCES,
   MAX_ICP_AVAILABILITY_LEASE_TTL_MS,
   MAX_ICP_PERMIT_TTL_MS,
   type IcpAutonomyReasonCode,
   type IcpAvailabilityLease,
   type IcpAvailabilityState,
+  type IcpDyadDeliveryOutcome,
+  type IcpConversationEpisode,
   type IcpInitiationPermit,
   type IcpPermitStatus,
 } from '../../shared/contracts/icp-autonomy.js';
@@ -17,6 +20,36 @@ import { assertNoUnknownKeys, isRecord } from '../../shared/utils/types.js';
 import { requireUuid } from '../../shared/utils/uuid.js';
 
 export type IcpGateReasonClass = 'deferrable' | 'terminal';
+
+export interface IcpOpenDyadProjection {
+  dyadId: string;
+  peerCompanionId: string;
+  channelId: string;
+  status: 'open';
+  availability: IcpPeerAvailabilityResult;
+  lastDeliveryOutcome?: IcpDyadDeliveryOutcome;
+  lastDeliveryAtMs?: number;
+}
+
+export interface IcpDyadContinuationAuthorization {
+  dyadId: string;
+  deliveryId: string;
+  peerCompanionId: string;
+  channelId: string;
+  episode: IcpConversationEpisode;
+}
+
+export type IcpDyadContinuationPrepareResult =
+  | { status: 'authorized'; authorization: IcpDyadContinuationAuthorization }
+  | {
+      status: 'need_initiation';
+      reasonCode: Extract<IcpAutonomyReasonCode,
+        'dyad_not_found' | 'dyad_closed' | 'dyad_revoked' | 'stale_provenance'>;
+    }
+  | {
+      status: 'unavailable';
+      reasonCode: IcpAutonomyReasonCode;
+    };
 
 /** Strict content-free deterministic facts owned by the initiating runtime. */
 export interface IcpInitiationPolicySnapshot {
@@ -257,6 +290,73 @@ export function parseIcpOwnAvailabilityReadParams(value: unknown): IcpOwnAvailab
     ? undefined
     : requireUuid(value.companionId, 'companionId');
   return companionId === undefined ? {} : { companionId };
+}
+
+export function parseIcpOpenDyadListParams(value: unknown): Record<string, never> {
+  if (!isRecord(value)) throw new Error('ICP open dyad list params must be an object');
+  assertNoUnknownKeys(value, ['companionId'], 'ICP open dyad list params');
+  return {};
+}
+
+export function parseIcpDyadContinuationPrepareParams(value: unknown): {
+  dyadId: string;
+  deliveryId: string;
+  conversationId: string;
+  peerContactId: string;
+  initiationSource: typeof ICP_INITIATION_SOURCES[number];
+  sourceDyadId?: string;
+} {
+  if (!isRecord(value)) throw new Error('ICP dyad continuation params must be an object');
+  assertNoUnknownKeys(value, [
+    'dyadId', 'deliveryId', 'conversationId', 'peerContactId', 'initiationSource',
+    'sourceDyadId', 'companionId',
+  ], 'ICP dyad continuation params');
+  if (typeof value.initiationSource !== 'string'
+    || !ICP_INITIATION_SOURCES.includes(value.initiationSource as typeof ICP_INITIATION_SOURCES[number])) {
+    throw new Error('ICP dyad continuation initiationSource is invalid');
+  }
+  return {
+    dyadId: requireUuid(value.dyadId, 'dyadId'),
+    deliveryId: requireUuid(value.deliveryId, 'deliveryId'),
+    conversationId: requireUuid(value.conversationId, 'conversationId'),
+    peerContactId: requireTrimmedString(value.peerContactId, 'peerContactId'),
+    initiationSource: value.initiationSource as typeof ICP_INITIATION_SOURCES[number],
+    ...(value.sourceDyadId === undefined
+      ? {}
+      : { sourceDyadId: requireUuid(value.sourceDyadId, 'sourceDyadId') }),
+  };
+}
+
+export function parseIcpDyadContinuationOutcomeParams(value: unknown): {
+  dyadId: string;
+  deliveryId: string;
+  peerContactId: string;
+  outcome: 'suppressed' | 'failed' | 'retrying';
+  attempt: number;
+  reasonCode?: Extract<IcpAutonomyReasonCode, 'delivery_failed' | 'conversation_ended'>;
+} {
+  if (!isRecord(value)) throw new Error('ICP dyad continuation outcome params must be an object');
+  assertNoUnknownKeys(value, [
+    'dyadId', 'deliveryId', 'peerContactId', 'outcome', 'attempt', 'reasonCode', 'companionId',
+  ], 'ICP dyad continuation outcome params');
+  if (value.outcome !== 'suppressed' && value.outcome !== 'failed' && value.outcome !== 'retrying') {
+    throw new Error('ICP dyad continuation outcome is invalid');
+  }
+  if (!Number.isSafeInteger(value.attempt) || Number(value.attempt) < 0) {
+    throw new Error('ICP dyad continuation attempt is invalid');
+  }
+  if (value.reasonCode !== undefined
+    && value.reasonCode !== 'delivery_failed' && value.reasonCode !== 'conversation_ended') {
+    throw new Error('ICP dyad continuation reasonCode is invalid');
+  }
+  return {
+    dyadId: requireUuid(value.dyadId, 'dyadId'),
+    deliveryId: requireUuid(value.deliveryId, 'deliveryId'),
+    peerContactId: requireTrimmedString(value.peerContactId, 'peerContactId'),
+    outcome: value.outcome,
+    attempt: Number(value.attempt),
+    ...(value.reasonCode ? { reasonCode: value.reasonCode } : {}),
+  };
 }
 
 export function parseIcpInitiationHandoffPrepareParams(value: unknown): {

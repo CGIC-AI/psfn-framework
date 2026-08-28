@@ -66,6 +66,19 @@ export type IcpConversationStatus = typeof ICP_CONVERSATION_STATUSES[number];
 const ICP_DYAD_STATUSES = ['open', 'closed', 'revoked'] as const;
 export type IcpDyadStatus = typeof ICP_DYAD_STATUSES[number];
 
+export const ICP_DYAD_DELIVERY_OUTCOMES = [
+  'queued',
+  'delayed',
+  'delivered',
+  'ignored',
+  'declined',
+  'failed',
+  'retrying',
+  'duplicate',
+  'suppressed',
+] as const;
+export type IcpDyadDeliveryOutcome = typeof ICP_DYAD_DELIVERY_OUTCOMES[number];
+
 export const ICP_PERMIT_STATUSES = ['issued', 'consumed', 'revoked', 'expired'] as const;
 export type IcpPermitStatus = typeof ICP_PERMIT_STATUSES[number];
 
@@ -105,6 +118,9 @@ export const ICP_AUTONOMY_REASON_CODES = [
   'operator_cancelled',
   'delivery_failed',
   'inactivity_timeout',
+  'dyad_not_found',
+  'dyad_closed',
+  'dyad_revoked',
 ] as const;
 export type IcpAutonomyReasonCode = typeof ICP_AUTONOMY_REASON_CODES[number];
 
@@ -145,6 +161,22 @@ export interface IcpDyad {
   closeReasonCode?: IcpAutonomyReasonCode;
   /** Episode conversation IDs retained as content-free historical provenance. */
   provenanceConversationIds: string[];
+  revision: number;
+}
+
+/** Content-free delivery lifecycle for an established dyad continuation. */
+export interface IcpDyadDelivery {
+  deliveryId: string;
+  dyadId: string;
+  conversationId: string;
+  senderCompanionId: string;
+  recipientCompanionId: string;
+  outcome: IcpDyadDeliveryOutcome;
+  createdAtMs: number;
+  updatedAtMs: number;
+  attempt: number;
+  gatewayMessageId?: string;
+  reasonCode?: IcpAutonomyReasonCode;
   revision: number;
 }
 
@@ -193,15 +225,19 @@ export function deriveIcpTransportMessageId(
 ): string {
   const correlation = parseIcpConversationCorrelation(value);
   if (correlation.costOriginStage === 'initiation') {
-    const prefix = 'icp-initiation:';
-    if (!correlation.messageId.startsWith(prefix)) {
-      throw new Error('ICP initiation correlation messageId is not candidate-bound');
-    }
+    const prefix = correlation.messageId.startsWith('icp-initiation:')
+      ? 'icp-initiation:'
+      : correlation.messageId.startsWith('icp-continuation:')
+        ? 'icp-continuation:'
+        : null;
+    if (!prefix) throw new Error('ICP initiation correlation messageId is not authority-bound');
     const candidateId = correlation.messageId.slice(prefix.length).trim();
     if (!candidateId) {
       throw new Error('ICP initiation correlation is missing candidate identity');
     }
-    return `companion-initiation-${candidateId}`;
+    return prefix === 'icp-initiation:'
+      ? `companion-initiation-${candidateId}`
+      : `companion-continuation-${candidateId}`;
   }
   if (correlation.costOriginStage !== 'reply') {
     throw new Error('Only initiation and reply ICP correlations can be transported');

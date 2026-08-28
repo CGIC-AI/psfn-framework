@@ -1,6 +1,7 @@
 import type { GatewayClient } from '../../boundary/gateway/client.js';
 import type {
   IcpInitiationHandoffPrepareResult,
+  IcpOpenDyadProjection,
   IcpOwnAvailabilityResult,
   IcpPeerAvailabilityResult,
 } from '../../boundary/gateway/icp-autonomy-contract.js';
@@ -10,6 +11,7 @@ import type {
   IcpAvailabilityLease,
   IcpAvailabilityState,
   IcpInitiationPermit,
+  IcpInitiationSource,
 } from '../../shared/contracts/icp-autonomy.js';
 import type {
   IcpAutonomyCandidateOrigin,
@@ -48,6 +50,11 @@ export interface IcpCompanionOutreachExecutionResult {
   disposition: 'delivered' | 'suppressed';
 }
 
+interface KnownOpenIcpDyad extends IcpOpenDyadProjection {
+  peerContactId: string;
+  peerDisplayLabel: string;
+}
+
 export interface IcpAgentGatewayPort {
   companionReadOwnAvailability(): Promise<IcpOwnAvailabilityResult>;
   companionPublishAvailability(input: {
@@ -65,6 +72,15 @@ export interface IcpAgentGatewayPort {
     permitId: string;
     peerContactId: string;
   }): Promise<IcpInitiationHandoffPrepareResult>;
+  companionListOpenDyads(): Promise<IcpOpenDyadProjection[]>;
+  companionPrepareDyadContinuation(input: {
+    dyadId: string;
+    deliveryId: string;
+    conversationId: string;
+    peerContactId: string;
+    initiationSource: IcpInitiationSource;
+    sourceDyadId?: string;
+  }): Promise<import('../../boundary/gateway/icp-autonomy-contract.js').IcpDyadContinuationPrepareResult>;
 }
 
 export interface IcpTargetChannelCommandPort {
@@ -72,6 +88,12 @@ export interface IcpTargetChannelCommandPort {
     permit: IcpInitiationPermit;
     rootInitiationId: string;
     peerContactId: string;
+    continuationTaskKind?: IcpContinuationTaskKind;
+  }): Promise<IcpCompanionOutreachExecutionResult>;
+  executeContinuation?(input: {
+    authorization: import('../../boundary/gateway/icp-autonomy-contract.js').IcpDyadContinuationAuthorization;
+    peerContactId: string;
+    privateIntent: string;
     continuationTaskKind?: IcpContinuationTaskKind;
   }): Promise<IcpCompanionOutreachExecutionResult>;
 }
@@ -88,6 +110,17 @@ export interface AgentFacingIcpAutonomyRuntime {
   }): Promise<IcpAvailabilityLease>;
   clearOwnAvailability(expectedRevision: number): Promise<{ cleared: boolean }>;
   prepareCompanionOutreach(contactId: string, permitId: string): Promise<void>;
+  listOpenDyads(): Promise<KnownOpenIcpDyad[]>;
+  inspectOpenDyad(dyadId: string): Promise<KnownOpenIcpDyad>;
+  executeDyadContinuation(input: {
+    dyadId: string;
+    deliveryId: string;
+    conversationId: string;
+    privateIntent: string;
+    initiationSource: IcpInitiationSource;
+    sourceDyadId?: string;
+    continuationTaskKind?: IcpContinuationTaskKind;
+  }, isExecutionAuthorized?: () => boolean): Promise<IcpCompanionOutreachExecutionResult>;
   executeCompanionOutreach(
     contactId: string,
     permitId: string,
@@ -212,6 +245,36 @@ export function createAgentFacingIcpAutonomyRuntime(input: {
     return { peer, handoff };
   };
 
+  const listOpenDyads = async (): Promise<KnownOpenIcpDyad[]> => {
+    const [projections, contacts] = await Promise.all([
+      input.gateway.companionListOpenDyads(),
+      input.contactStore.listAll(),
+    ]);
+    const peers = new Map<string, KnownCompanionPeer>();
+    for (const contact of contacts) {
+      try {
+        const peer = await resolveCanonicalKnownPeer(input.contactStore, contact);
+        if (peers.has(peer.peerCompanionId)) {
+          throw new Error('ambiguous canonical companion contact authority');
+        }
+        peers.set(peer.peerCompanionId, peer);
+      } catch (error) {
+        if (!(error instanceof CanonicalCompanionPeerValidationError)) throw error;
+      }
+    }
+    const dyads: KnownOpenIcpDyad[] = [];
+    for (const projection of projections) {
+      const peer = peers.get(projection.peerCompanionId);
+      if (!peer) continue;
+      dyads.push({
+        ...projection,
+        peerContactId: peer.contactId,
+        peerDisplayLabel: peer.displayName,
+      });
+    }
+    return dyads;
+  };
+
   return {
     resolveKnownPeer,
     readKnownPeerAvailability,
@@ -229,6 +292,48 @@ export function createAgentFacingIcpAutonomyRuntime(input: {
     clearOwnAvailability: async expectedRevision => await input.gateway.companionClearAvailability({ expectedRevision }),
     async prepareCompanionOutreach(contactId, permitId) {
       await prepare(contactId, permitId);
+    },
+    listOpenDyads,
+    async inspectOpenDyad(dyadId) {
+      if (!isRfc4122Uuid(dyadId)) throw new Error('dyad_id must be a lowercase RFC-4122 UUID');
+      const matches = (await listOpenDyads()).filter(dyad => dyad.dyadId === dyadId);
+      if (matches.length !== 1) throw new Error('open dyad is unavailable or not owned by this companion');
+      return matches[0]!;
+    },
+    async executeDyadContinuation(continuation, isExecutionAuthorized) {
+      const dyad = await this.inspectOpenDyad(continuation.dyadId);
+      if (isExecutionAuthorized && !isExecutionAuthorized()) {
+        throw new Error('companion continuation authorization changed before broker preparation');
+      }
+      const prepared = await input.gateway.companionPrepareDyadContinuation({
+        dyadId: dyad.dyadId,
+        deliveryId: continuation.deliveryId,
+        conversationId: continuation.conversationId,
+        peerContactId: dyad.peerContactId,
+        initiationSource: continuation.initiationSource,
+        ...(continuation.sourceDyadId ? { sourceDyadId: continuation.sourceDyadId } : {}),
+      });
+      if (prepared.status !== 'authorized') {
+        throw new Error(`companion continuation ${prepared.status}: ${prepared.reasonCode}`);
+      }
+      if (prepared.authorization.peerCompanionId !== dyad.peerCompanionId
+        || prepared.authorization.channelId !== dyad.channelId) {
+        throw new Error('companion continuation authorization changed its canonical destination');
+      }
+      if (isExecutionAuthorized && !isExecutionAuthorized()) {
+        throw new Error('companion continuation authorization changed before target-channel turn');
+      }
+      if (!input.command.executeContinuation) {
+        throw new Error('ICP target-channel continuation command is not registered');
+      }
+      return await input.command.executeContinuation({
+        authorization: prepared.authorization,
+        peerContactId: dyad.peerContactId,
+        privateIntent: continuation.privateIntent,
+        ...(continuation.continuationTaskKind
+          ? { continuationTaskKind: continuation.continuationTaskKind }
+          : {}),
+      });
     },
     async executeCompanionOutreach(
       contactId,

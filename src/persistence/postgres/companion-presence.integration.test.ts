@@ -83,6 +83,7 @@ describe('companion_presence shared-schema integration', () => {
           { version: 12, name: 'icp-felt-impulse-initiation-source' },
           { version: 13, name: 'icp-operator-test-initiation-source' },
           { version: 14, name: 'icp-durable-dyads' },
+          { version: 15, name: 'icp-open-dyad-continuation' },
         ]);
       } finally {
         await pool.end();
@@ -113,7 +114,7 @@ describe('companion_presence shared-schema integration', () => {
         const ledger = await pool.query<{ count: string }>(
           `SELECT COUNT(*)::text AS count FROM shared.shared_schema_migrations`,
         );
-        expect(ledger.rows[0]?.count).toBe('12');
+        expect(ledger.rows[0]?.count).toBe('13');
         // Nothing leaked into public.
         const publicTables = await pool.query<{ table_name: string }>(
           `SELECT table_name FROM information_schema.tables

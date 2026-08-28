@@ -88,6 +88,7 @@ export interface GatewayPrivilegedCore {
     icpInitiationPolicyAuthority?: Pick<
       GatewayIcpInitiationPolicyAuthority,
       'resolve' | 'authorizeHandoff' | 'runAuthorizedHandoff'
+        | 'authorizeDyadContinuation' | 'runAuthorizedDyadContinuation'
     >;
     /**
      * fxt1: gateway-side welfare grant verifier. Injected by

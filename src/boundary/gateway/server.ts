@@ -380,6 +380,7 @@ export interface GatewayServerOptions extends OptionalCompanionRoutingBinding {
   icpInitiationPolicyAuthority?: Pick<
     GatewayIcpInitiationPolicyAuthority,
     'resolve' | 'authorizeHandoff' | 'runAuthorizedHandoff'
+      | 'authorizeDyadContinuation' | 'runAuthorizedDyadContinuation'
   >;
   /** Shared clock for companion room delivery/reply boundary tests. */
   companionChannelNow?: () => number;
@@ -1412,6 +1413,7 @@ export class GatewayServer {
       authorName,
       messageId: requestedMessageId,
       initiation,
+      continuation,
       correlation,
       replyToMessageId,
     } = parseCompanionMessageSendParams(params);
@@ -1468,6 +1470,36 @@ export class GatewayServer {
         ...correlation,
         rootInitiationId: consumption.episode.rootInitiationId,
       };
+    } else if (continuation) {
+      if (!this.icpAutonomyBroker) {
+        throw new JSONRPCErrorException(
+          'ICP autonomy broker is not configured',
+          GatewayErrors.COMPANION_ROUTING_UNAVAILABLE,
+        );
+      }
+      const authorized = await this.icpAutonomyBroker.authorizeDyadContinuationDelivery(
+        senderCompanionId,
+        {
+          dyadId: continuation.dyadId,
+          deliveryId: continuation.deliveryId,
+          peerContactId: continuation.peerContactId,
+        },
+      );
+      const candidate = continuation.correlation;
+      if (authorized.dyad.channelId !== channelId
+        || authorized.delivery.recipientCompanionId !== continuation.recipientCompanionId
+        || authorized.episode.conversationId !== candidate.conversationId
+        || authorized.episode.rootInitiationId !== candidate.rootInitiationId
+        || candidate.localCompanionId !== senderCompanionId
+        || candidate.peerCompanionId !== continuation.recipientCompanionId
+        || candidate.peerContactId !== continuation.peerContactId
+        || candidate.messageId !== `icp-continuation:${continuation.deliveryId}`
+        || candidate.requestId !== candidate.messageId
+        || candidate.channelId !== channelId
+        || candidate.costOriginStage !== 'initiation') {
+        throw new Error('ICP dyad continuation delivery correlation mismatch');
+      }
+      messageCorrelation = candidate;
     } else if (correlation) {
       if (!this.icpAutonomyBroker) {
         throw new JSONRPCErrorException(
@@ -1511,6 +1543,16 @@ export class GatewayServer {
             { senderCompanionId, channelId, messageId: stableIcpMessageId },
           );
           throw new Error('Replayed ICP delivery mismatch');
+        }
+        if (continuation && this.icpAutonomyBroker) {
+          await this.icpAutonomyBroker.recordDyadContinuationDelivery(senderCompanionId, {
+            dyadId: continuation.dyadId,
+            deliveryId: continuation.deliveryId,
+            peerContactId: continuation.peerContactId,
+            outcome: 'duplicate',
+            attempt: 1,
+            gatewayMessageId: delivered.result.messageId,
+          });
         }
         return {
           ...delivered.result,
@@ -1678,6 +1720,16 @@ export class GatewayServer {
       skippedOffline,
       ...(initiationPermitOutcome ? { permitOutcome: initiationPermitOutcome } : {}),
     };
+    if (continuation && this.icpAutonomyBroker) {
+      await this.icpAutonomyBroker.recordDyadContinuationDelivery(senderCompanionId, {
+        dyadId: continuation.dyadId,
+        deliveryId: continuation.deliveryId,
+        peerContactId: continuation.peerContactId,
+        outcome: 'delivered',
+        attempt: 1,
+        gatewayMessageId: message.id,
+      });
+    }
     if (stableIcpMessageId && messageCorrelation) {
       this.deliveredIcpMessages.set(stableIcpMessageId, {
         content,
@@ -3715,6 +3767,13 @@ function parseCompanionMessageSendParams(params: unknown): {
     recipientCompanionId: string;
     correlation: IcpConversationCorrelation;
   };
+  continuation?: {
+    dyadId: string;
+    deliveryId: string;
+    recipientCompanionId: string;
+    peerContactId: string;
+    correlation: IcpConversationCorrelation;
+  };
   correlation?: IcpConversationCorrelation;
   replyToMessageId?: string;
 } {
@@ -3789,13 +3848,51 @@ function parseCompanionMessageSendParams(params: unknown): {
       correlation: parseIcpConversationCorrelation(params.initiation.correlation),
     };
   }
-  if (params.correlation !== undefined && initiation) {
-    throw new Error('companion.message.send cannot combine initiation and reply correlation');
+  let continuation: {
+    dyadId: string;
+    deliveryId: string;
+    recipientCompanionId: string;
+    peerContactId: string;
+    correlation: IcpConversationCorrelation;
+  } | undefined;
+  if (params.continuation !== undefined) {
+    if (!isRecord(params.continuation)) {
+      throw new Error('companion.message.send continuation must be an object');
+    }
+    assertNoUnknownKeys(params.continuation, [
+      'dyadId', 'deliveryId', 'recipientCompanionId', 'peerContactId', 'correlation',
+    ] as const, 'companion.message.send continuation');
+    const dyadId = typeof params.continuation.dyadId === 'string'
+      ? params.continuation.dyadId.trim()
+      : '';
+    const deliveryId = typeof params.continuation.deliveryId === 'string'
+      ? params.continuation.deliveryId.trim()
+      : '';
+    const recipientCompanionId = typeof params.continuation.recipientCompanionId === 'string'
+      ? params.continuation.recipientCompanionId.trim()
+      : '';
+    const peerContactId = typeof params.continuation.peerContactId === 'string'
+      ? params.continuation.peerContactId.trim()
+      : '';
+    if (!dyadId || !deliveryId || !recipientCompanionId || !peerContactId) {
+      throw new Error('companion.message.send continuation binding is incomplete');
+    }
+    continuation = {
+      dyadId,
+      deliveryId,
+      recipientCompanionId,
+      peerContactId,
+      correlation: parseIcpConversationCorrelation(params.continuation.correlation),
+    };
+  }
+  if ([initiation, continuation, params.correlation].filter(value => value !== undefined).length > 1) {
+    throw new Error('companion.message.send cannot combine initiation, continuation, and reply correlation');
   }
   const correlation = params.correlation === undefined
     ? undefined
     : parseIcpConversationCorrelation(params.correlation);
-  if ((initiation !== undefined || correlation !== undefined) !== (messageId !== undefined)) {
+  if ((initiation !== undefined || continuation !== undefined || correlation !== undefined)
+    !== (messageId !== undefined)) {
     throw new Error('companion.message.send correlated transports require a deterministic messageId');
   }
   let replyToMessageId: string | undefined;
@@ -3817,6 +3914,7 @@ function parseCompanionMessageSendParams(params: unknown): {
     ...(authorName ? { authorName } : {}),
     ...(messageId ? { messageId } : {}),
     ...(initiation ? { initiation } : {}),
+    ...(continuation ? { continuation } : {}),
     ...(correlation ? { correlation } : {}),
     ...(replyToMessageId ? { replyToMessageId } : {}),
   };

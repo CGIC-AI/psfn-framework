@@ -311,6 +311,7 @@ describe('Postgres live schema migrations', () => {
       'icp_availability_leases',
       'icp_conversation_episodes',
       'icp_dyads',
+      'icp_dyad_deliveries',
       'icp_initiation_permits',
       'icp_fatigue_turn_reservations',
       'companion_social_pot',
@@ -336,6 +337,7 @@ describe('Postgres live schema migrations', () => {
     expect(localSql).toContain('peer_contact_id TEXT NOT NULL');
     expect(sharedSql).toContain("VALUES (13, 'icp-operator-test-initiation-source')");
     expect(sharedSql).toContain("VALUES (14, 'icp-durable-dyads')");
+    expect(sharedSql).toContain("VALUES (15, 'icp-open-dyad-continuation')");
     expect(sharedSql).toContain('provenance_conversation_ids UUID[] NOT NULL');
     expect(sharedSql).toContain('ICP dyad backfill rejected ambiguous pair/channel ownership');
     expect(sharedSql).toContain('ADD COLUMN IF NOT EXISTS dyad_id UUID');

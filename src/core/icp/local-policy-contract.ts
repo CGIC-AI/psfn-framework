@@ -3,6 +3,8 @@ import { createHash } from 'node:crypto';
 import {
   ICP_AUTONOMY_REASON_CODES,
   parseIcpInitiationPermit,
+  parseIcpDyad,
+  type IcpDyad,
   type IcpAutonomyReasonCode,
   type IcpInitiationPermit,
 } from '../../shared/contracts/icp-autonomy.js';
@@ -34,6 +36,16 @@ export type IcpLocalPolicyInspectParams =
     })
   | (IcpLocalPolicyRequestBase & {
       role: 'recipient';
+      dyad?: undefined;
+    })
+  | (IcpLocalPolicyRequestBase & {
+      role: 'sender';
+      dyad: IcpDyad;
+      peerContactId?: string;
+    })
+  | (IcpLocalPolicyRequestBase & {
+      role: 'recipient';
+      dyad: IcpDyad;
     });
 
 export type IcpLocalPolicyInspectResult =
@@ -110,7 +122,7 @@ export function deriveIcpLocalPolicyAcquirePayloadDigest(
 
 const INSPECT_KEYS = [
   'role', 'senderCompanionId', 'recipientCompanionId', 'candidate', 'channelId', 'nowMs',
-  'relationshipPressure',
+  'relationshipPressure', 'dyad', 'peerContactId',
 ] as const;
 const ACQUIRE_KEYS = [
   'role', 'phase', 'senderCompanionId', 'recipientCompanionId', 'candidate', 'permit',
@@ -193,6 +205,27 @@ export function parseIcpLocalPolicyInspectParams(value: unknown): IcpLocalPolicy
   if (!isRecord(value)) throw new Error('ICP local policy inspect params must be an object');
   assertNoUnknownKeys(value, INSPECT_KEYS, 'ICP local policy inspect params');
   const base = parseRequestBase(value);
+  if (value.dyad !== undefined) {
+    if (value.candidate !== undefined || value.relationshipPressure !== undefined) {
+      throw new Error('ICP dyad policy inspection must not include initiation candidate facts');
+    }
+    const dyad = parseIcpDyad(value.dyad);
+    if (dyad.status !== 'open' || dyad.channelId !== base.channelId
+      || !dyad.participantCompanionIds.includes(base.senderCompanionId)
+      || !dyad.participantCompanionIds.includes(base.recipientCompanionId)) {
+      throw new Error('ICP dyad policy inspection binding mismatch');
+    }
+    if (base.role === 'sender') {
+      const peerContactId = value.peerContactId === undefined
+        ? undefined
+        : requireTrimmedString(value.peerContactId, 'peerContactId');
+      return { ...base, role: 'sender', dyad, ...(peerContactId ? { peerContactId } : {}) };
+    }
+    if (value.peerContactId !== undefined) {
+      throw new Error('ICP recipient dyad inspection must not include peerContactId');
+    }
+    return { ...base, role: 'recipient', dyad };
+  }
   if (base.role === 'sender') {
     const candidate = parseIcpInitiationCandidateSharedMetadata(value.candidate);
     if (candidate.localCompanionId !== base.senderCompanionId
@@ -206,7 +239,8 @@ export function parseIcpLocalPolicyInspectParams(value: unknown): IcpLocalPolicy
       relationshipPressure: requireRelationshipPressure(value.relationshipPressure),
     };
   }
-  if (value.candidate !== undefined || value.relationshipPressure !== undefined) {
+  if (value.candidate !== undefined || value.relationshipPressure !== undefined
+    || value.peerContactId !== undefined) {
     throw new Error('ICP local policy recipient inspection must not include candidate or pressure');
   }
   return { ...base, role: 'recipient' };

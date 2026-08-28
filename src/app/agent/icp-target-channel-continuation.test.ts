@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { AgentResponse, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { IcpDeliveryObservation } from '../../core/session/icp-delivery-recovery.js';
+import type { IcpConversationCorrelation } from '../../shared/contracts/icp-autonomy.js';
 import type { IcpDyadContinuationAuthorization } from '../../boundary/gateway/icp-autonomy-contract.js';
 import {
   createIcpTargetChannelContinuation,
@@ -56,7 +57,11 @@ function responseFor(message: SubstrateMessage, content: string): AgentResponse 
 
 function harness(input: {
   content?: string;
-  recorded?: { content: string; correlation: any; recoveryResponse: AgentResponse } | null;
+  recorded?: {
+    content: string;
+    correlation: IcpConversationCorrelation;
+    recoveryResponse: AgentResponse;
+  } | null;
   observation?: IcpDeliveryObservation | null;
   sendError?: Error;
   nowMs?: number;
@@ -142,6 +147,11 @@ describe('ICP target-channel dyad continuation', () => {
     expect(test.sendContinuation).toHaveBeenCalledWith(expect.objectContaining({
       authorization,
       content: 'Hello again.',
+      correlation: expect.objectContaining({
+        dyadId: DYAD,
+        conversationId: CONVERSATION,
+        channelId: CHANNEL,
+      }),
     }));
     expect(test.sendContinuation.mock.calls[0]?.[0]).not.toHaveProperty('privateIntent');
     expect(test.observations.at(-1)).toMatchObject({

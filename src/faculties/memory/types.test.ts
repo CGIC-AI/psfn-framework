@@ -78,6 +78,9 @@ describe('memory import normalization policy', () => {
   it('normalizes structured group attribution provenance', () => {
     expect(normalizeMemoryProvenance({
       channelId: 'discord-room',
+      icpDyadId: '11111111-1111-4111-8111-111111111111',
+      sourceActivityIds: ['activity-b', 'activity-a', 'activity-b', ' '],
+      sourceTurnIds: ['turn-b', 'turn-a', 'turn-b'],
       companionId: '11111111-1111-4111-8111-111111111111',
       triggerContactId: 'contact-trigger',
       routedContactId: 'contact-morgan',
@@ -93,6 +96,9 @@ describe('memory import normalization policy', () => {
       sourceSpanEndMessageId: 14,
     })).toEqual({
       channelId: 'discord-room',
+      icpDyadId: '11111111-1111-4111-8111-111111111111',
+      sourceActivityIds: ['activity-a', 'activity-b'],
+      sourceTurnIds: ['turn-a', 'turn-b'],
       companionId: '11111111-1111-4111-8111-111111111111',
       triggerContactId: 'contact-trigger',
       routedContactId: 'contact-morgan',

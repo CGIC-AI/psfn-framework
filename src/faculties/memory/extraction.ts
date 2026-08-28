@@ -1062,6 +1062,9 @@ export class MemoryExtractor {
           ...(routing?.sourceConversationAt !== undefined
             ? { sourceConversationAt: routing.sourceConversationAt }
             : {}),
+          ...(routing?.icpDyadId ? { icpDyadId: routing.icpDyadId } : {}),
+          ...(routing?.sourceActivityIds ? { sourceActivityIds: routing.sourceActivityIds } : {}),
+          ...(routing?.sourceTurnIds ? { sourceTurnIds: routing.sourceTurnIds } : {}),
         }
         : undefined,
       sensitivity: fact.sensitivity,

@@ -502,6 +502,8 @@ export async function runExtractionOrchestration(
       channelId: options.channelId,
       triggerReason: options.triggerReason,
       turnId,
+      sourceEntries: recentEntries,
+      ...(options.icpCorrelation ? { icpCorrelation: options.icpCorrelation } : {}),
       telemetryEnabled: options.telemetryEnabled,
       isAcceptingExtractions: options.isAcceptingExtractions,
       processFact: options.processFact,

@@ -226,6 +226,8 @@ export interface IcpInitiationPermit {
 }
 
 export interface IcpConversationCorrelation {
+  /** Durable relationship identity. Present for open-dyad continuation traffic. */
+  dyadId?: string;
   conversationId: string;
   rootInitiationId: string;
   initiatedByCompanionId: string;
@@ -323,7 +325,7 @@ const PERMIT_KEYS = [
   'expiresAtMs', 'status', 'consumedAtMs', 'revokedAtMs', 'reasonCode', 'revision',
 ] as const;
 const CORRELATION_KEYS = [
-  'conversationId', 'rootInitiationId', 'initiatedByCompanionId',
+  'dyadId', 'conversationId', 'rootInitiationId', 'initiatedByCompanionId',
   'localCompanionId', 'peerCompanionId', 'peerContactId', 'channelId',
   'turnId', 'messageId', 'requestId', 'chargeLane', 'surface', 'costPurpose',
   'costOriginStage', 'fatigueDecision', 'fatigueReasonCode',
@@ -771,6 +773,9 @@ export function parseIcpConversationCorrelation(value: unknown): IcpConversation
     || (channelKind === 'room' && surface !== 'companion_room')) {
     throw new Error('ICP conversation correlation.surface does not match channelId');
   }
+  if (raw.dyadId !== undefined && channelKind !== 'dm') {
+    throw new Error('ICP conversation correlation.dyadId is restricted to companion DM traffic');
+  }
   const fatigueReasonCode = requireOptionalReason(
     raw.fatigueReasonCode,
     'ICP conversation correlation.fatigueReasonCode',
@@ -785,6 +790,9 @@ export function parseIcpConversationCorrelation(value: unknown): IcpConversation
     );
   }
   return {
+    ...(raw.dyadId !== undefined
+      ? { dyadId: requireUuid(raw.dyadId, 'ICP conversation correlation.dyadId') }
+      : {}),
     conversationId: requireUuid(raw.conversationId, 'ICP conversation correlation.conversationId'),
     rootInitiationId: requireUuid(
       raw.rootInitiationId,

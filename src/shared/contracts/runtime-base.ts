@@ -566,6 +566,13 @@ export interface MessageRoutingMetadata {
    * prompt/runtime. It is metadata, never a parallel dispatch path.
    */
   icpCorrelation?: IcpConversationCorrelation;
+  /** Gateway-validated custody for a bounded human relay and its exact return bytes. */
+  humanRelay?: {
+    requestCapsule: import('../../core/icp/human-relay-capsule.js').HumanRelayIntentCapsule;
+    responseCapsule?: import('../../core/icp/human-relay-capsule.js').HumanRelayResponseCapsule;
+    /** Process-local proof minted by target intake; never accepted from transport RPC. */
+    targetAuthorization?: import('../../core/icp/human-relay-capsule.js').HumanRelayBoundaryDecision;
+  };
   /**
    * Inner shard lineage for an ordinary shard→parent companion turn. The
    * parent CompanionId remains the routing identity; the shard id is

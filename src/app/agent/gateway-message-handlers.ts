@@ -61,6 +61,13 @@ import {
 } from '../../core/session/icp-delivery-recovery.js';
 import { assertCompanionRecoveryLineage } from './icp-recovery-lineage.js';
 import {
+  openSourceHumanRelayReturn,
+  openTargetHumanRelayRequest,
+  type HumanRelayTransportCustody,
+} from './human-relay-response-path.js';
+import { createInMemoryHumanRelayReplayGuard } from '../../core/icp/human-relay-capsule.js';
+import type { DisclosureLineage } from '../../core/cogsec/disclosure/index.js';
+import {
   emitTurnPerformance,
   monotonicEpochNowMs,
 } from '../../shared/telemetry/turn-performance.js';
@@ -72,6 +79,7 @@ const CANONICAL_COMPANION_ROUTING_KEYS = new Set([
   'source',
   'authorIsMachineIntelligence',
   'icpCorrelation',
+  'humanRelay',
   'channelPrivacy',
   'room',
 ]);
@@ -146,6 +154,7 @@ function bindRecordedCompanionSourceEnvelope(
     source: 'companion',
     authorIsMachineIntelligence: true,
     icpCorrelation: recorded.correlation,
+    ...(message.routing?.humanRelay ? { humanRelay: message.routing.humanRelay } : {}),
     ...(channelPrivacy ? { channelPrivacy } : {}),
     ...(room ? { room } : {}),
   };
@@ -155,10 +164,12 @@ function bindCompanionRecoveryCorrelation(
   message: SubstrateMessage,
   correlation: IcpConversationCorrelation,
 ): void {
+  const humanRelay = message.routing?.humanRelay;
   message.routing = {
     source: 'companion',
     authorIsMachineIntelligence: true,
     icpCorrelation: correlation,
+    ...(humanRelay ? { humanRelay } : {}),
   };
 }
 
@@ -174,6 +185,7 @@ export interface GatewayMessageGateway {
     content: string,
     authorName?: string,
     correlationOrReplyToMessageId?: IcpConversationCorrelation | string,
+    humanRelay?: HumanRelayTransportCustody,
   ): Promise<{
     channelId: string;
     messageId: string;
@@ -201,6 +213,7 @@ export interface GatewayMessageGateway {
     content: string;
     authorName?: string;
     correlation: IcpConversationCorrelation;
+    humanRelayRequest?: import('../../core/icp/human-relay-capsule.js').HumanRelayIntentCapsule;
   }): Promise<{ messageId: string; deliveredTo: string[]; duplicate: boolean }>;
   companionRecordDyadContinuationOutcome(input: {
     dyadId: string;
@@ -252,6 +265,7 @@ export interface GatewayMessageAgentLoop {
     sourceMessageId: string,
   ): Promise<RecordedCompanionSourceMessage | null> | RecordedCompanionSourceMessage | null;
   recordIcpDeliveryObservation(observation: IcpDeliveryObservation): Promise<void> | void;
+  getCurrentTurnDisclosureLineage(): DisclosureLineage | undefined;
 }
 
 export type GatewayMessageShardManager = Pick<ShardExecutionPort, 'delegateSatelliteSession'>;
@@ -406,6 +420,9 @@ export function registerGatewayMessageHandlers(
     companionAuthorName,
     eventBus,
   } = deps;
+  const localCompanionId = resolveCompanionIdFromConfig(config);
+  const targetHumanRelayReplayGuard = createInMemoryHumanRelayReplayGuard();
+  const sourceHumanRelayReplayGuard = createInMemoryHumanRelayReplayGuard();
   const nowMonotonicMs = deps.nowMonotonicMs ?? monotonicEpochNowMs;
   // performance.timeOrigin + performance.now() preserves sub-millisecond
   // precision for telemetry, but durable arbiter/social-pot timestamps are
@@ -413,7 +430,7 @@ export function registerGatewayMessageHandlers(
   // Normalize only at that persistence boundary so observability keeps its
   // higher-resolution clock.
   const nowArbiterMs = (): number => Math.floor(nowMonotonicMs());
-  const companionId = resolveCompanionIdFromConfig(config);
+  const companionId = localCompanionId;
 
   const inFlightHandleMessages = new Map<string, Promise<AgentResponse>>();
   const recentHandleResponses = new Map<string, RecentHandleMessageResult>();
@@ -1375,6 +1392,8 @@ export function registerGatewayMessageHandlers(
     gateway,
     ...(companionAuthorName ? { authorName: companionAuthorName } : {}),
     log,
+    localCompanionId,
+    getDisclosureLineage: () => agentLoop.getCurrentTurnDisclosureLineage(),
   });
 
   const pumpCompanionQueue = async (): Promise<void> => {
@@ -1464,6 +1483,30 @@ export function registerGatewayMessageHandlers(
     }
     let handedToPump = false;
     try {
+      if (message.routing?.humanRelay?.responseCapsule) {
+        await openSourceHumanRelayReturn({
+          message,
+          localCompanionId,
+          nowMs: Date.now(),
+          replayGuard: sourceHumanRelayReplayGuard,
+          deliver: (channelId, exactContent) => gateway.discordSend(channelId, exactContent),
+        });
+        safeguardAuditTrail.append('human_relay.response.delivered', {
+          channelId: message.routing.humanRelay.requestCapsule.source.channelId,
+          responseId: message.routing.humanRelay.responseCapsule.responseId,
+          requestCapsuleId: message.routing.humanRelay.requestCapsule.capsuleId,
+        });
+        return;
+      }
+      if (message.routing?.humanRelay) {
+        const targetAuthorization = await openTargetHumanRelayRequest({
+          message,
+          localCompanionId,
+          nowMs: Date.now(),
+          replayGuard: targetHumanRelayReplayGuard,
+        });
+        message.routing.humanRelay = { ...message.routing.humanRelay, targetAuthorization };
+      }
       let recordedSource: RecordedCompanionSourceMessage | null;
       try {
         normalizeTransportTimestamp(message);
@@ -1652,7 +1695,7 @@ export function registerGatewayMessageHandlers(
   return {
     icpTargetChannelInitiator: {
       ...createIcpTargetChannelInitiator({
-        localCompanionId: resolveCompanionIdFromConfig(config),
+        localCompanionId,
         agent: agentLoop,
         gateway: {
           sendInitiation: (input) => gateway.companionSendInitiation(input),
@@ -1661,7 +1704,7 @@ export function registerGatewayMessageHandlers(
         ...(companionAuthorName ? { authorName: companionAuthorName } : {}),
       }),
       ...createIcpTargetChannelContinuation({
-        localCompanionId: resolveCompanionIdFromConfig(config),
+        localCompanionId,
         agent: agentLoop,
         gateway: {
           sendContinuation: (input) => gateway.companionSendContinuation(input),

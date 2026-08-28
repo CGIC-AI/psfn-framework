@@ -286,6 +286,7 @@ async function main(): Promise<void> {
     findIcpDeliveryObservation: agent.findIcpDeliveryObservation.bind(agent),
     findRecordedCompanionSourceMessage: agent.findRecordedCompanionSourceMessage.bind(agent),
     recordIcpDeliveryObservation: agent.recordIcpDeliveryObservation.bind(agent),
+    getCurrentTurnDisclosureLineage: agent.getCurrentTurnDisclosureLineage.bind(agent),
   };
   const registeredHandlers = registerGatewayMessageHandlers({
     eventBus: startup.eventBus,

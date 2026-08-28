@@ -77,7 +77,7 @@ describe('AdminObserverEvalSidecarDataService', () => {
     const runtime = {
       status: 'enabled' as const,
       observedAt: NOW_MS,
-      sidecarId: 'emosim-artemis',
+      sidecarId: 'emosim-vesper',
       enabled: true,
       available: true,
       accepting: true,
@@ -105,9 +105,9 @@ describe('AdminObserverEvalSidecarDataService', () => {
       companionId,
       binding: {
         companionId,
-        sidecarId: 'emosim-artemis',
-        sessionLabel: 'emosim-session-artemis',
-        agentName: 'emosim-agent-artemis',
+        sidecarId: 'emosim-vesper',
+        sessionLabel: 'emosim-session-vesper',
+        agentName: 'emosim-agent-vesper',
       },
       configuredEnabled: true,
       proactivityEnabled: true,
@@ -125,8 +125,8 @@ describe('AdminObserverEvalSidecarDataService', () => {
     await expect(service.getHealth()).resolves.toMatchObject({
       companionId,
       operatingState: 'on',
-      binding: { companionId, sidecarId: 'emosim-artemis' },
-      runtime: { sidecarId: 'emosim-artemis' },
+      binding: { companionId, sidecarId: 'emosim-vesper' },
+      runtime: { sidecarId: 'emosim-vesper' },
       lastTransition: { stage: 'final_disposition', outcome: 'delivered' },
     });
 
@@ -134,13 +134,13 @@ describe('AdminObserverEvalSidecarDataService', () => {
       companionId,
       binding: {
         companionId,
-        sidecarId: 'emosim-artemis',
-        sessionLabel: 'emosim-session-artemis',
-        agentName: 'emosim-agent-artemis',
+        sidecarId: 'emosim-vesper',
+        sessionLabel: 'emosim-session-vesper',
+        agentName: 'emosim-agent-vesper',
       },
       configuredEnabled: true,
       proactivityEnabled: true,
-      getHealthSnapshot: () => ({ ...runtime, sidecarId: 'emosim-purrsephone' }),
+      getHealthSnapshot: () => ({ ...runtime, sidecarId: 'emosim-nyx' }),
       getLastTransition: () => ({
         correlationId: `felt-impulse:would_message:${NOW_MS}`,
         lever: 'would_message',
@@ -165,14 +165,14 @@ describe('AdminObserverEvalSidecarDataService', () => {
     'reports the $state operating state separately',
     async ({ configuredEnabled, proactivityEnabled, state, status }) => {
       const companionId = '22222222-2222-4222-8222-222222222222';
-      const sidecarId = 'emosim-artemis';
+      const sidecarId = 'emosim-vesper';
       const service = new AdminObserverEvalSidecarDataService({
         companionId,
         binding: {
           companionId,
           sidecarId,
-          sessionLabel: 'emosim-session-artemis',
-          agentName: 'emosim-agent-artemis',
+          sessionLabel: 'emosim-session-vesper',
+          agentName: 'emosim-agent-vesper',
         },
         configuredEnabled,
         proactivityEnabled,

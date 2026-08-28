@@ -3452,7 +3452,6 @@ export const POSTGRES_SHARED_MIGRATIONS: readonly string[] = [
     AND episode.participant_companion_ids[1] = dyad.first_companion_id
     AND episode.participant_companion_ids[2] = dyad.second_companion_id;
   `,
-  `ALTER TABLE icp_conversation_episodes ALTER COLUMN dyad_id SET NOT NULL;`,
   `ALTER TABLE icp_conversation_episodes
     DROP CONSTRAINT IF EXISTS icp_conversation_episodes_dyad_id_fkey;`,
   `ALTER TABLE icp_conversation_episodes

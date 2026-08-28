@@ -318,6 +318,18 @@ async function ensureOpenDyadWithClient(
   return dyad;
 }
 
+async function resolveEpisodeDyadIdWithClient(
+  client: PoolClient,
+  episode: IcpConversationEpisode,
+  knownCompanionIds: ReadonlySet<string>,
+): Promise<string | null> {
+  const parsedChannel = parseCompanionChannelId(episode.channelId);
+  if (parsedChannel?.kind !== 'dm' || episode.participantCompanionIds.length !== 2) {
+    return null;
+  }
+  return (await ensureOpenDyadWithClient(client, episode, knownCompanionIds)).dyadId;
+}
+
 function mapPermit(row: PermitRow): IcpInitiationPermit {
   return parseIcpInitiationPermit({
     permitId: row.permit_id,
@@ -629,7 +641,11 @@ export class PostgresIcpSharedAutonomyStore implements IcpSharedAutonomyStorePor
       throw new Error('A new ICP conversation episode must start invited at revision 1');
     }
     return await withPostgresClient(this.pool, async client => {
-      const dyad = await ensureOpenDyadWithClient(client, episode, this.knownCompanionIds);
+      const dyadId = await resolveEpisodeDyadIdWithClient(
+        client,
+        episode,
+        this.knownCompanionIds,
+      );
       const result = await client.query<ConversationRow>(`
         INSERT INTO icp_conversation_episodes (
           conversation_id, dyad_id, channel_id, participant_companion_ids, root_initiation_id,
@@ -650,7 +666,7 @@ export class PostgresIcpSharedAutonomyStore implements IcpSharedAutonomyStorePor
         episode.status,
         episode.closeReasonCode ?? null,
         episode.revision,
-        dyad.dyadId,
+        dyadId,
       ]);
       const row = result.rows.at(0);
       if (!row) throw new Error(`Failed to create ICP conversation ${episode.conversationId}`);

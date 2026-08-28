@@ -63,8 +63,19 @@ export const ICP_CONVERSATION_STATUSES = [
 ] as const;
 export type IcpConversationStatus = typeof ICP_CONVERSATION_STATUSES[number];
 
-const ICP_DYAD_STATUSES = ['open', 'closed', 'revoked'] as const;
+const ICP_DYAD_STATUSES = ['open', 'paused', 'closed', 'blocked'] as const;
 export type IcpDyadStatus = typeof ICP_DYAD_STATUSES[number];
+export type IcpDyadSideAction = 'pause' | 'resume' | 'close' | 'block' | 'unblock';
+
+const ICP_DYAD_RELATIONSHIP_STATES = ['open', 'paused', 'closed'] as const;
+type IcpDyadRelationshipState = typeof ICP_DYAD_RELATIONSHIP_STATES[number];
+
+export interface IcpDyadParticipantState {
+  companionId: string;
+  relationshipState: IcpDyadRelationshipState;
+  blocked: boolean;
+  updatedAtMs: number;
+}
 
 export const ICP_DYAD_DELIVERY_OUTCOMES = [
   'queued',
@@ -119,10 +130,24 @@ export const ICP_AUTONOMY_REASON_CODES = [
   'delivery_failed',
   'inactivity_timeout',
   'dyad_not_found',
+  'dyad_paused',
   'dyad_closed',
-  'dyad_revoked',
+  'dyad_blocked',
+  'dyad_stale_revision',
 ] as const;
 export type IcpAutonomyReasonCode = typeof ICP_AUTONOMY_REASON_CODES[number];
+
+export function icpDyadStatusReasonCode(status: IcpDyadStatus): Extract<
+  IcpAutonomyReasonCode,
+  'dyad_paused' | 'dyad_closed' | 'dyad_blocked' | 'dyad_stale_revision'
+> {
+  switch (status) {
+    case 'paused': return 'dyad_paused';
+    case 'closed': return 'dyad_closed';
+    case 'blocked': return 'dyad_blocked';
+    case 'open': return 'dyad_stale_revision';
+  }
+}
 
 export interface IcpAvailabilityLease {
   companionId: string;
@@ -156,11 +181,12 @@ export interface IcpDyad {
   channelId: string;
   participantCompanionIds: [string, string];
   status: IcpDyadStatus;
+  /** Pair-canonical, reason-free state owned independently by each participant. */
+  participantStates: [IcpDyadParticipantState, IcpDyadParticipantState];
   createdAtMs: number;
-  closedAtMs?: number;
-  closeReasonCode?: IcpAutonomyReasonCode;
   /** Episode conversation IDs retained as content-free historical provenance. */
   provenanceConversationIds: string[];
+  lifecycleRevision: number;
   revision: number;
 }
 
@@ -177,6 +203,8 @@ export interface IcpDyadDelivery {
   attempt: number;
   gatewayMessageId?: string;
   reasonCode?: IcpAutonomyReasonCode;
+  /** Relationship fence captured before content generation. */
+  dyadLifecycleRevision: number;
   revision: number;
 }
 
@@ -285,8 +313,9 @@ const EPISODE_KEYS = [
   'lastActivityAtMs', 'status', 'closeReasonCode', 'revision',
 ] as const;
 const DYAD_KEYS = [
-  'dyadId', 'channelId', 'participantCompanionIds', 'status', 'createdAtMs',
-  'closedAtMs', 'closeReasonCode', 'provenanceConversationIds', 'revision',
+  'dyadId', 'channelId', 'participantCompanionIds', 'status', 'participantStates',
+  'createdAtMs', 'provenanceConversationIds', 'revision',
+  'lifecycleRevision',
 ] as const;
 const PERMIT_KEYS = [
   'permitId', 'candidateId', 'conversationId', 'senderCompanionId',
@@ -309,9 +338,10 @@ const CONVERSATION_TRANSITIONS: Readonly<Record<IcpConversationStatus, readonly 
   suppressed: [],
 };
 const DYAD_TRANSITIONS: Readonly<Record<IcpDyadStatus, readonly IcpDyadStatus[]>> = {
-  open: ['closed', 'revoked'],
-  closed: [],
-  revoked: [],
+  open: ['paused', 'closed', 'blocked'],
+  paused: ['open', 'closed', 'blocked'],
+  closed: ['open', 'blocked'],
+  blocked: ['open', 'paused', 'closed'],
 };
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
@@ -534,15 +564,46 @@ export function parseIcpDyad(
   }
   const status = requireEnum(raw.status, ICP_DYAD_STATUSES, 'ICP dyad.status');
   const createdAtMs = requireTimestamp(raw.createdAtMs, 'ICP dyad.createdAtMs');
-  const closedAtMs = requireOptionalTimestamp(raw.closedAtMs, 'ICP dyad.closedAtMs');
-  const closeReasonCode = requireOptionalReason(raw.closeReasonCode, 'ICP dyad.closeReasonCode');
-  if (status === 'open'
-    ? closedAtMs !== undefined || closeReasonCode !== undefined
-    : closedAtMs === undefined || closeReasonCode === undefined) {
-    throw new Error('Only a closed or revoked ICP dyad may carry closure facts');
+  if (!Array.isArray(raw.participantStates) || raw.participantStates.length !== 2) {
+    throw new Error('ICP dyad.participantStates must contain exactly two participant states');
   }
-  if (closedAtMs !== undefined && closedAtMs < createdAtMs) {
-    throw new Error('ICP dyad.closedAtMs must not predate createdAtMs');
+  const participantStates = raw.participantStates.map((value, index) => {
+    const state = requireRecord(value, `ICP dyad.participantStates[${index}]`);
+    assertNoUnknownKeys(
+      state,
+      ['companionId', 'relationshipState', 'blocked', 'updatedAtMs'],
+      `ICP dyad.participantStates[${index}]`,
+    );
+    const companionId = requireUuid(
+      state.companionId,
+      `ICP dyad.participantStates[${index}].companionId`,
+    );
+    if (companionId !== participants[index]) {
+      throw new Error('ICP dyad.participantStates must match canonical participant order');
+    }
+    const updatedAtMs = requireTimestamp(
+      state.updatedAtMs,
+      `ICP dyad.participantStates[${index}].updatedAtMs`,
+    );
+    if (updatedAtMs < createdAtMs) {
+      throw new Error('ICP dyad participant state cannot predate dyad creation');
+    }
+    if (typeof state.blocked !== 'boolean') {
+      throw new Error(`ICP dyad.participantStates[${index}].blocked must be a boolean`);
+    }
+    return {
+      companionId,
+      relationshipState: requireEnum(
+        state.relationshipState,
+        ICP_DYAD_RELATIONSHIP_STATES,
+        `ICP dyad.participantStates[${index}].relationshipState`,
+      ),
+      blocked: state.blocked,
+      updatedAtMs,
+    };
+  }) as [IcpDyadParticipantState, IcpDyadParticipantState];
+  if (resolveIcpDyadStatus(participantStates) !== status) {
+    throw new Error('ICP dyad status does not match its effective status');
   }
   const provenanceConversationIds = requireUuidArray(
     raw.provenanceConversationIds,
@@ -554,12 +615,22 @@ export function parseIcpDyad(
     channelId,
     participantCompanionIds: [participants[0]!, participants[1]!],
     status,
+    participantStates,
     createdAtMs,
-    ...(closedAtMs !== undefined ? { closedAtMs } : {}),
-    ...(closeReasonCode !== undefined ? { closeReasonCode } : {}),
     provenanceConversationIds,
+    lifecycleRevision: requireRevision(raw.lifecycleRevision, 'ICP dyad.lifecycleRevision'),
     revision: requireRevision(raw.revision, 'ICP dyad.revision'),
   };
+}
+
+/** Effective sendability is the intersection of both reason-free grants. */
+export function resolveIcpDyadStatus(
+  participantStates: readonly IcpDyadParticipantState[],
+): IcpDyadStatus {
+  if (participantStates.some(state => state.blocked)) return 'blocked';
+  if (participantStates.some(state => state.relationshipState === 'closed')) return 'closed';
+  if (participantStates.some(state => state.relationshipState === 'paused')) return 'paused';
+  return 'open';
 }
 
 export function assertIcpDyadStatusTransition(from: IcpDyadStatus, to: IcpDyadStatus): void {

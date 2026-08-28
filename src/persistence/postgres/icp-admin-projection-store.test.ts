@@ -50,6 +50,13 @@ const VALID_COST_ROW = {
   participant_companion_ids: [LOCAL, PEER],
 } as const;
 
+function sharedStoreMock() {
+  return {
+    close: vi.fn(async () => {}),
+    listDyadsForCompanion: vi.fn(async () => []),
+  };
+}
+
 describe('PostgresIcpAdminProjectionStore tenant binding', () => {
   beforeEach(() => {
     mocks.createPostgresPool.mockReset();
@@ -63,7 +70,7 @@ describe('PostgresIcpAdminProjectionStore tenant binding', () => {
   it('binds every projection query to the local companion before applying its limit', async () => {
     const sharedPool = { end: vi.fn() };
     const costPool = { end: vi.fn() };
-    const shared = { close: vi.fn() };
+    const shared = sharedStoreMock();
     mocks.createPostgresPool
       .mockReturnValueOnce(sharedPool)
       .mockReturnValueOnce(costPool);
@@ -76,6 +83,7 @@ describe('PostgresIcpAdminProjectionStore tenant binding', () => {
 
     await expect(store.readProjection(7)).resolves.toEqual({
       availability: [],
+      dyads: [],
       episodes: [],
       permits: [],
       fatigue: [],
@@ -128,7 +136,7 @@ describe('PostgresIcpAdminProjectionStore tenant binding', () => {
   it('keeps the shared control plane ready when the optional cost relation is unavailable', async () => {
     const sharedPool = { end: vi.fn(async () => {}) };
     const costPool = { end: vi.fn(async () => {}) };
-    const shared = { close: vi.fn(async () => {}) };
+    const shared = sharedStoreMock();
     mocks.createPostgresPool
       .mockReturnValueOnce(sharedPool)
       .mockReturnValueOnce(costPool);
@@ -150,6 +158,7 @@ describe('PostgresIcpAdminProjectionStore tenant binding', () => {
 
     await expect(store.readProjection()).resolves.toEqual({
       availability: [],
+      dyads: [],
       episodes: [],
       permits: [],
       fatigue: [],
@@ -171,7 +180,7 @@ describe('PostgresIcpAdminProjectionStore tenant binding', () => {
     mocks.createPostgresPool
       .mockReturnValueOnce(sharedPool)
       .mockReturnValueOnce(costPool);
-    mocks.connectShared.mockResolvedValue({ close: vi.fn(async () => {}) });
+    mocks.connectShared.mockResolvedValue(sharedStoreMock());
     let costProbeCount = 0;
     mocks.assertRelationColumns.mockImplementation(async (
       _pool: unknown,
@@ -205,7 +214,7 @@ describe('PostgresIcpAdminProjectionStore tenant binding', () => {
     mocks.createPostgresPool
       .mockReturnValueOnce(sharedPool)
       .mockReturnValueOnce(costPool);
-    mocks.connectShared.mockResolvedValue({ close: vi.fn(async () => {}) });
+    mocks.connectShared.mockResolvedValue(sharedStoreMock());
     mocks.queryRows.mockImplementation(async (
       _pool: unknown,
       sql: string,
@@ -223,6 +232,7 @@ describe('PostgresIcpAdminProjectionStore tenant binding', () => {
 
     await expect(store.readProjection()).resolves.toEqual({
       availability: [],
+      dyads: [],
       episodes: [],
       permits: [],
       fatigue: [],
@@ -241,7 +251,7 @@ describe('PostgresIcpAdminProjectionStore tenant binding', () => {
     mocks.createPostgresPool
       .mockReturnValueOnce(sharedPool)
       .mockReturnValueOnce(costPool);
-    mocks.connectShared.mockResolvedValue({ close: vi.fn(async () => {}) });
+    mocks.connectShared.mockResolvedValue(sharedStoreMock());
     const malformedRows: ReadonlyArray<readonly [string, Record<string, unknown>]> = [
       ['allowed must be boolean', { ...VALID_COST_ROW, allowed: 'false' }],
       ['reason must be present', { ...VALID_COST_ROW, reason: null }],
@@ -343,7 +353,7 @@ describe('PostgresIcpAdminProjectionStore tenant binding', () => {
     mocks.createPostgresPool
       .mockReturnValueOnce(sharedPool)
       .mockReturnValueOnce(costPool);
-    mocks.connectShared.mockResolvedValue({ close: vi.fn() });
+    mocks.connectShared.mockResolvedValue(sharedStoreMock());
 
     await PostgresIcpAdminProjectionStore.connect('postgres://test', {
       localCompanionId: LOCAL,

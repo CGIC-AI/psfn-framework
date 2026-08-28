@@ -4,6 +4,8 @@ import type {
   IcpAvailabilitySource,
   IcpAvailabilityState,
   IcpConversationEpisode,
+  IcpDyadParticipantState,
+  IcpDyadStatus,
   IcpInitiationCandidateStatus,
   IcpInitiationPermit,
   IcpInitiationSource,
@@ -46,6 +48,14 @@ export type AdminIcpEpisodeView = IcpConversationEpisode & {
     modelUsage: '/models';
   };
 };
+
+interface AdminIcpDyadView {
+  dyadId: string;
+  status: IcpDyadStatus;
+  participantStates: [IcpDyadParticipantState, IcpDyadParticipantState];
+  createdAtMs: number;
+  lifecycleRevision: number;
+}
 
 /** Permit bearer identity is intentionally absent from the Garden contract. */
 export type AdminIcpPermitView = Omit<IcpInitiationPermit, 'permitId'>;
@@ -187,6 +197,7 @@ export interface AdminIcpAutonomyData {
   availability: AdminIcpAvailabilityView[];
   candidates: AdminIcpCandidateView[];
   episodes: AdminIcpEpisodeView[];
+  dyads: AdminIcpDyadView[];
   permits: AdminIcpPermitView[];
   fatigue: AdminIcpFatigueView[];
   costs: AdminIcpCostView[];

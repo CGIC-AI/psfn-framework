@@ -5,6 +5,7 @@ import type {
   IcpAutonomyCandidateOrigin,
   PostTurnActionCandidate,
 } from '../../shared/contracts/runtime.js';
+import type { IcpDyadSideAction } from '../../shared/contracts/icp-autonomy.js';
 import type { PostTurnInferenceContext } from '../agent/substrate-agent/post-turn-actions.js';
 import { assertNoUnknownKeys, isRecord, isRfc4122Uuid, toRecordView } from '../../shared/utils/types.js';
 import { getRequestContext } from '../../primitives/llm/request-context.js';
@@ -39,6 +40,14 @@ export type CompanionNotifyParams =
       mode: 'list';
       action: 'list_dyads';
       target_kind: 'companion';
+    }
+  | {
+      mode: 'lifecycle';
+      action: 'dyad_lifecycle';
+      target_kind: 'companion';
+      dyad_id: string;
+      expected_revision: number;
+      lifecycle_action: IcpDyadSideAction;
     };
 
 export type CompanionNotifyCatalogSource = 'extended';
@@ -149,6 +158,30 @@ function parseCompanionNotifyParams(value: unknown): CompanionNotifyParams {
       throw new Error('companion dyad list requires target_kind=companion');
     }
     return { mode: 'list', action: 'list_dyads', target_kind: 'companion' };
+  }
+  if (value.action === 'dyad_lifecycle') {
+    assertNoUnknownKeys(value, [
+      'action', 'target_kind', 'dyad_id', 'expected_revision', 'lifecycle_action',
+    ], 'companion dyad lifecycle params');
+    if (value.target_kind !== COMPANION_NOTIFY_TARGET_KIND || !isRfc4122Uuid(value.dyad_id)) {
+      throw new Error('companion dyad lifecycle requires an exact dyad_id');
+    }
+    if (!Number.isSafeInteger(value.expected_revision) || Number(value.expected_revision) < 1) {
+      throw new Error('companion dyad lifecycle requires a positive expected_revision');
+    }
+    if (value.lifecycle_action !== 'pause' && value.lifecycle_action !== 'resume'
+      && value.lifecycle_action !== 'close' && value.lifecycle_action !== 'block'
+      && value.lifecycle_action !== 'unblock') {
+      throw new Error('companion dyad lifecycle action is invalid');
+    }
+    return {
+      mode: 'lifecycle',
+      action: 'dyad_lifecycle',
+      target_kind: 'companion',
+      dyad_id: value.dyad_id,
+      expected_revision: Number(value.expected_revision),
+      lifecycle_action: value.lifecycle_action,
+    };
   }
   if (value.action === 'send' && value.dyad_id !== undefined) {
     assertNoUnknownKeys(
@@ -263,8 +296,16 @@ export async function executeCompanionNotify(input: {
     }
     const params = parseCompanionNotifyParams(input.params);
     if (params.mode === 'list') {
-      const dyads = await input.runtime.listOpenDyads();
+      const dyads = await input.runtime.listDyads();
       return textResult(JSON.stringify({ dyads }));
+    }
+    if (params.mode === 'lifecycle') {
+      const result = await input.runtime.transitionDyad({
+        dyadId: params.dyad_id,
+        expectedRevision: params.expected_revision,
+        action: params.lifecycle_action,
+      });
+      return textResult(JSON.stringify(result));
     }
     if (params.mode === 'continuation') {
       const dyad = await input.runtime.inspectOpenDyad(params.dyad_id);
@@ -324,7 +365,7 @@ export function inferDeferredCompanionOutreachActions(
       }
       try {
         const params = parseCompanionNotifyParams(content.arguments);
-        if (params.mode === 'list') continue;
+        if (params.mode === 'list' || params.mode === 'lifecycle') continue;
         const authorization = {
             version: 2,
             toolName: 'notify',

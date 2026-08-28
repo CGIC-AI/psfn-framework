@@ -46,6 +46,26 @@ export async function companionListOpenDyads(
   }) as IcpOpenDyadProjection[];
 }
 
+export async function companionListDyads(
+  transportRuntime: GatewayClientTransportRuntime,
+  companionId: string | undefined,
+): Promise<GatewayMethods['companion.dyad.list'][1]> {
+  return await transportRuntime.request('companion.dyad.list', {
+    ...(companionId ? { companionId } : {}),
+  }) as GatewayMethods['companion.dyad.list'][1];
+}
+
+export async function companionTransitionDyad(
+  transportRuntime: GatewayClientTransportRuntime,
+  companionId: string | undefined,
+  params: Omit<GatewayMethods['companion.dyad.transition'][0], 'companionId'>,
+): Promise<GatewayMethods['companion.dyad.transition'][1]> {
+  return await transportRuntime.request('companion.dyad.transition', {
+    ...params,
+    ...(companionId ? { companionId } : {}),
+  }) as GatewayMethods['companion.dyad.transition'][1];
+}
+
 export async function companionPrepareDyadContinuation(
   transportRuntime: GatewayClientTransportRuntime,
   companionId: string | undefined,

@@ -255,6 +255,7 @@ export class AdminIcpAutonomyDataService implements AdminIcpAutonomyService {
       : {
         availability: [],
         episodes: [],
+        dyads: [],
         permits: [],
         fatigue: [],
         costs: [],
@@ -275,6 +276,9 @@ export class AdminIcpAutonomyDataService implements AdminIcpAutonomyService {
     const episodes = localCompanionId
       ? projection.episodes.filter(episode =>
         episode.participantCompanionIds.includes(localCompanionId))
+      : [];
+    const dyads = localCompanionId
+      ? projection.dyads.filter(dyad => dyad.participantCompanionIds.includes(localCompanionId))
       : [];
     const permits = localCompanionId
       ? projection.permits.filter(permit =>
@@ -373,6 +377,13 @@ export class AdminIcpAutonomyDataService implements AdminIcpAutonomyService {
           charges: '/charge-budget',
           modelUsage: '/models',
         },
+      })),
+      dyads: dyads.map(dyad => ({
+        dyadId: dyad.dyadId,
+        status: dyad.status,
+        participantStates: dyad.participantStates,
+        createdAtMs: dyad.createdAtMs,
+        lifecycleRevision: dyad.lifecycleRevision,
       })),
       permits: permitView,
       fatigue,

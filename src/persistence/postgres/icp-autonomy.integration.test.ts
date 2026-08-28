@@ -13,7 +13,10 @@ import { createPostgresContactStore } from '../../core/contacts/postgres-adapter
 import { ContactBlockListStore } from '../../core/cogsec/contact-block-list.js';
 import { resolveContactBlockListPath } from '../layout.js';
 import { toIcpInitiationCandidateSharedMetadata } from '../../core/icp/initiation-candidate.js';
-import { IcpAutonomyInvalidationConflictError } from '../../core/icp/autonomy-store-ports.js';
+import {
+  IcpAutonomyInvalidationConflictError,
+  IcpDyadLifecycleConflictError,
+} from '../../core/icp/autonomy-store-ports.js';
 import type { IcpSharedAutonomyStorePort } from '../../core/icp/autonomy-store-ports.js';
 import { GatewayIcpAutonomyBroker } from '../../boundary/gateway/icp-autonomy-broker.js';
 import type { GatewayIcpInitiationPolicyAuthority } from '../../boundary/gateway/icp-initiation-policy-authority.js';
@@ -41,6 +44,17 @@ const RACE_PERMIT_A = 'aaaaaaaa-1111-4111-8111-111111111111';
 const RACE_PERMIT_B = 'bbbbbbbb-2222-4222-8222-222222222222';
 const RACE_CANDIDATE_A = 'cccccccc-3333-4333-8333-333333333333';
 const RACE_CANDIDATE_B = 'dddddddd-4444-4444-8444-444444444444';
+const LIFECYCLE_DELIVERY_ID = 'eeeeeeee-5555-4555-8555-555555555555';
+const OPERATOR_TEST_CONVERSATION_ID = 'ffffffff-6666-4666-8666-666666666666';
+const ROOM_CONVERSATION_ID = '12121212-7777-4777-8777-777777777777';
+const UNRELATED_CONVERSATION_ID = '23232323-8888-4888-8888-888888888888';
+const UNRELATED_PERMIT_ID = '34343434-9999-4999-8999-999999999999';
+const UNRELATED_CANDIDATE_ID = '45454545-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+const OPERATOR_TEST_PERMIT_ID = '56565656-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+const OPERATOR_TEST_CANDIDATE_ID = '67676767-cccc-4ccc-8ccc-cccccccccccc';
+const LIFECYCLE_RACE_CONVERSATION_ID = '78787878-dddd-4ddd-8ddd-dddddddddddd';
+const LIFECYCLE_RACE_PERMIT_ID = '89898989-eeee-4eee-8eee-eeeeeeeeeeee';
+const LIFECYCLE_RACE_CANDIDATE_ID = '90909090-ffff-4fff-8fff-ffffffffffff';
 const CHANNEL = `companion-dm:${A}:${B}`;
 const CHANNEL_AC = `companion-dm:${A}:${C}`;
 const PROVENANCE_HANDLE = `icp-prov:${CANDIDATE_ID}`;
@@ -169,9 +183,9 @@ describe('ICP autonomy Postgres persistence', () => {
       await expect(suppressed.pool.query(`
         SELECT status, closed_at_ms::text, close_reason_code FROM icp_dyads
       `)).resolves.toMatchObject({ rows: [{
-        status: 'revoked',
-        closed_at_ms: '2000',
-        close_reason_code: 'conversation_suppressed',
+        status: 'open',
+        closed_at_ms: null,
+        close_reason_code: null,
       }] });
     } finally {
       await suppressed.pool.end();
@@ -269,6 +283,7 @@ describe('ICP autonomy Postgres persistence', () => {
     });
     await first.createDyadContinuation({
       dyadId: CONVERSATION_ID,
+      expectedLifecycleRevision: 1,
       episode: {
         conversationId: RACE_CONVERSATION_A,
         channelId: CHANNEL,
@@ -292,6 +307,7 @@ describe('ICP autonomy Postgres persistence', () => {
         createdAtMs: 2_000,
         updatedAtMs: 2_000,
         attempt: 0,
+        dyadLifecycleRevision: 1,
         revision: 1,
       },
     });
@@ -343,6 +359,488 @@ describe('ICP autonomy Postgres persistence', () => {
       });
     } finally {
       await restarted.close();
+    }
+  }, TIMEOUT_MS);
+
+  it('persists bilateral lifecycle controls, fences stale work, and reopens only by consent permit', async () => {
+    const databaseUrl = await freshDatabaseUrl();
+    const store = await PostgresIcpSharedAutonomyStore.connect(databaseUrl, {
+      knownCompanionIds: [A, B, C],
+    });
+    try {
+      await store.createEpisode({
+        conversationId: CONVERSATION_ID,
+        channelId: CHANNEL,
+        participantCompanionIds: [A, B],
+        rootInitiationId: ROOT_ID,
+        initiatedByCompanionId: A,
+        initiationSource: 'foreground',
+        provenanceRef: PROVENANCE_HANDLE,
+        openedAtMs: 1_000,
+        lastActivityAtMs: 1_000,
+        status: 'invited',
+        revision: 1,
+      });
+      await store.createDyadContinuation({
+        dyadId: CONVERSATION_ID,
+        expectedLifecycleRevision: 1,
+        episode: {
+          conversationId: RACE_CONVERSATION_A,
+          channelId: CHANNEL,
+          participantCompanionIds: [A, B],
+          rootInitiationId: ROOT_ID,
+          initiatedByCompanionId: A,
+          initiationSource: 'foreground',
+          provenanceRef: `icp-prov:${RACE_CONVERSATION_A}`,
+          openedAtMs: 2_000,
+          lastActivityAtMs: 2_000,
+          status: 'invited',
+          revision: 1,
+        },
+        delivery: {
+          deliveryId: LIFECYCLE_DELIVERY_ID,
+          dyadId: CONVERSATION_ID,
+          conversationId: RACE_CONVERSATION_A,
+          senderCompanionId: A,
+          recipientCompanionId: B,
+          outcome: 'queued',
+          createdAtMs: 2_000,
+          updatedAtMs: 2_000,
+          attempt: 0,
+          dyadLifecycleRevision: 1,
+          revision: 1,
+        },
+      });
+      await store.createEpisodeAndIssuePermit({
+        episode: {
+          conversationId: UNRELATED_CONVERSATION_ID,
+          channelId: CHANNEL_AC,
+          participantCompanionIds: [A, C],
+          rootInitiationId: UNRELATED_CANDIDATE_ID,
+          initiatedByCompanionId: A,
+          initiationSource: 'intention',
+          provenanceRef: `icp-prov:${UNRELATED_CANDIDATE_ID}`,
+          openedAtMs: 2_100,
+          lastActivityAtMs: 2_100,
+          status: 'invited',
+          revision: 1,
+        },
+        permit: {
+          permitId: UNRELATED_PERMIT_ID,
+          candidateId: UNRELATED_CANDIDATE_ID,
+          conversationId: UNRELATED_CONVERSATION_ID,
+          senderCompanionId: A,
+          recipientCompanionId: C,
+          channelId: CHANNEL_AC,
+          provenanceRef: `icp-prov:${UNRELATED_CANDIDATE_ID}`,
+          issuedAtMs: 2_100,
+          expiresAtMs: 50_000,
+          status: 'issued',
+          revision: 1,
+        },
+        expectedInvalidationFence: await store.captureInvalidationFence(A, C),
+      });
+      await store.createEpisodeAndIssuePermit({
+        episode: {
+          conversationId: OPERATOR_TEST_CONVERSATION_ID,
+          channelId: CHANNEL,
+          participantCompanionIds: [A, B],
+          rootInitiationId: OPERATOR_TEST_CANDIDATE_ID,
+          initiatedByCompanionId: A,
+          initiationSource: 'operator_test',
+          provenanceRef: `icp-prov:${OPERATOR_TEST_CANDIDATE_ID}`,
+          openedAtMs: 2_200,
+          lastActivityAtMs: 2_200,
+          status: 'invited',
+          revision: 1,
+        },
+        permit: {
+          permitId: OPERATOR_TEST_PERMIT_ID,
+          candidateId: OPERATOR_TEST_CANDIDATE_ID,
+          conversationId: OPERATOR_TEST_CONVERSATION_ID,
+          senderCompanionId: A,
+          recipientCompanionId: B,
+          channelId: CHANNEL,
+          provenanceRef: `icp-prov:${OPERATOR_TEST_CANDIDATE_ID}`,
+          issuedAtMs: 2_200,
+          expiresAtMs: 2_500,
+          status: 'issued',
+          revision: 1,
+        },
+        expectedInvalidationFence: await store.captureInvalidationFence(A, B),
+      });
+
+      const paused = await store.transitionDyad({
+        dyadId: CONVERSATION_ID,
+        actorCompanionId: A,
+        expectedRevision: 1,
+        action: 'pause',
+        transitionedAtMs: 3_000,
+      });
+      expect(paused).toMatchObject({
+        dyad: { status: 'paused', lifecycleRevision: 2 },
+        fencedDeliveries: [{ deliveryId: LIFECYCLE_DELIVERY_ID, outcome: 'suppressed' }],
+      });
+      await expect(store.getPermit(UNRELATED_PERMIT_ID)).resolves.toMatchObject({ status: 'issued' });
+      await expect(store.getPermit(OPERATOR_TEST_PERMIT_ID))
+        .resolves.toMatchObject({ status: 'issued' });
+      await expect(store.createDyadContinuation({
+        dyadId: CONVERSATION_ID,
+        expectedLifecycleRevision: 1,
+        episode: {
+          conversationId: RACE_CONVERSATION_B,
+          channelId: CHANNEL,
+          participantCompanionIds: [A, B],
+          rootInitiationId: ROOT_ID,
+          initiatedByCompanionId: B,
+          initiationSource: 'foreground',
+          provenanceRef: `icp-prov:${RACE_CONVERSATION_B}`,
+          openedAtMs: 3_100,
+          lastActivityAtMs: 3_100,
+          status: 'invited',
+          revision: 1,
+        },
+        delivery: {
+          deliveryId: RACE_PERMIT_B,
+          dyadId: CONVERSATION_ID,
+          conversationId: RACE_CONVERSATION_B,
+          senderCompanionId: B,
+          recipientCompanionId: A,
+          outcome: 'queued',
+          createdAtMs: 3_100,
+          updatedAtMs: 3_100,
+          attempt: 0,
+          dyadLifecycleRevision: 1,
+          revision: 1,
+        },
+      })).rejects.toThrow('requires an owned open dyad');
+
+      await expect(store.transitionDyad({
+        dyadId: CONVERSATION_ID,
+        actorCompanionId: A,
+        expectedRevision: 2,
+        action: 'resume',
+        transitionedAtMs: 4_000,
+      })).resolves.toMatchObject({ dyad: { status: 'open', lifecycleRevision: 3 } });
+      await expect(store.transitionDyad({
+        dyadId: CONVERSATION_ID,
+        actorCompanionId: B,
+        expectedRevision: 3,
+        action: 'close',
+        transitionedAtMs: 5_000,
+      })).resolves.toMatchObject({ dyad: { status: 'closed', lifecycleRevision: 4 } });
+      await expect(store.transitionDyad({
+        dyadId: CONVERSATION_ID,
+        actorCompanionId: A,
+        expectedRevision: 4,
+        action: 'close',
+        transitionedAtMs: 5_050,
+      })).resolves.toMatchObject({ dyad: { status: 'closed', lifecycleRevision: 5 } });
+      await expect(store.transitionDyad({
+        dyadId: CONVERSATION_ID,
+        actorCompanionId: A,
+        expectedRevision: 5,
+        action: 'block',
+        transitionedAtMs: 5_100,
+      })).resolves.toMatchObject({ dyad: { status: 'blocked', lifecycleRevision: 6 } });
+      await expect(store.transitionDyad({
+        dyadId: CONVERSATION_ID,
+        actorCompanionId: B,
+        expectedRevision: 6,
+        action: 'block',
+        transitionedAtMs: 5_110,
+      })).resolves.toMatchObject({ dyad: { status: 'blocked', lifecycleRevision: 7 } });
+
+      await store.createEpisodeAndIssuePermit({
+        episode: {
+          conversationId: RACE_CONVERSATION_B,
+          channelId: CHANNEL,
+          participantCompanionIds: [A, B],
+          rootInitiationId: RACE_CANDIDATE_B,
+          initiatedByCompanionId: A,
+          initiationSource: 'intention',
+          provenanceRef: `icp-prov:${RACE_CANDIDATE_B}`,
+          openedAtMs: 5_120,
+          lastActivityAtMs: 5_120,
+          status: 'invited',
+          revision: 1,
+        },
+        permit: {
+          permitId: RACE_PERMIT_B,
+          candidateId: RACE_CANDIDATE_B,
+          conversationId: RACE_CONVERSATION_B,
+          senderCompanionId: A,
+          recipientCompanionId: B,
+          channelId: CHANNEL,
+          provenanceRef: `icp-prov:${RACE_CANDIDATE_B}`,
+          issuedAtMs: 5_120,
+          expiresAtMs: 50_000,
+          status: 'issued',
+          revision: 1,
+        },
+        expectedInvalidationFence: await store.captureInvalidationFence(A, B),
+      });
+      await expect(store.consumePermit({
+        permitId: RACE_PERMIT_B,
+        conversationId: RACE_CONVERSATION_B,
+        senderCompanionId: A,
+        recipientCompanionId: B,
+        channelId: CHANNEL,
+        consumedAtMs: 5_130,
+        expectedInvalidationFence: await store.captureInvalidationFence(A, B),
+      })).rejects.toMatchObject({ reasonCode: 'dyad_blocked' });
+      await expect(store.getPermit(RACE_PERMIT_B)).resolves.toMatchObject({ status: 'issued' });
+
+      await expect(store.transitionDyad({
+        dyadId: CONVERSATION_ID,
+        actorCompanionId: A,
+        expectedRevision: 7,
+        action: 'unblock',
+        transitionedAtMs: 5_200,
+      })).resolves.toMatchObject({
+        dyad: { status: 'blocked', lifecycleRevision: 8 },
+        revokedPermits: [{ permitId: RACE_PERMIT_B, status: 'revoked' }],
+      });
+      await expect(store.transitionDyad({
+        dyadId: CONVERSATION_ID,
+        actorCompanionId: B,
+        expectedRevision: 8,
+        action: 'unblock',
+        transitionedAtMs: 5_210,
+      })).resolves.toMatchObject({ dyad: { status: 'closed', lifecycleRevision: 9 } });
+
+      const reopenFence = await store.captureInvalidationFence(A, B);
+      const reopen = await store.createEpisodeAndIssuePermit({
+        episode: {
+          conversationId: SECOND_CONVERSATION_ID,
+          channelId: CHANNEL,
+          participantCompanionIds: [A, B],
+          rootInitiationId: SECOND_CANDIDATE_ID,
+          initiatedByCompanionId: A,
+          initiationSource: 'intention',
+          provenanceRef: SECOND_PROVENANCE_HANDLE,
+          openedAtMs: 6_000,
+          lastActivityAtMs: 6_000,
+          status: 'invited',
+          revision: 1,
+        },
+        permit: {
+          permitId: SECOND_PERMIT_ID,
+          candidateId: SECOND_CANDIDATE_ID,
+          conversationId: SECOND_CONVERSATION_ID,
+          senderCompanionId: A,
+          recipientCompanionId: B,
+          channelId: CHANNEL,
+          provenanceRef: SECOND_PROVENANCE_HANDLE,
+          issuedAtMs: 6_000,
+          expiresAtMs: 60_000,
+          status: 'issued',
+          revision: 1,
+        },
+        expectedInvalidationFence: reopenFence,
+      });
+      expect(reopen.dyad).toMatchObject({ dyadId: CONVERSATION_ID, status: 'closed' });
+      const consumeInput = {
+        permitId: SECOND_PERMIT_ID,
+        conversationId: SECOND_CONVERSATION_ID,
+        senderCompanionId: A,
+        recipientCompanionId: B,
+        channelId: CHANNEL,
+        consumedAtMs: 7_000,
+        expectedInvalidationFence: await store.captureInvalidationFence(A, B),
+      };
+      await expect(store.consumePermit(consumeInput)).resolves.toMatchObject({
+        outcome: 'consumed',
+        permit: { status: 'consumed' },
+      });
+      await expect(store.consumePermit(consumeInput)).resolves.toMatchObject({ outcome: 'replayed' });
+      await expect(store.getDyad(CONVERSATION_ID)).resolves.toMatchObject({
+        dyadId: CONVERSATION_ID,
+        channelId: CHANNEL,
+        status: 'open',
+        lifecycleRevision: 10,
+      });
+
+      await store.transitionEpisode({
+        conversationId: SECOND_CONVERSATION_ID,
+        expectedStatus: 'invited',
+        expectedRevision: 1,
+        expectedLastActivityAtMs: 6_000,
+        status: 'ended',
+        lastActivityAtMs: 7_100,
+        closeReasonCode: 'conversation_ended',
+      });
+      await expect(store.getDyad(CONVERSATION_ID)).resolves.toMatchObject({ status: 'open' });
+
+      await store.createEpisode({
+        conversationId: ROOM_CONVERSATION_ID,
+        channelId: 'companion-room:studio',
+        participantCompanionIds: [A, B],
+        rootInitiationId: ROOM_CONVERSATION_ID,
+        initiatedByCompanionId: A,
+        initiationSource: 'foreground',
+        provenanceRef: `icp-prov:${ROOM_CONVERSATION_ID}`,
+        openedAtMs: 9_000,
+        lastActivityAtMs: 9_000,
+        status: 'invited',
+        revision: 1,
+      });
+      const pool = createPostgresPool(databaseUrl, { schema: SHARED_SCHEMA_NAME, max: 1 });
+      try {
+        await expect(pool.query(`
+          SELECT conversation_id FROM icp_conversation_episodes
+          WHERE conversation_id IN ($1, $2) AND dyad_id IS NULL ORDER BY conversation_id
+        `, [OPERATOR_TEST_CONVERSATION_ID, ROOM_CONVERSATION_ID])).resolves.toMatchObject({
+          rowCount: 2,
+        });
+      } finally {
+        await pool.end();
+      }
+    } finally {
+      await store.close();
+    }
+
+    const restarted = await PostgresIcpSharedAutonomyStore.connect(databaseUrl, {
+      knownCompanionIds: [A, B, C],
+    });
+    try {
+      await expect(restarted.getDyad(CONVERSATION_ID)).resolves.toMatchObject({
+        status: 'open',
+        lifecycleRevision: 10,
+      });
+    } finally {
+      await restarted.close();
+    }
+  }, TIMEOUT_MS);
+
+  it('serializes concurrent same-revision lifecycle transitions with a typed stale loser', async () => {
+    const databaseUrl = await freshDatabaseUrl();
+    const first = await PostgresIcpSharedAutonomyStore.connect(databaseUrl, {
+      knownCompanionIds: [A, B],
+    });
+    const second = await PostgresIcpSharedAutonomyStore.connect(databaseUrl, {
+      knownCompanionIds: [A, B],
+    });
+    try {
+      await first.createEpisode({
+        conversationId: CONVERSATION_ID,
+        channelId: CHANNEL,
+        participantCompanionIds: [A, B],
+        rootInitiationId: ROOT_ID,
+        initiatedByCompanionId: A,
+        initiationSource: 'foreground',
+        provenanceRef: PROVENANCE_HANDLE,
+        openedAtMs: 1_000,
+        lastActivityAtMs: 1_000,
+        status: 'invited',
+        revision: 1,
+      });
+      const settled = await Promise.allSettled([
+        first.transitionDyad({
+          dyadId: CONVERSATION_ID,
+          actorCompanionId: A,
+          expectedRevision: 1,
+          action: 'pause',
+          transitionedAtMs: 2_000,
+        }),
+        second.transitionDyad({
+          dyadId: CONVERSATION_ID,
+          actorCompanionId: B,
+          expectedRevision: 1,
+          action: 'close',
+          transitionedAtMs: 2_000,
+        }),
+      ]);
+      expect(settled.filter(result => result.status === 'fulfilled')).toHaveLength(1);
+      const rejected = settled.find(result => result.status === 'rejected');
+      expect(rejected).toMatchObject({
+        status: 'rejected',
+        reason: expect.objectContaining({ reasonCode: 'dyad_stale_revision' }),
+      });
+      if (rejected?.status === 'rejected') {
+        expect(rejected.reason).toBeInstanceOf(IcpDyadLifecycleConflictError);
+      }
+      await expect(first.getDyad(CONVERSATION_ID)).resolves.toMatchObject({ lifecycleRevision: 2 });
+    } finally {
+      await first.close();
+      await second.close();
+    }
+  }, TIMEOUT_MS);
+
+  it('never leaves a pre-close consent permit issued across the lifecycle race', async () => {
+    const databaseUrl = await freshDatabaseUrl();
+    const first = await PostgresIcpSharedAutonomyStore.connect(databaseUrl, {
+      knownCompanionIds: [A, B],
+    });
+    const second = await PostgresIcpSharedAutonomyStore.connect(databaseUrl, {
+      knownCompanionIds: [A, B],
+    });
+    try {
+      await first.createEpisode({
+        conversationId: CONVERSATION_ID,
+        channelId: CHANNEL,
+        participantCompanionIds: [A, B],
+        rootInitiationId: ROOT_ID,
+        initiatedByCompanionId: A,
+        initiationSource: 'foreground',
+        provenanceRef: PROVENANCE_HANDLE,
+        openedAtMs: 1_000,
+        lastActivityAtMs: 1_000,
+        status: 'invited',
+        revision: 1,
+      });
+      const preCloseFence = await second.captureInvalidationFence(A, B);
+      const results = await Promise.allSettled([
+        first.transitionDyad({
+          dyadId: CONVERSATION_ID,
+          actorCompanionId: B,
+          expectedRevision: 1,
+          action: 'close',
+          transitionedAtMs: 2_000,
+        }),
+        second.createEpisodeAndIssuePermit({
+          episode: {
+            conversationId: LIFECYCLE_RACE_CONVERSATION_ID,
+            channelId: CHANNEL,
+            participantCompanionIds: [A, B],
+            rootInitiationId: LIFECYCLE_RACE_CANDIDATE_ID,
+            initiatedByCompanionId: A,
+            initiationSource: 'intention',
+            provenanceRef: `icp-prov:${LIFECYCLE_RACE_CANDIDATE_ID}`,
+            openedAtMs: 1_500,
+            lastActivityAtMs: 1_500,
+            status: 'invited',
+            revision: 1,
+          },
+          permit: {
+            permitId: LIFECYCLE_RACE_PERMIT_ID,
+            candidateId: LIFECYCLE_RACE_CANDIDATE_ID,
+            conversationId: LIFECYCLE_RACE_CONVERSATION_ID,
+            senderCompanionId: A,
+            recipientCompanionId: B,
+            channelId: CHANNEL,
+            provenanceRef: `icp-prov:${LIFECYCLE_RACE_CANDIDATE_ID}`,
+            issuedAtMs: 1_500,
+            expiresAtMs: 50_000,
+            status: 'issued',
+            revision: 1,
+          },
+          expectedInvalidationFence: preCloseFence,
+        }),
+      ]);
+      expect(results[0]).toMatchObject({ status: 'fulfilled' });
+      await expect(first.getDyad(CONVERSATION_ID)).resolves.toMatchObject({
+        status: 'closed',
+        lifecycleRevision: 2,
+      });
+      const permit = await first.getPermit(LIFECYCLE_RACE_PERMIT_ID);
+      expect(permit === null || permit.status === 'revoked').toBe(true);
+      if (results[1].status === 'rejected') {
+        expect(results[1].reason).toMatchObject({ reasonCode: 'dyad_stale_revision' });
+      }
+    } finally {
+      await first.close();
+      await second.close();
     }
   }, TIMEOUT_MS);
 

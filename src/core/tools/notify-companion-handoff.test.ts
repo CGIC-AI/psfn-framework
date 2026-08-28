@@ -49,6 +49,8 @@ function runtime(): AgentFacingIcpAutonomyRuntime {
     publishOwnAvailability: vi.fn(),
     clearOwnAvailability: vi.fn(),
     listOpenDyads: vi.fn().mockResolvedValue([]),
+    listDyads: vi.fn().mockResolvedValue([]),
+    transitionDyad: vi.fn(),
     inspectOpenDyad: vi.fn().mockResolvedValue({
       dyadId: '77777777-7777-4777-8777-777777777777',
       peerCompanionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
@@ -127,16 +129,16 @@ describe('permit-governed notify companion handoff', () => {
 
   it('returns only the redacted dyad projection supplied by companion authority', async () => {
     const owner = runtime();
-    vi.mocked(owner.listOpenDyads).mockResolvedValueOnce([{
+    vi.mocked(owner.listDyads).mockResolvedValueOnce([{
       dyadId: '77777777-7777-4777-8777-777777777777',
       peerCompanionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
       peerContactId: 'peer-contact-b',
       peerDisplayLabel: 'Peer',
       channelId: 'companion-dm:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
       status: 'open',
-      availability: { peerCompanionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', connectionState: 'online', eligible: true },
-      lastDeliveryOutcome: 'delivered',
-      lastDeliveryAtMs: 2_000,
+      ownState: { relationshipState: 'open', blocked: false },
+      peerState: { relationshipState: 'open', blocked: false },
+      lifecycleRevision: 4,
     }]);
     const result = await ordinaryContext(async () => await tool(owner).execute('call-list', {
       action: 'list_dyads', target_kind: 'companion',
@@ -145,10 +147,51 @@ describe('permit-governed notify companion handoff', () => {
       dyads: [expect.objectContaining({
         dyadId: '77777777-7777-4777-8777-777777777777',
         peerDisplayLabel: 'Peer',
-        lastDeliveryOutcome: 'delivered',
+        status: 'open',
+        lifecycleRevision: 4,
       })],
     });
     expect(text(result)).not.toMatch(/message|summary|memory|reasoning|motivation|session/iu);
+  });
+
+  it('applies a lifecycle action immediately without scheduling peer content', async () => {
+    const owner = runtime();
+    vi.mocked(owner.transitionDyad).mockResolvedValueOnce({
+      outcome: 'updated',
+      dyadId: '77777777-7777-4777-8777-777777777777',
+      status: 'paused',
+      ownState: { relationshipState: 'paused', blocked: false },
+      peerState: { relationshipState: 'open', blocked: false },
+      lifecycleRevision: 5,
+      revokedPermitCount: 1,
+      fencedDeliveryCount: 2,
+    });
+    const params = {
+      action: 'dyad_lifecycle' as const,
+      target_kind: 'companion' as const,
+      dyad_id: '77777777-7777-4777-8777-777777777777',
+      expected_revision: 4,
+      lifecycle_action: 'pause' as const,
+    };
+
+    const result = await ordinaryContext(async () => await tool(owner).execute('call-pause', params));
+
+    expect(JSON.parse(text(result))).toMatchObject({ status: 'paused', lifecycleRevision: 5 });
+    expect(owner.transitionDyad).toHaveBeenCalledWith({
+      dyadId: params.dyad_id,
+      expectedRevision: 4,
+      action: 'pause',
+    });
+    expect(inferDeferredCompanionOutreachActions({
+      message: { id: 'source-1', channelId: 'discord:owner', routing: {} } as never,
+      turnMessages: [
+        { role: 'assistant', content: [{ type: 'toolCall', id: 'call-pause', name: 'notify', arguments: params }] } as never,
+        { role: 'toolResult', toolCallId: 'call-pause', toolName: 'notify', isError: false,
+          content: [{ type: 'text', text: text(result) }] } as never,
+      ],
+      turnId: 'turn-pause' as never,
+      completedAt: 1_000,
+    }, 'extended')).toEqual([]);
   });
 
   it('queues an owned open-dyad continuation without an initiation permit', async () => {

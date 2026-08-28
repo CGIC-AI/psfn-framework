@@ -2,17 +2,20 @@ import { randomUUID } from 'node:crypto';
 
 import {
   IcpAutonomyInvalidationConflictError,
+  IcpDyadLifecycleConflictError,
   IcpOutstandingInvitationConflictError,
   type IcpSharedAutonomyStorePort,
 } from '../../core/icp/autonomy-store-ports.js';
 import {
   parseIcpConversationCorrelation,
   parseIcpAvailabilityLease,
+  icpDyadStatusReasonCode,
   type IcpAutonomyReasonCode,
   type IcpAvailabilityLease,
   type IcpAvailabilityState,
   type IcpConversationEpisode,
   type IcpDyad,
+  type IcpDyadSideAction,
   type IcpDyadDelivery,
   type IcpInitiationSource,
   type IcpInitiationPermit,
@@ -67,6 +70,7 @@ export class GatewayIcpAutonomyBroker {
   private readonly randomUuid: () => string;
   private readonly runtimeAvailabilityActiveCompanionIds = new Set<string>();
   private readonly runtimeAvailabilityOperationTails = new Map<string, Promise<void>>();
+  private readonly dyadOperationTails = new Map<string, Promise<void>>();
 
   constructor(private readonly options: GatewayIcpAutonomyBrokerOptions) {
     this.now = options.now ?? (() => Date.now());
@@ -366,6 +370,7 @@ export class GatewayIcpAutonomyBroker {
         peerCompanionId,
         channelId: dyad.channelId,
         status: 'open',
+        lifecycleRevision: dyad.lifecycleRevision,
         availability,
         ...(lastDelivery
           ? {
@@ -376,6 +381,27 @@ export class GatewayIcpAutonomyBroker {
       });
     }
     return projections;
+  }
+
+  async listDyadLifecycle(
+    companionId: string,
+  ): Promise<import('./icp-autonomy-contract.js').IcpDyadLifecycleProjection[]> {
+    this.requireFleetCompanion(companionId, 'dyad owner');
+    const dyads = await this.options.store.listDyadsForCompanion(companionId);
+    return dyads.flatMap(dyad => {
+      const ownState = dyad.participantStates.find(state => state.companionId === companionId);
+      const peerState = dyad.participantStates.find(state => state.companionId !== companionId);
+      if (!ownState || !peerState || !this.options.fleetCompanionIds.has(peerState.companionId)) return [];
+      return [{
+        dyadId: dyad.dyadId,
+        peerCompanionId: peerState.companionId,
+        channelId: dyad.channelId,
+        status: dyad.status,
+        ownState,
+        peerState,
+        lifecycleRevision: dyad.lifecycleRevision,
+      }];
+    });
   }
 
   async prepareDyadContinuation(
@@ -398,7 +424,8 @@ export class GatewayIcpAutonomyBroker {
       return { status: 'unavailable', reasonCode: 'recursive_trigger' };
     }
     if (dyad.status === 'closed') return { status: 'need_initiation', reasonCode: 'dyad_closed' };
-    if (dyad.status === 'revoked') return { status: 'need_initiation', reasonCode: 'dyad_revoked' };
+    if (dyad.status === 'paused') return { status: 'unavailable', reasonCode: 'dyad_paused' };
+    if (dyad.status === 'blocked') return { status: 'unavailable', reasonCode: 'dyad_blocked' };
     const peerCompanionId = dyad.participantCompanionIds.find(id => id !== senderCompanionId);
     if (!peerCompanionId || !this.options.fleetCompanionIds.has(peerCompanionId)) {
       return { status: 'unavailable', reasonCode: 'unknown_participant' };
@@ -456,10 +483,12 @@ export class GatewayIcpAutonomyBroker {
           createdAtMs: nowMs,
           updatedAtMs: nowMs,
           attempt: 0,
+          dyadLifecycleRevision: dyad.lifecycleRevision,
           revision: 1,
         };
         return await this.options.store.createDyadContinuation({
           dyadId: dyad.dyadId,
+          expectedLifecycleRevision: dyad.lifecycleRevision,
           episode,
           delivery,
         });
@@ -478,6 +507,7 @@ export class GatewayIcpAutonomyBroker {
         deliveryId: guarded.result.delivery.deliveryId,
         peerCompanionId,
         channelId: guarded.result.dyad.channelId,
+        dyadLifecycleRevision: guarded.result.delivery.dyadLifecycleRevision,
         episode: guarded.result.episode,
       },
     };
@@ -494,6 +524,7 @@ export class GatewayIcpAutonomyBroker {
     ]);
     if (!dyad || dyad.status !== 'open' || !delivery
       || delivery.dyadId !== dyad.dyadId || delivery.senderCompanionId !== senderCompanionId
+      || delivery.dyadLifecycleRevision !== dyad.lifecycleRevision
       || !['queued', 'retrying', 'failed'].includes(delivery.outcome)) {
       throw new Error('ICP dyad continuation delivery is unavailable');
     }
@@ -513,6 +544,80 @@ export class GatewayIcpAutonomyBroker {
       throw new Error(`ICP dyad continuation delivery unavailable: ${policy.reasonCode ?? 'policy_denied'}`);
     }
     return { dyad, delivery, episode };
+  }
+
+  async transitionDyadLifecycle(
+    companionId: string,
+    input: {
+      dyadId: string;
+      expectedRevision: number;
+      action: IcpDyadSideAction;
+    },
+  ): Promise<import('./icp-autonomy-contract.js').IcpDyadLifecycleResult> {
+    this.requireFleetCompanion(companionId, 'dyad lifecycle owner');
+    const release = await this.acquireDyadOperation(input.dyadId);
+    try {
+      let result: Awaited<ReturnType<IcpSharedAutonomyStorePort['transitionDyad']>>;
+      try {
+        result = await this.options.store.transitionDyad({
+          dyadId: input.dyadId,
+          actorCompanionId: companionId,
+          expectedRevision: input.expectedRevision,
+          action: input.action,
+          transitionedAtMs: this.now(),
+        });
+      } catch (error) {
+        if (!(error instanceof IcpDyadLifecycleConflictError)) throw error;
+        return { outcome: 'unavailable' as const, reasonCode: error.reasonCode };
+      }
+      const ownState = result.dyad.participantStates.find(
+        state => state.companionId === companionId,
+      );
+      const peerState = result.dyad.participantStates.find(
+        state => state.companionId !== companionId,
+      );
+      if (!ownState || !peerState) throw new Error('ICP dyad lifecycle participant binding is invalid');
+      for (const permit of result.revokedPermits) {
+        await this.emitPermitRevoked(permit, permit.reasonCode ?? 'dyad_stale_revision');
+      }
+      return {
+        outcome: 'updated' as const,
+        dyadId: result.dyad.dyadId,
+        status: result.dyad.status,
+        ownState,
+        peerState,
+        lifecycleRevision: result.dyad.lifecycleRevision,
+        revokedPermitCount: result.revokedPermits.length,
+        fencedDeliveryCount: result.fencedDeliveries.length,
+      };
+    } finally {
+      release();
+    }
+  }
+
+  async acquireDyadPairOperation(
+    firstCompanionId: string,
+    secondCompanionId: string,
+  ): Promise<() => void> {
+    this.requireDistinctFleetPair(firstCompanionId, secondCompanionId);
+    const dyad = await this.options.store.getDyadBetween(firstCompanionId, secondCompanionId);
+    return dyad ? await this.acquireDyadOperation(dyad.dyadId) : () => undefined;
+  }
+
+  async acquireDyadOperation(dyadId: string): Promise<() => void> {
+    const prior = this.dyadOperationTails.get(dyadId) ?? Promise.resolve();
+    let releaseGate!: () => void;
+    const gate = new Promise<void>(resolve => { releaseGate = resolve; });
+    const tail = prior.then(() => gate);
+    this.dyadOperationTails.set(dyadId, tail);
+    await prior;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      releaseGate();
+      if (this.dyadOperationTails.get(dyadId) === tail) this.dyadOperationTails.delete(dyadId);
+    };
   }
 
   async recordDyadContinuationDelivery(
@@ -746,6 +851,11 @@ export class GatewayIcpAutonomyBroker {
       }));
     } catch (error) {
       if (error instanceof IcpAutonomyInvalidationConflictError) {
+        const existing = await this.reconcilePermitIssue(senderCompanionId, input);
+        if (existing) {
+          await this.emitGate(input, senderCompanionId, existing.decision);
+          return existing;
+        }
         const closed = closedDecision(error.reasonCode, invalidationReasonClass(error.reasonCode));
         await this.emitGate(input, senderCompanionId, closed);
         return { decision: closed };
@@ -1071,6 +1181,13 @@ export class GatewayIcpAutonomyBroker {
     const correlation = await this.bindConversationCostCorrelation(senderCompanionId, value);
     if (correlation.costOriginStage !== 'reply') {
       throw new Error('ICP reply correlation requires reply cost origin');
+    }
+    const dyad = await this.options.store.getDyadBetween(
+      senderCompanionId,
+      correlation.peerCompanionId,
+    );
+    if (dyad && dyad.status !== 'open') {
+      throw new IcpDyadLifecycleConflictError(icpDyadStatusReasonCode(dyad.status));
     }
     return correlation;
   }

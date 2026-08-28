@@ -59,6 +59,13 @@ const DYAD_ROW = {
   first_companion_id: A,
   second_companion_id: B,
   status: 'open',
+  first_relationship_state: 'open',
+  second_relationship_state: 'open',
+  first_blocked: false,
+  second_blocked: false,
+  first_state_updated_at_ms: '10000',
+  second_state_updated_at_ms: '10000',
+  lifecycle_revision: '1',
   created_at_ms: '10000',
   closed_at_ms: null,
   close_reason_code: null,
@@ -359,24 +366,34 @@ describe('PostgresIcpSharedAutonomyStore', () => {
     expect(reversedValues).toEqual([A, B]);
   });
 
-  it('closes relationship authority independently from bounded episodes', async () => {
+  it('blocks one companion side and fences outstanding authority independently from episodes', async () => {
     const store = await connect();
-    mocks.queryOne.mockResolvedValue({
+    const blockedRow = {
       ...DYAD_ROW,
-      status: 'revoked',
-      closed_at_ms: '12000',
-      close_reason_code: 'peer_blocked',
+      status: 'blocked',
+      first_blocked: true,
+      first_state_updated_at_ms: '12000',
+      lifecycle_revision: '2',
       revision: '2',
-    });
+    };
+    mocks.clientQuery.mockReset();
+    mocks.clientQuery
+      .mockResolvedValueOnce({ rows: [DYAD_ROW], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [blockedRow], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 });
     await expect(store.transitionDyad({
       dyadId: CONVERSATION_ID,
-      expectedStatus: 'open',
+      actorCompanionId: A,
       expectedRevision: 1,
-      status: 'revoked',
-      closedAtMs: 12_000,
-      closeReasonCode: 'peer_blocked',
-    })).resolves.toMatchObject({ status: 'revoked', closeReasonCode: 'peer_blocked' });
-    const [, sql] = mocks.queryOne.mock.calls.at(-1) as [unknown, string];
+      action: 'block',
+      transitionedAtMs: 12_000,
+    })).resolves.toMatchObject({
+      dyad: { status: 'blocked', lifecycleRevision: 2 },
+      revokedPermits: [],
+      fencedDeliveries: [],
+    });
+    const [sql] = mocks.clientQuery.mock.calls[1] as [string];
     expect(sql).toContain('UPDATE icp_dyads');
     expect(sql).not.toContain('icp_conversation_episodes');
   });
@@ -385,6 +402,7 @@ describe('PostgresIcpSharedAutonomyStore', () => {
     const store = await connect();
     mocks.clientQuery.mockReset();
     mocks.clientQuery
+      .mockResolvedValueOnce({ rows: [{ dyad_id: null }], rowCount: 1 })
       .mockResolvedValueOnce({ rows: FENCE_ROWS, rowCount: 2 })
       .mockResolvedValueOnce({ rows: [], rowCount: 0 })
       .mockResolvedValueOnce({ rows: [PERMIT_ROW], rowCount: 1 });
@@ -404,7 +422,7 @@ describe('PostgresIcpSharedAutonomyStore', () => {
       },
       expectedInvalidationFence: FENCE,
     });
-    const [sql] = mocks.clientQuery.mock.calls[2] as [string];
+    const [sql] = mocks.clientQuery.mock.calls[3] as [string];
     expect(sql).toContain('INSERT INTO icp_initiation_permits');
     expect(sql).toContain('FROM icp_conversation_episodes');
     expect(sql).toContain('participant_companion_ids @>');
@@ -416,6 +434,7 @@ describe('PostgresIcpSharedAutonomyStore', () => {
     const store = await connect();
     mocks.clientQuery.mockReset();
     mocks.clientQuery
+      .mockResolvedValueOnce({ rows: [{ dyad_id: null }], rowCount: 1 })
       .mockResolvedValueOnce({ rows: FENCE_ROWS, rowCount: 2 })
       .mockResolvedValueOnce({ rows: [], rowCount: 0 })
       .mockResolvedValueOnce({ rows: [], rowCount: 0 })
@@ -437,7 +456,7 @@ describe('PostgresIcpSharedAutonomyStore', () => {
       },
       expectedInvalidationFence: FENCE,
     })).rejects.toThrow('outstanding invitation conflict');
-    const [sameCandidateSql] = mocks.clientQuery.mock.calls[3] as [string];
+    const [sameCandidateSql] = mocks.clientQuery.mock.calls[4] as [string];
     expect(sameCandidateSql).toContain('WHERE candidate_id = $1');
   });
 
@@ -451,6 +470,7 @@ describe('PostgresIcpSharedAutonomyStore', () => {
     const store = await connect();
     mocks.clientQuery.mockReset();
     mocks.clientQuery
+      .mockResolvedValueOnce({ rows: [{ dyad_id: null }], rowCount: 1 })
       .mockResolvedValueOnce({ rows: FENCE_ROWS, rowCount: 2 })
       .mockResolvedValueOnce({ rows: [consumedRow], rowCount: 1 });
     await expect(store.consumePermit({
@@ -462,11 +482,12 @@ describe('PostgresIcpSharedAutonomyStore', () => {
       consumedAtMs: 11_000,
       expectedInvalidationFence: FENCE,
     })).resolves.toMatchObject({ outcome: 'consumed' });
-    expect((mocks.clientQuery.mock.calls[1] as [string])[0])
+    expect((mocks.clientQuery.mock.calls[2] as [string])[0])
       .toContain("WHERE permit_id = $1 AND status = 'issued'");
 
     mocks.clientQuery.mockReset();
     mocks.clientQuery
+      .mockResolvedValueOnce({ rows: [{ dyad_id: null }], rowCount: 1 })
       .mockResolvedValueOnce({ rows: FENCE_ROWS, rowCount: 2 })
       .mockResolvedValueOnce({ rows: [], rowCount: 0 })
       .mockResolvedValueOnce({ rows: [consumedRow], rowCount: 1 });
@@ -491,6 +512,7 @@ describe('PostgresIcpSharedAutonomyStore', () => {
     };
     mocks.clientQuery.mockReset();
     mocks.clientQuery
+      .mockResolvedValueOnce({ rows: [{ dyad_id: null }], rowCount: 1 })
       .mockResolvedValueOnce({
         rows: [A, C].map(companionId => ({
           companion_id: companionId,

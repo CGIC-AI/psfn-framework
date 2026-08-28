@@ -1,6 +1,7 @@
 import type { EventBus } from '../../shared/event-bus.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { createIcpFeltImpulseInitiationAdapter } from '../../core/icp/felt-impulse-initiation.js';
+import type { EmoSimProactivityImpulse } from '../../core/emotion/emosim-proactivity-port.js';
 import type { KnownCompanionPeerAvailability } from '../../core/icp/agent-facing-autonomy.js';
 import type { IcpFeltImpulseFunnelStorePort } from '../../core/icp/felt-impulse-funnel.js';
 import { parseFeltImpulseCorrelationFirstCrossingMs } from '../../core/icp/felt-impulse-funnel.js';
@@ -48,6 +49,8 @@ export interface IcpInitiationSourceWiringInput {
   peerDirectory?: {
     listKnownPeerAvailability(): Promise<KnownCompanionPeerAvailability[]>;
   };
+  /** Companion-owned disposition path for qualified production impulses. */
+  handleFeltImpulse?: (signal: EmoSimProactivityImpulse) => Promise<void>;
 }
 
 export interface IcpInitiationSourceWiring {
@@ -136,13 +139,19 @@ export function wireIcpInitiationSources(
       })
     : () => undefined;
 
-  // ── Affect-driven felt-impulse source (hrmrq.34, operator ruling D4) ──
-  // The companion-local EmoSim Proactivity Port publishes a provenance-bearing
-  // qualified impulse, and this subscription turns it into
-  // an ICP initiation candidate through the same source runtime every other
-  // source uses (consent, preflight, permits, retry/TTL unchanged).
+  // ── Affect-driven felt-impulse source ──
+  // Production composes the companion-owned disposition handler first. The
+  // older direct-candidate adapter remains only as the explicit fallback for
+  // callers that have not composed that handler; first contact still enters
+  // this source runtime after the companion selects an exact destination.
   let unregisterFeltImpulseAdapter: () => void = () => undefined;
-  if (sourceRuntime && input.peerDirectory) {
+  if (input.handleFeltImpulse) {
+    unregisterFeltImpulseAdapter = input.eventBus.on(
+      'emotion.emosim.proactivity.impulse',
+      input.handleFeltImpulse,
+    );
+    log.info('EmoSim felt impulse wired to the companion outreach disposition surface');
+  } else if (sourceRuntime && input.peerDirectory) {
     const feltImpulseAdapter = createIcpFeltImpulseInitiationAdapter({
       sourceRuntime,
       peers: input.peerDirectory,

@@ -421,7 +421,10 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     domain: 'notification',
     exposure: 'extended',
     description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.notify,
-    actions: ['brief', 'send', 'consider', 'approval_request', 'clarify'],
+    actions: [
+      'brief', 'send', 'consider', 'approval_request', 'clarify',
+      'outreach_list', 'outreach_choose',
+    ],
     capabilityMetadata: { kind: 'action_aware', source: CAPABILITIES_REQUIREMENTS },
     retiredAliases: [
       retiredAlias('notify_operator', 'notify', 'hidden', 'brief', 'Operator notifications belong on notify.'),

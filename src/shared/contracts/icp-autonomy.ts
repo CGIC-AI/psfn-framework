@@ -63,7 +63,7 @@ export const ICP_CONVERSATION_STATUSES = [
 ] as const;
 export type IcpConversationStatus = typeof ICP_CONVERSATION_STATUSES[number];
 
-export const ICP_DYAD_STATUSES = ['open', 'closed', 'revoked'] as const;
+const ICP_DYAD_STATUSES = ['open', 'closed', 'revoked'] as const;
 export type IcpDyadStatus = typeof ICP_DYAD_STATUSES[number];
 
 export const ICP_PERMIT_STATUSES = ['issued', 'consumed', 'revoked', 'expired'] as const;

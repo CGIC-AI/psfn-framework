@@ -1,6 +1,5 @@
 import type { SensitivityLevel } from '../../../system/trust/types.js';
 import type { MemoryPolicyType } from '../../../system/config/memory-retrieval-policy.js';
-import type { BiographicalSourceLifecycleState } from '../../../system/config/biographical-candidate-policy.js';
 
 /**
  * Biographical Profile projection (psfn-framework-o61vb).
@@ -55,6 +54,17 @@ export const BIOGRAPHICAL_CLAIM_BASES: readonly BiographicalClaimBasis[] = [
   'inferred',
   'imported',
 ];
+
+export const BIOGRAPHICAL_SOURCE_LIFECYCLE_STATES = [
+  'active',
+  'quarantined',
+  'tombstoned',
+  'cogsec_blocked',
+  'revoked',
+  'superseded',
+] as const;
+type BiographicalSourceLifecycleState =
+  (typeof BIOGRAPHICAL_SOURCE_LIFECYCLE_STATES)[number];
 
 export type BiographicalClaimStatus =
   | 'candidate'

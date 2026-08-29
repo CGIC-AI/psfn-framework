@@ -1,10 +1,14 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import type {
-  BiographicalClaimBasis,
-  BiographicalClaimKind,
+import {
+  BIOGRAPHICAL_SOURCE_LIFECYCLE_STATES,
+  type BiographicalClaimBasis,
+  type BiographicalClaimKind,
 } from '../../faculties/memory/biographical/types.js';
+export { BIOGRAPHICAL_SOURCE_LIFECYCLE_STATES } from '../../faculties/memory/biographical/types.js';
+type BiographicalSourceLifecycleState =
+  (typeof BIOGRAPHICAL_SOURCE_LIFECYCLE_STATES)[number];
 import { hasExactKeys, isRecord } from '../../shared/utils/types.js';
 import {
   MEMORY_POLICY_TYPES,
@@ -14,17 +18,6 @@ import {
   VALID_SENSITIVITY_LEVELS,
   type SensitivityLevel,
 } from '../trust/types.js';
-
-export const BIOGRAPHICAL_SOURCE_LIFECYCLE_STATES = [
-  'active',
-  'quarantined',
-  'tombstoned',
-  'cogsec_blocked',
-  'revoked',
-  'superseded',
-] as const;
-export type BiographicalSourceLifecycleState =
-  (typeof BIOGRAPHICAL_SOURCE_LIFECYCLE_STATES)[number];
 
 const REQUIRED_BIOGRAPHICAL_SOURCE_EXCLUSIONS = [
   'quarantined',

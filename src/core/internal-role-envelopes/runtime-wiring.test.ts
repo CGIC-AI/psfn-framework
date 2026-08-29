@@ -46,6 +46,12 @@ vi.mock('../../persistence/sessions/postgres-adapters.js', async () => {
           withTurnRecordEligibilityFence: async (_key: unknown, operation: () => Promise<unknown>) => operation(),
           withTurnRecordEligibilityFences: async (_keys: readonly unknown[], operation: () => Promise<unknown>) => operation(),
         },
+        conversationalActivityWorkset: {
+          enumerate: vi.fn(async () => []),
+          claim: vi.fn(async () => null),
+          resumeClaim: vi.fn(async () => null),
+          checkpoint: vi.fn(async () => undefined),
+        },
       };
     }),
   };

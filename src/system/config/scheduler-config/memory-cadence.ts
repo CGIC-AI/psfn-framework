@@ -1,6 +1,7 @@
 import { isRecord } from '../../../shared/utils/types.js';
 import {
   toBoolean,
+  toCadenceTimezone,
   toLocalTime,
   toPositiveInteger,
   toTimeZone,
@@ -48,15 +49,16 @@ export interface NearTurnMemoryCadenceConfig {
 }
 
 /**
- * Candidate-episode synthesis lane: deterministic trigger gate plus synthesis
- * tuning knobs. The lane fires on a timer OR a turn threshold (whichever comes
- * first) and then applies two deterministic gates (new-messages watermark and
- * a minimum relevant-turn count) before any processing happens.
+ * Candidate-episode synthesis lane: a resumable changed-session drain plus
+ * synthesis tuning knobs. The lane fires at explicit daytime wall-clock slots
+ * OR a companion-level turn threshold, whichever comes first.
  */
 export interface EpisodeSynthesisLaneConfig {
-  /** Scheduler timer cadence for gate evaluation (minutes). */
-  timerIntervalMinutes: number;
-  /** Turn count per session that forces a gate evaluation before the timer. */
+  /** HH:mm wall-clock slots for the low-cadence daytime drain. */
+  daytimeSlots: string[];
+  /** Scheduler cadence timezone for every daytime slot. */
+  timezone: 'local' | 'utc';
+  /** Companion-level turn count that requests a drain before the next slot. */
   turnThreshold: number;
   /** Minimum companion-relevant turns required before synthesis runs. */
   minRelevantTurns: number;
@@ -149,8 +151,20 @@ export function validateEpisodeSynthesisConfig(
   if (!isRecord(raw)) {
     throw new Error(`Invalid scheduler config at ${sourcePath}: episodeSynthesis must be an object`);
   }
+  if (!Array.isArray(raw.daytimeSlots) || raw.daytimeSlots.length === 0) {
+    throw new Error('Invalid scheduler config: episodeSynthesis.daytimeSlots must be a non-empty array');
+  }
+  const daytimeSlots = raw.daytimeSlots.map((value, index) => (
+    toLocalTime(value, `episodeSynthesis.daytimeSlots[${index}]`)
+  ));
+  if (new Set(daytimeSlots).size !== daytimeSlots.length) {
+    throw new Error(
+      'Invalid scheduler config: episodeSynthesis.daytimeSlots must contain unique HH:mm local times',
+    );
+  }
   return {
-    timerIntervalMinutes: toPositiveInteger(raw.timerIntervalMinutes, 'episodeSynthesis.timerIntervalMinutes', 1),
+    daytimeSlots,
+    timezone: toCadenceTimezone(raw.timezone, 'episodeSynthesis.timezone'),
     turnThreshold: toPositiveInteger(raw.turnThreshold, 'episodeSynthesis.turnThreshold', 1),
     minRelevantTurns: toPositiveInteger(raw.minRelevantTurns, 'episodeSynthesis.minRelevantTurns', 1),
     transcriptMessageLimit: toPositiveInteger(raw.transcriptMessageLimit, 'episodeSynthesis.transcriptMessageLimit', 1),

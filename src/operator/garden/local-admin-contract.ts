@@ -173,15 +173,32 @@ const log = createComponentLogger('GardenAdminContract');
 
 /** Build the canonical operator-facing episodic watermark lanes. */
 export function buildEpisodicWatermarkLaneDefinitions(config: {
-  episodeSynthesis: { timerIntervalMinutes: number };
+  episodeSynthesis: { daytimeSlots: readonly string[] };
   arcFormation: { passIntervalDays: number };
 }): readonly EpisodicWatermarkLaneDefinition[] {
+  const slotMinutes = config.episodeSynthesis.daytimeSlots
+    .map((slot) => {
+      const [hour, minute] = slot.split(':').map(Number);
+      if (!Number.isInteger(hour) || !Number.isInteger(minute)) {
+        throw new Error('Episode synthesis Garden cadence requires validated HH:mm daytime slots');
+      }
+      return (hour ?? 0) * 60 + (minute ?? 0);
+    })
+    .sort((left, right) => left - right);
+  if (slotMinutes.length === 0) {
+    throw new Error('Episode synthesis Garden cadence requires at least one daytime slot');
+  }
+  const dailyGaps = slotMinutes.map((slot, index) => {
+    const next = slotMinutes[(index + 1) % slotMinutes.length] ?? slot;
+    return next > slot ? next - slot : 24 * 60 - slot + next;
+  });
+  const maximumSlotGapMinutes = Math.max(...dailyGaps);
   return [
     {
       processor: 'episodic_synthesis',
       label: 'Episode synthesis watermark',
       description: 'Durable candidate-episode synthesis progress.',
-      intervalMs: config.episodeSynthesis.timerIntervalMinutes * 60_000,
+      intervalMs: maximumSlotGapMinutes * 60_000,
     },
     {
       processor: 'sleep_consolidation',

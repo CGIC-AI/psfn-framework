@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SessionEntry } from '../../../core/session/types.js';
+import type {
+  ConversationalActivityWorkItem,
+  ConversationalActivityWorksetPort,
+} from '../../../core/session/conversational-activity-workset.js';
 import type { EpisodeSynthesisLaneConfig } from '../../../system/config/scheduler-config.js';
 import {
   EpisodeSynthesisLane,
@@ -37,7 +41,8 @@ const WATERMARK_END_MS = Date.parse('2026-06-01T10:00:00.000Z');
 
 function gateConfig(overrides: Partial<EpisodeSynthesisLaneConfig> = {}): EpisodeSynthesisLaneConfig {
   return {
-    timerIntervalMinutes: 30,
+    daytimeSlots: ['09:00', '12:00', '15:00', '18:00'],
+    timezone: 'local',
     turnThreshold: 24,
     minRelevantTurns: 10,
     transcriptMessageLimit: 96,
@@ -78,6 +83,68 @@ function mentionEntries(count: number, startId = 1): SessionEntry[] {
     id: startId + index,
     content: `hey ${COMPANION_NAME}, what do you think about topic ${index}?`,
   }));
+}
+
+function makeStatefulWorkset(sessionIds: readonly string[]): ConversationalActivityWorksetPort {
+  const items = sessionIds.map((logicalSessionId, index): ConversationalActivityWorkItem => ({
+    purpose: 'episodic_synthesis',
+    logicalSessionId,
+    revision: index + 1,
+    activityKind: 'direct_message',
+    checkpointRevision: 0,
+  }));
+  const checkpoints = new Map<string, number>();
+  const claims = new Map<string, { claimantId: string; claimedAtMs: number; revision: number }>();
+  return {
+    enumerate: vi.fn(async () => items
+      .filter(item => item.revision > (checkpoints.get(item.logicalSessionId) ?? 0))
+      .map(item => ({
+        ...item,
+        checkpointRevision: checkpoints.get(item.logicalSessionId) ?? 0,
+        ...(claims.get(item.logicalSessionId) ?? {}),
+      }))),
+    claim: vi.fn(async (input) => {
+      const item = items.find(candidate => candidate.logicalSessionId === input.logicalSessionId);
+      const activeClaim = claims.get(input.logicalSessionId);
+      if (
+        !item
+        || item.revision !== input.revision
+        || item.revision <= (checkpoints.get(item.logicalSessionId) ?? 0)
+        || (activeClaim && activeClaim.claimantId !== input.claimantId)
+      ) {
+        return null;
+      }
+      const claim = {
+        claimantId: input.claimantId,
+        claimedAtMs: WATERMARK_END_MS,
+        revision: input.revision,
+      };
+      claims.set(input.logicalSessionId, claim);
+      return {
+        ...item,
+        checkpointRevision: checkpoints.get(item.logicalSessionId) ?? 0,
+        ...claim,
+      };
+    }),
+    resumeClaim: vi.fn(async (input) => {
+      const item = items.find(candidate => candidate.logicalSessionId === input.logicalSessionId);
+      const claim = claims.get(input.logicalSessionId);
+      if (!item || !claim || claim.claimantId !== input.claimantId) return null;
+      return {
+        ...item,
+        checkpointRevision: checkpoints.get(item.logicalSessionId) ?? 0,
+        ...claim,
+      };
+    }),
+    checkpoint: vi.fn(async (input) => {
+      const claim = claims.get(input.logicalSessionId);
+      if (!claim || claim.claimantId !== input.claimantId || claim.revision !== input.revision) {
+        throw new Error('checkpoint does not match claim');
+      }
+      checkpoints.set(input.logicalSessionId, input.revision);
+      claims.delete(input.logicalSessionId);
+    }),
+  };
 }
 
 function makeHarness(options: {
@@ -128,11 +195,42 @@ function makeHarness(options: {
   const scopeClassifier = {
     classifyChannelMemoryScope: vi.fn(async () => options.scope ?? 'group'),
   };
+  const workset = {
+    enumerate: vi.fn(async () => {
+      const sourceChannelId = entriesRef.current[0]?.channelId ?? 'discord:room-1';
+      const logicalSessionId = sessionManager.resolveSessionChannelId(sourceChannelId);
+      return [{
+        purpose: 'episodic_synthesis' as const,
+        logicalSessionId,
+        revision: entriesRef.current.at(-1)?.id ?? 1,
+        activityKind: logicalSessionId.startsWith('internal:free-time:')
+          ? 'experiential_free_time' as const
+          : options.scope === 'direct'
+            ? 'direct_message' as const
+            : 'group_conversation' as const,
+        checkpointRevision: 0,
+      }];
+    }),
+    claim: vi.fn(async (input: {
+      purpose: 'episodic_synthesis';
+      logicalSessionId: string;
+      revision: number;
+      claimantId: string;
+    }) => ({
+      ...input,
+      activityKind: 'group_conversation' as const,
+      checkpointRevision: 0,
+      claimedAtMs: WATERMARK_END_MS,
+    })),
+    resumeClaim: vi.fn(),
+    checkpoint: vi.fn().mockResolvedValue(undefined),
+  };
   const gateEvents: EpisodeSynthesisGateEvent[] = [];
   const lane = new EpisodeSynthesisLane({
     sessionManager,
     synthesizer,
     watermarkStore: watermarkStore as never,
+    workset,
     config: options.config ?? gateConfig(),
     scopeClassifier,
     companionNames: [COMPANION_NAME],
@@ -141,7 +239,7 @@ function makeHarness(options: {
     onGateEvent: (event) => { gateEvents.push(event); },
     ...(options.now ? { now: options.now } : {}),
   });
-  return { lane, entriesRef, sessionManager, synthesizer, watermarkStore, scopeClassifier, gateEvents };
+  return { lane, entriesRef, sessionManager, synthesizer, watermarkStore, workset, scopeClassifier, gateEvents };
 }
 
 function timerAction() {
@@ -194,6 +292,159 @@ describe('EpisodeSynthesisLane', () => {
       minRelevantTurns: 10,
     });
     expect(getRecentDiagnosticLogRecords()[0]?.message).toContain('no new messages');
+  });
+
+  it('drains every changed session sequentially and checkpoints each success', async () => {
+    const workItems = Array.from({ length: 25 }, (_, index) => ({
+      purpose: 'episodic_synthesis' as const,
+      logicalSessionId: `discord:drain-${String(index).padStart(2, '0')}`,
+      revision: index + 1,
+      activityKind: 'direct_message' as const,
+      checkpointRevision: 0,
+    }));
+    const workset = {
+      enumerate: vi.fn().mockResolvedValue(workItems),
+      claim: vi.fn(async (input: {
+        purpose: 'episodic_synthesis';
+        logicalSessionId: string;
+        revision: number;
+        claimantId: string;
+      }) => ({
+        ...workItems.find(item => item.logicalSessionId === input.logicalSessionId)!,
+        claimantId: input.claimantId,
+        claimedAtMs: WATERMARK_END_MS,
+      })),
+      resumeClaim: vi.fn(),
+      checkpoint: vi.fn().mockResolvedValue(undefined),
+    };
+    const active = { current: 0, maximum: 0 };
+    const harness = makeHarness({ entries: mentionEntries(12) });
+    harness.synthesizer.run.mockImplementation(async () => {
+      active.current += 1;
+      active.maximum = Math.max(active.maximum, active.current);
+      await Promise.resolve();
+      active.current -= 1;
+      return {
+        consideredEntries: 12,
+        candidateEpisodeCount: 1,
+        createdEpisodes: [],
+        skippedEpisodeIds: [],
+        linkedArcs: [],
+      };
+    });
+    const lane = new EpisodeSynthesisLane({
+      sessionManager: harness.sessionManager,
+      synthesizer: harness.synthesizer,
+      watermarkStore: harness.watermarkStore as never,
+      workset,
+      config: gateConfig(),
+      scopeClassifier: harness.scopeClassifier,
+      companionNames: [COMPANION_NAME],
+      companionAuthorIds: [COMPANION_AUTHOR_ID],
+    });
+
+    await lane.execute(timerAction());
+
+    expect(harness.synthesizer.run.mock.calls.map(([input]) => input.sessionId)).toEqual(
+      workItems.map(item => item.logicalSessionId),
+    );
+    expect(active.maximum).toBe(1);
+    expect(workset.checkpoint).toHaveBeenCalledTimes(25);
+    expect(workset.checkpoint).toHaveBeenLastCalledWith({
+      purpose: 'episodic_synthesis',
+      logicalSessionId: 'discord:drain-24',
+      revision: 25,
+      claimantId: 'episode-synthesis-drain',
+    });
+  });
+
+  it('leaves only failed work retryable and a restarted lane resumes it', async () => {
+    const sessionIds = ['discord:episode-a', 'discord:episode-b', 'discord:episode-c'];
+    const workset = makeStatefulWorkset(sessionIds);
+    const first = makeHarness({ entries: mentionEntries(12), scope: 'direct' });
+    first.synthesizer.run.mockImplementation(async ({ sessionId }: { sessionId: string }) => {
+      if (sessionId === 'discord:episode-b') throw new Error('provider unavailable');
+      return {
+        consideredEntries: 12,
+        candidateEpisodeCount: 1,
+        createdEpisodes: [],
+        skippedEpisodeIds: [],
+        linkedArcs: [],
+      };
+    });
+    const firstLane = new EpisodeSynthesisLane({
+      sessionManager: first.sessionManager,
+      synthesizer: first.synthesizer,
+      watermarkStore: first.watermarkStore as never,
+      workset,
+      config: gateConfig(),
+      scopeClassifier: first.scopeClassifier,
+    });
+
+    await expect(firstLane.execute(timerAction())).rejects.toThrow(
+      'Episode synthesis drain failed for 1 session(s)',
+    );
+    expect(first.synthesizer.run.mock.calls.map(([input]) => input.sessionId)).toEqual(sessionIds);
+    expect(await workset.enumerate('episodic_synthesis')).toEqual([
+      expect.objectContaining({
+        logicalSessionId: 'discord:episode-b',
+        claimantId: 'episode-synthesis-drain',
+      }),
+    ]);
+
+    const restarted = makeHarness({ entries: mentionEntries(12), scope: 'direct' });
+    const restartedLane = new EpisodeSynthesisLane({
+      sessionManager: restarted.sessionManager,
+      synthesizer: restarted.synthesizer,
+      watermarkStore: restarted.watermarkStore as never,
+      workset,
+      config: gateConfig(),
+      scopeClassifier: restarted.scopeClassifier,
+    });
+    await restartedLane.execute(timerAction());
+
+    expect(restarted.synthesizer.run).toHaveBeenCalledTimes(1);
+    expect(restarted.synthesizer.run).toHaveBeenCalledWith({
+      sessionId: 'discord:episode-b',
+      sourceMessageId: 'timer-1',
+    });
+    await expect(workset.enumerate('episodic_synthesis')).resolves.toEqual([]);
+  });
+
+  it('load: coalesces trigger pressure while keeping episode model concurrency at one', async () => {
+    const sessionIds = Array.from({ length: 40 }, (_, index) => `discord:load-${index}`);
+    const workset = makeStatefulWorkset(sessionIds);
+    const harness = makeHarness({ entries: mentionEntries(12), scope: 'direct' });
+    let activeCalls = 0;
+    let maximumActiveCalls = 0;
+    harness.synthesizer.run.mockImplementation(async () => {
+      activeCalls += 1;
+      maximumActiveCalls = Math.max(maximumActiveCalls, activeCalls);
+      await new Promise<void>(resolve => queueMicrotask(resolve));
+      activeCalls -= 1;
+      return {
+        consideredEntries: 12,
+        candidateEpisodeCount: 1,
+        createdEpisodes: [],
+        skippedEpisodeIds: [],
+        linkedArcs: [],
+      };
+    });
+    const lane = new EpisodeSynthesisLane({
+      sessionManager: harness.sessionManager,
+      synthesizer: harness.synthesizer,
+      watermarkStore: harness.watermarkStore as never,
+      workset,
+      config: gateConfig(),
+      scopeClassifier: harness.scopeClassifier,
+    });
+
+    await Promise.all(Array.from({ length: 12 }, () => lane.execute(timerAction())));
+
+    expect(harness.synthesizer.run).toHaveBeenCalledTimes(40);
+    expect(maximumActiveCalls).toBe(1);
+    expect(workset.enumerate).toHaveBeenCalledTimes(1);
+    await expect(workset.enumerate('episodic_synthesis')).resolves.toEqual([]);
   });
 
   it('Gate 1 treats a future processing watermark as invalid so current traffic can recover the lane', async () => {
@@ -316,9 +567,9 @@ describe('EpisodeSynthesisLane', () => {
     });
     expect(candidate).toMatchObject({
       kind: EPISODE_SYNTHESIS_ACTION_KIND,
-      dedupeKey: `${EPISODE_SYNTHESIS_ACTION_KIND}:discord:room-1`,
+      dedupeKey: `${EPISODE_SYNTHESIS_ACTION_KIND}:drain`,
       payload: {
-        sessionId: 'discord:room-1',
+        sourceChannelId: 'discord:room-1',
         trigger: 'turn_threshold',
         channelType: 'discord',
       },
@@ -358,7 +609,7 @@ describe('EpisodeSynthesisLane', () => {
     const candidate = harness.lane.noteTurn({ id: 'self-2', channelId, channelType: 'terminal' });
     expect(candidate).toMatchObject({
       kind: EPISODE_SYNTHESIS_ACTION_KIND,
-      payload: { sessionId: channelId, trigger: 'turn_threshold' },
+      payload: { sourceChannelId: channelId, trigger: 'turn_threshold' },
     });
 
     await harness.lane.execute({
@@ -384,16 +635,14 @@ describe('EpisodeSynthesisLane', () => {
     });
   });
 
-  it('emits one timer gate-evaluation action per recent session', () => {
+  it('emits one companion-level timer drain action', () => {
     const harness = makeHarness();
-    const actions = harness.lane.inferTimerActions();
-    expect(actions).toHaveLength(1);
-    expect(actions[0]).toMatchObject({
+    expect(harness.lane.inferTimerAction()).toMatchObject({
       kind: EPISODE_SYNTHESIS_ACTION_KIND,
       payload: {
-        sessionId: 'discord:room-1',
         trigger: 'timer',
       },
+      dedupeKey: `${EPISODE_SYNTHESIS_ACTION_KIND}:drain`,
     });
   });
 
@@ -407,7 +656,6 @@ describe('EpisodeSynthesisLane', () => {
       channelId: sessionId,
       channelType: 'discord',
     })).toBeNull();
-    expect(harness.lane.inferTimerActions()).toEqual([]);
     await harness.lane.execute({
       ...timerAction(),
       channelId: sessionId,

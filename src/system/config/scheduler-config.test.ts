@@ -62,7 +62,8 @@ function buildValidSchedulerConfig(): Record<string, unknown> {
       group: { minIntervalMinutes: 20, minNewEntries: 12 },
     },
     episodeSynthesis: {
-      timerIntervalMinutes: 30,
+      daytimeSlots: ['09:00', '12:00', '15:00', '18:00'],
+      timezone: 'local',
       turnThreshold: 24,
       minRelevantTurns: 10,
       transcriptMessageLimit: 96,
@@ -774,6 +775,45 @@ describe('scheduler config seed defaults', () => {
       writeJson(join(seedDir, SCHEDULER_SEED_FILE_NAME), config);
       expect(() => loadSchedulerSeedDefaults({ seedDir })).toThrow(
         'episodeSynthesis.minRelevantTurns must be an integer >= 1',
+      );
+    });
+  });
+
+  it('owns episode synthesis as explicit daytime wall-clock slots', () => {
+    withSeedDir((seedDir) => {
+      const config = buildValidSchedulerConfig();
+      writeJson(join(seedDir, SCHEDULER_SEED_FILE_NAME), config);
+
+      expect(loadSchedulerSeedDefaults({ seedDir }).episodeSynthesis).toMatchObject({
+        daytimeSlots: ['09:00', '12:00', '15:00', '18:00'],
+        timezone: 'local',
+        turnThreshold: 24,
+      });
+    });
+  });
+
+  it('rejects missing, duplicate, or invalid episode-synthesis daytime slots', () => {
+    withSeedDir((seedDir) => {
+      const config = buildValidSchedulerConfig();
+      config.episodeSynthesis = {
+        ...(config.episodeSynthesis as Record<string, unknown>),
+        daytimeSlots: ['09:00', '09:00'],
+      };
+      writeJson(join(seedDir, SCHEDULER_SEED_FILE_NAME), config);
+      expect(() => loadSchedulerSeedDefaults({ seedDir })).toThrow(
+        'episodeSynthesis.daytimeSlots must contain unique HH:mm local times',
+      );
+    });
+
+    withSeedDir((seedDir) => {
+      const config = buildValidSchedulerConfig();
+      config.episodeSynthesis = {
+        ...(config.episodeSynthesis as Record<string, unknown>),
+        daytimeSlots: [],
+      };
+      writeJson(join(seedDir, SCHEDULER_SEED_FILE_NAME), config);
+      expect(() => loadSchedulerSeedDefaults({ seedDir })).toThrow(
+        'episodeSynthesis.daytimeSlots must be a non-empty array',
       );
     });
   });

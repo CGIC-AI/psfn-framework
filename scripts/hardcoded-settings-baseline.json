@@ -7176,22 +7176,10 @@
     },
     {
       "file": "src/faculties/memory/episodic/synthesis-lane.ts",
-      "name": "DEFAULT_TIMER_SESSION_LIMIT",
-      "value": "20"
-    },
-    {
-      "file": "src/faculties/memory/episodic/synthesis-lane.ts",
       "name": "EpisodeSynthesisLane.buildActionCandidate.maxRetries",
       "value": "1",
       "form": "object-member",
       "note": "Existing mutable policy candidate EpisodeSynthesisLane.buildActionCandidate.maxRetries; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
-    },
-    {
-      "file": "src/faculties/memory/episodic/synthesis-lane.ts",
-      "name": "EpisodeSynthesisLane.timerIntervalMs.$call:return-arithmetic:AsteriskToken#1",
-      "value": "60_000",
-      "form": "return-arithmetic",
-      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
     },
     {
       "file": "src/faculties/memory/episodic/synthesis-lane.ts",

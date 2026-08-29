@@ -3,6 +3,10 @@ import type { InferredPostTurnAction, PostTurnActionCandidate, SubstrateMessage 
 import type { Episode, EpisodeArc } from '../../../shared/contracts/episodic-memory.js';
 import type { SessionEntry } from '../../../core/session/types.js';
 import type { SessionManager } from '../../../core/session/manager.js';
+import type {
+  ConversationalActivityWorkItem,
+  ConversationalActivityWorksetPort,
+} from '../../../core/session/conversational-activity-workset.js';
 import {
   isExperientialSelfDirectedSessionId,
   isTestingSessionId,
@@ -20,9 +24,9 @@ const log = createComponentLogger('EpisodeSynthesisLane');
 
 export const EPISODE_SYNTHESIS_ACTION_KIND = 'memory.episode-synthesis.run';
 export const EPISODE_SYNTHESIS_TIMER_TASK_ID = 'memory.episode-synthesis.timer';
+export const EPISODE_SYNTHESIS_DRAIN_CLAIMANT_ID = 'episode-synthesis-drain';
 
 const EPISODIC_SYNTHESIS_PROCESSOR = 'episodic_synthesis';
-const DEFAULT_TIMER_SESSION_LIMIT = 20;
 const MAX_BEHAVIORAL_SUMMARY_WRITES = 1;
 
 export type EpisodeSynthesisTrigger = 'timer' | 'turn_threshold';
@@ -49,13 +53,15 @@ export interface EpisodeSynthesisGateEvent {
 }
 
 type SynthesisLaneSessionReader = Pick<SessionManager, 'resolveSessionChannelId' | 'getRecentMessages'>
-  & Partial<Pick<SessionManager, 'listRecentSessions' | 'isSessionRetiredOrQuarantined'>>;
+  & Partial<Pick<SessionManager, 'isSessionRetiredOrQuarantined'>>;
 
 export interface EpisodeSynthesisLaneOptions {
   sessionManager: SynthesisLaneSessionReader;
   synthesizer: Pick<EpisodicSynthesizer, 'run'>;
   /** Read-only watermark access shared with the synthesizer's durable scope. */
   watermarkStore: Pick<EpisodicStorePort, 'getProcessingWatermark'>;
+  /** Durable changed-session workset shared by all episode drain triggers. */
+  workset: ConversationalActivityWorksetPort;
   /** JSON-owned gate config (scheduler.json `episodeSynthesis`). Required. */
   config: EpisodeSynthesisLaneConfig;
   /** Canonical direct-vs-group scope classification; absent => direct scope. */
@@ -69,6 +75,8 @@ export interface EpisodeSynthesisLaneOptions {
   /** Gate telemetry sink; wired to the runtime event bus by composition. */
   onGateEvent?: (event: EpisodeSynthesisGateEvent) => void;
   now?: () => number;
+  /** Stable across restart so an interrupted session claim can be reclaimed. */
+  claimantId?: string;
 }
 
 function assertPositiveInteger(value: number, field: string): number {
@@ -190,6 +198,7 @@ export class EpisodeSynthesisLane {
   private readonly sessionManager: SynthesisLaneSessionReader;
   private readonly synthesizer: Pick<EpisodicSynthesizer, 'run'>;
   private readonly watermarkStore: Pick<EpisodicStorePort, 'getProcessingWatermark'>;
+  private readonly workset: ConversationalActivityWorksetPort;
   private readonly config: EpisodeSynthesisLaneConfig;
   private readonly scopeClassifier: NearTurnMemoryScopeClassifierPort | null;
   private readonly companionNames: readonly string[];
@@ -197,33 +206,32 @@ export class EpisodeSynthesisLane {
   private readonly memoryWriter: Pick<MemoryWriter, 'write'> | null;
   private readonly onGateEvent?: (event: EpisodeSynthesisGateEvent) => void;
   private readonly now: () => number;
-  private readonly turnCountBySession = new Map<string, number>();
+  private readonly claimantId: string;
+  private turnCount = 0;
+  private activeDrain: Promise<void> | null = null;
 
   constructor(options: EpisodeSynthesisLaneOptions) {
     this.sessionManager = options.sessionManager;
-    assertPositiveInteger(options.config.timerIntervalMinutes, 'timerIntervalMinutes');
     assertPositiveInteger(options.config.turnThreshold, 'turnThreshold');
     assertPositiveInteger(options.config.minRelevantTurns, 'minRelevantTurns');
     assertPositiveInteger(options.config.transcriptMessageLimit, 'transcriptMessageLimit');
     this.config = options.config;
     this.synthesizer = options.synthesizer;
     this.watermarkStore = options.watermarkStore;
+    this.workset = options.workset;
     this.scopeClassifier = options.scopeClassifier ?? null;
     this.companionNames = options.companionNames ?? [];
     this.companionAuthorIds = options.companionAuthorIds ?? [];
     this.memoryWriter = options.memoryWriter ?? null;
     this.onGateEvent = options.onGateEvent;
     this.now = options.now ?? (() => Date.now());
-  }
-
-  get timerIntervalMs(): number {
-    return this.config.timerIntervalMinutes * 60_000;
+    this.claimantId = options.claimantId?.trim() || EPISODE_SYNTHESIS_DRAIN_CLAIMANT_ID;
   }
 
   /**
-   * Turn-threshold trigger: counts turns per session and forces a gate
-   * evaluation once `turnThreshold` turns accumulate before the timer fires.
-   * Deterministic and free — the gate itself decides whether anything runs.
+   * Turn-threshold trigger: counts companion-level conversational turns and
+   * requests one shared drain once `turnThreshold` turns accumulate before the
+   * next daytime slot. The durable workset decides which sessions need work.
    */
   noteTurn(
     message: Pick<SubstrateMessage, 'id' | 'channelId'>
@@ -238,42 +246,71 @@ export class EpisodeSynthesisLane {
     const sessionId = this.sessionManager.resolveSessionChannelId(message.channelId);
     if (isTestingSessionId(sessionId)) return null;
     if (this.sessionManager.isSessionRetiredOrQuarantined?.(sessionId)) return null;
-    const nextCount = (this.turnCountBySession.get(sessionId) ?? 0) + 1;
+    const nextCount = this.turnCount + 1;
     if (nextCount < this.config.turnThreshold) {
-      this.turnCountBySession.set(sessionId, nextCount);
+      this.turnCount = nextCount;
       return null;
     }
-    this.turnCountBySession.set(sessionId, 0);
-    return this.buildActionCandidate(sessionId, message.channelId, 'turn_threshold', message.channelType);
+    this.turnCount = 0;
+    return this.buildActionCandidate('turn_threshold', message.channelId, message.channelType);
   }
 
   /**
-   * Timer trigger: evaluated by the scheduler task on `timerIntervalMinutes`.
-   * Emits one gate-evaluation action per recent session; the deterministic
-   * gates inside `execute` decide whether synthesis actually runs.
+   * Daytime slot trigger. Every slot adds one companion-level drain demand;
+   * it never fans out into per-session queued actions.
    */
-  inferTimerActions(options: { limit?: number } = {}): PostTurnActionCandidate[] {
-    if (!this.sessionManager.listRecentSessions) {
-      return [];
-    }
-    const limit = options.limit ?? DEFAULT_TIMER_SESSION_LIMIT;
-    const actions: PostTurnActionCandidate[] = [];
-    for (const session of this.sessionManager.listRecentSessions(limit)) {
-      const sessionId = this.sessionManager.resolveSessionChannelId(session.channelId);
-      if (isTestingSessionId(sessionId)) continue;
-      if (sessionId.startsWith('internal:') && !isExperientialSelfDirectedSessionId(sessionId)) continue;
-      if (this.sessionManager.isSessionRetiredOrQuarantined?.(sessionId)) continue;
-      const channelType = 'channelType' in session
-        ? (session as { channelType?: SubstrateMessage['channelType'] }).channelType
-        : undefined;
-      actions.push(this.buildActionCandidate(sessionId, session.channelId, 'timer', channelType));
-      this.turnCountBySession.set(sessionId, 0);
-    }
-    return actions;
+  inferTimerAction(): PostTurnActionCandidate {
+    this.turnCount = 0;
+    return this.buildActionCandidate('timer');
   }
 
   async execute(action: Pick<InferredPostTurnAction, 'id' | 'channelId' | 'sourceMessageId' | 'payload'>): Promise<void> {
-    const sessionId = this.resolveActionSessionId(action);
+    if (this.activeDrain) {
+      return this.activeDrain;
+    }
+    let drain!: Promise<void>;
+    drain = this.drain(action).finally(() => {
+      if (this.activeDrain === drain) this.activeDrain = null;
+    });
+    this.activeDrain = drain;
+    return drain;
+  }
+
+  private async drain(
+    action: Pick<InferredPostTurnAction, 'id' | 'channelId' | 'sourceMessageId' | 'payload'>,
+  ): Promise<void> {
+    const workItems = await this.workset.enumerate('episodic_synthesis');
+    const failures: Error[] = [];
+    for (const workItem of workItems) {
+      const claim = await this.workset.claim({
+        purpose: 'episodic_synthesis',
+        logicalSessionId: workItem.logicalSessionId,
+        revision: workItem.revision,
+        claimantId: this.claimantId,
+      });
+      if (!claim) continue;
+      try {
+        await this.executeSession(action, workItem);
+        await this.workset.checkpoint({
+          purpose: 'episodic_synthesis',
+          logicalSessionId: claim.logicalSessionId,
+          revision: claim.revision,
+          claimantId: claim.claimantId,
+        });
+      } catch (error) {
+        failures.push(error instanceof Error ? error : new Error(String(error)));
+      }
+    }
+    if (failures.length > 0) {
+      throw new AggregateError(failures, `Episode synthesis drain failed for ${failures.length} session(s)`);
+    }
+  }
+
+  private async executeSession(
+    action: Pick<InferredPostTurnAction, 'id' | 'channelId' | 'sourceMessageId' | 'payload'>,
+    workItem: ConversationalActivityWorkItem,
+  ): Promise<void> {
+    const sessionId = workItem.logicalSessionId;
     const trigger = this.resolveActionTrigger(action);
 
     if (isTestingSessionId(sessionId)) {
@@ -363,7 +400,11 @@ export class EpisodeSynthesisLane {
     // Gate 2 (deterministic): minimum companion-relevant turn count. Below
     // the minimum the lane holds; the watermark does not advance, so the
     // unprocessed turns accumulate into the next period.
-    const scope = await this.resolveMemoryScope(channelId, this.resolveActionChannelType(action));
+    const scope = await this.resolveMemoryScope(
+      channelId,
+      this.resolveActionChannelType(action),
+      workItem.activityKind,
+    );
     const relevantTurnCount = scope === 'direct'
       ? newEntries.length
       : newEntries.filter(entry => (
@@ -427,20 +468,18 @@ export class EpisodeSynthesisLane {
   }
 
   private buildActionCandidate(
-    sessionId: string,
-    sourceChannelId: string,
     trigger: EpisodeSynthesisTrigger,
-    channelType: SubstrateMessage['channelType'] | undefined,
+    sourceChannelId?: string,
+    channelType?: SubstrateMessage['channelType'],
   ): PostTurnActionCandidate {
     return {
       kind: EPISODE_SYNTHESIS_ACTION_KIND,
       payload: {
-        sessionId,
-        sourceChannelId,
         trigger,
+        ...(sourceChannelId ? { sourceChannelId } : {}),
         ...(channelType ? { channelType } : {}),
       },
-      dedupeKey: `${EPISODE_SYNTHESIS_ACTION_KIND}:${sessionId}`,
+      dedupeKey: `${EPISODE_SYNTHESIS_ACTION_KIND}:drain`,
       maxRetries: 1,
     };
   }
@@ -454,7 +493,14 @@ export class EpisodeSynthesisLane {
   private async resolveMemoryScope(
     channelId: string,
     channelType: SubstrateMessage['channelType'] | undefined,
+    activityKind: ConversationalActivityWorkItem['activityKind'],
   ): Promise<'direct' | 'group'> {
+    if (activityKind === 'group_conversation') {
+      return 'group';
+    }
+    if (activityKind === 'direct_message' || activityKind === 'inter_companion') {
+      return 'direct';
+    }
     if (isExperientialSelfDirectedSessionId(channelId)) {
       return 'direct';
     }
@@ -500,14 +546,6 @@ export class EpisodeSynthesisLane {
       minRelevantTurns: this.config.minRelevantTurns,
       timestamp: this.now(),
     });
-  }
-
-  private resolveActionSessionId(action: Pick<InferredPostTurnAction, 'channelId' | 'payload'>): string {
-    const payloadSession = action.payload['sessionId'];
-    if (typeof payloadSession === 'string' && payloadSession.trim().length > 0) {
-      return payloadSession.trim();
-    }
-    return this.sessionManager.resolveSessionChannelId(action.channelId);
   }
 
   private resolveActionTrigger(action: Pick<InferredPostTurnAction, 'payload'>): EpisodeSynthesisTrigger {

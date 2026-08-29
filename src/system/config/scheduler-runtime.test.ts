@@ -23,7 +23,8 @@ const MEMORY_LANE_BLOCKS = {
     group: { minIntervalMinutes: 15, minNewEntries: 8 },
   },
   episodeSynthesis: {
-    timerIntervalMinutes: 30,
+    daytimeSlots: ['09:00', '12:00', '15:00', '18:00'],
+    timezone: 'local',
     turnThreshold: 24,
     minRelevantTurns: 10,
     transcriptMessageLimit: 96,

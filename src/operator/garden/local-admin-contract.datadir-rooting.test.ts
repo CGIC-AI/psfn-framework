@@ -248,10 +248,12 @@ describe('createInProcessGardenAdminContract per-companion dataDir rooting (dnll
 
   it('uses nightly cadence rather than the wiki review window for watermark staleness', () => {
     const definitions = buildEpisodicWatermarkLaneDefinitions({
-      episodeSynthesis: { timerIntervalMinutes: 30 },
+      episodeSynthesis: { daytimeSlots: ['09:00', '12:00', '15:00', '18:00'] },
       arcFormation: { passIntervalDays: 6 },
     });
 
+    expect(definitions.find(definition => definition.processor === 'episodic_synthesis')?.intervalMs)
+      .toBe(15 * 60 * 60_000);
     expect(definitions.find(definition => definition.processor === 'wiki_pass')?.intervalMs)
       .toBe(24 * 60 * 60_000);
   });

@@ -43,6 +43,9 @@ const EXPECTED_EXCLUDED_FIELD_KEYS = new Set([
   'episodicProcessingRestWindowEndLocalTime',
   'episodicProcessingRestWindowTimeZone',
   'episodicProcessingInactivityThresholdMinutes',
+  'episodeSynthesisDaytimeSlots',
+  'episodeSynthesisTimezone',
+  'episodeSynthesisTurnThreshold',
 ]);
 
 // The five curated panels whose bindings back CURATED_RENDERED_FIELD_KEYS.

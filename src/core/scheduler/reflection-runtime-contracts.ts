@@ -22,6 +22,7 @@ import type { EpisodeArcWeaver } from '../../faculties/memory/episodic/arc-forma
 import type { DreamMeaningPass } from '../../faculties/memory/episodic/dream-meaning-pass.js';
 import type { SleeptimeWikiPass } from '../../faculties/wiki/sleeptime-wiki-pass.js';
 import type { NearTurnMemoryScopeClassifierPort } from '../../faculties/memory/near-turn-memory-lane.js';
+import type { ConversationalActivityWorksetPort } from '../session/conversational-activity-workset.js';
 import type { ProactiveOutboundDispatcher } from '../intention/proactive-outbound.js';
 import type { OutreachOutboxStore } from '../intention/outreach-outbox.js';
 import type { SocialDesireOutboundRuntime } from '../intention/social-desire-outreach.js';
@@ -219,6 +220,8 @@ export interface ReflectionRuntimeOptions {
     EpisodicStorePort,
     'getProcessingWatermark' | 'upsertProcessingWatermark'
   > | null;
+  /** Durable changed-session workset consumed by episodic and sleeptime drains. */
+  conversationalActivityWorkset?: ConversationalActivityWorksetPort | null;
   /** Companion aliases for deterministic relevance classification. */
   companionNames?: readonly string[];
   /** Companion author ids (e.g. Discord bot id) for mention detection. */

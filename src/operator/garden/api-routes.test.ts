@@ -4364,6 +4364,21 @@ describe('AdminServer JSON API routes', () => {
         ['fields', 'fieldSchemas'],
         'backgroundMaintenanceIntervalMs',
       );
+      const episodeSynthesisDaytimeSlotsField = getNamedSchemaEntry(
+        schemaRoot,
+        ['fields', 'fieldSchemas'],
+        'episodeSynthesisDaytimeSlots',
+      );
+      const episodeSynthesisTimezoneField = getNamedSchemaEntry(
+        schemaRoot,
+        ['fields', 'fieldSchemas'],
+        'episodeSynthesisTimezone',
+      );
+      const episodeSynthesisTurnThresholdField = getNamedSchemaEntry(
+        schemaRoot,
+        ['fields', 'fieldSchemas'],
+        'episodeSynthesisTurnThreshold',
+      );
       const capabilityTierField = getNamedSchemaEntry(schemaRoot, ['fields', 'fieldSchemas'], 'capabilityTier');
       const compositionalPolicyField = getNamedSchemaEntry(schemaRoot, ['fields', 'fieldSchemas'], 'compositionalPolicy');
       const sttProviderField = getNamedSchemaEntry(schemaRoot, ['fields', 'fieldSchemas'], 'sttProvider');
@@ -4386,6 +4401,15 @@ describe('AdminServer JSON API routes', () => {
       expect(readStringMetadata(modelRoleAssignmentsField, ['type', 'kind', 'valueType', 'inputType'])).toBe('object');
       expect(readStringMetadata(modelRosterField, ['type', 'kind', 'valueType', 'inputType'])).toBe('object');
       expect(readOwnerFiles(backgroundMaintenanceIntervalMsField)).toContain('scheduler.json');
+      expect(readOwnerFiles(episodeSynthesisDaytimeSlotsField)).toContain('scheduler.json');
+      expect(readStringMetadata(
+        episodeSynthesisDaytimeSlotsField,
+        ['type', 'kind', 'valueType', 'inputType'],
+      )).toBe('string_array');
+      expect(readOwnerFiles(episodeSynthesisTimezoneField)).toContain('scheduler.json');
+      expect(readEnumLikeValues(episodeSynthesisTimezoneField)).toEqual(['local', 'utc']);
+      expect(readOwnerFiles(episodeSynthesisTurnThresholdField)).toContain('scheduler.json');
+      expect(readNumberMetadata(episodeSynthesisTurnThresholdField, ['min', 'minimum'])).toBe(1);
       expect(readOwnerFiles(capabilityTierField)).toContain('capability-tier.json');
       expect(readOwnerFiles(compositionalPolicyField)).toContain('settings.json');
       expect(readStringMetadata(compositionalPolicyField, ['type', 'kind', 'valueType', 'inputType'])).toBe('object');
@@ -4533,7 +4557,8 @@ describe('AdminServer JSON API routes', () => {
         group: { minIntervalMinutes: 15, minNewEntries: 8 },
       },
       episodeSynthesis: {
-        timerIntervalMinutes: 30,
+        daytimeSlots: ['09:00', '12:00', '15:00', '18:00'],
+        timezone: 'local',
         turnThreshold: 24,
         minRelevantTurns: 10,
         transcriptMessageLimit: 96,

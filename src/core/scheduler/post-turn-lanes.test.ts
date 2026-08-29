@@ -82,6 +82,12 @@ describe('reflection post-turn lane split (E5.2)', () => {
     const dreamMeaningPass = { run: vi.fn() };
     const episodicSynthesizer = { run: vi.fn() };
     const episodicWatermarkStore = { getProcessingWatermark: vi.fn(async () => undefined) };
+    const conversationalActivityWorkset = {
+      enumerate: vi.fn().mockResolvedValue([]),
+      claim: vi.fn(),
+      resumeClaim: vi.fn(),
+      checkpoint: vi.fn(),
+    };
     const llmProvider = { stream: vi.fn(), complete: vi.fn() };
     const inferers: PostTurnActionInferer[] = [];
 
@@ -124,7 +130,8 @@ describe('reflection post-turn lane split (E5.2)', () => {
           group: { minIntervalMinutes: 15, minNewEntries: 8 },
         },
         episodeSynthesis: {
-          timerIntervalMinutes: 30,
+          daytimeSlots: ['09:00', '12:00', '15:00', '18:00'],
+          timezone: 'local',
           turnThreshold: 5,
           minRelevantTurns: 10,
           transcriptMessageLimit: 96,
@@ -135,6 +142,7 @@ describe('reflection post-turn lane split (E5.2)', () => {
           minSingleEntryChars: 120,
         },
         episodicWatermarkStore: fromAny(episodicWatermarkStore),
+        conversationalActivityWorkset: fromAny(conversationalActivityWorkset),
         companionNames: ['Companion'],
         companionAuthorIds: ['bot-1'],
         episodicSynthesizer,
@@ -195,9 +203,15 @@ describe('reflection post-turn lane split (E5.2)', () => {
     expect(task?.operations).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: SLEEPTIME_REST_WINDOW_OPERATION_ID }),
     ]));
-    const timerTask = harness.scheduler.getTask(EPISODE_SYNTHESIS_TIMER_TASK_ID);
-    expect(timerTask).toBeDefined();
-    expect(timerTask?.intervalMs).toBe(30 * 60_000);
+    const timerTasks = harness.scheduler.listTasks()
+      .filter(task => task.id.startsWith(`${EPISODE_SYNTHESIS_TIMER_TASK_ID}:`));
+    expect(timerTasks).toHaveLength(4);
+    expect(timerTasks.map(task => task.cadence)).toEqual([
+      { kind: 'daily', hour: 9, minute: 0, timezone: 'local' },
+      { kind: 'daily', hour: 12, minute: 0, timezone: 'local' },
+      { kind: 'daily', hour: 15, minute: 0, timezone: 'local' },
+      { kind: 'daily', hour: 18, minute: 0, timezone: 'local' },
+    ]);
     // The heavy sleeptime handler is registered for the scheduler-owned action
     // kind; the near-turn and episode-synthesis handlers are separate lanes.
     const registeredKinds = harness.postTurnActions.registerHandler.mock.calls.map(call => call[0]);

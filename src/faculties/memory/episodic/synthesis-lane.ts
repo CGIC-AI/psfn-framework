@@ -178,9 +178,11 @@ function buildBehavioralSummaryWrites(input: {
 /**
  * Candidate-episode synthesis lane with a deterministic trigger gate (E5.3).
  *
- * Trigger: the scheduler timer OR a per-session turn threshold, whichever
- * comes first (both JSON-owned). The gate then runs two deterministic checks
- * with zero LLM spend when closed:
+ * Explicit daytime scheduler slots and a companion-level turn threshold both
+ * request the same action. One drain snapshots the durable changed-session
+ * workset, processes its claims sequentially, and checkpoints only successful
+ * evaluations. Each claimed session then runs two deterministic checks with
+ * zero LLM spend when closed:
  *
  * 1. Gate 1 — new messages since the durable processing watermark. No new
  *    messages => no-op.
@@ -191,8 +193,9 @@ function buildBehavioralSummaryWrites(input: {
  *
  * Below the minimum the lane holds: because synthesis never ran, the
  * watermark does not advance, so unprocessed turns accumulate into the next
- * period (9 relevant now => hold; 25 total next period => process the whole
- * accumulated chunk). Every skip emits a typed gate event with a reason.
+ * changed revision (9 relevant now => hold; 25 total after more conversation
+ * => process the whole accumulated chunk). Every skip emits a typed gate event
+ * with a reason.
  */
 export class EpisodeSynthesisLane {
   private readonly sessionManager: SynthesisLaneSessionReader;

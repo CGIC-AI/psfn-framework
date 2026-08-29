@@ -170,6 +170,7 @@ import type { BackgroundWorkStorePort } from '../../core/agent/background-work/s
 import type { OperatorAlertSinkConfiguration } from '../../shared/contracts/operator-alerting.js';
 
 const log = createComponentLogger('GardenAdminContract');
+const DAY_MS = 24 * 60 * 60_000;
 
 /** Build the canonical operator-facing episodic watermark lanes. */
 export function buildEpisodicWatermarkLaneDefinitions(config: {
@@ -204,7 +205,7 @@ export function buildEpisodicWatermarkLaneDefinitions(config: {
       processor: 'sleep_consolidation',
       label: 'Sleep consolidation watermark',
       description: 'Durable nightly episode-consolidation progress.',
-      intervalMs: 24 * 60 * 60_000,
+      intervalMs: DAY_MS,
     },
     {
       processor: 'dream_meaning',
@@ -216,13 +217,13 @@ export function buildEpisodicWatermarkLaneDefinitions(config: {
       processor: 'wiki_pass',
       label: 'Sleeptime wiki watermark',
       description: 'Durable nightly wiki synthesis progress.',
-      intervalMs: 24 * 60 * 60_000,
+      intervalMs: DAY_MS,
     },
     {
       processor: 'arc_formation',
       label: 'Arc formation watermark',
       description: 'Durable cross-day episodic arc-formation progress.',
-      intervalMs: config.arcFormation.passIntervalDays * 24 * 60 * 60_000,
+      intervalMs: config.arcFormation.passIntervalDays * DAY_MS,
     },
   ];
 }

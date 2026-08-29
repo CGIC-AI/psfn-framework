@@ -358,6 +358,26 @@ describe('EpisodeSynthesisLane', () => {
     });
   });
 
+  it('does not synthesize an unchanged long conversation again on the next timer tick', async () => {
+    const workset = makeStatefulWorkset(['discord:unchanged-long-conversation']);
+    const harness = makeHarness({ entries: mentionEntries(24), scope: 'direct' });
+    const lane = new EpisodeSynthesisLane({
+      sessionManager: harness.sessionManager,
+      synthesizer: harness.synthesizer,
+      watermarkStore: harness.watermarkStore as never,
+      workset,
+      config: gateConfig(),
+      scopeClassifier: harness.scopeClassifier,
+    });
+
+    await lane.execute(timerAction());
+    await lane.execute(timerAction());
+
+    expect(harness.synthesizer.run).toHaveBeenCalledTimes(1);
+    expect(workset.enumerate).toHaveBeenCalledTimes(2);
+    expect(workset.checkpoint).toHaveBeenCalledTimes(1);
+  });
+
   it('leaves only failed work retryable and a restarted lane resumes it', async () => {
     const sessionIds = ['discord:episode-a', 'discord:episode-b', 'discord:episode-c'];
     const workset = makeStatefulWorkset(sessionIds);

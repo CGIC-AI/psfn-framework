@@ -39,9 +39,23 @@ import type {
   ReflectionRuntimeOptions,
 } from '../reflection-runtime-contracts.js';
 import type { Scheduler } from '../scheduler.js';
+import type { DailyRecurringCadence, RecurringCadenceTimezone } from '../types.js';
 
 const log = createComponentLogger('PostTurnRuntime');
 const DAY_MS = 24 * 60 * 60_000;
+
+function wallClockSlot(
+  localTime: string,
+  timezone: RecurringCadenceTimezone,
+): DailyRecurringCadence {
+  const [hourText, minuteText] = localTime.split(':');
+  return {
+    kind: 'daily',
+    hour: Number(hourText),
+    minute: Number(minuteText),
+    timezone,
+  };
+}
 
 export const SLEEPTIME_REST_WINDOW_OPERATION_ID = 'memory.sleeptime.rest-window';
 export const CONTACT_TRUST_DRIFT_REVIEW_OPERATION_ID = 'contacts.trust-drift-review.rest-window';
@@ -579,15 +593,14 @@ export function registerSchedulerOwnedPostTurnLanes(
       {
         executionMode: 'background',
         runtimeClass: MAINTENANCE_REFLECTION_RUNTIME_CLASS,
-        // Equal keys are one session's durable episodic-synthesis watermark.
-        // A newer trigger therefore subsumes queued demand, while a trigger
-        // observed during execution must survive as a successor evaluation.
+        // Every trigger targets the same durable companion-level workset. A
+        // newer queued trigger subsumes older demand, while demand observed
+        // during execution survives as a successor drain evaluation.
         coalescing: 'dedupe_key_with_durable_watermark',
       },
     );
     if (telemetryEventBus && runtimeOptions.episodeSynthesis) {
       for (const localTime of runtimeOptions.episodeSynthesis.daytimeSlots) {
-        const [hour, minute] = localTime.split(':').map(Number);
         const taskId = `${EPISODE_SYNTHESIS_TIMER_TASK_ID}:${localTime.replace(':', '-')}`;
         if (scheduler.getTask(taskId)) continue;
         scheduler.register({
@@ -597,12 +610,7 @@ export function registerSchedulerOwnedPostTurnLanes(
           scheduleSource: 'scheduler.json#episodeSynthesis.daytimeSlots',
           type: 'every',
           intervalMs: DAY_MS,
-          cadence: {
-            kind: 'daily',
-            hour: hour ?? 0,
-            minute: minute ?? 0,
-            timezone: runtimeOptions.episodeSynthesis.timezone,
-          },
+          cadence: wallClockSlot(localTime, runtimeOptions.episodeSynthesis.timezone),
           handler: async () => {
             const action = episodeSynthesisLane.inferTimerAction();
             const channelId = 'api:episode-synthesis';

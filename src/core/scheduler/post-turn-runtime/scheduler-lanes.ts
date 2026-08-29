@@ -121,6 +121,10 @@ export function createSchedulerOwnedPostTurnLanes(
     && runtimeOptions.conversationalActivityWorkset
     && runtimeOptions.coreMemoryStore
     && runtimeOptions.episodicProcessingRestWindow
+    && runtimeOptions.sleepConsolidator
+    && runtimeOptions.arcWeaver
+    && runtimeOptions.dreamMeaningPass
+    && runtimeOptions.sleeptimeWikiPass
   )
     ? new SleeptimeMemoryAgent({
       agent: agentLoop,
@@ -414,6 +418,10 @@ export function registerSchedulerOwnedPostTurnLanes(
       hasConversationalActivityWorkset: Boolean(runtimeOptions.conversationalActivityWorkset),
       hasCoreMemoryStore: Boolean(runtimeOptions.coreMemoryStore),
       hasRestWindow: Boolean(runtimeOptions.episodicProcessingRestWindow),
+      hasSleepConsolidator: Boolean(runtimeOptions.sleepConsolidator),
+      hasArcWeaver: Boolean(runtimeOptions.arcWeaver),
+      hasDreamMeaningPass: Boolean(runtimeOptions.dreamMeaningPass),
+      hasSleeptimeWikiPass: Boolean(runtimeOptions.sleeptimeWikiPass),
     });
   }
 

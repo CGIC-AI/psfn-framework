@@ -62,6 +62,8 @@ export interface ArcFormationOutcomeEvent {
 export interface ArcFormationRunInput {
   sessionId: string;
   sourceMessageId?: string;
+  throughRevision?: number;
+  throughOccurredAtMs?: number;
 }
 
 export interface ArcFormationRunResult {
@@ -263,7 +265,10 @@ export class EpisodeArcWeaver {
   }
 
   async run(input: ArcFormationRunInput): Promise<ArcFormationRunResult> {
-    const nowMs = this.now().getTime();
+    const runtimeNowMs = this.now().getTime();
+    const nowMs = input.throughOccurredAtMs === undefined
+      ? runtimeNowMs
+      : Math.min(runtimeNowMs, input.throughOccurredAtMs);
     const watermarkScope = {
       processor: ARC_FORMATION_PROCESSOR,
       sourceRef: input.sessionId,

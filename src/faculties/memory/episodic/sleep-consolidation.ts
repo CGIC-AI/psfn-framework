@@ -85,6 +85,10 @@ export interface SleepCycleConsolidationOptions {
 export interface SleepCycleConsolidationRunInput {
   sessionId: string;
   sourceMessageId?: string;
+  /** Inclusive L0 snapshot bound supplied by resumable sleeptime work. */
+  throughRevision?: number;
+  /** Inclusive source-activity time bound paired with throughRevision. */
+  throughOccurredAtMs?: number;
 }
 
 export interface SleepCycleConsolidationResult {
@@ -688,7 +692,10 @@ export class SleepCycleEpisodeConsolidator {
   }
 
   async run(input: SleepCycleConsolidationRunInput): Promise<SleepCycleConsolidationResult> {
-    const nowMs = this.now().getTime();
+    const runtimeNowMs = this.now().getTime();
+    const nowMs = input.throughOccurredAtMs === undefined
+      ? runtimeNowMs
+      : Math.min(runtimeNowMs, input.throughOccurredAtMs);
     const reviewFrom = toIsoInstant(nowMs - this.reviewWindowMs);
     const reviewTo = toIsoInstant(nowMs);
 
@@ -723,7 +730,7 @@ export class SleepCycleEpisodeConsolidator {
     const recentEntries = this.sessionReader.getRecentMessages(
       input.sessionId,
       this.transcriptMessageLimit,
-    );
+    ).filter(entry => input.throughRevision === undefined || entry.id <= input.throughRevision);
 
     // Stage 1 — candidate-then-consolidate.
     const consolidatedFromCandidates = await this.consolidateCandidates(

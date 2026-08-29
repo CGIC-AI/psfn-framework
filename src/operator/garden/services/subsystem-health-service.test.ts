@@ -15,6 +15,39 @@ function laneById(lanes: SubsystemLaneHealth[], id: string): SubsystemLaneHealth
 }
 
 describe('AdminSubsystemHealthDataService', () => {
+  it('returns injected content-free PostgreSQL ownership telemetry unchanged', async () => {
+    const bus = new EventBus();
+    const postgresPools = [{
+      process: 'agent' as const,
+      physicalPoolCount: 1,
+      totalCapacity: 3,
+      active: 1,
+      idle: 1,
+      waiting: 0,
+      highWaterConnections: 2,
+      authorities: [{
+        authorityIndex: 1,
+        authorityClass: 'schema_role' as const,
+        readOnly: false,
+        capacity: 3,
+        logicalStoreCount: 12,
+        applicationNames: ['psfn-memory'],
+        active: 1,
+        idle: 1,
+        waiting: 0,
+        highWaterActive: 2,
+        highWaterConnections: 2,
+        highWaterWaiting: 0,
+      }],
+    }];
+    const service = new AdminSubsystemHealthDataService({
+      eventBus: bus,
+      postgresPoolTelemetry: () => postgresPools,
+    });
+
+    expect((await service.getSnapshot()).postgresPools).toEqual(postgresPools);
+  });
+
   it('surfaces zero configured operator-alert sinks as a degraded Garden banner', async () => {
     const bus = new EventBus();
     const service = new AdminSubsystemHealthDataService({
@@ -495,5 +528,16 @@ describe('subsystem health page contract', () => {
     expect(page).toContain("lane.source === 'watermark'");
     expect(page).toContain('{#each watermarkLanes as lane (lane.id)}');
     expect(page).toContain('Episodic processor watermarks');
+  });
+
+  it('renders content-free PostgreSQL pool capacity and pressure', () => {
+    const page = readFileSync(
+      new URL('../../../../admin-ui/src/routes/subsystem-health/+page.svelte', import.meta.url),
+      'utf8',
+    );
+
+    expect(page).toContain('PostgreSQL connection pools');
+    expect(page).toContain('poolOwner.highWaterConnections');
+    expect(page).toContain('authority.applicationNames.join');
   });
 });

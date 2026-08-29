@@ -8,6 +8,10 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { loadConfig } from '../../system/config/load-config.js';
 import { createComponentLogger } from '../../shared/logger.js';
+import {
+  PostgresPoolOwner,
+  runWithPostgresPoolOwner,
+} from '../../persistence/postgres.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import { ensureRegistryFile } from '../../system/modules/registry.js';
 import { attachTerminalDebugObserver } from '../startup/support/terminal-observer.js';
@@ -118,6 +122,7 @@ import {
 } from '../../persistence/postgres/runtime-readiness.js';
 
 const log = createComponentLogger('Gateway');
+const postgresPoolOwner = new PostgresPoolOwner('gateway');
 
 ensureActiveTimezone();
 
@@ -1024,6 +1029,7 @@ async function main(): Promise<void> {
         { step: 'close fleet auth persistence', action: async () => { await fleetAuthPersistence?.close(); } },
         { step: 'stop channel adapters', action: () => stopGatewayChannelSurfaces(channelSurfaces) },
         { step: 'dispose intake screening', action: () => privilegedCore.intakeScreening.dispose() },
+        { step: 'close PostgreSQL pool owner', action: () => postgresPoolOwner.close() },
       ], log);
       log.info('Stopped');
     })();
@@ -1057,7 +1063,8 @@ function serializeMessage(msg: SubstrateMessage): Record<string, unknown> {
   };
 }
 
-main().catch((err) => {
+runWithPostgresPoolOwner(postgresPoolOwner, main).catch(async (err) => {
   log.error('Fatal error', { error: String(err) });
+  await postgresPoolOwner.close().catch(() => undefined);
   process.exit(1);
 });

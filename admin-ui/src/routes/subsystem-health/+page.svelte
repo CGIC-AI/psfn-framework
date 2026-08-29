@@ -175,6 +175,54 @@
       <span class="text-xs text-shadow-500">Auto-refreshes every 15s</span>
     </div>
 
+    <!-- Content-free PostgreSQL ownership and pressure. No URLs, SQL, or row data. -->
+    <section class="space-y-3">
+      <h2 class="text-base font-serif font-semibold text-shadow-900">
+        PostgreSQL connection pools
+        <span class="text-xs font-sans font-normal text-shadow-500">(process lifecycle)</span>
+      </h2>
+      {#if snapshot.postgresPools.length === 0}
+        <div class="card-garden p-4 text-sm text-shadow-500 italic">
+          No lifecycle-owned PostgreSQL pools are active in this process.
+        </div>
+      {:else}
+        <div class="space-y-4">
+          {#each snapshot.postgresPools as poolOwner (poolOwner.process)}
+            <article class="card-garden overflow-hidden">
+              <div class="px-5 py-3 bg-bark-50 border-b border-bark-100 flex flex-wrap items-center gap-x-5 gap-y-1 text-sm">
+                <span class="font-semibold text-shadow-900">{poolOwner.process}</span>
+                <span class="text-shadow-600">physical pools: {poolOwner.physicalPoolCount}</span>
+                <span class="text-shadow-600">capacity: {poolOwner.totalCapacity}</span>
+                <span class="text-shadow-600">active: {poolOwner.active}</span>
+                <span class="text-shadow-600">idle: {poolOwner.idle}</span>
+                <span class={poolOwner.waiting > 0 ? 'text-wilt-600 font-semibold' : 'text-shadow-600'}>
+                  waiting: {poolOwner.waiting}
+                </span>
+                <span class="text-shadow-600">high-water: {poolOwner.highWaterConnections}</span>
+              </div>
+              <div class="divide-y divide-bark-100">
+                {#each poolOwner.authorities as authority (authority.authorityIndex)}
+                  <div class="px-5 py-3 text-xs space-y-1">
+                    <div class="flex flex-wrap gap-x-4 gap-y-1 text-shadow-700">
+                      <span class="font-mono">authority-{authority.authorityIndex}</span>
+                      <span>{authority.authorityClass}</span>
+                      <span>{authority.readOnly ? 'read only' : 'read/write'}</span>
+                      <span>stores: {authority.logicalStoreCount}</span>
+                      <span>active/idle/waiting: {authority.active}/{authority.idle}/{authority.waiting}</span>
+                      <span>high-water active/connections/waiting: {authority.highWaterActive}/{authority.highWaterConnections}/{authority.highWaterWaiting}</span>
+                    </div>
+                    <p class="font-mono text-shadow-500 break-words">
+                      {authority.applicationNames.join(', ')}
+                    </p>
+                  </div>
+                {/each}
+              </div>
+            </article>
+          {/each}
+        </div>
+      {/if}
+    </section>
+
     <!-- Event-bus lanes -->
     <section class="space-y-3">
       <h2 class="text-base font-serif font-semibold text-shadow-900">

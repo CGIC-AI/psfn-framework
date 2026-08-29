@@ -27,6 +27,10 @@ import {
 import type {
   EpisodicProcessingWatermarkHealthSummary,
 } from '../../../faculties/memory/episodic/store-port.js';
+import {
+  getPostgresPoolTelemetry,
+  type PostgresPoolOwnerTelemetry,
+} from '../../../persistence/postgres.js';
 
 /** Outcome of a single lane observation. */
 export type SubsystemLaneOutcome = 'ran' | 'skipped' | 'degraded' | 'failed';
@@ -82,6 +86,8 @@ export interface SubsystemHealthSnapshot {
   processStartedAt: number;
   generatedAt: number;
   operatorAlerting?: OperatorAlertSinkConfiguration;
+  /** Content-free pool ownership/capacity; never connection strings, SQL, or row content. */
+  postgresPools: PostgresPoolOwnerTelemetry[];
   lanes: SubsystemLaneHealth[];
 }
 
@@ -285,6 +291,7 @@ export class AdminSubsystemHealthDataService implements AdminSubsystemHealthServ
   private readonly operatorAlerting: SubsystemHealthSnapshot['operatorAlerting'];
   private readonly watermarkProvider: EpisodicWatermarkStateProvider | null;
   private readonly watermarkDefinitionProvider: () => readonly EpisodicWatermarkLaneDefinition[];
+  private readonly postgresPoolTelemetry: () => PostgresPoolOwnerTelemetry[];
   private readonly lanes = new Map<string, LaneAccumulator>();
   private readonly backgroundWorkHealth = new BackgroundWorkHealthAccumulator();
   private readonly unsubscribers: Array<() => void> = [];
@@ -302,6 +309,7 @@ export class AdminSubsystemHealthDataService implements AdminSubsystemHealthServ
     processStartedAt?: number;
     operatorAlerting?: SubsystemHealthSnapshot['operatorAlerting'];
     startupMemorySubjectClassificationCoverage?: MemorySubjectClassificationCoverage;
+    postgresPoolTelemetry?: () => PostgresPoolOwnerTelemetry[];
   }) {
     this.ringLimit = Number.isFinite(deps.ringLimit)
       ? Math.max(1, Math.floor(deps.ringLimit as number))
@@ -314,6 +322,7 @@ export class AdminSubsystemHealthDataService implements AdminSubsystemHealthServ
     this.scheduler = deps.scheduler ?? null;
     this.operatorAlerting = deps.operatorAlerting;
     this.watermarkProvider = deps.watermarkProvider ?? null;
+    this.postgresPoolTelemetry = deps.postgresPoolTelemetry ?? getPostgresPoolTelemetry;
     const watermarkDefinitions = deps.watermarkDefinitions;
     this.watermarkDefinitionProvider = typeof watermarkDefinitions === 'function'
       ? watermarkDefinitions
@@ -368,6 +377,7 @@ export class AdminSubsystemHealthDataService implements AdminSubsystemHealthServ
       processStartedAt: this.processStartedAt,
       generatedAt,
       ...(this.operatorAlerting ? { operatorAlerting: this.operatorAlerting } : {}),
+      postgresPools: this.postgresPoolTelemetry(),
       lanes,
     };
   }

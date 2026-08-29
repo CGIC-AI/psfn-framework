@@ -31,6 +31,16 @@ npm run eval:companion-shape:report -- --responses <captured-responses.json> --o
 npm run eval:repeng:validate
 ```
 
+## J-lens (L1 activation instrument)
+
+`eval/jlens/` holds the Jacobian-lens instrument and L1/L2/L3 consistency
+battery — the activation-level layer of the emotion measurement cascade.
+It requires an HF-format model (not GGUF) and a pinned reference
+implementation; see [`eval/jlens/README.md`](./eval/jlens/README.md) for
+setup, configuration, and memory guidance, and
+[`docs/evals-initial-acceptance-testing.md`](../../docs/evals-initial-acceptance-testing.md)
+for the initial acceptance record.
+
 The existing eval paths remain under `tools/evals/eval/` so historical fixtures,
 scripts, and artifact references stay recognizable after the history-preserving
 monorepo import.

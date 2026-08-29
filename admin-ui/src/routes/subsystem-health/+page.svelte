@@ -25,6 +25,9 @@
   const watermarkLanes = $derived(
     (snapshot?.lanes ?? []).filter(lane => lane.source === 'watermark'),
   );
+  const postTurnQueueLanes = $derived(
+    (snapshot?.lanes ?? []).filter(lane => lane.source === 'post_turn_queue'),
+  );
 
   // ── Status presentation (honest: never/stale/failed are visually distinct) ──
   const STATUS_META: Record<SubsystemLaneStatus, { label: string; badge: string; accent: string }> = {
@@ -115,7 +118,7 @@
   <GardenPageHeader
     eyebrow="Operations · Runtime posture"
     title="Subsystem Health"
-    description="Live health from event-bus lanes, durable episodic watermarks, and scheduled work. Process-local history is labelled separately from durable state."
+    description="Live health from durable deferred work, event-bus lanes, episodic watermarks, and scheduled work. Process-local history is labelled separately from durable state."
   >
     {#snippet actions()}
       <button
@@ -222,6 +225,51 @@
         </div>
       {/if}
     </section>
+
+    <!-- Durable post-turn action demand -->
+    {#if postTurnQueueLanes.length > 0}
+      <section class="space-y-3">
+        <h2 class="text-base font-serif font-semibold text-shadow-900">
+          Deferred action queue
+          <span class="text-xs font-sans font-normal text-shadow-500">(durable demand)</span>
+        </h2>
+        <div class="grid grid-cols-1 gap-4">
+          {#each postTurnQueueLanes as lane (lane.id)}
+            {@const meta = statusMeta(lane.status)}
+            <article class="card-garden overflow-hidden border-l-4 {meta.accent}">
+              <div class="px-5 py-3 bg-bark-50 border-b border-bark-100 flex items-center justify-between gap-2">
+                <div>
+                  <p class="text-sm font-semibold text-shadow-900">{lane.label}</p>
+                  <p class="text-xs text-shadow-500 mt-0.5">{lane.description}</p>
+                </div>
+                <span class="inline-block px-2 py-0.5 rounded-full text-xs font-semibold shrink-0 {meta.badge}">
+                  {meta.label}
+                </span>
+              </div>
+              <div class="px-5 py-4 space-y-2 text-sm">
+                <p class="text-shadow-700">
+                  <span class="text-shadow-500">Last progress:</span>
+                  {formatRelative(lane.lastRunAt ?? lane.lastEventAt)}
+                </p>
+                {#if lane.lastReason}
+                  <p class="text-gold-700 font-mono">{lane.lastReason}</p>
+                {/if}
+                {#if lane.lastError}
+                  <p class="text-wilt-600 font-mono break-words">{lane.lastError}</p>
+                {/if}
+                <div class="flex flex-wrap gap-1.5 pt-1">
+                  {#each countEntries(lane.counts) as [key, value] (key)}
+                    <span class="inline-block px-2 py-0.5 rounded bg-bark-100 text-shadow-700 text-xs font-mono">
+                      {key}: {value}
+                    </span>
+                  {/each}
+                </div>
+              </div>
+            </article>
+          {/each}
+        </div>
+      </section>
+    {/if}
 
     <!-- Event-bus lanes -->
     <section class="space-y-3">

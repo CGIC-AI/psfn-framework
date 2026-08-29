@@ -26,11 +26,18 @@ export type PostTurnActionHandler = (
   action: InferredPostTurnAction,
 ) => Promise<PostTurnActionHandlerResult | void> | PostTurnActionHandlerResult | void;
 export type PostTurnActionExecutionMode = 'foreground' | 'background';
-export type PostTurnActionEnqueueResult = 'queued' | 'deduplicated' | 'dropped_budget';
+export type PostTurnActionEnqueueResult = 'queued' | 'coalesced' | 'deduplicated' | 'dropped_budget';
+export type PostTurnActionCoalescingMode = 'dedupe_key_with_durable_watermark';
 
 export interface PostTurnActionHandlerOptions {
   executionMode?: PostTurnActionExecutionMode;
   runtimeClass?: RuntimeLaneClass;
+  /**
+   * Declares that equal dedupe keys target the same handler-owned durable
+   * watermark. The newest trigger can then replace queued demand, while a
+   * trigger arriving during execution is retained as a successor run.
+   */
+  coalescing?: PostTurnActionCoalescingMode;
 }
 
 export type PostTurnActionQueueEntryState = 'deferred' | 'ready' | 'scheduled' | 'retry_scheduled' | 'running';
@@ -103,7 +110,21 @@ export interface PostTurnActionQueuedEntryStatus {
   nextRunAt: number;
   queuedForMs: number;
   runAfterMs: number;
+  coalescedCount: number;
+  coverageThroughInferredAt: number;
+  latestSourceMessageId: string;
+  successorPending: boolean;
   subagentSpawn?: PostTurnSubagentSpawnQueuedStatus;
+}
+
+export interface PostTurnActionQueueCoalescingRecord {
+  dedupeKey: string;
+  actionKind: string;
+  retainedActionId: string;
+  coalescedActionId: string;
+  coverageThroughInferredAt: number;
+  coalescedAt: number;
+  successorPending: boolean;
 }
 
 export interface PostTurnActionQueueDropRecord {
@@ -239,13 +260,25 @@ export interface PostTurnActionQueueStatus {
   nextRunAt?: number;
   lanes: PostTurnActionQueueLaneStatus[];
   queued: PostTurnActionQueuedEntryStatus[];
+  coalescing: {
+    coalescedCount: number;
+    activeCoalescedCount: number;
+    recentCoalesces: PostTurnActionQueueCoalescingRecord[];
+  };
   backPressure: {
     droppedCount: number;
     recentDrops: PostTurnActionQueueDropRecord[];
   };
   failures: {
     failedCount: number;
+    retryableFailureCount: number;
+    permanentRejectCount: number;
     recentFailures: PostTurnActionQueueFailureRecord[];
+  };
+  progress: {
+    lastProgressAt?: number;
+    noProgressSince?: number;
+    noProgressForMs: number;
   };
   terminal: {
     cancelledCount: number;

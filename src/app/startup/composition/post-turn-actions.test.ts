@@ -225,6 +225,159 @@ describe('wirePostTurnActionRuntime', () => {
     expect(phases).toContain('succeeded');
   });
 
+  it('durably coalesces watermark-backed demand onto the newest trigger cursor', async () => {
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1_700_000_000_500);
+    const tempDir = mkdtempSync(join(tmpdir(), 'psfn-post-turn-coalescing-'));
+    const persistencePath = join(tempDir, 'queue.json');
+    try {
+      const eventBus = new EventBus();
+      const scheduler = new Scheduler(eventBus, {
+        tickIntervalMs: 100,
+        heartbeatIntervalMs: 1_000,
+      });
+      const runtime = wirePostTurnActionRuntime({
+        eventBus,
+        scheduler,
+        agentLoop: { waitForIdle: vi.fn().mockResolvedValue(undefined) },
+        intervalMs: 1,
+        persistencePath,
+      });
+      const handler = vi.fn().mockResolvedValue(undefined);
+      runtime.registerHandler('memory.episode-synthesis.run', handler, {
+        runtimeClass: MAINTENANCE_REFLECTION_RUNTIME_CLASS,
+        coalescing: 'dedupe_key_with_durable_watermark',
+      });
+
+      expect(runtime.enqueue(makeAction({
+        id: 'synthesis-trigger-a',
+        kind: 'memory.episode-synthesis.run',
+        dedupeKey: 'memory.episode-synthesis.run:session-a',
+        sourceMessageId: 'message-a',
+        inferredAt: 1_700_000_000_100,
+        runAt: 1_700_000_001_000,
+      }))).toBe('queued');
+      expect(runtime.enqueue(makeAction({
+        id: 'synthesis-trigger-b',
+        kind: 'memory.episode-synthesis.run',
+        dedupeKey: 'memory.episode-synthesis.run:session-a',
+        sourceMessageId: 'message-b',
+        inferredAt: 1_700_000_000_400,
+        runAt: 1_700_000_001_000,
+      }))).toBe('coalesced');
+
+      expect(runtime.getStatus()).toMatchObject({
+        queueDepth: 1,
+        coalescing: {
+          coalescedCount: 1,
+        },
+        queued: [{
+          actionId: 'synthesis-trigger-b',
+          inferredAt: 1_700_000_000_100,
+          coalescedCount: 1,
+          coverageThroughInferredAt: 1_700_000_000_400,
+          latestSourceMessageId: 'message-b',
+          successorPending: false,
+        }],
+      });
+      expect(readPersistedQueue(persistencePath).version).toBe(2);
+
+      const restartedBus = new EventBus();
+      const restartedScheduler = new Scheduler(restartedBus, {
+        tickIntervalMs: 100,
+        heartbeatIntervalMs: 1_000,
+      });
+      const restarted = wirePostTurnActionRuntime({
+        eventBus: restartedBus,
+        scheduler: restartedScheduler,
+        agentLoop: { waitForIdle: vi.fn().mockResolvedValue(undefined) },
+        intervalMs: 1,
+        persistencePath,
+      });
+      const restartedHandler = vi.fn().mockResolvedValue(undefined);
+      restarted.registerHandler('memory.episode-synthesis.run', restartedHandler, {
+        runtimeClass: MAINTENANCE_REFLECTION_RUNTIME_CLASS,
+        coalescing: 'dedupe_key_with_durable_watermark',
+      });
+      expect(restarted.getStatus().queued[0]).toMatchObject({
+        actionId: 'synthesis-trigger-b',
+        coalescedCount: 1,
+        coverageThroughInferredAt: 1_700_000_000_400,
+      });
+
+      nowSpy.mockReturnValue(1_700_000_001_001);
+      await restartedScheduler.tick();
+      expect(restartedHandler).toHaveBeenCalledOnce();
+      expect(restartedHandler.mock.calls[0]?.[0]).toMatchObject({
+        id: 'synthesis-trigger-b',
+        sourceMessageId: 'message-b',
+      });
+      expect(restarted.getStatus().queueDepth).toBe(0);
+    } finally {
+      nowSpy.mockRestore();
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('retains a watermark-backed successor trigger that arrives while its predecessor runs', async () => {
+    const eventBus = new EventBus();
+    const scheduler = new Scheduler(eventBus, {
+      tickIntervalMs: 100,
+      heartbeatIntervalMs: 1_000,
+    });
+    const firstRun = createDeferred<void>();
+    const handledIds: string[] = [];
+    const runtime = wirePostTurnActionRuntime({
+      eventBus,
+      scheduler,
+      agentLoop: { waitForIdle: vi.fn().mockResolvedValue(undefined) },
+      intervalMs: 1,
+    });
+    runtime.registerHandler('memory.episode-synthesis.run', async (action) => {
+      handledIds.push(action.id);
+      if (action.id === 'running-trigger') {
+        await firstRun.promise;
+      }
+    }, {
+      runtimeClass: MAINTENANCE_REFLECTION_RUNTIME_CLASS,
+      coalescing: 'dedupe_key_with_durable_watermark',
+    });
+
+    expect(runtime.enqueue(makeAction({
+      id: 'running-trigger',
+      kind: 'memory.episode-synthesis.run',
+      dedupeKey: 'memory.episode-synthesis.run:session-a',
+      inferredAt: 1,
+    }))).toBe('queued');
+    const firstTick = scheduler.tick();
+    await vi.waitFor(() => expect(handledIds).toEqual(['running-trigger']));
+
+    expect(runtime.enqueue(makeAction({
+      id: 'successor-trigger',
+      kind: 'memory.episode-synthesis.run',
+      dedupeKey: 'memory.episode-synthesis.run:session-a',
+      sourceMessageId: 'successor-message',
+      inferredAt: 2,
+    }))).toBe('coalesced');
+    expect(runtime.getStatus().queued[0]).toMatchObject({
+      actionId: 'running-trigger',
+      coalescedCount: 1,
+      coverageThroughInferredAt: 2,
+      latestSourceMessageId: 'successor-message',
+      successorPending: true,
+    });
+
+    firstRun.resolve(undefined);
+    await firstTick;
+    expect(runtime.getStatus().queued[0]).toMatchObject({
+      actionId: 'successor-trigger',
+      successorPending: false,
+    });
+
+    await scheduler.tick();
+    expect(handledIds).toEqual(['running-trigger', 'successor-trigger']);
+    expect(runtime.getStatus().queueDepth).toBe(0);
+  });
+
   it('waits for foreground handlers to reach agent idle before executing', async () => {
     const eventBus = new EventBus();
     const scheduler = new Scheduler(eventBus, {
@@ -1234,7 +1387,7 @@ describe('wirePostTurnActionRuntime', () => {
       });
 
       const persistedBeforeRestart = readPersistedQueue(persistencePath);
-      expect(persistedBeforeRestart.version).toBe(1);
+      expect(persistedBeforeRestart.version).toBe(2);
       expect(persistedBeforeRestart.entries).toHaveLength(5);
 
       const secondBus = new EventBus();
@@ -1574,7 +1727,15 @@ describe('wirePostTurnActionRuntime', () => {
           }),
         }),
       ]);
-      expect(readPersistedQueue(persistencePath).entries).toHaveLength(1);
+      const migratedQueue = readPersistedQueue(persistencePath);
+      expect(migratedQueue.version).toBe(2);
+      expect(migratedQueue.entries).toEqual([
+        expect.objectContaining({
+          demandStartedAt: 1_700_000_399_000,
+          coverageThroughInferredAt: 1_700_000_399_000,
+          coalescedCount: 0,
+        }),
+      ]);
 
       await scheduler.tick();
       expect(handler).toHaveBeenCalledTimes(1);

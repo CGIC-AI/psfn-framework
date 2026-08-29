@@ -204,5 +204,10 @@ describe('reflection post-turn lane split (E5.2)', () => {
     expect(registeredKinds).toContain(SLEEPTIME_MEMORY_ACTION_KIND);
     expect(registeredKinds).toContain(NEAR_TURN_MEMORY_ACTION_KIND);
     expect(registeredKinds).toContain(EPISODE_SYNTHESIS_ACTION_KIND);
+    expect(harness.postTurnActions.registerHandler.mock.calls.find(
+      call => call[0] === EPISODE_SYNTHESIS_ACTION_KIND,
+    )?.[2]).toMatchObject({
+      coalescing: 'dedupe_key_with_durable_watermark',
+    });
   });
 });

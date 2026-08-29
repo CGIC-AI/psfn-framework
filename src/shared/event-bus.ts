@@ -389,6 +389,7 @@ export interface EventMap {
     chargeLane: 'interactive' | 'companion_social' | 'background' | 'maintenance' | 'subagent' | 'shard';
     phase:
       | 'queued'
+      | 'coalesced'
       | 'deduplicated'
       | 'started'
       | 'succeeded'

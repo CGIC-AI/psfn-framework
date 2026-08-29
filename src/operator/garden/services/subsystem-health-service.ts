@@ -31,6 +31,7 @@ import {
   getPostgresPoolTelemetry,
   type PostgresPoolOwnerTelemetry,
 } from '../../../persistence/postgres.js';
+import type { PostTurnActionQueueStatus } from '../../../core/agent/post-turn-action-runtime.js';
 
 /** Outcome of a single lane observation. */
 export type SubsystemLaneOutcome = 'ran' | 'skipped' | 'degraded' | 'failed';
@@ -45,7 +46,7 @@ export type SubsystemLaneStatus =
   | 'paused' // scheduler lane explicitly paused by operator
   | 'never'; // no data since process start / never run
 
-export type SubsystemLaneSource = 'event_bus' | 'scheduler' | 'watermark';
+export type SubsystemLaneSource = 'event_bus' | 'scheduler' | 'watermark' | 'post_turn_queue';
 
 /** A single recorded lane observation (ring-buffer entry). */
 export interface SubsystemLaneEvent {
@@ -119,6 +120,10 @@ export interface EpisodicWatermarkStateProvider {
   listProcessingWatermarkHealth():
     | Promise<EpisodicProcessingWatermarkHealthSummary[]>
     | EpisodicProcessingWatermarkHealthSummary[];
+}
+
+export interface PostTurnActionQueueStateProvider {
+  getStatus(): PostTurnActionQueueStatus;
 }
 
 export interface EpisodicWatermarkLaneDefinition {
@@ -290,6 +295,7 @@ export class AdminSubsystemHealthDataService implements AdminSubsystemHealthServ
   private readonly scheduler: SubsystemSchedulerStateProvider | null;
   private readonly operatorAlerting: SubsystemHealthSnapshot['operatorAlerting'];
   private readonly watermarkProvider: EpisodicWatermarkStateProvider | null;
+  private readonly postTurnActionQueueProvider: PostTurnActionQueueStateProvider | null;
   private readonly watermarkDefinitionProvider: () => readonly EpisodicWatermarkLaneDefinition[];
   private readonly postgresPoolTelemetry: () => PostgresPoolOwnerTelemetry[];
   private readonly lanes = new Map<string, LaneAccumulator>();
@@ -300,6 +306,7 @@ export class AdminSubsystemHealthDataService implements AdminSubsystemHealthServ
     eventBus: EventBus;
     scheduler?: SubsystemSchedulerStateProvider | null;
     watermarkProvider?: EpisodicWatermarkStateProvider | null;
+    postTurnActionQueueProvider?: PostTurnActionQueueStateProvider | null;
     watermarkDefinitions?:
       | readonly EpisodicWatermarkLaneDefinition[]
       | (() => readonly EpisodicWatermarkLaneDefinition[]);
@@ -323,6 +330,7 @@ export class AdminSubsystemHealthDataService implements AdminSubsystemHealthServ
     this.operatorAlerting = deps.operatorAlerting;
     this.watermarkProvider = deps.watermarkProvider ?? null;
     this.postgresPoolTelemetry = deps.postgresPoolTelemetry ?? getPostgresPoolTelemetry;
+    this.postTurnActionQueueProvider = deps.postTurnActionQueueProvider ?? null;
     const watermarkDefinitions = deps.watermarkDefinitions;
     this.watermarkDefinitionProvider = typeof watermarkDefinitions === 'function'
       ? watermarkDefinitions
@@ -371,6 +379,10 @@ export class AdminSubsystemHealthDataService implements AdminSubsystemHealthServ
     }
     for (const laneView of await this.buildWatermarkLanes(generatedAt)) {
       lanes.push(laneView);
+    }
+    const postTurnQueueLane = this.buildPostTurnActionQueueLane(generatedAt);
+    if (postTurnQueueLane) {
+      lanes.push(postTurnQueueLane);
     }
 
     return {
@@ -807,6 +819,95 @@ export class AdminSubsystemHealthDataService implements AdminSubsystemHealthServ
         deniedReason: null,
       };
     });
+  }
+
+  private buildPostTurnActionQueueLane(generatedAt: number): SubsystemLaneHealth | null {
+    if (!this.postTurnActionQueueProvider) return null;
+    let queueStatus: PostTurnActionQueueStatus;
+    try {
+      queueStatus = this.postTurnActionQueueProvider.getStatus();
+    } catch (error) {
+      const message = toErrorMessage(error);
+      log.warn('Failed to read post-turn action queue for subsystem health', { error: message });
+      return {
+        id: 'post_turn_action_queue',
+        label: 'Deferred action queue',
+        description: 'Durable defer-until-idle demand, coalescing, retries, rejects, and progress.',
+        source: 'post_turn_queue',
+        sinceProcessStart: false,
+        status: 'failed',
+        lastEventAt: generatedAt,
+        lastOutcome: 'failed',
+        lastReason: 'queue_health_read_failed',
+        lastError: message,
+        counts: {},
+        observedEventCount: 0,
+        recent: [],
+      };
+    }
+
+    const deferredDepth = queueStatus.lanes.reduce((sum, lane) => sum + lane.deferredCount, 0);
+    const oldestDeferredForMs = queueStatus.lanes.reduce(
+      (oldest, lane) => Math.max(oldest, lane.oldestDeferredForMs ?? 0),
+      0,
+    );
+    const persistenceError = queueStatus.persistence.lastPersistError
+      ?? queueStatus.persistence.lastLoadError
+      ?? (queueStatus.quarantine.persisted ? undefined : 'Queue quarantine state is not durable');
+    const hasFailures = queueStatus.failures.retryableFailureCount > 0
+      || queueStatus.failures.permanentRejectCount > 0;
+    const status: SubsystemLaneStatus = persistenceError || queueStatus.quarantine.count > 0
+      ? 'failed'
+      : hasFailures || queueStatus.backPressure.droppedCount > 0
+        ? 'degraded'
+        : 'ok';
+    const outcome: SubsystemLaneOutcome = status === 'failed'
+      ? 'failed'
+      : status === 'degraded'
+        ? 'degraded'
+        : 'ran';
+    const reason = persistenceError
+      ? 'queue_persistence_failed'
+      : queueStatus.quarantine.count > 0
+        ? 'queue_entries_quarantined'
+        : hasFailures
+          ? 'retryable_or_permanent_failures'
+          : queueStatus.backPressure.droppedCount > 0
+            ? 'terminal_drops_observed'
+            : queueStatus.queueDepth > 0 && queueStatus.progress.noProgressForMs > 0
+              ? 'demand_waiting'
+              : null;
+
+    return {
+      id: 'post_turn_action_queue',
+      label: 'Deferred action queue',
+      description: 'Durable defer-until-idle demand, coalescing, retries, rejects, and progress.',
+      source: 'post_turn_queue',
+      sinceProcessStart: false,
+      status,
+      lastEventAt: queueStatus.progress.lastProgressAt ?? queueStatus.timestamp,
+      lastOutcome: outcome,
+      lastReason: reason,
+      lastError: persistenceError ?? null,
+      counts: {
+        queueDepth: queueStatus.queueDepth,
+        deferredDepth,
+        oldestDeferredForMs,
+        coalescedCount: queueStatus.coalescing.coalescedCount,
+        activeCoalescedCount: queueStatus.coalescing.activeCoalescedCount,
+        retryableFailureCount: queueStatus.failures.retryableFailureCount,
+        permanentRejectCount: queueStatus.failures.permanentRejectCount,
+        noProgressForMs: queueStatus.progress.noProgressForMs,
+        droppedCount: queueStatus.backPressure.droppedCount,
+        completedCount: queueStatus.completions.completedCount,
+        quarantinedCount: queueStatus.quarantine.count,
+      },
+      observedEventCount: 0,
+      recent: [],
+      lastRunAt: queueStatus.progress.lastProgressAt ?? null,
+      nextRunDueAt: queueStatus.nextRunAt ?? null,
+      deniedReason: null,
+    };
   }
 
   private validateWatermarkDefinitions(

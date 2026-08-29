@@ -576,6 +576,10 @@ export function registerSchedulerOwnedPostTurnLanes(
       {
         executionMode: 'background',
         runtimeClass: MAINTENANCE_REFLECTION_RUNTIME_CLASS,
+        // Equal keys are one session's durable episodic-synthesis watermark.
+        // A newer trigger therefore subsumes queued demand, while a trigger
+        // observed during execution must survive as a successor evaluation.
+        coalescing: 'dedupe_key_with_durable_watermark',
       },
     );
     if (telemetryEventBus && !scheduler.getTask(EPISODE_SYNTHESIS_TIMER_TASK_ID)) {

@@ -155,6 +155,7 @@ export function wirePostTurnActionRuntime(
   const handlers = new Map<string, Map<PostTurnActionHandler, RegisteredPostTurnActionHandler>>();
   const queue = new Map<string, DeferredQueueEntry>();
   const runningDedupeKeys = new Set<string>();
+  const executingDedupeKeys = new Set<string>();
   const waitingForForegroundIdleDedupeKeys = new Set<string>();
   const recentDrops: PostTurnActionQueueDropRecord[] = [];
   const recentFailures: PostTurnActionQueueFailureRecord[] = [];
@@ -362,24 +363,29 @@ export function wirePostTurnActionRuntime(
     const attempt = normalizePositiveInteger(value.attempt);
     const nextRunAt = normalizeActionRunAt(value.nextRunAt);
     const maxRetries = normalizePositiveInteger(value.maxRetries);
-    if (attempt === undefined || nextRunAt === undefined) {
+    const expectedCapability = resolveActionCapability(action.kind);
+    const runtimeClass = typeof value.runtimeClass === 'string' && isRuntimeLaneClass(value.runtimeClass)
+      ? value.runtimeClass
+      : undefined;
+    if (
+      attempt === undefined
+      || nextRunAt === undefined
+      || maxRetries === undefined
+      || value.capability !== expectedCapability
+      || runtimeClass === undefined
+    ) {
       return null;
     }
 
-    const resolvedMaxRetries = maxRetries !== undefined
-      ? maxRetries
-      : normalizeMaxRetries(action.maxRetries);
-    if (attempt > resolvedMaxRetries + 1) {
+    if (attempt > maxRetries + 1) {
       return null;
     }
-    const runtimeClass = typeof value.runtimeClass === 'string' && isRuntimeLaneClass(value.runtimeClass)
-      ? value.runtimeClass
-      : resolveRuntimeClassForKind(action.kind);
     const progressState = normalizeDeferredPostTurnQueueProgressState({
       value,
       action,
       ...(pendingAction ? { pendingAction } : {}),
       normalizeNonNegativeInteger: normalizePositiveInteger,
+      allowLegacyDefaults: queueFileVersion === LEGACY_PERSISTED_QUEUE_VERSION,
     });
     if (!progressState) return null;
 
@@ -391,7 +397,7 @@ export function wirePostTurnActionRuntime(
         runtimeClass,
         attempt,
         nextRunAt,
-        maxRetries: resolvedMaxRetries,
+        maxRetries,
         ...progressState,
       },
       migrated: normalizedPayload.migrated,
@@ -933,7 +939,7 @@ export function wirePostTurnActionRuntime(
       return 'deduplicated';
     }
 
-    const currentRunMustFinish = runningDedupeKeys.has(existing.action.dedupeKey)
+    const currentRunMustFinish = executingDedupeKeys.has(existing.action.dedupeKey)
       || Boolean(existing.pendingAction);
     const { entry: nextEntry, successorPending } = coalesceDeferredPostTurnQueueEntry({
       existing,
@@ -1105,7 +1111,7 @@ export function wirePostTurnActionRuntime(
         || left.nextRunAt - right.nextRunAt
         || left.demandStartedAt - right.demandStartedAt
       ));
-    const entry = dueEntries[0] as typeof dueEntries[number] | undefined;
+    let entry = dueEntries[0] as typeof dueEntries[number] | undefined;
     if (!entry) {
       return false;
     }
@@ -1156,13 +1162,6 @@ export function wirePostTurnActionRuntime(
     entry.attempt += 1;
     runningDedupeKeys.add(entry.action.dedupeKey);
     persistRunningCheckpoint(entry);
-    emitTelemetry('started', entry);
-    emitCompletionHandoff(entry, 'started', {
-      summary: `Post-turn action "${entry.action.kind}" started.`,
-      validationPerformed: ['post_turn_action_lifecycle_nonterminal', `attempt:${entry.attempt}`],
-      recommendedNextAction: 'Keep the task visible without interrupting the foreground conversation.',
-      lifecycleSequence: `attempt:${entry.attempt}`,
-    });
 
     try {
       const registeredHandlers = [...registrations.values()];
@@ -1182,6 +1181,16 @@ export function wirePostTurnActionRuntime(
           waitingForForegroundIdleDedupeKeys.delete(entry.action.dedupeKey);
         }
       }
+      entry = queue.get(entry.action.dedupeKey) ?? entry;
+      executingDedupeKeys.add(entry.action.dedupeKey);
+      lastProgressAt = Date.now();
+      emitTelemetry('started', entry);
+      emitCompletionHandoff(entry, 'started', {
+        summary: `Post-turn action "${entry.action.kind}" started.`,
+        validationPerformed: ['post_turn_action_lifecycle_nonterminal', `attempt:${entry.attempt}`],
+        recommendedNextAction: 'Keep the task visible without interrupting the foreground conversation.',
+        lifecycleSequence: `attempt:${entry.attempt}`,
+      });
       let handlerResult: PostTurnActionHandlerResult | undefined;
       for (const { callback } of registeredHandlers) {
         const result = await callback(entry.action);
@@ -1295,6 +1304,7 @@ export function wirePostTurnActionRuntime(
         lifecycleSequence: `retry:${entry.attempt}:${entry.nextRunAt}`,
       });
     } finally {
+      executingDedupeKeys.delete(entry.action.dedupeKey);
       runningDedupeKeys.delete(entry.action.dedupeKey);
     }
 

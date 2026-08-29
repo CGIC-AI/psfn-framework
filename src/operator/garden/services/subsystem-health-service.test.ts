@@ -707,8 +707,11 @@ describe('AdminSubsystemHealthDataService', () => {
         retryScheduledCount: 0,
       })),
       progress: {
-        ...queueStatus.progress,
+        noProgressSince: 5_000,
+        noProgressForMs: 4_000,
+        expectedSchedulerRunIntervalMs: 250,
         stalled: true,
+        waitingForForegroundIdleCount: 0,
       },
     };
     const stalledService = new AdminSubsystemHealthDataService({
@@ -721,6 +724,8 @@ describe('AdminSubsystemHealthDataService', () => {
       'post_turn_action_queue',
     )).toMatchObject({
       status: 'degraded',
+      lastEventAt: 5_000,
+      lastRunAt: null,
       lastOutcome: 'degraded',
       lastReason: 'queue_no_progress',
     });
@@ -758,6 +763,7 @@ describe('subsystem health page contract', () => {
     expect(page).toContain('Episodic processor watermarks');
     expect(page).toContain("lane.source === 'post_turn_queue'");
     expect(page).toContain('Deferred action queue');
+    expect(page).toContain('No progress since:');
   });
 
   it('renders content-free PostgreSQL pool capacity and pressure', () => {

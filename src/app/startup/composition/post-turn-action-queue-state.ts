@@ -53,13 +53,26 @@ export function normalizeDeferredPostTurnQueueProgressState(input: {
   action: InferredPostTurnAction;
   pendingAction?: InferredPostTurnAction;
   normalizeNonNegativeInteger: (value: unknown) => number | undefined;
+  allowLegacyDefaults: boolean;
 }): Pick<
   DeferredPostTurnQueueEntry,
   'demandStartedAt' | 'coverageThroughInferredAt' | 'coalescedCount' | 'retryableFailureCount'
 > | null {
   const { value, action, pendingAction, normalizeNonNegativeInteger } = input;
-  const demandStartedAt = normalizeNonNegativeInteger(value.demandStartedAt) ?? action.inferredAt;
-  const coverageThroughInferredAt = normalizeNonNegativeInteger(value.coverageThroughInferredAt)
+  const persistedDemandStartedAt = normalizeNonNegativeInteger(value.demandStartedAt);
+  const persistedCoverageThroughInferredAt = normalizeNonNegativeInteger(
+    value.coverageThroughInferredAt,
+  );
+  const persistedCoalescedCount = normalizeNonNegativeInteger(value.coalescedCount);
+  const persistedRetryableFailureCount = normalizeNonNegativeInteger(value.retryableFailureCount);
+  if (!input.allowLegacyDefaults && (
+    persistedDemandStartedAt === undefined
+    || persistedCoverageThroughInferredAt === undefined
+    || persistedCoalescedCount === undefined
+    || persistedRetryableFailureCount === undefined
+  )) return null;
+  const demandStartedAt = persistedDemandStartedAt ?? action.inferredAt;
+  const coverageThroughInferredAt = persistedCoverageThroughInferredAt
     ?? Math.max(action.inferredAt, pendingAction?.inferredAt ?? 0);
   if (
     demandStartedAt > action.inferredAt
@@ -69,8 +82,8 @@ export function normalizeDeferredPostTurnQueueProgressState(input: {
   return {
     demandStartedAt,
     coverageThroughInferredAt,
-    coalescedCount: normalizeNonNegativeInteger(value.coalescedCount) ?? 0,
-    retryableFailureCount: normalizeNonNegativeInteger(value.retryableFailureCount) ?? 0,
+    coalescedCount: persistedCoalescedCount ?? 0,
+    retryableFailureCount: persistedRetryableFailureCount ?? 0,
   };
 }
 
@@ -305,7 +318,8 @@ export function buildPostTurnActionQueueStatus(input: {
   const oldestReadyAt = minimumPostTurnQueueNumber(queued
     .filter((entry) => entry.state === 'ready')
     .map((entry) => Math.max(entry.inferredAt, entry.nextRunAt)));
-  const noProgressSince = input.processing || oldestReadyAt === undefined
+  const noProgressSince = input.waitingForForegroundIdleDedupeKeys.size > 0
+    || oldestReadyAt === undefined
     ? undefined
     : Math.max(oldestReadyAt, input.lastProgressAt ?? oldestReadyAt);
   const noProgressForMs = noProgressSince === undefined

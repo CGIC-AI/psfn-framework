@@ -247,10 +247,19 @@
                 </span>
               </div>
               <div class="px-5 py-4 space-y-2 text-sm">
-                <p class="text-shadow-700">
-                  <span class="text-shadow-500">Last progress:</span>
-                  {formatRelative(lane.lastRunAt ?? lane.lastEventAt)}
-                </p>
+                {#if lane.lastRunAt !== null && lane.lastRunAt !== undefined}
+                  <p class="text-shadow-700">
+                    <span class="text-shadow-500">Last progress:</span>
+                    {formatRelative(lane.lastRunAt)}
+                  </p>
+                {:else if lane.lastEventAt !== null}
+                  <p class="text-shadow-700">
+                    <span class="text-shadow-500">No progress since:</span>
+                    {formatRelative(lane.lastEventAt)}
+                  </p>
+                {:else}
+                  <p class="text-shadow-500 italic">No progress recorded</p>
+                {/if}
                 {#if lane.lastReason}
                   <p class="text-gold-700 font-mono">{lane.lastReason}</p>
                 {/if}

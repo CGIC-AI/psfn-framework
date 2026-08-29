@@ -4,6 +4,7 @@ import type {
   MemoryScopeQuery,
   PurrMemory,
 } from '../types.js';
+import { memoryLifecycleDisposition } from '../current-memory.js';
 import {
   memoryMatchesScopeQuery,
   normalizeMemoryScopeQuery,
@@ -28,10 +29,6 @@ import type {
   SharedBackgroundSource,
 } from '../retrieval/shared-background.js';
 import {
-  formatMemoryWithheldReasonLabel,
-  formatMemoryWithheldRelevanceBandLabel,
-  listMemoryWithheldReasonEntries,
-  listMemoryWithheldRelevanceBandEntries,
   type MemoryWithheldSummary,
 } from '../withheld-summary.js';
 import {
@@ -78,6 +75,7 @@ type TimelineVisibilityResult =
   | { ok: false; error: string };
 
 export type MemoryVisibilityAction =
+  | 'search'
   | 'episode_search'
   | 'timeline'
   | 'get'
@@ -119,9 +117,9 @@ export interface MemoryAccessOptions {
   canonicalContactId?: string;
 }
 
-export interface MemoryAccessPartition {
-  visible: PurrMemory[];
-  withheld: Array<PurrMemory & { similarity?: number }>;
+export interface MemoryAccessPartition<T extends PurrMemory = PurrMemory> {
+  visible: T[];
+  withheld: T[];
   withheldSummary?: MemoryWithheldSummary;
 }
 
@@ -386,7 +384,7 @@ export function resolveMemoryVisibilityFilter(
 }
 
 function memoryState(memory: Pick<PurrMemory, 'deletedAt' | 'supersededBy'>): 'active' | 'archived' {
-  return memory.deletedAt || memory.supersededBy ? 'archived' : 'active';
+  return memoryLifecycleDisposition(memory) === 'current' ? 'active' : 'archived';
 }
 
 function memoryMatchesVisibilityFilter(memory: PurrMemory, filter: MemoryVisibilityFilter): boolean {
@@ -407,9 +405,9 @@ export async function listFilteredMemories(
 export function partitionVisibleMemories<T extends PurrMemory & { similarity?: number }>(
   memories: readonly T[],
   access: MemoryAccessOptions,
-): MemoryAccessPartition {
-  const visible: PurrMemory[] = [];
-  const withheld: Array<PurrMemory & { similarity?: number }> = [];
+): MemoryAccessPartition<T> {
+  const visible: T[] = [];
+  const withheld: T[] = [];
   for (const memory of memories) {
     const decision = evaluateRetrievalAccessDecision(memory, access);
     if (decision.allowed) {
@@ -456,45 +454,6 @@ function scopeRefLabel(memory: PurrMemory): string | undefined {
   return `${memory.scopeRef.kind}:${memory.scopeRef.id}`;
 }
 
-function provenanceBucket(memory: PurrMemory): string {
-  if (memory.sourceType && memory.sourceType !== 'unknown') return memory.sourceType;
-  const normalized = memory.sourceRef.toLowerCase();
-  if (normalized.includes('shard:')) return 'shard';
-  if (normalized.includes('tool:') || normalized.includes('source:tool')) return 'tool_write';
-  if (normalized.includes('heartbeat')) return 'heartbeat';
-  if (normalized.includes('reflection')) return 'reflection';
-  if (normalized.includes('session') || normalized.includes('turn') || normalized.includes('conversation')) return 'turn';
-  return 'unspecified_source';
-}
-
-function formatWithheldContext(
-  summary: MemoryWithheldSummary | undefined,
-  withheld: readonly PurrMemory[],
-): string[] {
-  if (!summary || summary.totalCount <= 0) return [];
-  const plural = summary.totalCount === 1 ? 'memory was' : 'memories were';
-  const lines = [
-    `- Withheld context: ${summary.totalCount} candidate ${plural} present but not included in visible detail because trust/privacy gates withheld it.`,
-  ];
-  const reasonLine = listMemoryWithheldReasonEntries(summary.reasonCounts)
-    .map(({ reason, count }) => `${count} ${formatMemoryWithheldReasonLabel(reason)}`)
-    .join(', ');
-  if (reasonLine) {
-    lines.push(`- Withheld trust/privacy reasons: ${reasonLine}.`);
-  }
-  const relevanceLine = listMemoryWithheldRelevanceBandEntries(summary.relevanceBands ?? {})
-    .map(({ band, count }) => `${count} ${formatMemoryWithheldRelevanceBandLabel(band)}`)
-    .join(', ');
-  if (relevanceLine) {
-    lines.push(`- Withheld relevance bands: ${relevanceLine}.`);
-  }
-  lines.push(`- Withheld categories: ${formatCounts(countBy(withheld, memory => memory.type))}.`);
-  lines.push(`- Withheld states: ${formatCounts(countBy(withheld, memoryState))}.`);
-  lines.push(`- Withheld provenance classes: ${formatCounts(countBy(withheld, provenanceBucket))}.`);
-  lines.push('- Protected withheld memory text, memory IDs, contact IDs, and scope labels are not included.');
-  return lines;
-}
-
 function formatVisibleMemoryBreakdown(visible: readonly PurrMemory[]): string[] {
   if (visible.length === 0) return [];
   const lines = [
@@ -517,8 +476,7 @@ function formatVisibleMemoryBreakdown(visible: readonly PurrMemory[]): string[] 
 export function formatMemoryCensusResult(partition: MemoryAccessPartition): string {
   const lines = ['Memory census:'];
   const visibleCount = partition.visible.length;
-  const withheldCount = partition.withheldSummary?.totalCount ?? 0;
-  if (visibleCount === 0 && withheldCount === 0) {
+  if (visibleCount === 0) {
     lines.push('- No memories matched the requested filters.');
     lines.push('No memory text returned.');
     return lines.join('\n');
@@ -526,29 +484,21 @@ export function formatMemoryCensusResult(partition: MemoryAccessPartition): stri
 
   lines.push(`- Visible memories: ${visibleCount}.`);
   lines.push(...formatVisibleMemoryBreakdown(partition.visible));
-  lines.push(...formatWithheldContext(partition.withheldSummary, partition.withheld));
   lines.push('No memory text returned.');
   return lines.join('\n');
 }
 
 export function formatMemoryExistsResult(partition: MemoryAccessPartition): string {
   const visibleCount = partition.visible.length;
-  const withheldCount = partition.withheldSummary?.totalCount ?? 0;
-  const totalCount = visibleCount + withheldCount;
   const lines = ['Memory exists check:'];
-  if (totalCount === 0) {
+  if (visibleCount === 0) {
     lines.push('- Result: no matching memories found for the requested topic and filters.');
     lines.push('No memory text returned.');
     return lines.join('\n');
   }
 
-  if (visibleCount > 0) {
-    lines.push(`- Result: yes, ${visibleCount} visible matching ${visibleCount === 1 ? 'memory' : 'memories'} found.`);
-  } else {
-    lines.push('- Result: yes, matching memory exists, but none is visible in this channel.');
-  }
+  lines.push(`- Result: yes, ${visibleCount} visible matching ${visibleCount === 1 ? 'memory' : 'memories'} found.`);
   lines.push(...formatVisibleMemoryBreakdown(partition.visible));
-  lines.push(...formatWithheldContext(partition.withheldSummary, partition.withheld));
   lines.push('No memory text returned.');
   return lines.join('\n');
 }
@@ -581,7 +531,7 @@ export function formatSharedBackgroundResult(result: SharedBackgroundResult): st
   if (result.items.length === 0) {
     lines.push('- No shared-background memories are visible in this context.');
   } else {
-    lines.push(`- Visible shared-background memories: ${result.items.length} (of ${result.totalCandidates} candidate${result.totalCandidates === 1 ? '' : 's'}).`);
+    lines.push(`- Visible shared-background memories: ${result.items.length}.`);
     for (const item of result.items) {
       lines.push(
         `- [${formatSharedBackgroundSources(item.sources)}] `
@@ -592,20 +542,6 @@ export function formatSharedBackgroundResult(result: SharedBackgroundResult): st
 
   if (result.truncated) {
     lines.push(`- Result truncated to the top ${result.limit} by evidence-source priority, then salience, then recency.`);
-  }
-
-  if (result.withheldSummary && result.withheldSummary.totalCount > 0) {
-    const plural = result.withheldSummary.totalCount === 1 ? 'memory was' : 'memories were';
-    lines.push(
-      `- Withheld context: ${result.withheldSummary.totalCount} candidate ${plural} present but withheld by trust/privacy gates.`,
-    );
-    const reasonLine = listMemoryWithheldReasonEntries(result.withheldSummary.reasonCounts)
-      .map(({ reason, count }) => `${count} ${formatMemoryWithheldReasonLabel(reason)}`)
-      .join(', ');
-    if (reasonLine) {
-      lines.push(`- Withheld trust/privacy reasons: ${reasonLine}.`);
-    }
-    lines.push('- Protected withheld memory text, memory IDs, contact IDs, and scope labels are not included.');
   }
 
   return lines.join('\n');

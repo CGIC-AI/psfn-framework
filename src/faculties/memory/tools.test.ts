@@ -530,6 +530,9 @@ describe('createMemoryTool', () => {
       action: 'search',
       query: 'direct answers',
       limit: 2,
+      channel_id: 'api:private',
+      trust_level: 'primary',
+      channel_visibility: 'private',
     });
 
     expect(store.searchByText).toHaveBeenCalledWith('direct answers', 2);
@@ -538,7 +541,82 @@ describe('createMemoryTool', () => {
     expect(resultText(fromAny(result))).toContain('similarity=0.82');
   });
 
-  it('census reports public-channel visible counts and companion-readable withheld context without protected text', async () => {
+  it('filters tombstoned, superseded, and quarantined rows from action=search results and counts', async () => {
+    const store = mockUnifiedStore();
+    store.searchByText.mockResolvedValue([
+      { ...makeMemory({ id: 'mem-current', text: 'Current answer', sensitivity: 'public' }), similarity: 0.8 },
+      { ...makeMemory({ id: 'mem-deleted', text: 'Deleted answer', deletedAt: 1 }), similarity: 0.99 },
+      { ...makeMemory({ id: 'mem-superseded', text: 'Superseded answer', supersededBy: 'mem-current' }), similarity: 0.98 },
+      {
+        ...makeMemory({
+          id: 'mem-quarantined',
+          text: 'Quarantined answer',
+          provenance: { sessionId: 'session-retired' },
+        }),
+        similarity: 0.97,
+      },
+    ]);
+    const tool = createMemoryTool(
+      writer as unknown as MemoryWriter,
+      store as unknown as MemoryStorePort,
+      {
+        sessionQuarantineFilter: {
+          isSessionRetiredOrQuarantined: sessionId => sessionId === 'session-retired',
+        },
+      },
+    );
+
+    const result = await tool.execute('memory-call-current-search', {
+      action: 'search',
+      query: 'answer',
+      channel_id: 'api:private',
+      trust_level: 'primary',
+      channel_visibility: 'private',
+    });
+
+    const text = resultText(fromAny(result));
+    expect(text).toContain('Memory search results (1)');
+    expect(text).toContain('Current answer');
+    expect(text).not.toContain('Deleted answer');
+    expect(text).not.toContain('Superseded answer');
+    expect(text).not.toContain('Quarantined answer');
+  });
+
+  it('makes privacy-withheld and absent lexical search results indistinguishable to chat callers', async () => {
+    const hiddenStore = mockUnifiedStore();
+    hiddenStore.searchByText.mockResolvedValue([
+      {
+        ...makeMemory({
+          id: 'mem-hidden-room',
+          text: 'Protected cross-room answer',
+          sensitivity: 'confidential',
+          provenance: { channelId: 'discord:room:hidden' },
+          scopeRef: { kind: 'conversation', id: 'discord:room:hidden' },
+        }),
+        similarity: 0.99,
+      },
+    ]);
+    const emptyStore = mockUnifiedStore();
+    emptyStore.searchByText.mockResolvedValue([]);
+    const hiddenTool = createMemoryTool(writer as unknown as MemoryWriter, hiddenStore as unknown as MemoryStorePort);
+    const emptyTool = createMemoryTool(writer as unknown as MemoryWriter, emptyStore as unknown as MemoryStorePort);
+    const input = {
+      action: 'search',
+      query: 'protected answer',
+      channel_id: 'discord:room:caller',
+      trust_level: 'public',
+      channel_visibility: 'public',
+    };
+
+    const hidden = resultText(fromAny(await hiddenTool.execute('memory-call-hidden-search', input)));
+    const absent = resultText(fromAny(await emptyTool.execute('memory-call-empty-search', input)));
+
+    expect(hidden).toBe(absent);
+    expect(hidden).toBe('No memories matched the search query.');
+    expect(hidden).not.toContain('Protected cross-room answer');
+  });
+
+  it('census reports only visible current counts without enumerating lifecycle or privacy records', async () => {
     const store = mockUnifiedStore([
       makeMemory({
         id: 'mem-public-active',
@@ -572,18 +650,18 @@ describe('createMemoryTool', () => {
       channel_id: 'api:public',
       trust_level: 'regular',
       channel_visibility: 'public',
+      include_archived: true,
     });
 
     const text = resultText(fromAny(result));
     expect(text).toContain('Memory census:');
-    expect(text).toContain('Visible memories: 2');
-    expect(text).toContain('By type: episodic: 1, semantic: 1.');
-    expect(text).toContain('By sensitivity: public: 2.');
-    expect(text).toContain('By state: active: 1, archived: 1.');
-    expect(text).toContain('Withheld context: 1 candidate memory was present');
-    expect(text).toContain('Withheld trust/privacy reasons: 1 trust ceiling.');
-    expect(text).toContain('Withheld categories: semantic: 1.');
-    expect(text).toContain('Withheld provenance classes: turn: 1.');
+    expect(text).toContain('Visible memories: 1');
+    expect(text).toContain('By type: semantic: 1.');
+    expect(text).toContain('By sensitivity: public: 1.');
+    expect(text).toContain('By state: active: 1.');
+    expect(text).not.toContain('archived:');
+    expect(text).not.toContain('Withheld context');
+    expect(text).not.toContain('trust ceiling');
     expect(text).toContain('No memory text returned.');
     expect(text).not.toContain('secret launch phrase');
     expect(text).not.toContain('mem-secret');
@@ -631,7 +709,7 @@ describe('createMemoryTool', () => {
     expect(text).not.toContain('mem-primary');
   });
 
-  it('exists reports withheld-only confidential matches on public channels without leaking text', async () => {
+  it('exists makes withheld-only matches indistinguishable from absence', async () => {
     const store = mockUnifiedStore([
       makeMemory({
         id: 'mem-hidden-topic',
@@ -652,11 +730,8 @@ describe('createMemoryTool', () => {
     });
 
     const text = resultText(fromAny(result));
-    expect(text).toContain('Result: yes, matching memory exists, but none is visible in this channel.');
-    expect(text).toContain('Withheld context: 1 candidate memory was present');
-    expect(text).toContain('Withheld categories: procedural: 1.');
-    expect(text).toContain('Withheld provenance classes: tool_write: 1.');
-    expect(text).toContain('Withheld relevance bands: 1 high-match.');
+    expect(text).toContain('Result: no matching memories found for the requested topic and filters.');
+    expect(text).not.toContain('Withheld context');
     expect(text).not.toContain('confidential garden protocol phrase');
     expect(text).not.toContain('mem-hidden-topic');
   });

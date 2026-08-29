@@ -63,6 +63,13 @@ function makeMemoryService(overrides: Partial<AdminMemorySessionService> = {}): 
     getManagedScopeDetail: vi.fn(async () => null),
     searchMemories: vi.fn(async () => ({
       results: [],
+      diagnostics: {
+        outcome: 'absent',
+        currentMatchCount: 0,
+        lifecycle: { tombstonedCount: 0, supersededCount: 0 },
+        privacyWithheldCount: 0,
+        schema: 'available',
+      },
       privacySummary: {
         activeMemoryCount: 0,
         matchingMemoryCount: 0,

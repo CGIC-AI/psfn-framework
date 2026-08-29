@@ -70,6 +70,28 @@ export const POSTGRES_BIOGRAPHICAL_PROFILE_MIGRATIONS: readonly string[] = [
   `,
   `CREATE INDEX IF NOT EXISTS idx_biographical_grants_digests ON biographical_grants(claim_digest, source_set_digest);`,
   `
+  CREATE TABLE IF NOT EXISTS biographical_candidates (
+    id TEXT PRIMARY KEY,
+    claim_id TEXT NOT NULL UNIQUE REFERENCES biographical_claims(id),
+    claim_digest TEXT NOT NULL,
+    source_set_digest TEXT NOT NULL,
+    stage TEXT NOT NULL,
+    revision BIGINT NOT NULL,
+    automata_run_id TEXT NOT NULL,
+    policy_digest TEXT NOT NULL,
+    candidate_json JSONB NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL,
+    CONSTRAINT biographical_candidates_stage_check CHECK (stage IN ('automata_synthesis', 'companion_review', 'human_review', 'active', 'rejected', 'superseded')),
+    CONSTRAINT biographical_candidates_revision_check CHECK (revision >= 1),
+    CONSTRAINT biographical_candidates_claim_digest_check CHECK (claim_digest ~ '^[0-9a-f]{64}$'),
+    CONSTRAINT biographical_candidates_source_set_digest_check CHECK (source_set_digest ~ '^[0-9a-f]{64}$'),
+    CONSTRAINT biographical_candidates_policy_digest_check CHECK (policy_digest ~ '^[0-9a-f]{64}$')
+  );
+  `,
+  `CREATE INDEX IF NOT EXISTS idx_biographical_candidates_stage ON biographical_candidates(stage, updated_at, id);`,
+  `CREATE INDEX IF NOT EXISTS idx_biographical_candidates_automata_run ON biographical_candidates(automata_run_id, stage);`,
+  `
   ALTER TABLE biographical_claims DROP CONSTRAINT IF EXISTS biographical_claims_kind_check;
   ALTER TABLE biographical_claims
     ADD CONSTRAINT biographical_claims_kind_check

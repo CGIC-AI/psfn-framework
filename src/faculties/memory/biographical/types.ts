@@ -1,4 +1,6 @@
 import type { SensitivityLevel } from '../../../system/trust/types.js';
+import type { MemoryPolicyType } from '../../../system/config/memory-retrieval-policy.js';
+import type { BiographicalSourceLifecycleState } from '../../../system/config/biographical-candidate-policy.js';
 
 /**
  * Biographical Profile projection (psfn-framework-o61vb).
@@ -200,6 +202,61 @@ export interface BiographicalClaimSource {
   readonly consentFingerprint: string;
   readonly sourceChannelId?: string;
   readonly sourceChannelEpoch?: number;
+  /** Required at the candidate admission boundary; legacy active claims may omit it. */
+  readonly sourceType?: MemoryPolicyType;
+  /** Required at candidate admission; only an exact owner-policy value is accepted. */
+  readonly lifecycleStateAtProjection?: BiographicalSourceLifecycleState;
+}
+
+// ── Revisioned candidate review authority ──
+
+export const BIOGRAPHICAL_CANDIDATE_STAGES = [
+  'automata_synthesis',
+  'companion_review',
+  'human_review',
+  'active',
+  'rejected',
+  'superseded',
+] as const;
+export type BiographicalCandidateStage = (typeof BIOGRAPHICAL_CANDIDATE_STAGES)[number];
+
+export const BIOGRAPHICAL_CANDIDATE_RECEIPT_AUTHORITIES = [
+  'automata',
+  'companion',
+  'human',
+  'owner_policy',
+] as const;
+export type BiographicalCandidateReceiptAuthority =
+  (typeof BIOGRAPHICAL_CANDIDATE_RECEIPT_AUTHORITIES)[number];
+
+export type BiographicalCandidateReceiptDecision = 'approved' | 'rejected' | 'superseded';
+
+export interface BiographicalCandidateReceipt {
+  readonly id: string;
+  readonly authority: BiographicalCandidateReceiptAuthority;
+  readonly decision: BiographicalCandidateReceiptDecision;
+  readonly actorAuthorityRef: string;
+  readonly candidateRevision: number;
+  readonly claimDigest: string;
+  readonly sourceSetDigest: string;
+  readonly recordedAt: string;
+}
+
+export interface BiographicalCandidateRecord {
+  readonly id: string;
+  readonly claimId: string;
+  readonly claimDigest: string;
+  readonly sourceSetDigest: string;
+  readonly automataRunId: string;
+  readonly policyDigest: string;
+  /** Snapshotted owner-policy bound so later transitions remain budgeted. */
+  readonly reviewReceiptLimit: number;
+  readonly revision: number;
+  readonly stage: BiographicalCandidateStage;
+  readonly receipts: readonly BiographicalCandidateReceipt[];
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly supersedesCandidateId?: string;
 }
 
 // ── Claim envelope ──

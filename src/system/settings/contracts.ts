@@ -6,6 +6,7 @@ import type { MemoryRetrievalPolicy } from '../config/memory-retrieval-policy.js
 import type { MemoryPresentationProfile } from '../config/memory-presentation-profile.js';
 import type { MemoryDeletionPolicy } from '../config/memory-deletion-policy.js';
 import type { BiographicalDepthPolicy } from '../config/biographical-depth-policy.js';
+import type { BiographicalCandidatePolicy } from '../config/biographical-candidate-policy.js';
 import type { CapabilityTier, CompositionalPolicyConfig, LifecycleKubernetesSettings, SessionRestartBehavior, SessionTailCacheSettings, SubstrateConfig, VoiceReplySegmenterSettings, WikiStartupHydrationSettings } from '../config/runtime-config-contracts.js';
 import type { ShellExecSettings } from '../config/shell-exec-config.js';
 import type {
@@ -178,6 +179,7 @@ export interface EditableSettings {
   memoryDeletionPolicy?: MemoryDeletionPolicy;
   memoryRetrievalPolicy?: MemoryRetrievalPolicy;
   biographicalDepthPolicy?: BiographicalDepthPolicy;
+  biographicalCandidatePolicy?: BiographicalCandidatePolicy;
   memoryPresentationProfile?: MemoryPresentationProfile;
   memoryRefreshFailureAlertThreshold?: number;
   intakeScreeningFailureAlertThreshold?: number;
@@ -355,6 +357,7 @@ export const RUNTIME_SETTINGS_KEYS = [
   'memoryDeletionPolicy',
   'memoryRetrievalPolicy',
   'biographicalDepthPolicy',
+  'biographicalCandidatePolicy',
   'memoryPresentationProfile',
   'memoryRefreshFailureAlertThreshold',
   'intakeScreeningFailureAlertThreshold',
@@ -491,6 +494,7 @@ export type RuntimeSettingValue =
   | NarrativeEmotionAppraisalSettings
   | MemoryRetrievalPolicy
   | BiographicalDepthPolicy
+  | BiographicalCandidatePolicy
   | MemoryPresentationProfile
   | MemoryDeletionPolicy
   | ObserverEvalSidecarSettings

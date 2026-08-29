@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { createPostgresPool } from '../../../persistence/postgres.js';
 import { runBackupCycle } from '../../../persistence/backups/service.js';
 import { verifyPostgresDumpRestore } from '../../../persistence/backups/postgres-restore.js';
+import { createDefaultBiographicalCandidatePolicy } from '../../../system/config/biographical-candidate-policy.js';
 import {
   startPostgresTestHarness,
   type PostgresTestHarness,
@@ -104,6 +105,75 @@ describe('PostgresBiographicalProfileStore — schema and roundtrip', () => {
 
       const reloaded = await store.getClaim(claim.id);
       expect(reloaded).toEqual(claim);
+    });
+  });
+
+  it('preserves exact-revision candidate review across a store restart and activates only with receipts', async () => {
+    await withStore(async (store, pool) => {
+      const policy = createDefaultBiographicalCandidatePolicy();
+      const created = await store.writeCandidate({
+        automataRunId: 'automata-run-invented-postgres',
+        automataAuthorityRef: 'automata:biography-synthesis',
+        policy,
+        claim: {
+          id: 'claim-invented-postgres-candidate',
+          subject: contact('contact-invented-postgres'),
+          kind: 'role',
+          value: {
+            kind: 'role',
+            schemaVersion: 1,
+            roleType: 'creative',
+            title: 'Illustrator',
+          },
+          basis: 'explicit',
+          confidence: 0.9,
+          sources: [source({
+            sourceType: 'semantic',
+            lifecycleStateAtProjection: 'active',
+          })],
+          validFrom: '2026-01-01T00:00:00.000Z',
+          now: NOW,
+        },
+      });
+      await store.transitionCandidate({
+        candidateId: created.id,
+        expectedRevision: 1,
+        to: 'companion_review',
+        receipts: [{
+          authority: 'automata',
+          decision: 'approved',
+          actorAuthorityRef: 'automata:biography-synthesis',
+        }],
+        now: NOW,
+      });
+
+      const restarted = new PostgresBiographicalProfileStore(pool, () => NOW);
+      const durable = await restarted.getCandidate(created.id);
+      expect(durable).toMatchObject({ revision: 2, stage: 'companion_review' });
+      expect((await restarted.getClaim(created.claimId))?.status).toBe('candidate');
+      const humanReview = await restarted.transitionCandidate({
+        candidateId: created.id,
+        expectedRevision: 2,
+        to: 'human_review',
+        receipts: [{
+          authority: 'companion',
+          decision: 'approved',
+          actorAuthorityRef: 'companion:invented-reviewer',
+        }],
+        now: NOW,
+      });
+      await restarted.transitionCandidate({
+        candidateId: created.id,
+        expectedRevision: humanReview.revision,
+        to: 'active',
+        receipts: [{
+          authority: 'human',
+          decision: 'approved',
+          actorAuthorityRef: 'human:invented-reviewer',
+        }],
+        now: NOW,
+      });
+      expect((await restarted.getClaim(created.claimId))?.status).toBe('active');
     });
   });
 
@@ -505,6 +575,31 @@ describe('PostgresBiographicalProfileStore — canonical backup and restore', ()
           grantedSensitivity: 'public',
           now: NOW,
         });
+        await store.writeCandidate({
+          automataRunId: 'automata-run-invented-backup',
+          automataAuthorityRef: 'automata:biography-synthesis',
+          policy: createDefaultBiographicalCandidatePolicy(),
+          claim: {
+            id: 'claim-invented-backup-candidate',
+            subject: contact('contact-invented-backup'),
+            kind: 'role',
+            value: {
+              kind: 'role',
+              schemaVersion: 1,
+              roleType: 'creative',
+              title: 'Ceramicist',
+            },
+            basis: 'explicit',
+            confidence: 0.9,
+            sources: [source({
+              ref: 'memory:invented-backup-candidate',
+              sourceType: 'semantic',
+              lifecycleStateAtProjection: 'active',
+            })],
+            validFrom: '2026-01-01T00:00:00.000Z',
+            now: NOW,
+          },
+        });
         const backup = await runBackupCycle({
           postgres: {
             databaseUrl,
@@ -535,6 +630,7 @@ describe('PostgresBiographicalProfileStore — canonical backup and restore', ()
           sourceDatabaseUrl: databaseUrl,
           criticalTables: [
             'biographical_claims',
+            'biographical_candidates',
             'biographical_grants',
             'biographical_rebuild_queue',
             'biographical_review_audits',
@@ -543,7 +639,8 @@ describe('PostgresBiographicalProfileStore — canonical backup and restore', ()
           pgRestoreBinary: harness.clientBinaries.pgRestoreBinary,
         });
         expect(verified.tableCounts).toEqual([
-          { table: 'biographical_claims', restored: 1, source: 1 },
+          { table: 'biographical_claims', restored: 2, source: 2 },
+          { table: 'biographical_candidates', restored: 1, source: 1 },
           { table: 'biographical_grants', restored: 1, source: 1 },
           { table: 'biographical_rebuild_queue', restored: 1, source: 1 },
           { table: 'biographical_review_audits', restored: 1, source: 1 },

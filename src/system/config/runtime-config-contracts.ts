@@ -23,6 +23,7 @@ import type { MemoryRetrievalPolicy } from './memory-retrieval-policy.js';
 import type { MemoryPresentationProfile } from './memory-presentation-profile.js';
 import type { MemoryDeletionPolicy } from './memory-deletion-policy.js';
 import type { BiographicalDepthPolicy } from './biographical-depth-policy.js';
+import type { BiographicalCandidatePolicy } from './biographical-candidate-policy.js';
 import type { ShellExecSettings } from './shell-exec-config.js';
 import type { RuntimeCompanionId } from '../../shared/routing/companion-id.js';
 import type {
@@ -310,6 +311,8 @@ export interface SubstrateConfig {
   memoryRetrievalPolicy?: MemoryRetrievalPolicy;
   /** Owner-configured adaptive biographical collection economics. */
   biographicalDepthPolicy?: BiographicalDepthPolicy;
+  /** Owner-controlled admission and review policy for durable biography candidates. */
+  biographicalCandidatePolicy?: BiographicalCandidatePolicy;
   /**
    * Versioned, schema-validated presentation profile for the retrieval
    * formatting layer (ordering, headings, valence markers, recency labels,

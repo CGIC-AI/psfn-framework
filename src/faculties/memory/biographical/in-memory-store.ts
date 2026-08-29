@@ -1,4 +1,8 @@
-import type { BiographicalClaim, BiographicalSensitivityGrant } from './types.js';
+import type {
+  BiographicalCandidateRecord,
+  BiographicalClaim,
+  BiographicalSensitivityGrant,
+} from './types.js';
 import {
   computeBiographicalRebuildId,
   deserializeBiographicalRebuildRequest,
@@ -19,6 +23,8 @@ import {
   reevaluateClaimEffective,
   serializeClaim,
   type BiographicalClaimListOptions,
+  type BiographicalCandidateTransitionInput,
+  type BiographicalCandidateWriteInput,
   type BiographicalClaimWriteInput,
   type BiographicalGrantRevokeInput,
   type BiographicalGrantWriteInput,
@@ -28,9 +34,17 @@ import {
   type BiographicalTransitionInput,
   type PreparedBiographicalClaim,
 } from './store-port.js';
+import {
+  assertCandidateClaimBinding,
+  deserializeCandidate,
+  prepareBiographicalCandidate,
+  serializeCandidate,
+  transitionBiographicalCandidate,
+} from './candidate-state.js';
 import { assertGrantRecord, BiographicalLifecycleError } from './kernel.js';
 import { assertKnownClaimKind } from './claim-kinds.js';
 import type { BiographicalSubjectRef } from './types.js';
+import { normalizeBiographicalCandidatePolicy } from '../../../system/config/biographical-candidate-policy.js';
 import {
   prepareBiographicalReviewAudit,
   type BiographicalReviewAuditInput,
@@ -40,6 +54,10 @@ import {
 interface StoredClaimRow {
   readonly id: string;
   readonly claimJson: string;
+}
+
+interface StoredCandidateRow {
+  readonly candidateJson: string;
 }
 
 interface StoredGrantRow {
@@ -90,6 +108,7 @@ function sameSubjectRef(
  */
 export class InMemoryBiographicalProfileStore implements BiographicalProfileStorePort {
   private readonly claims = new Map<string, StoredClaimRow>();
+  private readonly candidates = new Map<string, StoredCandidateRow>();
   private readonly grants = new Map<string, StoredGrantRow>();
   private readonly rebuilds = new Map<string, StoredRebuildRow>();
   private readonly reviewAudits = new Map<string, BiographicalReviewAuditRecord>();
@@ -105,6 +124,97 @@ export class InMemoryBiographicalProfileStore implements BiographicalProfileStor
 
   private storeClaim(claim: BiographicalClaim): void {
     this.claims.set(claim.id, { id: claim.id, claimJson: serializeClaim(claim) });
+  }
+
+  private readCandidate(id: string): BiographicalCandidateRecord {
+    const row = this.candidates.get(id);
+    if (!row) throw new Error(`biography candidate not found: ${id}`);
+    return deserializeCandidate(row.candidateJson);
+  }
+
+  private storeCandidate(candidate: BiographicalCandidateRecord): void {
+    this.candidates.set(candidate.id, { candidateJson: serializeCandidate(candidate) });
+  }
+
+  async writeCandidate(
+    input: BiographicalCandidateWriteInput,
+  ): Promise<BiographicalCandidateRecord> {
+    if ((input.claim as { readonly status?: unknown }).status !== undefined) {
+      throw new Error('biography candidate callers cannot choose claim status');
+    }
+    const policy = normalizeBiographicalCandidatePolicy(input.policy);
+    const now = input.claim.now ?? this.now();
+    const prepared = prepareBiographicalClaim({ ...input.claim, status: 'candidate', now });
+    const claim = finalizeBiographicalClaim(
+      prepared,
+      this.grantsByDigests(prepared.claimDigest, prepared.sourceSetDigest),
+      now,
+    );
+    if (this.claims.has(claim.id)) {
+      throw new Error(`biographical claim already exists: ${claim.id}`);
+    }
+    const pending = [...this.candidates.values()]
+      .map(row => deserializeCandidate(row.candidateJson))
+      .filter(candidate => !['active', 'rejected', 'superseded'].includes(candidate.stage));
+    if (pending.length >= policy.budgets.maxPendingCandidates) {
+      throw new Error('biography candidate pending budget exhausted');
+    }
+    if (
+      [...this.candidates.values()]
+        .map(row => deserializeCandidate(row.candidateJson))
+        .filter(candidate => candidate.automataRunId === input.automataRunId).length
+      >= policy.budgets.maxCandidatesPerAutomataRun
+    ) {
+      throw new Error('biography candidate automata run budget exhausted');
+    }
+    const candidate = prepareBiographicalCandidate({
+      claim,
+      automataRunId: input.automataRunId,
+      automataAuthorityRef: input.automataAuthorityRef,
+      policy,
+      now,
+      ...(input.supersedesCandidateId !== undefined
+        ? { supersedesCandidateId: input.supersedesCandidateId }
+        : {}),
+    });
+    this.storeClaim(claim);
+    this.storeCandidate(candidate);
+    return candidate;
+  }
+
+  async getCandidate(id: string): Promise<BiographicalCandidateRecord | undefined> {
+    const row = this.candidates.get(id);
+    if (!row) return undefined;
+    const candidate = deserializeCandidate(row.candidateJson);
+    assertCandidateClaimBinding(candidate, this.readClaim(candidate.claimId));
+    return candidate;
+  }
+
+  async transitionCandidate(
+    input: BiographicalCandidateTransitionInput,
+  ): Promise<BiographicalCandidateRecord> {
+    const candidate = this.readCandidate(input.candidateId);
+    const claim = this.readClaim(candidate.claimId);
+    const now = input.now ?? this.now();
+    const updated = transitionBiographicalCandidate({
+      candidate,
+      claim,
+      expectedRevision: input.expectedRevision,
+      to: input.to,
+      receipts: input.receipts,
+      ...(input.policy !== undefined ? { policy: input.policy } : {}),
+      now,
+    });
+    if (updated.stage === 'active') {
+      assertClaimTransition(claim, 'active', now);
+      this.storeClaim({
+        ...claim,
+        status: 'active',
+        lastSourceValidatedAt: now.toISOString(),
+      });
+    }
+    this.storeCandidate(updated);
+    return updated;
   }
 
   private grantsByDigests(
@@ -407,6 +517,7 @@ export class InMemoryBiographicalProfileStore implements BiographicalProfileStor
     this.transactionTail = new Promise<void>(resolve => { release = resolve; });
     await previous;
     const claimSnapshot = new Map(this.claims);
+    const candidateSnapshot = new Map(this.candidates);
     const grantSnapshot = new Map(this.grants);
     const rebuildSnapshot = new Map(this.rebuilds);
     const reviewAuditSnapshot = new Map(this.reviewAudits);
@@ -414,10 +525,12 @@ export class InMemoryBiographicalProfileStore implements BiographicalProfileStor
       return await operation(this);
     } catch (error) {
       this.claims.clear();
+      this.candidates.clear();
       this.grants.clear();
       this.rebuilds.clear();
       this.reviewAudits.clear();
       for (const [id, row] of claimSnapshot) this.claims.set(id, row);
+      for (const [id, row] of candidateSnapshot) this.candidates.set(id, row);
       for (const [id, row] of grantSnapshot) this.grants.set(id, row);
       for (const [id, row] of rebuildSnapshot) this.rebuilds.set(id, row);
       for (const [id, record] of reviewAuditSnapshot) this.reviewAudits.set(id, record);

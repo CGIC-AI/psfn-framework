@@ -12,6 +12,7 @@ import { normalizeEmotionScopingSettings } from '../config/emotion-scoping-confi
 import { normalizeNarrativeEmotionAppraisalSettings } from '../config/narrative-emotion-appraisal-config.js';
 import { normalizeMemoryRetrievalPolicy } from '../config/memory-retrieval-policy.js';
 import { normalizeBiographicalDepthPolicy } from '../config/biographical-depth-policy.js';
+import { normalizeBiographicalCandidatePolicy } from '../config/biographical-candidate-policy.js';
 import { normalizeMemoryPresentationProfile } from '../config/memory-presentation-profile.js';
 import { normalizeMemoryDeletionPolicy } from '../config/memory-deletion-policy.js';
 import { normalizeShellExecSettings } from '../config/shell-exec-config.js';
@@ -1528,6 +1529,12 @@ export function normalizeContextControlSettings(
     normalized.biographicalDepthPolicy = normalizeBiographicalDepthPolicy(
       settings.biographicalDepthPolicy,
       'biographicalDepthPolicy',
+    );
+  }
+  if ('biographicalCandidatePolicy' in settings) {
+    normalized.biographicalCandidatePolicy = normalizeBiographicalCandidatePolicy(
+      settings.biographicalCandidatePolicy,
+      'biographicalCandidatePolicy',
     );
   }
   if ('memoryDeletionPolicy' in settings) {

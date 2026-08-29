@@ -38,6 +38,7 @@ import { createDefaultEmotionScopingSettings } from './emotion-scoping-config.js
 import { createDefaultNarrativeEmotionAppraisalSettings } from './narrative-emotion-appraisal-config.js';
 import { createDefaultMemoryRetrievalPolicy } from './memory-retrieval-policy.js';
 import { createDefaultBiographicalDepthPolicy } from './biographical-depth-policy.js';
+import { createDefaultBiographicalCandidatePolicy } from './biographical-candidate-policy.js';
 import { createDefaultMemoryPresentationProfile } from './memory-presentation-profile.js';
 import {
   resolveCompanionFleet,
@@ -488,6 +489,7 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
     memoryRetrievalTelemetryEnabled: true,
     memoryRetrievalPolicy: createDefaultMemoryRetrievalPolicy(),
     biographicalDepthPolicy: createDefaultBiographicalDepthPolicy(),
+    biographicalCandidatePolicy: createDefaultBiographicalCandidatePolicy(),
     memoryPresentationProfile: createDefaultMemoryPresentationProfile(),
     memoryRefreshFailureAlertThreshold: DEFAULT_MEMORY_REFRESH_FAILURE_ALERT_THRESHOLD,
     intakeScreeningFailureAlertThreshold: DEFAULT_INTAKE_SCREENING_FAILURE_ALERT_THRESHOLD,

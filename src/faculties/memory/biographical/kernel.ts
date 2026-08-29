@@ -5,6 +5,8 @@ import {
   type ArtifactSensitivitySource,
 } from '../../../shared/contracts/artifact-sensitivity.js';
 import { hasExactKeys, isCanonicalIsoTimestamp, isRecord } from '../../../shared/utils/types.js';
+import { MEMORY_POLICY_TYPES } from '../../../system/config/memory-retrieval-policy.js';
+import { BIOGRAPHICAL_SOURCE_LIFECYCLE_STATES } from '../../../system/config/biographical-candidate-policy.js';
 import {
   sensitivityOrd,
   type SensitivityLevel,
@@ -248,7 +250,12 @@ function assertSource(value: unknown, index: number): BiographicalClaimSource {
       'subjectEvidenceDigest',
       'consentFingerprint',
     ],
-    ['sourceChannelId', 'sourceChannelEpoch'],
+    [
+      'sourceChannelId',
+      'sourceChannelEpoch',
+      'sourceType',
+      'lifecycleStateAtProjection',
+    ],
   )) {
     fail(`sources[${index}] has unknown or missing fields`);
   }
@@ -293,6 +300,29 @@ function assertSource(value: unknown, index: number): BiographicalClaimSource {
       `sources[${index}].sourceChannelEpoch`,
     );
   }
+  let sourceType: BiographicalClaimSource['sourceType'];
+  if (value.sourceType !== undefined) {
+    if (
+      typeof value.sourceType !== 'string'
+      || !(MEMORY_POLICY_TYPES as readonly string[]).includes(value.sourceType)
+    ) {
+      fail(`sources[${index}].sourceType must be a supported memory type`);
+    }
+    sourceType = value.sourceType as NonNullable<BiographicalClaimSource['sourceType']>;
+  }
+  let lifecycleStateAtProjection: BiographicalClaimSource['lifecycleStateAtProjection'];
+  if (value.lifecycleStateAtProjection !== undefined) {
+    if (
+      typeof value.lifecycleStateAtProjection !== 'string'
+      || !(BIOGRAPHICAL_SOURCE_LIFECYCLE_STATES as readonly string[])
+        .includes(value.lifecycleStateAtProjection)
+    ) {
+      fail(`sources[${index}].lifecycleStateAtProjection must be a supported lifecycle state`);
+    }
+    lifecycleStateAtProjection = value.lifecycleStateAtProjection as NonNullable<
+      BiographicalClaimSource['lifecycleStateAtProjection']
+    >;
+  }
   return {
     ref: value.ref.trim(),
     revision: value.revision.trim(),
@@ -302,6 +332,8 @@ function assertSource(value: unknown, index: number): BiographicalClaimSource {
     consentFingerprint: value.consentFingerprint,
     ...(sourceChannelId !== undefined ? { sourceChannelId } : {}),
     ...(sourceChannelEpoch !== undefined ? { sourceChannelEpoch } : {}),
+    ...(sourceType !== undefined ? { sourceType } : {}),
+    ...(lifecycleStateAtProjection !== undefined ? { lifecycleStateAtProjection } : {}),
   };
 }
 

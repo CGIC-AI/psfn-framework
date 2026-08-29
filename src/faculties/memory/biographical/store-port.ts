@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import type { SensitivityLevel } from '../../../system/trust/types.js';
+import type { BiographicalCandidatePolicy } from '../../../system/config/biographical-candidate-policy.js';
 import { hasExactKeys, isCanonicalIsoTimestamp } from '../../../shared/utils/types.js';
 import type {
   BiographicalClaim,
@@ -9,6 +10,10 @@ import type {
   BiographicalClaimSource,
   BiographicalClaimStatus,
   BiographicalClaimValue,
+  BiographicalCandidateRecord,
+  BiographicalCandidateReceiptAuthority,
+  BiographicalCandidateReceiptDecision,
+  BiographicalCandidateStage,
   BiographicalCollectionDepth,
   BiographicalSensitivityGrant,
   BiographicalSubjectRef,
@@ -122,6 +127,30 @@ export interface BiographicalSupersessionResult {
 export interface BiographicalTransitionInput {
   readonly claimId: string;
   readonly to: BiographicalClaimStatus;
+  readonly now?: Date;
+}
+
+export interface BiographicalCandidateReceiptInput {
+  readonly authority: BiographicalCandidateReceiptAuthority;
+  readonly decision: BiographicalCandidateReceiptDecision;
+  readonly actorAuthorityRef: string;
+}
+
+export interface BiographicalCandidateWriteInput {
+  readonly claim: Omit<BiographicalClaimWriteInput, 'status'> & { readonly status?: never };
+  readonly automataRunId: string;
+  readonly automataAuthorityRef: string;
+  readonly policy: BiographicalCandidatePolicy;
+  readonly supersedesCandidateId?: string;
+}
+
+export interface BiographicalCandidateTransitionInput {
+  readonly candidateId: string;
+  readonly expectedRevision: number;
+  readonly to: BiographicalCandidateStage;
+  readonly receipts: readonly BiographicalCandidateReceiptInput[];
+  /** Required only for companion-only autoactivation; must match the creation policy digest. */
+  readonly policy?: BiographicalCandidatePolicy;
   readonly now?: Date;
 }
 
@@ -554,6 +583,11 @@ export function assertCompatibleSupersession(
 }
 
 export interface BiographicalProfileStorePort {
+  writeCandidate(input: BiographicalCandidateWriteInput): Promise<BiographicalCandidateRecord>;
+  getCandidate(id: string): Promise<BiographicalCandidateRecord | undefined>;
+  transitionCandidate(
+    input: BiographicalCandidateTransitionInput,
+  ): Promise<BiographicalCandidateRecord>;
   writeClaim(input: BiographicalClaimWriteInput): Promise<BiographicalClaim>;
   getClaim(id: string): Promise<BiographicalClaim | undefined>;
   listClaims(options?: BiographicalClaimListOptions): Promise<BiographicalClaim[]>;

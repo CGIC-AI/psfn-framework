@@ -193,6 +193,43 @@
       "turnClaimLimit": 12
     }
   },
+  "biographicalCandidatePolicy": {
+    "schemaVersion": 1,
+    "admittedSourceTypes": ["semantic", "episodic", "reflection", "relational"],
+    "maximumSourceSensitivity": "personal",
+    "excludedLifecycleStates": [
+      "quarantined",
+      "tombstoned",
+      "cogsec_blocked",
+      "revoked",
+      "superseded"
+    ],
+    "budgets": {
+      "maxPendingCandidates": 100,
+      "maxCandidatesPerAutomataRun": 20,
+      "maxSourcesPerCandidate": 8,
+      "maxReviewReceiptsPerCandidate": 8
+    },
+    "reviewTriggers": [
+      "human_subject",
+      "inferred_basis",
+      "imported_basis",
+      "relational_claim",
+      "sensitivity_lowering"
+    ],
+    "companionOnlyAutoactivation": {
+      "enabled": true,
+      "scopes": ["companion_self"],
+      "admittedClaimKinds": ["name", "nickname", "role", "stable-preference"],
+      "admittedBases": ["explicit"],
+      "maximumSensitivity": "personal"
+    },
+    "projectionScopes": [
+      "companion_self",
+      "current_author",
+      "explicitly_relevant_subject"
+    ]
+  },
   "memoryPresentationProfile": {
     "version": 1,
     "sectionOrder": [

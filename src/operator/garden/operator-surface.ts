@@ -44,9 +44,6 @@ import { readFleetGardenBody } from './garden-admission.js';
 import type { GardenFleetChildAssertionClient } from './fleet-child-assertion-client.js';
 import { FleetGardenControlPlane } from './fleet-garden-control-plane.js';
 import { GardenOperatorRouting } from './garden-operator-routing.js';
-import type {
-  FleetGardenDirectDatabasePort,
-} from './fleet-garden-operator-router.js';
 import type { GardenIntakeQuarantineReadPort } from './garden-intake-quarantine-reads.js';
 import type { FleetModelUsageRouteService } from './routes/fleet-model-usage-routes.js';
 import {
@@ -73,8 +70,6 @@ export interface GardenOperatorSurfaceConfig {
   fleetControlPlane?: FleetGardenControlPlane;
   /** Test seam; production constructs this from fleetControlPlane.targetRegistry(). */
   fleetTransport?: FleetGardenTransportProxyPort;
-  /** Approved invariant-11 routes served from companion-bound Garden DB services. */
-  fleetDirectDatabase?: FleetGardenDirectDatabasePort;
   /** Quarantine queue/detail GETs served from companion-bound mounted snapshots. */
   intakeQuarantineReads?: GardenIntakeQuarantineReadPort;
   /** Fleet-wide read model assembled through companion admin transports. */
@@ -130,9 +125,6 @@ export class GardenOperatorSurface implements Lifecycle {
       ...(config.transportEndpoint ? { transportEndpoint: config.transportEndpoint } : {}),
       ...(config.fleetControlPlane ? { fleetControlPlane: config.fleetControlPlane } : {}),
       ...(config.fleetTransport ? { fleetTransport: config.fleetTransport } : {}),
-      ...(config.fleetDirectDatabase
-        ? { fleetDirectDatabase: config.fleetDirectDatabase }
-        : {}),
       ...(config.intakeQuarantineReads
         ? { fleetIntakeQuarantineReads: config.intakeQuarantineReads }
         : {}),

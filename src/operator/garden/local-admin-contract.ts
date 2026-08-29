@@ -301,35 +301,6 @@ export interface InProcessGardenAdminContractOptions {
   operatorAlerting?: OperatorAlertSinkConfiguration;
 }
 
-export interface FleetGardenDirectDatabaseServices {
-  readonly modelUsage: AdminModelUsageDataService;
-  readonly observerEvalSidecar: AdminObserverEvalSidecarService;
-}
-
-export function createFleetGardenDirectDatabaseServices(
-  config: SubstrateConfig,
-): FleetGardenDirectDatabaseServices {
-  const modelUsageStore = createPostgresModelUsageStoreFromConfig(
-    config,
-    undefined,
-    'read_only',
-  );
-  if (!modelUsageStore) {
-    throw new Error('Fleet Garden model usage access requires PostgreSQL persistence');
-  }
-  const observerEvalSidecar = createObserverEvalSidecarAdminService({
-    config,
-    // Fleet direct-database services are constructed from the selected
-    // companion tuple. Pin this read pool to that schema/role exactly; an
-    // unscoped pool would resolve against the primary/public tenant.
-    tenant: resolveConfigTenantPoolScope(config),
-  });
-  return {
-    modelUsage: new AdminModelUsageDataService(modelUsageStore),
-    observerEvalSidecar,
-  };
-}
-
 export function createInProcessGardenAdminContract(
   options: InProcessGardenAdminContractOptions,
 ): GardenAdminDomainServices {

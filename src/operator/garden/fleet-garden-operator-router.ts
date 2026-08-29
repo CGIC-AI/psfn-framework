@@ -37,18 +37,9 @@ export interface FleetGardenOperatorRouterOptions {
   readonly controlPlane: FleetGardenControlPlane;
   readonly transport: FleetGardenTransportProxyPort;
   readonly childAssertions?: GardenFleetChildAssertionClient;
-  readonly directDatabase?: FleetGardenDirectDatabasePort;
   readonly intakeQuarantineReads?: FleetGardenIntakeQuarantineReadPort;
   readonly fleetModelUsage?: FleetModelUsageRouteService;
   readonly operatorConfirmationResolver?: GatewayOperatorConfirmationClient;
-}
-
-export interface FleetGardenDirectDatabasePort {
-  handleHttp(input: {
-    readonly admission: FleetGardenAdmittedPrincipalRequest;
-    readonly req: IncomingMessage;
-    readonly res: ServerResponse;
-  }): boolean;
 }
 
 export interface FleetGardenIntakeQuarantineReadPort {
@@ -101,13 +92,6 @@ export class FleetGardenOperatorRouter {
     if (admitted.target.method === 'POST'
       && admitted.target.canonicalPath === CONFIRMATION_RESOLVE_PATH
       && await this.resolveOperatorConfirmation(admitted, input.res)) {
-      return;
-    }
-    if (this.options.directDatabase?.handleHttp({
-      admission: admitted,
-      req: input.req,
-      res: input.res,
-    })) {
       return;
     }
     if (this.options.intakeQuarantineReads?.handleHttp({

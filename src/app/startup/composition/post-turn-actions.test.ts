@@ -445,6 +445,11 @@ describe('wirePostTurnActionRuntime', () => {
       processing: true,
       queueDepth: 1,
       runningCount: 1,
+      progress: {
+        noProgressForMs: 0,
+        stalled: false,
+        waitingForForegroundIdleCount: 1,
+      },
       queued: [
         expect.objectContaining({
           actionId: 'foreground-action',
@@ -458,6 +463,44 @@ describe('wirePostTurnActionRuntime', () => {
 
     expect(handler).toHaveBeenCalledTimes(1);
     expect(runtime.listQueued()).toHaveLength(0);
+    expect(runtime.getStatus().progress.waitingForForegroundIdleCount).toBe(0);
+  });
+
+  it('reports no progress only after ready work misses the executor interval', async () => {
+    const nowSpy = vi.spyOn(Date, 'now');
+    try {
+      nowSpy.mockReturnValue(1_700_000_000_000);
+      const eventBus = new EventBus();
+      const scheduler = new Scheduler(eventBus, {
+        tickIntervalMs: 100,
+        heartbeatIntervalMs: 1_000,
+      });
+      const runtime = wirePostTurnActionRuntime({
+        eventBus,
+        scheduler,
+        agentLoop: { waitForIdle: vi.fn().mockResolvedValue(undefined) },
+        intervalMs: 10,
+      });
+      runtime.registerHandler('heartbeat.run_template', vi.fn().mockResolvedValue(undefined));
+
+      runtime.enqueue(makeAction({ id: 'ready-action', dedupeKey: 'ready:key' }));
+
+      expect(runtime.getStatus().progress).toMatchObject({
+        noProgressForMs: 0,
+        expectedSchedulerRunIntervalMs: 50,
+        stalled: false,
+        waitingForForegroundIdleCount: 0,
+      });
+
+      nowSpy.mockReturnValue(1_700_000_000_051);
+      expect(runtime.getStatus().progress).toMatchObject({
+        noProgressForMs: 51,
+        expectedSchedulerRunIntervalMs: 50,
+        stalled: true,
+      });
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 
   it('awaits foreground idle for a maintenance_reflection action even when the handler declares background execution', async () => {

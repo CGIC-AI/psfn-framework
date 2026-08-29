@@ -854,13 +854,15 @@ export class AdminSubsystemHealthDataService implements AdminSubsystemHealthServ
     const persistenceError = queueStatus.persistence.lastPersistError
       ?? queueStatus.persistence.lastLoadError
       ?? (queueStatus.quarantine.persisted ? undefined : 'Queue quarantine state is not durable');
-    const hasFailures = queueStatus.failures.retryableFailureCount > 0
-      || queueStatus.failures.permanentRejectCount > 0;
-    const hasNoProgress = queueStatus.queueDepth > 0
-      && queueStatus.progress.noProgressForMs > 0;
+    // Failure and drop counters are lifetime telemetry. They describe what has
+    // happened, not whether the queue is currently unhealthy. A scheduled
+    // retry is the present-tense failure state; demand age remains observable
+    // without treating expected foreground-idle waits as a stalled queue.
+    const hasActiveRetry = queueStatus.retryScheduledCount > 0;
+    const hasNoProgress = queueStatus.progress.stalled;
     const status: SubsystemLaneStatus = persistenceError || queueStatus.quarantine.count > 0
       ? 'failed'
-      : hasFailures || queueStatus.backPressure.droppedCount > 0 || hasNoProgress
+      : hasActiveRetry || hasNoProgress
         ? 'degraded'
         : 'ok';
     const outcome: SubsystemLaneOutcome = status === 'failed'
@@ -872,13 +874,11 @@ export class AdminSubsystemHealthDataService implements AdminSubsystemHealthServ
       ? 'queue_persistence_failed'
       : queueStatus.quarantine.count > 0
         ? 'queue_entries_quarantined'
-        : hasFailures
-          ? 'retryable_or_permanent_failures'
-          : queueStatus.backPressure.droppedCount > 0
-            ? 'terminal_drops_observed'
-            : hasNoProgress
-              ? 'queue_no_progress'
-              : null;
+        : hasActiveRetry
+          ? 'queue_retry_scheduled'
+          : hasNoProgress
+            ? 'queue_no_progress'
+            : null;
 
     return {
       id: 'post_turn_action_queue',
@@ -899,7 +899,10 @@ export class AdminSubsystemHealthDataService implements AdminSubsystemHealthServ
         activeCoalescedCount: queueStatus.coalescing.activeCoalescedCount,
         retryableFailureCount: queueStatus.failures.retryableFailureCount,
         permanentRejectCount: queueStatus.failures.permanentRejectCount,
+        activeRetryCount: queueStatus.retryScheduledCount,
+        waitingForForegroundIdleCount: queueStatus.progress.waitingForForegroundIdleCount,
         noProgressForMs: queueStatus.progress.noProgressForMs,
+        expectedSchedulerRunIntervalMs: queueStatus.progress.expectedSchedulerRunIntervalMs,
         droppedCount: queueStatus.backPressure.droppedCount,
         completedCount: queueStatus.completions.completedCount,
         quarantinedCount: queueStatus.quarantine.count,

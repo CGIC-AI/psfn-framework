@@ -564,6 +564,9 @@ describe('AdminSubsystemHealthDataService', () => {
         lastProgressAt: 5_000,
         noProgressSince: 5_000,
         noProgressForMs: 4_000,
+        expectedSchedulerRunIntervalMs: 250,
+        stalled: false,
+        waitingForForegroundIdleCount: 0,
       },
       terminal: { cancelledCount: 0, acknowledgedCount: 0, recentTerminals: [] },
       completions: { completedCount: 11, recentCompletions: [] },
@@ -588,7 +591,7 @@ describe('AdminSubsystemHealthDataService', () => {
       status: 'degraded',
       lastEventAt: 5_000,
       lastOutcome: 'degraded',
-      lastReason: 'retryable_or_permanent_failures',
+      lastReason: 'queue_retry_scheduled',
       counts: {
         queueDepth: 5,
         deferredDepth: 2,
@@ -597,24 +600,121 @@ describe('AdminSubsystemHealthDataService', () => {
         activeCoalescedCount: 3,
         retryableFailureCount: 4,
         permanentRejectCount: 2,
+        activeRetryCount: 1,
+        waitingForForegroundIdleCount: 0,
         noProgressForMs: 4_000,
+        expectedSchedulerRunIntervalMs: 250,
         completedCount: 11,
       },
     });
 
-    const stalledWithoutFailures: PostTurnActionQueueStatus = {
+    const healthyForegroundWaitWithRecoveredFailures: PostTurnActionQueueStatus = {
       ...queueStatus,
-      failures: {
-        failedCount: 0,
-        retryableFailureCount: 0,
-        permanentRejectCount: 0,
-        recentFailures: [],
+      processing: true,
+      readyCount: 1,
+      retryScheduledCount: 0,
+      runningCount: 1,
+      lanes: queueStatus.lanes.map((lane) => ({
+        ...lane,
+        readyCount: 1,
+        retryScheduledCount: 0,
+        runningCount: 1,
+      })),
+      backPressure: {
+        droppedCount: 3,
+        recentDrops: [],
+      },
+      progress: {
+        lastProgressAt: 5_000,
+        noProgressForMs: 0,
+        expectedSchedulerRunIntervalMs: 250,
+        stalled: false,
+        waitingForForegroundIdleCount: 1,
+      },
+    };
+    const healthyForegroundWaitService = new AdminSubsystemHealthDataService({
+      eventBus: new EventBus(),
+      now: () => 9_000,
+      postTurnActionQueueProvider: {
+        getStatus: () => healthyForegroundWaitWithRecoveredFailures,
+      },
+    });
+    expect(laneById(
+      (await healthyForegroundWaitService.getSnapshot()).lanes,
+      'post_turn_action_queue',
+    )).toMatchObject({
+      status: 'ok',
+      lastOutcome: 'ran',
+      lastReason: null,
+      counts: {
+        activeRetryCount: 0,
+        retryableFailureCount: 4,
+        permanentRejectCount: 2,
+        droppedCount: 3,
+        noProgressForMs: 0,
+        waitingForForegroundIdleCount: 1,
+      },
+    });
+
+    const recoveredQueueWithHistoricalFailures: PostTurnActionQueueStatus = {
+      ...healthyForegroundWaitWithRecoveredFailures,
+      processing: false,
+      queueDepth: 0,
+      readyCount: 0,
+      runningCount: 0,
+      lanes: healthyForegroundWaitWithRecoveredFailures.lanes.map((lane) => ({
+        ...lane,
+        queueDepth: 0,
+        readyCount: 0,
+        runningCount: 0,
+        deferredCount: 0,
+      })),
+      progress: {
+        lastProgressAt: 9_000,
+        noProgressForMs: 0,
+        expectedSchedulerRunIntervalMs: 250,
+        stalled: false,
+        waitingForForegroundIdleCount: 0,
+      },
+    };
+    const recoveredService = new AdminSubsystemHealthDataService({
+      eventBus: new EventBus(),
+      now: () => 9_000,
+      postTurnActionQueueProvider: {
+        getStatus: () => recoveredQueueWithHistoricalFailures,
+      },
+    });
+    expect(laneById(
+      (await recoveredService.getSnapshot()).lanes,
+      'post_turn_action_queue',
+    )).toMatchObject({
+      status: 'ok',
+      lastOutcome: 'ran',
+      lastReason: null,
+      counts: {
+        activeRetryCount: 0,
+        retryableFailureCount: 4,
+        permanentRejectCount: 2,
+        droppedCount: 3,
+      },
+    });
+
+    const stalledQueue: PostTurnActionQueueStatus = {
+      ...queueStatus,
+      retryScheduledCount: 0,
+      lanes: queueStatus.lanes.map((lane) => ({
+        ...lane,
+        retryScheduledCount: 0,
+      })),
+      progress: {
+        ...queueStatus.progress,
+        stalled: true,
       },
     };
     const stalledService = new AdminSubsystemHealthDataService({
       eventBus: new EventBus(),
       now: () => 9_000,
-      postTurnActionQueueProvider: { getStatus: () => stalledWithoutFailures },
+      postTurnActionQueueProvider: { getStatus: () => stalledQueue },
     });
     expect(laneById(
       (await stalledService.getSnapshot()).lanes,

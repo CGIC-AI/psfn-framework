@@ -210,6 +210,10 @@ describe('testing-session purge with PostgreSQL projection', () => {
         [sessionId],
       )).rows[0]?.count).toBe('1');
       expect((await adminPool.query<{ count: string }>(
+        `SELECT COUNT(*)::text AS count FROM "${schema}".session_conversational_activity WHERE logical_session_id = $1`,
+        [sessionId],
+      )).rows[0]?.count).toBe('1');
+      expect((await adminPool.query<{ count: string }>(
         'SELECT COUNT(*)::text AS count FROM public.session_messages_projection WHERE channel_id = $1',
         [sessionId],
       )).rows[0]?.count).toBe('1');
@@ -221,7 +225,7 @@ describe('testing-session purge with PostgreSQL projection', () => {
       });
 
       expect(report.database).toEqual({
-        removedProjectionRows: 2,
+        removedProjectionRows: 3,
         removedMemoryRows: 1,
         removedRecentContactShapeRows: 1,
         removedMemoryLinkRows: 1,
@@ -234,6 +238,10 @@ describe('testing-session purge with PostgreSQL projection', () => {
       )).rows[0]?.count).toBe('0');
       expect((await adminPool.query<{ count: string }>(
         `SELECT COUNT(*)::text AS count FROM "${schema}".session_projection_drift WHERE channel_id = $1`,
+        [sessionId],
+      )).rows[0]?.count).toBe('0');
+      expect((await adminPool.query<{ count: string }>(
+        `SELECT COUNT(*)::text AS count FROM "${schema}".session_conversational_activity WHERE logical_session_id = $1`,
         [sessionId],
       )).rows[0]?.count).toBe('0');
       expect((await adminPool.query<{ count: string }>(

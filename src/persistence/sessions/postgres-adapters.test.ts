@@ -116,6 +116,13 @@ class FakePostgresPool {
       } as QueryResult;
     }
 
+    if (
+      normalized.startsWith('insert into session_conversational_activity')
+      || normalized.startsWith('delete from session_conversational_activity')
+    ) {
+      return { rows: [], command: 'OK', rowCount: 1, oid: 0, fields: [] } as QueryResult;
+    }
+
     if (normalized.startsWith('delete from session_messages_projection where channel_id =')) {
       const channelId = String(values[0] ?? '');
       if (this.failDeleteForChannel === channelId) {

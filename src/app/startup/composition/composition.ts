@@ -152,6 +152,7 @@ export interface SessionComposition {
   sessionTailCache: SessionTailCachePort | null;
   sessionsDir: string;
   exactSessionProjection: Awaited<ReturnType<typeof createDefaultPostgresSessionAdapters>>['exactSessionProjection'];
+  conversationalActivityWorkset: Awaited<ReturnType<typeof createDefaultPostgresSessionAdapters>>['conversationalActivityWorkset'];
   exactSessionWriteBarrier: FilesystemAutomataRetentionWriteBarrier;
 }
 
@@ -225,6 +226,11 @@ function createSessionComposition(
   if (!turnRecordEligibilityFence) {
     throw new Error('PostgreSQL session composition requires a TurnRecord eligibility fence');
   }
+  const conversationalActivityWorkset = (sessionAdapters as Partial<typeof sessionAdapters>)
+    .conversationalActivityWorkset;
+  if (!conversationalActivityWorkset) {
+    throw new Error('PostgreSQL session composition requires a conversational activity workset');
+  }
   // Durable session-integrity incident seam (bead g59z): when a keyring makes
   // HMAC verification active, a full journal load that surfaces a broken chain
   // records one operator-only CogSec incident per session in the canonical
@@ -291,6 +297,7 @@ function createSessionComposition(
     sessionTailCache,
     sessionsDir,
     exactSessionProjection: sessionAdapters.exactSessionProjection,
+    conversationalActivityWorkset,
     exactSessionWriteBarrier,
   };
 }

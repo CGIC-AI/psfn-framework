@@ -24,7 +24,7 @@ import {
   startPostgresTestHarness,
   type PostgresTestHarness,
 } from '../../test-support/postgres-test-harness.js';
-import { createPostgresPool } from '../postgres.js';
+import { createPostgresPool, ensurePostgresSchemaExists } from '../postgres.js';
 import { createDefaultPostgresSessionAdapters } from './postgres-adapters.js';
 
 const INTEGRATION_TIMEOUT_MS = 120_000;
@@ -108,6 +108,203 @@ function tombstoneEntry(channelId: string, id: number, caseId: string): {
 }
 
 describe('transcript projection redaction drift (real Postgres)', () => {
+  it('enumerates every conversational revision and resumes per-purpose claims across companion restarts', async () => {
+    if (!harness) throw new Error('Postgres test harness is unavailable');
+    const database = await harness.createDatabase();
+    const adminPool = createPostgresPool(database.databaseUrl, {
+      applicationName: 'psfn-conversation-workset-admin',
+      allowExitOnIdle: true,
+      max: 2,
+    });
+    const namespaces = ['companion_alpha', 'companion_beta', 'companion_gamma'] as const;
+    for (const namespace of namespaces) {
+      await ensurePostgresSchemaExists(adminPool, namespace);
+    }
+    const pools = namespaces.map(namespace => createPostgresPool(database.databaseUrl, {
+      applicationName: `psfn-conversation-workset-${namespace}`,
+      allowExitOnIdle: true,
+      max: 3,
+      schema: namespace,
+    }));
+
+    try {
+      const adapters = await Promise.all(pools.map((pool, index) => (
+        createDefaultPostgresSessionAdapters(database.databaseUrl, {
+          sessionsDir: newSessionsDir(`psfn-conversation-workset-${index}-`),
+          pool,
+          schema: namespaces[index],
+        })
+      )));
+      const [alpha, beta, gamma] = adapters;
+      if (!alpha || !beta || !gamma) throw new Error('Companion workset adapters were not created');
+
+      for (let index = 0; index < 31; index += 1) {
+        alpha.transcriptProjection.upsertSessionEntry({
+          id: 1,
+          channelId: `api:friend-${String(index).padStart(2, '0')}`,
+          role: 'user',
+          content: `Conversation ${index}`,
+          timestamp: 1_000 + index,
+        });
+      }
+      alpha.transcriptProjection.upsertSessionEntry({
+        id: 1,
+        channelId: 'internal:free-time:painting',
+        role: 'assistant',
+        content: 'I experimented with watercolors.',
+        timestamp: 2_000,
+      });
+      alpha.transcriptProjection.upsertSessionEntry({
+        id: 1,
+        channelId: 'api:inactive',
+        role: 'system',
+        content: 'Still here',
+        timestamp: 99_000,
+        metadata: JSON.stringify({
+          sessionLane: { schemaVersion: 1, kind: 'internal', source: 'ambient_presence' },
+        }),
+      });
+      alpha.transcriptProjection.upsertSessionEntry({
+        id: 1,
+        channelId: 'api:friend:testing:maintenance',
+        role: 'user',
+        content: 'Synthetic fixture',
+        timestamp: 100_000,
+      });
+      alpha.transcriptProjection.upsertSessionEntry({
+        id: 7,
+        channelId: 'api:physical-alias',
+        role: 'assistant',
+        content: 'Canonical alias reply',
+        timestamp: 3_000,
+      }, { channelId: 'api:logical-session' });
+
+      beta.transcriptProjection.upsertSessionEntry({
+        id: 1,
+        channelId: 'discord:friends-room',
+        role: 'user',
+        content: 'Group conversation',
+        timestamp: 4_000,
+        channelVisibility: 'invite_only',
+      });
+      gamma.transcriptProjection.upsertSessionEntry({
+        id: 1,
+        channelId: 'companion-room:kitchen',
+        role: 'assistant',
+        content: 'ICP room conversation',
+        timestamp: 5_000,
+      });
+      await Promise.all(adapters.map(adapter => adapter.transcriptProjection.flushPendingWrites?.()));
+
+      const alphaEpisodes = await alpha.conversationalActivityWorkset.enumerate('episodic_synthesis');
+      expect(alphaEpisodes).toHaveLength(33);
+      expect(alphaEpisodes.map(item => item.logicalSessionId)).toContain('api:logical-session');
+      expect(alphaEpisodes.map(item => item.logicalSessionId)).not.toContain('api:physical-alias');
+      expect(alphaEpisodes.map(item => item.logicalSessionId)).not.toContain('api:inactive');
+      expect(alphaEpisodes.map(item => item.logicalSessionId)).not.toContain('api:friend:testing:maintenance');
+      await expect(beta.conversationalActivityWorkset.enumerate('episodic_synthesis')).resolves.toEqual([
+        expect.objectContaining({
+          logicalSessionId: 'discord:friends-room',
+          activityKind: 'group_conversation',
+          revision: 1,
+        }),
+      ]);
+      await expect(gamma.conversationalActivityWorkset.enumerate('episodic_synthesis')).resolves.toEqual([
+        expect.objectContaining({
+          logicalSessionId: 'companion-room:kitchen',
+          activityKind: 'inter_companion',
+          revision: 1,
+        }),
+      ]);
+
+      const claimed = await alpha.conversationalActivityWorkset.claim({
+        purpose: 'episodic_synthesis',
+        logicalSessionId: 'api:friend-00',
+        revision: 1,
+        claimantId: 'episode-worker',
+      });
+      expect(claimed).toEqual(expect.objectContaining({
+        logicalSessionId: 'api:friend-00',
+        revision: 1,
+        claimantId: 'episode-worker',
+      }));
+      await expect(alpha.conversationalActivityWorkset.claim({
+        purpose: 'episodic_synthesis',
+        logicalSessionId: 'api:friend-00',
+        revision: 1,
+        claimantId: 'competing-worker',
+      })).resolves.toBeNull();
+
+      const restartPool = createPostgresPool(database.databaseUrl, {
+        applicationName: 'psfn-conversation-workset-alpha-restart',
+        allowExitOnIdle: true,
+        max: 3,
+        schema: namespaces[0],
+      });
+      try {
+        const restarted = await createDefaultPostgresSessionAdapters(database.databaseUrl, {
+          sessionsDir: newSessionsDir('psfn-conversation-workset-alpha-restart-'),
+          pool: restartPool,
+          schema: namespaces[0],
+        });
+        await expect(restarted.conversationalActivityWorkset.resumeClaim({
+          purpose: 'episodic_synthesis',
+          logicalSessionId: 'api:friend-00',
+          claimantId: 'episode-worker',
+        })).resolves.toEqual(claimed);
+        await expect(restarted.conversationalActivityWorkset.checkpoint({
+          purpose: 'episodic_synthesis',
+          logicalSessionId: 'api:friend-00',
+          revision: 1,
+          claimantId: 'competing-worker',
+        })).rejects.toThrow(/active claim/);
+        await restarted.conversationalActivityWorkset.checkpoint({
+          purpose: 'episodic_synthesis',
+          logicalSessionId: 'api:friend-00',
+          revision: 1,
+          claimantId: 'episode-worker',
+        });
+        expect((await restarted.conversationalActivityWorkset.enumerate('episodic_synthesis'))
+          .map(item => item.logicalSessionId)).not.toContain('api:friend-00');
+        expect((await restarted.conversationalActivityWorkset.enumerate('sleeptime_consolidation'))
+          .map(item => item.logicalSessionId)).toContain('api:friend-00');
+
+        restarted.transcriptProjection.upsertSessionEntry({
+          id: 2,
+          channelId: 'api:friend-00',
+          role: 'system',
+          content: 'Temporal maintenance',
+          timestamp: 200_000,
+          metadata: JSON.stringify({
+            sessionLane: { schemaVersion: 1, kind: 'system_note', source: 'temporal_wakeup_refresher' },
+          }),
+        });
+        await restarted.transcriptProjection.flushPendingWrites?.();
+        expect((await restarted.conversationalActivityWorkset.enumerate('episodic_synthesis'))
+          .map(item => item.logicalSessionId)).not.toContain('api:friend-00');
+
+        restarted.transcriptProjection.upsertSessionEntry({
+          id: 3,
+          channelId: 'api:friend-00',
+          role: 'assistant',
+          content: 'A genuine new reply',
+          timestamp: 201_000,
+        });
+        await restarted.transcriptProjection.flushPendingWrites?.();
+        expect(await restarted.conversationalActivityWorkset.enumerate('episodic_synthesis'))
+          .toContainEqual(expect.objectContaining({
+            logicalSessionId: 'api:friend-00',
+            revision: 3,
+          }));
+      } finally {
+        await restartPool.end();
+      }
+    } finally {
+      await Promise.all(pools.map(pool => pool.end()));
+      await adminPool.end();
+    }
+  }, INTEGRATION_TIMEOUT_MS);
+
   it('fails closed on a failed redaction DELETE, survives restart, and recovers through repair', async () => {
     if (!harness) throw new Error('Postgres test harness is unavailable');
     const database = await harness.createDatabase();

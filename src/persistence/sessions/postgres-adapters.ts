@@ -12,6 +12,7 @@ import { POSTGRES_TRANSCRIPT_MIGRATIONS } from '../postgres/migrations.js';
 import type { SessionArchivePort } from '../journals/journal/port.js';
 import { createFilesystemSessionArchivePort } from '../journals/journal/port.js';
 import { isCogSecTombstoneSessionEntry } from '../../core/cogsec/tombstones.js';
+import type { ConversationalActivityWorksetPort } from '../../core/session/conversational-activity-workset.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { isRecord } from '../../shared/utils/types.js';
 import type { RedactionProjectionDriftObserver } from '../../shared/contracts/projection-drift.js';
@@ -31,6 +32,12 @@ import {
   purgeTestingSessionPostgresData,
   type SessionDatabasePurgePort,
 } from './testing-session-postgres-purge.js';
+import { PostgresConversationalActivityWorkset } from './postgres-conversational-activity-workset.js';
+import {
+  deleteConversationActivity,
+  projectConversationActivity,
+  upsertConversationActivity,
+} from './postgres-conversational-activity-ledger.js';
 
 const DEFAULT_SEARCH_LIMIT = 10;
 const MAX_SEARCH_LIMIT = 100;
@@ -111,6 +118,7 @@ export interface PostgresSessionAdapters {
   transcriptSearch: KeywordSearchableTranscriptProjection;
   turnRecordStore: TurnRecordStorePort;
   turnRecordEligibilityFence: TurnRecordEligibilityFencePort;
+  conversationalActivityWorkset: ConversationalActivityWorksetPort;
   /** Production exact-purge seam; deliberately excludes the testing purge port. */
   exactSessionProjection: {
     pool: Pool;
@@ -561,6 +569,7 @@ class PostgresTranscriptProjection implements KeywordSearchableTranscriptProject
 
       this.enqueueWrite(channelId, async (client) => {
         const deleted = await deleteProjectionRecord(client, channelId, entry.id);
+        await deleteConversationActivity(client, channelId, entry.id);
         this.reconcileProjectionDelete(channelId, prediction, deleted);
         if (clearTrackedDrift) {
           await client.query(
@@ -576,11 +585,13 @@ class PostgresTranscriptProjection implements KeywordSearchableTranscriptProject
     }
 
     const record = toProjectionRecord(entry, options);
+    const activity = projectConversationActivity(entry, record.channelId);
     const prediction = this.predictProjectionUpsert(record.channelId, record.messageId);
     const clearTrackedDrift = this.takeClearableSyncDrift(record.channelId);
 
     this.enqueueWrite(record.channelId, async (client) => {
       const inserted = await upsertProjectionRecord(client, record);
+      await upsertConversationActivity(client, activity);
       this.reconcileProjectionUpsert(
         record.channelId,
         record.messageId,
@@ -613,6 +624,9 @@ class PostgresTranscriptProjection implements KeywordSearchableTranscriptProject
     const records = entries
       .filter(entry => !isCogSecTombstoneSessionEntry(entry))
       .map(entry => toProjectionRecord(entry, { channelId }));
+    const activityRecords = entries
+      .filter(entry => !isCogSecTombstoneSessionEntry(entry))
+      .map(entry => projectConversationActivity(entry, channelId));
     this.replaceCachedChannel(channelId, records.map(record => record.messageId));
     // Best-effort 'sync' drift keeps its pre-6oott synchronous clear (callers
     // like repair read listProjectionDrift before the queued write flushes).
@@ -628,8 +642,15 @@ class PostgresTranscriptProjection implements KeywordSearchableTranscriptProject
         `,
         [channelId],
       );
+      await client.query(
+        `DELETE FROM session_conversational_activity WHERE logical_session_id = $1`,
+        [channelId],
+      );
       for (const record of records) {
         await upsertProjectionRecord(client, record);
+      }
+      for (const activity of activityRecords) {
+        await upsertConversationActivity(client, activity);
       }
       // A full successful replacement makes the projection match canon, so it
       // clears drift of ANY kind — including fail-closed redaction drift. The
@@ -898,6 +919,10 @@ export async function createDefaultPostgresSessionAdapters(
     turnRecordEligibilityFence: new PostgresTurnRecordEligibilityFence(
       pool,
       options.schema ?? 'default',
+    ),
+    conversationalActivityWorkset: new PostgresConversationalActivityWorkset(
+      pool,
+      () => transcriptProjection.flushPendingWrites(),
     ),
     exactSessionProjection: {
       pool,

@@ -1511,6 +1511,51 @@ export const POSTGRES_TRANSCRIPT_MIGRATIONS = [
   `CREATE INDEX IF NOT EXISTS idx_session_messages_projection_search_vector ON session_messages_projection USING GIN(search_vector);`,
   `ALTER TABLE session_messages_projection ADD COLUMN IF NOT EXISTS metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb;`,
   `
+  CREATE TABLE IF NOT EXISTS session_conversational_activity (
+    logical_session_id TEXT NOT NULL,
+    message_revision BIGINT NOT NULL,
+    activity_kind TEXT NOT NULL CHECK (activity_kind IN (
+      'direct_message',
+      'group_conversation',
+      'inter_companion',
+      'experiential_free_time',
+      'automation_scaffold',
+      'journal',
+      'health',
+      'maintenance',
+      'testing'
+    )),
+    processable BOOLEAN NOT NULL,
+    occurred_at_ms BIGINT NOT NULL,
+    PRIMARY KEY (logical_session_id, message_revision),
+    CHECK (processable = (activity_kind IN (
+      'direct_message',
+      'group_conversation',
+      'inter_companion',
+      'experiential_free_time'
+    )))
+  );
+  `,
+  `CREATE INDEX IF NOT EXISTS idx_session_conversational_activity_workset
+    ON session_conversational_activity(logical_session_id, message_revision DESC)
+    WHERE processable = TRUE;`,
+  `
+  CREATE TABLE IF NOT EXISTS session_conversational_workset (
+    purpose TEXT NOT NULL CHECK (purpose IN ('episodic_synthesis', 'sleeptime_consolidation')),
+    logical_session_id TEXT NOT NULL,
+    checkpoint_revision BIGINT NOT NULL DEFAULT 0 CHECK (checkpoint_revision >= 0),
+    claimed_revision BIGINT,
+    claimed_by TEXT,
+    claimed_at_ms BIGINT,
+    updated_at_ms BIGINT NOT NULL,
+    PRIMARY KEY (purpose, logical_session_id),
+    CHECK (
+      (claimed_revision IS NULL AND claimed_by IS NULL AND claimed_at_ms IS NULL)
+      OR (claimed_revision > checkpoint_revision AND claimed_by <> '' AND claimed_at_ms >= 0)
+    )
+  );
+  `,
+  `
   CREATE TABLE IF NOT EXISTS session_message_addressing_quarantine (
     channel_id TEXT NOT NULL,
     message_id BIGINT NOT NULL,

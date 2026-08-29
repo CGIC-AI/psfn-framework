@@ -14,7 +14,7 @@ import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import { isRecord } from '../../shared/utils/types.js';
 import { ensurePersonalFilesLayout } from '../layout.js';
 
-export const COMPANION_LIBRARY_SEED_VERSION = 'companion-library-v3';
+export const COMPANION_LIBRARY_SEED_VERSION = 'companion-library-v4';
 export const COMPANION_LIBRARY_MANIFEST_FILE = 'companion-library-manifest.json';
 export const SHARED_WORKSPACE_POLICY_VERSION = 1;
 

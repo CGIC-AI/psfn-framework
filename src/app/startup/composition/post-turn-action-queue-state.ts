@@ -34,7 +34,7 @@ export interface DeferredPostTurnQueueEntry {
   retryableFailureCount: number;
 }
 
-export const POST_TURN_RUNTIME_CLASS_ORDER: readonly RuntimeLaneClass[] = [
+const POST_TURN_RUNTIME_CLASS_ORDER: readonly RuntimeLaneClass[] = [
   RUNTIME_LANE_CLASSES.foregroundChat,
   RUNTIME_LANE_CLASSES.postTurnAppraisal,
   RUNTIME_LANE_CLASSES.backgroundContinuation,
@@ -213,11 +213,11 @@ export function toPostTurnActionQueuedEntryStatus(
   return status;
 }
 
-export function minimumPostTurnQueueNumber(values: number[]): number | undefined {
+function minimumPostTurnQueueNumber(values: number[]): number | undefined {
   return values.length > 0 ? Math.min(...values) : undefined;
 }
 
-export function buildPostTurnActionQueueLaneStatus(input: {
+function buildPostTurnActionQueueLaneStatus(input: {
   runtimeClass: RuntimeLaneClass;
   queued: PostTurnActionQueuedEntryStatus[];
   now: number;

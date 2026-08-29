@@ -77,7 +77,6 @@ const log = createComponentLogger('PostTurnActions');
 export type {
   PostTurnActionAgent,
   PostTurnActionCapability,
-  PostTurnActionCoalescingMode,
   PostTurnActionExecutionMode,
   PostTurnActionEnqueueResult,
   PostTurnActionFailureReason,
@@ -85,7 +84,6 @@ export type {
   PostTurnActionHandlerOptions,
   PostTurnActionHandlerResult,
   PostTurnActionQueueCompletionRecord,
-  PostTurnActionQueueCoalescingRecord,
   PostTurnActionQueueDropRecord,
   PostTurnActionQueueEntryState,
   PostTurnActionQueueFailureRecord,

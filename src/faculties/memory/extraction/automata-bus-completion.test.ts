@@ -66,7 +66,7 @@ function binding() {
 }
 
 describe('completeExtractionChunkWithAutomataBus', () => {
-  it('exposes the bounded tool and executes search plus append with authoritative extraction scope', async () => {
+  it('exposes the bounded read tool and executes search with authoritative extraction scope', async () => {
     const bound = binding();
     const calls: Array<{ context: LLMContext; phase: ExtractionCompletionPhase }> = [];
     const complete = vi.fn(async (context: LLMContext, phase: ExtractionCompletionPhase) => {
@@ -79,22 +79,6 @@ describe('completeExtractionChunkWithAutomataBus', () => {
               id: 'call-search',
               name: 'automata_bus',
               input: { action: 'search', query: 'known extraction parser failures', limit: 2 },
-            },
-            {
-              id: 'call-append',
-              name: 'automata_bus',
-              input: {
-                action: 'append',
-                claim: 'The focused extraction parser fixture passed.',
-                provenance: 'computed',
-                evidence: [{
-                  kind: 'command',
-                  reference: 'command:extraction-parser-fixture',
-                  summary: 'Focused parser fixture passed.',
-                }],
-                artifact_refs: ['artifact:fixture-output'],
-                verification_status: 'verified',
-              },
             },
           ],
         });
@@ -113,6 +97,8 @@ describe('completeExtractionChunkWithAutomataBus', () => {
     expect(calls[0]?.context.tools).toEqual([
       expect.objectContaining({ name: 'automata_bus' }),
     ]);
+    expect(JSON.stringify(calls[0]?.context.tools?.[0]?.inputSchema))
+      .not.toContain('"const":"append"');
     expect(calls[1]?.context.tools).toBeUndefined();
     expect(calls[1]?.context.messages.at(-1)?.content).toContain(
       'They are not evidence that a fact occurred',
@@ -122,10 +108,42 @@ describe('completeExtractionChunkWithAutomataBus', () => {
       query: 'known extraction parser failures',
       limit: 2,
     });
-    expect(bound.append).toHaveBeenCalledWith(expect.objectContaining({
-      scope: bound.scope,
-      claim: 'The focused extraction parser fixture passed.',
+    expect(bound.append).not.toHaveBeenCalled();
+  });
+
+  it('rejects transcript-derived Bus writes before any operation runs', async () => {
+    const bound = binding();
+    const complete = vi.fn(async () => response({
+      toolCalls: [
+        {
+          id: 'call-search',
+          name: 'automata_bus',
+          input: { action: 'search', query: 'safe process guidance' },
+        },
+        {
+          id: 'call-private-append',
+          name: 'automata_bus',
+          input: {
+            action: 'append',
+            claim: 'Example Partner biography from the source transcript.',
+            provenance: 'computed',
+            evidence: [{
+              kind: 'session-span',
+              reference: 'session:private-example',
+              summary: 'Raw transcript evidence.',
+            }],
+          },
+        },
+      ],
     }));
+
+    await expect(completeExtractionChunkWithAutomataBus({
+      prompt: 'EXTRACTION PROMPT',
+      automataBus: { access: bound.access, scope: bound.scope },
+      complete,
+    })).rejects.toThrow(/Bus writes are runtime-owned/);
+    expect(bound.search).not.toHaveBeenCalled();
+    expect(bound.append).not.toHaveBeenCalled();
   });
 
   it('preflights malformed and oversized batches before any Bus operation', async () => {

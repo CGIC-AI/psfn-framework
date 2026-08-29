@@ -15,9 +15,13 @@ import {
   normalizeAuthorizedAutomataBusWorkerScope,
 } from './worker-access-formation.js';
 import {
-  AUTOMATA_BUS_TOOL_PARAMETERS,
+  automataBusToolParametersForActions,
   normalizeAutomataBusWorkerOperation,
 } from './worker-access-operation.js';
+import {
+  AUTOMATA_BUS_TOOL_ACTIONS,
+  type AutomataBusToolAction,
+} from './worker-access-contracts.js';
 
 function assertJsonResult(value: unknown, path: string, seen: WeakSet<object>): void {
   if (value === null || typeof value === 'string' || typeof value === 'boolean') return;
@@ -136,20 +140,26 @@ async function dispatchOperation(
 export function createAutomataBusTool(input: {
   access: AutomataBusWorkerAccess;
   scope: AutomataBusWorkerScope;
+  allowedActions?: readonly AutomataBusToolAction[];
 }): SubstrateAgentTool {
   if (!isAutomataBusWorkerEligible(input.access, input.scope.automatonClass)) {
     throw new Error(`Automata Bus tool is not eligible for ${input.scope.automatonClass}`);
   }
   const scope = normalizeAuthorizedAutomataBusWorkerScope(input.access, input.scope);
   const { access } = input;
+  const allowedActions = input.allowedActions ?? AUTOMATA_BUS_TOOL_ACTIONS;
+  const allowedActionSet = new Set<AutomataBusToolAction>(allowedActions);
   const tool: SubstrateAgentTool = {
     name: 'automata_bus',
     label: 'automata_bus',
     description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.automata_bus,
-    parameters: AUTOMATA_BUS_TOOL_PARAMETERS,
+    parameters: automataBusToolParametersForActions(allowedActions),
     execute: async (_toolCallId, params: unknown) => {
       try {
         const operation = normalizeAutomataBusWorkerOperation(params, access.bounds);
+        if (!allowedActionSet.has(operation.action)) {
+          throw new Error(`automata_bus action=${operation.action} is not allowed for this worker`);
+        }
         const result = await dispatchOperation(access.port, scope, operation);
         return textResult(boundedResult({ action: operation.action, result }, access.bounds.maxToolResultChars));
       } catch (error) {

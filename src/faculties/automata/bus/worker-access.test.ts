@@ -2,12 +2,22 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { resolveToolRequiredCapabilities } from '../../../system/capabilities/requirements.js';
 import {
+  AUTOMATA_BUS_WORKER_BRIEFING_SCHEMA_VERSION,
   buildAutomataBusWorkerScope,
   createAutomataBusTool,
   resolveAutomataBusWorkerFormation,
   type AutomataBusWorkerAccess,
   type AutomataBusWorkerPort,
 } from './worker-access.js';
+
+const BRIEFING_DIAGNOSTICS = {
+  cache: 'miss',
+  semanticPath: 'ann',
+  indexState: 'ready',
+  reindexState: 'current',
+  modelIdentity: { provider: 'fixture-provider', model: 'fixture-model', dimensions: 2 },
+  indexingLag: { pendingCount: 0 },
+} as const;
 
 const BOUNDS = {
   maxQueryChars: 120,
@@ -31,8 +41,10 @@ function makeAccess(options: {
 } {
   const eligible = new Set(options.eligible ?? ['subagent.bounded', 'memory.extraction']);
   const createSpawnBriefing = vi.fn(async () => options.briefing ?? ({
+    schemaVersion: AUTOMATA_BUS_WORKER_BRIEFING_SCHEMA_VERSION,
     text: 'Automata Bus briefing\n- Prefer the bounded parser.',
     itemCount: 1,
+    diagnostics: BRIEFING_DIAGNOSTICS,
   }));
   const actionResult = async () => options.result ?? ({ ok: true });
   const search = vi.fn(actionResult);
@@ -137,16 +149,56 @@ describe('Automata Bus worker formation', () => {
     expect(createSpawnBriefing).not.toHaveBeenCalled();
   });
 
-  it('fails closed on malformed or oversized briefing results', async () => {
-    const malformed = makeAccess({ briefing: { text: 'ok', itemCount: 1, leak: true } });
+  it('accepts the explicit v1 diagnostics field without relaxing unknown-field rejection', async () => {
+    const versioned = makeAccess({ briefing: {
+      schemaVersion: AUTOMATA_BUS_WORKER_BRIEFING_SCHEMA_VERSION,
+      text: 'Automata Bus briefing\n- Keep parser errors structured.',
+      itemCount: 1,
+      diagnostics: BRIEFING_DIAGNOSTICS,
+    } });
+    await expect(resolveAutomataBusWorkerFormation({
+      access: versioned.access,
+      scope: scope(versioned.access, 'subagent.bounded'),
+      query: 'x',
+    })).resolves.toMatchObject({
+      briefing: {
+        schemaVersion: AUTOMATA_BUS_WORKER_BRIEFING_SCHEMA_VERSION,
+        diagnostics: BRIEFING_DIAGNOSTICS,
+      },
+    });
+
+    const malformed = makeAccess({ briefing: {
+      schemaVersion: AUTOMATA_BUS_WORKER_BRIEFING_SCHEMA_VERSION,
+      text: 'ok',
+      itemCount: 1,
+      diagnostics: { ...BRIEFING_DIAGNOSTICS, transcript: 'forbidden source text' },
+    } });
     await expect(resolveAutomataBusWorkerFormation({
       access: malformed.access,
       scope: scope(malformed.access, 'subagent.bounded'),
       query: 'x',
     })).rejects.toThrow(/unknown fields/);
 
+    const unversioned = makeAccess({ briefing: {
+      text: 'ok',
+      itemCount: 1,
+      diagnostics: BRIEFING_DIAGNOSTICS,
+    } });
+    await expect(resolveAutomataBusWorkerFormation({
+      access: unversioned.access,
+      scope: scope(unversioned.access, 'subagent.bounded'),
+      query: 'x',
+    })).rejects.toThrow(/schemaVersion/);
+  });
+
+  it('fails closed on oversized briefing results', async () => {
     const oversized = makeAccess({
-      briefing: { text: 'x'.repeat(BOUNDS.maxBriefingChars + 1), itemCount: 1 },
+      briefing: {
+        schemaVersion: AUTOMATA_BUS_WORKER_BRIEFING_SCHEMA_VERSION,
+        text: 'x'.repeat(BOUNDS.maxBriefingChars + 1),
+        itemCount: 1,
+        diagnostics: BRIEFING_DIAGNOSTICS,
+      },
     });
     await expect(resolveAutomataBusWorkerFormation({
       access: oversized.access,

@@ -1,6 +1,9 @@
 import type { SensitivityLevel } from '../../../system/trust/types.js';
 import type { ProductionAutomataClassId } from '../registry-contract.js';
-import type { AutomataBusQueryAudience } from './query-ports.js';
+import type {
+  AutomataBusQueryAudience,
+  AutomataBusSearchDiagnostics,
+} from './query-ports.js';
 import type {
   AutomataBusEvidence,
   AutomataBusLessonAttribution,
@@ -20,6 +23,8 @@ export const AUTOMATA_BUS_TOOL_ACTIONS = [
 ] as const;
 
 export type AutomataBusToolAction = typeof AUTOMATA_BUS_TOOL_ACTIONS[number];
+
+export const AUTOMATA_BUS_WORKER_BRIEFING_SCHEMA_VERSION = 1 as const;
 
 export interface AutomataBusWorkerScope {
   /** Authenticated companion owner. Never accepted from model arguments. */
@@ -47,8 +52,10 @@ export interface AutomataBusWorkerBounds {
 }
 
 export interface AutomataBusWorkerBriefing {
+  schemaVersion: typeof AUTOMATA_BUS_WORKER_BRIEFING_SCHEMA_VERSION;
   text: string;
   itemCount: number;
+  diagnostics: AutomataBusSearchDiagnostics;
 }
 
 export type AutomataBusWorkerOperation =

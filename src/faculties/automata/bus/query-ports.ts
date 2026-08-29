@@ -86,8 +86,10 @@ export interface AutomataBusEmbeddingPort {
   embed(text: string, options?: EmbeddingProviderCallOptions): Promise<Float32Array>;
 }
 
-export type AutomataBusIndexState = 'building' | 'degraded' | 'ready' | 'unavailable';
-export type AutomataBusReindexState = 'current' | 'required' | 'running';
+export const AUTOMATA_BUS_INDEX_STATES = ['building', 'degraded', 'ready', 'unavailable'] as const;
+export type AutomataBusIndexState = typeof AUTOMATA_BUS_INDEX_STATES[number];
+export const AUTOMATA_BUS_REINDEX_STATES = ['current', 'required', 'running'] as const;
+export type AutomataBusReindexState = typeof AUTOMATA_BUS_REINDEX_STATES[number];
 
 export interface AutomataBusIndexingLag {
   pendingCount: number;
@@ -98,6 +100,29 @@ export interface AutomataBusIndexingLag {
 export interface AutomataBusVectorIndexState {
   indexState: AutomataBusIndexState;
   reindexState: AutomataBusReindexState;
+  modelIdentity: AutomataBusEmbeddingIdentity | null;
+  indexingLag: AutomataBusIndexingLag;
+}
+
+export const AUTOMATA_BUS_SEARCH_CACHE_STATES = ['disabled', 'error', 'hit', 'miss'] as const;
+type AutomataBusSearchCacheState = typeof AUTOMATA_BUS_SEARCH_CACHE_STATES[number];
+export const AUTOMATA_BUS_SEMANTIC_PATHS = [
+  'ann',
+  'cache',
+  'embedding-unavailable',
+  'exact-failed',
+  'exact-fallback',
+  'index-state-unavailable',
+  'model-mismatch',
+  'reindex-required',
+] as const;
+export type AutomataBusSemanticPath = typeof AUTOMATA_BUS_SEMANTIC_PATHS[number];
+
+export interface AutomataBusSearchDiagnostics {
+  cache: AutomataBusSearchCacheState;
+  semanticPath: AutomataBusSemanticPath;
+  indexState: AutomataBusVectorIndexState['indexState'];
+  reindexState: AutomataBusVectorIndexState['reindexState'];
   modelIdentity: AutomataBusEmbeddingIdentity | null;
   indexingLag: AutomataBusIndexingLag;
 }

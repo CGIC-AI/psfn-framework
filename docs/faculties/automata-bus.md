@@ -501,4 +501,3 @@ the bus Postgres store/schema/query/reindex/runtime/worker-access suites under
 - [/openwiki/faculties/automata.md](/openwiki/faculties/automata.md) — the automata faculty this bus serves
 - [/openwiki/faculties/shards.md](/openwiki/faculties/shards.md) — long-horizon shards and their fold/retention interplay
 - [/openwiki/memory/persistence-authority.md](/openwiki/memory/persistence-authority.md) — the durable-memory authority the bus must not be promoted into
-- [/openwiki/process/orchestration.md](/openwiki/process/orchestration.md) — surrounding lifecycle wiring for one companion

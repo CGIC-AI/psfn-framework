@@ -13,6 +13,7 @@ export const SERVICE_LABELS: Record<RuntimeServiceHealth['serviceId'], string> =
   ntfy: 'ntfy',
   mcp: 'External MCP',
   approval_notifications: 'Approval Notifications',
+  operator_alerting: 'Operator Alerting',
 };
 
 export const HEALTH_LABELS: Record<RuntimeServiceHealthStatus, string> = {

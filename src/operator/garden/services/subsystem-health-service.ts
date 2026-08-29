@@ -887,7 +887,9 @@ export class AdminSubsystemHealthDataService implements AdminSubsystemHealthServ
       source: 'post_turn_queue',
       sinceProcessStart: false,
       status,
-      lastEventAt: queueStatus.progress.lastProgressAt ?? queueStatus.timestamp,
+      lastEventAt: queueStatus.progress.lastProgressAt
+        ?? queueStatus.progress.noProgressSince
+        ?? null,
       lastOutcome: outcome,
       lastReason: reason,
       lastError: persistenceError ?? null,

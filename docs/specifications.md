@@ -122,21 +122,6 @@ carries no companion identity. Every agent additionally requires both
 `GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN` (isolated session-integrity role);
 startup aborts without either.
 
-### Deferred post-turn queue migration boundary
-
-Runtime startup may hydrate only the exact schema-v1 deferred post-turn queue
-envelope and valid v1 entries into schema v2. It may derive each entry's durable
-demand start and coverage cursor from its validated action and initialize the
-new coalescing and retryable-failure counters to zero. Missing action, retry,
-timing, capability, or runtime-lane fields are not guessed: malformed entries
-are quarantined, and surviving entries are atomically rewritten as v2.
-
-Validate this live-alpha boundary with the mixed valid/invalid v1 hydration
-regression and the v2 restart tests for retry checkpoints, coverage cursors,
-and pending successors in `post-turn-actions.test.ts`. Remove the v1 reader
-before beta after every supported companion has completed a successful v2
-rewrite and no retained operational backup requires a v1-capable runtime.
-
 ### `.env` vs JSON owner files
 
 The ownership law is strict: **`.env` owns only secrets, host/port/socket

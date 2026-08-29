@@ -2393,6 +2393,43 @@ describe('GatewayServer', () => {
       );
     });
 
+    it('delivers an operator alert through a designated Discord-only sink', async () => {
+      const discordSend = vi.fn(async () => undefined);
+      const { conn } = await setupServerConnection({
+        ...createMinimalOptions(),
+        operatorDiscordDock: {
+          id: 'discord:operator-bot',
+          outbound: {
+            textChunkLimit: 2_000,
+            sendText: discordSend,
+          },
+        },
+        operatorDiscordChannelId: '222222222222222222',
+      });
+
+      const response = await invokeRpc(conn, 3, 'notify.operator', {
+        message: 'A channel worker stopped',
+        title: 'Channel alert',
+        priority: 5,
+        sender: {
+          kind: 'system',
+          provenance: 'system.operator_alert.channel_failure',
+        },
+      });
+
+      expect(response.result).toEqual({
+        deliveries: [{
+          sink: 'discord',
+          status: 'sent',
+          target: 'discord:222222222222222222',
+        }],
+      });
+      expect(discordSend).toHaveBeenCalledWith(
+        { channelId: 'discord:222222222222222222' },
+        '**Channel alert**\n\nA channel worker stopped',
+      );
+    });
+
     it('debounces duplicate alerts', async () => {
       fetchMock.mockResolvedValue(new Response('', { status: 200 }));
       const { conn } = await setupServerConnection({

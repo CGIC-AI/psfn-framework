@@ -14,13 +14,13 @@ const ALERT: NotifyNtfyParams = {
   priority: 5,
 };
 
-function telegramDock(sendText = vi.fn(async () => {})): {
+function outboundDock(id: string, sendText = vi.fn(async () => {})): {
   dock: ChannelOutboundDock;
   sendText: typeof sendText;
 } {
   return {
     dock: {
-      id: 'telegram',
+      id,
       outbound: {
         textChunkLimit: 4_096,
         sendText,
@@ -29,6 +29,9 @@ function telegramDock(sendText = vi.fn(async () => {})): {
     sendText,
   };
 }
+
+const telegramDock = (sendText = vi.fn(async () => {})) => outboundDock('telegram', sendText);
+const discordDock = (sendText = vi.fn(async () => {})) => outboundDock('discord', sendText);
 
 describe('GatewayOperatorAlertDispatcher', () => {
   it('attempts ntfy and Telegram when both sinks are configured', async () => {
@@ -133,7 +136,7 @@ describe('GatewayOperatorAlertDispatcher', () => {
     expect(telegram.sendText).toHaveBeenCalledOnce();
   });
 
-  it('rejects loudly when no operator alert sink is configured', async () => {
+  it('returns a typed unconfigured outcome when no operator alert sink is configured', async () => {
     const dispatcher = new GatewayOperatorAlertDispatcher({
       ntfy: {
         isConfigured: () => false,
@@ -141,9 +144,64 @@ describe('GatewayOperatorAlertDispatcher', () => {
       },
     });
 
-    await expect(dispatcher.dispatch(ALERT)).rejects.toThrow(
-      'Operator alerting has zero configured sinks',
+    await expect(dispatcher.dispatch(ALERT)).resolves.toEqual({
+      outcome: 'unconfigured',
+      deliveries: [],
+      warning: 'Operator alerting has zero configured sinks; alerts cannot leave the runtime.',
+    });
+  });
+
+  it('delivers through an explicitly designated Discord-only sink', async () => {
+    const discord = discordDock();
+    const dispatcher = new GatewayOperatorAlertDispatcher({
+      ntfy: { isConfigured: () => false, send: vi.fn() },
+      discordDock: discord.dock,
+      discordChannelId: '987654321098765432',
+    });
+
+    await expect(dispatcher.dispatch(ALERT)).resolves.toEqual({
+      deliveries: [{
+        sink: 'discord',
+        status: 'sent',
+        target: 'discord:987654321098765432',
+      }],
+    });
+    expect(discord.sendText).toHaveBeenCalledWith(
+      { channelId: 'discord:987654321098765432' },
+      '**Backup failed**\n\npg_dump exited 1',
     );
+  });
+
+  it('starts every explicit provider concurrently and preserves partial failures', async () => {
+    let rejectNtfy!: (error: Error) => void;
+    const ntfyPending = new Promise<never>((_resolve, reject) => {
+      rejectNtfy = reject;
+    });
+    const telegram = telegramDock();
+    const discord = discordDock();
+    const dispatcher = new GatewayOperatorAlertDispatcher({
+      ntfy: { isConfigured: () => true, send: vi.fn(() => ntfyPending) },
+      telegramDock: telegram.dock,
+      telegramChatId: '42',
+      discordDock: discord.dock,
+      discordChannelId: '987654321098765432',
+      logger: { error: vi.fn() },
+    });
+
+    const pending = dispatcher.dispatch(ALERT);
+    await vi.waitFor(() => {
+      expect(telegram.sendText).toHaveBeenCalledOnce();
+      expect(discord.sendText).toHaveBeenCalledOnce();
+    });
+    rejectNtfy(new Error('ntfy unavailable'));
+
+    await expect(pending).resolves.toEqual({
+      deliveries: [
+        { sink: 'ntfy', status: 'failed', error: 'ntfy unavailable' },
+        { sink: 'telegram', status: 'sent', target: 'telegram:42' },
+        { sink: 'discord', status: 'sent', target: 'discord:987654321098765432' },
+      ],
+    });
   });
 
   it('delivers keyed budget alerts to a configured Telegram-only sink', async () => {
@@ -194,6 +252,8 @@ describe('resolveOperatorAlertSinkConfiguration', () => {
       ntfyConfigured: false,
       telegramEnabled: false,
       telegramChatId: '',
+      discordEnabled: false,
+      discordChannelId: '',
     })).toEqual({
       configuredSinks: [],
       status: 'unconfigured',
@@ -206,6 +266,8 @@ describe('resolveOperatorAlertSinkConfiguration', () => {
       ntfyConfigured: false,
       telegramEnabled: false,
       telegramChatId: '42',
+      discordEnabled: false,
+      discordChannelId: '',
     }).status).toBe('unconfigured');
   });
 
@@ -214,10 +276,20 @@ describe('resolveOperatorAlertSinkConfiguration', () => {
       ntfyConfigured: true,
       telegramEnabled: true,
       telegramChatId: ' 42 ',
+      discordEnabled: true,
+      discordChannelId: ' 987654321098765432 ',
     })).toEqual({
-      configuredSinks: ['ntfy', 'telegram'],
+      configuredSinks: ['ntfy', 'telegram', 'discord'],
       status: 'configured',
       warning: null,
     });
+  });
+
+  it('does not treat an ordinary Discord adapter as an implicit alert sink', () => {
+    expect(resolveOperatorAlertSinkConfiguration({
+      ntfyConfigured: false,
+      telegramEnabled: false,
+      discordEnabled: true,
+    }).status).toBe('unconfigured');
   });
 });

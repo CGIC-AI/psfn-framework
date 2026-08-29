@@ -37,6 +37,8 @@ import {
   loadChannelAdaptersFromManifest,
   type RuntimeChannelLifecycleLogger,
 } from '../../channels/backplane/channel-lifecycle.js';
+import type { DiscordOperatorAlertConfig } from '../../channels/backplane/config.js';
+import type { ChannelOutboundDock } from '../../channels/backplane/types.js';
 
 /** One per-companion discord bot account surface (multi-companion W1-P2). */
 export interface GatewayDiscordAccountSurface {
@@ -112,6 +114,28 @@ export function resolveChannelSurfaceCompanionId(
 /** All discord adapter instances owned by the gateway, in configured order. */
 function listDiscordAdapters(surfaces: GatewayChannelSurfaces): DiscordAdapter[] {
   return surfaces.discordAccounts?.map(account => account.adapter) ?? [surfaces.discord];
+}
+
+interface GatewayDiscordOperatorAlertSurface {
+  dock: ChannelOutboundDock;
+  channelId: string;
+}
+
+/** Resolve only the explicitly designated Discord alert identity and channel. */
+export function resolveGatewayDiscordOperatorAlertSurface(
+  surfaces: Pick<GatewayChannelSurfaces, 'discord' | 'discordAccounts'>,
+  config: DiscordOperatorAlertConfig | undefined,
+): GatewayDiscordOperatorAlertSurface | undefined {
+  if (!config) return undefined;
+  const dock = config.accountId
+    ? surfaces.discordAccounts?.find(account => account.accountId === config.accountId)?.adapter
+    : surfaces.discord;
+  if (!dock) {
+    throw new Error(
+      `Discord operator alert account "${config.accountId}" has no runtime adapter`,
+    );
+  }
+  return { dock, channelId: config.channelId };
 }
 
 function resolvePersonalFilesDir(
@@ -527,7 +551,7 @@ export function wireGatewayChannelMessages(input: WireGatewayChannelMessagesInpu
         ? input.gateway.requestAgentVoiceStream(message, options)
         : input.gateway.requestAgentVoiceStream(message)
     ),
-    notifyOperator: input.gateway.notifyOperator,
+    notifyOperator: params => input.gateway.notifyOperator(params),
   });
 }
 

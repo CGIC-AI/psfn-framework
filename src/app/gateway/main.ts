@@ -28,6 +28,7 @@ import {
 import {
   initGatewayChannelSurfaces,
   loadGatewayChannelSurfaces,
+  resolveGatewayDiscordOperatorAlertSurface,
   startGatewayChannelSurfaces,
   stopGatewayChannelSurfaces,
   wireGatewayChannelMessages,
@@ -520,10 +521,16 @@ async function main(): Promise<void> {
     dims: privilegedServices.embeddingProvider.dims,
   });
   const { discord, telegram } = channelSurfaces;
+  const discordOperatorAlert = resolveGatewayDiscordOperatorAlertSurface(
+    channelSurfaces,
+    bootstrap.channelsConfig.discord.operatorAlert,
+  );
   const operatorAlerting = resolveOperatorAlertSinkConfiguration({
     ntfyConfigured: bootstrap.server.ntfy !== undefined,
     telegramEnabled: telegram !== undefined,
     telegramChatId: bootstrap.channelsConfig.telegram.operatorChatId,
+    discordEnabled: discordOperatorAlert !== undefined,
+    discordChannelId: discordOperatorAlert?.channelId,
   });
   if (operatorAlerting.status === 'unconfigured') {
     log.error('OPERATOR ALERTING IS UNCONFIGURED', {
@@ -739,6 +746,10 @@ async function main(): Promise<void> {
     ...(telegram ? { telegramDock: telegram } : {}),
     ...(bootstrap.channelsConfig.telegram.operatorChatId
       ? { operatorTelegramChatId: bootstrap.channelsConfig.telegram.operatorChatId }
+      : {}),
+    ...(discordOperatorAlert ? { operatorDiscordDock: discordOperatorAlert.dock } : {}),
+    ...(discordOperatorAlert
+      ? { operatorDiscordChannelId: discordOperatorAlert.channelId }
       : {}),
     ...(discordAccountDocks ? { discordAccountDocks } : {}),
     ...(pluginOutboundRoutes.length > 0 ? { pluginOutboundRoutes } : {}),

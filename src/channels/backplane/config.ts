@@ -113,6 +113,13 @@ export interface DiscordAccountConfig {
   customEmojiMeanings?: CustomEmojiMeaningsByGuild;
 }
 
+export interface DiscordOperatorAlertConfig {
+  /** Exact Discord channel used only for system/operator alerts. */
+  channelId: string;
+  /** Required in multi-account mode so alerts use one designated bot identity. */
+  accountId?: string;
+}
+
 export interface DiscordChannelConfig {
   heartbeatChannelId: string;
   allowedBotUserIds: string[];
@@ -131,6 +138,8 @@ export interface DiscordChannelConfig {
    * per-account settings live on each entry.
    */
   accounts?: DiscordAccountConfig[];
+  /** Explicit system-alert destination; ordinary chat channels are never inferred. */
+  operatorAlert?: DiscordOperatorAlertConfig;
 }
 
 /**
@@ -545,7 +554,8 @@ function parseDiscordAccountsSection(
 ): DiscordAccountConfig[] | undefined {
   if (!Object.hasOwn(discordConfig, 'accounts')) return undefined;
 
-  const singleAccountKeys = Object.keys(discordConfig).filter(key => key !== 'accounts');
+  const singleAccountKeys = Object.keys(discordConfig)
+    .filter(key => key !== 'accounts' && key !== 'operatorAlert');
   if (singleAccountKeys.length > 0) {
     throw new Error(
       'channels.json.discord must not combine "accounts" with single-account keys '
@@ -633,6 +643,50 @@ function parseDiscordAccountsSection(
   });
 
   return accounts;
+}
+
+function parseDiscordOperatorAlertSection(
+  discordConfig: Record<string, unknown>,
+  accounts: readonly DiscordAccountConfig[] | undefined,
+): DiscordOperatorAlertConfig | undefined {
+  if (!Object.hasOwn(discordConfig, 'operatorAlert')) return undefined;
+  const raw = discordConfig.operatorAlert;
+  if (!isRecord(raw)) {
+    throw new Error('channels.json.discord.operatorAlert must be an object');
+  }
+  const unknownKeys = Object.keys(raw)
+    .filter(key => key !== 'channelId' && key !== 'accountId');
+  if (unknownKeys.length > 0) {
+    throw new Error(
+      `channels.json.discord.operatorAlert has unsupported keys: ${unknownKeys.join(', ')}`,
+    );
+  }
+  const channelId = parseConfiguredString(
+    raw.channelId,
+    'channels.json.discord.operatorAlert.channelId',
+  );
+  if (!channelId) {
+    throw new Error('channels.json.discord.operatorAlert.channelId must be configured');
+  }
+  const accountId = parseConfiguredString(
+    raw.accountId,
+    'channels.json.discord.operatorAlert.accountId',
+  );
+  if (accounts) {
+    if (!accountId || !accounts.some(account => account.accountId === accountId)) {
+      throw new Error(
+        'channels.json.discord.operatorAlert.accountId must name a configured discord account',
+      );
+    }
+  } else if (accountId) {
+    throw new Error(
+      'channels.json.discord.operatorAlert.accountId is only valid with discord.accounts',
+    );
+  }
+  return {
+    channelId,
+    ...(accountId ? { accountId } : {}),
+  };
 }
 
 /**
@@ -957,6 +1011,10 @@ export function loadRuntimeChannelsConfig(
     env,
     options.credentialVault,
   );
+  const discordOperatorAlert = parseDiscordOperatorAlertSection(
+    discordConfig,
+    discordAccounts,
+  );
   const api = parseApiChannelSection(scopedRoot, env, options.credentialVault);
   const plugins = parseChannelPluginSections(
     scopedRoot,
@@ -1113,6 +1171,7 @@ export function loadRuntimeChannelsConfig(
         : {}),
       ...(discordCompanionId ? { companionId: discordCompanionId } : {}),
       ...(discordAccounts ? { accounts: discordAccounts } : {}),
+      ...(discordOperatorAlert ? { operatorAlert: discordOperatorAlert } : {}),
     },
     api,
     plugins,

@@ -229,6 +229,8 @@ async function main(): Promise<void> {
     ),
     telegramEnabled: channelsConfig.telegram.enabled,
     telegramChatId: channelsConfig.telegram.operatorChatId,
+    discordEnabled: true,
+    discordChannelId: channelsConfig.discord.operatorAlert?.channelId,
   });
   if (operatorAlerting.status === 'unconfigured') {
     log.error('OPERATOR ALERTING IS UNCONFIGURED', {

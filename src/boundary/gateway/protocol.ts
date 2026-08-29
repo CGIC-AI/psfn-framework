@@ -1031,16 +1031,23 @@ export interface NotifyNtfyResult {
 }
 
 export interface OperatorAlertDelivery {
-  sink: 'ntfy' | 'telegram';
+  sink: 'ntfy' | 'telegram' | 'discord';
   status: 'sent' | 'debounced' | 'failed';
   target?: string;
   messageId?: string;
   error?: string;
 }
 
-export interface OperatorAlertResult {
+export type OperatorAlertResult = {
   deliveries: OperatorAlertDelivery[];
-}
+  outcome?: never;
+  warning?: never;
+} | {
+  /** Dispatch could not start because no explicit sink exists. */
+  outcome: 'unconfigured';
+  deliveries: [];
+  warning: string;
+};
 
 // ── Notification types (gateway → agent, no response) ──
 

@@ -27,6 +27,7 @@ export interface GatewayConnectionSummary {
 
 export interface GatewayRuntimeHealthOptions {
   ntfyConfigured: boolean;
+  operatorAlertingConfigured: boolean;
   approvalNotificationConfigured: boolean;
   vaultEnabled: boolean;
   vaultAllowActions: readonly VaultPolicyAction[];
@@ -50,6 +51,7 @@ const TRACKED_METHODS = new Set<GatewayTrackedMethod>([
 
 export class GatewayRuntimeHealthTracker {
   private readonly ntfyConfigured: boolean;
+  private readonly operatorAlertingConfigured: boolean;
   private readonly approvalNotificationConfigured: boolean;
   private readonly vaultEnabled: boolean;
   private readonly vaultAllowActions: readonly VaultPolicyAction[];
@@ -60,6 +62,7 @@ export class GatewayRuntimeHealthTracker {
 
   constructor(options: GatewayRuntimeHealthOptions) {
     this.ntfyConfigured = options.ntfyConfigured;
+    this.operatorAlertingConfigured = options.operatorAlertingConfigured;
     this.approvalNotificationConfigured = options.approvalNotificationConfigured;
     this.vaultEnabled = options.vaultEnabled;
     this.vaultAllowActions = [...options.vaultAllowActions];
@@ -120,10 +123,28 @@ export class GatewayRuntimeHealthTracker {
       services: [
         this.buildGatewayServiceHealth(connectionSummary, checkedAt),
         this.buildApprovalNotificationHealth(checkedAt),
+        this.buildOperatorAlertingHealth(checkedAt),
         this.buildNtfyServiceHealth(checkedAt),
         this.buildVaultServiceHealth(checkedAt),
         this.buildMcpServiceHealth(checkedAt, companionId),
       ],
+    };
+  }
+
+  private buildOperatorAlertingHealth(checkedAt: number): RuntimeServiceHealth {
+    if (!this.operatorAlertingConfigured) {
+      return {
+        serviceId: 'operator_alerting',
+        status: 'degraded',
+        detail: 'No explicit operator alert sink is configured.',
+        checkedAt,
+      };
+    }
+    return {
+      serviceId: 'operator_alerting',
+      status: 'healthy',
+      detail: 'At least one explicit operator alert sink is configured.',
+      checkedAt,
     };
   }
 

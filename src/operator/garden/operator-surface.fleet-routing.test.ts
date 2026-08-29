@@ -20,7 +20,6 @@ import {
   transitionIntakeEnvelope,
 } from '../../shared/contracts/intake-envelope.js';
 import {
-  createDefaultObserverEvalSidecarSettings,
   type SubstrateConfig,
 } from '../../system/config/runtime-config-contracts.js';
 import {
@@ -32,10 +31,8 @@ import {
 } from './garden-admission.js';
 import { AtomicRequestCapabilityReplayPort } from './atomic-request-capability-replay.js';
 import { FleetGardenControlPlane } from './fleet-garden-control-plane.js';
-import { FleetGardenDirectDatabase } from './fleet-garden-direct-database.js';
 import { GardenIntakeQuarantineReads } from './garden-intake-quarantine-reads.js';
 import { FleetGardenTargetRegistry } from './fleet-garden-target-registry.js';
-import type { FleetGardenDirectDatabaseServices } from './local-admin-contract.js';
 import { createAdminIntakeQuarantineReadService } from './services/intake-quarantine-service.js';
 import {
   GardenOperatorSurface,
@@ -44,7 +41,6 @@ import {
 
 const COMPANION_A = createCompanionId('11111111-1111-4111-8111-111111111111');
 const COMPANION_B = createCompanionId('22222222-2222-4222-8222-222222222222');
-const COMPANION_C = createCompanionId('33333333-3333-4333-8333-333333333333');
 const VERSIONS: RequestCapabilityAuthorityVersions = Object.freeze({
   authorityGeneration: 2,
   globalAuthEpoch: 3,
@@ -707,7 +703,7 @@ describe('GardenOperatorSurface fleet transport routing', () => {
     expect(surface).toBeDefined();
   });
 
-  it('serves approved direct-database routes in Garden with the admitted companion binding', async () => {
+  it('routes companion database reads through the selected agent child assertion', async () => {
     const registry = new FleetGardenTargetRegistry([
       {
         companionId: COMPANION_A,
@@ -723,41 +719,12 @@ describe('GardenOperatorSurface fleet transport routing', () => {
       verifier: createRequestCapabilityVerifier(verifierConfig),
       replay: new AtomicRequestCapabilityReplayPort(),
     });
-    const directBindings: string[] = [];
-    const directServiceBindings: Array<{
-      companionId: string | undefined;
-      postgresSchema: string | undefined;
-      postgresRole: string | undefined;
+    const routed: RoutedFleetRequest[] = [];
+    const exchanged: Array<{
+      companionId: string;
+      audience: string;
+      requestPath: string;
     }> = [];
-    const directDatabase = new FleetGardenDirectDatabase({
-      config: {
-        ...config(),
-        persistenceBackend: 'postgres',
-        postgresDatabaseUrl: 'postgres://fleet-garden-test.invalid/psfn',
-      },
-      companionIds: [COMPANION_A, COMPANION_B],
-      createServices: (selectedConfig, companionId) => {
-        directServiceBindings.push({
-          companionId: selectedConfig.companionId,
-          postgresSchema: selectedConfig.postgresSchema,
-          postgresRole: selectedConfig.postgresRole,
-        });
-        return {
-          modelUsage: {
-            getModelUsageData: async () => {
-              directBindings.push(companionId);
-              return {};
-            },
-          },
-          observerEvalSidecar: {
-            queryObservations: async () => {
-              directBindings.push(companionId);
-              return {};
-            },
-          },
-        } as unknown as FleetGardenDirectDatabaseServices;
-      },
-    });
     const surface = new GardenOperatorSurface({
       port: 1,
       host: '127.0.0.1',
@@ -766,17 +733,35 @@ describe('GardenOperatorSurface fleet transport routing', () => {
       fleetTransport: {
         close: callback => callback(),
         probeAll: async () => undefined,
-        proxyBufferedApiRequest: () => {
-          throw new Error('direct database route must not proxy to an agent');
+        proxyBufferedApiRequest: (target, _req, _res, body, _headers, requestPath) => {
+          routed.push({ companionId: target.companionId, requestPath, body });
         },
         handleTelemetryUpgrade: () => {
           throw new Error('not used');
         },
       },
-      fleetDirectDatabase: directDatabase,
       fleetChildAssertions: {
-        exchange: async () => {
-          throw new Error('direct database route must not exchange an agent child assertion');
+        exchange: async (input) => {
+          exchanged.push({
+            companionId: input.target.companionId,
+            audience: input.expectedAgentAudience,
+            requestPath: input.target.canonicalRequestTarget,
+          });
+          return {
+            token: `child-${input.parentVerified.jti}`,
+            context: {
+              requestId: input.parentVerified.requestId,
+              decisionId: input.parentVerified.decisionId,
+              versions: input.parentVerified.versions,
+              parent: {
+                audience: input.parentVerified.audience as RequestCapabilityParentBinding['audience'],
+                requestId: input.parentVerified.requestId,
+                decisionId: input.parentVerified.decisionId,
+                jti: input.parentVerified.jti,
+                targetDigest: input.parentVerified.targetDigest,
+              },
+            },
+          };
         },
       },
     });
@@ -786,8 +771,6 @@ describe('GardenOperatorSurface fleet transport routing', () => {
         handleFleetRequest(req: IncomingMessage, res: ServerResponse): Promise<void>;
       }
     ).handleFleetRequest.bind(surface);
-    const observerResponse = new CapturingResponse();
-    const modelUsageResponse = new CapturingResponse();
     await Promise.all([
       handleFleetRequest(
         signedRequestForTarget(
@@ -795,69 +778,38 @@ describe('GardenOperatorSurface fleet transport routing', () => {
           'c',
           '/api/admin/evals/observer-sidecar/observations',
         ),
-        observerResponse as unknown as ServerResponse,
+        {} as ServerResponse,
       ),
       handleFleetRequest(
         signedRequestForTarget(COMPANION_B, 'd', '/api/admin/model-usage'),
-        modelUsageResponse as unknown as ServerResponse,
+        {} as ServerResponse,
       ),
     ]);
-    await waitFor(() => observerResponse.body.length > 0 && modelUsageResponse.body.length > 0);
 
-    expect(directBindings.sort()).toEqual([COMPANION_A, COMPANION_B].sort());
-    expect(directServiceBindings).toEqual([
+    expect(exchanged).toEqual([
       {
         companionId: COMPANION_A,
-        postgresSchema: 'companion_a',
-        postgresRole: 'companion_a_runtime',
+        audience: `agent:${COMPANION_A}`,
+        requestPath: '/api/admin/evals/observer-sidecar/observations',
       },
       {
         companionId: COMPANION_B,
-        postgresSchema: 'companion_b',
-        postgresRole: 'companion_b_runtime',
+        audience: `agent:${COMPANION_B}`,
+        requestPath: '/api/admin/model-usage',
       },
     ]);
-    expect(observerResponse.status).toBe(200);
-    expect(modelUsageResponse.status).toBe(200);
-    expect(directDatabase.handleHttp({
-      admission: {
-        target: { canonicalPath: '/api/admin/evals/observer-sidecar/health' },
-      } as never,
-      req: {} as IncomingMessage,
-      res: {} as ServerResponse,
-    })).toBe(false);
-  });
-
-  it('refuses a direct-database companion without an exact fleet identity', () => {
-    expect(() => new FleetGardenDirectDatabase({
-      config: {
-        ...config(),
-        persistenceBackend: 'postgres',
-        postgresDatabaseUrl: 'postgres://fleet-garden-test.invalid/psfn',
+    expect(routed).toEqual([
+      {
+        companionId: COMPANION_A,
+        requestPath: '/api/admin/evals/observer-sidecar/observations',
+        body: Buffer.alloc(0),
       },
-      companionIds: [COMPANION_C],
-      createServices: () => {
-        throw new Error('must fail before constructing primary-companion services');
+      {
+        companionId: COMPANION_B,
+        requestPath: '/api/admin/model-usage',
+        body: Buffer.alloc(0),
       },
-    })).toThrow(`companion ${COMPANION_C} has no exact fleet identity`);
-  });
-
-  it('refuses enabled fleet emotion telemetry without companion-owned sidecar bindings', () => {
-    expect(() => new FleetGardenDirectDatabase({
-      config: {
-        ...config(),
-        persistenceBackend: 'postgres',
-        postgresDatabaseUrl: 'postgres://fleet-garden-test.invalid/psfn',
-        observerEvalSidecar: {
-          ...createDefaultObserverEvalSidecarSettings(),
-          enabled: true,
-        },
-      },
-      companionIds: [COMPANION_A, COMPANION_B],
-      createServices: () => {
-        throw new Error('must fail before constructing primary-companion services');
-      },
-    })).toThrow(/requires an exact companionRuntimeIdentity\.observerEvalSidecar binding/);
+    ]);
   });
 
   it('binds quarantine snapshots to the admitted companion and keeps decisions agent-owned', async () => {

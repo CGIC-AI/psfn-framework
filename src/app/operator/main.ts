@@ -26,7 +26,6 @@ import {
 import { FleetGardenControlPlane } from '../../operator/garden/fleet-garden-control-plane.js';
 import { AtomicRequestCapabilityReplayPort } from '../../operator/garden/atomic-request-capability-replay.js';
 import { createRequestCapabilityVerifier } from '../../boundary/fleet-auth/request-capability.js';
-import { FleetGardenDirectDatabase } from '../../operator/garden/fleet-garden-direct-database.js';
 import {
   GardenIntakeQuarantineReads,
 } from '../../operator/garden/garden-intake-quarantine-reads.js';
@@ -66,7 +65,6 @@ async function main(): Promise<void> {
     ? resolveFleetSsoGardenTls(process.env)
     : undefined;
   let fleetControlPlane: FleetGardenControlPlane | undefined;
-  let fleetDirectDatabase: FleetGardenDirectDatabase | undefined;
   let fleetTransport: FleetGardenAdminTransportProxy | undefined;
   let fleetModelUsage: FleetModelUsageService | undefined;
   if (config.fleetAuthVerifier) {
@@ -88,10 +86,6 @@ async function main(): Promise<void> {
     });
     fleetTransport = new FleetGardenAdminTransportProxy(registry);
     fleetModelUsage = new FleetModelUsageService({ registry, transport: fleetTransport });
-    fleetDirectDatabase = new FleetGardenDirectDatabase({
-      config,
-      companionIds: config.companionFleet.companions.map(companion => companion.companionId),
-    });
   }
   const admissionMode = config.fleetAuthVerifier
     ? 'fleet-principal'
@@ -111,7 +105,6 @@ async function main(): Promise<void> {
     ...(fleetControlPlane
       ? {
           fleetControlPlane,
-          fleetDirectDatabase,
           fleetTransport,
           fleetModelUsage,
         }

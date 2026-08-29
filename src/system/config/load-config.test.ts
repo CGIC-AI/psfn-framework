@@ -700,7 +700,7 @@ describe('loadConfig path defaults', () => {
     expect(() => loadAgentConfig()).toThrow(/GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN/);
   });
 
-  it('projects operator config with only the direct Garden database credential', () => {
+  it('projects operator config without companion or database credentials', () => {
     const config = loadOperatorConfig({
       COMPANION_ID: '22222222-2222-4222-8222-222222222222',
       DISCORD_TOKEN: 'sentinel-discord',
@@ -718,22 +718,18 @@ describe('loadConfig path defaults', () => {
     expect(config.deepgramApiKey).toBeUndefined();
     expect(config.elevenLabsApiKey).toBeUndefined();
     expect(config.falApiKey).toBeUndefined();
-    expect(config.postgresDatabaseUrl).toBe('postgres://sentinel-secret@localhost/db');
+    expect(config.postgresDatabaseUrl).toBeUndefined();
     expect(config.gatewayCompanionAuthToken).toBeUndefined();
     expect(config.gatewaySessionIntegrityAuthToken).toBeUndefined();
   });
 
-  it('projects the operator direct Garden database credential from a mounted secret file', () => {
-    const root = mkdtempSync(join(tmpdir(), 'psfn-load-operator-postgres-'));
-    tempDirs.push(root);
-    const credentialPath = join(root, 'database-url');
-    writeFileSync(credentialPath, 'postgres://file-secret@localhost/db\n', 'utf8');
+  it('does not read a companion database credential file in the operator process', () => {
     const config = loadOperatorConfig({
       COMPANION_ID: '22222222-2222-4222-8222-222222222222',
-      POSTGRES_DATABASE_URL_FILE: credentialPath,
+      POSTGRES_DATABASE_URL_FILE: '/does/not/exist/operator-must-not-read-this',
     }) as Record<string, unknown>;
 
-    expect(config.postgresDatabaseUrl).toBe('postgres://file-secret@localhost/db');
+    expect(config.postgresDatabaseUrl).toBeUndefined();
   });
 
   it('projects an operator config without a database credential when none is provided', () => {

@@ -608,8 +608,8 @@ spec:
         {{- include "psfn.waitForPostgresInitContainer" (dict "root" . "image" .Values.workloads.garden.image) | nindent 8 }}
         {{- else }}
         {{- include "psfn.seedInitContainer" . | nindent 8 }}
-        {{- end }}
         {{- include "psfn.runtimeBootstrapInitContainer" . | nindent 8 }}
+        {{- end }}
       containers:
         - name: garden
           image: {{ include "psfn.image" (dict "root" . "image" .Values.workloads.garden.image) | quote }}

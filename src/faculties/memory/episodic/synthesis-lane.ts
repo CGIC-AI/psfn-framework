@@ -28,6 +28,22 @@ const EPISODE_SYNTHESIS_DRAIN_CLAIMANT_ID = 'episode-synthesis-drain';
 
 const EPISODIC_SYNTHESIS_PROCESSOR = 'episodic_synthesis';
 const MAX_BEHAVIORAL_SUMMARY_WRITES = 1;
+const BEHAVIORAL_SUMMARY_STAGE_PREFIX = 'behavioral_summary:';
+
+interface BehavioralSummaryWrite {
+  arc: EpisodeArc;
+  payload: MemoryWriteOptions;
+}
+
+class BehavioralSummaryWriteError extends Error {
+  readonly stage: string;
+
+  constructor(stage: string, cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause));
+    this.name = 'BehavioralSummaryWriteError';
+    this.stage = stage;
+  }
+}
 
 export type EpisodeSynthesisTrigger = 'timer' | 'turn_threshold';
 export type EpisodeSynthesisSkipReason =
@@ -80,6 +96,11 @@ export interface EpisodeSynthesisLaneOptions {
   synthesizer: Pick<EpisodicSynthesizer, 'run'>;
   /** Read-only watermark access shared with the synthesizer's durable scope. */
   watermarkStore: Pick<EpisodicStorePort, 'getProcessingWatermark'>;
+  /** Durable episode artifacts used to resume a failed derived-memory write. */
+  behavioralSummaryStore?: Pick<
+    EpisodicStorePort,
+    'getEpisodesByIds' | 'listEpisodeArcsForEpisodes'
+  > | null;
   /** Durable changed-session workset shared by all episode drain triggers. */
   workset: ConversationalActivityWorksetPort;
   /** JSON-owned gate config (scheduler.json `episodeSynthesis`). Required. */
@@ -145,7 +166,7 @@ function buildBehavioralSummaryWrites(input: {
   actionId: string;
   sourceMessageId?: string;
   synthesis: EpisodicSynthesisRunResult;
-}): MemoryWriteOptions[] {
+}): BehavioralSummaryWrite[] {
   const arcs = input.synthesis.linkedArcs
     .filter(arc => arc.confidence >= 0.7)
     .filter(arc => arc.arcKind !== 'same_theme')
@@ -156,43 +177,67 @@ function buildBehavioralSummaryWrites(input: {
     const sourceRef = `source:episode_synthesis|session:${input.sessionId}|episode_arc:${arc.id}`;
     const sourceConversationAt = arcSourceConversationAt(arc, episodesById);
     return {
-      text: `Episode evidence chain shows a ${arc.arcKind.replace(/_/g, ' ')} pattern around ${themes}.`,
-      type: 'reflection',
-      importance: 0.62,
-      confidence: Math.min(0.84, Math.max(0.7, arc.confidence)),
-      emotionalValence: 0,
-      sensitivity: 'personal',
-      sourceRef,
-      sourceType: 'autonomous_action',
-      provenance: {
-        channelId: input.sessionId,
-        sessionId: input.sessionId,
-        actor: 'system',
-        reason: 'episode_synthesis_behavioral_summary',
-        ...(sourceConversationAt !== undefined ? { sourceConversationAt } : {}),
-      },
-      provenanceRefs: [
+      arc,
+      payload: {
+        text: `Episode evidence chain shows a ${arc.arcKind.replace(/_/g, ' ')} pattern around ${themes}.`,
+        type: 'reflection',
+        importance: 0.62,
+        confidence: Math.min(0.84, Math.max(0.7, arc.confidence)),
+        emotionalValence: 0,
+        sensitivity: 'personal',
         sourceRef,
-        `l01_episode_arc:${arc.id}`,
-        `l01_episode:${arc.sourceEpisodeId}`,
-        `l01_episode:${arc.targetEpisodeId}`,
-        `episode_synthesis_action:${input.actionId}`,
-        ...(input.sourceMessageId ? [`source_message:${input.sourceMessageId}`] : []),
-      ],
-      tags: [
-        'episode_synthesis',
-        'behavioral_summary',
-        'evidence_chain',
-        `episode_arc:${arc.arcKind}`,
-      ],
-      scopeRef: {
-        kind: 'conversation',
-        id: input.sessionId,
-        label: 'episode synthesis source session',
+        sourceType: 'autonomous_action',
+        provenance: {
+          channelId: input.sessionId,
+          sessionId: input.sessionId,
+          actor: 'system',
+          reason: 'episode_synthesis_behavioral_summary',
+          ...(sourceConversationAt !== undefined ? { sourceConversationAt } : {}),
+        },
+        provenanceRefs: [
+          sourceRef,
+          `l01_episode_arc:${arc.id}`,
+          `l01_episode:${arc.sourceEpisodeId}`,
+          `l01_episode:${arc.targetEpisodeId}`,
+          `episode_synthesis_action:${input.actionId}`,
+          ...(input.sourceMessageId ? [`source_message:${input.sourceMessageId}`] : []),
+        ],
+        tags: [
+          'episode_synthesis',
+          'behavioral_summary',
+          'evidence_chain',
+          `episode_arc:${arc.arcKind}`,
+        ],
+        scopeRef: {
+          kind: 'conversation',
+          id: input.sessionId,
+          label: 'episode synthesis source session',
+        },
+        scopeTags: [`channel:${input.sessionId}`, 'episode_synthesis'],
       },
-      scopeTags: [`channel:${input.sessionId}`, 'episode_synthesis'],
     };
   });
+}
+
+function behavioralSummaryStage(arc: Pick<EpisodeArc, 'id' | 'targetEpisodeId'>): string {
+  return `${BEHAVIORAL_SUMMARY_STAGE_PREFIX}${encodeURIComponent(arc.targetEpisodeId)}:${encodeURIComponent(arc.id)}`;
+}
+
+function parseBehavioralSummaryStage(stage: string | undefined): {
+  targetEpisodeId: string;
+  arcId: string;
+} | null {
+  if (!stage?.startsWith(BEHAVIORAL_SUMMARY_STAGE_PREFIX)) return null;
+  const encoded = stage.slice(BEHAVIORAL_SUMMARY_STAGE_PREFIX.length).split(':');
+  if (encoded.length !== 2 || !encoded[0] || !encoded[1]) return null;
+  try {
+    return {
+      targetEpisodeId: decodeURIComponent(encoded[0]),
+      arcId: decodeURIComponent(encoded[1]),
+    };
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -221,6 +266,10 @@ export class EpisodeSynthesisLane {
   private readonly sessionManager: SynthesisLaneSessionReader;
   private readonly synthesizer: Pick<EpisodicSynthesizer, 'run'>;
   private readonly watermarkStore: Pick<EpisodicStorePort, 'getProcessingWatermark'>;
+  private readonly behavioralSummaryStore: Pick<
+    EpisodicStorePort,
+    'getEpisodesByIds' | 'listEpisodeArcsForEpisodes'
+  > | null;
   private readonly workset: ConversationalActivityWorksetPort;
   private readonly config: EpisodeSynthesisLaneConfig;
   private readonly scopeClassifier: NearTurnMemoryScopeClassifierPort | null;
@@ -241,6 +290,7 @@ export class EpisodeSynthesisLane {
     this.config = options.config;
     this.synthesizer = options.synthesizer;
     this.watermarkStore = options.watermarkStore;
+    this.behavioralSummaryStore = options.behavioralSummaryStore ?? null;
     this.workset = options.workset;
     this.scopeClassifier = options.scopeClassifier ?? null;
     this.companionNames = options.companionNames ?? [];
@@ -333,7 +383,26 @@ export class EpisodeSynthesisLane {
           claimantId: claim.claimantId,
         });
       } catch (error) {
-        failures.push(error instanceof Error ? error : new Error(String(error)));
+        const normalizedError = error instanceof Error ? error : new Error(String(error));
+        if (error instanceof BehavioralSummaryWriteError) {
+          try {
+            await this.workset.recordFailure({
+              purpose: 'episodic_synthesis',
+              logicalSessionId: claim.logicalSessionId,
+              revision: claim.revision,
+              claimantId: claim.claimantId,
+              stage: error.stage,
+              message: error.message,
+            });
+          } catch (recordError) {
+            failures.push(new AggregateError(
+              [normalizedError, recordError],
+              `Episode behavioral-summary failure could not be checkpointed for ${claim.logicalSessionId}`,
+            ));
+            continue;
+          }
+        }
+        failures.push(normalizedError);
         continue;
       }
       const disposition = await options.onSafeBoundary?.({
@@ -398,6 +467,15 @@ export class EpisodeSynthesisLane {
       .getRecentMessages(sessionId, this.config.transcriptMessageLimit)
       .filter(isConversational);
     const channelId = entries[0]?.channelId ?? sessionId;
+
+    if (await this.resumeBehavioralSummary(action, workItem)) {
+      log.info('Episode synthesis lane resumed its pending behavioral summary', {
+        sessionId,
+        actionId: action.id,
+        trigger,
+      });
+      return;
+    }
 
     // Gate 1 (free, deterministic): any new messages since the durable
     // synthesis watermark? Scope construction mirrors EpisodicSynthesizer.
@@ -571,9 +649,75 @@ export class EpisodeSynthesisLane {
     synthesis: EpisodicSynthesisRunResult;
   }): Promise<void> {
     if (!this.memoryWriter) return;
-    for (const writePayload of buildBehavioralSummaryWrites(input)) {
-      await this.memoryWriter.write(writePayload);
+    for (const write of buildBehavioralSummaryWrites(input)) {
+      try {
+        await this.memoryWriter.write(write.payload);
+      } catch (error) {
+        throw new BehavioralSummaryWriteError(behavioralSummaryStage(write.arc), error);
+      }
     }
+  }
+
+  private async resumeBehavioralSummary(
+    action: Pick<InferredPostTurnAction, 'id' | 'sourceMessageId'>,
+    workItem: ConversationalActivityWorkItem,
+  ): Promise<boolean> {
+    const completedBehavioralSummaryStage = workItem.completedStages.find(
+      stage => stage.startsWith(BEHAVIORAL_SUMMARY_STAGE_PREFIX),
+    );
+    if (completedBehavioralSummaryStage) {
+      if (!parseBehavioralSummaryStage(completedBehavioralSummaryStage)) {
+        throw new Error('Episode behavioral-summary stage checkpoint is malformed');
+      }
+      return true;
+    }
+    const failedStage = workItem.lastFailure?.stage;
+    const pending = parseBehavioralSummaryStage(failedStage);
+    if (failedStage?.startsWith(BEHAVIORAL_SUMMARY_STAGE_PREFIX) && !pending) {
+      throw new Error('Episode behavioral-summary failure checkpoint is malformed');
+    }
+    if (!pending) return false;
+    if (!this.memoryWriter || !this.behavioralSummaryStore) {
+      throw new Error('Episode behavioral-summary recovery requires its memory writer and durable episode artifact store');
+    }
+    const arcs = await this.behavioralSummaryStore.listEpisodeArcsForEpisodes(
+      [pending.targetEpisodeId],
+      { direction: 'incoming' },
+    );
+    const arc = arcs.find(candidate => candidate.id === pending.arcId);
+    if (!arc) {
+      throw new Error(`Episode behavioral-summary recovery could not resolve arc "${pending.arcId}"`);
+    }
+    const episodes = await this.behavioralSummaryStore.getEpisodesByIds([
+      arc.sourceEpisodeId,
+      arc.targetEpisodeId,
+    ]);
+    if (episodes.length !== 2) {
+      throw new Error(`Episode behavioral-summary recovery could not resolve both endpoints for arc "${pending.arcId}"`);
+    }
+    await this.writeBehavioralSummaries({
+      sessionId: workItem.logicalSessionId,
+      actionId: action.id,
+      sourceMessageId: action.sourceMessageId,
+      synthesis: {
+        consideredEntries: 0,
+        claimedEntriesSkipped: 0,
+        candidateEpisodeCount: 0,
+        createdEpisodes: episodes,
+        skippedEpisodeIds: [],
+        linkedArcs: [arc],
+        heldBackEntryCount: 0,
+        segmentationFailedChunkCount: 0,
+      },
+    });
+    await this.workset.checkpointStage({
+      purpose: 'episodic_synthesis',
+      logicalSessionId: workItem.logicalSessionId,
+      revision: workItem.revision,
+      claimantId: workItem.claimantId ?? this.claimantId,
+      stage: workItem.lastFailure?.stage ?? behavioralSummaryStage(arc),
+    });
+    return true;
   }
 
   private emitGateEvent(event: Omit<EpisodeSynthesisGateEvent, 'timestamp' | 'minRelevantTurns'>): void {

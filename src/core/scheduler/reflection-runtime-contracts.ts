@@ -221,7 +221,10 @@ export interface ReflectionRuntimeOptions {
    */
   episodicWatermarkStore?: Pick<
     EpisodicStorePort,
-    'getProcessingWatermark' | 'upsertProcessingWatermark'
+    | 'getProcessingWatermark'
+    | 'upsertProcessingWatermark'
+    | 'getEpisodesByIds'
+    | 'listEpisodeArcsForEpisodes'
   > | null;
   /** System-scoped scheduling authority for private heavy maintenance drains. */
   fleetMaintenance?: {

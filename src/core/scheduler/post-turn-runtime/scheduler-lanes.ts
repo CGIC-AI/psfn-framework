@@ -205,6 +205,7 @@ export function createSchedulerOwnedPostTurnLanes(
       sessionManager: runtimeOptions.sessionManager,
       synthesizer: runtimeOptions.episodicSynthesizer,
       watermarkStore: runtimeOptions.episodicWatermarkStore,
+      behavioralSummaryStore: runtimeOptions.episodicWatermarkStore,
       workset: runtimeOptions.conversationalActivityWorkset,
       config: runtimeOptions.episodeSynthesis,
       scopeClassifier: runtimeOptions.memoryScopeClassifier ?? null,

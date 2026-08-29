@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SessionEntry } from '../../../core/session/types.js';
+import type { Episode } from '../../../shared/contracts/episodic-memory.js';
 import type {
   ConversationalActivityWorkItem,
   ConversationalActivityWorksetPort,
@@ -67,6 +68,10 @@ function makeEntry(overrides: Partial<SessionEntry> & { id: number }): SessionEn
   } as SessionEntry;
 }
 
+function makeEpisode(id: string, endedAt: string): Episode {
+  return { id, startedAt: endedAt, endedAt } as Episode;
+}
+
 function bystanderEntries(count: number, startId = 1): SessionEntry[] {
   return Array.from({ length: count }, (_, index) => makeEntry({
     id: startId + index,
@@ -92,16 +97,23 @@ function makeStatefulWorkset(sessionIds: readonly string[]): ConversationalActiv
     revision: index + 1,
     activityKind: 'direct_message',
     checkpointRevision: 0,
+    completedStages: [],
   }));
   const checkpoints = new Map<string, number>();
   const claims = new Map<string, { claimantId: string; claimedAtMs: number; revision: number }>();
+  const completedStages = new Map<string, string[]>();
+  const failures = new Map<string, { stage: string; message: string; failedAtMs: number }>();
   return {
     enumerate: vi.fn(async () => items
       .filter(item => item.revision > (checkpoints.get(item.logicalSessionId) ?? 0))
       .map(item => ({
         ...item,
         checkpointRevision: checkpoints.get(item.logicalSessionId) ?? 0,
+        completedStages: completedStages.get(item.logicalSessionId) ?? [],
         ...(claims.get(item.logicalSessionId) ?? {}),
+        ...(failures.has(item.logicalSessionId)
+          ? { lastFailure: failures.get(item.logicalSessionId) }
+          : {}),
       }))),
     claim: vi.fn(async (input) => {
       const item = items.find(candidate => candidate.logicalSessionId === input.logicalSessionId);
@@ -123,6 +135,7 @@ function makeStatefulWorkset(sessionIds: readonly string[]): ConversationalActiv
       return {
         ...item,
         checkpointRevision: checkpoints.get(item.logicalSessionId) ?? 0,
+        completedStages: completedStages.get(item.logicalSessionId) ?? [],
         ...claim,
       };
     }),
@@ -133,8 +146,33 @@ function makeStatefulWorkset(sessionIds: readonly string[]): ConversationalActiv
       return {
         ...item,
         checkpointRevision: checkpoints.get(item.logicalSessionId) ?? 0,
+        completedStages: completedStages.get(item.logicalSessionId) ?? [],
         ...claim,
+        ...(failures.has(item.logicalSessionId)
+          ? { lastFailure: failures.get(item.logicalSessionId) }
+          : {}),
       };
+    }),
+    checkpointStage: vi.fn(async (input) => {
+      const claim = claims.get(input.logicalSessionId);
+      if (!claim || claim.claimantId !== input.claimantId || claim.revision !== input.revision) {
+        throw new Error('stage checkpoint does not match claim');
+      }
+      completedStages.set(input.logicalSessionId, [
+        ...new Set([...(completedStages.get(input.logicalSessionId) ?? []), input.stage]),
+      ]);
+      failures.delete(input.logicalSessionId);
+    }),
+    recordFailure: vi.fn(async (input) => {
+      const claim = claims.get(input.logicalSessionId);
+      if (!claim || claim.claimantId !== input.claimantId || claim.revision !== input.revision) {
+        throw new Error('failure does not match claim');
+      }
+      failures.set(input.logicalSessionId, {
+        stage: input.stage,
+        message: input.message,
+        failedAtMs: WATERMARK_END_MS,
+      });
     }),
     checkpoint: vi.fn(async (input) => {
       const claim = claims.get(input.logicalSessionId);
@@ -143,6 +181,8 @@ function makeStatefulWorkset(sessionIds: readonly string[]): ConversationalActiv
       }
       checkpoints.set(input.logicalSessionId, input.revision);
       claims.delete(input.logicalSessionId);
+      completedStages.delete(input.logicalSessionId);
+      failures.delete(input.logicalSessionId);
     }),
   };
 }
@@ -209,6 +249,7 @@ function makeHarness(options: {
             ? 'direct_message' as const
             : 'group_conversation' as const,
         checkpointRevision: 0,
+        completedStages: [],
       }];
     }),
     claim: vi.fn(async (input: {
@@ -224,9 +265,12 @@ function makeHarness(options: {
           ? 'direct_message' as const
           : 'group_conversation' as const,
       checkpointRevision: 0,
+      completedStages: [],
       claimedAtMs: WATERMARK_END_MS,
     })),
     resumeClaim: vi.fn(),
+    checkpointStage: vi.fn().mockResolvedValue(undefined),
+    recordFailure: vi.fn().mockResolvedValue(undefined),
     checkpoint: vi.fn().mockResolvedValue(undefined),
   };
   const gateEvents: EpisodeSynthesisGateEvent[] = [];
@@ -305,6 +349,7 @@ describe('EpisodeSynthesisLane', () => {
       revision: index + 1,
       activityKind: 'direct_message' as const,
       checkpointRevision: 0,
+      completedStages: [],
     }));
     const workset = {
       enumerate: vi.fn().mockResolvedValue(workItems),
@@ -319,6 +364,8 @@ describe('EpisodeSynthesisLane', () => {
         claimedAtMs: WATERMARK_END_MS,
       })),
       resumeClaim: vi.fn(),
+      checkpointStage: vi.fn().mockResolvedValue(undefined),
+      recordFailure: vi.fn().mockResolvedValue(undefined),
       checkpoint: vi.fn().mockResolvedValue(undefined),
     };
     const active = { current: 0, maximum: 0 };
@@ -830,8 +877,101 @@ describe('EpisodeSynthesisLane', () => {
     });
 
     expect(memoryWriter.write).toHaveBeenCalledTimes(1);
+    expect(harness.workset.recordFailure).toHaveBeenCalledWith(expect.objectContaining({
+      stage: expect.stringMatching(/^behavioral_summary:/u),
+      message: 'memory store unavailable',
+    }));
     expect(harness.workset.checkpoint).not.toHaveBeenCalled();
     expect(harness.gateEvents).toEqual([]);
+  });
+
+  it('replays a failed behavioral summary after restart even when synthesis advanced its watermark', async () => {
+    const sessionId = 'discord:room-1';
+    const targetEpisode = makeEpisode('episode-2', '2026-04-01T12:00:00.000Z');
+    const sourceEpisode = makeEpisode('episode-1', '2026-04-01T10:00:00.000Z');
+    const arc = {
+      id: 'arc-recurrence-1',
+      schemaVersion: 1 as const,
+      sourceEpisodeId: sourceEpisode.id,
+      targetEpisodeId: targetEpisode.id,
+      arcKind: 'recurrence' as const,
+      confidence: 0.78,
+      salience: 0.78,
+      themes: ['atlas', 'validation'],
+      spanRefs: [],
+      artifactRefs: [],
+      provenanceRefs: [],
+      createdAt: '2026-04-01T12:00:00.000Z',
+      updatedAt: '2026-04-01T12:00:00.000Z',
+    };
+    const workset = makeStatefulWorkset([sessionId]);
+    let watermarkEndedAt: string | undefined;
+    const watermarkStore = {
+      getProcessingWatermark: vi.fn(async () => watermarkEndedAt
+        ? {
+            id: 'watermark-1',
+            processor: 'episodic_synthesis',
+            sourceRef: sessionId,
+            processedEndedAt: watermarkEndedAt,
+            updatedAt: watermarkEndedAt,
+          }
+        : undefined),
+    };
+    const behavioralSummaryStore = {
+      listEpisodeArcsForEpisodes: vi.fn(async () => [arc]),
+      getEpisodesByIds: vi.fn(async () => [sourceEpisode, targetEpisode]),
+    };
+    const memoryWriter = {
+      write: vi.fn()
+        .mockRejectedValueOnce(new Error('memory store unavailable'))
+        .mockResolvedValue({ action: 'created' }),
+    };
+    const firstSynthesizer = {
+      run: vi.fn(async () => {
+        watermarkEndedAt = new Date(WATERMARK_END_MS + 12_000).toISOString();
+        return {
+          consideredEntries: 12,
+          candidateEpisodeCount: 2,
+          createdEpisodes: [sourceEpisode, targetEpisode],
+          skippedEpisodeIds: [],
+          linkedArcs: [arc],
+        };
+      }),
+    };
+    const laneOptions = {
+      sessionManager: {
+        resolveSessionChannelId: (channelId: string) => channelId,
+        getRecentMessages: () => mentionEntries(12),
+      },
+      watermarkStore: watermarkStore as never,
+      behavioralSummaryStore: behavioralSummaryStore as never,
+      workset,
+      config: gateConfig(),
+      scopeClassifier: { classifyChannelMemoryScope: vi.fn(async () => 'direct' as const) },
+      companionNames: [COMPANION_NAME],
+      companionAuthorIds: [COMPANION_AUTHOR_ID],
+      memoryWriter,
+    };
+    const firstLane = new EpisodeSynthesisLane({ ...laneOptions, synthesizer: firstSynthesizer });
+
+    await expect(firstLane.execute(timerAction())).rejects.toThrow(
+      'Episode synthesis drain failed for 1 session(s)',
+    );
+
+    const restartedSynthesizer = { run: vi.fn() };
+    const restartedLane = new EpisodeSynthesisLane({ ...laneOptions, synthesizer: restartedSynthesizer });
+    await restartedLane.execute(timerAction());
+
+    expect(restartedSynthesizer.run).not.toHaveBeenCalled();
+    expect(memoryWriter.write).toHaveBeenCalledTimes(2);
+    expect(memoryWriter.write).toHaveBeenLastCalledWith(expect.objectContaining({
+      sourceRef: expect.stringContaining(`episode_arc:${arc.id}`),
+    }));
+    expect(workset.checkpointStage).toHaveBeenCalledWith(expect.objectContaining({
+      stage: expect.stringMatching(/^behavioral_summary:/u),
+    }));
+    expect(workset.checkpoint).toHaveBeenCalledTimes(1);
+    await expect(workset.enumerate('episodic_synthesis')).resolves.toEqual([]);
   });
 
   // psfn-framework-ca980 — a behavioral summary must carry the arc's episode

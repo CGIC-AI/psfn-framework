@@ -204,10 +204,7 @@ export class PostgresConversationalActivityWorkset implements ConversationalActi
           failure_message = NULL,
           failed_at_ms = NULL
         WHERE session_conversational_workset.checkpoint_revision < EXCLUDED.claimed_revision
-          AND (
-            session_conversational_workset.claimed_by IS NULL
-            OR session_conversational_workset.claimed_by = EXCLUDED.claimed_by
-          )
+          AND session_conversational_workset.claimed_by IS NULL
         RETURNING purpose, logical_session_id, checkpoint_revision,
           claimed_revision, claimed_by, claimed_at_ms, completed_stages,
           failed_stage, failure_message, failed_at_ms

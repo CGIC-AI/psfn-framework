@@ -70,6 +70,7 @@ import {
   type SleeptimeWorksetRunOutcome,
   type SleeptimeWorksetStageInput,
 } from './sleeptime-workset.js';
+import { classifyPostTurnActionContention } from '../../core/agent/post-turn-action-contention.js';
 
 const log = createComponentLogger('SleeptimeMemoryAgent');
 
@@ -638,7 +639,8 @@ export class SleeptimeMemoryAgent {
       lastUserActivityAtMs,
     });
     if (!restWindowDecision.allowed) return [];
-    return [{
+    const actions: PostTurnActionCandidate[] = [];
+    actions.push({
       kind: SLEEPTIME_MEMORY_ACTION_KIND,
       payload: {
         trigger: 'idle_rest_window',
@@ -647,7 +649,8 @@ export class SleeptimeMemoryAgent {
       },
       dedupeKey: SLEEPTIME_COMPANION_ACTION_DEDUPE_KEY,
       maxRetries: 1,
-    }];
+    });
+    return actions;
   }
 
   async execute(
@@ -682,6 +685,7 @@ export class SleeptimeMemoryAgent {
       workset: this.conversationalActivityWorkset,
       claimantId: SLEEPTIME_WORKSET_CLAIMANT_ID,
       shouldYield: async () => this.hasActivityBeyondSnapshot(snapshotRevisions),
+      isYieldError: error => classifyPostTurnActionContention(error) !== null,
       runStage: async input => this.runWorksetStage(input, action, entriesBySession),
     });
     return runner.run(snapshot);

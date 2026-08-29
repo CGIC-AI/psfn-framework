@@ -11,7 +11,7 @@ export const SLEEPTIME_WORKSET_STAGES = [
   'orientation_review',
 ] as const;
 
-export type SleeptimeWorksetStage = (typeof SLEEPTIME_WORKSET_STAGES)[number];
+type SleeptimeWorksetStage = (typeof SLEEPTIME_WORKSET_STAGES)[number];
 
 export interface SleeptimeWorksetStageInput {
   logicalSessionId: string;
@@ -19,7 +19,7 @@ export interface SleeptimeWorksetStageInput {
   stage: SleeptimeWorksetStage;
 }
 
-export interface SleeptimeWorksetFailure {
+interface SleeptimeWorksetFailure {
   logicalSessionId: string;
   revision: number;
   stage: SleeptimeWorksetStage;
@@ -49,6 +49,7 @@ export interface SleeptimeWorksetRunnerOptions {
   claimantId: string;
   runStage(input: SleeptimeWorksetStageInput): Promise<void>;
   shouldYield?: () => boolean | Promise<boolean>;
+  isYieldError?: (error: unknown) => boolean;
 }
 
 function requireClaimantId(value: string): string {
@@ -71,12 +72,14 @@ export class SleeptimeWorksetRunner {
   private readonly claimantId: string;
   private readonly runStage: SleeptimeWorksetRunnerOptions['runStage'];
   private readonly shouldYield: NonNullable<SleeptimeWorksetRunnerOptions['shouldYield']>;
+  private readonly isYieldError: NonNullable<SleeptimeWorksetRunnerOptions['isYieldError']>;
 
   constructor(options: SleeptimeWorksetRunnerOptions) {
     this.workset = options.workset;
     this.claimantId = requireClaimantId(options.claimantId);
     this.runStage = options.runStage;
     this.shouldYield = options.shouldYield ?? (() => false);
+    this.isYieldError = options.isYieldError ?? (() => false);
   }
 
   async run(
@@ -127,6 +130,13 @@ export class SleeptimeWorksetRunner {
             stage,
           });
         } catch (error) {
+          if (this.isYieldError(error)) {
+            return {
+              outcome: 'yield',
+              completedSessions,
+              remainingSessions: snapshot.length - completedSessions,
+            };
+          }
           const message = error instanceof Error ? error.message : String(error);
           await this.workset.recordFailure({
             purpose: claim.purpose,
@@ -179,10 +189,16 @@ export class SleeptimeWorksetRunner {
       });
     }
     if (item.claimantId) return null;
-    return this.workset.claim({
+    const claimed = await this.workset.claim({
       purpose: item.purpose,
       logicalSessionId: item.logicalSessionId,
       revision: item.revision,
+      claimantId: this.claimantId,
+    });
+    if (claimed) return claimed;
+    return this.workset.resumeClaim({
+      purpose: item.purpose,
+      logicalSessionId: item.logicalSessionId,
       claimantId: this.claimantId,
     });
   }

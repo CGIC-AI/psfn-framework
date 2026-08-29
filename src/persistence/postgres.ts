@@ -1,9 +1,19 @@
 import { Pool, type PoolClient, type PoolConfig, type QueryResult, type QueryResultRow } from 'pg';
 import { isRecord } from '../shared/utils/types.js';
+import { acquireOwnedPostgresPool } from './postgres/pool-owner.js';
 import {
   assertPostgresRuntimeDdlAllowed,
   type PostgresRuntimeDdlAuthority,
 } from './postgres/runtime-readiness.js';
+
+export {
+  getPostgresPoolTelemetry,
+  PostgresPoolOwner,
+  runWithPostgresPoolOwner,
+} from './postgres/pool-owner.js';
+export type {
+  PostgresPoolOwnerTelemetry,
+} from './postgres/pool-owner.js';
 
 // Postgres identifiers are bounded to 63 bytes (NAMEDATALEN - 1). We deliberately
 // stay inside that limit and only admit a strict, lowercase-first identifier so a
@@ -95,6 +105,14 @@ export interface PostgresConnectionOptions {
 export function createPostgresPool(
   connectionString: string,
   options: PostgresConnectionOptions = {},
+): Pool {
+  return acquireOwnedPostgresPool(connectionString, options, createRawPostgresPool)
+    ?? createRawPostgresPool(connectionString, options);
+}
+
+function createRawPostgresPool(
+  connectionString: string,
+  options: PostgresConnectionOptions,
 ): Pool {
   const config: PoolConfig = {
     connectionString,

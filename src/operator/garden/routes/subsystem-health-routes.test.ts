@@ -50,6 +50,7 @@ describe('admin subsystem-health routes', () => {
     const snapshot: SubsystemHealthSnapshot = {
       processStartedAt: 1_000,
       generatedAt: 2_000,
+      postgresPools: [],
       lanes: [
         {
           id: 'episode_synthesis',

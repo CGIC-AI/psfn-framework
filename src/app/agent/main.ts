@@ -100,6 +100,10 @@ import {
   wireReflectionRuntime,
 } from '../startup/composition/parity.js';
 import { createAgentPersistenceRuntime } from '../../persistence/runtime-factory.js';
+import {
+  PostgresPoolOwner,
+  runWithPostgresPoolOwner,
+} from '../../persistence/postgres.js';
 import { sealPostgresStoreReadinessBeforeReady } from '../../persistence/postgres/runtime-readiness.js';
 import { CompanionPresenceRuntime } from '../../core/agent/companion-presence-runtime.js';
 import {
@@ -198,6 +202,7 @@ import { PostgresAdminAutomataBusReadAdapter } from '../../operator/garden/servi
 import { createProductionAutomataBusReindexService } from '../../faculties/automata/bus/production-reindex.js';
 
 const log = createComponentLogger('Agent');
+const postgresPoolOwner = new PostgresPoolOwner('agent');
 ensureActiveTimezone();
 const DEFAULT_SHUTDOWN_FORCE_EXIT_TIMEOUT_MS = 15_000;
 
@@ -1622,6 +1627,7 @@ async function main(): Promise<void> {
       await persistenceRuntime.introspectionLandmarkStore.close();
       await persistenceRuntime.partnerAffectShadowStore.close();
       await persistenceRuntime.companionAvailabilityStore.close();
+      await postgresPoolOwner.close();
     },
     scheduler,
     moduleLoader,
@@ -1992,7 +1998,8 @@ async function main(): Promise<void> {
   });
 }
 
-main().catch((err) => {
+runWithPostgresPoolOwner(postgresPoolOwner, main).catch(async (err) => {
   log.error('Fatal error', { error: String(err) });
+  await postgresPoolOwner.close().catch(() => undefined);
   process.exit(1);
 });

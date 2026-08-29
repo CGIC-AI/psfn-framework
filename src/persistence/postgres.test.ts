@@ -9,6 +9,8 @@ import {
   POSTGRES_SCHEMA_NAME_MAX_LENGTH,
   queryOne,
   queryRows,
+  PostgresPoolOwner,
+  runWithPostgresPoolOwner,
 } from './postgres.js';
 
 const CONNECTION_STRING = 'postgres://user:pass@localhost:5432/psfn';
@@ -102,6 +104,140 @@ describe('createPostgresPool schema pinning', () => {
     expect(() => createPostgresPool(CONNECTION_STRING, { role: 'psfn_companion_a' }))
       .toThrow('requires an explicit tenant schema');
   });
+});
+
+describe('PostgresPoolOwner lifecycle and authority isolation', () => {
+  it('coalesces logical stores only inside an exact authority tuple', async () => {
+    const owner = new PostgresPoolOwner('test');
+    let first!: Pool;
+    let second!: Pool;
+    let readOnly!: Pool;
+    let sibling!: Pool;
+    try {
+      runWithPostgresPoolOwner(owner, () => {
+        first = createPostgresPool(CONNECTION_STRING, {
+          applicationName: 'memory',
+          schema: 'companion_a',
+          role: 'companion_a_runtime',
+          max: 10,
+        });
+        second = createPostgresPool(CONNECTION_STRING, {
+          applicationName: 'episodic',
+          schema: 'companion_a',
+          role: 'companion_a_runtime',
+          max: 10,
+        });
+        readOnly = createPostgresPool(CONNECTION_STRING, {
+          applicationName: 'operator-read',
+          schema: 'companion_a',
+          role: 'companion_a_runtime',
+          readOnly: true,
+        });
+        sibling = createPostgresPool(CONNECTION_STRING, {
+          applicationName: 'sibling-memory',
+          schema: 'companion_b',
+          role: 'companion_b_runtime',
+        });
+      });
+
+      const snapshot = owner.telemetry();
+      expect(snapshot.physicalPoolCount).toBe(3);
+      expect(snapshot.totalCapacity).toBe(9);
+      expect(snapshot.authorities).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          authorityClass: 'schema_role',
+          readOnly: false,
+          capacity: 3,
+          logicalStoreCount: 2,
+          applicationNames: ['episodic', 'memory'],
+        }),
+        expect.objectContaining({ readOnly: true, logicalStoreCount: 1 }),
+      ]));
+
+      await first.end();
+      expect(owner.telemetry().physicalPoolCount).toBe(3);
+      await second.end();
+      expect(owner.telemetry().physicalPoolCount).toBe(2);
+    } finally {
+      await Promise.allSettled([first.end(), second.end(), readOnly.end(), sibling.end()]);
+      await owner.close();
+      await owner.close();
+    }
+  });
+
+  it('does not affect ordinary pools outside an owner scope', async () => {
+    const pool = createPostgresPool(CONNECTION_STRING, { max: 7 });
+    try {
+      expect(pool.options.max).toBe(7);
+    } finally {
+      await pool.end();
+    }
+  });
+
+  it('preserves the process owner across awaited startup work', async () => {
+    const owner = new PostgresPoolOwner('test');
+    let pool!: Pool;
+    try {
+      await runWithPostgresPoolOwner(owner, async () => {
+        await Promise.resolve();
+        pool = createPostgresPool(CONNECTION_STRING, {
+          applicationName: 'async-startup-store',
+          schema: 'companion_a',
+          role: 'companion_a_runtime',
+        });
+      });
+
+      expect(owner.telemetry()).toEqual(expect.objectContaining({
+        physicalPoolCount: 1,
+        totalCapacity: 3,
+      }));
+    } finally {
+      await pool.end();
+      await owner.close();
+    }
+  });
+
+  it.each([3, 5, 10])(
+    'keeps a %i-companion two-authority fleet below a 100-connection server budget',
+    async (companionCount) => {
+      const owners = Array.from(
+        { length: companionCount },
+        () => new PostgresPoolOwner('test'),
+      );
+      const leases: Pool[] = [];
+      try {
+        owners.forEach((owner, companionIndex) => {
+          runWithPostgresPoolOwner(owner, () => {
+            const schema = `companion_${String(companionIndex + 1)}`;
+            const role = `${schema}_runtime`;
+            for (let storeIndex = 0; storeIndex < 30; storeIndex += 1) {
+              leases.push(createPostgresPool(CONNECTION_STRING, {
+                applicationName: `store-${String(storeIndex + 1)}`,
+                schema,
+                role,
+              }));
+            }
+            for (let storeIndex = 0; storeIndex < 10; storeIndex += 1) {
+              leases.push(createPostgresPool(CONNECTION_STRING, {
+                applicationName: `shared-store-${String(storeIndex + 1)}`,
+                schema: 'shared',
+              }));
+            }
+          });
+        });
+
+        const totalCapacity = owners.reduce(
+          (sum, owner) => sum + owner.telemetry().totalCapacity,
+          0,
+        );
+        expect(totalCapacity).toBe(companionCount * 2 * 3);
+        expect(totalCapacity).toBeLessThan(97);
+      } finally {
+        await Promise.allSettled(leases.map(pool => pool.end()));
+        await Promise.all(owners.map(owner => owner.close()));
+      }
+    },
+  );
 });
 
 describe('bind-parameter NUL stripping (psfn-framework-dn05)', () => {

@@ -8,7 +8,7 @@ import {
 function entry(overrides: Partial<SessionEntry> = {}): SessionEntry {
   return {
     id: 1,
-    channelId: 'api:contact-ada',
+    channelId: 'api:contact-morgan',
     role: 'user',
     content: 'Hello',
     timestamp: 1_000,
@@ -45,7 +45,7 @@ describe('classifyConversationalActivity', () => {
     ['free-time experience', entry({
       channelId: 'internal:free-time:painting',
       role: 'assistant',
-      authorName: 'Ada',
+      authorName: 'Morgan',
     }), 'experiential_free_time'],
   ] as const)('includes %s as %s', (_label, candidate, kind) => {
     expect(classifyConversationalActivity(candidate)).toEqual({ kind, processable: true });
@@ -69,7 +69,7 @@ describe('classifyConversationalActivity', () => {
     ['maintenance', entry({ channelId: 'internal:maintenance:memory', role: 'assistant' }), 'maintenance'],
     ['free-time framing prompt', entry({ channelId: 'internal:free-time:painting', role: 'system' }), 'automation_scaffold'],
     ['ICP scheduler prompt', entry({ channelId: 'companion-room:kitchen', role: 'system' }), 'automation_scaffold'],
-    ['testing namespace', entry({ channelId: 'api:contact-ada:testing:episode-fixture' }), 'testing'],
+    ['testing namespace', entry({ channelId: 'api:contact-morgan:testing:episode-fixture' }), 'testing'],
     ['testing provenance', entry({
       metadata: JSON.stringify({ testingHarness: { schemaVersion: 1, runId: 'run-1', purpose: 'e2e' } }),
     }), 'testing'],

@@ -261,6 +261,8 @@ function buildPostTurnActionQueueLaneStatus(input: {
 export function buildPostTurnActionQueueStatus(input: {
   entries: Iterable<DeferredPostTurnQueueEntry>;
   runningDedupeKeys: ReadonlySet<string>;
+  waitingForForegroundIdleDedupeKeys: ReadonlySet<string>;
+  expectedSchedulerRunIntervalMs: number;
   now: number;
   processing: boolean;
   droppedCountsByRuntimeClass: ReadonlyMap<RuntimeLaneClass, number>;
@@ -300,10 +302,15 @@ export function buildPostTurnActionQueueStatus(input: {
     lastDrop: input.recentDrops.find((drop) => drop.runtimeClass === runtimeClass),
   }));
   const nextRunAt = minimumPostTurnQueueNumber(queued.map((entry) => entry.nextRunAt));
-  const oldestDemandAt = minimumPostTurnQueueNumber(queued.map((entry) => entry.inferredAt));
-  const noProgressSince = oldestDemandAt === undefined
+  const oldestReadyAt = minimumPostTurnQueueNumber(queued
+    .filter((entry) => entry.state === 'ready')
+    .map((entry) => Math.max(entry.inferredAt, entry.nextRunAt)));
+  const noProgressSince = input.processing || oldestReadyAt === undefined
     ? undefined
-    : Math.max(oldestDemandAt, input.lastProgressAt ?? oldestDemandAt);
+    : Math.max(oldestReadyAt, input.lastProgressAt ?? oldestReadyAt);
+  const noProgressForMs = noProgressSince === undefined
+    ? 0
+    : Math.max(0, input.now - noProgressSince);
   return {
     timestamp: input.now,
     processing: input.processing,
@@ -336,7 +343,12 @@ export function buildPostTurnActionQueueStatus(input: {
     progress: {
       ...(input.lastProgressAt !== undefined ? { lastProgressAt: input.lastProgressAt } : {}),
       ...(noProgressSince !== undefined ? { noProgressSince } : {}),
-      noProgressForMs: noProgressSince === undefined ? 0 : Math.max(0, input.now - noProgressSince),
+      noProgressForMs,
+      expectedSchedulerRunIntervalMs: input.expectedSchedulerRunIntervalMs,
+      stalled: noProgressForMs > input.expectedSchedulerRunIntervalMs,
+      waitingForForegroundIdleCount: queued.filter((entry) => (
+        input.waitingForForegroundIdleDedupeKeys.has(entry.dedupeKey)
+      )).length,
     },
     terminal: {
       cancelledCount: input.cancelledCount,

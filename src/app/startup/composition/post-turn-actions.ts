@@ -155,6 +155,7 @@ export function wirePostTurnActionRuntime(
   const handlers = new Map<string, Map<PostTurnActionHandler, RegisteredPostTurnActionHandler>>();
   const queue = new Map<string, DeferredQueueEntry>();
   const runningDedupeKeys = new Set<string>();
+  const waitingForForegroundIdleDedupeKeys = new Set<string>();
   const recentDrops: PostTurnActionQueueDropRecord[] = [];
   const recentFailures: PostTurnActionQueueFailureRecord[] = [];
   const recentTerminals: PostTurnActionQueueTerminalRecord[] = [];
@@ -1173,8 +1174,13 @@ export function wirePostTurnActionRuntime(
       const requiresForegroundIdle = resolveRuntimeLaneBudgetProfile(
         entry.runtimeClass,
       ).requiresForegroundIdle;
-      if (requiresForegroundIdle) {
-        await agentLoop.waitForIdle?.();
+      if (requiresForegroundIdle && agentLoop.waitForIdle) {
+        waitingForForegroundIdleDedupeKeys.add(entry.action.dedupeKey);
+        try {
+          await agentLoop.waitForIdle();
+        } finally {
+          waitingForForegroundIdleDedupeKeys.delete(entry.action.dedupeKey);
+        }
       }
       let handlerResult: PostTurnActionHandlerResult | undefined;
       for (const { callback } of registeredHandlers) {
@@ -1337,6 +1343,8 @@ export function wirePostTurnActionRuntime(
     return buildPostTurnActionQueueStatus({
       entries: queue.values(),
       runningDedupeKeys,
+      waitingForForegroundIdleDedupeKeys,
+      expectedSchedulerRunIntervalMs: scheduler.getTask(taskId)?.intervalMs ?? intervalMs,
       now,
       processing,
       droppedCountsByRuntimeClass,

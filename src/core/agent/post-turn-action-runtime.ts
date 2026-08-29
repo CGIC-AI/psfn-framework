@@ -279,6 +279,10 @@ export interface PostTurnActionQueueStatus {
     lastProgressAt?: number;
     noProgressSince?: number;
     noProgressForMs: number;
+    expectedSchedulerRunIntervalMs: number;
+    stalled: boolean;
+    /** Actions deliberately paused behind active foreground work. */
+    waitingForForegroundIdleCount: number;
   };
   terminal: {
     cancelledCount: number;

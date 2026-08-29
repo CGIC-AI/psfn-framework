@@ -1,6 +1,6 @@
-torch>=2.13
-transformers>=5.5
-accelerate
-numpy
-datasets
-huggingface_hub
+torch==2.13.0
+transformers==5.16.1
+accelerate==1.14.0
+numpy==2.5.2
+datasets==5.0.1
+huggingface_hub==1.29.0

@@ -406,7 +406,7 @@ exits nonzero when the report status is not `pass`.
 ## Emotion measurement and calibration
 
 The emotion calibration effort is scoped by the playbook
-(`docs/EMOTION_MEASUREMENT_EVAL_HARNESS_PLAYBOOK.md`) — architecture and test
+(`tools/evals/docs/EMOTION_MEASUREMENT_EVAL_HARNESS_PLAYBOOK.md`) — architecture and test
 design only, no configs or code — and implemented by the harnesses below.
 
 ### The measurement cascade

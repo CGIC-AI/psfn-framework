@@ -68,7 +68,7 @@ export interface EpisodeSynthesisGateEvent {
   timestamp: number;
 }
 
-interface EpisodeSynthesisSafeBoundary {
+export interface EpisodeSynthesisSafeBoundary {
   logicalSessionId: string;
   revision: number;
 }

@@ -18,6 +18,7 @@ interface BatonRow extends QueryResultRow {
   manifest_fingerprint: string | null;
   fleet_size: string | number;
   holder_companion_id: string | null;
+  holder_instance_id: string | null;
   fencing_token: string | number;
   acquired_at_ms: string | number | null;
   lease_expires_at_ms: string | number | null;
@@ -41,9 +42,14 @@ interface CheckpointRow extends QueryResultRow {
 }
 
 const BATON_COLUMNS = `
-  manifest_fingerprint, fleet_size, holder_companion_id, fencing_token,
+  manifest_fingerprint, fleet_size, holder_companion_id, holder_instance_id, fencing_token,
   acquired_at_ms, lease_expires_at_ms, phase, preempt_requested,
   last_served_ordinal
+`;
+
+const OWNED_LEASE_FENCE_PREDICATE = `
+  scope = $1 AND holder_companion_id = $2
+  AND holder_instance_id = $3 AND fencing_token = $4
 `;
 
 function nullableSafeInteger(
@@ -56,6 +62,9 @@ function nullableSafeInteger(
 function toLease(row: BatonRow, checkpointRef: string | null): FleetMaintenanceLease {
   if (row.holder_companion_id === null || row.phase === null) {
     throw new Error('fleet maintenance baton row has no holder');
+  }
+  if (row.holder_instance_id === null) {
+    throw new Error('fleet maintenance baton holder is missing its process-instance fence');
   }
   const acquiredAtMs = nullableSafeInteger(row.acquired_at_ms, 'fleetMaintenance.acquiredAtMs');
   const expiresAtMs = nullableSafeInteger(
@@ -154,7 +163,7 @@ export class PostgresFleetMaintenanceStore implements FleetMaintenanceStorePort 
         && holderExpiry <= input.nowMs) {
         const expired = await client.query<BatonRow>(
           `UPDATE fleet_maintenance_baton
-           SET holder_companion_id = NULL, acquired_at_ms = NULL,
+           SET holder_companion_id = NULL, holder_instance_id = NULL, acquired_at_ms = NULL,
                lease_expires_at_ms = NULL, phase = NULL,
                preempt_requested = FALSE, revision = revision + 1
            WHERE scope = $1
@@ -167,7 +176,8 @@ export class PostgresFleetMaintenanceStore implements FleetMaintenanceStorePort 
       }
 
       if (state.holder_companion_id !== null) {
-        if (state.holder_companion_id === input.companionId) {
+        if (state.holder_companion_id === input.companionId
+          && state.holder_instance_id === input.holderInstanceId) {
           const checkpoint = await this.readCheckpointRow(client, input);
           return { outcome: 'acquired', lease: toLease(state, checkpoint?.checkpoint_ref ?? null) };
         }
@@ -220,14 +230,16 @@ export class PostgresFleetMaintenanceStore implements FleetMaintenanceStorePort 
       const checkpoint = await this.readCheckpointRow(client, input);
       const granted = await client.query<BatonRow>(
         `UPDATE fleet_maintenance_baton
-         SET holder_companion_id = $2, fencing_token = fencing_token + 1,
-             acquired_at_ms = $3, lease_expires_at_ms = $4,
-             phase = $5, preempt_requested = FALSE, revision = revision + 1
+         SET holder_companion_id = $2, holder_instance_id = $3,
+             fencing_token = fencing_token + 1,
+             acquired_at_ms = $4, lease_expires_at_ms = $5,
+             phase = $6, preempt_requested = FALSE, revision = revision + 1
          WHERE scope = $1 AND holder_companion_id IS NULL
          RETURNING ${BATON_COLUMNS}`,
         [
           input.scope,
           input.companionId,
+          input.holderInstanceId,
           input.nowMs,
           input.leaseExpiresAtMs,
           checkpoint?.phase ?? input.phase,
@@ -263,10 +275,16 @@ export class PostgresFleetMaintenanceStore implements FleetMaintenanceStorePort 
       }
       const renewed = await client.query<BatonRow>(
         `UPDATE fleet_maintenance_baton
-         SET lease_expires_at_ms = $4, revision = revision + 1
-         WHERE scope = $1 AND holder_companion_id = $2 AND fencing_token = $3
+         SET lease_expires_at_ms = $5, revision = revision + 1
+         WHERE ${OWNED_LEASE_FENCE_PREDICATE}
          RETURNING ${BATON_COLUMNS}`,
-        [input.scope, input.companionId, input.fencingToken, input.leaseExpiresAtMs],
+        [
+          input.scope,
+          input.companionId,
+          input.holderInstanceId,
+          input.fencingToken,
+          input.leaseExpiresAtMs,
+        ],
       );
       const row = renewed.rows.at(0);
       if (!row) throw new FleetMaintenanceFenceLostError();
@@ -314,12 +332,13 @@ export class PostgresFleetMaintenanceStore implements FleetMaintenanceStorePort 
       );
       const checkpointed = await client.query<BatonRow>(
         `UPDATE fleet_maintenance_baton
-         SET phase = $4, lease_expires_at_ms = $5, revision = revision + 1
-         WHERE scope = $1 AND holder_companion_id = $2 AND fencing_token = $3
+         SET phase = $5, lease_expires_at_ms = $6, revision = revision + 1
+         WHERE ${OWNED_LEASE_FENCE_PREDICATE}
          RETURNING ${BATON_COLUMNS}`,
         [
           input.scope,
           input.companionId,
+          input.holderInstanceId,
           input.fencingToken,
           input.phase,
           input.leaseExpiresAtMs,
@@ -358,16 +377,17 @@ export class PostgresFleetMaintenanceStore implements FleetMaintenanceStorePort 
       );
       const released = await client.query(
         `UPDATE fleet_maintenance_baton
-         SET holder_companion_id = NULL, acquired_at_ms = NULL,
+         SET holder_companion_id = NULL, holder_instance_id = NULL, acquired_at_ms = NULL,
              lease_expires_at_ms = NULL, phase = NULL,
              preempt_requested = FALSE,
-             last_served_ordinal = CASE WHEN $4 = 'complete'
-               THEN $5 ELSE last_served_ordinal END,
+             last_served_ordinal = CASE WHEN $5 = 'complete'
+               THEN $6 ELSE last_served_ordinal END,
              revision = revision + 1
-         WHERE scope = $1 AND holder_companion_id = $2 AND fencing_token = $3`,
+         WHERE ${OWNED_LEASE_FENCE_PREDICATE}`,
         [
           input.scope,
           input.companionId,
+          input.holderInstanceId,
           input.fencingToken,
           input.outcome,
           input.manifestOrdinal,
@@ -384,9 +404,9 @@ export class PostgresFleetMaintenanceStore implements FleetMaintenanceStorePort 
     const updated = await this.pool.query(
       `UPDATE fleet_maintenance_baton
        SET preempt_requested = TRUE, revision = revision + 1
-       WHERE scope = $1 AND holder_companion_id = $2
-         AND lease_expires_at_ms > $3 AND preempt_requested = FALSE`,
-      [input.scope, input.companionId, input.nowMs],
+       WHERE scope = $1 AND holder_companion_id IS NOT NULL
+         AND lease_expires_at_ms > $2 AND preempt_requested = FALSE`,
+      [input.scope, input.nowMs],
     );
     return updated.rowCount === 1;
   }
@@ -443,7 +463,7 @@ export class PostgresFleetMaintenanceStore implements FleetMaintenanceStorePort 
     const reconciled = await client.query<BatonRow>(
       `UPDATE fleet_maintenance_baton
        SET manifest_fingerprint = $2, fleet_size = $3,
-           holder_companion_id = NULL, acquired_at_ms = NULL,
+           holder_companion_id = NULL, holder_instance_id = NULL, acquired_at_ms = NULL,
            lease_expires_at_ms = NULL, phase = NULL,
            preempt_requested = FALSE, last_served_ordinal = -1,
            revision = revision + 1
@@ -473,24 +493,26 @@ export class PostgresFleetMaintenanceStore implements FleetMaintenanceStorePort 
     client: PoolClient,
     input: Pick<
       FleetMaintenanceStoreBinding,
-      'scope' | 'companionId'
+      'scope' | 'companionId' | 'holderInstanceId'
     > & { fencingToken: number; nowMs: number },
   ): Promise<BatonRow> {
     const result = await client.query<BatonRow>(
       `SELECT ${BATON_COLUMNS}
        FROM fleet_maintenance_baton
-       WHERE scope = $1
+       WHERE ${OWNED_LEASE_FENCE_PREDICATE}
        FOR UPDATE`,
-      [input.scope],
+      [
+        input.scope,
+        input.companionId,
+        input.holderInstanceId,
+        input.fencingToken,
+      ],
     );
     const row = result.rows.at(0);
     const expiry = row
       ? nullableSafeInteger(row.lease_expires_at_ms, 'fleetMaintenance.expiresAtMs')
       : null;
-    if (!row || row.holder_companion_id !== input.companionId
-      || requireSafeInteger(row.fencing_token, 'fleetMaintenance.fencingToken')
-        !== input.fencingToken
-      || expiry === null || expiry <= input.nowMs) {
+    if (!row || expiry === null || expiry <= input.nowMs) {
       throw new FleetMaintenanceFenceLostError();
     }
     return row;

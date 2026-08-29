@@ -18,7 +18,6 @@ import type { SessionManager } from '../../core/session/manager.js';
 import type { ConversationalActivityWorksetPort } from '../../core/session/conversational-activity-workset.js';
 import type { SessionStore } from '../../persistence/sessions/store.js';
 import type { SessionTailCachePort } from '../../persistence/sessions/session-tail-cache-port.js';
-import type { ConversationalActivityWorksetPort } from '../../core/session/conversational-activity-workset.js';
 import { RedisSessionTailCache } from '../../persistence/sessions/redis-session-tail-cache.js';
 import type { SkillsRuntime } from '../../faculties/skills/runtime.js';
 import type { CharacterCardV2 } from '../../core/identity/types.js';

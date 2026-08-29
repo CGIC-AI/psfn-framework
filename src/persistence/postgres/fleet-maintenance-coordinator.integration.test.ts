@@ -1,4 +1,5 @@
 import { fork, type ChildProcess } from 'node:child_process';
+import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -45,6 +46,7 @@ interface ProcessResponse<T> {
   ready?: boolean;
   ok?: boolean;
   result?: T;
+  signal?: 'stage_entered';
   error?: { name: string; message: string };
 }
 
@@ -104,13 +106,20 @@ class FleetMaintenanceProcess {
     return new FleetMaintenanceProcess(child, stderr);
   }
 
-  async request<T>(command: Record<string, unknown>): Promise<T> {
+  async request<T>(
+    command: Record<string, unknown>,
+    onSignal?: (signal: NonNullable<ProcessResponse<T>['signal']>) => void,
+  ): Promise<T> {
     const requestId = this.nextRequestId;
     this.nextRequestId += 1;
     return await new Promise<T>((resolve, reject) => {
       const onMessage = (raw: unknown): void => {
         const response = raw as ProcessResponse<T>;
         if (response.requestId !== requestId) return;
+        if (response.signal) {
+          onSignal?.(response.signal);
+          return;
+        }
         cleanup();
         if (response.ok === true) {
           resolve(response.result as T);
@@ -132,6 +141,18 @@ class FleetMaintenanceProcess {
       this.child.once('exit', onExit);
       this.child.send({ ...command, requestId });
     });
+  }
+
+  startRun<T>(command: Record<string, unknown>): {
+    result: Promise<T>;
+    stageEntered: Promise<void>;
+  } {
+    let resolveStageEntered!: () => void;
+    const stageEntered = new Promise<void>(resolve => {
+      resolveStageEntered = resolve;
+    });
+    const result = this.request<T>(command, () => resolveStageEntered());
+    return { result, stageEntered };
   }
 
   async shutdown(): Promise<void> {
@@ -278,47 +299,168 @@ describe('Postgres fleet maintenance coordinator', () => {
     }
   });
 
+  it('does not share a live token between two processes for the same companion', async () => {
+    const databaseUrl = await freshDatabaseUrl();
+    const fleet = fleetOfSize(2);
+    const [first, overlapping] = await Promise.all([
+      FleetMaintenanceProcess.start({
+        databaseUrl,
+        companionId: fleet[0]!,
+        fleetCompanionIds: fleet,
+      }),
+      FleetMaintenanceProcess.start({
+        databaseUrl,
+        companionId: fleet[0]!,
+        fleetCompanionIds: fleet,
+      }),
+    ]);
+    const nowMs = Date.parse('2026-08-29T05:30:00.000Z');
+    try {
+      await first.request<void>({
+        action: 'announce',
+        nowMs,
+        demandExpiresAtMs: nowMs + 60_000,
+      });
+      const acquired = await first.request<{
+        outcome: 'acquired';
+        lease: import('../../core/scheduler/fleet-maintenance-coordinator.js').FleetMaintenanceLease;
+      }>({
+        action: 'acquire',
+        nowMs: nowMs + 1,
+        leaseExpiresAtMs: nowMs + 30_000,
+        phase: 'same-companion-overlap',
+      });
+
+      await overlapping.request<void>({
+        action: 'announce',
+        nowMs: nowMs + 2,
+        demandExpiresAtMs: nowMs + 60_000,
+      });
+      await expect(overlapping.request({
+        action: 'acquire',
+        nowMs: nowMs + 3,
+        leaseExpiresAtMs: nowMs + 30_000,
+        phase: 'same-companion-overlap',
+      })).resolves.toMatchObject({ outcome: 'waiting', reason: 'held' });
+      await expect(overlapping.request({
+        action: 'checkpoint',
+        lease: acquired.lease,
+        nowMs: nowMs + 4,
+        leaseExpiresAtMs: nowMs + 40_000,
+        phase: 'stolen-token',
+        checkpointRef: null,
+      })).rejects.toMatchObject({ name: 'FleetMaintenanceFenceLostError' });
+    } finally {
+      await Promise.all([first.shutdown(), overlapping.shutdown()]);
+    }
+  });
+
+  it('renews through a slow stage so another process cannot enter after the original expiry', async () => {
+    const databaseUrl = await freshDatabaseUrl();
+    const fleet = fleetOfSize(2);
+    const [first, second] = await Promise.all(fleet.map(companionId => (
+      FleetMaintenanceProcess.start({ databaseUrl, companionId, fleetCompanionIds: fleet })
+    )));
+    try {
+      const firstRun = first!.startRun<{
+        outcome: 'ran';
+        result: { outcome: 'complete' | 'yield' };
+      }>({
+        action: 'run',
+        leaseDurationMs: 80,
+        retryDelayMs: 10,
+        stageDurationMs: 220,
+        phase: 'slow-real-stage',
+      });
+      await firstRun.stageEntered;
+      await delay(120);
+      await expect(second!.request({
+        action: 'run',
+        leaseDurationMs: 80,
+        retryDelayMs: 10,
+        stageDurationMs: 1,
+        phase: 'must-wait',
+      })).resolves.toMatchObject({ outcome: 'waiting' });
+      await expect(firstRun.result).resolves.toEqual({
+        outcome: 'ran',
+        result: { outcome: 'complete' },
+      });
+    } finally {
+      await Promise.all([first!.shutdown(), second!.shutdown()]);
+    }
+  });
+
+  it('lets foreground on another companion preempt the current holder at its safe boundary', async () => {
+    const databaseUrl = await freshDatabaseUrl();
+    const fleet = fleetOfSize(2);
+    const [holder, foreground] = await Promise.all(fleet.map(companionId => (
+      FleetMaintenanceProcess.start({ databaseUrl, companionId, fleetCompanionIds: fleet })
+    )));
+    try {
+      const holderRun = holder!.startRun<{
+        outcome: 'ran';
+        result: { outcome: 'complete' | 'yield' };
+      }>({
+        action: 'run',
+        leaseDurationMs: 500,
+        retryDelayMs: 20,
+        stageDurationMs: 100,
+        phase: 'cross-companion-preemption',
+      });
+      await holderRun.stageEntered;
+      await expect(foreground!.request({
+        action: 'preempt',
+        nowMs: Date.now(),
+      })).resolves.toBe(true);
+      await expect(holderRun.result).resolves.toEqual({
+        outcome: 'ran',
+        result: { outcome: 'yield' },
+      });
+    } finally {
+      await Promise.all([holder!.shutdown(), foreground!.shutdown()]);
+    }
+  });
+
   it.each([3, 5, 10])(
-    'bounds lease concurrency and eventually serves %i real companion processes',
+    'bounds actual-runner concurrency and eventually serves %i quick-release processes',
     async (fleetSize) => {
       const databaseUrl = await freshDatabaseUrl();
       const fleet = fleetOfSize(fleetSize);
       const processes = await Promise.all(fleet.map(companionId => (
         FleetMaintenanceProcess.start({ databaseUrl, companionId, fleetCompanionIds: fleet })
       )));
-      const nowMs = Date.parse('2026-08-29T06:00:00.000Z');
       try {
-        await Promise.all(processes.map(process => process.request<void>({
-          action: 'announce',
-          nowMs,
-          demandExpiresAtMs: nowMs + 120_000,
-        })));
         const served: string[] = [];
-        for (let round = 0; round < fleetSize; round += 1) {
-          const outcomes = await Promise.all(processes.map(process => process.request<{
-            outcome: 'acquired' | 'waiting';
-            lease?: import('../../core/scheduler/fleet-maintenance-coordinator.js').FleetMaintenanceLease;
+        const pending = new Set(processes.keys());
+        while (pending.size > 0) {
+          const roundStartedAt = Date.now();
+          const indices = [...pending];
+          const outcomes = await Promise.all(indices.map(index => processes[index]!.request<{
+            outcome: 'ran' | 'waiting';
+            retryAtMs?: number;
+            result?: { outcome: 'complete' | 'yield' };
           }>({
-            action: 'acquire',
-            nowMs: nowMs + round * 10 + 1,
-            leaseExpiresAtMs: nowMs + 60_000,
-            phase: 'fleet-load-proof',
+            action: 'run',
+            leaseDurationMs: 500,
+            retryDelayMs: 20,
+            stageDurationMs: 2,
+            phase: 'fleet-quick-release-proof',
           })));
-          const acquired = outcomes.filter(
-            (outcome): outcome is typeof outcome & { lease: NonNullable<typeof outcome.lease> } => (
-              outcome.outcome === 'acquired' && outcome.lease !== undefined
-            ),
-          );
-          expect(acquired).toHaveLength(1);
-          expect(acquired[0]!.lease.companionId).toBe(fleet[round]);
-          served.push(acquired[0]!.lease.companionId);
-          const winner = fleet.indexOf(acquired[0]!.lease.companionId);
-          await processes[winner]!.request<void>({
-            action: 'release',
-            lease: acquired[0]!.lease,
-            nowMs: nowMs + round * 10 + 2,
-            outcome: 'complete',
-          });
+          const roundFinishedAt = Date.now();
+          const ran = outcomes.flatMap((outcome, position) => (
+            outcome.outcome === 'ran' ? [indices[position]!] : []
+          ));
+          expect(ran.length).toBeGreaterThan(0);
+          for (const index of ran) {
+            served.push(fleet[index]!);
+            pending.delete(index);
+          }
+          for (const outcome of outcomes) {
+            if (outcome.outcome !== 'waiting') continue;
+            expect(outcome.retryAtMs).toBeGreaterThanOrEqual(roundStartedAt);
+            expect(outcome.retryAtMs).toBeLessThanOrEqual(roundFinishedAt + 20);
+          }
+          if (pending.size > 0) await delay(20);
         }
         expect(served).toEqual(fleet);
       } finally {

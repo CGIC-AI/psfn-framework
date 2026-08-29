@@ -502,6 +502,13 @@
       "measuredBaselineMs": null,
       "baselineSource": "inherited",
       "note": "beforeAll 90s harness startup budget (standard harness pattern); pre-existing flake under full-suite postgres slot contention, exposed as the suite gained more harness consumers."
+    },
+    {
+      "file": "src/faculties/memory/episodic/synthesis-lane-postgres.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": 1400,
+      "baselineSource": "measured",
+      "note": "y0bft.2 stable episode-claim restart regression against the real containerized Postgres workset. Baseline 1.35s full-file wall (one restart test, warm harness, this host, 2026-08-29); the repo-standard 120s cap preserves headroom for cold-start and shared harness-slot contention."
     }
   ]
 }

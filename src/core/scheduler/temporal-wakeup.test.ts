@@ -478,6 +478,21 @@ describe('morning wake lane (simulated clock, real session manager)', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
+  it('registers the morning slot with the companion fleet ordinal', () => {
+    const scheduler = new Scheduler(new EventBus());
+    registerTemporalWakeupTasks({
+      scheduler,
+      sessionManager: mgr,
+      config: makeWakeConfig({ refresher: { enabled: false } }),
+      fleetScheduleStagger: { manifestOrdinal: 2, fleetSize: 5 },
+    });
+
+    expect(scheduler.getTask(TEMPORAL_WAKEUP_MORNING_TASK_ID)?.fleetStagger).toEqual({
+      manifestOrdinal: 2,
+      fleetSize: 5,
+    });
+  });
+
   it('injects the new-day frame overnight so it precedes the first partner message of the day in built context', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(DAY1_EVENING));

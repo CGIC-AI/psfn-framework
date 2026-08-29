@@ -55,7 +55,13 @@ function makeResponse(channelId = 'terminal:lane-test'): AgentResponse {
 }
 
 describe('reflection post-turn lane split (E5.2)', () => {
-  function wireLanes() {
+  function wireLanes(options: {
+    fleetMaintenance?: {
+      coordinator: Record<string, unknown>;
+      leaseDurationMs: number;
+      retryDelayMs: number;
+    };
+  } = {}) {
     const tempDir = mkdtempSync(join(tmpdir(), 'psfn-lane-split-'));
     TEMP_DIRS.push(tempDir);
     const eventBus = new EventBus();
@@ -119,14 +125,6 @@ describe('reflection post-turn lane split (E5.2)', () => {
           resolveSessionChannelId: (channelId: string) => channelId,
           getRecentMessages: vi.fn().mockReturnValue([]),
         }),
-        conversationalActivityWorkset: fromAny({
-          enumerate: vi.fn(async () => []),
-          claim: vi.fn(async () => null),
-          resumeClaim: vi.fn(async () => null),
-          checkpointStage: vi.fn(async () => undefined),
-          recordFailure: vi.fn(async () => undefined),
-          checkpoint: vi.fn(async () => undefined),
-        }),
         episodicProcessingRestWindow: {
           enabled: true,
           startLocalTime: '00:00',
@@ -152,6 +150,10 @@ describe('reflection post-turn lane split (E5.2)', () => {
         },
         episodicWatermarkStore: fromAny(episodicWatermarkStore),
         conversationalActivityWorkset: fromAny(conversationalActivityWorkset),
+        fleetScheduleStagger: { manifestOrdinal: 1, fleetSize: 3 },
+        ...(options.fleetMaintenance
+          ? { fleetMaintenance: fromAny(options.fleetMaintenance) }
+          : {}),
         companionNames: ['Companion'],
         companionAuthorIds: ['bot-1'],
         episodicSynthesizer,
@@ -170,6 +172,7 @@ describe('reflection post-turn lane split (E5.2)', () => {
     return {
       scheduler,
       postTurnActions,
+      conversationalActivityWorkset,
       sleepConsolidator,
       arcWeaver,
       dreamMeaningPass,
@@ -222,6 +225,12 @@ describe('reflection post-turn lane split (E5.2)', () => {
       { kind: 'daily', hour: 15, minute: 0, timezone: 'local' },
       { kind: 'daily', hour: 18, minute: 0, timezone: 'local' },
     ]);
+    expect(timerTasks.map(task => task.fleetStagger)).toEqual([
+      { manifestOrdinal: 1, fleetSize: 3 },
+      { manifestOrdinal: 1, fleetSize: 3 },
+      { manifestOrdinal: 1, fleetSize: 3 },
+      { manifestOrdinal: 1, fleetSize: 3 },
+    ]);
     // The heavy sleeptime handler is registered for the scheduler-owned action
     // kind; the near-turn and episode-synthesis handlers are separate lanes.
     const registeredKinds = harness.postTurnActions.registerHandler.mock.calls.map(call => call[0]);
@@ -233,5 +242,142 @@ describe('reflection post-turn lane split (E5.2)', () => {
     )?.[2]).toMatchObject({
       coalescing: 'dedupe_key_with_durable_watermark',
     });
+    expect(harness.scheduler.getTask('reflection:daily-review')?.fleetStagger).toEqual({
+      manifestOrdinal: 1,
+      fleetSize: 3,
+    });
+    expect(harness.scheduler.getTask('reflection:weekly-review')?.fleetStagger).toEqual({
+      manifestOrdinal: 1,
+      fleetSize: 3,
+    });
+  });
+
+  it('runs the companion sleeptime action under the fleet baton', async () => {
+    const lease = {
+      companionId: '11111111-1111-4111-8111-111111111111',
+      fencingToken: 1,
+      acquiredAtMs: Date.now(),
+      expiresAtMs: Date.now() + 5_000,
+      phase: 'sleeptime',
+      checkpointRef: null,
+      preemptRequested: false,
+    };
+    const coordinator = {
+      companionId: lease.companionId,
+      manifestOrdinal: 0,
+      fleetSize: 3,
+      announceDemand: vi.fn(async () => undefined),
+      tryAcquire: vi.fn(async () => ({ outcome: 'acquired', lease })),
+      renew: vi.fn(),
+      commitCheckpoint: vi.fn(),
+      release: vi.fn(async () => undefined),
+      requestForegroundPreemption: vi.fn(),
+      withdrawDemand: vi.fn(),
+      readCheckpoint: vi.fn(),
+      close: vi.fn(),
+    };
+    const harness = wireLanes({
+      fleetMaintenance: {
+        coordinator,
+        leaseDurationMs: 5_000,
+        retryDelayMs: 1_000,
+      },
+    });
+    const registration = harness.postTurnActions.registerHandler.mock.calls.find(
+      call => call[0] === SLEEPTIME_MEMORY_ACTION_KIND,
+    );
+    const handler = registration?.[1];
+    if (typeof handler !== 'function') throw new Error('Sleeptime handler was not registered');
+
+    await expect(handler(fromAny({
+      id: 'sleeptime-action',
+      sourceMessageId: 'source-message',
+      payload: { trigger: 'idle_rest_window' },
+    }))).resolves.toMatchObject({ detail: 'Sleeptime completed 0 changed session(s)' });
+    expect(coordinator.announceDemand).toHaveBeenCalledOnce();
+    expect(coordinator.tryAcquire).toHaveBeenCalledOnce();
+    expect(coordinator.release).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'complete' }));
+  });
+
+  it('runs episode synthesis under the fleet baton and checkpoints only after private progress', async () => {
+    const lease = {
+      companionId: '11111111-1111-4111-8111-111111111111',
+      fencingToken: 2,
+      acquiredAtMs: Date.now(),
+      expiresAtMs: Date.now() + 5_000,
+      phase: 'episode_synthesis',
+      checkpointRef: null,
+      preemptRequested: false,
+    };
+    const checkpointedLease = { ...lease, fencingToken: 2, phase: 'episode_synthesis' };
+    const coordinator = {
+      companionId: lease.companionId,
+      manifestOrdinal: 0,
+      fleetSize: 3,
+      announceDemand: vi.fn(async () => undefined),
+      tryAcquire: vi.fn(async () => ({ outcome: 'acquired', lease })),
+      renew: vi.fn(),
+      commitCheckpoint: vi.fn(async () => ({
+        lease: checkpointedLease,
+        disposition: 'yield_requested',
+      })),
+      release: vi.fn(async () => undefined),
+      requestForegroundPreemption: vi.fn(),
+      withdrawDemand: vi.fn(),
+      readCheckpoint: vi.fn(),
+      close: vi.fn(),
+    };
+    const harness = wireLanes({
+      fleetMaintenance: {
+        coordinator,
+        leaseDurationMs: 5_000,
+        retryDelayMs: 1_000,
+      },
+    });
+    harness.conversationalActivityWorkset.enumerate.mockResolvedValueOnce([{
+      purpose: 'episodic_synthesis',
+      logicalSessionId: 'terminal:episode-baton',
+      revision: 1,
+      activityKind: 'direct_message',
+      checkpointRevision: 0,
+      completedStages: [],
+    }]);
+    harness.conversationalActivityWorkset.resumeClaim.mockResolvedValueOnce(null);
+    harness.conversationalActivityWorkset.claim.mockResolvedValueOnce({
+      purpose: 'episodic_synthesis',
+      logicalSessionId: 'terminal:episode-baton',
+      revision: 1,
+      activityKind: 'direct_message',
+      checkpointRevision: 0,
+      completedStages: [],
+      claimantId: 'episode-synthesis-drain',
+      claimedAtMs: Date.now(),
+    });
+    harness.conversationalActivityWorkset.checkpoint.mockResolvedValueOnce(undefined);
+    const registration = harness.postTurnActions.registerHandler.mock.calls.find(
+      call => call[0] === EPISODE_SYNTHESIS_ACTION_KIND,
+    );
+    const handler = registration?.[1];
+    if (typeof handler !== 'function') throw new Error('Episode synthesis handler was not registered');
+
+    await expect(handler(fromAny({
+      id: 'episode-action',
+      channelId: 'terminal:episode-baton',
+      sourceMessageId: 'source-message',
+      payload: { trigger: 'timer' },
+    }))).resolves.toMatchObject({
+      detail: 'Episode synthesis yielded for fleet preemption',
+    });
+
+    expect(coordinator.announceDemand).toHaveBeenCalledOnce();
+    expect(coordinator.tryAcquire).toHaveBeenCalledOnce();
+    expect(harness.conversationalActivityWorkset.checkpoint).toHaveBeenCalledOnce();
+    expect(coordinator.commitCheckpoint).toHaveBeenCalledWith(expect.objectContaining({
+      phase: 'episode_synthesis',
+      checkpointRef: null,
+    }));
+    expect(harness.conversationalActivityWorkset.checkpoint.mock.invocationCallOrder[0])
+      .toBeLessThan(coordinator.commitCheckpoint.mock.invocationCallOrder[0] ?? 0);
+    expect(coordinator.release).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'yield' }));
   });
 });

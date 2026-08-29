@@ -1732,6 +1732,14 @@ async function main(): Promise<void> {
     promptRegistry: promptState.registry,
     proactiveOutbound,
     companionName: card.data.name,
+    ...(persistenceRuntime.fleetMaintenanceCoordinator
+      ? {
+          fleetScheduleStagger: {
+            manifestOrdinal: persistenceRuntime.fleetMaintenanceCoordinator.manifestOrdinal,
+            fleetSize: persistenceRuntime.fleetMaintenanceCoordinator.fleetSize,
+          },
+        }
+      : {}),
   });
 
   // ── Free-time lanes (E8.1): self-directed time, extracted to
@@ -1871,6 +1879,19 @@ async function main(): Promise<void> {
       reflectionStore,
       sessionManager,
       conversationalActivityWorkset,
+      ...(persistenceRuntime.fleetMaintenanceCoordinator
+        ? {
+            fleetMaintenance: {
+              coordinator: persistenceRuntime.fleetMaintenanceCoordinator,
+              leaseDurationMs: schedulerConfig.backgroundWork.supervisor.leaseDurationMs,
+              retryDelayMs: schedulerConfig.backgroundWork.supervisor.retryBaseDelayMs,
+            },
+            fleetScheduleStagger: {
+              manifestOrdinal: persistenceRuntime.fleetMaintenanceCoordinator.manifestOrdinal,
+              fleetSize: persistenceRuntime.fleetMaintenanceCoordinator.fleetSize,
+            },
+          }
+        : {}),
       emotionState,
       contactStore,
       getActiveConcerns: intentionAppraisalHooks.getActiveConcerns,
@@ -1928,7 +1949,6 @@ async function main(): Promise<void> {
       nearTurnMemoryCadence: schedulerConfig.nearTurnMemory,
       episodeSynthesis: schedulerConfig.episodeSynthesis,
       episodicWatermarkStore: episodicStore,
-      conversationalActivityWorkset,
       companionNames: [card.data.name],
       companionAuthorIds: config.discordBotId ? [config.discordBotId] : [],
       memoryScopeClassifier: observedGroupMemoryScheduler,

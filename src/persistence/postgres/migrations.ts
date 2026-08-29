@@ -3042,15 +3042,16 @@ export const POSTGRES_OBSERVER_EVAL_SIDECAR_MIGRATIONS = [
 //  15 — content-free open-dyad continuation delivery ledger (84g0z.2)
 //  16 — companion-owned dyad lifecycle boundaries and revision fencing (84g0z.3)
 //  17 — fleet-wide heavy-maintenance baton, demand roster, and checkpoints
+//  18 — opaque process-instance fencing for fleet-maintenance holders
 export const SHARED_SCHEMA_NAME = 'shared';
 
 /** Ledger versions installed by POSTGRES_SHARED_MIGRATIONS (excluding wiki versions 3 and 8). */
 export const POSTGRES_SHARED_BASE_MIGRATION_VERSIONS = [
-  1, 2, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17,
+  1, 2, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18,
 ] as const;
 /** Complete ledger across the base and shared-wiki chains. */
 export const POSTGRES_SHARED_ALL_MIGRATION_VERSIONS = [
-  1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17,
+  1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18,
 ] as const;
 
 export const POSTGRES_SHARED_MIGRATIONS: readonly string[] = [
@@ -3768,6 +3769,7 @@ export const POSTGRES_SHARED_MIGRATIONS: readonly string[] = [
     manifest_fingerprint TEXT,
     fleet_size INTEGER NOT NULL DEFAULT 0 CHECK (fleet_size >= 0),
     holder_companion_id UUID,
+    holder_instance_id UUID,
     fencing_token BIGINT NOT NULL DEFAULT 0 CHECK (fencing_token >= 0),
     acquired_at_ms BIGINT,
     lease_expires_at_ms BIGINT,
@@ -3779,6 +3781,8 @@ export const POSTGRES_SHARED_MIGRATIONS: readonly string[] = [
     CHECK (manifest_fingerprint IS NULL OR manifest_fingerprint ~ '^[0-9a-f]{64}$'),
     CHECK (last_served_ordinal < fleet_size OR fleet_size = 0),
     CHECK ((holder_companion_id IS NULL) = (acquired_at_ms IS NULL)),
+    CONSTRAINT fleet_maintenance_baton_holder_instance_check
+      CHECK ((holder_companion_id IS NULL) = (holder_instance_id IS NULL)),
     CHECK ((holder_companion_id IS NULL) = (lease_expires_at_ms IS NULL)),
     CHECK ((holder_companion_id IS NULL) = (phase IS NULL)),
     CHECK (holder_companion_id IS NOT NULL OR preempt_requested = FALSE),
@@ -3817,6 +3821,24 @@ export const POSTGRES_SHARED_MIGRATIONS: readonly string[] = [
   );`,
   `INSERT INTO shared_schema_migrations (version, name)
     VALUES (17, 'fleet-heavy-maintenance-baton')
+    ON CONFLICT (version) DO NOTHING;`,
+  // Version 18: a live lease is owned by one opaque coordinator instance, not
+  // merely by a companion. Clear any version-17 live lease before installing
+  // the invariant so rolling upgrades fail closed instead of sharing a token.
+  `ALTER TABLE fleet_maintenance_baton
+    ADD COLUMN IF NOT EXISTS holder_instance_id UUID;`,
+  `UPDATE fleet_maintenance_baton
+    SET holder_companion_id = NULL, holder_instance_id = NULL,
+        acquired_at_ms = NULL, lease_expires_at_ms = NULL, phase = NULL,
+        preempt_requested = FALSE, revision = revision + 1
+    WHERE holder_companion_id IS NOT NULL AND holder_instance_id IS NULL;`,
+  `ALTER TABLE fleet_maintenance_baton
+    DROP CONSTRAINT IF EXISTS fleet_maintenance_baton_holder_instance_check;`,
+  `ALTER TABLE fleet_maintenance_baton
+    ADD CONSTRAINT fleet_maintenance_baton_holder_instance_check
+    CHECK ((holder_companion_id IS NULL) = (holder_instance_id IS NULL));`,
+  `INSERT INTO shared_schema_migrations (version, name)
+    VALUES (18, 'fleet-maintenance-process-fencing')
     ON CONFLICT (version) DO NOTHING;`,
 ];
 

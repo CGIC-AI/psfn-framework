@@ -1,7 +1,10 @@
+import { setTimeout as delay } from 'node:timers/promises';
+
 import {
   createFleetMaintenanceCoordinator,
   type FleetMaintenanceLease,
 } from '../../../core/scheduler/fleet-maintenance-coordinator.js';
+import { runWithFleetMaintenanceBaton } from '../../../core/scheduler/fleet-maintenance-runner.js';
 import { PostgresFleetMaintenanceStore } from '../fleet-maintenance-store.js';
 
 type Command =
@@ -29,6 +32,15 @@ type Command =
       nowMs: number;
       outcome: 'complete' | 'yield';
     }
+  | {
+      requestId: number;
+      action: 'run';
+      leaseDurationMs: number;
+      retryDelayMs: number;
+      stageDurationMs: number;
+      phase: string;
+    }
+  | { requestId: number; action: 'preempt'; nowMs: number }
   | { requestId: number; action: 'readCheckpoint' }
   | { requestId: number; action: 'shutdown' };
 
@@ -78,6 +90,26 @@ process.on('message', (raw) => {
           break;
         case 'release':
           result = await coordinator.release(command);
+          break;
+        case 'run':
+          result = await runWithFleetMaintenanceBaton({
+            coordinator,
+            leaseDurationMs: command.leaseDurationMs,
+            retryDelayMs: command.retryDelayMs,
+            phase: command.phase,
+            run: async control => {
+              send({ requestId: command.requestId, signal: 'stage_entered' });
+              await delay(command.stageDurationMs);
+              const disposition = await control.checkpoint({
+                phase: `${command.phase}:stage-complete`,
+                checkpointRef: null,
+              });
+              return { outcome: disposition === 'yield' ? 'yield' as const : 'complete' as const };
+            },
+          });
+          break;
+        case 'preempt':
+          result = await coordinator.requestForegroundPreemption(command);
           break;
         case 'readCheckpoint':
           result = await coordinator.readCheckpoint();

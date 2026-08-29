@@ -1236,14 +1236,37 @@ describe('SleeptimeMemoryAgent', () => {
     const arcWeaver = { run: vi.fn() };
     const dreamMeaningPass = { run: vi.fn() };
     const sleeptimeWikiPass = { run: vi.fn() };
+    const reviewAgent = makeReviewAgent(JSON.stringify({
+      orient: { persona: 'first revision', human: 'first revision', goals: 'first revision' },
+      memory_writes: [],
+    }));
+    const episodes = [
+      {
+        id: 'episode-first-revision',
+        title: 'First revision episode',
+        landmark: 'The first revision remained bounded',
+        startedAt: '2026-03-16T00:30:00.000Z',
+        endedAt: '2026-03-16T00:45:00.000Z',
+        themes: ['first'],
+      },
+      {
+        id: 'episode-second-revision',
+        title: 'Second revision episode',
+        landmark: 'The later foreground revision formed another episode',
+        startedAt: '2026-03-16T01:01:00.000Z',
+        endedAt: '2026-03-16T01:04:00.000Z',
+        themes: ['second'],
+      },
+    ];
+    const searchByTime = vi.fn(async (options?: { to?: string }) => episodes.filter(
+      episode => episode.endedAt <= (options?.to ?? ''),
+    ) as never);
     const agent = new SleeptimeMemoryAgent(makeAgentOptions({
       now: () => nowMs,
       conversationalActivityWorkset: workset,
       sessionManager: { getRecentMessages: vi.fn().mockReturnValue(transcripts) },
-      agent: makeReviewAgent(JSON.stringify({
-        orient: { persona: 'first revision', human: 'first revision', goals: 'first revision' },
-        memory_writes: [],
-      })),
+      agent: reviewAgent,
+      episodicStore: { searchByTime },
       sleepConsolidator,
       arcWeaver,
       dreamMeaningPass,
@@ -1260,6 +1283,13 @@ describe('SleeptimeMemoryAgent', () => {
     }));
     expect(sleepConsolidator.run).toHaveBeenCalledTimes(1);
     expect(checkpointRevision).toBe(1);
+    expect(searchByTime).toHaveBeenCalledWith(expect.objectContaining({
+      to: new Date(firstOccurredAtMs).toISOString(),
+    }));
+    const oldClaimPrompt = (reviewAgent.handleMessage.mock.calls[0]?.[0] as { content: string }).content;
+    expect(oldClaimPrompt).toContain('First revision episode');
+    expect(oldClaimPrompt).not.toContain('Second revision episode');
+    expect(oldClaimPrompt).not.toContain('new foreground revision');
 
     await expect(agent.execute(makeSleeptimeAction())).resolves.toMatchObject({ outcome: 'complete' });
     expect(sleepConsolidator.run).toHaveBeenCalledTimes(2);
@@ -1268,6 +1298,9 @@ describe('SleeptimeMemoryAgent', () => {
       throughOccurredAtMs: secondOccurredAtMs,
     }));
     expect(checkpointRevision).toBe(2);
+    const newClaimPrompt = (reviewAgent.handleMessage.mock.calls[1]?.[0] as { content: string }).content;
+    expect(newClaimPrompt).toContain('Second revision episode');
+    expect(newClaimPrompt).toContain('new foreground revision');
   });
 
   it('skips CogSec-risk sleeptime orient rewrites while keeping safe memory writes', async () => {

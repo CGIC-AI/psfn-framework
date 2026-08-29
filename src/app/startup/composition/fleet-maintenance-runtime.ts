@@ -1,28 +1,8 @@
 import {
-  createFleetMaintenanceCoordinator,
   type FleetMaintenanceCoordinator,
-  type FleetMaintenanceStorePort,
 } from '../../../core/scheduler/fleet-maintenance-coordinator.js';
 import { RUNTIME_LANE_CLASSES } from '../../../shared/contracts/runtime-lanes.js';
 import type { EventBus } from '../../../shared/event-bus.js';
-
-export type FleetMaintenanceRuntimeStore = FleetMaintenanceStorePort;
-
-export interface FleetMaintenanceRuntime {
-  coordinator: FleetMaintenanceCoordinator;
-  close(): Promise<void>;
-}
-
-export function composeFleetMaintenanceRuntime(input: {
-  store: FleetMaintenanceRuntimeStore;
-  companionId: string;
-  fleetCompanionIds: readonly string[];
-}): FleetMaintenanceRuntime {
-  return {
-    coordinator: createFleetMaintenanceCoordinator(input),
-    close: () => input.store.close(),
-  };
-}
 
 /**
  * Foreground work never acquires or waits for the maintenance baton. Its turn

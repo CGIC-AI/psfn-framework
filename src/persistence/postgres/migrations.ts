@@ -3033,15 +3033,16 @@ export const POSTGRES_OBSERVER_EVAL_SIDECAR_MIGRATIONS = [
 //  14 — durable canonical ICP dyads with bounded activity episodes (84g0z.1)
 //  15 — content-free open-dyad continuation delivery ledger (84g0z.2)
 //  16 — companion-owned dyad lifecycle boundaries and revision fencing (84g0z.3)
+//  17 — fleet-wide heavy-maintenance baton, demand roster, and checkpoints
 export const SHARED_SCHEMA_NAME = 'shared';
 
 /** Ledger versions installed by POSTGRES_SHARED_MIGRATIONS (excluding wiki versions 3 and 8). */
 export const POSTGRES_SHARED_BASE_MIGRATION_VERSIONS = [
-  1, 2, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 16,
+  1, 2, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17,
 ] as const;
 /** Complete ledger across the base and shared-wiki chains. */
 export const POSTGRES_SHARED_ALL_MIGRATION_VERSIONS = [
-  1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
+  1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17,
 ] as const;
 
 export const POSTGRES_SHARED_MIGRATIONS: readonly string[] = [
@@ -3749,6 +3750,65 @@ export const POSTGRES_SHARED_MIGRATIONS: readonly string[] = [
     CHECK (dyad_lifecycle_revision >= 1);`,
   `INSERT INTO shared_schema_migrations (version, name)
     VALUES (16, 'icp-dyad-participant-lifecycle')
+    ON CONFLICT (version) DO NOTHING;`,
+  // Version 17 (y0bft.4): one cluster-wide, content-free scheduling authority
+  // for heavy nighttime maintenance. Private work and memory content remain in
+  // each companion schema; shared state carries only identities, ordinals,
+  // deadlines, an opaque checkpoint reference, and a monotonic fencing token.
+  `CREATE TABLE IF NOT EXISTS fleet_maintenance_baton (
+    scope TEXT PRIMARY KEY CHECK (scope = 'heavy_nighttime_maintenance'),
+    manifest_fingerprint TEXT,
+    fleet_size INTEGER NOT NULL DEFAULT 0 CHECK (fleet_size >= 0),
+    holder_companion_id UUID,
+    fencing_token BIGINT NOT NULL DEFAULT 0 CHECK (fencing_token >= 0),
+    acquired_at_ms BIGINT,
+    lease_expires_at_ms BIGINT,
+    phase TEXT,
+    preempt_requested BOOLEAN NOT NULL DEFAULT FALSE,
+    last_served_ordinal INTEGER NOT NULL DEFAULT -1 CHECK (last_served_ordinal >= -1),
+    revision BIGINT NOT NULL DEFAULT 1 CHECK (revision >= 1),
+    CHECK ((fleet_size = 0) = (manifest_fingerprint IS NULL)),
+    CHECK (manifest_fingerprint IS NULL OR manifest_fingerprint ~ '^[0-9a-f]{64}$'),
+    CHECK (last_served_ordinal < fleet_size OR fleet_size = 0),
+    CHECK ((holder_companion_id IS NULL) = (acquired_at_ms IS NULL)),
+    CHECK ((holder_companion_id IS NULL) = (lease_expires_at_ms IS NULL)),
+    CHECK ((holder_companion_id IS NULL) = (phase IS NULL)),
+    CHECK (holder_companion_id IS NOT NULL OR preempt_requested = FALSE),
+    CHECK (phase IS NULL OR char_length(phase) BETWEEN 1 AND 128),
+    CHECK (lease_expires_at_ms IS NULL OR lease_expires_at_ms > acquired_at_ms)
+  );`,
+  `INSERT INTO fleet_maintenance_baton (scope)
+    VALUES ('heavy_nighttime_maintenance')
+    ON CONFLICT (scope) DO NOTHING;`,
+  `CREATE TABLE IF NOT EXISTS fleet_maintenance_demands (
+    scope TEXT NOT NULL CHECK (scope = 'heavy_nighttime_maintenance'),
+    companion_id UUID NOT NULL,
+    manifest_fingerprint TEXT NOT NULL CHECK (manifest_fingerprint ~ '^[0-9a-f]{64}$'),
+    manifest_ordinal INTEGER NOT NULL CHECK (manifest_ordinal >= 0),
+    fleet_size INTEGER NOT NULL CHECK (fleet_size > 0),
+    requested_at_ms BIGINT NOT NULL CHECK (requested_at_ms >= 0),
+    ready_until_ms BIGINT NOT NULL CHECK (ready_until_ms > requested_at_ms),
+    PRIMARY KEY (scope, companion_id),
+    UNIQUE (scope, manifest_fingerprint, manifest_ordinal),
+    CHECK (manifest_ordinal < fleet_size)
+  );`,
+  `CREATE INDEX IF NOT EXISTS idx_fleet_maintenance_demand_order
+    ON fleet_maintenance_demands (
+      scope, manifest_fingerprint, manifest_ordinal, ready_until_ms
+    );`,
+  `CREATE TABLE IF NOT EXISTS fleet_maintenance_checkpoints (
+    scope TEXT NOT NULL CHECK (scope = 'heavy_nighttime_maintenance'),
+    companion_id UUID NOT NULL,
+    phase TEXT NOT NULL CHECK (char_length(phase) BETWEEN 1 AND 128),
+    checkpoint_ref TEXT CHECK (
+      checkpoint_ref IS NULL OR char_length(checkpoint_ref) BETWEEN 1 AND 512
+    ),
+    fencing_token BIGINT NOT NULL CHECK (fencing_token > 0),
+    updated_at_ms BIGINT NOT NULL CHECK (updated_at_ms >= 0),
+    PRIMARY KEY (scope, companion_id)
+  );`,
+  `INSERT INTO shared_schema_migrations (version, name)
+    VALUES (17, 'fleet-heavy-maintenance-baton')
     ON CONFLICT (version) DO NOTHING;`,
 ];
 

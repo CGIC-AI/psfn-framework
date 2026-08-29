@@ -607,19 +607,12 @@ introspection faculty.
   the emo_sim telemetry lineage; same non-authoritative eval boundary.
 - [`evals.md`](/openwiki/tools/evals.md) — the offline eval toolkit that owns
   the model-output harnesses this audit consumes.
-- [`adversarial-review.md`](/openwiki/process/adversarial-review.md) — the
-  code-gate adversarial surface; the prompt audit is the model-facing
-  counterpart.
-- [`productivity-pack.md`](/openwiki/process/productivity-pack.md) — the
-  workflow pack whose pre-PR gate carries the evals preflight and the
-  maintenance CLI discipline.
 <!-- openwiki: broken internal link [/openwiki/prompt-macros.md] file "/openwiki/prompt-macros.md" does not exist. Fix the href or restore the target, then delete this comment. -->
 - [`prompt-macros.md`](/openwiki/prompt-macros.md) — the prompt composition
   stack the audit's prompts are built from (static/dynamic layers, purity
   rule, removed-macro registry).
-- [`internal-review.md`](/openwiki/process/internal-review.md) and
-  [`development-status.md`](/openwiki/development-status.md) — the review
-  contract and current-source truth this page's assertions must match.
+- [`development-status.md`](/openwiki/development-status.md) — the
+  current-source truth this page's assertions must match.
 - [`docs/self-eval-prompt-audit.md`](/docs/self-eval-prompt-audit.md) — the
   operator-facing audit report (rule table, S1–S15 inventory, per-prompt
   verdicts, writing checklist).

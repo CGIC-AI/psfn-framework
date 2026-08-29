@@ -457,13 +457,6 @@ evidence it describes.
 - [development-status](/openwiki/development-status.md) — the validation
   baseline list and which suites make up the cumulative recertification
   contract referenced from this page.
-- [maintenance-scripts](/openwiki/process/maintenance-scripts.md) — the shared
-  maintenance CLI harness and the catalog that `shakedown:cleanup` and
-  `session:purge` belong to.
-- [internal-review](/openwiki/process/internal-review.md) — the heavy test
-  phase that certifies the shakedown surface described here.
-- [adversarial-review](/openwiki/process/adversarial-review.md) — the baseline
-  debt and regression-evidence gates a shakedown failure feeds.
 
 ## Focused tests
 

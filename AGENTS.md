@@ -6,14 +6,11 @@ This is the repository map and operating contract for coding agents. Use it with
 the current code, not instead of it. Current operator instructions win; runtime
 and configuration contracts win when prose has drifted.
 
-Load detailed workflow documents only when the task needs them:
-
-- Multi-bead or multi-PR implementation wave: [`docs/process/orchestration.md`](./docs/process/orchestration.md)
-- Portable gate/reviewer setup: [`docs/process/internal-review.md`](./docs/process/internal-review.md)
-- High-risk review practices: [`docs/process/adversarial-review.md`](./docs/process/adversarial-review.md)
-- Runtime and framework operations: [`docs/operations.md`](./docs/operations.md);
-  deployment-specific live operations use the explicitly supplied external
-  configuration location
+Load the runtime operations document only when the task needs it:
+[`docs/operations.md`](./docs/operations.md); deployment-specific live
+operations use the explicitly supplied external configuration location. The
+detailed internal orchestration/review workflow docs were archived off-repo;
+this file is the operating contract.
 
 ## Implementation first: process must earn its cost
 

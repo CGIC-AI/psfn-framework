@@ -497,5 +497,4 @@ Related: [Session Runtime](/openwiki/runtime/session.md), [Identity
 Runtime](/openwiki/runtime/identity.md), [Context Envelope](/openwiki/context-envelope.md),
 <!-- openwiki: broken internal link [/openwiki/attribution.md] file "/openwiki/attribution.md" does not exist. Fix the href or restore the target, then delete this comment. -->
 [Attribution and Provenance](/openwiki/attribution.md), [Memory: L2 Typed
-Memory](/openwiki/memory/l2-typed.md), [Approval Envelope](/openwiki/security/approval-envelope.md),
-[Internal Review](/openwiki/process/internal-review.md).
+Memory](/openwiki/memory/l2-typed.md), [Approval Envelope](/openwiki/security/approval-envelope.md).

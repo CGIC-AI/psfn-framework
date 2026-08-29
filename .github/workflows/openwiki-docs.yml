@@ -1,9 +1,9 @@
 name: OpenWiki docs
 
+# Manual only: run at end-of-sprint once new work has landed. No schedule —
+# an unattended full-tree regeneration wastes spend and creates review churn.
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "0 8 * * 1"
 
 permissions:
   contents: read
@@ -66,6 +66,6 @@ jobs:
           commit-message: "docs: refresh generated documentation"
           title: "docs: refresh generated documentation"
           body: |
-            Weekly OpenWiki update copied into `docs/`.
+            Manual end-of-sprint OpenWiki update copied into `docs/`.
 
             `docs/PSFN_PROJECT_CHARTER.md` is operator-owned and is never overwritten.

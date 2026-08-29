@@ -601,6 +601,29 @@ describe('AdminSubsystemHealthDataService', () => {
         completedCount: 11,
       },
     });
+
+    const stalledWithoutFailures: PostTurnActionQueueStatus = {
+      ...queueStatus,
+      failures: {
+        failedCount: 0,
+        retryableFailureCount: 0,
+        permanentRejectCount: 0,
+        recentFailures: [],
+      },
+    };
+    const stalledService = new AdminSubsystemHealthDataService({
+      eventBus: new EventBus(),
+      now: () => 9_000,
+      postTurnActionQueueProvider: { getStatus: () => stalledWithoutFailures },
+    });
+    expect(laneById(
+      (await stalledService.getSnapshot()).lanes,
+      'post_turn_action_queue',
+    )).toMatchObject({
+      status: 'degraded',
+      lastOutcome: 'degraded',
+      lastReason: 'queue_no_progress',
+    });
   });
 
   it('fails the queue-health lane when its durable state cannot be read', async () => {

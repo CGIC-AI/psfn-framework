@@ -1,6 +1,6 @@
 # PSFN - Persona Substrate Formation Network
 
-Last updated: 2026-07-21
+Last updated: 2026-08-29
 Package version: `0.1.0`
 Current status: early alpha; see [`docs/development-status.md`](./docs/development-status.md) for milestones and active risks, and [`CHANGELOG.md`](./CHANGELOG.md) for capability history.
 
@@ -54,20 +54,26 @@ builds by is [`docs/PSFN_PROJECT_CHARTER.md`](./docs/PSFN_PROJECT_CHARTER.md).
 - **Split runtime**: a privileged gateway owns secrets, egress, and policy; the
   companion's Core runs isolated and talks over a private socket. Split mode is
   the only supported shape.
-- **Postgres-backed continuity state**: L0.1 episodic memory, L2 typed memory, contacts,
-  intentions, concerns, and internal state on PostgreSQL + pgvector; JSONL L0
-  stays canonical. See [`docs/memory.md`](./docs/memory.md).
+- **Postgres-backed continuity state**: L0.1 episodic memory, L2 typed memory,
+  contacts, intentions, concerns, and internal state on PostgreSQL + pgvector;
+  JSONL L0 stays canonical. Runtime pools are bounded, process-lifecycle-owned,
+  and reused only inside an exact database, schema, role, and read-only authority
+  boundary. See [`docs/memory/overview.md`](./docs/memory/overview.md).
 - **Trust and cognitive security**: Context Envelope privacy per turn,
   trust-gated retrieval, and a taint-tracked intake firewall with quarantine,
-  sink gates, and drift review. See [`docs/context-envelope.md`](./docs/context-envelope.md)
-  and [`docs/cognitive-security.md`](./docs/cognitive-security.md).
+  sink gates, and drift review. See
+  [`docs/security/context-envelope.md`](./docs/security/context-envelope.md) and
+  [`docs/security/cognitive-security.md`](./docs/security/cognitive-security.md).
 - **Channels and embodiment**: Discord (text + voice), Telegram, Multica, an
   OpenAI-compatible API, the Garden operator UI, a companion PWA, and Satellite
   Hub endpoints with situated presence and Home Assistant world tooling.
 - **Autonomy surfaces**: scheduler-driven reflection, free-time work, weighted
   thoughts, bounded subagents, and long-horizon shards with reviewed fold-back.
 - **Fleet-capable**: one installation can host multiple peer companions with
-  isolated state and a shared, governed world. See [`docs/multi-companion.md`](./docs/multi-companion.md).
+  isolated state and a shared, governed world. Fleet Garden reads a selected
+  companion through an authenticated child assertion and that companion's agent
+  transport; it never assumes a sibling companion's database role. See
+  [`docs/operator/multi-companion.md`](./docs/operator/multi-companion.md).
 
 ## Getting Started
 

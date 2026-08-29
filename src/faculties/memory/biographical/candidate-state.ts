@@ -256,7 +256,7 @@ export function transitionBiographicalCandidate(input: {
   if (input.to === 'active') {
     if (input.candidate.stage === 'human_review') {
       if (!hasReceipt(newReceipts, 'human', 'approved')) {
-        throw new Error('activation requires a human approval receipt');
+        throw new Error('activation requires a human-reviewer approval receipt');
       }
     } else {
       assertAutoactivation(input.candidate, input.claim, input.policy, newReceipts);

@@ -229,6 +229,9 @@ export const SETTINGS_OWNER_FILE_BY_FIELD = new Map<string, string>([
   ['episodicProcessingRestWindowEndLocalTime', SCHEDULER_FILE_NAME],
   ['episodicProcessingRestWindowTimeZone', SCHEDULER_FILE_NAME],
   ['episodicProcessingInactivityThresholdMinutes', SCHEDULER_FILE_NAME],
+  ['episodeSynthesisDaytimeSlots', SCHEDULER_FILE_NAME],
+  ['episodeSynthesisTimezone', SCHEDULER_FILE_NAME],
+  ['episodeSynthesisTurnThreshold', SCHEDULER_FILE_NAME],
   ['capabilityTier', CAPABILITY_TIER_FILE_NAME],
   ['customTokens', CAPABILITY_TIER_FILE_NAME],
 ]);
@@ -250,6 +253,9 @@ const SETTINGS_OWNER_SUBSYSTEM_BY_FIELD = new Map<string, SettingsSubsystemId>([
   ['episodicProcessingRestWindowEndLocalTime', 'scheduler'],
   ['episodicProcessingRestWindowTimeZone', 'scheduler'],
   ['episodicProcessingInactivityThresholdMinutes', 'scheduler'],
+  ['episodeSynthesisDaytimeSlots', 'scheduler'],
+  ['episodeSynthesisTimezone', 'scheduler'],
+  ['episodeSynthesisTurnThreshold', 'scheduler'],
   ['capabilityTier', 'capabilities'],
   ['customTokens', 'capabilities'],
 ]);
@@ -284,6 +290,7 @@ export const SETTINGS_STRING_ARRAY_FIELDS = new Set<string>([
   'promotedExtendedTools',
   'moaReferenceModels',
   'customTokens',
+  'episodeSynthesisDaytimeSlots',
 ]);
 
 const SETTINGS_INTEGER_FIELDS = new Set<string>([
@@ -300,6 +307,7 @@ const SETTINGS_INTEGER_FIELDS = new Set<string>([
   'extractionInterval',
   'backgroundMaintenanceIntervalMs',
   'episodicProcessingInactivityThresholdMinutes',
+  'episodeSynthesisTurnThreshold',
   'extractionThresholdPct',
   'compactionThresholdPct',
   'observationMaskingWindow',
@@ -420,11 +428,13 @@ const BASE_ENUM_VALUES_BY_FIELD = new Map<string, readonly string[]>([
   ['imageFalCreateModel', FAL_CREATE_MODELS],
   ['imageFalEditModel', FAL_EDIT_MODELS],
   ['imageSelfieEditModel', FAL_EDIT_MODELS],
+  ['episodeSynthesisTimezone', ['local', 'utc']],
 ]);
 
 const EXTRA_NUMERIC_RANGES = new Map<string, { min?: number; max?: number }>([
   ['backgroundMaintenanceIntervalMs', { min: 1_000 }],
   ['episodicProcessingInactivityThresholdMinutes', { min: 1 }],
+  ['episodeSynthesisTurnThreshold', { min: 1 }],
   ['moodCongruenceWeight', { min: 0, max: 1 }],
   ['memoryExtractionEmotionalIntensityWeight', { min: 0, max: 1 }],
   ['wikiRetrievalChatTokenCap', { min: 0, max: 16_000 }],

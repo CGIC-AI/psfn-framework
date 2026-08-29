@@ -41,6 +41,7 @@ import type {
 import type { Scheduler } from '../scheduler.js';
 
 const log = createComponentLogger('PostTurnRuntime');
+const DAY_MS = 24 * 60 * 60_000;
 
 export const SLEEPTIME_REST_WINDOW_OPERATION_ID = 'memory.sleeptime.rest-window';
 export const CONTACT_TRUST_DRIFT_REVIEW_OPERATION_ID = 'contacts.trust-drift-review.rest-window';
@@ -175,12 +176,14 @@ export function createSchedulerOwnedPostTurnLanes(
     runtimeOptions.sessionManager
     && runtimeOptions.episodicSynthesizer
     && runtimeOptions.episodicWatermarkStore
+    && runtimeOptions.conversationalActivityWorkset
     && runtimeOptions.episodeSynthesis
   )
     ? new EpisodeSynthesisLane({
       sessionManager: runtimeOptions.sessionManager,
       synthesizer: runtimeOptions.episodicSynthesizer,
       watermarkStore: runtimeOptions.episodicWatermarkStore,
+      workset: runtimeOptions.conversationalActivityWorkset,
       config: runtimeOptions.episodeSynthesis,
       scopeClassifier: runtimeOptions.memoryScopeClassifier ?? null,
       ...(runtimeOptions.companionNames ? { companionNames: runtimeOptions.companionNames } : {}),
@@ -582,31 +585,38 @@ export function registerSchedulerOwnedPostTurnLanes(
         coalescing: 'dedupe_key_with_durable_watermark',
       },
     );
-    if (telemetryEventBus && !scheduler.getTask(EPISODE_SYNTHESIS_TIMER_TASK_ID)) {
-      scheduler.register({
-        id: EPISODE_SYNTHESIS_TIMER_TASK_ID,
-        name: 'Episode Synthesis Gate Timer',
-        type: 'every',
-        intervalMs: episodeSynthesisLane.timerIntervalMs,
-        handler: async () => {
-          for (const action of episodeSynthesisLane.inferTimerActions()) {
-            const payload = action.payload ?? {};
-            const channelId = typeof payload.sourceChannelId === 'string'
-              ? payload.sourceChannelId
-              : typeof payload.sessionId === 'string'
-                ? payload.sessionId
-                : 'api:episode-synthesis';
+    if (telemetryEventBus && runtimeOptions.episodeSynthesis) {
+      for (const localTime of runtimeOptions.episodeSynthesis.daytimeSlots) {
+        const [hour, minute] = localTime.split(':').map(Number);
+        const taskId = `${EPISODE_SYNTHESIS_TIMER_TASK_ID}:${localTime.replace(':', '-')}`;
+        if (scheduler.getTask(taskId)) continue;
+        scheduler.register({
+          id: taskId,
+          name: `Episode Synthesis Drain (${localTime})`,
+          description: 'Drains every changed conversational session sequentially for daytime episode synthesis.',
+          scheduleSource: 'scheduler.json#episodeSynthesis.daytimeSlots',
+          type: 'every',
+          intervalMs: DAY_MS,
+          cadence: {
+            kind: 'daily',
+            hour: hour ?? 0,
+            minute: minute ?? 0,
+            timezone: runtimeOptions.episodeSynthesis.timezone,
+          },
+          handler: async () => {
+            const action = episodeSynthesisLane.inferTimerAction();
+            const channelId = 'api:episode-synthesis';
             const inferredChannelType = inferSessionChannelType(channelId);
             const channelType = inferredChannelType && inferredChannelType !== 'subagent'
               ? inferredChannelType
               : 'api';
             const syntheticMessage = {
-              id: `episode-synthesis-timer:${channelId}:${Date.now()}`,
+              id: `episode-synthesis-timer:${localTime}:${Date.now()}`,
               channelId,
               channelType,
               authorId: 'system:episode-synthesis',
               authorName: 'Episode Synthesis',
-              content: 'Episode-synthesis gate timer fired.',
+              content: 'Episode-synthesis daytime drain requested.',
               timestamp: new Date(),
             };
             await telemetryEventBus.emit('agent.post_turn.actions.inferred', {
@@ -623,17 +633,18 @@ export function registerSchedulerOwnedPostTurnLanes(
               },
               actions: toInferredPostTurnActions([action], syntheticMessage),
             });
-          }
-        },
-        eligibility: { requiredTokens: ['memory.write'] },
-        state: 'idle',
-      }, { skipFirstRun: true });
+          },
+          eligibility: { requiredTokens: ['memory.write'] },
+          state: 'idle',
+        });
+      }
     }
   } else {
     log.info('Episode-synthesis lane wiring skipped: missing dependencies', {
       hasSessionManager: Boolean(runtimeOptions.sessionManager),
       hasSynthesizer: Boolean(runtimeOptions.episodicSynthesizer),
       hasWatermarkStore: Boolean(runtimeOptions.episodicWatermarkStore),
+      hasConversationalActivityWorkset: Boolean(runtimeOptions.conversationalActivityWorkset),
       hasGateConfig: Boolean(runtimeOptions.episodeSynthesis),
     });
   }

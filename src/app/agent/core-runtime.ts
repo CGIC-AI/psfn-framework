@@ -15,6 +15,7 @@ import { createLLMProviderPort } from '../../core/agent/contracts.js';
 import type { EmotionRuntimeWiring } from '../../core/agent/substrate-agent.js';
 import type { MemoryExtractor } from '../../faculties/memory/extraction.js';
 import type { SessionManager } from '../../core/session/manager.js';
+import type { ConversationalActivityWorksetPort } from '../../core/session/conversational-activity-workset.js';
 import type { SessionStore } from '../../persistence/sessions/store.js';
 import type { SessionTailCachePort } from '../../persistence/sessions/session-tail-cache-port.js';
 import { RedisSessionTailCache } from '../../persistence/sessions/redis-session-tail-cache.js';
@@ -261,6 +262,7 @@ export interface AgentCoreRuntime {
   agentLoop: SubstrateAgent;
   sessionStore: SessionStore;
   sessionManager: SessionManager;
+  conversationalActivityWorkset: ConversationalActivityWorksetPort;
   promptState: PromptStatePort;
   skillsRuntime: SkillsRuntime;
   memoryStore: MemoryStorePort;
@@ -1038,6 +1040,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     agentLoop,
     sessionStore,
     sessionManager,
+    conversationalActivityWorkset: sessionComposition.conversationalActivityWorkset,
     promptState,
     skillsRuntime,
     memoryStore,

@@ -388,7 +388,8 @@ describe('subsystem config round-trip', () => {
         maxSourceMemories: 30,
       },
       episodeSynthesis: {
-        timerIntervalMinutes: 30,
+        daytimeSlots: ['09:00', '12:00', '15:00', '18:00'],
+        timezone: 'local',
         turnThreshold: 24,
         minRelevantTurns: 10,
         transcriptMessageLimit: 96,

@@ -27,6 +27,10 @@ import {
   createDefaultBiographicalDepthPolicy,
 } from '../config/biographical-depth-policy.js';
 import {
+  cloneBiographicalCandidatePolicy,
+  createDefaultBiographicalCandidatePolicy,
+} from '../config/biographical-candidate-policy.js';
+import {
   cloneMemoryPresentationProfile,
   createDefaultMemoryPresentationProfile,
 } from '../config/memory-presentation-profile.js';
@@ -289,6 +293,9 @@ function getMemorySettingsSnapshot(config: SubstrateConfig) {
     biographicalDepthPolicy: cloneBiographicalDepthPolicy(
       config.biographicalDepthPolicy ?? createDefaultBiographicalDepthPolicy(),
     ),
+    biographicalCandidatePolicy: cloneBiographicalCandidatePolicy(
+      config.biographicalCandidatePolicy ?? createDefaultBiographicalCandidatePolicy(),
+    ),
     memoryPresentationProfile: cloneMemoryPresentationProfile(
       config.memoryPresentationProfile ?? createDefaultMemoryPresentationProfile(),
     ),
@@ -344,6 +351,7 @@ function getMemorySettingsSnapshot(config: SubstrateConfig) {
     | 'memoryDeletionPolicy'
     | 'memoryRetrievalPolicy'
     | 'biographicalDepthPolicy'
+    | 'biographicalCandidatePolicy'
     | 'memoryPresentationProfile'
     | 'memoryRefreshFailureAlertThreshold'
     | 'groupMemory'
@@ -764,6 +772,11 @@ function applyCoreSettings(
   if ('biographicalDepthPolicy' in settings) {
     config.biographicalDepthPolicy = cloneBiographicalDepthPolicy(
       settings.biographicalDepthPolicy ?? createDefaultBiographicalDepthPolicy(),
+    );
+  }
+  if ('biographicalCandidatePolicy' in settings) {
+    config.biographicalCandidatePolicy = cloneBiographicalCandidatePolicy(
+      settings.biographicalCandidatePolicy ?? createDefaultBiographicalCandidatePolicy(),
     );
   }
   if ('memoryDeletionPolicy' in settings) {

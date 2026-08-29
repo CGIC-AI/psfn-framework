@@ -8,9 +8,11 @@ describe('POSTGRES_BIOGRAPHICAL_PROFILE_MIGRATIONS', () => {
   it('creates append-only claim and grant tables with no DELETE paths', () => {
     expect(sql).toContain('CREATE TABLE IF NOT EXISTS biographical_claims');
     expect(sql).toContain('CREATE TABLE IF NOT EXISTS biographical_grants');
+    expect(sql).toContain('CREATE TABLE IF NOT EXISTS biographical_candidates');
     // Append-only: migrations never drop or delete rows.
     expect(sql).not.toMatch(/DELETE\s+FROM\s+biographical_/i);
     expect(sql).not.toMatch(/DROP\s+TABLE\s+biographical_/i);
+    expect(sql).toContain("stage IN ('automata_synthesis', 'companion_review', 'human_review', 'active', 'rejected', 'superseded')");
   });
 
   it('pins the supported claim schema version and rejects others', () => {

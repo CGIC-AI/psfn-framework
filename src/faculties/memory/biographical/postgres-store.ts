@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { Pool, PoolClient, QueryResultRow } from 'pg';
+import { normalizeBiographicalCandidatePolicy } from '../../../system/config/biographical-candidate-policy.js';
 
 import {
   ensurePostgresSchemaWithAdvisoryLock,
@@ -18,6 +19,8 @@ import {
   reevaluateClaimEffective,
   serializeClaim,
   type BiographicalClaimListOptions,
+  type BiographicalCandidateTransitionInput,
+  type BiographicalCandidateWriteInput,
   type BiographicalClaimWriteInput,
   type BiographicalGrantRevokeInput,
   type BiographicalGrantWriteInput,
@@ -29,11 +32,19 @@ import {
   assertClaimTransition,
 } from './store-port.js';
 import {
+  assertCandidateClaimBinding,
+  deserializeCandidate,
+  prepareBiographicalCandidate,
+  serializeCandidate,
+  transitionBiographicalCandidate,
+} from './candidate-state.js';
+import {
   assertGrantRecord,
   BiographicalLifecycleError,
 } from './kernel.js';
 import type {
   BiographicalClaim,
+  BiographicalCandidateRecord,
   BiographicalClaimStatus,
   BiographicalSensitivityGrant,
   BiographicalSubjectRef,
@@ -59,6 +70,18 @@ interface ClaimRow {
   claim_json: string;
 }
 
+interface CandidateRow {
+  id: string;
+  claim_id: string;
+  claim_digest: string;
+  source_set_digest: string;
+  stage: string;
+  revision: string | number;
+  automata_run_id: string;
+  policy_digest: string;
+  candidate_json: unknown;
+}
+
 interface GrantRow {
   grant_json: string;
 }
@@ -69,6 +92,23 @@ interface RebuildRow {
 
 interface ReviewAuditRow {
   audit_json: unknown;
+}
+
+function deserializeCandidateRow(row: CandidateRow): BiographicalCandidateRecord {
+  const candidate = deserializeCandidate(row.candidate_json);
+  if (
+    row.id !== candidate.id
+    || row.claim_id !== candidate.claimId
+    || row.claim_digest !== candidate.claimDigest
+    || row.source_set_digest !== candidate.sourceSetDigest
+    || row.stage !== candidate.stage
+    || Number(row.revision) !== candidate.revision
+    || row.automata_run_id !== candidate.automataRunId
+    || row.policy_digest !== candidate.policyDigest
+  ) {
+    throw new Error('stored biography candidate columns contradict its canonical envelope');
+  }
+  return candidate;
 }
 
 function subjectColumns(subject: BiographicalSubjectRef): {
@@ -189,6 +229,154 @@ export class PostgresBiographicalProfileStore implements BiographicalProfileStor
         nowIso,
       ],
     );
+  }
+
+  async writeCandidate(
+    input: BiographicalCandidateWriteInput,
+  ): Promise<BiographicalCandidateRecord> {
+    if ((input.claim as { readonly status?: unknown }).status !== undefined) {
+      throw new Error('biography candidate callers cannot choose claim status');
+    }
+    const policy = normalizeBiographicalCandidatePolicy(input.policy);
+    const now = input.claim.now ?? this.now();
+    return await this.inTransaction(async (store, client) => {
+      await client.query(
+        `SELECT pg_advisory_xact_lock(hashtext('biographical-candidates'), hashtext('capacity'))`,
+      );
+      const counts = await client.query<{ pending_count: string; run_count: string }>(
+        `SELECT
+           COUNT(*) FILTER (WHERE stage NOT IN ('active', 'rejected', 'superseded'))::text AS pending_count,
+           COUNT(*) FILTER (
+             WHERE automata_run_id = $1
+           )::text AS run_count
+         FROM biographical_candidates`,
+        [input.automataRunId],
+      );
+      const count = counts.rows[0];
+      if (Number(count?.pending_count ?? '0') >= policy.budgets.maxPendingCandidates) {
+        throw new Error('biography candidate pending budget exhausted');
+      }
+      if (
+        Number(count?.run_count ?? '0')
+        >= policy.budgets.maxCandidatesPerAutomataRun
+      ) {
+        throw new Error('biography candidate automata run budget exhausted');
+      }
+      const prepared = prepareBiographicalClaim({
+        ...input.claim,
+        status: 'candidate',
+        now,
+      });
+      const grants = await store.findGrantsByDigests(
+        prepared.claimDigest,
+        prepared.sourceSetDigest,
+      );
+      const claim = finalizeBiographicalClaim(prepared, grants, now);
+      const candidate = prepareBiographicalCandidate({
+        claim,
+        automataRunId: input.automataRunId,
+        automataAuthorityRef: input.automataAuthorityRef,
+        policy,
+        now,
+        ...(input.supersedesCandidateId !== undefined
+          ? { supersedesCandidateId: input.supersedesCandidateId }
+          : {}),
+      });
+      await store.insertClaimRowClient(client, claim, now);
+      await client.query(
+        `INSERT INTO biographical_candidates
+          (id, claim_id, claim_digest, source_set_digest, stage, revision,
+           automata_run_id, policy_digest, candidate_json, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11)`,
+        [
+          candidate.id,
+          candidate.claimId,
+          candidate.claimDigest,
+          candidate.sourceSetDigest,
+          candidate.stage,
+          candidate.revision,
+          candidate.automataRunId,
+          candidate.policyDigest,
+          serializeCandidate(candidate),
+          candidate.createdAt,
+          candidate.updatedAt,
+        ],
+      );
+      return candidate;
+    });
+  }
+
+  async getCandidate(id: string): Promise<BiographicalCandidateRecord | undefined> {
+    const row = await this.queryOne<CandidateRow>(
+      `SELECT id, claim_id, claim_digest, source_set_digest, stage, revision,
+              automata_run_id, policy_digest, candidate_json
+       FROM biographical_candidates WHERE id = $1`,
+      [id],
+    );
+    if (!row) return undefined;
+    const candidate = deserializeCandidateRow(row);
+    assertCandidateClaimBinding(candidate, await this.readClaim(candidate.claimId));
+    return candidate;
+  }
+
+  async transitionCandidate(
+    input: BiographicalCandidateTransitionInput,
+  ): Promise<BiographicalCandidateRecord> {
+    const now = input.now ?? this.now();
+    return await this.inTransaction(async (_store, client) => {
+      const candidateResult = await client.query<CandidateRow>(
+        `SELECT id, claim_id, claim_digest, source_set_digest, stage, revision,
+                automata_run_id, policy_digest, candidate_json
+         FROM biographical_candidates WHERE id = $1 FOR UPDATE`,
+        [input.candidateId],
+      );
+      const candidateRow = candidateResult.rows[0];
+      if (!candidateRow) throw new Error(`biography candidate not found: ${input.candidateId}`);
+      const candidate = deserializeCandidateRow(candidateRow);
+      const claimResult = await client.query<ClaimRow>(
+        'SELECT claim_json FROM biographical_claims WHERE id = $1 FOR UPDATE',
+        [candidate.claimId],
+      );
+      const claimRow = claimResult.rows[0];
+      if (!claimRow) throw new Error(`biographical claim not found: ${candidate.claimId}`);
+      const claim = deserializeClaim(claimRow.claim_json);
+      const updated = transitionBiographicalCandidate({
+        candidate,
+        claim,
+        expectedRevision: input.expectedRevision,
+        to: input.to,
+        receipts: input.receipts,
+        ...(input.policy !== undefined ? { policy: input.policy } : {}),
+        now,
+      });
+      if (updated.stage === 'active') {
+        assertClaimTransition(claim, 'active', now);
+        const active: BiographicalClaim = {
+          ...claim,
+          status: 'active',
+          lastSourceValidatedAt: now.toISOString(),
+        };
+        const claimUpdate = await client.query(
+          `UPDATE biographical_claims
+           SET status = 'active', claim_json = $2::jsonb, updated_at = $3
+           WHERE id = $1`,
+          [active.id, serializeClaim(active), now.toISOString()],
+        );
+        if (claimUpdate.rowCount !== 1) {
+          throw new Error('biography candidate activation did not update exactly one claim');
+        }
+      }
+      const candidateUpdate = await client.query(
+        `UPDATE biographical_candidates
+         SET stage = $2, revision = $3, candidate_json = $4::jsonb, updated_at = $5
+         WHERE id = $1`,
+        [updated.id, updated.stage, updated.revision, serializeCandidate(updated), updated.updatedAt],
+      );
+      if (candidateUpdate.rowCount !== 1) {
+        throw new Error('biography candidate transition did not update exactly one candidate');
+      }
+      return updated;
+    });
   }
 
   private async reevaluateClaimsForDigests(

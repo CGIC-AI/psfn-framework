@@ -364,6 +364,7 @@ const SETTINGS_OBJECT_FIELDS = new Set<string>([
   'modelPurposeSelection',
   'memoryRetrievalPolicy',
   'biographicalDepthPolicy',
+  'biographicalCandidatePolicy',
   'memoryDeletionPolicy',
   'memoryPresentationProfile',
   'compositionalPolicy',

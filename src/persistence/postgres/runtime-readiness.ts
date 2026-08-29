@@ -45,6 +45,7 @@ export const POSTGRES_STORE_READINESS_CATALOG = {
   companion_presence: { label: 'companion presence', requirement: 'required' },
   social_pot: { label: 'social pot', requirement: 'required' },
   speaking_arbiter: { label: 'speaking arbiter', requirement: 'required' },
+  fleet_maintenance: { label: 'fleet maintenance', requirement: 'required' },
   icp_shared_autonomy: { label: 'ICP shared autonomy', requirement: 'required' },
   icp_fatigue_reservations: { label: 'ICP fatigue reservations', requirement: 'required' },
   icp_initiation_policy: { label: 'ICP initiation policy', requirement: 'required' },

@@ -45,6 +45,13 @@ const runtimeFactoryMocks = vi.hoisted(() => ({
   connectPostgresSocialPotStore: vi.fn(async () => runtimeFactoryMocks.postgresSocialPotStore),
   postgresSpeakingArbiterStore: { kind: 'postgres-speaking-arbiter-store' },
   connectPostgresSpeakingArbiterStore: vi.fn(async () => runtimeFactoryMocks.postgresSpeakingArbiterStore),
+  postgresFleetMaintenanceStore: {
+    kind: 'postgres-fleet-maintenance-store',
+    close: vi.fn(async () => undefined),
+  },
+  connectPostgresFleetMaintenanceStore: vi.fn(
+    async () => runtimeFactoryMocks.postgresFleetMaintenanceStore,
+  ),
   postgresPartnerAffectShadowStore: { kind: 'postgres-partner-affect-shadow-store' },
   connectPostgresPartnerAffectShadowStore: vi.fn(async () => runtimeFactoryMocks.postgresPartnerAffectShadowStore),
   postgresAutomataRunStore: {
@@ -160,6 +167,12 @@ vi.mock('./postgres/speaking-arbiter-store.js', () => ({
   },
 }));
 
+vi.mock('./postgres/fleet-maintenance-store.js', () => ({
+  PostgresFleetMaintenanceStore: {
+    connect: runtimeFactoryMocks.connectPostgresFleetMaintenanceStore,
+  },
+}));
+
 vi.mock('./postgres/partner-affect-shadow-store.js', () => ({
   PostgresPartnerAffectShadowStore: {
     connect: runtimeFactoryMocks.connectPostgresPartnerAffectShadowStore,
@@ -205,6 +218,7 @@ beforeEach(() => {
   runtimeFactoryMocks.connectPostgresCompanionPresenceStore.mockClear();
   runtimeFactoryMocks.connectPostgresSocialPotStore.mockClear();
   runtimeFactoryMocks.connectPostgresSpeakingArbiterStore.mockClear();
+  runtimeFactoryMocks.connectPostgresFleetMaintenanceStore.mockClear();
   runtimeFactoryMocks.connectPostgresPartnerAffectShadowStore.mockClear();
   runtimeFactoryMocks.connectPostgresAutomataRunStore.mockClear();
   runtimeFactoryMocks.connectPostgresAutomataBusRuntimeStore.mockClear();
@@ -545,6 +559,59 @@ describe('createAgentPersistenceRuntime', () => {
       'postgres://postgres:secret@localhost:5432/psfn',
     );
     expect(runtime.speakingArbiterStore).toBe(runtimeFactoryMocks.postgresSpeakingArbiterStore);
+  });
+
+  it('composes a manifest-bound fleet maintenance coordinator for multi-companion agents', async () => {
+    const localCompanionId = '11111111-1111-4111-8111-111111111111';
+    const siblingCompanionId = '22222222-2222-4222-8222-222222222222';
+    const runtime = await createAgentPersistenceRuntime({
+      config: {
+        databasePath: '/tmp/ignored.db',
+        persistenceBackend: 'postgres',
+        postgresDatabaseUrl: 'postgres://postgres:secret@localhost:5432/psfn',
+        postgresSchema: 'companion_x',
+        postgresRole: 'companion_x_runtime',
+        multiCompanion: true,
+        companionId: localCompanionId,
+        automataPolicy: loadAutomataPolicySeedDefaults(),
+        companionFleet: {
+          persistenceRoot: '/tmp',
+          workspacesRoot: '/tmp/workspaces',
+          sharedWorkspacePath: '/tmp/workspaces/shared',
+          companions: [
+            {
+              companionId: localCompanionId,
+              postgresSchema: 'companion_x',
+              postgresRole: 'companion_x_runtime',
+            },
+            {
+              companionId: siblingCompanionId,
+              postgresSchema: 'companion_y',
+              postgresRole: 'companion_y_runtime',
+            },
+          ],
+        } as never,
+      },
+      pathSnapshot: {
+        systemDataDir: '/tmp/system-data',
+        companionDataDir: '/tmp/companion-data',
+        workspacePath: '/tmp/workspace',
+        tempDir: '/tmp/tmp',
+        logsDir: '/tmp/logs',
+        backupRootDir: '/tmp/backups',
+      },
+      embeddingDims: 1536,
+    });
+
+    expect(runtimeFactoryMocks.connectPostgresFleetMaintenanceStore).toHaveBeenCalledWith(
+      'postgres://postgres:secret@localhost:5432/psfn',
+    );
+    expect(runtime.fleetMaintenanceCoordinator).toMatchObject({
+      companionId: localCompanionId,
+      manifestOrdinal: 0,
+    });
+    await runtime.fleetMaintenanceCoordinator?.close();
+    expect(runtimeFactoryMocks.postgresFleetMaintenanceStore.close).toHaveBeenCalledOnce();
   });
 
   it('threads the configured per-companion schema into every store and provisions it up front', async () => {

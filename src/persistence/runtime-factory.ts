@@ -85,6 +85,11 @@ import { PostgresAutomataRetentionStore } from '../faculties/automata/retention-
 import { AutomataSessionClassificationService } from '../faculties/automata/session-classification.js';
 import { PostgresExactSessionPurgeSagaStore } from './postgres/automata-exact-session-purge-store.js';
 import { resolveConfigTenantPoolScope } from './postgres/tenant-pool-scope.js';
+import {
+  createFleetMaintenanceCoordinator,
+  type FleetMaintenanceCoordinator,
+} from '../core/scheduler/fleet-maintenance-coordinator.js';
+import { PostgresFleetMaintenanceStore } from './postgres/fleet-maintenance-store.js';
 
 export interface AgentPersistenceRuntime {
   backend: PersistenceBackend;
@@ -160,6 +165,12 @@ export interface AgentPersistenceRuntime {
    * flag-off never touches the shared schema.
    */
   speakingArbiterStore?: SpeakingArbiterStorePort;
+  /**
+   * System-scoped heavy-maintenance scheduling authority. The coordinator is
+   * content-free; episode/sleeptime runners commit private progress through its
+   * fenced checkpoint seam.
+   */
+  fleetMaintenanceCoordinator?: FleetMaintenanceCoordinator;
   /** Leased contact-authority recovery, started before the factory returns. */
   contactLifecycleRecovery?: ContactLifecycleRecoveryRuntime;
 }
@@ -270,6 +281,33 @@ export async function createAgentPersistenceRuntime(
     ? await awaitPostgresStoreReadiness(
         'companion_presence',
         () => PostgresCompanionPresenceStore.connect(databaseUrl),
+      )
+    : undefined;
+  const fleetMaintenanceCoordinator = options.config.multiCompanion === true
+    ? await awaitPostgresStoreReadiness(
+        'fleet_maintenance',
+        async () => {
+          const companionFleet = options.config.companionFleet;
+          const companionId = options.config.companionId?.trim();
+          if (!companionFleet || !companionId) {
+            throw new Error(
+              'Multi-companion fleet maintenance requires manifest and companion identity',
+            );
+          }
+          const store = await PostgresFleetMaintenanceStore.connect(databaseUrl);
+          try {
+            return createFleetMaintenanceCoordinator({
+              store,
+              companionId,
+              fleetCompanionIds: companionFleet.companions.map(
+                companion => companion.companionId,
+              ),
+            });
+          } catch (error) {
+            await store.close();
+            throw error;
+          }
+        },
       )
     : undefined;
   const icpInitiationCandidateStore = fleetTenancy
@@ -452,6 +490,7 @@ export async function createAgentPersistenceRuntime(
     ...(icpInitiationCandidateStore ? { icpInitiationCandidateStore } : {}),
     ...(socialPotStore ? { socialPotStore } : {}),
     ...(speakingArbiterStore ? { speakingArbiterStore } : {}),
+    ...(fleetMaintenanceCoordinator ? { fleetMaintenanceCoordinator } : {}),
   };
   if (!options.contactLifecycleGateway) return runtime;
   const contactLifecycleRecovery = new ContactLifecycleRecoveryRuntime({

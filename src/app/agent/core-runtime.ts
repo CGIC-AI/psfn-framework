@@ -595,6 +595,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     contactTrackingGate,
     ...(options.placesRegistryConfig ? { placesRegistryConfig: options.placesRegistryConfig } : {}),
   });
+  agentLoop.cogSecMode = intakePolicy.mode;
   agentLoop.artifactApprovalQueue = cardProposalQueue;
   // Durable Share Capsule custody (jp36.7.1.2): rides the same approval queue as
   // artifact egress (no second approval store), backed by a server-side custody

@@ -60,6 +60,7 @@ import {
 import type { TurnExecutionRuntime, TurnSessionIdentity } from './contracts.js';
 import { runCorrectivePromptLifecycle } from './corrective-prompt-lifecycle.js';
 import type { CapturedSessionReads } from '../../../session/manager/captured-session-owner.js';
+import { isIntakeEnforcingMode } from '../../../../system/config/intake-policy-config.js';
 
 const log = createComponentLogger('SubstrateAgent');
 // Covers attachment fetch (with gateway DNS retries) plus the vision model call;
@@ -697,6 +698,7 @@ export async function invokeAgentForTurn(input: {
         logger: log,
         visionReviewer: runtime.imageVisionReviewer,
         visionIntakeScreener: runtime.visionIntakeScreener,
+        visionIntakeEnforcing: isIntakeEnforcingMode(runtime.cogSecMode),
         imageRetentionScope: turnId,
       }),
     });

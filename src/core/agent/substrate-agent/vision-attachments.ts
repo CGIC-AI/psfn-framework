@@ -231,6 +231,13 @@ export async function buildTurnUserContent(input: {
    * compositions) preserves the unscreened behavior.
    */
   visionIntakeScreener?: VisionIntakeImageScreenerPort | null;
+  /**
+   * Whether the canonical intake policy may withhold external ingress.
+   * Production wiring always supplies this before screening starts so an RPC
+   * transport failure does not have to infer policy from a missing decision.
+   * Omitted callers retain the historical fail-closed transport behavior.
+   */
+  visionIntakeEnforcing?: boolean;
   /** Turn ID binding for gateway-side retention of screened inline bytes. */
   imageRetentionScope?: string;
 }): Promise<TurnUserContentBuildResult> {
@@ -239,6 +246,7 @@ export async function buildTurnUserContent(input: {
     screener: input.visionIntakeScreener ?? null,
     logger: input.logger,
     requestScope: input.imageRetentionScope,
+    enforcing: input.visionIntakeEnforcing,
   });
   const message = intake.message;
   const intakeNotes: string[] = intake.noticeText ? [intake.noticeText] : [];
@@ -419,15 +427,16 @@ interface TurnImageIntakeScreening {
 
 /**
  * Screens every screenable image attachment through the gateway vision intake
- * screener. Fail closed: with a screener wired, an image whose screening call
- * did not complete is withheld — never delivered unscreened. Without a
- * screener (firewall off, local compositions) this is a no-op passthrough.
+ * screener. A failed screening call withholds in enforcing mode and remains
+ * observe-only in shadow mode. Without a screener (local compositions) this
+ * is a no-op passthrough.
  */
 async function screenTurnImageAttachments(input: {
   message: SubstrateMessage;
   screener: VisionIntakeImageScreenerPort | null;
   logger: VisionLogger;
   requestScope?: string;
+  enforcing?: boolean;
 }): Promise<TurnImageIntakeScreening> {
   const { message, screener } = input;
   const attachments = message.attachments ?? [];
@@ -475,20 +484,25 @@ async function screenTurnImageAttachments(input: {
         ...(input.requestScope ? { requestScope: input.requestScope } : {}),
       });
     } catch (error) {
-      // Fail closed: the screener is wired but this screening did not
-      // complete, so the image is withheld rather than delivered unscreened.
-      input.logger.warn('Vision intake screening call failed; withholding image (fail closed)', {
+      const reason = toErrorMessage(error);
+      const withholdOnFailure = input.enforcing ?? true;
+      input.logger.warn(withholdOnFailure
+        ? 'Vision intake screening call failed; withholding image (fail closed)'
+        : 'Vision intake screening call failed in shadow mode; passing image through', {
         channelId: message.channelId,
         channelType: message.channelType,
         originRef: candidate.originRef,
-        error: toErrorMessage(error),
+        error: reason,
       });
       return {
         kind: 'failed_closed',
+        mode: withholdOnFailure ? 'enforce' : 'shadow',
         flagged: true,
-        withheld: true,
-        reason: toErrorMessage(error),
-        noticeText: INTAKE_FIREWALL_NOTICE_TEMPLATES.withheldImage,
+        withheld: withholdOnFailure,
+        reason,
+        ...(withholdOnFailure
+          ? { noticeText: INTAKE_FIREWALL_NOTICE_TEMPLATES.withheldImage }
+          : {}),
       };
     }
   };
@@ -523,7 +537,8 @@ async function screenTurnImageAttachments(input: {
   // The firewall only interposes on delivery when it is enforcing. Shadow-mode
   // decisions contribute NOTHING to the delivered or persisted content — the
   // screening already audited gateway-side (1l8xj).
-  const enforcing = decisions.some((decision) => decision.mode === 'enforce');
+  const enforcing = input.enforcing
+    ?? decisions.some((decision) => decision.mode === 'enforce');
   decisions.forEach((decision, position) => {
     const candidate = candidates[position];
     const key = candidateKeys[position];

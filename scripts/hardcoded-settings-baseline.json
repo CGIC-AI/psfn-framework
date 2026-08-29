@@ -8803,20 +8803,6 @@
     },
     {
       "file": "src/operator/garden/local-admin-contract.ts",
-      "name": "buildEpisodicWatermarkLaneDefinitions.intervalMs@L190",
-      "value": "24 * 60 * 60_000",
-      "form": "object-member",
-      "note": "Existing mutable policy candidate buildEpisodicWatermarkLaneDefinitions.intervalMs; line identity shifted only, preserving psfn-framework-7qeo1.18 migration debt rather than approving immutable code ownership."
-    },
-    {
-      "file": "src/operator/garden/local-admin-contract.ts",
-      "name": "buildEpisodicWatermarkLaneDefinitions.intervalMs@L202",
-      "value": "24 * 60 * 60_000",
-      "form": "object-member",
-      "note": "Existing mutable policy candidate buildEpisodicWatermarkLaneDefinitions.intervalMs; line identity shifted only, preserving psfn-framework-7qeo1.18 migration debt rather than approving immutable code ownership."
-    },
-    {
-      "file": "src/operator/garden/local-admin-contract.ts",
       "name": "createInProcessGardenAdminContract.$call:math-clamp:Math.min.arg1#1",
       "value": "120_000",
       "form": "math-clamp",

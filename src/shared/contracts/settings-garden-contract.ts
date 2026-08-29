@@ -46,6 +46,12 @@ const MEMORY_ADVANCED_EXPOSURE = Object.freeze({
   surface: 'advanced',
 } as const);
 
+const SCHEDULER_CUSTOM_EXPOSURE = Object.freeze({
+  sectionId: 'sessions',
+  surface: 'custom',
+  editorId: 'scheduler',
+} as const);
+
 export const SETTINGS_GARDEN_FIELD_EXPOSURE = {
   modelCatalog: { sectionId: 'models', surface: 'custom', editorId: 'models' },
   // 23pp per-companion model selection: runtime-owned (settings.json/overlay),
@@ -86,9 +92,9 @@ export const SETTINGS_GARDEN_FIELD_EXPOSURE = {
   episodicProcessingRestWindowEndLocalTime: { sectionId: 'sessions', surface: 'custom', editorId: 'scheduler' },
   episodicProcessingRestWindowTimeZone: { sectionId: 'sessions', surface: 'custom', editorId: 'scheduler' },
   episodicProcessingInactivityThresholdMinutes: { sectionId: 'sessions', surface: 'custom', editorId: 'scheduler' },
-  episodeSynthesisDaytimeSlots: { sectionId: 'sessions', surface: 'custom', editorId: 'scheduler' },
-  episodeSynthesisTimezone: { sectionId: 'sessions', surface: 'custom', editorId: 'scheduler' },
-  episodeSynthesisTurnThreshold: { sectionId: 'sessions', surface: 'custom', editorId: 'scheduler' },
+  episodeSynthesisDaytimeSlots: SCHEDULER_CUSTOM_EXPOSURE,
+  episodeSynthesisTimezone: SCHEDULER_CUSTOM_EXPOSURE,
+  episodeSynthesisTurnThreshold: SCHEDULER_CUSTOM_EXPOSURE,
   sessionRestartBehavior: { sectionId: 'sessions', surface: 'advanced' },
   sessionTailCache: { sectionId: 'sessions', surface: 'advanced' },
   activeTimezone: { sectionId: 'sessions', surface: 'advanced' },

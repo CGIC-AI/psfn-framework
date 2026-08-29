@@ -319,6 +319,20 @@ describe('Postgres live schema migrations', () => {
     expect(sql).toContain("VALUES (2, 'companion-presence')");
   });
 
+  it('keeps fleet maintenance scheduling authority content-free in shared migration 17', () => {
+    const sql = migrationSql(POSTGRES_SHARED_MIGRATIONS);
+
+    expect(sql).toContain('CREATE TABLE IF NOT EXISTS fleet_maintenance_baton');
+    expect(sql).toContain('CREATE TABLE IF NOT EXISTS fleet_maintenance_demands');
+    expect(sql).toContain('CREATE TABLE IF NOT EXISTS fleet_maintenance_checkpoints');
+    expect(sql).toContain("scope = 'heavy_nighttime_maintenance'");
+    expect(sql).toContain('fencing_token BIGINT NOT NULL');
+    expect(sql).toContain('lease_expires_at_ms BIGINT');
+    expect(sql).toContain("VALUES (17, 'fleet-heavy-maintenance-baton')");
+    expect(sql).not.toContain('message_content');
+    expect(sql).not.toContain('memory_content');
+  });
+
   it('adds restart-durable ICP autonomy state without sharing private candidate text', () => {
     const sharedSql = migrationSql(POSTGRES_SHARED_MIGRATIONS);
     const localSql = migrationSql(POSTGRES_INTENTION_MIGRATIONS);

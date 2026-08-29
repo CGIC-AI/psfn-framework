@@ -163,6 +163,9 @@ import {
   buildAgentSchedulerRuntime,
 } from './scheduler-runtime.js';
 import {
+  wireFleetMaintenanceForegroundPreemption,
+} from '../startup/composition/fleet-maintenance-runtime.js';
+import {
   createSessionActivityTracker,
   writeStartupSessionMetadata,
 } from './session-activity.js';
@@ -346,6 +349,18 @@ async function main(): Promise<void> {
       });
     },
   });
+  const detachFleetMaintenanceForegroundPreemption =
+    persistenceRuntime.fleetMaintenanceCoordinator
+      ? wireFleetMaintenanceForegroundPreemption({
+          eventBus,
+          coordinator: persistenceRuntime.fleetMaintenanceCoordinator,
+          onError: error => {
+            log.error('Fleet maintenance foreground preemption failed', {
+              error: error instanceof Error ? error.message : String(error),
+            });
+          },
+        })
+      : () => undefined;
   const {
     backend: persistenceBackend,
     memoryStore: companionMemoryStore,
@@ -1609,6 +1624,7 @@ async function main(): Promise<void> {
       }
     },
     closeDatabase: async () => {
+      detachFleetMaintenanceForegroundPreemption();
       await detachToolAvailability();
       await companionAvailability.stop();
       partnerAffectShadowBridge.unsubscribe();
@@ -1622,6 +1638,7 @@ async function main(): Promise<void> {
       await persistenceRuntime.socialImpulseOutreachStore.close();
       await persistenceRuntime.socialPotStore?.close();
       await persistenceRuntime.speakingArbiterStore?.close();
+      await persistenceRuntime.fleetMaintenanceCoordinator?.close();
       await persistenceRuntime.backgroundWorkStore.close();
       await persistenceRuntime.automataBusStore.close();
       await persistenceRuntime.automataRunRegistry.close();

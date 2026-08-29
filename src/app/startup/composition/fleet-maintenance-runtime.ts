@@ -6,9 +6,7 @@ import {
 import { RUNTIME_LANE_CLASSES } from '../../../shared/contracts/runtime-lanes.js';
 import type { EventBus } from '../../../shared/event-bus.js';
 
-export interface FleetMaintenanceRuntimeStore extends FleetMaintenanceStorePort {
-  close(): Promise<void>;
-}
+export type FleetMaintenanceRuntimeStore = FleetMaintenanceStorePort;
 
 export interface FleetMaintenanceRuntime {
   coordinator: FleetMaintenanceCoordinator;

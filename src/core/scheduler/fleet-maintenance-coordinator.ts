@@ -131,6 +131,7 @@ export interface FleetMaintenanceStorePort {
   requestPreemption(input: FleetMaintenanceStoreBinding & { nowMs: number }): Promise<boolean>;
   withdrawDemand(input: FleetMaintenanceStoreBinding): Promise<void>;
   readCheckpoint(input: FleetMaintenanceStoreBinding): Promise<FleetMaintenanceCheckpoint | null>;
+  close(): Promise<void>;
 }
 
 export interface FleetMaintenanceCoordinator {
@@ -162,6 +163,7 @@ export interface FleetMaintenanceCoordinator {
   requestForegroundPreemption(input: { nowMs: number }): Promise<boolean>;
   withdrawDemand(): Promise<void>;
   readCheckpoint(): Promise<FleetMaintenanceCheckpoint | null>;
+  close(): Promise<void>;
 }
 
 function requireFencingToken(value: number): number {
@@ -282,6 +284,9 @@ export function createFleetMaintenanceCoordinator(input: {
     },
     async readCheckpoint() {
       return await input.store.readCheckpoint(binding);
+    },
+    async close() {
+      await input.store.close();
     },
   };
 }

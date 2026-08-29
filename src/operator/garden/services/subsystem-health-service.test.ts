@@ -7,6 +7,7 @@ import {
   type SubsystemLaneHealth,
   type SubsystemSchedulerStateProvider,
 } from './subsystem-health-service.js';
+import type { PostTurnActionQueueStatus } from '../../../core/agent/post-turn-action-runtime.js';
 
 function laneById(lanes: SubsystemLaneHealth[], id: string): SubsystemLaneHealth {
   const lane = lanes.find(candidate => candidate.id === id);
@@ -516,6 +517,110 @@ describe('AdminSubsystemHealthDataService', () => {
       lastError: 'watermark store unavailable',
     });
   });
+
+  it('projects durable post-turn queue pressure and progress into Garden health', async () => {
+    const queueStatus: PostTurnActionQueueStatus = {
+      timestamp: 9_000,
+      processing: false,
+      queueDepth: 5,
+      maxQueueDepth: 12,
+      availableSlots: 7,
+      saturated: true,
+      readyCount: 2,
+      scheduledCount: 0,
+      retryScheduledCount: 1,
+      runningCount: 0,
+      lanes: [{
+        runtimeClass: 'maintenance_reflection',
+        chargeLane: 'maintenance',
+        queueDepth: 5,
+        maxQueuedActions: 3,
+        availableSlots: 0,
+        saturated: true,
+        backPressureMode: 'defer_until_idle',
+        maxRunsPerSchedulerTick: 1,
+        readyCount: 2,
+        scheduledCount: 0,
+        retryScheduledCount: 1,
+        runningCount: 0,
+        deferredCount: 2,
+        droppedCount: 0,
+        oldestDeferredForMs: 4_000,
+      }],
+      queued: [],
+      coalescing: {
+        coalescedCount: 7,
+        activeCoalescedCount: 3,
+        recentCoalesces: [],
+      },
+      backPressure: { droppedCount: 0, recentDrops: [] },
+      failures: {
+        failedCount: 2,
+        retryableFailureCount: 4,
+        permanentRejectCount: 2,
+        recentFailures: [],
+      },
+      progress: {
+        lastProgressAt: 5_000,
+        noProgressSince: 5_000,
+        noProgressForMs: 4_000,
+      },
+      terminal: { cancelledCount: 0, acknowledgedCount: 0, recentTerminals: [] },
+      completions: { completedCount: 11, recentCompletions: [] },
+      quarantine: { count: 0, persisted: true, entries: [] },
+      persistence: {
+        enabled: true,
+        loadState: 'loaded',
+        loadedEntries: 5,
+        quarantinedEntries: 0,
+        quarantinePersisted: true,
+      },
+    };
+    const service = new AdminSubsystemHealthDataService({
+      eventBus: new EventBus(),
+      now: () => 9_000,
+      postTurnActionQueueProvider: { getStatus: () => queueStatus },
+    });
+
+    expect(laneById((await service.getSnapshot()).lanes, 'post_turn_action_queue')).toMatchObject({
+      source: 'post_turn_queue',
+      sinceProcessStart: false,
+      status: 'degraded',
+      lastEventAt: 5_000,
+      lastOutcome: 'degraded',
+      lastReason: 'retryable_or_permanent_failures',
+      counts: {
+        queueDepth: 5,
+        deferredDepth: 2,
+        oldestDeferredForMs: 4_000,
+        coalescedCount: 7,
+        activeCoalescedCount: 3,
+        retryableFailureCount: 4,
+        permanentRejectCount: 2,
+        noProgressForMs: 4_000,
+        completedCount: 11,
+      },
+    });
+  });
+
+  it('fails the queue-health lane when its durable state cannot be read', async () => {
+    const service = new AdminSubsystemHealthDataService({
+      eventBus: new EventBus(),
+      now: () => 9_000,
+      postTurnActionQueueProvider: {
+        getStatus: () => {
+          throw new Error('queue state unavailable');
+        },
+      },
+    });
+
+    expect(laneById((await service.getSnapshot()).lanes, 'post_turn_action_queue')).toMatchObject({
+      source: 'post_turn_queue',
+      status: 'failed',
+      lastEventAt: 9_000,
+      lastError: 'queue state unavailable',
+    });
+  });
 });
 
 describe('subsystem health page contract', () => {
@@ -528,6 +633,8 @@ describe('subsystem health page contract', () => {
     expect(page).toContain("lane.source === 'watermark'");
     expect(page).toContain('{#each watermarkLanes as lane (lane.id)}');
     expect(page).toContain('Episodic processor watermarks');
+    expect(page).toContain("lane.source === 'post_turn_queue'");
+    expect(page).toContain('Deferred action queue');
   });
 
   it('renders content-free PostgreSQL pool capacity and pressure', () => {

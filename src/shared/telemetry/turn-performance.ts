@@ -68,6 +68,7 @@ export type TurnPerformanceCacheState = 'hit' | 'miss' | 'mixed' | 'unknown';
 export type TurnPerformanceDeferReason =
   | 'no_stream_delta'
   | 'queued'
+  | 'coalesced'
   | 'deduplicated'
   | 'started'
   | 'succeeded'
@@ -276,6 +277,7 @@ const TURN_PERFORMANCE_PROVIDER_OUTPUT_KIND_SET = new Set<string>(['text', 'thin
 const TURN_PERFORMANCE_DEFER_REASON_SET = new Set<string>([
   'no_stream_delta',
   'queued',
+  'coalesced',
   'deduplicated',
   'started',
   'succeeded',

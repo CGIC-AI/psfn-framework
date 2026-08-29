@@ -21,6 +21,7 @@ import {
 import type {
   PostTurnActionAgent,
   PostTurnActionCapability,
+  PostTurnActionCoalescingMode,
   PostTurnActionHandlerResult,
   PostTurnActionExecutionMode,
   PostTurnActionEnqueueResult,
@@ -28,6 +29,7 @@ import type {
   PostTurnActionHandler,
   PostTurnActionHandlerOptions,
   PostTurnActionQueueCompletionRecord,
+  PostTurnActionQueueCoalescingRecord,
   PostTurnActionQueueDropRecord,
   PostTurnActionQueueEntryState,
   PostTurnActionQueueFailureRecord,
@@ -71,6 +73,7 @@ const log = createComponentLogger('PostTurnActions');
 export type {
   PostTurnActionAgent,
   PostTurnActionCapability,
+  PostTurnActionCoalescingMode,
   PostTurnActionExecutionMode,
   PostTurnActionEnqueueResult,
   PostTurnActionFailureReason,
@@ -78,6 +81,7 @@ export type {
   PostTurnActionHandlerOptions,
   PostTurnActionHandlerResult,
   PostTurnActionQueueCompletionRecord,
+  PostTurnActionQueueCoalescingRecord,
   PostTurnActionQueueDropRecord,
   PostTurnActionQueueEntryState,
   PostTurnActionQueueFailureRecord,
@@ -101,17 +105,22 @@ export {
 } from '../../../core/agent/post-turn-action-runtime.js';
 interface DeferredQueueEntry {
   action: InferredPostTurnAction;
+  pendingAction?: InferredPostTurnAction;
   capability: PostTurnActionCapability;
   runtimeClass: RuntimeLaneClass;
   attempt: number;
   nextRunAt: number;
   maxRetries: number;
+  demandStartedAt: number;
+  coverageThroughInferredAt: number;
+  coalescedCount: number;
 }
 
 interface RegisteredPostTurnActionHandler {
   callback: PostTurnActionHandler;
   executionMode: PostTurnActionExecutionMode;
   runtimeClass: RuntimeLaneClass;
+  coalescing?: PostTurnActionCoalescingMode;
 }
 
 export interface WirePostTurnActionRuntimeOptions {
@@ -129,7 +138,8 @@ export interface WirePostTurnActionRuntimeOptions {
 }
 
 const DEFAULT_TASK_ID = 'post-turn-action-executor';
-const PERSISTED_QUEUE_VERSION = 1;
+const PERSISTED_QUEUE_VERSION = 2;
+const LEGACY_PERSISTED_QUEUE_VERSION = 1;
 const MAX_STATUS_HISTORY = 25;
 const RUNTIME_CLASS_ORDER: RuntimeLaneClass[] = [
   RUNTIME_LANE_CLASSES.foregroundChat,
@@ -167,13 +177,17 @@ export function wirePostTurnActionRuntime(
   const recentFailures: PostTurnActionQueueFailureRecord[] = [];
   const recentTerminals: PostTurnActionQueueTerminalRecord[] = [];
   const recentCompletions: PostTurnActionQueueCompletionRecord[] = [];
+  const recentCoalesces: PostTurnActionQueueCoalescingRecord[] = [];
   const droppedCountsByRuntimeClass = new Map<RuntimeLaneClass, number>();
   let processing = false;
   let droppedCount = 0;
   let failedCount = 0;
+  let retryableFailureCount = 0;
+  let coalescedCount = 0;
   let cancelledCount = 0;
   let acknowledgedCount = 0;
   let completedCount = 0;
+  let lastProgressAt: number | undefined;
   let persistenceLoadState: PostTurnActionQueuePersistenceLoadState = persistencePath
     ? 'not_found'
     : 'not_configured';
@@ -335,6 +349,7 @@ export function wirePostTurnActionRuntime(
 
   const normalizePersistedQueueEntry = (
     value: unknown,
+    queueFileVersion: number,
   ): { entry: DeferredQueueEntry; migrated: boolean; requiresRewrite: boolean } | null => {
     if (!isRecord(value)) {
       return null;
@@ -353,6 +368,13 @@ export function wirePostTurnActionRuntime(
       return null;
     }
     const { action } = normalizedPayload;
+    const hasPendingAction = Object.hasOwn(value, 'pendingAction');
+    const pendingAction = hasPendingAction
+      ? normalizePersistedAction(value.pendingAction)
+      : undefined;
+    if (hasPendingAction && !pendingAction) {
+      return null;
+    }
 
     const attempt = normalizePositiveInteger(value.attempt);
     const nextRunAt = normalizeActionRunAt(value.nextRunAt);
@@ -370,18 +392,36 @@ export function wirePostTurnActionRuntime(
     const runtimeClass = typeof value.runtimeClass === 'string' && isRuntimeLaneClass(value.runtimeClass)
       ? value.runtimeClass
       : resolveRuntimeClassForKind(action.kind);
+    const demandStartedAt = normalizePositiveInteger(value.demandStartedAt)
+      ?? action.inferredAt;
+    const coverageThroughInferredAt = normalizePositiveInteger(value.coverageThroughInferredAt)
+      ?? Math.max(action.inferredAt, pendingAction?.inferredAt ?? 0);
+    const coalescedEntryCount = normalizePositiveInteger(value.coalescedCount) ?? 0;
+    if (
+      demandStartedAt > action.inferredAt
+      || coverageThroughInferredAt < action.inferredAt
+      || (pendingAction && coverageThroughInferredAt < pendingAction.inferredAt)
+    ) {
+      return null;
+    }
 
     return {
       entry: {
         action,
+        ...(pendingAction ? { pendingAction } : {}),
         capability: resolveActionCapability(action.kind),
         runtimeClass,
         attempt,
         nextRunAt,
         maxRetries: resolvedMaxRetries,
+        demandStartedAt,
+        coverageThroughInferredAt,
+        coalescedCount: coalescedEntryCount,
       },
       migrated: normalizedPayload.migrated,
-      requiresRewrite: normalizedPayload.requiresRewrite,
+      requiresRewrite:
+        normalizedPayload.requiresRewrite
+        || queueFileVersion === LEGACY_PERSISTED_QUEUE_VERSION,
     };
   };
 
@@ -395,11 +435,15 @@ export function wirePostTurnActionRuntime(
       entries: [...entries].map((entry) => ({
         actionPayloadVersion: PERSISTED_POST_TURN_ACTION_PAYLOAD_VERSION,
         action: entry.action,
+        ...(entry.pendingAction ? { pendingAction: entry.pendingAction } : {}),
         capability: entry.capability,
         runtimeClass: entry.runtimeClass,
         attempt: entry.attempt,
         nextRunAt: entry.nextRunAt,
         maxRetries: entry.maxRetries,
+        demandStartedAt: entry.demandStartedAt,
+        coverageThroughInferredAt: entry.coverageThroughInferredAt,
+        coalescedCount: entry.coalescedCount,
       })),
     } satisfies PersistedQueueFile;
 
@@ -479,7 +523,11 @@ export function wirePostTurnActionRuntime(
       return;
     }
 
-    if (!isRecord(parsed) || parsed.version !== PERSISTED_QUEUE_VERSION || !Array.isArray(parsed.entries)) {
+    if (
+      !isRecord(parsed)
+      || (parsed.version !== PERSISTED_QUEUE_VERSION && parsed.version !== LEGACY_PERSISTED_QUEUE_VERSION)
+      || !Array.isArray(parsed.entries)
+    ) {
       persistenceLoadState = 'invalid_payload';
       lastLoadedAt = Date.now();
       lastLoadError = 'Deferred post-turn action queue payload is invalid';
@@ -495,7 +543,7 @@ export function wirePostTurnActionRuntime(
     const migratedDedupeKeys = new Set<string>();
     const quarantinedEntries: QuarantinedPersistedQueueEntry[] = [];
     for (const [index, rawEntry] of parsed.entries.entries()) {
-      const normalizedEntry = normalizePersistedQueueEntry(rawEntry);
+      const normalizedEntry = normalizePersistedQueueEntry(rawEntry, parsed.version);
       if (!normalizedEntry) {
         quarantinedEntries.push({
           entryNumber: index + 1,
@@ -514,6 +562,7 @@ export function wirePostTurnActionRuntime(
         continue;
       }
       queue.set(entry.action.dedupeKey, entry);
+      coalescedCount += entry.coalescedCount;
       loaded += 1;
       if (normalizedEntry.migrated) {
         migrated += 1;
@@ -568,6 +617,7 @@ export function wirePostTurnActionRuntime(
   const emitTelemetry = (
     phase:
       | 'queued'
+      | 'coalesced'
       | 'deduplicated'
       | 'started'
       | 'succeeded'
@@ -584,7 +634,7 @@ export function wirePostTurnActionRuntime(
     const maxAttempts = entry.maxRetries + 1;
     const runtimeProfile = resolveRuntimeLaneBudgetProfile(entry.runtimeClass);
     const timestamp = Date.now();
-    const backgroundJobAgeMs = Math.max(0, timestamp - entry.action.inferredAt);
+    const backgroundJobAgeMs = Math.max(0, timestamp - entry.demandStartedAt);
     eventBus.emit('agent.post_turn.action.telemetry', {
       actionId: entry.action.id,
       actionKind: entry.action.kind,
@@ -705,6 +755,7 @@ export function wirePostTurnActionRuntime(
   ): void => {
     const runtimeProfile = resolveRuntimeLaneBudgetProfile(entry.runtimeClass);
     const droppedAt = Date.now();
+    lastProgressAt = droppedAt;
     droppedCount += 1;
     droppedCountsByRuntimeClass.set(
       entry.runtimeClass,
@@ -734,6 +785,8 @@ export function wirePostTurnActionRuntime(
     reason: PostTurnActionFailureReason,
     error: string,
   ): void => {
+    const failedAt = Date.now();
+    lastProgressAt = failedAt;
     failedCount += 1;
     rememberRecent(recentFailures, {
       actionId: entry.action.id,
@@ -742,7 +795,7 @@ export function wirePostTurnActionRuntime(
       capability: entry.capability,
       runtimeClass: entry.runtimeClass,
       reason,
-      failedAt: Date.now(),
+      failedAt,
       attempt: entry.attempt,
       maxAttempts: entry.maxRetries + 1,
       error,
@@ -796,6 +849,8 @@ export function wirePostTurnActionRuntime(
     reason: PostTurnActionTerminalReason,
     detail: string,
   ): void => {
+    const recordedAt = Date.now();
+    lastProgressAt = recordedAt;
     if (reason === 'cancelled') {
       cancelledCount += 1;
     } else {
@@ -808,7 +863,7 @@ export function wirePostTurnActionRuntime(
       capability: entry.capability,
       runtimeClass: entry.runtimeClass,
       reason,
-      recordedAt: Date.now(),
+      recordedAt,
       attempt: entry.attempt,
       maxAttempts: entry.maxRetries + 1,
       detail,
@@ -825,6 +880,8 @@ export function wirePostTurnActionRuntime(
     entry: DeferredQueueEntry,
     result: PostTurnActionHandlerResult | undefined,
   ): void => {
+    const completedAt = Date.now();
+    lastProgressAt = completedAt;
     completedCount += 1;
     rememberRecent(recentCompletions, {
       actionId: entry.action.id,
@@ -832,7 +889,7 @@ export function wirePostTurnActionRuntime(
       dedupeKey: entry.action.dedupeKey,
       capability: entry.capability,
       runtimeClass: entry.runtimeClass,
-      completedAt: Date.now(),
+      completedAt,
       attempt: entry.attempt,
       maxAttempts: entry.maxRetries + 1,
       detail: result?.detail?.trim() || 'succeeded',
@@ -861,6 +918,80 @@ export function wirePostTurnActionRuntime(
     return [...queue.values()].find((entry) => entry.action.id === normalizedRef);
   };
 
+  const resolveCoalescingMode = (kind: string): PostTurnActionCoalescingMode | undefined => {
+    const registrations = handlers.get(kind);
+    if (!registrations) return undefined;
+    return [...registrations.values()].find((registration) => registration.coalescing)?.coalescing;
+  };
+
+  const recordCoalescing = (
+    retainedEntry: DeferredQueueEntry,
+    incomingAction: InferredPostTurnAction,
+    retainedActionId: string,
+    successorPending: boolean,
+  ): void => {
+    coalescedCount += 1;
+    rememberRecent(recentCoalesces, {
+      dedupeKey: retainedEntry.action.dedupeKey,
+      actionKind: retainedEntry.action.kind,
+      retainedActionId,
+      coalescedActionId: incomingAction.id,
+      coverageThroughInferredAt: retainedEntry.coverageThroughInferredAt,
+      coalescedAt: Date.now(),
+      successorPending,
+    });
+    emitTelemetry('coalesced', retainedEntry);
+  };
+
+  const coalesceQueueAction = (
+    existing: DeferredQueueEntry,
+    incomingAction: InferredPostTurnAction,
+  ): PostTurnActionEnqueueResult => {
+    if (
+      incomingAction.id === existing.action.id
+      || incomingAction.id === existing.pendingAction?.id
+    ) {
+      emitTelemetry('deduplicated', existing);
+      return 'deduplicated';
+    }
+
+    const currentRunMustFinish = runningDedupeKeys.has(existing.action.dedupeKey)
+      || Boolean(existing.pendingAction);
+    const incomingIsLatest = incomingAction.inferredAt >= existing.coverageThroughInferredAt;
+    const successorPending = currentRunMustFinish && incomingIsLatest;
+    const nextEntry: DeferredQueueEntry = {
+      ...existing,
+      action: !currentRunMustFinish && incomingIsLatest ? incomingAction : existing.action,
+      ...(currentRunMustFinish && incomingIsLatest ? { pendingAction: incomingAction } : {}),
+      demandStartedAt: Math.min(existing.demandStartedAt, incomingAction.inferredAt),
+      coverageThroughInferredAt: Math.max(
+        existing.coverageThroughInferredAt,
+        incomingAction.inferredAt,
+      ),
+      coalescedCount: existing.coalescedCount + 1,
+      nextRunAt: currentRunMustFinish
+        ? existing.nextRunAt
+        : Math.min(existing.nextRunAt, resolveInitialNextRunAt(incomingAction)),
+      maxRetries: Math.max(existing.maxRetries, normalizeMaxRetries(incomingAction.maxRetries)),
+    };
+    const candidateQueue = new Map(queue);
+    candidateQueue.set(existing.action.dedupeKey, nextEntry);
+    try {
+      persistQueueEntries(candidateQueue.values());
+    } catch (error) {
+      lastPersistError = String(error);
+      log.error('Failed to persist coalesced post-turn action demand', {
+        actionId: incomingAction.id,
+        dedupeKey: incomingAction.dedupeKey,
+        error: lastPersistError,
+      });
+      throw error;
+    }
+    queue.set(existing.action.dedupeKey, nextEntry);
+    recordCoalescing(nextEntry, incomingAction, existing.action.id, successorPending);
+    return 'coalesced';
+  };
+
   const completeQueuedActionWithoutRunning = (
     actionRef: string,
     reason: PostTurnActionTerminalReason,
@@ -880,6 +1011,9 @@ export function wirePostTurnActionRuntime(
   const queueAction = (action: InferredPostTurnAction): PostTurnActionEnqueueResult => {
     const existing = queue.get(action.dedupeKey);
     if (existing) {
+      if (resolveCoalescingMode(action.kind) === 'dedupe_key_with_durable_watermark') {
+        return coalesceQueueAction(existing, action);
+      }
       emitTelemetry('deduplicated', existing);
       return 'deduplicated';
     }
@@ -891,13 +1025,16 @@ export function wirePostTurnActionRuntime(
       attempt: 0,
       nextRunAt: resolveInitialNextRunAt(action),
       maxRetries: normalizeMaxRetries(action.maxRetries),
+      demandStartedAt: action.inferredAt,
+      coverageThroughInferredAt: action.inferredAt,
+      coalescedCount: 0,
     };
     const candidateQueue = new Map(queue);
     candidateQueue.set(action.dedupeKey, entry);
     const runtimeProfile = resolveRuntimeLaneBudgetProfile(entry.runtimeClass);
     const sameClassEntries = [...candidateQueue.values()]
       .filter((candidate) => candidate.runtimeClass === entry.runtimeClass)
-      .sort((left, right) => left.action.inferredAt - right.action.inferredAt || left.nextRunAt - right.nextRunAt);
+      .sort((left, right) => left.demandStartedAt - right.demandStartedAt || left.nextRunAt - right.nextRunAt);
     const overflow = Math.max(0, sameClassEntries.length - runtimeProfile.maxQueuedActions);
     // defer_until_idle is a durable-demand contract. Its capacity bounds the
     // runnable admission window below; it must never delete valid demand.
@@ -947,6 +1084,41 @@ export function wirePostTurnActionRuntime(
     return 'dropped_budget';
   };
 
+  const persistRunningCheckpoint = (entry: DeferredQueueEntry): void => {
+    const liveEntry = queue.get(entry.action.dedupeKey) ?? entry;
+    queue.set(entry.action.dedupeKey, {
+      ...liveEntry,
+      action: entry.action,
+      attempt: entry.attempt,
+      nextRunAt: entry.nextRunAt,
+      maxRetries: entry.maxRetries,
+    });
+    persistQueue();
+  };
+
+  const advancePastFinishedAction = (entry: DeferredQueueEntry): boolean => {
+    const liveEntry = queue.get(entry.action.dedupeKey);
+    const successor = liveEntry?.pendingAction;
+    if (!liveEntry || !successor) {
+      queue.delete(entry.action.dedupeKey);
+      persistQueue();
+      return false;
+    }
+    const { pendingAction: _pendingAction, ...retained } = liveEntry;
+    queue.set(entry.action.dedupeKey, {
+      ...retained,
+      action: successor,
+      capability: resolveActionCapability(successor.kind),
+      runtimeClass: resolveRuntimeClassForKind(successor.kind),
+      attempt: 0,
+      nextRunAt: resolveInitialNextRunAt(successor),
+      maxRetries: normalizeMaxRetries(successor.maxRetries),
+      demandStartedAt: successor.inferredAt,
+    });
+    persistQueue();
+    return true;
+  };
+
   const resolveAdmittedDedupeKeys = (): Set<string> => {
     const admittedDedupeKeys = new Set<string>();
     for (const runtimeClass of RUNTIME_CLASS_ORDER) {
@@ -955,7 +1127,7 @@ export function wirePostTurnActionRuntime(
         .filter((candidate) => candidate.runtimeClass === runtimeClass)
         .sort((left, right) => (
           left.nextRunAt - right.nextRunAt
-          || left.action.inferredAt - right.action.inferredAt
+          || left.demandStartedAt - right.demandStartedAt
         ));
       const admittedEntries = runtimeProfile.degradationMode === 'defer_until_idle'
         ? laneEntries.slice(0, runtimeProfile.maxQueuedActions)
@@ -987,7 +1159,7 @@ export function wirePostTurnActionRuntime(
       .sort((left, right) => (
         compareRuntimeLanePriority(left.runtimeClass, right.runtimeClass)
         || left.nextRunAt - right.nextRunAt
-        || left.action.inferredAt - right.action.inferredAt
+        || left.demandStartedAt - right.demandStartedAt
       ));
     const entry = dueEntries[0] as typeof dueEntries[number] | undefined;
     if (!entry) {
@@ -1039,7 +1211,7 @@ export function wirePostTurnActionRuntime(
 
     entry.attempt += 1;
     runningDedupeKeys.add(entry.action.dedupeKey);
-    persistQueue();
+    persistRunningCheckpoint(entry);
     emitTelemetry('started', entry);
     emitCompletionHandoff(entry, 'started', {
       summary: `Post-turn action "${entry.action.kind}" started.`,
@@ -1078,7 +1250,7 @@ export function wirePostTurnActionRuntime(
         }
         entry.attempt = Math.max(0, entry.attempt - 1);
         entry.nextRunAt = rescheduleAt;
-        persistQueue();
+        persistRunningCheckpoint(entry);
         const delayMs = Math.max(1, rescheduleAt - Date.now());
         log.info('Deferred action rescheduled by handler', {
           actionId: entry.action.id,
@@ -1101,9 +1273,8 @@ export function wirePostTurnActionRuntime(
         });
         return true;
       }
-      queue.delete(entry.action.dedupeKey);
-      persistQueue();
       recordCompletion(entry, handlerResult);
+      advancePastFinishedAction(entry);
       emitTelemetry('succeeded', entry);
     } catch (error) {
       const errorText = String(error);
@@ -1112,7 +1283,7 @@ export function wirePostTurnActionRuntime(
         entry.attempt = Math.max(0, entry.attempt - 1);
         const delayMs = Math.max(1, Math.min(maxRetryDelayMs, baseRetryDelayMs));
         entry.nextRunAt = Date.now() + delayMs;
-        persistQueue();
+        persistRunningCheckpoint(entry);
         log.info('Deferred action rescheduled after runtime contention', {
           actionId: entry.action.id,
           actionKind: entry.action.kind,
@@ -1136,8 +1307,6 @@ export function wirePostTurnActionRuntime(
         return true;
       }
       if (entry.attempt > entry.maxRetries) {
-        queue.delete(entry.action.dedupeKey);
-        persistQueue();
         log.error('Deferred action exhausted retries', {
           actionId: entry.action.id,
           actionKind: entry.action.kind,
@@ -1146,13 +1315,15 @@ export function wirePostTurnActionRuntime(
           error: errorText,
         });
         recordFailure(entry, 'retries_exhausted', errorText);
+        advancePastFinishedAction(entry);
         emitTelemetry('failed', entry, { error: errorText });
         return true;
       }
 
       const delayMs = Math.min(maxRetryDelayMs, baseRetryDelayMs * Math.pow(2, Math.max(0, entry.attempt - 1)));
       entry.nextRunAt = Date.now() + delayMs;
-      persistQueue();
+      persistRunningCheckpoint(entry);
+      retryableFailureCount += 1;
       log.warn('Deferred action retry scheduled', {
         actionId: entry.action.id,
         actionKind: entry.action.kind,
@@ -1226,10 +1397,14 @@ export function wirePostTurnActionRuntime(
       cancellable: state !== 'running',
       attempt: entry.attempt,
       maxAttempts: entry.maxRetries + 1,
-      inferredAt: entry.action.inferredAt,
+      inferredAt: entry.demandStartedAt,
       nextRunAt: entry.nextRunAt,
-      queuedForMs: Math.max(0, now - entry.action.inferredAt),
+      queuedForMs: Math.max(0, now - entry.demandStartedAt),
       runAfterMs: Math.max(0, entry.nextRunAt - now),
+      coalescedCount: entry.coalescedCount,
+      coverageThroughInferredAt: entry.coverageThroughInferredAt,
+      latestSourceMessageId: entry.pendingAction?.sourceMessageId ?? entry.action.sourceMessageId,
+      successorPending: Boolean(entry.pendingAction),
     };
     if (entry.capability === 'subagent_spawn') {
       const spawnStatus = resolvePostTurnSubagentSpawnQueuedStatus(entry.action.payload);
@@ -1310,6 +1485,10 @@ export function wirePostTurnActionRuntime(
       now,
     ));
     const nextRunAt = minimumNumber(queued.map((entry) => entry.nextRunAt));
+    const oldestDemandAt = minimumNumber(queued.map((entry) => entry.inferredAt));
+    const noProgressSince = oldestDemandAt === undefined
+      ? undefined
+      : Math.max(oldestDemandAt, lastProgressAt ?? oldestDemandAt);
     const persistenceStatus: PostTurnActionQueuePersistenceStatus = {
       enabled: Boolean(persistencePath),
       loadState: persistenceLoadState,
@@ -1347,13 +1526,25 @@ export function wirePostTurnActionRuntime(
       runningCount: queued.filter((entry) => entry.state === 'running').length,
       lanes,
       queued,
+      coalescing: {
+        coalescedCount,
+        activeCoalescedCount: queued.reduce((sum, entry) => sum + entry.coalescedCount, 0),
+        recentCoalesces: recentCoalesces.map((entry) => ({ ...entry })),
+      },
       backPressure: {
         droppedCount,
         recentDrops: recentDrops.map((entry) => ({ ...entry })),
       },
       failures: {
         failedCount,
+        retryableFailureCount,
+        permanentRejectCount: failedCount,
         recentFailures: recentFailures.map((entry) => ({ ...entry })),
+      },
+      progress: {
+        ...(lastProgressAt !== undefined ? { lastProgressAt } : {}),
+        ...(noProgressSince !== undefined ? { noProgressSince } : {}),
+        noProgressForMs: noProgressSince === undefined ? 0 : Math.max(0, now - noProgressSince),
       },
       terminal: {
         cancelledCount,
@@ -1529,6 +1720,14 @@ export function wirePostTurnActionRuntime(
       const executionMode: PostTurnActionExecutionMode =
         options.executionMode === 'foreground' ? 'foreground' : 'background';
       const runtimeClass = options.runtimeClass ?? resolveRuntimeClassForKind(normalizedKind);
+      const existingCoalescing = handlerSet.size > 0
+        ? [...handlerSet.values()][0]?.coalescing
+        : options.coalescing;
+      if (handlerSet.size > 0 && existingCoalescing !== options.coalescing) {
+        throw new Error(
+          `Post-turn action handlers for "${normalizedKind}" must declare one consistent coalescing mode`,
+        );
+      }
       // Consistency guard against silent re-drift: a handler that declares it
       // needs foreground idle must map to a lane whose profile actually
       // requires foreground idle. Fail closed at registration otherwise.
@@ -1546,6 +1745,7 @@ export function wirePostTurnActionRuntime(
         callback: handler,
         executionMode,
         runtimeClass,
+        ...(options.coalescing ? { coalescing: options.coalescing } : {}),
       });
       handlers.set(normalizedKind, handlerSet);
       return () => {

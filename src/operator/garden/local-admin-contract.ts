@@ -420,6 +420,7 @@ export function createInProcessGardenAdminContract(
   const subsystemHealth = new AdminSubsystemHealthDataService({
     eventBus: options.eventBus,
     scheduler: schedulerService,
+    postTurnActionQueueProvider: options.postTurnActions ?? null,
     ...(options.operatorAlerting ? { operatorAlerting: options.operatorAlerting } : {}),
     watermarkProvider: options.episodicStore ?? null,
     watermarkDefinitions: () => (

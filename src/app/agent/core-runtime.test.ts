@@ -63,6 +63,7 @@ describe('agent core runtime builder', () => {
     expect(coreRuntimeSource).toContain('wireSessionToolsRuntime(');
     expect(coreRuntimeSource).toContain('wireCoreMemoryRuntime(');
     expect(coreRuntimeSource).toContain('wireMemoryRuntime(');
+    expect(coreRuntimeSource).toContain('agentLoop.cogSecMode = intakePolicy.mode');
   });
 
   it('constructs eligible worker Bus ports while keeping foreground retrieval Bus-free', () => {

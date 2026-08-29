@@ -5748,6 +5748,9 @@ describe('handleMessageForTurn compaction scheduling', () => {
 
     await handleMessageForTurn(runtime, createMessage('msg-cogsec-shadow'));
 
+    expect(mockedBuildTurnUserContent).toHaveBeenCalledWith(
+      expect.objectContaining({ visionIntakeEnforcing: false }),
+    );
     const buildTurnRecordMock = runtime.buildTurnRecord as ReturnType<typeof vi.fn>;
     const recordedInput = buildTurnRecordMock.mock.calls[0]?.[0] as { turnSnapshot?: Record<string, unknown> };
     const plan = recordedInput.turnSnapshot?.plan as PromptPlan;

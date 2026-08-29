@@ -477,7 +477,7 @@ describe('buildTurnUserContent vision intake screening (htm9.8)', () => {
     expect(content).toContain('Participant text: My little satellite');
   });
 
-  it('fails closed when the screening call itself throws: image withheld, never unscreened', async () => {
+  it('enforce mode fails closed when the screening call itself throws', async () => {
     const screener: VisionIntakeImageScreenerPort = {
       screenImageIntake: async () => {
         throw new Error('gateway unreachable');
@@ -490,6 +490,7 @@ describe('buildTurnUserContent vision intake screening (htm9.8)', () => {
       runtimeMode: 'gateway',
       logger,
       visionIntakeScreener: screener,
+      visionIntakeEnforcing: true,
     });
 
     expect(typeof result.content).toBe('string');
@@ -497,6 +498,31 @@ describe('buildTurnUserContent vision intake screening (htm9.8)', () => {
     expect(result.content as string).toContain(INTAKE_FIREWALL_NOTICE_TEMPLATES.withheldImage);
     expect(logger.warn).toHaveBeenCalledWith(
       'Vision intake screening call failed; withholding image (fail closed)',
+      expect.objectContaining({ error: 'gateway unreachable' }),
+    );
+  });
+
+  it('shadow mode audits a screening call failure and passes the image through', async () => {
+    const screener: VisionIntakeImageScreenerPort = {
+      screenImageIntake: async () => {
+        throw new Error('gateway unreachable');
+      },
+    };
+    const logger = { warn: vi.fn(), debug: vi.fn() };
+    const result = await buildTurnUserContent({
+      message: inlinePngMessage(),
+      llmClient: fromPartial<Record<string, unknown>>({}),
+      runtimeMode: 'gateway',
+      logger,
+      visionIntakeScreener: screener,
+      visionIntakeEnforcing: false,
+    });
+
+    expect(Array.isArray(result.content)).toBe(true);
+    const parts = result.content as Array<{ type: string; data?: string }>;
+    expect(parts.some((part) => part.type === 'image' && part.data === 'aW1hZ2VieXRlcw==')).toBe(true);
+    expect(logger.warn).toHaveBeenCalledWith(
+      'Vision intake screening call failed in shadow mode; passing image through',
       expect.objectContaining({ error: 'gateway unreachable' }),
     );
   });

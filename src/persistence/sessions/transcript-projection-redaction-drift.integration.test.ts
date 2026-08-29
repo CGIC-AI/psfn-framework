@@ -234,6 +234,31 @@ describe('transcript projection redaction drift (real Postgres)', () => {
         revision: 1,
         claimantId: 'competing-worker',
       })).resolves.toBeNull();
+      const sleeptimeClaim = await alpha.conversationalActivityWorkset.claim({
+        purpose: 'sleeptime_consolidation',
+        logicalSessionId: 'api:friend-01',
+        revision: 1,
+        claimantId: 'companion:sleeptime',
+      });
+      expect(sleeptimeClaim).toEqual(expect.objectContaining({
+        logicalSessionId: 'api:friend-01',
+        occurredAtMs: 1_001,
+        completedStages: [],
+      }));
+      await alpha.conversationalActivityWorkset.checkpointStage({
+        purpose: 'sleeptime_consolidation',
+        logicalSessionId: 'api:friend-01',
+        revision: 1,
+        claimantId: 'companion:sleeptime',
+        stage: 'sleep_consolidation',
+      });
+      await alpha.conversationalActivityWorkset.checkpointStage({
+        purpose: 'sleeptime_consolidation',
+        logicalSessionId: 'api:friend-01',
+        revision: 1,
+        claimantId: 'companion:sleeptime',
+        stage: 'arc_formation',
+      });
 
       const restartPool = createPostgresPool(database.databaseUrl, {
         applicationName: 'psfn-conversation-workset-alpha-restart',
@@ -252,6 +277,33 @@ describe('transcript projection redaction drift (real Postgres)', () => {
           logicalSessionId: 'api:friend-00',
           claimantId: 'episode-worker',
         })).resolves.toEqual(claimed);
+        await expect(restarted.conversationalActivityWorkset.resumeClaim({
+          purpose: 'sleeptime_consolidation',
+          logicalSessionId: 'api:friend-01',
+          claimantId: 'companion:sleeptime',
+        })).resolves.toEqual(expect.objectContaining({
+          revision: 1,
+          completedStages: ['sleep_consolidation', 'arc_formation'],
+        }));
+        await restarted.conversationalActivityWorkset.recordFailure({
+          purpose: 'sleeptime_consolidation',
+          logicalSessionId: 'api:friend-01',
+          revision: 1,
+          claimantId: 'companion:sleeptime',
+          stage: 'dream_meaning',
+          message: 'simulated restart boundary',
+        });
+        await expect(restarted.conversationalActivityWorkset.resumeClaim({
+          purpose: 'sleeptime_consolidation',
+          logicalSessionId: 'api:friend-01',
+          claimantId: 'companion:sleeptime',
+        })).resolves.toEqual(expect.objectContaining({
+          completedStages: ['sleep_consolidation', 'arc_formation'],
+          lastFailure: expect.objectContaining({
+            stage: 'dream_meaning',
+            message: 'simulated restart boundary',
+          }),
+        }));
         await expect(restarted.conversationalActivityWorkset.checkpoint({
           purpose: 'episodic_synthesis',
           logicalSessionId: 'api:friend-00',

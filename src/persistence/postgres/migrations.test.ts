@@ -8,6 +8,7 @@ import {
   POSTGRES_INTROSPECTION_MIGRATIONS,
   POSTGRES_MEMORY_MIGRATIONS,
   POSTGRES_MODEL_USAGE_MIGRATIONS,
+  POSTGRES_TRANSCRIPT_MIGRATIONS,
   POSTGRES_SHARED_ALL_MIGRATION_VERSIONS,
   POSTGRES_SHARED_MIGRATIONS,
   POSTGRES_SHARED_WIKI_MIGRATIONS,
@@ -29,6 +30,16 @@ function expectAddColumn(sql: string, table: string, column: string): void {
 }
 
 describe('Postgres live schema migrations', () => {
+  it('persists resumable per-stage conversational maintenance checkpoints', () => {
+    const sql = migrationSql(POSTGRES_TRANSCRIPT_MIGRATIONS);
+    expect(sql).toContain('CREATE TABLE IF NOT EXISTS session_conversational_workset');
+    expect(sql).toContain("completed_stages JSONB NOT NULL DEFAULT '[]'::jsonb");
+    expectAddColumn(sql, 'session_conversational_workset', 'completed_stages');
+    expectAddColumn(sql, 'session_conversational_workset', 'failed_stage');
+    expectAddColumn(sql, 'session_conversational_workset', 'failure_message');
+    expectAddColumn(sql, 'session_conversational_workset', 'failed_at_ms');
+  });
+
   it('creates scoped Buzz recovery, cursor, and membership authorities', () => {
     const sql = migrationSql(POSTGRES_BUZZ_RECOVERY_MIGRATIONS);
 

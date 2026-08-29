@@ -20,6 +20,10 @@ import type { InferredPostTurnAction, PostTurnActionCandidate, SubstrateMessage 
 import { createComponentLogger } from '../../shared/logger.js';
 import type { SessionEntry } from '../../core/session/types.js';
 import type { SessionManager } from '../../core/session/manager.js';
+import type {
+  ConversationalActivityWorkItem,
+  ConversationalActivityWorksetPort,
+} from '../../core/session/conversational-activity-workset.js';
 import { latestSourceEntryTimestamp } from './extraction/speaker-routing.js';
 import { isTestingSessionId } from '../../core/session/session-id.js';
 import {
@@ -61,12 +65,16 @@ import {
   type PurrMemory,
   type SensitivityLevel,
 } from './types.js';
+import {
+  SleeptimeWorksetRunner,
+  type SleeptimeWorksetRunOutcome,
+  type SleeptimeWorksetStageInput,
+} from './sleeptime-workset.js';
 
 const log = createComponentLogger('SleeptimeMemoryAgent');
 
 export const SLEEPTIME_MEMORY_ACTION_KIND = 'memory.sleeptime.run';
 
-const DEFAULT_IDLE_SESSION_LIMIT = 20;
 const DEFAULT_TRANSCRIPT_MESSAGE_LIMIT = 24;
 const DEFAULT_MAX_MEMORY_WRITES = 4;
 // Her end-of-day review runs as her own reflection turns on an internal
@@ -76,6 +84,8 @@ const MAX_REVIEW_TURNS = 3;
 const EPISODE_REVIEW_LIMIT = 20;
 const ORIENTATION_REWRITE_GATE_LANE = 'orientation_rewrite';
 const DAY_MS = 24 * 60 * 60_000;
+const SLEEPTIME_WORKSET_CLAIMANT_ID = 'companion:sleeptime';
+const SLEEPTIME_COMPANION_ACTION_DEDUPE_KEY = `${SLEEPTIME_MEMORY_ACTION_KIND}:companion`;
 
 /**
  * Orientation-rewrite gate (jpvd.4): the nightly core-memory orient rewrite is
@@ -126,8 +136,8 @@ export interface SleeptimeReviewAgent {
 }
 
 type SleeptimeEpisodeReader = Pick<EpisodicStorePort, 'searchByTime'>;
-type SessionMemoryReader = Pick<SessionManager, 'resolveSessionChannelId' | 'getRecentMessages'>
-  & Partial<Pick<SessionManager, 'listRecentSessions' | 'isSessionRetiredOrQuarantined'>>;
+type SessionMemoryReader = Pick<SessionManager, 'getRecentMessages'>
+  & Partial<Pick<SessionManager, 'isSessionRetiredOrQuarantined'>>;
 type SleeptimeMemoryWriter = Pick<MemoryWriter, 'write'>;
 type SleeptimeEpisodeConsolidator = Pick<SleepCycleEpisodeConsolidator, 'run'>;
 type SleeptimeArcWeaver = Pick<EpisodeArcWeaver, 'run'>;
@@ -175,6 +185,7 @@ export interface SleeptimeMemoryAgentOptions {
    */
   episodicStore: SleeptimeEpisodeReader;
   sessionManager: SessionMemoryReader;
+  conversationalActivityWorkset: ConversationalActivityWorksetPort;
   coreMemoryStore: CoreMemoryRewriter;
   memoryWriter: SleeptimeMemoryWriter;
   promptRegistry?: PromptRegistryStatePort | null;
@@ -549,6 +560,7 @@ export class SleeptimeMemoryAgent {
   private readonly agent: SleeptimeReviewAgent;
   private readonly episodicStore: SleeptimeEpisodeReader;
   private readonly sessionManager: SessionMemoryReader;
+  private readonly conversationalActivityWorkset: ConversationalActivityWorksetPort;
   private readonly coreMemoryStore: CoreMemoryRewriter;
   private readonly memoryWriter: SleeptimeMemoryWriter;
   private readonly promptRegistry: PromptRegistryStatePort | null;
@@ -576,6 +588,7 @@ export class SleeptimeMemoryAgent {
     this.agent = options.agent;
     this.episodicStore = options.episodicStore;
     this.sessionManager = options.sessionManager;
+    this.conversationalActivityWorkset = options.conversationalActivityWorkset;
     this.coreMemoryStore = options.coreMemoryStore;
     this.memoryWriter = options.memoryWriter;
     this.promptRegistry = options.promptRegistry ?? null;
@@ -604,69 +617,53 @@ export class SleeptimeMemoryAgent {
   /**
    * Rest-window inference is the ONLY trigger surface for sleeptime work. The
    * scheduler polls this on an interval; turn cadence has no code path here.
+   * One companion-level action represents the entire changed-session snapshot.
    */
-  inferIdlePostTurnActions(options: {
+  async inferIdlePostTurnActions(options: {
     nowMs?: number;
-    limit?: number;
-  } = {}): PostTurnActionCandidate[] {
-    if (!this.sessionManager.listRecentSessions) {
-      return [];
-    }
+  } = {}): Promise<PostTurnActionCandidate[]> {
+    const snapshot = (await this.conversationalActivityWorkset.enumerate('sleeptime_consolidation'))
+      .filter(item => (
+        !isTestingSessionId(item.logicalSessionId)
+        && !this.sessionManager.isSessionRetiredOrQuarantined?.(item.logicalSessionId)
+      ));
+    if (snapshot.length === 0) return [];
     const nowMs = typeof options.nowMs === 'number' && Number.isFinite(options.nowMs)
       ? options.nowMs
-      : Date.now();
-    const limit = positiveIntegerOr(options.limit, DEFAULT_IDLE_SESSION_LIMIT);
-    const actions: PostTurnActionCandidate[] = [];
-	    for (const session of this.sessionManager.listRecentSessions(limit)) {
-	      const sessionId = this.sessionManager.resolveSessionChannelId(session.channelId);
-	      if (sessionId.startsWith('internal:')) continue;
-	      if (isTestingSessionId(sessionId)) continue;
-	      if (this.sessionManager.isSessionRetiredOrQuarantined?.(sessionId)) continue;
-	      const lastUserActivityAtMs = session.lastActivityAt;
-      const restWindowDecision = evaluateRestWindowEligibility({
-        config: this.restWindow,
-        nowMs,
+      : this.now();
+    const lastUserActivityAtMs = this.latestActivityAtMs(snapshot);
+    const restWindowDecision = evaluateRestWindowEligibility({
+      config: this.restWindow,
+      nowMs,
+      lastUserActivityAtMs,
+    });
+    if (!restWindowDecision.allowed) return [];
+    return [{
+      kind: SLEEPTIME_MEMORY_ACTION_KIND,
+      payload: {
+        trigger: 'idle_rest_window',
         lastUserActivityAtMs,
-      });
-      if (!restWindowDecision.allowed) continue;
-      actions.push({
-        kind: SLEEPTIME_MEMORY_ACTION_KIND,
-        payload: {
-          sessionId,
-          sourceChannelId: session.channelId,
-          trigger: 'idle_rest_window',
-          lastUserActivityAtMs,
-        },
-        dedupeKey: `${SLEEPTIME_MEMORY_ACTION_KIND}:${sessionId}`,
-        maxRetries: 1,
-      });
-    }
-    return actions;
+        changedSessionCount: snapshot.length,
+      },
+      dedupeKey: SLEEPTIME_COMPANION_ACTION_DEDUPE_KEY,
+      maxRetries: 1,
+    }];
   }
 
-	  async execute(action: Pick<InferredPostTurnAction, 'id' | 'channelId' | 'sourceMessageId' | 'payload'>): Promise<void> {
-	    const sessionId = this.resolveActionSessionId(action);
-	    if (isTestingSessionId(sessionId)) {
-	      log.info('Skipping sleeptime run for testing session', {
-	        sessionId,
-	        actionId: action.id,
-	      });
-	      return;
-	    }
-	    if (this.sessionManager.isSessionRetiredOrQuarantined?.(sessionId)) {
-	      log.info('Skipping sleeptime run for retired session', {
-	        sessionId,
-	        actionId: action.id,
-	      });
-	      return;
-	    }
-	    const restWindowDecision = evaluateRestWindowEligibility({
+  async execute(
+    action: Pick<InferredPostTurnAction, 'id' | 'sourceMessageId' | 'payload'>,
+  ): Promise<SleeptimeWorksetRunOutcome> {
+    const snapshot = await this.conversationalActivityWorkset.enumerate('sleeptime_consolidation');
+    if (snapshot.length === 0) {
+      return { outcome: 'complete', completedSessions: 0, remainingSessions: 0 };
+    }
+    const restWindowDecision = evaluateRestWindowEligibility({
       config: this.restWindow,
-      lastUserActivityAtMs: this.resolveActionLastUserActivityAtMs(action),
+      nowMs: this.now(),
+      lastUserActivityAtMs: this.latestActivityAtMs(snapshot),
     });
     if (!restWindowDecision.allowed) {
-      log.info('Skipping sleeptime run outside rest-window eligibility', {
-        sessionId,
+      log.info('Yielding sleeptime workset outside rest-window eligibility', {
         actionId: action.id,
         reasonCode: restWindowDecision.reasonCode,
         nextEligibleAtMs: restWindowDecision.nextEligibleAtMs,
@@ -674,71 +671,70 @@ export class SleeptimeMemoryAgent {
         requiredInactiveMs: restWindowDecision.requiredInactiveMs,
         timeZone: restWindowDecision.timeZone,
       });
-      return;
+      return { outcome: 'yield', completedSessions: 0, remainingSessions: snapshot.length };
     }
 
-    const recentEntries = this.sessionManager
-      .getRecentMessages(sessionId, this.transcriptMessageLimit)
-      .filter(entry => entry.role === 'user' || entry.role === 'assistant');
-    if (recentEntries.length === 0) {
-      log.debug('Skipping sleeptime run: no recent conversational transcript', {
-        sessionId,
-        actionId: action.id,
-      });
-      return;
+    const snapshotRevisions = new Map(
+      snapshot.map(item => [item.logicalSessionId, item.revision]),
+    );
+    const entriesBySession = new Map<string, SessionEntry[]>();
+    const runner = new SleeptimeWorksetRunner({
+      workset: this.conversationalActivityWorkset,
+      claimantId: SLEEPTIME_WORKSET_CLAIMANT_ID,
+      shouldYield: async () => this.hasActivityBeyondSnapshot(snapshotRevisions),
+      runStage: async input => this.runWorksetStage(input, action, entriesBySession),
+    });
+    return runner.run(snapshot);
+  }
+
+  private async runWorksetStage(
+    input: SleeptimeWorksetStageInput,
+    action: Pick<InferredPostTurnAction, 'id' | 'sourceMessageId'>,
+    entriesBySession: Map<string, SessionEntry[]>,
+  ): Promise<void> {
+    const sessionId = input.logicalSessionId;
+    if (isTestingSessionId(sessionId)) {
+      throw new Error('Testing sessions are not eligible for sleeptime');
+    }
+    if (this.sessionManager.isSessionRetiredOrQuarantined?.(sessionId)) {
+      throw new Error('Retired or quarantined sessions are not eligible for sleeptime');
+    }
+    let recentEntries = entriesBySession.get(sessionId);
+    if (!recentEntries) {
+      recentEntries = this.sessionManager
+        .getRecentMessages(sessionId, this.transcriptMessageLimit)
+        .filter(entry => entry.role === 'user' || entry.role === 'assistant');
+      if (recentEntries.length === 0) {
+        throw new Error('Changed conversational session has no readable conversational transcript');
+      }
+      entriesBySession.set(sessionId, recentEntries);
     }
 
-    const sleepConsolidation = await this.runIsolatedEpisodicPass(
-      'sleep_consolidation',
-      sessionId,
-      action.id,
-      this.sleepConsolidator
-        ? () => this.sleepConsolidator!.run({
-        sessionId,
-        sourceMessageId: action.sourceMessageId,
-      })
-        : null,
-    );
+    const passInput = { sessionId, sourceMessageId: action.sourceMessageId };
+    switch (input.stage) {
+      case 'sleep_consolidation':
+        await this.sleepConsolidator?.run(passInput);
+        return;
+      case 'arc_formation':
+        await this.arcWeaver?.run(passInput);
+        return;
+      case 'dream_meaning':
+        await this.dreamMeaningPass?.run(passInput);
+        return;
+      case 'wiki_pass':
+        await this.sleeptimeWikiPass?.run(passInput);
+        return;
+      case 'orientation_review':
+        await this.runOrientationReview(sessionId, action, recentEntries);
+        return;
+    }
+  }
 
-    const arcFormation = await this.runIsolatedEpisodicPass(
-      'arc_formation',
-      sessionId,
-      action.id,
-      this.arcWeaver
-        ? () => this.arcWeaver!.run({
-        sessionId,
-        sourceMessageId: action.sourceMessageId,
-      })
-        : null,
-    );
-
-    const dreamMeaning = await this.runIsolatedEpisodicPass(
-      'dream_meaning',
-      sessionId,
-      action.id,
-      this.dreamMeaningPass
-        ? () => this.dreamMeaningPass!.run({
-        sessionId,
-        sourceMessageId: action.sourceMessageId,
-      })
-        : null,
-    );
-
-    // Sleeptime wiki update pass (E8.2): runs here, AFTER episodes/memories
-    // settle, with its OWN deterministic gate + watermark. It is independent of
-    // the orient-rewrite gate below, so quiet-orientation nights that still
-    // produced wiki-shaped world knowledge are not skipped.
-    const wikiPass = await this.runIsolatedEpisodicPass(
-      'wiki_pass',
-      sessionId,
-      action.id,
-      this.sleeptimeWikiPass
-        ? () => this.sleeptimeWikiPass!.run({
-        sessionId,
-        sourceMessageId: action.sourceMessageId,
-      })
-        : null,
-    );
+  private async runOrientationReview(
+    sessionId: string,
+    action: Pick<InferredPostTurnAction, 'id' | 'sourceMessageId'>,
+    recentEntries: readonly SessionEntry[],
+  ): Promise<void> {
 
     const coreMemoryScope = coreMemoryChannelScope({ channelId: sessionId });
     const currentSnapshot = this.coreMemoryStore.getSnapshot({ scope: coreMemoryScope });
@@ -776,7 +772,7 @@ export class SleeptimeMemoryAgent {
         sessionId,
         actionId: action.id,
       });
-      return;
+      throw new Error('Sleeptime review produced no usable plan');
     }
 
     const groundingCorpus = buildGroundingCorpus(recentEntries, dayEpisodes);
@@ -876,33 +872,21 @@ export class SleeptimeMemoryAgent {
       memoryWritesRejectedUngrounded: ungroundedRejectedCount,
       orientBlocksRejected,
       memoryMaintenanceReviewsQueued: reviewQueuedCount,
-      ...(sleepConsolidation ? { sleepConsolidation } : {}),
-      ...(arcFormation?.ran ? { arcFormation } : {}),
-      ...(dreamMeaning?.ran ? { dreamMeaning } : {}),
-      ...(wikiPass?.ran ? { wikiPass } : {}),
       ...(memoryMaintenanceDiagnostics ? { memoryMaintenanceDiagnostics } : {}),
       ...(episodicMaintenanceDiagnostics ? { episodicMaintenanceDiagnostics } : {}),
     });
   }
 
-  private async runIsolatedEpisodicPass<T>(
-    processor: 'sleep_consolidation' | 'arc_formation' | 'dream_meaning' | 'wiki_pass',
-    sessionId: string,
-    actionId: string,
-    run: (() => Promise<T>) | null,
-  ): Promise<T | null> {
-    if (!run) return null;
-    try {
-      return await run();
-    } catch (error) {
-      log.error(`Sleeptime ${processor} pass failed; continuing independent processors`, {
-        sessionId,
-        actionId,
-        processor,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return null;
-    }
+  private latestActivityAtMs(items: readonly ConversationalActivityWorkItem[]): number {
+    return items.reduce(
+      (latest, item) => Math.max(latest, item.occurredAtMs),
+      0,
+    );
+  }
+
+  private async hasActivityBeyondSnapshot(snapshotRevisions: ReadonlyMap<string, number>): Promise<boolean> {
+    const current = await this.conversationalActivityWorkset.enumerate('sleeptime_consolidation');
+    return current.some(item => item.revision > (snapshotRevisions.get(item.logicalSessionId) ?? 0));
   }
 
   private evaluateOrientationRewriteGate(
@@ -1087,19 +1071,4 @@ export class SleeptimeMemoryAgent {
     return this.episodicDiagnosticsStore.getMaintenanceDiagnostics();
   }
 
-  private resolveActionSessionId(action: Pick<InferredPostTurnAction, 'channelId' | 'payload'>): string {
-    const payloadSession = action.payload['sessionId'];
-    if (typeof payloadSession === 'string' && payloadSession.trim().length > 0) {
-      return payloadSession.trim();
-    }
-    return this.sessionManager.resolveSessionChannelId(action.channelId);
-  }
-
-  private resolveActionLastUserActivityAtMs(action: Pick<InferredPostTurnAction, 'payload'>): number | undefined {
-    const value = action.payload['lastUserActivityAtMs'];
-    if (typeof value === 'number' && Number.isFinite(value)) {
-      return value;
-    }
-    return undefined;
-  }
 }

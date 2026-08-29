@@ -118,6 +118,14 @@ describe('reflection post-turn lane split (E5.2)', () => {
           resolveSessionChannelId: (channelId: string) => channelId,
           getRecentMessages: vi.fn().mockReturnValue([]),
         }),
+        conversationalActivityWorkset: fromAny({
+          enumerate: vi.fn(async () => []),
+          claim: vi.fn(async () => null),
+          resumeClaim: vi.fn(async () => null),
+          checkpointStage: vi.fn(async () => undefined),
+          recordFailure: vi.fn(async () => undefined),
+          checkpoint: vi.fn(async () => undefined),
+        }),
         episodicProcessingRestWindow: {
           enabled: true,
           startLocalTime: '00:00',

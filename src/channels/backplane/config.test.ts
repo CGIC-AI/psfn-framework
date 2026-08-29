@@ -21,6 +21,7 @@ describe('loadRuntimeChannelsConfig', () => {
       expect(config.discord.heartbeatChannelId).toBe('');
       expect(config.discord.allowedBotUserIds).toEqual([]);
       expect(config.discord.groupMemory).toEqual({ channelOverrides: {} });
+      expect(config.discord.operatorAlert).toBeUndefined();
       expect(config.telegram.enabled).toBe(false);
       expect(config.telegram.token).toBe('');
       expect(config.telegram.allowedUsers).toEqual([]);
@@ -335,6 +336,68 @@ describe('loadRuntimeChannelsConfig', () => {
 
       expect(() => loadRuntimeChannelsConfig(dataDir, {})).toThrow(
         'channels.json.telegram.operatorChatId must be a numeric Telegram chat id',
+      );
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('loads an explicit Discord operator alert destination without selecting ordinary chats', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
+    try {
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        discord: {
+          heartbeatChannelId: '111111111111111111',
+          operatorAlert: { channelId: '222222222222222222' },
+        },
+      }));
+
+      expect(loadRuntimeChannelsConfig(dataDir, {}).discord.operatorAlert).toEqual({
+        channelId: '222222222222222222',
+      });
+
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        discord: { heartbeatChannelId: '111111111111111111' },
+      }));
+      expect(loadRuntimeChannelsConfig(dataDir, {}).discord.operatorAlert).toBeUndefined();
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('requires an exact configured Discord account for multi-account alerts', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
+    const account = {
+      accountId: 'operator-bot',
+      companionId: '11111111-1111-4111-8111-111111111111',
+      tokenRef: { kind: 'env', envName: 'OPERATOR_DISCORD_TOKEN' },
+    };
+    try {
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        discord: {
+          accounts: [account],
+          operatorAlert: {
+            accountId: 'operator-bot',
+            channelId: '222222222222222222',
+          },
+        },
+      }));
+      expect(loadRuntimeChannelsConfig(dataDir, {}).discord.operatorAlert).toEqual({
+        accountId: 'operator-bot',
+        channelId: '222222222222222222',
+      });
+
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        discord: {
+          accounts: [account],
+          operatorAlert: {
+            accountId: 'ordinary-bot',
+            channelId: '222222222222222222',
+          },
+        },
+      }));
+      expect(() => loadRuntimeChannelsConfig(dataDir, {})).toThrow(
+        'channels.json.discord.operatorAlert.accountId must name a configured discord account',
       );
     } finally {
       rmSync(dataDir, { recursive: true, force: true });

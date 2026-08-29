@@ -79,6 +79,8 @@ export interface GatewayPrivilegedCore {
     discordAdapter: ChannelOutboundDock;
     telegramDock?: ChannelOutboundDock;
     operatorTelegramChatId?: string;
+    operatorDiscordDock?: ChannelOutboundDock;
+    operatorDiscordChannelId?: string;
     /** Multi-account discord (W1-P2): outbound dock per companionId. */
     discordAccountDocks?: ReadonlyMap<CompanionId, ChannelOutboundDock>;
     pluginOutboundRoutes?: readonly {
@@ -252,6 +254,8 @@ export async function buildGatewayPrivilegedCore(
       ntfyConfigured: input.bootstrap.server.ntfy !== undefined,
       telegramEnabled: input.bootstrap.channelsConfig.telegram.enabled,
       telegramChatId: input.bootstrap.channelsConfig.telegram.operatorChatId,
+      discordEnabled: true,
+      discordChannelId: input.bootstrap.channelsConfig.discord.operatorAlert?.channelId,
     }),
     onQuarantineHeld: companionId => emitGardenQueueChanged(
       eventBus,
@@ -387,6 +391,8 @@ export async function buildGatewayPrivilegedCore(
       discordAdapter,
       telegramDock,
       operatorTelegramChatId,
+      operatorDiscordDock,
+      operatorDiscordChannelId,
       discordAccountDocks,
       pluginOutboundRoutes,
       companionChannels,
@@ -419,6 +425,8 @@ export async function buildGatewayPrivilegedCore(
       discordAdapter,
       ...(telegramDock ? { telegramDock } : {}),
       ...(operatorTelegramChatId ? { operatorTelegramChatId } : {}),
+      ...(operatorDiscordDock ? { operatorDiscordDock } : {}),
+      ...(operatorDiscordChannelId ? { operatorDiscordChannelId } : {}),
       gitOps,
       imageConfig: input.config,
       ...(privilegedServices.modelUsageStore ? { modelUsageRecorder: privilegedServices.modelUsageStore } : {}),

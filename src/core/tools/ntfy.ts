@@ -831,10 +831,13 @@ export function createGatewayOperatorNotificationPort(
 ): NotificationPort {
   return {
     notify: async (params) => {
-      await gateway.notifyOperator({
+      const result = await gateway.notifyOperator({
         ...params,
         sender: normalizeNotificationSenderMetadata(params.sender),
       });
+      if (result.outcome === 'unconfigured') {
+        throw new Error(result.warning);
+      }
       return { status: 'sent', topic: 'operator-alert-sinks' };
     },
   };

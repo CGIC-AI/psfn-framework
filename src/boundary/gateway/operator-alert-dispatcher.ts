@@ -27,6 +27,8 @@ export interface GatewayOperatorAlertDispatcherOptions {
   };
   telegramDock?: ChannelOutboundDock;
   telegramChatId?: string;
+  discordDock?: ChannelOutboundDock;
+  discordChannelId?: string;
   logger?: OperatorAlertLogger;
 }
 
@@ -38,12 +40,16 @@ export class GatewayOperatorAlertDispatcher {
   private readonly ntfy: GatewayOperatorAlertDispatcherOptions['ntfy'];
   private readonly telegramDock?: ChannelOutboundDock;
   private readonly telegramChatId?: string;
+  private readonly discordDock?: ChannelOutboundDock;
+  private readonly discordChannelId?: string;
   private readonly logger: OperatorAlertLogger;
 
   constructor(options: GatewayOperatorAlertDispatcherOptions) {
     this.ntfy = options.ntfy;
     this.telegramDock = options.telegramDock;
     this.telegramChatId = options.telegramChatId?.trim() || undefined;
+    this.discordDock = options.discordDock;
+    this.discordChannelId = options.discordChannelId?.trim() || undefined;
     this.logger = options.logger ?? log;
   }
 
@@ -52,6 +58,8 @@ export class GatewayOperatorAlertDispatcher {
       ntfyConfigured: this.ntfy.isConfigured(),
       telegramEnabled: this.telegramDock !== undefined,
       telegramChatId: this.telegramChatId,
+      discordEnabled: this.discordDock !== undefined,
+      discordChannelId: this.discordChannelId,
     });
   }
 
@@ -74,7 +82,11 @@ export class GatewayOperatorAlertDispatcher {
 
     const configuration = this.configuration();
     if (configuration.status === 'unconfigured') {
-      throw new Error(configuration.warning!);
+      return {
+        outcome: 'unconfigured',
+        deliveries: [],
+        warning: configuration.warning!,
+      };
     }
 
     const attempts: Array<Promise<OperatorAlertDelivery>> = [];
@@ -99,6 +111,17 @@ export class GatewayOperatorAlertDispatcher {
         this.telegramDock.outbound.sendText({ channelId: target }, content)
           .then(() => ({ sink: 'telegram' as const, status: 'sent' as const, target }))
           .catch(error => this.recordFailure('telegram', error, sender.provenance)),
+      );
+    }
+
+    if (this.discordDock && this.discordChannelId) {
+      const target = `discord:${this.discordChannelId}`;
+      const title = params.title?.trim();
+      const content = title ? `**${escapeDiscordMarkdown(title)}**\n\n${message}` : message;
+      attempts.push(
+        this.discordDock.outbound.sendText({ channelId: target }, content)
+          .then(() => ({ sink: 'discord' as const, status: 'sent' as const, target }))
+          .catch(error => this.recordFailure('discord', error, sender.provenance)),
       );
     }
 
@@ -130,4 +153,8 @@ export class GatewayOperatorAlertDispatcher {
 
 function escapeTelegramMarkdown(value: string): string {
   return value.replace(/([\\_*[\]`])/g, '\\$1');
+}
+
+function escapeDiscordMarkdown(value: string): string {
+  return value.replace(/([\\_*~|`])/g, '\\$1');
 }

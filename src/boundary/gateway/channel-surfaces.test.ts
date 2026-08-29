@@ -4,6 +4,7 @@ import {
   resolveDiscordPrimaryUsers,
   resolveChannelSurfaceCompanionId,
   resolveChannelIntakeScreening,
+  resolveGatewayDiscordOperatorAlertSurface,
   wireGatewayChannelMessages,
   type WireGatewayChannelMessagesInput,
 } from './channel-surfaces.js';
@@ -211,6 +212,30 @@ describe('wireGatewayChannelMessages', () => {
       idempotencyKey: 'multica-channel:heartbeat',
     });
   });
+
+  it('preserves the gateway receiver when a plugin raises an operator alert', async () => {
+    const setup = await createInput();
+    const dispatch = vi.fn(async () => ({
+      deliveries: [{ sink: 'ntfy' as const, status: 'sent' as const }],
+    }));
+    setup.input.gateway = fromAny({
+      notifyChannelMessage: vi.fn(() => 1),
+      requestAgentVoiceStream: vi.fn(),
+      operatorAlertDispatcher: { dispatch },
+      async notifyOperator(params: unknown) {
+        return await this.operatorAlertDispatcher.dispatch(params);
+      },
+    });
+    wireGatewayChannelMessages(setup.input);
+
+    await setup.multicaAlertHandler?.({
+      title: 'Multica channel stopped',
+      message: 'Heartbeat failed after 3 attempts',
+      idempotencyKey: 'multica-channel:heartbeat',
+    });
+
+    expect(dispatch).toHaveBeenCalledOnce();
+  });
 });
 
 describe('wireGatewayChannelMessages multi-account discord (W1-P2)', () => {
@@ -411,5 +436,42 @@ describe('gateway channel surface routing', () => {
       explicitCompanionId: undefined,
       surface: 'discord',
     })).toThrow('Multi-companion discord surface is missing companionId routing');
+  });
+});
+
+describe('Discord operator alert surface composition', () => {
+  const shared = fromAny({ id: 'discord', outbound: {} });
+  const operatorAccount = fromAny({ id: 'discord:operator-bot', outbound: {} });
+
+  it('does not infer an alert sink from an ordinary Discord surface', () => {
+    expect(resolveGatewayDiscordOperatorAlertSurface({ discord: shared }, undefined))
+      .toBeUndefined();
+  });
+
+  it('selects only the explicitly designated Discord account', () => {
+    expect(resolveGatewayDiscordOperatorAlertSurface({
+      discord: shared,
+      discordAccounts: [{
+        accountId: 'operator-bot',
+        companionId: createCompanionId('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'),
+        adapter: operatorAccount,
+      }],
+    }, {
+      accountId: 'operator-bot',
+      channelId: '222222222222222222',
+    })).toEqual({
+      dock: operatorAccount,
+      channelId: '222222222222222222',
+    });
+  });
+
+  it('fails closed when the designated Discord account has no runtime adapter', () => {
+    expect(() => resolveGatewayDiscordOperatorAlertSurface({
+      discord: shared,
+      discordAccounts: [],
+    }, {
+      accountId: 'missing-bot',
+      channelId: '222222222222222222',
+    })).toThrow('Discord operator alert account "missing-bot" has no runtime adapter');
   });
 });

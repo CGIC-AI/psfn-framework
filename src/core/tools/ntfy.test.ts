@@ -4,6 +4,7 @@ import { describe, it, expect, expectTypeOf, vi } from 'vitest';
 import {
   createGatewayClarificationPort,
   createGatewayDiscordNotifySender,
+  createGatewayOperatorNotificationPort,
   createHttpNotificationPortFromEnv,
   createNotifyDispatcher,
   createNotifyTool,
@@ -33,6 +34,24 @@ const systemApprovalSender = {
 function resultText(result: { content: Array<{ type: string; text: string }> }): string {
   return result.content[0]?.text ?? '';
 }
+
+describe('gateway operator notification port', () => {
+  it('keeps a typed unconfigured outcome retryable for durable alert producers', async () => {
+    const port = createGatewayOperatorNotificationPort({
+      notifyOperator: vi.fn(async () => ({
+        outcome: 'unconfigured' as const,
+        deliveries: [] as [],
+        warning: 'Operator alerting has zero configured sinks; alerts cannot leave the runtime.',
+      })),
+    });
+
+    await expect(port.notify({
+      sender: systemApprovalSender,
+      message: 'Approval is waiting',
+      priority: 5,
+    })).rejects.toThrow('Operator alerting has zero configured sinks');
+  });
+});
 
 describe('notify tool', () => {
   it('keeps strict execution branches while exposing a flat model-facing schema', () => {

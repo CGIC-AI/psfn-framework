@@ -280,6 +280,9 @@ export interface GatewayServerOptions extends OptionalCompanionRoutingBinding {
   telegramDock?: ChannelOutboundDock;
   /** Numeric Telegram destination for secondary system/operator alerts. */
   operatorTelegramChatId?: string;
+  /** Explicit Discord system-alert outbound identity and destination. */
+  operatorDiscordDock?: ChannelOutboundDock;
+  operatorDiscordChannelId?: string;
   gitOps?: GitOperations;
   imageConfig?: ImageRuntimeConfig;
   modelUsageRecorder?: ModelUsageRecorder;
@@ -628,6 +631,10 @@ export class GatewayServer {
       ...(options.operatorTelegramChatId
         ? { telegramChatId: options.operatorTelegramChatId }
         : {}),
+      ...(options.operatorDiscordDock ? { discordDock: options.operatorDiscordDock } : {}),
+      ...(options.operatorDiscordChannelId
+        ? { discordChannelId: options.operatorDiscordChannelId }
+        : {}),
     });
     this.inboundChannelReplay = new GatewayInboundChannelReplay({
       onDrop: drop => this.alertInboundChannelDrop(drop),
@@ -676,6 +683,8 @@ export class GatewayServer {
     });
     this.runtimeHealthTracker = new GatewayRuntimeHealthTracker({
       ntfyConfigured: Boolean(options.ntfy),
+      operatorAlertingConfigured:
+        this.operatorAlertDispatcher.configuration().status === 'configured',
       approvalNotificationConfigured: Boolean(
         options.confirmation?.operatorDiscordChannelId?.trim()
         || this.ntfyNotifier.hasConfiguredTopic(options.confirmation?.ntfyTopic),

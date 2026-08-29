@@ -2,7 +2,7 @@
 
 This directory holds the L1 activation instrument for the emotion measurement
 cascade described in
-[`docs/EMOTION_MEASUREMENT_EVAL_HARNESS_PLAYBOOK.md`](../../../docs/EMOTION_MEASUREMENT_EVAL_HARNESS_PLAYBOOK.md):
+[`docs/EMOTION_MEASUREMENT_EVAL_HARNESS_PLAYBOOK.md`](../../docs/EMOTION_MEASUREMENT_EVAL_HARNESS_PLAYBOOK.md):
 the **Jacobian lens** (J-lens) and the **J-space** consistency battery.
 
 The J-lens linearly transports a residual-stream activation at any layer into

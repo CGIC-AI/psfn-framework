@@ -1,10 +1,10 @@
 {
   "schemaVersion": 1,
-  "bundleVersion": "companion-library-v3",
+  "bundleVersion": "companion-library-v4",
   "files": [
     {
       "path": "welcome.md",
-      "sha256": "803fef4eb125b4793a9771a2724fb7798a2ce1cef3e65ddfbc0d69cc78a9a54a"
+      "sha256": "4988ecee77d1eeb07fd4ea35acb649a42b8894b527713baa8dfd0427fa9ccd28"
     },
     {
       "path": "privacy-boundary-reference.md",

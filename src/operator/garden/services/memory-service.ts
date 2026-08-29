@@ -64,6 +64,7 @@ import { MemoryWriter, MemoryCandidacyPolicyError } from '../../../faculties/mem
 import type { CompanionRoomMembershipAuthority } from '../../../faculties/memory/companion-provenance.js';
 import type { GardenRequestContext } from '../garden-request-context.js';
 import type { FleetGardenRequestContext } from '../garden-request-context.js';
+import { partitionMemoriesByLifecycle } from '../../../faculties/memory/current-memory.js';
 
 const log = createComponentLogger('AdminMemoryService');
 
@@ -135,14 +136,6 @@ function parseDateFilter(value: string | null | undefined, boundary: 'start' | '
 
 function memoryTimestamp(memory: { extractedAt?: number; createdAt?: number }): number {
   return memory.extractedAt ?? memory.createdAt ?? 0;
-}
-
-function isNullish(value: unknown): boolean {
-  return Object.is(value, null) || Object.is(value, undefined);
-}
-
-function isActiveMemoryView(memory: { supersededBy?: unknown; deletedAt?: unknown }): boolean {
-  return isNullish(memory.supersededBy) && isNullish(memory.deletedAt);
 }
 
 function parsePositiveInteger(
@@ -764,6 +757,13 @@ export class AdminMemoryDataService implements AdminMemoryService {
         results: [],
         contactsById: await this.buildContactSummaryMap(),
         privacySummary: buildPrivacySummary(privacySummary, 0, 0),
+        diagnostics: {
+          outcome: 'schema_unavailable',
+          currentMatchCount: 0,
+          lifecycle: { tombstonedCount: 0, supersededCount: 0 },
+          ...(this.canReadSearchDiagnostics() ? { privacyWithheldCount: 0 } : {}),
+          schema: 'unavailable',
+        },
         elevation: this.elevationStatusForResponse(sessionKey),
       };
     }
@@ -781,17 +781,64 @@ export class AdminMemoryDataService implements AdminMemoryService {
     // of this stance; the standalone operator session uses the raw store behind the
     // body-elevation gate, so this is an explicit, auditable system-internal
     // opt-out rather than a product-recall path.
-    const results = (await this.deps.memoryStore
-      .searchByEmbedding(embedding, 0.1, 50, undefined, { authorization: 'bypass-system-internal' }))
-      .filter(isActiveMemoryView)
+    const projectedCandidates = await this.deps.memoryStore
+      .searchByEmbedding(embedding, 0.1, 50, undefined, { authorization: 'bypass-system-internal' });
+    const diagnosticCandidates = await this.searchDiagnosticCandidates(embedding, projectedCandidates);
+    const projectedLifecycle = partitionMemoriesByLifecycle(projectedCandidates);
+    const diagnosticLifecycle = partitionMemoriesByLifecycle(diagnosticCandidates);
+    const results = projectedLifecycle.current
       .filter(memory => !isInternalMemoryArtifact(memory));
+    const visibleCurrentIds = new Set(projectedLifecycle.current.map(memory => memory.id));
+    const privacyWithheldCount = this.canReadSearchDiagnostics()
+      ? diagnosticLifecycle.current.filter(memory => !visibleCurrentIds.has(memory.id)).length
+      : undefined;
+    const outcome = results.length > 0
+      ? 'matches' as const
+      : diagnosticLifecycle.tombstoned.length + diagnosticLifecycle.superseded.length > 0
+        ? 'lifecycle_only' as const
+        : privacyWithheldCount !== undefined && privacyWithheldCount > 0
+          ? 'privacy_withheld' as const
+          : 'absent' as const;
     return {
       query,
       results: await Promise.all(results.map(memory => this.toRequestMemoryView(sessionKey, memory))),
       contactsById: await this.buildContactSummaryMap(),
       privacySummary: buildPrivacySummary(privacySummary, results.length, results.length),
+      diagnostics: {
+        outcome,
+        currentMatchCount: results.length,
+        lifecycle: {
+          tombstonedCount: diagnosticLifecycle.tombstoned.length,
+          supersededCount: diagnosticLifecycle.superseded.length,
+        },
+        ...(privacyWithheldCount !== undefined ? { privacyWithheldCount } : {}),
+        schema: 'available',
+      },
       elevation: this.elevationStatusForResponse(sessionKey),
     };
+  }
+
+  private canReadSearchDiagnostics(): boolean {
+    return this.requestContext === undefined
+      || this.requestContext.kind === 'standalone_token'
+      || (this.requestContext.kind === 'fleet_principal'
+        && this.requestContext.actor.role === 'owner');
+  }
+
+  private async searchDiagnosticCandidates(
+    embedding: Float32Array,
+    projectedCandidates: Awaited<ReturnType<MemoryStorePort['searchByEmbedding']>>,
+  ): Promise<Awaited<ReturnType<MemoryStorePort['searchByEmbedding']>>> {
+    if (!this.canReadSearchDiagnostics()) return projectedCandidates;
+    const rawStore = this.deps.fleetMemoryStore;
+    if (!rawStore || rawStore === this.deps.memoryStore) return projectedCandidates;
+    return await rawStore.searchByEmbedding(
+      embedding,
+      0.1,
+      50,
+      undefined,
+      { authorization: 'bypass-system-internal' },
+    );
   }
 
   async sharedBackground(

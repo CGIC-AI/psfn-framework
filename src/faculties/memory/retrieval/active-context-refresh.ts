@@ -156,7 +156,6 @@ export function finalizeRetrievalPromptBlock(
   const block = renderPromptBlock(input.recentContactShape, input.selectedForPrompt ?? [], {
     emotionalSnapshot: input.emotionalSnapshot,
     emotionalContinuityMemories: input.emotionalContinuityMemories,
-    withheldSummary: input.withheldSummary,
     socialContext: input.socialContext,
     contactContextById: input.contactContextById,
     episodicChains: input.episodicChains,
@@ -342,7 +341,6 @@ function applyActiveMemoryContextRefresh(
   const contextBlock = renderPromptBlock(recentContactShape, selectedForActivePrompt, {
     emotionalSnapshot,
     emotionalContinuityMemories,
-    withheldSummary,
     socialContext,
     contactContextById,
     episodicChains,

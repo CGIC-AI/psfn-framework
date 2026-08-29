@@ -1161,7 +1161,7 @@ describe('MemoryRetriever trust-gated filtering', () => {
     ))).rejects.toThrow('trusted audience=self free-time context');
   });
 
-  it('expands bounded evolution chains for useful high-trust private retrieval', async () => {
+  it('does not expand superseded bodies even for evolution-history prompts', async () => {
     const current = makeMemory({
       id: 'workspace-current',
       text: 'Current workspace is /home/user/new.',
@@ -1197,7 +1197,7 @@ describe('MemoryRetriever trust-gated filtering', () => {
     const result = await retriever.retrieve('what changed in the workspace history?', 'api:test', 'primary');
 
     expect(result).toContain('Current workspace is /home/user/new.');
-    expect(result).toContain('Supersedes [semantic] Current workspace is /home/user/old.');
+    expect(result).not.toContain('Current workspace is /home/user/old.');
   });
 
   it('does not expand evolution chains for non-useful retrieval prompts', async () => {
@@ -1250,7 +1250,7 @@ describe('MemoryRetriever trust-gated filtering', () => {
     expect(result).not.toContain('Confidential secret');
   });
 
-  it('explains withheld memories with abstract reasons in the memory context block', async () => {
+  it('keeps withheld diagnostics internal instead of exposing them in the memory context block', async () => {
     const memories = [
       makeMemory({ text: 'Public fact', sensitivity: 'public', similarity: 0.95 }),
       makeMemory({ text: 'Intimate detail', sensitivity: 'intimate', similarity: 0.9 }),
@@ -1275,12 +1275,9 @@ describe('MemoryRetriever trust-gated filtering', () => {
 
     expect(result).toContain('Public fact');
     expect(result).not.toContain('Intimate detail');
-    expect(result).toContain('Memory context note:');
-    expect(result).toContain('1 candidate memory was kept out');
-    expect(result).toContain('Broad trust/privacy reasons: 1 trust ceiling.');
-    expect(result).toContain('Coarse relevance bands: 1 high-match.');
-    expect(result).toContain('trust ceiling');
-    expect(result).toContain('Safe next actions: do not infer or disclose missing details');
+    expect(result).not.toContain('Memory context note:');
+    expect(result).not.toContain('candidate memory was kept out');
+    expect(result).not.toContain('trust ceiling');
   });
 
   it('public trust + broadcast channel returns only public memories', async () => {
@@ -2159,7 +2156,7 @@ describe('MemoryRetriever trust-gated filtering', () => {
     );
   });
 
-  it('downranks superseded memories relative to supported alternatives', async () => {
+  it('filters superseded and tombstoned memories before ordinary retrieval', async () => {
     const memories = [
       makeMemory({
         text: 'Superseded memory candidate',
@@ -2179,18 +2176,24 @@ describe('MemoryRetriever trust-gated filtering', () => {
         importance: 0.9,
         salience: 0.9,
       }),
+      makeMemory({
+        text: 'Deleted memory candidate',
+        sensitivity: 'public',
+        deletedAt: Date.now(),
+        similarity: 0.99,
+      }),
     ];
     const store = makeMockStore(memories);
     const embedding = makeMockEmbedding();
     const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 });
 
     const result = await retriever.retrieve('memory check', 'api:test', 'primary');
-    expect(result.indexOf('Current stable memory candidate')).toBeLessThan(
-      result.indexOf('Superseded memory candidate'),
-    );
+    expect(result).toContain('Current stable memory candidate');
+    expect(result).not.toContain('Superseded memory candidate');
+    expect(result).not.toContain('Deleted memory candidate');
   });
 
-  it('returns an abstract withheld-memory note when all memories are filtered out by trust', async () => {
+  it('does not expose whether matching memories were filtered out by trust', async () => {
     const memories = [
       makeMemory({ text: 'Secret stuff', sensitivity: 'confidential', similarity: 0.95 }),
       makeMemory({ text: 'Private detail', sensitivity: 'intimate', similarity: 0.90 }),
@@ -2202,14 +2205,10 @@ describe('MemoryRetriever trust-gated filtering', () => {
     // public trust + broadcast = only public allowed, none present
     const result = await retriever.retrieve('test query', 'twitter:feed', 'public');
 
-    expect(result).toContain('Memory context note:');
-    expect(result).toContain('2 candidate memories were kept out');
-    expect(result).toContain('trust ceiling');
-    expect(result).not.toContain('Secret stuff');
-    expect(result).not.toContain('Private detail');
+    expect(result).toBe('');
   });
 
-  it('distinguishes no matching memories from matching memories withheld by trust gates', async () => {
+  it('makes no match and a trust-withheld-only match indistinguishable to chat callers', async () => {
     const emptyRetriever = new MemoryRetriever(makeMockStore([]), makeMockEmbedding(), { retrievalLimit: 20 });
     const gatedMemory = makeMemory({
       text: 'Protected matching detail that must not leak.',
@@ -2225,14 +2224,11 @@ describe('MemoryRetriever trust-gated filtering', () => {
     const emptyResult = await emptyRetriever.retrieve('protected detail', 'twitter:feed', 'public');
     const gatedResult = await gatedRetriever.retrieve('protected detail', 'twitter:feed', 'public');
 
-    expect(emptyResult).toBe('');
-    expect(gatedResult).toContain('Memory context note:');
-    expect(gatedResult).toContain('1 candidate memory was kept out');
-    expect(gatedResult).toContain('Coarse relevance bands: 1 high-match.');
-    expect(gatedResult).not.toContain(gatedMemory.text);
+    expect(gatedResult).toBe(emptyResult);
+    expect(gatedResult).toBe('');
   });
 
-  it('keeps the withheld-memory summary bounded when many relevant memories are gated', async () => {
+  it('does not expose a bounded count when many relevant memories are gated', async () => {
     const memories = Array.from({ length: 80 }, (_, idx) => makeMemory({
       text: `Protected gated detail ${idx}`,
       sensitivity: 'confidential',
@@ -2242,11 +2238,7 @@ describe('MemoryRetriever trust-gated filtering', () => {
 
     const result = await retriever.retrieve('protected gated detail', 'twitter:feed', 'public');
 
-    expect(result).toContain('80 candidate memories were kept out');
-    expect(result).toContain('Coarse relevance bands: 20 high-match, 30 medium-match, 30 low-match.');
-    expect(result).not.toContain('Protected gated detail 0');
-    expect(result).not.toContain('Protected gated detail 79');
-    expect(result.length).toBeLessThan(700);
+    expect(result).toBe('');
   });
 
   it('does not update access stats for filtered-out memories', async () => {
@@ -3620,7 +3612,7 @@ describe('MemoryRetriever retrieval trace telemetry', () => {
     expect(telemetry.lowConfidenceSuppressedCount).toBeGreaterThanOrEqual(1);
   });
 
-  it('counts superseded memories in contradiction diagnostics telemetry', async () => {
+  it('excludes superseded memories from ordinary candidate and contradiction counts', async () => {
     const memories = [
       makeMemory({
         text: 'Superseded memory with stale details',
@@ -3642,12 +3634,14 @@ describe('MemoryRetriever retrieval trace telemetry', () => {
     const eventBus = makeMockEventBus();
     const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 }, eventBus);
 
-    await retriever.retrieve('general status', 'api:test', 'primary');
+    const result = await retriever.retrieve('general status', 'api:test', 'primary');
 
     const calls = ((eventBus.emit as unknown) as ReturnType<typeof vi.fn>).mock.calls;
     expect(calls).toHaveLength(1);
     const telemetry = calls[0][1] as Record<string, unknown>;
-    expect(telemetry.contradictionAdjustedCount).toBeGreaterThanOrEqual(1);
+    expect(result).not.toContain('Superseded memory with stale details');
+    expect(telemetry.candidateCount).toBe(1);
+    expect(telemetry.contradictionAdjustedCount).toBe(0);
   });
 
   it('emits telemetry with pipeline stage counts for trust-filtered scenario', async () => {
@@ -3769,6 +3763,76 @@ describe('MemoryRetriever room-scoped visibility', () => {
       'room_visibility.blocked': 2,
     });
     expect(telemetry.policyAllowedCount).toBe(1);
+  });
+
+  it('does not let a cross-room-only match enumerate another room and preserves same-room recall after restart', async () => {
+    const { contactStore, morganId } = await makeRoomVisibilityContactStore();
+    await contactStore.recordChannelActivity(morganId, 'discord', GROUP_ROOM_X, 'invite_only');
+    await contactStore.recordChannelActivity(morganId, 'discord', GROUP_ROOM_Y, 'invite_only');
+    const sameRoomMemory = makeMemory({
+      id: 'restart-room-x-memory',
+      text: 'Room X restart-safe answer is cobalt.',
+      sensitivity: 'public',
+      provenance: { channelId: GROUP_ROOM_X },
+      scopeRef: { kind: 'conversation', id: GROUP_ROOM_X },
+      similarity: 0.97,
+    });
+    const crossRoomMemory = makeMemory({
+      id: 'enumeration-room-y-memory',
+      text: 'Room Y protected answer is saffron.',
+      sensitivity: 'public',
+      provenance: { channelId: GROUP_ROOM_Y },
+      scopeRef: { kind: 'conversation', id: GROUP_ROOM_Y },
+      similarity: 0.99,
+    });
+    const store = makeMockStore([sameRoomMemory, crossRoomMemory]);
+    const firstRetriever = new MemoryRetriever(
+      store,
+      makeMockEmbedding(),
+      { retrievalLimit: 20 },
+      makeMockEventBus(),
+      contactStore,
+    );
+    const first = await firstRetriever.retrieve(
+      'restart-safe answer',
+      GROUP_ROOM_X,
+      'primary',
+      { isDirectMessage: false, privacyLevel: 'invite_only' },
+      morganId,
+    );
+    const restartedRetriever = new MemoryRetriever(
+      store,
+      makeMockEmbedding(),
+      { retrievalLimit: 20 },
+      makeMockEventBus(),
+      contactStore,
+    );
+    const afterRestart = await restartedRetriever.retrieve(
+      'restart-safe answer',
+      GROUP_ROOM_X,
+      'primary',
+      { isDirectMessage: false, privacyLevel: 'invite_only' },
+      morganId,
+    );
+    const crossRoomOnly = await new MemoryRetriever(
+      makeMockStore([crossRoomMemory]),
+      makeMockEmbedding(),
+      { retrievalLimit: 20 },
+      makeMockEventBus(),
+      contactStore,
+    ).retrieve(
+      'protected answer',
+      GROUP_ROOM_X,
+      'primary',
+      { isDirectMessage: false, privacyLevel: 'invite_only' },
+      morganId,
+    );
+
+    expect(first).toContain('Room X restart-safe answer is cobalt.');
+    expect(afterRestart).toContain('Room X restart-safe answer is cobalt.');
+    expect(first).not.toContain('Room Y protected answer is saffron.');
+    expect(afterRestart).not.toContain('Room Y protected answer is saffron.');
+    expect(crossRoomOnly).toBe('');
   });
 
   it('allows same-room personal memories for regular contacts without trust ceiling rejection', async () => {

@@ -17,6 +17,7 @@ import type {
   MemoryProvenance,
   RetrievalAccessScope,
 } from './types.js';
+import { isCurrentMemory } from './current-memory.js';
 import {
   VALID_MEMORY_TYPES,
   VALID_MEMORY_SCOPE_KINDS,
@@ -43,6 +44,7 @@ import {
   type EpisodicTimelineStore,
 } from './retrieval/episodic.js';
 import {
+  filterQuarantinedMemories,
   filterQuarantinedEpisodicChains,
   isEpisodeArcQuarantined,
   isEpisodeQuarantined,
@@ -936,24 +938,24 @@ export function createMemoryTool(
         Type.String({ description: 'For action=timeline, inclusive range end as YYYY-MM-DD or ISO-8601 timestamp with timezone.' }),
       ),
       channel_id: Type.Optional(
-        Type.String({ description: 'For action=episode_search, action=get, action=census, action=exists, or action=timeline, current channel id. Usually supplied by runtime context.' }),
+        Type.String({ description: 'For action=search, action=episode_search, action=get, action=census, action=exists, or action=timeline, current channel id. Usually supplied by runtime context.' }),
       ),
       trust_level: Type.Optional(
         Type.Unsafe<TrustLevel>({
           type: 'string',
           enum: [...TRUST_LEVELS],
-          description: 'For action=episode_search, action=get, action=census, action=exists, or action=timeline, current viewer trust level. Usually supplied by runtime context.',
+          description: 'For action=search, action=episode_search, action=get, action=census, action=exists, or action=timeline, current viewer trust level. Usually supplied by runtime context.',
         }),
       ),
       channel_visibility: Type.Optional(
         Type.Unsafe<ChannelPrivacy>({
           type: 'string',
           enum: [...CHANNEL_PRIVACY_VALUES],
-          description: 'For action=episode_search, action=get, action=census, action=exists, or action=timeline, current channel visibility. Usually supplied by runtime context.',
+          description: 'For action=search, action=episode_search, action=get, action=census, action=exists, or action=timeline, current channel visibility. Usually supplied by runtime context.',
         }),
       ),
       canonical_contact_id: Type.Optional(
-        Type.String({ description: 'For action=episode_search, action=get, action=census, action=exists, or action=timeline, optional canonical contact id for trusted cross-channel continuity. Runtime ingress remains authoritative.' }),
+        Type.String({ description: 'For action=search, action=episode_search, action=get, action=census, action=exists, or action=timeline, optional canonical contact id for trusted cross-channel continuity. Runtime ingress remains authoritative.' }),
       ),
       contact_a: Type.Optional(
         Type.String({ description: 'Required for action=shared_background. First contact id of the pair to find shared background for.' }),
@@ -1108,7 +1110,21 @@ export function createMemoryTool(
             const limit = normalizedParams.limit === undefined
               ? MEMORY_SEARCH_DEFAULT_LIMIT
               : clampInt(normalizedParams.limit, 1, MEMORY_SEARCH_MAX_LIMIT);
-            const results = await memoryStore.searchByText(query, limit);
+            const visibility = resolveMemoryVisibility(normalizedParams, 'search');
+            if (!visibility.ok) {
+              return textResultWithError(visibility.error, true);
+            }
+            const current = (await memoryStore.searchByText(query, limit)).filter(isCurrentMemory);
+            const eligible = filterQuarantinedMemories(
+              options.sessionQuarantineFilter ?? null,
+              current,
+            ).memories;
+            const results = partitionVisibleMemories(eligible, {
+              trustLevel: visibility.trustLevel,
+              channelPrivacy: visibility.channelVisibility,
+              broadcast: visibility.broadcast,
+              ...(visibility.canonicalContactId ? { canonicalContactId: visibility.canonicalContactId } : {}),
+            }).visible;
             return textResult(formatMemorySearchResults(results.map(memory => ({
               id: memory.id,
               text: memory.text,
@@ -1304,14 +1320,14 @@ export function createMemoryTool(
             if (!visibility.ok) {
               return textResultWithError(visibility.error, true);
             }
-            const filterResult = resolveMemoryVisibilityFilter(normalizedParams, true);
+            const filterResult = resolveMemoryVisibilityFilter(normalizedParams, false);
             if (!filterResult.ok) {
               return textResultWithError(filterResult.error, true);
             }
             const filter: MemoryVisibilityFilter = {
               ...(filterResult.contactId ? { contactId: filterResult.contactId } : {}),
               ...(filterResult.scopeQuery ? { scopeQuery: filterResult.scopeQuery } : {}),
-              includeArchived: filterResult.includeArchived ?? true,
+              includeArchived: false,
             };
             const memories = await listFilteredMemories(memoryStore, filter);
             const partition = partitionVisibleMemories(memories, {
@@ -1339,7 +1355,7 @@ export function createMemoryTool(
             const filter: MemoryVisibilityFilter = {
               ...(filterResult.contactId ? { contactId: filterResult.contactId } : {}),
               ...(filterResult.scopeQuery ? { scopeQuery: filterResult.scopeQuery } : {}),
-              includeArchived: filterResult.includeArchived ?? false,
+              includeArchived: false,
             };
             const memories = await listFilteredMemories(memoryStore, filter);
             const matchingMemories = filterTopicMatches(memories, query);

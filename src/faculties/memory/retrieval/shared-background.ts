@@ -27,6 +27,7 @@ import type { ChannelPrivacyLevel, Contact, SocialGraphEntity } from '../../../c
 import type { MemoryStorePort } from '../memory-store-port.js';
 import type { PurrMemory } from '../types.js';
 import { isInternalMemoryArtifact } from '../internal-artifacts.js';
+import { isCurrentMemory } from '../current-memory.js';
 import { resolveMemoriesByIds } from './memory-batch.js';
 import { clamp } from './scoring.js';
 import {
@@ -275,7 +276,7 @@ export async function collectSharedBackgroundUnion(
 
   const union = new Map<string, { memory: PurrMemory; sources: Set<SharedBackgroundSource> }>();
   const addSource = (memory: PurrMemory, source: SharedBackgroundSource): void => {
-    if (isInternalMemoryArtifact(memory)) return;
+    if (!isCurrentMemory(memory) || isInternalMemoryArtifact(memory)) return;
     const existing = union.get(memory.id);
     if (existing) {
       existing.sources.add(source);
@@ -308,7 +309,6 @@ export async function collectSharedBackgroundUnion(
     // Resolve all edge-evidence memories in one authorized batch instead of one
     // sequential detail query per evidence id.
     for (const memory of await resolveMemoriesByIds(deps.memoryStore, [...evidenceIds])) {
-      if (memory.deletedAt !== undefined) continue;
       addSource(memory, 'edge_evidence');
     }
   }
@@ -317,7 +317,7 @@ export async function collectSharedBackgroundUnion(
   const sharedRooms = intersect(collectContactRoomIds(contactA), collectContactRoomIds(contactB));
   const memories = await deps.memoryStore.listMemories();
   for (const memory of memories) {
-    if (memory.deletedAt !== undefined) continue;
+    if (!isCurrentMemory(memory)) continue;
     if (memoryNamesBoth(memory, contactAId, contactBId)) {
       addSource(memory, 'co_mention');
     }

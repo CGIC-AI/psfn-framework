@@ -85,6 +85,23 @@ export interface AdminMemorySearchResult {
   results: AdminMemoryView[];
   contactsById: Map<string, AdminMemoryContactSummary>;
   privacySummary: AdminMemoryPrivacySummary;
+  /** Content-free reason buckets available only on the authenticated Garden surface. */
+  diagnostics: {
+    outcome:
+      | 'matches'
+      | 'lifecycle_only'
+      | 'privacy_withheld'
+      | 'schema_unavailable'
+      | 'absent';
+    currentMatchCount: number;
+    lifecycle: {
+      tombstonedCount: number;
+      supersededCount: number;
+    };
+    /** Omitted for principals that are not authorized to enumerate hidden subjects. */
+    privacyWithheldCount?: number;
+    schema: 'available' | 'unavailable';
+  };
   elevation: AdminMemoryElevationStatus;
 }
 

@@ -63,6 +63,7 @@ import {
   cloneScoredMemory,
 } from '../../core/turns/snapshot.js';
 import { isInternalMemoryArtifact } from './internal-artifacts.js';
+import { isCurrentMemory, partitionMemoriesByLifecycle } from './current-memory.js';
 import {
   cloneMemoryWithheldSummary,
   type MemoryWithheldSummary,
@@ -189,6 +190,8 @@ import type {
 } from './retrieval/types.js';
 import type { RolledOutSessionBoundary } from '../../core/session/rolled-out-session-boundary.js';
 const log = createComponentLogger('Retrieval');
+
+type CurrentMemoryCandidate = MemoryQuarantineCandidate & Pick<PurrMemory, 'deletedAt' | 'supersededBy'>;
 
 type RetrievalIntegrityErrorStage =
   | 'retrieve'
@@ -360,10 +363,11 @@ export class MemoryRetriever implements MemoryProvider {
     });
   }
 
-  private filterIneligibleMemories<T extends MemoryQuarantineCandidate>(
+  private filterIneligibleMemories<T extends CurrentMemoryCandidate>(
     memories: readonly T[],
   ): { memories: T[]; summary?: MemoryWithheldSummary; withheldIds: string[] } {
-    const quarantine = filterQuarantinedMemories(this.sessionQuarantineFilter, memories);
+    const lifecycle = partitionMemoriesByLifecycle(memories);
+    const quarantine = filterQuarantinedMemories(this.sessionQuarantineFilter, lifecycle.current);
     const owned: T[] = [];
     const withheldIds = new Set(quarantine.withheldIds);
     for (const memory of quarantine.memories) {
@@ -384,8 +388,9 @@ export class MemoryRetriever implements MemoryProvider {
     };
   }
 
-  private isMemoryUnavailable(memory: MemoryQuarantineCandidate): boolean {
-    return isMemoryQuarantined(this.sessionQuarantineFilter, memory)
+  private isMemoryUnavailable(memory: CurrentMemoryCandidate): boolean {
+    return !isCurrentMemory(memory)
+      || isMemoryQuarantined(this.sessionQuarantineFilter, memory)
       || !isMemoryOwnedByCompanion(
         memory,
         this.runtimeConfig?.companionId,

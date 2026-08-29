@@ -115,7 +115,7 @@ describe('memory tool action=shared_background', () => {
     expect(text.indexOf('[edge-evidence]')).toBeLessThan(text.indexOf('[shared-room]'));
   });
 
-  it('withholds with reason codes from a low-trust public context', async () => {
+  it('does not reveal withheld existence to a low-trust public context', async () => {
     const tool = makeFixtureTool();
     const result = await tool.execute('call-2', {
       action: 'shared_background',
@@ -127,8 +127,9 @@ describe('memory tool action=shared_background', () => {
     });
     const text = resultText(fromAny(result));
     expect(text).toContain('No shared-background memories are visible');
-    expect(text).toContain('Withheld context: 2');
-    expect(text).toContain('trust ceiling');
+    expect(text).not.toContain('Withheld context');
+    expect(text).not.toContain('trust ceiling');
+    expect(text).not.toContain('candidate');
     // No memory bodies leak.
     expect(text).not.toContain('A and B met at the conference');
     expect(text).not.toContain('overheard exchange');

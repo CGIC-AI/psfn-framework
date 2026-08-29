@@ -182,11 +182,58 @@ describe('AdminMemoryDataService', () => {
       },
     });
     expect(result.results.map(memory => memory.id)).toEqual(['visible-search-result']);
+    expect(result.diagnostics).toEqual({
+      outcome: 'matches',
+      currentMatchCount: 1,
+      lifecycle: { tombstonedCount: 1, supersededCount: 1 },
+      privacyWithheldCount: 0,
+      schema: 'available',
+    });
     expect(result.privacySummary).toMatchObject({
       activeMemoryCount: 4,
       matchingMemoryCount: 1,
       pageMemoryCount: 1,
     });
+  });
+
+  it('distinguishes lifecycle-only, schema-unavailable, and absent Garden search outcomes without bodies', async () => {
+    const deleted = makeMemory('deleted-only', { text: 'Protected deleted body', deletedAt: 1 });
+    const lifecycleStore = {
+      getAdminMemoryPrivacySummary: vi.fn(async () => makePrivacySummary()),
+      searchByEmbedding: vi.fn(async () => [{ ...deleted, similarity: 0.99 }]),
+    } as unknown as MemoryStorePort;
+    const embeddingService: EmbeddingProviderPort = {
+      dims: 3,
+      embed: vi.fn(async () => new Float32Array([0.1, 0.2, 0.3])),
+      embedBatch: vi.fn(async () => []),
+    };
+
+    const lifecycle = await new AdminMemoryDataService({
+      memoryStore: lifecycleStore,
+      embeddingService,
+    }).forSession(OPERATOR_SESSION).searchMemories('deleted topic');
+    expect(lifecycle.results).toEqual([]);
+    expect(lifecycle.diagnostics).toEqual({
+      outcome: 'lifecycle_only',
+      currentMatchCount: 0,
+      lifecycle: { tombstonedCount: 1, supersededCount: 0 },
+      privacyWithheldCount: 0,
+      schema: 'available',
+    });
+    expect(JSON.stringify(lifecycle)).not.toContain('Protected deleted body');
+
+    const noEmbedding = await new AdminMemoryDataService({
+      memoryStore: lifecycleStore,
+    }).forSession(OPERATOR_SESSION).searchMemories('schema status');
+    expect(noEmbedding.diagnostics.outcome).toBe('schema_unavailable');
+    expect(noEmbedding.diagnostics.schema).toBe('unavailable');
+
+    vi.mocked(lifecycleStore.searchByEmbedding).mockResolvedValue([]);
+    const absent = await new AdminMemoryDataService({
+      memoryStore: lifecycleStore,
+      embeddingService,
+    }).forSession(OPERATOR_SESSION).searchMemories('absent topic');
+    expect(absent.diagnostics.outcome).toBe('absent');
   });
 
   it('pages managed-scope memory scans past the store page clamp', async () => {
@@ -561,6 +608,44 @@ describe('AdminMemoryDataService fleet escalation-only elevation signal', () => 
     expect(service.getBodyElevationStatus(null)).toEqual({ elevated: false, ttlMs: 0 });
     const list = await service.listMemories(null);
     expect(list.elevation).toEqual({ elevated: false, ttlMs: 0 });
+  });
+
+  it('reports privacy-withheld matches only to an owner diagnostic projection and returns no body', async () => {
+    const protectedMemory = makeMemory('privacy-hidden', { text: 'Protected owner-only body' });
+    const projectedStore = {
+      getAdminMemoryPrivacySummary: vi.fn(async () => makePrivacySummary()),
+      searchByEmbedding: vi.fn(async () => []),
+    } as unknown as MemoryStorePort;
+    const fleetMemoryStore = {
+      searchByEmbedding: vi.fn(async () => [{ ...protectedMemory, similarity: 0.99 }]),
+    } as unknown as MemoryStorePort;
+    const embeddingService: EmbeddingProviderPort = {
+      dims: 3,
+      embed: vi.fn(async () => new Float32Array([0.1, 0.2, 0.3])),
+      embedBatch: vi.fn(async () => []),
+    };
+    const memberContext = fleetContext();
+    const ownerContext: FleetGardenRequestContext = Object.freeze({
+      ...memberContext,
+      actor: Object.freeze({ ...memberContext.actor, role: 'owner' as const }),
+    });
+    const owner = new AdminMemoryDataService({
+      memoryStore: projectedStore,
+      fleetMemoryStore,
+      embeddingService,
+    }, undefined, ownerContext);
+
+    const result = await owner.searchMemories(null, 'protected topic');
+
+    expect(result.results).toEqual([]);
+    expect(result.diagnostics).toEqual({
+      outcome: 'privacy_withheld',
+      currentMatchCount: 0,
+      lifecycle: { tombstonedCount: 0, supersededCount: 0 },
+      privacyWithheldCount: 1,
+      schema: 'available',
+    });
+    expect(JSON.stringify(result)).not.toContain('Protected owner-only body');
   });
 
   it('keeps the real body-gate window for the standalone operator session', async () => {

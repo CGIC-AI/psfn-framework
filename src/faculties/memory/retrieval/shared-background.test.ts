@@ -175,6 +175,22 @@ describe('collectSharedBackgroundUnion', () => {
     expect(both?.sources).toEqual(['edge_evidence', 'co_mention']);
   });
 
+  it('excludes tombstoned and superseded memories from every union source', async () => {
+    const fixture = baseFixture();
+    fixture.memories = fixture.memories.map(memory => {
+      if (memory.id === 'mem-evidence') return { ...memory, deletedAt: 2_000 };
+      if (memory.id === 'mem-comention') return { ...memory, supersededBy: 'mem-current' };
+      return memory;
+    });
+
+    const union = await collectSharedBackgroundUnion(makeDeps(fixture), {
+      contactAId: 'contact-a',
+      contactBId: 'contact-b',
+    });
+
+    expect(union.candidates.map(candidate => candidate.memory.id)).toEqual(['mem-room']);
+  });
+
   it('reports unresolved contacts without leaking a union', async () => {
     const fixture = baseFixture();
     const union = await collectSharedBackgroundUnion(makeDeps(fixture), {

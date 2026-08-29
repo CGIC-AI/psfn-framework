@@ -17,6 +17,7 @@ describe('startup surface hygiene', () => {
     const scripts = packageJson.scripts ?? {};
     const readme = readRepoFile('README.md');
     const specifications = readRepoFile('docs/specifications.md');
+    const normalizedSpecifications = specifications.replace(/\s+/g, ' ');
     const architecture = readRepoFile('docs/architecture.md');
     const indexEntrypoint = readRepoFile('src/app/startup/index.ts');
     const removedRuntimeFile = ['runtime', '.ts'].join('');
@@ -54,7 +55,9 @@ describe('startup surface hygiene', () => {
     expect(readme).toContain('npm run local:up && npm run local:verify');
     expect(readme).toContain('npm run helm:up');
     expect(readme).toContain('npm run helm:verify');
-    expect(specifications).toContain('split gateway + agent');
+    expect(normalizedSpecifications).toContain(
+      'The split runtime — privileged gateway, isolated agent (Companion Core), operator Garden plane',
+    );
     expect(specifications).toContain('`src/app/startup/index.ts` is disabled');
     expect(architecture).toContain('`src/app/startup/index.ts` is disabled');
     expect(indexEntrypoint).toContain('This entrypoint is disabled.');

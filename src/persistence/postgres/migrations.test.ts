@@ -338,8 +338,10 @@ describe('Postgres live schema migrations', () => {
     expect(sql).toContain('CREATE TABLE IF NOT EXISTS fleet_maintenance_checkpoints');
     expect(sql).toContain("scope = 'heavy_nighttime_maintenance'");
     expect(sql).toContain('fencing_token BIGINT NOT NULL');
+    expect(sql).toContain('holder_instance_id UUID');
     expect(sql).toContain('lease_expires_at_ms BIGINT');
     expect(sql).toContain("VALUES (17, 'fleet-heavy-maintenance-baton')");
+    expect(sql).toContain("VALUES (18, 'fleet-maintenance-process-fencing')");
     expect(sql).not.toContain('message_content');
     expect(sql).not.toContain('memory_content');
   });

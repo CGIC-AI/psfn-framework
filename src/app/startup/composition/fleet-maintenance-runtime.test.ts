@@ -40,4 +40,23 @@ describe('fleet maintenance runtime composition', () => {
     });
     detach();
   });
+
+  it('requests the scope holder even when foreground starts on a different companion', async () => {
+    const eventBus = new EventBus();
+    const requestForegroundPreemption = vi.fn(async () => true);
+    const detach = wireFleetMaintenanceForegroundPreemption({
+      eventBus,
+      coordinator: { requestForegroundPreemption },
+      now: () => Date.parse('2026-08-29T09:05:01.000Z'),
+    });
+
+    await expect(eventBus.emit('agent.turn.start', {
+      message: { ...MESSAGE, authorId: 'human-on-another-fleet-companion' },
+      runtimeLaneClass: 'foreground_chat',
+    })).resolves.toBeUndefined();
+    expect(requestForegroundPreemption).toHaveBeenCalledWith({
+      nowMs: Date.parse('2026-08-29T09:05:01.000Z'),
+    });
+    detach();
+  });
 });

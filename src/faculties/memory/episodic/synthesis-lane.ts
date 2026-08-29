@@ -24,7 +24,7 @@ const log = createComponentLogger('EpisodeSynthesisLane');
 
 export const EPISODE_SYNTHESIS_ACTION_KIND = 'memory.episode-synthesis.run';
 export const EPISODE_SYNTHESIS_TIMER_TASK_ID = 'memory.episode-synthesis.timer';
-export const EPISODE_SYNTHESIS_DRAIN_CLAIMANT_ID = 'episode-synthesis-drain';
+const EPISODE_SYNTHESIS_DRAIN_CLAIMANT_ID = 'episode-synthesis-drain';
 
 const EPISODIC_SYNTHESIS_PROCESSOR = 'episodic_synthesis';
 const MAX_BEHAVIORAL_SUMMARY_WRITES = 1;
@@ -50,6 +50,26 @@ export interface EpisodeSynthesisGateEvent {
   relevantTurnCount: number;
   minRelevantTurns: number;
   timestamp: number;
+}
+
+interface EpisodeSynthesisSafeBoundary {
+  logicalSessionId: string;
+  revision: number;
+}
+
+export interface EpisodeSynthesisDrainOptions {
+  /**
+   * Called only after the companion-private workset checkpoint commits. A
+   * fleet coordinator may request yielding here without exposing the private
+   * session identity to the system-scoped baton store.
+   */
+  onSafeBoundary?: (
+    boundary: EpisodeSynthesisSafeBoundary,
+  ) => Promise<'continue' | 'yield'> | 'continue' | 'yield';
+}
+
+export interface EpisodeSynthesisDrainOutcome {
+  outcome: 'complete' | 'yield';
 }
 
 type SynthesisLaneSessionReader = Pick<SessionManager, 'resolveSessionChannelId' | 'getRecentMessages'>
@@ -211,7 +231,7 @@ export class EpisodeSynthesisLane {
   private readonly now: () => number;
   private readonly claimantId: string;
   private turnCount = 0;
-  private activeDrain: Promise<void> | null = null;
+  private activeDrain: Promise<EpisodeSynthesisDrainOutcome> | null = null;
 
   constructor(options: EpisodeSynthesisLaneOptions) {
     this.sessionManager = options.sessionManager;
@@ -267,12 +287,15 @@ export class EpisodeSynthesisLane {
     return this.buildActionCandidate('timer');
   }
 
-  async execute(action: Pick<InferredPostTurnAction, 'id' | 'channelId' | 'sourceMessageId' | 'payload'>): Promise<void> {
+  async execute(
+    action: Pick<InferredPostTurnAction, 'id' | 'channelId' | 'sourceMessageId' | 'payload'>,
+    options: EpisodeSynthesisDrainOptions = {},
+  ): Promise<EpisodeSynthesisDrainOutcome> {
     if (this.activeDrain) {
       return this.activeDrain;
     }
-    let drain!: Promise<void>;
-    drain = this.drain(action).finally(() => {
+    let drain!: Promise<EpisodeSynthesisDrainOutcome>;
+    drain = this.drain(action, options).finally(() => {
       if (this.activeDrain === drain) this.activeDrain = null;
     });
     this.activeDrain = drain;
@@ -281,19 +304,28 @@ export class EpisodeSynthesisLane {
 
   private async drain(
     action: Pick<InferredPostTurnAction, 'id' | 'channelId' | 'sourceMessageId' | 'payload'>,
-  ): Promise<void> {
+    options: EpisodeSynthesisDrainOptions,
+  ): Promise<EpisodeSynthesisDrainOutcome> {
     const workItems = await this.workset.enumerate('episodic_synthesis');
     const failures: Error[] = [];
+    let yielded = false;
     for (const workItem of workItems) {
-      const claim = await this.workset.claim({
-        purpose: 'episodic_synthesis',
-        logicalSessionId: workItem.logicalSessionId,
-        revision: workItem.revision,
-        claimantId: this.claimantId,
-      });
+      const resumedClaim = workItem.claimantId === this.claimantId
+        ? await this.workset.resumeClaim({
+            purpose: 'episodic_synthesis',
+            logicalSessionId: workItem.logicalSessionId,
+            claimantId: this.claimantId,
+          })
+        : null;
+      const claim = resumedClaim ?? await this.workset.claim({
+          purpose: 'episodic_synthesis',
+          logicalSessionId: workItem.logicalSessionId,
+          revision: workItem.revision,
+          claimantId: this.claimantId,
+        });
       if (!claim) continue;
       try {
-        await this.executeSession(action, workItem);
+        await this.executeSession(action, claim);
         await this.workset.checkpoint({
           purpose: 'episodic_synthesis',
           logicalSessionId: claim.logicalSessionId,
@@ -302,11 +334,21 @@ export class EpisodeSynthesisLane {
         });
       } catch (error) {
         failures.push(error instanceof Error ? error : new Error(String(error)));
+        continue;
+      }
+      const disposition = await options.onSafeBoundary?.({
+        logicalSessionId: claim.logicalSessionId,
+        revision: claim.revision,
+      });
+      if (disposition === 'yield') {
+        yielded = true;
+        break;
       }
     }
     if (failures.length > 0) {
       throw new AggregateError(failures, `Episode synthesis drain failed for ${failures.length} session(s)`);
     }
+    return { outcome: yielded ? 'yield' : 'complete' };
   }
 
   private async executeSession(

@@ -225,6 +225,63 @@ describe('Scheduler', () => {
       }
     });
 
+    it('stagger wall-clock tasks deterministically inside the configured minute', async () => {
+      const first = vi.fn();
+      const third = vi.fn();
+      const nowSpy = vi.spyOn(Date, 'now');
+      try {
+        nowSpy.mockReturnValue(Date.parse('2026-03-07T06:29:00.000Z'));
+        scheduler.register({
+          id: 'fleet-first',
+          name: 'Fleet first',
+          type: 'every',
+          intervalMs: 24 * 60 * 60_000,
+          cadence: { kind: 'daily', hour: 6, minute: 30, timezone: 'utc' },
+          fleetStagger: { manifestOrdinal: 0, fleetSize: 3 },
+          handler: first,
+          state: 'idle',
+        });
+        scheduler.register({
+          id: 'fleet-third',
+          name: 'Fleet third',
+          type: 'every',
+          intervalMs: 24 * 60 * 60_000,
+          cadence: { kind: 'daily', hour: 6, minute: 30, timezone: 'utc' },
+          fleetStagger: { manifestOrdinal: 2, fleetSize: 3 },
+          handler: third,
+          state: 'idle',
+        });
+
+        nowSpy.mockReturnValue(Date.parse('2026-03-07T06:30:00.000Z'));
+        await scheduler.tick();
+        expect(first).toHaveBeenCalledOnce();
+        expect(third).not.toHaveBeenCalled();
+
+        nowSpy.mockReturnValue(Date.parse('2026-03-07T06:30:39.999Z'));
+        await scheduler.tick();
+        expect(third).not.toHaveBeenCalled();
+
+        nowSpy.mockReturnValue(Date.parse('2026-03-07T06:30:40.000Z'));
+        await scheduler.tick();
+        expect(third).toHaveBeenCalledOnce();
+      } finally {
+        nowSpy.mockRestore();
+      }
+    });
+
+    it('rejects invalid fleet staggering metadata', () => {
+      expect(() => scheduler.register({
+        id: 'fleet-invalid',
+        name: 'Fleet invalid',
+        type: 'every',
+        intervalMs: 24 * 60 * 60_000,
+        cadence: { kind: 'daily', hour: 6, minute: 30, timezone: 'utc' },
+        fleetStagger: { manifestOrdinal: 3, fleetSize: 3 },
+        handler: () => {},
+        state: 'idle',
+      })).toThrow('fleetStagger.manifestOrdinal');
+    });
+
     it('does not fire wall-clock tasks immediately on startup', async () => {
       const fn = vi.fn();
       const nowSpy = vi.spyOn(Date, 'now');

@@ -46,6 +46,7 @@ import {
 } from '../session/session-lane-metadata.js';
 import type { SessionEntry } from '../session/types.js';
 import type { Scheduler } from './scheduler.js';
+import type { FleetOrdinalStagger } from './types.js';
 import {
   evaluateMorningWakePreflight,
 } from './temporal-wakeup-preflight.js';
@@ -542,6 +543,8 @@ export interface TemporalWakeupRuntimeOptions {
   scheduler: Scheduler;
   sessionManager: TemporalWakeupSessionManagerPort;
   config: TemporalWakeupConfig;
+  /** Stable fleet position for spreading the configured morning wall-clock minute. */
+  fleetScheduleStagger?: FleetOrdinalStagger;
   /** Quiet hours for outward delivery after the wake model turn. */
   quietHours?: ProactiveQuietHoursConfig | null;
   /**
@@ -970,6 +973,9 @@ export function registerTemporalWakeupTasks(options: TemporalWakeupRuntimeOption
       type: 'every',
       intervalMs: 24 * HOUR_MS,
       cadence: { kind: 'daily', hour, minute, timezone: morning.timezone },
+      ...(options.fleetScheduleStagger
+        ? { fleetStagger: options.fleetScheduleStagger }
+        : {}),
       handler: async () => {
         // Fan the internal new-day frame out to EVERY recently-active channel
         // (bead 2x37.3), each gated by its own eligibility + anti-loop state via

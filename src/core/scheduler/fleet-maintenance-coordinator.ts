@@ -1,8 +1,9 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 import { isBoundedString, isRfc4122Uuid } from '../../shared/utils/types.js';
+import type { FleetOrdinalStagger } from './types.js';
 
-export const FLEET_MAINTENANCE_SCOPE = 'heavy_nighttime_maintenance';
+const FLEET_MAINTENANCE_SCOPE = 'heavy_nighttime_maintenance';
 
 export interface FleetScheduleWindowInput {
   companionId: string;
@@ -96,6 +97,7 @@ export type FleetMaintenanceAcquireResult =
 export interface FleetMaintenanceStoreBinding {
   scope: typeof FLEET_MAINTENANCE_SCOPE;
   companionId: string;
+  holderInstanceId: string;
   manifestOrdinal: number;
   fleetSize: number;
   manifestFingerprint: string;
@@ -137,6 +139,7 @@ export interface FleetMaintenanceStorePort {
 export interface FleetMaintenanceCoordinator {
   readonly companionId: string;
   readonly manifestOrdinal: number;
+  readonly fleetSize: number;
   announceDemand(input: { nowMs: number; demandExpiresAtMs: number }): Promise<void>;
   tryAcquire(input: {
     nowMs: number;
@@ -195,6 +198,7 @@ export function createFleetMaintenanceCoordinator(input: {
   const binding: FleetMaintenanceStoreBinding = {
     scope: FLEET_MAINTENANCE_SCOPE,
     companionId: input.companionId,
+    holderInstanceId: randomUUID(),
     manifestOrdinal,
     fleetSize: fleet.length,
     manifestFingerprint: createHash('sha256').update(fleet.join('\n')).digest('hex'),
@@ -212,6 +216,7 @@ export function createFleetMaintenanceCoordinator(input: {
   return {
     companionId: input.companionId,
     manifestOrdinal,
+    fleetSize: fleet.length,
     async announceDemand({ nowMs, demandExpiresAtMs }) {
       const now = requireTimestamp(nowMs, 'fleetMaintenance.nowMs');
       await input.store.announceDemand({
@@ -291,6 +296,29 @@ export function createFleetMaintenanceCoordinator(input: {
   };
 }
 
+export function staggerFleetOrdinalWithinWindow(
+  input: FleetOrdinalStagger & { windowStartMs: number; windowEndMs: number },
+): number {
+  const windowStartMs = requireTimestamp(input.windowStartMs, 'fleetSchedule.windowStartMs');
+  const windowEndMs = requireTimestamp(input.windowEndMs, 'fleetSchedule.windowEndMs');
+  if (windowEndMs <= windowStartMs) {
+    throw new Error('fleetSchedule.windowEndMs must be greater than windowStartMs');
+  }
+  if (!Number.isSafeInteger(input.fleetSize) || input.fleetSize < 1) {
+    throw new Error('fleetSchedule.fleetSize must be a positive safe integer');
+  }
+  if (
+    !Number.isSafeInteger(input.manifestOrdinal)
+    || input.manifestOrdinal < 0
+    || input.manifestOrdinal >= input.fleetSize
+  ) {
+    throw new Error('fleetSchedule.manifestOrdinal must identify a fleet member');
+  }
+  return windowStartMs + Math.floor(
+    ((windowEndMs - windowStartMs) * input.manifestOrdinal) / input.fleetSize,
+  );
+}
+
 /**
  * Place one lightweight scheduled action deterministically inside its existing
  * semantic window. Manifest order is the sole ordering authority; no companion
@@ -300,20 +328,17 @@ export function staggerFleetScheduleWithinWindow(
   input: FleetScheduleWindowInput,
 ): FleetSchedulePosition {
   const fleet = requireFleetOrder(input.fleetCompanionIds);
-  const windowStartMs = requireTimestamp(input.windowStartMs, 'fleetSchedule.windowStartMs');
-  const windowEndMs = requireTimestamp(input.windowEndMs, 'fleetSchedule.windowEndMs');
-  if (windowEndMs <= windowStartMs) {
-    throw new Error('fleetSchedule.windowEndMs must be greater than windowStartMs');
-  }
   const manifestOrdinal = fleet.indexOf(input.companionId);
   if (manifestOrdinal < 0) {
     throw new Error('fleetSchedule.companionId is not present in the fleet manifest');
   }
-  const windowDurationMs = windowEndMs - windowStartMs;
   return {
     manifestOrdinal,
-    scheduledAtMs: windowStartMs + Math.floor(
-      (windowDurationMs * manifestOrdinal) / fleet.length,
-    ),
+    scheduledAtMs: staggerFleetOrdinalWithinWindow({
+      manifestOrdinal,
+      fleetSize: fleet.length,
+      windowStartMs: input.windowStartMs,
+      windowEndMs: input.windowEndMs,
+    }),
   };
 }

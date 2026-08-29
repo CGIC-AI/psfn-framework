@@ -176,6 +176,38 @@ describe('SleeptimeWorksetRunner', () => {
     expect(workset.items.get('dm:alpha')?.completedStages).toEqual(['sleep_consolidation']);
   });
 
+  it('persists a stage that finishes while foreground becomes active before yielding', async () => {
+    const workset = new RestartableWorkset([item('dm:alpha', 1_000)]);
+    const shouldYield = vi.fn()
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true);
+    const runStage = vi.fn(async () => undefined);
+    const runner = new SleeptimeWorksetRunner({
+      workset,
+      claimantId: 'companion-sleeptime',
+      shouldYield,
+      runStage,
+    });
+
+    await expect(runner.run()).resolves.toEqual({
+      outcome: 'yield',
+      completedSessions: 0,
+      remainingSessions: 1,
+    });
+    expect(workset.items.get('dm:alpha')?.completedStages).toEqual(['sleep_consolidation']);
+
+    const resumedRunStage = vi.fn(async () => undefined);
+    await expect(new SleeptimeWorksetRunner({
+      workset,
+      claimantId: 'companion-sleeptime',
+      runStage: resumedRunStage,
+    }).run()).resolves.toMatchObject({ outcome: 'complete' });
+    expect(runStage).toHaveBeenCalledTimes(1);
+    expect(resumedRunStage).not.toHaveBeenCalledWith(expect.objectContaining({
+      stage: 'sleep_consolidation',
+    }));
+  });
+
   it('yields a model-preempted stage without recording it as a session failure', async () => {
     const workset = new RestartableWorkset([item('dm:alpha', 1_000)]);
     const preempted = new Error('Foreground conversation took the model lane');
@@ -196,5 +228,38 @@ describe('SleeptimeWorksetRunner', () => {
     });
     expect(workset.items.get('dm:alpha')?.completedStages).toEqual(['sleep_consolidation']);
     expect(workset.items.get('dm:alpha')?.lastFailure).toBeUndefined();
+  });
+
+  it('publishes a safe boundary only after the private stage checkpoint and yields there', async () => {
+    const workset = new RestartableWorkset([item('dm:alpha', 1_000)]);
+    const order: string[] = [];
+    const originalCheckpointStage = workset.checkpointStage.bind(workset);
+    workset.checkpointStage = async input => {
+      order.push(`private:${input.stage}`);
+      await originalCheckpointStage(input);
+    };
+    const runner = new SleeptimeWorksetRunner({
+      workset,
+      claimantId: 'companion-sleeptime',
+      runStage: async ({ stage }) => {
+        order.push(`run:${stage}`);
+      },
+      onSafeBoundary: async ({ stage }) => {
+        order.push(`fleet:${stage}`);
+        return 'yield';
+      },
+    });
+
+    await expect(runner.run()).resolves.toEqual({
+      outcome: 'yield',
+      completedSessions: 0,
+      remainingSessions: 1,
+    });
+    expect(order).toEqual([
+      'run:sleep_consolidation',
+      'private:sleep_consolidation',
+      'fleet:sleep_consolidation',
+    ]);
+    expect(workset.items.get('dm:alpha')?.completedStages).toEqual(['sleep_consolidation']);
   });
 });

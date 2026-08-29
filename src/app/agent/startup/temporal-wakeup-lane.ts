@@ -32,6 +32,7 @@ export interface TemporalWakeupLaneDeps {
   promptRegistry: PromptRegistryStatePort | null;
   proactiveOutbound: ProactiveOutboundDispatcher | null;
   companionName: string;
+  fleetScheduleStagger?: TemporalWakeupRuntimeOptions['fleetScheduleStagger'];
 }
 
 export function buildTemporalWakeTurnPrompt(note: string): string {
@@ -59,6 +60,7 @@ export function registerTemporalWakeupLane(deps: TemporalWakeupLaneDeps): void {
     promptRegistry,
     proactiveOutbound,
     companionName,
+    fleetScheduleStagger,
   } = deps;
 
   registerTemporalWakeupTasks({
@@ -66,6 +68,7 @@ export function registerTemporalWakeupLane(deps: TemporalWakeupLaneDeps): void {
     sessionManager,
     config,
     quietHours,
+    ...(fleetScheduleStagger ? { fleetScheduleStagger } : {}),
     // Surface how the morning wake slot was resolved (E7.2): fixed, habit
     // estimate, or habit fallback with a reason. Typed event + Garden read route.
     onWakeTimingResolved: (snapshot) => {

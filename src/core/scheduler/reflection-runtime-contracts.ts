@@ -23,6 +23,8 @@ import type { DreamMeaningPass } from '../../faculties/memory/episodic/dream-mea
 import type { SleeptimeWikiPass } from '../../faculties/wiki/sleeptime-wiki-pass.js';
 import type { NearTurnMemoryScopeClassifierPort } from '../../faculties/memory/near-turn-memory-lane.js';
 import type { ConversationalActivityWorksetPort } from '../session/conversational-activity-workset.js';
+import type { FleetMaintenanceCoordinator } from './fleet-maintenance-coordinator.js';
+import type { FleetOrdinalStagger } from './types.js';
 import type { ProactiveOutboundDispatcher } from '../intention/proactive-outbound.js';
 import type { OutreachOutboxStore } from '../intention/outreach-outbox.js';
 import type { SocialDesireOutboundRuntime } from '../intention/social-desire-outreach.js';
@@ -32,7 +34,6 @@ import type {
 } from '../../faculties/memory/episodic/store-port.js';
 import type { ReflectionMetacognitionJournalStore } from '../../persistence/journals/reflection-metacognition-journal.js';
 import type { SessionManager } from '../session/manager.js';
-import type { ConversationalActivityWorksetPort } from '../session/conversational-activity-workset.js';
 import type { CoreMemoryStore } from '../../faculties/core-memory/store.js';
 import type { EmotionStateSnapshot } from '../emotion/state.js';
 import type { ContactStorePort } from '../contacts/contact-store-port.js';
@@ -222,8 +223,14 @@ export interface ReflectionRuntimeOptions {
     EpisodicStorePort,
     'getProcessingWatermark' | 'upsertProcessingWatermark'
   > | null;
-  /** Durable changed-session workset consumed by episodic and sleeptime drains. */
-  conversationalActivityWorkset?: ConversationalActivityWorksetPort | null;
+  /** System-scoped scheduling authority for private heavy maintenance drains. */
+  fleetMaintenance?: {
+    coordinator: FleetMaintenanceCoordinator;
+    leaseDurationMs: number;
+    retryDelayMs: number;
+  };
+  /** Stable fleet position for lightweight wall-clock task spreading. */
+  fleetScheduleStagger?: FleetOrdinalStagger;
   /** Companion aliases for deterministic relevance classification. */
   companionNames?: readonly string[];
   /** Companion author ids (e.g. Discord bot id) for mention detection. */

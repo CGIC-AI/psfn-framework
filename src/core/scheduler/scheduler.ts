@@ -5,6 +5,7 @@
 import type { EventBus } from '../../shared/event-bus.js';
 import type {
   DailyRecurringCadence,
+  FleetOrdinalStagger,
   HourlyRecurringCadence,
   RecurringCadence,
   ScheduledTask,
@@ -12,6 +13,7 @@ import type {
   TaskState,
   WeeklyRecurringCadence,
 } from './types.js';
+import { staggerFleetOrdinalWithinWindow } from './fleet-maintenance-coordinator.js';
 import { DEFAULT_SCHEDULER_CONFIG } from './types.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import {
@@ -78,6 +80,7 @@ function validateRecurringCadence(taskId: string, cadence: RecurringCadence | un
 
 const HOUR_MS = 3_600_000;
 const DAY_MS = 86_400_000;
+const WALL_CLOCK_MINUTE_MS = 60_000;
 
 // Floor for the adaptive next-wake delay. Guarantees the self-rescheduling timer
 // can never spin into a busy-loop even when a task is already overdue: an overdue
@@ -158,12 +161,73 @@ function getCurrentSlotStart(
 
 export { getCurrentSlotStart };
 
+function validateFleetStagger(task: ScheduledTask): void {
+  const stagger = task.fleetStagger;
+  if (!stagger) return;
+  if (task.type !== 'every' || !isWallClockCadence(task.cadence)) {
+    throw new Error(`Task "${task.id}" fleetStagger requires a wall-clock recurring cadence`);
+  }
+  if (!Number.isSafeInteger(stagger.fleetSize) || stagger.fleetSize < 1) {
+    throw new Error(`Task "${task.id}" fleetStagger.fleetSize must be a positive safe integer`);
+  }
+  if (
+    !Number.isSafeInteger(stagger.manifestOrdinal)
+    || stagger.manifestOrdinal < 0
+    || stagger.manifestOrdinal >= stagger.fleetSize
+  ) {
+    throw new Error(`Task "${task.id}" fleetStagger.manifestOrdinal must identify a fleet member`);
+  }
+}
+
+function fleetStaggeredSlotStart(slotStart: number, stagger?: FleetOrdinalStagger): number {
+  if (!stagger) return slotStart;
+  return staggerFleetOrdinalWithinWindow({
+    ...stagger,
+    windowStartMs: slotStart,
+    windowEndMs: slotStart + WALL_CLOCK_MINUTE_MS,
+  });
+}
+
+function getNextSlotStart(
+  currentSlotStart: number,
+  cadence: HourlyRecurringCadence | DailyRecurringCadence | WeeklyRecurringCadence,
+): number {
+  if (cadence.kind === 'hourly') return currentSlotStart + HOUR_MS;
+  const probe = currentSlotStart + (cadence.kind === 'daily' ? 36 * HOUR_MS : 8 * DAY_MS);
+  const next = getCurrentSlotStart(probe, cadence);
+  if (next <= currentSlotStart) {
+    throw new Error('Scheduler failed to resolve the next wall-clock cadence slot');
+  }
+  return next;
+}
+
+function getCurrentStaggeredSlotStart(
+  now: number,
+  cadence: HourlyRecurringCadence | DailyRecurringCadence | WeeklyRecurringCadence,
+  stagger?: FleetOrdinalStagger,
+): number {
+  return fleetStaggeredSlotStart(getCurrentSlotStart(now, cadence), stagger);
+}
+
+function getNextStaggeredSlotStart(
+  now: number,
+  cadence: HourlyRecurringCadence | DailyRecurringCadence | WeeklyRecurringCadence,
+  stagger?: FleetOrdinalStagger,
+): number {
+  const currentBase = getCurrentSlotStart(now, cadence);
+  const currentDue = fleetStaggeredSlotStart(currentBase, stagger);
+  return currentDue > now
+    ? currentDue
+    : fleetStaggeredSlotStart(getNextSlotStart(currentBase, cadence), stagger);
+}
+
 function isWallClockTaskDue(
   now: number,
   lastRun: number,
   cadence: HourlyRecurringCadence | DailyRecurringCadence | WeeklyRecurringCadence,
+  stagger?: FleetOrdinalStagger,
 ): boolean {
-  const currentSlotStart = getCurrentSlotStart(now, cadence);
+  const currentSlotStart = getCurrentStaggeredSlotStart(now, cadence, stagger);
   return now >= currentSlotStart && lastRun < currentSlotStart;
 }
 
@@ -251,6 +315,7 @@ export class Scheduler {
     } else if (task.cadence !== undefined) {
       throw new Error(`Task "${task.id}" cadence is only supported for "every" tasks`);
     }
+    validateFleetStagger(task);
     if (opts?.lastRunAt !== undefined) {
       if (!Number.isFinite(opts.lastRunAt) || opts.lastRunAt < 0) {
         throw new Error(`Task "${task.id}" lastRunAt must be a non-negative finite epoch`);
@@ -379,9 +444,9 @@ export class Scheduler {
     if (entry.state !== 'idle') return Number.POSITIVE_INFINITY;
     if (entry.type === 'every') {
       if (isWallClockCadence(entry.cadence)) {
-        return isWallClockTaskDue(now, entry.lastRun, entry.cadence)
+        return isWallClockTaskDue(now, entry.lastRun, entry.cadence, entry.fleetStagger)
           ? now
-          : now + this.config.tickIntervalMs;
+          : getNextStaggeredSlotStart(now, entry.cadence, entry.fleetStagger);
       }
       return entry.lastRun === 0 ? now : entry.lastRun + entry.intervalMs;
     }
@@ -498,7 +563,7 @@ export class Scheduler {
 
       if (entry.type === 'every') {
         if (isWallClockCadence(entry.cadence)) {
-          isDue = isWallClockTaskDue(now, entry.lastRun, entry.cadence);
+          isDue = isWallClockTaskDue(now, entry.lastRun, entry.cadence, entry.fleetStagger);
         } else {
           isDue = entry.lastRun === 0 || (now - entry.lastRun >= entry.intervalMs);
         }

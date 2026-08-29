@@ -110,7 +110,7 @@ function makeStatefulWorkset(sessionIds: readonly string[]): ConversationalActiv
         !item
         || item.revision !== input.revision
         || item.revision <= (checkpoints.get(item.logicalSessionId) ?? 0)
-        || (activeClaim && activeClaim.claimantId !== input.claimantId)
+        || activeClaim
       ) {
         return null;
       }
@@ -218,7 +218,11 @@ function makeHarness(options: {
       claimantId: string;
     }) => ({
       ...input,
-      activityKind: 'group_conversation' as const,
+      activityKind: input.logicalSessionId.startsWith('internal:free-time:')
+        ? 'experiential_free_time' as const
+        : options.scope === 'direct'
+          ? 'direct_message' as const
+          : 'group_conversation' as const,
       checkpointRevision: 0,
       claimedAtMs: WATERMARK_END_MS,
     })),
@@ -423,12 +427,79 @@ describe('EpisodeSynthesisLane', () => {
     });
     await restartedLane.execute(timerAction());
 
+    expect(workset.resumeClaim).toHaveBeenCalledWith({
+      purpose: 'episodic_synthesis',
+      logicalSessionId: 'discord:episode-b',
+      claimantId: 'episode-synthesis-drain',
+    });
     expect(restarted.synthesizer.run).toHaveBeenCalledTimes(1);
     expect(restarted.synthesizer.run).toHaveBeenCalledWith({
       sessionId: 'discord:episode-b',
       sourceMessageId: 'timer-1',
     });
     await expect(workset.enumerate('episodic_synthesis')).resolves.toEqual([]);
+  });
+
+  it('offers fleet preemption only after a successful private session checkpoint', async () => {
+    const sessionIds = ['discord:episode-a', 'discord:episode-b'];
+    const workset = makeStatefulWorkset(sessionIds);
+    const harness = makeHarness({ entries: mentionEntries(12), scope: 'direct' });
+    const onSafeBoundary = vi.fn(async (input: {
+      logicalSessionId: string;
+      revision: number;
+    }) => {
+      expect(workset.checkpoint).toHaveBeenCalledWith({
+        purpose: 'episodic_synthesis',
+        logicalSessionId: input.logicalSessionId,
+        revision: input.revision,
+        claimantId: 'episode-synthesis-drain',
+      });
+      return 'yield' as const;
+    });
+    const lane = new EpisodeSynthesisLane({
+      sessionManager: harness.sessionManager,
+      synthesizer: harness.synthesizer,
+      watermarkStore: harness.watermarkStore as never,
+      workset,
+      config: gateConfig(),
+      scopeClassifier: harness.scopeClassifier,
+    });
+
+    await expect(lane.execute(timerAction(), { onSafeBoundary })).resolves.toEqual({
+      outcome: 'yield',
+    });
+
+    expect(harness.synthesizer.run).toHaveBeenCalledTimes(1);
+    expect(onSafeBoundary).toHaveBeenCalledWith({
+      logicalSessionId: 'discord:episode-a',
+      revision: 1,
+    });
+    await expect(workset.enumerate('episodic_synthesis')).resolves.toEqual([
+      expect.objectContaining({ logicalSessionId: 'discord:episode-b' }),
+    ]);
+  });
+
+  it('stops the drain when the fleet boundary loses authority after a private checkpoint', async () => {
+    const workset = makeStatefulWorkset(['discord:episode-a', 'discord:episode-b']);
+    const harness = makeHarness({ entries: mentionEntries(12), scope: 'direct' });
+    const lane = new EpisodeSynthesisLane({
+      sessionManager: harness.sessionManager,
+      synthesizer: harness.synthesizer,
+      watermarkStore: harness.watermarkStore as never,
+      workset,
+      config: gateConfig(),
+      scopeClassifier: harness.scopeClassifier,
+    });
+
+    await expect(lane.execute(timerAction(), {
+      onSafeBoundary: async () => { throw new Error('fleet fence lost'); },
+    })).rejects.toThrow('fleet fence lost');
+
+    expect(harness.synthesizer.run).toHaveBeenCalledTimes(1);
+    expect(workset.checkpoint).toHaveBeenCalledOnce();
+    await expect(workset.enumerate('episodic_synthesis')).resolves.toEqual([
+      expect.objectContaining({ logicalSessionId: 'discord:episode-b' }),
+    ]);
   });
 
   it('load: coalesces trigger pressure while keeping episode model concurrency at one', async () => {

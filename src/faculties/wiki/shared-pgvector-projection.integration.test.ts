@@ -171,6 +171,8 @@ describe('shared_wiki_chunks shared-schema integration (s10f9)', () => {
           { version: 14, name: 'icp-durable-dyads' },
           { version: 15, name: 'icp-open-dyad-continuation' },
           { version: 16, name: 'icp-dyad-participant-lifecycle' },
+          { version: 17, name: 'fleet-heavy-maintenance-baton' },
+          { version: 18, name: 'fleet-maintenance-process-fencing' },
         ]);
 
         // Idempotent re-provisioning (advisory-lock serialized).
@@ -178,7 +180,7 @@ describe('shared_wiki_chunks shared-schema integration (s10f9)', () => {
         const ledgerAgain = await pool.query<{ count: string }>(
           `SELECT COUNT(*)::text AS count FROM shared.shared_schema_migrations`,
         );
-        expect(ledgerAgain.rows[0]?.count).toBe('16');
+        expect(ledgerAgain.rows[0]?.count).toBe('18');
       } finally {
         await pool.end();
         await store.close();

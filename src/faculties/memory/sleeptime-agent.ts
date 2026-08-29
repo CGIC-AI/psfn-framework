@@ -67,6 +67,7 @@ import {
 } from './types.js';
 import {
   SleeptimeWorksetRunner,
+  type SleeptimeWorksetRunnerOptions,
   type SleeptimeWorksetRunOutcome,
   type SleeptimeWorksetStageInput,
 } from './sleeptime-workset.js';
@@ -75,6 +76,11 @@ import { classifyPostTurnActionContention } from '../../core/agent/post-turn-act
 const log = createComponentLogger('SleeptimeMemoryAgent');
 
 export const SLEEPTIME_MEMORY_ACTION_KIND = 'memory.sleeptime.run';
+
+export interface SleeptimeExecutionControl {
+  onSafeBoundary?: SleeptimeWorksetRunnerOptions['onSafeBoundary'];
+  isYieldError?: (error: unknown) => boolean;
+}
 
 const DEFAULT_TRANSCRIPT_MESSAGE_LIMIT = 24;
 const DEFAULT_MAX_MEMORY_WRITES = 4;
@@ -668,6 +674,7 @@ export class SleeptimeMemoryAgent {
 
   async execute(
     action: Pick<InferredPostTurnAction, 'id' | 'sourceMessageId' | 'payload'>,
+    control: SleeptimeExecutionControl = {},
   ): Promise<SleeptimeWorksetRunOutcome> {
     const snapshot = (await this.conversationalActivityWorkset.enumerate('sleeptime_consolidation'))
       .filter(item => this.isEligibleWorkItem(item));
@@ -699,7 +706,11 @@ export class SleeptimeMemoryAgent {
       workset: this.conversationalActivityWorkset,
       claimantId: SLEEPTIME_WORKSET_CLAIMANT_ID,
       shouldYield: async () => this.hasActivityBeyondSnapshot(snapshotRevisions),
-      isYieldError: error => classifyPostTurnActionContention(error) !== null,
+      isYieldError: error => (
+        control.isYieldError?.(error) === true
+        || classifyPostTurnActionContention(error) !== null
+      ),
+      ...(control.onSafeBoundary ? { onSafeBoundary: control.onSafeBoundary } : {}),
       runStage: async input => this.runWorksetStage(
         input,
         action,
@@ -755,7 +766,7 @@ export class SleeptimeMemoryAgent {
         await this.sleeptimeWikiPass.run(passInput);
         return;
       case 'orientation_review':
-        await this.runOrientationReview(sessionId, action, recentEntries);
+        await this.runOrientationReview(sessionId, action, recentEntries, input.occurredAtMs);
         return;
     }
   }
@@ -764,6 +775,7 @@ export class SleeptimeMemoryAgent {
     sessionId: string,
     action: Pick<InferredPostTurnAction, 'id' | 'sourceMessageId'>,
     recentEntries: readonly SessionEntry[],
+    throughOccurredAtMs: number,
   ): Promise<void> {
 
     const coreMemoryScope = coreMemoryChannelScope({ channelId: sessionId });
@@ -789,7 +801,7 @@ export class SleeptimeMemoryAgent {
     const transcript = recentEntries.map(summarizeSessionEntry).join('\n');
     // Fail closed: episode loading errors abort the pass — she must not review
     // her day against a silently degraded context.
-    const dayEpisodes = await this.loadDayEpisodes(sessionId, this.now());
+    const dayEpisodes = await this.loadDayEpisodes(sessionId, throughOccurredAtMs);
     const plan = await this.runReviewConversation({
       sessionId,
       actionId: action.id,
@@ -981,12 +993,12 @@ export class SleeptimeMemoryAgent {
    * invite-only, and unrelated private sessions retain distinct logical owners.
    * Errors propagate rather than silently widening or degrading that context.
    */
-  private async loadDayEpisodes(sessionId: string, nowMs: number): Promise<Episode[]> {
+  private async loadDayEpisodes(sessionId: string, throughOccurredAtMs: number): Promise<Episode[]> {
     const episodes = await this.episodicStore.searchByTime({
       spanSessionId: sessionId,
       order: 'desc',
-      from: toIsoInstant(nowMs - DAY_MS),
-      to: toIsoInstant(nowMs),
+      from: toIsoInstant(throughOccurredAtMs - DAY_MS),
+      to: toIsoInstant(throughOccurredAtMs),
       limit: EPISODE_REVIEW_LIMIT,
     });
     return [...episodes].sort((left, right) => left.startedAt.localeCompare(right.startedAt));

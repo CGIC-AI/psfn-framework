@@ -1601,6 +1601,11 @@ export function createReflectionTemplateRuntime(
           type: 'every',
           intervalMs: template.intervalMs,
           cadence: template.cadence,
+          ...(template.cadence?.kind === 'daily' || template.cadence?.kind === 'weekly'
+            ? runtimeOptions.fleetScheduleStagger
+              ? { fleetStagger: runtimeOptions.fleetScheduleStagger }
+              : {}
+            : {}),
           availability: 'do_not_disturb',
           handler: () => executeScheduledTemplate(template),
           state: 'idle',

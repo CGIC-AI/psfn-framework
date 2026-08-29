@@ -101,13 +101,24 @@ export async function purgeTestingSessionPostgresData(
       DELETE FROM session_messages_projection
       WHERE channel_id = $1
     `, [input.channelId]);
+    const activity = await client.query(`
+      DELETE FROM session_conversational_activity
+      WHERE logical_session_id = $1
+    `, [input.channelId]);
+    const workset = await client.query(`
+      DELETE FROM session_conversational_workset
+      WHERE logical_session_id = $1
+    `, [input.channelId]);
     const drift = await client.query(`
       DELETE FROM session_projection_drift
       WHERE channel_id = $1
     `, [input.channelId]);
 
     return {
-      removedProjectionRows: (projection.rowCount ?? 0) + (drift.rowCount ?? 0),
+      removedProjectionRows: (projection.rowCount ?? 0)
+        + (activity.rowCount ?? 0)
+        + (workset.rowCount ?? 0)
+        + (drift.rowCount ?? 0),
       removedMemoryRows,
       removedRecentContactShapeRows,
       removedMemoryLinkRows,

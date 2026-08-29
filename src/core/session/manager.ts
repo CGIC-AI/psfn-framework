@@ -26,6 +26,10 @@ import type {
 import type { UserContinuityStore } from './continuity.js';
 import type { SessionEntry, SessionEntryRole } from './types.js';
 import { detectInternalOriginForUserAttribution } from './entry-attribution.js';
+import {
+  buildSessionMetadataWithConversationOrigin,
+  resolveSessionConversationOrigin,
+} from './conversational-activity.js';
 import type { SessionSearchHit } from '../../persistence/sessions/transcript-projection-port.js';
 import {
   resolveLatestCompactionSourceRange,
@@ -834,9 +838,17 @@ export class SessionManager implements SessionManagerTypeSurface {
       ?? (typeof isDirectMessage === 'boolean' ? { isDirectMessage } : undefined);
     const channelVisibility = classifyChannelEnvelope(sourceChannelId, meta).privacy;
     const timestamp = Date.now();
+    const originMetadata = buildSessionMetadataWithConversationOrigin(
+      options.metadata,
+      resolveSessionConversationOrigin({
+        logicalSessionId: resolvedChannelId,
+        ...(meta?.isDirectMessage !== undefined ? { isDirectMessage: meta.isDirectMessage } : {}),
+        channelVisibility,
+      }),
+    );
     const addressingMetadata = options.addressing
-      ? buildSessionMetadataWithMessageAddressing(options.metadata, options.addressing)
-      : options.metadata;
+      ? buildSessionMetadataWithMessageAddressing(originMetadata, options.addressing)
+      : originMetadata;
     const turnMetadata = options.turnId
       ? buildSessionMetadataWithTurn(addressingMetadata, {
         turnId: options.turnId,
@@ -989,15 +1001,23 @@ export class SessionManager implements SessionManagerTypeSurface {
       ?? (typeof isDirectMessage === 'boolean' ? { isDirectMessage } : undefined);
     const channelVisibility = classifyChannelEnvelope(sourceChannelId, meta).privacy;
     const timestamp = Date.now();
+    const originMetadata = buildSessionMetadataWithConversationOrigin(
+      options.metadata,
+      resolveSessionConversationOrigin({
+        logicalSessionId: resolvedChannelId,
+        ...(meta?.isDirectMessage !== undefined ? { isDirectMessage: meta.isDirectMessage } : {}),
+        channelVisibility,
+      }),
+    );
     const turnMetadata = options.turnId
-      ? buildSessionMetadataWithTurn(options.metadata, {
+      ? buildSessionMetadataWithTurn(originMetadata, {
         turnId: options.turnId,
         requestId: options.requestId ?? options.sourceMessageId ?? options.turnId,
         sourceMessageId: options.sourceMessageId,
         role: 'assistant',
         actorKind: 'machine_intelligence',
       })
-      : options.metadata;
+      : originMetadata;
     const metadata = options.roleEnvelopePreview
       ? buildSessionMetadataWithRoleEnvelopePreview(turnMetadata, options.roleEnvelopePreview)
       : turnMetadata;

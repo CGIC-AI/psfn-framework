@@ -93,6 +93,13 @@ class FakePostgresPool {
       return { rows: [], command: 'DELETE', rowCount: 1, oid: 0, fields: [] } as QueryResult;
     }
 
+    if (
+      normalized.startsWith('insert into session_conversational_activity')
+      || normalized.startsWith('delete from session_conversational_activity')
+    ) {
+      return { rows: [], command: 'OK', rowCount: 1, oid: 0, fields: [] } as QueryResult;
+    }
+
     if (normalized.startsWith('insert into session_messages_projection')) {
       const next: ProjectedMessageRecord = {
         channelId: String(values[0] ?? ''),

@@ -44,6 +44,12 @@ vi.mock('../../../persistence/sessions/postgres-adapters.js', async () => {
           withTurnRecordEligibilityFence: async (_key: unknown, operation: () => Promise<unknown>) => operation(),
           withTurnRecordEligibilityFences: async (_keys: readonly unknown[], operation: () => Promise<unknown>) => operation(),
         },
+        conversationalActivityWorkset: {
+          enumerate: vi.fn(async () => []),
+          claim: vi.fn(async () => null),
+          resumeClaim: vi.fn(async () => null),
+          checkpoint: vi.fn(async () => undefined),
+        },
       };
     }),
   };
@@ -70,7 +76,7 @@ describe('session runtime composition transcript projection wiring', () => {
     dirs.push(root);
     const companionDataDir = join(root, 'companion-data');
 
-    await composeSessionRuntimeAsync({
+    const composition = await composeSessionRuntimeAsync({
       config: fromAny({
         companionDataDir,
         dataDir: companionDataDir,
@@ -99,6 +105,7 @@ describe('session runtime composition transcript projection wiring', () => {
         role: 'companion_alpha_runtime',
       }),
     );
+    expect(composition.conversationalActivityWorkset).toBeDefined();
   });
 
   it('rejects a sibling transcript tenant before opening session adapters', async () => {

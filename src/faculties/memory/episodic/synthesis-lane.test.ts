@@ -803,6 +803,37 @@ describe('EpisodeSynthesisLane', () => {
     }));
   });
 
+  it('keeps the session claim retryable when a behavioral summary write fails', async () => {
+    const memoryWriter = { write: vi.fn().mockRejectedValue(new Error('memory store unavailable')) };
+    const harness = makeHarness({
+      entries: mentionEntries(12),
+      memoryWriter,
+    });
+    harness.synthesizer.run.mockResolvedValue({
+      consideredEntries: 12,
+      candidateEpisodeCount: 2,
+      createdEpisodes: [],
+      skippedEpisodeIds: [],
+      linkedArcs: [{
+        id: 'arc-recurrence-1',
+        sourceEpisodeId: 'episode-1',
+        targetEpisodeId: 'episode-2',
+        arcKind: 'recurrence',
+        confidence: 0.78,
+        themes: ['atlas', 'validation'],
+      }],
+    });
+
+    await expect(harness.lane.execute(timerAction())).rejects.toMatchObject({
+      message: 'Episode synthesis drain failed for 1 session(s)',
+      errors: [expect.objectContaining({ message: 'memory store unavailable' })],
+    });
+
+    expect(memoryWriter.write).toHaveBeenCalledTimes(1);
+    expect(harness.workset.checkpoint).not.toHaveBeenCalled();
+    expect(harness.gateEvents).toEqual([]);
+  });
+
   // psfn-framework-ca980 — a behavioral summary must carry the arc's episode
   // source-content time (target episode `endedAt`), not the deferred synthesis run
   // clock, so a room widened after that content denies the auto-share.

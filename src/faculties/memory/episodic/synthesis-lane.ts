@@ -572,15 +572,7 @@ export class EpisodeSynthesisLane {
   }): Promise<void> {
     if (!this.memoryWriter) return;
     for (const writePayload of buildBehavioralSummaryWrites(input)) {
-      try {
-        await this.memoryWriter.write(writePayload);
-      } catch (error) {
-        log.warn('Episode-synthesis behavioral summary write skipped after error', {
-          sessionId: input.sessionId,
-          actionId: input.actionId,
-          error: String(error),
-        });
-      }
+      await this.memoryWriter.write(writePayload);
     }
   }
 

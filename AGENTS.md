@@ -8,9 +8,12 @@ and configuration contracts win when prose has drifted.
 
 Load the runtime operations document only when the task needs it:
 [`docs/operations.md`](./docs/operations.md); deployment-specific live
-operations use the explicitly supplied external configuration location. The
-detailed internal orchestration/review workflow docs were archived off-repo;
-this file is the operating contract.
+operations use the explicitly supplied external configuration location. For
+high-risk review practices, load
+[`docs/process/adversarial-review.md`](./docs/process/adversarial-review.md)
+(hand-maintained, not generated). The other detailed internal
+orchestration/review workflow docs were archived off-repo; this file is the
+operating contract.
 
 ## Implementation first: process must earn its cost
 

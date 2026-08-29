@@ -164,10 +164,13 @@ Delete `/openwiki/memory.md`, `/openwiki/SPEC_L01_LANDMARK_SCHEMA.md`,
 
 ### process/
 
-Only these two pages. The other internal process docs (`orchestration`,
-`internal-review`, `adversarial-review`, `public-history-rewrite`,
+Only these two generated pages. The other internal process docs
+(`orchestration`, `internal-review`, `public-history-rewrite`,
 `maintenance-scripts`, `productivity-pack`) were archived off-repo — delete
 them if present and never regenerate or link them.
+
+`docs/process/adversarial-review.md` is a hand-maintained operator document,
+not a wiki page. Never generate, overwrite, delete, or link it from the wiki.
 
 - `/openwiki/process/shakedown.md` — release recertification diligence
 - `/openwiki/process/self-eval-prompt-audit.md` — how self-evaluation prompts

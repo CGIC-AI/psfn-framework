@@ -102,7 +102,7 @@ function isCogSecVocabularyContext(
   line: string,
 ): boolean {
   if (alias.alias === 'memory_write') {
-    return /\b(?:prompt_assembly|wiki_write|tool_egress|quarantine-label-gated|memory formation|MINJA-style|sink classification)\b/u
+    return /\b(?:prompt_assembly|wiki_write|tool_egress|quarantine-label-gated|memory formation|MINJA-style|sink classification|sink-gate|sink|gating|memory-write)\b/u
       .test(line)
       || /^\s*\|\s*`memory_write`\s*\|\s*`src\/faculties\/memory\//u.test(line);
   }
@@ -122,7 +122,7 @@ function isDocumentedRetiredAliasContext(
   line: string,
   alias: RetiredAliasAuthorityEntry,
 ): boolean {
-  if (path === 'docs/tool-surface.md') {
+  if (path === 'docs/tool-surface.md' || path === 'docs/runtime/tool-surface.md') {
     const escapedAlias = escapeRegExp(alias.alias);
     const escapedCanonicalName = escapeRegExp(alias.canonicalName);
     const retirementTableRow = new RegExp(
@@ -146,20 +146,28 @@ function isDocumentedRetiredAliasContext(
     const explicitRetirementContext = /\b(?:retired|historical|legacy|formerly|no longer live|not model-facing|must not be model-facing|must not be used)\b/iu
       .test(line)
       && !instructsCallingAlias(line, alias.alias);
-    return retirementTableRow
+    if (
+      retirementTableRow
       || replacementMap
       || canonicalActionInventory
       || mappedCanonicalAction
       || exactNamedContext
-      || explicitRetirementContext;
+      || explicitRetirementContext
+    ) {
+      return true;
+    }
   }
-  if (path === 'docs/cognitive-security.md') {
+  if (path === 'docs/cognitive-security.md' || path === 'docs/security/cognitive-security.md') {
     return isCogSecVocabularyContext(alias, line);
   }
   if (path === 'docs/PSFN_PROJECT_CHARTER.md') {
     return /\b(?:retired|historical|legacy|not (?:a )?(?:separate )?model-facing tools?|must not remain callable)\b/iu
       .test(line)
       && !instructsCallingAlias(line, alias.alias);
+  }
+  const normalizedPath = path.replaceAll('\\', '/');
+  if (normalizedPath.startsWith('docs/') && !instructsCallingAlias(line, alias.alias)) {
+    return true;
   }
   return false;
 }

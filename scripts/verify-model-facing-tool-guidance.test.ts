@@ -61,7 +61,15 @@ describe('model-facing retired tool guidance verifier', () => {
         text: '`memory_write` -> `write`\n| `web_fetch` | `web` | hidden | Retired alias. |',
       },
       {
+        path: 'docs/runtime/tool-surface.md',
+        text: '`memory_write` -> `write`\n| `web_fetch` | `web` | hidden | Retired alias. |',
+      },
+      {
         path: 'docs/cognitive-security.md',
+        text: '| `memory_write` | `allow` | Cognitive-security sink classification. |',
+      },
+      {
+        path: 'docs/security/cognitive-security.md',
         text: '| `memory_write` | `allow` | Cognitive-security sink classification. |',
       },
     ]).violations).toEqual([]);

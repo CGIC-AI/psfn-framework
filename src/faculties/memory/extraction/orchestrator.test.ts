@@ -20,6 +20,11 @@ import {
   InMemoryAutomataRunStore,
 } from '../../automata/run-registry.js';
 import type { AutomataBusWorkerAccess } from '../../automata/bus/worker-access.js';
+import { AUTOMATA_BUS_WORKER_BRIEFING_SCHEMA_VERSION } from '../../automata/bus/worker-access.js';
+import {
+  clearDiagnosticLogRingBufferForTests,
+  getRecentDiagnosticLogRecords,
+} from '../../../shared/logger.js';
 
 type LlmCompletionContext = Parameters<ExtractionRunOptions['llmClient']['complete']>[0];
 type LlmCompletionResponse = Awaited<ReturnType<ExtractionRunOptions['llmClient']['complete']>>;
@@ -192,10 +197,22 @@ function createAutomataBusAccess(
       isClassEligible: classId => classId === 'memory.extraction',
       brief: vi.fn(async ({ scope }) => {
         expect(registry.getRun(scope.runId)?.status).toBe('running');
-        return { text: '', itemCount: 0 };
+        return {
+          schemaVersion: AUTOMATA_BUS_WORKER_BRIEFING_SCHEMA_VERSION,
+          text: '',
+          itemCount: 0,
+          diagnostics: {
+            cache: 'miss',
+            semanticPath: 'exact-fallback',
+            indexState: 'ready',
+            reindexState: 'current',
+            modelIdentity: null,
+            indexingLag: { pendingCount: 0 },
+          },
+        };
       }),
       search: vi.fn(),
-      append: vi.fn(),
+      append: vi.fn(async () => ({ inserted: true })),
       correct: vi.fn(),
       handoff: vi.fn(),
       runs: vi.fn(),
@@ -222,6 +239,117 @@ describe('runExtractionOrchestration durable children', () => {
         taskId: 'api:test',
       }),
     ]);
+  });
+
+  it('appends a content-safe process finding that a later extraction briefing consumes', async () => {
+    const registry = await createAutomataRunRegistry();
+    const findings: string[] = [];
+    const automataBusWorkerAccess = createAutomataBusAccess(registry);
+    automataBusWorkerAccess.port.brief = vi.fn(async () => ({
+      schemaVersion: AUTOMATA_BUS_WORKER_BRIEFING_SCHEMA_VERSION,
+      text: ['Automata Bus briefing', ...findings.map(finding => `- ${finding}`)].join('\n'),
+      itemCount: findings.length,
+      diagnostics: {
+        cache: 'miss',
+        semanticPath: 'exact-fallback',
+        indexState: 'ready',
+        reindexState: 'current',
+        modelIdentity: null,
+        indexingLag: { pendingCount: 0 },
+      },
+    }));
+    automataBusWorkerAccess.port.append = vi.fn(async input => {
+      findings.push(input.claim);
+      return { inserted: true };
+    });
+
+    await runExtractionOrchestration(buildOptions({
+      turnId: '018f22a2-52b8-7a3a-8c16-25b7b14f7001',
+      automataBusWorkerAccess,
+      automataRunRegistry: registry,
+    }));
+
+    expect(automataBusWorkerAccess.port.append).toHaveBeenCalledWith(expect.objectContaining({
+      provenance: 'computed',
+      verificationStatus: 'pending',
+      source: 'memory-extraction-process-summary',
+    }));
+    const firstAppend = vi.mocked(automataBusWorkerAccess.port.append).mock.calls[0]?.[0];
+    expect(firstAppend?.claim).toContain('parsed=2; accepted=1; written=1');
+    expect(JSON.stringify(firstAppend)).not.toMatch(/board games|Alex|User enjoys/iu);
+
+    const laterComplete = vi.fn().mockResolvedValue({ content: '<response></response>' });
+    await runExtractionOrchestration(buildOptions({
+      turnId: '018f22a2-52b8-7a3a-8c16-25b7b14f7002',
+      llmClient: { complete: laterComplete } as ExtractionRunOptions['llmClient'],
+      automataBusWorkerAccess,
+      automataRunRegistry: registry,
+    }));
+
+    expect(laterComplete).toHaveBeenCalledWith(
+      expect.objectContaining({
+        systemPrompt: expect.stringContaining(firstAppend!.claim),
+      }),
+      'extraction',
+      expect.any(Object),
+    );
+  });
+
+  it('completes the eligible run but records an observable error when process append fails', async () => {
+    clearDiagnosticLogRingBufferForTests();
+    const registry = await createAutomataRunRegistry();
+    const automataBusWorkerAccess = createAutomataBusAccess(registry);
+    automataBusWorkerAccess.port.append = vi.fn().mockRejectedValue(new Error('fixture bus unavailable'));
+
+    await runExtractionOrchestration(buildOptions({
+      turnId: '018f22a2-52b8-7a3a-8c16-25b7b14f7003',
+      automataBusWorkerAccess,
+      automataRunRegistry: registry,
+    }));
+
+    expect(registry.getRun(
+      '018f22a2-52b8-7a3a-8c16-25b7b14f7003:memory-extraction',
+    )?.status).toBe('completed');
+    expect(getRecentDiagnosticLogRecords()).toContainEqual(expect.objectContaining({
+      level: 'error',
+      component: 'Extraction',
+      message: 'Memory extraction Automata Bus process finding append failed',
+      context: expect.objectContaining({
+        status: 'failed',
+        runId: '018f22a2-52b8-7a3a-8c16-25b7b14f7003:memory-extraction',
+        taskId: 'api:test',
+      }),
+    }));
+    clearDiagnosticLogRingBufferForTests();
+  });
+
+  it('records an attributable skip when append reports that no event was inserted', async () => {
+    clearDiagnosticLogRingBufferForTests();
+    const registry = await createAutomataRunRegistry();
+    const automataBusWorkerAccess = createAutomataBusAccess(registry);
+    automataBusWorkerAccess.port.append = vi.fn().mockResolvedValue({ inserted: false });
+
+    await runExtractionOrchestration(buildOptions({
+      turnId: '018f22a2-52b8-7a3a-8c16-25b7b14f7004',
+      automataBusWorkerAccess,
+      automataRunRegistry: registry,
+    }));
+
+    expect(registry.getRun(
+      '018f22a2-52b8-7a3a-8c16-25b7b14f7004:memory-extraction',
+    )?.status).toBe('completed');
+    expect(getRecentDiagnosticLogRecords()).toContainEqual(expect.objectContaining({
+      level: 'warn',
+      component: 'Extraction',
+      message: 'Memory extraction Automata Bus process finding append skipped',
+      context: expect.objectContaining({
+        status: 'skipped',
+        reason: 'already_present',
+        runId: '018f22a2-52b8-7a3a-8c16-25b7b14f7004:memory-extraction',
+        taskId: 'api:test',
+      }),
+    }));
+    clearDiagnosticLogRingBufferForTests();
   });
 
   it('routes group extraction through the dedicated group memory-automaton prompt', async () => {

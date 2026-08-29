@@ -23,6 +23,7 @@ import { loadAutomataPolicySeedDefaults } from '../../system/config/automata-pol
 import type { AutomataBusEvent } from './bus/contract.js';
 import type { PostgresAutomataBusRuntimeStore } from './bus/runtime-store.js';
 import {
+  AUTOMATA_BUS_WORKER_BRIEFING_SCHEMA_VERSION,
   buildAutomataBusWorkerScope,
   resolveAutomataBusWorkerFormation,
   type AutomataBusWorkerAccess,
@@ -367,7 +368,19 @@ describe('Automata assembled certification', () => {
     try {
       const brief = vi.fn(async () => {
         await new Promise(resolve => setTimeout(resolve, 25));
-        return { text: 'Automata Bus briefing\n- One bounded item.', itemCount: 1 };
+        return {
+          schemaVersion: AUTOMATA_BUS_WORKER_BRIEFING_SCHEMA_VERSION,
+          text: 'Automata Bus briefing\n- One bounded item.',
+          itemCount: 1,
+          diagnostics: {
+            cache: 'miss',
+            semanticPath: 'exact-fallback',
+            indexState: 'ready',
+            reindexState: 'current',
+            modelIdentity: null,
+            indexingLag: { pendingCount: 0 },
+          },
+        };
       });
       const action = vi.fn(async () => ({ ok: true }));
       const port: AutomataBusWorkerPort = {

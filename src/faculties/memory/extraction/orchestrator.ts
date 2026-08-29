@@ -67,6 +67,7 @@ import {
 } from '../../automata/bus/worker-access.js';
 import type { AutomataRunRegistry } from '../../automata/run-registry.js';
 import {
+  appendExtractionProcessFinding,
   completeExtractionChunkWithAutomataBus,
   type ExtractionAutomataBusBinding,
 } from './automata-bus-completion.js';
@@ -373,6 +374,12 @@ export async function runExtractionOrchestration(
         query: `memory extraction ${options.triggerReason}`,
       })
       : null;
+    const automataBusBinding: ExtractionAutomataBusBinding | undefined = automataBusFormation
+      ? {
+          access: options.automataBusWorkerAccess!,
+          scope: automataBusFormation.scope,
+        }
+      : undefined;
     const llmPass = await executeExtractionLlmPass({
       recentEntries,
       useCompositionalExtraction: options.useCompositionalExtraction,
@@ -389,12 +396,7 @@ export async function runExtractionOrchestration(
       completeChunk: createExtractionChunkCompleter(
         options,
         turnId,
-        automataBusFormation
-          ? {
-              access: options.automataBusWorkerAccess!,
-              scope: automataBusFormation.scope,
-            }
-          : undefined,
+        automataBusBinding,
       ),
     });
     const { mergedParsedFacts, crossChunkDeduplicatedCount } = llmPass;
@@ -428,7 +430,7 @@ export async function runExtractionOrchestration(
         factCount: facts.length,
         triggerReason: options.triggerReason,
       });
-      await options.emitExtractionEnd({
+      const telemetry: ExtractionEndTelemetry = {
         channelId: options.channelId,
         count: 0,
         ...(turnId ? { turnId } : {}),
@@ -448,6 +450,12 @@ export async function runExtractionOrchestration(
         mergedFactCount: mergedParsedFacts.length,
         crossChunkDeduplicatedCount,
         boundaryFactCount: normalization.boundaryFactCount,
+      };
+      await options.emitExtractionEnd(telemetry);
+      await recordExtractionProcessFinding({
+        eligible: automataBusEligible,
+        binding: automataBusBinding,
+        telemetry,
       });
       if (activeAutomataRunId) {
         await completeMemoryExtractionAutomataRun(
@@ -577,6 +585,11 @@ export async function runExtractionOrchestration(
       maybeRefreshRecentContactShape: options.maybeRefreshRecentContactShape,
       assertEffectAllowed: options.assertEffectAllowed,
     });
+    await recordExtractionProcessFinding({
+      eligible: automataBusEligible,
+      binding: automataBusBinding,
+      telemetry,
+    });
     if (activeAutomataRunId) {
       await completeMemoryExtractionAutomataRun(
         options.automataRunRegistry!,
@@ -632,6 +645,50 @@ export async function runExtractionOrchestration(
 
 function toErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+async function recordExtractionProcessFinding(input: {
+  eligible: boolean;
+  binding: ExtractionAutomataBusBinding | undefined;
+  telemetry: ExtractionEndTelemetry;
+}): Promise<void> {
+  if (!input.eligible) return;
+  if (!input.binding) {
+    log.warn('Memory extraction Automata Bus process finding append skipped', {
+      status: 'skipped',
+      reason: 'formation_unavailable',
+    });
+    return;
+  }
+  try {
+    const outcome = await appendExtractionProcessFinding({
+      binding: input.binding,
+      parsedCount: input.telemetry.parsedCount,
+      acceptedCount: input.telemetry.acceptedCount,
+      rejectedCount: input.telemetry.rejectedCount,
+      writeCount: input.telemetry.writeCount,
+      deduplicatedCount: input.telemetry.deduplicatedCount,
+      supersededCount: input.telemetry.supersededCount,
+      chunkCount: input.telemetry.chunkCount,
+      crossChunkDeduplicatedCount: input.telemetry.crossChunkDeduplicatedCount,
+      boundaryFactCount: input.telemetry.boundaryFactCount,
+    });
+    if (outcome === 'existing') {
+      log.warn('Memory extraction Automata Bus process finding append skipped', {
+        status: 'skipped',
+        reason: 'already_present',
+        runId: input.binding.scope.runId,
+        taskId: input.binding.scope.taskId,
+      });
+    }
+  } catch (error) {
+    log.error('Memory extraction Automata Bus process finding append failed', {
+      status: 'failed',
+      reason: toErrorMessage(error),
+      runId: input.binding.scope.runId,
+      taskId: input.binding.scope.taskId,
+    });
+  }
 }
 
 /**

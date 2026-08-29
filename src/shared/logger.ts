@@ -30,6 +30,7 @@ const DIAGNOSTIC_LOG_CONTEXT_KEYS = new Set([
   'restoreVerified',
   'revision',
   'routeId',
+  'runId',
   'siteId',
   'state',
   'status',

@@ -12,8 +12,7 @@ import {
   type AutomataBusWorkerOperation,
 } from './worker-access-contracts.js';
 
-export const AUTOMATA_BUS_TOOL_PARAMETERS = Type.Object({
-  action: Type.Union(AUTOMATA_BUS_TOOL_ACTIONS.map(action => Type.Literal(action))),
+const AUTOMATA_BUS_TOOL_PARAMETER_PROPERTIES = {
   query: Type.Optional(Type.String()),
   limit: Type.Optional(Type.Integer({ minimum: 1 })),
   claim: Type.Optional(Type.String()),
@@ -57,7 +56,21 @@ export const AUTOMATA_BUS_TOOL_PARAMETERS = Type.Object({
   task_id: Type.Optional(Type.String()),
   event_id: Type.Optional(Type.String()),
   run_id: Type.Optional(Type.String()),
-}, { additionalProperties: false });
+};
+
+export function automataBusToolParametersForActions(
+  actions: readonly AutomataBusToolAction[],
+) {
+  if (actions.length === 0) throw new Error('automata_bus must allow at least one action');
+  return Type.Object({
+    action: Type.Union(actions.map(action => Type.Literal(action))),
+    ...AUTOMATA_BUS_TOOL_PARAMETER_PROPERTIES,
+  }, { additionalProperties: false });
+}
+
+const AUTOMATA_BUS_TOOL_PARAMETERS = automataBusToolParametersForActions(
+  AUTOMATA_BUS_TOOL_ACTIONS,
+);
 
 type AutomataBusToolParams = Static<typeof AUTOMATA_BUS_TOOL_PARAMETERS>;
 

@@ -36,6 +36,7 @@ import type {
   AutomataBusWorkerPort,
   AutomataBusWorkerScope,
 } from './worker-access.js';
+import { AUTOMATA_BUS_WORKER_BRIEFING_SCHEMA_VERSION } from './worker-access.js';
 
 interface CanonicalAppendInput {
   eventId: string;
@@ -223,11 +224,16 @@ export function createProductionAutomataBusWorkerAccess(options: {
       candidate.id === classId && candidate.busEligibility === 'eligible'
     )),
     brief: async input => {
-      const { text, itemCount } = await options.runtime.query.createSpawnBriefing({
+      const { text, itemCount, diagnostics } = await options.runtime.query.createSpawnBriefing({
         query: input.query ?? options.registry.getRun(input.scope.runId)?.taskSummary ?? input.scope.taskId,
         visibility: visibility(input.scope),
       });
-      return { text, itemCount };
+      return {
+        schemaVersion: AUTOMATA_BUS_WORKER_BRIEFING_SCHEMA_VERSION,
+        text,
+        itemCount,
+        diagnostics,
+      };
     },
     search: async input => await options.runtime.query.search({
       query: input.query,

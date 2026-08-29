@@ -24,7 +24,9 @@ import type {
   AutomataBusIndexingLag,
   AutomataBusResultCachePort,
   AutomataBusScoredReference,
+  AutomataBusSearchDiagnostics,
   AutomataBusSearchFilters,
+  AutomataBusSemanticPath,
   AutomataBusVectorIndexPort,
   AutomataBusVectorIndexState,
   AutomataBusVisibility,
@@ -55,25 +57,6 @@ interface AutomataBusSearchResultItem extends AutomataBusCanonicalFinding {
   score: number;
   semanticScore?: number;
   lexicalScore?: number;
-}
-
-type AutomataBusSemanticPath =
-  | 'ann'
-  | 'cache'
-  | 'embedding-unavailable'
-  | 'exact-failed'
-  | 'exact-fallback'
-  | 'index-state-unavailable'
-  | 'model-mismatch'
-  | 'reindex-required';
-
-interface AutomataBusSearchDiagnostics {
-  cache: 'disabled' | 'error' | 'hit' | 'miss';
-  semanticPath: AutomataBusSemanticPath;
-  indexState: AutomataBusVectorIndexState['indexState'];
-  reindexState: AutomataBusVectorIndexState['reindexState'];
-  modelIdentity: AutomataBusEmbeddingIdentity | null;
-  indexingLag: AutomataBusIndexingLag;
 }
 
 export interface AutomataBusSearchResult {

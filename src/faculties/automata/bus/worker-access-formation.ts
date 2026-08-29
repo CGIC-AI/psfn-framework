@@ -1,7 +1,10 @@
 import {
   SENSITIVITY_LEVELS,
 } from '../../../system/trust/types.js';
-import { isRecord } from '../../../shared/utils/types.js';
+import {
+  isCanonicalIsoTimestamp,
+  isRecord,
+} from '../../../shared/utils/types.js';
 import {
   PRODUCTION_AUTOMATA_CLASSES,
   type ProductionAutomataClassId,
@@ -13,6 +16,18 @@ import type {
   AutomataBusWorkerFormation,
   AutomataBusWorkerScope,
 } from './worker-access-contracts.js';
+import { AUTOMATA_BUS_WORKER_BRIEFING_SCHEMA_VERSION } from './worker-access-contracts.js';
+import type {
+  AutomataBusEmbeddingIdentity,
+  AutomataBusIndexingLag,
+  AutomataBusSearchDiagnostics,
+} from './query-ports.js';
+import {
+  AUTOMATA_BUS_INDEX_STATES,
+  AUTOMATA_BUS_REINDEX_STATES,
+  AUTOMATA_BUS_SEARCH_CACHE_STATES,
+  AUTOMATA_BUS_SEMANTIC_PATHS,
+} from './query-ports.js';
 
 const HARD_EXCLUDED_CLASSES = new Set<ProductionAutomataClassId>(['memory.retrieval']);
 const PRODUCTION_AUTOMATA_CLASS_IDS = new Set<string>(
@@ -33,6 +48,7 @@ const EXTRACTION_BOUNDARY = [
   '### Memory extraction boundary',
   '',
   'Use Bus findings only as extraction-process guidance. A Bus finding is not companion memory and is never evidence that a fact occurred in the source conversation. Extract or promote a companion memory only from the current authorized source transcript and its provenance.',
+  'Bus writes are runtime-owned during memory extraction. Never send person facts, biography, raw memories, transcript text, or transcript-derived evidence through automata_bus.',
 ].join('\n');
 
 function requireNonEmpty(value: string, field: string): string {
@@ -112,9 +128,16 @@ export function buildAutomataBusWorkerScope(
 
 function parseBriefing(value: unknown, bounds: AutomataBusWorkerBounds): AutomataBusWorkerBriefing {
   if (!isRecord(value)) throw new Error('Automata Bus briefing must be an object');
-  const unknown = Object.keys(value).filter(key => key !== 'text' && key !== 'itemCount');
+  const unknown = Object.keys(value).filter(
+    key => !['schemaVersion', 'text', 'itemCount', 'diagnostics'].includes(key),
+  );
   if (unknown.length > 0) {
     throw new Error(`Automata Bus briefing contains unknown fields: ${unknown.sort().join(', ')}`);
+  }
+  if (value.schemaVersion !== AUTOMATA_BUS_WORKER_BRIEFING_SCHEMA_VERSION) {
+    throw new Error(
+      `Automata Bus briefing schemaVersion must be ${AUTOMATA_BUS_WORKER_BRIEFING_SCHEMA_VERSION}`,
+    );
   }
   if (typeof value.text !== 'string') throw new Error('Automata Bus briefing text must be a string');
   if (!Number.isSafeInteger(value.itemCount) || (value.itemCount as number) < 0) {
@@ -126,7 +149,102 @@ function parseBriefing(value: unknown, bounds: AutomataBusWorkerBounds): Automat
   if ((value.itemCount as number) > bounds.maxBriefingItems) {
     throw new Error(`Automata Bus briefing exceeds maxBriefingItems (${bounds.maxBriefingItems})`);
   }
-  return { text: value.text, itemCount: value.itemCount as number };
+  return {
+    schemaVersion: AUTOMATA_BUS_WORKER_BRIEFING_SCHEMA_VERSION,
+    text: value.text,
+    itemCount: value.itemCount as number,
+    diagnostics: parseBriefingDiagnostics(value.diagnostics),
+  };
+}
+
+function rejectUnknownFields(
+  value: Record<string, unknown>,
+  allowed: readonly string[],
+  label: string,
+): void {
+  const unknown = Object.keys(value).filter(key => !allowed.includes(key));
+  if (unknown.length > 0) {
+    throw new Error(`${label} contains unknown fields: ${unknown.sort().join(', ')}`);
+  }
+}
+
+function parseBriefingModelIdentity(value: unknown): AutomataBusEmbeddingIdentity | null {
+  if (value === null) return null;
+  if (!isRecord(value)) throw new Error('Automata Bus briefing diagnostics.modelIdentity must be an object or null');
+  rejectUnknownFields(value, ['provider', 'model', 'dimensions'], 'Automata Bus briefing diagnostics.modelIdentity');
+  if (typeof value.provider !== 'string' || !value.provider.trim()) {
+    throw new Error('Automata Bus briefing diagnostics.modelIdentity.provider must be non-empty');
+  }
+  if (typeof value.model !== 'string' || !value.model.trim()) {
+    throw new Error('Automata Bus briefing diagnostics.modelIdentity.model must be non-empty');
+  }
+  if (!Number.isSafeInteger(value.dimensions) || (value.dimensions as number) < 1) {
+    throw new Error('Automata Bus briefing diagnostics.modelIdentity.dimensions must be a positive safe integer');
+  }
+  return {
+    provider: value.provider,
+    model: value.model,
+    dimensions: value.dimensions as number,
+  };
+}
+
+function parseBriefingIndexingLag(value: unknown): AutomataBusIndexingLag {
+  if (!isRecord(value)) throw new Error('Automata Bus briefing diagnostics.indexingLag must be an object');
+  rejectUnknownFields(
+    value,
+    ['pendingCount', 'oldestPendingAt', 'lastFailureAt'],
+    'Automata Bus briefing diagnostics.indexingLag',
+  );
+  if (!Number.isSafeInteger(value.pendingCount) || (value.pendingCount as number) < 0) {
+    throw new Error('Automata Bus briefing diagnostics.indexingLag.pendingCount must be a non-negative safe integer');
+  }
+  for (const field of ['oldestPendingAt', 'lastFailureAt'] as const) {
+    if (value[field] !== undefined && !isCanonicalIsoTimestamp(value[field])) {
+      throw new Error(`Automata Bus briefing diagnostics.indexingLag.${field} must be a canonical timestamp`);
+    }
+  }
+  return {
+    pendingCount: value.pendingCount as number,
+    ...(value.oldestPendingAt === undefined ? {} : { oldestPendingAt: value.oldestPendingAt as string }),
+    ...(value.lastFailureAt === undefined ? {} : { lastFailureAt: value.lastFailureAt as string }),
+  };
+}
+
+function parseBriefingDiagnostics(value: unknown): AutomataBusSearchDiagnostics {
+  if (!isRecord(value)) throw new Error('Automata Bus briefing diagnostics must be an object');
+  rejectUnknownFields(
+    value,
+    ['cache', 'semanticPath', 'indexState', 'reindexState', 'modelIdentity', 'indexingLag'],
+    'Automata Bus briefing diagnostics',
+  );
+  if (!AUTOMATA_BUS_SEARCH_CACHE_STATES.includes(
+    value.cache as typeof AUTOMATA_BUS_SEARCH_CACHE_STATES[number],
+  )) {
+    throw new Error('Automata Bus briefing diagnostics.cache is unknown');
+  }
+  if (!AUTOMATA_BUS_SEMANTIC_PATHS.includes(
+    value.semanticPath as typeof AUTOMATA_BUS_SEMANTIC_PATHS[number],
+  )) {
+    throw new Error('Automata Bus briefing diagnostics.semanticPath is unknown');
+  }
+  if (!AUTOMATA_BUS_INDEX_STATES.includes(
+    value.indexState as typeof AUTOMATA_BUS_INDEX_STATES[number],
+  )) {
+    throw new Error('Automata Bus briefing diagnostics.indexState is unknown');
+  }
+  if (!AUTOMATA_BUS_REINDEX_STATES.includes(
+    value.reindexState as typeof AUTOMATA_BUS_REINDEX_STATES[number],
+  )) {
+    throw new Error('Automata Bus briefing diagnostics.reindexState is unknown');
+  }
+  return {
+    cache: value.cache as AutomataBusSearchDiagnostics['cache'],
+    semanticPath: value.semanticPath as AutomataBusSearchDiagnostics['semanticPath'],
+    indexState: value.indexState as AutomataBusSearchDiagnostics['indexState'],
+    reindexState: value.reindexState as AutomataBusSearchDiagnostics['reindexState'],
+    modelIdentity: parseBriefingModelIdentity(value.modelIdentity),
+    indexingLag: parseBriefingIndexingLag(value.indexingLag),
+  };
 }
 
 /** Resolve one bounded spawn briefing. Excluded classes return before any query. */

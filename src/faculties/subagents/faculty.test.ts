@@ -41,7 +41,10 @@ import {
   type CapabilityRequirementInput,
 } from '../../system/capabilities/requirements.js';
 import type { CapabilityTier } from '../../system/capabilities/tier-types.js';
-import type { AutomataBusWorkerAccess } from '../automata/bus/worker-access.js';
+import {
+  AUTOMATA_BUS_WORKER_BRIEFING_SCHEMA_VERSION,
+  type AutomataBusWorkerAccess,
+} from '../automata/bus/worker-access.js';
 import {
   buildSubagentTerminalHandoffKey,
   type SubagentAutomataLifecyclePort,
@@ -51,6 +54,15 @@ let mockSubagentContent = 'subagent response';
 let mockSubagentError: Error | null = null;
 let mockSubagentDelayMs = 0;
 let mockFirstPromptTools: AgentTool<any>[] = [];
+
+const AUTOMATA_BUS_BRIEFING_DIAGNOSTICS = {
+  cache: 'miss',
+  semanticPath: 'exact-fallback',
+  indexState: 'ready',
+  reindexState: 'current',
+  modelIdentity: null,
+  indexingLag: { pendingCount: 0 },
+} as const;
 
 const promptSpy = vi.spyOn(Agent.prototype, 'prompt').mockImplementation(async function (this: Agent) {
   mockFirstPromptTools = [...resolveInstalledAgentTurnTools(this)];
@@ -2321,7 +2333,12 @@ describe('SubagentFaculty core-authoritative tool governance (p0le)', () => {
 
     it('renders the golden identity then bounded Bus then role order and injects the bound tool', async () => {
       const handleSpy = vi.spyOn(SubstrateAgent.prototype, 'handleMessage');
-      const createSpawnBriefing = vi.fn(async () => ({ text: 'Automata Bus briefing', itemCount: 0 }));
+      const createSpawnBriefing = vi.fn(async () => ({
+        schemaVersion: AUTOMATA_BUS_WORKER_BRIEFING_SCHEMA_VERSION,
+        text: 'Automata Bus briefing',
+        itemCount: 0,
+        diagnostics: AUTOMATA_BUS_BRIEFING_DIAGNOSTICS,
+      }));
       const access: AutomataBusWorkerAccess = {
         identity: {
           companionId: 'companion-public-example',
@@ -2420,7 +2437,12 @@ describe('SubagentFaculty core-authoritative tool governance (p0le)', () => {
         if (!runRegistry.getRun(scope.runId)) {
           throw new Error(`Automata Bus run "${scope.runId}" is not registered`);
         }
-        return { text: 'Registered briefing', itemCount: 0 };
+        return {
+          schemaVersion: AUTOMATA_BUS_WORKER_BRIEFING_SCHEMA_VERSION,
+          text: 'Registered briefing',
+          itemCount: 0,
+          diagnostics: AUTOMATA_BUS_BRIEFING_DIAGNOSTICS,
+        };
       });
       const access: AutomataBusWorkerAccess = {
         identity: {

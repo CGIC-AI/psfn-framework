@@ -16,6 +16,7 @@ import {
 } from './production-worker-adapter.js';
 import { createAutomataBusReviewerModelAdapter } from './production-reviewer-adapters.js';
 import {
+  AUTOMATA_BUS_WORKER_BRIEFING_SCHEMA_VERSION,
   buildAutomataBusWorkerScope,
   resolveAutomataBusWorkerFormation,
 } from './worker-access.js';
@@ -153,7 +154,7 @@ describe('production Automata Bus lifecycle composition', () => {
         cache: 'miss' as const,
         semanticPath: 'ann' as const,
         indexState: 'ready' as const,
-        reindexState: 'idle' as const,
+        reindexState: 'current' as const,
         modelIdentity: { provider: 'test', model: 'test', dimensions: 2 },
         indexingLag: { pendingCount: 0 },
       },
@@ -181,8 +182,17 @@ describe('production Automata Bus lifecycle composition', () => {
     });
 
     expect(formation?.briefing).toEqual({
+      schemaVersion: AUTOMATA_BUS_WORKER_BRIEFING_SCHEMA_VERSION,
       text: 'Automata Bus briefing\n- Production finding.',
       itemCount: 1,
+      diagnostics: {
+        cache: 'miss',
+        semanticPath: 'ann',
+        indexState: 'ready',
+        reindexState: 'current',
+        modelIdentity: { provider: 'test', model: 'test', dimensions: 2 },
+        indexingLag: { pendingCount: 0 },
+      },
     });
   });
 

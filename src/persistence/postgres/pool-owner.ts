@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { Pool } from 'pg';
-import type { PostgresConnectionOptions } from '../postgres.js';
+import type { PostgresConnectionOptions } from './connection-options.js';
 
 type PostgresPoolProcessKind = 'agent' | 'gateway' | 'maintenance' | 'test';
 

@@ -12,6 +12,7 @@ import { InternalStateComputer } from '../self-model/state.js';
 import type { AgentResponse, InferredPostTurnAction, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { CapturedSessionReads } from '../session/manager/captured-session-owner.js';
 import type { SessionEntry } from '../session/types.js';
+import { POST_TURN_APPRAISAL_RUNTIME_CLASS } from '../agent/worker-lanes.js';
 import { INTENTION_OUTBOUND_MESSAGE_ACTION_KIND } from './appraisal.js';
 import type { OutreachOutboxAppendInput, OutreachOutboxRecord } from './outreach-outbox.js';
 import { MAX_NEAR_TERM_FOLLOW_UP_HORIZON_MS } from '../../system/config/scheduler-config.js';
@@ -256,6 +257,8 @@ describe('intention appraisal runtime integration', () => {
           inferredAt: 1_699_999_999_000,
           maxRetries: 0,
         },
+        capability: 'generic',
+        runtimeClass: POST_TURN_APPRAISAL_RUNTIME_CLASS,
         attempt: 0,
         nextRunAt: 1_700_000_000_000,
         maxRetries: 0,
@@ -356,6 +359,8 @@ describe('intention appraisal runtime integration', () => {
           inferredAt: 1_700_000_000_000,
           maxRetries: 0,
         },
+        capability: 'generic',
+        runtimeClass: POST_TURN_APPRAISAL_RUNTIME_CLASS,
         attempt: 0,
         nextRunAt: 1_700_000_000_001,
         maxRetries: 0,
@@ -461,6 +466,8 @@ describe('intention appraisal runtime integration', () => {
           inferredAt: 1_700_000_000_000,
           maxRetries: 0,
         },
+        capability: 'generic',
+        runtimeClass: POST_TURN_APPRAISAL_RUNTIME_CLASS,
         attempt: 0,
         nextRunAt: 1_700_000_000_001,
         maxRetries: 0,

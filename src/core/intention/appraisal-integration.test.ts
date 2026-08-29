@@ -282,10 +282,20 @@ describe('intention appraisal runtime integration', () => {
         entries: Array<{
           actionPayloadVersion: number;
           action: { payload: Record<string, unknown> };
+          demandStartedAt: number;
+          coverageThroughInferredAt: number;
+          coalescedCount: number;
+          retryableFailureCount: number;
         }>;
       };
-      expect(migratedQueue.version).toBe(1);
+      expect(migratedQueue.version).toBe(2);
       expect(migratedQueue.entries[0]?.actionPayloadVersion).toBe(2);
+      expect(migratedQueue.entries[0]).toMatchObject({
+        demandStartedAt: 1_699_999_999_000,
+        coverageThroughInferredAt: 1_699_999_999_000,
+        coalescedCount: 0,
+        retryableFailureCount: 0,
+      });
       expect(migratedQueue.entries[0]?.action.payload).toMatchObject({
         personalProjectId: 'project-live',
       });
@@ -479,7 +489,7 @@ describe('intention appraisal runtime integration', () => {
           action: { payload: Record<string, unknown> };
         }>;
       };
-      expect(hydratedQueue.version).toBe(1);
+      expect(hydratedQueue.version).toBe(2);
       expect(hydratedQueue.entries[0]?.actionPayloadVersion).toBe(2);
       expect(hydratedQueue.entries[0]?.action.payload).toMatchObject({
         personalProjectId: 'project-live',

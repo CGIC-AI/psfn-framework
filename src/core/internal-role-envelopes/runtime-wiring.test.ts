@@ -50,6 +50,8 @@ vi.mock('../../persistence/sessions/postgres-adapters.js', async () => {
           enumerate: vi.fn(async () => []),
           claim: vi.fn(async () => null),
           resumeClaim: vi.fn(async () => null),
+          checkpointStage: vi.fn(async () => undefined),
+          recordFailure: vi.fn(async () => undefined),
           checkpoint: vi.fn(async () => undefined),
         },
       };

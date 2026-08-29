@@ -24,6 +24,11 @@ import {
 import { DEMOTION_EPOCH_NOTICE_VERSION } from '../../system/trust/context-envelope.js';
 import { destinationEpochEligible } from '../../core/cogsec/disclosure/decision.js';
 import type { DisclosureDestinationConstraint } from '../../core/cogsec/disclosure/contracts.js';
+import type {
+  ClaimedConversationalActivityWorkItem,
+  ConversationalActivityWorkItem,
+  ConversationalActivityWorksetPort,
+} from '../../core/session/conversational-activity-workset.js';
 
 /** start == end means the window covers the whole day. */
 function alwaysOpenRestWindow(): EpisodicProcessingRestWindowConfig {
@@ -86,6 +91,45 @@ function makeSleeptimeAction(overrides: Partial<InferredPostTurnAction> = {}): I
 
 function makeReviewAgent(content: string) {
   return { handleMessage: vi.fn(async () => ({ content })) };
+}
+
+function makeConversationalWorkset(
+  logicalSessionId = 'terminal:test',
+  occurredAtMs = 1,
+): ConversationalActivityWorksetPort {
+  const item: ConversationalActivityWorkItem = {
+    purpose: 'sleeptime_consolidation',
+    logicalSessionId,
+    revision: 1,
+    activityKind: logicalSessionId.startsWith('free-time:')
+      ? 'experiential_free_time'
+      : 'direct_message',
+    occurredAtMs,
+    checkpointRevision: 0,
+    completedStages: [],
+  };
+  let complete = false;
+  return {
+    enumerate: vi.fn(async () => complete ? [] : [{ ...item, completedStages: [...item.completedStages] }]),
+    claim: vi.fn(async input => {
+      if (item.claimantId || input.revision !== item.revision) return null;
+      item.claimantId = input.claimantId;
+      item.claimedAtMs = 1;
+      return { ...item, completedStages: [...item.completedStages] } as ClaimedConversationalActivityWorkItem;
+    }),
+    resumeClaim: vi.fn(async input => item.claimantId === input.claimantId
+      ? { ...item, completedStages: [...item.completedStages] } as ClaimedConversationalActivityWorkItem
+      : null),
+    checkpointStage: vi.fn(async input => {
+      item.completedStages.push(input.stage);
+    }),
+    recordFailure: vi.fn(async input => {
+      item.lastFailure = { stage: input.stage, message: input.message, failedAtMs: 2 };
+    }),
+    checkpoint: vi.fn(async () => {
+      complete = true;
+    }),
+  };
 }
 
 /**
@@ -165,6 +209,7 @@ describe('SleeptimeMemoryAgent', () => {
         resolveSessionChannelId: vi.fn((channelId: string) => channelId),
         getRecentMessages: vi.fn().mockReturnValue([]),
       },
+      conversationalActivityWorkset: makeConversationalWorkset(),
       coreMemoryStore: makeCoreMemoryStore(),
       memoryWriter: { write: vi.fn() },
       restWindow: alwaysOpenRestWindow(),
@@ -188,7 +233,38 @@ describe('SleeptimeMemoryAgent', () => {
     expect(typeof surface.inferIdlePostTurnActions).toBe('function');
   });
 
-  it('infers idle sleeptime actions for quiet rest-window sessions', () => {
+  it('performs zero LLM or heavy-pass calls when the durable workset has no changes', async () => {
+    const reviewAgent = makeReviewAgent('{}');
+    const sleepConsolidator = { run: vi.fn() };
+    const arcWeaver = { run: vi.fn() };
+    const dreamMeaningPass = { run: vi.fn() };
+    const sleeptimeWikiPass = { run: vi.fn() };
+    const emptyWorkset = {
+      ...makeConversationalWorkset(),
+      enumerate: vi.fn(async () => []),
+    };
+    const agent = new SleeptimeMemoryAgent(makeAgentOptions({
+      agent: reviewAgent,
+      conversationalActivityWorkset: emptyWorkset,
+      sleepConsolidator,
+      arcWeaver,
+      dreamMeaningPass,
+      sleeptimeWikiPass,
+    }));
+
+    await expect(agent.execute(makeSleeptimeAction())).resolves.toEqual({
+      outcome: 'complete',
+      completedSessions: 0,
+      remainingSessions: 0,
+    });
+    expect(reviewAgent.handleMessage).not.toHaveBeenCalled();
+    expect(sleepConsolidator.run).not.toHaveBeenCalled();
+    expect(arcWeaver.run).not.toHaveBeenCalled();
+    expect(dreamMeaningPass.run).not.toHaveBeenCalled();
+    expect(sleeptimeWikiPass.run).not.toHaveBeenCalled();
+  });
+
+  it('infers one companion sleeptime action for quiet changed sessions', async () => {
     const sessionManager = {
       resolveSessionChannelId: vi.fn((channelId: string) => channelId),
       getRecentMessages: vi.fn().mockReturnValue([]),
@@ -204,26 +280,29 @@ describe('SleeptimeMemoryAgent', () => {
     };
     const agent = new SleeptimeMemoryAgent(makeAgentOptions({
       sessionManager,
+      conversationalActivityWorkset: makeConversationalWorkset(
+        'terminal:alpha',
+        Date.parse('2026-03-16T01:00:00.000Z'),
+      ),
       restWindow: nightRestWindow(),
     }));
 
-    const actions = agent.inferIdlePostTurnActions({
+    const actions = await agent.inferIdlePostTurnActions({
       nowMs: Date.parse('2026-03-16T03:30:00.000Z'),
     });
 
     expect(actions).toHaveLength(1);
     expect(actions[0]).toMatchObject({
       kind: SLEEPTIME_MEMORY_ACTION_KIND,
-      dedupeKey: `${SLEEPTIME_MEMORY_ACTION_KIND}:terminal:alpha`,
+      dedupeKey: `${SLEEPTIME_MEMORY_ACTION_KIND}:companion`,
       payload: {
-        sessionId: 'terminal:alpha',
         trigger: 'idle_rest_window',
         lastUserActivityAtMs: Date.parse('2026-03-16T01:00:00.000Z'),
       },
     });
   });
 
-  it('does not infer sleeptime actions for testing sessions', () => {
+  it('does not infer sleeptime actions for testing sessions', async () => {
     const sessionManager = {
       resolveSessionChannelId: vi.fn((channelId: string) => channelId),
       getRecentMessages: vi.fn().mockReturnValue([]),
@@ -239,12 +318,16 @@ describe('SleeptimeMemoryAgent', () => {
     };
     const agent = new SleeptimeMemoryAgent(makeAgentOptions({
       sessionManager,
+      conversationalActivityWorkset: makeConversationalWorkset(
+        'terminal:testing:rest-window-probe',
+        Date.parse('2026-03-16T01:00:00.000Z'),
+      ),
       restWindow: nightRestWindow(),
     }));
 
-    expect(agent.inferIdlePostTurnActions({
+    await expect(agent.inferIdlePostTurnActions({
       nowMs: Date.parse('2026-03-16T03:30:00.000Z'),
-    })).toEqual([]);
+    })).resolves.toEqual([]);
   });
 
   it('skips queued testing-session work before transcript, durable memory, orientation, wiki, dream, or arc activity', async () => {
@@ -274,6 +357,9 @@ describe('SleeptimeMemoryAgent', () => {
       arcWeaver,
       dreamMeaningPass,
       sleeptimeWikiPass,
+      conversationalActivityWorkset: makeConversationalWorkset(
+        'terminal:testing:queued-rest-window-probe',
+      ),
     }));
 
     await agent.execute(makeSleeptimeAction({
@@ -292,7 +378,7 @@ describe('SleeptimeMemoryAgent', () => {
     expect(memoryWriter.write).not.toHaveBeenCalled();
   });
 
-  it('does not infer idle actions for sessions active inside the window', () => {
+  it('does not infer idle actions for sessions active inside the window', async () => {
     const sessionManager = {
       resolveSessionChannelId: vi.fn((channelId: string) => channelId),
       getRecentMessages: vi.fn().mockReturnValue([]),
@@ -308,12 +394,16 @@ describe('SleeptimeMemoryAgent', () => {
     };
     const agent = new SleeptimeMemoryAgent(makeAgentOptions({
       sessionManager,
+      conversationalActivityWorkset: makeConversationalWorkset(
+        'terminal:alpha',
+        Date.parse('2026-03-16T03:10:00.000Z'),
+      ),
       restWindow: nightRestWindow(),
     }));
 
-    expect(agent.inferIdlePostTurnActions({
+    await expect(agent.inferIdlePostTurnActions({
       nowMs: Date.parse('2026-03-16T03:30:00.000Z'),
-    })).toHaveLength(0);
+    })).resolves.toHaveLength(0);
   });
 
   it('reorients active blocks and writes long-term memory facts from a sleeptime plan', async () => {
@@ -820,6 +910,7 @@ describe('SleeptimeMemoryAgent', () => {
       agent: reviewAgent,
       episodicStore: { searchByTime },
       memoryWriter,
+      conversationalActivityWorkset: makeConversationalWorkset('discord:dm-logical'),
       sessionManager: {
         resolveSessionChannelId: vi.fn(() => 'discord:dm-logical'),
         getRecentMessages: vi.fn().mockReturnValue([
@@ -894,7 +985,7 @@ describe('SleeptimeMemoryAgent', () => {
     });
   });
 
-  it('isolates each episodic pass failure so every downstream pass still runs', async () => {
+  it('records an episodic pass failure and leaves downstream stages for retry', async () => {
     const sessionManager = {
       resolveSessionChannelId: vi.fn((channelId: string) => channelId),
       getRecentMessages: vi.fn().mockReturnValue([
@@ -922,12 +1013,15 @@ describe('SleeptimeMemoryAgent', () => {
     await expect(agent.execute(makeSleeptimeAction({
       payload: { sessionId: 'terminal:test' },
       sourceMessageId: 'msg-78',
-    }))).resolves.toBeUndefined();
+    }))).resolves.toMatchObject({
+      outcome: 'retry',
+      failures: [expect.objectContaining({ stage: 'sleep_consolidation' })],
+    });
 
     expect(sleepConsolidator.run).toHaveBeenCalledTimes(1);
-    expect(arcWeaver.run).toHaveBeenCalledTimes(1);
-    expect(dreamMeaningPass.run).toHaveBeenCalledTimes(1);
-    expect(sleeptimeWikiPass.run).toHaveBeenCalledTimes(1);
+    expect(arcWeaver.run).not.toHaveBeenCalled();
+    expect(dreamMeaningPass.run).not.toHaveBeenCalled();
+    expect(sleeptimeWikiPass.run).not.toHaveBeenCalled();
   });
 
   it('skips CogSec-risk sleeptime orient rewrites while keeping safe memory writes', async () => {
@@ -1310,6 +1404,7 @@ describe('SleeptimeMemoryAgent', () => {
       sleepConsolidator,
       arcWeaver,
       dreamMeaningPass,
+      conversationalActivityWorkset: makeConversationalWorkset('terminal:test', Date.now()),
     }));
 
     await agent.execute(makeSleeptimeAction({

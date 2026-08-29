@@ -32,6 +32,7 @@ import type {
 } from '../../faculties/memory/episodic/store-port.js';
 import type { ReflectionMetacognitionJournalStore } from '../../persistence/journals/reflection-metacognition-journal.js';
 import type { SessionManager } from '../session/manager.js';
+import type { ConversationalActivityWorksetPort } from '../session/conversational-activity-workset.js';
 import type { CoreMemoryStore } from '../../faculties/core-memory/store.js';
 import type { EmotionStateSnapshot } from '../emotion/state.js';
 import type { ContactStorePort } from '../contacts/contact-store-port.js';
@@ -107,6 +108,7 @@ export interface ReflectionRuntimeOptions {
     SessionManager,
     'getConversationEvidenceWindow' | 'recordSystemMessage' | 'recordAssistantMessage'
   >>;
+  conversationalActivityWorkset?: ConversationalActivityWorksetPort;
   emotionState?: { getState(): EmotionStateSnapshot };
   contactStore?: Pick<ContactStorePort, 'getById' | 'getEmotionalSnapshot' | 'getEmotionalTimeSeries'>
     & Partial<Pick<

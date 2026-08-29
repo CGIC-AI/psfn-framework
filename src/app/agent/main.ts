@@ -1870,6 +1870,7 @@ async function main(): Promise<void> {
       promptRegistry: promptState.registry,
       reflectionStore,
       sessionManager,
+      conversationalActivityWorkset,
       emotionState,
       contactStore,
       getActiveConcerns: intentionAppraisalHooks.getActiveConcerns,

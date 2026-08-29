@@ -1547,6 +1547,10 @@ export const POSTGRES_TRANSCRIPT_MIGRATIONS = [
     claimed_revision BIGINT,
     claimed_by TEXT,
     claimed_at_ms BIGINT,
+    completed_stages JSONB NOT NULL DEFAULT '[]'::jsonb,
+    failed_stage TEXT,
+    failure_message TEXT,
+    failed_at_ms BIGINT,
     updated_at_ms BIGINT NOT NULL,
     PRIMARY KEY (purpose, logical_session_id),
     CHECK (
@@ -1555,6 +1559,10 @@ export const POSTGRES_TRANSCRIPT_MIGRATIONS = [
     )
   );
   `,
+  `ALTER TABLE session_conversational_workset ADD COLUMN IF NOT EXISTS completed_stages JSONB NOT NULL DEFAULT '[]'::jsonb;`,
+  `ALTER TABLE session_conversational_workset ADD COLUMN IF NOT EXISTS failed_stage TEXT;`,
+  `ALTER TABLE session_conversational_workset ADD COLUMN IF NOT EXISTS failure_message TEXT;`,
+  `ALTER TABLE session_conversational_workset ADD COLUMN IF NOT EXISTS failed_at_ms BIGINT;`,
   `
   CREATE TABLE IF NOT EXISTS session_message_addressing_quarantine (
     channel_id TEXT NOT NULL,

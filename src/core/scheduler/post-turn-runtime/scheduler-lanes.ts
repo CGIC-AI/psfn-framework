@@ -118,6 +118,7 @@ export function createSchedulerOwnedPostTurnLanes(
     runtimeOptions.episodicReviewStore
     && runtimeOptions.memoryWriter
     && runtimeOptions.sessionManager
+    && runtimeOptions.conversationalActivityWorkset
     && runtimeOptions.coreMemoryStore
     && runtimeOptions.episodicProcessingRestWindow
   )
@@ -125,6 +126,7 @@ export function createSchedulerOwnedPostTurnLanes(
       agent: agentLoop,
       episodicStore: runtimeOptions.episodicReviewStore,
       sessionManager: runtimeOptions.sessionManager,
+      conversationalActivityWorkset: runtimeOptions.conversationalActivityWorkset,
       coreMemoryStore: runtimeOptions.coreMemoryStore,
       memoryWriter: runtimeOptions.memoryWriter,
       promptRegistry: runtimeOptions.promptRegistry ?? null,
@@ -335,7 +337,7 @@ export function registerSchedulerOwnedPostTurnLanes(
         name: 'Sleeptime Rest-Window Check',
         description: 'Checks whether rest-window heavy memory passes have become eligible.',
         handler: async () => {
-          const actions = sleeptimeAgent.inferIdlePostTurnActions();
+          const actions = await sleeptimeAgent.inferIdlePostTurnActions();
           for (const action of actions) {
             const payload = action.payload ?? {};
             const channelId = typeof payload.sourceChannelId === 'string'
@@ -378,7 +380,25 @@ export function registerSchedulerOwnedPostTurnLanes(
     postTurnActions.registerHandler(
       SLEEPTIME_MEMORY_ACTION_KIND,
       async (action) => {
-        await sleeptimeAgent.execute(action);
+        const outcome = await sleeptimeAgent.execute(action);
+        if (outcome.outcome === 'retry') {
+          throw new AggregateError(
+            outcome.failures.map(failure => new Error(
+              `${failure.logicalSessionId}/${failure.stage}: ${failure.message}`,
+            )),
+            `Sleeptime workset has ${outcome.failures.length} session failure(s)`,
+          );
+        }
+        if (outcome.outcome === 'yield') {
+          const delayMs = runtimeOptions.episodicProcessingRestWindow!.inactivityThresholdMinutes * 60_000;
+          return {
+            rescheduleAt: Date.now() + delayMs,
+            detail: `Sleeptime yielded with ${outcome.remainingSessions} session(s) remaining`,
+          };
+        }
+        return {
+          detail: `Sleeptime completed ${outcome.completedSessions} changed session(s)`,
+        };
       },
       {
         executionMode: 'background',
@@ -391,6 +411,7 @@ export function registerSchedulerOwnedPostTurnLanes(
       hasLLMProvider: Boolean(runtimeOptions.llmProvider),
       hasMemoryWriter: Boolean(runtimeOptions.memoryWriter),
       hasSessionManager: Boolean(runtimeOptions.sessionManager),
+      hasConversationalActivityWorkset: Boolean(runtimeOptions.conversationalActivityWorkset),
       hasCoreMemoryStore: Boolean(runtimeOptions.coreMemoryStore),
       hasRestWindow: Boolean(runtimeOptions.episodicProcessingRestWindow),
     });

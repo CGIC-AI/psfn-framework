@@ -13,9 +13,18 @@ export interface ConversationalActivityWorkItem {
   logicalSessionId: string;
   revision: number;
   activityKind: ProcessableConversationKind;
+  occurredAtMs: number;
   checkpointRevision: number;
+  completedStages: string[];
   claimantId?: string;
   claimedAtMs?: number;
+  lastFailure?: ConversationalActivityFailure;
+}
+
+export interface ConversationalActivityFailure {
+  stage: string;
+  message: string;
+  failedAtMs: number;
 }
 
 export interface ClaimedConversationalActivityWorkItem
@@ -39,10 +48,22 @@ export interface ConversationalActivityResumeInput {
 
 export type ConversationalActivityCheckpointInput = ConversationalActivityClaimInput;
 
+export interface ConversationalActivityStageCheckpointInput
+  extends ConversationalActivityCheckpointInput {
+  stage: string;
+}
+
+export interface ConversationalActivityFailureInput
+  extends ConversationalActivityStageCheckpointInput {
+  message: string;
+}
+
 export interface ConversationalActivityWorksetPort {
   /** Enumerate every changed logical session; intentionally has no limit. */
   enumerate(purpose: ConversationalActivityPurpose): Promise<ConversationalActivityWorkItem[]>;
   claim(input: ConversationalActivityClaimInput): Promise<ClaimedConversationalActivityWorkItem | null>;
   resumeClaim(input: ConversationalActivityResumeInput): Promise<ClaimedConversationalActivityWorkItem | null>;
+  checkpointStage(input: ConversationalActivityStageCheckpointInput): Promise<void>;
+  recordFailure(input: ConversationalActivityFailureInput): Promise<void>;
   checkpoint(input: ConversationalActivityCheckpointInput): Promise<void>;
 }

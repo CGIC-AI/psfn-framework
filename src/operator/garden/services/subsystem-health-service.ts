@@ -856,9 +856,11 @@ export class AdminSubsystemHealthDataService implements AdminSubsystemHealthServ
       ?? (queueStatus.quarantine.persisted ? undefined : 'Queue quarantine state is not durable');
     const hasFailures = queueStatus.failures.retryableFailureCount > 0
       || queueStatus.failures.permanentRejectCount > 0;
+    const hasNoProgress = queueStatus.queueDepth > 0
+      && queueStatus.progress.noProgressForMs > 0;
     const status: SubsystemLaneStatus = persistenceError || queueStatus.quarantine.count > 0
       ? 'failed'
-      : hasFailures || queueStatus.backPressure.droppedCount > 0
+      : hasFailures || queueStatus.backPressure.droppedCount > 0 || hasNoProgress
         ? 'degraded'
         : 'ok';
     const outcome: SubsystemLaneOutcome = status === 'failed'
@@ -874,8 +876,8 @@ export class AdminSubsystemHealthDataService implements AdminSubsystemHealthServ
           ? 'retryable_or_permanent_failures'
           : queueStatus.backPressure.droppedCount > 0
             ? 'terminal_drops_observed'
-            : queueStatus.queueDepth > 0 && queueStatus.progress.noProgressForMs > 0
-              ? 'demand_waiting'
+            : hasNoProgress
+              ? 'queue_no_progress'
               : null;
 
     return {

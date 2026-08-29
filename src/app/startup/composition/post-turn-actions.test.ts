@@ -356,12 +356,14 @@ describe('wirePostTurnActionRuntime', () => {
       kind: 'memory.episode-synthesis.run',
       dedupeKey: 'memory.episode-synthesis.run:session-a',
       sourceMessageId: 'successor-message',
-      inferredAt: 2,
+      // Deliberately older than the running action's inference timestamp:
+      // arrival during execution, not wall-clock ordering, requires a successor.
+      inferredAt: 0,
     }))).toBe('coalesced');
     expect(runtime.getStatus().queued[0]).toMatchObject({
       actionId: 'running-trigger',
       coalescedCount: 1,
-      coverageThroughInferredAt: 2,
+      coverageThroughInferredAt: 1,
       latestSourceMessageId: 'successor-message',
       successorPending: true,
     });
@@ -376,6 +378,37 @@ describe('wirePostTurnActionRuntime', () => {
     await scheduler.tick();
     expect(handledIds).toEqual(['running-trigger', 'successor-trigger']);
     expect(runtime.getStatus().queueDepth).toBe(0);
+  });
+
+  it('rejects a cross-kind dedupe collision instead of falsely coalescing distinct work', () => {
+    const eventBus = new EventBus();
+    const scheduler = new Scheduler(eventBus, {
+      tickIntervalMs: 100,
+      heartbeatIntervalMs: 1_000,
+    });
+    const runtime = wirePostTurnActionRuntime({
+      eventBus,
+      scheduler,
+      agentLoop: { waitForIdle: vi.fn().mockResolvedValue(undefined) },
+    });
+    runtime.registerHandler('memory.episode-synthesis.run', vi.fn(), {
+      runtimeClass: MAINTENANCE_REFLECTION_RUNTIME_CLASS,
+      coalescing: 'dedupe_key_with_durable_watermark',
+    });
+    runtime.enqueue(makeAction({
+      id: 'reflection-action',
+      kind: 'heartbeat.run_template',
+      dedupeKey: 'colliding-key',
+    }));
+
+    expect(() => runtime.enqueue(makeAction({
+      id: 'synthesis-action',
+      kind: 'memory.episode-synthesis.run',
+      dedupeKey: 'colliding-key',
+    }))).toThrow(/dedupe key collision/i);
+    expect(runtime.listQueued()).toEqual([
+      expect.objectContaining({ actionId: 'reflection-action', actionKind: 'heartbeat.run_template' }),
+    ]);
   });
 
   it('waits for foreground handlers to reach agent idle before executing', async () => {
@@ -1123,6 +1156,74 @@ describe('wirePostTurnActionRuntime', () => {
       });
     } finally {
       nowSpy.mockRestore();
+    }
+  });
+
+  it('restores the retryable-failure count with a durable retry checkpoint', async () => {
+    const nowSpy = vi.spyOn(Date, 'now');
+    const tempDir = mkdtempSync(join(tmpdir(), 'psfn-post-turn-retry-restart-'));
+    const persistencePath = join(tempDir, 'queue.json');
+
+    try {
+      nowSpy.mockReturnValue(1_700_000_000_000);
+      const firstBus = new EventBus();
+      const firstScheduler = new Scheduler(firstBus, {
+        tickIntervalMs: 100,
+        heartbeatIntervalMs: 1_000,
+      });
+      const firstRuntime = wirePostTurnActionRuntime({
+        eventBus: firstBus,
+        scheduler: firstScheduler,
+        agentLoop: { waitForIdle: vi.fn().mockResolvedValue(undefined) },
+        intervalMs: 1,
+        baseRetryDelayMs: 100,
+        maxRetryDelayMs: 100,
+        persistencePath,
+      });
+      firstRuntime.registerHandler(
+        'heartbeat.run_template',
+        vi.fn().mockRejectedValue(new Error('retry after restart')),
+      );
+      await firstBus.emit('agent.post_turn.actions.inferred', {
+        message: makeMessage(),
+        response: makeResponse(),
+        actions: [makeAction({
+          id: 'retry-before-restart',
+          dedupeKey: 'retry:before-restart',
+          maxRetries: 1,
+        })],
+      });
+
+      await firstScheduler.tick();
+      expect(firstRuntime.getStatus()).toMatchObject({
+        retryScheduledCount: 1,
+        failures: { retryableFailureCount: 1 },
+      });
+
+      const restartedBus = new EventBus();
+      const restartedScheduler = new Scheduler(restartedBus, {
+          tickIntervalMs: 100,
+          heartbeatIntervalMs: 1_000,
+      });
+      const restartedRuntime = wirePostTurnActionRuntime({
+        eventBus: restartedBus,
+        scheduler: restartedScheduler,
+        agentLoop: { waitForIdle: vi.fn().mockResolvedValue(undefined) },
+        intervalMs: 1,
+        persistencePath,
+      });
+      expect(restartedRuntime.getStatus()).toMatchObject({
+        retryScheduledCount: 1,
+        failures: { retryableFailureCount: 1 },
+        queued: [expect.objectContaining({
+          actionId: 'retry-before-restart',
+          attempt: 1,
+          state: 'retry_scheduled',
+        })],
+      });
+    } finally {
+      nowSpy.mockRestore();
+      rmSync(tempDir, { recursive: true, force: true });
     }
   });
 

@@ -206,15 +206,15 @@ export interface SleeptimeMemoryAgentOptions {
   /** Typed gate telemetry sink; wired to the runtime event bus by composition. */
   onGateEvent?: (event: DeterministicGateEvent) => void;
   now?: () => number;
-  sleepConsolidator?: SleeptimeEpisodeConsolidator | null;
-  arcWeaver?: SleeptimeArcWeaver | null;
-  dreamMeaningPass?: SleeptimeDreamMeaningPass | null;
+  sleepConsolidator: SleeptimeEpisodeConsolidator;
+  arcWeaver: SleeptimeArcWeaver;
+  dreamMeaningPass: SleeptimeDreamMeaningPass;
   /**
    * Sleeptime wiki update pass (E8.2). Runs AFTER episodes/memories settle
    * (after consolidation/arcs/dream) with its own deterministic gate and
    * watermark; independent of the orient rewrite gate.
    */
-  sleeptimeWikiPass?: SleeptimeWikiPassRunner | null;
+  sleeptimeWikiPass: SleeptimeWikiPassRunner;
   memoryMaintenanceStore?: SleeptimeMaintenanceStore | null;
   episodicDiagnosticsStore?: SleeptimeEpisodicDiagnosticsStore | null;
 }
@@ -571,10 +571,10 @@ export class SleeptimeMemoryAgent {
   private readonly orientationRewriteGate: DeterministicGateDefinition;
   private readonly onGateEvent: ((event: DeterministicGateEvent) => void) | null;
   private readonly now: () => number;
-  private readonly sleepConsolidator: SleeptimeEpisodeConsolidator | null;
-  private readonly arcWeaver: SleeptimeArcWeaver | null;
-  private readonly dreamMeaningPass: SleeptimeDreamMeaningPass | null;
-  private readonly sleeptimeWikiPass: SleeptimeWikiPassRunner | null;
+  private readonly sleepConsolidator: SleeptimeEpisodeConsolidator;
+  private readonly arcWeaver: SleeptimeArcWeaver;
+  private readonly dreamMeaningPass: SleeptimeDreamMeaningPass;
+  private readonly sleeptimeWikiPass: SleeptimeWikiPassRunner;
   private readonly memoryMaintenanceStore: SleeptimeMaintenanceStore | null;
   private readonly episodicDiagnosticsStore: SleeptimeEpisodicDiagnosticsStore | null;
 
@@ -585,6 +585,22 @@ export class SleeptimeMemoryAgent {
         'SleeptimeMemoryAgent requires a rest-window config (scheduler.json episodicProcessing); '
         + 'sleeptime is scheduler-owned nightly work and must not run from turn cadence',
       );
+    }
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime guards for JS callers
+    if (!options.sleepConsolidator) {
+      throw new Error('SleeptimeMemoryAgent requires every ordered pass; missing sleepConsolidator');
+    }
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime guards for JS callers
+    if (!options.arcWeaver) {
+      throw new Error('SleeptimeMemoryAgent requires every ordered pass; missing arcWeaver');
+    }
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime guards for JS callers
+    if (!options.dreamMeaningPass) {
+      throw new Error('SleeptimeMemoryAgent requires every ordered pass; missing dreamMeaningPass');
+    }
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime guards for JS callers
+    if (!options.sleeptimeWikiPass) {
+      throw new Error('SleeptimeMemoryAgent requires every ordered pass; missing sleeptimeWikiPass');
     }
     this.agent = options.agent;
     this.episodicStore = options.episodicStore;
@@ -607,10 +623,10 @@ export class SleeptimeMemoryAgent {
     );
     this.onGateEvent = options.onGateEvent ?? null;
     this.now = options.now ?? (() => Date.now());
-    this.sleepConsolidator = options.sleepConsolidator ?? null;
-    this.arcWeaver = options.arcWeaver ?? null;
-    this.dreamMeaningPass = options.dreamMeaningPass ?? null;
-    this.sleeptimeWikiPass = options.sleeptimeWikiPass ?? null;
+    this.sleepConsolidator = options.sleepConsolidator;
+    this.arcWeaver = options.arcWeaver;
+    this.dreamMeaningPass = options.dreamMeaningPass;
+    this.sleeptimeWikiPass = options.sleeptimeWikiPass;
     this.memoryMaintenanceStore = options.memoryMaintenanceStore ?? null;
     this.episodicDiagnosticsStore = options.episodicDiagnosticsStore ?? null;
   }
@@ -624,10 +640,7 @@ export class SleeptimeMemoryAgent {
     nowMs?: number;
   } = {}): Promise<PostTurnActionCandidate[]> {
     const snapshot = (await this.conversationalActivityWorkset.enumerate('sleeptime_consolidation'))
-      .filter(item => (
-        !isTestingSessionId(item.logicalSessionId)
-        && !this.sessionManager.isSessionRetiredOrQuarantined?.(item.logicalSessionId)
-      ));
+      .filter(item => this.isEligibleWorkItem(item));
     if (snapshot.length === 0) return [];
     const nowMs = typeof options.nowMs === 'number' && Number.isFinite(options.nowMs)
       ? options.nowMs
@@ -656,7 +669,8 @@ export class SleeptimeMemoryAgent {
   async execute(
     action: Pick<InferredPostTurnAction, 'id' | 'sourceMessageId' | 'payload'>,
   ): Promise<SleeptimeWorksetRunOutcome> {
-    const snapshot = await this.conversationalActivityWorkset.enumerate('sleeptime_consolidation');
+    const snapshot = (await this.conversationalActivityWorkset.enumerate('sleeptime_consolidation'))
+      .filter(item => this.isEligibleWorkItem(item));
     if (snapshot.length === 0) {
       return { outcome: 'complete', completedSessions: 0, remainingSessions: 0 };
     }
@@ -686,7 +700,11 @@ export class SleeptimeMemoryAgent {
       claimantId: SLEEPTIME_WORKSET_CLAIMANT_ID,
       shouldYield: async () => this.hasActivityBeyondSnapshot(snapshotRevisions),
       isYieldError: error => classifyPostTurnActionContention(error) !== null,
-      runStage: async input => this.runWorksetStage(input, action, entriesBySession),
+      runStage: async input => this.runWorksetStage(
+        input,
+        action,
+        entriesBySession,
+      ),
     });
     return runner.run(snapshot);
   }
@@ -707,26 +725,34 @@ export class SleeptimeMemoryAgent {
     if (!recentEntries) {
       recentEntries = this.sessionManager
         .getRecentMessages(sessionId, this.transcriptMessageLimit)
-        .filter(entry => entry.role === 'user' || entry.role === 'assistant');
+        .filter(entry => (
+          entry.id <= input.revision
+          && (entry.role === 'user' || entry.role === 'assistant')
+        ));
       if (recentEntries.length === 0) {
         throw new Error('Changed conversational session has no readable conversational transcript');
       }
       entriesBySession.set(sessionId, recentEntries);
     }
 
-    const passInput = { sessionId, sourceMessageId: action.sourceMessageId };
+    const passInput = {
+      sessionId,
+      sourceMessageId: action.sourceMessageId,
+      throughRevision: input.revision,
+      throughOccurredAtMs: input.occurredAtMs,
+    };
     switch (input.stage) {
       case 'sleep_consolidation':
-        await this.sleepConsolidator?.run(passInput);
+        await this.sleepConsolidator.run(passInput);
         return;
       case 'arc_formation':
-        await this.arcWeaver?.run(passInput);
+        await this.arcWeaver.run(passInput);
         return;
       case 'dream_meaning':
-        await this.dreamMeaningPass?.run(passInput);
+        await this.dreamMeaningPass.run(passInput);
         return;
       case 'wiki_pass':
-        await this.sleeptimeWikiPass?.run(passInput);
+        await this.sleeptimeWikiPass.run(passInput);
         return;
       case 'orientation_review':
         await this.runOrientationReview(sessionId, action, recentEntries);
@@ -849,18 +875,9 @@ export class SleeptimeMemoryAgent {
         evidenceCount,
         ...(sourceConversationAt !== undefined ? { sourceConversationAt } : {}),
       });
-      try {
-        const result = await this.memoryWriter.write(writePayload);
-        writtenCount += 1;
-        reviewQueuedCount += await this.queueConflictReviewFromWriteResult(result);
-      } catch (error) {
-        log.warn('Sleeptime memory write skipped after error', {
-          sessionId,
-          actionId: action.id,
-          type: memory.type,
-          error: String(error),
-        });
-      }
+      const result = await this.memoryWriter.write(writePayload);
+      writtenCount += 1;
+      reviewQueuedCount += await this.queueConflictReviewFromWriteResult(result);
     }
     const memoryMaintenanceDiagnostics = await this.getMemoryMaintenanceDiagnostics();
     const episodicMaintenanceDiagnostics = await this.getEpisodicMaintenanceDiagnostics();
@@ -888,8 +905,14 @@ export class SleeptimeMemoryAgent {
     );
   }
 
+  private isEligibleWorkItem(item: ConversationalActivityWorkItem): boolean {
+    return !isTestingSessionId(item.logicalSessionId)
+      && !this.sessionManager.isSessionRetiredOrQuarantined?.(item.logicalSessionId);
+  }
+
   private async hasActivityBeyondSnapshot(snapshotRevisions: ReadonlyMap<string, number>): Promise<boolean> {
-    const current = await this.conversationalActivityWorkset.enumerate('sleeptime_consolidation');
+    const current = (await this.conversationalActivityWorkset.enumerate('sleeptime_consolidation'))
+      .filter(item => this.isEligibleWorkItem(item));
     return current.some(item => item.revision > (snapshotRevisions.get(item.logicalSessionId) ?? 0));
   }
 

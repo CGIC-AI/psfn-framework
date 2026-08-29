@@ -55,6 +55,7 @@ export interface DreamPassAgent {
  * the manager directly without a coupling import.
  */
 export interface DreamPassTranscriptEntry {
+  id?: number;
   role: string;
   content: string;
   timestamp: number;
@@ -109,6 +110,8 @@ export interface DreamMeaningPassOptions {
 export interface DreamMeaningPassRunInput {
   sessionId: string;
   sourceMessageId?: string;
+  throughRevision?: number;
+  throughOccurredAtMs?: number;
 }
 
 export interface DreamMeaningPassRunResult {
@@ -455,6 +458,7 @@ export class DreamMeaningPass {
    */
   private loadTranscriptGrounding(
     episodes: readonly Episode[],
+    throughRevision?: number,
   ): { excerpts: Map<string, string>; deferredEpisodeIds: Set<string> } {
     const excerpts = new Map<string, string>();
     const deferredEpisodeIds = new Set<string>();
@@ -469,7 +473,13 @@ export class DreamMeaningPass {
         // recorded) once, not once per episode.
         let entries: readonly DreamPassTranscriptEntry[] = [];
         try {
-          entries = this.transcriptReader.getRecentMessages(sessionKey, this.transcriptMessageLimit);
+          entries = this.transcriptReader
+            .getRecentMessages(sessionKey, this.transcriptMessageLimit)
+            .filter(entry => (
+              throughRevision === undefined
+              || entry.id === undefined
+              || entry.id <= throughRevision
+            ));
         } catch (error) {
           // Content-free diagnostic only — never the unread transcript.
           log.warn('Dream pass could not read transcript turns; deferring this session rather than authoring ungrounded meaning', {
@@ -507,7 +517,10 @@ export class DreamMeaningPass {
   }
 
   async run(input: DreamMeaningPassRunInput): Promise<DreamMeaningPassRunResult> {
-    const nowMs = this.now().getTime();
+    const runtimeNowMs = this.now().getTime();
+    const nowMs = input.throughOccurredAtMs === undefined
+      ? runtimeNowMs
+      : Math.min(runtimeNowMs, input.throughOccurredAtMs);
     const watermarkScope = {
       processor: DREAM_MEANING_PROCESSOR,
       sourceRef: input.sessionId,
@@ -603,7 +616,10 @@ export class DreamMeaningPass {
     // deferred — withheld from authorship this pass and left eligible next run —
     // so a failed transcript read can never author first-person meaning from
     // title/landmark alone (charter Law 17).
-    const { excerpts, deferredEpisodeIds } = this.loadTranscriptGrounding(episodes);
+    const { excerpts, deferredEpisodeIds } = this.loadTranscriptGrounding(
+      episodes,
+      input.throughRevision,
+    );
     const reviewable = episodes.filter(episode => !deferredEpisodeIds.has(episode.id));
     if (deferredEpisodeIds.size > 0) {
       log.warn('Dream pass deferred episodes with unreadable transcripts; they keep no meaning and remain eligible next run', {

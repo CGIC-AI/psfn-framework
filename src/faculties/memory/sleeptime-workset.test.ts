@@ -157,7 +157,10 @@ describe('SleeptimeWorksetRunner', () => {
 
   it('checkpoints before yielding to newly active foreground conversation', async () => {
     const workset = new RestartableWorkset([item('dm:alpha', 1_000), item('dm:beta', 900)]);
-    const shouldYield = vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    const shouldYield = vi.fn()
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true);
     const runner = new SleeptimeWorksetRunner({
       workset,
       claimantId: 'companion-sleeptime',

@@ -16,6 +16,7 @@ type SleeptimeWorksetStage = (typeof SLEEPTIME_WORKSET_STAGES)[number];
 export interface SleeptimeWorksetStageInput {
   logicalSessionId: string;
   revision: number;
+  occurredAtMs: number;
   stage: SleeptimeWorksetStage;
 }
 
@@ -120,8 +121,20 @@ export class SleeptimeWorksetRunner {
           await this.runStage({
             logicalSessionId: claim.logicalSessionId,
             revision: claim.revision,
+            occurredAtMs: claim.occurredAtMs,
             stage,
           });
+          // Foreground activity can arrive while a long-running pass is in
+          // flight. Never certify that pass against the older claim after the
+          // snapshot changed; the unchanged durable stage boundary is retried
+          // against its original revision after yielding.
+          if (await this.shouldYield()) {
+            return {
+              outcome: 'yield',
+              completedSessions,
+              remainingSessions: snapshot.length - completedSessions,
+            };
+          }
           await this.workset.checkpointStage({
             purpose: claim.purpose,
             logicalSessionId: claim.logicalSessionId,

@@ -96,11 +96,12 @@ function makeReviewAgent(content: string) {
 function makeConversationalWorkset(
   logicalSessionId = 'terminal:test',
   occurredAtMs = 1,
+  revision = Number.MAX_SAFE_INTEGER,
 ): ConversationalActivityWorksetPort {
   const item: ConversationalActivityWorkItem = {
     purpose: 'sleeptime_consolidation',
     logicalSessionId,
-    revision: 1,
+    revision,
     activityKind: logicalSessionId.startsWith('free-time:')
       ? 'experiential_free_time'
       : 'direct_message',
@@ -212,6 +213,10 @@ describe('SleeptimeMemoryAgent', () => {
       conversationalActivityWorkset: makeConversationalWorkset(),
       coreMemoryStore: makeCoreMemoryStore(),
       memoryWriter: { write: vi.fn() },
+      sleepConsolidator: { run: vi.fn().mockResolvedValue({ reviewedEpisodes: 0 }) },
+      arcWeaver: { run: vi.fn().mockResolvedValue({ ran: false }) },
+      dreamMeaningPass: { run: vi.fn().mockResolvedValue({ ran: false }) },
+      sleeptimeWikiPass: { run: vi.fn().mockResolvedValue({ ran: false }) },
       restWindow: alwaysOpenRestWindow(),
       ...overrides,
     };
@@ -222,6 +227,14 @@ describe('SleeptimeMemoryAgent', () => {
     delete (options as Partial<SleeptimeMemoryAgentOptions>).restWindow;
     expect(() => new SleeptimeMemoryAgent(options)).toThrow(
       /requires a rest-window config.*must not run from turn cadence/s,
+    );
+  });
+
+  it('fails closed at construction when an ordered sleeptime pass is missing', () => {
+    const options = makeAgentOptions();
+    delete (options as Partial<SleeptimeMemoryAgentOptions>).dreamMeaningPass;
+    expect(() => new SleeptimeMemoryAgent(options)).toThrow(
+      /requires every ordered pass.*dreamMeaningPass/s,
     );
   });
 
@@ -376,6 +389,85 @@ describe('SleeptimeMemoryAgent', () => {
     expect(coreMemoryStore.getSnapshot).not.toHaveBeenCalled();
     expect(coreMemoryStore.rethink).not.toHaveBeenCalled();
     expect(memoryWriter.write).not.toHaveBeenCalled();
+  });
+
+  it('ignores recent ineligible work without gating or retry-blocking a quiet valid session', async () => {
+    const quietAtMs = Date.parse('2026-03-16T01:00:00.000Z');
+    const nowMs = Date.parse('2026-03-16T03:30:00.000Z');
+    const testingId = 'terminal:testing:recent-probe';
+    const validId = 'terminal:valid';
+    const items: ConversationalActivityWorkItem[] = [
+      {
+        purpose: 'sleeptime_consolidation',
+        logicalSessionId: testingId,
+        revision: 1,
+        activityKind: 'direct_message',
+        occurredAtMs: nowMs,
+        checkpointRevision: 0,
+        completedStages: [],
+      },
+      {
+        purpose: 'sleeptime_consolidation',
+        logicalSessionId: validId,
+        revision: 1,
+        activityKind: 'direct_message',
+        occurredAtMs: quietAtMs,
+        checkpointRevision: 0,
+        completedStages: [],
+      },
+    ];
+    const completed = new Set<string>();
+    const workset: ConversationalActivityWorksetPort = {
+      enumerate: vi.fn(async () => items.filter(item => !completed.has(item.logicalSessionId))),
+      claim: vi.fn(async input => ({
+        ...items.find(item => item.logicalSessionId === input.logicalSessionId)!,
+        claimantId: input.claimantId,
+        claimedAtMs: nowMs,
+      })),
+      resumeClaim: vi.fn(async () => null),
+      checkpointStage: vi.fn(async () => undefined),
+      recordFailure: vi.fn(async () => undefined),
+      checkpoint: vi.fn(async input => {
+        completed.add(input.logicalSessionId);
+      }),
+    };
+    const sleepConsolidator = { run: vi.fn() };
+    const agent = new SleeptimeMemoryAgent(makeAgentOptions({
+      agent: makeReviewAgent(JSON.stringify({
+        orient: {
+          persona: 'This quiet valid session should still drain.',
+          human: 'This quiet valid session should still drain.',
+          goals: 'This quiet valid session should still drain.',
+        },
+        memory_writes: [],
+      })),
+      now: () => nowMs,
+      restWindow: nightRestWindow(),
+      conversationalActivityWorkset: workset,
+      sessionManager: {
+        getRecentMessages: vi.fn().mockReturnValue([{
+          id: 1,
+          channelId: validId,
+          role: 'user',
+          content: 'This quiet valid session should still drain.',
+          timestamp: quietAtMs,
+        }]),
+      },
+      sleepConsolidator,
+    }));
+
+    await expect(agent.execute(makeSleeptimeAction())).resolves.toEqual({
+      outcome: 'complete',
+      completedSessions: 1,
+      remainingSessions: 0,
+    });
+    expect(completed).toEqual(new Set([validId]));
+    expect(workset.recordFailure).not.toHaveBeenCalled();
+    expect(sleepConsolidator.run).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: validId,
+      throughRevision: 1,
+      throughOccurredAtMs: quietAtMs,
+    }));
   });
 
   it('does not infer idle actions for sessions active inside the window', async () => {
@@ -638,6 +730,54 @@ describe('SleeptimeMemoryAgent', () => {
 
     expect(reviewAgent.handleMessage).toHaveBeenCalled();
     expect(memoryWriter.write).not.toHaveBeenCalled();
+  });
+
+  it('keeps orientation incomplete and retryable when a durable memory write fails', async () => {
+    const reviewAgent = makeReviewAgent(JSON.stringify({
+      orient: {
+        persona: 'Concise and implementation-focused.',
+        human: 'User prefers explicit validation evidence.',
+        goals: 'Preserve explicit validation evidence.',
+      },
+      memory_writes: [{
+        text: 'User prefers explicit validation evidence.',
+        type: 'semantic',
+        importance: 0.8,
+        confidence: 0.9,
+        emotionalValence: 0,
+        tags: ['validation'],
+        sensitivity: 'personal',
+      }],
+    }));
+    const workset = makeConversationalWorkset();
+    const memoryWriter = { write: vi.fn().mockRejectedValue(new Error('durable write unavailable')) };
+    const agent = new SleeptimeMemoryAgent(makeAgentOptions({
+      agent: reviewAgent,
+      conversationalActivityWorkset: workset,
+      memoryWriter,
+      sessionManager: {
+        getRecentMessages: vi.fn().mockReturnValue([{
+          id: 1,
+          channelId: 'terminal:test',
+          role: 'user',
+          content: 'I prefer explicit validation evidence.',
+          timestamp: Date.now(),
+        }]),
+      },
+    }));
+
+    await expect(agent.execute(makeSleeptimeAction())).resolves.toMatchObject({
+      outcome: 'retry',
+      failures: [expect.objectContaining({
+        stage: 'orientation_review',
+        message: 'durable write unavailable',
+      })],
+    });
+    expect(workset.recordFailure).toHaveBeenCalledWith(expect.objectContaining({
+      stage: 'orientation_review',
+      message: 'durable write unavailable',
+    }));
+    expect(workset.checkpoint).not.toHaveBeenCalled();
   });
 
   it('keeps previous orient content when a rewritten block is ungrounded (1gpol)', async () => {
@@ -974,14 +1114,20 @@ describe('SleeptimeMemoryAgent', () => {
     expect(sleepConsolidator.run).toHaveBeenCalledWith({
       sessionId: 'terminal:test',
       sourceMessageId: 'msg-77',
+      throughRevision: Number.MAX_SAFE_INTEGER,
+      throughOccurredAtMs: 1,
     });
     expect(arcWeaver.run).toHaveBeenCalledWith({
       sessionId: 'terminal:test',
       sourceMessageId: 'msg-77',
+      throughRevision: Number.MAX_SAFE_INTEGER,
+      throughOccurredAtMs: 1,
     });
     expect(dreamMeaningPass.run).toHaveBeenCalledWith({
       sessionId: 'terminal:test',
       sourceMessageId: 'msg-77',
+      throughRevision: Number.MAX_SAFE_INTEGER,
+      throughOccurredAtMs: 1,
     });
   });
 
@@ -1022,6 +1168,106 @@ describe('SleeptimeMemoryAgent', () => {
     expect(arcWeaver.run).not.toHaveBeenCalled();
     expect(dreamMeaningPass.run).not.toHaveBeenCalled();
     expect(sleeptimeWikiPass.run).not.toHaveBeenCalled();
+  });
+
+  it('yields on a new revision, then resumes the old bounded claim before processing the new revision', async () => {
+    const sessionId = 'terminal:revision-bound';
+    const firstOccurredAtMs = Date.parse('2026-03-16T01:00:00.000Z');
+    const secondOccurredAtMs = Date.parse('2026-03-16T01:05:00.000Z');
+    const nowMs = Date.parse('2026-03-16T03:30:00.000Z');
+    let latestRevision = 1;
+    let latestOccurredAtMs = firstOccurredAtMs;
+    let checkpointRevision = 0;
+    let activeClaim: ClaimedConversationalActivityWorkItem | null = null;
+    let advancedForeground = false;
+    const completedStages: string[] = [];
+    const workset: ConversationalActivityWorksetPort = {
+      enumerate: vi.fn(async () => checkpointRevision < latestRevision ? [{
+        purpose: 'sleeptime_consolidation' as const,
+        logicalSessionId: sessionId,
+        revision: latestRevision,
+        activityKind: 'direct_message' as const,
+        occurredAtMs: latestOccurredAtMs,
+        checkpointRevision,
+        completedStages: [...completedStages],
+        ...(activeClaim ? {
+          claimantId: activeClaim.claimantId,
+          claimedAtMs: activeClaim.claimedAtMs,
+        } : {}),
+      }] : []),
+      claim: vi.fn(async input => {
+        if (activeClaim || input.revision !== latestRevision) return null;
+        activeClaim = {
+          purpose: input.purpose,
+          logicalSessionId: input.logicalSessionId,
+          revision: input.revision,
+          activityKind: 'direct_message',
+          occurredAtMs: latestOccurredAtMs,
+          checkpointRevision,
+          completedStages: [],
+          claimantId: input.claimantId,
+          claimedAtMs: nowMs,
+        };
+        return { ...activeClaim };
+      }),
+      resumeClaim: vi.fn(async input => activeClaim?.claimantId === input.claimantId
+        ? { ...activeClaim, completedStages: [...completedStages] }
+        : null),
+      checkpointStage: vi.fn(async input => {
+        completedStages.push(input.stage);
+        if (!advancedForeground && input.revision === 1 && input.stage === 'sleep_consolidation') {
+          advancedForeground = true;
+          latestRevision = 2;
+          latestOccurredAtMs = secondOccurredAtMs;
+        }
+      }),
+      recordFailure: vi.fn(async () => undefined),
+      checkpoint: vi.fn(async input => {
+        checkpointRevision = input.revision;
+        activeClaim = null;
+        completedStages.splice(0);
+      }),
+    };
+    const transcripts = [
+      { id: 1, channelId: sessionId, role: 'user' as const, content: 'first revision', timestamp: firstOccurredAtMs },
+      { id: 2, channelId: sessionId, role: 'user' as const, content: 'new foreground revision', timestamp: secondOccurredAtMs },
+    ];
+    const sleepConsolidator = { run: vi.fn() };
+    const arcWeaver = { run: vi.fn() };
+    const dreamMeaningPass = { run: vi.fn() };
+    const sleeptimeWikiPass = { run: vi.fn() };
+    const agent = new SleeptimeMemoryAgent(makeAgentOptions({
+      now: () => nowMs,
+      conversationalActivityWorkset: workset,
+      sessionManager: { getRecentMessages: vi.fn().mockReturnValue(transcripts) },
+      agent: makeReviewAgent(JSON.stringify({
+        orient: { persona: 'first revision', human: 'first revision', goals: 'first revision' },
+        memory_writes: [],
+      })),
+      sleepConsolidator,
+      arcWeaver,
+      dreamMeaningPass,
+      sleeptimeWikiPass,
+    }));
+
+    await expect(agent.execute(makeSleeptimeAction())).resolves.toMatchObject({ outcome: 'yield' });
+    expect(completedStages).toEqual(['sleep_consolidation']);
+
+    await expect(agent.execute(makeSleeptimeAction())).resolves.toMatchObject({ outcome: 'complete' });
+    expect(arcWeaver.run).toHaveBeenCalledWith(expect.objectContaining({
+      throughRevision: 1,
+      throughOccurredAtMs: firstOccurredAtMs,
+    }));
+    expect(sleepConsolidator.run).toHaveBeenCalledTimes(1);
+    expect(checkpointRevision).toBe(1);
+
+    await expect(agent.execute(makeSleeptimeAction())).resolves.toMatchObject({ outcome: 'complete' });
+    expect(sleepConsolidator.run).toHaveBeenCalledTimes(2);
+    expect(sleepConsolidator.run).toHaveBeenLastCalledWith(expect.objectContaining({
+      throughRevision: 2,
+      throughOccurredAtMs: secondOccurredAtMs,
+    }));
+    expect(checkpointRevision).toBe(2);
   });
 
   it('skips CogSec-risk sleeptime orient rewrites while keeping safe memory writes', async () => {

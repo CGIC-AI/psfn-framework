@@ -135,6 +135,8 @@ export interface SleeptimeWikiPassOptions {
 export interface SleeptimeWikiPassRunInput {
   sessionId: string;
   sourceMessageId?: string;
+  throughRevision?: number;
+  throughOccurredAtMs?: number;
 }
 
 export type WikiPassSkipReason = 'disabled' | 'no_material' | 'malformed_output';
@@ -407,7 +409,10 @@ export class SleeptimeWikiPass {
       return { ...empty, skippedReason: 'disabled' };
     }
 
-    const nowMs = this.now().getTime();
+    const runtimeNowMs = this.now().getTime();
+    const nowMs = input.throughOccurredAtMs === undefined
+      ? runtimeNowMs
+      : Math.min(runtimeNowMs, input.throughOccurredAtMs);
     const windowStartMs = nowMs - this.config.reviewWindowHours * HOUR_MS;
     const watermarkScope: EpisodicProcessingWatermarkScope = {
       processor: WIKI_PASS_PROCESSOR,
@@ -429,6 +434,7 @@ export class SleeptimeWikiPass {
     const windowMemories = activeMemories.filter((memory) => {
       const formedAt = memory.extractedAt;
       if (typeof formedAt !== 'number' || !Number.isFinite(formedAt)) return false;
+      if (formedAt > nowMs) return false;
       if (formedAt < windowStartMs) return false;
       if (Number.isFinite(watermarkMs) && formedAt <= watermarkMs) return false;
       return true;

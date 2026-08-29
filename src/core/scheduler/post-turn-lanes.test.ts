@@ -80,6 +80,7 @@ describe('reflection post-turn lane split (E5.2)', () => {
     const sleepConsolidator = { run: vi.fn() };
     const arcWeaver = { run: vi.fn() };
     const dreamMeaningPass = { run: vi.fn() };
+    const sleeptimeWikiPass = { run: vi.fn() };
     const episodicSynthesizer = { run: vi.fn() };
     const episodicWatermarkStore = { getProcessingWatermark: vi.fn(async () => undefined) };
     const conversationalActivityWorkset = {
@@ -157,6 +158,7 @@ describe('reflection post-turn lane split (E5.2)', () => {
         sleepConsolidator,
         arcWeaver,
         dreamMeaningPass,
+        sleeptimeWikiPass,
         intentionAppraisalEnabled: false,
       },
     );

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import { fromAny } from '@total-typescript/shoehorn';
 import type { DeterministicGateEvent } from '../../shared/event-bus.js';
 import type { EpisodicProcessingRestWindowConfig } from '../../system/config/scheduler-config.js';
 import {
@@ -62,6 +63,17 @@ function makeAgent(input: {
 }): { agent: SleeptimeMemoryAgent; reviewAgent: ReturnType<typeof makeReviewAgent>; rethink: ReturnType<typeof vi.fn> } {
   const reviewAgent = makeReviewAgent();
   const rethink = vi.fn();
+  const workItem = {
+    purpose: 'sleeptime_consolidation' as const,
+    logicalSessionId: 'terminal:test',
+    revision: input.entries.at(-1)?.id ?? 1,
+    activityKind: 'direct_message' as const,
+    occurredAtMs: NOW_MS - 2 * 60 * 60_000,
+    checkpointRevision: 0,
+    completedStages: [],
+    claimantId: 'companion:sleeptime',
+    claimedAtMs: NOW_MS,
+  };
   const options: SleeptimeMemoryAgentOptions = {
     agent: reviewAgent,
     episodicStore: { searchByTime: vi.fn().mockResolvedValue([]) },
@@ -69,11 +81,23 @@ function makeAgent(input: {
       resolveSessionChannelId: vi.fn((channelId: string) => channelId),
       getRecentMessages: vi.fn().mockReturnValue(input.entries),
     },
+    conversationalActivityWorkset: fromAny({
+      enumerate: vi.fn(async () => [workItem]),
+      claim: vi.fn(async () => workItem),
+      resumeClaim: vi.fn(async () => workItem),
+      checkpointStage: vi.fn(async () => undefined),
+      recordFailure: vi.fn(async () => undefined),
+      checkpoint: vi.fn(async () => undefined),
+    }),
     coreMemoryStore: {
       getSnapshot: vi.fn().mockReturnValue(makeSnapshot(input.updatedAtMs)),
       rethink,
     },
     memoryWriter: { write: vi.fn().mockResolvedValue({ action: 'created' }) },
+    sleepConsolidator: { run: vi.fn() },
+    arcWeaver: { run: vi.fn() },
+    dreamMeaningPass: { run: vi.fn() },
+    sleeptimeWikiPass: { run: vi.fn() },
     restWindow: alwaysOpenRestWindow(),
     orientationRewriteGate: { minNewEntriesSinceRewrite: 4, refreshAfterQuietDays: 7 },
     onGateEvent: (event) => input.events.push(event),

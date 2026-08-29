@@ -1275,9 +1275,9 @@ describe('MemoryRetriever trust-gated filtering', () => {
 
     expect(result).toContain('Public fact');
     expect(result).not.toContain('Intimate detail');
-    expect(result).not.toContain('Memory context note:');
-    expect(result).not.toContain('candidate memory was kept out');
-    expect(result).not.toContain('trust ceiling');
+    expect(result).toContain('Memory context note:');
+    expect(result).toContain('1 candidate memory was kept out');
+    expect(result).not.toContain(memories[1].id);
   });
 
   it('public trust + broadcast channel returns only public memories', async () => {
@@ -2205,10 +2205,13 @@ describe('MemoryRetriever trust-gated filtering', () => {
     // public trust + broadcast = only public allowed, none present
     const result = await retriever.retrieve('test query', 'twitter:feed', 'public');
 
-    expect(result).toBe('');
+    expect(result).toContain('Memory context note:');
+    expect(result).toContain('2 candidate memories were kept out');
+    expect(result).not.toContain('Secret stuff');
+    expect(result).not.toContain('Private detail');
   });
 
-  it('makes no match and a trust-withheld-only match indistinguishable to chat callers', async () => {
+  it('makes no match and a trust-withheld-only match distinguishable only by the withheld note', async () => {
     const emptyRetriever = new MemoryRetriever(makeMockStore([]), makeMockEmbedding(), { retrievalLimit: 20 });
     const gatedMemory = makeMemory({
       text: 'Protected matching detail that must not leak.',
@@ -2224,8 +2227,10 @@ describe('MemoryRetriever trust-gated filtering', () => {
     const emptyResult = await emptyRetriever.retrieve('protected detail', 'twitter:feed', 'public');
     const gatedResult = await gatedRetriever.retrieve('protected detail', 'twitter:feed', 'public');
 
-    expect(gatedResult).toBe(emptyResult);
-    expect(gatedResult).toBe('');
+    expect(emptyResult).toBe('');
+    expect(gatedResult).toContain('Memory context note:');
+    expect(gatedResult).toContain('1 candidate memory was kept out');
+    expect(gatedResult).not.toContain('Protected matching detail');
   });
 
   it('does not expose a bounded count when many relevant memories are gated', async () => {
@@ -2238,7 +2243,8 @@ describe('MemoryRetriever trust-gated filtering', () => {
 
     const result = await retriever.retrieve('protected gated detail', 'twitter:feed', 'public');
 
-    expect(result).toBe('');
+    expect(result).toContain('80 candidate memories were kept out');
+    expect(result).not.toContain('Protected gated detail');
   });
 
   it('does not update access stats for filtered-out memories', async () => {
@@ -3832,7 +3838,8 @@ describe('MemoryRetriever room-scoped visibility', () => {
     expect(afterRestart).toContain('Room X restart-safe answer is cobalt.');
     expect(first).not.toContain('Room Y protected answer is saffron.');
     expect(afterRestart).not.toContain('Room Y protected answer is saffron.');
-    expect(crossRoomOnly).toBe('');
+    expect(crossRoomOnly).not.toContain('Room Y protected answer is saffron.');
+    expect(crossRoomOnly).toContain('room visibility boundary');
   });
 
   it('allows same-room personal memories for regular contacts without trust ceiling rejection', async () => {

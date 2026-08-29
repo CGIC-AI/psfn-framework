@@ -919,8 +919,8 @@ export function createObserverEvalSidecarAdminService(input: {
   /**
    * Tenant boundary for the sidecar's own pool. The sidecar tables are
    * companion-local, so the agent's in-process Garden pins its companion
-   * schema/role here (psfn-framework-cc3v7). The fleet Garden constructs one
-   * exact companion config per admitted route and pins that schema/role too.
+   * schema/role here (psfn-framework-cc3v7). Fleet Garden reaches this service
+   * through an agent-audience child assertion and companion transport proxy.
    */
   tenant?: TenantPoolScope;
 }): AdminObserverEvalSidecarService {

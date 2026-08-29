@@ -172,4 +172,26 @@ describe('SleeptimeWorksetRunner', () => {
     });
     expect(workset.items.get('dm:alpha')?.completedStages).toEqual(['sleep_consolidation']);
   });
+
+  it('yields a model-preempted stage without recording it as a session failure', async () => {
+    const workset = new RestartableWorkset([item('dm:alpha', 1_000)]);
+    const preempted = new Error('Foreground conversation took the model lane');
+    preempted.name = 'ModelCallPreemptedError';
+    const runner = new SleeptimeWorksetRunner({
+      workset,
+      claimantId: 'companion-sleeptime',
+      isYieldError: error => error instanceof Error && error.name === 'ModelCallPreemptedError',
+      runStage: vi.fn(async ({ stage }) => {
+        if (stage === 'arc_formation') throw preempted;
+      }),
+    });
+
+    await expect(runner.run()).resolves.toEqual({
+      outcome: 'yield',
+      completedSessions: 0,
+      remainingSessions: 1,
+    });
+    expect(workset.items.get('dm:alpha')?.completedStages).toEqual(['sleep_consolidation']);
+    expect(workset.items.get('dm:alpha')?.lastFailure).toBeUndefined();
+  });
 });

@@ -6411,17 +6411,17 @@
     },
     {
       "file": "src/core/tools/ntfy.ts",
-      "name": "notifyToolParameters.contact_id.minLength@L989",
-      "value": "1",
-      "form": "object-member",
-      "note": "Existing mutable policy candidate notifyToolParameters.contact_id.minLength@L986; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
-    },
-    {
-      "file": "src/core/tools/ntfy.ts",
       "name": "notifyToolParameters.contact_id.minLength@L1001",
       "value": "1",
       "form": "object-member",
       "note": "Existing mutable policy candidate notifyToolParameters.contact_id.minLength@L998; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+    },
+    {
+      "file": "src/core/tools/ntfy.ts",
+      "name": "notifyToolParameters.contact_id.minLength@L989",
+      "value": "1",
+      "form": "object-member",
+      "note": "Existing mutable policy candidate notifyToolParameters.contact_id.minLength@L986; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/core/tools/ntfy.ts",
@@ -7660,11 +7660,6 @@
       "value": "2",
       "form": "math-clamp",
       "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
-    },
-    {
-      "file": "src/faculties/memory/sleeptime-agent.ts",
-      "name": "DEFAULT_IDLE_SESSION_LIMIT",
-      "value": "20"
     },
     {
       "file": "src/faculties/memory/sleeptime-agent.ts",

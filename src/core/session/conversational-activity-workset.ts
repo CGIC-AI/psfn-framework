@@ -21,7 +21,7 @@ export interface ConversationalActivityWorkItem {
   lastFailure?: ConversationalActivityFailure;
 }
 
-export interface ConversationalActivityFailure {
+interface ConversationalActivityFailure {
   stage: string;
   message: string;
   failedAtMs: number;

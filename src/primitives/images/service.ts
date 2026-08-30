@@ -29,6 +29,13 @@ import type {
   ImageRuntimeConfig,
 } from './types.js';
 import { buildImageFileName } from './file-naming.js';
+import {
+  buildComfyUiMcpArguments,
+  ComfyUiMcpAdapterError,
+  parseComfyUiMcpResult,
+  resolveComfyUiMcpSensitivity,
+  type ComfyUiMcpInvoker,
+} from './comfyui-mcp.js';
 
 const log = createComponentLogger('ImageService');
 const FAL_TRANSIENT_ATTEMPTS = 2;
@@ -37,7 +44,7 @@ type ImageFallbackReason = 'fal_transient_model_fallback' | 'fal_content_policy_
 
 export interface ImageProviderAttempt {
   attempt: number;
-  provider: 'fal' | 'comfyui';
+  provider: 'fal' | 'comfyui' | 'comfyui_mcp';
   model: string;
   startedAtMs: number;
   completedAtMs: number;
@@ -48,7 +55,7 @@ export interface ImageProviderAttempt {
 
 export interface ImageProviderAttemptStart {
   attempt: number;
-  provider: 'fal' | 'comfyui';
+  provider: 'fal' | 'comfyui' | 'comfyui_mcp';
   model: string;
   startedAtMs: number;
 }
@@ -91,6 +98,7 @@ interface ImageServiceOptions {
   personalFilesDir?: string;
   beforeProviderAttempt?: (attempt: ImageProviderAttemptStart) => Promise<void> | void;
   onProviderAttempt?: (attempt: ImageProviderAttempt) => Promise<void> | void;
+  mcpInvoker?: ComfyUiMcpInvoker;
 }
 
 interface ImageRunContext {
@@ -286,6 +294,12 @@ export class ImageService implements ImageOperations {
       const result = mode === 'create'
         ? await this.runComfy('create', params as ImageCreateParams, context)
         : await this.runComfy('edit', params as ImageEditParams, context);
+      return await this.persistGeneratedImages(result, params);
+    }
+    if (provider === 'comfyui_mcp') {
+      const result = mode === 'create'
+        ? await this.runComfyMcp('create', params as ImageCreateParams, context)
+        : await this.runComfyMcp('edit', params as ImageEditParams, context);
       return await this.persistGeneratedImages(result, params);
     }
 
@@ -484,9 +498,53 @@ export class ImageService implements ImageOperations {
     );
   }
 
+  private async runComfyMcp(
+    mode: 'create',
+    params: ImageCreateParams,
+    context: ImageRunContext,
+  ): Promise<ImageGenerationResult>;
+  private async runComfyMcp(
+    mode: 'edit',
+    params: ImageEditParams,
+    context: ImageRunContext,
+  ): Promise<ImageGenerationResult>;
+  private async runComfyMcp(
+    mode: ImageMode,
+    params: ImageCreateParams | ImageEditParams,
+    context: ImageRunContext,
+  ): Promise<ImageGenerationResult> {
+    return await this.runProviderAttempt(
+      context,
+      'comfyui_mcp',
+      `mcp:${mode}`,
+      async () => {
+        const invoker = this.options.mcpInvoker;
+        if (!invoker) {
+          throw new ComfyUiMcpAdapterError(
+            'IMAGE_MCP_NOT_CONFIGURED',
+            'ComfyUI MCP image provider is not configured on the gateway',
+          );
+        }
+        const outboundSensitivity = resolveComfyUiMcpSensitivity(params);
+        const result = mode === 'create'
+          ? await invoker({
+              mode,
+              arguments: buildComfyUiMcpArguments('create', params as ImageCreateParams),
+              outboundSensitivity,
+            })
+          : await invoker({
+              mode,
+              arguments: buildComfyUiMcpArguments('edit', params as ImageEditParams),
+              outboundSensitivity,
+            });
+        return parseComfyUiMcpResult(mode, result);
+      },
+    );
+  }
+
   private async runProviderAttempt(
     context: ImageRunContext,
-    provider: 'fal' | 'comfyui',
+    provider: 'fal' | 'comfyui' | 'comfyui_mcp',
     model: string,
     operation: () => Promise<ImageGenerationResult>,
     fallbackReason?: ImageFallbackReason,

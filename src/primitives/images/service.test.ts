@@ -272,6 +272,133 @@ describe('ImageService', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it('routes create and edit through the configured ComfyUI MCP adapter', async () => {
+    const mcpInvoker = vi.fn(async (input: { mode: 'create' | 'edit' }) => ({
+      serverId: 'comfyui',
+      toolName: input.mode === 'create' ? 'generate_image' : 'edit_image',
+      isError: false,
+      withheld: false,
+      effectiveText: JSON.stringify(input.mode === 'create'
+        ? {
+            structuredContent: {
+              request_id: 'mcp-create-1',
+              model: 'portrait-create',
+              images: [{
+                url: 'https://comfy.example.test/create.png',
+                content_type: 'image/png',
+                file_name: 'create.png',
+              }],
+            },
+          }
+        : {
+            content: [{
+              type: 'image',
+              data: 'cmVuZGVyZWQ=',
+              mimeType: 'image/png',
+              name: 'edit.png',
+            }],
+          }),
+    }));
+    const service = new ImageService(
+      { imageProvider: 'comfyui_mcp' },
+      vi.fn() as typeof fetch,
+      { mcpInvoker },
+    );
+
+    await expect(service.create({
+      prompt: 'a lighthouse at dusk',
+      numImages: 2,
+      aspectRatio: '16:9',
+    })).resolves.toEqual({
+      provider: 'comfyui_mcp',
+      mode: 'create',
+      model: 'portrait-create',
+      fallbackUsed: false,
+      requestId: 'mcp-create-1',
+      images: [{
+        url: 'https://comfy.example.test/create.png',
+        contentType: 'image/png',
+        fileName: 'create.png',
+      }],
+    });
+    await expect(service.edit({
+      prompt: 'make it moonlit',
+      imageUrls: ['data:image/png;base64,cmVm'],
+      maskImageUrl: 'https://images.example.test/mask.png',
+    })).resolves.toMatchObject({
+      provider: 'comfyui_mcp',
+      mode: 'edit',
+      images: [{
+        url: 'data:image/png;base64,cmVuZGVyZWQ=',
+        contentType: 'image/png',
+        fileName: 'edit.png',
+      }],
+    });
+
+    expect(mcpInvoker).toHaveBeenNthCalledWith(1, {
+      mode: 'create',
+      outboundSensitivity: 'personal',
+      arguments: {
+        prompt: 'a lighthouse at dusk',
+        num_images: 2,
+        aspect_ratio: '16:9',
+      },
+    });
+    expect(mcpInvoker).toHaveBeenNthCalledWith(2, {
+      mode: 'edit',
+      outboundSensitivity: 'confidential',
+      arguments: {
+        prompt: 'make it moonlit',
+        input_urls: ['data:image/png;base64,cmVm'],
+        mask_image_url: 'https://images.example.test/mask.png',
+      },
+    });
+  });
+
+  it('fails with typed ComfyUI MCP configuration and result errors', async () => {
+    const serviceWithoutAdapter = new ImageService({ imageProvider: 'comfyui_mcp' });
+    await expect(serviceWithoutAdapter.create({ prompt: 'missing adapter' })).rejects.toMatchObject({
+      name: 'ComfyUiMcpAdapterError',
+      code: 'IMAGE_MCP_NOT_CONFIGURED',
+    });
+
+    const serviceWithWithheldResult = new ImageService(
+      { imageProvider: 'comfyui_mcp' },
+      vi.fn() as typeof fetch,
+      {
+        mcpInvoker: vi.fn(async () => ({
+          serverId: 'comfyui',
+          toolName: 'generate_image',
+          isError: false,
+          withheld: true,
+          effectiveText: '[withheld]',
+        })),
+      },
+    );
+    await expect(serviceWithWithheldResult.create({ prompt: 'withheld output' })).rejects.toMatchObject({
+      name: 'ComfyUiMcpAdapterError',
+      code: 'IMAGE_MCP_OUTPUT_WITHHELD',
+    });
+
+    const serviceWithMalformedResult = new ImageService(
+      { imageProvider: 'comfyui_mcp' },
+      vi.fn() as typeof fetch,
+      {
+        mcpInvoker: vi.fn(async () => ({
+          serverId: 'comfyui',
+          toolName: 'generate_image',
+          isError: false,
+          withheld: false,
+          effectiveText: JSON.stringify({ structuredContent: { images: [] } }),
+        })),
+      },
+    );
+    await expect(serviceWithMalformedResult.create({ prompt: 'empty output' })).rejects.toMatchObject({
+      name: 'ComfyUiMcpAdapterError',
+      code: 'IMAGE_MCP_INVALID_RESULT',
+    });
+  });
+
   it('retries transient FAL fetch failures once before surfacing an image failure', async () => {
     const settledAttempts: ImageProviderAttempt[] = [];
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {

@@ -139,7 +139,7 @@ describe('settings contract guard', () => {
       ownerFile: 'settings.json',
       type: 'enum',
       scope: 'perCompanion',
-      enumValues: ['fal', 'comfyui'],
+      enumValues: ['fal', 'comfyui', 'comfyui_mcp'],
     });
     expect(contractData.fields.imageFalCreateModel).toMatchObject({
       type: 'enum',

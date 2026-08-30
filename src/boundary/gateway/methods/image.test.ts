@@ -24,6 +24,123 @@ describe('registerImageMethods model usage accounting', () => {
     }));
   });
 
+  it('routes ComfyUI MCP images through the authenticated gateway broker', async () => {
+    const workspacePath = await mkdtemp(join(tmpdir(), 'psfn-image-mcp-'));
+    tempDirs.push(workspacePath);
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input) === 'https://comfy.example.test/output.png') {
+        return new Response(new Uint8Array([137, 80, 78, 71]), {
+          status: 200,
+          headers: { 'content-type': 'image/png' },
+        });
+      }
+      throw new Error(`Unexpected fetch: ${String(input)}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const invokeTool = vi.fn(async () => ({
+      serverId: 'comfyui',
+      toolName: 'generate_image',
+      isError: false,
+      withheld: false,
+      effectiveText: JSON.stringify({
+        structuredContent: {
+          request_id: 'comfy-mcp-request-1',
+          images: [{ url: 'https://comfy.example.test/output.png' }],
+        },
+      }),
+    }));
+    const usageEvents: ModelUsageEventInput[] = [];
+    const methods = new Map<string, (params: unknown) => Promise<unknown>>();
+    const runtime = {
+      target: {
+        addMethod(name: string, handler: (params: unknown) => Promise<unknown>) {
+          methods.set(name, handler);
+        },
+      },
+      audited: (_method: string, handler: (params: unknown) => Promise<unknown>) => handler,
+      imageConfig: { imageProvider: 'comfyui_mcp' },
+      workspacePath,
+      authenticatedCompanionId: () => 'companion-a',
+      capabilityGrantSnapshotProvider: () => ({
+        tier: 'apprentice',
+        customTokens: [],
+        grantedTokens: ['external.mcp'],
+      }),
+      mcpBroker: { invokeTool },
+      modelUsageRecorder: {
+        async recordUsageEvent(event: ModelUsageEventInput) {
+          usageEvents.push(event);
+        },
+      },
+    } as unknown as GatewayMethodRuntime;
+    registerImageMethods(runtime);
+
+    const handler = methods.get('image.create');
+    if (!handler) throw new Error('image.create was not registered');
+    const result = await handler({
+      prompt: 'a lighthouse at dusk',
+      provider: 'comfyui_mcp',
+      numImages: 1,
+    });
+
+    expect(result).toMatchObject({
+      provider: 'comfyui_mcp',
+      requestId: 'comfy-mcp-request-1',
+      images: [{ localPath: expect.stringContaining('/images/') }],
+    });
+    expect(invokeTool).toHaveBeenCalledWith({
+      companionId: 'companion-a',
+      serverId: 'comfyui',
+      toolName: 'generate_image',
+      arguments: {
+        prompt: 'a lighthouse at dusk',
+        num_images: 1,
+      },
+      outboundSensitivity: 'personal',
+      confirmed: false,
+    });
+    expect(usageEvents).toMatchObject([{
+      provider: 'comfyui_mcp',
+      providerCostUsd: 0,
+      effectiveCostUsd: 0,
+      costSource: 'provider',
+      attribution: { chargeSurface: 'localImageGeneration' },
+    }]);
+  });
+
+  it('fails closed before ComfyUI MCP invocation without external.mcp capability', async () => {
+    const invokeTool = vi.fn();
+    const methods = new Map<string, (params: unknown) => Promise<unknown>>();
+    const runtime = {
+      target: {
+        addMethod(name: string, handler: (params: unknown) => Promise<unknown>) {
+          methods.set(name, handler);
+        },
+      },
+      audited: (_method: string, handler: (params: unknown) => Promise<unknown>) => handler,
+      imageConfig: { imageProvider: 'comfyui_mcp' },
+      workspacePath: '/tmp/unused-image-workspace',
+      authenticatedCompanionId: () => 'companion-a',
+      capabilityGrantSnapshotProvider: () => ({
+        tier: 'nursery',
+        customTokens: [],
+        grantedTokens: [],
+      }),
+      mcpBroker: { invokeTool },
+    } as unknown as GatewayMethodRuntime;
+    registerImageMethods(runtime);
+
+    const handler = methods.get('image.create');
+    if (!handler) throw new Error('image.create was not registered');
+    await expect(handler({
+      prompt: 'must not leave the gateway',
+      provider: 'comfyui_mcp',
+    })).rejects.toMatchObject({
+      message: expect.stringContaining('lacks external.mcp'),
+    });
+    expect(invokeTool).not.toHaveBeenCalled();
+  });
+
   it('fails pricing admission before invoking a paid image provider', async () => {
     const workspacePath = await mkdtemp(join(tmpdir(), 'psfn-image-accounting-preflight-'));
     tempDirs.push(workspacePath);

@@ -1,5 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import type { GatewayCorrelationParams, ImageGenerationRpcResult } from '../protocol.js';
+import { JSONRPCErrorException } from 'json-rpc-2.0';
+import {
+  GatewayErrors,
+  type GatewayCorrelationParams,
+  type ImageGenerationRpcResult,
+} from '../protocol.js';
 import type {
   ImageCreateParams,
   ImageEditParams,
@@ -20,6 +25,12 @@ import type { GatewayMethodRuntime } from './types.js';
 import { defineAuditedMethod } from './types.js';
 import { gatewayMethodParamDecoders } from './params.js';
 import { registerAuditedDescriptors } from './register.js';
+import {
+  COMFYUI_MCP_CREATE_TOOL,
+  COMFYUI_MCP_EDIT_TOOL,
+  COMFYUI_MCP_SERVER_ID,
+  type ComfyUiMcpInvoker,
+} from '../../../primitives/images/comfyui-mcp.js';
 
 type ImageUsageParams = (ImageCreateParams | ImageEditParams) & GatewayCorrelationParams;
 
@@ -55,7 +66,7 @@ async function recordImageProviderAttempt(
       )
     : undefined;
   const localProviderCostUsd = providerAttempt.status === 'success'
-    && providerAttempt.provider === 'comfyui'
+    && (providerAttempt.provider === 'comfyui' || providerAttempt.provider === 'comfyui_mcp')
     ? 0
     : undefined;
   const metadata: Record<string, unknown> = {
@@ -179,9 +190,43 @@ async function runImageWithUsage(
     }
     falCostEstimatesByAttempt.set(providerAttempt.attempt, await request);
   };
+  const mcpBroker = runtime.mcpBroker;
+  const mcpInvoker: ComfyUiMcpInvoker | undefined = mcpBroker
+    ? async input => {
+        const companionId = runtime.authenticatedCompanionId()?.trim();
+        if (!companionId) {
+          throw new JSONRPCErrorException(
+            'ComfyUI MCP requires an authenticated companion connection',
+            GatewayErrors.COMPANION_IDENTIFY_REQUIRED,
+          );
+        }
+        let grantedTokens: readonly string[] | undefined;
+        try {
+          grantedTokens = runtime.capabilityGrantSnapshotProvider?.().grantedTokens;
+        } catch {
+          grantedTokens = undefined;
+        }
+        if (!grantedTokens?.includes('external.mcp')) {
+          throw new JSONRPCErrorException(
+            'ComfyUI MCP denied: authenticated companion lacks external.mcp',
+            GatewayErrors.POLICY_DENIED,
+            { missingCapability: 'external.mcp' },
+          );
+        }
+        return await mcpBroker.invokeTool({
+          companionId,
+          serverId: COMFYUI_MCP_SERVER_ID,
+          toolName: input.mode === 'create' ? COMFYUI_MCP_CREATE_TOOL : COMFYUI_MCP_EDIT_TOOL,
+          arguments: input.arguments,
+          outboundSensitivity: input.outboundSensitivity,
+          confirmed: false,
+        });
+      }
+    : undefined;
   const imageService = new ImageService(runtime.imageConfig, fetch, {
     personalFilesDir: runtime.workspacePath,
     beforeProviderAttempt,
+    ...(mcpInvoker ? { mcpInvoker } : {}),
     onProviderAttempt: async providerAttempt => {
       await recordImageProviderAttempt(
         runtime,

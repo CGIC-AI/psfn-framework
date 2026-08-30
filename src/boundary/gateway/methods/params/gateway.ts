@@ -50,7 +50,7 @@ const journalEntry = strictObject({
 const imageCommon = {
   ...correlationProperties,
   prompt: Type.String(),
-  provider: Type.Optional(enumSchema(['auto', 'fal', 'comfyui'])),
+  provider: Type.Optional(enumSchema(['auto', 'fal', 'comfyui', 'comfyui_mcp'])),
   model: optionalString,
   settingsDefaults: Type.Optional(unknownRecord),
   numImages: optionalNumber,

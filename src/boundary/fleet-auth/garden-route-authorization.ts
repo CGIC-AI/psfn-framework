@@ -564,6 +564,17 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
     ]), confirmation: 'explicit',
   },
   {
+    action: 'wiki.read', area: 'companion', routeIds: [
+      ...ids('GET', ['/api/admin/doing-mirror']),
+      ...pageIds(['/doing-mirror']),
+    ],
+  },
+  {
+    action: 'wiki.manage', area: 'companion',
+    routeIds: ids('POST', ['/api/admin/doing-mirror/:itemType/:itemId']),
+    confirmation: 'explicit',
+  },
+  {
     action: 'audit.read', area: 'audit', routeIds: [
       ...ids('GET', [
         '/api/admin/shards',

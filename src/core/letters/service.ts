@@ -21,6 +21,8 @@ export interface LetterServiceOptions {
 }
 
 export interface ComposeLetterInput {
+  /** Stable caller-owned id for idempotent authored delivery (for example, a durable disposition outbox). */
+  id?: string;
   author: LetterParty;
   recipient: LetterParty;
   subject: string;
@@ -61,13 +63,34 @@ export class LetterService {
 
   async compose(input: ComposeLetterInput): Promise<LetterRecord> {
     assertDirected(input.author, input.recipient);
+    const subject = requireText(input.subject, 'subject');
+    const body = requireText(input.body, 'body');
+    if (input.id) {
+      const existing = await this.options.store.get(input.id);
+      if (existing) {
+        const requestedState = input.draft === true ? 'draft' : 'placed';
+        const stateMatches = requestedState === 'draft'
+          ? existing.state === 'draft'
+          : existing.state !== 'draft';
+        if (
+          existing.author !== input.author
+          || existing.recipient !== input.recipient
+          || existing.subject !== subject
+          || existing.body !== body
+          || !stateMatches
+        ) {
+          throw new Error(`Letter id ${input.id} is already bound to different authored content`);
+        }
+        return existing;
+      }
+    }
     const createdAt = this.now();
     const letter = await this.options.store.create({
-      id: this.createId(),
+      id: input.id ?? this.createId(),
       author: input.author,
       recipient: input.recipient,
-      subject: requireText(input.subject, 'subject'),
-      body: requireText(input.body, 'body'),
+      subject,
+      body,
       state: input.draft === true ? 'draft' : 'placed',
       createdAt,
     });

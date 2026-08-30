@@ -200,6 +200,7 @@ export function buildAdminRoutes(deps: AdminRouteDependencies): AdminRoute[] {
       wikiService: deps.services.wiki,
       wishlistService: deps.services.wishlist,
       letterService: deps.services.letters,
+      doingMirrorService: deps.services.doingMirror,
       episodicMemoryService: deps.services.episodicMemory,
       groupMemoryService: deps.services.groupMemory,
       memoryService: deps.services.memory,

@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { LetterService } from '../letters/service.js';
 import { createLetterTool } from './letter.js';
 import { resolveToolCapabilityRequirement } from '../../system/capabilities/requirements.js';
+import type { DoingMirrorService } from '../doing-mirror/service.js';
 
 function serviceStub(): LetterService {
   return {
@@ -33,9 +34,22 @@ describe('letter tool', () => {
     expect(service.read).toHaveBeenCalledWith('letter-1', 'companion');
   });
 
+  it('reads current companion-originated dispositions from the canonical Letter surface', async () => {
+    const get = vi.fn(async () => ({ source: { itemId: 'wish-1' }, disposition: { state: 'considering' } }));
+    const mirror = { list: vi.fn(async () => []), get } as unknown as DoingMirrorService;
+
+    await createLetterTool(serviceStub(), mirror).execute('call-1', {
+      action: 'disposition_read', itemType: 'wishlist', itemId: 'wish-1',
+    });
+
+    expect(get).toHaveBeenCalledWith('wishlist', 'wish-1');
+  });
+
   it('keeps state-changing read actions behind the runtime-write capability', () => {
     const tool = createLetterTool(serviceStub());
     expect(resolveToolCapabilityRequirement(tool, { action: 'list' }))
+      .toEqual({ declared: true, tokens: ['identity.read'] });
+    expect(resolveToolCapabilityRequirement(tool, { action: 'disposition_list' }))
       .toEqual({ declared: true, tokens: ['identity.read'] });
     expect(resolveToolCapabilityRequirement(tool, { action: 'read', letterId: 'letter-1' }))
       .toEqual({ declared: true, tokens: ['identity.write.runtime'] });

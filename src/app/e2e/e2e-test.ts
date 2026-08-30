@@ -34,6 +34,10 @@ import {
   wireShardAndThinkRuntime,
 } from '../startup/composition/composition.js';
 import { createScriptedE2ELLMProvider } from './test-llm-provider.js';
+import {
+  createScriptedE2EEmotionRuntime,
+  runMechanicalEmotionAppraisalAssertions,
+} from './emotion-appraisal-harness.js';
 import { createProviderRuntimeServices } from '../../system/config/provider-runtime-factory.js';
 import { composeCapabilityRuntime } from '../startup/composition/capability-runtime.js';
 
@@ -116,15 +120,18 @@ async function main(): Promise<void> {
       sessionManager,
       systemPrompt,
       config: sanitizeCoreSubstrateConfig(config),
+      emotionRuntime: createScriptedE2EEmotionRuntime(),
       backgroundWorkDisabled: true,
     });
     const memoryExtractor = wireMemoryRuntime({
       agentLoop,
       llmProvider: llmClient,
       sessionManager,
+      sessionStore,
       memoryStore,
       embeddingService: embeddingProvider,
       eventBus,
+      config,
     });
     wireShardAndThinkRuntime({
       agentLoop,
@@ -255,9 +262,25 @@ async function main(): Promise<void> {
   }
 
   // ────────────────────────────────────────
-  // TEST 4: Memory extraction
+  // TEST 4: Mechanical emotion/appraisal transitions
   // ────────────────────────────────────────
-  section('Test 4: Memory Extraction');
+  section('Test 4: Mechanical Emotion/Appraisal Transitions');
+
+  try {
+    await runMechanicalEmotionAppraisalAssertions({
+      agentLoop,
+      assert,
+      channelId: CHANNEL,
+      sessionStore,
+    });
+  } catch (err) {
+    assert(false, 'Mechanical emotion/appraisal transitions succeeded', String(err));
+  }
+
+  // ────────────────────────────────────────
+  // TEST 5: Memory extraction
+  // ────────────────────────────────────────
+  section('Test 5: Memory Extraction');
 
   // Force extraction (bypass interval check)
   events.length = 0;
@@ -300,9 +323,9 @@ async function main(): Promise<void> {
   }
 
   // ────────────────────────────────────────
-  // TEST 5: Memory retrieval in context
+  // TEST 6: Memory retrieval in context
   // ────────────────────────────────────────
-  section('Test 5: Memory Retrieval');
+  section('Test 6: Memory Retrieval');
 
   try {
     process.stdout.write('  Asking about Morgan\'s dessert...');
@@ -320,9 +343,9 @@ async function main(): Promise<void> {
   }
 
   // ────────────────────────────────────────
-  // TEST 6: Embedding service
+  // TEST 7: Embedding service
   // ────────────────────────────────────────
-  section('Test 6: Embedding Service');
+  section('Test 7: Embedding Service');
 
   try {
     const embedding = await embeddingProvider.embed('test embedding query');
@@ -340,9 +363,9 @@ async function main(): Promise<void> {
   }
 
   // ────────────────────────────────────────
-  // TEST 7: Session store reload
+  // TEST 8: Session store reload
   // ────────────────────────────────────────
-  section('Test 7: Session Store Reload');
+  section('Test 8: Session Store Reload');
 
   try {
     // Create a new store pointing at same directory — should reload from JSONL
@@ -360,9 +383,9 @@ async function main(): Promise<void> {
   }
 
   // ────────────────────────────────────────
-  // TEST 8: LLM complete (extraction mode)
+  // TEST 9: LLM complete (extraction mode)
   // ────────────────────────────────────────
-  section('Test 8: LLM Complete (Extraction Mode)');
+  section('Test 9: LLM Complete (Extraction Mode)');
 
   try {
     process.stdout.write('  Testing complete()...');
@@ -385,9 +408,9 @@ async function main(): Promise<void> {
   }
 
   // ────────────────────────────────────────
-  // TEST 9: REPL/analysis workbench (RLM loop)
+  // TEST 10: REPL/analysis workbench (RLM loop)
   // ────────────────────────────────────────
-  section('Test 9: REPL/Analysis Workbench');
+  section('Test 10: REPL/Analysis Workbench');
 
   try {
     process.stdout.write('  Running RLM loop (simple math)...');
@@ -423,9 +446,9 @@ async function main(): Promise<void> {
   }
 
   // ────────────────────────────────────────
-  // TEST 10: REPL with memory search
+  // TEST 11: REPL with memory search
   // ────────────────────────────────────────
-  section('Test 10: REPL Memory Access');
+  section('Test 11: REPL Memory Access');
 
   try {
     process.stdout.write('  Running RLM loop (memory search)...');
@@ -451,12 +474,12 @@ async function main(): Promise<void> {
   }
 
   // ────────────────────────────────────────
-  // TEST 11: Multi-companion fleet (flag-gated)
+  // TEST 12: Multi-companion fleet (flag-gated)
   // ────────────────────────────────────────
   // No-op in single-companion runs: skipped and logged, leaving existing e2e
   // behavior untouched. Runs only under PSFN_MULTI_COMPANION=1, exercising
   // fleet resolution and per-companion + shared Postgres schema provisioning.
-  section('Test 11: Multi-Companion Fleet resolution');
+  section('Test 12: Multi-Companion Fleet resolution');
 
   {
     try {

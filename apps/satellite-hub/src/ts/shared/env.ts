@@ -733,6 +733,7 @@ function parseCapabilityProfile(value: string | undefined): SatelliteCapabilityP
     "voice-only",
     "text-only",
     "voxta-avatar",
+    "world-avatar",
     "vision-capable",
     "telemetry-only",
     "mobile-location",

@@ -130,6 +130,30 @@ test("loadPsfnRuntime rejects incomplete client certificate pairs", () => {
   });
 });
 
+test("loadPsfnRuntime accepts world-avatar and rejects unknown capability profiles", () => {
+  withPsfnEnv({
+    PSFN_API_BASE_URL: "https://psfn.example/v1",
+    PSFN_CAPABILITY_PROFILE: "world-avatar",
+    PSFN_SATELLITE_ID: "eidoverse-world",
+    PSFN_ENDPOINT_ID: "eidoverse-avatar",
+  }, () => {
+    const runtime = loadPsfnRuntime(process.cwd());
+    assert.equal(runtime.satelliteClaim.capabilityProfile, "world-avatar");
+    assert.equal(runtime.satelliteClaim.type, "world-avatar");
+    assert.equal(runtime.satelliteClaim.endpointClass, "avatar");
+  });
+
+  withPsfnEnv({
+    PSFN_API_BASE_URL: "https://psfn.example/v1",
+    PSFN_CAPABILITY_PROFILE: "unknown-avatar",
+  }, () => {
+    assert.throws(
+      () => loadPsfnRuntime(process.cwd()),
+      /PSFN_CAPABILITY_PROFILE must be one of:.*world-avatar/,
+    );
+  });
+});
+
 test("loadPsfnRuntime separates strictly validated voice and text reply budgets", () => {
   withPsfnEnv({
     PSFN_API_BASE_URL: "https://psfn.example/v1",

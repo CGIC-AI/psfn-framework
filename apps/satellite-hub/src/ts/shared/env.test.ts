@@ -66,6 +66,7 @@ const HUB_ENV_KEYS = [
   "HUB_CONTROL_TOKEN",
   "HUB_CONTROL_MAX_BODY_BYTES",
   "HUB_DEVICE_REGISTRY_PATH",
+  "EIDOVERSE_PLACE_MAP_PATH",
   "HUB_DEVICE_ASSERTION_ISSUER",
   "HUB_DEVICE_ASSERTION_KID",
   "HUB_DEVICE_ASSERTION_AUDIENCE",
@@ -239,6 +240,33 @@ test("loadHubConfig supports text-only mode without voice provider secrets", () 
     assert.equal(config.companion, null);
     assert.equal(config.homeAssistant, null);
     assert.equal(config.control, null);
+    assert.equal(config.eidoversePlaceMap, null);
+  });
+});
+
+test("loadHubConfig loads the Hub-owned Eidoverse place map", () => {
+  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "psfn-hub-runtime-"));
+  fs.writeFileSync(path.join(projectRoot, "eidoverse-place-map.json"), JSON.stringify({
+    schemaVersion: 1,
+    worlds: {
+      "demo-world": {
+        placeId: "eidoverse:demo-world",
+        regions: { market: "eidoverse:demo-world:market" },
+      },
+    },
+  }));
+
+  withEnv(HUB_ENV_KEYS, {
+    HUB_TEXT_ONLY: "true",
+    PSFN_API_BASE_URL: "http://127.0.0.1:10053/v1",
+    EIDOVERSE_PLACE_MAP_PATH: "eidoverse-place-map.json",
+  }, () => {
+    const config = loadHubConfig(projectRoot);
+
+    assert.equal(
+      config.eidoversePlaceMap?.worlds["demo-world"]?.regions.market,
+      "eidoverse:demo-world:market",
+    );
   });
 });
 

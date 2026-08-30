@@ -987,6 +987,7 @@ function testHubConfig(): HubConfig {
     homeAssistant: null,
     control: null,
     deviceRegistry: null,
+    eidoversePlaceMap: null,
     voxta: {
       enabled: false,
       satelliteId: "voxta-vam",

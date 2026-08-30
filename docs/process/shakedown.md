@@ -105,6 +105,7 @@ silent fallbacks between these layers.
 | `npm run walkthrough` | `src/app/e2e/e2e-walkthrough.ts` | Interactive orientation tour of the real agent loop |
 | `npm run e2e:multi-companion-runtime` | `src/app/e2e/multi-companion-runtime-validation.ts` | Process-level two-agent isolation, fatigue suppression, closeout reserve, flag-off fail-closed |
 | `npm run e2e:fleet-posture` | `src/app/e2e/fleet-posture-runtime-validation.test.ts` | Authenticated posture attribution, staleness, expiry, disconnect/reconnect |
+| `npm run e2e:egress-capability-matrix` | `src/app/e2e/egress-capability-matrix.test.ts` | Every canonical `external.*` capability across nursery/apprentice/autonomous, using real gated tools and local recording adapters with deny-side-effect proof |
 | `npm run shakedown:cleanup` | `src/app/maintenance/cleanup-shakedown-artifacts.ts` | Exact, backed-up deletion of the canonical testing-harness session and its artifacts |
 | `npm run session:purge` | `src/app/maintenance/purge-testing-session.ts` | Exact, rollback-safe purge of one indexed session and its projection rows |
 | `npm run verify:idle-purity` | `src/app/e2e/idle-purity-certification/` | An idle runtime performs zero filesystem/Postgres writes outside an allowlist |
@@ -228,6 +229,16 @@ certified chain**, the fleet SSO unified-origin certification covers the
 unified-origin authorization surface end to end, and idle purity snapshots
 filesystem/Postgres write counters and fails on any write outside an explicit
 allowlist.
+
+The egress capability matrix is the public, topology-free capability-grid
+case. It executes the production `notify` and `mcp` tools for all 15
+capability-by-tier rows. Its Discord, email, operator-brief, companion-candidate,
+and MCP targets terminate in in-memory recording adapters; it performs no live
+external send. Allowed rows must reach exactly one handler. Denied rows must
+return the canonical `capabilityDenied`, `tier`, and `missingTokens` shape and
+must reach zero handlers, making absence of egress side effects executable
+evidence. A private live matrix may run this command as its mechanical profile,
+while deployment targets and topology stay in operator-owned configuration.
 
 ## Shakedown artifact cleanup
 

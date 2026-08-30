@@ -36,13 +36,21 @@ import {
   type HubStreamState,
 } from '../lib/stream/hub-stream.js';
 import { deriveOperationalTraces } from '../lib/traces.js';
-import { HeadpatCoalescer } from '../lib/touch-interactions.js';
+import {
+  TouchInteractionCoalescer,
+  type TouchInteractionInput,
+} from '../lib/touch-interactions.js';
 import { useSpriteManifest } from '../lib/sprites/use-sprite-manifest.js';
 import type { DeviceLocationSample } from '../lib/geolocation.js';
 import { useDeviceLocation } from './use-device-location.js';
 import { ActivityDrawer, traceMatchesFilter } from './activity-drawer.js';
+import { AvatarView } from './avatar-view.js';
 import { CompanionSelectorPage } from './companion-selector.js';
 import { CompanionSprite, deriveSpriteState } from './companion-sprite.js';
+import {
+  CompanionViewLayout,
+  type CompanionView,
+} from './companion-view-layout.js';
 import { Composer } from './composer.js';
 import { useComposerController } from './composer-controller.js';
 import {
@@ -79,6 +87,7 @@ export function App() {
   const [spriteAnimations, setSpriteAnimations] = useState(true);
   const [spritePetted, setSpritePetted] = useState(false);
   const [touchError, setTouchError] = useState<string | null>(null);
+  const [activeView, setActiveView] = useState<CompanionView>('thread');
   const [locationEnabled, setLocationEnabled] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const composer = useComposerController({
@@ -94,7 +103,7 @@ export function App() {
   const fleetSessionRef = useRef<FleetSessionClient | null>(null);
   const storeRef = useRef<HubStreamStore | null>(null);
   const z02AudioStoreRef = useRef<HubStreamStore | null>(null);
-  const headpatCoalescerRef = useRef<HeadpatCoalescer | null>(null);
+  const touchCoalescerRef = useRef<TouchInteractionCoalescer | null>(null);
   const headpatReactionTimerRef = useRef<number | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
   const reconnectAttemptRef = useRef(0);
@@ -140,7 +149,7 @@ export function App() {
   });
 
   useEffect(() => {
-    const coalescer = new HeadpatCoalescer({
+    const coalescer = new TouchInteractionCoalescer({
       emit: (interaction) => {
         try {
           const store = storeRef.current;
@@ -148,11 +157,11 @@ export function App() {
           store.sendTouchInteraction(interaction);
           setTouchError(null);
         } catch (error) {
-          setTouchError(error instanceof Error ? error.message : 'Headpat delivery failed');
+          setTouchError(error instanceof Error ? error.message : 'Touch delivery failed');
         }
       },
     });
-    headpatCoalescerRef.current = coalescer;
+    touchCoalescerRef.current = coalescer;
     try {
       setRuntime(readCompanionUiRuntimeConfig());
       fleetSessionRef.current = new FleetSessionClient();
@@ -173,7 +182,7 @@ export function App() {
       window.removeEventListener('offline', onOffline);
       window.removeEventListener('online', onOnline);
       coalescer.destroy();
-      headpatCoalescerRef.current = null;
+      touchCoalescerRef.current = null;
       if (headpatReactionTimerRef.current !== null) window.clearTimeout(headpatReactionTimerRef.current);
       if (reconnectTimerRef.current !== null) window.clearTimeout(reconnectTimerRef.current);
       authorityEpochRef.current += 1;
@@ -420,7 +429,11 @@ export function App() {
       setSpritePetted(false);
       headpatReactionTimerRef.current = null;
     }, 900);
-    if (canSend) headpatCoalescerRef.current?.tap();
+    queueTouchInteraction({ kind: 'headpat', region: 'head', durationMs: 0 });
+  }
+
+  function queueTouchInteraction(interaction: TouchInteractionInput) {
+    if (canSend) touchCoalescerRef.current?.record(interaction);
   }
 
   async function decideApproval(id: string, decision: 'approve' | 'deny') {
@@ -488,53 +501,71 @@ export function App() {
         <span aria-label="Place authority">Place: {streamState.session?.place?.name ?? 'not available'}</span>
       </section>
 
-      <ThreadView
-        streamState={streamState}
-        targetLabel={streamState.session?.activeShardId
-          ? streamState.session.shards?.find(
-              shard => shard.shardId === streamState.session?.activeShardId,
-            )?.label
-          : undefined}
-      />
-      {spriteEnabled && (
-        <CompanionSprite
-          state={spriteState}
-          animated={spriteAnimations}
-          label={identityLabel}
-          mouthOpen={mouthOpen}
-          onHeadpat={giveHeadpat}
-          petted={spritePetted}
-          manifest={spriteManifest.state === 'ready' ? spriteManifest.manifest : null}
-          touch={spritePetted ? 'headpat-happy' : null}
-          emotion={streamState.emotion}
-          toolActivity={latestToolActivity}
-        />
-      )}
-      <ToastLayer
-        approvals={approvals}
-        artifacts={artifacts}
-        error={streamState.failure?.message ?? touchError ?? configError}
-        onApprovalDecision={(id, decision) => { void decideApproval(id, decision); }}
-        onArtifactPreview={previewArtifact}
-        stacked={composer.pendingAttachments.length > 0}
-        updateReady={updateReady}
-        voiceNotice={composer.voiceNotice}
-      />
-      {composer.pendingAttachments.length > 0 && (
-        <AttachmentTray attachments={composer.pendingAttachments} onRemove={composer.removeAttachment} />
-      )}
-      <Composer
-        canSend={canSend}
-        controller={composer}
-        generationStopActive={generationStopActive}
-        onSendText={sendUserText}
-        onStopGeneration={() => storeRef.current?.interrupt()}
-        voiceStopActive={voiceStopActive}
-        targetLabel={streamState.session?.activeShardId
-          ? streamState.session.shards?.find(
-              shard => shard.shardId === streamState.session?.activeShardId,
-            )?.label
-          : undefined}
+      <CompanionViewLayout
+        activeView={activeView}
+        onViewChange={setActiveView}
+        thread={(
+          <>
+            <ThreadView
+              streamState={streamState}
+              targetLabel={streamState.session?.activeShardId
+                ? streamState.session.shards?.find(
+                    shard => shard.shardId === streamState.session?.activeShardId,
+                  )?.label
+                : undefined}
+            />
+            {spriteEnabled && (
+              <CompanionSprite
+                state={spriteState}
+                animated={spriteAnimations}
+                label={identityLabel}
+                mouthOpen={mouthOpen}
+                onHeadpat={giveHeadpat}
+                petted={spritePetted}
+                manifest={spriteManifest.state === 'ready' ? spriteManifest.manifest : null}
+                touch={spritePetted ? 'headpat-happy' : null}
+                emotion={streamState.emotion}
+                toolActivity={latestToolActivity}
+              />
+            )}
+            <ToastLayer
+              approvals={approvals}
+              artifacts={artifacts}
+              error={streamState.failure?.message ?? touchError ?? configError}
+              onApprovalDecision={(id, decision) => { void decideApproval(id, decision); }}
+              onArtifactPreview={previewArtifact}
+              stacked={composer.pendingAttachments.length > 0}
+              updateReady={updateReady}
+              voiceNotice={composer.voiceNotice}
+            />
+            {composer.pendingAttachments.length > 0 && (
+              <AttachmentTray attachments={composer.pendingAttachments} onRemove={composer.removeAttachment} />
+            )}
+            <Composer
+              canSend={canSend}
+              controller={composer}
+              generationStopActive={generationStopActive}
+              onSendText={sendUserText}
+              onStopGeneration={() => storeRef.current?.interrupt()}
+              voiceStopActive={voiceStopActive}
+              targetLabel={streamState.session?.activeShardId
+                ? streamState.session.shards?.find(
+                    shard => shard.shardId === streamState.session?.activeShardId,
+                  )?.label
+                : undefined}
+            />
+          </>
+        )}
+        avatar={(
+          <AvatarView
+            state={spriteState}
+            animated={spriteAnimations}
+            label={identityLabel}
+            manifest={spriteManifest.state === 'ready' ? spriteManifest.manifest : null}
+            emotion={streamState.emotion}
+            onInteraction={queueTouchInteraction}
+          />
+        )}
       />
       {overlay && (
         <OverlayFrame onClose={() => setOverlay(null)} side={overlay === 'activity' ? 'left' : 'right'}>

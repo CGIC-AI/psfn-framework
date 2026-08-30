@@ -67,13 +67,152 @@ test("authenticated hello uses registry-owned identity and bounded capabilities"
   await waitFor(() => messages.some((message) => message.type === "hello.ack"));
   const ack = messages.find((message) => message.type === "hello.ack");
   assert.ok(ack && ack.type === "hello.ack");
+  const ready = messages.find((message) => message.type === "session.ready");
+  assert.ok(ready && ready.type === "session.ready");
   assert.equal(ack.deviceName, "Office Device");
   assert.equal(ack.satelliteId, "office");
   assert.deepEqual(ack.capabilities.control, []);
   assert.deepEqual(ack.capabilities.safety, ["local_only"]);
+  assert.deepEqual(ready.capabilities, ack.capabilities);
   socket.close();
   await new Promise<void>((resolve) => socket.once("close", () => resolve()));
   await server.close();
+});
+
+test("authenticated spoken replies advertise and emit one bracketed audio stream", async () => {
+  const tts = new RecordingTts(["first-audio", "second-audio"]);
+  const server = new RealtimeHubServer(
+    config({ streamingAudio: true }),
+    { agent: fixedReplyAgent("Spoken reply."), realtimeTts: tts },
+  );
+  await server.start();
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  const socket = new WebSocket(`ws://127.0.0.1:${address.port}`);
+  const messages: HubToClientMessage[] = [];
+  socket.on("message", raw => messages.push(JSON.parse(raw.toString()) as HubToClientMessage));
+
+  try {
+    await new Promise<void>(resolve => socket.once("open", resolve));
+    socket.send(JSON.stringify({
+      type: "hello",
+      deviceId: "office-device",
+      deviceName: "Office Device",
+      credential,
+      capabilities: { input: ["text"], output: ["text", "streamed_audio"], control: [], safety: [] },
+    }));
+    await waitFor(() => messages.some(message => message.type === "hello.ack"));
+    const ready = messages.find(message => message.type === "session.ready");
+    assert.ok(ready && ready.type === "session.ready");
+    assert.deepEqual(ready.capabilities.output, ["text", "streamed_audio"]);
+
+    socket.send(JSON.stringify({ type: "user.text", text: "speak" }));
+    await waitFor(() => messages.some(message => message.type === "text" && message.data === "audio-end"));
+
+    assert.deepEqual(
+      messages.flatMap(message => {
+        if (message.type === "text" && (message.data === "audio-init" || message.data === "audio-end")) {
+          return [message.data];
+        }
+        if (message.type === "audio") {
+          return [Buffer.from(message.data, "base64").toString("utf8")];
+        }
+        return [];
+      }),
+      ["audio-init", "first-audio", "second-audio", "audio-end"],
+    );
+    assert.deepEqual(tts.calls, ["Spoken reply."]);
+  } finally {
+    socket.close();
+    await new Promise<void>(resolve => socket.once("close", () => resolve()));
+    await server.close();
+  }
+});
+
+test("authenticated spoken replies fail closed for an audio-incapable client", async () => {
+  const tts = new RecordingTts(["must-not-send"]);
+  const server = new RealtimeHubServer(
+    config({ streamingAudio: true }),
+    { agent: fixedReplyAgent("Text only."), realtimeTts: tts },
+  );
+  await server.start();
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  const socket = new WebSocket(`ws://127.0.0.1:${address.port}`);
+  const messages: HubToClientMessage[] = [];
+  socket.on("message", raw => messages.push(JSON.parse(raw.toString()) as HubToClientMessage));
+
+  try {
+    await new Promise<void>(resolve => socket.once("open", resolve));
+    socket.send(JSON.stringify({
+      type: "hello",
+      deviceId: "office-device",
+      deviceName: "Office Device",
+      credential,
+      capabilities: { input: ["text"], output: ["text"], control: [], safety: [] },
+    }));
+    await waitFor(() => messages.some(message => message.type === "hello.ack"));
+    const ready = messages.find(message => message.type === "session.ready");
+    assert.ok(ready && ready.type === "session.ready");
+    assert.deepEqual(ready.capabilities.output, ["text"]);
+
+    socket.send(JSON.stringify({ type: "user.text", text: "reply in text" }));
+    await waitFor(() => finalAssistantMessages(messages).includes("Text only."));
+
+    assert.equal(messages.some(message => message.type === "audio"), false);
+    assert.equal(messages.some(
+      message => message.type === "text" && (message.data === "audio-init" || message.data === "audio-end"),
+    ), false);
+    assert.deepEqual(tts.calls, []);
+  } finally {
+    socket.close();
+    await new Promise<void>(resolve => socket.once("close", () => resolve()));
+    await server.close();
+  }
+});
+
+test("session readiness removes streamed audio when spoken-reply TTS is unavailable", async () => {
+  const runtimeConfig = config({ streamingAudio: true });
+  runtimeConfig.elevenlabsApiKey = null;
+  runtimeConfig.elevenlabsVoiceId = null;
+  const tts = new RecordingTts(["must-not-send"]);
+  const server = new RealtimeHubServer(
+    runtimeConfig,
+    { agent: fixedReplyAgent("Unavailable audio."), realtimeTts: tts },
+  );
+  await server.start();
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  const socket = new WebSocket(`ws://127.0.0.1:${address.port}`);
+  const messages: HubToClientMessage[] = [];
+  socket.on("message", raw => messages.push(JSON.parse(raw.toString()) as HubToClientMessage));
+
+  try {
+    await new Promise<void>(resolve => socket.once("open", resolve));
+    socket.send(JSON.stringify({
+      type: "hello",
+      deviceId: "office-device",
+      deviceName: "Office Device",
+      credential,
+      capabilities: { input: ["text"], output: ["text", "streamed_audio"], control: [], safety: [] },
+    }));
+    await waitFor(() => messages.some(message => message.type === "hello.ack"));
+    const ready = messages.find(message => message.type === "session.ready");
+    const ack = messages.find(message => message.type === "hello.ack");
+    assert.ok(ready && ready.type === "session.ready");
+    assert.ok(ack && ack.type === "hello.ack");
+    assert.deepEqual(ready.capabilities.output, ["text"]);
+    assert.deepEqual(ack.capabilities.output, ["text"]);
+
+    socket.send(JSON.stringify({ type: "user.text", text: "do not synthesize" }));
+    await waitFor(() => finalAssistantMessages(messages).includes("Unavailable audio."));
+    assert.equal(messages.some(message => message.type === "audio"), false);
+    assert.deepEqual(tts.calls, []);
+  } finally {
+    socket.close();
+    await new Promise<void>(resolve => socket.once("close", () => resolve()));
+    await server.close();
+  }
 });
 
 test("authenticated hello rejects browser-authored place, companion, contact, or human authority", async () => {
@@ -469,6 +608,16 @@ function agent(): FrameworkAgentAdapter {
   return { async *streamReply() { return ""; }, async close() {} };
 }
 
+function fixedReplyAgent(reply: string): FrameworkAgentAdapter {
+  return {
+    async *streamReply() {
+      yield reply;
+      return reply;
+    },
+    async close() {},
+  };
+}
+
 type ReplyInput = Parameters<FrameworkAgentAdapter["streamReply"]>[0];
 
 class BlockingAgent implements FrameworkAgentAdapter {
@@ -534,6 +683,21 @@ class FirstReplyStallingTts implements StreamingTtsAdapter {
   async close(): Promise<void> {
     this.releaseFirst();
   }
+}
+
+class RecordingTts implements StreamingTtsAdapter {
+  readonly calls: string[] = [];
+
+  constructor(private readonly chunks: string[]) {}
+
+  async *streamText(textStream: AsyncIterable<string>): AsyncGenerator<Buffer, void, void> {
+    let text = "";
+    for await (const chunk of textStream) text += chunk;
+    this.calls.push(text);
+    for (const chunk of this.chunks) yield Buffer.from(chunk);
+  }
+
+  async close(): Promise<void> {}
 }
 
 function finalAssistantMessages(messages: HubToClientMessage[]): string[] {

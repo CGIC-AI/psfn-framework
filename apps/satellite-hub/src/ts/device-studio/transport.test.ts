@@ -216,6 +216,7 @@ test("live transport sends hello and typed commands over websocket", async () =>
           deviceName: message.deviceName,
           satelliteId,
           audioFormat: "pcm_s16le_16000_mono_in/mp3_44100_out",
+          capabilities: message.capabilities ?? {},
         } satisfies HubToClientMessage));
         socket.send(JSON.stringify({
           type: "hello.ack",

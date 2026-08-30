@@ -1224,6 +1224,7 @@ function mergeCapabilityList<T extends string>(inferred: T[], overrides?: T[]): 
 
 function createMockSessionReady(hello: HelloMessage): SessionReadyMessage {
   const sessionId = hello.sessionId ?? `device-studio:${hello.deviceId}`;
+  const capabilities = cloneCapabilities(hello.capabilities) ?? inferSatelliteCapabilities();
   return {
     type: "session.ready",
     sessionId,
@@ -1232,6 +1233,7 @@ function createMockSessionReady(hello: HelloMessage): SessionReadyMessage {
     deviceName: hello.deviceName,
     satelliteId: hello.satelliteId ?? hello.deviceId,
     audioFormat: DEFAULT_MOCK_AUDIO_FORMAT,
+    capabilities,
   };
 }
 

@@ -58,6 +58,7 @@ import {
   canUseApprovals,
   DEFAULT_REALTIME_CAPABILITIES,
   EmbodiedSessionRegistry,
+  normalizeCapabilities,
   type SatelliteAttachmentOwnership,
 } from "./embodied-session.js";
 import { SessionStore } from "./session-store.js";
@@ -330,6 +331,7 @@ class RealtimeConnection {
       deviceName: this.deviceName,
       satelliteId: this.satelliteId,
       audioFormat: this.config.deepgramApiKey ? "pcm_s16le_16000_mono_in/mp3_44100_out" : "text_only",
+      capabilities: this.capabilities,
       identity: await this.resolveRuntimeIdentity(),
     });
   }
@@ -945,30 +947,35 @@ class RealtimeConnection {
         if (!this.config.elevenlabsApiKey || !this.config.elevenlabsVoiceId) {
           throw new Error("ElevenLabs TTS is not configured for this hub");
         }
-        await this.send({
-          type: "text",
-          data: "audio-init",
-        });
-        this.assertReplyActive(replyId, replyAbortController);
         let emittedAudio = false;
         const audio = this.tts.streamText(singleValueStream(spokenSegmentText), {
           signal: replyAbortController.signal,
         });
-        for await (const audioChunk of abortableAsyncIterable(audio, replyAbortController.signal)) {
-          this.assertReplyActive(replyId, replyAbortController);
-          emittedAudio = true;
-          await this.send({
-            type: "audio",
-            data: encodeAudioChunk(audioChunk),
-          });
-          this.assertReplyActive(replyId, replyAbortController);
-        }
-        this.assertReplyActive(replyId, replyAbortController);
-        if (emittedAudio) {
-          await this.send({
-            type: "text",
-            data: "audio-end",
-          });
+        try {
+          for await (const audioChunk of abortableAsyncIterable(audio, replyAbortController.signal)) {
+            this.assertReplyActive(replyId, replyAbortController);
+            if (!emittedAudio) {
+              await this.send({
+                type: "text",
+                data: "audio-init",
+              });
+              this.assertReplyActive(replyId, replyAbortController);
+            }
+            emittedAudio = true;
+            await this.send({
+              type: "audio",
+              data: encodeAudioChunk(audioChunk),
+            });
+            this.assertReplyActive(replyId, replyAbortController);
+          }
+        } finally {
+          if (emittedAudio) {
+            this.assertReplyActive(replyId, replyAbortController);
+            await this.send({
+              type: "text",
+              data: "audio-end",
+            });
+          }
           this.assertReplyActive(replyId, replyAbortController);
         }
       }
@@ -1202,12 +1209,13 @@ class RealtimeConnection {
     claimIdentity?: PsfnChannelContext["claimIdentity"],
     deviceAuthority?: PsfnChannelContext["deviceAuthority"],
   ): void {
+    const effectiveCapabilities = applySpokenReplyAudioCeiling(capabilities, this.config);
     const attachment = this.embodiedSessions.attachSatellite({
       sessionId: this.sessionId,
       channelId,
       satelliteId: this.satelliteId,
       satelliteName: this.satelliteName,
-      capabilities,
+      capabilities: effectiveCapabilities,
       ...(claimIdentity ? { claimIdentity } : {}),
       ...(deviceAuthority ? { deviceAuthority } : {}),
     });
@@ -1222,6 +1230,20 @@ class RealtimeConnection {
     }
     return this.attachmentOwnership;
   }
+}
+
+function applySpokenReplyAudioCeiling(
+  capabilities: SatelliteCapabilities | undefined,
+  config: HubConfig,
+): Required<SatelliteCapabilities> {
+  const normalized = normalizeCapabilities(capabilities);
+  const spokenReplyAudioAvailable = Boolean(config.elevenlabsApiKey && config.elevenlabsVoiceId);
+  return {
+    ...normalized,
+    output: spokenReplyAudioAvailable
+      ? normalized.output
+      : normalized.output.filter(capability => capability !== "streamed_audio"),
+  };
 }
 
 function hasBrowserAuthoredAuthority(message: ClientToHubMessage): boolean {

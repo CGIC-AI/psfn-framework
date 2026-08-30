@@ -121,6 +121,7 @@ export interface SessionReadyMessage {
   deviceName: string;
   satelliteId: string;
   audioFormat: string;
+  capabilities: SatelliteCapabilities;
   identity?: RuntimeIdentity;
 }
 

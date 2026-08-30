@@ -27,7 +27,7 @@ export const VOXTA_VAM_CAPABILITIES: Required<SatelliteCapabilities> = {
 export interface AttachedSatellite {
   id: string;
   name: string;
-  transport: "websocket";
+  transport: "websocket" | "mcp";
   capabilities: Required<SatelliteCapabilities>;
   attachedAt: string;
   updatedAt: string;
@@ -57,6 +57,8 @@ export interface PsfnChannelContext {
     displayName: string;
   };
   deviceAuthority?: HubDeviceAssertionAuthority;
+  /** Hub-owned situated place resolved from a trusted device/world mapping. */
+  placeId?: string;
   activeSatellites: Array<{
     id: string;
     name: string;
@@ -91,6 +93,7 @@ export interface AttachSatelliteInput {
   channelId?: string;
   satelliteId: string;
   satelliteName: string;
+  transport?: AttachedSatellite["transport"];
   capabilities?: SatelliteCapabilities;
   claimIdentity?: PsfnChannelContext["claimIdentity"];
   deviceAuthority?: HubDeviceAssertionAuthority;
@@ -117,7 +120,7 @@ export class EmbodiedSessionRegistry {
     const satellite: AttachedSatellite = {
       id: satelliteId,
       name: normalizeOptional(input.satelliteName) ?? satelliteId,
-      transport: "websocket",
+      transport: input.transport ?? "websocket",
       capabilities: normalizeCapabilities(input.capabilities),
       attachedAt: current?.satellites.find((item) => item.id === satelliteId)?.attachedAt ?? now,
       updatedAt: now,

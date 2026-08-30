@@ -15,7 +15,11 @@ async function main(): Promise<void> {
   const config = loadHubConfig(projectRoot);
   const eidoverseConfig = loadEidoverseMcpConfig();
   fs.mkdirSync(config.artifactsRoot, { recursive: true });
-  const server = new RealtimeHubServer(config);
+  const server = new RealtimeHubServer(config, {
+    eidoverse: eidoverseConfig
+      ? { worldName: eidoverseConfig.worldName, agentName: eidoverseConfig.agentName }
+      : null,
+  });
   const homeAssistant = config.homeAssistant ? new HomeAssistantClient(config.homeAssistant) : null;
   const eidoverse = eidoverseConfig
     ? new EidoverseMcpClient(eidoverseConfig, resolveEidoverseCredentialFromEnv, {

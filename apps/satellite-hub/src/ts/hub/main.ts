@@ -6,6 +6,7 @@ import {
   loadEidoverseMcpConfig,
   resolveEidoverseCredentialFromEnv,
 } from "./eidoverse-mcp.js";
+import { createEidoverseProductionWakeLifecycle } from "./eidoverse-wake-runtime.js";
 import { RealtimeHubServer } from "./server.js";
 import { HomeAssistantClient } from "./home-assistant/client.js";
 import { HomeAssistantControlServer } from "./home-assistant/control-server.js";
@@ -35,20 +36,27 @@ async function main(): Promise<void> {
         }
       : null,
   });
+  const eidoverseProduction = eidoverseConfig && eidoverse
+    ? createEidoverseProductionWakeLifecycle(eidoverse, server, eidoverseConfig, {
+        logger: { warn: (message) => console.warn(message) },
+      })
+    : null;
   const control = config.control && homeAssistant && config.deviceRegistry
     ? new HomeAssistantControlServer(config.control, homeAssistant, config.deviceRegistry)
     : null;
   try {
     homeAssistant?.start();
-    await eidoverse?.start();
     await control?.start();
-    await server.start();
+    if (eidoverseProduction) {
+      await eidoverseProduction.start();
+    } else {
+      await server.start();
+    }
   } catch (error) {
     await Promise.allSettled([
       control?.close(),
-      eidoverse?.close(),
       homeAssistant?.close(),
-      server.close(),
+      eidoverseProduction ? eidoverseProduction.close() : server.close(),
     ]);
     throw error;
   }
@@ -61,10 +69,17 @@ async function main(): Promise<void> {
   const stop = async (): Promise<void> => {
     if (stopping) return;
     stopping = true;
-    await control?.close();
-    await eidoverse?.close();
-    await homeAssistant?.close();
-    await server.close();
+    const results = await Promise.allSettled([
+      control?.close(),
+      homeAssistant?.close(),
+      eidoverseProduction ? eidoverseProduction.close() : server.close(),
+    ]);
+    const errors = results
+      .filter((result): result is PromiseRejectedResult => result.status === "rejected")
+      .map((result) => result.reason);
+    if (errors.length > 0) {
+      throw new AggregateError(errors, "Satellite Hub shutdown failed");
+    }
   };
   process.once("SIGINT", () => { void stop(); });
   process.once("SIGTERM", () => { void stop(); });

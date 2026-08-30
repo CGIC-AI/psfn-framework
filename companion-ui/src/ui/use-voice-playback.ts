@@ -36,6 +36,7 @@ export function useVoicePlayback(
   const [mouthOpen, setMouthOpen] = useState(false);
   const controllerRef = useRef<VoicePlaybackController | null>(null);
   const contextRef = useRef<ManagedAudioContext | null>(null);
+  const resetGenerationRef = useRef(voicePlayback.resetGeneration);
 
   function teardown(): void {
     controllerRef.current?.dispose();
@@ -48,6 +49,11 @@ export function useVoicePlayback(
   useEffect(() => () => teardown(), []);
 
   useEffect(() => {
+    if (resetGenerationRef.current !== voicePlayback.resetGeneration) {
+      resetGenerationRef.current = voicePlayback.resetGeneration;
+      controllerRef.current?.stop();
+      setMouthOpen(false);
+    }
     if (!voicePlayback.supported) {
       if (controllerRef.current) teardown();
       return;

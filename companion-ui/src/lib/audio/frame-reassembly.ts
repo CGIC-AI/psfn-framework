@@ -62,6 +62,8 @@ export interface VoicePlaybackState {
   readonly droppedFrames: number;
   /** Most recent reassembly anomaly, surfaced for diagnostics. */
   readonly lastError: string | null;
+  /** Changes only when queued or in-flight playback must be stopped. */
+  readonly resetGeneration: number;
 }
 
 export type PlaybackSignal =
@@ -69,7 +71,10 @@ export type PlaybackSignal =
   | { readonly kind: 'chunk'; readonly base64: string }
   | { readonly kind: 'end' };
 
-export function createVoicePlaybackState(supported = false): VoicePlaybackState {
+export function createVoicePlaybackState(
+  supported = false,
+  resetGeneration = 0,
+): VoicePlaybackState {
   return {
     supported,
     bracketOpen: false,
@@ -79,6 +84,7 @@ export function createVoicePlaybackState(supported = false): VoicePlaybackState 
     completedCount: 0,
     droppedFrames: 0,
     lastError: null,
+    resetGeneration,
   };
 }
 
@@ -198,7 +204,7 @@ export function consumeUtterance(state: VoicePlaybackState, id: string): VoicePl
 
 /** Reset audio buffering while preserving the negotiated support flag. */
 export function resetVoicePlayback(state: VoicePlaybackState): VoicePlaybackState {
-  return createVoicePlaybackState(state.supported);
+  return createVoicePlaybackState(state.supported, state.resetGeneration + 1);
 }
 
 export function cloneVoicePlaybackState(state: VoicePlaybackState): VoicePlaybackState {

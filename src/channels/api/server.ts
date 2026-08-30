@@ -110,6 +110,7 @@ import {
   handleCompanionApprovalDecision,
   handleCompanionArtifactPreview,
   handleCompanionEventsStream,
+  handleCompanionUiAudioOutput,
   matchCompanionRelayRoute,
   type CompanionRelayHttpDeps,
 } from './server/companion-relay-routes.js';
@@ -1177,6 +1178,15 @@ export class ApiServer implements ChannelAdapterPort {
         log.error('Companion touch stimulus handler failed', { error: toErrorMessage(error) });
         if (canWriteResponse(res)) {
           sendApiError(res, 500, 'internal_error', 'Touch stimulus delivery failed');
+        }
+      });
+      return;
+    }
+    if (route.route === 'audio_output') {
+      void handleCompanionUiAudioOutput(ctx).catch((error) => {
+        log.error('Companion UI audio output handler failed', { error: toErrorMessage(error) });
+        if (canWriteResponse(res)) {
+          sendApiError(res, 500, 'internal_error', 'Companion UI audio output delivery failed');
         }
       });
       return;

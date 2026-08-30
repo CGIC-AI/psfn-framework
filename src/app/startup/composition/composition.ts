@@ -9,6 +9,8 @@ import type { CoreSubstrateConfig, SubstrateConfig } from '../../../system/confi
 import type { PlacesRegistryConfig } from '../../../shared/contracts/places-registry.js';
 import type { EventBus } from '../../../shared/event-bus.js';
 import type { AppCache } from '../../../shared/cache/types.js';
+import type { NotificationPort } from '../../../boundary/gateway/notification-port.js';
+import { isRecord } from '../../../shared/utils/types.js';
 import type { CapabilityGrantSnapshot } from '../../../system/capabilities/access.js';
 import { wireRuntimeDiagnosticsEventCapture } from '../../../shared/diagnostics/runtime-diagnostics.js';
 import { createEventBusCostTelemetryPort } from '../../../shared/telemetry/cost-telemetry-port.js';
@@ -156,7 +158,7 @@ export interface SessionComposition {
   exactSessionWriteBarrier: FilesystemAutomataRetentionWriteBarrier;
 }
 
-export interface SessionCompositionOptions {
+interface SessionCompositionBaseOptions {
   config: SubstrateConfig;
   /**
    * Explicit database credential for callers whose core config is
@@ -172,7 +174,6 @@ export interface SessionCompositionOptions {
   /** Exact enabled-plugin channel-id prefixes eligible for cross-channel continuity. */
   continuityChannelPrefixes?: readonly string[];
   promptRegistry?: PromptRegistryStatePort | null;
-  sessionIntegrityProvider?: SessionIntegrityProvider | null;
   /** Runtime-owned backup root for automatic corrupt-handoff quarantine evidence. */
   sessionIntegrityRepairBackupRootDir?: string;
   /**
@@ -183,6 +184,43 @@ export interface SessionCompositionOptions {
   sessionTailCache?: SessionTailCachePort | null;
   /** Exact runtime identity used by retention write barriers in full agent composition. */
   automataRetentionCompanionId?: string;
+}
+
+interface SessionIntegrityOperatorAlertComposition {
+  notifier: NotificationPort;
+  companionName: string;
+}
+
+/**
+ * Production composition must make HMAC verification and its operator alert
+ * indivisible. Tests and narrowly scoped maintenance harnesses may continue to
+ * omit both by leaving `runtimeMode` unset.
+ */
+export type SessionCompositionOptions = SessionCompositionBaseOptions & (
+  | {
+      runtimeMode: 'production';
+      sessionIntegrityProvider: SessionIntegrityProvider;
+      sessionIntegrityOperatorAlert: SessionIntegrityOperatorAlertComposition;
+    }
+  | {
+      runtimeMode?: 'non-production';
+      sessionIntegrityProvider?: SessionIntegrityProvider | null;
+      sessionIntegrityOperatorAlert?: SessionIntegrityOperatorAlertComposition;
+    }
+);
+
+function assertProductionSessionIntegrityComposition(options: unknown): void {
+  if (!isRecord(options) || options.runtimeMode !== 'production') return;
+  if (!options.sessionIntegrityProvider) {
+    throw new Error('Production session composition requires a non-null integrity provider');
+  }
+  const operatorAlert = options.sessionIntegrityOperatorAlert;
+  if (!isRecord(operatorAlert)
+    || !operatorAlert.notifier
+    || typeof operatorAlert.companionName !== 'string'
+    || !operatorAlert.companionName.trim()) {
+    throw new Error('Production session composition requires an operator integrity alert path');
+  }
 }
 
 /**
@@ -242,6 +280,9 @@ function createSessionComposition(
   const integrityObserver = options.sessionIntegrityProvider
     ? createSessionIntegrityIncidentObserver({
       cogSecEvents: () => new CogSecEventStore(cogSecEventsPath),
+      ...(options.sessionIntegrityOperatorAlert
+        ? { operatorAlert: options.sessionIntegrityOperatorAlert }
+        : {}),
     })
     : null;
   const sessionStore = new SessionStore(sessionsDir, {
@@ -312,6 +353,7 @@ function createSessionComposition(
 export async function composeSessionRuntimeAsync(
   options: SessionCompositionOptions,
 ): Promise<SessionComposition> {
+  assertProductionSessionIntegrityComposition(options);
   const companionDataDir = resolveConfiguredCompanionDataDir(options.config);
   migrateLegacyPersistenceLayout(companionDataDir);
 

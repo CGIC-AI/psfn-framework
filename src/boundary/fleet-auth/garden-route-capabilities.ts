@@ -162,6 +162,7 @@ const requiredBodyPatterns = new Set([
   'POST /api/admin/icp-autonomy/test-initiations',
   'POST /api/admin/memory/bulk-delete',
   'POST /api/admin/letters',
+  'POST /api/admin/doing-mirror/:itemType/:itemId',
   'POST /api/admin/memory/bulk-update',
   'POST /api/admin/memory/link',
   'DELETE /api/admin/memory/link',
@@ -237,6 +238,7 @@ const fixedRoutes: readonly RouteTuple[] = [
   ['GET', '/api/admin/evals/observer-sidecar/observations'], ['GET', '/api/admin/evals/observer-sidecar/runs'],
   ['GET', '/api/admin/graph-proposals'], ['GET', '/api/admin/group-memory'],
   [['GET', 'POST'], '/api/admin/letters'],
+  ['GET', '/api/admin/doing-mirror'],
   ['GET', '/api/admin/identity'], ['POST', '/api/admin/identity/diff'],
   ['PATCH', '/api/admin/identity/fields'], ['POST', '/api/admin/identity/import'],
   ['POST', '/api/admin/identity/onboarding'], ['POST', '/api/admin/identity/rollback'],
@@ -346,6 +348,7 @@ const dynamicRoutes: readonly RouteTuple[] = [
   ['POST', '/api/admin/wishlist/:wishId/respond'],
   ['POST', '/api/admin/wishlist/:wishId/convert-to-bead'],
   ['POST', '/api/admin/wishlist/:wishId/done'],
+  ['POST', '/api/admin/doing-mirror/:itemType/:itemId'],
   ['GET', '/api/admin/intake/drift-reviews/:id'], ['POST', '/api/admin/intake/drift-reviews/:id/resolve'],
   ['GET', '/api/admin/intake/quarantine/:id'], ['POST', '/api/admin/intake/quarantine/:id/confirm'],
   ['POST', '/api/admin/intake/quarantine/:id/decide'],
@@ -361,7 +364,7 @@ export const GARDEN_CLIENT_ROUTES = Object.freeze([
   '/fleet-costs', '/images', '/memory', '/model-room', '/models', '/places', '/primer', '/prompt-monitor',
   '/prompts', '/room-arbiter', '/rooms', '/satellites', '/scheduler', '/session-recovery', '/sessions',
   '/settings', '/shards', '/shards/:shardId', '/skills', '/subsystem-health', '/telemetry', '/theme', '/tools',
-  '/values', '/wiki', '/wishlist', '/letters', '/biographical-profile',
+  '/values', '/wiki', '/wishlist', '/letters', '/doing-mirror', '/biographical-profile',
 ] as const);
 
 function bodyPolicy(method: GardenForwardMethod, pattern: string): GardenBodyPolicy {

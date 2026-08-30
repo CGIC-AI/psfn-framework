@@ -330,3 +330,7 @@ export type {
 export type {
   AdminLetterService,
 } from './types/letters.js';
+
+export type {
+  AdminDoingMirrorService,
+} from './types/doing-mirror.js';

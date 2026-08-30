@@ -92,6 +92,8 @@ import {
 import { PostgresFleetMaintenanceStore } from './postgres/fleet-maintenance-store.js';
 import { PostgresLetterStore } from './postgres/letter-store.js';
 import type { LetterStorePort } from '../core/letters/contracts.js';
+import { PostgresDoingMirrorStore } from './postgres/doing-mirror-store.js';
+import type { DoingMirrorStorePort } from '../core/doing-mirror/contracts.js';
 
 export interface AgentPersistenceRuntime {
   backend: PersistenceBackend;
@@ -123,6 +125,8 @@ export interface AgentPersistenceRuntime {
   companionAvailabilityStore: CompanionAvailabilityStorePort & { close(): Promise<void> };
   /** Companion-private durable asynchronous correspondence bin. */
   letterStore: LetterStorePort;
+  /** Companion-private outcome mirror with durable partner-Letter delivery metadata. */
+  doingMirrorStore: DoingMirrorStorePort;
   introspectionLandmarkStore: IntrospectionLandmarkPostgresStore;
   backgroundWorkStore: BackgroundWorkStorePort;
   automataRunRegistry: AutomataRunRegistry;
@@ -472,6 +476,10 @@ export async function createAgentPersistenceRuntime(
     letterStore: await awaitPostgresStoreReadiness(
       'letters',
       () => PostgresLetterStore.connect(databaseUrl, { schema, role: tenantRole }),
+    ),
+    doingMirrorStore: await awaitPostgresStoreReadiness(
+      'doing_mirror',
+      () => PostgresDoingMirrorStore.connect(databaseUrl, { schema, role: tenantRole }),
     ),
     introspectionLandmarkStore: await awaitPostgresStoreReadiness(
       'introspection',

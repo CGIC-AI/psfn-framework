@@ -108,6 +108,7 @@ export interface StartOptionalAdminTransportServerOptions {
     | 'toolConformanceRunner'
     | 'humanAttentionLedger'
     | 'letterService'
+    | 'doingMirrorService'
   >;
   operatorAlerting: OperatorAlertSinkConfiguration;
 }
@@ -227,6 +228,7 @@ export async function startOptionalAdminTransportServer(
     episodicStore: options.episodicStore ?? null,
     sessionStore: options.coreRuntime.sessionStore,
     letterService: options.coreRuntime.letterService,
+    doingMirrorService: options.coreRuntime.doingMirrorService,
     sessionManager: options.coreRuntime.sessionManager,
     intakeReleaseConversationTurn,
     scheduler: options.scheduler,

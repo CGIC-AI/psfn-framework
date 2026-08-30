@@ -203,6 +203,7 @@ import {
 } from './icp-runtime-availability.js';
 import { PostgresAdminAutomataBusReadAdapter } from '../../operator/garden/services/automata-bus-read-adapter.js';
 import { createProductionAutomataBusReindexService } from '../../faculties/automata/bus/production-reindex.js';
+import { FoldPackageDoingMirrorSource } from '../../core/doing-mirror/sources.js';
 
 const log = createComponentLogger('Agent');
 const postgresPoolOwner = new PostgresPoolOwner('agent');
@@ -555,6 +556,7 @@ async function main(): Promise<void> {
     postgresDatabaseUrl,
     emosimProactivityStateStore: persistenceRuntime.emosimProactivityStateStore,
     letterStore: persistenceRuntime.letterStore,
+    doingMirrorStore: persistenceRuntime.doingMirrorStore,
     pathSnapshot,
     eventBus,
     gateway,
@@ -965,6 +967,16 @@ async function main(): Promise<void> {
     automataBusWorkerAccess: coreRuntime.automataBus!.workerAccess,
     automataLifecyclePort: coreRuntime.automataBus!.lifecycle,
   });
+  if (!shardManager.listFoldReviews || !shardManager.getFoldReview) {
+    throw new Error('Doing-mirror fold source requires the canonical shard fold-review port');
+  }
+  coreRuntime.doingMirrorService.registerSource(new FoldPackageDoingMirrorSource(
+    {
+      listFoldReviews: () => shardManager.listFoldReviews!(),
+      getFoldReview: shardId => shardManager.getFoldReview!(shardId),
+    },
+    resolveCoreCompanionIdFromConfig(config),
+  ));
 
   // Operator-extensible lifecycle hooks (bead vvf.2): workspace
   // HOOK.yaml definitions attach to the agent-process bus, fire-and-forget.
@@ -1580,6 +1592,7 @@ async function main(): Promise<void> {
       intentionRuntime,
       toolConformanceRunner,
       letterService: coreRuntime.letterService,
+      doingMirrorService: coreRuntime.doingMirrorService,
       humanAttentionLedger: coreRuntime.humanAttentionLedger,
     },
   });
@@ -1651,6 +1664,7 @@ async function main(): Promise<void> {
       await persistenceRuntime.partnerAffectShadowStore.close();
       await persistenceRuntime.companionAvailabilityStore.close();
       await persistenceRuntime.letterStore.close();
+      await persistenceRuntime.doingMirrorStore.close();
       await postgresPoolOwner.close();
     },
     scheduler,

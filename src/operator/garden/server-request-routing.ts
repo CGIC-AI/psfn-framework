@@ -14,6 +14,7 @@ const GARDEN_CLIENT_ROUTE_SET = new Set<string>([
   ...GARDEN_CLIENT_ROUTES,
   '/wishlist',
   '/letters',
+  '/doing-mirror',
 ]);
 
 interface AdminRequestRoutingDependencies {

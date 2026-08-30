@@ -92,4 +92,29 @@ describe('LetterService', () => {
     })).rejects.toThrow('directed to the other party');
     expect(store.create).not.toHaveBeenCalled();
   });
+
+  it('reuses a stable caller-owned id without duplicating the L0 compose event', async () => {
+    const store = makeStore();
+    const existing = record({
+      id: '83f2437e-1af8-40c4-9710-f6a7b085ad64',
+      author: 'partner',
+      recipient: 'companion',
+      subject: 'A disposition',
+      body: 'I am considering it.',
+    });
+    vi.mocked(store.get).mockResolvedValue(existing);
+    const append = vi.fn();
+    const service = new LetterService({ store, sessionStore: { append } });
+
+    await expect(service.compose({
+      id: existing.id,
+      author: 'partner',
+      recipient: 'companion',
+      subject: existing.subject,
+      body: existing.body,
+    })).resolves.toEqual(existing);
+
+    expect(store.create).not.toHaveBeenCalled();
+    expect(append).not.toHaveBeenCalled();
+  });
 });

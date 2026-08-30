@@ -199,12 +199,6 @@ export class GatewayFleetPortalProjection {
   async resolve(input: unknown): Promise<FleetPortalProjection> {
     const request = parseProjectionRequest(input);
     const authorized = await this.options.authorizer.resolve(request);
-    const connections = indexConnections(this.options.source.getFleetConnectionSnapshot());
-    const now = this.now();
-    if (!Number.isFinite(now.getTime())) {
-      throw new Error('Fleet portal projection clock is invalid');
-    }
-
     const seen = new Set<string>();
     const visibleManifest: ProjectionManifestEntry[] = [];
     for (const authority of authorized.companions) {
@@ -218,6 +212,27 @@ export class GatewayFleetPortalProjection {
       // admin endpoint), so authorization is the only gate.
       if (!authority.gardenLinkEligible) continue;
       visibleManifest.push(manifest);
+    }
+    return this.buildProjection(visibleManifest);
+  }
+
+  /**
+   * The configured ADMIN_TOKEN is the fleet deployment's unconditional
+   * operator credential: it holds a Garden link to every manifest companion by
+   * construction, so its portal projection is the full manifest with no
+   * per-principal SSO filtering.
+   */
+  async resolveAdminToken(): Promise<FleetPortalProjection> {
+    return this.buildProjection([...this.fleetByCompanionId.values()]);
+  }
+
+  private buildProjection(
+    visibleManifest: readonly ProjectionManifestEntry[],
+  ): FleetPortalProjection {
+    const connections = indexConnections(this.options.source.getFleetConnectionSnapshot());
+    const now = this.now();
+    if (!Number.isFinite(now.getTime())) {
+      throw new Error('Fleet portal projection clock is invalid');
     }
     const displayIdentity = createCompanionDisplayIdentityResolver(visibleManifest);
     const companions: FleetPortalCompanionProjection[] = [];

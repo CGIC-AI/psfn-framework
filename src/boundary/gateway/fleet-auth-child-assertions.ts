@@ -114,7 +114,10 @@ export class GatewayChildAssertionDeniedError extends Error {
 /**
  * The authenticated operator control plane may exchange, but never forward,
  * an operator capability. The gateway verifies and consumes the parent,
- * reauthorizes exact current authority, then signs a linked agent-only child.
+ * reauthorizes exact current SSO authority, then signs a linked agent-only
+ * child. A short-lived admin-token parent is already bound to the boot-frozen
+ * shared credential at the canonical gateway admission seam, so it carries
+ * its signed decision and versions forward without a nonexistent SSO session.
  */
 export class GatewayFleetAuthChildAssertionBroker {
   constructor(private readonly options: {
@@ -189,7 +192,13 @@ export class GatewayFleetAuthChildAssertionBroker {
       throw new GatewayChildAssertionDeniedError();
     }
 
-    const authority = input.operator.kind === 'operator_process'
+    const authority = verified.authContext.provider === 'admin_token'
+      ? {
+          decision: 'allow' as const,
+          decisionId: verified.decisionId,
+          versions: verified.versions,
+        }
+      : input.operator.kind === 'operator_process'
       ? await this.options.authority.reauthorize({
           operator: input.operator,
           parent: verified,

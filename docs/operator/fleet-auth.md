@@ -1,7 +1,7 @@
 ---
 type: concept
 title: Fleet Auth
-description: The fleet-auth authority model — the seven database projections that must agree before a companion request is authorized, the Discord-SSO-only session and lifecycle-ceremony doctrine, reconciliation quarantine and the accountRoster admin path, the signed Ed25519 request-capability boundary between the gateway and Garden, child assertions for agent-bound work, and Hub device assertion ingress.
+description: The fleet-auth authority model — the seven database projections that must agree before an SSO companion request is authorized, the alternative ADMIN_TOKEN Garden door, lifecycle ceremonies, reconciliation quarantine and the accountRoster admin path, the signed Ed25519 request-capability boundary between the gateway and Garden, child assertions for agent-bound work, and Hub device assertion ingress.
 tags: [fleet-auth, authority-model, sso, discord-oauth, authorization, request-capability, account-roster, lifecycle-ceremony, reconciliation, quarantine, escalation, hub-device-assertion, gateway, garden-control-plane, multi-companion, fail-closed]
 verified:
   - by: openwiki/0.4.3
@@ -103,7 +103,7 @@ principal authorizes a companion request only when seven projections describe
 the same current authority, and the gateway hands the companion a short-lived,
 signed request capability that binds the exact request bytes to the exact
 authorization decision. The browser never talks to Garden directly; the gateway
-is the only process that ever sees session tokens and the only signer of
+is the only process that ever sees SSO sessions or the shared ADMIN_TOKEN and the only signer of
 operator capabilities. Everything else — origin resolution, session cookies,
 authorization snapshots, capability issuance, replay fences — fails closed by
 construction.
@@ -113,19 +113,20 @@ flowchart TD
   B["Browser"] -->|"GET /companions/uuid/garden/..."| R["GatewayFleetSsoRouter"]
   R -->|"host and forwarded metadata"| ORIG{"resolveFleetSsoBrowserOrigin"}
   ORIG -->|"invalid provenance"| D400["400 invalid origin"]
-  R -->|"__Host-psfn_session cookie"| AUTH{"session token present"}
-  AUTH -->|"missing"| D401["401 or login redirect"]
-  AUTH -->|"present"| CTX["resolveAuthorizationContext"]
+  R -->|"SSO cookie or ADMIN_TOKEN"| AUTH{"valid admin credential"}
+  AUTH -->|"missing or invalid"| D401["401 or login redirect"]
+  AUTH -->|"SSO"| CTX["resolveAuthorizationContext"]
   CTX -->|"snapshot plus evaluation"| EVAL{"evaluateFleetAuthorizationSnapshot"}
   EVAL -->|"deny"| D403["403 FleetAuthorizationDeniedError"]
   EVAL -->|"allow"| CAP["issue signed request capability"]
+  AUTH -->|"ADMIN_TOKEN"| CAP
   CAP -->|"x-psfn-request-capability plus x-psfn-capability-context"| GATE["Garden admission"]
   GATE -->|"verify signature and versions"| REPLAY{"durable replay consume"}
   REPLAY -->|"consumed"| UP["companion upstream"]
   REPLAY -->|"replayed or mismatch"| D409["409 capability already consumed"]
 ```
 
-*The gateway is the unified fleet origin: it authenticates the browser session, resolves the exact authorization context per companion and action, mints a single-use signed capability, and proxies the request to Garden, which verifies and replays that capability.*
+*The gateway is the unified fleet origin: it accepts either a configured ADMIN_TOKEN or fleet SSO, binds the request to one companion and action, mints a single-use signed capability, and proxies the request to Garden, which verifies and replays that capability. Browser credentials are never forwarded upstream.*
 
 ## The seven authority projections
 
@@ -447,8 +448,9 @@ the socket (any forwarded-origin metadata is forbidden) or exactly one trusted
 proxy hop with an exact host, `https` (or `wss` for upgrades), an optional
 exact port, and a valid IP in `x-forwarded-for`. Mixed or duplicate forwarding
 metadata fails closed with `400` before any OAuth or session processing. All
-other requests are handled through one router: session cookie
-`__Host-psfn_session`, companion-scoped route parsing
+other requests are handled through one router: SSO session cookie
+`__Host-psfn_session` or ADMIN_TOKEN bearer/`psfn_token` cookie,
+companion-scoped route parsing
 (`/companions/<companion-uuid>/garden/...`), the fleet portal page
 (`/fleet`) and API (`/v1/fleet/portal`), the companion UI
 (`/companion-ui`), model-usage telemetry (`/v1/fleet/model-usage`), login
@@ -559,8 +561,11 @@ and resolved through the credential vault. A key-boundary check forces the
 broker signing key and the Hub verifier ring to be distinct Ed25519 keys and
 rejects the distributed seed/test fixture fingerprints and `replace-before-enable`
 placeholder key ids before fleet auth can be enabled. Fleet-auth-enabled mode
-also rejects standalone Garden/API token, cookie, HTTP, and WebSocket surfaces
-before listen (`assertFleetAuthStandaloneSurfacesUnavailable`), and
+rejects direct standalone Garden/API token, cookie, HTTP, and WebSocket
+surfaces before listen (`assertFleetAuthStandaloneSurfacesUnavailable`). The
+browser-facing Gateway Garden route remains the single admission seam and
+accepts either fleet SSO or a configured ADMIN_TOKEN, replacing either
+credential with an internal signed capability before the mTLS hop to Garden.
 `ALLOW_INSECURE_LOCAL_API=true` is silently ineffective (with a loud startup
 warning) once fleet auth is active.
 

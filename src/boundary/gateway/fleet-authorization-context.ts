@@ -203,7 +203,7 @@ export interface FleetAuthorizationFacts {
     bindingVersion: number;
     grantVersion: number;
     policyVersion: number;
-    provider: 'discord' | 'testing_harness';
+    provider: 'discord' | 'admin_token' | 'testing_harness';
     providerSubjectId: string;
   };
   authority: {
@@ -223,7 +223,7 @@ export type FleetAuthorizationEvaluation =
 export interface FleetAuthorizationContext {
   readonly principalId: string;
   readonly providerSubject: Readonly<{
-    provider: 'discord' | 'testing_harness';
+    provider: 'discord' | 'admin_token' | 'testing_harness';
     subjectId: string;
   }>;
   readonly companionId: string;
@@ -255,7 +255,7 @@ export interface FleetAuthorizationContext {
     expiresAt: string;
   }>;
   readonly provenance: Readonly<{
-    source: 'gateway_fleet_authorization_snapshot' | 'gateway_testing_harness';
+    source: 'gateway_fleet_authorization_snapshot' | 'gateway_admin_token' | 'gateway_testing_harness';
     authorizationEventId: string;
     resolvedAt: string;
     correlationId?: string;

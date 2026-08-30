@@ -43,10 +43,21 @@ const testingHarnessAuthContext = Object.freeze({
   fleetAccessMode: 'multi_admin' as const,
   authorizationEventId: 'event-harness', resolvedAt: '2030-01-01T00:00:00.000Z',
 });
+const adminTokenAuthContext = Object.freeze({
+  principalId: 'admin-token-operator', provider: 'admin_token' as const,
+  providerSubjectId: 'admin-token', companionId,
+  contactBindingId: `admin-token-binding-${companionId}`,
+  contactId: `admin-token-contact-${companionId}`,
+  operatorGrantId: `admin-token-grant-${companionId}`, role: 'owner' as const,
+  sessionRecordId: `admin-token-session-${companionId}`,
+  sessionAssurance: 'break_glass' as const,
+  fleetAccessMode: 'sole_admin' as const,
+  authorizationEventId: 'event-admin-token', resolvedAt: '2030-01-01T00:00:00.000Z',
+});
 
 function fixture(
   authorityDecision: 'allow' | 'deny' = 'allow',
-  provider: 'discord' | 'testing_harness' = 'discord',
+  provider: 'discord' | 'admin_token' | 'testing_harness' = 'discord',
 ) {
   const pair = generateKeyPairSync('ed25519');
   const ids = ['operator-jti', 'agent-jti'];
@@ -95,7 +106,11 @@ function fixture(
     target: parentTarget,
     requestId: randomUUID(),
     decisionId: randomUUID(),
-    authContext: provider === 'testing_harness' ? testingHarnessAuthContext : authContext,
+    authContext: provider === 'testing_harness'
+      ? testingHarnessAuthContext
+      : provider === 'admin_token'
+        ? adminTokenAuthContext
+        : authContext,
     versions,
   };
   const parentToken = provider === 'testing_harness'
@@ -217,6 +232,32 @@ describe('GatewayFleetAuthChildAssertionBroker', () => {
         principalId: 'testing-harness',
       },
     });
+  });
+
+  it('carries a gateway-authenticated ADMIN_TOKEN parent into an agent child without SSO reauthorization', async () => {
+    const built = fixture('deny', 'admin_token');
+
+    const result = await built.broker.exchange(built.input);
+
+    expect(built.replay.consume).toHaveBeenCalledOnce();
+    expect(built.authority.reauthorize).not.toHaveBeenCalled();
+    const verified = built.verifier.verifyAgent({
+      token: result.token,
+      target: built.childTarget,
+      requestId: result.requestId,
+      decisionId: result.decisionId,
+      versions,
+      parent: result.parent,
+      nowSeconds: NOW,
+    });
+    expect(verified).toMatchObject({
+      audience: `agent:${companionId}`,
+      authContext: {
+        provider: 'admin_token',
+        principalId: 'admin-token-operator',
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain(built.parentToken);
   });
 
   it('denies a testing-harness parent when verifier-side enablement is absent', async () => {

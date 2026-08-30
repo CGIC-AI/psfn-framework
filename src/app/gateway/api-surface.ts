@@ -617,6 +617,7 @@ export async function startOptionalGatewayApiServer(
     ? new GatewayFleetSsoRouter({
         canonicalOrigin: options.config.fleetAuth.canonicalOrigin,
         trustProxy: isExplicitTrue(env.FLEET_SSO_TRUST_PROXY),
+        ...(env.ADMIN_TOKEN ? { adminToken: env.ADMIN_TOKEN } : {}),
         broker: options.fleetAuthBroker,
         signer: options.fleetAuthRequestCapabilities,
         verifier: options.fleetAuthRequestCapabilityVerifier,
@@ -1016,8 +1017,8 @@ export async function startOptionalGatewayApiServer(
     sensorIngest: inertSensorIngest,
     apiKey: fleetAuthBootstrapOnly ? undefined : env.API_KEY || undefined,
     testingHarnessPrincipal: options.channelsConfig?.api.testingHarness,
-    // Fleet browser/API admission remains SSO-only. ADMIN_TOKEN is retained
-    // solely for the private Garden -> Gateway operator confirmation endpoint.
+    // ADMIN_TOKEN remains available to the private Garden -> Gateway operator
+    // confirmation endpoint and to the fleet router's alternative admin door.
     adminToken: env.ADMIN_TOKEN || undefined,
     ...(satelliteApiKeys.length > 0 ? { satelliteApiKeys } : {}),
     ...(trustedProxyClientCertToken ? { trustedProxyClientCertToken } : {}),

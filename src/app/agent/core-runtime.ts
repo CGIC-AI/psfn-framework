@@ -441,6 +441,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     proactivityStateStore: options.emosimProactivityStateStore,
   });
   const sessionComposition = await composeSessionRuntimeAsync({
+    runtimeMode: 'production',
     config,
     postgresDatabaseUrl,
     eventBus,
@@ -449,6 +450,10 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     continuityChannelPrefixes: options.continuityChannelPrefixes,
     promptRegistry,
     sessionIntegrityProvider: gateway.createSessionIntegrityProvider(),
+    sessionIntegrityOperatorAlert: {
+      notifier: operatorNotifier,
+      companionName: card.data.name,
+    },
     sessionIntegrityRepairBackupRootDir: pathSnapshot.runtimePathLayout.backupsDir,
     automataRetentionCompanionId: resolveCompanionIdFromConfig(config),
   });

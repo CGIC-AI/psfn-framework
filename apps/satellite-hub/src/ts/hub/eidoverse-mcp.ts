@@ -10,7 +10,7 @@ const DEFAULT_RECONNECT_MAX_ATTEMPTS = 3;
 const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
 const DEFAULT_PENDING_PINGS_POLL_INTERVAL_MS = 2_000;
 const DEFAULT_AMBIENT_SAY_DEBOUNCE_MS = 180_000;
-const MAX_SAY_TEXT_LENGTH = 4_000;
+export const EIDOVERSE_SAY_MAX_TEXT_LENGTH = 4_000;
 
 export interface EidoverseMcpConfig {
   command: string;
@@ -111,7 +111,7 @@ export class EidoverseMcpClient {
   }
 
   async say(text: string): Promise<void> {
-    if (text.length > MAX_SAY_TEXT_LENGTH || this.containsSensitiveValue(text)) {
+    if (text.length > EIDOVERSE_SAY_MAX_TEXT_LENGTH || this.containsSensitiveValue(text)) {
       throw new EidoverseMcpRequestError("Eidoverse MCP say request failed");
     }
     const result = await this.requestText({ name: "say", arguments: { text } });

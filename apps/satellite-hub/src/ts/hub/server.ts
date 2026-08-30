@@ -39,6 +39,7 @@ import type { FrameworkAgentAdapter, FrameworkReplyInputMode } from "./framework
 import {
   CompanionBridge,
   CompanionRequestError,
+  type CompanionAudioOutputFrame,
   type CompanionEvent,
 } from "./companion-bridge.js";
 import { ElevenLabsStream, type StreamingTtsAdapter } from "./elevenlabs-stream.js";
@@ -80,6 +81,8 @@ import {
   HubLocationGeofence,
   validateLocationSample,
 } from "./location-geofence.js";
+
+const COMPANION_AUDIO_OUTPUT_PUBLISH_WARNING = "Companion audio output publish failed";
 
 export class RealtimeHubServer {
   private readonly httpServer: http.Server;
@@ -285,6 +288,7 @@ class RealtimeConnection {
   private authenticatedDevice: HubDeviceIdentity | null = null;
   private attachmentOwnership: SatelliteAttachmentOwnership | null = null;
   private unsubscribeCompanion: (() => void) | null = null;
+  private companionAudioPublishChain: Promise<void> = Promise.resolve();
 
   constructor(
     private readonly socket: WebSocket,
@@ -453,8 +457,9 @@ class RealtimeConnection {
         await this.send({ type: "pong", sentAt: message.sentAt });
         return;
       case "interrupt":
-        await this.cancelReply("client_interrupt");
-        await this.send({ type: "assistant.interrupted", sessionId: this.sessionId });
+        if (!await this.cancelReply("client_interrupt")) {
+          await this.send({ type: "assistant.interrupted", sessionId: this.sessionId });
+        }
         return;
       case "relay.stt":
         await this.handleRelaySttRequest(message);
@@ -1067,14 +1072,14 @@ class RealtimeConnection {
           for await (const audioChunk of abortableAsyncIterable(audio, replyAbortController.signal)) {
             this.assertReplyActive(replyId, replyAbortController);
             if (!emittedAudio) {
-              await this.send({
+              await this.deliverSpokenAudioFrame({
                 type: "text",
                 data: "audio-init",
               });
               this.assertReplyActive(replyId, replyAbortController);
             }
             emittedAudio = true;
-            await this.send({
+            await this.deliverSpokenAudioFrame({
               type: "audio",
               data: encodeAudioChunk(audioChunk),
             });
@@ -1083,7 +1088,7 @@ class RealtimeConnection {
         } finally {
           if (emittedAudio) {
             this.assertReplyActive(replyId, replyAbortController);
-            await this.send({
+            await this.deliverSpokenAudioFrame({
               type: "text",
               data: "audio-end",
             });
@@ -1193,12 +1198,44 @@ class RealtimeConnection {
     }
   }
 
-  private async cancelReply(reason: string): Promise<void> {
+  private async cancelReply(reason: string): Promise<boolean> {
+    const shouldResetAudio = Boolean(
+      this.replyTask
+      && !this.replyAbort
+      && canReceiveStreamingAudio(this.capabilities),
+    );
     this.replyAbort = true;
     this.replySequence += 1;
     this.replyAbortController?.abort(new DOMException(`reply cancelled: ${reason}`, "AbortError"));
     if (this.activeTurn) {
       appendEvent(this.activeTurn, "reply.cancel", { reason });
+    }
+    if (shouldResetAudio) {
+      await this.deliverSpokenAudioFrame({
+        type: "assistant.interrupted",
+        sessionId: this.sessionId,
+      });
+    }
+    return shouldResetAudio;
+  }
+
+  private async deliverSpokenAudioFrame(frame: CompanionAudioOutputFrame): Promise<void> {
+    await this.send(frame);
+    if (!this.companion || !canReceiveStreamingAudio(this.capabilities)) {
+      return;
+    }
+    const publish = this.companionAudioPublishChain.then(async () => {
+      await this.companion?.publishAudioOutput({
+        sessionId: this.sessionId,
+        capabilities: this.capabilities,
+        frame,
+      });
+    });
+    this.companionAudioPublishChain = publish.catch(() => undefined);
+    try {
+      await publish;
+    } catch {
+      console.warn(COMPANION_AUDIO_OUTPUT_PUBLISH_WARNING);
     }
   }
 

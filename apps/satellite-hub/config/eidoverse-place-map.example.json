@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "worlds": {
+    "demo-world": {
+      "placeId": "eidoverse:demo-world",
+      "regions": {
+        "market": "eidoverse:demo-world:market"
+      }
+    }
+  }
+}

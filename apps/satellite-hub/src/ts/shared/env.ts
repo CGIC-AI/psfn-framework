@@ -11,6 +11,10 @@ import {
   createHubDeviceAssertionIssuer,
   type HubDeviceAssertionIssuer,
 } from "../hub/device-assertion.js";
+import {
+  loadEidoversePlaceMap,
+  type EidoversePlaceMap,
+} from "../hub/eidoverse-place-map.js";
 
 import {
   CAPABILITY_PROFILE_DEFAULTS,
@@ -102,6 +106,7 @@ export interface HubConfig {
   homeAssistant: HomeAssistantConfig | null;
   control: HubControlConfig | null;
   deviceRegistry: HubDeviceRegistryAuthority | null;
+  eidoversePlaceMap: EidoversePlaceMap | null;
   voxta: VoxtaFacadeConfig;
   sessionTtlSeconds: number;
 }
@@ -300,6 +305,11 @@ export function loadHubConfig(projectRoot: string): HubConfig {
       : undefined,
   );
   const deviceAssertionIssuer = loadHubDeviceAssertionIssuer(projectRoot, deviceRegistry !== null);
+  const eidoversePlaceMap = loadEidoversePlaceMap(
+    optional("EIDOVERSE_PLACE_MAP_PATH")
+      ? resolveExistingFile(projectRoot, required("EIDOVERSE_PLACE_MAP_PATH"), "EIDOVERSE_PLACE_MAP_PATH")
+      : undefined,
+  );
   if (homeAssistant && !deviceRegistry) {
     throw new Error("HOME_ASSISTANT_ENABLED=true requires HUB_DEVICE_REGISTRY_PATH for trusted room identity");
   }
@@ -322,6 +332,7 @@ export function loadHubConfig(projectRoot: string): HubConfig {
     homeAssistant,
     control,
     deviceRegistry,
+    eidoversePlaceMap,
     voxta: loadVoxtaFacadeConfig(projectRoot),
     sessionTtlSeconds: Number.parseInt(process.env.SESSION_TTL_SECONDS || "300", 10),
   };

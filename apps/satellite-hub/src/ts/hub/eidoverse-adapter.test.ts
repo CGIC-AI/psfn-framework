@@ -69,7 +69,7 @@ test("world adapter attaches a stable embodied session and deduplicates addresse
   const spoken: string[] = [];
   const config = {
     worldName: "demo-world",
-    agentName: "Purrsephone",
+    agentName: "Aster Example",
     satelliteClaim: normalizeSatelliteClaimConfig({
       capabilityProfile: "world-avatar",
       satelliteId: "eidoverse-world",
@@ -149,7 +149,7 @@ test("world adapter rejects non-world claim profiles", () => {
   assert.throws(
     () => new EidoverseEmbodiedSessionAdapter({
       worldName: "demo-world",
-      agentName: "Purrsephone",
+      agentName: "Aster Example",
       satelliteClaim: normalizeSatelliteClaimConfig({ capabilityProfile: "voxta-avatar" }),
       placeMap: null,
     }, {
@@ -174,7 +174,7 @@ test("realtime hub lifecycle connects and disconnects the configured world adapt
     voxtaStt: null,
     eidoverse: {
       worldName: "demo-world",
-      agentName: "Purrsephone",
+      agentName: "Aster Example",
       look,
       say: { say: async (text) => { spoken.push(text); } },
     },
@@ -347,7 +347,7 @@ function createAdapter(agent: FakeAgent, say: EidoverseMcpClient): {
 function worldConfig() {
   return {
     worldName: "demo-world",
-    agentName: "Purrsephone",
+    agentName: "Aster Example",
     satelliteClaim: normalizeSatelliteClaimConfig({
       capabilityProfile: "world-avatar",
       satelliteId: "eidoverse-world",
@@ -365,7 +365,7 @@ function mcpConfig(mode: string, recordPath: string): EidoverseMcpConfig {
     worldUrl: WORLD_URL,
     tokenRef: TOKEN_REF,
     worldName: "demo-world",
-    agentName: "Purrsephone",
+    agentName: "Aster Example",
     reconnectBaseMs: 10,
     reconnectMaxMs: 20,
     reconnectMaxAttempts: 1,
@@ -421,7 +421,7 @@ function expectedChannel(conversationId: string): PsfnChannelContext {
 function adapterConfig() {
   return {
     worldName: "demo-world",
-    agentName: "Purrsephone",
+    agentName: "Aster Example",
     satelliteClaim: normalizeSatelliteClaimConfig({
       capabilityProfile: "world-avatar",
       satelliteId: "eidoverse-world",

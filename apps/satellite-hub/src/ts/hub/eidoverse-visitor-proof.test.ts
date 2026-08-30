@@ -51,7 +51,7 @@ test("offline visitor path wakes once, speaks once, and invents neither contact 
   const mcp = new FakeMcp();
   const adapter = new EidoverseEmbodiedSessionAdapter({
     worldName: "unmapped-visitor-world",
-    agentName: "Purrsephone",
+    agentName: "Aster Example",
     satelliteClaim: normalizeSatelliteClaimConfig({
       capabilityProfile: "world-avatar",
       satelliteId: "eidoverse-world",

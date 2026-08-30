@@ -485,8 +485,8 @@ creation through the gateway MCP trust boundary. The system-owned
 `comfyui`, allow that companion id, and classify the exact screened tool
 definitions for `generate_image` and `edit_image` with their
 `metadataSha256` fingerprints. The companion also needs the `external.mcp`
-capability. Server and tool trust ceilings must allow `personal` outbound
-content; edits containing inline image bytes are classified `confidential`.
+capability. Image prompts and source bytes are conservatively classified
+`confidential`, so the server and tool trust ceilings must allow that level.
 
 The Comfy-side MCP tools receive snake-case image arguments (`prompt`,
 `num_images`, `input_urls`, and the applicable optional image controls). They

@@ -5,10 +5,11 @@ import {
   type GatewayCorrelationParams,
   type ImageGenerationRpcResult,
 } from '../protocol.js';
-import type {
-  ImageCreateParams,
-  ImageEditParams,
-  ImageMode,
+import {
+  isLocalImageProvider,
+  type ImageCreateParams,
+  type ImageEditParams,
+  type ImageMode,
 } from '../../../primitives/images/types.js';
 import {
   ImageService,
@@ -66,7 +67,7 @@ async function recordImageProviderAttempt(
       )
     : undefined;
   const localProviderCostUsd = providerAttempt.status === 'success'
-    && (providerAttempt.provider === 'comfyui' || providerAttempt.provider === 'comfyui_mcp')
+    && isLocalImageProvider(providerAttempt.provider)
     ? 0
     : undefined;
   const metadata: Record<string, unknown> = {
@@ -200,12 +201,14 @@ async function runImageWithUsage(
             GatewayErrors.COMPANION_IDENTIFY_REQUIRED,
           );
         }
-        let grantedTokens: readonly string[] | undefined;
-        try {
-          grantedTokens = runtime.capabilityGrantSnapshotProvider?.().grantedTokens;
-        } catch {
-          grantedTokens = undefined;
+        if (runtime.resolveShardWorkloadForChannel?.(params.channelId)) {
+          throw new JSONRPCErrorException(
+            'ComfyUI MCP denied: shard capability grants exclude external.mcp',
+            GatewayErrors.POLICY_DENIED,
+            { missingCapability: 'external.mcp' },
+          );
         }
+        const grantedTokens = runtime.capabilityGrantSnapshotProvider?.().grantedTokens;
         if (!grantedTokens?.includes('external.mcp')) {
           throw new JSONRPCErrorException(
             'ComfyUI MCP denied: authenticated companion lacks external.mcp',
@@ -218,7 +221,7 @@ async function runImageWithUsage(
           serverId: COMFYUI_MCP_SERVER_ID,
           toolName: input.mode === 'create' ? COMFYUI_MCP_CREATE_TOOL : COMFYUI_MCP_EDIT_TOOL,
           arguments: input.arguments,
-          outboundSensitivity: input.outboundSensitivity,
+          outboundSensitivity: 'confidential',
           confirmed: false,
         });
       }

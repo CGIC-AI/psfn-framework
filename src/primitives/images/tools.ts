@@ -24,6 +24,7 @@ import {
   FAL_EDIT_MODELS,
   IMAGE_ASPECT_RATIO_VALUES,
   IMAGE_PROVIDER_PREFERENCE_VALUES,
+  isLocalImageProvider,
   type ImageAspectRatio,
   type ImageGenerationResult,
   type ImageProviderPreference,
@@ -403,7 +404,7 @@ function preflightPaidImageGeneration(input: {
   imageCount?: number;
   inputImageCount?: number;
 }): void {
-  if (input.provider === 'comfyui' || input.provider === 'comfyui_mcp') {
+  if (isLocalImageProvider(input.provider)) {
     return;
   }
   assertChargeSurfaceAvailable('paidImageGeneration', {
@@ -422,7 +423,7 @@ function chargeImageGeneration(
   action: 'generate' | 'edit',
   source: { toolName: string; toolCallId?: string },
 ): void {
-  if (result.provider === 'comfyui' || result.provider === 'comfyui_mcp') {
+  if (isLocalImageProvider(result.provider)) {
     chargeSurface('localImageGeneration', {
       recordZeroCost: true,
       details: {
@@ -551,7 +552,7 @@ function resolveInvalidFalModelError(
   model: string | undefined,
   validModels: readonly string[],
 ): AgentToolResult<MediaToolResultDetails> | null {
-  if (provider === 'comfyui' || provider === 'comfyui_mcp') return null;
+  if (isLocalImageProvider(provider)) return null;
   const normalizedModel = model?.trim();
   if (!normalizedModel) return null;
   if ((validModels as readonly string[]).includes(normalizedModel)) return null;
@@ -1055,7 +1056,7 @@ function createImageGenerationTool(
             },
           });
 
-          if (effectiveProvider === 'comfyui' || effectiveProvider === 'comfyui_mcp') {
+          if (isLocalImageProvider(effectiveProvider)) {
             result = await runReferenceEdit(params.edit_model, prompt);
           } else {
             const editChain = resolveSelfieEditModelChain(

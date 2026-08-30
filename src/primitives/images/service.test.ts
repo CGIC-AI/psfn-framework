@@ -337,7 +337,6 @@ describe('ImageService', () => {
 
     expect(mcpInvoker).toHaveBeenNthCalledWith(1, {
       mode: 'create',
-      outboundSensitivity: 'personal',
       arguments: {
         prompt: 'a lighthouse at dusk',
         num_images: 2,
@@ -346,12 +345,41 @@ describe('ImageService', () => {
     });
     expect(mcpInvoker).toHaveBeenNthCalledWith(2, {
       mode: 'edit',
-      outboundSensitivity: 'confidential',
       arguments: {
         prompt: 'make it moonlit',
         input_urls: ['data:image/png;base64,cmVm'],
         mask_image_url: 'https://images.example.test/mask.png',
       },
+    });
+  });
+
+  it('accepts a standard MCP resource link without optional MIME metadata', async () => {
+    const service = new ImageService(
+      { imageProvider: 'comfyui_mcp' },
+      vi.fn() as typeof fetch,
+      {
+        mcpInvoker: vi.fn(async () => ({
+          serverId: 'comfyui',
+          toolName: 'generate_image',
+          isError: false,
+          withheld: false,
+          effectiveText: JSON.stringify({
+            content: [{
+              type: 'resource_link',
+              name: 'render.png',
+              uri: 'https://comfy.example.test/render.png',
+            }],
+          }),
+        })),
+      },
+    );
+
+    await expect(service.create({ prompt: 'linked render' })).resolves.toMatchObject({
+      provider: 'comfyui_mcp',
+      images: [{
+        url: 'https://comfy.example.test/render.png',
+        fileName: 'render.png',
+      }],
     });
   });
 

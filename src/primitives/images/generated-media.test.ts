@@ -179,6 +179,37 @@ describe('collectGeneratedImageAttachments', () => {
     expect(readFileSync(attachments[0]!.localPath!)).toEqual(Buffer.from('png-two'));
   });
 
+  it('rejects recovered image results with an unknown provider', async () => {
+    let fetchCalled = false;
+    const companionDataDir = mkdtempSync(join(tmpdir(), 'psfn-generated-media-unknown-provider-'));
+    tempDirs.push(companionDataDir);
+    const attachments = await collectGeneratedImageAttachments({
+      personalFilesDir: companionDataDir,
+      turnMessages: [
+        fromAny({
+          role: 'toolResult',
+          toolName: 'generate_image',
+          content: [{
+            type: 'text',
+            text: JSON.stringify({
+              provider: 'unknown-provider',
+              mode: 'create',
+              fallbackUsed: false,
+              images: [{ url: 'https://images.example.test/unknown.png' }],
+            }),
+          }],
+        }),
+      ],
+      fetchImpl: async () => {
+        fetchCalled = true;
+        return new Response();
+      },
+    });
+
+    expect(attachments).toEqual([]);
+    expect(fetchCalled).toBe(false);
+  });
+
   it('persists the embodiment-consistency descriptor from the vision review onto the gallery sidecar', async () => {
     const companionDataDir = mkdtempSync(join(tmpdir(), 'psfn-generated-media-'));
     tempDirs.push(companionDataDir);

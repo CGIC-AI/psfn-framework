@@ -6,7 +6,6 @@ import type {
   ImageMode,
   ImageResultAsset,
 } from './types.js';
-import type { SensitivityLevel } from '../../system/trust/types.js';
 
 export const COMFYUI_MCP_SERVER_ID = 'comfyui';
 export const COMFYUI_MCP_CREATE_TOOL = 'generate_image';
@@ -40,17 +39,7 @@ export interface ComfyUiMcpScreenedResult {
 export type ComfyUiMcpInvoker = (input: {
   mode: ImageMode;
   arguments: Record<string, unknown>;
-  outboundSensitivity: SensitivityLevel;
 }) => Promise<ComfyUiMcpScreenedResult>;
-
-export function resolveComfyUiMcpSensitivity(
-  params: ImageCreateParams | ImageEditParams,
-): SensitivityLevel {
-  if ('imageUrls' in params && params.imageUrls.some(url => url.startsWith('data:'))) {
-    return 'confidential';
-  }
-  return 'personal';
-}
 
 function compactRecord(entries: ReadonlyArray<readonly [string, unknown]>): Record<string, unknown> {
   return Object.fromEntries(entries.filter((entry) => entry[1] !== undefined));
@@ -148,11 +137,11 @@ function extractProtocolImageAssets(protocolResult: Record<string, unknown>): Im
     if (block.type === 'resource_link') {
       const url = optionalTrimmedString(block.uri);
       const contentType = optionalTrimmedString(block.mimeType);
-      if (!url || !contentType?.startsWith('image/')) continue;
+      if (!url || (contentType && !contentType.startsWith('image/'))) continue;
       const fileName = optionalTrimmedString(block.name);
       images.push({
         url,
-        contentType,
+        ...(contentType ? { contentType } : {}),
         ...(fileName ? { fileName } : {}),
       });
     }

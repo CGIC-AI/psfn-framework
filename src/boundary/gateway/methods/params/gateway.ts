@@ -1,4 +1,5 @@
 import { Type } from '@sinclair/typebox';
+import { IMAGE_PROVIDER_PREFERENCE_VALUES } from '../../../../primitives/images/types.js';
 
 import {
   attachment,
@@ -50,7 +51,7 @@ const journalEntry = strictObject({
 const imageCommon = {
   ...correlationProperties,
   prompt: Type.String(),
-  provider: Type.Optional(enumSchema(['auto', 'fal', 'comfyui', 'comfyui_mcp'])),
+  provider: Type.Optional(enumSchema(IMAGE_PROVIDER_PREFERENCE_VALUES)),
   model: optionalString,
   settingsDefaults: Type.Optional(unknownRecord),
   numImages: optionalNumber,

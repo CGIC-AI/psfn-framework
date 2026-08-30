@@ -39,6 +39,12 @@ export type ImageProvider = typeof IMAGE_PROVIDER_VALUES[number];
 export type ImageProviderPreference = typeof IMAGE_PROVIDER_PREFERENCE_VALUES[number];
 export type ImageMode = 'create' | 'edit';
 
+export function isLocalImageProvider(
+  value: ImageProviderPreference | undefined,
+): value is Extract<ImageProvider, 'comfyui' | 'comfyui_mcp'> {
+  return value === 'comfyui' || value === 'comfyui_mcp';
+}
+
 function normalizeCatalogModelSetting<TModel extends string>(
   value: unknown,
   fieldName: string,

@@ -95,7 +95,12 @@ export type CompanionUiActionBody =
   | Readonly<Record<string, never>>
   | Readonly<{ content: string }>
   | Readonly<{ interactionId: string }>
-  | Readonly<{ region: 'head' | 'face' | 'shoulder' | 'hand'; count: number; durationMs: number }>
+  | Readonly<{
+    kind: 'headpat' | 'petting' | 'hug' | 'kiss';
+    region: 'head' | 'cheek' | 'body';
+    count: number;
+    durationMs: number;
+  }>
   | Readonly<{ transcript: string }>
   | Readonly<{ shardId: string }>
   | Readonly<{ shardId: string; content: string }>
@@ -202,12 +207,14 @@ function parseBody(resource: CompanionUiActionResource, value: unknown): Compani
         || !REQUEST_ID_PATTERN.test(value.interactionId)) deny();
       return Object.freeze({ interactionId: value.interactionId });
     case 'conversation.touch':
-      if (!hasExactKeys(value, ['region', 'count', 'durationMs'])
-        || !['head', 'face', 'shoulder', 'hand'].includes(String(value.region))
-        || !Number.isSafeInteger(value.count) || Number(value.count) < 1 || Number(value.count) > 16
+      if (!hasExactKeys(value, ['kind', 'region', 'count', 'durationMs'])
+        || !['headpat', 'petting', 'hug', 'kiss'].includes(String(value.kind))
+        || !['head', 'cheek', 'body'].includes(String(value.region))
+        || !Number.isSafeInteger(value.count) || Number(value.count) < 1 || Number(value.count) > 20
         || !Number.isSafeInteger(value.durationMs) || Number(value.durationMs) < 0 || Number(value.durationMs) > 60_000) deny();
       return Object.freeze({
-        region: value.region as 'head' | 'face' | 'shoulder' | 'hand',
+        kind: value.kind as 'headpat' | 'petting' | 'hug' | 'kiss',
+        region: value.region as 'head' | 'cheek' | 'body',
         count: Number(value.count),
         durationMs: Number(value.durationMs),
       });
@@ -341,7 +348,7 @@ export function companionUiPromptContent(frame: CompanionUiActionFrame): string 
   if (frame.resource === 'shards.interact') return String(body.content);
   if (frame.resource === 'conversation.audio') return String(body.transcript);
   if (frame.resource === 'conversation.touch') {
-    return `[Authenticated device touch: region=${String(body.region)}, count=${String(body.count)}, durationMs=${String(body.durationMs)}]`;
+    return `[Authenticated device touch: kind=${String(body.kind)}, region=${String(body.region)}, count=${String(body.count)}, durationMs=${String(body.durationMs)}]`;
   }
   return undefined;
 }

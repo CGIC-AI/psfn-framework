@@ -417,6 +417,7 @@ export class CompanionGatewayClient {
 
   sendTouchInteraction(interaction: TouchInteraction): void {
     this.sendAction('conversation.touch', 'companion.interact', {
+      kind: interaction.kind,
       region: interaction.region,
       count: interaction.count,
       durationMs: interaction.durationMs,

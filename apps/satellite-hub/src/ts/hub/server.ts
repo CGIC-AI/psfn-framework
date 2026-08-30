@@ -46,6 +46,7 @@ import {
   EidoverseEmbodiedSessionAdapter,
   type EidoverseAddressedUtterance,
   type EidoverseEmbodiedSessionConfig,
+  type EidoverseEmbodiedSessionDependencies,
 } from "./eidoverse-adapter.js";
 import { VoxtaFacade, type VoxtaSttAdapter, type VoxtaTtsAdapter } from "./voxta-facade.js";
 import {
@@ -93,7 +94,10 @@ export class RealtimeHubServer {
       voxtaTts?: VoxtaTtsAdapter | null;
       voxtaStt?: VoxtaSttAdapter | null;
       companion?: CompanionBridge | null;
-      eidoverse?: Pick<EidoverseEmbodiedSessionConfig, "worldName" | "agentName"> | null;
+      eidoverse?: (
+        Pick<EidoverseEmbodiedSessionConfig, "worldName" | "agentName">
+        & Pick<EidoverseEmbodiedSessionDependencies, "look" | "onLookError">
+      ) | null;
     } = {},
   ) {
     if (config.deviceRegistry && !config.psfn.deviceAssertionIssuer) {
@@ -111,6 +115,8 @@ export class RealtimeHubServer {
           embodiedSessions: this.embodiedSessions,
           sessions: this.sessions,
           agent: this.agent,
+          look: options.eidoverse.look,
+          ...(options.eidoverse.onLookError ? { onLookError: options.eidoverse.onLookError } : {}),
         })
       : null;
     this.companion = options.companion !== undefined

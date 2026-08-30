@@ -15,11 +15,6 @@ async function main(): Promise<void> {
   const config = loadHubConfig(projectRoot);
   const eidoverseConfig = loadEidoverseMcpConfig();
   fs.mkdirSync(config.artifactsRoot, { recursive: true });
-  const server = new RealtimeHubServer(config, {
-    eidoverse: eidoverseConfig
-      ? { worldName: eidoverseConfig.worldName, agentName: eidoverseConfig.agentName }
-      : null,
-  });
   const homeAssistant = config.homeAssistant ? new HomeAssistantClient(config.homeAssistant) : null;
   const eidoverse = eidoverseConfig
     ? new EidoverseMcpClient(eidoverseConfig, resolveEidoverseCredentialFromEnv, {
@@ -29,6 +24,16 @@ async function main(): Promise<void> {
         },
       })
     : null;
+  const server = new RealtimeHubServer(config, {
+    eidoverse: eidoverseConfig && eidoverse
+      ? {
+          worldName: eidoverseConfig.worldName,
+          agentName: eidoverseConfig.agentName,
+          look: eidoverse,
+          onLookError: () => console.warn("Eidoverse MCP look failed"),
+        }
+      : null,
+  });
   const control = config.control && homeAssistant && config.deviceRegistry
     ? new HomeAssistantControlServer(config.control, homeAssistant, config.deviceRegistry)
     : null;

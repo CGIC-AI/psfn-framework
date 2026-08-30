@@ -48,6 +48,8 @@ import {
 import { readExclusiveFleetSessionCookie } from './server/fleet-auth-cookie.js';
 import { REQUEST_CAPABILITY_ASSERTION_HEADERS } from '../../boundary/fleet-auth/request-capability-transport.js';
 import { CompanionUiAudioSocketSession } from './companion-ui-audio-socket.js';
+import type { CompanionUiAudioOutputRelay } from '../backplane/companion-ui-audio-output-relay.js';
+import type { CompanionUiAudioOutputBinding } from '../../shared/contracts/companion-ui-audio-output.js';
 
 const log = createComponentLogger('CompanionUiWebSocket');
 const PATH_PATTERN = /^\/companion-ui\/companions\/([0-9a-f-]+)\/ws$/u;
@@ -90,6 +92,7 @@ export interface CompanionUiWebSocketConfig {
     }>,
   ) => Promise<void>;
   readonly eventRelay: CompanionEventRelay;
+  readonly audioOutputRelay?: CompanionUiAudioOutputRelay;
   readonly guestMode?: 'disabled' | 'explicit';
   readonly guestActionBroker?: Readonly<{
     execute(input: Omit<Parameters<GatewayCompanionUiActionBroker['execute']>[0], 'sessionToken'>): Promise<unknown>;
@@ -119,6 +122,7 @@ interface UpgradeAuthority {
     device: Readonly<{ id: string; label: string }>;
     place?: Readonly<{ id: string; label: string }>;
   }>;
+  readonly audioOutputBinding: CompanionUiAudioOutputBinding;
 }
 
 function rawHeaderCount(request: IncomingMessage, name: string): number {
@@ -387,6 +391,14 @@ export class CompanionUiWebSocketAdapter {
           }),
         } : {}),
       }),
+      audioOutputBinding: Object.freeze({
+        companionId,
+        principalId: principal.id,
+        satelliteId: satellite.value.satellite.satelliteId,
+        endpointId: satellite.value.satellite.endpointId,
+        claimType: satellite.value.satellite.claimType,
+        sessionId: satellite.value.satellite.sessionId,
+      }),
       ...(clientCert ? { clientCert } : {}),
     });
   }
@@ -402,7 +414,10 @@ export class CompanionUiWebSocketAdapter {
     let configured = false;
     let audioSocket: CompanionUiAudioSocketSession | null = null;
     let unsubscribeEvents: (() => void) | null = null;
+    let unsubscribeAudioOutput: (() => void) | null = null;
     let eventDelivery = Promise.resolve();
+    let audioOutputDelivery = Promise.resolve();
+    let pendingAudioOutputFrames = 0;
     const seenRequestIds = new Set<string>();
     const initialAuthorityKey = attachmentAuthorityKey(initialAttachment);
     const audioCapable = Boolean(
@@ -417,12 +432,21 @@ export class CompanionUiWebSocketAdapter {
       : authority.physicalCeiling.capabilities.filter(
         capability => capability !== 'audio_input' && capability !== 'speech_to_text',
       );
+    const audioOutputCapable = Boolean(
+      this.config.audioOutputRelay
+      && authority.physicalCeiling.capabilities.includes('audio_output'),
+    );
+    const effectiveAdvertisedCapabilities = audioOutputCapable
+      ? advertisedCapabilities
+      : advertisedCapabilities.filter(capability => capability !== 'audio_output');
     const close = (code: number, reason: string): void => {
       if (closed) return;
       closed = true;
       clearInterval(watch);
       unsubscribeEvents?.();
       unsubscribeEvents = null;
+      unsubscribeAudioOutput?.();
+      unsubscribeAudioOutput = null;
       audioSocket?.close(reason);
       audioSocket = null;
       this.activeSockets.delete(socket);
@@ -535,12 +559,39 @@ export class CompanionUiWebSocketAdapter {
               },
             });
           }
+          if (audioOutputCapable) {
+            unsubscribeAudioOutput = this.config.audioOutputRelay!.subscribe({
+              binding: authority.audioOutputBinding,
+              onFrame: (frame) => {
+                if (closed) return;
+                if (pendingAudioOutputFrames >= this.maxPendingAudioFrames) {
+                  close(CLOSE.denied, 'audio output backpressure exceeded');
+                  return;
+                }
+                pendingAudioOutputFrames += 1;
+                audioOutputDelivery = audioOutputDelivery.then(async () => {
+                  await refreshAuthority();
+                  if (!closed) {
+                    sendJson(socket, {
+                      schemaVersion: 1,
+                      type: 'event',
+                      event: frame,
+                    });
+                  }
+                }).catch(() => {
+                  close(CLOSE.authorityChanged, 'authority changed');
+                }).finally(() => {
+                  pendingAudioOutputFrames -= 1;
+                });
+              },
+            });
+          }
           sendJson(socket, {
             schemaVersion: 1,
             type: 'session.ready',
             device: authority.presentation.device,
             ...(authority.presentation.place ? { place: authority.presentation.place } : {}),
-            capabilities: advertisedCapabilities,
+            capabilities: effectiveAdvertisedCapabilities,
             telemetryScopes: authority.physicalCeiling.telemetryScopes,
             eventCapabilities,
           });

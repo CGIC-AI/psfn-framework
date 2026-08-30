@@ -259,6 +259,37 @@ describe('CompanionGatewayClient', () => {
     expect(socket.sent).toEqual([]);
   });
 
+  it('reassembles the gateway relay envelope with the shipped Hub audio contract', async () => {
+    const socket = new FakeSocket();
+    const client = await connectClient(socket);
+    const store = new HubStreamStore(client);
+
+    socket.message({
+      schemaVersion: 1,
+      type: 'event',
+      event: { type: 'text', data: 'audio-init' },
+    });
+    socket.message({
+      schemaVersion: 1,
+      type: 'event',
+      event: { type: 'audio', data: 'AQID' },
+    });
+    socket.message({
+      schemaVersion: 1,
+      type: 'event',
+      event: { type: 'text', data: 'audio-end' },
+    });
+    await flushAsyncMessage();
+
+    expect(store.snapshot().voicePlayback).toMatchObject({
+      supported: true,
+      bracketOpen: false,
+      pending: [],
+      queue: [{ chunksBase64: ['AQID'], byteLength: 3 }],
+    });
+    store.destroy();
+  });
+
   it('sends exact action frames and correlates server results without retaining channel authority', async () => {
     const socket = new FakeSocket();
     const client = await connectClient(socket, ['request-interact-1']);

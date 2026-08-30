@@ -326,6 +326,11 @@ fail-closed:
   over the size ceiling is dropped, never played. Sessions without the
   `streamed_audio` ceiling buffer no audio at all, so playback stays inert and
   text remains the source of truth.
+- On the gateway transport, those Hub frames arrive only through the
+  authenticated, session-bound audio-output relay. A socket without the
+  server-owned `audio_output` ceiling is never subscribed and receives zero
+  audio frames. Interrupt, pause, or authority loss stops in-flight Web Audio
+  playback and closes both CSS and manifest-art mouth states.
 - Outbound mic **capture** (getUserMedia + downsample to 16k PCM, or browser
   speech-to-text feeding the gateway `conversation.audio` transcript action) is
   not wired in this build yet; the Voice Chat toggle surfaces a fail-closed

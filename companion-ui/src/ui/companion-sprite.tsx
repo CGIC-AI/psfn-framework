@@ -149,7 +149,14 @@ export function CompanionSprite({
         <span className="sprite-heart third">♥</span>
       </span>
       {hasSprite && manifest && entryId ? (
-        <SpriteFrame manifest={manifest} entryId={entryId} animated={animated} displayWidth={MINI_DISPLAY_WIDTH} />
+        <>
+          <SpriteFrame manifest={manifest} entryId={entryId} animated={animated} displayWidth={MINI_DISPLAY_WIDTH} />
+          <span
+            className="sprite-art-mouth"
+            data-mouth-state={mouthOpen ? 'open' : 'closed'}
+            aria-hidden
+          />
+        </>
       ) : (
         <CssFace />
       )}

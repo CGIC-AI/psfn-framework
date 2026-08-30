@@ -48,6 +48,26 @@ describe('companion sprite rendering path', () => {
     // The expression sheet is the background source for the neutral base.
     expect(image!.style.backgroundImage).toContain('expr-mini.png');
     expect(sprite.querySelector('.sprite-face')).toBeNull();
+    expect(sprite.querySelector('.sprite-art-mouth')?.getAttribute('data-mouth-state')).toBe('closed');
+  });
+
+  it('makes amplitude mouth state visible over manifest-driven sprite art', () => {
+    const { getByRole } = render(
+      <CompanionSprite
+        animated
+        label="P"
+        mouthOpen
+        onHeadpat={vi.fn()}
+        petted={false}
+        state="speaking"
+        manifest={manifest}
+      />,
+    );
+    const sprite = getByRole('button');
+    expect(sprite.className).toContain('sprite-art');
+    expect(sprite.className).toContain('mouth-open');
+    expect(sprite.querySelector('.sprite-art-mouth')?.getAttribute('data-mouth-state')).toBe('open');
+    expect(sprite.querySelector('.sprite-mouth')).toBeNull();
   });
 
   it('switches to the touch reaction sheet while a headpat reaction is in flight', () => {

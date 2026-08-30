@@ -13,6 +13,8 @@ import type {
   CompanionUiAudioIngressCallbacks,
   CompanionUiAudioIngressSession,
 } from '../../boundary/gateway/companion-ui-audio-ingress.js';
+import { CompanionUiAudioOutputRelay } from '../backplane/companion-ui-audio-output-relay.js';
+import type { CompanionUiAudioOutputBinding } from '../../shared/contracts/companion-ui-audio-output.js';
 
 const companionId = '11111111-1111-4111-8111-111111111111';
 const satelliteKey = 'satellite-key-with-more-than-sixteen-characters';
@@ -70,7 +72,7 @@ function request(overrides: Partial<IncomingMessage> = {}): IncomingMessage {
   } as IncomingMessage;
 }
 
-function fixture(options: { guest?: boolean; audio?: boolean } = {}) {
+function fixture(options: { guest?: boolean; audio?: boolean; audioOutput?: boolean } = {}) {
   const eventBus = new EventBus();
   const eventRelay = new CompanionEventRelay({
     eventBus,
@@ -127,6 +129,7 @@ function fixture(options: { guest?: boolean; audio?: boolean } = {}) {
     input.transcript === 'hello there' ? 'screened speech' : input.transcript
   ));
   const cancelAudioInteraction = vi.fn(async () => undefined);
+  const audioOutputRelay = new CompanionUiAudioOutputRelay(1_048_576);
   const adapter = new CompanionUiWebSocketAdapter({
     canonicalOrigin: 'https://fleet.example.test',
     satelliteApiKeys: [satelliteKey],
@@ -146,9 +149,11 @@ function fixture(options: { guest?: boolean; audio?: boolean } = {}) {
           defaultIdentity: {
             authorId: 'legacy', authorName: 'Legacy', canonicalContactId: 'legacy-contact', channelPrivacy: 'private',
           },
-          maxCapabilities: options.audio
-            ? ['text', 'audio_input', 'speech_to_text']
-            : ['text'],
+          maxCapabilities: [
+            'text',
+            ...(options.audio ? ['audio_input' as const, 'speech_to_text' as const] : []),
+            ...(options.audioOutput ? ['audio_output' as const] : []),
+          ],
           telemetryScopes: ['status', 'approvals'],
           hubDeviceEnrollment: { deviceId: 'display', enrollmentVersion: 1, enrollmentStatus: 'active' },
         }],
@@ -162,6 +167,7 @@ function fixture(options: { guest?: boolean; audio?: boolean } = {}) {
       cancelAudioInteraction,
     } : {}),
     eventRelay,
+    audioOutputRelay,
     ...(options.guest ? {
       guestMode: 'explicit' as const,
       guestActionBroker: { execute: guestExecute } as never,
@@ -183,6 +189,18 @@ function fixture(options: { guest?: boolean; audio?: boolean } = {}) {
     audioIngress,
     screenAudioTranscript,
     cancelAudioInteraction,
+    audioOutputRelay,
+  };
+}
+
+function audioOutputBinding(): CompanionUiAudioOutputBinding {
+  return {
+    companionId,
+    principalId: deriveApiKeyPrincipalId(satelliteKey),
+    satelliteId: 'office',
+    endpointId: 'display',
+    claimType: 'hub-device',
+    sessionId: 'hub-session-1',
   };
 }
 
@@ -206,6 +224,81 @@ function createAudioIngressHarness() {
 }
 
 describe('CompanionUiWebSocketAdapter upgrade policy', () => {
+  it('relays exact Hub audio brackets only to a session carrying the audio_output ceiling', async () => {
+    const built = fixture({ audioOutput: true });
+    const candidate = request();
+    candidate.headers['x-psfn-satellite-capabilities'] = 'text,audio_output';
+    candidate.rawHeaders = Object.entries(candidate.headers)
+      .flatMap(([name, value]) => [name, String(value)]);
+    const socket = new FakeSocket();
+    built.adapter.handleUpgrade(candidate, socket as unknown as Duplex, Buffer.alloc(0));
+    await vi.waitFor(() => expect(built.handleUpgrade).toHaveBeenCalledOnce());
+    built.webSocket.emit('message', CONFIGURE, false);
+    await vi.waitFor(() => expect(built.webSocket.sent).toHaveLength(1));
+    expect(JSON.parse(built.webSocket.sent[0]!)).toMatchObject({
+      type: 'session.ready',
+      capabilities: ['text', 'audio_output'],
+    });
+
+    built.audioOutputRelay.publish(
+      { ...audioOutputBinding(), sessionId: 'different-session' },
+      { type: 'audio', data: 'AQID' },
+    );
+    await new Promise(resolve => setImmediate(resolve));
+    expect(built.webSocket.sent).toHaveLength(1);
+
+    built.audioOutputRelay.publish(audioOutputBinding(), { type: 'text', data: 'audio-init' });
+    built.audioOutputRelay.publish(audioOutputBinding(), { type: 'audio', data: 'AQID' });
+    built.audioOutputRelay.publish(audioOutputBinding(), { type: 'text', data: 'audio-end' });
+
+    await vi.waitFor(() => expect(built.webSocket.sent).toHaveLength(4));
+    expect(built.webSocket.sent.slice(1).map(value => JSON.parse(value))).toEqual([
+      { schemaVersion: 1, type: 'event', event: { type: 'text', data: 'audio-init' } },
+      { schemaVersion: 1, type: 'event', event: { type: 'audio', data: 'AQID' } },
+      { schemaVersion: 1, type: 'event', event: { type: 'text', data: 'audio-end' } },
+    ]);
+    await built.adapter.stop();
+  });
+
+  it('delivers zero audio frames when the server-owned session ceiling lacks audio_output', async () => {
+    const built = fixture({ audioOutput: true });
+    const socket = new FakeSocket();
+    built.adapter.handleUpgrade(request(), socket as unknown as Duplex, Buffer.alloc(0));
+    await vi.waitFor(() => expect(built.handleUpgrade).toHaveBeenCalledOnce());
+    built.webSocket.emit('message', CONFIGURE, false);
+    await vi.waitFor(() => expect(built.webSocket.sent).toHaveLength(1));
+    expect(JSON.parse(built.webSocket.sent[0]!)).toMatchObject({ capabilities: ['text'] });
+
+    built.audioOutputRelay.publish(audioOutputBinding(), { type: 'text', data: 'audio-init' });
+    built.audioOutputRelay.publish(audioOutputBinding(), { type: 'audio', data: 'AQID' });
+    built.audioOutputRelay.publish(audioOutputBinding(), { type: 'text', data: 'audio-end' });
+    await new Promise(resolve => setImmediate(resolve));
+
+    expect(built.webSocket.sent).toHaveLength(1);
+    await built.adapter.stop();
+  });
+
+  it('reauthorizes Hub audio delivery and closes without a frame after authority loss', async () => {
+    const built = fixture({ audioOutput: true });
+    const candidate = request();
+    candidate.headers['x-psfn-satellite-capabilities'] = 'text,audio_output';
+    candidate.rawHeaders = Object.entries(candidate.headers)
+      .flatMap(([name, value]) => [name, String(value)]);
+    const socket = new FakeSocket();
+    built.adapter.handleUpgrade(candidate, socket as unknown as Duplex, Buffer.alloc(0));
+    await vi.waitFor(() => expect(built.handleUpgrade).toHaveBeenCalledOnce());
+    built.webSocket.emit('message', CONFIGURE, false);
+    await vi.waitFor(() => expect(built.webSocket.sent).toHaveLength(1));
+
+    built.admit.mockRejectedValueOnce(new Error('authority revoked'));
+    built.audioOutputRelay.publish(audioOutputBinding(), { type: 'text', data: 'audio-init' });
+
+    await vi.waitFor(() => expect(built.webSocket.readyState).toBe(WebSocket.CLOSED));
+    expect(built.webSocket.closeArgs[0]).toBe(4401);
+    expect(built.webSocket.sent).toHaveLength(1);
+    await built.adapter.stop();
+  });
+
   it('admits only the exact query-free same-origin path and attaches the cookie human to verified Hub authority', async () => {
     const built = fixture();
     const socket = new FakeSocket();

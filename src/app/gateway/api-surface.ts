@@ -57,6 +57,7 @@ import type {
   RequestCapabilityVerifier,
 } from '../../boundary/fleet-auth/request-capability.js';
 import { CompanionUiWebSocketAdapter } from '../../channels/api/companion-ui-websocket.js';
+import { CompanionUiAudioOutputRelay } from '../../channels/backplane/companion-ui-audio-output-relay.js';
 import {
   companionUiPromptContent,
   compileCompanionUiAction,
@@ -695,6 +696,9 @@ export async function startOptionalGatewayApiServer(
     });
   };
   const companionUiVoiceLimits = buildVoiceWebSocketServerOptions(options.config);
+  const companionUiAudioOutputRelay = fleetAuthBootstrapOnly && options.companionRelay
+    ? new CompanionUiAudioOutputRelay(companionUiVoiceLimits.maxFrameBytes!)
+    : undefined;
   const companionUiStt = fleetAuthBootstrapOnly
     ? createRuntimeVoiceSttConnector(options.config, {
         eligibilityGate: options.eligibilityGate,
@@ -731,6 +735,7 @@ export async function startOptionalGatewayApiServer(
         ...(trustedProxyClientCertToken ? { trustedProxyClientCertToken } : {}),
         hubDeviceIngress,
         eventRelay: options.companionRelay.relay,
+        ...(companionUiAudioOutputRelay ? { audioOutputRelay: companionUiAudioOutputRelay } : {}),
         ...(companionUiAudioIngress ? {
           audioIngress: companionUiAudioIngress,
           maxPendingAudioFrames: companionUiVoiceLimits.maxPendingFrames,
@@ -964,6 +969,7 @@ export async function startOptionalGatewayApiServer(
   const companionRelay: CompanionRelayHttpDeps | undefined = options.companionRelay
     ? {
         ...options.companionRelay,
+        ...(companionUiAudioOutputRelay ? { audioOutput: companionUiAudioOutputRelay } : {}),
         stimuli: new CompanionStimulusIngress({
           cooldownMs: COMPANION_STIMULUS_COOLDOWN_MS,
           deliver: async (message) => {

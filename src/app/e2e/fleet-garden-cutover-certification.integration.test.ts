@@ -92,6 +92,7 @@ const UNKNOWN_COMPANION = createCompanionId('55555555-5555-4555-8555-55555555555
 const SESSION_A = 'a'.repeat(43);
 const SESSION_B = 'b'.repeat(43);
 const SESSION_C = 'c'.repeat(43);
+const ADMIN_TOKEN = 'fleet-cert-admin-token';
 const CANONICAL_ORIGIN = 'https://fleet.example.test';
 const ISSUER = 'fleet-cert-e2e';
 const KID = 'cert-active';
@@ -544,6 +545,7 @@ function buildRouter(input: {
   return new GatewayFleetSsoRouter({
     canonicalOrigin: CANONICAL_ORIGIN,
     trustProxy: true,
+    adminToken: ADMIN_TOKEN,
     upstreams: resolveFleetSsoGardenUpstreams({
       fleet: input.runtime.fleet,
       fleetGardenPort: input.gardenPort,
@@ -979,6 +981,30 @@ describe('fleet Garden cutover certification: assembled production composition',
     );
     expect(bare.status).toBeGreaterThanOrEqual(400);
     expect(bare.body).not.toContain('backgroundMaintenance');
+  });
+
+  it('serves the adaptive tool catalog through an ADMIN_TOKEN-derived child capability', async () => {
+    const response = await rawRequest(
+      fixture.edgePort,
+      'GET',
+      `/companions/${COMPANION_A}/garden/api/admin/tools/adaptive`,
+      {
+        host: 'fleet.example.test',
+        authorization: `Bearer ${ADMIN_TOKEN}`,
+        'x-forwarded-host': 'fleet.example.test',
+        'x-forwarded-proto': 'https',
+        'x-forwarded-port': '443',
+        'x-forwarded-for': '198.51.100.9',
+      },
+    );
+
+    expect(response.status).toBe(200);
+    expect(JSON.parse(response.body)).toMatchObject({
+      serviceHealth: [],
+      toolHealth: [],
+      inventory: [],
+    });
+    expect(response.body).not.toContain(ADMIN_TOKEN);
   });
 
   it('serves live subsystem, observer, and journal status from the exact selected companion', async () => {

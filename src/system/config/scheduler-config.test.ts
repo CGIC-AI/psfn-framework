@@ -1002,6 +1002,29 @@ describe('social-autonomy owner-file config (jp36.8.2)', () => {
     expect(validated.socialAutonomy.freeTimeChooser.projectListCap).toBe(0);
   });
 
+  it('warns when chooser silence can outlive the scheduler block interval', () => {
+    const warnings: string[] = [];
+    const validated = validateSchedulerConfig(
+      {
+        ...buildValidSchedulerConfig(),
+        freeTime: {
+          ...DEFAULT_FREE_TIME_CONFIG,
+          minBlockIntervalMinutes: 30,
+        },
+        socialAutonomy: {
+          freeTimeChooser: { silencePersistenceMinutes: 31 },
+        },
+      },
+      'test',
+      { warn: message => warnings.push(message) },
+    );
+
+    expect(validated.socialAutonomy.freeTimeChooser.silencePersistenceMinutes).toBe(31);
+    expect(warnings).toEqual([
+      expect.stringMatching(/silencePersistenceMinutes \(31\).*must not exceed.*minBlockIntervalMinutes \(30\)/u),
+    ]);
+  });
+
   it('defaults autonomous room egress off and exposes an explicit off/shadow/on mode', () => {
     expect(DEFAULT_SOCIAL_AUTONOMY_CONFIG.egressLease).not.toHaveProperty('enabled');
     expect(DEFAULT_SOCIAL_AUTONOMY_CONFIG.egressLease.mode).toBe('off');

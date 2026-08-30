@@ -1563,13 +1563,20 @@ export class SubstrateAgent {
     message: SubstrateMessage,
     deliveryLifecycle?: TurnDeliveryLifecycle,
     turnControl?: MessageHandlerOptions,
+    /** One-shot snapshot captured before live tool-egress lineage is cleared. */
+    captureCompletedDisclosureLineage?: (lineage: DisclosureLineage | undefined) => void,
   ): Promise<AgentResponse> {
     await this.classifySessionAtCreation?.(message);
     return this.turnRunReservation.runShared(
       { kind: 'ordinary-turn', sourceId: message.id },
       () => {
         this.turnQueueIngress.enqueuePendingInternalFollowUpsForOrdinaryRun();
-        return this.handleMessageUnderReservation(message, deliveryLifecycle, turnControl);
+        return this.handleMessageUnderReservation(
+          message,
+          deliveryLifecycle,
+          turnControl,
+          captureCompletedDisclosureLineage,
+        );
       },
     );
   }
@@ -1578,6 +1585,7 @@ export class SubstrateAgent {
     message: SubstrateMessage,
     deliveryLifecycle?: TurnDeliveryLifecycle,
     turnControl?: MessageHandlerOptions,
+    captureCompletedDisclosureLineage?: (lineage: DisclosureLineage | undefined) => void,
   ): Promise<AgentResponse> {
     const cancellationId = turnControl?.cancellationId ?? message.routing?.cancellationId ?? null;
     // mmo9.6.1: register this turn's cancellation identity for the lifetime of
@@ -1621,6 +1629,7 @@ export class SubstrateAgent {
         deliveryLifecycle,
         turnControl?.conversationScope,
         turnControl?.precomputedNoReplyDisposition,
+        captureCompletedDisclosureLineage,
       );
     } finally {
       detachCancelSignal?.();
@@ -1637,6 +1646,7 @@ export class SubstrateAgent {
     deliveryLifecycle?: TurnDeliveryLifecycle,
     conversationScope?: import('../session/conversation-scope.js').ConversationScope,
     precomputedNoReplyDisposition?: import('../participation/types.js').PrecomputedNoReplyDisposition,
+    captureCompletedDisclosureLineage?: (lineage: DisclosureLineage | undefined) => void,
   ): Promise<AgentResponse> {
     const run = async (): Promise<AgentResponse> => handleMessageForTurn(createTurnExecutionRuntimeAdapter({
       eventBus: this.eventBus,
@@ -1868,20 +1878,23 @@ export class SubstrateAgent {
       // folded this turn, so a social send before then is denied outward.
       this.currentTurnDisclosureLineage = undefined;
       try {
+        let response: AgentResponse;
         if (!this.config.chargePolicy || getRunChargeContext()) {
-          return await run();
+          response = await run();
+        } else {
+          response = await runWithChargeContext({
+            chargePolicy: this.config.chargePolicy,
+            eventBus: this.eventBus,
+            lane: 'interactive',
+            runId: message.id,
+            correlation: {
+              requestId: message.id,
+              channelId: message.channelId,
+            },
+          }, run);
         }
-
-        return await runWithChargeContext({
-          chargePolicy: this.config.chargePolicy,
-          eventBus: this.eventBus,
-          lane: 'interactive',
-          runId: message.id,
-          correlation: {
-            requestId: message.id,
-            channelId: message.channelId,
-          },
-        }, run);
+        captureCompletedDisclosureLineage?.(this.currentTurnDisclosureLineage);
+        return response;
       } finally {
         this.currentTurnIntakeEnvelopes = [];
         this.currentTurnDisclosureLineage = undefined;

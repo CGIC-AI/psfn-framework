@@ -5,6 +5,7 @@ import {
 } from './load-or-seed.js';
 import { isRecord } from '../../shared/utils/types.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
+import { createComponentLogger } from '../../shared/logger.js';
 import { OWNER_FILE_MODE_COMPANION_POLICY } from './owner-file-modes.js';
 import type { BackgroundWorkRuntimeTuning } from '../../core/agent/background-work/config.js';
 import {
@@ -201,6 +202,12 @@ interface SchedulerRuntimeLoadOptions {
   seedDir?: string;
 }
 
+interface SchedulerConfigValidationOptions {
+  warn?: (message: string) => void;
+}
+
+const log = createComponentLogger('SchedulerConfig');
+
 function resolveSeedDir(seedDir?: string): string {
   const resolved = (seedDir ?? process.env.CONFIG_DIR ?? './config').trim();
   if (!resolved) {
@@ -246,7 +253,11 @@ function assertBackgroundMaintenanceRestWindowCoverage(
   }
 }
 
-export function validateSchedulerConfig(raw: unknown, sourcePath: string): SchedulerRuntimeConfig {
+export function validateSchedulerConfig(
+  raw: unknown,
+  sourcePath: string,
+  options: SchedulerConfigValidationOptions = {},
+): SchedulerRuntimeConfig {
   if (!isRecord(raw)) {
     throw new Error(`Invalid scheduler config at ${sourcePath}: expected object`);
   }
@@ -307,6 +318,14 @@ export function validateSchedulerConfig(raw: unknown, sourcePath: string): Sched
       : { toolUsageEvaluator: validateToolUsageEvaluatorConfig(raw.toolUsageEvaluator, sourcePath) }),
   };
   assertBackgroundMaintenanceRestWindowCoverage(validated, sourcePath);
+  const silencePersistenceMinutes = validated.socialAutonomy.freeTimeChooser.silencePersistenceMinutes;
+  const minBlockIntervalMinutes = validated.freeTime.minBlockIntervalMinutes;
+  if (silencePersistenceMinutes > minBlockIntervalMinutes) {
+    const warning = `Scheduler config at ${sourcePath}: socialAutonomy.freeTimeChooser.silencePersistenceMinutes `
+      + `(${silencePersistenceMinutes}) must not exceed freeTime.minBlockIntervalMinutes `
+      + `(${minBlockIntervalMinutes}); the chooser silence window can otherwise outlive the configured block cadence`;
+    (options.warn ?? ((message: string) => log.warn(message)))(warning);
+  }
   return validated;
 }
 

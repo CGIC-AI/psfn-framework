@@ -160,7 +160,7 @@ function base64(value: unknown): value is string {
 }
 
 const CAPABILITIES = Object.freeze({
-  input: ['text', 'microphone_pcm', 'final_transcript', 'vision_upload', 'wake_event'],
+  input: ['text', 'microphone_pcm', 'final_transcript', 'vision_upload', 'wake_event', 'device_location'],
   output: [
     'text', 'subtitle', 'streamed_audio', 'local_file_audio', 'animation', 'action',
     'expression', 'gaze', 'servo', 'artifact', 'tool_activity',

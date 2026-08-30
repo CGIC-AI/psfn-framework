@@ -29,6 +29,7 @@ import type {
 import type { PlacePrivacy } from './places-registry.js';
 import type { MessageAddressingMetadata } from './message-addressing.js';
 import type {
+  CompanionLocationTransition,
   CompanionTouchRegion,
   CompanionTouchStimulusKind,
 } from './companion-relay.js';
@@ -538,14 +539,22 @@ export interface MessageRoutingMetadata {
    *  contact (with nickname etc.) regardless of API auth principal identity. */
   canonicalContactId?: string;
   /** Server-authored physical interaction metadata; caller prose is never accepted. */
-  stimulus?: {
-    schemaVersion: 1;
-    kind: CompanionTouchStimulusKind;
-    region: CompanionTouchRegion;
-    count: number;
-    durationMs: number;
-    deviceId: string;
-  };
+  stimulus?:
+    | {
+      schemaVersion: 1;
+      kind: CompanionTouchStimulusKind;
+      region: CompanionTouchRegion;
+      count: number;
+      durationMs: number;
+      deviceId: string;
+    }
+    | {
+      schemaVersion: 1;
+      kind: CompanionLocationTransition;
+      placeId: string;
+      placeLabel: string;
+      deviceId: string;
+    };
   /**
    * E1.7: explicit ConversationScope decision for scheduler-dispatched
    * reflection turns. When present with `kind: 'group'`, the turn

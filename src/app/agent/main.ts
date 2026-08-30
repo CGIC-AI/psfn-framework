@@ -554,6 +554,7 @@ async function main(): Promise<void> {
       .flatMap(section => section.continuityChannelPrefixes ?? []),
     postgresDatabaseUrl,
     emosimProactivityStateStore: persistenceRuntime.emosimProactivityStateStore,
+    letterStore: persistenceRuntime.letterStore,
     pathSnapshot,
     eventBus,
     gateway,
@@ -1578,6 +1579,7 @@ async function main(): Promise<void> {
       memoryExtractor,
       intentionRuntime,
       toolConformanceRunner,
+      letterService: coreRuntime.letterService,
       humanAttentionLedger: coreRuntime.humanAttentionLedger,
     },
   });
@@ -1648,6 +1650,7 @@ async function main(): Promise<void> {
       await persistenceRuntime.introspectionLandmarkStore.close();
       await persistenceRuntime.partnerAffectShadowStore.close();
       await persistenceRuntime.companionAvailabilityStore.close();
+      await persistenceRuntime.letterStore.close();
       await postgresPoolOwner.close();
     },
     scheduler,

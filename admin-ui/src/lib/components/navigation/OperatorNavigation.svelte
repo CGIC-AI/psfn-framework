@@ -255,7 +255,7 @@
                   {/if}
                 </span>
                 {#if item.attention > 0}
-                  <span class="rounded-full bg-wilt-500 px-1.5 py-0.5 text-[0.62rem] font-bold text-white tabular-nums">{item.attention}</span>
+                  <span class="rounded-full px-1.5 py-0.5 text-[0.62rem] font-bold tabular-nums {item.indicatorTone === 'waiting' ? 'border border-gold-300 bg-gold-50 text-gold-700' : 'bg-wilt-500 text-white'}">{item.attention}</span>
                 {/if}
               </a>
             </li>
@@ -302,7 +302,7 @@
               <li>
                 <a href={item.href} onclick={handleNavigation} aria-current={item.active ? 'page' : undefined} class="flex items-center gap-2.5 rounded-lg px-2 py-2 text-sm {item.active ? 'bg-gold-50 font-semibold text-gold-700' : 'text-shadow-800 hover:bg-bark-100'}">
                   <span aria-hidden="true">{item.icon}</span><span class="min-w-0 flex-1 truncate">{item.primaryLabel}</span>
-                  {#if item.attention > 0}<span class="rounded-full bg-wilt-500 px-1.5 text-[0.62rem] text-white">{item.attention}</span>{/if}
+                  {#if item.attention > 0}<span class="rounded-full px-1.5 text-[0.62rem] {item.indicatorTone === 'waiting' ? 'border border-gold-300 bg-gold-50 text-gold-700' : 'bg-wilt-500 text-white'}">{item.attention}</span>{/if}
                 </a>
               </li>
             {/each}
@@ -341,7 +341,7 @@
                     <span class="block text-sm font-medium text-shadow-900">{item.primaryLabel}</span>
                     {#if item.secondaryLabel}<span class="block text-xs text-shadow-500">{item.secondaryLabel}</span>{/if}
                   </span>
-                  {#if item.attention > 0}<span class="rounded-full bg-wilt-500 px-1.5 py-0.5 text-[0.62rem] font-bold text-white">{item.attention}</span>{/if}
+                  {#if item.attention > 0}<span class="rounded-full px-1.5 py-0.5 text-[0.62rem] font-bold {item.indicatorTone === 'waiting' ? 'border border-gold-300 bg-gold-50 text-gold-700' : 'bg-wilt-500 text-white'}">{item.attention}</span>{/if}
                 </a>
               {/each}
             </div>

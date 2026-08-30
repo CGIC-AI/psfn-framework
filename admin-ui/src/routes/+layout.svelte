@@ -154,7 +154,9 @@
   const consoleNavigationGroups = $derived(navGroups.map((group) => ({
     id: group.id,
     label: group.defaultLabel,
-    attention: group.items.reduce((sum, item) => sum + (attentionCounts[item.path] ?? 0), 0),
+    attention: group.items.reduce((sum, item) => (
+      item.indicatorTone === 'waiting' ? sum : sum + (attentionCounts[item.path] ?? 0)
+    ), 0),
     items: group.items.map((item) => {
       const labels = resolveThemeMenuLabel(activeTheme, item.id, item.defaultLabel, { companionName });
       return {
@@ -167,6 +169,7 @@
         primaryLabel: labels.primaryLabel,
         secondaryLabel: labels.secondaryLabel,
         attention: attentionCounts[item.path] ?? 0,
+        indicatorTone: item.indicatorTone ?? 'attention',
         active: isActive(item.path),
       };
     }),

@@ -146,7 +146,7 @@ export interface AdminSessionMessageOntologyView {
   sessionEntryId: number;
   transportRole: SessionEntry['role'];
   promptRole: 'user' | 'assistant' | 'toolResult' | 'custom';
-  semanticType: 'outwardSpeech' | 'toolResult' | 'systemNote' | 'mirror';
+  semanticType: 'outwardSpeech' | 'toolResult' | 'systemNote' | 'mirror' | 'letter';
   messageClass: MessageClass | null;
   promptVisibility: 'prompt_visible' | 'operator_only';
   displayLabel: string;

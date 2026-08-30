@@ -610,6 +610,20 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
     ]), confirmation: 'explicit',
   },
   {
+    action: 'memory.read', area: 'memory', routeIds: [
+      ...ids('GET', ['/api/admin/letters']),
+      ...pageIds(['/letters']),
+    ],
+  },
+  {
+    action: 'memory.manage', area: 'memory', routeIds: ids('POST', [
+      '/api/admin/letters',
+      '/api/admin/letters/:letterId/place',
+      '/api/admin/letters/:letterId/read',
+      '/api/admin/letters/:letterId/archive',
+    ]), confirmation: 'explicit',
+  },
+  {
     action: 'wiki.read', area: 'wiki', scope: 'governed_shared_workspace',
     routeIds: ids('GET', [
       '/api/admin/wiki/shared-world/:siteId',

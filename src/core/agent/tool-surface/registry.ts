@@ -315,6 +315,15 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     ],
   },
   {
+    name: 'letter',
+    domain: 'self_expression',
+    exposure: 'core',
+    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.letter,
+    actions: ['compose', 'list', 'read', 'place', 'archive'],
+    capabilityMetadata: { kind: 'action_aware', source: CAPABILITIES_REQUIREMENTS },
+    retiredAliases: [],
+  },
+  {
     name: 'self_status',
     domain: 'system',
     exposure: 'core',

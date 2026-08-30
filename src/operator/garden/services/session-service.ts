@@ -198,12 +198,26 @@ function buildMessageOntologyView(entry: AdminSessionMessagesData['messages'][nu
   }
 
   if (classified.role === 'user' || classified.role === 'assistant') {
+    const messageClass = resolveMessageClass(
+      'messageClass' in classified ? classified.messageClass : undefined,
+    );
+    if (messageClass === MESSAGE_CLASSES.letter) {
+      return {
+        sessionEntryId: entry.id,
+        transportRole: entry.role,
+        promptRole: classified.role,
+        semanticType: 'letter',
+        messageClass,
+        promptVisibility: 'prompt_visible',
+        displayLabel: 'Letter',
+      };
+    }
     return {
       sessionEntryId: entry.id,
       transportRole: entry.role,
       promptRole: classified.role,
       semanticType: 'outwardSpeech',
-      messageClass: resolveMessageClass('messageClass' in classified ? classified.messageClass : undefined),
+      messageClass,
       promptVisibility: 'prompt_visible',
       displayLabel: 'Outward speech',
     };

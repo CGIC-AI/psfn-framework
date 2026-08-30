@@ -113,6 +113,7 @@ const queryPolicies: Readonly<Partial<Record<string, Readonly<Partial<Record<str
       'limit', 'sinceMs', 'untilMs', 'status', 'evalSessionId', 'scenarioId', 'testRunId',
     ]),
     '/api/admin/images/generated': singleton(['tags', 'favorite', 'meaningful', 'milestone', 'q']),
+    '/api/admin/letters': singleton(['direction', 'states']),
     '/api/admin/image-references/upload': singleton(['description', 'tags', 'setDefault']),
     '/api/admin/memory': singleton([
       'type', 'sensitivity', 'retention', 'startDate', 'endDate', 'limit', 'offset', 'preference',
@@ -160,6 +161,7 @@ const requiredBodyPatterns = new Set([
   'POST /api/admin/images/generated/:id/promote-reference',
   'POST /api/admin/icp-autonomy/test-initiations',
   'POST /api/admin/memory/bulk-delete',
+  'POST /api/admin/letters',
   'POST /api/admin/memory/bulk-update',
   'POST /api/admin/memory/link',
   'DELETE /api/admin/memory/link',
@@ -200,6 +202,9 @@ const noBodyMutationPatterns = new Set([
   'POST /api/admin/graph-proposals/:id/reject',
   'POST /api/admin/group-memory/:channelId/backfill',
   'POST /api/admin/image-references/:id/default',
+  'POST /api/admin/letters/:letterId/place',
+  'POST /api/admin/letters/:letterId/read',
+  'POST /api/admin/letters/:letterId/archive',
   'POST /api/admin/automata/reindex',
   'POST /api/admin/models/refresh',
   'POST /api/admin/prompts/:layerId/toggle',
@@ -231,6 +236,7 @@ const fixedRoutes: readonly RouteTuple[] = [
   ['GET', '/api/admin/evals/observer-sidecar/latest'], ['GET', '/api/admin/evals/observer-sidecar/lever-events'],
   ['GET', '/api/admin/evals/observer-sidecar/observations'], ['GET', '/api/admin/evals/observer-sidecar/runs'],
   ['GET', '/api/admin/graph-proposals'], ['GET', '/api/admin/group-memory'],
+  [['GET', 'POST'], '/api/admin/letters'],
   ['GET', '/api/admin/identity'], ['POST', '/api/admin/identity/diff'],
   ['PATCH', '/api/admin/identity/fields'], ['POST', '/api/admin/identity/import'],
   ['POST', '/api/admin/identity/onboarding'], ['POST', '/api/admin/identity/rollback'],
@@ -307,6 +313,9 @@ const dynamicRoutes: readonly RouteTuple[] = [
   [['PATCH', 'DELETE'], '/api/admin/image-references/:id'], ['GET', '/api/admin/image-references/:id/blob'],
   ['GET', '/api/admin/image-references/:id/lineage'],
   ['POST', '/api/admin/image-references/:id/default'], ['PATCH', '/api/admin/images/generated/:id'],
+  ['POST', '/api/admin/letters/:letterId/place'],
+  ['POST', '/api/admin/letters/:letterId/read'],
+  ['POST', '/api/admin/letters/:letterId/archive'],
   ['POST', '/api/admin/images/generated/:id/promote-reference'],
   ['GET', '/api/admin/images/generated/:id/blob'], [['GET', 'DELETE'], '/api/admin/memory/:id'],
   ['GET', '/api/admin/memory/:id/links'], ['PATCH', '/api/admin/memory/:id/patch'],
@@ -352,7 +361,7 @@ export const GARDEN_CLIENT_ROUTES = Object.freeze([
   '/fleet-costs', '/images', '/memory', '/model-room', '/models', '/places', '/primer', '/prompt-monitor',
   '/prompts', '/room-arbiter', '/rooms', '/satellites', '/scheduler', '/session-recovery', '/sessions',
   '/settings', '/shards', '/shards/:shardId', '/skills', '/subsystem-health', '/telemetry', '/theme', '/tools',
-  '/values', '/wiki', '/wishlist', '/biographical-profile',
+  '/values', '/wiki', '/wishlist', '/letters', '/biographical-profile',
 ] as const);
 
 function bodyPolicy(method: GardenForwardMethod, pattern: string): GardenBodyPolicy {

@@ -7,6 +7,13 @@
   },
   "overrides": [
     {
+      "file": "src/persistence/postgres/letter-store.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": 8200,
+      "baselineSource": "measured",
+      "note": "S12A letter lifecycle and restart persistence against the real containerized PostgreSQL harness. Focused local wall baseline was 8.194s on 2026-08-30; 120s preserves headroom for cold image startup and shared harness-slot contention."
+    },
+    {
       "file": "src/app/e2e/contact-lifecycle-certification/process-harness.integration.test.ts",
       "timeoutMs": 120000,
       "measuredBaselineMs": null,

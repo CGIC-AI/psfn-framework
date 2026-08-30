@@ -4845,6 +4845,18 @@
       "note": "Existing mutable policy candidate buildOutboundActionCandidate.maxRetries; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
+      "file": "src/core/letters/service.ts",
+      "name": "DEFAULT_LIST_LIMIT",
+      "value": "50",
+      "note": "Code-owned bounded default for a private correspondence query; it is a fixed resource-safety guard rather than companion/operator tuning."
+    },
+    {
+      "file": "src/core/letters/service.ts",
+      "name": "MAX_LIST_LIMIT",
+      "value": "100",
+      "note": "Code-owned DoS ceiling for one private correspondence query; callers may lower it but owner settings must not weaken the safety cap."
+    },
+    {
       "file": "src/core/participation/appraisal-parser.ts",
       "name": "normalizeReactionClass.reactionClassCharCap",
       "value": "48",

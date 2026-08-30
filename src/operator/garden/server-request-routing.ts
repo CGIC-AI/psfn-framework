@@ -13,6 +13,7 @@ export const GARDEN_PREFIX = '/';
 const GARDEN_CLIENT_ROUTE_SET = new Set<string>([
   ...GARDEN_CLIENT_ROUTES,
   '/wishlist',
+  '/letters',
 ]);
 
 interface AdminRequestRoutingDependencies {

@@ -199,6 +199,15 @@ function resolveSessionRequirement(action: string | null): CapabilityRequirement
   return IDENTITY_READ_RUNTIME_WRITE;
 }
 
+const LETTER_READ_ACTIONS = new Set(['list']);
+const LETTER_WRITE_ACTIONS = new Set(['compose', 'read', 'place', 'archive']);
+
+function resolveLetterRequirement(action: string | null): CapabilityRequirement {
+  if (actionIn(action, LETTER_READ_ACTIONS)) return 'identity.read';
+  if (actionIn(action, LETTER_WRITE_ACTIONS)) return 'identity.write.runtime';
+  return IDENTITY_READ_RUNTIME_WRITE;
+}
+
 const SKILL_READ_ACTIONS = new Set(['list', 'skill_list', 'view', 'skill_view', 'stats', 'skill_stats', 'history']);
 const SKILL_WRITE_ACTIONS = new Set(['create', 'skill_create', 'update', 'skill_update', 'rollback']);
 
@@ -336,6 +345,7 @@ const UNIFIED_TOOL_REQUIREMENT_RESOLVERS: Readonly<Partial<Record<string, Unifie
   contact: resolveContactRequirement,
   orient: (action) => resolveOrientRequirement(action),
   session: (action) => resolveSessionRequirement(action),
+  letter: (action) => resolveLetterRequirement(action),
   skill: (action) => resolveSkillRequirement(action),
   subagent: (action) => resolveSubagentRequirement(action),
   shard: () => 'shard.spawn',

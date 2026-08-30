@@ -6,6 +6,7 @@ export interface ConsoleNavigationItem {
   secondaryLabel: string | null;
   icon: string;
   attention: number;
+  indicatorTone?: 'attention' | 'waiting';
   active: boolean;
 }
 

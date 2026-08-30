@@ -79,6 +79,16 @@ describe('attention count reconciliation', () => {
     expect(apiGet).toHaveBeenCalledWith('/api/admin/values/status');
   });
 
+  it('polls the Letters bin for a quiet waiting count', async () => {
+    const source = ATTENTION_SOURCES.find((item) => item.path === '/letters');
+    expect(source).toBeDefined();
+    apiGet.mockReset();
+    apiGet.mockResolvedValueOnce({ waitingCount: 3 });
+
+    await expect(source!.fetchCount()).resolves.toBe(3);
+    expect(apiGet).toHaveBeenCalledWith('/api/admin/letters?direction=inbox');
+  });
+
   it('keeps the last count when a background source refresh fails', () => {
     const current = {
       '/confirmations': 2,

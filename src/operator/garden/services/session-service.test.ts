@@ -1947,6 +1947,38 @@ describe('AdminSessionDataService', () => {
     ]);
   });
 
+  it('shows letter L0 entries as authored correspondence rather than outward speech', async () => {
+    const channelId = 'letters:bin';
+    const letterId = store.append({
+      channelId,
+      role: 'assistant',
+      content: 'For whenever you arrive.',
+      timestamp: 1_700_000_300_080,
+      metadata: JSON.stringify({
+        type: 'letter', schemaVersion: 1, event: 'composed',
+        letterId: '11111111-1111-4111-8111-111111111111',
+        author: 'companion', recipient: 'partner', subject: 'No hurry',
+      }),
+    });
+    const service = new AdminSessionDataService({
+      sessionStore: store,
+      sessionManager: new SessionManager(store, makeConfig({ dataDir: dir })),
+      eventBus: new EventBus(),
+    });
+
+    const result = await service.getSessionMessages(channelId);
+
+    expect(result.messageOntologyViews).toContainEqual({
+      sessionEntryId: letterId,
+      transportRole: 'assistant',
+      promptRole: 'assistant',
+      semanticType: 'letter',
+      messageClass: 'letter',
+      promptVisibility: 'prompt_visible',
+      displayLabel: 'Letter',
+    });
+  });
+
   it('classifies reflection musings with the canonical musing message class', async () => {
     const channelId = 'internal:reflection:musing';
     const assistantId = store.append({

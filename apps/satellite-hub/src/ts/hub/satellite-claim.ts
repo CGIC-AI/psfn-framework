@@ -13,6 +13,7 @@ export type SatelliteCapabilityProfile =
   | "voice-only"
   | "text-only"
   | "voxta-avatar"
+  | "world-avatar"
   | "vision-capable"
   | "telemetry-only"
   | "mobile-location";
@@ -161,6 +162,17 @@ export const CAPABILITY_PROFILE_DEFAULTS: Record<SatelliteCapabilityProfile, Pro
     capabilities: VOXTA_VAM_CAPABILITIES,
     telemetry: { mode: "event", categories: ["presence", "avatar_state"] },
   },
+  "world-avatar": {
+    endpointClass: "avatar",
+    locationMode: "static",
+    capabilities: {
+      input: ["text", "vision_upload"],
+      output: ["text", "subtitle", "action"],
+      control: ["presence", "session_attach"],
+      safety: ["action_allowlist", "confirmation_required"],
+    },
+    telemetry: { mode: "event", categories: ["presence", "avatar_state"] },
+  },
   "vision-capable": {
     endpointClass: "vision",
     locationMode: "static",
@@ -278,7 +290,10 @@ export function buildSatelliteRegistryHeaders(input: {
   config: PsfnSatelliteClaimConfig;
   satelliteClaim: SatelliteClaimEnvelope;
 }): Record<string, string> {
-  const capabilities = frameworkCapabilitiesForSatelliteCapabilities(input.satelliteClaim.capabilities.current);
+  const capabilities = frameworkCapabilitiesForSatelliteCapabilities(
+    input.satelliteClaim.capabilities.current,
+    input.config.capabilityProfile,
+  );
   const telemetryScopes = frameworkTelemetryScopesForConfig(input.config.telemetry);
   const headers: Record<string, string> = {
     "X-PSFN-Satellite-Claim-Type": input.satelliteClaim.claim.type,
@@ -301,9 +316,11 @@ export function buildSatelliteRegistryHeaders(input: {
 
 export function frameworkCapabilitiesForSatelliteCapabilities(
   capabilities: SatelliteCapabilities,
+  profile?: SatelliteCapabilityProfile,
 ): FrameworkSatelliteCapability[] {
   const input = new Set(capabilities.input ?? []);
   const output = new Set(capabilities.output ?? []);
+  const control = new Set(capabilities.control ?? []);
   const mapped = new Set<FrameworkSatelliteCapability>();
 
   if (input.has("text") || output.has("text") || output.has("subtitle")) {
@@ -331,6 +348,9 @@ export function frameworkCapabilitiesForSatelliteCapabilities(
   }
   if (output.has("action")) {
     mapped.add("avatar_action");
+  }
+  if (profile === "world-avatar" && control.has("presence")) {
+    mapped.add("presence");
   }
   return [...mapped];
 }

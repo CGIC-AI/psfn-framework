@@ -148,6 +148,66 @@ function exampleRegistry(overrides: Record<string, unknown> = {}) {
 }
 
 describe('satellite registry', () => {
+  it('admits registered world-avatar claims within their capability ceiling and rejects other profiles', () => {
+    const registry = parseSatelliteRegistryConfig({
+      schemaVersion: 1,
+      enabled: true,
+      satellites: [{
+        satelliteId: 'eidoverse-world',
+        displayName: 'Eidoverse World',
+        mobility: 'static',
+        placeId: 'default',
+        endpoints: [{
+          endpointId: 'eidoverse-avatar',
+          displayName: 'Eidoverse World Avatar',
+          claimTypes: ['world-avatar'],
+          promptChannelType: 'world_satellite',
+          auth: { mode: 'api_key' },
+          defaultIdentity: {
+            authorId: 'primary-user',
+            authorName: 'Primary User',
+            canonicalContactId: 'contact-primary-user',
+            channelPrivacy: 'private',
+          },
+          maxCapabilities: ['text', 'avatar', 'avatar_action', 'presence', 'vision', 'image_upload'],
+          telemetryScopes: ['presence', 'status'],
+        }],
+      }],
+    });
+    const accepted = resolveSatelliteClaim({
+      registry,
+      principal,
+      headers: {
+        'x-psfn-satellite-claim-type': 'world-avatar',
+        'x-psfn-satellite-id': 'eidoverse-world',
+        'x-psfn-satellite-endpoint-id': 'eidoverse-avatar',
+        'x-psfn-satellite-session-id': 'eidoverse-session',
+        'x-psfn-satellite-capabilities': 'text,avatar_action,presence',
+      },
+    });
+    expect(accepted.ok && accepted.value.satellite.capabilities.effective).toEqual([
+      'text',
+      'avatar_action',
+      'presence',
+    ]);
+
+    const unknownProfile = resolveSatelliteClaim({
+      registry,
+      principal,
+      headers: {
+        'x-psfn-satellite-claim-type': 'voxta-avatar',
+        'x-psfn-satellite-id': 'eidoverse-world',
+        'x-psfn-satellite-endpoint-id': 'eidoverse-avatar',
+        'x-psfn-satellite-session-id': 'eidoverse-session',
+      },
+    });
+    expect(unknownProfile).toMatchObject({
+      ok: false,
+      status: 403,
+      type: 'satellite_claim_not_registered',
+    });
+  });
+
   it('parses and threads separate shared-device authorities into authenticated claims', () => {
     const primaryCompanionId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
     const productivityCompanionId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';

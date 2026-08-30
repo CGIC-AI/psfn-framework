@@ -50,6 +50,7 @@ Use the narrowest profile that matches the endpoint:
 | `voice-only` | Pi-class microphone/speaker endpoint | mic PCM, transcript, text, streamed audio, interrupt |
 | `text-only` | CLI, browser shell, chat-only sidecar | text in, text/subtitle out, interrupt |
 | `voxta-avatar` | VaM/Voxta avatar facade | text, local audio file playback, avatar actions/expressions |
+| `world-avatar` | 3D-world avatar endpoint | text/vision in, text/action out, presence and session attachment |
 | `vision-capable` | Image upload or camera endpoint | text plus image upload, text/subtitle output |
 | `telemetry-only` | Health/presence/device-state sidecar | presence/control only, no chat input/output |
 | `mobile-location` | Phone/tablet/browser endpoint | text, optional mic/speaker, optional image upload, configured location/timezone/battery telemetry |
@@ -57,6 +58,21 @@ Use the narrowest profile that matches the endpoint:
 Only advertise capabilities that are actually available at runtime. If a camera,
 speaker, microphone, avatar action path, or telemetry source is unavailable,
 omit or degrade that capability before sending `hello`.
+
+`world-avatar` is separate from `voxta-avatar`: selecting it does not opt the
+endpoint into Voxta's SignalR framing or local-audio-file behavior. Its Hub
+profile uses only the existing realtime capability vocabulary:
+
+| Dimension | Hub capabilities | Framework capability advertisement |
+| --- | --- | --- |
+| Input | `text`, `vision_upload` | `text`, `vision`, `image_upload` |
+| Output | `text`, `subtitle`, `action` | `text`, `avatar`, `avatar_action` |
+| Control | `presence`, `session_attach` | `presence`; session attachment adds no registry grant |
+| Safety | `action_allowlist`, `confirmation_required` | Safety declarations remain enforced locally; they add no registry grant |
+
+The profile is an advertisement, not authority. The framework accepts only the
+intersection with the endpoint's `satellites.json` `maxCapabilities`; an
+advertised capability outside that ceiling fails closed.
 
 ## PSFN Framework Registry
 
@@ -159,6 +175,48 @@ Android/Amica POC endpoint with speech, optional vision, and mobile telemetry:
 }
 ```
 
+3D-world avatar endpoint (the referenced `placeId` must exist in
+`places.json` when that registry is configured):
+
+```json
+{
+  "schemaVersion": 1,
+  "enabled": true,
+  "satellites": [
+    {
+      "satelliteId": "eidoverse-world",
+      "displayName": "Eidoverse World",
+      "mobility": "static",
+      "placeId": "default",
+      "endpoints": [
+        {
+          "endpointId": "eidoverse-avatar",
+          "displayName": "Eidoverse World Avatar",
+          "claimTypes": ["world-avatar"],
+          "promptChannelType": "world_satellite",
+          "auth": { "mode": "api_key" },
+          "defaultIdentity": {
+            "authorId": "primary-user",
+            "authorName": "Primary User",
+            "canonicalContactId": "contact-primary-user",
+            "channelPrivacy": "private"
+          },
+          "maxCapabilities": [
+            "text",
+            "avatar",
+            "avatar_action",
+            "presence",
+            "vision",
+            "image_upload"
+          ],
+          "telemetryScopes": ["presence", "status"]
+        }
+      ]
+    }
+  ]
+}
+```
+
 For local POC work, `auth.mode: "api_key"` is acceptable. For higher-trust
 deployments, use `auth.mode: "mtls"` with a client certificate binding, and put
 PSFN behind a trusted TLS edge that strips untrusted client certificate headers
@@ -198,6 +256,23 @@ For a speech-only Pi, use the same shape with `voice-only`, `kitchen-pi`, and
 `kitchen-pi-realtime`. Keep `PSFN_CLAIM_TYPE`, `PSFN_CAPABILITY_PROFILE`,
 `PSFN_SATELLITE_ID`, and `PSFN_ENDPOINT_ID` aligned with the PSFN
 `satellites.json` entry.
+
+For a 3D-world adapter, use `world-avatar` for both
+`PSFN_CAPABILITY_PROFILE` and `PSFN_CLAIM_TYPE`, and register the same claim
+type on its endpoint. This profile is intentionally independent of the Voxta
+facade:
+
+```dotenv
+PSFN_CAPABILITY_PROFILE=world-avatar
+PSFN_CLAIM_TYPE=world-avatar
+PSFN_SATELLITE_ID=eidoverse-world
+PSFN_ENDPOINT_ID=eidoverse-avatar
+PSFN_ENDPOINT_NAME=Eidoverse World Avatar
+PSFN_ENDPOINT_CLASS=avatar
+PSFN_LOCATION_MODE=static
+PSFN_TELEMETRY_MODE=event
+PSFN_TELEMETRY_CATEGORIES=presence,avatar_state
+```
 
 For an Amica browser/avatar conduit, use a claim type registered for that
 endpoint, for example `amica-conduit`, and keep the registry maximum wide enough

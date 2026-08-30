@@ -206,6 +206,54 @@ def test_load_runtime_config_reads_satellite_claim_and_cert_settings(tmp_path: P
     assert config.psfn_client_certificate.ca_path == tmp_path / "ca.pem"
 
 
+def test_load_runtime_config_accepts_world_avatar_profile(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("PSFN_CAPABILITY_PROFILE", "world-avatar")
+    (tmp_path / ".env").write_text(
+        "DEVICE_TRANSPORT=realtime\n"
+        "AUDIO_PUBLIC_HOST=voice.example\n"
+        "DEEPGRAM_API_KEY=project-deepgram\n"
+        "ELEVENLABS_API_KEY=project-eleven\n"
+        "PSFN_API_BASE_URL=http://127.0.0.1:3100/v1\n"
+        "PSFN_PROVIDER=\n"
+        "PSFN_MODEL=psfn\n"
+        "PSFN_CLAIM_TYPE=\n"
+        "PSFN_ENDPOINT_CLASS=\n"
+        "PSFN_LOCATION_MODE=\n"
+        "PSFN_TELEMETRY_MODE=\n"
+        "PSFN_TELEMETRY_CATEGORIES=\n"
+        "PSFN_CLIENT_CERT_PATH=\n"
+        "PSFN_CLIENT_KEY_PATH=\n"
+        "PSFN_CA_CERT_PATH=\n"
+        "PSFN_SATELLITE_ID=eidoverse-world\n"
+        "PSFN_ENDPOINT_ID=eidoverse-avatar\n",
+        encoding="utf-8",
+    )
+
+    config = load_runtime_config(tmp_path)
+
+    assert config.psfn_satellite_claim.capability_profile == "world-avatar"
+    assert config.psfn_satellite_claim.type == "world-avatar"
+    assert config.psfn_satellite_claim.endpoint_class == "avatar"
+
+
+def test_load_runtime_config_rejects_unknown_capability_profile(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("PSFN_CAPABILITY_PROFILE", "unknown-avatar")
+    (tmp_path / ".env").write_text(
+        "DEVICE_TRANSPORT=realtime\n"
+        "AUDIO_PUBLIC_HOST=voice.example\n"
+        "DEEPGRAM_API_KEY=project-deepgram\n"
+        "ELEVENLABS_API_KEY=project-eleven\n"
+        "PSFN_PROVIDER=\n"
+        "PSFN_CLIENT_CERT_PATH=\n"
+        "PSFN_CLIENT_KEY_PATH=\n"
+        "PSFN_CA_CERT_PATH=\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=r"PSFN_CAPABILITY_PROFILE must be one of:.*world-avatar"):
+        load_runtime_config(tmp_path)
+
+
 def test_load_runtime_config_requires_public_host_in_realtime_mode(tmp_path: Path, monkeypatch) -> None:
     for name in (
         "DEVICE_TRANSPORT",

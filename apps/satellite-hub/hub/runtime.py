@@ -315,7 +315,15 @@ def _split_csv(value: str | None) -> list[str]:
 def _parse_capability_profile(value: str | None) -> CapabilityProfile | None:
     return _parse_enum(
         value,
-        ["voice-only", "text-only", "voxta-avatar", "vision-capable", "telemetry-only", "mobile-location"],
+        [
+            "voice-only",
+            "text-only",
+            "voxta-avatar",
+            "world-avatar",
+            "vision-capable",
+            "telemetry-only",
+            "mobile-location",
+        ],
         "PSFN_CAPABILITY_PROFILE",
     )
 

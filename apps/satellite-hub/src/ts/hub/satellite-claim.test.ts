@@ -4,10 +4,60 @@ import test from "node:test";
 import {
   buildSatelliteRegistryHeaders,
   buildSatelliteClaimEnvelope,
+  defaultCapabilitiesForProfile,
   frameworkCapabilitiesForSatelliteCapabilities,
   frameworkTelemetryScopesForConfig,
   normalizeSatelliteClaimConfig,
 } from "./satellite-claim.js";
+
+test("world-avatar is a distinct fail-closed profile using existing framework capabilities", () => {
+  const config = normalizeSatelliteClaimConfig({
+    capabilityProfile: "world-avatar",
+    satelliteId: "eidoverse-world",
+    endpointId: "eidoverse-avatar",
+    displayName: "Eidoverse World Avatar",
+  });
+
+  assert.equal(config.type, "world-avatar");
+  assert.equal(config.endpointClass, "avatar");
+  assert.equal(config.locationMode, "static");
+  assert.deepEqual(config.telemetry, {
+    mode: "event",
+    categories: ["presence", "avatar_state"],
+  });
+  const capabilities = defaultCapabilitiesForProfile("world-avatar");
+  assert.deepEqual(capabilities, {
+    input: ["text", "vision_upload"],
+    output: ["text", "subtitle", "action"],
+    control: ["presence", "session_attach"],
+    safety: ["action_allowlist", "confirmation_required"],
+  });
+  assert.deepEqual(frameworkCapabilitiesForSatelliteCapabilities(capabilities, "world-avatar"), [
+    "text",
+    "vision",
+    "image_upload",
+    "avatar",
+    "avatar_action",
+    "presence",
+  ]);
+  const envelope = buildSatelliteClaimEnvelope({
+    config,
+    conversationId: "eidoverse:default",
+    channel: {
+      sessionId: "eidoverse:default",
+      channelType: "satellite.endpoint",
+      channelId: "satellite.endpoint:eidoverse:default",
+      sourceSatelliteId: "eidoverse-world",
+      sourceSatelliteName: "Eidoverse World Avatar",
+      activeSatellites: [],
+    },
+  });
+  assert.equal(envelope.claim.type, "world-avatar");
+  assert.equal(
+    buildSatelliteRegistryHeaders({ config, satelliteClaim: envelope })["X-PSFN-Satellite-Capabilities"],
+    "text,vision,image_upload,avatar,avatar_action,presence",
+  );
+});
 
 test("satellite claim config supports mobile location endpoint profiles", () => {
   const config = normalizeSatelliteClaimConfig({

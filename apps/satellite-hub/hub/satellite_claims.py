@@ -10,6 +10,7 @@ CapabilityProfile = Literal[
     "voice-only",
     "text-only",
     "voxta-avatar",
+    "world-avatar",
     "vision-capable",
     "telemetry-only",
     "mobile-location",
@@ -146,6 +147,17 @@ CAPABILITY_PROFILE_DEFAULTS: dict[CapabilityProfile, ProfileDefaults] = {
             "output": ["text", "subtitle", "local_file_audio", "animation", "action", "expression"],
             "control": ["interrupt", "presence", "session_attach"],
             "safety": ["action_allowlist", "local_only"],
+        },
+        telemetry=TelemetryConfig(mode="event", categories=("presence", "avatar_state")),
+    ),
+    "world-avatar": ProfileDefaults(
+        endpoint_class="avatar",
+        location_mode="static",
+        capabilities={
+            "input": ["text", "vision_upload"],
+            "output": ["text", "subtitle", "action"],
+            "control": ["presence", "session_attach"],
+            "safety": ["action_allowlist", "confirmation_required"],
         },
         telemetry=TelemetryConfig(mode="event", categories=("presence", "avatar_state")),
     ),
@@ -293,7 +305,10 @@ def build_satellite_registry_headers(
     if not isinstance(current_capabilities, dict):
         raise ValueError("satellite claim envelope is missing current capabilities")
 
-    mapped_capabilities = framework_capabilities_for_satellite_capabilities(current_capabilities)
+    mapped_capabilities = framework_capabilities_for_satellite_capabilities(
+        current_capabilities,
+        config.capability_profile,
+    )
     telemetry_scopes = framework_telemetry_scopes_for_config(config.telemetry)
     headers = {
         "X-PSFN-Satellite-Claim-Type": config.type,
@@ -318,9 +333,11 @@ def build_satellite_registry_headers(
 
 def framework_capabilities_for_satellite_capabilities(
     capabilities: SatelliteCapabilities | dict[str, object],
+    profile: CapabilityProfile | None = None,
 ) -> tuple[FrameworkCapability, ...]:
     inputs = set(_string_values(capabilities.get("input", [])))
     outputs = set(_string_values(capabilities.get("output", [])))
+    controls = set(_string_values(capabilities.get("control", [])))
     mapped: list[FrameworkCapability] = []
 
     def add(value: FrameworkCapability) -> None:
@@ -345,6 +362,8 @@ def framework_capabilities_for_satellite_capabilities(
         add("avatar_expression")
     if "action" in outputs:
         add("avatar_action")
+    if profile == "world-avatar" and "presence" in controls:
+        add("presence")
     return tuple(mapped)
 
 

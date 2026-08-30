@@ -108,13 +108,14 @@ describe('useVoicePlayback interruption bridge', () => {
     );
 
     await waitFor(() => expect(sources).toHaveLength(1));
-    await waitFor(() => expect(result.current).toBe(true));
+    await waitFor(() => expect(result.current.active).toBe(true));
+    await waitFor(() => expect(result.current.mouthOpen).toBe(true));
     const playing = sources[0]!;
 
     rerender({ state: interrupt(initial) });
 
     await waitFor(() => expect(playing.stop).toHaveBeenCalled());
-    await waitFor(() => expect(result.current).toBe(false));
+    await waitFor(() => expect(result.current).toEqual({ active: false, mouthOpen: false }));
     unmount();
   });
 });

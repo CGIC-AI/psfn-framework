@@ -478,6 +478,7 @@ function buildChannelMetadata(
     sessionId: channel.sessionId,
     sourceSatelliteId: channel.sourceSatelliteId,
     sourceSatelliteName: channel.sourceSatelliteName,
+    ...(channel.placeId ? { placeId: channel.placeId } : {}),
     activeSatellites: channel.activeSatellites,
     ...(channel.visionCaptures?.length ? { visionCaptures: channel.visionCaptures } : {}),
     ...(channel.contextNotes?.length ? { contextNotes: normalizeContextNotes(channel.contextNotes) } : {}),
@@ -535,7 +536,7 @@ function buildContextualUserText(userText: string, channel: PsfnChannelContext):
     return userText;
   }
   const lines = [
-    "Current VaM context:",
+    "Current embodiment context:",
     ...contextNotes.map((note) => `- [${note.key}] ${note.text}`),
     "",
     "User turn:",

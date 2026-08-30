@@ -144,6 +144,7 @@ test("psfn model adapter sends embodied hub channel headers", async () => {
     channelId: "satellite.endpoint:thin-shell:demo",
     sourceSatelliteId: "thin-shell",
     sourceSatelliteName: "Thin Shell",
+    placeId: "demo-place",
     activeSatellites: [
       {
         id: "thin-shell",
@@ -208,6 +209,7 @@ test("psfn model adapter sends embodied hub channel headers", async () => {
       sessionId: "thin-shell:demo",
       sourceSatelliteId: "thin-shell",
       sourceSatelliteName: "Thin Shell",
+      placeId: "demo-place",
       activeSatellites: channel.activeSatellites,
       satelliteClaim: bodyClaim,
     };
@@ -713,7 +715,7 @@ test("psfn model adapter injects retained VaM context into the active user turn"
 
     assert.deepEqual(capturedBody.messages, [{
       role: "user",
-      content: "Current VaM context:\n- [VaM/Slot2] The scene view shows Companion's body and surroundings — use what you see.\n\nUser turn:\ncan you see?",
+      content: "Current embodiment context:\n- [VaM/Slot2] The scene view shows Companion's body and surroundings — use what you see.\n\nUser turn:\ncan you see?",
     }]);
     const channelMetadata = capturedBody.channel_metadata as Record<string, unknown>;
     assert.deepEqual(channelMetadata.contextNotes, [{

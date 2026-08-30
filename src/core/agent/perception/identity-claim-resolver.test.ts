@@ -104,6 +104,26 @@ describe('resolveIdentityClaim', () => {
     expect(getById).not.toHaveBeenCalled();
   });
 
+  it('keeps an unenrolled Eidoverse participant id anonymous without creating or loading a contact', async () => {
+    const participantId = 'participant-aid1-unenrolled';
+    const resolve = vi.fn(async (): Promise<HubIdentityResolution> => ({ status: 'unenrolled' }));
+    const getById = vi.fn();
+
+    const result = await resolveIdentityClaim({
+      event: identityClaimEvent({ hubIdentityId: participantId }),
+      enrollmentService: { resolve },
+      contactStore: { getById },
+    });
+
+    expect(result).toMatchObject({
+      kind: 'anonymous',
+      reason: 'unenrolled',
+      hubIdentityId: participantId,
+    });
+    expect(resolve).toHaveBeenCalledWith(participantId);
+    expect(getById).not.toHaveBeenCalled();
+  });
+
   it('surfaces a low-confidence claim as anonymous without touching the binding', async () => {
     const resolve = vi.fn();
     const getById = vi.fn();

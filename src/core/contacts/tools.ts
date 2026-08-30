@@ -1197,7 +1197,7 @@ export function createContactSetChannelPrivacyTool(contactStore: ContactStorePor
     label: 'contact_set_channel_privacy',
     parameters: Type.Object({
       contactId: Type.String({ description: 'Canonical contact ID' }),
-      channel: Type.String({ minLength: 1, description: 'Channel key, for example: discord, api, telegram' }),
+      channel: Type.String({ minLength: 1, description: 'Channel key, for example: discord, api, telegram, eidoverse' }),
       channelUserId: Type.String({ minLength: 1, description: 'Participant ID within that channel' }),
       privacyLevel: Type.Unsafe<ChannelPrivacyLevel>({
         type: 'string',
@@ -1256,7 +1256,7 @@ export function createContactLinkIdentityTool(contactStore: ContactStorePort): S
     label: 'contact_link_identity',
     parameters: Type.Object({
       contactId: Type.String({ description: 'Canonical contact ID to extend' }),
-      channel: Type.String({ minLength: 1, description: 'Channel key, for example: discord, api, telegram' }),
+      channel: Type.String({ minLength: 1, description: 'Channel key, for example: discord, api, telegram, eidoverse' }),
       channelUserId: Type.String({ minLength: 1, description: 'Participant ID within that channel' }),
       privacyLevel: Type.Optional(Type.Unsafe<ChannelPrivacyLevel>({
         type: 'string',

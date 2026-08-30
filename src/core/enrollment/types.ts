@@ -3,10 +3,12 @@
  *
  * Face-recognition compute and biometric templates live ENTIRELY at the
  * endpoint + Satellite Hub (a separate repo) and NEVER enter core. Core owns
- * only an owner-controlled, durable binding between an OPAQUE hub-side identity
- * handle (`hubIdentityId`, minted by the Hub) and a core contact
+ * only an owner-controlled, durable binding between an OPAQUE identity handle
+ * presented by the Hub (`hubIdentityId`) and a core contact
  * (`canonicalContactId`). A hub identity is meaningless to core until the owner
  * explicitly enrolls it; an unenrolled handle always resolves to "unknown".
+ * A handle may be source-issued (for example, an Eidoverse participant id);
+ * presenting that handle is never itself proof of enrollment or trust.
  *
  * There is deliberately NO field here for a biometric template, embedding, or
  * raw sensor payload — core has no place to store one.
@@ -20,7 +22,7 @@ export type HubIdentityEnrollmentStatus = 'enrolled' | 'revoked';
  * `hubIdentityId` is the primary key: at most one binding row exists per handle.
  */
 export interface HubIdentityEnrollment {
-  /** Opaque handle minted by the Satellite Hub. Never a biometric template. */
+  /** Opaque handle presented by the Satellite Hub. Never enrollment proof or a biometric template. */
   hubIdentityId: string;
   /** The core contact this handle is bound to (`contacts.id`). */
   canonicalContactId: string;

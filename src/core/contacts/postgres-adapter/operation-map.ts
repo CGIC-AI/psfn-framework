@@ -7,6 +7,7 @@ import type {
   ChannelPrivacyLevel,
   Contact,
   ContactChannel,
+  ContactIdentityLinkOptions,
   ContactIdentityLinkResult,
   ContactIdentityLinkVerification,
   ContactMutationAuditEntry,
@@ -58,7 +59,7 @@ export interface PostgresContactOperationContext extends ContactStorePort {
     channelUserId: string,
     firstSeen: string,
     lastSeen: string,
-    privacyLevel?: ChannelPrivacyLevel,
+    options?: ContactIdentityLinkOptions,
   ): Promise<ContactIdentityLinkResult>;
   upsertSocialGraphEntityForContact(
     contact: Pick<Contact, 'id' | 'displayName' | 'firstSeen' | 'lastSeen'>,

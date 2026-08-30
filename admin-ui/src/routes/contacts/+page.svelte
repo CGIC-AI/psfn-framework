@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import ContactSocialGraphPanel from './ContactSocialGraphPanel.svelte';
+  import ContactIntroductionProvenance from './ContactIntroductionProvenance.svelte';
   import {
     listContacts,
     updateContact,
@@ -1106,7 +1107,10 @@
                       {@const pb = privacyBadge(ch.privacyLevel)}
                       <tr class="border-b border-bark-100">
                         <td class="py-1.5 pr-2 text-shadow-800 font-medium">{ch.channel}</td>
-                        <td class="py-1.5 pr-2 font-mono text-shadow-800 text-sm break-all">{ch.userId}</td>
+                        <td class="py-1.5 pr-2 text-shadow-800 text-sm break-all">
+                          <span class="font-mono">{ch.userId}</span>
+                          <ContactIntroductionProvenance link={ch} />
+                        </td>
                         <td class="py-1.5 pr-2">
                           <span class="inline-flex items-center px-2 py-0.5 rounded-full text-sm font-medium {pb.cls}">
                             {pb.label}

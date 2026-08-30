@@ -96,7 +96,7 @@ describe('registerImageMethods model usage accounting', () => {
         prompt: 'a lighthouse at dusk',
         num_images: 1,
       },
-      outboundSensitivity: 'personal',
+      outboundSensitivity: 'confidential',
       confirmed: false,
     });
     expect(usageEvents).toMatchObject([{
@@ -138,6 +138,71 @@ describe('registerImageMethods model usage accounting', () => {
     })).rejects.toMatchObject({
       message: expect.stringContaining('lacks external.mcp'),
     });
+    expect(invokeTool).not.toHaveBeenCalled();
+  });
+
+  it('does not let a shard inherit its parent companion MCP capability', async () => {
+    const invokeTool = vi.fn();
+    const methods = new Map<string, (params: unknown) => Promise<unknown>>();
+    const runtime = {
+      target: {
+        addMethod(name: string, handler: (params: unknown) => Promise<unknown>) {
+          methods.set(name, handler);
+        },
+      },
+      audited: (_method: string, handler: (params: unknown) => Promise<unknown>) => handler,
+      imageConfig: { imageProvider: 'comfyui_mcp' },
+      workspacePath: '/tmp/unused-shard-image-workspace',
+      authenticatedCompanionId: () => 'companion-a',
+      resolveShardWorkloadForChannel: () => ({ workload: {}, identity: {} }),
+      capabilityGrantSnapshotProvider: () => ({
+        tier: 'autonomous',
+        customTokens: [],
+        grantedTokens: ['external.mcp'],
+      }),
+      mcpBroker: { invokeTool },
+    } as unknown as GatewayMethodRuntime;
+    registerImageMethods(runtime);
+
+    const handler = methods.get('image.create');
+    if (!handler) throw new Error('image.create was not registered');
+    await expect(handler({
+      prompt: 'must stay inside the shard boundary',
+      provider: 'comfyui_mcp',
+      channelId: 'shard:render-1',
+    })).rejects.toMatchObject({
+      message: expect.stringContaining('shard capability grants exclude external.mcp'),
+    });
+    expect(invokeTool).not.toHaveBeenCalled();
+  });
+
+  it('preserves capability owner read failures while denying MCP invocation', async () => {
+    const ownerReadFailure = new Error('capability owner snapshot is unreadable');
+    const invokeTool = vi.fn();
+    const methods = new Map<string, (params: unknown) => Promise<unknown>>();
+    const runtime = {
+      target: {
+        addMethod(name: string, handler: (params: unknown) => Promise<unknown>) {
+          methods.set(name, handler);
+        },
+      },
+      audited: (_method: string, handler: (params: unknown) => Promise<unknown>) => handler,
+      imageConfig: { imageProvider: 'comfyui_mcp' },
+      workspacePath: '/tmp/unused-owner-error-image-workspace',
+      authenticatedCompanionId: () => 'companion-a',
+      capabilityGrantSnapshotProvider: () => {
+        throw ownerReadFailure;
+      },
+      mcpBroker: { invokeTool },
+    } as unknown as GatewayMethodRuntime;
+    registerImageMethods(runtime);
+
+    const handler = methods.get('image.create');
+    if (!handler) throw new Error('image.create was not registered');
+    await expect(handler({
+      prompt: 'must preserve the authority failure',
+      provider: 'comfyui_mcp',
+    })).rejects.toBe(ownerReadFailure);
     expect(invokeTool).not.toHaveBeenCalled();
   });
 

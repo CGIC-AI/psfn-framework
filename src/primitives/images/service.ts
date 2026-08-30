@@ -25,6 +25,7 @@ import type {
   ImageEditParams,
   ImageGenerationResult,
   ImageMode,
+  ImageProvider,
   ImageResultAsset,
   ImageRuntimeConfig,
 } from './types.js';
@@ -33,7 +34,6 @@ import {
   buildComfyUiMcpArguments,
   ComfyUiMcpAdapterError,
   parseComfyUiMcpResult,
-  resolveComfyUiMcpSensitivity,
   type ComfyUiMcpInvoker,
 } from './comfyui-mcp.js';
 
@@ -44,7 +44,7 @@ type ImageFallbackReason = 'fal_transient_model_fallback' | 'fal_content_policy_
 
 export interface ImageProviderAttempt {
   attempt: number;
-  provider: 'fal' | 'comfyui' | 'comfyui_mcp';
+  provider: ImageProvider;
   model: string;
   startedAtMs: number;
   completedAtMs: number;
@@ -55,7 +55,7 @@ export interface ImageProviderAttempt {
 
 export interface ImageProviderAttemptStart {
   attempt: number;
-  provider: 'fal' | 'comfyui' | 'comfyui_mcp';
+  provider: ImageProvider;
   model: string;
   startedAtMs: number;
 }
@@ -525,17 +525,14 @@ export class ImageService implements ImageOperations {
             'ComfyUI MCP image provider is not configured on the gateway',
           );
         }
-        const outboundSensitivity = resolveComfyUiMcpSensitivity(params);
         const result = mode === 'create'
           ? await invoker({
               mode,
               arguments: buildComfyUiMcpArguments('create', params as ImageCreateParams),
-              outboundSensitivity,
             })
           : await invoker({
               mode,
               arguments: buildComfyUiMcpArguments('edit', params as ImageEditParams),
-              outboundSensitivity,
             });
         return parseComfyUiMcpResult(mode, result);
       },
@@ -544,7 +541,7 @@ export class ImageService implements ImageOperations {
 
   private async runProviderAttempt(
     context: ImageRunContext,
-    provider: 'fal' | 'comfyui' | 'comfyui_mcp',
+    provider: ImageProvider,
     model: string,
     operation: () => Promise<ImageGenerationResult>,
     fallbackReason?: ImageFallbackReason,

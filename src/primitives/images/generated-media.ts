@@ -6,8 +6,10 @@ import type { Attachment } from '../../shared/contracts/runtime.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { isStrictSubpath, resolvePersonalImagesDir } from '../../persistence/layout.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
+import { IMAGE_PROVIDER_VALUES } from './types.js';
 import type {
   ImageGenerationResult,
+  ImageProvider,
   ImageResultAsset,
   MediaToolResultDetails,
   ImageToolResultDetails,
@@ -65,9 +67,11 @@ function normalizeImageMode(value: unknown): ImageGenerationResult['mode'] {
   return value === 'edit' ? 'edit' : 'create';
 }
 
-function normalizeImageProvider(value: unknown): ImageGenerationResult['provider'] {
-  if (value === 'comfyui' || value === 'comfyui_mcp') return value;
-  return 'fal';
+function normalizeImageProvider(value: unknown): ImageProvider | null {
+  return typeof value === 'string'
+    && (IMAGE_PROVIDER_VALUES as readonly string[]).includes(value)
+    ? value as ImageProvider
+    : null;
 }
 
 function collectImageResultKey(entry: CollectedImageGenerationResult): string {
@@ -139,6 +143,8 @@ function imageResultFromPendingDeliverable(
   if (deliverable.artifactKind !== 'image') return null;
   const toolName = deliverable.toolName?.trim();
   if (!toolName || !IMAGE_TOOL_NAMES.has(toolName)) return null;
+  const provider = normalizeImageProvider(deliverable.provider);
+  if (provider !== 'fal') return null;
 
   const images = (deliverable.artifacts ?? [])
     .filter((artifact): artifact is PendingPaidDeliverableArtifact => (
@@ -153,7 +159,7 @@ function imageResultFromPendingDeliverable(
   if (images.length === 0) return null;
 
   const result: ImageGenerationResult = {
-    provider: normalizeImageProvider(deliverable.provider),
+    provider,
     mode: normalizeImageMode(deliverable.mode),
     ...(deliverable.model?.trim() ? { model: deliverable.model.trim() } : {}),
     fallbackUsed: false,
@@ -232,9 +238,10 @@ function normalizeImageGenerationResult(parsed: unknown): ImageGenerationResult 
   if (images.length === 0) {
     return null;
   }
-
+  const provider = normalizeImageProvider(parsed.provider);
+  if (!provider) return null;
   return {
-    provider: normalizeImageProvider(parsed.provider),
+    provider,
     mode: parsed.mode === 'edit' ? 'edit' : 'create',
     model: typeof parsed.model === 'string' && parsed.model.trim() ? parsed.model.trim() : undefined,
     fallbackUsed: parsed.fallbackUsed === true,

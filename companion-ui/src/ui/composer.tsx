@@ -18,6 +18,7 @@ export function Composer({
   controller,
   onSendText,
   onStopGeneration,
+  onToggleMic,
   targetLabel,
 }: {
   canSend: boolean;
@@ -26,6 +27,7 @@ export function Composer({
   controller: ComposerController;
   onSendText: (text: string) => void;
   onStopGeneration: () => void;
+  onToggleMic: () => void;
   targetLabel?: string;
 }) {
   function submit(event?: FormEvent<HTMLFormElement>) {
@@ -93,7 +95,8 @@ export function Composer({
         <button
           className={`composer-button mic-button ${controller.micActive ? 'active' : ''} ${controller.micMode}`}
           type="button"
-          onClick={controller.toggleMic}
+          onClick={onToggleMic}
+          disabled={!canSend}
           title={controller.micMode === 'dictation' ? 'Dictation' : 'Voice chat'}
           aria-label={controller.micMode === 'dictation' ? 'Toggle dictation' : 'Toggle voice chat'}
         >

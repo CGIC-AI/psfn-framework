@@ -5,11 +5,13 @@ import type {
   ApprovalResolutionStatus,
   ArtifactCreatedMessage,
   EmotionSnapshotMessage,
+  SatelliteCapabilities,
   ToolActivityMessage,
   ToolActivityPhase,
   TouchRegion,
   TouchStimulusKind,
 } from "../shared/protocol.js";
+import { canReceiveStreamingAudio } from "./embodied-session.js";
 
 export type CompanionEvent =
   | { kind: "approval.requested"; payload: ApprovalRequestedMessage["data"] }
@@ -19,6 +21,12 @@ export type CompanionEvent =
   | { kind: "emotion.snapshot"; payload: EmotionSnapshotMessage["data"] };
 
 export type CompanionEventListener = (event: CompanionEvent) => void;
+
+export type CompanionAudioOutputFrame =
+  | { type: "text"; data: "audio-init" | "audio-end" }
+  | { type: "audio"; data: string }
+  | { type: "assistant.interrupted"; sessionId: string }
+  | { type: "action"; data: "interrupt" | "pause-audio" };
 
 const APPROVAL_RESOLUTION_STATUSES: readonly ApprovalResolutionStatus[] = [
   "approved",
@@ -53,6 +61,8 @@ export class CompanionRequestError extends Error {
  * - Proxies approval decisions to `POST <base>/companion/approvals/{id}`.
  * - Proxies size-capped artifact previews from
  *   `GET <base>/companion/artifacts/{id}/preview`.
+ * - Publishes strict session-bound spoken-audio frames to
+ *   `POST <base>/companion/audio-output`.
  *
  * The bridge never fabricates data: events that fail strict validation are
  * logged and dropped. Unknown payload fields are stripped from established
@@ -240,6 +250,46 @@ export class CompanionBridge {
       messageId,
       ...(responseText ? { response: responseText } : {}),
     };
+  }
+
+  /**
+   * Publishes one retained spoken-audio lifecycle frame to the gateway-owned
+   * Companion UI relay. The connection supplies its server-resolved session
+   * and effective capability ceiling; browser-authored routing is never used.
+   */
+  async publishAudioOutput(input: {
+    sessionId: string;
+    capabilities: SatelliteCapabilities;
+    frame: CompanionAudioOutputFrame;
+  }): Promise<boolean> {
+    if (!canReceiveStreamingAudio(input.capabilities)) {
+      return false;
+    }
+    const sessionId = input.sessionId.trim();
+    if (!sessionId) {
+      throw new Error("Companion audio output requires a non-empty session id");
+    }
+    const frame = projectCompanionAudioOutputFrame(input.frame, sessionId);
+    const response = await fetch(`${this.config.baseUrl}/companion/audio-output`, {
+      method: "POST",
+      headers: {
+        ...this.buildHeaders(),
+        "Content-Type": "application/json",
+        "X-PSFN-Satellite-Claim-Type": this.config.identity.claimType,
+        "X-PSFN-Satellite-ID": this.config.identity.satelliteId,
+        "X-PSFN-Satellite-Endpoint-ID": this.config.identity.endpointId,
+        "X-PSFN-Satellite-Session-ID": sessionId,
+        "X-PSFN-Satellite-Capabilities": "audio_output",
+      },
+      body: JSON.stringify(frame),
+    });
+    if (!response.ok) {
+      throw new CompanionRequestError(
+        response.status,
+        `Companion audio output publish failed (${response.status})`,
+      );
+    }
+    return true;
   }
 
   async fetchArtifactPreview(artifactId: string): Promise<{ mediaType: string; dataBase64: string }> {
@@ -687,6 +737,51 @@ function requireExactKeys(
   if (required.some((key) => !(key in value))) {
     throw new Error(`${name} is missing a required field`);
   }
+}
+
+function projectCompanionAudioOutputFrame(
+  frame: CompanionAudioOutputFrame,
+  expectedSessionId: string,
+): CompanionAudioOutputFrame {
+  if (!isRecord(frame)) {
+    throw new Error("Companion audio output frame must be a JSON object");
+  }
+  if (frame.type === "text") {
+    requireExactKeys(frame, ["type", "data"], [], "Companion audio output text frame");
+    if (frame.data !== "audio-init" && frame.data !== "audio-end") {
+      throw new Error("Companion audio output text signal is invalid");
+    }
+    return { type: "text", data: frame.data };
+  }
+  if (frame.type === "audio") {
+    requireExactKeys(frame, ["type", "data"], [], "Companion audio output audio frame");
+    if (!isCanonicalBase64(frame.data)) {
+      throw new Error("Companion audio output audio data must be canonical base64");
+    }
+    return { type: "audio", data: frame.data };
+  }
+  if (frame.type === "assistant.interrupted") {
+    requireExactKeys(frame, ["type", "sessionId"], [], "Companion audio output interruption frame");
+    if (frame.sessionId !== expectedSessionId) {
+      throw new Error("Companion audio output interruption session does not match");
+    }
+    return { type: "assistant.interrupted", sessionId: expectedSessionId };
+  }
+  if (frame.type === "action") {
+    requireExactKeys(frame, ["type", "data"], [], "Companion audio output action frame");
+    if (frame.data !== "interrupt" && frame.data !== "pause-audio") {
+      throw new Error("Companion audio output action is invalid");
+    }
+    return { type: "action", data: frame.data };
+  }
+  throw new Error("Companion audio output frame type is invalid");
+}
+
+function isCanonicalBase64(value: unknown): value is string {
+  if (typeof value !== "string" || value.length === 0 || value.length % 4 !== 0) {
+    return false;
+  }
+  return Buffer.from(value, "base64").toString("base64") === value;
 }
 
 function readRequiredString(value: unknown, name: string): string {

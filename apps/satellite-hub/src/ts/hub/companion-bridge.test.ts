@@ -13,6 +13,7 @@ import type {
 } from "../shared/protocol.js";
 import type { FrameworkAgentAdapter } from "./framework-agent.js";
 import type { FrameworkReplyInputMode } from "./framework-agent.js";
+import type { StreamingTtsAdapter } from "./elevenlabs-stream.js";
 import {
   CompanionBridge,
   CompanionRequestError,
@@ -46,6 +47,13 @@ const TOUCH_CAPABILITIES: SatelliteCapabilities = {
 const PLAIN_CAPABILITIES: SatelliteCapabilities = {
   input: ["text"],
   output: ["text", "subtitle"],
+  control: ["interrupt", "session_attach"],
+  safety: [],
+};
+
+const STREAMING_AUDIO_CAPABILITIES: SatelliteCapabilities = {
+  input: ["text"],
+  output: ["text", "streamed_audio"],
   control: ["interrupt", "session_attach"],
   safety: [],
 };
@@ -213,6 +221,67 @@ test("companion bridge refuses to start without a complete registry identity", (
     })),
     /complete satellite registry identity/,
   );
+});
+
+test("companion bridge publishes strict audio output with registry identity and effective session authority", async () => {
+  const backplane = new FakeBackplane();
+  const baseUrl = await backplane.start();
+  const bridge = new CompanionBridge(bridgeConfig(baseUrl));
+
+  try {
+    assert.equal(await bridge.publishAudioOutput({
+      sessionId: "realtime:phone:authoritative",
+      capabilities: STREAMING_AUDIO_CAPABILITIES,
+      frame: { type: "audio", data: "AQID" },
+    }), true);
+    assert.deepEqual(backplane.audioOutputRequests, [{
+      authorization: "Bearer companion-key",
+      claimType: "text-only",
+      satelliteId: "hub-companion-test",
+      endpointId: "companion-test",
+      sessionId: "realtime:phone:authoritative",
+      capabilities: "audio_output",
+      body: { type: "audio", data: "AQID" },
+    }]);
+
+    assert.equal(await bridge.publishAudioOutput({
+      sessionId: "realtime:phone:authoritative",
+      capabilities: PLAIN_CAPABILITIES,
+      frame: { type: "text", data: "audio-init" },
+    }), false);
+    await assert.rejects(
+      bridge.publishAudioOutput({
+        sessionId: "realtime:phone:authoritative",
+        capabilities: STREAMING_AUDIO_CAPABILITIES,
+        frame: { type: "audio", data: "not base64" },
+      }),
+      /canonical base64/,
+    );
+    assert.equal(backplane.audioOutputRequests.length, 1);
+  } finally {
+    await backplane.stop();
+  }
+});
+
+test("companion bridge surfaces one failed audio publish without retrying", async () => {
+  const backplane = new FakeBackplane();
+  backplane.audioOutputResponse = { status: 503, body: "unavailable" };
+  const baseUrl = await backplane.start();
+  const bridge = new CompanionBridge(bridgeConfig(baseUrl));
+
+  try {
+    await assert.rejects(
+      bridge.publishAudioOutput({
+        sessionId: "realtime:phone:authoritative",
+        capabilities: STREAMING_AUDIO_CAPABILITIES,
+        frame: { type: "text", data: "audio-init" },
+      }),
+      (error: unknown) => error instanceof CompanionRequestError && error.status === 503,
+    );
+    assert.equal(backplane.audioOutputRequests.length, 1);
+  } finally {
+    await backplane.stop();
+  }
 });
 
 test("reconnectDelayMs backs off exponentially up to the cap", () => {
@@ -430,6 +499,147 @@ test("companion bridge enforces the artifact preview size cap and relays denials
     );
   } finally {
     await bridge.stop();
+    await backplane.stop();
+  }
+});
+
+test("hub publishes one TTS lifecycle to both the local device and gateway relay in exact order", async () => {
+  const backplane = new FakeBackplane();
+  const baseUrl = await backplane.start();
+  const bridge = new CompanionBridge(bridgeConfig(baseUrl));
+  const tts = new RecordingAudioTts(["first-audio", "second-audio"]);
+  const server = new RealtimeHubServer(testHubConfig({ streamingAudio: true }), {
+    agent: new FakeAgent(),
+    realtimeTts: tts,
+    voxtaTts: null,
+    voxtaStt: null,
+    companion: bridge,
+  });
+  let client: TestClient | null = null;
+
+  try {
+    await server.start();
+    const port = (server.address() as AddressInfo).port;
+    client = await TestClient.connect(port, "phone", STREAMING_AUDIO_CAPABILITIES);
+    client.send({ type: "user.text", text: "speak" });
+    await waitFor(() => backplane.audioOutputRequests.length === 4, "gateway audio lifecycle");
+
+    const expectedBodies = [
+      { type: "text", data: "audio-init" },
+      { type: "audio", data: Buffer.from("first-audio").toString("base64") },
+      { type: "audio", data: Buffer.from("second-audio").toString("base64") },
+      { type: "text", data: "audio-end" },
+    ];
+    assert.deepEqual(backplane.audioOutputRequests.map(request => request.body), expectedBodies);
+    assert.deepEqual(
+      backplane.audioOutputRequests.map(({ claimType, satelliteId, endpointId, sessionId, capabilities }) => ({
+        claimType,
+        satelliteId,
+        endpointId,
+        sessionId,
+        capabilities,
+      })),
+      Array.from({ length: 4 }, () => ({
+        claimType: "text-only",
+        satelliteId: "hub-companion-test",
+        endpointId: "companion-test",
+        sessionId: "companion-test:phone",
+        capabilities: "audio_output",
+      })),
+    );
+    assert.deepEqual(audioLifecycle(client.messages), expectedBodies);
+    assert.deepEqual(tts.calls, ["ok"]);
+  } finally {
+    await client?.close();
+    await server.close();
+    await backplane.stop();
+  }
+});
+
+test("gateway audio publish failure is sanitized and does not abort local audio or the completed text turn", async () => {
+  const backplane = new FakeBackplane();
+  backplane.audioOutputResponse = { status: 503, body: "unavailable" };
+  const baseUrl = await backplane.start();
+  const bridge = new CompanionBridge(bridgeConfig(baseUrl));
+  const tts = new RecordingAudioTts(["sensitive-audio"]);
+  const server = new RealtimeHubServer(testHubConfig({ streamingAudio: true }), {
+    agent: new FakeAgent(),
+    realtimeTts: tts,
+    voxtaTts: null,
+    voxtaStt: null,
+    companion: bridge,
+  });
+  const warnings: unknown[][] = [];
+  const originalWarn = console.warn;
+  let client: TestClient | null = null;
+  console.warn = (...args: unknown[]) => warnings.push(args);
+
+  try {
+    await server.start();
+    const port = (server.address() as AddressInfo).port;
+    client = await TestClient.connect(port, "phone", STREAMING_AUDIO_CAPABILITIES);
+    client.send({ type: "user.text", text: "speak despite relay failure" });
+    await waitFor(
+      () => client?.messages.some(message => (
+        message.type === "message" && message.data.role === "assistant" && message.data.final === true
+      )) === true,
+      "completed text turn after audio relay failure",
+    );
+
+    assert.deepEqual(audioLifecycle(client.messages), [
+      { type: "text", data: "audio-init" },
+      { type: "audio", data: Buffer.from("sensitive-audio").toString("base64") },
+      { type: "text", data: "audio-end" },
+    ]);
+    assert.deepEqual(tts.calls, ["ok"]);
+    assert.equal(backplane.audioOutputRequests.length, 3);
+    assert.deepEqual(warnings, Array.from(
+      { length: 3 },
+      () => ["Companion audio output publish failed"],
+    ));
+    assert.doesNotMatch(JSON.stringify(warnings), /sensitive-audio|c2Vuc2l0aXZlLWF1ZGlv/u);
+  } finally {
+    console.warn = originalWarn;
+    await client?.close();
+    await server.close();
+    await backplane.stop();
+  }
+});
+
+test("hub publishes an interruption reset after an opened gateway audio bracket", async () => {
+  const backplane = new FakeBackplane();
+  const baseUrl = await backplane.start();
+  const bridge = new CompanionBridge(bridgeConfig(baseUrl));
+  const tts = new InterruptibleAudioTts();
+  const server = new RealtimeHubServer(testHubConfig({ streamingAudio: true }), {
+    agent: new FakeAgent(),
+    realtimeTts: tts,
+    voxtaTts: null,
+    voxtaStt: null,
+    companion: bridge,
+  });
+  let client: TestClient | null = null;
+
+  try {
+    await server.start();
+    const port = (server.address() as AddressInfo).port;
+    client = await TestClient.connect(port, "phone", STREAMING_AUDIO_CAPABILITIES);
+    client.send({ type: "user.text", text: "start speaking" });
+    await waitFor(() => backplane.audioOutputRequests.length === 2, "opened gateway audio bracket");
+    client.send({ type: "interrupt" });
+    await waitFor(() => backplane.audioOutputRequests.length === 3, "gateway interruption reset");
+
+    assert.deepEqual(backplane.audioOutputRequests.map(request => request.body), [
+      { type: "text", data: "audio-init" },
+      { type: "audio", data: Buffer.from("open-audio").toString("base64") },
+      { type: "assistant.interrupted", sessionId: "companion-test:phone" },
+    ]);
+    assert.equal(backplane.audioOutputRequests.some(request => (
+      (request.body as { data?: unknown }).data === "audio-end"
+    )), false);
+  } finally {
+    await client?.close();
+    await server.close();
     await backplane.stop();
   }
 });
@@ -1037,6 +1247,47 @@ class FakeAgent implements FrameworkAgentAdapter {
   async close(): Promise<void> {}
 }
 
+class RecordingAudioTts implements StreamingTtsAdapter {
+  readonly calls: string[] = [];
+
+  constructor(private readonly chunks: string[]) {}
+
+  async *streamText(textStream: AsyncIterable<string>): AsyncGenerator<Buffer, void, void> {
+    let text = "";
+    for await (const chunk of textStream) {
+      text += chunk;
+    }
+    this.calls.push(text);
+    for (const chunk of this.chunks) {
+      yield Buffer.from(chunk);
+    }
+  }
+
+  async close(): Promise<void> {}
+}
+
+class InterruptibleAudioTts implements StreamingTtsAdapter {
+  async *streamText(
+    _textStream: AsyncIterable<string>,
+    options?: { signal?: AbortSignal },
+  ): AsyncGenerator<Buffer, void, void> {
+    yield Buffer.from("open-audio");
+    await new Promise<void>((_resolve, reject) => {
+      const signal = options?.signal;
+      const rejectAbort = (): void => reject(
+        signal?.reason ?? new DOMException("audio interrupted", "AbortError"),
+      );
+      if (signal?.aborted) {
+        rejectAbort();
+        return;
+      }
+      signal?.addEventListener("abort", rejectAbort, { once: true });
+    });
+  }
+
+  async close(): Promise<void> {}
+}
+
 class TestClient {
   readonly messages: HubToClientMessage[] = [];
 
@@ -1120,8 +1371,21 @@ class FakeBackplane {
     status: 200,
     body: JSON.stringify({ status: "accepted", messageId: "stimulus-1" }),
   };
+  audioOutputResponse: { status: number; body: string } = {
+    status: 202,
+    body: JSON.stringify({ accepted: true }),
+  };
   readonly approvalRequests: Array<{ id: string; authorization?: string; body: unknown }> = [];
   readonly stimulusRequests: Array<{ authorization?: string; body: unknown }> = [];
+  readonly audioOutputRequests: Array<{
+    authorization?: string;
+    claimType?: string;
+    satelliteId?: string;
+    endpointId?: string;
+    sessionId?: string;
+    capabilities?: string;
+    body: unknown;
+  }> = [];
   readonly previewRequests: string[] = [];
   sseConnectionCount = 0;
   lastEventsAuthorization: string | undefined;
@@ -1213,6 +1477,21 @@ class FakeBackplane {
       response.end(this.stimulusResponse.body);
       return;
     }
+    if (request.method === "POST" && url.pathname === "/companion/audio-output") {
+      const body = await readBody(request);
+      this.audioOutputRequests.push({
+        authorization: request.headers.authorization,
+        claimType: request.headers["x-psfn-satellite-claim-type"] as string | undefined,
+        satelliteId: request.headers["x-psfn-satellite-id"] as string | undefined,
+        endpointId: request.headers["x-psfn-satellite-endpoint-id"] as string | undefined,
+        sessionId: request.headers["x-psfn-satellite-session-id"] as string | undefined,
+        capabilities: request.headers["x-psfn-satellite-capabilities"] as string | undefined,
+        body: JSON.parse(body),
+      });
+      response.writeHead(this.audioOutputResponse.status, { "Content-Type": "application/json" });
+      response.end(this.audioOutputResponse.body);
+      return;
+    }
     const previewMatch = url.pathname.match(/^\/companion\/artifacts\/([^/]+)\/preview$/);
     if (request.method === "GET" && previewMatch?.[1]) {
       if (!hasIdentityQuery(url)) {
@@ -1271,6 +1550,7 @@ function bridgeConfig(baseUrl: string, overrides: Partial<CompanionBridgeConfig>
 function testHubConfig(options: {
   deviceRegistry?: HubConfig["deviceRegistry"];
   location?: HubLocationConfig;
+  streamingAudio?: boolean;
 } = {}): HubConfig {
   const satelliteClaim = normalizeSatelliteClaimConfig({
     capabilityProfile: "text-only",
@@ -1279,12 +1559,12 @@ function testHubConfig(options: {
     displayName: "Companion Test Endpoint",
   });
   return {
-    textOnlyMode: true,
+    textOnlyMode: !options.streamingAudio,
     bindHost: "127.0.0.1",
     port: 0,
     deepgramApiKey: null,
-    elevenlabsApiKey: null,
-    elevenlabsVoiceId: null,
+    elevenlabsApiKey: options.streamingAudio ? "test-elevenlabs" : null,
+    elevenlabsVoiceId: options.streamingAudio ? "test-voice" : null,
     elevenlabsModelId: "eleven_flash_v2_5",
     artifactsRoot: ".artifacts/test-companion",
     psfn: {
@@ -1325,6 +1605,21 @@ function testHubConfig(options: {
     },
     sessionTtlSeconds: 300,
   };
+}
+
+function audioLifecycle(messages: readonly HubToClientMessage[]): unknown[] {
+  return messages.flatMap<unknown>(message => {
+    if (message.type === "text" && (message.data === "audio-init" || message.data === "audio-end")) {
+      return [{ type: "text", data: message.data }];
+    }
+    if (message.type === "audio") {
+      return [{ type: "audio", data: message.data }];
+    }
+    if (message.type === "assistant.interrupted") {
+      return [{ type: "assistant.interrupted", sessionId: message.sessionId }];
+    }
+    return [];
+  });
 }
 
 async function sendLocationAndFence(

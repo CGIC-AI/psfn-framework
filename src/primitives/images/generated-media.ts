@@ -66,7 +66,8 @@ function normalizeImageMode(value: unknown): ImageGenerationResult['mode'] {
 }
 
 function normalizeImageProvider(value: unknown): ImageGenerationResult['provider'] {
-  return value === 'comfyui' ? 'comfyui' : 'fal';
+  if (value === 'comfyui' || value === 'comfyui_mcp') return value;
+  return 'fal';
 }
 
 function collectImageResultKey(entry: CollectedImageGenerationResult): string {
@@ -233,7 +234,7 @@ function normalizeImageGenerationResult(parsed: unknown): ImageGenerationResult 
   }
 
   return {
-    provider: parsed.provider === 'comfyui' ? 'comfyui' : 'fal',
+    provider: normalizeImageProvider(parsed.provider),
     mode: parsed.mode === 'edit' ? 'edit' : 'create',
     model: typeof parsed.model === 'string' && parsed.model.trim() ? parsed.model.trim() : undefined,
     fallbackUsed: parsed.fallbackUsed === true,

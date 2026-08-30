@@ -26,6 +26,7 @@ import {
   IMAGE_PROVIDER_PREFERENCE_VALUES,
   type ImageAspectRatio,
   type ImageGenerationResult,
+  type ImageProviderPreference,
   type MediaToolResultDetails,
   type ImageToolResultDetails,
   type ImageVisionReview,
@@ -61,7 +62,7 @@ interface MediaToolParams {
   prompt?: string;
   input_urls?: string[];
   question?: string;
-  provider?: 'auto' | 'fal' | 'comfyui';
+  provider?: ImageProviderPreference;
   model?: string;
   num_images?: number;
   width?: number;
@@ -185,7 +186,7 @@ function providerPreferenceSchema() {
   return Type.Optional(Type.Union(
     IMAGE_PROVIDER_PREFERENCE_VALUES.map((value) => Type.Literal(value)),
     {
-      description: 'Optional provider preference: auto picks the configured default, fal is the paid hosted provider, comfyui is the local pipeline.',
+      description: 'Optional provider preference: auto picks the configured default, fal is hosted and paid, comfyui uses raw local HTTP, and comfyui_mcp uses the governed MCP adapter.',
     },
   ));
 }
@@ -397,12 +398,12 @@ function buildMediaResultDetails(
 
 function preflightPaidImageGeneration(input: {
   action: 'generate' | 'edit';
-  provider?: 'auto' | 'fal' | 'comfyui';
+  provider?: ImageProviderPreference;
   model?: string;
   imageCount?: number;
   inputImageCount?: number;
 }): void {
-  if (input.provider === 'comfyui') {
+  if (input.provider === 'comfyui' || input.provider === 'comfyui_mcp') {
     return;
   }
   assertChargeSurfaceAvailable('paidImageGeneration', {
@@ -421,7 +422,7 @@ function chargeImageGeneration(
   action: 'generate' | 'edit',
   source: { toolName: string; toolCallId?: string },
 ): void {
-  if (result.provider === 'comfyui') {
+  if (result.provider === 'comfyui' || result.provider === 'comfyui_mcp') {
     chargeSurface('localImageGeneration', {
       recordZeroCost: true,
       details: {
@@ -550,14 +551,14 @@ function resolveInvalidFalModelError(
   model: string | undefined,
   validModels: readonly string[],
 ): AgentToolResult<MediaToolResultDetails> | null {
-  if (provider === 'comfyui') return null;
+  if (provider === 'comfyui' || provider === 'comfyui_mcp') return null;
   const normalizedModel = model?.trim();
   if (!normalizedModel) return null;
   if ((validModels as readonly string[]).includes(normalizedModel)) return null;
   return textResultWithError(
     `Invalid "model" value "${normalizedModel}" for ${GENERATE_IMAGE_TOOL_NAME} action="${action}". `
     + `Valid ${action === 'generate' ? 'generation' : 'edit'} models: ${validModels.join(', ')}. `
-    + 'Omit "model" to use the default model chain, or set provider="comfyui" for a local ComfyUI model.',
+    + 'Omit "model" to use the default model chain, or select a ComfyUI provider for a local model.',
     true,
   );
 }
@@ -968,7 +969,7 @@ function createImageGenerationTool(
       toolCallId: string,
       params: {
         prompt: string;
-        provider?: 'auto' | 'fal' | 'comfyui';
+        provider?: ImageProviderPreference;
         model?: typeof FAL_CREATE_MODELS[number];
         num_images?: number;
         width?: number;
@@ -1054,7 +1055,7 @@ function createImageGenerationTool(
             },
           });
 
-          if (effectiveProvider === 'comfyui') {
+          if (effectiveProvider === 'comfyui' || effectiveProvider === 'comfyui_mcp') {
             result = await runReferenceEdit(params.edit_model, prompt);
           } else {
             const editChain = resolveSelfieEditModelChain(

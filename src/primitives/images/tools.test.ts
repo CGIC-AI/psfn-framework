@@ -7,7 +7,13 @@ import type { AgentToolResult } from '../../boundary/pi-agent/index.js';
 import type { TextContent } from '@earendil-works/pi-ai';
 import { runWithVisionToolRequestContext } from './request-context.js';
 import { createGenerateImageTool, createSelfieTool } from './tools.js';
-import { IMAGE_ASPECT_RATIO_VALUES, type ImageToolResultDetails, type ImageVisionReviewer, type MediaToolResultDetails } from './types.js';
+import {
+  IMAGE_ASPECT_RATIO_VALUES,
+  IMAGE_PROVIDER_PREFERENCE_VALUES,
+  type ImageToolResultDetails,
+  type ImageVisionReviewer,
+  type MediaToolResultDetails,
+} from './types.js';
 import {
   chargeSurface,
   getRunChargeSnapshot,
@@ -55,6 +61,15 @@ function readActions(tool: ReturnType<typeof createGenerateImageTool>): string[]
   const schema = (tool.parameters as {
     properties?: Record<string, { anyOf?: Array<{ const?: string }> }>;
   }).properties?.action;
+  return (schema?.anyOf ?? [])
+    .map((entry) => entry.const)
+    .filter((value): value is string => typeof value === 'string');
+}
+
+function readProviders(tool: { parameters: unknown }): string[] {
+  const schema = (tool.parameters as {
+    properties?: Record<string, { anyOf?: Array<{ const?: string }> }>;
+  }).properties?.provider;
   return (schema?.anyOf ?? [])
     .map((entry) => entry.const)
     .filter((value): value is string => typeof value === 'string');
@@ -572,6 +587,55 @@ describe('image tools', () => {
 
     expect(readAspectRatios(mediaTool)).toEqual([...IMAGE_ASPECT_RATIO_VALUES]);
     expect(readAspectRatios(selfieTool)).toEqual([...IMAGE_ASPECT_RATIO_VALUES]);
+  });
+
+  it('exposes ComfyUI MCP on both image tools and keeps referenced selfies on one local edit attempt', async () => {
+    const edit = vi.fn<ImageOperations['edit']>(async () => ({
+      provider: 'comfyui_mcp',
+      mode: 'edit',
+      fallbackUsed: false,
+      images: [],
+    }));
+    const ops: ImageOperations = {
+      resolveSettingsDefaults: () => ({ provider: 'comfyui_mcp' }),
+      create: vi.fn(),
+      edit,
+    };
+    const referenceResolver = {
+      resolveForTool: vi.fn(async () => ({
+        id: 'ref-default',
+        dataUrl: 'data:image/png;base64,cmVm',
+        description: 'default portrait',
+        tags: ['default'],
+      })),
+    };
+    const mediaTool = createGenerateImageTool(ops);
+    const selfieTool = createSelfieTool(ops, undefined, { referenceResolver });
+
+    const emitted: Array<[string, Record<string, unknown>]> = [];
+    const eventBus = fromAny({
+      emit: vi.fn(async (eventName: string, payload: Record<string, unknown>) => {
+        emitted.push([eventName, payload]);
+      }),
+    });
+    await runWithChargeContext({
+      chargePolicy: makeInteractiveQuotaPolicy(0),
+      eventBus,
+      lane: 'interactive',
+      runId: 'configured-comfy-mcp-selfie',
+    }, async () => await selfieTool.execute('tool-call-comfy-mcp-selfie', {
+      prompt: 'a local reference portrait',
+    }));
+
+    expect(readProviders(mediaTool)).toEqual([...IMAGE_PROVIDER_PREFERENCE_VALUES]);
+    expect(readProviders(selfieTool)).toEqual([...IMAGE_PROVIDER_PREFERENCE_VALUES]);
+    expect(edit).toHaveBeenCalledOnce();
+    expect(edit).toHaveBeenCalledWith(expect.objectContaining({
+      imageUrls: ['data:image/png;base64,cmVm'],
+      model: undefined,
+      settingsDefaults: { provider: 'comfyui_mcp' },
+    }));
+    expect(emitted.map(([, payload]) => payload.surface)).toEqual(['localImageGeneration']);
   });
 
   it('returns generated image results plus an in-turn vision review', async () => {

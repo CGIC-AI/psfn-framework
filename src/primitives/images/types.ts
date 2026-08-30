@@ -28,7 +28,7 @@ export const IMAGE_ASPECT_RATIO_VALUES = [
   '1:8',
 ] as const;
 
-export const IMAGE_PROVIDER_VALUES = ['fal', 'comfyui'] as const;
+export const IMAGE_PROVIDER_VALUES = ['fal', 'comfyui', 'comfyui_mcp'] as const;
 export const IMAGE_PROVIDER_PREFERENCE_VALUES = ['auto', ...IMAGE_PROVIDER_VALUES] as const;
 
 export type FalCreateModel = typeof FAL_CREATE_MODELS[number];

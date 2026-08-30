@@ -476,6 +476,46 @@ distinct — the workspace is the companion's Personal Workspace, not runtime
 state or configuration — and the runtime rejects missing or overlapping
 production roots.
 
+### ComfyUI through MCP
+
+Set the companion's `imageProvider` in `settings.json` to `comfyui_mcp` to keep
+the model-facing `generate_image` and `selfie_create` tools while routing image
+creation through the gateway MCP trust boundary. The system-owned
+`mcp-servers.json` must contain an enabled server whose id is exactly
+`comfyui`, allow that companion id, and classify the exact screened tool
+definitions for `generate_image` and `edit_image` with their
+`metadataSha256` fingerprints. The companion also needs the `external.mcp`
+capability. Server and tool trust ceilings must allow `personal` outbound
+content; edits containing inline image bytes are classified `confidential`.
+
+The Comfy-side MCP tools receive snake-case image arguments (`prompt`,
+`num_images`, `input_urls`, and the applicable optional image controls). They
+may return either standard MCP `image`/`resource_link` content blocks or this
+structured result:
+
+```json
+{
+  "structuredContent": {
+    "request_id": "render-123",
+    "model": "configured-workflow",
+    "images": [
+      {
+        "url": "https://images.example.test/render-123.png",
+        "content_type": "image/png",
+        "file_name": "render-123.png"
+      }
+    ]
+  }
+}
+```
+
+Provider errors, withheld output, unclassified tools, and malformed or empty
+image results fail closed. The adapter invokes with `confirmed: false`, so it
+never bypasses an MCP policy that requires confirmation. Configure these image
+tools with `confirmation: "never"` only when the operator accepts the existing
+image-tool governance as the approval boundary. Deploying ComfyUI or its MCP
+server remains operator-owned and outside this public repository.
+
 Do not edit generated owner files inside an image. Change them through Garden
 or in the persistent owner-file location; the Helm init container copies only
 missing files, so upgrades never overwrite settings changed through Garden.

@@ -26,14 +26,23 @@ const PORTAL_HTTP_POLICY = Object.freeze({
   ]),
 });
 
-interface FleetPortalProjectionPort {
+export interface FleetPortalProjectionPort {
   resolve(input: unknown): Promise<FleetPortalProjection>;
+  /**
+   * Unconditional full-manifest projection for the configured ADMIN_TOKEN
+   * door. Optional: a projection without it fails the admin-token portal
+   * closed with an unavailable response instead of guessing a session scope.
+   */
+  resolveAdminToken?(): Promise<FleetPortalProjection>;
 }
 
 interface FleetPortalRouteRequest {
   readonly request: IncomingMessage;
   readonly response: ServerResponse;
-  readonly sessionToken: string;
+  /** SSO session identity; absent when the request authenticated with ADMIN_TOKEN. */
+  readonly sessionToken?: string;
+  /** True when the request carried the configured ADMIN_TOKEN (bearer or cookie). */
+  readonly adminToken?: boolean;
   readonly rawPath: string;
   readonly rawQuery: string;
 }
@@ -113,9 +122,7 @@ export class GatewayFleetPortalHttpRoutes {
       return;
     }
     try {
-      const projection = await this.options.projection.resolve({
-        sessionToken: input.sessionToken,
-      });
+      const projection = await this.resolveProjection(input);
       if (isApi) {
         const body = serializeFleetPortalProjection(projection);
         input.response.writeHead(200, {
@@ -144,5 +151,23 @@ export class GatewayFleetPortalHttpRoutes {
       }
       sendJson(input.response, 503, { error: { type: 'fleet_portal_unavailable' } });
     }
+  }
+
+  private async resolveProjection(
+    input: FleetPortalRouteRequest,
+  ): Promise<FleetPortalProjection> {
+    if (input.adminToken === true) {
+      const resolveAdminToken = this.options.projection.resolveAdminToken;
+      if (!resolveAdminToken) {
+        throw new Error('Fleet portal projection cannot serve the admin-token door');
+      }
+      return await resolveAdminToken.call(this.options.projection);
+    }
+    if (!input.sessionToken) {
+      throw new FleetAuthorizationDeniedError('session_absent');
+    }
+    return await this.options.projection.resolve({
+      sessionToken: input.sessionToken,
+    });
   }
 }

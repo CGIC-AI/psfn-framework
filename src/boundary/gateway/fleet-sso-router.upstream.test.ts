@@ -1,6 +1,6 @@
 import { generateKeyPairSync } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import type { IncomingHttpHeaders, IncomingMessage, RequestOptions } from 'node:http';
+import type { IncomingHttpHeaders, IncomingMessage, RequestOptions, ServerResponse } from 'node:http';
 import { Readable } from 'node:stream';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -9,6 +9,8 @@ import {
 } from '../fleet-auth/request-capability.js';
 import { createCompanionId } from '../../shared/routing/companion-id.js';
 import type { FleetAuthorizationContext } from './fleet-authorization-context.js';
+import type { FleetGardenUiAssetsPort } from './fleet-garden-ui-assets.js';
+import type { FleetPortalProjection } from './fleet-portal-projection.js';
 import { GatewayFleetSsoRouter } from './fleet-sso-router.js';
 
 const { httpRequest } = vi.hoisted(() => ({ httpRequest: vi.fn() }));
@@ -128,6 +130,38 @@ function adminLoginRequest(token: string): IncomingMessage {
   return incoming;
 }
 
+function portalRequest(path: string, headers: IncomingHttpHeaders = {}): IncomingMessage {
+  const incoming = Readable.from([]) as IncomingMessage;
+  incoming.method = 'GET';
+  incoming.url = path;
+  incoming.headers = {
+    host: 'fleet.example.test',
+    accept: 'text/html',
+    'x-forwarded-host': 'fleet.example.test',
+    'x-forwarded-proto': 'https',
+    'x-forwarded-port': '443',
+    'x-forwarded-for': '198.51.100.9',
+    ...headers,
+  };
+  Object.defineProperty(incoming, 'socket', { value: {} });
+  return incoming;
+}
+
+function adminPortalProjection(): FleetPortalProjection {
+  return {
+    schemaVersion: 2,
+    generatedAt: new Date(1_783_000_000 * 1_000).toISOString(),
+    session: { state: 'authenticated' },
+    companions: [{
+      companionId: COMPANION_ID,
+      displayName: 'Test Companion',
+      health: { agentRpc: 'up', adminTransport: 'unknown', channels: 'unknown' },
+      posture: { status: 'unavailable' },
+      gardenPath: `/companions/${COMPANION_ID}/garden`,
+    }],
+  };
+}
+
 function ssoAuthorization(nowSeconds: number): FleetAuthorizationContext {
   return Object.freeze({
     principalId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
@@ -173,6 +207,11 @@ function createRouter(
     oversizedCapability?: boolean;
     broker?: { resolveAuthorizationContext: ReturnType<typeof vi.fn> };
     adminToken?: string;
+    portalProjection?: {
+      resolve: ReturnType<typeof vi.fn>;
+      resolveAdminToken?: ReturnType<typeof vi.fn>;
+    };
+    portalUi?: FleetGardenUiAssetsPort;
   } = {},
 ): GatewayFleetSsoRouter {
   const nowSeconds = 1_783_000_000;
@@ -204,7 +243,8 @@ function createRouter(
       }],
     }),
     replay: { consume: async input => ({ outcome: 'consumed', result: input.consumeResult }) },
-    portalProjection: { resolve: vi.fn() },
+    portalProjection: options.portalProjection ?? { resolve: vi.fn() },
+    ...(options.portalUi ? { portalUi: options.portalUi } : {}),
     modelUsageProjection: { resolve: vi.fn() },
     upstreams: [{
       companionId: COMPANION_ID,
@@ -564,6 +604,84 @@ describe('Fleet Garden dual admin admission', () => {
 
     await vi.waitFor(() => expect(socket.end).toHaveBeenCalled());
     expect(socket.end).toHaveBeenCalledWith(expect.stringMatching(/^HTTP\/1\.1 401 /u));
+    expect(httpRequest).not.toHaveBeenCalled();
+  });
+
+  it('lands a token-authenticated browser on the fleet portal instead of looping back to the login form', async () => {
+    const servePage = vi.fn((_request: IncomingMessage, res: ServerResponse) => {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end(Buffer.from('<html>portal</html>'));
+    });
+    const resolveAdminToken = vi.fn(async () => adminPortalProjection());
+    const router = createRouter(3211, { warn: vi.fn() }, {
+      adminToken: ADMIN_TOKEN,
+      portalProjection: { resolve: vi.fn(), resolveAdminToken },
+      portalUi: { isEnabled: () => true, servePage, serveAsset: vi.fn() },
+    });
+    const probe = responseProbe();
+
+    await router.handle(
+      portalRequest('/fleet', { cookie: `psfn_token=${ADMIN_TOKEN}` }),
+      probe.response as never,
+    );
+
+    expect(probe.response.statusCode).toBe(200);
+    expect(probe.response.writeHead).not.toHaveBeenCalledWith(
+      302,
+      expect.objectContaining({ Location: '/fleet/login' }),
+    );
+    expect(resolveAdminToken).toHaveBeenCalledOnce();
+    expect(servePage).toHaveBeenCalledOnce();
+    expect(httpRequest).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['cookie', { cookie: `psfn_token=${ADMIN_TOKEN}` }],
+    ['bearer', { authorization: `Bearer ${ADMIN_TOKEN}` }],
+  ] as const)('serves the portal API companion roster to the ADMIN_TOKEN %s without an SSO session', async (_kind, headers) => {
+    const resolve = vi.fn();
+    const resolveAdminToken = vi.fn(async () => adminPortalProjection());
+    const router = createRouter(3211, { warn: vi.fn() }, {
+      adminToken: ADMIN_TOKEN,
+      portalProjection: { resolve, resolveAdminToken },
+    });
+    const probe = responseProbe();
+
+    await router.handle(
+      portalRequest('/v1/fleet/portal', { accept: 'application/json', ...headers }),
+      probe.response as never,
+    );
+
+    expect(probe.response.statusCode).toBe(200);
+    const body = JSON.parse(probe.body()) as {
+      companions: { companionId: string; gardenPath?: string }[];
+    };
+    expect(body.companions).toHaveLength(1);
+    expect(body.companions[0]).toMatchObject({
+      companionId: COMPANION_ID,
+      gardenPath: `/companions/${COMPANION_ID}/garden`,
+    });
+    expect(resolveAdminToken).toHaveBeenCalledOnce();
+    expect(resolve).not.toHaveBeenCalled();
+    expect(httpRequest).not.toHaveBeenCalled();
+  });
+
+  it('fails closed on the admin-token portal when the projection cannot serve the unconditional door', async () => {
+    const router = createRouter(3211, { warn: vi.fn() }, {
+      adminToken: ADMIN_TOKEN,
+      portalProjection: { resolve: vi.fn() },
+    });
+    const probe = responseProbe();
+
+    await router.handle(
+      portalRequest('/v1/fleet/portal', {
+        accept: 'application/json',
+        cookie: `psfn_token=${ADMIN_TOKEN}`,
+      }),
+      probe.response as never,
+    );
+
+    expect(probe.response.statusCode).toBe(503);
     expect(httpRequest).not.toHaveBeenCalled();
   });
 });

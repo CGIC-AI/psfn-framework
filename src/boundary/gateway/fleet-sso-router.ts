@@ -72,8 +72,8 @@ import {
 import {
   FLEET_PORTAL_API_PATH,
   GatewayFleetPortalHttpRoutes,
+  type FleetPortalProjectionPort,
 } from './fleet-portal-http-routes.js';
-import type { GatewayFleetPortalProjection } from './fleet-portal-projection.js';
 import {
   FleetGardenUiAssets,
   type FleetGardenUiAssetsPort,
@@ -168,7 +168,7 @@ export interface GatewayFleetSsoRouterOptions extends FleetSsoTrustedOriginOptio
   readonly signer: GatewayRequestCapabilitySigner;
   readonly verifier: RequestCapabilityVerifier;
   readonly replay: RequestCapabilityReplayPort;
-  readonly portalProjection: Pick<GatewayFleetPortalProjection, 'resolve'>;
+  readonly portalProjection: FleetPortalProjectionPort;
   readonly portalUi?: FleetGardenUiAssetsPort;
   readonly modelUsageProjection: FleetModelUsageProjectionPort;
   readonly escalation?: Pick<FleetEscalationCoordinator, 'consumeGrant'>;
@@ -792,7 +792,8 @@ export class GatewayFleetSsoRouter {
         await this.proxyHttp(request, response, upstream, route, body, issued);
         return;
       }
-      const adminTokenRoute = this.matchesAdminToken(request)
+      const adminTokenMatched = this.matchesAdminToken(request);
+      const adminTokenRoute = adminTokenMatched
         ? parseGardenRoute(request.url ?? '/')
         : null;
       if (adminTokenRoute) {
@@ -825,6 +826,21 @@ export class GatewayFleetSsoRouter {
       }
       const sessionToken = readOpaqueSessionCookie(request);
       if (!sessionToken) {
+        if (adminTokenMatched && (
+          this.portalRoutes.matches(rawPath) || rawPath.startsWith(FLEET_PORTAL_API_PATH)
+        )) {
+          // The ADMIN_TOKEN door lands on the fleet portal after login: serve
+          // the page and its companion roster through the unconditional
+          // full-manifest projection instead of looping back to the login form.
+          await this.portalRoutes.handle({
+            request,
+            response,
+            adminToken: true,
+            rawPath,
+            rawQuery,
+          });
+          return;
+        }
         if (isHtmlNavigation(request) && (
           rawPath === FLEET_PATH
           || rawPath === `${FLEET_PATH}/`

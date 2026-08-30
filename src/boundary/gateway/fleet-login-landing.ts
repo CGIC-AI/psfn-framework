@@ -271,7 +271,11 @@ export class GatewayFleetLoginLanding {
   constructor(
     private readonly registration?: FleetBreakGlassLoginRegistration,
     private readonly adminTokenEnabled = false,
-  ) {}
+  ) {
+    // Fail closed at startup, not at first request: an off-origin break-glass
+    // login target is a misconfiguration the deployment must not boot with.
+    if (registration) validateLoginPath(registration.loginPath);
+  }
 
   send(response: ServerResponse, error?: string): void {
     const body = pageBody(this.registration, this.adminTokenEnabled, error);

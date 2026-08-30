@@ -63,7 +63,10 @@ import type {
   FatigueRoomEpisodeCircuitBreakerConfig,
   FatigueSocialPotConfig,
 } from '../../../shared/contracts/charge-policy.js';
-import type { ParticipationAppraisal } from '../../participation/types.js';
+import type {
+  EndogenousRoomParticipationCandidate,
+  ParticipationAppraisal,
+} from '../../participation/types.js';
 import {
   assessRoomEpisodeCircuitBreaker,
   type RoomEpisodeCircuitBreakerFiring,
@@ -104,24 +107,28 @@ export interface RoomEpisodePressureAssessmentResolver {
   ): RoomEpisodePressureAssessment | Promise<RoomEpisodePressureAssessment>;
 }
 
-/**
- * The triggering room message a reply is generated against. A minimal data shape
- * (no runtime imports) the phase forwards opaquely to the sender; the concrete
- * sender maps it onto the runtime's message/response path. Untrusted room text —
- * the sender is responsible for routing it through the normal gated response
- * path (bible §8.2 "a reply still routes through the full normal response path
- * and its egress gates"), never a bespoke ungated generation.
- */
-export interface EgressReplyTrigger {
+/** An inbound participant message that nominated a room reply. */
+export interface InboundRoomMessageEgressReplyTrigger {
+  kind: 'inbound_room_message';
   channelId: string;
   /** The platform channel type (e.g. `discord`); kept as a string to avoid a runtime import. */
   channelType: string;
-  sourceMessageId: string;
+  sourceEventId: string;
   authorId: string;
   authorName: string;
   content: string;
-  timestampMs: number;
+  occurredAtMs: number;
 }
+
+/**
+ * The exact source that an autonomous reply is generated from. Inbound room
+ * messages remain untrusted participant text. Endogenous room candidates carry
+ * a durable companion-authored disposition and never masquerade as an inbound
+ * participant message.
+ */
+export type EgressReplyTrigger =
+  | InboundRoomMessageEgressReplyTrigger
+  | EndogenousRoomParticipationCandidate;
 
 /** The delivery outcome the injected sender reports back. */
 export type EgressReplyDeliveryOutcome = 'delivered' | 'failed';
@@ -131,7 +138,7 @@ export interface EgressReplyDeliveryRequest {
   /** The exclusive fenced lease this send owns. */
   lease: SpeakingEgressLeaseSnapshot;
   appraisal: Extract<ParticipationAppraisal, { action: 'reply' }>;
-  /** The triggering room message this reply answers. */
+  /** The inbound message or first-class endogenous candidate this reply answers. */
   trigger: EgressReplyTrigger;
   nowMs: number;
 }
@@ -154,6 +161,7 @@ export interface EgressReplySender {
 
 /** The lifecycle stage a fail-closed `gate_error` occurred at (content-free). */
 export type EgressLeaseErrorStage =
+  | 'trigger'
   | 'room_pressure'
   | 'breaker'
   | 'fairness'
@@ -422,6 +430,24 @@ export class SpeakingEgressLeasePhase {
       assertNonEmpty(triggerEventId, 'triggerEventId');
     } catch {
       return { ...base, outcome: 'gate_error', errorStage: 'room_pressure' };
+    }
+
+    // The fenced lease and the generation source must describe the exact same
+    // room event. Endogenous candidates additionally prove local companion
+    // authorship instead of supplying a forged participant identity.
+    try {
+      assertNonEmpty(trigger.channelId, 'trigger.channelId');
+      assertNonEmpty(trigger.sourceEventId, 'trigger.sourceEventId');
+      assertFiniteTimestamp(trigger.occurredAtMs, 'trigger.occurredAtMs');
+      if (trigger.channelId !== channelId || trigger.sourceEventId !== triggerEventId) {
+        throw new Error('egress reply trigger does not match its reservation');
+      }
+      if (trigger.kind === 'endogenous_room_candidate'
+        && trigger.companionId !== this.companionId) {
+        throw new Error('endogenous room candidate belongs to another companion');
+      }
+    } catch {
+      return { ...base, outcome: 'gate_error', errorStage: 'trigger' };
     }
 
     // 1. Reservation-status guard (jp36.5.1.2 handoff): a settled/expired

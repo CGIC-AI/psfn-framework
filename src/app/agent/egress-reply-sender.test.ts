@@ -6,7 +6,9 @@ import {
   type EgressLeasePhaseConfig,
   type EgressReplyDeliveryRequest,
   type EgressReplyTrigger,
+  type InboundRoomMessageEgressReplyTrigger,
 } from '../../core/agent/arbiter/egress-lease-phase.js';
+import { createEndogenousRoomParticipationCandidate } from '../../core/participation/endogenous-room-candidate.js';
 import type {
   SpeakingEgressLeaseSnapshot,
   SpeakingReservationSnapshot,
@@ -19,19 +21,22 @@ function makeResponse(content: string): AgentResponse {
   return { content } as AgentResponse;
 }
 
-function makeRequest(overrides: Partial<EgressReplyDeliveryRequest['trigger']> = {}): EgressReplyDeliveryRequest {
+function makeRequest(
+  overrides: Partial<InboundRoomMessageEgressReplyTrigger> = {},
+): EgressReplyDeliveryRequest {
   return {
     reservation: {} as EgressReplyDeliveryRequest['reservation'],
     lease: {} as EgressReplyDeliveryRequest['lease'],
     appraisal: { action: 'reply', reasonCode: 'addressed', confidence: 0.9 },
     trigger: {
+      kind: 'inbound_room_message',
       channelId: 'discord:guild-1:general',
       channelType: 'discord',
-      sourceMessageId: 'evt-1',
+      sourceEventId: 'evt-1',
       authorId: 'human-1',
       authorName: 'Sam',
       content: 'hey companion',
-      timestampMs: 1_000,
+      occurredAtMs: 1_000,
       ...overrides,
     },
     nowMs: 2_000,
@@ -86,6 +91,35 @@ describe('createAgentLoopEgressReplySender', () => {
     expect(genMessage?.content).toContain('[Sam]: hey companion');
     // The trimmed reply is delivered to the REAL room channel.
     expect(delivery.send).toHaveBeenCalledWith('discord', 'discord:guild-1:general', 'Hi Sam!');
+  });
+
+  it('authors an endogenous room candidate without fabricating an inbound participant message', async () => {
+    const generator = { handleMessage: vi.fn(async () => makeResponse('A room thought.')) };
+    const delivery = { send: vi.fn(async () => undefined) };
+    const sender = makeSender(generator, delivery);
+    const request = makeRequest();
+    request.trigger = createEndogenousRoomParticipationCandidate({
+      sourceEventId: 'felt-impulse:would_message:1780000000000',
+      candidateId: 'binding-hash',
+      channelId: 'discord:guild-1:general',
+      channelType: 'discord',
+      companionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      roomIntent: 'Ask how the shared project is going.',
+      occurredAtMs: 1_780_000_000_100,
+    });
+
+    await expect(sender.deliver(request)).resolves.toMatchObject({ outcome: 'delivered' });
+
+    const prompt: string = generator.handleMessage.mock.calls[0]?.[0]?.content ?? '';
+    expect(prompt).toContain('No participant message triggered this candidate');
+    expect(prompt).toContain('"Ask how the shared project is going."');
+    expect(prompt).not.toContain('A message below mentioned or addressed you');
+    expect(prompt).not.toContain('[Test Companion]:');
+    expect(delivery.send).toHaveBeenCalledWith(
+      'discord',
+      'discord:guild-1:general',
+      'A room thought.',
+    );
   });
 
   it('reports a non-delivery (never sends empty) when the model declines', async () => {
@@ -399,13 +433,14 @@ function makePhaseLease(leaseId: string, nowMs: number): SpeakingEgressLeaseSnap
 }
 
 const PHASE_TRIGGER: EgressReplyTrigger = {
+  kind: 'inbound_room_message',
   channelId: CHANNEL,
   channelType: 'discord',
-  sourceMessageId: TRIGGER_EVENT,
+  sourceEventId: TRIGGER_EVENT,
   authorId: 'human-1',
   authorName: 'Sam',
   content: 'hey companion, thoughts?',
-  timestampMs: 4_000,
+  occurredAtMs: 4_000,
 };
 
 describe('post-TTL re-drive delivers exactly once (qgqw.3 regression)', () => {

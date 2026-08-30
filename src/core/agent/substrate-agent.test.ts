@@ -3120,6 +3120,26 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(response.metadata.durationMs).toBeGreaterThanOrEqual(0);
   });
 
+  it('can return completed-turn disclosure lineage without leaving live turn state exposed', async () => {
+    const config = makeConfig();
+    const agent = new SubstrateAgent(
+      new EventBus(), makeMockLLMProvider(), makeMockSessionManager(), 'test', config,
+    );
+
+    let completedDisclosureLineage: DisclosureLineage | undefined;
+    const response = await agent.handleMessage(
+      makeMessage(),
+      undefined,
+      undefined,
+      lineage => { completedDisclosureLineage = lineage; },
+    );
+
+    expect(response.content).toBe(TEST_ASSISTANT_RESPONSE);
+    expect(completedDisclosureLineage).toBeDefined();
+    expect(completedDisclosureLineage?.generationContextRef).toBeTruthy();
+    expect(agent.getCurrentTurnDisclosureLineage()).toBeUndefined();
+  });
+
   it('fails closed for Discord image turns when gateway binary fetch is unavailable', async () => {
     const config = makeConfig({
       modelRoster: {

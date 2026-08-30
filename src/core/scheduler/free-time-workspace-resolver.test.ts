@@ -254,6 +254,15 @@ describe('resolveFreeTimeWorkspace — fail-closed + continuity invariants', () 
       makeDeps(),
     )).toThrow();
   });
+
+  it('rejects traversal and foreign internal prefixes in session-key segments', () => {
+    for (const projectRef of ['project:../escape', 'project:internal:reflection:foreign']) {
+      expect(() => resolveFreeTimeWorkspace(
+        { kind: 'create_workspace', projectRef, workspace: { kind: 'private' } },
+        makeDeps(),
+      )).toThrow(/project ref/u);
+    }
+  });
 });
 
 describe('FreeTimeWorkspaceResolver (§13.2 resolve half)', () => {

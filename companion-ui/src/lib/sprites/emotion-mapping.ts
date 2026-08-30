@@ -200,6 +200,7 @@ export const TOOL_NAME_DOMAIN: Readonly<Record<string, FirstPartyToolDomain>> = 
   generate_image: 'media',
   selfie_create: 'self_expression',
   publication: 'self_expression',
+  letter: 'self_expression',
   subagent: 'subagents',
   vault: 'knowledge',
   journal: 'memory',

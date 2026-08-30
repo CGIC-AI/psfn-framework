@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  canReceiveEmotion,
   canReceiveStreamingAudio,
   EmbodiedSessionRegistry,
   THIN_SHELL_CAPABILITIES,
+  VOXTA_VAM_CAPABILITIES,
 } from "./embodied-session.js";
 
 test("embodied session registry derives one stable PSFN hub channel", () => {
@@ -32,6 +34,8 @@ test("embodied session registry derives one stable PSFN hub channel", () => {
 
 test("thin shell capabilities are text-only for assistant output", () => {
   assert.equal(canReceiveStreamingAudio(THIN_SHELL_CAPABILITIES), false);
+  assert.equal(canReceiveEmotion(THIN_SHELL_CAPABILITIES), false);
+  assert.equal(canReceiveEmotion(VOXTA_VAM_CAPABILITIES), true);
 });
 
 test("detaching an enrolled satellite removes its cached assertion authority", () => {

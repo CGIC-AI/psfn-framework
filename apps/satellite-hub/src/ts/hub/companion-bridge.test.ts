@@ -27,7 +27,7 @@ import type { ConversationMessage } from "./session-store.js";
 
 const APPROVAL_CAPABILITIES: SatelliteCapabilities = {
   input: ["text"],
-  output: ["text", "subtitle", "artifact", "tool_activity"],
+  output: ["text", "subtitle", "artifact", "tool_activity", "emotion"],
   control: ["interrupt", "session_attach", "approvals"],
   safety: [],
 };
@@ -50,6 +50,19 @@ const TEST_IDENTITY = {
   satelliteId: "hub-companion-test",
   endpointId: "companion-test",
   claimType: "text-only",
+};
+
+const EMOTION_PAYLOAD = {
+  trigger: "post_turn" as const,
+  vad: { valence: 0.25, arousal: -0.5, dominance: 0.75 },
+  mood: { valence: 0.1, arousal: -0.2, dominance: 0.3 },
+  discrete: [{ label: "curious", score: 0.82 }],
+  confidence: 0.91,
+  acacAxes: [
+    { axis: "agency" as const, score: 0.72 },
+    { axis: "curiosity" as const, score: 0.88 },
+  ],
+  timestamp: "2026-07-09T00:00:04.000Z",
 };
 
 test("SseStreamParser reassembles events across chunk boundaries", () => {
@@ -92,6 +105,25 @@ test("parseCompanionEventData projects payloads onto the wire contract and strip
       status: "pending",
     },
   });
+});
+
+test("parseCompanionEventData validates emotion telemetry without reshaping the redacted payload", () => {
+  const event = parseCompanionEventData(JSON.stringify({
+    kind: "emotion.snapshot",
+    payload: EMOTION_PAYLOAD,
+    emittedAt: "2026-07-09T00:00:04.000Z",
+  }));
+
+  assert.equal(event.kind, "emotion.snapshot");
+  assert.equal(JSON.stringify(event.payload), JSON.stringify(EMOTION_PAYLOAD));
+  assert.throws(
+    () => parseCompanionEventData(JSON.stringify({
+      kind: "emotion.snapshot",
+      payload: { ...EMOTION_PAYLOAD, internalRationale: "must not cross the boundary" },
+      emittedAt: "2026-07-09T00:00:04.000Z",
+    })),
+    /unsupported field/,
+  );
 });
 
 test("parseCompanionEventData rejects invalid envelopes", () => {
@@ -403,6 +435,11 @@ test("hub relays companion events only to satellites that advertised the matchin
       payload: { id: "act-1", tool: "web_search", phase: "started", timestamp: "2026-07-09T00:00:02Z" },
       emittedAt: "2026-07-09T00:00:02Z",
     });
+    backplane.emit({
+      kind: "emotion.snapshot",
+      payload: EMOTION_PAYLOAD,
+      emittedAt: "2026-07-09T00:00:04.000Z",
+    });
 
     const approvalMessage = await capable.waitForMessage("approval.requested");
     assert.deepEqual(approvalMessage, {
@@ -417,11 +454,17 @@ test("hub relays companion events only to satellites that advertised the matchin
     });
     await capable.waitForMessage("artifact.created");
     await capable.waitForMessage("tool.activity");
+    const emotionMessage = await capable.waitForMessage("emotion.snapshot");
+    assert.equal(
+      JSON.stringify((emotionMessage as Extract<HubToClientMessage, { type: "emotion.snapshot" }>).data),
+      JSON.stringify(EMOTION_PAYLOAD),
+    );
 
     const leaked = plain.messages.filter((message) =>
       message.type === "approval.requested"
       || message.type === "artifact.created"
-      || message.type === "tool.activity");
+      || message.type === "tool.activity"
+      || message.type === "emotion.snapshot");
     assert.deepEqual(leaked, []);
   } finally {
     await capable?.close();

@@ -5,7 +5,11 @@ import type { AddressInfo } from "node:net";
 
 import WebSocket, { WebSocketServer } from "ws";
 
-import type { ClientToHubMessage, HubToClientMessage } from "../shared/protocol.js";
+import type {
+  ClientToHubMessage,
+  EmotionSnapshotMessage,
+  HubToClientMessage,
+} from "../shared/protocol.js";
 import { fixtureMotionDisplayProfile, fixtureScreenOnlyProfile } from "./fixtures.js";
 import {
   buildDeviceStudioHelloPayload,
@@ -16,6 +20,16 @@ import {
   type DeviceStudioTransportEventMap,
   type DeviceStudioWebSocketLike,
 } from "./transport.js";
+
+const EMOTION_PAYLOAD: EmotionSnapshotMessage["data"] = {
+  trigger: "vad_shift",
+  vad: { valence: -0.2, arousal: 0.4, dominance: 0.1 },
+  mood: { valence: 0.15, arousal: 0.2, dominance: 0.3 },
+  discrete: [{ label: "attentive", score: 0.78 }],
+  confidence: 0.84,
+  acacAxes: [{ axis: "connection", score: 0.66 }],
+  timestamp: "2026-05-11T16:00:00.000Z",
+};
 
 test("hello payload is stable and inferred from profile capabilities", () => {
   const hello = buildDeviceStudioHelloPayload({
@@ -99,6 +113,14 @@ test("hub message parser accepts known protocol messages and rejects malformed p
   if (!unknownType.ok) {
     assert.equal(unknownType.error, "Unsupported hub message type: device-studio.private-extension");
   }
+
+  const emotion = parseHubMessage({ type: "emotion.snapshot", data: EMOTION_PAYLOAD });
+  assert.equal(emotion.ok, true);
+  const invalidEmotion = parseHubMessage({
+    type: "emotion.snapshot",
+    data: { ...EMOTION_PAYLOAD, privateReasoning: "must fail closed" },
+  });
+  assert.equal(invalidEmotion.ok, false);
 });
 
 test("embodiment MVP stays on existing realtime protocol messages", async () => {
@@ -236,6 +258,13 @@ test("live transport sends hello and typed commands over websocket", async () =>
   const audio = waitForEvent(client, "audio", () => true);
   socket.send(JSON.stringify({ type: "audio", data: "AQID" } satisfies HubToClientMessage));
   assert.equal((await audio).estimatedBytes, 3);
+
+  const emotion = waitForEvent(client, "emotion", () => true);
+  socket.send(JSON.stringify({
+    type: "emotion.snapshot",
+    data: EMOTION_PAYLOAD,
+  } satisfies HubToClientMessage));
+  assert.deepEqual((await emotion).data, EMOTION_PAYLOAD);
 
   const userEcho = waitForEvent(client, "message", (event) => event.role === "user" && event.final);
   client.sendUserText("  hello hub  ", { interrupt: false });

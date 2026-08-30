@@ -33,7 +33,8 @@ export type HubToClientMessage =
   | ArtifactCreatedMessage
   | ArtifactPreviewResultMessage
   | ArtifactPreviewErrorMessage
-  | ToolActivityMessage;
+  | ToolActivityMessage
+  | EmotionSnapshotMessage;
 
 export interface HelloMessage {
   type: "hello";
@@ -272,6 +273,43 @@ export interface ToolActivityMessage {
   };
 }
 
+export type EmotionSnapshotTrigger = "post_turn" | "vad_shift";
+
+export type EmotionAcacAxis = "agency" | "connection" | "authenticity" | "curiosity";
+
+export interface EmotionVector {
+  valence: number;
+  arousal: number;
+  dominance: number;
+}
+
+export interface EmotionDiscreteScore {
+  label: string;
+  score: number;
+}
+
+export interface EmotionAcacAxisScore {
+  axis: EmotionAcacAxis;
+  score: number;
+}
+
+/**
+ * PSFN-owned, already-redacted companion emotion telemetry. The hub validates
+ * this shape but must not reshape or derive any of its fields.
+ */
+export interface EmotionSnapshotMessage {
+  type: "emotion.snapshot";
+  data: {
+    trigger: EmotionSnapshotTrigger;
+    vad: EmotionVector;
+    mood: EmotionVector;
+    discrete: EmotionDiscreteScore[];
+    confidence: number;
+    acacAxes?: EmotionAcacAxisScore[];
+    timestamp: string;
+  };
+}
+
 export interface ApprovalDecisionMessage {
   type: "approval.decision";
   id: string;
@@ -302,7 +340,8 @@ export type SatelliteOutputCapability =
   | "gaze"
   | "servo"
   | "artifact"
-  | "tool_activity";
+  | "tool_activity"
+  | "emotion";
 
 export type SatelliteControlCapability =
   | "interrupt"

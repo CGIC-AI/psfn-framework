@@ -24,7 +24,7 @@ export type {
  * HTTP surface (served by the gateway-hosted API edge):
  * - `GET  /v1/companion/events`                 — authenticated SSE stream
  * - `POST /v1/companion/approvals/{id}`         — approval decision
- * - `POST /v1/companion/stimuli`                — typed physical interaction
+ * - `POST /v1/companion/stimuli`                — typed physical or place-transition stimulus
  * - `GET  /v1/companion/artifacts/{id}/preview` — read-only artifact preview
  *
  * These payload shapes mirror hub protocol messages 1:1 — do not deviate.
@@ -265,6 +265,10 @@ export const COMPANION_TOUCH_REGIONS = ['head', 'cheek', 'body'] as const;
 
 export type CompanionTouchRegion = typeof COMPANION_TOUCH_REGIONS[number];
 
+export const COMPANION_LOCATION_TRANSITIONS = ['left', 'arrived'] as const;
+
+export type CompanionLocationTransition = typeof COMPANION_LOCATION_TRANSITIONS[number];
+
 /** Body of `POST /v1/companion/stimuli`. No caller-authored prompt text is accepted. */
 export interface CompanionTouchStimulusRequest {
   satelliteId: string;
@@ -278,6 +282,26 @@ export interface CompanionTouchStimulusRequest {
   durationMs: number;
   responseMode: 'respond' | 'observe';
 }
+
+/**
+ * Hub-derived place transition. Coordinates and caller-authored prose are not
+ * members of this type and the HTTP parser rejects them as unknown fields.
+ */
+export interface CompanionLocationTransitionStimulusRequest {
+  satelliteId: string;
+  endpointId: string;
+  claimType: string;
+  sessionId: string;
+  deviceId: string;
+  kind: CompanionLocationTransition;
+  placeId: string;
+  placeLabel: string;
+  responseMode: 'respond' | 'observe';
+}
+
+export type CompanionStimulusRequest =
+  | CompanionTouchStimulusRequest
+  | CompanionLocationTransitionStimulusRequest;
 
 /** 200 body of `POST /v1/companion/stimuli`. */
 export interface CompanionTouchStimulusResponse {

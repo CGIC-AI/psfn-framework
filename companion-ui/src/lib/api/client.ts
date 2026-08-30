@@ -289,13 +289,9 @@ export class SatelliteHubClient {
     this.send({ type: 'touch.interaction', ...interaction });
   }
 
-  /**
-   * The direct-hub transport terminates raw coordinates at the hub (it
-   * geofences them into a place label and never forwards lat/lon toward PSFN),
-   * so `device.location` may be sent here.
-   */
+  /** True only after the Hub explicitly accepts its coordinate sink capability. */
   supportsDeviceLocation(): boolean {
-    return true;
+    return this.ready && Boolean(this.session.capabilities?.input?.includes('device_location'));
   }
 
   sendDeviceLocation(sample: DeviceLocationSample): void {

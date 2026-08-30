@@ -223,8 +223,10 @@ test("psfn model adapter sends embodied hub channel headers", async () => {
 test("psfn model adapter mints a fresh Hub assertion only from authenticated device authority", async () => {
   const originalFetch = globalThis.fetch;
   const capturedHeaders: Array<Record<string, string>> = [];
+  const capturedBodies: unknown[] = [];
   globalThis.fetch = async (_input: string | URL | Request, init?: RequestInit) => {
     capturedHeaders.push(init?.headers as Record<string, string>);
+    capturedBodies.push(JSON.parse(String(init?.body)));
     return jsonResponse('{"choices":[{"message":{"role":"assistant","content":"ok"}}]}');
   };
   const runtime = buildRuntimeConfig({
@@ -250,6 +252,8 @@ test("psfn model adapter mints a fresh Hub assertion only from authenticated dev
       companionId: "11111111-1111-4111-8111-111111111111",
       placeId: "office",
     },
+    placeId: null,
+    contextNotes: [{ key: "location", text: "Out, near Home." }],
     activeSatellites: [],
   };
   const adapter = new PsfnModelAdapter(runtime, undefined, authenticatedRegistryAuthority());
@@ -273,8 +277,13 @@ test("psfn model adapter mints a fresh Hub assertion only from authenticated dev
     }, {
       deviceId: "office-device",
       companionId: "11111111-1111-4111-8111-111111111111",
-      placeId: "office",
+      placeId: undefined,
     });
+    assert.deepEqual(
+      (capturedBodies[0] as { channel_metadata: { contextNotes: unknown } }).channel_metadata.contextNotes,
+      [{ key: "location", text: "Out, near Home." }],
+    );
+    assert.doesNotMatch(JSON.stringify(capturedBodies), /latitude|longitude|\"lat\"|\"lon\"|40\.005|-75/i);
     assert.equal(JSON.stringify(capturedHeaders).includes("PRIVATE KEY"), false);
   } finally {
     globalThis.fetch = originalFetch;

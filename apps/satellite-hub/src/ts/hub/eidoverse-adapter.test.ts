@@ -470,6 +470,7 @@ function hubConfig(): HubConfig {
     homeAssistant: null,
     control: null,
     deviceRegistry: null,
+    location: null,
     eidoversePlaceMap: parseEidoversePlaceMap({
       schemaVersion: 1,
       worlds: {

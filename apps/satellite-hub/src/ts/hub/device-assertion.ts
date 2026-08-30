@@ -26,6 +26,8 @@ export interface HubDeviceAssertionIssuerConfig {
 export interface IssueHubDeviceAssertionInput {
   device: HubDeviceAssertionAuthority;
   sessionId: string;
+  /** Hub-derived situated place. null deliberately removes a static enrollment place. */
+  placeId?: string | null;
   issuedAtSeconds?: number;
   jti?: string;
 }
@@ -63,8 +65,9 @@ export function createHubDeviceAssertionIssuer(
       if (input.device.enrollmentAssurance !== "device_credential") {
         throw new Error("Hub device assertion enrollment assurance is unsupported");
       }
-      const placeId = input.device.placeId
-        ? requireToken(input.device.placeId, "Hub device assertion place id")
+      const assertedPlaceId = input.placeId === undefined ? input.device.placeId : input.placeId;
+      const placeId = assertedPlaceId
+        ? requireToken(assertedPlaceId, "Hub device assertion place id")
         : undefined;
       const issuedAtSeconds = input.issuedAtSeconds ?? Math.floor(Date.now() / 1000);
       if (!Number.isSafeInteger(issuedAtSeconds) || issuedAtSeconds < 1) {

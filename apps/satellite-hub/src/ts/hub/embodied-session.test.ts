@@ -38,6 +38,31 @@ test("thin shell capabilities are text-only for assistant output", () => {
   assert.equal(canReceiveEmotion(VOXTA_VAM_CAPABILITIES), true);
 });
 
+test("situated context binds and unbinds only the current satellite attachment", () => {
+  const registry = new EmbodiedSessionRegistry();
+  const attachment = registry.attachSatellite({
+    sessionId: "realtime:phone",
+    satelliteId: "phone",
+    satelliteName: "Phone",
+  });
+  registry.setSituatedContext("realtime:phone", "phone", attachment.ownership, {
+    placeId: "home",
+    contextNotes: [],
+  });
+  const atHome = registry.getContext("realtime:phone", "phone", attachment.ownership);
+  assert.equal(atHome.placeId, "home");
+  assert.deepEqual(atHome.contextNotes, []);
+
+  registry.setSituatedContext("realtime:phone", "phone", attachment.ownership, {
+    placeId: null,
+    contextNotes: [{ key: "location", text: "Out, near Home." }],
+  });
+  const context = registry.getContext("realtime:phone", "phone", attachment.ownership);
+  assert.equal(context.placeId, null);
+  assert.deepEqual(context.contextNotes, [{ key: "location", text: "Out, near Home." }]);
+  assert.doesNotMatch(JSON.stringify(context), /lat|lon|coordinate/i);
+});
+
 test("detaching an enrolled satellite removes its cached assertion authority", () => {
   const registry = new EmbodiedSessionRegistry();
   const attachment = registry.attachSatellite({

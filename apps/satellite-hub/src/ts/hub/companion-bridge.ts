@@ -192,6 +192,56 @@ export class CompanionBridge {
     };
   }
 
+  async submitLocationTransition(input: {
+    sessionId: string;
+    deviceId: string;
+    kind: "left" | "arrived";
+    placeId: string;
+    placeLabel: string;
+    responseMode: "observe" | "respond";
+  }): Promise<{ status: "accepted"; messageId: string; response?: string }> {
+    const response = await fetch(`${this.config.baseUrl}/companion/stimuli`, {
+      method: "POST",
+      headers: {
+        ...this.buildHeaders(),
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        ...this.config.identity,
+        sessionId: input.sessionId,
+        deviceId: input.deviceId,
+        kind: input.kind,
+        placeId: input.placeId,
+        placeLabel: input.placeLabel,
+        responseMode: input.responseMode,
+      }),
+    });
+    if (!response.ok) {
+      const body = (await response.text()).trim();
+      throw new CompanionRequestError(
+        response.status,
+        `Companion location transition failed (${response.status})${body ? `: ${body}` : ""}`,
+      );
+    }
+    const payload = await response.json() as {
+      status?: unknown;
+      messageId?: unknown;
+      response?: unknown;
+    };
+    if (payload.status !== "accepted") {
+      throw new Error("Companion location transition response status must be 'accepted'");
+    }
+    const messageId = readRequiredString(payload.messageId, "location transition response messageId");
+    const responseText = payload.response === undefined
+      ? undefined
+      : readRequiredString(payload.response, "location transition response text");
+    return {
+      status: "accepted",
+      messageId,
+      ...(responseText ? { response: responseText } : {}),
+    };
+  }
+
   async fetchArtifactPreview(artifactId: string): Promise<{ mediaType: string; dataBase64: string }> {
     const normalizedId = artifactId.trim();
     if (!normalizedId) {

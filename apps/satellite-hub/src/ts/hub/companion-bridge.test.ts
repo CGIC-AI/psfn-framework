@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash, createPrivateKey } from "node:crypto";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import test from "node:test";
@@ -24,6 +25,9 @@ import type { PsfnChannelContext } from "./embodied-session.js";
 import { normalizeSatelliteClaimConfig } from "./satellite-claim.js";
 import { RealtimeHubServer } from "./server.js";
 import type { ConversationMessage } from "./session-store.js";
+import { createHubDeviceAssertionIssuer } from "./device-assertion.js";
+import { createHubDeviceRegistryAuthority } from "./device-registry.js";
+import type { HubLocationConfig } from "./location-geofence.js";
 
 const APPROVAL_CAPABILITIES: SatelliteCapabilities = {
   input: ["text"],
@@ -64,6 +68,19 @@ const EMOTION_PAYLOAD = {
   ],
   timestamp: "2026-07-09T00:00:04.000Z",
 };
+
+const LOCATION_CREDENTIAL = "phone-location-test-secret";
+const LOCATION_ASSERTION_ISSUER = createHubDeviceAssertionIssuer({
+  issuer: "psfn-satellite-hub",
+  kid: "hub-location-test",
+  audience: "https://fleet.example.test",
+  privateKeyPem: createPrivateKey({
+    key: Buffer.from("MC4CAQAwBQYDK2VwBCIEIBxi3MoZ6dMittBNv2g0RvbmOi9PJuzu5IVCwAL2tIbN", "base64"),
+    format: "der",
+    type: "pkcs8",
+  }).export({ format: "pem", type: "pkcs8" }).toString(),
+  ttlSeconds: 30,
+});
 
 test("SseStreamParser reassembles events across chunk boundaries", () => {
   const parser = new SseStreamParser();
@@ -346,6 +363,37 @@ test("companion bridge submits typed touch stimuli with its registered identity"
   }
 });
 
+test("companion bridge submits only sanitized place-transition semantics", async () => {
+  const backplane = new FakeBackplane();
+  const baseUrl = await backplane.start();
+  const bridge = new CompanionBridge(bridgeConfig(baseUrl));
+
+  try {
+    const result = await bridge.submitLocationTransition({
+      sessionId: "phone-session",
+      deviceId: "phone",
+      kind: "left",
+      placeId: "home",
+      placeLabel: "Home",
+      responseMode: "observe",
+    });
+    assert.deepEqual(result, { status: "accepted", messageId: "stimulus-1" });
+    assert.deepEqual(backplane.stimulusRequests[0]?.body, {
+      ...TEST_IDENTITY,
+      sessionId: "phone-session",
+      deviceId: "phone",
+      kind: "left",
+      placeId: "home",
+      placeLabel: "Home",
+      responseMode: "observe",
+    });
+    assert.doesNotMatch(JSON.stringify(backplane.stimulusRequests), /latitude|longitude|\"lat\"|\"lon\"/i);
+  } finally {
+    await bridge.stop();
+    await backplane.stop();
+  }
+});
+
 test("companion bridge enforces the artifact preview size cap and relays denials", async () => {
   const backplane = new FakeBackplane();
   const baseUrl = await backplane.start();
@@ -570,6 +618,168 @@ test("hub rejects touch interactions from clients without the touch capability",
   }
 });
 
+test("hub rejects device.location from an unauthenticated legacy transport", async () => {
+  const server = new RealtimeHubServer(testHubConfig(), {
+    agent: new FakeAgent(),
+    voxtaTts: null,
+    voxtaStt: null,
+  });
+  let client: TestClient | null = null;
+  try {
+    await server.start();
+    const port = (server.address() as AddressInfo).port;
+    client = await TestClient.connect(port, "legacy-app", {
+      ...PLAIN_CAPABILITIES,
+      input: ["text", "device_location"],
+    });
+    client.clearMessages();
+    client.send({
+      type: "device.location", lat: 40, lon: -75, accuracyM: 10, timestamp: 1_700_000_000_000,
+    });
+    const error = await client.waitForMessage("error-event");
+    assert.match(
+      (error as Extract<HubToClientMessage, { type: "error-event" }>).data.message,
+      /authenticated Hub/,
+    );
+  } finally {
+    await client?.close();
+    await server.close();
+  }
+});
+
+test("authenticated Hub geofences device.location and forwards only typed transitions", async () => {
+  let now = 1_000;
+  const backplane = new FakeBackplane();
+  const baseUrl = await backplane.start();
+  backplane.stimulusResponse = {
+    status: 200,
+    body: JSON.stringify({
+      status: "accepted",
+      messageId: "location-stimulus",
+      response: "Welcome home.",
+    }),
+  };
+  const bridge = new CompanionBridge(bridgeConfig(baseUrl));
+  const registry = createHubDeviceRegistryAuthority(() => ({
+    schemaVersion: 1,
+    devices: [{
+      deviceId: "phone",
+      deviceName: "Phone",
+      satelliteId: "phone",
+      satelliteName: "Phone",
+      endpointId: "phone",
+      claimType: "mobile-location",
+      credentialSha256: createHash("sha256").update(LOCATION_CREDENTIAL).digest("hex"),
+      enrollmentVersion: 1,
+      enrollmentAssurance: "device_credential",
+      enrollmentStatus: "active",
+      companionId: "11111111-1111-4111-8111-111111111111",
+      maxCapabilities: {
+        input: ["text", "device_location"],
+        output: ["text"],
+        control: [],
+        safety: ["local_only"],
+      },
+      homeAssistantEntityIds: [],
+    }],
+  }));
+  const location: HubLocationConfig = {
+    schemaVersion: 1,
+    debounceMs: 100,
+    maxAccuracyM: 50,
+    zones: [{ placeId: "home", label: "Home", lat: 40, lon: -75, radiusM: 100 }],
+  };
+  const captureAgent = new FakeAgent();
+  const server = new RealtimeHubServer(testHubConfig({ deviceRegistry: registry, location }), {
+    agent: captureAgent,
+    voxtaTts: null,
+    voxtaStt: null,
+    companion: bridge,
+    locationNow: () => now,
+  });
+  let client: TestClient | null = null;
+
+  try {
+    await server.start();
+    const port = (server.address() as AddressInfo).port;
+    client = await TestClient.connectAuthenticated(port, {
+      type: "hello",
+      deviceId: "phone",
+      deviceName: "Browser supplied name",
+      credential: LOCATION_CREDENTIAL,
+      capabilities: {
+        input: ["text", "device_location"], output: ["text"], control: [], safety: ["local_only"],
+      },
+    });
+    const ack = client.messages.find(message => message.type === "hello.ack");
+    assert.ok(ack?.type === "hello.ack");
+    assert.deepEqual(ack.capabilities.input, ["text", "device_location"]);
+
+    client.clearMessages();
+    await sendLocationAndFence(client, { lat: 40, lon: -75 }, 1);
+    assert.equal(backplane.stimulusRequests.length, 0, "initial classification is not an arrival event");
+
+    now = 2_000;
+    await sendLocationAndFence(client, { lat: 40.005, lon: -75 }, 2);
+    assert.equal(backplane.stimulusRequests.length, 0, "departure waits for Hub debounce");
+    now = 2_100;
+    await sendLocationAndFence(client, { lat: 40.005, lon: -75 }, 3);
+    await waitFor(() => backplane.stimulusRequests.length === 1, "left transition");
+    assert.deepEqual(backplane.stimulusRequests[0]?.body, {
+      ...TEST_IDENTITY,
+      sessionId: "realtime:phone",
+      deviceId: "phone",
+      kind: "left",
+      placeId: "home",
+      placeLabel: "Home",
+      responseMode: "observe",
+    });
+
+    client.send({ type: "user.text", text: "Where are we?" });
+    await waitFor(() => captureAgent.calls.length === 1, "situated user turn");
+    assert.deepEqual(captureAgent.calls[0]?.channel?.contextNotes, [
+      { key: "location", text: "Out, near Home." },
+    ]);
+    assert.equal(captureAgent.calls[0]?.channel?.placeId, null);
+
+    now = 3_000;
+    await sendLocationAndFence(client, { lat: 40, lon: -75 }, 4);
+    now = 3_100;
+    await sendLocationAndFence(client, { lat: 40, lon: -75 }, 5);
+    await waitFor(() => backplane.stimulusRequests.length === 2, "arrived transition");
+    assert.deepEqual(backplane.stimulusRequests[1]?.body, {
+      ...TEST_IDENTITY,
+      sessionId: "realtime:phone",
+      deviceId: "phone",
+      kind: "arrived",
+      placeId: "home",
+      placeLabel: "Home",
+      responseMode: "respond",
+    });
+    await client.waitForMessage("message");
+
+    const relayed = JSON.stringify({
+      requests: backplane.stimulusRequests,
+      context: captureAgent.calls[0]?.channel,
+    });
+    assert.doesNotMatch(relayed, /40\.005|-75|latitude|longitude|\"lat\"|\"lon\"/i);
+
+    const requestCount = backplane.stimulusRequests.length;
+    client.clearMessages();
+    client.send({
+      type: "device.location", lat: 40, lon: -75, accuracyM: 10,
+      timestamp: 1_700_000_000_000, placeId: "browser-forged",
+    });
+    const invalid = await client.waitForMessage("error-event");
+    assert.match((invalid as Extract<HubToClientMessage, { type: "error-event" }>).data.message, /payload is invalid/);
+    assert.equal(backplane.stimulusRequests.length, requestCount);
+  } finally {
+    await client?.close();
+    await server.close();
+    await backplane.stop();
+  }
+});
+
 test("hub rejects approval decisions from satellites without the approvals capability", async () => {
   const backplane = new FakeBackplane();
   const baseUrl = await backplane.start();
@@ -766,13 +976,22 @@ test("hub without a companion bridge fails closed for approvals and previews", a
 });
 
 class FakeAgent implements FrameworkAgentAdapter {
-  async *streamReply(_input: {
+  readonly calls: Array<{
+    inputMode: FrameworkReplyInputMode;
+    userText: string;
+    conversationId?: string;
+    history?: ConversationMessage[];
+    channel?: PsfnChannelContext;
+  }> = [];
+
+  async *streamReply(input: {
     inputMode: FrameworkReplyInputMode;
     userText: string;
     conversationId?: string;
     history?: ConversationMessage[];
     channel?: PsfnChannelContext;
   }): AsyncGenerator<string, string, void> {
+    this.calls.push(input);
     yield "ok";
     return "ok";
   }
@@ -811,6 +1030,18 @@ class TestClient {
       satelliteName: satelliteId,
       capabilities,
     });
+    await client.waitForMessage("hello.ack");
+    return client;
+  }
+
+  static async connectAuthenticated(port: number, hello: unknown): Promise<TestClient> {
+    const socket = new WebSocket(`ws://127.0.0.1:${port}/`);
+    await new Promise<void>((resolve, reject) => {
+      socket.once("open", resolve);
+      socket.once("error", reject);
+    });
+    const client = new TestClient(socket);
+    client.send(hello);
     await client.waitForMessage("hello.ack");
     return client;
   }
@@ -999,7 +1230,10 @@ function bridgeConfig(baseUrl: string, overrides: Partial<CompanionBridgeConfig>
   };
 }
 
-function testHubConfig(): HubConfig {
+function testHubConfig(options: {
+  deviceRegistry?: HubConfig["deviceRegistry"];
+  location?: HubLocationConfig;
+} = {}): HubConfig {
   const satelliteClaim = normalizeSatelliteClaimConfig({
     capabilityProfile: "text-only",
     satelliteId: "hub-companion-test",
@@ -1021,6 +1255,7 @@ function testHubConfig(): HubConfig {
       model: "psfn",
       channelType: satelliteClaim.channelType,
       satelliteClaim,
+      ...(options.deviceRegistry ? { deviceAssertionIssuer: LOCATION_ASSERTION_ISSUER } : {}),
       voiceReplyDeadlineMs: 8_000,
       voiceAttemptTimeoutMs: 6_000,
       textReplyDeadlineMs: 80_000,
@@ -1029,8 +1264,9 @@ function testHubConfig(): HubConfig {
     companion: null,
     homeAssistant: null,
     control: null,
-    deviceRegistry: null,
+    deviceRegistry: options.deviceRegistry ?? null,
     eidoversePlaceMap: null,
+    location: options.location ?? null,
     voxta: {
       enabled: false,
       satelliteId: "voxta-vam",
@@ -1051,6 +1287,23 @@ function testHubConfig(): HubConfig {
     },
     sessionTtlSeconds: 300,
   };
+}
+
+async function sendLocationAndFence(
+  client: TestClient,
+  point: { lat: number; lon: number },
+  fence: number,
+): Promise<void> {
+  client.clearMessages();
+  client.send({
+    type: "device.location",
+    lat: point.lat,
+    lon: point.lon,
+    accuracyM: 10,
+    timestamp: 1_700_000_000_000 + fence,
+  });
+  client.send({ type: "ping", sentAt: fence });
+  await client.waitForMessage("pong");
 }
 
 async function readBody(request: http.IncomingMessage): Promise<string> {

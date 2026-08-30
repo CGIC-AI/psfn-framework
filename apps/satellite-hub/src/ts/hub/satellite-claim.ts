@@ -199,7 +199,7 @@ export const CAPABILITY_PROFILE_DEFAULTS: Record<SatelliteCapabilityProfile, Pro
     endpointClass: "mobile",
     locationMode: "mobile",
     capabilities: {
-      input: ["microphone_pcm", "final_transcript", "text", "vision_upload", "wake_event"],
+      input: ["microphone_pcm", "final_transcript", "text", "vision_upload", "wake_event", "device_location"],
       output: ["text", "subtitle", "streamed_audio"],
       control: ["interrupt", "presence", "session_attach"],
       safety: ["confirmation_required"],
@@ -339,6 +339,9 @@ export function frameworkCapabilitiesForSatelliteCapabilities(
   if (input.has("vision_upload")) {
     mapped.add("vision");
     mapped.add("image_upload");
+  }
+  if (input.has("device_location")) {
+    mapped.add("location");
   }
   if (output.has("animation") || output.has("expression") || output.has("action") || output.has("gaze")) {
     mapped.add("avatar");

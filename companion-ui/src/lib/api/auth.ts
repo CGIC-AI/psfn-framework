@@ -8,7 +8,7 @@ export interface SatelliteHelloOptions {
 }
 
 export const MOBILE_CHAT_APP_CAPABILITIES: Required<SatelliteCapabilities> = {
-  input: ['text'],
+  input: ['text', 'device_location'],
   output: ['text', 'subtitle', 'artifact', 'tool_activity'],
   control: ['interrupt', 'presence', 'session_attach', 'approvals', 'touch'],
   safety: ['confirmation_required', 'local_only'],

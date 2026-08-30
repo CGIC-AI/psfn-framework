@@ -15,6 +15,10 @@ import {
   loadEidoversePlaceMap,
   type EidoversePlaceMap,
 } from "../hub/eidoverse-place-map.js";
+import {
+  loadHubLocationConfig,
+  type HubLocationConfig,
+} from "../hub/location-geofence.js";
 
 import {
   CAPABILITY_PROFILE_DEFAULTS,
@@ -107,6 +111,7 @@ export interface HubConfig {
   control: HubControlConfig | null;
   deviceRegistry: HubDeviceRegistryAuthority | null;
   eidoversePlaceMap: EidoversePlaceMap | null;
+  location: HubLocationConfig | null;
   voxta: VoxtaFacadeConfig;
   sessionTtlSeconds: number;
 }
@@ -310,6 +315,14 @@ export function loadHubConfig(projectRoot: string): HubConfig {
       ? resolveExistingFile(projectRoot, required("EIDOVERSE_PLACE_MAP_PATH"), "EIDOVERSE_PLACE_MAP_PATH")
       : undefined,
   );
+  const location = loadHubLocationConfig(
+    optional("HUB_LOCATION_CONFIG_PATH")
+      ? resolveExistingFile(projectRoot, required("HUB_LOCATION_CONFIG_PATH"), "HUB_LOCATION_CONFIG_PATH")
+      : undefined,
+  );
+  if (location && !deviceRegistry) {
+    throw new Error("HUB_LOCATION_CONFIG_PATH requires HUB_DEVICE_REGISTRY_PATH for authenticated location authority");
+  }
   if (homeAssistant && !deviceRegistry) {
     throw new Error("HOME_ASSISTANT_ENABLED=true requires HUB_DEVICE_REGISTRY_PATH for trusted room identity");
   }
@@ -333,6 +346,7 @@ export function loadHubConfig(projectRoot: string): HubConfig {
     control,
     deviceRegistry,
     eidoversePlaceMap,
+    location,
     voxta: loadVoxtaFacadeConfig(projectRoot),
     sessionTtlSeconds: Number.parseInt(process.env.SESSION_TTL_SECONDS || "300", 10),
   };

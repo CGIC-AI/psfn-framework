@@ -10,6 +10,7 @@ export type ClientToHubMessage =
   | TurnStartMessage
   | TurnEndMessage
   | TouchInteractionMessage
+  | DeviceLocationMessage
   | ApprovalDecisionMessage
   | ArtifactPreviewRequestMessage;
 
@@ -111,6 +112,15 @@ export interface TouchInteractionMessage {
   region: TouchRegion;
   count: number;
   durationMs: number;
+}
+
+/** Raw coordinates terminate at the authenticated Satellite Hub handler. */
+export interface DeviceLocationMessage {
+  type: "device.location";
+  lat: number;
+  lon: number;
+  accuracyM: number;
+  timestamp: number;
 }
 
 export interface SessionReadyMessage {
@@ -328,7 +338,8 @@ export type SatelliteInputCapability =
   | "microphone_pcm"
   | "final_transcript"
   | "vision_upload"
-  | "wake_event";
+  | "wake_event"
+  | "device_location";
 
 export type SatelliteOutputCapability =
   | "text"

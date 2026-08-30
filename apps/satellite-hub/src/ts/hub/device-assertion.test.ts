@@ -103,6 +103,30 @@ test("refuses revoked enrollment and caller-selected authority fields", () => {
   assert.equal("audience" in issuer.issue, false);
 });
 
+test("uses a Hub-derived situated place override without mutating enrollment authority", () => {
+  const issuer = createHubDeviceAssertionIssuer({
+    issuer: "psfn-satellite-hub",
+    kid: "hub-2026-07",
+    audience: "https://fleet.example.test",
+    privateKeyPem: PRIVATE_KEY_PEM,
+    ttlSeconds: 30,
+  });
+  const issue = (placeId: string | null) => issuer.issue({
+    device,
+    sessionId: "realtime:office-device",
+    placeId,
+    issuedAtSeconds: 1_784_112_400,
+    jti: "018f0f10-79b2-4cc7-8c99-0242ac120002",
+  });
+  const claims = (token: string) => JSON.parse(
+    Buffer.from(token.split(".")[1]!, "base64url").toString("utf8"),
+  ) as Record<string, unknown>;
+
+  assert.equal(claims(issue("home")).place_id, "home");
+  assert.equal(Object.hasOwn(claims(issue(null)), "place_id"), false);
+  assert.equal(device.placeId, "office");
+});
+
 test("rejects signing identities that the Framework verifier cannot accept", () => {
   const base = {
     issuer: "psfn-satellite-hub",

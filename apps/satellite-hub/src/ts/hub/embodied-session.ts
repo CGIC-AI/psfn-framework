@@ -40,6 +40,7 @@ export interface EmbodiedSession {
   satellites: AttachedSatellite[];
   claimIdentities?: Record<string, NonNullable<PsfnChannelContext["claimIdentity"]>>;
   deviceAuthorities?: Record<string, HubDeviceAssertionAuthority>;
+  situatedContexts?: Record<string, SituatedSatelliteContext>;
   createdAt: string;
   updatedAt: string;
 }
@@ -57,8 +58,8 @@ export interface PsfnChannelContext {
     displayName: string;
   };
   deviceAuthority?: HubDeviceAssertionAuthority;
-  /** Hub-owned situated place resolved from a trusted device/world mapping. */
-  placeId?: string;
+  /** Hub-owned situated place; a dynamic null override deliberately means unbound. */
+  placeId?: string | null;
   activeSatellites: Array<{
     id: string;
     name: string;
@@ -71,6 +72,11 @@ export interface PsfnChannelContext {
     key: string;
     text: string;
   }>;
+}
+
+export interface SituatedSatelliteContext {
+  placeId: string | null;
+  contextNotes: Array<{ key: string; text: string }>;
 }
 
 export interface VisionCaptureMetadata {
@@ -146,6 +152,9 @@ export class EmbodiedSessionRegistry {
           ...(input.deviceAuthority ? { [satelliteId]: input.deviceAuthority } : {}),
         },
       } : {}),
+      ...(current?.situatedContexts ? {
+        situatedContexts: { ...current.situatedContexts },
+      } : {}),
       createdAt: current?.createdAt ?? now,
       updatedAt: now,
     };
@@ -182,6 +191,32 @@ export class EmbodiedSessionRegistry {
     return this.sessions.get(sessionId) ?? null;
   }
 
+  setSituatedContext(
+    sessionId: string,
+    satelliteId: string,
+    ownership: SatelliteAttachmentOwnership,
+    context: SituatedSatelliteContext,
+  ): void {
+    const current = this.sessions.get(sessionId);
+    const currentOwnership = this.attachmentOwners.get(sessionId)?.get(satelliteId);
+    // ubs:ignore — opaque in-process attachment ownership, not secret material.
+    if (!current || currentOwnership !== ownership
+      || !current.satellites.some(satellite => satellite.id === satelliteId)) {
+      throw new Error(`Satellite attachment is not current: ${sessionId}/${satelliteId}`);
+    }
+    this.sessions.set(sessionId, {
+      ...current,
+      situatedContexts: {
+        ...(current.situatedContexts ?? {}),
+        [satelliteId]: {
+          placeId: context.placeId,
+          contextNotes: context.contextNotes.map(note => ({ ...note })),
+        },
+      },
+      updatedAt: new Date().toISOString(),
+    });
+  }
+
   detachSatellite(
     sessionId: string,
     satelliteId: string,
@@ -202,17 +237,21 @@ export class EmbodiedSessionRegistry {
     owners.delete(satelliteId);
     const claimIdentities = { ...current.claimIdentities };
     const deviceAuthorities = { ...current.deviceAuthorities };
+    const situatedContexts = { ...current.situatedContexts };
     delete claimIdentities[satelliteId];
     delete deviceAuthorities[satelliteId];
+    delete situatedContexts[satelliteId];
     const updated: EmbodiedSession = {
       ...current,
       satellites,
       claimIdentities,
       deviceAuthorities,
+      situatedContexts,
       updatedAt: new Date().toISOString(),
     };
     if (Object.keys(claimIdentities).length === 0) delete updated.claimIdentities;
     if (Object.keys(deviceAuthorities).length === 0) delete updated.deviceAuthorities;
+    if (Object.keys(situatedContexts).length === 0) delete updated.situatedContexts;
     this.sessions.set(sessionId, updated);
     return true;
   }
@@ -258,6 +297,7 @@ export function normalizeCapabilities(capabilities?: SatelliteCapabilities): Req
 }
 
 function contextFromSession(session: EmbodiedSession, sourceSatellite: AttachedSatellite): PsfnChannelContext {
+  const situated = session.situatedContexts?.[sourceSatellite.id];
   return {
     sessionId: session.sessionId,
     channelType: session.channelType,
@@ -270,6 +310,10 @@ function contextFromSession(session: EmbodiedSession, sourceSatellite: AttachedS
     ...(session.deviceAuthorities?.[sourceSatellite.id]
       ? { deviceAuthority: session.deviceAuthorities[sourceSatellite.id] }
       : {}),
+    ...(situated ? {
+      placeId: situated.placeId,
+      contextNotes: situated.contextNotes.map(note => ({ ...note })),
+    } : {}),
     activeSatellites: session.satellites.map((satellite) => ({
       id: satellite.id,
       name: satellite.name,

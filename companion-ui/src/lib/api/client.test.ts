@@ -54,7 +54,7 @@ describe('satellite hub auth', () => {
     expect(buildSatelliteHello()).toEqual({
       type: 'hello',
       capabilities: {
-        input: ['text'],
+        input: ['text', 'device_location'],
         output: ['text', 'subtitle', 'artifact', 'tool_activity'],
         control: ['interrupt', 'presence', 'session_attach', 'approvals', 'touch'],
         safety: ['confirmation_required', 'local_only'],
@@ -124,6 +124,7 @@ describe('satellite hub websocket client', () => {
     expect(client.snapshot().session.identity?.companion?.name).toBe('Companion');
     expect(client.snapshot().session.place).toEqual({ id: 'office', name: 'Office' });
     expect(client.snapshot().session.eventCapabilities).toEqual(['approvals.v2']);
+    expect(client.supportsDeviceLocation()).toBe(false);
     expect(sessions).toHaveLength(1);
   });
 
@@ -180,6 +181,18 @@ describe('satellite hub websocket client', () => {
     socket.open();
     await connecting;
 
+    expect(client.supportsDeviceLocation()).toBe(false);
+    socket.message({
+      type: 'hello.ack',
+      sessionId: 'session-1',
+      channelId: 'satellite.endpoint:session-1',
+      deviceId: 'phone',
+      deviceName: 'Phone',
+      satelliteId: 'phone',
+      satelliteName: 'Phone',
+      capabilities: { input: ['text', 'device_location'], output: ['text'], control: [], safety: [] },
+    });
+    await flushAsyncMessage();
     expect(client.supportsDeviceLocation()).toBe(true);
     client.sendDeviceLocation({ lat: 37.42, lon: -122.08, accuracyM: 12, timestamp: 1_700_000_000_000 });
 

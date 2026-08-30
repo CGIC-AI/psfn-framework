@@ -444,7 +444,8 @@ export type SatelliteInputCapability =
   | 'microphone_pcm'
   | 'final_transcript'
   | 'vision_upload'
-  | 'wake_event';
+  | 'wake_event'
+  | 'device_location';
 
 export type SatelliteOutputCapability =
   | 'text'

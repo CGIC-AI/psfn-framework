@@ -16,6 +16,7 @@ import {
   decodeAudioChunk,
   encodeAudioChunk,
   type ClientToHubMessage,
+  type DeviceLocationMessage,
   type HubToClientMessage,
   type RuntimeIdentity,
   type SatelliteCapabilities,
@@ -75,6 +76,10 @@ import {
   type HubDeviceRegistryAuthority,
 } from "./device-registry.js";
 import type { PsfnChannelContext } from "./embodied-session.js";
+import {
+  HubLocationGeofence,
+  validateLocationSample,
+} from "./location-geofence.js";
 
 export class RealtimeHubServer {
   private readonly httpServer: http.Server;
@@ -86,6 +91,7 @@ export class RealtimeHubServer {
   private readonly voxta: VoxtaFacade;
   private readonly companion: CompanionBridge | null;
   private readonly eidoverse: EidoverseEmbodiedSessionAdapter | null;
+  private readonly locationGeofence: HubLocationGeofence | null;
 
   constructor(
     private readonly config: HubConfig,
@@ -99,6 +105,7 @@ export class RealtimeHubServer {
         Pick<EidoverseEmbodiedSessionConfig, "worldName" | "agentName">
         & Pick<EidoverseEmbodiedSessionDependencies, "look" | "onLookError" | "say" | "logger">
       ) | null;
+      locationNow?: () => number;
     } = {},
   ) {
     if (config.deviceRegistry && !config.psfn.deviceAssertionIssuer) {
@@ -125,6 +132,9 @@ export class RealtimeHubServer {
     this.companion = options.companion !== undefined
       ? options.companion
       : (config.companion ? new CompanionBridge(config.companion) : null);
+    this.locationGeofence = config.location
+      ? new HubLocationGeofence(config.location, options.locationNow)
+      : null;
     this.tts = options.realtimeTts ?? new ElevenLabsStream(
       config.elevenlabsApiKey ?? "",
       config.elevenlabsModelId,
@@ -169,6 +179,7 @@ export class RealtimeHubServer {
         this.tts,
         this.companion,
         this.config.deviceRegistry,
+        this.locationGeofence,
       );
       connection.run().catch((error) => {
         console.error("Realtime connection failed:", error);
@@ -284,6 +295,7 @@ class RealtimeConnection {
     private readonly tts: StreamingTtsAdapter,
     private readonly companion: CompanionBridge | null = null,
     private readonly deviceRegistry: HubDeviceRegistryAuthority | null = null,
+    private readonly locationGeofence: HubLocationGeofence | null = null,
   ) {
     this.authenticated = !this.deviceRegistry;
     if (!this.deviceRegistry) this.attachSatellite();
@@ -468,6 +480,9 @@ class RealtimeConnection {
       case "touch.interaction":
         await this.handleTouchInteraction(message);
         return;
+      case "device.location":
+        await this.handleDeviceLocation(message);
+        return;
       case "artifact.preview":
         await this.handleArtifactPreviewRequest(message);
         return;
@@ -546,6 +561,85 @@ class RealtimeConnection {
         ? "Touch interaction is cooling down"
         : "Touch interaction delivery failed";
       await this.send({ type: "error-event", data: { message: messageText } });
+    }
+  }
+
+  private async handleDeviceLocation(message: DeviceLocationMessage): Promise<void> {
+    if (!this.deviceRegistry || !this.authenticatedDevice) {
+      await this.send({
+        type: "error-event",
+        data: { message: "Device location requires an authenticated Hub satellite transport" },
+      });
+      return;
+    }
+    if (!this.capabilities.input.includes("device_location")) {
+      await this.send({
+        type: "error-event",
+        data: { message: "Satellite did not advertise the device_location capability" },
+      });
+      return;
+    }
+    if (!this.locationGeofence) {
+      await this.send({
+        type: "error-event",
+        data: { message: "Hub location geofence is not configured" },
+      });
+      return;
+    }
+    if (!this.companion) {
+      await this.send({
+        type: "error-event",
+        data: { message: "Companion location transition bridge is not configured" },
+      });
+      return;
+    }
+
+    try {
+      validateLocationSample(message);
+    } catch {
+      await this.send({
+        type: "error-event",
+        data: { message: "Device location payload is invalid" },
+      });
+      return;
+    }
+
+    const observation = this.locationGeofence.observe(this.deviceId, message);
+    if (observation.status === "ignored") return;
+    this.embodiedSessions.setSituatedContext(
+      this.sessionId,
+      this.satelliteId,
+      this.requireAttachmentOwnership(),
+      observation.context,
+    );
+    for (const transition of observation.transitions) {
+      try {
+        const result = await this.companion.submitLocationTransition({
+          sessionId: this.sessionId,
+          deviceId: this.deviceId,
+          kind: transition.kind,
+          placeId: transition.placeId,
+          placeLabel: transition.placeLabel,
+          responseMode: transition.responseMode,
+        });
+        if (transition.responseMode === "respond" && result.response) {
+          await this.send({
+            type: "message",
+            data: { role: "assistant", content: result.response, final: true },
+          });
+        }
+      } catch (error) {
+        console.error("Location transition delivery failed", {
+          sessionId: this.sessionId,
+          deviceId: this.deviceId,
+          transition: transition.kind,
+          errorType: error instanceof Error ? error.name : "unknown",
+        });
+        const messageText = error instanceof CompanionRequestError && error.status === 429
+          ? "Location transition is cooling down"
+          : "Location transition delivery failed";
+        await this.send({ type: "error-event", data: { message: messageText } });
+      }
     }
   }
 
@@ -1209,7 +1303,13 @@ class RealtimeConnection {
     claimIdentity?: PsfnChannelContext["claimIdentity"],
     deviceAuthority?: PsfnChannelContext["deviceAuthority"],
   ): void {
-    const effectiveCapabilities = applySpokenReplyAudioCeiling(capabilities, this.config);
+    const audioBoundCapabilities = applySpokenReplyAudioCeiling(capabilities, this.config);
+    const effectiveCapabilities = audioBoundCapabilities && !this.canTerminateDeviceLocation()
+      ? {
+        ...audioBoundCapabilities,
+        input: audioBoundCapabilities.input?.filter(capability => capability !== "device_location"),
+      }
+      : audioBoundCapabilities;
     const attachment = this.embodiedSessions.attachSatellite({
       sessionId: this.sessionId,
       channelId,
@@ -1222,6 +1322,15 @@ class RealtimeConnection {
     this.channelId = attachment.session.channelId;
     this.capabilities = attachment.satellite.capabilities;
     this.attachmentOwnership = attachment.ownership;
+  }
+
+  private canTerminateDeviceLocation(): boolean {
+    return Boolean(
+      this.deviceRegistry
+      && this.authenticatedDevice
+      && this.locationGeofence
+      && this.companion,
+    );
   }
 
   private requireAttachmentOwnership(): SatelliteAttachmentOwnership {

@@ -1197,6 +1197,7 @@ function testHubConfig(overrides: {
     control: null,
     deviceRegistry: null,
     eidoversePlaceMap: null,
+    location: null,
     voxta: {
       enabled: true,
       satelliteId: "voxta-vam",

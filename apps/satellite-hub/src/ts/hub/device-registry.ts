@@ -3,7 +3,9 @@ import fs from "node:fs";
 
 import type { SatelliteCapabilities } from "../shared/protocol.js";
 
-const INPUT_CAPABILITIES = ["text", "microphone_pcm", "final_transcript", "vision_upload", "wake_event"] as const;
+const INPUT_CAPABILITIES = [
+  "text", "microphone_pcm", "final_transcript", "vision_upload", "wake_event", "device_location",
+] as const;
 const OUTPUT_CAPABILITIES = [
   "text", "subtitle", "streamed_audio", "local_file_audio", "animation", "action",
   "expression", "gaze", "servo", "artifact", "tool_activity", "emotion",

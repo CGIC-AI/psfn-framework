@@ -66,6 +66,7 @@ const HUB_ENV_KEYS = [
   "HUB_CONTROL_TOKEN",
   "HUB_CONTROL_MAX_BODY_BYTES",
   "HUB_DEVICE_REGISTRY_PATH",
+  "HUB_LOCATION_CONFIG_PATH",
   "EIDOVERSE_PLACE_MAP_PATH",
   "HUB_DEVICE_ASSERTION_ISSUER",
   "HUB_DEVICE_ASSERTION_KID",
@@ -265,6 +266,7 @@ test("loadHubConfig supports text-only mode without voice provider secrets", () 
     assert.equal(config.homeAssistant, null);
     assert.equal(config.control, null);
     assert.equal(config.eidoversePlaceMap, null);
+    assert.equal(config.location, null);
   });
 });
 

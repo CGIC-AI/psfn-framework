@@ -5,8 +5,13 @@ import type {
   SatelliteClientCertIdentity,
   SatelliteRegistryConfig,
 } from '../../../shared/contracts/satellite-registry.js';
-import type { CompanionTouchStimulusRequest } from '../../../shared/contracts/companion-relay.js';
+import type {
+  CompanionLocationTransitionStimulusRequest,
+  CompanionStimulusRequest,
+  CompanionTouchStimulusRequest,
+} from '../../../shared/contracts/companion-relay.js';
 import {
+  COMPANION_LOCATION_TRANSITIONS,
   COMPANION_TOUCH_REGIONS,
   COMPANION_TOUCH_STIMULUS_KINDS,
 } from '../../../shared/contracts/companion-relay.js';
@@ -26,6 +31,8 @@ import type { CompanionStimulusPort } from './companion-stimuli.js';
 const log = createComponentLogger('CompanionTouchStimulusRoute');
 const TOUCH_STIMULUS_MAX_BODY_BYTES = 16 * 1024;
 const DEVICE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:@-]{0,127}$/u;
+const PLACE_ID_PATTERN = DEVICE_ID_PATTERN;
+const PLACE_LABEL_PATTERN = /^[^\p{Cc}\p{Cs}\p{Zl}\p{Zp}]{1,80}$/u;
 
 export interface CompanionTouchStimulusRequestContext {
   req: IncomingMessage;
@@ -50,15 +57,30 @@ const TOUCH_STIMULUS_FIELDS = new Set([
   'responseMode',
 ]);
 
-function parseTouchStimulusBody(body: unknown): CompanionTouchStimulusRequest {
+const LOCATION_STIMULUS_FIELDS = new Set([
+  'satelliteId',
+  'endpointId',
+  'claimType',
+  'sessionId',
+  'deviceId',
+  'kind',
+  'placeId',
+  'placeLabel',
+  'responseMode',
+]);
+
+function parseStimulusBody(body: unknown): CompanionStimulusRequest {
   if (!isRecord(body)) {
     throw new Error('Request body must be a JSON object');
   }
-  const unknownFields = Object.keys(body).filter((field) => !TOUCH_STIMULUS_FIELDS.has(field));
+  const locationTransition = typeof body.kind === 'string'
+    && (COMPANION_LOCATION_TRANSITIONS as readonly string[]).includes(body.kind);
+  const fields = locationTransition ? LOCATION_STIMULUS_FIELDS : TOUCH_STIMULUS_FIELDS;
+  const unknownFields = Object.keys(body).filter((field) => !fields.has(field));
   if (unknownFields.length > 0) {
     throw new Error(`Unknown request fields: ${unknownFields.join(', ')}`);
   }
-  const requiredString = (field: keyof CompanionTouchStimulusRequest): string => {
+  const requiredString = (field: string): string => {
     const value = body[field];
     if (typeof value !== 'string' || !value.trim()) {
       throw new Error(`${field} must be a non-empty string`);
@@ -74,6 +96,35 @@ function parseTouchStimulusBody(body: unknown): CompanionTouchStimulusRequest {
     throw new Error('deviceId must be 1-128 characters of letters, numbers, dot, underscore, dash, colon, or @');
   }
   const kind = body.kind;
+  const responseMode = body.responseMode;
+  if (responseMode !== 'respond' && responseMode !== 'observe') {
+    throw new Error('responseMode must be "respond" or "observe"');
+  }
+  if (locationTransition) {
+    const placeId = requiredString('placeId');
+    const placeLabel = requiredString('placeLabel');
+    if (!PLACE_ID_PATTERN.test(placeId)) {
+      throw new Error('placeId has an invalid format');
+    }
+    if (!PLACE_LABEL_PATTERN.test(placeLabel)) {
+      throw new Error('placeLabel must be a single bounded printable line');
+    }
+    const expectedResponseMode = kind === 'arrived' ? 'respond' : 'observe';
+    if (responseMode !== expectedResponseMode) {
+      throw new Error(`${String(kind)} location stimuli must use responseMode=${expectedResponseMode}`);
+    }
+    return {
+      satelliteId,
+      endpointId,
+      claimType,
+      sessionId,
+      deviceId,
+      kind: kind as CompanionLocationTransitionStimulusRequest['kind'],
+      placeId,
+      placeLabel,
+      responseMode,
+    };
+  }
   if (typeof kind !== 'string' || !(COMPANION_TOUCH_STIMULUS_KINDS as readonly string[]).includes(kind)) {
     throw new Error(`kind must be one of: ${COMPANION_TOUCH_STIMULUS_KINDS.join(', ')}`);
   }
@@ -89,10 +140,6 @@ function parseTouchStimulusBody(body: unknown): CompanionTouchStimulusRequest {
   if (!Number.isInteger(durationMs) || (durationMs as number) < 0 || (durationMs as number) > 60_000) {
     throw new Error('durationMs must be an integer from 0 through 60000');
   }
-  const responseMode = body.responseMode;
-  if (responseMode !== 'respond' && responseMode !== 'observe') {
-    throw new Error('responseMode must be "respond" or "observe"');
-  }
   return {
     satelliteId,
     endpointId,
@@ -107,7 +154,13 @@ function parseTouchStimulusBody(body: unknown): CompanionTouchStimulusRequest {
   };
 }
 
-function describeTouchStimulus(stimulus: CompanionTouchStimulusRequest): string {
+function describeStimulus(stimulus: CompanionStimulusRequest): string {
+  if (stimulus.kind === 'left') {
+    return `Your Partner left ${stimulus.placeLabel}.`;
+  }
+  if (stimulus.kind === 'arrived') {
+    return `Your Partner arrived at ${stimulus.placeLabel}.`;
+  }
   if (stimulus.kind === 'headpat') {
     return stimulus.count === 1
       ? 'Your Partner gives you a gentle headpat.'
@@ -137,9 +190,9 @@ export async function handleCompanionTouchStimulus(
     return;
   }
 
-  let stimulus: CompanionTouchStimulusRequest;
+  let stimulus: CompanionStimulusRequest;
   try {
-    stimulus = parseTouchStimulusBody(bodyResult.value);
+    stimulus = parseStimulusBody(bodyResult.value);
   } catch (error) {
     sendApiError(ctx.res, 400, 'invalid_request', toErrorMessage(error));
     return;
@@ -151,7 +204,9 @@ export async function handleCompanionTouchStimulus(
       [SATELLITE_CLAIM_HEADERS.satelliteId]: stimulus.satelliteId,
       [SATELLITE_CLAIM_HEADERS.endpointId]: stimulus.endpointId,
       [SATELLITE_CLAIM_HEADERS.sessionId]: stimulus.sessionId,
-      [SATELLITE_CLAIM_HEADERS.capabilities]: 'touch',
+      [SATELLITE_CLAIM_HEADERS.capabilities]: stimulus.kind === 'left' || stimulus.kind === 'arrived'
+        ? 'location'
+        : 'touch',
     },
     principal: ctx.principal,
     registry: ctx.registry,
@@ -168,7 +223,7 @@ export async function handleCompanionTouchStimulus(
     channelType: 'api',
     authorId: claim.value.authorId,
     authorName: claim.value.authorName,
-    content: describeTouchStimulus(stimulus),
+    content: describeStimulus(stimulus),
     isDirectMessage: true,
     routing: {
       source: 'satellite',
@@ -176,14 +231,22 @@ export async function handleCompanionTouchStimulus(
       responseStyle: 'concise',
       channelPrivacy: claim.value.channelPrivacy,
       canonicalContactId: claim.value.canonicalContactId,
-      stimulus: {
-        schemaVersion: 1,
-        kind: stimulus.kind,
-        region: stimulus.region,
-        count: stimulus.count,
-        durationMs: stimulus.durationMs,
-        deviceId: stimulus.deviceId,
-      },
+      stimulus: stimulus.kind === 'left' || stimulus.kind === 'arrived'
+        ? {
+          schemaVersion: 1,
+          kind: stimulus.kind,
+          placeId: stimulus.placeId,
+          placeLabel: stimulus.placeLabel,
+          deviceId: stimulus.deviceId,
+        }
+        : {
+          schemaVersion: 1,
+          kind: stimulus.kind,
+          region: stimulus.region,
+          count: stimulus.count,
+          durationMs: stimulus.durationMs,
+          deviceId: stimulus.deviceId,
+        },
       presence: buildSatellitePresenceMetadata({
         satelliteId: claim.value.satellite.satelliteId,
         companionId: ctx.companionId,

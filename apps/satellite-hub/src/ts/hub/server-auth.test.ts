@@ -91,7 +91,6 @@ test("authenticated spoken replies advertise and emit one bracketed audio stream
   const socket = new WebSocket(`ws://127.0.0.1:${address.port}`);
   const messages: HubToClientMessage[] = [];
   socket.on("message", raw => messages.push(JSON.parse(raw.toString()) as HubToClientMessage));
-
   try {
     await new Promise<void>(resolve => socket.once("open", resolve));
     socket.send(JSON.stringify({
@@ -213,6 +212,28 @@ test("session readiness removes streamed audio when spoken-reply TTS is unavaila
     await new Promise<void>(resolve => socket.once("close", () => resolve()));
     await server.close();
   }
+});
+
+test("authenticated device.location fails closed without registry-granted capability", async () => {
+  const server = new RealtimeHubServer(config(), { agent: agent() });
+  await server.start();
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  const socket = new WebSocket(`ws://127.0.0.1:${address.port}`);
+  const messages: HubToClientMessage[] = [];
+  socket.on("message", raw => messages.push(JSON.parse(raw.toString()) as HubToClientMessage));
+  await new Promise<void>(resolve => socket.once("open", resolve));
+  sendAuthenticatedHello(socket);
+  await waitFor(() => messages.some(message => message.type === "hello.ack"));
+  socket.send(JSON.stringify({
+    type: "device.location", lat: 40, lon: -75, accuracyM: 10, timestamp: 1_700_000_000_000,
+  }));
+  await waitFor(() => messages.some(message => (
+    message.type === "error-event" && message.data.message.includes("device_location capability")
+  )));
+  socket.close();
+  await new Promise<void>(resolve => socket.once("close", resolve));
+  await server.close();
 });
 
 test("authenticated hello rejects browser-authored place, companion, contact, or human authority", async () => {
@@ -559,6 +580,7 @@ function config(options: {
     companion: null, homeAssistant: null, control: null,
     deviceRegistry: options.deviceRegistry ?? createHubDeviceRegistryAuthority(() => registry(undefined, options)),
     eidoversePlaceMap: null,
+    location: null,
     voxta: { enabled: false, satelliteId: "voxta", satelliteName: "Voxta", sessionId: null,
       chatId: null, assistantId: "assistant", assistantName: "Assistant", userId: "user", userName: "User",
       appLabel: "Test", clientVersion: "1", publicBaseUrl: null, audioFolder: null, sttStreamEnabled: false,

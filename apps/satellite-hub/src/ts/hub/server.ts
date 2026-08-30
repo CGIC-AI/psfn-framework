@@ -567,29 +567,33 @@ class RealtimeConnection {
   private async handleDeviceLocation(message: DeviceLocationMessage): Promise<void> {
     if (!this.deviceRegistry || !this.authenticatedDevice) {
       await this.send({
-        type: "error-event",
-        data: { message: "Device location requires an authenticated Hub satellite transport" },
+        type: "device.location.status",
+        status: "rejected",
+        reason: "unsupported_transport",
       });
       return;
     }
     if (!this.capabilities.input.includes("device_location")) {
       await this.send({
-        type: "error-event",
-        data: { message: "Satellite did not advertise the device_location capability" },
+        type: "device.location.status",
+        status: "rejected",
+        reason: "capability_unavailable",
       });
       return;
     }
     if (!this.locationGeofence) {
       await this.send({
-        type: "error-event",
-        data: { message: "Hub location geofence is not configured" },
+        type: "device.location.status",
+        status: "rejected",
+        reason: "configuration_unavailable",
       });
       return;
     }
     if (!this.companion) {
       await this.send({
-        type: "error-event",
-        data: { message: "Companion location transition bridge is not configured" },
+        type: "device.location.status",
+        status: "rejected",
+        reason: "configuration_unavailable",
       });
       return;
     }
@@ -598,20 +602,25 @@ class RealtimeConnection {
       validateLocationSample(message);
     } catch {
       await this.send({
-        type: "error-event",
-        data: { message: "Device location payload is invalid" },
+        type: "device.location.status",
+        status: "rejected",
+        reason: "invalid_sample",
       });
       return;
     }
 
     const observation = this.locationGeofence.observe(this.deviceId, message);
-    if (observation.status === "ignored") return;
+    if (observation.status === "ignored") {
+      await this.send({ type: "device.location.status", status: "poor_accuracy" });
+      return;
+    }
     this.embodiedSessions.setSituatedContext(
       this.sessionId,
       this.satelliteId,
       this.requireAttachmentOwnership(),
       observation.context,
     );
+    let deliveryFailed = false;
     for (const transition of observation.transitions) {
       try {
         const result = await this.companion.submitLocationTransition({
@@ -629,18 +638,27 @@ class RealtimeConnection {
           });
         }
       } catch (error) {
+        deliveryFailed = true;
         console.error("Location transition delivery failed", {
           sessionId: this.sessionId,
           deviceId: this.deviceId,
           transition: transition.kind,
           errorType: error instanceof Error ? error.name : "unknown",
         });
-        const messageText = error instanceof CompanionRequestError && error.status === 429
-          ? "Location transition is cooling down"
-          : "Location transition delivery failed";
-        await this.send({ type: "error-event", data: { message: messageText } });
       }
     }
+    if (deliveryFailed) {
+      await this.send({
+        type: "device.location.status",
+        status: "rejected",
+        reason: "transition_delivery_failed",
+      });
+      return;
+    }
+    await this.send({
+      type: "device.location.status",
+      status: observation.context.placeId === null ? "unzoned" : "located",
+    });
   }
 
   private async loadRuntimeIdentity(): Promise<RuntimeIdentity | undefined> {

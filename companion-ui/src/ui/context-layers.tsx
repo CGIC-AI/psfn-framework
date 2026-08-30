@@ -17,6 +17,7 @@ export function ToastLayer({
   approvals,
   artifacts,
   error,
+  locationNotice,
   onApprovalDecision,
   onArtifactPreview,
   stacked,
@@ -26,6 +27,7 @@ export function ToastLayer({
   approvals: ApprovalPanelState;
   artifacts: ArtifactShelfState;
   error: string | null;
+  locationNotice: string | null;
   onApprovalDecision: (id: string, decision: 'approve' | 'deny') => void;
   onArtifactPreview: (artifactId: string) => void;
   stacked: boolean;
@@ -33,6 +35,7 @@ export function ToastLayer({
   voiceNotice: string | null;
 }) {
   const hasToasts = error
+    || locationNotice
     || updateReady
     || voiceNotice
     || approvals.requests.length > 0
@@ -65,6 +68,15 @@ export function ToastLayer({
           <div>
             <strong>Connection issue</strong>
             <p>{error}</p>
+          </div>
+        </article>
+      )}
+      {locationNotice && (
+        <article className="context-toast update-toast" role="status">
+          <AlertTriangle aria-hidden />
+          <div>
+            <strong>Location update</strong>
+            <p>{locationNotice}</p>
           </div>
         </article>
       )}

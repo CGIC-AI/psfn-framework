@@ -237,6 +237,36 @@ describe('satellite hub websocket client', () => {
     expect(errors.at(-1)).toContain('Unknown hub->client message type');
   });
 
+  it('treats coordinate-free location rejection as recoverable state, not a client error', async () => {
+    const socket = new FakeSocket();
+    const client = new SatelliteHubClient({
+      url: 'ws://127.0.0.1:8787/',
+      webSocketFactory: () => socket,
+    });
+    const errors: string[] = [];
+    const inbound: unknown[] = [];
+    client.on('error', (event) => errors.push(event.message));
+    client.on('inbound', (event) => inbound.push(event.message));
+
+    const connecting = client.connect();
+    socket.open();
+    await connecting;
+    socket.message({
+      type: 'device.location.status',
+      status: 'rejected',
+      reason: 'transition_delivery_failed',
+    });
+    await flushAsyncMessage();
+
+    expect(errors).toEqual([]);
+    expect(client.snapshot().state).toBe('connected');
+    expect(inbound).toContainEqual({
+      type: 'device.location.status',
+      status: 'rejected',
+      reason: 'transition_delivery_failed',
+    });
+  });
+
   it('rejects discriminator-only and authority-injected hello acknowledgements', async () => {
     const socket = new FakeSocket();
     const client = new SatelliteHubClient({

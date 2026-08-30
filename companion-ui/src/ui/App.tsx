@@ -61,6 +61,7 @@ import {
 import { AttachmentTray, ToastLayer } from './context-layers.js';
 import { OverlayFrame } from './overlay-drawer.js';
 import {
+  describeLocationNotice,
   SettingsDrawer,
   type CompanionUiAccessPresentation,
 } from './settings-drawer.js';
@@ -146,7 +147,9 @@ export function App() {
     enabled: locationEnabled,
     canSend: canSendLocation,
     send: sendDeviceLocation,
+    hubStatus: streamState.deviceLocation?.status,
   });
+  const locationNotice = describeLocationNotice(locationStatus);
 
   useEffect(() => {
     const coalescer = new TouchInteractionCoalescer({
@@ -532,6 +535,7 @@ export function App() {
               approvals={approvals}
               artifacts={artifacts}
               error={streamState.failure?.message ?? touchError ?? configError}
+              locationNotice={locationNotice}
               onApprovalDecision={(id, decision) => { void decideApproval(id, decision); }}
               onArtifactPreview={previewArtifact}
               stacked={composer.pendingAttachments.length > 0}

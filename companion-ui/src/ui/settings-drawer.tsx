@@ -197,7 +197,7 @@ export function SettingsDrawer({
   );
 }
 
-function describeLocationStatus(status: DeviceLocationStatus): string {
+export function describeLocationStatus(status: DeviceLocationStatus): string {
   switch (status) {
     case 'off':
       return 'Location sharing is off.';
@@ -208,13 +208,34 @@ function describeLocationStatus(status: DeviceLocationStatus): string {
     case 'suspended':
       return 'Paused while the app is in the background.';
     case 'watching':
-      return 'Sharing your place while the app is open.';
+      return 'Waiting for the satellite hub to resolve your first place update.';
+    case 'located':
+      return 'Sharing your current configured place while the app is open.';
+    case 'unzoned':
+      return 'Location sharing is working, but you are outside the satellite hub\'s configured places.';
+    case 'poor-accuracy':
+      return 'Location permission is on. Waiting for a more accurate fix.';
+    case 'hub-rejected':
+      return 'Location permission is still on, but the satellite hub could not update your place. Reconnect or turn sharing off and on to refresh the place status.';
     case 'denied':
-      return 'Location permission was denied. Enable it in your browser settings to share your place.';
+      return 'Location permission is off. Allow it in your browser settings, then turn sharing off and on.';
     case 'error':
-      return 'Location is temporarily unavailable.';
+      return 'The browser could not get a fix. Permission is still on, and sharing will recover automatically.';
     default:
       return '';
+  }
+}
+
+export function describeLocationNotice(status: DeviceLocationStatus): string | null {
+  switch (status) {
+    case 'unzoned':
+    case 'poor-accuracy':
+    case 'hub-rejected':
+    case 'denied':
+    case 'error':
+      return describeLocationStatus(status);
+    default:
+      return null;
   }
 }
 

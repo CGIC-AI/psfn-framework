@@ -18,6 +18,7 @@ import type {
   EmotionSnapshotTrigger,
   EmotionVector,
   HubToClientMessage,
+  DeviceLocationRejectionReason,
   ToolActivityPhase,
 } from '../protocol/events.js';
 import type { TouchInteraction } from '../touch-interactions.js';
@@ -152,6 +153,12 @@ export interface ToolActivityStreamEntry {
   receivedAt: string;
 }
 
+export interface DeviceLocationStreamStatus {
+  status: 'located' | 'unzoned' | 'poor_accuracy' | 'rejected';
+  reason?: DeviceLocationRejectionReason;
+  receivedAt: string;
+}
+
 export interface HubStreamState {
   connection: HubStreamConnection;
   phase: HubStreamPhase;
@@ -169,6 +176,8 @@ export interface HubStreamState {
   toolActivity: ToolActivityStreamEntry[];
   /** Latest redacted emotion snapshot, or null when none received / authority cleared. */
   emotion: EmotionSnapshotStreamEntry | null;
+  /** Latest coordinate-free location resolution result from the Hub. */
+  deviceLocation: DeviceLocationStreamStatus | null;
   voicePlayback: VoicePlaybackState;
   sequence: number;
   updatedAt: string;
@@ -231,6 +240,7 @@ export function createInitialHubStreamState(at = new Date().toISOString()): HubS
     artifactPreviews: {},
     toolActivity: [],
     emotion: null,
+    deviceLocation: null,
     voicePlayback: createVoicePlaybackState(false),
     sequence: 0,
     updatedAt: at,
@@ -263,13 +273,19 @@ export function reduceHubStreamState(
     case 'client.session': {
       const shardSelectionChanged =
         state.session?.activeShardId !== event.session.activeShardId;
+      const authorityChanged = state.session?.sessionId !== event.session.sessionId
+        || state.session?.channelId !== event.session.channelId
+        || state.session?.deviceId !== event.session.deviceId;
       const supported = sessionSupportsStreamedAudio(event.session);
-      const voicePlayback = supported !== state.voicePlayback.supported || shardSelectionChanged
+      const voicePlayback = supported !== state.voicePlayback.supported
+        || shardSelectionChanged
+        || authorityChanged
         ? createVoicePlaybackState(supported, state.voicePlayback.resetGeneration + 1)
         : state.voicePlayback;
       return {
         ...state,
         session: cloneSession(event.session) ?? null,
+        deviceLocation: authorityChanged ? null : state.deviceLocation,
         voicePlayback,
         ...(shardSelectionChanged ? {
           messages: [],
@@ -399,6 +415,7 @@ export class HubStreamStore {
       artifactPreviews: cloneArtifactPreviews(this.state.artifactPreviews),
       toolActivity: this.state.toolActivity.map((entry) => ({ ...entry })),
       emotion: cloneEmotionSnapshot(this.state.emotion),
+      deviceLocation: this.state.deviceLocation ? { ...this.state.deviceLocation } : null,
       voicePlayback: cloneVoicePlaybackState(this.state.voicePlayback),
     };
   }
@@ -564,6 +581,7 @@ function applyConnectionState(
           // Drop stale companion affect on lost authority so the sprite falls
           // back to a neutral default rather than freezing a past expression.
           emotion: null,
+          deviceLocation: null,
           voicePlayback: createVoicePlaybackState(
             false,
             state.voicePlayback.resetGeneration + 1,
@@ -613,6 +631,7 @@ function applyInboundMessage(
         connection: 'ready',
         phase: 'listening',
         session,
+        deviceLocation: null,
         voicePlayback: syncPlaybackSupport(base.voicePlayback, session),
       };
     }
@@ -633,6 +652,7 @@ function applyInboundMessage(
         connection: 'ready',
         phase: 'listening',
         session,
+        deviceLocation: null,
         voicePlayback: syncPlaybackSupport(base.voicePlayback, session),
       };
     }
@@ -783,6 +803,15 @@ function applyInboundMessage(
       };
       return { ...base, emotion: entry };
     }
+    case 'device.location.status':
+      return {
+        ...base,
+        deviceLocation: {
+          status: message.status,
+          ...(message.status === 'rejected' ? { reason: message.reason } : {}),
+          receivedAt: at,
+        },
+      };
     case 'text':
     case 'audio': {
       // `text` doubles as the audio-init/audio-end bracket signal channel and

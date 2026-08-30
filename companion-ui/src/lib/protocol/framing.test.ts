@@ -155,6 +155,10 @@ describe('hub websocket framing', () => {
         timestamp: '2026-06-17T00:00:04.000Z',
       },
     },
+    { type: 'device.location.status', status: 'located' },
+    { type: 'device.location.status', status: 'unzoned' },
+    { type: 'device.location.status', status: 'poor_accuracy' },
+    { type: 'device.location.status', status: 'rejected', reason: 'invalid_sample' },
   ];
 
   const clientMessages: ClientToHubMessage[] = [
@@ -211,6 +215,10 @@ describe('hub websocket framing', () => {
     ['hello.ack missing capabilities', '{"type":"hello.ack","sessionId":"s","channelId":"c","deviceId":"d","deviceName":"D","satelliteId":"sat","satelliteName":"S"}'],
     ['hello.ack malformed place', '{"type":"hello.ack","sessionId":"s","channelId":"c","deviceId":"d","deviceName":"D","satelliteId":"sat","satelliteName":"S","capabilities":{},"place":{"id":"office"}}'],
     ['message extra trust field', '{"type":"message","data":{"role":"assistant","content":"x","trusted":true}}'],
+    ['location rejected without reason', '{"type":"device.location.status","status":"rejected"}'],
+    ['location resolution with coordinates', '{"type":"device.location.status","status":"located","lat":1,"lon":2}'],
+    ['location resolution with wrong reason shape', '{"type":"device.location.status","status":"poor_accuracy","reason":"invalid_sample"}'],
+    ['location resolution with unknown status', '{"type":"device.location.status","status":"permission_denied"}'],
     ['approval.requested missing id', '{"type":"approval.requested","data":{"title":"t","requestedAt":"x","redactedContext":"y","status":"pending"}}'],
     ['approval.requested wrong status', '{"type":"approval.requested","data":{"id":"1","title":"t","requestedAt":"x","redactedContext":"y","status":"approved"}}'],
     ['approval.requested malformed v2 grantMode', '{"type":"approval.requested","data":{"id":"1","title":"t","requestedAt":"2026-06-17T00:00:01.000Z","redactedContext":"y","status":"pending","grantMode":{"kind":"forever"}}}'],

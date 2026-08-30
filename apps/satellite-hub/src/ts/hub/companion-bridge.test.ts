@@ -618,7 +618,7 @@ test("hub rejects touch interactions from clients without the touch capability",
   }
 });
 
-test("hub rejects device.location from an unauthenticated legacy transport", async () => {
+test("hub reports coordinate-free rejection for device.location on a legacy transport", async () => {
   const server = new RealtimeHubServer(testHubConfig(), {
     agent: new FakeAgent(),
     voxtaTts: null,
@@ -636,11 +636,13 @@ test("hub rejects device.location from an unauthenticated legacy transport", asy
     client.send({
       type: "device.location", lat: 40, lon: -75, accuracyM: 10, timestamp: 1_700_000_000_000,
     });
-    const error = await client.waitForMessage("error-event");
-    assert.match(
-      (error as Extract<HubToClientMessage, { type: "error-event" }>).data.message,
-      /authenticated Hub/,
-    );
+    const status = await client.waitForMessage("device.location.status");
+    assert.deepEqual(status, {
+      type: "device.location.status",
+      status: "rejected",
+      reason: "unsupported_transport",
+    });
+    assert.doesNotMatch(JSON.stringify(status), /latitude|longitude|"lat"|"lon"/i);
   } finally {
     await client?.close();
     await server.close();
@@ -716,14 +718,29 @@ test("authenticated Hub geofences device.location and forwards only typed transi
     assert.deepEqual(ack.capabilities.input, ["text", "device_location"]);
 
     client.clearMessages();
-    await sendLocationAndFence(client, { lat: 40, lon: -75 }, 1);
+    assert.deepEqual(await sendLocationAndFence(client, { lat: 40, lon: -75 }, 1), {
+      type: "device.location.status", status: "located",
+    });
     assert.equal(backplane.stimulusRequests.length, 0, "initial classification is not an arrival event");
 
+    client.clearMessages();
+    client.send({
+      type: "device.location", lat: 40, lon: -75, accuracyM: 500, timestamp: 1_700_000_000_001,
+    });
+    assert.deepEqual(await client.waitForMessage("device.location.status"), {
+      type: "device.location.status", status: "poor_accuracy",
+    });
+    assert.equal(backplane.stimulusRequests.length, 0);
+
     now = 2_000;
-    await sendLocationAndFence(client, { lat: 40.005, lon: -75 }, 2);
+    assert.deepEqual(await sendLocationAndFence(client, { lat: 40.005, lon: -75 }, 2), {
+      type: "device.location.status", status: "located",
+    });
     assert.equal(backplane.stimulusRequests.length, 0, "departure waits for Hub debounce");
     now = 2_100;
-    await sendLocationAndFence(client, { lat: 40.005, lon: -75 }, 3);
+    assert.deepEqual(await sendLocationAndFence(client, { lat: 40.005, lon: -75 }, 3), {
+      type: "device.location.status", status: "unzoned",
+    });
     await waitFor(() => backplane.stimulusRequests.length === 1, "left transition");
     assert.deepEqual(backplane.stimulusRequests[0]?.body, {
       ...TEST_IDENTITY,
@@ -743,9 +760,13 @@ test("authenticated Hub geofences device.location and forwards only typed transi
     assert.equal(captureAgent.calls[0]?.channel?.placeId, null);
 
     now = 3_000;
-    await sendLocationAndFence(client, { lat: 40, lon: -75 }, 4);
+    assert.deepEqual(await sendLocationAndFence(client, { lat: 40, lon: -75 }, 4), {
+      type: "device.location.status", status: "unzoned",
+    });
     now = 3_100;
-    await sendLocationAndFence(client, { lat: 40, lon: -75 }, 5);
+    assert.deepEqual(await sendLocationAndFence(client, { lat: 40, lon: -75 }, 5), {
+      type: "device.location.status", status: "located",
+    });
     await waitFor(() => backplane.stimulusRequests.length === 2, "arrived transition");
     assert.deepEqual(backplane.stimulusRequests[1]?.body, {
       ...TEST_IDENTITY,
@@ -757,6 +778,20 @@ test("authenticated Hub geofences device.location and forwards only typed transi
       responseMode: "respond",
     });
     await client.waitForMessage("message");
+
+    backplane.stimulusResponse = {
+      status: 503,
+      body: JSON.stringify({ error: "temporarily unavailable" }),
+    };
+    now = 4_000;
+    assert.deepEqual(await sendLocationAndFence(client, { lat: 40.005, lon: -75 }, 6), {
+      type: "device.location.status", status: "located",
+    });
+    now = 4_100;
+    assert.deepEqual(await sendLocationAndFence(client, { lat: 40.005, lon: -75 }, 7), {
+      type: "device.location.status", status: "rejected", reason: "transition_delivery_failed",
+    });
+    assert.equal(client.messages.some(message => message.type === "error-event"), false);
 
     const relayed = JSON.stringify({
       requests: backplane.stimulusRequests,
@@ -770,8 +805,11 @@ test("authenticated Hub geofences device.location and forwards only typed transi
       type: "device.location", lat: 40, lon: -75, accuracyM: 10,
       timestamp: 1_700_000_000_000, placeId: "browser-forged",
     });
-    const invalid = await client.waitForMessage("error-event");
-    assert.match((invalid as Extract<HubToClientMessage, { type: "error-event" }>).data.message, /payload is invalid/);
+    const invalid = await client.waitForMessage("device.location.status");
+    assert.deepEqual(invalid, {
+      type: "device.location.status", status: "rejected", reason: "invalid_sample",
+    });
+    assert.doesNotMatch(JSON.stringify(invalid), /40|-75|latitude|longitude|"lat"|"lon"/i);
     assert.equal(backplane.stimulusRequests.length, requestCount);
   } finally {
     await client?.close();
@@ -1293,7 +1331,7 @@ async function sendLocationAndFence(
   client: TestClient,
   point: { lat: number; lon: number },
   fence: number,
-): Promise<void> {
+): Promise<Extract<HubToClientMessage, { type: "device.location.status" }>> {
   client.clearMessages();
   client.send({
     type: "device.location",
@@ -1303,7 +1341,9 @@ async function sendLocationAndFence(
     timestamp: 1_700_000_000_000 + fence,
   });
   client.send({ type: "ping", sentAt: fence });
+  const status = await client.waitForMessage("device.location.status");
   await client.waitForMessage("pong");
+  return status as Extract<HubToClientMessage, { type: "device.location.status" }>;
 }
 
 async function readBody(request: http.IncomingMessage): Promise<string> {

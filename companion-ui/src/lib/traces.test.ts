@@ -184,6 +184,31 @@ describe('operational traces', () => {
     });
   });
 
+  it('projects only coordinate-free location resolution metadata', () => {
+    const state = reduceHubStreamState(createInitialHubStreamState(), {
+      type: 'hub.inbound',
+      at: '2026-06-17T00:00:00.000Z',
+      event: {
+        message: {
+          type: 'device.location.status',
+          status: 'rejected',
+          reason: 'transition_delivery_failed',
+        },
+      },
+    });
+
+    const trace = deriveOperationalTraces(state)[0];
+    expect(trace).toMatchObject({
+      operationClass: 'device_location',
+      status: 'failed',
+      metadata: {
+        resolution: 'rejected',
+        reason: 'transition_delivery_failed',
+      },
+    });
+    expect(JSON.stringify(trace)).not.toMatch(/latitude|longitude|"lat"|"lon"/i);
+  });
+
   it('keeps authority identifiers and arbitrary Hub diagnostics out of visible traces', () => {
     let state = reduceHubStreamState(createInitialHubStreamState(), {
       type: 'hub.inbound',

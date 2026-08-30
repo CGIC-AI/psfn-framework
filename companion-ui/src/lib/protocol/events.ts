@@ -164,6 +164,25 @@ export interface DeviceLocationMessage {
   timestamp: number;
 }
 
+export type DeviceLocationRejectionReason =
+  | 'unsupported_transport'
+  | 'capability_unavailable'
+  | 'configuration_unavailable'
+  | 'invalid_sample'
+  | 'transition_delivery_failed';
+
+/** Coordinate-free Hub resolution state for recoverable phone feedback. */
+export type DeviceLocationStatusMessage =
+  | {
+    type: 'device.location.status';
+    status: 'located' | 'unzoned' | 'poor_accuracy';
+  }
+  | {
+    type: 'device.location.status';
+    status: 'rejected';
+    reason: DeviceLocationRejectionReason;
+  };
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Hub -> Client
 // ─────────────────────────────────────────────────────────────────────────────
@@ -189,7 +208,8 @@ export type HubToClientMessage =
   | ArtifactPreviewResultMessage
   | ArtifactPreviewErrorMessage
   | ToolActivityMessage
-  | EmotionSnapshotMessage;
+  | EmotionSnapshotMessage
+  | DeviceLocationStatusMessage;
 
 export interface SessionReadyMessage {
   type: 'session.ready';

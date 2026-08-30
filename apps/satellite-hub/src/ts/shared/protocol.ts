@@ -35,7 +35,8 @@ export type HubToClientMessage =
   | ArtifactPreviewResultMessage
   | ArtifactPreviewErrorMessage
   | ToolActivityMessage
-  | EmotionSnapshotMessage;
+  | EmotionSnapshotMessage
+  | DeviceLocationStatusMessage;
 
 export interface HelloMessage {
   type: "hello";
@@ -183,6 +184,25 @@ export interface ErrorEventMessage {
     message: string;
   };
 }
+
+export type DeviceLocationRejectionReason =
+  | "unsupported_transport"
+  | "capability_unavailable"
+  | "configuration_unavailable"
+  | "invalid_sample"
+  | "transition_delivery_failed";
+
+/** Coordinate-free resolution state returned only to the originating phone. */
+export type DeviceLocationStatusMessage =
+  | {
+    type: "device.location.status";
+    status: "located" | "unzoned" | "poor_accuracy";
+  }
+  | {
+    type: "device.location.status";
+    status: "rejected";
+    reason: DeviceLocationRejectionReason;
+  };
 
 export interface RelaySttResultMessage {
   type: "relay.stt.result";

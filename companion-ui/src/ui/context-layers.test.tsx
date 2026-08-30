@@ -17,6 +17,7 @@ function renderApprovals(approvals: ApprovalPanelState) {
       approvals={approvals}
       artifacts={NO_ARTIFACTS}
       error={null}
+      locationNotice={null}
       onApprovalDecision={onApprovalDecision}
       onArtifactPreview={vi.fn()}
       stacked={false}
@@ -28,6 +29,25 @@ function renderApprovals(approvals: ApprovalPanelState) {
 }
 
 describe('approval cards', () => {
+  it('labels recoverable location feedback separately from connection errors', () => {
+    render(
+      <ToastLayer
+        approvals={{ capability: 'unsupported', requests: [], blockedReason: 'unsupported' }}
+        artifacts={NO_ARTIFACTS}
+        error={null}
+        locationNotice="Location permission is on. Waiting for a more accurate fix."
+        onApprovalDecision={vi.fn()}
+        onArtifactPreview={vi.fn()}
+        stacked={false}
+        updateReady={false}
+        voiceNotice={null}
+      />,
+    );
+
+    expect(screen.getByText('Location update')).toBeTruthy();
+    expect(screen.queryByText('Connection issue')).toBeNull();
+  });
+
   it('renders complete shard attribution and submits only the offered decision', () => {
     const requestedAt = '2026-07-17T00:00:00.000Z';
     const expiresAt = '2026-07-17T00:05:00.000Z';

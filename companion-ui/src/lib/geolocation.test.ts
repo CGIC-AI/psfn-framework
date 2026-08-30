@@ -156,4 +156,24 @@ describe('startDeviceLocationWatch', () => {
 
     expect(send).not.toHaveBeenCalled();
   });
+
+  it('reports valid recovery fixes even when egress filtering suppresses them', () => {
+    const geolocation = new FakeGeolocation();
+    const send = vi.fn();
+    const onValidFix = vi.fn();
+    startDeviceLocationWatch({
+      geolocation,
+      send,
+      onValidFix,
+      minDistanceM: 100,
+      minIntervalMs: 30_000,
+    });
+
+    geolocation.emit({ latitude: 37.42, longitude: -122.08, accuracy: 10 }, 1_000);
+    geolocation.emit({ latitude: 37.4201, longitude: -122.08, accuracy: 10 }, 40_000);
+    geolocation.emit({ latitude: 999, longitude: 0, accuracy: 10 }, 80_000);
+
+    expect(send).toHaveBeenCalledOnce();
+    expect(onValidFix).toHaveBeenCalledTimes(2);
+  });
 });

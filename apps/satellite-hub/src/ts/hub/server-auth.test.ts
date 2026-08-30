@@ -229,7 +229,9 @@ test("authenticated device.location fails closed without registry-granted capabi
     type: "device.location", lat: 40, lon: -75, accuracyM: 10, timestamp: 1_700_000_000_000,
   }));
   await waitFor(() => messages.some(message => (
-    message.type === "error-event" && message.data.message.includes("device_location capability")
+    message.type === "device.location.status"
+    && message.status === "rejected"
+    && message.reason === "capability_unavailable"
   )));
   socket.close();
   await new Promise<void>(resolve => socket.once("close", resolve));

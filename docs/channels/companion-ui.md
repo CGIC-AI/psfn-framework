@@ -465,6 +465,22 @@ relay, because the shipped transport accepts final transcripts, not raw PCM.
 The live voice surfaces themselves (Discord voice, the `/v1/voice/ws` API
 websocket, the Satellite Hub) are documented on the voice page, not here.
 
+The gateway output path is session-exact and fail-closed. The authenticated
+Hub posts one retained audio frame to `POST /v1/companion/audio-output` with
+its registry claim headers. The route requires the resolved `audio_output`
+ceiling and publishes through `CompanionUiAudioOutputRelay`; the WebSocket
+adapter subscribes only when the same principal, satellite, endpoint, claim
+type, session, and companion binding negotiated `audio_output`. It projects
+those frames into the client's ordinary `{schemaVersion: 1, type: 'event'}`
+envelope. Incapable sessions are not subscribed and receive zero frames.
+Delivery revalidates attachment authority before every frame and closes the
+socket on loss or bounded-backlog exhaustion.
+
+This output relay does not choose a new browser input protocol. Browser speech
+input remains transcript-only here; raw browser capture, downsampling, gesture
+unlock, and hands-free microphone ownership belong to `psfn-framework-7ang.12`.
+The existing badge PCM ingress remains its separately authenticated transport.
+
 ## Primary embodiment
 
 `dispatchCompanionUiPrimaryEmbodiment`

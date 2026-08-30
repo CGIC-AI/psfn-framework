@@ -248,7 +248,9 @@ function syncPlaybackSupport(
   session: SatelliteHubSession | null | undefined,
 ): VoicePlaybackState {
   const supported = sessionSupportsStreamedAudio(session);
-  return supported === state.supported ? state : createVoicePlaybackState(supported);
+  return supported === state.supported
+    ? state
+    : createVoicePlaybackState(supported, state.resetGeneration + 1);
 }
 
 export function reduceHubStreamState(
@@ -263,7 +265,7 @@ export function reduceHubStreamState(
         state.session?.activeShardId !== event.session.activeShardId;
       const supported = sessionSupportsStreamedAudio(event.session);
       const voicePlayback = supported !== state.voicePlayback.supported || shardSelectionChanged
-        ? createVoicePlaybackState(supported)
+        ? createVoicePlaybackState(supported, state.voicePlayback.resetGeneration + 1)
         : state.voicePlayback;
       return {
         ...state,
@@ -562,7 +564,10 @@ function applyConnectionState(
           // Drop stale companion affect on lost authority so the sprite falls
           // back to a neutral default rather than freezing a past expression.
           emotion: null,
-          voicePlayback: createVoicePlaybackState(false),
+          voicePlayback: createVoicePlaybackState(
+            false,
+            state.voicePlayback.resetGeneration + 1,
+          ),
         }
       : {}),
     updatedAt: at,

@@ -17,8 +17,10 @@ import { projectApprovalRequestedPayload } from '../../backplane/companion-relay
 import {
   resolveCompanionApprovalActor,
   resolveCompanionRelayAccess,
+  resolveSatelliteClaim,
 } from '../../backplane/satellite-registry.js';
 import type { CompanionEventRelay } from '../../backplane/companion-relay/relay.js';
+import type { CompanionUiAudioOutputRelay } from '../../backplane/companion-ui-audio-output-relay.js';
 import type {
   ConfirmationQueueHistoryEntry,
   ConfirmationResolveResult,
@@ -29,6 +31,12 @@ import { toErrorMessage } from '../../../shared/utils/errors.js';
 import { isRecord } from '../../../shared/utils/types.js';
 import { sendApiError } from './http.js';
 import type { CompanionStimulusPort } from './companion-stimuli.js';
+import {
+  COMPANION_UI_AUDIO_OUTPUT_PATH,
+  parseCompanionUiAudioOutputFrame,
+  type CompanionUiAudioOutputBinding,
+} from '../../../shared/contracts/companion-ui-audio-output.js';
+import { createCompanionId } from '../../../shared/routing/companion-id.js';
 
 const log = createComponentLogger('CompanionRelayRoutes');
 
@@ -65,6 +73,8 @@ export interface CompanionRelayAuditEntry {
 
 export interface CompanionRelayHttpDeps {
   relay: CompanionEventRelay;
+  /** Hub-to-browser spoken audio. Optional only for runtimes without Companion UI. */
+  audioOutput?: CompanionUiAudioOutputRelay;
   approvals: CompanionApprovalDecisionPort;
   /** Records an audit summary; failures must reject (fail closed). */
   audit: (entry: CompanionRelayAuditEntry) => Promise<void>;
@@ -78,7 +88,7 @@ const COMPANION_ARTIFACTS_PREFIX = '/v1/companion/artifacts/';
 const COMPANION_ARTIFACT_PREVIEW_SUFFIX = '/preview';
 
 export interface CompanionRelayRouteMatch {
-  route: 'events' | 'approval_decision' | 'artifact_preview' | 'touch_stimulus';
+  route: 'events' | 'approval_decision' | 'artifact_preview' | 'touch_stimulus' | 'audio_output';
   id?: string;
 }
 
@@ -109,6 +119,9 @@ export function matchCompanionRelayRoute(
   if (method === 'POST' && path === COMPANION_STIMULI_PATH) {
     return { route: 'touch_stimulus' };
   }
+  if (method === 'POST' && path === COMPANION_UI_AUDIO_OUTPUT_PATH) {
+    return { route: 'audio_output' };
+  }
   if (
     method === 'GET'
     && path.startsWith(COMPANION_ARTIFACTS_PREFIX)
@@ -123,6 +136,76 @@ export function matchCompanionRelayRoute(
     }
   }
   return null;
+}
+
+/**
+ * `POST /v1/companion/audio-output` — accepts one strict retained Hub frame
+ * and publishes it only to the exact authenticated browser session binding.
+ */
+export async function handleCompanionUiAudioOutput(
+  ctx: CompanionRelayRequestContext,
+): Promise<void> {
+  const relay = ctx.deps.audioOutput;
+  if (!relay) {
+    sendApiError(
+      ctx.res,
+      503,
+      'companion_audio_output_unavailable',
+      'Companion UI audio output relay is unavailable',
+    );
+    return;
+  }
+  const claim = resolveSatelliteClaim({
+    headers: ctx.req.headers,
+    principal: ctx.principal,
+    registry: ctx.registry,
+    ...(ctx.clientCert ? { clientCert: ctx.clientCert } : {}),
+  });
+  if (!claim.ok) {
+    sendApiError(ctx.res, claim.status, claim.type, claim.message);
+    return;
+  }
+  if (!claim.value.satellite.capabilities.effective.includes('audio_output')) {
+    sendApiError(
+      ctx.res,
+      403,
+      'companion_audio_output_not_allowed',
+      'Satellite endpoint lacks the audio_output capability',
+    );
+    return;
+  }
+  const body = await readJsonBodyWithLimit(ctx.req, ctx.res, {
+    maxBytes: relay.maxFrameBytes(),
+    logger: log,
+    logMeta: { route: 'companion.audio-output' },
+  });
+  if (!body.ok) {
+    if (body.errorCode === 'payload_too_large') return;
+    sendApiError(ctx.res, 400, 'invalid_request', 'Audio output frame must be valid JSON');
+    return;
+  }
+  let frame;
+  try {
+    frame = parseCompanionUiAudioOutputFrame(
+      body.value,
+      claim.value.satellite.sessionId,
+    );
+  } catch (error) {
+    sendApiError(ctx.res, 400, 'invalid_request', toErrorMessage(error));
+    return;
+  }
+  const addressedCompanionId = claim.value.satellite.addressedCompanionId
+    ?? createCompanionId(ctx.companionId, 'Companion UI audio output companion');
+  const binding: CompanionUiAudioOutputBinding = Object.freeze({
+    companionId: addressedCompanionId,
+    principalId: ctx.principal.id,
+    satelliteId: claim.value.satellite.satelliteId,
+    endpointId: claim.value.satellite.endpointId,
+    claimType: claim.value.satellite.claimType,
+    sessionId: claim.value.satellite.sessionId,
+  });
+  relay.publish(binding, frame);
+  sendJson(ctx.res, 202, { accepted: true });
 }
 
 interface CompanionRelayRequestContext {

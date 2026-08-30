@@ -12,6 +12,7 @@ import type { SubstrateMessage } from '../../../shared/contracts/runtime.js';
 import { deriveApiKeyPrincipalId } from '../../backplane/http/auth.js';
 import { parseSatelliteRegistryConfig } from '../../backplane/satellite-registry.js';
 import { CompanionEventRelay } from '../../backplane/companion-relay/relay.js';
+import { CompanionUiAudioOutputRelay } from '../../backplane/companion-ui-audio-output-relay.js';
 import {
   redactApprovalRequested,
   redactApprovalResolved,
@@ -20,6 +21,7 @@ import { ConfirmationQueue } from '../../../system/capabilities/confirmation-que
 import type { CompanionRelayAuditEntry } from './companion-relay-routes.js';
 import { CompanionStimulusIngress } from './companion-stimuli.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
+import type { CompanionUiAudioOutputFrame } from '../../../shared/contracts/companion-ui-audio-output.js';
 
 const API_KEY = 'companion-relay-test-key';
 const OPERATOR_API_KEY = 'companion-relay-operator-key';
@@ -30,6 +32,14 @@ const EMOTION_QUERY = 'satelliteId=emotion-node&endpointId=emotion-endpoint&clai
 const EMOTION_SECONDARY_QUERY = 'satelliteId=emotion-node&endpointId=emotion-secondary&claimType=satellite-hub';
 const WAIT_TIMEOUT_MS = 2_000;
 const DEFAULT_COMPANION_ID = '11111111-1111-4111-8111-111111111111';
+const AUDIO_OUTPUT_HEADERS = {
+  ...AUTH,
+  'X-PSFN-Satellite-Claim-Type': 'satellite-hub',
+  'X-PSFN-Satellite-ID': 'hub-node',
+  'X-PSFN-Satellite-Endpoint-ID': 'hub-endpoint',
+  'X-PSFN-Satellite-Session-ID': 'browser-session-1',
+  'X-PSFN-Satellite-Capabilities': 'audio_output',
+};
 
 function endpointFixture(overrides: Record<string, unknown>): Record<string, unknown> {
   return {
@@ -60,7 +70,7 @@ const TEST_REGISTRY = parseSatelliteRegistryConfig({
       endpoints: [
         endpointFixture({
           endpointId: 'hub-endpoint',
-          maxCapabilities: ['text', 'touch', 'location'],
+          maxCapabilities: ['text', 'touch', 'location', 'audio_output'],
           telemetryScopes: ['approvals', 'artifacts', 'tool_activity'],
         }),
         endpointFixture({
@@ -240,6 +250,7 @@ describe('companion relay routes', () => {
   let server: ApiServer;
   let eventBus: EventBus;
   let relay: CompanionEventRelay;
+  let audioOutputRelay: CompanionUiAudioOutputRelay;
   let queue: ConfirmationQueue;
   let tempDir: string;
   let auditEntries: CompanionRelayAuditEntry[];
@@ -288,6 +299,7 @@ describe('companion relay routes', () => {
       previewRoots: [tempDir],
       maxPreviewBytes: 1_000,
     });
+    audioOutputRelay = new CompanionUiAudioOutputRelay(128 * 1024);
 
     server = new ApiServer({
       companionId: DEFAULT_COMPANION_ID,
@@ -308,6 +320,7 @@ describe('companion relay routes', () => {
       satelliteRegistry: TEST_REGISTRY,
       companionRelay: {
         relay,
+        audioOutput: audioOutputRelay,
         approvals: {
           resolve: (params) => queue.resolve(params),
           findHistory: (id) => queue.listHistory().find((entry) => entry.id === id) ?? null,
@@ -391,6 +404,70 @@ describe('companion relay routes', () => {
       );
       expect(res.status).toBe(403);
       expect(res.body).toContain('companion_relay_not_registered');
+    });
+  });
+
+  describe('Companion UI audio output', () => {
+    it('publishes strict Hub brackets to the exact authenticated session binding', async () => {
+      const frames: CompanionUiAudioOutputFrame[] = [];
+      const unsubscribe = audioOutputRelay.subscribe({
+        binding: {
+          companionId: DEFAULT_COMPANION_ID,
+          principalId: HUB_PRINCIPAL_ID,
+          satelliteId: 'hub-node',
+          endpointId: 'hub-endpoint',
+          claimType: 'satellite-hub',
+          sessionId: 'browser-session-1',
+        },
+        onFrame: frame => frames.push(frame),
+      });
+
+      for (const frame of [
+        { type: 'text', data: 'audio-init' },
+        { type: 'audio', data: 'AQID' },
+        { type: 'text', data: 'audio-end' },
+      ] as const) {
+        const response = await request(
+          port,
+          'POST',
+          '/v1/companion/audio-output',
+          frame,
+          AUDIO_OUTPUT_HEADERS,
+        );
+        expect(response.status).toBe(202);
+        expect(JSON.parse(response.body)).toEqual({ accepted: true });
+      }
+
+      expect(frames).toEqual([
+        { type: 'text', data: 'audio-init' },
+        { type: 'audio', data: 'AQID' },
+        { type: 'text', data: 'audio-end' },
+      ]);
+      unsubscribe();
+    });
+
+    it('rejects malformed frames and claims without the audio_output ceiling', async () => {
+      const malformed = await request(
+        port,
+        'POST',
+        '/v1/companion/audio-output',
+        { type: 'audio', data: 'not base64' },
+        AUDIO_OUTPUT_HEADERS,
+      );
+      expect(malformed.status).toBe(400);
+
+      const denied = await request(
+        port,
+        'POST',
+        '/v1/companion/audio-output',
+        { type: 'text', data: 'audio-init' },
+        {
+          ...AUDIO_OUTPUT_HEADERS,
+          'X-PSFN-Satellite-Capabilities': 'text',
+        },
+      );
+      expect(denied.status).toBe(403);
+      expect(denied.body).toContain('companion_audio_output_not_allowed');
     });
   });
 

@@ -44,13 +44,14 @@ const REPLY: Extract<ParticipationAppraisal, { action: 'reply' }> = {
 
 function trigger(): EgressReplyTrigger {
   return {
+    kind: 'inbound_room_message',
     channelId: CHANNEL,
     channelType: 'discord',
-    sourceMessageId: 'evt',
+    sourceEventId: 'evt',
     authorId: 'human-1',
     authorName: 'Sam',
     content: 'hey there',
-    timestampMs: 1_000,
+    occurredAtMs: 1_000,
   };
 }
 
@@ -172,7 +173,7 @@ describe('speaking egress-lease phase integration', () => {
         const decisionA = await makePhase(store, COMPANION_A).grantReply(
           reservationA,
           REPLY,
-          { ...trigger(), sourceMessageId: 'evt-1' },
+          { ...trigger(), sourceEventId: 'evt-1' },
           2_000,
         );
         expect(decisionA.outcome).toBe('delivered');
@@ -188,7 +189,7 @@ describe('speaking egress-lease phase integration', () => {
         const decisionB = await makePhase(store, COMPANION_B).grantReply(
           reservationB,
           REPLY,
-          { ...trigger(), sourceMessageId: 'evt-1' },
+          { ...trigger(), sourceEventId: 'evt-1' },
           3_000,
         );
         expect(decisionB.outcome).toBe('lease_declined');
@@ -214,7 +215,7 @@ describe('speaking egress-lease phase integration', () => {
         const suppressed = await makePhase(store, COMPANION_A, calmPressure(50)).grantReply(
           reservation1,
           REPLY,
-          { ...trigger(), sourceMessageId: 'evt-ho' },
+          { ...trigger(), sourceEventId: 'evt-ho' },
           1_200,
         );
         expect(suppressed.outcome).toBe('breaker_suppressed');
@@ -228,7 +229,7 @@ describe('speaking egress-lease phase integration', () => {
         const admitted = await makePhase(store, COMPANION_A, calmPressure(30)).grantReply(
           reservation2,
           REPLY,
-          { ...trigger(), sourceMessageId: 'evt-probe' },
+          { ...trigger(), sourceEventId: 'evt-probe' },
           1_500,
         );
         expect(admitted.outcome).toBe('delivered');

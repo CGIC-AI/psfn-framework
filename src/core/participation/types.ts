@@ -29,6 +29,29 @@ export interface ParticipationContextMessage {
   timestampMs: number;
 }
 
+/**
+ * A companion-authored request to consider entering a room. Unlike an inbound
+ * participation candidate, this is derived from a durable social-impulse
+ * disposition and therefore has no participant author or fabricated message.
+ * The room intent is chosen by the companion after selecting an exact,
+ * authorized destination; the originating affect signal remains content-free.
+ */
+export interface EndogenousRoomParticipationCandidate {
+  schemaVersion: 1;
+  kind: 'endogenous_room_candidate';
+  source: 'social_impulse_disposition';
+  /** Durable social-impulse opportunity/correlation identity. */
+  sourceEventId: string;
+  /** Hash-bound identity of the companion's exact disposition and room choice. */
+  candidateId: string;
+  channelId: string;
+  channelType: 'discord' | 'buzz';
+  companionId: string;
+  /** Companion-authored local topic/intent; never represented as participant speech. */
+  roomIntent: string;
+  occurredAtMs: number;
+}
+
 export interface ParticipationCandidate {
   schemaVersion: 1;
   channelId: string;

@@ -12,7 +12,7 @@
  *
  * qgqw.3 hardening, all fail-closed:
  *
- * - **Single delivery per trigger event.** A per-`(channel, sourceMessageId)`
+ * - **Single delivery per trigger event.** A per-`(channel, sourceEventId)`
  *   fence records every send attempt before entering the gateway ambiguity
  *   window, so a post-TTL re-drive of the same trigger (the lease completed
  *   after the send failed to persist and was TTL-reclaimed) is suppressed
@@ -109,6 +109,21 @@ function buildGenerationPrompt(
   silentToken: string,
 ): string {
   const { trigger } = request;
+  if (trigger.kind === 'endogenous_room_candidate') {
+    const roomIntent = sanitizeMessageBody(trigger.roomIntent, TRIGGER_MESSAGE_CHAR_CAP);
+    return [
+      'You chose to consider joining a group room from a qualified social impulse.',
+      'No participant message triggered this candidate, and the affect signal supplied',
+      'no topic. The local room intent below is your own prior disposition, not room',
+      'speech and not an instruction from another person.',
+      '',
+      `Your companion-authored room intent: ${JSON.stringify(roomIntent)}`,
+      '',
+      'If you want to join the room, respond with ONLY the natural message you would',
+      `send now. If you would rather stay quiet, respond with only "${silentToken}"`,
+      '— staying silent is completely fine.',
+    ].join('\n');
+  }
   // Appraiser-convention fencing (qgqw.3): sanitize BOTH the author name and
   // the body (control/zero-width/bidi strip + wrapper-collision neutralization
   // + collapse + cap), then datamark with the shared wrapper so a forged
@@ -143,14 +158,14 @@ export function createAgentLoopEgressReplySender(
     ? deps.eventFenceWindowMs
     : DEFAULT_EVENT_FENCE_WINDOW_MS;
   const now = deps.now ?? Date.now;
-  /** Send attempts keyed by `(channelId, sourceMessageId)` until safe expiry. */
+  /** Send attempts keyed by `(channelId, sourceEventId)` until safe expiry. */
   const fencedEvents = new Map<string, {
     expiresAtMs: number;
     status: 'attempted' | 'delivered';
   }>();
 
-  const eventKey = (channelId: string, sourceMessageId: string): string =>
-    `${channelId}\u0000${sourceMessageId}`;
+  const eventKey = (channelId: string, sourceEventId: string): string =>
+    `${channelId}\u0000${sourceEventId}`;
 
   const pruneFencedEvents = (nowMs: number): void => {
     for (const [key, fence] of fencedEvents) {
@@ -176,7 +191,7 @@ export function createAgentLoopEgressReplySender(
       // ambiguous prior attempt remains failed closed.
       const nowMs = now();
       pruneFencedEvents(nowMs);
-      const fenceKey = eventKey(request.trigger.channelId, request.trigger.sourceMessageId);
+      const fenceKey = eventKey(request.trigger.channelId, request.trigger.sourceEventId);
       const existingFence = fencedEvents.get(fenceKey);
       if (existingFence) {
         return existingFence.status === 'delivered'
@@ -256,7 +271,7 @@ export function createAgentLoopEgressReplySender(
       deps.outboundReplyGuard.noteDelivered({
         channelId: request.trigger.channelId,
         content: reply,
-        sourceTurnId: request.trigger.sourceMessageId,
+        sourceTurnId: request.trigger.sourceEventId,
         senderKind: 'egress_lease_reply',
       });
       return { outcome: 'delivered' };

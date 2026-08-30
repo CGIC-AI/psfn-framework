@@ -699,13 +699,14 @@ export function registerGatewayMessageHandlers(
       let egressDecision: EgressLeaseDecision;
       if (result.appraisal.action === 'reply') {
         const trigger: EgressReplyTrigger = {
+          kind: 'inbound_room_message',
           channelId: candidate.channelId,
           channelType: candidate.channelType,
-          sourceMessageId: candidate.sourceMessageId,
+          sourceEventId: candidate.sourceMessageId,
           authorId: candidate.triggerAuthorId,
           authorName: candidate.triggerAuthorName,
           content: candidate.triggerContent,
-          timestampMs: candidate.triggerTimestampMs,
+          occurredAtMs: candidate.triggerTimestampMs,
         };
         egressDecision = await egressLeasePhase.grantReply(
           decision.reservation,

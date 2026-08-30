@@ -17,6 +17,7 @@ import {
 import type { ProactiveOutboundDispatcher } from '../../core/intention/proactive-outbound.js';
 import type { SocialDesireHumanDeliveryPolicy } from '../../core/intention/social-desire-human-policy.js';
 import type { CompanionAvailabilityRuntime } from '../../core/agent/companion-availability.js';
+import { createEndogenousRoomParticipationCandidate } from '../../core/participation/endogenous-room-candidate.js';
 import type { CapabilityRuntime } from '../../system/capabilities/runtime.js';
 import type { SessionStore } from '../../persistence/sessions/store.js';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
@@ -291,11 +292,20 @@ export function createProductionSocialImpulseOutreachRuntime(
         || !options.capabilityRuntime.has('external.discord')) {
         return { outcome: 'suppressed', reasonCode: 'room_arbiter_unavailable' };
       }
-      const reserved = await phases.reservationPhase.reserve({
+      const candidate = createEndogenousRoomParticipationCandidate({
+        sourceEventId: execution.opportunityId,
+        candidateId: execution.bindingHash,
         channelId: destination.channelId,
-        triggerEventId: execution.opportunityId,
+        channelType: destination.channelType,
         companionId: options.companionId,
-        nowMs: now(),
+        roomIntent: execution.intent,
+        occurredAtMs: now(),
+      });
+      const reserved = await phases.reservationPhase.reserve({
+        channelId: candidate.channelId,
+        triggerEventId: candidate.sourceEventId,
+        companionId: options.companionId,
+        nowMs: candidate.occurredAtMs,
       });
       if (reserved.outcome !== 'reserved') {
         return { outcome: 'suppressed', reasonCode: `room_reservation_${reserved.blockedBy}` };
@@ -303,21 +313,13 @@ export function createProductionSocialImpulseOutreachRuntime(
       await phases.reservationPhase.settleAfterAppraisal(
         reserved.reservation,
         'reply',
-        now(),
+        candidate.occurredAtMs,
       );
       const roomResult = await phases.egressLeasePhase.grantReply(
         reserved.reservation,
         { action: 'reply', reasonCode: 'companion_chosen_outreach', confidence: 1 },
-        {
-          channelId: destination.channelId,
-          channelType: destination.channelType,
-          sourceMessageId: execution.opportunityId,
-          authorId: 'system:social-outreach',
-          authorName: options.companionName,
-          content: execution.intent,
-          timestampMs: now(),
-        },
-        now(),
+        candidate,
+        candidate.occurredAtMs,
       );
       return roomResult.outcome === 'delivered'
         ? { outcome: 'delivered' }

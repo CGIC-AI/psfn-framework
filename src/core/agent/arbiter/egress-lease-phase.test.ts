@@ -116,13 +116,14 @@ const REPLY: Extract<ParticipationAppraisal, { action: 'reply' }> = {
 };
 
 const TRIGGER_CTX: EgressReplyTrigger = {
+  kind: 'inbound_room_message',
   channelId: CHANNEL,
   channelType: 'discord',
-  sourceMessageId: TRIGGER,
+  sourceEventId: TRIGGER,
   authorId: 'human-1',
   authorName: 'Sam',
   content: 'hey companion, thoughts?',
-  timestampMs: 4_000,
+  occurredAtMs: 4_000,
 };
 
 interface FakeStoreOptions {
@@ -362,6 +363,27 @@ describe('SpeakingEgressLeasePhase.grantReply — reservation-status guard (jp36
       expect(store.readRoomEpisodeBreakerState).not.toHaveBeenCalled();
     });
   }
+});
+
+describe('SpeakingEgressLeasePhase.grantReply — exact trigger binding', () => {
+  it('fails closed before gate reads when the generation source is not the reserved event', async () => {
+    const store = makeFakeStore();
+    const pot = makePot('drawn');
+    const sender = makeSender('delivered');
+    const phase = makePhase({ store, pot, sender });
+
+    const decision = await phase.grantReply(
+      makeReservation(),
+      REPLY,
+      { ...TRIGGER_CTX, sourceEventId: 'different-event' },
+      10_000,
+    );
+
+    expect(decision).toMatchObject({ outcome: 'gate_error', errorStage: 'trigger' });
+    expect(store.readRoomEpisodeBreakerState).not.toHaveBeenCalled();
+    expect(pot.draw).not.toHaveBeenCalled();
+    expect(sender.deliver).not.toHaveBeenCalled();
+  });
 });
 
 describe('SpeakingEgressLeasePhase.grantReply — Law-36 single-probe breaker discipline', () => {

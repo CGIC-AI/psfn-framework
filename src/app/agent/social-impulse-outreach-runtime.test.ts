@@ -5,7 +5,11 @@ import type {
   SocialImpulseOutreachRecord,
   SocialImpulseOutreachStorePort,
 } from '../../core/emotion/social-impulse-outreach.js';
+import { SpeakingReservationPhase } from '../../core/agent/arbiter/reservation-phase.js';
+import { SpeakingEgressLeasePhase } from '../../core/agent/arbiter/egress-lease-phase.js';
 import { runWithRequestContext } from '../../primitives/llm/request-context.js';
+import { OutboundReplyDeduper } from '../../system/lifecycle/outbound-reply-dedupe.js';
+import { createAgentLoopEgressReplySender } from './egress-reply-sender.js';
 import { createProductionSocialImpulseOutreachRuntime } from './social-impulse-outreach-runtime.js';
 
 const COMPANION_ID = '11111111-1111-4111-8111-111111111111';
@@ -109,6 +113,10 @@ function harness(
   }));
   const settleAfterAppraisal = vi.fn(async () => {});
   const grantReply = vi.fn(async () => fromAny({ outcome: 'delivered' }));
+  const roomPhases = fromAny({
+    reservationPhase: { reserve, settleAfterAppraisal },
+    egressLeasePhase: { grantReply },
+  });
   const runtime = createProductionSocialImpulseOutreachRuntime({
     companionId: COMPANION_ID,
     companionName: 'Test Companion',
@@ -163,8 +171,7 @@ function harness(
     getPhases: () => fromAny({
       proactiveOutbound: { dispatch },
       humanPolicy: { evaluate: evaluateHuman },
-      reservationPhase: { reserve, settleAfterAppraisal },
-      egressLeasePhase: { grantReply },
+      ...roomPhases,
     }),
     now: () => NOW_MS + 100,
   });
@@ -178,6 +185,160 @@ function harness(
     reserve,
     settleAfterAppraisal,
     grantReply,
+    setRoomPhases(value: {
+      reservationPhase: SpeakingReservationPhase;
+      egressLeasePhase: SpeakingEgressLeasePhase;
+    }) {
+      roomPhases.reservationPhase = value.reservationPhase;
+      roomPhases.egressLeasePhase = value.egressLeasePhase;
+    },
+  };
+}
+
+function assembledRoomPhases(input: {
+  handleMessage: ReturnType<typeof vi.fn>;
+  send: ReturnType<typeof vi.fn>;
+}): {
+  reservationPhase: SpeakingReservationPhase;
+  egressLeasePhase: SpeakingEgressLeasePhase;
+} {
+  let reservation = fromAny();
+  const arbiterStore = fromAny({
+    reserve: async (request: Record<string, unknown>) => {
+      reservation = fromAny({
+        reservationId: request.reservationId,
+        channelId: request.channelId,
+        triggerEventId: request.triggerEventId,
+        companionId: request.companionId,
+        episodeId: 'episode-room',
+        reservedAtMs: request.nowMs,
+        expiresAtMs: request.expiresAtMs,
+        status: 'reserved',
+        reason: null,
+        finalizedAtMs: null,
+        revision: 1,
+      });
+      return { outcome: 'reserved', reservation, episode: roomEpisode() };
+    },
+    releaseReservation: async () => fromAny({ ...reservation, status: 'released' }),
+    readRoomEpisodeBreakerState: async () => 'closed',
+    persistRoomEpisodeBreakerState: async () => undefined,
+    listActiveReservers: async () => [COMPANION_ID],
+    readRoomEpisode: async () => roomEpisode(),
+    acquireEgressLease: async (request: Record<string, unknown>) => ({
+      outcome: 'acquired',
+      heldBy: null,
+      lease: fromAny({
+        leaseId: request.leaseId,
+        reservationId: reservation.reservationId,
+        channelId: reservation.channelId,
+        triggerEventId: reservation.triggerEventId,
+        companionId: COMPANION_ID,
+        episodeId: 'episode-room',
+        fencingToken: 1,
+        chargedUnits: request.chargedUnits,
+        acquiredAtMs: request.nowMs,
+        expiresAtMs: request.expiresAtMs,
+        status: 'held',
+        reason: null,
+        finalizedAtMs: null,
+        revision: 1,
+      }),
+    }),
+    completeEgressLease: async () => fromAny({ status: 'delivered' }),
+  });
+  const socialPot = fromAny({
+    readPot: async () => ({
+      companionId: COMPANION_ID,
+      balance: 10,
+      cap: 240,
+      lastRegenAtMs: NOW_MS,
+      revision: 1,
+    }),
+    draw: async () => ({
+      outcome: 'drawn',
+      drawn: 1,
+      before: { companionId: COMPANION_ID, balance: 10, cap: 240, lastRegenAtMs: NOW_MS, revision: 1 },
+      after: { companionId: COMPANION_ID, balance: 9, cap: 240, lastRegenAtMs: NOW_MS, revision: 2 },
+    }),
+    refund: async () => ({
+      companionId: COMPANION_ID,
+      balance: 10,
+      cap: 240,
+      lastRegenAtMs: NOW_MS,
+      revision: 3,
+    }),
+  });
+  const socialPotConfig = {
+    capUnits: 240,
+    perChannelDrawFraction: 0.34,
+    regenerationTickMs: 3_600_000,
+    regenerationUnitsPerTick: 10,
+  };
+  const roomEpisodeCircuitBreaker = { tripThreshold: 100, resetThreshold: 40 };
+  return {
+    reservationPhase: new SpeakingReservationPhase({
+      store: arbiterStore,
+      socialPot,
+      icpPrecedence: { resolve: () => ({ icpTurnFenced: false, icpFatigueExhausted: false }) },
+      companionId: COMPANION_ID,
+      config: {
+        reservationTtlMs: 60_000,
+        minReserveDrawUnits: 1,
+        socialPot: socialPotConfig,
+        roomEpisodeCircuitBreaker,
+        wrapUpThreshold: 60,
+      },
+    }),
+    egressLeasePhase: new SpeakingEgressLeasePhase({
+      store: arbiterStore,
+      socialPot,
+      roomPressure: {
+        resolve: ({ channelId, nowMs }) => ({
+          channelId,
+          pressure: 0,
+          contributingEventCount: 0,
+          windowStartMs: nowMs,
+          evaluatedAtMs: nowMs,
+          level: 'calm',
+          wrapUpInvited: false,
+          leaseThresholdBias: 0,
+        }),
+      },
+      sender: createAgentLoopEgressReplySender({
+        generator: { handleMessage: input.handleMessage },
+        delivery: { send: input.send },
+        companionName: 'Test Companion',
+        outboundReplyGuard: new OutboundReplyDeduper(),
+        resolveDestinationDisclosure: () => ({ channelPrivacy: 'invite_only', broadcast: false }),
+      }),
+      companionId: COMPANION_ID,
+      config: {
+        mode: 'on',
+        leaseTtlMs: 60_000,
+        egressDrawUnits: 1,
+        minReplyConfidence: 0.5,
+        socialPot: socialPotConfig,
+        roomEpisodeCircuitBreaker,
+        wrapUpThreshold: 60,
+        replyPressureUnits: 3,
+      },
+    }),
+  };
+}
+
+function roomEpisode() {
+  return {
+    episodeId: 'episode-room',
+    channelId: 'room-discord',
+    status: 'open' as const,
+    pressure: 0,
+    openedAtMs: NOW_MS,
+    lastActivityAtMs: NOW_MS,
+    consecutiveAutonomousTurns: 0,
+    lastSpeakerCompanionId: null,
+    revision: 1,
+    participants: [],
   };
 }
 
@@ -287,21 +448,85 @@ describe('production social impulse outreach routing', () => {
     const { runtime, reserve, settleAfterAppraisal, grantReply } = harness();
     await runtime.onImpulse(impulse());
 
-    await runtime.choose({
+    const result = await runtime.choose({
       opportunityId: impulse().correlationId,
       disposition: 'join-room',
       destinationId: `room:${channelType}:${channelId}`,
       intent: 'Join the room naturally.',
     });
 
+    expect(result).toMatchObject({
+      outcome: 'delivered',
+      record: {
+        state: 'delivered',
+        disposition: 'join-room',
+        destination: { kind: 'room', channelId, channelType },
+        bindingHash: expect.any(String),
+      },
+    });
     expect(reserve).toHaveBeenCalledWith(expect.objectContaining({ channelId }));
     expect(settleAfterAppraisal).toHaveBeenCalledWith(expect.anything(), 'reply', expect.any(Number));
     expect(grantReply).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ action: 'reply' }),
-      expect.objectContaining({ channelId, channelType }),
+      expect.objectContaining({
+        kind: 'endogenous_room_candidate',
+        source: 'social_impulse_disposition',
+        sourceEventId: impulse().correlationId,
+        candidateId: result.record.bindingHash,
+        channelId,
+        channelType,
+        companionId: COMPANION_ID,
+        roomIntent: 'Join the room naturally.',
+      }),
       expect.any(Number),
     );
+    const candidate = grantReply.mock.calls[0]?.[2];
+    expect(candidate).not.toHaveProperty('authorId');
+    expect(candidate).not.toHaveProperty('authorName');
+    expect(candidate).not.toHaveProperty('content');
+  });
+
+  it('assembles a durable endogenous disposition through the real two-phase sender path', async () => {
+    const assembled = harness(channelType => channelType === 'discord');
+    const send = vi.fn(async () => undefined);
+    assembled.handleMessage.mockImplementation(async (message) => fromAny({
+      content: message.id.startsWith('egress-reply-')
+        ? 'A naturally authored room message.'
+        : '',
+    }));
+    assembled.setRoomPhases(assembledRoomPhases({
+      handleMessage: assembled.handleMessage,
+      send,
+    }));
+    await assembled.runtime.onImpulse(impulse());
+
+    const result = await assembled.runtime.choose({
+      opportunityId: impulse().correlationId,
+      disposition: 'join-room',
+      destinationId: 'room:discord:room-discord',
+      intent: 'Ask how the shared project is going.',
+    });
+
+    expect(result).toMatchObject({
+      outcome: 'delivered',
+      record: {
+        state: 'delivered',
+        disposition: 'join-room',
+        destination: { kind: 'room', channelId: 'room-discord' },
+        bindingHash: expect.any(String),
+      },
+    });
+    expect(send).toHaveBeenCalledWith(
+      'discord',
+      'room-discord',
+      'A naturally authored room message.',
+    );
+    const generated = assembled.handleMessage.mock.calls.find(
+      ([message]) => message.id.startsWith('egress-reply-'),
+    )?.[0];
+    expect(generated?.content).toContain('No participant message triggered this candidate');
+    expect(generated?.content).not.toContain('A message below mentioned or addressed you');
   });
 
   it('does not advertise a room whose composed transport cannot carry it', async () => {

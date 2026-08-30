@@ -1220,9 +1220,10 @@ describe('registerGatewayMessageHandlers', () => {
       reservation,
       expect.objectContaining({ action: 'reply' }),
       expect.objectContaining({
+        kind: 'inbound_room_message',
         channelId: message.channelId,
         channelType: 'buzz',
-        sourceMessageId: message.id,
+        sourceEventId: message.id,
       }),
       expect.any(Number),
     );
@@ -2892,7 +2893,10 @@ describe('registerGatewayMessageHandlers — reservation phase wiring (jp36.5.1.
     expect(egressLeasePhase.grantReply).toHaveBeenCalledWith(
       reservation,
       expect.objectContaining({ action: 'reply' }),
-      expect.objectContaining({ sourceMessageId: SOURCE_MESSAGE_ID }),
+      expect.objectContaining({
+        kind: 'inbound_room_message',
+        sourceEventId: SOURCE_MESSAGE_ID,
+      }),
       1_000_100,
     );
   });

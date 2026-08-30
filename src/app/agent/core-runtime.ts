@@ -186,6 +186,9 @@ import type { PostgresExactSessionPurgeSagaStore } from '../../persistence/postg
 import type { LetterStorePort } from '../../core/letters/contracts.js';
 import { LetterService } from '../../core/letters/service.js';
 import { createLetterTool } from '../../core/tools/letter.js';
+import type { DoingMirrorStorePort } from '../../core/doing-mirror/contracts.js';
+import { DoingMirrorService } from '../../core/doing-mirror/service.js';
+import { WishlistDoingMirrorSource } from '../../core/doing-mirror/sources.js';
 import {
   resolveForegroundSessionOwner,
   type AutomataSessionClassificationService,
@@ -218,6 +221,7 @@ export interface AgentCoreRuntimeOptions {
   postgresDatabaseUrl: string;
   emosimProactivityStateStore: EmoSimProactivityStateStorePort;
   letterStore: LetterStorePort;
+  doingMirrorStore: DoingMirrorStorePort;
   pathSnapshot: RuntimePathSnapshot;
   eventBus: EventBus;
   gateway: GatewayClient;
@@ -303,6 +307,7 @@ export interface AgentCoreRuntime {
   toolConformanceRunner: ToolConformanceRunner;
   sharedWorldWikiCaretaker: SharedWorldWikiCaretakerService | null;
   letterService: LetterService;
+  doingMirrorService: DoingMirrorService;
   closeWikiRuntime: () => Promise<void>;
   closeBiographicalProjection: () => Promise<void>;
   /** Shared lazy durable model-usage query handle (b0yl.5); null on non-postgres. */
@@ -790,6 +795,11 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     systemDataDir: pathSnapshot.systemDataDir,
     systemDataWriter: gateway,
   });
+  const doingMirrorService = new DoingMirrorService({
+    store: options.doingMirrorStore,
+    letters: letterService,
+  });
+  doingMirrorService.registerSource(new WishlistDoingMirrorSource(wikiRuntime.personalWishlist));
   // E8.3: attach the supplemental wiki RAG provider (null when the projection
   // is unavailable); pre-turn assembly consults it AFTER memory context.
   agentLoop.wikiRetrieval = wikiRuntime.retrievalService;
@@ -837,7 +847,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   });
   wireSettingsRuntime(agentLoop, config, { registerSystemTool: false });
   wireSessionToolsRuntime(agentLoop, sessionManager, pathSnapshot.companionDataDir, gateway, promptRegistry);
-  agentLoop.registerTool(createLetterTool(letterService), 'core');
+  agentLoop.registerTool(createLetterTool(letterService, doingMirrorService), 'core');
   const contactRuntimeOptions: ContactRuntimeOptions = {
     exportDir: resolveContactsDir(pathSnapshot.companionDataDir),
     // Reuse the shared confirmation queue (also used by card/module proposals)
@@ -1084,6 +1094,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     toolConformanceRunner,
     sharedWorldWikiCaretaker: wikiRuntime.sharedWorldCaretaker,
     letterService,
+    doingMirrorService,
     closeWikiRuntime: wikiRuntime.close,
     closeBiographicalProjection: () => biographicalPool.end(),
     // Durable model-usage query handle (b0yl.5): shared lazy store also used by

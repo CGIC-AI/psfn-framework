@@ -50,6 +50,7 @@ import type {
   AdminWikiService,
   AdminWishlistService,
   AdminLetterService,
+  AdminDoingMirrorService,
 } from './services/types.js';
 import type { AdminObserverEvalSidecarService } from './services/observer-eval-sidecar-service.js';
 import type { AdminIntakeQuarantineService } from './services/intake-quarantine-service.js';
@@ -206,6 +207,7 @@ export interface GardenAdminDomainServices {
   wiki?: AdminWikiService | null;
   wishlist?: AdminWishlistService | null;
   letters?: AdminLetterService | null;
+  doingMirror?: AdminDoingMirrorService | null;
   episodicMemory?: AdminEpisodicMemoryService | null;
   groupMemory?: AdminGroupMemoryService | null;
   memory: AdminMemoryService;

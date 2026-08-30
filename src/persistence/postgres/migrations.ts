@@ -4089,6 +4089,46 @@ export const POSTGRES_LETTER_MIGRATIONS: readonly string[] = [
   `,
 ];
 
+/** Companion-private doing-mirror disposition and durable Letter-delivery outbox. */
+export const POSTGRES_DOING_MIRROR_MIGRATIONS: readonly string[] = [
+  `
+  CREATE TABLE IF NOT EXISTS doing_mirror_dispositions (
+    item_type TEXT NOT NULL,
+    item_id TEXT NOT NULL,
+    state TEXT NOT NULL,
+    reason TEXT,
+    version INTEGER NOT NULL,
+    updated_at_ms BIGINT NOT NULL,
+    updated_by TEXT NOT NULL,
+    letter_id UUID NOT NULL UNIQUE,
+    letter_subject TEXT NOT NULL,
+    letter_body TEXT NOT NULL,
+    letter_delivered_at_ms BIGINT,
+    PRIMARY KEY (item_type, item_id),
+    CHECK (item_type IN ('wishlist', 'fold_package')),
+    CHECK (length(btrim(item_id)) > 0),
+    CHECK (state IN ('considering', 'done', 'declined')),
+    CHECK (reason IS NULL OR length(btrim(reason)) > 0),
+    CHECK (state <> 'declined' OR reason IS NOT NULL),
+    CHECK (version >= 1),
+    CHECK (updated_at_ms >= 0),
+    CHECK (updated_by = 'partner'),
+    CHECK (length(btrim(letter_subject)) > 0),
+    CHECK (length(btrim(letter_body)) > 0),
+    CHECK (letter_delivered_at_ms IS NULL OR letter_delivered_at_ms >= updated_at_ms)
+  );
+  `,
+  `
+  CREATE INDEX IF NOT EXISTS idx_doing_mirror_dispositions_updated
+    ON doing_mirror_dispositions(updated_at_ms DESC, item_type, item_id);
+  `,
+  `
+  CREATE INDEX IF NOT EXISTS idx_doing_mirror_pending_letters
+    ON doing_mirror_dispositions(updated_at_ms, item_type, item_id)
+    WHERE letter_delivered_at_ms IS NULL;
+  `,
+];
+
 /** Companion-private durable class/run/session discovery for ephemeral workers. */
 export const POSTGRES_AUTOMATA_RUN_MIGRATIONS: readonly string[] = [
   `

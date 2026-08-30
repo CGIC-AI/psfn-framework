@@ -319,7 +319,7 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     domain: 'self_expression',
     exposure: 'core',
     description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.letter,
-    actions: ['compose', 'list', 'read', 'place', 'archive'],
+    actions: ['compose', 'list', 'read', 'place', 'archive', 'disposition_list', 'disposition_read'],
     capabilityMetadata: { kind: 'action_aware', source: CAPABILITIES_REQUIREMENTS },
     retiredAliases: [],
   },

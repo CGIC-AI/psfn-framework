@@ -50,6 +50,7 @@ import type { PostgresExactSessionPurgeSagaStore } from '../../persistence/postg
 import type { AutomataSessionClassificationService } from '../../faculties/automata/session-classification.js';
 import type { EmoSimProactivityStateStorePort } from '../../core/emotion/emosim-proactivity-port.js';
 import type { LetterStorePort } from '../../core/letters/contracts.js';
+import type { DoingMirrorStorePort } from '../../core/doing-mirror/contracts.js';
 
 const log = createComponentLogger('Agent');
 
@@ -77,6 +78,7 @@ export interface BootstrapAgentCoreRuntimeOptions {
   postgresDatabaseUrl: string;
   emosimProactivityStateStore: EmoSimProactivityStateStorePort;
   letterStore: LetterStorePort;
+  doingMirrorStore: DoingMirrorStorePort;
   pathSnapshot: RuntimePathSnapshot;
   eventBus: EventBus;
   gateway: GatewayClient;
@@ -118,6 +120,7 @@ export async function bootstrapAgentCoreRuntime(
     postgresDatabaseUrl,
     emosimProactivityStateStore,
     letterStore,
+    doingMirrorStore,
     pathSnapshot,
     eventBus,
     gateway,
@@ -176,6 +179,7 @@ export async function bootstrapAgentCoreRuntime(
     postgresDatabaseUrl,
     emosimProactivityStateStore,
     letterStore,
+    doingMirrorStore,
     pathSnapshot,
     eventBus,
     gateway,

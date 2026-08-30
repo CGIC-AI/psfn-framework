@@ -199,7 +199,7 @@ function resolveSessionRequirement(action: string | null): CapabilityRequirement
   return IDENTITY_READ_RUNTIME_WRITE;
 }
 
-const LETTER_READ_ACTIONS = new Set(['list']);
+const LETTER_READ_ACTIONS = new Set(['list', 'disposition_list', 'disposition_read']);
 const LETTER_WRITE_ACTIONS = new Set(['compose', 'read', 'place', 'archive']);
 
 function resolveLetterRequirement(action: string | null): CapabilityRequirement {

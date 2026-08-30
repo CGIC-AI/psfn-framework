@@ -422,6 +422,8 @@ describe('createAgentPersistenceRuntime', () => {
       automataSessionClassification: expect.any(Object),
       automataPurgeSagaStore: expect.any(Object),
       introspectionLandmarkStore: expect.any(Object),
+      letterStore: expect.any(Object),
+      doingMirrorStore: expect.any(Object),
       weightedThoughtStore: undefined,
       socialDesireStore: undefined,
     });

@@ -26,6 +26,7 @@ import type { AdminGraphProposalsService } from './services/graph-proposals-serv
 import { buildAdminConcernRoutes } from './routes/concern-routes.js';
 import { buildAdminWishlistRoutes } from './routes/wishlist-routes.js';
 import { buildAdminLetterRoutes } from './routes/letter-routes.js';
+import { buildAdminDoingMirrorRoutes } from './routes/doing-mirror-routes.js';
 import { buildAdminIdentityRoutes } from './routes/identity-routes.js';
 import { buildAdminImageRoutes } from './routes/image-routes.js';
 import { buildAdminOverviewRoutes } from './routes/overview-routes.js';
@@ -81,6 +82,7 @@ import type {
   AdminWikiService,
   AdminWishlistService,
   AdminLetterService,
+  AdminDoingMirrorService,
 } from './services/types.js';
 import type { AdminSubsystemHealthService } from './services/subsystem-health-service.js';
 import type { AdminToolConformanceService } from './services/tool-conformance-service.js';
@@ -314,6 +316,7 @@ export function buildAdminApiRoutes(options: {
   wikiService?: AdminWikiService | null;
   wishlistService?: AdminWishlistService | null;
   letterService?: AdminLetterService | null;
+  doingMirrorService?: AdminDoingMirrorService | null;
   episodicMemoryService?: AdminEpisodicMemoryService | null;
   groupMemoryService?: AdminGroupMemoryService | null;
   memoryService: AdminMemoryService;
@@ -377,6 +380,7 @@ export function buildAdminApiRoutes(options: {
     wikiService,
     wishlistService,
     letterService,
+    doingMirrorService,
     episodicMemoryService,
     groupMemoryService,
     memoryService,
@@ -548,6 +552,11 @@ export function buildAdminApiRoutes(options: {
       ...(appendAuditTimelineEntry ? { appendAuditTimelineEntry } : {}),
     }),
     ...buildAdminLetterRoutes({ letterService, withBody }),
+    ...buildAdminDoingMirrorRoutes({
+      doingMirrorService,
+      withBody,
+      ...(appendAuditTimelineEntry ? { appendAuditTimelineEntry } : {}),
+    }),
     ...(sharedWorkspaceService
       ? buildAdminSharedWorkspaceRoutes({
           service: sharedWorkspaceService,

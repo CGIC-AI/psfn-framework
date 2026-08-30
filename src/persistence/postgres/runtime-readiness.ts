@@ -35,6 +35,7 @@ export const POSTGRES_STORE_READINESS_CATALOG = {
   scheduled_prompts: { label: 'scheduled prompts', requirement: 'required' },
   companion_availability: { label: 'companion availability', requirement: 'required' },
   letters: { label: 'letters', requirement: 'required' },
+  doing_mirror: { label: 'doing mirror', requirement: 'required' },
   buzz_recovery: { label: 'Buzz recovery', requirement: 'required' },
   introspection: { label: 'introspection landmarks', requirement: 'required' },
   background_work: { label: 'background work', requirement: 'required' },

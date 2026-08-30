@@ -62,6 +62,7 @@ import { readLastActiveSession } from '../../system/lifecycle/notifications.js';
 import type { SessionStore } from '../../persistence/sessions/store.js';
 import type { EventBus, EventMap } from '../../shared/event-bus.js';
 import type { LetterService } from '../../core/letters/service.js';
+import type { DoingMirrorService } from '../../core/doing-mirror/service.js';
 import { emitGardenQueueChanged } from '../../shared/garden-queue-change.js';
 import { RunChargeLedger } from '../../shared/telemetry/charge-ledger.js';
 import { FatigueLedger } from '../../shared/telemetry/fatigue-ledger.js';
@@ -255,6 +256,7 @@ export interface InProcessGardenAdminContractOptions {
   episodicStore?: EpisodicStorePort | null;
   sessionStore: SessionStore;
   letterService?: LetterService | null;
+  doingMirrorService?: DoingMirrorService | null;
   sessionManager: SessionManager;
   /** Canonical system-authored turn placement for released quarantine content. */
   intakeReleaseConversationTurn?: IntakeReleaseRedeliveryPort;
@@ -783,6 +785,7 @@ export function createInProcessGardenAdminContract(
       )
       : null,
     letters: options.letterService ?? null,
+    doingMirror: options.doingMirrorService ?? null,
     episodicMemory: options.episodicStore
       ? new AdminEpisodicMemoryDataService(options.episodicStore)
       : null,

@@ -449,7 +449,7 @@ text, microphone_pcm, final_transcript, vision_upload, wake_event
 Output:
 
 ```text
-text, subtitle, streamed_audio, local_file_audio, animation, action, expression, gaze, servo, artifact, tool_activity
+text, subtitle, streamed_audio, local_file_audio, animation, action, expression, gaze, servo, artifact, tool_activity, emotion
 ```
 
 Control:
@@ -458,9 +458,11 @@ Control:
 interrupt, mute, sleep_wake, presence, session_attach, approvals, touch
 ```
 
-`artifact`, `tool_activity`, `approvals`, and `touch` opt a satellite into the companion
+`artifact`, `tool_activity`, `emotion`, `approvals`, and `touch` opt a satellite into the companion
 relay messages described in `docs/realtime-client-protocol.md`. Satellites that
-do not advertise them receive none of those events, and `approval.decision`
+do not advertise them receive none of those events. The Hub endpoint also needs
+the corresponding `approvals`, `artifacts`, `tool_activity`, and `emotion`
+telemetry scopes in PSFN's `satellites.json`; `approval.decision`
 from a satellite without `approvals` is rejected.
 
 Safety:

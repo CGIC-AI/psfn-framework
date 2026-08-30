@@ -28,7 +28,7 @@ test("world-avatar is a distinct fail-closed profile using existing framework ca
   const capabilities = defaultCapabilitiesForProfile("world-avatar");
   assert.deepEqual(capabilities, {
     input: ["text", "vision_upload"],
-    output: ["text", "subtitle", "action"],
+    output: ["text", "subtitle", "action", "emotion"],
     control: ["presence", "session_attach"],
     safety: ["action_allowlist", "confirmation_required"],
   });

@@ -167,7 +167,7 @@ export const CAPABILITY_PROFILE_DEFAULTS: Record<SatelliteCapabilityProfile, Pro
     locationMode: "static",
     capabilities: {
       input: ["text", "vision_upload"],
-      output: ["text", "subtitle", "action"],
+      output: ["text", "subtitle", "action", "emotion"],
       control: ["presence", "session_attach"],
       safety: ["action_allowlist", "confirmation_required"],
     },

@@ -2,6 +2,7 @@ import type {
   ActionMessage,
   AudioOutMessage,
   ClientToHubMessage,
+  EmotionSnapshotMessage,
   HelloAckMessage,
   HelloMessage,
   HubToClientMessage,
@@ -133,6 +134,12 @@ export interface DeviceStudioPongEvent {
   log: DeviceStudioTransportLogEntry;
 }
 
+export interface DeviceStudioEmotionSnapshotEvent {
+  data: EmotionSnapshotMessage["data"];
+  message: EmotionSnapshotMessage;
+  log: DeviceStudioTransportLogEntry;
+}
+
 export interface DeviceStudioErrorEvent {
   message: string;
   recoverable: boolean;
@@ -149,6 +156,7 @@ export interface DeviceStudioTransportEventMap {
   audio: DeviceStudioAudioEvent;
   lifecycle: DeviceStudioLifecycleEvent;
   pong: DeviceStudioPongEvent;
+  emotion: DeviceStudioEmotionSnapshotEvent;
   error: DeviceStudioErrorEvent;
 }
 
@@ -692,6 +700,9 @@ export class DeviceStudioHubClient {
           log,
         });
         return;
+      case "emotion.snapshot":
+        this.emit("emotion", { data: message.data, message, log });
+        return;
       case "relay.stt.result":
       case "relay.tts.chunk":
       case "relay.tts.done":
@@ -988,9 +999,111 @@ function validateHubMessage(message: Record<string, unknown>): string | null {
       return typeof message.sentAt === "number" ? null : "pong sentAt must be a number";
     case "assistant.interrupted":
       return typeof message.sessionId === "string" ? null : "assistant.interrupted sessionId must be a string";
+    case "emotion.snapshot":
+      return validateEmotionSnapshotMessage(message);
     default:
       return `Unsupported hub message type: ${String(message.type)}`;
   }
+}
+
+function validateEmotionSnapshotMessage(message: Record<string, unknown>): string | null {
+  if (!hasExactKeys(message, ["type", "data"])) {
+    return "emotion.snapshot message fields are invalid";
+  }
+  const data = asRecord(message.data);
+  if (!data || !hasExactKeys(
+    data,
+    ["trigger", "vad", "mood", "discrete", "confidence", "timestamp"],
+    ["acacAxes"],
+  )) {
+    return "emotion.snapshot data fields are invalid";
+  }
+  if (data.trigger !== "post_turn" && data.trigger !== "vad_shift") {
+    return "emotion.snapshot data.trigger is invalid";
+  }
+  if (!isEmotionVector(data.vad) || !isEmotionVector(data.mood)) {
+    return "emotion.snapshot VAD vectors are invalid";
+  }
+  if (!isEmotionDiscrete(data.discrete)) {
+    return "emotion.snapshot data.discrete is invalid";
+  }
+  if (!isUnitInterval(data.confidence)) {
+    return "emotion.snapshot data.confidence is invalid";
+  }
+  if (!isEmotionAcacAxes(data.acacAxes)) {
+    return "emotion.snapshot data.acacAxes is invalid";
+  }
+  return isIsoTimestamp(data.timestamp) ? null : "emotion.snapshot data.timestamp is invalid";
+}
+
+function isEmotionVector(value: unknown): boolean {
+  const vector = asRecord(value);
+  return vector !== null
+    && hasExactKeys(vector, ["valence", "arousal", "dominance"])
+    && isSignedUnit(vector.valence)
+    && isSignedUnit(vector.arousal)
+    && isSignedUnit(vector.dominance);
+}
+
+function isEmotionDiscrete(value: unknown): boolean {
+  return Array.isArray(value) && value.length <= 32 && value.every((entry) => {
+    const score = asRecord(entry);
+    return score !== null
+      && hasExactKeys(score, ["label", "score"])
+      && typeof score.label === "string"
+      && score.label.length > 0
+      && score.label.length <= 64
+      && isUnitInterval(score.score);
+  });
+}
+
+function isEmotionAcacAxes(value: unknown): boolean {
+  if (value === undefined) {
+    return true;
+  }
+  if (!Array.isArray(value) || value.length > 4) {
+    return false;
+  }
+  const seen = new Set<string>();
+  for (const entry of value) {
+    const score = asRecord(entry);
+    if (!score || !hasExactKeys(score, ["axis", "score"]) || !isUnitInterval(score.score)) {
+      return false;
+    }
+    const axis = score.axis;
+    if (axis !== "agency" && axis !== "connection" && axis !== "authenticity" && axis !== "curiosity") {
+      return false;
+    }
+    if (seen.has(axis)) {
+      return false;
+    }
+    seen.add(axis);
+  }
+  return true;
+}
+
+function isSignedUnit(value: unknown): boolean {
+  return typeof value === "number" && Number.isFinite(value) && value >= -1 && value <= 1;
+}
+
+function isUnitInterval(value: unknown): boolean {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1;
+}
+
+function isIsoTimestamp(value: unknown): boolean {
+  return typeof value === "string"
+    && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/u.test(value)
+    && !Number.isNaN(Date.parse(value));
+}
+
+function hasExactKeys(
+  value: Record<string, unknown>,
+  required: readonly string[],
+  optional: readonly string[] = [],
+): boolean {
+  const allowed = new Set([...required, ...optional]);
+  return required.every((key) => key in value)
+    && Object.keys(value).every((key) => allowed.has(key));
 }
 
 function validateConversationMessage(message: Record<string, unknown>): string | null {

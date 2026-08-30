@@ -4,6 +4,7 @@ import type {
   ApprovalResolvedMessage,
   ApprovalResolutionStatus,
   ArtifactCreatedMessage,
+  EmotionSnapshotMessage,
   ToolActivityMessage,
   ToolActivityPhase,
   TouchRegion,
@@ -14,7 +15,8 @@ export type CompanionEvent =
   | { kind: "approval.requested"; payload: ApprovalRequestedMessage["data"] }
   | { kind: "approval.resolved"; payload: ApprovalResolvedMessage["data"] }
   | { kind: "artifact.created"; payload: ArtifactCreatedMessage["data"] }
-  | { kind: "tool.activity"; payload: ToolActivityMessage["data"] };
+  | { kind: "tool.activity"; payload: ToolActivityMessage["data"] }
+  | { kind: "emotion.snapshot"; payload: EmotionSnapshotMessage["data"] };
 
 export type CompanionEventListener = (event: CompanionEvent) => void;
 
@@ -53,8 +55,9 @@ export class CompanionRequestError extends Error {
  *   `GET <base>/companion/artifacts/{id}/preview`.
  *
  * The bridge never fabricates data: events that fail strict validation are
- * logged and dropped, and unknown payload fields are stripped so nothing
- * beyond the wire contract can leak to satellites.
+ * logged and dropped. Unknown payload fields are stripped from established
+ * projected messages or rejected when the redacted contract must pass as-is,
+ * so nothing beyond the wire contract can leak to satellites.
  */
 export class CompanionBridge {
   private readonly listeners = new Set<CompanionEventListener>();
@@ -464,6 +467,8 @@ export function parseCompanionEventData(data: string): CompanionEvent {
       return { kind, payload: projectArtifactCreated(payload) };
     case "tool.activity":
       return { kind, payload: projectToolActivity(payload) };
+    case "emotion.snapshot":
+      return { kind, payload: projectEmotionSnapshot(payload) };
     default:
       throw new Error(`Unsupported companion event kind: ${String(kind)}`);
   }
@@ -523,6 +528,115 @@ function projectToolActivity(payload: Record<string, unknown>): ToolActivityMess
     ...(detail !== undefined ? { detail } : {}),
     timestamp: readRequiredString(payload.timestamp, "tool.activity timestamp"),
   };
+}
+
+function projectEmotionSnapshot(payload: Record<string, unknown>): EmotionSnapshotMessage["data"] {
+  requireExactKeys(
+    payload,
+    ["trigger", "vad", "mood", "discrete", "confidence", "timestamp"],
+    ["acacAxes"],
+    "emotion.snapshot payload",
+  );
+  if (payload.trigger !== "post_turn" && payload.trigger !== "vad_shift") {
+    throw new Error(`emotion.snapshot payload trigger is invalid: ${String(payload.trigger)}`);
+  }
+  validateEmotionVector(payload.vad, "emotion.snapshot vad");
+  validateEmotionVector(payload.mood, "emotion.snapshot mood");
+  validateEmotionDiscrete(payload.discrete);
+  validateUnitInterval(payload.confidence, "emotion.snapshot confidence");
+  validateEmotionAcacAxes(payload.acacAxes);
+  validateIsoTimestamp(payload.timestamp, "emotion.snapshot timestamp");
+
+  // Preserve the PSFN-owned redacted payload object and field ordering exactly.
+  return payload as unknown as EmotionSnapshotMessage["data"];
+}
+
+function validateEmotionVector(value: unknown, name: string): void {
+  if (!isRecord(value)) {
+    throw new Error(`${name} must be a JSON object`);
+  }
+  requireExactKeys(value, ["valence", "arousal", "dominance"], [], name);
+  validateSignedUnit(value.valence, `${name}.valence`);
+  validateSignedUnit(value.arousal, `${name}.arousal`);
+  validateSignedUnit(value.dominance, `${name}.dominance`);
+}
+
+function validateEmotionDiscrete(value: unknown): void {
+  if (!Array.isArray(value) || value.length > 32) {
+    throw new Error("emotion.snapshot discrete must contain at most 32 entries");
+  }
+  value.forEach((entry, index) => {
+    if (!isRecord(entry)) {
+      throw new Error(`emotion.snapshot discrete[${index}] must be a JSON object`);
+    }
+    requireExactKeys(entry, ["label", "score"], [], `emotion.snapshot discrete[${index}]`);
+    if (typeof entry.label !== "string" || entry.label.length === 0 || entry.label.length > 64) {
+      throw new Error(`emotion.snapshot discrete[${index}].label is invalid`);
+    }
+    validateUnitInterval(entry.score, `emotion.snapshot discrete[${index}].score`);
+  });
+}
+
+function validateEmotionAcacAxes(value: unknown): void {
+  if (value === undefined) {
+    return;
+  }
+  if (!Array.isArray(value) || value.length > 4) {
+    throw new Error("emotion.snapshot acacAxes must contain at most four entries");
+  }
+  const seen = new Set<string>();
+  value.forEach((entry, index) => {
+    if (!isRecord(entry)) {
+      throw new Error(`emotion.snapshot acacAxes[${index}] must be a JSON object`);
+    }
+    requireExactKeys(entry, ["axis", "score"], [], `emotion.snapshot acacAxes[${index}]`);
+    const axis = entry.axis;
+    if (axis !== "agency" && axis !== "connection" && axis !== "authenticity" && axis !== "curiosity") {
+      throw new Error(`emotion.snapshot acacAxes[${index}].axis is invalid`);
+    }
+    if (seen.has(axis)) {
+      throw new Error(`emotion.snapshot acacAxes axis is duplicated: ${axis}`);
+    }
+    seen.add(axis);
+    validateUnitInterval(entry.score, `emotion.snapshot acacAxes[${index}].score`);
+  });
+}
+
+function validateSignedUnit(value: unknown, name: string): void {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < -1 || value > 1) {
+    throw new Error(`${name} must be a finite number from -1 through 1`);
+  }
+}
+
+function validateUnitInterval(value: unknown, name: string): void {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 1) {
+    throw new Error(`${name} must be a finite number from 0 through 1`);
+  }
+}
+
+function validateIsoTimestamp(value: unknown, name: string): void {
+  if (
+    typeof value !== "string"
+    || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/u.test(value)
+    || Number.isNaN(Date.parse(value))
+  ) {
+    throw new Error(`${name} must be an ISO timestamp`);
+  }
+}
+
+function requireExactKeys(
+  value: Record<string, unknown>,
+  required: readonly string[],
+  optional: readonly string[],
+  name: string,
+): void {
+  const allowed = new Set([...required, ...optional]);
+  if (Object.keys(value).some((key) => !allowed.has(key))) {
+    throw new Error(`${name} contains an unsupported field`);
+  }
+  if (required.some((key) => !(key in value))) {
+    throw new Error(`${name} is missing a required field`);
+  }
 }
 
 function readRequiredString(value: unknown, name: string): string {

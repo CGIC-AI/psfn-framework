@@ -209,14 +209,14 @@ must be capability-gated through `hello`, versioned, typed in
 `src/ts/shared/protocol.ts`, documented here, and covered by focused protocol
 tests.
 
-## Companion Touch, Approvals, Artifacts, And Tool Activity
+## Companion Touch, Approvals, Artifacts, Tool Activity, And Emotion
 
 The hub can bridge a PSFN companion backplane (`PSFN_COMPANION_BASE_URL`) into
 the realtime websocket path. The backplane endpoints live on the same gateway
 API edge as `/v1/chat/completions`, so the base URL is typically the same
 `<gateway>/v1` value as `PSFN_API_BASE_URL`. PSFN owns touch ingestion,
-approvals, artifacts, and tool events; the hub only relays typed requests or
-the redacted payloads PSFN emits and
+approvals, artifacts, tool events, and redacted emotion snapshots; the hub only
+relays typed requests or the redacted payloads PSFN emits and
 proxies decisions and preview reads back. If the backplane is unconfigured or
 unreachable, the hub relays nothing and rejects the client requests below —
 there is no fake or cached data.
@@ -224,7 +224,7 @@ there is no fake or cached data.
 Backplane access is deny-by-default at the satellite registry. The hub
 authenticates with `Authorization: Bearer <key>`; the key's principal must be
 listed on the hub's endpoint entry in PSFN's `satellites.json` and granted the
-`approvals`, `artifacts`, and `tool_activity` telemetry scopes. Both backplane
+`approvals`, `artifacts`, `tool_activity`, and `emotion` telemetry scopes. Both backplane
 `GET` endpoints additionally require the hub's registry identity as query
 parameters (`satelliteId`, `endpointId`, `claimType`), which the hub takes
 from its existing `PSFN_SATELLITE_ID` / `PSFN_ENDPOINT_ID` /
@@ -246,6 +246,7 @@ All of these message families are capability-gated through `hello`:
 - `artifact.created`, `artifact.preview`, `artifact.preview.result`, and
   `artifact.preview.error` require the `artifact` output capability.
 - `tool.activity` requires the `tool_activity` output capability.
+- `emotion.snapshot` requires the `emotion` output capability.
 
 A satellite that did not advertise the matching capability receives none of
 the hub-to-client events, and its `approval.decision` is rejected with an
@@ -370,6 +371,29 @@ becomes `artifact.preview.error` for the requesting satellite only.
 
 `phase` is one of `started`, `progress`, `completed`, or `failed`. `detail` is
 optional and already redacted by PSFN.
+
+`emotion.snapshot`
+
+```json
+{
+  "type": "emotion.snapshot",
+  "data": {
+    "trigger": "post_turn",
+    "vad": { "valence": 0.25, "arousal": -0.5, "dominance": 0.75 },
+    "mood": { "valence": 0.1, "arousal": -0.2, "dominance": 0.3 },
+    "discrete": [{ "label": "curious", "score": 0.82 }],
+    "confidence": 0.91,
+    "acacAxes": [{ "axis": "curiosity", "score": 0.88 }],
+    "timestamp": "2026-07-09T00:00:04.000Z"
+  }
+}
+```
+
+The Hub validates and relays this PSFN-redacted payload as-is. It never adds
+internal rationale, active concerns, salient entities, or another derived
+emotion interpretation. An endpoint receives no snapshots unless its
+`satellites.json` entry grants the `emotion` telemetry scope and the connected
+client advertises the `emotion` output capability.
 
 ### Client To Hub
 

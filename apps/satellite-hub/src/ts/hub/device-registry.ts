@@ -6,7 +6,7 @@ import type { SatelliteCapabilities } from "../shared/protocol.js";
 const INPUT_CAPABILITIES = ["text", "microphone_pcm", "final_transcript", "vision_upload", "wake_event"] as const;
 const OUTPUT_CAPABILITIES = [
   "text", "subtitle", "streamed_audio", "local_file_audio", "animation", "action",
-  "expression", "gaze", "servo", "artifact", "tool_activity",
+  "expression", "gaze", "servo", "artifact", "tool_activity", "emotion",
 ] as const;
 const CONTROL_CAPABILITIES = ["interrupt", "mute", "sleep_wake", "presence", "session_attach", "touch", "approvals"] as const;
 const SAFETY_CAPABILITIES = ["action_allowlist", "confirmation_required", "local_only"] as const;

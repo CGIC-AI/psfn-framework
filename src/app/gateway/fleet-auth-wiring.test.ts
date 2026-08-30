@@ -39,6 +39,10 @@ describe('gateway fleet authorization context wiring', () => {
   it('passes exact manifest companion IDs and enables only the complete principal composition', () => {
     const mainSource = readFileSync(new URL('./main.ts', import.meta.url), 'utf8');
     const apiSurfaceSource = readFileSync(new URL('./api-surface.ts', import.meta.url), 'utf8');
+    const helmHelpersSource = readFileSync(
+      new URL('../../../deploy/helm/psfn/templates/_helpers.tpl', import.meta.url),
+      'utf8',
+    );
     const manifestGuard = mainSource.indexOf(
       'requireFleetSsoFleetManifest(config.companionFleet)',
     );
@@ -58,9 +62,21 @@ describe('gateway fleet authorization context wiring', () => {
     expect(apiSurfaceSource).toContain('const principalAuthenticationWired =');
     expect(apiSurfaceSource).toContain('if (fleetAuthBootstrapOnly && !principalAuthenticationWired)');
     expect(apiSurfaceSource).toContain('adminToken: env.ADMIN_TOKEN || undefined,');
+    expect(apiSurfaceSource).toContain(
+      '...(env.ADMIN_TOKEN ? { adminToken: env.ADMIN_TOKEN } : {}),',
+    );
     expect(apiSurfaceSource).not.toContain(
       'adminToken: fleetAuthBootstrapOnly ? undefined : env.ADMIN_TOKEN || undefined,',
     );
+    const providerSecretEnvStart = helmHelpersSource.indexOf(
+      '{{- define "psfn.providerSecretEnv" -}}',
+    );
+    const providerSecretEnv = helmHelpersSource.slice(
+      providerSecretEnvStart,
+      helmHelpersSource.indexOf('{{- define ', providerSecretEnvStart + 1),
+    );
+    expect(providerSecretEnv).toContain('- name: ADMIN_TOKEN');
+    expect(providerSecretEnv).not.toContain('{{- if not .Values.fleetAuth.enabled }}');
     expect(mainSource).toContain('hubDeviceAssertionVerifier: fleetAuthPersistence,');
     expect(mainSource).toContain('primaryEmbodiments: fleetAuthPersistence.primaryEmbodiments,');
     expect(mainSource).toContain(

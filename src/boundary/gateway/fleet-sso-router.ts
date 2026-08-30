@@ -24,17 +24,21 @@ import {
 import {
   stripBrowserRequestCapabilityHeaders,
 } from '../fleet-auth/request-capability-transport.js';
-import type {
-  GatewayRequestCapabilitySigner,
-  RequestCapabilityAuthContext,
-  RequestCapabilityAuthorityVersions,
-  RequestCapabilityVerifier,
-  VerifiedRequestCapability,
+import {
+  ADMIN_TOKEN_REQUEST_CAPABILITY_PRINCIPAL_ID,
+  ADMIN_TOKEN_REQUEST_CAPABILITY_SUBJECT_ID,
+  type GatewayRequestCapabilitySigner,
+  type RequestCapabilityAuthContext,
+  type RequestCapabilityAuthorityVersions,
+  type RequestCapabilityVerifier,
+  type VerifiedRequestCapability,
 } from '../fleet-auth/request-capability.js';
 import {
   FleetAuthorizationDeniedError,
+  createImmutableFleetAuthorizationContext,
   toRequestCapabilityAuthContext,
   type FleetAuthorizationContext,
+  type FleetAuthorizationFacts,
 } from './fleet-authorization-context.js';
 import type { GatewayFleetAuthBroker } from './fleet-auth-broker.js';
 import type {
@@ -95,6 +99,7 @@ import {
   type GardenDenialDetails,
   type GardenDenialLogger,
 } from '../../shared/observability/garden-denial-observability.js';
+import { hasBearerToken, hasCookieValue } from '../../channels/backplane/http/auth.js';
 
 const SESSION_COOKIE_NAME = '__Host-psfn_session';
 const MAX_PROXY_BODY_BYTES = 1_048_576;
@@ -157,6 +162,8 @@ export interface FleetSsoTrustedOriginOptions {
 }
 
 export interface GatewayFleetSsoRouterOptions extends FleetSsoTrustedOriginOptions {
+  /** Optional shared operator credential accepted as an alternative to fleet SSO. */
+  readonly adminToken?: string;
   readonly broker: Pick<GatewayFleetAuthBroker, 'resolveAuthorizationContext'>;
   readonly signer: GatewayRequestCapabilitySigner;
   readonly verifier: RequestCapabilityVerifier;
@@ -753,6 +760,37 @@ export class GatewayFleetSsoRouter {
         await this.proxyHttp(request, response, upstream, route, body, issued);
         return;
       }
+      const adminTokenRoute = this.matchesAdminToken(request)
+        ? parseGardenRoute(request.url ?? '/')
+        : null;
+      if (adminTokenRoute) {
+        const route = adminTokenRoute;
+        const upstream = this.upstreams.get(route.companionId);
+        if (!upstream) throw new FleetSsoRequestError(404, 'Resource not found');
+        const body = await readBoundedBody(request);
+        const issued = await this.authorizeAdminTokenAndIssue({
+          route,
+          method: request.method ?? 'GET',
+          headers: request.headers,
+          body,
+        });
+        if (route.upstreamTarget === FLEET_GARDEN_CHAT_PATH
+          && request.method === 'POST') {
+          if (!this.gardenChatHandler) {
+            throw new FleetSsoRequestError(503, 'Fleet Garden chat is unavailable');
+          }
+          await this.gardenChatHandler({
+            request,
+            response,
+            body,
+            companionId: route.companionId,
+            authorization: issued.context,
+          });
+          return;
+        }
+        await this.proxyHttp(request, response, upstream, route, body, issued);
+        return;
+      }
       const sessionToken = readOpaqueSessionCookie(request);
       if (!sessionToken) {
         if (isHtmlNavigation(request) && (
@@ -1183,6 +1221,100 @@ export class GatewayFleetSsoRouter {
     });
   }
 
+  private matchesAdminToken(request: IncomingMessage): boolean {
+    const token = this.options.adminToken;
+    if (!token) return false;
+    return hasBearerToken(request, token) || hasCookieValue(request, 'psfn_token', token);
+  }
+
+  private async authorizeAdminTokenAndIssue(input: {
+    route: ParsedGardenRoute;
+    method: string;
+    headers: IncomingHttpHeaders;
+    body: Buffer;
+  }): Promise<{
+    token: string;
+    verified: VerifiedRequestCapability;
+    context: FleetAuthorizationContext;
+  }> {
+    const targetHeaders = { ...input.headers };
+    stripBrowserRequestCapabilityHeaders(targetHeaders);
+    delete targetHeaders.authorization;
+    delete targetHeaders.cookie;
+    const target = compileGatewayGardenRequestTarget({
+      rawTarget: input.route.upstreamTarget,
+      method: input.method,
+      companionId: input.route.companionId,
+      headers: targetHeaders,
+      body: input.body,
+    });
+    const requestId = randomUUID();
+    const authorizationEventId = randomUUID();
+    const resolvedAt = new Date(
+      this.options.nowSeconds ? this.options.nowSeconds() * 1_000 : Date.now(),
+    );
+    const syntheticVersion = 1;
+    const principalId = ADMIN_TOKEN_REQUEST_CAPABILITY_PRINCIPAL_ID;
+    const providerSubjectId = ADMIN_TOKEN_REQUEST_CAPABILITY_SUBJECT_ID;
+    const facts: FleetAuthorizationFacts = {
+      principalId,
+      providerSubjectId,
+      companionId: input.route.companionId,
+      contact: {
+        bindingId: `admin-token-binding-${input.route.companionId}`,
+        contactId: `admin-token-contact-${input.route.companionId}`,
+        bindingVersion: syntheticVersion,
+      },
+      operator: {
+        grantId: `admin-token-grant-${input.route.companionId}`,
+        role: 'owner',
+        grantVersion: syntheticVersion,
+      },
+      session: {
+        recordId: `admin-token-session-${input.route.companionId}`,
+        audience: 'fleet',
+        assurance: 'break_glass',
+        authnVersion: syntheticVersion,
+        authzVersion: syntheticVersion,
+        bindingVersion: syntheticVersion,
+        grantVersion: syntheticVersion,
+        policyVersion: syntheticVersion,
+        provider: 'admin_token',
+        providerSubjectId,
+      },
+      authority: {
+        authorityGeneration: syntheticVersion,
+        globalAuthEpoch: syntheticVersion,
+      },
+    };
+    const context = createImmutableFleetAuthorizationContext({
+      request: {
+        sessionToken: 'admin-token',
+        audience: 'fleet',
+        companionId: input.route.companionId,
+        action: target.action,
+        correlationId: requestId,
+      },
+      facts,
+      authorizationEventId,
+      resolvedAt,
+      provenanceSource: 'gateway_admin_token',
+    });
+    return await this.issueCapability({
+      target,
+      requestId,
+      decisionId: authorizationEventId,
+      authContext: Object.freeze({
+        ...toRequestCapabilityAuthContext(context),
+        // The shared ADMIN_TOKEN is the fleet deployment's unconditional
+        // operator credential, so it must not inherit SSO subject filtering.
+        fleetAccessMode: 'sole_admin',
+      }),
+      versions: authorityVersions(context),
+      context,
+    });
+  }
+
   private async issueCapability(input: {
     target: CompiledGardenRequestTarget;
     requestId: string;
@@ -1349,19 +1481,28 @@ export class GatewayFleetSsoRouter {
     if (singleHeader(request.headers.origin) !== this.options.canonicalOrigin) {
       throw new FleetSsoRequestError(400, 'WebSocket origin is invalid');
     }
-    const sessionToken = readOpaqueSessionCookie(request);
-    if (!sessionToken) throw new FleetSsoRequestError(401, 'Authentication required');
     const route = parseGardenRoute(request.url ?? '/');
     if (!route) throw new FleetSsoRequestError(404, 'Resource not found');
     const upstream = this.upstreams.get(route.companionId);
     if (!upstream) throw new FleetSsoRequestError(404, 'Resource not found');
-    const issued = await this.authorizeAndIssue({
-      sessionToken,
-      route,
-      method: 'WS',
-      headers: request.headers,
-      body: Buffer.alloc(0),
-    });
+    const issued = this.matchesAdminToken(request)
+      ? await this.authorizeAdminTokenAndIssue({
+          route,
+          method: 'WS',
+          headers: request.headers,
+          body: Buffer.alloc(0),
+        })
+      : await (async () => {
+          const sessionToken = readOpaqueSessionCookie(request);
+          if (!sessionToken) throw new FleetSsoRequestError(401, 'Authentication required');
+          return await this.authorizeAndIssue({
+            sessionToken,
+            route,
+            method: 'WS',
+            headers: request.headers,
+            body: Buffer.alloc(0),
+          });
+        })();
     const headers = buildFleetSsoProxyRequestHeaders(request.headers);
     headers.connection = 'Upgrade';
     headers.upgrade = 'websocket';

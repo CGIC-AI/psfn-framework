@@ -147,6 +147,8 @@ const SCOPES = new Set<string>(GARDEN_WORKSPACE_SCOPES);
 const RESOURCE_AREAS = new Set<string>(GARDEN_RESOURCE_AREAS);
 
 export const TESTING_HARNESS_REQUEST_CAPABILITY_AUDIENCE = 'testing-harness' as const;
+export const ADMIN_TOKEN_REQUEST_CAPABILITY_PRINCIPAL_ID = 'admin-token-operator' as const;
+export const ADMIN_TOKEN_REQUEST_CAPABILITY_SUBJECT_ID = 'admin-token' as const;
 
 export type RequestCapabilityParentAudience =
   | `operator:${string}`
@@ -178,7 +180,7 @@ export interface RequestCapabilityParentBinding {
  */
 export interface RequestCapabilityAuthContext {
   readonly principalId: string;
-  readonly provider: 'discord' | 'testing_harness';
+  readonly provider: 'discord' | 'admin_token' | 'testing_harness';
   readonly providerSubjectId: string;
   readonly companionId: string;
   readonly contactBindingId: string;
@@ -613,7 +615,7 @@ function assertAuthContext(value: unknown, target: CompiledGardenRequestTarget):
     'authContext',
   );
   requireStableId(context.principalId, 'authContext.principalId');
-  if (!['discord', 'testing_harness'].includes(
+  if (!['discord', 'admin_token', 'testing_harness'].includes(
     requireString(context.provider, 'authContext.provider'),
   )) {
     reject('authContext.provider is invalid');
@@ -683,6 +685,24 @@ function assertTestingHarnessAuthContext(
     || context.principalId !== TESTING_HARNESS_REQUEST_CAPABILITY_AUDIENCE
     || context.providerSubjectId !== TESTING_HARNESS_REQUEST_CAPABILITY_AUDIENCE) {
     reject('testing-harness provider identity does not match audience');
+  }
+}
+
+function assertAdminTokenAuthContext(
+  context: RequestCapabilityAuthContext,
+  companionId: string,
+): void {
+  if (context.provider !== 'admin_token'
+    || context.principalId !== ADMIN_TOKEN_REQUEST_CAPABILITY_PRINCIPAL_ID
+    || context.providerSubjectId !== ADMIN_TOKEN_REQUEST_CAPABILITY_SUBJECT_ID
+    || context.contactBindingId !== `admin-token-binding-${companionId}`
+    || context.contactId !== `admin-token-contact-${companionId}`
+    || context.operatorGrantId !== `admin-token-grant-${companionId}`
+    || context.role !== 'owner'
+    || context.sessionRecordId !== `admin-token-session-${companionId}`
+    || context.sessionAssurance !== 'break_glass'
+    || context.fleetAccessMode !== 'sole_admin') {
+    reject('admin-token provider identity is invalid');
   }
 }
 
@@ -866,11 +886,15 @@ export function createGatewayRequestCapabilitySigner(input: {
     parent?: RequestCapabilityParentBinding,
   ): string => {
     validateSignInput(signInput);
+    if (signInput.authContext.provider === 'admin_token') {
+      assertAdminTokenAuthContext(signInput.authContext, signInput.target.companionId);
+    }
     if (audience === TESTING_HARNESS_REQUEST_CAPABILITY_AUDIENCE) {
       assertTestingHarnessAuthContext(signInput.authContext);
       if (parent) reject('testing-harness capabilities must not contain a parent binding');
     } else if (audience === `operator:${signInput.target.companionId}`) {
-      if (signInput.authContext.provider !== 'discord') {
+      if (signInput.authContext.provider !== 'discord'
+        && signInput.authContext.provider !== 'admin_token') {
         reject('operator capabilities require the operator provider');
       }
       if (parent) reject('operator capabilities must not contain a parent binding');
@@ -1066,7 +1090,7 @@ function parseAuthContext(
   const accessMode = requireString(record.fleet_access_mode, 'claims.auth_context.fleet_access_mode');
   const context: RequestCapabilityAuthClaims = {
     principal_id: requireStableId(record.principal_id, 'claims.auth_context.principal_id'),
-    provider: provider === 'discord' || provider === 'testing_harness'
+    provider: provider === 'discord' || provider === 'admin_token' || provider === 'testing_harness'
       ? provider
       : reject('claims.auth_context.provider is invalid'),
     provider_subject_id: requireStableId(
@@ -1208,8 +1232,13 @@ function parseClaims(
     && path === '/api/admin/fleet-model-usage'
     && action === 'models.read';
   const authContext = parseAuthContext(record.auth_context, companionId, fleetRosterAllowed);
-  if (audienceKind === 'operator' && authContext.provider !== 'discord') {
+  if (audienceKind === 'operator'
+    && authContext.provider !== 'discord'
+    && authContext.provider !== 'admin_token') {
     reject('operator capabilities require the operator provider');
+  }
+  if (authContext.provider === 'admin_token') {
+    assertAdminTokenAuthContext(fromAuthClaims(authContext), companionId);
   }
   if (audienceKind === 'testing_harness') {
     assertTestingHarnessAuthContext(fromAuthClaims(authContext));

@@ -16,10 +16,11 @@ export type GardenSubjectRelation =
   | 'self_or_co_subject';
 
 /**
- * Assurance tiers under the Discord-SSO-only doctrine (operator rulings D1/D2,
- * 2026-07-30):
- * - `oauth`: an authenticated Discord SSO browser session. This is the only
- *   authentication tier; mutation routes gate on role + explicit confirmation.
+ * Assurance tiers for fleet principals (operator rulings D1/D2, 2026-07-30):
+ * - `oauth`: an authenticated Discord SSO browser session. A configured
+ *   ADMIN_TOKEN is an alternative unconditional operator credential and is
+ *   represented by a gateway-minted `break_glass` capability; mutation routes
+ *   still gate on role + explicit confirmation.
  * - `escalated`: the route additionally requires a consumed audited escalation
  *   grant (reason + TTL, one audit event per grant). Reserved for the D1
  *   escalation surfaces: other-humans' sensitive memories and cogsec

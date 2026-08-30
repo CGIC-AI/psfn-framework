@@ -60,6 +60,46 @@ export interface RequiredSettingsBlocksMigrationResult {
   updatedPaths?: string[];
 }
 
+function migrateLegacyEmosimProactivityBlock(
+  candidate: Record<string, unknown>,
+  defaults: unknown,
+): boolean {
+  const legacy = candidate.emosimProactivity;
+  if (!isRecord(legacy) || !Object.prototype.hasOwnProperty.call(legacy, 'enabled')) return false;
+  if (Object.prototype.hasOwnProperty.call(legacy, 'mode')) return false;
+  const legacyKeys = Object.keys(legacy);
+  if (legacyKeys.some(key => !['enabled', 'thresholdProfile'].includes(key))) return false;
+  if (typeof legacy.enabled !== 'boolean' || !isRecord(legacy.thresholdProfile)) return false;
+  const legacyProfileKeys = Object.keys(legacy.thresholdProfile);
+  const supportedLegacyProfileKeys = new Set([
+    'profileId',
+    'socialNeedThreshold',
+    'attachmentIntensityThreshold',
+    'sustainMs',
+    'cooldownMs',
+  ]);
+  if (legacyProfileKeys.some(key => !supportedLegacyProfileKeys.has(key))) return false;
+
+  if (!isRecord(defaults)) {
+    throw new Error('Canonical settings defaults must be an object');
+  }
+  const defaultBlock = defaults.emosimProactivity;
+  if (!isRecord(defaultBlock) || !isRecord(defaultBlock.thresholdProfile)) {
+    throw new Error('Canonical settings defaults are missing emosimProactivity.thresholdProfile');
+  }
+  candidate.emosimProactivity = {
+    ...structuredClone(defaultBlock),
+    mode: legacy.enabled ? 'on' : 'off',
+    thresholdProfile: {
+      ...structuredClone(defaultBlock.thresholdProfile),
+      ...structuredClone(legacy.thresholdProfile),
+      revision: 'legacy-owner-upgrade.v1',
+      reviewNote: 'One-way upgrade of the legacy EmoSim proactivity owner block.',
+    },
+  };
+  return true;
+}
+
 /**
  * Upgrade settings owners written before current default-bearing runtime
  * contract fields existed. The legacy function name remains the stable CLI
@@ -99,9 +139,13 @@ export function migrateRequiredSettingsBlocks(
     }
     const candidate: Record<string, unknown> = structuredClone(raw);
     const addedPaths: string[] = [];
+    const updatedPaths: string[] = [];
     const defaults = loadRuntimeSettingsContractDefaults(
       options.seedDir ?? process.env.CONFIG_DIR ?? './config',
     );
+    if (migrateLegacyEmosimProactivityBlock(candidate, defaults)) {
+      updatedPaths.push('emosimProactivity');
+    }
     for (const [key, value] of Object.entries(defaults).sort(([left], [right]) => (
       left.localeCompare(right)
     ))) {
@@ -112,7 +156,7 @@ export function migrateRequiredSettingsBlocks(
     }
 
     normalizeEditableSettings(candidate as EditableSettings);
-    if (addedPaths.length === 0) {
+    if (addedPaths.length === 0 && updatedPaths.length === 0) {
       assertSourceStillCurrent();
       const canonicalMode = canonicalOwnerFileMode({
         ownerFileName: SETTINGS_FILE_NAME,
@@ -141,7 +185,8 @@ export function migrateRequiredSettingsBlocks(
       mode,
       status: options.apply ? 'applied' : 'planned',
       filePath,
-      addedPaths,
+      ...(addedPaths.length > 0 ? { addedPaths } : {}),
+      ...(updatedPaths.length > 0 ? { updatedPaths } : {}),
     };
     if (options.apply) {
       writeFileDurableAtomicSync(

@@ -72,6 +72,51 @@ describe('migrateRequiredSettingsBlocks', () => {
     expect(migrated.wikiStartupHydration).toEqual(customWiki);
   });
 
+  it('upgrades the legacy EmoSim proactivity block while preserving its policy thresholds', () => {
+    const { dataDir, filePath } = prepare({
+      emosimProactivity: {
+        enabled: false,
+        thresholdProfile: {
+          profileId: 'emosim-would-message-v1',
+          socialNeedThreshold: 0.73,
+          attachmentIntensityThreshold: 0.52,
+          sustainMs: 1_900_000,
+          cooldownMs: 22_000_000,
+        },
+      },
+    });
+    const result = migrateRequiredSettingsBlocks({ dataDir, apply: true });
+    expect(result).toMatchObject({
+      status: 'applied',
+      updatedPaths: ['emosimProactivity'],
+    });
+    const migrated = JSON.parse(readFileSync(filePath, 'utf8')) as {
+      emosimProactivity: {
+        mode: string;
+        enabled?: boolean;
+        thresholdProfile: Record<string, unknown>;
+      };
+    };
+    expect(migrated.emosimProactivity.enabled).toBeUndefined();
+    expect(migrated.emosimProactivity.mode).toBe('off');
+    expect(migrated.emosimProactivity.thresholdProfile).toMatchObject({
+      schemaVersion: 1,
+      profileId: 'emosim-would-message-v1',
+      revision: 'legacy-owner-upgrade.v1',
+      applicableSource: {
+        model: 'emo_sim',
+        version: 'emo_sim/server.py#http-api.v1',
+      },
+      socialNeedThreshold: 0.73,
+      attachmentIntensityThreshold: 0.52,
+      sustainMs: 1_900_000,
+      cooldownMs: 22_000_000,
+    });
+    expect(migrateRequiredSettingsBlocks({ dataDir, apply: true })).toMatchObject({
+      status: 'not_needed',
+    });
+  });
+
   it('fails closed on a malformed present block', () => {
     const { dataDir, filePath } = prepare({ wikiStartupHydration: null });
     const before = readFileSync(filePath, 'utf8');

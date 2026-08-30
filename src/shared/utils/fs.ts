@@ -2,6 +2,7 @@ import {
   closeSync,
   constants,
   existsSync,
+  fchmodSync,
   fsyncSync,
   linkSync,
   lstatSync,
@@ -77,6 +78,10 @@ export function writeFileDurableAtomicSync(
       constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY,
       options.mode ?? 0o600,
     );
+    // open(2) applies the process umask even when the caller supplied an
+    // explicit owner-file mode. Honor that explicit contract before the file
+    // is populated and published.
+    if (options.mode !== undefined) fchmodSync(descriptor, options.mode);
     writeFileSync(descriptor, content);
     fsyncSync(descriptor);
     options.faultInjection?.('after_file_sync', path);

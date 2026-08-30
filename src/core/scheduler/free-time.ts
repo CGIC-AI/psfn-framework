@@ -115,7 +115,18 @@ export type { FreeTimeLane } from './free-time-lane.js';
  */
 export function freeTimeWorkspaceChannelId(workspaceSegment?: string | null): string {
   const segment = (workspaceSegment ?? '').trim();
-  return `${FREE_TIME_CHANNEL_PREFIX}${segment.length > 0 ? segment : FREE_TIME_DEFAULT_WORKSPACE_SEGMENT}`;
+  if (segment.length === 0) {
+    return `${FREE_TIME_CHANNEL_PREFIX}${FREE_TIME_DEFAULT_WORKSPACE_SEGMENT}`;
+  }
+  if (
+    /^(?:internal|subagent|shard):/u.test(segment)
+    || !/^[a-z0-9][a-z0-9_-]*(?::[a-z0-9][a-z0-9_-]*)*$/u.test(segment)
+  ) {
+    throw new Error(
+      'Invalid free-time workspace segment: expected lowercase alphanumeric, underscore, or hyphen segments',
+    );
+  }
+  return `${FREE_TIME_CHANNEL_PREFIX}${segment}`;
 }
 
 function localDateKey(timestampMs: number, timeZone: string): string {

@@ -993,6 +993,14 @@ describe('free-time continuity identity is lane-independent', () => {
     // A chosen workspace segment is preserved verbatim under the same prefix.
     expect(freeTimeWorkspaceChannelId('project:story-panels'))
       .toBe('internal:free-time:project:story-panels');
+    for (const hostileSegment of [
+      '../outside',
+      'project:../outside',
+      'internal:reflection:stolen',
+      'subagent:foreign',
+    ]) {
+      expect(() => freeTimeWorkspaceChannelId(hostileSegment)).toThrow(/workspace segment/u);
+    }
     // The trigger-lane names never leak into the resolved identity.
     expect(freeTimeWorkspaceChannelId()).not.toContain('quiet-hours');
     expect(freeTimeWorkspaceChannelId()).not.toContain('idle');

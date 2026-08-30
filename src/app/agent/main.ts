@@ -1761,6 +1761,7 @@ async function main(): Promise<void> {
     companionId: config.companionId,
     chargePolicy: config.chargePolicy,
     personalProjects,
+    contactStore,
   });
   // ── Weighted-thought outreach lane (E?/1xb.2) + Law 27 contradiction
   // dampening: extracted to startup/weighted-thought-outreach-lane.ts.

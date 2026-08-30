@@ -12,13 +12,22 @@
 
 import type { SubstrateAgent } from '../../../core/agent/substrate-agent.js';
 import type { LLMProviderPort } from '../../../core/agent/contracts.js';
+import type { ContactStorePort } from '../../../core/contacts/contact-store-port.js';
+import type { Contact } from '../../../core/contacts/types.js';
+import type { DisclosureLineage } from '../../../core/cogsec/disclosure/index.js';
 import { deriveConversationScopeEnvelope } from '../../../core/session/conversation-scope.js';
+import type { SessionEntry } from '../../../core/session/types.js';
 import { summarizeRecentSessionEntries } from '../../../core/session/manager/compaction-service.js';
-import { registerFreeTimeTasks, type FreeTimeRuntimeOptions } from '../../../core/scheduler/free-time.js';
+import {
+  freeTimeWorkspaceChannelId,
+  registerFreeTimeTasks,
+  type FreeTimeRuntimeOptions,
+} from '../../../core/scheduler/free-time.js';
 import {
   FreeTimeWorkspaceResolver,
   type FreeTimeProjectRecord,
   type FreeTimeWorkspaceContext,
+  type FreeTimeWorkspace,
 } from '../../../core/scheduler/free-time-workspace-resolver.js';
 import {
   FreeTimeChooser,
@@ -29,6 +38,7 @@ import { InMemoryRestWindowPolicy } from '../../../core/scheduler/rest-window-po
 import type { PromptRegistryStatePort } from '../../../core/identity/prompt-state-port.js';
 import type { PersonalProjectLibrary, PersonalProjectWorkContext } from '../../../faculties/wiki/personal-projects.js';
 import type { EventBus } from '../../../shared/event-bus.js';
+import { createComponentLogger } from '../../../shared/logger.js';
 import type { ChargePolicyConfig } from '../../../shared/contracts/charge-policy.js';
 import { getRunChargeSnapshot, runWithChargeContext } from '../../../shared/telemetry/run-charge.js';
 import { getRequestContext } from '../../../primitives/llm/request-context.js';
@@ -49,6 +59,38 @@ export interface FreeTimeLaneDeps {
   companionId: string | undefined;
   chargePolicy: ChargePolicyConfig | undefined;
   personalProjects: PersonalProjectLibrary;
+  contactStore: Pick<ContactStorePort, 'getById'>;
+}
+
+const log = createComponentLogger('FreeTimeLane');
+
+function sessionEntryLineageKey(entry: Pick<SessionEntry, 'channelId' | 'id'>): string {
+  return `${entry.channelId}:${entry.id}`;
+}
+
+function mostRecentPrivateConversationChannel(contact: Contact | undefined): string | null {
+  if (!contact || contact.archivedAt) return null;
+  const candidates = (contact.conversationChannels ?? [])
+    .filter(channel => channel.privacyLevel === 'private' && channel.channelId.trim().length > 0)
+    .map(channel => ({
+      channelId: channel.channelId.trim(),
+      lastSeenMs: Date.parse(channel.lastSeen),
+    }))
+    .filter(channel => Number.isFinite(channel.lastSeenMs))
+    .sort((left, right) => (
+      right.lastSeenMs - left.lastSeenMs || left.channelId.localeCompare(right.channelId)
+    ));
+  return candidates[0]?.channelId ?? null;
+}
+
+async function resolveWorkspaceContactDmSession(
+  workspace: FreeTimeWorkspace,
+  contactStore: Pick<ContactStorePort, 'getById'>,
+): Promise<{ contactId: string; sessionId: string } | null> {
+  if (workspace.returnPolicy.kind !== 'contact_dm') return null;
+  const contactId = workspace.returnPolicy.contactId;
+  const sessionId = mostRecentPrivateConversationChannel(await contactStore.getById(contactId));
+  return sessionId ? { contactId, sessionId } : null;
 }
 
 export function registerFreeTimeLane(deps: FreeTimeLaneDeps): void {
@@ -66,7 +108,12 @@ export function registerFreeTimeLane(deps: FreeTimeLaneDeps): void {
     companionId,
     chargePolicy,
     personalProjects,
+    contactStore,
   } = deps;
+
+  let selectedWorkspace: FreeTimeWorkspace | undefined;
+  let selectedContactDmSession: { contactId: string; sessionId: string } | null = null;
+  const entryDisclosureLineage = new Map<string, DisclosureLineage>();
 
   // Companion free-time chooser (jp36.2.1.2): supersedes the LRU auto-select.
   // The companion picks rest / private wander / resume / create through ONE
@@ -185,15 +232,37 @@ export function registerFreeTimeLane(deps: FreeTimeLaneDeps): void {
     // and her normal tools apply (no restricted reflection policy). A "silent"
     // reply ends the block; staying quiet / loafing is a valid outcome.
     invokeTurn: async ({ lane, channelId, turnIndex, content }) => {
-      const response = await agentLoop.handleMessage({
-        id: `free-time-${lane}-${turnIndex}-${Date.now()}`,
-        channelId,
-        channelType: 'terminal',
-        authorId: 'scheduler',
-        authorName: 'Free Time',
-        content,
-        timestamp: new Date(),
-      });
+      if (turnIndex === 0) entryDisclosureLineage.clear();
+      const messageId = `free-time-${lane}-${turnIndex}-${Date.now()}`;
+      let completedDisclosureLineage: DisclosureLineage | undefined;
+      const response = await agentLoop.handleMessage(
+        {
+          id: messageId,
+          channelId,
+          channelType: 'terminal',
+          authorId: 'scheduler',
+          authorName: 'Free Time',
+          content,
+          timestamp: new Date(),
+        },
+        undefined,
+        undefined,
+        lineage => { completedDisclosureLineage = lineage; },
+      );
+      if (completedDisclosureLineage) {
+        const recentEntries = sessionManager.getRecentSessionEntries
+          ? sessionManager.getRecentSessionEntries(channelId, 8)
+          : sessionManager.getRecentMessages(channelId, 8);
+        const assistantEntry = [...recentEntries]
+          .reverse()
+          .find(entry => entry.role === 'assistant');
+        if (assistantEntry) {
+          entryDisclosureLineage.set(
+            sessionEntryLineageKey(assistantEntry),
+            completedDisclosureLineage,
+          );
+        }
+      }
       return { content: response.content };
     },
     // Shared summarizer, free-time lane identity: distinct purpose/originStage
@@ -213,6 +282,31 @@ export function registerFreeTimeLane(deps: FreeTimeLaneDeps): void {
     )?.context ?? null,
     // Companion chooser drives rest / workspace selection; rest persists silence
     // for the quiet period (fails closed to rest, never a forced workspace).
-    chooseWorkspace: ({ lane, nowMs }) => freeTimeChooser.chooseWorkspace({ lane, nowMs }),
+    chooseWorkspace: async ({ lane, nowMs }) => {
+      selectedWorkspace = undefined;
+      selectedContactDmSession = null;
+      const outcome = await freeTimeChooser.chooseWorkspace({ lane, nowMs });
+      if (outcome.kind === 'workspace') {
+        selectedWorkspace = outcome.workspace;
+        try {
+          selectedContactDmSession = await resolveWorkspaceContactDmSession(
+            outcome.workspace,
+            contactStore,
+          );
+        } catch (error) {
+          log.warn('Free-time contact-DM resolution failed closed', {
+            error: String(error),
+          });
+        }
+      }
+      return outcome;
+    },
+    resolveWorkspaceChannelId: () => selectedWorkspace?.sessionId ?? freeTimeWorkspaceChannelId(),
+    resolveContactDmSessionId: (contactId) => (
+      selectedContactDmSession?.contactId === contactId
+        ? selectedContactDmSession.sessionId
+        : null
+    ),
+    resolveEntryDisclosureLineage: (entry) => entryDisclosureLineage.get(sessionEntryLineageKey(entry)),
   });
 }

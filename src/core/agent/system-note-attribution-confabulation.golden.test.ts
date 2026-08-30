@@ -409,11 +409,13 @@ describe('golden: system notes never render as unprefixed companion thoughts', (
         authorId: 'system', authorName: 'System', timestamp: NOW,
       };
 
+      const baseline = selectEmotionAppraisalSourceEntries([partner, contextNote]);
       const surviving = selectEmotionAppraisalSourceEntries([partner, contextNote, firewallNotice]);
 
       // Pins the existing exclusion so it cannot silently break: the firewall
-      // notice contributes ZERO appraisal input, while the ordinary context
+      // notice contributes ZERO appraisal-input delta, while the ordinary context
       // system note and partner speech survive.
+      expect(surviving).toEqual(baseline);
       const ids = surviving.map((entry) => entry.id);
       expect(ids).toEqual([1, 2]);
       expect(surviving.some((entry) => entry.content === INTAKE_FIREWALL_NOTICE_TEMPLATES.one)).toBe(false);

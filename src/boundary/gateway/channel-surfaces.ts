@@ -189,6 +189,33 @@ export interface GatewayChannelStartupLogger extends RuntimeChannelLifecycleLogg
   info(message: string, meta?: Record<string, unknown>): void;
 }
 
+const MULTICA_START_FAILURE = /^Channel plugin "multica(?:[^"]*)" failed to start:/u;
+
+/**
+ * Multica is an auxiliary work channel, not a gateway availability dependency.
+ * Its startup failure is reported and isolated while authority/configuration
+ * failures in every other plugin retain the host's fail-closed behavior.
+ */
+export async function startGatewayChannelPlugins(
+  plugins: Pick<ChannelPluginHost, 'start' | 'list'>,
+  log: GatewayChannelStartupLogger,
+): Promise<void> {
+  try {
+    await plugins.start();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!MULTICA_START_FAILURE.test(message)) throw error;
+    log.warn('Multica channel unavailable; gateway continuing without it', {
+      pluginId: 'multica',
+      error: message,
+    });
+    return;
+  }
+  for (const entry of plugins.list()) {
+    log.info('Channel plugin started', { pluginId: entry.id });
+  }
+}
+
 export interface GatewayChannelIntakeScreeningRouting {
   multiCompanion: boolean;
   mode: CogSecMode;
@@ -612,10 +639,7 @@ export async function startGatewayChannelSurfaces(
     });
   }
 
-  await surfaces.plugins.start();
-  for (const entry of surfaces.plugins.list()) {
-    log.info('Channel plugin started', { pluginId: entry.id });
-  }
+  await startGatewayChannelPlugins(surfaces.plugins, log);
 }
 
 export async function stopGatewayChannelSurfaces(

@@ -5,6 +5,7 @@ import {
   resolveChannelSurfaceCompanionId,
   resolveChannelIntakeScreening,
   resolveGatewayDiscordOperatorAlertSurface,
+  startGatewayChannelPlugins,
   wireGatewayChannelMessages,
   type WireGatewayChannelMessagesInput,
 } from './channel-surfaces.js';
@@ -473,5 +474,38 @@ describe('Discord operator alert surface composition', () => {
       accountId: 'missing-bot',
       channelId: '222222222222222222',
     })).toThrow('Discord operator alert account "missing-bot" has no runtime adapter');
+  });
+});
+
+describe('gateway channel plugin startup isolation', () => {
+  it('keeps the gateway available when Multica cannot start', async () => {
+    const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const plugins = fromAny({
+      start: vi.fn(async () => {
+        throw new Error('Channel plugin "multica" failed to start: fetch failed');
+      }),
+      list: vi.fn(() => [{ id: 'multica' }]),
+    });
+
+    await expect(startGatewayChannelPlugins(plugins, log)).resolves.toBeUndefined();
+    expect(log.warn).toHaveBeenCalledWith(
+      'Multica channel unavailable; gateway continuing without it',
+      expect.objectContaining({ pluginId: 'multica' }),
+    );
+    expect(log.info).not.toHaveBeenCalledWith('Channel plugin started', expect.anything());
+  });
+
+  it('preserves fail-closed startup for every other plugin', async () => {
+    const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const plugins = fromAny({
+      start: vi.fn(async () => {
+        throw new Error('Channel plugin "other" failed to start: invalid authority');
+      }),
+      list: vi.fn(() => [{ id: 'other' }]),
+    });
+
+    await expect(startGatewayChannelPlugins(plugins, log)).rejects.toThrow(
+      'Channel plugin "other" failed to start',
+    );
   });
 });

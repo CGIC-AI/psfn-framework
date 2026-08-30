@@ -107,6 +107,8 @@ test("loads an optional stdio configuration with an unresolved token reference",
     EIDOVERSE_MCP_RECONNECT_MAX_MS: "250",
     EIDOVERSE_MCP_RECONNECT_MAX_ATTEMPTS: "4",
     EIDOVERSE_MCP_REQUEST_TIMEOUT_MS: "2000",
+    EIDOVERSE_MCP_PENDING_PINGS_POLL_INTERVAL_MS: "1500",
+    EIDOVERSE_MCP_AMBIENT_SAY_DEBOUNCE_MS: "12000",
   });
 
   assert.deepEqual(config, {
@@ -120,6 +122,8 @@ test("loads an optional stdio configuration with an unresolved token reference",
     reconnectMaxMs: 250,
     reconnectMaxAttempts: 4,
     requestTimeoutMs: 2000,
+    pendingPingsPollIntervalMs: 1500,
+    ambientSayDebounceMs: 12000,
   });
   assert.equal("joinToken" in config!, false);
   assert.equal(loadEidoverseMcpConfig({ EIDOVERSE_MCP_ENABLED: "false" }), null);
@@ -156,6 +160,8 @@ function configFor(
     reconnectMaxMs: 20,
     reconnectMaxAttempts: 1,
     requestTimeoutMs: 1_000,
+    pendingPingsPollIntervalMs: 1_000,
+    ambientSayDebounceMs: 10_000,
     ...overrides,
   };
 }

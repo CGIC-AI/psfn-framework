@@ -3,6 +3,7 @@ import type { CogSecEvent } from './events.js';
 import { buildCogSecEventNoticeBlock, formatCogSecNotice, toAgentVisibleCogSecEvent } from './safe-log.js';
 import { evaluateCogSecMemoryCandidacy } from './memory-candidacy.js';
 import {
+  assertIntakeFirewallNoticeWording,
   FORBIDDEN_ALARM_WORDS,
   FORBIDDEN_HUMAN_IMPERATIVE_WORDS,
   formatIntakeReleaseNotice,
@@ -54,6 +55,13 @@ describe('intake-firewall notice wording contract (htm9.12)', () => {
     for (const [form, text] of templates) {
       expect(text, form).toContain(INTAKE_FIREWALL_NOTICE_SIGNATURE);
     }
+  });
+
+  it('fails closed when a registered notice drops the appraisal/memory signature', () => {
+    expect(() => assertIntakeFirewallNoticeWording(
+      'A calm notice whose required signature was accidentally reworded.',
+      'rewordedFixture',
+    )).toThrow(/missing the required soft-notice signature phrase/u);
   });
 
   it('no template contains an imperative directed at the human', () => {

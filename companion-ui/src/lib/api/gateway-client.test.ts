@@ -575,7 +575,7 @@ describe('CompanionGatewayClient', () => {
         requestId: 'request-fallback',
         action: 'companion.interact',
         resource: 'conversation.touch',
-        body: { region: 'head', count: 2, durationMs: 20 },
+        body: { kind: 'headpat', region: 'head', count: 2, durationMs: 20 },
       },
     ]);
   });

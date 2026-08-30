@@ -42,7 +42,7 @@ function useSpriteFrame(entry: SpriteEntry | null, animated: boolean): number {
   return Math.min(index, Math.max(frameCount - 1, 0));
 }
 
-function SpriteFrame({
+export function SpriteFrame({
   manifest,
   entryId,
   animated,
@@ -78,7 +78,7 @@ function SpriteFrame({
   return <span className="sprite-image" style={style} aria-hidden />;
 }
 
-function CssFace() {
+export function CssFace() {
   return (
     <span className="sprite-face" aria-hidden>
       <span className="sprite-ear left" />

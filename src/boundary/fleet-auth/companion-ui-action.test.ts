@@ -4,6 +4,7 @@ import { createCompanionId } from '../../shared/routing/companion-id.js';
 import {
   CompanionUiProtocolError,
   compileCompanionUiAction,
+  companionUiPromptContent,
   parseCompanionUiActionFrame,
 } from './companion-ui-action.js';
 import {
@@ -48,7 +49,9 @@ describe('Companion UI action target', () => {
     ['conversation.status', 'companion.read', {}],
     ['conversation.interact', 'companion.interact', { content: 'untrusted browser text' }],
     ['conversation.interrupt', 'companion.interact', { interactionId: 'interaction-1' }],
-    ['conversation.touch', 'companion.interact', { region: 'head', count: 1, durationMs: 250 }],
+    ['conversation.touch', 'companion.interact', {
+      kind: 'headpat', region: 'head', count: 1, durationMs: 250,
+    }],
     ['conversation.audio', 'companion.interact', { transcript: 'untrusted transcript' }],
     ['shards.list', 'companion.read', {}],
     ['shards.history', 'companion.read', { shardId: 'shard-live-1' }],
@@ -107,6 +110,30 @@ describe('Companion UI action target', () => {
         deviceId: 'browser-selected',
       },
     ))).toThrowError(expect.objectContaining({ code: 'authority_forbidden' }));
+  });
+
+  it.each([
+    ['headpat', 'head'],
+    ['petting', 'head'],
+    ['hug', 'body'],
+    ['kiss', 'cheek'],
+  ] as const)('preserves the typed %s/%s touch stimulus in the signed action', (kind, region) => {
+    const frame = parseCompanionUiActionFrame(raw(
+      'conversation.touch',
+      'companion.interact',
+      { kind, region, count: 1, durationMs: 550 },
+    ));
+
+    expect(frame.body).toEqual({ kind, region, count: 1, durationMs: 550 });
+    expect(companionUiPromptContent(frame)).toContain(`kind=${kind}, region=${region}`);
+  });
+
+  it('rejects the pre-vocabulary touch body that loses stimulus kind', () => {
+    expect(() => parseCompanionUiActionFrame(raw(
+      'conversation.touch',
+      'companion.interact',
+      { region: 'head', count: 1, durationMs: 250 },
+    ))).toThrow(CompanionUiProtocolError);
   });
 
   it('intersects human action with the physical capability ceiling', () => {

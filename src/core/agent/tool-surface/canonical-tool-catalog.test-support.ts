@@ -17,6 +17,7 @@ import { createSystemTool } from '../../tools/lifecycle.js';
 import { createNotifyTool } from '../../tools/ntfy.js';
 import { createSelfStatusTool } from '../../tools/self-status.js';
 import { createSessionTool } from '../../tools/session.js';
+import { createLetterTool } from '../../tools/letter.js';
 import { createOrientTool } from '../../../faculties/core-memory/tools.js';
 import { createMemoryTool } from '../../../faculties/memory/tools.js';
 import { createScratchpadTool } from '../../../faculties/memory/tools/scratchpad.js';
@@ -89,7 +90,7 @@ export function createProviderFactoryToolCatalog(): AgentTool<any>[] {
     createMemoryTool(inert, inert), automataBus, createScratchpadTool(inert), createContactTool(inert, {
       intake: INTAKE_FIREWALL_OFF_SELF_AUTHORED_MUTATION_RUNTIME,
     }),
-    createSessionTool(inert), createSelfStatusTool(inert), createSystemTool(inert),
+    createSessionTool(inert), createLetterTool(inert), createSelfStatusTool(inert), createSystemTool(inert),
     createSkillTool(inert), createWikiTool(inert, {
       intake: INTAKE_FIREWALL_OFF_SELF_AUTHORED_MUTATION_RUNTIME,
     }), createScheduleTool(inert),

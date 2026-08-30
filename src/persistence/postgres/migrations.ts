@@ -4052,6 +4052,43 @@ export const POSTGRES_ANALYSIS_WORKBENCH_TRACE_MIGRATIONS: readonly string[] = [
   `,
 ];
 
+/** Companion-private asynchronous correspondence bin (S12A Letters). */
+export const POSTGRES_LETTER_MIGRATIONS: readonly string[] = [
+  `
+  CREATE TABLE IF NOT EXISTS letters (
+    id UUID PRIMARY KEY,
+    author_kind TEXT NOT NULL,
+    recipient_kind TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    body TEXT NOT NULL,
+    state TEXT NOT NULL,
+    created_at_ms BIGINT NOT NULL,
+    updated_at_ms BIGINT NOT NULL,
+    placed_at_ms BIGINT,
+    read_at_ms BIGINT,
+    archived_at_ms BIGINT,
+    CHECK (author_kind IN ('companion', 'partner')),
+    CHECK (recipient_kind IN ('companion', 'partner')),
+    CHECK (author_kind <> recipient_kind),
+    CHECK (state IN ('draft', 'placed', 'read', 'archived')),
+    CHECK (length(btrim(subject)) > 0),
+    CHECK (length(btrim(body)) > 0),
+    CHECK (created_at_ms >= 0 AND updated_at_ms >= created_at_ms),
+    CHECK ((state = 'draft' AND placed_at_ms IS NULL) OR state <> 'draft'),
+    CHECK ((state IN ('read', 'archived') AND read_at_ms IS NOT NULL) OR state NOT IN ('read', 'archived')),
+    CHECK ((state = 'archived' AND archived_at_ms IS NOT NULL) OR state <> 'archived')
+  );
+  `,
+  `
+  CREATE INDEX IF NOT EXISTS idx_letters_recipient_state_updated
+    ON letters(recipient_kind, state, updated_at_ms DESC, id DESC);
+  `,
+  `
+  CREATE INDEX IF NOT EXISTS idx_letters_author_updated
+    ON letters(author_kind, updated_at_ms DESC, id DESC);
+  `,
+];
+
 /** Companion-private durable class/run/session discovery for ephemeral workers. */
 export const POSTGRES_AUTOMATA_RUN_MIGRATIONS: readonly string[] = [
   `

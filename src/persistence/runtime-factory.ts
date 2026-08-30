@@ -90,6 +90,8 @@ import {
   type FleetMaintenanceCoordinator,
 } from '../core/scheduler/fleet-maintenance-coordinator.js';
 import { PostgresFleetMaintenanceStore } from './postgres/fleet-maintenance-store.js';
+import { PostgresLetterStore } from './postgres/letter-store.js';
+import type { LetterStorePort } from '../core/letters/contracts.js';
 
 export interface AgentPersistenceRuntime {
   backend: PersistenceBackend;
@@ -119,6 +121,8 @@ export interface AgentPersistenceRuntime {
   participantTrendStore: ParticipantTrendStorePort;
   scheduledPromptStore: ScheduledPromptStorePort;
   companionAvailabilityStore: CompanionAvailabilityStorePort & { close(): Promise<void> };
+  /** Companion-private durable asynchronous correspondence bin. */
+  letterStore: LetterStorePort;
   introspectionLandmarkStore: IntrospectionLandmarkPostgresStore;
   backgroundWorkStore: BackgroundWorkStorePort;
   automataRunRegistry: AutomataRunRegistry;
@@ -464,6 +468,10 @@ export async function createAgentPersistenceRuntime(
     companionAvailabilityStore: await awaitPostgresStoreReadiness(
       'companion_availability',
       () => PostgresCompanionAvailabilityStore.connect(databaseUrl, { schema, role: tenantRole }),
+    ),
+    letterStore: await awaitPostgresStoreReadiness(
+      'letters',
+      () => PostgresLetterStore.connect(databaseUrl, { schema, role: tenantRole }),
     ),
     introspectionLandmarkStore: await awaitPostgresStoreReadiness(
       'introspection',

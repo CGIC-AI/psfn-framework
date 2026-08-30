@@ -143,4 +143,17 @@ export const CONTINUITY_TOOL_CONTRACTS = {
     guidance: 'Do not treat transcript search as durable memory or a scratchpad; use memory or scratchpad.',
     example: { action: 'search', query: 'promise about the vet appointment', limit: 5 },
   },
+  letter: {
+    purpose: 'Write and receive unhurried private correspondence through the shared Letters bin.',
+    actions: [
+      action('compose', ['subject', 'body'], ['draft']),
+      action('list', [], ['direction', 'states', 'limit']),
+      action('read', ['letterId']),
+      action('place', ['letterId']),
+      action('archive', ['letterId']),
+    ],
+    output: 'It returns durable letter state; compose and read also become lived L0 entries available to memory extraction.',
+    guidance: 'Do not use letters for urgent or externally delivered messages; they wait in the bin without push, sound, quiet-hour handling, external delivery, or an outbound sender.',
+    example: { action: 'compose', subject: 'For whenever you arrive', body: 'I wanted to leave you this thought.' },
+  },
 } as const satisfies Record<string, CanonicalToolSurfaceContract>;

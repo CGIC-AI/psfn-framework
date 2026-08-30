@@ -61,6 +61,7 @@ import type {
   TurnExecutionRuntime,
 } from './turn-execution-runtime.js';
 import { handleMessageForTurn } from './turn-execution-runtime.js';
+import { selectEmotionAppraisalSourceEntries } from './emotion-self-model-runtime.js';
 import { isExtractionTranscriptEntry } from '../../../faculties/memory/extraction/chunk-compose.js';
 import { evaluateCogSecMemoryCandidacy } from '../../cogsec/memory-candidacy.js';
 import { PromptCacheTurnRuntime } from './turn-execution/prompt-cache-runtime.js';
@@ -7575,7 +7576,8 @@ describe('handleMessageForTurn pre-response concurrency', () => {
       }],
     }));
 
-    const assistantEntry = store.getRecent('ch1', 10).find(entry => entry.role === 'assistant');
+    const persistedEntries = store.getRecent('ch1', 10);
+    const assistantEntry = persistedEntries.find(entry => entry.role === 'assistant');
     expect(JSON.parse(assistantEntry?.metadata ?? '{}')).toMatchObject({
       runtimeFallbackProvenance: {
         schemaVersion: 1,
@@ -7600,6 +7602,10 @@ describe('handleMessageForTurn pre-response concurrency', () => {
     // REAL downstream checks against the exact persisted entry shape.
     expect(assistantEntry).toBeDefined();
     expect(isExtractionTranscriptEntry(assistantEntry!)).toBe(false);
+    const appraisalBaseline = selectEmotionAppraisalSourceEntries(
+      persistedEntries.filter(entry => entry.id !== assistantEntry!.id),
+    );
+    expect(selectEmotionAppraisalSourceEntries(persistedEntries)).toEqual(appraisalBaseline);
     expect(evaluateCogSecMemoryCandidacy({
       text: assistantEntry!.content,
       type: 'episodic',

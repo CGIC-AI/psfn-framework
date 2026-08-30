@@ -44,6 +44,7 @@ import type { CapturedSessionReads } from '../../session/manager/captured-sessio
 import type { SessionEntry } from '../../session/types.js';
 import type { ConversationScope } from '../../session/conversation-scope.js';
 import { isIntentionAppraisalArtifact } from '../../session/entry-attribution.js';
+import { isRuntimeAuthoredFallbackSessionEntry } from '../../session/runtime-fallback-provenance.js';
 import { isIntakeFirewallNoticeText } from '../../cogsec/intake-firewall-notice-templates.js';
 import { MetacognitiveMonitor, type MetacognitiveFlag } from '../../self-model/metacognition.js';
 import {
@@ -86,6 +87,10 @@ export function selectEmotionAppraisalSourceEntries(
 ): SessionEntry[] {
   return entries
     .filter(entry => !isIntentionAppraisalArtifact(entry))
+    // Runtime fallback replies are runtime speech, not companion-authored
+    // experience. The persisted provenance marker is authoritative; wording
+    // is only a text-level memory-candidacy backstop.
+    .filter(entry => !isRuntimeAuthoredFallbackSessionEntry(entry))
     // Intake-firewall/quarantine notices contribute zero appraisal input.
     .filter(entry => !isIntakeFirewallNoticeText(entry.content));
 }

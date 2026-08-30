@@ -6,6 +6,7 @@ import type {
   ChannelPrivacyLevel,
   Contact,
   ContactChannel,
+  ContactIdentityLinkOptions,
   ContactIdentityLinkResult,
   ContactMutationAuditEntry,
   RelationshipType,
@@ -22,7 +23,11 @@ import {
 import type { TrustLevel } from '../../../system/trust/types.js';
 import type { EmotionalTimeSeriesPoint } from '../store/emotional-baseline.js';
 import { normalizeEmotionalTimeSeries } from '../store/emotional-baseline.js';
-import { normalizeIdentity, normalizePrivacyLevel } from '../store/identity-utils.js';
+import {
+  normalizeContactIdentityLinkOptions,
+  normalizeIdentity,
+  normalizePrivacyLevel,
+} from '../store/identity-utils.js';
 import type { ContactChannelActivityRow, ContactIdentityRow, ContactRow } from './rows.js';
 import { normalizeAuditActor, rowToContact } from './mapping.js';
 import { queryOne, queryRows } from './connection.js';
@@ -61,6 +66,15 @@ function archivedIdentitySnapshotToRows(contactId: string, snapshot: unknown): C
       channel_user_id: channelUserId,
       privacy_level: typeof record.privacy_level === 'string' ? record.privacy_level : null,
       bonded: typeof record.bonded === 'boolean' ? record.bonded : false,
+      ...(typeof record.introduced_at_place_id === 'string'
+        ? { introduced_at_place_id: record.introduced_at_place_id }
+        : {}),
+      ...(typeof record.introduced_at_world === 'string'
+        ? { introduced_at_world: record.introduced_at_world }
+        : {}),
+      ...(typeof record.introduced_via === 'string'
+        ? { introduced_via: record.introduced_via }
+        : {}),
       first_seen: typeof record.first_seen === 'string' ? record.first_seen : '',
       last_seen: typeof record.last_seen === 'string' ? record.last_seen : '',
     });
@@ -139,7 +153,9 @@ const postgresContactSharedOperations: PostgresContactOperationMap = {
     let identities = await queryRows<ContactIdentityRow>(
       this.pool,
       `
-        SELECT contact_id, channel, channel_user_id, privacy_level, bonded, first_seen, last_seen
+        SELECT contact_id, channel, channel_user_id, privacy_level, bonded,
+               introduced_at_place_id, introduced_at_world, introduced_via,
+               first_seen, last_seen
         FROM contact_channel_ids
         WHERE contact_id = $1
         ORDER BY channel ASC, channel_user_id ASC
@@ -343,9 +359,10 @@ const postgresContactSharedOperations: PostgresContactOperationMap = {
     channelUserId: string,
     firstSeen: string,
     lastSeen: string,
-    privacyLevel?: ChannelPrivacyLevel,
+    options?: ContactIdentityLinkOptions,
   ): Promise<ContactIdentityLinkResult> {
     const normalized = normalizeIdentity(channel, channelUserId);
+    const normalizedOptions = normalizeContactIdentityLinkOptions(options);
     const existing = await queryOne<{ contact_id: string }>(
       this.pool,
       `
@@ -361,7 +378,7 @@ const postgresContactSharedOperations: PostgresContactOperationMap = {
       return 'identity_conflict';
     }
 
-    const privacy = normalizePrivacyLevel(privacyLevel, normalized.channel);
+    const privacy = normalizePrivacyLevel(normalizedOptions.privacyLevel, normalized.channel);
     if (existing) {
       await this.pool.query(
         `
@@ -382,12 +399,25 @@ const postgresContactSharedOperations: PostgresContactOperationMap = {
           channel,
           channel_user_id,
           privacy_level,
+          introduced_at_place_id,
+          introduced_at_world,
+          introduced_via,
           first_seen,
           last_seen
         )
-        VALUES ($1, $2, $3, $4, $5, $6)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
       `,
-      [contactId, normalized.channel, normalized.userId, privacy, firstSeen, lastSeen],
+      [
+        contactId,
+        normalized.channel,
+        normalized.userId,
+        privacy,
+        normalizedOptions.introducedAtPlaceId ?? null,
+        normalizedOptions.introducedAtWorld ?? null,
+        normalizedOptions.introducedVia ?? null,
+        firstSeen,
+        lastSeen,
+      ],
     );
 
     return 'linked';

@@ -292,6 +292,14 @@ describe('Postgres live schema migrations', () => {
       expectAddColumn(sql, 'contacts', column);
     }
 
+    for (const column of [
+      'introduced_at_place_id',
+      'introduced_at_world',
+      'introduced_via',
+    ]) {
+      expectAddColumn(sql, 'contact_channel_ids', column);
+    }
+
     expect(sql).toContain('CREATE TABLE IF NOT EXISTS social_graph_entities');
     expect(sql).toContain('CREATE TABLE IF NOT EXISTS social_relationship_edges');
     expect(sql).toContain('contact_id TEXT UNIQUE');

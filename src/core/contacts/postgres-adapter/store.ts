@@ -7,6 +7,7 @@ import type {
   ChannelPrivacyLevel,
   Contact,
   ContactChannel,
+  ContactIdentityLinkOptions,
   ContactIdentityLinkResult,
   ContactIdentityLinkVerification,
   ContactMutationAuditEntry,
@@ -123,7 +124,7 @@ export class PostgresContactStore implements ContactStorePort {
   declare loadContactByRow: (row: ContactRow) => Promise<Contact>;
   declare touchContactLastSeen: (id: string) => Promise<void>;
   declare appendMutationAuditEntry: (contactId: string, field: ContactMutationAuditEntry['field'], oldValue: string | null, newValue: string | null, actor?: string, queryable?: Pool | PoolClient, metadata?: ContactMutationAuditEntry['metadata']) => Promise<void>;
-  declare upsertIdentityLinkRecord: (contactId: string, channel: string, channelUserId: string, firstSeen: string, lastSeen: string, privacyLevel?: ChannelPrivacyLevel) => Promise<ContactIdentityLinkResult>;
+  declare upsertIdentityLinkRecord: (contactId: string, channel: string, channelUserId: string, firstSeen: string, lastSeen: string, options?: ContactIdentityLinkOptions) => Promise<ContactIdentityLinkResult>;
   declare upsertSocialGraphEntityForContact: (contact: Pick<Contact, 'id' | 'displayName' | 'firstSeen' | 'lastSeen'>) => Promise<SocialGraphEntity>;
   declare loadSocialGraphEntityByRow: (row: SocialGraphEntityRow | undefined) => Promise<SocialGraphEntity | undefined>;
   declare loadSocialGraphEntityById: (entityId: string) => Promise<SocialGraphEntity | undefined>;

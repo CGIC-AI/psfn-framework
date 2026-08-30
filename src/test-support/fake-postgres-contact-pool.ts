@@ -223,7 +223,7 @@ export class FakePostgresPool {
       return result(row ? [{ trust_level: row.trust_level, trust_version: row.trust_version ?? '0' }] : []);
     }
 
-    if (normalized.startsWith('select contact_id, channel, channel_user_id, privacy_level, bonded, first_seen, last_seen from contact_channel_ids where contact_id = $1 order by channel asc, channel_user_id asc')) {
+    if (normalized.startsWith('select contact_id, channel, channel_user_id, privacy_level, bonded, introduced_at_place_id, introduced_at_world, introduced_via, first_seen, last_seen from contact_channel_ids where contact_id = $1 order by channel asc, channel_user_id asc')) {
       const contactId = String(values[0] ?? '');
       const rows = [...this.contactChannelIds.values()].filter(row => row.contact_id === contactId);
       rows.sort((left, right) => left.channel.localeCompare(right.channel) || left.channel_user_id.localeCompare(right.channel_user_id));
@@ -505,8 +505,11 @@ export class FakePostgresPool {
         channel: String(values[1] ?? ''),
         channel_user_id: String(values[2] ?? ''),
         privacy_level: values[3] == null ? null : String(values[3]),
-        first_seen: String(values[4] ?? ''),
-        last_seen: String(values[5] ?? ''),
+        introduced_at_place_id: values[4] == null ? null : String(values[4]),
+        introduced_at_world: values[5] == null ? null : String(values[5]),
+        introduced_via: values[6] == null ? null : String(values[6]),
+        first_seen: String(values[7] ?? ''),
+        last_seen: String(values[8] ?? ''),
       };
       this.contactChannelIds.set(this.contactKey(row.channel, row.channel_user_id), row);
       return result();

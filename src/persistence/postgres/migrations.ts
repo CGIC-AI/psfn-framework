@@ -884,6 +884,9 @@ export const POSTGRES_CONTACT_MIGRATIONS = [
     channel_user_id TEXT NOT NULL,
     privacy_level TEXT NOT NULL DEFAULT 'invite_only',
     bonded BOOLEAN NOT NULL DEFAULT FALSE,
+    introduced_at_place_id TEXT,
+    introduced_at_world TEXT,
+    introduced_via TEXT,
     first_seen TEXT NOT NULL,
     last_seen TEXT NOT NULL,
     PRIMARY KEY (channel, channel_user_id)
@@ -892,6 +895,11 @@ export const POSTGRES_CONTACT_MIGRATIONS = [
   `CREATE INDEX IF NOT EXISTS idx_contact_channel_ids_contact ON contact_channel_ids(contact_id);`,
   // Channel bonding opt-in flag per contact channel identity.
   `ALTER TABLE contact_channel_ids ADD COLUMN IF NOT EXISTS bonded BOOLEAN NOT NULL DEFAULT FALSE;`,
+  // Optional first-introduction evidence. Nullable additions preserve the
+  // serialized shape of every existing identity link until context is known.
+  `ALTER TABLE contact_channel_ids ADD COLUMN IF NOT EXISTS introduced_at_place_id TEXT;`,
+  `ALTER TABLE contact_channel_ids ADD COLUMN IF NOT EXISTS introduced_at_world TEXT;`,
+  `ALTER TABLE contact_channel_ids ADD COLUMN IF NOT EXISTS introduced_via TEXT;`,
   `
   CREATE TABLE IF NOT EXISTS contact_channel_activity (
     contact_id TEXT NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,

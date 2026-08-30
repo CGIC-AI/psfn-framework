@@ -40,7 +40,18 @@ export interface ContactChannelIdentity {
   userId: string;
 }
 
-export interface ContactChannelLink extends ContactChannelIdentity {
+/**
+ * Optional evidence describing where this exact channel identity first entered
+ * the contact biography. These fields are display/audit context only: trust,
+ * privacy classification, enrollment, and presence policy must ignore them.
+ */
+interface ContactIdentityIntroductionProvenance {
+  introducedAtPlaceId?: string;
+  introducedAtWorld?: string;
+  introducedVia?: ContactChannel;
+}
+
+export interface ContactChannelLink extends ContactChannelIdentity, ContactIdentityIntroductionProvenance {
   /**
    * @deprecated E3.2 (Context Envelope contract, docs/context-envelope.md):
    * per-contact privacy labels are provenance EVIDENCE only. They must never
@@ -75,7 +86,7 @@ export interface ContactConversationChannel {
   privacyLevel?: ChannelPrivacyLevel;
 }
 
-export interface ContactIdentityLinkOptions {
+export interface ContactIdentityLinkOptions extends ContactIdentityIntroductionProvenance {
   /**
    * @deprecated E3.2: recorded as provenance evidence on the contact row
    * only; never consulted by channel classification (docs/context-envelope.md).

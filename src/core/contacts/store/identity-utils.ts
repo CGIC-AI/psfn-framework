@@ -13,6 +13,61 @@ export const LEGACY_DISCORD_CHANNEL = 'discord';
 export const DEFAULT_LINK_VERIFICATION_TTL_MS = 5 * 60_000;
 export const MAX_LINK_VERIFICATION_TTL_MS = 60 * 60_000;
 
+const CONTACT_IDENTITY_LINK_OPTION_KEYS = new Set([
+  'privacyLevel',
+  'introducedAtPlaceId',
+  'introducedAtWorld',
+  'introducedVia',
+]);
+
+function normalizeIntroductionField(
+  value: unknown,
+  field: 'introducedAtPlaceId' | 'introducedAtWorld' | 'introducedVia',
+): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string') {
+    throw new Error(`Contact identity ${field} must be a string`);
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    throw new Error(`Contact identity ${field} cannot be empty`);
+  }
+  return field === 'introducedVia' ? trimmed.toLowerCase() : trimmed;
+}
+
+/** Strictly normalize the optional evidence accepted by an identity-link write. */
+export function normalizeContactIdentityLinkOptions(
+  options: ContactIdentityLinkOptions | undefined,
+): ContactIdentityLinkOptions {
+  if (options === undefined) return {};
+  const candidate: unknown = options;
+  if (typeof candidate !== 'object' || candidate === null || Array.isArray(candidate)) {
+    throw new Error('Contact identity link options must be an object');
+  }
+  for (const key of Object.keys(candidate)) {
+    if (!CONTACT_IDENTITY_LINK_OPTION_KEYS.has(key)) {
+      throw new Error(`Unknown contact identity link option: ${key}`);
+    }
+  }
+
+  const record = candidate as Record<string, unknown>;
+  const introducedAtPlaceId = normalizeIntroductionField(
+    record.introducedAtPlaceId,
+    'introducedAtPlaceId',
+  );
+  const introducedAtWorld = normalizeIntroductionField(
+    record.introducedAtWorld,
+    'introducedAtWorld',
+  );
+  const introducedVia = normalizeIntroductionField(record.introducedVia, 'introducedVia');
+  return {
+    ...(options.privacyLevel !== undefined ? { privacyLevel: options.privacyLevel } : {}),
+    ...(introducedAtPlaceId ? { introducedAtPlaceId } : {}),
+    ...(introducedAtWorld ? { introducedAtWorld } : {}),
+    ...(introducedVia ? { introducedVia } : {}),
+  };
+}
+
 export function normalizeIdentity(channel: ContactChannel, userId: string): ContactChannelIdentity {
   const normalizedChannel = channel.trim().toLowerCase() || 'unknown';
   const normalizedUserId = userId.trim();
@@ -52,11 +107,19 @@ export function normalizeChannelLinkInput(
   identity: ContactChannelIdentity,
   options?: ContactIdentityLinkOptions,
 ): ContactChannelLink {
-  const privacyLevel = normalizePrivacyLevel(options?.privacyLevel, identity.channel);
+  const normalizedOptions = normalizeContactIdentityLinkOptions(options);
+  const privacyLevel = normalizePrivacyLevel(normalizedOptions.privacyLevel, identity.channel);
   return {
     channel: identity.channel,
     userId: identity.userId,
     privacyLevel,
+    ...(normalizedOptions.introducedAtPlaceId
+      ? { introducedAtPlaceId: normalizedOptions.introducedAtPlaceId }
+      : {}),
+    ...(normalizedOptions.introducedAtWorld
+      ? { introducedAtWorld: normalizedOptions.introducedAtWorld }
+      : {}),
+    ...(normalizedOptions.introducedVia ? { introducedVia: normalizedOptions.introducedVia } : {}),
     firstSeen: '',
     lastSeen: '',
   };

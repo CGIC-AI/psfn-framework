@@ -193,14 +193,22 @@ export function rowToContact(row: ContactRow, identities: ContactIdentityRow[], 
   };
 
   if (identities.length > 0) {
-    contact.channels = identities.map(identity => ({
-      channel: identity.channel,
-      userId: identity.channel_user_id,
-      privacyLevel: normalizePrivacyLevel(identity.privacy_level as ChannelPrivacyLevel | undefined, identity.channel),
-      ...(identity.bonded === true ? { bonded: true } : {}),
-      firstSeen: identity.first_seen,
-      lastSeen: identity.last_seen,
-    }));
+    contact.channels = identities.map((identity) => {
+      const introducedAtPlaceId = normalizeTrimmed(identity.introduced_at_place_id ?? undefined);
+      const introducedAtWorld = normalizeTrimmed(identity.introduced_at_world ?? undefined);
+      const introducedVia = normalizeTrimmed(identity.introduced_via ?? undefined);
+      return {
+        channel: identity.channel,
+        userId: identity.channel_user_id,
+        privacyLevel: normalizePrivacyLevel(identity.privacy_level as ChannelPrivacyLevel | undefined, identity.channel),
+        ...(identity.bonded === true ? { bonded: true } : {}),
+        ...(introducedAtPlaceId ? { introducedAtPlaceId } : {}),
+        ...(introducedAtWorld ? { introducedAtWorld } : {}),
+        ...(introducedVia ? { introducedVia } : {}),
+        firstSeen: identity.first_seen,
+        lastSeen: identity.last_seen,
+      };
+    });
     contact.channelIdentities = contact.channels.map(identity => ({
       channel: identity.channel,
       userId: identity.userId,

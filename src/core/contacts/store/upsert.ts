@@ -24,7 +24,16 @@ export function collectUpsertIdentities(partial: Partial<Contact>): ContactChann
     for (const channel of partial.channels) {
       if (!channel.channel || !channel.userId) continue;
       const normalized = normalizeIdentity(channel.channel, channel.userId);
-      addIdentity(normalizeChannelLinkInput(normalized, { privacyLevel: channel.privacyLevel }));
+      addIdentity(normalizeChannelLinkInput(normalized, {
+        privacyLevel: channel.privacyLevel,
+        ...(channel.introducedAtPlaceId !== undefined
+          ? { introducedAtPlaceId: channel.introducedAtPlaceId }
+          : {}),
+        ...(channel.introducedAtWorld !== undefined
+          ? { introducedAtWorld: channel.introducedAtWorld }
+          : {}),
+        ...(channel.introducedVia !== undefined ? { introducedVia: channel.introducedVia } : {}),
+      }));
     }
   }
 

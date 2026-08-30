@@ -483,7 +483,7 @@ const postgresContactLifecycleCoordinatorOperations: PostgresContactOperationMap
       row.target_user_id,
       contact.firstSeen,
       new Date().toISOString(),
-      privacyLevel,
+      privacyLevel ? { privacyLevel } : undefined,
     );
     if (linkResult === 'identity_conflict') {
       throw new Error('Contact verification owner changed during exact link preparation');

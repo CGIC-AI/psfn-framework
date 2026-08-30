@@ -46,6 +46,7 @@ import {
   isPrimaryIdentity,
   looksLikeOpaqueIdentifier,
   latestTimestamp,
+  normalizeContactIdentityLinkOptions,
   normalizeIdentity,
   normalizeNicknameValue,
   normalizePrivacyLevel,
@@ -85,6 +86,9 @@ interface ArchivedChannelIdentitySnapshotEntry {
   channel_user_id: string;
   privacy_level: string | null;
   bonded: boolean;
+  introduced_at_place_id?: string;
+  introduced_at_world?: string;
+  introduced_via?: string;
   first_seen: string;
   last_seen: string;
 }
@@ -106,11 +110,16 @@ async function snapshotContactChannelIdentities(
     channel_user_id: string;
     privacy_level: string | null;
     bonded: boolean | null;
+    introduced_at_place_id: string | null;
+    introduced_at_world: string | null;
+    introduced_via: string | null;
     first_seen: string;
     last_seen: string;
   }>(
     `
-      SELECT contact_id, channel, channel_user_id, privacy_level, bonded, first_seen, last_seen
+      SELECT contact_id, channel, channel_user_id, privacy_level, bonded,
+             introduced_at_place_id, introduced_at_world, introduced_via,
+             first_seen, last_seen
       FROM contact_channel_ids
       WHERE contact_id = $1
       ORDER BY channel ASC, channel_user_id ASC
@@ -122,6 +131,11 @@ async function snapshotContactChannelIdentities(
     channel_user_id: identity.channel_user_id,
     privacy_level: identity.privacy_level,
     bonded: identity.bonded === true,
+    ...(identity.introduced_at_place_id
+      ? { introduced_at_place_id: identity.introduced_at_place_id }
+      : {}),
+    ...(identity.introduced_at_world ? { introduced_at_world: identity.introduced_at_world } : {}),
+    ...(identity.introduced_via ? { introduced_via: identity.introduced_via } : {}),
     first_seen: identity.first_seen,
     last_seen: identity.last_seen,
   }));
@@ -322,7 +336,12 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
           identity.userId,
           target.firstSeen,
           now,
-          identity.privacyLevel,
+          {
+            privacyLevel: identity.privacyLevel,
+            ...(identity.introducedAtPlaceId ? { introducedAtPlaceId: identity.introducedAtPlaceId } : {}),
+            ...(identity.introducedAtWorld ? { introducedAtWorld: identity.introducedAtWorld } : {}),
+            ...(identity.introducedVia ? { introducedVia: identity.introducedVia } : {}),
+          },
         );
       }
 
@@ -409,7 +428,12 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
         identity.userId,
         contact.firstSeen,
         contact.lastSeen,
-        identity.privacyLevel,
+        {
+          privacyLevel: identity.privacyLevel,
+          ...(identity.introducedAtPlaceId ? { introducedAtPlaceId: identity.introducedAtPlaceId } : {}),
+          ...(identity.introducedAtWorld ? { introducedAtWorld: identity.introducedAtWorld } : {}),
+          ...(identity.introducedVia ? { introducedVia: identity.introducedVia } : {}),
+        },
       );
     }
 
@@ -1621,13 +1645,14 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
     if (!contact) return 'contact_not_found';
 
     const normalizedIdentity = normalizeIdentity(channel, channelUserId);
+    const normalizedOptions = normalizeContactIdentityLinkOptions(options);
     const result = await this.upsertIdentityLinkRecord(
       contactId,
       normalizedIdentity.channel,
       normalizedIdentity.userId,
       contact.firstSeen,
       new Date().toISOString(),
-      options?.privacyLevel,
+      normalizedOptions,
     );
     if (result === 'identity_conflict') {
       if (normalizedIdentity.channel === 'discord' && this.contactLifecycleGateway) {
@@ -1824,7 +1849,14 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
       if (displayName?.trim() && looksLikeOpaqueIdentifier(existing.displayName)) {
         await this.pool.query('UPDATE contacts SET display_name = $1 WHERE id = $2', [displayName.trim(), existing.id]);
       }
-      await this.upsertIdentityLinkRecord(existing.id, identity.channel, identity.userId, existing.firstSeen, new Date().toISOString(), defaultPrivacyForChannel(identity.channel));
+      await this.upsertIdentityLinkRecord(
+        existing.id,
+        identity.channel,
+        identity.userId,
+        existing.firstSeen,
+        new Date().toISOString(),
+        { privacyLevel: defaultPrivacyForChannel(identity.channel) },
+      );
       const updated = await this.getById(existing.id);
       if (!updated) throw new Error(`Failed to reload resolved contact ${existing.id}`);
       await this.upsertSocialGraphEntityForContact({

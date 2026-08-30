@@ -30,6 +30,9 @@ export interface ContactIdentityRow {
   channel_user_id: string;
   privacy_level: string | null;
   bonded?: boolean | null;
+  introduced_at_place_id?: string | null;
+  introduced_at_world?: string | null;
+  introduced_via?: string | null;
   first_seen: string;
   last_seen: string;
   identity_version?: string;

@@ -8,6 +8,8 @@ const DEFAULT_RECONNECT_BASE_MS = 250;
 const DEFAULT_RECONNECT_MAX_MS = 5_000;
 const DEFAULT_RECONNECT_MAX_ATTEMPTS = 3;
 const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
+const DEFAULT_PENDING_PINGS_POLL_INTERVAL_MS = 2_000;
+const DEFAULT_AMBIENT_SAY_DEBOUNCE_MS = 180_000;
 const MAX_SAY_TEXT_LENGTH = 4_000;
 
 export interface EidoverseMcpConfig {
@@ -21,6 +23,8 @@ export interface EidoverseMcpConfig {
   reconnectMaxMs: number;
   reconnectMaxAttempts: number;
   requestTimeoutMs: number;
+  pendingPingsPollIntervalMs: number;
+  ambientSayDebounceMs: number;
 }
 
 export interface EidoverseMcpLogger {
@@ -293,6 +297,16 @@ export function loadEidoverseMcpConfig(
     "EIDOVERSE_MCP_REQUEST_TIMEOUT_MS",
     DEFAULT_REQUEST_TIMEOUT_MS,
   );
+  const pendingPingsPollIntervalMs = positiveIntegerEnv(
+    env,
+    "EIDOVERSE_MCP_PENDING_PINGS_POLL_INTERVAL_MS",
+    DEFAULT_PENDING_PINGS_POLL_INTERVAL_MS,
+  );
+  const ambientSayDebounceMs = positiveIntegerEnv(
+    env,
+    "EIDOVERSE_MCP_AMBIENT_SAY_DEBOUNCE_MS",
+    DEFAULT_AMBIENT_SAY_DEBOUNCE_MS,
+  );
 
   return {
     command,
@@ -305,6 +319,8 @@ export function loadEidoverseMcpConfig(
     reconnectMaxMs,
     reconnectMaxAttempts,
     requestTimeoutMs,
+    pendingPingsPollIntervalMs,
+    ambientSayDebounceMs,
   };
 }
 

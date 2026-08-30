@@ -170,7 +170,7 @@ describe('sensor cognition bridge normalization', () => {
     });
   });
 
-  it('normalizes identity-claim observed events without resolving contacts', () => {
+  it('preserves an Eidoverse participant id supplied through the existing identity-claim contract', () => {
     const result = normalize(telemetryEvent({
       id: 'event-claim',
       scope: 'face',
@@ -178,7 +178,7 @@ describe('sensor cognition bridge normalization', () => {
         origin: { satelliteId: 'sat.living', siteId: 'site.home' },
         type: 'identity-claim.observed',
         claim: {
-          hubIdentityId: 'hub.identity.sample',
+          hubIdentityId: 'participant-aid1-observed',
           confidence: 0.84,
         },
       },
@@ -191,7 +191,7 @@ describe('sensor cognition bridge normalization', () => {
         action: 'observed',
         satelliteId: 'sat.living',
         placeId: 'place.living',
-        hubIdentityId: 'hub.identity.sample',
+        hubIdentityId: 'participant-aid1-observed',
         confidence: 0.84,
         claimSource: 'face',
       },

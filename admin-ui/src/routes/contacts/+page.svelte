@@ -102,6 +102,7 @@
   const KNOWN_CHANNEL_TYPES = [
     'discord',
     'telegram',
+    'eidoverse',
     'api',
     'admin-chat',
     'twitter',

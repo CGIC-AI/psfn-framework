@@ -2,6 +2,18 @@ import type { TrustLevel, SensitivityLevel } from '../../system/trust/types.js';
 import type { ChannelPrivacy } from '../../system/trust/context-envelope.js';
 
 export type RelationshipType = 'partner' | 'family' | 'friend' | 'acquaintance' | 'stranger' | 'ai_companion';
+
+/**
+ * Stable contact-identity namespace for an Eidoverse participant id.
+ *
+ * The `userId` stored beside this token is the participant/aid1 subject
+ * presented by the Hub. Linking it records identity continuity only: it does
+ * not create a contact, enroll a hub identity, grant trust, or represent the
+ * participant as cluster companion presence.
+ */
+export const EIDOVERSE_CONTACT_CHANNEL = 'eidoverse' as const;
+
+/** Open string domain: integrations may add contact namespaces without treating them as chat surfaces. */
 export type ContactChannel = string;
 // E3.2 demoted per-contact privacy to provenance evidence; E3.3 narrows the
 // value domain to ChannelPrivacy (stored legacy values decode at read time).

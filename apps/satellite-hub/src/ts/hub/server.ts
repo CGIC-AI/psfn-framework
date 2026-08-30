@@ -42,6 +42,11 @@ import {
 } from "./companion-bridge.js";
 import { ElevenLabsStream, type StreamingTtsAdapter } from "./elevenlabs-stream.js";
 import { PsfnModelAdapter } from "./psfn-model.js";
+import {
+  EidoverseEmbodiedSessionAdapter,
+  type EidoverseAddressedUtterance,
+  type EidoverseEmbodiedSessionConfig,
+} from "./eidoverse-adapter.js";
 import { VoxtaFacade, type VoxtaSttAdapter, type VoxtaTtsAdapter } from "./voxta-facade.js";
 import {
   canReceiveArtifacts,
@@ -77,6 +82,7 @@ export class RealtimeHubServer {
   private readonly tts: StreamingTtsAdapter;
   private readonly voxta: VoxtaFacade;
   private readonly companion: CompanionBridge | null;
+  private readonly eidoverse: EidoverseEmbodiedSessionAdapter | null;
 
   constructor(
     private readonly config: HubConfig,
@@ -86,6 +92,7 @@ export class RealtimeHubServer {
       voxtaTts?: VoxtaTtsAdapter | null;
       voxtaStt?: VoxtaSttAdapter | null;
       companion?: CompanionBridge | null;
+      eidoverse?: Pick<EidoverseEmbodiedSessionConfig, "worldName" | "agentName"> | null;
     } = {},
   ) {
     if (config.deviceRegistry && !config.psfn.deviceAssertionIssuer) {
@@ -94,6 +101,17 @@ export class RealtimeHubServer {
     this.sessions = new SessionStore(config.sessionTtlSeconds);
     this.embodiedSessions = new EmbodiedSessionRegistry(resolveChannelType(config));
     this.agent = options.agent ?? createFrameworkAgent(config);
+    this.eidoverse = options.eidoverse
+      ? new EidoverseEmbodiedSessionAdapter({
+          ...options.eidoverse,
+          satelliteClaim: config.psfn.satelliteClaim,
+          placeMap: config.eidoversePlaceMap,
+        }, {
+          embodiedSessions: this.embodiedSessions,
+          sessions: this.sessions,
+          agent: this.agent,
+        })
+      : null;
     this.companion = options.companion !== undefined
       ? options.companion
       : (config.companion ? new CompanionBridge(config.companion) : null);
@@ -129,6 +147,7 @@ export class RealtimeHubServer {
   }
 
   async start(): Promise<void> {
+    this.eidoverse?.connect();
     this.companion?.start();
     this.wsServer.on("connection", (socket) => {
       const connection = new RealtimeConnection(
@@ -164,7 +183,15 @@ export class RealtimeHubServer {
     return this.httpServer.address();
   }
 
+  handleEidoverseAddressedUtterance(input: EidoverseAddressedUtterance): Promise<string | null> {
+    if (!this.eidoverse) {
+      throw new Error("Eidoverse embodied session is not configured");
+    }
+    return this.eidoverse.handleAddressedUtterance(input);
+  }
+
   async close(): Promise<void> {
+    this.eidoverse?.disconnect();
     await this.companion?.stop();
     await this.agent.close();
     await this.tts.close();

@@ -34,7 +34,8 @@ function resolveRelativeSourceImport(
   options: ts.CompilerOptions,
 ): string | null {
   if (!specifier.startsWith('.') || specifier.endsWith('.css')) return null;
-  const resolved = ts.resolveModuleName(specifier, containingFile, options, ts.sys)
+  const sourceSpecifier = specifier.replace(/\?(?:worker&url|url)$/u, '');
+  const resolved = ts.resolveModuleName(sourceSpecifier, containingFile, options, ts.sys)
     .resolvedModule?.resolvedFileName;
   if (!resolved) {
     throw new Error(`Unable to resolve ${specifier} from ${relative(REPO_ROOT, containingFile)}`);

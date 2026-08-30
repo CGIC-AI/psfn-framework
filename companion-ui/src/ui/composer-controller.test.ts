@@ -4,14 +4,14 @@ import { buildVoiceNotice } from './composer-controller.js';
 describe('buildVoiceNotice', () => {
   it('reports capture as pending and text as canonical when nothing is wired', () => {
     const notice = buildVoiceNotice('dictation', { captureReady: false, playbackReady: false });
-    expect(notice).toMatch(/Dictation capture is not wired/);
+    expect(notice).toMatch(/Dictation capture is unavailable/);
     expect(notice).toMatch(/text remains the source of truth/);
     expect(notice).not.toMatch(/play back/);
   });
 
   it('mentions spoken-reply playback when the session advertises streamed audio', () => {
     const notice = buildVoiceNotice('voice', { captureReady: false, playbackReady: true });
-    expect(notice).toMatch(/Voice chat capture is not wired/);
+    expect(notice).toMatch(/Voice chat capture is unavailable/);
     expect(notice).toMatch(/play back with mouth movement/);
   });
 

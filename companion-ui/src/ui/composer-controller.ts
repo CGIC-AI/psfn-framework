@@ -1,5 +1,6 @@
 import {
   type ChangeEvent,
+  useCallback,
   useEffect,
   useRef,
   useState,
@@ -27,7 +28,7 @@ export function buildVoiceNotice(mode: MicMode, capability: VoiceCapability): st
   const playback = capability.playbackReady
     ? ' Spoken replies from your companion still play back with mouth movement.'
     : '';
-  return `${label} capture is not wired in this build yet, so text remains the source of truth.${playback}`;
+  return `${label} capture is unavailable for this browser or attached device, so text remains the source of truth.${playback}`;
 }
 
 export function useComposerController(voice: VoiceCapability = NO_VOICE_CAPABILITY) {
@@ -68,6 +69,11 @@ export function useComposerController(voice: VoiceCapability = NO_VOICE_CAPABILI
       return next;
     });
   }
+
+  const syncMicCapture = useCallback((active: boolean, notice: string | null) => {
+    setMicActive(active);
+    setVoiceNotice(notice);
+  }, []);
 
   function selectMicMode(mode: MicMode) {
     setMicMode(mode);
@@ -130,6 +136,7 @@ export function useComposerController(voice: VoiceCapability = NO_VOICE_CAPABILI
     setAttachmentMenuOpen,
     setInput,
     stopVoicePlayback,
+    syncMicCapture,
     toggleMic,
     toggleMicMode,
     voiceNotice,

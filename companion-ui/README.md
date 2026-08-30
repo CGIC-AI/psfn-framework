@@ -104,13 +104,10 @@ Bluetooth with a native BLE adapter without changing authentication, framing,
 or UI state. This replacement is required for Android WebView shells that do
 not expose Web Bluetooth; Chrome/TWA can use the browser connector directly.
 
-The UI reports receipt/decoding without claiming upstream delivery. The shipped
-same-origin Companion Gateway action transport currently accepts final audio
-transcripts, not raw PCM, so it deliberately reports **Mic received** or
-**Mic decoded** instead of claiming end-to-end relay. Adding a gateway-owned,
-bounded streaming-audio ingress is the remaining server-side dependency;
-browser code must not invent a Hub URL, device credential, or channel authority
-to bypass it.
+The UI reports receipt, decoding, and only server-acknowledged relay counts.
+The same-origin Companion Gateway owns the bounded PCM16 mono 16 kHz stream,
+STT, transcript screening, and conversation attachment. Browser code sends no
+Hub URL, device credential, session/channel identifier, or other authority.
 
 Build the PWA:
 
@@ -331,11 +328,15 @@ fail-closed:
   server-owned `audio_output` ceiling is never subscribed and receives zero
   audio frames. Interrupt, pause, or authority loss stops in-flight Web Audio
   playback and closes both CSS and manifest-art mouth states.
-- Outbound mic **capture** (getUserMedia + downsample to 16k PCM, or browser
-  speech-to-text feeding the gateway `conversation.audio` transcript action) is
-  not wired in this build yet; the Voice Chat toggle surfaces a fail-closed
-  notice. The reassembly and amplitude/lipsync primitives live under
-  `src/lib/audio/`.
+- Outbound mic **capture** is wired only when the attached gateway session
+  advertises both `microphone_pcm` and `final_transcript`. An explicit mic or
+  avatar hands-free button gesture unlocks Web Audio and requests getUserMedia;
+  an AudioWorklet box-filters microphone mono audio to PCM16 16 kHz and feeds
+  bounded chunks into the existing same-origin gateway stream. The avatar view
+  holds a screen wake lock while hands-free capture is active and releases the
+  lock and microphone on exit. Permission/device loss stops capture loudly and
+  points back to the text composer. No browser frame supplies device, session,
+  channel, or companion authority.
 
 Approval and artifact UI is contextual only. It does not live as a permanent
 section on the main page. Approval cards (approve/deny with an expiry

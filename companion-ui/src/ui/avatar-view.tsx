@@ -54,16 +54,24 @@ export function AvatarView({
   emotion = null,
   label,
   manifest,
+  handsFreeActive = false,
+  handsFreeAvailable = false,
+  handsFreeDetail,
   now = () => Date.now(),
   onInteraction,
+  onToggleHandsFree,
   state,
 }: {
   animated: boolean;
   emotion?: EmotionSnapshotStreamEntry | null;
   label: string;
   manifest: SpriteManifest | null;
+  handsFreeActive?: boolean;
+  handsFreeAvailable?: boolean;
+  handsFreeDetail?: string;
   now?: () => number;
   onInteraction: (interaction: TouchInteractionInput) => void;
+  onToggleHandsFree?: () => void;
   state: SpriteState;
 }) {
   const pointerStartRef = useRef<PointerStart | null>(null);
@@ -211,6 +219,19 @@ export function AvatarView({
             {REACTION_COPY[reaction.kind]}
           </div>
         )}
+        <div className="avatar-voice-control">
+          <button
+            type="button"
+            className={handsFreeActive ? 'active' : ''}
+            disabled={!handsFreeAvailable && !handsFreeActive}
+            onClick={onToggleHandsFree}
+            aria-pressed={handsFreeActive}
+            aria-label={handsFreeActive ? 'Stop hands-free voice' : 'Start hands-free voice'}
+          >
+            {handsFreeActive ? 'Stop listening' : 'Hands-free voice'}
+          </button>
+          {handsFreeDetail && <p role="status">{handsFreeDetail}</p>}
+        </div>
         <p className="avatar-gesture-hint">Tap or stroke her head · double-tap her cheek · hold her close</p>
       </div>
     </section>

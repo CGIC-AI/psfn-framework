@@ -25,6 +25,25 @@ function renderAvatar(now: () => number, onInteraction = vi.fn()) {
 }
 
 describe('avatar view interactions', () => {
+  it('starts hands-free voice only from its explicit avatar control', () => {
+    const onToggleHandsFree = vi.fn();
+    const view = render(
+      <AvatarView
+        animated
+        handsFreeAvailable
+        label="Companion"
+        manifest={null}
+        onInteraction={vi.fn()}
+        onToggleHandsFree={onToggleHandsFree}
+        state="attentive"
+      />,
+    );
+
+    expect(onToggleHandsFree).not.toHaveBeenCalled();
+    fireEvent.click(view.getByRole('button', { name: 'Start hands-free voice' }));
+    expect(onToggleHandsFree).toHaveBeenCalledTimes(1);
+  });
+
   it('turns a head tap into one immediate headpat reaction', () => {
     const view = renderAvatar(timeSource(1_000, 1_080));
     const head = view.getByRole('button', { name: /head: tap or drag/i });

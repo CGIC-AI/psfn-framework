@@ -12,6 +12,7 @@ export interface FleetBreakGlassLoginRegistration {
 }
 
 const DISCORD_LOGIN_PATH = '/v1/fleet-auth/login?return_to=%2Ffleet';
+const FLEET_LOGIN_PATH = '/fleet/login';
 const VALIDATION_ORIGIN = 'https://fleet-login.invalid';
 
 /**
@@ -158,6 +159,19 @@ h1 {
   text-underline-offset: 3px;
 }
 .emergency a:hover { color: var(--ink); }
+.emergency form { display: grid; gap: 12px; text-align: left; }
+.emergency label { color: var(--ink); font-size: 13px; font-weight: 600; }
+.emergency input {
+  min-height: 46px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0 12px;
+  color: var(--ink);
+  font: inherit;
+}
+.emergency input:focus-visible { outline: 2px solid var(--gold-600); outline-offset: 2px; }
+.emergency button { border: 0; cursor: pointer; }
+.login-error { margin: 0; color: #9f2d20; font-size: 13px; text-align: center; }
 @media (max-width: 420px) {
   main { padding: 24px 14px; }
   .login { padding: 28px 20px 24px; }
@@ -167,18 +181,20 @@ h1 {
 }
 `;
 const STYLE_HASH = createHash('sha256').update(PAGE_STYLE, 'utf8').digest('base64');
-const CONTENT_SECURITY_POLICY = [
-  "default-src 'none'",
-  "base-uri 'none'",
-  "connect-src 'none'",
-  "font-src 'none'",
-  "form-action 'none'",
-  "frame-ancestors 'none'",
-  "img-src 'none'",
-  "object-src 'none'",
-  "script-src 'none'",
-  `style-src 'sha256-${STYLE_HASH}'`,
-].join('; ');
+function contentSecurityPolicy(adminTokenEnabled: boolean): string {
+  return [
+    "default-src 'none'",
+    "base-uri 'none'",
+    "connect-src 'none'",
+    "font-src 'none'",
+    adminTokenEnabled ? "form-action 'self'" : "form-action 'none'",
+    "frame-ancestors 'none'",
+    "img-src 'none'",
+    "object-src 'none'",
+    "script-src 'none'",
+    `style-src 'sha256-${STYLE_HASH}'`,
+  ].join('; ');
+}
 
 function validateLoginPath(loginPath: string): void {
   if (!loginPath.startsWith('/')
@@ -198,12 +214,27 @@ function validateLoginPath(loginPath: string): void {
 const LOCK_ICON = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>';
 const DISCORD_MARK = '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M20.317 4.369a19.79 19.79 0 0 0-4.885-1.515.074.074 0 0 0-.79.037c-.211.375-.445.865-.608 1.249a18.27 18.27 0 0 0-5.487 0 12.65 12.65 0 0 0-.617-1.25.077.077 0 0 0-.079-.036c-1.714.29-3.354.8-4.885 1.515a.07.07 0 0 0-.32.027C.533 9.045-.32 13.579.099 18.057a.082.082 0 0 0 .31.056 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028c.462-.63.874-1.295 1.226-1.994a.076.076 0 0 0-.041-.106 13.1 13.1 0 0 1-1.872-.892.077.077 0 0 1-.008-.128c.126-.094.252-.192.372-.291a.074.074 0 0 1 .078-.01c3.927 1.793 8.18 1.793 12.061 0a.074.074 0 0 1 .79.009c.12.099.245.198.372.292a.077.077 0 0 1-.6.127c-.598.35-1.22.645-1.873.891a.077.077 0 0 0-.41.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .84.029 19.84 19.84 0 0 0 6.002-3.03.077.077 0 0 0 .032-.055c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.028ZM8.02 15.331c-1.182 0-2.157-1.086-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.332-.956 2.418-2.157 2.418Zm7.975 0c-1.183 0-2.157-1.086-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.332-.946 2.418-2.157 2.418Z"/></svg>';
 
-function pageBody(registration?: FleetBreakGlassLoginRegistration): Buffer {
+function pageBody(
+  registration?: FleetBreakGlassLoginRegistration,
+  adminTokenEnabled = false,
+  error?: string,
+): Buffer {
   if (registration) validateLoginPath(registration.loginPath);
   const breakGlass = registration
     ? `
       <div class="emergency">
         <a href="${escapeHtml(registration.loginPath)}">Emergency administrator login</a>
+      </div>`
+    : '';
+  const adminToken = adminTokenEnabled
+    ? `
+      <div class="emergency">
+        <form action="${FLEET_LOGIN_PATH}" method="post">
+          <label for="admin-token">Administrator token</label>
+          <input id="admin-token" name="token" type="password" autocomplete="current-password" required>
+          <button class="primary" type="submit">Login with administrator token</button>
+          ${error ? `<p class="login-error" role="alert">${escapeHtml(error)}</p>` : ''}
+        </form>
       </div>`
     : '';
   return Buffer.from(`<!doctype html>
@@ -229,7 +260,7 @@ function pageBody(registration?: FleetBreakGlassLoginRegistration): Buffer {
       <h1 id="login-title">Welcome back.</h1>
       <p class="intro">Sign in to continue to the PSFN Cluster Portal. Operator identity is verified through Discord, then bound to your session.</p>
       <a class="primary" href="${DISCORD_LOGIN_PATH}">${DISCORD_MARK}<span>Login with Discord</span></a>
-      <p class="privacy">${LOCK_ICON}<span>Authentication is handled securely through Discord.</span></p>${breakGlass}
+      <p class="privacy">${LOCK_ICON}<span>Authentication is handled at this Gateway.</span></p>${adminToken}${breakGlass}
     </section>
   </main>
 </body>
@@ -237,17 +268,17 @@ function pageBody(registration?: FleetBreakGlassLoginRegistration): Buffer {
 }
 
 export class GatewayFleetLoginLanding {
-  private readonly body: Buffer;
+  constructor(
+    private readonly registration?: FleetBreakGlassLoginRegistration,
+    private readonly adminTokenEnabled = false,
+  ) {}
 
-  constructor(registration?: FleetBreakGlassLoginRegistration) {
-    this.body = pageBody(registration);
-  }
-
-  send(response: ServerResponse): void {
-    response.writeHead(200, {
+  send(response: ServerResponse, error?: string): void {
+    const body = pageBody(this.registration, this.adminTokenEnabled, error);
+    response.writeHead(error ? 401 : 200, {
       'Cache-Control': 'no-store',
-      'Content-Length': String(this.body.byteLength),
-      'Content-Security-Policy': CONTENT_SECURITY_POLICY,
+      'Content-Length': String(body.byteLength),
+      'Content-Security-Policy': contentSecurityPolicy(this.adminTokenEnabled),
       'Content-Type': 'text/html; charset=utf-8',
       'Cross-Origin-Opener-Policy': 'same-origin',
       'Cross-Origin-Resource-Policy': 'same-origin',
@@ -259,6 +290,6 @@ export class GatewayFleetLoginLanding {
       'X-Content-Type-Options': 'nosniff',
       'X-Frame-Options': 'DENY',
     });
-    response.end(this.body);
+    response.end(body);
   }
 }

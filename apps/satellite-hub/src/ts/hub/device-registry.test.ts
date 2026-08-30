@@ -97,18 +97,18 @@ test("file-backed device authority reloads enrollment state and fences stale att
 test("capability authorization preserves safety and rejects escalation", () => {
   const maximum = {
     input: ["text", "microphone_pcm"],
-    output: ["text", "streamed_audio"],
+    output: ["text", "streamed_audio", "emotion"],
     control: ["interrupt", "presence"],
     safety: ["local_only"],
   } satisfies Required<SatelliteCapabilities>;
   assert.deepEqual(intersectCapabilities({
     input: ["text"],
-    output: [],
+    output: ["emotion"],
     control: ["presence"],
     safety: [],
   }, maximum), {
     input: ["text"],
-    output: [],
+    output: ["emotion"],
     control: ["presence"],
     safety: ["local_only"],
   });

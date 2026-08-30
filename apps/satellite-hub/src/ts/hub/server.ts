@@ -50,6 +50,7 @@ import {
 import { VoxtaFacade, type VoxtaSttAdapter, type VoxtaTtsAdapter } from "./voxta-facade.js";
 import {
   canReceiveArtifacts,
+  canReceiveEmotion,
   canReceiveStreamingAudio,
   canReceiveToolActivity,
   canSendTouchInteractions,
@@ -710,6 +711,12 @@ class RealtimeConnection {
           return;
         }
         await this.send({ type: "tool.activity", data: event.payload });
+        return;
+      case "emotion.snapshot":
+        if (!canReceiveEmotion(this.capabilities)) {
+          return;
+        }
+        await this.send({ type: "emotion.snapshot", data: event.payload });
         return;
     }
   }

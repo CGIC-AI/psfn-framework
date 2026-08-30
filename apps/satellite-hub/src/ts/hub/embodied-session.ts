@@ -19,7 +19,7 @@ export const THIN_SHELL_CAPABILITIES: Required<SatelliteCapabilities> = {
 
 export const VOXTA_VAM_CAPABILITIES: Required<SatelliteCapabilities> = {
   input: ["text", "vision_upload"],
-  output: ["text", "subtitle", "local_file_audio", "animation", "action", "expression"],
+  output: ["text", "subtitle", "local_file_audio", "animation", "action", "expression", "emotion"],
   control: ["interrupt", "presence", "session_attach"],
   safety: ["action_allowlist", "local_only"],
 };
@@ -236,6 +236,10 @@ export function canReceiveArtifacts(capabilities: SatelliteCapabilities): boolea
 
 export function canReceiveToolActivity(capabilities: SatelliteCapabilities): boolean {
   return Boolean(capabilities.output?.includes("tool_activity"));
+}
+
+export function canReceiveEmotion(capabilities: SatelliteCapabilities): boolean {
+  return Boolean(capabilities.output?.includes("emotion"));
 }
 
 export function deriveChannelId(channelType: string, sessionId: string): string {

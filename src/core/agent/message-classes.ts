@@ -6,6 +6,7 @@ export const MESSAGE_CLASSES = {
   compaction: 'compaction',
   continuity: 'continuity',
   mirror: 'mirror',
+  letter: 'letter',
 } as const;
 
 export type MessageClass = typeof MESSAGE_CLASSES[keyof typeof MESSAGE_CLASSES];

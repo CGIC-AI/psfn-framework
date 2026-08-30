@@ -4,6 +4,7 @@ export interface NavItem {
   defaultLabel: string;
   icon: string;
   groupId: string;
+  indicatorTone?: 'attention' | 'waiting';
 }
 
 export interface NavGroup {
@@ -40,6 +41,7 @@ export const navGroups: NavGroup[] = [
     { id: 'episodic-memory', path: '/episodic-memory', defaultLabel: 'L0.1 Episodes', icon: '\u{1F9F6}' },
     { id: 'wiki', path: '/wiki', defaultLabel: 'Wiki', icon: '\u{1F4D8}' },
     { id: 'wishlist', path: '/wishlist', defaultLabel: 'Wishlist', icon: '\u{1F49B}' },
+    { id: 'letters', path: '/letters', defaultLabel: 'Letters', icon: '\u{2709}\u{FE0F}', indicatorTone: 'waiting' },
     { id: 'contacts', path: '/contacts', defaultLabel: 'Contacts', icon: '\u{1F6AA}' },
     { id: 'contact-approvals', path: '/contact-approvals', defaultLabel: 'Contact Approvals', icon: '\u{1F91D}' },
     { id: 'enrollment', path: '/enrollment', defaultLabel: 'Enrollment', icon: '\u{1FAAA}' },

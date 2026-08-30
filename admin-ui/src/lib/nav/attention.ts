@@ -107,6 +107,11 @@ async function journalHealthAttentionCount(): Promise<number> {
   return data.attentionCount;
 }
 
+async function lettersWaitingCount(): Promise<number> {
+  const data = await apiGet<{ waitingCount: number }>('/api/admin/letters?direction=inbox');
+  return Number.isSafeInteger(data.waitingCount) && data.waitingCount > 0 ? data.waitingCount : 0;
+}
+
 export const ATTENTION_SOURCES: AttentionSource[] = [
   { path: '/confirmations', fetchCount: confirmationsCount },
   { path: '/contact-approvals', fetchCount: contactApprovalsCount },
@@ -114,4 +119,5 @@ export const ATTENTION_SOURCES: AttentionSource[] = [
   { path: '/cognitive-security/remediation', fetchCount: sessionIntegrityIncidentsCount },
   { path: '/graph-proposals', fetchCount: graphProposalsCount },
   { path: '/values', fetchCount: journalHealthAttentionCount },
+  { path: '/letters', fetchCount: lettersWaitingCount },
 ];

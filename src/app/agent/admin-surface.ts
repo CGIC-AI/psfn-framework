@@ -107,6 +107,7 @@ export interface StartOptionalAdminTransportServerOptions {
     | 'intentionRuntime'
     | 'toolConformanceRunner'
     | 'humanAttentionLedger'
+    | 'letterService'
   >;
   operatorAlerting: OperatorAlertSinkConfiguration;
 }
@@ -225,6 +226,7 @@ export async function startOptionalAdminTransportServer(
     subsystemOutputRefStore: options.subsystemOutputRefStore,
     episodicStore: options.episodicStore ?? null,
     sessionStore: options.coreRuntime.sessionStore,
+    letterService: options.coreRuntime.letterService,
     sessionManager: options.coreRuntime.sessionManager,
     intakeReleaseConversationTurn,
     scheduler: options.scheduler,

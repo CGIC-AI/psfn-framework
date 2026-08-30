@@ -22,6 +22,7 @@ import {
   attachToolResultInvocationAudit,
   stripToolResultInvocationAuditForModel,
 } from './tool-result-invocation-audit.js';
+import { parseLetterSessionMetadata } from '../letters/contracts.js';
 
 // ── Custom message types ──
 
@@ -161,8 +162,9 @@ export function isCustomMessage(m: AgentMessage): boolean {
 
 function resolveStandardMessageClass(
   message: AgentMessage,
-): typeof MESSAGE_CLASSES.outwardSpeech | typeof MESSAGE_CLASSES.musing {
+): typeof MESSAGE_CLASSES.outwardSpeech | typeof MESSAGE_CLASSES.musing | typeof MESSAGE_CLASSES.letter {
   const existingMessageClass = (message as { messageClass?: unknown }).messageClass;
+  if (existingMessageClass === MESSAGE_CLASSES.letter) return MESSAGE_CLASSES.letter;
   return existingMessageClass === MESSAGE_CLASSES.musing
     ? MESSAGE_CLASSES.musing
     : MESSAGE_CLASSES.outwardSpeech;
@@ -280,11 +282,14 @@ export function sessionEntryToMessage(entry: SessionEntry): AgentMessage {
   }
 
   if (entry.role === 'user') {
+    const messageClass = parseLetterSessionMetadata(entry.metadata)
+      ? MESSAGE_CLASSES.letter
+      : MESSAGE_CLASSES.outwardSpeech;
     const message = {
       role: 'user',
       content: entry.content,
       timestamp: ts,
-      messageClass: MESSAGE_CLASSES.outwardSpeech,
+      messageClass,
     } as ClassifiedUserMessage;
     return message;
   }
@@ -317,9 +322,11 @@ export function sessionEntryToMessage(entry: SessionEntry): AgentMessage {
     usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
     stopReason: 'stop',
     timestamp: ts,
-    messageClass: isMusingReflectionChannel(entry.channelId)
-      ? MESSAGE_CLASSES.musing
-      : MESSAGE_CLASSES.outwardSpeech,
+    messageClass: parseLetterSessionMetadata(entry.metadata)
+      ? MESSAGE_CLASSES.letter
+      : isMusingReflectionChannel(entry.channelId)
+        ? MESSAGE_CLASSES.musing
+        : MESSAGE_CLASSES.outwardSpeech,
   } as ClassifiedAssistantMessage;
   return message;
 }

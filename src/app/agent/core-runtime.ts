@@ -183,6 +183,9 @@ import type { AutomataBusWorkerAccess } from '../../faculties/automata/bus/worke
 import type { SubagentAutomataLifecyclePort } from '../../faculties/subagents/automata-lifecycle.js';
 import type { PostgresAutomataRetentionStore } from '../../faculties/automata/retention-postgres-store.js';
 import type { PostgresExactSessionPurgeSagaStore } from '../../persistence/postgres/automata-exact-session-purge-store.js';
+import type { LetterStorePort } from '../../core/letters/contracts.js';
+import { LetterService } from '../../core/letters/service.js';
+import { createLetterTool } from '../../core/tools/letter.js';
 import {
   resolveForegroundSessionOwner,
   type AutomataSessionClassificationService,
@@ -214,6 +217,7 @@ export interface AgentCoreRuntimeOptions {
   /** Database credential kept outside the secret-sanitized core config. */
   postgresDatabaseUrl: string;
   emosimProactivityStateStore: EmoSimProactivityStateStorePort;
+  letterStore: LetterStorePort;
   pathSnapshot: RuntimePathSnapshot;
   eventBus: EventBus;
   gateway: GatewayClient;
@@ -298,6 +302,7 @@ export interface AgentCoreRuntime {
   icpTurnFenceReader?: IcpTurnFenceReader;
   toolConformanceRunner: ToolConformanceRunner;
   sharedWorldWikiCaretaker: SharedWorldWikiCaretakerService | null;
+  letterService: LetterService;
   closeWikiRuntime: () => Promise<void>;
   closeBiographicalProjection: () => Promise<void>;
   /** Shared lazy durable model-usage query handle (b0yl.5); null on non-postgres. */
@@ -465,6 +470,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
       )
     : null;
   const { sessionStore, sessionManager } = sessionComposition;
+  const letterService = new LetterService({ store: options.letterStore, sessionStore });
   const automataRetention = options.automataRuntime
     ? createProductionAutomataRetentionRuntime({
         companionId: resolveCompanionIdFromConfig(config),
@@ -831,6 +837,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   });
   wireSettingsRuntime(agentLoop, config, { registerSystemTool: false });
   wireSessionToolsRuntime(agentLoop, sessionManager, pathSnapshot.companionDataDir, gateway, promptRegistry);
+  agentLoop.registerTool(createLetterTool(letterService), 'core');
   const contactRuntimeOptions: ContactRuntimeOptions = {
     exportDir: resolveContactsDir(pathSnapshot.companionDataDir),
     // Reuse the shared confirmation queue (also used by card/module proposals)
@@ -1076,6 +1083,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
       : {}),
     toolConformanceRunner,
     sharedWorldWikiCaretaker: wikiRuntime.sharedWorldCaretaker,
+    letterService,
     closeWikiRuntime: wikiRuntime.close,
     closeBiographicalProjection: () => biographicalPool.end(),
     // Durable model-usage query handle (b0yl.5): shared lazy store also used by

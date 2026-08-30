@@ -326,3 +326,7 @@ export type {
   RuntimePromptUpdateResult,
   AdminPromptsService,
 } from './types/prompts.js';
+
+export type {
+  AdminLetterService,
+} from './types/letters.js';

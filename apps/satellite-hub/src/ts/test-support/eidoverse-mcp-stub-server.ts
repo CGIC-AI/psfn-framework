@@ -58,7 +58,17 @@ input.on("line", (line) => {
     return;
   }
   if (name === "pending_pings") {
-    respond(request.id, { content: [{ type: "text", text: "north gate\nsouth gate" }] });
+    const text = mode === "wake-pings"
+      ? [
+          "@ digi: come look at this",
+          "@ digi whispers: psst",
+          "≈ digi walked up to you",
+          "≈ digi reaches toward your shoulder_l (right hand)",
+          "≈ digi touches your head_top (left hand)",
+          "≈ digi walked away",
+        ].join("\n")
+      : "north gate\nsouth gate";
+    respond(request.id, { content: [{ type: "text", text }] });
     return;
   }
   respondError(request.id);

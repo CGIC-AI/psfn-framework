@@ -419,6 +419,7 @@ function config(options: {
       textReplyDeadlineMs: 80_000, textAttemptTimeoutMs: 75_000 },
     companion: null, homeAssistant: null, control: null,
     deviceRegistry: options.deviceRegistry ?? createHubDeviceRegistryAuthority(() => registry(undefined, options)),
+    eidoversePlaceMap: null,
     voxta: { enabled: false, satelliteId: "voxta", satelliteName: "Voxta", sessionId: null,
       chatId: null, assistantId: "assistant", assistantName: "Assistant", userId: "user", userName: "User",
       appLabel: "Test", clientVersion: "1", publicBaseUrl: null, audioFolder: null, sttStreamEnabled: false,

@@ -4,6 +4,7 @@ import {
   type DeviceLocationSample,
   type DeviceLocationWatch,
 } from '../lib/geolocation.js';
+import type { DeviceLocationStatusMessage } from '../lib/protocol/events.js';
 
 /**
  * Foreground-only device-location watcher for the Companion PWA
@@ -24,6 +25,10 @@ export type DeviceLocationStatus =
   | 'transport-unavailable' // enabled, but the transport cannot terminate coordinates
   | 'suspended' // enabled + supported, but the app is backgrounded
   | 'watching' // actively feeding significant-change samples
+  | 'located' // Hub resolved the latest accepted fix to a configured place
+  | 'unzoned' // Hub accepted the fix outside all configured places
+  | 'poor-accuracy' // Hub needs a clearer fix before resolving a place
+  | 'hub-rejected' // Hub could not accept or deliver the latest update
   | 'denied' // the Partner denied the browser permission
   | 'error'; // geolocation reported a non-permission error
 
@@ -31,6 +36,7 @@ export interface UseDeviceLocationOptions {
   enabled: boolean;
   canSend: boolean;
   send: (sample: DeviceLocationSample) => void;
+  hubStatus?: DeviceLocationStatusMessage['status'] | null;
   /** Injectable for tests; defaults to navigator.geolocation. */
   geolocation?: typeof navigator.geolocation | null;
 }
@@ -87,6 +93,7 @@ export function useDeviceLocation(options: UseDeviceLocationOptions): DeviceLoca
           setErrored(true);
         }
       },
+      onValidFix: () => setErrored(false),
     });
     return () => {
       watch?.stop();
@@ -100,5 +107,9 @@ export function useDeviceLocation(options: UseDeviceLocationOptions): DeviceLoca
   if (denied) return 'denied';
   if (errored) return 'error';
   if (!visible) return 'suspended';
+  if (options.hubStatus === 'located') return 'located';
+  if (options.hubStatus === 'unzoned') return 'unzoned';
+  if (options.hubStatus === 'poor_accuracy') return 'poor-accuracy';
+  if (options.hubStatus === 'rejected') return 'hub-rejected';
   return 'watching';
 }

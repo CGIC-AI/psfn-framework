@@ -430,6 +430,8 @@ export class SatelliteHubClient {
       case 'artifact.preview.result':
       case 'artifact.preview.error':
       case 'tool.activity':
+      case 'emotion.snapshot':
+      case 'device.location.status':
         return;
     }
   }

@@ -119,6 +119,17 @@ function eventToTrace(
         summary: 'Hub reported an error',
         metadata: {},
       };
+    case 'device.location.status':
+      return {
+        ...common,
+        operationClass: 'device_location',
+        status: message.status === 'rejected' ? 'failed' : 'info',
+        summary: 'Location resolution update',
+        metadata: {
+          resolution: message.status,
+          ...(message.status === 'rejected' ? { reason: message.reason } : {}),
+        },
+      };
     case 'relay.stt.result':
       return {
         ...common,

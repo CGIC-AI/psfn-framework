@@ -399,6 +399,52 @@ describe('hub stream reducer', () => {
     expect(state.emotion?.acacAxes).toEqual([{ axis: 'agency', score: 0.3 }]);
   });
 
+  it('retains coordinate-free location resolution without failing the connection', () => {
+    let state: HubStreamState = {
+      ...createInitialHubStreamState('2026-06-17T00:00:00.000Z'),
+      connection: 'ready',
+      phase: 'listening',
+    };
+
+    state = reduceHubStreamState(state, {
+      type: 'hub.inbound',
+      at: '2026-06-17T00:00:01.000Z',
+      event: {
+        message: {
+          type: 'device.location.status',
+          status: 'rejected',
+          reason: 'transition_delivery_failed',
+        },
+      },
+    });
+    expect(state.deviceLocation).toEqual({
+      status: 'rejected',
+      reason: 'transition_delivery_failed',
+      receivedAt: '2026-06-17T00:00:01.000Z',
+    });
+    expect(state.connection).toBe('ready');
+    expect(state.phase).toBe('listening');
+    expect(state.failure).toBeNull();
+    expect(JSON.stringify(state.deviceLocation)).not.toMatch(/lat|lon|coordinate/i);
+
+    state = reduceHubStreamState(state, {
+      type: 'hub.inbound',
+      at: '2026-06-17T00:00:02.000Z',
+      event: { message: { type: 'device.location.status', status: 'located' } },
+    });
+    expect(state.deviceLocation).toEqual({
+      status: 'located',
+      receivedAt: '2026-06-17T00:00:02.000Z',
+    });
+
+    state = reduceHubStreamState(state, {
+      type: 'client.state',
+      at: '2026-06-17T00:00:03.000Z',
+      event: { previous: 'ready', current: 'closed' },
+    });
+    expect(state.deviceLocation).toBeNull();
+  });
+
   it('clears emotion affect when connection authority is lost', () => {
     let state: HubStreamState = {
       ...createInitialHubStreamState('2026-06-17T00:00:00.000Z'),

@@ -23,6 +23,7 @@ interface Harness {
   decode: ReturnType<typeof vi.fn>;
   play: ReturnType<typeof vi.fn>;
   mouth: Array<{ open: boolean; envelope: number }>;
+  playback: boolean[];
   errors: string[];
   tick: () => void;
   finishCurrent: () => void;
@@ -34,6 +35,7 @@ function harness(pcm: DecodedPcm = loudPcm(), decodeError?: Error): Harness {
   let resolveFinished: (() => void) | null = null;
   const stopSpy = vi.fn();
   const mouth: Array<{ open: boolean; envelope: number }> = [];
+  const playback: boolean[] = [];
   const errors: string[] = [];
 
   const decode = vi.fn(async (): Promise<DecodedPcm> => {
@@ -51,6 +53,7 @@ function harness(pcm: DecodedPcm = loudPcm(), decodeError?: Error): Harness {
   const controller = new VoicePlaybackController({
     source,
     onMouthOpen: (open, envelope) => mouth.push({ open, envelope }),
+    onPlaybackActive: (active) => playback.push(active),
     onError: (message) => errors.push(message),
     frameMs: 60,
     setInterval: (cb) => {
@@ -67,6 +70,7 @@ function harness(pcm: DecodedPcm = loudPcm(), decodeError?: Error): Harness {
     decode,
     play,
     mouth,
+    playback,
     errors,
     stopSpy,
     tick: () => intervalCb?.(),
@@ -81,12 +85,14 @@ describe('VoicePlaybackController', () => {
 
     await vi.waitFor(() => expect(h.play).toHaveBeenCalledTimes(1));
     expect(h.decode).toHaveBeenCalledTimes(1);
+    expect(h.playback).toEqual([true]);
 
     h.tick();
     expect(h.mouth.at(-1)).toEqual({ open: true, envelope: 1 });
 
     h.finishCurrent();
     await vi.waitFor(() => expect(h.mouth.at(-1)?.open).toBe(false));
+    expect(h.playback).toEqual([true, false]);
   });
 
   it('plays queued utterances sequentially', async () => {
@@ -109,6 +115,7 @@ describe('VoicePlaybackController', () => {
     h.controller.stop();
     expect(h.stopSpy).toHaveBeenCalledTimes(1);
     expect(h.mouth.at(-1)?.open).toBe(false);
+    expect(h.playback).toEqual([true, false]);
   });
 
   it('reports a decode failure and never plays or opens the mouth', async () => {

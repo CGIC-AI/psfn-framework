@@ -45,6 +45,8 @@ export interface VoicePlaybackControllerOptions {
   readonly source: AudioClipSource;
   /** Called on every mouth transition and at clip end (closed). */
   readonly onMouthOpen: (open: boolean, envelope: number) => void;
+  /** Called when audible playback starts or ends, independent of mouth amplitude. */
+  readonly onPlaybackActive?: (active: boolean) => void;
   /** Optional structured error sink for decode/playback anomalies. */
   readonly onError?: (message: string) => void;
   /** Envelope frame size in milliseconds (default 60ms). */
@@ -60,6 +62,7 @@ const DEFAULT_FRAME_MS = 60;
 export class VoicePlaybackController {
   private readonly source: AudioClipSource;
   private readonly onMouthOpen: (open: boolean, envelope: number) => void;
+  private readonly onPlaybackActive?: (active: boolean) => void;
   private readonly onError?: (message: string) => void;
   private readonly frameMs: number;
   private readonly gate: MouthGateOptions;
@@ -71,12 +74,14 @@ export class VoicePlaybackController {
   private current: PlayingClip | null = null;
   private tickHandle: unknown = null;
   private mouthOpen = false;
+  private playbackActive = false;
   private generation = 0;
   private disposed = false;
 
   constructor(options: VoicePlaybackControllerOptions) {
     this.source = options.source;
     this.onMouthOpen = options.onMouthOpen;
+    this.onPlaybackActive = options.onPlaybackActive;
     this.onError = options.onError;
     this.frameMs = options.frameMs && options.frameMs > 0 ? options.frameMs : DEFAULT_FRAME_MS;
     this.gate = options.gate ?? DEFAULT_MOUTH_GATE;
@@ -127,13 +132,17 @@ export class VoicePlaybackController {
       return;
     }
     this.current = clip;
+    this.setPlaybackActive(true);
     this.startTicking(envelope, generation);
     try {
       await clip.finished;
     } catch (error) {
       this.reportError(error, 'play');
     } finally {
-      if (this.current === clip) this.current = null;
+      if (this.current === clip) {
+        this.current = null;
+        this.setPlaybackActive(false);
+      }
       this.stopTicking();
       if (generation === this.generation) this.setMouth(false, 0);
     }
@@ -178,6 +187,7 @@ export class VoicePlaybackController {
     this.stopTicking();
     const clip = this.current;
     this.current = null;
+    this.setPlaybackActive(false);
     if (clip) {
       try {
         clip.stop();
@@ -193,6 +203,12 @@ export class VoicePlaybackController {
     if (open === this.mouthOpen && !(open === false && envelope === 0)) return;
     this.mouthOpen = open;
     this.onMouthOpen(open, envelope);
+  }
+
+  private setPlaybackActive(active: boolean): void {
+    if (active === this.playbackActive) return;
+    this.playbackActive = active;
+    this.onPlaybackActive?.(active);
   }
 
   private reportError(error: unknown, phase: 'decode' | 'play'): void {

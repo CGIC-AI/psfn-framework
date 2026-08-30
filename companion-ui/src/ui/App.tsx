@@ -164,7 +164,8 @@ export function App() {
     },
   }), []);
   const z02Link = useZ02Link(undefined, { audioRelay: z02AudioRelay });
-  const mouthOpen = useVoicePlayback(streamState.voicePlayback, storeRef.current);
+  const voicePlayback = useVoicePlayback(streamState.voicePlayback, storeRef.current);
+  const mouthOpen = voicePlayback.mouthOpen;
 
   useEffect(() => {
     const { phase, detail } = browserMic.state;
@@ -307,7 +308,8 @@ export function App() {
   const spriteState = deriveSpriteState(streamState, traces, composer.micActive, connecting);
   const latestToolActivity = streamState.toolActivity.at(-1) ?? null;
   const latestTrace = traces.at(-1);
-  const companionTalking = Boolean(streamState.liveAssistant)
+  const companionTalking = voicePlayback.active
+    || Boolean(streamState.liveAssistant)
     || (latestTrace?.operationClass === 'relay_tts' && latestTrace.status === 'active');
   const voiceStopActive = composer.micMode === 'voice' && companionTalking;
   const generationStopActive = Boolean(streamState.liveAssistant)

@@ -27,13 +27,20 @@ function resolveAudioContextCtor(): AudioContextCtor | null {
  * queue. Fail-closed and dormant by default: it does nothing until the session
  * advertises the `streamed_audio` ceiling and a reply is buffered, and it does
  * nothing when Web Audio is unavailable (text stays the source of truth).
- * Returns the current mouth-open signal for the sprite.
+ * Returns the current playback presentation. Playback activity is separate
+ * from mouth amplitude so barge-in remains armed during quiet audio frames.
  */
+export interface VoicePlaybackPresentation {
+  readonly mouthOpen: boolean;
+  readonly active: boolean;
+}
+
 export function useVoicePlayback(
   voicePlayback: VoicePlaybackState,
   store: HubStreamStore | null,
-): boolean {
+): VoicePlaybackPresentation {
   const [mouthOpen, setMouthOpen] = useState(false);
+  const [active, setActive] = useState(false);
   const controllerRef = useRef<VoicePlaybackController | null>(null);
   const contextRef = useRef<ManagedAudioContext | null>(null);
   const resetGenerationRef = useRef(voicePlayback.resetGeneration);
@@ -44,6 +51,7 @@ export function useVoicePlayback(
     void contextRef.current?.close?.();
     contextRef.current = null;
     setMouthOpen(false);
+    setActive(false);
   }
 
   useEffect(() => () => teardown(), []);
@@ -53,6 +61,7 @@ export function useVoicePlayback(
       resetGenerationRef.current = voicePlayback.resetGeneration;
       controllerRef.current?.stop();
       setMouthOpen(false);
+      setActive(false);
     }
     if (!voicePlayback.supported) {
       if (controllerRef.current) teardown();
@@ -72,6 +81,7 @@ export function useVoicePlayback(
       controllerRef.current = new VoicePlaybackController({
         source: createWebAudioClipSource(context),
         onMouthOpen: (open) => setMouthOpen(open),
+        onPlaybackActive: setActive,
       });
     }
     void contextRef.current?.resume?.();
@@ -81,5 +91,5 @@ export function useVoicePlayback(
     }
   }, [store, voicePlayback]);
 
-  return mouthOpen;
+  return { mouthOpen, active };
 }

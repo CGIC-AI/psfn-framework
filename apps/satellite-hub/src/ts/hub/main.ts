@@ -31,6 +31,7 @@ async function main(): Promise<void> {
           agentName: eidoverseConfig.agentName,
           look: eidoverse,
           onLookError: () => console.warn("Eidoverse MCP look failed"),
+          say: eidoverse,
         }
       : null,
   });

@@ -13,6 +13,7 @@ import {
   type SatelliteAttachmentOwnership,
 } from "./embodied-session.js";
 import type { FrameworkAgentAdapter } from "./framework-agent.js";
+import { EIDOVERSE_SAY_MAX_TEXT_LENGTH } from "./eidoverse-mcp.js";
 import type { SessionStore } from "./session-store.js";
 
 const MAX_EIDOVERSE_CONTEXT_NOTES = 12;
@@ -34,18 +35,29 @@ export interface EidoverseLookSource {
   look(): Promise<string>;
 }
 
+export interface EidoverseSayPublisher {
+  say(text: string): Promise<void>;
+}
+
+export interface EidoverseEmbodiedSessionLogger {
+  warn(message: string): void;
+}
+
 export interface EidoverseEmbodiedSessionDependencies {
   embodiedSessions: EmbodiedSessionRegistry;
   sessions: SessionStore;
   agent: FrameworkAgentAdapter;
   look: EidoverseLookSource;
   onLookError?: () => void;
+  say: EidoverseSayPublisher;
+  logger?: EidoverseEmbodiedSessionLogger;
 }
 
 /**
  * Protocol-neutral embodiment seam for an Eidoverse visitor. The wake source
- * supplies addressed utterances; this adapter owns only session continuity,
- * deduplication, and the single FrameworkAgentAdapter call for each utterance.
+ * supplies addressed utterances; this adapter owns session continuity,
+ * deduplication, the single FrameworkAgentAdapter call, and the resulting
+ * allowlisted in-world `say` publication for each utterance.
  */
 export class EidoverseEmbodiedSessionAdapter {
   readonly conversationId: string;
@@ -137,10 +149,26 @@ export class EidoverseEmbodiedSessionAdapter {
       responseText = responseText.trim();
       if (responseText) {
         this.deps.sessions.append(this.conversationId, { role: "assistant", content: responseText });
+        await this.publishReply(responseText);
       }
       return responseText;
     } finally {
       this.activeReplies.delete(controller);
+    }
+  }
+
+  /**
+   * Publishes only the completed companion reply. The durable session retains
+   * the full reply; the world-bound copy is deterministically limited to the
+   * MCP `say` protocol maximum. Publication is best-effort and never retries.
+   */
+  private async publishReply(responseText: string): Promise<void> {
+    const sayText = responseText.trim().slice(0, EIDOVERSE_SAY_MAX_TEXT_LENGTH);
+    if (!sayText) return;
+    try {
+      await this.deps.say.say(sayText);
+    } catch {
+      (this.deps.logger ?? console).warn("Eidoverse in-world say failed");
     }
   }
 

@@ -96,7 +96,7 @@ export class RealtimeHubServer {
       companion?: CompanionBridge | null;
       eidoverse?: (
         Pick<EidoverseEmbodiedSessionConfig, "worldName" | "agentName">
-        & Pick<EidoverseEmbodiedSessionDependencies, "look" | "onLookError">
+        & Pick<EidoverseEmbodiedSessionDependencies, "look" | "onLookError" | "say" | "logger">
       ) | null;
     } = {},
   ) {
@@ -117,6 +117,8 @@ export class RealtimeHubServer {
           agent: this.agent,
           look: options.eidoverse.look,
           ...(options.eidoverse.onLookError ? { onLookError: options.eidoverse.onLookError } : {}),
+          say: options.eidoverse.say,
+          ...(options.eidoverse.logger ? { logger: options.eidoverse.logger } : {}),
         })
       : null;
     this.companion = options.companion !== undefined

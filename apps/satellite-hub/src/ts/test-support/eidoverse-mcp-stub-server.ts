@@ -13,7 +13,7 @@ interface JsonRpcRequest {
 const mode = process.argv[2] ?? "normal";
 const recordPath = process.argv[3];
 
-if (recordPath) {
+if (recordPath && mode === "disconnect") {
   const previous = fs.existsSync(recordPath)
     ? Number.parseInt(fs.readFileSync(recordPath, "utf8"), 10) || 0
     : 0;
@@ -54,6 +54,13 @@ input.on("line", (line) => {
     return;
   }
   if (name === "say" && isRecord(args) && typeof args.text === "string") {
+    if (recordPath && (mode === "record-say" || mode === "say-error")) {
+      fs.appendFileSync(recordPath, `${JSON.stringify(args.text)}\n`);
+    }
+    if (mode === "say-error") {
+      respondError(request.id);
+      return;
+    }
     respond(request.id, { content: [{ type: "text", text: "said" }] });
     return;
   }

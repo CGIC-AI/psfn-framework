@@ -15,6 +15,8 @@ import {
 import type { FrameworkAgentAdapter } from "./framework-agent.js";
 import type { SessionStore } from "./session-store.js";
 
+const MAX_EIDOVERSE_CONTEXT_NOTES = 12;
+
 export interface EidoverseEmbodiedSessionConfig {
   worldName: string;
   agentName: string;
@@ -28,10 +30,16 @@ export interface EidoverseAddressedUtterance {
   region?: string;
 }
 
+export interface EidoverseLookSource {
+  look(): Promise<string>;
+}
+
 export interface EidoverseEmbodiedSessionDependencies {
   embodiedSessions: EmbodiedSessionRegistry;
   sessions: SessionStore;
   agent: FrameworkAgentAdapter;
+  look: EidoverseLookSource;
+  onLookError?: () => void;
 }
 
 /**
@@ -43,7 +51,6 @@ export class EidoverseEmbodiedSessionAdapter {
   readonly conversationId: string;
 
   private readonly worldName: string;
-  private readonly agentName: string;
   private readonly consumedUtteranceIds = new Set<string>();
   private readonly activeReplies = new Set<AbortController>();
   private attachmentOwnership: SatelliteAttachmentOwnership | null = null;
@@ -53,7 +60,7 @@ export class EidoverseEmbodiedSessionAdapter {
     private readonly deps: EidoverseEmbodiedSessionDependencies,
   ) {
     this.worldName = requireNonEmpty(config.worldName, "Eidoverse world name");
-    this.agentName = requireNonEmpty(config.agentName, "Eidoverse agent name");
+    requireNonEmpty(config.agentName, "Eidoverse agent name");
     if (
       config.satelliteClaim.capabilityProfile !== "world-avatar"
       || config.satelliteClaim.type !== "world-avatar"
@@ -109,7 +116,8 @@ export class EidoverseEmbodiedSessionAdapter {
     if (this.consumedUtteranceIds.has(utteranceId)) return null;
     this.consumedUtteranceIds.add(utteranceId);
 
-    const channel = this.channelContext(input.region, ownership);
+    const lookNotes = await this.lookContextNotes();
+    const channel = this.channelContext(input.region, ownership, lookNotes);
     const controller = new AbortController();
     this.activeReplies.add(controller);
     this.deps.sessions.append(this.conversationId, { role: "user", content: userText });
@@ -139,6 +147,7 @@ export class EidoverseEmbodiedSessionAdapter {
   private channelContext(
     region: string | undefined,
     ownership: SatelliteAttachmentOwnership,
+    lookNotes: NonNullable<PsfnChannelContext["contextNotes"]>,
   ): PsfnChannelContext {
     const normalizedRegion = normalizeOptional(region);
     const place = this.resolvePlace(normalizedRegion);
@@ -147,21 +156,32 @@ export class EidoverseEmbodiedSessionAdapter {
       this.config.satelliteClaim.satelliteId,
       ownership,
     );
-    const location = normalizedRegion
-      ? `, region ${JSON.stringify(normalizedRegion)}`
-      : "";
-    const contextNotes: NonNullable<PsfnChannelContext["contextNotes"]> = [{
-      key: "eidoverse.world",
-      text: `Avatar ${JSON.stringify(this.agentName)} is in Eidoverse world ${JSON.stringify(this.worldName)}${location}.`,
-    }];
+    const contextNotes = [...lookNotes];
     if (place.contextNote) {
       contextNotes.push({ key: "eidoverse.place", text: place.contextNote });
     }
+    const boundedContextNotes = contextNotes.slice(-MAX_EIDOVERSE_CONTEXT_NOTES);
     return {
       ...base,
       ...(place.placeId ? { placeId: place.placeId } : {}),
-      contextNotes,
+      ...(boundedContextNotes.length > 0 ? { contextNotes: boundedContextNotes } : {}),
     };
+  }
+
+  private async lookContextNotes(): Promise<NonNullable<PsfnChannelContext["contextNotes"]>> {
+    let lookText: string;
+    try {
+      lookText = await this.deps.look.look();
+    } catch {
+      this.deps.onLookError?.();
+      return [];
+    }
+    return lookText
+      .split(/\r?\n/u)
+      .map((text) => text.trim())
+      .filter((text) => text.length > 0)
+      .map((text) => ({ key: "eidoverse.look", text }))
+      .slice(-MAX_EIDOVERSE_CONTEXT_NOTES);
   }
 
   private resolvePlace(region: string | undefined): EidoversePlaceResolution {

@@ -26,10 +26,29 @@ class FakeAgent implements FrameworkAgentAdapter {
   async close(): Promise<void> {}
 }
 
+class FakeLook {
+  calls = 0;
+
+  constructor(private readonly result: string | Error) {}
+
+  async look(): Promise<string> {
+    this.calls += 1;
+    if (this.result instanceof Error) throw this.result;
+    return this.result;
+  }
+}
+
 test("world adapter attaches a stable embodied session and deduplicates addressed utterances", async () => {
   const embodiedSessions = new EmbodiedSessionRegistry("satellite.endpoint");
   const sessions = new SessionStore(60);
   const agent = new FakeAgent();
+  const look = new FakeLook([
+    "You are in the market.",
+    "People (2):",
+    "- Rowan: 1.2m north, standing",
+    "- Mica: 2.8m east, walking",
+    "Things (1): a brass toaster",
+  ].join("\n"));
   const config = {
     worldName: "demo-world",
     agentName: "Purrsephone",
@@ -53,11 +72,13 @@ test("world adapter attaches a stable embodied session and deduplicates addresse
     embodiedSessions,
     sessions,
     agent,
+    look,
   });
   const sameIdentity = new EidoverseEmbodiedSessionAdapter(config, {
     embodiedSessions: new EmbodiedSessionRegistry("satellite.endpoint"),
     sessions: new SessionStore(60),
     agent: new FakeAgent(),
+    look: new FakeLook("Nobody else is here right now."),
   });
 
   assert.match(adapter.conversationId, /^eidoverse:[0-9a-f]{64}$/);
@@ -74,6 +95,7 @@ test("world adapter attaches a stable embodied session and deduplicates addresse
   assert.equal(agent.calls.length, 1);
   assert.equal(agent.calls[0]?.inputMode, "text");
   assert.equal(agent.calls[0]?.conversationId, adapter.conversationId);
+  assert.equal(look.calls, 1);
   assert.deepEqual(agent.calls[0]?.history, [{ role: "user", content: "Are you here?" }]);
   assert.deepEqual(agent.calls[0]?.channel, expectedChannel(adapter.conversationId));
   assert.equal(await adapter.handleAddressedUtterance({
@@ -82,6 +104,7 @@ test("world adapter attaches a stable embodied session and deduplicates addresse
     region: "market",
   }), null);
   assert.equal(agent.calls.length, 1);
+  assert.equal(look.calls, 1);
 
   adapter.disconnect();
   assert.equal(embodiedSessions.getSession(adapter.conversationId), null);
@@ -111,6 +134,7 @@ test("world adapter rejects non-world claim profiles", () => {
       embodiedSessions: new EmbodiedSessionRegistry(),
       sessions: new SessionStore(60),
       agent: new FakeAgent(),
+      look: new FakeLook("Nobody else is here right now."),
     }),
     /world-avatar/,
   );
@@ -118,12 +142,13 @@ test("world adapter rejects non-world claim profiles", () => {
 
 test("realtime hub lifecycle connects and disconnects the configured world adapter", async () => {
   const agent = new FakeAgent();
+  const look = new FakeLook("People (1):\n- Rowan: 1.2m north, standing");
   const server = new RealtimeHubServer(hubConfig(), {
     agent,
     realtimeTts: silentTts(),
     voxtaTts: null,
     voxtaStt: null,
-    eidoverse: { worldName: "demo-world", agentName: "Purrsephone" },
+    eidoverse: { worldName: "demo-world", agentName: "Purrsephone", look },
   });
 
   await server.start();
@@ -134,6 +159,7 @@ test("realtime hub lifecycle connects and disconnects the configured world adapt
       region: "market",
     }), "Welcome back.");
     assert.equal(agent.calls.length, 1);
+    assert.equal(look.calls, 1);
     assert.equal(agent.calls[0]?.channel?.placeId, "eidoverse:demo-world:market");
   } finally {
     await server.close();
@@ -147,6 +173,55 @@ test("realtime hub lifecycle connects and disconnects the configured world adapt
     /not connected/,
   );
   assert.equal(agent.calls.length, 1);
+});
+
+test("look context keeps the latest twelve notes and retains occupants", async () => {
+  const agent = new FakeAgent();
+  const lookLines = Array.from({ length: 15 }, (_, index) => `look line ${index + 1}`);
+  lookLines.push("People (1):", "- Rowan: 1.2m north, standing");
+  const adapter = new EidoverseEmbodiedSessionAdapter(adapterConfig(), {
+    embodiedSessions: new EmbodiedSessionRegistry("satellite.endpoint"),
+    sessions: new SessionStore(60),
+    agent,
+    look: new FakeLook(lookLines.join("\n")),
+  });
+  adapter.connect();
+
+  await adapter.handleAddressedUtterance({
+    utteranceId: "event-bounds",
+    userText: "Who is here?",
+    region: "market",
+  });
+
+  assert.deepEqual(agent.calls[0]?.channel?.contextNotes, lookLines.slice(-12).map((text) => ({
+    key: "eidoverse.look",
+    text,
+  })));
+  adapter.disconnect();
+});
+
+test("look failure omits notes while retaining the statically mapped default place", async () => {
+  const agent = new FakeAgent();
+  let lookFailures = 0;
+  const adapter = new EidoverseEmbodiedSessionAdapter(adapterConfig(), {
+    embodiedSessions: new EmbodiedSessionRegistry("satellite.endpoint"),
+    sessions: new SessionStore(60),
+    agent,
+    look: new FakeLook(new Error("untrusted provider detail")),
+    onLookError: () => { lookFailures += 1; },
+  });
+  adapter.connect();
+
+  await adapter.handleAddressedUtterance({
+    utteranceId: "event-look-failure",
+    userText: "What is around me?",
+  });
+
+  assert.equal(lookFailures, 1);
+  assert.equal(agent.calls[0]?.channel?.placeId, "eidoverse:demo-world");
+  assert.equal(agent.calls[0]?.channel?.contextNotes, undefined);
+  assert.equal(JSON.stringify(agent.calls[0]?.channel).includes("untrusted provider detail"), false);
+  adapter.disconnect();
 });
 
 function expectedChannel(conversationId: string): PsfnChannelContext {
@@ -174,10 +249,35 @@ function expectedChannel(conversationId: string): PsfnChannelContext {
       },
     }],
     placeId: "eidoverse:demo-world:market",
-    contextNotes: [{
-      key: "eidoverse.world",
-      text: "Avatar \"Purrsephone\" is in Eidoverse world \"demo-world\", region \"market\".",
-    }],
+    contextNotes: [
+      { key: "eidoverse.look", text: "You are in the market." },
+      { key: "eidoverse.look", text: "People (2):" },
+      { key: "eidoverse.look", text: "- Rowan: 1.2m north, standing" },
+      { key: "eidoverse.look", text: "- Mica: 2.8m east, walking" },
+      { key: "eidoverse.look", text: "Things (1): a brass toaster" },
+    ],
+  };
+}
+
+function adapterConfig() {
+  return {
+    worldName: "demo-world",
+    agentName: "Purrsephone",
+    satelliteClaim: normalizeSatelliteClaimConfig({
+      capabilityProfile: "world-avatar",
+      satelliteId: "eidoverse-world",
+      endpointId: "eidoverse-avatar",
+      displayName: "Eidoverse World Avatar",
+    }),
+    placeMap: parseEidoversePlaceMap({
+      schemaVersion: 1,
+      worlds: {
+        "demo-world": {
+          placeId: "eidoverse:demo-world",
+          regions: { market: "eidoverse:demo-world:market" },
+        },
+      },
+    }),
   };
 }
 

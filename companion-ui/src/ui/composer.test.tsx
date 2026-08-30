@@ -22,6 +22,7 @@ function makeController(overrides: Partial<ComposerController> = {}): ComposerCo
     setAttachmentMenuOpen: vi.fn(),
     setInput: vi.fn(),
     stopVoicePlayback: vi.fn(),
+    syncMicCapture: vi.fn(),
     toggleMic: vi.fn(),
     toggleMicMode: vi.fn(),
     voiceNotice: null,
@@ -36,6 +37,7 @@ function renderComposer(props: {
   generationStopActive?: boolean;
   onSendText?: (text: string) => void;
   onStopGeneration?: () => void;
+  onToggleMic?: () => void;
 } = {}) {
   const controller = props.controller ?? makeController();
   const onSendText = props.onSendText ?? vi.fn();
@@ -47,6 +49,7 @@ function renderComposer(props: {
       generationStopActive={props.generationStopActive ?? false}
       onSendText={onSendText}
       onStopGeneration={onStopGeneration}
+      onToggleMic={props.onToggleMic ?? vi.fn()}
       voiceStopActive={props.voiceStopActive ?? false}
     />,
   );
@@ -54,6 +57,15 @@ function renderComposer(props: {
 }
 
 describe('Composer stop-generation control', () => {
+  it('requests microphone capture only from the explicit mic button', () => {
+    const onToggleMic = vi.fn();
+    renderComposer({ onToggleMic });
+
+    expect(onToggleMic).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle dictation' }));
+    expect(onToggleMic).toHaveBeenCalledTimes(1);
+  });
+
   it('exposes an explicit stop control that interrupts an in-flight assistant turn', () => {
     const { onStopGeneration } = renderComposer({ generationStopActive: true });
 

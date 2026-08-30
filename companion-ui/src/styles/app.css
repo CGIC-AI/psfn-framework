@@ -590,6 +590,39 @@ button:focus-visible {
   transform: translateX(-50%);
 }
 
+.avatar-voice-control {
+  position: absolute;
+  right: max(1rem, env(safe-area-inset-right));
+  bottom: calc(2.5rem + env(safe-area-inset-bottom));
+  z-index: 7;
+  display: grid;
+  justify-items: end;
+  gap: 0.35rem;
+  max-width: min(72vw, 340px);
+}
+
+.avatar-voice-control button {
+  min-height: 44px;
+  border-radius: 999px;
+  background: rgba(255, 253, 248, 0.94);
+  color: var(--color-ink);
+}
+
+.avatar-voice-control button.active {
+  background: var(--color-blue-soft);
+  box-shadow: 0 0 0 3px rgba(143, 187, 232, 0.2);
+}
+
+.avatar-voice-control p {
+  margin: 0;
+  padding: 0.35rem 0.55rem;
+  border-radius: 0.7rem;
+  background: rgba(255, 253, 248, 0.9);
+  color: var(--color-muted);
+  font-size: 0.72rem;
+  text-align: right;
+}
+
 @keyframes avatar-breathe {
   0%, 100% { transform: translateY(0); }
   50% { transform: translateY(-5px); }

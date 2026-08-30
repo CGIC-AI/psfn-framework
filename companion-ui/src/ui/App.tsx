@@ -68,6 +68,10 @@ import {
 import { ThreadView } from './thread-view.js';
 import type { ActivityFilter, OverlayDrawer } from './types.js';
 import { useFleetRouting } from './use-fleet-routing.js';
+import {
+  shouldInterruptForMicrophoneSpeech,
+  useBrowserMicrophone,
+} from './use-browser-microphone.js';
 import { useVoicePlayback } from './use-voice-playback.js';
 import { useZ02Link } from './use-z02-link.js';
 import { WishlistDrawer } from './wishlist-drawer.js';
@@ -91,10 +95,6 @@ export function App() {
   const [activeView, setActiveView] = useState<CompanionView>('thread');
   const [locationEnabled, setLocationEnabled] = useState(false);
   const [now, setNow] = useState(() => Date.now());
-  const composer = useComposerController({
-    captureReady: false,
-    playbackReady: streamState.voicePlayback.supported,
-  });
   const spriteManifest = useSpriteManifest(spriteEnabled);
   const updateReady = useSyncExternalStore(
     subscribeToServiceWorkerUpdates,
@@ -103,6 +103,7 @@ export function App() {
   );
   const fleetSessionRef = useRef<FleetSessionClient | null>(null);
   const storeRef = useRef<HubStreamStore | null>(null);
+  const browserMicStoreRef = useRef<HubStreamStore | null>(null);
   const z02AudioStoreRef = useRef<HubStreamStore | null>(null);
   const touchCoalescerRef = useRef<TouchInteractionCoalescer | null>(null);
   const headpatReactionTimerRef = useRef<number | null>(null);
@@ -110,6 +111,35 @@ export function App() {
   const reconnectAttemptRef = useRef(0);
   const authorityEpochRef = useRef(0);
   const manualDisconnectRef = useRef(false);
+  const interruptedLiveUserRef = useRef<string | null>(null);
+  const browserAudioRelay = useMemo(() => ({
+    async start(): Promise<void> {
+      const store = storeRef.current;
+      if (!store) throw new Error('Companion is not connected');
+      await store.startPcmAudioStream();
+      browserMicStoreRef.current = store;
+    },
+    write(pcm: Uint8Array): Promise<void> {
+      const store = browserMicStoreRef.current;
+      if (!store) throw new Error('Companion microphone stream is not ready');
+      return store.sendPcmAudio(pcm);
+    },
+    async stop(): Promise<void> {
+      const store = browserMicStoreRef.current;
+      browserMicStoreRef.current = null;
+      await store?.stopPcmAudioStream();
+    },
+  }), []);
+  const browserMic = useBrowserMicrophone(browserAudioRelay);
+  const captureAuthorized = browserMic.supported
+    && (access.state === 'signed_in' || access.state === 'guest')
+    && streamState.connection === 'ready'
+    && Boolean(streamState.session?.capabilities?.input?.includes('microphone_pcm'))
+    && Boolean(streamState.session?.capabilities?.input?.includes('final_transcript'));
+  const composer = useComposerController({
+    captureReady: captureAuthorized,
+    playbackReady: streamState.voicePlayback.supported,
+  });
   const fleet = useFleetRouting({
     accessState: access.state,
     connect,
@@ -135,6 +165,19 @@ export function App() {
   }), []);
   const z02Link = useZ02Link(undefined, { audioRelay: z02AudioRelay });
   const mouthOpen = useVoicePlayback(streamState.voicePlayback, storeRef.current);
+
+  useEffect(() => {
+    const { phase, detail } = browserMic.state;
+    composer.syncMicCapture(
+      phase === 'active',
+      phase === 'active' || phase === 'requesting' || phase === 'error' ? detail : null,
+    );
+  }, [browserMic.state.detail, browserMic.state.phase, composer.syncMicCapture]);
+
+  useEffect(() => {
+    if (activeView === 'avatar' || !browserMic.state.handsFree) return;
+    void browserMic.stop();
+  }, [activeView, browserMic.state.handsFree, browserMic.stop]);
 
   const sendDeviceLocation = useCallback((sample: DeviceLocationSample) => {
     // Only ever reached when the transport can terminate coordinates at a hub
@@ -270,6 +313,22 @@ export function App() {
   const generationStopActive = Boolean(streamState.liveAssistant)
     || (z02Link.state.phase === 'linked' && streamState.phase === 'responding');
 
+  useEffect(() => {
+    const liveUser = streamState.liveUser;
+    if (!liveUser) {
+      interruptedLiveUserRef.current = null;
+      return;
+    }
+    if (!shouldInterruptForMicrophoneSpeech({
+      captureActive: browserMic.state.phase === 'active',
+      companionTalking,
+      liveUserId: liveUser.id,
+      lastInterruptedLiveUserId: interruptedLiveUserRef.current,
+    })) return;
+    interruptedLiveUserRef.current = liveUser.id;
+    storeRef.current?.interrupt();
+  }, [browserMic.state.phase, companionTalking, streamState.liveUser]);
+
   async function refreshAuthority(connectWhenAllowed: boolean) {
     const authorityEpoch = authorityEpochRef.current + 1;
     authorityEpochRef.current = authorityEpoch;
@@ -362,6 +421,7 @@ export function App() {
 
   function clearHumanScopedState() {
     authorityEpochRef.current += 1;
+    void browserMic.stop();
     const store = storeRef.current;
     storeRef.current = null;
     store?.destroy();
@@ -375,6 +435,7 @@ export function App() {
 
   function disconnect() {
     manualDisconnectRef.current = true;
+    void browserMic.stop();
     storeRef.current?.disconnect();
   }
 
@@ -423,6 +484,20 @@ export function App() {
 
   function sendUserText(text: string) {
     if (canSend) storeRef.current?.sendUserText(text, { interrupt: true });
+  }
+
+  async function toggleBrowserMic(handsFree: boolean) {
+    if (browserMic.state.phase === 'active' || browserMic.state.phase === 'requesting') {
+      await browserMic.stop();
+      return;
+    }
+    if (!captureAuthorized) {
+      composer.syncMicCapture(false, browserMic.supported
+        ? 'Microphone audio is not authorized for this attached device. Continue in the text composer.'
+        : browserMic.state.detail);
+      return;
+    }
+    await browserMic.startFromUserGesture({ handsFree });
   }
 
   function giveHeadpat() {
@@ -551,6 +626,7 @@ export function App() {
               generationStopActive={generationStopActive}
               onSendText={sendUserText}
               onStopGeneration={() => storeRef.current?.interrupt()}
+              onToggleMic={() => { void toggleBrowserMic(false); }}
               voiceStopActive={voiceStopActive}
               targetLabel={streamState.session?.activeShardId
                 ? streamState.session.shards?.find(
@@ -567,7 +643,13 @@ export function App() {
             label={identityLabel}
             manifest={spriteManifest.state === 'ready' ? spriteManifest.manifest : null}
             emotion={streamState.emotion}
+            handsFreeActive={browserMic.state.phase === 'active' && browserMic.state.handsFree}
+            handsFreeAvailable={captureAuthorized}
+            handsFreeDetail={browserMic.state.handsFree || browserMic.state.phase === 'error'
+              ? browserMic.state.detail
+              : undefined}
             onInteraction={queueTouchInteraction}
+            onToggleHandsFree={() => { void toggleBrowserMic(true); }}
           />
         )}
       />
@@ -599,7 +681,10 @@ export function App() {
                 setOverlay(null);
                 void logout();
               }}
-              onMicModeChange={composer.selectMicMode}
+              onMicModeChange={(mode) => {
+                void browserMic.stop();
+                composer.selectMicMode(mode);
+              }}
               onCompanionChange={(companionId) => { void fleet.select(companionId); }}
               onSpriteAnimationsChange={setSpriteAnimations}
               onSpriteEnabledChange={setSpriteEnabled}

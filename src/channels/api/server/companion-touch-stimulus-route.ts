@@ -154,12 +154,17 @@ function parseStimulusBody(body: unknown): CompanionStimulusRequest {
   };
 }
 
+function isLocationTransitionStimulus(
+  stimulus: CompanionStimulusRequest,
+): stimulus is CompanionLocationTransitionStimulusRequest {
+  return 'placeId' in stimulus;
+}
+
 function describeStimulus(stimulus: CompanionStimulusRequest): string {
-  if (stimulus.kind === 'left') {
-    return `Your Partner left ${stimulus.placeLabel}.`;
-  }
-  if (stimulus.kind === 'arrived') {
-    return `Your Partner arrived at ${stimulus.placeLabel}.`;
+  if (isLocationTransitionStimulus(stimulus)) {
+    return stimulus.kind === 'left'
+      ? `Your Partner left ${stimulus.placeLabel}.`
+      : `Your Partner arrived at ${stimulus.placeLabel}.`;
   }
   if (stimulus.kind === 'headpat') {
     return stimulus.count === 1
@@ -204,7 +209,7 @@ export async function handleCompanionTouchStimulus(
       [SATELLITE_CLAIM_HEADERS.satelliteId]: stimulus.satelliteId,
       [SATELLITE_CLAIM_HEADERS.endpointId]: stimulus.endpointId,
       [SATELLITE_CLAIM_HEADERS.sessionId]: stimulus.sessionId,
-      [SATELLITE_CLAIM_HEADERS.capabilities]: stimulus.kind === 'left' || stimulus.kind === 'arrived'
+      [SATELLITE_CLAIM_HEADERS.capabilities]: isLocationTransitionStimulus(stimulus)
         ? 'location'
         : 'touch',
     },
@@ -231,7 +236,7 @@ export async function handleCompanionTouchStimulus(
       responseStyle: 'concise',
       channelPrivacy: claim.value.channelPrivacy,
       canonicalContactId: claim.value.canonicalContactId,
-      stimulus: stimulus.kind === 'left' || stimulus.kind === 'arrived'
+      stimulus: isLocationTransitionStimulus(stimulus)
         ? {
           schemaVersion: 1,
           kind: stimulus.kind,

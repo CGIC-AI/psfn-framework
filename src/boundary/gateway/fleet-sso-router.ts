@@ -346,10 +346,16 @@ function isHtmlNavigation(request: IncomingMessage): boolean {
   return accept?.split(',').some(value => value.trim().split(';', 1)[0] === 'text/html') ?? false;
 }
 
-function sendFleetLoginRedirect(response: ServerResponse, returnPath: string): void {
+function sendFleetLoginRedirect(
+  response: ServerResponse,
+  returnPath: string,
+  adminTokenEnabled = false,
+): void {
   response.writeHead(302, {
     'Cache-Control': 'no-store',
-    Location: `${FLEET_AUTH_LOGIN_PATH}?return_to=${encodeURIComponent(returnPath)}`,
+    Location: adminTokenEnabled
+      ? FLEET_LOGIN_PATH
+      : `${FLEET_AUTH_LOGIN_PATH}?return_to=${encodeURIComponent(returnPath)}`,
     'Referrer-Policy': 'no-referrer',
   });
   response.end();
@@ -646,7 +652,10 @@ export class GatewayFleetSsoRouter {
       projection: options.portalProjection,
       ui: options.portalUi ?? new FleetGardenUiAssets(),
     });
-    this.loginLanding = new GatewayFleetLoginLanding(options.breakGlassLogin);
+    this.loginLanding = new GatewayFleetLoginLanding(
+      options.breakGlassLogin,
+      Boolean(options.adminToken),
+    );
     this.modelUsageRoutes = new GatewayFleetModelUsageHttpRoutes({
       projection: options.modelUsageProjection,
     });
@@ -728,8 +737,31 @@ export class GatewayFleetSsoRouter {
         return;
       }
       if (rawPath === FLEET_LOGIN_PATH) {
-        if (request.method !== 'GET' || rawQuery) throw new FleetSsoRequestError(404, 'Resource not found');
-        this.loginLanding.send(response);
+        if (rawQuery) throw new FleetSsoRequestError(404, 'Resource not found');
+        if (request.method === 'GET') {
+          this.loginLanding.send(response);
+          return;
+        }
+        if (request.method !== 'POST' || !this.options.adminToken) {
+          throw new FleetSsoRequestError(404, 'Resource not found');
+        }
+        const contentType = singleHeader(request.headers['content-type'])?.split(';', 1)[0]?.trim();
+        if (contentType !== 'application/x-www-form-urlencoded') {
+          throw new FleetSsoRequestError(400, 'Login request is invalid');
+        }
+        const body = await readBoundedBody(request);
+        const candidate = new URLSearchParams(body.toString('utf8')).get('token') ?? '';
+        if (!timingSafeStringEqual(candidate, this.options.adminToken)) {
+          this.loginLanding.send(response, 'Invalid administrator token.');
+          return;
+        }
+        response.writeHead(302, {
+          'Cache-Control': 'no-store',
+          Location: FLEET_PATH,
+          'Referrer-Policy': 'no-referrer',
+          'Set-Cookie': `psfn_token=${encodeURIComponent(candidate)}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=86400`,
+        });
+        response.end();
         return;
       }
       const companionUiRequest = rawPath === COMPANION_UI_PREFIX
@@ -797,11 +829,19 @@ export class GatewayFleetSsoRouter {
           rawPath === FLEET_PATH
           || rawPath === `${FLEET_PATH}/`
         )) {
-          sendFleetLoginRedirect(response, request.url ?? FLEET_PATH);
+          sendFleetLoginRedirect(
+            response,
+            request.url ?? FLEET_PATH,
+            Boolean(this.options.adminToken),
+          );
           return;
         }
         if (isHtmlNavigation(request) && parseGardenRoute(request.url ?? '/')) {
-          sendFleetLoginRedirect(response, request.url ?? '/');
+          sendFleetLoginRedirect(
+            response,
+            request.url ?? '/',
+            Boolean(this.options.adminToken),
+          );
           return;
         }
         if (request.method === 'GET' && companionUiRequest) {

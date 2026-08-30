@@ -110,6 +110,24 @@ function gardenEventsUpgrade(headers: IncomingHttpHeaders = {}): IncomingMessage
   return incoming;
 }
 
+function adminLoginRequest(token: string): IncomingMessage {
+  const body = Buffer.from(`token=${encodeURIComponent(token)}`);
+  const incoming = Readable.from([body]) as IncomingMessage;
+  incoming.method = 'POST';
+  incoming.url = '/fleet/login';
+  incoming.headers = {
+    host: 'fleet.example.test',
+    'x-forwarded-host': 'fleet.example.test',
+    'x-forwarded-proto': 'https',
+    'x-forwarded-port': '443',
+    'x-forwarded-for': '198.51.100.9',
+    'content-type': 'application/x-www-form-urlencoded',
+    'content-length': String(body.byteLength),
+  };
+  Object.defineProperty(incoming, 'socket', { value: {} });
+  return incoming;
+}
+
 function ssoAuthorization(nowSeconds: number): FleetAuthorizationContext {
   return Object.freeze({
     principalId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
@@ -430,6 +448,48 @@ describe('Fleet Garden dual admin admission', () => {
     });
     expect(upstream.headers()).not.toHaveProperty('authorization');
     expect(upstream.headers()).not.toHaveProperty('cookie');
+  });
+
+  it('lets a fresh browser exchange ADMIN_TOKEN for the accepted HttpOnly cookie at Gateway', async () => {
+    const router = createRouter(3211, { warn: vi.fn() }, { adminToken: ADMIN_TOKEN });
+    const probe = responseProbe();
+
+    await router.handle(adminLoginRequest(ADMIN_TOKEN), probe.response as never);
+
+    expect(probe.response.statusCode).toBe(302);
+    expect(probe.response.writeHead).toHaveBeenCalledWith(302, expect.objectContaining({
+      Location: '/fleet',
+      'Set-Cookie': `psfn_token=${ADMIN_TOKEN}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=86400`,
+    }));
+    expect(httpRequest).not.toHaveBeenCalled();
+  });
+
+  it('routes an unauthenticated Garden navigation to the dual login landing', async () => {
+    const router = createRouter(3211, { warn: vi.fn() }, { adminToken: ADMIN_TOKEN });
+    const probe = responseProbe();
+    const request = adaptiveToolsRequest({ accept: 'text/html' });
+
+    await router.handle(request, probe.response as never);
+
+    expect(probe.response.statusCode).toBe(302);
+    expect(probe.response.writeHead).toHaveBeenCalledWith(302, expect.objectContaining({
+      Location: '/fleet/login',
+    }));
+  });
+
+  it('keeps an invalid browser token at the Gateway login boundary', async () => {
+    const router = createRouter(3211, { warn: vi.fn() }, { adminToken: ADMIN_TOKEN });
+    const probe = responseProbe();
+
+    await router.handle(adminLoginRequest('invalid-admin-token'), probe.response as never);
+
+    expect(probe.response.statusCode).toBe(401);
+    expect(probe.body()).toContain('Invalid administrator token.');
+    expect(probe.response.writeHead).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ 'Set-Cookie': expect.any(String) }),
+    );
+    expect(httpRequest).not.toHaveBeenCalled();
   });
 
   it('continues accepting a valid fleet SSO session when ADMIN_TOKEN is configured', async () => {

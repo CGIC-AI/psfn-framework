@@ -143,6 +143,8 @@ export interface DeviceLocationWatchOptions {
   /** Egress sink for accepted samples. MUST route only to a coord-terminating hub. */
   send: (sample: DeviceLocationSample) => void;
   onError?: (error: GeolocationPositionError) => void;
+  /** Called for every valid browser fix, including fixes filtered from egress. */
+  onValidFix?: () => void;
   minDistanceM?: number;
   minIntervalMs?: number;
   enableHighAccuracy?: boolean;
@@ -172,6 +174,9 @@ export function startDeviceLocationWatch(options: DeviceLocationWatchOptions): D
         accuracyM: position.coords.accuracy,
         timestamp: Math.trunc(position.timestamp),
       };
+      if (isValidDeviceLocationSample(sample)) {
+        options.onValidFix?.();
+      }
       if (filter.accept(sample)) {
         options.send(sample);
       }

@@ -62,6 +62,7 @@ const HUB_TO_CLIENT_TYPES: ReadonlySet<HubToClientMessage['type']> = new Set([
   'artifact.preview.error',
   'tool.activity',
   'emotion.snapshot',
+  'device.location.status',
 ]);
 
 const CLIENT_TO_HUB_TYPES: ReadonlySet<ClientToHubMessage['type']> = new Set([
@@ -386,6 +387,21 @@ const STRICT_HUB_VALIDATORS: Record<HubToClientMessage['type'], (payload: unknow
       && emotionVector(data.vad) && emotionVector(data.mood)
       && emotionDiscrete(data.discrete) && unitInterval(data.confidence)
       && emotionAcacAxes(data.acacAxes) && isoTimestamp(data.timestamp);
+  },
+  'device.location.status': payload => {
+    if (!isRecord(payload) || payload.type !== 'device.location.status') return false;
+    if (payload.status === 'rejected') {
+      const record = exactRecord(payload, ['type', 'status', 'reason']);
+      return record !== null && oneOf(record.reason, [
+        'unsupported_transport',
+        'capability_unavailable',
+        'configuration_unavailable',
+        'invalid_sample',
+        'transition_delivery_failed',
+      ]);
+    }
+    const record = exactRecord(payload, ['type', 'status']);
+    return record !== null && oneOf(record.status, ['located', 'unzoned', 'poor_accuracy']);
   },
 };
 

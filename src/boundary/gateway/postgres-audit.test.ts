@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { createPostgresGatewayAuditStoreFromPool } from './postgres-audit.js';
+import {
+  createPostgresGatewayAuditStoreFromPool,
+  type PostgresGatewayAuditStoreOptions,
+} from './postgres-audit.js';
 
 interface QueryResult<Row> {
   rows: Row[];
@@ -145,6 +148,18 @@ function toQueryRow(row: AuditRow): Record<string, unknown> {
 }
 
 describe('postgres gateway audit adapter', () => {
+  it('accepts the tenant scope required by a restricted gateway connection', () => {
+    const options = {
+      schema: 'companion_default',
+      role: 'companion_default_runtime',
+    } satisfies PostgresGatewayAuditStoreOptions;
+
+    expect(options).toEqual({
+      schema: 'companion_default',
+      role: 'companion_default_runtime',
+    });
+  });
+
   it('logs, completes, and prunes audit entries', async () => {
     const pool = new FakeAuditPool();
     const store = createPostgresGatewayAuditStoreFromPool(pool as never, {

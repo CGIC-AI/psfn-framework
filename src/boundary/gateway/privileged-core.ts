@@ -221,7 +221,14 @@ export async function buildGatewayPrivilegedCore(
   }
   const auditStore = await awaitPostgresStoreReadiness(
     'gateway_audit',
-    () => createPostgresGatewayAuditStore(databaseUrl),
+    () => createPostgresGatewayAuditStore(databaseUrl, undefined, {
+      ...(input.config.postgresSchema?.trim()
+        ? { schema: input.config.postgresSchema.trim() }
+        : {}),
+      ...(input.config.postgresRole?.trim()
+        ? { role: input.config.postgresRole.trim() }
+        : {}),
+    }),
   );
   const kubeSelfManagement = resolveKubeSelfManagementController({
     env: input.env,

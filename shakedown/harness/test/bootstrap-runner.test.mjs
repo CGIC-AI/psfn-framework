@@ -81,9 +81,12 @@ try {
   writeFileSync(join(repoRoot, 'package.json'), '{}\n');
   writeFileSync(join(repoRoot, 'shakedown', 'artie', 'ARTIE.png'), 'card');
   for (const owner of [...GLOBAL_OWNER_SEEDS, ...COMPANION_OWNER_SEEDS]) {
+    const seed = owner === 'charge-policy'
+      ? { schemaVersion: 1, runChargeQuotaByLane: { interactive: 24 } }
+      : { owner };
     writeFileSync(
       join(repoRoot, 'config', `${owner}.seed.json`),
-      `${JSON.stringify({ owner }, null, 2)}\n`,
+      `${JSON.stringify(seed, null, 2)}\n`,
     );
   }
 
@@ -117,6 +120,19 @@ try {
     rcRevision: '1111111111111111111111111111111111111111',
   };
   const result = await runBootstrap(config, services);
+
+  // Shakedown charge headroom (0frcd): the seeded interactive quota is raised
+  // on the round's own companion-data copy, never on the repo seed.
+  assert.equal(
+    JSON.parse(readFileSync(join(config.companionDataDir, 'charge-policy.json'), 'utf8'))
+      .runChargeQuotaByLane.interactive >= 120,
+    true,
+  );
+  assert.equal(
+    JSON.parse(readFileSync(join(repoRoot, 'config', 'charge-policy.seed.json'), 'utf8'))
+      .runChargeQuotaByLane.interactive,
+    24,
+  );
 
   assert.deepEqual(commands, [
     ['npm', 'ci'],
@@ -152,7 +168,14 @@ try {
   }
   for (const owner of COMPANION_OWNER_SEEDS) {
     const path = join(roundRoot, 'companion-data', `${owner}.json`);
-    assert.equal(JSON.parse(readFileSync(path, 'utf8')).owner, owner);
+    if (owner === 'charge-policy') {
+      assert.equal(
+        JSON.parse(readFileSync(path, 'utf8')).runChargeQuotaByLane.interactive >= 120,
+        true,
+      );
+    } else {
+      assert.equal(JSON.parse(readFileSync(path, 'utf8')).owner, owner);
+    }
   }
   assert.equal(existsSync(join(roundRoot, '.bootstrap-state.json')), true);
 

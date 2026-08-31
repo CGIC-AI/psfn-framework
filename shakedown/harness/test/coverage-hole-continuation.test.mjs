@@ -43,6 +43,7 @@ for (const scenario of [
         PSFN_TARGET: 'kube',
         PSFN_API_BASE: 'http://127.0.0.1:1',
         PSFN_ADMIN_BASE: 'http://127.0.0.1:1',
+        COMPANION_ID: '11111111-1111-4111-8111-111111111111',
         TESTING_HARNESS_API_KEY: 'stub-testing-harness-key',
         POSTGRES_DATABASE_URL: 'postgres://stub',
         PSFN_MATRIX_DIR: matrixDir,

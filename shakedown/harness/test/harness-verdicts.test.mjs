@@ -437,6 +437,26 @@ describe('dispatch grading', () => {
     })).toBe(false);
   });
 
+  it('classifies runtime charge-budget exhaustion as budget_exhausted instead of semantic_failure', () => {
+    const quotaNote = 'generate_image generate failed: Charge quota exceeded for lane "interactive" while charging "paidImageGeneration" (29/24; rolling 24-hour budget)';
+    expect(classifyCaseStatus({
+      turnSummary: {
+        status: 'completed',
+        assistant: JSON.stringify({ worked: false, note: quotaNote }),
+      },
+      semanticFailureMatches: [{ pattern: 'image_create worked must be true' }],
+    })).toBe('budget_exhausted');
+    // Without the runtime quota marker the same shape stays a product-grade
+    // semantic failure.
+    expect(classifyCaseStatus({
+      turnSummary: {
+        status: 'completed',
+        assistant: JSON.stringify({ worked: false, note: 'provider unavailable' }),
+      },
+      semanticFailureMatches: [{ pattern: 'image_create worked must be true' }],
+    })).toBe('semantic_failure');
+  });
+
   it('grades a partially executed failed transport as dispatch_aborted', () => {
     const finalTurnTools = evaluateToolNameVerdict({
       expectedToolNames: [],

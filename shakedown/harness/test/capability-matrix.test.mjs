@@ -28,10 +28,13 @@ const ALL_TOKENS = [
   'identity.write.operator',
   'memory.write',
   'memory.delete',
+  'automata.bus.read',
+  'automata.bus.write',
   'external.discord',
   'external.email',
   'external.web',
   'external.companion',
+  'external.mcp',
   'git.read',
   'git.write',
   'issue.read',
@@ -50,11 +53,13 @@ assert.deepEqual(
   ALL_TOKENS,
   'matrix covers each canonical capability token exactly once and in the reviewed order',
 );
-assert.equal(new Set(CAPABILITY_MATRIX_PROBES.map((probe) => probe.token)).size, 22);
+assert.equal(new Set(CAPABILITY_MATRIX_PROBES.map((probe) => probe.token)).size, 25);
 assert.deepEqual(CAPABILITY_MATRIX_TIER_TOKENS.nursery, [
   'identity.read',
   'identity.write.runtime',
   'memory.write',
+  'automata.bus.read',
+  'automata.bus.write',
   'git.read',
   'issue.read',
   'repl.execute',
@@ -64,9 +69,12 @@ assert.deepEqual(CAPABILITY_MATRIX_TIER_TOKENS.apprentice, [
   'internal.read',
   'identity.write.runtime',
   'memory.write',
+  'automata.bus.read',
+  'automata.bus.write',
   'external.discord',
   'external.email',
   'external.web',
+  'external.mcp',
   'git.read',
   'issue.read',
   'issue.write',
@@ -440,7 +448,7 @@ const apprenticeGrid = evaluateCapabilityMatrix({
   gateObservationsByExecutionId: apprenticeGates,
 });
 assert.equal(apprenticeGrid.mismatchCount, 0);
-assert.equal(apprenticeGrid.rows.length, 22);
+assert.equal(apprenticeGrid.rows.length, 25);
 
 // (a) correct denial → pass, asserted from persisted LIVE state (not the gate).
 const gitWriteRow = apprenticeGrid.rows.find((row) => row.token === 'git.write');

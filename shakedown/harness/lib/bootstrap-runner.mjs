@@ -31,6 +31,13 @@ const COMPANION_OWNER_SEEDS = [
   'skills',
 ];
 
+// Shakedown-only charge headroom (bead 0frcd): the framework seed's
+// interactive lane (24 points with 6 per paid image = 4 images per rolling
+// 24h) cannot cover a full Layer A matrix plus same-day retests. Raise the
+// shakedown round's own copy so image cases stay green; production owner
+// files are never touched.
+const SHAKEDOWN_MIN_INTERACTIVE_CHARGE_QUOTA = 120;
+
 function statePath(config) {
   return join(config.roundRoot, STATE_FILE_NAME);
 }
@@ -131,6 +138,20 @@ function seedOwnerFiles(config) {
     const target = join(config.companionDataDir, `${owner}.json`);
     if (!existsSync(target)) {
       copyFileSync(join(seedDir, `${owner}.seed.json`), target);
+    }
+  }
+  const chargePolicyPath = join(config.companionDataDir, 'charge-policy.json');
+  if (existsSync(chargePolicyPath)) {
+    const chargePolicy = JSON.parse(readFileSync(chargePolicyPath, 'utf8'));
+    if (
+      chargePolicy
+      && typeof chargePolicy.runChargeQuotaByLane === 'object'
+      && chargePolicy.runChargeQuotaByLane !== null
+      && typeof chargePolicy.runChargeQuotaByLane.interactive === 'number'
+      && chargePolicy.runChargeQuotaByLane.interactive < SHAKEDOWN_MIN_INTERACTIVE_CHARGE_QUOTA
+    ) {
+      chargePolicy.runChargeQuotaByLane.interactive = SHAKEDOWN_MIN_INTERACTIVE_CHARGE_QUOTA;
+      writeFileSync(chargePolicyPath, `${JSON.stringify(chargePolicy, null, 2)}\n`);
     }
   }
   const channelsPath = join(config.systemDataDir, 'channels.json');

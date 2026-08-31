@@ -175,6 +175,18 @@ function isCompletedSuccessfulTurnSummary(turnSummary) {
     && typeof turnSummary?.response?.errorMessage !== 'string';
 }
 
+// Runtime charge-policy exhaustion (bead 0frcd): the turn completed and the
+// tool ran, but the runtime's own rolling charge budget refused the paid
+// surface. That is an environment condition, not a product or model failure,
+// so it gets its own status instead of landing in semantic_failure.
+const CHARGE_QUOTA_EXHAUSTED_PATTERN = /Charge quota exceeded/i;
+
+function isChargeBudgetExhausted(caseResult) {
+  const assistant = caseResult?.turnSummary?.assistant;
+  return typeof assistant === 'string'
+    && CHARGE_QUOTA_EXHAUSTED_PATTERN.test(assistant);
+}
+
 export function classifyCaseStatus(caseResult) {
   const recoveredCompletedSuccessfulTurn = (
     caseResult.resolvedFromTurnRecord === true
@@ -187,6 +199,7 @@ export function classifyCaseStatus(caseResult) {
   );
   if (caseResult.staleTurnRecord === true) return 'runtime_stale';
   if (caseResult.dispatchAborted === true) return 'dispatch_aborted';
+  if (isChargeBudgetExhausted(caseResult)) return 'budget_exhausted';
   if ((caseResult.semanticFailureMatches?.length ?? 0) > 0) return 'semantic_failure';
   if ((caseResult.narrationWithoutExecutionFailures?.length ?? 0) > 0) {
     return 'narration_without_execution';

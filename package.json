@@ -21,6 +21,7 @@
     "test": "vitest run",
     "test:unit": "PSFN_VITEST_PROFILE=unit vitest run",
     "test:scripts": "PSFN_VITEST_PROFILE=scripts vitest run",
+    "test:shakedown-harness": "vitest run --config shakedown/harness/vitest.config.mjs",
     "test:integration": "PSFN_VITEST_PROFILE=integration vitest run",
     "test:ci-rules": "node --test scripts/ci/*.test.mjs",
     "test:postgres:down": "node scripts/ci/stop-test-postgres.mjs",

@@ -133,6 +133,14 @@ async function probeShardBackend(
       _method: string,
       handler: (params: Record<string, unknown>) => Promise<unknown>,
     ) => handler,
+    // The probe exercises capability gating itself; the production approval
+    // boundary is a pass-through here. Required since registerGatedDescriptors
+    // made approvalBoundary.gate mandatory for gated method registration.
+    approvalBoundary: {
+      gate: (
+        input: { handler: (params: Record<string, unknown>) => Promise<unknown> },
+      ) => input.handler,
+    },
   } as unknown as GatewayMethodRuntime;
   registerShardBackendMethods(runtime);
   const handler = methods.get('shard.backend.request');

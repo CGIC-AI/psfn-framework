@@ -443,7 +443,14 @@ export function resolveCaseCoverageHoleReason(testCase, { target, catalogToolNam
   const missingSuggestedTool = (
     Array.isArray(testCase?.suggestTools) ? testCase.suggestTools : []
   ).find((name) => typeof name === 'string' && !catalog.has(name));
-  return missingSuggestedTool
-    ? `catalog_tool_missing:${missingSuggestedTool}`
-    : null;
+  if (!missingSuggestedTool) return null;
+  // A case that declares `excludedWhenToolsMissing` for the absent tool is a
+  // deliberate matrix exclusion (bead s2u1n: shakedown targets do not enable
+  // the beads tool), not an unplanned coverage hole.
+  const excludedWhenToolsMissing = (
+    Array.isArray(testCase?.excludedWhenToolsMissing) ? testCase.excludedWhenToolsMissing : []
+  ).filter((name) => typeof name === 'string' && name.length > 0);
+  return excludedWhenToolsMissing.includes(missingSuggestedTool)
+    ? `excluded_by_design:catalog_tool_missing:${missingSuggestedTool}`
+    : `catalog_tool_missing:${missingSuggestedTool}`;
 }

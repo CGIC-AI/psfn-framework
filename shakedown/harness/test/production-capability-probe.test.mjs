@@ -23,7 +23,7 @@ function runProbe(tier) {
 
 const apprentice = runProbe('apprentice');
 assert.equal(apprentice.tier, 'apprentice');
-assert.equal(apprentice.gates.length, 22);
+assert.equal(apprentice.gates.length, 25);
 
 const restart = apprentice.gates.find((entry) => entry.executionId === 'lifecycle_restart');
 assert.deepEqual(restart.eligibility, {

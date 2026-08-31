@@ -43,6 +43,25 @@ export interface SchedulerOwnerMigrationResult {
   addedPaths?: string[];
 }
 
+const LEGACY_EPISODE_SYNTHESIS_DAYTIME_SLOTS = ['09:00', '12:00', '15:00', '18:00'] as const;
+
+function addMissingEpisodeSynthesisCadence(
+  candidate: Record<string, unknown>,
+  addedPaths: string[],
+): void {
+  if (!isRecord(candidate.episodeSynthesis)) return;
+  const next = { ...candidate.episodeSynthesis };
+  if (next.daytimeSlots === undefined) {
+    next.daytimeSlots = [...LEGACY_EPISODE_SYNTHESIS_DAYTIME_SLOTS];
+    addedPaths.push('episodeSynthesis.daytimeSlots');
+  }
+  if (next.timezone === undefined) {
+    next.timezone = 'local';
+    addedPaths.push('episodeSynthesis.timezone');
+  }
+  candidate.episodeSynthesis = next;
+}
+
 function addMissingIcpPolicyHolds(
   candidate: Record<string, unknown>,
   addedPaths: string[],
@@ -165,6 +184,7 @@ export function migrateLegacySchedulerOwner(
       addMissingBackgroundWorkMaxAttempts(candidate, addedPaths);
       addMissingIcpPolicyHolds(candidate, addedPaths);
       addMissingIntentionFollowUp(candidate, addedPaths);
+      addMissingEpisodeSynthesisCadence(candidate, addedPaths);
 
       const validated = validateSchedulerConfig(candidate, filePath);
       result = {
@@ -208,6 +228,7 @@ export function migrateLegacySchedulerOwner(
       addMissingBackgroundWorkMaxAttempts(candidate, addedPaths);
       addMissingIcpPolicyHolds(candidate, addedPaths);
       addMissingIntentionFollowUp(candidate, addedPaths);
+      addMissingEpisodeSynthesisCadence(candidate, addedPaths);
       if (addedPaths.length === 0) {
         validateSchedulerConfig(raw, filePath);
         assertSourceStillCurrent();

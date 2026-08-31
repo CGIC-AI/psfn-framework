@@ -492,6 +492,36 @@ describe('migrateLegacySchedulerOwner', () => {
     expect(loadSchedulerConfig(dataDir).backgroundMaintenance.intervalMs).toBe(1_800_000);
   });
 
+  it('adds the daytime episode-synthesis cadence required by legacy owner files', () => {
+    const { dataDir, filePath } = prepareOwner((owner) => {
+      const episodeSynthesis = owner.episodeSynthesis as Record<string, unknown>;
+      delete episodeSynthesis.daytimeSlots;
+      delete episodeSynthesis.timezone;
+    });
+
+    expect(migrateLegacySchedulerOwner({ dataDir, apply: true })).toMatchObject({
+      status: 'applied',
+      addedPaths: expect.arrayContaining([
+        'episodeSynthesis.daytimeSlots',
+        'episodeSynthesis.timezone',
+      ]),
+    });
+    const migrated = JSON.parse(readFileSync(filePath, 'utf8')) as {
+      episodeSynthesis: Record<string, unknown>;
+    };
+    expect(migrated.episodeSynthesis).toMatchObject({
+      daytimeSlots: ['09:00', '12:00', '15:00', '18:00'],
+      timezone: 'local',
+    });
+    expect(loadSchedulerConfig(dataDir).episodeSynthesis).toMatchObject({
+      daytimeSlots: ['09:00', '12:00', '15:00', '18:00'],
+      timezone: 'local',
+    });
+    expect(migrateLegacySchedulerOwner({ dataDir, apply: true })).toMatchObject({
+      status: 'not_needed',
+    });
+  });
+
   it('refuses an invalid candidate before replacing the legacy owner file', () => {
     const { dataDir, filePath } = prepareOwner((owner) => {
       owner.salienceDecayIntervalMs = 999;

@@ -362,3 +362,26 @@ test('a requested suggested tool absent from the live catalog is a named coverag
     catalogToolNames: ['memory', 'skill'],
   }), 'catalog_tool_missing:beads');
 });
+
+test('a case-declared exclusion for an absent tool is excluded by design, not a coverage hole', () => {
+  assert.equal(resolveCaseCoverageHoleReason({
+    id: 'issue_create_update',
+    variants: ['local', 'kube'],
+    suggestTools: ['beads'],
+    excludedWhenToolsMissing: ['beads'],
+  }, {
+    target: 'local',
+    catalogToolNames: ['memory', 'skill'],
+  }), 'excluded_by_design:catalog_tool_missing:beads');
+  // The declaration only covers the named tool: another absent tool stays a
+  // plain coverage hole.
+  assert.equal(resolveCaseCoverageHoleReason({
+    id: 'issue_create_update',
+    variants: ['local', 'kube'],
+    suggestTools: ['selfie_create'],
+    excludedWhenToolsMissing: ['beads'],
+  }, {
+    target: 'local',
+    catalogToolNames: ['memory', 'skill'],
+  }), 'catalog_tool_missing:selfie_create');
+});

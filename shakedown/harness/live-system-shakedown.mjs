@@ -2389,6 +2389,10 @@ function buildApprenticeCases(ctx) {
       sessionId: `apprentice-issue-${ctx.runToken}`,
       expectedTools: ['beads'],
       suggestTools: ['beads'],
+      // Shakedown targets do not enable the beads tool (no .beads roots on
+      // node-dev; helm beads.toolsEnabled unset on kube-test), so its absence
+      // is an exclusion by design, not an unplanned coverage hole (s2u1n).
+      excludedWhenToolsMissing: ['beads'],
       actionSensitive: true,
       actionSuccessKeys: [],
       message:
@@ -2911,6 +2915,10 @@ function buildCoverageCases(ctx) {
       sessionId: `coverage-issue-read-${ctx.runToken}`,
       expectedTools: ['beads'],
       suggestTools: ['beads'],
+      // Shakedown targets do not enable the beads tool (no .beads roots on
+      // node-dev; helm beads.toolsEnabled unset on kube-test), so its absence
+      // is an exclusion by design, not an unplanned coverage hole (s2u1n).
+      excludedWhenToolsMissing: ['beads'],
       message:
         'Then use beads with action "ready". '
         + 'Select an existing issue id from that result. If ready returns no issues, use beads with action "list" and select an existing issue id from that result. '
@@ -2945,6 +2953,10 @@ function buildAutonomousCases(ctx) {
       sessionId: `autonomous-issue-close-${ctx.runToken}`,
       expectedTools: ['beads'],
       suggestTools: ['beads'],
+      // Shakedown targets do not enable the beads tool (no .beads roots on
+      // node-dev; helm beads.toolsEnabled unset on kube-test), so its absence
+      // is an exclusion by design, not an unplanned coverage hole (s2u1n).
+      excludedWhenToolsMissing: ['beads'],
       actionSensitive: true,
       actionSuccessKeys: [],
       message:
@@ -3823,10 +3835,11 @@ async function main() {
     let caseResult;
     let caseExecutionAttempted = false;
     if (coverageHoleReason) {
+      const excludedByDesign = coverageHoleReason.startsWith('excluded_by_design:');
       caseResult = buildHarnessErrorResult(
         testCase,
         `Case ${testCase.id} skipped: ${coverageHoleReason}`,
-        'coverage_hole',
+        excludedByDesign ? 'excluded_by_design' : 'coverage_hole',
         coverageHoleReason,
       );
     } else {

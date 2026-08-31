@@ -223,6 +223,8 @@ function createBuzzPluginInstance(
     companionId: input.config.companionId,
   }) ?? createGatewayBuzzRecoveryStore(
     input.context.postgresDatabaseUrl,
+    input.context.postgresSchema,
+    input.context.postgresRole,
     input.config.relayUrl,
     input.config.companionId,
   );
@@ -254,6 +256,8 @@ function createBuzzPluginInstance(
 
 function createGatewayBuzzRecoveryStore(
   postgresDatabaseUrl: string | undefined,
+  postgresSchema: string | undefined,
+  postgresRole: string | undefined,
   community: string,
   companionId: string,
 ): BuzzRecoveryStore {
@@ -261,7 +265,10 @@ function createGatewayBuzzRecoveryStore(
   if (!databaseUrl) {
     throw new Error('Enabled Buzz channel requires config.postgresDatabaseUrl for durable recovery');
   }
-  return PostgresBuzzRecoveryStore.connect(databaseUrl, { community, companionId });
+  return PostgresBuzzRecoveryStore.connect(databaseUrl, { community, companionId }, {
+    ...(postgresSchema?.trim() ? { schema: postgresSchema.trim() } : {}),
+    ...(postgresRole?.trim() ? { role: postgresRole.trim() } : {}),
+  });
 }
 
 function parseNostrPubkey(value: unknown, fieldName: string): string {

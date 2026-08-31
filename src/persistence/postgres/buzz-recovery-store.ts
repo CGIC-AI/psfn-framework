@@ -73,11 +73,17 @@ export class PostgresBuzzRecoveryStore implements BuzzRecoveryStore {
     );
   }
 
-  static connect(databaseUrl: string, scope: BuzzRecoveryScope): PostgresBuzzRecoveryStore {
+  static connect(
+    databaseUrl: string,
+    scope: BuzzRecoveryScope,
+    connectionScope: { schema?: string; role?: string } = {},
+  ): PostgresBuzzRecoveryStore {
     const pool = createPostgresPool(databaseUrl, {
       applicationName: 'buzz-recovery',
       allowExitOnIdle: true,
       max: 2,
+      ...(connectionScope.schema ? { schema: connectionScope.schema } : {}),
+      ...(connectionScope.role ? { role: connectionScope.role } : {}),
     });
     return new PostgresBuzzRecoveryStore(pool, scope, true);
   }

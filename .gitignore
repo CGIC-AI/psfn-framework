@@ -44,7 +44,6 @@ workspace/
 /docs/monorepo-imports.md
 /docs/satellite-hub-kube.md
 /docs/system-schematic-2026-08-05.md
-/shakedown/
 /tools/evals/eval/local/profiles/
 /companion_docs/live_verification_checklist.md
 /scripts/fixtures/helm-owner-upgrade-old/

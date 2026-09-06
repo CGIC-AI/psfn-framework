@@ -68,6 +68,7 @@ describe('loadRuntimeChannelsConfig', () => {
       expect(config.plugins.multica).toEqual({
         id: 'multica',
         enabled: true,
+        continuityChannelPrefixes: ['multica:11111111-1111-4111-8111-111111111111:'],
         companionId: '22222222-2222-4222-8222-222222222222',
         credentials: [{
           id: 'token',

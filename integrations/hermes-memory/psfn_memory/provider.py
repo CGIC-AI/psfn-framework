@@ -3,6 +3,7 @@
 import contextvars
 import json
 import logging
+import sqlite3
 import threading
 
 from agent.memory_provider import MemoryProvider
@@ -13,19 +14,63 @@ from .outbox import Outbox
 logger = logging.getLogger(__name__)
 
 
+class MCPCallError(RuntimeError):
+    """An adapter-owned diagnostic that does not echo server-provided content."""
+
+
+class ProtocolError(ValueError):
+    """An adapter-owned response validation diagnostic."""
+
+
+def _server_error(error) -> MCPCallError:
+    # Server error strings can contain request content or headers. Classify them
+    # without ever forwarding the untrusted text to profile logs or the UI.
+    description = str(error).lower()
+    for terms, message in (
+        (("401", "unauthorized", "authentication", "invalid_token"), "MCP authentication failed; check the configured credential"),
+        (("403", "forbidden", "permission", "not authorized"), "MCP access denied; check the gateway body binding"),
+        (("schema", "validation", "invalid argument", "invalid external memory"), "MCP request validation failed; check adapter/gateway compatibility"),
+        (("timeout", "timed out"), "MCP call timed out; check gateway connectivity and MCP timeout"),
+        (("unknown tool", "not connected", "offline", "connection", "unavailable"), "MCP tool unavailable; check the selected MCP server and connection"),
+    ):
+        if any(term in description for term in terms):
+            return MCPCallError(message)
+    return MCPCallError("MCP server rejected the request; inspect gateway diagnostics")
+
+
+def _diagnostic(error: Exception) -> str:
+    if isinstance(error, (MCPCallError, ProtocolError)):
+        message = str(error)
+    elif isinstance(error, sqlite3.Error):
+        message = f"Local outbox failure ({getattr(error, 'sqlite_errorname', 'SQLITE_ERROR')})"
+    else:
+        message = "Unexpected local failure; inspect Hermes diagnostics"
+    return f"{type(error).__name__}: {message}"
+
+
 def _dispatch(name: str, args: dict):
     from tools.registry import registry
     return registry.dispatch(name, args)
 
 
 def _decode_result(raw) -> dict:
-    envelope = json.loads(raw) if isinstance(raw, str) else raw
-    if not isinstance(envelope, dict) or "error" in envelope:
-        raise RuntimeError("PSFN MCP call failed; check the Hermes MCP connection")
+    try:
+        envelope = json.loads(raw) if isinstance(raw, str) else raw
+    except ValueError:
+        raise ProtocolError("MCP response envelope is not valid JSON") from None
+    if not isinstance(envelope, dict):
+        raise ProtocolError("MCP response envelope must be an object")
+    if "error" in envelope:
+        raise _server_error(envelope["error"])
     result = envelope.get("result")
-    result = json.loads(result) if isinstance(result, str) else result
-    if not isinstance(result, dict) or "error" in result:
-        raise RuntimeError("PSFN MCP returned an invalid result")
+    try:
+        result = json.loads(result) if isinstance(result, str) else result
+    except ValueError:
+        raise ProtocolError("MCP tool result is not valid JSON") from None
+    if not isinstance(result, dict):
+        raise ProtocolError("MCP tool result must be an object")
+    if "error" in result:
+        raise _server_error(result["error"])
     return result
 
 
@@ -110,10 +155,10 @@ class PSFNMemoryProvider(MemoryProvider):
         try:
             result = self._call("context", {"sessionId": self._session(session_id), "query": query})
             if set(result) != {"context"} or not isinstance(result["context"], str):
-                raise ValueError("Invalid PSFN memory context response")
+                raise ProtocolError("Invalid PSFN memory context response")
             return result["context"]
-        except Exception:
-            self._warn("PSFN memory recall unavailable; this turn has no fresh PSFN memory context.")
+        except Exception as error:
+            self._warn(f"PSFN memory recall unavailable; this turn has no fresh PSFN memory context. {_diagnostic(error)}")
             raise
 
     def sync_turn(self, user_content: str, assistant_content: str, *, session_id: str = "", messages=None) -> None:
@@ -146,6 +191,10 @@ class PSFNMemoryProvider(MemoryProvider):
         # Queued turns retain the session supplied when captured, including on rewind.
         self._wake.set()
 
+    def on_session_end(self, messages) -> None:
+        # Only retry already-captured completed pairs; never archive this list.
+        self._wake.set()
+
     def _validate_receipt(self, result: dict, event: dict) -> dict:
         receipt = result.get("receipt")
         expected = {
@@ -160,13 +209,15 @@ class PSFNMemoryProvider(MemoryProvider):
             or not isinstance(receipt.get("receiptId"), str)
             or not receipt["receiptId"].strip()
         ):
-            raise ValueError("PSFN ingestion receipt did not match the queued event and configured identity")
+            raise ProtocolError("PSFN ingestion receipt did not match the queued event and configured identity")
         return receipt
 
     def _run_worker(self) -> None:
+        retrying = False
         while True:
-            self._wake.wait()
+            self._wake.wait(timeout=self._config.retry_interval_seconds if retrying else None)
             self._wake.clear()
+            retrying = False
             try:
                 events = self._outbox.pending(self._config.retry_batch_size)
                 for event in events:
@@ -176,10 +227,11 @@ class PSFNMemoryProvider(MemoryProvider):
                     self._wake.set()
                 elif self._closing:
                     return
-            except Exception:
-                self._warn("PSFN memory delivery pending; completed chat remains in the local retry queue.")
+            except Exception as error:
+                self._warn(f"PSFN memory delivery pending; completed chat remains in the local retry queue. {_diagnostic(error)}")
                 if self._closing:
                     return
+                retrying = True
 
     def shutdown(self) -> None:
         with self._state_lock:

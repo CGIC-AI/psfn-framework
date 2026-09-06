@@ -1,3 +1,4 @@
+import type { ExternalMemoryExecuteParams, ExternalMemoryExecuteResult } from '../../../shared/contracts/external-memory.js';
 import type { JSONRPCServerAndClient } from 'json-rpc-2.0';
 import { JSONRPCErrorException } from 'json-rpc-2.0';
 import type { MessageHandler, MessageHandlerOptions } from '../../../channels/backplane/types.js';
@@ -124,6 +125,7 @@ interface ReverseRpcRuntimeOptions {
 
 /** Owns reverse-RPC registration, handler readiness, ICP holds, and voice streams. */
 export class GatewayClientReverseRpcRuntime {
+  private externalMemoryHandler: ((params: ExternalMemoryExecuteParams) => Promise<ExternalMemoryExecuteResult>) | null = null;
   private registered = false;
   private handleMessageHandler: MessageHandler | null = null;
   private apiChatCompletionHandler: ((params: ApiChatCompletionRpcParams) => Promise<ApiChatCompletionRpcResult>) | null = null;
@@ -144,6 +146,11 @@ export class GatewayClientReverseRpcRuntime {
   private readonly voiceStreams = new Map<string, VoiceStreamState>();
 
   constructor(private readonly options: ReverseRpcRuntimeOptions) {}
+
+  onExternalMemoryExecute(handler: (params: ExternalMemoryExecuteParams) => Promise<ExternalMemoryExecuteResult>): void {
+    this.externalMemoryHandler = handler;
+    this.register();
+  }
 
   onHandleMessage(handler: MessageHandler): void { this.handleMessageHandler = handler; this.register(); }
   onApiChatCompletion(handler: (params: ApiChatCompletionRpcParams) => Promise<ApiChatCompletionRpcResult>): void { this.apiChatCompletionHandler = handler; this.register(); }
@@ -205,6 +212,7 @@ export class GatewayClientReverseRpcRuntime {
     this.registered = true;
     registerReverseGatewayMethods({
       target: this.options.target,
+      handleExternalMemoryExecute: params => this.requireHandler(this.externalMemoryHandler, 'memory.external.execute')(params),
       dispatchHandleMessage: (message) => this.dispatchHandleMessage(message),
       handleVoiceStreamStart: (params) => this.handleVoiceStreamStart(params),
       handleVoiceStreamChunk: (params) => this.handleVoiceStreamChunk(params),

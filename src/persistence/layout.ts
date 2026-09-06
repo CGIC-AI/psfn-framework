@@ -599,6 +599,10 @@ export function resolveSessionsDir(dataDir: string): string {
   return join(resolveCompanionStateDir(dataDir), 'sessions');
 }
 
+export function resolveExternalMemoryIntakeDir(dataDir: string): string {
+  return join(resolveCompanionStateDir(dataDir), 'external-memory');
+}
+
 export function resolveNotesDir(dataDir: string): string {
   return join(resolveCompanionStateDir(dataDir), 'notes');
 }

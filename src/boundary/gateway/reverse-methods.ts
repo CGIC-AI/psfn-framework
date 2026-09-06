@@ -1,3 +1,4 @@
+import type { ExternalMemoryExecuteParams, ExternalMemoryExecuteResult } from '../../shared/contracts/external-memory.js';
 import type { JSONRPCServerAndClient } from 'json-rpc-2.0';
 import type {
   ApiChatCompletionCancelRpcParams,
@@ -55,6 +56,7 @@ import type { RpcParamsDecoder } from './rpc-param-decoder.js';
 
 export interface ReverseGatewayMethodRuntime {
   target: JSONRPCServerAndClient;
+  handleExternalMemoryExecute(params: ExternalMemoryExecuteParams): Promise<ExternalMemoryExecuteResult>;
   dispatchHandleMessage(message: unknown): Promise<VoiceHandleMessageResult>;
   handleVoiceStreamStart(params: VoiceStreamStartParams): VoiceStreamAckResult;
   handleVoiceStreamChunk(params: VoiceStreamChunkParams): VoiceStreamAckResult;
@@ -112,6 +114,11 @@ function defineReverseMethod<P, R>(definition: {
 }
 
 const reverseDescriptors = [
+  defineReverseMethod({
+    names: ['memory.external.execute'],
+    decode: agentMethodParamDecoders['memory.external.execute'],
+    handler: (params: ExternalMemoryExecuteParams, runtime) => runtime.handleExternalMemoryExecute(params),
+  }),
   defineReverseMethod({
     names: ['icp.policy.inspect'],
     decode: parseIcpLocalPolicyInspectParams,

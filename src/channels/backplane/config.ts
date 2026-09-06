@@ -41,6 +41,7 @@ import {
   parseTestingHarnessGardenAdminConfig,
   type TestingHarnessGardenAdminConfig,
 } from './testing-harness-garden-config.js';
+import { parseExternalMemoryConfig, type ExternalMemoryApiConfig } from './external-memory-config.js';
 import { createBuiltinChannelPluginRegistry } from '../plugins/builtin.js';
 import { parseChannelPluginSections } from '../plugins/load-sections.js';
 import type { ChannelPluginLoadedSection, ChannelPluginRegistry } from '../plugins/types.js';
@@ -147,6 +148,7 @@ export interface DiscordChannelConfig {
  * (OpenAI-compatible chat, API voice websocket, Wyoming-tagged api traffic).
  */
 export interface ApiChannelConfig {
+  externalMemory?: ExternalMemoryApiConfig;
   companionId?: CompanionId;
   /**
    * Exact companions an unscoped Bearer principal may select per request.
@@ -904,7 +906,8 @@ function parseApiChannelSection(
   const unknownApiKeys = Object.keys(apiConfig)
     .filter(key => key !== 'companionId'
       && key !== 'selectableCompanionIds'
-      && key !== 'testingHarness');
+      && key !== 'testingHarness'
+      && key !== 'externalMemory');
   if (unknownApiKeys.length > 0) {
     throw new Error(`channels.json.api has unsupported keys: ${unknownApiKeys.join(', ')}`);
   }
@@ -931,11 +934,14 @@ function parseApiChannelSection(
     && new Set(selectableCompanionIds).size !== selectableCompanionIds.length) {
     throw new Error('channels.json.api.selectableCompanionIds must not contain duplicates');
   }
+  const externalMemory = parseExternalMemoryConfig(apiConfig.externalMemory, reference =>
+    resolveCredentialValue(reference, env, credentialVault));
   const testingHarness = parseSectionObject(apiConfig, 'testingHarness');
   if (!testingHarness) {
     return {
       ...(companionId ? { companionId } : {}),
       ...(selectableCompanionIds ? { selectableCompanionIds } : {}),
+      ...(externalMemory ? { externalMemory } : {}),
     };
   }
 
@@ -978,6 +984,7 @@ function parseApiChannelSection(
   return {
     ...(companionId ? { companionId } : {}),
     ...(selectableCompanionIds ? { selectableCompanionIds } : {}),
+    ...(externalMemory ? { externalMemory } : {}),
     testingHarness: {
       principalId: normalizedPrincipalId,
       apiKey: resolveCredentialValue(tokenRef, env, credentialVault).trim(),

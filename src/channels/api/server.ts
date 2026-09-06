@@ -77,6 +77,7 @@ import {
 } from './http-policy.js';
 import type { ExternalChannelProfileConfig } from '../backplane/config.js';
 import { resolveCompanionIdFromConfig } from '../../core/identity/companion-runtime.js';
+import type { ExternalMemoryMcpRoute } from './server/external-memory-mcp.js';
 import { ApiChatCompletionsHandler } from './server/chat-completions.js';
 import {
   BEARER_COMPANION_SELECTOR_HEADER,
@@ -439,6 +440,7 @@ export interface ApiServerConfig {
   contactStore?: ContactStorePort;
   apiKey?: string;
   testingHarnessPrincipal?: TestingHarnessApiPrincipalCredential;
+  externalMemoryMcp?: ExternalMemoryMcpRoute;
   adminToken?: string;
   modelName?: string;
   requestTimeoutMs?: number;
@@ -531,6 +533,7 @@ export class ApiServer implements ChannelAdapterPort {
   private runtime: ApiServerRuntime | null;
   private apiKey?: string;
   private testingHarnessPrincipal?: TestingHarnessApiPrincipalCredential;
+  private externalMemoryMcp?: ExternalMemoryMcpRoute;
   private adminToken?: string;
   private satelliteApiKeys: string[];
   private trustedProxyClientCertToken?: string;
@@ -567,6 +570,7 @@ export class ApiServer implements ChannelAdapterPort {
     this.sensorIngest = config.sensorIngest ?? createEventBusSensorIngestPort(this.eventBus);
     this.sessionManager = config.sessionManager;
     this.runtime = config.runtime ?? null;
+    this.externalMemoryMcp = config.externalMemoryMcp;
     this.apiKey = clampHeaderValue(config.apiKey, 512);
     this.adminToken = clampHeaderValue(config.adminToken, 512);
     // Re-validate satellite keys at the trust boundary (fail closed on weak
@@ -718,6 +722,10 @@ export class ApiServer implements ChannelAdapterPort {
 
   private handleRequest(req: IncomingMessage, res: ServerResponse): void {
     stripBrowserRequestCapabilityHeaders(req.headers);
+    if (this.externalMemoryMcp?.matches(req.url ?? '/')) {
+      void this.externalMemoryMcp.handle(req, res);
+      return;
+    }
     if (this.fleetSsoRouter?.matches(req.url ?? '/')) {
       void this.fleetSsoRouter.handle(req, res);
       return;

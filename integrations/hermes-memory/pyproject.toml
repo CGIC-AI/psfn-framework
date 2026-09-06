@@ -1,0 +1,17 @@
+[build-system]
+requires = ["hatchling==1.27.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "psfn-hermes-memory"
+version = "0.1.0"
+description = "Hermes lifecycle adapter for PSFN companion memory over MCP"
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+dependencies = []
+
+[project.entry-points."hermes_agent.memory_providers"]
+psfn = "psfn_memory:register"
+
+[tool.hatch.build.targets.wheel]
+packages = ["psfn_memory"]

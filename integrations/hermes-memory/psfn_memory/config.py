@@ -16,6 +16,7 @@ class Config:
     mcp_server: str = "psfn"
     platforms: tuple[str, ...] = ("cli",)
     retry_batch_size: int = 20
+    retry_interval_seconds: float = 30.0
     shutdown_timeout_seconds: float = 5.0
 
     @classmethod
@@ -39,11 +40,10 @@ class Config:
             raise ValueError("PSFN platforms must name interactive surfaces only")
         if type(result.retry_batch_size) is not int or result.retry_batch_size < 1:
             raise ValueError("PSFN retry_batch_size must be a positive integer")
-        if (
-            type(result.shutdown_timeout_seconds) not in (int, float)
-            or not 0 < result.shutdown_timeout_seconds < float("inf")
-        ):
-            raise ValueError("PSFN shutdown_timeout_seconds must be finite and positive")
+        for key in ("retry_interval_seconds", "shutdown_timeout_seconds"):
+            value = getattr(result, key)
+            if type(value) not in (int, float) or not 0 < value < float("inf"):
+                raise ValueError(f"PSFN {key} must be finite and positive")
         return result
 
     @classmethod

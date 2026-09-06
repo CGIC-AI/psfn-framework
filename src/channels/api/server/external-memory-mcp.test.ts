@@ -79,7 +79,7 @@ describe('external memory MCP', () => {
     };
     expect(await send(1, 'initialize', {
       protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'hermes', version: '0.21.0' },
-    })).toContain('psfn-memory');
+    })).toContain('companion-memory');
     expect(await send(2, 'tools/call', { name: 'psfn_memory_context', arguments: { sessionId: 's1', query: 'task' } }))
       .toContain('A useful remembered preference.');
   });

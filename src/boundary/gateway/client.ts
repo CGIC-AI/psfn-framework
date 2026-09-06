@@ -1989,4 +1989,3 @@ function parseProviderQualifiedModel(value: string): { provider: string; model: 
   if (!provider || !model) return null;
   return { provider, model };
 }
-

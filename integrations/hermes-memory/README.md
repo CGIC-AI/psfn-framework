@@ -4,7 +4,8 @@ Run a companion in Hermes while PSFN keeps its long-term memory. This provider
 recalls PSFN context before a turn and submits each completed human/assistant
 exchange to the gateway's memory MCP server. The gateway forwards directly to
 the companion's core memory service; it does not run a PSFN conversation turn.
-PSFN accepts the raw exchange durably and processes its normal memory lifecycle.
+PSFN screens the exchange, archives the accepted evidence durably, and processes
+its normal memory lifecycle.
 
 Compatibility is pinned to Hermes commit
 `5bd439d3ed4ae5f099857813383389dcd0ab4369` (Python 3.11–3.13). The adapter uses
@@ -30,6 +31,30 @@ The operator must enable `api.externalMemory.bindings` in the gateway's external
 `channels.json`, using a dedicated bearer token bound to one body, companion and
 known contact. The server configuration and credential stay outside this public
 repository. A body token is not a core-agent connection credential.
+
+Merge this section into the gateway's existing `channels.json` API configuration:
+
+```json
+{
+  "api": {
+    "externalMemory": {
+      "bindings": [{
+        "bodyId": "example-hermes",
+        "companionId": "00000000-0000-4000-8000-000000000001",
+        "contactId": "existing-operator-contact-id",
+        "tokenRef": { "kind": "env", "envName": "HERMES_MEMORY_TOKEN" }
+      }]
+    }
+  }
+}
+```
+
+Use the actual companion UUID and an existing, active contact ID. Supply the
+dedicated token to both the gateway and Hermes through their secret configuration.
+The endpoint shares the existing API listener and works independently of human
+SSO. API, administrator and testing-harness keys cannot substitute for this token.
+The selected companion core must be online with its normal memory scheduler and
+durable deferred-action queue. Restart the configured gateway to load the binding.
 
 ## Profile configuration
 
@@ -96,6 +121,21 @@ receipt must match the configured body/companion and the queued session/event
 before the adapter clears the queued plaintext. Receipt status `accepted` means
 durable acceptance, **not** completed extraction. Receipt metadata and content
 digests remain locally for duplicate-callback detection.
+
+PSFN keeps screened processing intents in the companion's
+`state/external-memory` directory, alongside existing runtime state. A receipt is
+returned only after the canonical session journal is flushed and processing is
+durably queued. Restarts replay pending intents; model failures reschedule the
+same captured evidence. Successful processing clears the intent's duplicate chat
+text while retaining its identity and digest. Imported conversation entries carry
+the external body/session/event provenance and remain eligible for ordinary
+episodic and sleep processing. Extraction retries use the existing memory writer's
+deduplication; this is not an exactly-once guarantee for every downstream effect.
+
+The context tool recalls relevant memories and includes enabled North Star goals
+for the bound primary contact. Search and get use normal contact-subject and
+memory-disclosure checks. This surface exposes no deletion, editing, restoration,
+persona synchronization, or general PSFN tooling.
 
 The queue is bound to one body/companion. Reusing it with a different identity
 fails; create a separate profile. Preserve this profile's queue during moves and

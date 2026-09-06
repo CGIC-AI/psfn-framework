@@ -9,6 +9,7 @@ import {
 type RegisteredHandler = (params: unknown) => Promise<unknown> | unknown;
 
 const expectedRegisteredNames = [
+  'memory.external.execute',
   'icp.policy.inspect',
   'icp.policy.acquire',
   'icp.policy.release',

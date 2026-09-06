@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fsyncDirectorySync, fsyncTreeSync } from '../../shared/utils/fs.js';
 import type { SessionEntry, CompactionSummary, JournalEntry } from '../../core/session/types.js';
 import type { TurnRecord } from '../../shared/contracts/runtime.js';
 import { createComponentLogger } from '../../shared/logger.js';
@@ -761,6 +762,19 @@ export class SessionStore implements TranscriptSearchPort {
   ): Promise<SessionEntry[] | null> {
     return this.tailOperations.fetchSessionTailWindow(channelId, options);
   }
+  /** Establish a disk durability boundary before an external ingestion receipt. */
+  flushSessionJournal(channelId: string): void {
+    const flushed = this.withLockedExistingChannelWrite(channelId, cache => {
+      this.upsertChannelIndex(this.resolveCacheSessionKey(cache), snapshotIndexEntry(cache));
+      for (const filePath of [...cache.archivePaths, this.channelIndexPath]) {
+        fsyncTreeSync(filePath);
+        fsyncDirectorySync(dirname(filePath));
+      }
+      return true;
+    });
+    if (!flushed) throw new Error('Cannot flush a missing session journal');
+  }
+
   async flushSessionTailWrites(): Promise<void> {
     await this.tailOperations.flushSessionTailWrites();
   }

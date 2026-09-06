@@ -163,6 +163,45 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(self.calls[-1][1], original)
         self.assertTrue(self.warnings)
 
+    def test_idle_timer_recovers_first_failed_delivery_without_another_signal(self):
+        interval = 0.05
+        Config(BODY_ID, COMPANION_ID, retry_interval_seconds=interval).save(self.temp.name)
+        box = Outbox(self.temp.name, body_id=BODY_ID, companion_id=COMPANION_ID)
+        box.enqueue("finished-session", "last human turn", "last assistant reply")
+        original = box.pending(1)[0]
+        attempts = []
+
+        def fail_once_then_accept(name, args):
+            attempts.append((time.monotonic(), dict(args)))
+            if len(attempts) == 1:
+                return json.dumps({"error": "Connection offline"})
+            return envelope({"receipt": receipt(args)})
+
+        with patch("psfn_memory.provider._dispatch", side_effect=fail_once_then_accept):
+            provider = self.start()
+            # No sync_turn, prefetch, session change, or explicit wake follows.
+            wait_for(lambda: box.pending_count() == 0)
+            provider.shutdown()
+        self.assertEqual([args for _, args in attempts], [original, original])
+        self.assertGreaterEqual(attempts[1][0] - attempts[0][0], interval)
+
+    def test_failure_warnings_classify_remote_errors_without_echoing_secrets(self):
+        provider = self.start()
+        cases = [
+            ("401 Unauthorized Authorization: Bearer secret-sentinel", "authentication"),
+            ("403 forbidden private-chat-sentinel", "access denied"),
+            ("invalid external memory arguments private-chat-sentinel", "validation"),
+        ]
+        for remote_error, diagnostic in cases:
+            with patch("psfn_memory.provider._dispatch", return_value=json.dumps({"error": remote_error})):
+                with self.assertRaises(RuntimeError):
+                    provider.prefetch("query")
+            warning = self.warnings[-1]
+            self.assertIn("MCPCallError", warning)
+            self.assertIn(diagnostic, warning)
+            self.assertNotIn("secret-sentinel", warning)
+            self.assertNotIn("private-chat-sentinel", warning)
+
     def test_wrong_receipt_never_clears_payload(self):
         provider = self.start()
         for change in [
@@ -254,6 +293,9 @@ class ResultTests(unittest.TestCase):
             {"body_id": BODY_ID, "companion_id": COMPANION_ID, "platforms": ["subagent"]},
             {"body_id": BODY_ID, "companion_id": COMPANION_ID, "retry_batch_size": True},
             {"body_id": BODY_ID, "companion_id": COMPANION_ID, "shutdown_timeout_seconds": float("nan")},
+            {"body_id": BODY_ID, "companion_id": COMPANION_ID, "retry_interval_seconds": 0},
+            {"body_id": BODY_ID, "companion_id": COMPANION_ID, "retry_interval_seconds": True},
+            {"body_id": BODY_ID, "companion_id": COMPANION_ID, "retry_interval_seconds": float("inf")},
         ]:
             with self.assertRaises(ValueError):
                 Config.parse(values)

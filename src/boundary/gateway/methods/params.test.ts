@@ -65,6 +65,7 @@ const expectedGatewayMethods = [
 ] as const;
 
 const expectedAgentMethods = [
+  'memory.external.execute',
   'memory.deletion.snapshot',
   'memory.deletion.partner_alerted',
   'memory.deletion.resolve',
@@ -91,11 +92,11 @@ function expectInvalid(decoder: UnknownDecoder, params: unknown): void {
 }
 
 describe('gateway RPC parameter decoder catalog', () => {
-  it('keeps the reviewed 53 gateway plus 17 reverse-agent decoder inventory exact', () => {
+  it('keeps the reviewed 53 gateway plus 18 reverse-agent decoder inventory exact', () => {
     expect(Object.keys(gatewayMethodParamDecoders)).toEqual(expectedGatewayMethods);
     expect(Object.keys(agentMethodParamDecoders)).toEqual(expectedAgentMethods);
     expect(expectedGatewayMethods).toHaveLength(53);
-    expect(expectedAgentMethods).toHaveLength(17);
+    expect(expectedAgentMethods).toHaveLength(18);
   });
 
   it('rejects non-object params across the complete catalog', () => {

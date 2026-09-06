@@ -2374,6 +2374,13 @@
       "note": "Immutable parser/wire/schema contract ENV_CREDENTIAL_NAME_PATTERN; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning."
     },
     {
+      "file": "src/channels/backplane/external-memory-config.ts",
+      "name": "nonempty.minLength",
+      "value": "1",
+      "form": "object-member",
+      "note": "Nonempty text is a structural external-memory protocol and persisted-record invariant. minLength 1 excludes missing identity/evidence; it is not an operator-tunable content limit."
+    },
+    {
       "file": "src/channels/backplane/http/auth.ts",
       "name": "MIN_SATELLITE_API_KEY_LENGTH",
       "value": "16"
@@ -7310,6 +7317,13 @@
       "value": "80"
     },
     {
+      "file": "src/faculties/memory/external/intake-store.ts",
+      "name": "text.minLength",
+      "value": "1",
+      "form": "object-member",
+      "note": "Nonempty text is a structural external-memory protocol and persisted-record invariant. minLength 1 excludes missing identity/evidence; it is not an operator-tunable content limit."
+    },
+    {
       "file": "src/faculties/memory/extraction/coverage-ranges.ts",
       "name": "MAX_COVERAGE_INTERVALS",
       "value": "128",
@@ -10710,6 +10724,13 @@
       "value": "128",
       "form": "length-guard",
       "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
+      "file": "src/shared/contracts/external-memory.ts",
+      "name": "text.minLength",
+      "value": "1",
+      "form": "object-member",
+      "note": "Nonempty text is a structural external-memory protocol and persisted-record invariant. minLength 1 excludes missing identity/evidence; it is not an operator-tunable content limit."
     },
     {
       "file": "src/shared/contracts/filesystem.ts",

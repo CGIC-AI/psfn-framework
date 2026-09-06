@@ -1,4 +1,6 @@
+import { JSONRPCErrorCode, JSONRPCErrorException } from 'json-rpc-2.0';
 import { Type } from '@sinclair/typebox';
+import { parseExternalMemoryExecuteParams } from '../../../../shared/contracts/external-memory.js';
 
 import type { SatelliteResponseEligibilityRpcParams } from '../../../../channels/api/types.js';
 import { CHANNEL_TYPES } from '../../../../shared/contracts/channel-types.js';
@@ -46,6 +48,11 @@ const apiPrincipal = strictObject({
 });
 
 export const agentMethodParamDecoders = {
+  'memory.external.execute': (params: unknown) => {
+    try { return parseExternalMemoryExecuteParams(params); } catch {
+      throw new JSONRPCErrorException('memory.external.execute received invalid params', JSONRPCErrorCode.InvalidParams);
+    }
+  },
   'memory.deletion.snapshot': agentDecoder('memory.deletion.snapshot', strictObject({ proposalId: nonEmptyCanonicalString })),
   'memory.deletion.partner_alerted': agentDecoder('memory.deletion.partner_alerted', strictObject({ proposalId: nonEmptyCanonicalString })),
   'memory.deletion.resolve': agentDecoder('memory.deletion.resolve', strictObject({

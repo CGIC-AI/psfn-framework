@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
+import { ExternalMemoryMcpRoute } from '../../channels/api/server/external-memory-mcp.js';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type {
   SatelliteClientCertIdentity,
@@ -1023,6 +1024,18 @@ export async function startOptionalGatewayApiServer(
     sensorIngest: inertSensorIngest,
     apiKey: fleetAuthBootstrapOnly ? undefined : env.API_KEY || undefined,
     testingHarnessPrincipal: options.channelsConfig?.api.testingHarness,
+    ...(options.channelsConfig?.api.externalMemory ? {
+      externalMemoryMcp: new ExternalMemoryMcpRoute(
+        options.channelsConfig.api.externalMemory,
+        params => options.gateway.requestCompanionAgent(
+          params.binding.companionId,
+          'memory.external.execute',
+          params,
+          GATEWAY_API_REQUEST_TIMEOUT_MS,
+        ),
+        [env.API_KEY, env.ADMIN_TOKEN, options.channelsConfig.api.testingHarness?.apiKey, ...satelliteApiKeys],
+      ),
+    } : {}),
     // ADMIN_TOKEN remains available to the private Garden -> Gateway operator
     // confirmation endpoint and to the fleet router's alternative admin door.
     adminToken: env.ADMIN_TOKEN || undefined,

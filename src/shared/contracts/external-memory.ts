@@ -21,7 +21,7 @@ export const EXTERNAL_MEMORY_TOOL_SCHEMAS = {
   }, strict),
 } as const;
 
-export type ExternalMemoryOperation = keyof typeof EXTERNAL_MEMORY_TOOL_SCHEMAS;
+type ExternalMemoryOperation = keyof typeof EXTERNAL_MEMORY_TOOL_SCHEMAS;
 export type ExternalMemoryRequest = {
   [K in ExternalMemoryOperation]: { operation: K } & Static<typeof EXTERNAL_MEMORY_TOOL_SCHEMAS[K]>
 }[ExternalMemoryOperation];

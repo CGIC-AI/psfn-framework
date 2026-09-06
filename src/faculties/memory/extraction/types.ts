@@ -18,6 +18,7 @@ export interface MemoryExtractorDrainOptions {
 
 export type ExtractionTriggerReason =
   | 'manual'
+  | 'external_conversation'
   | 'reflection_output'
   | 'response_turn'
   | 'interval'

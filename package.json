@@ -184,6 +184,7 @@
     "@earendil-works/pi-agent-core": "0.84.1",
     "@earendil-works/pi-ai": "0.84.1",
     "@modelcontextprotocol/client": "2.0.0",
+    "@modelcontextprotocol/server": "2.0.0",
     "@peculiar/x509": "1.14.3",
     "@redis/client": "6.0.1",
     "@sinclair/typebox": "0.34.48",

@@ -1478,6 +1478,16 @@ describe('AdminSettingsDataService', () => {
     const config = buildConfig(root);
     const service = buildService(config);
     const payload = {
+      api: {
+        externalMemory: {
+          bindings: [{
+            bodyId: 'hermes-work',
+            companionId: '11111111-1111-4111-8111-111111111111',
+            contactId: 'contact-operator',
+            tokenRef: { kind: 'env', envName: 'HERMES_MEMORY_TOKEN' },
+          }],
+        },
+      },
       discord: {
         heartbeatChannelId: 'heartbeat-123',
       },

@@ -1,3 +1,5 @@
+import { mergeGatewayModelHints } from './client/model-hints.js';
+import type { ExternalMemoryExecuteParams, ExternalMemoryExecuteResult } from '../../shared/contracts/external-memory.js';
 // ── Gateway Client ──
 // Agent-side typed RPC wrapper. Implements LLMProviderPort and EmbeddingProviderPort
 // so it can be used as a drop-in replacement for direct clients.
@@ -1856,6 +1858,10 @@ export class GatewayClient implements
     this.reverseRpcRuntime.onContactAuthoritySnapshot(handler);
   }
 
+  onExternalMemoryExecute(handler: (params: ExternalMemoryExecuteParams) => Promise<ExternalMemoryExecuteResult>): void {
+    this.reverseRpcRuntime.onExternalMemoryExecute(handler);
+  }
+
   onMemoryDeletionPartnerAlerted(handler: (params: MemoryDeletionPartnerAlertedParams) => Promise<MemoryDeletionPartnerAlertedResult>): void {
     this.reverseRpcRuntime.onMemoryDeletionPartnerAlerted(handler);
   }
@@ -1984,15 +1990,3 @@ function parseProviderQualifiedModel(value: string): { provider: string; model: 
   return { provider, model };
 }
 
-function mergeGatewayModelHints(
-  contextHint: LLMModelHint | undefined,
-  optionHint: LLMModelHint | undefined,
-): LLMModelHint | undefined {
-  const normalizedContext = normalizeModelHint(contextHint, OPTIONAL_MODEL_HINT_NORMALIZATION);
-  const normalizedOption = normalizeModelHint(optionHint, OPTIONAL_MODEL_HINT_NORMALIZATION);
-  if (!normalizedContext && !normalizedOption) return undefined;
-  return {
-    ...(normalizedContext ?? {}),
-    ...(normalizedOption ?? {}),
-  };
-}

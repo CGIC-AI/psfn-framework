@@ -102,7 +102,7 @@ export class ExternalMemoryMcpRoute {
   }
 
   private createServer(binding: ExternalMemoryBinding): McpServer {
-    const server = new McpServer({ name: 'psfn-memory', version: '1.0.0' });
+    const server = new McpServer({ name: 'companion-memory', version: '1.0.0' });
     for (const [operation, schema] of Object.entries(EXTERNAL_MEMORY_TOOL_SCHEMAS)) {
       server.registerTool(`psfn_memory_${operation}`, {
         description: descriptions[operation as keyof typeof descriptions],

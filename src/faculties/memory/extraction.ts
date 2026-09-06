@@ -12,6 +12,7 @@ import { resolvePreferredContactName } from '../../core/contacts/preferred-name.
 import type { SessionStore } from '../../persistence/sessions/store.js';
 import type { SessionEntry } from '../../core/session/types.js';
 import { isTestingSessionId } from '../../core/session/session-id.js';
+import { assertMemorySourceIsNotTestingHarness } from '../../core/session/testing-harness-provenance.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { BiographicalDepthPolicy } from '../../system/config/biographical-depth-policy.js';
 import type { GroupMemoryWriteCapSettings } from '../../system/config/group-memory-config.js';
@@ -184,6 +185,7 @@ type MemoryExtractorRunOptions =
   & {
     forceSinglePassExtraction?: boolean;
     reflectionSource?: FinalReflectionExtractionInput;
+    externalConversation?: true;
   };
 
 export class MemoryExtractor {
@@ -440,6 +442,58 @@ export class MemoryExtractor {
     await this.trackExtraction(channelId, 'manual', canonicalContactId, undefined, turnId, undefined, placeId);
   }
 
+  /** Process an admitted external transcript snapshot without a foreground turn. */
+  async extractExternalConversation(input: {
+    sessionId: string;
+    entries: readonly SessionEntry[];
+    canonicalContactId: string;
+  }): Promise<MemoryExtractionOutputs> {
+    const sessionId = input.sessionId.trim();
+    const canonicalContactId = input.canonicalContactId.trim();
+    if (!sessionId || !canonicalContactId || isTestingSessionId(sessionId)) {
+      throw new Error('External conversation extraction requires a non-testing session and canonical contact');
+    }
+    const entries = input.entries.map(entry => ({ ...entry })).sort((left, right) => left.id - right.id);
+    if (entries.length === 0 || entries.length > RECOVERY_CONTEXT_MESSAGE_LIMIT
+      || entries.some(entry => (
+        entry.channelId !== sessionId
+        || !Number.isSafeInteger(entry.id) || entry.id < 1
+        || (entry.role !== 'user' && entry.role !== 'assistant')
+        || !entry.content.trim()
+        || !Number.isFinite(entry.timestamp)
+      ))
+      || new Set(entries.map(entry => entry.id)).size !== entries.length) {
+      throw new Error('External conversation extraction requires a bounded, unique conversational snapshot for its exact session');
+    }
+    assertMemorySourceIsNotTestingHarness(entries);
+    const sessionStore = this.sessionStore;
+    if (!sessionStore) {
+      throw new Error('External conversation extraction requires the canonical session store');
+    }
+    const assertEligible = async (): Promise<void> => {
+      if (!this.acceptingExtractions) {
+        throw new ExtractionDrainRequeueError(sessionId, 'external_conversation');
+      }
+      if (!this.isExtractionSessionCurrent(sessionId, sessionId, true)) {
+        throw new Error('External conversation extraction source session is retired or quarantined');
+      }
+    };
+    await assertEligible();
+    return this.trackExtraction(
+      sessionId,
+      'external_conversation',
+      canonicalContactId,
+      entries,
+      undefined,
+      { externalConversation: true },
+      undefined,
+      undefined,
+      assertEligible,
+      'serialize',
+      assertEligible,
+    );
+  }
+
   async extractFinalReflection(input: FinalReflectionExtractionInput): Promise<void> {
     if (!this.acceptingExtractions) {
       log.debug('Skipping final reflection extraction while extractor is draining', {
@@ -594,7 +648,9 @@ export class MemoryExtractor {
     preemptionProtected?: boolean,
     welfareGrantJobId?: string,
   ): Promise<MemoryExtractionOutputs> {
-    const logicalSessionId = this.resolveExtractionLogicalSessionId(channelId);
+    const logicalSessionId = groupOptions?.externalConversation
+      ? channelId
+      : this.resolveExtractionLogicalSessionId(channelId);
     const existing = this.inFlightByChannel.get(logicalSessionId);
     if (existing && scheduling === 'coalesce') {
       log.debug('Reusing in-flight extraction', { channelId, logicalSessionId, triggerReason });
@@ -698,7 +754,7 @@ export class MemoryExtractor {
     // (processFact / extraction marker), via `assertEffectAllowed`. Callers that
     // supply no pre-write fence fall back to the prior behavior.
     await (assertPreWriteFence ?? assertEffectAllowed)?.();
-    if (!this.isExtractionSessionCurrent(channelId, logicalSessionId)) {
+    if (!this.isExtractionSessionCurrent(channelId, logicalSessionId, groupOptions?.externalConversation)) {
       log.debug('Skipping stale extraction after session route changed', {
         channelId,
         logicalSessionId,
@@ -776,7 +832,7 @@ export class MemoryExtractor {
         : this.shouldUseCompositionalExtraction(channelId),
       isAcceptingExtractions: () => (
         this.acceptingExtractions
-        && this.isExtractionSessionCurrent(channelId, logicalSessionId)
+        && this.isExtractionSessionCurrent(channelId, logicalSessionId, groupOptions?.externalConversation)
       ),
       // u5bv.11: distinguishes a drain (extractor stopping) from a stale session
       // route so the orchestrator can fail a durable run closed on a mid-flight
@@ -815,7 +871,7 @@ export class MemoryExtractor {
         resolveCoveredMarker(this.sessionManager, extractionChannelId, entries)
       ),
       recordExtractionMarker: (_extractionChannelId, coveredUpToMessageId) => (
-        reflectionSource
+        reflectionSource || groupOptions?.externalConversation
           ? undefined
           : persistExtractionMarker(this.sessionStore, logicalSessionId, coveredUpToMessageId)
       ),
@@ -844,6 +900,13 @@ export class MemoryExtractor {
         : {}),
       ...(assertEffectAllowed ? { assertEffectAllowed } : {}),
     });
+    if (groupOptions?.externalConversation) {
+      await assertEffectAllowed?.();
+      // External receipts complete only after the exact snapshot and all its
+      // effects finish. Keep marker failures retryable and inside serialization.
+      this.sessionStore!.insertExtractionMarker(logicalSessionId, recoveredEntries!.at(-1)!.id);
+      advanceExtractionWatermarkForCoverage(logicalSessionId, recoveredEntries!);
+    }
     return {
       ...outputs,
       memoryIds: [...new Set([...outputs.memoryIds, ...mutatedMemoryIds])],
@@ -909,12 +972,16 @@ export class MemoryExtractor {
     return resolver.call(this.sessionManager, channelId);
   }
 
-  private isExtractionSessionCurrent(channelId: string, logicalSessionId: string): boolean {
+  private isExtractionSessionCurrent(
+    channelId: string,
+    logicalSessionId: string,
+    capturedLogicalSession = false,
+  ): boolean {
     const isRetired = this.sessionManager.isSessionRetiredOrQuarantined;
     if (typeof isRetired === 'function' && isRetired.call(this.sessionManager, logicalSessionId)) {
       return false;
     }
-    return this.resolveExtractionLogicalSessionId(channelId) === logicalSessionId;
+    return capturedLogicalSession || this.resolveExtractionLogicalSessionId(channelId) === logicalSessionId;
   }
 
   private async processFact(

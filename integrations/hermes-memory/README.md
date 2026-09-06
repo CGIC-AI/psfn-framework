@@ -76,8 +76,9 @@ Create `$HERMES_HOME/psfn-memory.json`, or use `hermes memory setup`:
 
 These are expected receipt identities, not authority supplied to the server. They
 must match the gateway credential binding. Optional fields are `mcp_server`
-(default `psfn`), `platforms` (default `["cli"]`), `retry_batch_size` (20), and
-`shutdown_timeout_seconds` (5). Add only the interactive platforms you intend to
+(default `psfn`), `platforms` (default `["cli"]`), `retry_batch_size` (20),
+`retry_interval_seconds` (30), and `shutdown_timeout_seconds` (5). Both time
+settings must be finite and positive. Add only the interactive platforms you intend to
 use; `subagent`, `cron`, `tool`, and `flush` are rejected. The network timeout
 belongs to the MCP connection; keep recall calls within Hermes's outer eight
 second prefetch limit.
@@ -87,7 +88,10 @@ second prefetch limit.
 The adapter persists completed exchanges under
 `$HERMES_HOME/psfn-memory/outbox.sqlite3` before sending them. Each event receives
 a stable UUID and capture timestamp; every retry sends the original payload.
-Startup, new turns, recall, session switches and shutdown trigger retries. A
+Startup, new turns, recall, session boundaries and shutdown trigger retries.
+After a failed attempt, the worker also retries at `retry_interval_seconds` while
+chat remains pending, so recovery continues during an idle session. When the
+queue is empty the worker sleeps until another signal. A
 receipt must match the configured body/companion and the queued session/event
 before the adapter clears the queued plaintext. Receipt status `accepted` means
 durable acceptance, **not** completed extraction. Receipt metadata and content
@@ -119,7 +123,10 @@ or checkpoint-v2 archival is claimed.
 Recall failures produce a warning and raise to Hermes; its normal provider hooks
 catch failures and can continue the turn. This provider does not globally require
 memory before actions. Delivery failures retain queued chat and report pending
-delivery. A shutdown timeout leaves the queue for the next profile startup.
+delivery with an exception type and a safe diagnostic for authentication,
+authorization, schema, timeout, connection or receipt failures. Server error
+text is classified rather than copied, keeping chat and credentials out of
+these warnings. A shutdown timeout leaves the queue for the next profile startup.
 
 The deliberate MCP tools are available alongside automatic hooks. `remember`
 and `ingest` require caller-chosen stable `eventId` values; retry the same request

@@ -1,3 +1,8 @@
+import { ExternalMemoryService } from '../../faculties/memory/external/service.js';
+import { ExternalMemoryIntakeStore } from '../../faculties/memory/external/intake-store.js';
+import { NorthStarStore } from '../../faculties/north-star/store.js';
+import { resolveExternalMemoryIntakeDir, resolveNorthStarPath } from '../../persistence/layout.js';
+import { resolveMemoryRetrievalPolicy } from '../../system/config/memory-retrieval-policy.js';
 // ── Agent Container Entry Point ──
 // Runs inside an isolated container. Connects to gateway via the configured RPC endpoint.
 // Run: npx tsx src/app/agent/main.ts
@@ -1249,6 +1254,25 @@ async function main(): Promise<void> {
     // knobs instead of compiled defaults (zet.2).
     memoryRetrievalPolicy: () => config.memoryRetrievalPolicy,
   });
+  const externalMemory = new ExternalMemoryService({
+    companionId: resolveCoreCompanionIdFromConfig(config),
+    companionName: card.data.name,
+    intakeStore: new ExternalMemoryIntakeStore(resolveExternalMemoryIntakeDir(pathSnapshot.companionDataDir)),
+    sessions: sessionStore,
+    contacts: contactStore,
+    memoryStore,
+    memoryProvider: agentLoop.memoryProvider ?? null,
+    writer: memoryWriter,
+    screening: intakeScreening,
+    quarantine: episodeSessionQuarantineFilter,
+    actions: postTurnActions,
+    retryDelayMs: schedulerConfig.backgroundWork.supervisor.retryBaseDelayMs,
+    searchLimit: resolveMemoryRetrievalPolicy(config.memoryRetrievalPolicy).lexicalAugment.selectedLimit,
+    goals: () => new NorthStarStore(resolveNorthStarPath(pathSnapshot.companionDataDir)).buildPromptLayer()?.content ?? '',
+    extract: input => memoryExtractor.extractExternalConversation(input),
+  });
+  gateway.onExternalMemoryExecute(input => externalMemory.execute(input));
+  await externalMemory.recover();
   log.info('Context feedback runtime deferred (Phase VI): background context-scoring LLM calls disabled');
 
   // Git tools — parent turns stay read-only; mutation must return through shard outputs.

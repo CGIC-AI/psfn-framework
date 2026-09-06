@@ -1,3 +1,4 @@
+import type { ExternalMemoryExecuteParams, ExternalMemoryExecuteResult } from '../../shared/contracts/external-memory.js';
 // ── JSON-RPC 2.0 method definitions ──
 // The contract between gateway (host) and agent (container).
 
@@ -1477,6 +1478,7 @@ export interface VoiceStreamEndResult extends VoiceHandleMessageResult {
 }
 
 export interface AgentMethods {
+  'memory.external.execute': [ExternalMemoryExecuteParams, ExternalMemoryExecuteResult];
   'memory.deletion.snapshot': [
     MemoryDeletionProposalSnapshotParams,
     MemoryDeletionProposalSnapshotResult,

@@ -7,6 +7,18 @@ export interface SatelliteHelloOptions {
   capabilities?: SatelliteCapabilities;
 }
 
+/**
+ * Presentation defaults only. `microphone_pcm` is deliberately absent: browser
+ * audio input is negotiated server-side, never self-declared here. The gateway
+ * derives microphone eligibility from the enrolled device's registered physical
+ * ceiling (`audio_input` plus `speech_to_text` in
+ * `src/channels/api/companion-ui-websocket.ts`) and advertises that filtered
+ * ceiling in `session.ready`; the client maps `audio_input` to `microphone_pcm`
+ * (`mapCapabilities` in gateway-protocol.ts) and gates capture on
+ * `session.capabilities.input.includes('microphone_pcm')` (gateway-client.ts,
+ * App.tsx). A browser-declared claim would grant no capture and only invite a
+ * ceiling the device has not been enrolled for.
+ */
 export const MOBILE_CHAT_APP_CAPABILITIES: Required<SatelliteCapabilities> = {
   input: ['text', 'device_location'],
   output: ['text', 'subtitle', 'artifact', 'tool_activity'],

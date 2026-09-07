@@ -57,6 +57,12 @@ control; and confirmation-required plus local-only safety. The hub only relays
 the approval, artifact, and tool-activity families to satellites that advertise
 them, so absent an ack those surfaces stay fail-closed.
 
+Microphone input is not in that default list on purpose. `microphone_pcm` is
+negotiated server-side: the gateway derives audio eligibility from the enrolled
+device's registered physical ceiling and advertises it in `session.ready`, the
+client maps that ceiling onto `microphone_pcm`, and capture is gated on the
+result. The browser never self-declares audio input.
+
 ## Development
 
 Install dependencies from this package directory:

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Kube 3-tier tool-conformance sweep — a repeatable, committed version of the
-// ad-hoc probe that was run against Artie (ARTEMIS, the test companion) on the
+// ad-hoc probe that was run against the primary test companion on the
 // k3d cluster on 2026-07-17 and then thrown away. It flips the LIVE capability
 // tier through nursery -> apprentice -> autonomous, triggers the Garden
 // tool-conformance sweep at each tier, captures the per-tier result JSON, and

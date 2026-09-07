@@ -50,7 +50,7 @@ function makeEnv(fixtureRoot, repoRoot, roundRoot) {
     POSTGRES_DATABASE_URL: 'postgresql://round:test@127.0.0.1:5432/psfn_shakedown_round',
     PSFN_LIVE_POSTGRES_DATABASE_URL: 'postgresql://live:test@127.0.0.1:5432/psfn_live',
     PSFN_SHAKEDOWN_POSTGRES_DATABASE: 'psfn_shakedown_round',
-    COMPANION_PG_SCHEMA: 'shakedown_artemis',
+    COMPANION_PG_SCHEMA: 'shakedown_companion',
     PSFN_SHAKEDOWN_EXTERNAL_CHANNELS: 'false',
     PSFN_API_BASE: 'http://127.0.0.1:10153',
     PSFN_ADMIN_BASE: 'http://127.0.0.1:10154',
@@ -74,12 +74,12 @@ try {
   const repoRoot = join(fixtureRoot, 'repo');
   const roundRoot = join(fixtureRoot, 'round');
   mkdirSync(join(repoRoot, 'config'), { recursive: true });
-  mkdirSync(join(repoRoot, 'shakedown', 'artie'), { recursive: true });
+  mkdirSync(join(repoRoot, 'shakedown', 'companion'), { recursive: true });
   mkdirSync(join(fixtureRoot, 'live'), { recursive: true });
   mkdirSync(roundRoot, { recursive: true });
   writeFileSync(join(roundRoot, 'shakedown.env'), '# already sourced\n');
   writeFileSync(join(repoRoot, 'package.json'), '{}\n');
-  writeFileSync(join(repoRoot, 'shakedown', 'artie', 'ARTIE.png'), 'card');
+  writeFileSync(join(repoRoot, 'shakedown', 'companion', 'REFERENCE-COMPANION.png'), 'card');
   for (const owner of [...GLOBAL_OWNER_SEEDS, ...COMPANION_OWNER_SEEDS]) {
     const seed = owner === 'charge-policy'
       ? { schemaVersion: 1, runChargeQuotaByLane: { interactive: 24 } }
@@ -141,7 +141,7 @@ try {
     ['npm', 'run', 'verify:startup-owner-files'],
     ['npm', 'run', 'verify:settings-contract'],
     ['npm', 'run', 'preflight:startup-owner-files'],
-    ['npm', 'run', 'import-character', '--', join(repoRoot, 'shakedown', 'artie', 'ARTIE.png')],
+    ['npm', 'run', 'import-character', '--', join(repoRoot, 'shakedown', 'companion', 'REFERENCE-COMPANION.png')],
     ['bash', join(repoRoot, 'shakedown', 'harness', 'restart-split-runtime.sh')],
   ]);
   assert.equal(readiness.length, 1);

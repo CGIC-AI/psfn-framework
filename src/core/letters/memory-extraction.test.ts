@@ -123,6 +123,45 @@ describe('letter memory extraction', () => {
     expect(maybeExtract).toHaveBeenCalledExactlyOnceWith(LETTER_L0_CHANNEL_ID);
   });
 
+  it('keeps a durable letter when the deferred-action queue cannot persist the signal', async () => {
+    const appended: string[] = [];
+    const letters = new LetterService({
+      store: createLetterStore(),
+      sessionStore: {
+        append: (entry: { channelId: string }) => {
+          appended.push(entry.channelId);
+          return appended.length;
+        },
+      } as unknown as Pick<SessionStore, 'append'>,
+      now: () => 1_000,
+      createId: () => 'e9a0f9f5-9b39-4b1e-9d1a-0c0f8b6f4d21',
+    });
+    const enqueue = vi.fn(() => {
+      throw new Error('deferred-action queue persistence failed');
+    });
+    const maybeExtract = vi.fn().mockResolvedValue(undefined);
+    wireLetterMemoryExtraction({
+      actions: { enqueue, registerHandler: vi.fn() },
+      letters,
+      memoryExtractor: { maybeExtract },
+    });
+
+    const letter = await letters.compose({
+      author: 'companion',
+      recipient: 'partner',
+      subject: 'The quiet hours',
+      body: 'I set this down for you to find later.',
+    });
+
+    // The queue failure is logged and dropped: the letter write succeeds once
+    // and is not reported as failed, so a caller has no reason to retry it.
+    expect(enqueue).toHaveBeenCalledOnce();
+    expect(letter.state).toBe('placed');
+    expect(await letters.list({ party: 'companion' })).toHaveLength(1);
+    expect(appended).toEqual([LETTER_L0_CHANNEL_ID]);
+    expect(maybeExtract).not.toHaveBeenCalled();
+  });
+
   it('collapses a burst of letter events into one bin evaluation', async () => {
     const { letters, maybeExtract, scheduler } = createHarness();
 

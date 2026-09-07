@@ -14,11 +14,26 @@ const SOURCE_CODE_EXTENSIONS = new Set([
   '.cjs', '.cts', '.js', '.jsx', '.mjs', '.mts', '.sh', '.ts', '.tsx',
 ]);
 
+// Publicly shipped subtrees that live under an otherwise local-only prefix. The
+// generic shakedown harness and its reference-companion bootstrap artifacts are
+// part of the public deliverable so any deployer can run their own shakedown,
+// exactly like the public Helm chart under deploy/.
+const PUBLIC_SUBTREE_EXEMPTIONS = [
+  /^deploy\/helm\/psfn(?:\/|$)/i,
+  /^shakedown\/harness(?:\/|$)/i,
+  /^shakedown\/companion(?:\/|$)/i,
+];
+
+/** @param {string} file */
+export function isPublicSubtreeExemptPath(file) {
+  return PUBLIC_SUBTREE_EXEMPTIONS.some((pattern) => pattern.test(file));
+}
+
 const FORBIDDEN_PATH_RULES = [
   {
     name: 'local-only-repository-surface',
     test: (file) => (
-      !/^deploy\/helm\/psfn(?:\/|$)/i.test(file)
+      !isPublicSubtreeExemptPath(file)
       && /^(?:\.beads|working_docs|deploy|deployment|shakedown|\.agents|\.claude|\.codec|\.codex|\.cursor|\.gemini)(?:\/|$)/i.test(file)
     ),
   },

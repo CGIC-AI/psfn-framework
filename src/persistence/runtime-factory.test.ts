@@ -246,6 +246,7 @@ describe('createAgentPersistenceRuntime', () => {
       config: {
         databasePath: '/tmp/ignored.db',
         persistenceBackend: 'postgres',
+        healthEventStreamMaxRows: 5_000,
         postgresDatabaseUrl: 'postgres://postgres:secret@localhost:5432/psfn',
       },
       pathSnapshot: {
@@ -271,6 +272,7 @@ describe('createAgentPersistenceRuntime', () => {
       config: {
         databasePath: '/tmp/ignored.db',
         persistenceBackend: 'postgres',
+        healthEventStreamMaxRows: 5_000,
         postgresDatabaseUrl: 'postgres://postgres:secret@localhost:5432/psfn',
         postgresSchema: 'companion_x',
         companionId: 'companion-x',
@@ -327,6 +329,7 @@ describe('createAgentPersistenceRuntime', () => {
       config: {
         databasePath: '/tmp/ignored.db',
         persistenceBackend: 'postgres',
+        healthEventStreamMaxRows: 5_000,
         postgresDatabaseUrl: 'postgres://postgres:secret@localhost:5432/psfn',
         postgresSchema: 'companion_y',
         postgresRole: 'companion_y_runtime',
@@ -370,6 +373,7 @@ describe('createAgentPersistenceRuntime', () => {
       config: {
         databasePath: '/tmp/ignored.db',
         persistenceBackend: 'postgres',
+        healthEventStreamMaxRows: 5_000,
         postgresDatabaseUrl: 'postgres://postgres:secret@localhost:5432/psfn',
         companionId: 'companion-x',
         automataPolicy: loadAutomataPolicySeedDefaults(),
@@ -424,6 +428,7 @@ describe('createAgentPersistenceRuntime', () => {
       introspectionLandmarkStore: expect.any(Object),
       letterStore: expect.any(Object),
       doingMirrorStore: expect.any(Object),
+      healthEventStore: expect.any(Object),
       weightedThoughtStore: undefined,
       socialDesireStore: undefined,
     });
@@ -502,6 +507,7 @@ describe('createAgentPersistenceRuntime', () => {
       config: {
         databasePath: '/tmp/ignored.db',
         persistenceBackend: 'postgres',
+        healthEventStreamMaxRows: 5_000,
         postgresDatabaseUrl: 'postgres://postgres:secret@localhost:5432/psfn',
         postgresSchema: 'companion_x',
         postgresRole: 'companion_x_runtime',
@@ -570,6 +576,7 @@ describe('createAgentPersistenceRuntime', () => {
       config: {
         databasePath: '/tmp/ignored.db',
         persistenceBackend: 'postgres',
+        healthEventStreamMaxRows: 5_000,
         postgresDatabaseUrl: 'postgres://postgres:secret@localhost:5432/psfn',
         postgresSchema: 'companion_x',
         postgresRole: 'companion_x_runtime',
@@ -621,6 +628,7 @@ describe('createAgentPersistenceRuntime', () => {
       config: {
         databasePath: '/tmp/ignored.db',
         persistenceBackend: 'postgres',
+        healthEventStreamMaxRows: 5_000,
         postgresDatabaseUrl: 'postgres://postgres:secret@localhost:5432/psfn',
         postgresSchema: 'companion_x',
         companionId: 'companion-x',

@@ -9,8 +9,7 @@ import {
   InMemoryAutomataRunStore,
 } from '../../automata/run-registry.js';
 import {
-  beginMemoryExtractionAutomataRun,
-  completeMemoryExtractionAutomataRun,
+  createMemoryExtractionAutomataRunPort,
   failMemoryExtractionAutomataRun,
 } from './memory-extraction-automata-run.js';
 
@@ -84,10 +83,18 @@ describe('memory extraction Automata run lifecycle', () => {
       createdAtMs: 100,
     };
 
-    await expect(beginMemoryExtractionAutomataRun(runs, input)).resolves.toEqual({
-      runId: input.runId,
+    const port = createMemoryExtractionAutomataRunPort(runs, input);
+    await expect(port.begin()).resolves.toMatchObject({
+      companionId: 'companion-a',
+      attempt: 1,
       execute: true,
-      ownsLifecycle: true,
+      lineage: {
+        automatonClass: 'memory.extraction',
+        runId: input.runId,
+        taskId: input.taskId,
+        workerId: 'memory-extraction',
+        sessionIds: [input.sessionId],
+      },
     });
     expect(runs.getRun(input.runId)).toMatchObject({
       automatonClass: 'memory.extraction',
@@ -95,20 +102,23 @@ describe('memory extraction Automata run lifecycle', () => {
       sessionIds: [input.sessionId],
       status: 'running',
     });
-    await expect(beginMemoryExtractionAutomataRun(runs, input)).resolves.toEqual({
-      runId: input.runId,
-      execute: true,
-      ownsLifecycle: true,
-    });
+    await expect(port.begin()).resolves.toMatchObject({ execute: true });
 
-    await completeMemoryExtractionAutomataRun(runs, input.runId, 200);
-    await completeMemoryExtractionAutomataRun(runs, input.runId, 201);
-    expect(runs.getRun(input.runId)?.status).toBe('completed');
-    await expect(beginMemoryExtractionAutomataRun(runs, input)).resolves.toEqual({
-      runId: input.runId,
-      execute: false,
-      ownsLifecycle: true,
+    await port.terminalize({
+      lifecycleState: 'completed',
+      outcome: 'completed',
+      stateReason: 'memory_extraction_completed',
+      atMs: 200,
     });
+    await port.terminalize({
+      lifecycleState: 'completed',
+      outcome: 'completed',
+      stateReason: 'memory_extraction_completed',
+      atMs: 201,
+    });
+    expect(runs.getRun(input.runId)?.status).toBe('completed');
+    // Restart: a re-entered terminal run is bound, never re-executed.
+    await expect(port.begin()).resolves.toMatchObject({ execute: false });
   });
 
   it('terminalizes a non-retryable failure without masking the exact run', async () => {
@@ -120,7 +130,8 @@ describe('memory extraction Automata run lifecycle', () => {
       triggerReason: 'reflection_output' as const,
       createdAtMs: 100,
     };
-    await beginMemoryExtractionAutomataRun(runs, input);
+    const port = createMemoryExtractionAutomataRunPort(runs, input);
+    await port.begin();
     await failMemoryExtractionAutomataRun(runs, input.runId, 'formation_failed', 200);
 
     expect(runs.getRun(input.runId)).toMatchObject({
@@ -128,12 +139,10 @@ describe('memory extraction Automata run lifecycle', () => {
       statusReason: 'memory_extraction_failed',
       failureReason: 'formation_failed',
     });
-    await expect(beginMemoryExtractionAutomataRun(runs, input)).rejects.toThrow(
-      'terminal failed run',
-    );
+    await expect(port.begin()).rejects.toThrow('terminal failed run');
   });
 
-  it('uses an exact running background-work run without taking over its lifecycle', async () => {
+  it('adopts an exact running background-work run instead of duplicating it', async () => {
     const runs = await registry();
     await runs.register({
       runId: 'request-1',
@@ -151,16 +160,16 @@ describe('memory extraction Automata run lifecycle', () => {
       atMs: 100,
     });
 
-    await expect(beginMemoryExtractionAutomataRun(runs, {
+    const port = createMemoryExtractionAutomataRunPort(runs, {
       runId: 'request-1',
       taskId: 'room-1',
       sessionId: 'room-1',
       triggerReason: 'interval',
       createdAtMs: 101,
-    })).resolves.toEqual({
-      runId: 'request-1',
+    });
+    await expect(port.begin()).resolves.toMatchObject({
       execute: true,
-      ownsLifecycle: false,
+      lineage: { workerId: 'background-work:bgw_job-1' },
     });
     expect(runs.getRun('request-1')).toMatchObject({
       workerId: 'background-work:bgw_job-1',

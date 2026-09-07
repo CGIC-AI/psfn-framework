@@ -58,22 +58,22 @@ export interface AutomataWorkerLifecycleEvent {
   briefingSchema?: { expected: number; received: string; field: string };
 }
 
-export type AutomataWorkerTelemetryPort = (event: AutomataWorkerLifecycleEvent) => void;
+type AutomataWorkerTelemetryPort = (event: AutomataWorkerLifecycleEvent) => void;
 
 /** Stages whose failure is dispositioned by owner policy rather than fixed code. */
-export type AutomataWorkerRecoverableStage = Extract<
+type AutomataWorkerRecoverableStage = Extract<
   AutomataWorkerLifecycleStage,
   'brief' | 'handoff'
 >;
 
-export interface AutomataWorkerStageFailure {
+interface AutomataWorkerStageFailure {
   stage: AutomataWorkerRecoverableStage;
   /** Zero on the first attempt, incremented for each policy-directed retry. */
   attemptIndex: number;
   error: unknown;
 }
 
-export type AutomataWorkerFailureDisposition = 'retry' | 'fail' | 'degrade';
+type AutomataWorkerFailureDisposition = 'retry' | 'fail' | 'degrade';
 
 /**
  * Owner-policy disposition for a recoverable Bus stage failure. A policy that
@@ -469,36 +469,4 @@ export async function openAutomataBusWorkerRun(
   options: AutomataBusWorkerRunOptions,
 ): Promise<AutomataBusWorkerRun> {
   return await AutomataBusWorkerRun.open(options);
-}
-
-export interface AutomataWorkerExecution<T> {
-  result: T;
-  outcome: AutomataWorkerOutcome;
-}
-
-/**
- * One-shot form of the same lifecycle, for classes whose work completes inside a
- * single call. `classifyFailure` may answer `deferred` for a control signal (a
- * drain requeue or model preemption) that must leave the run resumable: the
- * wrapper then rethrows without recording a terminal outcome, because the same
- * run will be executed again.
- */
-export async function executeAutomataBusWorkerRun<T>(
-  options: AutomataBusWorkerRunOptions & {
-    execute: (session: AutomataBusWorkerRun) => Promise<AutomataWorkerExecution<T>>;
-    failureOutcome: (error: unknown) => AutomataWorkerOutcome;
-    classifyFailure?: (error: unknown) => 'deferred' | 'failed';
-  },
-): Promise<{ result: T; settlement: AutomataWorkerSettlement }> {
-  const session = await openAutomataBusWorkerRun(options);
-  let executed: AutomataWorkerExecution<T>;
-  try {
-    executed = await options.execute(session);
-  } catch (error) {
-    if ((options.classifyFailure?.(error) ?? 'failed') === 'deferred') throw error;
-    await session.settle(options.failureOutcome(error));
-    throw error;
-  }
-  const settlement = await session.settle(executed.outcome);
-  return { result: executed.result, settlement };
 }

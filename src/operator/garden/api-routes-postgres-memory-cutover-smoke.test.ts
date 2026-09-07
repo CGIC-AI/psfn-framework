@@ -589,6 +589,7 @@ function makeSettingsService(): AdminSettingsService {
           },
           doingMirrorLetters: {
             batchSize: 25,
+            maxDeliveryFailures: 5,
           },
           ambientPresence: {
             minIdleMinutes: 180,

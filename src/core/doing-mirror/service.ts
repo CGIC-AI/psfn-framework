@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
+import { sanitizeDiagnosticText } from '../../shared/diagnostics/redaction.js';
 import { createComponentLogger } from '../../shared/logger.js';
 
 import type { LetterService } from '../letters/service.js';
@@ -69,6 +70,15 @@ function samePendingTransition(
     && record.reason === reason
     && record.notification.subject === subject
     && record.notification.body === body;
+}
+
+/**
+ * Delivery failures are persisted and shown to the operator in Garden, so the
+ * stored text is redacted and never empty; an unnamed failure would otherwise
+ * violate the store's failure-evidence invariant.
+ */
+function describeDeliveryFailure(error: Error): string {
+  return sanitizeDiagnosticText(error.message).trim() || 'Letter delivery failed without a message';
 }
 
 function assertSource(source: DoingMirrorSourceItem, itemType: DoingMirrorItemType): void {
@@ -181,11 +191,22 @@ export class DoingMirrorService {
    * Every row keeps its own failure boundary so one poisoned disposition cannot
    * strand the rest of the batch; the collected failures are rethrown so the
    * maintenance lane reports them instead of silently swallowing them.
+   *
+   * psfn-framework-nwtw1: each failure is counted on the row, and a row whose
+   * consecutive failures reach `maxDeliveryFailures` is quarantined by the
+   * store so it stops occupying the bounded oldest-first batch. Without this a
+   * handful of permanently failing rows starves every newer pending Letter.
+   * Quarantined rows stay visible through `list` and only an operator
+   * `retryLetterDelivery` clears the counter.
    */
-  async drainPendingLetters(limit: number): Promise<{ pending: number; drained: number }> {
+  async drainPendingLetters(
+    limit: number,
+    maxDeliveryFailures: number,
+  ): Promise<{ pending: number; drained: number; quarantined: number }> {
     const pending = await this.options.store.listPendingLetterDeliveries(limit);
     const failures: Error[] = [];
     let drained = 0;
+    let quarantined = 0;
     for (const record of pending) {
       try {
         await this.deliver(record);
@@ -199,6 +220,23 @@ export class DoingMirrorService {
           error: normalized.message,
         });
         failures.push(normalized);
+        try {
+          const failed = await this.options.store.recordLetterDeliveryFailure({
+            itemType: record.itemType,
+            itemId: record.itemId,
+            letterId: record.notification.letterId,
+            error: describeDeliveryFailure(normalized),
+            failedAt: this.now(),
+            maxDeliveryFailures,
+          });
+          if (failed.notification.quarantinedAt !== undefined) quarantined += 1;
+        } catch (bookkeepingError) {
+          // Losing the counter is what caused the starvation in the first place,
+          // so surface it beside the delivery failure instead of swallowing it.
+          failures.push(
+            bookkeepingError instanceof Error ? bookkeepingError : new Error(String(bookkeepingError)),
+          );
+        }
       }
     }
     if (failures.length > 0) {
@@ -210,7 +248,31 @@ export class DoingMirrorService {
         + `failures: ${failures.map(failure => failure.message).join('; ')}`,
       );
     }
-    return { pending: pending.length, drained };
+    return { pending: pending.length, drained, quarantined };
+  }
+
+  /**
+   * Operator escape hatch for a quarantined row: clear the consecutive-failure
+   * bookkeeping and attempt delivery once, synchronously, so the Garden surface
+   * reports the real outcome. An already-delivered row is returned untouched,
+   * which keeps a double-click idempotent.
+   */
+  async retryLetterDelivery(
+    itemType: DoingMirrorItemType,
+    itemId: string,
+  ): Promise<DoingMirrorItem> {
+    const current = await this.get(itemType, requireText(itemId, 'itemId'));
+    if (current.disposition.state === 'open') {
+      throw new Error(`doing-mirror ${itemType} item has no disposition Letter to retry`);
+    }
+    if (current.disposition.notification.deliveredAt !== undefined) {
+      return current;
+    }
+    const reset = await this.options.store.resetLetterDeliveryFailures(
+      itemType,
+      current.source.itemId,
+    );
+    return { source: current.source, disposition: await this.deliver(reset) };
   }
 
   private async deliver(record: DoingMirrorDispositionRecord): Promise<DoingMirrorDispositionRecord> {

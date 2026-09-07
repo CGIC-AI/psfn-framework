@@ -4122,10 +4122,38 @@ export const POSTGRES_DOING_MIRROR_MIGRATIONS: readonly string[] = [
   CREATE INDEX IF NOT EXISTS idx_doing_mirror_dispositions_updated
     ON doing_mirror_dispositions(updated_at_ms DESC, item_type, item_id);
   `,
+  // psfn-framework-nwtw1: consecutive delivery-failure bookkeeping so a
+  // permanently failing row is quarantined out of the bounded drain batch
+  // instead of starving every newer pending Letter. PostgreSQL has no
+  // `ADD CONSTRAINT IF NOT EXISTS` and a drop/add pair would revalidate the
+  // whole table on every store connect, so the pairing invariant (a non-zero
+  // count always carries its last error and failure timestamp) is enforced in
+  // PostgresDoingMirrorStore's row mapper and writes instead.
   `
-  CREATE INDEX IF NOT EXISTS idx_doing_mirror_pending_letters
+  ALTER TABLE doing_mirror_dispositions
+    ADD COLUMN IF NOT EXISTS letter_failure_count INTEGER NOT NULL DEFAULT 0;
+  `,
+  `
+  ALTER TABLE doing_mirror_dispositions
+    ADD COLUMN IF NOT EXISTS letter_last_error TEXT;
+  `,
+  `
+  ALTER TABLE doing_mirror_dispositions
+    ADD COLUMN IF NOT EXISTS letter_last_failed_at_ms BIGINT;
+  `,
+  `
+  ALTER TABLE doing_mirror_dispositions
+    ADD COLUMN IF NOT EXISTS letter_quarantined_at_ms BIGINT;
+  `,
+  // The drain must skip quarantined rows, so the pending index carries the same
+  // predicate. The pre-quarantine index is replaced rather than kept beside it.
+  `
+  DROP INDEX IF EXISTS idx_doing_mirror_pending_letters;
+  `,
+  `
+  CREATE INDEX IF NOT EXISTS idx_doing_mirror_drainable_letters
     ON doing_mirror_dispositions(updated_at_ms, item_type, item_id)
-    WHERE letter_delivered_at_ms IS NULL;
+    WHERE letter_delivered_at_ms IS NULL AND letter_quarantined_at_ms IS NULL;
   `,
 ];
 

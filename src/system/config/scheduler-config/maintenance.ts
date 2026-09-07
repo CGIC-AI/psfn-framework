@@ -24,6 +24,13 @@ export interface BackgroundMaintenanceConfig {
   /** Bounded doing-mirror dispositions whose Letter delivery is redriven per tick. */
   doingMirrorLetters: {
     batchSize: number;
+    /**
+     * Consecutive delivery failures a disposition may accumulate before the
+     * drain quarantines it. A quarantined row stops competing for the bounded
+     * batch, stays visible in Garden with its last error, and only an explicit
+     * operator retry clears the counter.
+     */
+    maxDeliveryFailures: number;
   };
   /** Ambient-presence eligibility thresholds evaluated on the shared tick. */
   ambientPresence: {
@@ -43,6 +50,7 @@ export const DEFAULT_BACKGROUND_MAINTENANCE_CONFIG: BackgroundMaintenanceConfig 
   },
   doingMirrorLetters: {
     batchSize: 25,
+    maxDeliveryFailures: 5,
   },
   ambientPresence: {
     minIdleMinutes: 180,
@@ -99,7 +107,7 @@ export function validateBackgroundMaintenanceConfig(
   }
   assertNoUnknownKeys(
     raw.doingMirrorLetters,
-    ['batchSize'],
+    ['batchSize', 'maxDeliveryFailures'],
     `${sourcePath}.backgroundMaintenance.doingMirrorLetters`,
     { errorPrefix: 'Invalid scheduler config' },
   );
@@ -121,6 +129,11 @@ export function validateBackgroundMaintenanceConfig(
       batchSize: toPositiveInteger(
         raw.doingMirrorLetters.batchSize,
         'backgroundMaintenance.doingMirrorLetters.batchSize',
+        1,
+      ),
+      maxDeliveryFailures: toPositiveInteger(
+        raw.doingMirrorLetters.maxDeliveryFailures,
+        'backgroundMaintenance.doingMirrorLetters.maxDeliveryFailures',
         1,
       ),
     },

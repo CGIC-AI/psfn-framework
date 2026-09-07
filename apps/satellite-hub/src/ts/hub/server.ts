@@ -428,8 +428,12 @@ class RealtimeConnection {
           this.subscribeCompanion();
           await this.sendSessionReady();
         } else {
-          this.deviceId = message.deviceId;
-          this.deviceName = message.deviceName;
+          // Browser clients (companion-ui) deliberately carry no device
+          // authority in hello; keep the connection-scoped identity the Hub
+          // minted instead of adopting an undefined id that would break the
+          // session key and embodied-session attach.
+          this.deviceId = message.deviceId?.trim() || this.deviceId;
+          this.deviceName = message.deviceName?.trim() || this.deviceName;
           this.sessionId = message.sessionId?.trim() || `realtime:${this.deviceId}`;
           this.satelliteId = message.satelliteId?.trim() || this.deviceId;
           this.satelliteName = message.satelliteName?.trim() || this.deviceName;

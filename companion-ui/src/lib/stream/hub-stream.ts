@@ -153,7 +153,7 @@ export interface ToolActivityStreamEntry {
   receivedAt: string;
 }
 
-export interface DeviceLocationStreamStatus {
+interface DeviceLocationStreamStatus {
   status: 'located' | 'unzoned' | 'poor_accuracy' | 'rejected';
   reason?: DeviceLocationRejectionReason;
   receivedAt: string;

@@ -623,6 +623,9 @@ function applyInboundMessage(
         sessionId: message.sessionId,
         channelId: message.channelId,
         audioFormat: message.audioFormat,
+        // Hub-direct transport gates microphone capture and audio playback on the
+        // hub's negotiated ceiling, the same way the gateway transport does.
+        capabilities: cloneCapabilities(message.capabilities),
         place: message.place ? { ...message.place } : undefined,
         identity: message.identity,
       };

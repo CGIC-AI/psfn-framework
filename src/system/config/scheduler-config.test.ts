@@ -37,6 +37,7 @@ function buildValidSchedulerConfig(): Record<string, unknown> {
       },
       doingMirrorLetters: {
         batchSize: 25,
+        maxDeliveryFailures: 5,
       },
       ambientPresence: {
         minIdleMinutes: 180,
@@ -275,6 +276,7 @@ describe('scheduler config seed defaults', () => {
       },
       doingMirrorLetters: {
         batchSize: 25,
+        maxDeliveryFailures: 5,
       },
       ambientPresence: {
         minIdleMinutes: 180,

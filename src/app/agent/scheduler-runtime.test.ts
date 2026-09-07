@@ -233,12 +233,13 @@ describe('agent scheduler runtime wiring', () => {
       eligibilityGate,
       intervalMs: 3_600_000,
     });
-    const drainPendingLetters = vi.fn(async () => ({ pending: 1, drained: 1 }));
+    const drainPendingLetters = vi.fn(async () => ({ pending: 1, drained: 1, quarantined: 0 }));
 
     registerDoingMirrorLetterDrainOperation({
       backgroundMaintenance,
       doingMirrorService: { drainPendingLetters },
       batchSize: 25,
+      maxDeliveryFailures: 5,
     });
 
     expect(scheduler.getTask('background-maintenance')).toMatchObject({
@@ -248,7 +249,7 @@ describe('agent scheduler runtime wiring', () => {
       }],
     });
     await scheduler.getTask('background-maintenance')?.handler();
-    expect(drainPendingLetters).toHaveBeenCalledExactlyOnceWith(25);
+    expect(drainPendingLetters).toHaveBeenCalledExactlyOnceWith(25, 5);
   });
 
   it('drains stranded doing-mirror letters even without the memory.write token', async () => {
@@ -265,16 +266,17 @@ describe('agent scheduler runtime wiring', () => {
       eligibilityGate,
       intervalMs: 3_600_000,
     });
-    const drainPendingLetters = vi.fn(async () => ({ pending: 1, drained: 1 }));
+    const drainPendingLetters = vi.fn(async () => ({ pending: 1, drained: 1, quarantined: 0 }));
 
     registerDoingMirrorLetterDrainOperation({
       backgroundMaintenance,
       doingMirrorService: { drainPendingLetters },
       batchSize: 25,
+      maxDeliveryFailures: 5,
     });
     await scheduler.getTask('background-maintenance')?.handler();
 
-    expect(drainPendingLetters).toHaveBeenCalledExactlyOnceWith(25);
+    expect(drainPendingLetters).toHaveBeenCalledExactlyOnceWith(25, 5);
   });
 
   it('binds the doing-mirror drain batch to its scheduler owner file and the real runtime', () => {
@@ -283,6 +285,9 @@ describe('agent scheduler runtime wiring', () => {
 
     expect(source).toContain(
       'batchSize: options.schedulerConfig.backgroundMaintenance.doingMirrorLetters.batchSize',
+    );
+    expect(source).toContain(
+      'options.schedulerConfig.backgroundMaintenance.doingMirrorLetters.maxDeliveryFailures',
     );
     expect(main).toContain('doingMirrorService: coreRuntime.doingMirrorService');
   });

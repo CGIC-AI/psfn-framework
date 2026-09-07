@@ -332,6 +332,7 @@ describe('subsystem config round-trip', () => {
         },
         doingMirrorLetters: {
           batchSize: 25,
+          maxDeliveryFailures: 5,
         },
         ambientPresence: {
           minIdleMinutes: 180,

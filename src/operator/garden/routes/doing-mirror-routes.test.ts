@@ -38,7 +38,31 @@ function serviceStub(): AdminDoingMirrorService {
         version: 1,
         updatedAt: 200,
         updatedBy: 'partner',
-        notification: { letterId: 'letter-1', subject: input.subject, body: input.body, deliveredAt: 200 },
+        notification: {
+          letterId: 'letter-1',
+          subject: input.subject,
+          body: input.body,
+          deliveredAt: 200,
+          failureCount: 0,
+        },
+      },
+    } as DoingMirrorItem)),
+    retryLetterDelivery: vi.fn(async (itemType, itemId) => ({
+      ...ITEM,
+      disposition: {
+        itemType,
+        itemId,
+        state: 'considering',
+        version: 1,
+        updatedAt: 200,
+        updatedBy: 'partner',
+        notification: {
+          letterId: 'letter-1',
+          subject: 'Your moon garden',
+          body: 'I am considering this.',
+          deliveredAt: 300,
+          failureCount: 0,
+        },
       },
     } as DoingMirrorItem)),
   };
@@ -103,6 +127,32 @@ describe('admin doing-mirror routes', () => {
       subject: 'Your moon garden',
       body: 'I am considering this.',
     });
+  });
+
+  it('retries a quarantined Letter delivery without colliding with the transition route', async () => {
+    const service = serviceStub();
+    const result = await invoke({
+      method: 'POST',
+      path: `/api/admin/doing-mirror/wishlist/${ITEM.source.itemId}/retry-letter`,
+      service,
+    });
+
+    expect(result.status).toBe(200);
+    expect(service.retryLetterDelivery).toHaveBeenCalledWith('wishlist', ITEM.source.itemId);
+    // The transition route must not have swallowed the sub-action path.
+    expect(service.transition).not.toHaveBeenCalled();
+  });
+
+  it('rejects a Letter retry for an unknown item type', async () => {
+    const service = serviceStub();
+    const result = await invoke({
+      method: 'POST',
+      path: `/api/admin/doing-mirror/journal/${ITEM.source.itemId}/retry-letter`,
+      service,
+    });
+
+    expect(result.status).toBe(400);
+    expect(service.retryLetterDelivery).not.toHaveBeenCalled();
   });
 
   it('rejects decline without a reason before the service boundary', async () => {

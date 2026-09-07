@@ -169,6 +169,8 @@ export interface EditableSettings {
   observationMaskingWindow?: number;
   compactionEmotionalSalienceThresholdPct?: number;
   backgroundFailureEscalationThreshold?: number;
+  /** Row cap on the bounded persisted runtime health-event stream. */
+  healthEventStreamMaxRows?: number;
   memoryExtractionMinImportance?: number;
   memoryExtractionMinConfidence?: number;
   memoryExtractionMinNovelty?: number;
@@ -347,6 +349,7 @@ export const RUNTIME_SETTINGS_KEYS = [
   'observationMaskingWindow',
   'compactionEmotionalSalienceThresholdPct',
   'backgroundFailureEscalationThreshold',
+  'healthEventStreamMaxRows',
   'memoryExtractionMinImportance',
   'memoryExtractionMinConfidence',
   'memoryExtractionMinNovelty',

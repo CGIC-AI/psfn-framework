@@ -828,6 +828,7 @@ async function main(): Promise<void> {
       companionId: resolveCoreCompanionIdFromConfig(config),
     },
     automataRetention: coreRuntime.automataRetention,
+    doingMirrorService: coreRuntime.doingMirrorService,
   });
   const episodeEmbeddingProvenance = embeddingProvenance;
   const episodeEmbeddingProfile = {

@@ -31,6 +31,9 @@ export function resolveRuntimeSchedulerConfig(
       sharedWorldWikiCaretaker: {
         ...persisted.backgroundMaintenance.sharedWorldWikiCaretaker,
       },
+      doingMirrorLetters: {
+        ...persisted.backgroundMaintenance.doingMirrorLetters,
+      },
       ambientPresence: { ...persisted.backgroundMaintenance.ambientPresence },
       concernGrooming: { ...persisted.backgroundMaintenance.concernGrooming },
     },

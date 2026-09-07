@@ -21,6 +21,10 @@ export interface BackgroundMaintenanceConfig {
   sharedWorldWikiCaretaker: {
     batchSize: number;
   };
+  /** Bounded doing-mirror dispositions whose Letter delivery is redriven per tick. */
+  doingMirrorLetters: {
+    batchSize: number;
+  };
   /** Ambient-presence eligibility thresholds evaluated on the shared tick. */
   ambientPresence: {
     minIdleMinutes: number;
@@ -35,6 +39,9 @@ export interface BackgroundMaintenanceConfig {
 export const DEFAULT_BACKGROUND_MAINTENANCE_CONFIG: BackgroundMaintenanceConfig = {
   intervalMs: 3_600_000,
   sharedWorldWikiCaretaker: {
+    batchSize: 25,
+  },
+  doingMirrorLetters: {
     batchSize: 25,
   },
   ambientPresence: {
@@ -85,6 +92,17 @@ export function validateBackgroundMaintenanceConfig(
     `${sourcePath}.backgroundMaintenance.sharedWorldWikiCaretaker`,
     { errorPrefix: 'Invalid scheduler config' },
   );
+  if (!isRecord(raw.doingMirrorLetters)) {
+    throw new Error(
+      `Invalid scheduler config at ${sourcePath}: backgroundMaintenance.doingMirrorLetters must be an object`,
+    );
+  }
+  assertNoUnknownKeys(
+    raw.doingMirrorLetters,
+    ['batchSize'],
+    `${sourcePath}.backgroundMaintenance.doingMirrorLetters`,
+    { errorPrefix: 'Invalid scheduler config' },
+  );
   if (!isRecord(raw.concernGrooming)) {
     throw new Error(
       `Invalid scheduler config at ${sourcePath}: backgroundMaintenance.concernGrooming must be an object`,
@@ -96,6 +114,13 @@ export function validateBackgroundMaintenanceConfig(
       batchSize: toPositiveInteger(
         raw.sharedWorldWikiCaretaker.batchSize,
         'backgroundMaintenance.sharedWorldWikiCaretaker.batchSize',
+        1,
+      ),
+    },
+    doingMirrorLetters: {
+      batchSize: toPositiveInteger(
+        raw.doingMirrorLetters.batchSize,
+        'backgroundMaintenance.doingMirrorLetters.batchSize',
         1,
       ),
     },

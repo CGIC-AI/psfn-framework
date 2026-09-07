@@ -79,7 +79,7 @@ describe('agent core runtime builder', () => {
     const retrieverEnd = memoryRuntime.indexOf('const extractorFormationOptions');
 
     expect(coreRuntimeSource).toContain('createProductionAutomataBusWorkerAccess({');
-    expect(coreRuntimeSource).toContain('createSubagentAutomataLifecycleAdapter({');
+    expect(coreRuntimeSource).toContain('createAutomataTerminalLifecycleAdapter({');
     expect(coreRuntimeSource).toContain('createBackgroundWorkAutomataLifecycle(');
     expect(coreRuntimeSource).toContain('backgroundWorkAutomataLifecycle:');
     expect(coreRuntimeSource).toContain('automataBusWorkerAccess: automataBus?.workerAccess');

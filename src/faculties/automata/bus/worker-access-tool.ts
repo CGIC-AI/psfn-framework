@@ -137,10 +137,21 @@ async function dispatchOperation(
   }
 }
 
+/**
+ * One completed governed Bus operation. The governed lifecycle wrapper uses
+ * these to decide whether a run left a real finding or must record a typed
+ * no-finding terminal; nothing model-authored crosses this seam.
+ */
+export interface AutomataBusToolObservation {
+  action: AutomataBusToolAction;
+  status: 'ok' | 'failed';
+}
+
 export function createAutomataBusTool(input: {
   access: AutomataBusWorkerAccess;
   scope: AutomataBusWorkerScope;
   allowedActions?: readonly AutomataBusToolAction[];
+  observe?: (observation: AutomataBusToolObservation) => void;
 }): SubstrateAgentTool {
   if (!isAutomataBusWorkerEligible(input.access, input.scope.automatonClass)) {
     throw new Error(`Automata Bus tool is not eligible for ${input.scope.automatonClass}`);
@@ -155,14 +166,21 @@ export function createAutomataBusTool(input: {
     description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.automata_bus,
     parameters: automataBusToolParametersForActions(allowedActions),
     execute: async (_toolCallId, params: unknown) => {
+      let observed: AutomataBusToolAction | undefined;
       try {
         const operation = normalizeAutomataBusWorkerOperation(params, access.bounds);
         if (!allowedActionSet.has(operation.action)) {
           throw new Error(`automata_bus action=${operation.action} is not allowed for this worker`);
         }
+        observed = operation.action;
         const result = await dispatchOperation(access.port, scope, operation);
-        return textResult(boundedResult({ action: operation.action, result }, access.bounds.maxToolResultChars));
+        const rendered = textResult(
+          boundedResult({ action: operation.action, result }, access.bounds.maxToolResultChars),
+        );
+        input.observe?.({ action: operation.action, status: 'ok' });
+        return rendered;
       } catch (error) {
+        if (observed) input.observe?.({ action: observed, status: 'failed' });
         return textResultWithError(boundedError(error, access.bounds.maxToolResultChars), true);
       }
     },

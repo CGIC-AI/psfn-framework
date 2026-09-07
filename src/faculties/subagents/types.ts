@@ -5,10 +5,10 @@ import type { LLMWorkSpec, SubstrateMessage, WyomingRoutingMetadata } from '../.
 import type { GatewayRoutingEnvelope } from '../../shared/routing/envelope.js';
 import type { AutomataArtifactRef } from '../automata/registry-contract.js';
 import type {
-  SubagentAutomataLifecycleDelivery,
-  SubagentAutomataRunInspection,
-  SubagentAutomataLineage,
-} from './automata-lifecycle.js';
+  AutomataTerminalLifecycleDelivery,
+  AutomataWorkerRunInspection,
+  AutomataWorkerLineage,
+} from '../automata/terminal-lifecycle.js';
 
 export type SubagentTaskLifecycleState = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
 
@@ -139,7 +139,7 @@ export interface SubagentTaskRecord {
   requiredCapabilities: string[];
   sourceContext?: SubagentExecutionSourceContext;
   /** Durable run/task/session identity shared by roster, discovery, and Bus. */
-  lineage?: SubagentAutomataLineage;
+  lineage?: AutomataWorkerLineage;
   /** Durable references only; never transcript or reasoning content. */
   linkedRefs?: AutomataArtifactRef[];
 }
@@ -164,7 +164,7 @@ export interface SubagentResult {
   /** Terminal lifecycle delivery, reported separately from the worker outcome. */
   completionHandoff: CompletionHandoffDelivery;
   /** Durable run/Bus terminal delivery, independent of the parent notice path. */
-  automataLifecycle?: SubagentAutomataLifecycleDelivery;
+  automataLifecycle?: AutomataTerminalLifecycleDelivery;
   stateReason: string;
   failureReason?: string;
   /**
@@ -211,8 +211,8 @@ export interface SubagentRuntimeTaskDetail {
 
 export interface SubagentDurableTaskInspection {
   task: SubagentTaskRecord;
-  lineage: SubagentAutomataLineage;
-  bus?: SubagentAutomataRunInspection;
+  lineage: AutomataWorkerLineage;
+  bus?: AutomataWorkerRunInspection;
   rawSession: {
     separatelyGoverned: true;
     sessionIds: string[];

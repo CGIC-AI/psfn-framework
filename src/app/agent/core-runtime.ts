@@ -176,11 +176,11 @@ import {
   CanonicalAutomataBusWriter,
   automataBusWorkerBoundsFromOwnerPolicy,
   createProductionAutomataBusWorkerAccess,
-  createSubagentAutomataLifecycleAdapter,
+  createAutomataTerminalLifecycleAdapter,
 } from '../../faculties/automata/bus/production-worker-adapter.js';
 import { createBackgroundWorkAutomataLifecycle } from './automata-background-work-lifecycle.js';
 import type { AutomataBusWorkerAccess } from '../../faculties/automata/bus/worker-access.js';
-import type { SubagentAutomataLifecyclePort } from '../../faculties/subagents/automata-lifecycle.js';
+import type { AutomataTerminalLifecyclePort } from '../../faculties/automata/terminal-lifecycle.js';
 import type { PostgresAutomataRetentionStore } from '../../faculties/automata/retention-postgres-store.js';
 import type { PostgresExactSessionPurgeSagaStore } from '../../persistence/postgres/automata-exact-session-purge-store.js';
 import type { LetterStorePort } from '../../core/letters/contracts.js';
@@ -319,7 +319,7 @@ export interface AgentCoreRuntime {
   automataBus?: {
     runtime: AutomataBusProductionRuntime;
     workerAccess: AutomataBusWorkerAccess;
-    lifecycle: SubagentAutomataLifecyclePort;
+    lifecycle: AutomataTerminalLifecyclePort;
     reviewer: AutomataBusReviewerTaskPort;
   };
   automataRetention?: ProductionAutomataRetentionRuntime;
@@ -425,7 +425,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
               recentRunLimit: policy.recentRunLimit,
             }),
           }),
-          lifecycle: createSubagentAutomataLifecycleAdapter({
+          lifecycle: createAutomataTerminalLifecycleAdapter({
             companionId,
             registry: options.automataRuntime.registry,
             store: options.automataRuntime.store,

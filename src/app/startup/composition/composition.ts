@@ -73,7 +73,7 @@ import type { ShardWorkloadLifecyclePort } from '../../../system/capabilities/sh
 import type { AutomataRunRegistry } from '../../../faculties/automata/run-registry.js';
 import type { AutomataSessionClassificationService } from '../../../faculties/automata/session-classification.js';
 import type { AutomataBusWorkerAccess } from '../../../faculties/automata/bus/worker-access.js';
-import type { SubagentAutomataLifecyclePort } from '../../../faculties/subagents/automata-lifecycle.js';
+import type { AutomataTerminalLifecyclePort } from '../../../faculties/automata/terminal-lifecycle.js';
 import { ShardFoldReviewController } from '../../../faculties/shards/fold-review.js';
 import {
   createShardExecutionPort,
@@ -780,7 +780,7 @@ export interface ToolRuntimeOptions {
   automataRunRegistry?: AutomataRunRegistry;
   automataSessionClassification?: Pick<AutomataSessionClassificationService, 'classifyAtCreation'>;
   automataBusWorkerAccess?: AutomataBusWorkerAccess | null;
-  automataLifecyclePort?: SubagentAutomataLifecyclePort | null;
+  automataLifecyclePort?: AutomataTerminalLifecyclePort | null;
 }
 
 function requireExplicitShardParentIcpDelivery(

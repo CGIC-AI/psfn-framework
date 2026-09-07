@@ -23,8 +23,14 @@ import {
 import { loadChannelIndex } from '../../persistence/sessions/store/channel-index.js';
 import { indexedChannelId } from '../../persistence/sessions/store/session-index-keys.js';
 import { SENSITIVITY_LEVELS } from '../../system/trust/types.js';
+import { AUTOMATA_TERMINAL_HANDOFF_SOURCES } from './terminal-lifecycle.js';
 
 const TERMINAL_RUN_STATUSES = new Set(['completed', 'failed', 'cancelled']);
+const TERMINAL_EVENT_SOURCES = new Set<string>([
+  ...AUTOMATA_TERMINAL_HANDOFF_SOURCES,
+  'background-work-terminal-handoff',
+  'automata-reviewer-outcome',
+]);
 
 function hashRevision(value: unknown): string {
   return createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -33,9 +39,8 @@ function hashRevision(value: unknown): string {
 function terminalEvents(events: readonly AutomataBusEvent[]): AutomataBusEvent[] {
   return events.filter(event => (
     event.type === 'finding'
-    && (event.body.source === 'subagent-terminal-handoff'
-      || event.body.source === 'background-work-terminal-handoff'
-      || event.body.source === 'automata-reviewer-outcome')
+    && event.body.source !== undefined
+    && TERMINAL_EVENT_SOURCES.has(event.body.source)
   ));
 }
 

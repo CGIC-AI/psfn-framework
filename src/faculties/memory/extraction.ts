@@ -91,6 +91,7 @@ import {
 import { parseFactsXml } from './extraction/parser.js';
 import type { MemoryExtractionSessionPort } from './extraction/session-port.js';
 import type { AutomataBusWorkerAccess } from '../automata/bus/worker-access.js';
+import type { AutomataTerminalLifecyclePort } from '../automata/terminal-lifecycle.js';
 import type { AutomataRunRegistry } from '../automata/run-registry.js';
 import { projectFinalReflectionForExtraction } from './extraction/reflection-output.js';
 import type { BiographicalProfileStorePort } from './biographical/store-port.js';
@@ -156,6 +157,8 @@ export interface MemoryExtractorFormationOptions {
   automataBusWorkerAccess?: AutomataBusWorkerAccess | null;
   /** Authoritative durable run registry paired with the Bus worker adapter. */
   automataRunRegistry?: AutomataRunRegistry | null;
+  /** Durable terminal handoff adapter; receives references, never source text. */
+  automataTerminalLifecycle?: AutomataTerminalLifecyclePort | null;
   biographicalRebuild?: {
     profileStore: BiographicalProfileStorePort;
     companionSubject: Extract<BiographicalSubjectRef, { kind: 'companion' }>;
@@ -216,6 +219,7 @@ export class MemoryExtractor {
   private personaPreamble: PersonaPreamblePort | null = null;
   private automataBusWorkerAccess: AutomataBusWorkerAccess | null = null;
   private automataRunRegistry: AutomataRunRegistry | null = null;
+  private automataTerminalLifecycle: AutomataTerminalLifecyclePort | null = null;
   private biographicalRebuild: MemoryExtractorFormationOptions['biographicalRebuild'] = undefined;
 
   constructor(
@@ -285,6 +289,7 @@ export class MemoryExtractor {
     this.personaPreamble = formationOptions?.personaPreamble ?? null;
     this.automataBusWorkerAccess = formationOptions?.automataBusWorkerAccess ?? null;
     this.automataRunRegistry = formationOptions?.automataRunRegistry ?? null;
+    this.automataTerminalLifecycle = formationOptions?.automataTerminalLifecycle ?? null;
     this.biographicalRebuild = formationOptions?.biographicalRebuild;
   }
 
@@ -814,6 +819,7 @@ export class MemoryExtractor {
       personaPreamble: this.personaPreamble,
       automataBusWorkerAccess: this.automataBusWorkerAccess,
       automataRunRegistry: this.automataRunRegistry,
+      automataTerminalLifecycle: this.automataTerminalLifecycle,
       gateConfig: resolveGateConfig(this.runtimeConfig, {
         minImportance: this.minImportance,
         minConfidence: this.minConfidence,

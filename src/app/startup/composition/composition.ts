@@ -650,6 +650,8 @@ export interface MemoryRuntimeOptions {
   automataBusWorkerAccess?: AutomataBusWorkerAccess | null;
   /** Authoritative lifecycle for extraction workers admitted to the Bus. */
   automataRunRegistry?: AutomataRunRegistry | null;
+  /** Durable terminal handoff adapter shared with the bounded subagent class. */
+  automataTerminalLifecycle?: AutomataTerminalLifecyclePort | null;
 }
 
 export function wireMemoryRuntime(options: MemoryRuntimeOptions): MemoryExtractor {
@@ -703,6 +705,9 @@ export function wireMemoryRuntime(options: MemoryRuntimeOptions): MemoryExtracto
       : {}),
     ...(options.automataRunRegistry
       ? { automataRunRegistry: options.automataRunRegistry }
+      : {}),
+    ...(options.automataTerminalLifecycle
+      ? { automataTerminalLifecycle: options.automataTerminalLifecycle }
       : {}),
   };
   const memoryExtractor = options.config

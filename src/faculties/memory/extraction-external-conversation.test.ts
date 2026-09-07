@@ -5,7 +5,14 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { SessionEntry } from '../../core/session/types.js';
 import { SessionStore } from '../../persistence/sessions/store.js';
-import { MemoryExtractor, __test as extractionTestUtils } from './extraction.js';
+import {
+  MemoryExtractor,
+  __test as extractionTestUtils,
+  type MemoryExtractorFormationOptions,
+} from './extraction.js';
+import { createAutomatedConcernRuntime } from '../../core/intention/concern-candidates.js';
+import { createTestPostgresIntentionPorts } from '../../test-support/postgres-intention-ports.js';
+import { EventBus } from '../../shared/event-bus.js';
 import { ExtractionDrainRequeueError } from './extraction/drain-signal.js';
 import { RECOVERY_CONTEXT_MESSAGE_LIMIT } from './extraction/types.js';
 
@@ -19,7 +26,11 @@ afterEach(() => {
   for (const directory of tempDirs.splice(0)) rmSync(directory, { recursive: true, force: true });
 });
 
-function makeHarness() {
+function makeHarness(
+  externalSessionId = sessionId,
+  formationOptions?: MemoryExtractorFormationOptions,
+) {
+  const sessionId = externalSessionId;
   const directory = mkdtempSync(join(tmpdir(), 'psfn-external-extraction-'));
   tempDirs.push(directory);
   const sessionStore = new SessionStore(directory);
@@ -44,6 +55,8 @@ function makeHarness() {
     { extractionInterval: 10 },
     null,
     sessionStore,
+    null,
+    formationOptions,
   );
   const write = vi.fn().mockResolvedValue({ action: 'created', memory: { id: 'memory-fixture' } });
   fromAny(extractor).writer = { write };
@@ -74,6 +87,34 @@ function makeHarness() {
 }
 
 describe('external conversation extraction', () => {
+  it('completes external extraction after persisting a concern with full source evidence', async () => {
+    const { ports } = createTestPostgresIntentionPorts();
+    const runtime = await createAutomatedConcernRuntime({
+      eventBus: new EventBus(),
+      llmProvider: fromAny({ complete: vi.fn() }),
+      concernStore: ports.concernStore,
+    });
+    const externalSessionId = `api:hermes:${'b'.repeat(64)}`;
+    const harness = makeHarness(externalSessionId, { emitConcernCandidates: runtime.extractionSink });
+    harness.llmClient.complete.mockResolvedValue({ content: `<response><fact>
+<text>Alex plans to work on the cedar garden project tomorrow.</text>
+<type>semantic</type><importance>0.9</importance><confidence>0.95</confidence>
+</fact></response>` });
+    try {
+      const outputs = await harness.extract(harness.appendPair());
+      expect(outputs.memoryIds).toEqual(['memory-fixture']);
+      expect(outputs.concernIds).toHaveLength(1);
+      const concern = await ports.concernStore.getById(outputs.concernIds[0]!);
+      expect(concern?.candidateReviewSnapshot).toMatchObject({
+        channelId: externalSessionId,
+        triggerReason: 'external_conversation',
+        sourceRef: harness.write.mock.calls[0]![0].sourceRef,
+      });
+    } finally {
+      runtime.dispose();
+    }
+  });
+
   it('extracts a short pair in its immutable session and preserves external source evidence', async () => {
     const harness = makeHarness();
     const entries = harness.appendPair();

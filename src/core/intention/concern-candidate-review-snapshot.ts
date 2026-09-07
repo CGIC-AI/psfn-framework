@@ -71,6 +71,7 @@ export function parseDurableCandidateReviewSnapshot(
   const triggerReason = value.triggerReason;
   if (typeof triggerReason !== 'string' || ![
     'manual',
+    'external_conversation',
     'reflection_output',
     'response_turn',
     'interval',

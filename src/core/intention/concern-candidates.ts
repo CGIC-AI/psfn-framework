@@ -1235,7 +1235,10 @@ function buildEvidenceRefs(
     ref: String(id),
   }));
   if (turnId) refs.push({ kind: 'turn', ref: turnId });
-  refs.push({ kind: 'runtime', ref: sourceRef });
+  // Keep the full extraction locator in the durable review snapshot. Evidence
+  // refs carry its stable identity within the concern store's bounded contract.
+  const sourceHash = createHash('sha256').update(sourceRef).digest('hex');
+  refs.push({ kind: 'runtime', ref: `memory-extraction-source:${sourceHash}` });
   return refs;
 }
 

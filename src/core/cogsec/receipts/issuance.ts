@@ -30,23 +30,20 @@ import type { CogSecStructuralSurface } from '../../../shared/contracts/cogsec-m
 import { isIntakeSinkConsumableState } from '../../../shared/contracts/intake-envelope.js';
 import type { IntakeScreeningResult } from '../intake/screening.js';
 
-export const COGSEC_RECEIPT_SUPPRESSIONS = [
-  'deep_screening_pending',
-  'not_admitted',
-  'withheld',
-  'envelope_not_consumable',
-  'scan_truncated',
-  'scanner_error',
-  'injection_scorer_error',
-] as const;
-
-export type CogSecReceiptSuppression = typeof COGSEC_RECEIPT_SUPPRESSIONS[number];
+type CogSecReceiptSuppression =
+  | 'deep_screening_pending'
+  | 'not_admitted'
+  | 'withheld'
+  | 'envelope_not_consumable'
+  | 'scan_truncated'
+  | 'scanner_error'
+  | 'injection_scorer_error';
 
 /**
  * Why this screening result must NOT produce a receipt, or null when it is a
  * complete admission of fully screened bytes.
  */
-export function cogSecReceiptSuppression(
+function cogSecReceiptSuppression(
   result: IntakeScreeningResult,
 ): CogSecReceiptSuppression | null {
   if (result.postEscalation === 'pending') return 'deep_screening_pending';
@@ -60,7 +57,7 @@ export function cogSecReceiptSuppression(
 }
 
 /** Screening-instance facts a receipt is bound to, fixed for the process. */
-export interface CogSecReceiptIssuanceContext {
+interface CogSecReceiptIssuanceContext {
   issuer: CogSecReceiptIssuer;
   /** sha256 of the canonical effective intake policy. */
   policyDigest: string;

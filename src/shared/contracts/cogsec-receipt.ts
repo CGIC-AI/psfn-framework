@@ -46,10 +46,10 @@ import {
   type IntakeSourceRiskTier,
 } from './intake-envelope.js';
 
-export const COGSEC_RECEIPT_SCHEMA_VERSION = 1 as const;
+const COGSEC_RECEIPT_SCHEMA_VERSION = 1 as const;
 
 /** Shape/algorithm version of the screening-contract digest preimage. */
-export const COGSEC_SCREENING_CONTRACT_DIGEST_VERSION = 1 as const;
+const COGSEC_SCREENING_CONTRACT_DIGEST_VERSION = 1 as const;
 
 /**
  * The single issuer identity Core mints under: the CogSec intake firewall.
@@ -61,10 +61,10 @@ export const COGSEC_INTAKE_FIREWALL_ISSUER_ID = 'cogsec:intake-firewall';
 const SHA256_HEX_PATTERN = /^[a-f0-9]{64}$/u;
 
 /** Actions that ADMIT content. Quarantine and block never produce a receipt. */
-export const COGSEC_RECEIPT_ADMITTED_ACTIONS = ['pass', 'sanitize'] as const;
-export type CogSecReceiptAdmittedAction = typeof COGSEC_RECEIPT_ADMITTED_ACTIONS[number];
+const COGSEC_RECEIPT_ADMITTED_ACTIONS = ['pass', 'sanitize'] as const;
+type CogSecReceiptAdmittedAction = typeof COGSEC_RECEIPT_ADMITTED_ACTIONS[number];
 
-export function isCogSecReceiptAdmittedAction(
+function isCogSecReceiptAdmittedAction(
   value: unknown,
 ): value is CogSecReceiptAdmittedAction {
   return typeof value === 'string'
@@ -88,7 +88,7 @@ export interface CogSecReceiptIssuer {
  * output re-entering CogSec from an isolated derivation, naming the receipt of
  * the content it was derived FROM.
  */
-export type CogSecReceiptLineageStage = 'raw_intake' | 'l1_sanitize' | IntakeDerivationKind;
+type CogSecReceiptLineageStage = 'raw_intake' | 'l1_sanitize' | IntakeDerivationKind;
 
 export interface CogSecReceiptLineageStep {
   stage: CogSecReceiptLineageStage;
@@ -100,12 +100,12 @@ export interface CogSecReceiptLineageStep {
   parentReceiptId?: string;
 }
 
-export function isCogSecReceiptLineageStage(value: unknown): value is CogSecReceiptLineageStage {
+function isCogSecReceiptLineageStage(value: unknown): value is CogSecReceiptLineageStage {
   return value === 'raw_intake' || value === 'l1_sanitize' || isIntakeDerivationKind(value);
 }
 
 /** The screening verdict this receipt refers back to. */
-export interface CogSecReceiptVerdict {
+interface CogSecReceiptVerdict {
   /** The IntakeEnvelope whose journal holds the full decision evidence. */
   envelopeId: string;
   action: CogSecReceiptAdmittedAction;
@@ -182,7 +182,7 @@ export function cogSecContentSha256(content: string | Uint8Array): string {
     : createHash('sha256').update(content).digest('hex');
 }
 
-export function cogSecContentSizeBytes(content: string | Uint8Array): number {
+function cogSecContentSizeBytes(content: string | Uint8Array): number {
   return typeof content === 'string' ? Buffer.byteLength(content, 'utf8') : content.byteLength;
 }
 
@@ -272,7 +272,7 @@ export function createCogSecReceipt(input: CreateCogSecReceiptInput): CogSecRece
  * Verification recomputes it, so an edited verdict, expiry, or issuer is
  * detected without any trust in the transport that carried the receipt.
  */
-export function cogSecReceiptSha256(receipt: Omit<CogSecReceipt, 'receiptSha256'>): string {
+function cogSecReceiptSha256(receipt: Omit<CogSecReceipt, 'receiptSha256'>): string {
   return createHash('sha256')
     .update(canonicalJsonString(receipt, 'cogsec receipt'), 'utf8')
     .digest('hex');

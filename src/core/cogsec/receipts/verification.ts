@@ -17,22 +17,22 @@ import {
 } from '../../../shared/contracts/cogsec-receipt.js';
 import type { CogSecReceiptStorePort } from './contracts.js';
 
-export const COGSEC_RECEIPT_REFUSAL_REASONS = [
-  /** No receipt exists for these bytes under this screening contract. */
-  'not_found',
-  /** The receipt is structurally invalid or its self-binding digest is broken. */
-  'malformed',
-  /** The issuing authority is not in the caller's trusted issuer set. */
-  'unknown_issuer',
-  /** The receipt covers different bytes than the ones presented. */
-  'content_hash_mismatch',
-  /** The effective screening contract has drifted since issuance. */
-  'screening_contract_mismatch',
-  /** The receipt is at or past its expiry. */
-  'expired',
-] as const;
-
-export type CogSecReceiptRefusalReason = typeof COGSEC_RECEIPT_REFUSAL_REASONS[number];
+/**
+ * Why admission was refused:
+ * - `not_found`: no receipt for these bytes under this screening contract;
+ * - `malformed`: structurally invalid, or its self-binding digest is broken;
+ * - `unknown_issuer`: the issuing authority is not in the caller's trusted set;
+ * - `content_hash_mismatch`: the receipt covers different bytes;
+ * - `screening_contract_mismatch`: the effective contract drifted since issuance;
+ * - `expired`: the receipt is at or past its expiry.
+ */
+type CogSecReceiptRefusalReason =
+  | 'not_found'
+  | 'malformed'
+  | 'unknown_issuer'
+  | 'content_hash_mismatch'
+  | 'screening_contract_mismatch'
+  | 'expired';
 
 export type CogSecReceiptVerification =
   | { admitted: true; receipt: CogSecReceipt }

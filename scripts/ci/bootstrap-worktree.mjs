@@ -81,8 +81,38 @@ function hasIsolatedDependencies(repositoryRoot) {
     && !lstatSync(modulesPath).isSymbolicLink();
 }
 
+/**
+ * Resolve the npm CLI *JavaScript* entry so it can run under the exact Node
+ * binary. `<node bin>/npm` is a shell wrapper on some installs (mise, nvm
+ * shims), which Node cannot execute; prefer the npm_execpath the invoking npm
+ * exported, then the lib tree beside the binary, then the bin symlink.
+ */
+export function resolveNpmCliPath({
+  execPath = process.execPath,
+  env = process.env,
+  exists = existsSync,
+  realpath = realpathSync,
+} = {}) {
+  const fromEnv = typeof env.npm_execpath === 'string' ? env.npm_execpath.trim() : '';
+  if (fromEnv.endsWith('npm-cli.js') && exists(fromEnv)) return fromEnv;
+  const nodeBin = dirname(execPath);
+  const libEntry = join(nodeBin, '..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js');
+  if (exists(libEntry)) return libEntry;
+  const binEntry = join(nodeBin, 'npm');
+  if (!exists(binEntry)) {
+    throw new Error(`Cannot resolve the npm CLI next to ${execPath}; set npm_execpath to npm-cli.js.`);
+  }
+  const resolved = realpath(binEntry);
+  if (readFileSync(resolved, 'utf8').startsWith('#!/usr/bin/env bash')) {
+    throw new Error(
+      `${resolved} is a shell wrapper, not the npm CLI; set npm_execpath to npm-cli.js or install npm beside the Node binary.`,
+    );
+  }
+  return resolved;
+}
+
 function defaultRunNpm(args, { repositoryRoot }) {
-  const npmCli = realpathSync(join(dirname(process.execPath), 'npm'));
+  const npmCli = resolveNpmCliPath();
   const result = spawnSync(process.execPath, [npmCli, ...args], {
     cwd: repositoryRoot,
     env: process.env,

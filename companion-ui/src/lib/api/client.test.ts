@@ -3,6 +3,7 @@ import { buildSatelliteHello } from './auth.js';
 import {
   resolveHubWebSocketUrl,
   SatelliteHubClient,
+  type SatelliteHubSession,
   type SatelliteHubWebSocketLike,
 } from './client.js';
 
@@ -88,6 +89,46 @@ describe('satellite hub websocket client', () => {
       type: 'hello',
       capabilities: expect.any(Object),
     });
+  });
+
+  it('replaces the requested ceiling with the hub ceiling from session.ready', async () => {
+    const socket = new FakeSocket();
+    const client = new SatelliteHubClient({
+      url: 'ws://hub.local:8787/',
+      webSocketFactory: () => socket,
+    });
+    const sessions: SatelliteHubSession[] = [];
+    client.on('session', (session) => sessions.push(session));
+
+    const connecting = client.connect();
+    socket.open();
+    await connecting;
+
+    // The hello we sent asked for `device_location`; the hub's ceiling does not grant it.
+    expect(client.snapshot().hello.capabilities.input).toContain('device_location');
+
+    socket.message({
+      type: 'session.ready',
+      sessionId: 'realtime:client-9f2ab310',
+      channelId: 'satellite.endpoint:realtime:client-9f2ab310',
+      deviceId: 'client-9f2ab310',
+      deviceName: 'Opanhome TS Client',
+      satelliteId: 'client-9f2ab310',
+      audioFormat: 'text_only',
+      capabilities: {
+        input: ['microphone_pcm', 'final_transcript', 'text', 'wake_event'],
+        output: ['text', 'subtitle'],
+        control: ['interrupt', 'presence', 'session_attach'],
+        safety: [],
+      },
+    });
+    await flushAsyncMessage();
+
+    expect(client.snapshot().session.capabilities?.input)
+      .toEqual(['microphone_pcm', 'final_transcript', 'text', 'wake_event']);
+    expect(sessions.at(-1)?.capabilities?.output).toEqual(['text', 'subtitle']);
+    // Gated on the hub ceiling, not on what the browser asked for.
+    expect(client.supportsDeviceLocation()).toBe(false);
   });
 
   it('surfaces session identity from hello ack without owning it', async () => {

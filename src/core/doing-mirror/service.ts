@@ -47,10 +47,13 @@ function openDisposition(source: DoingMirrorSourceItem): DoingMirrorDisposition 
   };
 }
 
+/**
+ * psfn-framework-p4rmp widened `open` beyond `considering`: the legacy Garden
+ * wishlist routes let the Partner finish or refuse a wish they never explicitly
+ * started considering, and forcing an intermediate hop there would emit two
+ * dispositions and two Letters for one operator action. Terminal stays terminal.
+ */
 function assertTransition(from: DoingMirrorState, to: Exclude<DoingMirrorState, 'open'>): void {
-  if (from === 'open' && to !== 'considering') {
-    throw new Error('open disposition can only move to considering');
-  }
   if (from === 'considering' && to !== 'done' && to !== 'declined') {
     throw new Error('considering disposition can only move to done or declined');
   }
@@ -275,7 +278,24 @@ export class DoingMirrorService {
     return { source: current.source, disposition: await this.deliver(reset) };
   }
 
+  /**
+   * Converge the source item's own lifecycle with the recorded disposition
+   * before the Letter is placed, so a failure here leaves the row pending and
+   * the drain retries both halves together instead of leaving the two stores
+   * permanently disagreeing.
+   */
+  private async applySourceDisposition(record: DoingMirrorDispositionRecord): Promise<void> {
+    const source = this.requireSource(record.itemType);
+    if (!source.applyDisposition) return;
+    await source.applyDisposition({
+      itemId: record.itemId,
+      state: record.state,
+      ...(record.reason ? { reason: record.reason } : {}),
+    });
+  }
+
   private async deliver(record: DoingMirrorDispositionRecord): Promise<DoingMirrorDispositionRecord> {
+    await this.applySourceDisposition(record);
     await this.options.letters.compose({
       id: record.notification.letterId,
       author: 'partner',

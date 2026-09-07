@@ -21,13 +21,15 @@ export function listDoingMirrorItems(): Promise<DoingMirrorListResponse> {
 export function transitionDoingMirrorItem(
   input: DoingMirrorTransitionInput,
 ): Promise<DoingMirrorMutationResponse> {
-  const path = `/api/admin/doing-mirror/${encodeURIComponent(input.itemType)}/${encodeURIComponent(input.itemId)}`;
-  return apiPost<DoingMirrorMutationResponse>(path, {
-    state: input.state,
-    ...(input.reason ? { reason: input.reason } : {}),
-    subject: input.subject,
-    body: input.body,
-  });
+  return apiPost<DoingMirrorMutationResponse>(
+    `/api/admin/doing-mirror/${encodeURIComponent(input.itemType)}/${encodeURIComponent(input.itemId)}`,
+    {
+      state: input.state,
+      ...(input.reason ? { reason: input.reason } : {}),
+      subject: input.subject,
+      body: input.body,
+    },
+  );
 }
 
 /**
@@ -38,8 +40,9 @@ export function retryDoingMirrorLetter(
   itemType: DoingMirrorItem['source']['itemType'],
   itemId: string,
 ): Promise<DoingMirrorMutationResponse> {
-  const path = `/api/admin/doing-mirror/${encodeURIComponent(itemType)}/${encodeURIComponent(itemId)}/retry-letter`;
-  return apiPost<DoingMirrorMutationResponse>(path, {});
+  return apiPost<DoingMirrorMutationResponse>(
+    `/api/admin/doing-mirror/${encodeURIComponent(itemType)}/${encodeURIComponent(itemId)}/retry-letter`,
+  );
 }
 
 export type { DoingMirrorItem, DoingMirrorTransitionInput };

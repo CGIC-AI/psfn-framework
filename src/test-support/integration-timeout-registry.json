@@ -14,6 +14,13 @@
       "note": "S12A letter lifecycle and restart persistence against the real containerized PostgreSQL harness. Focused local wall baseline was 8.194s on 2026-08-30; 120s preserves headroom for cold image startup and shared harness-slot contention."
     },
     {
+      "file": "src/operator/garden/services/wishlist-disposition.postgres.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": 600,
+      "baselineSource": "measured",
+      "note": "psfn-framework-p4rmp: legacy Garden wishlist routes over the doing-mirror lifecycle plus the pre-lifecycle closed-wish reconcile, against the real containerized PostgreSQL harness. Focused local full-file wall baseline was 0.56s on 2026-09-07 with a warm harness slot; 120s matches the repo integration cap and preserves headroom for cold image startup and shared harness-slot contention."
+    },
+    {
       "file": "src/persistence/postgres/doing-mirror-store.integration.test.ts",
       "timeoutMs": 120000,
       "measuredBaselineMs": 1450,

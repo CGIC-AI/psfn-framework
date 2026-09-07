@@ -479,12 +479,14 @@ const CLIENT_MUTATION_FIXTURES: readonly ClientMutationFixture[] = [
   {
     routeId: 'POST /api/admin/wishlist/:wishId/acknowledge',
     path: '/api/admin/wishlist/wish%20one/acknowledge',
-    invoke: () => acknowledgeWish('wish one'),
+    body: '{"subject":"About your wish","body":"I have read it."}',
+    invoke: () => acknowledgeWish('wish one', { subject: 'About your wish', body: 'I have read it.' }),
   },
   {
     routeId: 'POST /api/admin/wishlist/:wishId/done',
     path: '/api/admin/wishlist/wish%20one/done',
-    invoke: () => completeWish('wish one'),
+    body: '{"subject":"It is done","body":"I finished this today."}',
+    invoke: () => completeWish('wish one', { subject: 'It is done', body: 'I finished this today.' }),
   },
   {
     routeId: 'POST /api/admin/action-pipe/actions/:actionRef/cancel',

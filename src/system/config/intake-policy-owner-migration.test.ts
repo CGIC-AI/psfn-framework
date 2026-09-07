@@ -386,13 +386,13 @@ describe('intake policy owner migration', () => {
       status: 'planned',
       fromSchemaVersion: 5,
       toSchemaVersion: INTAKE_POLICY_SCHEMA_VERSION,
-      addedPaths: ['chatBodyHandling', 'surfacePostures'],
+      addedPaths: ['chatBodyHandling', 'surfacePostures', 'receipts'],
       updatedPaths: ['l2Screener.mandatoryTiers'],
     });
     expect(migrateIntakePolicyOwner({ dataDir, apply: true })).toMatchObject({
       status: 'applied',
       fromSchemaVersion: 5,
-      addedPaths: ['chatBodyHandling', 'surfacePostures'],
+      addedPaths: ['chatBodyHandling', 'surfacePostures', 'receipts'],
       updatedPaths: ['l2Screener.mandatoryTiers'],
     });
     expect(loadIntakePolicyConfig(dataDir).chatBodyHandling).toEqual({

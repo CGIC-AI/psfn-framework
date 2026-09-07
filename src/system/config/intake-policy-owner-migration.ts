@@ -25,6 +25,8 @@ import {
   INTAKE_POLICY_FILE_NAME,
   INTAKE_POLICY_SEED_FILE_NAME,
   INTAKE_POLICY_SCHEMA_VERSION,
+  validateReceipts,
+  type IntakeReceiptsPolicyConfig,
   validateIntakePolicy,
   validateChatBodyHandling,
   validateScreeningPool,
@@ -121,6 +123,22 @@ function loadSeedScreeningPoolPolicy(seedDir: string): IntakeScreeningPoolPolicy
     throw new Error(`Invalid intake policy seed at ${seedPath}: expected object`);
   }
   return validateScreeningPool(raw.screeningPool, seedPath);
+}
+
+function loadSeedReceiptsPolicy(seedDir: string): IntakeReceiptsPolicyConfig {
+  const seedPath = join(seedDir, INTAKE_POLICY_SEED_FILE_NAME);
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(seedPath, 'utf8')) as unknown;
+  } catch (error) {
+    throw new Error(
+      `Cannot load intake receipts migration policy from ${seedPath}: ${String(error)}`,
+    );
+  }
+  if (!isRecord(raw)) {
+    throw new Error(`Invalid intake policy seed at ${seedPath}: expected object`);
+  }
+  return validateReceipts(raw.receipts, seedPath);
 }
 
 function loadSeedChatBodyHandlingPolicy(seedDir: string): IntakeChatBodyHandlingPolicyConfig {
@@ -229,6 +247,26 @@ function ensureScreeningPoolPresent(
   const next = structuredClone(candidate);
   next.screeningPool = loadSeedScreeningPoolPolicy(seedDir);
   return { candidate: next, addedPaths: ['screeningPool'] };
+}
+
+/**
+ * Owners written before content-addressed admission receipts carry no
+ * `receipts` section. Seed it rather than failing the owner closed: the
+ * section only bounds how long an admission proof may be reused, and its
+ * absence would otherwise block startup on an otherwise valid policy.
+ */
+function ensureReceiptsPresent(
+  candidate: Record<string, unknown>,
+  filePath: string,
+  seedDir: string,
+): { candidate: Record<string, unknown>; addedPaths: string[] } {
+  if (isRecord(candidate.receipts)) {
+    validateReceipts(candidate.receipts, filePath);
+    return { candidate, addedPaths: [] };
+  }
+  const next = structuredClone(candidate);
+  next.receipts = loadSeedReceiptsPolicy(seedDir);
+  return { candidate: next, addedPaths: ['receipts'] };
 }
 
 function removeRetiredScreenerModelKeys(
@@ -396,13 +434,19 @@ export function migrateIntakePolicyOwner(
         withChatBodyHandling.candidate,
         options.seedDir ?? process.env.CONFIG_DIR ?? './config',
       );
-      const retired = removeRetiredScreenerModelKeys(withSurfacePostures.candidate);
+      const withReceipts = ensureReceiptsPresent(
+        withSurfacePostures.candidate,
+        filePath,
+        options.seedDir ?? process.env.CONFIG_DIR ?? './config',
+      );
+      const retired = removeRetiredScreenerModelKeys(withReceipts.candidate);
       candidate = retired.candidate;
       const addedPaths = [
         ...repaired.addedPaths,
         ...withScreeningPool.addedPaths,
         ...withChatBodyHandling.addedPaths,
         ...withSurfacePostures.addedPaths,
+        ...withReceipts.addedPaths,
       ];
       const updatedPaths: string[] = [];
       if (modeRemapped.updatedMode) {
@@ -517,6 +561,13 @@ export function migrateIntakePolicyOwner(
     );
     Object.assign(upgraded, withSurfacePostures.candidate);
     addedPaths.push(...withSurfacePostures.addedPaths);
+    const withReceipts = ensureReceiptsPresent(
+      upgraded,
+      filePath,
+      options.seedDir ?? process.env.CONFIG_DIR ?? './config',
+    );
+    Object.assign(upgraded, withReceipts.candidate);
+    addedPaths.push(...withReceipts.addedPaths);
     const upgradedSinks = structuredClone(raw.sinkGates.sinks);
     if (raw.schemaVersion === 1) {
       upgradedSinks.skill_write = createSkillWriteSinkRule();

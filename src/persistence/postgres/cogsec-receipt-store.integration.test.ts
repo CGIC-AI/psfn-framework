@@ -14,6 +14,7 @@ import {
 import {
   COGSEC_INTAKE_FIREWALL_ISSUER_ID,
   cogSecContentSha256,
+  createCogSecReceipt,
   type CogSecReceipt,
 } from '../../shared/contracts/cogsec-receipt.js';
 import { resolveAdmittedCogSecReceipt } from '../../core/cogsec/receipts/verification.js';
@@ -136,10 +137,29 @@ describe('PostgresCogSecReceiptStore', () => {
         nowMs: issued.expiresAtMs,
       })).resolves.toMatchObject({ admitted: false, reason: 'expired' });
 
-      // Re-recording the identical receipt is idempotent; a different receipt
+      // Re-recording the identical receipt is idempotent; a DIFFERENT receipt
       // under the same id is a hard failure rather than a silent drop.
       await store.record(issued);
       expect(await store.getById(issued.receiptId)).toEqual(issued);
+      const colliding = createCogSecReceipt({
+        receiptId: issued.receiptId,
+        issuer: issued.issuer,
+        issuedAtMs: issued.issuedAtMs,
+        expiresAtMs: issued.expiresAtMs,
+        admittedContent: 'entirely different admitted bytes',
+        rawContent: 'entirely different admitted bytes',
+        screeningContractDigest: issued.screeningContractDigest,
+        verdict: issued.verdict,
+        lineage: [{
+          stage: 'raw_intake',
+          outputSha256: cogSecContentSha256('entirely different admitted bytes'),
+          transformId: 'intake',
+        }],
+      });
+      await expect(store.record(colliding))
+        .rejects.toThrow(/already exists with different contents/);
+      expect(await store.getById(issued.receiptId)).toEqual(issued);
+      // A receipt whose digest was forged in flight never reaches the table.
       await expect(store.record({ ...issued, receiptSha256: cogSecContentSha256('forged') }))
         .rejects.toThrow(/digest does not bind its fields/);
     } finally {

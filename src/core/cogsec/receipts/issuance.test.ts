@@ -10,6 +10,7 @@ import {
   cogSecContentSha256,
   type CogSecReceipt,
 } from '../../../shared/contracts/cogsec-receipt.js';
+import { INTAKE_L1_SCAN_MAX_CHARS } from '../../../shared/contracts/intake-envelope.js';
 import {
   validateIntakePolicy,
   type IntakeFirewallMode,
@@ -143,6 +144,16 @@ describe('CogSec admission receipt issuance', () => {
       scope: 'context' as const,
     });
     expect(result.report.results).toEqual([]);
+    expect(result.receipt).toBeUndefined();
+    expect(recorded).toEqual([]);
+  });
+
+  it('issues nothing when the scan was truncated, so partly screened bytes stay unproved', async () => {
+    const { store, recorded } = recorder();
+    const oversized = 'x'.repeat(INTAKE_L1_SCAN_MAX_CHARS + 1);
+    const result = await makeService('strict', store).screen(oversized, documentInput);
+    expect(result.report.truncated).toBe(true);
+    expect(result.action).toBe('pass');
     expect(result.receipt).toBeUndefined();
     expect(recorded).toEqual([]);
   });

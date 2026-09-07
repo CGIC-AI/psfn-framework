@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
+import { createComponentLogger } from '../../shared/logger.js';
+
 import type { LetterService } from '../letters/service.js';
 import {
   type DoingMirrorDisposition,
@@ -12,6 +14,8 @@ import {
   type DoingMirrorStorePort,
   type DoingMirrorTransitionInput,
 } from './contracts.js';
+
+const log = createComponentLogger('DoingMirror');
 
 export interface DoingMirrorServiceOptions {
   store: DoingMirrorStorePort;
@@ -187,13 +191,23 @@ export class DoingMirrorService {
         await this.deliver(record);
         drained += 1;
       } catch (error) {
-        failures.push(error instanceof Error ? error : new Error(String(error)));
+        const normalized = error instanceof Error ? error : new Error(String(error));
+        log.error('doing-mirror pending Letter redelivery failed', {
+          itemType: record.itemType,
+          itemId: record.itemId,
+          letterId: record.notification.letterId,
+          error: normalized.message,
+        });
+        failures.push(normalized);
       }
     }
     if (failures.length > 0) {
+      // The bundled maintenance lane logs only the top-level message, so carry
+      // the per-row causes into it as well as into the AggregateError.
       throw new AggregateError(
         failures,
-        `doing-mirror redelivered ${drained} of ${pending.length} pending disposition letters`,
+        `doing-mirror redelivered ${drained} of ${pending.length} pending disposition letters; `
+        + `failures: ${failures.map(failure => failure.message).join('; ')}`,
       );
     }
     return { pending: pending.length, drained };

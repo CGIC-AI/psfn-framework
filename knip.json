@@ -33,6 +33,7 @@
         "sherpa-onnx-node"
       ],
       "ignoreBinaries": [
+        "bd",
         "gh",
         "kubectl",
         "rg",

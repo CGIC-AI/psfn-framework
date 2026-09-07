@@ -386,6 +386,67 @@ never back a ClusterIssuer. */ -}}
 {{- fail "satelliteHub.homeAssistant.egressPort must be within 1-65535" -}}
 {{- end -}}
 {{- end -}}
+{{- /* Eidoverse visitor path. loadEidoverseMcpConfig fails closed on partial
+     configuration, so reject it here instead of shipping a crash-looping pod. */}}
+{{- if and .Values.satelliteHub.eidoverse.enabled (not .Values.satelliteHub.enabled) -}}
+{{- fail "satelliteHub.eidoverse.enabled=true requires satelliteHub.enabled=true" -}}
+{{- end -}}
+{{- if .Values.satelliteHub.eidoverse.enabled -}}
+{{- $eidoverse := .Values.satelliteHub.eidoverse -}}
+{{- if not (trim ($eidoverse.command | default "")) -}}
+{{- fail "satelliteHub.eidoverse.command is required when satelliteHub.eidoverse.enabled=true" -}}
+{{- end -}}
+{{- if not (trim ($eidoverse.worldName | default "")) -}}
+{{- fail "satelliteHub.eidoverse.worldName is required when satelliteHub.eidoverse.enabled=true" -}}
+{{- end -}}
+{{- if not (trim ($eidoverse.agentName | default "")) -}}
+{{- fail "satelliteHub.eidoverse.agentName is required when satelliteHub.eidoverse.enabled=true" -}}
+{{- end -}}
+{{- $worldUrl := trim ($eidoverse.worldUrl | default "") -}}
+{{- if not $worldUrl -}}
+{{- fail "satelliteHub.eidoverse.worldUrl is required when satelliteHub.eidoverse.enabled=true" -}}
+{{- end -}}
+{{- if not (or (hasPrefix "ws://" $worldUrl) (hasPrefix "wss://" $worldUrl)) -}}
+{{- fail "satelliteHub.eidoverse.worldUrl must be a ws:// or wss:// URL" -}}
+{{- end -}}
+{{- if contains "@" (trimPrefix "wss://" (trimPrefix "ws://" $worldUrl)) -}}
+{{- fail "satelliteHub.eidoverse.worldUrl must be credential-free (no user:password@host)" -}}
+{{- end -}}
+{{- if not (regexMatch "^[A-Z][A-Z0-9_]*$" (trim ($eidoverse.tokenRef | default ""))) -}}
+{{- fail "satelliteHub.eidoverse.tokenRef must name an environment credential matching ^[A-Z][A-Z0-9_]*$" -}}
+{{- end -}}
+{{- if ne (trim ($eidoverse.tokenRef | default "")) (trim ($.Values.secrets.keys.eidoverseJoinToken | default "")) -}}
+{{- fail "satelliteHub.eidoverse.tokenRef must equal secrets.keys.eidoverseJoinToken so the hub can dereference the join token" -}}
+{{- end -}}
+{{- range $field := list "reconnectBaseMs" "reconnectMaxMs" "reconnectMaxAttempts" "requestTimeoutMs" "pendingPingsPollIntervalMs" "ambientSayDebounceMs" -}}
+{{- if lt (int (index $eidoverse $field)) 1 -}}
+{{- fail (printf "satelliteHub.eidoverse.%s must be a positive integer" $field) -}}
+{{- end -}}
+{{- end -}}
+{{- if lt (int $eidoverse.reconnectMaxMs) (int $eidoverse.reconnectBaseMs) -}}
+{{- fail "satelliteHub.eidoverse.reconnectMaxMs must be >= satelliteHub.eidoverse.reconnectBaseMs" -}}
+{{- end -}}
+{{- if or (lt (int $eidoverse.egressPort) 1) (gt (int $eidoverse.egressPort) 65535) -}}
+{{- fail "satelliteHub.eidoverse.egressPort must be within 1-65535" -}}
+{{- end -}}
+{{- if and $.Values.networkPolicy.enabled (eq (len $eidoverse.egressCIDRs) 0) (not $.Values.networkPolicy.satelliteHub.allowExternalEgress) -}}
+{{- fail "satelliteHub.eidoverse.egressCIDRs must list the Eidoverse world host/subnet when networkPolicy.enabled=true and networkPolicy.satelliteHub.allowExternalEgress=false" -}}
+{{- end -}}
+{{- if $eidoverse.placeMap.enabled -}}
+{{- if eq (len $eidoverse.placeMap.worlds) 0 -}}
+{{- fail "satelliteHub.eidoverse.placeMap.worlds must contain at least one world when satelliteHub.eidoverse.placeMap.enabled=true" -}}
+{{- end -}}
+{{- if not (hasPrefix "/" ($eidoverse.placeMap.mountPath | default "")) -}}
+{{- fail "satelliteHub.eidoverse.placeMap.mountPath must be an absolute container path" -}}
+{{- end -}}
+{{- end -}}
+{{- if and $.Values.secrets.create (not $.Values.secrets.existingSecret) (not $.Values.secrets.allowMissingRequired) -}}
+{{- $_ := required "secrets.values.eidoverseJoinToken is required for satelliteHub.eidoverse.enabled=true when secrets.allowMissingRequired=false" $.Values.secrets.values.eidoverseJoinToken -}}
+{{- end -}}
+{{- end -}}
+{{- if and .Values.satelliteHub.eidoverse.placeMap.enabled (not .Values.satelliteHub.eidoverse.enabled) -}}
+{{- fail "satelliteHub.eidoverse.placeMap.enabled=true requires satelliteHub.eidoverse.enabled=true" -}}
+{{- end -}}
 {{- if and .Values.satelliteHub.enabled (not .Values.satelliteHub.textOnly) .Values.secrets.create (not .Values.secrets.existingSecret) (not .Values.secrets.allowMissingRequired) -}}
 {{- $_ := required "secrets.values.deepgramApiKey is required for satelliteHub.enabled=true with satelliteHub.textOnly=false when secrets.allowMissingRequired=false" .Values.secrets.values.deepgramApiKey -}}
 {{- $_ := required "secrets.values.elevenLabsApiKey is required for satelliteHub.enabled=true with satelliteHub.textOnly=false when secrets.allowMissingRequired=false" .Values.secrets.values.elevenLabsApiKey -}}

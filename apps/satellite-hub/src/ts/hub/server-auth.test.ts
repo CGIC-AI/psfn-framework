@@ -47,6 +47,34 @@ test("realtime hub requires registry authentication before accepting messages", 
   await server.close();
 });
 
+test("browser hello without device authority keeps the hub-minted identity when no registry is configured", async () => {
+  const server = new RealtimeHubServer({ ...config(), deviceRegistry: null }, { agent: agent() });
+  await server.start();
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  const socket = new WebSocket(`ws://127.0.0.1:${address.port}`);
+  const messages: HubToClientMessage[] = [];
+  socket.on("message", (raw) => messages.push(JSON.parse(raw.toString()) as HubToClientMessage));
+  await new Promise<void>((resolve) => socket.once("open", resolve));
+  // companion-ui's hello carries capabilities only; deviceId/deviceName are hub authority.
+  socket.send(JSON.stringify({
+    type: "hello",
+    capabilities: { input: ["text"], output: ["text"], control: [], safety: [] },
+  }));
+  await waitFor(() => messages.some((message) => message.type === "hello.ack"));
+  const ack = messages.find((message) => message.type === "hello.ack");
+  assert.ok(ack && ack.type === "hello.ack");
+  assert.match(ack.deviceId, /^client-[0-9a-f]+$/);
+  assert.equal(ack.sessionId, `realtime:${ack.deviceId}`);
+  assert.equal(ack.deviceName, "Opanhome TS Client");
+  const ready = messages.find((message) => message.type === "session.ready");
+  assert.ok(ready && ready.type === "session.ready");
+  assert.equal(ready.deviceId, ack.deviceId);
+  socket.close();
+  await new Promise<void>((resolve) => socket.once("close", () => resolve()));
+  await server.close();
+});
+
 test("authenticated hello uses registry-owned identity and bounded capabilities", async () => {
   const server = new RealtimeHubServer(config(), { agent: agent() });
   await server.start();

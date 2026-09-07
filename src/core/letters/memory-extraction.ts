@@ -54,15 +54,30 @@ export function wireLetterMemoryExtraction(options: LetterMemoryExtractionWiring
   );
 
   options.letters.bindMemoryTrigger((event) => {
-    const result = options.actions.enqueue({
-      id: `${LETTER_MEMORY_EXTRACTION_ACTION_KIND}:${event.event}:${event.letterId}`,
-      kind: LETTER_MEMORY_EXTRACTION_ACTION_KIND,
-      payload: { letterEvent: event.event, letterId: event.letterId },
-      dedupeKey: LETTER_MEMORY_EXTRACTION_DEDUPE_KEY,
-      channelId: LETTER_L0_CHANNEL_ID,
-      sourceMessageId: event.letterId,
-      inferredAt: event.at,
-    });
+    let result: ReturnType<PostTurnActionRuntime['enqueue']>;
+    try {
+      result = options.actions.enqueue({
+        id: `${LETTER_MEMORY_EXTRACTION_ACTION_KIND}:${event.event}:${event.letterId}`,
+        kind: LETTER_MEMORY_EXTRACTION_ACTION_KIND,
+        payload: { letterEvent: event.event, letterId: event.letterId },
+        dedupeKey: LETTER_MEMORY_EXTRACTION_DEDUPE_KEY,
+        channelId: LETTER_L0_CHANNEL_ID,
+        sourceMessageId: event.letterId,
+        inferredAt: event.at,
+      });
+    } catch (error) {
+      // The letter is already durable in the store and in L0 by the time the
+      // trigger fires. A failure to persist the deferred-action queue entry is
+      // a lost evaluation signal, not a failed letter: surfacing it as a
+      // compose/read error would report a false failure and, on the tool path,
+      // invite a retry that writes a duplicate letter.
+      log.error('Letter memory-extraction evaluation could not be queued', {
+        letterEvent: event.event,
+        letterId: event.letterId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return;
+    }
     if (result === 'dropped_budget') {
       // The letter itself is already durable in L0 and the trigger counts every
       // uncovered bin entry, so the next letter event re-evaluates this same

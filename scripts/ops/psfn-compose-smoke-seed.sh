@@ -21,9 +21,9 @@
 # re-up over a populated volume preserves operator edits.
 set -eu
 
-SYSTEM_DATA_DIR="${SYSTEM_DATA_DIR:-/app/system-data}"
-COMPANION_DATA_DIR="${COMPANION_DATA_DIR:-/app/companion-data}"
-WORKSPACE_PATH="${WORKSPACE_PATH:-/app/workspace}"
+SYSTEM_DATA_DIR="${SYSTEM_DATA_DIR:-/app/runtime-root/system-data}"
+COMPANION_DATA_DIR="${COMPANION_DATA_DIR:-/app/runtime-root/companions/smoke}"
+WORKSPACE_PATH="${WORKSPACE_PATH:-/app/runtime-root/workspaces/personal/main}"
 GATEWAY_SOCKET_DIR="$(dirname "${GATEWAY_SOCKET:-/run/psfn/gateway.sock}")"
 CONFIG_DIR="${PSFN_SEED_CONFIG_DIR:-/app/config}"
 CHARACTER_CARD_PATH="${CHARACTER_CARD_PATH:-${COMPANION_DATA_DIR}/companion.json}"
@@ -41,6 +41,8 @@ SYSTEM_OWNERS="settings models providers trust-policy intake-policy backup place
 COMPANION_OWNERS="scheduler capability-tier charge-policy skills"
 COMPANION_ONLY_OWNERS="partner-affect-shadow"
 
+# mkdir -p creates the shared PSFN_RUNTIME_ROOT ancestor these roots sit under,
+# which the fleet manifest resolver requires to already exist.
 mkdir -p "$SYSTEM_DATA_DIR" "$COMPANION_DATA_DIR" "$WORKSPACE_PATH" "$GATEWAY_SOCKET_DIR" "$MODEL_CACHE_DIR"
 
 seed_owner() {
@@ -121,7 +123,7 @@ else
         {
           companionId,
           companionDataDir: "companions/smoke",
-          characterCardPath: "companions/smoke/character-card.json",
+          characterCardPath: "companions/smoke/companion.json",
           postgresSchema: "companion_smoke",
           postgresRole: "companion_smoke_runtime",
           postgresDatabaseUrlRef: { kind: "env", envName: "COMPANION_SMOKE_DATABASE_URL" },
@@ -132,6 +134,18 @@ else
     fs.writeFileSync(process.argv[1], `${JSON.stringify(manifest, null, 2)}\n`);
   ' "$COMPANIONS_MANIFEST"
   echo "[smoke-seed] wrote fleet manifest: $COMPANIONS_MANIFEST"
+fi
+
+# ── Satellite registry ──
+# The Satellite Hub authenticates as a satellite-scoped principal derived from
+# its own bearer key, and the gateway admits that principal only when
+# satellites.json lists it on the matching endpoint. No config seed template can
+# express that binding, so derive the registry from this stack's satellite key.
+# Skipped when no satellite key is configured (hub-less smoke runs).
+if [ -n "${PSFN_SMOKE_SATELLITE_API_KEY:-}" ]; then
+  SYSTEM_DATA_DIR="$SYSTEM_DATA_DIR" node /app/scripts/ops/psfn-compose-smoke-satellites.mjs
+else
+  echo "[smoke-seed] PSFN_SMOKE_SATELLITE_API_KEY unset; skipping satellite registry" >&2
 fi
 
 if [ -f "$CHARACTER_CARD_PATH" ]; then

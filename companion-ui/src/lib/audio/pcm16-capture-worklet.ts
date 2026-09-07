@@ -1,6 +1,5 @@
 import {
   COMPANION_PCM_CHUNK_BYTES,
-  COMPANION_PCM_CHUNK_SAMPLES,
   COMPANION_PCM_WORKLET_NAME,
   encodePcm16LittleEndian,
   StreamingPcm16Downsampler,

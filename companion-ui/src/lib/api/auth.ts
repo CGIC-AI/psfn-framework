@@ -30,6 +30,14 @@ export const MOBILE_CHAT_APP_CAPABILITIES: Required<SatelliteCapabilities> = {
  * The browser advertises presentation capabilities only. Device, place,
  * enrollment, session, channel, companion, and credential authority is
  * supplied by the authenticated Hub attachment and never appears here.
+ *
+ * This is deliberate and must stay that way: the hub's enrolled-device path
+ * (apps/satellite-hub/src/ts/hub/server.ts) rejects a hello whose `deviceId`
+ * does not match the credential's device record, so a browser-authored
+ * `deviceId` would fail authentication outright. The hub's no-registry
+ * development path assigns `message.deviceId`/`deviceName` unconditionally and
+ * therefore loses its own generated identity for a browser hello; that is a hub
+ * defect and its fix belongs on the hub side, not here.
  */
 export function buildSatelliteHello(options: SatelliteHelloOptions = {}): HelloMessage {
   return Object.freeze({

@@ -219,6 +219,13 @@ export interface SessionReadyMessage {
   deviceName: string;
   satelliteId: string;
   audioFormat: string;
+  /**
+   * Negotiated satellite ceiling. The hub always emits this (its own
+   * `SessionReadyMessage` declares it required); it is optional here only so a
+   * hub build predating that field still decodes. Treat an absent value as
+   * "no ceiling advertised yet", never as "everything permitted".
+   */
+  capabilities?: SatelliteCapabilities;
   place?: RuntimePlaceIdentity;
   identity?: RuntimeIdentity;
 }

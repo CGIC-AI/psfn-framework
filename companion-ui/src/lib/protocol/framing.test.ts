@@ -209,9 +209,37 @@ describe('hub websocket framing', () => {
     expect(() => serializeClientToHubMessage(message)).toThrow(HubFramingError);
   });
 
+  it('decodes the hub session.ready frame carrying the negotiated capability ceiling', () => {
+    // Verbatim frame observed from apps/satellite-hub over a live compose run.
+    const parsed = parseHubToClientMessage(
+      '{"type":"session.ready","sessionId":"realtime:client-9f2ab310","channelId":"satellite.endpoint:realtime:client-9f2ab310","deviceId":"client-9f2ab310","deviceName":"Opanhome TS Client","satelliteId":"client-9f2ab310","audioFormat":"text_only","capabilities":{"input":["microphone_pcm","final_transcript","text","wake_event"],"output":["text","subtitle"],"control":["interrupt","presence","session_attach"],"safety":[]}}',
+    );
+
+    expect(parsed).toEqual({
+      type: 'session.ready',
+      sessionId: 'realtime:client-9f2ab310',
+      channelId: 'satellite.endpoint:realtime:client-9f2ab310',
+      deviceId: 'client-9f2ab310',
+      deviceName: 'Opanhome TS Client',
+      satelliteId: 'client-9f2ab310',
+      audioFormat: 'text_only',
+      capabilities: {
+        input: ['microphone_pcm', 'final_transcript', 'text', 'wake_event'],
+        output: ['text', 'subtitle'],
+        control: ['interrupt', 'presence', 'session_attach'],
+        safety: [],
+      },
+    });
+  });
+
   const malformedHubFrames: Array<[string, string]> = [
     ['session.ready discriminator only', '{"type":"session.ready"}'],
     ['session.ready with browser credential echo', '{"type":"session.ready","sessionId":"s","channelId":"c","deviceId":"d","deviceName":"D","satelliteId":"sat","audioFormat":"text","credential":"secret"}'],
+    ['session.ready with an unknown extra key alongside capabilities', '{"type":"session.ready","sessionId":"s","channelId":"c","deviceId":"d","deviceName":"D","satelliteId":"sat","audioFormat":"text_only","capabilities":{"input":["text"]},"surprise":1}'],
+    ['session.ready with capabilities and a browser credential echo', '{"type":"session.ready","sessionId":"s","channelId":"c","deviceId":"d","deviceName":"D","satelliteId":"sat","audioFormat":"text_only","capabilities":{"input":["text"]},"credential":"secret"}'],
+    ['session.ready with an unknown capability entry', '{"type":"session.ready","sessionId":"s","channelId":"c","deviceId":"d","deviceName":"D","satelliteId":"sat","audioFormat":"text_only","capabilities":{"input":["keylogger"]}}'],
+    ['session.ready with an unknown capability axis', '{"type":"session.ready","sessionId":"s","channelId":"c","deviceId":"d","deviceName":"D","satelliteId":"sat","audioFormat":"text_only","capabilities":{"input":["text"],"bogus":[]}}'],
+    ['session.ready with non-array capabilities axis', '{"type":"session.ready","sessionId":"s","channelId":"c","deviceId":"d","deviceName":"D","satelliteId":"sat","audioFormat":"text_only","capabilities":{"input":"text"}}'],
     ['hello.ack missing capabilities', '{"type":"hello.ack","sessionId":"s","channelId":"c","deviceId":"d","deviceName":"D","satelliteId":"sat","satelliteName":"S"}'],
     ['hello.ack malformed place', '{"type":"hello.ack","sessionId":"s","channelId":"c","deviceId":"d","deviceName":"D","satelliteId":"sat","satelliteName":"S","capabilities":{},"place":{"id":"office"}}'],
     ['message extra trust field', '{"type":"message","data":{"role":"assistant","content":"x","trusted":true}}'],

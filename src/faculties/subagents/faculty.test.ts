@@ -46,9 +46,9 @@ import {
   type AutomataBusWorkerAccess,
 } from '../automata/bus/worker-access.js';
 import {
-  buildSubagentTerminalHandoffKey,
-  type SubagentAutomataLifecyclePort,
-} from './automata-lifecycle.js';
+  buildAutomataTerminalHandoffKey,
+  type AutomataTerminalLifecyclePort,
+} from '../automata/terminal-lifecycle.js';
 
 let mockSubagentContent = 'subagent response';
 let mockSubagentError: Error | null = null;
@@ -367,7 +367,7 @@ describe('SubagentFaculty', () => {
 
   it('records one reference-only durable terminal handoff with authoritative lineage and cost', async () => {
     mockSubagentContent = 'private worker output that must stay in the raw session';
-    const recordTerminalHandoff = vi.fn<SubagentAutomataLifecyclePort['recordTerminalHandoff']>(
+    const recordTerminalHandoff = vi.fn<AutomataTerminalLifecyclePort['recordTerminalHandoff']>(
       async input => ({
         handoffRef: `bus-handoff:${input.idempotencyKey}`,
         inserted: true,
@@ -376,7 +376,7 @@ describe('SubagentFaculty', () => {
         artifactRefs: [{ kind: 'work_product', ref: 'artifact:patch-1', custody: 'durable' }],
       }),
     );
-    const inspectRun = vi.fn<SubagentAutomataLifecyclePort['inspectRun']>(async lineage => ({
+    const inspectRun = vi.fn<AutomataTerminalLifecyclePort['inspectRun']>(async lineage => ({
       runId: lineage.runId,
       taskId: lineage.taskId,
       sessionIds: [...lineage.sessionIds],
@@ -438,7 +438,11 @@ describe('SubagentFaculty', () => {
       },
     });
     expect(terminalInput?.idempotencyKey).toBe(
-      buildSubagentTerminalHandoffKey(result.subagentId),
+      buildAutomataTerminalHandoffKey({
+        automatonClass: 'subagent.bounded',
+        runId: result.subagentId,
+        attempt: 1,
+      }),
     );
     expect(terminalInput?.outputRefs).toEqual([{
       kind: 'session_output',
@@ -478,7 +482,7 @@ describe('SubagentFaculty', () => {
 
   it('records failed workers as terminal blocked outcomes without fabricating a final artifact', async () => {
     mockSubagentError = new Error('worker unavailable');
-    const recordTerminalHandoff = vi.fn<SubagentAutomataLifecyclePort['recordTerminalHandoff']>()
+    const recordTerminalHandoff = vi.fn<AutomataTerminalLifecyclePort['recordTerminalHandoff']>()
       .mockResolvedValue({
         handoffRef: 'bus-handoff:failed',
         inserted: true,
@@ -2731,10 +2735,17 @@ describe('SubagentFaculty core-authoritative tool governance (p0le)', () => {
           activeHandles: Map<string, { subagentId: string; agentLoop: unknown }>;
         }).activeHandles;
         let aId: string | undefined;
-        for (const handle of handles.values()) {
-          if (handle.agentLoop === null) {
-            aId = handle.subagentId;
-            break;
+        // Registration is now behind the governed Automata lifecycle's own
+        // awaits, so drain microtasks until the handle appears. The interleaving
+        // under test is unchanged: `agentLoop === null` still means runHandle has
+        // not begun constructing A's agent.
+        for (let tick = 0; tick < 8 && aId === undefined; tick += 1) {
+          await Promise.resolve();
+          for (const handle of handles.values()) {
+            if (handle.agentLoop === null) {
+              aId = handle.subagentId;
+              break;
+            }
           }
         }
         expect(aId).toBeDefined();

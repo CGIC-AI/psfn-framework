@@ -97,6 +97,31 @@ describe('personal wishlist in the existing wiki tier', () => {
     expect(() => wishlist.planWish(created.ref, 'wish-45')).toThrow('is already done');
   });
 
+  it('records a terminal decline with its companion-visible reason and reloads it', () => {
+    const root = makeWorkspace();
+    const wishlist = new PersonalWishlist(
+      new WikiStore(root),
+      () => new Date('2026-07-16T05:00:00.000Z'),
+      () => WISH_ID,
+    );
+    const created = wishlist.createWish({ text: 'I want a second monitor.' });
+
+    const declined = wishlist.declineWish(created.ref, 'There is no room on the desk.');
+    expect(declined).toMatchObject({
+      state: 'declined',
+      declineReason: 'There is no room on the desk.',
+      declinedAt: '2026-07-16T05:00:00.000Z',
+      acknowledgedAt: '2026-07-16T05:00:00.000Z',
+    });
+    // Idempotent, so a redelivered disposition does not move the timeline.
+    expect(wishlist.declineWish(created.ref, 'A different reason.')).toEqual(declined);
+    expect(new PersonalWishlist(new WikiStore(root)).getWish(created.ref)).toEqual(declined);
+
+    expect(() => wishlist.declineWish(created.ref, '  ')).toThrow('non-empty string');
+    expect(() => wishlist.completeWish(created.ref)).toThrow('is already declined');
+    expect(() => wishlist.planWish(created.ref, 'wish-46')).toThrow('is already declined');
+  });
+
   it('fails closed on malformed, unknown, and state-inconsistent persisted fields', () => {
     const root = makeWorkspace();
     const store = new WikiStore(root);

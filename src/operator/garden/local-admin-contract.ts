@@ -782,6 +782,9 @@ export function createInProcessGardenAdminContract(
       ? new AdminWishlistDataService(
         options.config.workspacePath,
         options.wishlistBeadCreator,
+        // p4rmp: the legacy wishlist actions record their Partner decision
+        // through the same doing-mirror lifecycle the doing-mirror page uses.
+        options.doingMirrorService ?? undefined,
       )
       : null,
     letters: options.letterService ?? null,

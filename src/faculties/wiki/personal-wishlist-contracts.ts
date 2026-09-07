@@ -11,11 +11,16 @@ export const COMPANION_WISH_STATES: readonly [
   'acknowledged',
   'planned',
   'done',
+  'declined',
 ] = [
   'open',
   'acknowledged',
   'planned',
   'done',
+  // psfn-framework-p4rmp: the doing-mirror lifecycle can end a companion wish in
+  // a Partner decline. Without a terminal decline here the wish would stay open
+  // in the wiki while its disposition was terminal in the mirror.
+  'declined',
 ];
 
 export type CompanionWishState = typeof COMPANION_WISH_STATES[number];
@@ -36,6 +41,9 @@ export interface CompanionWish {
   plannedAt?: string;
   beadId?: string;
   completedAt?: string;
+  declinedAt?: string;
+  /** Companion-visible reason; a decline never lands without one. */
+  declineReason?: string;
 }
 
 const WISH_DOCUMENT_KEYS: readonly string[] = [
@@ -54,6 +62,8 @@ const WISH_DOCUMENT_KEYS: readonly string[] = [
   'plannedAt',
   'beadId',
   'completedAt',
+  'declinedAt',
+  'declineReason',
 ];
 
 const BEAD_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
@@ -79,6 +89,16 @@ export function requireWishContext(value: unknown, field: string): string {
     throw new Error(`${field} must be at most ${MAX_WISH_CONTEXT_CHARS} characters`);
   }
   return context;
+}
+
+export function requireWishDeclineReason(value: unknown): string {
+  if (typeof value !== 'string') throw new Error('wish decline reason must be a string');
+  const reason = value.trim();
+  if (!reason) throw new Error('wish decline reason must be a non-empty string');
+  if (reason.length > MAX_OPERATOR_RESPONSE_CHARS) {
+    throw new Error(`wish decline reason must be at most ${MAX_OPERATOR_RESPONSE_CHARS} characters`);
+  }
+  return reason;
 }
 
 export function requireOperatorWishResponse(value: unknown): string {
@@ -126,6 +146,7 @@ function assertStateFields(wish: CompanionWish, documentId: string): void {
     ['acknowledgedAt', wish.acknowledgedAt],
     ['plannedAt', wish.plannedAt],
     ['completedAt', wish.completedAt],
+    ['declinedAt', wish.declinedAt],
   ]) {
     if (timestamp && (
       timestamp.localeCompare(wish.createdAt) < 0
@@ -141,6 +162,8 @@ function assertStateFields(wish: CompanionWish, documentId: string): void {
       || wish.plannedAt
       || wish.beadId
       || wish.completedAt
+      || wish.declinedAt
+      || wish.declineReason
     ) {
       throw new Error(`wiki document ${documentId} has operator fields while open`);
     }
@@ -149,11 +172,25 @@ function assertStateFields(wish: CompanionWish, documentId: string): void {
   if (!wish.acknowledgedAt) {
     throw new Error(`wiki document ${documentId} is ${wish.state} without acknowledgedAt`);
   }
+  if (wish.state !== 'declined' && (wish.declinedAt || wish.declineReason)) {
+    throw new Error(`wiki document ${documentId} has decline fields while ${wish.state}`);
+  }
   if (wish.state === 'acknowledged' && (wish.plannedAt || wish.beadId || wish.completedAt)) {
     throw new Error(`wiki document ${documentId} has fields inconsistent with acknowledged state`);
   }
   if (wish.state === 'planned' && (!wish.plannedAt || !wish.beadId || wish.completedAt)) {
     throw new Error(`wiki document ${documentId} has fields inconsistent with planned state`);
+  }
+  if (wish.state === 'declined') {
+    if (!wish.declinedAt || !wish.declineReason) {
+      throw new Error(`wiki document ${documentId} is declined without a stamped reason`);
+    }
+    if (wish.completedAt) {
+      throw new Error(`wiki document ${documentId} is both declined and completed`);
+    }
+    if (wish.declinedAt.localeCompare(wish.acknowledgedAt) < 0) {
+      throw new Error(`wiki document ${documentId} was declined before its prior state`);
+    }
   }
   if (wish.plannedAt && wish.plannedAt.localeCompare(wish.acknowledgedAt) < 0) {
     throw new Error(`wiki document ${documentId} was planned before it was acknowledged`);
@@ -200,6 +237,7 @@ export function parseCompanionWishDocument(document: WikiDocument): CompanionWis
   const acknowledgedAt = optionalTimestamp(value.acknowledgedAt, 'acknowledgedAt');
   const plannedAt = optionalTimestamp(value.plannedAt, 'plannedAt');
   const completedAt = optionalTimestamp(value.completedAt, 'completedAt');
+  const declinedAt = optionalTimestamp(value.declinedAt, 'declinedAt');
   const wish: CompanionWish = {
     schemaVersion: 1,
     kind: 'companion_wish',
@@ -220,6 +258,10 @@ export function parseCompanionWishDocument(document: WikiDocument): CompanionWis
     ...(plannedAt ? { plannedAt } : {}),
     ...(value.beadId !== undefined ? { beadId: requireWishBeadId(value.beadId) } : {}),
     ...(completedAt ? { completedAt } : {}),
+    ...(declinedAt ? { declinedAt } : {}),
+    ...(value.declineReason !== undefined
+      ? { declineReason: requireWishDeclineReason(value.declineReason) }
+      : {}),
   };
   assertStateFields(wish, document.id);
   return wish;

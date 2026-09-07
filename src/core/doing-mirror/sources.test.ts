@@ -8,7 +8,62 @@ import { buildShardLineageEnvelope } from '../../faculties/shards/result-lineage
 import { PersonalWishlist } from '../../faculties/wiki/personal-wishlist.js';
 import { WikiStore } from '../../faculties/wiki/store.js';
 import { createCompanionId } from '../../shared/routing/companion-id.js';
-import { FoldPackageDoingMirrorSource, WishlistDoingMirrorSource } from './sources.js';
+import type {
+  DoingMirrorDispositionRecord,
+  DoingMirrorStorePort,
+  DoingMirrorTransitionStoreInput,
+} from './contracts.js';
+import {
+  FoldPackageDoingMirrorSource,
+  reconcileClosedWishDispositions,
+  WishlistDoingMirrorSource,
+} from './sources.js';
+
+function memoryDispositionStore(): DoingMirrorStorePort & {
+  readonly records: Map<string, DoingMirrorDispositionRecord>;
+} {
+  const records = new Map<string, DoingMirrorDispositionRecord>();
+  return {
+    records,
+    get: async (itemType, itemId) => records.get(`${itemType}:${itemId}`) ?? null,
+    list: async () => [...records.values()],
+    listPendingLetterDeliveries: async () => [...records.values()]
+      .filter(record => record.notification.deliveredAt === undefined),
+    recordLetterDeliveryFailure: async () => { throw new Error('unused'); },
+    resetLetterDeliveryFailures: async () => { throw new Error('unused'); },
+    transition: async (input: DoingMirrorTransitionStoreInput) => {
+      const record: DoingMirrorDispositionRecord = {
+        itemType: input.itemType,
+        itemId: input.itemId,
+        state: input.state,
+        ...(input.reason ? { reason: input.reason } : {}),
+        version: input.expectedVersion + 1,
+        updatedAt: input.updatedAt,
+        updatedBy: 'partner',
+        notification: {
+          letterId: input.letterId,
+          subject: input.letterSubject,
+          body: input.letterBody,
+          failureCount: 0,
+        },
+      };
+      records.set(`${input.itemType}:${input.itemId}`, record);
+      return record;
+    },
+    markLetterDelivered: async (itemType, itemId, letterId, deliveredAt) => {
+      const key = `${itemType}:${itemId}`;
+      const current = records.get(key);
+      if (!current || current.notification.letterId !== letterId) throw new Error('missing transition');
+      const delivered: DoingMirrorDispositionRecord = {
+        ...current,
+        notification: { ...current.notification, deliveredAt },
+      };
+      records.set(key, delivered);
+      return delivered;
+    },
+    close: async () => undefined,
+  };
+}
 
 const COMPANION_ID = createCompanionId('11111111-1111-4111-8111-111111111111');
 
@@ -95,5 +150,70 @@ describe('doing-mirror source adapters', () => {
       '22222222-2222-4222-8222-222222222222',
     );
     await expect(source.list()).rejects.toThrow('does not prove origin from this companion');
+  });
+
+  it('converges the wiki wish state with the recorded disposition', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'doing-mirror-apply-'));
+    const wishlist = new PersonalWishlist(
+      new WikiStore(root),
+      undefined,
+      () => 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    );
+    const wish = wishlist.createWish({ text: 'Repair the garden gate' });
+    const source = new WishlistDoingMirrorSource(wishlist);
+
+    await source.applyDisposition({ itemId: wish.id, state: 'considering' });
+    expect(wishlist.getWish(wish.id).state).toBe('acknowledged');
+
+    await source.applyDisposition({
+      itemId: wish.id, state: 'declined', reason: 'The gate is beyond repair.',
+    });
+    expect(wishlist.getWish(wish.id)).toMatchObject({
+      state: 'declined', declineReason: 'The gate is beyond repair.',
+    });
+
+    // Idempotent: a redelivery pass repeats the write without moving anything.
+    const declined = wishlist.getWish(wish.id);
+    await source.applyDisposition({
+      itemId: wish.id, state: 'declined', reason: 'The gate is beyond repair.',
+    });
+    expect(wishlist.getWish(wish.id)).toEqual(declined);
+
+    await expect(source.applyDisposition({ itemId: wish.id, state: 'declined' }))
+      .rejects.toThrow('must carry its companion-visible reason');
+  });
+
+  it('reconciles wishes closed before the doing mirror existed without writing a Letter', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'doing-mirror-reconcile-'));
+    let id = 0;
+    const wishlist = new PersonalWishlist(
+      new WikiStore(root),
+      undefined,
+      () => `bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb${id++}`,
+    );
+    const closed = wishlist.createWish({ text: 'Plant the tulips' });
+    wishlist.completeWish(closed.id);
+    const open = wishlist.createWish({ text: 'Prune the apple tree' });
+    const store = memoryDispositionStore();
+
+    let letterSeq = 0;
+    await expect(reconcileClosedWishDispositions({
+      wishlist,
+      store,
+      createId: () => `cccccccc-cccc-4ccc-8ccc-cccccccccc${String(letterSeq++).padStart(2, '0')}`,
+    })).resolves.toEqual({ reconciled: 1 });
+
+    const record = store.records.get(`wishlist:${closed.id}`);
+    expect(record).toMatchObject({ state: 'done', version: 1 });
+    // Stamped delivered on the spot: the drain must never compose a Letter for
+    // a decision that predates the lifecycle.
+    expect(record?.notification.deliveredAt).toBeDefined();
+    expect(await store.listPendingLetterDeliveries(25)).toEqual([]);
+    expect(store.records.has(`wishlist:${open.id}`)).toBe(false);
+
+    // Idempotent across restarts.
+    await expect(reconcileClosedWishDispositions({ wishlist, store }))
+      .resolves.toEqual({ reconciled: 0 });
+    expect(store.records.size).toBe(1);
   });
 });

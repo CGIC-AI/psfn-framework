@@ -163,7 +163,6 @@ const requiredBodyPatterns = new Set([
   'POST /api/admin/memory/bulk-delete',
   'POST /api/admin/letters',
   'POST /api/admin/doing-mirror/:itemType/:itemId',
-  'POST /api/admin/doing-mirror/:itemType/:itemId/retry-letter',
   'POST /api/admin/memory/bulk-update',
   'POST /api/admin/memory/link',
   'DELETE /api/admin/memory/link',
@@ -184,8 +183,10 @@ const requiredBodyPatterns = new Set([
   'PUT /api/admin/prompts/foundation',
   'PUT /api/admin/prompts/constitution',
   'PUT /api/admin/prompts/north-star',
+  'POST /api/admin/wishlist/:wishId/acknowledge',
   'POST /api/admin/wishlist/:wishId/respond',
   'POST /api/admin/wishlist/:wishId/convert-to-bead',
+  'POST /api/admin/wishlist/:wishId/done',
   'POST /api/admin/settings/models',
   'PATCH /api/admin/settings',
   'POST /api/admin/shared-workspace/proposals',
@@ -211,8 +212,7 @@ const noBodyMutationPatterns = new Set([
   'POST /api/admin/models/refresh',
   'POST /api/admin/prompts/:layerId/toggle',
   'POST /api/admin/wiki/shared-world/:siteId/publish',
-  'POST /api/admin/wishlist/:wishId/acknowledge',
-  'POST /api/admin/wishlist/:wishId/done',
+  'POST /api/admin/doing-mirror/:itemType/:itemId/retry-letter',
 ]);
 
 type RouteTuple = readonly [GardenForwardMethod | readonly GardenForwardMethod[], string];

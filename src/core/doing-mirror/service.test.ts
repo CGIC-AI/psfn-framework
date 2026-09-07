@@ -222,7 +222,8 @@ describe('DoingMirrorService', () => {
 
     compose.mockRejectedValueOnce(new Error('letter store still unavailable'));
     await expect(service.drainPendingLetters(25)).rejects.toThrow(
-      'doing-mirror redelivered 0 of 1 pending disposition letters',
+      'doing-mirror redelivered 0 of 1 pending disposition letters; '
+      + 'failures: letter store still unavailable',
     );
     expect(records.get(`wishlist:${SOURCE.itemId}`)?.notification.deliveredAt).toBeUndefined();
 

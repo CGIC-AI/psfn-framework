@@ -229,7 +229,10 @@ export function registerDoingMirrorLetterDrainOperation(input: {
         log.info('Doing-mirror pending Letter deliveries redriven', result);
       }
     },
-    eligibility: { requiredTokens: ['memory.write'] },
+    // Deliberately ungated: the Garden transition route that creates these
+    // pending rows carries no capability gate, so gating the drain would let a
+    // tier without the token strand rows exactly as before this operation
+    // existed.
   });
 }
 

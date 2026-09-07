@@ -251,6 +251,32 @@ describe('agent scheduler runtime wiring', () => {
     expect(drainPendingLetters).toHaveBeenCalledExactlyOnceWith(25);
   });
 
+  it('drains stranded doing-mirror letters even without the memory.write token', async () => {
+    const scheduler = new Scheduler(new EventBus());
+    // The Garden transition route that creates the pending row is ungated, so a
+    // gated drain would strand exactly the rows this operation exists to close.
+    const eligibilityGate = createEligibilityGate(() => ({
+      getTier: () => 'restricted',
+      getGrantedTokens: () => new Set(),
+      has: () => false,
+    }));
+    const backgroundMaintenance = new BackgroundMaintenanceRegistry({
+      scheduler,
+      eligibilityGate,
+      intervalMs: 3_600_000,
+    });
+    const drainPendingLetters = vi.fn(async () => ({ pending: 1, drained: 1 }));
+
+    registerDoingMirrorLetterDrainOperation({
+      backgroundMaintenance,
+      doingMirrorService: { drainPendingLetters },
+      batchSize: 25,
+    });
+    await scheduler.getTask('background-maintenance')?.handler();
+
+    expect(drainPendingLetters).toHaveBeenCalledExactlyOnceWith(25);
+  });
+
   it('binds the doing-mirror drain batch to its scheduler owner file and the real runtime', () => {
     const source = readFileSync(join(SRC_DIR, 'scheduler-runtime.ts'), 'utf-8');
     const main = readFileSync(join(SRC_DIR, 'main.ts'), 'utf-8');

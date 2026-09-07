@@ -9,6 +9,7 @@ import {
   dependencyMarkerPath,
   lockfileSha256,
   parseBootstrapArguments,
+  resolveNpmCliPath,
 } from './bootstrap-worktree.mjs';
 import { markerPathFor } from '../prewarm-worktree.mjs';
 
@@ -208,4 +209,30 @@ test('bootstrap refuses an install when cache preparation does not attest it', (
     runNpm() { invoked = true; },
   }), /did not create an attestation/u);
   assert.equal(invoked, false);
+});
+
+test('npm CLI resolution prefers npm_execpath, then the lib entry, and rejects shell wrappers', (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'psfn-npm-cli-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const nodeBin = join(root, 'bin');
+  const libEntry = join(root, 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js');
+  mkdirSync(nodeBin, { recursive: true });
+  const execPath = join(nodeBin, 'node');
+  writeFileSync(execPath, '');
+
+  const viaEnv = join(root, 'elsewhere', 'npm-cli.js');
+  mkdirSync(dirname(viaEnv), { recursive: true });
+  writeFileSync(viaEnv, '// npm cli\n');
+  assert.equal(resolveNpmCliPath({ execPath, env: { npm_execpath: viaEnv } }), viaEnv);
+
+  mkdirSync(dirname(libEntry), { recursive: true });
+  writeFileSync(libEntry, '// npm cli\n');
+  assert.equal(resolveNpmCliPath({ execPath, env: {} }), libEntry);
+
+  rmSync(libEntry);
+  writeFileSync(join(nodeBin, 'npm'), '#!/usr/bin/env bash\nset -euo pipefail\n');
+  assert.throws(() => resolveNpmCliPath({ execPath, env: {} }), /shell wrapper/);
+
+  writeFileSync(join(nodeBin, 'npm'), '#!/usr/bin/env node\n// npm cli\n');
+  assert.equal(resolveNpmCliPath({ execPath, env: {} }), join(nodeBin, 'npm'));
 });

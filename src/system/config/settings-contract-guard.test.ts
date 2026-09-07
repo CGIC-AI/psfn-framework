@@ -130,6 +130,27 @@ describe('settings contract guard', () => {
     expect(readSettingsSeed().cogSecPersonaConformance).toEqual({ enabled: false });
   });
 
+  it('bounds the persisted health-event stream from the settings owner file', () => {
+    const contractData = buildSettingsContractData();
+
+    expect(contractData.fields.healthEventStreamMaxRows).toEqual({
+      key: 'healthEventStreamMaxRows',
+      ownerSubsystem: 'runtime',
+      ownerFile: 'settings.json',
+      type: 'integer',
+      scope: 'global',
+      minimum: 100,
+      maximum: 1_000_000,
+    });
+    expect(SETTINGS_GARDEN_FIELD_EXPOSURE.healthEventStreamMaxRows).toEqual({
+      sectionId: 'sessions',
+      surface: 'advanced',
+    });
+    expect(SETTINGS_GARDEN_ADVANCED_SECTION_FIELDS.sessions)
+      .toContain('healthEventStreamMaxRows');
+    expect(readSettingsSeed().healthEventStreamMaxRows).toBe(5_000);
+  });
+
   it('publishes per-companion image defaults with catalog-backed enum metadata', () => {
     const contractData = buildSettingsContractData();
 

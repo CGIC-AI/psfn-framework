@@ -10983,6 +10983,13 @@
     },
     {
       "file": "src/shared/contracts/settings-garden-contract.ts",
+      "name": "SETTINGS_GARDEN_FIELD_EXPOSURE.healthEventStreamMaxRows",
+      "value": "{ sectionId: 'sessions', surface: 'advanced' }",
+      "form": "object-member",
+      "note": "Canonical Garden exposure metadata for the settings.json-owned health-event stream row cap; this literal locates the owned field and is not a runtime override."
+    },
+    {
+      "file": "src/shared/contracts/settings-garden-contract.ts",
       "name": "SETTINGS_GARDEN_FIELD_EXPOSURE.imageComfyPollIntervalMs",
       "value": "{ sectionId: 'channels', surface: 'advanced' }",
       "form": "object-member",
@@ -13274,6 +13281,13 @@
       "value": "{ min: 256, max: 1_000_000 }",
       "form": "object-member",
       "note": "Canonical owner-file/schema metadata SETTINGS_VALIDATION.extractionMaxTokens; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
+    },
+    {
+      "file": "src/system/settings/form.ts",
+      "name": "SETTINGS_VALIDATION.healthEventStreamMaxRows",
+      "value": "{ min: 100, max: 1000000 }",
+      "form": "object-member",
+      "note": "Canonical validation bounds for the settings.json-owned health-event stream row cap; this metadata constrains Garden edits and is not runtime policy."
     },
     {
       "file": "src/system/settings/form.ts",

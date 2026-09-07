@@ -14,7 +14,7 @@ describe('actor terminology gate wiring', () => {
       'npm run verify:public-sanitize && npm run verify:repository-hygiene:structural',
     );
     expect(scripts['verify:repository-hygiene:structural']).toBe(
-      'npm run verify:intake-sink-wiring && npm run verify:identity-literals && npm run verify:actor-terminology && npm run verify:model-facing-tool-guidance && npm run verify:dependency-cycles && npm run verify:shared-type-guards && npm run verify:model-usage-capture && npm run verify:postgres-only && npm run verify:hardcoded-settings && npm run verify:duplicate-type-names && npm run verify:knip && npm run verify:todo-bead-links',
+      'npm run verify:intake-sink-wiring && npm run verify:identity-literals && npm run verify:actor-terminology && npm run verify:model-facing-tool-guidance && npm run verify:dependency-cycles && npm run verify:shared-type-guards && npm run verify:model-usage-capture && npm run verify:postgres-only && npm run verify:hardcoded-settings && npm run verify:recovery-chart-digest && npm run verify:duplicate-type-names && npm run verify:knip && npm run verify:todo-bead-links',
     );
   });
 });

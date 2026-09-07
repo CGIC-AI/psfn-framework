@@ -26,9 +26,46 @@ import {
   type CogSecReceiptIssuer,
   type CogSecReceiptLineageStep,
 } from '../../../shared/contracts/cogsec-receipt.js';
-import type { CogSecStructuralSurface } from '../../../shared/contracts/cogsec-mode.js';
-import { isIntakeSinkConsumableState } from '../../../shared/contracts/intake-envelope.js';
-import type { IntakeScreeningResult } from '../intake/screening.js';
+import type {
+  CogSecMode,
+  CogSecStructuralSurface,
+  CogSecVector,
+  IntakeEnforcementPosture,
+} from '../../../shared/contracts/cogsec-mode.js';
+import {
+  isIntakeSinkConsumableState,
+  type IntakeDecisionAction,
+  type IntakeEnvelope,
+} from '../../../shared/contracts/intake-envelope.js';
+
+/**
+ * The screening facts a receipt is minted from. Declared structurally rather
+ * than imported from the screening service so the receipt lane stays a leaf of
+ * the intake pipeline: screening depends on issuance, never the other way
+ * round. `IntakeScreeningResult` satisfies this shape.
+ */
+interface CogSecScreenedAdmission {
+  action: IntakeDecisionAction;
+  withheld: boolean;
+  postEscalation?: 'pending';
+  /** The exact bytes admitted downstream (sanitized text when sanitized). */
+  effectiveText: string;
+  envelope: IntakeEnvelope;
+  /** Per-item enforcement posture the decision was taken under. */
+  mode: IntakeEnforcementPosture;
+  globalMode: CogSecMode;
+  cogsecVector: CogSecVector;
+  report: {
+    scope: string;
+    truncated: boolean;
+    scannerErrors: readonly unknown[];
+    results: readonly { scannerId: string }[];
+  };
+  observability: {
+    semanticTrace: { l2: { status: string }; l3: { status: string } };
+  };
+  injectionScorerError?: string;
+}
 
 type CogSecReceiptSuppression =
   | 'deep_screening_pending'
@@ -44,7 +81,7 @@ type CogSecReceiptSuppression =
  * complete admission of fully screened bytes.
  */
 function cogSecReceiptSuppression(
-  result: IntakeScreeningResult,
+  result: CogSecScreenedAdmission,
 ): CogSecReceiptSuppression | null {
   if (result.postEscalation === 'pending') return 'deep_screening_pending';
   if (result.action !== 'pass' && result.action !== 'sanitize') return 'not_admitted';
@@ -71,7 +108,7 @@ interface CogSecReceiptIssuanceContext {
 
 export interface BuildCogSecReceiptInput {
   context: CogSecReceiptIssuanceContext;
-  result: IntakeScreeningResult;
+  result: CogSecScreenedAdmission;
   /** The raw bytes handed to screening. */
   rawText: string;
   /** Structurally authenticated surface, when the call site proved one. */

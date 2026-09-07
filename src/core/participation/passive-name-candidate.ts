@@ -15,6 +15,7 @@ import type {
   ParticipationContextMessage,
   PassiveNameCandidateDecision,
 } from './types.js';
+import type { RoomParticipationContinuationOutcome } from './room-participation-lease-coordinator.js';
 
 /**
  * Deterministic passive-name participation candidate gate (free-time social
@@ -36,6 +37,17 @@ import type {
  * at most one appraisal chain per room per window, deterministically and
  * pre-model. The window is per-channel: spam in one room never silences another.
  *
+ * Contextual continuation (jp36.5.5): when the message carries NO name match,
+ * and only then, this gate consults the bounded durable room-participation
+ * lease. In a room where the companion already holds membership, an ordinary
+ * follow-up that never repeats the name may still become a
+ * `contextual_continuation` candidate carrying the same bounded transcript. The
+ * lease decision is deterministic and pre-model: with no lease the message stays
+ * observation/context only and costs nothing but a durable read. Continuations
+ * deliberately bypass neither the autonomy ladder, the staleness guard, nor
+ * source-message dedup; they DO bypass the name-spam debounce window, which
+ * exists to collapse repeated *summoning*, and they never open one.
+ *
  * Out of scope here (see sibling beads): the cheap appraiser (jp36.3.3) and the
  * speaking arbiter (jp36.5). This gate only decides whether a candidate exists.
  */
@@ -48,12 +60,30 @@ export interface ParticipationContextReader {
   ): SessionEntry[] | Promise<SessionEntry[]>;
 }
 
+/**
+ * The bounded room-participation lease seam (jp36.5.5). Optional: a runtime
+ * without durable leases keeps the pre-continuation behavior exactly.
+ */
+export interface RoomParticipationContinuationPort {
+  admitContinuation(input: {
+    channelId: string;
+    observation: {
+      messageId: string;
+      timestampMs: number;
+      authorIsMachine: boolean;
+      contentLength: number;
+    };
+  }): Promise<RoomParticipationContinuationOutcome>;
+}
+
 export interface PassiveNameCandidateBuilderOptions {
   scopeClassifier: NearTurnMemoryScopeClassifierPort;
   contextReader: ParticipationContextReader;
   companionNames: readonly string[];
   companionAuthorIds: readonly string[];
   settings?: PassiveNameCandidateSettings;
+  /** Durable room-participation lease gate; absent runtimes never continue. */
+  roomParticipationLease?: RoomParticipationContinuationPort;
   nowMs?: () => number;
 }
 
@@ -77,6 +107,7 @@ export class PassiveNameCandidateBuilder {
   private readonly companionNames: readonly string[];
   private readonly companionAuthorIds: readonly string[];
   private readonly settings: PassiveNameCandidateSettings;
+  private readonly roomParticipationLease: RoomParticipationContinuationPort | undefined;
   private readonly nowMs: () => number;
   private readonly dedupeByChannel = new Map<string, ChannelDedupeState>();
 
@@ -86,6 +117,7 @@ export class PassiveNameCandidateBuilder {
     this.companionNames = options.companionNames;
     this.companionAuthorIds = options.companionAuthorIds;
     this.settings = options.settings ?? createDefaultPassiveNameCandidateSettings();
+    this.roomParticipationLease = options.roomParticipationLease;
     this.nowMs = options.nowMs ?? (() => Date.now());
   }
 
@@ -123,20 +155,26 @@ export class PassiveNameCandidateBuilder {
       companionNames: this.companionNames,
       companionAuthorIds: this.companionAuthorIds,
     });
-    if (!match.mentioned && !match.directAddress) {
+    const nameMatched = match.mentioned || match.directAddress;
+    if (!nameMatched && !this.roomParticipationLease) {
       return this.suppress(message, 'no_name_match');
     }
     const trigger: ParticipationCandidateTrigger = match.directAddress
       ? 'direct_mention'
-      : 'passive_name';
+      : match.mentioned
+        ? 'passive_name'
+        : 'contextual_continuation';
 
-    // 6. Autonomy ladder gate (§8.4).
+    // 6. Autonomy ladder gate (§8.4). A contextual continuation is contextual
+    // participation, so it needs exactly what a passive-name summons needs.
     const level = this.resolveAutonomyLevel(message.channelId);
     const permitted = trigger === 'direct_mention'
       ? autonomyLevelPermitsDirected(level)
       : autonomyLevelPermitsPassiveName(level);
     if (!permitted) {
-      return this.suppress(message, 'autonomy_disabled', trigger);
+      return nameMatched
+        ? this.suppress(message, 'autonomy_disabled', trigger)
+        : this.suppress(message, 'no_name_match');
     }
 
     // 7. Staleness guard — never resurrect long-delayed observed mentions.
@@ -159,12 +197,33 @@ export class PassiveNameCandidateBuilder {
     // repeated summoning — one sender or several coordinating — yields at most
     // one appraisal chain per room per window. Deterministic and pre-model.
     const now = this.nowMs();
-    if (this.isDebounced(message.channelId, now)) {
+    if (nameMatched && this.isDebounced(message.channelId, now)) {
       return this.suppress(message, 'debounced', trigger);
     }
 
+    // 10. Contextual continuation (jp36.5.5). Only a name-free message reaches
+    // this branch, and only the deterministic lease gate may admit it. `absent`
+    // — no membership in this room — is reported as the ordinary `no_name_match`
+    // suppression this gate has always produced, so a room the companion is not
+    // taking part in is telemetry-identical to the pre-lease behavior and costs
+    // no model call. The gate's own durable claim is what makes the message
+    // considered, so it can never be considered twice.
+    if (!nameMatched) {
+      const admission = await this.admitContinuation(message);
+      if (admission.outcome === 'absent') {
+        return this.suppress(message, 'no_name_match');
+      }
+      if (admission.outcome === 'suppressed') {
+        return this.suppress(message, admission.suppression, trigger);
+      }
+    }
+
     this.markSeen(message.channelId, message.id);
-    this.openDebounceWindow(message.channelId, now);
+    // The debounce window collapses repeated *summoning*; a continuation neither
+    // opens one nor is silenced by one.
+    if (nameMatched) {
+      this.openDebounceWindow(message.channelId, now);
+    }
 
     const precedingContext = await this.loadPrecedingContext(message, triggerTimestampMs);
     const candidate: ParticipationCandidate = {
@@ -183,6 +242,30 @@ export class PassiveNameCandidateBuilder {
       createdAtMs: now,
     };
     return { status: 'created', candidate };
+  }
+
+  /**
+   * Consult the durable room-participation lease for one name-free room message.
+   * Content-free by construction: the gate sees ids, a timestamp, whether the
+   * author is a machine (the bot-loop fence), and the message LENGTH — never the
+   * message itself.
+   */
+  private async admitContinuation(
+    message: SubstrateMessage,
+  ): Promise<RoomParticipationContinuationOutcome> {
+    const lease = this.roomParticipationLease;
+    if (!lease) {
+      return { outcome: 'absent' };
+    }
+    return await lease.admitContinuation({
+      channelId: message.channelId,
+      observation: {
+        messageId: message.id,
+        timestampMs: message.timestamp.getTime(),
+        authorIsMachine: message.routing?.authorIsMachineIntelligence === true,
+        contentLength: message.content.trim().length,
+      },
+    });
   }
 
   private suppress(

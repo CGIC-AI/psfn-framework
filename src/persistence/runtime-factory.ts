@@ -91,6 +91,8 @@ import {
 } from '../core/scheduler/fleet-maintenance-coordinator.js';
 import { PostgresFleetMaintenanceStore } from './postgres/fleet-maintenance-store.js';
 import { PostgresLetterStore } from './postgres/letter-store.js';
+import { PostgresCogSecReceiptStore } from './postgres/cogsec-receipt-store.js';
+import type { CogSecReceiptStorePort } from '../core/cogsec/receipts/contracts.js';
 import type { LetterStorePort } from '../core/letters/contracts.js';
 import { PostgresDoingMirrorStore } from './postgres/doing-mirror-store.js';
 import type { DoingMirrorStorePort } from '../core/doing-mirror/contracts.js';
@@ -143,6 +145,13 @@ export interface AgentPersistenceRuntime {
    * inspection surface. Never behavioral authority.
    */
   partnerAffectShadowStore: PartnerAffectShadowStorePort;
+  /**
+   * Durable content-addressed CogSec admission receipts
+   * (psfn-framework-1fjvm.3). Written by intake screening when it admits fully
+   * screened bytes; read by admission consumers deciding whether byte-identical
+   * durable content may skip re-screening.
+   */
+  cogSecReceiptStore: CogSecReceiptStorePort;
   /**
    * Shared-schema cross-companion presence store (sprint 10, W5a). Present
    * ONLY when multi-companion mode is enabled; flag-off never touches the
@@ -495,6 +504,10 @@ export async function createAgentPersistenceRuntime(
     automataRetentionStore,
     automataSessionClassification,
     automataPurgeSagaStore,
+    cogSecReceiptStore: await awaitPostgresStoreReadiness(
+      'cogsec_receipts',
+      () => PostgresCogSecReceiptStore.connect(databaseUrl, { schema, role: tenantRole }),
+    ),
     partnerAffectShadowStore: await awaitPostgresStoreReadiness(
       'partner_affect_shadow',
       () => PostgresPartnerAffectShadowStore.connect(databaseUrl, { schema, role: tenantRole }),

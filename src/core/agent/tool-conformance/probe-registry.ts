@@ -76,6 +76,10 @@ export const TOOL_CONFORMANCE_PROBE_REGISTRY: Readonly<Record<string, ToolProbeS
   // ── Continuity / contacts ──
   session: { kind: 'read_only', action: 'list', args: { action: 'list' } },
   contact: { kind: 'read_only', action: 'list', args: { action: 'list' } },
+  // letter.list is a bounded read of the companion-owned letter bin; read/place/
+  // archive are state transitions and disposition reads depend on an optional
+  // doing-mirror port, so only list is probed live.
+  letter: { kind: 'read_only', action: 'list', args: { action: 'list' } },
 
   // ── Knowledge / scheduling / orientation-extended ──
   skill: { kind: 'read_only', action: 'list', args: { action: 'list' } },
@@ -338,6 +342,17 @@ export const TOOL_CONFORMANCE_ACTION_REGISTRY:
     set_machine_intelligence: SCHEMA_ASSERT,
     block: SCHEMA_ASSERT,
     unblock: SCHEMA_ASSERT,
+  },
+  letter: {
+    compose: SCHEMA_ASSERT,
+    list: safeRead({ action: 'list' }),
+    // read marks a placed letter as read (state transition), never a pure read.
+    read: SCHEMA_ASSERT,
+    place: SCHEMA_ASSERT,
+    archive: SCHEMA_ASSERT,
+    // doing-mirror reads require the optional doing-mirror port; schema only.
+    disposition_list: SCHEMA_ASSERT,
+    disposition_read: SCHEMA_ASSERT,
   },
   session: {
     list: safeRead({ action: 'list' }),

@@ -18,7 +18,6 @@ export interface TouchInteractionCoalescerOptions {
   quietMs?: number;
 }
 
-export type HeadpatCoalescerOptions = TouchInteractionCoalescerOptions;
 
 const DEFAULT_QUIET_MS = 3_000;
 const MAX_COUNT = 20;

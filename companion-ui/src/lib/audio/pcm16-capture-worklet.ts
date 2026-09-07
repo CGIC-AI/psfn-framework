@@ -44,5 +44,3 @@ class CompanionPcm16CaptureProcessor extends AudioWorkletProcessor {
 }
 
 registerProcessor(COMPANION_PCM_WORKLET_NAME, CompanionPcm16CaptureProcessor);
-
-export { COMPANION_PCM_CHUNK_SAMPLES };

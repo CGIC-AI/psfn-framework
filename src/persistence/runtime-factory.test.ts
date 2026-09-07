@@ -45,6 +45,10 @@ const runtimeFactoryMocks = vi.hoisted(() => ({
   connectPostgresSocialPotStore: vi.fn(async () => runtimeFactoryMocks.postgresSocialPotStore),
   postgresSpeakingArbiterStore: { kind: 'postgres-speaking-arbiter-store' },
   connectPostgresSpeakingArbiterStore: vi.fn(async () => runtimeFactoryMocks.postgresSpeakingArbiterStore),
+  postgresRoomParticipationLeaseStore: { kind: 'postgres-room-participation-lease-store' },
+  connectPostgresRoomParticipationLeaseStore: vi.fn(
+    async () => runtimeFactoryMocks.postgresRoomParticipationLeaseStore,
+  ),
   postgresFleetMaintenanceStore: {
     kind: 'postgres-fleet-maintenance-store',
     close: vi.fn(async () => undefined),
@@ -158,6 +162,12 @@ vi.mock('./postgres/companion-presence-store.js', () => ({
 vi.mock('./postgres/social-pot-store.js', () => ({
   PostgresSocialPotStore: {
     connect: runtimeFactoryMocks.connectPostgresSocialPotStore,
+  },
+}));
+
+vi.mock('./postgres/room-participation-lease-store.js', () => ({
+  PostgresRoomParticipationLeaseStore: {
+    connect: runtimeFactoryMocks.connectPostgresRoomParticipationLeaseStore,
   },
 }));
 

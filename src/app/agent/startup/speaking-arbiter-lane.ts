@@ -12,6 +12,7 @@ import type { SchedulerRuntimeConfig as SchedulerConfig } from '../../../system/
 import type { LLMProviderPort } from '../../../core/agent/contracts.js';
 import { ParticipationAppraiser } from '../../../core/participation/appraiser.js';
 import { PassiveNameCandidateBuilder } from '../../../core/participation/passive-name-candidate.js';
+import { RoomParticipationLeaseCoordinator } from '../../../core/participation/room-participation-lease-coordinator.js';
 import { SpeakingReservationPhase, type IcpSocialPrecedenceResolver } from '../../../core/agent/arbiter/reservation-phase.js';
 import { SpeakingEgressLeasePhase } from '../../../core/agent/arbiter/egress-lease-phase.js';
 import { createIcpSpeakingPrecedenceResolver } from '../../../core/icp/speaking-precedence-resolver.js';
@@ -49,6 +50,8 @@ export interface SpeakingArbiterLaneResult {
   participationAppraiser: ParticipationAppraiser;
   reservationPhase: SpeakingReservationPhase | undefined;
   egressLeasePhase: SpeakingEgressLeasePhase | undefined;
+  /** Bounded durable room-participation lease (jp36.5.5); undefined when off. */
+  roomParticipationLease: RoomParticipationLeaseCoordinator | undefined;
 }
 
 export function wireSpeakingArbiterLane(deps: SpeakingArbiterLaneDeps): SpeakingArbiterLaneResult {
@@ -66,6 +69,30 @@ export function wireSpeakingArbiterLane(deps: SpeakingArbiterLaneDeps): Speaking
     outboundReplyGuard,
   } = deps;
 
+  // Bounded durable room-participation lease (jp36.5.5). Membership in ONE
+  // verified group room for ONE companion, opened by an explicit disposition and
+  // carrying the context watermark that keeps a restart from replaying old room
+  // chatter into consideration. Constructed only when owner policy enables
+  // continuation AND the gateway-owned durable store exists (multi-companion),
+  // so the public default costs no per-message durable read at all. It grants
+  // consideration only: an admitted continuation still traverses the reservation
+  // phase, the cheap appraiser, CogSec, fatigue, and the egress lease.
+  const roomParticipationLeaseSettings = schedulerConfig.socialAutonomy.roomParticipationLease;
+  const roomParticipationLease = (
+    roomParticipationLeaseSettings.enabled
+    && persistenceRuntime.roomParticipationLeaseStore
+    && config.companionId
+  )
+    ? new RoomParticipationLeaseCoordinator({
+      companionId: config.companionId,
+      store: persistenceRuntime.roomParticipationLeaseStore,
+      // The same canonical direct-vs-group classifier the candidate gate uses —
+      // membership exists only in verified group rooms.
+      scopeClassifier: observedGroupMemoryScheduler,
+      settings: roomParticipationLeaseSettings,
+    })
+    : undefined;
+
   // Deterministic passive-name participation candidate gate (bible §8.1). Reuses
   // the group-salience name detector and the scheduler's canonical
   // direct-vs-group classifier — no parallel detection paths. Runs on observed
@@ -79,6 +106,8 @@ export function wireSpeakingArbiterLane(deps: SpeakingArbiterLaneDeps): Speaking
     // Passive-name gate tunables are owned by scheduler.json
     // socialAutonomy.passiveNameCandidate (jp36.8.2).
     settings: schedulerConfig.socialAutonomy.passiveNameCandidate,
+    // Name-free follow-ups are considered ONLY through the lease gate above.
+    ...(roomParticipationLease ? { roomParticipationLease } : {}),
   });
 
   // Cheap, tool-less participation appraiser (bible §8.2, jp36.3.3). Consumes the
@@ -219,5 +248,6 @@ export function wireSpeakingArbiterLane(deps: SpeakingArbiterLaneDeps): Speaking
     participationAppraiser,
     reservationPhase,
     egressLeasePhase,
+    roomParticipationLease,
   };
 }

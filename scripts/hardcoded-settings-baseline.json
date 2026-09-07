@@ -10754,6 +10754,12 @@
       "note": "Immutable parser/wire/schema contract FILESYSTEM_READ_PAGE_CONTRACT.minBytes; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning."
     },
     {
+      "file": "src/shared/contracts/health-event.ts",
+      "name": "MAX_EVIDENCE_ENTRIES",
+      "value": "16",
+      "note": "Immutable wire-schema bound on the content-free health-event envelope; it caps an untrusted evidence map at the persistence boundary, so changing it changes the contract and requires a reviewed release rather than operator tuning. The operator-owned bound for this subsystem is settings.json healthEventStreamMaxRows."
+    },
+    {
       "file": "src/shared/contracts/icp-autonomy.ts",
       "name": "MAX_ICP_AVAILABILITY_LEASE_TTL_MS",
       "value": "24 * 60 * 60_000"

@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
+  isPublicSubtreeExemptPath,
   loadLocalBlocklist,
   parseTrackedFilesFromGitLsStage,
   scanPublicSanitizeTrackedFiles,
@@ -66,6 +67,47 @@ describe('public-sanitize check', () => {
       else process.env.PUBLIC_SANITIZE_LOCAL_BLOCKLIST = previous;
       rmSync(directory, { recursive: true, force: true });
     }
+  });
+
+  it('admits the publicly shipped Helm chart and shakedown harness subtrees', () => {
+    expect(isPublicSubtreeExemptPath('deploy/helm/psfn/Chart.yaml')).toBe(true);
+    expect(isPublicSubtreeExemptPath('shakedown/harness/tier-conformance-sweep.mjs')).toBe(true);
+    expect(isPublicSubtreeExemptPath('shakedown/companion/shakedown.env.template')).toBe(true);
+    expect(isPublicSubtreeExemptPath('deploy/helm/other/Chart.yaml')).toBe(false);
+    expect(isPublicSubtreeExemptPath('shakedown/rounds/2026-01/notes.md')).toBe(false);
+    expect(isPublicSubtreeExemptPath('shakedown/harness-notes.md')).toBe(false);
+    expect(isPublicSubtreeExemptPath('shakedown/README.md')).toBe(false);
+  });
+
+  it('forbids local-only surfaces while allowing the public shakedown subtrees', () => {
+    const result = scanPublicSanitizeTrackedFiles(
+      [
+        'deploy/helm/psfn/values.yaml',
+        'shakedown/harness/lib/target.mjs',
+        'shakedown/harness/test/target-contract.test.mjs',
+        'shakedown/companion/shakedown.env.template',
+        'shakedown/rounds/2026-01/notes.md',
+        'shakedown/harness-notes.md',
+        'deploy/private/values.yaml',
+        'working_docs/plan.md',
+      ],
+      {
+        localBlocklist: {
+          localPath: 'workspace/sanitize/local-blocklist.json',
+          forbiddenPathRegex: [],
+          textRuleRegex: [],
+          loaded: false,
+        },
+        readTextFile: () => 'generic content\n',
+      },
+    );
+
+    expect(result.violations.map(({ file, rule }) => `${rule}:${file}`)).toEqual([
+      'local-only-repository-surface:shakedown/rounds/2026-01/notes.md',
+      'local-only-repository-surface:shakedown/harness-notes.md',
+      'local-only-repository-surface:deploy/private/values.yaml',
+      'local-only-repository-surface:working_docs/plan.md',
+    ]);
   });
 
   it('keeps text source and docs in scope', () => {

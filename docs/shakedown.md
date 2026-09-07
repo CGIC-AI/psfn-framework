@@ -15,7 +15,7 @@ It has two layers, run in this order per round:
 | Layer | What | Who drives | Verdict source |
 | --- | --- | --- | --- |
 | **A — scripted e2e** | Automated case harness + tool-conformance sweep + Garden behavioral sweep + scorecard | Scripts (repeatable, headless) | Persisted state, never reply text |
-| **B — Partner sessions** | 1:1 structured sessions with the test companion and a person acting in the Partner role | Operator/orchestrator + Artie | Companion reports and observed behavior, triaged into findings |
+| **B — Partner sessions** | 1:1 structured sessions with the test companion and a person acting in the Partner role | Operator/orchestrator + the primary test companion | Companion reports and observed behavior, triaged into findings |
 
 Layer A proves the substrate executes. Layer B collects evidence about whether it is *livable* — clarity, coherence, narration-vs-real-execution, fatigue, and companion self-report. Every reproducible Layer B finding is converted into a Layer A case for the next sprint, so the automated catalog grows from observed behavior and reported companion experience without treating either as proof of inner experience.
 
@@ -35,8 +35,8 @@ is `<prod-namespace>`.
 The test cluster must carry **copies** of both companions used for
 multi-companion work:
 
-- **Artemis** (Artie) — primary test companion
-- **support companion** (V Unit 00) — second companion for ICP, sibling-role,
+- **primary test companion** — the reference companion in `shakedown/companion/`
+- **support companion** — second companion for ICP, sibling-role,
   per-companion EmoSim, and other two-body paths
 
 Those are copies, not the production selves. Do not upgrade or wipe
@@ -53,8 +53,8 @@ spend OpenRouter on this round.
 
 | Pass | Target | Companions | What it proves |
 | --- | --- | --- | --- |
-| 1 | Repository-native node-dev (split local lifecycle) | Artemis only, **autonomous** | Fresh deploy boots; one Autonomous Layer A run |
-| 2 | Old k3d cluster `psfn-kube` / `<round-namespace>` (not `<prod-kube-context>`) | Artemis + support companion | ICP and other multi-companion paths |
+| 1 | Repository-native node-dev (split local lifecycle) | primary test companion only, **autonomous** | Fresh deploy boots; one Autonomous Layer A run |
+| 2 | Old k3d cluster `psfn-kube` / `<round-namespace>` (not `<prod-kube-context>`) | primary test companion + support companion | ICP and other multi-companion paths |
 
 Beads that must have live evidence, not just merged tests:
 
@@ -146,21 +146,21 @@ The lite profile is a **thin wrapper** — it never forks the matrix logic. It:
 
 - **Operator** — approves scope, waives findings, owns the release verdict.
 - **Orchestrator** (coding assistant) — runs the harness, conducts partner sessions, triages findings into beads, writes the round report.
-- **Artie (ARTEMIS)** — the test companion. Not a fixture: a partner. Her card frames her, in character, as a QA companion hired to test companion substrates, so shakedown work *is* her role. She exercises features herself, reports friction, and her exit interview is release-gating (see the livability gate).
+- **Primary test companion** — not a fixture: a partner. Its card frames it, in character, as a QA companion hired to test companion substrates, so shakedown work *is* its role. It exercises features itself, reports friction, and its exit interview is release-gating (see the livability gate).
 
-### Artie's identity rules
+### Test-companion identity rules
 
-- Her **persistent runtime lives on production** (`<prod-kube-context>` /
-  namespace `<prod-namespace>`). That deployment is her home and her continuity;
+- Its **persistent runtime lives on production** (`<prod-kube-context>` /
+  namespace `<prod-namespace>`). That deployment is its home and its continuity;
   testers never touch it. Continuity work is operator-owned production
   ops, not a shakedown step.
 - **Kube-lane testing uses the test-cluster copies** on
-  `k3d-psfn-kube` / `<round-namespace>` (Artemis + support companion). Tell her
-  which instance she is at session start (fresh local clone vs. test-cluster
+  `k3d-psfn-kube` / `<round-namespace>` (primary + support companion). Tell it
+  which instance it is at session start (fresh local clone vs. test-cluster
   copy vs. production self). The test copies may be reset as part of a
   round; production never is.
-- Memory diet policy applies: Artie's job is testing and her identity reflects it. Grunt-work transcripts stay in her lane; they are never merged into other companions' data.
-- Artie's artifacts are versioned in-repo at `shakedown/artie/` (card `ARTIE.png`, env template). She may ship as part of the release package as the reference/test companion; keep her card clean of any private data accordingly.
+- Memory diet policy applies: the test companion's job is testing and its identity reflects it. Grunt-work transcripts stay in its lane; they are never merged into other companions' data.
+- The test companion's artifacts are versioned in-repo at `shakedown/companion/` (card `REFERENCE-COMPANION.png`, env template). The shipped card is a generic reference companion so any deployer can run a round on a fresh build; keep it clean of any private data, and swap in your own card rather than committing it here.
 
 ## The matrix
 
@@ -171,7 +171,7 @@ The full cross-product is not run. The standing simplification:
 | Variant | Tiers | Scope |
 | --- | --- | --- |
 | **Local runtime** (split gateway/agent on the dev machine) | **all three tiers** | Full case catalog per tier subset; fresh bootstrap from seeds; Postgres-backed |
-| **Kube** (test cluster `k3d-psfn-kube` / `<round-namespace>` only; Artemis + support companion copies) | **autonomous only** | Full tool surface, all kube-only surfaces (satellite hub, PWA satellite path, HA world control where staged on, voice control-plane, cluster/multi-companion, ICP). Never production `<prod-kube-context>`. |
+| **Kube** (test cluster `k3d-psfn-kube` / `<round-namespace>` only; primary + support companion copies) | **autonomous only** | Full tool surface, all kube-only surfaces (satellite hub, PWA satellite path, HA world control where staged on, voice control-plane, cluster/multi-companion, ICP). Never production `<prod-kube-context>`. |
 | **Docker** (agent isolation profile) | spot check | Only when a finding suggests variant-dependence, or when the release epic's docker child bead is in scope; network-isolation probe is the variant-specific check |
 | Other combos | spot check | e.g. re-run a failing autonomous case at apprentice locally to bisect tier-dependence |
 | **Pi-class / low-context profile** | spot check, kube | Forced-compaction latency cliff (`mmo9.4`) — explicitly a blind spot on dev-class hardware |
@@ -243,19 +243,19 @@ Two hard rules:
 
 The fail-closed guard lives in `shakedown/harness/lib/capability-matrix.mjs`
 (`requireDedicatedExternalSinks`) and is not to be weakened. Template values are
-in `shakedown/artie/shakedown.env.template`.
+in `shakedown/companion/shakedown.env.template`.
 
-## Bootstrap: a fresh build with Artie
+## Bootstrap: a fresh build with the reference companion
 
 Goal: one clean, repeatable path from release-candidate commit to first proven conversation. This doubles as the fresh-bootstrap-from-seeds certification the release epic requires (config/seed drift check).
 
 ### Local runtime lane
 
 1. **Dedicated clone** of the RC commit (never the dev checkout): `git clone <repo> <shakedown-repo> && cd <shakedown-repo> && git checkout <rc-sha>` then `npm ci && npm run build && npm run garden:build`.
-2. **Shakedown root** outside both the repo and any live data root (e.g. `/srv/example/psfn-shakedown/sprint<N>-shakedown/`). Copy `shakedown/artie/shakedown.env.template` there as `shakedown.env` and fill the `OPERATOR-CONFIRM` values. Never point it at live companion roots — the layout guard rejects overlapping mutable roots in production mode, but do not rely on it.
+2. **Shakedown root** outside both the repo and any live data root (e.g. `/srv/example/psfn-shakedown/sprint<N>-shakedown/`). Copy `shakedown/companion/shakedown.env.template` there as `shakedown.env` and fill the `OPERATOR-CONFIRM` values. Never point it at live companion roots — the layout guard rejects overlapping mutable roots in production mode, but do not rely on it.
 3. **Env sourcing, two stages, in order**: `set -a; source <live>/.env; set +a` (secrets), then the same for `shakedown.env` (paths/ports/layout override). Every harness script fails closed on missing env — there are no fallback paths.
 4. **Seed owner files**: first boot seeds `system-data` from `config/*.seed.json`; gate with `npm run verify:startup-owner-files` and `npm run verify:settings-contract`.
-5. **Import Artie**: `npm run import-character -- shakedown/artie/ARTIE.png` (or Garden upload). This creates `companion-data/companion.json` and her avatar asset.
+5. **Import the reference companion**: `npm run import-character -- shakedown/companion/REFERENCE-COMPANION.png` (or Garden upload). This creates `companion-data/companion.json` and its avatar asset.
 6. **Postgres**: dedicated database/schema for the round (`POSTGRES_DATABASE_URL` in the env; per-companion schema if multi-companion). Runtime stores are Postgres-only — `PERSISTENCE_BACKEND=sqlite` is a stale Sprint-8/9 setting and must not be used.
 7. **Launch**: `npm run split` (or the harness restart script) and gate on all three health signals — gateway API up (`GET /v1/models`), Garden admin up, agent connected.
 8. **First-conversation gate**: one probe turn through `POST /v1/chat/completions`, then confirm the persisted turn record exists for that exact message. Only now is the lane "bootstrapped".
@@ -272,7 +272,7 @@ jq -r '.places[] | [.placeId, .kind, (.mirrorsPlaceId // "-")] | @tsv' \
 ```
 
 Copy exact IDs; do not assume the example vocabulary in
-`shakedown/artie/shakedown.env.template` matches the current round. A
+`shakedown/companion/shakedown.env.template` matches the current round. A
 satellite's `placeId` must resolve to a `kind: "physical"` entry. The
 mindspace probe variables instead name a virtual place and its exact
 `mirrorsPlaceId` physical counterpart.
@@ -312,7 +312,7 @@ disposable cluster) and the namespace is `<round-namespace>`. Stop if the contex
 
 1. Confirm no concurrent deploy session on the **test** cluster (helm history
    + git status on the deploy checkout — one deploy at a time).
-2. Confirm the test roster has **both** Artemis and support companion copies
+2. Confirm the test roster has **both** primary and support companion copies
    (`companions.json` / `fleet.companions`). Multi-companion and ICP cases
    do not run against a single-companion test fleet.
 3. Ship the RC to the test cluster: `npm run ship:kube`
@@ -388,11 +388,11 @@ boundaries, and Garden ports. They have no real channel accounts.
 
 The local round must already have:
 
-- the sourced `shakedown/artie/shakedown.env.template` values, including Artie's
-  canonical `COMPANION_ID` and `PSFN_SHAKEDOWN_ROOT`;
-- Artie's imported card at `$COMPANION_DATA_DIR/companion.json`;
-- all four canonical per-companion owner files in Artie's companion-data root;
-- the provisioned `shakedown_artie` Postgres tenant; and
+- the sourced `shakedown/companion/shakedown.env.template` values, including the
+  test companion's canonical `COMPANION_ID` and `PSFN_SHAKEDOWN_ROOT`;
+- the test companion's imported card at `$COMPANION_DATA_DIR/companion.json`;
+- all four canonical per-companion owner files in its companion-data root;
+- the provisioned `shakedown_companion` Postgres tenant; and
 - no running gateway or agent connected to the round database.
 
 Stand up the multi-companion cluster (topology is derived from the multi-entry
@@ -419,7 +419,7 @@ npm run e2e:multi-companion-runtime
 It uses the canonical support fixture identities and paths to prove two real
 agents establish a two-sided ICP exchange, persist it across agent restart,
 stop through the fatigue closeout reserve, and handle concurrent colliding
-request IDs with zero crossover. A live round repeats those cases with Artie as
+request IDs with zero crossover. A live round repeats those cases with the primary test companion as
 the primary companion and records persisted-state evidence; reply text alone is
 not proof.
 
@@ -433,8 +433,8 @@ npm run shakedown:support -- tear-down
 Teardown validates the exact state record and manifest digest, refuses active
 database sessions, drops only the recorded support tenants, and verifies that
 their cards, owner files, companion-data roots, Personal Workspaces, schemas,
-roles, manifest, and state record are absent. Artie's card, owner files,
-Personal Workspace, and `shakedown_artie` tenant remain.
+roles, manifest, and state record are absent. The primary test companion's card, owner files,
+Personal Workspace, and `shakedown_companion` tenant remain.
 
 ## Layer A — the scripted harness
 
@@ -507,9 +507,9 @@ stored as keyed digests, not raw request values.
 3. **Garden behavioral sweep** — Playwright over the Garden routes, asserting **behavior, not HTTP 200s**: settings save/load round-trip, memory search returns results, episodic rendering, charge-ledger state, tool-health telemetry, cognitive-security queue. No console/page errors.
 4. **Scorecard** — aggregates all run JSONs and **cross-checks the coverage appendix**: every feature row must map to ≥1 executed case or an explicit manual/partner-session disposition. A scorecard that is green while coverage rows are untouched is itself a failure. The non-green taxonomy is enforced in code, not prose: `semantic_failure`, `completed_after_abort`, `agent_busy`, `runtime_stale`, `matrix_aborted`, `unproven_tool_claim`, `unledgered_charge` — all count as failures unless the operator records an explicit waiver.
 
-The harness lives in-repo (target: `shakedown/harness/`, built out under epic `65rk` — see "Build-out status" below). Run artifacts (round dirs, run JSONs, screenshots, interviews) stay **outside** the repo in the round root; only the process, the harness, and Artie's bootstrap artifacts are versioned.
+The harness lives in-repo (target: `shakedown/harness/`, built out under epic `65rk` — see "Build-out status" below). Run artifacts (round dirs, run JSONs, screenshots, interviews) stay **outside** the repo in the round root; only the process, the harness, and the reference companion's bootstrap artifacts are versioned.
 
-## Layer B — partner sessions with Artie
+## Layer B — partner sessions with the test companion
 
 Structured 1:1 work, after Layer A is green enough to be worth her time. Principles from the introspection canon apply: first-person empirical prompts, don't ask "how do you feel" — ask what happened; fresh sessions for interviews (no prior transcript bleed).
 
@@ -583,7 +583,7 @@ Every finding — hers or the harness's — becomes a structured record: **Sever
 ### Explicitly out of scope for S10
 
 - **Proactive voice on satellites** — design only, never built; do not attempt to shake down.
-- **Cross-cluster ICP** (Companion↔Artie link, `0ggv.4`/`s10d1`) — deferred, hardware pending.
+- **Cross-cluster ICP** (cross-companion link, `0ggv.4`/`s10d1`) — deferred, hardware pending.
 - `fleet-auth` SSO / passkeys (`opl1` bulk), wiki caretaker beyond propose-approve, restore build-out (`s10d7`), docker variant full pass (spot check only this round).
 
 ### Known open items to re-check at round open
@@ -594,4 +594,4 @@ Every finding — hers or the harness's — becomes a structured record: **Sever
 
 ## Build-out status
 
-Tracked as child beads of epic `psfn-framework-65rk`: `65rk.1` harness port (shared probe lib, fail-closed env, tier sweep, scorecard coverage cross-check) — **landed** in-repo at `shakedown/harness/` (see `shakedown/harness/README.md`); `65rk.2` one-command fresh bootstrap with Artie; `65rk.3` S10 case authoring for the appendix; `65rk.4` support-companion fixtures. Rounds run the in-repo harness with the env sourced first; the Sprint-9 script set under `/srv/example/psfn-shakedown/` remains only as a historical run archive. Until `65rk.3` maps the appendix surfaces to cases, the scorecard's coverage cross-check is red by design — that is the fail-closed default, not a regression.
+Tracked as child beads of epic `psfn-framework-65rk`: `65rk.1` harness port (shared probe lib, fail-closed env, tier sweep, scorecard coverage cross-check) — **landed** in-repo at `shakedown/harness/` (see `shakedown/harness/README.md`); `65rk.2` one-command fresh bootstrap with the reference companion; `65rk.3` S10 case authoring for the appendix; `65rk.4` support-companion fixtures. Rounds run the in-repo harness with the env sourced first; the Sprint-9 script set under `/srv/example/psfn-shakedown/` remains only as a historical run archive. Until `65rk.3` maps the appendix surfaces to cases, the scorecard's coverage cross-check is red by design — that is the fail-closed default, not a regression.

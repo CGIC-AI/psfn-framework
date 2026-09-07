@@ -1,7 +1,7 @@
 // Deployment-target abstraction for the shakedown harness.
 //
 // The harness runs against either a locally bootstrapped split runtime
-// (`PSFN_TARGET=local`, the 65rk.1 default) or Artie's live kube deployment
+// (`PSFN_TARGET=local`, the 65rk.1 default) or the test companion's live kube deployment
 // (`PSFN_TARGET=kube`). This module is the single place that resolves the
 // transport contract — {chat base URL, admin/Garden API base URL, direct Garden
 // health base URL, gateway API key, Garden credential, Postgres connection} — from the fail-closed env for both

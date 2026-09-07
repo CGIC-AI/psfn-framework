@@ -282,8 +282,8 @@ export function resolveBootstrapConfig(env = process.env) {
     );
   }
   requireDirectory(configDir, 'CONFIG_DIR');
-  const characterCardSource = join(repoRoot, 'shakedown', 'artie', 'ARTIE.png');
-  requireFile(characterCardSource, 'Artie character card');
+  const characterCardSource = join(repoRoot, 'shakedown', 'companion', 'REFERENCE-COMPANION.png');
+  requireFile(characterCardSource, 'reference companion character card');
 
   if (pathsOverlap(roundRoot, repoRoot)) {
     throw new Error(

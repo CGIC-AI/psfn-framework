@@ -409,6 +409,11 @@ secrets:
     satelliteHubApiKey: ""
     homeAssistantToken: ""
     satelliteHubControlToken: ""
+    # Eidoverse world join token. Delivered to the hub under the environment
+    # name in secrets.keys.eidoverseJoinToken, which must equal
+    # satelliteHub.eidoverse.tokenRef. Required when the eidoverse visitor path
+    # is enabled and secrets.allowMissingRequired=false.
+    eidoverseJoinToken: ""
     # Optional comma-separated additional per-satellite bearer keys appended to
     # the gateway's API_SATELLITE_KEYS list (for LAN satellites that are not
     # the hub). Each key must be >=16 chars and distinct.
@@ -435,6 +440,7 @@ secrets:
     satelliteHubApiKey: SATELLITE_HUB_API_KEY
     homeAssistantToken: HOME_ASSISTANT_TOKEN
     satelliteHubControlToken: SATELLITE_HUB_CONTROL_TOKEN
+    eidoverseJoinToken: EIDOVERSE_JOIN_TOKEN
     satelliteApiKeys: API_SATELLITE_KEYS
     providerApiKey: PSFN_PROVIDER_API_KEY
     openRouterApiKey: OPENROUTER_API_KEY
@@ -753,6 +759,54 @@ satelliteHub:
     # exact homeAssistantEntityIds; the Hub rejects reads and service calls
     # outside that authenticated device's list.
     devices: []
+  # Optional Hub-owned Eidoverse embodiment client (EIDOVERSE_MCP_* in
+  # apps/satellite-hub/.env.example; loadEidoverseMcpConfig in
+  # src/ts/hub/eidoverse-mcp.ts). Disabled by default: the hub then never spawns
+  # the stdio MCP server and the visitor path stays off.
+  #
+  # Enabling it makes the MCP connection a STARTUP requirement — the hub
+  # rethrows EidoverseMcpUnavailableError and the pod crash-loops until the
+  # configured command and world URL are reachable. The MCP server binary is NOT
+  # bundled in the hub image; command must resolve inside that image.
+  eidoverse:
+    enabled: false
+    # Local stdio MCP server executable and its argument vector. Rendered as
+    # EIDOVERSE_MCP_COMMAND and EIDOVERSE_MCP_ARGS_JSON.
+    command: ""
+    args: []
+    # Credential-free ws:// or wss:// world URL. The hub rejects any other
+    # scheme and any embedded userinfo.
+    worldUrl: ""
+    worldName: ""
+    agentName: ""
+    # Name of the Hub-custodied environment entry holding the join token. The
+    # reference travels through config; the token value only ever arrives from
+    # the app Secret under secrets.keys.eidoverseJoinToken, which must use this
+    # same environment name.
+    tokenRef: EIDOVERSE_JOIN_TOKEN
+    reconnectBaseMs: 250
+    reconnectMaxMs: 5000
+    reconnectMaxAttempts: 3
+    requestTimeoutMs: 10000
+    # Hub-owned wake policy. Producer suggestedTreatment declarations never
+    # override these.
+    pendingPingsPollIntervalMs: 2000
+    ambientSayDebounceMs: 180000
+    # NetworkPolicy is deny-by-default for private LANs and
+    # networkPolicy.satelliteHub.allowExternalEgress opens only public 443, so a
+    # LAN or non-443 world must name its host/subnet and port explicitly.
+    # Example: ["192.0.2.30/32"] and 8080.
+    egressCIDRs: []
+    egressPort: 443
+    # Optional Hub-owned static world/region-to-place table rendered into a
+    # ConfigMap and mounted read-only at mountPath (EIDOVERSE_PLACE_MAP_PATH).
+    # worlds mirrors the "worlds" object of
+    # apps/satellite-hub/config/eidoverse-place-map.example.json; the chart adds
+    # schemaVersion 1.
+    placeMap:
+      enabled: false
+      mountPath: /app/config/eidoverse-place-map.json
+      worlds: {}
   # A cert-manager client Certificate (chain: chart CA / existing psfn-ca
   # Issuer) is issued for the hub whenever it is enabled and mounted at
   # <certificates.mountBasePath>/psfn-client. Runtime auth currently uses the

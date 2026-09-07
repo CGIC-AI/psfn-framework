@@ -994,6 +994,48 @@ spec:
             - name: HUB_DEVICE_REGISTRY_PATH
               value: /app/config/hub-devices.json
             {{- end }}
+            {{- if .Values.satelliteHub.eidoverse.enabled }}
+            {{- /* Hub-owned Eidoverse embodiment client. loadEidoverseMcpConfig
+                 returns null unless EIDOVERSE_MCP_ENABLED is exactly "true", so
+                 the disabled default renders none of these keys. The join token
+                 arrives ONLY under the configured tokenRef environment name;
+                 the reference itself travels through config. */}}
+            - name: EIDOVERSE_MCP_ENABLED
+              value: "true"
+            - name: EIDOVERSE_MCP_COMMAND
+              value: {{ .Values.satelliteHub.eidoverse.command | quote }}
+            - name: EIDOVERSE_MCP_ARGS_JSON
+              value: {{ toJson .Values.satelliteHub.eidoverse.args | quote }}
+            - name: EIDOVERSE_MCP_WORLD_URL
+              value: {{ .Values.satelliteHub.eidoverse.worldUrl | quote }}
+            - name: EIDOVERSE_MCP_WORLD_NAME
+              value: {{ .Values.satelliteHub.eidoverse.worldName | quote }}
+            - name: EIDOVERSE_MCP_AGENT_NAME
+              value: {{ .Values.satelliteHub.eidoverse.agentName | quote }}
+            - name: EIDOVERSE_MCP_TOKEN_REF
+              value: {{ .Values.satelliteHub.eidoverse.tokenRef | quote }}
+            - name: EIDOVERSE_MCP_RECONNECT_BASE_MS
+              value: {{ .Values.satelliteHub.eidoverse.reconnectBaseMs | quote }}
+            - name: EIDOVERSE_MCP_RECONNECT_MAX_MS
+              value: {{ .Values.satelliteHub.eidoverse.reconnectMaxMs | quote }}
+            - name: EIDOVERSE_MCP_RECONNECT_MAX_ATTEMPTS
+              value: {{ .Values.satelliteHub.eidoverse.reconnectMaxAttempts | quote }}
+            - name: EIDOVERSE_MCP_REQUEST_TIMEOUT_MS
+              value: {{ .Values.satelliteHub.eidoverse.requestTimeoutMs | quote }}
+            - name: EIDOVERSE_MCP_PENDING_PINGS_POLL_INTERVAL_MS
+              value: {{ .Values.satelliteHub.eidoverse.pendingPingsPollIntervalMs | quote }}
+            - name: EIDOVERSE_MCP_AMBIENT_SAY_DEBOUNCE_MS
+              value: {{ .Values.satelliteHub.eidoverse.ambientSayDebounceMs | quote }}
+            - name: {{ .Values.satelliteHub.eidoverse.tokenRef }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "psfn.appSecretName" . }}
+                  key: {{ .Values.secrets.keys.eidoverseJoinToken }}
+            {{- if .Values.satelliteHub.eidoverse.placeMap.enabled }}
+            - name: EIDOVERSE_PLACE_MAP_PATH
+              value: {{ .Values.satelliteHub.eidoverse.placeMap.mountPath | quote }}
+            {{- end }}
+            {{- end }}
             {{- if .Values.satelliteHub.textOnly }}
             {{- /* Text-only mode: voice providers are genuinely optional
                  (HUB_TEXT_ONLY, hub commit 2b8d234). */}}
@@ -1060,6 +1102,12 @@ spec:
               subPath: hub-devices.json
               readOnly: true
             {{- end }}
+            {{- if and .Values.satelliteHub.eidoverse.enabled .Values.satelliteHub.eidoverse.placeMap.enabled }}
+            - name: eidoverse-place-map
+              mountPath: {{ .Values.satelliteHub.eidoverse.placeMap.mountPath | quote }}
+              subPath: eidoverse-place-map.json
+              readOnly: true
+            {{- end }}
       volumes:
         - name: runtime
           persistentVolumeClaim:
@@ -1071,6 +1119,11 @@ spec:
         - name: hub-device-registry
           configMap:
             name: {{ include "psfn.fullname" . }}-hub-devices
+        {{- end }}
+        {{- if and .Values.satelliteHub.eidoverse.enabled .Values.satelliteHub.eidoverse.placeMap.enabled }}
+        - name: eidoverse-place-map
+          configMap:
+            name: {{ include "psfn.fullname" . }}-eidoverse-place-map
         {{- end }}
 {{- end }}
 {{- if .Values.companionUiTest.enabled }}

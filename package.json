@@ -165,6 +165,7 @@
     "verify:postgres-only": "node scripts/verify-postgres-only.mjs",
     "verify:hardcoded-settings": "node scripts/verify-hardcoded-settings.mjs",
     "verify:recovery-chart-digest": "tsx scripts/verify-recovery-chart-digest.ts",
+    "verify:chart-render": "tsx scripts/verify-chart-render.ts",
     "verify:typecheck-baseline": "node scripts/verify-typecheck-baseline.mjs",
     "verify:duplicate-type-names": "tsx scripts/check-duplicate-type-names.ts",
     "verify:knip": "node scripts/verify-knip-baseline.mjs",

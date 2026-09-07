@@ -48,6 +48,142 @@
         "enabled",
         "authorityFloor"
       ]
+    },
+    "satelliteHub": {
+      "type": "object",
+      "properties": {
+        "eidoverse": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabled",
+            "command",
+            "args",
+            "worldUrl",
+            "worldName",
+            "agentName",
+            "tokenRef",
+            "reconnectBaseMs",
+            "reconnectMaxMs",
+            "reconnectMaxAttempts",
+            "requestTimeoutMs",
+            "pendingPingsPollIntervalMs",
+            "ambientSayDebounceMs",
+            "egressCIDRs",
+            "egressPort",
+            "placeMap"
+          ],
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "command": {
+              "type": "string"
+            },
+            "args": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "worldUrl": {
+              "type": "string",
+              "pattern": "^$|^wss?://"
+            },
+            "worldName": {
+              "type": "string"
+            },
+            "agentName": {
+              "type": "string"
+            },
+            "tokenRef": {
+              "type": "string",
+              "pattern": "^[A-Z][A-Z0-9_]*$"
+            },
+            "reconnectBaseMs": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "reconnectMaxMs": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "reconnectMaxAttempts": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "requestTimeoutMs": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "pendingPingsPollIntervalMs": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "ambientSayDebounceMs": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "egressCIDRs": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "egressPort": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            },
+            "placeMap": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "enabled",
+                "mountPath",
+                "worlds"
+              ],
+              "properties": {
+                "enabled": {
+                  "type": "boolean"
+                },
+                "mountPath": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "^/"
+                },
+                "worlds": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "placeId"
+                    ],
+                    "properties": {
+                      "placeId": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "regions": {
+                        "type": "object",
+                        "additionalProperties": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "required": [
+        "eidoverse"
+      ]
     }
   }
 }

@@ -107,5 +107,39 @@ The chart contains advanced fleet, ingress, Redis, Satellite Hub, Kubernetes
 self-management, and observer-eval values for operator-owned deployments. They
 are disabled by default and are not additional public installation modes.
 
+### Satellite Hub Eidoverse visitor path
+
+`satelliteHub.eidoverse` renders the `EIDOVERSE_MCP_*` environment that the Hub
+reads (`apps/satellite-hub/src/ts/hub/eidoverse-mcp.ts`). It is disabled by
+default, and the disabled render contains no Eidoverse key at all.
+
+Enabling it requires `satelliteHub.enabled=true`, a `command` that resolves
+inside the Hub image, a credential-free `ws://`/`wss://` `worldUrl`, a
+`worldName`, and an `agentName`; partial configuration fails rendering rather
+than shipping a pod that cannot start. The join token is never a chart value on
+the container: `tokenRef` names the environment entry the Hub dereferences, and
+that entry is populated from the application Secret key
+`secrets.keys.eidoverseJoinToken` (the two must match), mirroring the Home
+Assistant control-token pattern.
+
+Two operational consequences:
+
+- **The MCP server binary is not bundled.** `command` must already exist in the
+  Hub image or the pod cannot connect.
+- **Connectivity becomes a startup requirement.** The Hub rethrows
+  `EidoverseMcpUnavailableError`, so the pod crash-loops until the configured
+  command and world are reachable. With `networkPolicy.enabled=true`, a LAN or
+  non-443 world also needs `satelliteHub.eidoverse.egressCIDRs`/`egressPort`;
+  `networkPolicy.satelliteHub.allowExternalEgress` only opens public 443.
+
+`satelliteHub.eidoverse.placeMap` renders the optional Hub-owned world/region to
+`places.json` mapping into a ConfigMap mounted read-only at `mountPath`
+(`EIDOVERSE_PLACE_MAP_PATH`). The mapping is read-only and never creates or
+changes entries in `places.json`.
+
+`npm run verify:chart-render` renders both states with `helm template` and asserts
+the exact environment, the secret-backed token, the place-map ConfigMap and
+mount, and every fail-closed rejection. It requires the `helm` binary.
+
 Live values files, kubeconfigs, cluster names, infrastructure addresses, and
 credentials do not belong in this repository.

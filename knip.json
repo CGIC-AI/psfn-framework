@@ -35,6 +35,7 @@
       "ignoreBinaries": [
         "bd",
         "gh",
+        "helm",
         "kubectl",
         "rg",
         "tail",

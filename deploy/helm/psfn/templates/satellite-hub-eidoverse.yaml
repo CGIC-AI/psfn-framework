@@ -1,0 +1,15 @@
+{{- if and .Values.satelliteHub.enabled .Values.satelliteHub.eidoverse.enabled .Values.satelliteHub.eidoverse.placeMap.enabled }}
+{{- /* Hub-owned static Eidoverse world/region-to-place table. Read-only: it
+     never creates or changes entries in places.json. The Hub parser requires
+     schemaVersion 1 and at least one world, so the chart owns the version and
+     fails closed on an empty map. */}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "psfn.fullname" . }}-eidoverse-place-map
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+data:
+  eidoverse-place-map.json: |
+    {{ dict "schemaVersion" 1 "worlds" .Values.satelliteHub.eidoverse.placeMap.worlds | toJson | nindent 4 }}
+{{- end }}

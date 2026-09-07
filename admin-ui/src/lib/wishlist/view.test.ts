@@ -17,11 +17,13 @@ function wish(id: string, state: CompanionWish['state']): CompanionWish {
 }
 
 describe('wishlist view helpers', () => {
-  it('summarizes state and keeps completed wishes out of the active view', () => {
+  it('summarizes state and keeps closed wishes out of the active view', () => {
     const wishes = [
       wish('11111111-1111-4111-8111-111111111111', 'open'),
       wish('22222222-2222-4222-8222-222222222222', 'planned'),
       wish('33333333-3333-4333-8333-333333333333', 'done'),
+      // psfn-framework-p4rmp: a doing-mirror decline is terminal for the wish too.
+      wish('44444444-4444-4444-8444-444444444444', 'declined'),
     ];
 
     expect(countWishesByState(wishes)).toEqual({
@@ -29,8 +31,10 @@ describe('wishlist view helpers', () => {
       acknowledged: 0,
       planned: 1,
       done: 1,
+      declined: 1,
     });
     expect(activeWishes(wishes).map(item => item.state)).toEqual(['open', 'planned']);
     expect(wishlistStateLabel('acknowledged')).toBe('Acknowledged');
+    expect(wishlistStateLabel('declined')).toBe('Declined');
   });
 });

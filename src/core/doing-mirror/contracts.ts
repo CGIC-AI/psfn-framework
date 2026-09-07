@@ -66,10 +66,29 @@ export interface DoingMirrorItem {
   disposition: DoingMirrorDisposition;
 }
 
+export interface DoingMirrorSourceDispositionInput {
+  itemId: string;
+  state: Exclude<DoingMirrorState, 'open'>;
+  /** Present for every decline; the lifecycle refuses one without a reason. */
+  reason?: string;
+}
+
 export interface DoingMirrorSourcePort {
   readonly itemType: DoingMirrorItemType;
   list(): Promise<DoingMirrorSourceItem[]>;
   get(itemId: string): Promise<DoingMirrorSourceItem | null>;
+  /**
+   * psfn-framework-p4rmp: project the recorded Partner disposition onto the
+   * source item's own operator-facing lifecycle, so a wish cannot be terminal
+   * in the doing mirror while still open in the wiki (or the reverse). This
+   * writes only operator-owned lifecycle fields; companion-authored content is
+   * never touched and decision authority does not move.
+   *
+   * Runs on every delivery attempt, including the maintenance drain and an
+   * operator retry, so it MUST be idempotent. A source with no separate
+   * lifecycle to converge omits it.
+   */
+  applyDisposition?(input: DoingMirrorSourceDispositionInput): Promise<void>;
 }
 
 export interface DoingMirrorTransitionStoreInput {

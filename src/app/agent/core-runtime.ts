@@ -188,7 +188,10 @@ import { LetterService } from '../../core/letters/service.js';
 import { createLetterTool } from '../../core/tools/letter.js';
 import type { DoingMirrorStorePort } from '../../core/doing-mirror/contracts.js';
 import { DoingMirrorService } from '../../core/doing-mirror/service.js';
-import { WishlistDoingMirrorSource } from '../../core/doing-mirror/sources.js';
+import {
+  reconcileClosedWishDispositions,
+  WishlistDoingMirrorSource,
+} from '../../core/doing-mirror/sources.js';
 import {
   resolveForegroundSessionOwner,
   type AutomataSessionClassificationService,
@@ -800,6 +803,14 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     letters: letterService,
   });
   doingMirrorService.registerSource(new WishlistDoingMirrorSource(wikiRuntime.personalWishlist));
+  // p4rmp: wishes closed through the pre-lifecycle Garden routes have no
+  // disposition row, so the mirror would report them open while the wiki calls
+  // them terminal. Fails startup closed rather than serving two disagreeing
+  // stores.
+  await reconcileClosedWishDispositions({
+    wishlist: wikiRuntime.personalWishlist,
+    store: options.doingMirrorStore,
+  });
   // E8.3: attach the supplemental wiki RAG provider (null when the projection
   // is unavailable); pre-turn assembly consults it AFTER memory context.
   agentLoop.wikiRetrieval = wikiRuntime.retrievalService;

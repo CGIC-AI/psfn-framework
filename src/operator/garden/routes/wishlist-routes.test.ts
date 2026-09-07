@@ -72,7 +72,7 @@ function createService(): AdminWishlistService {
   return {
     listWishes: vi.fn(async () => ({ wishes: [WISH], boundary: 'personal wishlist' })),
     acknowledgeWish: vi.fn(async () => ({ ...WISH, state: 'acknowledged' })),
-    respondToWish: vi.fn(async (_ref, response) => ({
+    respondToWish: vi.fn(async (_ref, response, _letter) => ({
       ...WISH,
       state: 'acknowledged',
       operatorResponse: response,
@@ -92,15 +92,18 @@ describe('admin wishlist routes', () => {
     expect(unavailable).toMatchObject({ status: 503, body: { error: 'Wishlist backend unavailable' } });
   });
 
-  it('routes acknowledge, respond, convert, and done mutations', async () => {
+  it('routes acknowledge, respond, convert, and done mutations with their Letter text', async () => {
     const service = createService();
     const base = `/api/admin/wishlist/${WISH.id}`;
+    const letter = { subject: 'About the botanical garden', body: 'I read this and I am on it.' };
 
-    expect((await invoke({ method: 'POST', path: `${base}/acknowledge`, service })).status).toBe(200);
+    expect((await invoke({
+      method: 'POST', path: `${base}/acknowledge`, body: letter, service,
+    })).status).toBe(200);
     expect((await invoke({
       method: 'POST',
       path: `${base}/respond`,
-      body: { response: 'I hear you.' },
+      body: { response: 'I hear you.', ...letter },
       service,
     })).status).toBe(200);
     expect((await invoke({
@@ -109,13 +112,39 @@ describe('admin wishlist routes', () => {
       body: { issueType: 'task', priority: 2 },
       service,
     })).status).toBe(200);
-    expect((await invoke({ method: 'POST', path: `${base}/done`, service })).status).toBe(200);
+    expect((await invoke({
+      method: 'POST', path: `${base}/done`, body: letter, service,
+    })).status).toBe(200);
 
-    expect(service.respondToWish).toHaveBeenCalledWith(WISH.id, 'I hear you.');
+    // p4rmp: the exact Partner-authored Letter text reaches the disposition
+    // lifecycle; the route never invents or reshapes it.
+    expect(service.acknowledgeWish).toHaveBeenCalledWith(WISH.id, letter);
+    expect(service.respondToWish).toHaveBeenCalledWith(WISH.id, 'I hear you.', letter);
+    expect(service.completeWish).toHaveBeenCalledWith(WISH.id, letter);
     expect(service.convertWishToBead).toHaveBeenCalledWith(WISH.id, {
       issueType: 'task',
       priority: 2,
     });
+  });
+
+  it('rejects empty or unknown Letter fields on a disposition action', async () => {
+    const service = createService();
+    const base = `/api/admin/wishlist/${WISH.id}`;
+
+    const blank = await invoke({
+      method: 'POST', path: `${base}/done`, body: { subject: '   ', body: 'text' }, service,
+    });
+    expect(blank.status).toBe(400);
+    expect(service.completeWish).not.toHaveBeenCalled();
+
+    const unknown = await invoke({
+      method: 'POST',
+      path: `${base}/acknowledge`,
+      body: { subject: 'A', body: 'B', response: 'nope' },
+      service,
+    });
+    expect(unknown.status).toBe(400);
+    expect(service.acknowledgeWish).not.toHaveBeenCalled();
   });
 
   it('rejects unknown and invalid mutation fields before service dispatch', async () => {

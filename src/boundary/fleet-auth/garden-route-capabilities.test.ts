@@ -275,8 +275,13 @@ describe('Garden route capability catalogue', () => {
     expect(bodyMode('POST', '/api/admin/contact-approvals/contact-a/approve')).toBe('forbidden');
     expect(bodyMode('POST', '/api/admin/contact-approvals/contact-a/deny')).toBe('forbidden');
     expect(bodyMode('POST', '/api/admin/contact-approvals/contact-a/reset')).toBe('forbidden');
-    expect(bodyMode('POST', '/api/admin/wishlist/wish-a/acknowledge')).toBe('forbidden');
-    expect(bodyMode('POST', '/api/admin/wishlist/wish-a/done')).toBe('forbidden');
+    // psfn-framework-p4rmp: these record a doing-mirror disposition, so they now
+    // carry the Partner-authored Letter the lifecycle refuses to invent.
+    expect(bodyMode('POST', '/api/admin/wishlist/wish-a/acknowledge')).toBe('required');
+    expect(bodyMode('POST', '/api/admin/wishlist/wish-a/done')).toBe('required');
+    // psfn-framework-nwtw1: the quarantine retry is fully addressed by its path.
+    expect(bodyMode('POST', '/api/admin/doing-mirror/wishlist/item-a/retry-letter'))
+      .toBe('forbidden');
     expect(bodyMode('POST', '/api/admin/prompts/layer-a/rollback')).toBe('optional');
     expect(bodyMode('POST', '/api/admin/action-pipe/actions/action-a/acknowledge')).toBe('optional');
     expect(bodyMode('POST', '/api/admin/action-pipe/actions/action-a/cancel')).toBe('optional');

@@ -4,6 +4,7 @@ import {
   parseCompanionWishDocument,
   requireOperatorWishResponse,
   requireWishBeadId,
+  requireWishDeclineReason,
   requireWishContext,
   requireWishId,
   requireWishText,
@@ -113,6 +114,7 @@ export class PersonalWishlist {
   planWish(refOrId: string, beadId: string): CompanionWish {
     const current = this.getWish(refOrId);
     if (current.state === 'done') throw new Error(`${current.ref} is already done`);
+    if (current.state === 'declined') throw new Error(`${current.ref} is already declined`);
     if (current.state === 'planned') return current;
     const timestamp = this.nextTimestamp(current);
     const planned: CompanionWish = {
@@ -127,9 +129,33 @@ export class PersonalWishlist {
     return planned;
   }
 
+  /**
+   * psfn-framework-p4rmp: terminal Partner decline mirrored from the doing-mirror
+   * lifecycle, which never lets a decline land without a companion-visible
+   * reason. Idempotent so a redelivered disposition does not move the timeline.
+   */
+  declineWish(refOrId: string, reason: string): CompanionWish {
+    const current = this.getWish(refOrId);
+    const declineReason = requireWishDeclineReason(reason);
+    if (current.state === 'declined') return current;
+    if (current.state === 'done') throw new Error(`${current.ref} is already done`);
+    const timestamp = this.nextTimestamp(current);
+    const declined: CompanionWish = {
+      ...current,
+      state: 'declined',
+      acknowledgedAt: current.acknowledgedAt ?? timestamp,
+      declinedAt: timestamp,
+      declineReason,
+      updatedAt: timestamp,
+    };
+    this.persist(declined, 'operator:personal-wishlist');
+    return declined;
+  }
+
   completeWish(refOrId: string): CompanionWish {
     const current = this.getWish(refOrId);
     if (current.state === 'done') return current;
+    if (current.state === 'declined') throw new Error(`${current.ref} is already declined`);
     const timestamp = this.nextTimestamp(current);
     const completed: CompanionWish = {
       ...current,

@@ -5,6 +5,7 @@ import { parseAdminJsonBody } from '../request-body.js';
 import { exactPath, paramWithSuffix } from '../route-matchers.js';
 import type {
   AdminWishlistConvertInput,
+  AdminWishlistDispositionLetter,
   AdminWishlistService,
 } from '../services/types.js';
 import { ADMIN_DYNAMIC_JSON_HEADERS, sendInternalError, toSanitizedMessage } from './shared.js';
@@ -15,7 +16,12 @@ import type {
 } from './types.js';
 
 const WISHLIST_UNAVAILABLE_ERROR = 'Wishlist backend unavailable';
-const WISH_RESPONSE_KEYS: readonly string[] = ['response'];
+// psfn-framework-p4rmp: every wishlist action that moves the doing-mirror
+// disposition carries the exact Partner-authored Letter text; machinery never
+// invents it. The fields are optional here because a repeat action that changes
+// nothing writes no Letter, and the service fails closed when one is required.
+const WISH_LETTER_KEYS: readonly string[] = ['subject', 'body'];
+const WISH_RESPONSE_KEYS: readonly string[] = ['response', 'subject', 'body'];
 const WISH_CONVERT_KEYS: readonly string[] = ['issueType', 'priority'];
 const WISH_ISSUE_TYPES: ReadonlySet<string> = new Set([
   'bug',
@@ -25,13 +31,37 @@ const WISH_ISSUE_TYPES: ReadonlySet<string> = new Set([
   'chore',
 ]);
 
-function parseResponseInput(value: unknown): string {
+function parseLetterFields(value: Record<string, unknown>): AdminWishlistDispositionLetter {
+  for (const field of WISH_LETTER_KEYS) {
+    const supplied = value[field];
+    if (supplied !== undefined && (typeof supplied !== 'string' || !supplied.trim())) {
+      throw new Error(`${field} must be a non-empty Partner-authored string when supplied`);
+    }
+  }
+  return {
+    ...(typeof value.subject === 'string' ? { subject: value.subject } : {}),
+    ...(typeof value.body === 'string' ? { body: value.body } : {}),
+  };
+}
+
+function parseLetterInput(value: unknown): AdminWishlistDispositionLetter {
+  if (!isRecord(value)) throw new Error('Wishlist disposition payload must be a JSON object');
+  assertNoUnknownKeys(value, WISH_LETTER_KEYS, 'Wishlist disposition payload');
+  return parseLetterFields(value);
+}
+
+interface WishResponseInput {
+  response: string;
+  letter: AdminWishlistDispositionLetter;
+}
+
+function parseResponseInput(value: unknown): WishResponseInput {
   if (!isRecord(value)) throw new Error('Wishlist response payload must be a JSON object');
   assertNoUnknownKeys(value, WISH_RESPONSE_KEYS, 'Wishlist response payload');
   if (typeof value.response !== 'string' || !value.response.trim()) {
     throw new Error('response must be a non-empty string');
   }
-  return value.response;
+  return { response: value.response, letter: parseLetterFields(value) };
 }
 
 function parseIssueType(value: unknown): BeadsIssueType | undefined {
@@ -129,7 +159,7 @@ export function buildAdminWishlistRoutes(options: {
     {
       method: 'POST',
       match: paramWithSuffix('/api/admin/wishlist/', 'wishId', '/acknowledge'),
-      handle: (_req, res, { wishId }) => {
+      handle: (req, res, { wishId }) => {
         if (!wishId) {
           sendJson(res, 400, { error: 'wishId is required' });
           return;
@@ -138,13 +168,15 @@ export function buildAdminWishlistRoutes(options: {
           sendJson(res, 503, { error: WISHLIST_UNAVAILABLE_ERROR });
           return;
         }
-        wishlistService.acknowledgeWish(wishId).then(
-          (wish) => {
-            auditWishMutation(appendAuditTimelineEntry, wishId, 'acknowledged');
-            sendJson(res, 200, { wish }, ADMIN_DYNAMIC_JSON_HEADERS);
-          },
-          error => sendJson(res, 400, { error: toSanitizedMessage(error, 'Failed to acknowledge wish') }),
-        );
+        withParsedBody(withBody, req, res, parseLetterInput, (letter) => {
+          wishlistService.acknowledgeWish(wishId, letter).then(
+            (wish) => {
+              auditWishMutation(appendAuditTimelineEntry, wishId, 'acknowledged');
+              sendJson(res, 200, { wish }, ADMIN_DYNAMIC_JSON_HEADERS);
+            },
+            error => sendJson(res, 400, { error: toSanitizedMessage(error, 'Failed to acknowledge wish') }),
+          );
+        });
       },
     },
     {
@@ -159,8 +191,8 @@ export function buildAdminWishlistRoutes(options: {
           sendJson(res, 503, { error: WISHLIST_UNAVAILABLE_ERROR });
           return;
         }
-        withParsedBody(withBody, req, res, parseResponseInput, (response) => {
-          wishlistService.respondToWish(wishId, response).then(
+        withParsedBody(withBody, req, res, parseResponseInput, ({ response, letter }) => {
+          wishlistService.respondToWish(wishId, response, letter).then(
             (wish) => {
               auditWishMutation(appendAuditTimelineEntry, wishId, 'responded to');
               sendJson(res, 200, { wish }, ADMIN_DYNAMIC_JSON_HEADERS);
@@ -196,7 +228,7 @@ export function buildAdminWishlistRoutes(options: {
     {
       method: 'POST',
       match: paramWithSuffix('/api/admin/wishlist/', 'wishId', '/done'),
-      handle: (_req, res, { wishId }) => {
+      handle: (req, res, { wishId }) => {
         if (!wishId) {
           sendJson(res, 400, { error: 'wishId is required' });
           return;
@@ -205,13 +237,15 @@ export function buildAdminWishlistRoutes(options: {
           sendJson(res, 503, { error: WISHLIST_UNAVAILABLE_ERROR });
           return;
         }
-        wishlistService.completeWish(wishId).then(
-          (wish) => {
-            auditWishMutation(appendAuditTimelineEntry, wishId, 'completed');
-            sendJson(res, 200, { wish }, ADMIN_DYNAMIC_JSON_HEADERS);
-          },
-          error => sendJson(res, 400, { error: toSanitizedMessage(error, 'Failed to complete wish') }),
-        );
+        withParsedBody(withBody, req, res, parseLetterInput, (letter) => {
+          wishlistService.completeWish(wishId, letter).then(
+            (wish) => {
+              auditWishMutation(appendAuditTimelineEntry, wishId, 'completed');
+              sendJson(res, 200, { wish }, ADMIN_DYNAMIC_JSON_HEADERS);
+            },
+            error => sendJson(res, 400, { error: toSanitizedMessage(error, 'Failed to complete wish') }),
+          );
+        });
       },
     },
   ];

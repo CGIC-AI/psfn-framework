@@ -6,6 +6,7 @@ import {
   type DoingMirrorDispositionRecord,
   type DoingMirrorLetterFailureInput,
   type DoingMirrorSourceItem,
+  type DoingMirrorSourcePort,
   type DoingMirrorStorePort,
   type DoingMirrorTransitionStoreInput,
 } from './contracts.js';
@@ -24,7 +25,9 @@ const SOURCE: DoingMirrorSourceItem = {
   },
 };
 
-function makeHarness() {
+function makeHarness(options: {
+  applyDisposition?: DoingMirrorSourcePort['applyDisposition'];
+} = {}) {
   const records = new Map<string, DoingMirrorDispositionRecord>();
   let nextLetter = 0;
   const store: DoingMirrorStorePort = {
@@ -137,6 +140,7 @@ function makeHarness() {
     itemType: 'wishlist',
     list: async () => [SOURCE],
     get: async itemId => itemId === SOURCE.itemId ? SOURCE : null,
+    ...(options.applyDisposition ? { applyDisposition: options.applyDisposition } : {}),
   });
   return { service, store, compose, records };
 }
@@ -158,13 +162,9 @@ describe('DoingMirrorService', () => {
     }]);
   });
 
-  it('requires open → considering → terminal and a decline reason', async () => {
+  it('keeps terminal dispositions terminal and requires a decline reason', async () => {
     const { service } = makeHarness();
     const letter = { subject: 'About your moon garden', body: 'I am considering this carefully.' };
-
-    await expect(service.transition({
-      itemType: 'wishlist', itemId: SOURCE.itemId, state: 'done', ...letter,
-    })).rejects.toThrow('open disposition can only move to considering');
 
     await service.transition({
       itemType: 'wishlist', itemId: SOURCE.itemId, state: 'considering', ...letter,
@@ -177,6 +177,97 @@ describe('DoingMirrorService', () => {
       subject: 'About your moon garden',
       body: 'I cannot take this on.',
     })).rejects.toThrow('declined disposition requires a reason');
+
+    await service.transition({
+      itemType: 'wishlist',
+      itemId: SOURCE.itemId,
+      state: 'done',
+      subject: 'Your moon garden',
+      body: 'It is planted.',
+    });
+    await expect(service.transition({
+      itemType: 'wishlist',
+      itemId: SOURCE.itemId,
+      state: 'declined',
+      reason: 'Changed my mind.',
+      subject: 'Your moon garden',
+      body: 'Actually no.',
+    })).rejects.toThrow('done disposition is terminal');
+  });
+
+  /**
+   * psfn-framework-p4rmp: the legacy Garden wishlist routes let the Partner
+   * finish or refuse a wish they never explicitly started considering. Forcing
+   * an intermediate hop would emit two dispositions and two Letters for one
+   * operator action.
+   */
+  it('records a terminal disposition straight from open as one transition and one Letter', async () => {
+    const { service, store, compose } = makeHarness();
+
+    const item = await service.transition({
+      itemType: 'wishlist',
+      itemId: SOURCE.itemId,
+      state: 'done',
+      subject: 'Your moon garden',
+      body: 'I planted it this weekend.',
+    });
+
+    expect(item.disposition).toMatchObject({ state: 'done', version: 1 });
+    expect(store.transition).toHaveBeenCalledTimes(1);
+    expect(compose).toHaveBeenCalledTimes(1);
+  });
+
+  it('converges the source item lifecycle before the Letter is placed', async () => {
+    const applied: { itemId: string; state: string; reason?: string }[] = [];
+    const { service, compose } = makeHarness({
+      applyDisposition: async (input) => {
+        applied.push({
+          itemId: input.itemId,
+          state: input.state,
+          ...(input.reason ? { reason: input.reason } : {}),
+        });
+      },
+    });
+
+    await service.transition({
+      itemType: 'wishlist',
+      itemId: SOURCE.itemId,
+      state: 'declined',
+      reason: 'Not this season.',
+      subject: 'Your moon garden',
+      body: 'I cannot take this on.',
+    });
+
+    expect(applied).toEqual([
+      { itemId: SOURCE.itemId, state: 'declined', reason: 'Not this season.' },
+    ]);
+    expect(compose).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves the row pending when the source lifecycle refuses the disposition', async () => {
+    let refuse = true;
+    const { service, compose, records } = makeHarness({
+      applyDisposition: async () => {
+        if (refuse) throw new Error('wiki wish is locked');
+      },
+    });
+    const input = {
+      itemType: 'wishlist' as const,
+      itemId: SOURCE.itemId,
+      state: 'done' as const,
+      subject: 'Your moon garden',
+      body: 'It is planted.',
+    };
+
+    await expect(service.transition(input)).rejects.toThrow('wiki wish is locked');
+    expect(compose).not.toHaveBeenCalled();
+    expect(records.get(`wishlist:${SOURCE.itemId}`)?.notification.deliveredAt).toBeUndefined();
+
+    // The drain retries both halves together, so the stores converge.
+    refuse = false;
+    await expect(service.drainPendingLetters(25, 5))
+      .resolves.toEqual({ pending: 1, drained: 1, quarantined: 0 });
+    expect(compose).toHaveBeenCalledTimes(1);
   });
 
   it('stores the transition before placing an exact partner-authored Letter', async () => {

@@ -452,6 +452,23 @@ describe('Postgres live schema migrations', () => {
     expect(sharedSql).not.toMatch(/vector/i);
   });
 
+  it('adds the bounded room-participation lease as shared migration 19 (jp36.5.5)', () => {
+    const sharedSql = migrationSql(POSTGRES_SHARED_MIGRATIONS);
+
+    expect(sharedSql).toContain('CREATE TABLE IF NOT EXISTS room_participation_leases');
+    // One durable membership per (companion, room).
+    expect(sharedSql).toContain('PRIMARY KEY (companion_id, channel_id)');
+    // The context watermark: what makes a message considered at most once.
+    expect(sharedSql).toContain('watermark_message_id TEXT NOT NULL');
+    expect(sharedSql).toContain('watermark_timestamp_ms BIGINT NOT NULL');
+    // Content-free: no room text ever lands in the shared arbiter state.
+    expect(sharedSql).not.toContain('message_text');
+    // Ledger discipline: the table precedes its version registration.
+    expect(sharedSql.indexOf('CREATE TABLE IF NOT EXISTS room_participation_leases'))
+      .toBeLessThan(sharedSql.indexOf("VALUES (19, 'room-participation-lease')"));
+    expect(sharedSql).toContain("VALUES (19, 'room-participation-lease')");
+  });
+
   it('binds the funding charge to the egress lease as shared migration 11 (jp36.5.3)', () => {
     const sharedSql = migrationSql(POSTGRES_SHARED_MIGRATIONS);
 

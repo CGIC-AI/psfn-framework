@@ -15,6 +15,8 @@ import {
   registerAutomataBusReviewerTask,
   SHARED_WORLD_WIKI_CARETAKER_OPERATION_ID,
   registerSharedWorldWikiCaretakerOperation,
+  DOING_MIRROR_LETTER_DRAIN_OPERATION_ID,
+  registerDoingMirrorLetterDrainOperation,
   registerSalienceDecayOperation,
 } from './scheduler-runtime.js';
 import { registerDurableBackgroundWorkSupervisorTask } from '../../core/agent/background-work/scheduler-task.js';
@@ -217,6 +219,46 @@ describe('agent scheduler runtime wiring', () => {
 
     await expect(scheduler.getTask('background-maintenance')?.handler())
       .rejects.toThrow('background-maintenance operations failed');
+  });
+
+  it('drains pending doing-mirror Letter deliveries on the shared maintenance lane', async () => {
+    const scheduler = new Scheduler(new EventBus());
+    const eligibilityGate = createEligibilityGate(() => ({
+      getTier: () => 'autonomous',
+      getGrantedTokens: () => new Set(),
+      has: () => true,
+    }));
+    const backgroundMaintenance = new BackgroundMaintenanceRegistry({
+      scheduler,
+      eligibilityGate,
+      intervalMs: 3_600_000,
+    });
+    const drainPendingLetters = vi.fn(async () => ({ pending: 1, drained: 1 }));
+
+    registerDoingMirrorLetterDrainOperation({
+      backgroundMaintenance,
+      doingMirrorService: { drainPendingLetters },
+      batchSize: 25,
+    });
+
+    expect(scheduler.getTask('background-maintenance')).toMatchObject({
+      operations: [{
+        id: DOING_MIRROR_LETTER_DRAIN_OPERATION_ID,
+        name: 'Doing-Mirror Letter Redelivery',
+      }],
+    });
+    await scheduler.getTask('background-maintenance')?.handler();
+    expect(drainPendingLetters).toHaveBeenCalledExactlyOnceWith(25);
+  });
+
+  it('binds the doing-mirror drain batch to its scheduler owner file and the real runtime', () => {
+    const source = readFileSync(join(SRC_DIR, 'scheduler-runtime.ts'), 'utf-8');
+    const main = readFileSync(join(SRC_DIR, 'main.ts'), 'utf-8');
+
+    expect(source).toContain(
+      'batchSize: options.schedulerConfig.backgroundMaintenance.doingMirrorLetters.batchSize',
+    );
+    expect(main).toContain('doingMirrorService: coreRuntime.doingMirrorService');
   });
 
   it('does not register a global turn-end listener for shard compression guidance', () => {

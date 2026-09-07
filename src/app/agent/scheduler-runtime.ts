@@ -37,6 +37,7 @@ import {
   type ConcernReviewSupervisorWorkerPort,
 } from '../../core/intention/concern-review-supervisor.js';
 import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
+import type { DoingMirrorService } from '../../core/doing-mirror/service.js';
 import {
   SocialGraphBuilderWorker,
   createSocialGraphBuilderMemoryReader,
@@ -124,6 +125,8 @@ export interface BuildAgentSchedulerRuntimeOptions {
     companionId: string;
   };
   automataRetention?: { runBounded(nowMs?: number): Promise<unknown> };
+  /** Doing-mirror disposition lifecycle whose Letter deliveries this lane redrives. */
+  doingMirrorService: Pick<DoingMirrorService, 'drainPendingLetters'>;
 }
 
 export function registerAutomataBusReviewerTask(input: {
@@ -197,6 +200,35 @@ export function registerSalienceDecayOperation(input: {
     name: 'Memory Salience Decay',
     description: 'Applies the configured memory weight decay pass to durable memories.',
     handler: () => salienceDecay.run(),
+    eligibility: { requiredTokens: ['memory.write'] },
+  });
+}
+
+export const DOING_MIRROR_LETTER_DRAIN_OPERATION_ID = 'doing-mirror-letter-drain';
+
+/**
+ * Redrives doing-mirror Letter deliveries that never reached the bin because
+ * `LetterService.compose` failed after the disposition transition committed.
+ * Without this the row stays pending forever and recovery depends on the
+ * operator resubmitting the identical Garden form.
+ */
+export function registerDoingMirrorLetterDrainOperation(input: {
+  backgroundMaintenance: BackgroundMaintenanceRegistrar;
+  doingMirrorService: Pick<DoingMirrorService, 'drainPendingLetters'>;
+  batchSize: number;
+}): void {
+  input.backgroundMaintenance.registerOperation({
+    id: DOING_MIRROR_LETTER_DRAIN_OPERATION_ID,
+    name: 'Doing-Mirror Letter Redelivery',
+    description:
+      'Redelivers a bounded batch of doing-mirror dispositions whose Partner-authored Letter '
+      + 'never reached the bin; delivery is idempotent on the stored canonical Letter id.',
+    handler: async () => {
+      const result = await input.doingMirrorService.drainPendingLetters(input.batchSize);
+      if (result.drained > 0) {
+        log.info('Doing-mirror pending Letter deliveries redriven', result);
+      }
+    },
     eligibility: { requiredTokens: ['memory.write'] },
   });
 }
@@ -429,6 +461,12 @@ export function buildAgentSchedulerRuntime(
     backgroundMaintenance,
     memoryStore: options.memoryStore,
     config: options.config,
+  });
+
+  registerDoingMirrorLetterDrainOperation({
+    backgroundMaintenance,
+    doingMirrorService: options.doingMirrorService,
+    batchSize: options.schedulerConfig.backgroundMaintenance.doingMirrorLetters.batchSize,
   });
 
   if (options.config.multiCompanion === true) {

@@ -167,6 +167,38 @@ export class DoingMirrorService {
     return { source: current.source, disposition: delivered };
   }
 
+  /**
+   * Redeliver dispositions whose Letter never reached the bin because `compose`
+   * or `markLetterDelivered` failed after `transition` committed. Delivery is
+   * idempotent: the canonical Letter id is stored with the transition, so
+   * `compose` returns the existing authored Letter instead of writing a second
+   * one, and `markLetterDelivered` COALESCEs the first delivery timestamp.
+   *
+   * Every row keeps its own failure boundary so one poisoned disposition cannot
+   * strand the rest of the batch; the collected failures are rethrown so the
+   * maintenance lane reports them instead of silently swallowing them.
+   */
+  async drainPendingLetters(limit: number): Promise<{ pending: number; drained: number }> {
+    const pending = await this.options.store.listPendingLetterDeliveries(limit);
+    const failures: Error[] = [];
+    let drained = 0;
+    for (const record of pending) {
+      try {
+        await this.deliver(record);
+        drained += 1;
+      } catch (error) {
+        failures.push(error instanceof Error ? error : new Error(String(error)));
+      }
+    }
+    if (failures.length > 0) {
+      throw new AggregateError(
+        failures,
+        `doing-mirror redelivered ${drained} of ${pending.length} pending disposition letters`,
+      );
+    }
+    return { pending: pending.length, drained };
+  }
+
   private async deliver(record: DoingMirrorDispositionRecord): Promise<DoingMirrorDispositionRecord> {
     await this.options.letters.compose({
       id: record.notification.letterId,

@@ -330,6 +330,9 @@ describe('subsystem config round-trip', () => {
         sharedWorldWikiCaretaker: {
           batchSize: 25,
         },
+        doingMirrorLetters: {
+          batchSize: 25,
+        },
         ambientPresence: {
           minIdleMinutes: 180,
           minNoteIntervalMinutes: 360,

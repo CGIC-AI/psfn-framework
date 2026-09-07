@@ -183,8 +183,10 @@ const requiredBodyPatterns = new Set([
   'PUT /api/admin/prompts/foundation',
   'PUT /api/admin/prompts/constitution',
   'PUT /api/admin/prompts/north-star',
+  'POST /api/admin/wishlist/:wishId/acknowledge',
   'POST /api/admin/wishlist/:wishId/respond',
   'POST /api/admin/wishlist/:wishId/convert-to-bead',
+  'POST /api/admin/wishlist/:wishId/done',
   'POST /api/admin/settings/models',
   'PATCH /api/admin/settings',
   'POST /api/admin/shared-workspace/proposals',
@@ -210,8 +212,7 @@ const noBodyMutationPatterns = new Set([
   'POST /api/admin/models/refresh',
   'POST /api/admin/prompts/:layerId/toggle',
   'POST /api/admin/wiki/shared-world/:siteId/publish',
-  'POST /api/admin/wishlist/:wishId/acknowledge',
-  'POST /api/admin/wishlist/:wishId/done',
+  'POST /api/admin/doing-mirror/:itemType/:itemId/retry-letter',
 ]);
 
 type RouteTuple = readonly [GardenForwardMethod | readonly GardenForwardMethod[], string];
@@ -349,6 +350,7 @@ const dynamicRoutes: readonly RouteTuple[] = [
   ['POST', '/api/admin/wishlist/:wishId/convert-to-bead'],
   ['POST', '/api/admin/wishlist/:wishId/done'],
   ['POST', '/api/admin/doing-mirror/:itemType/:itemId'],
+  ['POST', '/api/admin/doing-mirror/:itemType/:itemId/retry-letter'],
   ['GET', '/api/admin/intake/drift-reviews/:id'], ['POST', '/api/admin/intake/drift-reviews/:id/resolve'],
   ['GET', '/api/admin/intake/quarantine/:id'], ['POST', '/api/admin/intake/quarantine/:id/confirm'],
   ['POST', '/api/admin/intake/quarantine/:id/decide'],

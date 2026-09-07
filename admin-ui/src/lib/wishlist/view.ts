@@ -8,6 +8,7 @@ export const WISHLIST_STATE_ORDER: readonly CompanionWishState[] = [
   'acknowledged',
   'planned',
   'done',
+  'declined',
 ];
 
 export function wishlistStateLabel(state: CompanionWishState): string {
@@ -16,6 +17,7 @@ export function wishlistStateLabel(state: CompanionWishState): string {
     case 'acknowledged': return 'Acknowledged';
     case 'planned': return 'Planned';
     case 'done': return 'Done';
+    case 'declined': return 'Declined';
   }
 }
 
@@ -27,11 +29,12 @@ export function countWishesByState(
     acknowledged: 0,
     planned: 0,
     done: 0,
+    declined: 0,
   };
   for (const wish of wishes) counts[wish.state] += 1;
   return counts;
 }
 
 export function activeWishes(wishes: readonly CompanionWish[]): CompanionWish[] {
-  return wishes.filter(wish => wish.state !== 'done');
+  return wishes.filter(wish => wish.state !== 'done' && wish.state !== 'declined');
 }

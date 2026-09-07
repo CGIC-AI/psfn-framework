@@ -236,6 +236,7 @@ describe('migrateLegacySchedulerOwner', () => {
       },
       doingMirrorLetters: {
         batchSize: 25,
+        maxDeliveryFailures: 5,
       },
       ambientPresence: {
         minIdleMinutes: 180,
@@ -305,6 +306,35 @@ describe('migrateLegacySchedulerOwner', () => {
     expect(statSync(filePath).ino).toBe(inodeAfterApply);
   });
 
+  it('backfills the doing-mirror Letter quarantine threshold on an existing drain block', () => {
+    const { dataDir, filePath } = prepareOwner((owner) => {
+      delete owner.salienceDecayIntervalMs;
+      if (typeof owner.socialGraphBuilder === 'object' && owner.socialGraphBuilder !== null) {
+        delete (owner.socialGraphBuilder as Record<string, unknown>).intervalMs;
+      }
+      owner.backgroundMaintenance = structuredClone(DEFAULT_BACKGROUND_MAINTENANCE_CONFIG);
+      const maintenance = owner.backgroundMaintenance as Record<string, unknown>;
+      maintenance.doingMirrorLetters = { batchSize: 11 };
+    });
+
+    expect(migrateLegacySchedulerOwner({ dataDir, apply: true })).toMatchObject({
+      mode: 'apply',
+      status: 'applied',
+      addedPaths: [
+        'backgroundMaintenance.doingMirrorLetters.maxDeliveryFailures',
+        'backgroundWork.postTurn.maxAttempts',
+        'icpAutonomy.policyHolds',
+        'intentionFollowUp',
+      ],
+    });
+    // The operator's own batch size survives; only the unknown key is seeded.
+    expect(loadSchedulerConfig(dataDir).backgroundMaintenance.doingMirrorLetters)
+      .toEqual({ batchSize: 11, maxDeliveryFailures: 5 });
+    const migratedRaw = JSON.parse(readFileSync(filePath, 'utf8')) as Record<string, unknown>;
+    expect((migratedRaw.backgroundMaintenance as Record<string, unknown>).doingMirrorLetters)
+      .toEqual({ batchSize: 11, maxDeliveryFailures: 5 });
+  });
+
   it('explicitly plans and applies the doing-mirror Letter drain schema addition', () => {
     const { dataDir, filePath } = prepareOwner((owner) => {
       delete owner.salienceDecayIntervalMs;
@@ -326,7 +356,7 @@ describe('migrateLegacySchedulerOwner', () => {
       ],
     });
     expect(loadSchedulerConfig(dataDir).backgroundMaintenance.doingMirrorLetters)
-      .toEqual({ batchSize: 25 });
+      .toEqual({ batchSize: 25, maxDeliveryFailures: 5 });
     const migratedRaw = JSON.parse(readFileSync(filePath, 'utf8')) as Record<string, unknown>;
     expect((migratedRaw.backgroundMaintenance as Record<string, unknown>).sharedWorldWikiCaretaker)
       .toEqual({ batchSize: 25 });

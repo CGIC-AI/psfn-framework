@@ -4,7 +4,9 @@ import type { LetterRecord } from '../letters/contracts.js';
 import type { LetterService } from '../letters/service.js';
 import {
   type DoingMirrorDispositionRecord,
+  type DoingMirrorLetterFailureInput,
   type DoingMirrorSourceItem,
+  type DoingMirrorSourcePort,
   type DoingMirrorStorePort,
   type DoingMirrorTransitionStoreInput,
 } from './contracts.js';
@@ -23,7 +25,9 @@ const SOURCE: DoingMirrorSourceItem = {
   },
 };
 
-function makeHarness() {
+function makeHarness(options: {
+  applyDisposition?: DoingMirrorSourcePort['applyDisposition'];
+} = {}) {
   const records = new Map<string, DoingMirrorDispositionRecord>();
   let nextLetter = 0;
   const store: DoingMirrorStorePort = {
@@ -42,21 +46,67 @@ function makeHarness() {
           letterId: input.letterId,
           subject: input.letterSubject,
           body: input.letterBody,
+          failureCount: 0,
         },
       };
       records.set(`${record.itemType}:${record.itemId}`, record);
       return record;
     }),
     listPendingLetterDeliveries: vi.fn(async (limit: number) => [...records.values()]
-      .filter(record => record.notification.deliveredAt === undefined)
+      .filter(record => record.notification.deliveredAt === undefined
+        && record.notification.quarantinedAt === undefined)
       .sort((left, right) => left.updatedAt - right.updatedAt)
       .slice(0, limit)),
+    recordLetterDeliveryFailure: vi.fn(async (input: DoingMirrorLetterFailureInput) => {
+      const current = records.get(`${input.itemType}:${input.itemId}`);
+      if (!current || current.notification.letterId !== input.letterId
+        || current.notification.deliveredAt !== undefined) {
+        throw new Error('missing pending transition');
+      }
+      const failureCount = current.notification.failureCount + 1;
+      const failed: DoingMirrorDispositionRecord = {
+        ...current,
+        notification: {
+          ...current.notification,
+          failureCount,
+          lastError: input.error,
+          lastFailedAt: input.failedAt,
+          ...(failureCount >= input.maxDeliveryFailures
+            ? { quarantinedAt: current.notification.quarantinedAt ?? input.failedAt }
+            : {}),
+        },
+      };
+      records.set(`${input.itemType}:${input.itemId}`, failed);
+      return failed;
+    }),
+    resetLetterDeliveryFailures: vi.fn(async (itemType, itemId) => {
+      const current = records.get(`${itemType}:${itemId}`);
+      if (!current) throw new Error('missing transition');
+      const {
+        lastError: _lastError,
+        lastFailedAt: _lastFailedAt,
+        quarantinedAt: _quarantinedAt,
+        ...notification
+      } = current.notification;
+      const reset: DoingMirrorDispositionRecord = {
+        ...current,
+        notification: { ...notification, failureCount: 0 },
+      };
+      records.set(`${itemType}:${itemId}`, reset);
+      return reset;
+    }),
     markLetterDelivered: vi.fn(async (itemType, itemId, letterId, deliveredAt) => {
       const current = records.get(`${itemType}:${itemId}`);
       if (!current || current.notification.letterId !== letterId) throw new Error('missing transition');
+      const {
+        lastError: _lastError,
+        lastFailedAt: _lastFailedAt,
+        quarantinedAt: _quarantinedAt,
+        ...notification
+      } = current.notification;
       const delivered = {
         ...current,
-        notification: { ...current.notification, deliveredAt },
+        notification: { ...notification, deliveredAt, failureCount: 0 },
       };
       records.set(`${itemType}:${itemId}`, delivered);
       return delivered;
@@ -90,6 +140,7 @@ function makeHarness() {
     itemType: 'wishlist',
     list: async () => [SOURCE],
     get: async itemId => itemId === SOURCE.itemId ? SOURCE : null,
+    ...(options.applyDisposition ? { applyDisposition: options.applyDisposition } : {}),
   });
   return { service, store, compose, records };
 }
@@ -111,13 +162,9 @@ describe('DoingMirrorService', () => {
     }]);
   });
 
-  it('requires open → considering → terminal and a decline reason', async () => {
+  it('keeps terminal dispositions terminal and requires a decline reason', async () => {
     const { service } = makeHarness();
     const letter = { subject: 'About your moon garden', body: 'I am considering this carefully.' };
-
-    await expect(service.transition({
-      itemType: 'wishlist', itemId: SOURCE.itemId, state: 'done', ...letter,
-    })).rejects.toThrow('open disposition can only move to considering');
 
     await service.transition({
       itemType: 'wishlist', itemId: SOURCE.itemId, state: 'considering', ...letter,
@@ -130,6 +177,97 @@ describe('DoingMirrorService', () => {
       subject: 'About your moon garden',
       body: 'I cannot take this on.',
     })).rejects.toThrow('declined disposition requires a reason');
+
+    await service.transition({
+      itemType: 'wishlist',
+      itemId: SOURCE.itemId,
+      state: 'done',
+      subject: 'Your moon garden',
+      body: 'It is planted.',
+    });
+    await expect(service.transition({
+      itemType: 'wishlist',
+      itemId: SOURCE.itemId,
+      state: 'declined',
+      reason: 'Changed my mind.',
+      subject: 'Your moon garden',
+      body: 'Actually no.',
+    })).rejects.toThrow('done disposition is terminal');
+  });
+
+  /**
+   * psfn-framework-p4rmp: the legacy Garden wishlist routes let the Partner
+   * finish or refuse a wish they never explicitly started considering. Forcing
+   * an intermediate hop would emit two dispositions and two Letters for one
+   * operator action.
+   */
+  it('records a terminal disposition straight from open as one transition and one Letter', async () => {
+    const { service, store, compose } = makeHarness();
+
+    const item = await service.transition({
+      itemType: 'wishlist',
+      itemId: SOURCE.itemId,
+      state: 'done',
+      subject: 'Your moon garden',
+      body: 'I planted it this weekend.',
+    });
+
+    expect(item.disposition).toMatchObject({ state: 'done', version: 1 });
+    expect(store.transition).toHaveBeenCalledTimes(1);
+    expect(compose).toHaveBeenCalledTimes(1);
+  });
+
+  it('converges the source item lifecycle before the Letter is placed', async () => {
+    const applied: { itemId: string; state: string; reason?: string }[] = [];
+    const { service, compose } = makeHarness({
+      applyDisposition: async (input) => {
+        applied.push({
+          itemId: input.itemId,
+          state: input.state,
+          ...(input.reason ? { reason: input.reason } : {}),
+        });
+      },
+    });
+
+    await service.transition({
+      itemType: 'wishlist',
+      itemId: SOURCE.itemId,
+      state: 'declined',
+      reason: 'Not this season.',
+      subject: 'Your moon garden',
+      body: 'I cannot take this on.',
+    });
+
+    expect(applied).toEqual([
+      { itemId: SOURCE.itemId, state: 'declined', reason: 'Not this season.' },
+    ]);
+    expect(compose).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves the row pending when the source lifecycle refuses the disposition', async () => {
+    let refuse = true;
+    const { service, compose, records } = makeHarness({
+      applyDisposition: async () => {
+        if (refuse) throw new Error('wiki wish is locked');
+      },
+    });
+    const input = {
+      itemType: 'wishlist' as const,
+      itemId: SOURCE.itemId,
+      state: 'done' as const,
+      subject: 'Your moon garden',
+      body: 'It is planted.',
+    };
+
+    await expect(service.transition(input)).rejects.toThrow('wiki wish is locked');
+    expect(compose).not.toHaveBeenCalled();
+    expect(records.get(`wishlist:${SOURCE.itemId}`)?.notification.deliveredAt).toBeUndefined();
+
+    // The drain retries both halves together, so the stores converge.
+    refuse = false;
+    await expect(service.drainPendingLetters(25, 5))
+      .resolves.toEqual({ pending: 1, drained: 1, quarantined: 0 });
+    expect(compose).toHaveBeenCalledTimes(1);
   });
 
   it('stores the transition before placing an exact partner-authored Letter', async () => {
@@ -192,7 +330,8 @@ describe('DoingMirrorService', () => {
     await expect(service.transition(input)).rejects.toThrow('letter store unavailable');
     expect(records.get(`wishlist:${SOURCE.itemId}`)?.notification.deliveredAt).toBeUndefined();
 
-    await expect(service.drainPendingLetters(25)).resolves.toEqual({ pending: 1, drained: 1 });
+    await expect(service.drainPendingLetters(25, 5))
+      .resolves.toEqual({ pending: 1, drained: 1, quarantined: 0 });
     expect(compose).toHaveBeenCalledTimes(2);
     expect(compose).toHaveBeenLastCalledWith({
       id: '83f2437e-1af8-40c4-9710-f6a7b085ad64',
@@ -203,7 +342,8 @@ describe('DoingMirrorService', () => {
     });
     expect(records.get(`wishlist:${SOURCE.itemId}`)?.notification.deliveredAt).toBe(200);
 
-    await expect(service.drainPendingLetters(25)).resolves.toEqual({ pending: 0, drained: 0 });
+    await expect(service.drainPendingLetters(25, 5))
+      .resolves.toEqual({ pending: 0, drained: 0, quarantined: 0 });
     expect(compose).toHaveBeenCalledTimes(2);
     expect(store.transition).toHaveBeenCalledTimes(1);
   });
@@ -221,13 +361,72 @@ describe('DoingMirrorService', () => {
     await expect(service.transition(input)).rejects.toThrow('letter store unavailable');
 
     compose.mockRejectedValueOnce(new Error('letter store still unavailable'));
-    await expect(service.drainPendingLetters(25)).rejects.toThrow(
+    await expect(service.drainPendingLetters(25, 5)).rejects.toThrow(
       'doing-mirror redelivered 0 of 1 pending disposition letters; '
       + 'failures: letter store still unavailable',
     );
     expect(records.get(`wishlist:${SOURCE.itemId}`)?.notification.deliveredAt).toBeUndefined();
 
-    await expect(service.drainPendingLetters(25)).resolves.toEqual({ pending: 1, drained: 1 });
+    await expect(service.drainPendingLetters(25, 5))
+      .resolves.toEqual({ pending: 1, drained: 1, quarantined: 0 });
+  });
+
+  it('quarantines a permanently failing Letter and reopens it on an operator retry', async () => {
+    const { service, compose, records } = makeHarness();
+    const input = {
+      itemType: 'wishlist' as const,
+      itemId: SOURCE.itemId,
+      state: 'considering' as const,
+      subject: 'Your moon garden',
+      body: 'I am considering it.',
+    };
+    compose.mockRejectedValueOnce(new Error('letter store unavailable'));
+    await expect(service.transition(input)).rejects.toThrow('letter store unavailable');
+
+    compose.mockRejectedValue(new Error('letter content rejected'));
+    await expect(service.drainPendingLetters(25, 2)).rejects.toThrow('letter content rejected');
+    expect(records.get(`wishlist:${SOURCE.itemId}`)?.notification).toMatchObject({
+      failureCount: 1,
+      lastError: 'letter content rejected',
+      lastFailedAt: 200,
+    });
+    expect(records.get(`wishlist:${SOURCE.itemId}`)?.notification.quarantinedAt).toBeUndefined();
+
+    await expect(service.drainPendingLetters(25, 2)).rejects.toThrow('letter content rejected');
+    expect(records.get(`wishlist:${SOURCE.itemId}`)?.notification)
+      .toMatchObject({ failureCount: 2, quarantinedAt: 200 });
+
+    // The quarantined row no longer occupies a slot in the bounded batch.
+    await expect(service.drainPendingLetters(25, 2))
+      .resolves.toEqual({ pending: 0, drained: 0, quarantined: 0 });
+
+    compose.mockReset();
+    compose.mockResolvedValue({
+      id: '83f2437e-1af8-40c4-9710-f6a7b085ad64',
+      author: 'partner',
+      recipient: 'companion',
+      subject: 'Your moon garden',
+      body: 'I am considering it.',
+      state: 'placed',
+      createdAt: 200,
+      updatedAt: 200,
+      placedAt: 200,
+    });
+    await expect(service.retryLetterDelivery('wishlist', SOURCE.itemId)).resolves.toMatchObject({
+      disposition: { notification: { deliveredAt: 200, failureCount: 0 } },
+    });
+    expect(records.get(`wishlist:${SOURCE.itemId}`)?.notification.quarantinedAt).toBeUndefined();
+    // A second click is a no-op rather than a second Letter.
+    await service.retryLetterDelivery('wishlist', SOURCE.itemId);
+    expect(compose).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses a Letter retry for an item that has no disposition yet', async () => {
+    const { service } = makeHarness();
+
+    await expect(service.retryLetterDelivery('wishlist', SOURCE.itemId)).rejects.toThrow(
+      'doing-mirror wishlist item has no disposition Letter to retry',
+    );
   });
 
   it('fails closed for an unregistered or missing source item', async () => {

@@ -69,6 +69,29 @@ export function wrappedParamPath(prefix: string, suffix: string, paramName: stri
   }, `${prefix}:${paramName}${suffix}`);
 }
 
+/**
+ * Matches `${prefix}${first}${separator}${second}${suffix}`, for a sub-action on
+ * a nested resource such as
+ * `/api/admin/doing-mirror/<itemType>/<itemId>/retry-letter`. Segment decoding
+ * and rejection rules are exactly `nestedParamPath`'s, so a path whose id
+ * segment would swallow the suffix still fails the match.
+ */
+export function nestedParamWithSuffix(
+  prefix: string,
+  separator: string,
+  firstParamName: string,
+  secondParamName: string,
+  suffix: string,
+): RouteMatcher {
+  const nested = nestedParamPath(prefix, separator, firstParamName, secondParamName);
+  return attachCapabilityPattern(
+    (path) => (
+      path.endsWith(suffix) ? nested(path.slice(0, path.length - suffix.length)) : null
+    ),
+    `${prefix}:${firstParamName}${separator}:${secondParamName}${suffix}`,
+  );
+}
+
 export function paramWithSuffix(prefix: string, paramName: string, suffix: string): RouteMatcher {
   return wrappedParamPath(prefix, suffix, paramName);
 }

@@ -54,6 +54,7 @@ export type {
 export type {
   AdminWishlistBeadCreatePort,
   AdminWishlistConvertInput,
+  AdminWishlistDispositionLetter,
   AdminWishlistListData,
   AdminWishlistService,
 } from './types/wishlist.js';

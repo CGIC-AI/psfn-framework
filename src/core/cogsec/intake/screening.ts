@@ -102,6 +102,12 @@ import {
   type IntakeScanScope,
 } from './scanners/index.js';
 import type { IntakeQuarantineHoldPort } from './quarantine-store.js';
+import {
+  cogSecPolicyDigest,
+  type CogSecReceipt,
+} from '../../../shared/contracts/cogsec-receipt.js';
+import type { CogSecReceiptWriterPort } from '../receipts/contracts.js';
+import { buildCogSecReceipt } from '../receipts/issuance.js';
 import { classifyToolResultBenignClass } from './tool-result-benign-classes.js';
 
 export { INTAKE_QUARANTINE_RISK_LABELS, INTAKE_SANITIZE_RISK_LABELS } from './risk-label-families.js';
@@ -429,6 +435,19 @@ export interface IntakeScreeningResult {
   cogSecCaseId?: string;
   /** Deep layers were scheduled after pass-through and have not settled yet. */
   postEscalation?: 'pending';
+  /**
+   * Content-addressed admission receipt (psfn-framework-1fjvm.3), present only
+   * when a receipt writer is wired AND this result is a complete admission of
+   * fully screened bytes (see `cogSecReceiptSuppression`). Its absence is
+   * never a claim about the content: a consumer without a receipt screens.
+   */
+  receipt?: CogSecReceipt;
+  /**
+   * Visible-not-swallowed failure minting or persisting the admission receipt.
+   * The screening decision stands either way; only the reusable proof was
+   * lost, so the next consumer of these bytes screens them again.
+   */
+  receiptIssuanceError?: string;
 }
 
 export interface IntakePostEscalationEvent {
@@ -461,14 +480,30 @@ export interface IntakeScreeningService {
   readonly mode: IntakeEnforcementPosture;
   /** Canonical global CogSec mode this instance is running under. */
   readonly globalMode: CogSecMode;
-  /** Full screening: L1 plus the L1.5 scorer when configured. */
+  /**
+   * Full screening: L1 plus the L1.5 scorer when configured. This is the ONLY
+   * path that issues a content-addressed admission receipt; durable-artifact
+   * admission consumers must use it rather than `screenSync`.
+   */
   screen(text: string, input: IntakeScreeningInput): Promise<IntakeScreeningResult>;
   /**
    * Synchronous L1-only screening for sync call sites (session-entry
    * recording). Fails closed when an async scorer is configured: silently
-   * skipping a configured screening layer is not allowed.
+   * skipping a configured screening layer is not allowed. It never issues a
+   * receipt — durable receipt persistence is asynchronous — so its results
+   * carry no reusable admission proof.
    */
   screenSync(text: string, input: IntakeScreeningInput): IntakeScreeningResult;
+}
+
+/** Receipt issuance wiring for one screening instance. */
+export interface IntakeScreeningReceiptOptions {
+  /** Durable sink for issued receipts. */
+  store: CogSecReceiptWriterPort;
+  /** Issuing authority; verifiers match this against their trusted set. */
+  issuerId: string;
+  /** Receipt lifetime from intake policy; there is no permanent clean bit. */
+  ttlMs: number;
 }
 
 export interface IntakeScreeningServiceOptions {
@@ -487,6 +522,12 @@ export interface IntakeScreeningServiceOptions {
    * compositions) quarantined content is withheld without a review copy.
    */
   quarantine?: IntakeQuarantineHoldPort;
+  /**
+   * Durable content-addressed receipt issuance (psfn-framework-1fjvm.3).
+   * Absent (tests, minimal compositions) admitted content simply carries no
+   * reusable proof and every consumer screens it again — the safe direction.
+   */
+  receipts?: IntakeScreeningReceiptOptions;
   /** Acting principal for envelope transitions, e.g. 'gateway:intake-screening'. */
   actor: string;
   now?: () => number;
@@ -742,13 +783,14 @@ function semanticLayersNotRun(reason: string): IntakeSemanticScreeningTrace {
 export function createIntakeScreeningService(
   options: IntakeScreeningServiceOptions,
 ): IntakeScreeningService {
-  const { policy, l1, injectionScorer, escalation, quarantine, actor } = options;
+  const { policy, l1, injectionScorer, escalation, quarantine, receipts, actor } = options;
   const globalMode = policy.mode;
   // Ingress enforcement posture of this screening instance: shadow observes,
   // boundary/strict enforce external ingress. Per-item clean-bubble bypass is
   // resolved inside screen()/screenSync() through the centralized posture.
   const mode = intakeEnforcementPosture(globalMode);
   const now = options.now ?? Date.now;
+  let policyDigestMemo: string | undefined;
 
   function emitScreeningObservability(
     envelope: IntakeEnvelope,
@@ -1727,6 +1769,55 @@ export function createIntakeScreeningService(
     );
   }
 
+  /**
+   * Issue and durably record the content-addressed admission receipt for a
+   * completed screening result (psfn-framework-1fjvm.3).
+   *
+   * The clean-bubble path is excluded here rather than inside the issuance
+   * predicate: it is the one path where ZERO scanners ran, and only this
+   * service knows that. Certifying it would let a consumer skip screening on
+   * the strength of screening that never happened.
+   *
+   * A mint or write failure is recorded on the result and logged as an error,
+   * never swallowed and never thrown: the content was already admitted by the
+   * screening decision, and denying it now because a cache write failed would
+   * be a worse outcome than the next consumer screening the bytes again.
+   */
+  async function issueAdmissionReceipt(
+    text: string,
+    input: IntakeScreeningInput,
+    result: IntakeScreeningResult,
+  ): Promise<IntakeScreeningResult> {
+    if (!receipts || !resolveItemPosture(input).screens) return result;
+    try {
+      policyDigestMemo ??= cogSecPolicyDigest(policy);
+      const receipt = buildCogSecReceipt({
+        context: {
+          issuer: { id: receipts.issuerId, instance: actor },
+          policyDigest: policyDigestMemo,
+          ruleFingerprint: l1.rulesStatus().fingerprint,
+          ttlMs: receipts.ttlMs,
+          ...(injectionScorer ? { injectionScorerId: injectionScorer.scannerId } : {}),
+        },
+        result,
+        rawText: text,
+        ...(input.surface !== undefined ? { surface: input.surface } : {}),
+        issuedAtMs: input.atMs ?? now(),
+      });
+      if (!receipt) return result;
+      await receipts.store.record(receipt);
+      return { ...result, receipt };
+    } catch (error) {
+      const receiptIssuanceError = error instanceof Error ? error.message : String(error);
+      log.error('CogSec admission receipt issuance failed; admitted content is not reusable', {
+        envelopeId: result.envelope.id,
+        originRef: input.origin.ref,
+        error: receiptIssuanceError,
+      });
+      return { ...result, receiptIssuanceError };
+    }
+  }
+
   async function screen(text: string, input: IntakeScreeningInput): Promise<IntakeScreeningResult> {
     const item = resolveItemPosture(input);
     if (!item.screens) {
@@ -1840,7 +1931,14 @@ export function createIntakeScreeningService(
     return finalize(text, input, report, { labels: [] }, item.posture, item.vector);
   }
 
-  return { mode, globalMode, screen, screenSync };
+  return {
+    mode,
+    globalMode,
+    screen: receipts
+      ? async (text, input) => issueAdmissionReceipt(text, input, await screen(text, input))
+      : screen,
+    screenSync,
+  };
 }
 
 // ── Composition helper (L1-only; agent process and tests) ──
@@ -1858,6 +1956,8 @@ export interface MaybeCreateIntakeScreeningOptions {
   injectionScorer?: IntakeInjectionScorerPort;
   /** Durable quarantine store (htm9.11) for held-item review in Garden. */
   quarantine?: IntakeQuarantineHoldPort;
+  /** Durable content-addressed receipt issuance (psfn-framework-1fjvm.3). */
+  receipts?: IntakeScreeningReceiptOptions;
   now?: () => number;
   onFailClosed?: IntakeScreeningServiceOptions['onFailClosed'];
 }
@@ -1879,6 +1979,7 @@ export function maybeCreateIntakeScreeningService(
     }),
     ...(options.injectionScorer ? { injectionScorer: options.injectionScorer } : {}),
     ...(options.quarantine ? { quarantine: options.quarantine } : {}),
+    ...(options.receipts ? { receipts: options.receipts } : {}),
     actor: options.actor,
     ...(options.now ? { now: options.now } : {}),
     ...(options.onFailClosed ? { onFailClosed: options.onFailClosed } : {}),

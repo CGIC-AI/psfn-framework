@@ -4223,3 +4223,49 @@ export const POSTGRES_AUTOMATA_ROLLBACK_MIGRATIONS: readonly string[] = [
   ...AUTOMATA_RETENTION_POSTGRES_ROLLBACK_STATEMENTS,
   ...AUTOMATA_BUS_POSTGRES_ROLLBACK_STATEMENTS,
 ];
+
+/**
+ * Content-addressed CogSec admission receipts (psfn-framework-1fjvm.3). The
+ * canonical receipt lives in `receipt_json` and is re-validated on every read;
+ * the extracted columns exist only so lookup by (exact bytes × exact screening
+ * contract) is an index hit. Rows accumulate per issuance — a later receipt
+ * never rewrites an earlier one — and lookup takes the newest.
+ */
+export const POSTGRES_COGSEC_RECEIPT_MIGRATIONS: readonly string[] = [
+  `
+  CREATE TABLE IF NOT EXISTS cogsec_receipts (
+    receipt_id TEXT PRIMARY KEY,
+    content_sha256 TEXT NOT NULL,
+    raw_content_sha256 TEXT NOT NULL,
+    screening_contract_digest TEXT NOT NULL,
+    receipt_sha256 TEXT NOT NULL,
+    issuer_id TEXT NOT NULL,
+    issuer_instance TEXT NOT NULL,
+    envelope_id TEXT NOT NULL,
+    verdict_action TEXT NOT NULL,
+    issued_at_ms BIGINT NOT NULL,
+    expires_at_ms BIGINT NOT NULL,
+    receipt_json JSONB NOT NULL,
+    CHECK (length(btrim(receipt_id)) > 0),
+    CHECK (content_sha256 ~ '^[a-f0-9]{64}$'),
+    CHECK (raw_content_sha256 ~ '^[a-f0-9]{64}$'),
+    CHECK (screening_contract_digest ~ '^[a-f0-9]{64}$'),
+    CHECK (receipt_sha256 ~ '^[a-f0-9]{64}$'),
+    CHECK (length(btrim(issuer_id)) > 0),
+    CHECK (length(btrim(issuer_instance)) > 0),
+    CHECK (length(btrim(envelope_id)) > 0),
+    CHECK (verdict_action IN ('pass', 'sanitize')),
+    CHECK (issued_at_ms > 0),
+    CHECK (expires_at_ms > issued_at_ms),
+    CHECK (jsonb_typeof(receipt_json) = 'object')
+  );
+  `,
+  `
+  CREATE INDEX IF NOT EXISTS idx_cogsec_receipts_content_contract
+    ON cogsec_receipts(content_sha256, screening_contract_digest, issued_at_ms DESC, receipt_id DESC);
+  `,
+  `
+  CREATE INDEX IF NOT EXISTS idx_cogsec_receipts_expiry
+    ON cogsec_receipts(expires_at_ms);
+  `,
+];

@@ -13,6 +13,18 @@ import {
 const DEFAULT_LIST_LIMIT = 50;
 const MAX_LIST_LIMIT = 100;
 
+/**
+ * Called with the letter event that has just entered L0. The runtime binds a
+ * trigger so the existing memory-extraction primitive evaluates the letter bin
+ * the same way a completed turn evaluates its own channel; letters would
+ * otherwise persist into a channel nothing ever asks the extractor about.
+ */
+export type LetterMemoryTrigger = (event: {
+  event: 'composed' | 'read';
+  letterId: string;
+  at: number;
+}) => void;
+
 export interface LetterServiceOptions {
   store: LetterStorePort;
   sessionStore: Pick<SessionStore, 'append'>;
@@ -55,10 +67,21 @@ function eventMetadata(letter: LetterRecord, event: LetterSessionMetadata['event
 export class LetterService {
   private readonly now: () => number;
   private readonly createId: () => string;
+  private memoryTrigger: LetterMemoryTrigger | null = null;
 
   constructor(private readonly options: LetterServiceOptions) {
     this.now = options.now ?? Date.now;
     this.createId = options.createId ?? randomUUID;
+  }
+
+  /**
+   * Late-bound because the memory extractor and the deferred-action queue are
+   * both composed after this service. Binding twice is a wiring defect, not a
+   * supported reconfiguration, so it fails closed.
+   */
+  bindMemoryTrigger(trigger: LetterMemoryTrigger): void {
+    if (this.memoryTrigger) throw new Error('Letter memory trigger is already bound');
+    this.memoryTrigger = trigger;
   }
 
   async compose(input: ComposeLetterInput): Promise<LetterRecord> {
@@ -103,6 +126,7 @@ export class LetterService {
       timestamp: createdAt,
       metadata: eventMetadata(letter, 'composed'),
     });
+    this.memoryTrigger?.({ event: 'composed', letterId: letter.id, at: createdAt });
     return letter;
   }
 
@@ -122,6 +146,7 @@ export class LetterService {
       timestamp,
       metadata: eventMetadata(letter, 'read'),
     });
+    this.memoryTrigger?.({ event: 'read', letterId: letter.id, at: timestamp });
     return letter;
   }
 

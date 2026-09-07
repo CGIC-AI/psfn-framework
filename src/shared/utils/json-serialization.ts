@@ -36,3 +36,24 @@ export function normalizeJsonRecordForSerialization(
   }
   return normalized;
 }
+
+/**
+ * Deterministic JSON text for content-addressed digests: object keys are
+ * emitted in ascending code-unit order at every depth, arrays keep their
+ * order, and the value first passes the JSON-boundary projection above so an
+ * unrepresentable value fails loudly instead of hashing to a lie.
+ */
+export function canonicalJsonString(value: unknown, fieldName = 'value'): string {
+  return writeCanonical(normalizeJsonValueForSerialization(value, fieldName));
+}
+
+function writeCanonical(value: JsonValue): string {
+  if (Array.isArray(value)) return `[${value.map(writeCanonical).join(',')}]`;
+  if (isRecord(value)) {
+    const entries = Object.keys(value)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${writeCanonical(value[key] as JsonValue)}`);
+    return `{${entries.join(',')}}`;
+  }
+  return JSON.stringify(value);
+}

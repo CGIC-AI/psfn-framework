@@ -117,4 +117,13 @@ describe('LetterService', () => {
     expect(store.create).not.toHaveBeenCalled();
     expect(append).not.toHaveBeenCalled();
   });
+
+  it('rejects a second memory trigger binding instead of silently replacing it', () => {
+    const service = new LetterService({ store: makeStore(), sessionStore: { append: vi.fn() } });
+
+    service.bindMemoryTrigger(vi.fn());
+    expect(() => service.bindMemoryTrigger(vi.fn())).toThrow(
+      'Letter memory trigger is already bound',
+    );
+  });
 });

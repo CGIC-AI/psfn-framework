@@ -310,6 +310,9 @@ export function hydrateCanonicalStartupConfig(
       sharedWorldWikiCaretaker: {
         ...persistedScheduler.backgroundMaintenance.sharedWorldWikiCaretaker,
       },
+      doingMirrorLetters: {
+        ...persistedScheduler.backgroundMaintenance.doingMirrorLetters,
+      },
       ambientPresence: { ...persistedScheduler.backgroundMaintenance.ambientPresence },
       concernGrooming: { ...persistedScheduler.backgroundMaintenance.concernGrooming },
     },

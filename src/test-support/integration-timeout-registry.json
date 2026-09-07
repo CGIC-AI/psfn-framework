@@ -18,7 +18,7 @@
       "timeoutMs": 120000,
       "measuredBaselineMs": 1450,
       "baselineSource": "measured",
-      "note": "S12A doing-mirror lifecycle, restart persistence, and stale-transition rejection against the real containerized PostgreSQL harness. Focused local full-file wall baseline was 1.45s on 2026-08-30; 120s preserves headroom for cold image startup and shared harness-slot contention."
+      "note": "S12A doing-mirror lifecycle, restart persistence, stale-transition rejection, and the maintenance-lane pending-Letter drain against the real containerized PostgreSQL harness. Focused local full-file wall baseline was 1.45s on 2026-08-30 and 0.41s on 2026-09-07 with the drain proof added (warm harness slot); the conservative 1.45s baseline is retained and 120s preserves headroom for cold image startup and shared harness-slot contention."
     },
     {
       "file": "src/app/e2e/contact-lifecycle-certification/process-harness.integration.test.ts",

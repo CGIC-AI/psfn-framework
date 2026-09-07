@@ -209,6 +209,7 @@ import {
 import { PostgresAdminAutomataBusReadAdapter } from '../../operator/garden/services/automata-bus-read-adapter.js';
 import { createProductionAutomataBusReindexService } from '../../faculties/automata/bus/production-reindex.js';
 import { FoldPackageDoingMirrorSource } from '../../core/doing-mirror/sources.js';
+import { wireLetterMemoryExtraction } from '../../core/letters/memory-extraction.js';
 
 const log = createComponentLogger('Agent');
 const postgresPoolOwner = new PostgresPoolOwner('agent');
@@ -828,6 +829,15 @@ async function main(): Promise<void> {
       companionId: resolveCoreCompanionIdFromConfig(config),
     },
     automataRetention: coreRuntime.automataRetention,
+    doingMirrorService: coreRuntime.doingMirrorService,
+  });
+  // Letters land in their own L0 channel, which no completed turn ever points
+  // the extractor at. Bind the bin to the same maybeExtract the post-turn path
+  // uses, through the deferred-action queue so it runs outside every turn scope.
+  wireLetterMemoryExtraction({
+    actions: postTurnActions,
+    letters: coreRuntime.letterService,
+    memoryExtractor,
   });
   const episodeEmbeddingProvenance = embeddingProvenance;
   const episodeEmbeddingProfile = {

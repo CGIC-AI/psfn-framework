@@ -47,6 +47,10 @@ function makeHarness() {
       records.set(`${record.itemType}:${record.itemId}`, record);
       return record;
     }),
+    listPendingLetterDeliveries: vi.fn(async (limit: number) => [...records.values()]
+      .filter(record => record.notification.deliveredAt === undefined)
+      .sort((left, right) => left.updatedAt - right.updatedAt)
+      .slice(0, limit)),
     markLetterDelivered: vi.fn(async (itemType, itemId, letterId, deliveredAt) => {
       const current = records.get(`${itemType}:${itemId}`);
       if (!current || current.notification.letterId !== letterId) throw new Error('missing transition');
@@ -172,6 +176,58 @@ describe('DoingMirrorService', () => {
     });
     expect(store.transition).toHaveBeenCalledTimes(1);
     expect(compose).toHaveBeenCalledTimes(2);
+  });
+
+  it('drains a pending Letter delivery exactly once on the next maintenance pass', async () => {
+    const { service, store, compose, records } = makeHarness();
+    compose.mockRejectedValueOnce(new Error('letter store unavailable'));
+    const input = {
+      itemType: 'wishlist' as const,
+      itemId: SOURCE.itemId,
+      state: 'considering' as const,
+      subject: 'Your moon garden',
+      body: 'I am considering it.',
+    };
+
+    await expect(service.transition(input)).rejects.toThrow('letter store unavailable');
+    expect(records.get(`wishlist:${SOURCE.itemId}`)?.notification.deliveredAt).toBeUndefined();
+
+    await expect(service.drainPendingLetters(25)).resolves.toEqual({ pending: 1, drained: 1 });
+    expect(compose).toHaveBeenCalledTimes(2);
+    expect(compose).toHaveBeenLastCalledWith({
+      id: '83f2437e-1af8-40c4-9710-f6a7b085ad64',
+      author: 'partner',
+      recipient: 'companion',
+      subject: 'Your moon garden',
+      body: 'I am considering it.',
+    });
+    expect(records.get(`wishlist:${SOURCE.itemId}`)?.notification.deliveredAt).toBe(200);
+
+    await expect(service.drainPendingLetters(25)).resolves.toEqual({ pending: 0, drained: 0 });
+    expect(compose).toHaveBeenCalledTimes(2);
+    expect(store.transition).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps a failed drain row isolated and reports it instead of swallowing it', async () => {
+    const { service, compose, records } = makeHarness();
+    compose.mockRejectedValueOnce(new Error('letter store unavailable'));
+    const input = {
+      itemType: 'wishlist' as const,
+      itemId: SOURCE.itemId,
+      state: 'considering' as const,
+      subject: 'Your moon garden',
+      body: 'I am considering it.',
+    };
+    await expect(service.transition(input)).rejects.toThrow('letter store unavailable');
+
+    compose.mockRejectedValueOnce(new Error('letter store still unavailable'));
+    await expect(service.drainPendingLetters(25)).rejects.toThrow(
+      'doing-mirror redelivered 0 of 1 pending disposition letters; '
+      + 'failures: letter store still unavailable',
+    );
+    expect(records.get(`wishlist:${SOURCE.itemId}`)?.notification.deliveredAt).toBeUndefined();
+
+    await expect(service.drainPendingLetters(25)).resolves.toEqual({ pending: 1, drained: 1 });
   });
 
   it('fails closed for an unregistered or missing source item', async () => {

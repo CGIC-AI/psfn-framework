@@ -9506,6 +9506,18 @@
       "note": "Code-owned protocol boundary mirroring the fleet_auth.contact_bindings database CHECK constraint; it is not an operator-tunable policy."
     },
     {
+      "file": "src/persistence/postgres/health-event-store.ts",
+      "name": "DEFAULT_HEALTH_EVENT_LIST_LIMIT",
+      "value": "200",
+      "note": "Code-owned default read-page size for the health-stream query surface, mirroring DEFAULT_PARTNER_AFFECT_SHADOW_LIST_LIMIT; callers that care pass an explicit limit, so this is API shape rather than operator tuning."
+    },
+    {
+      "file": "src/persistence/postgres/health-event-store.ts",
+      "name": "MAX_HEALTH_EVENT_LIST_LIMIT",
+      "value": "1_000",
+      "note": "Code-owned read-page ceiling on the health-stream query surface, mirroring MAX_PARTNER_AFFECT_SHADOW_LIST_LIMIT; it is a resource guard on an untrusted caller-supplied limit, not operator tuning. The operator-owned bound on this subsystem is settings.json healthEventStreamMaxRows."
+    },
+    {
       "file": "src/persistence/postgres/icp-admin-projection-store.ts",
       "name": "MAX_ADMIN_ROWS",
       "value": "100"

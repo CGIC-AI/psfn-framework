@@ -420,6 +420,13 @@
       "note": "Pre-policy 180s override shipped unregistered by the stmof named-tenant lane (89c6ba23cd landed without the repo-wide tests stage). Registered as measurement debt: pinned so any change forces a real measurement."
     },
     {
+      "file": "src/persistence/postgres/health-event-store.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": 960,
+      "baselineSource": "measured",
+      "note": "psfn-framework-7qeo1.24.1: bounded runtime health-event stream round-trip, ring eviction, restart persistence, idempotence, incident/window reads, and fail-closed read-back against the real containerized PostgreSQL harness. Focused local full-file wall baseline was 0.96s on 2026-09-07 with a warm harness slot; 120s matches the repo integration cap and preserves headroom for cold image startup and shared harness-slot contention."
+    },
+    {
       "file": "src/persistence/postgres/partner-affect-shadow-store.integration.test.ts",
       "timeoutMs": 120000,
       "measuredBaselineMs": null,

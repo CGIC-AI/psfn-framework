@@ -3,6 +3,12 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { EventBus } from '../../../shared/event-bus.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import { emitTurnPerformance } from '../../../shared/telemetry/turn-performance.js';
+import {
+  emitHealthEvent,
+  hashHealthEventSubject,
+  processObserverId,
+  type HealthEventOwner,
+} from '../../../shared/contracts/health-event.js';
 import type { TurnPerformanceDeferReason } from '../../../shared/telemetry/turn-performance.js';
 import type {
   BackgroundWorkEnqueueResult,
@@ -100,6 +106,13 @@ export interface BackgroundWorkSupervisorOptions extends BackgroundWorkSuperviso
     payload: BackgroundWorkPayload;
     reasonCode: StoredBackgroundWorkJob['reasonCode'];
   }) => void;
+  /**
+   * Ownership the supervisor stamps on its health events (bead
+   * psfn-framework-7qeo1.24.1). The agent entrypoint declares it; absent, the
+   * supervisor still runs and still emits turn-performance telemetry, it just
+   * contributes nothing to the health plane.
+   */
+  healthEventOwner?: HealthEventOwner;
 }
 
 export interface ForegroundWorkLease {
@@ -224,6 +237,7 @@ export class BackgroundWorkSupervisor {
   private readonly welfare: BackgroundWorkWelfarePolicy;
   private readonly automataLifecycle: BackgroundWorkAutomataLifecyclePort | undefined;
   private readonly onTerminalFailure: BackgroundWorkSupervisorOptions['onTerminalFailure'];
+  private readonly healthEventOwner: HealthEventOwner | undefined;
   private readonly foregroundCounts = new Map<string, number>();
   private readonly foregroundLeases = new Map<string, ManagedForegroundWorkLease>();
   private readonly readyForegroundLeaseIds = new Set<string>();
@@ -246,6 +260,7 @@ export class BackgroundWorkSupervisor {
     this.store = options.store;
     this.eventBus = options.eventBus;
     this.executor = options.executor;
+    this.healthEventOwner = options.healthEventOwner;
     this.now = options.now ?? Date.now;
     this.leaseOwner = options.leaseOwner?.trim() || `background-supervisor:${randomUUID()}`;
     this.maxConcurrentSessions = requirePositiveInteger(
@@ -995,6 +1010,11 @@ export class BackgroundWorkSupervisor {
   ): Promise<void> {
     this.emitJobTelemetry(settled, undefined, this.executionDurationMs(claimed));
     if (settled.state !== 'failed') return;
+    // Agent health emitter: one terminal background-work failure. The job is
+    // identified by a digest of its KIND, not its id, so the repeated-failure
+    // detector can count repeats of the same lane (memory refresh, extraction)
+    // rather than seeing every failure as its own singleton group.
+    this.emitTerminalFailureHealthEvent(claimed, payload, settled);
     try {
       await this.automataLifecycle?.onFailed({
         job: claimed,
@@ -1025,6 +1045,43 @@ export class BackgroundWorkSupervisor {
         errorName: error instanceof Error ? error.name : 'UnknownError',
       });
     }
+  }
+
+  /**
+   * Fire-and-forget with a logged catch: the durable failure is already
+   * committed, and a health-plane emission fault must never rewrite or mask it.
+   */
+  private emitTerminalFailureHealthEvent(
+    claimed: ClaimedBackgroundWorkJob,
+    payload: BackgroundWorkPayload,
+    settled: StoredBackgroundWorkJob,
+  ): void {
+    const owner = this.healthEventOwner;
+    if (!owner) return;
+    const nowMs = this.now();
+    void emitHealthEvent(this.eventBus, {
+      owner,
+      severity: 'degraded',
+      code: 'background_work_job_failed',
+      provenance: {
+        process: 'agent',
+        component: 'background_work',
+        observerId: processObserverId(),
+        subjectHash: hashHealthEventSubject(payload.kind),
+      },
+      observedAtMs: nowMs,
+      evidence: {
+        attemptCount: settled.attemptCount,
+        durationMs: this.executionDurationMs(claimed),
+        jobAgeMs: Math.max(0, nowMs - settled.createdAtMs),
+        terminal: true,
+      },
+    }).catch((error: unknown) => {
+      log.error('Background terminal-failure health event emission failed', {
+        jobId: settled.jobId,
+        errorName: error instanceof Error ? error.name : 'UnknownError',
+      });
+    });
   }
 
   private emitJobTelemetry(

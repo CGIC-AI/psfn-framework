@@ -1690,6 +1690,7 @@ async function main(): Promise<void> {
       await persistenceRuntime.socialImpulseOutreachStore.close();
       await persistenceRuntime.socialPotStore?.close();
       await persistenceRuntime.speakingArbiterStore?.close();
+      await persistenceRuntime.roomParticipationLeaseStore?.shutdown();
       await persistenceRuntime.fleetMaintenanceCoordinator?.close();
       await persistenceRuntime.backgroundWorkStore.close();
       await persistenceRuntime.automataBusStore.close();
@@ -1879,6 +1880,7 @@ async function main(): Promise<void> {
     participationAppraiser,
     reservationPhase,
     egressLeasePhase,
+    roomParticipationLease,
   } = wireSpeakingArbiterLane({
     config,
     schedulerConfig,
@@ -1898,7 +1900,13 @@ async function main(): Promise<void> {
     },
     outboundReplyGuard,
   });
-  socialImpulseOutreachLane.setSpeakingPhases({ reservationPhase, egressLeasePhase });
+  socialImpulseOutreachLane.setSpeakingPhases({
+    reservationPhase,
+    egressLeasePhase,
+    // A granted endogenous room entry opens the same bounded membership an
+    // inbound summons would (jp36.5.5).
+    roomParticipationLease,
+  });
 
   // ── Drift review lanes (htm9.14/htm9.15) + emo_sim dyad advisory (oth4.6):
   // extracted to startup/drift-review-lanes.ts (charter 12.1 split).
@@ -2034,6 +2042,7 @@ async function main(): Promise<void> {
     participationAppraiser,
     ...(reservationPhase ? { reservationPhase } : {}),
     ...(egressLeasePhase ? { egressLeasePhase } : {}),
+    ...(roomParticipationLease ? { roomParticipationLease } : {}),
     outboundReplyGuard,
     companionAuthorName: card.data.name,
     protectedMessageQueue: companionAvailability,

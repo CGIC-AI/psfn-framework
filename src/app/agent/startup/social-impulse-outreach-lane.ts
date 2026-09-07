@@ -1,6 +1,7 @@
 import type { SubstrateAgent } from '../../../core/agent/substrate-agent.js';
 import type { SpeakingEgressLeasePhase } from '../../../core/agent/arbiter/egress-lease-phase.js';
 import type { SpeakingReservationPhase } from '../../../core/agent/arbiter/reservation-phase.js';
+import type { RoomParticipationLeaseCoordinator } from '../../../core/participation/room-participation-lease-coordinator.js';
 import type { CompanionAvailabilityRuntime } from '../../../core/agent/companion-availability.js';
 import { ContactBlockListStore } from '../../../core/cogsec/contact-block-list.js';
 import type { ContactStorePort } from '../../../core/contacts/contact-store-port.js';
@@ -42,6 +43,7 @@ export interface SocialImpulseOutreachLane {
   setSpeakingPhases(input: {
     reservationPhase: SpeakingReservationPhase | undefined;
     egressLeasePhase: SpeakingEgressLeasePhase | undefined;
+    roomParticipationLease: RoomParticipationLeaseCoordinator | undefined;
   }): void;
 }
 
@@ -52,6 +54,7 @@ export function registerSocialImpulseOutreachLane(
   let humanPolicy: SocialDesireHumanDeliveryPolicy | undefined;
   let reservationPhase: SpeakingReservationPhase | undefined;
   let egressLeasePhase: SpeakingEgressLeasePhase | undefined;
+  let roomParticipationLease: RoomParticipationLeaseCoordinator | undefined;
   const blockList = new ContactBlockListStore(resolveContactBlockListPath(deps.companionDataDir));
 
   const runtime = createProductionSocialImpulseOutreachRuntime({
@@ -86,7 +89,13 @@ export function registerSocialImpulseOutreachLane(
           isDirectMessage: true,
         }).action === 'allow';
     },
-    getPhases: () => ({ proactiveOutbound, humanPolicy, reservationPhase, egressLeasePhase }),
+    getPhases: () => ({
+      proactiveOutbound,
+      humanPolicy,
+      reservationPhase,
+      egressLeasePhase,
+      roomParticipationLease,
+    }),
   });
 
   return {
@@ -100,6 +109,7 @@ export function registerSocialImpulseOutreachLane(
     setSpeakingPhases(input) {
       reservationPhase = input.reservationPhase;
       egressLeasePhase = input.egressLeasePhase;
+      roomParticipationLease = input.roomParticipationLease;
     },
   };
 }

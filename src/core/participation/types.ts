@@ -14,8 +14,16 @@ import type { ChannelType } from '../../shared/contracts/runtime.js';
  * - `passive_name`   — an ambient name/alias occurrence in room chatter.
  * - `direct_mention` — the message opens by addressing the companion (a leading
  *                      platform mention or a message that starts with an alias).
+ * - `contextual_continuation` — no name at all: an ordinary follow-up in a room
+ *                      where this companion already holds a bounded durable
+ *                      participation lease (jp36.5.5). Admission is decided by
+ *                      the deterministic lease gate before any model call.
  */
-export type ParticipationCandidateTrigger = 'direct_mention' | 'passive_name' | 'companion_message';
+export type ParticipationCandidateTrigger =
+  | 'direct_mention'
+  | 'passive_name'
+  | 'companion_message'
+  | 'contextual_continuation';
 
 /** The conversation surface on which the speaking decision is being made. */
 type ParticipationSurface = 'group_room' | 'companion_dm';
@@ -88,6 +96,26 @@ export const PARTICIPATION_SUPPRESSION_REASONS = [
   'stale',
   'duplicate',
   'debounced',
+  // Room-participation lease (jp36.5.5). Every one of these is decided
+  // deterministically, before any model call, and is content-free telemetry.
+  /** Owner policy disabled continuation while a lease was still live. */
+  'lease_policy_off',
+  /** The bounded membership lifetime elapsed. */
+  'lease_expired',
+  /** Nothing was considered for the configured silence window. */
+  'lease_silent',
+  /** The per-lease continuation budget is spent. */
+  'lease_message_cap',
+  /** The consecutive machine-author fence tripped (no bot-to-bot loop). */
+  'lease_machine_streak',
+  /** Already considered: the message is at or behind the context watermark. */
+  'lease_watermark',
+  /** Continuations are rate-limited within one room. */
+  'lease_cooldown',
+  /** Bounded relevance hint: too little content to read as a follow-up. */
+  'lease_low_signal',
+  /** Another observer claimed this message first (restart/redelivery race). */
+  'lease_claim_lost',
 ] as const;
 
 export type ParticipationSuppressionReason =

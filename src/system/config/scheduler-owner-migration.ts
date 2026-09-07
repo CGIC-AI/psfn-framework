@@ -22,6 +22,7 @@ import {
 } from './scheduler-config.js';
 import { DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG } from './icp-autonomy-scheduler-config.js';
 import { DEFAULT_INTENTION_FOLLOW_UP_SCHEDULER_CONFIG } from './scheduler-config/intention-follow-up.js';
+import { createDefaultRoomParticipationLeaseSettings } from './participation-config.js';
 
 export interface SchedulerOwnerMigrationOptions {
   dataDir: string;
@@ -110,6 +111,27 @@ function addMissingIntentionFollowUp(
 }
 
 /**
+ * psfn-framework-jp36.5.5: an owner file written before bounded room-participation
+ * continuation existed has a `socialAutonomy` block with no
+ * `roomParticipationLease`. Seed the canonical default (continuation disabled)
+ * rather than leaving the posture implicit, so the operator can see and edit the
+ * knob in the owner file it belongs to.
+ */
+function addMissingRoomParticipationLease(
+  candidate: Record<string, unknown>,
+  addedPaths: string[],
+): void {
+  const socialAutonomy = candidate.socialAutonomy;
+  if (!isRecord(socialAutonomy)
+    || socialAutonomy.roomParticipationLease !== undefined) return;
+  candidate.socialAutonomy = {
+    ...socialAutonomy,
+    roomParticipationLease: createDefaultRoomParticipationLeaseSettings(),
+  };
+  addedPaths.push('socialAutonomy.roomParticipationLease');
+}
+
+/**
  * Converts the pre-bundled scheduler owner shape into the canonical shared
  * background-maintenance cadence. Dry-run is the default. The candidate is
  * fully validated before an atomic replacement, and already-migrated files are
@@ -190,6 +212,7 @@ export function migrateLegacySchedulerOwner(
       addMissingBackgroundWorkMaxAttempts(candidate, addedPaths);
       addMissingIcpPolicyHolds(candidate, addedPaths);
       addMissingIntentionFollowUp(candidate, addedPaths);
+      addMissingRoomParticipationLease(candidate, addedPaths);
 
       const validated = validateSchedulerConfig(candidate, filePath);
       result = {
@@ -247,6 +270,7 @@ export function migrateLegacySchedulerOwner(
       addMissingBackgroundWorkMaxAttempts(candidate, addedPaths);
       addMissingIcpPolicyHolds(candidate, addedPaths);
       addMissingIntentionFollowUp(candidate, addedPaths);
+      addMissingRoomParticipationLease(candidate, addedPaths);
       if (addedPaths.length === 0) {
         validateSchedulerConfig(raw, filePath);
         assertSourceStillCurrent();

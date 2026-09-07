@@ -176,6 +176,7 @@ import {
 } from './session-activity.js';
 import { loadIntakePolicyConfig } from '../../system/config/intake-policy-config.js';
 import { maybeCreateIntakeScreeningService } from '../../core/cogsec/intake/screening.js';
+import { COGSEC_INTAKE_FIREWALL_ISSUER_ID } from '../../shared/contracts/cogsec-receipt.js';
 import { loadPartnerAffectShadowConfig } from '../../system/config/partner-affect-shadow-config.js';
 import { createPartnerAffectShadowIngestBridge } from '../../core/emotion/partner-affect/shadow-ingest-bridge.js';
 import { createIntakeQuarantineStore } from '../../core/cogsec/intake/quarantine-store.js';
@@ -723,6 +724,16 @@ async function main(): Promise<void> {
           error: String(error),
         });
       });
+    },
+    // Content-addressed admission receipts (psfn-framework-1fjvm.3): admitted,
+    // fully screened bytes get a durable receipt so a byte-identical durable
+    // artifact (skill body, wiki document) can prove its admission after a
+    // restart instead of re-paying screening. Quarantined, withheld, partially
+    // screened, and clean-bubble content never gets one.
+    receipts: {
+      store: persistenceRuntime.cogSecReceiptStore,
+      issuerId: COGSEC_INTAKE_FIREWALL_ISSUER_ID,
+      ttlMs: intakePolicy.receipts.ttlHours * 3_600_000,
     },
     // Durable quarantine hold (htm9.11): agent-side quarantine decisions land
     // in the same companion-data store the gateway writes and Garden reviews.
@@ -1696,6 +1707,7 @@ async function main(): Promise<void> {
       await persistenceRuntime.automataRunRegistry.close();
       await persistenceRuntime.introspectionLandmarkStore.close();
       await persistenceRuntime.partnerAffectShadowStore.close();
+      await persistenceRuntime.cogSecReceiptStore.close();
       await persistenceRuntime.companionAvailabilityStore.close();
       await persistenceRuntime.letterStore.close();
       await persistenceRuntime.doingMirrorStore.close();

@@ -174,7 +174,7 @@
     "verify:fleet-auth-certification": "tsx scripts/verify-fleet-auth-certification.ts",
     "verify:companion-id-types": "tsc --noEmit -p tsconfig.companion-id-types.json",
     "verify:repository-hygiene": "npm run verify:public-sanitize && npm run verify:repository-hygiene:structural",
-    "verify:repository-hygiene:structural": "npm run verify:intake-sink-wiring && npm run verify:identity-literals && npm run verify:actor-terminology && npm run verify:model-facing-tool-guidance && npm run verify:dependency-cycles && npm run verify:shared-type-guards && npm run verify:model-usage-capture && npm run verify:postgres-only && npm run verify:hardcoded-settings && npm run verify:recovery-chart-digest && npm run verify:duplicate-type-names && npm run verify:knip && npm run verify:todo-bead-links",
+    "verify:repository-hygiene:structural": "npm run verify:intake-sink-wiring && npm run verify:identity-literals && npm run verify:actor-terminology && npm run verify:model-facing-tool-guidance && npm run verify:dependency-cycles && npm run verify:shared-type-guards && npm run verify:model-usage-capture && npm run verify:postgres-only && npm run verify:hardcoded-settings && npm run verify:recovery-chart-digest && npm run verify:chart-render && npm run verify:duplicate-type-names && npm run verify:knip && npm run verify:todo-bead-links",
     "verify:settings-contract": "tsx scripts/verify-settings-contract.ts",
     "verify:supply-chain": "tsx scripts/verify-supply-chain.ts",
     "verify:backup-restore": "tsx scripts/verify-backup-restore.ts"

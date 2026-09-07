@@ -7,6 +7,9 @@ import { ensureActiveTimezone } from '../../shared/time/active-timezone.js';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { loadConfig } from '../../system/config/load-config.js';
+import { createPostgresHealthEventStoreFromConfig } from '../../persistence/postgres/health-event-store.js';
+import { subscribeHealthEventStream } from '../../shared/observability/health-event-stream.js';
+import { emitHealthEvent, processObserverId } from '../../shared/contracts/health-event.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import {
   PostgresPoolOwner,
@@ -319,6 +322,18 @@ async function main(): Promise<void> {
     privilegedServices,
     createGatewayServer,
   } = privilegedCore;
+  // Bounded persisted health plane for this process. Constructed and
+  // subscribed here — before the first gateway emitter below — because
+  // `EventBus.emit` returns silently with no subscriber, so a later
+  // subscription would drop startup-time observations rather than fail.
+  const healthEventStore = await awaitPostgresStoreReadiness(
+    'runtime_health_stream',
+    () => createPostgresHealthEventStoreFromConfig(config),
+  );
+  const detachHealthEventStream = subscribeHealthEventStream({
+    eventBus,
+    store: healthEventStore,
+  });
   if (companionDatabaseTopology && companionDatabaseTopology.companions.length > 1) {
     const primary = companionDatabaseTopology.companions[0];
     if (!primary) {
@@ -426,7 +441,12 @@ async function main(): Promise<void> {
         tickIntervalMs: startupHydration.schedulerConfig.tickIntervalMs,
         heartbeatIntervalMs: startupHydration.schedulerConfig.heartbeatIntervalMs,
       },
-      { eligibilityGate },
+      {
+        eligibilityGate,
+        // Gateway-process scheduler: fleet-auth backup is system work, owned by
+        // the runtime rather than by any one companion.
+        healthEventSource: { owner: { kind: 'system' }, process: 'gateway' },
+      },
     );
     registerScheduledFleetAuthBackupTask({
       scheduler: fleetAuthBackupScheduler,
@@ -541,6 +561,22 @@ async function main(): Promise<void> {
     log.error('OPERATOR ALERTING IS UNCONFIGURED', {
       warning: operatorAlerting.warning,
       configuredSinks: operatorAlerting.configuredSinks,
+    });
+    // Gateway health emitter: a runtime that cannot deliver an operator alert
+    // is the one fault nobody will be told about, so it enters the health
+    // plane as a system-owned observation. The human-readable warning stays in
+    // the log; the stream carries the code and the sink count only.
+    await emitHealthEvent(eventBus, {
+      owner: { kind: 'system' },
+      severity: 'critical',
+      code: 'operator_alert_sinks_unconfigured',
+      provenance: {
+        process: 'gateway',
+        component: 'operator_alerting',
+        observerId: processObserverId(),
+      },
+      observedAtMs: Date.now(),
+      evidence: { configuredSinkCount: operatorAlerting.configuredSinks.length },
     });
   }
   const primaryDiscordCompanionId = bootstrap.channelsConfig.discord.companionId
@@ -1029,6 +1065,8 @@ async function main(): Promise<void> {
         { step: 'close fleet auth persistence', action: async () => { await fleetAuthPersistence?.close(); } },
         { step: 'stop channel adapters', action: () => stopGatewayChannelSurfaces(channelSurfaces) },
         { step: 'dispose intake screening', action: () => privilegedCore.intakeScreening.dispose() },
+        { step: 'stop runtime health stream', action: () => detachHealthEventStream() },
+        { step: 'close runtime health stream', action: async () => { await healthEventStore.close(); } },
         { step: 'close PostgreSQL pool owner', action: () => postgresPoolOwner.close() },
       ], log);
       log.info('Stopped');

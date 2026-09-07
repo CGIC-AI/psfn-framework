@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { EventBus } from '../../../shared/event-bus.js';
+import { hashHealthEventSubject, type HealthEvent } from '../../../shared/contracts/health-event.js';
 import { buildSubsystemOutputRef } from '../../../shared/contracts/subsystem-output-refs.js';
 import {
   runIntentionPostTurnHooks,
@@ -32,6 +33,8 @@ import {
   type AutoCompactionBackgroundPayload,
   type MemoryExtractionBackgroundPayload,
 } from './types.js';
+
+const HEALTH_COMPANION_ID = '11111111-1111-4111-8111-111111111111';
 
 const TEST_BACKGROUND_WORK_SUPERVISOR_TUNING: BackgroundWorkSupervisorTuning = {
   maxConcurrentSessions: 4,
@@ -1250,6 +1253,76 @@ describe('BackgroundWorkSupervisor', () => {
       reasonCode: 'retry_exhausted',
       payload: input.payload,
     }));
+  });
+
+  it('projects a terminal background-work failure into the content-free health plane', async () => {
+    let now = 1_000;
+    const store = new MemoryBackgroundWorkStore();
+    const eventBus = new EventBus();
+    const healthEvents: HealthEvent[] = [];
+    eventBus.on('runtime.health.event', (payload) => {
+      healthEvents.push(payload.event);
+    });
+    const supervisor = createBackgroundWorkSupervisor({
+      store,
+      eventBus,
+      now: () => now,
+      retryBaseDelayMs: 100,
+      healthEventOwner: { kind: 'companion', companionId: HEALTH_COMPANION_ID as never },
+      executor: vi.fn().mockRejectedValue(new Error('embedding host unreachable at 10.0.0.7')),
+    });
+    const input = { ...makeInput('session-health', 'turn-health'), maxAttempts: 2 };
+    await store.enqueue(input);
+
+    await supervisor.tick();
+    await supervisor.waitForIdle();
+    // A retryable failure is not yet a health-plane observation.
+    expect(healthEvents).toEqual([]);
+
+    now += 100;
+    await supervisor.tick();
+    await supervisor.waitForIdle();
+    await vi.waitFor(() => { expect(healthEvents).toHaveLength(1); });
+
+    const [event] = healthEvents;
+    expect(event.code).toBe('background_work_job_failed');
+    expect(event.severity).toBe('degraded');
+    expect(event.owner).toEqual({ kind: 'companion', companionId: HEALTH_COMPANION_ID });
+    expect(event.provenance.process).toBe('agent');
+    expect(event.provenance.component).toBe('background_work');
+    // Grouped by job KIND, which is what makes the repeated-failure detector
+    // possible: hashing the job id would make every failure its own group.
+    expect(event.provenance.subjectHash).toBe(hashHealthEventSubject('memory_extraction'));
+    expect(event.evidence).toMatchObject({ attemptCount: 2, terminal: true });
+    const serialized = JSON.stringify(event);
+    expect(serialized).not.toContain('10.0.0.7');
+    expect(serialized).not.toContain('session-health');
+    expect(serialized).not.toContain('memory_extraction');
+  });
+
+  it('stays silent on the health plane when no entrypoint declared ownership', async () => {
+    let now = 1_000;
+    const store = new MemoryBackgroundWorkStore();
+    const eventBus = new EventBus();
+    const healthEvents: unknown[] = [];
+    eventBus.on('runtime.health.event', (payload) => {
+      healthEvents.push(payload.event);
+    });
+    const supervisor = createBackgroundWorkSupervisor({
+      store,
+      eventBus,
+      now: () => now,
+      retryBaseDelayMs: 100,
+      executor: vi.fn().mockRejectedValue(new Error('boom')),
+    });
+    const input = { ...makeInput('session-unclaimed', 'turn-unclaimed'), maxAttempts: 1 };
+    await store.enqueue(input);
+
+    await supervisor.tick();
+    await supervisor.waitForIdle();
+
+    expect(await store.get(input.jobId)).toMatchObject({ state: 'failed' });
+    expect(healthEvents).toEqual([]);
   });
 
   it('abandons a pre-write intention receipt and retries the hook once', async () => {

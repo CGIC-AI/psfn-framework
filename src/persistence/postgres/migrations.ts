@@ -4029,6 +4029,63 @@ export const POSTGRES_PARTNER_AFFECT_SHADOW_MIGRATIONS: readonly string[] = [
   `,
 ];
 
+/**
+ * Bounded runtime health-event stream (bead psfn-framework-7qeo1.24.1).
+ *
+ * One append-only ring of content-free `HealthEvent` envelopes, capped by the
+ * settings.json-owned `healthEventStreamMaxRows` so it survives a restart
+ * without growing without bound. The columns a detector filters and joins on
+ * (correlation, causation, code, severity, component, subject digest, time)
+ * are first-class; the bounded structured evidence rides as a small JSONB map.
+ *
+ * The CHECK constraints are deliberately STRUCTURAL only. The closed
+ * vocabularies for `code`, `severity`, `process`, and `component` live in
+ * `shared/contracts/health-event.ts` and are enforced by `validateHealthEvent`
+ * on both the write and the read path: pinning them into DDL would silently
+ * drift the day a detector child adds a code, because `CREATE TABLE IF NOT
+ * EXISTS` never updates an existing constraint.
+ */
+export const POSTGRES_HEALTH_EVENT_MIGRATIONS: readonly string[] = [
+  `
+  CREATE TABLE IF NOT EXISTS runtime_health_events (
+    event_id UUID PRIMARY KEY,
+    schema_version INTEGER NOT NULL,
+    correlation_id UUID NOT NULL,
+    causation_id UUID,
+    owner_kind TEXT NOT NULL,
+    owner_companion_id TEXT,
+    severity TEXT NOT NULL,
+    code TEXT NOT NULL,
+    process TEXT NOT NULL,
+    component TEXT NOT NULL,
+    observer_id UUID NOT NULL,
+    subject_hash TEXT,
+    occurrence_count INTEGER NOT NULL,
+    first_observed_at_ms BIGINT NOT NULL,
+    last_observed_at_ms BIGINT NOT NULL,
+    recorded_at_ms BIGINT NOT NULL,
+    evidence_json JSONB NOT NULL,
+    CHECK (owner_kind IN ('system', 'companion')),
+    CHECK ((owner_kind = 'companion') = (owner_companion_id IS NOT NULL)),
+    CHECK (occurrence_count >= 1),
+    CHECK (first_observed_at_ms >= 0),
+    CHECK (last_observed_at_ms >= first_observed_at_ms),
+    CHECK (recorded_at_ms >= 0),
+    CHECK (subject_hash IS NULL OR subject_hash ~ '^[0-9a-f]{64}$'),
+    CHECK (jsonb_typeof(evidence_json) = 'object'),
+    CHECK (octet_length(evidence_json::text) <= 4096)
+  );
+  `,
+  `
+  CREATE INDEX IF NOT EXISTS idx_runtime_health_events_recorded
+    ON runtime_health_events(recorded_at_ms DESC, event_id DESC);
+  `,
+  `
+  CREATE INDEX IF NOT EXISTS idx_runtime_health_events_correlation
+    ON runtime_health_events(correlation_id, recorded_at_ms DESC, event_id DESC);
+  `,
+];
+
 // Analysis-workbench trace ring (bead vb11). Persists the redacted
 // AnalysisWorkbenchTraceView projection so the Garden /analysis-workbench page
 // survives a Garden/agent restart. Companion-scoped, bounded per companion to

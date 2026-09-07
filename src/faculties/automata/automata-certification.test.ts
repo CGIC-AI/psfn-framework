@@ -43,6 +43,7 @@ import {
 import { AutomataRetentionCoordinator } from './retention-coordinator.js';
 import { InMemoryAutomataRetentionStore } from './retention-store.js';
 import { AutomataRunRegistry, InMemoryAutomataRunStore } from './run-registry.js';
+import { AUTOMATA_TERMINAL_HANDOFF_SOURCE } from './terminal-lifecycle.js';
 
 const COMPANION_ID = 'companion-a';
 const RUN_ID = 'run-retention';
@@ -77,7 +78,7 @@ function terminalFinding(): AutomataBusEvent {
         summary: 'Content-addressed report evidence.',
       }],
       verification: { status: 'verified', by: 'certification-reviewer' },
-      source: 'subagent-terminal-handoff',
+      source: AUTOMATA_TERMINAL_HANDOFF_SOURCE,
     },
   };
 }

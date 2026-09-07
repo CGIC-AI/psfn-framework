@@ -169,6 +169,7 @@ describe('SubagentTaskRegistry', () => {
       createdAt: 100,
     });
     expect(task.lineage).toEqual({
+      automatonClass: 'subagent.bounded',
       runId: 'subagent-durable',
       taskId: 'task-durable',
       workerId: 'subagent-durable',

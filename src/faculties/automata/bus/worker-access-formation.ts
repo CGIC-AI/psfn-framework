@@ -51,6 +51,31 @@ const EXTRACTION_BOUNDARY = [
   'Bus writes are runtime-owned during memory extraction. Never send person facts, biography, raw memories, transcript text, or transcript-derived evidence through automata_bus.',
 ].join('\n');
 
+/**
+ * A briefing the runtime could not accept under the version it understands.
+ * Carries the version pair and the offending field so an operator sees an
+ * actionable contract mismatch instead of an ambiguous worker death.
+ */
+export class AutomataBusBriefingSchemaError extends Error {
+  readonly expectedSchemaVersion = AUTOMATA_BUS_WORKER_BRIEFING_SCHEMA_VERSION;
+
+  constructor(
+    readonly receivedSchemaVersion: string,
+    readonly field: string,
+    detail: string,
+  ) {
+    super(
+      `Automata Bus briefing schema mismatch at ${field}: expected schemaVersion `
+      + `${AUTOMATA_BUS_WORKER_BRIEFING_SCHEMA_VERSION}, received ${receivedSchemaVersion} (${detail})`,
+    );
+    this.name = 'AutomataBusBriefingSchemaError';
+  }
+}
+
+function describeSchemaVersion(value: unknown): string {
+  return typeof value === 'number' || typeof value === 'string' ? String(value) : typeof value;
+}
+
 function requireNonEmpty(value: string, field: string): string {
   const normalized = value.trim();
   if (!normalized) throw new Error(`${field} must be non-empty`);
@@ -127,16 +152,24 @@ export function buildAutomataBusWorkerScope(
 }
 
 function parseBriefing(value: unknown, bounds: AutomataBusWorkerBounds): AutomataBusWorkerBriefing {
-  if (!isRecord(value)) throw new Error('Automata Bus briefing must be an object');
+  if (!isRecord(value)) {
+    throw new AutomataBusBriefingSchemaError(describeSchemaVersion(value), 'briefing', 'not an object');
+  }
   const unknown = Object.keys(value).filter(
     key => !['schemaVersion', 'text', 'itemCount', 'diagnostics'].includes(key),
   );
   if (unknown.length > 0) {
-    throw new Error(`Automata Bus briefing contains unknown fields: ${unknown.sort().join(', ')}`);
+    throw new AutomataBusBriefingSchemaError(
+      describeSchemaVersion(value.schemaVersion),
+      'briefing',
+      `unknown fields: ${unknown.sort().join(', ')}`,
+    );
   }
   if (value.schemaVersion !== AUTOMATA_BUS_WORKER_BRIEFING_SCHEMA_VERSION) {
-    throw new Error(
-      `Automata Bus briefing schemaVersion must be ${AUTOMATA_BUS_WORKER_BRIEFING_SCHEMA_VERSION}`,
+    throw new AutomataBusBriefingSchemaError(
+      describeSchemaVersion(value.schemaVersion),
+      'briefing.schemaVersion',
+      'unsupported briefing contract version',
     );
   }
   if (typeof value.text !== 'string') throw new Error('Automata Bus briefing text must be a string');

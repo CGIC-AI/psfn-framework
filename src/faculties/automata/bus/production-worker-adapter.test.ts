@@ -12,7 +12,7 @@ import type { PostgresAutomataBusRuntimeStore } from './runtime-store.js';
 import {
   CanonicalAutomataBusWriter,
   createProductionAutomataBusWorkerAccess,
-  createSubagentAutomataLifecycleAdapter,
+  createAutomataTerminalLifecycleAdapter,
 } from './production-worker-adapter.js';
 import { createAutomataBusReviewerModelAdapter } from './production-reviewer-adapters.js';
 import {
@@ -229,7 +229,7 @@ describe('production Automata Bus lifecycle composition', () => {
 
   it('persists, hydrates, and only then indexes the canonical terminal finding', async () => {
     const harness = createHarness();
-    const lifecycle = createSubagentAutomataLifecycleAdapter({
+    const lifecycle = createAutomataTerminalLifecycleAdapter({
       companionId: 'companion-a',
       registry: await createRegistry(),
       store: harness.store,
@@ -238,6 +238,7 @@ describe('production Automata Bus lifecycle composition', () => {
     const receipt = await lifecycle.recordTerminalHandoff({
       idempotencyKey: 'terminal-key',
       lineage: {
+        automatonClass: 'subagent.bounded' as const,
         runId: 'subagent-1',
         taskId: 'task-1',
         workerId: 'subagent-1',
@@ -247,6 +248,7 @@ describe('production Automata Bus lifecycle composition', () => {
       outcome: 'completed',
       stateReason: 'completed',
       resultKind: 'final',
+      handoffKind: 'useful',
       usage: {
         model: 'test-model',
         inputTokens: 10,
@@ -265,7 +267,7 @@ describe('production Automata Bus lifecycle composition', () => {
   it('replays exactly after artifact linking and rejects changed content under the same key', async () => {
     const harness = createHarness();
     const registry = await createRegistry();
-    const lifecycle = createSubagentAutomataLifecycleAdapter({
+    const lifecycle = createAutomataTerminalLifecycleAdapter({
       companionId: 'companion-a',
       registry,
       store: harness.store,
@@ -274,6 +276,7 @@ describe('production Automata Bus lifecycle composition', () => {
     const input = {
       idempotencyKey: 'terminal-key',
       lineage: {
+        automatonClass: 'subagent.bounded' as const,
         runId: 'subagent-1',
         taskId: 'task-1',
         workerId: 'subagent-1',
@@ -283,6 +286,7 @@ describe('production Automata Bus lifecycle composition', () => {
       outcome: 'completed' as const,
       stateReason: 'completed',
       resultKind: 'final' as const,
+      handoffKind: 'useful' as const,
       usage: {
         model: 'test-model',
         inputTokens: 10,

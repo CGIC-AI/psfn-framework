@@ -135,6 +135,20 @@ export class PostgresDoingMirrorStore implements DoingMirrorStorePort {
     return rows.map(mapRow);
   }
 
+  async listPendingLetterDeliveries(limit: number): Promise<DoingMirrorDispositionRecord[]> {
+    if (!Number.isSafeInteger(limit) || limit < 1) {
+      throw new Error('Doing-mirror pending Letter delivery limit must be a positive safe integer');
+    }
+    const rows = await queryRows<DoingMirrorRow>(this.pool, `
+      SELECT ${COLUMNS}
+      FROM doing_mirror_dispositions
+      WHERE letter_delivered_at_ms IS NULL
+      ORDER BY updated_at_ms, item_type, item_id
+      LIMIT $1
+    `, [limit]);
+    return rows.map(mapRow);
+  }
+
   async transition(input: DoingMirrorTransitionStoreInput): Promise<DoingMirrorDispositionRecord> {
     assertTimestamp(input.updatedAt, 'updatedAt');
     if (!Number.isSafeInteger(input.expectedVersion) || input.expectedVersion < 0) {

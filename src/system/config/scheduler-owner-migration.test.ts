@@ -234,6 +234,9 @@ describe('migrateLegacySchedulerOwner', () => {
       sharedWorldWikiCaretaker: {
         batchSize: 25,
       },
+      doingMirrorLetters: {
+        batchSize: 25,
+      },
       ambientPresence: {
         minIdleMinutes: 180,
         minNoteIntervalMinutes: 360,
@@ -300,6 +303,33 @@ describe('migrateLegacySchedulerOwner', () => {
     });
     expect(readFileSync(filePath, 'utf8')).toBe(bytesAfterApply);
     expect(statSync(filePath).ino).toBe(inodeAfterApply);
+  });
+
+  it('explicitly plans and applies the doing-mirror Letter drain schema addition', () => {
+    const { dataDir, filePath } = prepareOwner((owner) => {
+      delete owner.salienceDecayIntervalMs;
+      if (typeof owner.socialGraphBuilder === 'object' && owner.socialGraphBuilder !== null) {
+        delete (owner.socialGraphBuilder as Record<string, unknown>).intervalMs;
+      }
+      owner.backgroundMaintenance = structuredClone(DEFAULT_BACKGROUND_MAINTENANCE_CONFIG);
+      delete (owner.backgroundMaintenance as Record<string, unknown>).doingMirrorLetters;
+    });
+
+    expect(migrateLegacySchedulerOwner({ dataDir, apply: true })).toMatchObject({
+      mode: 'apply',
+      status: 'applied',
+      addedPaths: [
+        'backgroundMaintenance.doingMirrorLetters',
+        'backgroundWork.postTurn.maxAttempts',
+        'icpAutonomy.policyHolds',
+        'intentionFollowUp',
+      ],
+    });
+    expect(loadSchedulerConfig(dataDir).backgroundMaintenance.doingMirrorLetters)
+      .toEqual({ batchSize: 25 });
+    const migratedRaw = JSON.parse(readFileSync(filePath, 'utf8')) as Record<string, unknown>;
+    expect((migratedRaw.backgroundMaintenance as Record<string, unknown>).sharedWorldWikiCaretaker)
+      .toEqual({ batchSize: 25 });
   });
 
   it('explicitly plans and applies the shared-world caretaker schema addition', () => {

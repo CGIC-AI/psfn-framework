@@ -35,6 +35,9 @@ function buildValidSchedulerConfig(): Record<string, unknown> {
       sharedWorldWikiCaretaker: {
         batchSize: 25,
       },
+      doingMirrorLetters: {
+        batchSize: 25,
+      },
       ambientPresence: {
         minIdleMinutes: 180,
         minNoteIntervalMinutes: 360,
@@ -268,6 +271,9 @@ describe('scheduler config seed defaults', () => {
     expect(loadSchedulerSeedDefaults().backgroundMaintenance).toEqual({
       intervalMs: 3_600_000,
       sharedWorldWikiCaretaker: {
+        batchSize: 25,
+      },
+      doingMirrorLetters: {
         batchSize: 25,
       },
       ambientPresence: {

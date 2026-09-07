@@ -201,6 +201,19 @@ export function migrateLegacySchedulerOwner(
         };
         addedPaths.push('backgroundMaintenance.sharedWorldWikiCaretaker');
       }
+      const migratedBackgroundMaintenance = isRecord(candidate.backgroundMaintenance)
+        ? candidate.backgroundMaintenance
+        : backgroundMaintenance;
+      if (isRecord(migratedBackgroundMaintenance)
+        && migratedBackgroundMaintenance.doingMirrorLetters === undefined) {
+        candidate.backgroundMaintenance = {
+          ...migratedBackgroundMaintenance,
+          doingMirrorLetters: structuredClone(
+            DEFAULT_BACKGROUND_MAINTENANCE_CONFIG.doingMirrorLetters,
+          ),
+        };
+        addedPaths.push('backgroundMaintenance.doingMirrorLetters');
+      }
       if (raw.backgroundWork === undefined) {
         candidate.backgroundWork = structuredClone(DEFAULT_BACKGROUND_WORK_TUNING);
         addedPaths.push('backgroundWork');

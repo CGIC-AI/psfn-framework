@@ -73,6 +73,12 @@ export interface DoingMirrorTransitionStoreInput {
 export interface DoingMirrorStorePort {
   get(itemType: DoingMirrorItemType, itemId: string): Promise<DoingMirrorDispositionRecord | null>;
   list(): Promise<DoingMirrorDispositionRecord[]>;
+  /**
+   * Oldest-first dispositions whose Partner-authored Letter never reached the
+   * bin, so a crash between `transition` and `markLetterDelivered` is drained
+   * automatically instead of waiting for the operator to resubmit the form.
+   */
+  listPendingLetterDeliveries(limit: number): Promise<DoingMirrorDispositionRecord[]>;
   transition(input: DoingMirrorTransitionStoreInput): Promise<DoingMirrorDispositionRecord>;
   markLetterDelivered(
     itemType: DoingMirrorItemType,

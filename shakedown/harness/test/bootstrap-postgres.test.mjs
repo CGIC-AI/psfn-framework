@@ -11,7 +11,7 @@ function contract(overrides = {}) {
     postgresUrl: 'postgresql://round:secret@127.0.0.1:5432/psfn_shakedown_round',
     livePostgresUrl: 'postgresql://live:secret@127.0.0.1:5432/psfn_live',
     expectedDatabase: 'psfn_shakedown_round',
-    schema: 'shakedown_artemis',
+    schema: 'shakedown_companion',
     ...overrides,
   });
 }
@@ -20,7 +20,7 @@ const target = contract();
 assert.deepEqual(target.identity, {
   endpoint: '127.0.0.1:5432',
   database: 'psfn_shakedown_round',
-  schema: 'shakedown_artemis',
+  schema: 'shakedown_companion',
   role: 'round',
 });
 assert.equal(JSON.stringify(target.identity).includes('secret'), false);

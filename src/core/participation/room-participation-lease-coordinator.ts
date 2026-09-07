@@ -51,7 +51,7 @@ export type RoomParticipationDispositionOutcome =
   | { outcome: 'skipped'; reason: RoomParticipationDispositionSkipReason };
 
 /** Content-free reason codes for a disposition that did not open/refresh. */
-export type RoomParticipationDispositionSkipReason =
+type RoomParticipationDispositionSkipReason =
   | 'policy_off'
   | 'direct_message'
   | 'not_group'

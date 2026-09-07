@@ -25,6 +25,7 @@ import { RUNTIME_LAYOUT_MODE, resolveRuntimeLayoutMode } from '../../persistence
 import type { SessionManager } from '../session/manager.js';
 import { formatAttributedSystemContent } from '../session/entry-attribution.js';
 import type { AgentResponse, Attachment, CorrelationMetadata, MessagePromptOverride, ResponseStyle, SubstrateMessage } from '../../shared/contracts/runtime.js';
+import { resolveHealthEventOwner } from '../../shared/contracts/health-event.js';
 import type { PlacesRegistryConfig } from '../../shared/contracts/places-registry.js';
 import type { CapabilityTier, CoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { ContactStorePort } from '../contacts/contact-store-port.js';
@@ -646,6 +647,9 @@ export class SubstrateAgent {
         store: backgroundWorkStore,
         eventBus: this.eventBus,
         welfare: backgroundWorkWelfare,
+        // Terminal background-work failures enter the health plane owned by
+        // the companion this agent serves.
+        healthEventOwner: resolveHealthEventOwner(this.config.companionId),
         ...(options.backgroundWorkAutomataLifecycle
           ? { automataLifecycle: options.backgroundWorkAutomataLifecycle }
           : {}),

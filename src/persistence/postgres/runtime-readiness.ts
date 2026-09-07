@@ -61,6 +61,14 @@ export const POSTGRES_STORE_READINESS_CATALOG = {
       message: 'Model usage schema migration failed',
     },
   },
+  runtime_health_stream: {
+    label: 'runtime health stream',
+    requirement: 'required',
+    failureDiagnostic: {
+      component: 'HealthEventStore',
+      message: 'Runtime health-event stream schema migration failed',
+    },
+  },
   shared_wiki: { label: 'shared world wiki', requirement: 'required' },
   memory_ann_index: { label: 'memory ANN index', requirement: 'optional' },
   wiki_projection: { label: 'wiki projection', requirement: 'optional' },

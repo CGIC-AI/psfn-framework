@@ -43,7 +43,7 @@
 
 import { createHash, randomUUID } from 'node:crypto';
 import { isRecord } from '../utils/types.js';
-import { createCompanionId, type CompanionId } from '../routing/companion-id.js';
+import { createCompanionId, parseCompanionId, type CompanionId } from '../routing/companion-id.js';
 import type { CorrelationMetadata } from './runtime-base.js';
 
 /** Which runtime process observed the condition. */
@@ -64,6 +64,11 @@ function isHealthEventProcess(value: unknown): value is HealthEventProcess {
  * Which subsystem the condition belongs to. Closed on purpose: a detector
  * groups by component, and an open string would be the first place free text
  * leaked into the stream.
+ *
+ * This and the sibling vocabularies below stay module-local until a consumer
+ * outside this contract actually needs them: the dead-export gate is
+ * reduction-only, so a detector child exports what it imports rather than the
+ * envelope publishing names nothing reads.
  */
 const HEALTH_EVENT_COMPONENTS = [
   'operator_alerting',
@@ -71,7 +76,7 @@ const HEALTH_EVENT_COMPONENTS = [
   'scheduler',
 ] as const;
 
-export type HealthEventComponent = typeof HEALTH_EVENT_COMPONENTS[number];
+type HealthEventComponent = typeof HEALTH_EVENT_COMPONENTS[number];
 
 function isHealthEventComponent(value: unknown): value is HealthEventComponent {
   return typeof value === 'string'
@@ -92,7 +97,7 @@ const HEALTH_EVENT_CODES = [
   'scheduler_task_failed',
 ] as const;
 
-export type HealthEventCode = typeof HEALTH_EVENT_CODES[number];
+type HealthEventCode = typeof HEALTH_EVENT_CODES[number];
 
 function isHealthEventCode(value: unknown): value is HealthEventCode {
   return typeof value === 'string'
@@ -107,7 +112,7 @@ const HEALTH_EVENT_SEVERITIES = [
   'critical',
 ] as const;
 
-export type HealthEventSeverity = typeof HEALTH_EVENT_SEVERITIES[number];
+type HealthEventSeverity = typeof HEALTH_EVENT_SEVERITIES[number];
 
 function isHealthEventSeverity(value: unknown): value is HealthEventSeverity {
   return typeof value === 'string'
@@ -137,14 +142,14 @@ const HEALTH_EVENT_EVIDENCE_KEYS = [
   'terminal',
 ] as const;
 
-export type HealthEventEvidenceKey = typeof HEALTH_EVENT_EVIDENCE_KEYS[number];
+type HealthEventEvidenceKey = typeof HEALTH_EVENT_EVIDENCE_KEYS[number];
 
 function isHealthEventEvidenceKey(value: unknown): value is HealthEventEvidenceKey {
   return typeof value === 'string'
     && (HEALTH_EVENT_EVIDENCE_KEYS as readonly string[]).includes(value);
 }
 
-export type HealthEventEvidence = Partial<Record<HealthEventEvidenceKey, number | boolean>>;
+type HealthEventEvidence = Partial<Record<HealthEventEvidenceKey, number | boolean>>;
 
 /**
  * Where the observation came from. `observerId` identifies the emitting process
@@ -152,7 +157,7 @@ export type HealthEventEvidence = Partial<Record<HealthEventEvidenceKey, number 
  * process failing once". `subjectHash` is the opaque per-subject grouping key
  * described in the module header.
  */
-export interface HealthEventProvenance {
+interface HealthEventProvenance {
   process: HealthEventProcess;
   component: HealthEventComponent;
   observerId: string;
@@ -306,6 +311,18 @@ function normalizeOwner(value: unknown): HealthEventOwner {
     kind: 'companion',
     companionId: createCompanionId(value.companionId, 'owner.companionId'),
   };
+}
+
+/**
+ * Resolve envelope ownership from a runtime identity. A core companion routing
+ * identity binds the event to that tenant. Anything else — a derived shard
+ * identity, or no identity at all — has no core tenancy to attribute the
+ * observation to, so it is recorded as system-owned rather than guessed onto a
+ * companion that did not produce it.
+ */
+export function resolveHealthEventOwner(companionId: string | undefined): HealthEventOwner {
+  const parsed = parseCompanionId(companionId);
+  return parsed === null ? { kind: 'system' } : { kind: 'companion', companionId: parsed };
 }
 
 function normalizeProvenance(value: unknown): HealthEventProvenance {

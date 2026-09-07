@@ -69,6 +69,7 @@ import {
 import { IntrospectionLandmarkPostgresStore } from '../faculties/introspection/postgres-store.js';
 import { assertSharedSchemaRuntimeAuthority } from './postgres/shared-schema.js';
 import { PostgresPartnerAffectShadowStore } from './postgres/partner-affect-shadow-store.js';
+import { PostgresHealthEventStore } from './postgres/health-event-store.js';
 import type { PartnerAffectShadowStorePort } from '../core/emotion/partner-affect/shadow-store-port.js';
 import { PostgresBackgroundWorkStore } from './postgres/background-work-store.js';
 import type { BackgroundWorkStorePort } from '../core/agent/background-work/store-port.js';
@@ -144,6 +145,12 @@ export interface AgentPersistenceRuntime {
    */
   partnerAffectShadowStore: PartnerAffectShadowStorePort;
   /**
+   * Bounded runtime health-event stream (bead psfn-framework-7qeo1.24.1).
+   * Written by the bus sink that drains `runtime.health.event`; read by
+   * detectors and the Garden incident timeline. Content-free by contract.
+   */
+  healthEventStore: PostgresHealthEventStore;
+  /**
    * Shared-schema cross-companion presence store (sprint 10, W5a). Present
    * ONLY when multi-companion mode is enabled; flag-off never touches the
    * shared schema.
@@ -197,12 +204,27 @@ export interface CreateAgentPersistenceRuntimeOptions {
     | 'companionId'
     | 'automataPolicy'
     | 'observerEvalSidecar'
+    | 'healthEventStreamMaxRows'
   >;
   pathSnapshot: RuntimePathSnapshot;
   embeddingDims: number;
   primaryUserId?: string;
   contactLifecycleGateway?: ContactLifecycleGatewayPort;
   onContactLifecycleRecoveryFailure?: (error: unknown) => void;
+}
+
+/**
+ * The health stream is bounded by an operator-owned value only. There is no
+ * built-in cap: booting a runtime that persists health events without a
+ * declared bound is the failure this refuses.
+ */
+function requireHealthEventStreamMaxRows(value: number | undefined): number {
+  if (value === undefined) {
+    throw new Error(
+      'Runtime health stream requires settings.json healthEventStreamMaxRows',
+    );
+  }
+  return value;
 }
 
 export async function createAgentPersistenceRuntime(
@@ -498,6 +520,14 @@ export async function createAgentPersistenceRuntime(
     partnerAffectShadowStore: await awaitPostgresStoreReadiness(
       'partner_affect_shadow',
       () => PostgresPartnerAffectShadowStore.connect(databaseUrl, { schema, role: tenantRole }),
+    ),
+    healthEventStore: await awaitPostgresStoreReadiness(
+      'runtime_health_stream',
+      () => PostgresHealthEventStore.connect(
+        databaseUrl,
+        requireHealthEventStreamMaxRows(options.config.healthEventStreamMaxRows),
+        { schema, role: tenantRole },
+      ),
     ),
     icpFeltImpulseFunnelStore,
     emosimProactivityStateStore,

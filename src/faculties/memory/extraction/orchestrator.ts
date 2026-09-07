@@ -60,21 +60,21 @@ import { ExtractionIntegrityError } from './integrity-error.js';
 import { selectExtractionRecentEntries } from './recovered-entries.js';
 import { parseSessionMessageAddressing } from '../../../core/session/message-addressing.js';
 import {
-  buildAutomataBusWorkerScope,
   isAutomataBusWorkerEligible,
-  resolveAutomataBusWorkerFormation,
+  openAutomataBusWorkerRun,
   type AutomataBusWorkerAccess,
+  type AutomataBusWorkerRun,
 } from '../../automata/bus/worker-access.js';
 import type { AutomataRunRegistry } from '../../automata/run-registry.js';
+import type { AutomataTerminalLifecyclePort } from '../../automata/terminal-lifecycle.js';
 import {
-  appendExtractionProcessFinding,
+  buildExtractionProcessSummary,
+  EXTRACTION_AUTOMATA_BUS_ACTIONS,
   completeExtractionChunkWithAutomataBus,
   type ExtractionAutomataBusBinding,
 } from './automata-bus-completion.js';
 import {
-  beginMemoryExtractionAutomataRun,
-  completeMemoryExtractionAutomataRun,
-  failMemoryExtractionAutomataRun,
+  createMemoryExtractionAutomataRunPort,
 } from './memory-extraction-automata-run.js';
 
 export { ExtractionIntegrityError } from './integrity-error.js';
@@ -157,6 +157,8 @@ export interface ExtractionRunOptions {
   automataBusWorkerAccess?: AutomataBusWorkerAccess | null;
   /** Authoritative run lifecycle paired with the production Bus adapter. */
   automataRunRegistry?: AutomataRunRegistry | null;
+  /** Durable terminal handoff adapter; receives references, never source text. */
+  automataTerminalLifecycle?: AutomataTerminalLifecyclePort | null;
   gateConfig: ExtractionGateConfig;
   maxWrites: number;
   groupWriteCaps?: GroupMemoryWriteCapSettings;
@@ -222,7 +224,7 @@ export async function runExtractionOrchestration(
   options: ExtractionRunOptions,
 ): Promise<MemoryExtractionOutputs> {
   let resolvedTurnId: TurnID | undefined = options.turnId;
-  let activeAutomataRunId: string | undefined;
+  let automataRun: AutomataBusWorkerRun | null = null;
   try {
     if (
       isTestingSessionId(options.channelId)
@@ -351,34 +353,25 @@ export async function runExtractionOrchestration(
     }
     const automataRunId = latestTurnContext?.requestId ?? attemptRef;
     if (automataBusEligible) {
-      const run = await beginMemoryExtractionAutomataRun(options.automataRunRegistry!, {
-        runId: automataRunId,
-        taskId: options.channelId,
-        sessionId: options.sourceSessionId ?? options.channelId,
-        triggerReason: options.triggerReason,
-      });
-      if (!run.execute) return emptyExtractionOutputs();
-      activeAutomataRunId = run.ownsLifecycle ? run.runId : undefined;
-    }
-    const automataBusScope = automataBusEligible
-      ? buildAutomataBusWorkerScope(options.automataBusWorkerAccess!, {
-        automatonClass: 'memory.extraction',
-        runId: automataRunId,
-        taskId: options.channelId,
-      })
-      : undefined;
-    const automataBusFormation = automataBusScope
-      ? await resolveAutomataBusWorkerFormation({
+      // One governed lifecycle owns the durable run, the bounded briefing, the
+      // read-only Bus tool, the terminal handoff, and terminalization.
+      automataRun = await openAutomataBusWorkerRun({
         access: options.automataBusWorkerAccess,
-        scope: automataBusScope,
-        query: `memory extraction ${options.triggerReason}`,
-      })
-      : null;
-    const automataBusBinding: ExtractionAutomataBusBinding | undefined = automataBusFormation
-      ? {
-          access: options.automataBusWorkerAccess!,
-          scope: automataBusFormation.scope,
-        }
+        run: createMemoryExtractionAutomataRunPort(options.automataRunRegistry!, {
+          runId: automataRunId,
+          taskId: options.channelId,
+          sessionId: options.sourceSessionId ?? options.channelId,
+          triggerReason: options.triggerReason,
+        }),
+        terminal: options.automataTerminalLifecycle ?? null,
+        briefingQuery: `memory extraction ${options.triggerReason}`,
+        allowedActions: EXTRACTION_AUTOMATA_BUS_ACTIONS,
+        telemetry: event => log.debug('Memory extraction Automata lifecycle stage', { ...event }),
+      });
+      if (!automataRun.binding.execute) return emptyExtractionOutputs();
+    }
+    const automataBusBinding: ExtractionAutomataBusBinding | undefined = automataRun?.tool
+      ? { bounds: options.automataBusWorkerAccess!.bounds, tool: automataRun.tool }
       : undefined;
     const llmPass = await executeExtractionLlmPass({
       recentEntries,
@@ -390,7 +383,7 @@ export async function runExtractionOrchestration(
         characterName: options.sessionManager.characterName,
         experientialCompanionName,
         personaPreamble: options.personaPreamble,
-        ...(automataBusFormation ? { automataBusPrompt: automataBusFormation.promptBlock } : {}),
+        ...(automataRun?.promptBlock ? { automataBusPrompt: automataRun.promptBlock } : {}),
       },
       requestId,
       completeChunk: createExtractionChunkCompleter(
@@ -452,17 +445,7 @@ export async function runExtractionOrchestration(
         boundaryFactCount: normalization.boundaryFactCount,
       };
       await options.emitExtractionEnd(telemetry);
-      await recordExtractionProcessFinding({
-        eligible: automataBusEligible,
-        binding: automataBusBinding,
-        telemetry,
-      });
-      if (activeAutomataRunId) {
-        await completeMemoryExtractionAutomataRun(
-          options.automataRunRegistry!,
-          activeAutomataRunId,
-        );
-      }
+      await settleExtractionAutomataRun(automataRun, telemetry);
       return emptyExtractionOutputs();
     }
 
@@ -585,17 +568,7 @@ export async function runExtractionOrchestration(
       maybeRefreshRecentContactShape: options.maybeRefreshRecentContactShape,
       assertEffectAllowed: options.assertEffectAllowed,
     });
-    await recordExtractionProcessFinding({
-      eligible: automataBusEligible,
-      binding: automataBusBinding,
-      telemetry,
-    });
-    if (activeAutomataRunId) {
-      await completeMemoryExtractionAutomataRun(
-        options.automataRunRegistry!,
-        activeAutomataRunId,
-      );
-    }
+    await settleExtractionAutomataRun(automataRun, telemetry);
     return {
       memoryIds: [...durableMemoryIds],
       concernIds: [...new Set(sideEffects.concernIds)],
@@ -609,12 +582,15 @@ export async function runExtractionOrchestration(
     if (error instanceof ExtractionDrainRequeueError) throw error;
     if (error instanceof Error && error.name === 'ModelCallPreemptedError') throw error;
     let failure: unknown = error;
-    if (activeAutomataRunId) {
+    if (automataRun) {
       try {
-        await failMemoryExtractionAutomataRun(
-          options.automataRunRegistry!,
-          activeAutomataRunId,
-        );
+        await automataRun.settle({
+          lifecycleState: 'failed',
+          outcome: 'blocked',
+          stateReason: 'memory_extraction_failed',
+          failureReason: 'orchestration_failure',
+          resultKind: 'none',
+        });
       } catch (runError) {
         failure = new AggregateError(
           [error, runError],
@@ -647,46 +623,41 @@ function toErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-async function recordExtractionProcessFinding(input: {
-  eligible: boolean;
-  binding: ExtractionAutomataBusBinding | undefined;
-  telemetry: ExtractionEndTelemetry;
-}): Promise<void> {
-  if (!input.eligible) return;
-  if (!input.binding) {
-    log.warn('Memory extraction Automata Bus process finding append skipped', {
-      status: 'skipped',
-      reason: 'formation_unavailable',
+/**
+ * Terminalize one memory-extraction run through the governed Bus lifecycle.
+ *
+ * The class-authored summary carries pipeline counters and nothing else: no
+ * person facts, memories, transcript text, or transcript-derived evidence ever
+ * cross this seam.
+ */
+async function settleExtractionAutomataRun(
+  automataRun: AutomataBusWorkerRun | null,
+  telemetry: ExtractionEndTelemetry,
+): Promise<void> {
+  if (!automataRun) return;
+  const settlement = await automataRun.settle({
+    lifecycleState: 'completed',
+    outcome: 'completed',
+    stateReason: 'memory_extraction_completed',
+    resultKind: 'final',
+    summary: buildExtractionProcessSummary(telemetry),
+  });
+  const lineage = automataRun.binding.lineage;
+  if (settlement.handoff.status === 'failed') {
+    log.error('Memory extraction Automata Bus terminal handoff failed', {
+      status: 'failed',
+      reason: settlement.handoff.error,
+      runId: lineage.runId,
+      taskId: lineage.taskId,
     });
     return;
   }
-  try {
-    const outcome = await appendExtractionProcessFinding({
-      binding: input.binding,
-      parsedCount: input.telemetry.parsedCount,
-      acceptedCount: input.telemetry.acceptedCount,
-      rejectedCount: input.telemetry.rejectedCount,
-      writeCount: input.telemetry.writeCount,
-      deduplicatedCount: input.telemetry.deduplicatedCount,
-      supersededCount: input.telemetry.supersededCount,
-      chunkCount: input.telemetry.chunkCount,
-      crossChunkDeduplicatedCount: input.telemetry.crossChunkDeduplicatedCount,
-      boundaryFactCount: input.telemetry.boundaryFactCount,
-    });
-    if (outcome === 'existing') {
-      log.warn('Memory extraction Automata Bus process finding append skipped', {
-        status: 'skipped',
-        reason: 'already_present',
-        runId: input.binding.scope.runId,
-        taskId: input.binding.scope.taskId,
-      });
-    }
-  } catch (error) {
-    log.error('Memory extraction Automata Bus process finding append failed', {
-      status: 'failed',
-      reason: toErrorMessage(error),
-      runId: input.binding.scope.runId,
-      taskId: input.binding.scope.taskId,
+  if (settlement.handoff.status === 'recorded' && settlement.handoff.replay) {
+    log.warn('Memory extraction Automata Bus terminal handoff skipped', {
+      status: 'skipped',
+      reason: 'already_present',
+      runId: lineage.runId,
+      taskId: lineage.taskId,
     });
   }
 }

@@ -3,11 +3,13 @@ import { describe, expect, it, vi } from 'vitest';
 import type { LLMContext, LLMResponse } from '../../../shared/contracts/runtime.js';
 import {
   buildAutomataBusWorkerScope,
+  createAutomataBusTool,
   type AutomataBusWorkerAccess,
   type AutomataBusWorkerPort,
 } from '../../automata/bus/worker-access.js';
 import {
   completeExtractionChunkWithAutomataBus,
+  EXTRACTION_AUTOMATA_BUS_ACTIONS,
   type ExtractionCompletionPhase,
 } from './automata-bus-completion.js';
 
@@ -62,7 +64,12 @@ function binding() {
     runId: 'request-public-example',
     taskId: 'channel-public-example',
   });
-  return { access, scope, search, append };
+  const tool = createAutomataBusTool({
+    access,
+    scope,
+    allowedActions: EXTRACTION_AUTOMATA_BUS_ACTIONS,
+  });
+  return { access, scope, search, append, binding: { bounds: BOUNDS, tool } };
 }
 
 describe('completeExtractionChunkWithAutomataBus', () => {
@@ -88,7 +95,7 @@ describe('completeExtractionChunkWithAutomataBus', () => {
 
     const content = await completeExtractionChunkWithAutomataBus({
       prompt: 'EXTRACTION PROMPT',
-      automataBus: { access: bound.access, scope: bound.scope },
+      automataBus: bound.binding,
       complete,
     });
 
@@ -139,7 +146,7 @@ describe('completeExtractionChunkWithAutomataBus', () => {
 
     await expect(completeExtractionChunkWithAutomataBus({
       prompt: 'EXTRACTION PROMPT',
-      automataBus: { access: bound.access, scope: bound.scope },
+      automataBus: bound.binding,
       complete,
     })).rejects.toThrow(/Bus writes are runtime-owned/);
     expect(bound.search).not.toHaveBeenCalled();
@@ -172,7 +179,7 @@ describe('completeExtractionChunkWithAutomataBus', () => {
       const complete = vi.fn(async () => response({ toolCalls }));
       await expect(completeExtractionChunkWithAutomataBus({
         prompt: 'EXTRACTION PROMPT',
-        automataBus: { access: bound.access, scope: bound.scope },
+        automataBus: bound.binding,
         complete,
       })).rejects.toThrow(/exceed/);
       expect(bound.search).not.toHaveBeenCalled();

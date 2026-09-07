@@ -97,7 +97,7 @@ describe('background-work Automata lifecycle', () => {
     await expect(lifecycle.onClaimed({
       job: { ...job, jobId: 'job-memory-conflict' },
       payload,
-    })).rejects.toThrow('conflicts with its background-work binding');
+    })).rejects.toThrow('conflicts with its authoritative binding');
   });
 
   it('records terminal background failure without registering excluded work kinds', async () => {

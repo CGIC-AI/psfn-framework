@@ -222,6 +222,35 @@ function createAutomataBusAccess(
 }
 
 describe('runExtractionOrchestration durable children', () => {
+  it('retries a failed external concern effect with a linked run and the correct Bus scope', async () => {
+    const registry = await createAutomataRunRegistry();
+    const automataBusWorkerAccess = createAutomataBusAccess(registry);
+    const emitConcernCandidates = vi.fn()
+      .mockRejectedValueOnce(new Error('concern persistence unavailable'))
+      .mockResolvedValue(['concern-recovered']);
+    const options = buildOptions({
+      triggerReason: 'external_conversation',
+      automataBusWorkerAccess,
+      automataRunRegistry: registry,
+      emitConcernCandidates,
+    });
+    await expect(runExtractionOrchestration(options)).rejects.toThrow('Extraction orchestration failed');
+    const failed = registry.findByTask(options.channelId)[0]!;
+    expect(failed.status).toBe('failed');
+
+    await expect(runExtractionOrchestration(options)).resolves.toMatchObject({
+      concernIds: ['concern-recovered'],
+    });
+    const recovered = registry.findByTask(options.channelId).find(run => run.status === 'completed')!;
+    expect(recovered.sourceRunId).toBe(failed.runId);
+    expect(registry.getRun(failed.runId)?.status).toBe('failed');
+    expect(automataBusWorkerAccess.port.append).toHaveBeenCalledWith(expect.objectContaining({
+      scope: expect.objectContaining({ runId: recovered.runId }),
+    }));
+    await runExtractionOrchestration(options);
+    expect(emitConcernCandidates).toHaveBeenCalledTimes(2);
+  });
+
   it('registers the memory-extraction run before requesting its Bus briefing', async () => {
     const registry = await createAutomataRunRegistry();
     const automataBusWorkerAccess = createAutomataBusAccess(registry);

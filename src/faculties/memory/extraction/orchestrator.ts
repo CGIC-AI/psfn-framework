@@ -349,7 +349,7 @@ export async function runExtractionOrchestration(
     if (automataBusEligible && !options.automataRunRegistry) {
       throw new Error('Memory extraction Automata Bus formation requires the authoritative run registry');
     }
-    const automataRunId = latestTurnContext?.requestId ?? attemptRef;
+    let automataRunId = latestTurnContext?.requestId ?? attemptRef;
     if (automataBusEligible) {
       const run = await beginMemoryExtractionAutomataRun(options.automataRunRegistry!, {
         runId: automataRunId,
@@ -358,6 +358,7 @@ export async function runExtractionOrchestration(
         triggerReason: options.triggerReason,
       });
       if (!run.execute) return emptyExtractionOutputs();
+      automataRunId = run.runId;
       activeAutomataRunId = run.ownsLifecycle ? run.runId : undefined;
     }
     const automataBusScope = automataBusEligible

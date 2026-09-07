@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { AutomataRunRecord } from '../../automata/registry-contract.js';
 import type { AutomataRunRegistry } from '../../automata/run-registry.js';
 import type { ExtractionTriggerReason } from './types.js';
@@ -43,7 +44,7 @@ export async function beginMemoryExtractionAutomataRun(
   registry: AutomataRunRegistry,
   input: BeginMemoryExtractionAutomataRunInput,
 ): Promise<BeginMemoryExtractionAutomataRunResult> {
-  let run = registry.getRun(input.runId);
+  let run = await registry.loadExactRun(input.runId);
   if (!run) {
     run = await registry.register({
       runId: input.runId,
@@ -57,6 +58,31 @@ export async function beginMemoryExtractionAutomataRun(
     });
   }
   assertExactMemoryExtractionRun(run, input);
+  while (input.triggerReason === 'external_conversation'
+    && run.workerId === MEMORY_EXTRACTION_WORKER_ID
+    && run.status === 'failed'
+    && run.statusReason === MEMORY_EXTRACTION_FAILED_REASON
+    && run.failureReason === 'orchestration_failure') {
+    const sourceRunId: string = run.runId;
+    const retryRunId = `memory-extraction-retry:${createHash('sha256').update(sourceRunId).digest('hex')}`;
+    const existingRetry: AutomataRunRecord | null = await registry.loadExactRun(retryRunId);
+    if (existingRetry && existingRetry.sourceRunId !== sourceRunId) {
+      throw new Error('Memory extraction retry lineage does not match the failed run');
+    }
+    run = existingRetry ?? await registry.register({
+      runId: retryRunId,
+      automatonClass: 'memory.extraction',
+      workerId: MEMORY_EXTRACTION_WORKER_ID,
+      workerGeneration: run.workerGeneration + 1,
+      taskId: input.taskId,
+      taskLabel: MEMORY_EXTRACTION_TASK_LABEL,
+      taskSummary: `Memory extraction triggered by ${input.triggerReason}`,
+      sourceRunId,
+      sessionIds: [input.sessionId],
+      ...(input.createdAtMs === undefined ? {} : { createdAtMs: input.createdAtMs }),
+    });
+    assertExactMemoryExtractionRun(run, input);
+  }
   const ownsLifecycle = !isBackgroundWorkOwnedRun(run);
 
   if (run.status === 'completed') {

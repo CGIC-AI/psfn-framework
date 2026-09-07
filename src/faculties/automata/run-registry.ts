@@ -227,6 +227,21 @@ export class AutomataRunRegistry {
     return record ? cloneAutomataRun(record) : null;
   }
 
+  async loadExactRun(runId: string): Promise<AutomataRunRecord | null> {
+    const normalized = requiredText(runId, 'runId');
+    const retained = this.getRun(normalized);
+    if (retained) return retained;
+    const record = await this.store.loadExact(this.companionId, normalized);
+    if (!record) return null;
+    if (record.companionId !== this.companionId || record.runId !== normalized) {
+      throw new Error('Automata run exact lookup scope mismatch');
+    }
+    requireAutomataClass(record.automatonClass);
+    requireAutomataRunStatus(record.status);
+    this.runs.set(normalized, cloneAutomataRun(record));
+    return cloneAutomataRun(record);
+  }
+
   findByTask(taskId: string): AutomataRunRecord[] {
     const normalized = requiredText(taskId, 'taskId');
     return this.sortedRuns().filter(record => record.taskId === normalized);

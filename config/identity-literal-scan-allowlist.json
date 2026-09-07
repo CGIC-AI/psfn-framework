@@ -1879,6 +1879,12 @@
       "pattern": "identity-legacy-slug"
     },
     {
+      "path": "scripts/verify-recovery-chart-digest.ts",
+      "contains": "psfn",
+      "reason": "The recovery-chart digest gate names the repository's generic public Helm chart directory deploy/helm/psfn, not a companion identity.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
       "path": "src/channels/multica/adapter.ts",
       "contains": "PSFN",
       "reason": "Multica registration labels and protocol errors name the framework runtime boundary, not a companion identity or persona default (psfn-framework-87nkt).",

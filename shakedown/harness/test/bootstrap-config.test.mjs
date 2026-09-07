@@ -19,9 +19,9 @@ try {
   const roundRoot = join(fixtureRoot, 'round');
   const liveRoot = join(fixtureRoot, 'live');
   mkdirSync(join(repoRoot, 'config'), { recursive: true });
-  mkdirSync(join(repoRoot, 'shakedown', 'artie'), { recursive: true });
+  mkdirSync(join(repoRoot, 'shakedown', 'companion'), { recursive: true });
   writeFileSync(join(repoRoot, 'package.json'), '{}\n');
-  writeFileSync(join(repoRoot, 'shakedown', 'artie', 'ARTIE.png'), 'card');
+  writeFileSync(join(repoRoot, 'shakedown', 'companion', 'REFERENCE-COMPANION.png'), 'card');
 
   const env = {
     PSFN_REPO_ROOT: repoRoot,
@@ -42,7 +42,7 @@ try {
     POSTGRES_DATABASE_URL: 'postgresql://round:test@127.0.0.1:5432/psfn_shakedown_round',
     PSFN_LIVE_POSTGRES_DATABASE_URL: 'postgresql://live:test@127.0.0.1:5432/psfn_live',
     PSFN_SHAKEDOWN_POSTGRES_DATABASE: 'psfn_shakedown_round',
-    COMPANION_PG_SCHEMA: 'shakedown_artemis',
+    COMPANION_PG_SCHEMA: 'shakedown_companion',
     PSFN_SHAKEDOWN_EXTERNAL_CHANNELS: 'false',
     PSFN_API_BASE: 'http://127.0.0.1:10153',
     PSFN_ADMIN_BASE: 'http://127.0.0.1:10154',
@@ -124,13 +124,13 @@ try {
   );
 
   const shippedTemplate = readFileSync(
-    join(process.cwd(), 'shakedown', 'artie', 'shakedown.env.template'),
+    join(process.cwd(), 'shakedown', 'companion', 'shakedown.env.template'),
     'utf8',
   );
   assert.match(
     shippedTemplate,
     /^COMPANION_ID=a7100000-0000-4000-8000-000000000001$/mu,
-    'single-companion bootstrap must share the canonical synthetic Artie UUID with support fixtures',
+    'single-companion bootstrap must share the canonical synthetic companion UUID with support fixtures',
   );
   assert.match(shippedTemplate, /^PSFN_LIVE_DATA_ROOTS=$/mu);
   assert.match(shippedTemplate, /^CONFIG_DIR=\$PSFN_REPO_ROOT\/config$/mu);

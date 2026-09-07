@@ -404,7 +404,7 @@
     },
     {
       "path": "src/channels/backplane/places-mermaid.ts",
-      "contains": "%% PSFN world map — sites, places, affordances, and bound satellites.",
+      "contains": "%% PSFN world map \u2014 sites, places, affordances, and bound satellites.",
       "reason": "The generated operator-facing Mermaid artifact retains its explicit product title.",
       "pattern": "identity-proper-name"
     },
@@ -1754,7 +1754,7 @@
     },
     {
       "path": "scripts/onboarding/flow.ts",
-      "contains": "PSFN onboarding — configure",
+      "contains": "PSFN onboarding \u2014 configure",
       "reason": "User-facing installer banner naming the product.",
       "pattern": "identity-proper-name"
     },
@@ -1900,6 +1900,24 @@
       "path": "src/channels/multica/plugin.ts",
       "contains": "psfn",
       "reason": "The Postgres application_name for the Multica runtime lease names the framework runtime boundary for connection attribution, not a companion identity or persona default (psfn-framework-lj32q).",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "scripts/verify-chart-render.ts",
+      "contains": "psfn",
+      "reason": "The chart render gate names the repository's generic public Helm chart directory deploy/helm/psfn and its release/namespace identifiers, not a companion identity.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "scripts/compose-hub-verification.ts",
+      "contains": "psfn",
+      "reason": "The compose hub verifier names the generic smoke stack project/service identifiers, not a companion identity.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "scripts/smoke-docker.mjs",
+      "contains": "psfn",
+      "reason": "The Docker smoke runner names the generic compose project identifier, not a companion identity.",
       "pattern": "identity-legacy-slug"
     }
   ]

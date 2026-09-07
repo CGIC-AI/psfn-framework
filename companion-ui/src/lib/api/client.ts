@@ -454,6 +454,10 @@ export class SatelliteHubClient {
     this.session.deviceName = message.deviceName;
     this.session.satelliteId = message.satelliteId;
     this.session.audioFormat = message.audioFormat;
+    // The hub's negotiated ceiling replaces the requested ceiling seeded from
+    // our own hello. Assigned unconditionally: an absent ceiling means "the hub
+    // advertised none", never "keep the ceiling the browser asked for".
+    this.session.capabilities = cloneCapabilities(message.capabilities);
     this.session.place = message.place ? { ...message.place } : undefined;
     this.session.identity = cloneIdentity(message.identity);
   }

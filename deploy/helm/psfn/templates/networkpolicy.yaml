@@ -621,6 +621,19 @@ spec:
         - port: {{ .Values.satelliteHub.homeAssistant.egressPort }}
           protocol: TCP
     {{- end }}
+    {{- /* The Eidoverse stdio MCP server runs inside this pod and dials the
+         world URL itself, so a LAN or non-443 world needs an explicit hole.
+         allowExternalEgress below only opens public 443. */}}
+    {{- if and .Values.satelliteHub.eidoverse.enabled .Values.satelliteHub.eidoverse.egressCIDRs }}
+    - to:
+        {{- range .Values.satelliteHub.eidoverse.egressCIDRs }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+      ports:
+        - port: {{ .Values.satelliteHub.eidoverse.egressPort }}
+          protocol: TCP
+    {{- end }}
     {{- if .Values.networkPolicy.satelliteHub.allowExternalEgress }}
     - to:
         - ipBlock:

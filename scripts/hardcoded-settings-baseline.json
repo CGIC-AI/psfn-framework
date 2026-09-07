@@ -12735,6 +12735,13 @@
     },
     {
       "file": "src/system/config/scheduler-config/maintenance.ts",
+      "name": "DEFAULT_BACKGROUND_MAINTENANCE_CONFIG.doingMirrorLetters.maxDeliveryFailures",
+      "value": "5",
+      "form": "object-member",
+      "note": "Canonical scheduler.json owner-file default (psfn-framework-nwtw1); operators tune backgroundMaintenance.doingMirrorLetters.maxDeliveryFailures in scheduler.json and the owner migration seeds this value, so the literal is a seed default rather than a code-owned policy constant."
+    },
+    {
+      "file": "src/system/config/scheduler-config/maintenance.ts",
       "name": "DEFAULT_BACKGROUND_MAINTENANCE_CONFIG.intervalMs",
       "value": "3_600_000",
       "form": "object-member",

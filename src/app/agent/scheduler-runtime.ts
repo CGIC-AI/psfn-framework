@@ -216,16 +216,22 @@ export function registerDoingMirrorLetterDrainOperation(input: {
   backgroundMaintenance: BackgroundMaintenanceRegistrar;
   doingMirrorService: Pick<DoingMirrorService, 'drainPendingLetters'>;
   batchSize: number;
+  maxDeliveryFailures: number;
 }): void {
   input.backgroundMaintenance.registerOperation({
     id: DOING_MIRROR_LETTER_DRAIN_OPERATION_ID,
     name: 'Doing-Mirror Letter Redelivery',
     description:
       'Redelivers a bounded batch of doing-mirror dispositions whose Partner-authored Letter '
-      + 'never reached the bin; delivery is idempotent on the stored canonical Letter id.',
+      + 'never reached the bin; delivery is idempotent on the stored canonical Letter id. '
+      + 'A row past the owner-file consecutive-failure bound is quarantined out of the batch '
+      + 'and waits for an explicit operator retry in Garden.',
     handler: async () => {
-      const result = await input.doingMirrorService.drainPendingLetters(input.batchSize);
-      if (result.drained > 0) {
+      const result = await input.doingMirrorService.drainPendingLetters(
+        input.batchSize,
+        input.maxDeliveryFailures,
+      );
+      if (result.drained > 0 || result.quarantined > 0) {
         log.info('Doing-mirror pending Letter deliveries redriven', result);
       }
     },
@@ -470,6 +476,8 @@ export function buildAgentSchedulerRuntime(
     backgroundMaintenance,
     doingMirrorService: options.doingMirrorService,
     batchSize: options.schedulerConfig.backgroundMaintenance.doingMirrorLetters.batchSize,
+    maxDeliveryFailures:
+      options.schedulerConfig.backgroundMaintenance.doingMirrorLetters.maxDeliveryFailures,
   });
 
   if (options.config.multiCompanion === true) {

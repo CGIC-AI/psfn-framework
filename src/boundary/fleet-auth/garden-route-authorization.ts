@@ -571,7 +571,10 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
   },
   {
     action: 'wiki.manage', area: 'companion',
-    routeIds: ids('POST', ['/api/admin/doing-mirror/:itemType/:itemId']),
+    routeIds: ids('POST', [
+      '/api/admin/doing-mirror/:itemType/:itemId',
+      '/api/admin/doing-mirror/:itemType/:itemId/retry-letter',
+    ]),
     confirmation: 'explicit',
   },
   {

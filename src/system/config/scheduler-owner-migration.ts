@@ -56,6 +56,31 @@ function addMissingIcpPolicyHolds(
   addedPaths.push('icpAutonomy.policyHolds');
 }
 
+/**
+ * psfn-framework-nwtw1: an owner file written before the drain gained
+ * dead-letter handling has `doingMirrorLetters.batchSize` but no quarantine
+ * threshold. Seed the canonical default rather than failing an existing owner
+ * file closed on a key it could not have known about.
+ */
+function addMissingDoingMirrorLetterQuarantine(
+  candidate: Record<string, unknown>,
+  addedPaths: string[],
+): void {
+  const backgroundMaintenance = candidate.backgroundMaintenance;
+  if (!isRecord(backgroundMaintenance)) return;
+  const doingMirrorLetters = backgroundMaintenance.doingMirrorLetters;
+  if (!isRecord(doingMirrorLetters) || doingMirrorLetters.maxDeliveryFailures !== undefined) return;
+  candidate.backgroundMaintenance = {
+    ...backgroundMaintenance,
+    doingMirrorLetters: {
+      ...doingMirrorLetters,
+      maxDeliveryFailures:
+        DEFAULT_BACKGROUND_MAINTENANCE_CONFIG.doingMirrorLetters.maxDeliveryFailures,
+    },
+  };
+  addedPaths.push('backgroundMaintenance.doingMirrorLetters.maxDeliveryFailures');
+}
+
 function addMissingBackgroundWorkMaxAttempts(
   candidate: Record<string, unknown>,
   addedPaths: string[],
@@ -214,6 +239,7 @@ export function migrateLegacySchedulerOwner(
         };
         addedPaths.push('backgroundMaintenance.doingMirrorLetters');
       }
+      addMissingDoingMirrorLetterQuarantine(candidate, addedPaths);
       if (raw.backgroundWork === undefined) {
         candidate.backgroundWork = structuredClone(DEFAULT_BACKGROUND_WORK_TUNING);
         addedPaths.push('backgroundWork');

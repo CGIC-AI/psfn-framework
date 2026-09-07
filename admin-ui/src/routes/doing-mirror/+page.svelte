@@ -2,6 +2,7 @@
   import { onDestroy, onMount } from 'svelte';
   import {
     listDoingMirrorItems,
+    retryDoingMirrorLetter,
     transitionDoingMirrorItem,
     type DoingMirrorItem,
     type DoingMirrorTransitionInput,
@@ -33,6 +34,45 @@
 
   function itemTypeLabel(item: DoingMirrorItem): string {
     return item.source.itemType === 'wishlist' ? 'Wishlist' : 'Fold package';
+  }
+
+  type DeliveryTrouble = {
+    quarantined: boolean;
+    failureCount: number;
+    lastError: string;
+    lastFailedAt?: number;
+  };
+
+  /**
+   * A disposition whose Partner-authored Letter never reached the bin. Once the
+   * drain quarantines it the row stops retrying on its own, so the operator is
+   * the only path back.
+   */
+  function deliveryTrouble(item: DoingMirrorItem): DeliveryTrouble | null {
+    const disposition = item.disposition;
+    if (disposition.state === 'open') return null;
+    const notification = disposition.notification;
+    if (notification.deliveredAt !== undefined || notification.failureCount === 0) return null;
+    return {
+      quarantined: notification.quarantinedAt !== undefined,
+      failureCount: notification.failureCount,
+      lastError: notification.lastError ?? 'Delivery failed without a message.',
+      ...(notification.lastFailedAt !== undefined ? { lastFailedAt: notification.lastFailedAt } : {}),
+    };
+  }
+
+  async function retryLetter(item: DoingMirrorItem): Promise<void> {
+    busyKey = key(item);
+    try {
+      await retryDoingMirrorLetter(item.source.itemType, item.source.itemId);
+      pushToast('Letter delivered and the failure count cleared.', 'success');
+      await load(true);
+    } catch (error) {
+      pushToast(error instanceof Error ? error.message : 'Letter delivery failed again.', 'error');
+      await load(true);
+    } finally {
+      busyKey = '';
+    }
   }
 
   function stateClasses(state: DoingMirrorItem['disposition']['state']): string {
@@ -141,6 +181,28 @@
             </div>
           {/if}
           <p class="mt-3 text-xs text-shadow-500">Disposition updated {formatDate(item.disposition.updatedAt)}</p>
+
+          {#if deliveryTrouble(item)}
+            {@const trouble = deliveryTrouble(item)!}
+            <div class="mt-3 rounded-xl border border-wilt-300 bg-wilt-50 px-4 py-3">
+              <p class="text-xs uppercase tracking-[0.14em] text-wilt-700">
+                {trouble.quarantined ? 'Letter quarantined' : 'Letter not delivered yet'}
+              </p>
+              <p class="mt-1 text-sm text-shadow-800">
+                {trouble.failureCount} consecutive delivery {trouble.failureCount === 1 ? 'failure' : 'failures'}{trouble.lastFailedAt !== undefined ? `, last at ${formatDate(trouble.lastFailedAt)}` : ''}.
+                {#if trouble.quarantined}
+                  Automatic redelivery has stopped so newer Letters keep flowing; retry it here once the cause is fixed.
+                {/if}
+              </p>
+              <p class="mt-1 whitespace-pre-wrap font-mono text-xs text-wilt-700">{trouble.lastError}</p>
+              <button
+                type="button"
+                onclick={() => void retryLetter(item)}
+                disabled={busyKey === key(item)}
+                class="mt-3 rounded-lg border border-wilt-300 bg-white px-3 py-1.5 text-sm font-medium text-wilt-700 disabled:opacity-50"
+              >Retry Letter delivery</button>
+            </div>
+          {/if}
 
           {#if composingKey === key(item)}
             <div class="mt-4 space-y-3 border-t border-bark-100 pt-4">

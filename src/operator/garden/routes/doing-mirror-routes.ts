@@ -6,7 +6,7 @@ import {
 } from '../../../core/doing-mirror/contracts.js';
 import { assertNoUnknownKeys, isRecord } from '../../../shared/utils/types.js';
 import { parseAdminJsonBody } from '../request-body.js';
-import { exactPath, nestedParamPath } from '../route-matchers.js';
+import { exactPath, nestedParamPath, nestedParamWithSuffix } from '../route-matchers.js';
 import type { AdminDoingMirrorService } from '../services/types.js';
 import { ADMIN_DYNAMIC_JSON_HEADERS, sendInternalError, toSanitizedMessage } from './shared.js';
 import type {
@@ -104,6 +104,35 @@ export function buildAdminDoingMirrorRoutes(options: {
             error => sendJson(res, 400, { error: toSanitizedMessage(error, 'Failed to change disposition') }),
           );
         });
+      },
+    },
+    {
+      method: 'POST',
+      match: nestedParamWithSuffix(
+        '/api/admin/doing-mirror/', '/', 'itemType', 'itemId', '/retry-letter',
+      ),
+      handle: (_req, res, { itemType, itemId }) => {
+        if (!doingMirrorService) return void sendJson(res, 503, { error: 'Doing-mirror backend unavailable' });
+        if (!itemType || !itemId) return void sendJson(res, 400, { error: 'itemType and itemId are required' });
+        let parsedItemType: DoingMirrorItemType;
+        try {
+          parsedItemType = parseItemType(itemType);
+        } catch (error) {
+          return void sendJson(res, 400, { error: toSanitizedMessage(error, 'Invalid doing-mirror item type') });
+        }
+        doingMirrorService.retryLetterDelivery(parsedItemType, itemId).then(
+          (item) => {
+            appendAuditTimelineEntry?.(
+              'external_action',
+              'allowed',
+              'Operator retried a quarantined doing-mirror Letter delivery.',
+              [`itemType=${parsedItemType}`, `itemId=${itemId}`, 'action=retry-letter'],
+              'operator',
+            );
+            sendJson(res, 200, { item, boundary: BOUNDARY }, ADMIN_DYNAMIC_JSON_HEADERS);
+          },
+          error => sendJson(res, 400, { error: toSanitizedMessage(error, 'Failed to retry the Letter delivery') }),
+        );
       },
     },
   ];

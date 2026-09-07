@@ -92,6 +92,13 @@ export function createLetterTool(
               requireItemType(input.itemType),
               requireString(input.itemId, 'itemId'),
             ), null, 2));
+          default:
+            // Fail closed on a missing or unknown action so empty arguments never
+            // act on the bin (tool-conformance rejection_check).
+            throw new Error(
+              `Unknown letter action "${String((input as { action?: unknown }).action)}". `
+              + 'Use action=compose|list|read|place|archive|disposition_list|disposition_read.',
+            );
         }
       } catch (error) {
         return textResultFromError('Letter action failed', error, {

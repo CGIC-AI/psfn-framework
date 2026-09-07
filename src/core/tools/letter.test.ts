@@ -45,6 +45,15 @@ describe('letter tool', () => {
     expect(get).toHaveBeenCalledWith('wishlist', 'wish-1');
   });
 
+  it('rejects empty arguments instead of acting on the bin', async () => {
+    const service = serviceStub();
+    const result = await createLetterTool(service).execute('call-1', {} as never);
+    expect(result.details).toMatchObject({ isError: true });
+    expect(JSON.stringify(result.content)).toContain('Unknown letter action');
+    expect(service.list).not.toHaveBeenCalled();
+    expect(service.compose).not.toHaveBeenCalled();
+  });
+
   it('keeps state-changing read actions behind the runtime-write capability', () => {
     const tool = createLetterTool(serviceStub());
     expect(resolveToolCapabilityRequirement(tool, { action: 'list' }))

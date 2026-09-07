@@ -14,6 +14,86 @@ import {
 } from './hub-stream.js';
 
 describe('hub stream reducer', () => {
+  it('exposes the hub-negotiated capability ceiling from session.ready', () => {
+    let state = createInitialHubStreamState('2026-06-17T00:00:00.000Z');
+
+    state = reduceHubStreamState(state, {
+      type: 'hub.inbound',
+      at: '2026-06-17T00:00:01.000Z',
+      event: {
+        message: {
+          type: 'session.ready',
+          sessionId: 'realtime:client-9f2ab310',
+          channelId: 'satellite.endpoint:realtime:client-9f2ab310',
+          deviceId: 'client-9f2ab310',
+          deviceName: 'Opanhome TS Client',
+          satelliteId: 'client-9f2ab310',
+          audioFormat: 'text_only',
+          capabilities: {
+            input: ['microphone_pcm', 'final_transcript', 'text', 'wake_event'],
+            output: ['text', 'subtitle'],
+            control: ['interrupt', 'presence', 'session_attach'],
+            safety: [],
+          },
+        },
+      },
+    });
+
+    // The microphone gate in App.tsx reads exactly these two input capabilities.
+    expect(state.session?.capabilities?.input)
+      .toEqual(['microphone_pcm', 'final_transcript', 'text', 'wake_event']);
+    expect(state.session?.capabilities?.output).toEqual(['text', 'subtitle']);
+    expect(state.session?.capabilities?.safety).toEqual([]);
+    // No streamed_audio in the ceiling -> playback stays gated off.
+    expect(state.voicePlayback.supported).toBe(false);
+  });
+
+  it('opens audio playback when session.ready advertises streamed audio', () => {
+    let state = createInitialHubStreamState('2026-06-17T00:00:00.000Z');
+
+    state = reduceHubStreamState(state, {
+      type: 'hub.inbound',
+      at: '2026-06-17T00:00:01.000Z',
+      event: {
+        message: {
+          type: 'session.ready',
+          sessionId: 'realtime:client-9f2ab310',
+          channelId: 'satellite.endpoint:realtime:client-9f2ab310',
+          deviceId: 'client-9f2ab310',
+          deviceName: 'Opanhome TS Client',
+          satelliteId: 'client-9f2ab310',
+          audioFormat: 'pcm_s16le_16000_mono_in/mp3_44100_out',
+          capabilities: { output: ['text', 'subtitle', 'streamed_audio'] },
+        },
+      },
+    });
+
+    expect(state.voicePlayback.supported).toBe(true);
+  });
+
+  it('leaves the capability ceiling unset when session.ready omits it', () => {
+    let state = createInitialHubStreamState('2026-06-17T00:00:00.000Z');
+
+    state = reduceHubStreamState(state, {
+      type: 'hub.inbound',
+      at: '2026-06-17T00:00:01.000Z',
+      event: {
+        message: {
+          type: 'session.ready',
+          sessionId: 'session-1',
+          channelId: 'satellite.endpoint:session-1',
+          deviceId: 'phone',
+          deviceName: 'Phone',
+          satelliteId: 'phone',
+          audioFormat: 'text',
+        },
+      },
+    });
+
+    expect(state.session?.capabilities).toBeUndefined();
+    expect(state.voicePlayback.supported).toBe(false);
+  });
+
   it('preserves event order and session correlation', () => {
     let state = createInitialHubStreamState('2026-06-17T00:00:00.000Z');
 

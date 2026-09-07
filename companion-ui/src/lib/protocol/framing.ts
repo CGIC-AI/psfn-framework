@@ -253,12 +253,18 @@ function approvalGrantMode(value: unknown): boolean {
 
 const STRICT_HUB_VALIDATORS: Record<HubToClientMessage['type'], (payload: unknown) => boolean> = {
   'session.ready': (payload) => {
+    // `capabilities` is the hub's negotiated ceiling. It has been unconditional on the
+    // wire since the hub advertised spoken-reply audio readiness (apps/satellite-hub/
+    // src/ts/shared/protocol.ts `SessionReadyMessage`), but stays OPTIONAL here so
+    // older hubs keep decoding. The hub is the wire authority; the closed-vocabulary
+    // `capabilities` checker still applies, and unknown keys still fail closed.
     const record = exactRecord(payload, [
       'type', 'sessionId', 'channelId', 'deviceId', 'deviceName', 'satelliteId', 'audioFormat',
-    ], ['identity', 'place']);
+    ], ['identity', 'place', 'capabilities']);
     return record !== null
       && ['sessionId', 'channelId', 'deviceId', 'deviceName', 'satelliteId', 'audioFormat']
         .every(key => boundedString(record[key], 256))
+      && (record.capabilities === undefined || capabilities(record.capabilities))
       && identity(record.identity) && place(record.place);
   },
   'hello.ack': (payload) => {

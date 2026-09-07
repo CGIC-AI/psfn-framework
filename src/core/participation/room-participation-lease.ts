@@ -35,16 +35,12 @@ import type { RoomParticipationLeaseSettings } from '../../system/config/partici
  * (`socialAutonomy.roomParticipationLease.openOn`); any of them refreshes a
  * lease that is already active.
  */
-const ROOM_PARTICIPATION_DISPOSITIONS = [
-  'direct_summons',
-  'passive_summons',
-  'reaction',
-  'reply',
-  'endogenous_room_entry',
-] as const;
-
 export type RoomParticipationDisposition =
-  typeof ROOM_PARTICIPATION_DISPOSITIONS[number];
+  | 'direct_summons'
+  | 'passive_summons'
+  | 'reaction'
+  | 'reply'
+  | 'endogenous_room_entry';
 
 /**
  * Why a lease stopped granting consideration. Terminal and durable: a closed
@@ -61,19 +57,15 @@ export type RoomParticipationDisposition =
  * - `room_pressure`  — the reservation gate reported a flooded room.
  * - `policy_off`     — owner policy disabled continuation while a lease was live.
  */
-const ROOM_PARTICIPATION_LEASE_CLOSE_REASONS = [
-  'expiry',
-  'silence',
-  'message_cap',
-  'machine_streak',
-  'withdrawn',
-  'fatigue',
-  'room_pressure',
-  'policy_off',
-] as const;
-
 export type RoomParticipationLeaseCloseReason =
-  typeof ROOM_PARTICIPATION_LEASE_CLOSE_REASONS[number];
+  | 'expiry'
+  | 'silence'
+  | 'message_cap'
+  | 'machine_streak'
+  | 'withdrawn'
+  | 'fatigue'
+  | 'room_pressure'
+  | 'policy_off';
 
 export type RoomParticipationLeaseStatus = 'active' | 'closed';
 
@@ -183,7 +175,10 @@ export function evaluateRoomParticipationContinuation(input: {
   if (!isAfterWatermark(observation, lease)) {
     return { outcome: 'suppressed', suppression: 'lease_watermark' };
   }
-  if (observation.timestampMs - lease.lastActivityAtMs < settings.continuationCooldownMs) {
+  // Spacing is measured on the observation clock, not the message's own
+  // timestamp: a late or clock-skewed delivery must not read as "too soon"
+  // (ordering is already the watermark's job).
+  if (nowMs - lease.lastActivityAtMs < settings.continuationCooldownMs) {
     return { outcome: 'suppressed', suppression: 'lease_cooldown' };
   }
   if (observation.contentLength < settings.minContentChars) {

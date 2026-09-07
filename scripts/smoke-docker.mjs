@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 // ── Docker Compose smoke harness (psfn-framework-65rk.12) ──
 // The Compose analogue of the k8s smoke:chat. Brings up the split runtime
-// (postgres + gateway + agent) from docker/docker-compose.smoke.yml, proves the
-// plumbing (gateway API edge up, gateway<->agent RPC connected), then drives one
-// OpenAI-compatible chat turn through the gateway /v1 edge.
+// (postgres + gateway + agent + satellite-hub + companion-ui) from
+// docker/docker-compose.smoke.yml, proves the plumbing (gateway API edge up,
+// gateway<->agent RPC connected), verifies the Satellite Hub and companion-ui
+// surfaces, then drives one OpenAI-compatible chat turn through the gateway /v1
+// edge.
 //
 // Exit codes:
 //   0  full turn: /v1/chat/completions returned a persisted assistant reply.
@@ -11,19 +13,26 @@
 //      but the turn failed at the external provider egress (expected when
 //      OPENROUTER_API_KEY is unset). This is the documented "validate up to the
 //      provider call" stop.
+//   3  hub contract boundary reached: the whole stack is healthy and the hub
+//      handshake works, but companion-ui's own protocol decoder rejects a live
+//      hub frame. That is a source-contract divergence, not a deployment fault.
 //   1  plumbing failure: the stack did not come up, the gateway API edge never
 //      became healthy, or the request failed before reaching the provider.
 //
 // Usage:
-//   node scripts/smoke-docker.mjs [--no-up] [--keep-up] [--message <text>]
+//   npm run smoke:docker -- [--no-up] [--keep-up] [--message <text>]
 //     --no-up     assume the stack is already running (skip compose up)
 //     --keep-up   leave the stack running on exit (default: compose down -v)
+//
+// Runs under tsx: the hub verification imports companion-ui's own TypeScript
+// protocol codec so the handshake is decoded by the real client, not a copy.
 
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { dirname, resolve } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
+import { verifyComposeHub } from './compose-hub-verification.ts';
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(SCRIPT_DIR, '..');
@@ -36,6 +45,11 @@ const SMOKE_SESSION_ID = 'compose-persistence';
 const API_PRINCIPAL_ID = `api-key-${createHash('sha256').update(API_KEY.trim()).digest('hex').slice(0, 24)}`;
 const SMOKE_CHANNEL_ID = `api:${API_PRINCIPAL_ID}:${SMOKE_SESSION_ID}`;
 const HAS_PROVIDER_KEY = (process.env.OPENROUTER_API_KEY || '').trim().length > 0;
+const HUB_PORT = process.env.PSFN_SMOKE_HUB_PORT || '18787';
+const COMPANION_UI_PORT = process.env.PSFN_SMOKE_COMPANION_UI_PORT || '18080';
+const SATELLITE_API_KEY = process.env.PSFN_SMOKE_SATELLITE_API_KEY
+  || 'psfn-smoke-satellite-key-please-rotate';
+const HUB_VERIFY_TIMEOUT_MS = 20_000;
 
 function log(msg) {
   console.log(`[smoke:docker] ${msg}`);
@@ -161,7 +175,7 @@ function verifyPersistedTurn(userContent, assistantContent) {
     const fs = require('node:fs');
     const path = require('node:path');
     const [channelId, userContent, assistantContent] = process.argv.slice(1);
-    const sessionsDir = '/app/companion-data/state/sessions';
+    const sessionsDir = '/app/runtime-root/companions/smoke/state/sessions';
     const index = JSON.parse(fs.readFileSync(path.join(sessionsDir, '_channel_index.json'), 'utf8'));
     const entry = index.channels?.[channelId];
     if (!entry || !Array.isArray(entry.filenames) || entry.filenames.length === 0) process.exit(2);
@@ -181,20 +195,30 @@ function verifyPersistedTurn(userContent, assistantContent) {
   return result.status === 0;
 }
 
+// A contract divergence between two source trees is neither a deployment fault
+// nor a provider fault, so it gets its own exit code instead of masking either.
+function contractExit(code, contractBoundary) {
+  if (!contractBoundary) return code;
+  fail(`HUB CONTRACT BOUNDARY: ${contractBoundary}`);
+  log('Everything else in the stack is healthy; this is a source-contract divergence.');
+  return 3;
+}
+
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
   let exitCode = 1;
 
   try {
     if (opts.up) {
-      log('Bringing up postgres + gateway + agent (docker compose up -d --wait)...');
+      log('Bringing up postgres + gateway + agent + satellite-hub + companion-ui '
+        + '(docker compose up -d --wait)...');
       const up = compose(['up', '-d', '--wait', '--wait-timeout', '240']);
       if (up.status !== 0) {
         fail('docker compose up did not reach a healthy state');
         compose(['ps']);
         return 1;
       }
-      pass('all services reported healthy (postgres, gateway, agent)');
+      pass('all services reported healthy (postgres, gateway, agent, satellite-hub, companion-ui)');
     }
 
     log(`Waiting for gateway API edge at ${API_BASE}/health ...`);
@@ -214,6 +238,36 @@ async function main() {
     // agent-backed scheduler. Report the table count as a migration signal.
     const tableCount = await queryPublicTableCount();
     if (tableCount) pass(`Postgres reachable; public schema has ${tableCount} tables (runtime migrations ran)`);
+
+    log('Verifying the Satellite Hub and companion-ui surfaces ...');
+    let hubContractBoundary = null;
+    try {
+      const hubResult = await verifyComposeHub({
+        hubBase: `http://127.0.0.1:${HUB_PORT}`,
+        hubWsUrl: `ws://127.0.0.1:${HUB_PORT}/`,
+        companionUiBase: `http://127.0.0.1:${COMPANION_UI_PORT}`,
+        gatewayApiBase: `${API_BASE}/v1`,
+        satelliteApiKey: SATELLITE_API_KEY,
+        satelliteId: 'smoke-hub',
+        endpointId: 'smoke-hub-endpoint',
+        claimType: 'satellite.endpoint',
+        timeoutMs: HUB_VERIFY_TIMEOUT_MS,
+      });
+      for (const entry of hubResult.checks) {
+        if (entry.ok) pass(`${entry.name} (${entry.detail})`);
+        else fail(`${entry.name}: ${entry.detail}`);
+      }
+      hubContractBoundary = hubResult.contractBoundary;
+      const blocking = hubResult.checks.filter((entry) => !entry.ok
+        && entry.name !== 'companion-ui decoder accepts the hub session.ready');
+      if (blocking.length > 0) {
+        fail(`hub/companion-ui verification failed: ${blocking.map((entry) => entry.name).join(', ')}`);
+        return 1;
+      }
+    } catch (err) {
+      fail(`hub/companion-ui verification could not run: ${err instanceof Error ? err.message : String(err)}`);
+      return 1;
+    }
 
     log('Driving one chat turn: POST /v1/chat/completions ...');
     let res;
@@ -249,7 +303,7 @@ async function main() {
         }
         pass(`full Autonomous turn persisted and returned: ${content.slice(0, 160)}`);
         pass(`canonical L0 session journal contains the exact user/assistant pair (${SMOKE_CHANNEL_ID})`);
-        return 0;
+        return contractExit(0, hubContractBoundary);
       }
       fail(`chat returned ${res.status} but no assistant content: ${bodyText.slice(0, 240)}`);
       return 1;
@@ -265,7 +319,7 @@ async function main() {
       }
       pass('PROVIDER BOUNDARY REACHED: stack healthy, gateway<->agent RPC connected, request accepted, '
         + 'turn failed only at the external provider (set OPENROUTER_API_KEY for a full turn).');
-      return 2;
+      return contractExit(2, hubContractBoundary);
     }
 
     fail(`chat failed before the provider boundary (status ${res.status}): ${bodyText.slice(0, 280)}`);

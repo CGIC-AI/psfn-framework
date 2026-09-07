@@ -123,7 +123,7 @@
     "e2e:icp-certification": "vitest run --reporter=verbose src/app/e2e/icp-certification/process-harness.integration.test.ts",
     "e2e:egress-capability-matrix": "vitest run --reporter=verbose src/app/e2e/egress-capability-matrix.test.ts",
     "smoke:chat": "node scripts/chat-cockpit-smoke.mjs",
-    "smoke:docker": "node scripts/smoke-docker.mjs",
+    "smoke:docker": "tsx scripts/smoke-docker.mjs",
     "smoke:cogsec": "tsx scripts/cogsec-remediation-smoke.ts",
     "smoke:wiki-caretaker": "vitest run src/faculties/wiki/shared-world-caretaker.integration.test.ts",
     "smoke:garden:postgres-memory": "node scripts/garden-postgres-memory-cutover-smoke.mjs",

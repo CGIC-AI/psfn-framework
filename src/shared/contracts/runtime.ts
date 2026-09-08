@@ -79,6 +79,23 @@ export interface TurnRecord {
   userMessage: TurnRecordMessage;
   assistantMessage?: TurnRecordMessage;
   toolCalls: TurnRecordToolCall[];
+  /**
+   * Resolvable reference to this turn's durable context source manifest
+   * (psfn-framework-ccgdz.4) — the same deterministic `turn:<turnId>` key the
+   * custody snapshot uses, so no identifier is minted for it.
+   *
+   * Absent when no manifest was recorded, which is the honest state.
+   *
+   * DIVERGENCE CAVEAT (psfn-framework-8nq3h): unlike `custodySnapshotRef`,
+   * which is WITHHELD when a second fold of the same turn disagrees with the
+   * stored record, this ref is still returned on a `diverged` context-manifest
+   * write. Because the key is deterministic rather than content-addressed, it
+   * then resolves to the FIRST stored manifest for this turn — a sibling fold
+   * of the same turn, not necessarily the prompt assembly this record
+   * describes. The divergence itself is logged at the write seam
+   * (`recordTurnContextManifest`); a reader that must prove which fold produced
+   * a given reply reads `custodySnapshotRef`, whose absence is load-bearing.
+   */
   contextManifestRef?: string;
   /**
    * Resolvable reference to this turn's durable CogSec custody snapshot

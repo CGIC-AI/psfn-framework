@@ -2,10 +2,14 @@
   import { onMount } from 'svelte';
   import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
   import {
+    getBlindReviewState,
     getIntakePolicy,
     getIntakeSourceLists,
     mutateIntakeSourceList,
   } from '$lib/api/endpoints/intake';
+  import type {
+    AdminBlindReviewStateView,
+  } from '../../../../../src/operator/garden/services/blind-review-service.js';
   import { listCogSecEvents } from '$lib/api/endpoints/sessions';
   import type {
     AdminCogSecEventListData,
@@ -19,6 +23,7 @@
   let policy = $state<IntakePolicyConfig | null>(null);
   let lists = $state<IntakeSourceListsConfig | null>(null);
   let cogSecEvents = $state<AdminCogSecEventListData['events']>([]);
+  let blindReview = $state<AdminBlindReviewStateView | null>(null);
   let loading = $state(true);
   let error = $state('');
   let endpointMissing = $state(false);
@@ -44,6 +49,38 @@
 
   const TIER_ORDER = ['trusted', 'standard', 'untrusted', 'hostile'] as const;
 
+  const BLIND_REVIEW_STATUS_LABELS: Record<AdminBlindReviewStateView['status'], string> = {
+    disabled: 'disabled',
+    unwired: 'enabled, not wired',
+    never_run: 'no pass yet',
+    running: 'running',
+  };
+
+  const BLIND_REVIEW_STATUS_STYLES: Record<AdminBlindReviewStateView['status'], string> = {
+    disabled: 'bg-bark-200 text-shadow-700',
+    unwired: 'bg-wilt-100 text-wilt-600',
+    never_run: 'bg-gold-100 text-gold-700',
+    running: 'bg-moss-100 text-moss-700',
+  };
+
+  const BLIND_REVIEW_GATE_LABELS: Record<AdminBlindReviewStateView['gate']['nextPassGate'], string> = {
+    no_evidence: 'no unreviewed evidence -- no model call',
+    undersized_items: 'backlog below the batch floor -- deferred, no model call',
+    eligible: 'clears the count gates -- a pass may call the reviewer',
+  };
+
+  /** Owner-file durations read as hours/minutes/days, not as raw milliseconds. */
+  function formatDuration(ms: number): string {
+    if (ms <= 0) return '0';
+    const days = ms / 86_400_000;
+    if (days >= 1) return `${Number(days.toFixed(days < 10 ? 1 : 0))}d`;
+    const hours = ms / 3_600_000;
+    if (hours >= 1) return `${Number(hours.toFixed(hours < 10 ? 1 : 0))}h`;
+    const minutes = ms / 60_000;
+    if (minutes >= 1) return `${Number(minutes.toFixed(minutes < 10 ? 1 : 0))}m`;
+    return `${Math.round(ms / 1_000)}s`;
+  }
+
   function formatTimestamp(value: string | number): string {
     const parsed = new Date(value);
     return Number.isNaN(parsed.getTime()) ? String(value) : parsed.toLocaleString();
@@ -65,6 +102,14 @@
       }
     } finally {
       loading = false;
+    }
+    // The Blind Reviewer projection rides its own endpoint; a deployment that
+    // does not serve it must not blank the page, but it must not look healthy
+    // either — the section is simply absent, never rendered as an empty window.
+    try {
+      blindReview = await getBlindReviewState();
+    } catch {
+      blindReview = null;
     }
     // CogSec telemetry rides a separate endpoint; its absence must not blank the page.
     try {
@@ -334,6 +379,110 @@
         </div>
       {/each}
     </div>
+
+    <!-- Blind Reviewer state (33xah): the reviewer's own health, never its findings -->
+    {#if blindReview}
+      <div class="card-garden p-5">
+        <div class="flex flex-wrap items-center gap-2 mb-1">
+          <h2 class="font-serif text-lg text-shadow-900">Blind Reviewer</h2>
+          <span class="inline-block px-2 py-0.5 rounded-full text-xs font-medium {BLIND_REVIEW_STATUS_STYLES[blindReview.status]}">
+            {BLIND_REVIEW_STATUS_LABELS[blindReview.status]}
+          </span>
+          {#if blindReview.retry.backingOff}
+            <span class="inline-block px-2 py-0.5 rounded-full text-xs font-medium bg-gold-100 text-gold-700">
+              backing off
+            </span>
+          {/if}
+          {#if blindReview.retry.attemptsExhausted}
+            <span class="inline-block px-2 py-0.5 rounded-full text-xs font-medium bg-wilt-100 text-wilt-600">
+              attempts exhausted
+            </span>
+          {/if}
+        </div>
+        <p class="text-sm text-shadow-600 mb-3">
+          The passive reviewer's own state. Counts and bounds only &mdash; no evidence, no batch
+          digest, and no findings (those arrive as CogSec cases above). The deterministic change
+          gate is what keeps unchanged or undersized batches from costing a model call at all.
+        </p>
+
+        {#if blindReview.status === 'disabled'}
+          <p class="text-sm text-shadow-600">
+            Disabled in <code class="font-mono">scheduler.json</code> (<code class="font-mono">blindReviewer.enabled</code>).
+          </p>
+        {:else if blindReview.status === 'unwired'}
+          <p class="text-sm text-wilt-600">
+            Enabled, but no durable review window is composed in this process &mdash; the reviewer
+            requires a PostgreSQL URL and is not running.
+          </p>
+        {:else}
+          <dl class="grid grid-cols-2 gap-x-4 gap-y-2 text-sm sm:grid-cols-4">
+            <div>
+              <dt class="text-xs text-shadow-500">Window rows</dt>
+              <dd class="font-mono text-shadow-800">
+                {blindReview.window.total} / {blindReview.window.maxRows}{blindReview.window.atRowCeiling ? ' (at cap)' : ''}
+              </dd>
+            </div>
+            <div>
+              <dt class="text-xs text-shadow-500">Unreviewed</dt>
+              <dd class="font-mono text-shadow-800">{blindReview.window.unreviewed}</dd>
+            </div>
+            <div>
+              <dt class="text-xs text-shadow-500">Pinned to cases</dt>
+              <dd class="font-mono text-shadow-800">
+                {blindReview.window.pinned} / {blindReview.window.maxPinnedRows}{blindReview.window.atPinCeiling ? ' (at cap)' : ''}
+              </dd>
+            </div>
+            <div>
+              <dt class="text-xs text-shadow-500">Retention</dt>
+              <dd class="font-mono text-shadow-800">{formatDuration(blindReview.window.retentionMs)}</dd>
+            </div>
+            <div>
+              <dt class="text-xs text-shadow-500">Last pass</dt>
+              <dd class="font-mono text-shadow-800">
+                {blindReview.updatedAtMs === 0 ? 'never' : formatTimestamp(blindReview.updatedAtMs)}
+              </dd>
+            </div>
+            <div>
+              <dt class="text-xs text-shadow-500">Evidence ingested through</dt>
+              <dd class="font-mono text-shadow-800">
+                {blindReview.ingestedThroughMs === 0 ? 'never' : formatTimestamp(blindReview.ingestedThroughMs)}
+              </dd>
+            </div>
+            <div>
+              <dt class="text-xs text-shadow-500">Reviewed a batch</dt>
+              <dd class="font-mono text-shadow-800">{blindReview.hasReviewedBatch ? 'yes' : 'not yet'}</dd>
+            </div>
+            <div>
+              <dt class="text-xs text-shadow-500">Retry attempt</dt>
+              <dd class="font-mono text-shadow-800">
+                {blindReview.retry.attempt} / {blindReview.retry.maxAttempts}
+              </dd>
+            </div>
+            <div class="col-span-2">
+              <dt class="text-xs text-shadow-500">Effective cadence</dt>
+              <dd class="font-mono text-shadow-800">
+                {formatDuration(blindReview.cadence.effectiveIntervalMs)}
+              </dd>
+              <p class="mt-0.5 text-xs text-shadow-500">
+                max(blindReviewer.intervalMs {formatDuration(blindReview.cadence.intervalMs)},
+                backgroundMaintenance.intervalMs {formatDuration(blindReview.cadence.backgroundMaintenanceIntervalMs)})
+                &mdash; the lane is due-gated on top of the maintenance tick, so it can never run more often than that tick.
+              </p>
+            </div>
+            <div class="col-span-2">
+              <dt class="text-xs text-shadow-500">Next pass, change gate</dt>
+              <dd class="text-shadow-800">{BLIND_REVIEW_GATE_LABELS[blindReview.gate.nextPassGate]}</dd>
+              <p class="mt-0.5 text-xs text-shadow-500">
+                Batch floor {blindReview.gate.minItemsPerBatch}, ceiling {blindReview.gate.maxItemsPerBatch},
+                at most {blindReview.gate.maxReviewsPerRun} model call{blindReview.gate.maxReviewsPerRun === 1 ? '' : 's'} per pass.
+                A batch identical to the last reviewed one is retired without a call; that check needs the
+                evidence itself, so it is not previewed here.
+              </p>
+            </div>
+          </dl>
+        {/if}
+      </div>
+    {/if}
 
     <!-- Recent CogSec events -->
     <div class="card-garden p-5">

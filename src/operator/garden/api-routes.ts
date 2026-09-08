@@ -55,7 +55,9 @@ import {
 import { buildAdminSettingsRoutes } from './routes/settings-routes.js';
 import { buildAdminChannelEnvelopeRoutes } from './routes/channel-envelope-routes.js';
 import { buildAdminBearerCompanionRoutes } from './routes/bearer-companion-routes.js';
+import { buildAdminBlindReviewRoutes } from './routes/blind-review-routes.js';
 import { buildAdminCustodyRoutes } from './routes/custody-routes.js';
+import type { AdminBlindReviewService } from './services/blind-review-service.js';
 import type { AdminCustodyQueryService } from './services/custody-query-service.js';
 import { buildAdminIntakeSourceListRoutes } from './routes/intake-source-list-routes.js';
 import { buildAdminIntakeQuarantineRoutes } from './routes/intake-quarantine-routes.js';
@@ -332,6 +334,7 @@ export function buildAdminApiRoutes(options: {
   episodicMemoryService?: AdminEpisodicMemoryService | null;
   /** Content-free custody chain query seam (ccgdz.7); Postgres-backed. */
   custodyQueryService?: AdminCustodyQueryService | null;
+  blindReviewService?: AdminBlindReviewService | null;
   groupMemoryService?: AdminGroupMemoryService | null;
   memoryService: AdminMemoryService;
   biographicalReviewService?: AdminBiographicalReviewService | null;
@@ -400,6 +403,7 @@ export function buildAdminApiRoutes(options: {
     doingMirrorService,
     episodicMemoryService,
     custodyQueryService,
+    blindReviewService,
     groupMemoryService,
     memoryService,
     biographicalReviewService,
@@ -926,6 +930,7 @@ export function buildAdminApiRoutes(options: {
     }),
     ...buildAdminEpisodicMemoryRoutes({ episodicMemoryService }),
     ...buildAdminCustodyRoutes({ custodyQueryService }),
+    ...buildAdminBlindReviewRoutes({ blindReviewService }),
     {
       method: 'GET',
       match: exactPath('/api/admin/group-memory'),

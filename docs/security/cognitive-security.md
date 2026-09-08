@@ -327,6 +327,16 @@ schema versions (`npm run migrate:intake-policy-owner`). Key sections:
   the durable prompt-bearing self-authored sinks (`skill_write`,
   `persona_mutation`, `wiki_write`) — `allow` is rejected at validation with no
   operator override (`intake-policy-config.ts#L690-L698`, `L1405-L1413`).
+  `trust_mutation` is deliberately NOT in that set: it is security-sensitive but
+  not prompt-bearing, so an operator may loosen it. It is still defended against
+  silent drift (psfn-framework-5a921) — its shipped `deny` is pinned in
+  `INTAKE_UNSCREENED_PINNED_POSTURES`, and an owner file that weakens it must
+  name the sink in `sinkGates.acknowledgedUnscreenedWeakening` or it refuses to
+  load. The acknowledgement is checked at the load/save seam rather than in
+  `validateIntakePolicy`, so the shape validator keeps answering "is this a
+  well-formed policy?" and a stale acknowledgement (one naming a sink that is
+  not actually weakened) is refused too, so consent cannot be armed ahead of the
+  change it excuses.
 - **`screeningPool`**: the bounded async screening pool — concurrency 2–4,
   queue depth 1–1024, whole-item deadline 5s–300s, bounded by the code-owned
   contract `intake-screening-pool-contract.json`.

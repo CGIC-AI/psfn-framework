@@ -248,6 +248,44 @@ describe('GardenCustodyQueryService companion boundary', () => {
     }))).rejects.toThrow(/not owned by this companion/u);
   });
 
+  it('refuses a delivery ref whose record is absent (8nq3h)', async () => {
+    const attempt = custodyIdentity('tool-call-1');
+    // The stub's default resolution is `absent`; before 8nq3h this fell through
+    // the ownership guard and answered from the client-supplied ref text.
+    const service = serviceOver(stubReader());
+    await expect(service.queryEgressChain(new URLSearchParams({
+      deliveryRef: egressDeliveryRef(custodySnapshotRefForTurn(TURN_ID), attempt),
+    }))).rejects.toThrow(/not owned by this companion/u);
+  });
+
+  it('refuses a delivery ref whose record is malformed (8nq3h)', async () => {
+    const attempt = custodyIdentity('tool-call-1');
+    const service = serviceOver(stubReader({
+      resolvedDelivery: { status: 'malformed' },
+    }));
+    await expect(service.queryEgressChain(new URLSearchParams({
+      deliveryRef: egressDeliveryRef(custodySnapshotRefForTurn(TURN_ID), attempt),
+    }))).rejects.toThrow(/not owned by this companion/u);
+  });
+
+  it('answers an owned delivery ref from the stored record, not the ref text', async () => {
+    const attempt = custodyIdentity('tool-call-1');
+    const service = serviceOver(stubReader({
+      resolvedDelivery: {
+        status: 'present',
+        record: deliveryFor(TURN_ID, { kind: 'companion', companionId: COMPANION_ID }),
+      },
+      snapshots: new Map([[custodySnapshotRefForTurn(TURN_ID), {
+        status: 'present' as const, record: snapshotFor(TURN_ID),
+      }]]),
+    }));
+    const view = await service.queryEgressChain(new URLSearchParams({
+      deliveryRef: egressDeliveryRef(custodySnapshotRefForTurn(TURN_ID), attempt),
+    }));
+    expect(view.turnId).toBe(TURN_ID);
+    expect(view.snapshotStatus).toBe('present');
+  });
+
   it('refuses a fleet request that names a different companion', async () => {
     const service = serviceOver(stubReader());
     await expect(service.queryEgressChain(

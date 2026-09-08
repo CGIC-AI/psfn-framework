@@ -97,6 +97,12 @@ export interface IncidentAlertsConfig {
    * Stream rows the read-only investigator may read for one incident bundle.
    * It bounds the timeline attached to an alert and the evidence Garden shows
    * for the same incident.
+   *
+   * At least two, and that minimum is load-bearing rather than cosmetic:
+   * deduplication across a restart works by finding the incident's PREVIOUS
+   * statement beside the one that woke the alert path. A window of one can
+   * only ever hold the triggering row, so every restart would re-alert every
+   * open incident.
    */
   bundleEventLimit: number;
   /**
@@ -295,10 +301,12 @@ export function validateHealthDetectorsConfig(
         incidentAlertsRaw.closeNotice,
         'healthDetectors.incidentAlerts.closeNotice',
       ),
+      // Minimum two: one row can only be the triggering statement, leaving
+      // deduplication across a restart with no predecessor to anchor on.
       bundleEventLimit: toPositiveInteger(
         incidentAlertsRaw.bundleEventLimit,
         'healthDetectors.incidentAlerts.bundleEventLimit',
-        1,
+        2,
       ),
       ledgerCapacity: toPositiveInteger(
         incidentAlertsRaw.ledgerCapacity,

@@ -216,6 +216,22 @@
         "endogenousRoomEntry": true
       }
     },
+    "roomSignal": {
+      "enabled": false,
+      "contextualEligibleSourceClasses": ["operator", "primary_user"],
+      "contextualEligibleRoomRoles": [],
+      "velocityWindowMs": 60000,
+      "maxRoomVelocity": 12,
+      "featureCacheSize": 256,
+      "topicTags": {},
+      "companionInterests": [],
+      "classifier": {
+        "enabled": false,
+        "deadlineMs": 4000,
+        "maxOutputTokens": 16,
+        "excerptChars": 280
+      }
+    },
     "freeTimeChooser": {
       "enabled": true,
       "chooserDeadlineMs": 8000,

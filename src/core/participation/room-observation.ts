@@ -28,10 +28,10 @@ import type { RoomParticipationObservation } from './room-participation-lease.js
  * role, `unknown` room size, no direct address), never guessed from prose.
  */
 
-export const ROOM_OBSERVATION_SCHEMA_VERSION = 1 as const;
+const ROOM_OBSERVATION_SCHEMA_VERSION = 1 as const;
 
 /** Why a normalized message is not an observable room event. */
-export type RoomObservationRejection =
+type RoomObservationRejection =
   /** A direct/private conversation is never a room. */
   | 'direct_message'
   /** The connector supplied no usable message/author identity. */
@@ -40,7 +40,7 @@ export type RoomObservationRejection =
   | 'invalid_timestamp';
 
 /** Content-free author standing, normalized across connectors. */
-export interface RoomObservationAuthor {
+interface RoomObservationAuthor {
   authorId: string;
   displayName: string;
   /** Bot/app author, from channel metadata — the bot-loop fence input. */

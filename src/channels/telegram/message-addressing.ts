@@ -19,7 +19,7 @@ import {
  */
 
 /** The Bot API user fields addressing needs. */
-export interface TelegramAddressingUser {
+interface TelegramAddressingUser {
   id: number;
   username?: string;
   first_name?: string;
@@ -27,7 +27,7 @@ export interface TelegramAddressingUser {
 }
 
 /** The Bot API entity fields addressing needs (`offset`/`length` slice `text`). */
-export interface TelegramAddressingEntity {
+interface TelegramAddressingEntity {
   type: string;
   offset: number;
   length: number;

@@ -1,4 +1,10 @@
 import { isRecord } from '../../shared/utils/types.js';
+import {
+  MESSAGE_AUTHOR_ROOM_ROLES,
+  MESSAGE_AUTHOR_SOURCE_CLASSES,
+  type MessageAuthorRoomRole,
+  type MessageAuthorSourceClass,
+} from '../../shared/contracts/message-addressing.js';
 import { assertNoUnknownKeys, assertPositiveInteger } from './validators.js';
 
 /**
@@ -687,5 +693,232 @@ export function parseRoomParticipationLeaseSettings(
       `${fieldPath}.minContentChars`,
     ),
     openOn: participationOpenOnSettings(record.openOn, `${fieldPath}.openOn`, defaults.openOn),
+  };
+}
+
+/**
+ * Tunables for the channel-neutral room signal (jp36.5.6, bible §8.1/§8.4).
+ *
+ * These bound the deterministic stage that runs BEFORE any model call on an
+ * observed room message: which room members may be participated with
+ * contextually at all, how fast a room may be before contextual participation
+ * stops, how much derived state one process keeps, and the reviewed coarse
+ * topic vocabulary a companion-local matcher may compare its interests against.
+ *
+ * The public default is OFF, and every list defaults to its most restrictive
+ * value: with no owner-approved trust class or room role, an untrusted room
+ * member can only ever reach the companion by addressing it directly.
+ *
+ * Cost note: normalization and feature extraction are pure and run once per
+ * physical message per agent process. The optional ambiguity classifier is the
+ * claimed-once stage — it runs only when a claim authority admits it, so in a
+ * fleet runtime it stays inert until a durable cross-process claim exists.
+ */
+export interface RoomSignalSettings {
+  /** Master switch. Off: the deterministic room-signal gate suppresses. */
+  enabled: boolean;
+  /**
+   * Intake trust classes whose members may be participated with CONTEXTUALLY —
+   * that is, without addressing the companion. A direct mention or reply is
+   * always admitted regardless of this list.
+   */
+  contextualEligibleSourceClasses: MessageAuthorSourceClass[];
+  /** Platform room roles admitted contextually; `unknown` is never one. */
+  contextualEligibleRoomRoles: MessageAuthorRoomRole[];
+  /** Trailing window the room-velocity gate counts observed messages over. */
+  velocityWindowMs: number;
+  /** Observed messages in that window above which contextual participation stops. */
+  maxRoomVelocity: number;
+  /** Bounded per-process memo of derived features, velocity, and classifications. */
+  featureCacheSize: number;
+  /**
+   * Reviewed coarse domain/topic vocabulary: tag → keywords that select it.
+   * Owner-curated and deliberately empty by default; it is compared against
+   * `companionInterests`, never against a biography or a private memory.
+   */
+  topicTags: Record<string, string[]>;
+  /** Reviewed room-safe interest/responsibility tags for this companion. */
+  companionInterests: string[];
+  classifier: RoomSignalClassifierSettings;
+}
+
+/**
+ * The optional cheap ambiguity classifier. Bounded and content-minimal: it sees
+ * a truncated excerpt and reviewed tags, answers one boolean, and is shared
+ * across every companion evaluating the same physical message. It is never a
+ * response-capable model call.
+ */
+interface RoomSignalClassifierSettings {
+  /** Master switch; off means ambiguity resolves to suppression. */
+  enabled: boolean;
+  /** Hard wall-clock ceiling for the single bounded call. */
+  deadlineMs: number;
+  /** Output-token ceiling; the contract needs one boolean. */
+  maxOutputTokens: number;
+  /** Per-message excerpt cap applied before the call. */
+  excerptChars: number;
+}
+
+/**
+ * Defaults factory (owner-file / settings pattern). All tuning values live
+ * inside the function body — never as module-level constants — so the
+ * hardcoded-settings gate stays satisfied and Garden/config can own overrides.
+ */
+export function createDefaultRoomSignalSettings(): RoomSignalSettings {
+  return {
+    enabled: false,
+    contextualEligibleSourceClasses: ['operator', 'primary_user'],
+    contextualEligibleRoomRoles: [],
+    velocityWindowMs: 60 * 1000,
+    maxRoomVelocity: 12,
+    featureCacheSize: 256,
+    topicTags: {},
+    companionInterests: [],
+    classifier: {
+      enabled: false,
+      deadlineMs: 4_000,
+      maxOutputTokens: 16,
+      excerptChars: 280,
+    },
+  };
+}
+
+function participationStringList(value: unknown, fieldPath: string): string[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`${PARTICIPATION_ERROR_PREFIX}: ${fieldPath} must be an array of strings`);
+  }
+  return value.map((entry, index) => {
+    if (typeof entry !== 'string' || !entry.trim()) {
+      throw new Error(
+        `${PARTICIPATION_ERROR_PREFIX}: ${fieldPath}[${String(index)}] must be a non-empty string`,
+      );
+    }
+    return entry.trim();
+  });
+}
+
+function participationEnumList<T extends string>(
+  value: unknown,
+  allowed: readonly T[],
+  fieldPath: string,
+): T[] {
+  return participationStringList(value, fieldPath).map((entry, index) => {
+    if (!(allowed as readonly string[]).includes(entry)) {
+      throw new Error(
+        `${PARTICIPATION_ERROR_PREFIX}: ${fieldPath}[${String(index)}] must be one of `
+        + `${allowed.map(item => `"${item}"`).join(', ')}`,
+      );
+    }
+    return entry as T;
+  });
+}
+
+function participationTopicTags(
+  value: unknown,
+  fieldPath: string,
+): Record<string, string[]> {
+  const record = participationRecord(value, fieldPath);
+  const parsed: Record<string, string[]> = {};
+  for (const [tag, keywords] of Object.entries(record)) {
+    if (!tag.trim()) {
+      throw new Error(`${PARTICIPATION_ERROR_PREFIX}: ${fieldPath} tag names must be non-empty`);
+    }
+    parsed[tag.trim()] = participationStringList(keywords, `${fieldPath}.${tag}`);
+  }
+  return parsed;
+}
+
+function parseRoomSignalClassifierSettings(
+  raw: unknown,
+  fieldPath: string,
+  defaults: RoomSignalClassifierSettings,
+): RoomSignalClassifierSettings {
+  if (raw === undefined) return { ...defaults };
+  const record = participationRecord(raw, fieldPath);
+  assertNoUnknownKeys(
+    record,
+    ['enabled', 'deadlineMs', 'maxOutputTokens', 'excerptChars'],
+    fieldPath,
+    { errorPrefix: PARTICIPATION_ERROR_PREFIX },
+  );
+  return {
+    enabled: participationBoolean(record.enabled ?? defaults.enabled, `${fieldPath}.enabled`),
+    deadlineMs: participationPositiveInteger(
+      record.deadlineMs ?? defaults.deadlineMs,
+      `${fieldPath}.deadlineMs`,
+    ),
+    maxOutputTokens: participationPositiveInteger(
+      record.maxOutputTokens ?? defaults.maxOutputTokens,
+      `${fieldPath}.maxOutputTokens`,
+    ),
+    excerptChars: participationPositiveInteger(
+      record.excerptChars ?? defaults.excerptChars,
+      `${fieldPath}.excerptChars`,
+    ),
+  };
+}
+
+export function parseRoomSignalSettings(
+  raw: unknown,
+  fieldPath: string,
+): RoomSignalSettings {
+  const defaults = createDefaultRoomSignalSettings();
+  if (raw === undefined) {
+    return defaults;
+  }
+  const record = participationRecord(raw, fieldPath);
+  assertNoUnknownKeys(
+    record,
+    [
+      'enabled',
+      'contextualEligibleSourceClasses',
+      'contextualEligibleRoomRoles',
+      'velocityWindowMs',
+      'maxRoomVelocity',
+      'featureCacheSize',
+      'topicTags',
+      'companionInterests',
+      'classifier',
+    ],
+    fieldPath,
+    { errorPrefix: PARTICIPATION_ERROR_PREFIX },
+  );
+  return {
+    enabled: participationBoolean(record.enabled ?? defaults.enabled, `${fieldPath}.enabled`),
+    contextualEligibleSourceClasses: participationEnumList(
+      record.contextualEligibleSourceClasses ?? defaults.contextualEligibleSourceClasses,
+      MESSAGE_AUTHOR_SOURCE_CLASSES,
+      `${fieldPath}.contextualEligibleSourceClasses`,
+    ),
+    contextualEligibleRoomRoles: participationEnumList(
+      record.contextualEligibleRoomRoles ?? defaults.contextualEligibleRoomRoles,
+      MESSAGE_AUTHOR_ROOM_ROLES,
+      `${fieldPath}.contextualEligibleRoomRoles`,
+    ),
+    velocityWindowMs: participationPositiveInteger(
+      record.velocityWindowMs ?? defaults.velocityWindowMs,
+      `${fieldPath}.velocityWindowMs`,
+    ),
+    maxRoomVelocity: participationPositiveInteger(
+      record.maxRoomVelocity ?? defaults.maxRoomVelocity,
+      `${fieldPath}.maxRoomVelocity`,
+    ),
+    featureCacheSize: participationPositiveInteger(
+      record.featureCacheSize ?? defaults.featureCacheSize,
+      `${fieldPath}.featureCacheSize`,
+    ),
+    topicTags: participationTopicTags(
+      record.topicTags ?? defaults.topicTags,
+      `${fieldPath}.topicTags`,
+    ),
+    companionInterests: participationStringList(
+      record.companionInterests ?? defaults.companionInterests,
+      `${fieldPath}.companionInterests`,
+    ),
+    classifier: parseRoomSignalClassifierSettings(
+      record.classifier,
+      `${fieldPath}.classifier`,
+      defaults.classifier,
+    ),
   };
 }

@@ -404,6 +404,16 @@ export function hydrateCanonicalStartupConfig(
         ...persistedScheduler.socialAutonomy.roomParticipationLease,
         openOn: { ...persistedScheduler.socialAutonomy.roomParticipationLease.openOn },
       },
+      roomSignal: {
+        ...persistedScheduler.socialAutonomy.roomSignal,
+        contextualEligibleSourceClasses:
+          [...persistedScheduler.socialAutonomy.roomSignal.contextualEligibleSourceClasses],
+        contextualEligibleRoomRoles:
+          [...persistedScheduler.socialAutonomy.roomSignal.contextualEligibleRoomRoles],
+        topicTags: structuredClone(persistedScheduler.socialAutonomy.roomSignal.topicTags),
+        companionInterests: [...persistedScheduler.socialAutonomy.roomSignal.companionInterests],
+        classifier: { ...persistedScheduler.socialAutonomy.roomSignal.classifier },
+      },
       freeTimeChooser: { ...persistedScheduler.socialAutonomy.freeTimeChooser },
     },
     ...(persistedScheduler.toolUsageEvaluator

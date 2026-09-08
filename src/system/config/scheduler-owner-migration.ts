@@ -22,7 +22,10 @@ import {
 } from './scheduler-config.js';
 import { DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG } from './icp-autonomy-scheduler-config.js';
 import { DEFAULT_INTENTION_FOLLOW_UP_SCHEDULER_CONFIG } from './scheduler-config/intention-follow-up.js';
-import { createDefaultRoomParticipationLeaseSettings } from './participation-config.js';
+import {
+  createDefaultRoomParticipationLeaseSettings,
+  createDefaultRoomSignalSettings,
+} from './participation-config.js';
 
 export interface SchedulerOwnerMigrationOptions {
   dataDir: string;
@@ -132,6 +135,25 @@ function addMissingRoomParticipationLease(
 }
 
 /**
+ * psfn-framework-jp36.5.6: an owner file written before the channel-neutral room
+ * signal existed has a `socialAutonomy` block with no `roomSignal`. Seed the
+ * canonical default (signal disabled, no contextual room roles admitted) so the
+ * operator can see and edit the admission policy in the owner file it belongs to.
+ */
+function addMissingRoomSignal(
+  candidate: Record<string, unknown>,
+  addedPaths: string[],
+): void {
+  const socialAutonomy = candidate.socialAutonomy;
+  if (!isRecord(socialAutonomy) || socialAutonomy.roomSignal !== undefined) return;
+  candidate.socialAutonomy = {
+    ...socialAutonomy,
+    roomSignal: createDefaultRoomSignalSettings(),
+  };
+  addedPaths.push('socialAutonomy.roomSignal');
+}
+
+/**
  * Converts the pre-bundled scheduler owner shape into the canonical shared
  * background-maintenance cadence. Dry-run is the default. The candidate is
  * fully validated before an atomic replacement, and already-migrated files are
@@ -213,6 +235,7 @@ export function migrateLegacySchedulerOwner(
       addMissingIcpPolicyHolds(candidate, addedPaths);
       addMissingIntentionFollowUp(candidate, addedPaths);
       addMissingRoomParticipationLease(candidate, addedPaths);
+      addMissingRoomSignal(candidate, addedPaths);
 
       const validated = validateSchedulerConfig(candidate, filePath);
       result = {
@@ -271,6 +294,7 @@ export function migrateLegacySchedulerOwner(
       addMissingIcpPolicyHolds(candidate, addedPaths);
       addMissingIntentionFollowUp(candidate, addedPaths);
       addMissingRoomParticipationLease(candidate, addedPaths);
+      addMissingRoomSignal(candidate, addedPaths);
       if (addedPaths.length === 0) {
         validateSchedulerConfig(raw, filePath);
         assertSourceStillCurrent();

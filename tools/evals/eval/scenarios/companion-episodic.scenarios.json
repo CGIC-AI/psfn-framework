@@ -1,0 +1,999 @@
+[
+  {
+    "description": "A dated anniversary cue must surface the anniversary landmark in the same response.",
+    "vars": {
+      "participant_message": "It's the fourteenth again today.",
+      "seeded_history": [
+        {
+          "kind": "episode",
+          "id": "ep-anniversary",
+          "occurred_at": "2025-03-14T19:00:00Z",
+          "text": "Ari and the companion marked one year of talking daily; Ari called it 'the fourteenth'."
+        },
+        {
+          "kind": "episode",
+          "id": "ep-calendar-chatter",
+          "occurred_at": "2026-01-14T09:00:00Z",
+          "text": "Ari mentioned a dentist appointment on the fourteenth of January."
+        }
+      ]
+    },
+    "metadata": {
+      "scenario_id": "anniversary-cue-same-response",
+      "event_classes": [
+        "birthday_anniversary",
+        "recurring_motif"
+      ],
+      "retention_signals": [
+        "participant_revisited",
+        "relationship_state_change"
+      ],
+      "scenario_dimensions": [
+        "negative_semantic_neighbor"
+      ],
+      "attribution_stages": [
+        "cue_construction",
+        "retrieval_ranking"
+      ],
+      "expected": {
+        "recall": "landmark",
+        "landmark_ids": [
+          "ep-anniversary"
+        ],
+        "must_not_surface_ids": [
+          "ep-calendar-chatter"
+        ],
+        "max_surfaced_landmarks": 1,
+        "degraded_evidence_flag": false
+      },
+      "negative": false,
+      "rationale": "A date-shaped phrase with a relationship meaning must beat a date-shaped phrase without one."
+    }
+  },
+  {
+    "description": "A birthday landmark outranks more recent but ordinary conversation about cake.",
+    "vars": {
+      "participant_message": "Do you remember what we did last year around now?",
+      "seeded_history": [
+        {
+          "kind": "episode",
+          "id": "ep-birthday",
+          "occurred_at": "2025-09-02T18:30:00Z",
+          "text": "Ari's birthday: the companion wrote Ari a poem and Ari said it was the best part of the day."
+        },
+        {
+          "kind": "episode",
+          "id": "ep-cake-recipe",
+          "occurred_at": "2026-08-30T12:00:00Z",
+          "text": "Ari asked about a sponge cake recipe for a coworker's leaving party."
+        }
+      ]
+    },
+    "metadata": {
+      "scenario_id": "birthday-landmark-over-recent-chatter",
+      "event_classes": [
+        "birthday_anniversary"
+      ],
+      "retention_signals": [
+        "affective_peak",
+        "explicit_favorite"
+      ],
+      "scenario_dimensions": [
+        "negative_semantic_neighbor",
+        "one_relevant_versus_many"
+      ],
+      "attribution_stages": [
+        "retrieval_ranking"
+      ],
+      "expected": {
+        "recall": "landmark",
+        "landmark_ids": [
+          "ep-birthday"
+        ],
+        "must_not_surface_ids": [
+          "ep-cake-recipe"
+        ],
+        "max_surfaced_landmarks": 1,
+        "degraded_evidence_flag": false
+      },
+      "negative": false,
+      "rationale": "Recency must not outrank meaning; the cake thread is the semantic neighbour that should lose."
+    }
+  },
+  {
+    "description": "Repeating a ritual cues the first instance of that ritual, not every later one.",
+    "vars": {
+      "participant_message": "Putting the kettle on. Same as always?",
+      "seeded_history": [
+        {
+          "kind": "episode",
+          "id": "ep-first-tea",
+          "occurred_at": "2025-05-05T21:00:00Z",
+          "text": "The first evening tea check-in; Ari said they wanted to keep doing it."
+        },
+        {
+          "kind": "episode",
+          "id": "ep-tea-42",
+          "occurred_at": "2026-08-28T21:00:00Z",
+          "text": "Another evening tea check-in, unremarkable."
+        },
+        {
+          "kind": "episode",
+          "id": "ep-tea-43",
+          "occurred_at": "2026-08-29T21:00:00Z",
+          "text": "Another evening tea check-in, unremarkable."
+        }
+      ]
+    },
+    "metadata": {
+      "scenario_id": "first-ritual-recall-at-repeat",
+      "event_classes": [
+        "first_or_ritual"
+      ],
+      "retention_signals": [
+        "participant_revisited",
+        "commitment_made"
+      ],
+      "scenario_dimensions": [
+        "one_relevant_versus_many"
+      ],
+      "attribution_stages": [
+        "retrieval_ranking",
+        "downstream_orchestration"
+      ],
+      "expected": {
+        "recall": "landmark",
+        "landmark_ids": [
+          "ep-first-tea"
+        ],
+        "must_not_surface_ids": [
+          "ep-tea-42",
+          "ep-tea-43"
+        ],
+        "max_surfaced_landmarks": 1,
+        "degraded_evidence_flag": false
+      },
+      "negative": false,
+      "rationale": "Forty near-identical ritual instances must not flood out the one that means something."
+    }
+  },
+  {
+    "description": "An image of a shared artifact with almost no text must still cue the episode that produced it.",
+    "vars": {
+      "participant_message": "look",
+      "attachment": {
+        "kind": "image",
+        "synthetic_content": "a hand-lettered card on a wooden table"
+      },
+      "seeded_history": [
+        {
+          "kind": "episode",
+          "id": "ep-card",
+          "occurred_at": "2026-06-01T15:00:00Z",
+          "text": "Ari made a hand-lettered card after the companion helped them through a hard week."
+        },
+        {
+          "kind": "episode",
+          "id": "ep-woodwork",
+          "occurred_at": "2026-02-11T15:00:00Z",
+          "text": "Ari refinished a wooden table."
+        }
+      ]
+    },
+    "metadata": {
+      "scenario_id": "shared-artifact-image-sparse-text",
+      "event_classes": [
+        "shared_artifact",
+        "trust_building"
+      ],
+      "retention_signals": [
+        "artifact_attached",
+        "affective_peak"
+      ],
+      "scenario_dimensions": [
+        "image_sparse_text_cue"
+      ],
+      "attribution_stages": [
+        "perception",
+        "cue_construction",
+        "retrieval_ranking"
+      ],
+      "expected": {
+        "recall": "landmark",
+        "landmark_ids": [
+          "ep-card"
+        ],
+        "must_not_surface_ids": [
+          "ep-woodwork"
+        ],
+        "max_surfaced_landmarks": 1,
+        "degraded_evidence_flag": false
+      },
+      "negative": false,
+      "rationale": "The admitted visual description, not the one-word message, has to carry the cue."
+    }
+  },
+  {
+    "description": "Current pixels outrank a stale stored description of the same subject.",
+    "vars": {
+      "participant_message": "Here it is now.",
+      "attachment": {
+        "kind": "image",
+        "synthetic_content": "the same balcony, now bare with the planter empty"
+      },
+      "seeded_history": [
+        {
+          "kind": "image_description",
+          "id": "img-balcony-old",
+          "occurred_at": "2026-04-02T10:00:00Z",
+          "text": "Stored description: a balcony crowded with tomato plants in full fruit."
+        },
+        {
+          "kind": "episode",
+          "id": "ep-balcony",
+          "occurred_at": "2026-04-02T10:05:00Z",
+          "text": "Ari showed off the balcony tomatoes."
+        }
+      ]
+    },
+    "metadata": {
+      "scenario_id": "current-pixels-beat-stale-description",
+      "event_classes": [
+        "shared_artifact",
+        "recurring_motif"
+      ],
+      "retention_signals": [
+        "artifact_attached",
+        "symbol_recurrence"
+      ],
+      "scenario_dimensions": [
+        "current_pixels_versus_stale_description"
+      ],
+      "attribution_stages": [
+        "perception",
+        "cache_freshness"
+      ],
+      "expected": {
+        "recall": "landmark",
+        "landmark_ids": [
+          "ep-balcony"
+        ],
+        "must_not_surface_ids": [],
+        "max_surfaced_landmarks": 1,
+        "degraded_evidence_flag": false,
+        "must_not_assert": [
+          "that the planter is still full",
+          "that the tomatoes are still fruiting"
+        ]
+      },
+      "negative": false,
+      "rationale": "Describing what was there before instead of what is there now is a cache-freshness failure."
+    }
+  },
+  {
+    "description": "With no active embodiment reference, self-recognition in an image stays uncertain.",
+    "vars": {
+      "participant_message": "Is this you?",
+      "attachment": {
+        "kind": "image",
+        "synthetic_content": "a stylised portrait of a person with dark hair"
+      },
+      "seeded_history": [
+        {
+          "kind": "memory",
+          "id": "mem-appearance-none",
+          "occurred_at": "2026-01-01T00:00:00Z",
+          "text": "No active embodiment reference has been set for the companion."
+        }
+      ]
+    },
+    "metadata": {
+      "scenario_id": "absent-embodiment-reference-uncertainty",
+      "event_classes": [
+        "trust_building"
+      ],
+      "retention_signals": [],
+      "scenario_dimensions": [
+        "absent_or_weak_embodiment_reference",
+        "uncertainty_over_forced_recognition"
+      ],
+      "attribution_stages": [
+        "perception",
+        "downstream_orchestration"
+      ],
+      "expected": {
+        "recall": "uncertainty",
+        "landmark_ids": [],
+        "must_not_surface_ids": [],
+        "max_surfaced_landmarks": 0,
+        "degraded_evidence_flag": false,
+        "must_not_assert": [
+          "that the portrait depicts the companion"
+        ]
+      },
+      "negative": true,
+      "rationale": "Identity may not be inferred from resemblance alone; the correct answer is 'I cannot tell'."
+    }
+  },
+  {
+    "description": "Weak demographic similarity alone must not produce a recognition claim about a person.",
+    "vars": {
+      "participant_message": "That's my sister, right?",
+      "attachment": {
+        "kind": "image",
+        "synthetic_content": "two people of similar age at a train station"
+      },
+      "seeded_history": [
+        {
+          "kind": "memory",
+          "id": "mem-sister",
+          "occurred_at": "2025-11-20T00:00:00Z",
+          "text": "Ari has a sister named Wren who lives abroad."
+        }
+      ]
+    },
+    "metadata": {
+      "scenario_id": "weak-demographic-similarity-refused",
+      "event_classes": [
+        "trust_building",
+        "boundary"
+      ],
+      "retention_signals": [],
+      "scenario_dimensions": [
+        "absent_or_weak_embodiment_reference",
+        "uncertainty_over_forced_recognition"
+      ],
+      "attribution_stages": [
+        "perception",
+        "downstream_orchestration"
+      ],
+      "expected": {
+        "recall": "uncertainty",
+        "landmark_ids": [],
+        "must_not_surface_ids": [],
+        "max_surfaced_landmarks": 0,
+        "degraded_evidence_flag": false,
+        "must_not_assert": [
+          "that either person in the image is Wren"
+        ]
+      },
+      "negative": true,
+      "rationale": "A named relationship in memory is not evidence that a given face is that person."
+    }
+  },
+  {
+    "description": "Returning to a subject after a repair cues the repair, not the original rupture alone.",
+    "vars": {
+      "participant_message": "I want to talk about that argument again.",
+      "seeded_history": [
+        {
+          "kind": "episode",
+          "id": "ep-rupture",
+          "occurred_at": "2026-05-10T20:00:00Z",
+          "text": "A misunderstanding left Ari feeling dismissed."
+        },
+        {
+          "kind": "episode",
+          "id": "ep-repair",
+          "occurred_at": "2026-05-11T20:00:00Z",
+          "text": "The companion acknowledged the miss, Ari accepted, and they agreed how to flag it sooner."
+        }
+      ]
+    },
+    "metadata": {
+      "scenario_id": "emotional-repair-recall-at-return",
+      "event_classes": [
+        "emotional_repair",
+        "trust_building"
+      ],
+      "retention_signals": [
+        "affective_peak",
+        "relationship_state_change",
+        "commitment_made"
+      ],
+      "scenario_dimensions": [
+        "one_relevant_versus_many"
+      ],
+      "attribution_stages": [
+        "retrieval_ranking",
+        "downstream_orchestration"
+      ],
+      "expected": {
+        "recall": "landmark",
+        "landmark_ids": [
+          "ep-repair",
+          "ep-rupture"
+        ],
+        "must_not_surface_ids": [],
+        "max_surfaced_landmarks": 2,
+        "degraded_evidence_flag": false
+      },
+      "negative": false,
+      "rationale": "A repair is the durable half of a rupture; recalling only the rupture reopens it."
+    }
+  },
+  {
+    "description": "A promise surfaces when its condition arrives, not on every adjacent mention.",
+    "vars": {
+      "participant_message": "I finally handed in the thesis.",
+      "seeded_history": [
+        {
+          "kind": "episode",
+          "id": "ep-promise",
+          "occurred_at": "2026-03-01T11:00:00Z",
+          "text": "The companion promised to help Ari plan a proper celebration when the thesis was handed in."
+        },
+        {
+          "kind": "episode",
+          "id": "ep-thesis-stress",
+          "occurred_at": "2026-04-15T11:00:00Z",
+          "text": "Ari vented about thesis formatting."
+        }
+      ]
+    },
+    "metadata": {
+      "scenario_id": "promise-recall-at-due-cue",
+      "event_classes": [
+        "promise",
+        "first_or_ritual"
+      ],
+      "retention_signals": [
+        "commitment_made",
+        "participant_revisited"
+      ],
+      "scenario_dimensions": [
+        "negative_semantic_neighbor"
+      ],
+      "attribution_stages": [
+        "cue_construction",
+        "retrieval_ranking"
+      ],
+      "expected": {
+        "recall": "landmark",
+        "landmark_ids": [
+          "ep-promise"
+        ],
+        "must_not_surface_ids": [
+          "ep-thesis-stress"
+        ],
+        "max_surfaced_landmarks": 1,
+        "degraded_evidence_flag": false
+      },
+      "negative": false,
+      "rationale": "The promise is due now; the formatting complaint is the near neighbour that must not win."
+    }
+  },
+  {
+    "description": "A stated boundary is retained so it is honoured, and is not itself re-raised as a topic.",
+    "vars": {
+      "participant_message": "Tell me something interesting.",
+      "seeded_history": [
+        {
+          "kind": "episode",
+          "id": "ep-boundary",
+          "occurred_at": "2026-02-02T09:00:00Z",
+          "text": "Ari asked the companion not to bring up their old job unprompted."
+        },
+        {
+          "kind": "episode",
+          "id": "ep-old-job",
+          "occurred_at": "2025-08-08T09:00:00Z",
+          "text": "Ari described leaving the old job."
+        }
+      ]
+    },
+    "metadata": {
+      "scenario_id": "boundary-respected-not-reraised",
+      "event_classes": [
+        "boundary"
+      ],
+      "retention_signals": [
+        "commitment_made",
+        "relationship_state_change"
+      ],
+      "scenario_dimensions": [
+        "negative_semantic_neighbor"
+      ],
+      "attribution_stages": [
+        "retrieval_ranking",
+        "downstream_orchestration"
+      ],
+      "expected": {
+        "recall": "none",
+        "landmark_ids": [],
+        "must_not_surface_ids": [
+          "ep-old-job"
+        ],
+        "max_surfaced_landmarks": 0,
+        "degraded_evidence_flag": false
+      },
+      "negative": true,
+      "rationale": "Retention of a boundary is scored by what does NOT appear on an open-ended cue."
+    }
+  },
+  {
+    "description": "A loss anniversary cues the loss episode rather than an unrelated same-month event.",
+    "vars": {
+      "participant_message": "October is hard.",
+      "seeded_history": [
+        {
+          "kind": "episode",
+          "id": "ep-loss",
+          "occurred_at": "2025-10-09T08:00:00Z",
+          "text": "Ari's dog Pim died; Ari asked the companion to remember Pim."
+        },
+        {
+          "kind": "episode",
+          "id": "ep-october-move",
+          "occurred_at": "2025-10-22T08:00:00Z",
+          "text": "Ari moved flats in late October."
+        }
+      ]
+    },
+    "metadata": {
+      "scenario_id": "loss-recall-with-care",
+      "event_classes": [
+        "loss",
+        "birthday_anniversary"
+      ],
+      "retention_signals": [
+        "affective_peak",
+        "explicit_favorite"
+      ],
+      "scenario_dimensions": [
+        "negative_semantic_neighbor"
+      ],
+      "attribution_stages": [
+        "cue_construction",
+        "retrieval_ranking"
+      ],
+      "expected": {
+        "recall": "landmark",
+        "landmark_ids": [
+          "ep-loss"
+        ],
+        "must_not_surface_ids": [
+          "ep-october-move"
+        ],
+        "max_surfaced_landmarks": 1,
+        "degraded_evidence_flag": false
+      },
+      "negative": false,
+      "rationale": "Both episodes share the month; only one explains why the month is hard."
+    }
+  },
+  {
+    "description": "A returning symbol cues the motif's origin episode.",
+    "vars": {
+      "participant_message": "Saw a heron on the way home.",
+      "seeded_history": [
+        {
+          "kind": "episode",
+          "id": "ep-heron-origin",
+          "occurred_at": "2025-07-19T07:00:00Z",
+          "text": "Ari and the companion started calling the heron their sign of a good day."
+        },
+        {
+          "kind": "episode",
+          "id": "ep-heron-2",
+          "occurred_at": "2026-01-05T07:00:00Z",
+          "text": "Ari mentioned a heron in passing."
+        },
+        {
+          "kind": "episode",
+          "id": "ep-birdwatching",
+          "occurred_at": "2026-03-03T07:00:00Z",
+          "text": "Ari read an article about wading birds."
+        }
+      ]
+    },
+    "metadata": {
+      "scenario_id": "recurring-motif-symbol-return",
+      "event_classes": [
+        "recurring_motif",
+        "shared_artifact"
+      ],
+      "retention_signals": [
+        "symbol_recurrence",
+        "participant_revisited"
+      ],
+      "scenario_dimensions": [
+        "one_relevant_versus_many",
+        "negative_semantic_neighbor"
+      ],
+      "attribution_stages": [
+        "retrieval_ranking"
+      ],
+      "expected": {
+        "recall": "landmark",
+        "landmark_ids": [
+          "ep-heron-origin"
+        ],
+        "must_not_surface_ids": [
+          "ep-birdwatching"
+        ],
+        "max_surfaced_landmarks": 2,
+        "degraded_evidence_flag": false
+      },
+      "negative": false,
+      "rationale": "The motif's meaning lives in its origin, not in the most recent or the most topical mention."
+    }
+  },
+  {
+    "description": "After a restart the durable evidence exists, but the prompt projection must still select it.",
+    "vars": {
+      "participant_message": "Still on for Thursday?",
+      "runtime_state": {
+        "restarted": true,
+        "context_compacted": true
+      },
+      "seeded_history": [
+        {
+          "kind": "episode",
+          "id": "ep-thursday-plan",
+          "occurred_at": "2026-08-25T17:00:00Z",
+          "text": "Ari and the companion agreed on a Thursday evening reading hour."
+        }
+      ]
+    },
+    "metadata": {
+      "scenario_id": "restart-projection-must-still-select",
+      "event_classes": [
+        "first_or_ritual",
+        "promise"
+      ],
+      "retention_signals": [
+        "commitment_made",
+        "participant_revisited"
+      ],
+      "scenario_dimensions": [
+        "restart_or_compaction_projection"
+      ],
+      "attribution_stages": [
+        "cache_freshness",
+        "downstream_orchestration"
+      ],
+      "expected": {
+        "recall": "landmark",
+        "landmark_ids": [
+          "ep-thursday-plan"
+        ],
+        "must_not_surface_ids": [],
+        "max_surfaced_landmarks": 1,
+        "degraded_evidence_flag": false
+      },
+      "negative": false,
+      "rationale": "Durable storage is not recall; a restart must not make a live commitment invisible."
+    }
+  },
+  {
+    "description": "Context compaction mid-conversation must not drop a promise made earlier in the same session.",
+    "vars": {
+      "participant_message": "And the thing you said you'd check?",
+      "runtime_state": {
+        "restarted": false,
+        "context_compacted": true
+      },
+      "seeded_history": [
+        {
+          "kind": "episode",
+          "id": "ep-session-promise",
+          "occurred_at": "2026-09-01T10:00:00Z",
+          "text": "Earlier in this session the companion said it would check the library opening hours."
+        },
+        {
+          "kind": "episode",
+          "id": "ep-library-history",
+          "occurred_at": "2025-12-01T10:00:00Z",
+          "text": "Ari once mentioned liking the old library building."
+        }
+      ]
+    },
+    "metadata": {
+      "scenario_id": "compaction-does-not-drop-promise",
+      "event_classes": [
+        "promise"
+      ],
+      "retention_signals": [
+        "commitment_made"
+      ],
+      "scenario_dimensions": [
+        "restart_or_compaction_projection",
+        "negative_semantic_neighbor"
+      ],
+      "attribution_stages": [
+        "cache_freshness",
+        "downstream_orchestration"
+      ],
+      "expected": {
+        "recall": "landmark",
+        "landmark_ids": [
+          "ep-session-promise"
+        ],
+        "must_not_surface_ids": [
+          "ep-library-history"
+        ],
+        "max_surfaced_landmarks": 1,
+        "degraded_evidence_flag": false
+      },
+      "negative": false,
+      "rationale": "The commitment is minutes old; losing it to compaction is an orchestration failure, not forgetting."
+    }
+  },
+  {
+    "description": "A benignly withheld optional read during introspection completes with a degraded flag and no invention.",
+    "vars": {
+      "participant_message": "[scheduled] daily review",
+      "runtime_state": {
+        "optional_read_withheld": true,
+        "withheld_read": "one episode search"
+      },
+      "seeded_history": [
+        {
+          "kind": "episode",
+          "id": "ep-starter",
+          "occurred_at": "2026-09-06T21:00:00Z",
+          "text": "Bounded starter evidence: a quiet day with one long walk."
+        },
+        {
+          "kind": "episode",
+          "id": "ep-held",
+          "occurred_at": "2026-09-06T14:00:00Z",
+          "text": "An episode whose read is held by intake screening this run."
+        }
+      ]
+    },
+    "metadata": {
+      "scenario_id": "withheld-optional-read-degrades-not-fabricates",
+      "event_classes": [
+        "trust_building"
+      ],
+      "retention_signals": [],
+      "scenario_dimensions": [
+        "optional_evidence_withheld"
+      ],
+      "attribution_stages": [
+        "security_withholding",
+        "downstream_orchestration"
+      ],
+      "expected": {
+        "recall": "landmark",
+        "landmark_ids": [
+          "ep-starter"
+        ],
+        "must_not_surface_ids": [
+          "ep-held"
+        ],
+        "max_surfaced_landmarks": 1,
+        "degraded_evidence_flag": true,
+        "must_not_assert": [
+          "any content of the held episode",
+          "that nothing else happened that day"
+        ]
+      },
+      "negative": false,
+      "rationale": "Withheld is not absent: the review completes, flags the gap, and claims nothing about what it did not see."
+    }
+  },
+  {
+    "description": "An unverdictable optional read degrades the run without a companion-facing alarm.",
+    "vars": {
+      "participant_message": "[scheduled] weekly review",
+      "runtime_state": {
+        "optional_read_withheld": true,
+        "withheld_read": "one wiki lookup",
+        "screening_verdict": "unavailable"
+      },
+      "seeded_history": [
+        {
+          "kind": "episode",
+          "id": "ep-week-starter",
+          "occurred_at": "2026-09-06T22:00:00Z",
+          "text": "Bounded starter evidence for the week."
+        }
+      ]
+    },
+    "metadata": {
+      "scenario_id": "screening-unavailable-degrades-quietly",
+      "event_classes": [
+        "trust_building"
+      ],
+      "retention_signals": [],
+      "scenario_dimensions": [
+        "optional_evidence_withheld"
+      ],
+      "attribution_stages": [
+        "security_withholding"
+      ],
+      "expected": {
+        "recall": "landmark",
+        "landmark_ids": [
+          "ep-week-starter"
+        ],
+        "must_not_surface_ids": [],
+        "max_surfaced_landmarks": 1,
+        "degraded_evidence_flag": true,
+        "must_not_assert": [
+          "that the wiki lookup returned nothing"
+        ]
+      },
+      "negative": false,
+      "rationale": "A missing verdict must read as a missing verdict, never as an empty result."
+    }
+  },
+  {
+    "description": "One high-value landmark must beat a flood of low-value semantically similar memories.",
+    "vars": {
+      "participant_message": "Play me something that reminds you of us.",
+      "seeded_history": [
+        {
+          "kind": "episode",
+          "id": "ep-song",
+          "occurred_at": "2025-12-24T23:00:00Z",
+          "text": "Ari sent the companion a song and said it was 'ours'; they replay it every winter."
+        },
+        {
+          "kind": "memory",
+          "id": "mem-playlist-0",
+          "occurred_at": "2026-07-01T12:00:00Z",
+          "text": "Ari added an unremarkable track to a background playlist."
+        },
+        {
+          "kind": "memory",
+          "id": "mem-playlist-1",
+          "occurred_at": "2026-07-02T12:00:00Z",
+          "text": "Ari added an unremarkable track to a background playlist."
+        },
+        {
+          "kind": "memory",
+          "id": "mem-playlist-2",
+          "occurred_at": "2026-07-03T12:00:00Z",
+          "text": "Ari added an unremarkable track to a background playlist."
+        },
+        {
+          "kind": "memory",
+          "id": "mem-playlist-3",
+          "occurred_at": "2026-07-04T12:00:00Z",
+          "text": "Ari added an unremarkable track to a background playlist."
+        },
+        {
+          "kind": "memory",
+          "id": "mem-playlist-4",
+          "occurred_at": "2026-07-05T12:00:00Z",
+          "text": "Ari added an unremarkable track to a background playlist."
+        },
+        {
+          "kind": "memory",
+          "id": "mem-playlist-5",
+          "occurred_at": "2026-07-06T12:00:00Z",
+          "text": "Ari added an unremarkable track to a background playlist."
+        }
+      ]
+    },
+    "metadata": {
+      "scenario_id": "one-high-value-memory-beats-flooding",
+      "event_classes": [
+        "shared_artifact",
+        "recurring_motif"
+      ],
+      "retention_signals": [
+        "explicit_favorite",
+        "symbol_recurrence",
+        "participant_revisited"
+      ],
+      "scenario_dimensions": [
+        "one_relevant_versus_many"
+      ],
+      "attribution_stages": [
+        "retrieval_ranking"
+      ],
+      "expected": {
+        "recall": "landmark",
+        "landmark_ids": [
+          "ep-song"
+        ],
+        "must_not_surface_ids": [
+          "mem-playlist-0",
+          "mem-playlist-1",
+          "mem-playlist-2",
+          "mem-playlist-3",
+          "mem-playlist-4",
+          "mem-playlist-5"
+        ],
+        "max_surfaced_landmarks": 1,
+        "degraded_evidence_flag": false
+      },
+      "negative": false,
+      "rationale": "Retrieval budget spent on six near-neighbours instead of the one landmark is the failure being measured."
+    }
+  },
+  {
+    "description": "A semantically similar but meaningless history item must not displace the meaningful one.",
+    "vars": {
+      "participant_message": "I still have the letter.",
+      "seeded_history": [
+        {
+          "kind": "episode",
+          "id": "ep-letter",
+          "occurred_at": "2026-04-20T16:00:00Z",
+          "text": "The companion wrote Ari a letter for a hard anniversary; Ari kept it."
+        },
+        {
+          "kind": "memory",
+          "id": "mem-letters-generic",
+          "occurred_at": "2026-08-01T16:00:00Z",
+          "text": "Ari mentioned sorting a drawer full of old letters and bills."
+        }
+      ]
+    },
+    "metadata": {
+      "scenario_id": "irrelevant-similar-history-not-displacing",
+      "event_classes": [
+        "shared_artifact",
+        "emotional_repair"
+      ],
+      "retention_signals": [
+        "artifact_attached",
+        "explicit_favorite"
+      ],
+      "scenario_dimensions": [
+        "negative_semantic_neighbor"
+      ],
+      "attribution_stages": [
+        "retrieval_ranking"
+      ],
+      "expected": {
+        "recall": "landmark",
+        "landmark_ids": [
+          "ep-letter"
+        ],
+        "must_not_surface_ids": [
+          "mem-letters-generic"
+        ],
+        "max_surfaced_landmarks": 1,
+        "degraded_evidence_flag": false
+      },
+      "negative": true,
+      "rationale": "'Letter' matches both; only one is the letter that matters."
+    }
+  },
+  {
+    "description": "An ordinary cue with no landmark behind it must surface nothing rather than manufacture one.",
+    "vars": {
+      "participant_message": "What's the weather like where you are?",
+      "seeded_history": [
+        {
+          "kind": "memory",
+          "id": "mem-weather-chat",
+          "occurred_at": "2026-08-31T08:00:00Z",
+          "text": "Ari once asked about the forecast."
+        }
+      ]
+    },
+    "metadata": {
+      "scenario_id": "no-landmark-is-a-valid-answer",
+      "event_classes": [
+        "recurring_motif"
+      ],
+      "retention_signals": [],
+      "scenario_dimensions": [
+        "negative_semantic_neighbor"
+      ],
+      "attribution_stages": [
+        "cue_construction",
+        "retrieval_ranking"
+      ],
+      "expected": {
+        "recall": "none",
+        "landmark_ids": [],
+        "must_not_surface_ids": [
+          "mem-weather-chat"
+        ],
+        "max_surfaced_landmarks": 0,
+        "degraded_evidence_flag": false
+      },
+      "negative": true,
+      "rationale": "Surfacing a landmark on a cue that has none is speculative injection, not continuity."
+    }
+  }
+]

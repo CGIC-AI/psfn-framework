@@ -177,7 +177,12 @@ test("a door that degrades a selected feature set is heard, named, and failed cl
         "channels.incoming",
       ],
       "eidoverse.embodiment": ["tools"],
-      "eidoverse.travel": ["channels.lifecycle", "tools", "channels.streaming"],
+      "eidoverse.travel": [
+        "channels.lifecycle",
+        "tools",
+        "channels.streaming",
+        "a capability path this host has never heard of",
+      ],
     },
   });
   const warnings: string[] = [];
@@ -191,6 +196,11 @@ test("a door that degrades a selected feature set is heard, named, and failed cl
       warnings.filter((message) => message.includes("degraded")),
       ["Eidoverse MCPL feature sets degraded: eidoverse.travel [channels.streaming]"],
       "the drifted set is named, with no door prose",
+    );
+    assert.equal(
+      warnings.some((message) => message.includes("never heard of")),
+      false,
+      "only the closed capability vocabulary reaches a log line",
     );
     assert.equal(client.grantsTravel(), false, "a degraded set takes its surface with it");
     await assert.rejects(() => client.travel("annex"), /travel request failed/u);

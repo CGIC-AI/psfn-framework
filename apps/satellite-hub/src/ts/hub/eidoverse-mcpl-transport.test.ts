@@ -9,6 +9,7 @@ import { EidoverseEmbodiedSessionAdapter } from "./eidoverse-adapter.js";
 import { EidoverseMcplClient } from "./eidoverse-mcpl-client.js";
 import type { EidoverseMcplConfig } from "./eidoverse-mcpl-config.js";
 import { createEidoverseMcplWakeRuntime } from "./eidoverse-mcpl-runtime.js";
+import { parseEidoversePlaceMap } from "./eidoverse-place-map.js";
 import { effectiveCapabilitiesForFeatureSets } from "./eidoverse-mcpl-wire.js";
 import {
   EidoverseSnapshotSource,
@@ -240,6 +241,82 @@ test("a refused or unreadable policy receipt degrades every selected feature set
       await client.close();
       await door.close();
     }
+  }
+});
+
+test("a reconnect reseats the body and the Hub's world belief follows the door", async () => {
+  // The door mints an attachment from the join credential's own world claim,
+  // so a reconnect always lands back in the deployment's home world. If the
+  // Hub kept believing the world it travelled to, the next travel there would
+  // short-circuit and report a move that never happened.
+  const door = await EidoverseMcplDoor.start({
+    world: "commons",
+    tokens: [TOKEN],
+    travelWorlds: ["annex"],
+  });
+  const client = new EidoverseMcplClient(config(door), credential);
+  const agent = new VisionAgent();
+  const adapter = new EidoverseEmbodiedSessionAdapter({
+    worldName: "commons",
+    agentName: "companion",
+    satelliteClaim: normalizeSatelliteClaimConfig({
+      capabilityProfile: "world-avatar",
+      satelliteId: "eidoverse-world",
+      endpointId: "eidoverse-avatar",
+      displayName: "Eidoverse World Avatar",
+    }),
+    placeMap: parseEidoversePlaceMap({
+      schemaVersion: 1,
+      worlds: { commons: { placeId: "eidoverse:commons" }, annex: { placeId: "eidoverse:annex" } },
+    }),
+  }, {
+    embodiedSessions: new EmbodiedSessionRegistry("satellite.endpoint"),
+    sessions: new SessionStore(60),
+    agent,
+    look: client,
+    say: client,
+    travel: client,
+    logger: { warn: () => undefined },
+  });
+  client.setWorldHandler((world) => { adapter.resyncWorld(world); });
+  let probe = 0;
+  const placeIdOfNextTurn = async (): Promise<string | null | undefined> => {
+    probe += 1;
+    await adapter.handleAddressedUtterance({
+      utteranceId: `probe-${probe}`,
+      userText: "Quill: where are you?",
+    });
+    return agent.calls.at(-1)?.channel?.placeId;
+  };
+  try {
+    await client.start();
+    await door.waitForHandshake();
+    adapter.connect();
+    assert.deepEqual(await adapter.travelTo("annex"), {
+      accepted: true,
+      world: "annex",
+      placeId: "eidoverse:annex",
+    });
+    assert.equal(await placeIdOfNextTurn(), "eidoverse:annex");
+
+    door.dropConnection();
+    await waitFor(() => door.connections === 2 && door.connected, "the client to reconnect");
+    await waitFor(
+      async () => await placeIdOfNextTurn() === "eidoverse:commons",
+      "the world belief to follow the door back to the home world",
+    );
+
+    // And the belief is not merely relabelled: the next travel is really made.
+    assert.deepEqual(await adapter.travelTo("annex"), {
+      accepted: true,
+      world: "annex",
+      placeId: "eidoverse:annex",
+    });
+    assert.deepEqual(door.prepared, ["annex", "annex"]);
+  } finally {
+    adapter.disconnect();
+    await client.close();
+    await door.close();
   }
 });
 

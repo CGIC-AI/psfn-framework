@@ -261,6 +261,15 @@ export class RealtimeHubServer {
   }
 
   /**
+   * Adopt the world the door says the transport is attached to. Called once per
+   * (re)connection by the MCPL lifecycle, because a fresh connection reseats
+   * the body in the credential's home world rather than resuming where it was.
+   */
+  handleEidoverseWorldResync(world: string): void {
+    this.eidoverse?.resyncWorld(world);
+  }
+
+  /**
    * Execute one authorized world move. Authorization happened on the
    * connection; this is the Hub's own policy and wire call, so a Hub with no
    * Eidoverse emanation refuses rather than pretending.

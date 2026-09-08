@@ -33,6 +33,7 @@ import {
 import type { EidoverseMcplConfig } from "./eidoverse-mcpl-config.js";
 import { EidoverseMcplResponder } from "./eidoverse-mcpl-responder.js";
 import {
+  descriptorWorldName,
   disabledFeatureSetsForSelection,
   EIDOVERSE_TRAVEL_FEATURE_SET,
   extractSingleToolText,
@@ -43,6 +44,7 @@ import {
   parseFeatureSetsUpdateResult,
   parseJsonRpcFrame,
   type JsonRpcId,
+  type McplChannelDescriptor,
   type McplIncomingChannelMessage,
   type McplIncomingMessageResult,
 } from "./eidoverse-mcpl-wire.js";
@@ -64,6 +66,12 @@ export type EidoverseMcplSocketFactory = (url: string) => EidoverseMcplSocket;
 export type EidoverseMcplIncomingHandler = (
   messages: readonly McplIncomingChannelMessage[],
 ) => void;
+
+/**
+ * Called with the world the door says this connection is attached to, once per
+ * successful (re)connection.
+ */
+export type EidoverseMcplWorldHandler = (world: string) => void;
 
 export interface EidoverseMcplClientOptions {
   logger?: EidoverseMcpLogger;
@@ -107,6 +115,7 @@ export class EidoverseMcplClient {
   private readonly logger: EidoverseMcpLogger;
   private readonly connect: EidoverseMcplSocketFactory;
   private onIncoming: EidoverseMcplIncomingHandler | null = null;
+  private onWorld: EidoverseMcplWorldHandler | null = null;
 
   constructor(
     private readonly config: EidoverseMcplConfig,
@@ -125,6 +134,17 @@ export class EidoverseMcplClient {
    */
   setIncomingHandler(handler: EidoverseMcplIncomingHandler | null): void {
     this.onIncoming = handler;
+  }
+
+  /**
+   * Bind the world-resync path. A fresh connection is not "resume where you
+   * left off": the door builds the attachment from the join credential's own
+   * world claim, so every reconnect reseats the body in this deployment's home
+   * world whatever it had travelled to. Without this the Hub's belief and the
+   * door's actual world diverge permanently.
+   */
+  setWorldHandler(handler: EidoverseMcplWorldHandler | null): void {
+    this.onWorld = handler;
   }
 
   start(): Promise<void> {
@@ -233,9 +253,16 @@ export class EidoverseMcplClient {
     session.socket.onClose(() => this.handleDisconnect(session));
     session.socket.onError(() => session.socket.close());
 
+    let world: string;
     try {
       await this.awaitOpen(session);
       await this.handshake(session);
+      // The door's own answer for where this attachment is, asked on every
+      // connection. `channels/list` is not capability-gated and always
+      // describes the current world, so a connection that cannot answer it is
+      // one the Hub cannot situate — it is torn down for the bounded
+      // reconnect path rather than used with a guessed world.
+      world = await this.currentWorldFromDoor(session);
     } catch (error) {
       this.teardown(session, "Eidoverse MCPL connection failed");
       throw error instanceof EidoverseMcpUnavailableError
@@ -247,6 +274,30 @@ export class EidoverseMcplClient {
       throw new EidoverseMcpUnavailableError("Eidoverse MCPL connection stopped");
     }
     this.session = session;
+    try {
+      this.onWorld?.(world);
+    } catch {
+      this.logger.warn("Eidoverse MCPL world resync failed");
+    }
+  }
+
+  /** Read the world of the single channel the door lists for this connection. */
+  private async currentWorldFromDoor(session: McplSession): Promise<string> {
+    const result = await this.request(
+      session,
+      MCPL_METHOD.channelsList,
+      {},
+      this.config.handshakeTimeoutMs,
+    );
+    if (!isRecord(result) || !Array.isArray(result.channels)) {
+      throw new EidoverseMcpUnavailableError("Eidoverse MCPL door did not name its world");
+    }
+    for (const descriptor of result.channels) {
+      if (!isRecord(descriptor) || typeof descriptor.id !== "string") continue;
+      const world = descriptorWorldName(descriptor as unknown as McplChannelDescriptor);
+      if (world) return world;
+    }
+    throw new EidoverseMcpUnavailableError("Eidoverse MCPL door did not name its world");
   }
 
   private awaitOpen(session: McplSession): Promise<void> {

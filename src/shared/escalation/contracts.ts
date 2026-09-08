@@ -70,7 +70,7 @@ export const HUMAN_ESCALATION_KINDS = [
 
 export type HumanEscalationKind = typeof HUMAN_ESCALATION_KINDS[number];
 
-export function isHumanEscalationKind(value: unknown): value is HumanEscalationKind {
+function isHumanEscalationKind(value: unknown): value is HumanEscalationKind {
   return typeof value === 'string'
     && (HUMAN_ESCALATION_KINDS as readonly string[]).includes(value);
 }
@@ -165,7 +165,7 @@ export function isHumanEscalationResolutionReason(
  * carries actor identity under its own retention. Keeping the ledger to an
  * actor CLASS is what lets the whole table stay content-free.
  */
-export const HUMAN_ESCALATION_ACTORS = [
+const HUMAN_ESCALATION_ACTORS = [
   'operator',
   'fleet_principal',
   'system',
@@ -173,29 +173,25 @@ export const HUMAN_ESCALATION_ACTORS = [
 
 export type HumanEscalationActor = typeof HUMAN_ESCALATION_ACTORS[number];
 
-export function isHumanEscalationActor(value: unknown): value is HumanEscalationActor {
+function isHumanEscalationActor(value: unknown): value is HumanEscalationActor {
   return typeof value === 'string'
     && (HUMAN_ESCALATION_ACTORS as readonly string[]).includes(value);
 }
 
 /** What one delivery attempt did. */
-export const HUMAN_ESCALATION_DELIVERY_OUTCOMES = [
-  /** A sink accepted the notice. */
-  'delivered',
-  /** Routing said `garden_only`: the ledger row is the notice. */
-  'recorded',
-  /** The routed sink is not wired in this process yet. */
-  'no_sink',
-  /** The sink exists but has no configured destination. */
-  'unconfigured',
-  /** The sink was reached and refused or threw. */
-  'delivery_failed',
-  /** A cooldown for this condition suppressed the notice. */
-  'suppressed',
-] as const;
-
 export type HumanEscalationDeliveryOutcome =
-  typeof HUMAN_ESCALATION_DELIVERY_OUTCOMES[number];
+  /** A sink accepted the notice. */
+  | 'delivered'
+  /** Routing said `garden_only`: the ledger row is the notice. */
+  | 'recorded'
+  /** The routed sink is not wired in this process yet. */
+  | 'no_sink'
+  /** The sink exists but has no configured destination. */
+  | 'unconfigured'
+  /** The sink was reached and refused or threw. */
+  | 'delivery_failed'
+  /** A cooldown for this condition suppressed the notice. */
+  | 'suppressed';
 
 /**
  * Structural bounds on the identifiers and label tokens the plane accepts.

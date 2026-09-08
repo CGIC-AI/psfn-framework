@@ -15,6 +15,7 @@ import {
   POSTGRES_PARTNER_AFFECT_SHADOW_MIGRATIONS,
   POSTGRES_ANALYSIS_WORKBENCH_TRACE_MIGRATIONS,
   POSTGRES_HEALTH_EVENT_MIGRATIONS,
+  POSTGRES_HUMAN_ESCALATION_MIGRATIONS,
   POSTGRES_AUTOMATA_MIGRATIONS,
   POSTGRES_AUTOMATA_ROLLBACK_MIGRATIONS,
 } from './migrations.js';
@@ -701,6 +702,34 @@ describe('Partner affect shadow migrations (docs/partner-affect.md slice 1)', ()
     // Structural facts only: the table stores routing identity and reasons,
     // never a payload/value column that could retain rejected content.
     expect(sql).not.toContain('payload');
+  });
+
+  it('creates a content-free human escalation ledger keyed on condition and attempt', () => {
+    const sql = migrationSql(POSTGRES_HUMAN_ESCALATION_MIGRATIONS);
+
+    expect(sql).toContain('CREATE TABLE IF NOT EXISTS human_escalations');
+    expect(sql).toContain('CREATE TABLE IF NOT EXISTS human_escalation_attempts');
+    // The condition a human resolves is unique; the attempt that may not be
+    // dispatched twice is a primary key. Those two identities are the ledger.
+    expect(sql).toContain('ON human_escalations(kind, dedupe_key)');
+    expect(sql).toContain('idempotency_key TEXT PRIMARY KEY');
+    expect(sql).toContain('REFERENCES human_escalations(escalation_id) ON DELETE CASCADE');
+    // An escalation that left the queue always says why; an open one never
+    // claims a reason it was never given.
+    expect(sql).toContain("CHECK ((state = 'open') = (resolution_reason IS NULL))");
+    expect(sql).toContain("CHECK ((owner_kind = 'companion') = (owner_companion_id IS NOT NULL))");
+    expect(sql).toContain("CHECK (jsonb_typeof(labels_json) = 'array')");
+    expect(sql).toContain("CHECK (detail_path ~ '^/[a-z0-9/-]*$')");
+    expect(sql).toContain('ON human_escalations(state, last_raised_at_ms DESC, escalation_id DESC)');
+    // The closed vocabularies stay in the TypeScript contract, for the same
+    // reason the health stream's do: CREATE TABLE IF NOT EXISTS never updates
+    // an existing constraint, so a DDL-pinned vocabulary silently drifts.
+    expect(sql).not.toContain("CHECK (kind IN");
+    expect(sql).not.toContain("CHECK (state IN");
+    // Content-free: no column can hold narrative text.
+    expect(sql).not.toContain('message');
+    expect(sql).not.toContain('resolution_note');
+    expect(sql).not.toContain('error');
   });
 
   it('creates a bounded runtime health-event stream with structural checks only', () => {

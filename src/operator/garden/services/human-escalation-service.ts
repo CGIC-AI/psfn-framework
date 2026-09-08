@@ -43,7 +43,7 @@ import type {
 } from '../../../system/config/scheduler-config/human-escalation.js';
 
 /** Which ledger this snapshot was read from, and under whose tenancy. */
-export interface HumanEscalationScope {
+interface HumanEscalationScope {
   /** The tenancy whose escalations this surface may show, beside system-owned ones. */
   owner: HealthEventOwner;
   /** The process whose durable ledger was read. */

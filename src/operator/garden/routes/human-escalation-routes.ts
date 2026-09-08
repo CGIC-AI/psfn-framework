@@ -49,7 +49,7 @@ import type { AdminApiRoute, AdminAuditTimelineAppender, AdminBodyReader } from 
 
 const log = createComponentLogger('AdminHumanEscalationRoutes');
 
-export const ADMIN_ESCALATIONS_API_PATH = '/api/admin/escalations';
+const ADMIN_ESCALATIONS_API_PATH = '/api/admin/escalations';
 const ADMIN_ESCALATION_ITEM_PREFIX = `${ADMIN_ESCALATIONS_API_PATH}/`;
 
 interface ParsedResolveBody {

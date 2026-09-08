@@ -34,13 +34,13 @@ import {
   createRuntimeVoiceSttConnector,
   createRuntimeVoiceTtsConnector,
   hydrateCanonicalStartupConfig,
-  hydrateSecretBearingConfig,
   installPromotedToolsPersistenceHook,
   resolveRuntimeVoiceProviderGate,
   resolveRuntimeVoiceSttProvider,
   resolveRuntimeVoiceTtsProviderOrder,
   resolveRuntimeVoiceTtsProvider,
 } from './bootstrap-helpers.js';
+import { hydrateSecretBearingConfig } from './secret-hydration.js';
 import { registerStreamingSttProvider } from '../../../primitives/voice/connectors/stt/index.js';
 import { registerStreamingTtsProvider } from '../../../primitives/voice/connectors/tts/index.js';
 import { createCompanionId } from '../../../shared/routing/companion-id.js';
@@ -64,6 +64,10 @@ function makeStartupHydrationConfig(
   companionDataDir: string,
 ): SubstrateConfig {
   return {
+    // Gateway-authority hydration requires a vault already installed by
+    // hydrateSecretBearingConfig (psfn-framework-f77ca); tests that exercise
+    // the agent path delete it explicitly.
+    credentialVault: createEnvCredentialVault(process.env),
     primaryModel: 'openrouter/deepseek/deepseek-v3.2',
     primaryProvider: 'openrouter',
     extractionModel: 'openrouter/deepseek/deepseek-v3.2',
@@ -1176,6 +1180,9 @@ describe('hydrateCanonicalStartupConfig', () => {
 
     const config = makeStartupHydrationConfig(systemDataDir, companionDataDir);
     config.voiceEnabled = true;
+    // This test owns the vault construction it is asserting on: drop the
+    // factory's env-backed placeholder so hydration reaches OpenBao.
+    delete config.credentialVault;
 
     await hydrateSecretBearingConfig(config, {
       env: {

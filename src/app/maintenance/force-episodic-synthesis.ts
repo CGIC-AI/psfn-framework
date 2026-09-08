@@ -10,7 +10,7 @@ import {
 } from '../../faculties/memory/episodic/index.js';
 import { createPostgresPool, queryOne } from '../../persistence/postgres.js';
 import { loadConfig } from '../../system/config/load-config.js';
-import { hydrateSecretBearingConfig } from '../startup/support/bootstrap-helpers.js';
+import { hydrateSecretBearingConfig } from '../startup/support/secret-hydration.js';
 import { applyGatewayTlsConfig } from '../../boundary/gateway/tls.js';
 
 export interface ForcedEpisodicSynthesisInput extends EpisodicSynthesisOptions {

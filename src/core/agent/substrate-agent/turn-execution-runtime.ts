@@ -96,7 +96,7 @@ import {
   type AgentInvocationMutableState,
   type AgentInvocationResult,
 } from './turn-execution/agent-invocation.js';
-import type { TurnToolResultCustodyRecord } from './turn-records.js';
+import type { TurnToolResultCustodyRecord } from './turn-tool-result-custody.js';
 import { createTurnExecutionObservability } from './turn-execution/observability.js';
 import {
   countToolCallOutcomes,

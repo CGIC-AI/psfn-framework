@@ -317,6 +317,8 @@ const SETTINGS_INTEGER_FIELDS = new Set<string>([
   'postgresStoreReadinessRetryAttempts',
   'postgresStoreReadinessRetryBackoffMs',
   'custodySnapshotRetentionDays',
+  'sharedWorkspaceListPageSize',
+  'sharedWorkspaceListPageBytes',
   'memoryExtractionMaxWrites',
   'memoryRefreshFailureAlertThreshold',
   'intakeScreeningFailureAlertThreshold',

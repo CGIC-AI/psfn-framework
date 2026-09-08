@@ -128,6 +128,7 @@ import {
   type OptionalCompanionRoutingBinding,
 } from '../../shared/routing/companion-id.js';
 import { SharedCompanionWorkspaceReader } from '../../persistence/workspaces/shared-workspace-reader.js';
+import type { SharedWorkspaceListBounds } from '../../persistence/workspaces/shared-workspace-bounds.js';
 import { materializeGatewayAttachments } from './attachment-materialization.js';
 import type { TurnPerformanceEvent } from '../../shared/telemetry/turn-performance.js';
 import type { KubeSelfManagementController } from '../../system/lifecycle/kube-self-management.js';
@@ -384,6 +385,13 @@ export interface GatewayServerOptions extends OptionalCompanionRoutingBinding {
    */
   multiCompanion?: GatewayMultiCompanionConfig;
   /**
+   * settings.json-owned bounds on a governed shared-workspace listing. Required
+   * whenever `multiCompanion.sharedWorkspacePath` is configured: the reviewed
+   * corpus is re-read and re-hashed on every list, so it may only be exposed
+   * with an operator-declared page bound (psfn-framework-9jld5).
+   */
+  sharedWorkspaceListBounds?: SharedWorkspaceListBounds;
+  /**
    * Inter-companion channel lane: resolves companion-room /
    * companion-dm addressing for `companion.message.send`. Requires the
    * multi-companion flag; providing it flag-off is a configuration error
@@ -528,6 +536,16 @@ export class GatewayServer {
     this.sharedWorkspaceReader = this.multiCompanion.enabled && this.multiCompanion.sharedWorkspacePath
       ? new SharedCompanionWorkspaceReader(this.multiCompanion.sharedWorkspacePath)
       : null;
+    // Fail at boot rather than on the first operator request: a gateway that
+    // starts and then cannot list the shared workspace hides the missing
+    // setting behind an RPC error nobody is watching.
+    if (this.sharedWorkspaceReader && !options.sharedWorkspaceListBounds) {
+      throw new Error(
+        'GatewayServer exposes a governed shared workspace without listing bounds; '
+        + 'settings.json must declare sharedWorkspaceListPageSize and '
+        + 'sharedWorkspaceListPageBytes',
+      );
+    }
     if (options.companionChannels && !this.multiCompanion.enabled) {
       throw new Error(
         'GatewayServer received a companionChannels lane while multi-companion is disabled; '
@@ -1080,6 +1098,11 @@ export class GatewayServer {
     target.addMethod('shared.workspace.list', this.audited(
       'shared.workspace.list',
       (params: unknown) => this.listSharedWorkspaceArtifacts(conn, params),
+      (params: unknown) => ({
+        ...(isRecord(params) && typeof params.cursor === 'string'
+          ? { cursor: params.cursor }
+          : {}),
+      }),
     ));
     target.addMethod('shared.workspace.read', this.audited(
       'shared.workspace.read',
@@ -1104,10 +1127,27 @@ export class GatewayServer {
   }
 
   private async listSharedWorkspaceArtifacts(conn: GatewayRpcConnection, params: unknown) {
-    if (params !== undefined && (!isRecord(params) || Object.keys(params).length > 0)) {
+    // A continuation cursor is the only accepted parameter. Page size stays
+    // operator policy, so a caller can neither raise nor lower it, and any
+    // other key is still an identity assertion attempt.
+    const keys = isRecord(params) ? Object.keys(params) : [];
+    const cursor = isRecord(params) ? params.cursor : undefined;
+    if (params !== undefined
+      && (!isRecord(params)
+        || keys.some(key => key !== 'cursor')
+        || (cursor !== undefined && typeof cursor !== 'string'))) {
       throw new Error('shared.workspace.list accepts no parameters or identity assertions');
     }
-    return { artifacts: this.requireSharedWorkspaceReader(conn).listArtifacts() };
+    const bounds = this.options.sharedWorkspaceListBounds;
+    if (!bounds) {
+      throw new Error('Shared workspace listing has no operator-declared bounds');
+    }
+    const reader = this.requireSharedWorkspaceReader(conn);
+    const page = reader.listArtifacts({
+      bounds,
+      ...(typeof cursor === 'string' ? { cursor } : {}),
+    });
+    return { artifacts: page.artifacts, nextCursor: page.nextCursor };
   }
 
   private async readSharedWorkspaceArtifact(conn: GatewayRpcConnection, params: unknown) {

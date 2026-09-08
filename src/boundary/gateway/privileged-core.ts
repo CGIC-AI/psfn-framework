@@ -22,6 +22,7 @@ import {
   composeGatewayIntakeScreeningRuntime,
   type GatewayIntakeScreeningRuntime,
 } from './intake/fleet-screening.js';
+import { requireSharedWorkspaceListBounds } from '../../persistence/workspaces/shared-workspace-bounds.js';
 import { GatewayServer } from './server.js';
 import type { WelfareGrantVerifier } from './welfare-grant-verifier.js';
 import type { IntakeQuarantineEntry } from '../../core/cogsec/intake/quarantine-store.js';
@@ -574,6 +575,11 @@ export async function buildGatewayPrivilegedCore(
       sessionHmacKeyring: input.bootstrap.server.sessionHmacKeyring,
       wyomingShardRouting: input.bootstrap.server.wyomingShardRouting,
       multiCompanion: input.bootstrap.server.multiCompanion,
+      ...(input.bootstrap.server.multiCompanion.sharedWorkspacePath
+        ? {
+            sharedWorkspaceListBounds: requireSharedWorkspaceListBounds(input.config),
+          }
+        : {}),
       credentialPresence: input.bootstrap.server.credentialPresence,
       eventBus,
     }),

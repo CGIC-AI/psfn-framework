@@ -969,7 +969,7 @@ describe('AdminServer JSON API routes', () => {
       priority: 'high',
       expiresAt: '2026-06-29T18:00:00.000Z',
     });
-    new ReflectionJournalStore(resolveConcernResolutionArcJournalPath(tempDir)).appendOnce(
+    await new ReflectionJournalStore(resolveConcernResolutionArcJournalPath(tempDir)).appendOnce(
       'concern-arc-generation-garden-1',
       {
         templateId: 'concern_arc',

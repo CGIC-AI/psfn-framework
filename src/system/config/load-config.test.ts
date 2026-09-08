@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative, resolve } from 'node:path';
-import { loadAgentConfig, loadConfig, loadOperatorConfig } from './load-config.js';
+import { loadAgentConfig, loadOperatorConfig } from './load-config.js';
+import { loadConfig } from './load-gateway-config.js';
 import {
   createDefaultObserverEvalSidecarSettings,
   createDefaultSessionTailCacheSettings,

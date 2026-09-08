@@ -36,22 +36,17 @@ const FORBIDDEN_MODULES = new Set([
  * Existing violations under active burn-down. Each entry names the tracking
  * bead; the fix removes the entry, and a stale entry (violation gone, entry
  * kept) fails the test so the baseline can only shrink.
+ *
+ * Empty since psfn-framework-f77ca closed the last credential-vault chain. The
+ * agent closure now reaches neither forbidden module, so both are enforced
+ * outright: the vault's secret-free half (credential references, the
+ * `CredentialVaultPort` contract, and the resolvers that read through an
+ * injected port) lives in shared/contracts/credential-contracts, while vault
+ * *construction* — the env/static factories, the backend selector, the OpenBao
+ * client, and the provider API-key tables — stays gateway-only behind
+ * app/startup/support/secret-hydration and system/config/load-gateway-config.
  */
-const KNOWN_VIOLATIONS = new Map<string, string>([
-  // The voice-connector chain named by psfn-framework-mp1pf is fixed (see the
-  // per-seam assertion below), but the vault is still reachable by value from
-  // the agent closure through the gateway bootstrap surface, e.g.
-  //   app/agent/startup-context -> app/startup/support/startup-preflight
-  //   -> app/startup/support/bootstrap-helpers -> persistence/cutover
-  //   -> system/config/settings-contract -> system/config/skills-config
-  //   -> system/config/owner-file-modes -> system/config/fleet-auth-config
-  //   -> boundary/custody/credential-vault
-  // and a dozen further owner-file/channel-config modules that value-import
-  // `envCredential`. Removing this entry needs the agent entrypoint to stop
-  // pulling gateway bootstrap and owner-file loading in by value, which is a
-  // separate, larger seam than mp1pf, tracked as psfn-framework-f77ca.
-  ['src/boundary/custody/credential-vault.ts', 'psfn-framework-f77ca'],
-]);
+const KNOWN_VIOLATIONS = new Map<string, string>();
 
 /**
  * Subtrees that must never *directly* value-import a forbidden module

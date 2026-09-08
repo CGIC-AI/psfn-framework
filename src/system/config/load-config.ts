@@ -3,10 +3,9 @@ import {
   SESSION_HISTORY_BUDGET_PCT_DEFAULT,
 } from '../../shared/context-budget.js';
 import {
-  createEnvCredentialVault,
-  resolveCredentialVaultBackend,
   resolveOptionalEnvCredential,
-} from '../../boundary/custody/credential-vault.js';
+  type CredentialVaultPort,
+} from '../../shared/contracts/credential-contracts.js';
 import { RUNTIME_LAYOUT_MODE, resolveCompanionStateDir, resolveRuntimePathLayout } from '../../persistence/layout.js';
 import { assertValidPostgresSchemaName } from '../../persistence/postgres.js';
 import { parseOptionalStringEnv } from '../../shared/utils/env.js';
@@ -185,15 +184,35 @@ function parsePersistenceBackendEnv(value: string | undefined): PersistenceBacke
   );
 }
 
-function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = process.env): SubstrateConfig {
+/**
+ * Credential materialization the *gateway* supplies to config loading
+ * (psfn-framework-f77ca).
+ *
+ * Only the gateway may construct a credential vault, so this loader never
+ * builds one: `load-gateway-config.ts` resolves the configured backend, builds
+ * the vault, and hands both in. The agent and operator loaders pass nothing, so
+ * a vault-backed credential reads as not configured for them — fail closed.
+ */
+export interface GatewayCredentialMaterialization {
+  /** The gateway's vault, when the configured backend materializes env secrets. */
+  credentialVault?: CredentialVaultPort;
+  /** True when the configured backend is `env` and secrets load eagerly here. */
+  materializeEnvBackedSecrets: boolean;
+}
+
+const NO_GATEWAY_CREDENTIALS: GatewayCredentialMaterialization = {
+  materializeEnvBackedSecrets: false,
+};
+
+function loadConfigForMode(
+  mode: LoadConfigMode,
+  env: NodeJS.ProcessEnv = process.env,
+  gatewayCredentials: GatewayCredentialMaterialization = NO_GATEWAY_CREDENTIALS,
+): SubstrateConfig {
   const includeSecretBearingConfig = mode === 'gateway';
-  const credentialVaultBackend = includeSecretBearingConfig
-    ? resolveCredentialVaultBackend(env)
-    : 'env';
-  const materializeEnvBackedSecrets = includeSecretBearingConfig && credentialVaultBackend === 'env';
-  const credentialVault = materializeEnvBackedSecrets
-    ? createEnvCredentialVault(env)
-    : undefined;
+  const { credentialVault } = gatewayCredentials;
+  const materializeEnvBackedSecrets = includeSecretBearingConfig
+    && gatewayCredentials.materializeEnvBackedSecrets;
   const primaryModel = OWNER_FILE_REQUIRED_SENTINEL;
   const primaryProvider = OWNER_FILE_REQUIRED_SENTINEL;
   const primaryMaxTokens = BOOTSTRAP_MAX_OUTPUT_TOKENS;
@@ -616,8 +635,15 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
   };
 }
 
-export function loadConfig(env: NodeJS.ProcessEnv = process.env): SubstrateConfig {
-  return loadConfigForMode('gateway', env);
+/**
+ * Gateway config loading. Not the entrypoint: `load-gateway-config.ts` owns the
+ * vault construction this needs and exports the `loadConfig` callers use.
+ */
+export function loadGatewayConfig(
+  env: NodeJS.ProcessEnv,
+  gatewayCredentials: GatewayCredentialMaterialization,
+): SubstrateConfig {
+  return loadConfigForMode('gateway', env, gatewayCredentials);
 }
 
 export function loadAgentConfig(env: NodeJS.ProcessEnv = process.env): SubstrateConfig {

@@ -209,6 +209,23 @@ describe('buildWikiContextBlock (own bounded budget)', () => {
     ]);
   });
 
+  it('carries the admitted content hash onto the rendered document\'s disclosure source (ccgdz.4)', () => {
+    const admittedSha = 'e'.repeat(64);
+    const result = buildWikiContextBlock(
+      [
+        { ...makeMatch({ documentId: 'doc-personal' }), admittedContentSha256: admittedSha },
+        // A shared-world match: not covered by the personal admission check, so
+        // it honestly carries no hash rather than borrowing one.
+        makeMatch({ documentId: 'doc-shared' }),
+      ],
+      1000,
+    );
+    expect(result.disclosureWikiSources).toEqual([
+      expect.objectContaining({ ref: 'wiki:doc-personal', contentSha256: admittedSha }),
+      expect.not.objectContaining({ contentSha256: expect.anything() }),
+    ]);
+  });
+
   it('omits disclosure sources for documents dropped by the budget', () => {
     const matches = Array.from({ length: 20 }, (_unused, index) => makeMatch({
       documentId: `doc-${index}`,
@@ -308,7 +325,9 @@ describe('WikiRetrievalService', () => {
       eventBus: fromAny(bus),
       getSettings: () => makeSettings(),
       // psfn-framework-1fjvm.2: the last seam before wiki text enters a prompt.
-      isPersonalDocumentAdmitted: documentId => documentId !== 'poisoned',
+      resolvePersonalDocumentAdmission: documentId => (documentId === 'poisoned'
+        ? null
+        : { contentSha256: 'a'.repeat(64) }),
     });
     const block = await readWikiBlock(service, {
       channelId: 'c1',
@@ -330,7 +349,7 @@ describe('WikiRetrievalService', () => {
       embedding: fakeEmbedding,
       eventBus: fromAny(bus),
       getSettings: () => makeSettings(),
-      isPersonalDocumentAdmitted: () => false,
+      resolvePersonalDocumentAdmission: () => null,
     });
     const block = await readWikiBlock(service, {
       channelId: 'c1',

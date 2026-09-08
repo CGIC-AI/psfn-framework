@@ -40,6 +40,7 @@
 //     the memory record), never recomputed here (bible §9.0).
 
 import type { ConversationScope } from '../../session/conversation-scope.js';
+import type { CogSecStructuredProvenanceRef } from '../../../shared/contracts/provenance-ref.js';
 import {
   isIntakeSinkConsumableState,
   type IntakeEnvelopeState,
@@ -90,6 +91,14 @@ export interface DisclosureMemorySource {
    */
   readonly sourceChannelEpoch?: number;
   readonly provenanceRefs?: readonly string[];
+  /**
+   * Admission identity of the source bytes the memory was derived from
+   * (psfn-framework-ccgdz.3), carried forward so a prompt block that renders
+   * this memory can name the ingress proof of its ultimate source. Read only by
+   * the context source manifest; `buildCustodySnapshot` never touches it, so
+   * the custody snapshot's content digest is unaffected.
+   */
+  readonly sourceAdmissions?: readonly CogSecStructuredProvenanceRef[];
 }
 
 /**
@@ -126,6 +135,14 @@ export interface DisclosureWikiSource {
   /** Required to scope a `primary_contact` audience to a DM; absent forces companion-self collapse. */
   readonly primaryContactId?: string;
   readonly provenanceRefs?: readonly string[];
+  /**
+   * sha256 of the EXACT canonical bytes CogSec admission cleared for this
+   * document (psfn-framework-ccgdz.4). Absent for shared-world documents, which
+   * the personal admission check does not cover, and whenever no admission gate
+   * is wired. Never derived from the rendered chunk: a chunk is a slice of the
+   * admitted document, not the admitted bytes.
+   */
+  readonly contentSha256?: string;
   /** False when the read carried no usable disclosure lineage — taints the context unclassified (§9.5). */
   readonly classified: boolean;
 }

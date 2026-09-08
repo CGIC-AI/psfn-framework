@@ -19,6 +19,7 @@ import type {
   ToolSchema,
 } from '../../../../shared/contracts/runtime-base.js';
 import type { ConversationScope } from '../../../session/conversation-scope.js';
+import type { CogSecStructuredProvenanceRef } from '../../../../shared/contracts/provenance-ref.js';
 import { countTokens } from '../../../../primitives/llm/tokens.js';
 import {
   contextMessagesToPiMessages,
@@ -66,6 +67,19 @@ export interface PromptPlanBlock {
   scopeKey?: string;
   renderedText: string;
   tokensEst: number;
+  /**
+   * Content-free identity of the sources whose text this block renders
+   * (psfn-framework-ccgdz.4): retrieved memory ids, admitted wiki documents and
+   * their admission hashes, biographical claim ids — each optionally carrying
+   * the admission evidence from ccgdz.3.
+   *
+   * Provider-inert by construction: serialization reads `renderedText` only and
+   * the cache plan reads `volatility` only, so adding sources cannot move a
+   * prompt byte or a cache breakpoint. This is the field that turns "the prompt
+   * was assembled from identified sources" into something the durable record
+   * can still say after the turn.
+   */
+  sources?: CogSecStructuredProvenanceRef[];
 }
 
 export interface PromptPlanCachePlan {
@@ -151,6 +165,7 @@ export function createPromptPlanBlock(input: {
   producer: string;
   scopeKey?: string;
   renderedText: string;
+  sources?: readonly CogSecStructuredProvenanceRef[];
 }): PromptPlanBlock {
   return {
     id: input.id,
@@ -160,6 +175,9 @@ export function createPromptPlanBlock(input: {
     ...(input.scopeKey ? { scopeKey: input.scopeKey } : {}),
     renderedText: input.renderedText,
     tokensEst: countTokens(input.renderedText),
+    ...(input.sources && input.sources.length > 0
+      ? { sources: input.sources.map(source => ({ ...source })) }
+      : {}),
   };
 }
 
@@ -303,7 +321,13 @@ export function serializePromptPlanForProvider(
 }
 
 export function clonePromptPlanBlock(block: PromptPlanBlock): PromptPlanBlock {
-  return { ...block };
+  return {
+    ...block,
+    // The shallow spread would share the sources array with the original, so a
+    // clone taken for the persisted snapshot could be mutated through the live
+    // plan. Custody evidence must not alias.
+    ...(block.sources ? { sources: block.sources.map(source => ({ ...source })) } : {}),
+  };
 }
 
 export function clonePromptPlan(

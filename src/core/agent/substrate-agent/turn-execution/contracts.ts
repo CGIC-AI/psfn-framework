@@ -14,6 +14,7 @@ import type { CapturedSessionReads } from '../../../session/manager/captured-ses
 import type { TurnToolResultCustodyRecord } from '../turn-tool-result-custody.js';
 import type { DisclosureLineage } from '../../../cogsec/disclosure/contracts.js';
 import type { ToolResultCustodyEdge } from '../../../../shared/contracts/tool-result-custody.js';
+import type { ContextSourceManifestBlockInput } from '../../../cogsec/disclosure/context-source-manifest.js';
 import type { MetacognitiveFlag } from '../../../self-model/metacognition.js';
 import type { InternalState } from '../../../self-model/state.js';
 import type { SkillsRuntime } from '../../../../faculties/skills/runtime.js';
@@ -314,6 +315,17 @@ export interface TurnExecutionRuntime {
     requestId: string;
     toolResultEdges?: ReadonlyMap<string, ToolResultCustodyEdge>;
   }) => Promise<TurnCustodySnapshotOutcome>;
+  /**
+   * Persist the assembled prompt plan's per-block source manifest
+   * (psfn-framework-ccgdz.4) and return its resolvable ref (`turn:<turnId>`),
+   * or undefined when no store is wired or the write failed visibly. Never
+   * throws, for the same reason the snapshot write does not.
+   */
+  recordTurnContextManifest: (input: {
+    turnId: TurnID;
+    requestId: string;
+    blocks: readonly ContextSourceManifestBlockInput[];
+  }) => Promise<string | undefined>;
   buildRuntimeContext: (
     message: SubstrateMessage,
     resolvedUserName: string,
@@ -429,8 +441,6 @@ export interface TurnExecutionRuntime {
     continuationStop?: ParentTurnContinuationStop;
     promptMode: MessagePromptOverrideMode;
     promptText: string;
-    contextMessageCount: number;
-    memoryContextChars: number;
     trustLevel: TrustLevel;
     speakerRole: 'user' | 'system';
     canonicalContactKey?: string;

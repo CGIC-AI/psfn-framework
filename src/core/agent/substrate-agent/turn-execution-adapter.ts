@@ -403,6 +403,8 @@ export function createTurnExecutionRuntimeAdapter(
       options.callbacks.getCurrentTurnDisclosureLineage(),
     recordTurnCustodySnapshot: (input) =>
       options.turnSupportRuntime.recordTurnCustodySnapshot(input),
+    recordTurnContextManifest: (input) =>
+      options.turnSupportRuntime.recordTurnContextManifest(input),
     buildRuntimeContext: (
       message,
       resolvedUserName,

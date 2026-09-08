@@ -16,8 +16,13 @@ import {
   startPostgresTestHarness,
   type PostgresTestHarness,
 } from '../../../test-support/postgres-test-harness.js';
+import type { GardenRequestContext } from '../garden-request-context.js';
 import { buildAdminIcpAutonomyRoutes } from '../routes/icp-autonomy-routes.js';
-import type { AdminApiRoute, AdminBodyReader } from '../routes/types.js';
+import type {
+  AdminApiRoute,
+  AdminAuditTimelineAppender,
+  AdminBodyReader,
+} from '../routes/types.js';
 import { AdminIcpAutonomyDataService } from './icp-autonomy-service.js';
 import type { AdminSettingsService } from './types/settings.js';
 
@@ -36,6 +41,32 @@ const PERMIT_ID = '44444444-4444-4444-8444-444444444444';
 const SECOND_CONVERSATION_ID = '55555555-5555-4555-8555-555555555555';
 const SECOND_CANDIDATE_ID = '77777777-7777-4777-8777-777777777777';
 const SECOND_PERMIT_ID = '66666666-6666-4666-8666-666666666666';
+
+/**
+ * The authenticated caller the Garden dispatcher hands the route. Readmission
+ * is a fence-clearing act, so its durable audit row has to name this principal
+ * rather than the generic 'operator' actor class.
+ */
+const OPERATOR_CONTEXT = {
+  kind: 'fleet_principal',
+  actor: {
+    kind: 'fleet_principal',
+    principalId: 'operator-mira',
+    role: 'admin',
+    sessionRecordId: 'session-readmit-1',
+  },
+  action: 'autonomy.manage',
+  requestId: 'request-readmit-1',
+  decisionId: 'decision-readmit-1',
+  resource: {
+    routeId: `POST ${READMIT_PATH}`,
+    scope: 'system',
+    area: 'autonomy',
+    companionId: null,
+    pathParams: {},
+    query: {},
+  },
+} as unknown as GardenRequestContext;
 
 let harness: PostgresTestHarness | null = null;
 /** Request body the shared `withBody` reader replays into the route handler. */
@@ -177,6 +208,7 @@ function operatorGarden(
 ): {
   routes: AdminApiRoute[];
   service: AdminIcpAutonomyDataService;
+  auditCalls: Parameters<AdminAuditTimelineAppender>[];
 } {
   const service = new AdminIcpAutonomyDataService({
     localCompanionId: A,
@@ -190,15 +222,21 @@ function operatorGarden(
   const withBody: AdminBodyReader = (_req, _res, callback) => {
     callback(pendingBody);
   };
+  const auditCalls: Parameters<AdminAuditTimelineAppender>[] = [];
+  const appendAuditTimelineEntry: AdminAuditTimelineAppender = (...call) => {
+    auditCalls.push(call);
+  };
   return {
     service,
-    routes: buildAdminIcpAutonomyRoutes({ service, withBody }),
+    auditCalls,
+    routes: buildAdminIcpAutonomyRoutes({ service, withBody, appendAuditTimelineEntry }),
   };
 }
 
 async function postReadmit(
   routes: readonly AdminApiRoute[],
   body: unknown,
+  context: GardenRequestContext | null = OPERATOR_CONTEXT,
 ): Promise<{ status: number; payload: Record<string, unknown> }> {
   pendingBody = JSON.stringify(body);
   const route = routes.find(candidate => candidate.method === 'POST'
@@ -209,6 +247,7 @@ async function postReadmit(
     { headers: {} } as IncomingMessage,
     res as unknown as ServerResponse,
     route.match(READMIT_PATH) ?? {},
+    context ?? undefined,
   );
   await res.done;
   return {
@@ -335,6 +374,29 @@ describe('explicit operator readmission of a lifecycle-fenced companion (psfn-fr
       });
       expect(repeated.status).toBe(200);
       expect(repeated.payload).toMatchObject({ transitioned: false });
+
+      // The durable audit names the principal and session that cleared the
+      // fence, not just that "an operator" did.
+      const readmitAudit = garden.auditCalls.find(([actionType, decision, narrative]) => (
+        actionType === 'autonomy_control'
+        && decision === 'allowed'
+        && narrative.includes('readmitted a lifecycle-fenced companion')
+      ));
+      expect(readmitAudit?.[4]).toBe('operator');
+      expect(readmitAudit?.[5]).toMatchObject({
+        kind: 'fleet_principal',
+        actor: { principalId: 'operator-mira', sessionRecordId: 'session-readmit-1' },
+      });
+
+      // An unattributable call is refused before it can touch the fence, and
+      // never lands in the timeline as a generic operator act.
+      const auditsBefore = garden.auditCalls.length;
+      const unattributed = await postReadmit(garden.routes, {
+        companionId: B,
+        confirmCompanionId: B,
+      }, null);
+      expect(unattributed.status).toBe(403);
+      expect(garden.auditCalls.length).toBe(auditsBefore);
 
       // 7. Permits issue again for the readmitted companion.
       await expect(readded.createEpisodeAndIssuePermit({

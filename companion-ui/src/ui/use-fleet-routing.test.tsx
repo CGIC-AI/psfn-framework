@@ -36,11 +36,11 @@ describe('fleet routing renewal recovery', () => {
     let finish!: (value: unknown) => void;
     mocks.readRoutingSnapshot.mockReturnValue(new Promise(resolve => { finish = resolve; }));
     const connect = vi.fn(async () => true);
-    const { result } = renderHook(() => useFleetRouting({ accessState: 'signed_in', connect, reportError: vi.fn() }));
+    const { result } = renderHook(() => useFleetRouting({ accessState: 'signed_in', connect, reportError: vi.fn(), verifyAccount: async () => true }));
     let loading!: Promise<void>;
     await act(async () => {
       loading = result.current.load({
-        schemaVersion: 1, state: 'signed_in', guestMode: 'disabled', websocketPath: WEBSOCKET_PATH,
+        schemaVersion: 1, state: 'signed_in', displayStateBinding: 'a'.repeat(64), guestMode: 'disabled', websocketPath: WEBSOCKET_PATH,
         human: { provider: 'discord', label: 'Partner', role: 'owner' },
       }, 1, () => true, true);
       await Promise.resolve();
@@ -65,7 +65,7 @@ describe('fleet routing renewal recovery', () => {
     mocks.readApprovals.mockReturnValue(new Promise((_, reject) => { fail = reject; }));
     const reportError = vi.fn();
     const { result, rerender } = renderHook(({ accessState }) => useFleetRouting({
-      accessState, connect: async () => true, reportError,
+      accessState, connect: async () => true, reportError, verifyAccount: async () => true,
     }), { initialProps: { accessState: 'signed_in' } });
     await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
     expect(mocks.readApprovals).toHaveBeenCalledOnce();
@@ -98,12 +98,14 @@ describe('fleet routing renewal recovery', () => {
       accessState: 'signed_in',
       connect,
       reportError,
+      verifyAccount: async () => true,
     }));
 
     await act(async () => {
       await result.current.load({
         schemaVersion: 1,
         state: 'signed_in',
+        displayStateBinding: 'a'.repeat(64),
         guestMode: 'disabled',
         websocketPath: WEBSOCKET_PATH,
         human: { provider: 'discord', label: 'Partner', role: 'owner' },

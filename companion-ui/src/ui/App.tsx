@@ -104,6 +104,7 @@ export function App() {
   const reconnectTimerRef = useRef<number | null>(null);
   const reconnectAttemptRef = useRef(0);
   const authorityEpochRef = useRef(0);
+  const displayStateBindingRef = useRef<string | null>(null);
   const manualDisconnectRef = useRef(false);
   const interruptedLiveUserRef = useRef<string | null>(null);
   const browserAudioRelay = useMemo(() => ({
@@ -134,6 +135,7 @@ export function App() {
     accessState: access.state,
     connect,
     reportError: setConfigError,
+    verifyAccount,
   });
   const composer = useComposerController({
     captureReady: captureAuthorized,
@@ -318,7 +320,7 @@ export function App() {
   }, [browserMic.state.phase, companionTalking, streamState.liveUser]);
 
   async function refreshAuthority(connectWhenAllowed: boolean) {
-    const authorityEpoch = authorityEpochRef.current + 1;
+    let authorityEpoch = authorityEpochRef.current + 1;
     authorityEpochRef.current = authorityEpoch;
     const fleetSession = fleetSessionRef.current;
     if (!fleetSession || !navigator.onLine) {
@@ -329,6 +331,14 @@ export function App() {
     try {
       const status = await fleetSession.readStatus();
       if (authorityEpoch !== authorityEpochRef.current) return;
+      if (status.state === 'signed_in') {
+        if (displayStateBindingRef.current !== null
+          && displayStateBindingRef.current !== status.displayStateBinding) {
+          clearHumanScopedState();
+          authorityEpoch = authorityEpochRef.current;
+        }
+        displayStateBindingRef.current = status.displayStateBinding;
+      }
       setAccess(status);
       setConfigError(null);
       if (status.state === 'signed_out') {
@@ -347,6 +357,25 @@ export function App() {
       setAccess({ state: 'offline' });
       setConfigError(error instanceof Error ? error.message : 'Cluster session status failed');
     }
+  }
+
+  async function verifyAccount(): Promise<boolean> {
+    const epoch = authorityEpochRef.current;
+    try {
+      const status = await fleetSessionRef.current?.readStatus();
+      if (epoch !== authorityEpochRef.current) return false;
+      if (status?.state === 'signed_in'
+        && status.displayStateBinding === displayStateBindingRef.current) return true;
+      clearHumanScopedState();
+      setAccess({ state: 'loading' });
+      await refreshAuthority(true);
+    } catch (error) {
+      if (epoch !== authorityEpochRef.current) return false;
+      clearHumanScopedState();
+      setAccess({ state: 'offline' });
+      setConfigError(error instanceof Error ? error.message : 'Account continuity could not be checked');
+    }
+    return false;
   }
 
   async function connect(
@@ -389,6 +418,7 @@ export function App() {
         store.disconnect();
         return false;
       }
+      if (displayStateBindingRef.current !== null && !await verifyAccount()) return false;
       reconnectAttemptRef.current = 0;
       if (store.snapshot().session?.canListShards) {
         store.refreshShards();
@@ -420,6 +450,7 @@ export function App() {
 
   function clearHumanScopedState() {
     authorityEpochRef.current += 1;
+    displayStateBindingRef.current = null;
     void browserMic.stop();
     const store = storeRef.current;
     storeRef.current = null;
@@ -433,6 +464,7 @@ export function App() {
     display.clear();
     z02Link.disconnect();
     setActiveView('thread');
+    setOverlay(null);
   }
 
   function disconnect() {

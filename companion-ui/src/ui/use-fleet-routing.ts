@@ -13,6 +13,7 @@ export function useFleetRouting(input: {
   accessState: string;
   connect: (path: string, expectedAuthorityEpoch?: number) => Promise<boolean>;
   reportError: (message: string) => void;
+  verifyAccount: () => Promise<boolean>;
 }) {
   const clientRef = useRef<FleetRosterClient | null>(null);
   clientRef.current ??= new FleetRosterClient();
@@ -22,6 +23,8 @@ export function useFleetRouting(input: {
   connectRef.current = input.connect;
   const reportErrorRef = useRef(input.reportError);
   reportErrorRef.current = input.reportError;
+  const verifyAccountRef = useRef(input.verifyAccount);
+  verifyAccountRef.current = input.verifyAccount;
   const accessStateRef = useRef(input.accessState);
   accessStateRef.current = input.accessState;
   const routingEpochRef = useRef(0);
@@ -64,7 +67,7 @@ export function useFleetRouting(input: {
     }
     if (!current()) return;
     const { roster: nextRoster, approvals: nextApprovals } = await client.readRoutingSnapshot();
-    if (!current()) return;
+    if (!current() || !await verifyAccountRef.current() || !current()) return;
     const selected = nextRoster.companions.find(
       companion => companion.companionId === activeCompanionIdRef.current,
     ) ?? nextRoster.companions.find(
@@ -87,9 +90,9 @@ export function useFleetRouting(input: {
     pollingEpochRef.current = epoch;
     try {
       await sessionClient.renewIfDue();
-      if (!current()) return;
+      if (!current() || !await verifyAccountRef.current() || !current()) return;
       const next = await client.readApprovals();
-      if (current()) rememberApprovals(next.approvals);
+      if (current() && await verifyAccountRef.current() && current()) rememberApprovals(next.approvals);
     } catch (error) {
       if (current()) reportErrorRef.current(error instanceof Error ? error.message : 'Cluster approvals refresh failed');
     } finally {
@@ -111,7 +114,8 @@ export function useFleetRouting(input: {
       return false;
     }
     try {
-      if (!await connectRef.current(companion.websocketPath)
+      if (!await verifyAccountRef.current() || selectionEpoch !== selectionEpochRef.current
+        || !await connectRef.current(companion.websocketPath)
         || selectionEpoch !== selectionEpochRef.current || accessStateRef.current !== 'signed_in') return false;
       activeCompanionIdRef.current = companion.companionId;
       setActiveCompanionId(companion.companionId);

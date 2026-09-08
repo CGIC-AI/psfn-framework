@@ -20,6 +20,11 @@ export const REFLECTION_EVIDENCE_GROUNDING_DEGRADED_HEADING =
  *   has no verdict and was withheld fail-closed.
  * - `partial_result`: at least one optional read delivered part of what was
  *   asked for.
+ * - `read_failed`: at least one optional read failed, was denied, or was
+ *   skipped behind one that did. The grounding turn absorbed the failure and
+ *   completed, so the reflection has no other signal that the evidence is
+ *   missing — without this cause it would silently reason as if the read had
+ *   come back empty.
  *
  * None of them licenses inference about the missing evidence: the whole point
  * of naming the cause is that the reflection can say "I could not see this"
@@ -29,6 +34,7 @@ export const REFLECTION_EVIDENCE_DEGRADATION_CAUSES = [
   'grounding_exhausted',
   'content_withheld',
   'screening_unavailable',
+  'read_failed',
   'partial_result',
 ] as const;
 
@@ -41,6 +47,7 @@ export const REFLECTION_EVIDENCE_DEGRADATION_TAGS: Readonly<
   grounding_exhausted: REFLECTION_EVIDENCE_GROUNDING_UNAVAILABLE_TAG,
   content_withheld: 'evidence-content-withheld',
   screening_unavailable: 'evidence-screening-unavailable',
+  read_failed: 'evidence-read-failed',
   partial_result: 'evidence-partial',
 });
 
@@ -63,6 +70,10 @@ export const REFLECTION_EVIDENCE_DEGRADATION_PROMPT_LINES: Readonly<
   screening_unavailable:
     'Intake screening could not reach a verdict for an optional read-only lookup, so its content was withheld. '
     + 'Continue from the bounded starter evidence already present; do not infer what the withheld read contained.',
+  read_failed:
+    'An optional read-only lookup did not complete for this run, so its evidence is not present. '
+    + 'Continue from the bounded starter evidence already present; do not infer what the failed read '
+    + 'would have returned and do not treat its absence as a finding.',
   partial_result:
     'An optional read-only lookup returned only part of what was requested. '
     + 'Continue from the evidence actually present and say so where it is incomplete; '
@@ -79,6 +90,7 @@ const CAUSE_PRECEDENCE: readonly ReflectionEvidenceDegradationCause[] = [
   'grounding_exhausted',
   'screening_unavailable',
   'content_withheld',
+  'read_failed',
   'partial_result',
 ];
 
@@ -86,9 +98,11 @@ const CAUSE_PRECEDENCE: readonly ReflectionEvidenceDegradationCause[] = [
  * The degraded-evidence cause implied by one completed grounding turn's
  * content-free outcome census, or `null` when nothing was degraded.
  *
- * Only degraded-evidence outcomes count. An ordinary tool failure is NOT
- * silently reclassified as degraded evidence here: it stays a failure for the
- * caller that owns it.
+ * A failed, denied, or skipped optional read counts too. The grounding turn is
+ * the caller that owned that failure and it already absorbed it — so if the
+ * reflection did not learn the evidence is missing here, it would learn it
+ * nowhere and reason as though the read came back empty. Naming it `read_failed`
+ * keeps it distinct from a security hold; neither licenses an inference.
  */
 export function resolveReflectionEvidenceDegradationCause(
   counts: ToolCallOutcomeCounts | undefined,
@@ -96,6 +110,11 @@ export function resolveReflectionEvidenceDegradationCause(
   if (!counts) return null;
   if (counts.screening_unavailable > 0) return 'screening_unavailable';
   if (counts.content_withheld > 0) return 'content_withheld';
+  if (counts.execution_failure > 0
+    || counts.policy_denial > 0
+    || counts.dependency_skip > 0) {
+    return 'read_failed';
+  }
   if (counts.partial_result > 0) return 'partial_result';
   return null;
 }

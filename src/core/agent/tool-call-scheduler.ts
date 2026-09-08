@@ -11,6 +11,7 @@ import {
   isHeldToolCallResult,
   isToolCallErrorOutcome,
   resolveToolCallIdempotency,
+  SEQUENTIAL_DEGRADED_EVIDENCE_SKIP_RESULT,
   SEQUENTIAL_DEPENDENCY_SKIP_RESULT,
   type ToolCallEvidenceDependency,
 } from '../../shared/contracts/tool-call-outcome.js';
@@ -376,7 +377,9 @@ async function executeSequentialBatch(
       return {
         toolResults: results,
         haltRemaining: true,
-        haltReasonText: SEQUENTIAL_DEPENDENCY_SKIP_RESULT,
+        haltReasonText: outcome && isDegradedEvidenceToolCallOutcome(outcome)
+          ? SEQUENTIAL_DEGRADED_EVIDENCE_SKIP_RESULT
+          : SEQUENTIAL_DEPENDENCY_SKIP_RESULT,
       };
     }
 

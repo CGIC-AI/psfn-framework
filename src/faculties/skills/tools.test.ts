@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import type { CogSecArtifactAdmissionPort } from '../../core/cogsec/intake/durable-admission.js';
 import { SkillsRuntime } from './runtime.js';
 import { createSkillTool, type SkillWriteGovernance } from './tools.js';
 import type {
@@ -67,7 +68,26 @@ interface SkillToolHarness {
   runtime: SkillsRuntime;
 }
 
-function setupSkillRuntime(prefix: string): SkillToolHarness {
+/**
+ * A CogSec admission port that admits everything and counts how many times it
+ * was asked (psfn-framework-lpxg3.3). Reuse must go THROUGH this gate, so the
+ * call count is the observable that proves it.
+ */
+function countingAdmission(): CogSecArtifactAdmissionPort & { calls: string[] } {
+  const calls: string[] = [];
+  return {
+    calls,
+    admit: async (request) => {
+      calls.push(request.artifactRef);
+      return { admitted: true, content: request.content, via: 'screening' };
+    },
+  };
+}
+
+function setupSkillRuntime(
+  prefix: string,
+  admission?: CogSecArtifactAdmissionPort,
+): SkillToolHarness {
   const root = mkdtempSync(join(tmpdir(), prefix));
   const companionDataDir = join(root, 'companion-data');
   const personalFilesDir = join(root, 'companion');
@@ -81,6 +101,7 @@ function setupSkillRuntime(prefix: string): SkillToolHarness {
     repoRoot: root,
     managedRootDir: join(personalFilesDir, 'skills'),
     isBinaryAvailable: () => true,
+    ...(admission ? { admission } : {}),
   });
   return { root, runtime };
 }
@@ -793,6 +814,89 @@ describe('skill revision binding and no-op reuse', () => {
       const payload = JSON.parse(readText(history)) as { entries: unknown[] };
       expect(payload.entries).toHaveLength(1);
       expect(runtime.getStore().getByName('stable-skill')?.version).toBe(1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+// psfn-framework-lpxg3.3: the reuse loop's candidate index and the revision path
+// both go through the CogSec admission gate. These pin that link rather than
+// leaving it structural.
+describe('skill reuse admission linkage', () => {
+  it('surfaces only admitted skills, and re-admits exactly once after a revision', async () => {
+    const admission = countingAdmission();
+    const { root, runtime } = setupSkillRuntime('skills-reuse-admission-', admission);
+    try {
+      const tool = createSkillTool(runtime, undefined, AUTONOMOUS_GOVERNANCE);
+      // No cache built yet: the reuse loop must read this as "no candidates",
+      // never as "every skill".
+      expect(runtime.getCachedAdmittedSkills()).toEqual([]);
+
+      await tool.execute('call-1', {
+        action: 'create',
+        name: 'admitted-skill',
+        category: 'ops',
+        description: 'Admission-linked test skill.',
+        content: '# Admitted\n\n- Step one',
+      });
+
+      await runtime.getSnapshot();
+      const admittedNames = runtime.getCachedAdmittedSkills().map(entry => entry.name);
+      expect(admittedNames).toContain('admitted-skill');
+      const afterFirstBuild = admission.calls.length;
+      expect(afterFirstBuild).toBeGreaterThan(0);
+
+      // A byte-identical rewrite writes nothing and invalidates nothing, so the
+      // already-admitted bytes are not re-admitted.
+      await tool.execute('call-2', {
+        action: 'update',
+        name: 'admitted-skill',
+        content: '# Admitted\n\n- Step one',
+      });
+      await runtime.getSnapshot();
+      expect(admission.calls.length).toBe(afterFirstBuild);
+
+      // A real revision invalidates the cache, so the NEW bytes are admitted
+      // before they can be surfaced again.
+      await tool.execute('call-3', {
+        action: 'update',
+        name: 'admitted-skill',
+        base_version: 1,
+        content: '# Admitted\n\n- Step one\n- Step two',
+      });
+      await runtime.getSnapshot();
+      expect(admission.calls.length).toBeGreaterThan(afterFirstBuild);
+      expect(runtime.getCachedAdmittedSkills().map(entry => entry.name))
+        .toContain('admitted-skill');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps a held skill out of the reuse index entirely', async () => {
+    const held: CogSecArtifactAdmissionPort = {
+      admit: async () => ({
+        admitted: false,
+        reason: 'quarantined',
+        detail: 'CogSec intake screening withheld these skill bytes',
+        riskLabels: [],
+      }),
+    };
+    const { root, runtime } = setupSkillRuntime('skills-reuse-held-', held);
+    try {
+      const tool = createSkillTool(runtime, undefined, AUTONOMOUS_GOVERNANCE);
+      await tool.execute('call-1', {
+        action: 'create',
+        name: 'held-skill',
+        category: 'ops',
+        description: 'Held test skill.',
+        content: '# Held\n\n- Step one',
+      });
+
+      await runtime.getSnapshot();
+      expect(runtime.getCachedAdmittedSkills().map(entry => entry.name))
+        .not.toContain('held-skill');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

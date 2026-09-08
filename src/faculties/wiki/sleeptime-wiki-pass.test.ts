@@ -598,6 +598,43 @@ describe('SleeptimeWikiPass quiet revision loop', () => {
     expect(wikiStore.list()).toHaveLength(0);
   });
 
+  it('never fuzzy-folds onto a document the pass did not author', async () => {
+    const wikiStore = new WikiStore(makeWorkspace());
+    const companionAuthored = wikiStore.upsert({
+      title: 'Rust async runtime notes',
+      body: 'Notes the companion wrote by hand about Rust async runtimes.',
+      tags: ['rust'],
+      sourceClass: 'companion_authored_note',
+      provenanceRefs: ['episode:ep-seed'],
+      sensitivity: 'personal',
+      updatedBy: 'agent',
+    });
+    const { episodicStore, memoryStore } = seededDay();
+    const { provider } = fakeLlm(proposal({}));
+    const pass = buildPass({
+      wikiStore,
+      episodicStore,
+      memoryStore,
+      llm: provider,
+      gateEvents: [],
+    });
+
+    const result = await pass.run({ sessionId: SESSION_ID });
+
+    expect(result).toMatchObject({
+      ran: true,
+      entriesCreated: 1,
+      entriesUpdated: 0,
+      nearDuplicatesFolded: 0,
+    });
+    // The hand-written document is untouched: same version, same body.
+    expect(wikiStore.get(companionAuthored.id)).toMatchObject({
+      version: 1,
+      updatedBy: 'agent',
+    });
+    expect(wikiStore.get(companionAuthored.id)?.body).toContain('by hand');
+  });
+
   it('leaves an unrelated entry alone rather than folding into it', async () => {
     const wikiStore = new WikiStore(makeWorkspace());
     wikiStore.upsert({

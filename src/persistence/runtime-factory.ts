@@ -97,6 +97,8 @@ import { PostgresFleetMaintenanceStore } from './postgres/fleet-maintenance-stor
 import { PostgresLetterStore } from './postgres/letter-store.js';
 import { PostgresCogSecReceiptStore } from './postgres/cogsec-receipt-store.js';
 import type { CogSecReceiptStorePort } from '../core/cogsec/receipts/contracts.js';
+import { PostgresCustodySnapshotStore } from './postgres/custody-snapshot-store.js';
+import type { CustodySnapshotStorePort } from '../core/cogsec/disclosure/custody-snapshot.js';
 import type { LetterStorePort } from '../core/letters/contracts.js';
 import { PostgresDoingMirrorStore } from './postgres/doing-mirror-store.js';
 import type { DoingMirrorStorePort } from '../core/doing-mirror/contracts.js';
@@ -156,6 +158,13 @@ export interface AgentPersistenceRuntime {
    * durable content may skip re-screening.
    */
   cogSecReceiptStore: CogSecReceiptStorePort;
+  /**
+   * Durable per-turn CogSec custody snapshots (psfn-framework-ccgdz.1). Written
+   * record-first by the turn runtime once the generation's disclosure lineage
+   * is folded and before the reply is composed; read by custody/provenance
+   * queries. Content-free by contract, retention bound owned by settings.json.
+   */
+  custodySnapshotStore: CustodySnapshotStorePort;
   /**
    * Bounded runtime health-event stream (bead psfn-framework-7qeo1.24.1).
    * Written by the bus sink that drains `runtime.health.event`; read by
@@ -227,6 +236,7 @@ export interface CreateAgentPersistenceRuntimeOptions {
     | 'automataPolicy'
     | 'observerEvalSidecar'
     | 'healthEventStreamMaxRows'
+    | 'custodySnapshotRetentionDays'
   >;
   pathSnapshot: RuntimePathSnapshot;
   embeddingDims: number;
@@ -550,6 +560,14 @@ export async function createAgentPersistenceRuntime(
     cogSecReceiptStore: await awaitPostgresStoreReadiness(
       'cogsec_receipts',
       () => PostgresCogSecReceiptStore.connect(databaseUrl, { schema, role: tenantRole }),
+    ),
+    custodySnapshotStore: await awaitPostgresStoreReadiness(
+      'custody_snapshots',
+      () => PostgresCustodySnapshotStore.connect(
+        databaseUrl,
+        options.config.custodySnapshotRetentionDays,
+        { schema, role: tenantRole },
+      ),
     ),
     partnerAffectShadowStore: await awaitPostgresStoreReadiness(
       'partner_affect_shadow',

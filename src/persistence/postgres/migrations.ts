@@ -4547,3 +4547,50 @@ export const POSTGRES_COGSEC_BLIND_REVIEW_MIGRATIONS: readonly string[] = [
   );
   `,
 ];
+
+// ── Durable per-turn CogSec custody snapshots (psfn-framework-ccgdz.1) ──
+//
+// One row per generation context (`turn:<turnId>`) — the lineage's own key, so
+// no new identifier is minted. `snapshot_json` is the canonical document; every
+// read re-validates it through `validateCustodySnapshot`, so a row edited in
+// the database is a load failure rather than a quiet custody claim.
+//
+// The CHECK constraints below are the content-free floor: only closed
+// vocabularies, structurally bounded identifiers, lowercase-hex digests, and
+// non-negative counts can reach a column. Retention is operator-owned
+// (`settings.json` `custodySnapshotRetentionDays`) and enforced by the store.
+export const POSTGRES_CUSTODY_SNAPSHOT_MIGRATIONS: readonly string[] = [
+  `
+  CREATE TABLE IF NOT EXISTS custody_snapshots (
+    generation_context_ref TEXT PRIMARY KEY,
+    turn_id TEXT NOT NULL,
+    request_sha256 TEXT NOT NULL,
+    classification TEXT NOT NULL,
+    effective_sensitivity TEXT NOT NULL,
+    source_count INTEGER NOT NULL,
+    has_unclassified_source BOOLEAN NOT NULL,
+    classifier_version TEXT NOT NULL,
+    classified_at_ms BIGINT NOT NULL,
+    content_sha256 TEXT NOT NULL,
+    snapshot_json JSONB NOT NULL,
+    CHECK (generation_context_ref = 'turn:' || turn_id),
+    CHECK (turn_id ~ '^[A-Za-z0-9_:.@+-]{1,128}$'),
+    CHECK (request_sha256 ~ '^[a-f0-9]{64}$'),
+    CHECK (content_sha256 ~ '^[a-f0-9]{64}$'),
+    CHECK (classification IN ('auto_shareable', 'restricted', 'approval_required', 'non_shareable')),
+    CHECK (effective_sensitivity IN ('public', 'personal', 'intimate', 'confidential')),
+    CHECK (source_count >= 0),
+    CHECK (classifier_version ~ '^[A-Za-z0-9_./-]{1,64}$'),
+    CHECK (classified_at_ms > 0),
+    CHECK (jsonb_typeof(snapshot_json) = 'object')
+  );
+  `,
+  `
+  CREATE INDEX IF NOT EXISTS idx_custody_snapshots_turn
+    ON custody_snapshots(turn_id);
+  `,
+  `
+  CREATE INDEX IF NOT EXISTS idx_custody_snapshots_classified_at
+    ON custody_snapshots(classified_at_ms);
+  `,
+];

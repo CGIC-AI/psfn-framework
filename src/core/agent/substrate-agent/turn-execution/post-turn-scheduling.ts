@@ -138,6 +138,8 @@ export async function schedulePostTurnWork(input: {
   conversationScope: ConversationScope;
   turnBudgetCharacteristics: ContextBudgetTurnCharacteristics;
   persistedUserMessageContent?: string;
+  /** Resolvable ref to this turn's durable custody snapshot, when one was written. */
+  custodySnapshotRef?: string;
   onTurnRecordPersisted?: () => void;
   observability: Pick<
     TurnExecutionObservability,
@@ -244,6 +246,7 @@ export async function schedulePostTurnWork(input: {
       ...(observability.getObservedTurnSnapshot() ? { snapshot: observability.getObservedTurnSnapshot() } : {}),
     },
     internalStateSnapshotRef,
+    ...(input.custodySnapshotRef ? { custodySnapshotRef: input.custodySnapshotRef } : {}),
   }, sessionReads);
 
   await runtime.eventBus.emit('agent.turn.end', {

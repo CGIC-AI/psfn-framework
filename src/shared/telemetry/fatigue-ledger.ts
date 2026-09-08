@@ -403,11 +403,26 @@ export class FatigueLedger {
     eventBus?: Pick<EventBus, 'on'> | null,
     options: FatigueLedgerOptions = {},
   ): Promise<FatigueLedger> {
-    const hydratedEntries = await readLedgerEntriesStreaming(
-      path,
-      resolveJsonLinesReadLimits(options.readLimitSettings),
-    );
-    return new FatigueLedger(path, eventBus, { ...options, hydratedEntries });
+    // Buffer fatigue events across the hydration await, then replay them once
+    // the ledger owns its own subscription: the synchronous constructor had no
+    // window in which an event could be missed and neither does this.
+    const pending: FatigueBudgetEvent[] = [];
+    const detachBuffer = eventBus?.on('agent.fatigue', (event) => {
+      pending.push(event);
+    }) ?? null;
+    try {
+      const hydratedEntries = await readLedgerEntriesStreaming(
+        path,
+        resolveJsonLinesReadLimits(options.readLimitSettings),
+      );
+      const ledger = new FatigueLedger(path, eventBus, { ...options, hydratedEntries });
+      detachBuffer?.();
+      for (const event of pending) ledger.recordFatigueEvent(event);
+      return ledger;
+    } catch (error) {
+      detachBuffer?.();
+      throw error;
+    }
   }
 
   private entries: FatigueLedgerEntry[];

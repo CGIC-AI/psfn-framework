@@ -565,11 +565,27 @@ export class RunChargeLedger {
     eventBus?: Pick<EventBus, 'on'> | null,
     options: RunChargeLedgerOptions = {},
   ): Promise<RunChargeLedger> {
-    const hydratedEntries = await readLedgerEntriesStreaming(
-      path,
-      resolveJsonLinesReadLimits(options.readLimitSettings),
-    );
-    return new RunChargeLedger(path, eventBus, { ...options, hydratedEntries });
+    // Cooperative hydration introduces an await where the synchronous
+    // constructor had none, so buffer charge events for the duration and replay
+    // them once the ledger owns its own subscription. Nothing emitted during
+    // startup hydration can be dropped.
+    const pending: RunChargeEvent[] = [];
+    const detachBuffer = eventBus?.on('agent.charge', (event) => {
+      pending.push(event);
+    }) ?? null;
+    try {
+      const hydratedEntries = await readLedgerEntriesStreaming(
+        path,
+        resolveJsonLinesReadLimits(options.readLimitSettings),
+      );
+      const ledger = new RunChargeLedger(path, eventBus, { ...options, hydratedEntries });
+      detachBuffer?.();
+      for (const event of pending) ledger.recordChargeEvent(event);
+      return ledger;
+    } catch (error) {
+      detachBuffer?.();
+      throw error;
+    }
   }
 
   private entries: RunChargeLedgerEntry[];

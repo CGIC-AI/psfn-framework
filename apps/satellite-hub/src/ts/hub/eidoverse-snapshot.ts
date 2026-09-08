@@ -28,12 +28,11 @@ const SNAPSHOT_LABEL = "first-person";
  * one can be trusted to name it.
  */
 export type EidoverseSnapshotOrigin =
-  | { transport: "poll"; worldName: string; agentName: string; worldUrl: string }
-  | { transport: "mcpl"; worldName: string; agentName: string; doorUrl: string };
+  | { transport: "poll"; agentName: string; worldUrl: string }
+  | { transport: "mcpl"; agentName: string; doorUrl: string };
 
 export interface EidoverseSnapshotConfig {
   baseUrl: string;
-  worldName: string;
   agentName: string;
   timeoutMs: number;
   maxBytes: number;
@@ -75,11 +74,18 @@ export class EidoverseSnapshotSource {
     this.fetchImpl = deps.fetchImpl ?? fetch;
   }
 
-  async capture(sessionId: string): Promise<VisionCaptureImage | null> {
+  /**
+   * `world` is the world the body is in *now*, not the one this deployment
+   * booted in. The door serves `/snap` per world and an avatar is present in
+   * exactly one of them, so a snapshot asked for against a stale world answers
+   * 404 forever after the first travel. The live world is therefore a
+   * parameter, never configuration.
+   */
+  async capture(sessionId: string, world: string): Promise<VisionCaptureImage | null> {
     const requestId = randomUUID();
     let response: Response;
     try {
-      response = await this.fetchImpl(this.snapshotUrl(), {
+      response = await this.fetchImpl(this.snapshotUrl(world), {
         signal: AbortSignal.timeout(this.config.timeoutMs),
       });
     } catch {
@@ -119,9 +125,9 @@ export class EidoverseSnapshotSource {
     }
   }
 
-  private snapshotUrl(): string {
+  private snapshotUrl(world: string): string {
     const url = new URL(`${this.config.baseUrl}${SNAPSHOT_PATH}`);
-    url.searchParams.set("world", this.config.worldName);
+    url.searchParams.set("world", world);
     url.searchParams.set("follow", this.config.agentName);
     url.searchParams.set("view", SNAPSHOT_VIEW);
     return url.toString();
@@ -260,7 +266,6 @@ export function loadEidoverseSnapshotConfig(
       : deriveEidoverseSnapshotBaseUrl(origin.worldUrl);
   return {
     baseUrl,
-    worldName: origin.worldName,
     agentName: origin.agentName,
     timeoutMs: positiveIntegerEnv(env, "EIDOVERSE_SNAPSHOT_TIMEOUT_MS", DEFAULT_SNAPSHOT_TIMEOUT_MS),
     maxBytes: positiveIntegerEnv(env, "EIDOVERSE_SNAPSHOT_MAX_BYTES", DEFAULT_SNAPSHOT_MAX_BYTES),

@@ -57,7 +57,7 @@ export interface EidoverseSayPublisher {
  * `look()` notes.
  */
 export interface EidoverseSnapshotCaptureSource {
-  capture(sessionId: string): Promise<VisionCaptureImage | null>;
+  capture(sessionId: string, world: string): Promise<VisionCaptureImage | null>;
 }
 
 /**
@@ -347,7 +347,9 @@ export class EidoverseEmbodiedSessionAdapter {
     const snapshot = this.deps.snapshot;
     if (!snapshot) return null;
     try {
-      return await snapshot.capture(this.conversationId);
+      // The world the body is in right now, not the one the session was
+      // founded in: travel moves the avatar out of the boot world entirely.
+      return await snapshot.capture(this.conversationId, this.currentWorldName);
     } catch {
       // A snapshot never fails a turn; the text look notes remain the tier.
       (this.deps.logger ?? console).warn("Eidoverse snapshot failed");

@@ -72,14 +72,12 @@ async function main(): Promise<void> {
   const eidoverseSnapshotOrigin: EidoverseSnapshotOrigin | null = eidoverseConfig
     ? {
         transport: "poll",
-        worldName: eidoverseConfig.worldName,
         agentName: eidoverseConfig.agentName,
         worldUrl: eidoverseConfig.worldUrl,
       }
     : eidoverseMcplConfig
       ? {
           transport: "mcpl",
-          worldName: eidoverseMcplConfig.worldName,
           agentName: eidoverseMcplConfig.agentName,
           doorUrl: eidoverseMcplConfig.doorUrl,
         }

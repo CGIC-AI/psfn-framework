@@ -66,6 +66,29 @@ const REPLY_TEXT = 'Tram 28 runs from Martim Moniz, and today it was on time.';
 const MEMORY_REF = 'memory:mem-7';
 const TOOL_REF = toolResultLineageRef('wiki_read', 'call_1');
 
+/**
+ * Minimal stand-ins for the two derived-artifact tables. The full episodic and
+ * memory schemas belong to their own stores and their own integration tests;
+ * this file proves the custody QUERY reads the four columns it depends on, so
+ * it declares exactly those and nothing else.
+ */
+const EPISODE_TABLE_DDL = `
+  CREATE TABLE IF NOT EXISTS l01_episodes (
+    id TEXT PRIMARY KEY,
+    status TEXT NOT NULL,
+    provenance_refs JSONB NOT NULL DEFAULT '[]'::jsonb,
+    consent_flags JSONB NOT NULL DEFAULT '{}'::jsonb
+  )`;
+
+const MEMORY_TABLE_DDL = `
+  CREATE TABLE IF NOT EXISTS l2_memories (
+    id TEXT PRIMARY KEY,
+    provenance_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    consent_flags JSONB NOT NULL DEFAULT '{}'::jsonb,
+    deleted_at TIMESTAMPTZ,
+    superseded_by TEXT
+  )`;
+
 let harness: PostgresTestHarness | null = null;
 
 beforeAll(async () => {
@@ -148,6 +171,21 @@ describe('PostgresCustodyChainReader', () => {
     await bootstrap.query(`CREATE SCHEMA ${SCHEMA}`);
     await bootstrap.end();
 
+    // The derived-artifact tables exist from the start so the seam reports
+    // `present` with an empty list — "nothing was derived" — rather than
+    // `unknown`, which is the answer reserved for having no reader at all.
+    const derivedBootstrap = createPostgresPool(databaseUrl, {
+      applicationName: 'custody-chain-derived-bootstrap',
+      allowExitOnIdle: true,
+      schema: SCHEMA,
+    });
+    try {
+      await derivedBootstrap.query(EPISODE_TABLE_DDL);
+      await derivedBootstrap.query(MEMORY_TABLE_DDL);
+    } finally {
+      await derivedBootstrap.end();
+    }
+
     // ── Hop 1: a real ingress admission receipt for the inbound bytes ──
     const receiptStore = await PostgresCogSecReceiptStore.connect(databaseUrl, {
       schema: SCHEMA,
@@ -187,7 +225,10 @@ describe('PostgresCustodyChainReader', () => {
     );
     const reader = await PostgresCustodyChainReader.connect(databaseUrl, { schema: SCHEMA });
     const service = new GardenCustodyQueryService({
-      snapshots: reader, deliveries: reader, companionId: COMPANION_ID,
+      snapshots: reader,
+      deliveries: reader,
+      derivedArtifacts: reader,
+      companionId: COMPANION_ID,
     });
 
     try {
@@ -274,6 +315,8 @@ describe('PostgresCustodyChainReader', () => {
       expect(chain.deliveryStatus).toBe('present');
       expect(chain.chainComplete).toBe(true);
       expect(chain.unknownDimensions).toEqual([]);
+      expect(chain.derivedArtifactStatus).toBe('present');
+      expect(chain.derivedArtifacts).toEqual([]);
       expect(chain.deliveryCount).toBe(2);
       expect(chain.heldDeliveryCount).toBe(1);
 
@@ -378,6 +421,76 @@ describe('PostgresCustodyChainReader', () => {
       // The delivery records still stand — one broken row does not erase the
       // record of what left.
       expect(tampered.deliveryCount).toBe(2);
+
+      // ── ccgdz.8: the two closed chain gaps, seen through this same seam ──
+      //
+      // Both markers are written by production code paths (episode synthesis
+      // for the runtime-authorship marker, deletion-proposal approval for the
+      // consent producer) and asserted there. What this proves is the other
+      // half of the AC: that the custody query SURFACES them on the generation
+      // they belong to.
+      const derived = createPostgresPool(databaseUrl, {
+        applicationName: 'custody-chain-derived', allowExitOnIdle: true, schema: SCHEMA,
+      });
+      try {
+        await derived.query(
+          `INSERT INTO l01_episodes (id, status, provenance_refs, consent_flags)
+           VALUES ($1, 'canonical', $2::jsonb, '{}'::jsonb)`,
+          [
+            'episode-runtime-authored',
+            JSON.stringify([
+              { kind: 'turn', refId: TURN_ID, authoredBy: 'runtime', envelopeId },
+              { kind: 'session', refId: 'terminal:daily' },
+            ]),
+          ],
+        );
+        await derived.query(
+          `INSERT INTO l2_memories (id, provenance_json, consent_flags, deleted_at)
+           VALUES ($1, $2::jsonb, $3::jsonb, NOW())`,
+          [
+            'memory-consent-withdrawn',
+            JSON.stringify({
+              turnId: TURN_ID,
+              sourceAdmissions: [{ kind: 'intake_envelope', refId: envelopeId, envelopeId }],
+              consentProducer: {
+                producerId: 'memory.deletion_proposal',
+                justificationCategoryId: 'privacy_or_consent',
+                requestedBy: 'operator-1',
+                recordedAtMs: NOW_MS,
+              },
+            }),
+            JSON.stringify({ allowRecall: false, deleteOnRequest: true }),
+          ],
+        );
+      } finally {
+        await derived.end();
+      }
+
+      const withDerivations = await service.queryEgressChain(
+        new URLSearchParams({ turnId: TURN_ID }),
+      );
+      expect(withDerivations.derivedArtifactStatus).toBe('present');
+      expect(withDerivations.derivedArtifacts).toEqual([
+        {
+          kind: 'episode',
+          id: custodyIdentity('episode-runtime-authored'),
+          turnRefCount: 1,
+          runtimeAuthoredSourceCount: 1,
+          admittedSourceCount: 1,
+          consentDenied: false,
+          retired: false,
+        },
+        {
+          kind: 'memory',
+          id: custodyIdentity('memory-consent-withdrawn'),
+          turnRefCount: 1,
+          runtimeAuthoredSourceCount: 0,
+          admittedSourceCount: 1,
+          consentDenied: true,
+          consentProducerId: 'memory.deletion_proposal',
+          retired: true,
+        },
+      ]);
 
       // ── The reader must be pinned to the writers' tenant schema ──
       //

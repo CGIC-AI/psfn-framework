@@ -7,6 +7,7 @@ import {
   type PostgresMemoryDeletionProposalDependencies,
 } from './deletion-proposals.js';
 import type { MemoryRow } from './rows.js';
+import { evaluateMemoryPolicy } from '../../../system/trust/policy.js';
 
 function makeMemoryRow(id: string): MemoryRow & { authorization_revision: string } {
   return {
@@ -55,6 +56,7 @@ function createHarness() {
   const deleteVersions = new Map<string, MemoryDeleteVersion>();
   let inTransaction = false;
   const onApproved = vi.fn();
+  const persisted: PurrMemory[] = [];
 
   const query = async <T extends QueryResultRow>(
     text: string,
@@ -163,6 +165,7 @@ function createHarness() {
     hasActiveTransaction: () => inTransaction,
     upsertDeleteVersion: async version => { deleteVersions.set(version.deleteId, version); },
     persistClassifiedMemoryRow: async (memory: PurrMemory) => {
+      persisted.push(memory);
       const row = memories.get(memory.id);
       if (row) {
         row.deleted_at = memory.deletedAt ?? null;
@@ -178,6 +181,15 @@ function createHarness() {
       if (categoryId !== 'privacy_or_consent' && categoryId !== 'duplicate_or_superseded') {
         throw new Error(`Unknown memory deletion justification category "${categoryId}"`);
       }
+      // Mirrors config/settings.seed.json: only the privacy/consent category is
+      // declared a consent withdrawal (alco2).
+      return {
+        id: categoryId,
+        label: categoryId,
+        eligible: true,
+        explanationPatterns: ['consent', 'duplicate'],
+        ...(categoryId === 'privacy_or_consent' ? { consentWithdrawal: true } : {}),
+      };
     },
     onApproved,
   };
@@ -186,11 +198,72 @@ function createHarness() {
     deleteVersions,
     memories,
     onApproved,
+    persisted,
     proposals,
     store: new PostgresMemoryDeletionProposalStore(deps),
     transact: deps.runInTransaction,
   };
 }
+
+describe('memory deletion approval as a consent producer (alco2)', () => {
+  it('writes consent flags and producer identity when the category is a withdrawal', async () => {
+    const h = createHarness();
+    const proposed = await h.store.createMemoryDeletionProposal({
+      proposalId: 'proposal-consent',
+      memoryId: 'memory-approved',
+      justificationCategory: 'privacy_or_consent',
+      explanation: 'Consent was withdrawn.',
+      proposedBy: 'Companion',
+      proposedAt: 10,
+    });
+    await h.store.markMemoryDeletionPartnerAlerted(proposed.id, 20);
+    await h.store.approveMemoryDeletionProposal(proposed.id, 'operator-1', 30);
+
+    const written = h.persisted.at(-1);
+    expect(written?.consentFlags).toEqual({
+      allowRecall: false,
+      deleteOnRequest: true,
+      redactionBehavior: 'delete',
+    });
+    expect(written?.provenance?.consentProducer).toEqual({
+      producerId: 'memory.deletion_proposal',
+      justificationCategoryId: 'privacy_or_consent',
+      requestedBy: 'operator-1',
+      recordedAtMs: 30,
+    });
+    // The Layer-3 gate is absolute and now has real data to act on.
+    expect(evaluateMemoryPolicy({
+      consentFlags: written?.consentFlags,
+      memorySensitivity: 'personal',
+      trustLevel: 'partner',
+      privacyLevel: 'private',
+      isBroadcast: false,
+    })).toMatchObject({
+      decision: 'deny',
+      layer: 'consent',
+      reasonTag: 'consent.allow_recall_denied',
+    });
+  });
+
+  it('leaves a correctness deletion free of consent flags', async () => {
+    const h = createHarness();
+    const proposed = await h.store.createMemoryDeletionProposal({
+      proposalId: 'proposal-duplicate',
+      memoryId: 'memory-approved',
+      justificationCategory: 'duplicate_or_superseded',
+      explanation: 'Duplicate of the canonical row.',
+      proposedBy: 'Companion',
+      proposedAt: 10,
+    });
+    await h.store.markMemoryDeletionPartnerAlerted(proposed.id, 20);
+    await h.store.approveMemoryDeletionProposal(proposed.id, 'operator-1', 30);
+    const written = h.persisted.at(-1);
+    // Housekeeping is not a consent act: inventing a withdrawal here would
+    // make a later restore permanently unrecallable for no stated reason.
+    expect(written?.consentFlags?.allowRecall).toBeUndefined();
+    expect(written?.provenance?.consentProducer).toBeUndefined();
+  });
+});
 
 describe('PostgresMemoryDeletionProposalStore', () => {
   it('links proposed, Partner-alerted, approved, deleted, and restored events by proposal id', async () => {

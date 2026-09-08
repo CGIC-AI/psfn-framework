@@ -86,8 +86,34 @@ export interface MemoryEmotionalTexture {
   /** Emotion-signal confidence [0,1] at formation. */
   confidence: number;
 }
+/**
+ * Who set this memory's consent flags, and on whose request
+ * (psfn-framework-alco2, via psfn-framework-ccgdz.8).
+ *
+ * The consent gate was absolute long before anything populated the column it
+ * reads, so a non-empty `consentFlags` with no recorded producer would be a
+ * denial nobody can account for. Every field is an id, a closed-vocabulary
+ * label, or a timestamp — never the reason text, which lives on the deletion
+ * proposal's own audit trail.
+ */
+interface MemoryConsentProducer {
+  /** Closed vocabulary: which production path set the flags. */
+  producerId: 'memory.deletion_proposal';
+  /** Operator-owned justification category id that made this a withdrawal. */
+  justificationCategoryId: string;
+  /** Authenticated actor whose decision set them (an id, never a name). */
+  requestedBy: string;
+  recordedAtMs: number;
+}
+
 export interface MemoryProvenance {
   channelId?: string;
+  /**
+   * Set when a production path wrote this memory's `consentFlags`. Absent on
+   * every row written before a producer existed — absence means "nobody set
+   * these", never "consent was granted".
+   */
+  consentProducer?: MemoryConsentProducer;
   /** Durable ICP relationship containing the source turns. */
   icpDyadId?: string;
   /** Bounded ICP activity episodes represented by the source turns. */
@@ -652,7 +678,35 @@ export function normalizeMemoryProvenance(value: unknown): MemoryProvenance | un
   if (actor && ['companion', 'operator', 'system', 'shard', 'subagent', 'repl'].includes(actor)) {
     provenance.actor = actor as MemoryProvenance['actor'];
   }
+  const consentProducer = normalizeMemoryConsentProducer(record.consentProducer);
+  if (consentProducer) {
+    provenance.consentProducer = consentProducer;
+  }
   return Object.keys(provenance).length > 0 ? provenance : undefined;
+}
+
+/**
+ * Re-derive the consent producer from stored or transported data (alco2).
+ *
+ * All-or-nothing: a producer record missing any field is dropped entirely
+ * rather than kept in part. A half-read producer would attach a denial to an
+ * actor or a category that the row does not actually name, which is worse than
+ * recording that nobody is named.
+ */
+function normalizeMemoryConsentProducer(value: unknown): MemoryConsentProducer | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  if (record.producerId !== 'memory.deletion_proposal') return undefined;
+  const justificationCategoryId = normalizeOptionalString(record.justificationCategoryId);
+  const requestedBy = normalizeOptionalString(record.requestedBy);
+  const recordedAtMs = normalizeOptionalFiniteTimestamp(record.recordedAtMs);
+  if (!justificationCategoryId || !requestedBy || recordedAtMs === undefined) return undefined;
+  return {
+    producerId: 'memory.deletion_proposal',
+    justificationCategoryId,
+    requestedBy,
+    recordedAtMs,
+  };
 }
 
 export function normalizeMemoryScopeTags(tags: readonly string[] | undefined): string[] {

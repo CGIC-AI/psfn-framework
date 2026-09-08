@@ -34,6 +34,7 @@ import type { GroupMemoryBackfillExtractorPort } from '../../faculties/memory/ex
 import type { EpisodicStorePort } from '../../faculties/memory/episodic/store-port.js';
 import type {
   CustodyChainDeliveryReadPort,
+  CustodyChainDerivedArtifactReadPort,
   CustodyChainSnapshotReadPort,
 } from '../../core/cogsec/disclosure/custody-chain-query.js';
 import { GardenCustodyQueryService } from './services/custody-query-service.js';
@@ -276,7 +277,11 @@ export interface InProcessGardenAdminContractOptions {
    * Read side of the custody chain (ccgdz.7). Absent when the runtime has
    * no Postgres URL; the Garden surface then reports an explicit 503.
    */
-  custodyChainReader?: (CustodyChainSnapshotReadPort & CustodyChainDeliveryReadPort) | null;
+  custodyChainReader?: (
+    CustodyChainSnapshotReadPort
+    & CustodyChainDeliveryReadPort
+    & CustodyChainDerivedArtifactReadPort
+  ) | null;
   /** Bounded read over the persisted health stream for the incident timeline. */
   healthEventStreamRead?: IncidentStreamRead | null;
   /** Durable ledger behind the human escalation attention surface (bznbn). */
@@ -849,6 +854,10 @@ export function createInProcessGardenAdminContract(
       ? new GardenCustodyQueryService({
         snapshots: options.custodyChainReader,
         deliveries: options.custodyChainReader,
+        // ccgdz.8: the same reader answers what a generation LEFT BEHIND, so
+        // the runtime-authorship and consent-denial markers on derived
+        // episodes and memories are visible on the chain that produced them.
+        derivedArtifacts: options.custodyChainReader,
         companionId: options.config.companionId,
       })
       : null,

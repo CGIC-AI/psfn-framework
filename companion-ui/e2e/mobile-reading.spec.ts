@@ -57,3 +57,18 @@ test('retains a browser installation invitation until Settings opens', async ({ 
   await expect(page.getByRole('status')).toContainText('Installation dismissed');
   expect(await page.evaluate(() => document.documentElement.dataset.installPrompted)).toBe('true');
 });
+
+test('opens a selected local sprite pack as real browser image assets', async ({ page }) => {
+  await page.goto(`${origin}/companion-ui/e2e/fixtures/mobile-reading.html`);
+  await page.getByRole('button', { name: 'Installation', exact: true }).click();
+  const folder = resolve(import.meta.dirname, '../public/sprites');
+  await page.getByLabel('Choose sprite pack files').setInputFiles([
+    'manifest.json', 'expr-mini.png', 'expr-avatar.png', 'tool.png', 'touch.png',
+  ].map(name => resolve(folder, name)));
+  const image = page.getByRole('img', { name: 'Imported sprite sheet' });
+  await expect(image).toBeVisible();
+  await expect.poll(() => image.evaluate(node => (node as HTMLImageElement).naturalWidth)).toBe(768);
+  expect(await image.getAttribute('src')).toMatch(/^blob:/);
+  await page.getByRole('button', { name: 'Use default artwork' }).click();
+  await expect(image).toHaveCount(0);
+});

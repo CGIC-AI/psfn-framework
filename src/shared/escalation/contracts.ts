@@ -47,7 +47,7 @@ import type {
   HealthEventOwner,
   HealthEventSeverity,
 } from '../contracts/health-event.js';
-import { isRecord } from '../utils/types.js';
+import { hasExactKeys, isRecord } from '../utils/types.js';
 import { requireUuid } from '../utils/uuid.js';
 
 /** Envelope revision persisted with every ledger row. */
@@ -443,6 +443,30 @@ export type HumanEscalationAttemptClaim =
   | { claimed: false; existing: HumanEscalationAttempt };
 
 /**
+ * Every key a persisted escalation carries, and the only ones it may. Declared
+ * beside the record it guards so adding a field to one without the other is a
+ * compile-adjacent mistake rather than a silent hole.
+ */
+const HUMAN_ESCALATION_RECORD_KEYS = [
+  'schemaVersion',
+  'escalationId',
+  'kind',
+  'severity',
+  'owner',
+  'dedupeKey',
+  'sourceRef',
+  'labels',
+  'evidence',
+  'detailPath',
+  'state',
+  'resolution',
+  'raisedAtMs',
+  'lastRaisedAtMs',
+  'lastNotifiedAtMs',
+  'raiseCount',
+] as const satisfies readonly (keyof HumanEscalationRecord)[];
+
+/**
  * Re-validate a row read back from storage. A row written by a newer schema,
  * hand-edited, or corrupted fails here rather than reaching an operator surface
  * as a half-typed object.
@@ -450,6 +474,17 @@ export type HumanEscalationAttemptClaim =
 export function validateHumanEscalationRecord(value: unknown): HumanEscalationRecord {
   if (!isRecord(value)) {
     throw new Error('Human escalation record must be an object');
+  }
+  // Strict, like the health envelope this one borrows its owner and evidence
+  // types from (bead psfn-framework-bs9qz). A record that carried an extra key
+  // through this seam would reach an operator surface — and, on a re-persist,
+  // the table — as a field nothing in the contract declares, which is exactly
+  // how a content-free ledger stops being content-free.
+  if (!hasExactKeys(value, HUMAN_ESCALATION_RECORD_KEYS)) {
+    throw new Error(
+      'Human escalation record must carry exactly: '
+      + HUMAN_ESCALATION_RECORD_KEYS.join(', '),
+    );
   }
   if (!isHumanEscalationState(value.state)) {
     throw new Error(`Unknown human escalation state ${JSON.stringify(value.state)}`);

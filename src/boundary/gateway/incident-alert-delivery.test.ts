@@ -26,6 +26,7 @@ import {
 import {
   createInMemoryHumanEscalationLedger,
 } from '../../shared/escalation/memory-ledger.js';
+import type { HumanEscalationLedgerPort } from '../../shared/escalation/contracts.js';
 import {
   DEFAULT_HUMAN_ESCALATION_CONFIG,
 } from '../../system/config/scheduler-config/human-escalation.js';
@@ -64,9 +65,13 @@ interface Harness {
 function harness(options: {
   sink?: OperatorIncidentAlertSink | null;
   config?: HealthDetectorsConfig;
+  /** Shared to model a restart: a new process, the same durable ledger. */
+  ledger?: HumanEscalationLedgerPort;
+  stream?: HealthEvent[];
+  sent?: NotifyNtfyParams[];
 } = {}): Harness {
-  const stream: HealthEvent[] = [];
-  const sent: NotifyNtfyParams[] = [];
+  const stream: HealthEvent[] = options.stream ?? [];
+  const sent: NotifyNtfyParams[] = options.sent ?? [];
   const errors: string[] = [];
   let clock = NOW_MS;
   const config = options.config ?? CONFIG;
@@ -95,7 +100,7 @@ function harness(options: {
       // the fixture changes: every assertion below is on the outcomes and the
       // rendered notification, which the migration must leave untouched.
       escalation: createHumanEscalationControlPlane<NotifyNtfyParams>({
-        ledger: createInMemoryHumanEscalationLedger(),
+        ledger: options.ledger ?? createInMemoryHumanEscalationLedger(),
         routing: () => DEFAULT_HUMAN_ESCALATION_CONFIG.routes,
         sinks: [createOperatorAlertEscalationSink({ resolveDispatcher: () => sink })],
         now: () => clock,
@@ -457,5 +462,47 @@ describe('incident alert cooldown policy', () => {
   it('never promises a re-alert cadence faster than the stream can restate', () => {
     expect(CONFIG.incidentAlerts.realertCooldownMs).toBeGreaterThanOrEqual(CONFIG.cooldownMs);
     expect(CONFIG.incidentAlerts.realertCooldownMs).toBe(HOUR_MS);
+  });
+});
+
+describe('incident alert keys across a restart', () => {
+  it('mints a fresh key for every re-alert, however often the process restarts', async () => {
+    // The bug this pins: the alert sequence used to come from an in-process
+    // counter that restarts at zero. After the SECOND restart it re-minted a
+    // key an earlier process had already recorded durably, the escalation plane
+    // correctly refused to dispatch a recorded key twice, and the operator
+    // silently stopped being told the fault was still going.
+    const ledger = createInMemoryHumanEscalationLedger();
+    const stream: HealthEvent[] = [];
+    const sent: NotifyNtfyParams[] = [];
+    const opened = event({ code: 'postgres_pool_pressure_opened' });
+    let elapsed = 0;
+
+    for (let boot = 0; boot < 3; boot += 1) {
+      const bench = harness({ ledger, stream, sent });
+      // Each boot re-anchors on the persisted stream, then re-alerts once the
+      // incident has been open for a full re-alert cooldown.
+      elapsed += CONFIG.incidentAlerts.realertCooldownMs;
+      bench.setNow(NOW_MS + elapsed);
+      const outcome = await state(bench, event({
+        code: 'postgres_pool_pressure_opened',
+        correlationId: opened.correlationId,
+        occurrenceCount: boot + 1,
+        recordedAtMs: NOW_MS + elapsed,
+        lastObservedAtMs: NOW_MS + elapsed,
+      }));
+
+      expect(outcome).toEqual({
+        status: 'delivered',
+        incidentId: opened.correlationId,
+        phase: 'opened',
+      });
+    }
+
+    expect(sent.map(alert => alert.idempotencyKey)).toEqual([
+      `${opened.correlationId}:opened:1`,
+      `${opened.correlationId}:opened:2`,
+      `${opened.correlationId}:opened:3`,
+    ]);
   });
 });

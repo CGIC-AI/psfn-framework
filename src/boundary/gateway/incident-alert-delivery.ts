@@ -183,12 +183,21 @@ export function createIncidentAlertDelivery(
     return family === null ? [bundle.incident.code] : [bundle.incident.code, family];
   }
 
+  /**
+   * One alert, one key. The sequence comes from the DURABLE escalation ledger
+   * rather than the in-process ledger below, and that distinction is
+   * load-bearing: the in-process counter restarts at zero on every boot, so
+   * after a second restart it would re-mint a key an earlier process already
+   * recorded, and the plane would correctly refuse to dispatch it — silently
+   * costing an operator the re-alert that says the fault is still going. The
+   * in-process ledger keeps its own job, which is gating the cooldown.
+   */
   async function deliver(
     bundle: IncidentBundle,
     phase: IncidentStatementPhase,
-    sequence: number,
   ): Promise<IncidentAlertOutcome> {
     const incidentId = bundle.incident.incidentId;
+    const sequence = await options.escalation.raiseCount('runtime_incident', incidentId) + 1;
     const notice = renderIncidentAlert(bundle, phase, sequence);
     const idempotencyKey = notice.idempotencyKey;
     if (!idempotencyKey) {
@@ -279,7 +288,7 @@ export function createIncidentAlertDelivery(
         }
         const bundle = await options.investigator.investigate(event);
         if (!bundle) return { status: 'ignored' };
-        const outcome = await deliver(bundle, 'closed', (existing?.alertCount ?? 0) + 1);
+        const outcome = await deliver(bundle, 'closed');
         remember(incidentId, {
           lastAlertAtMs: nowMs,
           alertCount: (existing?.alertCount ?? 0) + 1,
@@ -294,7 +303,7 @@ export function createIncidentAlertDelivery(
         }
         const bundle = await options.investigator.investigate(event);
         if (!bundle) return { status: 'ignored' };
-        const outcome = await deliver(bundle, 'opened', existing.alertCount + 1);
+        const outcome = await deliver(bundle, 'opened');
         remember(incidentId, {
           lastAlertAtMs: nowMs,
           alertCount: existing.alertCount + 1,
@@ -317,7 +326,7 @@ export function createIncidentAlertDelivery(
         }, policy.ledgerCapacity);
         return { status: 'suppressed', incidentId, reason: 'stated_by_earlier_process' };
       }
-      const outcome = await deliver(bundle, 'opened', 1);
+      const outcome = await deliver(bundle, 'opened');
       remember(incidentId, {
         lastAlertAtMs: nowMs,
         alertCount: 1,

@@ -64,6 +64,18 @@ import {
   BACKGROUND_WORK_SUPERVISOR_TASK_ID,
   registerDurableBackgroundWorkSupervisorTask,
 } from '../../core/agent/background-work/scheduler-task.js';
+import {
+  registerRuntimeHealthDetectorTask,
+} from '../../core/scheduler/health-detector-task.js';
+import {
+  createRuntimeHealthDetectorCycle,
+} from '../../shared/observability/health-detectors/runtime.js';
+import type {
+  HealthDetectorStreamReader,
+} from '../../shared/observability/health-detectors/cycle.js';
+import type {
+  PostgresPoolTelemetryReader,
+} from '../../shared/observability/health-detectors/postgres-pressure.js';
 import type { SchedulerRuntimeConfig } from '../../system/config/scheduler-config.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { SharedWorldWikiCaretakerService } from '../../faculties/wiki/shared-world-caretaker.js';
@@ -135,6 +147,16 @@ export interface BuildAgentSchedulerRuntimeOptions {
   /** Composition-owned governed Bus lifecycle shared by this file's automata lanes. */
   automataLifecycle?: AutomataClassLifecycleRuntime;
   automataRetention?: { runBounded(nowMs?: number): Promise<unknown> };
+  /**
+   * Persisted health stream and live pool telemetry this process's runtime
+   * health detectors read (7qeo1.24.2-.4). The stream is required: the agent
+   * always opens one, and a detector without it could neither deduplicate an
+   * incident nor survive a restart.
+   */
+  healthDetectors: {
+    stream: HealthDetectorStreamReader;
+    postgresPoolTelemetry: PostgresPoolTelemetryReader;
+  };
   /** Doing-mirror disposition lifecycle whose Letter deliveries this lane redrives. */
   doingMirrorService: Pick<DoingMirrorService, 'drainPendingLetters'>;
 }
@@ -457,6 +479,21 @@ export function buildAgentSchedulerRuntime(
       companionId: options.automataReviewer.companionId,
     });
   }
+
+  registerRuntimeHealthDetectorTask({
+    scheduler,
+    intervalMs: options.schedulerConfig.healthDetectors.intervalMs,
+    cycle: createRuntimeHealthDetectorCycle({
+      stream: options.healthDetectors.stream,
+      publisher: options.eventBus,
+      source: {
+        owner: resolveHealthEventOwner(options.config.companionId),
+        process: 'agent',
+      },
+      config: options.schedulerConfig.healthDetectors,
+      postgresPoolTelemetry: options.healthDetectors.postgresPoolTelemetry,
+    }),
+  });
 
   const backgroundMaintenance = new BackgroundMaintenanceRegistry({
     scheduler,

@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { DEFAULT_HEALTH_DETECTORS_CONFIG } from './scheduler-config/health-detectors.js';
 import {
   CAPABILITY_TIER_FILE_NAME,
   loadCapabilityTierConfig,
@@ -342,6 +343,7 @@ describe('subsystem config round-trip', () => {
           maxActiveConcerns: 7,
         },
       },
+      healthDetectors: structuredClone(DEFAULT_HEALTH_DETECTORS_CONFIG),
       backgroundWork: {
         supervisor: {
           maxConcurrentSessions: 4,

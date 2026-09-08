@@ -7,6 +7,13 @@
   },
   "overrides": [
     {
+      "file": "src/shared/observability/health-detectors/health-detectors.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": 900,
+      "baselineSource": "measured",
+      "note": "psfn-framework-7qeo1.24.2-.4: runtime health-detector cycle over the real containerized PostgreSQL health-event ring, proving one correlated incident per episode across a simulated restart and a single close on recovery. Focused local full-file wall baseline was 0.87s on 2026-09-07 with a warm harness slot; 120s matches the repo integration cap and preserves headroom for cold image startup and shared harness-slot contention."
+    },
+    {
       "file": "src/persistence/postgres/letter-store.integration.test.ts",
       "timeoutMs": 120000,
       "measuredBaselineMs": 8200,

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { DEFAULT_HEALTH_DETECTORS_CONFIG } from './scheduler-config/health-detectors.js';
 import {
   mkdirSync,
   mkdtempSync,
@@ -218,6 +219,7 @@ describe('startup owner-file loaders', () => {
           maxActiveConcerns: 7,
         },
       },
+      healthDetectors: structuredClone(DEFAULT_HEALTH_DETECTORS_CONFIG),
       backgroundWork: structuredClone(DEFAULT_BACKGROUND_WORK_TUNING),
       artifactLifecycle: {
         scratchpadRetentionDays: 7,

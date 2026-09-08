@@ -94,10 +94,7 @@ import {
   runGovernedAutomataClass,
   type AutomataClassLifecycleRuntime,
 } from '../automata/bus/class-lifecycle.js';
-import type {
-  AutomataArtifactRef,
-  ProductionAutomataClassId,
-} from '../automata/registry-contract.js';
+import type { ProductionAutomataClassId } from '../automata/registry-contract.js';
 import { LiveShardDirectory } from './directory.js';
 import { createShardAgentRuntime } from './agent-runtime.js';
 import type { PolicyGovernedShardParentIcpDeliveryPort } from '../../shared/contracts/shard-parent-icp.js';
@@ -275,19 +272,6 @@ export interface ShardManagerDeps {
 const SHARD_AUTOMATON_CLASS: ProductionAutomataClassId = 'shard.long_horizon';
 const SHARD_TASK_LABEL = 'Long-horizon shard';
 const SHARD_TASK_SUMMARY = 'Execute one long-horizon shard workload to a terminal outcome.';
-
-/**
- * Governed artifact references for the terminal handoff. Only the durable
- * artifact identity travels; artifact content, local paths, and shard output
- * stay in their own custody.
- */
-function shardArtifactRefs(result: ShardResult): AutomataArtifactRef[] {
-  return (result.artifactReturn?.artifacts ?? []).map(artifact => ({
-    kind: artifact.kind,
-    ref: artifact.artifactId,
-    custody: 'durable' as const,
-  }));
-}
 
 export class ShardManager implements ShardExecutionPort {
   private deps: ShardManagerDeps;
@@ -514,12 +498,16 @@ export class ShardManager implements ShardExecutionPort {
       briefingQuery: input.name,
       work: async () => {
         const result = await input.execute();
+        // Counts only. The shard's own artifact-return batch already owns
+        // returned-artifact custody, so this handoff reports how many artifacts
+        // came back rather than asserting a second durable custody claim over
+        // references the automata artifact store never took custody of.
         return {
           value: result,
           resultKind: result.outcome === 'completed' ? 'final' : 'partial',
           summary: `Shard ${result.outcome}: turns=${result.turns} `
-            + `lifecycleState=${result.lifecycleState} health=${result.health}`,
-          outputRefs: shardArtifactRefs(result),
+            + `lifecycleState=${result.lifecycleState} health=${result.health} `
+            + `returnedArtifacts=${result.artifactReturn?.artifacts.length ?? 0}`,
         };
       },
     });

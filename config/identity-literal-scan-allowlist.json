@@ -1961,6 +1961,30 @@
       "contains": "PSFN",
       "reason": "The escalation contract's module comment names the framework and does not define a companion identity.",
       "pattern": "identity-proper-name"
+    },
+    {
+      "path": "scripts/ops/lib/postgres-tenancy.mjs",
+      "contains": "psfn-compose",
+      "reason": "Compose tenancy helper names its Postgres advisory lock key and application_name after the deployment tooling, not a companion identity.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "scripts/ops/psfn-compose-smoke-provision-db.mjs",
+      "contains": "psfn-compose",
+      "reason": "Smoke provisioning script cites the compose bootstrap module and names its application_name/lock key after the deployment tooling.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/persistence/postgres/health-event-store.ts",
+      "contains": "psfn-fleet-health-stream",
+      "reason": "Postgres application_name for the fleet health stream connection names the framework component, not a companion identity.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/shared/contracts/health-event.ts",
+      "contains": "psfn.health.condition",
+      "reason": "Stable correlation-id namespace prefix for health conditions names the framework, not a companion identity.",
+      "pattern": "identity-legacy-slug"
     }
   ]
 }

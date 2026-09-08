@@ -2,7 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { detectDestructiveSkillContentReplace, SkillStore } from './store.js';
+import {
+  detectDestructiveSkillContentReplace,
+  SkillStore,
+  SkillVersionConflictError,
+} from './store.js';
 
 const AGENT = { updatedBy: 'agent' } as const;
 
@@ -182,6 +186,48 @@ describe('skill store', () => {
 
       expect(() => store.rollback('deploy-checklist', 99, { updatedBy: 'agent:rollback' }))
         .toThrow(/no history entry/i);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses a stale expectedVersion and leaves the document untouched', () => {
+    const root = mkdtempSync(join(tmpdir(), 'skill-store-cas-'));
+    const dataDir = join(root, 'data');
+    mkdirSync(dataDir, { recursive: true });
+    const store = new SkillStore(dataDir, { repoRoot: root });
+
+    try {
+      store.create({
+        name: 'contended-skill',
+        category: 'ops',
+        description: 'A contended skill.',
+        content: 'Original body content.',
+      }, AGENT);
+      store.update({
+        name: 'contended-skill',
+        content: 'Second author body content.',
+      }, AGENT);
+
+      // A writer still holding the v1 snapshot must not overwrite v2.
+      expect(() => store.update({
+        name: 'contended-skill',
+        content: 'First author body content.',
+        expectedVersion: 1,
+      }, AGENT)).toThrow(SkillVersionConflictError);
+
+      const record = store.getByName('contended-skill');
+      expect(record?.version).toBe(2);
+      expect(record?.content).toBe('Second author body content.');
+      expect(store.getHistory('contended-skill')).toHaveLength(2);
+
+      // The current version still writes.
+      const applied = store.update({
+        name: 'contended-skill',
+        content: 'Third body content.',
+        expectedVersion: 2,
+      }, AGENT);
+      expect(applied.version).toBe(3);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

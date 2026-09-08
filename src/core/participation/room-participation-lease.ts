@@ -213,6 +213,14 @@ export interface OpenRoomParticipationLeaseInput {
   /** The disposition's own room message; it is already considered. */
   watermarkMessageId: string;
   watermarkTimestampMs: number;
+  /**
+   * Whether the disposition's own author is a machine (a sibling bot, or the
+   * companion's own endogenous entry). Required, never inferred: it is the
+   * bot-loop fence input on the opening path exactly as it is on the claim
+   * path. A machine-authored opening neither clears the machine streak nor
+   * revives a lease the fence itself closed.
+   */
+  authorIsMachine: boolean;
   nowMs: number;
   expiresAtMs: number;
 }
@@ -224,6 +232,8 @@ export interface RefreshRoomParticipationLeaseInput {
   expiresAtMs: number;
   watermarkMessageId: string;
   watermarkTimestampMs: number;
+  /** Author class of the refreshing act; only a human turn clears a streak. */
+  authorIsMachine: boolean;
 }
 
 export interface ClaimRoomParticipationContinuationInput {
@@ -263,11 +273,18 @@ export interface RoomParticipationLeaseStorePort {
     companionId: string;
     channelId: string;
   }): Promise<RoomParticipationLeaseSnapshot | null>;
-  /** Open (or re-open) an active lease, resetting its bounded budget. */
-  open(input: OpenRoomParticipationLeaseInput): Promise<RoomParticipationLeaseSnapshot>;
   /**
-   * Extend a live lease's deadline and clear the ignore streak. Returns null
-   * when no active lease exists — refresh never creates membership.
+   * Open (or re-open) an active lease, resetting its bounded budget. Returns
+   * null when the bot-loop fence refuses the opening: a lease closed for
+   * `machine_streak` is only ever re-opened by a human-authored disposition,
+   * so a peer bot cannot summon its way back into a room it was cut off from.
+   */
+  open(input: OpenRoomParticipationLeaseInput): Promise<RoomParticipationLeaseSnapshot | null>;
+  /**
+   * Extend a live lease's deadline and, for a human-authored act, clear the
+   * ignore streak; a machine-authored refresh keeps it, because only a human
+   * turn clears a streak. Returns null when no active lease exists — refresh
+   * never creates membership.
    */
   refresh(
     input: RefreshRoomParticipationLeaseInput,

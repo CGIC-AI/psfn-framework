@@ -373,6 +373,7 @@ export class PassiveNameCandidateBuilder {
       sourceMessageId: message.id,
       trigger,
       triggerAuthorId: message.authorId,
+      triggerAuthorIsMachine: message.routing?.authorIsMachineIntelligence === true,
       triggerAuthorName: message.authorName,
       triggerContent: message.content,
       triggerTimestampMs,

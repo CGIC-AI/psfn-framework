@@ -42,6 +42,7 @@ function makeCandidate(overrides: Partial<ParticipationCandidate> = {}): Partici
     sourceMessageId: 'msg-trigger',
     trigger: 'passive_name',
     triggerAuthorId: 'human-alice',
+    triggerAuthorIsMachine: false,
     triggerAuthorName: 'Alice',
     triggerContent: 'I wonder what Persephone thinks about that',
     triggerTimestampMs: 1_000_000,

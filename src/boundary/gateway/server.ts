@@ -69,6 +69,9 @@ import {
 } from './voice-stream-request.js';
 import { GatewayNtfyNotifier, type GatewayNtfyConfig } from './ntfy-notifier.js';
 import { GatewayOperatorAlertDispatcher } from './operator-alert-dispatcher.js';
+import type {
+  ConfirmationEscalationProducerOptions,
+} from '../../system/capabilities/confirmation-escalation-producer.js';
 import {
   createGatewayApprovalBoundaryService,
   type ApprovalBoundaryService,
@@ -355,6 +358,14 @@ export interface GatewayServerOptions extends OptionalCompanionRoutingBinding {
    * autonomous auto-clear).
    */
   shardApprovalWorkloads?: ShardWorkloadLifecycleRegistryPort;
+  /**
+   * Human escalation control plane and its durable ledger (bead
+   * psfn-framework-wtw7l). Presence makes every confirmation-queue enqueue and
+   * resolution visible on the Garden attention surface. Absence keeps the queue
+   * behaving exactly as before — the escalation is a projection of the queue,
+   * never an authority over it.
+   */
+  confirmationEscalation?: ConfirmationEscalationProducerOptions<NotifyNtfyParams>;
   /**
    * Structured audit sink for shard approval-grant lifecycle events. A
    * throwing sink fails the transition it audits (terminal resolutions are
@@ -673,6 +684,9 @@ export class GatewayServer {
       parentLabelProvider: options.approvalParentLabelProvider,
       ...(this.shardApprovalGrants
         ? { shardApprovalGrants: this.shardApprovalGrants }
+        : {}),
+      ...(options.confirmationEscalation
+        ? { confirmationEscalation: options.confirmationEscalation }
         : {}),
       audit: this.audit.bind(this),
       auditComplete: this.auditComplete.bind(this),

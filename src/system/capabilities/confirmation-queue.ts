@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { createComponentLogger } from '../../shared/logger.js';
 import { isRecord } from '../../shared/utils/types.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { positiveIntegerOr } from '../../shared/utils/numeric.js';
@@ -185,6 +186,55 @@ export interface ConfirmationQueueObserver {
   beforeTerminalized?(outcome: ConfirmationQueueTerminalOutcome): void;
   onEnqueued?(entry: ConfirmationQueueEntry): void;
   onResolved?(outcome: ConfirmationQueueResolutionOutcome): void;
+}
+
+/**
+ * Run several observers as one, in declaration order.
+ *
+ * The queue takes exactly one observer because it has exactly one commit
+ * guard, and that stays true here: `beforeTerminalized` is not wrapped, so the
+ * FIRST observer that refuses a terminal resolution stops the ones after it and
+ * the queue keeps the pending entry. That is the fail-closed reading — a guard
+ * that ran after a refusal would be reasoning about a commit that is not
+ * happening.
+ *
+ * The notification callbacks are contracted not to throw, so one that does is
+ * contained rather than allowed to abandon the observers behind it.
+ */
+const confirmationQueueLog = createComponentLogger('ConfirmationQueue');
+
+export function composeConfirmationQueueObservers(
+  observers: readonly ConfirmationQueueObserver[],
+): ConfirmationQueueObserver {
+  return {
+    beforeTerminalized(outcome: ConfirmationQueueTerminalOutcome): void {
+      for (const observer of observers) observer.beforeTerminalized?.(outcome);
+    },
+    onEnqueued(entry: ConfirmationQueueEntry): void {
+      for (const observer of observers) {
+        try {
+          observer.onEnqueued?.(entry);
+        } catch (error) {
+          confirmationQueueLog.error('Confirmation queue enqueue observer threw', {
+            id: entry.id,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+    },
+    onResolved(outcome: ConfirmationQueueResolutionOutcome): void {
+      for (const observer of observers) {
+        try {
+          observer.onResolved?.(outcome);
+        } catch (error) {
+          confirmationQueueLog.error('Confirmation queue resolution observer threw', {
+            id: outcome.id,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+    },
+  };
 }
 
 export interface ConfirmationQueueOptions {

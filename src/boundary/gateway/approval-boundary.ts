@@ -41,6 +41,13 @@ import {
   notifyOperatorForPendingAction,
 } from './ntfy-notifier.js';
 import { executeQueuedAction, resolveCompanionReason } from './confirmation-actions.js';
+import { composeConfirmationQueueObservers } from '../../system/capabilities/confirmation-queue.js';
+import type { ConfirmationQueueObserver } from '../../system/capabilities/confirmation-queue.js';
+import { createConfirmationEscalationObserver } from '../../system/capabilities/confirmation-escalation-producer.js';
+import type {
+  ConfirmationEscalationProducerOptions,
+} from '../../system/capabilities/confirmation-escalation-producer.js';
+import type { NotifyNtfyParams } from './protocol.js';
 import type { CanaryEgressGuard } from './canary-egress-guard.js';
 
 const unknownCompanionDisplayIdentity = createCompanionDisplayIdentityResolver([]);
@@ -81,6 +88,14 @@ interface ApprovalBoundaryOptions extends ApprovalBoundaryAuditHooks {
    * temporary-grant path disabled.
    */
   shardApprovalGrants?: ShardApprovalGrantAuthority;
+  /**
+   * Human escalation control plane and durable ledger (bead
+   * psfn-framework-wtw7l). Presence adds one observer that projects every
+   * enqueue and resolution onto the Garden attention surface. It is a
+   * projection and never an authority: its raises are fire-and-forget, so a
+   * ledger this process cannot reach can never fail an approval.
+   */
+  confirmationEscalation?: ConfirmationEscalationProducerOptions<NotifyNtfyParams>;
 }
 
 export interface GatewayConfirmationConfig {
@@ -282,46 +297,55 @@ export function createGatewayApprovalBoundaryService(
       });
     });
   };
+  const approvalRelayObserver: ConfirmationQueueObserver = {
+    beforeTerminalized: (outcome) => {
+      // The queue invokes this before deleting the pending entry or appending
+      // terminal history. A failed security audit therefore leaves the
+      // public resolution retryable instead of creating a partial commit.
+      options.shardApprovalGrants?.recordRequestResolution({
+        approvalId: outcome.id,
+        status: outcome.status,
+        ...(outcome.resolver ? { resolver: outcome.resolver } : {}),
+      });
+    },
+    onResolved: (outcome) => {
+      const owner = outcome.entry.approvalOwner;
+      if (!owner) {
+        approvalLog.error('Refusing to emit ownerless companion.approval.resolved', {
+          id: outcome.id,
+        });
+        return;
+      }
+      options.eventBus.emit('companion.approval.resolved', {
+        companionId: owner.companionId,
+        ...(owner.shardId !== undefined ? { shardId: owner.shardId } : {}),
+        payload: redactApprovalResolved({
+          id: outcome.id,
+          status: outcome.status,
+          resolvedAt: outcome.resolvedAt,
+          executed: outcome.executed,
+          ...(owner.shardId !== undefined ? { shardId: owner.shardId } : {}),
+        }),
+        timestamp: Date.now(),
+      }).catch((error) => {
+        approvalLog.error('Failed to emit companion.approval.resolved', {
+          id: outcome.id,
+          error: toErrorMessage(error),
+        });
+      });
+    },
+  };
   const confirmationQueue = new ConfirmationQueue({
     defaultExpiryMs: options.confirmation?.expiryMs ?? DEFAULT_CONFIRMATION_EXPIRY_MS,
-    observer: {
-      beforeTerminalized: (outcome) => {
-        // The queue invokes this before deleting the pending entry or appending
-        // terminal history. A failed security audit therefore leaves the
-        // public resolution retryable instead of creating a partial commit.
-        options.shardApprovalGrants?.recordRequestResolution({
-          approvalId: outcome.id,
-          status: outcome.status,
-          ...(outcome.resolver ? { resolver: outcome.resolver } : {}),
-        });
-      },
-      onResolved: (outcome) => {
-        const owner = outcome.entry.approvalOwner;
-        if (!owner) {
-          approvalLog.error('Refusing to emit ownerless companion.approval.resolved', {
-            id: outcome.id,
-          });
-          return;
-        }
-        options.eventBus.emit('companion.approval.resolved', {
-          companionId: owner.companionId,
-          ...(owner.shardId !== undefined ? { shardId: owner.shardId } : {}),
-          payload: redactApprovalResolved({
-            id: outcome.id,
-            status: outcome.status,
-            resolvedAt: outcome.resolvedAt,
-            executed: outcome.executed,
-            ...(owner.shardId !== undefined ? { shardId: owner.shardId } : {}),
-          }),
-          timestamp: Date.now(),
-        }).catch((error) => {
-          approvalLog.error('Failed to emit companion.approval.resolved', {
-            id: outcome.id,
-            error: toErrorMessage(error),
-          });
-        });
-      },
-    },
+    observer: composeConfirmationQueueObservers([
+      approvalRelayObserver,
+      // Second, and deliberately: the relay above owns the companion-facing
+      // emission and its fail-closed ownership checks, and the escalation is a
+      // projection of what the queue already did.
+      ...(options.confirmationEscalation
+        ? [createConfirmationEscalationObserver(options.confirmationEscalation)]
+        : []),
+    ]),
   });
   const confirmationConfig = {
     expiryMs: options.confirmation?.expiryMs ?? DEFAULT_CONFIRMATION_EXPIRY_MS,

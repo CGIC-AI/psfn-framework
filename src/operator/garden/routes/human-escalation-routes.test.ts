@@ -6,7 +6,10 @@ import { AdminHumanEscalationDataService } from '../services/human-escalation-se
 import {
   DEFAULT_HUMAN_ESCALATION_CONFIG,
 } from '../../../system/config/scheduler-config/human-escalation.js';
-import type { HumanEscalationLedgerPort } from '../../../shared/escalation/contracts.js';
+import type {
+  HumanEscalationLedgerPort,
+  HumanEscalationRecord,
+} from '../../../shared/escalation/contracts.js';
 import type { GardenRequestContext } from '../garden-request-context.js';
 
 const NOW_MS = 1_800_000_000_000;
@@ -99,10 +102,12 @@ async function post(
 async function seed(options: {
   companionId?: string;
   dedupeKey?: string;
+  kind?: HumanEscalationRecord['kind'];
+  ledger?: HumanEscalationLedgerPort;
 } = {}): Promise<{ ledger: HumanEscalationLedgerPort; id: string }> {
-  const ledger = createInMemoryHumanEscalationLedger();
+  const ledger = options.ledger ?? createInMemoryHumanEscalationLedger();
   const record = await ledger.openOrReopen({
-    kind: 'runtime_incident',
+    kind: options.kind ?? 'runtime_incident',
     severity: 'critical',
     owner: options.companionId
       ? { kind: 'companion', companionId: options.companionId as never }
@@ -211,5 +216,43 @@ describe('admin human escalation routes', () => {
     expect(listed.body.escalations).toHaveLength(0);
     // 404, not 403: "exists, but not yours" is an enumeration oracle.
     expect(resolved.statusCode).toBe(404);
+  });
+
+  it.each([
+    ['operator_confirmation' as const, 'confirmation-a'],
+    ['cogsec_quarantine' as const, 'quarantine-a'],
+  ])('lets the standalone ADMIN_TOKEN or harness operator answer a %s escalation', async (
+    kind,
+    dedupeKey,
+  ) => {
+    // The producers wired in psfn-framework-wtw7l raise these kinds, and they
+    // route `garden_only` — so this surface is the ONLY place a person sees
+    // them, and the standalone principal (an ADMIN_TOKEN or harness key, which
+    // reaches these routes with no fleet context) must be able to answer.
+    const { ledger, id } = await seed({ kind, dedupeKey });
+
+    const listed = await get(ledger);
+    const resolved = await post(ledger, id, { state: 'resolved', reason: 'handled' });
+
+    expect(listed.body.escalations).toMatchObject([{ kind, state: 'open' }]);
+    expect(resolved.statusCode).toBe(200);
+    expect(resolved.body.escalation).toMatchObject({
+      kind,
+      state: 'resolved',
+      resolution: { reason: 'handled', actor: 'operator' },
+    });
+  });
+
+  it('shows the confirmation and quarantine kinds beside runtime incidents', async () => {
+    const ledger = createInMemoryHumanEscalationLedger();
+    await seed({ ledger, kind: 'runtime_incident', dedupeKey: 'incident-a' });
+    await seed({ ledger, kind: 'operator_confirmation', dedupeKey: 'confirmation-a' });
+    await seed({ ledger, kind: 'cogsec_quarantine', dedupeKey: 'quarantine-a' });
+
+    const response = await get(ledger);
+
+    expect(response.body.counts).toMatchObject({ open: 3 });
+    expect((response.body.escalations as { kind: string }[]).map(row => row.kind).sort())
+      .toEqual(['cogsec_quarantine', 'operator_confirmation', 'runtime_incident']);
   });
 });

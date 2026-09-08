@@ -24,6 +24,10 @@ import {
 } from './intake/fleet-screening.js';
 import { GatewayServer } from './server.js';
 import type { WelfareGrantVerifier } from './welfare-grant-verifier.js';
+import type {
+  ConfirmationEscalationProducerOptions,
+} from '../../system/capabilities/confirmation-escalation-producer.js';
+import type { NotifyNtfyParams } from './protocol.js';
 import { CogSecEventStore } from '../../core/cogsec/events.js';
 import { resolveCogSecEventsPath } from '../../persistence/layout.js';
 import type { StartupConfigHydrationResult } from '../../app/startup/support/bootstrap-helpers.js';
@@ -118,6 +122,12 @@ export interface GatewayPrivilegedCore {
      * approval-grant authority inside the gateway server.
      */
     shardApprovalWorkloads?: ShardWorkloadLifecycleRegistryPort;
+    /**
+     * wtw7l: human escalation control plane and its durable ledger. Presence
+     * projects every confirmation-queue enqueue and resolution onto the Garden
+     * attention surface; absence leaves the queue behaving exactly as before.
+     */
+    confirmationEscalation?: ConfirmationEscalationProducerOptions<NotifyNtfyParams>;
     sharedSatelliteQuietHoursAllows?: (nowMs: number) => boolean;
     credentialPresence?: GatewayCredentialPresenceResult;
   }): GatewayServer;
@@ -465,6 +475,7 @@ export async function buildGatewayPrivilegedCore(
       welfareGrantVerifier,
       contactLifecycleAuthority,
       shardApprovalWorkloads,
+      confirmationEscalation,
       sharedSatelliteQuietHoursAllows,
       credentialPresence,
     }) => new GatewayServer({
@@ -476,6 +487,7 @@ export async function buildGatewayPrivilegedCore(
       ...(welfareGrantVerifier ? { welfareGrantVerifier } : {}),
       ...(contactLifecycleAuthority ? { contactLifecycleAuthority } : {}),
       ...(shardApprovalWorkloads ? { shardApprovalWorkloads } : {}),
+      ...(confirmationEscalation ? { confirmationEscalation } : {}),
       ...(sharedSatelliteQuietHoursAllows ? { sharedSatelliteQuietHoursAllows } : {}),
       ...(credentialPresence ? { credentialPresence } : {}),
       systemDataWriter,

@@ -746,8 +746,9 @@ export class CompanionGatewayClient {
           && activeInteraction.shardId === shardId) {
           this.activeInteraction = null;
         }
-        if (this.lastCompletedInteraction?.requestId === pending.interactionId
-          && this.lastCompletedInteraction.shardId === shardId) {
+        const completedInteraction = this.lastCompletedInteraction;
+        if (completedInteraction && completedInteraction.requestId === pending.interactionId
+          && completedInteraction.shardId === shardId) {
           this.lastCompletedInteraction = null;
         }
         return;

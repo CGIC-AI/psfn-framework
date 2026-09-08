@@ -82,8 +82,6 @@ export interface WikiAdmissionGate {
    * document whose bytes differ from the recorded ones is `unknown`.
    */
   status(document: WikiDocument): WikiDocumentAdmission;
-  /** Forget a document that no longer exists. */
-  forget(documentId: string): void;
 }
 
 interface AdmissionRecord {
@@ -123,18 +121,30 @@ export function createWikiAdmissionGate(
         artifactRef: document.id,
         origin: { ref: `wiki:${document.id}`, detail: document.sourceClass },
       });
-      const record: AdmissionRecord = outcome.admitted
-        ? { contentSha256, state: 'admitted', detail: '' }
-        : { contentSha256, state: 'held', detail: outcome.detail };
+      // A 'sanitize' decision admits TRANSFORMED bytes, not the ones on disk.
+      // The wiki serves the stored document, and there is no seam here that can
+      // substitute the transform without rewriting the canonical file — so the
+      // document is held with an actionable reason rather than served in the
+      // form screening declined to admit.
+      const record: AdmissionRecord = ((): AdmissionRecord => {
+        if (!outcome.admitted) {
+          return { contentSha256, state: 'held', detail: outcome.detail };
+        }
+        if (outcome.via === 'screening' && outcome.content !== content) {
+          return {
+            contentSha256,
+            state: 'held',
+            detail: 'CogSec intake screening admits this wiki document only in sanitized form; '
+              + 'rewrite it through the wiki tool so the sanitized text becomes canonical',
+          };
+        }
+        return { contentSha256, state: 'admitted', detail: '' };
+      })();
       if (tickets.get(document.id) === ticket) records.set(document.id, record);
       return { state: record.state, detail: record.detail };
     },
     status(document) {
       return statusFor(document, cogSecContentSha256(wikiAdmissionContent(document)));
-    },
-    forget(documentId) {
-      records.delete(documentId);
-      tickets.delete(documentId);
     },
   };
 }

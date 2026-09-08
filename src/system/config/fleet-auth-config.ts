@@ -19,6 +19,7 @@ import {
 import { parseBooleanEnv } from '../../shared/utils/env.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import { parseExactPostgresCredential } from '../../shared/utils/postgres-credential.js';
+import { RETIRED_FLEET_WELFARE_VERIFIER_ROLE } from '../../persistence/postgres/retired-fleet-grantees.js';
 import { loadRequiredJson } from './load-or-seed.js';
 import type { FleetAuthDatabaseRoles } from '../../persistence/postgres/fleet-auth/schema.js';
 import type {
@@ -858,34 +859,55 @@ export function saveFleetAuthConfig(dataDir: string, value: unknown): FleetAuthC
  * - file absent, flag unset or falsy → non-fleet mode.
  */
 /**
- * Refuse a multi-companion fleet whose owner file still declares the retired
- * welfare-verifier authority (psfn-framework-h248l.7, psfn-framework-znuav).
+ * Drop the retired welfare-verifier authority from a multi-companion fleet's
+ * owner file projection (psfn-framework-h248l.7, psfn-framework-znuav).
  *
  * A fleet gateway verifies a sibling's welfare grant through that companion's
  * OWN runtime authority (`welfare.grant.verify`), so it reads no sibling schema
  * and the dedicated fleet-wide reader role — plus the cross-schema USAGE/SELECT
- * grants that fed it — no longer exist. Accept-and-ignore would leave an
- * operator provisioning a fleet-wide reader across every tenant schema for a
- * consumer that is gone, so the key refuses by name, exactly like the other
- * retired owner-file keys (scheduler `sleeptime`, the retired charge surfaces,
- * `companions[].gardenPort`).
+ * grants that fed it — no longer exist.
+ *
+ * This key was first retired by refusal, on the reasoning that accept-and-ignore
+ * would leave an operator provisioning a fleet-wide reader for a consumer that is
+ * gone. That premise no longer holds: the provisioning path that created the role
+ * and its grants is deleted, and the shared-schema startup authority now actively
+ * revokes the retired role's privileges from every tenant schema. What remains is
+ * that every fleet provisioned before the retirement — production included —
+ * still carries the block, and a refusal at config load is an upgrade that
+ * crash-loops rather than converges. A load cannot distinguish a block an
+ * operator just added from one an upgrade inherited, so the block is warned about
+ * and ignored, and the privilege it used to describe is removed at startup.
  *
  * Single-companion deployments are untouched: their local Postgres welfare
  * verifier still reads its own schema through this same credential.
  */
-export function assertRetiredFleetWelfareVerifier(options: {
-  multiCompanion: boolean;
-  fleetAuth?: Pick<FleetAuthConfig, 'welfareVerifier'>;
-}): void {
-  if (!options.multiCompanion || !options.fleetAuth?.welfareVerifier) return;
-  throw new Error(
-    `Invalid ${FLEET_AUTH_FILE_NAME}: the "welfareVerifier" authority is retired for `
-    + 'multi-companion fleets. Fleet welfare grants are verified through each companion\'s own '
-    + 'runtime authority (welfare.grant.verify), so no fleet-wide cross-schema reader exists. '
-    + `Remove the "welfareVerifier" block from ${FLEET_AUTH_FILE_NAME} and the `
-    + 'FLEET_AUTH_WELFARE_VERIFIER_DATABASE_URL credential from the deployment, then re-run '
-    + '`npm run provision:postgres-tenancy -- --apply` to converge the tenant grants.',
+export function withRetiredFleetWelfareVerifierRemoved(
+  config: FleetAuthConfig,
+  options: {
+    multiCompanion: boolean;
+    /** Startup warning sink; defaults to console.warn. */
+    warn?: (message: string) => void;
+  },
+): FleetAuthConfig {
+  if (!options.multiCompanion || !config.welfareVerifier) return config;
+  const warn = options.warn ?? ((message: string) => console.warn(message));
+  const { welfareVerifier, ...retained } = config;
+  warn(
+    `[fleet-auth] IGNORING the retired "welfareVerifier" authority in ${FLEET_AUTH_FILE_NAME}: `
+    + 'fleet welfare grants are verified through each companion\'s own runtime authority '
+    + '(welfare.grant.verify), so no fleet-wide cross-schema reader exists. Remove the '
+    + `"welfareVerifier" block from ${FLEET_AUTH_FILE_NAME} and the `
+    + `${welfareVerifier.databaseUrlRef.envName} credential from the deployment; the shared-schema `
+    + 'startup authority revokes the retired role\'s tenant grants on its own.',
   );
+  if (welfareVerifier.role !== RETIRED_FLEET_WELFARE_VERIFIER_ROLE) {
+    warn(
+      `[fleet-auth] The retired welfare-verifier role ${welfareVerifier.role} is not the retired `
+      + `role ${RETIRED_FLEET_WELFARE_VERIFIER_ROLE} that startup revokes automatically. Revoke its `
+      + 'tenant-schema privileges manually, or the exact-grantee proof will refuse the schema.',
+    );
+  }
+  return retained;
 }
 
 export function resolveFleetAuthOwnerFile(options: {

@@ -3,6 +3,10 @@ import type {
   ResponseMetadata,
 } from '../../shared/contracts/runtime.js';
 import { parseIcpConversationCorrelation } from '../../shared/contracts/icp-autonomy.js';
+import {
+  TOOL_CALL_OUTCOMES,
+  type ToolCallOutcomeCounts,
+} from '../../shared/contracts/tool-call-outcome.js';
 import { isRecord } from '../../shared/utils/types.js';
 import { parseTurnId } from '../turns/id.js';
 import { createHash } from 'node:crypto';
@@ -45,6 +49,7 @@ const METADATA_KEYS = new Set([
   'internalStateSnapshotRef',
   'metacognitiveFlags',
   'retrievalProvenanceRefs',
+  'toolCallOutcomes',
   'diagnostics',
   'broadcastSafety',
   'fatigue',
@@ -180,6 +185,27 @@ function parseMetacognitiveFlags(value: unknown, label: string): MetacognitiveFl
       evidence: requireString(raw.evidence, `${itemLabel}.evidence`),
     };
   });
+}
+
+/**
+ * The content-free per-turn tool-call census (psfn-framework-lpxg3.2). The
+ * producer always emits the complete count set, so a recorded census that is
+ * missing an outcome, carries an unknown one, or holds a fractional/negative
+ * count is corruption rather than an older shape: reject it instead of
+ * recovering a turn whose evidence record cannot be trusted.
+ */
+function parseToolCallOutcomes(value: unknown, label: string): ToolCallOutcomeCounts {
+  const raw = requireRecord(value, label);
+  assertExactKeys(raw, new Set<string>(TOOL_CALL_OUTCOMES), label);
+  const counts = {} as ToolCallOutcomeCounts;
+  for (const outcome of TOOL_CALL_OUTCOMES) {
+    const count = requireFinite(raw[outcome], `${label}.${outcome}`);
+    if (!Number.isInteger(count)) {
+      throw new Error(`${label}.${outcome} must be a whole count`);
+    }
+    counts[outcome] = count;
+  }
+  return counts;
 }
 
 function parseDiagnostics(
@@ -393,6 +419,14 @@ export function parseIcpRecoveryResponseMetadata(value: unknown, label: string):
           retrievalProvenanceRefs: parseStringArray(
             raw.retrievalProvenanceRefs,
             `${label}.retrievalProvenanceRefs`,
+          ),
+        }
+      : {}),
+    ...(raw.toolCallOutcomes !== undefined
+      ? {
+          toolCallOutcomes: parseToolCallOutcomes(
+            raw.toolCallOutcomes,
+            `${label}.toolCallOutcomes`,
           ),
         }
       : {}),

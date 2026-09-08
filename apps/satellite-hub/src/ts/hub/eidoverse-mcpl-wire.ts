@@ -64,6 +64,9 @@ export const MCPL_CAPABILITY = {
 
 export type McplCapabilityPath = (typeof MCPL_CAPABILITY)[keyof typeof MCPL_CAPABILITY];
 
+/** Membership test for the closed §6.2 vocabulary above. */
+const MCPL_CAPABILITY_PATHS: ReadonlySet<string> = new Set(Object.values(MCPL_CAPABILITY));
+
 /**
  * The door's declared feature sets and the capability paths each one needs,
  * mirrored from the Eidoverse `declaration.ts` FEATURE_SETS table.
@@ -223,7 +226,7 @@ export interface McplFeatureSetsUpdateParams {
 /** One degraded feature set in the door's §6.7 receipt. */
 export interface McplUnavailableFeature {
   featureSet: string;
-  missingCapabilities: string[];
+  missingCapabilities: McplCapabilityPath[];
   effect: string;
 }
 
@@ -306,8 +309,12 @@ export function parseFeatureSetsUpdateResult(
   const unavailableFeatures: McplUnavailableFeature[] = [];
   for (const entry of raw) {
     if (!isRecord(entry) || typeof entry.featureSet !== "string") return null;
-    const missing = Array.isArray(entry.missingCapabilities)
-      ? entry.missingCapabilities.filter((path): path is string => typeof path === "string")
+    // Only the closed capability vocabulary survives the read. A capability
+    // path the Hub knows is a protocol constant and safe to log; anything else
+    // the door writes here is door prose wearing a field name.
+    const missing: McplCapabilityPath[] = Array.isArray(entry.missingCapabilities)
+      ? entry.missingCapabilities.filter((path): path is McplCapabilityPath =>
+        typeof path === "string" && MCPL_CAPABILITY_PATHS.has(path))
       : [];
     unavailableFeatures.push({
       featureSet: entry.featureSet,

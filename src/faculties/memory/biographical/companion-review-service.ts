@@ -410,6 +410,24 @@ export class BiographyCompanionReviewService {
         });
       }
     }
+    // uz787: a claim that already binds an exact canonical participant set
+    // proves its own group context, so the reviewer may re-aim into it. This
+    // needs no group-membership authority precisely because it invents nothing:
+    // the set comes from the claim under review, canonically ordered by
+    // `assertParticipantSet`. A reviewer still cannot construct a group the
+    // evidence never established — a claim with no participant set offers no
+    // group context here.
+    const participantContactIds = (claim.participants ?? [])
+      .filter(participant => participant.kind === 'contact')
+      .map(participant => participant.contactId);
+    if (participantContactIds.length === (claim.participants ?? []).length
+      && participantContactIds.length > 1) {
+      add({
+        kind: 'companion_group',
+        companionId: this.options.companionId,
+        contactIds: participantContactIds,
+      });
+    }
     return contexts;
   }
 

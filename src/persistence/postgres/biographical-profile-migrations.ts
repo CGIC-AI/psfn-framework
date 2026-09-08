@@ -145,4 +145,36 @@ export const POSTGRES_BIOGRAPHICAL_PROFILE_MIGRATIONS: readonly string[] = [
   );
   `,
   `CREATE INDEX IF NOT EXISTS idx_biographical_review_claim ON biographical_review_audits(claim_id, recorded_at, id);`,
+  // Human staged review (o61vb.14) and reviewed portability (o61vb.15) added
+  // actions and reason codes. The CHECK lists are the database's copy of those
+  // closed vocabularies and must be replaced with them, or an audit row the
+  // service considers valid is rejected at write time.
+  `
+  ALTER TABLE biographical_review_audits DROP CONSTRAINT IF EXISTS biographical_review_action_check;
+  ALTER TABLE biographical_review_audits
+    ADD CONSTRAINT biographical_review_action_check
+    CHECK (action IN ('approve', 'deny', 'revoke', 'regrant', 'stage-approve', 'stage-reject', 'set-portability'));
+  `,
+  `
+  ALTER TABLE biographical_review_audits DROP CONSTRAINT IF EXISTS biographical_review_reason_check;
+  ALTER TABLE biographical_review_audits
+    ADD CONSTRAINT biographical_review_reason_check
+    CHECK (reason IN ('approved', 'denied', 'grant-revoked', 'grant-recorded', 'malformed', 'unauthorized', 'claim-not-found', 'stale-claim-digest', 'stale-source-set-digest', 'grant-not-found', 'grant-digest-mismatch', 'invalid-state', 'stage-approved', 'stage-rejected', 'candidate-not-found', 'stale-candidate-revision', 'portability-set', 'portability-refused'));
+  `,
+  // Durable background-stage cursors (o61vb.16). One row per stage and scan
+  // key, holding only the digest of what that stage last processed: a
+  // no-change window is detected by comparing digests, so it costs one read
+  // and zero model calls. Content-free by construction — the key is a
+  // canonical subject or candidate identity and the value is a digest.
+  `
+  CREATE TABLE IF NOT EXISTS biographical_stage_cursors (
+    stage TEXT NOT NULL,
+    cursor_key TEXT NOT NULL,
+    observed_digest TEXT NOT NULL,
+    observed_at TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY (stage, cursor_key),
+    CONSTRAINT biographical_stage_cursor_stage_check CHECK (stage IN ('biography_synthesis', 'biography_companion_review')),
+    CONSTRAINT biographical_stage_cursor_digest_check CHECK (observed_digest ~ '^[0-9a-f]{64}$')
+  );
+  `,
 ];

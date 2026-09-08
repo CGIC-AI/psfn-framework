@@ -4629,6 +4629,41 @@ export const POSTGRES_COGSEC_BLIND_REVIEW_MIGRATIONS: readonly string[] = [
     CHECK (last_batch_digest IS NULL OR last_batch_digest ~ '^[a-f0-9]{64}$')
   );
   `,
+  // ── Gate savings counter (bead psfn-framework-33xah) ──
+  //
+  // How many model calls the deterministic change gate has refused over the
+  // lane's whole life, and when it last refused one. The lane's acceptance
+  // criterion is "an unchanged or undersized batch costs zero model calls";
+  // without a durable cumulative counter that claim is unfalsifiable from
+  // Garden, because a per-pass number is gone the moment the pass ends.
+  //
+  // Additive and backfill-free on purpose: `ADD COLUMN IF NOT EXISTS` with a
+  // zero default upgrades a deployment that already carries lane state — the
+  // existing row reads as "the gate has saved nothing yet", which is the honest
+  // answer for a counter that did not exist while those savings happened. A
+  // companion-schema chain has no version ledger (`shared_schema_migrations` is
+  // the shared schema's), so idempotent statements appended here ARE the
+  // migration, exactly as `agent_background_work_jobs` does it.
+  `ALTER TABLE cogsec_blind_review_state ADD COLUMN IF NOT EXISTS model_calls_avoided BIGINT NOT NULL DEFAULT 0;`,
+  // 0 means "never", not "the epoch": the counter and its clock start together,
+  // so a zero count can never carry a non-zero timestamp.
+  `ALTER TABLE cogsec_blind_review_state ADD COLUMN IF NOT EXISTS model_calls_avoided_at_ms BIGINT NOT NULL DEFAULT 0;`,
+  // `CREATE TABLE IF NOT EXISTS` never revisits an existing table's
+  // constraints, so the floor for these two columns is installed the way every
+  // other post-hoc CHECK in this file is: dropped by name, then re-added.
+  `ALTER TABLE cogsec_blind_review_state
+    DROP CONSTRAINT IF EXISTS cogsec_blind_review_state_model_calls_avoided_check;`,
+  `ALTER TABLE cogsec_blind_review_state
+    ADD CONSTRAINT cogsec_blind_review_state_model_calls_avoided_check
+      CHECK (model_calls_avoided >= 0);`,
+  `ALTER TABLE cogsec_blind_review_state
+    DROP CONSTRAINT IF EXISTS cogsec_blind_review_state_model_calls_avoided_at_ms_check;`,
+  `ALTER TABLE cogsec_blind_review_state
+    ADD CONSTRAINT cogsec_blind_review_state_model_calls_avoided_at_ms_check
+      CHECK (
+        model_calls_avoided_at_ms >= 0
+        AND (model_calls_avoided > 0 OR model_calls_avoided_at_ms = 0)
+      );`,
 ];
 
 // ── Durable per-turn CogSec custody snapshots (psfn-framework-ccgdz.1) ──

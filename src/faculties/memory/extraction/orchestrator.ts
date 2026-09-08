@@ -358,18 +358,35 @@ export async function runExtractionOrchestration(
       // read-only Bus tool, the terminal handoff, and terminalization.
       automataRun = await openAutomataBusWorkerRun({
         access: options.automataBusWorkerAccess,
-        run: createMemoryExtractionAutomataRunPort(options.automataRunRegistry!, {
-          runId: automataRunId,
-          taskId: options.channelId,
-          sessionId: options.sourceSessionId ?? options.channelId,
-          triggerReason: options.triggerReason,
-        }),
+        run: createMemoryExtractionAutomataRunPort(
+          options.automataRunRegistry!,
+          {
+            runId: automataRunId,
+            taskId: options.channelId,
+            sessionId: options.sourceSessionId ?? options.channelId,
+            triggerReason: options.triggerReason,
+          },
+          options.automataTerminalLifecycle ?? null,
+        ),
         terminal: options.automataTerminalLifecycle ?? null,
         briefingQuery: `memory extraction ${options.triggerReason}`,
         allowedActions: EXTRACTION_AUTOMATA_BUS_ACTIONS,
         telemetry: event => log.debug('Memory extraction Automata lifecycle stage', { ...event }),
       });
-      if (!automataRun.binding.execute) return emptyExtractionOutputs();
+      if (!automataRun.binding.execute) {
+        // The run is already terminal: either the registry says so, or the Bus
+        // holds a committed terminal this process crashed before recording
+        // (psfn-framework-8n40k). Settling is what converges the registry on
+        // that durable terminal — returning without it would leave a run stuck
+        // `running` forever. It never re-records the handoff.
+        await automataRun.settle({
+          lifecycleState: 'completed',
+          outcome: 'completed',
+          stateReason: 'memory_extraction_completed',
+          resultKind: 'none',
+        });
+        return emptyExtractionOutputs();
+      }
     }
     const automataBusBinding: ExtractionAutomataBusBinding | undefined = automataRun?.tool
       ? { bounds: options.automataBusWorkerAccess!.bounds, tool: automataRun.tool }

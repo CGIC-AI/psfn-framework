@@ -6,6 +6,7 @@ import {
   buildAutomataTerminalHandoffKey,
   type AutomataTerminalLifecyclePort,
   type RecordAutomataTerminalHandoffInput,
+  type CommittedAutomataTerminalHandoff,
   type PersistedAutomataTerminalOutcome,
 } from '../terminal-lifecycle.js';
 import {
@@ -129,6 +130,8 @@ function createTerminalPort(options: {
     occurredAtMs: number;
     outcome: PersistedAutomataTerminalOutcome;
   };
+  /** A terminal already committed to the Bus before this run attempt began. */
+  committed?: CommittedAutomataTerminalHandoff;
 } = {}): TerminalHarness {
   const recorded: RecordAutomataTerminalHandoffInput[] = [];
   return {
@@ -151,6 +154,7 @@ function createTerminalPort(options: {
             : {}),
         };
       },
+      readTerminalHandoff: async () => options.committed ?? null,
       inspectRun: async lineage => ({
         runId: lineage.runId,
         taskId: lineage.taskId,

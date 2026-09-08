@@ -249,6 +249,7 @@ function createTerminalLifecycle(options: {
         artifactRefs: [],
       };
     }),
+    readTerminalHandoff: vi.fn(async () => null),
     inspectRun: vi.fn(async lineage => ({
       runId: lineage.runId,
       taskId: lineage.taskId,

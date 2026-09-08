@@ -9,6 +9,7 @@ import { createAutomataTextValidator } from '../validation.js';
 import {
   buildAutomataTerminalHandoffKey,
   type AutomataTerminalHandoffKind,
+  type CommittedAutomataTerminalHandoff,
   type AutomataTerminalLifecycleDelivery,
   type AutomataTerminalLifecyclePort,
   type AutomataWorkerLineage,
@@ -104,6 +105,14 @@ export interface AutomataWorkerRunBinding {
    * neither duplicate a terminal event nor re-execute a finished run.
    */
   execute: boolean;
+  /**
+   * The Bus terminal this run attempt already committed, when the run registry
+   * has NOT yet recorded a terminal for it (psfn-framework-8n40k): the crash
+   * window between the handoff commit and registry terminalization. `execute`
+   * is false — the work must not run a second time — and settlement converges
+   * the registry onto these durable facts instead of recomputing them.
+   */
+  replayTerminal?: CommittedAutomataTerminalHandoff;
 }
 
 export interface AutomataWorkerTerminalRequest {
@@ -326,9 +335,46 @@ export class AutomataBusWorkerRun {
     const handoffKind: AutomataTerminalHandoffKind =
       this.observer.writes > 0 || outcome.summary !== undefined ? 'useful' : 'no_finding';
     if (!this.binding.execute) {
+      const committed = this.binding.replayTerminal;
       this.emit('handoff', 'replayed');
-      this.emit('terminal', 'replayed');
-      return { handoff: { status: 'not_configured' }, handoffKind, terminalized: false };
+      if (!committed) {
+        // The durable run was already terminal in the registry too, so there is
+        // nothing left to converge.
+        this.emit('terminal', 'replayed');
+        return { handoff: { status: 'not_configured' }, handoffKind, terminalized: false };
+      }
+      // Crash window: the Bus terminal is committed but the registry never
+      // recorded it. Terminalize from the durable facts, at the time they were
+      // actually recorded, without re-running or re-recording anything.
+      await this.options.run.terminalize({
+        lifecycleState: committed.outcome.lifecycleState,
+        outcome: committed.outcome.outcome,
+        stateReason: committed.outcome.stateReason,
+        ...(committed.outcome.failureReason
+          ? { failureReason: committed.outcome.failureReason }
+          : {}),
+        atMs: committed.occurredAtMs,
+      });
+      this.emit('terminal', 'replayed', { detail: committed.outcome.lifecycleState });
+      return {
+        handoff: {
+          status: 'recorded',
+          idempotencyKey: buildAutomataTerminalHandoffKey({
+            automatonClass: this.binding.lineage.automatonClass,
+            runId: this.binding.lineage.runId,
+            attempt: this.binding.attempt,
+          }),
+          handoffRef: committed.handoffRef,
+          replay: true,
+          findingRefs: [...committed.findingRefs],
+          evidenceRefs: [...committed.evidenceRefs],
+          artifactRefs: [],
+          occurredAtMs: committed.occurredAtMs,
+          persistedOutcome: { ...committed.outcome },
+        },
+        handoffKind,
+        terminalized: true,
+      };
     }
     const handoff = await this.recordHandoff(outcome, handoffKind);
     // Convergence on replay (psfn-framework-8n40k): when this run already has a

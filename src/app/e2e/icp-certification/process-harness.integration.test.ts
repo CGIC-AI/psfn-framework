@@ -9,6 +9,7 @@ import {
   type PostgresTestHarness,
 } from '../../../test-support/postgres-test-harness.js';
 import { resolveChargeLedgerPath } from '../../../persistence/layout.js';
+import type { Pool } from 'pg';
 import { createPostgresPool } from '../../../persistence/postgres.js';
 import { readRunChargeRollingWindowFromLedger } from '../../../shared/telemetry/charge-ledger.js';
 import { createGatewayFleetChargePolicyResolver } from '../../gateway/fleet-charge-policy-resolver.js';
@@ -277,6 +278,32 @@ async function waitForCompletedFatigueSuppression(
     await new Promise(resolveWait => setTimeout(resolveWait, 25));
   }
   throw new Error(`Timed out waiting for fatigue suppression for ${rootInitiationId}`);
+}
+
+/**
+ * Seed one background-work row directly into a companion's own tenant schema.
+ * The durable CHECK makes a welfare-claimed non-running row unrepresentable, so
+ * a welfare-claimed seed is always a running seed.
+ */
+async function seedCertificationWelfareJob(
+  pool: Pool,
+  schema: string,
+  input: { jobId: string; welfareClaimed: boolean },
+): Promise<void> {
+  await pool.query(
+    `INSERT INTO "${schema}".agent_background_work_jobs (
+       job_id, idempotency_key, logical_session_id, kind, payload_schema_version,
+       payload, payload_fingerprint, source_turn_id, source_request_id, source_channel_id,
+       state, reason_code, attempt_count, max_attempts, created_at_ms, available_at_ms,
+       updated_at_ms, lease_owner, lease_expires_at_ms, revision, welfare_claimed
+     ) VALUES (
+       $1, $1, $1, 'memory_extraction', 1,
+       '{"schemaVersion":1}'::jsonb, 'fp', 'turn-1', 'req-1', 'chan-1',
+       'running', 'started', 0, 3, 1, 1,
+       1, 'welfare-seed-owner', 9999999999999, 1, $2
+     )`,
+    [input.jobId, input.welfareClaimed],
+  );
 }
 
 describe('ICP certification real process harness', () => {
@@ -1306,6 +1333,70 @@ describe('ICP certification real process harness', () => {
       companionId: CERTIFICATION_COMPANION_A,
       multiCompanion: true,
     });
+  }, TIMEOUT_MS);
+
+  // psfn-framework-h248l.7: the production isolated-role topology. Each agent
+  // logs in under its OWN least-privilege tenant role and the gateway holds no
+  // sibling background-work grant, so welfare verification has to travel to the
+  // companion that owns the job. The previous fleet-schema probe could not run
+  // here at all: it went unavailable at readiness and silently stripped every
+  // sibling companion's genuine welfare protection.
+  it('verifies fleet welfare grants through each companion agent, with no gateway sibling privilege', async () => {
+    if (!postgres) throw new Error('Postgres certification harness is unavailable');
+    const { databaseUrl } = await postgres.createDatabase();
+    fixture = createIcpCertificationFixture({ databaseUrl });
+    processes = await startIcpCertificationProcessHarness({ databaseUrl, fixture });
+    const activeProcesses = processes;
+    await Promise.all(activeProcesses.agents.map(agent => agent.ready()));
+
+    const pool = createPostgresPool(databaseUrl, {
+      applicationName: 'psfn-icp-certification-welfare-seed',
+      max: 1,
+    });
+    try {
+      // Seed each companion's OWN background-work table, in its own schema, with
+      // a genuinely welfare-claimed running job plus a non-welfare foil.
+      await seedCertificationWelfareJob(pool, CERTIFICATION_SCHEMA_A, {
+        jobId: 'cert-a-welfare-running',
+        welfareClaimed: true,
+      });
+      await seedCertificationWelfareJob(pool, CERTIFICATION_SCHEMA_A, {
+        jobId: 'cert-a-not-welfare',
+        welfareClaimed: false,
+      });
+      await seedCertificationWelfareJob(pool, CERTIFICATION_SCHEMA_B, {
+        jobId: 'cert-b-welfare-running',
+        welfareClaimed: true,
+      });
+
+      // Each companion's genuine running welfare-claimed job keeps protection.
+      await expect(activeProcesses.verifyWelfareGrant('cert-a-welfare-running', CERTIFICATION_COMPANION_A))
+        .resolves.toBe(true);
+      await expect(activeProcesses.verifyWelfareGrant('cert-b-welfare-running', CERTIFICATION_COMPANION_B))
+        .resolves.toBe(true);
+      // A running job with no welfare claim is not protected.
+      await expect(activeProcesses.verifyWelfareGrant('cert-a-not-welfare', CERTIFICATION_COMPANION_A))
+        .resolves.toBe(false);
+      // OWNERSHIP: another companion's job id cannot be borrowed — it is simply
+      // absent from the answering companion's own store.
+      await expect(activeProcesses.verifyWelfareGrant('cert-b-welfare-running', CERTIFICATION_COMPANION_A))
+        .resolves.toBe(false);
+      await expect(activeProcesses.verifyWelfareGrant('cert-a-welfare-running', CERTIFICATION_COMPANION_B))
+        .resolves.toBe(false);
+      // A companion outside the manifest has no authority to ask.
+      await expect(activeProcesses.verifyWelfareGrant('cert-a-welfare-running', 'stranger-companion'))
+        .resolves.toBe(false);
+
+      // Losing the authority is bounded evidence, never a silent "not welfare".
+      await activeProcesses.stopAgent(0);
+      await expect(activeProcesses.verifyWelfareGrant('cert-a-welfare-running', CERTIFICATION_COMPANION_A))
+        .rejects.toThrow(/welfare grant verification is unavailable \(/i);
+      // The surviving companion is unaffected by its sibling's outage.
+      await expect(activeProcesses.verifyWelfareGrant('cert-b-welfare-running', CERTIFICATION_COMPANION_B))
+        .resolves.toBe(true);
+    } finally {
+      await pool.end();
+    }
   }, TIMEOUT_MS);
 
   it('boots one genuine single-companion feature-off agent without ICP stores or LLM calls', async () => {

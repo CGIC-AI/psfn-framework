@@ -50,6 +50,14 @@ import {
   parseIcpLocalPolicyInspectParams,
   parseIcpLocalPolicyReleaseParams,
 } from '../../core/icp/local-policy-contract.js';
+import type {
+  WelfareGrantVerifyParams,
+  WelfareGrantVerifyResult,
+} from './welfare-grant-contract.js';
+import {
+  WELFARE_GRANT_VERIFY_METHOD,
+  parseWelfareGrantVerifyParams,
+} from './welfare-grant-contract.js';
 import { parseContactAuthoritySnapshotRequest } from '../../shared/contracts/contact-authority-snapshot.js';
 import { agentMethodParamDecoders } from './methods/params.js';
 import type { RpcParamsDecoder } from './rpc-param-decoder.js';
@@ -95,6 +103,9 @@ export interface ReverseGatewayMethodRuntime {
   handleIcpLocalPolicyRelease(
     params: IcpLocalPolicyReleaseParams,
   ): Promise<IcpLocalPolicyReleaseResult>;
+  handleWelfareGrantVerify(
+    params: WelfareGrantVerifyParams,
+  ): Promise<WelfareGrantVerifyResult>;
 }
 
 interface ReverseGatewayMethodDescriptor {
@@ -138,6 +149,17 @@ const reverseDescriptors = [
     decode: parseIcpLocalPolicyReleaseParams,
     handler: (params: IcpLocalPolicyReleaseParams, runtime) => (
       runtime.handleIcpLocalPolicyRelease(params)
+    ),
+  }),
+  // psfn-framework-h248l.7: the gateway asks THIS companion whether one of its
+  // own background-work jobs genuinely holds a welfare claim. Answered from the
+  // companion's own store over its own connection — the gateway never needs a
+  // sibling background-work grant.
+  defineReverseMethod({
+    names: [WELFARE_GRANT_VERIFY_METHOD],
+    decode: parseWelfareGrantVerifyParams,
+    handler: (params: WelfareGrantVerifyParams, runtime) => (
+      runtime.handleWelfareGrantVerify(params)
     ),
   }),
   defineReverseMethod({

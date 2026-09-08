@@ -48,6 +48,7 @@ import { GatewayClientSessionIntegrityRuntime } from './client/session-integrity
 import {
   GatewayClientReverseRpcRuntime,
   type IcpLocalPolicyAuthorityPort,
+  type WelfareGrantAuthorityPort,
 } from './client/reverse-rpc-runtime.js';
 import type { MessageHandler } from '../../channels/backplane/types.js';
 import {
@@ -395,7 +396,7 @@ export interface GatewayConnectionCloseEvent {
   error?: Error;
 }
 
-export type { IcpLocalPolicyAuthorityPort } from './client/reverse-rpc-runtime.js';
+export type { IcpLocalPolicyAuthorityPort, WelfareGrantAuthorityPort } from './client/reverse-rpc-runtime.js';
 
 export class GatewayClient implements
   LLMProviderPort,
@@ -1872,6 +1873,11 @@ export class GatewayClient implements
 
   onMemoryDeletionResolve(handler: (params: MemoryDeletionResolveParams) => Promise<MemoryDeletionResolveResult>): void {
     this.reverseRpcRuntime.onMemoryDeletionResolve(handler);
+  }
+
+  /** psfn-framework-h248l.7: this companion's own welfare-grant authority. */
+  onWelfareGrantAuthority(authority: WelfareGrantAuthorityPort): void {
+    this.reverseRpcRuntime.onWelfareGrantAuthority(authority);
   }
 
   onIcpLocalPolicyAuthority(authority: IcpLocalPolicyAuthorityPort): void {

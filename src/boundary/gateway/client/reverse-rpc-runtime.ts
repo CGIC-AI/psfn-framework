@@ -32,6 +32,10 @@ import {
 import { captureReplyCanary, getReplyCanaryCaptureToken } from '../../../core/cogsec/canary/reply-canary.js';
 import { CANARY_CARRIER_PARAM_KEY, getActiveCanaryToken } from '../../../core/cogsec/canary/canary-token.js';
 import { CHANNEL_TYPES, type SubstrateMessage } from '../../../shared/contracts/runtime.js';
+import type {
+  WelfareGrantVerifyParams,
+  WelfareGrantVerifyResult,
+} from '../welfare-grant-contract.js';
 import {
   parseVerifiedDiscordContactAuthoritySnapshot,
   type ContactAuthoritySnapshotRequest,
@@ -94,6 +98,15 @@ function assertRpcSubstrateMessage(
   if (!isRecord(value.routing)) throw new Error(`${fieldName}.routing must be an object`);
 }
 
+/**
+ * psfn-framework-h248l.7: this companion's own answer to "does that background-
+ * work job of mine genuinely hold a welfare claim?". Backed by the agent's own
+ * background-work store, so the gateway needs no sibling schema privilege.
+ */
+export interface WelfareGrantAuthorityPort {
+  verify(jobId: string): Promise<boolean>;
+}
+
 export interface IcpLocalPolicyAuthorityPort {
   inspect(input: IcpLocalPolicyInspectParams): Promise<IcpLocalPolicyInspectResult>;
   acquire(input: IcpLocalPolicyAcquireParams): Promise<IcpLocalPolicyAcquireResult>;
@@ -141,6 +154,7 @@ export class GatewayClientReverseRpcRuntime {
   private memoryDeletionProposalSnapshotHandler: ((params: MemoryDeletionProposalSnapshotParams) => Promise<MemoryDeletionProposalSnapshotResult>) | null = null;
   private memoryDeletionResolveHandler: ((params: MemoryDeletionResolveParams) => Promise<MemoryDeletionResolveResult>) | null = null;
   private icpAuthority: IcpLocalPolicyAuthorityPort | null = null;
+  private welfareGrantAuthority: WelfareGrantAuthorityPort | null = null;
   private icpReady = false;
   private icpCleanupStarted = false;
   private readonly voiceStreams = new Map<string, VoiceStreamState>();
@@ -165,6 +179,18 @@ export class GatewayClientReverseRpcRuntime {
   onMemoryDeletionPartnerAlerted(handler: (params: MemoryDeletionPartnerAlertedParams) => Promise<MemoryDeletionPartnerAlertedResult>): void { this.memoryDeletionPartnerAlertedHandler = handler; this.register(); }
   onMemoryDeletionProposalSnapshot(handler: (params: MemoryDeletionProposalSnapshotParams) => Promise<MemoryDeletionProposalSnapshotResult>): void { this.memoryDeletionProposalSnapshotHandler = handler; this.register(); }
   onMemoryDeletionResolve(handler: (params: MemoryDeletionResolveParams) => Promise<MemoryDeletionResolveResult>): void { this.memoryDeletionResolveHandler = handler; this.register(); }
+
+  /**
+   * Registration IS readiness here: the agent registers only once its own
+   * background-work store is open, and the authority holds no hold state to
+   * reconcile across a reconnect.
+   */
+  onWelfareGrantAuthority(authority: WelfareGrantAuthorityPort): void {
+    if (this.welfareGrantAuthority) throw new Error('Welfare grant authority is already registered');
+    if (this.options.isClosed()) throw new Error('Cannot register a welfare grant authority on a closed gateway connection');
+    this.welfareGrantAuthority = authority;
+    this.register();
+  }
 
   onIcpLocalPolicyAuthority(authority: IcpLocalPolicyAuthorityPort): void {
     if (this.icpAuthority) throw new Error('ICP local policy authority is already registered');
@@ -233,6 +259,7 @@ export class GatewayClientReverseRpcRuntime {
       handleIcpLocalPolicyInspect: (params) => this.handleIcpLocalPolicyInspect(params),
       handleIcpLocalPolicyAcquire: (params) => this.handleIcpLocalPolicyAcquire(params),
       handleIcpLocalPolicyRelease: (params) => this.handleIcpLocalPolicyRelease(params),
+      handleWelfareGrantVerify: (params) => this.handleWelfareGrantVerify(params),
     });
   }
 
@@ -245,6 +272,27 @@ export class GatewayClientReverseRpcRuntime {
     if (!this.icpAuthority) throw new Error('No ICP local policy authority registered');
     if (requireReady && !this.icpReady) throw new Error('ICP local policy authority is not ready');
     return this.icpAuthority;
+  }
+
+  /**
+   * Fail closed on every uncertainty: an unregistered authority THROWS rather
+   * than answering `false`, so the gateway records unavailable evidence instead
+   * of mistaking "cannot tell" for "not welfare".
+   */
+  private async handleWelfareGrantVerify(
+    params: WelfareGrantVerifyParams,
+  ): Promise<WelfareGrantVerifyResult> {
+    if (!this.welfareGrantAuthority) throw new Error('No welfare grant authority registered');
+    const companionId = this.options.companionId;
+    // The gateway addresses one companion connection; a params identity that
+    // does not name this companion is a routing fault, never a lookup.
+    if (companionId !== undefined && params.companionId !== companionId) {
+      throw new Error('Welfare grant verification addressed another companion');
+    }
+    return {
+      companionId: params.companionId,
+      granted: await this.welfareGrantAuthority.verify(params.jobId) === true,
+    };
   }
 
   private async handleIcpLocalPolicyInspect(params: IcpLocalPolicyInspectParams): Promise<IcpLocalPolicyInspectResult> {

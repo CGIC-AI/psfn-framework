@@ -1,10 +1,15 @@
-// psfn-framework-fxt1 — real-Postgres proof that the gateway welfare grant
-// verifier honors ONLY a genuinely welfare-escalated, running background-work
-// row, scoped to the authenticated companion's schema (design §8 verification
-// point 1: companion ownership is the per-companion Postgres schema). Runs the
+// psfn-framework-fxt1 / psfn-framework-h248l.7 — real-Postgres proof that the
+// gateway welfare grant verifier honors ONLY a genuinely welfare-escalated,
+// running background-work row owned by the authenticated companion. Runs the
 // REAL background-work migrations so the table + columns match production; rows
 // are seeded directly to pin the exact (welfare_claimed, state) the verifier
 // discriminates on.
+//
+// A FLEET answers through each companion's own local authority: the store below
+// stands in for the companion agent's process, reached over the same
+// `welfare.grant.verify` contract the reverse-RPC channel carries. The gateway
+// opens no sibling schema, so companion ownership is enforced by which store
+// answers, not by a schema map the gateway holds.
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Pool } from 'pg';
@@ -16,9 +21,15 @@ import {
 } from '../../test-support/postgres-test-harness.js';
 import { PostgresBackgroundWorkStore } from '../../persistence/postgres/background-work-store.js';
 import {
+  CompanionAuthorityWelfareGrantVerifier,
   createWelfareGrantVerifier,
   type WelfareGrantVerifier,
 } from './welfare-grant-verifier.js';
+import {
+  WELFARE_GRANT_VERIFY_METHOD,
+  parseWelfareGrantVerifyParams,
+  type WelfareGrantVerifyResult,
+} from './welfare-grant-contract.js';
 
 const SCHEMA_A = 'companion_a';
 const SCHEMA_B = 'companion_b';
@@ -53,7 +64,7 @@ async function seedJob(
   );
 }
 
-describe('PostgresWelfareGrantVerifier (fxt1, real Postgres)', () => {
+describe('Welfare grant verification (fxt1 / h248l.7, real Postgres)', () => {
   let harness: PostgresTestHarness;
 
   beforeAll(async () => {
@@ -64,14 +75,18 @@ describe('PostgresWelfareGrantVerifier (fxt1, real Postgres)', () => {
     await harness.stop();
   });
 
-  it('verifies welfare grants scoped to the authenticated companion schema', async () => {
+  it('verifies fleet welfare grants through each companion\'s own local authority', async () => {
     const database = await harness.createDatabase();
-    // Real migrations create agent_background_work_jobs inside each companion schema.
+    // Real migrations create agent_background_work_jobs inside each companion
+    // schema. Each store IS that companion's local authority: the gateway never
+    // touches either one.
     const storeA = await PostgresBackgroundWorkStore.connect(database.databaseUrl, { schema: SCHEMA_A });
     const storeB = await PostgresBackgroundWorkStore.connect(database.databaseUrl, { schema: SCHEMA_B });
+    const storesByCompanionId = new Map([[COMPANION_A, storeA], [COMPANION_B, storeB]]);
 
     const seedPool = createPostgresPool(database.databaseUrl, { applicationName: 'seed', max: 2 });
     let verifier: WelfareGrantVerifier | undefined;
+    const asked: Array<{ companionId: string; method: string }> = [];
     try {
       // Companion A's schema: a genuine welfare-claimed running job, plus foils.
       // (The schema's CHECK (state = 'running' OR welfare_claimed = false) makes a
@@ -84,14 +99,23 @@ describe('PostgresWelfareGrantVerifier (fxt1, real Postgres)', () => {
       // Companion B's schema: a genuine welfare-claimed running job of its own.
       await seedJob(seedPool, SCHEMA_B, { jobId: 'b-welfare-running', state: 'running', welfareClaimed: true });
 
-      verifier = createWelfareGrantVerifier({
-        databaseUrl: database.databaseUrl,
-        fleet: [
-          { companionId: COMPANION_A, postgresSchema: SCHEMA_A },
-          { companionId: COMPANION_B, postgresSchema: SCHEMA_B },
-        ],
+      verifier = new CompanionAuthorityWelfareGrantVerifier({
+        companionIds: new Set([COMPANION_A, COMPANION_B]),
+        // Stands in for the reverse-RPC hop: the params and result cross the
+        // real contract, and the answer comes from the addressed companion's
+        // OWN store — exactly what the agent handler does in production.
+        requestCompanionAgent: async (companionId, method, params): Promise<WelfareGrantVerifyResult> => {
+          asked.push({ companionId, method });
+          const request = parseWelfareGrantVerifyParams(params);
+          const store = storesByCompanionId.get(companionId);
+          if (!store) throw new Error(`No local authority for ${companionId}`);
+          const job = await store.get(request.jobId);
+          return {
+            companionId: request.companionId,
+            granted: job !== null && job.state === 'running' && job.welfareClaimed === true,
+          };
+        },
       });
-      if (!verifier) throw new Error('verifier not constructed');
 
       // Genuine welfare escalation for the owning companion → honored.
       expect(await verifier.verify('a-welfare-running', COMPANION_A)).toBe(true);
@@ -102,12 +126,23 @@ describe('PostgresWelfareGrantVerifier (fxt1, real Postgres)', () => {
       // Unknown job id → stripped.
       expect(await verifier.verify('does-not-exist', COMPANION_A)).toBe(false);
       // OWNERSHIP CLAUSE: companion A presenting companion B's genuinely
-      // welfare-claimed running job id → not found under A's schema → stripped.
+      // welfare-claimed running job id → absent from A's own store → stripped.
       expect(await verifier.verify('b-welfare-running', COMPANION_A)).toBe(false);
       // Companion B's own job verifies under B.
       expect(await verifier.verify('b-welfare-running', COMPANION_B)).toBe(true);
-      // An unknown fleet companion has no schema to scope to → stripped.
+      // An unknown fleet companion has no authority to ask → stripped, unasked.
       expect(await verifier.verify('a-welfare-running', 'stranger-companion')).toBe(false);
+
+      // Every answered question went to the authenticated companion itself, and
+      // the stranger was never broadcast to the fleet.
+      expect(asked).toEqual([
+        { companionId: COMPANION_A, method: WELFARE_GRANT_VERIFY_METHOD },
+        { companionId: COMPANION_A, method: WELFARE_GRANT_VERIFY_METHOD },
+        { companionId: COMPANION_A, method: WELFARE_GRANT_VERIFY_METHOD },
+        { companionId: COMPANION_A, method: WELFARE_GRANT_VERIFY_METHOD },
+        { companionId: COMPANION_A, method: WELFARE_GRANT_VERIFY_METHOD },
+        { companionId: COMPANION_B, method: WELFARE_GRANT_VERIFY_METHOD },
+      ]);
     } finally {
       await verifier?.close();
       await seedPool.end();

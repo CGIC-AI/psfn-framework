@@ -13,6 +13,7 @@ import {
   type AppendAutomataBusEventInput,
   type AppendAutomataBusEventResult,
   type AutomataBusCurrentFindingReadScope,
+  type AutomataBusEventReadScope,
   type AutomataBusReadScope,
   type AutomataBusSqlPool,
   type PersistedAutomataBusCurrentFinding,
@@ -168,6 +169,11 @@ export class PostgresAutomataBusRuntimeStore {
   async readHistory(input: AutomataBusReadScope): Promise<AutomataBusEvent[]> {
     this.assertCompanion(input.companionId);
     return await this.store.readHistory(input);
+  }
+
+  async readEventById(input: AutomataBusEventReadScope): Promise<AutomataBusEvent | null> {
+    this.assertCompanion(input.companionId);
+    return await this.store.readEventById(input);
   }
 
   async readCurrentFindingsByEventIds(

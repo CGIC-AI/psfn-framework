@@ -13,6 +13,7 @@ import {
   CanonicalAutomataBusWriter,
   createProductionAutomataBusWorkerAccess,
   createAutomataTerminalLifecycleAdapter,
+  parseTerminalClaim,
 } from './production-worker-adapter.js';
 import { createAutomataBusReviewerModelAdapter } from './production-reviewer-adapters.js';
 import {
@@ -68,6 +69,9 @@ function createHarness() {
       return { event, inserted: true };
     }),
     readHistory: vi.fn(async () => [...events.values()].map(value => value.event)),
+    readEventById: vi.fn(async (input: { eventId: string }) => (
+      events.get(input.eventId)?.event ?? null
+    )),
   } as unknown as PostgresAutomataBusRuntimeStore;
   const canonical = {
     getCurrentByEventIds: vi.fn(async (input: { eventIds: string[] }) => {
@@ -264,7 +268,7 @@ describe('production Automata Bus lifecycle composition', () => {
     expect(harness.order).toEqual(['persist', 'hydrate', 'index']);
   });
 
-  it('replays exactly after artifact linking and rejects changed content under the same key', async () => {
+  it('replays exactly after artifact linking and converges a changed replay on the durable terminal', async () => {
     const harness = createHarness();
     const registry = await createRegistry();
     const lifecycle = createAutomataTerminalLifecycleAdapter({
@@ -306,10 +310,110 @@ describe('production Automata Bus lifecycle composition', () => {
     const replay = await lifecycle.recordTerminalHandoff(input);
 
     expect(replay).toMatchObject({ inserted: false, handoffRef: first.handoffRef });
-    await expect(lifecycle.recordTerminalHandoff({
+    expect(replay.persistedOutcome).toEqual({
+      lifecycleState: 'completed',
+      outcome: 'completed',
+      stateReason: 'completed',
+    });
+    expect(replay.occurredAtMs).toBe(1_700_000_000_100);
+
+    // 8n40k: a re-run after a crash between the handoff commit and terminalize
+    // recomputes a DIFFERENT terminal. The durable Bus finding is authoritative:
+    // the replay reads it back instead of appending a conflicting event.
+    const diverged = await lifecycle.recordTerminalHandoff({
       ...input,
+      lifecycleState: 'failed' as const,
+      outcome: 'blocked' as const,
       stateReason: 'changed-under-replay',
-    })).rejects.toThrow(/reused with different content/u);
+      failureReason: 'the re-run failed',
+      occurredAtMs: 1_700_000_999_999,
+    });
+    expect(diverged).toMatchObject({ inserted: false, handoffRef: first.handoffRef });
+    expect(diverged.persistedOutcome).toEqual({
+      lifecycleState: 'completed',
+      outcome: 'completed',
+      stateReason: 'completed',
+    });
+    expect(diverged.occurredAtMs).toBe(1_700_000_000_100);
+    expect(harness.events.size).toBe(1);
+  });
+});
+
+describe('persisted automata terminal claim', () => {
+  const lineage = {
+    automatonClass: 'subagent.bounded' as const,
+    runId: 'subagent-1',
+    taskId: 'task-1',
+    workerId: 'subagent-1',
+    sessionIds: ['subagent:subagent-1'],
+  };
+
+  async function claimFor(
+    overrides: Partial<Parameters<
+      ReturnType<typeof createAutomataTerminalLifecycleAdapter>['recordTerminalHandoff']
+    >[0]> = {},
+  ): Promise<string> {
+    const harness = createHarness();
+    const lifecycle = createAutomataTerminalLifecycleAdapter({
+      companionId: 'companion-a',
+      registry: await createRegistry(),
+      store: harness.store,
+      writer: harness.writer,
+    });
+    await lifecycle.recordTerminalHandoff({
+      idempotencyKey: 'terminal-key',
+      lineage,
+      lifecycleState: 'completed',
+      outcome: 'completed',
+      stateReason: 'completed',
+      resultKind: 'final',
+      handoffKind: 'useful',
+      outputRefs: [],
+      occurredAtMs: 1_700_000_000_100,
+      ...overrides,
+    });
+    const event = [...harness.events.values()][0]?.event;
+    if (!event || event.type !== 'finding') throw new Error('no terminal finding persisted');
+    return event.body.claim;
+  }
+
+  it('round-trips the terminal facts it serialized', async () => {
+    expect(parseTerminalClaim(await claimFor(), 'subagent.bounded')).toEqual({
+      lifecycleState: 'completed',
+      outcome: 'completed',
+      stateReason: 'completed',
+    });
+  });
+
+  it('round-trips a multi-line failure reason after summary and usage lines', async () => {
+    const claim = await claimFor({
+      lifecycleState: 'failed',
+      outcome: 'blocked',
+      stateReason: 'failed',
+      failureReason: 'first line\nsecond line',
+      resultKind: 'none',
+      summary: 'A class-authored process line.',
+      usage: {
+        model: 'test-model',
+        inputTokens: 10,
+        outputTokens: 5,
+        durationMs: 100,
+        turns: 1,
+      },
+    });
+    expect(parseTerminalClaim(claim, 'subagent.bounded')).toEqual({
+      lifecycleState: 'failed',
+      outcome: 'blocked',
+      stateReason: 'failed',
+      failureReason: 'first line\nsecond line',
+    });
+  });
+
+  it('refuses a claim it did not write or that belongs to another class', async () => {
+    expect(() => parseTerminalClaim('Some unrelated finding claim.', 'subagent.bounded'))
+      .toThrow(/lifecycle state/u);
+    expect(async () => parseTerminalClaim(await claimFor(), 'memory.sleeptime'))
+      .rejects.toThrow(/different automaton class/u);
   });
 });
 

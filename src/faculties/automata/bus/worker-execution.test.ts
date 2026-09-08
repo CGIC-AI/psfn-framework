@@ -6,6 +6,7 @@ import {
   buildAutomataTerminalHandoffKey,
   type AutomataTerminalLifecyclePort,
   type RecordAutomataTerminalHandoffInput,
+  type PersistedAutomataTerminalOutcome,
 } from '../terminal-lifecycle.js';
 import {
   AUTOMATA_BUS_WORKER_BRIEFING_SCHEMA_VERSION,
@@ -121,7 +122,14 @@ interface TerminalHarness {
   recorded: RecordAutomataTerminalHandoffInput[];
 }
 
-function createTerminalPort(options: { fail?: Error; inserted?: boolean } = {}): TerminalHarness {
+function createTerminalPort(options: {
+  fail?: Error;
+  inserted?: boolean;
+  persisted?: {
+    occurredAtMs: number;
+    outcome: PersistedAutomataTerminalOutcome;
+  };
+} = {}): TerminalHarness {
   const recorded: RecordAutomataTerminalHandoffInput[] = [];
   return {
     recorded,
@@ -135,6 +143,12 @@ function createTerminalPort(options: { fail?: Error; inserted?: boolean } = {}):
           findingRefs: [`automata-bus-terminal:${input.idempotencyKey}`],
           evidenceRefs: [`automata-run:${input.lineage.runId}`],
           artifactRefs: [],
+          ...(options.persisted
+            ? {
+              occurredAtMs: options.persisted.occurredAtMs,
+              persistedOutcome: options.persisted.outcome,
+            }
+            : {}),
         };
       },
       inspectRun: async lineage => ({
@@ -274,6 +288,42 @@ describe('governed Automata Bus worker lifecycle', () => {
       expect(run.terminals).toHaveLength(1);
     },
   );
+
+  it('terminalizes on the durable finding when the handoff replays (8n40k)', async () => {
+    const persisted: PersistedAutomataTerminalOutcome = {
+      lifecycleState: 'completed',
+      outcome: 'completed',
+      stateReason: 'completed',
+    };
+    // The crash window: the Bus handoff committed, terminalize did not. The
+    // re-run computes a FAILED terminal; the durable finding says completed.
+    const replayed = await runClass({
+      automatonClass: 'subagent.bounded',
+      runId: 'run-replayed-terminal',
+      terminalOptions: {
+        inserted: false,
+        persisted: { occurredAtMs: 1_700_000_000_500, outcome: persisted },
+      },
+      outcome: {
+        lifecycleState: 'failed',
+        outcome: 'blocked',
+        stateReason: 'failed',
+        failureReason: 're-run failed',
+        atMs: 1_700_000_999_999,
+      },
+    });
+
+    expect(replayed.run.terminals).toHaveLength(1);
+    expect(replayed.run.terminals[0]).toMatchObject({
+      lifecycleState: 'completed',
+      outcome: 'completed',
+      stateReason: 'completed',
+      atMs: 1_700_000_000_500,
+    });
+    expect(replayed.run.terminals[0]?.failureReason).toBeUndefined();
+    expect(stageTrace(replayed.events)).toContain('terminal:replayed');
+    expect(stageTrace(replayed.events)).not.toContain('handoff:degraded');
+  });
 
   it('records a typed no-finding terminal when the model never calls the Bus tool', async () => {
     const silent = await runClass({ automatonClass: 'subagent.bounded', runId: 'subagent-2' });

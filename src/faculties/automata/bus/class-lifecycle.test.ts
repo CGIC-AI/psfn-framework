@@ -140,6 +140,38 @@ describe('runGovernedAutomataClass', () => {
     });
   });
 
+  it('reports both errors when settling a failed worker also fails (8n40k)', async () => {
+    const store = new InMemoryAutomataRunStore();
+    // The registry write that TERMINALIZES the run fails (the run still starts),
+    // so `settle()` throws from inside the failure path. The work error must
+    // survive that instead of being replaced.
+    const failingStore = Object.create(store) as InMemoryAutomataRunStore;
+    failingStore.update = async (record, previousStatus) => {
+      if (record.status !== 'running') throw new Error('registry write failed');
+      return await store.update(record, previousStatus);
+    };
+    const failingRegistry = await AutomataRunRegistry.hydrate({
+      companionId: COMPANION_ID,
+      policy: loadAutomataPolicySeedDefaults(),
+      store: failingStore,
+    });
+
+    const settled = await runGovernedAutomataClass({
+      runtime: { registry: failingRegistry },
+      spec: spec({ runId: 'run-governed-dual-error' }),
+      briefingQuery: 'deferred reflection template run',
+      work: async () => { throw new Error('template exploded'); },
+    }).catch((error: unknown) => error);
+
+    expect(settled).toBeInstanceOf(AggregateError);
+    const aggregate = settled as AggregateError;
+    expect(aggregate.errors).toHaveLength(2);
+    // Loggers read `.message`, so both causes have to be legible there too.
+    expect(aggregate.message).toContain('template exploded');
+    expect(aggregate.message).toContain('registry write failed');
+    expect((aggregate.errors[0] as Error).message).toBe('template exploded');
+  });
+
   it('runs the class work unchanged when no durable Automata runtime is composed', async () => {
     const outcome = await runGovernedAutomataClass<string>({
       spec: spec(),

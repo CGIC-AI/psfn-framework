@@ -223,13 +223,24 @@ export async function runGovernedAutomataClass<T>(input: {
     result = await input.work(session);
   } catch (error) {
     const failureReason = toErrorMessage(error);
-    await session.settle({
-      lifecycleState: 'failed',
-      outcome: 'blocked',
-      stateReason: RUN_FAILED_REASON,
-      failureReason,
-      resultKind: 'none',
-    });
+    try {
+      await session.settle({
+        lifecycleState: 'failed',
+        outcome: 'blocked',
+        stateReason: RUN_FAILED_REASON,
+        failureReason,
+        resultKind: 'none',
+      });
+    } catch (settleError) {
+      // The work error is the one the caller has to see; a settlement that
+      // also failed must not replace it (psfn-framework-8n40k). Report both,
+      // with a composed message because loggers read `.message`, not `.errors`.
+      throw new AggregateError(
+        [error, settleError],
+        `Automata class ${input.spec.automatonClass} work failed: ${failureReason}; `
+        + `settlement also failed: ${toErrorMessage(settleError)}`,
+      );
+    }
     throw error;
   }
   const lifecycleState = result.lifecycleState ?? 'completed';

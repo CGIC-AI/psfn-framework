@@ -110,7 +110,7 @@ export class RealtimeHubServer {
         Pick<EidoverseEmbodiedSessionConfig, "worldName" | "agentName">
         & Pick<
           EidoverseEmbodiedSessionDependencies,
-          "look" | "onLookError" | "say" | "body" | "logger"
+          "look" | "onLookError" | "say" | "body" | "snapshot" | "logger"
         >
       ) | null;
       locationNow?: () => number;
@@ -135,6 +135,7 @@ export class RealtimeHubServer {
           ...(options.eidoverse.onLookError ? { onLookError: options.eidoverse.onLookError } : {}),
           say: options.eidoverse.say,
           ...(options.eidoverse.body ? { body: options.eidoverse.body } : {}),
+          ...(options.eidoverse.snapshot ? { snapshot: options.eidoverse.snapshot } : {}),
           ...(options.eidoverse.logger ? { logger: options.eidoverse.logger } : {}),
         })
       : null;

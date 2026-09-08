@@ -1,10 +1,26 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import type http from "node:http";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 
+import { EidoverseEmbodiedSessionAdapter } from "./eidoverse-adapter.js";
 import { EidoverseMcplClient } from "./eidoverse-mcpl-client.js";
 import type { EidoverseMcplConfig } from "./eidoverse-mcpl-config.js";
 import { createEidoverseMcplWakeRuntime } from "./eidoverse-mcpl-runtime.js";
 import { effectiveCapabilitiesForFeatureSets } from "./eidoverse-mcpl-wire.js";
+import {
+  EidoverseSnapshotSource,
+  loadEidoverseSnapshotConfig,
+} from "./eidoverse-snapshot.js";
+import {
+  EmbodiedSessionRegistry,
+  type PsfnChannelContext,
+} from "./embodied-session.js";
+import type { FrameworkAgentAdapter } from "./framework-agent.js";
+import { normalizeSatelliteClaimConfig } from "./satellite-claim.js";
+import { SessionStore } from "./session-store.js";
 import { EidoverseMcplDoor } from "../test-support/eidoverse-mcpl-door.js";
 
 const TOKEN = "door-identity-token";
@@ -298,4 +314,180 @@ test("a dropped connection reconnects within the bounded budget and re-states th
     await client.close();
     await door.close();
   }
+});
+
+// ── First-person vision on the MCPL transport ──
+// The renderer is the world's own HTTP surface, so the door double serves it on
+// the same listener the door dials. That is what makes the derived origin real
+// here: the Hub is handed only the credential-free door URL and has to reach
+// the renderer from it.
+
+const PNG_BYTES = Buffer.from([
+  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+]);
+
+class VisionAgent implements FrameworkAgentAdapter {
+  readonly calls: Array<Parameters<FrameworkAgentAdapter["streamReply"]>[0]> = [];
+
+  async *streamReply(
+    input: Parameters<FrameworkAgentAdapter["streamReply"]>[0],
+  ): AsyncGenerator<string, string, void> {
+    this.calls.push(input);
+    yield "ok";
+    return "ok";
+  }
+
+  async close(): Promise<void> {}
+}
+
+interface McplVisionTurn {
+  channel: PsfnChannelContext | undefined;
+  door: EidoverseMcplDoor;
+  warnings: string[];
+  baseUrl: string;
+}
+
+/**
+ * One full MCPL turn with vision wired the way `main.ts` wires it: the door
+ * config is the only world address the snapshot path is given, and every
+ * logger on the path shares one warning sink so a leaked token would show up.
+ */
+async function mcplVisionTurn(
+  t: { after(fn: () => void): void },
+  snap?: (request: http.IncomingMessage, response: http.ServerResponse) => void,
+): Promise<McplVisionTurn> {
+  const door = await EidoverseMcplDoor.start({
+    world: "commons",
+    tokens: [TOKEN],
+    ...(snap ? { snap } : {}),
+  });
+  const doorConfig = config(door);
+  const snapshotConfig = loadEidoverseSnapshotConfig({
+    transport: "mcpl",
+    worldName: doorConfig.worldName,
+    agentName: doorConfig.agentName,
+    doorUrl: doorConfig.doorUrl,
+  }, {
+    EIDOVERSE_SNAPSHOT_ENABLED: "true",
+    EIDOVERSE_SNAPSHOT_TIMEOUT_MS: "1000",
+    EIDOVERSE_SNAPSHOT_MAX_BYTES: "4096",
+  });
+  assert.notEqual(snapshotConfig, null, "an enabled MCPL hub must resolve a snapshot origin");
+  const artifactsRoot = fs.mkdtempSync(path.join(os.tmpdir(), "eidoverse-mcpl-vision-"));
+  t.after(() => { fs.rmSync(artifactsRoot, { recursive: true, force: true }); });
+
+  const warnings: string[] = [];
+  const warn = (message: string): void => { warnings.push(message); };
+  const client = new EidoverseMcplClient(doorConfig, credential, { logger: { info: warn, warn } });
+  const agent = new VisionAgent();
+  const adapter = new EidoverseEmbodiedSessionAdapter({
+    worldName: doorConfig.worldName,
+    agentName: doorConfig.agentName,
+    satelliteClaim: normalizeSatelliteClaimConfig({
+      capabilityProfile: "world-avatar",
+      satelliteId: "eidoverse-world",
+      endpointId: "eidoverse-avatar",
+      displayName: "Eidoverse World Avatar",
+    }),
+    placeMap: null,
+  }, {
+    embodiedSessions: new EmbodiedSessionRegistry("satellite.endpoint"),
+    sessions: new SessionStore(60),
+    agent,
+    look: client,
+    say: client,
+    snapshot: new EidoverseSnapshotSource(snapshotConfig!, {
+      artifactsRoot,
+      logger: { warn },
+    }),
+    logger: { warn },
+  });
+  const wake = createEidoverseMcplWakeRuntime({
+    handleEidoverseAddressedUtterance: async (input) => adapter.handleAddressedUtterance(input),
+  }, { ambientSayDebounceMs: 50, catchupWake: false }, { logger: { warn } });
+  client.setIncomingHandler((messages) => wake.deliver(messages));
+  try {
+    await client.start();
+    await door.waitForHandshake();
+    await door.registerChannel();
+    adapter.connect();
+    await door.deliver([
+      door.message({
+        text: "Ada: what do you see?",
+        tags: ["chat:mention", "chat:addressed"],
+        author: { id: "ada", name: "Ada" },
+      }),
+    ]);
+    await waitFor(() => agent.calls.length > 0, "the MCPL turn to reach the agent");
+  } finally {
+    await wake.close();
+    adapter.disconnect();
+    await client.close();
+    await door.close();
+  }
+  return {
+    channel: agent.calls.at(-1)?.channel,
+    door,
+    warnings,
+    baseUrl: snapshotConfig?.baseUrl ?? "",
+  };
+}
+
+test("an MCPL turn carries a first-person frame from the origin derived from the door", async (t) => {
+  const turn = await mcplVisionTurn(t, (_request, response) => {
+    response.writeHead(200, { "content-type": "image/png", "content-length": PNG_BYTES.length });
+    response.end(PNG_BYTES);
+  });
+
+  assert.equal(turn.baseUrl.startsWith("http://127.0.0.1:"), true, "ws://host/mcpl yields http://host");
+  assert.deepEqual(turn.door.snapRequests, ["/snap?world=commons&follow=companion&view=first"]);
+  assert.equal(turn.channel?.visionCaptures?.length, 1);
+  assert.equal(turn.channel?.visionCaptureImages?.length, 1);
+  assert.equal(
+    turn.channel?.visionCaptureImages?.[0]?.dataBase64,
+    PNG_BYTES.toString("base64"),
+    "the frame the renderer served is the frame the turn carries",
+  );
+  assert.equal(
+    (turn.channel?.contextNotes ?? []).some((note) => note.key === "eidoverse.look"),
+    true,
+    "the text look tier is unchanged by vision",
+  );
+});
+
+test("an MCPL turn with no renderer attached degrades to its text look notes", async (t) => {
+  const turn = await mcplVisionTurn(t);
+
+  assert.deepEqual(turn.door.snapRequests, ["/snap?world=commons&follow=companion&view=first"]);
+  assert.equal(turn.channel?.visionCaptures, undefined, "no renderer means no vision seam");
+  assert.equal(turn.channel?.visionCaptureImages, undefined);
+  assert.equal(
+    (turn.channel?.contextNotes ?? []).some((note) => note.key === "eidoverse.look"),
+    true,
+    "the turn still happens on the text tier",
+  );
+  assert.equal(
+    turn.warnings.some((message) => message.includes("Eidoverse snapshot is unavailable")),
+    true,
+    "an absent renderer says so exactly once, without an address",
+  );
+});
+
+test("the identity token reaches neither the derived origin, the snapshot request, nor a log line", async (t) => {
+  const turn = await mcplVisionTurn(t, (_request, response) => {
+    response.writeHead(200, { "content-type": "image/png", "content-length": PNG_BYTES.length });
+    response.end(PNG_BYTES);
+  });
+
+  assert.equal(turn.baseUrl.includes(TOKEN), false, "the derived origin never carries the dial token");
+  assert.equal(
+    turn.door.snapRequests.every((url) => !url.includes(TOKEN) && !url.includes("token")),
+    true,
+    "the renderer is asked for a frame, not authenticated with the world credential",
+  );
+  assert.equal(
+    turn.warnings.every((message) => !message.includes(TOKEN)),
+    true,
+    `no log line may carry the identity token: ${turn.warnings.join(" | ")}`,
+  );
 });

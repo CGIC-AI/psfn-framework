@@ -11,7 +11,7 @@ import type { ImageVisionReviewer } from '../../../../primitives/images/types.js
 import type { VisionIntakeImageScreenerPort } from '../vision-attachments.js';
 import type { SessionManager } from '../../../session/manager.js';
 import type { CapturedSessionReads } from '../../../session/manager/captured-session-owner.js';
-import type { TurnToolResultCustodyRecord } from '../turn-records.js';
+import type { TurnToolResultCustodyRecord } from '../turn-tool-result-custody.js';
 import type { DisclosureLineage } from '../../../cogsec/disclosure/contracts.js';
 import type { ToolResultCustodyEdge } from '../../../../shared/contracts/tool-result-custody.js';
 import type { MetacognitiveFlag } from '../../../self-model/metacognition.js';

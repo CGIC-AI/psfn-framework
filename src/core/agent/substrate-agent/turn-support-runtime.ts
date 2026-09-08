@@ -33,10 +33,10 @@ import {
   buildTurnToolSummary as buildTurnToolSummaryForTurn,
   recordAssistantMessage as recordAssistantMessageForTurn,
   recordToolObservations as recordToolObservationsForTurn,
-  type TurnToolResultCustodyRecord,
   recordUserMessage as recordUserMessageForTurn,
   type TurnSessionWriteManager,
 } from './turn-records.js';
+import type { TurnToolResultCustodyRecord } from './turn-tool-result-custody.js';
 import {
   inferPostTurnActions as inferPostTurnActionsForTurn,
   runIntentionPostTurnHooks as runIntentionPostTurnHooksForTurn,

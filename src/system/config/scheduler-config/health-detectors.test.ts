@@ -60,6 +60,13 @@ describe('healthDetectors.incidentAlerts owner-file contract', () => {
     )).toThrow(/structural read ceiling/u);
   });
 
+  it('refuses a bundle window of one, which would defeat restart deduplication', () => {
+    expect(() => validateHealthDetectorsConfig(withIncidentAlerts({ bundleEventLimit: 1 }), SOURCE))
+      .toThrow(/bundleEventLimit/u);
+    expect(validateHealthDetectorsConfig(withIncidentAlerts({ bundleEventLimit: 2 }), SOURCE)
+      .incidentAlerts.bundleEventLimit).toBe(2);
+  });
+
   it('requires a positive bundle window and ledger capacity', () => {
     expect(() => validateHealthDetectorsConfig(withIncidentAlerts({ bundleEventLimit: 0 }), SOURCE))
       .toThrow(/bundleEventLimit/u);

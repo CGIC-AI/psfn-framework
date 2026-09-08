@@ -251,8 +251,10 @@ export function createHumanEscalationControlPlane<TNotice>(
         }
         // The provisional outcome is the fail-closed one. A process that dies
         // between the claim and the settle leaves a row that does not claim a
-        // delivery nobody can prove happened.
-        const lost = await claim('delivery_failed');
+        // delivery nobody can prove happened. It is also what the settle below
+        // compares against, so this value names the row this caller owns.
+        const provisionalOutcome = 'delivery_failed' as const;
+        const lost = await claim(provisionalOutcome);
         if (lost) return lost;
         try {
           outcome = await sink.deliver(request.notice, record);
@@ -268,7 +270,11 @@ export function createHumanEscalationControlPlane<TNotice>(
           });
           outcome = 'delivery_failed';
         }
-        await options.ledger.settleAttempt(idempotencyKey, outcome);
+        await options.ledger.settleAttempt({
+          idempotencyKey,
+          expectedOutcome: provisionalOutcome,
+          outcome,
+        });
       }
 
       if (outcome === 'delivered') {

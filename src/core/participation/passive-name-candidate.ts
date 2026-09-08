@@ -35,6 +35,7 @@ import {
 } from './room-signal.js';
 import type { RoomSignalSettings } from '../../system/config/participation-config.js';
 import type { BiographicalAliasResolver } from '../../faculties/memory/biographical/alias-address.js';
+import { resolveIdentityChannel } from '../agent/substrate-agent/runtime-context.js';
 
 /**
  * Deterministic passive-name participation candidate gate (free-time social
@@ -258,7 +259,10 @@ export class PassiveNameCandidateBuilder {
       && this.aliasResolver !== undefined && observation !== null
     ) {
       const aliases = await this.aliasResolver.resolve({
-        source: message.channelType,
+        // The same canonical identity-channel resolution every other
+        // contact lookup uses; a raw channelType would miss the satellite,
+        // voice and terminal mappings and silently resolve nobody.
+        source: resolveIdentityChannel(message),
         transportParticipantId: observation.author.authorId,
       });
       const admitted = aliases.filter(

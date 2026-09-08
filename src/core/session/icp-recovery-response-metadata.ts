@@ -1,8 +1,12 @@
 import type {
   IntentionalNoReplyMetadata,
+  NotificationAckMetadata,
   ResponseMetadata,
+  RuntimeFallbackProvenance,
 } from '../../shared/contracts/runtime.js';
 import { parseIcpConversationCorrelation } from '../../shared/contracts/icp-autonomy.js';
+import { NOTIFICATION_ACK_DISPOSITION } from '../../shared/agent-response-disposition.js';
+import { normalizeRuntimeFallbackProvenance } from '../../shared/runtime-fallback-provenance.js';
 import {
   TOOL_CALL_OUTCOMES,
   type ToolCallOutcomeCounts,
@@ -36,25 +40,46 @@ import {
 } from './icp-recovery-fatigue-metadata.js';
 import { assertFatigueRecoveryBinding } from './icp-recovery-fatigue-binding.js';
 
-const METADATA_KEYS = new Set([
-  'model',
-  'inputTokens',
-  'outputTokens',
-  'durationMs',
-  'turnId',
-  'requestId',
-  'icpCorrelation',
-  'noReply',
-  'internalState',
-  'internalStateSnapshotRef',
-  'metacognitiveFlags',
-  'retrievalProvenanceRefs',
-  'toolCallOutcomes',
-  'diagnostics',
-  'broadcastSafety',
-  'fatigue',
-  'fatiguePendingSpend',
-]);
+/**
+ * Every `ResponseMetadata` field this codec knows about, and whether it is
+ * recovered ('parsed') or deliberately never recorded on an ICP recovery
+ * response ('excluded').
+ *
+ * The map is keyed on `keyof ResponseMetadata`, so a field added to the runtime
+ * contract without a decision here is a TypeScript error at build time instead
+ * of a runtime "contains unknown fields" rejection that fails a live correlated
+ * turn (psfn-framework-lvoda; the same seam already broke once on
+ * `toolCallOutcomes`). Admit a new field through its own strict parser — never
+ * by loosening the allowlist.
+ */
+export const ICP_RECOVERY_METADATA_KEY_HANDLING:
+  Record<keyof ResponseMetadata, 'parsed' | 'excluded'> = {
+  model: 'parsed',
+  inputTokens: 'parsed',
+  outputTokens: 'parsed',
+  durationMs: 'parsed',
+  turnId: 'parsed',
+  requestId: 'parsed',
+  icpCorrelation: 'parsed',
+  runtimeFallbackProvenance: 'parsed',
+  noReply: 'parsed',
+  notificationAck: 'parsed',
+  internalState: 'parsed',
+  internalStateSnapshotRef: 'parsed',
+  metacognitiveFlags: 'parsed',
+  retrievalProvenanceRefs: 'parsed',
+  toolCallOutcomes: 'parsed',
+  diagnostics: 'parsed',
+  broadcastSafety: 'parsed',
+  fatigue: 'parsed',
+  fatiguePendingSpend: 'parsed',
+};
+
+const METADATA_KEYS = new Set(
+  Object.entries(ICP_RECOVERY_METADATA_KEY_HANDLING)
+    .filter(([, handling]) => handling === 'parsed')
+    .map(([key]) => key),
+);
 
 function parseNoReply(
   value: unknown,
@@ -99,6 +124,48 @@ function parseNoReply(
     ...(channelId ? { channelId } : {}),
     ...(toolCallId ? { toolCallId } : {}),
     ...(reason ? { reason } : {}),
+  };
+}
+
+/**
+ * Provenance for a runtime-authored fallback reply (charter Law 17). The turn
+ * runtime spreads this onto the same response metadata an ICP no-reply turn
+ * persists, so a correlated turn that took a vision/runtime fallback must
+ * recover it rather than reject the record. Shape validation reuses the single
+ * shared normalizer; the codec only adds its strict no-unknown-field rule.
+ */
+function parseRuntimeFallbackProvenance(
+  value: unknown,
+  label: string,
+): RuntimeFallbackProvenance {
+  const raw = requireRecord(value, label);
+  assertExactKeys(raw, new Set(['schemaVersion', 'authoredBy', 'model', 'strategy']), label);
+  return normalizeRuntimeFallbackProvenance(raw, label);
+}
+
+/**
+ * Transport receipt for an inbound notification handled on an asynchronous
+ * channel surface. Never companion-authored channel output, but it rides the
+ * same ResponseMetadata an ICP delivery observation records, so the codec must
+ * round-trip it exactly and reject any other disposition or outcome.
+ */
+function parseNotificationAck(value: unknown, label: string): NotificationAckMetadata {
+  const raw = requireRecord(value, label);
+  assertExactKeys(raw, new Set(['schemaVersion', 'disposition', 'outcome']), label);
+  if (raw.schemaVersion !== 1) {
+    throw new Error(`${label}.schemaVersion must be 1`);
+  }
+  if (raw.disposition !== NOTIFICATION_ACK_DISPOSITION) {
+    throw new Error(`${label}.disposition is unsupported`);
+  }
+  return {
+    schemaVersion: 1,
+    disposition: NOTIFICATION_ACK_DISPOSITION,
+    outcome: requireEnum(
+      raw.outcome,
+      ['forwarded_to_agent', 'blocked_by_policy'],
+      `${label}.outcome`,
+    ),
   };
 }
 
@@ -391,6 +458,22 @@ export function parseIcpRecoveryResponseMetadata(value: unknown, label: string):
     turnId,
     requestId,
     icpCorrelation: correlation,
+    ...(raw.runtimeFallbackProvenance !== undefined
+      ? {
+          runtimeFallbackProvenance: parseRuntimeFallbackProvenance(
+            raw.runtimeFallbackProvenance,
+            `${label}.runtimeFallbackProvenance`,
+          ),
+        }
+      : {}),
+    ...(raw.notificationAck !== undefined
+      ? {
+          notificationAck: parseNotificationAck(
+            raw.notificationAck,
+            `${label}.notificationAck`,
+          ),
+        }
+      : {}),
     ...(raw.noReply !== undefined
       ? {
           noReply: parseNoReply(raw.noReply, `${label}.noReply`, {

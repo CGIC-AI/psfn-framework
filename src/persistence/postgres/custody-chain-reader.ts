@@ -45,11 +45,7 @@ import {
   type EgressDeliveryRecord,
 } from '../../core/cogsec/disclosure/egress-delivery-record.js';
 import type { HealthEventOwner } from '../../shared/contracts/health-event.js';
-import { createPostgresPool, ensurePostgresSchema, queryOne, queryRows } from '../postgres.js';
-import {
-  POSTGRES_CUSTODY_SNAPSHOT_MIGRATIONS,
-  POSTGRES_EGRESS_DELIVERY_RECORD_MIGRATIONS,
-} from './migrations.js';
+import { createPostgresPool, queryOne, queryRows } from '../postgres.js';
 
 interface SnapshotRow extends QueryResultRow {
   snapshot_json: unknown;
@@ -105,7 +101,20 @@ implements CustodyChainSnapshotReadPort, CustodyChainDeliveryReadPort {
     private readonly ownsPool: boolean,
   ) {}
 
-  static async connect(
+  /**
+   * Opened by the persistence runtime with the SAME `schema`/`role` the custody
+   * writer stores pin, so the reader and the turn look at one tenant boundary.
+   * A reader on `public` while the turn writes to a companion schema would
+   * report every real chain as absent — the one answer an audit surface must
+   * never give wrongly.
+   *
+   * It deliberately runs NO migrations. The writer stores own this schema and
+   * have already ensured it in this same process; a read-only surface that
+   * creates tables would both contradict the deployment's "verify, never
+   * repair" tenancy rule and, on a pinned tenant role, fail on a privilege it
+   * has no business holding.
+   */
+  static connect(
     databaseUrl: string,
     options: { schema?: string; role?: string } = {},
   ): Promise<PostgresCustodyChainReader> {
@@ -115,25 +124,12 @@ implements CustodyChainSnapshotReadPort, CustodyChainDeliveryReadPort {
       schema: options.schema,
       role: options.role,
     });
-    await PostgresCustodyChainReader.ensureSchema(pool);
-    return new PostgresCustodyChainReader(pool, true);
+    return Promise.resolve(new PostgresCustodyChainReader(pool, true));
   }
 
   /** Test/embedding entry point: the caller owns the pool lifecycle. */
-  static async fromPool(pool: Pool): Promise<PostgresCustodyChainReader> {
-    await PostgresCustodyChainReader.ensureSchema(pool);
+  static fromPool(pool: Pool): PostgresCustodyChainReader {
     return new PostgresCustodyChainReader(pool, false);
-  }
-
-  /**
-   * The reader ensures the same schema the writers do. It is idempotent, and
-   * the alternative — assuming the agent already wrote — makes the Garden
-   * surface fail with a raw relation error the first time an operator opens it
-   * on a companion that has not yet completed a turn.
-   */
-  private static async ensureSchema(pool: Pool): Promise<void> {
-    await ensurePostgresSchema(pool, POSTGRES_CUSTODY_SNAPSHOT_MIGRATIONS);
-    await ensurePostgresSchema(pool, POSTGRES_EGRESS_DELIVERY_RECORD_MIGRATIONS);
   }
 
   async resolveSnapshot(

@@ -8,7 +8,7 @@ import {
   Settings,
   UserRoundCog,
 } from 'lucide-react';
-import type { HubStreamState } from '../lib/stream/hub-stream.js';
+import type { HubStreamState, HubStreamStore } from '../lib/stream/hub-stream.js';
 import type { FleetRosterCompanion } from '../lib/fleet-roster.js';
 import { DrawerHeader } from './overlay-drawer.js';
 import type { MicMode } from './types.js';
@@ -17,6 +17,7 @@ import type { Z02LinkState } from './use-z02-link.js';
 import { Z02LinkSection } from './z02-link-section.js';
 import { AvatarDisplaySettings } from './avatar-display-settings.js';
 import { InstallAppSection } from './install-app-section.js';
+import { EmbodimentSection } from './embodiment-section.js';
 import type { CompanionDisplayController } from './use-companion-display.js';
 
 export type CompanionUiAccessPresentation = Readonly<{
@@ -28,6 +29,7 @@ export type CompanionUiAccessPresentation = Readonly<{
 
 export function SettingsDrawer({
   access,
+  activeStream,
   activeCompanionId,
   companions,
   connecting,
@@ -54,6 +56,7 @@ export function SettingsDrawer({
   onZ02Link,
 }: {
   access: CompanionUiAccessPresentation;
+  activeStream: HubStreamStore | null;
   activeCompanionId: string | null;
   companions: readonly FleetRosterCompanion[];
   connecting: boolean;
@@ -176,6 +179,8 @@ export function SettingsDrawer({
         </section>
 
         <AvatarDisplaySettings key={activeCompanionId} display={display} label={companionLabel} />
+        <EmbodimentSection stream={activeStream} companionId={activeCompanionId} companionName={companionLabel}
+          connected={streamState.connection === 'ready'} signedIn={access.state === 'signed_in'} />
         <InstallAppSection />
 
         <section className="settings-section" aria-label="Location awareness">

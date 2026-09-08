@@ -513,6 +513,17 @@ required owner files, seeds, and canonical modes before rollout.
   reaches the dedicated gateway backup role, never a companion runtime login.
   A fleet gateway reads no sibling schema at all: welfare grants are answered by
   each companion's own runtime authority over `welfare.grant.verify`.
+- **Retired authority converges, it does not crash.** A fleet provisioned before
+  the fleet welfare verifier was retired still carries that role's cross-schema
+  `USAGE`/`SELECT` on every companion schema, and its `fleet-auth.json` still
+  declares the `welfareVerifier` block. Startup revokes the retired role's tenant
+  privileges (idempotent, logged by name) and the exact-grantee proof tolerates
+  only that one named legacy role; every other unexpected grantee, `PUBLIC`
+  included, still refuses the schema. The owner-file block is warned about and
+  ignored for a fleet of more than one companion. Remove the block and the
+  `FLEET_AUTH_WELFARE_VERIFIER_DATABASE_URL` credential at your convenience; a
+  verifier role renamed away from the canonical retired name must have its tenant
+  grants revoked by hand.
 
 ## Focused tests
 

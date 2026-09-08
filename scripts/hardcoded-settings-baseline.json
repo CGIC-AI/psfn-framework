@@ -11166,6 +11166,20 @@
     },
     {
       "file": "src/shared/contracts/settings-garden-contract.ts",
+      "name": "SETTINGS_GARDEN_FIELD_EXPOSURE.postgresStoreReadinessRetryAttempts",
+      "value": "{ sectionId: 'sessions', surface: 'advanced' }",
+      "form": "object-member",
+      "note": "Canonical Garden exposure metadata for the settings.json-owned PostgreSQL store readiness retry attempt budget; this literal locates the owned field and is not a runtime override."
+    },
+    {
+      "file": "src/shared/contracts/settings-garden-contract.ts",
+      "name": "SETTINGS_GARDEN_FIELD_EXPOSURE.postgresStoreReadinessRetryBackoffMs",
+      "value": "{ sectionId: 'sessions', surface: 'advanced' }",
+      "form": "object-member",
+      "note": "Canonical Garden exposure metadata for the settings.json-owned PostgreSQL store readiness retry backoff; this literal locates the owned field and is not a runtime override."
+    },
+    {
+      "file": "src/shared/contracts/settings-garden-contract.ts",
       "name": "SETTINGS_GARDEN_FIELD_EXPOSURE.profileSynthesisCooldownMs",
       "value": "{ sectionId: 'profile', surface: 'advanced' }",
       "form": "object-member",
@@ -13778,6 +13792,20 @@
       "value": "{ min: 1000, max: 30000 }",
       "form": "object-member",
       "note": "Canonical owner-file/schema metadata SETTINGS_VALIDATION.obsidianTimeoutMs; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
+    },
+    {
+      "file": "src/system/settings/form.ts",
+      "name": "SETTINGS_VALIDATION.postgresStoreReadinessRetryAttempts",
+      "value": "{ min: 1, max: 20 }",
+      "form": "object-member",
+      "note": "Canonical owner-file validation bounds for the settings.json-owned readiness retry attempt budget; the literal defines the accepted range for the owned JSON contract rather than a parallel runtime override."
+    },
+    {
+      "file": "src/system/settings/form.ts",
+      "name": "SETTINGS_VALIDATION.postgresStoreReadinessRetryBackoffMs",
+      "value": "{ min: 100, max: 60000 }",
+      "form": "object-member",
+      "note": "Canonical owner-file validation bounds for the settings.json-owned readiness retry backoff; the literal defines the accepted range for the owned JSON contract rather than a parallel runtime override."
     },
     {
       "file": "src/system/settings/form.ts",

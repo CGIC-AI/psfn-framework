@@ -1115,6 +1115,7 @@ describe('GardenOperatorSurface fleet transport routing', () => {
           store: 'observer_eval_sidecar',
           label: 'observer eval sidecar',
           requirement: 'optional',
+          degradesOperatorReadiness: false,
           mismatch: 'private database endpoint refused the connection',
         }],
       }),
@@ -1137,9 +1138,94 @@ describe('GardenOperatorSurface fleet transport routing', () => {
       status: 'ok',
       dependencies: {
         adminTransports: { status: 'ready' },
-        postgresStores: { status: 'degraded', degradedCount: 1 },
+        postgresStores: {
+          status: 'degraded',
+          degradedCount: 1,
+          // psfn-framework-6c6cq: named, so the failure is diagnosable...
+          degradedStores: [{
+            store: 'observer_eval_sidecar',
+            requirement: 'optional',
+            degradesOperatorReadiness: false,
+          }],
+        },
       },
     });
+    // ...but still content-free: /health is always public.
     expect(body).not.toContain('private database endpoint');
+  });
+
+  // psfn-framework-6c6cq. Garden used to serve a flat 1/1 Ready while its
+  // model-usage reader stayed permanently broken, folded into an anonymous
+  // degraded count with no store name and no readiness effect.
+  it('refuses a healthy verdict while a readiness-coupled store stays degraded', async () => {
+    const registry = new FleetGardenTargetRegistry([{
+      companionId: COMPANION_A,
+      endpoint: { mode: 'socket', socketPath: '/run/admin-a.sock', timeoutMs: 1_000 },
+    }]);
+    registry.reportHealth(COMPANION_A, {
+      status: 'ready',
+      probedAt: '2030-01-01T00:00:00.000Z',
+    });
+    const controlPlane = new FleetGardenControlPlane({
+      registry,
+      verifier: createRequestCapabilityVerifier(verifierConfig),
+      replay: new AtomicRequestCapabilityReplayPort(),
+    });
+    const surface = new GardenOperatorSurface({
+      port: 1,
+      host: '127.0.0.1',
+      config: config(),
+      fleetControlPlane: controlPlane,
+      fleetTransport: {
+        close: callback => callback(),
+        probeAll: async () => undefined,
+        proxyBufferedApiRequest: () => { throw new Error('not used'); },
+        handleTelemetryUpgrade: () => { throw new Error('not used'); },
+      },
+      // The snapshot is only read after readiness sealed, so a store listed
+      // here has already spent its whole retry budget.
+      postgresReadiness: () => ({
+        phase: 'ready',
+        pending: [],
+        readyStores: [],
+        degraded: [{
+          store: 'model_usage_diagnostics',
+          label: 'model usage diagnostics',
+          requirement: 'optional',
+          degradesOperatorReadiness: true,
+          mismatch: 'password authentication failed for the runtime role',
+        }],
+      }),
+    });
+    let status = 0;
+    let body = '';
+    const res = {
+      writableEnded: false,
+      destroyed: false,
+      writeHead(nextStatus: number) { status = nextStatus; return this; },
+      end(nextBody: string) { body = nextBody; this.writableEnded = true; return this; },
+    } as unknown as ServerResponse;
+
+    await (
+      surface as unknown as { handleHealth(response: ServerResponse): Promise<void> }
+    ).handleHealth(res);
+
+    expect(status).toBe(503);
+    expect(JSON.parse(body)).toMatchObject({
+      status: 'degraded',
+      dependencies: {
+        adminTransports: { status: 'ready' },
+        postgresStores: {
+          status: 'degraded',
+          degradedCount: 1,
+          degradedStores: [{
+            store: 'model_usage_diagnostics',
+            requirement: 'optional',
+            degradesOperatorReadiness: true,
+          }],
+        },
+      },
+    });
+    expect(body).not.toContain('password authentication failed');
   });
 });

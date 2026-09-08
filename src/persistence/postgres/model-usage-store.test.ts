@@ -77,6 +77,10 @@ describe('PostgresModelUsageStore previous-period totals', () => {
       multiCompanion: true,
       postgresSchema: 'companion_follower',
       postgresRole: 'follower_runtime',
+      // 6c6cq: the read-only diagnostic reader carries the operator-declared
+      // readiness retry budget, so the factory refuses to build one without it.
+      postgresStoreReadinessRetryAttempts: 1,
+      postgresStoreReadinessRetryBackoffMs: 0,
       companionFleet: {
         companions: [
           { postgresSchema: 'arbitrary_primary_schema', postgresRole: 'primary_runtime' },

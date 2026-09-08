@@ -845,6 +845,15 @@ export function normalizeTurnRecord(raw: unknown, expectedChannelId: string): Tu
   const versionPointers = parseVersionPointers(raw.versionPointers);
 
   const contextManifestRef = raw.contextManifestRef;
+  // ccgdz.1: the custody snapshot ref is the lineage's own generation context
+  // key, so it must be exactly `turn:<turnId>` for THIS turn. A ref naming a
+  // different turn is a cross-bound custody claim and is refused rather than
+  // stored.
+  const custodySnapshotRef = raw.custodySnapshotRef;
+  if (custodySnapshotRef !== undefined
+    && (typeof custodySnapshotRef !== 'string' || custodySnapshotRef !== `turn:${turnId}`)) {
+    throw new Error('TurnRecord field "custodySnapshotRef" must be turn:<turnId> for this turn');
+  }
   const internalStateSnapshotRef = raw.internalStateSnapshotRef;
   const observability = parseTurnObservability(raw.observability, {
     turnId,
@@ -905,6 +914,7 @@ export function normalizeTurnRecord(raw: unknown, expectedChannelId: string): Tu
     ...(typeof contextManifestRef === 'string' && contextManifestRef.trim().length > 0
       ? { contextManifestRef: contextManifestRef.trim() }
       : {}),
+    ...(custodySnapshotRef !== undefined ? { custodySnapshotRef } : {}),
     ...(typeof internalStateSnapshotRef === 'string' && internalStateSnapshotRef.trim().length > 0
       ? { internalStateSnapshotRef: internalStateSnapshotRef.trim() }
       : {}),

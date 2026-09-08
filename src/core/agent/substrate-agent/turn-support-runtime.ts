@@ -4,6 +4,13 @@ import type { EventBus, EventMap } from '../../../shared/event-bus.js';
 import type { CapturedSessionReads } from '../../session/manager/captured-session-owner.js';
 import type { TrustLevel } from '../../../system/trust/types.js';
 import type { DisclosureToolResultSource } from '../../cogsec/disclosure/generation-lineage.js';
+import type { DisclosureLineage } from '../../cogsec/disclosure/contracts.js';
+import {
+  buildCustodySnapshot,
+  custodySnapshotContentDigest,
+  type CustodySnapshotStorePort,
+  type CustodyToolResultEdge,
+} from '../../cogsec/disclosure/custody-snapshot.js';
 import { normalizeChannelPrivacy } from '../../../system/trust/context-envelope.js';
 import type { AgentResponse, CorrelationMetadata, InferredPostTurnAction, IntentionalNoReplyMetadata, MessagePromptOverrideMode, ObservabilityCallType, ParentTurnContinuationStop, RuntimeFallbackProvenance, SubstrateMessage, TurnID, TurnRecord, TurnUsage } from '../../../shared/contracts/runtime.js';
 import type { TurnObservabilityRecord } from '../../turns/observability.js';
@@ -74,6 +81,11 @@ export interface TurnSupportRuntimeOptions {
   /** Configured companion identity, used as the fallback companion scope on
    *  ordinary human-ingress turn correlations (icpCorrelation still wins). */
   companionId?: string;
+  /**
+   * Durable per-turn custody snapshot sink (psfn-framework-ccgdz.1). Absent,
+   * the folded disclosure lineage stays in-process exactly as before.
+   */
+  custodySnapshotStore?: CustodySnapshotStorePort;
 }
 
 export class TurnSupportRuntime {
@@ -85,6 +97,7 @@ export class TurnSupportRuntime {
   private readonly hashPromptText: (text: string) => string;
   private readonly resolveContextWindow: () => number;
   private readonly companionId?: string;
+  private readonly custodySnapshotStore: CustodySnapshotStorePort | null;
   private introspectionTurnSensitivityDecisions: IntrospectionTurnSensitivityDecisions | null = null;
 
   private activeTurnCorrelation: CorrelationMetadata | null = null;
@@ -115,6 +128,62 @@ export class TurnSupportRuntime {
     this.companionId = typeof options.companionId === 'string' && options.companionId.trim().length > 0
       ? options.companionId.trim()
       : undefined;
+    this.custodySnapshotStore = options.custodySnapshotStore ?? null;
+  }
+
+  /**
+   * Persist this turn's folded disclosure lineage as a durable custody snapshot
+   * (psfn-framework-ccgdz.1) and return its resolvable reference — the
+   * lineage's own `generationContextRef` (`turn:<turnId>`), so no identifier is
+   * minted here.
+   *
+   * Record-first: the turn runtime calls this immediately after the fold and
+   * before the reply is composed, so the record exists before anything can be
+   * delivered on the strength of it.
+   *
+   * Failure is VISIBLE, not thrown. The lineage-consuming egress guard already
+   * fails closed on its own terms; converting a custody-store outage into a
+   * turn failure would silence the companion for a write that only records what
+   * already happened. The ref is simply absent from the TurnRecord and the
+   * error is logged, so a missing chain reads as missing rather than as proof.
+   */
+  async recordTurnCustodySnapshot(input: {
+    lineage: DisclosureLineage;
+    turnId: TurnID;
+    requestId: string;
+    toolResultEdges?: ReadonlyMap<string, CustodyToolResultEdge>;
+  }): Promise<string | undefined> {
+    const store = this.custodySnapshotStore;
+    if (!store) return undefined;
+    try {
+      const snapshot = buildCustodySnapshot({
+        lineage: input.lineage,
+        turnId: input.turnId,
+        requestId: input.requestId,
+        ...(input.toolResultEdges ? { toolResultEdges: input.toolResultEdges } : {}),
+      });
+      const outcome = await store.record(snapshot);
+      if (outcome === 'diverged') {
+        // Two folds disagreed on one generation context — a recovered turn that
+        // reconstructed a different admitted-source set, or a genuine turn-id
+        // collision. The FIRST snapshot stands because it is the fold that
+        // produced the delivered reply; this must never be silent.
+        log.error('Custody snapshot diverged from the stored record for this turn', {
+          turnId: input.turnId,
+          requestId: input.requestId,
+          generationContextRef: snapshot.generationContextRef,
+          rejectedContentSha256: custodySnapshotContentDigest(snapshot),
+        });
+      }
+      return snapshot.generationContextRef;
+    } catch (error) {
+      log.error('Custody snapshot write failed; this turn has no durable custody record', {
+        turnId: input.turnId,
+        requestId: input.requestId,
+        error: toErrorMessage(error),
+      });
+      return undefined;
+    }
   }
 
   setIntrospectionTurnSensitivityDecisions(
@@ -480,6 +549,7 @@ export class TurnSupportRuntime {
     turnObservability?: TurnObservabilityRecord;
     internalStateSnapshotRef?: string;
     persistedUserMessageContent?: string;
+    custodySnapshotRef?: string;
   }, sessionReads: CapturedSessionReads): TurnRecord {
     if (input.message.channelId !== input.turnSessionIdentity.sourceChannelId) {
       throw new Error('TurnRecord physical source does not match the captured turn identity');

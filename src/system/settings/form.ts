@@ -63,6 +63,7 @@ export const SETTINGS_VALIDATION = {
   compactionEmotionalSalienceThresholdPct: { min: 0, max: 100 },
   backgroundFailureEscalationThreshold: { min: 2, max: 100 },
   healthEventStreamMaxRows: { min: 100, max: 1000000 },
+  custodySnapshotRetentionDays: { min: 1, max: 3650 },
   memoryRefreshFailureAlertThreshold: { min: 1, max: 100 },
   intakeScreeningFailureAlertThreshold: { min: 1, max: 100 },
   analysisWorkbenchMaxTokens: { min: 1000, max: 1000000 },

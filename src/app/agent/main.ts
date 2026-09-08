@@ -620,6 +620,10 @@ async function main(): Promise<void> {
     // Durable admission receipts for executable skills and prompt-bearing wiki
     // documents (psfn-framework-1fjvm.1/.2).
     cogSecReceiptStore: persistenceRuntime.cogSecReceiptStore,
+    // Durable per-turn custody snapshots (psfn-framework-ccgdz.1): the turn
+    // runtime records the folded disclosure lineage here before the reply is
+    // composed, so an egress claim stays provable after the turn ends.
+    custodySnapshotStore: persistenceRuntime.custodySnapshotStore,
     automataRuntime: {
       registry: persistenceRuntime.automataRunRegistry,
       runs: persistenceRuntime.automataRunStore,
@@ -1783,6 +1787,7 @@ async function main(): Promise<void> {
       await persistenceRuntime.introspectionLandmarkStore.close();
       await persistenceRuntime.partnerAffectShadowStore.close();
       await persistenceRuntime.cogSecReceiptStore.close();
+      await persistenceRuntime.custodySnapshotStore.close();
       await persistenceRuntime.companionAvailabilityStore.close();
       await persistenceRuntime.letterStore.close();
       await persistenceRuntime.doingMirrorStore.close();

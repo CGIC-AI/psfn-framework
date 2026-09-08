@@ -134,6 +134,7 @@ import {
   type CogSecArtifactAdmissionPort,
 } from '../../core/cogsec/intake/durable-admission.js';
 import type { CogSecReceiptStorePort } from '../../core/cogsec/receipts/contracts.js';
+import type { CustodySnapshotStorePort } from '../../core/cogsec/disclosure/custody-snapshot.js';
 import { COGSEC_INTAKE_FIREWALL_ISSUER_ID } from '../../shared/contracts/cogsec-receipt.js';
 import {
   intakeReceiptTtlMs,
@@ -287,6 +288,12 @@ export interface AgentCoreRuntimeOptions {
    * (psfn-framework-1fjvm.1/.2); absent, they load as they did before.
    */
   cogSecReceiptStore?: CogSecReceiptStorePort;
+  /**
+   * Durable per-turn custody snapshots (psfn-framework-ccgdz.1). Present, every
+   * turn that folds a disclosure lineage records it before the reply is
+   * composed; absent, the lineage stays in-process exactly as before.
+   */
+  custodySnapshotStore?: CustodySnapshotStorePort;
   automataRuntime?: {
     registry: AutomataRunRegistry;
     runs: Pick<import('../../faculties/automata/run-registry.js').AutomataRunStorePort, 'loadExact'>;
@@ -686,6 +693,9 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     appCache,
     backgroundWorkStore: options.backgroundWorkStore,
     backgroundWorkTuning: options.backgroundWorkTuning,
+    ...(options.custodySnapshotStore
+      ? { custodySnapshotStore: options.custodySnapshotStore }
+      : {}),
     ...(options.backgroundWorkWelfare ? { backgroundWorkWelfare: options.backgroundWorkWelfare } : {}),
     ...(options.automataRuntime
       ? {

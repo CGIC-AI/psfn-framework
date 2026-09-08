@@ -1,3 +1,4 @@
+import type { EventBus } from '../../../shared/event-bus.js';
 import {
   isConcernTerminalStatus,
   type ActiveConcernEvidenceRef,
@@ -92,6 +93,8 @@ export async function createConcernFromDecision(input: {
   formationVAD?: ActiveConcernVAD;
   sourceMessageId?: string;
   originIcpRootInitiationId?: string;
+  /** Announces the new concern so lifecycle consumers can pick it up. */
+  eventBus?: Pick<EventBus, 'emit'>;
 }): Promise<void> {
   const text = resolveConcernDecisionText(input.decision);
   const status = input.decision.concern?.status ?? 'active';
@@ -101,7 +104,7 @@ export async function createConcernFromDecision(input: {
   const evidenceRefs: ActiveConcernEvidenceRef[] = input.sourceMessageId
     ? [{ kind: 'message', ref: input.sourceMessageId }]
     : [];
-  await input.concernStore.create({
+  const concern = await input.concernStore.create({
     text,
     priority: (input.decision.concern?.priority ?? input.decision.priority) as ActiveConcernPriority,
     source: 'appraisal',
@@ -113,6 +116,12 @@ export async function createConcernFromDecision(input: {
       ? { originIcpRootInitiationId: input.originIcpRootInitiationId }
       : {}),
     ...(evidenceRefs.length > 0 ? { evidenceRefs } : {}),
+  });
+  await input.eventBus?.emit('intention.concern.created', {
+    concernId: concern.id,
+    source: concern.source,
+    ...(concern.contactId ? { contactId: concern.contactId } : {}),
+    timestamp: Date.parse(concern.createdAt),
   });
 }
 

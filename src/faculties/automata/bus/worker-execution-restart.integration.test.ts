@@ -311,6 +311,18 @@ describe('governed Automata lifecycle restart certification', () => {
         outputRefs: [],
         occurredAtMs: Date.now(),
       })).rejects.toThrow(/is not registered/u);
+      // The crash-window guard's READ path is scoped the same way: an intruder
+      // cannot learn whether another companion's run is already terminal.
+      await expect(intruder.terminal.readTerminalHandoff({
+        idempotencyKey: 'cross-companion-key',
+        lineage: {
+          automatonClass: 'memory.extraction',
+          runId: RUN_ID,
+          taskId: TASK_ID,
+          workerId: 'memory-extraction',
+          sessionIds: [SESSION_ID],
+        },
+      })).rejects.toThrow(/is not registered/u);
       expect(await terminalEvents(intruder)).toHaveLength(0);
       expect(await terminalEvents(owner)).toHaveLength(1);
       await intruder.close();

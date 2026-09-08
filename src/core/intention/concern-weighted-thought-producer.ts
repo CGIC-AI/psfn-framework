@@ -11,6 +11,11 @@
 // nothing and the guard is inert, and the concern's own care never reaches the
 // weighted-thought lifecycle at all.
 //
+// Both production concern-creation paths reach it: the extraction-derived
+// candidate review (`intention.concern_candidate.reviewed`) and the post-turn
+// appraisal decision (`intention.concern.created`). Covering only one would
+// leave the dampening guard inert for the concerns raised by the other.
+//
 // Shape mirrors the ICP co-location adapter: an event subscriber that performs
 // exactly one authoritative re-read and one durable thought write, with no
 // model, broker or scheduler dependency.
@@ -41,6 +46,7 @@ const CONCERN_CREATING_STATUSES: readonly string[] = ['created', 'merged'];
 const CONCERN_THOUGHT_SOURCE = 'concern';
 
 export type ConcernCandidateReviewedEvent = EventMap['intention.concern_candidate.reviewed'];
+export type ConcernCreatedEvent = EventMap['intention.concern.created'];
 
 export interface ConcernWeightedThoughtProducerDeps {
   concernStore: { getById(id: string): Promise<ActiveConcern | null> | ActiveConcern | null };
@@ -51,7 +57,7 @@ export interface ConcernWeightedThoughtProducerDeps {
 }
 
 export interface ConcernWeightedThoughtResult {
-  /** Ids of the thoughts created or reinforced by this review batch. */
+  /** Ids of the thoughts created or reinforced by this event. */
   recordedThoughtIds: string[];
 }
 
@@ -76,28 +82,22 @@ function concernThoughtProvenance(concern: ActiveConcern): ThoughtProvenance {
 }
 
 /**
- * Record one weighted thought per concern this review batch actually brought
- * into being. Each concern is re-read from its authoritative store — the review
- * outcome names the concern, it does not describe its current state.
+ * Record one weighted thought per named concern. Each concern is re-read from
+ * its authoritative store — an event names a concern, it never describes its
+ * current state, and only a concern that is live right now becomes a thought.
  */
-export async function recordConcernWeightedThoughts(
+async function recordThoughtsForConcerns(
   deps: ConcernWeightedThoughtProducerDeps,
-  event: ConcernCandidateReviewedEvent,
+  concernIds: readonly string[],
 ): Promise<ConcernWeightedThoughtResult> {
   const logger = deps.logger ?? log;
   const now = deps.now ?? Date.now;
-  const concernIds = [...new Set(
-    event.outcomes
-      .filter(outcome => CONCERN_CREATING_STATUSES.includes(outcome.status))
-      .map(outcome => outcome.concernId)
-      .filter((id): id is string => typeof id === 'string' && id.trim().length > 0),
-  )];
 
   const recordedThoughtIds: string[] = [];
   for (const concernId of concernIds) {
     const concern = await deps.concernStore.getById(concernId);
     if (!concern) {
-      logger.warn('Concern thought skipped: reviewed concern not found', { concernId });
+      logger.warn('Concern thought skipped: named concern not found', { concernId });
       continue;
     }
     if (!isConcernAttentionStatus(concern.status)) {
@@ -136,11 +136,32 @@ export async function recordConcernWeightedThoughts(
 
   if (recordedThoughtIds.length > 0) {
     logger.debug('Recorded concern-derived weighted thoughts', {
-      reviewedConcernCount: concernIds.length,
+      namedConcernCount: concernIds.length,
       recordedCount: recordedThoughtIds.length,
     });
   }
   return { recordedThoughtIds };
+}
+
+/** Concerns one candidate-review batch actually brought into being. */
+export async function recordConcernWeightedThoughts(
+  deps: ConcernWeightedThoughtProducerDeps,
+  event: ConcernCandidateReviewedEvent,
+): Promise<ConcernWeightedThoughtResult> {
+  return await recordThoughtsForConcerns(deps, [...new Set(
+    event.outcomes
+      .filter(outcome => CONCERN_CREATING_STATUSES.includes(outcome.status))
+      .map(outcome => outcome.concernId)
+      .filter((id): id is string => typeof id === 'string' && id.trim().length > 0),
+  )]);
+}
+
+/** One concern raised directly by a post-turn appraisal decision. */
+export async function recordCreatedConcernWeightedThought(
+  deps: ConcernWeightedThoughtProducerDeps,
+  event: ConcernCreatedEvent,
+): Promise<ConcernWeightedThoughtResult> {
+  return await recordThoughtsForConcerns(deps, [event.concernId]);
 }
 
 /**
@@ -153,5 +174,17 @@ export function createConcernWeightedThoughtProducer(
 ): (event: ConcernCandidateReviewedEvent) => Promise<void> {
   return async (event) => {
     await recordConcernWeightedThoughts(deps, event);
+  };
+}
+
+/**
+ * The same producer for the appraisal path. Mount it with
+ * `eventBus.on('intention.concern.created', …)`.
+ */
+export function createCreatedConcernWeightedThoughtProducer(
+  deps: ConcernWeightedThoughtProducerDeps,
+): (event: ConcernCreatedEvent) => Promise<void> {
+  return async (event) => {
+    await recordCreatedConcernWeightedThought(deps, event);
   };
 }

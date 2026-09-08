@@ -246,14 +246,29 @@ export class HumanAttentionPressureLedger implements HumanAttentionPressureStore
     now: () => number = Date.now,
     options: HumanAttentionPressureLedgerOptions = {},
   ): Promise<HumanAttentionPressureLedger> {
-    const hydratedEntries = await readEntriesStreaming(
-      path,
-      resolveJsonLinesReadLimits(options.readLimitSettings),
-    );
-    return new HumanAttentionPressureLedger(path, eventBus, now, {
-      ...options,
-      hydratedEntries,
-    });
+    // Buffer pressure events across the hydration await and replay them once the
+    // ledger owns its own subscription, so cooperative hydration cannot drop an
+    // event the synchronous constructor would have captured.
+    const pending: HumanAttentionPressureEvent[] = [];
+    const detachBuffer = eventBus?.on('agent.human_attention_pressure', (event) => {
+      pending.push(event);
+    }) ?? null;
+    try {
+      const hydratedEntries = await readEntriesStreaming(
+        path,
+        resolveJsonLinesReadLimits(options.readLimitSettings),
+      );
+      const ledger = new HumanAttentionPressureLedger(path, eventBus, now, {
+        ...options,
+        hydratedEntries,
+      });
+      detachBuffer?.();
+      for (const event of pending) ledger.recordHumanAttentionPressureEvent(event);
+      return ledger;
+    } catch (error) {
+      detachBuffer?.();
+      throw error;
+    }
   }
 
   private readonly entries: HumanAttentionPressureLedgerEntry[];

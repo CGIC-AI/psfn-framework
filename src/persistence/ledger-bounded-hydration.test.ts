@@ -8,10 +8,12 @@ import {
   openFileOutreachOutboxStore,
 } from '../core/intention/outreach-outbox.js';
 import { ReflectionJournalStore } from './journals/reflection-journal.js';
+import { HumanAttentionPressureLedger } from '../core/agent/fatigue/human-attention-ledger.js';
 import {
   readRunChargeRollingWindowFromLedger,
   RunChargeLedger,
 } from '../shared/telemetry/charge-ledger.js';
+import { FatigueLedger } from '../shared/telemetry/fatigue-ledger.js';
 
 const tempRoots: string[] = [];
 const NOW_MS = 1_800_000_000_000;
@@ -71,6 +73,66 @@ function writeChargeLedger(path: string, rows: number): number {
   return expectedSocial;
 }
 
+function writeFatigueLedger(path: string, rows: number): void {
+  const padding = 'f'.repeat(1_024);
+  const ledger = new FatigueLedger(path, null, { now: () => NOW_MS });
+  for (let index = 0; index < rows; index += 1) {
+    ledger.recordFatigueEvent({
+      timestampMs: NOW_MS - 60_000 + index,
+      dayKey: '2027-01-15',
+      localCompanionId: 'companion',
+      peerContactId: 'fixture-companion',
+      channelId: 'dm-fixture-companion',
+      triggeringAuthor: {
+        role: 'machine_intelligence',
+        contactId: 'fixture-companion',
+        isMachineIntelligence: true,
+      },
+      peer: { contactId: 'fixture-companion', isMachineIntelligence: true },
+      amount: 1,
+      decision: 'charged',
+      reason: 'machine_intelligence_response',
+      spentAfter: index + 1,
+      remainingAllowance: 10_000 - index,
+      allowance: 10_000,
+      softLimit: 5_000,
+      softState: 'clear',
+      hardState: 'available',
+      requestId: `req-${String(index)}`,
+      turnId: `turn-${String(index)}`,
+      callType: 'chat',
+      purpose: padding,
+      lineage: { runId: 'run-a', rootRunId: 'run-a' },
+    });
+  }
+  ledger.close();
+}
+
+function writeHumanAttentionLedger(path: string, rows: number): void {
+  const padding = 'h'.repeat(1_024);
+  const ledger = new HumanAttentionPressureLedger(path, null, () => NOW_MS);
+  for (let index = 0; index < rows; index += 1) {
+    ledger.recordHumanAttentionPressureEvent({
+      schemaVersion: 1,
+      timestampMs: NOW_MS - 60_000 + index,
+      localCompanionId: 'companion',
+      contactId: 'human-a',
+      channelId: 'channel-a',
+      trustLevel: 'public',
+      relationshipType: 'stranger',
+      channelContext: 'direct_mention',
+      weight: 2,
+      pressureInWindow: 4,
+      threshold: 3,
+      decision: index % 3 === 0 ? 'boundary_alert' : 'clear',
+      reason: index % 3 === 0 ? 'threshold_reached' : 'below_threshold',
+      suppressTurn: false,
+      sourceMessageId: `${padding}-${String(index)}`,
+      turnId: `turn-${String(index)}`,
+    });
+  }
+}
+
 afterEach(() => {
   while (tempRoots.length > 0) {
     rmSync(tempRoots.pop()!, { recursive: true, force: true });
@@ -110,6 +172,39 @@ describe('bounded ledger hydration surfaces (psfn-framework-z3e2x)', () => {
       .toEqual(synchronous.getData({ limit: 1 }).aggregates);
     synchronous.close();
     value.close();
+  });
+
+  it('streams the Garden fatigue ledger without changing its aggregates', async () => {
+    const path = join(makeTempDir(), 'fatigue-ledger.jsonl');
+    writeFatigueLedger(path, 1_500);
+    expect(statSync(path).size).toBeGreaterThan(1024 * 1024);
+
+    const { heartbeats, value } = await measure(
+      () => FatigueLedger.open(path, null, {
+        now: () => NOW_MS,
+        readLimitSettings: { ledgerReadYieldRows: 32 },
+      }),
+    );
+    expect(heartbeats).toBeGreaterThan(0);
+    const synchronous = new FatigueLedger(path, null, { now: () => NOW_MS });
+    expect(value.getData({ limit: 25 })).toEqual(synchronous.getData({ limit: 25 }));
+    synchronous.close();
+    value.close();
+  });
+
+  it('streams the Garden human-attention ledger without changing its aggregates', async () => {
+    const path = join(makeTempDir(), 'human-attention-ledger.jsonl');
+    writeHumanAttentionLedger(path, 1_500);
+    expect(statSync(path).size).toBeGreaterThan(1024 * 1024);
+
+    const { heartbeats, value } = await measure(
+      () => HumanAttentionPressureLedger.open(path, null, () => NOW_MS, {
+        readLimitSettings: { ledgerReadYieldRows: 32 },
+      }),
+    );
+    expect(heartbeats).toBeGreaterThan(0);
+    const synchronous = new HumanAttentionPressureLedger(path, null, () => NOW_MS);
+    expect(value.getData({ limit: 25 })).toEqual(synchronous.getData({ limit: 25 }));
   });
 
   it('preserves outreach outbox restart semantics across bounded hydration', async () => {

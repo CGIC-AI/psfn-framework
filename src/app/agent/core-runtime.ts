@@ -141,6 +141,7 @@ import { createPostgresPool } from '../../persistence/postgres.js';
 import { createPostgresBiographicalProfileStore } from '../../faculties/memory/biographical/postgres-store.js';
 import { MemoryBackedBiographicalSourceRevalidator } from '../../faculties/memory/biographical/memory-source.js';
 import { BiographySynthesisService } from '../../faculties/memory/biographical/synthesis-service.js';
+import { BiographyCompanionReviewService } from '../../faculties/memory/biographical/companion-review-service.js';
 import { createBiographySynthesisTargetPort } from '../../faculties/memory/biographical/synthesis-targets.js';
 import { createDefaultBiographicalCandidatePolicy } from '../../system/config/biographical-candidate-policy.js';
 import type { BiographicalSubjectRef } from '../../faculties/memory/biographical/types.js';
@@ -323,6 +324,12 @@ export interface AgentCoreRuntime {
    * runtime keeps ownership of the durable stores it reads.
    */
   biographySynthesis: BiographySynthesisService;
+  /**
+   * Companion protected self-review of biography candidates (o61vb.13).
+   * Runs under this companion's identity; it stages review decisions and never
+   * activates a human-derived fact.
+   */
+  biographyCompanionReview: BiographyCompanionReviewService;
   /** Shared lazy durable model-usage query handle (b0yl.5); null on non-postgres. */
   getModelUsageQuery: () => ModelUsageQueryPort | null;
   icpAutonomyRuntime?: AgentFacingIcpAutonomyRuntime;
@@ -959,6 +966,16 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     depthPolicy: () => config.biographicalDepthPolicy ?? biographicalDepthPolicy,
   });
 
+  const biographyCompanionReview = new BiographyCompanionReviewService({
+    profileStore: biographicalStore,
+    llmClient: llmProvider,
+    personaPreamble,
+    companionId,
+    candidatePolicy: () => (
+      config.biographicalCandidatePolicy ?? createDefaultBiographicalCandidatePolicy()
+    ),
+  });
+
   const perceptionNoteDeliverer = createPerceptionNoteDeliverer(sessionManager);
   // Presence is observation, not a summons. Shared satellites deliver only
   // exact, normalized scopes to configured observation recipients; this path
@@ -1145,6 +1162,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     closeWikiRuntime: wikiRuntime.close,
     closeBiographicalProjection: () => biographicalPool.end(),
     biographySynthesis,
+    biographyCompanionReview,
     // Durable model-usage query handle (b0yl.5): shared lazy store also used by
     // the self-diagnosis tool, reused by the tool-usage evaluator scheduler lane
     // so the two do not open separate pools.

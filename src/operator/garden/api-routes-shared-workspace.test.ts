@@ -48,6 +48,10 @@ async function invoke(
   return response;
 }
 
+// settings.json-owned in production; two per page here so the Garden snapshot
+// actually returns a continuation cursor.
+const GARDEN_LIST_BOUNDS = { pageSize: 2, pageBytes: 8_000_000 };
+
 describe('shared workspace admin write authentication', () => {
   const roots: string[] = [];
   afterEach(() => {
@@ -66,7 +70,7 @@ describe('shared workspace admin write authentication', () => {
     for (const path of [
       'artifacts', 'reviews', 'cogsec-decisions', 'provenance/events', 'transactions', '.locks',
     ]) mkdirSync(join(root, path), { recursive: true });
-    const service = new AdminSharedWorkspaceService(root);
+    const service = new AdminSharedWorkspaceService(root, GARDEN_LIST_BOUNDS);
     return {
       service,
       routes: buildAdminSharedWorkspaceRoutes({
@@ -289,6 +293,64 @@ describe('shared workspace admin write authentication', () => {
       artifactPath: 'guide.md', content: 'x', mediaType: 'text/plain', provenance: 'source',
     });
     expect(response.status).toBe(401);
+  });
+
+  it('pages the governed snapshot and carries a continuation cursor', async () => {
+    const { service, routes } = fixture();
+    const snapshotRoute = routes.find(route => (
+      route.method === 'GET' && route.match('/api/admin/shared-workspace')
+    ))!;
+    const publish = (artifactPath: string) => {
+      const proposal = service.propose(
+        context('POST /api/admin/shared-workspace/proposals'),
+        { artifactPath, content: `# ${artifactPath}\n`, mediaType: 'text/markdown', provenance: 'seed' },
+      );
+      service.recordCogSecDecision(
+        context('POST /api/admin/shared-workspace/reviews/:reviewId/cogsec', ['cogsec'], 'principal-c'),
+        { reviewId: proposal.reviewId, decision: 'approved' },
+      );
+      service.review(
+        context(
+          'POST /api/admin/shared-workspace/reviews/:reviewId/decision',
+          ['cogsec', 'independent_reviewer'],
+          'principal-b',
+        ),
+        { reviewId: proposal.reviewId, decision: 'approve' },
+      );
+    };
+    for (const name of ['a.md', 'b.md', 'c.md', 'd.md', 'e.md']) publish(name);
+
+    const collected: string[] = [];
+    let cursor: string | null = null;
+    let pages = 0;
+    do {
+      const url = cursor === null
+        ? '/api/admin/shared-workspace'
+        : `/api/admin/shared-workspace?artifactCursor=${encodeURIComponent(cursor)}`;
+      const response = await invoke(snapshotRoute, url, {});
+      expect(response.status).toBe(200);
+      const payload = JSON.parse(response.body) as {
+        artifacts: Array<{ artifactPath: string; revision: string }>;
+        nextArtifactCursor: string | null;
+      };
+      expect(payload.artifacts.length).toBeLessThanOrEqual(GARDEN_LIST_BOUNDS.pageSize);
+      collected.push(...payload.artifacts.map(artifact => artifact.artifactPath));
+      cursor = payload.nextArtifactCursor;
+      pages += 1;
+    } while (cursor !== null);
+
+    expect(pages).toBe(3);
+    expect(collected).toEqual(['a.md', 'b.md', 'c.md', 'd.md', 'e.md']);
+
+    const stale = await invoke(
+      snapshotRoute,
+      '/api/admin/shared-workspace?artifactCursor=z.md',
+      {},
+    );
+    expect(stale.status).toBe(500);
+    expect(JSON.parse(stale.body)).toMatchObject({
+      error: expect.stringContaining('restart the listing'),
+    });
   });
 });
 function context(

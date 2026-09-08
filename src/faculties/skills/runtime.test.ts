@@ -3,6 +3,7 @@ import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync 
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { SkillsRuntime } from './runtime.js';
+import { SkillVersionConflictError } from './store.js';
 import { SKILL_USAGE_TELEMETRY_FILE_NAME } from './telemetry.js';
 
 function writeSkill(path: string, description: string, body: string): void {
@@ -450,6 +451,65 @@ describe('skills runtime', () => {
           name: expect.stringContaining('operator/oversized/SKILL.md'),
         }),
       ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses an operator save built on a version an agent revision superseded', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'skills-runtime-operator-cas-'));
+    const dataDir = join(root, 'data');
+    const seedDir = join(root, 'config');
+    const managedRoot = join(root, 'personal', 'skills');
+    mkdirSync(dataDir, { recursive: true });
+    mkdirSync(seedDir, { recursive: true });
+    writeSkillsConfig(dataDir, seedDir);
+
+    try {
+      const runtime = new SkillsRuntime({
+        dataDir,
+        seedDir,
+        repoRoot: root,
+        managedRootDir: managedRoot,
+        isBinaryAvailable: () => true,
+      });
+      const created = runtime.createSkill({
+        name: 'gardening',
+        category: 'operator',
+        description: 'Tend the beds',
+        content: '# v1 body',
+      });
+      expect(created.version).toBe(1);
+
+      // The agent revises while the operator's Garden editor still holds v1.
+      const agentRevision = runtime.updateSkill({
+        name: 'gardening',
+        content: '# agent v2 body',
+        expectedVersion: created.version,
+      });
+      expect(agentRevision.version).toBe(2);
+
+      expect(() => runtime.updateSkill({
+        name: 'gardening',
+        content: '# stale operator body',
+        expectedVersion: created.version,
+      })).toThrow(SkillVersionConflictError);
+
+      // The agent revision survives the refused operator save byte for byte.
+      const afterConflict = await runtime.listManaged();
+      expect(afterConflict.managed).toEqual([expect.objectContaining({
+        name: 'gardening',
+        version: 2,
+        content: '# agent v2 body',
+      })]);
+
+      const rebased = runtime.updateSkill({
+        name: 'gardening',
+        content: '# operator body on v2',
+        expectedVersion: agentRevision.version,
+      });
+      expect(rebased.version).toBe(3);
+      expect(rebased.content).toBe('# operator body on v2');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

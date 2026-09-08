@@ -72,9 +72,19 @@ export function buildAdminSharedWorkspaceRoutes(options: {
     {
       method: 'GET',
       match: exactPath('/api/admin/shared-workspace'),
-      handle: (_req, res) => {
+      handle: (req, res) => {
+        // `artifactCursor` resumes the previous response's nextArtifactCursor.
+        // Omitting it starts at the first page; a cursor the corpus no longer
+        // contains fails rather than silently restarting the listing.
+        const artifactCursor = parseRequestUrl(req, '/api/admin/shared-workspace')
+          .searchParams.get('artifactCursor');
         try {
-          sendJson(res, 200, options.service.getSnapshot(), { 'Cache-Control': 'no-store' });
+          sendJson(
+            res,
+            200,
+            options.service.getSnapshot(artifactCursor ? { artifactCursor } : {}),
+            { 'Cache-Control': 'no-store' },
+          );
         } catch (error) {
           sendJson(res, 500, { error: toErrorMessage(error) });
         }

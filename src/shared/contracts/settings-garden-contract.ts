@@ -86,6 +86,8 @@ export const SETTINGS_GARDEN_FIELD_EXPOSURE = {
   postgresStoreReadinessRetryAttempts: { sectionId: 'sessions', surface: 'advanced' },
   postgresStoreReadinessRetryBackoffMs: { sectionId: 'sessions', surface: 'advanced' },
   custodySnapshotRetentionDays: { sectionId: 'sessions', surface: 'advanced' },
+  sharedWorkspaceListPageSize: { sectionId: 'sessions', surface: 'advanced' },
+  sharedWorkspaceListPageBytes: { sectionId: 'sessions', surface: 'advanced' },
   backgroundMaintenanceIntervalMs: { sectionId: 'sessions', surface: 'custom', editorId: 'scheduler' },
   // hrmrq.34: icpAutonomy.enabled is scheduler.json-owned and edited through
   // the Garden scheduler raw editor (restart applies it; the autonomy page

@@ -129,6 +129,8 @@ const DIRECT_DEFINED_CONFIG_SETTINGS = [
   'postgresStoreReadinessRetryAttempts',
   'postgresStoreReadinessRetryBackoffMs',
   'custodySnapshotRetentionDays',
+  'sharedWorkspaceListPageSize',
+  'sharedWorkspaceListPageBytes',
   'memoryExtractionMinImportance',
   'memoryExtractionMinConfidence',
   'memoryExtractionMinNovelty',
@@ -250,6 +252,8 @@ function getContextSettingsSnapshot(config: SubstrateConfig) {
     postgresStoreReadinessRetryBackoffMs:
       config.postgresStoreReadinessRetryBackoffMs ?? null,
     custodySnapshotRetentionDays: config.custodySnapshotRetentionDays ?? null,
+    sharedWorkspaceListPageSize: config.sharedWorkspaceListPageSize ?? null,
+    sharedWorkspaceListPageBytes: config.sharedWorkspaceListPageBytes ?? null,
     sessionTailCache: structuredClone(
       config.sessionTailCache ?? createDefaultSessionTailCacheSettings(),
     ),
@@ -283,6 +287,8 @@ function getContextSettingsSnapshot(config: SubstrateConfig) {
     | 'postgresStoreReadinessRetryAttempts'
     | 'postgresStoreReadinessRetryBackoffMs'
     | 'custodySnapshotRetentionDays'
+    | 'sharedWorkspaceListPageSize'
+    | 'sharedWorkspaceListPageBytes'
     | 'sessionTailCache'
   >;
 }

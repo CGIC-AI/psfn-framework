@@ -55,7 +55,11 @@ export function buildExtractionAdmissionIndex(
       index.envelopesByEntryId.set(entry.id, screening.envelopes);
       index.allEnvelopes.push(...screening.envelopes);
     } catch (error) {
-      log.error('Malformed intake screening metadata on extraction source entry; treated as gate-denied in enforce mode', {
+      // The index now serves BOTH the sink gate and the admission provenance,
+      // so the consequence is stated by consequence, not by assuming a gate:
+      // the gate (when wired) fails this entry closed in enforce mode, and the
+      // provenance side records no identity for it.
+      log.error('Malformed intake screening metadata on extraction source entry; unknowable admission state (gate-denied in enforce mode, no recorded admission identity)', {
         channelId,
         entryId: entry.id,
         error: error instanceof Error ? error.message : String(error),

@@ -28,7 +28,6 @@
 import { createHash } from 'node:crypto';
 
 import { isRecord } from '../../../shared/utils/types.js';
-import { normalizeCogSecStructuredProvenanceRef } from '../../../shared/contracts/provenance-ref.js';
 import {
   custodyIdentity,
   custodyRefForTurn,
@@ -127,22 +126,46 @@ function invalid(field: string, requirement: string): Error {
   return new Error(`Context source manifest ${field} ${requirement}`);
 }
 
+/**
+ * Bind one rendered source.
+ *
+ * The ref id goes through `custodyIdentity` UNCONDITIONALLY: hashed always,
+ * kept literally only when it is a bounded safe token. Dropping a source whose
+ * ref happens to contain a path or a space would silently shorten the record of
+ * what the prompt rendered — the one thing this manifest exists to prevent — so
+ * an unbounded ref loses its literal, never its row.
+ *
+ * A malformed identity field IS dropped, alone: that loses verification, which
+ * degrades a descendant to `uncertain` rather than asserting a proof it does
+ * not have.
+ */
 function buildSource(
   source: NonNullable<ContextSourceManifestBlockInput['sources']>[number],
 ): ContextSourceManifestSource | null {
-  // The one shared normalizer keeps a manifest source and a memory/episode ref
-  // from ever disagreeing about what a valid identity looks like. A ref with an
-  // unusable kind/refId is dropped; a malformed identity field is dropped alone,
-  // which loses verification rather than asserting it.
-  const normalized = normalizeCogSecStructuredProvenanceRef(source);
-  if (!normalized) return null;
+  const kind = source.kind.trim();
+  const refId = source.refId.trim();
+  // A kind is a compile-time vocabulary word, never runtime data, so an
+  // unbounded one means the caller is not producing a structured ref at all.
+  if (!MANIFEST_BOUNDED_TOKEN_PATTERN.test(kind) || refId.length === 0) return null;
+  const receiptId = boundedIdentityField(source.receiptId);
+  const envelopeId = boundedIdentityField(source.envelopeId);
+  const contentSha256 = typeof source.contentSha256 === 'string'
+    && SHA256_HEX_PATTERN.test(source.contentSha256.trim())
+    ? source.contentSha256.trim()
+    : undefined;
   return {
-    kind: normalized.kind,
-    ref: custodyIdentity(normalized.refId),
-    ...(normalized.receiptId ? { receiptId: normalized.receiptId } : {}),
-    ...(normalized.contentSha256 ? { contentSha256: normalized.contentSha256 } : {}),
-    ...(normalized.envelopeId ? { envelopeId: normalized.envelopeId } : {}),
+    kind,
+    ref: custodyIdentity(refId),
+    ...(receiptId ? { receiptId } : {}),
+    ...(contentSha256 ? { contentSha256 } : {}),
+    ...(envelopeId ? { envelopeId } : {}),
   };
+}
+
+function boundedIdentityField(value: string | undefined): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return MANIFEST_BOUNDED_TOKEN_PATTERN.test(trimmed) ? trimmed : undefined;
 }
 
 /**

@@ -77,6 +77,7 @@ import {
   type HubDeviceRegistryAuthority,
 } from "./device-registry.js";
 import type { PsfnChannelContext } from "./embodied-session.js";
+import { CompanionBrowserBridge } from "./companion-browser-bridge.js";
 import {
   HubLocationGeofence,
   validateLocationSample,
@@ -95,6 +96,7 @@ export class RealtimeHubServer {
   private readonly companion: CompanionBridge | null;
   private readonly eidoverse: EidoverseEmbodiedSessionAdapter | null;
   private readonly locationGeofence: HubLocationGeofence | null;
+  private readonly companionBrowser: CompanionBrowserBridge | null;
 
   constructor(
     private readonly config: HubConfig,
@@ -143,6 +145,13 @@ export class RealtimeHubServer {
       config.elevenlabsModelId,
       config.elevenlabsVoiceId ?? "",
     );
+    if (config.companionBrowser && !config.deviceRegistry) {
+      throw new Error("Companion browser bridge requires the Hub device registry");
+    }
+    this.companionBrowser = config.companionBrowser && config.deviceRegistry
+      ? new CompanionBrowserBridge(config.companionBrowser, config.psfn, config.deviceRegistry,
+          config.elevenlabsApiKey && config.elevenlabsVoiceId ? this.tts : null)
+      : null;
     const voxtaTts = options.voxtaTts === null
       ? undefined
       : options.voxtaTts
@@ -189,6 +198,7 @@ export class RealtimeHubServer {
       });
     });
     this.httpServer.on("upgrade", (request, socket, head) => {
+      if (this.companionBrowser?.handleUpgrade(request, socket, head)) return;
       if (this.voxta.shouldHandleUpgrade(request)) {
         this.voxta.handleUpgrade(request, socket, head);
         return;
@@ -216,6 +226,7 @@ export class RealtimeHubServer {
 
   async close(): Promise<void> {
     this.eidoverse?.disconnect();
+    await this.companionBrowser?.close();
     await this.companion?.stop();
     await this.agent.close();
     await this.tts.close();

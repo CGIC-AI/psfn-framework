@@ -203,6 +203,7 @@ export function buildAdminRoutes(deps: AdminRouteDependencies): AdminRoute[] {
       letterService: deps.services.letters,
       doingMirrorService: deps.services.doingMirror,
       episodicMemoryService: deps.services.episodicMemory,
+      custodyQueryService: deps.services.custodyQuery,
       groupMemoryService: deps.services.groupMemory,
       memoryService: deps.services.memory,
       privacyBreakGlassService: deps.services.privacyBreakGlass,

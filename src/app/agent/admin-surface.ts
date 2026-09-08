@@ -37,6 +37,7 @@ import type { IcpInitiationCandidateStorePort } from '../../core/icp/autonomy-st
 import type { IcpAutonomyRuntimeEnablement } from '../../core/icp/runtime-enablement.js';
 import type { IcpFeltImpulseFunnelStorePort } from '../../core/icp/felt-impulse-funnel.js';
 import { PostgresIcpAdminProjectionStore } from '../../persistence/postgres/icp-admin-projection-store.js';
+import { PostgresCustodyChainReader } from '../../persistence/postgres/custody-chain-reader.js';
 import { PostgresSpeakingArbiterAdminStore } from '../../persistence/postgres/speaking-arbiter-admin-store.js';
 import type { BackgroundWorkStorePort } from '../../core/agent/background-work/store-port.js';
 import type { PartnerAffectShadowStorePort } from '../../core/emotion/partner-affect/shadow-store-port.js';
@@ -221,6 +222,14 @@ export async function startOptionalAdminTransportServer(
     && postgresDatabaseUrl
     ? await PostgresSpeakingArbiterAdminStore.connect(postgresDatabaseUrl)
     : null;
+  // ccgdz.7: the custody query seam reads the three tables the turn already
+  // wrote. It gets its OWN read-only connection rather than borrowing the
+  // runtime's writer stores, so an operator's audit read can never prune, can
+  // never require the writer's retention setting, and can never be the thing
+  // that fails a turn.
+  const custodyChainReader = postgresDatabaseUrl
+    ? await PostgresCustodyChainReader.connect(postgresDatabaseUrl)
+    : null;
   const intakeReleaseConversationTurn = createIntakeReleaseConversationTurn({
     agent: options.coreRuntime.agentLoop,
     delivery: {
@@ -244,6 +253,7 @@ export async function startOptionalAdminTransportServer(
     biographicalReviewService,
     subsystemOutputRefStore: options.subsystemOutputRefStore,
     episodicStore: options.episodicStore ?? null,
+    custodyChainReader,
     healthEventStreamRead: options.healthEventStreamRead ?? null,
     humanEscalationLedger: options.humanEscalationLedger ?? null,
     sessionStore: options.coreRuntime.sessionStore,

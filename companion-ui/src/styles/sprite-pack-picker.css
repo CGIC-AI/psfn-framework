@@ -1,0 +1,26 @@
+.sprite-pack-picker {
+  padding-top: 0.8rem;
+}
+
+.sprite-pack-picker h3 {
+  margin: 0 0 0.4rem;
+  font-size: 0.9rem;
+}
+
+.sprite-pack-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.sprite-pack-picker .sprite-pack-help {
+  color: var(--color-muted);
+  font-size: 0.75rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.sprite-pack-picker .sprite-pack-error {
+  color: var(--color-error);
+  font-size: 0.8rem;
+}

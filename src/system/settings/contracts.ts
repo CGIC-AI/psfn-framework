@@ -250,6 +250,10 @@ export interface EditableSettings {
   ledgerReadChunkBytes?: number;
   ledgerReadMaxRowBytes?: number;
   ledgerReadYieldRows?: number;
+  // Tier 2 tuning knob (psfn-framework-5jx2v): bound on retained L0
+  // turn-tombstone authority owners. Absence of an owner is fail-closed:
+  // authority is recomputed on demand, never assumed empty.
+  sessionTombstoneAuthorityOwners?: number;
   // Tier 2 tuning knobs (zet.7): image generation polling limits
   imageFalTimeoutMs?: number;
   imageFalPollIntervalMs?: number;
@@ -480,6 +484,7 @@ export const RUNTIME_SETTINGS_KEYS = [
   'ledgerReadChunkBytes',
   'ledgerReadMaxRowBytes',
   'ledgerReadYieldRows',
+  'sessionTombstoneAuthorityOwners',
   'imageFalTimeoutMs',
   'imageFalPollIntervalMs',
   'imageComfyTimeoutMs',

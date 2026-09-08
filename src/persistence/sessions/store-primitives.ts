@@ -113,6 +113,13 @@ export interface SessionStoreOptions {
    */
   maxHotChannels?: number;
   /**
+   * psfn-framework-5jx2v: declared bound on retained L0 turn-tombstone
+   * authority owners (settings.json sessionTombstoneAuthorityOwners). Eviction
+   * is safe because an absent owner is recomputed from the journal, never
+   * assumed tombstone-free. Absent uses the store default.
+   */
+  turnTombstoneAuthorityOwners?: number;
+  /**
    * Bead g59z: durable-incident subscriber for session HMAC-chain verification
    * failures. When set, a full journal load that surfaces failed entries emits
    * one content-free event so Garden can record a durable, operator-visible

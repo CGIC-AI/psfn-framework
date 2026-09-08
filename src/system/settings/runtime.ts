@@ -173,6 +173,7 @@ const DIRECT_DEFINED_CONFIG_SETTINGS = [
   'ledgerReadChunkBytes',
   'ledgerReadMaxRowBytes',
   'ledgerReadYieldRows',
+  'sessionTombstoneAuthorityOwners',
   'imageFalTimeoutMs',
   'imageFalPollIntervalMs',
   'imageComfyTimeoutMs',
@@ -624,6 +625,7 @@ function getTier2TuningSnapshot(config: SubstrateConfig) {
     ledgerReadChunkBytes: config.ledgerReadChunkBytes ?? null,
     ledgerReadMaxRowBytes: config.ledgerReadMaxRowBytes ?? null,
     ledgerReadYieldRows: config.ledgerReadYieldRows ?? null,
+    sessionTombstoneAuthorityOwners: config.sessionTombstoneAuthorityOwners ?? null,
     imageFalTimeoutMs: config.imageFalTimeoutMs ?? null,
     imageFalPollIntervalMs: config.imageFalPollIntervalMs ?? null,
     imageComfyTimeoutMs: config.imageComfyTimeoutMs ?? null,
@@ -641,6 +643,7 @@ function getTier2TuningSnapshot(config: SubstrateConfig) {
     | 'ledgerReadChunkBytes'
     | 'ledgerReadMaxRowBytes'
     | 'ledgerReadYieldRows'
+    | 'sessionTombstoneAuthorityOwners'
     | 'imageFalTimeoutMs'
     | 'imageFalPollIntervalMs'
     | 'imageComfyTimeoutMs'

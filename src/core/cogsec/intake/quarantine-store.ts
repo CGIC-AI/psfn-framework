@@ -33,12 +33,15 @@ import {
 } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { withCrossProcessWriteLock } from '../../../persistence/sessions/cross-process-write-lock.js';
+import { createComponentLogger } from '../../../shared/logger.js';
 import {
   isIntakeSinkConsumableState,
   transitionIntakeEnvelope,
   validateIntakeEnvelope,
   type IntakeEnvelope,
 } from '../../../shared/contracts/intake-envelope.js';
+
+const quarantineLog = createComponentLogger('IntakeQuarantineStore');
 
 export const INTAKE_QUARANTINE_CONTENT_STORE = 'intake-quarantine';
 
@@ -261,6 +264,23 @@ export interface IntakeQuarantineStoreOptions {
     expiredAtMs: number;
     reason: string;
   }) => void;
+  /**
+   * Called once a hold is durably persisted (bead psfn-framework-wtw7l).
+   *
+   * The hold seam for the human escalation control plane: quarantine is a
+   * place a person is asked for something, and until this existed it said so
+   * nowhere a person looks. Fired AFTER `persist`, like `onExpired`, so an
+   * escalation is never raised for a hold the disk does not have — and it must
+   * not throw: a hold is a security decision and must land whatever an
+   * observer thinks of it.
+   */
+  onHeld?: (entry: IntakeQuarantineEntry) => void;
+  /**
+   * Called once a human decision is durably persisted. The resolve half of the
+   * same seam: the escalation mirrors the decision the domain actually made,
+   * rather than a Garden button claiming it did.
+   */
+  onDecided?: (entry: IntakeQuarantineEntry) => void;
 }
 
 export type IntakeQuarantineReadStore = Pick<IntakeQuarantineStore, 'list' | 'getById'>;
@@ -692,6 +712,29 @@ function createIntakeQuarantineStoreInternal(
     ...(entry.safeRepresentationText !== undefined ? { safeRepresentationText: '' } : {}),
   });
 
+  /**
+   * Publish one lifecycle notification without letting it undo the transition
+   * it is describing. The hold and the decision are already on disk by the time
+   * this runs, so an observer that throws is a broken observer — never a reason
+   * to fail a security decision the store has committed.
+   */
+  const notify = (
+    observer: ((entry: IntakeQuarantineEntry) => void) | undefined,
+    entry: IntakeQuarantineEntry,
+    stage: 'hold' | 'decision',
+  ): void => {
+    if (!observer) return;
+    try {
+      observer(entry);
+    } catch (error) {
+      quarantineLog.error('Intake quarantine lifecycle observer threw', {
+        stage,
+        envelopeId: entry.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  };
+
   /** Lazy TTL sweep; durably persists before publishing expiry notifications. */
   // Returns true when at least one entry expired (callers persist and may
   // notify); fires the TTL-expiry alert hook per expired entry (hrmrq.71).
@@ -917,6 +960,7 @@ function createIntakeQuarantineStoreInternal(
         pruneTerminalHistory(entries);
         advanceGateRevision();
         persist(entries);
+        notify(options.onHeld, entry, 'hold');
         return entry;
       });
     },
@@ -1194,6 +1238,7 @@ function createIntakeQuarantineStoreInternal(
           advanceGateRevision();
         }
         persist(entries);
+        notify(options.onDecided, decided, 'decision');
         return decided;
       });
     },

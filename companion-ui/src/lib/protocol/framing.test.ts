@@ -49,6 +49,7 @@ describe('hub websocket framing', () => {
     },
     { type: 'action', data: 'interrupt' },
     { type: 'error-event', data: { message: 'hub rejected request' } },
+    { type: 'error-event', data: { message: 'spoken output failed', scope: 'speech' } },
     {
       type: 'relay.stt.result',
       requestId: 'stt-1',
@@ -201,6 +202,12 @@ describe('hub websocket framing', () => {
 
   it('rejects malformed hub frames', () => {
     expect(() => parseHubToClientMessage('{')).toThrow(HubFramingError);
+  });
+
+  it.each(['connection', 'tts', '', null, 1, false, {}, []])('rejects unknown error scope %j', (scope) => {
+    expect(() => parseHubToClientMessage(JSON.stringify({
+      type: 'error-event', data: { message: 'failure', scope },
+    }))).toThrow(HubFramingError);
   });
 
   it('rejects unknown client message types', () => {

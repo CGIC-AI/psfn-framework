@@ -303,8 +303,9 @@ const STRICT_HUB_VALIDATORS: Record<HubToClientMessage['type'], (payload: unknow
     return record !== null && oneOf(record.data, ['interrupt', 'pause-audio', 'play-audio']);
   },
   'error-event': payload => {
-    const data = dataRecord(payload, ['message']);
-    return data !== null && boundedString(data.message, 1024);
+    const data = dataRecord(payload, ['message'], ['scope']);
+    return data !== null && boundedString(data.message, 1024)
+      && (!Object.hasOwn(data, 'scope') || data.scope === 'speech');
   },
   'relay.stt.result': payload => {
     const record = exactRecord(payload, ['type', 'requestId', 'text', 'provider'], ['latencyMs']);

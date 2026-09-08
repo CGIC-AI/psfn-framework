@@ -750,7 +750,15 @@ export class SleeptimeMemoryAgent {
           && !isRuntimeAuthoredFallbackSessionEntry(entry)
         ));
       if (recentEntries.length === 0) {
-        throw new Error('Changed conversational session has no readable conversational transcript');
+        // Per-session: the workset runner records this as that session's
+        // failure and moves on (`sleeptime-workset.ts`), so a session whose
+        // only change was a runtime notice never blocks the others. Naming the
+        // cause matters because the filter above widened which sessions land
+        // here — an operator must not read this as a missing transcript.
+        throw new Error(
+          'Changed conversational session has no readable conversational transcript '
+          + '(its entries in range are runtime-authored notices or non-conversational)',
+        );
       }
       entriesBySession.set(sessionId, recentEntries);
     }

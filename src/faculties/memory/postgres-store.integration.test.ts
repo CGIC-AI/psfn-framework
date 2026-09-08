@@ -34,6 +34,8 @@ import {
   subjectAdminStats,
 } from '../../test-support/in-memory-memory-subjects.js';
 import { MemoryWriter } from './writer.js';
+import { evaluateMemoryPolicy } from '../../system/trust/policy.js';
+import { PostgresCustodyChainReader } from '../../persistence/postgres/custody-chain-reader.js';
 import type { EmbeddingProviderPort } from '../../shared/contracts/embedding-provider.js';
 import { MemoryRetriever } from './retrieval.js';
 import { describeMemorySubjectMutationContract } from '../../test-support/memory-subject-mutation-contract.js';
@@ -49,6 +51,7 @@ import {
 
 const INTEGRATION_TIMEOUT_MS = 120_000;
 const DEFAULT_EMBEDDING = new Float32Array([0.9, 0.1, 0.1, 0.1]);
+const CONSENT_TURN_ID = '01936f2c-4a1b-7c3d-8e5f-0a1b2c3d4e5f';
 
 let harness: PostgresTestHarness | null = null;
 
@@ -358,6 +361,10 @@ describe('postgres memory store integration', () => {
               label: 'Privacy or consent',
               eligible: true,
               explanationPatterns: ['consent'],
+              // alco2: this is the operator-owned declaration that approving
+              // under this category is a consent WITHDRAWAL, which is what
+              // makes the approval a real consentFlags producer.
+              consentWithdrawal: true,
             },
             {
               id: 'duplicate_or_superseded',
@@ -369,7 +376,13 @@ describe('postgres memory store integration', () => {
         },
       });
       const proposalStore = store.memoryDeletionProposalStore;
-      await store.insertMemory(makeMemory({ id: 'proposal-approved' }), DEFAULT_EMBEDDING);
+      await store.insertMemory(
+        makeMemory({
+          id: 'proposal-approved',
+          provenance: { turnId: CONSENT_TURN_ID, actor: 'companion' },
+        }),
+        DEFAULT_EMBEDDING,
+      );
       await store.insertMemory(makeMemory({ id: 'proposal-denied' }), DEFAULT_EMBEDDING);
 
       const proposed = await proposalStore.createMemoryDeletionProposal({
@@ -397,6 +410,45 @@ describe('postgres memory store integration', () => {
         memoryId: 'proposal-approved',
       });
       expect((await store.getById('proposal-approved'))?.deletedAt).toBe(1_700_000_000_300);
+
+      // alco2: approval under a consent-withdrawal category is the production
+      // path that writes consentFlags, and it writes them to the REAL columns.
+      const withdrawn = await store.getById('proposal-approved');
+      expect(withdrawn?.consentFlags).toEqual({
+        allowRecall: false,
+        deleteOnRequest: true,
+        redactionBehavior: 'delete',
+      });
+      expect(withdrawn?.provenance?.consentProducer).toEqual({
+        producerId: 'memory.deletion_proposal',
+        justificationCategoryId: 'privacy_or_consent',
+        requestedBy: 'operator:test',
+        recordedAtMs: 1_700_000_000_300,
+      });
+      expect(evaluateMemoryPolicy({
+        consentFlags: withdrawn?.consentFlags,
+        memorySensitivity: 'low',
+        trustLevel: 'partner',
+        privacyLevel: 'private',
+        isBroadcast: false,
+      })).toMatchObject({
+        decision: 'deny',
+        layer: 'consent',
+        reasonTag: 'consent.allow_recall_denied',
+      });
+
+      // ccgdz.8: the withdrawal is visible on the custody chain of the turn the
+      // memory was derived from, over the real memory columns.
+      const custodyReader = PostgresCustodyChainReader.fromPool(pool);
+      await expect(custodyReader.listDerivedArtifactsForGeneration({
+        turnId: CONSENT_TURN_ID,
+        limit: 10,
+      })).resolves.toEqual([expect.objectContaining({
+        kind: 'memory',
+        consentDenied: true,
+        consentProducerId: 'memory.deletion_proposal',
+        retired: true,
+      })]);
       expect(await proposalStore.listMemoryDeletionAuditEvents(proposed.id)).toEqual([
         expect.objectContaining({ proposalId: proposed.id, eventType: 'proposed', actorRole: 'Companion' }),
         expect.objectContaining({ proposalId: proposed.id, eventType: 'partner_alerted', actorRole: 'Partner' }),
@@ -411,6 +463,14 @@ describe('postgres memory store integration', () => {
       })).resolves.toMatchObject({ proposalId: proposed.id, restoredAt: 1_700_000_000_400 });
       await expect(proposalStore.getMemoryDeletionProposal(proposed.id))
         .resolves.toMatchObject({ status: 'restored', deleteId: approved.deleteId });
+      // The withdrawal survives the restore. Recovering a consent-withdrawn
+      // memory recovers the record for audit, never the recall — the Layer-3
+      // gate still denies it.
+      const restoredMemory = await store.getById('proposal-approved');
+      expect(restoredMemory?.deletedAt).toBeUndefined();
+      expect(restoredMemory?.consentFlags?.allowRecall).toBe(false);
+      expect(restoredMemory?.provenance?.consentProducer?.producerId)
+        .toBe('memory.deletion_proposal');
       expect((await proposalStore.listMemoryDeletionAuditEvents(proposed.id)).at(-1)).toMatchObject({
         proposalId: proposed.id,
         eventType: 'restored',

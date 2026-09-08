@@ -159,7 +159,7 @@ export const POSTGRES_BIOGRAPHICAL_PROFILE_MIGRATIONS: readonly string[] = [
   ALTER TABLE biographical_review_audits DROP CONSTRAINT IF EXISTS biographical_review_reason_check;
   ALTER TABLE biographical_review_audits
     ADD CONSTRAINT biographical_review_reason_check
-    CHECK (reason IN ('approved', 'denied', 'grant-revoked', 'grant-recorded', 'malformed', 'unauthorized', 'claim-not-found', 'stale-claim-digest', 'stale-source-set-digest', 'grant-not-found', 'grant-digest-mismatch', 'invalid-state', 'stage-approved', 'stage-rejected', 'candidate-not-found', 'stale-candidate-revision', 'portability-set', 'portability-refused'));
+    CHECK (reason IN ('approved', 'denied', 'grant-revoked', 'grant-recorded', 'malformed', 'unauthorized', 'claim-not-found', 'stale-claim-digest', 'stale-source-set-digest', 'grant-not-found', 'grant-digest-mismatch', 'invalid-state', 'stage-approved', 'stage-rejected', 'candidate-not-found', 'stale-candidate-revision', 'portability-set', 'portability-refused', 'portability-failed'));
   `,
   // Durable background-stage cursors (o61vb.16). One row per stage and scan
   // key, holding only the digest of what that stage last processed: a

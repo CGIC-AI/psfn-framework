@@ -151,6 +151,7 @@ import {
 import type { NotificationPort } from '../../core/tools/ntfy.js';
 import { createPostEscalationIncidentRecorder } from '../../core/cogsec/intake/post-escalation-incidents.js';
 import {
+  createQuarantineDecisionEscalationObserver,
   createQuarantineHoldEscalationObserver,
 } from '../../core/cogsec/intake/quarantine-escalation-producer.js';
 import type { IntakeQuarantineEntry } from '../../core/cogsec/intake/quarantine-store.js';
@@ -345,7 +346,9 @@ async function main(): Promise<void> {
   // wtw7l: raises a CogSec quarantine hold onto the escalation plane. Late-bound
   // because the plane is opened below, after this core exists; a hold made
   // before then behaves exactly as it always has.
-  let quarantineHoldEscalation: ((entry: IntakeQuarantineEntry) => void) | null = null;
+  let quarantineHoldEscalation:
+    ((entry: IntakeQuarantineEntry, companionId?: string) => void) | null = null;
+  let quarantineExpiryEscalation: ((entry: IntakeQuarantineEntry) => void) | null = null;
   const privilegedCore = await buildGatewayPrivilegedCore({
     config,
     env,
@@ -354,6 +357,7 @@ async function main(): Promise<void> {
     logger: log,
     onEligibilityDecision: emitEligibilityDecision,
     resolveQuarantineHoldEscalation: () => quarantineHoldEscalation,
+    resolveQuarantineExpiryEscalation: () => quarantineExpiryEscalation,
     ...(resolveFleetChargePolicy
       ? { icpConversationChargePolicyResolver: resolveFleetChargePolicy }
       : {}),
@@ -470,6 +474,11 @@ async function main(): Promise<void> {
       title: 'Quarantined item awaiting an operator',
       message: `Garden: /cognitive-security, item ${entry.id}`,
     }),
+  });
+  // A hold that timed out is a question nobody answered: the escalation closes
+  // in the process that observed the expiry, against the ledger that holds it.
+  quarantineExpiryEscalation = createQuarantineDecisionEscalationObserver({
+    ledgers: [humanEscalationStore],
   });
   const detachIncidentAlerts = subscribeIncidentAlerts({
     eventBus,

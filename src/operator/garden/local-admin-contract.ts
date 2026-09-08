@@ -674,6 +674,10 @@ export function createInProcessGardenAdminContract(
             ? { onDecided: quarantineDecisionEscalation }
             : {}),
           onExpired: ({ entry, expiredAtMs, reason }) => {
+            // wtw7l: nobody answered before the window closed, so the
+            // escalation closes too — otherwise every expired hold leaves an
+            // open row on this very surface, permanently.
+            quarantineDecisionEscalation?.(entry);
             void options.eventBus.emit('intake.quarantine.expired', {
               envelopeId: entry.id,
               ...(entry.sourceChannelId ? { sourceChannelId: entry.sourceChannelId } : {}),

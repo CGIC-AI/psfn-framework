@@ -59,7 +59,13 @@ export interface QuarantineHoldEscalationOptions<TNotice> {
   plane: HumanEscalationControlPlane<TNotice>;
   /** Rendered by the caller; unused while this kind routes `garden_only`. */
   renderNotice: (entry: IntakeQuarantineEntry) => TNotice;
-  /** This runtime's companion identity; absent for a shard with no tenancy. */
+  /**
+   * The identity to fall back to when a hold names no companion — this
+   * process's own tenancy in the agent, and the primary companion in a
+   * single-companion gateway. In a FLEET the gateway holds for every companion,
+   * so the observer is handed the owning companion per hold and this is only
+   * the floor.
+   */
   companionId?: string;
   now?: () => number;
   logger?: QuarantineEscalationLogger;
@@ -97,13 +103,21 @@ function windowMs(entry: IntakeQuarantineEntry): number {
   return Math.max(0, entry.expiresAtMs - entry.heldAtMs);
 }
 
-/** Observer for the process that HOLDS: raises one escalation per held item. */
+/**
+ * Observer for the process that HOLDS: raises one escalation per held item.
+ *
+ * `companionId` is per HOLD, not per observer. One gateway screens for the
+ * whole fleet, so an observer that stamped its own identity on every hold would
+ * either mark another companion's quarantine `system` — visible to every
+ * Garden, an existence oracle across tenants — or attribute it to the primary
+ * companion, whose operator can then answer for a companion that never saw it.
+ */
 export function createQuarantineHoldEscalationObserver<TNotice>(
   options: QuarantineHoldEscalationOptions<TNotice>,
-): (entry: IntakeQuarantineEntry) => void {
+): (entry: IntakeQuarantineEntry, companionId?: string) => void {
   const now = options.now ?? (() => Date.now());
   const logger = options.logger ?? log;
-  return (entry: IntakeQuarantineEntry): void => {
+  return (entry: IntakeQuarantineEntry, companionId?: string): void => {
     void (async () => {
       // From the DURABLE ledger: a gateway that restarts while items are held
       // would otherwise re-mint an attempt key the ledger already holds.
@@ -115,7 +129,7 @@ export function createQuarantineHoldEscalationObserver<TNotice>(
         kind: QUARANTINE_ESCALATION_KIND,
         // A withheld item is a decision waiting, not a fault in progress.
         severity: 'warning',
-        owner: resolveHealthEventOwner(options.companionId),
+        owner: resolveHealthEventOwner(companionId ?? options.companionId),
         dedupeKey: entry.id,
         idempotencyKey: `${entry.id}.${String(raiseCount + 1)}`,
         sourceRef: entry.id,

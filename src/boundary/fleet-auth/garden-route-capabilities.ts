@@ -135,6 +135,9 @@ const queryPolicies: Readonly<Partial<Record<string, Readonly<Partial<Record<str
     '/api/admin/sessions/:channelId': singleton(['limit', 'beforeId', 'messagesOnly', 'includeTurns']),
     '/api/admin/sessions/:channelId/detail': singleton(['limit', 'beforeId', 'messagesOnly', 'includeTurns']),
     '/api/admin/sessions/:channelId/search': singleton(['q', 'limit']),
+    // 9jld5: the bounded listing resumes from a keyset cursor; it is the only
+    // client-supplied field the route reads, and page size stays operator policy.
+    '/api/admin/shared-workspace': singleton(['artifactCursor']),
     '/api/admin/shared-workspace/artifact': singleton(['path']),
     '/api/admin/wiki': singleton(['scope']),
     '/api/admin/wiki/search': singleton(['query', 'limit']),

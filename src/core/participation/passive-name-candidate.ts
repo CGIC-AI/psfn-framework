@@ -28,7 +28,9 @@ import {
   toRoomNomination,
   type RoomCompanionProfile,
   type RoomMessageFeatureExtractor,
+  type RoomMessageFeatures,
   type RoomNomination,
+  type RoomSignalReasonCode,
   type SharedRoomClassifier,
 } from './room-signal.js';
 import type { RoomSignalSettings } from '../../system/config/participation-config.js';
@@ -122,6 +124,29 @@ export interface RoomSignalRuntime {
   /** Content-free sink for the bounded nomination and its reason codes. */
   onNomination?: (nomination: RoomNomination) => void;
 }
+
+/**
+ * The staged room-signal verdict carried between the deterministic gates and
+ * the optional shared classifier. `ambiguous` retains the room text so the ONE
+ * bounded classifier call can be made later, after membership is confirmed; it
+ * never leaves this module.
+ */
+type RoomSignalStage =
+  | { status: 'absent' }
+  | { status: 'suppressed'; reason: ParticipationSuppressionReason }
+  | {
+    status: 'eligible';
+    runtime: RoomSignalRuntime;
+    features: RoomMessageFeatures;
+    reasonCodes: readonly RoomSignalReasonCode[];
+  }
+  | {
+    status: 'ambiguous';
+    runtime: RoomSignalRuntime;
+    features: RoomMessageFeatures;
+    content: string;
+    reasonCodes: readonly RoomSignalReasonCode[];
+  };
 
 /** The same-cluster inter-companion lane; ICP owns its own consent moment. */
 const ICP_CHANNEL_TYPE = 'companion';
@@ -267,11 +292,12 @@ export class PassiveNameCandidateBuilder {
     // no model call. The gate's own durable claim is what makes the message
     // considered, so it can never be considered twice.
     //
-    // The room signal (jp36.5.6) runs FIRST and can only refuse: an unverified
-    // room, an untrusted member, a flooding room, or an irrelevant topic all
-    // stop here without any durable read. Membership itself remains the lease's
-    // question, so one physical message can still be considered only once.
-    const signal = await this.evaluateRoomSignal(observation, trigger);
+    // The room signal's deterministic gates (jp36.5.6) run FIRST and can only
+    // refuse: an unverified room, an untrusted member, a flooding room, or an
+    // irrelevant topic all stop here without any durable read and without any
+    // model call. Membership itself remains the lease's question, so one
+    // physical message can still be considered only once.
+    const signal = this.evaluateRoomSignal(observation);
     if (signal.status === 'suppressed') {
       return this.suppress(message, signal.reason, trigger);
     }
@@ -283,6 +309,13 @@ export class PassiveNameCandidateBuilder {
       if (admission.outcome === 'suppressed') {
         return this.suppress(message, admission.suppression, trigger);
       }
+    }
+    // Only a message that survived every deterministic gate AND holds
+    // membership may spend the shared ambiguity classifier, so a room this
+    // companion is not taking part in never costs one.
+    const resolved = await this.resolveRoomSignalAmbiguity(signal, trigger);
+    if (resolved.status === 'suppressed') {
+      return this.suppress(message, resolved.reason, trigger);
     }
 
     this.markSeen(message.channelId, message.id);
@@ -346,15 +379,9 @@ export class PassiveNameCandidateBuilder {
    * observation, or a directly-addressed line all pass straight through; the
    * gate can only ever refuse or record a bounded content-free nomination.
    */
-  private async evaluateRoomSignal(
-    observation: RoomObservation | null,
-    trigger: ParticipationCandidateTrigger,
-  ): Promise<
-    { status: 'admitted' }
-    | { status: 'suppressed'; reason: ParticipationSuppressionReason }
-  > {
+  private evaluateRoomSignal(observation: RoomObservation | null): RoomSignalStage {
     const runtime = this.roomSignal;
-    if (!runtime || !observation) return { status: 'admitted' };
+    if (!runtime || !observation) return { status: 'absent' };
     const features = runtime.extractor.extract(observation);
     const eligibility = evaluateRoomSignalEligibility({
       features,
@@ -365,23 +392,67 @@ export class PassiveNameCandidateBuilder {
     if (eligibility.outcome === 'ineligible') {
       return { status: 'suppressed', reason: eligibility.suppression };
     }
-    let classifierConsulted = false;
-    let reasonCodes = eligibility.outcome === 'eligible' ? eligibility.reasonCodes : [];
     if (eligibility.outcome === 'ambiguous') {
-      // At most ONE cheap bounded evaluation for this physical message, shared
-      // across every companion that reached this point. No claim authority means
-      // no evaluation and no participation.
-      const verdict = await runtime.classifier?.resolve({
+      return {
+        status: 'ambiguous',
+        runtime,
         features,
         content: observation.content,
-        interests: runtime.profile.interests,
-      });
-      classifierConsulted = verdict !== undefined && verdict.outcome !== 'unavailable';
-      if (!verdict || verdict.outcome !== 'relevant') {
-        return { status: 'suppressed', reason: 'room_signal_ambiguous' };
-      }
-      reasonCodes = [...eligibility.reasonCodes, 'classifier_relevant'];
+        reasonCodes: eligibility.reasonCodes,
+      };
     }
+    return {
+      status: 'eligible',
+      runtime,
+      features,
+      reasonCodes: eligibility.reasonCodes,
+    };
+  }
+
+  /**
+   * Resolve a deterministic stalemate with at most ONE cheap bounded evaluation
+   * for this physical message, shared across every companion that reached this
+   * point. No classifier, or no claim authority, means no evaluation and no
+   * participation: ambiguity is never a route to default speech.
+   */
+  private async resolveRoomSignalAmbiguity(
+    signal: RoomSignalStage,
+    trigger: ParticipationCandidateTrigger,
+  ): Promise<
+    { status: 'admitted' }
+    | { status: 'suppressed'; reason: ParticipationSuppressionReason }
+  > {
+    if (signal.status === 'absent') return { status: 'admitted' };
+    if (signal.status === 'suppressed') return signal;
+    if (signal.status === 'eligible') {
+      this.recordNomination(signal.runtime, signal.features, trigger, signal.reasonCodes, false);
+      return { status: 'admitted' };
+    }
+    const verdict = await signal.runtime.classifier?.resolve({
+      features: signal.features,
+      content: signal.content,
+      interests: signal.runtime.profile.interests,
+    });
+    if (!verdict || verdict.outcome !== 'relevant') {
+      return { status: 'suppressed', reason: 'room_signal_ambiguous' };
+    }
+    this.recordNomination(
+      signal.runtime,
+      signal.features,
+      trigger,
+      [...signal.reasonCodes, 'classifier_relevant'],
+      true,
+    );
+    return { status: 'admitted' };
+  }
+
+  private recordNomination(
+    runtime: RoomSignalRuntime,
+    features: RoomMessageFeatures,
+    trigger: ParticipationCandidateTrigger,
+    reasonCodes: readonly RoomSignalReasonCode[],
+    classifierConsulted: boolean,
+  ): void {
     runtime.onNomination?.(toRoomNomination({
       features,
       companionId: runtime.profile.companionId,
@@ -389,7 +460,6 @@ export class PassiveNameCandidateBuilder {
       reasonCodes,
       classifierConsulted,
     }));
-    return { status: 'admitted' };
   }
 
   private suppress(

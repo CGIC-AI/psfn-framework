@@ -43,6 +43,7 @@ const COMPANION_A = '3f2a1c88-5d4e-4a7b-9c3d-1e2f3a4b5c6d';
 const COMPANION_B = '9a8b7c66-1d2e-4f3a-8b9c-0d1e2f3a4b5c';
 const ROOM_CHANNEL = 'discord:guild-1:general';
 const SOURCE_EVENT_ID = 'discord-message-1195551234567890';
+const CONTACT_ID = 'contact-1';
 const REPLY_TEXT = 'That trip to the coast was in March, I think.';
 const SECRET_BODY = "my bank PIN is 4417\nsee /home/vega/private/notes.md";
 
@@ -306,6 +307,91 @@ describe('PostgresEgressDeliveryRecordStore', () => {
         expect(serialized).not.toContain(fragment);
       }
       expect(serialized).toContain(custodySha256(SECRET_BODY));
+    } finally {
+      await stores.deliveries.close();
+      await stores.custody.close();
+      await stores.pool.end();
+    }
+  }, TIMEOUT_MS);
+
+  it('resolves a mid-turn pending delivery through the snapshot the fold writes after it', async () => {
+    // S12B lane B24: a model-invoked send is recorded record-first, DURING the
+    // turn, and the custody snapshot is folded only after the tool loop
+    // returns. The row therefore carries `custodySnapshot: 'pending'` instead
+    // of a ref, and the join it promises is its own `turn:<turnId>`.
+    if (!harness) throw new Error('Postgres integration harness is unavailable');
+    const { databaseUrl } = await harness.createDatabase();
+    const bootstrap = createPostgresPool(databaseUrl, {
+      applicationName: 'egress-delivery-bootstrap', allowExitOnIdle: true,
+    });
+    await bootstrap.query(`CREATE SCHEMA ${SCHEMA}`);
+    await bootstrap.end();
+
+    const stores = await makeStores(databaseUrl);
+    try {
+      const lineage = lineageOf(TURN_ID, memoryDerivedSources);
+      const recorder = new EgressDeliveryRecorder({
+        store: stores.deliveries,
+        companionId: COMPANION_A,
+        getCogSecMode: () => 'boundary',
+        now: () => NOW_MS,
+      });
+
+      // Mid-turn: no snapshot exists yet, so the proof carries no ref.
+      const midTurn = await recorder.record({
+        surface: 'tool_egress',
+        disposition: 'released',
+        turnId: TURN_ID,
+        attemptRef: 'tool-call-1',
+        contentSha256: egressContentSha256(REPLY_TEXT),
+        destination: { kind: 'contact_dm', contactId: CONTACT_ID },
+        proof: turnEgressCustodyProof(lineage, undefined),
+        custodySnapshot: 'pending',
+        decisionAllowed: true,
+      });
+      expect(midTurn.written).toBe(true);
+
+      // Read back through the store's own re-validation: the typed state
+      // survives, and it is not a citation of a snapshot.
+      const stored = await stores.deliveries.getByDeliveryRef(
+        midTurn.record?.deliveryRef ?? '',
+      );
+      expect(stored?.custodySnapshot).toBe('pending');
+      expect(stored?.custodySnapshotRef).toBeUndefined();
+      expect(stored?.holdReason).toBeUndefined();
+      const column = await stores.pool.query<{ custody_snapshot_ref: string | null }>(
+        `SELECT custody_snapshot_ref FROM ${SCHEMA}.egress_delivery_records WHERE delivery_ref = $1`,
+        [midTurn.record?.deliveryRef],
+      );
+      expect(column.rows[0]?.custody_snapshot_ref).toBeNull();
+
+      // The fold lands after the tool loop, and the pending row now resolves.
+      expect(await stores.custody.record(buildCustodySnapshot({
+        lineage, turnId: TURN_ID, requestId: `turn:${TURN_ID}`,
+      }))).toBe('recorded');
+      const resolved = await stores.custody.getByGenerationContextRef(
+        stored?.generationContextRef ?? '',
+      );
+      expect(resolved?.sourceCount).toBe(3);
+
+      // A post-fold egress on the same turn cites the ref directly, and both
+      // rows list under one generation context.
+      expect((await recorder.record({
+        surface: 'social_reply',
+        disposition: 'released',
+        turnId: TURN_ID,
+        attemptRef: SOURCE_EVENT_ID,
+        contentSha256: egressContentSha256(REPLY_TEXT),
+        destination: { kind: 'public_room', channelId: ROOM_CHANNEL },
+        proof: turnEgressCustodyProof(lineage, custodySnapshotRefForTurn(TURN_ID)),
+        decisionAllowed: true,
+      })).written).toBe(true);
+      const rows = await stores.deliveries.listByGenerationContextRef(
+        custodySnapshotRefForTurn(TURN_ID),
+      );
+      expect(rows).toHaveLength(2);
+      expect(rows.map(row => row.custodySnapshot ?? row.custodySnapshotRef).sort())
+        .toEqual(['pending', custodySnapshotRefForTurn(TURN_ID)]);
     } finally {
       await stores.deliveries.close();
       await stores.custody.close();

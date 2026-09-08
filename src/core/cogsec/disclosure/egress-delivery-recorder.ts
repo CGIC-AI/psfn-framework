@@ -32,6 +32,7 @@ import {
   egressDeliveryRef,
   validateEgressDeliveryRecord,
   type EgressCustodyHoldReason,
+  type EgressCustodySnapshotState,
   type EgressDeliveryDisposition,
   type EgressDeliveryRecord,
   type EgressDeliveryRecordStorePort,
@@ -60,6 +61,12 @@ export interface EgressDeliveryRecordRequest {
   outcome?: DisclosureClassification;
   decisionAllowed: boolean;
   holdReason?: EgressCustodyHoldReason;
+  /**
+   * `pending` for an in-turn egress recorded before its turn folds the custody
+   * snapshot. The proof carries no ref yet, and this states WHY: the snapshot
+   * for this row's own `turn:<turnId>` is written after the tool loop returns.
+   */
+  custodySnapshot?: EgressCustodySnapshotState;
   /** The inbound event this egress answers, when the surface carries one. */
   triggerEventRef?: string;
 }
@@ -171,6 +178,12 @@ export class EgressDeliveryRecorder {
       ...(request.holdReason !== undefined ? { holdReason: request.holdReason } : {}),
       ...(proof?.custodySnapshotRef !== undefined
         ? { custodySnapshotRef: proof.custodySnapshotRef }
+        : {}),
+      // Passed through unconditionally: a request that claims a pending
+      // snapshot AND cites a written ref is contradictory, and the validator
+      // refuses it rather than letting the recorder quietly pick a winner.
+      ...(request.custodySnapshot !== undefined
+        ? { custodySnapshot: request.custodySnapshot }
         : {}),
       sourceCount: proof?.sourceCount ?? 0,
       hasUnclassifiedSource: proof?.hasUnclassifiedSource ?? false,

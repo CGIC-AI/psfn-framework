@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { SkillsRuntime } from './runtime.js';
@@ -26,6 +26,7 @@ function writeSkillsConfig(
     extraDirectories?: string[];
     maxLoadedSkills?: number;
     maxSkillChars?: number;
+    maxTotalBinaryChecks?: number;
   },
 ): void {
   const payload = {
@@ -35,6 +36,9 @@ function writeSkillsConfig(
     maxLoadedSkills: overrides?.maxLoadedSkills ?? 32,
     maxSkillChars: overrides?.maxSkillChars ?? 100_000,
     disabledSkills: [],
+    ...(overrides?.maxTotalBinaryChecks === undefined
+      ? {}
+      : { eligibility: { maxTotalBinaryChecks: overrides.maxTotalBinaryChecks } }),
   };
 
   writeFileSync(join(seedDir, 'skills.seed.json'), JSON.stringify(payload, null, 2));
@@ -497,6 +501,110 @@ describe('skills runtime', () => {
         }),
       ]);
     } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('bounds binary eligibility checks across the whole snapshot build (7wggj)', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'skills-runtime-aggregate-'));
+    const dataDir = join(root, 'data');
+    const seedDir = join(root, 'config');
+    mkdirSync(dataDir, { recursive: true });
+    mkdirSync(seedDir, { recursive: true });
+    // 24 skills x 8 declared binaries = 192 checks with no aggregate bound.
+    writeSkillsConfig(dataDir, seedDir, { maxTotalBinaryChecks: 48 });
+
+    for (let index = 0; index < 24; index += 1) {
+      const name = `binary-skill-${String(index).padStart(3, '0')}`;
+      const directory = join(root, 'skills', name);
+      mkdirSync(directory, { recursive: true });
+      writeFileSync(join(directory, 'SKILL.md'), [
+        '---',
+        `name: ${name}`,
+        `description: Description for ${name}`,
+        'requires:',
+        `  binaries: [${Array.from({ length: 8 }, (_, slot) => `tool-${String(index)}-${String(slot)}`).join(', ')}]`,
+        '---',
+        '# Instructions',
+        'bounded body',
+      ].join('\n'));
+    }
+
+    try {
+      let checks = 0;
+      const runtime = new SkillsRuntime({
+        dataDir,
+        seedDir,
+        repoRoot: root,
+        isBinaryAvailable: () => { checks += 1; return true; },
+        collectionLimits: { yieldEvery: 4 },
+      });
+      const snapshot = await runtime.getSnapshot();
+
+      // The ledger is per build, not per chunk: six of the twenty-four skills
+      // are paid for and the rest fail closed without a single extra probe.
+      expect(checks).toBe(48);
+      expect(snapshot.includedSkills).toHaveLength(6);
+      const budgetSkips = snapshot.skipped.filter(
+        record => /aggregate binary check budget exhausted/.test(record.reason),
+      );
+      expect(budgetSkips).toHaveLength(18);
+      expect(snapshot.promptXml).not.toContain('binary-skill-023');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('resolves binary requirements through the default PATH probe (7wggj)', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'skills-runtime-path-probe-'));
+    const dataDir = join(root, 'data');
+    const seedDir = join(root, 'config');
+    const binDir = join(root, 'bin');
+    mkdirSync(dataDir, { recursive: true });
+    mkdirSync(seedDir, { recursive: true });
+    mkdirSync(binDir, { recursive: true });
+    writeSkillsConfig(dataDir, seedDir);
+
+    const executable = join(binDir, 'psfn-probe-tool');
+    writeFileSync(executable, '#!/bin/sh\nexit 0\n');
+    chmodSync(executable, 0o755);
+
+    for (const [name, binary] of [
+      ['present-binary', 'psfn-probe-tool'],
+      ['absent-binary', 'psfn-probe-tool-missing'],
+    ]) {
+      const directory = join(root, 'skills', name!);
+      mkdirSync(directory, { recursive: true });
+      writeFileSync(join(directory, 'SKILL.md'), [
+        '---',
+        `name: ${name!}`,
+        `description: Description for ${name!}`,
+        'requires:',
+        `  binaries: [${binary!}]`,
+        '---',
+        '# Instructions',
+        'bounded body',
+      ].join('\n'));
+    }
+
+    const previousPath = process.env.PATH;
+    try {
+      process.env.PATH = binDir;
+      // No isBinaryAvailable override: the runtime must build its own probe.
+      const runtime = new SkillsRuntime({ dataDir, seedDir, repoRoot: root });
+      const snapshot = await runtime.getSnapshot();
+
+      expect(snapshot.includedSkills.map(entry => entry.name)).toEqual(['present-binary']);
+      expect(snapshot.skipped).toEqual([
+        expect.objectContaining({
+          name: 'absent-binary',
+          kind: 'ineligible',
+          reason: expect.stringContaining('missing binaries: psfn-probe-tool-missing'),
+        }),
+      ]);
+    } finally {
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
       rmSync(root, { recursive: true, force: true });
     }
   });

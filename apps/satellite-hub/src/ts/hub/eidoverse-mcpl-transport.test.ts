@@ -116,10 +116,10 @@ test("pushed channel traffic produces the Phase 1 wake decisions", async () => {
     assert.equal(client.currentWorldName(), "commons");
 
     await door.deliver([
-      door.message({ text: "* Ada arrived in the world", tags: ["chat:ambient", "eidoverse:presence"] }),
-      door.message({ text: "* Ada is no longer nearby", tags: ["chat:ambient", "eidoverse:depart"] }),
+      door.message({ text: "* Quill arrived in the world", tags: ["chat:ambient", "eidoverse:presence"] }),
+      door.message({ text: "* Quill is no longer nearby", tags: ["chat:ambient", "eidoverse:depart"] }),
       door.message({
-        text: "Ada: while you were away",
+        text: "Quill: while you were away",
         tags: ["chat:mention", "chat:addressed", "eidoverse:catchup"],
       }),
     ]);
@@ -128,14 +128,14 @@ test("pushed channel traffic produces the Phase 1 wake decisions", async () => {
 
     await door.deliver([
       door.message({
-        text: "Ada: are you there?",
+        text: "Quill: are you there?",
         tags: ["chat:mention", "chat:addressed"],
-        author: { id: "ada", name: "Ada" },
+        author: { id: "quill", name: "Quill" },
       }),
-      door.message({ text: "* Ada walked up to you", tags: ["chat:addressed", "eidoverse:approach"] }),
+      door.message({ text: "* Quill walked up to you", tags: ["chat:addressed", "eidoverse:approach"] }),
     ]);
     await waitFor(() => target.turns.length === 2, "two addressed wakes");
-    assert.deepEqual(target.turns, ["Ada: are you there?", "* Ada walked up to you"]);
+    assert.deepEqual(target.turns, ["Quill: are you there?", "* Quill walked up to you"]);
   } finally {
     await wake.close();
     await client.close();
@@ -155,7 +155,7 @@ test("catchup replay wakes only when the operator opts in", async () => {
     await client.start();
     await door.waitForHandshake();
     await door.deliver([door.message({
-      text: "Ada: while you were away",
+      text: "Quill: while you were away",
       tags: ["chat:mention", "chat:addressed", "eidoverse:catchup"],
     })]);
     await waitFor(() => target.turns.length === 1, "the opted-in replay wake");
@@ -275,7 +275,7 @@ test("denying channels.lifecycle keeps the world and only costs the ability to l
     await door.waitForHandshake();
     await door.registerChannel();
     await door.deliver([door.message({
-      text: "Ada: still here?",
+      text: "Quill: still here?",
       tags: ["chat:mention", "chat:addressed"],
     })]);
     await waitFor(() => target.turns.length === 1, "an addressed wake without channels.lifecycle");
@@ -413,9 +413,9 @@ async function mcplVisionTurn(
     adapter.connect();
     await door.deliver([
       door.message({
-        text: "Ada: what do you see?",
+        text: "Quill: what do you see?",
         tags: ["chat:mention", "chat:addressed"],
-        author: { id: "ada", name: "Ada" },
+        author: { id: "quill", name: "Quill" },
       }),
     ]);
     await waitFor(() => agent.calls.length > 0, "the MCPL turn to reach the agent");

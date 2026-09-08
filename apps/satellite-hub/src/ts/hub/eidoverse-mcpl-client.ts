@@ -40,6 +40,7 @@ import {
   isRecord,
   MCPL_METHOD,
   MCPL_PROTOCOL_VERSION,
+  parseFeatureSetsUpdateResult,
   parseJsonRpcFrame,
   type JsonRpcId,
   type McplIncomingChannelMessage,
@@ -86,6 +87,13 @@ interface McplSession {
   responder: EidoverseMcplResponder;
   nextId: number;
   closed: boolean;
+  /**
+   * Feature sets this hub selected that the door's own degradation receipt
+   * says it will not honour on this connection. Read from the receipt, never
+   * assumed: it is what the door will DO, and the surfaces that depend on a
+   * degraded set are refused Hub-side rather than tried and failed.
+   */
+  degradedFeatureSets: Set<string>;
 }
 
 export class EidoverseMcplClient {
@@ -184,18 +192,23 @@ export class EidoverseMcplClient {
    */
   async travel(world: string): Promise<string> {
     if (!this.grantsTravel()) {
-      // The operator withheld the feature set. Feature-set names carry no
+      // Either the operator withheld the feature set, or the door's own
+      // receipt says it will not honour it. Feature-set names carry no
       // authority on the wire, so this refusal is the enforcement: the door is
       // never asked.
-      this.logger.warn("Eidoverse MCPL travel is not in this hub's granted feature sets");
+      this.logger.warn("Eidoverse MCPL travel is not available under this hub's feature sets");
       throw new EidoverseMcpRequestError("Eidoverse MCPL travel request failed");
     }
     return this.callTool("travel", { world });
   }
 
-  /** Whether this hub's own feature-set selection admits world-to-world travel. */
+  /**
+   * Whether world-to-world travel is live: this hub selected the feature set
+   * AND the door's own receipt did not report it degraded on this connection.
+   */
   grantsTravel(): boolean {
-    return this.config.featureSets.includes(EIDOVERSE_TRAVEL_FEATURE_SET);
+    if (!this.config.featureSets.includes(EIDOVERSE_TRAVEL_FEATURE_SET)) return false;
+    return !this.session?.degradedFeatureSets.has(EIDOVERSE_TRAVEL_FEATURE_SET);
   }
 
   private async connectInitial(): Promise<void> {
@@ -231,6 +244,7 @@ export class EidoverseMcplClient {
       }),
       nextId: 1,
       closed: false,
+      degradedFeatureSets: new Set<string>(),
     };
     session.socket.onMessage((data) => this.receive(session, data));
     session.socket.onClose(() => this.handleDisconnect(session));
@@ -291,11 +305,50 @@ export class EidoverseMcplClient {
       clientInfo: HUB_CLIENT_INFO,
     }, this.config.handshakeTimeoutMs);
     this.notify(session, MCPL_METHOD.initialized, {});
-    await this.request(session, MCPL_METHOD.featureSetsUpdate, {
+    const receipt = await this.request(session, MCPL_METHOD.featureSetsUpdate, {
       enabled: [...this.config.featureSets],
       disabled: disabledFeatureSetsForSelection(this.config.featureSets),
       effectiveCapabilities: [...this.config.effectiveCapabilities],
     }, this.config.handshakeTimeoutMs);
+    this.applyDegradationReceipt(session, receipt);
+  }
+
+  /**
+   * Read the door's §6.7 degradation receipt.
+   *
+   * The receipt reports what the door will stop doing, and it is the only
+   * signal the Hub gets that its hand-maintained mirror of the door's feature
+   * -set table has drifted — a routine upstream change, not an attack. A set
+   * this hub selected and the door reports unavailable disables the surfaces
+   * that depend on it, and says so in one content-free line naming the set ids
+   * and the capability paths the door found missing. A set the operator
+   * withheld coming back unavailable is the expected consequence of
+   * withholding it and is not reported.
+   *
+   * An unreadable receipt, or one refusing the policy outright, degrades every
+   * selected set: the Hub cannot tell what survived, so it assumes nothing did.
+   */
+  private applyDegradationReceipt(session: McplSession, result: unknown): void {
+    const receipt = parseFeatureSetsUpdateResult(result);
+    if (!receipt || !receipt.accepted) {
+      for (const name of this.config.featureSets) session.degradedFeatureSets.add(name);
+      this.logger.warn(
+        receipt
+          ? "Eidoverse MCPL door refused the feature-set policy; every selected set is degraded"
+          : "Eidoverse MCPL feature-set receipt was unreadable; every selected set is degraded",
+      );
+      return;
+    }
+    const degraded: string[] = [];
+    for (const entry of receipt.unavailableFeatures ?? []) {
+      if (!this.config.featureSets.includes(entry.featureSet)) continue;
+      session.degradedFeatureSets.add(entry.featureSet);
+      degraded.push(entry.missingCapabilities.length > 0
+        ? `${entry.featureSet} [${entry.missingCapabilities.join(" ")}]`
+        : entry.featureSet);
+    }
+    if (degraded.length === 0) return;
+    this.logger.warn(`Eidoverse MCPL feature sets degraded: ${degraded.join(", ")}`);
   }
 
   /**

@@ -44,6 +44,12 @@ export interface EidoverseMcplDoorOptions {
    * capability the Hub never learned to grant.
    */
   featureSetUses?: Readonly<Record<string, readonly string[]>>;
+  /**
+   * A verbatim `featureSets/update` answer, replacing the computed receipt.
+   * For the shapes a real door may legitimately send and this one does not —
+   * an outright `accepted: false`, or a body the Hub cannot read.
+   */
+  policyReceipt?: Record<string, unknown>;
   /** Text the `look` tool returns. */
   lookText?: string;
   /** Drop the socket immediately after the policy receipt, once. */
@@ -289,7 +295,7 @@ export class EidoverseMcplDoor {
         // not cover is degraded WHOLE, a set the host named in `disabled` is
         // degraded by name, and the receipt is consequence testimony — this
         // door never answers `accepted: false`.
-        const receipt = policyReceipt(
+        const receipt = this.options.policyReceipt ?? policyReceipt(
           connection.grant,
           disabled,
           this.options.featureSetUses ?? DECLARED_FEATURE_SET_USES,

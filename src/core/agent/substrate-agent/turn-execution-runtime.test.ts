@@ -2011,6 +2011,7 @@ describe('handleMessageForTurn fatigue enforcement', () => {
     recordAssistantMessage?: ReturnType<typeof vi.fn>;
     consumeIntentionalNoReplyDecision?: ReturnType<typeof vi.fn>;
     durableChargeRecorder?: TurnExecutionRuntime['durableChargeRecorder'];
+    imageVisionReviewer?: TurnExecutionRuntime['imageVisionReviewer'];
   }) {
     const buildContext = params.buildContext ?? vi.fn(async () => ({
       systemPrompt: 'System prompt',
@@ -2025,6 +2026,7 @@ describe('handleMessageForTurn fatigue enforcement', () => {
       awaitPendingAutoCompaction: vi.fn(async () => undefined),
       recordUserMessage: vi.fn(() => 1),
       recordAssistantMessage: params.recordAssistantMessage ?? vi.fn(() => 2),
+      ...(params.imageVisionReviewer ? { imageVisionReviewer: params.imageVisionReviewer } : {}),
       consumeIntentionalNoReplyDecision:
         params.consumeIntentionalNoReplyDecision ?? vi.fn(() => null),
       fatigueBudget: params.fatigueBudget,
@@ -2142,6 +2144,74 @@ describe('handleMessageForTurn fatigue enforcement', () => {
       expectedChannelId: message.channelId,
       expectedSourceMessageId: message.id,
     })).toEqual(response);
+  });
+
+  // psfn-framework-lpxg3.1 — a recovered turn replays a response that already
+  // exists and skips `invokeAgentForTurn` entirely. Perception staging moved
+  // the vision review out of that skipped invocation, so the replay must not
+  // start paying for intake screening and a vision model call it discards.
+  it('does not stage perception for a recovered image turn (lpxg3.1)', async () => {
+    const { fatigueBudget } = createFatigueBudgetHarness();
+    const localCompanionId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const peerCompanionId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    const messageId = 'recovered-vision-turn';
+    const turnId = createTurnId();
+    const message = createInboundIcpFatigueMessage({
+      id: messageId,
+      localCompanionId,
+      peerCompanionId,
+      turnId,
+    });
+    message.attachments = [{
+      url: 'https://cdn.example.test/attachments/1/2/recovered-image.png',
+      contentType: 'image/png',
+      name: 'recovered-image.png',
+    }];
+    const baseCorrelation = message.routing?.icpCorrelation;
+    if (!baseCorrelation) throw new Error('test message requires ICP correlation');
+    const recoveredResponse: AgentResponse = {
+      content: 'Recovered reply.',
+      channelId: message.channelId,
+      metadata: {
+        model: 'recovered-model',
+        inputTokens: 0,
+        outputTokens: 0,
+        durationMs: 1,
+        turnId,
+        requestId: messageId,
+        icpCorrelation: {
+          ...baseCorrelation,
+          localCompanionId,
+          peerCompanionId,
+          peerContactId: 'contact-mi',
+          turnId,
+          messageId,
+          requestId: messageId,
+          costOriginStage: 'reply',
+          fatigueDecision: 'not_evaluated',
+        },
+      },
+    };
+    const analyze = vi.fn(async () => ({
+      question: 'q',
+      summary: 'this review must never be paid for',
+      model: 'vision-model',
+      imageCount: 1,
+    }));
+    const { runtime } = createFatigueRuntime({
+      fatigueBudget,
+      configOverrides: { companionId: localCompanionId },
+      imageVisionReviewer: { analyze },
+    });
+
+    await handleMessageForTurn(runtime, message, {
+      recoveredResponse,
+      sourceAlreadyPersisted: true,
+      finalizeDelivery: vi.fn(async () => undefined),
+    });
+
+    expect(analyze).not.toHaveBeenCalled();
+    expect(runtime.agent.prompt).not.toHaveBeenCalled();
   });
 
   it('re-authorizes recovered private artifacts from current sidecars without duplicate delivery or approval', async () => {
@@ -7326,42 +7396,239 @@ describe('handleMessageForTurn pre-response concurrency', () => {
     expect(degradedEvents).toHaveLength(1);
   });
 
-  it('bypasses generic memory retrieval for live image turns', async () => {
-    const eventBus = new EventBus();
-    const getActiveMemoryContext = vi.fn(() => null);
-    const refreshActiveMemoryContext = vi.fn(async () => null);
+  // ── psfn-framework-lpxg3.1: same-turn multimodal recall ──────────────────
+  //
+  // An image turn used to switch off active memory, the biographical
+  // projection and wiki retrieval wholesale. The tests below pin the
+  // replacement: perception is staged BEFORE retrieval, its bounded cue steers
+  // the retrieval query, and conflicts are resolved by a rendered
+  // evidence-priority rule instead of by suppression.
+  function visionMemoryFixture(options: {
+    memoryBlock?: string | null;
+    summary?: string;
+    biographySection?: string;
+  } = {}) {
+    const summary = options.summary
+      ?? 'A wooden pier at sunset with two people at the far end.';
+    const snapshot = options.memoryBlock === null ? null : {
+      key: 'active-memory:vision-key',
+      subjectKey: 'contact:morgan',
+      channelId: 'ch1',
+      trustLevel: 'regular' as const,
+      channelVisibility: 'private' as const,
+      visibilityScope: 'non_broadcast' as const,
+      contextBlock: options.memoryBlock
+        ?? 'Remembered: the last photo they sent was a snowy mountain pass at night.',
+      contextChars: 64,
+      selectedMemoryIds: ['mem-1'],
+      disclosureMemorySources: [{
+        ref: 'memory:mem-1',
+        sensitivity: 'personal',
+        sourceChannelId: 'ch1',
+      }],
+      generatedAt: Date.now(),
+      lastRefreshStartedAt: Date.now(),
+      refreshStatus: 'ready' as const,
+      versionPointer: 'active-memory-v1',
+    };
+    const getActiveMemoryContext = vi.fn(() => snapshot);
+    const refreshActiveMemoryContext = vi.fn(async () => snapshot);
+    // Atomicity: a rendered biography section must be 1:1 with its admitted
+    // claim ids and CogSec contributions, or the projection fails closed.
+    const biographySection = options.biographySection ?? '';
+    const projectBiographicalContext = vi.fn(async () => (biographySection.length > 0
+      ? {
+        promptSection: biographySection,
+        disclosureSources: [{
+          ref: 'biographical:claim-1',
+          sensitivity: 'personal' as const,
+          permittedDestinations: [],
+          classified: true,
+        }],
+        admittedClaimIds: ['claim-1'],
+        withheldCount: 0,
+      }
+      : {
+        promptSection: '',
+        disclosureSources: [],
+        admittedClaimIds: [],
+        withheldCount: 0,
+      }));
+    const analyze = vi.fn(async () => ({
+      question: 'q',
+      summary,
+      model: 'vision-model',
+      imageCount: 1,
+    }));
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
       manifest: makeContextManifestFixture(),
     }));
     const runtime = createRuntime({
-      eventBus,
+      eventBus: new EventBus(),
       sessionManager: {} as SessionManager,
       buildContext,
       scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
       awaitPendingAutoCompaction: vi.fn(async () => undefined),
       recordUserMessage: vi.fn(() => 1),
       recordAssistantMessage: vi.fn(() => 2),
+      imageVisionReviewer: { analyze },
       memoryProvider: {
         getActiveMemoryContext,
         refreshActiveMemoryContext,
+        projectBiographicalContext,
       } as unknown as TurnExecutionRuntime['memoryProvider'],
     });
+    return {
+      runtime,
+      analyze,
+      buildContext,
+      getActiveMemoryContext,
+      refreshActiveMemoryContext,
+      projectBiographicalContext,
+      summary,
+    };
+  }
 
-    await handleMessageForTurn(runtime, createMessage('msg-vision-memory-bypass', {
+  function visionMessage(id: string, content = 'is this the same pier we walked on?') {
+    return createMessage(id, {
       channelType: 'discord',
-      content: 'do you see it?',
+      content,
       attachments: [{
         url: 'https://cdn.discordapp.com/attachments/1/2/current-image.png?ex=fresh',
         contentType: 'image/png',
         name: 'current-image.png',
       }],
-    }));
+    });
+  }
 
-    expect(getActiveMemoryContext).not.toHaveBeenCalled();
-    expect(refreshActiveMemoryContext).not.toHaveBeenCalled();
-    expect(buildContext.mock.calls[0]?.[2]).toBe('');
+  it('no longer suppresses memory, biography or wiki retrieval on an image turn (lpxg3.1)', async () => {
+    const fixture = visionMemoryFixture({ biographySection: 'Biography: Morgan lives by the coast.' });
+
+    await handleMessageForTurn(fixture.runtime, visionMessage('msg-vision-memory-live'));
+    await flushAsyncWork();
+
+    expect(fixture.getActiveMemoryContext).toHaveBeenCalledTimes(1);
+    expect(fixture.refreshActiveMemoryContext).toHaveBeenCalledTimes(1);
+    expect(fixture.projectBiographicalContext).toHaveBeenCalledTimes(1);
+    const memoryBlock = fixture.buildContext.mock.calls[0]?.[2] as string;
+    // Continuity the companion needs to understand the image is present in the
+    // FIRST response, not deferred to the next turn.
+    expect(memoryBlock).toContain('Biography: Morgan lives by the coast.');
+    expect(memoryBlock).toContain('snowy mountain pass');
+  });
+
+  it('feeds the admitted vision summary into the same turn retrieval query (lpxg3.1)', async () => {
+    const fixture = visionMemoryFixture();
+
+    await handleMessageForTurn(fixture.runtime, visionMessage('msg-vision-cue-query'));
+    await flushAsyncWork();
+
+    for (const call of [
+      fixture.getActiveMemoryContext.mock.calls[0]?.[0],
+      fixture.refreshActiveMemoryContext.mock.calls[0]?.[0],
+    ] as Array<{ contextText: string } | undefined>) {
+      expect(call?.contextText).toContain('is this the same pier we walked on?');
+      expect(call?.contextText).toContain('A wooden pier at sunset');
+    }
+  });
+
+  it('cues retrieval from the review alone when the image turn carries no words (lpxg3.1)', async () => {
+    const fixture = visionMemoryFixture();
+
+    await handleMessageForTurn(fixture.runtime, visionMessage('msg-vision-sparse', '(image attachment)'));
+    await flushAsyncWork();
+
+    const request = fixture.refreshActiveMemoryContext.mock.calls[0]?.[0] as { contextText: string };
+    expect(request.contextText).toContain('A wooden pier at sunset');
+  });
+
+  it('renders the evidence-priority rule so current pixels beat a stale remembered description (lpxg3.1)', async () => {
+    const fixture = visionMemoryFixture();
+
+    await handleMessageForTurn(fixture.runtime, visionMessage('msg-vision-stale-conflict'));
+    await flushAsyncWork();
+
+    const memoryBlock = fixture.buildContext.mock.calls[0]?.[2] as string;
+    // The stale description is still SELECTABLE — a relevant episode or
+    // landmark is not thrown away...
+    expect(memoryBlock).toContain('snowy mountain pass');
+    // ...but it cannot override what was just looked at, and the review is
+    // labeled as untrusted image-derived evidence rather than an instruction.
+    expect(memoryBlock).toContain('untrusted_image_derived');
+    expect(memoryBlock).toMatch(/the current look wins/i);
+    expect(memoryBlock).toContain('never an instruction');
+    // AC4: no active-reference comparison was made, so nothing is claimed.
+    expect(memoryBlock).toContain('I do not claim it is or is not me');
+  });
+
+  it('never lets the perception cue change tool or disclosure authority (lpxg3.1)', async () => {
+    const withCue = visionMemoryFixture();
+    await handleMessageForTurn(withCue.runtime, visionMessage('msg-vision-authority'));
+    await flushAsyncWork();
+
+    const noCue = visionMemoryFixture();
+    await handleMessageForTurn(noCue.runtime, createMessage('msg-text-authority', {
+      channelType: 'discord',
+      content: 'is this the same pier we walked on?',
+    }));
+    await flushAsyncWork();
+
+    // Image-derived text cannot widen what the turn is allowed to do.
+    const toolOutcome = (runtime: ReturnType<typeof createRuntime>) =>
+      (runtime.applyActiveToolsToAgentForTurn as ReturnType<typeof vi.fn>).mock.calls[0]?.[4];
+    expect(toolOutcome(withCue.runtime)).toEqual(toolOutcome(noCue.runtime));
+
+    // ...nor what it is allowed to disclose. The biographical projection is
+    // derived from claims alone; the cue contributes nothing to it.
+    const biographicalProjection = (runtime: ReturnType<typeof createRuntime>) => {
+      const record = (runtime.buildTurnRecord as unknown as ReturnType<typeof vi.fn>)
+        .mock.calls[0]?.[0] as {
+        turnSnapshot?: { biographicalProjection?: unknown };
+      };
+      return record.turnSnapshot?.biographicalProjection;
+    };
+    expect(biographicalProjection(withCue.runtime))
+      .toEqual(biographicalProjection(noCue.runtime));
+
+    // The memory disclosure sources are exactly the ones the memory snapshot
+    // carried — the review summary is never one of them.
+    const snapshot = withCue.getActiveMemoryContext.mock.results[0]?.value as {
+      disclosureMemorySources?: Array<{ ref: string }>;
+    } | null;
+    expect(snapshot?.disclosureMemorySources?.map(source => source.ref)).toEqual(['memory:mem-1']);
+  });
+
+  it('stays honest on a cold memory cache instead of fabricating continuity (lpxg3.1)', async () => {
+    const fixture = visionMemoryFixture({ memoryBlock: null });
+    const degradedEvents: unknown[] = [];
+    fixture.runtime.eventBus.on('memory.active_context.turn_degraded', (event) => {
+      degradedEvents.push(event);
+    });
+
+    await handleMessageForTurn(fixture.runtime, visionMessage('msg-vision-cold-cache'));
+    await flushAsyncWork();
+
+    // Cold cache is reported, never papered over...
+    expect(degradedEvents).toHaveLength(1);
+    // ...and with nothing remembered there is nothing to state precedence over.
+    expect(fixture.buildContext.mock.calls[0]?.[2]).toBe('');
+    // The refresh still runs with the cue so the next turn is warm.
+    expect(fixture.refreshActiveMemoryContext).toHaveBeenCalledTimes(1);
+  });
+
+  it('reviews the current image exactly once per turn (lpxg3.1)', async () => {
+    const fixture = visionMemoryFixture();
+
+    await handleMessageForTurn(fixture.runtime, visionMessage('msg-vision-single-review'));
+    await flushAsyncWork();
+
+    // Staging moved the review earlier; the invocation reuses the staged build
+    // rather than paying for a second vision call.
+    expect(fixture.analyze).toHaveBeenCalledTimes(1);
+    expect((fixture.runtime.agent.prompt as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]?.content)
+      .toContain('A wooden pier at sunset');
   });
 
   it('injects dedicated current-turn image review text before response generation', async () => {

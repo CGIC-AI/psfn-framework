@@ -730,6 +730,18 @@ export interface BiographicalProfileStorePort {
   listCandidates(
     options: BiographicalCandidateListOptions,
   ): Promise<BiographicalCandidateRecord[]>;
+  /**
+   * How many candidates currently occupy the fleet-wide pending budget — every
+   * candidate whose stage is not terminal (`active`, `rejected`, `superseded`).
+   *
+   * ADVISORY read only (psfn-framework-a18qq). `writeCandidate` remains the sole
+   * authority: it re-counts under the capacity advisory lock inside its own
+   * transaction. This exists so synthesis can decline to spend a model call on
+   * work the cap is already certain to reject — under a saturated human-review
+   * backlog every tick otherwise re-synthesized every changed target, threw at
+   * staging, and repeated on the next tick.
+   */
+  countPendingCandidates(): Promise<number>;
   transitionCandidate(
     input: BiographicalCandidateTransitionInput,
   ): Promise<BiographicalCandidateRecord>;

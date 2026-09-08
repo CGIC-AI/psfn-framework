@@ -37,6 +37,12 @@ import { resolveActiveEmanationState } from '../../active-emanation-state.js';
 import { resolveContinuitySubjectKey, resolveRequesterProvenance, type ResolvedAuthorContext } from '../runtime-context.js';
 import { resolveSituatedSiteId } from '../runtime-context-sections/situated-presence.js';
 import { collectVisionTurnImageUrls, hasVisionTurnInputs } from '../vision-attachments.js';
+import {
+  applyPerceptionCueToRetrievalQuery,
+  buildPerceptionEvidencePriorityBlock,
+  summarizeTurnPerceptionCue,
+  type TurnPerceptionCue,
+} from '../perception-cue.js';
 import type { TurnExecutionObservability } from './observability.js';
 import type { TurnRetrievalQueryEmbedding } from '../../../../shared/retrieval-query-embedding.js';
 import { resolveCompanionIdFromConfig } from '../../../identity/companion-runtime.js';
@@ -727,6 +733,12 @@ export async function computePreTurnState(input: {
   temporalRetrievalMode: RetrievalModeInput | undefined;
   viewerRequestContext: Partial<CorrelationMetadata>;
   turnCorrelationBase: CorrelationMetadata;
+  /**
+   * lpxg3.1: the current turn's staged perception, reduced to a bounded cue.
+   * Present only on image turns. It is a RETRIEVAL CUE and evidence — never an
+   * instruction, and never a source of tool or disclosure authority.
+   */
+  perceptionCue?: TurnPerceptionCue | null;
   observability: Pick<
     TurnExecutionObservability,
     'emitObservedTurnStage' | 'emitPerformanceStage' | 'emitTurnSnapshotInBackground'
@@ -754,10 +766,22 @@ export async function computePreTurnState(input: {
     turnCorrelationBase,
     observability,
   } = input;
+  const perceptionCue = input.perceptionCue ?? null;
 
   const memoryProvider = runtime.memoryProvider;
   const activeMemorySurface = requireTurnActiveMemorySurface(memoryProvider);
-  const bypassMemoryForVisionTurn = hasVisionTurnInputs(message);
+  // lpxg3.1: an image on the turn used to switch OFF active memory, the
+  // biographical projection and wiki retrieval wholesale
+  // (`bypassMemoryForVisionTurn`). That protected the current pixels from a
+  // stale remembered image description, but it also removed the recent episode,
+  // relationship landmark and wiki entry needed to understand the image at all,
+  // because the visual review ran only after this function had finished.
+  //
+  // Perception is now staged BEFORE this call, so the blanket bypass is gone:
+  // every lane runs on an image turn, the cue steers the retrieval query, and
+  // the narrow conflict rule is rendered as an explicit evidence-priority block
+  // rather than enforced by suppression.
+  const hasVisionInputs = hasVisionTurnInputs(message);
   const promptSnapshot = runtime.captureTurnPromptSnapshot({ channelType, taskKind });
   // Single session-context derivation for the turn (E2.2): captured once here,
   // it feeds the retrieval query, the live context build (assembleTurnPrompt
@@ -794,7 +818,11 @@ export async function computePreTurnState(input: {
   observability.emitPerformanceStage('session_context_assembly', {
     durationMs: Math.max(0, performance.now() - sessionContextAssemblyStartedAt),
   });
-  const memoryRetrievalContextText = buildMemoryRetrievalContextText(message, sessionContextSnapshot);
+  const memoryRetrievalContextText = applyPerceptionCueToRetrievalQuery(
+    buildMemoryRetrievalContextText(message, sessionContextSnapshot),
+    perceptionCue,
+    MEMORY_RETRIEVAL_QUERY_MAX_CHARS,
+  );
   const sessionChannelId = turnSessionIdentity.logicalSessionId;
   const companionId = activeMemorySurface?.createTurnRetrievalQueryEmbedding
     ? resolveCompanionIdFromConfig(runtime.config)
@@ -836,7 +864,7 @@ export async function computePreTurnState(input: {
     ...(effectiveRetrievalCallerContext ? { callerContext: effectiveRetrievalCallerContext } : {}),
     ...(temporalRetrievalMode ? { retrievalMode: temporalRetrievalMode } : {}),
   };
-  const activeMemoryContext = activeMemorySurface && !bypassMemoryForVisionTurn
+  const activeMemoryContext = activeMemorySurface
     ? activeMemorySurface.getActiveMemoryContext(activeMemoryRequest)
     : null;
   // E5.5: degraded state is explicit, never silent. When the turn proceeds
@@ -844,7 +872,7 @@ export async function computePreTurnState(input: {
   // still in flight from an earlier pass) a typed event records why. The turn
   // itself continues on the last-good context: the background refresh catches
   // up next pass, and remembering a turn late is acceptable in this design.
-  const activeMemoryDegradedReason = activeMemorySurface && !bypassMemoryForVisionTurn
+  const activeMemoryDegradedReason = activeMemorySurface
     ? resolveActiveMemoryTurnDegradedReason(activeMemoryContext)
     : null;
   if (activeMemoryDegradedReason) {
@@ -869,7 +897,7 @@ export async function computePreTurnState(input: {
       });
     });
   }
-  const refreshActiveMemoryContext = activeMemorySurface && !bypassMemoryForVisionTurn
+  const refreshActiveMemoryContext = activeMemorySurface
     ? activeMemorySurface.refreshActiveMemoryContext
     : undefined;
   const activeMemoryRefreshScheduled = refreshActiveMemoryContext !== undefined;
@@ -980,7 +1008,7 @@ export async function computePreTurnState(input: {
         contactResolved: Boolean(authorContext.canonicalContactKey),
         contentLength: message.content.length,
         attachmentCount: message.attachments?.length ?? 0,
-        hasVisionInput: bypassMemoryForVisionTurn,
+        hasVisionInput: hasVisionInputs,
         sensitivity: observerEvalPrivacyContext.sensitivity,
       },
       provenance: {
@@ -1017,8 +1045,7 @@ export async function computePreTurnState(input: {
     conversationScope,
     capturedSessionReads: sessionReads,
   });
-  const rawBiographicalProjection = !bypassMemoryForVisionTurn
-    && memoryProvider?.projectBiographicalContext
+  const rawBiographicalProjection = memoryProvider?.projectBiographicalContext
     ? await memoryProvider.projectBiographicalContext({
       conversationScope,
       currentAuthor: authorContext.canonicalContactKey
@@ -1043,11 +1070,24 @@ export async function computePreTurnState(input: {
       withheldCount: 0,
     };
   const biographicalProjection = enforceAtomicBiographicalProjection(rawBiographicalProjection);
-  const memoryContextBlock = bypassMemoryForVisionTurn
-    ? ''
-    : [biographicalProjection.promptSection, activeMemoryContext?.contextBlock ?? '']
-      .filter(Boolean)
-      .join('\n\n');
+  const rememberedContextBlock = [
+    biographicalProjection.promptSection,
+    activeMemoryContext?.contextBlock ?? '',
+  ].filter(Boolean).join('\n\n');
+  // AC3: the narrow replacement for the blanket bypass. When this turn produced
+  // a current image review AND there is remembered material it could collide
+  // with, the precedence is stated explicitly — current pixels beat a
+  // remembered description of some OTHER image — instead of deleting the whole
+  // continuity context. Non-conflicting episodes and relationship landmarks
+  // stay available. The block also re-states the untrusted image-derived label
+  // so the review can never read as an instruction or an authority grant.
+  const perceptionPriorityBlock = buildPerceptionEvidencePriorityBlock(
+    perceptionCue,
+    rememberedContextBlock.length > 0,
+  );
+  const memoryContextBlock = [rememberedContextBlock, perceptionPriorityBlock]
+    .filter(Boolean)
+    .join('\n\n');
   const memoryContextChars = memoryContextBlock.length;
   turnSnapshot.biographicalProjection = {
     admittedClaimIds: [...biographicalProjection.admittedClaimIds],
@@ -1079,7 +1119,7 @@ export async function computePreTurnState(input: {
   // state is explicit via a typed `wiki.retrieval.turn_degraded` event and the
   // turn proceeds on last-good (or empty, preserving the fail-closed behavior).
   const wikiRetrieval = runtime.wikiRetrieval;
-  const wikiRequest: WikiRetrievalRequest | null = wikiRetrieval && !bypassMemoryForVisionTurn
+  const wikiRequest: WikiRetrievalRequest | null = wikiRetrieval
     ? {
       channelId: message.channelId,
       queryText: memoryRetrievalContextText,
@@ -1144,7 +1184,13 @@ export async function computePreTurnState(input: {
     durationMs: Date.now() - memoryStageStart,
     hasMemoryProvider: memoryProvider != null,
     memoryChars: memoryContextChars,
-    memoryBypassedForVisionTurn: bypassMemoryForVisionTurn,
+    hasVisionTurnInputs: hasVisionInputs,
+    // lpxg3.1: memory is no longer bypassed on an image turn. The structural,
+    // CONTENT-FREE cue summary records what perception contributed instead:
+    // counts, status, embodiment verdict/reason and the trust label. Neither
+    // the Participant's words nor the image-derived summary leave through here.
+    perceptionCue: perceptionCue ? summarizeTurnPerceptionCue(perceptionCue) : null,
+    perceptionPriorityBlockApplied: perceptionPriorityBlock.length > 0,
     activeMemoryContextKey: activeMemoryContext?.key ?? null,
     activeMemoryContextVersion: activeMemoryContext?.versionPointer ?? null,
     activeMemoryRefreshStatus: activeMemoryContext?.refreshStatus ?? 'not_ready',

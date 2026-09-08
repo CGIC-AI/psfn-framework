@@ -8,6 +8,7 @@ import type {
   SatelliteHubStateEvent,
 } from '../api/client.js';
 import type { PcmAudioStreamPort } from '../api/pcm-audio.js';
+import type { BrowserEmbodimentPort } from '../api/primary-embodiment.js';
 import type {
   ApprovalAttribution,
   ApprovalGrantMode,
@@ -202,6 +203,7 @@ export interface HubStreamClientLike {
   sendUserText(text: string, options?: { interrupt?: boolean }): void;
   interrupt(): void;
   readonly pcmAudio?: PcmAudioStreamPort;
+  readonly primaryEmbodiment?: BrowserEmbodimentPort;
   sendApprovalDecision(id: string, decision: 'approve' | 'deny'): void;
   sendArtifactPreviewRequest(requestId: string, artifactId: string): void;
   sendTouchInteraction(interaction: TouchInteraction): void;
@@ -422,6 +424,10 @@ export class HubStreamStore {
 
   connect(): Promise<void> {
     return this.client.connect();
+  }
+
+  get primaryEmbodiment(): BrowserEmbodimentPort | undefined {
+    return this.client.primaryEmbodiment;
   }
 
   disconnect(): void {

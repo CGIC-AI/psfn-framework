@@ -79,6 +79,93 @@ async function connectClient(socket: FakeSocket, requestIds = ['request-1']) {
 }
 
 describe('CompanionGatewayClient', () => {
+  it('reads redacted embodiment status and sends only an explicit generation-checked handoff', async () => {
+    const socket = new FakeSocket();
+    const client = await connectClient(socket, ['status-1', 'handoff-1']);
+    const store = new HubStreamStore(client);
+    expect(socket.sent).toEqual([]);
+    const reading = store.primaryEmbodiment!.read();
+    expect(JSON.parse(String(socket.sent[0]))).toEqual({
+      schemaVersion: 1, requestId: 'status-1', action: 'companion.read', resource: 'embodiment.status', body: {},
+    });
+    const status = { generation: 8, version: 9, primaryPresent: true, currentDeviceIsPrimary: false, lastDecision: null };
+    socket.message({ schemaVersion: 1, type: 'result', requestId: 'status-1', ok: true, result: status });
+    await expect(reading).resolves.toEqual(status);
+    expect(socket.sent).toHaveLength(1);
+
+    const switching = store.primaryEmbodiment!.handoff(status.generation);
+    expect(JSON.parse(String(socket.sent[1]))).toEqual({
+      schemaVersion: 1, requestId: 'handoff-1', action: 'embodiment.handoff', resource: 'embodiment.handoff',
+      body: { expectedGeneration: 8, decisionId: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u), reason: 'user_requested' },
+    });
+    socket.message({ schemaVersion: 1, type: 'result', requestId: 'handoff-1', ok: true, result: { ...status, generation: 9, version: 10, currentDeviceIsPrimary: true } });
+    await expect(switching).resolves.toMatchObject({ generation: 9, currentDeviceIsPrimary: true });
+    store.destroy();
+  });
+
+  it('rejects denied embodiment operations and permits a fresh read without retrying handoff', async () => {
+    const socket = new FakeSocket();
+    const client = await connectClient(socket, ['handoff-1', 'status-1']);
+    const denied = expect(client.primaryEmbodiment!.handoff(4)).rejects.toThrow(/denied/);
+    socket.message({ schemaVersion: 1, type: 'result', requestId: '', ok: false, error: { code: 'denied' } });
+    await denied;
+    const reading = client.primaryEmbodiment!.read();
+    socket.message({ schemaVersion: 1, type: 'result', requestId: 'status-1', ok: true, result: {
+      generation: 5, version: 6, primaryPresent: true, currentDeviceIsPrimary: false, lastDecision: null,
+    } });
+    await expect(reading).resolves.toMatchObject({ generation: 5 });
+    expect(socket.sent).toHaveLength(2);
+    expect(JSON.parse(String(socket.sent[1])).resource).toBe('embodiment.status');
+  });
+
+  it('rejects malformed embodiment responses and clears the attachment', async () => {
+    const socket = new FakeSocket();
+    const client = await connectClient(socket, ['status-1']);
+    const reading = expect(client.primaryEmbodiment!.read()).rejects.toThrow(/invalid/);
+    socket.message({ schemaVersion: 1, type: 'result', requestId: 'status-1', ok: true, result: {
+      generation: 0, version: 0, primaryPresent: false, currentDeviceIsPrimary: true, lastDecision: null,
+    } });
+    await reading;
+    expect(socket.closeCalls.at(-1)?.[0]).toBe(1002);
+    expect(client.primaryEmbodiment).toBeUndefined();
+  });
+
+  it('binds embodiment operations to one attachment and ignores old socket replies and close events', async () => {
+    const firstSocket = new FakeSocket();
+    const nextSocket = new FakeSocket();
+    const sockets = [firstSocket, nextSocket];
+    let requestId = 0;
+    const client = new CompanionGatewayClient({
+      url: 'wss://fleet.example.test/companion-ui/ws',
+      webSocketFactory: () => sockets.shift()!,
+      requestIdFactory: () => `request-${++requestId}`,
+    });
+    const firstConnect = client.connect();
+    firstSocket.open();
+    firstSocket.message(READY);
+    await firstConnect;
+    const firstPort = client.primaryEmbodiment!;
+    const cancelled = expect(firstPort.read()).rejects.toThrow(/disconnected/);
+    client.disconnect();
+    await cancelled;
+    expect(client.primaryEmbodiment).toBeUndefined();
+    const nextConnect = client.connect();
+    nextSocket.open();
+    nextSocket.message(READY);
+    await nextConnect;
+    const nextPort = client.primaryEmbodiment!;
+    expect(nextPort).not.toBe(firstPort);
+    await expect(firstPort.handoff(1)).rejects.toThrow(/no longer current/);
+    const reading = nextPort.read();
+    const status = { generation: 1, version: 1, primaryPresent: false, currentDeviceIsPrimary: false, lastDecision: null };
+    firstSocket.message({ schemaVersion: 1, type: 'result', requestId: 'request-2', ok: true, result: { ...status, generation: 99 } });
+    firstSocket.serverClose(1000);
+    nextSocket.message({ schemaVersion: 1, type: 'result', requestId: 'request-2', ok: true, result: status });
+    await expect(reading).resolves.toEqual(status);
+    expect(client.snapshot().state).toBe('ready');
+    expect(nextSocket.sent).toHaveLength(2);
+  });
+
   it('starts one authenticated PCM stream and sends sequenced binary chunks', async () => {
     const socket = new FakeSocket();
     const client = await connectClient(socket, ['audio-request-1']);
@@ -145,7 +232,7 @@ describe('CompanionGatewayClient', () => {
     await expect(starting).rejects.toThrow(/closed during audio startup/u);
   });
 
-  it('interrupts only a server-confirmed audio turn without browser-supplied authority', async () => {
+  it('interrupts a server-confirmed audio session before and after its turn ends', async () => {
     const socket = new FakeSocket();
     const client = await connectClient(socket, ['audio-request-1']);
     const starting = client.pcmAudio.start();
@@ -173,6 +260,65 @@ describe('CompanionGatewayClient', () => {
       requestId: 'audio-request-1',
     });
     await flushAsyncMessage();
+    socket.sent.length = 0;
+    client.interrupt();
+    expect(socket.sent).toEqual([JSON.stringify({
+      schemaVersion: 1,
+      type: 'audio.interrupt',
+      requestId: 'audio-request-1',
+    })]);
+  });
+
+  it('can stop speech after the final text result without resending the conversation', async () => {
+    const socket = new FakeSocket();
+    const client = await connectClient(socket, ['text-1', 'stop-1']);
+    client.sendUserText('Tell me a story.');
+    socket.message({
+      schemaVersion: 1, type: 'result', requestId: 'text-1', ok: true,
+      result: { content: 'Once upon a time.', channelId: 'attached-channel', inputTokens: 5, outputTokens: 5 },
+    });
+    await flushAsyncMessage();
+    client.interrupt();
+    expect(JSON.parse(String(socket.sent[1]))).toEqual({
+      schemaVersion: 1, requestId: 'stop-1', action: 'companion.interact', resource: 'conversation.interrupt',
+      body: { interactionId: 'text-1' },
+    });
+    socket.message({
+      schemaVersion: 1, type: 'result', requestId: 'stop-1', ok: true,
+      result: { interrupted: false, interactionId: 'text-1' },
+    });
+    await flushAsyncMessage();
+    client.interrupt();
+    expect(socket.sent).toHaveLength(2);
+    expect(client.snapshot().state).toBe('ready');
+  });
+
+  it('interrupts an active text conversation even when an idle microphone session remains open', async () => {
+    const socket = new FakeSocket();
+    const client = await connectClient(socket, ['audio-1', 'text-1', 'stop-1']);
+    const starting = client.pcmAudio.start();
+    socket.message({ schemaVersion: 1, type: 'audio.ready', requestId: 'audio-1' });
+    await starting;
+    client.sendUserText('Tell me a story.');
+    client.interrupt();
+    expect(JSON.parse(String(socket.sent[2]))).toMatchObject({
+      requestId: 'stop-1', resource: 'conversation.interrupt', body: { interactionId: 'text-1' },
+    });
+  });
+
+  it.each(['disconnect', 'server-close'] as const)('drops a completed speech selector on %s', async mode => {
+    const socket = new FakeSocket();
+    const client = await connectClient(socket, ['text-1']);
+    client.sendUserText('Tell me a story.');
+    socket.message({
+      schemaVersion: 1, type: 'result', requestId: 'text-1', ok: true,
+      result: { content: 'Once upon a time.', channelId: 'attached-channel', inputTokens: 5, outputTokens: 5 },
+    });
+    await flushAsyncMessage();
+    if (mode === 'disconnect') client.disconnect();
+    else socket.serverClose(1000);
+    expect(() => client.interrupt()).not.toThrow();
+    expect(socket.sent).toHaveLength(1);
   });
 
   it('accepts the server-owned turn ending while an audio stop is draining', async () => {

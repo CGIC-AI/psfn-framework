@@ -60,6 +60,10 @@ function reviewErrorStatus(error: BiographicalReviewError): number {
   if (error.reason === 'malformed') return 400;
   if (error.reason === 'unauthorized') return 403;
   if (error.reason === 'claim-not-found' || error.reason === 'grant-not-found') return 404;
+  // A store fault is not the operator's answer to retry differently
+  // (psfn-framework-bs9qz): 4xx here would tell them the claim was judged and
+  // refused, which is precisely what did not happen.
+  if (error.reason === 'portability-failed') return 503;
   return 409;
 }
 

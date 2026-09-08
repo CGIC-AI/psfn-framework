@@ -668,6 +668,55 @@ describe('AdminBiographicalReviewService', () => {
     }, ACTOR)).rejects.toMatchObject({ reason: 'malformed' });
   });
 
+  it('reports a store fault during set-portability as a failure, not a refusal', async () => {
+    const store = new InMemoryBiographicalProfileStore(() => NOW);
+    const candidate = await stagedCompanionSelfCandidate(store);
+    const forwarded = await store.transitionCandidate({
+      candidateId: candidate.id,
+      expectedRevision: 2,
+      to: 'human_review',
+      receipts: [{
+        authority: 'companion',
+        decision: 'approved',
+        actorAuthorityRef: 'companion:companion-garden',
+        reason: 'reviewer_approved',
+      }],
+      now: NOW,
+    });
+    const service = new AdminBiographicalReviewService({ store, queryLimit: 20, now: () => NOW });
+    const claim = (await store.getClaim(candidate.claimId))!;
+    const digests = { claimDigest: claim.claimDigest, sourceSetDigest: claim.sourceSetDigest };
+    await service.review(claim.id, {
+      action: 'stage-approve',
+      ...digests,
+      candidateRevision: forwarded.revision,
+      portabilityScope: 'universal',
+    }, ACTOR);
+
+    // The kernel never gets to judge this claim: the write itself fails. The
+    // scope requested is one the kernel WOULD have allowed, so a refusal here
+    // would be a lie about the claim rather than a report about the runtime.
+    vi.spyOn(store, 'setClaimPortability').mockRejectedValueOnce(
+      new Error('connection terminated unexpectedly'),
+    );
+    await expect(service.review(claim.id, {
+      action: 'set-portability',
+      ...digests,
+      portabilityScope: 'origin_only',
+    }, ACTOR)).rejects.toMatchObject({
+      reason: 'portability-failed',
+      // Content-free at the surface: the driver's own text never rides along.
+      message: 'biographical portability could not be recorded',
+    });
+    expect(await store.listReviewAudits(claim.id, 20)).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        action: 'set-portability',
+        decision: 'denied',
+        reason: 'portability-failed',
+      }),
+    ]));
+  });
+
   it('records a declined candidate as a closed reason code and revokes the claim', async () => {
     const store = new InMemoryBiographicalProfileStore(() => NOW);
     const candidate = await stagedCompanionSelfCandidate(store);

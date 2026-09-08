@@ -89,6 +89,23 @@ function matchesSubject(
       && subject.subjectVersion === candidate.subject.subjectVersion;
 }
 
+/**
+ * Canonical-identity match that ignores the stored subject version: a person's
+ * biography is one biography across contact merges and subject revisions.
+ */
+function sameSubjectIdentity(
+  expected:
+    | { readonly kind: 'companion'; readonly companionId: string }
+    | { readonly kind: 'contact'; readonly contactId: string }
+    | undefined,
+  actual: BiographicalSubjectRef | undefined,
+): boolean {
+  if (expected === undefined || actual === undefined || expected.kind !== actual.kind) return false;
+  return expected.kind === 'companion'
+    ? actual.kind === 'companion' && expected.companionId === actual.companionId
+    : actual.kind === 'contact' && expected.contactId === actual.contactId;
+}
+
 function sameSubjectRef(
   expected: BiographicalSubjectRef,
   actual: BiographicalSubjectRef | undefined,
@@ -196,6 +213,7 @@ export class InMemoryBiographicalProfileStore implements BiographicalProfileStor
       .filter(candidate => (
         (options.stages === undefined || options.stages.includes(candidate.stage))
         && (options.claimDigest === undefined || candidate.claimDigest === options.claimDigest)
+        && (options.claimId === undefined || candidate.claimId === options.claimId)
         && (options.automataRunId === undefined
           || candidate.automataRunId === options.automataRunId)
       ))
@@ -327,6 +345,12 @@ export class InMemoryBiographicalProfileStore implements BiographicalProfileStor
     for (const storedClaim of ordered) {
       const claim = this.projectClaimAtReadTime(storedClaim, readAt);
       if (options.subject !== undefined && !matchesSubject(options.subject, claim)) continue;
+      if (
+        options.anySubjectIdentity !== undefined
+        && ![claim.subject, claim.relatedSubject].some(
+          subject => sameSubjectIdentity(options.anySubjectIdentity, subject),
+        )
+      ) continue;
       if (
         options.relatedSubject !== undefined
         && !sameSubjectRef(options.relatedSubject, claim.relatedSubject)

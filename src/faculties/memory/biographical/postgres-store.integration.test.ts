@@ -260,6 +260,106 @@ describe('PostgresBiographicalProfileStore — schema and roundtrip', () => {
     });
   });
 
+  it('scopes a subject biography view to one canonical identity on either side of a dyad', async () => {
+    await withStore(async (store) => {
+      const about = await store.writeClaim({
+        subject: contact('contact-bio-view'),
+        kind: 'stable-preference',
+        value: {
+          kind: 'stable-preference',
+          schemaVersion: 1,
+          domain: 'food',
+          target: 'tea',
+          polarity: 'likes',
+        },
+        basis: 'explicit',
+        confidence: 1,
+        sources: [source()],
+        now: NOW,
+      });
+      const dyad = await store.writeClaim({
+        subject: companion('purrs-bio-view'),
+        relatedSubject: contact('contact-bio-view'),
+        kind: 'relationship',
+        value: { kind: 'relationship', relationshipType: 'friend' },
+        basis: 'explicit',
+        confidence: 1,
+        sources: [source()],
+        now: NOW,
+      });
+      await store.writeClaim({
+        subject: contact('contact-bio-view-other'),
+        kind: 'stable-preference',
+        value: {
+          kind: 'stable-preference',
+          schemaVersion: 1,
+          domain: 'food',
+          target: 'coffee',
+          polarity: 'likes',
+        },
+        basis: 'explicit',
+        confidence: 1,
+        sources: [source()],
+        now: NOW,
+      });
+
+      const scoped = await store.listClaims({
+        anySubjectIdentity: { kind: 'contact', contactId: 'contact-bio-view' },
+        limit: 20,
+      });
+      expect(scoped.map(claim => claim.id).sort()).toEqual([about.id, dyad.id].sort());
+      // Identity, not stored subject version: a merged contact keeps one biography.
+      const merged = await store.writeClaim({
+        subject: contact('contact-bio-view', 2),
+        kind: 'nickname',
+        value: { kind: 'nickname', nickname: 'V', scope: 'self' },
+        basis: 'explicit',
+        confidence: 1,
+        sources: [source()],
+        now: NOW,
+      });
+      expect((await store.listClaims({
+        anySubjectIdentity: { kind: 'contact', contactId: 'contact-bio-view' },
+        limit: 20,
+      })).map(claim => claim.id).sort()).toEqual([about.id, dyad.id, merged.id].sort());
+      expect((await store.listClaims({
+        anySubjectIdentity: { kind: 'companion', companionId: 'purrs-bio-view' },
+        limit: 20,
+      })).map(claim => claim.id)).toEqual([dyad.id]);
+    });
+  });
+
+  it('lists the exact staging record for one claim id', async () => {
+    await withStore(async (store) => {
+      const policy = createDefaultBiographicalCandidatePolicy();
+      const stageOne = async (nickname: string) => await store.writeCandidate({
+        automataRunId: 'automata-run-claim-id-filter',
+        automataAuthorityRef: 'maintenance:biography-synthesis',
+        policy,
+        socialContext: { kind: 'companion_self', companionId: 'companion-claim-id-filter' },
+        rationale: 'new_subject_claim',
+        claim: {
+          subject: companion('companion-claim-id-filter'),
+          kind: 'nickname',
+          value: { kind: 'nickname', nickname, scope: 'self' },
+          basis: 'explicit',
+          confidence: 1,
+          sources: [source({ sourceType: 'semantic', lifecycleStateAtProjection: 'active' })],
+          now: NOW,
+        },
+      });
+      const first = await stageOne('Sprout');
+      const second = await stageOne('Sunbeam');
+
+      expect((await store.listCandidates({ claimId: first.claimId, limit: 10 }))
+        .map(record => record.id)).toEqual([first.id]);
+      expect((await store.listCandidates({ claimId: second.claimId, limit: 10 }))
+        .map(record => record.id)).toEqual([second.id]);
+      expect(await store.listCandidates({ claimId: 'claim-that-does-not-exist', limit: 10 }))
+        .toEqual([]);
+    });
+  });
+
   it('refuses to stage a candidate whose source exceeds the owner privacy policy', async () => {
     await withStore(async (store) => {
       const policy = createDefaultBiographicalCandidatePolicy();

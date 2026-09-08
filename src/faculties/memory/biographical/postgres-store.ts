@@ -338,6 +338,10 @@ export class PostgresBiographicalProfileStore implements BiographicalProfileStor
       values.push(options.claimDigest);
       filters.push(`claim_digest = $${values.length}`);
     }
+    if (options.claimId !== undefined) {
+      values.push(options.claimId);
+      filters.push(`claim_id = $${values.length}`);
+    }
     if (options.automataRunId !== undefined) {
       values.push(options.automataRunId);
       filters.push(`automata_run_id = $${values.length}`);
@@ -493,6 +497,21 @@ export class PostgresBiographicalProfileStore implements BiographicalProfileStor
         `claim_json->'relatedSubject'->>'kind' = $${params.length - 2}
          AND claim_json->'relatedSubject'->>'${idField}' = $${params.length - 1}
          AND (claim_json->'relatedSubject'->>'subjectVersion')::bigint = $${params.length}`,
+      );
+    }
+    if (options.anySubjectIdentity !== undefined) {
+      const identity = options.anySubjectIdentity;
+      const idField = identity.kind === 'companion' ? 'companionId' : 'contactId';
+      params.push(
+        identity.kind,
+        identity.kind === 'companion' ? identity.companionId : identity.contactId,
+      );
+      // Identity only, never subject version: one canonical person keeps one
+      // biography across merges and stored subject revisions.
+      conditions.push(
+        `((subject_kind = $${params.length - 1} AND subject_id = $${params.length})
+          OR (claim_json->'relatedSubject'->>'kind' = $${params.length - 1}
+             AND claim_json->'relatedSubject'->>'${idField}' = $${params.length}))`,
       );
     }
     if (options.kind !== undefined) {

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import ContactSocialGraphPanel from './ContactSocialGraphPanel.svelte';
+  import BiographicalClaimsPanel from '../memory/BiographicalClaimsPanel.svelte';
   import ContactIntroductionProvenance from './ContactIntroductionProvenance.svelte';
   import {
     listContacts,
@@ -64,6 +65,8 @@
 
   // Expanded edit panel
   let editingContactId = $state<string | null>(null);
+  /** Contact whose biography queue is mounted; at most one at a time. */
+  let biographyOpenForContactId = $state<string | null>(null);
   let editDisplayName = $state('');
   let editNickname = $state('');
   let editTrustLevel = $state<TrustLevel>('regular');
@@ -1262,6 +1265,31 @@
             {graphSourceLabel}
             {trustBadge}
           />
+
+          <!--
+            Contact Biography (o61vb.14): the same governed review queue narrowed
+            to this canonical contact, on either side of a dyad. Mounted only
+            once opened so an ordinary contact list costs no biography reads.
+          -->
+          <div class="border-t border-bark-200 pt-2">
+            <button
+              class="text-sm font-medium text-gold-700 transition-colors hover:text-gold-600"
+              onclick={() => {
+                biographyOpenForContactId =
+                  biographyOpenForContactId === contact.id ? null : contact.id;
+              }}
+            >
+              {biographyOpenForContactId === contact.id ? 'Hide Biography' : 'Biography'}
+            </button>
+            {#if biographyOpenForContactId === contact.id}
+              <div class="mt-3">
+                <BiographicalClaimsPanel
+                  subjectContactId={contact.id}
+                  heading="Contact biography"
+                />
+              </div>
+            {/if}
+          </div>
 
           <!-- Edit / Expand button -->
           <div class="border-t border-bark-200 pt-2 flex">

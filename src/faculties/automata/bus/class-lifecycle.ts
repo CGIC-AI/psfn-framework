@@ -154,6 +154,12 @@ export interface AutomataClassWorkResult<T> {
   outputRefs?: readonly AutomataArtifactRef[];
   resultKind?: 'final' | 'partial' | 'none';
   outcome?: AutomataRunOutcome;
+  /**
+   * Terminal lifecycle state for work that finished without doing its job — a
+   * lane that never won its maintenance baton, for instance. Defaults to
+   * `completed`; a thrown error settles `failed` instead.
+   */
+  lifecycleState?: 'completed' | 'cancelled';
 }
 
 export type AutomataClassWorkOutcome<T> =
@@ -214,10 +220,11 @@ export async function runGovernedAutomataClass<T>(input: {
     });
     throw error;
   }
+  const lifecycleState = result.lifecycleState ?? 'completed';
   await session.settle({
-    lifecycleState: 'completed',
+    lifecycleState,
     outcome: result.outcome ?? 'completed',
-    stateReason: RUN_COMPLETED_REASON,
+    stateReason: lifecycleState === 'cancelled' ? RUN_CANCELLED_REASON : RUN_COMPLETED_REASON,
     resultKind: result.resultKind ?? 'final',
     ...(result.summary === undefined ? {} : { summary: result.summary }),
     ...(result.outputRefs ? { outputRefs: result.outputRefs } : {}),

@@ -41,6 +41,8 @@ import type {
 } from './reflection-runtime-contracts.js';
 import { resolveIcpOriginRootInitiationId } from '../icp/initiation-lineage.js';
 import { DEFERRED_REFLECTION_ACTION_KIND } from './reflection-runtime-contracts.js';
+import { runGovernedAutomataClass } from '../../faculties/automata/bus/class-lifecycle.js';
+import type { ProductionAutomataClassId } from '../../faculties/automata/registry-contract.js';
 import { createPostTurnOutboundGates } from './post-turn-outbound-gates.js';
 import type { ReflectionTemplateRuntime } from './reflection-template-runtime.js';
 import type { Scheduler } from './scheduler.js';
@@ -54,6 +56,12 @@ export {
   DRIFT_VELOCITY_REVIEW_OPERATION_ID,
   SLEEPTIME_REST_WINDOW_OPERATION_ID,
 } from './post-turn-runtime/scheduler-lanes.js';
+
+const SCHEDULER_REFLECTION_CLASS: ProductionAutomataClassId = 'scheduler.reflection';
+const SCHEDULER_REFLECTION_TASK_LABEL = 'Deferred reflection template';
+const SCHEDULER_REFLECTION_TASK_SUMMARY =
+  'Run one policy-owned deferred reflection template outside the turn scope.';
+const SCHEDULER_REFLECTION_BRIEFING_QUERY = 'deferred reflection template run';
 
 const log = createComponentLogger('PostTurnRuntime');
 export { INTENTION_FOLLOW_UP_ACTIVATION_MIN_INTERVAL_MS } from './post-turn-outbound-gates.js';
@@ -451,8 +459,32 @@ export function wirePostTurnRuntime(
       if (typeof templateIdRaw !== 'string' || !templateIdRaw.trim()) {
         throw new Error(`Deferred reflection action "${action.id}" is missing payload.templateId`);
       }
-      await templateRuntime.runDeferredTemplate(templateIdRaw.trim(), {
-        actionId: action.id,
+      const templateId = templateIdRaw.trim();
+      // The template run itself is unchanged. Its run identity comes from the
+      // durable queued action id, so a restarted or redelivered reflection
+      // re-enters its own run instead of recording a second terminal event.
+      await runGovernedAutomataClass({
+        runtime: runtimeOptions.automataClassLifecycle,
+        spec: {
+          automatonClass: SCHEDULER_REFLECTION_CLASS,
+          runId: `scheduler-reflection:${action.id}`,
+          workerId: DEFERRED_REFLECTION_ACTION_KIND,
+          taskId: templateId,
+          taskLabel: SCHEDULER_REFLECTION_TASK_LABEL,
+          taskSummary: SCHEDULER_REFLECTION_TASK_SUMMARY,
+        },
+        briefingQuery: SCHEDULER_REFLECTION_BRIEFING_QUERY,
+        work: async () => {
+          const result = await templateRuntime.runDeferredTemplate(templateId, {
+            actionId: action.id,
+          });
+          // Template identity and status only: reflection content stays out of
+          // the Bus, which carries process findings and not companion material.
+          return {
+            value: result,
+            summary: `Deferred reflection template ${templateId} completed`,
+          };
+        },
       });
     },
     {

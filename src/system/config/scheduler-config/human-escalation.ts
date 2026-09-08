@@ -42,7 +42,7 @@ import { isRecord } from '../../../shared/utils/types.js';
 import { assertNoUnknownKeys } from '../validators.js';
 import { toNonNegativeInteger, toPositiveInteger } from './primitives.js';
 
-export interface HumanEscalationRouteConfig {
+interface HumanEscalationRouteConfig {
   /** Where a raised escalation of this kind goes. */
   sink: HumanEscalationSinkId;
   /**

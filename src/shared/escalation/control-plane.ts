@@ -62,7 +62,7 @@ export interface HumanEscalationSink<TNotice> {
 }
 
 /** Owner-file routing for one kind. */
-export interface HumanEscalationRoute {
+interface HumanEscalationRoute {
   sink: HumanEscalationSinkId;
   /** Zero means the caller owns deduplication for this kind. */
   cooldownMs: number;
@@ -72,7 +72,7 @@ export type HumanEscalationRoutingPolicy = Readonly<
   Record<HumanEscalationKind, HumanEscalationRoute>
 >;
 
-export type HumanEscalationRaiseResult =
+type HumanEscalationRaiseResult =
   | { status: 'delivered'; escalationId: string }
   /** Routed to `garden_only`: the durable row is the whole notice. */
   | { status: 'recorded'; escalationId: string }
@@ -108,7 +108,11 @@ function requireRoute(
   routing: HumanEscalationRoutingPolicy,
   kind: HumanEscalationKind,
 ): HumanEscalationRoute {
-  const route: HumanEscalationRoute | undefined = routing[kind];
+  // Widened deliberately: the owner file proves every kind is routed, but this
+  // seam is also reachable from a caller-supplied policy, and a kind with no
+  // entry must throw rather than dereference undefined at the sink.
+  const table: Partial<Record<HumanEscalationKind, HumanEscalationRoute>> = routing;
+  const route = table[kind];
   if (!route) {
     throw new Error(
       `Human escalation kind ${kind} has no routing entry; the owner file must route every kind`,

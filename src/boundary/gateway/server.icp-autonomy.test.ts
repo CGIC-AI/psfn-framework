@@ -10,6 +10,7 @@ import type {
   IcpConversationTransitionInput,
   IcpPermitConsumptionInput,
   IcpPermitConsumptionResult,
+  IcpLifecycleAdmissionResult,
   IcpSharedAutonomyStorePort,
 } from '../../core/icp/autonomy-store-ports.js';
 import {
@@ -82,6 +83,7 @@ class RpcMemoryStore implements IcpSharedAutonomyStorePort {
   permits = new Map<string, IcpInitiationPermit>();
   invalidationGenerations = new Map<string, number>();
   invalidationReasons = new Map<string, IcpAutonomyReasonCode>();
+  lifecycleFenced = new Set<string>();
   beforeInvalidate?: () => Promise<void>;
   beforeConsume?: () => Promise<void>;
 
@@ -192,12 +194,57 @@ class RpcMemoryStore implements IcpSharedAutonomyStorePort {
   }
 
   assertInvalidationFence(fence: IcpAutonomyInvalidationFence): void {
+    // psfn-framework-h248l.9: the durable lifecycle bit is read with the
+    // generation and BEFORE it, so a fenced participant is refused even against
+    // a generation captured a moment ago.
+    for (const entry of fence.companions) {
+      if (this.lifecycleFenced.has(entry.companionId)) {
+        throw new IcpAutonomyInvalidationConflictError('unknown_participant');
+      }
+    }
     for (const entry of fence.companions) {
       if ((this.invalidationGenerations.get(entry.companionId) ?? 0) === entry.generation) continue;
       throw new IcpAutonomyInvalidationConflictError(
         this.invalidationReasons.get(entry.companionId) ?? 'operator_cancelled',
       );
     }
+  }
+
+  async fenceLifecycleAdmission(
+    companionId: string,
+    nowMs: number,
+  ): Promise<IcpLifecycleAdmissionResult> {
+    return this.setLifecycleAdmission(companionId, nowMs, true, 'unknown_participant');
+  }
+
+  async clearLifecycleAdmission(
+    companionId: string,
+    nowMs: number,
+  ): Promise<IcpLifecycleAdmissionResult> {
+    return this.setLifecycleAdmission(companionId, nowMs, false, 'operator_cancelled');
+  }
+
+  async isLifecycleAdmissionFenced(companionId: string): Promise<boolean> {
+    return this.lifecycleFenced.has(companionId);
+  }
+
+  private setLifecycleAdmission(
+    companionId: string,
+    nowMs: number,
+    lifecycleFenced: boolean,
+    reasonCode: IcpAutonomyReasonCode,
+  ): IcpLifecycleAdmissionResult {
+    if (this.lifecycleFenced.has(companionId) === lifecycleFenced) {
+      return { companionId, lifecycleFenced, transitioned: false, revokedPermits: [] };
+    }
+    if (lifecycleFenced) this.lifecycleFenced.add(companionId);
+    else this.lifecycleFenced.delete(companionId);
+    return {
+      companionId,
+      lifecycleFenced,
+      transitioned: true,
+      revokedPermits: this.revokeOutstandingPermitsForCompanionNow(companionId, nowMs, reasonCode),
+    };
   }
 
   async issuePermit(input: {

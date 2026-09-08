@@ -1,4 +1,5 @@
 import { resolve } from 'node:path';
+import { readFile } from 'node:fs/promises';
 import { expect, test, type Page, type WebSocketRoute } from '@playwright/test';
 import { createServer, type ViteDevServer } from 'vite';
 import { humanoidModel } from '../src/lib/avatar/model-fixture.js';
@@ -22,12 +23,13 @@ async function attachCluster(page: Page) {
   const sockets = new Map<string, WebSocketRoute>();
   const frames: Array<{ companionId: string; resource: string; body: unknown }> = [];
   let signedIn = true;
+  let displayStateBinding = 'a'.repeat(64);
   await page.route('**/v1/fleet-auth/**', async route => {
     const pathname = new URL(route.request().url()).pathname;
     let body: unknown;
     switch (pathname) {
       case '/v1/fleet-auth/session/status':
-        body = signedIn ? { schemaVersion: 1, state: 'signed_in', guestMode: 'disabled', websocketPath: pathFor(CANOPY), human: { provider: 'discord', label: 'Partner', role: 'owner' } }
+        body = signedIn ? { schemaVersion: 1, state: 'signed_in', displayStateBinding, guestMode: 'disabled', websocketPath: pathFor(CANOPY), human: { provider: 'discord', label: 'Partner', role: 'owner' } }
           : { schemaVersion: 1, state: 'signed_out', guestMode: 'disabled' };
         break;
       case '/v1/fleet-auth/session/csrf': body = { csrfToken: 'c'.repeat(43) }; break;
@@ -70,7 +72,7 @@ async function attachCluster(page: Page) {
   });
   await page.goto(`${origin}/companion-ui/`);
   await expect(page.getByLabel('Message your companion', { exact: true })).toBeEnabled();
-  return { sockets, frames };
+  return { sockets, frames, switchAccount: () => { displayStateBinding = 'b'.repeat(64); } };
 }
 
 async function selectCompanion(page: Page, label: string) {
@@ -137,4 +139,73 @@ test('claims primary embodiment only after an explicit device handoff', async ({
   expect(frames.find(frame => frame.resource === 'embodiment.handoff')).toEqual({
     companionId: CANOPY, resource: 'embodiment.handoff', body: { expectedGeneration: 0, decisionId: expect.any(String), reason: 'user_requested' },
   });
+});
+
+for (const boundary of ['companion selection', 'socket loss', 'approval polling'] as const) {
+  test(`clears another tab’s same-label account state on ${boundary}`, async ({ page }) => {
+    const { switchAccount, sockets } = await attachCluster(page);
+    await page.getByLabel('Message your companion', { exact: true }).fill('Previous Partner private draft');
+    await page.getByRole('button', { name: 'Open settings', exact: true }).click();
+    await page.getByRole('button', { name: 'Animated sprite', exact: true }).click();
+    await page.getByRole('button', { name: 'Close Settings' }).click();
+    if (boundary === 'approval polling') await page.clock.install();
+    switchAccount();
+    if (boundary === 'companion selection') await selectCompanion(page, 'Meadow');
+    else if (boundary === 'socket loss') sockets.get(CANOPY)!.close({ code: 4401, reason: 'Authority changed' });
+    else await page.clock.runFor(5000);
+    await expect(page.getByLabel('Message your companion', { exact: true })).toHaveValue('');
+    await expect(page.getByLabel('Message your companion', { exact: true })).toBeEnabled();
+    await page.getByRole('button', { name: 'Open settings', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'No avatar', exact: true })).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByLabel('Partner authority')).toContainText('Partner');
+  });
+}
+
+test('uses selected local sprite artwork only for its companion', async ({ page }) => {
+  await attachCluster(page);
+  const names = ['manifest.json', 'expr-mini.png', 'expr-avatar.png', 'tool.png', 'touch.png'];
+  const files = await Promise.all(names.map(async name => ({ name,
+    mimeType: name.endsWith('.json') ? 'application/json' : 'image/png',
+    buffer: await readFile(resolve(import.meta.dirname, '../public/sprites', name)),
+  })));
+  await page.getByRole('button', { name: 'Open settings', exact: true }).click();
+  await page.getByRole('button', { name: 'Animated sprite', exact: true }).click();
+  await page.getByLabel('Choose sprite pack files').setInputFiles(files);
+  await expect(page.getByRole('button', { name: 'Use default artwork', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Close Settings' }).click();
+  await page.getByRole('button', { name: 'Avatar', exact: true }).click();
+  await expect(page.locator('.avatar-view .sprite-image')).toHaveCSS('background-image', /blob:/);
+  await page.getByRole('button', { name: 'Thread', exact: true }).click();
+  await selectCompanion(page, 'Meadow');
+  await page.getByRole('button', { name: 'Avatar', exact: true }).click();
+  await expect(page.locator('.avatar-view .sprite-image')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Thread', exact: true }).click();
+  await selectCompanion(page, 'Canopy');
+  await page.getByRole('button', { name: 'Avatar', exact: true }).click();
+  await expect(page.locator('.avatar-view .sprite-image')).toHaveCSS('background-image', /blob:/);
+});
+
+test('offers Stop for a typed spoken reply and keeps the chat when synthesis fails', async ({ page }) => {
+  const { sockets, frames } = await attachCluster(page);
+  await page.getByLabel('Message your companion', { exact: true }).fill('Tell me a story');
+  await page.getByRole('button', { name: 'Send message', exact: true }).click();
+  await expect(page.getByText('Reply from Canopy: Tell me a story', { exact: true })).toBeVisible();
+  const socket = sockets.get(CANOPY)!;
+  const emit = (event: unknown) => socket.send(JSON.stringify({ schemaVersion: 1, type: 'event', event }));
+  const wav = Buffer.alloc(44 + 16000 * 2 * 4);
+  wav.write('RIFF'); wav.writeUInt32LE(wav.length - 8, 4); wav.write('WAVEfmt ', 8);
+  wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22);
+  wav.writeUInt32LE(16000, 24); wav.writeUInt32LE(32000, 28); wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34);
+  wav.write('data', 36); wav.writeUInt32LE(wav.length - 44, 40);
+  emit({ type: 'text', data: 'audio-init' });
+  emit({ type: 'audio', data: wav.toString('base64') });
+  emit({ type: 'text', data: 'audio-end' });
+  await page.getByRole('button', { name: 'Stop voice playback', exact: true }).click();
+  expect(frames.some(frame => frame.resource === 'conversation.interrupt')).toBe(true);
+  emit({ type: 'error-event', data: { message: 'A provider failure', scope: 'speech' } });
+  await expect(page.getByText('Spoken reply unavailable. The text reply is still available in chat.', { exact: true })).toBeVisible();
+  await expect(page.getByLabel('Message your companion', { exact: true })).toBeEnabled();
+  await page.waitForTimeout(750);
+  await expect(page.getByText('Reply from Canopy: Tell me a story', { exact: true })).toBeVisible();
+  expect(sockets.get(CANOPY)).toBe(socket);
 });

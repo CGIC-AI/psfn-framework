@@ -96,6 +96,7 @@ class FakeFleetProcess {
       } : {
         schemaVersion: 1,
         state: 'signed_in',
+        displayStateBinding: String(this.user).repeat(64),
         guestMode: 'explicit',
         websocketPath: WS_PATH,
         human: { provider: 'discord', label: `Discord user ${this.user}`, role: 'member' },

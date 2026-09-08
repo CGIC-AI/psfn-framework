@@ -1094,6 +1094,13 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
       contactStore,
       companionSubject: biographyCompanionSubject,
       depthPolicy: () => config.biographicalDepthPolicy ?? biographicalDepthPolicy,
+      // psfn-framework-uz787: `groupMembershipAuthority` is deliberately absent.
+      // No production source can currently vouch for a canonical group
+      // membership (the same gap that leaves `governedContexts` empty in the
+      // depth evidence), so group synthesis stays OFF and this pass produces
+      // zero `companion_group` targets and zero group claims. Wiring an
+      // authority here is the ONLY thing that turns it on — the runtime never
+      // infers a participant set from rooms, labels or model output.
     }),
     candidatePolicy: () => (
       config.biographicalCandidatePolicy ?? createDefaultBiographicalCandidatePolicy()

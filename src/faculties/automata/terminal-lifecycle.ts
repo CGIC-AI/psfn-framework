@@ -101,6 +101,28 @@ export interface AutomataTerminalHandoffReceipt {
   persistedOutcome?: PersistedAutomataTerminalOutcome;
 }
 
+/**
+ * A terminal handoff already committed to the durable Bus ledger for one run
+ * attempt, read back BEFORE that attempt's work runs (psfn-framework-8n40k).
+ *
+ * The bookkeeping convergence fix reads the durable terminal at settle time,
+ * which is too late to stop the re-execution itself: a crash between the Bus
+ * handoff commit and registry terminalization leaves the run `running`, so a
+ * restart would otherwise re-run the class's work — including its chargeable
+ * model calls — for a run the Bus already terminalized. A durable-run adapter
+ * consults this from `begin()` and reports `execute: false` when it hits.
+ */
+export interface CommittedAutomataTerminalHandoff {
+  /** Stable durable Bus handoff/event reference. */
+  handoffRef: string;
+  /** When the durable terminal was actually recorded. */
+  occurredAtMs: number;
+  /** The durable terminal facts the registry must converge on. */
+  outcome: PersistedAutomataTerminalOutcome;
+  findingRefs: readonly string[];
+  evidenceRefs: readonly string[];
+}
+
 export interface AutomataWorkerRunInspection {
   runId: string;
   taskId: string;
@@ -116,7 +138,38 @@ export interface AutomataTerminalLifecyclePort {
   recordTerminalHandoff(
     input: RecordAutomataTerminalHandoffInput,
   ): Promise<AutomataTerminalHandoffReceipt>;
+  /**
+   * The committed terminal handoff for one run attempt, or `null` when the Bus
+   * holds none. Never writes. Errors are NOT swallowed: a caller that cannot
+   * read the ledger cannot prove the run is unfinished, and re-running its work
+   * on an unproven assumption is the exact duplication this read prevents.
+   */
+  readTerminalHandoff(input: {
+    idempotencyKey: string;
+    lineage: AutomataWorkerLineage;
+  }): Promise<CommittedAutomataTerminalHandoff | null>;
   inspectRun(input: AutomataWorkerLineage): Promise<AutomataWorkerRunInspection>;
+}
+
+/**
+ * Consult the durable Bus ledger for a terminal already committed under this
+ * class/run/attempt identity. Shared by every durable-run adapter's `begin()`
+ * so the crash-window guard is one implementation, not one per class.
+ */
+export async function readCommittedAutomataTerminalHandoff(
+  terminal: AutomataTerminalLifecyclePort | null | undefined,
+  lineage: AutomataWorkerLineage,
+  attempt: number,
+): Promise<CommittedAutomataTerminalHandoff | null> {
+  if (!terminal) return null;
+  return await terminal.readTerminalHandoff({
+    idempotencyKey: buildAutomataTerminalHandoffKey({
+      automatonClass: lineage.automatonClass,
+      runId: lineage.runId,
+      attempt,
+    }),
+    lineage,
+  });
 }
 
 export type AutomataTerminalLifecycleDelivery =

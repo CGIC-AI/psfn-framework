@@ -4,6 +4,11 @@ import { loadAutomataPolicySeedDefaults } from '../../../system/config/automata-
 import type { ProductionAutomataClassId } from '../registry-contract.js';
 import { AutomataRunRegistry, InMemoryAutomataRunStore } from '../run-registry.js';
 import {
+  buildAutomataTerminalHandoffKey,
+  type AutomataTerminalLifecyclePort,
+  type CommittedAutomataTerminalHandoff,
+} from '../terminal-lifecycle.js';
+import {
   createAutomataClassRunPort,
   runGovernedAutomataClass,
   type AutomataClassRunSpec,
@@ -34,6 +39,47 @@ function spec(overrides: Partial<AutomataClassRunSpec> = {}): AutomataClassRunSp
     sessionIds: ['session-governed-1'],
     ...overrides,
   };
+}
+
+/**
+ * A terminal-lifecycle port holding exactly the handoffs the Bus already
+ * committed, keyed the way the durable adapter keys them.
+ */
+function terminalPortWithCommitted(
+  committed: ReadonlyMap<string, CommittedAutomataTerminalHandoff>,
+  observed: string[] = [],
+): AutomataTerminalLifecyclePort {
+  return {
+    recordTerminalHandoff: async () => {
+      throw new Error('this test must not record a terminal handoff');
+    },
+    readTerminalHandoff: async input => {
+      observed.push(input.lineage.runId);
+      return committed.get(input.idempotencyKey) ?? null;
+    },
+    inspectRun: async () => {
+      throw new Error('this test must not inspect a run');
+    },
+  };
+}
+
+function committedTerminal(
+  input: AutomataClassRunSpec,
+  outcome: CommittedAutomataTerminalHandoff['outcome'],
+  occurredAtMs: number,
+): [string, CommittedAutomataTerminalHandoff] {
+  const idempotencyKey = buildAutomataTerminalHandoffKey({
+    automatonClass: input.automatonClass,
+    runId: input.runId,
+    attempt: 1,
+  });
+  return [idempotencyKey, {
+    handoffRef: `automata-bus-terminal:${idempotencyKey}`,
+    occurredAtMs,
+    outcome,
+    findingRefs: [`automata-bus-terminal:${idempotencyKey}`],
+    evidenceRefs: [`automata-run:${input.runId}`],
+  }];
 }
 
 describe('governed automata class run port', () => {
@@ -202,5 +248,172 @@ describe('runGovernedAutomataClass', () => {
       status: 'cancelled',
       outcome: 'cancelled',
     });
+  });
+});
+
+describe('crash-window execution guard (psfn-framework-8n40k)', () => {
+  it('skips work and converges on the durable terminal when the Bus already committed one', async () => {
+    const { registry, store } = await createRegistry();
+    // Crash: the run started, its work finished, its Bus terminal committed —
+    // and the process died before the registry transition.
+    await createAutomataClassRunPort(registry, spec()).begin();
+    expect(registry.getRun('run-governed-1')?.status).toBe('running');
+
+    const restarted = await AutomataRunRegistry.hydrate({
+      companionId: COMPANION_ID,
+      policy: loadAutomataPolicySeedDefaults(),
+      store,
+    });
+    const terminal = terminalPortWithCommitted(new Map([committedTerminal(
+      spec(),
+      { lifecycleState: 'completed', outcome: 'completed', stateReason: 'automata_run_completed' },
+      4_242,
+    )]));
+
+    let executions = 0;
+    const outcome = await runGovernedAutomataClass({
+      runtime: { registry: restarted, terminal },
+      spec: spec(),
+      briefingQuery: 'deferred reflection template run',
+      work: async () => {
+        executions += 1;
+        return { value: 'ran again' };
+      },
+    });
+
+    expect(outcome).toEqual({ status: 'replayed' });
+    expect(executions).toBe(0);
+    expect(restarted.getRun('run-governed-1')).toMatchObject({
+      status: 'completed',
+      outcome: 'completed',
+      finishedAtMs: 4_242,
+    });
+  });
+
+  it('converges a crash-window FAILED terminal without re-running the work', async () => {
+    const { registry, store } = await createRegistry();
+    await createAutomataClassRunPort(registry, spec()).begin();
+    const restarted = await AutomataRunRegistry.hydrate({
+      companionId: COMPANION_ID,
+      policy: loadAutomataPolicySeedDefaults(),
+      store,
+    });
+    const terminal = terminalPortWithCommitted(new Map([committedTerminal(
+      spec(),
+      {
+        lifecycleState: 'failed',
+        outcome: 'blocked',
+        stateReason: 'automata_run_failed',
+        failureReason: 'the first attempt failed',
+      },
+      777,
+    )]));
+
+    let executions = 0;
+    const outcome = await runGovernedAutomataClass({
+      runtime: { registry: restarted, terminal },
+      spec: spec(),
+      briefingQuery: 'deferred reflection template run',
+      work: async () => {
+        executions += 1;
+        return { value: 'ran again' };
+      },
+    });
+
+    expect(outcome).toEqual({ status: 'replayed' });
+    expect(executions).toBe(0);
+    expect(restarted.getRun('run-governed-1')).toMatchObject({
+      status: 'failed',
+      outcome: 'blocked',
+      failureReason: 'the first attempt failed',
+      finishedAtMs: 777,
+    });
+  });
+
+  it('executes when the ledger holds no terminal for the interrupted run', async () => {
+    const { registry, store } = await createRegistry();
+    await createAutomataClassRunPort(registry, spec()).begin();
+    const restarted = await AutomataRunRegistry.hydrate({
+      companionId: COMPANION_ID,
+      policy: loadAutomataPolicySeedDefaults(),
+      store,
+    });
+
+    let executions = 0;
+    const outcome = await runGovernedAutomataClass({
+      runtime: {
+        registry: restarted,
+        terminal: terminalPortWithCommitted(new Map()),
+      },
+      spec: spec(),
+      briefingQuery: 'deferred reflection template run',
+      work: async () => {
+        executions += 1;
+        return { value: 'ran' };
+      },
+    });
+
+    expect(outcome).toEqual({ status: 'executed', value: 'ran' });
+    expect(executions).toBe(1);
+  });
+
+  it('does not consult the ledger for a run it started itself', async () => {
+    const { registry } = await createRegistry();
+    const observed: string[] = [];
+    const binding = await createAutomataClassRunPort(
+      registry,
+      spec(),
+      terminalPortWithCommitted(new Map(), observed),
+    ).begin();
+    expect(binding.execute).toBe(true);
+    expect(observed).toEqual([]);
+  });
+
+  it('does not consult the ledger for an already-completed run', async () => {
+    const { registry } = await createRegistry();
+    const observed: string[] = [];
+    const port = createAutomataClassRunPort(
+      registry,
+      spec(),
+      terminalPortWithCommitted(new Map(), observed),
+    );
+    await port.begin();
+    await port.terminalize({
+      lifecycleState: 'completed',
+      outcome: 'completed',
+      stateReason: 'automata_run_completed',
+      atMs: 11,
+    });
+    const replay = await port.begin();
+    expect(replay).toMatchObject({ execute: false });
+    expect(replay.replayTerminal).toBeUndefined();
+    expect(observed).toEqual([]);
+  });
+
+  it('fails closed when the durable ledger cannot be read', async () => {
+    const { registry, store } = await createRegistry();
+    await createAutomataClassRunPort(registry, spec()).begin();
+    const restarted = await AutomataRunRegistry.hydrate({
+      companionId: COMPANION_ID,
+      policy: loadAutomataPolicySeedDefaults(),
+      store,
+    });
+    const terminal: AutomataTerminalLifecyclePort = {
+      ...terminalPortWithCommitted(new Map()),
+      readTerminalHandoff: async () => { throw new Error('bus ledger unavailable'); },
+    };
+
+    let executions = 0;
+    await expect(runGovernedAutomataClass({
+      runtime: { registry: restarted, terminal },
+      spec: spec(),
+      briefingQuery: 'deferred reflection template run',
+      work: async () => {
+        executions += 1;
+        return { value: 'ran' };
+      },
+    })).rejects.toThrow('bus ledger unavailable');
+    // Unproven absence of a terminal never licenses a second chargeable run.
+    expect(executions).toBe(0);
   });
 });

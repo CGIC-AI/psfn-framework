@@ -5,9 +5,10 @@ import type {
   ProductionAutomataClassId,
 } from '../registry-contract.js';
 import type { AutomataRunRegistry } from '../run-registry.js';
-import type {
-  AutomataTerminalLifecyclePort,
-  AutomataWorkerLineage,
+import {
+  readCommittedAutomataTerminalHandoff,
+  type AutomataTerminalLifecyclePort,
+  type AutomataWorkerLineage,
 } from '../terminal-lifecycle.js';
 import type { AutomataBusToolAction, AutomataBusWorkerAccess } from './worker-access-contracts.js';
 import {
@@ -76,6 +77,7 @@ function lineageFromSpec(
 export function createAutomataClassRunPort(
   registry: AutomataRunRegistry,
   spec: AutomataClassRunSpec,
+  terminal?: AutomataTerminalLifecyclePort | null,
 ): AutomataWorkerRunPort {
   return {
     begin: async (): Promise<AutomataWorkerRunBinding> => {
@@ -103,18 +105,48 @@ export function createAutomataClassRunPort(
           + `for class ${spec.automatonClass}.`,
         );
       }
+      const lineage = lineageFromSpec(spec, [...run.sessionIds]);
+      if (run.status === 'completed') {
+        // Registry and Bus already agree this run is terminal; nothing to
+        // execute and nothing to converge.
+        return {
+          companionId: run.companionId,
+          lineage,
+          attempt: run.workerGeneration,
+          execute: false,
+        };
+      }
       if (run.status === 'queued') {
         run = await registry.transition(run.runId, {
           status: 'running',
           reason: RUN_STARTED_REASON,
           ...(spec.createdAtMs === undefined ? {} : { atMs: spec.createdAtMs }),
         });
+        // A run this call moved out of `queued` cannot already hold a durable
+        // terminal, so the ledger is not consulted on the ordinary hot path.
+        return {
+          companionId: run.companionId,
+          lineage,
+          attempt: run.workerGeneration,
+          execute: true,
+        };
       }
+      // The run was ALREADY running when this process opened it: a restart or
+      // redelivery. Before re-executing chargeable work, consult the durable
+      // Bus ledger — a committed terminal means the previous attempt finished
+      // its work and crashed before terminalizing the registry
+      // (psfn-framework-8n40k). Skip the work and converge on that terminal.
+      const committed = await readCommittedAutomataTerminalHandoff(
+        terminal,
+        lineage,
+        run.workerGeneration,
+      );
       return {
         companionId: run.companionId,
-        lineage: lineageFromSpec(spec, [...run.sessionIds]),
+        lineage,
         attempt: run.workerGeneration,
-        execute: run.status === 'running',
+        execute: committed === null,
+        ...(committed ? { replayTerminal: committed } : {}),
       };
     },
     terminalize: async request => {
@@ -202,7 +234,7 @@ export async function runGovernedAutomataClass<T>(input: {
   }
   const session = await openAutomataBusWorkerRun({
     access: runtime.workerAccess ?? null,
-    run: createAutomataClassRunPort(runtime.registry, input.spec),
+    run: createAutomataClassRunPort(runtime.registry, input.spec, runtime.terminal ?? null),
     terminal: runtime.terminal ?? null,
     briefingQuery: input.briefingQuery,
     ...(input.allowedActions ? { allowedActions: input.allowedActions } : {}),

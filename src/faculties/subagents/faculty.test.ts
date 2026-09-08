@@ -393,7 +393,11 @@ describe('SubagentFaculty', () => {
       memoryProvider: null,
       config: TEST_CONFIG,
       parentSystemPrompt: 'test prompt',
-      automataLifecyclePort: { recordTerminalHandoff, inspectRun },
+      automataLifecyclePort: {
+        recordTerminalHandoff,
+        readTerminalHandoff: vi.fn(async () => null),
+        inspectRun,
+      },
     });
 
     const result = await faculty.execute({
@@ -500,6 +504,7 @@ describe('SubagentFaculty', () => {
       parentSystemPrompt: 'test prompt',
       automataLifecyclePort: {
         recordTerminalHandoff,
+        readTerminalHandoff: vi.fn(async () => null),
         inspectRun: vi.fn(async lineage => ({
           runId: lineage.runId,
           taskId: lineage.taskId,

@@ -39,7 +39,6 @@ import {
 export type {
   CredentialReference,
   CredentialVaultPort,
-  EnvCredentialReference,
 } from '../../shared/contracts/credential-contracts.js';
 export {
   envCredential,

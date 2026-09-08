@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { loadConfig } from './load-config.js';
+import { loadConfig } from './load-gateway-config.js';
 import { hydrateJsonBackedRuntimeConfig } from './runtime-config.js';
 import { makeTestFatiguePolicyConfig } from '../../test-support/charge-policy.js';
 

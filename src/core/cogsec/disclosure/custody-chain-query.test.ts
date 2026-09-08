@@ -143,6 +143,7 @@ describe('projectEgressToSources', () => {
       snapshot: { status: 'present', record: snapshotOf([memorySource]) },
       manifest: { status: 'present', record: manifestWithAdmission() },
       deliveries: deliveries([deliveryOf()]),
+      derivedArtifacts: [],
     });
     expect(view.sources).toHaveLength(1);
     expect(view.sources[0]?.admission).toEqual({
@@ -165,6 +166,7 @@ describe('projectEgressToSources', () => {
       snapshot: { status: 'present', record: snapshotOf([memorySource, wikiSource]) },
       manifest: { status: 'present', record: manifestWithAdmission() },
       deliveries: deliveries([deliveryOf()]),
+      derivedArtifacts: [],
     });
     const wiki = view.sources.find(entry => entry.source.kind === 'wiki');
     expect(wiki?.admission).toEqual({ status: 'unknown' });
@@ -180,6 +182,7 @@ describe('projectEgressToSources', () => {
       snapshot: { status: 'absent' },
       manifest: { status: 'absent' },
       deliveries: deliveries([]),
+      derivedArtifacts: [],
     });
     expect(view.sourceCount).toBe('unknown');
     expect(view.hasUnclassifiedSource).toBe('unknown');
@@ -199,6 +202,7 @@ describe('projectEgressToSources', () => {
       snapshot: { status: 'malformed' },
       manifest: { status: 'malformed' },
       deliveries: deliveries([], 2),
+      derivedArtifacts: [],
     });
     expect(view.snapshotStatus).toBe('malformed');
     expect(view.manifestStatus).toBe('malformed');
@@ -216,9 +220,60 @@ describe('projectEgressToSources', () => {
       snapshot: { status: 'present', record: snapshotOf([memorySource]) },
       manifest: { status: 'present', record: manifestWithAdmission() },
       deliveries: deliveries([deliveryOf()], 1),
+      derivedArtifacts: [],
     });
     expect(view.deliveryStatus).toBe('present');
     expect(view.chainComplete).toBe(false);
+  });
+
+  it('reports derived artifacts as unknown when no reader answered', () => {
+    const view = projectEgressToSources({
+      generationContextRef: custodySnapshotRefForTurn(TURN_ID),
+      turnId: TURN_ID,
+      snapshot: { status: 'present', record: snapshotOf([memorySource]) },
+      manifest: { status: 'present', record: manifestWithAdmission() },
+      deliveries: deliveries([deliveryOf()]),
+      derivedArtifacts: null,
+    });
+    expect(view.derivedArtifactStatus).toBe('unknown');
+    expect(view.derivedArtifacts).toEqual([]);
+    expect(view.unknownDimensions).toContain('derived_artifacts');
+  });
+
+  it('surfaces the runtime-authorship and consent-denial markers on a derivation', () => {
+    const view = projectEgressToSources({
+      generationContextRef: custodySnapshotRefForTurn(TURN_ID),
+      turnId: TURN_ID,
+      snapshot: { status: 'present', record: snapshotOf([memorySource]) },
+      manifest: { status: 'present', record: manifestWithAdmission() },
+      deliveries: deliveries([deliveryOf()]),
+      derivedArtifacts: [
+        {
+          kind: 'episode',
+          id: custodyIdentity('episode-1'),
+          turnRefCount: 1,
+          runtimeAuthoredSourceCount: 1,
+          admittedSourceCount: 1,
+          consentDenied: false,
+          retired: false,
+        },
+        {
+          kind: 'memory',
+          id: custodyIdentity('mem-7'),
+          turnRefCount: 1,
+          runtimeAuthoredSourceCount: 0,
+          admittedSourceCount: 1,
+          consentDenied: true,
+          consentProducerId: 'memory.deletion_proposal',
+          retired: true,
+        },
+      ],
+    });
+    expect(view.derivedArtifactStatus).toBe('present');
+    expect(view.derivedArtifacts[0]?.runtimeAuthoredSourceCount).toBe(1);
+    expect(view.derivedArtifacts[1]?.consentDenied).toBe(true);
+    expect(view.derivedArtifacts[1]?.consentProducerId).toBe('memory.deletion_proposal');
+    expect(view.unknownDimensions).not.toContain('derived_artifacts');
   });
 
   it('counts held deliveries separately from released ones', () => {
@@ -237,6 +292,7 @@ describe('projectEgressToSources', () => {
           outcome: 'non_shareable',
         }),
       ]),
+      derivedArtifacts: [],
     });
     expect(view.deliveryCount).toBe(2);
     expect(view.heldDeliveryCount).toBe(1);
@@ -372,6 +428,16 @@ describe('custody chain query content-free discipline', () => {
       snapshot: { status: 'present', record: snapshot },
       manifest: { status: 'present', record: manifest },
       deliveries: deliveries([deliveryOf()]),
+      derivedArtifacts: [{
+        kind: 'memory',
+        id: custodyIdentity(SECRET_BODY),
+        turnRefCount: 1,
+        runtimeAuthoredSourceCount: 1,
+        admittedSourceCount: 0,
+        consentDenied: true,
+        consentProducerId: 'memory.deletion_proposal',
+        retired: true,
+      }],
     });
     const sourceView = projectSourceToEgresses({
       source: custodyIdentity(`wiki:${SECRET_BODY}`),

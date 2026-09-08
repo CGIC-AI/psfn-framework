@@ -2,6 +2,7 @@ import type { Pool } from 'pg';
 import { describe, expect, it } from 'vitest';
 import type { SessionEntry } from '../../../core/session/types.js';
 import type { LLMProviderPort } from '../../../core/agent/contracts.js';
+import { RUNTIME_FALLBACK_NOTICE_TEMPLATES } from '../../../shared/runtime-fallback-provenance.js';
 import { FakeEpisodicPool } from '../../../test-support/fake-postgres-episodic-pool.js';
 import { PostgresEpisodicStore } from './postgres-store.js';
 import type { EpisodicStorePort } from './store-port.js';
@@ -94,6 +95,63 @@ describe('EpisodicSynthesizer', () => {
       expect.objectContaining({ kind: 'session', refId: 'terminal:daily' }),
       expect.objectContaining({ kind: 'turn', refId: '00000000-0000-7000-a000-000000000001' }),
     ]));
+  });
+
+  it('records a runtime-authored turn in provenance and keeps its text out of the narrative (f54sx)', async () => {
+    const store = makeStore();
+    const runtimeNotice = entry(
+      2,
+      '2026-04-01T10:02:00.000Z',
+      'assistant',
+      RUNTIME_FALLBACK_NOTICE_TEMPLATES.visionUnavailableImageOnly,
+      {
+        runtimeFallbackProvenance: {
+          schemaVersion: 1,
+          authoredBy: 'runtime',
+          model: 'runtime-fallback',
+          strategy: 'runtime_nonfabricating_notice',
+        },
+      },
+    );
+    const synthesizer = new EpisodicSynthesizer(store, {
+      getRecentMessages: () => [
+        entry(1, '2026-04-01T10:00:00.000Z', 'user', 'Please debug the atlas project scheduler tests.'),
+        runtimeNotice,
+        entry(3, '2026-04-01T10:04:00.000Z', 'user', 'Thanks, the atlas project scheduler matters most.'),
+      ],
+    });
+
+    const result = await synthesizer.run({ sessionId: 'terminal:daily' });
+    const episode = result.createdEpisodes[0];
+    if (!episode) throw new Error('expected one episode');
+
+    // The chain records that the derivation touched runtime-authored text.
+    expect(episode.provenanceRefs).toContainEqual(expect.objectContaining({
+      kind: 'turn',
+      refId: '00000000-0000-7000-a000-000000000002',
+      authoredBy: 'runtime',
+    }));
+    // A turn she actually authored is NOT marked.
+    const authoredRef = episode.provenanceRefs.find(
+      ref => ref.refId === '00000000-0000-7000-a000-000000000001',
+    );
+    expect(authoredRef?.authoredBy).toBeUndefined();
+
+    // The notice is still inside the episode's span — the chain never hides it.
+    expect(Date.parse(episode.startedAt)).toBeLessThanOrEqual(runtimeNotice.timestamp);
+    expect(Date.parse(episode.endedAt)).toBeGreaterThanOrEqual(runtimeNotice.timestamp);
+
+    // ...but its words never become what the episode is ABOUT.
+    const narrative = `${episode.title} ${episode.landmark} ${episode.themes.join(' ')}`;
+    expect(narrative).not.toContain('image reader');
+    expect(episode.themes).toContain('atlas');
+
+    // Round-trips through the store, so the marker is durable.
+    const persisted = await store.getEpisode(episode.id);
+    expect(persisted?.provenanceRefs).toContainEqual(expect.objectContaining({
+      refId: '00000000-0000-7000-a000-000000000002',
+      authoredBy: 'runtime',
+    }));
   });
 
   it('births affect-empty episodes and routes machine emotion heuristics to the machineSignals sidecar (h4fp.6)', async () => {

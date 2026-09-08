@@ -178,6 +178,12 @@ export class SessionStore implements TranscriptSearchPort {
    * startup. Startup priming used to consume these before any later index
    * rebuild could observe a tampered journal; retaining the ids preserves that
    * conservative baseline without keeping any message bytes.
+   *
+   * Captured exactly once, during construction, and never re-seeded: the map is
+   * the boot-pinned floor a later tampered rebuild must not be able to lower.
+   * Ordinary reads re-run `primeChannelIndexFromDisk()`, so re-seeding it there
+   * replaced the trusted floor with whatever the unsigned index carried moments
+   * later, voiding the protection the floor exists for.
    */
   private readonly startupTurnTombstoneBaseline = new Map<string, readonly string[]>();
   private readonly recoveryAuthoritySnapshotHook:
@@ -271,7 +277,12 @@ export class SessionStore implements TranscriptSearchPort {
       });
     }
     loadChannelIndex(this.channelIndexPath, this.channelIndex);
+    // Pin the floor from the persisted index before any rebuild can observe a
+    // tampered journal, then widen it with whatever priming discovers on disk.
+    // Both captures happen inside the constructor and add only.
+    this.captureStartupTurnTombstoneBaseline();
     this.primeChannelIndexFromDisk();
+    this.captureStartupTurnTombstoneBaseline();
     this.backfillTranscriptProjectionFromDisk();
     this.channelIndexFingerprint = this.fingerprintChannelIndex();
     this.cogSecOperations = new SessionCogSecOperations({
@@ -535,10 +546,23 @@ export class SessionStore implements TranscriptSearchPort {
         );
       },
     });
-    this.startupTurnTombstoneBaseline.clear();
+  }
+
+  /**
+   * Add the current index's active tombstone ids to the boot-pinned floor.
+   * Constructor-only and additive: an id that entered the floor at startup stays
+   * there for the life of the instance, so a later index rebuild — including one
+   * that read an already-tampered journal — can never revoke it.
+   */
+  private captureStartupTurnTombstoneBaseline(): void {
     for (const [sessionId, entry] of this.channelIndex.entries()) {
       const active = entry.activeTurnTombstoneIds ?? [];
-      if (active.length > 0) this.startupTurnTombstoneBaseline.set(sessionId, [...active]);
+      if (active.length === 0) continue;
+      const pinned = new Set([
+        ...(this.startupTurnTombstoneBaseline.get(sessionId) ?? []),
+        ...active,
+      ]);
+      this.startupTurnTombstoneBaseline.set(sessionId, [...pinned]);
     }
   }
 

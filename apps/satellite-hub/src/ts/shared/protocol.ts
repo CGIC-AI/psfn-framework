@@ -12,7 +12,8 @@ export type ClientToHubMessage =
   | TouchInteractionMessage
   | DeviceLocationMessage
   | ApprovalDecisionMessage
-  | ArtifactPreviewRequestMessage;
+  | ArtifactPreviewRequestMessage
+  | WorldTravelRequestMessage;
 
 export type HubToClientMessage =
   | SessionReadyMessage
@@ -36,7 +37,8 @@ export type HubToClientMessage =
   | ArtifactPreviewErrorMessage
   | ToolActivityMessage
   | EmotionSnapshotMessage
-  | DeviceLocationStatusMessage;
+  | DeviceLocationStatusMessage
+  | WorldTravelResultMessage;
 
 export interface HelloMessage {
   type: "hello";
@@ -54,6 +56,18 @@ export interface HelloMessage {
 export interface AudioMessage {
   type: "audio";
   audio: string;
+}
+
+/**
+ * Ask the Hub to move its world-avatar emanation to another world.
+ *
+ * The Hub, not the satellite, owns the move: it holds the door credential, the
+ * place map, and the refusal policy. This message is only a request, and it is
+ * answered by exactly one `world.travel.result`.
+ */
+export interface WorldTravelRequestMessage {
+  type: "world.travel";
+  world: string;
 }
 
 export interface UserTextMessage {
@@ -204,6 +218,33 @@ export type DeviceLocationStatusMessage =
     type: "device.location.status";
     status: "rejected";
     reason: DeviceLocationRejectionReason;
+  };
+
+/**
+ * Why a `world.travel` request did not move the emanation. A fixed Hub-owned
+ * vocabulary: the door's own prose never reaches a satellite.
+ */
+export type WorldTravelRejectionReason =
+  | "not_configured"
+  | "capability_denied"
+  | "unavailable"
+  | "invalid_world"
+  | "unmapped_world"
+  | "refused";
+
+/** The single answer to one `world.travel` request. */
+export type WorldTravelResultMessage =
+  | {
+    type: "world.travel.result";
+    accepted: true;
+    world: string;
+    placeId?: string;
+  }
+  | {
+    type: "world.travel.result";
+    accepted: false;
+    world: string;
+    reason: WorldTravelRejectionReason;
   };
 
 export interface RelaySttResultMessage {
@@ -384,7 +425,13 @@ export type SatelliteControlCapability =
   | "presence"
   | "session_attach"
   | "touch"
-  | "approvals";
+  | "approvals"
+  /**
+   * Authority to move the Hub's world-avatar emanation between worlds. Granted
+   * per device in the server-owned registry: a satellite that merely asks for
+   * it in its hello does not receive it.
+   */
+  | "world_travel";
 
 export type SatelliteSafetyCapability =
   | "action_allowlist"

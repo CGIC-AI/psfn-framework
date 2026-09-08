@@ -660,6 +660,7 @@ export function App() {
           {overlay === 'settings' ? (
             <SettingsDrawer
               access={accessPresentation}
+              activeStream={storeRef.current}
               activeCompanionId={fleet.activeCompanionId}
               companions={fleet.roster}
               connecting={connecting}

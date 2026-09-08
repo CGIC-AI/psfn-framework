@@ -61,7 +61,8 @@ async function attachCluster(page: Page) {
         case 'shards.list': result = []; break;
         case 'conversation.interact': result = { content: `Reply from ${companionId === CANOPY ? 'Canopy' : 'Meadow'}: ${frame.body.content}`, channelId: `fixture-${companionId}`, inputTokens: 1, outputTokens: 1 }; break;
         case 'conversation.interrupt': result = { interrupted: true, interactionId: frame.body.interactionId }; break;
-        case 'embodiment.status': result = { companionId, generation: 0, version: 0, current: null, lastDecision: null }; break;
+        case 'embodiment.status': result = { generation: 0, version: 0, primaryPresent: false, currentDeviceIsPrimary: false, lastDecision: null }; break;
+        case 'embodiment.handoff': result = { generation: 1, version: 1, primaryPresent: true, currentDeviceIsPrimary: true, lastDecision: { decision: 'handoff', reason: 'user_requested', decidedAt: new Date().toISOString() } }; break;
         default: return;
       }
       socket.send(JSON.stringify({ schemaVersion: 1, type: 'result', requestId: frame.requestId, ok: true, result }));
@@ -124,4 +125,16 @@ test('loads a local VRM for one companion and clears it for another companion an
   await expect(page.getByLabel('Partner authority')).toContainText('Signed out');
   await expect(page.locator('canvas.vrm-avatar-canvas')).toHaveCount(0);
   await expect(page.getByLabel('Message your companion', { exact: true })).toHaveValue('');
+});
+
+test('claims primary embodiment only after an explicit device handoff', async ({ page }) => {
+  const { frames } = await attachCluster(page);
+  await page.getByRole('button', { name: 'Open settings', exact: true }).click();
+  await expect(page.getByText('No device is currently the primary embodiment.', { exact: true })).toBeVisible();
+  expect(frames.some(frame => frame.resource === 'embodiment.handoff')).toBe(false);
+  await page.getByRole('button', { name: 'Use this device as primary', exact: true }).click();
+  await expect(page.getByText('This device is the primary embodiment.', { exact: true })).toBeVisible();
+  expect(frames.find(frame => frame.resource === 'embodiment.handoff')).toEqual({
+    companionId: CANOPY, resource: 'embodiment.handoff', body: { expectedGeneration: 0, decisionId: expect.any(String), reason: 'user_requested' },
+  });
 });

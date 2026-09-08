@@ -62,13 +62,17 @@ export class EidoverseBodyActionRejectedError extends Error {
   override readonly name = "EidoverseBodyActionRejectedError";
 }
 
+/**
+ * Neutral phrasing on purpose: a body action may be requested by something
+ * other than the companion, so a note never asserts who asked for it.
+ */
 const OUTCOME_NOTES: Readonly<Record<EidoverseBodyOutcome, string>> = {
-  arrived: "Your body finished the walk you requested and has arrived.",
+  arrived: "A requested walk finished; your body has arrived.",
   "interrupted-or-timed-out":
-    "The walk you requested did not finish; your body was interrupted or ran out of time.",
-  facing: "Your body finished turning to face the target you requested.",
-  stopped: "Your body stopped as you requested.",
-  failed: "The body action you requested could not be carried out.",
+    "A requested walk did not finish; your body was interrupted or ran out of time.",
+  facing: "A requested turn finished; your body is facing the target.",
+  stopped: "A requested stop finished; your body is no longer walking.",
+  failed: "A requested body action could not be carried out.",
 };
 
 /**

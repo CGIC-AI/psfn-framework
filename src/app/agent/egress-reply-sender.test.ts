@@ -93,6 +93,26 @@ describe('createAgentLoopEgressReplySender', () => {
     expect(delivery.send).toHaveBeenCalledWith('discord', 'discord:guild-1:general', 'Hi Sam!');
   });
 
+  it('tells the companion a lease continuation did not address it', async () => {
+    const generator = { handleMessage: vi.fn(async () => makeResponse('Still holds, I think.')) };
+    const delivery = { send: vi.fn(async () => undefined) };
+    const sender = makeSender(generator, delivery);
+    const request = makeRequest();
+    if (request.trigger.kind !== 'inbound_room_message') {
+      throw new Error('expected an inbound room trigger fixture');
+    }
+    request.trigger.continuation = true;
+
+    await expect(sender.deliver(request)).resolves.toMatchObject({ outcome: 'delivered' });
+
+    const prompt: string = generator.handleMessage.mock.calls[0]?.[0]?.content ?? '';
+    expect(prompt).toContain('did NOT mention or address you by name');
+    expect(prompt).toContain('already taking part in this conversation');
+    // The false summons claim is gone, but the room text stays datamarked.
+    expect(prompt).not.toContain('A message below mentioned or addressed you');
+    expect(prompt).toContain('<untrusted_context source="public">');
+  });
+
   it('authors an endogenous room candidate without fabricating an inbound participant message', async () => {
     const generator = { handleMessage: vi.fn(async () => makeResponse('A room thought.')) };
     const delivery = { send: vi.fn(async () => undefined) };

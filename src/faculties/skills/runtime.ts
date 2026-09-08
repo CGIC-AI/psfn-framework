@@ -309,7 +309,6 @@ export class SkillsRuntime {
       // A held skill is omitted, never returned with placeholder prose: the
       // caller's `has(id)` check is the single fail-closed test.
       if (outcome.admitted) contents.set(entry.id, outcome.body);
-      await new Promise<void>(resolveYield => setImmediate(resolveYield));
       if ((index + 1) % limits.yieldEvery === 0) {
         await new Promise<void>(resolveYield => setImmediate(resolveYield));
       }
@@ -400,7 +399,12 @@ export class SkillsRuntime {
         (left, right) => left.name.localeCompare(right.name),
         limits.yieldEvery,
       ),
-      skipped: [],
+      // Garden is the operator's only repair surface for a managed skill, so a
+      // skill held by CogSec admission must appear here as a typed hold rather
+      // than silently vanish from the list (psfn-framework-1fjvm.1).
+      skipped: cache.snapshot.skipped.filter(skip => (
+        skip.kind === 'admission_held' && skip.source === 'custom'
+      )),
     };
   }
 

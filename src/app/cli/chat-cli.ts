@@ -5,7 +5,7 @@
 
 import '../../shared/utils/load-dotenv.js';
 import { createInterface } from 'node:readline';
-import { loadConfig } from '../../system/config/load-config.js';
+import { loadConfig } from '../../system/config/load-gateway-config.js';
 import { sanitizeCoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { EventBus } from '../../shared/event-bus.js';
 import { resolveCompanionNameFromCard } from '../../core/identity/companion-runtime.js';

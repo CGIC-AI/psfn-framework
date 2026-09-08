@@ -634,6 +634,7 @@ export function registerGatewayMessageHandlers(
           disposition: 'reaction',
           sourceMessageId: candidate.sourceMessageId,
           sourceTimestampMs: candidate.triggerTimestampMs,
+          authorIsMachine: candidate.triggerAuthorIsMachine,
         });
       }
       await eventBus.emit('participation.appraisal', {
@@ -697,6 +698,8 @@ export function registerGatewayMessageHandlers(
       sourceMessageId: message.id,
       trigger: 'companion_message',
       triggerAuthorId: message.authorId,
+      // An authenticated inbound ICP turn is always a peer companion.
+      triggerAuthorIsMachine: true,
       triggerAuthorName: message.authorName,
       triggerContent: message.content,
       triggerTimestampMs: timestampMs,
@@ -898,6 +901,7 @@ export function registerGatewayMessageHandlers(
           disposition: 'reply',
           sourceMessageId: candidate.sourceMessageId,
           sourceTimestampMs: candidate.triggerTimestampMs,
+          authorIsMachine: candidate.triggerAuthorIsMachine,
         });
       }
       safeguardAuditTrail.append('participation.egress.settled', {
@@ -1064,6 +1068,7 @@ export function registerGatewayMessageHandlers(
               : 'passive_summons',
             sourceMessageId: candidate.sourceMessageId,
             sourceTimestampMs: candidate.triggerTimestampMs,
+            authorIsMachine: candidate.triggerAuthorIsMachine,
             ...(message.isDirectMessage === undefined
               ? {}
               : { isDirectMessage: message.isDirectMessage }),
@@ -1290,6 +1295,7 @@ export function registerGatewayMessageHandlers(
             disposition: 'reply',
             sourceMessageId: message.id,
             sourceTimestampMs: message.timestamp.getTime(),
+            authorIsMachine: message.routing?.authorIsMachineIntelligence === true,
             ...(message.isDirectMessage === undefined
               ? {}
               : { isDirectMessage: message.isDirectMessage }),

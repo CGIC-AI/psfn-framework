@@ -29,8 +29,18 @@ export class FakeRoomParticipationLeaseStore implements RoomParticipationLeaseSt
     return row ? { ...row } : null;
   }
 
-  async open(input: OpenRoomParticipationLeaseInput): Promise<RoomParticipationLeaseSnapshot> {
+  async open(
+    input: OpenRoomParticipationLeaseInput,
+  ): Promise<RoomParticipationLeaseSnapshot | null> {
     const existing = this.rows.get(this.key(input.companionId, input.channelId));
+    // The bot-loop fence survives the opening exactly as it does in SQL: a
+    // machine-authored disposition never revives a lease the fence closed, and
+    // never clears the machine streak it carried.
+    if (input.authorIsMachine
+      && existing?.status === 'closed'
+      && existing.closeReason === 'machine_streak') {
+      return null;
+    }
     const snapshot: RoomParticipationLeaseSnapshot = {
       companionId: input.companionId,
       channelId: input.channelId,
@@ -43,7 +53,7 @@ export class FakeRoomParticipationLeaseStore implements RoomParticipationLeaseSt
       watermarkTimestampMs: input.watermarkTimestampMs,
       consideredCount: 0,
       ignoreStreak: 0,
-      machineStreak: 0,
+      machineStreak: input.authorIsMachine ? existing?.machineStreak ?? 0 : 0,
       closedAtMs: null,
       closeReason: null,
       revision: (existing?.revision ?? 0) + 1,
@@ -63,7 +73,7 @@ export class FakeRoomParticipationLeaseStore implements RoomParticipationLeaseSt
       row.watermarkMessageId = input.watermarkMessageId;
       row.watermarkTimestampMs = input.watermarkTimestampMs;
     }
-    row.ignoreStreak = 0;
+    if (!input.authorIsMachine) row.ignoreStreak = 0;
     row.revision += 1;
     return { ...row };
   }

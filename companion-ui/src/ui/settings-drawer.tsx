@@ -16,6 +16,7 @@ import type { DeviceLocationStatus } from './use-device-location.js';
 import type { Z02LinkState } from './use-z02-link.js';
 import { Z02LinkSection } from './z02-link-section.js';
 import { AvatarDisplaySettings } from './avatar-display-settings.js';
+import { InstallAppSection } from './install-app-section.js';
 import type { CompanionDisplayController } from './use-companion-display.js';
 
 export type CompanionUiAccessPresentation = Readonly<{
@@ -174,7 +175,8 @@ export function SettingsDrawer({
           <ToggleRow label="Animation enabled" checked={spriteAnimations} onChange={onSpriteAnimationsChange} />
         </section>
 
-        <AvatarDisplaySettings display={display} label={companionLabel} />
+        <AvatarDisplaySettings key={activeCompanionId} display={display} label={companionLabel} />
+        <InstallAppSection />
 
         <section className="settings-section" aria-label="Location awareness">
           <h2>Location</h2>

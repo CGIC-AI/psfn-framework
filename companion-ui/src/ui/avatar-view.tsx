@@ -103,7 +103,7 @@ export function AvatarView({
     if (reactionTimerRef.current !== null) window.clearTimeout(reactionTimerRef.current);
   }, []);
 
-  const { base, toolDomain, toolPhase } = useSpriteInputs(emotion, toolActivity, active);
+  const { base, toolDomain, toolPhase } = useSpriteInputs(emotion, toolActivity, active && displayMode === 'sprite');
   const [failedSheet, setFailedSheet] = useState<string | null>(null);
   const touch = reaction ? { headpat: 'headpat-happy', petting: 'headpat-happy', hug: 'hug-squeeze', kiss: 'kiss-blush' }[reaction.kind] : null;
   const entryId = manifest

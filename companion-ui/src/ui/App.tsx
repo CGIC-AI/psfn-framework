@@ -73,6 +73,8 @@ import { useZ02Link } from './use-z02-link.js';
 import { WishlistDrawer } from './wishlist-drawer.js';
 import { useCompanionTouch } from './use-companion-touch.js';
 import { useCompanionDisplay } from './use-companion-display.js';
+import { VrmAvatarPlayer } from './vrm-avatar-player.js';
+import { useSpriteInputs } from './use-sprite-inputs.js';
 
 type AccessState = FleetSessionStatus
   | Readonly<{ state: 'loading' | 'offline' }>
@@ -138,6 +140,7 @@ export function App() {
     playbackReady: streamState.voicePlayback.supported,
   }, `${fleet.activeCompanionId ?? 'guest'}:${streamState.session?.activeShardId ?? 'companion'}`);
   const display = useCompanionDisplay(fleet.activeCompanionId ?? (access.state === 'guest' ? access.websocketPath : null));
+  const { base: avatarEmotion } = useSpriteInputs(streamState.emotion, null, activeView === 'avatar' && display.mode === 'model');
   const spriteEnabled = display.mode === 'sprite';
   const spriteManifest = useSpriteManifest(spriteEnabled);
   const canSend = (access.state === 'signed_in' || access.state === 'guest')
@@ -568,6 +571,8 @@ export function App() {
         thread={(
           <>
             <ThreadView
+              active={activeView === 'thread'}
+              companionLabel={identityLabel}
               streamState={streamState}
               targetLabel={streamState.session?.activeShardId
                 ? streamState.session.shards?.find(
@@ -619,6 +624,10 @@ export function App() {
             animated={spriteAnimations}
             active={activeView === 'avatar'}
             displayMode={display.mode}
+            model={display.mode === 'model' && display.file ? (
+              <VrmAvatarPlayer file={display.file} active={activeView === 'avatar'}
+                animated={spriteAnimations} mouthOpen={mouthOpen} emotionalBase={avatarEmotion} label={identityLabel} />
+            ) : undefined}
             mouthOpen={mouthOpen}
             toolActivity={latestToolActivity}
             onChooseAppearance={() => setOverlay('settings')}

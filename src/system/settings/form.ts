@@ -63,6 +63,8 @@ export const SETTINGS_VALIDATION = {
   compactionEmotionalSalienceThresholdPct: { min: 0, max: 100 },
   backgroundFailureEscalationThreshold: { min: 2, max: 100 },
   healthEventStreamMaxRows: { min: 100, max: 1000000 },
+  postgresStoreReadinessRetryAttempts: { min: 1, max: 20 },
+  postgresStoreReadinessRetryBackoffMs: { min: 100, max: 60000 },
   custodySnapshotRetentionDays: { min: 1, max: 3650 },
   memoryRefreshFailureAlertThreshold: { min: 1, max: 100 },
   intakeScreeningFailureAlertThreshold: { min: 1, max: 100 },

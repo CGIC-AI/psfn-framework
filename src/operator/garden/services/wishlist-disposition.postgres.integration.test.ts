@@ -180,6 +180,22 @@ describe('legacy Garden wishlist routes over the doing-mirror lifecycle', () => 
       );
       expect(reopened.status).toBe(400);
       expect(reopened.payload.error).toContain('terminal done disposition');
+
+      // psfn-framework-p2jr0 (2). /respond takes the same fail-loud path: it
+      // moves the disposition to `considering`, so on a terminal wish it now
+      // refuses with a 400 instead of silently writing an operatorResponse
+      // onto a wish the companion was already told was finished. The wish and
+      // the mirror are both left exactly as they were.
+      const respondedAfterDone = await post(
+        routes, holder, `/api/admin/wishlist/${wish.id}/respond`,
+        { response: 'Actually, one more thought.', subject: 'Reopening', body: 'Reopening this.' },
+      );
+      expect(respondedAfterDone.status).toBe(400);
+      expect(respondedAfterDone.payload.error).toContain('terminal done disposition');
+      expect((await mirrorStore.get('wishlist', wish.id))?.version).toBe(1);
+      expect(wishlist.getWish(wish.id).state).toBe('done');
+      expect(await letterStore.list({ party: 'companion', direction: 'inbox', limit: 10 }))
+        .toHaveLength(1);
     } finally {
       await letterStore.close();
       await mirrorStore.close();
@@ -233,6 +249,66 @@ describe('legacy Garden wishlist routes over the doing-mirror lifecycle', () => 
       await expect(reconcileClosedWishDispositions({ wishlist, store: mirrorStore }))
         .resolves.toEqual({ reconciled: 0 });
       expect(await mirrorStore.list()).toHaveLength(1);
+    } finally {
+      await letterStore.close();
+      await mirrorStore.close();
+    }
+  });
+
+  // psfn-framework-p2jr0 (2). `declined` is the other terminal state, and it is
+  // reached only through the wiki plus reconciliation — there is no Garden
+  // decline route — so it needs its own case rather than riding on the `done`
+  // one above.
+  it('refuses a response to a wish already declined', async () => {
+    if (!harness) throw new Error('Postgres integration harness is unavailable');
+    const { databaseUrl } = await harness.createDatabase();
+    const bootstrap = createPostgresPool(databaseUrl, {
+      applicationName: 'wishlist-declined-bootstrap', allowExitOnIdle: true,
+    });
+    await bootstrap.query(`CREATE SCHEMA ${SCHEMA}`);
+    await bootstrap.end();
+
+    const workspace = mkdtempSync(join(tmpdir(), 'wishlist-declined-'));
+    workspaces.push(workspace);
+    const wishlist = new PersonalWishlist(new WikiStore(workspace));
+    const wish = wishlist.createWish({ text: 'Rebuild the gate' });
+    wishlist.declineWish(wish.id, 'The gate is beyond repair.');
+
+    const mirrorStore = await PostgresDoingMirrorStore.connect(databaseUrl, { schema: SCHEMA });
+    const letterStore = await PostgresLetterStore.connect(databaseUrl, { schema: SCHEMA });
+    const doingMirror = new DoingMirrorService({
+      store: mirrorStore,
+      letters: new LetterService({
+        store: letterStore,
+        sessionStore: { append: () => 1 } as unknown as Pick<SessionStore, 'append'>,
+      }),
+    });
+    doingMirror.registerSource(new WishlistDoingMirrorSource(wishlist));
+    const holder: RequestBodyHolder = { value: {} };
+    const routes = buildAdminWishlistRoutes({
+      wishlistService: new AdminWishlistDataService(workspace, undefined, doingMirror),
+      withBody: ((_req, _res, callback) => callback(
+        JSON.stringify(holder.value),
+      )) as AdminBodyReader,
+    });
+
+    try {
+      await expect(reconcileClosedWishDispositions({ wishlist, store: mirrorStore }))
+        .resolves.toEqual({ reconciled: 1 });
+      expect((await mirrorStore.get('wishlist', wish.id))?.state).toBe('declined');
+
+      const responded = await post(
+        routes, holder, `/api/admin/wishlist/${wish.id}/respond`,
+        { response: 'Could we revisit this?', subject: 'Revisiting', body: 'Revisiting this.' },
+      );
+      expect(responded.status).toBe(400);
+      expect(responded.payload.error).toContain('terminal declined disposition');
+
+      // Nothing moved: no version bump, no Letter, and the decline stands.
+      expect((await mirrorStore.get('wishlist', wish.id))?.version).toBe(1);
+      expect(wishlist.getWish(wish.id).state).toBe('declined');
+      expect(await letterStore.list({ party: 'companion', direction: 'inbox', limit: 10 }))
+        .toEqual([]);
     } finally {
       await letterStore.close();
       await mirrorStore.close();

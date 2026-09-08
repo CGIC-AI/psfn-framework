@@ -16,7 +16,7 @@ import { buildEgressToolGuard } from './egress-tool-guard.js';
 const POLICY_SEED_PATH = join(process.cwd(), 'config', 'intake-policy.seed.json');
 
 describe('buildEgressToolGuard', () => {
-  it('attaches the active session identity to a hard trifecta block audit', () => {
+  it('attaches the active session identity to a hard trifecta block audit', async () => {
     const seed = JSON.parse(readFileSync(POLICY_SEED_PATH, 'utf8')) as Record<string, unknown>;
     const auditEvents: IntakeSinkGateAuditEvent[] = [];
     const gate = createIntakeSinkGate({
@@ -41,9 +41,12 @@ describe('buildEgressToolGuard', () => {
         sourceChannelId: 'discord:live-channel',
         logicalSessionId: 'discord:live-session',
       }),
+      getCurrentTurnCustodyProof: () => undefined,
+      getActiveTurnId: () => undefined,
+      egressDeliveryRecorder: null,
     });
 
-    const decision = guard?.evaluate({
+    const decision = await guard?.evaluate({
       toolCallId: 'egress-call-1',
       toolName: 'fs',
       requiredTokens: ['repl.execute'],

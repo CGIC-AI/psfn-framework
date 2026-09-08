@@ -135,6 +135,7 @@ import {
 } from '../../core/cogsec/intake/durable-admission.js';
 import type { CogSecReceiptStorePort } from '../../core/cogsec/receipts/contracts.js';
 import type { CustodySnapshotStorePort } from '../../core/cogsec/disclosure/custody-snapshot.js';
+import type { EgressDeliveryRecordStorePort } from '../../core/cogsec/disclosure/index.js';
 import { COGSEC_INTAKE_FIREWALL_ISSUER_ID } from '../../shared/contracts/cogsec-receipt.js';
 import {
   intakeReceiptTtlMs,
@@ -298,6 +299,13 @@ export interface AgentCoreRuntimeOptions {
    * composed; absent, the lineage stays in-process exactly as before.
    */
   custodySnapshotStore?: CustodySnapshotStorePort;
+  /**
+   * Durable egress delivery records (psfn-framework-ccgdz.6). Present, every
+   * social, tool, and artifact egress binds its delivered bytes to the turn's
+   * custody proof and a proof-requiring egress with an incomplete chain is
+   * held; absent, no record is written and the hold stays inert.
+   */
+  egressDeliveryRecordStore?: EgressDeliveryRecordStorePort;
   automataRuntime?: {
     registry: AutomataRunRegistry;
     runs: Pick<import('../../faculties/automata/run-registry.js').AutomataRunStorePort, 'loadExact'>;
@@ -704,6 +712,9 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     backgroundWorkTuning: options.backgroundWorkTuning,
     ...(options.custodySnapshotStore
       ? { custodySnapshotStore: options.custodySnapshotStore }
+      : {}),
+    ...(options.egressDeliveryRecordStore
+      ? { egressDeliveryRecordStore: options.egressDeliveryRecordStore }
       : {}),
     ...(options.backgroundWorkWelfare ? { backgroundWorkWelfare: options.backgroundWorkWelfare } : {}),
     ...(options.automataRuntime

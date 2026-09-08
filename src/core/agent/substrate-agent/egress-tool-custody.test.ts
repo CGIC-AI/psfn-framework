@@ -108,10 +108,10 @@ function makeGuard(input: {
   return guard;
 }
 
-function sendTool(): { tool: AgentTool<never>; executeSpy: ReturnType<typeof vi.fn> } {
-  const executeSpy = vi.fn().mockResolvedValue({
-    content: [{ type: 'text', text: 'sent' }],
-    details: {},
+function sendTool(onExecute?: () => void) {
+  const executeSpy = vi.fn(async () => {
+    onExecute?.();
+    return { content: [{ type: 'text', text: 'sent' }], details: {} };
   });
   const tool = withCapabilityRequirement({
     name: 'discord.send',
@@ -157,17 +157,15 @@ describe('tool egress custody', () => {
   it('records the tool-derived payload record-first, before the tool runs', async () => {
     const store = fakeStore();
     const guard = makeGuard({ proof: PROVEN, mode: 'boundary', store });
-    const { tool, executeSpy } = sendTool();
     // The record must exist BEFORE the bytes leave.
-    executeSpy.mockImplementation(async () => {
-      expect(store.rows).toHaveLength(1);
-      return { content: [{ type: 'text', text: 'sent' }], details: {} };
-    });
+    let rowsAtExecution = -1;
+    const { tool, executeSpy } = sendTool(() => { rowsAtExecution = store.rows.length; });
     const gated = gateToolWithCapabilities(tool, accessFor, () => guard);
 
     await gated.execute('tool-call-1', sendParams);
 
     expect(executeSpy).toHaveBeenCalledTimes(1);
+    expect(rowsAtExecution).toBe(1);
     const [row] = store.rows;
     expect(row?.surface).toBe('tool_egress');
     expect(row?.disposition).toBe('released');

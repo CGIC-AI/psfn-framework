@@ -642,6 +642,13 @@
       "measuredBaselineMs": 900,
       "baselineSource": "measured",
       "note": "psfn-framework-e5r0s: the fleet's system-owned health stream and escalation ledger across two real companion schemas plus the shared one - a gateway incident visible in both companions' Garden under the id its alert carried, companion incidents that never cross, and a companion answering the gateway's escalation. Focused local full-file wall baseline was 0.88s on 2026-09-08 with a warm harness slot; 120s matches the repo integration cap and preserves headroom for cold image startup and shared harness-slot contention."
+    },
+    {
+      "file": "src/persistence/backups/fleet-retired-grantee-cleanup.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": 750,
+      "baselineSource": "measured",
+      "note": "psfn-framework-znuav: upgrade path for the retired fleet welfare verifier against the real containerized PostgreSQL harness - a fleet carrying the legacy cross-schema USAGE/SELECT grants boots, the shared-schema startup authority revokes them, a second boot is idempotent, and a stray grantee still fails closed. Focused local full-file wall baseline was 0.72s on 2026-09-08 with a warm harness slot; 120s matches the repo integration cap and preserves headroom for cold image startup and shared harness-slot contention."
     }
   ]
 }

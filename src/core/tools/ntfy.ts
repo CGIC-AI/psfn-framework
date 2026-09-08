@@ -21,7 +21,7 @@ import { withCapabilityRequirement } from '../../system/capabilities/requirement
 import {
   resolveOptionalEnvCredential,
   type CredentialVaultPort,
-} from '../../boundary/custody/credential-vault.js';
+} from '../../shared/contracts/credential-contracts.js';
 import type { NotificationPort } from '../../boundary/gateway/notification-port.js';
 import {
   normalizeNotificationSenderMetadata,

@@ -5,11 +5,11 @@ import {
   statSync,
 } from 'node:fs';
 import { basename, isAbsolute, join, relative, resolve } from 'node:path';
-import type {
-  CredentialReference,
-  CredentialVaultPort,
-} from '../../boundary/custody/credential-vault.js';
-import { envCredential } from '../../boundary/custody/credential-vault.js';
+import {
+  envCredential,
+  type CredentialReference,
+  type CredentialVaultPort,
+} from '../../shared/contracts/credential-contracts.js';
 import {
   assertNoUnknownKeys,
   isCanonicalIsoTimestamp,

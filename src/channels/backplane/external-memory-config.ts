@@ -1,6 +1,6 @@
 import { Type } from '@sinclair/typebox';
 import { Value } from '@sinclair/typebox/value';
-import { envCredential, type CredentialReference } from '../../boundary/custody/credential-vault.js';
+import { envCredential, type CredentialReference } from '../../shared/contracts/credential-contracts.js';
 import {
   parseExternalMemoryBinding,
   type ExternalMemoryBinding,

@@ -93,10 +93,18 @@ function loginDatabaseUrl(databaseUrl: string, login: string, password: string):
   return url.toString();
 }
 
-function createVerifier(
+/**
+ * psfn-framework-h248l.7: the verifier's fleet mode is gone — a fleet asks each
+ * companion's own local authority over reverse RPC and needs no cross-schema
+ * credential at all. The dedicated LOGIN role and its exact grants remain the
+ * operator posture this file pins, so each schema is probed through its own
+ * single-scope verifier, which is also the sharpest statement of the privilege
+ * boundary: reading companion X's table requires a grant on companion X.
+ */
+function createSchemaVerifier(
   databaseUrl: string,
   verifierRole: string,
-  fleet: ReadonlyArray<{ companionId: string; postgresSchema: string }>,
+  schema: string,
 ): WelfareGrantVerifier {
   const pool = createPostgresPool(
     loginDatabaseUrl(databaseUrl, verifierRole, VERIFIER_PASSWORD),
@@ -106,12 +114,7 @@ function createVerifier(
       max: 2,
     },
   );
-  return createWelfareGrantVerifierForPool(pool, {
-    mode: 'fleet',
-    schemaByCompanionId: new Map(
-      fleet.map(companion => [companion.companionId, companion.postgresSchema]),
-    ),
-  });
+  return createWelfareGrantVerifierForPool(pool, { mode: 'single', schema });
 }
 
 async function migrateBackgroundWork(
@@ -264,10 +267,7 @@ describe('dedicated welfare verifier authority (aqp2u, real Postgres)', () => {
 
       // Before the grant, the verifier role has no table privilege → startup
       // readiness fails closed (degraded), exactly as the regression pin.
-      verifier = createVerifier(databaseUrl, verifierRole, [
-        { companionId: PRIMARY_COMPANION, postgresSchema: PRIMARY_SCHEMA },
-        { companionId: FOLLOWER_COMPANION, postgresSchema: FOLLOWER_SCHEMA },
-      ]);
+      verifier = createSchemaVerifier(databaseUrl, verifierRole, FOLLOWER_SCHEMA);
       await expect(verifier.assertReady())
         .rejects.toThrow(/missing required role privileges: SELECT/u);
       await verifier.close();
@@ -282,14 +282,11 @@ describe('dedicated welfare verifier authority (aqp2u, real Postgres)', () => {
         expect(evidence.relationGranted).toBe(true);
       }
 
-      verifier = createVerifier(databaseUrl, verifierRole, [
-        { companionId: PRIMARY_COMPANION, postgresSchema: PRIMARY_SCHEMA },
-        { companionId: FOLLOWER_COMPANION, postgresSchema: FOLLOWER_SCHEMA },
-      ]);
+      verifier = createSchemaVerifier(databaseUrl, verifierRole, FOLLOWER_SCHEMA);
       await verifier.assertReady();
 
       // End-to-end: a genuine welfare-claimed running job verifies; foils strip;
-      // cross-companion foil strips (the verifier scopes per-companion).
+      // and the SAME job id is absent from the sibling companion's schema.
       await seedJob(admin, FOLLOWER_SCHEMA, {
         jobId: 'follower-welfare-running',
         state: 'running',
@@ -302,7 +299,14 @@ describe('dedicated welfare verifier authority (aqp2u, real Postgres)', () => {
       });
       expect(await verifier.verify('follower-welfare-running', FOLLOWER_COMPANION)).toBe(true);
       expect(await verifier.verify('follower-not-welfare', FOLLOWER_COMPANION)).toBe(false);
-      expect(await verifier.verify('follower-welfare-running', PRIMARY_COMPANION)).toBe(false);
+      const primaryVerifier = createSchemaVerifier(databaseUrl, verifierRole, PRIMARY_SCHEMA);
+      try {
+        await primaryVerifier.assertReady();
+        expect(await primaryVerifier.verify('follower-welfare-running', PRIMARY_COMPANION))
+          .toBe(false);
+      } finally {
+        await primaryVerifier.close();
+      }
 
       // The dedicated verifier role holds exactly SELECT on the verifier table
       // in both schemas and USAGE without CREATE on each schema.
@@ -362,9 +366,7 @@ describe('dedicated welfare verifier authority (aqp2u, real Postgres)', () => {
       }
 
       await migrateBackgroundWork(databaseUrl, added);
-      verifier = createVerifier(databaseUrl, verifierRole, [
-        { companionId: 'added-follower-id', postgresSchema: added.schema },
-      ]);
+      verifier = createSchemaVerifier(databaseUrl, verifierRole, added.schema);
       await expect(verifier.assertReady())
         .rejects.toThrow(/missing required role privileges: SELECT/u);
       await verifier.close();
@@ -386,9 +388,7 @@ describe('dedicated welfare verifier authority (aqp2u, real Postgres)', () => {
       // The added follower's own runtime login gets no direct verifier grant.
       expect(await directTablePrivileges(admin, added.schema, addedLogin)).toEqual([]);
 
-      verifier = createVerifier(databaseUrl, verifierRole, [
-        { companionId: 'added-follower-id', postgresSchema: added.schema },
-      ]);
+      verifier = createSchemaVerifier(databaseUrl, verifierRole, added.schema);
       await verifier.assertReady();
       await seedJob(admin, added.schema, {
         jobId: 'added-welfare-running',

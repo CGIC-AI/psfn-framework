@@ -73,7 +73,7 @@ import type { ShardWorkloadLifecyclePort } from '../../../system/capabilities/sh
 import type { AutomataRunRegistry } from '../../../faculties/automata/run-registry.js';
 import type { AutomataSessionClassificationService } from '../../../faculties/automata/session-classification.js';
 import type { AutomataBusWorkerAccess } from '../../../faculties/automata/bus/worker-access.js';
-import type { SubagentAutomataLifecyclePort } from '../../../faculties/subagents/automata-lifecycle.js';
+import type { AutomataTerminalLifecyclePort } from '../../../faculties/automata/terminal-lifecycle.js';
 import { ShardFoldReviewController } from '../../../faculties/shards/fold-review.js';
 import {
   createShardExecutionPort,
@@ -650,6 +650,8 @@ export interface MemoryRuntimeOptions {
   automataBusWorkerAccess?: AutomataBusWorkerAccess | null;
   /** Authoritative lifecycle for extraction workers admitted to the Bus. */
   automataRunRegistry?: AutomataRunRegistry | null;
+  /** Durable terminal handoff adapter shared with the bounded subagent class. */
+  automataTerminalLifecycle?: AutomataTerminalLifecyclePort | null;
 }
 
 export function wireMemoryRuntime(options: MemoryRuntimeOptions): MemoryExtractor {
@@ -703,6 +705,9 @@ export function wireMemoryRuntime(options: MemoryRuntimeOptions): MemoryExtracto
       : {}),
     ...(options.automataRunRegistry
       ? { automataRunRegistry: options.automataRunRegistry }
+      : {}),
+    ...(options.automataTerminalLifecycle
+      ? { automataTerminalLifecycle: options.automataTerminalLifecycle }
       : {}),
   };
   const memoryExtractor = options.config
@@ -780,7 +785,7 @@ export interface ToolRuntimeOptions {
   automataRunRegistry?: AutomataRunRegistry;
   automataSessionClassification?: Pick<AutomataSessionClassificationService, 'classifyAtCreation'>;
   automataBusWorkerAccess?: AutomataBusWorkerAccess | null;
-  automataLifecyclePort?: SubagentAutomataLifecyclePort | null;
+  automataLifecyclePort?: AutomataTerminalLifecyclePort | null;
 }
 
 function requireExplicitShardParentIcpDelivery(

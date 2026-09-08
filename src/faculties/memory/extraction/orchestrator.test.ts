@@ -20,6 +20,7 @@ import {
   InMemoryAutomataRunStore,
 } from '../../automata/run-registry.js';
 import type { AutomataBusWorkerAccess } from '../../automata/bus/worker-access.js';
+import type { AutomataTerminalLifecyclePort } from '../../automata/terminal-lifecycle.js';
 import { AUTOMATA_BUS_WORKER_BRIEFING_SCHEMA_VERSION } from '../../automata/bus/worker-access.js';
 import {
   clearDiagnosticLogRingBufferForTests,
@@ -221,6 +222,45 @@ function createAutomataBusAccess(
   };
 }
 
+interface RecordedTerminal {
+  summary?: string;
+  handoffKind: string;
+  automatonClass: string;
+}
+
+function createTerminalLifecycle(options: {
+  recorded: RecordedTerminal[];
+  inserted?: boolean;
+  fail?: boolean;
+}): AutomataTerminalLifecyclePort {
+  return {
+    recordTerminalHandoff: vi.fn(async input => {
+      if (options.fail) throw new Error('fixture bus unavailable');
+      options.recorded.push({
+        ...(input.summary === undefined ? {} : { summary: input.summary }),
+        handoffKind: input.handoffKind,
+        automatonClass: input.lineage.automatonClass,
+      });
+      return {
+        handoffRef: `automata-bus-terminal:${input.idempotencyKey}`,
+        inserted: options.inserted ?? true,
+        findingRefs: [`automata-bus-terminal:${input.idempotencyKey}`],
+        evidenceRefs: [`automata-run:${input.lineage.runId}`],
+        artifactRefs: [],
+      };
+    }),
+    inspectRun: vi.fn(async lineage => ({
+      runId: lineage.runId,
+      taskId: lineage.taskId,
+      sessionIds: [...lineage.sessionIds],
+      findingRefs: [],
+      evidenceRefs: [],
+      artifactRefs: [],
+      handoffRefs: [],
+    })),
+  };
+}
+
 describe('runExtractionOrchestration durable children', () => {
   it('registers the memory-extraction run before requesting its Bus briefing', async () => {
     const registry = await createAutomataRunRegistry();
@@ -241,9 +281,10 @@ describe('runExtractionOrchestration durable children', () => {
     ]);
   });
 
-  it('appends a content-safe process finding that a later extraction briefing consumes', async () => {
+  it('records a content-safe terminal handoff that a later extraction briefing consumes', async () => {
     const registry = await createAutomataRunRegistry();
     const findings: string[] = [];
+    const recorded: RecordedTerminal[] = [];
     const automataBusWorkerAccess = createAutomataBusAccess(registry);
     automataBusWorkerAccess.port.brief = vi.fn(async () => ({
       schemaVersion: AUTOMATA_BUS_WORKER_BRIEFING_SCHEMA_VERSION,
@@ -258,25 +299,34 @@ describe('runExtractionOrchestration durable children', () => {
         indexingLag: { pendingCount: 0 },
       },
     }));
-    automataBusWorkerAccess.port.append = vi.fn(async input => {
-      findings.push(input.claim);
-      return { inserted: true };
-    });
+    const automataTerminalLifecycle = createTerminalLifecycle({ recorded });
+    const terminal = automataTerminalLifecycle as {
+      recordTerminalHandoff: (input: unknown) => Promise<unknown>;
+    };
+    const capture = terminal.recordTerminalHandoff.bind(terminal);
+    terminal.recordTerminalHandoff = async input => {
+      const result = await capture(input);
+      const summary = recorded.at(-1)?.summary;
+      if (summary) findings.push(summary);
+      return result;
+    };
 
     await runExtractionOrchestration(buildOptions({
       turnId: '018f22a2-52b8-7a3a-8c16-25b7b14f7001',
       automataBusWorkerAccess,
       automataRunRegistry: registry,
+      automataTerminalLifecycle,
     }));
 
-    expect(automataBusWorkerAccess.port.append).toHaveBeenCalledWith(expect.objectContaining({
-      provenance: 'computed',
-      verificationStatus: 'pending',
-      source: 'memory-extraction-process-summary',
-    }));
-    const firstAppend = vi.mocked(automataBusWorkerAccess.port.append).mock.calls[0]?.[0];
-    expect(firstAppend?.claim).toContain('parsed=2; accepted=1; written=1');
-    expect(JSON.stringify(firstAppend)).not.toMatch(/board games|Alex|User enjoys/iu);
+    // Runtime-owned Bus writes only: the model never reaches an append action.
+    expect(automataBusWorkerAccess.port.append).not.toHaveBeenCalled();
+    expect(recorded).toEqual([expect.objectContaining({
+      automatonClass: 'memory.extraction',
+      handoffKind: 'useful',
+    })]);
+    const summary = recorded[0]?.summary;
+    expect(summary).toContain('parsed=2; accepted=1; written=1');
+    expect(JSON.stringify(recorded)).not.toMatch(/board games|Alex|User enjoys/iu);
 
     const laterComplete = vi.fn().mockResolvedValue({ content: '<response></response>' });
     await runExtractionOrchestration(buildOptions({
@@ -284,36 +334,66 @@ describe('runExtractionOrchestration durable children', () => {
       llmClient: { complete: laterComplete } as ExtractionRunOptions['llmClient'],
       automataBusWorkerAccess,
       automataRunRegistry: registry,
+      automataTerminalLifecycle,
     }));
 
     expect(laterComplete).toHaveBeenCalledWith(
       expect.objectContaining({
-        systemPrompt: expect.stringContaining(firstAppend!.claim),
+        systemPrompt: expect.stringContaining(summary!),
       }),
       'extraction',
       expect.any(Object),
     );
   });
 
-  it('completes the eligible run but records an observable error when process append fails', async () => {
+  it('leaves a preempted run resumable instead of terminalizing it', async () => {
+    const registry = await createAutomataRunRegistry();
+    const automataBusWorkerAccess = createAutomataBusAccess(registry);
+    const recorded: RecordedTerminal[] = [];
+    const automataTerminalLifecycle = createTerminalLifecycle({ recorded });
+    const preempted = new Error('model call preempted');
+    preempted.name = 'ModelCallPreemptedError';
+
+    await expect(runExtractionOrchestration(buildOptions({
+      turnId: '018f22a2-52b8-7a3a-8c16-25b7b14f7005',
+      llmClient: {
+        complete: vi.fn().mockRejectedValue(preempted),
+      } as ExtractionRunOptions['llmClient'],
+      automataBusWorkerAccess,
+      automataRunRegistry: registry,
+      automataTerminalLifecycle,
+    }))).rejects.toThrow('model call preempted');
+
+    // A retryable control signal defers the run; it never terminalizes it, so
+    // the same run can be executed again without a duplicate terminal event.
+    expect(registry.getRun(
+      '018f22a2-52b8-7a3a-8c16-25b7b14f7005:memory-extraction',
+    )).toMatchObject({ status: 'running' });
+    expect(recorded).toEqual([]);
+    expect(automataTerminalLifecycle.recordTerminalHandoff).not.toHaveBeenCalled();
+  });
+
+  it('terminalizes the eligible run and records an observable error when the handoff fails', async () => {
     clearDiagnosticLogRingBufferForTests();
     const registry = await createAutomataRunRegistry();
     const automataBusWorkerAccess = createAutomataBusAccess(registry);
-    automataBusWorkerAccess.port.append = vi.fn().mockRejectedValue(new Error('fixture bus unavailable'));
 
     await runExtractionOrchestration(buildOptions({
       turnId: '018f22a2-52b8-7a3a-8c16-25b7b14f7003',
       automataBusWorkerAccess,
       automataRunRegistry: registry,
+      automataTerminalLifecycle: createTerminalLifecycle({ recorded: [], fail: true }),
     }));
 
+    // Fail-closed without orphaning: the Bus handoff degrades loudly, and the
+    // durable run still reaches its true terminal state.
     expect(registry.getRun(
       '018f22a2-52b8-7a3a-8c16-25b7b14f7003:memory-extraction',
     )?.status).toBe('completed');
     expect(getRecentDiagnosticLogRecords()).toContainEqual(expect.objectContaining({
       level: 'error',
       component: 'Extraction',
-      message: 'Memory extraction Automata Bus process finding append failed',
+      message: 'Memory extraction Automata Bus terminal handoff failed',
       context: expect.objectContaining({
         status: 'failed',
         runId: '018f22a2-52b8-7a3a-8c16-25b7b14f7003:memory-extraction',
@@ -323,16 +403,16 @@ describe('runExtractionOrchestration durable children', () => {
     clearDiagnosticLogRingBufferForTests();
   });
 
-  it('records an attributable skip when append reports that no event was inserted', async () => {
+  it('reports an attributable replay when the terminal event was already recorded', async () => {
     clearDiagnosticLogRingBufferForTests();
     const registry = await createAutomataRunRegistry();
     const automataBusWorkerAccess = createAutomataBusAccess(registry);
-    automataBusWorkerAccess.port.append = vi.fn().mockResolvedValue({ inserted: false });
 
     await runExtractionOrchestration(buildOptions({
       turnId: '018f22a2-52b8-7a3a-8c16-25b7b14f7004',
       automataBusWorkerAccess,
       automataRunRegistry: registry,
+      automataTerminalLifecycle: createTerminalLifecycle({ recorded: [], inserted: false }),
     }));
 
     expect(registry.getRun(
@@ -341,7 +421,7 @@ describe('runExtractionOrchestration durable children', () => {
     expect(getRecentDiagnosticLogRecords()).toContainEqual(expect.objectContaining({
       level: 'warn',
       component: 'Extraction',
-      message: 'Memory extraction Automata Bus process finding append skipped',
+      message: 'Memory extraction Automata Bus terminal handoff skipped',
       context: expect.objectContaining({
         status: 'skipped',
         reason: 'already_present',

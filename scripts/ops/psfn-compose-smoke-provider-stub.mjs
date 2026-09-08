@@ -157,7 +157,7 @@ function sendError(response, status, message) {
 }
 
 function completionId() {
-  return `chatcmpl-psfn-smoke-${Date.now()}`;
+  return `chatcmpl-compose-smoke-${Date.now()}`;
 }
 
 /** SSE shape pi-ai's openai-completions client consumes (stream_options.include_usage). */
@@ -240,7 +240,7 @@ function modelCatalog() {
       id,
       object: 'model',
       created,
-      owned_by: 'psfn-smoke-provider-stub',
+      owned_by: 'compose-smoke-provider-stub',
     })),
   };
 }

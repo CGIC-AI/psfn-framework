@@ -478,6 +478,35 @@ describe('Postgres live schema migrations', () => {
     expect(sharedSql).toContain("VALUES (19, 'room-participation-lease')");
   });
 
+  it('adds the non-expiring ICP lifecycle admission fence as shared migration 20 (h248l.9)', () => {
+    const sharedSql = migrationSql(POSTGRES_SHARED_MIGRATIONS);
+
+    // Additive on the EXISTING fence row, not a parallel membership registry.
+    expect(sharedSql).toContain(
+      'ADD COLUMN IF NOT EXISTS lifecycle_fenced BOOLEAN NOT NULL DEFAULT false',
+    );
+    expect(sharedSql).not.toContain('CREATE TABLE IF NOT EXISTS icp_lifecycle_admission');
+    // Safe on a live deployment: every existing row defaults to "admitted",
+    // which is the pre-migration behavior exactly.
+    expect(sharedSql.indexOf('CREATE TABLE IF NOT EXISTS icp_autonomy_invalidation_fences'))
+      .toBeLessThan(sharedSql.indexOf('ADD COLUMN IF NOT EXISTS lifecycle_fenced'));
+    // Non-expiring by construction: no TTL, expiry, or clearing timestamp.
+    expect(sharedSql).not.toContain('lifecycle_fenced_expires_at_ms');
+    expect(sharedSql).not.toContain('lifecycle_fence_ttl');
+    // Every transition advances the generation, so a fenced row is never pristine.
+    expect(sharedSql).toContain('CHECK (NOT lifecycle_fenced OR generation > 0)');
+    // Re-runnable: the CHECK is dropped before it is added.
+    expect(sharedSql.indexOf(
+      'DROP CONSTRAINT IF EXISTS icp_autonomy_invalidation_fences_lifecycle_evidence_check',
+    )).toBeLessThan(sharedSql.indexOf(
+      'ADD CONSTRAINT icp_autonomy_invalidation_fences_lifecycle_evidence_check',
+    ));
+    // Ledger discipline: the column precedes its version registration.
+    expect(sharedSql.indexOf('ADD COLUMN IF NOT EXISTS lifecycle_fenced'))
+      .toBeLessThan(sharedSql.indexOf("VALUES (20, 'icp-lifecycle-admission-fence')"));
+    expect(sharedSql).toContain("VALUES (20, 'icp-lifecycle-admission-fence')");
+  });
+
   it('binds the funding charge to the egress lease as shared migration 11 (jp36.5.3)', () => {
     const sharedSql = migrationSql(POSTGRES_SHARED_MIGRATIONS);
 

@@ -64,6 +64,10 @@ export const SETTINGS_VALIDATION = {
   backgroundFailureEscalationThreshold: { min: 2, max: 100 },
   healthEventStreamMaxRows: { min: 100, max: 1000000 },
   custodySnapshotRetentionDays: { min: 1, max: 3650 },
+  sharedWorkspaceListPageSize: { min: 1, max: 10000 },
+  // One approved artifact is capped at 1 MiB, so the smallest legal page budget
+  // must still admit a single maximum-size artifact.
+  sharedWorkspaceListPageBytes: { min: 1000000, max: 1000000000 },
   memoryRefreshFailureAlertThreshold: { min: 1, max: 100 },
   intakeScreeningFailureAlertThreshold: { min: 1, max: 100 },
   analysisWorkbenchMaxTokens: { min: 1000, max: 1000000 },

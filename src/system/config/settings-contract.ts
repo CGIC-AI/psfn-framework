@@ -315,6 +315,8 @@ const SETTINGS_INTEGER_FIELDS = new Set<string>([
   'backgroundFailureEscalationThreshold',
   'healthEventStreamMaxRows',
   'custodySnapshotRetentionDays',
+  'sharedWorkspaceListPageSize',
+  'sharedWorkspaceListPageBytes',
   'memoryExtractionMaxWrites',
   'memoryRefreshFailureAlertThreshold',
   'intakeScreeningFailureAlertThreshold',

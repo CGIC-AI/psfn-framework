@@ -186,6 +186,7 @@ import { AdminIcpAutonomyDataService } from './services/icp-autonomy-service.js'
 import type { SpeakingArbiterAdminStore } from '../../persistence/postgres/speaking-arbiter-admin-store.js';
 import { AdminRoomArbiterDataService } from './services/room-arbiter-service.js';
 import { AdminSharedWorkspaceService } from './services/shared-workspace-service.js';
+import { requireSharedWorkspaceListBounds } from '../../persistence/workspaces/shared-workspace-bounds.js';
 import { requireAuditOpaqueIdKeyring } from './audit-opaque-id-keyring.js';
 import type { BackgroundWorkStorePort } from '../../core/agent/background-work/store-port.js';
 import type { OperatorAlertSinkConfiguration } from '../../shared/contracts/operator-alerting.js';
@@ -951,7 +952,10 @@ export function createInProcessGardenAdminContract(
     settings: settingsService,
     ownerFileReloadWatcher,
     sharedWorkspace: options.config.sharedWorkspacePath
-      ? new AdminSharedWorkspaceService(options.config.sharedWorkspacePath)
+      ? new AdminSharedWorkspaceService(
+          options.config.sharedWorkspacePath,
+          requireSharedWorkspaceListBounds(options.config),
+        )
       : null,
     intakeQuarantine,
     driftReviews,

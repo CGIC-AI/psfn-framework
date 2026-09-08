@@ -19,6 +19,12 @@ import {
 } from '../../shared/utils/fs.js';
 import { isRecord } from '../../shared/utils/types.js';
 import { SHARED_WORKSPACE_POLICY } from './provisioning.js';
+import {
+  resumeSharedWorkspaceListing,
+  selectSharedWorkspacePage,
+  type SharedWorkspaceArtifactPage,
+  type SharedWorkspaceListBounds,
+} from './shared-workspace-bounds.js';
 
 const MAX_ARTIFACT_BYTES = 1_000_000;
 const ALLOWED_ARTIFACT_EXTENSIONS = new Set(['.md', '.txt', '.json']);
@@ -303,25 +309,52 @@ export class SharedCompanionWorkspaceStore {
       .sort((a, b) => b.proposedAt.localeCompare(a.proposedAt));
   }
 
-  listArtifacts(): Array<{ artifactPath: string; revision: string }> {
+  /**
+   * List published artifacts one operator-bounded page at a time.
+   *
+   * The walk collects paths and stat sizes only; content is read and hashed
+   * exclusively for the artifacts a page actually serves, so Garden's list cost
+   * follows the declared page rather than the corpus (psfn-framework-9jld5).
+   * Hashing stays per-call — an artifact edited out of band is still caught by
+   * the page that returns it.
+   */
+  listArtifacts(request: {
+    bounds: SharedWorkspaceListBounds;
+    cursor?: string;
+  }): SharedWorkspaceArtifactPage {
     this.recoverTransactions();
     const artifactsRoot = join(this.root, 'artifacts');
-    const results: Array<{ artifactPath: string; revision: string }> = [];
+    const found: Array<{ artifactPath: string; absolutePath: string; size: number }> = [];
     const visit = (dir: string): void => {
       for (const entry of readdirSync(dir, { withFileTypes: true })) {
         const path = join(dir, entry.name);
         if (entry.isDirectory()) visit(path);
         else if (entry.isFile()) {
-          const content = readFileSync(path, 'utf8');
-          results.push({
+          found.push({
             artifactPath: relative(artifactsRoot, path).replace(/\\/g, '/'),
-            revision: hashContent(content),
+            absolutePath: path,
+            size: statSync(path).size,
           });
         }
       }
     };
     visit(artifactsRoot);
-    return results.sort((a, b) => a.artifactPath.localeCompare(b.artifactPath));
+    const ordered = found.sort((a, b) => a.artifactPath.localeCompare(b.artifactPath));
+    const remaining = resumeSharedWorkspaceListing(
+      ordered,
+      request.cursor,
+      entry => entry.artifactPath,
+    );
+    const page = selectSharedWorkspacePage(remaining, request.bounds, entry => entry.size);
+    const artifacts = page.entries.map(entry => ({
+      artifactPath: entry.artifactPath,
+      revision: hashContent(readFileSync(entry.absolutePath, 'utf8')),
+    }));
+    const last = artifacts[artifacts.length - 1];
+    return {
+      artifacts,
+      nextCursor: page.exhausted || !last ? null : last.artifactPath,
+    };
   }
 
   readArtifact(artifactPath: string): { artifactPath: string; content: string; revision: string } {

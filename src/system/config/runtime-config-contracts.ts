@@ -308,6 +308,19 @@ export interface SubstrateConfig {
    * an operator-declared retention bound.
    */
   custodySnapshotRetentionDays?: number;
+  /**
+   * Artifacts served by one governed Shared Workspace list page. Owned by
+   * settings.json; the gateway and Garden refuse to expose a shared workspace
+   * without it, so a reviewed corpus can never be listed unbounded
+   * (psfn-framework-9jld5).
+   */
+  sharedWorkspaceListPageSize?: number;
+  /**
+   * Artifact bytes read and hashed for one governed Shared Workspace list page.
+   * Owned by settings.json alongside `sharedWorkspaceListPageSize`; both are
+   * required before a shared workspace is exposed.
+   */
+  sharedWorkspaceListPageBytes?: number;
   sessionMirrorEnabled?: boolean;
   sessionMirrorMaxChars?: number;
   sessionMirrorActiveWindowMs?: number;

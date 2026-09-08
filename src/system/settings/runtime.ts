@@ -127,6 +127,8 @@ const DIRECT_DEFINED_CONFIG_SETTINGS = [
   'backgroundFailureEscalationThreshold',
   'healthEventStreamMaxRows',
   'custodySnapshotRetentionDays',
+  'sharedWorkspaceListPageSize',
+  'sharedWorkspaceListPageBytes',
   'memoryExtractionMinImportance',
   'memoryExtractionMinConfidence',
   'memoryExtractionMinNovelty',
@@ -244,6 +246,8 @@ function getContextSettingsSnapshot(config: SubstrateConfig) {
       config.backgroundFailureEscalationThreshold ?? null,
     healthEventStreamMaxRows: config.healthEventStreamMaxRows ?? null,
     custodySnapshotRetentionDays: config.custodySnapshotRetentionDays ?? null,
+    sharedWorkspaceListPageSize: config.sharedWorkspaceListPageSize ?? null,
+    sharedWorkspaceListPageBytes: config.sharedWorkspaceListPageBytes ?? null,
     sessionTailCache: structuredClone(
       config.sessionTailCache ?? createDefaultSessionTailCacheSettings(),
     ),
@@ -275,6 +279,8 @@ function getContextSettingsSnapshot(config: SubstrateConfig) {
     | 'backgroundFailureEscalationThreshold'
     | 'healthEventStreamMaxRows'
     | 'custodySnapshotRetentionDays'
+    | 'sharedWorkspaceListPageSize'
+    | 'sharedWorkspaceListPageBytes'
     | 'sessionTailCache'
   >;
 }

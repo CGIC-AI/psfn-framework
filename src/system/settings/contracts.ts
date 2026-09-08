@@ -173,6 +173,19 @@ export interface EditableSettings {
   healthEventStreamMaxRows?: number;
   /** Days a per-turn custody snapshot is retained before it is pruned. */
   custodySnapshotRetentionDays?: number;
+  /**
+   * Artifacts returned by one governed Shared Workspace list page. Reads are
+   * filesystem-backed and re-hash every artifact they return, so listing is
+   * bounded by an operator-declared page rather than by corpus size
+   * (psfn-framework-9jld5).
+   */
+  sharedWorkspaceListPageSize?: number;
+  /**
+   * Artifact bytes read and hashed for one governed Shared Workspace list page.
+   * A page stops early once this is reached, so one very large reviewed corpus
+   * cannot hold the gateway or Garden request loop (psfn-framework-9jld5).
+   */
+  sharedWorkspaceListPageBytes?: number;
   memoryExtractionMinImportance?: number;
   memoryExtractionMinConfidence?: number;
   memoryExtractionMinNovelty?: number;
@@ -354,6 +367,8 @@ export const RUNTIME_SETTINGS_KEYS = [
   'backgroundFailureEscalationThreshold',
   'healthEventStreamMaxRows',
   'custodySnapshotRetentionDays',
+  'sharedWorkspaceListPageSize',
+  'sharedWorkspaceListPageBytes',
   'memoryExtractionMinImportance',
   'memoryExtractionMinConfidence',
   'memoryExtractionMinNovelty',

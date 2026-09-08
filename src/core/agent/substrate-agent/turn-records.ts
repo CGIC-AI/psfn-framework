@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { AgentMessage } from '../../../boundary/pi-agent/index.js';
 import type { AssistantMessage, TextContent, ToolResultMessage } from '@earendil-works/pi-ai';
 import type { SessionManager } from '../../session/manager.js';
@@ -23,6 +24,11 @@ import type { IntrospectionTurnSensitivityDecision } from '../../../faculties/in
 import { resolveMessagePlaceId } from './message-location.js';
 import type { TurnSessionIdentity } from './turn-execution/contracts.js';
 import type { DisclosureToolResultSource } from '../../cogsec/disclosure/generation-lineage.js';
+import type { IntakeEnvelopeSnapshot } from '../../../shared/contracts/intake-envelope.js';
+import {
+  toolResultLineageRef,
+  type ToolResultCustodyEdge,
+} from '../../../shared/contracts/tool-result-custody.js';
 import {
   isToolCallErrorOutcome,
   isToolCallOutcome,
@@ -288,6 +294,25 @@ export function recordAssistantMessage(input: {
 }
 
 /**
+ * One observed tool result's content-free custody row (psfn-framework-ccgdz.5).
+ *
+ * The edge is derived ONCE, here, where the post-record envelope snapshot is in
+ * hand. Both the turn's custody snapshot and the `TurnRecordToolCall` consume
+ * this same value, so the two cannot drift and "the snapshot's tool-result
+ * contributions match the TurnRecord's" holds by construction rather than by
+ * two implementations agreeing.
+ */
+export interface TurnToolResultCustodyRecord {
+  /** The content-free lineage ref this result folds into (`tool:<name>[:<id>]`). */
+  readonly ref: string;
+  /** The disclosure fold's view of this result. */
+  readonly disclosureSource: DisclosureToolResultSource;
+  /** The envelope that admitted the result, when the firewall produced one. */
+  readonly intakeEnvelope?: IntakeEnvelopeSnapshot;
+  readonly custody: ToolResultCustodyEdge;
+}
+
+/**
  * Records every tool-result message as a session tool observation AND returns
  * the content-free outbound-disclosure sources for those results (jp36.1.1.3).
  * The disclosure verdict rides the intake-firewall snapshot the same
@@ -303,8 +328,8 @@ export function recordToolObservations(input: {
   requestId: string;
   turnMessages: AgentMessage[];
   trustLevel: TrustLevel;
-}): DisclosureToolResultSource[] {
-  const disclosureSources: DisclosureToolResultSource[] = [];
+}): TurnToolResultCustodyRecord[] {
+  const custodyRecords: TurnToolResultCustodyRecord[] = [];
   for (const entry of input.turnMessages) {
     if (!isToolResultAgentMessage(entry)) continue;
     const outcome = resolveToolResultMessageOutcome(entry);
@@ -356,16 +381,54 @@ export function recordToolObservations(input: {
           : {}),
       },
     );
-    const toolName = entry.toolName.trim();
-    const toolCallId = entry.toolCallId.trim();
-    const toolCallSuffix = toolCallId ? `:${toolCallId}` : '';
+    const ref = toolResultLineageRef(entry.toolName, entry.toolCallId);
     const snapshot = result.intakeSnapshot;
-    disclosureSources.push({
-      ref: `tool:${toolName}${toolCallSuffix}`,
-      ...(snapshot ? { intakeState: snapshot.state, sourceRiskTier: snapshot.sourceRiskTier } : {}),
+    custodyRecords.push({
+      ref,
+      disclosureSource: {
+        ref,
+        ...(snapshot
+          ? { intakeState: snapshot.state, sourceRiskTier: snapshot.sourceRiskTier }
+          : {}),
+      },
+      ...(snapshot ? { intakeEnvelope: snapshot } : {}),
+      custody: buildToolResultCustodyEdge(entry, snapshot, schedulerScreening),
     });
   }
-  return disclosureSources;
+  return custodyRecords;
+}
+
+/**
+ * The custody edge for one observed tool result.
+ *
+ * - Enforce-mode quarantine at the scheduler seam replaced the result BEFORE
+ *   the model saw it, so the message text is the fixed withheld placeholder.
+ *   Hashing it would record boilerplate as evidence of what the model consumed,
+ *   so the withheld state is recorded instead (ccgdz.5 acceptance).
+ * - With no envelope at all there is no admission identity to bind a hash to,
+ *   and a bare hash could later read as custody where there is none; the gap is
+ *   named explicitly rather than left as silence.
+ * - Otherwise the hash is over the exact post-scheduler message text — the
+ *   bytes the model actually consumed, not the raw tool output.
+ *
+ * The envelope is always the one THIS result's own session write returned, so a
+ * result can never borrow another call's admission identity.
+ */
+function buildToolResultCustodyEdge(
+  entry: ToolResultMessage,
+  snapshot: IntakeEnvelopeSnapshot | null,
+  schedulerScreening: ReturnType<typeof getToolResultIntakeScreening>,
+): ToolResultCustodyEdge {
+  if (!snapshot) return { absenceReason: 'unscreened' };
+  if (schedulerScreening?.withheld === true) {
+    return { envelopeId: snapshot.envelopeId, absenceReason: 'withheld' };
+  }
+  return {
+    envelopeId: snapshot.envelopeId,
+    contentSha256: createHash('sha256')
+      .update(extractToolResultText(entry), 'utf8')
+      .digest('hex'),
+  };
 }
 
 export function buildTurnRecord(input: {
@@ -400,8 +463,10 @@ export function buildTurnRecord(input: {
   introspectionSensitivityDecision?: IntrospectionTurnSensitivityDecision;
   /** Resolvable ref to this turn's durable custody snapshot (ccgdz.1). */
   custodySnapshotRef?: string;
+  /** Per-tool-result custody edges, keyed by lineage ref (ccgdz.5). */
+  toolResultCustody?: ReadonlyMap<string, TurnToolResultCustodyRecord>;
 }): TurnRecord {
-  const toolCalls = buildTurnToolCalls(input.turnMessages);
+  const toolCalls = buildTurnToolCalls(input.turnMessages, input.toolResultCustody);
   const roleEnvelopeRefs = normalizeRoleEnvelopeRefs(input.roleEnvelopeRefs);
   const provenanceRefs = [...new Set([
     `turn:${input.turnId}`,
@@ -592,7 +657,10 @@ export function sanitizePersistedReasoningText(reasoning: string | undefined): s
   return normalized;
 }
 
-function buildTurnToolCalls(turnMessages: AgentMessage[]): TurnRecordToolCall[] {
+function buildTurnToolCalls(
+  turnMessages: AgentMessage[],
+  toolResultCustody?: ReadonlyMap<string, TurnToolResultCustodyRecord>,
+): TurnRecordToolCall[] {
   const toolCalls: TurnRecordToolCall[] = [];
   const toolCallsById = new Map<string, TurnRecordToolCall>();
   for (const entry of turnMessages) {
@@ -651,9 +719,24 @@ function buildTurnToolCalls(turnMessages: AgentMessage[]): TurnRecordToolCall[] 
       details: entry.details,
       existing: target?.provenanceRefs,
     });
+    // ccgdz.5: the custody edge is LOOKED UP by the same lineage ref the
+    // disclosure fold used, never recomputed from the message here. Keyed by
+    // tool call id (via the ref), so two calls of the same tool never merge and
+    // no call can borrow another's admission identity.
+    const custodyRecord = toolResultCustody?.get(
+      toolResultLineageRef(entry.toolName, entry.toolCallId),
+    );
+    const custodyFields = custodyRecord
+      ? {
+        ...(custodyRecord.intakeEnvelope
+          ? { intakeEnvelope: custodyRecord.intakeEnvelope }
+          : {}),
+        resultCustody: custodyRecord.custody,
+      }
+      : {};
 
     if (target) {
-      Object.assign(target, toolResultFields);
+      Object.assign(target, toolResultFields, custodyFields);
       if (provenanceRefs.length > 0) {
         target.provenanceRefs = provenanceRefs;
       }
@@ -670,6 +753,7 @@ function buildTurnToolCalls(turnMessages: AgentMessage[]): TurnRecordToolCall[] 
       ...(fallbackRationale ? { rationale: fallbackRationale } : {}),
       ...(fallbackThoughtSignature ? { thoughtSignature: fallbackThoughtSignature } : {}),
       ...toolResultFields,
+      ...custodyFields,
     });
   }
   return toolCalls;

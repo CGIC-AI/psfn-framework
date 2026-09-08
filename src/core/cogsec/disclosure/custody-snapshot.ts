@@ -23,6 +23,10 @@ import { createHash } from 'node:crypto';
 
 import { canonicalJsonString } from '../../../shared/utils/json-serialization.js';
 import { isRecord } from '../../../shared/utils/types.js';
+import {
+  validateToolResultCustodyEdge,
+  type ToolResultCustodyEdge,
+} from '../../../shared/contracts/tool-result-custody.js';
 import { VALID_SENSITIVITY_LEVELS, type SensitivityLevel } from '../../../system/trust/types.js';
 import {
   DISCLOSURE_DESTINATION_KINDS,
@@ -58,28 +62,6 @@ function isCustodySourceKind(value: unknown): value is CustodySourceKind {
     && (CUSTODY_SOURCE_KINDS as readonly string[]).includes(value);
 }
 
-/**
- * Why a tool result contributed no content hash. `withheld` is the
- * enforce-mode quarantine case: the model saw the fixed withheld placeholder,
- * so hashing what it saw would record a hash of boilerplate as if it were
- * evidence (psfn-framework-ccgdz.5 acceptance). `unscreened` means the intake
- * firewall produced no screening outcome for this result at all.
- */
-const CUSTODY_TOOL_RESULT_ABSENCE_REASONS = [
-  'withheld',
-  'unscreened',
-] as const;
-
-type CustodyToolResultAbsenceReason =
-  typeof CUSTODY_TOOL_RESULT_ABSENCE_REASONS[number];
-
-function isCustodyToolResultAbsenceReason(
-  value: unknown,
-): value is CustodyToolResultAbsenceReason {
-  return typeof value === 'string'
-    && (CUSTODY_TOOL_RESULT_ABSENCE_REASONS as readonly string[]).includes(value);
-}
-
 const SHA256_HEX_PATTERN = /^[a-f0-9]{64}$/u;
 
 /**
@@ -92,16 +74,6 @@ const CUSTODY_SAFE_IDENTIFIER_PATTERN = /^[A-Za-z0-9_:.@+-]{1,128}$/u;
 
 /** Compile-time version labels (`disclosure/v1`) additionally allow a slash. */
 const CUSTODY_VERSION_LABEL_PATTERN = /^[A-Za-z0-9_./-]{1,64}$/u;
-
-/**
- * The literal token, or undefined when it cannot be stored verbatim. Callers
- * building custody edges use this so an unusual provider-issued id degrades to
- * "not recorded" instead of throwing on the turn's hot path.
- */
-export function custodySafeToken(value: string | undefined): string | undefined {
-  if (value === undefined) return undefined;
-  return CUSTODY_SAFE_IDENTIFIER_PATTERN.test(value) ? value : undefined;
-}
 
 /** Bounded identity for one runtime reference: always a hash, sometimes an id. */
 interface CustodyIdentity {
@@ -122,21 +94,7 @@ interface CustodySnapshotSource {
   readonly subjectContactCount: number;
   readonly sourceChannel?: CustodyIdentity;
   /** Present only for tool-result sources (psfn-framework-ccgdz.5). */
-  readonly toolResult?: CustodyToolResultEdge;
-}
-
-/**
- * The tool-call custody edge: the intake envelope that admitted the tool
- * result and the hash of the exact bytes the model saw. Exactly one of
- * `contentSha256` / `absenceReason` is present — a withheld or unscreened
- * result records that state rather than a hash of the placeholder.
- */
-export interface CustodyToolResultEdge {
-  readonly toolName: string;
-  readonly toolCallId?: string;
-  readonly envelopeId?: string;
-  readonly contentSha256?: string;
-  readonly absenceReason?: CustodyToolResultAbsenceReason;
+  readonly toolResult?: ToolResultCustodyEdge;
 }
 
 /**
@@ -223,7 +181,7 @@ export function buildCustodySnapshot(input: {
   lineage: DisclosureLineage;
   turnId: string;
   requestId: string;
-  toolResultEdges?: ReadonlyMap<string, CustodyToolResultEdge>;
+  toolResultEdges?: ReadonlyMap<string, ToolResultCustodyEdge>;
   classifiedAtMs?: number;
 }): CustodySnapshot {
   const { lineage } = input;
@@ -235,8 +193,15 @@ export function buildCustodySnapshot(input: {
   }
   const edgesByRef = input.toolResultEdges;
   const parsedClassifiedAt = Date.parse(lineage.classifiedAt);
-  const classifiedAtMs = input.classifiedAtMs
-    ?? (Number.isFinite(parsedClassifiedAt) ? parsedClassifiedAt : Date.now());
+  if (input.classifiedAtMs === undefined && !Number.isFinite(parsedClassifiedAt)) {
+    // Substituting "now" would date the record to when it was written rather
+    // than when the context was classified — a silent fallback in an audit
+    // trail. The caller turns this into a visible absent ref instead.
+    throw new Error(
+      `Custody snapshot classifiedAt ${lineage.classifiedAt} is not a parseable instant`,
+    );
+  }
+  const classifiedAtMs = input.classifiedAtMs ?? parsedClassifiedAt;
   const sources = lineage.sourceSnapshots.map((snapshot): CustodySnapshotSource => {
     const edge = edgesByRef?.get(snapshot.ref);
     return {
@@ -326,46 +291,6 @@ function validateDestinationKinds(
   return uniqueDestinationKinds(value as DisclosureDestinationKind[]);
 }
 
-function validateToolResultEdge(value: unknown, field: string): CustodyToolResultEdge {
-  if (!isRecord(value)) throw invalid(field, 'must be an object');
-  if (typeof value.toolName !== 'string'
-    || !CUSTODY_SAFE_IDENTIFIER_PATTERN.test(value.toolName)) {
-    throw invalid(`${field}.toolName`, 'must be a bounded safe identifier');
-  }
-  if (value.toolCallId !== undefined
-    && (typeof value.toolCallId !== 'string'
-      || !CUSTODY_SAFE_IDENTIFIER_PATTERN.test(value.toolCallId))) {
-    throw invalid(`${field}.toolCallId`, 'must be a bounded safe identifier');
-  }
-  if (value.envelopeId !== undefined
-    && (typeof value.envelopeId !== 'string'
-      || !CUSTODY_SAFE_IDENTIFIER_PATTERN.test(value.envelopeId))) {
-    throw invalid(`${field}.envelopeId`, 'must be a bounded safe identifier');
-  }
-  const hasHash = value.contentSha256 !== undefined;
-  const hasAbsence = value.absenceReason !== undefined;
-  if (hasHash === hasAbsence) {
-    throw invalid(field, 'must carry exactly one of contentSha256 or absenceReason');
-  }
-  if (hasHash
-    && (typeof value.contentSha256 !== 'string'
-      || !SHA256_HEX_PATTERN.test(value.contentSha256))) {
-    throw invalid(`${field}.contentSha256`, 'must be 64 lowercase hex characters');
-  }
-  if (hasAbsence && !isCustodyToolResultAbsenceReason(value.absenceReason)) {
-    throw invalid(`${field}.absenceReason`, 'must be a known absence reason');
-  }
-  return {
-    toolName: value.toolName,
-    ...(value.toolCallId !== undefined ? { toolCallId: value.toolCallId as string } : {}),
-    ...(value.envelopeId !== undefined ? { envelopeId: value.envelopeId as string } : {}),
-    ...(hasHash ? { contentSha256: value.contentSha256 as string } : {}),
-    ...(hasAbsence
-      ? { absenceReason: value.absenceReason as CustodyToolResultAbsenceReason }
-      : {}),
-  };
-}
-
 function validateSource(value: unknown, index: number): CustodySnapshotSource {
   const field = `sources[${index}]`;
   if (!isRecord(value)) throw invalid(field, 'must be an object');
@@ -395,7 +320,7 @@ function validateSource(value: unknown, index: number): CustodySnapshotSource {
       ? { sourceChannel: validateIdentity(value.sourceChannel, `${field}.sourceChannel`) }
       : {}),
     ...(value.toolResult !== undefined
-      ? { toolResult: validateToolResultEdge(value.toolResult, `${field}.toolResult`) }
+      ? { toolResult: validateToolResultCustodyEdge(value.toolResult, `${field}.toolResult`) }
       : {}),
   };
 }

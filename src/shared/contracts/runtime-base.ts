@@ -21,6 +21,7 @@ import type {
 import type { SatelliteRoutingMetadata } from './satellite-registry.js';
 import type { GatewayRoutingEnvelope } from '../routing/envelope.js';
 import type { IntakeEnvelopeSnapshot } from './intake-envelope.js';
+import type { ToolResultCustodyEdge } from './tool-result-custody.js';
 import type { HubDeviceAttachmentSnapshot } from './hub-device-ingress.js';
 import type {
   IcpConversationCorrelation,
@@ -93,6 +94,21 @@ export interface TurnRecordToolCall {
   rationale?: string;
   /** Provider thought signature attached to the tool call, when captured. */
   thoughtSignature?: string;
+  /**
+   * The intake envelope that admitted this tool result (psfn-framework-ccgdz.5).
+   * Previously the envelope lived one hop away on session-entry metadata, so
+   * "which admitted tool result caused this write or egress?" was unanswerable
+   * from the turn record alone. Absent when the intake firewall produced no
+   * envelope for the result.
+   */
+  intakeEnvelope?: IntakeEnvelopeSnapshot;
+  /**
+   * Custody edge for the bytes the model actually saw: the result's content
+   * hash, or the typed reason there is none (psfn-framework-ccgdz.5). The same
+   * value is folded into the turn's custody snapshot as this tool result's
+   * contribution, so the two are comparable rather than independently derived.
+   */
+  resultCustody?: ToolResultCustodyEdge;
 }
 
 export interface TurnRecordVersionPointers {

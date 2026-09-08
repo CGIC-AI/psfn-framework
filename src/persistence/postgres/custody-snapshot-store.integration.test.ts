@@ -232,12 +232,12 @@ describe('PostgresCustodySnapshotStore', () => {
         turnId: OTHER_TURN_ID,
         requestId: REQUEST_ID,
       });
-      // The first write of the day applies the bound; the stale row is older
-      // than it and is already gone by the time the second write lands.
+      // Retention runs before a write, never after it: a fresh row is never at
+      // risk from the sweep that its own insert triggered.
       expect(await store.record(stale)).toBe('recorded');
       expect(await store.record(fresh)).toBe('recorded');
 
-      expect(await store.pruneExpired()).toBe(0);
+      expect(await store.pruneExpired()).toBe(1);
       expect(await store.getByGenerationContextRef(stale.generationContextRef)).toBeNull();
       expect(await store.getByGenerationContextRef(fresh.generationContextRef))
         .toEqual(fresh);

@@ -17,12 +17,14 @@ import {
   type PostgresTestHarness,
 } from '../../test-support/postgres-test-harness.js';
 import { PostgresCogSecBlindReviewStore } from './cogsec-blind-review-store.js';
+import { POSTGRES_COGSEC_BLIND_REVIEW_MIGRATIONS } from './migrations.js';
 import { BlindReviewLane } from '../../core/cogsec/blind-review/lane.js';
 import {
   blindReviewTestConfig,
   blindReviewTestEvidence,
   blindReviewTestEvidenceRange,
 } from '../../core/cogsec/blind-review/blind-review.test-support.js';
+import { BLIND_REVIEW_PROCESSOR } from '../../core/cogsec/blind-review/contracts.js';
 import type {
   BlindReviewEvidenceItem,
   BlindReviewFinding,
@@ -329,6 +331,132 @@ describe('PostgresCogSecBlindReviewStore', () => {
       )).rejects.toThrow();
     } finally {
       await pool.end();
+    }
+  }, TIMEOUT_MS);
+});
+
+
+// ── Gate savings counter, migration and round trip (bead psfn-framework-33xah) ──
+//
+// The claim this block owns is the one a fresh-schema test cannot make: an
+// EXISTING deployment, with lane state already in its columnar row, gains the
+// counter in place — no backfill, no rewritten history, no lost watermark — and
+// the counter then survives the whole-row `writeState` the lane performs every
+// pass, plus a restart.
+describe('cogsec_blind_review_state gate-savings counter', () => {
+  it('upgrades a populated pre-counter table in place and round-trips the increment', async () => {
+    const databaseUrl = await freshDatabaseUrl();
+    const pool = createPostgresPool(databaseUrl, {
+      applicationName: 'cogsec-blind-review-upgrade',
+      allowExitOnIdle: true,
+      schema: SCHEMA,
+    });
+    try {
+      // The schema as it stood before this bead: every statement in the chain
+      // except the ones this bead appended.
+      const preCounter = POSTGRES_COGSEC_BLIND_REVIEW_MIGRATIONS.filter(statement => (
+        !statement.includes('model_calls_avoided')
+      ));
+      expect(preCounter.length).toBeLessThan(POSTGRES_COGSEC_BLIND_REVIEW_MIGRATIONS.length);
+      for (const statement of preCounter) await pool.query(statement);
+      await pool.query(`
+        INSERT INTO cogsec_blind_review_state (
+          processor, ingested_through_ms, last_batch_digest,
+          review_attempt, retry_not_before_ms, updated_at_ms
+        ) VALUES ($1, $2, NULL, 2, $3, $4)
+      `, [BLIND_REVIEW_PROCESSOR, 1_700_000_000_000, 1_700_000_050_000, 1_700_000_060_000]);
+      await expect(
+        pool.query('SELECT model_calls_avoided FROM cogsec_blind_review_state'),
+      ).rejects.toThrow();
+
+      // The full chain over the populated old table: this is the upgrade.
+      const store = await PostgresCogSecBlindReviewStore.fromPool(pool);
+      expect(await store.readModelCallsAvoided())
+        .toEqual({ modelCallsAvoided: 0, lastAvoidedAtMs: 0 });
+      // Nothing the old row carried was disturbed.
+      expect(await store.readState()).toEqual({
+        ingestedThroughMs: 1_700_000_000_000,
+        lastBatchDigest: null,
+        reviewAttempt: 2,
+        retryNotBeforeMs: 1_700_000_050_000,
+        updatedAtMs: 1_700_000_060_000,
+      });
+
+      // Additive increments, then the whole-row state write the lane performs
+      // every pass, which must not be able to reach the counter.
+      await store.recordModelCallsAvoided(2, NOW_MS);
+      await store.recordModelCallsAvoided(3, NOW_MS + 1_000);
+      expect(await store.readModelCallsAvoided())
+        .toEqual({ modelCallsAvoided: 5, lastAvoidedAtMs: NOW_MS + 1_000 });
+      await store.writeState({
+        ingestedThroughMs: NOW_MS,
+        lastBatchDigest: null,
+        reviewAttempt: 0,
+        retryNotBeforeMs: 0,
+        updatedAtMs: NOW_MS,
+      });
+      expect(await store.readModelCallsAvoided())
+        .toEqual({ modelCallsAvoided: 5, lastAvoidedAtMs: NOW_MS + 1_000 });
+
+      // Re-running the chain is idempotent: the constraints are dropped by name
+      // and re-added, so a second startup neither errors nor resets anything.
+      await PostgresCogSecBlindReviewStore.fromPool(pool);
+      expect((await store.readModelCallsAvoided()).modelCallsAvoided).toBe(5);
+
+      // The floor lives in the database, not only in TypeScript.
+      await expect(pool.query(
+        'UPDATE cogsec_blind_review_state SET model_calls_avoided = -1 WHERE processor = $1',
+        [BLIND_REVIEW_PROCESSOR],
+      )).rejects.toThrow();
+      await expect(pool.query(
+        'UPDATE cogsec_blind_review_state SET model_calls_avoided = 0 WHERE processor = $1',
+        [BLIND_REVIEW_PROCESSOR],
+      )).rejects.toThrow();
+      await expect(store.recordModelCallsAvoided(0, NOW_MS)).rejects.toThrow(/positive integer/u);
+    } finally {
+      await pool.end();
+    }
+  }, TIMEOUT_MS);
+
+  it('accumulates gate refusals across real lane passes and a restart', async () => {
+    const databaseUrl = await freshDatabaseUrl();
+    const eventsRoot = mkdtempSync(join(tmpdir(), 'psfn-blind-review-savings-'));
+    // One row against a floor of two: every pass refuses the batch, so every
+    // pass is one model call the gate did not make.
+    const items = blindReviewTestEvidenceRange(1);
+    let store = await PostgresCogSecBlindReviewStore.connect(databaseUrl, { schema: SCHEMA });
+    try {
+      const first = laneOver({ store, items, finding: CLEAN_FINDING, eventsRoot });
+      const result = await first.lane.runOnce();
+      expect(first.review).not.toHaveBeenCalled();
+      expect(result.modelCalls).toBe(0);
+      expect(result.modelCallsAvoided).toBe(1);
+      expect(result.batches).toEqual([{ kind: 'skipped', reason: 'undersized_items' }]);
+      expect(await store.readModelCallsAvoided())
+        .toEqual({ modelCallsAvoided: 1, lastAvoidedAtMs: NOW_MS });
+    } finally {
+      await store.close();
+    }
+
+    // Restart: a new process and a new pool over the same durable window. A
+    // cumulative counter that reset here would be a per-process gauge.
+    store = await PostgresCogSecBlindReviewStore.connect(databaseUrl, { schema: SCHEMA });
+    try {
+      expect((await store.readModelCallsAvoided()).modelCallsAvoided).toBe(1);
+      const second = laneOver({
+        store,
+        items,
+        finding: CLEAN_FINDING,
+        eventsRoot,
+        nowMs: NOW_MS + 5_000,
+      });
+      const result = await second.lane.runOnce();
+      expect(result.modelCallsAvoided).toBe(1);
+      expect(await store.readModelCallsAvoided())
+        .toEqual({ modelCallsAvoided: 2, lastAvoidedAtMs: NOW_MS + 5_000 });
+    } finally {
+      await store.close();
+      rmSync(eventsRoot, { recursive: true, force: true });
     }
   }, TIMEOUT_MS);
 });

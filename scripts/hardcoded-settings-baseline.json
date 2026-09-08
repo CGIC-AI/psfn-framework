@@ -2979,11 +2979,6 @@
       "value": "3"
     },
     {
-      "file": "src/core/agent/substrate-agent/turn-execution/vision-turn-deadline.ts",
-      "name": "VISION_TURN_TIMEOUT_MS",
-      "value": "120_000"
-    },
-    {
       "file": "src/core/agent/substrate-agent/turn-execution/pre-turn-state.ts",
       "name": "MEMORY_RETRIEVAL_QUERY_MAX_CHARS",
       "value": "6_000"
@@ -3002,6 +2997,11 @@
       "file": "src/core/agent/substrate-agent/turn-execution/prompt-cache-runtime.ts",
       "name": "MAX_TRACKED_SCOPES",
       "value": "256"
+    },
+    {
+      "file": "src/core/agent/substrate-agent/turn-execution/vision-turn-deadline.ts",
+      "name": "VISION_TURN_TIMEOUT_MS",
+      "value": "120_000"
     },
     {
       "file": "src/core/agent/substrate-agent/turn-records.ts",
@@ -3306,14 +3306,14 @@
     },
     {
       "file": "src/core/cogsec/blind-review/lane.ts",
-      "name": "BlindReviewLane.settleState.store.writeState.arg0.retryNotBeforeMs@L453",
+      "name": "BlindReviewLane.settleState.store.writeState.arg0.retryNotBeforeMs@L480",
       "value": "0",
       "form": "object-member",
       "note": "Structural sentinel, not a tuning value: 0 means 'no retry backoff is in effect'. The backoff itself is owner-file governed by blindReviewer.retry.baseDelayMs/maxDelayMs (psfn-framework-yxz0z.3); this literal only clears that state."
     },
     {
       "file": "src/core/cogsec/blind-review/lane.ts",
-      "name": "BlindReviewLane.settleState.store.writeState.arg0.retryNotBeforeMs@L466",
+      "name": "BlindReviewLane.settleState.store.writeState.arg0.retryNotBeforeMs@L493",
       "value": "0",
       "form": "object-member",
       "note": "Structural sentinel, not a tuning value: 0 means 'no retry backoff is in effect'. The backoff itself is owner-file governed by blindReviewer.retry.baseDelayMs/maxDelayMs (psfn-framework-yxz0z.3); this literal only clears that state."

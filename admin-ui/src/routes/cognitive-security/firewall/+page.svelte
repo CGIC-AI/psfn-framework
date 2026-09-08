@@ -459,6 +459,22 @@
               </dd>
             </div>
             <div class="col-span-2">
+              <dt class="text-xs text-shadow-500">Model calls avoided by the gate</dt>
+              <dd class="font-mono text-shadow-800">
+                {blindReview.gate.modelCallsAvoided}
+                <span class="text-xs text-shadow-500">
+                  (last {blindReview.gate.modelCallsAvoidedAtMs === 0
+                    ? 'never'
+                    : formatTimestamp(blindReview.gate.modelCallsAvoidedAtMs)})
+                </span>
+              </dd>
+              <p class="mt-0.5 text-xs text-shadow-500">
+                Cumulative over the lane's whole life, counted only when the gate actually refused a
+                candidate batch &mdash; an idle window adds nothing. It never decreases and a restart
+                does not reset it.
+              </p>
+            </div>
+            <div class="col-span-2">
               <dt class="text-xs text-shadow-500">Effective cadence</dt>
               <dd class="font-mono text-shadow-800">
                 {formatDuration(blindReview.cadence.effectiveIntervalMs)}

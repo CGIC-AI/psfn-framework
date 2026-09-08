@@ -13,13 +13,17 @@ import {
   type AdminBlindReviewStateView,
 } from './blind-review-service.js';
 import { blindReviewTestConfig } from '../../../core/cogsec/blind-review/blind-review.test-support.js';
-import type { BlindReviewLaneState } from '../../../core/cogsec/blind-review/contracts.js';
+import type {
+  BlindReviewGateSavings,
+  BlindReviewLaneState,
+} from '../../../core/cogsec/blind-review/contracts.js';
 
 const NOW_MS = 1_800_000_000_000;
 
 function readPort(
   state: Partial<BlindReviewLaneState>,
   rows: { total: number; pinned: number; unreviewed: number },
+  savings: Partial<BlindReviewGateSavings> = {},
 ): AdminBlindReviewReadPort {
   return {
     readState: () => Promise.resolve({
@@ -31,6 +35,11 @@ function readPort(
       ...state,
     }),
     countRows: () => Promise.resolve(rows),
+    readModelCallsAvoided: () => Promise.resolve({
+      modelCallsAvoided: 0,
+      lastAvoidedAtMs: 0,
+      ...savings,
+    }),
   };
 }
 
@@ -75,6 +84,7 @@ describe('admin blind review projection: status is an answer, not an absence', (
       reader: {
         readState: () => { read = true; throw new Error('must not read'); },
         countRows: () => { read = true; throw new Error('must not read'); },
+        readModelCallsAvoided: () => { read = true; throw new Error('must not read'); },
       },
     }).getState(NOW_MS);
     expect(view.status).toBe('disabled');
@@ -171,6 +181,48 @@ describe('admin blind review projection: cadence and gate', () => {
     expect(await gateFor(3)).toBe('undersized_items');
     expect(await gateFor(4)).toBe('eligible');
     expect(await gateFor(400)).toBe('eligible');
+  });
+
+  it('carries the cumulative gate savings and the time of the last refusal', async () => {
+    const view = await createAdminBlindReviewService({
+      config,
+      backgroundMaintenanceIntervalMs: 300_000,
+      reader: readPort(
+        { updatedAtMs: NOW_MS },
+        { total: 8, pinned: 0, unreviewed: 8 },
+        { modelCallsAvoided: 47, lastAvoidedAtMs: NOW_MS - 120_000 },
+      ),
+    }).getState(NOW_MS);
+    expect(view.gate.modelCallsAvoided).toBe(47);
+    expect(view.gate.modelCallsAvoidedAtMs).toBe(NOW_MS - 120_000);
+    // A cumulative counter is a number and a clock reading; neither can carry
+    // evidence, and the content-free walk proves nothing else came with them.
+    assertContentFree(view);
+  });
+
+  it('reports a gate that has never refused a call as zero and never', async () => {
+    const view = await createAdminBlindReviewService({
+      config,
+      backgroundMaintenanceIntervalMs: 300_000,
+      reader: readPort({ updatedAtMs: NOW_MS }, { total: 0, pinned: 0, unreviewed: 0 }),
+    }).getState(NOW_MS);
+    expect(view.gate.modelCallsAvoided).toBe(0);
+    expect(view.gate.modelCallsAvoidedAtMs).toBe(0);
+  });
+
+  it('reports zero savings for a disabled or unwired reviewer without reading', async () => {
+    for (const status of ['disabled', 'unwired'] as const) {
+      const view = await createAdminBlindReviewService({
+        config: status === 'disabled' ? { ...config, enabled: false } : config,
+        backgroundMaintenanceIntervalMs: 300_000,
+        reader: status === 'disabled'
+          ? readPort({}, { total: 0, pinned: 0, unreviewed: 0 }, { modelCallsAvoided: 9 })
+          : null,
+      }).getState(NOW_MS);
+      expect(view.status).toBe(status);
+      expect(view.gate.modelCallsAvoided).toBe(0);
+      expect(view.gate.modelCallsAvoidedAtMs).toBe(0);
+    }
   });
 
   it('reports a batch ceiling below the floor as permanently undersized', async () => {

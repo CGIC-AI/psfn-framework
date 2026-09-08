@@ -18,6 +18,7 @@ import {
   POSTGRES_HUMAN_ESCALATION_MIGRATIONS,
   POSTGRES_AUTOMATA_MIGRATIONS,
   POSTGRES_AUTOMATA_ROLLBACK_MIGRATIONS,
+  POSTGRES_COGSEC_BLIND_REVIEW_MIGRATIONS,
 } from './migrations.js';
 import { POSTGRES_BUZZ_RECOVERY_MIGRATIONS } from './buzz-recovery-migrations.js';
 import { MODEL_USAGE_RUNTIME_LANE_CLASSES } from '../../shared/telemetry/model-usage-attribution.js';
@@ -76,6 +77,56 @@ describe('Postgres live schema migrations', () => {
     for (let index = 1; index < registeredVersions.length; index += 1) {
       expect(registeredVersions[index]).toBeGreaterThan(registeredVersions[index - 1]!);
     }
+  });
+
+  it('adds the Blind Reviewer gate-savings counter additively, after its table', () => {
+    const sql = migrationSql(POSTGRES_COGSEC_BLIND_REVIEW_MIGRATIONS);
+
+    expectAddColumn(
+      sql,
+      'cogsec_blind_review_state',
+      'model_calls_avoided BIGINT NOT NULL DEFAULT 0',
+    );
+    expectAddColumn(
+      sql,
+      'cogsec_blind_review_state',
+      'model_calls_avoided_at_ms BIGINT NOT NULL DEFAULT 0',
+    );
+    // A post-hoc CHECK is not idempotent on its own: `CREATE TABLE IF NOT
+    // EXISTS` never revisits an existing table's constraints, so the floor is
+    // dropped by name before it is added, exactly as the other alters here do.
+    expect(sql).toContain(
+      'DROP CONSTRAINT IF EXISTS cogsec_blind_review_state_model_calls_avoided_check',
+    );
+    expect(sql).toContain(
+      'ADD CONSTRAINT cogsec_blind_review_state_model_calls_avoided_check\n      CHECK (model_calls_avoided >= 0)',
+    );
+    expect(sql).toContain(
+      'DROP CONSTRAINT IF EXISTS cogsec_blind_review_state_model_calls_avoided_at_ms_check',
+    );
+    // A zero count can never carry a non-zero clock reading: the counter and
+    // its "last avoided" timestamp start together.
+    expect(sql).toContain('model_calls_avoided > 0 OR model_calls_avoided_at_ms = 0');
+
+    // Ledger discipline for an unversioned companion chain: the column alters
+    // must follow the CREATE TABLE they extend, or a fresh database applies
+    // them against a table that does not exist yet.
+    const createdAt = POSTGRES_COGSEC_BLIND_REVIEW_MIGRATIONS.findIndex(statement => (
+      statement.includes('CREATE TABLE IF NOT EXISTS cogsec_blind_review_state')
+    ));
+    const alteredAt = POSTGRES_COGSEC_BLIND_REVIEW_MIGRATIONS.findIndex(statement => (
+      statement.includes('ADD COLUMN IF NOT EXISTS model_calls_avoided ')
+    ));
+    const constrainedAt = POSTGRES_COGSEC_BLIND_REVIEW_MIGRATIONS.findIndex(statement => (
+      statement.includes('ADD CONSTRAINT cogsec_blind_review_state_model_calls_avoided_check')
+    ));
+    expect(createdAt).toBeGreaterThanOrEqual(0);
+    expect(alteredAt).toBeGreaterThan(createdAt);
+    expect(constrainedAt).toBeGreaterThan(alteredAt);
+
+    // The counter is columnar and cumulative, so nothing may backfill it: an
+    // existing deployment upgrades in place with the zero default.
+    expect(sql).not.toContain('UPDATE cogsec_blind_review_state');
   });
 
   it('retains social-desire settlement identities across desire deletion and recreation', () => {

@@ -52,7 +52,12 @@ const TURN_RECORD_TOMBSTONE_OVERSCAN_FACTOR = 4;
 /** Hard bound preventing a post-turn effect from turning one session into an unbounded lock set. */
 const MAX_TURN_RECORD_ELIGIBILITY_SNAPSHOT_FENCES = 512;
 
-const RECOVERY_AUTHORITY_LIMITS = Object.freeze({
+/**
+ * Shared L0 authority scan budget: the recovery path and the off-primary
+ * startup priming in startup-tombstone-authority.ts run the same forked worker
+ * over the same journals, so they share one bound rather than drifting.
+ */
+export const RECOVERY_AUTHORITY_LIMITS = Object.freeze({
   cacheOwners: 8,
   maxActionBytes: 256 * 1024,
   maxActions: 4_096,

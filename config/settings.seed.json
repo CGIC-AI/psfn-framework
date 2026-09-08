@@ -545,6 +545,7 @@
   "ledgerReadChunkBytes": 65536,
   "ledgerReadMaxRowBytes": 4194304,
   "ledgerReadYieldRows": 512,
+  "sessionTombstoneAuthorityOwners": 64,
   "imageFalTimeoutMs": 300000,
   "imageFalPollIntervalMs": 1500,
   "imageComfyTimeoutMs": 180000,

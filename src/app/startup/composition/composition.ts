@@ -145,6 +145,10 @@ import { createProjectionDriftIncidentObserver } from '../../../core/cogsec/proj
 import { createPostgresShardSchemaLifecycle } from '../../../persistence/postgres/shard-schema-lifecycle.js';
 import { FatigueLedger } from '../../../shared/telemetry/fatigue-ledger.js';
 import { createSafeguardAuditTrail } from '../../../system/capabilities/safeguards.js';
+import { createComponentLogger } from '../../../shared/logger.js';
+import { toErrorMessage } from '../../../shared/utils/errors.js';
+
+const log = createComponentLogger('StartupComposition');
 
 export interface SessionComposition {
   sessionStore: SessionStore;
@@ -307,7 +311,30 @@ function createSessionComposition(
       }
       : {}),
     automataRetentionWriteBarrier: exactSessionWriteBarrier,
+    ...(options.config.sessionTombstoneAuthorityOwners !== undefined
+      ? { turnTombstoneAuthorityOwners: options.config.sessionTombstoneAuthorityOwners }
+      : {}),
   });
+  // psfn-framework-5jx2v: canonical L0 turn-tombstone verification no longer
+  // runs inside the constructor. Warm it through the forked authority worker so
+  // startup timers and admin work keep advancing; owners this pass does not
+  // reach stay fail-closed and are rebuilt from the journal on first demand.
+  void sessionStore.primeTurnTombstoneAuthority()
+    .then((report) => {
+      log.debug('Primed L0 turn-tombstone authority off the primary event loop', {
+        considered: report.considered,
+        primed: report.primed,
+        alreadyCurrent: report.alreadyCurrent,
+        deferred: report.deferred.length,
+        bytesReadOffPrimary: report.bytesReadOffPrimary,
+      });
+    })
+    .catch((error: unknown) => {
+      log.warn('Deferred L0 turn-tombstone authority priming failed; '
+        + 'authority will be rebuilt fail-closed on demand', {
+        error: toErrorMessage(error),
+      });
+    });
   const sessionManager = new SessionManager(
     sessionStore,
     options.config,

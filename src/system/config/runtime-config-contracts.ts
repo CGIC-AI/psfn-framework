@@ -443,6 +443,7 @@ export interface SubstrateConfig {
   ledgerReadChunkBytes?: number;
   ledgerReadMaxRowBytes?: number;
   ledgerReadYieldRows?: number;
+  sessionTombstoneAuthorityOwners?: number;
   /** Overall wait cap (ms) for FAL image queue results (zet.7). */
   imageFalTimeoutMs?: number;
   /** Poll cadence (ms) for FAL image queue status (zet.7). */

@@ -355,6 +355,7 @@ const SETTINGS_INTEGER_FIELDS = new Set<string>([
   'ledgerReadChunkBytes',
   'ledgerReadMaxRowBytes',
   'ledgerReadYieldRows',
+  'sessionTombstoneAuthorityOwners',
   'imageFalTimeoutMs',
   'imageFalPollIntervalMs',
   'imageComfyTimeoutMs',

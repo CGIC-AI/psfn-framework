@@ -110,6 +110,13 @@ export interface SleeptimeWikiPassConfig {
   maxSourceEpisodes: number;
   /** Cap on durable memories fed into the proposal prompt. */
   maxSourceMemories: number;
+  /**
+   * Title-overlap ratio (0..1) at or above which a proposed entry is treated as
+   * a revision of an existing one rather than a new document
+   * (psfn-framework-lpxg3.3). Raising it creates more separate entries;
+   * lowering it folds more proposals into existing ones.
+   */
+  nearDuplicateTitleSimilarity: number;
 }
 
 export const DEFAULT_SLEEPTIME_WIKI_PASS: SleeptimeWikiPassConfig = {
@@ -120,6 +127,7 @@ export const DEFAULT_SLEEPTIME_WIKI_PASS: SleeptimeWikiPassConfig = {
   maxEntriesPerRun: 3,
   maxSourceEpisodes: 12,
   maxSourceMemories: 30,
+  nearDuplicateTitleSimilarity: 0.6,
 };
 
 /**
@@ -251,6 +259,10 @@ export function validateSleeptimeWikiPassConfig(
       raw.maxSourceMemories ?? DEFAULT_SLEEPTIME_WIKI_PASS.maxSourceMemories,
       'wikiPass.maxSourceMemories',
       1,
+    ),
+    nearDuplicateTitleSimilarity: toUnitInterval(
+      raw.nearDuplicateTitleSimilarity ?? DEFAULT_SLEEPTIME_WIKI_PASS.nearDuplicateTitleSimilarity,
+      'wikiPass.nearDuplicateTitleSimilarity',
     ),
   };
 }

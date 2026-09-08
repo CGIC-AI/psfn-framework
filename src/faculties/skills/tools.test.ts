@@ -694,3 +694,107 @@ describe('skill write governance (charter 9.5 category-2)', () => {
     }
   });
 });
+
+// psfn-framework-lpxg3.3: a revision binds to the version its author read, and
+// a byte-identical rewrite reuses the admitted version instead of burning one.
+describe('skill revision binding and no-op reuse', () => {
+  it('refuses a revision based on a stale version and names the current one', async () => {
+    const { root, runtime } = setupSkillRuntime('skills-base-version-');
+    try {
+      const tool = createSkillTool(runtime, undefined, AUTONOMOUS_GOVERNANCE);
+      await tool.execute('call-1', {
+        action: 'create',
+        name: 'concurrent-skill',
+        category: 'ops',
+        description: 'Concurrency test skill.',
+        content: '# Concurrent\n\n- Step one',
+      });
+      // Someone else revises it while this author is still holding v1.
+      await tool.execute('call-2', {
+        action: 'update',
+        name: 'concurrent-skill',
+        content: '# Concurrent\n\n- Step one\n- Step two from another writer',
+      });
+
+      const stale = await tool.execute('call-3', {
+        action: 'update',
+        name: 'concurrent-skill',
+        base_version: 1,
+        content: '# Concurrent\n\n- Step one\n- Step two from this writer',
+      });
+      expect(readText(stale)).toMatch(/changed since you read it/i);
+      expect(readText(stale)).toContain('v2');
+      // The other writer's revision survives.
+      expect(runtime.getStore().getByName('concurrent-skill')?.content)
+        .toContain('another writer');
+
+      const fresh = await tool.execute('call-4', {
+        action: 'update',
+        name: 'concurrent-skill',
+        base_version: 2,
+        content: '# Concurrent\n\n- Step one\n- Step two from another writer\n- Step three',
+      });
+      expect(JSON.parse(readText(fresh))).toMatchObject({ action: 'updated', version: 3 });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects a malformed base_version instead of ignoring it', async () => {
+    const { root, runtime } = setupSkillRuntime('skills-base-version-invalid-');
+    try {
+      const tool = createSkillTool(runtime, undefined, AUTONOMOUS_GOVERNANCE);
+      await tool.execute('call-1', {
+        action: 'create',
+        name: 'guarded-skill',
+        category: 'ops',
+        description: 'Guarded test skill.',
+        content: '# Guarded\n\n- Step one',
+      });
+      const result = await tool.execute('call-2', {
+        action: 'update',
+        name: 'guarded-skill',
+        base_version: 0,
+        content: '# Guarded\n\n- Step two',
+      });
+      expect(readText(result)).toMatch(/base_version must be a positive integer/i);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('reports a byte-identical rewrite as unchanged without burning a version', async () => {
+    const { root, runtime } = setupSkillRuntime('skills-noop-update-');
+    try {
+      const tool = createSkillTool(runtime, undefined, AUTONOMOUS_GOVERNANCE);
+      const content = '# Stable\n\n- Step one\n- Step two';
+      await tool.execute('call-1', {
+        action: 'create',
+        name: 'stable-skill',
+        category: 'ops',
+        description: 'Stable test skill.',
+        content,
+      });
+      const repeat = await tool.execute('call-2', {
+        action: 'update',
+        name: 'stable-skill',
+        content,
+      });
+      expect(JSON.parse(readText(repeat))).toMatchObject({
+        action: 'unchanged',
+        name: 'stable-skill',
+        version: 1,
+      });
+
+      const history = await tool.execute('call-3', {
+        action: 'history',
+        name: 'stable-skill',
+      });
+      const payload = JSON.parse(readText(history)) as { entries: unknown[] };
+      expect(payload.entries).toHaveLength(1);
+      expect(runtime.getStore().getByName('stable-skill')?.version).toBe(1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});

@@ -11,6 +11,7 @@ import {
   resolveTurnEvidenceDependency,
   SubstrateAgent as RuntimeSubstrateAgent,
 } from './substrate-agent.js';
+import { DEFAULT_SKILL_REUSE_CONFIG } from '../../system/config/skills-config.js';
 import { EventBus } from '../../shared/event-bus.js';
 import type { ContextCoherenceEvent } from '../../shared/contracts/context-coherence.js';
 import type { SessionManager } from '../session/manager.js';
@@ -4786,6 +4787,10 @@ describe('SubstrateAgent.handleMessage', () => {
     agent.skillsRuntime = fromAny({
       getPromptXml: vi.fn().mockResolvedValue('<skills_index><skill name=\"conversation\" /></skills_index>'),
       getCachedPromptXml: vi.fn().mockReturnValue('<skills_index><skill name=\"conversation\" /></skills_index>'),
+      // lpxg3.3: the quiet reuse loop reads the admitted cache and its
+      // owner-file bounds synchronously off the same runtime.
+      getCachedAdmittedSkills: vi.fn().mockReturnValue([]),
+      getCachedReuseConfig: vi.fn().mockReturnValue({ ...DEFAULT_SKILL_REUSE_CONFIG }),
     });
 
     await agent.handleMessage(makeMessage());

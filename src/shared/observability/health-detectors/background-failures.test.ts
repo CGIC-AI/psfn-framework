@@ -69,19 +69,25 @@ function harness(source: HealthEventSource = SOURCE): {
   };
 }
 
-function failure(overrides: Partial<HealthEventInput> = {}): HealthEvent {
+function failure(
+  overrides: Partial<HealthEventInput> & {
+    component?: HealthEventInput['provenance']['component'];
+    subjectHash?: string;
+  } = {},
+): HealthEvent {
+  const { component, subjectHash, ...rest } = overrides;
   return createHealthEvent({
     owner: { kind: 'system' },
     severity: 'degraded',
     code: 'background_work_job_failed',
     provenance: {
       process: 'agent',
-      component: 'background_work',
+      component: component ?? 'background_work',
       observerId: processObserverId(),
-      subjectHash: hashHealthEventSubject('memory_extraction'),
+      subjectHash: subjectHash ?? hashHealthEventSubject('memory_extraction'),
     },
     observedAtMs: NOW_MS,
-    ...overrides,
+    ...rest,
   });
 }
 
@@ -112,6 +118,29 @@ describe('repeated background-work failure detector', () => {
     // The incident spans the first failure in the window, not the cycle time.
     expect(opened[0]!.firstObservedAtMs).toBe(NOW_MS);
     expect(opened[0]!.causationId).toBeDefined();
+  });
+
+  it('turns repeated lost custody snapshots into one incident', async () => {
+    const detector = harness();
+    // A custody store that is down loses one snapshot per turn. Each loss is
+    // grouped by the failure MODE, so the episode is one incident about the
+    // store rather than one incident per turn.
+    for (let index = 0; index < 3; index += 1) {
+      detector.record(failure({
+        code: 'custody_snapshot_write_failed',
+        component: 'persistence',
+        subjectHash: hashHealthEventSubject('custody_snapshot:write_failed'),
+        observedAtMs: NOW_MS + index * MINUTE_MS,
+      }));
+    }
+    await detector.runAt(NOW_MS + 4 * MINUTE_MS);
+
+    const opened = detector.events.filter(e => e.code === 'background_work_failures_opened');
+    expect(opened).toHaveLength(1);
+    expect(opened[0]!.provenance.component).toBe('persistence');
+    expect(opened[0]!.provenance.subjectHash)
+      .toBe(hashHealthEventSubject('custody_snapshot:write_failed'));
+    expect(opened[0]!.evidence.failureCount).toBe(3);
   });
 
   it('closes the episode once the lane stops failing for a full window', async () => {

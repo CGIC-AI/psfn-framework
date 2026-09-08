@@ -905,7 +905,7 @@ function createRuntime(params: {
     recordToolObservations: vi.fn(() => []),
     recordTurnCustodySnapshot: vi.fn(async (
       input: Parameters<TurnExecutionRuntime['recordTurnCustodySnapshot']>[0],
-    ) => `turn:${input.turnId}`),
+    ) => ({ ref: `turn:${input.turnId}` })),
     recordAssistantMessage: params.recordAssistantMessage,
     buildTurnToolSummary: vi.fn(() => ({ toolCalls: [] })),
     inferPostTurnActions: vi.fn(async () => []),
@@ -1076,6 +1076,36 @@ describe('handleMessageForTurn MCP disclosure context', () => {
     // The written ref reaches the TurnRecord, so the chain resolves later.
     const recordInput = vi.mocked(runtime.buildTurnRecord).mock.calls.at(-1)?.[0];
     expect(recordInput?.custodySnapshotRef).toBe(`turn:${custodyInput?.turnId}`);
+  });
+
+  it('stamps a named custody absence on the turn record when the write is lost', async () => {
+    const eventBus = new EventBus();
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'System prompt',
+      messages: [],
+      manifest: makeContextManifestFixture(),
+    }));
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {} as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage: vi.fn(() => 2),
+    });
+    runtime.recordTurnCustodySnapshot = vi.fn(async () => ({
+      absenceReason: 'write_failed' as const,
+    }));
+
+    // The turn still completes — a custody-store outage may not silence the
+    // companion — but the record says WHY it carries no proof instead of
+    // leaving a bare undefined a later reader would have to guess about.
+    await handleMessageForTurn(runtime, createMessage('msg-custody-absent'));
+
+    const recordInput = vi.mocked(runtime.buildTurnRecord).mock.calls.at(-1)?.[0];
+    expect(recordInput?.custodySnapshotRef).toBeUndefined();
+    expect(recordInput?.custodySnapshotAbsence).toBe('write_failed');
   });
 
   it('feeds one tool-result custody edge to both the snapshot and the turn record', async () => {

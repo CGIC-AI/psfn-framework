@@ -2,11 +2,13 @@
 //
 // The runtime already reports single failures: `BackgroundWorkSupervisor`
 // emits `background_work_job_failed` for a job that reached its terminal failed
-// state, and the refresh emitter beside this module projects a failed
-// memory/wiki context refresh into `memory_refresh_failed`. Both are grouped by
-// `provenance.subjectHash` — a digest of the JOB KIND and of the REFRESH LANE
-// respectively, never of an individual job or channel — precisely so that
-// repeats of the same thing land in the same group.
+// state, the refresh emitter beside this module projects a failed memory/wiki
+// context refresh into `memory_refresh_failed`, and the turn support runtime
+// projects a lost custody snapshot into `custody_snapshot_write_failed`. All
+// three are grouped by `provenance.subjectHash` — a digest of the JOB KIND, of
+// the REFRESH LANE, and of the custody FAILURE MODE respectively, never of an
+// individual job, channel, or turn — precisely so that repeats of the same
+// thing land in the same group.
 //
 // What was missing is the judgment: a lane failing once is noise, and a lane
 // failing over and over is an incident. This detector is that judgment and
@@ -39,6 +41,7 @@ import { sameHealthEventOwner } from './owner.js';
 const COUNTED_FAILURE_CODES: readonly HealthEventCode[] = [
   'background_work_job_failed',
   'memory_refresh_failed',
+  'custody_snapshot_write_failed',
 ];
 
 interface FailureGroup {

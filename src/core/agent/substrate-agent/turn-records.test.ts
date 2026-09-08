@@ -2074,19 +2074,16 @@ describe('tool-call custody edge', () => {
     const custodyByRef = new Map(records.map(record => [record.ref, record]));
     const turnRecord = buildCustodyTurnRecord([firstAttempt, retry], custodyByRef);
 
-    // One tool call id carries exactly one custody edge — the last observed
-    // attempt — and every record for that id resolves to that same edge. A
-    // retry can therefore never leave two competing admission identities, and
-    // it can never pick up the envelope of a different call.
+    // One tool call id, one record, one custody edge — the last observed
+    // attempt. A retry never leaves two entries competing over one admission
+    // identity, and never picks up the envelope of a different call.
     expect(custodyByRef.size).toBe(1);
-    const retryEdge = {
+    expect(turnRecord.toolCalls).toHaveLength(1);
+    expect(turnRecord.toolCalls[0]?.toolCallId).toBe('call-retry');
+    expect(turnRecord.toolCalls[0]?.resultText).toBe('final result');
+    expect(turnRecord.toolCalls[0]?.resultCustody).toEqual({
       envelopeId: 'env-retry-2',
       contentSha256: createHash('sha256').update('final result', 'utf8').digest('hex'),
-    };
-    expect(custodyByRef.get('tool:wiki_read:call-retry')?.custody).toEqual(retryEdge);
-    for (const call of turnRecord.toolCalls) {
-      expect(call.toolCallId).toBe('call-retry');
-      expect(call.resultCustody).toEqual(retryEdge);
-    }
+    });
   });
 });

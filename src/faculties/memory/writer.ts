@@ -71,6 +71,7 @@ import {
   consentFlagsEqual,
   computeNoveltyFromSimilarities,
   evaluateSensitivityWritePolicy,
+  mergeAdmissionProvenance,
   mergeConsentFlags,
   mergeProvenanceRefs,
   mergeScopeTags,
@@ -599,6 +600,7 @@ export class MemoryWriter {
         salience: number;
         tags?: string[];
         provenanceRefs?: string[];
+        provenance?: MemoryProvenance;
         consentFlags?: ConsentFlags;
         scopeRef?: MemoryScopeRef;
         scopeTags?: string[];
@@ -631,6 +633,20 @@ export class MemoryWriter {
         || mergedProvenanceRefs.some((ref, idx) => ref !== existingProvenanceRefs[idx])
       ) {
         updates.provenanceRefs = mergedProvenanceRefs;
+      }
+
+      // ccgdz.3: a deduplicated write means this memory now ALSO derives from the
+      // incoming source. Merging that source's admission identity onto the
+      // surviving row is what keeps the custody chain complete — without it a
+      // memory absorbed from a poisoned envelope would carry only the identity of
+      // the first, clean source that happened to phrase the fact the same way.
+      // Additive only: an existing admission is never dropped or overwritten.
+      const mergedAdmissions = mergeAdmissionProvenance(
+        existing.provenance,
+        normalizedSource.provenance,
+      );
+      if (mergedAdmissions) {
+        updates.provenance = mergedAdmissions;
       }
 
       const mergedConsentFlags = mergeConsentFlags(existing.consentFlags, consentFlags);
@@ -676,6 +692,7 @@ export class MemoryWriter {
           salience: updates.salience,
           tags: updates.tags ?? existing.tags,
           provenanceRefs: updates.provenanceRefs ?? existingProvenanceRefs,
+          ...(updates.provenance ? { provenance: updates.provenance } : {}),
           consentFlags: updates.consentFlags ?? existing.consentFlags,
           retentionClass: updates.retentionClass ?? retention.retentionClass ?? existing.retentionClass,
           scopeRef: updates.scopeRef ?? existing.scopeRef,

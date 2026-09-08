@@ -1,4 +1,5 @@
 import { clampUnit } from '../../../shared/utils/numeric.js';
+import type { CogSecStructuredProvenanceRef } from '../../../shared/contracts/provenance-ref.js';
 import {
   DURABLE_PREFERENCE_MEMORY_TAG,
   DURABLE_RETENTION_TAG,
@@ -96,6 +97,38 @@ export function normalizeSourceContext(input: {
     ),
     provenance: normalizeMemoryProvenance(input.provenance),
   };
+}
+
+/**
+ * Merge the incoming write's admission identity onto an existing memory's
+ * provenance (psfn-framework-ccgdz.3).
+ *
+ * Additive by construction: it appends admission refs the row does not already
+ * carry and never removes, replaces, or reorders what is there. Returns
+ * `undefined` when nothing new arrived, so an unchanged row is not rewritten.
+ *
+ * `derivationRunId` is deliberately NOT merged: it names the run that CREATED
+ * the memory, and a later deduplicated write is a different run touching the
+ * same row, not a second author of it.
+ */
+export function mergeAdmissionProvenance(
+  existing: MemoryProvenance | undefined,
+  incoming: MemoryProvenance | undefined,
+): MemoryProvenance | undefined {
+  const incomingAdmissions = incoming?.sourceAdmissions ?? [];
+  if (incomingAdmissions.length === 0) return undefined;
+  const existingAdmissions = existing?.sourceAdmissions ?? [];
+  const seen = new Set(existingAdmissions.map(admissionKey));
+  const added = incomingAdmissions.filter(ref => !seen.has(admissionKey(ref)));
+  if (added.length === 0) return undefined;
+  return {
+    ...(existing ?? {}),
+    sourceAdmissions: [...existingAdmissions, ...added],
+  };
+}
+
+function admissionKey(ref: CogSecStructuredProvenanceRef): string {
+  return [ref.kind, ref.refId, ref.receiptId ?? '', ref.contentSha256 ?? '', ref.envelopeId ?? ''].join(' ');
 }
 
 export function normalizeProvenanceRefs(

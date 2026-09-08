@@ -378,3 +378,56 @@ describe('PostgresEpisodicStore thread repoint integration', () => {
     });
   });
 });
+
+// ── Admission identity round trip (psfn-framework-ccgdz.3) ──
+
+describe('PostgresEpisodicStore admission identity integration', () => {
+  it('round-trips every admission identity field on an episode provenance ref', async () => {
+    await withEpisodicDatabase(async (pool, store) => {
+      const provenanceRefs = [
+        { kind: 'l0_span' as const, refId: 'span-admission' },
+        {
+          kind: 'turn' as const,
+          refId: 'turn-admission',
+          envelopeId: 'env_01JZ00000000000000000000AA',
+          receiptId: 'rcpt_01JZ00000000000000000000AA',
+          contentSha256: 'b'.repeat(64),
+        },
+      ];
+      await store.createEpisode({
+        ...episodeInput('episode-admission', 'thread-old'),
+        provenanceRefs,
+      });
+      const stored = await store.getEpisode('episode-admission');
+      expect(stored?.provenanceRefs).toEqual(provenanceRefs);
+
+      // Proven through the real column, not just the store's own cache.
+      const row = (await pool.query<{ episode_json: { provenanceRefs: unknown } }>(`
+        SELECT episode_json FROM l01_episodes WHERE id = 'episode-admission'
+      `)).rows[0];
+      expect(row?.episode_json.provenanceRefs).toEqual(provenanceRefs);
+    });
+  });
+
+  it('drops a malformed identity field on read instead of failing the episode', async () => {
+    await withEpisodicDatabase(async (pool, store) => {
+      await store.createEpisode({
+        ...episodeInput('episode-malformed-identity', 'thread-old'),
+        provenanceRefs: [{ kind: 'turn', refId: 'turn-malformed' }],
+      });
+      await pool.query(`
+        UPDATE l01_episodes
+        SET episode_json = jsonb_set(
+          episode_json::jsonb,
+          '{provenanceRefs}',
+          '[{"kind":"turn","refId":"turn-malformed","contentSha256":"NOT-A-HASH"}]'::jsonb
+        )::json
+        WHERE id = 'episode-malformed-identity'
+      `);
+      const stored = await store.getEpisode('episode-malformed-identity');
+      // Verification is lost (the descendant degrades to `uncertain`); the ref
+      // itself survives so the derivation edge is never silently erased.
+      expect(stored?.provenanceRefs).toEqual([{ kind: 'turn', refId: 'turn-malformed' }]);
+    });
+  });
+});

@@ -1,11 +1,10 @@
 import { createComponentLogger } from '../../../shared/logger.js';
 import type { SessionEntry } from '../../../core/session/types.js';
 import type { IntakeSinkGate } from '../../../core/cogsec/intake/sink-gates.js';
-import type { IntakeEnvelopeSnapshot } from '../../../shared/contracts/intake-envelope.js';
 import {
-  INTAKE_SCREENING_METADATA_KEY,
-  parseIntakeScreeningMetadata,
-} from '../../../core/session/intake-screening-metadata.js';
+  buildExtractionAdmissionIndex,
+  resolveAdmissionEnvelopesForSource,
+} from './admission-identity.js';
 import { evaluateCogSecMemoryCandidacy } from '../../../core/cogsec/memory-candidacy.js';
 import type { ExtractedFact } from '../types.js';
 import {
@@ -31,73 +30,6 @@ const log = createComponentLogger('Extraction');
 export type RoutedAcceptedFactCandidate = AcceptedFactCandidate & {
   routing: Extract<FactRoutingDecision, { status: 'route' }>;
 };
-
-// ── Intake sink-gate index (htm9.3) ──
-//
-// Maps session-entry ids to the intake-envelope snapshots persisted on their
-// `intakeScreening` metadata, so each extracted fact can be gated at the
-// memory_write sink against the envelopes covering its SOURCE entries
-// (fact.attribution.sourceMessageIds) instead of re-deriving risk. Malformed
-// metadata is unknowable screening state: it is tracked and fails closed in
-// enforce mode.
-
-interface ExtractionIntakeGateIndex {
-  envelopesByEntryId: Map<number, readonly IntakeEnvelopeSnapshot[]>;
-  malformedEntryIds: Set<number>;
-  allEnvelopes: IntakeEnvelopeSnapshot[];
-}
-
-function buildExtractionIntakeGateIndex(
-  entries: readonly SessionEntry[],
-  channelId: string,
-): ExtractionIntakeGateIndex {
-  const index: ExtractionIntakeGateIndex = {
-    envelopesByEntryId: new Map(),
-    malformedEntryIds: new Set(),
-    allEnvelopes: [],
-  };
-  const marker = `"${INTAKE_SCREENING_METADATA_KEY}"`;
-  for (const entry of entries) {
-    if (!entry.metadata || !entry.metadata.includes(marker)) continue;
-    try {
-      const screening = parseIntakeScreeningMetadata(entry.metadata);
-      if (!screening) continue;
-      index.envelopesByEntryId.set(entry.id, screening.envelopes);
-      index.allEnvelopes.push(...screening.envelopes);
-    } catch (error) {
-      log.error('Malformed intake screening metadata on extraction source entry; treated as gate-denied in enforce mode', {
-        channelId,
-        entryId: entry.id,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      index.malformedEntryIds.add(entry.id);
-    }
-  }
-  return index;
-}
-
-function resolveFactIntakeEnvelopes(
-  index: ExtractionIntakeGateIndex,
-  fact: ExtractedFact,
-): { envelopes: readonly IntakeEnvelopeSnapshot[]; coversMalformedEntry: boolean } {
-  const sourceIds = fact.attribution?.sourceMessageIds;
-  if (sourceIds && sourceIds.length > 0) {
-    const envelopes: IntakeEnvelopeSnapshot[] = [];
-    let coversMalformedEntry = false;
-    for (const id of sourceIds) {
-      envelopes.push(...(index.envelopesByEntryId.get(id) ?? []));
-      if (index.malformedEntryIds.has(id)) coversMalformedEntry = true;
-    }
-    return { envelopes, coversMalformedEntry };
-  }
-  // An unattributed fact may derive from any entry in the window: it inherits
-  // every envelope in the window (fail closed — derivation never launders
-  // provenance away).
-  return {
-    envelopes: index.allEnvelopes,
-    coversMalformedEntry: index.malformedEntryIds.size > 0,
-  };
-}
 
 export interface FactAcceptanceStageInput {
   facts: ExtractedFact[];
@@ -138,7 +70,7 @@ export function buildAcceptedFactCandidates(
   const ambiguousSpeakerSkipReasons: Record<string, number> = {};
   const acceptedCandidates: RoutedAcceptedFactCandidate[] = [];
   const intakeGateIndex = input.intakeSinkGate
-    ? buildExtractionIntakeGateIndex(input.recentEntries, input.channelId)
+    ? buildExtractionAdmissionIndex(input.recentEntries, input.channelId)
     : null;
   for (const [index, fact] of input.facts.entries()) {
     const decision = evaluateFactAcceptance(fact, noveltyCorpus, input.gateConfig);
@@ -161,7 +93,10 @@ export function buildAcceptedFactCandidates(
 
     let intakeGateDecision;
     if (input.intakeSinkGate && intakeGateIndex) {
-      const factIntake = resolveFactIntakeEnvelopes(intakeGateIndex, fact);
+      const factIntake = resolveAdmissionEnvelopesForSource(
+        intakeGateIndex,
+        fact.attribution?.sourceMessageIds,
+      );
       if (factIntake.coversMalformedEntry && input.intakeSinkGate.mode === 'enforce') {
         // Unknowable screening state on a source entry fails closed.
         rejectionBreakdown.cogsec_risk++;

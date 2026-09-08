@@ -7,6 +7,12 @@ import type { MemoryProvenance, PurrMemory } from '../../faculties/memory/types.
 import type { MemoryStorePort } from '../../faculties/memory/memory-store-port.js';
 import { uniqueStrings } from '../../shared/utils/strings.js';
 import { toPositiveInteger } from '../../shared/utils/numeric.js';
+import {
+  hasVerifiedAdmissionIdentity,
+  type CogSecStructuredProvenanceRef,
+} from '../../shared/contracts/provenance-ref.js';
+import { parseIntakeEnvelopeIdFromProvenanceRef } from '../../shared/contracts/intake-envelope.js';
+import { parseIntakeScreeningMetadata } from '../session/intake-screening-metadata.js';
 
 export type CogSecLineageAction =
   | 'seal'
@@ -46,9 +52,17 @@ export interface CogSecExternalLineageArtifact {
   provenance?: MemoryProvenance;
 }
 
-export interface CogSecStructuredProvenanceRef {
-  kind: string;
-  refId: string;
+/**
+ * The admission identity a case's affected L0 messages were admitted under
+ * (ccgdz.3). Derived from the intake-screening metadata persisted on those
+ * exact entries, so the case never has to mint or carry a new identifier: a
+ * descendant that records the SAME receipt/envelope/content hash is provably
+ * derived from poisoned bytes rather than merely co-located in the session.
+ */
+export interface CogSecAffectedAdmissionIdentity {
+  envelopeIds: ReadonlySet<string>;
+  receiptIds: ReadonlySet<string>;
+  contentHashes: ReadonlySet<string>;
 }
 
 export interface CogSecLineageL0Ref {
@@ -104,7 +118,9 @@ export interface CogSecLineageGap {
     | 'episodic_landmarks'
     | 'profile_artifacts'
     | 'recent_contact_shapes'
-    | 'persona_artifacts';
+    | 'persona_artifacts'
+    /** Admission identity for the case's own affected L0 entries (ccgdz.3). */
+    | 'admission_identity';
   reason: string;
 }
 
@@ -126,6 +142,17 @@ export interface BuildCogSecLineagePreviewInput {
   sessionReader?: CogSecLineageSessionReader;
   memoryStore?: Pick<MemoryStorePort, 'listMemories'>;
   externalArtifacts?: readonly CogSecExternalLineageArtifact[];
+  /**
+   * Admission identity of the affected bytes. Normally derived from the
+   * affected L0 entries' own intake-screening metadata; supplied explicitly
+   * only when the caller already holds it (a case opened directly on a
+   * poisoned envelope, no session reader in hand).
+   */
+  affectedAdmissionIdentity?: {
+    envelopeIds?: readonly string[];
+    receiptIds?: readonly string[];
+    contentHashes?: readonly string[];
+  };
 }
 
 interface AffectedSpan {
@@ -359,7 +386,180 @@ function provenanceMatchesSpans(
   return sessionMatchWithoutGranularity;
 }
 
-function memoryMatchesSpans(memory: PurrMemory, spans: readonly AffectedSpan[]): MatchResult | null {
+// ── Verified admission identity (ccgdz.3) ──
+//
+// Before this, every descendant edge was a STRING match: a memory landed in a
+// case because its refs mentioned the affected session or message ids. That
+// answers "was this derived in the same conversation?", not "was this derived
+// from the poisoned bytes?". A derived artifact that records the receipt,
+// envelope, or content hash its source was admitted under can now be matched on
+// that identity directly.
+//
+// The verified check runs FIRST and only ever UPGRADES: a miss falls through to
+// the unchanged span/string logic, so a legacy row without identity classifies
+// exactly as it did before and is never silently cleared.
+
+const EMPTY_ADMISSION_IDENTITY: CogSecAffectedAdmissionIdentity = {
+  envelopeIds: new Set<string>(),
+  receiptIds: new Set<string>(),
+  contentHashes: new Set<string>(),
+};
+
+function admissionIdentityIsEmpty(identity: CogSecAffectedAdmissionIdentity): boolean {
+  return identity.envelopeIds.size === 0
+    && identity.receiptIds.size === 0
+    && identity.contentHashes.size === 0;
+}
+
+/**
+ * Collect the affected entries' own admission identity from the intake
+ * screening metadata persisted on them.
+ *
+ * Session-wide spans are deliberately NOT enumerated: there is no bounded entry
+ * set to read, so those cases keep the existing session-granularity matching.
+ * Malformed screening metadata on an affected entry is unknowable admission
+ * state; it is reported as an explicit gap rather than skipped quietly.
+ */
+function collectAffectedAdmissionIdentity(
+  spans: readonly AffectedSpan[],
+  sessionReader: CogSecLineageSessionReader | undefined,
+  gaps: CogSecLineageGap[],
+): CogSecAffectedAdmissionIdentity {
+  if (!sessionReader) return EMPTY_ADMISSION_IDENTITY;
+  const envelopeIds = new Set<string>();
+  const receiptIds = new Set<string>();
+  let malformedEntryCount = 0;
+  for (const span of spans) {
+    if (span.sessionWide) continue;
+    const bounds = admissionScanBounds(span);
+    if (!bounds) continue;
+    for (const entry of sessionReader.getEntriesInRange(
+      span.logicalSessionId,
+      bounds.start,
+      bounds.end,
+    )) {
+      if (!messageIdInSpan(entry.id, span)) continue;
+      let screening;
+      try {
+        screening = parseIntakeScreeningMetadata(entry.metadata);
+      } catch {
+        // The entry IS affected and its admission state is unreadable. Failing
+        // the whole preview would block remediation of a real incident, so the
+        // gap is recorded and the entry keeps string/span matching only.
+        malformedEntryCount += 1;
+        continue;
+      }
+      if (!screening) continue;
+      for (const snapshot of screening.envelopes) {
+        envelopeIds.add(snapshot.envelopeId);
+        if (snapshot.receiptId) receiptIds.add(snapshot.receiptId);
+      }
+    }
+  }
+  if (malformedEntryCount > 0) {
+    gaps.push(gap(
+      'admission_identity',
+      `affected_entry_intake_screening_metadata_malformed:${String(malformedEntryCount)}`,
+    ));
+  }
+  return { envelopeIds, receiptIds, contentHashes: new Set<string>() };
+}
+
+/** The bounded entry range an affected span can be scanned over, if any. */
+function admissionScanBounds(span: AffectedSpan): { start: number; end: number } | null {
+  const candidates = [
+    ...span.messageIds,
+    ...(span.startEntryId !== undefined ? [span.startEntryId] : []),
+    ...(span.endEntryId !== undefined ? [span.endEntryId] : []),
+  ];
+  if (candidates.length === 0) return null;
+  return { start: Math.min(...candidates), end: Math.max(...candidates) };
+}
+
+function mergeSuppliedAdmissionIdentity(
+  derived: CogSecAffectedAdmissionIdentity,
+  supplied: BuildCogSecLineagePreviewInput['affectedAdmissionIdentity'],
+): CogSecAffectedAdmissionIdentity {
+  if (!supplied) return derived;
+  const normalize = (
+    base: ReadonlySet<string>,
+    extra: readonly string[] | undefined,
+  ): Set<string> => {
+    const merged = new Set(base);
+    for (const value of extra ?? []) {
+      const trimmed = value.trim();
+      if (trimmed) merged.add(trimmed);
+    }
+    return merged;
+  };
+  return {
+    envelopeIds: normalize(derived.envelopeIds, supplied.envelopeIds),
+    receiptIds: normalize(derived.receiptIds, supplied.receiptIds),
+    contentHashes: normalize(derived.contentHashes, supplied.contentHashes),
+  };
+}
+
+function structuredRefMatchesAdmission(
+  refs: readonly CogSecStructuredProvenanceRef[] | undefined,
+  identity: CogSecAffectedAdmissionIdentity,
+): MatchResult | null {
+  if (!refs || refs.length === 0) return null;
+  for (const ref of refs) {
+    if (!hasVerifiedAdmissionIdentity(ref)) continue;
+    if (ref.receiptId !== undefined && identity.receiptIds.has(ref.receiptId)) {
+      return {
+        classification: 'tainted',
+        reason: 'admission_receipt_matches_affected_source',
+      };
+    }
+    if (ref.contentSha256 !== undefined && identity.contentHashes.has(ref.contentSha256)) {
+      return {
+        classification: 'tainted',
+        reason: 'admission_content_hash_matches_affected_source',
+      };
+    }
+    if (ref.envelopeId !== undefined && identity.envelopeIds.has(ref.envelopeId)) {
+      return {
+        classification: 'tainted',
+        reason: 'admission_envelope_matches_affected_source',
+      };
+    }
+  }
+  return null;
+}
+
+/**
+ * The unverified fallback. An `intake-envelope:<id>` provenance ref names the
+ * same envelope but proves nothing about WHICH bytes the artifact derived from,
+ * so a match here is explicitly `uncertain` and routes to manual review.
+ */
+function envelopeRefStringMatchesAdmission(
+  refs: readonly string[],
+  identity: CogSecAffectedAdmissionIdentity,
+): MatchResult | null {
+  if (identity.envelopeIds.size === 0) return null;
+  for (const ref of refs) {
+    const envelopeId = parseIntakeEnvelopeIdFromProvenanceRef(ref.trim());
+    if (envelopeId && identity.envelopeIds.has(envelopeId)) {
+      return {
+        classification: 'uncertain',
+        reason: 'intake_envelope_ref_string_match_without_verified_identity',
+      };
+    }
+  }
+  return null;
+}
+
+function memoryMatchesSpans(
+  memory: PurrMemory,
+  spans: readonly AffectedSpan[],
+  admissionIdentity: CogSecAffectedAdmissionIdentity,
+): MatchResult | null {
+  const admissionMatch = structuredRefMatchesAdmission(
+    memory.provenance?.sourceAdmissions,
+    admissionIdentity,
+  );
+  if (admissionMatch) return admissionMatch;
   const provenanceMatch = provenanceMatchesSpans(memory.provenance, spans);
   if (provenanceMatch) return provenanceMatch;
   const refs = [
@@ -370,7 +570,7 @@ function memoryMatchesSpans(memory: PurrMemory, spans: readonly AffectedSpan[]):
     const match = refMatchesSpans(ref, spans);
     if (match) return match;
   }
-  return null;
+  return envelopeRefStringMatchesAdmission(refs, admissionIdentity);
 }
 
 function normalizeProvenanceRef(ref: string | CogSecStructuredProvenanceRef): string | null {
@@ -390,7 +590,15 @@ function normalizeProvenanceRef(ref: string | CogSecStructuredProvenanceRef): st
 function artifactMatchesSpans(
   artifact: CogSecExternalLineageArtifact,
   spans: readonly AffectedSpan[],
+  admissionIdentity: CogSecAffectedAdmissionIdentity,
 ): MatchResult | null {
+  const structuredRefs = (artifact.provenanceRefs ?? [])
+    .filter((ref): ref is CogSecStructuredProvenanceRef => typeof ref !== 'string');
+  const admissionMatch = structuredRefMatchesAdmission(
+    [...structuredRefs, ...(artifact.provenance?.sourceAdmissions ?? [])],
+    admissionIdentity,
+  );
+  if (admissionMatch) return admissionMatch;
   const provenanceMatch = provenanceMatchesSpans(artifact.provenance, spans);
   if (provenanceMatch) return provenanceMatch;
   const refs = [
@@ -401,7 +609,7 @@ function artifactMatchesSpans(
     const match = refMatchesSpans(ref, spans);
     if (match) return match;
   }
-  return null;
+  return envelopeRefStringMatchesAdmission(refs, admissionIdentity);
 }
 
 function buildL0Refs(spans: readonly AffectedSpan[], sessionReader: CogSecLineageSessionReader | undefined): CogSecLineageL0Ref[] {
@@ -491,11 +699,21 @@ export async function buildCogSecLineagePreview(
   const l0Messages = buildL0Refs(spans, input.sessionReader);
   const transcriptProjectionRows = buildProjectionRefs(l0Messages);
   const gaps: CogSecLineageGap[] = [];
+  const admissionIdentity = mergeSuppliedAdmissionIdentity(
+    collectAffectedAdmissionIdentity(spans, input.sessionReader, gaps),
+    input.affectedAdmissionIdentity,
+  );
+  if (input.sessionReader && admissionIdentityIsEmpty(admissionIdentity)) {
+    // Without any admitted-source identity on the affected entries, every
+    // descendant edge below is a string/span match. Say so rather than let a
+    // silent `uncertain` read as a verified negative.
+    gaps.push(gap('admission_identity', 'affected_entries_carry_no_admission_identity'));
+  }
 
   const memories: CogSecLineageMemoryRef[] = [];
   if (input.memoryStore) {
     for (const memory of await input.memoryStore.listMemories()) {
-      const match = memoryMatchesSpans(memory, spans);
+      const match = memoryMatchesSpans(memory, spans, admissionIdentity);
       if (!match) continue;
       memories.push({
         id: memory.id,
@@ -522,7 +740,7 @@ export async function buildCogSecLineagePreview(
   const externalArtifacts: CogSecLineageExternalArtifactRef[] = [];
   if (input.externalArtifacts) {
     for (const artifact of input.externalArtifacts) {
-      const match = artifactMatchesSpans(artifact, spans);
+      const match = artifactMatchesSpans(artifact, spans, admissionIdentity);
       if (!match) continue;
       externalArtifacts.push({
         artifactClass: artifact.artifactClass,

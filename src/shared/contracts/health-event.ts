@@ -75,6 +75,7 @@ const HEALTH_EVENT_COMPONENTS = [
   'background_work',
   'scheduler',
   'persistence',
+  'memory',
 ] as const;
 
 export type HealthEventComponent = typeof HEALTH_EVENT_COMPONENTS[number];
@@ -107,6 +108,16 @@ const HEALTH_EVENT_CODES = [
   'postgres_pool_pressure_opened',
   /** That incident's pool authority returned to healthy samples. */
   'postgres_pool_pressure_closed',
+  /**
+   * One memory/wiki context-refresh lane failed a refresh. Grouped by a digest
+   * of the LANE, so repeated failures of the same lane accumulate into one
+   * episode rather than one incident per channel.
+   */
+  'memory_refresh_failed',
+  /** One lane failed repeatedly inside its owner-file window. */
+  'background_work_failures_opened',
+  /** That lane stopped failing for a full window. */
+  'background_work_failures_closed',
 ] as const;
 
 export type HealthEventCode = typeof HEALTH_EVENT_CODES[number];
@@ -136,6 +147,10 @@ const HEALTH_INCIDENT_FAMILY_CODES = {
   postgres_pool_pressure: {
     opened: 'postgres_pool_pressure_opened',
     closed: 'postgres_pool_pressure_closed',
+  },
+  background_work_failures: {
+    opened: 'background_work_failures_opened',
+    closed: 'background_work_failures_closed',
   },
 } as const satisfies Readonly<Record<string, { opened: HealthEventCode; closed: HealthEventCode }>>;
 
@@ -206,6 +221,7 @@ const HEALTH_EVENT_EVIDENCE_KEYS = [
   'attemptCount',
   'configuredSinkCount',
   'durationMs',
+  'failureCount',
   'jobAgeMs',
   'poolCapacity',
   'queueDepth',
@@ -213,6 +229,7 @@ const HEALTH_EVENT_EVIDENCE_KEYS = [
   'saturationPercent',
   'terminal',
   'waitingRequests',
+  'windowMs',
 ] as const;
 
 type HealthEventEvidenceKey = typeof HEALTH_EVENT_EVIDENCE_KEYS[number];

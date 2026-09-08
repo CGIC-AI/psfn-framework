@@ -28,6 +28,10 @@
       "minWaitingRequests": 1,
       "sustainedSamples": 3,
       "windowMs": 600000
+    },
+    "backgroundFailures": {
+      "failureThreshold": 3,
+      "windowMs": 3600000
     }
   },
   "backgroundWork": {

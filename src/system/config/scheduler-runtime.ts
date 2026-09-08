@@ -43,6 +43,7 @@ export function resolveRuntimeSchedulerConfig(
       cooldownMs: persisted.healthDetectors.cooldownMs,
       incidentScanLimit: persisted.healthDetectors.incidentScanLimit,
       postgresPressure: { ...persisted.healthDetectors.postgresPressure },
+      backgroundFailures: { ...persisted.healthDetectors.backgroundFailures },
     },
     artifactLifecycle: { ...persisted.artifactLifecycle },
     episodicProcessing: { ...persisted.episodicProcessing },

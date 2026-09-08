@@ -466,13 +466,19 @@ export class PostgresHumanEscalationStore implements HumanEscalationLedgerPort {
         WHERE state <> 'open' AND resolved_at_ms IS NOT NULL AND resolved_at_ms < $1
       `, [cutoffMs]);
     }
+    // Ranked by ANSWER time, not raise time. A long-open escalation raised
+    // before every row now in the ring is the OLDEST by raise time and the
+    // NEWEST by answer time; ranking it by raise time would evict it in the
+    // same statement that just recorded a human's decision about it. The
+    // column is non-null for every non-open row by CHECK constraint, so this
+    // ordering is total over exactly the rows this statement can see.
     await executeQuery(this.pool, `
       DELETE FROM human_escalations
       WHERE escalation_id IN (
         SELECT escalation_id
         FROM human_escalations
         WHERE kind = $1 AND state <> 'open'
-        ORDER BY last_raised_at_ms DESC, escalation_id DESC
+        ORDER BY resolved_at_ms DESC, escalation_id DESC
         OFFSET $2
       )
     `, [kind, this.bounds.maxResolvedRowsPerKind]);

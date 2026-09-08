@@ -3,6 +3,7 @@ import { fromAny } from '@total-typescript/shoehorn';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { createEnvCredentialVault } from '../../../boundary/custody/credential-vault.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import { saveSettings } from '../../../system/settings.js';
 import {
@@ -26,6 +27,9 @@ function makeStartupHydrationConfig(
   companionDataDir: string,
 ): SubstrateConfig {
   return {
+    // Gateway-authority preflight requires the vault hydrateSecretBearingConfig
+    // installs before it (psfn-framework-f77ca).
+    credentialVault: createEnvCredentialVault(process.env),
     primaryModel: 'openrouter/deepseek/deepseek-v3.2',
     primaryProvider: 'openrouter',
     extractionModel: 'openrouter/deepseek/deepseek-v3.2',

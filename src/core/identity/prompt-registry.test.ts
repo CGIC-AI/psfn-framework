@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
   PromptRegistryStore,
+  BIOGRAPHY_CANDIDATE_SYNTHESIS_PROMPT_KEY,
   EXTRACTION_PROMPT_KEY,
   GROUP_EXTRACTION_PROMPT_KEY,
   COMPACTION_SUMMARY_PROMPT_KEY,
@@ -73,6 +74,7 @@ describe('PromptRegistryStore', () => {
     // registers additional operator-editable keys under subsystem.persona.*,
     // which sort after the core prompts.
     expect(seeded.list().map(entry => entry.key)).toEqual([
+      BIOGRAPHY_CANDIDATE_SYNTHESIS_PROMPT_KEY,
       EXTRACTION_PROMPT_KEY,
       GROUP_EXTRACTION_PROMPT_KEY,
       RECENT_CONTACT_SHAPE_SYNTHESIS_PROMPT_KEY,

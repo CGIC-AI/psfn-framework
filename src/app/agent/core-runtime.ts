@@ -150,6 +150,11 @@ import { resolveConfigTenantPoolScope } from '../../persistence/postgres/tenant-
 import { createPostgresPool } from '../../persistence/postgres.js';
 import { createPostgresBiographicalProfileStore } from '../../faculties/memory/biographical/postgres-store.js';
 import { MemoryBackedBiographicalSourceRevalidator } from '../../faculties/memory/biographical/memory-source.js';
+import { BiographySynthesisService } from '../../faculties/memory/biographical/synthesis-service.js';
+import { BiographyCompanionReviewService } from '../../faculties/memory/biographical/companion-review-service.js';
+import { createBiographySynthesisTargetPort } from '../../faculties/memory/biographical/synthesis-targets.js';
+import { createDefaultBiographicalCandidatePolicy } from '../../system/config/biographical-candidate-policy.js';
+import type { BiographicalSubjectRef } from '../../faculties/memory/biographical/types.js';
 import { createRuntimeBiographicalProjection } from '../../faculties/memory/biographical/runtime-projection.js';
 import { resolveCompanionIdFromConfig } from '../../core/identity/companion-runtime.js';
 import { createDefaultBiographicalDepthPolicy } from '../../system/config/biographical-depth-policy.js';
@@ -340,6 +345,18 @@ export interface AgentCoreRuntime {
   doingMirrorService: DoingMirrorService;
   closeWikiRuntime: () => Promise<void>;
   closeBiographicalProjection: () => Promise<void>;
+  /**
+   * Cross-silo biography candidate synthesis (o61vb.12). Exposed as a run
+   * handle so the scheduler lane owns cadence and serialization while this
+   * runtime keeps ownership of the durable stores it reads.
+   */
+  biographySynthesis: BiographySynthesisService;
+  /**
+   * Companion protected self-review of biography candidates (o61vb.13).
+   * Runs under this companion's identity; it stages review decisions and never
+   * activates a human-derived fact.
+   */
+  biographyCompanionReview: BiographyCompanionReviewService;
   /** Shared lazy durable model-usage query handle (b0yl.5); null on non-postgres. */
   getModelUsageQuery: () => ModelUsageQueryPort | null;
   icpAutonomyRuntime?: AgentFacingIcpAutonomyRuntime;
@@ -1014,6 +1031,41 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   // context-visible `[Presence] ...` notes on the satellite session channel.
   // Absent enrollment store leaves the sink a no-op; off/absent registry config
   // leaves the bridge itself inactive.
+  const biographyCompanionSubject: Extract<BiographicalSubjectRef, { kind: 'companion' }> = {
+    kind: 'companion',
+    companionId,
+    subjectVersion: 1,
+  };
+  // Candidate synthesis is a maintenance surface: it stages review candidates
+  // and never activates a claim. Policy is re-read per run so an owner-file
+  // edit takes effect on the next pass without a restart.
+  const biographySynthesis = new BiographySynthesisService({
+    memoryStore,
+    profileStore: biographicalStore,
+    llmClient: llmProvider,
+    promptRegistry,
+    companionSubject: biographyCompanionSubject,
+    targets: createBiographySynthesisTargetPort({
+      contactStore,
+      companionSubject: biographyCompanionSubject,
+      depthPolicy: () => config.biographicalDepthPolicy ?? biographicalDepthPolicy,
+    }),
+    candidatePolicy: () => (
+      config.biographicalCandidatePolicy ?? createDefaultBiographicalCandidatePolicy()
+    ),
+    depthPolicy: () => config.biographicalDepthPolicy ?? biographicalDepthPolicy,
+  });
+
+  const biographyCompanionReview = new BiographyCompanionReviewService({
+    profileStore: biographicalStore,
+    llmClient: llmProvider,
+    personaPreamble,
+    companionId,
+    candidatePolicy: () => (
+      config.biographicalCandidatePolicy ?? createDefaultBiographicalCandidatePolicy()
+    ),
+  });
+
   const perceptionNoteDeliverer = createPerceptionNoteDeliverer(sessionManager);
   // Presence is observation, not a summons. Shared satellites deliver only
   // exact, normalized scopes to configured observation recipients; this path
@@ -1201,6 +1253,8 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     doingMirrorService,
     closeWikiRuntime: wikiRuntime.close,
     closeBiographicalProjection: () => biographicalPool.end(),
+    biographySynthesis,
+    biographyCompanionReview,
     // Durable model-usage query handle (b0yl.5): shared lazy store also used by
     // the self-diagnosis tool, reused by the tool-usage evaluator scheduler lane
     // so the two do not open separate pools.

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { requireGardenRouteAuthorization } from '../../../boundary/fleet-auth/garden-route-authorization.js';
+import { createDefaultBiographicalCandidatePolicy } from '../../../system/config/biographical-candidate-policy.js';
 import { InMemoryBiographicalProfileStore } from '../../../faculties/memory/biographical/in-memory-store.js';
 import {
   projectBiographicalContext,
@@ -407,6 +408,83 @@ describe('AdminBiographicalReviewService', () => {
       { action: 'revoke', decision: 'allowed', reason: 'grant-revoked' },
       { action: 'regrant', decision: 'denied', reason: 'invalid-state' },
     ].map(entry => expect.objectContaining(entry))));
+  });
+
+  it('exposes companion review staging read-only, with receipt codes and no reasoning', async () => {
+    const store = new InMemoryBiographicalProfileStore(() => NOW);
+    const candidate = await store.writeCandidate({
+      automataRunId: 'biography-synthesis:garden',
+      automataAuthorityRef: 'maintenance:biography-synthesis',
+      policy: createDefaultBiographicalCandidatePolicy(),
+      socialContext: {
+        kind: 'companion_contact_dyad',
+        companionId: 'companion-garden',
+        contactId: 'v',
+      },
+      rationale: 'new_subject_claim',
+      claim: {
+        subject: { kind: 'contact', contactId: 'v', subjectVersion: 1 },
+        kind: 'stable-preference',
+        value: {
+          kind: 'stable-preference',
+          schemaVersion: 1,
+          domain: 'food',
+          target: 'tea',
+          polarity: 'likes',
+        },
+        basis: 'explicit',
+        confidence: 1,
+        sources: [{ ...source(), sensitivityAtProjection: 'personal', sourceType: 'semantic', lifecycleStateAtProjection: 'active' }],
+        now: NOW,
+      },
+    });
+    await store.transitionCandidate({
+      candidateId: candidate.id,
+      expectedRevision: 1,
+      to: 'companion_review',
+      receipts: [{
+        authority: 'companion',
+        decision: 'approved',
+        actorAuthorityRef: 'companion:companion-garden',
+        reason: 'reviewer_approved',
+      }],
+      now: NOW,
+    });
+    const service = new AdminBiographicalReviewService({ store, queryLimit: 20, now: () => NOW });
+
+    const detail = await service.getClaim(candidate.claimId);
+
+    expect(detail.candidate).toMatchObject({
+      id: candidate.id,
+      stage: 'companion_review',
+      revision: 2,
+      rationale: 'new_subject_claim',
+      socialContext: { kind: 'companion_contact_dyad', contactId: 'v' },
+    });
+    expect(detail.candidate?.receipts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ authority: 'automata', decision: 'approved', reason: 'synthesized' }),
+      expect.objectContaining({
+        authority: 'companion',
+        decision: 'approved',
+        reason: 'reviewer_approved',
+        actorAuthorityRef: 'companion:companion-garden',
+      }),
+    ]));
+    // Receipts carry codes and digests only: no review reasoning, no source body.
+    for (const receipt of detail.candidate?.receipts ?? []) {
+      expect(Object.keys(receipt).sort()).toEqual([
+        'actorAuthorityRef', 'authority', 'candidateRevision', 'decision', 'reason', 'recordedAt',
+      ]);
+    }
+    // The Garden surface is read-only for candidates: the operator review verbs
+    // still act on claims, and none of them can move a candidate stage.
+    await expect(service.review(candidate.claimId, {
+      action: 'approve',
+      claimDigest: candidate.claimDigest,
+      sourceSetDigest: candidate.sourceSetDigest,
+      stage: 'active',
+    }, ACTOR)).rejects.toMatchObject({ reason: 'malformed' });
+    expect((await store.getCandidate(candidate.id))?.stage).toBe('companion_review');
   });
 
   it('rejects request-body actor injection before mutating or fabricating an audit', async () => {

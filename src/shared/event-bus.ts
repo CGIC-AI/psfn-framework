@@ -573,6 +573,41 @@ export interface EventMap {
     runAtMs: number;
     timestamp: number;
   };
+  // Biography candidate synthesis pass (o61vb.12). Content-free by contract:
+  // run counts only, never a subject id, claim value, or source body.
+  'memory.biography.synthesis': {
+    automataRunId: string;
+    targetsScanned: number;
+    targetsSynthesized: number;
+    sourcesScanned: number;
+    sourcesAdmitted: number;
+    sourcesWithheldByPolicy: number;
+    candidatesEmitted: number;
+    candidatesStaged: number;
+    candidatesSuperseded: number;
+    candidatesCoalesced: number;
+    candidatesWithheld: number;
+    candidatesDuplicate: number;
+    targetsFailed: number;
+    timestamp: number;
+  };
+  // Companion biography review pass (o61vb.13). Content-free by contract:
+  // decision counts only, never a candidate id, claim value, or review reason.
+  'memory.biography.companion_review': {
+    reviewRunId: string;
+    candidatesConsidered: number;
+    candidatesOutsideAuthority: number;
+    candidatesReplayed: number;
+    approved: number;
+    rejected: number;
+    flagged: number;
+    revised: number;
+    escalatedToHumanReview: number;
+    autoactivated: number;
+    malformedDecisions: number;
+    failures: number;
+    timestamp: number;
+  };
   /** Authenticated Garden refresh hint. Never carries queue entries, ids, or content. */
   'garden.queue.changed': {
     queue: GardenQueueName;

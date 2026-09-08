@@ -17,7 +17,7 @@ import type { ContactStorePort } from '../../../core/contacts/contact-store-port
 import type { Contact, RelationshipType } from '../../../core/contacts/types.js';
 import type { BiographicalDepthPolicy } from '../../../system/config/biographical-depth-policy.js';
 import { HIGH_TIER_TRUST_LEVELS, type TrustLevel } from '../../../system/trust/types.js';
-import { deriveBiographicalCollectionDepth } from './depth-policy.js';
+import { deriveBiographicalCollectionDepth, hasAuthorityRef } from './depth-policy.js';
 import type { VerifiedContactDepthEvidence } from './depth-policy.js';
 import type {
   BiographySynthesisTarget,
@@ -91,7 +91,7 @@ function admissibleGroupContactIds(
   membership: VerifiedBiographyGroupMembership,
 ): readonly string[] | null {
   if (!membership.verified) return null;
-  if (!/^[a-z][a-z0-9_-]*:[^\s]+$/u.test(membership.governanceAuthorityRef)) return null;
+  if (!hasAuthorityRef(membership.governanceAuthorityRef)) return null;
   if (membership.contextId.trim().length === 0) return null;
   const contactIds = membership.contactIds.map(id => id.trim()).filter(id => id.length > 0);
   const unique = [...new Set(contactIds)].sort((left, right) => left.localeCompare(right));

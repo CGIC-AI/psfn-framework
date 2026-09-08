@@ -50,6 +50,7 @@ function buildInput(
     channelId: 'api:test',
     triggerReason: 'manual',
     turnId: undefined,
+    sourceEntries: [],
     telemetryEnabled: false,
     isAcceptingExtractions: () => true,
     processFact: vi.fn().mockResolvedValue({

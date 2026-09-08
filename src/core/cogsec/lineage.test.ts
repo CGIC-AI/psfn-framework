@@ -305,3 +305,190 @@ describe('buildCogSecLineagePreview', () => {
     })]);
   });
 });
+
+// ── Verified admission identity (psfn-framework-ccgdz.3) ──
+
+const POISONED_ENVELOPE_ID = 'env_01JZ0000000000000000000001';
+const POISONED_RECEIPT_ID = 'rcpt_01JZ0000000000000000000001';
+
+function screenedSessionEntry(
+  id: number,
+  envelopeId: string,
+  receiptId?: string,
+): SessionEntry {
+  return {
+    ...sessionEntry(id),
+    metadata: JSON.stringify({
+      intakeScreening: {
+        schemaVersion: 1,
+        mode: 'enforce',
+        withheld: false,
+        envelopes: [{
+          envelopeId,
+          sourceClass: 'public_contact',
+          sourceRiskTier: 'untrusted',
+          state: 'released',
+          riskLabels: [],
+          subject: { kind: 'body' },
+          ...(receiptId ? { receiptId } : {}),
+        }],
+      },
+    }),
+  };
+}
+
+describe('buildCogSecLineagePreview verified admission identity', () => {
+  const poisonedCase = () => event({
+    affectedMessageRanges: [{ logicalSessionId: 'logical-session', messageIds: [4] }],
+  });
+
+  it('classifies a memory carrying the affected entry\'s receipt as tainted even with no session or message granularity', async () => {
+    const preview = await buildCogSecLineagePreview({
+      event: poisonedCase(),
+      sessionReader: sessionReader(
+        [screenedSessionEntry(4, POISONED_ENVELOPE_ID, POISONED_RECEIPT_ID)],
+        [],
+      ),
+      memoryStore: memoryStore([
+        makeMemory({
+          id: 'memory-verified',
+          // Deliberately a DIFFERENT session with no message ids: only the
+          // admission identity can reach this row.
+          provenance: {
+            sessionId: 'unrelated-session',
+            channelId: 'unrelated-session',
+            sourceAdmissions: [{
+              kind: 'intake_envelope',
+              refId: POISONED_ENVELOPE_ID,
+              envelopeId: POISONED_ENVELOPE_ID,
+              receiptId: POISONED_RECEIPT_ID,
+            }],
+          },
+        }),
+      ]),
+    });
+    expect(preview.memories).toEqual([expect.objectContaining({
+      id: 'memory-verified',
+      classification: 'tainted',
+      reason: 'admission_receipt_matches_affected_source',
+      actions: ['revoke', 'regenerate'],
+    })]);
+  });
+
+  it('classifies an unverified intake-envelope string ref as uncertain, not tainted', async () => {
+    const preview = await buildCogSecLineagePreview({
+      event: poisonedCase(),
+      sessionReader: sessionReader(
+        [screenedSessionEntry(4, POISONED_ENVELOPE_ID, POISONED_RECEIPT_ID)],
+        [],
+      ),
+      memoryStore: memoryStore([
+        makeMemory({
+          id: 'memory-string-only',
+          provenance: { sessionId: 'unrelated-session', channelId: 'unrelated-session' },
+          provenanceRefs: [`intake-envelope:${POISONED_ENVELOPE_ID}`],
+        }),
+      ]),
+    });
+    expect(preview.memories).toEqual([expect.objectContaining({
+      id: 'memory-string-only',
+      classification: 'uncertain',
+      reason: 'intake_envelope_ref_string_match_without_verified_identity',
+      actions: ['manual_review'],
+    })]);
+  });
+
+  it('leaves a legacy memory without any admission identity classified exactly as before', async () => {
+    const preview = await buildCogSecLineagePreview({
+      event: event(),
+      sessionReader: sessionReader([sessionEntry(4)], []),
+      memoryStore: memoryStore([
+        makeMemory({
+          id: 'memory-legacy',
+          provenance: { sessionId: 'logical-session' },
+        }),
+      ]),
+    });
+    expect(preview.memories).toEqual([expect.objectContaining({
+      id: 'memory-legacy',
+      classification: 'tainted',
+      reason: 'provenance_matches_affected_session',
+    })]);
+    // The case's own entries carry no admission identity: that is reported, not
+    // silently treated as a verified negative.
+    expect(preview.gaps).toContainEqual({
+      artifactClass: 'admission_identity',
+      reason: 'affected_entries_carry_no_admission_identity',
+    });
+  });
+
+  it('never downgrades a span match when the verified identity does not match', async () => {
+    const preview = await buildCogSecLineagePreview({
+      event: poisonedCase(),
+      sessionReader: sessionReader(
+        [screenedSessionEntry(4, POISONED_ENVELOPE_ID, POISONED_RECEIPT_ID)],
+        [],
+      ),
+      memoryStore: memoryStore([
+        makeMemory({
+          id: 'memory-other-envelope',
+          provenance: {
+            sessionId: 'logical-session',
+            sourceMessageIds: [4],
+            sourceAdmissions: [{
+              kind: 'intake_envelope',
+              refId: 'env_01JZ0000000000000000000099',
+              envelopeId: 'env_01JZ0000000000000000000099',
+            }],
+          },
+        }),
+      ]),
+    });
+    expect(preview.memories).toEqual([expect.objectContaining({
+      id: 'memory-other-envelope',
+      classification: 'tainted',
+      reason: 'provenance_message_id_intersects_affected_range',
+    })]);
+  });
+
+  it('reports malformed intake screening metadata on an affected entry as an explicit gap', async () => {
+    const preview = await buildCogSecLineagePreview({
+      event: poisonedCase(),
+      sessionReader: sessionReader(
+        [{ ...sessionEntry(4), metadata: '{"intakeScreening":{"schemaVersion":99}}' }],
+        [],
+      ),
+      memoryStore: memoryStore([]),
+    });
+    expect(preview.gaps).toContainEqual({
+      artifactClass: 'admission_identity',
+      reason: 'affected_entry_intake_screening_metadata_malformed:1',
+    });
+  });
+
+  it('accepts an explicitly supplied affected envelope when no session reader can derive one', async () => {
+    const preview = await buildCogSecLineagePreview({
+      event: poisonedCase(),
+      affectedAdmissionIdentity: { envelopeIds: [POISONED_ENVELOPE_ID] },
+      memoryStore: memoryStore([
+        makeMemory({
+          id: 'memory-supplied',
+          provenance: {
+            sessionId: 'unrelated-session',
+            channelId: 'unrelated-session',
+            sourceAdmissions: [{
+              kind: 'intake_envelope',
+              refId: POISONED_ENVELOPE_ID,
+              envelopeId: POISONED_ENVELOPE_ID,
+            }],
+          },
+        }),
+      ]),
+    });
+    expect(preview.memories).toEqual([expect.objectContaining({
+      id: 'memory-supplied',
+      classification: 'tainted',
+      reason: 'admission_envelope_matches_affected_source',
+    })]);
+  });
+});

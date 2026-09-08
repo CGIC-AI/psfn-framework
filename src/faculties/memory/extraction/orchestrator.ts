@@ -75,6 +75,7 @@ import {
 } from './automata-bus-completion.js';
 import {
   createMemoryExtractionAutomataRunPort,
+  resolveMemoryExtractionDerivationRunId,
 } from './memory-extraction-automata-run.js';
 
 export { ExtractionIntegrityError } from './integrity-error.js';
@@ -486,6 +487,13 @@ export async function runExtractionOrchestration(
     const { selectedCandidates, writeCapSkips } = selection;
     rejectionBreakdown.write_cap += selection.writeCapSkippedCount;
 
+    // ccgdz.3: the derivation run's own authoritative id. The governed Bus
+    // lifecycle already holds the run's lineage; without it the registry is
+    // consulted directly, so a Bus-ineligible extraction still records a
+    // verified run rather than nothing.
+    const derivationRunId = automataRun?.binding.lineage.runId
+      ?? resolveMemoryExtractionDerivationRunId(options.automataRunRegistry, automataRunId);
+
     const writeExecution = await executeAcceptedFactWrites({
       selectedCandidates,
       sourceRef,
@@ -494,6 +502,7 @@ export async function runExtractionOrchestration(
       triggerReason: options.triggerReason,
       turnId,
       sourceEntries: recentEntries,
+      ...(derivationRunId ? { derivationRunId } : {}),
       ...(options.icpCorrelation ? { icpCorrelation: options.icpCorrelation } : {}),
       telemetryEnabled: options.telemetryEnabled,
       isAcceptingExtractions: options.isAcceptingExtractions,

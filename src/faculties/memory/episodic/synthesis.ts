@@ -33,6 +33,7 @@ import { proposeTopicSegments, type TopicSegment } from './topic-segmentation.js
 import { applyThreadUnionForArc, type ThreadAssignmentEvent } from './thread-assignment.js';
 import type { PersonaPreamblePort } from '../../../core/identity/persona-preamble.js';
 import { resolveEpisodeSessionEntryTurnId } from './turn-reference.js';
+import { parseIntakeScreeningMetadata } from '../../../core/session/intake-screening-metadata.js';
 import { positiveIntegerOr } from '../../../shared/utils/numeric.js';
 
 const log = createComponentLogger('EpisodicSynthesis');
@@ -477,6 +478,41 @@ function metadataString(record: Record<string, unknown>, keys: readonly string[]
   return undefined;
 }
 
+/**
+ * Admission identity persisted on one source entry by the intake firewall
+ * (htm9.2). Unreadable screening metadata yields no identity: the episode then
+ * classifies as `uncertain` under a CogSec case, which is the safe direction.
+ * A multi-envelope entry (body plus attachments) contributes only when its
+ * envelopes agree on one id — an ambiguous binding is no binding.
+ */
+function resolveEntryAdmissionIdentity(
+  entry: SessionEntry,
+): { envelopeId: string; receiptId?: string } | undefined {
+  let screening;
+  try {
+    screening = parseIntakeScreeningMetadata(entry.metadata);
+  } catch (error) {
+    log.warn('Malformed intake screening metadata on episode source entry; recording no admission identity', {
+      channelId: entry.channelId,
+      entryId: entry.id,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return undefined;
+  }
+  if (!screening) return undefined;
+  const envelopeIds = new Set(screening.envelopes.map(snapshot => snapshot.envelopeId));
+  if (envelopeIds.size !== 1) return undefined;
+  const [snapshot] = screening.envelopes;
+  if (!snapshot) return undefined;
+  const receiptId = screening.envelopes
+    .map(candidate => candidate.receiptId)
+    .find((candidate): candidate is string => typeof candidate === 'string');
+  return {
+    envelopeId: snapshot.envelopeId,
+    ...(receiptId ? { receiptId } : {}),
+  };
+}
+
 function buildProvenanceRefs(
   sessionId: string,
   spanRef: EpisodeSpanRef,
@@ -488,7 +524,22 @@ function buildProvenanceRefs(
 
   for (const entry of entries.slice(0, 12)) {
     const turnId = getTurnId(entry);
-    provenance.set(`turn:${turnId}`, { kind: 'turn', refId: turnId });
+    // ccgdz.3: the turn ref carries the admission identity of the bytes this
+    // entry was admitted under, so an episode derived from a poisoned envelope
+    // is reachable by identity rather than by session co-location. Several
+    // entries may share a turn; the first entry carrying identity wins and a
+    // later identity-free entry never clears it.
+    const existingTurnRef = provenance.get(`turn:${turnId}`);
+    const admission = existingTurnRef?.envelopeId === undefined
+      ? resolveEntryAdmissionIdentity(entry)
+      : undefined;
+    if (!existingTurnRef || admission) {
+      provenance.set(`turn:${turnId}`, {
+        kind: 'turn',
+        refId: turnId,
+        ...(admission ?? {}),
+      });
+    }
     const metadata = parseMetadataRecord(entry);
     if (!metadata) continue;
     const operatorNoteId = metadataString(metadata, [

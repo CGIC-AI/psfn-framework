@@ -12474,6 +12474,20 @@
       "note": "Canonical owner-file/schema metadata createDefaultRoomParticipationLeaseSettings.silenceTimeoutMs; the code literal is the scheduler.json socialAutonomy.roomParticipationLease bootstrap default (seeded in config/scheduler.seed.json and added by the owner migration), not a parallel runtime override."
     },
     {
+      "file": "src/system/config/participation-config.ts",
+      "name": "createDefaultRoomSignalSettings.classifier.maxOutputTokens",
+      "value": "16",
+      "form": "object-member",
+      "note": "Canonical owner-file/schema metadata createDefaultRoomSignalSettings.classifier.maxOutputTokens; the code literal is the scheduler.json socialAutonomy.roomSignal bootstrap default (seeded in config/scheduler.seed.json and added by the owner migration), not a parallel runtime override."
+    },
+    {
+      "file": "src/system/config/participation-config.ts",
+      "name": "createDefaultRoomSignalSettings.maxRoomVelocity",
+      "value": "12",
+      "form": "object-member",
+      "note": "Canonical owner-file/schema metadata createDefaultRoomSignalSettings.maxRoomVelocity; the code literal is the scheduler.json socialAutonomy.roomSignal bootstrap default (seeded in config/scheduler.seed.json and added by the owner migration), not a parallel runtime override."
+    },
+    {
       "file": "src/system/config/runtime-config-contracts.ts",
       "name": "createDefaultEmoSimProactivitySettings.thresholdProfile.samplingIntervalMs",
       "value": "60_000",

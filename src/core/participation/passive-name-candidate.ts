@@ -13,9 +13,25 @@ import type {
   ParticipationCandidate,
   ParticipationCandidateTrigger,
   ParticipationContextMessage,
+  ParticipationSuppressionReason,
   PassiveNameCandidateDecision,
 } from './types.js';
 import type { RoomParticipationContinuationOutcome } from './room-participation-lease-coordinator.js';
+import {
+  normalizeRoomObservation,
+  toRoomParticipationObservation,
+  type RoomObservation,
+} from './room-observation.js';
+import {
+  evaluateRoomSignalEligibility,
+  normalizeRoomContent,
+  toRoomNomination,
+  type RoomCompanionProfile,
+  type RoomMessageFeatureExtractor,
+  type RoomNomination,
+  type SharedRoomClassifier,
+} from './room-signal.js';
+import type { RoomSignalSettings } from '../../system/config/participation-config.js';
 
 /**
  * Deterministic passive-name participation candidate gate (free-time social
@@ -84,7 +100,27 @@ export interface PassiveNameCandidateBuilderOptions {
   settings?: PassiveNameCandidateSettings;
   /** Durable room-participation lease gate; absent runtimes never continue. */
   roomParticipationLease?: RoomParticipationContinuationPort;
+  /**
+   * Channel-neutral room signal (jp36.5.6). Present only when owner policy
+   * enables it; absent runtimes keep the pre-signal behavior exactly.
+   */
+  roomSignal?: RoomSignalRuntime;
   nowMs?: () => number;
+}
+
+/**
+ * The room-signal stage this gate composes: the once-per-physical-message
+ * feature extractor, the reviewed room-safe companion profile the local matcher
+ * may read, the owner admission policy, and the optional shared classifier that
+ * resolves ambiguity at most once per message.
+ */
+export interface RoomSignalRuntime {
+  extractor: RoomMessageFeatureExtractor;
+  profile: RoomCompanionProfile;
+  settings: RoomSignalSettings;
+  classifier?: SharedRoomClassifier;
+  /** Content-free sink for the bounded nomination and its reason codes. */
+  onNomination?: (nomination: RoomNomination) => void;
 }
 
 /** The same-cluster inter-companion lane; ICP owns its own consent moment. */
@@ -108,6 +144,7 @@ export class PassiveNameCandidateBuilder {
   private readonly companionAuthorIds: readonly string[];
   private readonly settings: PassiveNameCandidateSettings;
   private readonly roomParticipationLease: RoomParticipationContinuationPort | undefined;
+  private readonly roomSignal: RoomSignalRuntime | undefined;
   private readonly nowMs: () => number;
   private readonly dedupeByChannel = new Map<string, ChannelDedupeState>();
 
@@ -118,6 +155,7 @@ export class PassiveNameCandidateBuilder {
     this.companionAuthorIds = options.companionAuthorIds;
     this.settings = options.settings ?? createDefaultPassiveNameCandidateSettings();
     this.roomParticipationLease = options.roomParticipationLease;
+    this.roomSignal = options.roomSignal;
     this.nowMs = options.nowMs ?? (() => Date.now());
   }
 
@@ -126,8 +164,20 @@ export class PassiveNameCandidateBuilder {
       return this.suppress(message, 'disabled');
     }
 
-    // 1. Never react to the companion's own messages.
-    if (this.companionAuthorIds.includes(message.authorId)) {
+    // 0. Channel-neutral normalization (jp36.5.6). Every gate below reads this
+    // instead of transport-specific fields, so one policy covers every
+    // connector. Pure and model-free: an ambient line that never becomes a
+    // candidate costs exactly this.
+    const normalized = normalizeRoomObservation(message);
+    const observation = normalized.status === 'observed' ? normalized.observation : null;
+
+    // 1. Never react to the companion's own messages. The connector's own
+    // observer identity answers this on every transport; the configured author
+    // ids stay as the fallback for connectors with no addressing envelope.
+    if (
+      this.companionAuthorIds.includes(message.authorId)
+      || observation?.author.isObserver === true
+    ) {
       return this.suppress(message, 'own_message');
     }
 
@@ -150,18 +200,26 @@ export class PassiveNameCandidateBuilder {
       return this.suppress(message, 'not_group');
     }
 
-    // 5. Companion-name detection — reuse the group-salience name detector.
+    // 5. Companion-name detection — reuse the group-salience name detector for
+    // the textual cue, and the connector's own validated addressee resolution
+    // for the authoritative one. A platform mention or a reply to this
+    // companion is a direct address on EVERY connector, even when the body
+    // never names it; prose alone can no longer be the only way in.
     const match = detectCompanionNameMatch(message.content, {
       companionNames: this.companionNames,
       companionAuthorIds: this.companionAuthorIds,
     });
-    const nameMatched = match.mentioned || match.directAddress;
+    const connectorAddressed = observation !== null
+      && (observation.addressedByMention || observation.addressedByReply);
+    const matchedName = match.mentioned || connectorAddressed;
+    const matchedDirectAddress = match.directAddress || connectorAddressed;
+    const nameMatched = matchedName || matchedDirectAddress;
     if (!nameMatched && !this.roomParticipationLease) {
       return this.suppress(message, 'no_name_match');
     }
-    const trigger: ParticipationCandidateTrigger = match.directAddress
+    const trigger: ParticipationCandidateTrigger = matchedDirectAddress
       ? 'direct_mention'
-      : match.mentioned
+      : matchedName
         ? 'passive_name'
         : 'contextual_continuation';
 
@@ -208,8 +266,17 @@ export class PassiveNameCandidateBuilder {
     // taking part in is telemetry-identical to the pre-lease behavior and costs
     // no model call. The gate's own durable claim is what makes the message
     // considered, so it can never be considered twice.
+    //
+    // The room signal (jp36.5.6) runs FIRST and can only refuse: an unverified
+    // room, an untrusted member, a flooding room, or an irrelevant topic all
+    // stop here without any durable read. Membership itself remains the lease's
+    // question, so one physical message can still be considered only once.
+    const signal = await this.evaluateRoomSignal(observation, trigger);
+    if (signal.status === 'suppressed') {
+      return this.suppress(message, signal.reason, trigger);
+    }
     if (!nameMatched) {
-      const admission = await this.admitContinuation(message);
+      const admission = await this.admitContinuation(message, observation);
       if (admission.outcome === 'absent') {
         return this.suppress(message, 'no_name_match');
       }
@@ -236,8 +303,8 @@ export class PassiveNameCandidateBuilder {
       triggerAuthorName: message.authorName,
       triggerContent: message.content,
       triggerTimestampMs,
-      matchedName: match.mentioned,
-      matchedDirectAddress: match.directAddress,
+      matchedName,
+      matchedDirectAddress,
       precedingContext,
       createdAtMs: now,
     };
@@ -252,6 +319,7 @@ export class PassiveNameCandidateBuilder {
    */
   private async admitContinuation(
     message: SubstrateMessage,
+    observation: RoomObservation | null,
   ): Promise<RoomParticipationContinuationOutcome> {
     const lease = this.roomParticipationLease;
     if (!lease) {
@@ -259,13 +327,69 @@ export class PassiveNameCandidateBuilder {
     }
     return await lease.admitContinuation({
       channelId: message.channelId,
-      observation: {
-        messageId: message.id,
-        timestampMs: message.timestamp.getTime(),
-        authorIsMachine: message.routing?.authorIsMachineIntelligence === true,
-        contentLength: message.content.trim().length,
-      },
+      // jp36.5.6 closes the jp36.5.5 seam: the lease gate now consumes the
+      // channel-neutral observation's own projection rather than reaching into
+      // Discord-shaped routing fields.
+      observation: observation
+        ? toRoomParticipationObservation(observation)
+        : {
+          messageId: message.id,
+          timestampMs: message.timestamp.getTime(),
+          authorIsMachine: message.routing?.authorIsMachineIntelligence === true,
+          contentLength: message.content.trim().length,
+        },
     });
+  }
+
+  /**
+   * Deterministic room-signal admission (jp36.5.6). Absent runtime, absent
+   * observation, or a directly-addressed line all pass straight through; the
+   * gate can only ever refuse or record a bounded content-free nomination.
+   */
+  private async evaluateRoomSignal(
+    observation: RoomObservation | null,
+    trigger: ParticipationCandidateTrigger,
+  ): Promise<
+    { status: 'admitted' }
+    | { status: 'suppressed'; reason: ParticipationSuppressionReason }
+  > {
+    const runtime = this.roomSignal;
+    if (!runtime || !observation) return { status: 'admitted' };
+    const features = runtime.extractor.extract(observation);
+    const eligibility = evaluateRoomSignalEligibility({
+      features,
+      normalizedContent: normalizeRoomContent(observation.content),
+      profile: runtime.profile,
+      settings: runtime.settings,
+    });
+    if (eligibility.outcome === 'ineligible') {
+      return { status: 'suppressed', reason: eligibility.suppression };
+    }
+    let classifierConsulted = false;
+    let reasonCodes = eligibility.outcome === 'eligible' ? eligibility.reasonCodes : [];
+    if (eligibility.outcome === 'ambiguous') {
+      // At most ONE cheap bounded evaluation for this physical message, shared
+      // across every companion that reached this point. No claim authority means
+      // no evaluation and no participation.
+      const verdict = await runtime.classifier?.resolve({
+        features,
+        content: observation.content,
+        interests: runtime.profile.interests,
+      });
+      classifierConsulted = verdict !== undefined && verdict.outcome !== 'unavailable';
+      if (!verdict || verdict.outcome !== 'relevant') {
+        return { status: 'suppressed', reason: 'room_signal_ambiguous' };
+      }
+      reasonCodes = [...eligibility.reasonCodes, 'classifier_relevant'];
+    }
+    runtime.onNomination?.(toRoomNomination({
+      features,
+      companionId: runtime.profile.companionId,
+      trigger,
+      reasonCodes,
+      classifierConsulted,
+    }));
+    return { status: 'admitted' };
   }
 
   private suppress(

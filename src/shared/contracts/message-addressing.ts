@@ -51,7 +51,7 @@ export const MESSAGE_AUTHOR_ROOM_ROLES = [
 export type MessageAuthorRoomRole = typeof MESSAGE_AUTHOR_ROOM_ROLES[number];
 
 /** Coarse room-size band. `unknown` is treated as the large/untrusted case. */
-export const MESSAGE_ROOM_SIZE_BANDS = ['small', 'large', 'unknown'] as const;
+const MESSAGE_ROOM_SIZE_BANDS = ['small', 'large', 'unknown'] as const;
 
 export type MessageRoomSizeBand = typeof MESSAGE_ROOM_SIZE_BANDS[number];
 
@@ -124,7 +124,7 @@ export interface MessageAddressingMetadata {
 }
 
 /** Connectors that can assert transport-authoritative addressing. */
-export const MESSAGE_ADDRESSING_SOURCES = ['discord', 'buzz', 'telegram'] as const;
+const MESSAGE_ADDRESSING_SOURCES = ['discord', 'buzz', 'telegram'] as const;
 
 export type MessageAddressingSource = typeof MESSAGE_ADDRESSING_SOURCES[number];
 

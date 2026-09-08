@@ -578,7 +578,7 @@
       "timeoutMs": 120000,
       "measuredBaselineMs": 12000,
       "baselineSource": "measured",
-      "note": "psfn-framework-mgdks.1 + psfn-framework-8n40k: governed Automata Bus lifecycle restart certification (durable run + exactly-once terminal event across a full process restart, cross-companion rejection, typed no-finding terminal, and convergence on the durable terminal after a crash between handoff and terminalize) against the real containerized PostgreSQL harness. Focused local full-file wall was 11.3s cold and 1.2s warm on 2026-09-08 with the added crash-window case; the 12s cold baseline covers it and the unchanged 120s cap matches the repo integration cap while preserving headroom for cold image startup and shared harness-slot contention."
+      "note": "psfn-framework-mgdks.1 + psfn-framework-8n40k: governed Automata Bus lifecycle restart certification (durable run + exactly-once terminal event across a full process restart, cross-companion rejection, typed no-finding terminal, and the crash-window guard between handoff and terminalize \u2014 the governed class does not re-run its work and converges on the durable terminal, and neither does the chargeable memory-extraction adapter) against the real containerized PostgreSQL harness. Focused local full-file wall was 11.3s cold on 2026-09-08 and 1.18s warm on 2026-09-08 with the two added execution-guard cases; the 12s cold baseline covers it and the unchanged 120s cap matches the repo integration cap while preserving headroom for cold image startup and shared harness-slot contention."
     },
     {
       "file": "src/core/cogsec/intake/durable-admission.integration.test.ts",

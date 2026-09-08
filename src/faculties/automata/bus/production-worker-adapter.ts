@@ -14,6 +14,7 @@ import {
   type AutomataTerminalLifecyclePort,
   type AutomataWorkerLineage,
   type AutomataWorkerRunInspection,
+  type CommittedAutomataTerminalHandoff,
   type PersistedAutomataTerminalOutcome,
   type RecordAutomataTerminalHandoffInput,
 } from '../terminal-lifecycle.js';
@@ -22,6 +23,7 @@ import {
   type AutomataArtifactRef,
   type AutomataRunOutcome,
   type AutomataRunRecord,
+  type ProductionAutomataClassId,
 } from '../registry-contract.js';
 import type { AutomataRunRegistry } from '../run-registry.js';
 import { createAutomataTextValidator } from '../validation.js';
@@ -484,6 +486,48 @@ export function parseTerminalClaim(
   };
 }
 
+/** Durable Bus event id one terminal handoff is committed under. */
+function terminalHandoffEventId(idempotencyKey: string): string {
+  return stableId('automata-bus-terminal', [idempotencyKey]);
+}
+
+/**
+ * Read one committed terminal handoff back out of the durable ledger.
+ *
+ * Companion scope is bound at the query level and re-asserted through the
+ * registry by the caller, so this can never surface another companion's run.
+ * A row that exists but is not a readable terminal finding throws rather than
+ * being treated as absence — an unreadable terminal is never guessed at.
+ */
+async function readCommittedTerminalHandoff(input: {
+  companionId: string;
+  store: PostgresAutomataBusRuntimeStore;
+  idempotencyKey: string;
+  automatonClass: ProductionAutomataClassId;
+}): Promise<{ handoff: CommittedAutomataTerminalHandoff; claim: string } | null> {
+  const eventId = terminalHandoffEventId(input.idempotencyKey);
+  const persisted = await input.store.readEventById({
+    companionId: input.companionId,
+    audience: 'eligible-automata',
+    maxSensitivity: SENSITIVITY_LEVELS.at(-1)!,
+    eventId,
+  });
+  if (!persisted) return null;
+  if (persisted.type !== 'finding') {
+    throw new Error('Persisted automata terminal handoff is not a finding event');
+  }
+  return {
+    handoff: {
+      handoffRef: eventId,
+      occurredAtMs: Date.parse(persisted.occurredAt),
+      outcome: parseTerminalClaim(persisted.body.claim, input.automatonClass),
+      findingRefs: [eventId],
+      evidenceRefs: persisted.body.evidence.map(evidence => evidence.reference),
+    },
+    claim: persisted.body.claim,
+  };
+}
+
 export function createAutomataTerminalLifecycleAdapter(options: {
   companionId: string;
   registry: AutomataRunRegistry;
@@ -501,7 +545,7 @@ export function createAutomataTerminalLifecycleAdapter(options: {
         ...artifacts.map(reference => reference.ref),
         `automata-run:${run.runId}`,
       ];
-      const eventId = stableId('automata-bus-terminal', [input.idempotencyKey]);
+      const eventId = terminalHandoffEventId(input.idempotencyKey);
       // Replay path (psfn-framework-8n40k): a run that crashed between this
       // handoff's commit and its registry terminalization re-runs its work and
       // arrives here again with a freshly computed timestamp. Re-READ the
@@ -509,20 +553,17 @@ export function createAutomataTerminalLifecycleAdapter(options: {
       // byte-wise from the persisted event, so the append would be rejected as
       // a reused id, degrade, and leave the registry disagreeing with the
       // durable Bus finding. The durable finding wins.
-      const persisted = await options.store.readEventById({
+      const committed = await readCommittedTerminalHandoff({
         companionId,
-        audience: 'eligible-automata',
-        maxSensitivity: SENSITIVITY_LEVELS.at(-1)!,
-        eventId,
+        store: options.store,
+        idempotencyKey: input.idempotencyKey,
+        automatonClass: input.lineage.automatonClass,
       });
-      if (persisted) {
-        if (persisted.type !== 'finding') {
-          throw new Error('Persisted automata terminal handoff is not a finding event');
-        }
+      if (committed) {
         // A replay whose recomputed terminal disagrees with the durable one is
         // not silently swallowed: the durable finding still wins (that is the
         // convergence contract), but the disagreement is reported.
-        if (persisted.body.claim !== terminalClaim(input)) {
+        if (committed.claim !== terminalClaim(input)) {
           lifecycleLog.warn(
             'Automata terminal replay disagrees with the durable Bus finding; converging on the durable terminal',
             {
@@ -535,19 +576,16 @@ export function createAutomataTerminalLifecycleAdapter(options: {
           );
         }
         return {
-          handoffRef: eventId,
+          handoffRef: committed.handoff.handoffRef,
           inserted: false,
-          findingRefs: [eventId],
+          findingRefs: [...committed.handoff.findingRefs],
           // Evidence comes from the durable finding; artifact refs are the
           // caller's own handles for this settlement (event context carries
           // none — custody evolves after the handoff is linked).
-          evidenceRefs: persisted.body.evidence.map(evidence => evidence.reference),
+          evidenceRefs: [...committed.handoff.evidenceRefs],
           artifactRefs: artifacts,
-          occurredAtMs: Date.parse(persisted.occurredAt),
-          persistedOutcome: parseTerminalClaim(
-            persisted.body.claim,
-            input.lineage.automatonClass,
-          ),
+          occurredAtMs: committed.handoff.occurredAtMs,
+          persistedOutcome: { ...committed.handoff.outcome },
         };
       }
       const appended = await options.writer.append({
@@ -574,6 +612,21 @@ export function createAutomataTerminalLifecycleAdapter(options: {
         evidenceRefs,
         artifactRefs: artifacts,
       };
+    },
+    readTerminalHandoff: async (input: {
+      idempotencyKey: string;
+      lineage: AutomataWorkerLineage;
+    }): Promise<CommittedAutomataTerminalHandoff | null> => {
+      // Same companion-scoped registry assertion the write path makes: a read
+      // for a run this companion does not own is refused, not answered.
+      assertLifecycleLineage(options.registry, companionId, input.lineage);
+      const committed = await readCommittedTerminalHandoff({
+        companionId,
+        store: options.store,
+        idempotencyKey: input.idempotencyKey,
+        automatonClass: input.lineage.automatonClass,
+      });
+      return committed ? committed.handoff : null;
     },
     inspectRun: async (lineage: AutomataWorkerLineage): Promise<AutomataWorkerRunInspection> => {
       const run = assertLifecycleLineage(options.registry, companionId, lineage);

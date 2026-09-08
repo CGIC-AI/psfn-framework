@@ -1,5 +1,6 @@
 import { useId } from 'react';
 import type { CompanionDisplayController, CompanionDisplayMode } from './use-companion-display.js';
+import { SpritePackPicker } from './sprite-pack-picker.js';
 import '../styles/avatar-display-settings.css';
 
 export function AvatarDisplaySettings({ display, label }: {
@@ -24,7 +25,12 @@ export function AvatarDisplaySettings({ display, label }: {
           </button>
         ))}
       </div>
-      {display.mode === 'sprite' && <p>The built-in sprite is a generic animated character.</p>}
+      {display.mode === 'sprite' && <>
+        <p>The default artwork is a labelled animation preview. Choose a sprite pack to use your companion’s artwork.</p>
+        <SpritePackPicker onSelect={display.selectSpritePack}
+          currentLabel={display.spritePack?.manifest.generator}
+          onClear={display.removeSpritePack} disabled={!display.available} />
+      </>}
       {display.mode === 'model' && (
         <div className="avatar-model-picker">
           <label className="avatar-file-label" htmlFor={pickerId}>Choose a VRM or GLB model</label>

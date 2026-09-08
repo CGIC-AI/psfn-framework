@@ -18,26 +18,39 @@ const MINI_DISPLAY_WIDTH = 74;
 // (touch reactions) play once and hold the last frame.
 function useSpriteFrame(entry: SpriteEntry | null, animated: boolean): number {
   const [index, setIndex] = useState(0);
+  const [motionAllowed, setMotionAllowed] = useState(() =>
+    document.visibilityState !== 'hidden' && !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches);
   const frameCount = entry?.frames.length ?? 0;
   const fps = entry?.fps ?? 0;
   const loop = entry?.loop ?? false;
   const entryId = entry?.id ?? '';
 
   useEffect(() => {
+    const media = window.matchMedia?.('(prefers-reduced-motion: reduce)');
+    const update = () => setMotionAllowed(document.visibilityState !== 'hidden' && !media?.matches);
+    document.addEventListener('visibilitychange', update);
+    media?.addEventListener('change', update);
+    return () => {
+      document.removeEventListener('visibilitychange', update);
+      media?.removeEventListener('change', update);
+    };
+  }, []);
+
+  useEffect(() => {
     setIndex(0);
   }, [entryId]);
 
   useEffect(() => {
-    if (!animated || frameCount <= 1 || fps <= 0) return undefined;
-    const interval = window.setInterval(() => {
+    if (!animated || !motionAllowed || frameCount <= 1 || fps <= 0 || (!loop && index === frameCount - 1)) return undefined;
+    const timer = window.setTimeout(() => {
       setIndex((current) => {
         const next = current + 1;
         if (next >= frameCount) return loop ? 0 : frameCount - 1;
         return next;
       });
     }, Math.round(1000 / fps));
-    return () => window.clearInterval(interval);
-  }, [animated, frameCount, fps, loop, entryId]);
+    return () => window.clearTimeout(timer);
+  }, [animated, motionAllowed, frameCount, fps, loop, entryId, index]);
 
   return Math.min(index, Math.max(frameCount - 1, 0));
 }

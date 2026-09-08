@@ -1,36 +1,57 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import type { LocalSpritePack } from '../lib/sprites/import-sprite-pack.js';
 
 export type CompanionDisplayMode = 'none' | 'sprite' | 'model';
 
 interface DisplayChoice {
   readonly mode: CompanionDisplayMode;
   readonly file: File | null;
+  readonly spritePack: LocalSpritePack | null;
 }
 
-const EMPTY_DISPLAY: DisplayChoice = { mode: 'none', file: null };
+const EMPTY_DISPLAY: DisplayChoice = { mode: 'none', file: null, spritePack: null };
 
 /** Local presentation choices belong to exactly one companion and open login. */
 export function useCompanionDisplay(companionId: string | null) {
   const [choices, setChoices] = useState<ReadonlyMap<string, DisplayChoice>>(() => new Map());
+  const owned = useRef(choices);
   const selected = companionId ? choices.get(companionId) ?? EMPTY_DISPLAY : EMPTY_DISPLAY;
 
-  function choose(mode: CompanionDisplayMode) {
+  useEffect(() => () => {
+    for (const choice of owned.current.values()) choice.spritePack?.dispose();
+    owned.current = new Map();
+  }, []);
+
+  function update(patch: Partial<DisplayChoice>) {
     if (!companionId) return;
-    setChoices(current => {
-      const previous = current.get(companionId) ?? EMPTY_DISPLAY;
-      // Choosing the model tab alone never borrows another companion's file.
-      return new Map(current).set(companionId, { ...previous, mode });
-    });
+    const previous = owned.current.get(companionId) ?? EMPTY_DISPLAY;
+    const next = { ...previous, ...patch };
+    owned.current = new Map(owned.current).set(companionId, next);
+    setChoices(owned.current);
+    if (previous.spritePack !== next.spritePack) previous.spritePack?.dispose();
+  }
+
+  function choose(mode: CompanionDisplayMode) {
+    update({ mode });
   }
 
   function selectFile(file: File) {
-    if (!companionId) return;
-    setChoices(current => new Map(current).set(companionId, { mode: 'model', file }));
+    update({ mode: 'model', file });
   }
 
   function removeFile() {
-    if (!companionId) return;
-    setChoices(current => new Map(current).set(companionId, EMPTY_DISPLAY));
+    update({ mode: 'none', file: null });
+  }
+
+  function selectSpritePack(spritePack: LocalSpritePack) {
+    if (!companionId) { spritePack.dispose(); return; }
+    update({ mode: 'sprite', spritePack });
+  }
+
+  function clear() {
+    for (const choice of owned.current.values()) choice.spritePack?.dispose();
+    owned.current = new Map();
+    setChoices(owned.current);
   }
 
   return {
@@ -39,7 +60,9 @@ export function useCompanionDisplay(companionId: string | null) {
     choose,
     selectFile,
     removeFile,
-    clear: () => setChoices(new Map()),
+    selectSpritePack,
+    removeSpritePack: () => update({ spritePack: null }),
+    clear,
   };
 }
 

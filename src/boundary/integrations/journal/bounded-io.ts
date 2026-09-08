@@ -2,7 +2,6 @@ import { randomUUID } from 'node:crypto';
 import {
   open,
   opendir,
-  rename,
   rm,
   stat,
 } from 'node:fs/promises';
@@ -91,8 +90,7 @@ export async function appendJournalNoteAtomically(
   // the kernel page cache. The expensive copy remains outside the JS heap.
   await yieldToEventLoop();
   try {
-    const handle = await open(temporaryPath, 'wx+', 0o666);
-    try {
+    const temporaryIdentity = await stageTemporaryNote(temporaryPath, 'wx+', async (handle) => {
       await preserveExistingMetadata(target, handle);
       if (target.existingHandle) {
         await copyHandleCompletely(target.existingHandle, handle);
@@ -113,19 +111,35 @@ export async function appendJournalNoteAtomically(
         separator = lastByte[0] === 0x0a ? '' : '\n';
       }
       await writeBufferCompletely(handle, Buffer.from(`${separator}${content}\n`, 'utf8'));
-      await handle.sync();
-    } finally {
-      await handle.close();
-    }
+    });
 
-    // The old note stays visible until this single namespace operation. A
-    // failure before rename leaves it byte-for-byte untouched.
-    await target.assertNamespaceUnchanged();
-    await rename(temporaryPath, target.stablePath);
-    await target.assertParentAttached();
+    // The old note stays visible until the coordinator's single identity-checked
+    // commit; a failure before it leaves the note byte-for-byte untouched.
+    await target.commit(temporaryPath, temporaryIdentity);
     return !target.existed;
   } finally {
     await rm(temporaryPath, { force: true });
+  }
+}
+
+/**
+ * Write a staged temporary note and return its filesystem identity, captured
+ * while the descriptor is still open. Publication binds to that inode, so the
+ * temporary pathname stops being trusted the moment this returns
+ * (psfn-framework-b695g).
+ */
+async function stageTemporaryNote(
+  temporaryPath: string,
+  flags: 'wx' | 'wx+',
+  write: (handle: Awaited<ReturnType<typeof open>>) => Promise<void>,
+): Promise<{ dev: bigint; ino: bigint }> {
+  const handle = await open(temporaryPath, flags, 0o666);
+  try {
+    await write(handle);
+    await handle.sync();
+    return await handle.stat({ bigint: true });
+  } finally {
+    await handle.close();
   }
 }
 
@@ -140,17 +154,11 @@ export async function writeJournalNoteAtomically(
   );
 
   try {
-    const handle = await open(temporaryPath, 'wx', 0o666);
-    try {
+    const temporaryIdentity = await stageTemporaryNote(temporaryPath, 'wx', async (handle) => {
       await preserveExistingMetadata(target, handle);
       await writeBufferCompletely(handle, Buffer.from(content, 'utf8'));
-      await handle.sync();
-    } finally {
-      await handle.close();
-    }
-    await target.assertNamespaceUnchanged();
-    await rename(temporaryPath, target.stablePath);
-    await target.assertParentAttached();
+    });
+    await target.commit(temporaryPath, temporaryIdentity);
     return !target.existed;
   } finally {
     await rm(temporaryPath, { force: true });

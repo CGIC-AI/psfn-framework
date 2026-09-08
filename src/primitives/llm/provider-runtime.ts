@@ -28,7 +28,7 @@ import {
   type CredentialReference,
   type CredentialVaultPort,
   resolveOptionalCredentialReference,
-} from '../../boundary/custody/credential-vault.js';
+} from '../../shared/contracts/credential-contracts.js';
 import { createOpenAICompatibleEndpointModel } from './models.js';
 import { resolveCompletionTokenBudget } from './completion-budget.js';
 

@@ -18,7 +18,7 @@ import {
 import {
   envCredential,
   type CredentialReference,
-} from '../../boundary/custody/credential-vault.js';
+} from '../../shared/contracts/credential-contracts.js';
 import { assertValidPostgresRoleName } from '../../persistence/postgres.js';
 
 export const COMPANIONS_FILE_NAME = 'companions.json';

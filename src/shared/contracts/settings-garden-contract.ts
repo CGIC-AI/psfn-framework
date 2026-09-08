@@ -104,6 +104,7 @@ export const SETTINGS_GARDEN_FIELD_EXPOSURE = {
   shardMaxConcurrent: { sectionId: 'compositional', surface: 'advanced' },
   shardHeartbeatStaleAfterMs: { sectionId: 'compositional', surface: 'advanced' },
   shardHeartbeatDisconnectAfterMs: { sectionId: 'compositional', surface: 'advanced' },
+  satelliteHeartbeatStaleAfterMs: { sectionId: 'compositional', surface: 'advanced' },
   memoryExtractionMinImportance: { sectionId: 'extraction-tuning', surface: 'advanced' },
   memoryExtractionMinConfidence: { sectionId: 'extraction-tuning', surface: 'advanced' },
   memoryExtractionMinNovelty: { sectionId: 'extraction-tuning', surface: 'advanced' },

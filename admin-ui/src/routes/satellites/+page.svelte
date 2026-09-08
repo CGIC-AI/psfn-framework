@@ -81,6 +81,27 @@
     return values.length > 0 ? values.map(labelize).join(', ') : EMPTY_LABEL;
   }
 
+  const HEALTH_TONE: Record<string, string> = {
+    ok: 'bg-moss-50 text-moss-700',
+    degraded: 'bg-wilt-50 text-wilt-700',
+    not_observed: 'bg-bark-100 text-shadow-600'
+  };
+
+  function healthTone(status: string): string {
+    return HEALTH_TONE[status] ?? HEALTH_TONE.not_observed;
+  }
+
+  /** Coarse, operator-readable heartbeat age. Precision below a minute is noise. */
+  function formatHeartbeatAge(ageMs: number | undefined): string {
+    if (ageMs === undefined) return EMPTY_LABEL;
+    const seconds = Math.floor(ageMs / 1000);
+    if (seconds < 60) return `${seconds}s ago`;
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) return `${minutes}m ago`;
+    const hours = Math.floor(minutes / 60);
+    return hours < 24 ? `${hours}h ago` : `${Math.floor(hours / 24)}d ago`;
+  }
+
   function resolveTwin(place: AdminPlaceView): AdminPlaceView | undefined {
     return place.twinPlaceId
       ? placesData?.places.find(candidate => candidate.placeId === place.twinPlaceId)
@@ -212,7 +233,9 @@
         <div>
           <p class="text-xs font-semibold uppercase tracking-[0.2em] text-shadow-500">Live Observation</p>
           <h2 id="satellite-live-heading" class="mt-1 text-lg font-serif font-semibold text-shadow-900">
-            Endpoint heartbeat is not wired yet
+            {data?.liveObservationStatus === 'observed'
+              ? 'Device health heartbeats'
+              : 'Device heartbeat is not wired yet'}
           </h2>
           <p class="mt-2 max-w-3xl text-sm text-shadow-600">
             {data?.liveObservationDetail ?? 'Live endpoint heartbeat and last-seen telemetry are not available yet.'}
@@ -307,7 +330,24 @@
                 </dd>
               </div>
               <div>
-                <dt class="text-xs uppercase tracking-[0.14em] text-shadow-500">Live State</dt>
+                <dt class="text-xs uppercase tracking-[0.14em] text-shadow-500">Device Health</dt>
+                <dd class="mt-1 flex flex-wrap items-center gap-2 text-shadow-700">
+                  <span class={`rounded-full px-2.5 py-1 text-xs font-semibold ${healthTone(item.satellite.live.status)}`}>
+                    {labelize(item.satellite.live.status)}
+                  </span>
+                  {#if item.satellite.live.status !== 'not_observed'}
+                    <span class="text-xs text-shadow-500">
+                      last beat {formatHeartbeatAge(item.satellite.live.ageMs)}
+                    </span>
+                  {/if}
+                  {#if item.satellite.live.reason}
+                    <span class="text-xs text-wilt-700">{labelize(item.satellite.live.reason)}</span>
+                  {/if}
+                </dd>
+                <dd class="mt-1 text-xs text-shadow-500">{item.satellite.live.detail}</dd>
+              </div>
+              <div>
+                <dt class="text-xs uppercase tracking-[0.14em] text-shadow-500">Endpoint Live State</dt>
                 <dd class="mt-1 text-shadow-700">{labelize(item.endpoint.live.status)}</dd>
               </div>
               {#if item.satellite.synthetic}

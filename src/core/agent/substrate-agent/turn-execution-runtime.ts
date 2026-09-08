@@ -97,6 +97,11 @@ import {
   type AgentInvocationResult,
 } from './turn-execution/agent-invocation.js';
 import { createTurnExecutionObservability } from './turn-execution/observability.js';
+import {
+  countToolCallOutcomes,
+  type ToolCallOutcomeCounts,
+} from '../../../shared/contracts/tool-call-outcome.js';
+import { isToolResultAgentMessage } from './turn-records.js';
 import { assembleTurnPrompt } from './turn-execution/prompt-assembly.js';
 import { computePreTurnState, prepareTurnIdentityState } from './turn-execution/pre-turn-state.js';
 import {
@@ -1252,6 +1257,12 @@ export async function handleMessageForTurn(
     }
 
     const retrievalProvenanceRefs = observability.getRetrievalProvenanceRefs();
+    // lpxg3.2: a content-free census of what this turn's tool calls actually
+    // returned. Evidence-gathering callers read it to see that a read was
+    // withheld, unavailable, or partial rather than reading absence as fact.
+    const toolCallOutcomes: ToolCallOutcomeCounts = countToolCallOutcomes(
+      turnMessages.filter(isToolResultAgentMessage),
+    );
     const internalState = recoveredResponse?.metadata.internalState
       ? cloneInternalState(recoveredResponse.metadata.internalState)
       : await runtime.emotionSelfModelRuntime.computeInternalStateForTurn({
@@ -1615,6 +1626,7 @@ export async function handleMessageForTurn(
         internalStateSnapshotRef,
         metacognitiveFlags: cloneMetacognitiveFlags(metacognitiveFlags),
         ...(retrievalProvenanceRefs.length > 0 ? { retrievalProvenanceRefs } : {}),
+        ...(turnUsage.toolCalls > 0 ? { toolCallOutcomes } : {}),
         ...(Object.keys(responseDiagnostics).length > 0 ? { diagnostics: responseDiagnostics } : {}),
         ...(broadcastSafetyMeta ? { broadcastSafety: broadcastSafetyMeta } : {}),
         ...(responseFatigueMetadata ? { fatigue: responseFatigueMetadata } : {}),

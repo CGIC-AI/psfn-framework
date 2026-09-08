@@ -7,7 +7,10 @@ import { Agent, type AgentTool } from '../../boundary/pi-agent/index.js';
 import type { CanonicalModelRegistry, LLMContext, LLMResponse, MessageAddressingMetadata, ModelRegistryEntry, ModelSlot, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { MemoryProvider, MemoryExtractor, LLMProviderPort } from './substrate-agent.js';
-import { SubstrateAgent as RuntimeSubstrateAgent } from './substrate-agent.js';
+import {
+  resolveTurnEvidenceDependency,
+  SubstrateAgent as RuntimeSubstrateAgent,
+} from './substrate-agent.js';
 import { EventBus } from '../../shared/event-bus.js';
 import type { ContextCoherenceEvent } from '../../shared/contracts/context-coherence.js';
 import type { SessionManager } from '../session/manager.js';
@@ -7612,5 +7615,46 @@ describe('explicit capability access injection (mus2.1)', () => {
     } finally {
       rmSync(dataDir, { recursive: true, force: true });
     }
+  });
+});
+
+// psfn-framework-lpxg3.2: only the protected reflection tool-grounding stage
+// declares its read-only evidence edges optional. Everything else keeps the
+// conservative posture, so an unstated dependency never relaxes on its own.
+describe('resolveTurnEvidenceDependency', () => {
+  function messageWithRouting(routing?: SubstrateMessage['routing']): SubstrateMessage {
+    return fromAny({
+      id: 'msg-evidence-dependency',
+      channelId: 'reflection:daily-review',
+      channelType: 'terminal',
+      authorId: 'scheduler',
+      authorName: 'scheduler',
+      content: 'reflect',
+      timestamp: new Date(),
+      ...(routing ? { routing } : {}),
+    });
+  }
+
+  it('declares the reflection tool-grounding stage optional', () => {
+    expect(resolveTurnEvidenceDependency(messageWithRouting(fromAny({
+      reflectionTurn: {
+        schemaVersion: 1,
+        stage: 'tool_grounding',
+        templateId: 'daily-review',
+        mode: 'deliberation',
+      },
+    })))).toBe('optional');
+  });
+
+  it('keeps the reflection final-output stage and ordinary turns required', () => {
+    expect(resolveTurnEvidenceDependency(messageWithRouting(fromAny({
+      reflectionTurn: {
+        schemaVersion: 1,
+        stage: 'final_output',
+        templateId: 'daily-review',
+        mode: 'deliberation',
+      },
+    })))).toBe('required');
+    expect(resolveTurnEvidenceDependency(messageWithRouting())).toBe('required');
   });
 });

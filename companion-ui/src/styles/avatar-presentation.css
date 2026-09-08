@@ -1,0 +1,10 @@
+.avatar-model-stage { width: min(100%, 780px); height: 100%; min-height: 0; }
+.avatar-stage.display-model { padding-bottom: calc(8rem + env(safe-area-inset-bottom)); }
+.avatar-no-model { max-width: 28rem; padding: 2rem; text-align: center; color: var(--color-muted); }
+.avatar-no-model h1 { color: var(--color-text); font-size: clamp(1.5rem, 5vw, 2.25rem); }
+.avatar-no-model p { line-height: 1.7; }
+.avatar-initial { display: grid; place-items: center; width: 6rem; height: 6rem; margin: auto; border-radius: 50%; background: var(--color-blue-soft); color: #335d8b; font-size: 2.5rem; }
+.avatar-no-model button,
+.avatar-model-affection button { border: 1px solid var(--color-border); border-radius: 18px; min-height: 44px; padding: 0.65rem 1rem; background: var(--color-surface, #fffdf8); color: inherit; font: inherit; cursor: pointer; }
+.avatar-model-affection { position: absolute; display: flex; gap: 0.5rem; bottom: calc(1rem + env(safe-area-inset-bottom)); }
+.avatar-stage.mouth-open .avatar-css-character .sprite-mouth { height: 12px; border-radius: 50%; }

@@ -25,6 +25,7 @@ import {
   buildSkillReuseOpportunity,
   rankOwnedSkillsForCue,
   turnDemonstratedReusableValue,
+  type SkillOutcomeEvidenceIndex,
 } from './reuse.js';
 import type { SkillEntry } from './types.js';
 
@@ -70,12 +71,25 @@ export interface ReflectionNudgeTrackerOptions {
    * held or has changed simply is not in it.
    */
   resolveAdmittedSkills?: () => readonly SkillEntry[];
+  /**
+   * Durable post-use outcome evidence for ranking (psfn-framework-sap72).
+   * Synchronous and cache-only, like the admitted-skill index.
+   */
+  resolveOutcomeEvidence?: () => SkillOutcomeEvidenceIndex;
+  /**
+   * Attribute this completed turn's structural outcome to the skills it used.
+   * Durable, so the evidence outlives the process; never throws into the turn.
+   */
+  recordPostUseOutcome?: (input: { demonstratedValue: boolean }) => void;
 }
 
 export class ReflectionNudgeTracker {
   private readonly overrides: Partial<ReflectionNudgeConfig>;
   private readonly resolveOwnerConfig: (() => SkillReuseConfig) | undefined;
   private resolveAdmittedSkills: () => readonly SkillEntry[];
+  private readonly resolveOutcomeEvidence: (() => SkillOutcomeEvidenceIndex) | undefined;
+  private readonly recordPostUseOutcome:
+    ((input: { demonstratedValue: boolean }) => void) | undefined;
   private qualifyingTurnCount = 0;
   /** Skills already offered for revision this process; never offered twice. */
   private offeredSkillNames = new Set<string>();
@@ -87,6 +101,8 @@ export class ReflectionNudgeTracker {
     this.overrides = normalized.config ?? {};
     this.resolveOwnerConfig = normalized.resolveConfig;
     this.resolveAdmittedSkills = normalized.resolveAdmittedSkills ?? (() => []);
+    this.resolveOutcomeEvidence = normalized.resolveOutcomeEvidence;
+    this.recordPostUseOutcome = normalized.recordPostUseOutcome;
   }
 
   /** Explicit constructor overrides win over the owner file, which wins over defaults. */
@@ -106,6 +122,14 @@ export class ReflectionNudgeTracker {
     const config = this.config;
     if (!this.isQualifyingTurn(summary, config)) return null;
 
+    const demonstratedValue = turnDemonstratedReusableValue(summary.outcomes);
+    // Record the post-use evidence for EVERY qualifying turn whose census was
+    // observed, independently of the quietness budget (sap72): what a skill's
+    // uses led to is durable evidence, not a nudge.
+    if (summary.outcomes) {
+      this.recordPostUseOutcome?.({ demonstratedValue });
+    }
+
     this.qualifyingTurnCount += 1;
     if (this.qualifyingTurnCount % config.nudgeEveryNthTurn !== 0) {
       return null;
@@ -113,13 +137,16 @@ export class ReflectionNudgeTracker {
 
     // An unknown census is not a success. A turn whose outcomes were never
     // observed cannot demonstrate reusable value, so it stays silent.
-    if (!turnDemonstratedReusableValue(summary.outcomes)) return null;
+    if (!demonstratedValue) return null;
 
     const candidates = summary.taskCue
       ? rankOwnedSkillsForCue({
         cue: summary.taskCue,
         entries: this.resolveAdmittedSkills(),
         config,
+        ...(this.resolveOutcomeEvidence
+          ? { outcomeEvidence: this.resolveOutcomeEvidence() }
+          : {}),
       }).filter(candidate => !this.offeredSkillNames.has(candidate.name))
       : [];
 
@@ -157,5 +184,9 @@ function isTrackerOptions(
   value: Partial<ReflectionNudgeConfig> | ReflectionNudgeTrackerOptions | undefined,
 ): value is ReflectionNudgeTrackerOptions {
   if (!value) return false;
-  return 'config' in value || 'resolveAdmittedSkills' in value || 'resolveConfig' in value;
+  return 'config' in value
+    || 'resolveAdmittedSkills' in value
+    || 'resolveConfig' in value
+    || 'resolveOutcomeEvidence' in value
+    || 'recordPostUseOutcome' in value;
 }

@@ -36,7 +36,11 @@ import {
   normalizeSkillName,
   SkillStore,
 } from './store.js';
-import { SkillUsageTelemetryStore } from './telemetry.js';
+import {
+  SkillUsageTelemetryStore,
+  type RecordSkillPostUseOutcomeInput,
+  type SkillOutcomeEvidence,
+} from './telemetry.js';
 import type {
   SkillInvocationRecordInput,
   SkillCollectionLimits,
@@ -351,6 +355,20 @@ export class SkillsRuntime {
     const result = await this.findSkill(name);
     if (!result) return null;
     return this.telemetry.record(result.entry.name, input);
+  }
+
+  /**
+   * Attribute one completed turn's structural outcome to the skills it used
+   * (psfn-framework-sap72). Durable, so the reuse loop keeps the evidence
+   * across a restart.
+   */
+  recordSkillPostUseOutcome(input: RecordSkillPostUseOutcomeInput): string[] {
+    return this.telemetry.recordPostUseOutcome(input);
+  }
+
+  /** Durable post-use outcome evidence, by lowercase skill name. */
+  getSkillOutcomeEvidence(): ReadonlyMap<string, SkillOutcomeEvidence> {
+    return this.telemetry.listOutcomeEvidence();
   }
 
   getSkillUsageStats(name: string): SkillUsageStats | null {

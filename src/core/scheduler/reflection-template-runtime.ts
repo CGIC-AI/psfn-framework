@@ -1,5 +1,6 @@
 import { compactMemoryTextForPrompt } from '../../faculties/memory/retrieval/formatting.js';
 import type { Scheduler } from './scheduler.js';
+import type { ReflectionEvidenceDegradationCause } from '../../shared/contracts/reflection-degradation.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import {
   ReflectionPolicyStore,
@@ -566,6 +567,37 @@ export function createReflectionTemplateRuntime(
     }
   };
 
+  /**
+   * Publish the degraded-evidence cause as a typed, content-free bus event
+   * (psfn-framework-sap72 AC6). The log line stays for operators; this makes
+   * the same fact observable to anything watching the bus. Emission never
+   * fails a reflection: telemetry is not the work.
+   */
+  const emitEvidenceDegradation = async (input: {
+    template: ReflectionTemplate;
+    channelId: string;
+    executionSource: ReflectionExecutionSource;
+    cause: ReflectionEvidenceDegradationCause;
+  }): Promise<void> => {
+    if (!runtimeOptions.eventBus) return;
+    try {
+      await runtimeOptions.eventBus.emit('reflection.evidence.degraded', {
+        templateId: input.template.id,
+        templateName: input.template.name,
+        channelId: input.channelId,
+        executionSource: input.executionSource,
+        cause: input.cause,
+        timestamp: Date.now(),
+      });
+    } catch (error) {
+      log.warn('Failed to emit reflection evidence-degradation telemetry', {
+        templateId: input.template.id,
+        cause: input.cause,
+        error: String(error),
+      });
+    }
+  };
+
   const emitReflectionGuardrailTelemetry = async (input: {
     template: ReflectionTemplate;
     reflectionChannelId: string;
@@ -995,6 +1027,12 @@ export function createReflectionTemplateRuntime(
             executionSource: source,
             cause: evidenceDegradation.cause,
           });
+          await emitEvidenceDegradation({
+            template,
+            channelId: reflectionChannelId,
+            executionSource: source,
+            cause: evidenceDegradation.cause,
+          });
         }
       } catch (error) {
         if (!isRecoverableEvidenceGroundingExhaustion(error)) {
@@ -1009,6 +1047,12 @@ export function createReflectionTemplateRuntime(
           error: String(error),
           templateId: template.id,
           executionSource: source,
+        });
+        await emitEvidenceDegradation({
+          template,
+          channelId: reflectionChannelId,
+          executionSource: source,
+          cause: evidenceDegradation.cause,
         });
       }
 

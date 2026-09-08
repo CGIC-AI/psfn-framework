@@ -1,3 +1,4 @@
+import { detectCompanionNameMatch } from '../../faculties/memory/extraction/group-salience.js';
 import type {
   MessageAuthorRoomRole,
   MessageAuthorSourceClass,
@@ -206,8 +207,18 @@ export class RoomMessageFeatureExtractor {
  */
 export function evaluateRoomSignalEligibility(input: {
   features: RoomMessageFeatures;
-  /** Normalized room text, used ONLY for the local reviewed-alias match. */
-  normalizedContent: string;
+  /**
+   * Raw room text, used ONLY for the canonical reviewed-alias match and the
+   * reviewed topic-tag match. The canonical detector owns its own
+   * normalization (psfn-framework-vprcm), so this stage must not pre-normalize.
+   */
+  content: string;
+  /**
+   * This companion's connector account ids, so a bare `<@id>` platform mention
+   * with no alias text still reads as a direct address — the same
+   * authoritative cue the canonical detector uses everywhere else.
+   */
+  companionAuthorIds: readonly string[];
   profile: RoomCompanionProfile;
   settings: RoomSignalSettings;
 }): RoomSignalEligibility {
@@ -226,7 +237,7 @@ export function evaluateRoomSignalEligibility(input: {
   const reasonCodes: RoomSignalReasonCode[] = [];
   if (features.addressedByMention) reasonCodes.push('connector_mention');
   if (features.addressedByReply) reasonCodes.push('connector_reply');
-  const aliasCue = matchAliasCue(input.normalizedContent, profile.aliases);
+  const aliasCue = matchAliasCue(input.content, profile.aliases, input.companionAuthorIds);
   if (aliasCue === 'leading_address') reasonCodes.push('alias_leading_address');
   else if (aliasCue === 'mention') reasonCodes.push('alias_mention');
 
@@ -401,8 +412,8 @@ export type RoomClassificationOutcome =
   /** Disabled, unclaimable, or otherwise not runnable — resolves to suppression. */
   | { outcome: 'unavailable' };
 
-/** Normalize room text once, for reviewed-alias matching only. */
-export function normalizeRoomContent(content: string): string {
+/** Normalize room text once, for reviewed topic-tag matching only. */
+function normalizeRoomContent(content: string): string {
   return content.toLowerCase().replace(/\s+/g, ' ').trim();
 }
 
@@ -410,20 +421,26 @@ function featureKey(roomId: string, messageId: string): string {
   return `${roomId}\0${messageId}`;
 }
 
+/**
+ * Reviewed-alias addressing, answered by the CANONICAL companion-name detector
+ * (psfn-framework-vprcm). Room signal used to carry its own alias matcher with
+ * different boundary rules, so a first-contact line that addressed the
+ * companion by a bare platform mention — or by an alias followed by punctuation
+ * — was read as ambient chatter here while group-memory salience and the
+ * passive-name gate both read it as a direct address. There is now one
+ * detector: `detectCompanionNameMatch`. Do not reintroduce a second one.
+ */
 function matchAliasCue(
-  normalizedContent: string,
+  content: string,
   aliases: readonly string[],
+  companionAuthorIds: readonly string[],
 ): RoomAliasCue {
-  let cue: RoomAliasCue = 'none';
-  for (const alias of aliases) {
-    const normalized = normalizeRoomContent(alias);
-    if (!normalized) continue;
-    if (normalizedContent === normalized || normalizedContent.startsWith(`${normalized} `)) {
-      return 'leading_address';
-    }
-    if (cue === 'none' && hasWholeWord(normalizedContent, normalized)) cue = 'mention';
-  }
-  return cue;
+  const match = detectCompanionNameMatch(content, {
+    companionNames: aliases,
+    companionAuthorIds,
+  });
+  if (match.directAddress) return 'leading_address';
+  return match.mentioned ? 'mention' : 'none';
 }
 
 function matchTopicTags(

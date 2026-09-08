@@ -443,6 +443,7 @@ describe('createAgentPersistenceRuntime', () => {
       letterStore: expect.any(Object),
       cogSecReceiptStore: expect.any(Object),
       custodySnapshotStore: expect.any(Object),
+      egressDeliveryRecordStore: expect.any(Object),
       doingMirrorStore: expect.any(Object),
       healthEventStore: expect.any(Object),
       humanEscalationStore: expect.any(Object),

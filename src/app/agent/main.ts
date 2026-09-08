@@ -1716,6 +1716,10 @@ async function main(): Promise<void> {
     postTurnActions,
     outreachOutbox,
     episodicStore,
+    // Read-only seam onto this process's persisted health stream: the Garden
+    // incident timeline renders the same incidents the alert path paged on,
+    // and cannot write to the plane it renders.
+    healthEventStreamRead: query => persistenceRuntime.healthEventStore.listRecent(query),
     subsystemOutputRefStore: backgroundWorkStore,
     operatorAlerting,
     pendingContactApprovals,

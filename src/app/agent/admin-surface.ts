@@ -55,6 +55,9 @@ import type {
   AdminAutomataReindexPort,
 } from '../../operator/garden/services/automata-service.js';
 import type { AdminIcpTestInitiationPort } from '../../operator/garden/services/types.js';
+import type {
+  IncidentStreamRead,
+} from '../../shared/observability/incident-alerts/investigator.js';
 
 export interface StartOptionalAdminTransportServerOptions {
   adminPort?: number;
@@ -85,6 +88,12 @@ export interface StartOptionalAdminTransportServerOptions {
   postTurnActions: PostTurnActionRuntime;
   outreachOutbox?: OutreachOutboxStore | null;
   episodicStore?: EpisodicStorePort | null;
+  /**
+   * Bounded READ over this process's persisted health stream, for the Garden
+   * incident timeline. Deliberately the read function rather than the store:
+   * an operator surface must not be able to write to the plane it renders.
+   */
+  healthEventStreamRead?: IncidentStreamRead | null;
   subsystemOutputRefStore: Pick<BackgroundWorkStorePort, 'getSubsystemOutputProjection'>;
   /** Pending contact approvals queue (E3.4 contact-tracking policy gate). */
   pendingContactApprovals?: PendingContactApprovalStore | null;
@@ -230,6 +239,7 @@ export async function startOptionalAdminTransportServer(
     biographicalReviewService,
     subsystemOutputRefStore: options.subsystemOutputRefStore,
     episodicStore: options.episodicStore ?? null,
+    healthEventStreamRead: options.healthEventStreamRead ?? null,
     sessionStore: options.coreRuntime.sessionStore,
     letterService: options.coreRuntime.letterService,
     doingMirrorService: options.coreRuntime.doingMirrorService,

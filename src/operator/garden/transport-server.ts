@@ -189,6 +189,7 @@ export class GardenAdminTransportServer implements Lifecycle {
       concernService: config.services.concerns,
       subjectAuditService: config.services.subjectAudit,
       subsystemHealthService: config.services.subsystemHealth ?? null,
+      incidentTimelineService: config.services.incidents ?? null,
       partnerAffectShadowService: config.services.partnerAffectShadow ?? null,
       toolConformanceService: config.services.toolConformance ?? null,
       icpAutonomyService: config.services.icpAutonomy ?? null,

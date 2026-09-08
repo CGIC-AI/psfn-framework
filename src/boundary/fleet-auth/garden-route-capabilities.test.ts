@@ -364,4 +364,26 @@ describe('Garden route capability catalogue', () => {
     expect(resolveGardenRouteCapability('GET', '/api/admin/wiki/shared-world/site-a')?.capability.authorization.resource)
       .toEqual({ scope: 'governed_shared_workspace', area: 'wiki' });
   });
+
+  // psfn-framework-2vd7s: an ADMIN_TOKEN operator is a gateway-minted
+  // owner-role break_glass capability, so it reaches a route exactly through
+  // that route's declared authorization. Declaring readmission identically to
+  // emergency-disable is what admits ADMIN_TOKEN (and the testing-harness key)
+  // there on the same terms as the other autonomy controls -- and keeps the
+  // explicit-confirmation requirement with it.
+  it('declares ICP lifecycle readmission exactly like the other autonomy controls', () => {
+    const readmit = resolveGardenRouteCapability(
+      'POST',
+      '/api/admin/icp-autonomy/lifecycle/readmit',
+    );
+    const emergencyDisable = resolveGardenRouteCapability(
+      'POST',
+      '/api/admin/icp-autonomy/emergency-disable',
+    );
+    expect(readmit?.capability.authorization).toEqual(emergencyDisable?.capability.authorization);
+    expect(readmit?.capability.authorization.requirements.confirmation).toBe('explicit');
+    expect(readmit?.capability.authorization.action).toBe('autonomy.manage');
+    // The explicit operator echo lives in the body, so the body is mandatory.
+    expect(readmit?.capability.body.mode).toBe('required');
+  });
 });

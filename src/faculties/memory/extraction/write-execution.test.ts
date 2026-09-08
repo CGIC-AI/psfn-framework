@@ -72,6 +72,58 @@ const emptyRejections = {
 };
 
 describe('executeAcceptedFactWrites', () => {
+  it('stamps the source entries\' admission identity and the derivation run id onto the write (ccgdz.3)', async () => {
+    const processFact = vi.fn().mockResolvedValue({ action: 'created', memory: { id: 'mem-1' } });
+    const envelopeId = 'env_01JZ0000000000000000000001';
+    const receiptId = 'rcpt_01JZ0000000000000000000001';
+    const screenedEntry = {
+      id: 1,
+      channelId: 'api:test',
+      role: 'user' as const,
+      content: 'the partner said their surgery is on the 14th',
+      timestamp: 1,
+      metadata: JSON.stringify({
+        intakeScreening: {
+          schemaVersion: 1,
+          mode: 'enforce',
+          withheld: false,
+          envelopes: [{
+            envelopeId,
+            sourceClass: 'public_contact',
+            sourceRiskTier: 'untrusted',
+            state: 'released',
+            riskLabels: [],
+            subject: { kind: 'body' },
+            receiptId,
+          }],
+        },
+      }),
+    };
+    await executeAcceptedFactWrites(buildInput({
+      selectedCandidates: [candidate(0, {
+        routing: {
+          status: 'route',
+          contactId: 'contact-alex',
+          sourceSpeakerName: 'Alex',
+          reason: 'single_speaker_transcript',
+          sourceMessageIds: [1],
+        },
+      })],
+      sourceEntries: [screenedEntry],
+      derivationRunId: 'run_01JZ0000000000000000000001',
+      processFact,
+    }));
+
+    const routingArg = processFact.mock.calls[0]?.[3];
+    expect(routingArg?.sourceAdmissions).toEqual([{
+      kind: 'intake_envelope',
+      refId: envelopeId,
+      envelopeId,
+      receiptId,
+    }]);
+    expect(routingArg?.derivationRunId).toBe('run_01JZ0000000000000000000001');
+  });
+
   it('writes a created fact and records the full accepted-write shape', async () => {
     const processFact = vi.fn().mockResolvedValue({ action: 'created', memory: { id: 'mem-1' } });
     const one = candidate(0);

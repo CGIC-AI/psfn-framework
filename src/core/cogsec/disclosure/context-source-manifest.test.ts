@@ -92,7 +92,7 @@ describe('buildContextSourceManifest', () => {
     expect(JSON.stringify(manifest)).not.toContain('password');
   });
 
-  it('drops a source whose ref is unusable rather than storing a malformed one', () => {
+  it('drops a malformed identity field alone, keeping the source it belongs to', () => {
     const manifest = buildContextSourceManifest({
       turnId: TURN_ID,
       blocks: [block({
@@ -105,6 +105,23 @@ describe('buildContextSourceManifest', () => {
     expect(manifest.blocks[0]?.sources).toEqual([
       { kind: 'memory', ref: { digest: custodySha256('mem-2'), id: 'mem-2' } },
     ]);
+  });
+
+  it('keeps a source whose ref cannot be stored literally, as its digest', () => {
+    const pathRef = 'notes/private file.md';
+    const manifest = buildContextSourceManifest({
+      turnId: TURN_ID,
+      blocks: [block({ sources: [{ kind: 'project', refId: pathRef }] })],
+    });
+    // The row must never lose the fact that this source was rendered, and must
+    // never store the path that names it.
+    expect(manifest.blocks[0]?.sources).toEqual([
+      { kind: 'project', ref: { digest: custodySha256(pathRef) } },
+    ]);
+    expect(manifest.sourceCount).toBe(1);
+    const rowText = JSON.stringify(manifest);
+    expect(rowText).not.toContain('notes/');
+    expect(rowText).not.toContain('private');
   });
 
   it('refuses an unknown block layer instead of widening the stored vocabulary', () => {

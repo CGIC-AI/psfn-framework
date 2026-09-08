@@ -116,6 +116,12 @@ export interface BiographySynthesisTelemetry {
   readonly candidatesWithheld: number;
   readonly candidatesDuplicate: number;
   readonly targetsFailed: number;
+  /**
+   * Pass declined before any model call because the fleet-wide pending budget
+   * was already full (a18qq). An operator draining `human_review` is what
+   * reopens synthesis; until then the pass costs one count query.
+   */
+  readonly pendingBudgetExhausted: boolean;
 }
 
 export interface BiographySynthesisServiceOptions {
@@ -211,9 +217,31 @@ export class BiographySynthesisService {
   async run(control: BiographyStageControl = {}): Promise<BiographySynthesisTelemetry> {
     const policy = this.options.candidatePolicy();
     const automataRunId = this.options.newRunId?.() ?? `biography-synthesis:${crypto.randomUUID()}`;
-    const targets = await this.options.targets.listTargets(
-      policy.budgets.maxCandidatesPerAutomataRun,
-    );
+    // a18qq: spend nothing on work the pending cap is already certain to
+    // reject. `writeCandidate` throws 'biography candidate pending budget
+    // exhausted' AFTER the model call and coalescing, so without this read a
+    // saturated human-review backlog made every tick re-synthesize every
+    // changed target, throw at staging, and repeat on the next tick.
+    //
+    // This read is ADVISORY: it takes no lock, so the count can move before a
+    // candidate is staged. That is fine and deliberate — the authoritative
+    // check still runs under the capacity advisory lock inside writeCandidate,
+    // and it is the only thing that admits or refuses. This only decides
+    // whether spending a model call is worth attempting.
+    const pendingCount = await this.options.profileStore.countPendingCandidates();
+    const pendingHeadroom = policy.budgets.maxPendingCandidates - pendingCount;
+    const pendingBudgetExhausted = pendingHeadroom <= 0;
+    if (pendingBudgetExhausted) {
+      log.info('Biography synthesis pass skipped: pending candidate budget exhausted', {
+        pendingCount,
+        maxPendingCandidates: policy.budgets.maxPendingCandidates,
+      });
+    }
+    // Enumerating targets is pointless work when nothing can be staged, and it
+    // keeps the telemetry honest: zero targets scanned, zero model calls.
+    const targets = pendingBudgetExhausted
+      ? []
+      : await this.options.targets.listTargets(policy.budgets.maxCandidatesPerAutomataRun);
     let targetsSynthesized = 0;
     let sourcesScanned = 0;
     let sourcesAdmitted = 0;
@@ -226,7 +254,11 @@ export class BiographySynthesisService {
     let candidatesDuplicate = 0;
     let targetsFailed = 0;
     let targetsUnchanged = 0;
-    let runBudget = policy.budgets.maxCandidatesPerAutomataRun;
+    // The run budget is now bounded by BOTH the per-run cap and the remaining
+    // fleet-wide pending headroom, so a partially-full backlog stops the pass at
+    // the last candidate the cap could actually accept instead of synthesizing
+    // into a guaranteed staging failure.
+    let runBudget = Math.min(policy.budgets.maxCandidatesPerAutomataRun, pendingHeadroom);
     let outcomeState: BiographyStageOutcome = 'complete';
     let processed = 0;
 
@@ -282,6 +314,7 @@ export class BiographySynthesisService {
       candidatesWithheld,
       candidatesDuplicate,
       targetsFailed,
+      pendingBudgetExhausted,
     };
     this.options.onComplete?.(telemetry);
     return telemetry;

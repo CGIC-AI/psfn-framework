@@ -3,14 +3,17 @@ import {
   createDefaultParticipationAppraiserSettings,
   createDefaultPassiveNameCandidateSettings,
   createDefaultReservationPhaseSettings,
+  createDefaultRoomParticipationLeaseSettings,
   parseEgressLeaseTunables,
   parseParticipationAppraiserSettings,
   parsePassiveNameCandidateSettings,
   parseReservationPhaseSettings,
+  parseRoomParticipationLeaseSettings,
   type EgressLeaseTunables,
   type ParticipationAppraiserSettings,
   type PassiveNameCandidateSettings,
   type ReservationPhaseSettings,
+  type RoomParticipationLeaseSettings,
 } from '../participation-config.js';
 import {
   createDefaultFreeTimeChooserSettings,
@@ -42,6 +45,12 @@ export interface SocialAutonomyConfig {
   appraiser: ParticipationAppraiserSettings;
   reservationPhase: ReservationPhaseSettings;
   egressLease: EgressLeaseTunables;
+  /**
+   * Bounded durable room-participation lease (jp36.5.5): how long an engaged
+   * companion may keep considering a running group conversation without the
+   * room repeating its name. Public default off.
+   */
+  roomParticipationLease: RoomParticipationLeaseSettings;
   freeTimeChooser: FreeTimeChooserSettings;
 }
 
@@ -51,6 +60,7 @@ export function createDefaultSocialAutonomyConfig(): SocialAutonomyConfig {
     appraiser: createDefaultParticipationAppraiserSettings(),
     reservationPhase: createDefaultReservationPhaseSettings(),
     egressLease: createDefaultEgressLeaseTunables(),
+    roomParticipationLease: createDefaultRoomParticipationLeaseSettings(),
     freeTimeChooser: createDefaultFreeTimeChooserSettings(),
   };
 }
@@ -70,7 +80,14 @@ export function validateSocialAutonomyConfig(
   }
   assertNoUnknownKeys(
     raw,
-    ['passiveNameCandidate', 'appraiser', 'reservationPhase', 'egressLease', 'freeTimeChooser'],
+    [
+      'passiveNameCandidate',
+      'appraiser',
+      'reservationPhase',
+      'egressLease',
+      'roomParticipationLease',
+      'freeTimeChooser',
+    ],
     `${sourcePath}.socialAutonomy`,
     { errorPrefix: 'Invalid scheduler config' },
   );
@@ -90,6 +107,10 @@ export function validateSocialAutonomyConfig(
     egressLease: parseEgressLeaseTunables(
       raw.egressLease,
       `${sourcePath}.socialAutonomy.egressLease`,
+    ),
+    roomParticipationLease: parseRoomParticipationLeaseSettings(
+      raw.roomParticipationLease,
+      `${sourcePath}.socialAutonomy.roomParticipationLease`,
     ),
     freeTimeChooser: parseFreeTimeChooserSettings(
       raw.freeTimeChooser,

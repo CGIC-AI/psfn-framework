@@ -12432,6 +12432,48 @@
       "note": "Canonical owner-file/schema metadata createDefaultReservationPhaseSettings.minReserveDrawUnits; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
     },
     {
+      "file": "src/system/config/participation-config.ts",
+      "name": "createDefaultRoomParticipationLeaseSettings.continuationCooldownMs",
+      "value": "20 * 1000",
+      "form": "object-member",
+      "note": "Canonical owner-file/schema metadata createDefaultRoomParticipationLeaseSettings.continuationCooldownMs; the code literal is the scheduler.json socialAutonomy.roomParticipationLease bootstrap default (seeded in config/scheduler.seed.json and added by the owner migration), not a parallel runtime override."
+    },
+    {
+      "file": "src/system/config/participation-config.ts",
+      "name": "createDefaultRoomParticipationLeaseSettings.maxConsecutiveIgnores",
+      "value": "3",
+      "form": "object-member",
+      "note": "Canonical owner-file/schema metadata createDefaultRoomParticipationLeaseSettings.maxConsecutiveIgnores; the code literal is the scheduler.json socialAutonomy.roomParticipationLease bootstrap default (seeded in config/scheduler.seed.json and added by the owner migration), not a parallel runtime override."
+    },
+    {
+      "file": "src/system/config/participation-config.ts",
+      "name": "createDefaultRoomParticipationLeaseSettings.maxConsecutiveMachineContinuations",
+      "value": "2",
+      "form": "object-member",
+      "note": "Canonical owner-file/schema metadata createDefaultRoomParticipationLeaseSettings.maxConsecutiveMachineContinuations; the code literal is the scheduler.json socialAutonomy.roomParticipationLease bootstrap default (seeded in config/scheduler.seed.json and added by the owner migration), not a parallel runtime override."
+    },
+    {
+      "file": "src/system/config/participation-config.ts",
+      "name": "createDefaultRoomParticipationLeaseSettings.maxContinuationCandidates",
+      "value": "6",
+      "form": "object-member",
+      "note": "Canonical owner-file/schema metadata createDefaultRoomParticipationLeaseSettings.maxContinuationCandidates; the code literal is the scheduler.json socialAutonomy.roomParticipationLease bootstrap default (seeded in config/scheduler.seed.json and added by the owner migration), not a parallel runtime override."
+    },
+    {
+      "file": "src/system/config/participation-config.ts",
+      "name": "createDefaultRoomParticipationLeaseSettings.minContentChars",
+      "value": "8",
+      "form": "object-member",
+      "note": "Canonical owner-file/schema metadata createDefaultRoomParticipationLeaseSettings.minContentChars; the code literal is the scheduler.json socialAutonomy.roomParticipationLease bootstrap default (seeded in config/scheduler.seed.json and added by the owner migration), not a parallel runtime override."
+    },
+    {
+      "file": "src/system/config/participation-config.ts",
+      "name": "createDefaultRoomParticipationLeaseSettings.silenceTimeoutMs",
+      "value": "5 * 60 * 1000",
+      "form": "object-member",
+      "note": "Canonical owner-file/schema metadata createDefaultRoomParticipationLeaseSettings.silenceTimeoutMs; the code literal is the scheduler.json socialAutonomy.roomParticipationLease bootstrap default (seeded in config/scheduler.seed.json and added by the owner migration), not a parallel runtime override."
+    },
+    {
       "file": "src/system/config/runtime-config-contracts.ts",
       "name": "createDefaultEmoSimProactivitySettings.thresholdProfile.samplingIntervalMs",
       "value": "60_000",

@@ -121,6 +121,10 @@ export function resolveRuntimeSchedulerConfig(
       appraiser: { ...persisted.socialAutonomy.appraiser },
       reservationPhase: { ...persisted.socialAutonomy.reservationPhase },
       egressLease: { ...persisted.socialAutonomy.egressLease },
+      roomParticipationLease: {
+        ...persisted.socialAutonomy.roomParticipationLease,
+        openOn: { ...persisted.socialAutonomy.roomParticipationLease.openOn },
+      },
       freeTimeChooser: { ...persisted.socialAutonomy.freeTimeChooser },
     },
     ...(persisted.backgroundWorkWelfare

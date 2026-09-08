@@ -24,6 +24,7 @@ import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { getRequestContext } from '../../primitives/llm/request-context.js';
 import { classifyChannelDisclosure } from '../../system/trust/policy.js';
+import type { RoomParticipationLeaseCoordinator } from '../../core/participation/room-participation-lease-coordinator.js';
 
 const log = createComponentLogger('SocialImpulseOutreach');
 
@@ -32,6 +33,8 @@ interface RuntimePhases {
   humanPolicy: SocialDesireHumanDeliveryPolicy | undefined;
   reservationPhase: SpeakingReservationPhase | undefined;
   egressLeasePhase: SpeakingEgressLeasePhase | undefined;
+  /** Bounded room-participation membership (jp36.5.5); absent when disabled. */
+  roomParticipationLease: RoomParticipationLeaseCoordinator | undefined;
 }
 
 export interface ProductionSocialImpulseOutreachOptions {
@@ -321,9 +324,23 @@ export function createProductionSocialImpulseOutreachRuntime(
         candidate,
         candidate.occurredAtMs,
       );
-      return roomResult.outcome === 'delivered'
-        ? { outcome: 'delivered' }
-        : { outcome: 'suppressed', reasonCode: `room_${roomResult.outcome}` };
+      if (roomResult.outcome !== 'delivered') {
+        return { outcome: 'suppressed', reasonCode: `room_${roomResult.outcome}` };
+      }
+      // A granted endogenous room entry is an admitted disposition: the
+      // companion has just joined this room on its own initiative, so the same
+      // bounded membership a summons would create opens here (jp36.5.5). The
+      // watermark starts at this entry, so nothing said before it can be
+      // replayed into a continuation.
+      await phases.roomParticipationLease?.recordDisposition({
+        channelId: candidate.channelId,
+        channelType: candidate.channelType,
+        disposition: 'endogenous_room_entry',
+        sourceMessageId: candidate.sourceEventId,
+        sourceTimestampMs: candidate.occurredAtMs,
+        nowMs: candidate.occurredAtMs,
+      });
+      return { outcome: 'delivered' };
     },
     onExecutionError: (error, context) => {
       log.error('Social impulse destination execution failed closed', {

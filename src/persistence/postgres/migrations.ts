@@ -3055,11 +3055,11 @@ export const SHARED_SCHEMA_NAME = 'shared';
 
 /** Ledger versions installed by POSTGRES_SHARED_MIGRATIONS (excluding wiki versions 3 and 8). */
 export const POSTGRES_SHARED_BASE_MIGRATION_VERSIONS = [
-  1, 2, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18,
+  1, 2, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
 ] as const;
 /** Complete ledger across the base and shared-wiki chains. */
 export const POSTGRES_SHARED_ALL_MIGRATION_VERSIONS = [
-  1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18,
+  1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
 ] as const;
 
 export const POSTGRES_SHARED_MIGRATIONS: readonly string[] = [
@@ -3847,6 +3847,56 @@ export const POSTGRES_SHARED_MIGRATIONS: readonly string[] = [
     CHECK ((holder_companion_id IS NULL) = (holder_instance_id IS NULL));`,
   `INSERT INTO shared_schema_migrations (version, name)
     VALUES (18, 'fleet-maintenance-process-fencing')
+    ON CONFLICT (version) DO NOTHING;`,
+  // Version 19 (sprint 12, jp36.5.5): the bounded durable room-participation
+  // lease. One companion's membership in one verified group room: while it is
+  // active an ordinary room message that never repeats the companion's name may
+  // still become a contextual continuation candidate for the existing cheap
+  // appraiser. It grants consideration only — the reservation and egress leases
+  // above still own appraisal and the single send.
+  //
+  // `watermark_*` is the context watermark: the newest already-considered room
+  // message. Continuation admission advances it in ONE atomic conditional
+  // update, so a message is considered at most once even across a restart, a
+  // redelivery, or two racing observers (acceptance jp36.5.5 #4). Content-free
+  // by construction: ids, counters, timestamps, and bounded reason codes only —
+  // no room text ever lands in the shared schema.
+  `
+  CREATE TABLE IF NOT EXISTS room_participation_leases (
+    companion_id UUID NOT NULL,
+    channel_id TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('active', 'closed')),
+    opened_disposition TEXT NOT NULL CHECK (opened_disposition IN (
+      'direct_summons', 'passive_summons', 'reaction', 'reply',
+      'endogenous_room_entry'
+    )),
+    opened_at_ms BIGINT NOT NULL CHECK (opened_at_ms >= 0),
+    last_activity_at_ms BIGINT NOT NULL CHECK (last_activity_at_ms >= 0),
+    expires_at_ms BIGINT NOT NULL CHECK (expires_at_ms > opened_at_ms),
+    watermark_message_id TEXT NOT NULL,
+    watermark_timestamp_ms BIGINT NOT NULL CHECK (watermark_timestamp_ms >= 0),
+    considered_count INTEGER NOT NULL DEFAULT 0 CHECK (considered_count >= 0),
+    ignore_streak INTEGER NOT NULL DEFAULT 0 CHECK (ignore_streak >= 0),
+    machine_streak INTEGER NOT NULL DEFAULT 0 CHECK (machine_streak >= 0),
+    closed_at_ms BIGINT,
+    close_reason TEXT CHECK (close_reason IN (
+      'expiry', 'silence', 'message_cap', 'machine_streak', 'withdrawn',
+      'fatigue', 'room_pressure', 'policy_off'
+    )),
+    revision BIGINT NOT NULL CHECK (revision >= 1),
+    PRIMARY KEY (companion_id, channel_id),
+    CONSTRAINT room_participation_leases_lifecycle_check
+      CHECK ((status = 'closed') = (closed_at_ms IS NOT NULL)),
+    CONSTRAINT room_participation_leases_close_reason_presence_check
+      CHECK ((status = 'closed') = (close_reason IS NOT NULL))
+  );
+  `,
+  // Active leases per room: the contention read for "who else is considering
+  // this conversation", and the sweep index for lapsed membership.
+  `CREATE INDEX IF NOT EXISTS idx_room_participation_leases_active_channel
+    ON room_participation_leases (channel_id, expires_at_ms) WHERE status = 'active';`,
+  `INSERT INTO shared_schema_migrations (version, name)
+    VALUES (19, 'room-participation-lease')
     ON CONFLICT (version) DO NOTHING;`,
 ];
 

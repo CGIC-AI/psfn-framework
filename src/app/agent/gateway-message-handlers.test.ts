@@ -18,6 +18,7 @@ import {
   type ParticipationAppraiserPort,
   type PassiveNameCandidatePort,
   type ReservationPhasePort,
+  type RoomParticipationLeasePort,
 } from './gateway-message-handlers.js';
 import type { EgressLeaseDecision } from '../../core/agent/arbiter/egress-lease-phase.js';
 import {
@@ -47,6 +48,14 @@ import type { RecordedCompanionSourceMessage } from '../../core/session/icp-deli
 import { materializeGatewayAttachment } from '../../boundary/gateway/attachment-materialization.js';
 import { EventBus } from '../../shared/event-bus.js';
 import { ParentTurnContinuationBudgetExceededError } from '../../core/agent/turn-limits.js';
+import { PassiveNameCandidateBuilder } from '../../core/participation/passive-name-candidate.js';
+import { RoomParticipationLeaseCoordinator } from '../../core/participation/room-participation-lease-coordinator.js';
+import { FakeRoomParticipationLeaseStore } from '../../test-support/room-participation-lease-store-fake.js';
+import {
+  createDefaultRoomParticipationLeaseSettings,
+  type RoomParticipationLeaseSettings,
+} from '../../system/config/participation-config.js';
+import type { SessionEntry } from '../../core/session/types.js';
 
 function makeMessage(overrides?: Record<string, unknown>): SubstrateMessage {
   return {
@@ -125,6 +134,7 @@ function createHarness(overrides?: {
   participationAppraiser?: ParticipationAppraiserPort;
   reservationPhase?: ReservationPhasePort;
   egressLeasePhase?: EgressLeasePhasePort;
+  roomParticipationLease?: RoomParticipationLeasePort;
   discordSend?: (channelId: string, content: string) => Promise<void>;
   discordSendMedia?: (channelId: string, media: Attachment) => Promise<void>;
   companionSend?: (
@@ -278,6 +288,9 @@ function createHarness(overrides?: {
       : {}),
     ...(overrides?.egressLeasePhase
       ? { egressLeasePhase: overrides.egressLeasePhase }
+      : {}),
+    ...(overrides?.roomParticipationLease
+      ? { roomParticipationLease: overrides.roomParticipationLease }
       : {}),
     ...(overrides?.outboundReplyGuard
       ? { outboundReplyGuard: overrides.outboundReplyGuard }
@@ -3015,5 +3028,233 @@ describe('registerGatewayMessageHandlers — reservation phase wiring (jp36.5.1.
       .find((call) => call[0] === 'participation.egress.settled');
     expect(settledCall).toBeDefined();
     expect(settledCall?.[1]).not.toHaveProperty('breakerFiring');
+  });
+});
+
+describe('registerGatewayMessageHandlers — bounded room participation lease (jp36.5.5)', () => {
+  /** The reply pump is detached; let its queued turn finish before asserting. */
+  async function settleDiscordPump(): Promise<void> {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+
+  const ROOM = 'discord:general';
+  const OTHER_ROOM = 'discord:offtopic';
+  const COMPANION_ID = '11111111-1111-4111-8111-111111111111';
+  // The gate and the candidate staleness guard both run on the wall clock, so
+  // this assembled test uses live timestamps rather than a frozen fixture date.
+  const NOW = Date.now();
+
+  function leaseSettings(): RoomParticipationLeaseSettings {
+    return {
+      ...createDefaultRoomParticipationLeaseSettings(),
+      enabled: true,
+      continuationCooldownMs: 0,
+      minContentChars: 4,
+    };
+  }
+
+  /**
+   * The real lease coordinator and the real passive-name gate behind the real
+   * registered handlers — only the durable store and the model call are
+   * substituted. This is the assembled multi-message path the bead cares about:
+   * summons → delivered reply → name-free follow-up → appraiser.
+   */
+  function createParticipationHarness(input?: {
+    settings?: RoomParticipationLeaseSettings;
+    sessionEntries?: SessionEntry[];
+  }) {
+    const store = new FakeRoomParticipationLeaseStore();
+    const coordinator = new RoomParticipationLeaseCoordinator({
+      companionId: COMPANION_ID,
+      store,
+      scopeClassifier: { classifyChannelMemoryScope: async () => 'group' },
+      settings: input?.settings ?? leaseSettings(),
+    });
+    const passiveNameCandidateBuilder = new PassiveNameCandidateBuilder({
+      scopeClassifier: { classifyChannelMemoryScope: async () => 'group' },
+      contextReader: { getRecent: (channelId) => (
+        (input?.sessionEntries ?? []).filter(entry => entry.channelId === channelId)
+      ) },
+      companionNames: ['Selene'],
+      companionAuthorIds: ['bot-selene'],
+      roomParticipationLease: coordinator,
+    });
+    const appraise = vi.fn(async (): Promise<ParticipationAppraisalResult> => ({
+      appraisal: { action: 'ignore', reasonCode: 'nothing_to_add', confidence: 0.9 },
+      failClosed: false,
+    }));
+    const harness = createHarness({
+      config: { companionId: COMPANION_ID } as SubstrateConfig,
+      handleMessage: async () => makeResponse('of course — the second option'),
+      passiveNameCandidateBuilder,
+      participationAppraiser: { appraise },
+      roomParticipationLease: coordinator,
+    });
+    return { harness, store, appraise };
+  }
+
+  function roomMessage(overrides: Record<string, unknown> = {}): SubstrateMessage {
+    return makeMessage({
+      id: 'discord-room-1',
+      channelId: ROOM,
+      channelType: 'discord',
+      authorId: 'human-alice',
+      authorName: 'Alice',
+      content: 'Selene what did you make of the second option',
+      timestamp: new Date(NOW),
+      isDirectMessage: false,
+      routing: { source: 'discord' },
+      ...overrides,
+    });
+  }
+
+  it('continues the conversation after a delivered reply and stops at an unrelated room', async () => {
+    const { harness, store, appraise } = createParticipationHarness({
+      sessionEntries: [{
+        id: 1,
+        channelId: ROOM,
+        role: 'user',
+        content: 'Selene what did you make of the second option',
+        authorId: 'human-alice',
+        authorName: 'Alice',
+        timestamp: NOW,
+        discordMessageId: 'discord-room-1',
+      }],
+    });
+
+    // 1. A canonical-name summons is answered through the ordinary reply path,
+    //    which opens the bounded membership.
+    await harness.onDiscordMessage(roomMessage());
+    await settleDiscordPump();
+    const opened = await store.read({ companionId: COMPANION_ID, channelId: ROOM });
+    expect(opened?.status).toBe('active');
+    expect(opened?.openedDisposition).toBe('reply');
+    expect(opened?.watermarkMessageId).toBe('discord-room-1');
+    expect(appraise).not.toHaveBeenCalled();
+
+    // 2. A relevant follow-up that never names the companion now reaches the
+    //    cheap appraiser with the bounded preceding transcript.
+    await harness.onDiscordMessage(roomMessage({
+      id: 'discord-room-2',
+      content: 'though would it actually hold up under real load',
+      timestamp: new Date(NOW + 30_000),
+      routing: { source: 'discord', responseMode: 'observe' },
+    }));
+    await settleDiscordPump();
+    expect(appraise).toHaveBeenCalledTimes(1);
+    const candidate = appraise.mock.calls[0]?.[0] as ParticipationCandidate | undefined;
+    expect(candidate?.trigger).toBe('contextual_continuation');
+    expect(candidate?.matchedName).toBe(false);
+    expect(candidate?.precedingContext.map(entry => entry.messageId)).toEqual([
+      'discord-room-1',
+    ]);
+    // The companion never spoke: `ignore` is a normal terminal outcome.
+    expect(harness.agentLoop.handleMessage).toHaveBeenCalledTimes(1);
+
+    // 3. Ambient chatter in a room with no membership costs no model call.
+    await harness.onDiscordMessage(roomMessage({
+      id: 'discord-other-1',
+      channelId: OTHER_ROOM,
+      content: 'completely unrelated conversation over here',
+      timestamp: new Date(NOW + 40_000),
+      routing: { source: 'discord', responseMode: 'observe' },
+    }));
+    await settleDiscordPump();
+    expect(appraise).toHaveBeenCalledTimes(1);
+    expect(await store.read({ companionId: COMPANION_ID, channelId: OTHER_ROOM })).toBeNull();
+  });
+
+  it('considers each room message once, so a redelivery cannot double-appraise', async () => {
+    const { harness, store, appraise } = createParticipationHarness();
+    await harness.onDiscordMessage(roomMessage());
+    await settleDiscordPump();
+    const followUp = roomMessage({
+      id: 'discord-room-2',
+      content: 'though would it actually hold up under real load',
+      timestamp: new Date(NOW + 30_000),
+      routing: { source: 'discord', responseMode: 'observe' },
+    });
+    await harness.onDiscordMessage(followUp);
+    await settleDiscordPump();
+    // A fresh handler registration models a restart: the in-memory dedupe ring
+    // is gone, only the durable watermark remains.
+    const restarted = createHarness({
+      config: { companionId: COMPANION_ID } as SubstrateConfig,
+      passiveNameCandidateBuilder: new PassiveNameCandidateBuilder({
+        scopeClassifier: { classifyChannelMemoryScope: async () => 'group' },
+        contextReader: { getRecent: () => [] },
+        companionNames: ['Selene'],
+        companionAuthorIds: ['bot-selene'],
+        roomParticipationLease: new RoomParticipationLeaseCoordinator({
+          companionId: COMPANION_ID,
+          store,
+          scopeClassifier: { classifyChannelMemoryScope: async () => 'group' },
+          settings: leaseSettings(),
+        }),
+      }),
+      participationAppraiser: { appraise },
+    });
+    await restarted.onDiscordMessage(followUp);
+    await settleDiscordPump();
+    expect(appraise).toHaveBeenCalledTimes(1);
+    const lease = await store.read({ companionId: COMPANION_ID, channelId: ROOM });
+    expect(lease?.consideredCount).toBe(1);
+    expect(lease?.watermarkMessageId).toBe('discord-room-2');
+  });
+
+  it('retires membership when the arbiter gate reports a flooded room', async () => {
+    const { harness, store } = createParticipationHarness();
+    await harness.onDiscordMessage(roomMessage());
+    await settleDiscordPump();
+    expect((await store.read({ companionId: COMPANION_ID, channelId: ROOM }))?.status)
+      .toBe('active');
+
+    const gated = createHarness({
+      config: { companionId: COMPANION_ID } as SubstrateConfig,
+      passiveNameCandidateBuilder: {
+        build: async () => ({
+          status: 'created' as const,
+          candidate: {
+            schemaVersion: 1,
+            channelId: ROOM,
+            channelType: 'discord',
+            sourceMessageId: 'discord-room-3',
+            trigger: 'contextual_continuation',
+            triggerAuthorId: 'human-alice',
+            triggerAuthorName: 'Alice',
+            triggerContent: 'still going on about it',
+            triggerTimestampMs: NOW + 60_000,
+            matchedName: false,
+            matchedDirectAddress: false,
+            precedingContext: [],
+            createdAtMs: NOW + 60_000,
+          } satisfies ParticipationCandidate,
+        }),
+      },
+      reservationPhase: {
+        reserve: async (): Promise<ReservationDecision> => ({
+          outcome: 'gated',
+          blockedBy: 'room_flooded',
+        }),
+        settleAfterAppraisal: async () => 'released',
+        releaseIgnored: async () => {},
+      },
+      roomParticipationLease: new RoomParticipationLeaseCoordinator({
+        companionId: COMPANION_ID,
+        store,
+        scopeClassifier: { classifyChannelMemoryScope: async () => 'group' },
+        settings: leaseSettings(),
+      }),
+    });
+    await gated.onDiscordMessage(roomMessage({
+      id: 'discord-room-3',
+      content: 'still going on about it',
+      timestamp: new Date(NOW + 60_000),
+      routing: { source: 'discord', responseMode: 'observe' },
+    }));
+    await settleDiscordPump();
+    const lease = await store.read({ companionId: COMPANION_ID, channelId: ROOM });
+    expect(lease?.status).toBe('closed');
+    expect(lease?.closeReason).toBe('room_pressure');
   });
 });

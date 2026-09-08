@@ -1,10 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+// The readiness probe requires the canonical shared ledger, so this fixture
+// tracks it rather than pinning a version list that goes stale on every
+// shared-schema addition.
+import { POSTGRES_SHARED_BASE_MIGRATION_VERSIONS } from './migrations.js';
+
 const mocks = vi.hoisted(() => ({
   poolQuery: vi.fn(async (text: string) => ({
     rows: text.includes('to_regclass')
       ? [{ ledger_table: 'shared.shared_schema_migrations' }]
-      : [{ versions: [1, 2, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18] }],
+      : [{ versions: [...POSTGRES_SHARED_BASE_MIGRATION_VERSIONS] }],
   })),
   poolEnd: vi.fn(async () => {}),
   createPostgresPool: vi.fn(() => ({

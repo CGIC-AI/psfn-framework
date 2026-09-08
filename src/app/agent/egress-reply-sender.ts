@@ -55,6 +55,10 @@ import { wrapUntrustedContext } from '../../core/session/manager-primitives.js';
 import type { OutboundReplyGuardPort } from '../../system/lifecycle/outbound-reply-dedupe.js';
 import type { ChannelDisclosureContext } from '../../system/trust/policy.js';
 import type { AgentResponse, SubstrateMessage } from '../../shared/contracts/runtime.js';
+import { createComponentLogger } from '../../shared/logger.js';
+import { toErrorMessage } from '../../shared/utils/errors.js';
+
+const log = createComponentLogger('egress-reply-sender');
 
 /** Generation primitive: run a turn and return the response (no auto-delivery). */
 export interface EgressReplyGenerator {
@@ -64,6 +68,16 @@ export interface EgressReplyGenerator {
 /** Delivery primitive: send text to a channel (the gateway sender). */
 export interface EgressReplyDelivery {
   send(channelType: 'discord' | 'buzz', channelId: string, content: string): Promise<void>;
+}
+
+/** Narrow append seam for the companion's own delivered room reply. */
+export interface EgressReplyRoomTranscriptPort {
+  recordCompanionRoomReply(input: {
+    channelId: string;
+    content: string;
+    timestampMs: number;
+    channelVisibility: string;
+  }): void;
 }
 
 export interface AgentLoopEgressReplySenderDeps {
@@ -83,6 +97,23 @@ export interface AgentLoopEgressReplySenderDeps {
    * a resolution failure fails the delivery closed (no generation, no send).
    */
   resolveDestinationDisclosure: (channelId: string) => ChannelDisclosureContext;
+  /**
+   * Records the companion's OWN delivered autonomous room reply on the room's
+   * transcript (jp36.5.6, closing the jp36.5.5 seam).
+   *
+   * Generation for this path runs as a synthetic terminal turn on
+   * `internal:egress-reply:<roomId>`, so the assistant entry the turn pipeline
+   * writes lands on that internal channel, not the room. Both adapters also drop
+   * the companion's own messages on ingest, so nothing echoes the reply back.
+   * Without this the room's own continuation transcript shows every participant
+   * except the companion, and the next follow-up is appraised against a
+   * conversation the companion appears not to be in.
+   *
+   * Called ONLY after a confirmed delivery, behind the per-event fence and the
+   * shared outbound guard, so a re-drive appends nothing. Absent port keeps the
+   * previous behavior exactly.
+   */
+  roomTranscript?: EgressReplyRoomTranscriptPort;
   /**
    * The token the model may reply with to decline speaking (mirrors the
    * heartbeat silent-reflection convention). A silent/empty generation is
@@ -288,6 +319,24 @@ export function createAgentLoopEgressReplySender(
         sourceTurnId: request.trigger.sourceEventId,
         senderKind: 'egress_lease_reply',
       });
+      // Record the companion's own delivered turn on the ROOM transcript, after
+      // the guard so ordering matches what the room actually saw. A failure here
+      // must never turn a delivered reply into a failed one: the message is
+      // already in the room, and the fence would suppress any retry anyway.
+      try {
+        deps.roomTranscript?.recordCompanionRoomReply({
+          channelId: request.trigger.channelId,
+          content: reply,
+          timestampMs: now(),
+          channelVisibility: destinationDisclosure.channelPrivacy,
+        });
+      } catch (error) {
+        log.warn('Autonomous room reply delivered but not recorded on the room transcript', {
+          channelId: request.trigger.channelId,
+          sourceEventId: request.trigger.sourceEventId,
+          error: toErrorMessage(error),
+        });
+      }
       return { outcome: 'delivered' };
     },
   };

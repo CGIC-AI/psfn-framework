@@ -1,8 +1,13 @@
-# PSFN Satellite Mobile Chat App
+# PSFN Companion App
 
 `companion-ui` is a standalone mobile-first PWA for companion chat. It is a
 client of the PSFN Satellite Hub and renders the relational chat surface plus
 presence and operational state.
+
+Choose any authorized companion from the cluster picker. Each companion has a
+separate draft and appearance; companions without an avatar remain fully usable
+through text and voice. The Thread and Avatar views share approval prompts,
+spoken replies, and the same authenticated connection.
 
 It does not run PSFN server logic, does not own memory or identity, and does
 not talk to PSFN core directly.
@@ -45,6 +50,19 @@ exact server-issued `/companion-ui/companions/<uuid>/ws` path on that origin.
 There is no build-time Hub URL and no editable Hub, device, session, channel,
 or credential field.
 
+The signed-in status also carries an opaque `displayStateBinding`. It is used
+only to detect a change of account ownership and never authorizes an action.
+It survives routine cookie renewal. A different binding clears drafts, local
+artwork, approvals, capture, and open drawers, including when another tab changes
+accounts with the same display name. Lost transport or offline authority clears
+the same state before reconnection.
+
+The in-tree browser bridge and its explicit, server-held enrollment configuration
+are documented in [Satellite Hub browser routing](../apps/satellite-hub/docs/companion-browser.md).
+Serve the matching gateway, Hub, and app revisions together. The public browser
+connection contains cookies only; Hub credentials and assertion renewal remain
+on the server.
+
 The browser emits no `hello` and no device/session/channel authority. Partner
 identity comes from the fleet session, while a strict `session.ready` frame
 provides server-owned device/place presentation and the physical capability
@@ -69,7 +87,7 @@ Install dependencies from this package directory:
 
 ```bash
 cd companion-ui
-npm install
+npm ci
 ```
 
 Run the development server:
@@ -150,6 +168,38 @@ build-generated static allowlist. Fleet, Garden, callback, authentication,
 WebSocket, query-bearing, credential-header, and no-store request traffic stays
 on the browser network. Online shell responses are never written to Cache
 Storage; offline mode serves only the build-time unauthenticated shell.
+
+Settings includes installation help: an install button when the browser offers
+one, or Safari’s Share → Add to Home Screen instructions on iPhone and iPad.
+The responsive shell accounts for safe areas and portrait/landscape layouts.
+This package builds a PWA; signed native Android/iOS packages are not included.
+
+## Companion appearance and embodiment
+
+Open Settings → Appearance for the selected companion:
+
+- **No avatar** keeps chat available with a name and initial.
+- **Animated sprite** uses the expression, tool, and touch animation catalog.
+  Choose a local sprite pack by selecting `manifest.json` and its four PNG
+  sheets together. The importer checks the frozen animation layout, filenames,
+  PNG structure, and pixel dimensions. Local files replace the default preview
+  for that companion only.
+- **3D model** opens a local, self-contained `.vrm` or `.glb` file with
+  `@pixiv/three-vrm`. VRM 0 and VRM 1 humanoids support idle movement, expressions,
+  and amplitude mouth movement. Other binary glTF models can be viewed with
+  orbit, pan, zoom, and Reset view. External model resources and compressed
+  extensions requiring additional decoders must be embedded or re-exported
+  before import. Invalid files show an actionable error.
+
+Models and sprite packs stay in memory for the open account. They are never
+uploaded and are released on removal, sign-out, or authority loss. Animation
+pauses when the view is hidden or reduced motion is requested. The 3D renderer
+loads separately from the ordinary chat bundle.
+
+Settings → Embodiment reports whether this device is primary. Selecting **Use
+this device as primary** sends an explicit handoff against the observed server
+generation. Connecting, opening settings, and choosing an avatar never claim
+primary embodiment.
 
 ## Emotion Sprite Sheets
 
@@ -247,10 +297,12 @@ Browser action frames have the exact top-level shape
 - `confirmations.resolve`
 - `artifact.preview`
 
-The authenticated gateway sends only:
+The authenticated gateway and Hub send:
 
 - one exact server-owned `session.ready` attachment presentation;
-- one exact correlated `result` for each action.
+- exact correlated `result` frames for submitted actions;
+- capability-scoped conversation, approval, artifact, tool, and audio events;
+- microphone readiness, chunk acknowledgements, and turn lifecycle frames.
 
 Unknown, replayed, uncorrelated, discriminator-only, or structurally malformed
 frames fail closed and close the socket. Action bodies reject browser-supplied
@@ -278,6 +330,11 @@ conversation lists, sidebars, top banners, or always-visible debug panels.
   typed interaction through Satellite Hub.
 - Contextual toast layer: holds errors and any future approval/artifact cards
   above the composer.
+
+Long replies preserve the reader’s scroll position while new text arrives. A
+Jump to latest control returns to the newest message; paragraphs, fenced code,
+safe web links, and Copy reply are supported. Approval cards remain reachable
+when the full avatar view is open.
 
 ## Drawers And Diagnostics
 
@@ -334,6 +391,11 @@ fail-closed:
   server-owned `audio_output` ceiling is never subscribed and receives zero
   audio frames. Interrupt, pause, or authority loss stops in-flight Web Audio
   playback and closes both CSS and manifest-art mouth states.
+- Stop playback is available for spoken typed replies as well as microphone
+  conversations. Sending replacement text stops the previous speech. Normal
+  microphone turn completion allows its spoken reply to finish; interrupted
+  late results cannot restart it. A synthesis failure stops audio and shows a
+  notice while keeping the successful text reply and connection available.
 - Outbound mic **capture** is wired only when the attached gateway session
   advertises both `microphone_pcm` and `final_transcript`. An explicit mic or
   avatar hands-free button gesture unlocks Web Audio and requests getUserMedia;

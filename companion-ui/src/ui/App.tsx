@@ -73,6 +73,8 @@ import { useZ02Link } from './use-z02-link.js';
 import { WishlistDrawer } from './wishlist-drawer.js';
 import { useCompanionTouch } from './use-companion-touch.js';
 import { useCompanionDisplay } from './use-companion-display.js';
+import { VrmAvatarPlayer } from './vrm-avatar-player.js';
+import { useSpriteInputs } from './use-sprite-inputs.js';
 
 type AccessState = FleetSessionStatus
   | Readonly<{ state: 'loading' | 'offline' }>
@@ -102,6 +104,7 @@ export function App() {
   const reconnectTimerRef = useRef<number | null>(null);
   const reconnectAttemptRef = useRef(0);
   const authorityEpochRef = useRef(0);
+  const displayStateBindingRef = useRef<string | null>(null);
   const manualDisconnectRef = useRef(false);
   const interruptedLiveUserRef = useRef<string | null>(null);
   const browserAudioRelay = useMemo(() => ({
@@ -132,14 +135,18 @@ export function App() {
     accessState: access.state,
     connect,
     reportError: setConfigError,
+    verifyAccount,
   });
   const composer = useComposerController({
     captureReady: captureAuthorized,
     playbackReady: streamState.voicePlayback.supported,
   }, `${fleet.activeCompanionId ?? 'guest'}:${streamState.session?.activeShardId ?? 'companion'}`);
   const display = useCompanionDisplay(fleet.activeCompanionId ?? (access.state === 'guest' ? access.websocketPath : null));
+  const { base: avatarEmotion } = useSpriteInputs(streamState.emotion, null, activeView === 'avatar' && display.mode === 'model');
   const spriteEnabled = display.mode === 'sprite';
-  const spriteManifest = useSpriteManifest(spriteEnabled);
+  const spriteManifest = useSpriteManifest(spriteEnabled && !display.spritePack);
+  const selectedSpriteManifest = display.spritePack?.manifest
+    ?? (spriteManifest.state === 'ready' ? spriteManifest.manifest : null);
   const canSend = (access.state === 'signed_in' || access.state === 'guest')
     && streamState.connection === 'ready' && !connecting;
   const touch = useCompanionTouch(storeRef.current, canSend);
@@ -292,7 +299,7 @@ export function App() {
   const companionTalking = voicePlayback.active
     || Boolean(streamState.liveAssistant)
     || (latestTrace?.operationClass === 'relay_tts' && latestTrace.status === 'active');
-  const voiceStopActive = composer.micMode === 'voice' && companionTalking;
+  const voiceStopActive = voicePlayback.active;
   const generationStopActive = Boolean(streamState.liveAssistant)
     || (z02Link.state.phase === 'linked' && streamState.phase === 'responding');
 
@@ -313,7 +320,7 @@ export function App() {
   }, [browserMic.state.phase, companionTalking, streamState.liveUser]);
 
   async function refreshAuthority(connectWhenAllowed: boolean) {
-    const authorityEpoch = authorityEpochRef.current + 1;
+    let authorityEpoch = authorityEpochRef.current + 1;
     authorityEpochRef.current = authorityEpoch;
     const fleetSession = fleetSessionRef.current;
     if (!fleetSession || !navigator.onLine) {
@@ -324,6 +331,14 @@ export function App() {
     try {
       const status = await fleetSession.readStatus();
       if (authorityEpoch !== authorityEpochRef.current) return;
+      if (status.state === 'signed_in') {
+        if (displayStateBindingRef.current !== null
+          && displayStateBindingRef.current !== status.displayStateBinding) {
+          clearHumanScopedState();
+          authorityEpoch = authorityEpochRef.current;
+        }
+        displayStateBindingRef.current = status.displayStateBinding;
+      }
       setAccess(status);
       setConfigError(null);
       if (status.state === 'signed_out') {
@@ -342,6 +357,25 @@ export function App() {
       setAccess({ state: 'offline' });
       setConfigError(error instanceof Error ? error.message : 'Cluster session status failed');
     }
+  }
+
+  async function verifyAccount(): Promise<boolean> {
+    const epoch = authorityEpochRef.current;
+    try {
+      const status = await fleetSessionRef.current?.readStatus();
+      if (epoch !== authorityEpochRef.current) return false;
+      if (status?.state === 'signed_in'
+        && status.displayStateBinding === displayStateBindingRef.current) return true;
+      clearHumanScopedState();
+      setAccess({ state: 'loading' });
+      await refreshAuthority(true);
+    } catch (error) {
+      if (epoch !== authorityEpochRef.current) return false;
+      clearHumanScopedState();
+      setAccess({ state: 'offline' });
+      setConfigError(error instanceof Error ? error.message : 'Account continuity could not be checked');
+    }
+    return false;
   }
 
   async function connect(
@@ -365,6 +399,12 @@ export function App() {
     oldStore?.disconnect();
     const client = new CompanionGatewayClient({
       url: resolveCompanionUiWebSocketUrl(path),
+      onAuthorityLost: () => {
+        if (storeRef.current !== store) return;
+        clearHumanScopedState();
+        // The existing reconnect effect backs off and rechecks fleet authority.
+        setStreamState(current => ({ ...current, connection: 'disconnected' }));
+      },
     });
     const store = new HubStreamStore(client);
     storeRef.current = store;
@@ -378,6 +418,7 @@ export function App() {
         store.disconnect();
         return false;
       }
+      if (displayStateBindingRef.current !== null && !await verifyAccount()) return false;
       reconnectAttemptRef.current = 0;
       if (store.snapshot().session?.canListShards) {
         store.refreshShards();
@@ -409,6 +450,7 @@ export function App() {
 
   function clearHumanScopedState() {
     authorityEpochRef.current += 1;
+    displayStateBindingRef.current = null;
     void browserMic.stop();
     const store = storeRef.current;
     storeRef.current = null;
@@ -422,6 +464,7 @@ export function App() {
     display.clear();
     z02Link.disconnect();
     setActiveView('thread');
+    setOverlay(null);
   }
 
   function disconnect() {
@@ -568,6 +611,8 @@ export function App() {
         thread={(
           <>
             <ThreadView
+              active={activeView === 'thread'}
+              companionLabel={identityLabel}
               streamState={streamState}
               targetLabel={streamState.session?.activeShardId
                 ? streamState.session.shards?.find(
@@ -583,7 +628,7 @@ export function App() {
                 mouthOpen={mouthOpen}
                 onHeadpat={touch.headpat}
                 petted={touch.petted}
-                manifest={spriteManifest.state === 'ready' ? spriteManifest.manifest : null}
+                manifest={selectedSpriteManifest}
                 touch={touch.petted ? 'headpat-happy' : null}
                 emotion={streamState.emotion}
                 toolActivity={latestToolActivity}
@@ -619,11 +664,15 @@ export function App() {
             animated={spriteAnimations}
             active={activeView === 'avatar'}
             displayMode={display.mode}
+            model={display.mode === 'model' && display.file ? (
+              <VrmAvatarPlayer file={display.file} active={activeView === 'avatar'}
+                animated={spriteAnimations} mouthOpen={mouthOpen} emotionalBase={avatarEmotion} label={identityLabel} />
+            ) : undefined}
             mouthOpen={mouthOpen}
             toolActivity={latestToolActivity}
             onChooseAppearance={() => setOverlay('settings')}
             label={identityLabel}
-            manifest={spriteManifest.state === 'ready' ? spriteManifest.manifest : null}
+            manifest={selectedSpriteManifest}
             emotion={streamState.emotion}
             handsFreeActive={browserMic.state.phase === 'active' && browserMic.state.handsFree}
             handsFreeAvailable={captureAuthorized}
@@ -651,6 +700,7 @@ export function App() {
           {overlay === 'settings' ? (
             <SettingsDrawer
               access={accessPresentation}
+              activeStream={storeRef.current}
               activeCompanionId={fleet.activeCompanionId}
               companions={fleet.roster}
               connecting={connecting}

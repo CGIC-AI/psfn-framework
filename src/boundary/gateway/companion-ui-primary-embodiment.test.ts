@@ -29,17 +29,36 @@ const attachment = {
   channel: { source: 'server', id: `hub-device:${'a'.repeat(64)}`, companionId },
 } as const satisfies HubDeviceAttachmentSnapshot;
 
-function compiled(resource: 'conversation.interact' | 'embodiment.handoff', body: unknown) {
+function compiled(resource: 'conversation.interact' | 'embodiment.handoff' | 'embodiment.status', body: unknown) {
   return compileCompanionUiAction(Buffer.from(JSON.stringify({
     schemaVersion: 1,
     requestId: 'request-1',
-    action: resource === 'embodiment.handoff' ? 'embodiment.handoff' : 'companion.interact',
+    action: resource === 'embodiment.handoff' ? 'embodiment.handoff'
+      : resource === 'embodiment.status' ? 'companion.read' : 'companion.interact',
     resource,
     body,
   })), companionId, { capabilities: ['text'], telemetryScopes: [] });
 }
 
 describe('Companion UI primary embodiment dispatch', () => {
+  it('keeps an existing primary on assertion renewal but never grants it to a reconnected session', async () => {
+    const state = { companionId, generation: 1, version: 1, lastDecision: null,
+      current: { attachmentId: '99999999-9999-4999-8999-999999999999',
+        deviceId: attachment.deviceActor.principal.deviceId, enrollmentVersion: 2,
+        hubSessionId: attachment.deviceActor.principal.sessionId } };
+    const authority = { read: vi.fn(async () => state), handoff: vi.fn() };
+    const input = { compiled: compiled('embodiment.status', {}), attachment, authority };
+    await expect(dispatchCompanionUiPrimaryEmbodiment(input)).resolves.toEqual({
+      handled: true, result: { generation: 1, version: 1, primaryPresent: true,
+        currentDeviceIsPrimary: true, lastDecision: null },
+    });
+    await expect(dispatchCompanionUiPrimaryEmbodiment({ ...input, attachment: {
+      ...attachment, deviceActor: { ...attachment.deviceActor,
+        principal: { ...attachment.deviceActor.principal, sessionId: 'reconnected-session' } },
+    } })).resolves.toMatchObject({ result: { currentDeviceIsPrimary: false } });
+    expect(authority.handoff).not.toHaveBeenCalled();
+  });
+
   it('does not infer handoff from an ordinary browser interaction', async () => {
     const handoff = vi.fn();
     await expect(dispatchCompanionUiPrimaryEmbodiment({

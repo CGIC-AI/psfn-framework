@@ -1,6 +1,7 @@
 import type { TouchInteraction } from '../touch-interactions.js';
 import type { DeviceLocationSample } from '../geolocation.js';
 import type { PcmAudioStreamPort } from './pcm-audio.js';
+import { BrowserEmbodimentRequests, type BrowserEmbodimentPort } from './primary-embodiment.js';
 import type { HubToClientMessage } from '../protocol/events.js';
 import { buildSatelliteHello } from './auth.js';
 import { COMPANION_APPROVALS_V2_CAPABILITY } from '../../../../src/shared/contracts/companion-relay.js';
@@ -88,6 +89,8 @@ export interface CompanionGatewayClientOptions {
   readonly handshakeTimeoutMs?: number;
   readonly maxBufferedAudioBytes?: number;
   readonly maxPendingAudioFrames?: number;
+  /** Lost transport invalidates the browser's proof of account continuity. */
+  readonly onAuthorityLost?: () => void;
 }
 
 type Listener = (event: SatelliteHubClientEventMap[keyof SatelliteHubClientEventMap]) => void;
@@ -99,6 +102,8 @@ type Listener = (event: SatelliteHubClientEventMap[keyof SatelliteHubClientEvent
  * browser frame.
  */
 export class CompanionGatewayClient {
+  private readonly embodimentRequests: BrowserEmbodimentRequests;
+  private embodimentPort: BrowserEmbodimentPort | undefined;
   readonly pcmAudio: PcmAudioStreamPort = Object.freeze({
     start: () => this.startPcmAudioStream(),
     write: (pcm: Uint8Array) => this.sendPcmAudio(pcm),
@@ -115,6 +120,8 @@ export class CompanionGatewayClient {
   private state: SatelliteHubConnectionState = 'idle';
   private ready = false;
   private activeInteraction: ActiveInteraction | null = null;
+  // Speech can outlive the text result; keep its selector only for an explicit Stop.
+  private lastCompletedInteraction: ActiveInteraction | null = null;
   private activeAudio: ActiveAudioStream | null = null;
   private authorizedShardId: string | null = null;
   private session: SatelliteHubSession = {};
@@ -123,6 +130,14 @@ export class CompanionGatewayClient {
     this.clock = options.clock ?? (() => new Date());
     this.requestIdFactory = options.requestIdFactory ?? (() => globalThis.crypto.randomUUID());
     this.handshakeTimeoutMs = options.handshakeTimeoutMs ?? 10_000;
+    this.embodimentRequests = new BrowserEmbodimentRequests({
+      requestId: this.requestIdFactory,
+      timeoutMs: this.handshakeTimeoutMs,
+      send: (requestId, resource, body) => {
+        this.sendAction(resource, resource === 'embodiment.status' ? 'companion.read' : 'embodiment.handoff', body, { requestId });
+      },
+      abandon: requestId => { this.pending.delete(requestId); },
+    });
     this.maxBufferedAudioBytes = options.maxBufferedAudioBytes
       ?? DEFAULT_MAX_BUFFERED_AUDIO_BYTES;
     this.maxPendingAudioFrames = options.maxPendingAudioFrames
@@ -147,6 +162,10 @@ export class CompanionGatewayClient {
     const wrapped = listener as Listener;
     listeners.add(wrapped);
     return () => listeners?.delete(wrapped);
+  }
+
+  get primaryEmbodiment(): BrowserEmbodimentPort | undefined {
+    return this.ready ? this.embodimentPort : undefined;
   }
 
   snapshot(): SatelliteHubSnapshot {
@@ -174,13 +193,18 @@ export class CompanionGatewayClient {
         else resolve();
       };
       const timeout = globalThis.setTimeout(() => {
+        if (this.socket !== socket) {
+          settle(new Error('Companion connection was replaced before attachment was ready'));
+          return;
+        }
         const error = this.emitLocalError('Companion attachment handshake timed out', false);
-        this.socket?.close(1002, 'Handshake timeout');
+        socket.close(1002, 'Handshake timeout');
         settle(error);
       }, this.handshakeTimeoutMs);
       const socket = this.createSocket(this.options.url);
       this.socket = socket;
       this.attachSocketListener(socket, 'open', () => {
+        if (this.socket !== socket) return;
         this.setState('connected');
         socket.send(JSON.stringify({
           schemaVersion: 1,
@@ -189,51 +213,63 @@ export class CompanionGatewayClient {
         }));
       });
       this.attachSocketListener(socket, 'message', (raw) => {
-        void this.handleRawSocketMessage(raw).then((becameReady) => {
+        void this.handleRawSocketMessage(raw, socket).then((becameReady) => {
           if (becameReady) settle();
         });
       });
       this.attachSocketListener(socket, 'error', (cause) => {
+        if (this.socket !== socket) return;
         const error = this.emitLocalError('Companion gateway websocket error', true, cause);
         if (!this.ready) settle(error);
       });
       this.attachSocketListener(socket, 'close', () => {
+        if (this.socket !== socket) {
+          settle(new Error('Companion gateway closed before attachment was ready'));
+          return;
+        }
+        this.embodimentRequests.reset(new Error('The companion disconnected. Reconnect to read its embodiment status.'));
         this.clearAudio(new Error('Companion gateway closed during audio startup'));
         this.socket = null;
         this.ready = false;
         this.pending.clear();
         this.activeInteraction = null;
+        this.lastCompletedInteraction = null;
         this.authorizedShardId = null;
         this.session = {};
         this.setState('closed');
         if (!settled) settle(new Error('Companion gateway closed before attachment was ready'));
+        this.options.onAuthorityLost?.();
       });
     });
   }
 
   disconnect(): void {
+    this.embodimentRequests.reset(new Error('The companion disconnected. Reconnect to read its embodiment status.'));
     const socket = this.socket;
     this.socket = null;
     this.ready = false;
     this.pending.clear();
     this.activeInteraction = null;
+    this.lastCompletedInteraction = null;
     this.authorizedShardId = null;
     this.clearAudio(new Error('Companion gateway disconnected during audio streaming'));
     this.session = {};
     if (socket && socket.readyState !== SOCKET_CLOSED && socket.readyState !== SOCKET_CLOSING) {
-      this.setState('closing');
       socket.close(1000, 'Companion UI disconnect');
-      return;
     }
     this.setState('closed');
   }
 
-  sendUserText(text: string): void {
+  sendUserText(text: string, options?: { interrupt?: boolean }): void {
     const content = text.trim();
     if (!content) throw this.emitLocalError('Typed message is empty', false);
     const shardId = this.session.activeShardId;
     if (shardId && shardId !== this.authorizedShardId) {
       throw this.emitLocalError('Selected shard has not been reauthorized', true);
+    }
+    if (options?.interrupt) {
+      this.interrupt();
+      this.emitInbound({ type: 'action', data: 'pause-audio' });
     }
     const requestId = shardId
       ? this.sendAction(
@@ -251,6 +287,7 @@ export class CompanionGatewayClient {
       requestId,
       ...(shardId ? { shardId } : {}),
     };
+    this.lastCompletedInteraction = null;
     this.emitInbound({ type: 'message', data: { role: 'user', content, final: true } });
   }
 
@@ -350,7 +387,7 @@ export class CompanionGatewayClient {
   interrupt(): void {
     const audio = this.activeAudio;
     const socket = this.socket;
-    if (audio?.phase === 'ready' && audio.turnActive
+    if (audio?.phase === 'ready' && (audio.turnActive || !this.activeInteraction)
       && socket?.readyState === SOCKET_OPEN) {
       try {
         socket.send(JSON.stringify({
@@ -363,7 +400,7 @@ export class CompanionGatewayClient {
       }
       return;
     }
-    const interaction = this.activeInteraction;
+    const interaction = this.activeInteraction ?? this.lastCompletedInteraction;
     if (!interaction) return;
     const { requestId: interactionId, shardId } = interaction;
     this.sendAction(
@@ -445,7 +482,7 @@ export class CompanionGatewayClient {
 
   private sendAction(
     resource: CompanionUiResource,
-    action: 'companion.read' | 'companion.interact' | 'confirmations.resolve' | 'artifacts.read',
+    action: 'companion.read' | 'companion.interact' | 'confirmations.resolve' | 'artifacts.read' | 'embodiment.handoff',
     body: Record<string, unknown>,
     options: SendActionOptions = {},
   ): string {
@@ -474,8 +511,9 @@ export class CompanionGatewayClient {
     return requestId;
   }
 
-  private async handleRawSocketMessage(raw: unknown): Promise<boolean> {
+  private async handleRawSocketMessage(raw: unknown, socket: SatelliteHubWebSocketLike): Promise<boolean> {
     const text = await decodeSocketText(raw);
+    if (this.socket !== socket) return false;
     if (text === null) return this.failProtocol('Unsupported websocket payload');
     let value: unknown;
     try {
@@ -503,6 +541,7 @@ export class CompanionGatewayClient {
     const result = parseGatewayResult(value);
     if (!result) return this.failProtocol('Companion gateway frame was malformed');
     if (!result.ok) {
+      this.embodimentRequests.reset(new Error('The embodiment request was denied. Refresh its status before trying again.'));
       this.emitLocalError('Companion action was denied', true);
       return false;
     }
@@ -514,6 +553,7 @@ export class CompanionGatewayClient {
   }
 
   private applyReady(ready: AttachmentReady): void {
+    this.lastCompletedInteraction = null;
     const capabilities = mapCapabilities(ready.capabilities, ready.telemetryScopes);
     this.session = {
       deviceId: ready.device.id,
@@ -523,6 +563,15 @@ export class CompanionGatewayClient {
       eventCapabilities: [...ready.eventCapabilities],
       canListShards: ready.telemetryScopes.includes('status'),
     };
+    const port: BrowserEmbodimentPort = Object.freeze({
+      read: () => this.primaryEmbodiment === port
+        ? this.embodimentRequests.read()
+        : Promise.reject(new Error('This companion attachment is no longer current.')),
+      handoff: (expectedGeneration: number) => this.primaryEmbodiment === port
+        ? this.embodimentRequests.handoff(expectedGeneration)
+        : Promise.reject(new Error('This companion attachment is no longer current.')),
+    });
+    this.embodimentPort = port;
     this.ready = true;
     this.setState('ready');
     this.emit('session', cloneGatewaySession(this.session));
@@ -567,7 +616,8 @@ export class CompanionGatewayClient {
         return this.failProtocol('Companion audio turn ended out of order');
       }
       audio.turnActive = false;
-      this.emitInbound({ type: 'action', data: 'pause-audio' });
+      // Generation has ended; Hub synthesis/playback may still be in flight.
+      // Only an explicit interruption or authority loss cancels spoken output.
       return false;
     }
     if (audio.phase !== 'stopping' || !audio.stopped || audio.turnActive
@@ -591,6 +641,12 @@ export class CompanionGatewayClient {
 
   private consumeResult(requestId: string, pending: PendingAction, result: unknown): void {
     switch (pending.resource) {
+      case 'embodiment.status':
+      case 'embodiment.handoff':
+        if (!this.embodimentRequests.consume(requestId, result)) {
+          this.failProtocol('Primary embodiment result was malformed');
+        }
+        return;
       case 'conversation.interact':
       case 'conversation.touch': {
         const response = parseAgentResponse(result);
@@ -601,6 +657,7 @@ export class CompanionGatewayClient {
         if (pending.resource === 'conversation.interact'
           && this.activeInteraction?.requestId === requestId
           && this.activeInteraction.shardId === undefined) {
+          this.lastCompletedInteraction = this.activeInteraction;
           this.activeInteraction = null;
         }
         if (response.content
@@ -660,6 +717,7 @@ export class CompanionGatewayClient {
         }
         if (this.activeInteraction?.requestId === requestId
           && this.activeInteraction.shardId === shardId) {
+          this.lastCompletedInteraction = this.activeInteraction;
           this.activeInteraction = null;
         }
         if (response.content && this.session.activeShardId === shardId
@@ -679,6 +737,9 @@ export class CompanionGatewayClient {
         if (this.activeInteraction?.requestId === pending.interactionId) {
           this.activeInteraction = null;
         }
+        if (this.lastCompletedInteraction?.requestId === pending.interactionId) {
+          this.lastCompletedInteraction = null;
+        }
         return;
       case 'shards.interrupt': {
         const shardId = pending.shardId;
@@ -692,6 +753,11 @@ export class CompanionGatewayClient {
           && activeInteraction.requestId === pending.interactionId
           && activeInteraction.shardId === shardId) {
           this.activeInteraction = null;
+        }
+        const completedInteraction = this.lastCompletedInteraction;
+        if (completedInteraction && completedInteraction.requestId === pending.interactionId
+          && completedInteraction.shardId === shardId) {
+          this.lastCompletedInteraction = null;
         }
         return;
       }
@@ -770,6 +836,7 @@ export class CompanionGatewayClient {
   private emitLocalError(message: string, recoverable: boolean, cause?: unknown): Error {
     const error = cause instanceof Error ? cause : new Error(message);
     if (!recoverable) {
+      this.embodimentRequests.reset(new Error('The companion connection failed. Reconnect to read its embodiment status.'));
       this.ready = false;
       this.setState('error');
     }

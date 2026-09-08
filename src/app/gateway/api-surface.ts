@@ -729,6 +729,10 @@ export async function startOptionalGatewayApiServer(
     && options.satelliteRegistry
     && options.companionRelay
     ? new CompanionUiWebSocketAdapter({
+        ...(env.FLEET_SSO_COMPANION_UI_HUB_ORIGIN?.trim()
+          ? { browserHubOrigin: env.FLEET_SSO_COMPANION_UI_HUB_ORIGIN.trim(),
+              browserHubTimeoutMs: GATEWAY_API_REQUEST_TIMEOUT_MS }
+          : {}),
         canonicalOrigin: options.config.fleetAuth.canonicalOrigin,
         satelliteApiKeys,
         satelliteRegistry: options.satelliteRegistry,

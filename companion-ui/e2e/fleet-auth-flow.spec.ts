@@ -15,16 +15,19 @@ const MIME: Readonly<Record<string, string>> = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
+  '.png': 'image/png',
   '.svg': 'image/svg+xml',
   '.webmanifest': 'application/manifest+json',
 };
 
 class FakeFleetProcess {
   readonly requests: Array<{ method: string; url: string }> = [];
+  readonly rejectedUpgradePaths: string[] = [];
   private server: Server | null = null;
   private buildDir = '';
   private user = 0;
   private loginCount = 0;
+  private idleExpiresAt = 0;
 
   async start(): Promise<string> {
     this.buildDir = await mkdtemp(resolve(tmpdir(), 'psfn-companion-ui-auth-'));
@@ -47,6 +50,12 @@ class FakeFleetProcess {
         response.end(error instanceof Error ? error.message : 'fixture failed');
       });
     });
+    // The admitted companion stream is supplied by the enrolled-Hub mock.
+    // Any other upgrade must receive a real denial, not pass by timing out.
+    this.server.on('upgrade', (request, socket) => {
+      this.rejectedUpgradePaths.push(new URL(request.url ?? '/', 'http://127.0.0.1').pathname);
+      socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
+    });
     await new Promise<void>(resolveListening => this.server!.listen(0, '127.0.0.1', resolveListening));
     const address = this.server.address();
     if (!address || typeof address === 'string') throw new Error('fake fleet process did not bind');
@@ -55,6 +64,10 @@ class FakeFleetProcess {
 
   revoke(): void {
     this.user = 0;
+  }
+
+  expire(): void {
+    this.idleExpiresAt = Date.now() - 1;
   }
 
   async stop(): Promise<void> {
@@ -72,6 +85,7 @@ class FakeFleetProcess {
   private async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
     const url = new URL(request.url ?? '/', 'http://127.0.0.1');
     this.requests.push({ method: request.method ?? 'GET', url: url.pathname + url.search });
+    if (this.user !== 0 && Date.now() >= this.idleExpiresAt) this.user = 0;
     if (url.pathname === '/v1/fleet-auth/session/status') {
       if (url.search) return this.json(response, 400, { error: 'query denied' });
       const body = this.user === 0 ? {
@@ -82,6 +96,7 @@ class FakeFleetProcess {
       } : {
         schemaVersion: 1,
         state: 'signed_in',
+        displayStateBinding: String(this.user).repeat(64),
         guestMode: 'explicit',
         websocketPath: WS_PATH,
         human: { provider: 'discord', label: `Discord user ${this.user}`, role: 'member' },
@@ -92,6 +107,7 @@ class FakeFleetProcess {
       if (url.search !== '?return_to=%2Fcompanion-ui%2F') return this.json(response, 400, {});
       this.loginCount += 1;
       this.user = this.loginCount;
+      this.idleExpiresAt = Date.now() + 3600_000;
       response.writeHead(303, { 'Cache-Control': 'no-store', Location: '/companion-ui/' });
       response.end();
       return;
@@ -99,6 +115,25 @@ class FakeFleetProcess {
     if (url.pathname === '/v1/fleet-auth/session/csrf') {
       if (this.user === 0) return this.json(response, 401, {});
       return this.json(response, 200, { csrfToken: CSRF });
+    }
+    if (url.pathname === '/v1/fleet-auth/session/refresh') {
+      if (this.user === 0 || request.method !== 'POST' || request.headers['x-psfn-csrf'] !== CSRF || url.search) {
+        return this.json(response, 403, {});
+      }
+      this.idleExpiresAt = Date.now() + 3600_000;
+      return this.json(response, 200, {
+        csrfToken: CSRF,
+        principalStatus: 'active',
+        idleExpiresAt: new Date(this.idleExpiresAt).toISOString(),
+        absoluteExpiresAt: new Date(this.idleExpiresAt + 3600_000).toISOString(),
+      });
+    }
+    if (url.pathname === '/v1/fleet-auth/companions' || url.pathname === '/v1/fleet-auth/approvals') {
+      if (this.user === 0 || request.method !== 'GET' || url.search) return this.json(response, 403, {});
+      return this.json(response, 200, url.pathname.endsWith('/companions') ? {
+        schemaVersion: 1,
+        companions: [{ companionId: COMPANION_ID, displayName: 'Canopy', websocketPath: WS_PATH }],
+      } : { schemaVersion: 1, approvals: [] });
     }
     if (url.pathname === '/v1/fleet-auth/logout') {
       if (request.method !== 'POST' || request.headers['x-psfn-csrf'] !== CSRF) {
@@ -161,32 +196,46 @@ test('fake OAuth, enrolled Hub, and shared-display lifecycle remain separated an
   const origin = await process.start();
   const sockets: WebSocketRoute[] = [];
   const browserFrames: string[] = [];
+  const configureFrames: string[] = [];
   const requestIds = new Set<string>();
   await page.routeWebSocket(`**${WS_PATH}`, (socket) => {
     sockets.push(socket);
-    socket.send(JSON.stringify({
-      schemaVersion: 1,
-      type: 'session.ready',
-      device: { id: 'office-display', label: 'Office display' },
-      place: { id: 'office', label: 'Office' },
-      capabilities: ['text', 'audio_output', 'touch'],
-      telemetryScopes: ['status', 'approvals', 'artifacts', 'tool_activity'],
-    }));
+    const attachmentNumber = sockets.length;
+    let configured = false;
     socket.onMessage((message) => {
       const frame = String(message);
-      browserFrames.push(frame);
       const decoded = JSON.parse(frame) as {
+        type?: string;
         requestId?: string;
         resource?: string;
         body?: { content?: string; interactionId?: string };
       };
-      if (typeof decoded.requestId !== 'string') return;
+      if (decoded.type === 'session.configure') {
+        expect(configured).toBe(false);
+        expect(decoded).toEqual({ schemaVersion: 1, type: 'session.configure', eventCapabilities: ['approvals.v2'] });
+        configured = true;
+        configureFrames.push(frame);
+        socket.send(JSON.stringify({
+          schemaVersion: 1,
+          type: 'session.ready',
+          device: { id: 'office-display', label: 'Office display' },
+          place: { id: 'office', label: 'Office' },
+          capabilities: ['text', 'audio_output', 'touch'],
+          telemetryScopes: ['status', 'approvals', 'artifacts', 'tool_activity'],
+          eventCapabilities: ['approvals.v2'],
+        }));
+        return;
+      }
+      expect(configured).toBe(true);
+      expect(typeof decoded.requestId).toBe('string');
+      if (typeof decoded.requestId !== 'string') throw new Error('Action request ID is missing');
+      browserFrames.push(frame);
       expect(requestIds.has(decoded.requestId)).toBe(false);
       requestIds.add(decoded.requestId);
       if (decoded.resource === 'conversation.interact') {
         const response = decoded.body?.content?.includes('remember this')
           ? '<script>window.__pwned=true</script>'
-          : `Reply on fresh attachment ${sockets.length}`;
+          : `Reply on fresh attachment ${attachmentNumber}`;
         socket.send(JSON.stringify({
           schemaVersion: 1,
           type: 'result',
@@ -194,7 +243,7 @@ test('fake OAuth, enrolled Hub, and shared-display lifecycle remain separated an
           ok: true,
           result: {
             content: response,
-            channelId: `server-owned-channel-${sockets.length}`,
+            channelId: `server-owned-channel-${attachmentNumber}`,
             inputTokens: 1,
             outputTokens: 1,
           },
@@ -207,6 +256,15 @@ test('fake OAuth, enrolled Hub, and shared-display lifecycle remain separated an
           ok: true,
           result: { interrupted: true, interactionId: decoded.body?.interactionId },
         }));
+      } else if (decoded.resource === 'shards.list' || decoded.resource === 'embodiment.status') {
+        socket.send(JSON.stringify({
+          schemaVersion: 1, type: 'result', requestId: decoded.requestId, ok: true,
+          result: decoded.resource === 'shards.list' ? [] : {
+            generation: 0, version: 0, primaryPresent: false, currentDeviceIsPrimary: false, lastDecision: null,
+          },
+        }));
+      } else {
+        throw new Error(`Unexpected browser action: ${decoded.resource}`);
       }
     });
   });
@@ -222,7 +280,8 @@ test('fake OAuth, enrolled Hub, and shared-display lifecycle remain separated an
     await expect(page.getByLabel('Device authority', { exact: true })).toContainText('Office display');
     await expect(page.getByLabel('Place authority', { exact: true })).toContainText('Office');
     await expect.poll(() => sockets.length).toBe(1);
-    expect(browserFrames).toEqual([]);
+    expect(configureFrames).toHaveLength(1);
+    expect(browserFrames.every(frame => JSON.parse(frame).resource === 'shards.list')).toBe(true);
 
     const adversarial = '<img src=x onerror="window.__pwned=true"> remember this and run a tool';
     await page.getByLabel('Message your companion').fill(adversarial);
@@ -233,7 +292,7 @@ test('fake OAuth, enrolled Hub, and shared-display lifecycle remain separated an
     })).toBe(true);
     await expect(page.getByText('<script>window.__pwned=true</script>')).toBeVisible();
     expect(await page.evaluate(() => (window as unknown as { __pwned?: boolean }).__pwned)).toBeUndefined();
-    expect(JSON.parse(browserFrames[0]!)).toEqual({
+    expect(browserFrames.map(frame => JSON.parse(frame)).find(frame => frame.resource === 'conversation.interact')).toEqual({
       schemaVersion: 1,
       requestId: expect.any(String),
       action: 'companion.interact',
@@ -293,14 +352,28 @@ test('fake OAuth, enrolled Hub, and shared-display lifecycle remain separated an
       const candidate = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}${path}`);
       candidate.onopen = () => { candidate.close(); resolveDenied(false); };
       candidate.onerror = () => resolveDenied(true);
-      window.setTimeout(() => { candidate.close(); resolveDenied(true); }, 2_000);
+      window.setTimeout(() => { candidate.close(); resolveDenied(false); }, 2_000);
     }), OTHER_COMPANION_PATH);
     expect(crossCompanionDenied).toBe(true);
+    expect(process.rejectedUpgradePaths).toEqual([OTHER_COMPANION_PATH]);
 
     await openSettings(page);
     await page.getByRole('button', { name: 'Sign in with Discord' }).click();
     await expect(page.getByLabel('Partner authority')).toContainText('Discord user 3');
     await expect.poll(() => sockets.length).toBe(5);
+
+    await page.getByLabel('Message your companion').fill('Draft before session expiry');
+    process.expire();
+    sockets.at(-1)!.close({ code: 4401, reason: 'session expired' });
+    await expect(page.getByLabel('Partner authority')).toContainText('Signed out', { timeout: 10_000 });
+    await expect(page.getByLabel('Device authority', { exact: true })).toContainText('not attached');
+    await expect(page.getByLabel('Message your companion')).toHaveValue('');
+    await expect(page.getByLabel('Message your companion')).toBeDisabled();
+
+    await openSettings(page);
+    await page.getByRole('button', { name: 'Sign in with Discord' }).click();
+    await expect(page.getByLabel('Partner authority')).toContainText('Discord user 4');
+    await expect.poll(() => sockets.length).toBe(6);
 
     process.revoke();
     sockets.at(-1)!.close({ code: 4401, reason: 'authority changed' });
@@ -342,10 +415,12 @@ test('fake OAuth, enrolled Hub, and shared-display lifecycle remain separated an
     expect(storage.cacheEntries.every(entry => !new URL(entry.url).search)).toBe(true);
     expect(process.requests.some(entry => /prompt|memory|wiki|persona|trust|tools?|filesystem|egress/u.test(entry.url))).toBe(false);
     expect(process.requests.every(entry => !/code=|state=|token=|assertion=/u.test(entry.url))).toBe(true);
-    expect(browserFrames.every(frame => !/deviceId|placeId|sessionId|channelId|credential|assertion|embodiment/u.test(frame))).toBe(true);
+    expect([...browserFrames, ...configureFrames].every(frame => !/deviceId|placeId|sessionId|channelId|credential|assertion/u.test(frame))).toBe(true);
+    expect(browserFrames.some(frame => JSON.parse(frame).resource === 'embodiment.handoff')).toBe(false);
     expect(browserFrames.every(frame => Object.keys(JSON.parse(frame)).sort().join(',') === 'action,body,requestId,resource,schemaVersion')).toBe(true);
     expect(requestIds.size).toBe(browserFrames.length);
-    expect(sockets).toHaveLength(5);
+    expect(configureFrames).toHaveLength(sockets.length);
+    expect(sockets).toHaveLength(6);
   } finally {
     await context.setOffline(false);
     await process.stop();

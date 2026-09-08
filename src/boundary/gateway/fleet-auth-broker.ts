@@ -261,6 +261,19 @@ export class GatewayFleetAuthBroker {
     return await this.authorizationContextResolver.resolve(input);
   }
 
+  /**
+   * Browser display ownership only: never a credential or action authority.
+   * Principal identity survives cookie rotation; authority resets do not.
+   */
+  displayStateBinding(context: Pick<FleetAuthorizationContext, 'principalId' | 'authority'>): string {
+    return this.digest(JSON.stringify([
+      'companion-ui-display-state:v1',
+      context.principalId,
+      context.authority.authorityGeneration,
+      context.authority.globalAuthEpoch,
+    ]));
+  }
+
   async beginLogin(input: { returnPath: string }): Promise<{
     authorizationUrl: string;
     initiatingBrowserToken: string;

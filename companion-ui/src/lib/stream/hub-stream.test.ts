@@ -5,6 +5,7 @@ import type {
 } from '../api/client.js';
 import { buildSatelliteHello } from '../api/auth.js';
 import type { HubToClientMessage } from '../protocol/events.js';
+import { parseHubToClientMessage } from '../protocol/framing.js';
 import {
   createInitialHubStreamState,
   HubStreamStore,
@@ -850,6 +851,79 @@ describe('hub stream voice playback wiring', () => {
     state = inbound(state, { type: 'assistant.interrupted', sessionId: 's' }, '2026-07-22T00:00:03.000Z');
     expect(state.voicePlayback.bracketOpen).toBe(false);
     expect(state.voicePlayback.pending).toHaveLength(0);
+  });
+
+  it('preserves completed and live text while a speech failure resets queued and in-flight audio', () => {
+    const at = '2026-07-22T00:00:00.000Z';
+    let state = reduceHubStreamState(withStreamedAudio(at), {
+      type: 'client.state', event: { previous: 'connected', current: 'ready' }, at,
+    });
+    state = inbound(state, { type: 'message', data: { role: 'assistant', content: 'A valid text reply.', final: true } }, at);
+    state = inbound(state, { type: 'text', data: 'audio-init' }, at);
+    state = inbound(state, { type: 'audio', data: AUDIO_CHUNK }, at);
+    state = inbound(state, { type: 'text', data: 'audio-end' }, at);
+    state = inbound(state, { type: 'text', data: 'audio-init' }, at);
+    state = inbound(state, { type: 'audio', data: AUDIO_CHUNK }, at);
+    state = inbound(state, { type: 'message', data: { role: 'assistant', content: 'More text still arriving', live: true } }, at);
+    const before = state;
+    expect(before.voicePlayback.queue).toHaveLength(1);
+    expect(before.voicePlayback.pending).toHaveLength(1);
+
+    state = inbound(state, parseHubToClientMessage(JSON.stringify({
+      type: 'error-event', data: { message: 'Private provider diagnostics', scope: 'speech' },
+    })), at);
+
+    expect(state.connection).toBe('ready');
+    expect(state.phase).toBe(before.phase);
+    expect(state.messages).toEqual(before.messages);
+    expect(state.liveAssistant).toEqual(before.liveAssistant);
+    expect(state.session).toEqual(before.session);
+    expect(state.voicePlayback).toMatchObject({ supported: true, bracketOpen: false, pending: [], queue: [] });
+    expect(state.voicePlayback.resetGeneration).toBe(before.voicePlayback.resetGeneration + 1);
+    expect(state.failure).toEqual({
+      message: 'Spoken reply unavailable. The text reply is still available in chat.',
+      scope: 'speech', recoverable: true, at,
+    });
+    state = inbound(state, { type: 'message', data: { role: 'assistant', content: 'The completed text reply.', final: true } }, at);
+    expect(state.failure?.scope).toBe('speech');
+    expect(state.messages.at(-1)?.content).toBe('The completed text reply.');
+  });
+
+  it('keeps a store usable after a parsed speech failure and clears its notice on the next user turn', () => {
+    const client = new FakeHubClient();
+    const reconnect = vi.spyOn(client, 'connect');
+    const store = new HubStreamStore(client);
+    const connections: string[] = [];
+    store.subscribe((state) => connections.push(state.connection));
+    client.emit('state', { previous: 'connected', current: 'ready' });
+    client.emit('session', { sessionId: 'session-speech', channelId: 'channel-speech', capabilities: { output: ['text', 'streamed_audio'] } });
+    client.emit('inbound', { message: { type: 'message', data: { role: 'assistant', content: 'The text survives.', final: true } } });
+    client.emit('inbound', { message: parseHubToClientMessage('{"type":"error-event","data":{"message":"TTS failed","scope":"speech"}}') });
+    expect(store.snapshot().failure?.scope).toBe('speech');
+    expect(store.snapshot().connection).toBe('ready');
+    expect(store.snapshot().messages[0]?.content).toBe('The text survives.');
+    expect(connections).not.toContain('failed');
+    expect(reconnect).not.toHaveBeenCalled();
+
+    client.emit('inbound', { message: { type: 'message', data: { role: 'user', content: 'Continue in text.', final: true } } });
+    expect(store.snapshot().failure).toBeNull();
+    client.emit('inbound', { message: { type: 'message', data: { role: 'assistant', content: 'Here is the next reply.', final: true } } });
+    expect(store.snapshot().messages.map((message) => message.content))
+      .toEqual(['The text survives.', 'Continue in text.', 'Here is the next reply.']);
+    expect(store.snapshot().connection).toBe('ready');
+  });
+
+  it('retains connection failure behavior for unscoped errors and does not obscure it with a late speech error', () => {
+    const at = '2026-07-22T00:00:00.000Z';
+    let state = withStreamedAudio(at);
+    state = inbound(state, parseHubToClientMessage('{"type":"error-event","data":{"message":"Session failed"}}'), at);
+    expect(state.connection).toBe('failed');
+    expect(state.phase).toBe('failed');
+    expect(state.failure?.message).toBe('Satellite Hub reported an error');
+    const failure = state.failure;
+    state = inbound(state, { type: 'error-event', data: { message: 'Late speech failure', scope: 'speech' } }, at);
+    expect(state.connection).toBe('failed');
+    expect(state.failure).toEqual(failure);
   });
 
   it('resets playback support when authority is cleared', () => {

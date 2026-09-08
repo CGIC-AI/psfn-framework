@@ -114,8 +114,12 @@ function routes(
     })),
     logout: vi.fn(async () => undefined),
     revokeProvider: vi.fn(async () => undefined),
+    displayStateBinding: vi.fn(() => 'b'.repeat(64)),
     resolveAuthorizationContext: vi.fn(async () => ({
+      principalId: 'current-principal',
       companionId: COMPANION_ID,
+      session: { recordId: 'current-session-record' },
+      authority: { authorityGeneration: 1, globalAuthEpoch: 2 },
       providerSubject: { provider: 'discord', subjectId: '123456789012345678' },
       operator: { role: 'member' },
       authorization: { action: 'companion.read', decision: 'allow' },
@@ -174,11 +178,19 @@ describe('gateway-only fleet auth HTTP routes', () => {
     expect(JSON.parse(res.body)).toEqual({
       schemaVersion: 1,
       state: 'signed_in',
+      displayStateBinding: 'b'.repeat(64),
       guestMode: 'disabled',
       websocketPath: `/companion-ui/companions/${COMPANION_ID}/ws`,
       human: { provider: 'discord', label: 'Discord user', role: 'member' },
     });
     expect(res.body).not.toMatch(/123456789012345678|a{20}|record|contact/iu);
+    expect(res.body).not.toMatch(/current-principal|authorityGeneration|globalAuthEpoch/iu);
+    expect(broker.displayStateBinding).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        principalId: 'current-principal',
+        authority: { authorityGeneration: 1, globalAuthEpoch: 2 },
+      }),
+    );
   });
 
   it('reports a denied stale cookie without erasing a concurrently rotated successor', async () => {
@@ -207,6 +219,19 @@ describe('gateway-only fleet auth HTTP routes', () => {
       websocketPath: `/companion-ui/companions/${COMPANION_ID}/ws`,
     });
     expect(res.headers.get('set-cookie')).toBeUndefined();
+  });
+
+  it('cannot authenticate with the display-state binding as a session cookie', async () => {
+    const { handler, broker } = routes();
+    const res = response();
+    await handler.handle(
+      request('GET', { cookie: `__Host-psfn_session=${'b'.repeat(64)}` }),
+      res,
+      new URL('https://fleet.example.test/v1/fleet-auth/session/status'),
+    );
+    expect(JSON.parse(res.body)).toEqual({ schemaVersion: 1, state: 'signed_out', guestMode: 'disabled' });
+    expect(broker.resolveAuthorizationContext).not.toHaveBeenCalled();
+    expect(broker.displayStateBinding).not.toHaveBeenCalled();
   });
 
   it('fails status closed without clearing the session on an authorization-store outage', async () => {

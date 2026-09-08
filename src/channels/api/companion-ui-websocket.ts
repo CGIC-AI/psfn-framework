@@ -50,6 +50,11 @@ import { REQUEST_CAPABILITY_ASSERTION_HEADERS } from '../../boundary/fleet-auth/
 import { CompanionUiAudioSocketSession } from './companion-ui-audio-socket.js';
 import type { CompanionUiAudioOutputRelay } from '../backplane/companion-ui-audio-output-relay.js';
 import type { CompanionUiAudioOutputBinding } from '../../shared/contracts/companion-ui-audio-output.js';
+import {
+  CompanionUiSessionAuthority,
+  parseCompanionUiSessionRenewal,
+} from './companion-ui-session-renewal.js';
+import { proxyCompanionUiBrowserUpgrade } from './companion-ui-hub-proxy.js';
 
 const log = createComponentLogger('CompanionUiWebSocket');
 const PATH_PATTERN = /^\/companion-ui\/companions\/([0-9a-f-]+)\/ws$/u;
@@ -69,6 +74,8 @@ const FORBIDDEN_BROWSER_AUTHORITY_HEADERS = new Set([
 ]);
 
 export interface CompanionUiWebSocketConfig {
+  readonly browserHubOrigin?: string;
+  readonly browserHubTimeoutMs?: number;
   readonly canonicalOrigin: string;
   readonly satelliteApiKeys: readonly string[];
   readonly satelliteRegistry: SatelliteRegistryConfig;
@@ -193,29 +200,6 @@ function projectCompanionEventFrame(
   });
 }
 
-function attachmentAuthorityKey(attachment: HubDeviceAttachmentSnapshot): string {
-  const actor = attachment.actor.kind === 'human'
-    ? {
-        kind: attachment.actor.kind,
-        principalId: attachment.actor.principalId,
-        companionId: attachment.actor.companionId,
-        providerSubject: attachment.actor.providerSubject,
-        contact: attachment.actor.contact,
-        operator: attachment.actor.operator,
-        session: attachment.actor.session,
-      }
-    : {
-        kind: attachment.actor.kind,
-        companionId: attachment.actor.companionId,
-      };
-  return JSON.stringify({
-    attachmentId: attachment.attachmentId,
-    deviceActor: attachment.deviceActor,
-    actor,
-    channel: attachment.channel,
-  });
-}
-
 export class CompanionUiWebSocketAdapter {
   private readonly expectedOrigin: string;
   private readonly expectedHost: string;
@@ -238,6 +222,15 @@ export class CompanionUiWebSocketAdapter {
       throw new Error('Companion UI audio ingress requires screening and interruption');
     }
     this.expectedOrigin = origin.origin;
+    if (config.browserHubOrigin) {
+      const hubOrigin = new URL(config.browserHubOrigin);
+      if (!['http:', 'https:'].includes(hubOrigin.protocol)
+        || hubOrigin.origin !== config.browserHubOrigin
+        || hubOrigin.username || hubOrigin.password || hubOrigin.origin === origin.origin
+        || !Number.isSafeInteger(config.browserHubTimeoutMs) || Number(config.browserHubTimeoutMs) < 1) {
+        throw new Error('Companion UI Hub origin must be an exact separate internal origin');
+      }
+    }
     this.expectedHost = origin.host;
     this.authorityPollMs = config.authorityPollMs ?? RUNTIME_LIMITS.authorityPollMs;
     if (!Number.isSafeInteger(this.authorityPollMs) || this.authorityPollMs < 250) {
@@ -262,7 +255,13 @@ export class CompanionUiWebSocketAdapter {
       rejectUpgrade(socket, 404);
       return true;
     }
-    void this.admitUpgrade(request, socket, head, match[1] as CompanionId);
+    if (this.config.browserHubOrigin && rawHeaderCount(request, 'authorization') === 0) {
+      proxyCompanionUiBrowserUpgrade({ request, socket, head,
+        hubOrigin: this.config.browserHubOrigin, canonicalOrigin: this.expectedOrigin,
+        timeoutMs: this.config.browserHubTimeoutMs!, allowGuest: this.config.guestMode === 'explicit' });
+    } else {
+      void this.admitUpgrade(request, socket, head, match[1] as CompanionId);
+    }
     return true;
   }
 
@@ -409,7 +408,6 @@ export class CompanionUiWebSocketAdapter {
     initialAttachment: Awaited<ReturnType<GatewayHubDeviceIngressService['admit']>>['attachment'],
   ): void {
     this.activeSockets.add(socket);
-    let attachment = initialAttachment;
     let closed = false;
     let configured = false;
     let audioSocket: CompanionUiAudioSocketSession | null = null;
@@ -419,7 +417,6 @@ export class CompanionUiWebSocketAdapter {
     let audioOutputDelivery = Promise.resolve();
     let pendingAudioOutputFrames = 0;
     const seenRequestIds = new Set<string>();
-    const initialAuthorityKey = attachmentAuthorityKey(initialAttachment);
     const audioCapable = Boolean(
       this.config.audioIngress
       && this.config.screenAudioTranscript
@@ -454,21 +451,18 @@ export class CompanionUiWebSocketAdapter {
         socket.close(code, reason);
       }
     };
-    const refreshAuthority = async (): Promise<void> => {
-      const refreshed = await this.config.hubDeviceIngress.admit({
-        assertion: authority.assertion,
+    const sessionAuthority = new CompanionUiSessionAuthority(
+      authority.assertion, initialAttachment,
+      async assertion => (await this.config.hubDeviceIngress.admit({
+        assertion,
         connection: authority.connection,
         human: authority.sessionToken
           ? { kind: 'fleet_browser_session', sessionToken: authority.sessionToken }
           : { kind: 'guest' },
-      });
-      if ((authority.sessionToken && refreshed.attachment.actor.kind !== 'human')
-        || (!authority.sessionToken && refreshed.attachment.actor.kind !== 'guest')
-        || attachmentAuthorityKey(refreshed.attachment) !== initialAuthorityKey) {
-        throw new Error('socket authority changed');
-      }
-      attachment = refreshed.attachment;
-    };
+      })).attachment,
+      () => closed,
+    );
+    const refreshAuthority = () => sessionAuthority.refresh();
     const reserveRequestId = (requestId: string): void => {
       if (seenRequestIds.has(requestId)
         || seenRequestIds.size >= RUNTIME_LIMITS.maxRequestIdsPerSocket) {
@@ -481,7 +475,7 @@ export class CompanionUiWebSocketAdapter {
       const common: Omit<CompanionUiActionBrokerInput, 'sessionToken'> = {
         rawBody: body,
         companionId: authority.companionId,
-        attachment,
+        attachment: sessionAuthority.attachment,
         physicalCeiling: authority.physicalCeiling,
         deviceTransport: authority.deviceTransport as CompanionUiActionBrokerInput['deviceTransport'],
         ...(signal ? { signal } : {}),
@@ -504,7 +498,7 @@ export class CompanionUiWebSocketAdapter {
         maxPendingFrames: this.maxPendingAudioFrames,
         send: value => sendJson(socket, value),
         refreshAuthority,
-        attachment: () => attachment,
+        attachment: () => sessionAuthority.attachment,
         reserveRequestId,
         dispatchAction,
         screenTranscript: this.config.screenAudioTranscript,
@@ -594,6 +588,15 @@ export class CompanionUiWebSocketAdapter {
             capabilities: effectiveAdvertisedCapabilities,
             telemetryScopes: authority.physicalCeiling.telemetryScopes,
             eventCapabilities,
+          });
+          return;
+        }
+        const renewal = parseCompanionUiSessionRenewal(body);
+        if (renewal) {
+          reserveRequestId(renewal.requestId);
+          await sessionAuthority.renew(renewal.assertion);
+          sendJson(socket, {
+            schemaVersion: 1, type: 'hub.session.renewed', requestId: renewal.requestId,
           });
           return;
         }

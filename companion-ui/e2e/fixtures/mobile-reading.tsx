@@ -1,8 +1,10 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { createInitialHubStreamState, type HubStreamMessage } from '../../src/lib/stream/hub-stream.js';
 import { ThreadView } from '../../src/ui/thread-view.js';
 import { InstallAppSection } from '../../src/ui/install-app-section.js';
+import { SpritePackPicker } from '../../src/ui/sprite-pack-picker.js';
+import type { LocalSpritePack } from '../../src/lib/sprites/import-sprite-pack.js';
 import '../../src/styles/app.css';
 import '../../src/styles/app-responsive.css';
 
@@ -16,6 +18,8 @@ function ReadingFixture() {
   const [revision, setRevision] = useState(0);
   const [active, setActive] = useState(true);
   const [install, setInstall] = useState(false);
+  const [spritePack, setSpritePack] = useState<LocalSpritePack | null>(null);
+  useEffect(() => () => { spritePack?.dispose(); }, [spritePack]);
   const state = {
     ...createInitialHubStreamState(),
     messages: history,
@@ -31,7 +35,13 @@ function ReadingFixture() {
       <div hidden={!active} style={{ height: '100%' }}>
         <ThreadView streamState={state} companionLabel="Aria" active={active} />
       </div>
-      {install && <aside style={{ position: 'fixed', inset: '4rem 1rem auto', zIndex: 30 }}><InstallAppSection /></aside>}
+      {install && (
+        <aside style={{ position: 'fixed', inset: '4rem 1rem auto', zIndex: 30 }}>
+          <InstallAppSection />
+          <SpritePackPicker onSelect={setSpritePack} currentLabel={spritePack ? 'Local artwork' : undefined} onClear={() => setSpritePack(null)} />
+          {spritePack && <img alt="Imported sprite sheet" width="100" src={spritePack.manifest.sheets['expr-mini']!.src} />}
+        </aside>
+      )}
     </main>
   );
 }

@@ -13,6 +13,10 @@ import type { SessionManager } from '../../../session/manager.js';
 import type { CapturedSessionReads } from '../../../session/manager/captured-session-owner.js';
 import type { TurnToolResultCustodyRecord } from '../turn-tool-result-custody.js';
 import type { DisclosureLineage } from '../../../cogsec/disclosure/contracts.js';
+import type {
+  CompletedTurnEgressCustody,
+  EgressDeliveryRecorder,
+} from '../../../cogsec/disclosure/index.js';
 import type { ToolResultCustodyEdge } from '../../../../shared/contracts/tool-result-custody.js';
 import type { ContextSourceManifestBlockInput } from '../../../cogsec/disclosure/context-source-manifest.js';
 import type { MetacognitiveFlag } from '../../../self-model/metacognition.js';
@@ -326,6 +330,16 @@ export interface TurnExecutionRuntime {
     requestId: string;
     blocks: readonly ContextSourceManifestBlockInput[];
   }) => Promise<string | undefined>;
+  /**
+   * Publish this turn's durable custody proof and correlation
+   * (psfn-framework-ccgdz.6) once the record-first snapshot write settles, so
+   * the egress tool guard can hold an outward send whose chain of custody is
+   * incomplete and key the send's delivery record to this turn. `null` clears
+   * it (fail closed: no proof published means no proof claimed).
+   */
+  setCurrentTurnEgressCustody: (custody: CompletedTurnEgressCustody | null) => void;
+  /** Durable egress delivery-record sink; null when no custody store is wired. */
+  getEgressDeliveryRecorder: () => EgressDeliveryRecorder | null;
   buildRuntimeContext: (
     message: SubstrateMessage,
     resolvedUserName: string,

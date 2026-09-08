@@ -7,14 +7,22 @@
 // with no per-turn lineage is denied; companion-self stays eligible via the
 // decision layer.
 
-import type { EgressToolGuard } from '../../../system/capabilities/gate.js';
+import type { EgressToolGuard, EgressToolGuardCommit } from '../../../system/capabilities/gate.js';
 import { classifyChannelDisclosure } from '../../../system/trust/policy.js';
 import { currentChannelClassificationEpoch } from '../../../system/trust/runtime-classification-epochs.js';
 import {
   composeEgressDisclosureDecision,
   deriveDisclosureDestination,
+  destinationRequiresCustodyProof,
+  egressContentSha256,
+  evaluateEgressCustodyHold,
+  isCustodyDurabilityHoldReason,
   isDisclosureSocialEgressInvocation,
+  type DisclosureDestination,
   type DisclosureLineage,
+  type EgressCustodyHoldReason,
+  type EgressDeliveryRecorder,
+  type TurnEgressCustodyProof,
 } from '../../cogsec/disclosure/index.js';
 import {
   isEgressCapabilityToken,
@@ -22,6 +30,7 @@ import {
 } from '../../cogsec/intake/sink-gates.js';
 import { INTAKE_FIREWALL_NOTICE_TEMPLATES } from '../../cogsec/intake-firewall-notice-templates.js';
 import type { IntakeEnvelopeSnapshot } from '../../../shared/contracts/intake-envelope.js';
+import { canonicalJsonString } from '../../../shared/utils/json-serialization.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import type { TurnSessionIdentity } from './turn-execution/contracts.js';
 
@@ -32,13 +41,109 @@ export interface EgressToolGuardDeps {
   getActiveTurnIntakeEnvelopes: () => readonly IntakeEnvelopeSnapshot[];
   getCurrentTurnDisclosureLineage: () => DisclosureLineage | undefined;
   getActiveTurnSessionIdentity: () => TurnSessionIdentity | null;
+  /**
+   * The turn's durable custody proof (psfn-framework-ccgdz.6): the custody
+   * snapshot ref the record-first write returned, plus the lineage facts the
+   * hold rules read. Undefined before the fold, or when no lineage was folded.
+   */
+  getCurrentTurnCustodyProof: () => TurnEgressCustodyProof | undefined;
+  /** The turn this egress belongs to; the delivery record's correlation key. */
+  getActiveTurnId: () => string | undefined;
+  /** Durable delivery-record sink; null when no custody store is wired. */
+  egressDeliveryRecorder: EgressDeliveryRecorder | null;
+}
+
+/**
+ * The custody condition this egress is held (or, under `shadow`, merely
+ * observed) for, and whether it actually withholds.
+ *
+ * The layering is deliberate and must not be flattened. `assessDisclosure`
+ * ALREADY denies unconditionally on a missing/unclassified lineage, mode
+ * independent, and `egress-composition.ts` forbids widening it — so those
+ * reasons are recorded as labels on a denial that stands regardless of posture.
+ * Only the custody-durability conditions this bead introduces are posture-gated,
+ * because they are genuinely new enforcement (design §5: land the hold in
+ * shadow first).
+ */
+function resolveCustodyHold(input: {
+  reason: EgressCustodyHoldReason | null;
+  composedAllowed: boolean;
+  posture: 'shadow' | 'enforce';
+}): { withholds: boolean; reason: EgressCustodyHoldReason | null } {
+  if (input.reason === null) return { withholds: false, reason: null };
+  if (!isCustodyDurabilityHoldReason(input.reason)) {
+    // Already governed by the composed decision; never relaxed, never widened.
+    return { withholds: !input.composedAllowed, reason: input.reason };
+  }
+  return { withholds: input.posture === 'enforce', reason: input.reason };
 }
 
 export function buildEgressToolGuard(deps: EgressToolGuardDeps): EgressToolGuard | null {
   const gate = deps.intakeSinkGate;
   if (!gate) return null;
+  const recorder = deps.egressDeliveryRecorder;
+
+  /**
+   * Write one delivery record for this invocation. Content-free: the bytes are
+   * reduced to a canonical-JSON digest of the params the tool will actually
+   * receive, which is the exact payload the egress carries.
+   */
+  const recordEgress = async (input: {
+    disposition: 'released' | 'held';
+    toolCallId: string;
+    finalParams: unknown;
+    destination: DisclosureDestination | null;
+    proof: TurnEgressCustodyProof | undefined;
+    turnId: string | undefined;
+    outcome: ReturnType<typeof composeEgressDisclosureDecision>['outcome'];
+    decisionAllowed: boolean;
+    holdReason: EgressCustodyHoldReason | null;
+  }): Promise<boolean> => {
+    if (!recorder) return true;
+    if (input.turnId === undefined) {
+      // No turn identity means no correlation key to bind the bytes to. The
+      // composed decision already governs release; this must not be silent.
+      log.error('Egress delivery record skipped: no active turn identity', {
+        toolCallId: input.toolCallId,
+        disposition: input.disposition,
+      });
+      return false;
+    }
+    // The digest is derived here rather than inside the recorder, so its own
+    // failure must be handled here too: `canonicalJsonString` refuses a param
+    // object it cannot serialize (a BigInt, a cycle), and letting that throw
+    // out of `evaluate` would turn a calm denial into an unhandled rejection in
+    // the tool loop. Report it the same way a failed write is reported.
+    let contentSha256: string;
+    try {
+      contentSha256 = egressContentSha256(
+        canonicalJsonString(input.finalParams, 'egress tool params'),
+      );
+    } catch (error) {
+      log.error('Egress delivery record skipped: the payload has no canonical digest', {
+        toolCallId: input.toolCallId,
+        disposition: input.disposition,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return false;
+    }
+    const result = await recorder.record({
+      surface: 'tool_egress',
+      disposition: input.disposition,
+      turnId: input.turnId,
+      attemptRef: input.toolCallId,
+      contentSha256,
+      destination: input.destination,
+      proof: input.proof,
+      outcome: input.outcome,
+      decisionAllowed: input.decisionAllowed,
+      ...(input.holdReason !== null ? { holdReason: input.holdReason } : {}),
+    });
+    return result.written;
+  };
+
   return {
-    evaluate: ({ toolCallId, toolName, requiredTokens, params }) => {
+    evaluate: async ({ toolCallId, toolName, requiredTokens, params }) => {
       if (!requiredTokens.some(isEgressCapabilityToken)) return null;
       const envelopes = deps.getActiveTurnIntakeEnvelopes();
       const turnIdentity = deps.getActiveTurnSessionIdentity();
@@ -146,10 +251,89 @@ export function buildEgressToolGuard(deps: EgressToolGuardDeps): EgressToolGuard
           reason: composed.reason,
         });
       }
-      if (!composed.allowed) {
+
+      // ccgdz.6: fail-closed provenance hold. A proof-requiring outward
+      // destination with no custody snapshot, no admitted source, or an
+      // unclassified source is held — and either way the decision is recorded.
+      const proof = deps.getCurrentTurnCustodyProof();
+      const turnId = deps.getActiveTurnId();
+      const custodyHold = resolveCustodyHold({
+        reason: evaluateEgressCustodyHold({ destination: composed.destination, proof }),
+        composedAllowed: composed.allowed,
+        posture: recorder?.enforcementPosture() ?? 'shadow',
+      });
+      const held = !composed.allowed || custodyHold.withholds;
+      if (held) {
+        // A denial with no custody condition is an ordinary sink-gate or
+        // unresolvable-destination refusal. Those are already audited by the
+        // gate that made them, nothing was delivered, and no custody claim was
+        // staked — so they do not manufacture a delivery row with an invented
+        // reason. Only a stated chain-of-custody condition is recorded here.
+        const recordedReason = custodyHold.reason
+          ?? (destinationRequiresCustodyProof(composed.destination)
+            ? 'lineage_missing'
+            : null);
+        if (recordedReason !== null) {
+          log.warn('Egress held: incomplete chain of custody', {
+            toolName,
+            destinationKind: composed.destination?.kind,
+            holdReason: recordedReason,
+            posture: recorder?.enforcementPosture() ?? 'shadow',
+          });
+          await recordEgress({
+            disposition: 'held',
+            toolCallId,
+            finalParams: params,
+            destination: composed.destination,
+            proof,
+            turnId,
+            outcome: composed.outcome,
+            decisionAllowed: composed.allowed,
+            holdReason: recordedReason,
+          });
+        }
         return { allowed: false, noticeText: INTAKE_FIREWALL_NOTICE_TEMPLATES.sinkHeld };
       }
-      return { allowed: true, noticeText: '' };
+
+      return {
+        allowed: true,
+        noticeText: '',
+        // Record-first: the gate awaits this with the post-hook params, so the
+        // durable record binds the bytes that actually leave.
+        commit: async (finalParams: unknown): Promise<EgressToolGuardCommit> => {
+          const written = await recordEgress({
+            disposition: 'released',
+            toolCallId,
+            finalParams,
+            destination: composed.destination,
+            proof,
+            turnId,
+            outcome: composed.outcome,
+            decisionAllowed: true,
+            holdReason: custodyHold.reason,
+          });
+          if (written || !destinationRequiresCustodyProof(composed.destination)) {
+            return { allowed: true, noticeText: '' };
+          }
+          // Custody-store unavailability holds proof-requiring egress; it never
+          // degrades to "send anyway" (design §4 rule 6). Under a shadow
+          // posture the failure is observed and the send proceeds.
+          if (recorder?.enforcementPosture() !== 'enforce') {
+            log.error('Egress released without a durable delivery record (shadow posture)', {
+              toolName,
+              destinationKind: composed.destination?.kind,
+              holdReason: 'custody_store_unavailable',
+            });
+            return { allowed: true, noticeText: '' };
+          }
+          log.error('Egress held: the delivery record could not be written', {
+            toolName,
+            destinationKind: composed.destination?.kind,
+            holdReason: 'custody_store_unavailable',
+          });
+          return { allowed: false, noticeText: INTAKE_FIREWALL_NOTICE_TEMPLATES.sinkHeld };
+        },
+      };
     },
   };
 }

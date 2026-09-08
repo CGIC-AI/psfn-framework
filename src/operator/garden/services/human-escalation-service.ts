@@ -13,13 +13,21 @@
 // admit the artifact, and cannot, because this service holds no domain
 // authority at all — only the ledger.
 //
-// Scope, stated rather than implied. The gateway and the agent each raise onto
-// their own pool scope: the agent's ledger is pinned to its companion tenant
-// schema in fleet mode, the gateway's runs on its own credential's default
-// search_path. This service reads the ledger of the process it runs in — the
-// agent's — exactly like the incident timeline beside it. Where both processes
-// resolve to the same table that is the unified view; where they do not, it is
-// this process's ledger, and the snapshot says which.
+// Scope, stated rather than implied (bead psfn-framework-e5r0s). This service
+// runs in the agent process and reads that process's tenant-pinned ledger. In a
+// single-companion deployment the gateway resolves to the same table, so that
+// one read already IS the unified view. In fleet mode it is not, and the
+// gateway's own escalations — the ones raised for faults no companion can see —
+// were unanswerable here. So in fleet mode a SECOND ledger is opened over the
+// shared schema the gateway raises its system-owned escalations into, and this
+// surface both lists and RESOLVES across the two.
+//
+// Resolving across two ledgers is the part worth stating. An escalation id is
+// unique, so `resolve` looks in this companion's ledger first and then the
+// fleet's, and answers 404 when neither holds a row this companion may see. The
+// tenancy fence is unchanged and applies to both: a companion-owned row from
+// another tenant is 404, not 403, because "exists, but not yours" is an
+// enumeration oracle.
 
 import {
   resolveHealthEventOwner,
@@ -48,9 +56,19 @@ interface HumanEscalationScope {
   owner: HealthEventOwner;
   /** The process whose durable ledger was read. */
   process: 'agent';
+  /**
+   * Every ledger actually read. `companion` is this process's tenant-pinned
+   * ledger; `fleet_system` is the shared-schema ledger the gateway raises its
+   * system-owned escalations into, present only when a fleet deployment wired
+   * it.
+   */
+  ledgers: readonly HumanEscalationLedgerScope[];
   /** Rows the surface may return per refresh, from the owner file. */
   listLimit: number;
 }
+
+/** One durable ledger this snapshot was assembled from. */
+type HumanEscalationLedgerScope = 'companion' | 'fleet_system';
 
 export interface HumanEscalationSnapshot {
   generatedAt: number;
@@ -76,10 +94,28 @@ export interface AdminHumanEscalationService {
 
 export interface AdminHumanEscalationServiceOptions {
   ledger: HumanEscalationLedgerPort;
+  /**
+   * The fleet's system-owned ledger, present only in fleet mode (bead
+   * psfn-framework-e5r0s). Absent in a single-companion deployment, where
+   * `ledger` already resolves to the table the gateway raises into.
+   */
+  fleetSystemLedger?: HumanEscalationLedgerPort;
   config: () => HumanEscalationConfig;
   /** This runtime's companion identity; absent for a shard with no core tenancy. */
   companionId?: string;
   now?: () => number;
+}
+
+function sumStateCounts(
+  left: Readonly<Record<HumanEscalationState, number>>,
+  right: Readonly<Record<HumanEscalationState, number>>,
+): Readonly<Record<HumanEscalationState, number>> {
+  return {
+    open: left.open + right.open,
+    acknowledged: left.acknowledged + right.acknowledged,
+    resolved: left.resolved + right.resolved,
+    dismissed: left.dismissed + right.dismissed,
+  };
 }
 
 export class AdminHumanEscalationDataService implements AdminHumanEscalationService {
@@ -94,18 +130,39 @@ export class AdminHumanEscalationDataService implements AdminHumanEscalationServ
   ): Promise<HumanEscalationSnapshot> {
     const config = this.options.config();
     const nowMs = (this.options.now ?? (() => Date.now()))();
-    const [rows, counts] = await Promise.all([
-      this.options.ledger.list({
-        ...(states === undefined ? {} : { states }),
-        limit: config.listLimit,
-      }),
+    const query = {
+      ...(states === undefined ? {} : { states }),
+      limit: config.listLimit,
+    };
+    const fleet = this.options.fleetSystemLedger;
+    // Each ledger is read at the FULL owner-file page size rather than the two
+    // splitting one: a noisy fleet must not be able to push this companion's own
+    // escalations off the page an operator is looking at.
+    const [rows, counts, fleetRows, fleetCounts] = await Promise.all([
+      this.options.ledger.list(query),
       this.options.ledger.countByState(),
+      fleet ? fleet.list(query) : Promise.resolve([]),
+      fleet ? fleet.countByState() : Promise.resolve(null),
     ]);
+    const visible = [...rows, ...fleetRows]
+      .filter(row => this.isVisible(row))
+      .sort((left, right) => (
+        right.lastRaisedAtMs - left.lastRaisedAtMs
+        || right.escalationId.localeCompare(left.escalationId)
+      ))
+      .slice(0, config.listLimit);
     return {
       generatedAt: nowMs,
-      scope: { owner: this.owner, process: 'agent', listLimit: config.listLimit },
-      counts,
-      escalations: rows.filter(row => this.isVisible(row)),
+      scope: {
+        owner: this.owner,
+        process: 'agent',
+        ledgers: fleet ? ['companion', 'fleet_system'] : ['companion'],
+        listLimit: config.listLimit,
+      },
+      // Summed, not taken from one ledger: a count that described half of what
+      // the list shows would be worse than no count at all.
+      counts: fleetCounts ? sumStateCounts(counts, fleetCounts) : counts,
+      escalations: visible,
     };
   }
 
@@ -120,14 +177,22 @@ export class AdminHumanEscalationDataService implements AdminHumanEscalationServ
     reason: HumanEscalationResolutionReason;
     actor: HumanEscalationActor;
   }): Promise<HumanEscalationResolveResult> {
-    const existing = await this.options.ledger.getById(input.escalationId);
-    if (!existing || !this.isVisible(existing)) {
-      return { ok: false, status: 404, error: 'Escalation not found' };
+    // This companion's own ledger first, then the fleet's. Ids are unique, so
+    // the order is a cost decision rather than a semantic one — and the write
+    // goes back to whichever ledger actually holds the row, never to the other.
+    const ledgers: readonly HumanEscalationLedgerPort[] = this.options.fleetSystemLedger
+      ? [this.options.ledger, this.options.fleetSystemLedger]
+      : [this.options.ledger];
+    for (const ledger of ledgers) {
+      const existing = await ledger.getById(input.escalationId);
+      if (!existing) continue;
+      if (!this.isVisible(existing)) break;
+      return await resolveHumanEscalation(ledger, {
+        ...input,
+        resolvedAtMs: (this.options.now ?? (() => Date.now()))(),
+      });
     }
-    return await resolveHumanEscalation(this.options.ledger, {
-      ...input,
-      resolvedAtMs: (this.options.now ?? (() => Date.now()))(),
-    });
+    return { ok: false, status: 404, error: 'Escalation not found' };
   }
 
   /**

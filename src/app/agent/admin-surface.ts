@@ -113,8 +113,12 @@ export interface StartOptionalAdminTransportServerOptions {
    * an operator surface must not be able to write to the plane it renders.
    */
   healthEventStreamRead?: IncidentStreamRead | null;
+  /** Fleet-wide system-owned health stream, read-only; fleet mode only (e5r0s). */
+  fleetSystemHealthEventStreamRead?: IncidentStreamRead | null;
   /** Durable ledger behind the human escalation attention surface (bznbn). */
   humanEscalationLedger?: HumanEscalationLedgerPort | null;
+  /** Fleet-wide system-owned escalation ledger; fleet mode only (e5r0s). */
+  fleetSystemHumanEscalationLedger?: HumanEscalationLedgerPort | null;
   subsystemOutputRefStore: Pick<BackgroundWorkStorePort, 'getSubsystemOutputProjection'>;
   /** Pending contact approvals queue (E3.4 contact-tracking policy gate). */
   pendingContactApprovals?: PendingContactApprovalStore | null;
@@ -262,7 +266,9 @@ export async function startOptionalAdminTransportServer(
     episodicStore: options.episodicStore ?? null,
     custodyChainReader: options.custodyChainReader ?? null,
     healthEventStreamRead: options.healthEventStreamRead ?? null,
+    fleetSystemHealthEventStreamRead: options.fleetSystemHealthEventStreamRead ?? null,
     humanEscalationLedger: options.humanEscalationLedger ?? null,
+    fleetSystemHumanEscalationLedger: options.fleetSystemHumanEscalationLedger ?? null,
     sessionStore: options.coreRuntime.sessionStore,
     letterService: options.coreRuntime.letterService,
     doingMirrorService: options.coreRuntime.doingMirrorService,

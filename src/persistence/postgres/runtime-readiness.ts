@@ -78,6 +78,26 @@ export const POSTGRES_STORE_READINESS_CATALOG = {
       message: 'Human escalation ledger schema migration failed',
     },
   },
+  // e5r0s: the fleet's system-owned observability in the shared schema. Both
+  // are REQUIRED where they are opened at all (fleet mode only): a Garden that
+  // silently showed only this companion's half would be the invisibility the
+  // bead exists to fix, wearing a green readiness light.
+  fleet_system_health_stream: {
+    label: 'fleet system health stream',
+    requirement: 'required',
+    failureDiagnostic: {
+      component: 'HealthEventStore',
+      message: 'Fleet system health-event stream is not readable in the shared schema',
+    },
+  },
+  fleet_system_human_escalations: {
+    label: 'fleet system escalation ledger',
+    requirement: 'required',
+    failureDiagnostic: {
+      component: 'HumanEscalationStore',
+      message: 'Fleet system escalation ledger is not readable in the shared schema',
+    },
+  },
   shared_wiki: { label: 'shared world wiki', requirement: 'required' },
   memory_ann_index: { label: 'memory ANN index', requirement: 'optional' },
   wiki_projection: { label: 'wiki projection', requirement: 'optional' },

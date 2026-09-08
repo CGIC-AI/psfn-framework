@@ -52,6 +52,7 @@ describe('Garden incident timeline', () => {
     expect(snapshot.incidents).toEqual([]);
     expect(snapshot.generatedAt).toBe(NOW_MS + MINUTE_MS);
     expect(snapshot.scope).toEqual({
+      streams: ['companion'],
       owner: { kind: 'system' },
       process: 'agent',
       windowMs: DEFAULT_HEALTH_DETECTORS_CONFIG.incidentWindowMs,

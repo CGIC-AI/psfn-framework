@@ -98,4 +98,35 @@ describe('registerWeightedThoughtOutreachLane concern producer wiring', () => {
     expect(thought).toMatchObject({ contactId: 'contact-v', source: 'concern' });
     expect(thought?.provenance.concernId).toBe('concern-1');
   });
+
+  it('turns an appraisal-raised concern into a concern-scoped weighted thought', async () => {
+    const deps = makeDeps(false);
+    const weightedThoughtStore = createWeightedThoughtStorePort(
+      createInMemoryWeightedThoughtBackend(),
+    );
+    const concern = {
+      id: 'concern-2',
+      text: 'Follow up on the appointment',
+      status: 'active',
+      contactId: 'contact-v',
+    } as ActiveConcern;
+
+    registerWeightedThoughtOutreachLane({
+      ...deps,
+      weightedThoughtStore,
+      concernStore: {
+        getById: (id: string) => (id === concern.id ? concern : null),
+      } as WeightedThoughtContradictionDamperDeps['concernStore'],
+    });
+
+    await deps.eventBus.emit('intention.concern.created', {
+      concernId: 'concern-2',
+      source: 'appraisal',
+      contactId: 'contact-v',
+      timestamp: Date.now(),
+    });
+
+    const thought = await weightedThoughtStore.getById(concernWeightedThoughtId('concern-2'));
+    expect(thought?.provenance.concernId).toBe('concern-2');
+  });
 });

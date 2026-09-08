@@ -849,6 +849,15 @@ export interface EventMap {
     }>;
     timestamp: number;
   } & EventCorrelationFields;
+  // One concern became live. Ids and classification only — the concern's own
+  // text never crosses this seam. Consumed by the concern-derived
+  // weighted-thought producer, which re-reads the concern authoritatively.
+  'intention.concern.created': {
+    concernId: string;
+    source: string;
+    contactId?: string;
+    timestamp: number;
+  } & EventCorrelationFields;
   'intention.concern.groomed': {
     staleResolvedCount: number;
     capResolvedCount: number;

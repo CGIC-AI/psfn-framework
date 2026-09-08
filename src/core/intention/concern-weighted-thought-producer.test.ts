@@ -4,6 +4,7 @@ import type { ConcernResolutionAppraisalEvent } from './concern-resolution-appra
 import {
   concernWeightedThoughtId,
   recordConcernWeightedThoughts,
+  recordCreatedConcernWeightedThought,
   type ConcernCandidateReviewedEvent,
 } from './concern-weighted-thought-producer.js';
 import { applyWeightedThoughtContradictionDampening } from './weighted-thought-contradiction.js';
@@ -201,6 +202,43 @@ describe('recordConcernWeightedThoughts (psfn-framework-99ugi producer)', () => 
     expect(rows).toHaveLength(1);
     expect(rows[0]?.reinforcementCount).toBe(1);
     expect(rows[0]?.accumulatedWeight).toBeGreaterThan(first!.accumulatedWeight);
+  });
+});
+
+describe('recordCreatedConcernWeightedThought (appraisal path)', () => {
+  it('stamps the concern id for a concern the post-turn appraisal raised directly', async () => {
+    const thoughtStore = createStore();
+    const result = await recordCreatedConcernWeightedThought({
+      concernStore: concernSource([stubConcern()]),
+      thoughtStore,
+      lifecycleConfig: CONFIG,
+      now: () => T0,
+    }, {
+      concernId: 'concern-1',
+      source: 'appraisal',
+      contactId: 'contact-v',
+      timestamp: T0,
+    });
+
+    expect(result.recordedThoughtIds).toEqual([concernWeightedThoughtId('concern-1')]);
+    const thought = await thoughtStore.getById(concernWeightedThoughtId('concern-1'));
+    expect(thought?.provenance.concernId).toBe('concern-1');
+  });
+
+  it('fails closed on an announced concern that is no longer live', async () => {
+    const thoughtStore = createStore();
+    const result = await recordCreatedConcernWeightedThought({
+      concernStore: concernSource([stubConcern({ status: 'dismissed' })]),
+      thoughtStore,
+      lifecycleConfig: CONFIG,
+      now: () => T0,
+    }, {
+      concernId: 'concern-1',
+      source: 'appraisal',
+      timestamp: T0,
+    });
+
+    expect(result.recordedThoughtIds).toEqual([]);
   });
 });
 

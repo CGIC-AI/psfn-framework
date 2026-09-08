@@ -227,22 +227,21 @@ export class PostgresHealthEventStore implements HealthEventStorePort {
 }
 
 /**
- * Open the process-local health stream from runtime config. Both real
- * entrypoints that emit health events (gateway and agent) are required by
- * `loadConfig` to have a Postgres URL, so this deliberately has no nullable
- * or memory-only path: a missing URL or a missing owner-file row cap is a
- * startup failure, not a silent downgrade to an unobservable runtime.
+ * Open the gateway process's health stream from runtime config.
  *
- * The pool pins the companion tenant schema and role the same way every other
- * per-companion store does, so a named-tenant credential resolves the
- * unqualified migration DDL (psfn-framework-stmof).
+ * `loadConfig` requires a Postgres URL in gateway mode, so this has no
+ * nullable or memory-only path: a missing URL or a missing owner-file row cap
+ * is a startup failure, not a silent downgrade to an unobservable runtime.
+ *
+ * Deliberately unpinned to any companion tenant schema, matching every other
+ * unconditional gateway store (`gateway_audit`, companion presence): the
+ * gateway credential owns its own default search_path and does not hold a
+ * companion tenant role. Per-companion health events are written by the agent
+ * process, whose factory pins the tenant scope like its sibling stores.
  */
-export function createPostgresHealthEventStoreFromConfig(config: {
+export function createGatewayHealthEventStore(config: {
   postgresDatabaseUrl?: string;
   healthEventStreamMaxRows?: number;
-  postgresSchema?: string;
-  postgresRole?: string;
-  multiCompanion?: boolean;
 }): Promise<PostgresHealthEventStore> {
   const databaseUrl = config.postgresDatabaseUrl?.trim();
   if (!databaseUrl) {
@@ -250,15 +249,7 @@ export function createPostgresHealthEventStoreFromConfig(config: {
   }
   const maxRows = config.healthEventStreamMaxRows;
   if (maxRows === undefined) {
-    throw new Error(
-      'Runtime health stream requires settings.json healthEventStreamMaxRows',
-    );
+    throw new Error('Runtime health stream requires settings.json healthEventStreamMaxRows');
   }
-  const schema = config.postgresSchema?.trim() || undefined;
-  const role = schema && config.multiCompanion === true
-    ? config.postgresRole?.trim() || (() => {
-        throw new Error('Multi-companion runtime health stream requires config.postgresRole');
-      })()
-    : undefined;
-  return PostgresHealthEventStore.connect(databaseUrl, maxRows, { schema, role });
+  return PostgresHealthEventStore.connect(databaseUrl, maxRows);
 }

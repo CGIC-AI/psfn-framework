@@ -24,6 +24,7 @@ import type { ObservedGroupMemoryScheduler } from '../../../faculties/memory/ext
 import type { SessionStore } from '../../../persistence/sessions/store.js';
 import type { OutboundReplyDeduper } from '../../../system/lifecycle/outbound-reply-dedupe.js';
 import { classifyChannelDisclosure } from '../../../system/trust/policy.js';
+import { currentChannelClassificationEpoch } from '../../../system/trust/runtime-classification-epochs.js';
 import type { createAgentPersistenceRuntime } from '../../../persistence/runtime-factory.js';
 import type { AgentCoreRuntime } from '../core-runtime.js';
 import { createComponentLogger } from '../../../shared/logger.js';
@@ -281,7 +282,20 @@ export function wireSpeakingArbiterLane(deps: SpeakingArbiterLaneDeps): Speaking
         delivery: gatewaySender,
         companionName,
         outboundReplyGuard,
-        resolveDestinationDisclosure: (channelId) => classifyChannelDisclosure(channelId),
+        resolveDestinationDisclosure: (channelId) => {
+          // ccgdz.6: stamp the room's CURRENT classification epoch alongside its
+          // privacy so the derived disclosure destination carries the same epoch
+          // boundary the tool-egress guard applies. Untracked rooms return
+          // undefined and the epoch gate stays inert.
+          const disclosure = classifyChannelDisclosure(channelId);
+          const classificationEpoch = currentChannelClassificationEpoch(channelId);
+          return classificationEpoch !== undefined
+            ? { ...disclosure, classificationEpoch }
+            : disclosure;
+        },
+        // ccgdz.6: the SAME recorder the in-turn tool and artifact egress
+        // surfaces use, so one turn's autonomous reply lands in one ledger.
+        egressDeliveryRecorder: agentLoop.getEgressDeliveryRecorder(),
         // jp36.5.6: the companion's own delivered autonomous reply is recorded
         // on the ROOM's transcript. Generation happens on a synthetic
         // `internal:egress-reply:*` channel and both adapters drop self

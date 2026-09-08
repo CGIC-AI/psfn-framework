@@ -43,6 +43,11 @@ import {
   type DisclosureLineage,
 } from '../cogsec/disclosure/index.js';
 import type { CustodySnapshotStorePort } from '../cogsec/disclosure/custody-snapshot.js';
+import {
+  EgressDeliveryRecorder,
+  type EgressDeliveryRecordStorePort,
+  type TurnEgressCustodyProof,
+} from '../cogsec/disclosure/index.js';
 import { applyAdmittedToolResultDisclosureFloor } from '../cogsec/disclosure/mcp-turn-context.js';
 import type { ChannelPromptRegistryPort } from '../../channels/backplane/registry-port.js';
 import type { MessageHandlerOptions } from '../../channels/backplane/types.js';
@@ -284,6 +289,12 @@ export interface SubstrateAgentOptions {
    * the folded disclosure lineage stays in-process exactly as before.
    */
   custodySnapshotStore?: CustodySnapshotStorePort;
+  /**
+   * Durable egress delivery-record sink (psfn-framework-ccgdz.6). Absent, no
+   * delivery record is written and the custody hold stays inert — the runtime
+   * behaves exactly as before this bead.
+   */
+  egressDeliveryRecordStore?: EgressDeliveryRecordStorePort;
 }
 
 function requireBackgroundWorkTuning(
@@ -460,6 +471,15 @@ export class SubstrateAgent {
    * Undefined until built — an outward social send with no lineage fails closed.
    */
   private currentTurnDisclosureLineage: DisclosureLineage | undefined;
+  /**
+   * The turn's durable custody proof and correlation (psfn-framework-ccgdz.6),
+   * published once the record-first custody-snapshot write settles. The egress
+   * tool guard reads it to hold an outward send whose chain of custody is
+   * incomplete, and to key the send's delivery record. Cleared at turn end.
+   */
+  private currentTurnEgressCustody: { turnId: string; proof: TurnEgressCustodyProof } | null = null;
+  /** Durable egress delivery-record sink; null when no custody store is wired. */
+  private readonly egressDeliveryRecorder: EgressDeliveryRecorder | null;
   /**
    * Whether the turn in flight declared its read-only evidence edges optional
    * (psfn-framework-lpxg3.2). Only the protected reflection tool-grounding stage
@@ -770,6 +790,16 @@ export class SubstrateAgent {
         ? { custodySnapshotStore: options.custodySnapshotStore }
         : {}),
     });
+    // ccgdz.6: one recorder shared by every egress surface this agent owns, so
+    // a turn's tool sends and artifact shares land in the same delivery ledger.
+    // The posture is read live from the CogSec mode, never snapshotted here.
+    this.egressDeliveryRecorder = options.egressDeliveryRecordStore
+      ? new EgressDeliveryRecorder({
+        store: options.egressDeliveryRecordStore,
+        companionId: this.config.companionId,
+        getCogSecMode: () => this.cogSecMode,
+      })
+      : null;
     installContextCoherenceMonitor({
       eventBus: this.eventBus,
       getRecentSessionEntries: (channelId, limit) => this.sessionManager.getRecentSessionEntries(channelId, limit),
@@ -1056,6 +1086,9 @@ export class SubstrateAgent {
       getActiveTurnIntakeEnvelopes: () => this.getActiveTurnIntakeEnvelopes(),
       getCurrentTurnDisclosureLineage: () => this.currentTurnDisclosureLineage,
       getActiveTurnSessionIdentity: () => this.turnSupportRuntime.getActiveTurnSessionIdentity(),
+      getCurrentTurnCustodyProof: () => this.currentTurnEgressCustody?.proof,
+      getActiveTurnId: () => this.currentTurnEgressCustody?.turnId,
+      egressDeliveryRecorder: this.egressDeliveryRecorder,
     });
   }
 
@@ -1133,6 +1166,17 @@ export class SubstrateAgent {
    */
   getCurrentTurnDisclosureLineage(): DisclosureLineage | undefined {
     return this.currentTurnDisclosureLineage;
+  }
+
+  /**
+   * The durable egress delivery-record sink (psfn-framework-ccgdz.6), or null
+   * when no custody store is wired. Exposed so out-of-turn deliverers of this
+   * agent's output — the speaking arbiter's autonomous reply sender — record
+   * into the SAME ledger, under the same companion ownership and the same live
+   * enforcement posture, as the in-turn tool and artifact surfaces.
+   */
+  getEgressDeliveryRecorder(): EgressDeliveryRecorder | null {
+    return this.egressDeliveryRecorder;
   }
 
   getPromotedExtendedToolsLimit(): number {
@@ -1837,6 +1881,10 @@ export class SubstrateAgent {
           this.currentTurnDisclosureLineage = lineage;
         },
         getCurrentTurnDisclosureLineage: () => this.currentTurnDisclosureLineage,
+        setCurrentTurnEgressCustody: (custody) => {
+          this.currentTurnEgressCustody = custody;
+        },
+        getEgressDeliveryRecorder: () => this.egressDeliveryRecorder,
         buildRuntimeContext: (
           turnMessage,
           resolvedUserName,
@@ -1921,6 +1969,9 @@ export class SubstrateAgent {
       // Fail closed: no lineage is published until the generation context is
       // folded this turn, so a social send before then is denied outward.
       this.currentTurnDisclosureLineage = undefined;
+      // Same fail-closed posture for the custody proof: nothing is published
+      // until the record-first custody write settles this turn.
+      this.currentTurnEgressCustody = null;
       try {
         let response: AgentResponse;
         if (!this.config.chargePolicy || getRunChargeContext()) {
@@ -1942,6 +1993,7 @@ export class SubstrateAgent {
       } finally {
         this.currentTurnIntakeEnvelopes = [];
         this.currentTurnDisclosureLineage = undefined;
+        this.currentTurnEgressCustody = null;
         this.currentTurnEvidenceDependency = 'required';
       }
     });

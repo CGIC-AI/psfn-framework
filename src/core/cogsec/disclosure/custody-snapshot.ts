@@ -29,6 +29,7 @@ import {
   validateCustodyIdentity,
   type CustodyIdentity,
 } from './custody-identity.js';
+export { custodyIdentity, custodySha256, validateCustodyIdentity, type CustodyIdentity } from './custody-identity.js';
 import { isRecord } from '../../../shared/utils/types.js';
 import {
   validateToolResultCustodyEdge,

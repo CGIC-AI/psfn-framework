@@ -36,6 +36,7 @@ import type { ContactStorePort } from '../../core/contacts/contact-store-port.js
 import type { ContactTrackingGate } from '../../core/contacts/tracking-gate.js';
 import type { CogSecReceiptStorePort } from '../../core/cogsec/receipts/contracts.js';
 import type { CustodySnapshotStorePort } from '../../core/cogsec/disclosure/custody-snapshot.js';
+import type { EgressDeliveryRecordStorePort } from '../../core/cogsec/disclosure/index.js';
 import type { HubIdentityEnrollmentStorePort } from '../../core/enrollment/enrollment-store-port.js';
 import type {
   IntentionRuntimeProviders,
@@ -104,6 +105,11 @@ export interface BootstrapAgentCoreRuntimeOptions {
    * substrate agent's turn runtime.
    */
   custodySnapshotStore?: CustodySnapshotStorePort;
+  /**
+   * Durable egress delivery records (psfn-framework-ccgdz.6), written by the
+   * substrate agent's tool, artifact, and autonomous-reply egress surfaces.
+   */
+  egressDeliveryRecordStore?: EgressDeliveryRecordStorePort;
   intentionRuntime?: IntentionRuntimeWiring;
   intentionProviders?: IntentionRuntimeProviders;
   intentionFollowUpHorizonMs: number;
@@ -212,6 +218,9 @@ export async function bootstrapAgentCoreRuntime(
       : {}),
     ...(options.custodySnapshotStore
       ? { custodySnapshotStore: options.custodySnapshotStore }
+      : {}),
+    ...(options.egressDeliveryRecordStore
+      ? { egressDeliveryRecordStore: options.egressDeliveryRecordStore }
       : {}),
     card,
     systemPrompt,

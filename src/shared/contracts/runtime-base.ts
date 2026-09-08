@@ -604,6 +604,21 @@ export interface MessageRoutingMetadata {
    * provenance only and must never be treated as a relay peer.
    */
   shardParentIcp?: import('./shard-parent-icp.js').ShardParentIcpRoutingMetadata;
+  /**
+   * Correlation for the synthetic generation turn behind an autonomous room
+   * reply (psfn-framework-ccgdz.6). Generation runs on an internal
+   * `internal:egress-reply:<roomId>` channel, so without this the delivered
+   * reply could not be joined back to the room event that caused it. It mints
+   * NO identifier: every field is the trigger's own, carried forward.
+   */
+  egressReplyTrigger?: {
+    schemaVersion: 1;
+    /** The room event this reply answers (`EgressReplyTrigger.sourceEventId`). */
+    sourceEventId: string;
+    /** The DESTINATION room, not the synthetic generation channel. */
+    channelId: string;
+    channelType: ChannelType;
+  };
   /** Durable lineage carried by generated follow-up turns outside a live ICP channel turn. */
   originIcpRootInitiationId?: string;
   /**
@@ -920,6 +935,16 @@ export interface ResponseMetadata {
   notificationAck?: NotificationAckMetadata;
   internalState?: InternalState;
   internalStateSnapshotRef?: string;
+  /**
+   * Content-free custody proof for this turn (psfn-framework-ccgdz.6): the
+   * durable custody-snapshot ref plus the lineage facts an egress hold reads.
+   * Handed to whatever delivers the response — the speaking arbiter's
+   * autonomous reply sender is the in-process consumer — so a delivery can be
+   * bound to the sources that authorized it, or held when it cannot be.
+   * Absent means the turn published no proof; that is never read as "no
+   * sources", only as "no chain to cite".
+   */
+  egressCustody?: import('../../core/cogsec/disclosure/egress-delivery-record.js').TurnEgressCustodyProof;
   metacognitiveFlags?: MetacognitiveFlag[];
   retrievalProvenanceRefs?: string[];
   /**

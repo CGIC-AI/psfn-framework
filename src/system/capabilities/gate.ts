@@ -157,6 +157,23 @@ function appendHookContext(
  * carries the operator-reviewed notice text returned to the model instead of
  * executing the tool.
  */
+/**
+ * Record-first custody commit (psfn-framework-ccgdz.6). Returned by an allowing
+ * guard and awaited by the gate ONCE, with the exact params that will execute,
+ * immediately before `tool.execute`. Two reasons it is deferred rather than done
+ * inside `evaluate`: a `pre_tool_use` hook may rewrite the params after the
+ * first evaluation, so only the gate knows the final bytes; and the durable
+ * record must exist BEFORE the egress happens, not after.
+ *
+ * A commit may still withhold: when the durable record cannot be written and the
+ * destination requires custody proof, the egress is held rather than released
+ * unaccounted for (design §4 rule 6).
+ */
+export interface EgressToolGuardCommit {
+  allowed: boolean;
+  noticeText: string;
+}
+
 export interface EgressToolGuard {
   evaluate(input: {
     /** Stable tool invocation id; hook re-evaluation reuses the same id. */
@@ -170,7 +187,7 @@ export interface EgressToolGuard {
      * do not surface params.
      */
     params?: unknown;
-  }): {
+  }): Promise<{
     allowed: boolean;
     noticeText: string;
     /** Safe structured failure surfaced when the guard blocks after an internal error. */
@@ -178,7 +195,9 @@ export interface EgressToolGuard {
       code: 'intake_sink_gate_evaluation_failed';
       message: string;
     };
-  } | null;
+    /** Present only on an allow: the deferred record-first custody commit. */
+    commit?: (finalParams: unknown) => Promise<EgressToolGuardCommit>;
+  } | null>;
 }
 
 export type EgressToolGuardProvider = () => EgressToolGuard | null;
@@ -216,7 +235,15 @@ export function gateToolWithCapabilities<T extends AgentTool<any>>(
       // the SAME gates. Returns a denial result, or null when the candidate is
       // allowed to execute. These gates always stay stricter than a hook: a
       // pre_tool_use hook can only block or rewrite, never widen authority.
-      const gateCandidate = (candidate: unknown): AgentToolResult<unknown> | null => {
+      // A gated candidate either denies, or allows and carries the guard's
+      // deferred record-first custody commit. Returning the commit (rather than
+      // stashing it) keeps a hook rewrite's re-gate authoritative: the commit
+      // that survives is always the one for the params that will execute.
+      type GatedCandidate = {
+        denial: AgentToolResult<unknown> | null;
+        commit: ((finalParams: unknown) => Promise<EgressToolGuardCommit>) | null;
+      };
+      const gateCandidate = async (candidate: unknown): Promise<GatedCandidate> => {
         const eligibility = evaluateToolCapabilityEligibility(tool, candidate, access);
         const transportAllowed = !eligibility.allowed
           && !eligibility.undeclared
@@ -229,14 +256,17 @@ export function gateToolWithCapabilities<T extends AgentTool<any>>(
           }) === true;
         if (!eligibility.allowed && !transportAllowed) {
           if (eligibility.undeclared) {
-            return undeclaredResult(tool.name, access.getTier());
+            return { denial: undeclaredResult(tool.name, access.getTier()), commit: null };
           }
-          return deniedResult(
-            tool.name,
-            access.getTier(),
-            eligibility.missingTokens,
-            access.getGrantedTokens(),
-          );
+          return {
+            denial: deniedResult(
+              tool.name,
+              access.getTier(),
+              eligibility.missingTokens,
+              access.getGrantedTokens(),
+            ),
+            commit: null,
+          };
         }
 
         // htm9.3: tool-egress sink gate (lethal-trifecta invariant). Evaluated
@@ -246,29 +276,33 @@ export function gateToolWithCapabilities<T extends AgentTool<any>>(
         // there.
         const egressGuard = getEgressGuard?.() ?? null;
         if (egressGuard) {
-          const egressDecision = egressGuard.evaluate({
+          const egressDecision = await egressGuard.evaluate({
             toolCallId,
             toolName: tool.name,
             requiredTokens: eligibility.requiredTokens,
             params: candidate,
           });
           if (egressDecision && !egressDecision.allowed) {
-            return toTextResult(egressDecision.noticeText, {
-              isError: true,
-              egressGated: true,
-              policyDenied: true,
-              toolName: tool.name,
-              ...(egressDecision.diagnostic
-                ? { egressGuardDiagnostic: egressDecision.diagnostic }
-                : {}),
-            });
+            return {
+              denial: toTextResult(egressDecision.noticeText, {
+                isError: true,
+                egressGated: true,
+                policyDenied: true,
+                toolName: tool.name,
+                ...(egressDecision.diagnostic
+                  ? { egressGuardDiagnostic: egressDecision.diagnostic }
+                  : {}),
+              }),
+              commit: null,
+            };
           }
+          return { denial: null, commit: egressDecision?.commit ?? null };
         }
-        return null;
+        return { denial: null, commit: null };
       };
 
-      const originalDenial = gateCandidate(params);
-      if (originalDenial) return originalDenial;
+      let gated = await gateCandidate(params);
+      if (gated.denial) return gated.denial;
 
       // Synchronous pre_tool_use hooks (bead 7ym.3.2). Evaluated AFTER the
       // capability + egress gates and BEFORE tool.execute, so those gates and
@@ -299,11 +333,28 @@ export function gateToolWithCapabilities<T extends AgentTool<any>>(
             if (!Value.Check(tool.parameters, evaluation.finalInput)) {
               return hookModifiedInputInvalidResult(tool.name);
             }
-            const modifiedDenial = gateCandidate(evaluation.finalInput);
-            if (modifiedDenial) return modifiedDenial;
+            gated = await gateCandidate(evaluation.finalInput);
+            if (gated.denial) return gated.denial;
             effectiveParams = evaluation.finalInput;
           }
           hookContext = evaluation.additionalContext;
+        }
+      }
+
+      // Record-first egress custody (psfn-framework-ccgdz.6): the durable
+      // delivery record binding these exact bytes to the turn's custody proof
+      // is written BEFORE the tool runs, with the post-hook params. A commit
+      // that cannot be recorded withholds a proof-requiring egress instead of
+      // releasing bytes nothing can account for.
+      if (gated.commit) {
+        const committed = await gated.commit(effectiveParams);
+        if (!committed.allowed) {
+          return toTextResult(committed.noticeText, {
+            isError: true,
+            egressGated: true,
+            policyDenied: true,
+            toolName: tool.name,
+          });
         }
       }
 

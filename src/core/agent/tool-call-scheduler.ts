@@ -649,7 +649,11 @@ async function executeSingleToolCall(
             // benign hold must not burn the retry budget or raise a
             // companion-facing operator notice). A sanitizing admission
             // delivered part of the evidence, so it is a partial result.
-            if (outcome === 'success') {
+            // A tool's own `partialResult` declaration is reclassified too: a
+            // pre-declared partial that the screen then withholds ENTIRELY is
+            // a hold, and leaving it named `partial_result` would let a
+            // required dependent run on zero bytes.
+            if (outcome === 'success' || outcome === 'partial_result') {
               outcome = resultContentWithheld ? 'content_withheld' : 'partial_result';
               isError = isToolCallErrorOutcome(outcome);
             }
@@ -680,6 +684,17 @@ async function executeSingleToolCall(
         intakeScreening = undefined;
       }
     }
+  }
+
+  // lpxg3.2: `partial_result` claims that SOME of the evidence arrived, and the
+  // sequential gate lets a dependent proceed on that claim. A declared partial
+  // that delivered nothing at all — no text and no binary block, whether the
+  // screen took it or the tool never produced it — gave the turn zero evidence,
+  // so it is a hold. Naming it honestly is what stops a required dependent from
+  // running on nothing. Runs after screening, and with no screener configured.
+  if (outcome === 'partial_result' && !deliversToolResultEvidence(result)) {
+    outcome = 'content_withheld';
+    isError = isToolCallErrorOutcome(outcome);
   }
 
   if (isDegradedEvidenceToolCallOutcome(outcome)) {
@@ -775,6 +790,14 @@ function replaceToolResultTextContent(
     ...result,
     content: [{ type: 'text', text: effectiveText }, ...nonTextBlocks],
   };
+}
+
+/**
+ * Whether a result handed the turn anything readable at all: a non-empty text
+ * block, or a binary block the text firewall has no verdict for.
+ */
+function deliversToolResultEvidence(result: AgentToolResult<unknown>): boolean {
+  return hasNonTextToolResultContent(result) || toolResultText(result).trim().length > 0;
 }
 
 function hasNonTextToolResultContent(result: AgentToolResult<unknown>): boolean {

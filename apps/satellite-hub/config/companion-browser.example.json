@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "canonicalOrigin": "https://fleet.example.test",
+  "gatewayOrigin": "https://gateway.example.test",
+  "guestMode": "disabled",
+  "deviceCredentialFiles": [
+    "/run/secrets/example-companion-display"
+  ],
+  "maxFrameBytes": 1048576,
+  "maxBufferedBytes": 2097152,
+  "maxConnections": 32,
+  "handshakeTimeoutMs": 10000,
+  "enrollmentPollMs": 1000
+}

@@ -20,6 +20,9 @@ const VALID = {
   documentIngestTextMaxBytes: '1048576',
   documentIngestPromptChars: '12000',
   documentIngestSidecarChars: '120000',
+  ledgerReadChunkBytes: '131072',
+  ledgerReadMaxRowBytes: '2097152',
+  ledgerReadYieldRows: '256',
   imageFalTimeoutMs: '240000',
   imageFalPollIntervalMs: '2000',
   imageComfyTimeoutMs: '90000',
@@ -38,6 +41,9 @@ describe('Tier 2 tuning knobs — form validation (fail closed)', () => {
     expect(settings.documentIngestTextMaxBytes).toBe(1_048_576);
     expect(settings.documentIngestPromptChars).toBe(12_000);
     expect(settings.documentIngestSidecarChars).toBe(120_000);
+    expect(settings.ledgerReadChunkBytes).toBe(131_072);
+    expect(settings.ledgerReadMaxRowBytes).toBe(2_097_152);
+    expect(settings.ledgerReadYieldRows).toBe(256);
     expect(settings.imageFalTimeoutMs).toBe(240_000);
     expect(settings.imageFalPollIntervalMs).toBe(2_000);
     expect(settings.imageComfyTimeoutMs).toBe(90_000);
@@ -55,6 +61,9 @@ describe('Tier 2 tuning knobs — form validation (fail closed)', () => {
     ['documentIngestTextMaxBytes', '10'],
     ['documentIngestPromptChars', '5'],
     ['documentIngestSidecarChars', '5'],
+    ['ledgerReadChunkBytes', '1'],
+    ['ledgerReadMaxRowBytes', '1024'],
+    ['ledgerReadYieldRows', '0'],
     ['imageFalTimeoutMs', '10'],
     ['imageFalPollIntervalMs', '1'],
     ['imageComfyTimeoutMs', '10'],
@@ -81,6 +90,9 @@ describe('Tier 2 tuning knobs — owner-file → config → snapshot wiring', ()
     expect(config.documentIngestTextMaxBytes).toBe(1_048_576);
     expect(config.documentIngestPromptChars).toBe(12_000);
     expect(config.documentIngestSidecarChars).toBe(120_000);
+    expect(config.ledgerReadChunkBytes).toBe(131_072);
+    expect(config.ledgerReadMaxRowBytes).toBe(2_097_152);
+    expect(config.ledgerReadYieldRows).toBe(256);
     expect(config.imageFalTimeoutMs).toBe(240_000);
     expect(config.imageFalPollIntervalMs).toBe(2_000);
     expect(config.imageComfyTimeoutMs).toBe(90_000);
@@ -95,6 +107,9 @@ describe('Tier 2 tuning knobs — owner-file → config → snapshot wiring', ()
     expect(snapshot.documentIngestTextMaxBytes).toBe(1_048_576);
     expect(snapshot.documentIngestPromptChars).toBe(12_000);
     expect(snapshot.documentIngestSidecarChars).toBe(120_000);
+    expect(snapshot.ledgerReadChunkBytes).toBe(131_072);
+    expect(snapshot.ledgerReadMaxRowBytes).toBe(2_097_152);
+    expect(snapshot.ledgerReadYieldRows).toBe(256);
     expect(snapshot.imageFalTimeoutMs).toBe(240_000);
     expect(snapshot.imageFalPollIntervalMs).toBe(2_000);
     expect(snapshot.imageComfyTimeoutMs).toBe(90_000);

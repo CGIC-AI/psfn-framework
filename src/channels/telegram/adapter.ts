@@ -276,6 +276,16 @@ export function parseTelegramCommand(content: string): TelegramCommand | null {
   };
 }
 
+/**
+ * The `@botname` suffix a Telegram slash command may carry. Commands are
+ * addressed to bots by convention, and a suffixed one names exactly which bot
+ * should answer; an unsuffixed one is for whichever bot handles it.
+ */
+function parseTelegramCommandTarget(raw: string): string | null {
+  const match = raw.trim().match(/^\/[A-Za-z0-9_]+@([A-Za-z0-9_]+)/);
+  return match?.[1] ?? null;
+}
+
 function splitMessage(content: string): string[] {
   if (content.length <= TELEGRAM_TEXT_LIMIT) return [content];
 
@@ -844,13 +854,30 @@ export class TelegramAdapter implements ChannelAdapterPort {
       isDirectMessage,
       ...(threadId ? { threadId } : {}),
     });
+    // A slash command is addressed to a bot by convention: an unsuffixed one is
+    // for whichever bot handles it, and a `/cmd@handle` one names its target
+    // explicitly. Either way it is a turn, never ambient chatter.
+    const commandTarget = command ? parseTelegramCommandTarget(command.raw) : null;
+    const commandAddressesObserver = command !== null
+      && (
+        commandTarget === null
+        || commandTarget.toLowerCase() === (this.observerIdentity?.username ?? '').toLowerCase()
+      );
+
     // jp36.5.6: an ambient group line the companion was not addressed in is
     // observation only — the same posture Discord and Buzz already take. It is
-    // deliberately handled BEFORE the per-channel turn lock: ambient chatter
-    // must never take the lock, start a typing indicator, open a stream, or
-    // displace an addressed message already queued behind it.
-    if (addressed && !addressed.addressesObserver && !isDirectMessage) {
-      await this.observeAmbientGroupMessage(message, {
+    // deliberately handled BEFORE the per-channel turn lock and is NOT awaited:
+    // ambient chatter must never take the lock, start a typing indicator, open a
+    // stream, displace an addressed message queued behind it, or stall the
+    // update loop (and, in webhook mode, the acknowledgement Telegram retries
+    // on). The observation path catches and reports its own failures.
+    if (
+      addressed
+      && !addressed.addressesObserver
+      && !commandAddressesObserver
+      && !isDirectMessage
+    ) {
+      void this.observeAmbientGroupMessage(message, {
         content,
         channelId,
         messageId,

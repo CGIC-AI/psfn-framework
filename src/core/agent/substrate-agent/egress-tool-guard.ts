@@ -109,14 +109,30 @@ export function buildEgressToolGuard(deps: EgressToolGuardDeps): EgressToolGuard
       });
       return false;
     }
+    // The digest is derived here rather than inside the recorder, so its own
+    // failure must be handled here too: `canonicalJsonString` refuses a param
+    // object it cannot serialize (a BigInt, a cycle), and letting that throw
+    // out of `evaluate` would turn a calm denial into an unhandled rejection in
+    // the tool loop. Report it the same way a failed write is reported.
+    let contentSha256: string;
+    try {
+      contentSha256 = egressContentSha256(
+        canonicalJsonString(input.finalParams, 'egress tool params'),
+      );
+    } catch (error) {
+      log.error('Egress delivery record skipped: the payload has no canonical digest', {
+        toolCallId: input.toolCallId,
+        disposition: input.disposition,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return false;
+    }
     const result = await recorder.record({
       surface: 'tool_egress',
       disposition: input.disposition,
       turnId: input.turnId,
       attemptRef: input.toolCallId,
-      contentSha256: egressContentSha256(
-        canonicalJsonString(input.finalParams, 'egress tool params'),
-      ),
+      contentSha256,
       destination: input.destination,
       proof: input.proof,
       outcome: input.outcome,

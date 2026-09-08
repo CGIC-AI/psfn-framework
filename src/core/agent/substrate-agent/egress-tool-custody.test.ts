@@ -273,6 +273,21 @@ describe('tool egress custody', () => {
     expect((result.details as { egressGated?: boolean }).egressGated).toBe(true);
   });
 
+  it('stays a calm denial when the payload has no canonical digest', async () => {
+    // A param object the canonical serializer refuses (a BigInt here) must not
+    // turn a held egress into an unhandled rejection in the tool loop.
+    const store = fakeStore();
+    const guard = makeGuard({ proof: undefined, mode: 'boundary', store });
+    const { tool, executeSpy } = sendTool();
+    const gated = gateToolWithCapabilities(tool, accessFor, () => guard);
+
+    const result = await gated.execute('tool-call-1', { ...sendParams, retries: 10n });
+
+    expect(executeSpy).not.toHaveBeenCalled();
+    expect((result.details as { egressGated?: boolean }).egressGated).toBe(true);
+    expect(store.rows).toHaveLength(0);
+  });
+
   it('leaves non-social tool egress governed by the existing sink gate alone', async () => {
     const store = fakeStore();
     const guard = makeGuard({ proof: undefined, mode: 'boundary', store });

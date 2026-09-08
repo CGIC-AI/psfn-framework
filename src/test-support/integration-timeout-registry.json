@@ -7,6 +7,34 @@
   },
   "overrides": [
     {
+      "file": "src/shared/observability/health-detectors/health-detectors.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": 900,
+      "baselineSource": "measured",
+      "note": "psfn-framework-7qeo1.24.2-.4: runtime health-detector cycle over the real containerized PostgreSQL health-event ring, proving one correlated incident per episode across a simulated restart and a single close on recovery. Focused local full-file wall baseline was 0.87s on 2026-09-07 with a warm harness slot; 120s matches the repo integration cap and preserves headroom for cold image startup and shared harness-slot contention."
+    },
+    {
+      "file": "src/persistence/postgres/letter-store.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": 8200,
+      "baselineSource": "measured",
+      "note": "S12A letter lifecycle and restart persistence against the real containerized PostgreSQL harness. Focused local wall baseline was 8.194s on 2026-08-30; 120s preserves headroom for cold image startup and shared harness-slot contention."
+    },
+    {
+      "file": "src/operator/garden/services/wishlist-disposition.postgres.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": 600,
+      "baselineSource": "measured",
+      "note": "psfn-framework-p4rmp: legacy Garden wishlist routes over the doing-mirror lifecycle plus the pre-lifecycle closed-wish reconcile, against the real containerized PostgreSQL harness. Focused local full-file wall baseline was 0.56s on 2026-09-07 with a warm harness slot; 120s matches the repo integration cap and preserves headroom for cold image startup and shared harness-slot contention."
+    },
+    {
+      "file": "src/persistence/postgres/doing-mirror-store.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": 1450,
+      "baselineSource": "measured",
+      "note": "S12A doing-mirror lifecycle, restart persistence, stale-transition rejection, and the maintenance-lane pending-Letter drain against the real containerized PostgreSQL harness. Focused local full-file wall baseline was 1.45s on 2026-08-30 and 0.41s on 2026-09-07 with the drain proof added (warm harness slot); the conservative 1.45s baseline is retained and 120s preserves headroom for cold image startup and shared harness-slot contention."
+    },
+    {
       "file": "src/app/e2e/contact-lifecycle-certification/process-harness.integration.test.ts",
       "timeoutMs": 120000,
       "measuredBaselineMs": null,
@@ -84,13 +112,6 @@
       "note": "2p0e0 legacy-receipt recovery regression against the real containerized Postgres harness. Baseline 5.34s full-file wall (2 tests, warm harness, this host, 2026-08-17); 90000/5340 = 16.85x headroom for cold Postgres startup and shared-heavy harness variance."
     },
     {
-      "file": "src/core/cogsec/intake/durable-admission.integration.test.ts",
-      "timeoutMs": 120000,
-      "measuredBaselineMs": 1000,
-      "baselineSource": "measured",
-      "note": "psfn-framework-1fjvm.1/.2: skill activation and wiki serving gated on real PostgresCogSecReceiptStore verification across three simulated process restarts. Focused local full-file wall baseline was 0.73s on 2026-09-07 with a warm harness slot; the conservative 1.0s baseline is retained and 120s matches the repo integration cap, preserving headroom for cold image startup and shared harness-slot contention."
-    },
-    {
       "file": "src/core/contacts/postgres-adapter.integration.test.ts",
       "timeoutMs": 120000,
       "measuredBaselineMs": null,
@@ -103,6 +124,13 @@
       "measuredBaselineMs": 1800,
       "baselineSource": "measured",
       "note": "qgqw.1 archive-never-delete suite against real containerized Postgres. Baseline 1.80s file wall (5 tests, warm RAM-backed harness, 32-core host, 2026-07-28); 120s is the repo-standard integration cap, headroom dominated by cold-start container variance on small machines."
+    },
+    {
+      "file": "src/operator/garden/routes/contact-routes.postgres.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": 2120,
+      "baselineSource": "measured",
+      "note": "o6tj6.3 Fleet Garden contact route/service attribution suite against real containerized Postgres. Baseline 2.12s file wall (4 tests, warm tmpfs harness, this host, 2026-08-03); 120s is the repo-standard integration cap with headroom dominated by cold-start and shared-heavy harness variance."
     },
     {
       "file": "src/core/contacts/postgres-adapter/contact-lifecycle-coordinator.integration.test.ts",
@@ -126,13 +154,6 @@
       "note": "Observer-sidecar fresh tenant-schema migration suite against the real containerized Postgres harness. Baseline 11.47s file wall (2 tests, local implementation run, 2026-07-30); 120000/11470 = 10.46x headroom for cold-start and shared-heavy-phase variance."
     },
     {
-      "file": "src/faculties/automata/bus/postgres-query-adapters.integration.test.ts",
-      "timeoutMs": 120000,
-      "measuredBaselineMs": 1511,
-      "baselineSource": "measured",
-      "note": "Automata Bus canonical/pgvector adapter suite against the persistent RAM-backed pgvector harness. Baseline 1.511s file wall (implementation run, this host, 2026-08-11); 120s preserves ample headroom for cold-start container and shared-heavy gate variance."
-    },
-    {
       "file": "src/faculties/automata/bus/postgres-store.integration.test.ts",
       "timeoutMs": 120000,
       "measuredBaselineMs": 2680,
@@ -140,11 +161,11 @@
       "note": "Automata Bus transactional store, conformance, tenancy, readiness, rollback, and backup-access suite against real containerized Postgres. Baseline 2.68s file wall (10 tests, warm tmpfs harness, this host, 2026-08-11); 120s is the repo-standard integration cap with headroom dominated by cold-start and shared harness-slot contention."
     },
     {
-      "file": "src/faculties/automata/bus/worker-execution-restart.integration.test.ts",
+      "file": "src/faculties/automata/bus/postgres-query-adapters.integration.test.ts",
       "timeoutMs": 120000,
-      "measuredBaselineMs": 11000,
+      "measuredBaselineMs": 1511,
       "baselineSource": "measured",
-      "note": "psfn-framework-mgdks.1: governed Automata Bus lifecycle restart certification (durable run + exactly-once terminal event across a full process restart, cross-companion rejection, typed no-finding terminal) against the real containerized PostgreSQL harness. Focused local full-file wall baseline was 10.9s cold and 0.83s warm on 2026-09-07; the conservative 11s cold baseline is retained and 120s matches the repo integration cap while preserving headroom for cold image startup and shared harness-slot contention."
+      "note": "Automata Bus canonical/pgvector adapter suite against the persistent RAM-backed pgvector harness. Baseline 1.511s file wall (implementation run, this host, 2026-08-11); 120s preserves ample headroom for cold-start container and shared-heavy gate variance."
     },
     {
       "file": "src/faculties/introspection/postgres-store.integration.test.ts",
@@ -159,20 +180,6 @@
       "measuredBaselineMs": 11701,
       "baselineSource": "measured",
       "note": "o61vb.7/.8 biographical persistence and canonical dump/restore suite against the real containerized Postgres harness. Worst observed dump/restore case was 11.701s under the full maxWorkers=8 pre-PR gate on 2026-08-10; the shared 90s integration cap preserves 7.69x headroom for cold-start and shared-heavy-phase variance."
-    },
-    {
-      "file": "src/faculties/memory/episodic/postgres-store.integration.test.ts",
-      "timeoutMs": 90000,
-      "measuredBaselineMs": null,
-      "baselineSource": "inherited",
-      "note": "beforeAll 90s harness startup budget (standard harness pattern); pre-existing flake under full-suite postgres slot contention, exposed as the suite gained more harness consumers."
-    },
-    {
-      "file": "src/faculties/memory/episodic/synthesis-lane-postgres.integration.test.ts",
-      "timeoutMs": 120000,
-      "measuredBaselineMs": 1400,
-      "baselineSource": "measured",
-      "note": "y0bft.2 stable episode-claim restart regression against the real containerized Postgres workset. Baseline 1.35s full-file wall (one restart test, warm harness, this host, 2026-08-29); the repo-standard 120s cap preserves headroom for cold-start and shared harness-slot contention."
     },
     {
       "file": "src/faculties/memory/postgres-store.integration.test.ts",
@@ -203,20 +210,6 @@
       "note": "Pre-policy 120s override (repo-standard integration cap). Registered as measurement debt: pinned to its current value so any change forces a re-measured registry update. No independent baseline measured under this bead (timing wiring scoped to the restore suite)."
     },
     {
-      "file": "src/operator/garden/routes/contact-routes.postgres.integration.test.ts",
-      "timeoutMs": 120000,
-      "measuredBaselineMs": 2120,
-      "baselineSource": "measured",
-      "note": "o6tj6.3 Fleet Garden contact route/service attribution suite against real containerized Postgres. Baseline 2.12s file wall (4 tests, warm tmpfs harness, this host, 2026-08-03); 120s is the repo-standard integration cap with headroom dominated by cold-start and shared-heavy harness variance."
-    },
-    {
-      "file": "src/operator/garden/services/wishlist-disposition.postgres.integration.test.ts",
-      "timeoutMs": 120000,
-      "measuredBaselineMs": 600,
-      "baselineSource": "measured",
-      "note": "psfn-framework-p4rmp: legacy Garden wishlist routes over the doing-mirror lifecycle plus the pre-lifecycle closed-wish reconcile, against the real containerized PostgreSQL harness. Focused local full-file wall baseline was 0.56s on 2026-09-07 with a warm harness slot; 120s matches the repo integration cap and preserves headroom for cold image startup and shared harness-slot contention."
-    },
-    {
       "file": "src/persistence/backups/fleet-auth-family-restore.integration.test.ts",
       "timeoutMs": 240000,
       "measuredBaselineMs": 108500,
@@ -229,20 +222,6 @@
       "measuredBaselineMs": null,
       "baselineSource": "inherited",
       "note": "Pre-policy 120s override (repo-standard integration cap). Registered as measurement debt: pinned to its current value so any change forces a re-measured registry update. No independent baseline measured under this bead (timing wiring scoped to the restore suite)."
-    },
-    {
-      "file": "src/persistence/postgres/background-work-live-drain.integration.test.ts",
-      "timeoutMs": 60000,
-      "measuredBaselineMs": 16000,
-      "baselineSource": "measured",
-      "note": "hrmrq.119 live-drain regression: 880-row claim-serial drain over dockerized Postgres measured ~11s isolated / ~16s worst under full-suite load; internal waitForCondition deadlines 40s sit inside the 60s vitest budget."
-    },
-    {
-      "file": "src/persistence/postgres/background-work-live-drain.integration.test.ts",
-      "timeoutMs": 90000,
-      "measuredBaselineMs": null,
-      "baselineSource": "inherited",
-      "note": "beforeAll 90s harness startup, mirroring the background-work store suite's established harness+schema hook budget (slot contention under full-suite load)."
     },
     {
       "file": "src/persistence/postgres/background-work-store.integration.test.ts",
@@ -266,32 +245,11 @@
       "note": "y2mqh.2 Buzz recovery persistence, causal-chain, membership-order, and cancellation suite against the real containerized Postgres harness. Worst observed full-file wall was 0.94s on this host (2026-08-27); the repo-standard 120s cap preserves ample headroom for cold-start and shared-heavy harness variance."
     },
     {
-      "file": "src/persistence/postgres/cogsec-blind-review-store.integration.test.ts",
-      "timeoutMs": 120000,
-      "measuredBaselineMs": 900,
-      "baselineSource": "measured",
-      "note": "psfn-framework-yxz0z.3: the passive Blind Reviewer's durable window over the real containerized PostgreSQL harness, proving restart recovery, a bounded rolling window under sustained ingest, retention expiry with pinned alert evidence surviving it, and one identical durable outcome per CogSec mode. Focused local full-file wall baseline was 0.86s on 2026-09-07 with a warm harness slot; 120s matches the repo integration cap and preserves headroom for cold image startup and shared harness-slot contention."
-    },
-    {
-      "file": "src/persistence/postgres/cogsec-receipt-store.integration.test.ts",
-      "timeoutMs": 120000,
-      "measuredBaselineMs": 1000,
-      "baselineSource": "measured",
-      "note": "psfn-framework-1fjvm.3 receipt-port integration proof, unregistered when it landed on the S12 train and registered here by the 1fjvm.1/.2 admission lane so the policy gate passes. Focused local full-file wall baseline was 0.58s on 2026-09-07 with a warm harness slot; the conservative 1.0s baseline is retained and 120s matches the repo integration cap."
-    },
-    {
       "file": "src/persistence/postgres/companion-presence.integration.test.ts",
       "timeoutMs": 120000,
       "measuredBaselineMs": null,
       "baselineSource": "inherited",
       "note": "Pre-policy 120s override (repo-standard integration cap). Registered as measurement debt: pinned to its current value so any change forces a re-measured registry update. No independent baseline measured under this bead (timing wiring scoped to the restore suite)."
-    },
-    {
-      "file": "src/persistence/postgres/doing-mirror-store.integration.test.ts",
-      "timeoutMs": 120000,
-      "measuredBaselineMs": 1450,
-      "baselineSource": "measured",
-      "note": "S12A doing-mirror lifecycle, restart persistence, stale-transition rejection, and the maintenance-lane pending-Letter drain against the real containerized PostgreSQL harness. Focused local full-file wall baseline was 1.45s on 2026-08-30 and 0.41s on 2026-09-07 with the drain proof added (warm harness slot); the conservative 1.45s baseline is retained and 120s preserves headroom for cold image startup and shared harness-slot contention."
     },
     {
       "file": "src/persistence/postgres/fleet-auth/authority-lifecycle-store.integration.test.ts",
@@ -357,13 +315,6 @@
       "note": "Pre-policy 120s override (repo-standard integration cap). Registered as measurement debt: pinned to its current value so any change forces a re-measured registry update. No independent baseline measured under this bead (timing wiring scoped to the restore suite)."
     },
     {
-      "file": "src/persistence/postgres/health-event-store.integration.test.ts",
-      "timeoutMs": 120000,
-      "measuredBaselineMs": 960,
-      "baselineSource": "measured",
-      "note": "psfn-framework-7qeo1.24.1: bounded runtime health-event stream round-trip, ring eviction, restart persistence, idempotence, incident/window reads, and fail-closed read-back against the real containerized PostgreSQL harness. Focused local full-file wall baseline was 0.96s on 2026-09-07 with a warm harness slot; 120s matches the repo integration cap and preserves headroom for cold image startup and shared harness-slot contention."
-    },
-    {
       "file": "src/persistence/postgres/icp-admin-projection-cost-scope.integration.test.ts",
       "timeoutMs": 120000,
       "measuredBaselineMs": 1870,
@@ -427,20 +378,6 @@
       "note": "Companion-local ICP exact-row lock suite against real Postgres. Baseline 1.64s file wall (1 test, warm tmpfs harness, this host, 2026-08-02); 120s is the repo-standard integration cap with headroom dominated by cold-start and shared-heavy harness variance."
     },
     {
-      "file": "src/persistence/postgres/internal-state-store.integration.test.ts",
-      "timeoutMs": 120000,
-      "measuredBaselineMs": 11830,
-      "baselineSource": "measured",
-      "note": "y9a2t Postgres restart-continuity regression. Measured 11.83s standalone including warm-container acquisition, schema setup, two independent store connections, and the stale-state location restore on this host (2026-08-13); 120s preserves >10x headroom for cold image startup and harness-slot contention."
-    },
-    {
-      "file": "src/persistence/postgres/letter-store.integration.test.ts",
-      "timeoutMs": 120000,
-      "measuredBaselineMs": 8200,
-      "baselineSource": "measured",
-      "note": "S12A letter lifecycle and restart persistence against the real containerized PostgreSQL harness. Focused local wall baseline was 8.194s on 2026-08-30; 120s preserves headroom for cold image startup and shared harness-slot contention."
-    },
-    {
       "file": "src/persistence/postgres/model-usage-budget.integration.test.ts",
       "timeoutMs": 120000,
       "measuredBaselineMs": 692,
@@ -460,6 +397,13 @@
       "measuredBaselineMs": null,
       "baselineSource": "inherited",
       "note": "Pre-policy 120s override (repo-standard integration cap). Registered as measurement debt: pinned to its current value so any change forces a re-measured registry update. No independent baseline measured under this bead (timing wiring scoped to the restore suite)."
+    },
+    {
+      "file": "src/persistence/postgres/internal-state-store.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": 11830,
+      "baselineSource": "measured",
+      "note": "y9a2t Postgres restart-continuity regression. Measured 11.83s standalone including warm-container acquisition, schema setup, two independent store connections, and the stale-state location restore on this host (2026-08-13); 120s preserves >10x headroom for cold image startup and harness-slot contention."
     },
     {
       "file": "src/persistence/postgres/model-usage-store.benchmark.integration.test.ts",
@@ -483,18 +427,18 @@
       "note": "Pre-policy 180s override shipped unregistered by the stmof named-tenant lane (89c6ba23cd landed without the repo-wide tests stage). Registered as measurement debt: pinned so any change forces a real measurement."
     },
     {
+      "file": "src/persistence/postgres/health-event-store.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": 960,
+      "baselineSource": "measured",
+      "note": "psfn-framework-7qeo1.24.1: bounded runtime health-event stream round-trip, ring eviction, restart persistence, idempotence, incident/window reads, and fail-closed read-back against the real containerized PostgreSQL harness. Focused local full-file wall baseline was 0.96s on 2026-09-07 with a warm harness slot; 120s matches the repo integration cap and preserves headroom for cold image startup and shared harness-slot contention."
+    },
+    {
       "file": "src/persistence/postgres/partner-affect-shadow-store.integration.test.ts",
       "timeoutMs": 120000,
       "measuredBaselineMs": null,
       "baselineSource": "inherited",
       "note": "Pre-policy 120s override (repo-standard integration cap). Registered as measurement debt: pinned to its current value so any change forces a re-measured registry update. No independent baseline measured under this bead (timing wiring scoped to the restore suite)."
-    },
-    {
-      "file": "src/persistence/postgres/room-participation-lease-store.integration.test.ts",
-      "timeoutMs": 120000,
-      "measuredBaselineMs": 1000,
-      "baselineSource": "measured",
-      "note": "psfn-framework-jp36.5.5: bounded room-participation lease store against the real containerized PostgreSQL harness (restart watermark, concurrent consider-once claim, in-SQL budget/bot-loop fences, two-companion independence). Focused local full-file wall baseline was 0.95s on 2026-09-07 with a warm harness slot; 120s matches the repo integration cap and preserves headroom for cold image startup and shared harness-slot contention."
     },
     {
       "file": "src/persistence/postgres/schema-tenancy.integration.test.ts",
@@ -523,6 +467,13 @@
       "measuredBaselineMs": null,
       "baselineSource": "inherited",
       "note": "Pre-policy 120s override (repo-standard integration cap). Registered as measurement debt: pinned to its current value so any change forces a re-measured registry update. No independent baseline measured under this bead (timing wiring scoped to the restore suite)."
+    },
+    {
+      "file": "src/persistence/postgres/room-participation-lease-store.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": 1000,
+      "baselineSource": "measured",
+      "note": "psfn-framework-jp36.5.5: bounded room-participation lease store against the real containerized PostgreSQL harness (restart watermark, concurrent consider-once claim, in-SQL budget/bot-loop fences, two-companion independence). Focused local full-file wall baseline was 0.95s on 2026-09-07 with a warm harness slot; 120s matches the repo integration cap and preserves headroom for cold image startup and shared harness-slot contention."
     },
     {
       "file": "src/persistence/postgres/speaking-arbiter-store.integration.test.ts",
@@ -574,11 +525,60 @@
       "note": "Bead 6oott redaction projection-drift fail-closed suite. Measured 11.4s standalone (harness container start + two real-Postgres tests); 120s matches the repo-standard integration cap to absorb harness-semaphore queueing under full-suite parallelism (headroom ratio >10x)."
     },
     {
-      "file": "src/shared/observability/health-detectors/health-detectors.integration.test.ts",
+      "file": "src/persistence/postgres/background-work-live-drain.integration.test.ts",
+      "timeoutMs": 60000,
+      "measuredBaselineMs": 16000,
+      "baselineSource": "measured",
+      "note": "hrmrq.119 live-drain regression: 880-row claim-serial drain over dockerized Postgres measured ~11s isolated / ~16s worst under full-suite load; internal waitForCondition deadlines 40s sit inside the 60s vitest budget."
+    },
+    {
+      "file": "src/persistence/postgres/background-work-live-drain.integration.test.ts",
+      "timeoutMs": 90000,
+      "measuredBaselineMs": null,
+      "baselineSource": "inherited",
+      "note": "beforeAll 90s harness startup, mirroring the background-work store suite's established harness+schema hook budget (slot contention under full-suite load)."
+    },
+    {
+      "file": "src/faculties/memory/episodic/postgres-store.integration.test.ts",
+      "timeoutMs": 90000,
+      "measuredBaselineMs": null,
+      "baselineSource": "inherited",
+      "note": "beforeAll 90s harness startup budget (standard harness pattern); pre-existing flake under full-suite postgres slot contention, exposed as the suite gained more harness consumers."
+    },
+    {
+      "file": "src/faculties/memory/episodic/synthesis-lane-postgres.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": 1400,
+      "baselineSource": "measured",
+      "note": "y0bft.2 stable episode-claim restart regression against the real containerized Postgres workset. Baseline 1.35s full-file wall (one restart test, warm harness, this host, 2026-08-29); the repo-standard 120s cap preserves headroom for cold-start and shared harness-slot contention."
+    },
+    {
+      "file": "src/faculties/automata/bus/worker-execution-restart.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": 11000,
+      "baselineSource": "measured",
+      "note": "psfn-framework-mgdks.1: governed Automata Bus lifecycle restart certification (durable run + exactly-once terminal event across a full process restart, cross-companion rejection, typed no-finding terminal) against the real containerized PostgreSQL harness. Focused local full-file wall baseline was 10.9s cold and 0.83s warm on 2026-09-07; the conservative 11s cold baseline is retained and 120s matches the repo integration cap while preserving headroom for cold image startup and shared harness-slot contention."
+    },
+    {
+      "file": "src/core/cogsec/intake/durable-admission.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": 1000,
+      "baselineSource": "measured",
+      "note": "psfn-framework-1fjvm.1/.2: skill activation and wiki serving gated on real PostgresCogSecReceiptStore verification across three simulated process restarts. Focused local full-file wall baseline was 0.73s on 2026-09-07 with a warm harness slot; the conservative 1.0s baseline is retained and 120s matches the repo integration cap, preserving headroom for cold image startup and shared harness-slot contention."
+    },
+    {
+      "file": "src/persistence/postgres/cogsec-receipt-store.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": 1000,
+      "baselineSource": "measured",
+      "note": "psfn-framework-1fjvm.3 receipt-port integration proof, unregistered when it landed on the S12 train and registered here by the 1fjvm.1/.2 admission lane so the policy gate passes. Focused local full-file wall baseline was 0.58s on 2026-09-07 with a warm harness slot; the conservative 1.0s baseline is retained and 120s matches the repo integration cap."
+    },
+    {
+      "file": "src/persistence/postgres/cogsec-blind-review-store.integration.test.ts",
       "timeoutMs": 120000,
       "measuredBaselineMs": 900,
       "baselineSource": "measured",
-      "note": "psfn-framework-7qeo1.24.2-.4: runtime health-detector cycle over the real containerized PostgreSQL health-event ring, proving one correlated incident per episode across a simulated restart and a single close on recovery. Focused local full-file wall baseline was 0.87s on 2026-09-07 with a warm harness slot; 120s matches the repo integration cap and preserves headroom for cold image startup and shared harness-slot contention."
+      "note": "psfn-framework-yxz0z.3: the passive Blind Reviewer's durable window over the real containerized PostgreSQL harness, proving restart recovery, a bounded rolling window under sustained ingest, retention expiry with pinned alert evidence surviving it, and one identical durable outcome per CogSec mode. Focused local full-file wall baseline was 0.86s on 2026-09-07 with a warm harness slot; 120s matches the repo integration cap and preserves headroom for cold image startup and shared harness-slot contention."
     }
   ]
 }

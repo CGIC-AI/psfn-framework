@@ -895,6 +895,19 @@ button:focus-visible {
   background: transparent;
 }
 
+.attachment-menu p {
+  max-width: 260px;
+  margin: 4px 8px 10px;
+  color: var(--color-muted);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.attachment-menu button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
 .hidden-file-input {
   position: absolute;
   width: 1px;
@@ -903,63 +916,6 @@ button:focus-visible {
   clip: rect(0 0 0 0);
   clip-path: inset(50%);
   white-space: nowrap;
-}
-
-.attachment-tray {
-  position: fixed;
-  left: 50%;
-  bottom: calc(max(0.9rem, env(safe-area-inset-bottom)) + 88px);
-  transform: translateX(-50%);
-  z-index: 6;
-  width: min(calc(100vw - 2rem), 700px);
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr));
-  gap: 0.55rem;
-}
-
-.pending-attachment {
-  min-width: 0;
-  display: grid;
-  grid-template-columns: 32px minmax(0, 1fr) 34px;
-  align-items: center;
-  gap: 0.55rem;
-  padding: 0.55rem;
-  border: 1px solid rgba(143, 187, 232, 0.42);
-  border-radius: 8px;
-  background: rgba(234, 244, 255, 0.94);
-  box-shadow: var(--shadow-soft);
-  backdrop-filter: blur(14px);
-}
-
-.pending-attachment > svg {
-  width: 1rem;
-  height: 1rem;
-  margin: auto;
-  color: #2f6da2;
-}
-
-.pending-attachment strong {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.pending-attachment p {
-  margin: 0.1rem 0 0;
-  color: var(--color-muted);
-  font-size: 0.76rem;
-  line-height: 1.25;
-  overflow-wrap: anywhere;
-}
-
-.pending-attachment button {
-  width: 32px;
-  height: 32px;
-  min-height: 32px;
-  padding: 0;
-  border-radius: 50%;
-  background: rgba(255, 253, 248, 0.78);
 }
 
 .mic-control {
@@ -1002,12 +958,12 @@ button:focus-visible {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
   gap: 0.62rem;
-  pointer-events: none;
+  max-height: 50dvh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  pointer-events: auto;
 }
 
-.toast-layer.stacked {
-  bottom: calc(max(0.9rem, env(safe-area-inset-bottom)) + 156px);
-}
 
 .context-toast {
   pointer-events: auto;

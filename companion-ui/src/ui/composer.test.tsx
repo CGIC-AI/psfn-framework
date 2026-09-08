@@ -6,28 +6,18 @@ import { Composer } from './composer.js';
 function makeController(overrides: Partial<ComposerController> = {}): ComposerController {
   return {
     attachmentMenuOpen: false,
-    cameraInputRef: { current: null },
     clearInput: vi.fn(),
-    fileInputRef: { current: null },
-    handleAttachmentFiles: vi.fn(),
-    imageInputRef: { current: null },
+    clearHumanScopedState: vi.fn(),
+    resetInteraction: vi.fn(),
     input: '',
     inputRef: { current: null },
     micActive: false,
-    micMode: 'dictation',
-    openAttachmentPicker: vi.fn(),
-    pendingAttachments: [],
-    removeAttachment: vi.fn(),
-    selectMicMode: vi.fn(),
     setAttachmentMenuOpen: vi.fn(),
     setInput: vi.fn(),
-    stopVoicePlayback: vi.fn(),
     syncMicCapture: vi.fn(),
-    toggleMic: vi.fn(),
-    toggleMicMode: vi.fn(),
     voiceNotice: null,
     ...overrides,
-  } as ComposerController;
+  };
 }
 
 function renderComposer(props: {
@@ -38,6 +28,7 @@ function renderComposer(props: {
   onSendText?: (text: string) => void;
   onStopGeneration?: () => void;
   onToggleMic?: () => void;
+  onStopVoicePlayback?: () => void;
 } = {}) {
   const controller = props.controller ?? makeController();
   const onSendText = props.onSendText ?? vi.fn();
@@ -50,6 +41,7 @@ function renderComposer(props: {
       onSendText={onSendText}
       onStopGeneration={onStopGeneration}
       onToggleMic={props.onToggleMic ?? vi.fn()}
+      onStopVoicePlayback={props.onStopVoicePlayback ?? vi.fn()}
       voiceStopActive={props.voiceStopActive ?? false}
     />,
   );
@@ -57,12 +49,22 @@ function renderComposer(props: {
 }
 
 describe('Composer stop-generation control', () => {
+  it('does not collect files that the connection cannot send', () => {
+    renderComposer({ controller: makeController({ attachmentMenuOpen: true }) });
+    expect(screen.getByText(/File and photo sharing is not available yet/)).toBeTruthy();
+    for (const name of ['Upload file', 'Upload image', 'Take photo']) {
+      expect((screen.getByRole('menuitem', { name }) as HTMLButtonElement).disabled).toBe(true);
+    }
+    expect(document.querySelector('input[type=file]')).toBeNull();
+    expect(screen.queryByText('Dictation')).toBeNull();
+  });
+
   it('requests microphone capture only from the explicit mic button', () => {
     const onToggleMic = vi.fn();
     renderComposer({ onToggleMic });
 
     expect(onToggleMic).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole('button', { name: 'Toggle dictation' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle voice chat' }));
     expect(onToggleMic).toHaveBeenCalledTimes(1);
   });
 
@@ -87,16 +89,16 @@ describe('Composer stop-generation control', () => {
   });
 
   it('keeps voice playback stop priority over generation stop', () => {
-    const controller = makeController({ micMode: 'voice' });
+    const onStopVoicePlayback = vi.fn();
     const { onStopGeneration } = renderComposer({
-      controller,
+      onStopVoicePlayback,
       generationStopActive: true,
       voiceStopActive: true,
     });
 
     const stopButton = screen.getByRole('button', { name: 'Stop voice playback' });
     fireEvent.click(stopButton);
-    expect(controller.stopVoicePlayback).toHaveBeenCalledTimes(1);
+    expect(onStopVoicePlayback).toHaveBeenCalledTimes(1);
     expect(onStopGeneration).not.toHaveBeenCalled();
   });
 

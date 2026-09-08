@@ -20,7 +20,6 @@ function renderApprovals(approvals: ApprovalPanelState) {
       locationNotice={null}
       onApprovalDecision={onApprovalDecision}
       onArtifactPreview={vi.fn()}
-      stacked={false}
       updateReady={false}
       voiceNotice={null}
     />,
@@ -38,14 +37,13 @@ describe('approval cards', () => {
         locationNotice="Location permission is on. Waiting for a more accurate fix."
         onApprovalDecision={vi.fn()}
         onArtifactPreview={vi.fn()}
-        stacked={false}
         updateReady={false}
         voiceNotice={null}
       />,
     );
 
     expect(screen.getByText('Location update')).toBeTruthy();
-    expect(screen.queryByText('Connection issue')).toBeNull();
+    expect(screen.queryByText('Needs attention')).toBeNull();
   });
 
   it('renders complete shard attribution and submits only the offered decision', () => {

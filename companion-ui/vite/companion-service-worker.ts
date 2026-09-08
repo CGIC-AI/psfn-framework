@@ -13,6 +13,10 @@ const STATIC_APP_SHELL = [
   `${APP_SCOPE}manifest.webmanifest`,
   `${APP_SCOPE}icon.svg`,
   `${APP_SCOPE}icon-maskable.svg`,
+  `${APP_SCOPE}icon-192.png`,
+  `${APP_SCOPE}icon-512.png`,
+  `${APP_SCOPE}icon-maskable-512.png`,
+  `${APP_SCOPE}apple-touch-icon.png`,
 ];
 
 function configuredBuildRevision(): string | null {

@@ -2574,3 +2574,137 @@ describe('postgres memory store ANN embedding search (a27w.2)', () => {
     });
   }, INTEGRATION_TIMEOUT_MS);
 });
+
+// ── Derived-memory admission identity round trip (psfn-framework-ccgdz.3) ──
+
+describe('postgres memory store admission identity integration', () => {
+  const ADMISSION_PROVENANCE = {
+    channelId: 'api:custody-integration',
+    sessionId: 'api:custody-integration',
+    turnId: 'turn-custody-1',
+    sourceMessageIds: [7],
+    derivationRunId: 'run_01JZ00000000000000000000AA',
+    sourceAdmissions: [{
+      kind: 'intake_envelope',
+      refId: 'env_01JZ00000000000000000000AA',
+      envelopeId: 'env_01JZ00000000000000000000AA',
+      receiptId: 'rcpt_01JZ00000000000000000000AA',
+    }],
+  } as const;
+
+  it('round-trips sourceAdmissions and derivationRunId through the real provenance column', async () => {
+    await withMemoryDatabase(async (pool) => {
+      const store = await createPostgresMemoryStoreFromPool(pool, 4);
+      const memory = makeMemory({
+        id: 'memory-admission-roundtrip',
+        provenance: { ...ADMISSION_PROVENANCE },
+      });
+      await store.insertMemory(memory, DEFAULT_EMBEDDING);
+
+      const loaded = await store.getById(memory.id);
+      expect(loaded?.provenance).toEqual(ADMISSION_PROVENANCE);
+
+      const row = (await pool.query<{ provenance_json: Record<string, unknown> }>(
+        'SELECT provenance_json FROM l2_memories WHERE id = $1',
+        [memory.id],
+      )).rows[0];
+      expect(row?.provenance_json).toMatchObject({
+        derivationRunId: ADMISSION_PROVENANCE.derivationRunId,
+        sourceAdmissions: ADMISSION_PROVENANCE.sourceAdmissions,
+      });
+    });
+  });
+
+  it('keeps a legacy row without admission identity legible and does not invent one', async () => {
+    await withMemoryDatabase(async (pool) => {
+      const store = await createPostgresMemoryStoreFromPool(pool, 4);
+      const memory = makeMemory({
+        id: 'memory-legacy-no-admission',
+        provenance: { channelId: 'api:custody-integration', turnId: 'turn-legacy' },
+      });
+      await store.insertMemory(memory, DEFAULT_EMBEDDING);
+      const loaded = await store.getById(memory.id);
+      expect(loaded?.provenance).toEqual({
+        channelId: 'api:custody-integration',
+        turnId: 'turn-legacy',
+      });
+      expect(loaded?.provenance?.sourceAdmissions).toBeUndefined();
+    });
+  });
+
+  it('drops a malformed persisted admission identity rather than reading it as verified', async () => {
+    await withMemoryDatabase(async (pool) => {
+      const store = await createPostgresMemoryStoreFromPool(pool, 4);
+      const memory = makeMemory({
+        id: 'memory-malformed-admission',
+        provenance: { ...ADMISSION_PROVENANCE },
+      });
+      await store.insertMemory(memory, DEFAULT_EMBEDDING);
+      await pool.query(`
+        UPDATE l2_memories
+        SET provenance_json = jsonb_set(
+          provenance_json::jsonb,
+          '{sourceAdmissions}',
+          '[{"kind":"intake_envelope","refId":"env_01JZ00000000000000000000AA","receiptId":"not a receipt id"}]'::jsonb
+        )::json
+        WHERE id = $1
+      `, [memory.id]);
+      // A fresh store so the assertion reads the mutated ROW, not a warm cache.
+      const reader = await createPostgresMemoryStoreFromPool(pool, 4);
+      const loaded = await reader.getById(memory.id);
+      expect(loaded?.provenance?.sourceAdmissions).toEqual([{
+        kind: 'intake_envelope',
+        refId: 'env_01JZ00000000000000000000AA',
+      }]);
+    });
+  });
+
+  it('merges a deduplicated write\'s admission identity onto the surviving memory', async () => {
+    await withMemoryDatabase(async (pool) => {
+      const store = await createPostgresMemoryStoreFromPool(pool, 4);
+      const text = 'the partner prefers oat milk in coffee';
+      const embedding = new Float32Array([1, 0, 0, 0]);
+      const embeddings: EmbeddingProviderPort = {
+        dims: 4,
+        embed: async () => embedding,
+        embedBatch: async (texts) => texts.map(() => embedding),
+      };
+      const writer = new MemoryWriter(store, embeddings);
+      const first = await writer.write({
+        text,
+        type: 'semantic',
+        sensitivity: 'personal',
+        provenance: {
+          channelId: 'api:custody-integration',
+          sourceAdmissions: [{
+            kind: 'intake_envelope',
+            refId: 'env_01JZ0000000000000000000CLEAN',
+            envelopeId: 'env_01JZ0000000000000000000CLEAN',
+          }],
+        },
+      });
+      expect(first.action).toBe('created');
+
+      const second = await writer.write({
+        text,
+        type: 'semantic',
+        sensitivity: 'personal',
+        provenance: {
+          channelId: 'api:custody-integration',
+          sourceAdmissions: [{
+            kind: 'intake_envelope',
+            refId: 'env_01JZ00000000000000000POISON',
+            envelopeId: 'env_01JZ00000000000000000POISON',
+          }],
+        },
+      });
+      expect(second.action).toBe('deduplicated');
+
+      const loaded = await store.getById(first.memory.id);
+      expect(loaded?.provenance?.sourceAdmissions).toEqual([
+        expect.objectContaining({ envelopeId: 'env_01JZ0000000000000000000CLEAN' }),
+        expect.objectContaining({ envelopeId: 'env_01JZ00000000000000000POISON' }),
+      ]);
+    });
+  });
+});

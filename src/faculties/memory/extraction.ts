@@ -1138,6 +1138,11 @@ export class MemoryExtractor {
           ...(routing?.icpDyadId ? { icpDyadId: routing.icpDyadId } : {}),
           ...(routing?.sourceActivityIds ? { sourceActivityIds: routing.sourceActivityIds } : {}),
           ...(routing?.sourceTurnIds ? { sourceTurnIds: routing.sourceTurnIds } : {}),
+          // ccgdz.3: admission identity of the source bytes and the identity of
+          // the run that derived this memory. Both are verified upstream; an
+          // absent field means the chain is unproven here, never that it is clean.
+          ...(routing?.sourceAdmissions ? { sourceAdmissions: routing.sourceAdmissions } : {}),
+          ...(routing?.derivationRunId ? { derivationRunId: routing.derivationRunId } : {}),
         }
         : undefined,
       sensitivity: fact.sensitivity,

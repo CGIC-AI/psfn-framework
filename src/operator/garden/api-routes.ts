@@ -55,6 +55,8 @@ import {
 import { buildAdminSettingsRoutes } from './routes/settings-routes.js';
 import { buildAdminChannelEnvelopeRoutes } from './routes/channel-envelope-routes.js';
 import { buildAdminBearerCompanionRoutes } from './routes/bearer-companion-routes.js';
+import { buildAdminCustodyRoutes } from './routes/custody-routes.js';
+import type { AdminCustodyQueryService } from './services/custody-query-service.js';
 import { buildAdminIntakeSourceListRoutes } from './routes/intake-source-list-routes.js';
 import { buildAdminIntakeQuarantineRoutes } from './routes/intake-quarantine-routes.js';
 import type { AdminIntakeQuarantineService } from './services/intake-quarantine-service.js';
@@ -328,6 +330,8 @@ export function buildAdminApiRoutes(options: {
   letterService?: AdminLetterService | null;
   doingMirrorService?: AdminDoingMirrorService | null;
   episodicMemoryService?: AdminEpisodicMemoryService | null;
+  /** Content-free custody chain query seam (ccgdz.7); Postgres-backed. */
+  custodyQueryService?: AdminCustodyQueryService | null;
   groupMemoryService?: AdminGroupMemoryService | null;
   memoryService: AdminMemoryService;
   biographicalReviewService?: AdminBiographicalReviewService | null;
@@ -395,6 +399,7 @@ export function buildAdminApiRoutes(options: {
     letterService,
     doingMirrorService,
     episodicMemoryService,
+    custodyQueryService,
     groupMemoryService,
     memoryService,
     biographicalReviewService,
@@ -920,6 +925,7 @@ export function buildAdminApiRoutes(options: {
       appendAuditTimelineEntry,
     }),
     ...buildAdminEpisodicMemoryRoutes({ episodicMemoryService }),
+    ...buildAdminCustodyRoutes({ custodyQueryService }),
     {
       method: 'GET',
       match: exactPath('/api/admin/group-memory'),

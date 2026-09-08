@@ -228,12 +228,19 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
     action: 'cogsec.read', area: 'cognitive_security', routeIds: [
       ...ids('GET', [
         '/api/admin/concerns', '/api/admin/concerns/:concernId/arcs',
+        // ccgdz.7: the custody chain query answers "which admitted context
+        // caused this egress?" from ids, hashes and counts alone. It reads the
+        // same CogSec provenance the quarantine queue does, so it shares that
+        // read authority rather than minting a capability for the same act of
+        // looking at what the firewall admitted.
+        '/api/admin/custody/chain', '/api/admin/custody/sources',
         '/api/admin/intake/drift-reviews', '/api/admin/intake/policy',
         '/api/admin/intake/quarantine', '/api/admin/intake/source-lists',
         '/api/admin/intake/drift-reviews/:id', '/api/admin/intake/quarantine/:id',
       ]),
       ...pageIds([
-        '/cognitive-security/approvals', '/cognitive-security/drift',
+        '/cognitive-security/approvals', '/cognitive-security/custody',
+        '/cognitive-security/drift',
         '/cognitive-security/firewall', '/cognitive-security/remediation', '/concerns',
       ]),
     ],

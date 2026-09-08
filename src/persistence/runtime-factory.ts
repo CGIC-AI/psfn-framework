@@ -99,6 +99,7 @@ import { PostgresCogSecReceiptStore } from './postgres/cogsec-receipt-store.js';
 import type { CogSecReceiptStorePort } from '../core/cogsec/receipts/contracts.js';
 import { PostgresCustodySnapshotStore } from './postgres/custody-snapshot-store.js';
 import type { CustodySnapshotStorePort } from '../core/cogsec/disclosure/custody-snapshot.js';
+import { PostgresCustodyChainReader } from './postgres/custody-chain-reader.js';
 import { PostgresEgressDeliveryRecordStore } from './postgres/egress-delivery-record-store.js';
 import type { EgressDeliveryRecordStorePort } from '../core/cogsec/disclosure/egress-delivery-record.js';
 import type { LetterStorePort } from '../core/letters/contracts.js';
@@ -175,6 +176,15 @@ export interface AgentPersistenceRuntime {
    * delivery never outlives the proof it cites. Content-free by contract.
    */
   egressDeliveryRecordStore: EgressDeliveryRecordStorePort;
+  /**
+   * Read side of the custody chain (psfn-framework-ccgdz.7), behind the Garden
+   * provenance surface. It lives here rather than being opened by the admin
+   * surface so it pins the SAME tenant schema and role the two writer stores
+   * above pin: a reader on `public` while the turn writes to a companion
+   * schema would report every real chain as absent, which is the one answer an
+   * audit surface must never give wrongly.
+   */
+  custodyChainReader: PostgresCustodyChainReader;
   /**
    * Bounded runtime health-event stream (bead psfn-framework-7qeo1.24.1).
    * Written by the bus sink that drains `runtime.health.event`; read by
@@ -586,6 +596,13 @@ export async function createAgentPersistenceRuntime(
         options.config.custodySnapshotRetentionDays,
         { schema, role: tenantRole },
       ),
+    ),
+    // No readiness wrapper: the reader runs no migration. It opens a pool on
+    // the schema the two custody writers above just migrated, so a readiness
+    // gate here would wait on work that has already happened.
+    custodyChainReader: await PostgresCustodyChainReader.connect(
+      databaseUrl,
+      { schema, role: tenantRole },
     ),
     partnerAffectShadowStore: await awaitPostgresStoreReadiness(
       'partner_affect_shadow',

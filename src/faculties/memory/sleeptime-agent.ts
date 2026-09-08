@@ -19,6 +19,7 @@ import { evaluateRestWindowEligibility } from '../../core/scheduler/rest-window.
 import type { InferredPostTurnAction, PostTurnActionCandidate, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import type { SessionEntry } from '../../core/session/types.js';
+import { isRuntimeAuthoredFallbackSessionEntry } from '../../core/session/runtime-fallback-provenance.js';
 import type { SessionManager } from '../../core/session/manager.js';
 import type {
   ConversationalActivityWorkItem,
@@ -739,9 +740,25 @@ export class SleeptimeMemoryAgent {
         .filter(entry => (
           entry.id <= input.revision
           && (entry.role === 'user' || entry.role === 'assistant')
+          // f54sx (via ccgdz.8): a runtime-authored fallback notice is not her
+          // speech. It must be excluded HERE, at the only point the entries
+          // still carry their metadata: everything downstream collapses them
+          // to bare strings (`summarizeSessionEntry`, `GroundingEntry`), so a
+          // notice that survives this filter both enters the orient-rewrite
+          // transcript AND counts as grounding evidence in the 1gpol gate —
+          // letting text the runtime wrote support a memory write about her.
+          && !isRuntimeAuthoredFallbackSessionEntry(entry)
         ));
       if (recentEntries.length === 0) {
-        throw new Error('Changed conversational session has no readable conversational transcript');
+        // Per-session: the workset runner records this as that session's
+        // failure and moves on (`sleeptime-workset.ts`), so a session whose
+        // only change was a runtime notice never blocks the others. Naming the
+        // cause matters because the filter above widened which sessions land
+        // here — an operator must not read this as a missing transcript.
+        throw new Error(
+          'Changed conversational session has no readable conversational transcript '
+          + '(its entries in range are runtime-authored notices or non-conversational)',
+        );
       }
       entriesBySession.set(sessionId, recentEntries);
     }

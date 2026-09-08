@@ -34,6 +34,7 @@ import { applyThreadUnionForArc, type ThreadAssignmentEvent } from './thread-ass
 import type { PersonaPreamblePort } from '../../../core/identity/persona-preamble.js';
 import { resolveEpisodeSessionEntryTurnId } from './turn-reference.js';
 import { parseIntakeScreeningMetadata } from '../../../core/session/intake-screening-metadata.js';
+import { isRuntimeAuthoredFallbackSessionEntry } from '../../../core/session/runtime-fallback-provenance.js';
 import { positiveIntegerOr } from '../../../shared/utils/numeric.js';
 
 const log = createComponentLogger('EpisodicSynthesis');
@@ -533,11 +534,27 @@ function buildProvenanceRefs(
     const admission = existingTurnRef?.envelopeId === undefined
       ? resolveEntryAdmissionIdentity(entry)
       : undefined;
-    if (!existingTurnRef || admission) {
+    // f54sx (via ccgdz.8): a turn whose text the RUNTIME authored is recorded
+    // as such rather than dropped. The marker is sticky across the entries
+    // sharing a turn — one runtime-authored entry makes the derivation
+    // runtime-touched, and a later companion-authored entry on the same turn
+    // never clears it, exactly as an admission identity is never cleared.
+    const runtimeAuthored = (existingTurnRef?.authoredBy === 'runtime')
+      || isRuntimeAuthoredFallbackSessionEntry(entry);
+    if (!existingTurnRef || admission || runtimeAuthored) {
       provenance.set(`turn:${turnId}`, {
         kind: 'turn',
         refId: turnId,
+        ...(existingTurnRef?.envelopeId !== undefined
+          ? {
+            envelopeId: existingTurnRef.envelopeId,
+            ...(existingTurnRef.receiptId !== undefined
+              ? { receiptId: existingTurnRef.receiptId }
+              : {}),
+          }
+          : {}),
         ...(admission ?? {}),
+        ...(runtimeAuthored ? { authoredBy: 'runtime' as const } : {}),
       });
     }
     const metadata = parseMetadataRecord(entry);
@@ -559,6 +576,28 @@ function buildProvenanceRefs(
   return [...provenance.values()];
 }
 
+/**
+ * The entries an episode's NARRATIVE is derived from (f54sx, via ccgdz.8).
+ *
+ * Runtime-authored fallback notices are delivered on her channel but are not
+ * her speech, and the extraction, trigger-count and emotion-appraisal readers
+ * already refuse to read them as such. Letting them shape an episode's title,
+ * themes, landmark, salience or machine signals would do exactly what those
+ * readers exist to prevent, one layer further out.
+ *
+ * They stay in the GROUP: spans, claim keys, fingerprints and provenance are
+ * computed over every entry, so the chain records that the notice happened and
+ * that this episode is derived from it. If a group is nothing but runtime
+ * notices, the narrative falls back to all of them rather than to nothing —
+ * an untitled episode would hide the group instead of describing it.
+ */
+function narrativeEntries(entries: readonly SessionEntry[]): readonly SessionEntry[] {
+  const authored = entries.filter(
+    entry => !isRuntimeAuthoredFallbackSessionEntry(entry),
+  );
+  return authored.length > 0 ? authored : entries;
+}
+
 function buildEpisodeInput(
   sessionId: string,
   group: EpisodeGroup,
@@ -570,7 +609,8 @@ function buildEpisodeInput(
     throw new Error('Cannot synthesize an empty episode group');
   }
 
-  const themes = inferThemes(entries);
+  const narrative = narrativeEntries(entries);
+  const themes = inferThemes(narrative);
   const spanRef = buildSpanRef(sessionId, entries);
   const id = stableId('episode', [
     sessionId,
@@ -580,8 +620,8 @@ function buildEpisodeInput(
 
   return {
     id,
-    title: summarizeTitle(entries, themes),
-    landmark: summarizeLandmark(entries, themes),
+    title: summarizeTitle(narrative, themes),
+    landmark: summarizeLandmark(narrative, themes),
     startedAt: toIso(first.timestamp),
     endedAt: toIso(last.timestamp),
     // apq0: a new episode seeds its OWN singleton topic thread (threadId = its
@@ -593,13 +633,13 @@ function buildEpisodeInput(
     participantContactIds: [...new Set(entries
       .map(entry => entry.authorId)
       .filter((authorId): authorId is string => typeof authorId === 'string' && authorId.trim().length > 0))].sort(),
-    salience: inferSalience(entries, themes),
+    salience: inferSalience(narrative, themes),
     // Episodes are born affect-empty (bead h4fp.6): machine emotion heuristics
     // must never masquerade as her felt affect. The keyword/VAD signals move to
     // the clearly machine-labeled `machineSignals` sidecar; the affect field is
     // authored only by her, later, in review.
     affect: { labels: [] },
-    machineSignals: buildMachineSignals(entries),
+    machineSignals: buildMachineSignals(narrative),
     themes,
     spanRefs: [spanRef],
     artifactRefs: inferArtifactRefs(entries),

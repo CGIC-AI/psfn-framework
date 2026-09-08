@@ -468,6 +468,10 @@ export const POSTGRES_MEMORY_MIGRATIONS = [
   `CREATE INDEX IF NOT EXISTS idx_l01_episodes_scope_time ON l01_episodes(channel_id, thread_id, started_at, ended_at);`,
   `CREATE INDEX IF NOT EXISTS idx_l01_episodes_thread_time ON l01_episodes(thread_id, started_at, id);`,
   `CREATE INDEX IF NOT EXISTS idx_l01_episodes_channel_time ON l01_episodes(channel_id, started_at, id);`,
+  // ccgdz.8: the custody query asks which episodes were derived from one
+  // turn, by containment on `{kind:'turn', refId}`. `jsonb_path_ops` indexes
+  // only the `@>` operator this lookup uses.
+  `CREATE INDEX IF NOT EXISTS idx_l01_episodes_provenance_refs_gin ON l01_episodes USING GIN (provenance_refs jsonb_path_ops);`,
   `CREATE INDEX IF NOT EXISTS idx_l01_episodes_status ON l01_episodes(status, updated_at DESC);`,
   `CREATE INDEX IF NOT EXISTS idx_l01_episodes_canonical ON l01_episodes(canonical_episode_id, status);`,
   `CREATE INDEX IF NOT EXISTS idx_l01_episodes_merged ON l01_episodes(merged_into_episode_id) WHERE merged_into_episode_id IS NOT NULL;`,
@@ -4622,6 +4626,23 @@ export const POSTGRES_CUSTODY_SNAPSHOT_MIGRATIONS: readonly string[] = [
   `
   CREATE INDEX IF NOT EXISTS idx_custody_context_manifests_recorded_at
     ON custody_context_manifests(recorded_at_ms);
+  `,
+  // ccgdz.7: the query seam asks the reverse question — "which generations
+  // admitted THIS source?" — by containment on the snapshot's own source refs
+  // (`snapshot_json -> sources -> ref.digest`). `jsonb_path_ops` is the narrow
+  // operator class: it indexes only `@>` containment, which is the single
+  // operator this seam uses, and is materially smaller than the default class.
+  // Without it a source lookup is a sequential scan over the whole retention
+  // horizon, which is how a bounded audit read turns into an outage.
+  `
+  CREATE INDEX IF NOT EXISTS idx_custody_snapshots_sources_gin
+    ON custody_snapshots USING GIN (snapshot_json jsonb_path_ops);
+  `,
+  // Keyset paging for that same lookup orders by `(classified_at_ms, turn_id)`
+  // newest-first, so the page cursor is two identifiers the row already carries.
+  `
+  CREATE INDEX IF NOT EXISTS idx_custody_snapshots_classified_at_turn
+    ON custody_snapshots(classified_at_ms DESC, turn_id DESC);
   `,
 ];
 

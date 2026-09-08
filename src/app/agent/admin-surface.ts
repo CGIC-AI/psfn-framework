@@ -24,6 +24,11 @@ import type { SatelliteRegistryConfig } from '../../shared/contracts/satellite-r
 import type { ChannelGroupMemoryConfig } from '../../system/config/group-memory-config.js';
 import type { ApprovalQueuePort } from '../../system/capabilities/approval-queue-port.js';
 import type {
+  CustodyChainDeliveryReadPort,
+  CustodyChainDerivedArtifactReadPort,
+  CustodyChainSnapshotReadPort,
+} from '../../core/cogsec/disclosure/custody-chain-query.js';
+import type {
   EpisodicStorePort,
 } from '../../faculties/memory/episodic/store-port.js';
 import { createGatewayConfirmationQueueAdminApi } from '../startup/support/confirmation-queue-admin-api.js';
@@ -91,6 +96,17 @@ export interface StartOptionalAdminTransportServerOptions {
   postTurnActions: PostTurnActionRuntime;
   outreachOutbox?: OutreachOutboxStore | null;
   episodicStore?: EpisodicStorePort | null;
+  /**
+   * Read side of the custody chain (ccgdz.7), opened by the persistence
+   * runtime so it pins the same tenant schema and role the custody writers
+   * pin. Never opened here: a second resolution of the tenant boundary is a
+   * second chance to resolve it differently.
+   */
+  custodyChainReader?: (
+    CustodyChainSnapshotReadPort
+    & CustodyChainDeliveryReadPort
+    & CustodyChainDerivedArtifactReadPort
+  ) | null;
   /**
    * Bounded READ over this process's persisted health stream, for the Garden
    * incident timeline. Deliberately the read function rather than the store:
@@ -244,6 +260,7 @@ export async function startOptionalAdminTransportServer(
     biographicalReviewService,
     subsystemOutputRefStore: options.subsystemOutputRefStore,
     episodicStore: options.episodicStore ?? null,
+    custodyChainReader: options.custodyChainReader ?? null,
     healthEventStreamRead: options.healthEventStreamRead ?? null,
     humanEscalationLedger: options.humanEscalationLedger ?? null,
     sessionStore: options.coreRuntime.sessionStore,

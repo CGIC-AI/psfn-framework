@@ -72,6 +72,25 @@ export interface EpisodeProvenanceRef {
   receiptId?: string;
   contentSha256?: string;
   envelopeId?: string;
+  /**
+   * Set when the source this ref points at was authored by the RUNTIME rather
+   * than by the companion (psfn-framework-f54sx, via psfn-framework-ccgdz.8) —
+   * a non-fabricating notice the runtime emitted on her behalf and the channel
+   * delivered as if it were her speech.
+   *
+   * A closed vocabulary of one, not free text: the marker is a fact about
+   * authorship that downstream readers gate on, and `note` is a display string
+   * nothing may branch on. Absence means "not known to be runtime-authored",
+   * which is what every pre-ccgdz.8 row says; it is never a claim that the
+   * source WAS her speech.
+   *
+   * Why it must be recorded rather than filtered away: the operator ruling on
+   * psfn-framework-f54sx is that an episode derived from specific chats must
+   * carry that derivation end to end. Dropping the ref would break the chain
+   * exactly where it is most interesting — a derivation from text she did not
+   * write.
+   */
+  authoredBy?: 'runtime';
 }
 
 export interface EpisodeSalience {
@@ -227,6 +246,7 @@ const PROVENANCE_REF_KEYS = new Set([
   'receiptId',
   'contentSha256',
   'envelopeId',
+  'authoredBy',
 ]);
 const SALIENCE_KEYS = new Set(['score', 'novelty', 'emotionalIntensity']);
 const AFFECT_KEYS = new Set(['valence', 'arousal', 'dominance', 'labels']);
@@ -383,6 +403,10 @@ function parseProvenanceRef(value: unknown, field: string): EpisodeProvenanceRef
     ...(admission?.receiptId ? { receiptId: admission.receiptId } : {}),
     ...(admission?.contentSha256 ? { contentSha256: admission.contentSha256 } : {}),
     ...(admission?.envelopeId ? { envelopeId: admission.envelopeId } : {}),
+    // f54sx (via ccgdz.8): a closed vocabulary of one. Anything else is not a
+    // weaker claim, it is an unreadable one, and an unreadable authorship claim
+    // must not survive as if it said "runtime".
+    ...(record.authoredBy === 'runtime' ? { authoredBy: 'runtime' as const } : {}),
   };
 }
 

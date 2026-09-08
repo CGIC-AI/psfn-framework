@@ -1,13 +1,15 @@
 import { isIP } from 'node:net';
 import { join } from 'node:path';
-import type { CredentialReference } from '../../shared/contracts/credential-contracts.js';
 import {
   createCompanionId,
   type CompanionId,
 } from '../../shared/routing/companion-id.js';
 import type { SensitivityLevel, TrustLevel } from '../trust/types.js';
 import { sensitivityOrd } from '../trust/types.js';
-import { envCredential } from '../../boundary/custody/credential-vault.js';
+import {
+  envCredential,
+  type CredentialReference,
+} from '../../shared/contracts/credential-contracts.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import {
   assertNoUnknownKeys,

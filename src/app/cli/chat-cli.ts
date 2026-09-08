@@ -5,16 +5,14 @@
 
 import '../../shared/utils/load-dotenv.js';
 import { createInterface } from 'node:readline';
-import { loadConfig } from '../../system/config/load-config.js';
+import { loadConfig } from '../../system/config/load-gateway-config.js';
 import { sanitizeCoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { EventBus } from '../../shared/event-bus.js';
 import { resolveCompanionNameFromCard } from '../../core/identity/companion-runtime.js';
 import { SalienceDecay } from '../../faculties/memory/decay.js';
 import { DEFAULT_REPL_CONFIG } from '../../core/tools/analysis-workbench/types.js';
-import {
-  hydrateCanonicalStartupConfig,
-  hydrateSecretBearingConfig,
-} from '../startup/support/bootstrap-helpers.js';
+import { hydrateCanonicalStartupConfig } from '../startup/support/bootstrap-helpers.js';
+import { hydrateSecretBearingConfig } from '../startup/support/secret-hydration.js';
 import { applyGatewayTlsConfig } from '../../boundary/gateway/tls.js';
 import {
   createInteractiveTerminalMessage,

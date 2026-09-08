@@ -6,11 +6,6 @@ import {
 } from '../../../system/settings.js';
 import type { RuntimeChannelsConfigOverrides } from '../../../channels/backplane/config.js';
 import {
-  createCredentialVaultFromEnvironment,
-  createEnvCredentialVault,
-  resolveInlineOrEnvCredential,
-} from '../../../boundary/custody/credential-vault.js';
-import {
   createOwnerFileConfigStore,
   type ConfigStorePort,
 } from '../../../system/config/config-store.js';
@@ -130,50 +125,6 @@ function createDefaultConfigStore(options: {
   });
 }
 
-export async function hydrateSecretBearingConfig(
-  config: SubstrateConfig,
-  options: {
-    env?: NodeJS.ProcessEnv;
-    fetchImpl?: typeof fetch;
-  } = {},
-): Promise<void> {
-  const env = options.env ?? process.env;
-  config.credentialVault ??= await createCredentialVaultFromEnvironment(env, {
-    fetchImpl: options.fetchImpl,
-  });
-  config.discordToken = resolveInlineOrEnvCredential(
-    config.discordToken,
-    config.credentialVault,
-    'DISCORD_TOKEN',
-    env,
-  ) ?? '';
-  config.discordBotId = resolveInlineOrEnvCredential(
-    config.discordBotId,
-    config.credentialVault,
-    'DISCORD_BOT_ID',
-    env,
-  ) ?? '';
-  config.deepgramApiKey = resolveInlineOrEnvCredential(
-    config.deepgramApiKey,
-    config.credentialVault,
-    'DEEPGRAM_API_KEY',
-    env,
-  );
-  config.elevenLabsApiKey = resolveInlineOrEnvCredential(
-    config.elevenLabsApiKey,
-    config.credentialVault,
-    'ELEVENLABS_API_KEY',
-    env,
-  );
-  config.falApiKey = resolveInlineOrEnvCredential(
-    config.falApiKey,
-    config.credentialVault,
-    'FAL_API_KEY',
-    env,
-  );
-  assertSecuritySensitiveStartupConfig(config);
-}
-
 export function installPromotedToolsPersistenceHook(
   config: SubstrateConfig,
   options: {
@@ -218,7 +169,7 @@ export function installPromotedToolsPersistenceHook(
   };
 }
 
-function assertSecuritySensitiveStartupConfig(config: SubstrateConfig): void {
+export function assertSecuritySensitiveStartupConfig(config: SubstrateConfig): void {
   const discordToken = config.discordToken?.trim() ?? '';
   const discordBotId = config.discordBotId?.trim() ?? '';
   const hasDiscordToken = discordToken.length > 0;
@@ -245,8 +196,16 @@ export function hydrateCanonicalStartupConfig(
 ): StartupConfigHydrationResult {
   const env = options.env ?? process.env;
   const secretAuthority = options.secretAuthority ?? 'gateway';
-  if (secretAuthority === 'gateway') {
-    config.credentialVault ??= createEnvCredentialVault(env);
+  if (secretAuthority === 'gateway' && !config.credentialVault) {
+    // Gateway authority means secrets are in play, and only the gateway may
+    // construct a vault (psfn-framework-f77ca). `hydrateSecretBearingConfig`
+    // runs first on every gateway entrypoint and installs one; reaching this
+    // point means the caller claimed gateway authority without it, so fail
+    // closed instead of silently hydrating an unauthorized runtime.
+    throw new Error(
+      'Gateway startup hydration requires a credential vault on the config: '
+      + 'call hydrateSecretBearingConfig before hydrateCanonicalStartupConfig.',
+    );
   }
   const pathSnapshot = resolveRuntimePathSnapshotFromConfig(config, {
     mode: env.PSFN_RUNTIME_LAYOUT_MODE,

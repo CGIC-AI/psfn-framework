@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { resolveCompanionStateDir } from '../../persistence/layout.js';
-import { loadConfig } from '../../system/config/load-config.js';
+import { loadConfig } from '../../system/config/load-gateway-config.js';
 import { hydrateJsonBackedRuntimeConfig } from '../../system/config/runtime-config.js';
 import { PER_COMPANION_OWNER_FILES } from '../../system/config/settings-contract.js';
 import { COMPANIONS_FILE_NAME } from '../../system/config/companions-config.js';

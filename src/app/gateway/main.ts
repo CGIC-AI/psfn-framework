@@ -6,7 +6,7 @@ import '../../shared/utils/load-dotenv.js';
 import { ensureActiveTimezone } from '../../shared/time/active-timezone.js';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { loadConfig } from '../../system/config/load-config.js';
+import { loadConfig } from '../../system/config/load-gateway-config.js';
 import {
   createFleetSystemHealthEventStore,
   createGatewayHealthEventStore,
@@ -48,7 +48,7 @@ import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { EligibilityDecision } from '../../system/capabilities/eligibility.js';
 import { resolveGatewayBootstrapInput } from '../../boundary/gateway/bootstrap-input.js';
 import type { StartupConfigHydrationDiagnostics } from '../startup/support/bootstrap-helpers.js';
-import { hydrateSecretBearingConfig } from '../startup/support/bootstrap-helpers.js';
+import { hydrateSecretBearingConfig } from '../startup/support/secret-hydration.js';
 import { RUNTIME_MODE } from '../../system/lifecycle/runtime-mode.js';
 import { applyGatewayTlsConfig } from '../../boundary/gateway/tls.js';
 import { formatGatewayRpcEndpoint } from '../../boundary/gateway/transport.js';

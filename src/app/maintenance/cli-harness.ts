@@ -2,9 +2,9 @@ import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { applyGatewayTlsConfig } from '../../boundary/gateway/tls.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
-import { loadConfig } from '../../system/config/load-config.js';
+import { loadConfig } from '../../system/config/load-gateway-config.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
-import { hydrateSecretBearingConfig } from '../startup/support/bootstrap-helpers.js';
+import { hydrateSecretBearingConfig } from '../startup/support/secret-hydration.js';
 
 export interface CommonMaintenanceArgs {
   backupDir?: string;

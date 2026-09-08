@@ -2,15 +2,13 @@ import type { EmbeddingProviderPort } from '../../shared/contracts/embedding-pro
 import path from 'node:path';
 import { createComponentLogger } from '../../shared/logger.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
-import type {
-  CredentialReference,
-  CredentialVaultPort,
-} from '../../boundary/custody/credential-vault.js';
 import {
   resolveHuggingFaceToken,
   resolveOptionalCredentialReference,
   resolveOptionalEnvCredential,
-} from '../../boundary/custody/credential-vault.js';
+  type CredentialReference,
+  type CredentialVaultPort,
+} from '../../shared/contracts/credential-contracts.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import type { RetrievalQueryEmbeddingProvenance } from '../../shared/retrieval-query-embedding.js';
 import type { LLMUsageDetails } from '../../shared/contracts/runtime.js';

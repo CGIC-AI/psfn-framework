@@ -147,17 +147,21 @@ function formatSourceMemory(memory: PurrMemory): string {
     + `confidence=${memory.confidence.toFixed(2)})`;
 }
 
-/** Union two source sets by exact snapshot identity, preserving provenance. */
+/**
+ * Union two source sets by exact snapshot identity. Returns undefined when the
+ * union would exceed the owner's per-candidate source budget: coalescing must
+ * never silently drop provenance, so an over-budget pair stays separate.
+ */
 function unionSources(
   left: readonly BiographicalClaimSource[],
   right: readonly BiographicalClaimSource[],
   limit: number,
-): readonly BiographicalClaimSource[] {
+): readonly BiographicalClaimSource[] | undefined {
   const byIdentity = new Map<string, BiographicalClaimSource>();
   for (const source of [...left, ...right]) {
     byIdentity.set(`${source.ref}@${source.revision}@${source.evidenceDigest}`, source);
   }
-  return [...byIdentity.values()].slice(0, limit);
+  return byIdentity.size > limit ? undefined : [...byIdentity.values()];
 }
 
 export class BiographySynthesisService {
@@ -405,6 +409,7 @@ export class BiographySynthesisService {
         write.sources,
         policy.budgets.maxSourcesPerCandidate,
       );
+      if (sources === undefined) continue;
       const merged: BiographicalClaimWriteInput = { ...existing.write, sources };
       const mergedPrepared = prepareBiographicalClaim({ ...merged, status: 'candidate' });
       byClaimDigest.set(prepared.claimDigest, {

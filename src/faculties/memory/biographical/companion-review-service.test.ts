@@ -323,9 +323,11 @@ describe('BiographyCompanionReviewService', () => {
     expect(original?.receipts.some(receipt => (
       receipt.authority === 'companion' && receipt.reason === 'reviewer_revised'
     ))).toBe(true);
-    // The replacement records what changed and restarts downstream review.
+    // The replacement records what changed, is labelled as the companion's own
+    // revision, and lands in human review rather than in the profile.
     expect(replacement?.supersedesCandidateId).toBe(candidate.id);
-    expect(replacement?.stage).toBe('companion_review');
+    expect(replacement?.stage).toBe('human_review');
+    expect(replacement?.rationale).toBe('companion_revision');
     expect(replacement?.sourceSetDigest).toBe(candidate.sourceSetDigest);
   });
 
@@ -363,6 +365,7 @@ describe('BiographyCompanionReviewService', () => {
     expect(all).toHaveLength(3);
     const replacements = all.filter(record => record.supersedesCandidateId !== undefined);
     expect(replacements).toHaveLength(2);
+    expect(replacements.every(record => record.stage === 'human_review')).toBe(true);
     expect(new Set(replacements.map(record => record.socialContext?.kind))).toEqual(
       new Set(['companion_contact_dyad', 'companion_self']),
     );
@@ -441,30 +444,24 @@ describe('BiographyCompanionReviewService', () => {
     expect((await store.listCandidates({ limit: 10 }))[0]?.stage).toBe('automata_synthesis');
   });
 
-  it('replays its own decision instead of re-reviewing or duplicating a receipt', async () => {
+  it('replays a decision it already recorded instead of duplicating a receipt', async () => {
     const store = new InMemoryBiographicalProfileStore(() => NOW);
-    const original = await stageCandidate({ store });
-    const first = buildService({
-      store,
-      responses: [{
-        action: 'revise',
-        reason: 'value_misread',
-        proposals: [{
-          kind: 'stable-preference',
-          value: preferenceValue('worked examples'),
-          basis: 'explicit',
-          confidence: 0.8,
-          sourceRefs: ['memory:invented-1'],
-        }],
+    const candidate = await stageCandidate({ store });
+    // The state a pass that committed its companion_review transition and then
+    // died would leave behind: the decision is durable at the consumed revision.
+    const staged = await store.transitionCandidate({
+      candidateId: candidate.id,
+      expectedRevision: candidate.revision,
+      to: 'companion_review',
+      receipts: [{
+        authority: 'companion',
+        decision: 'approved',
+        actorAuthorityRef: `companion:${COMPANION_ID}`,
+        reason: 'reviewer_approved',
       }],
+      now: NOW,
     });
-    await first.service.run();
-    const replacement = (await store.listCandidates({ limit: 10 }))
-      .find(record => record.id !== original.id);
-    expect(replacement?.stage).toBe('companion_review');
 
-    // The next pass still lists the companion's own replacement, and must
-    // recognize its own receipt rather than reviewing its own work again.
     const retry = buildService({
       store,
       responses: [{ action: 'approve', reason: 'evidence_supports_claim' }],
@@ -477,9 +474,40 @@ describe('BiographyCompanionReviewService', () => {
       approved: 0,
     });
     expect(retry.prompts).toHaveLength(0);
-    const afterRetry = await store.getCandidate(replacement!.id);
-    expect(afterRetry?.revision).toBe(replacement?.revision);
-    expect(afterRetry?.receipts).toHaveLength(replacement?.receipts.length ?? 0);
+    const afterRetry = await store.getCandidate(candidate.id);
+    expect(afterRetry?.revision).toBe(staged.revision);
+    expect(afterRetry?.receipts).toHaveLength(staged.receipts.length);
+  });
+
+  it('sends a reassignment into the companion self context to a human, never to active', async () => {
+    const store = new InMemoryBiographicalProfileStore(() => NOW);
+    // Human-derived proposal re-aimed at the companion's own context. The
+    // replacement now reads as companion-derived, so only the hard rule that
+    // replacements never autoactivate keeps it out of the profile.
+    await stageCandidate({ store });
+    const { service } = buildService({
+      store,
+      responses: [{
+        action: 'reassign',
+        reason: 'wrong_subject',
+        proposals: [{
+          kind: 'stable-preference',
+          value: preferenceValue(),
+          basis: 'explicit',
+          confidence: 0.9,
+          sourceRefs: ['memory:invented-1'],
+          socialContext: SELF_CONTEXT,
+        }],
+      }],
+    });
+
+    await service.run();
+
+    const replacement = (await store.listCandidates({ limit: 10 }))
+      .find(record => record.supersedesCandidateId !== undefined);
+    expect(replacement?.socialContext).toEqual(SELF_CONTEXT);
+    expect(replacement?.stage).toBe('human_review');
+    expect((await store.getClaim(replacement!.claimId))?.status).toBe('candidate');
   });
 
   it('shows the reviewer evidence references and never a source body', async () => {

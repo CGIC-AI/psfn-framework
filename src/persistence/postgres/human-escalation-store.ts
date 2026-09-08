@@ -30,6 +30,8 @@ import {
   HUMAN_ESCALATION_STATES,
   validateHumanEscalationRecord,
   type HumanEscalationAttempt,
+  type HumanEscalationAttemptClaim,
+  type HumanEscalationDeliveryOutcome,
   type HumanEscalationFacts,
   type HumanEscalationKind,
   type HumanEscalationLedgerPort,
@@ -230,13 +232,20 @@ export class PostgresHumanEscalationStore implements HumanEscalationLedgerPort {
   }
 
   /**
-   * The PRIMARY KEY is the idempotency guarantee. A colliding key is a replay
-   * that raced the lookup in the control plane, and it is reported rather than
-   * absorbed: silently accepting it would mean a second notice was dispatched
-   * for a key that promised only one.
+   * The PRIMARY KEY is the idempotency guarantee, and this is where it is
+   * taken — before a sink is reached, never after. Two overlapping raises about
+   * one condition both find no prior attempt and both open the same escalation;
+   * exactly one of them wins this insert, and the loser is handed the winner's
+   * row instead of a second page.
+   *
+   * The conflicting row is read back in a SEPARATE statement on purpose. A
+   * single `INSERT ... ON CONFLICT DO NOTHING` combined with a `SELECT` in one
+   * CTE would evaluate the select against the statement's own snapshot, which
+   * cannot see a row the concurrent transaction committed after that snapshot
+   * was taken — and would then report neither a claim nor an owner.
    */
-  async recordAttempt(attempt: HumanEscalationAttempt): Promise<void> {
-    const row = await queryOne<AttemptRow>(this.pool, `
+  async claimAttempt(attempt: HumanEscalationAttempt): Promise<HumanEscalationAttemptClaim> {
+    const claimed = await queryOne<AttemptRow>(this.pool, `
       INSERT INTO human_escalation_attempts (
         idempotency_key, escalation_id, sink, outcome, attempted_at_ms
       ) VALUES ($1, $2, $3, $4, $5)
@@ -249,10 +258,33 @@ export class PostgresHumanEscalationStore implements HumanEscalationLedgerPort {
       attempt.outcome,
       attempt.attemptedAtMs,
     ]);
-    if (!row) {
+    if (claimed) return { claimed: true };
+    const existing = await this.findAttempt(attempt.idempotencyKey);
+    if (!existing) {
       throw new Error(
-        `Human escalation attempt ${attempt.idempotencyKey} is already recorded`,
+        `Human escalation attempt ${attempt.idempotencyKey} could neither be claimed nor read back`,
       );
+    }
+    return { claimed: false, existing };
+  }
+
+  /**
+   * Settle a claimed attempt with what the sink actually said. The row must
+   * already exist: settling a key nobody claimed would mean the claim was
+   * skipped, which is exactly the path that pages twice.
+   */
+  async settleAttempt(
+    idempotencyKey: string,
+    outcome: HumanEscalationDeliveryOutcome,
+  ): Promise<void> {
+    const row = await queryOne<AttemptRow>(this.pool, `
+      UPDATE human_escalation_attempts
+      SET outcome = $2
+      WHERE idempotency_key = $1
+      RETURNING idempotency_key, escalation_id, sink, outcome, attempted_at_ms
+    `, [idempotencyKey, outcome]);
+    if (!row) {
+      throw new Error(`Human escalation attempt ${idempotencyKey} is not in the ledger`);
     }
   }
 

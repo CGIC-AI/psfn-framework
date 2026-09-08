@@ -18,6 +18,7 @@ import {
   evaluateEgressCustodyHold,
   isCustodyDurabilityHoldReason,
   isDisclosureSocialEgressInvocation,
+  turnEgressCustodyProof,
   type DisclosureDestination,
   type DisclosureLineage,
   type EgressCustodyHoldReason,
@@ -44,10 +45,17 @@ export interface EgressToolGuardDeps {
   /**
    * The turn's durable custody proof (psfn-framework-ccgdz.6): the custody
    * snapshot ref the record-first write returned, plus the lineage facts the
-   * hold rules read. Undefined before the fold, or when no lineage was folded.
+   * hold rules read. Undefined until the turn folds — which, for a model-invoked
+   * tool, is ALWAYS the case, because the fold happens after the tool loop
+   * returns. In that window the guard derives an unfolded proof from the live
+   * lineage below and records the egress as `custodySnapshot: 'pending'`.
    */
   getCurrentTurnCustodyProof: () => TurnEgressCustodyProof | undefined;
-  /** The turn this egress belongs to; the delivery record's correlation key. */
+  /**
+   * The turn this egress belongs to; the delivery record's correlation key.
+   * Published BEFORE generation starts, so a mid-turn tool egress has a turn to
+   * bind its bytes to. Undefined only outside a turn.
+   */
   getActiveTurnId: () => string | undefined;
   /** Durable delivery-record sink; null when no custody store is wired. */
   egressDeliveryRecorder: EgressDeliveryRecorder | null;
@@ -98,6 +106,8 @@ export function buildEgressToolGuard(deps: EgressToolGuardDeps): EgressToolGuard
     outcome: ReturnType<typeof composeEgressDisclosureDecision>['outcome'];
     decisionAllowed: boolean;
     holdReason: EgressCustodyHoldReason | null;
+    /** The turn has not folded its custody snapshot yet (the in-turn case). */
+    custodySnapshotPending: boolean;
   }): Promise<boolean> => {
     if (!recorder) return true;
     if (input.turnId === undefined) {
@@ -138,6 +148,7 @@ export function buildEgressToolGuard(deps: EgressToolGuardDeps): EgressToolGuard
       outcome: input.outcome,
       decisionAllowed: input.decisionAllowed,
       ...(input.holdReason !== null ? { holdReason: input.holdReason } : {}),
+      ...(input.custodySnapshotPending ? { custodySnapshot: 'pending' as const } : {}),
     });
     return result.written;
   };
@@ -232,10 +243,11 @@ export function buildEgressToolGuard(deps: EgressToolGuardDeps): EgressToolGuard
             : disclosure;
         },
       });
+      const lineage = deps.getCurrentTurnDisclosureLineage();
       const composed = composeEgressDisclosureDecision({
         sinkAllowed,
         sinkReason,
-        lineage: deps.getCurrentTurnDisclosureLineage(),
+        lineage,
         destination,
         requiresDisclosureDestination: isDisclosureSocialEgressInvocation({
           method: toolName,
@@ -255,10 +267,24 @@ export function buildEgressToolGuard(deps: EgressToolGuardDeps): EgressToolGuard
       // ccgdz.6: fail-closed provenance hold. A proof-requiring outward
       // destination with no custody snapshot, no admitted source, or an
       // unclassified source is held — and either way the decision is recorded.
-      const proof = deps.getCurrentTurnCustodyProof();
+      // The turn's custody snapshot is folded AFTER the model's tool loop
+      // returns, so a model-invoked egress can never see a folded proof. The
+      // facts the hold rules read (source count, unclassified source) come from
+      // the SAME live lineage the composed decision above was taken against —
+      // published before generation started and tightened in place by any
+      // admitted tool result — so the two layers never disagree. The missing
+      // piece is only the durable ref, and that is what `pending` states.
+      const foldedProof = deps.getCurrentTurnCustodyProof();
+      const custodySnapshotPending = foldedProof === undefined && lineage !== undefined;
+      const proof = foldedProof
+        ?? (lineage ? turnEgressCustodyProof(lineage, undefined) : undefined);
       const turnId = deps.getActiveTurnId();
       const custodyHold = resolveCustodyHold({
-        reason: evaluateEgressCustodyHold({ destination: composed.destination, proof }),
+        reason: evaluateEgressCustodyHold({
+          destination: composed.destination,
+          proof,
+          custodySnapshotPending,
+        }),
         composedAllowed: composed.allowed,
         posture: recorder?.enforcementPosture() ?? 'shadow',
       });
@@ -290,6 +316,7 @@ export function buildEgressToolGuard(deps: EgressToolGuardDeps): EgressToolGuard
             outcome: composed.outcome,
             decisionAllowed: composed.allowed,
             holdReason: recordedReason,
+            custodySnapshotPending,
           });
         }
         return { allowed: false, noticeText: INTAKE_FIREWALL_NOTICE_TEMPLATES.sinkHeld };
@@ -311,6 +338,7 @@ export function buildEgressToolGuard(deps: EgressToolGuardDeps): EgressToolGuard
             outcome: composed.outcome,
             decisionAllowed: true,
             holdReason: custodyHold.reason,
+            custodySnapshotPending,
           });
           if (written || !destinationRequiresCustodyProof(composed.destination)) {
             return { allowed: true, noticeText: '' };

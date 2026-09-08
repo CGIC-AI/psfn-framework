@@ -45,6 +45,7 @@ import {
 import type { CustodySnapshotStorePort } from '../cogsec/disclosure/custody-snapshot.js';
 import {
   EgressDeliveryRecorder,
+  type ActiveTurnEgressCustody,
   type CompletedTurnEgressCustody,
   type CompletedTurnEgressCustodyCapture,
   type EgressDeliveryRecordStorePort,
@@ -473,12 +474,14 @@ export class SubstrateAgent {
    */
   private currentTurnDisclosureLineage: DisclosureLineage | undefined;
   /**
-   * The turn's durable custody proof and correlation (psfn-framework-ccgdz.6),
-   * published once the record-first custody-snapshot write settles. The egress
-   * tool guard reads it to hold an outward send whose chain of custody is
-   * incomplete, and to key the send's delivery record. Cleared at turn end.
+   * The turn's egress custody state (psfn-framework-ccgdz.6). The correlation
+   * (`turnId`) is published BEFORE generation starts, so a model-invoked egress
+   * mid-turn can key its delivery record to the turn that produced the bytes;
+   * the durable `proof` is added once the record-first custody-snapshot write
+   * settles. The egress tool guard reads both to hold an outward send whose
+   * chain of custody is incomplete. Cleared at turn end.
    */
-  private currentTurnEgressCustody: CompletedTurnEgressCustody | null = null;
+  private currentTurnEgressCustody: ActiveTurnEgressCustody | null = null;
   /** Durable egress delivery-record sink; null when no custody store is wired. */
   private readonly egressDeliveryRecorder: EgressDeliveryRecorder | null;
   /**
@@ -1167,6 +1170,20 @@ export class SubstrateAgent {
    */
   getCurrentTurnDisclosureLineage(): DisclosureLineage | undefined {
     return this.currentTurnDisclosureLineage;
+  }
+
+  /**
+   * The turn's custody state REDUCED to a folded proof, or null when this turn
+   * has not folded one. Out-of-turn deliverers (the speaking arbiter's
+   * autonomous reply sender) run post-fold, so the pre-generation correlation
+   * alone must read to them exactly like no custody at all — otherwise the
+   * shape that legitimately releases a mid-turn tool send would also release an
+   * autonomous reply for a turn that never proved its provenance.
+   */
+  private foldedTurnEgressCustody(): CompletedTurnEgressCustody | null {
+    const custody = this.currentTurnEgressCustody;
+    if (!custody?.proof) return null;
+    return { turnId: custody.turnId, proof: custody.proof };
   }
 
   /**
@@ -1981,8 +1998,9 @@ export class SubstrateAgent {
       // Fail closed: no lineage is published until the generation context is
       // folded this turn, so a social send before then is denied outward.
       this.currentTurnDisclosureLineage = undefined;
-      // Same fail-closed posture for the custody proof: nothing is published
-      // until the record-first custody write settles this turn.
+      // Same fail-closed posture for the custody proof: the turn correlation is
+      // published when generation starts and the proof only once the
+      // record-first custody write settles this turn.
       this.currentTurnEgressCustody = null;
       try {
         let response: AgentResponse;
@@ -2001,7 +2019,7 @@ export class SubstrateAgent {
           }, run);
         }
         captureCompletedDisclosureLineage?.(this.currentTurnDisclosureLineage);
-        captureCompletedTurnEgressCustody?.(this.currentTurnEgressCustody);
+        captureCompletedTurnEgressCustody?.(this.foldedTurnEgressCustody());
         return response;
       } finally {
         this.currentTurnIntakeEnvelopes = [];

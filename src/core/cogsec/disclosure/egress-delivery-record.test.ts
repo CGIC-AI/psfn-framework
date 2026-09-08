@@ -119,6 +119,45 @@ describe('evaluateEgressCustodyHold', () => {
     })).toBe('custody_snapshot_missing');
   });
 
+  it('separates a fold that is still pending from one that produced no snapshot', () => {
+    // A model-invoked egress runs INSIDE the turn, and the custody snapshot is
+    // folded only after the tool loop returns — so "no ref yet" is the normal
+    // in-turn state, not a broken chain. Only an in-turn caller may say so.
+    const outward = { kind: 'public_room' as const, channelId: 'discord:room-1' };
+    const unfolded = turnEgressCustodyProof(lineage([provenSource]), undefined);
+    expect(evaluateEgressCustodyHold({ destination: outward, proof: unfolded }))
+      .toBe('custody_snapshot_missing');
+    expect(evaluateEgressCustodyHold({
+      destination: outward,
+      proof: unfolded,
+      custodySnapshotPending: true,
+    })).toBeNull();
+  });
+
+  it('relaxes nothing but durability when the fold is pending', () => {
+    // The pending branch is deliberately LAST: every provenance condition the
+    // disclosure layer already enforces still fires mid-turn.
+    const outward = { kind: 'public_room' as const, channelId: 'discord:room-1' };
+    expect(evaluateEgressCustodyHold({
+      destination: outward,
+      proof: undefined,
+      custodySnapshotPending: true,
+    })).toBe('lineage_missing');
+    expect(evaluateEgressCustodyHold({
+      destination: outward,
+      proof: turnEgressCustodyProof(lineage([]), undefined),
+      custodySnapshotPending: true,
+    })).toBe('no_admitted_source');
+    expect(evaluateEgressCustodyHold({
+      destination: outward,
+      proof: turnEgressCustodyProof(
+        lineage([provenSource, { ...provenSource, ref: 'wiki:doc-3', classified: false }]),
+        undefined,
+      ),
+      custodySnapshotPending: true,
+    })).toBe('unclassified_source');
+  });
+
   it('forces the proof requirement when the caller knows the egress is outward', () => {
     // An artifact share past its self/primary-contact return is outward by
     // audience even when the channel does not classify into a room kind.
@@ -158,6 +197,30 @@ describe('EgressDeliveryRecord', () => {
   it('refuses a hold with no stated reason', () => {
     expect(() => recordOf({ disposition: 'held', decisionAllowed: false }))
       .toThrow(/holdReason is required when the disposition is held/u);
+  });
+
+  it('carries a pending fold as a typed state that resolves through its own turn', () => {
+    const pending = recordOf({
+      custodySnapshot: 'pending',
+      custodySnapshotRef: undefined,
+    });
+    expect(pending.custodySnapshot).toBe('pending');
+    expect(pending.custodySnapshotRef).toBeUndefined();
+    // The row still names the generation whose snapshot will prove it.
+    expect(pending.generationContextRef).toBe(`turn:${TURN_ID}`);
+    expect(validateEgressDeliveryRecord(JSON.parse(JSON.stringify(pending)))).toEqual(pending);
+  });
+
+  it('refuses a row that both cites a written snapshot and claims a pending one', () => {
+    expect(() => recordOf({ custodySnapshot: 'pending' }))
+      .toThrow(/custodySnapshot must be absent/u);
+  });
+
+  it('refuses an unknown custody snapshot state', () => {
+    expect(() => recordOf({
+      custodySnapshotRef: undefined,
+      custodySnapshot: 'folded' as never,
+    })).toThrow(/custodySnapshot must be a known/u);
   });
 
   it('refuses a delivery that cites another turn\'s custody proof', () => {

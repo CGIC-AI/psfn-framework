@@ -84,6 +84,7 @@ export {
   evaluateEgressCustodyHold,
   isCustodyDurabilityHoldReason,
   turnEgressCustodyProof,
+  type ActiveTurnEgressCustody,
   type CompletedTurnEgressCustody,
   type CompletedTurnEgressCustodyCapture,
   type EgressCustodyHoldReason,

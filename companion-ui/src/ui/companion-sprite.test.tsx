@@ -1,9 +1,11 @@
-import { fireEvent, render } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, render } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { buildSpriteManifest } from '../lib/sprites/manifest.js';
+import { FPS } from '../lib/sprites/taxonomy.js';
 import { CompanionSprite } from './companion-sprite.js';
 
 const manifest = buildSpriteManifest();
+afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe('companion sprite headpats', () => {
   it('reacts locally and reports the tap immediately', () => {
@@ -27,6 +29,40 @@ describe('companion sprite headpats', () => {
 });
 
 describe('companion sprite rendering path', () => {
+  it('pauses frame advancement when the page is hidden and resumes on return', () => {
+    vi.useFakeTimers();
+    const { container } = render(
+      <CompanionSprite animated label="P" onHeadpat={vi.fn()} petted={false} state="thinking" manifest={manifest} />,
+    );
+    const sprite = container.querySelector<HTMLElement>('.sprite-image')!;
+    const first = sprite.style.backgroundPosition;
+    act(() => { vi.advanceTimersByTime(1000 / FPS.expression); });
+    expect(sprite.style.backgroundPosition).not.toBe(first);
+    const position = sprite.style.backgroundPosition;
+    const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
+    fireEvent(document, new Event('visibilitychange'));
+    act(() => { vi.advanceTimersByTime(1000); });
+    expect(sprite.style.backgroundPosition).toBe(position);
+    visibility.mockReturnValue('visible');
+    fireEvent(document, new Event('visibilitychange'));
+    act(() => { vi.advanceTimersByTime(1000 / FPS.expression); });
+    expect(sprite.style.backgroundPosition).not.toBe(position);
+    visibility.mockRestore();
+  });
+
+  it('keeps artwork still when reduced motion is requested', () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('matchMedia', () => ({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() }));
+    const { container } = render(
+      <CompanionSprite animated label="P" onHeadpat={vi.fn()} petted={false} state="thinking" manifest={manifest} />,
+    );
+    const sprite = container.querySelector<HTMLElement>('.sprite-image')!;
+    const position = sprite.style.backgroundPosition;
+    act(() => { vi.advanceTimersByTime(150); });
+    expect(sprite.style.backgroundPosition).toBe(position);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it('shows the built-in face when a sheet cannot load', () => {
     const { container, getByRole } = render(
       <CompanionSprite animated label="Companion" onHeadpat={vi.fn()} petted={false} state="attentive" manifest={manifest} />,

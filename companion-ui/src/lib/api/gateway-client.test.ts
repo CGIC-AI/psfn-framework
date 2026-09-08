@@ -293,6 +293,26 @@ describe('CompanionGatewayClient', () => {
     expect(client.snapshot().state).toBe('ready');
   });
 
+  it('interrupts the previous spoken reply before sending replacement text', async () => {
+    const socket = new FakeSocket();
+    const client = await connectClient(socket, ['first', 'stop-first', 'second']);
+    const store = new HubStreamStore(client);
+    client.sendUserText('First question');
+    socket.message({ schemaVersion: 1, type: 'result', requestId: 'first', ok: true,
+      result: { content: 'First reply.', channelId: 'attached-channel', inputTokens: 1, outputTokens: 1 } });
+    socket.message({ schemaVersion: 1, type: 'event', event: { type: 'text', data: 'audio-init' } });
+    socket.message({ schemaVersion: 1, type: 'event', event: { type: 'audio', data: 'AQID' } });
+    await flushAsyncMessage();
+    store.sendUserText('Second question', { interrupt: true });
+    expect(socket.sent.slice(1).map(frame => JSON.parse(String(frame)))).toMatchObject([
+      { requestId: 'stop-first', resource: 'conversation.interrupt', body: { interactionId: 'first' } },
+      { requestId: 'second', resource: 'conversation.interact', body: { content: 'Second question' } },
+    ]);
+    expect(store.snapshot().voicePlayback.bracketOpen).toBe(false);
+    expect(store.snapshot().voicePlayback.pending).toEqual([]);
+    store.destroy();
+  });
+
   it('interrupts an active text conversation even when an idle microphone session remains open', async () => {
     const socket = new FakeSocket();
     const client = await connectClient(socket, ['audio-1', 'text-1', 'stop-1']);
@@ -433,6 +453,32 @@ describe('CompanionGatewayClient', () => {
       pending: [],
       queue: [{ chunksBase64: ['AQID'], byteLength: 3 }],
     });
+    store.destroy();
+  });
+
+  it('preserves spoken audio across normal generation completion and stops on the Hub action', async () => {
+    const socket = new FakeSocket();
+    const client = await connectClient(socket, ['audio-1']);
+    const store = new HubStreamStore(client);
+    const starting = client.pcmAudio.start();
+    socket.message({ schemaVersion: 1, type: 'audio.ready', requestId: 'audio-1' });
+    await starting;
+    socket.message({ schemaVersion: 1, type: 'audio.turn.started', requestId: 'audio-1' });
+    socket.message({ schemaVersion: 1, type: 'event', event: { type: 'text', data: 'audio-init' } });
+    socket.message({ schemaVersion: 1, type: 'event', event: { type: 'audio', data: 'AQID' } });
+    socket.message({ schemaVersion: 1, type: 'audio.turn.ended', requestId: 'audio-1' });
+    socket.message({ schemaVersion: 1, type: 'event', event: { type: 'audio', data: 'BAUG' } });
+    socket.message({ schemaVersion: 1, type: 'event', event: { type: 'text', data: 'audio-end' } });
+    await flushAsyncMessage();
+    expect(store.snapshot().voicePlayback.queue).toMatchObject([
+      { chunksBase64: ['AQID', 'BAUG'], byteLength: 6 },
+    ]);
+    const priorGeneration = store.snapshot().voicePlayback.resetGeneration;
+    socket.message({ schemaVersion: 1, type: 'event', event: { type: 'action', data: 'pause-audio' } });
+    await flushAsyncMessage();
+    expect(store.snapshot().voicePlayback.queue).toEqual([]);
+    expect(store.snapshot().voicePlayback.resetGeneration).toBe(priorGeneration + 1);
+    expect(socket.closeCalls).toEqual([]);
     store.destroy();
   });
 

@@ -142,7 +142,9 @@ export function App() {
   const display = useCompanionDisplay(fleet.activeCompanionId ?? (access.state === 'guest' ? access.websocketPath : null));
   const { base: avatarEmotion } = useSpriteInputs(streamState.emotion, null, activeView === 'avatar' && display.mode === 'model');
   const spriteEnabled = display.mode === 'sprite';
-  const spriteManifest = useSpriteManifest(spriteEnabled);
+  const spriteManifest = useSpriteManifest(spriteEnabled && !display.spritePack);
+  const selectedSpriteManifest = display.spritePack?.manifest
+    ?? (spriteManifest.state === 'ready' ? spriteManifest.manifest : null);
   const canSend = (access.state === 'signed_in' || access.state === 'guest')
     && streamState.connection === 'ready' && !connecting;
   const touch = useCompanionTouch(storeRef.current, canSend);
@@ -295,7 +297,7 @@ export function App() {
   const companionTalking = voicePlayback.active
     || Boolean(streamState.liveAssistant)
     || (latestTrace?.operationClass === 'relay_tts' && latestTrace.status === 'active');
-  const voiceStopActive = composer.micMode === 'voice' && companionTalking;
+  const voiceStopActive = voicePlayback.active;
   const generationStopActive = Boolean(streamState.liveAssistant)
     || (z02Link.state.phase === 'linked' && streamState.phase === 'responding');
 
@@ -368,6 +370,12 @@ export function App() {
     oldStore?.disconnect();
     const client = new CompanionGatewayClient({
       url: resolveCompanionUiWebSocketUrl(path),
+      onAuthorityLost: () => {
+        if (storeRef.current !== store) return;
+        clearHumanScopedState();
+        // The existing reconnect effect backs off and rechecks fleet authority.
+        setStreamState(current => ({ ...current, connection: 'disconnected' }));
+      },
     });
     const store = new HubStreamStore(client);
     storeRef.current = store;
@@ -588,7 +596,7 @@ export function App() {
                 mouthOpen={mouthOpen}
                 onHeadpat={touch.headpat}
                 petted={touch.petted}
-                manifest={spriteManifest.state === 'ready' ? spriteManifest.manifest : null}
+                manifest={selectedSpriteManifest}
                 touch={touch.petted ? 'headpat-happy' : null}
                 emotion={streamState.emotion}
                 toolActivity={latestToolActivity}
@@ -632,7 +640,7 @@ export function App() {
             toolActivity={latestToolActivity}
             onChooseAppearance={() => setOverlay('settings')}
             label={identityLabel}
-            manifest={spriteManifest.state === 'ready' ? spriteManifest.manifest : null}
+            manifest={selectedSpriteManifest}
             emotion={streamState.emotion}
             handsFreeActive={browserMic.state.phase === 'active' && browserMic.state.handsFree}
             handsFreeAvailable={captureAuthorized}

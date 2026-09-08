@@ -89,6 +89,8 @@ export interface CompanionGatewayClientOptions {
   readonly handshakeTimeoutMs?: number;
   readonly maxBufferedAudioBytes?: number;
   readonly maxPendingAudioFrames?: number;
+  /** Lost transport invalidates the browser's proof of account continuity. */
+  readonly onAuthorityLost?: () => void;
 }
 
 type Listener = (event: SatelliteHubClientEventMap[keyof SatelliteHubClientEventMap]) => void;
@@ -236,6 +238,7 @@ export class CompanionGatewayClient {
         this.session = {};
         this.setState('closed');
         if (!settled) settle(new Error('Companion gateway closed before attachment was ready'));
+        this.options.onAuthorityLost?.();
       });
     });
   }
@@ -257,12 +260,16 @@ export class CompanionGatewayClient {
     this.setState('closed');
   }
 
-  sendUserText(text: string): void {
+  sendUserText(text: string, options?: { interrupt?: boolean }): void {
     const content = text.trim();
     if (!content) throw this.emitLocalError('Typed message is empty', false);
     const shardId = this.session.activeShardId;
     if (shardId && shardId !== this.authorizedShardId) {
       throw this.emitLocalError('Selected shard has not been reauthorized', true);
+    }
+    if (options?.interrupt) {
+      this.interrupt();
+      this.emitInbound({ type: 'action', data: 'pause-audio' });
     }
     const requestId = shardId
       ? this.sendAction(
@@ -609,7 +616,8 @@ export class CompanionGatewayClient {
         return this.failProtocol('Companion audio turn ended out of order');
       }
       audio.turnActive = false;
-      this.emitInbound({ type: 'action', data: 'pause-audio' });
+      // Generation has ended; Hub synthesis/playback may still be in flight.
+      // Only an explicit interruption or authority loss cancels spoken output.
       return false;
     }
     if (audio.phase !== 'stopping' || !audio.stopped || audio.turnActive

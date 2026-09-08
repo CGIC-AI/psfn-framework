@@ -12,6 +12,7 @@ import type { CompanionId } from '../../shared/routing/companion-id.js';
 import { isRfc4122Uuid } from '../../shared/utils/types.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import type { GatewayHubDeviceIngressService } from '../../boundary/fleet-auth/hub-device-ingress.js';
+import type { HubDeviceAttachmentSnapshot } from '../../shared/contracts/hub-device-ingress.js';
 import type {
   CompanionUiActionBrokerInput,
   GatewayCompanionUiActionBroker,

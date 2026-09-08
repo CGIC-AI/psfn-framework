@@ -11,7 +11,13 @@ import {
 } from '../../cogsec/disclosure/custody-snapshot.js';
 import type { ToolResultCustodyEdge } from '../../../shared/contracts/tool-result-custody.js';
 import { normalizeChannelPrivacy } from '../../../system/trust/context-envelope.js';
-import type { AgentResponse, CorrelationMetadata, InferredPostTurnAction, IntentionalNoReplyMetadata, MessagePromptOverrideMode, ObservabilityCallType, ParentTurnContinuationStop, RuntimeFallbackProvenance, SubstrateMessage, TurnID, TurnRecord, TurnUsage } from '../../../shared/contracts/runtime.js';
+import type { AgentResponse, CorrelationMetadata, InferredPostTurnAction, IntentionalNoReplyMetadata, MessagePromptOverrideMode, ObservabilityCallType, ParentTurnContinuationStop, RuntimeFallbackProvenance, SubstrateMessage, TurnCustodySnapshotAbsenceReason, TurnCustodySnapshotOutcome, TurnID, TurnRecord, TurnUsage } from '../../../shared/contracts/runtime.js';
+import {
+  emitHealthEvent,
+  hashHealthEventSubject,
+  processObserverId,
+  resolveHealthEventOwner,
+} from '../../../shared/contracts/health-event.js';
 import type { TurnObservabilityRecord } from '../../turns/observability.js';
 import type { TurnSnapshot } from '../../turns/snapshot.js';
 import type { EmotionStateSnapshot } from '../../emotion/state.js';
@@ -132,6 +138,41 @@ export class TurnSupportRuntime {
   }
 
   /**
+   * Project one lost custody snapshot into the health plane.
+   *
+   * A log line is not an incident. The turn deliberately does not fail on a
+   * custody write, so without this a store that is down loses every turn's
+   * durable proof and nothing ever escalates. The event is content-free — the
+   * only subject is a digest of the FAILURE MODE, never the turn — so repeated
+   * failures accumulate into one episode that the repeated-failure detector
+   * opens as a single incident rather than one per turn.
+   *
+   * Fire-and-forget with a logged catch, like every other health emitter in an
+   * error path: a telemetry fault must never mask the fault being reported, and
+   * it must never fail the turn either.
+   */
+  private emitCustodySnapshotHealthEvent(
+    mode: TurnCustodySnapshotAbsenceReason,
+  ): void {
+    void emitHealthEvent(this.eventBus, {
+      owner: resolveHealthEventOwner(this.companionId),
+      severity: 'degraded',
+      code: 'custody_snapshot_write_failed',
+      provenance: {
+        process: 'agent',
+        component: 'persistence',
+        observerId: processObserverId(),
+        subjectHash: hashHealthEventSubject(`custody_snapshot:${mode}`),
+      },
+      observedAtMs: Date.now(),
+    }).catch((error: unknown) => {
+      log.error('Custody snapshot health event emission failed', {
+        error: toErrorMessage(error),
+      });
+    });
+  }
+
+  /**
    * Persist this turn's folded disclosure lineage as a durable custody snapshot
    * (psfn-framework-ccgdz.1) and return its resolvable reference — the
    * lineage's own `generationContextRef` (`turn:<turnId>`), so no identifier is
@@ -144,17 +185,21 @@ export class TurnSupportRuntime {
    * Failure is VISIBLE, not thrown. The lineage-consuming egress guard already
    * fails closed on its own terms; converting a custody-store outage into a
    * turn failure would silence the companion for a write that only records what
-   * already happened. The ref is simply absent from the TurnRecord and the
-   * error is logged, so a missing chain reads as missing rather than as proof.
+   * already happened. So a failure returns a NAMED absence instead of a ref —
+   * mirroring the intake firewall's `receiptAbsence`, because a bare undefined
+   * cannot tell an unwired deployment apart from a store that refused — and
+   * announces itself on the health plane so repeats become one incident.
    */
   async recordTurnCustodySnapshot(input: {
     lineage: DisclosureLineage;
     turnId: TurnID;
     requestId: string;
     toolResultEdges?: ReadonlyMap<string, ToolResultCustodyEdge>;
-  }): Promise<string | undefined> {
+  }): Promise<TurnCustodySnapshotOutcome> {
     const store = this.custodySnapshotStore;
-    if (!store) return undefined;
+    // Not a fault: this deployment wires no custody store, so nothing was
+    // attempted and nothing is owed to an operator.
+    if (!store) return { absenceReason: 'no_custody_store' };
     try {
       const snapshot = buildCustodySnapshot({
         lineage: input.lineage,
@@ -167,22 +212,26 @@ export class TurnSupportRuntime {
         // Two folds disagreed on one generation context — a recovered turn that
         // reconstructed a different admitted-source set, or a genuine turn-id
         // collision. The FIRST snapshot stands because it is the fold that
-        // produced the delivered reply; this must never be silent.
+        // produced the delivered reply, so THIS turn may not point at it as
+        // though it were its own proof; it records the divergence instead.
         log.error('Custody snapshot diverged from the stored record for this turn', {
           turnId: input.turnId,
           requestId: input.requestId,
           generationContextRef: snapshot.generationContextRef,
           rejectedContentSha256: custodySnapshotContentDigest(snapshot),
         });
+        this.emitCustodySnapshotHealthEvent('diverged');
+        return { absenceReason: 'diverged' };
       }
-      return snapshot.generationContextRef;
+      return { ref: snapshot.generationContextRef };
     } catch (error) {
       log.error('Custody snapshot write failed; this turn has no durable custody record', {
         turnId: input.turnId,
         requestId: input.requestId,
         error: toErrorMessage(error),
       });
-      return undefined;
+      this.emitCustodySnapshotHealthEvent('write_failed');
+      return { absenceReason: 'write_failed' };
     }
   }
 

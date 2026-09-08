@@ -115,6 +115,14 @@ const HEALTH_EVENT_CODES = [
    * episode rather than one incident per channel.
    */
   'memory_refresh_failed',
+  /**
+   * A turn's durable CogSec custody snapshot could not be written, or the
+   * stored snapshot disagreed with this turn's fold (psfn-framework-ccgdz.1).
+   * The turn is never failed for it, so without this the loss is visible only
+   * in a log line; grouped by a digest of the FAILURE MODE so a store that is
+   * down accumulates into one episode rather than one incident per turn.
+   */
+  'custody_snapshot_write_failed',
   /** One lane failed repeatedly inside its owner-file window. */
   'background_work_failures_opened',
   /** That lane stopped failing for a full window. */

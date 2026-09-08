@@ -20,6 +20,10 @@ import {
 } from '../../cogsec/disclosure/decision.js';
 import { DISCLOSURE_CLASSIFIER_VERSION } from '../../cogsec/disclosure/generation-lineage.js';
 import {
+  hashHealthEventSubject,
+  type HealthEvent,
+} from '../../../shared/contracts/health-event.js';
+import {
   custodySnapshotRefForTurn,
   type CustodySnapshot,
   type CustodySnapshotStorePort,
@@ -548,9 +552,24 @@ describe('TurnSupportRuntime custody snapshots (psfn-framework-ccgdz.1)', () => 
     return lineage;
   }
 
-  function makeRuntime(store?: CustodySnapshotStorePort) {
+  /** Collects the content-free health envelopes this seam publishes. */
+  function healthEvents() {
+    const eventBus = new EventBus();
+    const emitted: HealthEvent[] = [];
+    eventBus.on('runtime.health.event', async (payload) => { emitted.push(payload.event); });
+    return {
+      eventBus,
+      // The emitter is fire-and-forget, so let its microtasks land first.
+      settled: async (): Promise<HealthEvent[]> => {
+        await new Promise(resolve => setTimeout(resolve, 0));
+        return emitted;
+      },
+    };
+  }
+
+  function makeRuntime(store?: CustodySnapshotStorePort, eventBus = new EventBus()) {
     return new TurnSupportRuntime({
-      eventBus: new EventBus(),
+      eventBus,
       sessionManager: {} as unknown as SessionManager,
       backgroundWorkSupervisor: null,
       hashPromptText: text => `hash:${text.length}`,
@@ -573,42 +592,64 @@ describe('TurnSupportRuntime custody snapshots (psfn-framework-ccgdz.1)', () => 
       requestId: REQUEST_ID,
     });
 
-    expect(ref).toBe(`turn:${TURN_ID}`);
+    expect(ref).toEqual({ ref: `turn:${TURN_ID}` });
     expect(recorded).toHaveLength(1);
     expect(recorded[0]).toMatchObject({ turnId: TURN_ID, sourceCount: 1 });
   });
 
-  it('keeps the stored fold and surfaces a divergence rather than overwriting it', async () => {
+  it('keeps the stored fold and names the divergence rather than claiming its ref', async () => {
+    const events = healthEvents();
     const runtime = makeRuntime({
       record: async () => 'diverged',
       getByGenerationContextRef: async () => null,
       close: async () => undefined,
-    });
+    }, events.eventBus);
+
+    // The FIRST snapshot stands, so this turn may not point at it as proof.
     await expect(runtime.recordTurnCustodySnapshot({
       lineage: lineageFor(['memory:mem-1']),
       turnId: TURN_ID,
       requestId: REQUEST_ID,
-    })).resolves.toBe(`turn:${TURN_ID}`);
+    })).resolves.toEqual({ absenceReason: 'diverged' });
+    await expect(events.settled()).resolves.toMatchObject([{
+      code: 'custody_snapshot_write_failed',
+      severity: 'degraded',
+      provenance: { component: 'persistence', process: 'agent' },
+    }]);
   });
 
-  it('leaves the ref absent when the custody write fails, without failing the turn', async () => {
+  it('names a failed custody write and raises it on the health plane', async () => {
+    const events = healthEvents();
     const runtime = makeRuntime({
       record: async () => { throw new Error('custody store unavailable'); },
       getByGenerationContextRef: async () => null,
       close: async () => undefined,
-    });
+    }, events.eventBus);
+
+    // The turn does not fail; the loss becomes an operator-visible observation.
     await expect(runtime.recordTurnCustodySnapshot({
       lineage: lineageFor(['memory:mem-1']),
       turnId: TURN_ID,
       requestId: REQUEST_ID,
-    })).resolves.toBeUndefined();
+    })).resolves.toEqual({ absenceReason: 'write_failed' });
+    const emitted = await events.settled();
+    expect(emitted).toHaveLength(1);
+    expect(emitted[0]).toMatchObject({ code: 'custody_snapshot_write_failed' });
+    // Content-free: the subject is the failure MODE, never the turn, so a store
+    // that is down accumulates into one episode instead of one per turn.
+    expect(JSON.stringify(emitted[0])).not.toContain(TURN_ID);
+    expect(emitted[0]?.provenance.subjectHash)
+      .toBe(hashHealthEventSubject('custody_snapshot:write_failed'));
   });
 
-  it('records nothing and claims nothing when no custody store is wired', async () => {
-    await expect(makeRuntime().recordTurnCustodySnapshot({
+  it('records nothing, claims nothing, and pages nobody when no store is wired', async () => {
+    const events = healthEvents();
+    await expect(makeRuntime(undefined, events.eventBus).recordTurnCustodySnapshot({
       lineage: lineageFor([]),
       turnId: TURN_ID,
       requestId: REQUEST_ID,
-    })).resolves.toBeUndefined();
+    })).resolves.toEqual({ absenceReason: 'no_custody_store' });
+    // An unwired deployment is not a fault, so it never reaches the health plane.
+    await expect(events.settled()).resolves.toEqual([]);
   });
 });

@@ -21,6 +21,10 @@ import process from 'node:process';
 
 const PRINCIPAL_DIGEST_LENGTH = 24;
 const MIN_SATELLITE_API_KEY_LENGTH = 16;
+// Shared-device response lease for the single-companion smoke fleet. Both are
+// bounded by the registry parser (<=60s and <=30min respectively).
+const RESPONSE_LEASE_DURATION_MS = 20_000;
+const ACTIVE_CONVERSATION_TTL_MS = 300_000;
 
 export function deriveApiKeyPrincipalId(token) {
   return `api-key-${createHash('sha256').update(token.trim()).digest('hex').slice(0, PRINCIPAL_DIGEST_LENGTH)}`;
@@ -42,6 +46,14 @@ export function buildSmokeSatelliteRegistry(options) {
   if (!satelliteId || !endpointId || !claimType) {
     throw new Error('satelliteId, endpointId, and claimType are required');
   }
+  // Every deployment is a fleet, and a fleet refuses an ungoverned
+  // satellite: satellites.json must state which companion owns the device
+  // (psfn-framework-e5aoa). This one-companion smoke fleet names its only
+  // companion as primary, sole emanation member, and sole observer.
+  const companionId = (options.companionId ?? '').trim();
+  if (!companionId) {
+    throw new Error('companionId is required to declare shared-device authority');
+  }
   return {
     schemaVersion: 1,
     enabled: true,
@@ -50,6 +62,18 @@ export function buildSmokeSatelliteRegistry(options) {
         satelliteId,
         displayName: 'Compose smoke Satellite Hub',
         mobility: 'static',
+        sharedDevice: {
+          primaryCompanionId: companionId,
+          // Scopes must be a subset of what the endpoint below permits.
+          observationRecipients: [
+            { companionId, scopes: ['approvals', 'artifacts', 'tool_activity'] },
+          ],
+          emanationMemberIds: [companionId],
+          responseLease: {
+            durationMs: RESPONSE_LEASE_DURATION_MS,
+            activeConversationTtlMs: ACTIVE_CONVERSATION_TTL_MS,
+          },
+        },
         endpoints: [
           {
             endpointId,
@@ -95,6 +119,7 @@ function main() {
     satelliteId: process.env.PSFN_SMOKE_SATELLITE_ID,
     endpointId: process.env.PSFN_SMOKE_SATELLITE_ENDPOINT_ID,
     claimType: process.env.PSFN_SMOKE_SATELLITE_CLAIM_TYPE,
+    companionId: process.env.COMPANION_ID,
   });
   writeFileSync(target, `${JSON.stringify(registry, null, 2)}\n`, 'utf8');
   console.log(`[smoke-satellites] wrote satellite registry: ${target}`);

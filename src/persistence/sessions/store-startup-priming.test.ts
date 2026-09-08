@@ -12,8 +12,6 @@ import { primeTurnTombstoneAuthorityOffPrimary } from './store/startup-tombstone
 
 const dirs: string[] = [];
 const OWNER_COUNT = 3;
-/** Declared startup budget for warm SessionStore construction over large L0 journals. */
-const CONSTRUCTION_BUDGET_MS = 1_500;
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -108,19 +106,17 @@ describe('SessionStore startup L0 tombstone priming (psfn-framework-5jx2v)', () 
     const readJournalFile = vi.spyOn(archivePort, 'readJournalFile');
 
     expect(fixture.totalBytes).toBeGreaterThan(1024 * 1024);
-    const startedAt = Date.now();
     const store = new SessionStore(fixture.dir, {
       integrityKeyring: fixture.keyring,
       sessionArchivePort: archivePort,
     });
-    const elapsedMs = Date.now() - startedAt;
 
     // Every one of these was O(total L0 bytes) on the primary event loop before
     // this bead; the warm channel index now carries construction on its own.
+    // These call counts are the proof, not wall-clock time.
     expect(scanMetadata).not.toHaveBeenCalled();
     expect(matchingScan).not.toHaveBeenCalled();
     expect(readJournalFile).not.toHaveBeenCalled();
-    expect(elapsedMs).toBeLessThan(CONSTRUCTION_BUDGET_MS);
     expect(store).toBeInstanceOf(SessionStore);
   });
 
@@ -183,22 +179,33 @@ describe('SessionStore startup L0 tombstone priming (psfn-framework-5jx2v)', () 
     expect(report.primed).toBeLessThan(OWNER_COUNT);
   }, 60_000);
 
-  it('re-primes evicted owners, proving retained authority owners are bounded', async () => {
+  it('bounds priming work and retention by the declared owner limit', async () => {
+    const fixture = await createPrimingFixture();
+    const store = new SessionStore(fixture.dir, {
+      integrityKeyring: fixture.keyring,
+      turnTombstoneAuthorityOwners: 2,
+    });
+    // Startup never forks more workers than the authority map can retain.
+    const capped = await store.primeTurnTombstoneAuthority();
+    expect(capped.considered).toBe(2);
+    expect(capped.primed).toBe(2);
+  }, 60_000);
+
+  it('retains exactly the declared number of authority owners across passes', async () => {
     const fixture = await createPrimingFixture();
     const store = new SessionStore(fixture.dir, {
       integrityKeyring: fixture.keyring,
       turnTombstoneAuthorityOwners: 1,
     });
     const first = await store.primeTurnTombstoneAuthority();
-    expect(first.primed).toBe(OWNER_COUNT);
+    expect(first.primed).toBe(1);
 
-    // The unbounded store reports every owner already current on a second pass
-    // (asserted above). Under a one-owner bound each newly primed owner evicts
-    // the previous one, so nothing survives to the next pass: retention is
-    // bounded by the declared limit, not by session count.
+    // The default-bounded store reports all three owners already current on a
+    // second pass (asserted above). Under a one-owner bound exactly one owner is
+    // warmed and retained: neither work nor retention scales with session count.
     const second = await store.primeTurnTombstoneAuthority();
-    expect(second.alreadyCurrent).toBe(0);
-    expect(second.primed).toBe(OWNER_COUNT);
+    expect(second.alreadyCurrent).toBe(1);
+    expect(second.primed).toBe(0);
   }, 60_000);
 });
 

@@ -24,6 +24,10 @@ set -eu
 SYSTEM_DATA_DIR="${SYSTEM_DATA_DIR:-/app/runtime-root/system-data}"
 COMPANION_DATA_DIR="${COMPANION_DATA_DIR:-/app/runtime-root/companions/smoke}"
 WORKSPACE_PATH="${WORKSPACE_PATH:-/app/runtime-root/workspaces/personal/main}"
+# Garden-governed shared companion material. The gateway creates
+# workspaces/shared/artifacts at startup, so its own volume must be writable by
+# the non-root runtime UID (psfn-framework-e5aoa).
+SHARED_WORKSPACE_DIR="${PSFN_RUNTIME_ROOT:-/app/runtime-root}/workspaces/shared"
 GATEWAY_SOCKET_DIR="$(dirname "${GATEWAY_SOCKET:-/run/psfn/gateway.sock}")"
 CONFIG_DIR="${PSFN_SEED_CONFIG_DIR:-/app/config}"
 CHARACTER_CARD_PATH="${CHARACTER_CARD_PATH:-${COMPANION_DATA_DIR}/companion.json}"
@@ -95,13 +99,27 @@ for capability_owner in \
   echo "[smoke-seed] configured Autonomous capability tier: $capability_owner"
 done
 
+# ── Database tenancy roles (psfn-framework-e5aoa) ──
+# The gateway's topology check requires the shared migration authority and this
+# companion's runtime to authenticate as their own configured PostgreSQL roles.
+# The smoke Postgres ships one superuser, so provision the same roles/schemas the
+# supported compose path provisions, through the shared tenancy module. Without
+# this the gateway exits before it ever binds its API edge.
+if [ -n "${POSTGRES_ADMIN_DATABASE_URL:-}" ]; then
+  node /app/scripts/ops/psfn-compose-smoke-provision-db.mjs
+else
+  echo "[smoke-seed] POSTGRES_ADMIN_DATABASE_URL is required to provision tenancy roles" >&2
+  exit 2
+fi
+
 # ── Fleet manifest ──
 # Every PSFN deployment is a fleet of one or more companions and the gateway
 # fails closed without companions.json, so write a one-entry fleet naming THIS
 # deployment's COMPANION_ID. The topology credential refs must not reuse
 # POSTGRES_DATABASE_URL (the manifest contract rejects that), so they carry their
-# own env names; this single-node stack resolves persistence from
-# POSTGRES_DATABASE_URL directly and never dereferences them.
+# own env names; SHARED_SCHEMA_MIGRATION_DATABASE_URL and
+# COMPANION_SMOKE_DATABASE_URL are the role-bound credentials provisioned above,
+# and the gateway dereferences both to prove the tenancy topology.
 COMPANIONS_MANIFEST="${SYSTEM_DATA_DIR}/companions.json"
 if [ -f "$COMPANIONS_MANIFEST" ]; then
   echo "[smoke-seed] keep existing fleet manifest: $COMPANIONS_MANIFEST"
@@ -229,13 +247,14 @@ fi
 # runtime credential custody rule requires it to arrive via
 # POSTGRES_DATABASE_URL_FILE or _FD. Hand it over as a 0600 file on the dedicated
 # auth volume; the gateway keeps the inline env form.
-if [ -z "${POSTGRES_DATABASE_URL:-}" ]; then
-  echo "[smoke-seed] POSTGRES_DATABASE_URL is required to hand the agent its persistence credential" >&2
+# It is the companion runtime role's credential, matching the fleet manifest.
+if [ -z "${COMPANION_SMOKE_DATABASE_URL:-}" ]; then
+  echo "[smoke-seed] COMPANION_SMOKE_DATABASE_URL is required to hand the agent its persistence credential" >&2
   exit 2
 fi
 mkdir -p "$AUTH_ENV_DIR"
 PG_URL_FILE="${AUTH_ENV_DIR}/postgres-database-url"
-printf '%s' "$POSTGRES_DATABASE_URL" > "$PG_URL_FILE"
+printf '%s' "$COMPANION_SMOKE_DATABASE_URL" > "$PG_URL_FILE"
 chmod 0600 "$PG_URL_FILE"
 chown "${RUNTIME_UID}:${RUNTIME_GID}" "$PG_URL_FILE"
 chmod 0700 "$AUTH_ENV_DIR"
@@ -244,7 +263,9 @@ echo "[smoke-seed] wrote agent persistence credential: ${PG_URL_FILE}"
 
 # Hand the shared named volumes to the non-root runtime UID so the gateway can
 # bind the socket and both processes can write runtime state.
+mkdir -p "$SHARED_WORKSPACE_DIR"
 chown -R "${RUNTIME_UID}:${RUNTIME_GID}" \
-  "$SYSTEM_DATA_DIR" "$COMPANION_DATA_DIR" "$WORKSPACE_PATH" "$GATEWAY_SOCKET_DIR" "$MODEL_CACHE_DIR"
+  "$SYSTEM_DATA_DIR" "$COMPANION_DATA_DIR" "$WORKSPACE_PATH" "$SHARED_WORKSPACE_DIR" \
+  "$GATEWAY_SOCKET_DIR" "$MODEL_CACHE_DIR"
 echo "[smoke-seed] chowned shared volumes to ${RUNTIME_UID}:${RUNTIME_GID}"
 echo "[smoke-seed] done"

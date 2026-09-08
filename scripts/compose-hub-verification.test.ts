@@ -11,6 +11,7 @@ import {
 } from './ops/psfn-compose-smoke-satellites.mjs';
 
 const SMOKE_KEY = 'psfn-smoke-satellite-key-please-rotate';
+const SMOKE_COMPANION_ID = '11111111-1111-4111-8111-111111111111';
 
 function registry(): unknown {
   return buildSmokeSatelliteRegistry({
@@ -18,6 +19,7 @@ function registry(): unknown {
     satelliteId: 'smoke-hub',
     endpointId: 'smoke-hub-endpoint',
     claimType: 'satellite.endpoint',
+    companionId: SMOKE_COMPANION_ID,
   });
 }
 
@@ -49,7 +51,29 @@ describe('Compose smoke satellite registry', () => {
       satelliteId: 'smoke-hub',
       endpointId: 'smoke-hub-endpoint',
       claimType: 'satellite.endpoint',
+      companionId: SMOKE_COMPANION_ID,
     })).toThrow(/at least 16 characters/u);
+  });
+
+  // A fleet deployment refuses an ungoverned satellite, and every PSFN
+  // deployment is a fleet (psfn-framework-e5aoa).
+  it('declares shared-device authority naming the deployment companion', () => {
+    const parsed = parseSatelliteRegistryConfig(registry(), 'satellites.json');
+    const sharedDevice = parsed.satellites[0]?.sharedDevice;
+    expect(sharedDevice?.primaryCompanionId).toBe(SMOKE_COMPANION_ID);
+    expect(sharedDevice?.emanationMemberIds).toEqual([SMOKE_COMPANION_ID]);
+    expect(sharedDevice?.observationRecipients).toEqual([
+      { companionId: SMOKE_COMPANION_ID, scopes: ['approvals', 'artifacts', 'tool_activity'] },
+    ]);
+  });
+
+  it('refuses a registry with no shared-device companion', () => {
+    expect(() => buildSmokeSatelliteRegistry({
+      apiKey: SMOKE_KEY,
+      satelliteId: 'smoke-hub',
+      endpointId: 'smoke-hub-endpoint',
+      claimType: 'satellite.endpoint',
+    })).toThrow(/companionId is required/u);
   });
 });
 

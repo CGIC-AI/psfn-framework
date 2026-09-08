@@ -322,7 +322,12 @@ function main(): number {
     if (mcpl.status === 0) {
       const env = extractContainerEnv(mcpl.stdout, `${RELEASE_NAME}-satellite-hub`, 'satellite-hub');
       const rendered = [...env.keys()].filter(name => name.startsWith('EIDOVERSE')).sort();
+      // The body runner works on either transport, so its bounds render here
+      // too; the snapshot source derives its origin from the stdio world URL
+      // and stays on that transport.
       const expected = [
+        'EIDOVERSE_BODY_MAX_PENDING_NOTES',
+        'EIDOVERSE_BODY_WALK_TIMEOUT_MS',
         'EIDOVERSE_JOIN_TOKEN',
         'EIDOVERSE_MCPL_CATCHUP_WAKE',
         'EIDOVERSE_MCPL_DOOR_URL',
@@ -385,6 +390,24 @@ function main(): number {
     check(
       mcplTokenInDoorUrl.status !== 0,
       'render fails closed: a door URL carrying its own query string',
+    );
+
+    const mcplSnapshot = helmTemplate([write('mcpl-snapshot', deepMergeEidoverse({
+      transport: 'mcpl',
+      command: '',
+      args: [],
+      worldUrl: '',
+      mcpl: {
+        doorUrl: 'wss://world.example.net/mcpl',
+        featureSets: ['eidoverse.world'],
+        catchupWake: false,
+        handshakeTimeoutMs: 10000,
+      },
+      snapshot: { enabled: true, baseUrl: '', timeoutMs: 4000, maxBytes: 4000000 },
+    }))]);
+    check(
+      mcplSnapshot.status !== 0,
+      'render fails closed: snapshot enabled on the MCPL transport it cannot reach',
     );
 
     // ── Enabled without the place map ──

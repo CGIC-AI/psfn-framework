@@ -2,7 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 
-import type { EidoverseMcpConfig } from "./eidoverse-mcp.js";
 import {
   defaultCapabilitiesForProfile,
   frameworkCapabilitiesForSatelliteCapabilities,
@@ -15,10 +14,22 @@ const DEFAULT_SNAPSHOT_MAX_BYTES = 4_000_000;
 
 /** Protocol constants of the door's `/snap` surface, not tuning values. */
 const SNAPSHOT_PATH = "/snap";
+/** The conventional MCPL door path, the one suffix an origin may be derived across. */
+const MCPL_DOOR_PATH = "/mcpl";
 const SNAPSHOT_MIME_TYPE = "image/png";
 const SNAPSHOT_VIEW = "first";
 const SNAPSHOT_SOURCE = "eidoverse";
 const SNAPSHOT_LABEL = "first-person";
+
+/**
+ * Where the snapshot origin is derived from when no explicit one is configured.
+ * Each transport reaches the world over a different URL, and neither of those
+ * URLs is the renderer's HTTP surface; the derivation below says how far each
+ * one can be trusted to name it.
+ */
+export type EidoverseSnapshotOrigin =
+  | { transport: "poll"; worldName: string; agentName: string; worldUrl: string }
+  | { transport: "mcpl"; worldName: string; agentName: string; doorUrl: string };
 
 export interface EidoverseSnapshotConfig {
   baseUrl: string;
@@ -174,6 +185,7 @@ export class EidoverseSnapshotSource {
  * The world's HTTP surface is the same origin as its WebSocket door: swap the
  * scheme, drop the `/ws` suffix, and drop the query string that carries the
  * join credential. Mirrors the door agent's own `httpBase` derivation.
+ * (`EIDOVERSE_MCP_TRANSPORT=poll`.)
  */
 export function deriveEidoverseSnapshotBaseUrl(worldUrl: string): string {
   const url = new URL(worldUrl);
@@ -188,12 +200,51 @@ export function deriveEidoverseSnapshotBaseUrl(worldUrl: string): string {
 }
 
 /**
+ * The same origin swap for the MCPL door (`EIDOVERSE_MCP_TRANSPORT=mcpl`):
+ * same host and port, `ws`->`http` / `wss`->`https`, the conventional `/mcpl`
+ * door path dropped, and the query string — which carries the identity token at
+ * dial time — dropped with it. The token is attached by the client when it
+ * dials and never reaches this function's input, so no derived origin can
+ * carry it.
+ *
+ * The limit is deliberate: this only holds when the renderer answers on the
+ * door's own host and port. A door behind a path-routed gateway, a renderer on
+ * another host, or any door path that is not the conventional `/mcpl` is
+ * refused here, and the deployment must name
+ * `EIDOVERSE_SNAPSHOT_BASE_URL` instead of getting a guessed origin.
+ */
+export function deriveEidoverseSnapshotBaseUrlFromDoorUrl(doorUrl: string): string {
+  const url = new URL(doorUrl);
+  if (url.username || url.password) {
+    throw new Error("Eidoverse snapshot base URL must be credential-free");
+  }
+  url.protocol = url.protocol === "wss:" ? "https:" : "http:";
+  url.search = "";
+  url.hash = "";
+  const doorPath = url.pathname.replace(/\/$/u, "");
+  if (doorPath !== "" && !doorPath.endsWith(MCPL_DOOR_PATH)) {
+    throw new Error(
+      "EIDOVERSE_SNAPSHOT_BASE_URL is required when EIDOVERSE_MCP_TRANSPORT=mcpl and "
+      + "EIDOVERSE_MCPL_DOOR_URL does not end in the conventional /mcpl door path",
+    );
+  }
+  url.pathname = doorPath.endsWith(MCPL_DOOR_PATH)
+    ? doorPath.slice(0, doorPath.length - MCPL_DOOR_PATH.length)
+    : doorPath;
+  return url.toString().replace(/\/$/u, "");
+}
+
+/**
  * Vision is opt-in twice over: `EIDOVERSE_SNAPSHOT_ENABLED` defaults to false,
  * and the claim profile must declare `vision_upload` (the `vision` framework
  * capability) before a snapshot source is built at all.
+ *
+ * Once it is asked for, it fails closed rather than quietly doing nothing: an
+ * origin that can be neither configured nor safely derived from the active
+ * transport's URL throws here, at boot, naming the variable that fixes it.
  */
 export function loadEidoverseSnapshotConfig(
-  mcp: EidoverseMcpConfig,
+  origin: EidoverseSnapshotOrigin,
   env: Readonly<Record<string, string | undefined>> = process.env,
 ): EidoverseSnapshotConfig | null {
   const enabled = env.EIDOVERSE_SNAPSHOT_ENABLED?.trim();
@@ -204,11 +255,13 @@ export function loadEidoverseSnapshotConfig(
   const override = env.EIDOVERSE_SNAPSHOT_BASE_URL?.trim();
   const baseUrl = override
     ? normalizeSnapshotBaseUrl(override)
-    : deriveEidoverseSnapshotBaseUrl(mcp.worldUrl);
+    : origin.transport === "mcpl"
+      ? deriveEidoverseSnapshotBaseUrlFromDoorUrl(origin.doorUrl)
+      : deriveEidoverseSnapshotBaseUrl(origin.worldUrl);
   return {
     baseUrl,
-    worldName: mcp.worldName,
-    agentName: mcp.agentName,
+    worldName: origin.worldName,
+    agentName: origin.agentName,
     timeoutMs: positiveIntegerEnv(env, "EIDOVERSE_SNAPSHOT_TIMEOUT_MS", DEFAULT_SNAPSHOT_TIMEOUT_MS),
     maxBytes: positiveIntegerEnv(env, "EIDOVERSE_SNAPSHOT_MAX_BYTES", DEFAULT_SNAPSHOT_MAX_BYTES),
   };

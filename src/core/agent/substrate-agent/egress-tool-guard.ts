@@ -248,31 +248,34 @@ export function buildEgressToolGuard(deps: EgressToolGuardDeps): EgressToolGuard
       });
       const held = !composed.allowed || custodyHold.withholds;
       if (held) {
-        if (custodyHold.reason !== null) {
+        // A denial with no custody condition is an ordinary sink-gate or
+        // unresolvable-destination refusal. Those are already audited by the
+        // gate that made them, nothing was delivered, and no custody claim was
+        // staked — so they do not manufacture a delivery row with an invented
+        // reason. Only a stated chain-of-custody condition is recorded here.
+        const recordedReason = custodyHold.reason
+          ?? (destinationRequiresCustodyProof(composed.destination)
+            ? 'lineage_missing'
+            : null);
+        if (recordedReason !== null) {
           log.warn('Egress held: incomplete chain of custody', {
             toolName,
             destinationKind: composed.destination?.kind,
-            holdReason: custodyHold.reason,
+            holdReason: recordedReason,
             posture: recorder?.enforcementPosture() ?? 'shadow',
           });
+          await recordEgress({
+            disposition: 'held',
+            toolCallId,
+            finalParams: params,
+            destination: composed.destination,
+            proof,
+            turnId,
+            outcome: composed.outcome,
+            decisionAllowed: composed.allowed,
+            holdReason: recordedReason,
+          });
         }
-        await recordEgress({
-          disposition: 'held',
-          toolCallId,
-          finalParams: params,
-          destination: composed.destination,
-          proof,
-          turnId,
-          outcome: composed.outcome,
-          decisionAllowed: composed.allowed,
-          // A denial with no custody condition is an ordinary sink/disclosure
-          // denial; the record still needs a stated reason, and the honest one
-          // is that no usable lineage backed this outward send.
-          holdReason: custodyHold.reason
-            ?? (destinationRequiresCustodyProof(composed.destination)
-              ? 'lineage_missing'
-              : null),
-        });
         return { allowed: false, noticeText: INTAKE_FIREWALL_NOTICE_TEMPLATES.sinkHeld };
       }
 

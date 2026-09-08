@@ -34,6 +34,20 @@ export interface PostgresPressureDetectorConfig {
   windowMs: number;
 }
 
+/** Repeated background-work / memory-refresh failure thresholds. */
+export interface BackgroundFailureDetectorConfig {
+  /**
+   * Failures for one subject inside `windowMs` required before an incident
+   * opens. At least two, so a single transient failure never fires.
+   */
+  failureThreshold: number;
+  /**
+   * Lookback the failure count is taken over. It is also the recovery rule: a
+   * lane that stops failing for a full window has its episode closed.
+   */
+  windowMs: number;
+}
+
 export interface HealthDetectorsConfig {
   /** Cadence of the single scheduler task that runs every detector. */
   intervalMs: number;
@@ -53,6 +67,7 @@ export interface HealthDetectorsConfig {
   /** Rows read from the stream per cycle when rebuilding the ledger. */
   incidentScanLimit: number;
   postgresPressure: PostgresPressureDetectorConfig;
+  backgroundFailures: BackgroundFailureDetectorConfig;
 }
 
 export const DEFAULT_HEALTH_DETECTORS_CONFIG: HealthDetectorsConfig = {
@@ -65,6 +80,10 @@ export const DEFAULT_HEALTH_DETECTORS_CONFIG: HealthDetectorsConfig = {
     minWaitingRequests: 1,
     sustainedSamples: 3,
     windowMs: 600_000,
+  },
+  backgroundFailures: {
+    failureThreshold: 3,
+    windowMs: 3_600_000,
   },
 };
 
@@ -95,6 +114,7 @@ export function validateHealthDetectorsConfig(
       'cooldownMs',
       'incidentScanLimit',
       'postgresPressure',
+      'backgroundFailures',
     ],
     `${sourcePath}.healthDetectors`,
     { errorPrefix: 'Invalid scheduler config' },
@@ -109,6 +129,17 @@ export function validateHealthDetectorsConfig(
     postgresPressureRaw,
     ['saturationPercent', 'minWaitingRequests', 'sustainedSamples', 'windowMs'],
     `${sourcePath}.healthDetectors.postgresPressure`,
+    { errorPrefix: 'Invalid scheduler config' },
+  );
+  const backgroundFailuresRaw = requireObject(
+    root.backgroundFailures,
+    sourcePath,
+    'healthDetectors.backgroundFailures',
+  );
+  assertNoUnknownKeys(
+    backgroundFailuresRaw,
+    ['failureThreshold', 'windowMs'],
+    `${sourcePath}.healthDetectors.backgroundFailures`,
     { errorPrefix: 'Invalid scheduler config' },
   );
 
@@ -140,6 +171,19 @@ export function validateHealthDetectorsConfig(
         'healthDetectors.postgresPressure.windowMs',
       ),
     },
+    backgroundFailures: {
+      // Minimum two: a threshold of one would fire on a single transient
+      // failure, which is exactly what this detector exists not to do.
+      failureThreshold: toPositiveInteger(
+        backgroundFailuresRaw.failureThreshold,
+        'healthDetectors.backgroundFailures.failureThreshold',
+        2,
+      ),
+      windowMs: toInterval(
+        backgroundFailuresRaw.windowMs,
+        'healthDetectors.backgroundFailures.windowMs',
+      ),
+    },
   };
 
   if (config.cooldownMs >= config.incidentWindowMs) {
@@ -157,6 +201,15 @@ export function validateHealthDetectorsConfig(
       + `(${config.postgresPressure.windowMs}) must be at least sustainedSamples x intervalMs `
       + `(${requiredPressureWindowMs}); otherwise the window can never hold enough samples `
       + 'to reach its own threshold and the detector never fires',
+    );
+  }
+
+  if (config.backgroundFailures.windowMs > config.incidentWindowMs) {
+    throw new Error(
+      `Invalid scheduler config at ${sourcePath}: healthDetectors.backgroundFailures.windowMs `
+      + `(${config.backgroundFailures.windowMs}) must not exceed healthDetectors.incidentWindowMs `
+      + `(${config.incidentWindowMs}); the failure count is taken over the ledger's scanned `
+      + 'window, so a longer failure window would silently count only part of itself',
     );
   }
 

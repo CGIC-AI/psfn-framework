@@ -476,7 +476,11 @@ describe('migrateLegacySchedulerOwner', () => {
     expect(migrateLegacySchedulerOwner({ dataDir, apply: true })).toMatchObject({
       mode: 'apply',
       status: 'applied',
-      addedPaths: ['healthDetectors.incidentScanLimit', 'healthDetectors.postgresPressure'],
+      addedPaths: [
+        'healthDetectors.incidentScanLimit',
+        'healthDetectors.postgresPressure',
+        'healthDetectors.backgroundFailures',
+      ],
     });
     const migrated = loadSchedulerConfig(dataDir).healthDetectors;
     // The operator's cadence survives; only the absent keys are seeded.

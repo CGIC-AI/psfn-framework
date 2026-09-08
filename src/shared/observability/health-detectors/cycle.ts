@@ -34,7 +34,8 @@ import {
 } from '../../contracts/health-event.js';
 import type { HealthEventQuery } from '../health-event-stream.js';
 import { createComponentLogger } from '../../logger.js';
-import { buildIncidentLedger, incidentEpisodeKey, type OpenIncidentEpisode } from './incident-ledger.js';
+import { buildIncidentLedger, incidentEpisodeKey } from './incident-ledger.js';
+import { sameHealthEventOwner } from './owner.js';
 import type { HealthDetector, HealthDetectorResult } from './contracts.js';
 
 const log = createComponentLogger('HealthDetectors');
@@ -63,14 +64,6 @@ export interface HealthDetectorCycleOptions {
 
 export interface HealthDetectorCycle {
   run(): Promise<void>;
-}
-
-function ownerKey(source: HealthEventSource): string {
-  return source.owner.kind === 'companion' ? source.owner.companionId : source.owner.kind;
-}
-
-function episodeOwnerKey(episode: OpenIncidentEpisode): string {
-  return episode.owner.kind === 'companion' ? episode.owner.companionId : episode.owner.kind;
 }
 
 export function createHealthDetectorCycle(
@@ -103,7 +96,6 @@ export function createHealthDetectorCycle(
         sinceMs: Math.max(0, nowMs - options.policy.incidentWindowMs),
       });
       const ledger = buildIncidentLedger(recentEvents);
-      const cycleOwnerKey = ownerKey(options.source);
 
       const failures: Error[] = [];
       const results = new Map<HealthIncidentFamily, HealthDetectorResult>();
@@ -200,7 +192,7 @@ export function createHealthDetectorCycle(
         // Only close what this cycle actually evaluated: an unowned family, a
         // detector that threw, or another tenant's episode all stay open.
         if (!results.has(episode.family)) continue;
-        if (episodeOwnerKey(episode) !== cycleOwnerKey) continue;
+        if (!sameHealthEventOwner(episode.owner, options.source.owner)) continue;
         if (observedKeys.has(key)) continue;
         await publish({
           owner: options.source.owner,

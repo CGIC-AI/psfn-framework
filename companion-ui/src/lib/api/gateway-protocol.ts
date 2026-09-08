@@ -36,6 +36,8 @@ export type CompanionUiResource =
   | 'shards.interact'
   | 'shards.interrupt'
   | 'confirmations.resolve'
+  | 'embodiment.status'
+  | 'embodiment.handoff'
   | 'artifact.preview';
 
 export interface AttachmentReady {

@@ -1,0 +1,89 @@
+.thread-viewport .message-list {
+  scroll-behavior: auto;
+  overscroll-behavior: contain;
+  overflow-anchor: none;
+}
+
+.message-row {
+  flex-shrink: 0;
+}
+
+.message-content > p + p,
+.message-content > pre + p {
+  margin-top: 0.75rem;
+}
+
+.message-content a {
+  color: #285782;
+  text-underline-offset: 0.18em;
+}
+
+.message-content code {
+  border-radius: 4px;
+  padding: 0.08rem 0.25rem;
+  background: rgba(38, 52, 74, 0.07);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 0.88em;
+}
+
+.message-content pre {
+  max-width: 100%;
+  overflow-x: auto;
+  margin: 0.75rem 0;
+  padding: 0.75rem;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: rgba(38, 52, 74, 0.04);
+  white-space: pre;
+  line-height: 1.5;
+}
+
+.message-content pre:first-child {
+  margin-top: 0;
+}
+
+.message-content pre code {
+  padding: 0;
+  background: transparent;
+}
+
+.message-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.4rem;
+  color: var(--color-muted);
+  font-size: 0.72rem;
+}
+
+.message-actions button {
+  min-height: 36px;
+  padding: 0.25rem 0.4rem;
+  border-color: transparent;
+  background: transparent;
+  color: inherit;
+  font-size: inherit;
+}
+
+.message-actions button svg {
+  width: 0.85rem;
+  height: 0.85rem;
+}
+
+.thread-jump-latest {
+  position: absolute;
+  left: 50%;
+  bottom: calc(128px + env(safe-area-inset-bottom));
+  z-index: 6;
+  max-width: calc(100% - 2rem);
+  border-radius: 999px;
+  background: var(--color-surface);
+  box-shadow: var(--shadow-soft);
+  transform: translateX(-50%);
+  font-size: 0.8rem;
+}
+
+.thread-jump-latest:hover:not(:disabled) {
+  transform: translateX(-50%);
+}

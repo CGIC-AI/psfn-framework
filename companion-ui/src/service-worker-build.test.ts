@@ -265,6 +265,9 @@ describe('companion-ui production service worker', () => {
     expect(manifest.scope).toBe('/companion-ui/');
     expect(manifest.start_url).toBe('/companion-ui/');
     expect(manifest.icons.map(({ src }) => src)).toEqual([
+      '/companion-ui/icon-192.png',
+      '/companion-ui/icon-512.png',
+      '/companion-ui/icon-maskable-512.png',
       '/companion-ui/icon.svg',
       '/companion-ui/icon-maskable.svg',
     ]);
@@ -274,6 +277,17 @@ describe('companion-ui production service worker', () => {
     expect(buildOutput.indexHtml).not.toMatch(/(?:src|href)="\/(?!companion-ui\/)/u);
     expect(buildOutput.serviceWorker).toContain('const APP_SCOPE = "/companion-ui/";');
     expect(buildOutput.serviceWorker).not.toMatch(/"\/(?:index\.html|manifest\.webmanifest|icon(?:-maskable)?\.svg|assets\/)/u);
+    const cached = testResponse('cached public icon');
+    const harness = createServiceWorkerHarness(buildOutput.serviceWorker, {
+      cachedResponse: cached,
+      fetchError: new Error('offline'),
+    });
+    for (const icon of [...manifest.icons.map(({ src }) => src), '/companion-ui/apple-touch-icon.png']) {
+      expect(await harness.dispatchFetch({
+        method: 'GET', mode: 'same-origin', url: `https://companion.test${icon}`,
+      })).toBe(cached);
+    }
+    expect(harness.fetch).not.toHaveBeenCalled();
   });
 
   it('versions each deployment and precaches that build\'s immutable assets', async () => {

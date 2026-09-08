@@ -50,6 +50,34 @@ const MODEL_PURPOSES: Readonly<Record<ModelPurpose, true>> = {
 
 export type BackgroundWorkKind = typeof BACKGROUND_WORK_KINDS[number];
 
+/**
+ * Durable binding one governed background-work automata run claims. The core
+ * layer names the run; composition owns the class, the Bus wiring, and the
+ * begin/brief/tool/handoff/terminal ordering behind {@link
+ * BackgroundWorkGovernedClassRunner}.
+ */
+export interface BackgroundWorkGovernedClassRun {
+  runId: string;
+  taskId: string;
+  taskLabel: string;
+  taskSummary: string;
+  sessionIds: readonly string[];
+  /** Owner-supplied bounded briefing query. Never model-supplied. */
+  briefingQuery: string;
+}
+
+/**
+ * Composition-supplied governed Bus lifecycle for one background-work class.
+ * `work` returns the class-authored process summary recorded on the terminal
+ * handoff, or undefined when the run produced no reportable process finding.
+ */
+export interface BackgroundWorkGovernedClassRunner {
+  run(
+    binding: BackgroundWorkGovernedClassRun,
+    work: () => Promise<string | undefined>,
+  ): Promise<void>;
+}
+
 /** Every durable background-work kind is classified; additions fail TypeScript until registered. */
 export const BACKGROUND_WORK_AUTOMATA_CLASSES: Record<BackgroundWorkKind, ProductionAutomataClassId> = {
   memory_extraction: 'memory.extraction',

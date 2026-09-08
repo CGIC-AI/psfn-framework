@@ -178,7 +178,10 @@ import {
   createProductionAutomataBusWorkerAccess,
   createAutomataTerminalLifecycleAdapter,
 } from '../../faculties/automata/bus/production-worker-adapter.js';
-import { createBackgroundWorkAutomataLifecycle } from './automata-background-work-lifecycle.js';
+import {
+  createBackgroundWorkAutomataLifecycle,
+  createIntentionPostTurnHooksAutomataRunner,
+} from './automata-background-work-lifecycle.js';
 import type { AutomataBusWorkerAccess } from '../../faculties/automata/bus/worker-access.js';
 import type { AutomataClassLifecycleRuntime } from '../../faculties/automata/bus/class-lifecycle.js';
 import type { AutomataTerminalLifecyclePort } from '../../faculties/automata/terminal-lifecycle.js';
@@ -437,6 +440,19 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
         };
       })()
     : undefined;
+  // One composition-owned Bus lifecycle bundle. Every governed automata class
+  // outside the tool/memory runtimes (scheduler lanes, background hooks, shard
+  // and concern workers) opens its run through this, so no lane has to
+  // re-assemble registry/access/terminal wiring of its own.
+  const automataClassLifecycle: AutomataClassLifecycleRuntime | undefined =
+    options.automataRuntime
+      ? {
+          registry: options.automataRuntime.registry,
+          workerAccess: automataBus?.workerAccess ?? null,
+          terminal: automataBus?.lifecycle ?? null,
+          telemetry: event => log.debug('Automata class lifecycle stage', { ...event }),
+        }
+      : undefined;
   const runtime = new PiProviderRuntime(undefined, config);
   const gatewayOps = createGatewayOpsPortFromClient(gateway);
   const observerEvalSidecar = createObserverEvalSidecarRuntimeFromConfig(config, {
@@ -600,6 +616,9 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
       ? {
           backgroundWorkAutomataLifecycle: createBackgroundWorkAutomataLifecycle(
             options.automataRuntime.registry,
+          ),
+          intentionHooksAutomataRunner: createIntentionPostTurnHooksAutomataRunner(
+            automataClassLifecycle!,
           ),
           classifySessionAtCreation: async (message) => {
             const owner = resolveForegroundSessionOwner({
@@ -1075,19 +1094,6 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     layers: promptStore,
     registry: promptRegistry,
   });
-  // One composition-owned Bus lifecycle bundle. Every governed automata class
-  // outside the tool/memory runtimes (scheduler lanes, background hooks, shard
-  // and concern workers) opens its run through this, so no lane has to
-  // re-assemble registry/access/terminal wiring of its own.
-  const automataClassLifecycle: AutomataClassLifecycleRuntime | undefined =
-    options.automataRuntime
-      ? {
-          registry: options.automataRuntime.registry,
-          workerAccess: automataBus?.workerAccess ?? null,
-          terminal: automataBus?.lifecycle ?? null,
-          telemetry: event => log.debug('Automata class lifecycle stage', { ...event }),
-        }
-      : undefined;
 
   return {
     agentLoop,

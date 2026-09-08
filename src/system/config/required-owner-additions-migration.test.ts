@@ -1,5 +1,6 @@
 import {
   chmodSync,
+  copyFileSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -200,6 +201,48 @@ describe('migrateRequiredOwnerAdditions', () => {
     })).toThrow(/bus\.reindex/);
     expect(readFileSync(fixture.settingsPath, 'utf8')).toBe(before);
     expect(() => statSync(fixture.partnerAffectPath)).toThrow();
+  });
+
+  it('backfills bus policy for automata classes registered after the owner was written', () => {
+    const fixture = prepareLegacyOwners();
+    // The exact owner file an existing deployment carries: written from the
+    // seed as it stood before o61vb.16 registered the two biography classes,
+    // which the seed init container then failed the registry contract on.
+    copyFileSync(
+      resolve('src/system/config/fixtures/automata-policy.pre-biography-owner.json'),
+      fixture.automataPath,
+    );
+    chmodSync(fixture.automataPath, 0o644);
+    const options = {
+      dataDir: fixture.dataDir,
+      companionDataDir: fixture.companionDataDir,
+      seedDir: resolve('config'),
+    };
+    const before = readFileSync(fixture.automataPath, 'utf8');
+    expect(() => parseAutomataOwnerPolicy(readJson(fixture.automataPath), fixture.automataPath))
+      .toThrow(/does not assign bus policy for/);
+
+    expect(migrateRequiredOwnerAdditions(options)).toMatchObject({
+      automataPolicy: {
+        status: 'planned',
+        addedPaths: [
+          'bus.eligibleClasses[memory.biography_synthesis]',
+          'bus.eligibleClasses[memory.biography_review]',
+        ],
+      },
+    });
+    expect(readFileSync(fixture.automataPath, 'utf8')).toBe(before);
+
+    expect(migrateRequiredOwnerAdditions({ ...options, apply: true })).toMatchObject({
+      automataPolicy: { status: 'applied' },
+    });
+    parseAutomataOwnerPolicy(readJson(fixture.automataPath), fixture.automataPath);
+
+    const settled = readFileSync(fixture.automataPath, 'utf8');
+    expect(migrateRequiredOwnerAdditions({ ...options, apply: true })).toMatchObject({
+      automataPolicy: { status: 'not_needed' },
+    });
+    expect(readFileSync(fixture.automataPath, 'utf8')).toBe(settled);
   });
 
   it('seeds newly required system owners only when they are absent', () => {

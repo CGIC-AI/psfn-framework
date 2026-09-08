@@ -1,8 +1,6 @@
 import { createElevenLabsStreamingTtsConnector, type ElevenLabsStreamingTtsConfig } from './elevenlabs-stream.js';
 import { createEchoStreamingTtsConnector } from './echo-stream.js';
 import type { EligibilityRequirements } from '../../../../system/capabilities/eligibility.js';
-import type { CredentialVaultPort } from '../../../../boundary/custody/credential-vault.js';
-import { resolveInlineOrEnvCredential } from '../../../../boundary/custody/credential-vault.js';
 import type { StreamingTtsConnector } from './types.js';
 
 export * from './types.js';
@@ -24,9 +22,20 @@ export interface StreamingTtsConfigByProvider {
   [provider: string]: unknown;
 }
 
+/**
+ * Provider runtime config as the *shared* connector index sees it
+ * (psfn-framework-mp1pf).
+ *
+ * Every credential here is already resolved: `hydrateSecretBearingConfig` on
+ * the gateway side asks the credential vault (or the process environment) and
+ * writes the plain value onto the substrate config before any connector is
+ * built. This index therefore holds no vault reference and performs no
+ * credential lookup of its own, which is what keeps the secret-bearing
+ * `boundary/custody/credential-vault` module out of the agent process's import
+ * closure. An unresolved credential reads as "not configured" — fail closed.
+ */
 export interface StreamingTtsProviderRuntimeConfig {
   [key: string]: unknown;
-  credentialVault?: CredentialVaultPort;
   elevenLabsApiKey?: string;
   elevenLabsVoiceId?: string;
   elevenLabsModelId?: string;
@@ -59,11 +68,8 @@ export interface StreamingTtsProviderRegistration<TConfig = unknown> {
 type AnyStreamingTtsProviderRegistration = StreamingTtsProviderRegistration<any>;
 
 function resolveElevenLabsApiKey(config: StreamingTtsProviderRuntimeConfig): string | undefined {
-  return resolveInlineOrEnvCredential(
-    config.elevenLabsApiKey,
-    config.credentialVault,
-    'ELEVENLABS_API_KEY',
-  );
+  const apiKey = typeof config.elevenLabsApiKey === 'string' ? config.elevenLabsApiKey.trim() : '';
+  return apiKey || undefined;
 }
 
 const providerRegistrations = new Map<string, AnyStreamingTtsProviderRegistration>([

@@ -1,7 +1,5 @@
 import { createDeepgramStreamingSttConnector, type DeepgramStreamingSttConfig } from './deepgram-stream.js';
 import type { EligibilityRequirements } from '../../../../system/capabilities/eligibility.js';
-import type { CredentialVaultPort } from '../../../../boundary/custody/credential-vault.js';
-import { resolveInlineOrEnvCredential } from '../../../../boundary/custody/credential-vault.js';
 import type { StreamingSttConnector } from './types.js';
 
 export * from './types.js';
@@ -14,9 +12,20 @@ export interface StreamingSttConfigByProvider {
   [provider: string]: unknown;
 }
 
+/**
+ * Provider runtime config as the *shared* connector index sees it
+ * (psfn-framework-mp1pf).
+ *
+ * Every credential here is already resolved: `hydrateSecretBearingConfig` on
+ * the gateway side asks the credential vault (or the process environment) and
+ * writes the plain value onto the substrate config before any connector is
+ * built. This index therefore holds no vault reference and performs no
+ * credential lookup of its own, which is what keeps the secret-bearing
+ * `boundary/custody/credential-vault` module out of the agent process's import
+ * closure. An unresolved credential reads as "not configured" — fail closed.
+ */
 export interface StreamingSttProviderRuntimeConfig {
   [key: string]: unknown;
-  credentialVault?: CredentialVaultPort;
   deepgramApiKey?: string;
   deepgramModel?: string;
   deepgramSttEndpoint?: string;
@@ -36,11 +45,8 @@ export interface StreamingSttProviderRegistration<TConfig = unknown> {
 type AnyStreamingSttProviderRegistration = StreamingSttProviderRegistration<any>;
 
 function resolveDeepgramApiKey(config: StreamingSttProviderRuntimeConfig): string | undefined {
-  return resolveInlineOrEnvCredential(
-    config.deepgramApiKey,
-    config.credentialVault,
-    'DEEPGRAM_API_KEY',
-  );
+  const apiKey = typeof config.deepgramApiKey === 'string' ? config.deepgramApiKey.trim() : '';
+  return apiKey || undefined;
 }
 
 const providerRegistrations = new Map<string, AnyStreamingSttProviderRegistration>([

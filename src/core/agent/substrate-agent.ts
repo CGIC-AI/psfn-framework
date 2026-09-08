@@ -195,6 +195,7 @@ import type {
   BackgroundWorkStorePort,
   BackgroundWorkWelfarePolicy,
 } from './background-work/store-port.js';
+import type { BackgroundWorkGovernedClassRunner } from './background-work/types.js';
 import { executePostTurnBackgroundWork } from './background-work/post-turn-runtime.js';
 import { runBackgroundWorkTick } from './background-work/tick-runtime.js';
 import { BackgroundWorkHandoffRecoveryRuntime } from './background-work/handoff-recovery-runtime.js';
@@ -271,6 +272,8 @@ export interface SubstrateAgentOptions {
   backgroundWorkWelfare?: Partial<BackgroundWorkWelfarePolicy>;
   /** Canonical lifecycle binding for eligible durable background automata. */
   backgroundWorkAutomataLifecycle?: BackgroundWorkAutomataLifecyclePort;
+  /** Governed Automata Bus lifecycle for the intention post-turn hooks class. */
+  intentionHooksAutomataRunner?: BackgroundWorkGovernedClassRunner;
   /** Durable creation gate that must complete before any raw session append. */
   classifySessionAtCreation?: (message: SubstrateMessage) => Promise<void>;
 }
@@ -678,6 +681,9 @@ export class SubstrateAgent {
           // assigns the writer after the agent is built (hrmrq.85).
           ...(this.socialDesireFeltSignals
             ? { socialDesireFeltSignals: this.socialDesireFeltSignals }
+            : {}),
+          ...(options.intentionHooksAutomataRunner
+            ? { intentionHooksAutomataRunner: options.intentionHooksAutomataRunner }
             : {}),
         }),
       });

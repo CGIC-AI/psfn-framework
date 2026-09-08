@@ -484,6 +484,7 @@ export interface SubstrateAgentCompositionOptions {
   backgroundWorkDisabled?: boolean;
   backgroundWorkWelfare?: SubstrateAgentOptions['backgroundWorkWelfare'];
   backgroundWorkAutomataLifecycle?: SubstrateAgentOptions['backgroundWorkAutomataLifecycle'];
+  intentionHooksAutomataRunner?: SubstrateAgentOptions['intentionHooksAutomataRunner'];
   classifySessionAtCreation?: SubstrateAgentOptions['classifySessionAtCreation'];
 }
 
@@ -524,6 +525,9 @@ export function composeSubstrateAgent(options: SubstrateAgentCompositionOptions)
       ...(options.backgroundWorkWelfare ? { backgroundWorkWelfare: options.backgroundWorkWelfare } : {}),
       ...(options.backgroundWorkAutomataLifecycle
         ? { backgroundWorkAutomataLifecycle: options.backgroundWorkAutomataLifecycle }
+        : {}),
+      ...(options.intentionHooksAutomataRunner
+        ? { intentionHooksAutomataRunner: options.intentionHooksAutomataRunner }
         : {}),
       ...(options.classifySessionAtCreation
         ? { classifySessionAtCreation: options.classifySessionAtCreation }

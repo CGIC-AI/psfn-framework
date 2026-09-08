@@ -357,6 +357,7 @@ describe('migrateLegacySchedulerOwner', () => {
         'icpAutonomy.policyHolds',
         'intentionFollowUp',
         'healthDetectors',
+        'humanEscalation',
       ],
     });
     expect(readFileSync(filePath, 'utf8')).toBe(before);
@@ -369,6 +370,7 @@ describe('migrateLegacySchedulerOwner', () => {
         'icpAutonomy.policyHolds',
         'intentionFollowUp',
         'healthDetectors',
+        'humanEscalation',
       ],
     });
     expect(loadSchedulerConfig(dataDir).icpAutonomy.policyHolds)
@@ -404,6 +406,7 @@ describe('migrateLegacySchedulerOwner', () => {
         'icpAutonomy.policyHolds',
         'intentionFollowUp',
         'healthDetectors',
+        'humanEscalation',
       ],
     });
     // The operator's own batch size survives; only the unknown key is seeded.
@@ -433,6 +436,7 @@ describe('migrateLegacySchedulerOwner', () => {
         'icpAutonomy.policyHolds',
         'intentionFollowUp',
         'healthDetectors',
+        'humanEscalation',
       ],
     });
     expect(loadSchedulerConfig(dataDir).backgroundMaintenance.doingMirrorLetters)
@@ -458,6 +462,7 @@ describe('migrateLegacySchedulerOwner', () => {
         'icpAutonomy.policyHolds',
         'intentionFollowUp',
         'healthDetectors',
+        'humanEscalation',
       ],
     });
     expect(readFileSync(filePath, 'utf8')).toBe(before);
@@ -471,6 +476,7 @@ describe('migrateLegacySchedulerOwner', () => {
         'icpAutonomy.policyHolds',
         'intentionFollowUp',
         'healthDetectors',
+        'humanEscalation',
       ],
     });
     const migratedRaw = JSON.parse(readFileSync(filePath, 'utf8')) as Record<string, unknown>;
@@ -519,6 +525,7 @@ describe('migrateLegacySchedulerOwner', () => {
         'healthDetectors.backgroundFailures',
         'healthDetectors.stuckJobs',
         'healthDetectors.incidentAlerts',
+        'humanEscalation',
       ],
     });
     const migrated = loadSchedulerConfig(dataDir).healthDetectors;
@@ -552,6 +559,7 @@ describe('migrateLegacySchedulerOwner', () => {
         'icpAutonomy.policyHolds',
         'intentionFollowUp',
         'healthDetectors',
+        'humanEscalation',
       ],
     });
     expect(migrateLegacySchedulerOwner({ dataDir, apply: true })).toMatchObject({
@@ -562,6 +570,7 @@ describe('migrateLegacySchedulerOwner', () => {
         'icpAutonomy.policyHolds',
         'intentionFollowUp',
         'healthDetectors',
+        'humanEscalation',
       ],
     });
     const migratedRaw = JSON.parse(readFileSync(filePath, 'utf8')) as Record<string, unknown>;
@@ -592,6 +601,7 @@ describe('migrateLegacySchedulerOwner', () => {
         'icpAutonomy.policyHolds',
         'intentionFollowUp',
         'healthDetectors',
+        'humanEscalation',
       ],
     });
     expect(migrateLegacySchedulerOwner({ dataDir, apply: true })).toMatchObject({
@@ -602,6 +612,7 @@ describe('migrateLegacySchedulerOwner', () => {
         'icpAutonomy.policyHolds',
         'intentionFollowUp',
         'healthDetectors',
+        'humanEscalation',
       ],
     });
     expect(loadSchedulerConfig(dataDir).backgroundWork.postTurn.maxAttempts).toBe(5);

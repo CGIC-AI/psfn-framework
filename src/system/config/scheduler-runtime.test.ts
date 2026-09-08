@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_HEALTH_DETECTORS_CONFIG } from './scheduler-config/health-detectors.js';
+import { DEFAULT_HUMAN_ESCALATION_CONFIG } from './scheduler-config/human-escalation.js';
 import {
   DEFAULT_BACKGROUND_WORK_TUNING,
   DEFAULT_FREE_TIME_CONFIG,
@@ -116,6 +117,7 @@ describe('resolveRuntimeSchedulerConfig', () => {
         heartbeatIntervalMs: 900_000,
         backgroundMaintenance: backgroundMaintenance(120_000),
         healthDetectors: structuredClone(DEFAULT_HEALTH_DETECTORS_CONFIG),
+        humanEscalation: structuredClone(DEFAULT_HUMAN_ESCALATION_CONFIG),
         backgroundWork: DEFAULT_BACKGROUND_WORK_TUNING,
         artifactLifecycle: {
           scratchpadRetentionDays: 7,
@@ -145,6 +147,7 @@ describe('resolveRuntimeSchedulerConfig', () => {
         heartbeatIntervalMs: 900_000,
         backgroundMaintenance: backgroundMaintenance(120_000),
         healthDetectors: structuredClone(DEFAULT_HEALTH_DETECTORS_CONFIG),
+        humanEscalation: structuredClone(DEFAULT_HUMAN_ESCALATION_CONFIG),
         artifactLifecycle: {
           scratchpadRetentionDays: 7,
           generatedMediaRetentionDays: 21,
@@ -191,6 +194,7 @@ describe('resolveRuntimeSchedulerConfig', () => {
         heartbeatIntervalMs: 20_000,
         backgroundMaintenance: backgroundMaintenance(30_000),
         healthDetectors: structuredClone(DEFAULT_HEALTH_DETECTORS_CONFIG),
+        humanEscalation: structuredClone(DEFAULT_HUMAN_ESCALATION_CONFIG),
         backgroundWork: DEFAULT_BACKGROUND_WORK_TUNING,
         artifactLifecycle: {
           scratchpadRetentionDays: 3,
@@ -220,6 +224,7 @@ describe('resolveRuntimeSchedulerConfig', () => {
         heartbeatIntervalMs: 20_000,
         backgroundMaintenance: backgroundMaintenance(30_000),
         healthDetectors: structuredClone(DEFAULT_HEALTH_DETECTORS_CONFIG),
+        humanEscalation: structuredClone(DEFAULT_HUMAN_ESCALATION_CONFIG),
         artifactLifecycle: {
           scratchpadRetentionDays: 3,
           generatedMediaRetentionDays: 4,

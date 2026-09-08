@@ -6,6 +6,7 @@ import {
   DEFAULT_BACKGROUND_WORK_TUNING,
   DEFAULT_FREE_TIME_CONFIG,
   DEFAULT_HEALTH_DETECTORS_CONFIG,
+  DEFAULT_HUMAN_ESCALATION_CONFIG,
   DEFAULT_SOCIAL_AUTONOMY_CONFIG,
   DEFAULT_SOCIAL_DESIRE_CONFIG,
   DEFAULT_TEMPORAL_WAKEUP_CONFIG,
@@ -49,6 +50,7 @@ function buildValidSchedulerConfig(): Record<string, unknown> {
       },
     },
     healthDetectors: structuredClone(DEFAULT_HEALTH_DETECTORS_CONFIG),
+    humanEscalation: structuredClone(DEFAULT_HUMAN_ESCALATION_CONFIG),
     backgroundWork: structuredClone(DEFAULT_BACKGROUND_WORK_TUNING),
     artifactLifecycle: {
       scratchpadRetentionDays: 10,

@@ -2377,6 +2377,69 @@ describe('ICP autonomy Postgres persistence', () => {
       }
     }, TIMEOUT_MS);
 
+    // Acceptance: "fence races linearize: a prior permit is revoked, and a later
+    // issue rejects". Both stores contend for the SAME companion fence row, so
+    // one of the two orderings must win completely -- there is no interleaving
+    // in which a permit ends up issued against a fenced companion.
+    it('linearizes a permit issue racing the fence, in either order', async () => {
+      const databaseUrl = await freshDatabaseUrl();
+      const issuer = await PostgresIcpSharedAutonomyStore.connect(databaseUrl, {
+        knownCompanionIds: [A, B],
+      });
+      const remover = await PostgresIcpSharedAutonomyStore.connect(databaseUrl, {
+        knownCompanionIds: [A, B],
+      });
+      try {
+        // Captured BEFORE the race, and still current when the race starts.
+        const capturedFence = await issuer.captureInvalidationFence(A, B);
+        const [issued, fenced] = await Promise.allSettled([
+          issuer.createEpisodeAndIssuePermit({
+            ...lifecycleEpisodeAndPermit({
+              conversationId: CONVERSATION_ID,
+              candidateId: CANDIDATE_ID,
+              permitId: PERMIT_ID,
+              issuedAtMs: 1_000,
+            }),
+            expectedInvalidationFence: capturedFence,
+          }),
+          remover.fenceLifecycleAdmission(B, 1_000),
+        ]);
+
+        // Removal always wins its own transaction.
+        expect(fenced.status).toBe('fulfilled');
+        if (fenced.status !== 'fulfilled') throw new Error('unreachable');
+        expect(fenced.value).toMatchObject({ lifecycleFenced: true, transitioned: true });
+        await expect(remover.isLifecycleAdmissionFenced(B)).resolves.toBe(true);
+
+        // THE INVARIANT, whichever order the row lock granted: no permit is left
+        // issued against a fenced companion. Either the issue lost outright, or
+        // it won and the fence revoked exactly that permit before returning.
+        const permit = await issuer.getPermit(PERMIT_ID);
+        if (issued.status === 'rejected') {
+          expect(issued.reason).toBeInstanceOf(IcpAutonomyInvalidationConflictError);
+          expect(issued.reason).toMatchObject({ reasonCode: 'unknown_participant' });
+          expect(permit).toBeNull();
+        } else {
+          expect(permit).toMatchObject({ status: 'revoked', reasonCode: 'unknown_participant' });
+          expect(fenced.value.revokedPermits.map(revoked => revoked.permitId)).toContain(PERMIT_ID);
+        }
+
+        // And a later issue rejects regardless, on a freshly captured fence.
+        await expect(issuer.createEpisodeAndIssuePermit({
+          ...lifecycleEpisodeAndPermit({
+            conversationId: SECOND_CONVERSATION_ID,
+            candidateId: SECOND_CANDIDATE_ID,
+            permitId: SECOND_PERMIT_ID,
+            issuedAtMs: 2_000,
+          }),
+          expectedInvalidationFence: await issuer.captureInvalidationFence(A, B),
+        })).rejects.toMatchObject({ reasonCode: 'unknown_participant' });
+      } finally {
+        await issuer.close();
+        await remover.close();
+      }
+    }, TIMEOUT_MS);
+
     it('upgrades an existing pre-v20 fence table without readmitting or denying anyone', async () => {
       if (!harness) throw new Error('Postgres integration harness is unavailable');
       const databaseUrl = (await harness.createDatabase()).databaseUrl;

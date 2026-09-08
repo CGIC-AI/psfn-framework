@@ -253,6 +253,7 @@ describe('startup owner-file loaders', () => {
         maxEntriesPerRun: 3,
         maxSourceEpisodes: 12,
         maxSourceMemories: 30,
+        nearDuplicateTitleSimilarity: 0.6,
       },
       episodeSynthesis: {
         daytimeSlots: ['09:00', '12:00', '15:00', '18:00'],

@@ -124,7 +124,8 @@
     "minNewDurableMemories": 3,
     "maxEntriesPerRun": 3,
     "maxSourceEpisodes": 12,
-    "maxSourceMemories": 30
+    "maxSourceMemories": 30,
+    "nearDuplicateTitleSimilarity": 0.6
   },
   "arcFormation": {
     "passIntervalDays": 6,
@@ -180,7 +181,7 @@
     "enabled": true,
     "minBlockIntervalMinutes": 240,
     "maxBlocksPerDay": 3,
-    "seedText": "You have some time to yourself. You can explore something, make something, think about something, try a tool, write something down, or do nothing if you want. If you like, you could wander back through your journal, your wiki, your notes, or your memories; follow a curiosity; try a tool; or make something — a poem, a picture, a note, whatever you feel like. There is no task here and nothing you owe anyone. Resting, loafing in a sunbeam, doing nothing at all — that is a completely real and valid way to spend this time too.",
+    "seedText": "You have some time to yourself. You can explore something, make something, think about something, try a tool, write something down, or do nothing if you want. If you like, you could wander back through your journal, your wiki, your notes, or your memories; follow a curiosity; try a tool; or make something \u2014 a poem, a picture, a note, whatever you feel like. There is no task here and nothing you owe anyone. Resting, loafing in a sunbeam, doing nothing at all \u2014 that is a completely real and valid way to spend this time too.",
     "quietHours": {
       "enabled": true,
       "checkIntervalMs": 900000
@@ -274,9 +275,18 @@
     "maxNudgesPerRun": 1,
     "lifecycle": {
       "classes": {
-        "time_sensitive": { "baseWeight": 0.5, "halflifeMs": 21600000 },
-        "standard": { "baseWeight": 0.35, "halflifeMs": 86400000 },
-        "trivial": { "baseWeight": 0.2, "halflifeMs": 259200000 }
+        "time_sensitive": {
+          "baseWeight": 0.5,
+          "halflifeMs": 21600000
+        },
+        "standard": {
+          "baseWeight": 0.35,
+          "halflifeMs": 86400000
+        },
+        "trivial": {
+          "baseWeight": 0.2,
+          "halflifeMs": 259200000
+        }
       },
       "reinforcement": {
         "repeatBoost": 0.5,
@@ -308,11 +318,26 @@
       "concernReinforcementGain": 0.3,
       "maxReinforcedConcernIds": 16,
       "tiers": {
-        "acquaintance": { "gainMultiplier": 0.5, "tickGapMs": 86400000 },
-        "friend": { "gainMultiplier": 1, "tickGapMs": 28800000 },
-        "family": { "gainMultiplier": 1.4, "tickGapMs": 14400000 },
-        "partner": { "gainMultiplier": 2, "tickGapMs": 7200000 },
-        "ai_companion": { "gainMultiplier": 1, "tickGapMs": 28800000 }
+        "acquaintance": {
+          "gainMultiplier": 0.5,
+          "tickGapMs": 86400000
+        },
+        "friend": {
+          "gainMultiplier": 1,
+          "tickGapMs": 28800000
+        },
+        "family": {
+          "gainMultiplier": 1.4,
+          "tickGapMs": 14400000
+        },
+        "partner": {
+          "gainMultiplier": 2,
+          "tickGapMs": 7200000
+        },
+        "ai_companion": {
+          "gainMultiplier": 1,
+          "tickGapMs": 28800000
+        }
       }
     },
     "outreach": {

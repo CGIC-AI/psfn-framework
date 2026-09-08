@@ -76,13 +76,15 @@ describe('full callable catalog schema token cost', () => {
       extendedTools: 7,
       totalTools: 32,
       includesLibrary: false,
-      beforeTokens: 19_386,
-      afterTokens: 23_401,
+      // psfn-framework-lpxg3.3 added the optional skill `base_version` binding:
+      // +219 bytes / +42 tokens on both the pre- and post-description payloads.
+      beforeTokens: 19_428,
+      afterTokens: 23_443,
       deltaTokens: 4_015,
-      beforeBytes: 91_147,
-      afterBytes: 109_124,
-      providerSchemaHash: 'd8436da57bb7a8cac533956ed6a55f22ae2d9da3bfc4a65c591c6e9ac92dc78b',
-      parameterSchemaHash: '6099367af0363ed2a6f745d53b75cad7075032ed8af611b0c6c672e5c3feeea8',
+      beforeBytes: 91_366,
+      afterBytes: 109_343,
+      providerSchemaHash: '6f224e80a5ffca70d69e341c76755359ac69517a75bad12fd18edad4677fe1ce',
+      parameterSchemaHash: '8babe5d024cd702142ca7137bc66262cf072507077c21e973c1b59cb4d053dd7',
     });
 
     // The additional description tokens affect an uncached request. A stable

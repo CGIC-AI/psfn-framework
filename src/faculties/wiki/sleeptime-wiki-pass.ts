@@ -115,6 +115,8 @@ export type WikiPassMemoryReader = {
 export type WikiPassStore = {
   list(): WikiDocumentListEntry[];
   search(input: WikiSearchInput): WikiSearchResult;
+  /** Read the current document so a byte-identical proposal can be a no-op. */
+  get(id: string): WikiDocument | null;
   upsert(input: WikiDocumentUpsertInput): WikiDocument;
 };
 
@@ -148,7 +150,18 @@ export interface SleeptimeWikiPassRunInput {
   throughOccurredAtMs?: number;
 }
 
-export type WikiPassSkipReason = 'disabled' | 'no_material' | 'malformed_output';
+/**
+ * `nothing_durable` (psfn-framework-lpxg3.3): the pass ran a full proposal
+ * cycle and nothing survived as durable world knowledge — every proposal was
+ * a personal-boundary rejection, a byte-identical no-op, or absent entirely.
+ * That is a real, recordable outcome, distinct from "the gate never opened",
+ * and it advances the watermark like any other completed review.
+ */
+export type WikiPassSkipReason =
+  | 'disabled'
+  | 'no_material'
+  | 'malformed_output'
+  | 'nothing_durable';
 
 export interface SleeptimeWikiPassRunResult {
   ran: boolean;
@@ -165,6 +178,14 @@ export interface SleeptimeWikiPassRunResult {
    * normally, so one hostile synthesis never stops the pass.
    */
   entriesHeld: number;
+  /**
+   * Proposals whose exact content already existed on the target entry. They
+   * reuse the existing admitted version: no new version, no history entry, no
+   * repeated notice (psfn-framework-lpxg3.3 AC6).
+   */
+  entriesUnchanged: number;
+  /** Proposals folded into an existing near-duplicate entry instead of creating one. */
+  nearDuplicatesFolded: number;
 }
 
 export type WikiPassProposalOperation = 'create' | 'update';
@@ -179,6 +200,75 @@ export interface WikiPassProposal {
   sourceEpisodeIds: string[];
   sourceMemoryIds: string[];
   reason?: string;
+}
+
+/** What one proposal did to the store. */
+type WikiPassWriteOutcome =
+  | { kind: 'written'; foldedIntoNearDuplicate: boolean; document: WikiDocument }
+  | { kind: 'unchanged'; foldedIntoNearDuplicate: boolean }
+  | { kind: 'failed'; foldedIntoNearDuplicate: boolean };
+
+const TITLE_TOKEN_MIN_LENGTH = 3;
+
+/**
+ * Naive singularization so "runtime" and "runtimes" are the same concept. It is
+ * deliberately crude — a real stemmer would be a dependency and a new failure
+ * mode for a comparison whose only job is to notice an obvious near-duplicate.
+ */
+function normalizeTitleToken(token: string): string {
+  return token.length > TITLE_TOKEN_MIN_LENGTH && token.endsWith('s') && !token.endsWith('ss')
+    ? token.slice(0, -1)
+    : token;
+}
+
+function titleTokens(title: string): Set<string> {
+  return new Set(
+    title
+      .toLowerCase()
+      .split(/[^a-z0-9]+/u)
+      .filter(token => token.length >= TITLE_TOKEN_MIN_LENGTH && !GUARD_STOP_WORDS.has(token))
+      .map(normalizeTitleToken),
+  );
+}
+
+/**
+ * Jaccard overlap of two titles' distinctive tokens. Deterministic and
+ * embedding-free: the pass must be able to avoid a near-duplicate without a
+ * second model call.
+ */
+export function titleTokenSimilarity(left: string, right: string): number {
+  const leftTokens = titleTokens(left);
+  const rightTokens = titleTokens(right);
+  if (leftTokens.size === 0 || rightTokens.size === 0) return 0;
+  let shared = 0;
+  for (const token of leftTokens) {
+    if (rightTokens.has(token)) shared += 1;
+  }
+  const union = leftTokens.size + rightTokens.size - shared;
+  return union === 0 ? 0 : shared / union;
+}
+
+/**
+ * Whether writing this proposal would change nothing the wiki actually serves.
+ * Provenance refs are deliberately excluded: re-citing the same knowledge from
+ * a new episode is not new knowledge, and burning a version for it would make
+ * every night's run look productive.
+ */
+function isUnchangedWikiProposal(
+  existing: WikiDocument,
+  proposal: WikiPassProposal,
+): boolean {
+  // Compare what the store would actually persist: it trims and newline-
+  // terminates the body, so a proposal that differs only in that whitespace is
+  // the same document.
+  if (existing.body.trim() !== proposal.body.trim()) return false;
+  if (existing.title.trim() !== proposal.title.trim()) return false;
+  const proposalSummary = proposal.summary?.trim();
+  if (proposalSummary !== undefined && existing.summary?.trim() !== proposalSummary) return false;
+  const proposedTags = [...new Set([...proposal.tags, 'wiki-pass'])].sort();
+  const existingTags = [...existing.tags].sort();
+  return proposedTags.length === existingTags.length
+    && proposedTags.every((tag, index) => tag === existingTags[index]);
 }
 
 function toIsoInstant(ms: number): string {
@@ -422,6 +512,8 @@ export class SleeptimeWikiPass {
       entriesUpdated: 0,
       proposalsRejected: 0,
       entriesHeld: 0,
+      entriesUnchanged: 0,
+      nearDuplicatesFolded: 0,
     };
 
     if (!this.config.enabled) {
@@ -535,10 +627,20 @@ export class SleeptimeWikiPass {
     let entriesCreated = 0;
     let entriesUpdated = 0;
     let entriesHeld = 0;
+    let entriesUnchanged = 0;
+    let nearDuplicatesFolded = 0;
     for (const proposal of guarded.accepted) {
       if (entriesCreated + entriesUpdated >= this.config.maxEntriesPerRun) break;
-      const written = this.writeProposal(proposal, input.sessionId);
-      if (!written) continue;
+      const outcome = this.writeProposal(proposal, input.sessionId);
+      if (outcome.kind === 'failed') continue;
+      if (outcome.foldedIntoNearDuplicate) nearDuplicatesFolded += 1;
+      if (outcome.kind === 'unchanged') {
+        // Byte-identical to what is already stored and already admitted: no new
+        // version, no rescan, and nothing for the companion to be told about.
+        entriesUnchanged += 1;
+        continue;
+      }
+      const written = outcome.document;
       // Awaited, not fire-and-forget: the run must be able to report which of
       // its own generated syntheses were held, and a held one must be inert
       // before the pass claims it created an entry.
@@ -575,6 +677,8 @@ export class SleeptimeWikiPass {
           entriesCreated,
           entriesUpdated,
           entriesHeld,
+          entriesUnchanged,
+          nearDuplicatesFolded,
           proposalsRejected: guarded.rejected.length,
         },
       },
@@ -583,6 +687,7 @@ export class SleeptimeWikiPass {
       lastProcessedAt: nowIso,
     });
 
+    const learnedSomethingDurable = entriesCreated + entriesUpdated > 0;
     const result: SleeptimeWikiPassRunResult = {
       ran: true,
       reviewedEpisodes: sourceEpisodes.length,
@@ -591,19 +696,61 @@ export class SleeptimeWikiPass {
       entriesUpdated,
       proposalsRejected: guarded.rejected.length,
       entriesHeld,
+      entriesUnchanged,
+      nearDuplicatesFolded,
+      // An explicit no-op: the day was reviewed and nothing durable came of it.
+      // Recording it is the point — silence would be indistinguishable from a
+      // run that never happened.
+      ...(learnedSomethingDurable ? {} : { skippedReason: 'nothing_durable' as const }),
     };
     log.info('Sleeptime wiki pass complete', { sessionId: input.sessionId, ...result });
     return result;
   }
 
-  private writeProposal(proposal: WikiPassProposal, sessionId: string): WikiDocument | null {
+  /**
+   * Resolve a proposal onto an existing entry when one is close enough that a
+   * new document would be a near-duplicate (psfn-framework-lpxg3.3 AC5).
+   *
+   * An exact title match still wins outright. Otherwise the best text-search hit
+   * whose title overlap clears the owner-file threshold becomes the update
+   * target, so "Rust async runtimes" revises "Rust async runtime notes" instead
+   * of sitting beside it. Below the threshold the proposal is a genuine create.
+   */
+  private resolveNearDuplicateTarget(title: string): { id: string; exact: boolean } | null {
+    const found = this.wikiStore.search({ query: title, limit: 3 });
+    const normalized = title.trim().toLowerCase();
+    const exact = found.matches.find(match => match.title.trim().toLowerCase() === normalized);
+    if (exact) return { id: exact.id, exact: true };
+    let best: { id: string; similarity: number } | null = null;
+    for (const match of found.matches) {
+      const similarity = titleTokenSimilarity(title, match.title);
+      if (similarity < this.config.nearDuplicateTitleSimilarity) continue;
+      if (!best || similarity > best.similarity) best = { id: match.id, similarity };
+    }
+    return best ? { id: best.id, exact: false } : null;
+  }
+
+  private writeProposal(
+    proposal: WikiPassProposal,
+    sessionId: string,
+  ): WikiPassWriteOutcome {
     // Prefer updating an existing entry over duplicating it. Use the cited id
-    // when the model supplied one; otherwise fall back to a title text search.
+    // when the model supplied one; otherwise fall back to a title search that
+    // also folds near-duplicates onto the entry they would have duplicated.
     let targetId = proposal.id;
+    let foldedIntoNearDuplicate = false;
     if (!targetId) {
-      const found = this.wikiStore.search({ query: proposal.title, limit: 3 });
-      const exact = found.matches.find(match => match.title.toLowerCase() === proposal.title.toLowerCase());
-      if (exact) targetId = exact.id;
+      const target = this.resolveNearDuplicateTarget(proposal.title);
+      if (target) {
+        targetId = target.id;
+        foldedIntoNearDuplicate = !target.exact;
+      }
+    }
+    if (targetId) {
+      const existing = this.wikiStore.get(targetId);
+      if (existing && isUnchangedWikiProposal(existing, proposal)) {
+        return { kind: 'unchanged', foldedIntoNearDuplicate };
+      }
     }
     const provenanceRefs = [
       `wiki_pass:${sessionId}`,
@@ -614,24 +761,28 @@ export class SleeptimeWikiPass {
       provenanceRefs.push(`wiki_pass:${sessionId}`);
     }
     try {
-      return this.wikiStore.upsert({
-        ...(targetId ? { id: targetId } : {}),
-        title: proposal.title,
-        body: proposal.body,
-        tags: [...proposal.tags, 'wiki-pass'],
-        sourceClass: 'generated_synthesis',
-        provenanceRefs,
-        sensitivity: 'personal',
-        ...(proposal.summary ? { summary: proposal.summary } : {}),
-        updatedBy: WIKI_PASS_UPDATED_BY,
-      });
+      return {
+        kind: 'written',
+        foldedIntoNearDuplicate,
+        document: this.wikiStore.upsert({
+          ...(targetId ? { id: targetId } : {}),
+          title: proposal.title,
+          body: proposal.body,
+          tags: [...proposal.tags, 'wiki-pass'],
+          sourceClass: 'generated_synthesis',
+          provenanceRefs,
+          sensitivity: 'personal',
+          ...(proposal.summary ? { summary: proposal.summary } : {}),
+          updatedBy: WIKI_PASS_UPDATED_BY,
+        }),
+      };
     } catch (error) {
       log.warn('Sleeptime wiki pass entry write skipped after error', {
         sessionId,
         title: proposal.title,
         error: String(error),
       });
-      return null;
+      return { kind: 'failed', foldedIntoNearDuplicate };
     }
   }
 

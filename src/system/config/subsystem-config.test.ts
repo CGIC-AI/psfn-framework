@@ -392,6 +392,7 @@ describe('subsystem config round-trip', () => {
         maxEntriesPerRun: 3,
         maxSourceEpisodes: 12,
         maxSourceMemories: 30,
+        nearDuplicateTitleSimilarity: 0.6,
       },
       episodeSynthesis: {
         daytimeSlots: ['09:00', '12:00', '15:00', '18:00'],
@@ -528,6 +529,14 @@ describe('subsystem config round-trip', () => {
       maxLoadedSkills: 16,
       maxSkillChars: 12_000,
       disabledSkills: ['git-ops'],
+      // lpxg3.3: the reuse block is optional in the owner file and fills in
+      // from the contract defaults, so the round-trip must state it.
+      reuse: {
+        maxCandidates: 3,
+        minRelevanceScore: 0.25,
+        minToolCalls: 3,
+        nudgeEveryNthTurn: 3,
+      },
     };
 
     expect(saveSkillsConfig(dataDir, expected)).toEqual(expected);

@@ -61,6 +61,7 @@ const MEMORY_LANE_BLOCKS = {
     maxEntriesPerRun: 3,
     maxSourceEpisodes: 12,
     maxSourceMemories: 30,
+    nearDuplicateTitleSimilarity: 0.6,
   },
   arcFormation: {
     passIntervalDays: 6,

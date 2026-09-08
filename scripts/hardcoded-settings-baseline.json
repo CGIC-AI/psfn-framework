@@ -13518,6 +13518,13 @@
     },
     {
       "file": "src/system/config/skills-config.ts",
+      "name": "DEFAULT_SKILL_ELIGIBILITY_CONFIG.maxTotalBinaryChecks",
+      "value": "4096",
+      "form": "object-member",
+      "note": "Skills owner-file default; operator-editable via skills.json eligibility.maxTotalBinaryChecks (psfn-framework-7wggj)."
+    },
+    {
+      "file": "src/system/config/skills-config.ts",
       "name": "DEFAULT_SKILL_REUSE_CONFIG.maxCandidates",
       "value": "3",
       "form": "object-member",

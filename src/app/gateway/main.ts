@@ -8,6 +8,15 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { loadConfig } from '../../system/config/load-config.js';
 import { createGatewayHealthEventStore } from '../../persistence/postgres/health-event-store.js';
+import {
+  createGatewayHumanEscalationStore,
+} from '../../persistence/postgres/human-escalation-store.js';
+import {
+  createHumanEscalationControlPlane,
+} from '../../shared/escalation/control-plane.js';
+import {
+  createOperatorAlertEscalationSink,
+} from '../../boundary/gateway/human-escalation-operator-sink.js';
 import { subscribeHealthEventStream } from '../../shared/observability/health-event-stream.js';
 import {
   createIncidentInvestigator,
@@ -359,6 +368,21 @@ async function main(): Promise<void> {
   // incident raised before the server is up is reported through the paths that
   // remain (an error log naming the incident id, and Garden).
   let gatewayIncidentAlertSink: OperatorIncidentAlertSink | null = null;
+  // Durable escalation ledger for this process. Opened here, before the first
+  // emitter, for the same reason the stream is: the gateway's own
+  // `operator_alert_sinks_unconfigured` incident is raised during startup and
+  // must land a durable row even though nothing can page yet.
+  const humanEscalationStore = await awaitPostgresStoreReadiness(
+    'human_escalations',
+    () => createGatewayHumanEscalationStore(config),
+  );
+  const humanEscalationControlPlane = createHumanEscalationControlPlane({
+    ledger: humanEscalationStore,
+    routing: () => startupHydration.schedulerConfig.humanEscalation.routes,
+    sinks: [createOperatorAlertEscalationSink({
+      resolveDispatcher: () => gatewayIncidentAlertSink,
+    })],
+  });
   const detachIncidentAlerts = subscribeIncidentAlerts({
     eventBus,
     delivery: createIncidentAlertDelivery({
@@ -366,7 +390,7 @@ async function main(): Promise<void> {
         readStream: query => healthEventStore.listRecent(query),
         config: () => startupHydration.schedulerConfig.healthDetectors,
       }),
-      resolveSink: () => gatewayIncidentAlertSink,
+      escalation: humanEscalationControlPlane,
       policy: () => startupHydration.schedulerConfig.healthDetectors.incidentAlerts,
     }),
   });
@@ -1135,6 +1159,10 @@ async function main(): Promise<void> {
         { step: 'stop runtime incident alerts', action: () => detachIncidentAlerts() },
         { step: 'stop runtime health stream', action: () => detachHealthEventStream() },
         { step: 'close runtime health stream', action: async () => { await healthEventStore.close(); } },
+        {
+          step: 'close human escalation ledger',
+          action: async () => { await humanEscalationStore.close(); },
+        },
         { step: 'close PostgreSQL pool owner', action: () => postgresPoolOwner.close() },
       ], log);
       log.info('Stopped');

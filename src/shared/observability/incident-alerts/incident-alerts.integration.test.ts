@@ -16,6 +16,18 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createPostgresPool } from '../../../persistence/postgres.js';
 import { PostgresHealthEventStore } from '../../../persistence/postgres/health-event-store.js';
 import {
+  PostgresHumanEscalationStore,
+} from '../../../persistence/postgres/human-escalation-store.js';
+import {
+  createHumanEscalationControlPlane,
+} from '../../escalation/control-plane.js';
+import {
+  DEFAULT_HUMAN_ESCALATION_CONFIG,
+} from '../../../system/config/scheduler-config/human-escalation.js';
+import {
+  createOperatorAlertEscalationSink,
+} from '../../../boundary/gateway/human-escalation-operator-sink.js';
+import {
   DEFAULT_POSTGRES_TEST_IMAGE,
   startPostgresTestHarness,
   type PostgresTestHarness,
@@ -67,6 +79,7 @@ afterAll(async () => {
 
 interface Runtime {
   store: PostgresHealthEventStore;
+  escalations: PostgresHumanEscalationStore;
   eventBus: EventBus;
   sent: NotifyNtfyParams[];
   garden: AdminIncidentTimelineDataService;
@@ -91,6 +104,7 @@ async function withRuntime(
   });
   try {
     const store = await PostgresHealthEventStore.fromPool(pool, HEALTH_EVENT_ROW_CAP);
+    const escalations = await PostgresHumanEscalationStore.fromPool(pool);
     const eventBus = new EventBus();
     const sent: NotifyNtfyParams[] = [];
     let clock = NOW_MS;
@@ -115,7 +129,15 @@ async function withRuntime(
           config: () => CONFIG,
           now: () => clock,
         }),
-        resolveSink: () => sink,
+        // The alert reaches the same dispatcher through the governed escalation
+        // plane over the real ledger, exactly as the gateway and agent wire it.
+        escalation: createHumanEscalationControlPlane<NotifyNtfyParams>({
+          ledger: escalations,
+          routing: () => DEFAULT_HUMAN_ESCALATION_CONFIG.routes,
+          sinks: [createOperatorAlertEscalationSink({ resolveDispatcher: () => sink })],
+          now: () => clock,
+          logger: { info: () => undefined, warn: () => undefined },
+        }),
         policy: () => CONFIG.incidentAlerts,
         now: () => clock,
         logger: { info: () => undefined, warn: () => undefined, error: () => undefined },
@@ -125,6 +147,7 @@ async function withRuntime(
     try {
       await run({
         store,
+        escalations,
         eventBus,
         sent,
         garden: new AdminIncidentTimelineDataService({

@@ -1,6 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
-import { appendJsonLine } from '../../../persistence/jsonl.js';
+import {
+  appendJsonLine,
+  resolveJsonLinesReadLimits,
+  streamJsonLines,
+  streamJsonLinesSync,
+  type JsonLinesReadLimitSettings,
+  type JsonLinesReadLimits,
+} from '../../../persistence/jsonl.js';
 import type { EventBus } from '../../../shared/event-bus.js';
 import { assertNoUnknownKeys } from '../../../shared/utils/types.js';
 import type {
@@ -162,23 +168,47 @@ function assertEntry(
   assertEvent(entry.event, lineNumber);
 }
 
-function readEntries(path: string): HumanAttentionPressureLedgerEntry[] {
-  if (!existsSync(path)) return [];
-  const raw = readFileSync(path, 'utf-8');
-  if (!raw.trim()) return [];
-  return raw
-    .split('\n')
-    .filter(line => line.trim())
-    .map((line, index) => {
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(line);
-      } catch (error) {
-        throw new Error(`Invalid human attention ledger JSON at line ${index + 1}: ${String(error)}`);
-      }
-      assertEntry(parsed, index + 1);
-      return parsed;
-    });
+/**
+ * Bounded append-only hydration (psfn-framework-z3e2x): one physical row is
+ * retained at a time instead of a whole-file string plus a whole-file row
+ * array. Malformed rows still fail closed.
+ */
+function visitEntryRows(collect: (entry: HumanAttentionPressureLedgerEntry) => void) {
+  return (parsed: unknown, context: { line: number }): void => {
+    assertEntry(parsed, context.line);
+    collect(parsed);
+  };
+}
+
+function attentionLedgerParseError(path: string) {
+  return (context: { line: number; error: unknown }): never => {
+    throw new Error(
+      `Invalid human attention ledger JSON at line ${context.line} of ${path}: `
+      + String(context.error),
+    );
+  };
+}
+
+function readEntriesSync(
+  path: string,
+  limits: JsonLinesReadLimits,
+): HumanAttentionPressureLedgerEntry[] {
+  const entries: HumanAttentionPressureLedgerEntry[] = [];
+  streamJsonLinesSync(path, limits, visitEntryRows(entry => entries.push(entry)), {
+    onParseError: attentionLedgerParseError(path),
+  });
+  return entries;
+}
+
+async function readEntriesStreaming(
+  path: string,
+  limits: JsonLinesReadLimits,
+): Promise<HumanAttentionPressureLedgerEntry[]> {
+  const entries: HumanAttentionPressureLedgerEntry[] = [];
+  await streamJsonLines(path, limits, visitEntryRows(entry => entries.push(entry)), {
+    onParseError: attentionLedgerParseError(path),
+  });
+  return entries;
 }
 
 function countBy(
@@ -197,7 +227,50 @@ function countBy(
     ));
 }
 
+export interface HumanAttentionPressureLedgerOptions {
+  /** Owner-file bounded-read budgets (settings.json ledgerRead* keys). */
+  readLimitSettings?: JsonLinesReadLimitSettings | null;
+  /** Internal: entries already streamed by {@link HumanAttentionPressureLedger.open}. */
+  hydratedEntries?: HumanAttentionPressureLedgerEntry[];
+}
+
 export class HumanAttentionPressureLedger implements HumanAttentionPressureStore {
+  /**
+   * Cooperative startup hydration: streams the append-only ledger with explicit
+   * event-loop yields so Garden/admin work keeps advancing on a multi-megabyte
+   * ledger (psfn-framework-z3e2x).
+   */
+  static async open(
+    path: string,
+    eventBus: EventBus | null = null,
+    now: () => number = Date.now,
+    options: HumanAttentionPressureLedgerOptions = {},
+  ): Promise<HumanAttentionPressureLedger> {
+    // Buffer pressure events across the hydration await and replay them once the
+    // ledger owns its own subscription, so cooperative hydration cannot drop an
+    // event the synchronous constructor would have captured.
+    const pending: HumanAttentionPressureEvent[] = [];
+    const detachBuffer = eventBus?.on('agent.human_attention_pressure', (event) => {
+      pending.push(event);
+    }) ?? null;
+    try {
+      const hydratedEntries = await readEntriesStreaming(
+        path,
+        resolveJsonLinesReadLimits(options.readLimitSettings),
+      );
+      const ledger = new HumanAttentionPressureLedger(path, eventBus, now, {
+        ...options,
+        hydratedEntries,
+      });
+      detachBuffer?.();
+      for (const event of pending) ledger.recordHumanAttentionPressureEvent(event);
+      return ledger;
+    } catch (error) {
+      detachBuffer?.();
+      throw error;
+    }
+  }
+
   private readonly entries: HumanAttentionPressureLedgerEntry[];
   private readonly detachEventBus: (() => void) | null;
 
@@ -205,8 +278,10 @@ export class HumanAttentionPressureLedger implements HumanAttentionPressureStore
     private readonly path: string,
     eventBus: EventBus | null = null,
     private readonly now: () => number = Date.now,
+    options: HumanAttentionPressureLedgerOptions = {},
   ) {
-    this.entries = readEntries(path);
+    this.entries = options.hydratedEntries
+      ?? readEntriesSync(path, resolveJsonLinesReadLimits(options.readLimitSettings));
     this.detachEventBus = eventBus?.on(
       'agent.human_attention_pressure',
       event => this.recordHumanAttentionPressureEvent(event),

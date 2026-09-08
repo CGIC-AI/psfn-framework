@@ -67,7 +67,7 @@ import {
   readRunChargeRollingWindowFromLedger,
 } from '../../shared/telemetry/charge-ledger.js';
 import { getRequestContext } from '../../primitives/llm/request-context.js';
-import { createFileOutreachOutboxStore } from '../../core/intention/outreach-outbox.js';
+import { openFileOutreachOutboxStore } from '../../core/intention/outreach-outbox.js';
 import { registerMemoryTools } from '../../faculties/memory/runtime-wiring.js';
 import { recoverPendingMemoryDeletionProposals } from '../../faculties/memory/deletion-proposal-recovery.js';
 import {
@@ -1679,9 +1679,10 @@ async function main(): Promise<void> {
   // Hydrate and subscribe before any gateway callback can execute. Prompt and
   // quota decisions must see the canonical rolling 24-hour balance even when
   // the optional Garden transport is disabled.
-  const chargeLedger = new RunChargeLedger(
+  const chargeLedger = await RunChargeLedger.open(
     resolveChargeLedgerPath(pathSnapshot.companionDataDir),
     eventBus,
+    { readLimitSettings: config },
   );
   // psfn-framework-h248l.7: this companion's own welfare-grant authority. The
   // gateway re-verifies a caller-asserted `preemptionProtected` by asking THIS
@@ -1727,7 +1728,7 @@ async function main(): Promise<void> {
           if (senderCompanionId !== localCompanionId) {
             throw new Error('ICP local charge balance requested for another companion');
           }
-          return readRunChargeRollingWindowFromLedger(chargeLedgerPath, nowMs);
+          return readRunChargeRollingWindowFromLedger(chargeLedgerPath, nowMs, config);
         },
       },
     );
@@ -1825,8 +1826,9 @@ async function main(): Promise<void> {
 
   // ── Admin transport (optional) ──
 
-  const outreachOutbox = createFileOutreachOutboxStore(
+  const outreachOutbox = await openFileOutreachOutboxStore(
     resolveOutreachOutboxLedgerPath(pathSnapshot.companionDataDir),
+    { readLimitSettings: config },
   );
 
   const adminTransport = await startOptionalAdminTransportServer({
@@ -1907,6 +1909,7 @@ async function main(): Promise<void> {
       toolConformanceRunner,
       letterService: coreRuntime.letterService,
       doingMirrorService: coreRuntime.doingMirrorService,
+      fatigueLedger: coreRuntime.fatigueLedger,
       humanAttentionLedger: coreRuntime.humanAttentionLedger,
     },
   });

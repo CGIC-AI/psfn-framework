@@ -1,7 +1,13 @@
 import { CHANNEL_TYPES, type ChannelType } from '../../shared/contracts/runtime.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { isRecord, isRfc4122Uuid } from '../../shared/utils/types.js';
-import { appendJsonLine, readJsonLines } from '../../persistence/jsonl.js';
+import {
+  appendJsonLine,
+  resolveJsonLinesReadLimits,
+  streamJsonLines,
+  streamJsonLinesSync,
+  type JsonLinesReadLimitSettings,
+} from '../../persistence/jsonl.js';
 
 const log = createComponentLogger('OutreachOutbox');
 
@@ -146,7 +152,78 @@ function deliveredIcpPendingFollowUpId(record: OutreachOutboxRecord): string | u
   return normalizeNonEmptyString(record.metadata.pendingFollowUpId);
 }
 
-export function createFileOutreachOutboxStore(path: string): OutreachOutboxStore {
+export interface FileOutreachOutboxStoreOptions {
+  /** Owner-file bounded-read budgets (settings.json ledgerRead* keys). */
+  readLimitSettings?: JsonLinesReadLimitSettings | null;
+}
+
+/**
+ * Cooperative startup hydration (psfn-framework-z3e2x). The outbox ledger is
+ * streamed row by row with explicit event-loop yields instead of being
+ * materialized whole, so a large outbox no longer stalls agent startup. Every
+ * row is still replayed in file order, so terminal/dedupe restart semantics are
+ * byte-for-byte what the synchronous form produced.
+ */
+export async function openFileOutreachOutboxStore(
+  path: string,
+  options: FileOutreachOutboxStoreOptions = {},
+): Promise<OutreachOutboxStore> {
+  const hydrated = await hydrateOutreachOutbox(path, options, true);
+  return createOutreachOutboxStoreFromHydration(path, hydrated);
+}
+
+export function createFileOutreachOutboxStore(
+  path: string,
+  options: FileOutreachOutboxStoreOptions = {},
+): OutreachOutboxStore {
+  const hydrated = hydrateOutreachOutbox(path, options, false);
+  return createOutreachOutboxStoreFromHydration(path, hydrated);
+}
+
+interface OutreachOutboxHydration {
+  entries: OutreachOutboxRecord[];
+  malformed: number;
+}
+
+function hydrateOutreachOutbox(
+  path: string,
+  options: FileOutreachOutboxStoreOptions,
+  streaming: true,
+): Promise<OutreachOutboxHydration>;
+function hydrateOutreachOutbox(
+  path: string,
+  options: FileOutreachOutboxStoreOptions,
+  streaming: false,
+): OutreachOutboxHydration;
+function hydrateOutreachOutbox(
+  path: string,
+  options: FileOutreachOutboxStoreOptions,
+  streaming: boolean,
+): OutreachOutboxHydration | Promise<OutreachOutboxHydration> {
+  const limits = resolveJsonLinesReadLimits(options.readLimitSettings);
+  const hydration: OutreachOutboxHydration = { entries: [], malformed: 0 };
+  const visit = (parsed: unknown): void => {
+    const record = normalizeRecord(parsed);
+    if (!record) {
+      hydration.malformed += 1;
+      return;
+    }
+    hydration.entries.push(record);
+  };
+  const onParseError = (): void => {
+    hydration.malformed += 1;
+  };
+  if (!streaming) {
+    streamJsonLinesSync(path, limits, visit, { onParseError });
+    return hydration;
+  }
+  return streamJsonLines(path, limits, visit, { onParseError }).then(() => hydration);
+}
+
+function createOutreachOutboxStoreFromHydration(
+  path: string,
+  loaded: OutreachOutboxHydration,
+): OutreachOutboxStore {
   const records: OutreachOutboxRecord[] = [];
   const terminalByDedupeKey = new Map<string, OutreachOutboxRecord>();
   const latestByDedupeKey = new Map<string, OutreachOutboxRecord>();
@@ -164,11 +241,10 @@ export function createFileOutreachOutboxStore(path: string): OutreachOutboxStore
     }
   };
 
-  const loaded = readJsonLines(path, normalizeRecord);
   for (const record of loaded.entries) {
     remember(record);
   }
-  const malformed = loaded.skipped + loaded.corrupt;
+  const malformed = loaded.malformed;
   if (malformed > 0) {
     log.warn('Ignored malformed outreach outbox ledger records during load', {
       path,

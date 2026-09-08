@@ -51,7 +51,7 @@ export class AdminConcernDataService implements AdminConcernService {
     options: { provenanceRef?: string; limit?: number } = {},
   ) {
     return {
-      arcs: this.concernArcJournal?.listConcernArcs({
+      arcs: await this.concernArcJournal?.listConcernArcs({
         concernId,
         ...(options.provenanceRef ? { provenanceRef: options.provenanceRef } : {}),
         ...(options.limit ? { limit: options.limit } : {}),

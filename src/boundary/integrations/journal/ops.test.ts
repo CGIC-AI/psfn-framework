@@ -307,6 +307,105 @@ describe('JournalOps governed I/O', () => {
     expect(readdirSync(outsideDirectory).filter(name => name.includes('journal-'))).toEqual([]);
   });
 
+  // psfn-framework-b695g: these fire beforeFinalCommit, i.e. AFTER the
+  // coordinator's final identity re-check has passed and immediately before the
+  // one namespace syscall that publishes the file. The pre-existing swap tests
+  // fire beforeCommit, which the re-check itself still catches.
+  it('creates without overwriting a note planted in the final commit window', async () => {
+    const notePath = join(root, 'created.md');
+    const outsideDirectory = mkdtempSync(join(tmpdir(), 'journal-final-create-'));
+    cleanupPaths.push(outsideDirectory);
+    const outsideNotePath = join(outsideDirectory, 'kept.md');
+    writeFileSync(outsideNotePath, 'outside\n', 'utf8');
+
+    const mutation = withJournalMutationLock(
+      root,
+      notePath,
+      async target => writeJournalNoteAtomically(target, 'replacement\n'),
+      {
+        beforeFinalCommit() {
+          // A same-UID racer wins the name in the exact check-to-commit window.
+          symlinkSync(outsideNotePath, notePath, 'file');
+        },
+      },
+    );
+
+    await expect(mutation).rejects.toThrow(/target appeared before commit/);
+    // link(2) refused to publish: neither the planted entry nor the external
+    // file it points at was created or overwritten.
+    expect(readFileSync(outsideNotePath, 'utf8')).toBe('outside\n');
+    expect(readdirSync(root).filter(name => name.includes('journal-'))).toEqual([]);
+    expect(readdirSync(outsideDirectory).filter(name => name.includes('journal-'))).toEqual([]);
+  });
+
+  it('appends without overwriting a note planted in the final commit window', async () => {
+    const notePath = join(root, 'appended.md');
+    const outsideDirectory = mkdtempSync(join(tmpdir(), 'journal-final-append-'));
+    cleanupPaths.push(outsideDirectory);
+    const outsideNotePath = join(outsideDirectory, 'kept.md');
+    writeFileSync(outsideNotePath, 'outside\n', 'utf8');
+
+    const mutation = withJournalMutationLock(
+      root,
+      notePath,
+      async target => appendJournalNoteAtomically(target, 'must not escape'),
+      {
+        beforeFinalCommit() {
+          writeFileSync(notePath, 'planted\n', 'utf8');
+        },
+      },
+    );
+
+    await expect(mutation).rejects.toThrow(/target appeared before commit/);
+    expect(readFileSync(notePath, 'utf8')).toBe('planted\n');
+    expect(readFileSync(outsideNotePath, 'utf8')).toBe('outside\n');
+    expect(readdirSync(root).filter(name => name.includes('journal-'))).toEqual([]);
+  });
+
+  it('fails explicitly when a replaced note is swapped in the final commit window', async () => {
+    const notePath = join(root, 'replaced.md');
+    const decoyPath = join(root, 'decoy.md');
+    writeFileSync(notePath, 'original\n', 'utf8');
+    writeFileSync(decoyPath, 'decoy\n', 'utf8');
+
+    const mutation = withJournalMutationLock(
+      root,
+      notePath,
+      async target => writeJournalNoteAtomically(target, 'replacement\n'),
+      {
+        beforeFinalCommit() {
+          // The bound note is moved aside and a different inode takes its name
+          // after the final check and before the rename. rename(2) is
+          // unconditional, so the link-count check detects the loss and the
+          // operation fails explicitly rather than reporting success.
+          renameSync(notePath, join(root, 'moved-original.md'));
+          renameSync(decoyPath, notePath);
+        },
+      },
+    );
+
+    await expect(mutation).rejects.toThrow(/replaced a target other than the bound note/);
+    // The bound note's own bytes are intact under the name it was moved to.
+    expect(readFileSync(join(root, 'moved-original.md'), 'utf8')).toBe('original\n');
+    expect(readdirSync(root).filter(name => name.includes('journal-'))).toEqual([]);
+  });
+
+  it('publishes a normal create and replace losslessly through the single commit', async () => {
+    const ops = new JournalOps(root);
+    const created = await ops.write('lossless.md', 'first');
+    expect(created.created).toBe(true);
+    expect(readFileSync(join(root, 'lossless.md'), 'utf8')).toBe('first\n');
+
+    const appended = await ops.append('lossless.md', 'second');
+    expect(appended.created).toBe(false);
+    expect(readFileSync(join(root, 'lossless.md'), 'utf8')).toBe('first\nsecond\n');
+
+    const replaced = await ops.write('lossless.md', 'third');
+    expect(replaced.created).toBe(false);
+    expect(readFileSync(join(root, 'lossless.md'), 'utf8')).toBe('third\n');
+    expect(readdirSync(root).filter(name => name.includes('journal-'))).toEqual([]);
+  });
+
   it('does not serialize mutations to unrelated paths or roots', async () => {
     const blockedPath = join(root, 'blocked.md');
     let releaseBlocked!: () => void;

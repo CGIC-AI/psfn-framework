@@ -90,7 +90,15 @@ import {
   reconcileSessionWriteChain,
   syncLightweightSessionCacheFromIndex,
 } from './store/session-chain-cache.js';
-import { SessionTurnRecordOperations } from './store/turn-record-operations.js';
+import {
+  RECOVERY_AUTHORITY_LIMITS,
+  SessionTurnRecordOperations,
+} from './store/turn-record-operations.js';
+import {
+  primeTurnTombstoneAuthorityOffPrimary,
+  type StartupTombstoneAuthorityCandidate,
+  type StartupTombstoneAuthorityPrimeReport,
+} from './store/startup-tombstone-authority.js';
 import { SessionTailOperations } from './store/tail-operations.js';
 import {
   buildCogSecTombstoneDiagnostics,
@@ -151,6 +159,8 @@ export class SessionStore implements TranscriptSearchPort {
   // module-level const, so it stays outside the hardcoded-settings scanner while
   // remaining overridable via SessionStoreOptions.maxHotChannels.
   private static readonly DEFAULT_HOT_CHANNEL_LIMIT = 1000;
+  /** Fallback for settings.json sessionTombstoneAuthorityOwners (seeded there). */
+  private static readonly DEFAULT_TURN_TOMBSTONE_AUTHORITY_OWNERS = 64;
   private sessionsDir: string;
   private channels: Map<string, ChannelCache> = new Map();
   private readonly maxHotChannels: number;
@@ -161,6 +171,15 @@ export class SessionStore implements TranscriptSearchPort {
     archiveFingerprint: string;
     tombstones: Set<string>;
   }>();
+  /** Declared bound on retained authority owners (settings.json sessionTombstoneAuthorityOwners). */
+  private readonly turnTombstoneAuthorityOwnerLimit: number;
+  /**
+   * Active turn-tombstone ids as the persisted channel index carried them at
+   * startup. Startup priming used to consume these before any later index
+   * rebuild could observe a tampered journal; retaining the ids preserves that
+   * conservative baseline without keeping any message bytes.
+   */
+  private readonly startupTurnTombstoneBaseline = new Map<string, readonly string[]>();
   private readonly recoveryAuthoritySnapshotHook:
     ((ownerSessionId: string) => void | Promise<void>) | undefined;
   private readonly backgroundWorkHandoffRecoveryDisposition:
@@ -183,6 +202,11 @@ export class SessionStore implements TranscriptSearchPort {
     this.maxHotChannels = Math.max(
       1,
       Math.floor(options.maxHotChannels ?? SessionStore.DEFAULT_HOT_CHANNEL_LIMIT),
+    );
+    this.turnTombstoneAuthorityOwnerLimit = Math.max(
+      1,
+      Math.floor(options.turnTombstoneAuthorityOwners
+        ?? SessionStore.DEFAULT_TURN_TOMBSTONE_AUTHORITY_OWNERS),
     );
     this.channelIndexPath = join(sessionsDir, CHANNEL_INDEX_FILENAME);
     this.importManifestPath = join(sessionsDir, IMPORT_MANIFEST_FILENAME);
@@ -397,7 +421,7 @@ export class SessionStore implements TranscriptSearchPort {
     }
     if (params.cache?.fullyLoaded && params.cache.archiveFingerprint === archiveFingerprint) {
       const tombstones = new Set(params.cache.turnTombstones);
-      this.journalTombstoneAuthority.set(params.sessionId, { archiveFingerprint, tombstones });
+      this.rememberTurnTombstoneAuthority(params.sessionId, archiveFingerprint, tombstones);
       return new Set(tombstones);
     }
 
@@ -405,9 +429,18 @@ export class SessionStore implements TranscriptSearchPort {
     // cannot authorize removal of a redaction merely because its archive
     // fingerprint is current. Scan authenticated tombstone actions once per
     // immutable archive generation without replaying every message row.
+    //
+    // The index's active tombstone ids join the conservative baseline exactly as
+    // startup priming used to supply them (psfn-framework-5jx2v): the union can
+    // only over-hide, and without it a tampered restore whose own signature no
+    // longer verifies would silently revoke an indexed redaction on the first
+    // read of a fresh process.
     const scanned = this.journalRuntime.readTurnTombstoneAuthorityFromChain(
       archives,
-      params.cache?.turnTombstones,
+      new Set(this.conservativeTurnTombstoneBaseline(
+        params.sessionId,
+        [...(params.cache?.turnTombstones ?? [])],
+      )),
     );
     if (!scanned) {
       const loaded = this.journalRuntime.loadChannelChain(archives);
@@ -416,18 +449,12 @@ export class SessionStore implements TranscriptSearchPort {
         throw new Error(`Cannot establish turn-tombstone authority for L0 session ${params.sessionId}`);
       }
       const tombstones = new Set(loaded.turnTombstones);
-      this.journalTombstoneAuthority.set(params.sessionId, {
-        archiveFingerprint: loadedFingerprint,
-        tombstones,
-      });
+      this.rememberTurnTombstoneAuthority(params.sessionId, loadedFingerprint, tombstones);
       this.syncCacheTurnTombstoneAuthority(params.cache, tombstones);
       return new Set(tombstones);
     }
     const tombstones = new Set(scanned.tombstones);
-    this.journalTombstoneAuthority.set(params.sessionId, {
-      archiveFingerprint: scanned.archiveFingerprint,
-      tombstones,
-    });
+    this.rememberTurnTombstoneAuthority(params.sessionId, scanned.archiveFingerprint, tombstones);
     this.syncCacheTurnTombstoneAuthority(params.cache, tombstones);
     return new Set(tombstones);
   }
@@ -508,31 +535,111 @@ export class SessionStore implements TranscriptSearchPort {
         );
       },
     });
+    this.startupTurnTombstoneBaseline.clear();
+    for (const [sessionId, entry] of this.channelIndex.entries()) {
+      const active = entry.activeTurnTombstoneIds ?? [];
+      if (active.length > 0) this.startupTurnTombstoneBaseline.set(sessionId, [...active]);
+    }
+  }
+
+  /**
+   * Derive priming candidates from the current channel index (psfn-framework-5jx2v).
+   * Construction used to fingerprint every archive, parse every L0 byte through
+   * scanArchiveMetadata, and run a full backward matching scan per session with
+   * tombstone evidence — synchronously, on the primary event loop. It now
+   * retains nothing: candidates are path/identity metadata derived on demand,
+   * and any owner priming does not reach is rebuilt fail-closed on first demand.
+   */
+  private turnTombstoneAuthorityCandidates(): StartupTombstoneAuthorityCandidate[] {
+    const candidates: Array<StartupTombstoneAuthorityCandidate & { lastTimestamp: number }> = [];
     for (const [sessionId, entry] of this.channelIndex.entries()) {
       const filePaths = entry.filenames.map(filename => join(this.sessionsDir, filename));
       if (filePaths.some(filePath => !existsSync(filePath))) continue;
-      const channelId = indexedChannelId(sessionId, entry);
-      const archives = filePaths.map(filePath => this.journalRuntime.openArchive(channelId, filePath));
-      const archiveFingerprint = this.journalRuntime.fingerprintArchiveChain(archives);
-      if (!archiveFingerprint) continue;
-      if (this.journalTombstoneAuthority.get(sessionId)?.archiveFingerprint === archiveFingerprint) continue;
-      const metadata = archives.map(archive => this.journalRuntime.scanArchiveMetadata(archive));
-      if (metadata.every(result => result.turnTombstoneCount === 0 && result.quarantined.length === 0)) {
-        this.journalTombstoneAuthority.set(sessionId, {
-          archiveFingerprint,
-          tombstones: new Set(),
-        });
-        continue;
-      }
-      const scanned = this.journalRuntime.readTurnTombstoneAuthorityFromChain(
-        archives,
-        new Set(entry.activeTurnTombstoneIds ?? []),
-      );
-      if (!scanned) continue;
-      this.journalTombstoneAuthority.set(sessionId, {
-        archiveFingerprint: scanned.archiveFingerprint,
-        tombstones: new Set(scanned.tombstones),
+      candidates.push({
+        sessionId,
+        channelId: indexedChannelId(sessionId, entry),
+        filePaths,
+        baselineTurnTombstoneIds: this.conservativeTurnTombstoneBaseline(
+          sessionId,
+          entry.activeTurnTombstoneIds,
+        ),
+        lastTimestamp: entry.lastTimestamp ?? 0,
       });
+    }
+    // Priming work is bounded by the same declared retention limit: warming more
+    // owners than the authority map can hold would fork a worker per session and
+    // then evict the result before anything could read it. Most-recent sessions
+    // are warmed first; the rest stay fail-closed on the lazy path.
+    return candidates
+      .sort((left, right) => (
+        right.lastTimestamp - left.lastTimestamp
+        || left.sessionId.localeCompare(right.sessionId)
+      ))
+      .slice(0, this.turnTombstoneAuthorityOwnerLimit)
+      .map(({ lastTimestamp: _lastTimestamp, ...candidate }) => candidate);
+  }
+
+  /**
+   * Verify canonical L0 turn-tombstone authority off the primary event loop.
+   * Runs the same forked worker the recovery path uses, so no message body is
+   * parsed on the primary heap, and never caches an owner whose evidence is
+   * stale, malformed, or over budget.
+   */
+  async primeTurnTombstoneAuthority(options: {
+    onOwnerSettled?: (sessionId: string) => void | Promise<void>;
+    signal?: AbortSignal;
+  } = {}): Promise<StartupTombstoneAuthorityPrimeReport> {
+    return primeTurnTombstoneAuthorityOffPrimary({
+      candidates: this.turnTombstoneAuthorityCandidates(),
+      context: {
+        openArchive: (channelId, filePath) => this.journalRuntime.openArchive(channelId, filePath),
+        fingerprintArchiveChain: archives => this.journalRuntime.fingerprintArchiveChain(archives),
+        verifyAndNormalizeEntry: (entry, previousHmacCandidates) => (
+          this.journalRuntime.verifyAndNormalizeEntry(entry, previousHmacCandidates)
+        ),
+      },
+      limits: RECOVERY_AUTHORITY_LIMITS,
+      isCurrent: (sessionId, archiveFingerprint) => (
+        this.journalTombstoneAuthority.get(sessionId)?.archiveFingerprint === archiveFingerprint
+      ),
+      remember: (sessionId, archiveFingerprint, tombstones) => {
+        this.rememberTurnTombstoneAuthority(sessionId, archiveFingerprint, tombstones);
+      },
+      ...(options.onOwnerSettled ? { onOwnerSettled: options.onOwnerSettled } : {}),
+      ...(options.signal ? { signal: options.signal } : {}),
+    });
+  }
+
+  /**
+   * Union the caller's baseline with the startup index snapshot. The union can
+   * only over-hide; a verified restore in the journal still removes an id.
+   */
+  private conservativeTurnTombstoneBaseline(
+    sessionId: string,
+    observed: readonly string[] | undefined,
+  ): string[] {
+    return [
+      ...(observed ?? []),
+      ...(this.channelIndex.get(sessionId)?.activeTurnTombstoneIds ?? []),
+      ...(this.startupTurnTombstoneBaseline.get(sessionId) ?? []),
+    ];
+  }
+
+  /**
+   * Retain a declared number of authority owners. Eviction is safe because an
+   * absent owner is recomputed from the journal, never assumed tombstone-free.
+   */
+  private rememberTurnTombstoneAuthority(
+    sessionId: string,
+    archiveFingerprint: string,
+    tombstones: Set<string>,
+  ): void {
+    this.journalTombstoneAuthority.delete(sessionId);
+    this.journalTombstoneAuthority.set(sessionId, { archiveFingerprint, tombstones });
+    while (this.journalTombstoneAuthority.size > this.turnTombstoneAuthorityOwnerLimit) {
+      const oldest = this.journalTombstoneAuthority.keys().next().value as string | undefined;
+      if (oldest === undefined) break;
+      this.journalTombstoneAuthority.delete(oldest);
     }
   }
   private backfillTranscriptProjectionFromDisk(): void {

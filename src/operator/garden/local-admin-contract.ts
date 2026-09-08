@@ -361,6 +361,8 @@ export interface InProcessGardenAdminContractOptions {
   hubIdentityEnrollmentStore?: HubIdentityEnrollmentStorePort | null;
   /** Shared runtime charge ledger; supplying it avoids duplicate event subscribers. */
   chargeLedger?: RunChargeLedger;
+  /** Shared runtime fatigue ledger; supplying it avoids a second whole-ledger hydration. */
+  fatigueLedger?: FatigueLedger;
   humanAttentionLedger?: HumanAttentionPressureLedger;
   /** Runtime log directory for bounded diagnostics reads. Defaults to /app/logs when absent. */
   logsDir?: string;
@@ -412,10 +414,20 @@ export function createInProcessGardenAdminContract(
   );
   const northStarStore = new NorthStarStore(resolveNorthStarPath(companionDataDir));
   const chargeLedger = options.chargeLedger
-    ?? new RunChargeLedger(resolveChargeLedgerPath(companionDataDir), options.eventBus);
-  const fatigueLedger = new FatigueLedger(resolveFatigueLedgerPath(companionDataDir), options.eventBus);
+    ?? new RunChargeLedger(resolveChargeLedgerPath(companionDataDir), options.eventBus, {
+      readLimitSettings: options.config,
+    });
+  const fatigueLedger = options.fatigueLedger
+    ?? new FatigueLedger(resolveFatigueLedgerPath(companionDataDir), options.eventBus, {
+      readLimitSettings: options.config,
+    });
   const humanAttentionLedger = options.humanAttentionLedger
-    ?? new HumanAttentionPressureLedger(resolveHumanAttentionLedgerPath(companionDataDir));
+    ?? new HumanAttentionPressureLedger(
+      resolveHumanAttentionLedgerPath(companionDataDir),
+      null,
+      Date.now,
+      { readLimitSettings: options.config },
+    );
   // The ledger is fleet-wide but has one explicit owner: the first companion
   // in canonical topology order. Garden reads it through a read-only pool and
   // retains the selected companion's query pin.

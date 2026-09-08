@@ -1,7 +1,13 @@
 import { randomUUID } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
 import type { EventBus } from '../event-bus.js';
-import { appendJsonLine } from '../utils/jsonl.js';
+import {
+  appendJsonLine,
+  resolveJsonLinesReadLimits,
+  streamJsonLines,
+  streamJsonLinesSync,
+  type JsonLinesReadLimitSettings,
+  type JsonLinesReadLimits,
+} from '../utils/jsonl.js';
 import type { RunChargeEvent } from '../contracts/runtime.js';
 import type {
   ChargePolicyRuntimeLane,
@@ -266,26 +272,47 @@ function assertLedgerEntry(value: unknown, lineNumber: number): asserts value is
   }
 }
 
-function readLedgerEntries(path: string): RunChargeLedgerEntry[] {
-  if (!existsSync(path)) {
-    return [];
-  }
-  const raw = readFileSync(path, 'utf-8');
-  if (raw.trim().length === 0) {
-    return [];
-  }
-  return raw.split('\n')
-    .filter(line => line.trim().length > 0)
-    .map((line, index) => {
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(line);
-      } catch (error) {
-        throw new Error(`Invalid charge ledger JSON at line ${index + 1}: ${String(error)}`);
-      }
-      assertLedgerEntry(parsed, index + 1);
-      return withEventIdentity(parsed);
-    });
+/**
+ * Bounded append-only hydration (psfn-framework-z3e2x). The ledger is streamed
+ * one physical row at a time instead of being materialized as a whole-file
+ * string plus a whole-file row array, so transient retention is bounded by the
+ * read chunk plus one row. Malformed rows still fail closed.
+ */
+function visitLedgerRows(onEntry: (entry: RunChargeLedgerEntry) => boolean | void) {
+  return (parsed: unknown, context: { line: number }): boolean | void => {
+    assertLedgerEntry(parsed, context.line);
+    return onEntry(withEventIdentity(parsed));
+  };
+}
+
+function chargeLedgerParseError(path: string) {
+  return (context: { line: number; error: unknown }): never => {
+    throw new Error(
+      `Invalid charge ledger JSON at line ${context.line} of ${path}: ${String(context.error)}`,
+    );
+  };
+}
+
+function readLedgerEntriesSync(
+  path: string,
+  limits: JsonLinesReadLimits,
+): RunChargeLedgerEntry[] {
+  const entries: RunChargeLedgerEntry[] = [];
+  streamJsonLinesSync(path, limits, visitLedgerRows(entry => {
+    entries.push(entry);
+  }), { onParseError: chargeLedgerParseError(path) });
+  return entries;
+}
+
+async function readLedgerEntriesStreaming(
+  path: string,
+  limits: JsonLinesReadLimits,
+): Promise<RunChargeLedgerEntry[]> {
+  const entries: RunChargeLedgerEntry[] = [];
+  await streamJsonLines(path, limits, visitLedgerRows(entry => {
+    entries.push(entry);
+  }), { onParseError: chargeLedgerParseError(path) });
+  return entries;
 }
 
 /**
@@ -293,25 +320,34 @@ function readLedgerEntries(path: string): RunChargeLedgerEntry[] {
  * agent process. The JSONL ledger remains canonical; every decision rereads
  * it so a gateway cannot authorize from stale process-local charge state.
  */
-export function readRunChargeRollingWindowFromLedger(
+export async function readRunChargeRollingWindowFromLedger(
   path: string,
   nowMs = Date.now(),
-): RunChargeRollingWindowSnapshot {
+  settings?: JsonLinesReadLimitSettings | null,
+): Promise<RunChargeRollingWindowSnapshot> {
   const cutoffMs = nowMs - RUN_CHARGE_ROLLING_WINDOW_MS;
   const seenEventIds = new Set<string>();
   const spentByLane: Partial<Record<ChargePolicyRuntimeLane, number>> = {};
   let entryCount = 0;
-  for (const entry of readLedgerEntries(path)) {
-    const event = entry.event;
-    if (event.timestampMs < cutoffMs || event.timestampMs > nowMs || event.amount <= 0) {
-      continue;
-    }
-    const eventId = event.eventId.trim() || entry.eventId;
-    if (seenEventIds.has(eventId)) continue;
-    seenEventIds.add(eventId);
-    addRecordAmount(spentByLane, event.lane, event.amount);
-    entryCount += 1;
-  }
+  // The rolling window is folded during the scan, so the decision retains only
+  // in-window event identities rather than the whole ledger. Every row is still
+  // inspected: the window is a filter, never a tail-only truncation.
+  await streamJsonLines(
+    path,
+    resolveJsonLinesReadLimits(settings),
+    visitLedgerRows((entry) => {
+      const event = entry.event;
+      if (event.timestampMs < cutoffMs || event.timestampMs > nowMs || event.amount <= 0) {
+        return;
+      }
+      const eventId = event.eventId.trim() || entry.eventId;
+      if (seenEventIds.has(eventId)) return;
+      seenEventIds.add(eventId);
+      addRecordAmount(spentByLane, event.lane, event.amount);
+      entryCount += 1;
+    }),
+    { onParseError: chargeLedgerParseError(path) },
+  );
   return {
     windowMs: RUN_CHARGE_ROLLING_WINDOW_MS,
     spentByLane,
@@ -511,9 +547,47 @@ function summarizeCalendarAccrual(
 
 export interface RunChargeLedgerOptions {
   now?: () => number;
+  /** Owner-file bounded-read budgets (settings.json ledgerRead* keys). */
+  readLimitSettings?: JsonLinesReadLimitSettings | null;
+  /** Internal: entries already streamed by {@link RunChargeLedger.open}. */
+  hydratedEntries?: RunChargeLedgerEntry[];
 }
 
 export class RunChargeLedger {
+  /**
+   * Cooperative startup hydration: streams the append-only ledger off the
+   * blocking path so timers and admin work keep advancing on a multi-megabyte
+   * ledger (psfn-framework-z3e2x). Prefer this over the constructor in runtime
+   * wiring; the constructor's synchronous form remains for direct/tool use.
+   */
+  static async open(
+    path: string,
+    eventBus?: Pick<EventBus, 'on'> | null,
+    options: RunChargeLedgerOptions = {},
+  ): Promise<RunChargeLedger> {
+    // Cooperative hydration introduces an await where the synchronous
+    // constructor had none, so buffer charge events for the duration and replay
+    // them once the ledger owns its own subscription. Nothing emitted during
+    // startup hydration can be dropped.
+    const pending: RunChargeEvent[] = [];
+    const detachBuffer = eventBus?.on('agent.charge', (event) => {
+      pending.push(event);
+    }) ?? null;
+    try {
+      const hydratedEntries = await readLedgerEntriesStreaming(
+        path,
+        resolveJsonLinesReadLimits(options.readLimitSettings),
+      );
+      const ledger = new RunChargeLedger(path, eventBus, { ...options, hydratedEntries });
+      detachBuffer?.();
+      for (const event of pending) ledger.recordChargeEvent(event);
+      return ledger;
+    } catch (error) {
+      detachBuffer?.();
+      throw error;
+    }
+  }
+
   private entries: RunChargeLedgerEntry[];
   private unsubscribe?: () => void;
   private readonly now: () => number;
@@ -524,7 +598,8 @@ export class RunChargeLedger {
     options: RunChargeLedgerOptions = {},
   ) {
     this.now = options.now ?? (() => Date.now());
-    this.entries = readLedgerEntries(path);
+    this.entries = options.hydratedEntries
+      ?? readLedgerEntriesSync(path, resolveJsonLinesReadLimits(options.readLimitSettings));
     hydrateRunChargeRollingWindowFromEvents(this.entries.map(entry => entry.event), this.now());
     if (eventBus) {
       this.unsubscribe = eventBus.on('agent.charge', (event) => {

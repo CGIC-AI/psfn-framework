@@ -3,6 +3,9 @@ import { EventBus } from '../../shared/event-bus.js';
 import { createEligibilityGate } from '../../system/capabilities/eligibility.js';
 import { Scheduler } from './scheduler.js';
 import type { ScheduledTask } from './types.js';
+import { hashHealthEventSubject, type HealthEvent } from '../../shared/contracts/health-event.js';
+
+const COMPANION_ID = '11111111-1111-4111-8111-111111111111';
 
 describe('Scheduler', () => {
   let eventBus: EventBus;
@@ -677,6 +680,77 @@ describe('Scheduler', () => {
       } finally {
         nowSpy.mockRestore();
       }
+    });
+
+    it('projects a task failure into the content-free health plane', async () => {
+      const nowSpy = vi.spyOn(Date, 'now');
+      const healthEvents: HealthEvent[] = [];
+      eventBus.on('runtime.health.event', (payload) => {
+        healthEvents.push(payload.event);
+      });
+      const observedScheduler = new Scheduler(
+        eventBus,
+        { tickIntervalMs: 100, heartbeatIntervalMs: 500 },
+        {
+          healthEventSource: {
+            owner: { kind: 'companion', companionId: COMPANION_ID as never },
+            process: 'agent',
+          },
+        },
+      );
+      try {
+        nowSpy.mockReturnValue(1_700_000_030_000);
+        observedScheduler.register({
+          id: 'health-failure',
+          name: 'Health Failure',
+          type: 'every',
+          intervalMs: 1,
+          handler: () => {
+            throw new Error('connection refused at 192.0.2.4:5432');
+          },
+          state: 'idle',
+        });
+
+        await observedScheduler.tick();
+
+        expect(healthEvents).toHaveLength(1);
+        const [event] = healthEvents;
+        expect(event.code).toBe('scheduler_task_failed');
+        expect(event.severity).toBe('degraded');
+        expect(event.owner).toEqual({ kind: 'companion', companionId: COMPANION_ID });
+        expect(event.provenance.process).toBe('agent');
+        expect(event.provenance.component).toBe('scheduler');
+        // Grouped by a digest of the task id, so repeats of the SAME task are
+        // countable without the stream learning task names or error text.
+        expect(event.provenance.subjectHash).toBe(hashHealthEventSubject('health-failure'));
+        expect(event.evidence).toEqual({});
+        expect(JSON.stringify(event)).not.toContain('192.0.2.4');
+        expect(JSON.stringify(event)).not.toContain('Health Failure');
+      } finally {
+        nowSpy.mockRestore();
+      }
+    });
+
+    it('stays silent on the health plane when no entrypoint claimed the scheduler', async () => {
+      const healthEvents: unknown[] = [];
+      eventBus.on('runtime.health.event', (payload) => {
+        healthEvents.push(payload.event);
+      });
+      scheduler.register({
+        id: 'unclaimed-failure',
+        name: 'Unclaimed Failure',
+        type: 'every',
+        intervalMs: 1,
+        handler: () => {
+          throw new Error('boom');
+        },
+        state: 'idle',
+      });
+
+      await scheduler.tick();
+
+      expect(scheduler.getTask('unclaimed-failure')?.lastOutcome).toBe('failed');
+      expect(healthEvents).toEqual([]);
     });
 
     it('exposes runtime outcome metadata for eligibility-denied task runs', async () => {

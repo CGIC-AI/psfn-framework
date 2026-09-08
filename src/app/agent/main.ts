@@ -105,6 +105,7 @@ import {
   wireReflectionRuntime,
 } from '../startup/composition/parity.js';
 import { createAgentPersistenceRuntime } from '../../persistence/runtime-factory.js';
+import { subscribeHealthEventStream } from '../../shared/observability/health-event-stream.js';
 import {
   PostgresPoolOwner,
   runWithPostgresPoolOwner,
@@ -356,6 +357,14 @@ async function main(): Promise<void> {
         error: error instanceof Error ? error.message : String(error),
       });
     },
+  });
+  // Drain the content-free health plane into its bounded persisted stream
+  // before anything else in this process can emit. `EventBus.emit` returns
+  // silently with no subscriber, so a later subscription would lose every
+  // startup-time observation instead of failing loudly.
+  const detachHealthEventStream = subscribeHealthEventStream({
+    eventBus,
+    store: persistenceRuntime.healthEventStore,
   });
   const detachFleetMaintenanceForegroundPreemption =
     persistenceRuntime.fleetMaintenanceCoordinator
@@ -1711,6 +1720,8 @@ async function main(): Promise<void> {
       await persistenceRuntime.companionAvailabilityStore.close();
       await persistenceRuntime.letterStore.close();
       await persistenceRuntime.doingMirrorStore.close();
+      detachHealthEventStream();
+      await persistenceRuntime.healthEventStore.close();
       await postgresPoolOwner.close();
     },
     scheduler,

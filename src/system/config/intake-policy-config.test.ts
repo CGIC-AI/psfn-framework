@@ -17,7 +17,9 @@ import {
   INTAKE_POLICY_SEED_FILE_NAME,
   INTAKE_SOURCE_LIST_NAMES,
   INTAKE_UNSCREENED_DENY_REQUIRED_SINKS,
+  INTAKE_UNSCREENED_PINNED_POSTURES,
   applyIntakeSourceListMutation,
+  assertIntakeUnscreenedPostureAcknowledged,
   createSkillWriteSinkRule,
   injectionScoreThresholdForTier,
   normalizeIntakePersonPattern,
@@ -982,5 +984,147 @@ describe('intake policy owner file', () => {
     expect(() => normalizeIntakeSitePattern('bad_host!.org')).toThrow();
     expect(normalizeIntakePersonPattern('contact:alice')).toBe('contact:alice');
     expect(() => normalizeIntakePersonPattern('a b')).toThrow();
+  });
+});
+
+// ── 5a921: trust_mutation's deny is tunable, but no longer driftable ──
+//
+// The qg13 test above pins the OTHER half of this design and must stay green:
+// `validateIntakePolicy` accepts `trust_mutation.unscreened: 'allow'`, because
+// that sink is security-sensitive but not prompt-bearing and an operator may
+// legitimately loosen it. What the bead found is that nothing distinguished
+// such a decision from a bad merge. The defense therefore lives at the LOAD and
+// SAVE seams — where the bead's defect actually was ("loads cleanly") — and not
+// in the shape validator.
+describe('intake policy unscreened posture drift defense (5a921)', () => {
+  const tempDirs: string[] = [];
+
+  afterEach(() => {
+    for (const dir of tempDirs.splice(0)) {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  function seed(): IntakePolicyConfig {
+    return validateIntakePolicy(
+      JSON.parse(readFileSync(join(process.cwd(), 'config', INTAKE_POLICY_SEED_FILE_NAME), 'utf-8')),
+      INTAKE_POLICY_SEED_FILE_NAME,
+    );
+  }
+
+  function withTrustMutation(
+    unscreened: 'allow' | 'deny',
+    acknowledged: readonly string[] = [],
+  ): IntakePolicyConfig {
+    const policy = structuredClone(seed());
+    policy.sinkGates.sinks.trust_mutation.unscreened = unscreened;
+    policy.sinkGates.acknowledgedUnscreenedWeakening = [...acknowledged] as
+      IntakePolicyConfig['sinkGates']['acknowledgedUnscreenedWeakening'];
+    return policy;
+  }
+
+  function ownerDir(policy: IntakePolicyConfig): string {
+    const dir = mkdtempSync(join(tmpdir(), 'psfn-intake-drift-'));
+    tempDirs.push(dir);
+    writeFileSync(join(dir, INTAKE_POLICY_FILE_NAME), JSON.stringify(policy, null, 2));
+    return dir;
+  }
+
+  it('pins exactly the shipped posture, so pin and seed cannot drift apart', () => {
+    const shipped = seed();
+    for (const [sink, pinned] of Object.entries(INTAKE_UNSCREENED_PINNED_POSTURES)) {
+      expect(shipped.sinkGates.sinks[sink as keyof typeof shipped.sinkGates.sinks].unscreened)
+        .toBe(pinned);
+    }
+  });
+
+  it('leaves no seed-denied sink undefended (the audit 5a921 asked for)', () => {
+    const shipped = seed();
+    for (const sink of INTAKE_SINKS) {
+      if (shipped.sinkGates.sinks[sink].unscreened !== 'deny') continue;
+      const hardRequired = (INTAKE_UNSCREENED_DENY_REQUIRED_SINKS as readonly string[])
+        .includes(sink);
+      const pinned = INTAKE_UNSCREENED_PINNED_POSTURES[sink] !== undefined;
+      expect(
+        hardRequired || pinned,
+        `${sink} ships 'deny' but is neither hard-required nor pinned`,
+      ).toBe(true);
+    }
+  });
+
+  it('still validates an unacknowledged loosening, exactly as qg13 requires', () => {
+    // The shape validator's answer is unchanged. Only the load/save seam moved.
+    expect(validateIntakePolicy(withTrustMutation('allow'), INTAKE_POLICY_FILE_NAME)
+      .sinkGates.sinks.trust_mutation.unscreened).toBe('allow');
+  });
+
+  it('refuses an unacknowledged loosening at the seam, naming the field to add', () => {
+    expect(() => assertIntakeUnscreenedPostureAcknowledged(
+      withTrustMutation('allow'),
+      INTAKE_POLICY_FILE_NAME,
+    )).toThrow(/acknowledgedUnscreenedWeakening/u);
+  });
+
+  it('admits the same loosening once the operator has signed it', () => {
+    expect(() => assertIntakeUnscreenedPostureAcknowledged(
+      withTrustMutation('allow', ['trust_mutation']),
+      INTAKE_POLICY_FILE_NAME,
+    )).not.toThrow();
+  });
+
+  it('admits the shipped posture with no acknowledgement at all', () => {
+    expect(() => assertIntakeUnscreenedPostureAcknowledged(seed(), INTAKE_POLICY_FILE_NAME))
+      .not.toThrow();
+  });
+
+  it('refuses a STALE acknowledgement, so consent cannot be armed in advance', () => {
+    // Without this, an operator could sign the file while it still says 'deny'
+    // and the flip this defends against would land silently later.
+    expect(() => assertIntakeUnscreenedPostureAcknowledged(
+      withTrustMutation('deny', ['trust_mutation']),
+      INTAKE_POLICY_FILE_NAME,
+    )).toThrow(/stale acknowledgement/u);
+  });
+
+  it('refuses acknowledgements that could never mean anything', () => {
+    const base = seed();
+    const withList = (list: unknown): unknown => {
+      const policy = structuredClone(base) as Record<string, unknown>;
+      (policy.sinkGates as Record<string, unknown>).acknowledgedUnscreenedWeakening = list;
+      return policy;
+    };
+    expect(() => validateIntakePolicy(withList('trust_mutation'), INTAKE_POLICY_FILE_NAME))
+      .toThrow(/must be an array of sink names/u);
+    expect(() => validateIntakePolicy(withList(['not_a_sink']), INTAKE_POLICY_FILE_NAME))
+      .toThrow(/unsupported sink/u);
+    expect(() => validateIntakePolicy(
+      withList(['trust_mutation', 'trust_mutation']),
+      INTAKE_POLICY_FILE_NAME,
+    )).toThrow(/more than once/u);
+    // A hard-required sink can never be weakened, so signing for one would read
+    // as consent to something the validator refuses outright.
+    expect(() => validateIntakePolicy(withList(['skill_write']), INTAKE_POLICY_FILE_NAME))
+      .toThrow(/hard-required/u);
+    // Absent is the normal case and means "nothing weakened".
+    expect(validateIntakePolicy(withList(undefined), INTAKE_POLICY_FILE_NAME)
+      .sinkGates.acknowledgedUnscreenedWeakening).toEqual([]);
+  });
+
+  it('refuses to LOAD a silently drifted owner file, which was the defect', () => {
+    expect(() => loadIntakePolicyConfig(ownerDir(withTrustMutation('allow'))))
+      .toThrow(/acknowledgedUnscreenedWeakening/u);
+    expect(loadIntakePolicyConfig(ownerDir(withTrustMutation('allow', ['trust_mutation'])))
+      .sinkGates.sinks.trust_mutation.unscreened).toBe('allow');
+    expect(loadIntakePolicyConfig(ownerDir(seed()))
+      .sinkGates.sinks.trust_mutation.unscreened).toBe('deny');
+  });
+
+  it('refuses to SAVE a file it would then refuse to load', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'psfn-intake-drift-save-'));
+    tempDirs.push(dir);
+    expect(() => saveIntakePolicyConfig(dir, withTrustMutation('allow')))
+      .toThrow(/acknowledgedUnscreenedWeakening/u);
+    expect(saveIntakePolicyConfig(dir, withTrustMutation('allow', ['trust_mutation']))
+      .sinkGates.sinks.trust_mutation.unscreened).toBe('allow');
   });
 });

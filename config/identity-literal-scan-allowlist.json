@@ -1949,6 +1949,18 @@
       "contains": "psfn",
       "reason": "The escalation contract's module comment names the framework; not a companion identity.",
       "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/boundary/gateway/incident-alert-render.ts",
+      "contains": "PSFN",
+      "reason": "Incident alert rendering names the framework in operator-facing alert text and does not define a companion identity.",
+      "pattern": "identity-proper-name"
+    },
+    {
+      "path": "src/shared/escalation/contracts.ts",
+      "contains": "PSFN",
+      "reason": "The escalation contract's module comment names the framework and does not define a companion identity.",
+      "pattern": "identity-proper-name"
     }
   ]
 }

@@ -221,6 +221,25 @@ describe('skills eligibility filter', () => {
     }
   });
 
+  it('still resolves a declared binary that carries a path separator', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'skills-binary-probe-nested-'));
+    try {
+      const nested = join(root, 'tools');
+      mkdirSync(nested, { recursive: true });
+      const executable = join(nested, 'nested-tool');
+      writeFileSync(executable, '#!/bin/sh\nexit 0\n');
+      chmodSync(executable, 0o755);
+
+      const probe = createBinaryAvailabilityProbe({ PATH: root });
+      // A flat directory listing cannot answer this name, so the probe must
+      // fall through to the direct access check rather than reporting missing.
+      expect(await probe.isAvailable('tools/nested-tool')).toBe(true);
+      expect(await probe.isAvailable('tools/absent-tool')).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('keeps the availability predicate when a PATH directory cannot be listed', async () => {
     const root = mkdtempSync(join(tmpdir(), 'skills-binary-probe-fallback-'));
     try {

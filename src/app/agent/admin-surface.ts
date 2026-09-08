@@ -24,6 +24,10 @@ import type { SatelliteRegistryConfig } from '../../shared/contracts/satellite-r
 import type { ChannelGroupMemoryConfig } from '../../system/config/group-memory-config.js';
 import type { ApprovalQueuePort } from '../../system/capabilities/approval-queue-port.js';
 import type {
+  CustodyChainDeliveryReadPort,
+  CustodyChainSnapshotReadPort,
+} from '../../core/cogsec/disclosure/custody-chain-query.js';
+import type {
   EpisodicStorePort,
 } from '../../faculties/memory/episodic/store-port.js';
 import { createGatewayConfirmationQueueAdminApi } from '../startup/support/confirmation-queue-admin-api.js';
@@ -37,7 +41,6 @@ import type { IcpInitiationCandidateStorePort } from '../../core/icp/autonomy-st
 import type { IcpAutonomyRuntimeEnablement } from '../../core/icp/runtime-enablement.js';
 import type { IcpFeltImpulseFunnelStorePort } from '../../core/icp/felt-impulse-funnel.js';
 import { PostgresIcpAdminProjectionStore } from '../../persistence/postgres/icp-admin-projection-store.js';
-import { PostgresCustodyChainReader } from '../../persistence/postgres/custody-chain-reader.js';
 import { PostgresSpeakingArbiterAdminStore } from '../../persistence/postgres/speaking-arbiter-admin-store.js';
 import type { BackgroundWorkStorePort } from '../../core/agent/background-work/store-port.js';
 import type { PartnerAffectShadowStorePort } from '../../core/emotion/partner-affect/shadow-store-port.js';
@@ -92,6 +95,13 @@ export interface StartOptionalAdminTransportServerOptions {
   postTurnActions: PostTurnActionRuntime;
   outreachOutbox?: OutreachOutboxStore | null;
   episodicStore?: EpisodicStorePort | null;
+  /**
+   * Read side of the custody chain (ccgdz.7), opened by the persistence
+   * runtime so it pins the same tenant schema and role the custody writers
+   * pin. Never opened here: a second resolution of the tenant boundary is a
+   * second chance to resolve it differently.
+   */
+  custodyChainReader?: (CustodyChainSnapshotReadPort & CustodyChainDeliveryReadPort) | null;
   /**
    * Bounded READ over this process's persisted health stream, for the Garden
    * incident timeline. Deliberately the read function rather than the store:
@@ -222,14 +232,6 @@ export async function startOptionalAdminTransportServer(
     && postgresDatabaseUrl
     ? await PostgresSpeakingArbiterAdminStore.connect(postgresDatabaseUrl)
     : null;
-  // ccgdz.7: the custody query seam reads the three tables the turn already
-  // wrote. It gets its OWN read-only connection rather than borrowing the
-  // runtime's writer stores, so an operator's audit read can never prune, can
-  // never require the writer's retention setting, and can never be the thing
-  // that fails a turn.
-  const custodyChainReader = postgresDatabaseUrl
-    ? await PostgresCustodyChainReader.connect(postgresDatabaseUrl)
-    : null;
   const intakeReleaseConversationTurn = createIntakeReleaseConversationTurn({
     agent: options.coreRuntime.agentLoop,
     delivery: {
@@ -253,7 +255,7 @@ export async function startOptionalAdminTransportServer(
     biographicalReviewService,
     subsystemOutputRefStore: options.subsystemOutputRefStore,
     episodicStore: options.episodicStore ?? null,
-    custodyChainReader,
+    custodyChainReader: options.custodyChainReader ?? null,
     healthEventStreamRead: options.healthEventStreamRead ?? null,
     humanEscalationLedger: options.humanEscalationLedger ?? null,
     sessionStore: options.coreRuntime.sessionStore,

@@ -180,8 +180,9 @@ export class GardenCustodyQueryService implements AdminCustodyQueryService {
    * specific delivery attempt.
    *
    * A `deliveryRef` is resolved through the delivery record so its owner is
-   * checked: a record belonging to another companion reads as absent, exactly
-   * as if it did not exist, rather than leaking its turn id through an error.
+   * checked BEFORE the generation it names is read. The refusal is deliberately
+   * the same 400 an unresolvable ref gets and carries no field of the foreign
+   * record, so the answer distinguishes ownership, not existence.
    */
   private async resolveGenerationContextRef(params: URLSearchParams): Promise<string> {
     const turnId = singleParam(params, 'turnId');

@@ -1771,6 +1771,7 @@ async function main(): Promise<void> {
     postTurnActions,
     outreachOutbox,
     episodicStore,
+    custodyChainReader: persistenceRuntime.custodyChainReader,
     // Read-only seam onto this process's persisted health stream: the Garden
     // incident timeline renders the same incidents the alert path paged on,
     // and cannot write to the plane it renders.
@@ -1874,6 +1875,7 @@ async function main(): Promise<void> {
       await persistenceRuntime.cogSecReceiptStore.close();
       await persistenceRuntime.custodySnapshotStore.close();
       await persistenceRuntime.egressDeliveryRecordStore.close();
+      await persistenceRuntime.custodyChainReader.close();
       await persistenceRuntime.companionAvailabilityStore.close();
       await persistenceRuntime.letterStore.close();
       await persistenceRuntime.doingMirrorStore.close();

@@ -378,6 +378,21 @@ describe('PostgresCustodyChainReader', () => {
       // The delivery records still stand — one broken row does not erase the
       // record of what left.
       expect(tampered.deliveryCount).toBe(2);
+
+      // ── The reader must be pinned to the writers' tenant schema ──
+      //
+      // A reader opened WITHOUT the companion schema looks at `public`, where
+      // the custody tables do not exist. It must fail loudly rather than
+      // create them or answer `absent` — an audit surface that silently reports
+      // "no custody for this turn" because it is pointed at the wrong schema is
+      // worse than one that is down.
+      const unpinned = await PostgresCustodyChainReader.connect(databaseUrl);
+      try {
+        await expect(unpinned.resolveSnapshot(custodySnapshotRefForTurn(TURN_ID)))
+          .rejects.toThrow(/custody_snapshots/u);
+      } finally {
+        await unpinned.close();
+      }
     } finally {
       await reader.close();
       await deliveryStore.close();

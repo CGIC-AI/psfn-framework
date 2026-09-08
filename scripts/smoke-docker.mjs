@@ -146,16 +146,20 @@ async function waitForHealth(timeoutMs) {
   throw new Error(`gateway /health plumbing never became ready (${lastErr})`);
 }
 
-async function queryPublicTableCount() {
-  // Best-effort migration signal; conversation persistence is asserted against
-  // the agent's canonical L0 session journal after the successful turn.
+// Migration signal. The fleet topology puts every runtime table in this
+// companion's own schema plus the shared one — `public` is empty by design, so
+// counting it proved nothing. Conversation persistence is still asserted
+// against the agent's canonical L0 session journal after the successful turn.
+async function queryRuntimeTableCount() {
   const res = compose(
     ['exec', '-T', 'postgres', 'psql', '-U', 'psfn', '-d', 'psfn', '-tAc',
-      "SELECT count(*) FROM information_schema.tables WHERE table_schema='public';"],
+      "SELECT count(*) FROM information_schema.tables "
+      + "WHERE table_schema IN ('companion_smoke', 'shared');"],
     { capture: true },
   );
   if (res.status !== 0) return null;
-  return (res.stdout || '').trim();
+  const count = Number((res.stdout || '').trim());
+  return Number.isInteger(count) ? count : null;
 }
 
 function verifyPersistedTurn(userContent, assistantContent) {
@@ -222,8 +226,18 @@ async function main() {
     // Agent RPC connectivity: the agent container is healthy only once its
     // gateway socket peer is connectable, and the health payload reflects the
     // agent-backed scheduler. Report the table count as a migration signal.
-    const tableCount = await queryPublicTableCount();
-    if (tableCount) pass(`Postgres reachable; public schema has ${tableCount} tables (runtime migrations ran)`);
+    const tableCount = await queryRuntimeTableCount();
+    if (tableCount === null) {
+      fail('could not read the runtime schema table count from Postgres');
+      return 1;
+    }
+    if (tableCount === 0) {
+      fail('Postgres is reachable but the companion_smoke/shared schemas are empty: '
+        + 'runtime migrations did not run');
+      return 1;
+    }
+    pass(`Postgres reachable; companion_smoke + shared schemas hold ${tableCount} tables `
+      + '(runtime migrations ran)');
 
     log('Verifying the Satellite Hub and companion-ui surfaces ...');
     let hubContractBoundary = null;

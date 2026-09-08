@@ -17,6 +17,9 @@ import { wirePostTurnActionRuntime } from '../startup/composition/post-turn-acti
 import type { PostTurnActionRuntime } from '../../core/agent/post-turn-action-runtime.js';
 import type { GatewayClient } from '../../boundary/gateway/client.js';
 import { SalienceDecay } from '../../faculties/memory/decay.js';
+import type { BiographySynthesisService } from '../../faculties/memory/biographical/synthesis-service.js';
+import type { BiographyCompanionReviewService } from '../../faculties/memory/biographical/companion-review-service.js';
+import { createDefaultBiographicalDepthPolicy } from '../../system/config/biographical-depth-policy.js';
 import type { MemoryStorePort } from '../../faculties/memory/memory-store-port.js';
 import { Scheduler } from '../../core/scheduler/scheduler.js';
 import { resolveHealthEventOwner } from '../../shared/contracts/health-event.js';
@@ -167,6 +170,10 @@ export interface BuildAgentSchedulerRuntimeOptions {
      */
     automataRuns: () => readonly StuckJobRunView[];
   };
+  /** Cross-silo biography candidate synthesis lane (o61vb.12). */
+  biographySynthesis?: Pick<BiographySynthesisService, 'run'>;
+  /** Companion protected self-review of biography candidates (o61vb.13). */
+  biographyCompanionReview?: Pick<BiographyCompanionReviewService, 'run'>;
   /** Doing-mirror disposition lifecycle whose Letter deliveries this lane redrives. */
   doingMirrorService: Pick<DoingMirrorService, 'drainPendingLetters'>;
 }
@@ -238,6 +245,80 @@ export function registerSalienceDecayOperation(input: {
     name: 'Memory Salience Decay',
     description: 'Applies the configured memory weight decay pass to durable memories.',
     handler: () => salienceDecay.run(),
+    eligibility: { requiredTokens: ['memory.write'] },
+  });
+}
+
+export const BIOGRAPHY_COMPANION_REVIEW_TASK_ID = 'biography-companion-review';
+
+/**
+ * Companion protected self-review of biography candidates (o61vb.13).
+ *
+ * This is the companion's own pass over proposals about itself, so it runs as
+ * its own protected task rather than on the shared maintenance lane: the
+ * `do_not_disturb` availability keeps it out of live conversation, and the
+ * cadence is the owner-file biography refresh interval rather than a new
+ * tuning value. It stages review decisions only; activation stays with owner
+ * policy and human review.
+ */
+export function registerBiographyCompanionReviewTask(input: {
+  scheduler: Scheduler;
+  review: Pick<BiographyCompanionReviewService, 'run'>;
+  intervalMs: number;
+  eventBus?: EventBus;
+}): void {
+  input.scheduler.register({
+    id: BIOGRAPHY_COMPANION_REVIEW_TASK_ID,
+    name: 'Companion Biography Review',
+    description:
+      'The companion reviews staged biography candidates about itself and its relationships, '
+      + 'with agency to approve, refuse, revise, reassign, split, merge, or flag.',
+    scheduleSource: 'settings.json > biographicalDepthPolicy.full.refreshIntervalMs',
+    type: 'every',
+    intervalMs: input.intervalMs,
+    availability: 'do_not_disturb',
+    state: 'idle',
+    handler: async () => {
+      const telemetry = await input.review.run();
+      // Content-free: decision counts only. No candidate id, claim value, or
+      // review reasoning ever reaches the event bus.
+      void input.eventBus?.emit('memory.biography.companion_review', {
+        ...telemetry,
+        timestamp: Date.now(),
+      });
+    },
+  }, { skipFirstRun: true });
+}
+
+export const BIOGRAPHY_SYNTHESIS_OPERATION_ID = 'biography-candidate-synthesis';
+
+/**
+ * Cross-silo portable biography candidate synthesis (o61vb.12). Runs on the
+ * serialized background-maintenance lane: it only ever stages review
+ * candidates, so a slow or skipped pass delays review rather than changing what
+ * the companion may say. Serialized maintenance ownership is hardened further
+ * by psfn-framework-o61vb.16.
+ */
+export function registerBiographySynthesisOperation(input: {
+  backgroundMaintenance: BackgroundMaintenanceRegistrar;
+  synthesis: Pick<BiographySynthesisService, 'run'>;
+  eventBus?: EventBus;
+}): void {
+  input.backgroundMaintenance.registerOperation({
+    id: BIOGRAPHY_SYNTHESIS_OPERATION_ID,
+    name: 'Biography Candidate Synthesis',
+    description:
+      'Mines subject-authorized memory silos for typed biography candidates and stages them '
+      + 'for companion and human review. Never activates a claim.',
+    handler: async () => {
+      const telemetry = await input.synthesis.run();
+      // Content-free: run counts only. No subject id, claim value, or source
+      // body ever reaches the event bus from this lane.
+      void input.eventBus?.emit('memory.biography.synthesis', {
+        ...telemetry,
+        timestamp: Date.now(),
+      });
+    },
     eligibility: { requiredTokens: ['memory.write'] },
   });
 }
@@ -538,6 +619,25 @@ export function buildAgentSchedulerRuntime(
     memoryStore: options.memoryStore,
     config: options.config,
   });
+
+  if (options.biographyCompanionReview) {
+    registerBiographyCompanionReviewTask({
+      scheduler,
+      review: options.biographyCompanionReview,
+      intervalMs: (
+        options.config.biographicalDepthPolicy ?? createDefaultBiographicalDepthPolicy()
+      ).full.refreshIntervalMs,
+      eventBus: options.eventBus,
+    });
+  }
+
+  if (options.biographySynthesis) {
+    registerBiographySynthesisOperation({
+      backgroundMaintenance,
+      synthesis: options.biographySynthesis,
+      eventBus: options.eventBus,
+    });
+  }
 
   registerDoingMirrorLetterDrainOperation({
     backgroundMaintenance,

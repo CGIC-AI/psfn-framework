@@ -6,7 +6,9 @@ import { admitBiographicalCandidate } from './conflict-policy.js';
 import { resolveLiveBiographicalMemorySource } from './memory-source.js';
 import { parsePortableStableCandidate } from './stable-candidate.js';
 import type { BiographicalProfileStorePort } from './store-port.js';
+import type { BiographicalClaimWriteInput } from './store-port.js';
 import type {
+  BiographicalClaimKind,
   BiographicalClaimSource,
   BiographicalCollectionDepth,
   BiographicalSubjectRef,
@@ -95,31 +97,71 @@ function candidateHasExactShape(candidate: Record<string, unknown>): boolean {
   );
 }
 
+export interface LiveBiographicalCandidateResolution {
+  readonly emittedCount: number;
+  /**
+   * Structured candidates that survived shape, source-binding and drift
+   * revalidation. Each write input is runtime-owned end to end: subject, dyad,
+   * source snapshots, lifecycle status and depth were never model-selectable.
+   */
+  readonly resolved: readonly {
+    readonly candidateIndex: number;
+    readonly write: BiographicalClaimWriteInput;
+  }[];
+  readonly withheld: readonly LiveSourceRebuildWithheld[];
+}
+
 /**
- * Admit portable claims only from structured candidates bound to exact live
- * canonical sources. Subject, dyad, source snapshots, lifecycle status and
- * depth are runtime-owned; model output cannot select any of them.
+ * Runtime-owned related subject. The model never names the other side of a
+ * dyad: a relational nickname, a relationship, and shared language about a
+ * contact are all bound to the companion the scan is running under, and every
+ * other kind carries none.
  */
-export async function rebuildBiographicalClaimsFromLiveSources(input: {
+function runtimeRelatedSubject(
+  kind: unknown,
+  value: unknown,
+  subject: BiographicalSubjectRef,
+  companionSubject: Extract<BiographicalSubjectRef, { kind: 'companion' }>,
+): BiographicalSubjectRef | undefined {
+  if (subject.kind !== 'contact') return undefined;
+  if (kind === 'relationship' || kind === 'shared-language') return companionSubject;
+  if (
+    kind === 'nickname'
+    && isRecord(value)
+    && value.scope === 'relational'
+  ) {
+    return companionSubject;
+  }
+  return undefined;
+}
+
+/**
+ * Parse structured candidates out of one synthesis response and bind each to
+ * exact, currently-live canonical sources. Nothing is persisted here: callers
+ * decide whether a resolved candidate becomes an active claim (the Recent
+ * Contact Shape refresh) or a staged review candidate (the biography
+ * automaton).
+ */
+export async function resolveLiveBiographicalCandidates(input: {
   readonly responseContent: string;
   readonly memoryStore: MemoryStorePort;
-  readonly profileStore: BiographicalProfileStorePort;
   readonly subject: BiographicalSubjectRef;
   readonly companionSubject: Extract<BiographicalSubjectRef, { kind: 'companion' }>;
   readonly availableEvidence: readonly LiveBiographicalMemoryEvidence[];
   readonly depth: BiographicalCollectionDepth;
   readonly candidateLimit: number;
+  readonly admittedKinds?: readonly BiographicalClaimKind[];
   readonly now?: Date;
-}): Promise<LiveSourceRebuildResult> {
+}): Promise<LiveBiographicalCandidateResolution> {
   const records = candidateRecords(input.responseContent);
   if (records === undefined) {
     return {
       emittedCount: 1,
-      admittedClaimIds: [],
+      resolved: [],
       withheld: [{ candidateIndex: 0, reason: 'malformed_candidate' }],
     };
   }
-  const admittedClaimIds: string[] = [];
+  const resolved: LiveBiographicalCandidateResolution['resolved'][number][] = [];
   const withheld: LiveSourceRebuildWithheld[] = [];
   const availableById = new Map(
     input.availableEvidence.map(evidence => [evidence.memory.id, evidence]),
@@ -164,11 +206,15 @@ export async function rebuildBiographicalClaimsFromLiveSources(input: {
 
     let parsed: ReturnType<typeof parsePortableStableCandidate>;
     try {
+      const relatedSubject = runtimeRelatedSubject(
+        rawCandidate.kind,
+        rawCandidate.value,
+        input.subject,
+        input.companionSubject,
+      );
       parsed = parsePortableStableCandidate({
         subject: input.subject,
-        ...(rawCandidate.kind === 'shared-language'
-          ? { relatedSubject: input.companionSubject }
-          : {}),
+        ...(relatedSubject !== undefined ? { relatedSubject } : {}),
         kind: rawCandidate.kind,
         value: rawCandidate.value,
         basis: rawCandidate.basis,
@@ -180,21 +226,61 @@ export async function rebuildBiographicalClaimsFromLiveSources(input: {
         ...(rawCandidate.validFrom !== undefined ? { validFrom: rawCandidate.validFrom } : {}),
         ...(rawCandidate.validTo !== undefined ? { validTo: rawCandidate.validTo } : {}),
         depthDecision: input.depth,
-      }, input.now ? { now: input.now } : {});
+      }, {
+        ...(input.now ? { now: input.now } : {}),
+        ...(input.admittedKinds ? { admittedKinds: input.admittedKinds } : {}),
+      });
     } catch (error) {
       if (!(error instanceof BiographicalClaimValidationError)) throw error;
       withheld.push({ candidateIndex, reason: 'malformed_candidate' });
       continue;
     }
+    resolved.push({ candidateIndex, write: parsed });
+  }
+  return {
+    emittedCount: records.length,
+    resolved,
+    withheld,
+  };
+}
+
+/**
+ * Admit portable claims from one synthesis response straight into the active
+ * profile under the deterministic conflict policy. This is the Recent Contact
+ * Shape refresh path; staged review lives in the biography synthesis service.
+ */
+export async function rebuildBiographicalClaimsFromLiveSources(input: {
+  readonly responseContent: string;
+  readonly memoryStore: MemoryStorePort;
+  readonly profileStore: BiographicalProfileStorePort;
+  readonly subject: BiographicalSubjectRef;
+  readonly companionSubject: Extract<BiographicalSubjectRef, { kind: 'companion' }>;
+  readonly availableEvidence: readonly LiveBiographicalMemoryEvidence[];
+  readonly depth: BiographicalCollectionDepth;
+  readonly candidateLimit: number;
+  readonly now?: Date;
+}): Promise<LiveSourceRebuildResult> {
+  const resolution = await resolveLiveBiographicalCandidates({
+    responseContent: input.responseContent,
+    memoryStore: input.memoryStore,
+    subject: input.subject,
+    companionSubject: input.companionSubject,
+    availableEvidence: input.availableEvidence,
+    depth: input.depth,
+    candidateLimit: input.candidateLimit,
+    ...(input.now !== undefined ? { now: input.now } : {}),
+  });
+  const admittedClaimIds: string[] = [];
+  for (const candidate of resolution.resolved) {
     const admitted = await admitBiographicalCandidate({
       store: input.profileStore,
-      candidate: parsed,
+      candidate: candidate.write,
     });
     admittedClaimIds.push(admitted.claim.id);
   }
   return {
-    emittedCount: records.length,
+    emittedCount: resolution.emittedCount,
     admittedClaimIds,
-    withheld,
+    withheld: resolution.withheld,
   };
 }

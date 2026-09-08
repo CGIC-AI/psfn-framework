@@ -22,6 +22,7 @@ export const COMPACTION_SUMMARY_PROMPT_KEY = 'session.compaction.summary' as con
 export const RECENT_SESSION_SUMMARY_PROMPT_KEY = 'session.recent.summary' as const;
 export const SESSION_SEARCH_SUMMARY_PROMPT_KEY = 'session.search.summary' as const;
 export const RECENT_CONTACT_SHAPE_SYNTHESIS_PROMPT_KEY = 'memory.recent_contact_shape.synthesis' as const;
+export const BIOGRAPHY_CANDIDATE_SYNTHESIS_PROMPT_KEY = 'memory.biography.candidate_synthesis' as const;
 export const SLEEPTIME_ORIENTATION_PROMPT_KEY = 'memory.sleeptime.orientation' as const;
 export const WIKI_PASS_PROMPT_KEY = 'memory.sleeptime.wiki' as const;
 
@@ -32,6 +33,7 @@ export type PromptRegistryKey =
   | typeof RECENT_SESSION_SUMMARY_PROMPT_KEY
   | typeof SESSION_SEARCH_SUMMARY_PROMPT_KEY
   | typeof RECENT_CONTACT_SHAPE_SYNTHESIS_PROMPT_KEY
+  | typeof BIOGRAPHY_CANDIDATE_SYNTHESIS_PROMPT_KEY
   | typeof SLEEPTIME_ORIENTATION_PROMPT_KEY
   | typeof WIKI_PASS_PROMPT_KEY;
 
@@ -208,6 +210,33 @@ Return XML only:
 <biographical_candidates>[{"kind":"stable-preference","value":{"kind":"stable-preference","schemaVersion":1,"domain":"communication","target":"concise explanations","polarity":"prefers"},"basis":"explicit","confidence":0.95,"sourceMemoryIds":["exact-memory-id"]}]</biographical_candidates>`,
   },
   {
+    key: BIOGRAPHY_CANDIDATE_SYNTHESIS_PROMPT_KEY,
+    description:
+      'Cross-silo portable biography candidate synthesis (o61vb.12). Proposes staged, '
+      + 'review-bound typed candidates from already policy-admitted canonical sources. Emits no '
+      + 'prose profile and never chooses subject, dyad, lifecycle, or sensitivity authority.',
+    consumers: ['src/faculties/memory/biographical/synthesis-service.ts'],
+    text: `Propose durable biography candidates for one canonical subject from the live canonical source memories below. Every source shown has already passed subject authorization and owner privacy policy; there is nothing else to read and nothing else to consider.
+
+Subject under synthesis:
+{subject_context}
+
+Live canonical source memories (exact ids; the only admissible evidence):
+{memory_facts}
+
+Emit at most {biographical_candidate_limit} candidates. Each candidate must be a JSON object with exactly kind, value, basis, confidence, and sourceMemoryIds, plus only the optional proposedSensitivity, validFrom, and validTo fields. Allowed kinds are {admitted_kinds}. Values must use their registered versioned schema. sourceMemoryIds must cite one or more ids from Live canonical source memories.
+
+Hard boundaries:
+- Do not emit subject, relatedSubject, status, stage, depth, digests, grants, review notes, rationale, or any free-form profile prose. The trusted runtime owns every one of those fields.
+- Propose nothing about a person who is not the subject of this scan, and nothing about an unnamed or unbound person mentioned inside a source.
+- Do not derive intimate, confidential, or emotional material, and do not restate a source body as a claim value.
+- Distinct, conflicting readings of the same evidence are separate candidates. Do not average them into one.
+- If the sources do not support a durable typed claim, return an empty array.
+
+Return XML only:
+<biographical_candidates>[{"kind":"stable-preference","value":{"kind":"stable-preference","schemaVersion":1,"domain":"communication","target":"concise explanations","polarity":"prefers"},"basis":"explicit","confidence":0.95,"sourceMemoryIds":["exact-memory-id"]}]</biographical_candidates>`,
+  },
+  {
     key: SLEEPTIME_ORIENTATION_PROMPT_KEY,
     description:
       'Sleeptime end-of-day review prompt: her own pass over the day\'s episodes and transcript. Must produce JSON orient and memory_writes without assigning companion identity or mood.',
@@ -297,6 +326,13 @@ const REQUIRED_SUBSTRINGS: Partial<Record<PromptRegistryKey, string[]>> = {
     '[observer: ... (author_id=...)]',
     '[channel_scope: group]',
     '[resolved_addressee: ...]',
+  ],
+  [BIOGRAPHY_CANDIDATE_SYNTHESIS_PROMPT_KEY]: [
+    '{subject_context}',
+    '{memory_facts}',
+    '{biographical_candidate_limit}',
+    '{admitted_kinds}',
+    '<biographical_candidates>',
   ],
   [RECENT_CONTACT_SHAPE_SYNTHESIS_PROMPT_KEY]: [
     '{contact_id}',

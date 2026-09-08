@@ -68,6 +68,7 @@
         "id": "privacy_or_consent",
         "label": "Privacy or consent requires removal",
         "eligible": true,
+        "consentWithdrawal": true,
         "explanationPatterns": ["privacy", "consent", "withdrawn", "personal data"]
       },
       {

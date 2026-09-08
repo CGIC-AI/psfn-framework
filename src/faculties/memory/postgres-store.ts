@@ -370,7 +370,7 @@ class PostgresMemoryStore implements PostgresMemoryStorePort {
         const policy = typeof options.memoryDeletionPolicy === 'function'
           ? options.memoryDeletionPolicy()
           : options.memoryDeletionPolicy;
-        resolveMemoryDeletionJustification(policy, categoryId, explanation);
+        return resolveMemoryDeletionJustification(policy, categoryId, explanation);
       },
       onApproved: (version, deletedMemory) => {
         this.memories.set(deletedMemory.id, deletedMemory);

@@ -25,6 +25,7 @@ import {
   projectEgressToSources,
   projectSourceToEgresses,
   type CustodyChainDeliveryReadPort,
+  type CustodyChainDerivedArtifactReadPort,
   type CustodyChainEgressToSourcesView,
   type CustodyChainSnapshotReadPort,
   type CustodyChainSourceToEgressesView,
@@ -48,6 +49,7 @@ const DELIVERY_REF_PATTERN = /^turn:[A-Za-z0-9_:.@+-]{1,128}#[a-f0-9]{64}$/u;
 
 const CUSTODY_SOURCE_PAGE_SIZE_DEFAULT = 25;
 const CUSTODY_SOURCE_PAGE_SIZE_MAX = 100;
+const CUSTODY_DERIVED_ARTIFACT_PAGE_SIZE = 50;
 
 /** A refusal the route turns into a 400; never carries the rejected value. */
 export class CustodyQueryInputError extends Error {}
@@ -93,6 +95,12 @@ export interface AdminCustodyQueryServiceOptions {
   readonly snapshots: CustodyChainSnapshotReadPort;
   readonly deliveries: CustodyChainDeliveryReadPort;
   /**
+   * Optional (ccgdz.8). Absent ⇒ the chain view reports `derived_artifacts` as
+   * unknown, so a deployment without the reader never reads as "this turn
+   * produced no memories or episodes".
+   */
+  readonly derivedArtifacts?: CustodyChainDerivedArtifactReadPort | undefined;
+  /**
    * The companion whose stores this service was constructed over. Undefined
    * means the system owner — the same resolution the delivery recorder used
    * when it wrote the rows, so the query's owner predicate and the record's
@@ -114,23 +122,32 @@ export class GardenCustodyQueryService implements AdminCustodyQueryService {
   ): Promise<CustodyChainEgressToSourcesView> {
     this.assertCompanionScope(context);
     const generationContextRef = await this.resolveGenerationContextRef(params);
-    const [snapshot, manifest, deliveries] = await Promise.all([
+    // The key IS `turn:<turnId>`, so the turn id is recovered from the key
+    // rather than from a record that may not exist. A query for a turn with no
+    // custody row still names the turn it found nothing for.
+    const turnId = generationContextRef.slice('turn:'.length);
+    const derived = this.options.derivedArtifacts;
+    const [snapshot, manifest, deliveries, derivedArtifacts] = await Promise.all([
       this.options.snapshots.resolveSnapshot(generationContextRef),
       this.options.snapshots.resolveContextManifest(generationContextRef),
       this.options.deliveries.listDeliveriesForGenerations({
         generationContextRefs: [generationContextRef],
         owner: this.owner,
       }),
+      derived
+        ? derived.listDerivedArtifactsForGeneration({
+          turnId,
+          limit: CUSTODY_DERIVED_ARTIFACT_PAGE_SIZE,
+        })
+        : Promise.resolve(null),
     ]);
     return projectEgressToSources({
       generationContextRef,
-      // The key IS `turn:<turnId>`, so the turn id is recovered from the key
-      // rather than from a record that may not exist. A query for a turn with
-      // no custody row still names the turn it found nothing for.
-      turnId: generationContextRef.slice('turn:'.length),
+      turnId,
       snapshot,
       manifest,
       deliveries,
+      derivedArtifacts,
     });
   }
 

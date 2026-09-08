@@ -185,12 +185,23 @@ export function mergeProvenanceRefs(
   return [...out];
 }
 
+/**
+ * `redactionBehavior` is carried through (psfn-framework-alco2, via
+ * psfn-framework-ccgdz.8). It used to be dropped here while the STORAGE
+ * normalizer in `system/trust/types.ts` preserved it, so a producer that set it
+ * lost it on the way in and `resolveConsentRedactionBehavior` — the only reader
+ * — silently fell back to its default. The two normalizers now agree on the
+ * same four fields.
+ */
 export function normalizeConsentFlags(flags: ConsentFlags | undefined): ConsentFlags | undefined {
   if (!flags) return undefined;
   const normalized: ConsentFlags = {};
   if (flags.allowRecall !== undefined) normalized.allowRecall = flags.allowRecall;
   if (flags.allowAbstraction !== undefined) normalized.allowAbstraction = flags.allowAbstraction;
   if (flags.deleteOnRequest !== undefined) normalized.deleteOnRequest = flags.deleteOnRequest;
+  if (flags.redactionBehavior === 'delete' || flags.redactionBehavior === 'abstract') {
+    normalized.redactionBehavior = flags.redactionBehavior;
+  }
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
@@ -225,6 +236,15 @@ export function mergeConsentFlags(
     merged.deleteOnRequest = false;
   }
 
+  // `delete` is the stricter behavior and wins, matching every other field
+  // here: a merge of two consent records never relaxes either one.
+  const behaviors = [left?.redactionBehavior, right?.redactionBehavior];
+  if (behaviors.includes('delete')) {
+    merged.redactionBehavior = 'delete';
+  } else if (behaviors.includes('abstract')) {
+    merged.redactionBehavior = 'abstract';
+  }
+
   return Object.keys(merged).length > 0 ? merged : undefined;
 }
 
@@ -235,6 +255,7 @@ export function consentFlagsEqual(left: ConsentFlags | undefined, right: Consent
     a?.allowRecall === b?.allowRecall
     && a?.allowAbstraction === b?.allowAbstraction
     && a?.deleteOnRequest === b?.deleteOnRequest
+    && a?.redactionBehavior === b?.redactionBehavior
   );
 }
 

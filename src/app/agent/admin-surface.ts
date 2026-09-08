@@ -25,6 +25,7 @@ import type { ChannelGroupMemoryConfig } from '../../system/config/group-memory-
 import type { ApprovalQueuePort } from '../../system/capabilities/approval-queue-port.js';
 import type {
   CustodyChainDeliveryReadPort,
+  CustodyChainDerivedArtifactReadPort,
   CustodyChainSnapshotReadPort,
 } from '../../core/cogsec/disclosure/custody-chain-query.js';
 import type {
@@ -101,7 +102,11 @@ export interface StartOptionalAdminTransportServerOptions {
    * pin. Never opened here: a second resolution of the tenant boundary is a
    * second chance to resolve it differently.
    */
-  custodyChainReader?: (CustodyChainSnapshotReadPort & CustodyChainDeliveryReadPort) | null;
+  custodyChainReader?: (
+    CustodyChainSnapshotReadPort
+    & CustodyChainDeliveryReadPort
+    & CustodyChainDerivedArtifactReadPort
+  ) | null;
   /**
    * Bounded READ over this process's persisted health stream, for the Garden
    * incident timeline. Deliberately the read function rather than the store:

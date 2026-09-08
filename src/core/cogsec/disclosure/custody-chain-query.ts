@@ -65,7 +65,9 @@ type CustodyChainUnknownDimension =
   /** No readable delivery record stands for the generation. */
   | 'egress_delivery'
   /** At least one admitted source carries no admission identity. */
-  | 'source_admission_identity';
+  | 'source_admission_identity'
+  /** No derived-artifact reader answered for this generation. */
+  | 'derived_artifacts';
 
 /** Admission identity for one source, joined from the context manifest. */
 interface CustodyChainAdmissionView {
@@ -87,6 +89,57 @@ interface CustodyChainSourceView {
   readonly renderedBlockCount: number | 'unknown';
 }
 
+/**
+ * One artifact DERIVED from a generation — an episode synthesized from its
+ * turn, a memory extracted from it (psfn-framework-ccgdz.8).
+ *
+ * The custody snapshot answers "what went in"; without this the chain stops at
+ * the reply and an operator cannot see what the turn left behind. Two markers
+ * matter here and appear nowhere else in the view:
+ *   - `runtimeAuthoredSourceCount` — refs marked `authoredBy: 'runtime'`
+ *     (psfn-framework-f54sx): this artifact is derived from text the RUNTIME
+ *     wrote, not from her speech.
+ *   - `consentDenied` / `consentProducerId` (psfn-framework-alco2): the
+ *     Layer-3 consent gate will refuse to recall this row, and who said so.
+ *
+ * Content-free like everything else: ids, counts, closed labels.
+ */
+export interface CustodyChainDerivedArtifactView {
+  readonly kind: 'episode' | 'memory';
+  readonly id: CustodyIdentity;
+  /** Refs on this artifact that name the queried generation's turn. */
+  readonly turnRefCount: number;
+  /** Of those, how many are marked runtime-authored. */
+  readonly runtimeAuthoredSourceCount: number;
+  /** Refs carrying an admission identity (envelope or receipt). */
+  readonly admittedSourceCount: number;
+  /** True when `consentFlags.allowRecall === false` — the Layer-3 denial. */
+  readonly consentDenied: boolean;
+  readonly consentProducerId?: string;
+  /**
+   * True when the row is no longer the standing artifact — soft-deleted or
+   * superseded for a memory, merged or superseded for an episode — but is
+   * still retained. Retired rows are SHOWN, not hidden: a memory deleted under
+   * a consent withdrawal is exactly the row an audit came to see.
+   */
+  readonly retired: boolean;
+}
+
+/**
+ * Derived-artifact lineage for one generation.
+ *
+ * A separate port from the custody stores because the artifacts live in the
+ * memory and episodic tables, which the custody records deliberately do not
+ * duplicate. Absent implementation ⇒ the view reports `unknown` rather than an
+ * empty list, so "nothing was derived" and "nobody asked" stay distinguishable.
+ */
+export interface CustodyChainDerivedArtifactReadPort {
+  listDerivedArtifactsForGeneration(input: {
+    readonly turnId: string;
+    readonly limit: number;
+  }): Promise<readonly CustodyChainDerivedArtifactView[]>;
+}
+
 /** Answer to "which admitted message/context caused this egress?". */
 export interface CustodyChainEgressToSourcesView {
   readonly direction: 'egress_to_sources';
@@ -100,6 +153,8 @@ export interface CustodyChainEgressToSourcesView {
   readonly deliveries: readonly EgressDeliveryRecord[];
   /** Rows in range that failed their validator; `chainComplete` is false when >0. */
   readonly malformedDeliveryCount: number;
+  readonly derivedArtifactStatus: 'present' | 'unknown';
+  readonly derivedArtifacts: readonly CustodyChainDerivedArtifactView[];
   readonly sources: readonly CustodyChainSourceView[];
   readonly sourceCount: number | 'unknown';
   readonly hasUnclassifiedSource: boolean | 'unknown';
@@ -284,6 +339,8 @@ export function projectEgressToSources(input: {
   readonly snapshot: CustodyChainResolution<CustodySnapshot>;
   readonly manifest: CustodyChainResolution<ContextSourceManifest>;
   readonly deliveries: CustodyChainDeliveryList;
+  /** `null` when no derived-artifact reader is wired — reported as unknown. */
+  readonly derivedArtifacts: readonly CustodyChainDerivedArtifactView[] | null;
 }): CustodyChainEgressToSourcesView {
   const snapshot = recordOf(input.snapshot);
   const manifest = recordOf(input.manifest);
@@ -303,6 +360,7 @@ export function projectEgressToSources(input: {
   if (sources.some(source => source.admission.status === 'unknown')) {
     unknownDimensions.push('source_admission_identity');
   }
+  if (input.derivedArtifacts === null) unknownDimensions.push('derived_artifacts');
   return {
     direction: 'egress_to_sources',
     generationContextRef: input.generationContextRef,
@@ -314,6 +372,8 @@ export function projectEgressToSources(input: {
     manifest,
     deliveries: input.deliveries.records,
     malformedDeliveryCount: input.deliveries.malformedCount,
+    derivedArtifactStatus: input.derivedArtifacts === null ? 'unknown' : 'present',
+    derivedArtifacts: input.derivedArtifacts ?? [],
     sources,
     sourceCount: snapshot?.sourceCount ?? 'unknown',
     hasUnclassifiedSource: snapshot?.hasUnclassifiedSource ?? 'unknown',

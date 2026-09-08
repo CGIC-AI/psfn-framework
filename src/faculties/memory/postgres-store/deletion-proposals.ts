@@ -10,6 +10,7 @@ import type {
   MemoryDeletionProposalStorePort,
 } from '../deletion-proposals.js';
 import type { MemoryDeleteVersion } from '../memory-store-port.js';
+import type { MemoryDeletionJustificationCategory } from '../../../system/config/memory-deletion-policy.js';
 import type { PurrMemory } from '../types.js';
 import {
   decodeEmbedding,
@@ -55,7 +56,16 @@ export interface PostgresMemoryDeletionProposalDependencies {
   upsertDeleteVersion(version: MemoryDeleteVersion): Promise<void>;
   persistClassifiedMemoryRow(memory: PurrMemory, embedding?: Float32Array): Promise<void>;
   validateEmbedding(embedding: Float32Array, operation: string): void;
-  assertJustification(categoryId: string, explanation: string): void;
+  /**
+   * Validate the justification and hand back the operator-owned category it
+   * resolved to. The RESOLVED category, not the id, because approval must know
+   * whether this deletion is a consent withdrawal (alco2) and only the owner
+   * file can say so.
+   */
+  assertJustification(
+    categoryId: string,
+    explanation: string,
+  ): MemoryDeletionJustificationCategory;
   onApproved(version: MemoryDeleteVersion, deletedMemory: PurrMemory): void;
 }
 
@@ -309,7 +319,10 @@ export class PostgresMemoryDeletionProposalStore implements MemoryDeletionPropos
       if (proposal.status !== 'pending_operator_validation') {
         throw new Error(`Memory deletion proposal ${proposalId} cannot be approved from ${proposal.status}`);
       }
-      this.deps.assertJustification(proposal.justificationCategory, proposal.explanation);
+      const category = this.deps.assertJustification(
+        proposal.justificationCategory,
+        proposal.explanation,
+      );
       const memoryRows = await this.deps.queryWrite<MemoryRow & { authorization_revision: number | string }>(`
         SELECT ${MEMORY_SUBJECT_SELECT_COLUMNS}, memory.authorization_revision
         FROM l2_memories memory
@@ -347,8 +360,35 @@ export class PostgresMemoryDeletionProposalStore implements MemoryDeletionPropos
         deletedBy: operatorId,
         deleteReason,
       };
+      // alco2: approving a deletion under a consent-withdrawal category IS the
+      // production act that sets consent flags. It is written onto the row
+      // being deleted, not only into the audit trail, so the withdrawal
+      // survives `undoSoftDelete`: restoring a consent-withdrawn memory
+      // recovers the record for audit and leaves the Layer-3 gate denying its
+      // recall, which is the only reading of "consent requires removal" that a
+      // restore cannot quietly undo.
+      const consent = category.consentWithdrawal === true
+        ? {
+          consentFlags: {
+            ...memory.consentFlags,
+            allowRecall: false,
+            deleteOnRequest: true,
+            redactionBehavior: 'delete' as const,
+          },
+          provenance: {
+            ...memory.provenance,
+            consentProducer: {
+              producerId: 'memory.deletion_proposal' as const,
+              justificationCategoryId: category.id,
+              requestedBy: operatorId,
+              recordedAtMs: decidedAt,
+            },
+          },
+        }
+        : {};
       const deletedMemory: PurrMemory = {
         ...memory,
+        ...consent,
         deletedAt: decidedAt,
         deletedBy: operatorId,
         deleteReason,

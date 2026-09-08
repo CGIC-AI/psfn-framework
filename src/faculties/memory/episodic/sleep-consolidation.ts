@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { SessionEntry } from '../../../core/session/types.js';
+import { isRuntimeAuthoredFallbackSessionEntry } from '../../../core/session/runtime-fallback-provenance.js';
 import type { LLMProviderPort } from '../../../core/agent/contracts.js';
 import type { PersonaPreamblePort } from '../../../core/identity/persona-preamble.js';
 import { createComponentLogger } from '../../../shared/logger.js';
@@ -212,8 +213,16 @@ function mergeUnique<T>(left: readonly T[], right: readonly T[], key: (item: T) 
   return [...seen.values()];
 }
 
+/**
+ * Union key for provenance refs across a consolidation merge.
+ *
+ * `authoredBy` is part of the identity (f54sx, via ccgdz.8): a ref marked
+ * runtime-authored and its unmarked twin are DIFFERENT claims about the same
+ * turn, and collapsing them on the unmarked one — whichever the merge happened
+ * to see first — would silently erase the marker the chain exists to carry.
+ */
 function provenanceRefKey(ref: EpisodeProvenanceRef): string {
-  return `${ref.kind}:${ref.refId}:${ref.note ?? ''}`;
+  return `${ref.kind}:${ref.refId}:${ref.note ?? ''}:${ref.authoredBy ?? ''}`;
 }
 
 /**
@@ -608,6 +617,13 @@ function transcriptExcerptForSpan(
     (entry.role === 'user' || entry.role === 'assistant')
     && entry.timestamp >= startMs
     && entry.timestamp <= endMs
+    // f54sx (via ccgdz.8): a runtime-authored fallback notice is delivered on
+    // her channel but is not her speech. This excerpt is what the consolidation
+    // model reads to decide what an episode is ABOUT, so a notice about a
+    // failed image reader must not become a theme, a title, or a landmark.
+    // The episode's provenance refs still record that the turn happened —
+    // consolidation only inherits refs, it never derives them.
+    && !isRuntimeAuthoredFallbackSessionEntry(entry)
   ));
   if (inSpan.length === 0) return '';
   const lines = inSpan.map(entry => `${entry.authorName || entry.role}: ${entry.content}`);

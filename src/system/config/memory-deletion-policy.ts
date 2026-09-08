@@ -9,6 +9,21 @@ export interface MemoryDeletionJustificationCategory {
   /** Case-insensitive phrases that substantiate (eligible) or identify (ineligible) this category. */
   explanationPatterns: string[];
   refusalReason?: string;
+  /**
+   * True when approving a deletion under this category is an act of CONSENT
+   * WITHDRAWAL rather than a correctness or housekeeping fix
+   * (psfn-framework-alco2, via psfn-framework-ccgdz.8).
+   *
+   * It is operator-owned rather than a category id hardcoded in source: the
+   * category list lives in `settings.json`, so a deployment that renames or
+   * adds its own consent category must be able to say which ones mean
+   * "the subject withdrew consent" without a code change.
+   *
+   * The only consumer sets `consentFlags.allowRecall = false` on the deleted
+   * row, so the withdrawal survives a later restore: restoring a
+   * consent-withdrawn memory recovers the audit record, never the recall.
+   */
+  consentWithdrawal?: boolean;
 }
 
 export interface MemoryDeletionPolicy {
@@ -42,7 +57,7 @@ export function normalizeMemoryDeletionPolicy(
     }
     assertNoUnknownKeys(
       entry,
-      ['id', 'label', 'eligible', 'explanationPatterns', 'refusalReason'],
+      ['id', 'label', 'eligible', 'explanationPatterns', 'refusalReason', 'consentWithdrawal'],
       categoryPath,
     );
     const id = requiredTrimmedString(entry.id, `${categoryPath}.id`);
@@ -72,12 +87,22 @@ export function normalizeMemoryDeletionPolicy(
     if (!entry.eligible && !refusalReason) {
       throw new Error(`${categoryPath}.refusalReason is required when eligible=false`);
     }
+    if (entry.consentWithdrawal !== undefined && typeof entry.consentWithdrawal !== 'boolean') {
+      throw new Error(`${categoryPath}.consentWithdrawal must be a boolean`);
+    }
+    // An ineligible category is never approved, so it can never withdraw
+    // consent. Accepting the pair would let an owner file declare a
+    // consent-withdrawal category that nothing can ever act on.
+    if (entry.consentWithdrawal === true && !entry.eligible) {
+      throw new Error(`${categoryPath}.consentWithdrawal requires eligible=true`);
+    }
     return {
       id,
       label,
       eligible: entry.eligible,
       explanationPatterns,
       ...(refusalReason ? { refusalReason } : {}),
+      ...(entry.consentWithdrawal === true ? { consentWithdrawal: true } : {}),
     };
   });
 

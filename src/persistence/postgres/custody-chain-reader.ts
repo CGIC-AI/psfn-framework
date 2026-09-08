@@ -32,10 +32,13 @@ import {
 import type {
   CustodyChainDeliveryList,
   CustodyChainDeliveryReadPort,
+  CustodyChainDerivedArtifactReadPort,
+  CustodyChainDerivedArtifactView,
   CustodyChainGenerationMatch,
   CustodyChainResolution,
   CustodyChainSnapshotReadPort,
 } from '../../core/cogsec/disclosure/custody-chain-query.js';
+import { custodyIdentity } from '../../core/cogsec/disclosure/custody-identity.js';
 import {
   validateCustodySnapshot,
   type CustodySnapshot,
@@ -45,6 +48,7 @@ import {
   type EgressDeliveryRecord,
 } from '../../core/cogsec/disclosure/egress-delivery-record.js';
 import type { HealthEventOwner } from '../../shared/contracts/health-event.js';
+import { isRecord } from '../../shared/utils/types.js';
 import { createPostgresPool, queryOne, queryRows } from '../postgres.js';
 
 interface SnapshotRow extends QueryResultRow {
@@ -94,8 +98,54 @@ function readInstant(value: string | number): number {
   return parsed;
 }
 
+interface DerivedArtifactRow extends QueryResultRow {
+  id: string;
+  refs: unknown;
+  consent_flags: unknown;
+  provenance_json: unknown;
+  retired: boolean;
+}
+
+/** Read one boolean out of a stored JSONB object without trusting its shape. */
+function jsonBoolean(value: unknown, key: string): boolean | undefined {
+  if (!isRecord(value)) return undefined;
+  const field = value[key];
+  return typeof field === 'boolean' ? field : undefined;
+}
+
+/**
+ * Fold one artifact's provenance refs into the three counts the custody view
+ * shows. Unreadable entries are counted as neither runtime-authored nor
+ * admitted: an unreadable ref proves nothing in either direction.
+ */
+function foldArtifactRefs(
+  refs: unknown,
+  turnId: string,
+): Pick<
+  CustodyChainDerivedArtifactView,
+  'turnRefCount' | 'runtimeAuthoredSourceCount' | 'admittedSourceCount'
+> {
+  let turnRefCount = 0;
+  let runtimeAuthoredSourceCount = 0;
+  let admittedSourceCount = 0;
+  for (const entry of Array.isArray(refs) ? refs : []) {
+    if (!isRecord(entry)) continue;
+    if (entry.envelopeId !== undefined || entry.receiptId !== undefined) {
+      admittedSourceCount += 1;
+    }
+    const namesThisTurn = entry.refId === turnId || entry.turnId === turnId;
+    if (!namesThisTurn) continue;
+    turnRefCount += 1;
+    if (entry.authoredBy === 'runtime') runtimeAuthoredSourceCount += 1;
+  }
+  return { turnRefCount, runtimeAuthoredSourceCount, admittedSourceCount };
+}
+
 export class PostgresCustodyChainReader
-implements CustodyChainSnapshotReadPort, CustodyChainDeliveryReadPort {
+implements
+  CustodyChainSnapshotReadPort,
+  CustodyChainDeliveryReadPort,
+  CustodyChainDerivedArtifactReadPort {
   private constructor(
     private readonly pool: Pool,
     private readonly ownsPool: boolean,
@@ -247,6 +297,93 @@ implements CustodyChainSnapshotReadPort, CustodyChainDeliveryReadPort {
       else malformedCount += 1;
     }
     return { records, malformedCount };
+  }
+
+  /**
+   * What did this generation leave behind — which episodes and memories were
+   * derived from its turn (psfn-framework-ccgdz.8)?
+   *
+   * The custody records deliberately do not duplicate the memory and episodic
+   * tables, so this is the one place the reader looks outside them. It is a
+   * strictly read-only projection: ids, counts, and two booleans, no text, no
+   * embedding, no scope.
+   *
+   * Episodes match on containment of a `{kind:'turn', refId}` provenance ref;
+   * memories match on the turn their extraction recorded, either as the
+   * provenance `turnId` or inside `sourceTurnIds`. Soft-deleted rows are
+   * INCLUDED and flagged: a memory deleted under a consent withdrawal is
+   * exactly the row an audit came to see, and hiding it would make the
+   * withdrawal invisible at the moment it took effect.
+   */
+  async listDerivedArtifactsForGeneration(input: {
+    readonly turnId: string;
+    readonly limit: number;
+  }): Promise<readonly CustodyChainDerivedArtifactView[]> {
+    const [episodes, memories] = await Promise.all([
+      queryRows<DerivedArtifactRow>(
+        this.pool,
+        `SELECT id, provenance_refs AS refs, consent_flags,
+                '{}'::jsonb AS provenance_json,
+                (status IN ('merged', 'superseded')) AS retired
+         FROM l01_episodes
+         WHERE provenance_refs @> $1::jsonb
+         ORDER BY id ASC
+         LIMIT $2`,
+        [JSON.stringify([{ kind: 'turn', refId: input.turnId }]), input.limit],
+      ),
+      // A memory's structured refs live under `provenance_json.sourceAdmissions`
+      // (ccgdz.3); its plain `provenance_refs` column is a list of display
+      // strings and carries no identity, so it is deliberately not read here.
+      queryRows<DerivedArtifactRow>(
+        this.pool,
+        `SELECT id,
+                COALESCE(provenance_json -> 'sourceAdmissions', '[]'::jsonb) AS refs,
+                consent_flags, provenance_json,
+                (deleted_at IS NOT NULL OR superseded_by IS NOT NULL) AS retired
+         FROM l2_memories
+         WHERE provenance_json @> $1::jsonb OR provenance_json @> $2::jsonb
+         ORDER BY id ASC
+         LIMIT $3`,
+        [
+          JSON.stringify({ turnId: input.turnId }),
+          JSON.stringify({ sourceTurnIds: [input.turnId] }),
+          input.limit,
+        ],
+      ),
+    ]);
+    return [
+      ...episodes.map(row => this.toDerivedArtifact(row, 'episode', input.turnId)),
+      // A memory row matched on its own recorded turn, so its turn-ref count is
+      // exactly one: it is derived from this generation by construction, and
+      // its structured refs carry admission identity rather than turn ids.
+      ...memories.map(row => ({
+        ...this.toDerivedArtifact(row, 'memory', input.turnId),
+        turnRefCount: 1,
+      })),
+    ];
+  }
+
+  private toDerivedArtifact(
+    row: DerivedArtifactRow,
+    kind: CustodyChainDerivedArtifactView['kind'],
+    turnId: string,
+  ): CustodyChainDerivedArtifactView {
+    const producerId = isRecord(row.provenance_json)
+      && isRecord(row.provenance_json.consentProducer)
+      && typeof row.provenance_json.consentProducer.producerId === 'string'
+      ? row.provenance_json.consentProducer.producerId
+      : undefined;
+    return {
+      kind,
+      id: custodyIdentity(row.id),
+      ...foldArtifactRefs(row.refs, turnId),
+      // Only an explicit `false` is a denial. An absent flag means nobody set
+      // it, which the Layer-3 gate treats as "not denied" — the view must say
+      // the same thing rather than inferring consent either way.
+      consentDenied: jsonBoolean(row.consent_flags, 'allowRecall') === false,
+      ...(producerId !== undefined ? { consentProducerId: producerId } : {}),
+      retired: row.retired === true,
+    };
   }
 
   async close(): Promise<void> {

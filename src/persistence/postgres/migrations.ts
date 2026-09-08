@@ -468,6 +468,10 @@ export const POSTGRES_MEMORY_MIGRATIONS = [
   `CREATE INDEX IF NOT EXISTS idx_l01_episodes_scope_time ON l01_episodes(channel_id, thread_id, started_at, ended_at);`,
   `CREATE INDEX IF NOT EXISTS idx_l01_episodes_thread_time ON l01_episodes(thread_id, started_at, id);`,
   `CREATE INDEX IF NOT EXISTS idx_l01_episodes_channel_time ON l01_episodes(channel_id, started_at, id);`,
+  // ccgdz.8: the custody query asks which episodes were derived from one
+  // turn, by containment on `{kind:'turn', refId}`. `jsonb_path_ops` indexes
+  // only the `@>` operator this lookup uses.
+  `CREATE INDEX IF NOT EXISTS idx_l01_episodes_provenance_refs_gin ON l01_episodes USING GIN (provenance_refs jsonb_path_ops);`,
   `CREATE INDEX IF NOT EXISTS idx_l01_episodes_status ON l01_episodes(status, updated_at DESC);`,
   `CREATE INDEX IF NOT EXISTS idx_l01_episodes_canonical ON l01_episodes(canonical_episode_id, status);`,
   `CREATE INDEX IF NOT EXISTS idx_l01_episodes_merged ON l01_episodes(merged_into_episode_id) WHERE merged_into_episode_id IS NOT NULL;`,

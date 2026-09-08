@@ -194,6 +194,43 @@
           </table>
         </div>
       {/if}
+      <div>
+        <h3 class="text-sm font-semibold text-shadow-700 mb-1">Derived artifacts</h3>
+        {#if chain.derivedArtifactStatus !== 'present'}
+          <p class="text-sm text-gold-700">unknown -- no derived-artifact reader answered.</p>
+        {:else if chain.derivedArtifacts.length === 0}
+          <p class="text-sm text-shadow-600">Nothing was derived from this turn.</p>
+        {:else}
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+              <thead class="text-left text-shadow-500">
+                <tr>
+                  <th class="py-1 pr-3">Kind</th>
+                  <th class="py-1 pr-3">Id</th>
+                  <th class="py-1 pr-3">Runtime-authored</th>
+                  <th class="py-1 pr-3">Admitted</th>
+                  <th class="py-1 pr-3">Recall</th>
+                  <th class="py-1 pr-3">Consent set by</th>
+                  <th class="py-1 pr-3">Retired</th>
+                </tr>
+              </thead>
+              <tbody class="font-mono">
+                {#each chain.derivedArtifacts as artifact (artifact.id.digest)}
+                  <tr class="border-t border-bark-200">
+                    <td class="py-1 pr-3">{artifact.kind}</td>
+                    <td class="py-1 pr-3">{artifact.id.id ?? short(artifact.id.digest)}</td>
+                    <td class="py-1 pr-3">{artifact.runtimeAuthoredSourceCount}</td>
+                    <td class="py-1 pr-3">{artifact.admittedSourceCount}</td>
+                    <td class="py-1 pr-3">{artifact.consentDenied ? 'denied' : 'allowed'}</td>
+                    <td class="py-1 pr-3">{artifact.consentProducerId ?? '-'}</td>
+                    <td class="py-1 pr-3">{artifact.retired}</td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
+        {/if}
+      </div>
     {/if}
   </section>
 

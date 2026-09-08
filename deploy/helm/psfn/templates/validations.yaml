@@ -446,6 +446,12 @@ never back a ClusterIssuer. */ -}}
 {{- if lt (int $eidoverse.mcpl.handshakeTimeoutMs) 1 -}}
 {{- fail "satelliteHub.eidoverse.mcpl.handshakeTimeoutMs must be a positive integer" -}}
 {{- end -}}
+{{- /* Snapshot derives its HTTP origin from the stdio transport's worldUrl, so
+     the hub builds no snapshot source under the MCPL door. Refuse the pair
+     rather than render vision config that would silently do nothing. */}}
+{{- if $eidoverse.snapshot.enabled -}}
+{{- fail "satelliteHub.eidoverse.snapshot.enabled=true is not supported with satelliteHub.eidoverse.transport=mcpl" -}}
+{{- end -}}
 {{- end -}}
 {{- if not (regexMatch "^[A-Z][A-Z0-9_]*$" (trim ($eidoverse.tokenRef | default ""))) -}}
 {{- fail "satelliteHub.eidoverse.tokenRef must name an environment credential matching ^[A-Z][A-Z0-9_]*$" -}}

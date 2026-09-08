@@ -78,12 +78,14 @@ describe('full callable catalog schema token cost', () => {
       includesLibrary: false,
       // psfn-framework-lpxg3.3 added the optional skill `base_version` binding:
       // +219 bytes / +42 tokens on both the pre- and post-description payloads.
+      // psfn-framework-owffl.8 named the shell byte-range route in the fs and
+      // shell guidance: +313 bytes / +66 tokens on the post-description payload.
       beforeTokens: 19_428,
-      afterTokens: 23_443,
-      deltaTokens: 4_015,
+      afterTokens: 23_509,
+      deltaTokens: 4_081,
       beforeBytes: 91_366,
-      afterBytes: 109_343,
-      providerSchemaHash: '6f224e80a5ffca70d69e341c76755359ac69517a75bad12fd18edad4677fe1ce',
+      afterBytes: 109_656,
+      providerSchemaHash: '54558a6b22ddc15b5e966673215b0dbe825cc7cb3b03cb6dfec05f849fe85b47',
       parameterSchemaHash: '8babe5d024cd702142ca7137bc66262cf072507077c21e973c1b59cb4d053dd7',
     });
 

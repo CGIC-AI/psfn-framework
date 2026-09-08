@@ -12,11 +12,11 @@ import {
   type McplIncomingChannelMessage,
 } from "./eidoverse-mcpl-wire.js";
 
-function message(tags: string[], text = "Ada: hello"): McplIncomingChannelMessage {
+function message(tags: string[], text = "Quill: hello"): McplIncomingChannelMessage {
   return {
     channelId: "world:commons",
     messageId: "ev-1",
-    author: { id: "ada", name: "Ada" },
+    author: { id: "quill", name: "Quill" },
     timestamp: "2026-09-08T00:00:00.000Z",
     content: [{ type: "text", text }],
     tags,
@@ -39,7 +39,7 @@ test("the door's own tag sets classify into the Phase 1 wake vocabulary", () => 
   );
   assert.equal(
     classifyMcplIncomingMessage(
-      message(["chat:addressed", "eidoverse:approach"], "* Ada walked up to you"),
+      message(["chat:addressed", "eidoverse:approach"], "* Quill walked up to you"),
       SUPPRESS_CATCHUP,
     ),
     "approach",
@@ -158,6 +158,6 @@ test("world names come from the descriptor address, falling back to the channel 
 });
 
 test("every text block of a delivery joins into the ping line", () => {
-  assert.equal(incomingMessageText(message(["chat:mention"], "Ada: hello")), "Ada: hello");
+  assert.equal(incomingMessageText(message(["chat:mention"], "Quill: hello")), "Quill: hello");
   assert.equal(incomingMessageText({ ...message(["chat:mention"]), content: [] }), "");
 });

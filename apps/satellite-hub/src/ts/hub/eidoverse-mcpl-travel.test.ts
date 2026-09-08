@@ -85,7 +85,7 @@ async function placeIdOfNextTurn(
   agent: RecordingAgent,
   utteranceId: string,
 ): Promise<PsfnChannelContext["placeId"]> {
-  await session.handleAddressedUtterance({ utteranceId, userText: "Ada: hello" });
+  await session.handleAddressedUtterance({ utteranceId, userText: "Quill: hello" });
   return agent.calls.at(-1)?.channel?.placeId;
 }
 

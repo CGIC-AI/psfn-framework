@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { loadAutomataPolicySeedDefaults } from '../../../system/config/automata-policy-config.js';
 import type { ProductionAutomataClassId } from '../registry-contract.js';
 import {
   buildAutomataTerminalHandoffKey,
@@ -213,30 +214,66 @@ async function runClass(input: {
 }
 
 describe('governed Automata Bus worker lifecycle', () => {
-  it('runs both eligible classes through the identical begin/brief/tool/handoff/terminal order', async () => {
-    const subagent = await runClass({
-      automatonClass: 'subagent.bounded',
-      runId: 'subagent-1',
-      callBusWrite: true,
-    });
-    const extraction = await runClass({
-      automatonClass: 'memory.extraction',
-      runId: 'extraction-1',
-      outcome: { summary: 'Memory extraction process result: parsed=0.' },
-    });
+  const eligibleClasses = loadAutomataPolicySeedDefaults().bus.eligibleClasses;
 
-    // The expected order is the exported stage contract itself, not a copy.
-    const expected = AUTOMATA_WORKER_LIFECYCLE_STAGES.map(stage => `${stage}:ok`);
-    expect(stageTrace(subagent.events)).toEqual(expected);
-    expect(stageTrace(extraction.events)).toEqual(expected);
-    expect(subagent.terminal.recorded).toHaveLength(1);
-    expect(extraction.terminal.recorded).toHaveLength(1);
-    expect(subagent.run.terminals).toHaveLength(1);
-    expect(extraction.run.terminals).toHaveLength(1);
-    // Both classes bind their own authoritative identity, never each other's.
-    expect(subagent.terminal.recorded[0]?.lineage.automatonClass).toBe('subagent.bounded');
-    expect(extraction.terminal.recorded[0]?.lineage.automatonClass).toBe('memory.extraction');
-  });
+  it.each(eligibleClasses)(
+    'runs %s through the identical begin/brief/tool/handoff/terminal order',
+    async (automatonClass) => {
+      const governed = await runClass({
+        automatonClass,
+        runId: `conformance-${automatonClass}`,
+        // One class-authored summary stands in for every class's process line,
+        // so the assertion is about ordering, not about what a class reports.
+        outcome: { summary: `${automatonClass} process result` },
+      });
+
+      // The expected order is the exported stage contract itself, not a copy.
+      expect(stageTrace(governed.events))
+        .toEqual(AUTOMATA_WORKER_LIFECYCLE_STAGES.map(stage => `${stage}:ok`));
+      expect(governed.terminal.recorded).toHaveLength(1);
+      expect(governed.run.terminals).toHaveLength(1);
+      // Every class binds its own authoritative identity, never another's.
+      expect(governed.terminal.recorded[0]?.lineage.automatonClass).toBe(automatonClass);
+      expect(governed.settlement.handoffKind).toBe('useful');
+    },
+  );
+
+  it.each(eligibleClasses)(
+    'records a typed no-finding terminal for %s when nothing reports a finding',
+    async (automatonClass) => {
+      const silent = await runClass({
+        automatonClass,
+        runId: `conformance-silent-${automatonClass}`,
+      });
+      expect(silent.session.observedBusWrites).toBe(0);
+      expect(silent.settlement.handoffKind).toBe('no_finding');
+      expect(silent.terminal.recorded[0]?.handoffKind).toBe('no_finding');
+      // Never silent: the deterministic terminal event is still recorded.
+      expect(stageTrace(silent.events)).toContain('handoff:ok');
+    },
+  );
+
+  it.each(eligibleClasses)(
+    'never duplicates %s terminal effects however many times a retried caller settles',
+    async (automatonClass) => {
+      const run = createRunPort({
+        automatonClass,
+        runId: `conformance-retry-${automatonClass}`,
+        taskId: `task-${automatonClass}`,
+      });
+      const terminal = createTerminalPort();
+      const session = await openAutomataBusWorkerRun({
+        access: createAccess(),
+        run: run.port,
+        terminal: terminal.port,
+        briefingQuery: `bounded work for ${automatonClass}`,
+      });
+      const first = await session.settle(completedOutcome());
+      expect(await session.settle(completedOutcome({ stateReason: 'different' }))).toBe(first);
+      expect(terminal.recorded).toHaveLength(1);
+      expect(run.terminals).toHaveLength(1);
+    },
+  );
 
   it('records a typed no-finding terminal when the model never calls the Bus tool', async () => {
     const silent = await runClass({ automatonClass: 'subagent.bounded', runId: 'subagent-2' });

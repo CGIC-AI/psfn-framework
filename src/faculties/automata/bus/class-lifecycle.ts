@@ -91,6 +91,18 @@ export function createAutomataClassRunPort(
         ...(spec.sourceRunId ? { sourceRunId: spec.sourceRunId } : {}),
         ...(spec.createdAtMs === undefined ? {} : { createdAtMs: spec.createdAtMs }),
       });
+      // A completed run is a replay: skip execution and terminalization so a
+      // restart cannot duplicate a terminal event. A failed or cancelled run is
+      // NOT a replay — silently reporting it as one would let a retried caller
+      // report success without doing the work — so it fails closed. A class
+      // whose trigger genuinely re-attempts binds the attempt into its own run
+      // id and therefore opens a fresh run instead of reaching this.
+      if (run.status === 'failed' || run.status === 'cancelled') {
+        throw new Error(
+          `Automata run "${spec.runId}" is already a terminal ${run.status} run `
+          + `for class ${spec.automatonClass}.`,
+        );
+      }
       if (run.status === 'queued') {
         run = await registry.transition(run.runId, {
           status: 'running',

@@ -30,6 +30,11 @@ import {
 import { PostgresAutomataBusRuntimeStore } from './runtime-store.js';
 import { AUTOMATA_BUS_WORKER_BRIEFING_SCHEMA_VERSION } from './worker-access.js';
 import { openAutomataBusWorkerRun } from './worker-execution.js';
+import {
+  createAutomataClassRunPort,
+  runGovernedAutomataClass,
+  type AutomataClassRunSpec,
+} from './class-lifecycle.js';
 
 const INTEGRATION_TIMEOUT_MS = 120_000;
 const COMPANION_A = 'companion-public-example-a';
@@ -152,6 +157,41 @@ async function openRun(process: Process, createdAtMs: number) {
     terminal: process.terminal,
     briefingQuery: 'memory extraction response_turn',
   });
+}
+
+/**
+ * The two newly governed classes whose production run ids are stable for one
+ * durable attempt, which is the only case where a restart must re-enter the
+ * same run rather than open a new one.
+ */
+const RESTART_CERTIFIED_CLASSES: readonly AutomataClassRunSpec[] = [
+  {
+    automatonClass: 'background.intention_post_turn_hooks',
+    // Shape of the production id: canonical source request plus durable attempt.
+    runId: 'intention-post-turn-hooks:request-public-example-1:0',
+    workerId: 'background-work:intention_post_turn_hooks',
+    taskId: 'logical-session-public-example',
+    taskLabel: 'Intention post-turn hooks',
+    taskSummary: 'Record behavioral intention signals from one canonical completed turn.',
+    sessionIds: ['logical-session-public-example'],
+  },
+  {
+    automatonClass: 'shard.long_horizon',
+    runId: 'shard-public-example-1',
+    workerId: 'shard-public-example-1',
+    taskId: 'shard-public-example-1',
+    taskLabel: 'Long-horizon shard',
+    taskSummary: 'Execute one long-horizon shard workload to a terminal outcome.',
+    sessionIds: ['shard:shard-public-example-1'],
+  },
+];
+
+function governedRuntime(process: Process) {
+  return {
+    registry: process.registry,
+    workerAccess: process.access,
+    terminal: process.terminal,
+  };
 }
 
 async function terminalEvents(process: Process): Promise<AutomataBusEvent[]> {
@@ -292,6 +332,77 @@ describe('governed Automata lifecycle restart certification', () => {
       await process.close();
     });
   }, INTEGRATION_TIMEOUT_MS);
+
+  it.each(RESTART_CERTIFIED_CLASSES)(
+    're-enters and terminalizes $automatonClass exactly once across a restart',
+    async (spec) => {
+      await withDatabase(async databaseUrl => {
+        // Crash: the run is opened and started, then the whole process dies
+        // before it can settle. Only Postgres survives.
+        const crashed = await startProcess(databaseUrl, COMPANION_A);
+        const opened = await openAutomataBusWorkerRun({
+          access: crashed.access,
+          run: createAutomataClassRunPort(crashed.registry, spec),
+          terminal: crashed.terminal,
+          briefingQuery: spec.taskLabel,
+        });
+        expect(opened.binding).toMatchObject({
+          companionId: COMPANION_A,
+          attempt: 1,
+          execute: true,
+        });
+        expect(opened.binding.lineage.automatonClass).toBe(spec.automatonClass);
+        expect(await terminalEvents(crashed)).toHaveLength(0);
+        await crashed.close();
+
+        // Restart: the class re-enters its own run and settles it once.
+        const restarted = await startProcess(databaseUrl, COMPANION_A);
+        let executions = 0;
+        const resumed = await runGovernedAutomataClass({
+          runtime: governedRuntime(restarted),
+          spec,
+          briefingQuery: spec.taskLabel,
+          work: async () => {
+            executions += 1;
+            return { value: 'done', summary: `${spec.automatonClass} process result` };
+          },
+        });
+        expect(resumed).toEqual({ status: 'executed', value: 'done' });
+        expect(executions).toBe(1);
+        const settled = await terminalEvents(restarted);
+        expect(settled).toHaveLength(1);
+        expect(settled[0]?.body).toMatchObject({ source: AUTOMATA_TERMINAL_HANDOFF_SOURCE });
+        expect(settled[0]?.context).toMatchObject({
+          automatonClass: spec.automatonClass,
+          runId: spec.runId,
+        });
+        await restarted.close();
+
+        // A second restart replays: no re-execution, no second terminal event.
+        const replayed = await startProcess(databaseUrl, COMPANION_A);
+        const replayOutcome = await runGovernedAutomataClass({
+          runtime: governedRuntime(replayed),
+          spec,
+          briefingQuery: spec.taskLabel,
+          work: async () => {
+            executions += 1;
+            return { value: 'done', summary: 'A second summary that must never reach the Bus.' };
+          },
+        });
+        expect(replayOutcome).toEqual({ status: 'replayed' });
+        expect(executions).toBe(1);
+        expect(await terminalEvents(replayed)).toHaveLength(1);
+        expect(replayed.registry.getRun(spec.runId)).toMatchObject({
+          companionId: COMPANION_A,
+          automatonClass: spec.automatonClass,
+          status: 'completed',
+          outcome: 'completed',
+        });
+        await replayed.close();
+      });
+    },
+    INTEGRATION_TIMEOUT_MS,
+  );
 
   it('exposes the briefing contract version the runtime accepts', () => {
     expect(AUTOMATA_BUS_WORKER_BRIEFING_SCHEMA_VERSION).toBe(1);

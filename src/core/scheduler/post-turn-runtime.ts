@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 import { createComponentLogger } from '../../shared/logger.js';
 import type { MessageSender } from '../../system/lifecycle/notifications.js';
 import {
@@ -460,14 +462,15 @@ export function wirePostTurnRuntime(
         throw new Error(`Deferred reflection action "${action.id}" is missing payload.templateId`);
       }
       const templateId = templateIdRaw.trim();
-      // The template run itself is unchanged. Its run identity comes from the
-      // durable queued action id, so a restarted or redelivered reflection
-      // re-enters its own run instead of recording a second terminal event.
+      // The template run itself is unchanged. The queued post-turn action
+      // carries no durable attempt counter, so each retry opens its own bounded
+      // run rather than colliding with a previous failed one; the wrapper's
+      // idempotency key still binds class, run, and attempt exactly once.
       await runGovernedAutomataClass({
         runtime: runtimeOptions.automataClassLifecycle,
         spec: {
           automatonClass: SCHEDULER_REFLECTION_CLASS,
-          runId: `scheduler-reflection:${action.id}`,
+          runId: `scheduler-reflection:${action.id}:${randomUUID()}`,
           workerId: DEFERRED_REFLECTION_ACTION_KIND,
           taskId: templateId,
           taskLabel: SCHEDULER_REFLECTION_TASK_LABEL,

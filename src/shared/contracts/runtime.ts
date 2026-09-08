@@ -38,6 +38,14 @@ export interface TurnRecord {
   assistantMessage?: TurnRecordMessage;
   toolCalls: TurnRecordToolCall[];
   contextManifestRef?: string;
+  /**
+   * Resolvable reference to this turn's durable CogSec custody snapshot
+   * (psfn-framework-ccgdz.1) — the lineage's own `generationContextRef`,
+   * `turn:<turnId>`. Absent when no custody store is wired or the record-first
+   * write failed visibly; its absence is never a claim that the turn had no
+   * admitted sources.
+   */
+  custodySnapshotRef?: string;
   internalStateSnapshotRef?: string;
   extractedMemoryIds: string[];
   concernDeltaRefs: string[];

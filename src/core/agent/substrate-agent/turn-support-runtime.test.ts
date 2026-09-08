@@ -14,6 +14,16 @@ import type { BackgroundWorkSupervisor } from '../background-work/supervisor.js'
 import { resolveSessionEntryReflectionTurnProvenance } from '../../session/reflection-turn-provenance.js';
 import type { SubstrateMessage } from '../../../shared/contracts/runtime.js';
 import { UserContinuityStore } from '../../session/continuity.js';
+import {
+  accumulateDisclosureSource,
+  beginDisclosureAccumulation,
+} from '../../cogsec/disclosure/decision.js';
+import { DISCLOSURE_CLASSIFIER_VERSION } from '../../cogsec/disclosure/generation-lineage.js';
+import {
+  custodySnapshotRefForTurn,
+  type CustodySnapshot,
+  type CustodySnapshotStorePort,
+} from '../../cogsec/disclosure/custody-snapshot.js';
 
 function flushAsyncWork(): Promise<void> {
   return Promise.resolve().then(() => undefined);
@@ -514,5 +524,91 @@ describe('TurnSupportRuntime intentional no-reply decisions', () => {
     }));
     expect(runtime.consumeIntentionalNoReplyDecision(turnId)).toEqual(decision);
     expect(runtime.consumeIntentionalNoReplyDecision(turnId)).toBeNull();
+  });
+});
+
+describe('TurnSupportRuntime custody snapshots (psfn-framework-ccgdz.1)', () => {
+  const TURN_ID = createTurnId({ requestId: 'request-custody', channelId: 'api:custody' });
+  const REQUEST_ID = 'request-custody';
+
+  function lineageFor(refs: readonly string[]) {
+    let lineage = beginDisclosureAccumulation({
+      generationContextRef: custodySnapshotRefForTurn(TURN_ID),
+      classifierVersion: DISCLOSURE_CLASSIFIER_VERSION,
+      classifiedAt: new Date(1_800_000_000_000).toISOString(),
+    });
+    for (const ref of refs) {
+      lineage = accumulateDisclosureSource(lineage, {
+        ref,
+        sensitivity: 'personal',
+        permittedDestinations: [],
+        classified: true,
+      });
+    }
+    return lineage;
+  }
+
+  function makeRuntime(store?: CustodySnapshotStorePort) {
+    return new TurnSupportRuntime({
+      eventBus: new EventBus(),
+      sessionManager: {} as unknown as SessionManager,
+      backgroundWorkSupervisor: null,
+      hashPromptText: text => `hash:${text.length}`,
+      resolveContextWindow: () => 4_096,
+      ...(store ? { custodySnapshotStore: store } : {}),
+    });
+  }
+
+  it('writes the folded lineage and returns the lineage key as the record ref', async () => {
+    const recorded: CustodySnapshot[] = [];
+    const runtime = makeRuntime({
+      record: async (snapshot) => { recorded.push(snapshot); return 'recorded'; },
+      getByGenerationContextRef: async () => null,
+      close: async () => undefined,
+    });
+
+    const ref = await runtime.recordTurnCustodySnapshot({
+      lineage: lineageFor(['memory:mem-1']),
+      turnId: TURN_ID,
+      requestId: REQUEST_ID,
+    });
+
+    expect(ref).toBe(`turn:${TURN_ID}`);
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0]).toMatchObject({ turnId: TURN_ID, sourceCount: 1 });
+  });
+
+  it('keeps the stored fold and surfaces a divergence rather than overwriting it', async () => {
+    const runtime = makeRuntime({
+      record: async () => 'diverged',
+      getByGenerationContextRef: async () => null,
+      close: async () => undefined,
+    });
+    await expect(runtime.recordTurnCustodySnapshot({
+      lineage: lineageFor(['memory:mem-1']),
+      turnId: TURN_ID,
+      requestId: REQUEST_ID,
+    })).resolves.toBe(`turn:${TURN_ID}`);
+  });
+
+  it('leaves the ref absent when the custody write fails, without failing the turn', async () => {
+    const runtime = makeRuntime({
+      record: async () => { throw new Error('custody store unavailable'); },
+      getByGenerationContextRef: async () => null,
+      close: async () => undefined,
+    });
+    await expect(runtime.recordTurnCustodySnapshot({
+      lineage: lineageFor(['memory:mem-1']),
+      turnId: TURN_ID,
+      requestId: REQUEST_ID,
+    })).resolves.toBeUndefined();
+  });
+
+  it('records nothing and claims nothing when no custody store is wired', async () => {
+    await expect(makeRuntime().recordTurnCustodySnapshot({
+      lineage: lineageFor([]),
+      turnId: TURN_ID,
+      requestId: REQUEST_ID,
+    })).resolves.toBeUndefined();
   });
 });

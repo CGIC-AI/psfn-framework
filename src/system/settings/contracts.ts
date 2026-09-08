@@ -171,6 +171,8 @@ export interface EditableSettings {
   backgroundFailureEscalationThreshold?: number;
   /** Row cap on the bounded persisted runtime health-event stream. */
   healthEventStreamMaxRows?: number;
+  /** Days a per-turn custody snapshot is retained before it is pruned. */
+  custodySnapshotRetentionDays?: number;
   memoryExtractionMinImportance?: number;
   memoryExtractionMinConfidence?: number;
   memoryExtractionMinNovelty?: number;
@@ -351,6 +353,7 @@ export const RUNTIME_SETTINGS_KEYS = [
   'compactionEmotionalSalienceThresholdPct',
   'backgroundFailureEscalationThreshold',
   'healthEventStreamMaxRows',
+  'custodySnapshotRetentionDays',
   'memoryExtractionMinImportance',
   'memoryExtractionMinConfidence',
   'memoryExtractionMinNovelty',

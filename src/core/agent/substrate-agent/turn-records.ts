@@ -398,6 +398,8 @@ export function buildTurnRecord(input: {
   persistedUserMessageContent?: string;
   hashPromptText: (text: string) => string;
   introspectionSensitivityDecision?: IntrospectionTurnSensitivityDecision;
+  /** Resolvable ref to this turn's durable custody snapshot (ccgdz.1). */
+  custodySnapshotRef?: string;
 }): TurnRecord {
   const toolCalls = buildTurnToolCalls(input.turnMessages);
   const roleEnvelopeRefs = normalizeRoleEnvelopeRefs(input.roleEnvelopeRefs);
@@ -475,6 +477,7 @@ export function buildTurnRecord(input: {
       : {}),
     toolCalls,
     contextManifestRef: `session:${input.message.channelId}|messages:${input.contextMessageCount}|memory_chars:${input.memoryContextChars}`,
+    ...(input.custodySnapshotRef ? { custodySnapshotRef: input.custodySnapshotRef } : {}),
     internalStateSnapshotRef: buildTurnRecordInternalStateSnapshotRef({
       trust: input.trustLevel,
       contact: input.canonicalContactKey,

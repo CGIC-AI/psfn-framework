@@ -712,6 +712,10 @@ export async function handleMessageForTurn(
   let userSessionEntryId = preparedUserSessionEntryId;
   let assistantSessionEntryId: number | null = null;
   let internalStateSnapshotRef: string | undefined;
+  // Resolvable reference to this turn's durable custody snapshot
+  // (psfn-framework-ccgdz.1). Absent until the generation context is folded and
+  // recorded; absent thereafter only when the write failed visibly.
+  let custodySnapshotRef: string | undefined;
   let persistedUserMessageContent: string | undefined;
   let fatigueDecision: FatigueTurnDecision | null = null;
   let humanAttentionPressure: HumanAttentionPressureEvent | null = null;
@@ -1382,6 +1386,17 @@ export async function handleMessageForTurn(
     // destination check over it for outbound social sends this turn. Until this
     // point the guard sees no lineage and fails closed for outward destinations.
     runtime.setCurrentTurnDisclosureLineage(generationDisclosureLineage);
+    // ccgdz.1: record-first. The custody snapshot is written HERE — after the
+    // fold and before the reply is composed — so the durable proof of which
+    // sources were admitted into this generation exists before anything can be
+    // delivered on the strength of it. The write is content-free and never
+    // throws; a failure leaves the ref absent so a missing chain reads as
+    // missing rather than as proof.
+    custodySnapshotRef = await runtime.recordTurnCustodySnapshot({
+      lineage: generationDisclosureLineage,
+      turnId,
+      requestId,
+    });
     let responseAttachments = honorNoReply
       ? []
       : recoveredResponse?.attachments
@@ -1839,6 +1854,7 @@ export async function handleMessageForTurn(
       turnBudgetCharacteristics,
       observability,
       persistedUserMessageContent,
+      ...(custodySnapshotRef ? { custodySnapshotRef } : {}),
       onTurnRecordPersisted: () => {
         completedTurnRecordState.persisted = true;
       },
@@ -1972,6 +1988,7 @@ export async function handleMessageForTurn(
           ...(observability.getObservedTurnSnapshot() ? { snapshot: observability.getObservedTurnSnapshot() } : {}),
         },
         ...(internalStateSnapshotRef ? { internalStateSnapshotRef } : {}),
+        ...(custodySnapshotRef ? { custodySnapshotRef } : {}),
       }, sessionReads));
     }
     if (continuationStop) {

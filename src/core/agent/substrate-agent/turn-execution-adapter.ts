@@ -401,6 +401,8 @@ export function createTurnExecutionRuntimeAdapter(
       options.callbacks.setCurrentTurnDisclosureLineage(lineage),
     getCurrentTurnDisclosureLineage: () =>
       options.callbacks.getCurrentTurnDisclosureLineage(),
+    recordTurnCustodySnapshot: (input) =>
+      options.turnSupportRuntime.recordTurnCustodySnapshot(input),
     buildRuntimeContext: (
       message,
       resolvedUserName,

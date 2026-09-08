@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "providers": [
+    {
+      "id": "smoke-stub",
+      "type": "generic_openai",
+      "enabled": true,
+      "label": "Compose smoke provider stub",
+      "apiBaseUrl": "http://provider-stub:3000/v1",
+      "modelsApiUrl": "http://provider-stub:3000/v1/models",
+      "apiKeyRef": {
+        "kind": "env",
+        "envName": "PSFN_SMOKE_PROVIDER_STUB_API_KEY"
+      }
+    }
+  ]
+}

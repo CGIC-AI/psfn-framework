@@ -541,25 +541,41 @@ export class GardenOperatorSurface implements Lifecycle {
   private async handleHealth(res: ServerResponse): Promise<void> {
     const probe = await this.routing.probe();
     const postgresReadiness = this.config.postgresReadiness?.();
-    const postgresDegraded = postgresReadiness?.degraded.some(
-      entry => entry.requirement === 'optional',
-    ) === true;
-    const requiredPostgresUnavailable = postgresReadiness !== undefined && (
+    const degradedStores = postgresReadiness?.degraded ?? [];
+    const postgresDegraded = degradedStores.some(entry => entry.requirement === 'optional');
+    // psfn-framework-6c6cq. A degradation is only visible here AFTER
+    // `sealPostgresStoreReadinessBeforeReady` settled every task, so by
+    // construction a store listed below has already spent its whole retry
+    // budget: this is a persistent failure, not a transient one. An optional
+    // store the catalog marks `degradesOperatorReadiness` therefore stops the
+    // surface reporting an unqualified healthy status, instead of vanishing
+    // into an anonymous degraded count while its telemetry stays blank.
+    const postgresBlocksReadiness = postgresReadiness !== undefined && (
       postgresReadiness.phase !== 'ready'
-      || postgresReadiness.degraded.some(entry => entry.requirement === 'required')
+      || degradedStores.some(entry => (
+        entry.requirement === 'required' || entry.degradesOperatorReadiness
+      ))
     );
     const postgresDependency = postgresReadiness
       ? {
           postgresStores: {
             status: postgresDegraded ? 'degraded' : 'ok',
-            degradedCount: postgresReadiness.degraded.length,
+            degradedCount: degradedStores.length,
+            // Named, so a persistently broken single store is diagnosable from
+            // the probe itself. Code-owned catalog identifiers only: the raw
+            // mismatch text never reaches this always-public response.
+            degradedStores: degradedStores.map(entry => ({
+              store: entry.store,
+              requirement: entry.requirement,
+              degradesOperatorReadiness: entry.degradesOperatorReadiness,
+            })),
           },
         }
       : {};
     if (probe.kind === 'fleet') {
       const { readiness } = probe;
       if (res.writableEnded || res.destroyed) return;
-      const healthy = readiness.status === 'ready' && !requiredPostgresUnavailable;
+      const healthy = readiness.status === 'ready' && !postgresBlocksReadiness;
       sendJson(res, healthy ? 200 : 503, {
         status: healthy ? 'ok' : 'degraded',
         uptime: process.uptime(),
@@ -580,7 +596,7 @@ export class GardenOperatorSurface implements Lifecycle {
     }
 
     const payload = {
-      status: adminTransport.status === 'ok' && !requiredPostgresUnavailable ? 'ok' : 'degraded',
+      status: adminTransport.status === 'ok' && !postgresBlocksReadiness ? 'ok' : 'degraded',
       uptime: process.uptime(),
       gardenDenialsLastHour: getGardenDenialsLastHour(),
       dependencies: {

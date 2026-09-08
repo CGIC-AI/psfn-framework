@@ -171,6 +171,14 @@ export interface EditableSettings {
   backgroundFailureEscalationThreshold?: number;
   /** Row cap on the bounded persisted runtime health-event stream. */
   healthEventStreamMaxRows?: number;
+  /**
+   * Total attempts a diagnostic PostgreSQL store's startup readiness task gets
+   * before it is recorded as a terminal failure (psfn-framework-6c6cq).
+   * Attempts include the first, so 1 is "no retry".
+   */
+  postgresStoreReadinessRetryAttempts?: number;
+  /** Fixed delay between those readiness attempts. */
+  postgresStoreReadinessRetryBackoffMs?: number;
   /** Days a per-turn custody snapshot is retained before it is pruned. */
   custodySnapshotRetentionDays?: number;
   memoryExtractionMinImportance?: number;
@@ -353,6 +361,8 @@ export const RUNTIME_SETTINGS_KEYS = [
   'compactionEmotionalSalienceThresholdPct',
   'backgroundFailureEscalationThreshold',
   'healthEventStreamMaxRows',
+  'postgresStoreReadinessRetryAttempts',
+  'postgresStoreReadinessRetryBackoffMs',
   'custodySnapshotRetentionDays',
   'memoryExtractionMinImportance',
   'memoryExtractionMinConfidence',

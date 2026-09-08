@@ -380,6 +380,41 @@ describe('turn-records', () => {
       .toThrow(/names a different envelope than its snapshot/);
   });
 
+  it('round-trips a named custody absence instead of a bare missing ref', () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-custody-absence-'));
+    const turnRecordStore = createFilesystemTurnRecordStorePort(sessionsDir);
+    const record = createTurnRecord({ custodySnapshotAbsence: 'write_failed' });
+
+    turnRecordStore.appendTurnRecord(record);
+
+    const reloaded = turnRecordStore.readRecentTurnRecords(record.channelId, 5)[0];
+    expect(reloaded?.custodySnapshotAbsence).toBe('write_failed');
+    expect(reloaded?.custodySnapshotRef).toBeUndefined();
+  });
+
+  it('refuses an unknown custody absence reason rather than dropping it', () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-custody-absence-bad-'));
+    const turnRecordStore = createFilesystemTurnRecordStorePort(sessionsDir);
+    const malformed = createTurnRecord({
+      custodySnapshotAbsence: 'store_was_grumpy' as never,
+    });
+
+    expect(() => turnRecordStore.appendTurnRecord(malformed))
+      .toThrow(/must be a known absence reason/);
+  });
+
+  it('refuses a turn that claims both a custody ref and a custody absence', () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-custody-both-'));
+    const turnRecordStore = createFilesystemTurnRecordStorePort(sessionsDir);
+    const contradictory = createTurnRecord({
+      custodySnapshotRef: 'turn:019d2326-d9e1-701d-bcee-250d2cbb0e4e',
+      custodySnapshotAbsence: 'write_failed',
+    });
+
+    expect(() => turnRecordStore.appendTurnRecord(contradictory))
+      .toThrow(/exactly one is allowed/);
+  });
+
   it('refuses a custody snapshot ref that names a different turn', () => {
     const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-custody-ref-'));
     const turnRecordStore = createFilesystemTurnRecordStorePort(sessionsDir);

@@ -758,3 +758,57 @@ describe('world tool — move', () => {
     expect(affDesc).toContain('action=list');
   });
 });
+
+// ── Emanation-time device health (bead psfn-framework-s7wq3) ──
+//
+// The operator sees full device health in Garden at all times. The companion
+// sees at most `ok`/`degraded`, only on a physical place, and only where a
+// place is already being weighed — no new prompt surface, no push, and nothing
+// at all where no heartbeat has been observed.
+describe('world tool device-health annotation (psfn-framework-s7wq3)', () => {
+  function listPlaces(payload: { places: Array<Record<string, unknown>> }) {
+    return new Map(payload.places.map(place => [place.placeId as string, place]));
+  }
+
+  it('annotates only physical places whose device has actually been observed', async () => {
+    const tool = createWorldTool(createMockOps(), {
+      placesRegistry: REGISTRY,
+      resolvePlaceDeviceStatus: placeId => (placeId === 'place.living-room' ? 'degraded' : undefined),
+    });
+
+    const payload = JSON.parse(resultText(await tool.execute('call-list', { action: 'list', scope: 'site' })));
+    const places = listPlaces(payload);
+
+    expect(places.get('place.living-room')).toMatchObject({ kind: 'physical', deviceStatus: 'degraded' });
+    // Observed-nothing renders nothing rather than a guess or a blanket badge.
+    expect(places.get('place.kitchen')).not.toHaveProperty('deviceStatus');
+  });
+
+  it('never annotates a virtual place, even when the resolver would answer', async () => {
+    const resolve = vi.fn(() => 'ok' as const);
+    const tool = createWorldTool(createMockOps(), {
+      placesRegistry: REGISTRY,
+      resolvePlaceDeviceStatus: resolve,
+    });
+
+    const payload = JSON.parse(resultText(await tool.execute('call-list', { action: 'list', scope: 'site' })));
+    for (const place of payload.places as Array<Record<string, unknown>>) {
+      if (place.kind !== 'physical') expect(place).not.toHaveProperty('deviceStatus');
+    }
+    expect(resolve).not.toHaveBeenCalledWith(expect.stringContaining('mud'));
+  });
+
+  it('leaves the listing byte-identical when no health resolver is wired', async () => {
+    const withoutResolver = createWorldTool(createMockOps(), { placesRegistry: REGISTRY });
+    const withUnobserved = createWorldTool(createMockOps(), {
+      placesRegistry: REGISTRY,
+      resolvePlaceDeviceStatus: () => undefined,
+    });
+
+    const bare = resultText(await withoutResolver.execute('call-list', { action: 'list', scope: 'site' }));
+    const unobserved = resultText(await withUnobserved.execute('call-list', { action: 'list', scope: 'site' }));
+
+    expect(unobserved).toBe(bare);
+    expect(bare).not.toContain('deviceStatus');
+  });
+});

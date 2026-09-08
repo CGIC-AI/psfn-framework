@@ -1,3 +1,4 @@
+import type { SatelliteDeviceHealthReader } from '../../shared/telemetry/satellite-device-health.js';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { sendJson } from '../../channels/backplane/http/primitives.js';
 import { buildAdminEpisodicMemoryRoutes } from './api-routes-episodic-memory.js';
@@ -311,6 +312,7 @@ export function buildAdminApiRoutes(options: {
   modelUsageService?: AdminModelUsageService | null;
   observerEvalSidecarService?: AdminObserverEvalSidecarService | null;
   actionPipeService?: AdminActionPipeService | null;
+  satelliteDeviceHealth?: SatelliteDeviceHealthReader | null;
   shardFoldReviewService: AdminShardFoldReviewService;
   adaptiveToolsService?: AdminAdaptiveToolsService | null;
   wikiService?: AdminWikiService | null;
@@ -375,6 +377,7 @@ export function buildAdminApiRoutes(options: {
     modelUsageService,
     observerEvalSidecarService,
     actionPipeService,
+    satelliteDeviceHealth,
     shardFoldReviewService,
     adaptiveToolsService,
     wikiService,
@@ -574,6 +577,7 @@ export function buildAdminApiRoutes(options: {
       modelUsageService,
       observerEvalSidecarService,
       actionPipeService,
+      satelliteDeviceHealth,
       withBody,
     }),
     ...buildAdminImageRoutes({

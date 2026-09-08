@@ -1,3 +1,4 @@
+import type { SatelliteDeviceHealthReader } from '../../shared/telemetry/satellite-device-health.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import type { RuntimeToolCatalogSnapshot } from '../../core/agent/tool-catalog.js';
 import type { AdaptiveToolRuntimeState } from '../../core/agent/adaptive-tools-telemetry.js';
@@ -202,6 +203,8 @@ export interface GardenAdminDomainServices {
   modelUsage?: AdminModelUsageService | null;
   observerEvalSidecar?: AdminObserverEvalSidecarService | null;
   actionPipe?: AdminActionPipeService | null;
+  /** Derived hub device-health from satellite heartbeats (s7wq3). Read-only. */
+  satelliteDeviceHealth?: SatelliteDeviceHealthReader | null;
   shards: AdminShardFoldReviewService;
   adaptiveTools?: AdminAdaptiveToolsService | null;
   wiki?: AdminWikiService | null;

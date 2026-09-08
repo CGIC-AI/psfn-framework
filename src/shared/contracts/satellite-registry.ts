@@ -410,9 +410,38 @@ export interface AdminSatelliteEndpointAuthView {
   certBindingTypes: string[];
 }
 
+/**
+ * Observed liveness of one physical satellite, derived from device health
+ * heartbeats (bead psfn-framework-s7wq3). Fail-closed: `not_observed` is the
+ * only state a device reaches without an admitted heartbeat — absence of
+ * evidence never renders `ok`.
+ */
+export type SatelliteDeviceHealthState = 'not_observed' | 'ok' | 'degraded';
+
+/** Closed, content-free vocabulary explaining why a device reads degraded. */
+export type SatelliteDeviceDegradedReason =
+  | 'heartbeat_stale'
+  | 'device_reported_unhealthy'
+  | 'device_reported_offline';
+
 export interface AdminSatelliteEndpointLiveView {
-  status: 'not_observed';
+  status: SatelliteDeviceHealthState;
   detail: string;
+}
+
+/**
+ * Per-satellite operator health view. Heartbeats resolve to a satellite, not to
+ * one of its endpoints, so this is the honest granularity; mirroring it onto
+ * every endpoint would misreport a hub whose endpoints differ.
+ */
+export interface AdminSatelliteLiveView {
+  status: SatelliteDeviceHealthState;
+  detail: string;
+  /** ISO timestamp of the last admitted heartbeat. Absent until one arrives. */
+  lastSeenAt?: string;
+  /** Age of that heartbeat at render time. */
+  ageMs?: number;
+  reason?: SatelliteDeviceDegradedReason;
 }
 
 export interface AdminSatelliteEndpointView {
@@ -437,6 +466,7 @@ export interface AdminSatelliteView {
   testManifestId?: string;
   staticLocationLabel?: string;
   sharedDevice?: SatelliteSharedDevicePolicy;
+  live: AdminSatelliteLiveView;
   endpoints: AdminSatelliteEndpointView[];
 }
 
@@ -447,7 +477,8 @@ export interface AdminSatelliteRegistryView {
   satelliteCount: number;
   retiredSatelliteCount: number;
   endpointCount: number;
-  liveObservationStatus: 'not_implemented';
+  /** `observed` once a heartbeat tracker is wired; `not_implemented` without one. */
+  liveObservationStatus: 'not_implemented' | 'observed';
   liveObservationDetail: string;
   satellites: AdminSatelliteView[];
 }

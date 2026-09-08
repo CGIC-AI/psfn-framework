@@ -236,6 +236,7 @@ export interface EditableSettings {
   shardMaxConcurrent?: number;
   shardHeartbeatStaleAfterMs?: number;
   shardHeartbeatDisconnectAfterMs?: number;
+  satelliteHeartbeatStaleAfterMs?: number;
   // Tier 2 tuning knobs (zet.7): document attachment ingest caps
   documentIngestMaxBytes?: number;
   documentIngestTextMaxBytes?: number;
@@ -462,6 +463,7 @@ export const RUNTIME_SETTINGS_KEYS = [
   'shardMaxConcurrent',
   'shardHeartbeatStaleAfterMs',
   'shardHeartbeatDisconnectAfterMs',
+  'satelliteHeartbeatStaleAfterMs',
   'documentIngestMaxBytes',
   'documentIngestTextMaxBytes',
   'documentIngestPromptChars',

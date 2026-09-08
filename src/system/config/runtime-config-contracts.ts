@@ -399,6 +399,8 @@ export interface SubstrateConfig {
   shardHeartbeatStaleAfterMs?: number;
   /** Shard heartbeat silence (ms) before a shard is marked offline (zet.7). */
   shardHeartbeatDisconnectAfterMs?: number;
+  /** Satellite heartbeat silence (ms) before a hub device reads degraded (s7wq3). */
+  satelliteHeartbeatStaleAfterMs?: number;
   /** Max document attachment size accepted by file ingest (bytes, zet.7). */
   documentIngestMaxBytes?: number;
   /** Max plain-text attachment size accepted by file ingest (bytes, zet.7). */

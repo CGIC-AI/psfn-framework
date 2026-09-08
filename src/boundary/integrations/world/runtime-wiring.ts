@@ -36,6 +36,8 @@ export interface RegisterWorldToolsOptions {
   companionPresence?: CompanionPresenceTurnPort | null;
   /** Local situated-state seam for `move` (emanation-tracker virtual overlay). */
   applyVirtualMove?: (placeId: string) => void;
+  /** Bounded emanation-time device health for a physical place (s7wq3). */
+  resolvePlaceDeviceStatus?: (placeId: string) => 'ok' | 'degraded' | undefined;
   /** Context-system-note sink for the room-entry note fired by `move`. */
   roomEntryNoteSink?: RoomEntryNoteSink;
   /**
@@ -67,6 +69,9 @@ export function registerWorldTools(
     ...(options.resolveSituatedPlaceId ? { resolveSituatedPlaceId: options.resolveSituatedPlaceId } : {}),
     ...(options.companionPresence !== undefined ? { companionPresence: options.companionPresence } : {}),
     ...(options.applyVirtualMove ? { applyVirtualMove: options.applyVirtualMove } : {}),
+    ...(options.resolvePlaceDeviceStatus
+      ? { resolvePlaceDeviceStatus: options.resolvePlaceDeviceStatus }
+      : {}),
     ...(options.roomEntryNoteSink ? { roomEntryNoteSink: options.roomEntryNoteSink } : {}),
     ...(options.controlEnabled !== undefined ? { controlEnabled: options.controlEnabled } : {}),
     ...(options.resolveRequesterTrust ? { resolveRequesterTrust: options.resolveRequesterTrust } : {}),

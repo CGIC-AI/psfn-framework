@@ -1,3 +1,4 @@
+import type { SatelliteDeviceHealthReader } from '../../../shared/telemetry/satellite-device-health.js';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { sendJson, sendText } from '../../../channels/backplane/http/primitives.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
@@ -213,6 +214,8 @@ export function buildAdminOverviewRoutes(options: {
   modelUsageService?: AdminModelUsageService | null;
   observerEvalSidecarService?: AdminObserverEvalSidecarService | null;
   actionPipeService?: AdminActionPipeService | null;
+  /** Derived hub device health. Absent ⇒ the surface reports not_implemented. */
+  satelliteDeviceHealth?: SatelliteDeviceHealthReader | null;
   withBody: AdminBodyReader;
 }): AdminApiRoute[] {
   const {
@@ -224,6 +227,7 @@ export function buildAdminOverviewRoutes(options: {
     modelUsageService,
     observerEvalSidecarService,
     actionPipeService,
+    satelliteDeviceHealth,
     withBody,
   } = options;
   const singleCompanionFleetModelUsage = modelUsageService && config.companionId
@@ -837,7 +841,10 @@ export function buildAdminOverviewRoutes(options: {
         sendJson(
           res,
           200,
-          buildAdminSatelliteRegistryView(config.satelliteRegistry),
+          buildAdminSatelliteRegistryView(
+            config.satelliteRegistry,
+            satelliteDeviceHealth?.snapshot(Date.now()),
+          ),
           ADMIN_DYNAMIC_JSON_HEADERS,
         );
       },

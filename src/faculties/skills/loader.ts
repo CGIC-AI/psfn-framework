@@ -737,7 +737,7 @@ export async function scanSkillFiles(
   return (await scanSkillRoots(directories)).files;
 }
 
-interface SkillDocumentReadOptions {
+export interface SkillDocumentReadOptions {
   maxDocumentBytes?: number;
   maxFrontmatterBytes?: number;
   collectionLimits?: Partial<SkillCollectionLimits>;
@@ -826,12 +826,42 @@ async function readStableSkillBytes(
   }
 }
 
+/**
+ * The EXACT complete SKILL.md document — frontmatter and body — read through
+ * the same TOCTOU-guarded stable read every other skill read uses.
+ *
+ * CogSec admission (psfn-framework-1fjvm.1) hashes and screens precisely these
+ * bytes, so the hashed bytes and the screened bytes are the same single read;
+ * hashing the file and then reading it again would leave a window in which the
+ * admitted document is not the executed one.
+ */
+export async function readSkillDocument(
+  file: Pick<SkillFileCandidate, 'absolutePath'>,
+  options: SkillDocumentReadOptions = {},
+): Promise<string> {
+  return (await readStableSkillBytes(file.absolutePath, options, 'document')).toString('utf8');
+}
+
+/**
+ * A shared aggregate read budget for one batch of complete-document reads.
+ * `maxBytes` is the owner-file collection limit; the counter simply starts
+ * empty.
+ */
+export function createSkillDocumentReadBudget(maxBytes: number): SkillDocumentReadOptions {
+  const aggregateBudget: SkillReadBudget = { chargedBytes: 0, maxBytes };
+  return { aggregateBudget };
+}
+
+/** The executable body of an already-read SKILL.md document. */
+export function readSkillBodyFromDocument(document: string, relativePath: string): string {
+  return parseSkillDocument(document, relativePath).body;
+}
+
 export async function readSkillContent(
   file: Pick<SkillFileCandidate, 'absolutePath' | 'relativePath'>,
   options: SkillDocumentReadOptions = {},
 ): Promise<string> {
-  const document = (await readStableSkillBytes(file.absolutePath, options, 'document')).toString('utf8');
-  return parseSkillDocument(document, file.relativePath).body;
+  return readSkillBodyFromDocument(await readSkillDocument(file, options), file.relativePath);
 }
 
 export async function readSkillContents(
@@ -839,10 +869,10 @@ export async function readSkillContents(
   maxBytes: number,
   yieldEvery: number,
 ): Promise<string[]> {
-  const aggregateBudget: SkillReadBudget = { chargedBytes: 0, maxBytes };
+  const readOptions = createSkillDocumentReadBudget(maxBytes);
   const contents: string[] = [];
   for (const [index, file] of files.entries()) {
-    contents.push(await readSkillContent(file, { aggregateBudget }));
+    contents.push(await readSkillContent(file, readOptions));
     await maybeYield(index + 1, yieldEvery);
   }
   return contents;

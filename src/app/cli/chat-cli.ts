@@ -176,7 +176,8 @@ async function main(): Promise<void> {
       const response = await agentLoop.handleMessage(message);
       // Newline after streamed response
       console.log();
-      console.log(`  [${response.metadata.model} | ${response.metadata.inputTokens}+${response.metadata.outputTokens} tokens | ${response.metadata.durationMs}ms]\n`);
+      const { model, inputTokens: promptCount, outputTokens: completionCount, durationMs } = response.metadata;
+      console.log(`  [${model} | ${promptCount}+${completionCount} usage | ${durationMs}ms]\n`);
     } catch (err) {
       console.error('\n[Error]', err instanceof Error ? err.message : err);
       console.log();

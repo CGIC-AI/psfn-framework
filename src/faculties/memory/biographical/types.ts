@@ -89,6 +89,31 @@ export const BIOGRAPHICAL_TERMINAL_STATUSES: readonly BiographicalClaimStatus[] 
   'revoked',
 ];
 
+// ── Portability scope (o61vb.15) ──
+
+/**
+ * How far a reviewed active claim may travel beyond the room its sources came
+ * from.
+ *
+ * - `origin_only`  — never enters portable projection. The default for every
+ *                    claim, including stored rows written before this scope
+ *                    existed: portability is something a reviewer grants, never
+ *                    something a claim acquires by existing.
+ * - `universal`    — reviewed baseline-safe companion identity. Renders in any
+ *                    destination its sensitivity and CogSec lineage already
+ *                    admit; scope widens *where* a claim may go, never *whether*
+ *                    it clears the destination gate.
+ * - `subject_present` — renders only while the bound person is actually part of
+ *                    the turn: the current author, an explicitly addressed
+ *                    verified contact, or a proven current participant.
+ */
+export const BIOGRAPHICAL_PORTABILITY_SCOPES = [
+  'origin_only',
+  'universal',
+  'subject_present',
+] as const;
+export type BiographicalPortabilityScope = (typeof BIOGRAPHICAL_PORTABILITY_SCOPES)[number];
+
 // ── Collection depth (audit only) ──
 //
 // Stored for audit. A claim may record the canonical depth decision under
@@ -286,6 +311,16 @@ export type BiographicalCandidateSocialContext =
       readonly kind: 'companion_contact_dyad';
       readonly companionId: string;
       readonly contactId: string;
+    }
+  /**
+   * A true group fact (o61vb.15). The contact set is the exact canonical
+   * participant set the claim binds, in canonical order, so an n-ary fact can
+   * never collapse into a misleading singular relationship.
+   */
+  | {
+      readonly kind: 'companion_group';
+      readonly companionId: string;
+      readonly contactIds: readonly string[];
     };
 
 /**
@@ -338,10 +373,23 @@ export interface BiographicalClaim {
   readonly subject: BiographicalSubjectRef;
   /** Required for relationship/shared-language and relational nickname dyads. */
   readonly relatedSubject?: BiographicalSubjectRef;
+  /**
+   * Exact canonical participant set for an n-ary group claim (o61vb.15). At
+   * least two contacts, unique and canonically ordered, and mutually exclusive
+   * with `relatedSubject`: a group fact never degrades into a dyad.
+   */
+  readonly participants?: readonly BiographicalSubjectRef[];
   readonly kind: BiographicalClaimKind;
   readonly value: BiographicalClaimValue;
   readonly basis: BiographicalClaimBasis;
   readonly status: BiographicalClaimStatus;
+  /**
+   * Review-assigned portability. Deliberately outside `claimDigest`, exactly
+   * like status and sensitivity: it is a lifecycle decision about one claim,
+   * not part of what the claim asserts, so granting portability never
+   * invalidates a digest-bound grant or a staged candidate.
+   */
+  readonly portabilityScope: BiographicalPortabilityScope;
   readonly schemaVersion: typeof BIOGRAPHICAL_CLAIM_SCHEMA_VERSION;
   readonly normalizerVersion: typeof BIOGRAPHICAL_CLAIM_NORMALIZER_VERSION;
   readonly claimDigest: string;

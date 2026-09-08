@@ -6,12 +6,14 @@ import {
 } from '../../../faculties/memory/biographical/kernel.js';
 import { renderBiographicalClaimForReview } from '../../../faculties/memory/biographical/projection-rendering.js';
 import { biographicalCandidateDerivation } from '../../../faculties/memory/biographical/candidate-state.js';
+import { BIOGRAPHICAL_PORTABILITY_SCOPES } from '../../../faculties/memory/biographical/types.js';
 import type {
   BiographicalCandidateDerivation,
   BiographicalCandidateReceiptReason,
   BiographicalCandidateRecord,
   BiographicalClaim,
   BiographicalClaimSource,
+  BiographicalPortabilityScope,
   BiographicalSensitivityGrant,
 } from '../../../faculties/memory/biographical/types.js';
 import type { BiographicalRebuildRequest } from '../../../faculties/memory/biographical/rebuild-contracts.js';
@@ -53,7 +55,11 @@ export interface AdminBiographicalClaimView {
    * never autoactivates human-derived facts, so the queue states it plainly.
    */
   readonly derivation: BiographicalCandidateDerivation;
+  /** Reviewed portability: how far this claim may travel beyond its origin room. */
+  readonly portabilityScope: BiographicalClaim['portabilityScope'];
   readonly subject: BiographicalClaim['subject'];
+  /** Exact canonical participant set for an n-ary group claim. */
+  readonly participants?: BiographicalClaim['participants'];
   readonly relatedSubject?: BiographicalClaim['relatedSubject'];
   readonly structuredValue: BiographicalClaim['value'];
   readonly renderedValue: string;
@@ -198,6 +204,8 @@ interface ParsedReviewInput {
   readonly candidateRevision?: number;
   /** Closed human reviewer reason code stamped on the candidate receipt. */
   readonly receiptReason?: BiographicalCandidateReceiptReason;
+  /** Reviewed portability granted by an activation or a portability decision. */
+  readonly portabilityScope?: BiographicalPortabilityScope;
 }
 
 /**
@@ -264,20 +272,25 @@ function parseReviewInput(
   if (
     action !== 'approve' && action !== 'deny' && action !== 'revoke' && action !== 'regrant'
     && action !== 'stage-approve' && action !== 'stage-reject'
+    && action !== 'set-portability'
   ) {
     throw new BiographicalReviewError('malformed', 'review action is not supported');
   }
   const isStageAction = action === 'stage-approve' || action === 'stage-reject';
   const required = isStageAction
     ? ['action', 'claimDigest', 'sourceSetDigest', 'candidateRevision'] as const
-    : ['action', 'claimDigest', 'sourceSetDigest'] as const;
+    : action === 'set-portability'
+      ? ['action', 'claimDigest', 'sourceSetDigest', 'portabilityScope'] as const
+      : ['action', 'claimDigest', 'sourceSetDigest'] as const;
   const optional = action === 'revoke'
     ? ['grantId'] as const
     : action === 'regrant'
       ? ['grantedSensitivity'] as const
-      : isStageAction
-        ? ['reason'] as const
-        : [] as const;
+      : action === 'stage-approve'
+        ? ['reason', 'portabilityScope'] as const
+        : action === 'stage-reject'
+          ? ['reason'] as const
+          : [] as const;
   if (!hasExactKeys(value, required, optional)) {
     throw new BiographicalReviewError('malformed', 'review input has unknown or missing fields');
   }
@@ -289,6 +302,9 @@ function parseReviewInput(
     sourceSetDigest: digest(value.sourceSetDigest, 'sourceSetDigest'),
     actor,
   };
+  if (action === 'set-portability') {
+    return { ...base, action, portabilityScope: parsePortabilityScope(value.portabilityScope) };
+  }
   if (isStageAction) {
     const revision = value.candidateRevision;
     if (typeof revision !== 'number' || !Number.isSafeInteger(revision) || revision < 1) {
@@ -311,6 +327,9 @@ function parseReviewInput(
       action,
       candidateRevision: revision,
       receiptReason: (value.reason as BiographicalCandidateReceiptReason | undefined) ?? allowed[0]!,
+      ...(action === 'stage-approve'
+        ? { portabilityScope: parsePortabilityScope(value.portabilityScope ?? 'origin_only') }
+        : {}),
     };
   }
   if (action === 'revoke') {
@@ -329,6 +348,17 @@ function parseReviewInput(
     return { ...base, action, grantedSensitivity: sensitivity };
   }
   return { ...base, action };
+}
+
+/** Portability is a closed reviewed vocabulary; an unknown scope is malformed. */
+function parsePortabilityScope(value: unknown): BiographicalPortabilityScope {
+  if (
+    typeof value !== 'string'
+    || !(BIOGRAPHICAL_PORTABILITY_SCOPES as readonly string[]).includes(value)
+  ) {
+    throw new BiographicalReviewError('malformed', 'portabilityScope is not supported');
+  }
+  return value as BiographicalPortabilityScope;
 }
 
 function sourceView(source: BiographicalClaimSource): AdminBiographicalSourceView {
@@ -426,7 +456,9 @@ function claimView(
       ? { candidateStage: candidate.stage, candidateRevision: candidate.revision }
       : {}),
     derivation: biographicalCandidateDerivation(claim),
+    portabilityScope: claim.portabilityScope,
     subject: claim.subject,
+    ...(claim.participants !== undefined ? { participants: claim.participants } : {}),
     ...(claim.relatedSubject !== undefined ? { relatedSubject: claim.relatedSubject } : {}),
     structuredValue: claim.value,
     renderedValue: renderBiographicalClaimForReview(claim),
@@ -691,7 +723,27 @@ export class AdminBiographicalReviewService {
 
         let reason: BiographicalReviewReason;
         let grantId: string | undefined;
-        if (input.action === 'stage-approve' || input.action === 'stage-reject') {
+        if (input.action === 'set-portability') {
+          if (input.portabilityScope === undefined) {
+            throw new BiographicalReviewError('malformed', 'portabilityScope is required');
+          }
+          try {
+            await store.setClaimPortability({
+              claimId: claim.id,
+              portabilityScope: input.portabilityScope,
+              now: this.now(),
+            });
+          } catch {
+            // The kernel refuses a scope the claim's subjects or live
+            // sensitivity do not support. That is a review outcome, not a
+            // server fault, so it is audited as a refusal.
+            throw new BiographicalReviewError(
+              'portability-refused',
+              'this claim does not support the requested portability scope',
+            );
+          }
+          reason = 'portability-set';
+        } else if (input.action === 'stage-approve' || input.action === 'stage-reject') {
           if (staged === undefined) {
             throw new BiographicalReviewError(
               'candidate-not-found',
@@ -729,6 +781,12 @@ export class AdminBiographicalReviewService {
               actorAuthorityRef: input.actor.authorityRef,
               ...(input.receiptReason !== undefined ? { reason: input.receiptReason } : {}),
             }],
+            // Activation is where portability is granted, in the same
+            // transaction as the receipt: a claim can never become active with
+            // portability nobody approved, and defaults to origin_only.
+            ...(input.portabilityScope !== undefined
+              ? { portabilityScope: input.portabilityScope }
+              : {}),
             now: this.now(),
           });
           if (input.action === 'stage-reject') {

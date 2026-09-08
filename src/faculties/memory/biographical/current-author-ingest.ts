@@ -26,6 +26,7 @@ import {
   type BiographicalClaimKind,
   type BiographicalClaimSource,
   type BiographicalClaimValue,
+  type BiographicalPortabilityScope,
   type BiographicalSubjectRef,
 } from './types.js';
 
@@ -211,6 +212,12 @@ export async function ingestCurrentAuthorIdentityEvidence(input: {
   readonly store: BiographicalProfileStorePort;
   readonly evidence: CurrentAuthorIdentityEvidence;
   readonly synthesize?: CurrentAuthorIdentitySynthesizer;
+  /**
+   * Portability the CALLER asserts a reviewer granted. Ingest is a conduit, not
+   * a portability authority: it defaults to `origin_only`, so a human-derived
+   * fact that never passed review cannot travel out of the room it came from.
+   */
+  readonly portabilityScope?: BiographicalPortabilityScope;
 }): Promise<CurrentAuthorIdentityIngestResult> {
   const mapped = mapCurrentAuthorEvidence(input.evidence);
   const sources = assertSources(input.evidence.sources);
@@ -275,14 +282,23 @@ export async function ingestCurrentAuthorIdentityEvidence(input: {
       supersededClaimId: priorSameClaim.id,
       ...sharedWrite,
     });
-    const claim = await input.store.transitionClaim({
+    await input.store.transitionClaim({
       claimId: superseding.id,
       to: 'active',
+      ...(input.evidence.now !== undefined ? { now: input.evidence.now } : {}),
+    });
+    const claim = await input.store.setClaimPortability({
+      claimId: superseding.id,
+      portabilityScope: input.portabilityScope ?? 'origin_only',
       ...(input.evidence.now !== undefined ? { now: input.evidence.now } : {}),
     });
     return { claim, superseded, status: 'superseded' };
   }
 
-  const claim = await input.store.writeClaim({ ...sharedWrite, status: 'active' });
+  const claim = await input.store.writeClaim({
+    ...sharedWrite,
+    status: 'active',
+    portabilityScope: input.portabilityScope ?? 'origin_only',
+  });
   return { claim, status: 'created' };
 }

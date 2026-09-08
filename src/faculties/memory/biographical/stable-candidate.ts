@@ -50,6 +50,7 @@ export function parsePortableStableCandidate(
       ['subject', 'kind', 'value', 'basis', 'confidence', 'sources'],
       [
         'relatedSubject',
+        'participants',
         'proposedSensitivity',
         'validFrom',
         'validTo',
@@ -75,6 +76,9 @@ export function parsePortableStableCandidate(
     ...(value.relatedSubject !== undefined
       ? { relatedSubject: value.relatedSubject as BiographicalClaimWriteInput['relatedSubject'] }
       : {}),
+    ...(value.participants !== undefined
+      ? { participants: value.participants as BiographicalClaimWriteInput['participants'] }
+      : {}),
     kind: value.kind as BiographicalClaimKind,
     value: value.value as BiographicalClaimWriteInput['value'],
     basis: value.basis as BiographicalClaimWriteInput['basis'],
@@ -99,6 +103,7 @@ export function parsePortableStableCandidate(
     ...(prepared.relatedSubject !== undefined
       ? { relatedSubject: prepared.relatedSubject }
       : {}),
+    ...(prepared.participants !== undefined ? { participants: prepared.participants } : {}),
     kind: prepared.kind,
     value: prepared.value,
     basis: prepared.basis,

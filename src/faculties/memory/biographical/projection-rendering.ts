@@ -8,11 +8,19 @@ import type {
   StablePreferenceClaimValue,
 } from './types.js';
 
-export type BiographicalClaimAudienceRole = 'companion-self' | 'current-author';
+export type BiographicalClaimAudienceRole =
+  | 'companion-self'
+  | 'current-author'
+  /** An n-ary group fact whose exact bound participant set is present (o61vb.15). */
+  | 'group-context';
 
 export interface BiographicalClaimPresentation {
   readonly claim: BiographicalClaim;
-  readonly section: 'companion-self' | 'current-author-identity' | 'current-author-relational';
+  readonly section:
+    | 'companion-self'
+    | 'current-author-identity'
+    | 'current-author-relational'
+    | 'group-context';
   readonly header: string;
   readonly line: string;
   readonly sortKey: string;
@@ -29,6 +37,8 @@ interface BiographicalClaimRenderer {
 const SELF_HEADER = '## Companion self-shape\nSelf-nicknames the companion has approved for this audience; she may recognize them when addressed by them:';
 const CURRENT_AUTHOR_IDENTITY_HEADER = '## Current author identity';
 const CURRENT_AUTHOR_RELATIONAL_HEADER = '## Current author relational attribution';
+const GROUP_CONTEXT_HEADER =
+  '## Shared in this group\nLanguage this exact group shares; every person it belongs to is part of this turn:';
 
 function normalizeForOrder(value: string): string {
   return value.trim().toLowerCase().replace(/\s+/g, ' ');
@@ -85,6 +95,20 @@ function isCurrentAuthorSharedLanguage(claim: BiographicalClaim): boolean {
   return claim.kind === 'shared-language'
     && claim.subject.kind === 'contact'
     && claim.relatedSubject?.kind === 'companion'
+    && claim.value.kind === 'shared-language';
+}
+
+/**
+ * A group fact is shared language bound to an exact participant set. It is
+ * rendered without naming anyone: who it belongs to is already proven by the
+ * participant-presence gate, and restating the set would republish the group's
+ * membership into the prompt.
+ */
+function isGroupSharedLanguage(claim: BiographicalClaim): boolean {
+  return claim.kind === 'shared-language'
+    && claim.subject.kind === 'companion'
+    && claim.relatedSubject === undefined
+    && claim.participants !== undefined
     && claim.value.kind === 'shared-language';
 }
 
@@ -240,6 +264,20 @@ const BIOGRAPHICAL_CLAIM_RENDERERS: readonly BiographicalClaimRenderer[] = [
   },
   {
     matches: (claim, audienceRole) =>
+      audienceRole === 'group-context' && isGroupSharedLanguage(claim),
+    present: claim => {
+      const value = claim.value as SharedLanguageClaimValue;
+      return {
+        claim,
+        section: 'group-context',
+        header: GROUP_CONTEXT_HEADER,
+        line: `- Shared ${value.languageType} \u201C${value.phrase}\u201D means ${value.meaning}.`,
+        sortKey: `group-context:shared-language:${value.languageType}:${normalizeForOrder(value.phrase)}`,
+      };
+    },
+  },
+  {
+    matches: (claim, audienceRole) =>
       audienceRole === 'current-author' && isCurrentAuthorSharedLanguage(claim),
     present: claim => {
       const value = claim.value as SharedLanguageClaimValue;
@@ -260,6 +298,11 @@ export function presentBiographicalClaim(
   now: Date = new Date(),
 ): BiographicalClaimPresentation | undefined {
   if (!isBiographicalClaimCurrent(claim, now)) return undefined;
+  // A participant-bound claim renders only through the group role, and a group
+  // role renders only participant-bound claims. Without this, an n-ary fact
+  // could match a singular renderer and read as an ordinary self or dyad line —
+  // exactly the collapse the participant set exists to prevent.
+  if ((claim.participants !== undefined) !== (audienceRole === 'group-context')) return undefined;
   return BIOGRAPHICAL_CLAIM_RENDERERS
     .find(renderer => renderer.matches(claim, audienceRole))
     ?.present(claim);

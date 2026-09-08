@@ -19,6 +19,7 @@
     'rejected', 'superseded', 'unstaged',
   ] as const;
   const SENSITIVITY_LEVELS = ['public', 'personal', 'intimate', 'confidential'] as const;
+  const PORTABILITY_SCOPES = ['origin_only', 'universal', 'subject_present'] as const;
   const STAGE_REJECT_REASONS = [
     'reviewer_rejected', 'reviewer_flagged_sensitive', 'reviewer_flagged_ambiguous',
   ] as const;
@@ -46,6 +47,7 @@
   let grantedSensitivity = $state<(typeof SENSITIVITY_LEVELS)[number]>('personal');
   let stageFilter = $state<(typeof STAGE_FILTERS)[number]>('all');
   let rejectReason = $state<(typeof STAGE_REJECT_REASONS)[number]>('reviewer_rejected');
+  let portabilityScope = $state<(typeof PORTABILITY_SCOPES)[number]>('origin_only');
 
   let filteredClaims = $derived.by(() => {
     const needle = query.trim().toLowerCase();
@@ -194,6 +196,7 @@
             claimDigest: detail.claim.claimDigest,
             sourceSetDigest: detail.claim.storedSourceSetDigest,
             candidateRevision: detail.claim.candidateRevision,
+            portabilityScope,
           }
         : {
             action,
@@ -204,6 +207,21 @@
           },
       action === 'stage-approve' ? 'Approve for use' : 'Decline',
     );
+  }
+
+  /**
+   * Set or withdraw how far an active claim may travel. Tightening back to
+   * origin_only always succeeds; a widening the claim's subjects or live
+   * sensitivity do not support is refused by the server and audited.
+   */
+  function setPortability(): void {
+    if (!detail) return;
+    void applyReview({
+      action: 'set-portability',
+      claimDigest: detail.claim.claimDigest,
+      sourceSetDigest: detail.claim.storedSourceSetDigest,
+      portabilityScope,
+    }, `Set portability to ${portabilityScope}`);
   }
 
   function revokeGrant(grantId: string, sourceSetDigest: string): void {
@@ -303,6 +321,7 @@
                   <span class="block truncate text-sm font-semibold text-shadow-900">{claim.renderedValue}</span>
                   <span class="mt-1 block truncate text-xs text-shadow-500">
                     {subjectLabel(claim)} · {claim.kind} · {claim.derivation === 'human_derived' ? 'human-derived' : 'companion-derived'}
+                    · {claim.portabilityScope}
                     {#if claim.candidateStage} · {claim.candidateStage}{/if}
                   </span>
                 </span>
@@ -339,6 +358,12 @@
                   <button class="garden-action garden-action--danger min-h-10 px-3" disabled={mutating} onclick={() => stageDecision('stage-reject')}>Decline</button>
                 </div>
                 <label class="flex items-center gap-2 text-xs text-shadow-600">
+                  <span>Portability on approval</span>
+                  <select class="min-h-9 rounded-lg border border-bark-300 bg-surface px-2 text-xs" bind:value={portabilityScope}>
+                    {#each PORTABILITY_SCOPES as scope}<option value={scope}>{scope}</option>{/each}
+                  </select>
+                </label>
+                <label class="flex items-center gap-2 text-xs text-shadow-600">
                   <span>Decline reason</span>
                   <select class="min-h-9 rounded-lg border border-bark-300 bg-surface px-2 text-xs" bind:value={rejectReason}>
                     {#each STAGE_REJECT_REASONS as reason}<option value={reason}>{reason}</option>{/each}
@@ -373,6 +398,18 @@
               <p class="text-xs uppercase tracking-wide text-shadow-500">Automatic floor</p>
               <p class="mt-1 font-semibold text-shadow-900">{detail.claim.automaticSensitivity ?? 'Revalidation pending'}</p>
               <p class="mt-1 text-xs text-shadow-500">Proposed {detail.claim.proposedSensitivity}</p>
+            </div>
+            <div class="garden-metric rounded-xl border border-bark-200 bg-bark-50 p-3">
+              <p class="text-xs uppercase tracking-wide text-shadow-500">Portability</p>
+              <p class="mt-1 font-semibold text-shadow-900">{detail.claim.portabilityScope}</p>
+              {#if detail.claim.status === 'active'}
+                <div class="mt-2 flex items-center gap-2">
+                  <select class="min-h-9 rounded-lg border border-bark-300 bg-surface px-2 text-xs" bind:value={portabilityScope}>
+                    {#each PORTABILITY_SCOPES as scope}<option value={scope}>{scope}</option>{/each}
+                  </select>
+                  <button class="garden-action min-h-9 px-2 text-xs" disabled={mutating} onclick={setPortability}>Apply</button>
+                </div>
+              {/if}
             </div>
             <div class="garden-metric rounded-xl border border-bark-200 bg-bark-50 p-3">
               <p class="text-xs uppercase tracking-wide text-shadow-500">Source revisions</p>

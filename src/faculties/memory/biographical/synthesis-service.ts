@@ -463,7 +463,8 @@ export class BiographySynthesisService {
         if (identical !== undefined) return 'duplicate';
         const prior = open[0];
         const rationale = this.rationaleFor({ candidate, active, recurring: prior !== undefined });
-        const { status: _ignoredStatus, ...claimWrite } = candidate.write;
+        const { status: _ignoredStatus, portabilityScope: _ignoredScope, ...claimWrite } =
+          candidate.write;
         const written = await store.writeCandidate({
           claim: { ...claimWrite, now: input.now },
           automataRunId: input.automataRunId,

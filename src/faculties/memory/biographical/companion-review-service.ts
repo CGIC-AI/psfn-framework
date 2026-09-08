@@ -128,9 +128,14 @@ function reviewSchemaBlock(): string {
 }
 
 function contextLabel(context: BiographicalCandidateSocialContext): string {
-  return context.kind === 'companion_self'
-    ? `companion_self(companionId=${context.companionId})`
-    : `companion_contact_dyad(companionId=${context.companionId}, contactId=${context.contactId})`;
+  if (context.kind === 'companion_self') {
+    return `companion_self(companionId=${context.companionId})`;
+  }
+  if (context.kind === 'companion_group') {
+    return `companion_group(companionId=${context.companionId}, `
+      + `contactIds=[${context.contactIds.join(', ')}])`;
+  }
+  return `companion_contact_dyad(companionId=${context.companionId}, contactId=${context.contactId})`;
 }
 
 function candidateBlock(subject: BiographicalCompanionReviewSubject): string {
@@ -318,8 +323,12 @@ export class BiographyCompanionReviewService {
         existing.kind === context.kind
         && existing.companionId === context.companionId
         && (existing.kind === 'companion_self'
-          || (context.kind === 'companion_contact_dyad'
-            && existing.contactId === context.contactId))
+          || (existing.kind === 'companion_group'
+            ? context.kind === 'companion_group'
+              && existing.contactIds.length === context.contactIds.length
+              && existing.contactIds.every((id, index) => id === context.contactIds[index])
+            : context.kind === 'companion_contact_dyad'
+              && existing.contactId === context.contactId))
       ));
       if (!duplicate) contexts.push(context);
     };
@@ -530,7 +539,8 @@ export class BiographyCompanionReviewService {
       merge: 'reviewer_merged',
     } as const)[input.decision.action];
     for (const proposal of input.decision.proposals) {
-      const { status: _ignoredStatus, ...claimWrite } = proposal.write;
+      const { status: _ignoredStatus, portabilityScope: _ignoredScope, ...claimWrite } =
+        proposal.write;
       const written = await input.store.writeCandidate({
         claim: { ...claimWrite, now: input.now },
         automataRunId: input.reviewRunId,

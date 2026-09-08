@@ -597,6 +597,77 @@ describe('AdminBiographicalReviewService', () => {
     ]));
   });
 
+  it('grants portability at activation and audits a refused widening', async () => {
+    const store = new InMemoryBiographicalProfileStore(() => NOW);
+    const candidate = await stagedCompanionSelfCandidate(store);
+    const forwarded = await store.transitionCandidate({
+      candidateId: candidate.id,
+      expectedRevision: 2,
+      to: 'human_review',
+      receipts: [{
+        authority: 'companion',
+        decision: 'approved',
+        actorAuthorityRef: 'companion:companion-garden',
+        reason: 'reviewer_approved',
+      }],
+      now: NOW,
+    });
+    const service = new AdminBiographicalReviewService({ store, queryLimit: 20, now: () => NOW });
+    const claim = (await store.getClaim(candidate.claimId))!;
+    const digests = { claimDigest: claim.claimDigest, sourceSetDigest: claim.sourceSetDigest };
+
+    const activated = await service.review(claim.id, {
+      action: 'stage-approve',
+      ...digests,
+      candidateRevision: forwarded.revision,
+      portabilityScope: 'universal',
+    }, ACTOR);
+    expect(activated.claim.status).toBe('active');
+    expect(activated.claim.portabilityScope).toBe('universal');
+
+    // Tightening is always available.
+    const tightened = await service.review(claim.id, {
+      action: 'set-portability',
+      ...digests,
+      portabilityScope: 'origin_only',
+    }, ACTOR);
+    expect(tightened.claim.portabilityScope).toBe('origin_only');
+
+    // A claim that names a human is nobody's baseline identity: the widening is
+    // refused and the refusal is audited rather than swallowed.
+    const dyad = await store.writeClaim({
+      subject: { kind: 'contact', contactId: 'contact-v', subjectVersion: 1 },
+      relatedSubject: { kind: 'companion', companionId: 'companion-garden', subjectVersion: 1 },
+      kind: 'relationship',
+      value: { kind: 'relationship', relationshipType: 'friend' },
+      basis: 'explicit',
+      status: 'active',
+      confidence: 1,
+      sources: [source()],
+      now: NOW,
+    });
+    await expect(service.review(dyad.id, {
+      action: 'set-portability',
+      claimDigest: dyad.claimDigest,
+      sourceSetDigest: dyad.sourceSetDigest,
+      portabilityScope: 'universal',
+    }, ACTOR)).rejects.toMatchObject({ reason: 'portability-refused' });
+    expect((await store.getClaim(dyad.id))?.portabilityScope).toBe('origin_only');
+    expect(await store.listReviewAudits(dyad.id, 20)).toEqual([
+      expect.objectContaining({
+        action: 'set-portability',
+        decision: 'denied',
+        reason: 'portability-refused',
+      }),
+    ]);
+    await expect(service.review(dyad.id, {
+      action: 'set-portability',
+      claimDigest: dyad.claimDigest,
+      sourceSetDigest: dyad.sourceSetDigest,
+      portabilityScope: 'everywhere',
+    }, ACTOR)).rejects.toMatchObject({ reason: 'malformed' });
+  });
+
   it('records a declined candidate as a closed reason code and revokes the claim', async () => {
     const store = new InMemoryBiographicalProfileStore(() => NOW);
     const candidate = await stagedCompanionSelfCandidate(store);

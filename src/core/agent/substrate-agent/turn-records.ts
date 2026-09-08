@@ -743,7 +743,7 @@ function buildTurnToolCalls(
       continue;
     }
 
-    toolCalls.push({
+    const fallbackRecord: TurnRecordToolCall = {
       toolName: entry.toolName,
       toolCallId: entry.toolCallId,
       ...(hasOwnKeys(fallbackArguments)
@@ -754,7 +754,14 @@ function buildTurnToolCalls(
       ...(fallbackThoughtSignature ? { thoughtSignature: fallbackThoughtSignature } : {}),
       ...toolResultFields,
       ...custodyFields,
-    });
+    };
+    toolCalls.push(fallbackRecord);
+    // ccgdz.5: a transcript with no assistant tool-call message (recovery,
+    // synthetic replay) still owns exactly one record per tool call id, so a
+    // repeated result for that id merges the way an assistant-carried one does.
+    // Without this a retry would leave two entries under one id, each stamped
+    // with the LAST result's custody edge — a duplicated, misattributed edge.
+    if (entry.toolCallId.trim()) toolCallsById.set(entry.toolCallId, fallbackRecord);
   }
   return toolCalls;
 }

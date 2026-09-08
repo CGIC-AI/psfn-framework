@@ -113,11 +113,10 @@ function loadLatestApprovedProofs(root: string): Map<string, ApprovedArtifactPro
  */
 function approvedArtifactBytes(root: string, proof: ApprovedArtifactProof): number {
   const absolutePath = resolve(root, 'artifacts', proof.artifactPath);
-  try {
-    return statSync(absolutePath).size;
-  } catch {
-    return 0;
-  }
+  // A missing artifact reports zero and fails legibly in readApprovedArtifact
+  // once the page selects it. Every other stat failure (permissions, IO) still
+  // throws here rather than being masked as a zero-byte artifact.
+  return statSync(absolutePath, { throwIfNoEntry: false })?.size ?? 0;
 }
 
 function readApprovedArtifact(

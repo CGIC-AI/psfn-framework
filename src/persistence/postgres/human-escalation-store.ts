@@ -31,6 +31,7 @@ import {
   validateHumanEscalationRecord,
   type HumanEscalationAttempt,
   type HumanEscalationFacts,
+  type HumanEscalationKind,
   type HumanEscalationLedgerPort,
   type HumanEscalationListQuery,
   type HumanEscalationRecord,
@@ -204,6 +205,18 @@ export class PostgresHumanEscalationStore implements HumanEscalationLedgerPort {
       throw new Error('Human escalation ledger returned no row for an upserted escalation');
     }
     return mapEscalationRow(row);
+  }
+
+  async findByCondition(
+    kind: HumanEscalationKind,
+    dedupeKey: string,
+  ): Promise<HumanEscalationRecord | null> {
+    const row = await queryOne<EscalationRow>(
+      this.pool,
+      `SELECT ${ESCALATION_COLUMNS} FROM human_escalations WHERE kind = $1 AND dedupe_key = $2`,
+      [kind, dedupeKey],
+    );
+    return row ? mapEscalationRow(row) : null;
   }
 
   async findAttempt(idempotencyKey: string): Promise<HumanEscalationAttempt | null> {

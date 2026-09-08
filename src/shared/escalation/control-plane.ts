@@ -87,6 +87,15 @@ type HumanEscalationRaiseResult =
 
 export interface HumanEscalationControlPlane<TNotice> {
   raise(request: HumanEscalationRaiseRequest<TNotice>): Promise<HumanEscalationRaiseResult>;
+  /**
+   * How many times this runtime has already raised one condition, across every
+   * process that ever ran. A caller that builds a per-attempt idempotency key
+   * from a counter MUST take it from here rather than from its own in-process
+   * state: a process-local counter restarts at zero, and after two restarts it
+   * re-mints a key the ledger has already recorded, which the plane correctly
+   * refuses to dispatch twice.
+   */
+  raiseCount(kind: HumanEscalationKind, dedupeKey: string): Promise<number>;
 }
 
 export interface HumanEscalationControlPlaneOptions<TNotice> {
@@ -146,6 +155,11 @@ export function createHumanEscalationControlPlane<TNotice>(
   }
 
   return {
+    async raiseCount(kind: HumanEscalationKind, dedupeKey: string): Promise<number> {
+      const existing = await options.ledger.findByCondition(kind, dedupeKey);
+      return existing?.raiseCount ?? 0;
+    },
+
     async raise(
       request: HumanEscalationRaiseRequest<TNotice>,
     ): Promise<HumanEscalationRaiseResult> {

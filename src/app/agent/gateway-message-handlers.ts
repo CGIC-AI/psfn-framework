@@ -871,6 +871,9 @@ export function registerGatewayMessageHandlers(
           authorName: candidate.triggerAuthorName,
           content: candidate.triggerContent,
           occurredAtMs: candidate.triggerTimestampMs,
+          // A lease continuation was never a summons; the generation prompt
+          // must not claim the room addressed the companion (jp36.5.5).
+          ...(candidate.trigger === 'contextual_continuation' ? { continuation: true } : {}),
         };
         egressDecision = await egressLeasePhase.grantReply(
           decision.reservation,

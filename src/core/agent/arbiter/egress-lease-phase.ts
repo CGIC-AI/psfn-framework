@@ -118,6 +118,13 @@ export interface InboundRoomMessageEgressReplyTrigger {
   authorName: string;
   content: string;
   occurredAtMs: number;
+  /**
+   * True when the room message never named the companion and reached the
+   * appraiser through a bounded room-participation lease (jp36.5.5). The
+   * generation prompt must then say so: the companion is continuing a
+   * conversation it is already part of, not answering a summons.
+   */
+  continuation?: true;
 }
 
 /**

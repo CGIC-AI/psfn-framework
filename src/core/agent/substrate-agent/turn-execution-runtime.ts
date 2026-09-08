@@ -1096,6 +1096,14 @@ export async function handleMessageForTurn(
         wikiSources: preTurnState.disclosureWikiSources,
         toolResultSources: [],
       }));
+      // ccgdz.6: publish the turn CORRELATION beside that lineage, before the
+      // model can call an egress tool. The custody snapshot itself is folded
+      // after the tool loop returns, so a mid-turn send cannot cite a ref — but
+      // it must still bind its delivery record to the turn whose lineage
+      // authorized it. Without this, every in-turn tool egress reached its
+      // record-first commit with no correlation key at all and a
+      // proof-requiring destination was refused as a custody-store outage.
+      runtime.setCurrentTurnEgressCustody({ turnId });
     }
 
     const promptStageStart = Date.now();
@@ -1446,6 +1454,9 @@ export async function handleMessageForTurn(
     // rules read) so an outward egress later in this turn can be held when the
     // chain is incomplete, and so its delivery record is keyed to this turn.
     turnEgressCustody = turnEgressCustodyProof(generationDisclosureLineage, custodySnapshotRef);
+    // Upgrades the correlation published before generation into the folded
+    // proof: from here on an egress cites the durable snapshot, not a pending
+    // one, and a post-fold deliverer reads this exact state.
     runtime.setCurrentTurnEgressCustody({ turnId, proof: turnEgressCustody });
     let responseAttachments = honorNoReply
       ? []
@@ -2069,7 +2080,6 @@ export async function handleMessageForTurn(
         ...(internalStateSnapshotRef ? { internalStateSnapshotRef } : {}),
         ...(custodySnapshotRef ? { custodySnapshotRef } : {}),
         ...(custodySnapshotAbsence ? { custodySnapshotAbsence } : {}),
-      ...(custodySnapshotAbsence ? { custodySnapshotAbsence } : {}),
         ...(contextManifestRef ? { contextManifestRef } : {}),
         toolResultCustody,
       }, sessionReads));

@@ -124,6 +124,28 @@ function isEgressCustodyHoldReason(value: unknown): value is EgressCustodyHoldRe
 }
 
 /**
+ * The custody-snapshot state a delivery record carries BESIDES the two its ref
+ * already expresses (present ⇒ the snapshot exists; absent ⇒ none survives for
+ * this turn).
+ *
+ * `pending` is the in-turn state. A model-invoked tool egress is recorded
+ * record-first, DURING the turn, and the turn folds its custody snapshot only
+ * after the model's tool loop returns — so no ref can exist yet. The chain is
+ * intact (the decision was taken against the turn's own published lineage) but
+ * not yet durable, and the row resolves through its own `generationContextRef`
+ * (`turn:<turnId>`) once the fold lands. It is NOT an absence of proof, and it
+ * is never written by an out-of-turn deliverer, which always runs post-fold.
+ */
+const EGRESS_CUSTODY_SNAPSHOT_STATES = ['pending'] as const;
+
+export type EgressCustodySnapshotState = typeof EGRESS_CUSTODY_SNAPSHOT_STATES[number];
+
+function isEgressCustodySnapshotState(value: unknown): value is EgressCustodySnapshotState {
+  return typeof value === 'string'
+    && (EGRESS_CUSTODY_SNAPSHOT_STATES as readonly string[]).includes(value);
+}
+
+/**
  * The content-free custody proof a completed turn hands to whatever delivers
  * its output. It is a projection of the turn's folded `DisclosureLineage` plus
  * the durable ref the custody snapshot write returned — never the lineage
@@ -139,13 +161,27 @@ export interface TurnEgressCustodyProof {
 }
 
 /**
+ * The LIVE per-turn egress custody state.
+ *
+ * `turnId` is published BEFORE the turn generates, because a model-invoked
+ * egress tool runs inside the generation and its delivery record needs the
+ * turn's correlation key at that moment. `proof` appears only once the turn
+ * folds its lineage and its record-first custody snapshot write settles, so an
+ * absent proof means "this turn has not folded yet", never "this turn has no
+ * provenance".
+ */
+export interface ActiveTurnEgressCustody {
+  readonly turnId: string;
+  readonly proof?: TurnEgressCustodyProof;
+}
+
+/**
  * One completed turn's custody proof together with the correlation it is keyed
  * by. This is a LIVE in-process handoff, never durable state: the durable form
  * is the custody snapshot itself, and the turn's persisted delivery-recovery row
  * is a closed contract that must not grow a second copy of the same fact.
  */
-export interface CompletedTurnEgressCustody {
-  readonly turnId: string;
+export interface CompletedTurnEgressCustody extends ActiveTurnEgressCustody {
   readonly proof: TurnEgressCustodyProof;
 }
 
@@ -211,6 +247,18 @@ export function evaluateEgressCustodyHold(input: {
    * whole gate exists to prevent.
    */
   requiresProof?: boolean;
+  /**
+   * The turn that produced these bytes is STILL GENERATING: its custody
+   * snapshot is folded after the model's tool loop returns, so an absent ref is
+   * "not written yet" rather than "never written". Only an in-turn caller (the
+   * egress tool guard) may set this; every out-of-turn deliverer runs post-fold,
+   * where an absent ref is a genuinely missing snapshot and must still hold.
+   *
+   * It widens nothing else. The snapshot check is deliberately the LAST branch,
+   * so a turn with no published lineage, no admitted source, or an unclassified
+   * source still holds exactly as it did before — pending or not.
+   */
+  custodySnapshotPending?: boolean;
 }): EgressCustodyHoldReason | null {
   const requiresProof = input.requiresProof ?? destinationRequiresCustodyProof(input.destination);
   if (!requiresProof) return null;
@@ -218,7 +266,9 @@ export function evaluateEgressCustodyHold(input: {
   if (!proof) return 'lineage_missing';
   if (proof.sourceCount === 0) return 'no_admitted_source';
   if (proof.hasUnclassifiedSource) return 'unclassified_source';
-  if (proof.custodySnapshotRef === undefined) return 'custody_snapshot_missing';
+  if (proof.custodySnapshotRef === undefined) {
+    return input.custodySnapshotPending === true ? null : 'custody_snapshot_missing';
+  }
   return null;
 }
 
@@ -301,6 +351,13 @@ export interface EgressDeliveryRecord {
   readonly holdReason?: EgressCustodyHoldReason;
   /** The custody snapshot this egress claims as its proof, when one exists. */
   readonly custodySnapshotRef?: string;
+  /**
+   * `pending` when the record was written mid-turn, before the turn folded its
+   * custody snapshot. Mutually exclusive with `custodySnapshotRef`: the ref is
+   * the proof, this is the promise that the proof is being written for the same
+   * `generationContextRef` this row already names.
+   */
+  readonly custodySnapshot?: EgressCustodySnapshotState;
   readonly sourceCount: number;
   readonly hasUnclassifiedSource: boolean;
   readonly effectiveSensitivity: SensitivityLevel;
@@ -410,6 +467,13 @@ export function validateEgressDeliveryRecord(value: unknown): EgressDeliveryReco
     // The proof a delivery cites must be the proof of the turn it came from.
     throw invalid('custodySnapshotRef', 'must equal the generation context ref');
   }
+  if (value.custodySnapshot !== undefined && !isEgressCustodySnapshotState(value.custodySnapshot)) {
+    throw invalid('custodySnapshot', 'must be a known custody snapshot state');
+  }
+  if (value.custodySnapshot !== undefined && value.custodySnapshotRef !== undefined) {
+    // A row cannot both cite a written snapshot and claim one is still pending.
+    throw invalid('custodySnapshot', 'must be absent when a custody snapshot ref is cited');
+  }
   if (typeof value.hasUnclassifiedSource !== 'boolean') {
     throw invalid('hasUnclassifiedSource', 'must be a boolean');
   }
@@ -442,6 +506,9 @@ export function validateEgressDeliveryRecord(value: unknown): EgressDeliveryReco
     ...(value.holdReason !== undefined ? { holdReason: value.holdReason } : {}),
     ...(value.custodySnapshotRef !== undefined
       ? { custodySnapshotRef: value.custodySnapshotRef as string }
+      : {}),
+    ...(value.custodySnapshot !== undefined
+      ? { custodySnapshot: value.custodySnapshot }
       : {}),
     sourceCount: validateCount(value.sourceCount, 'sourceCount'),
     hasUnclassifiedSource: value.hasUnclassifiedSource,

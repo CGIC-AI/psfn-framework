@@ -11,7 +11,6 @@ import {
 import { parseExactPostgresCredential } from '../../shared/utils/postgres-credential.js';
 import { assertPostgresRolesAreLeastPrivilege } from '../postgres/role-posture.js';
 import { grantBackupReadAccessToTenantSchema } from '../postgres/backup-schema-access.js';
-import { grantWelfareVerifierReadAccessToTenantSchema } from '../postgres/welfare-verifier-access.js';
 
 export interface FleetAuthSchemaAccessContract {
   kind: 'companion' | 'shared';
@@ -26,11 +25,6 @@ export interface SharedSchemaRoleBoundary {
 }
 
 type SchemaAccessRoleBoundary = FleetAuthFamilyDatabaseRoles | SharedSchemaRoleBoundary;
-
-export interface FleetAuthWelfareVerifierSchemaAccess {
-  role: string;
-  databaseUrl: string;
-}
 
 function protectedRolesForBoundary(boundary: SchemaAccessRoleBoundary): string[] {
   if ('runtime' in boundary) {
@@ -155,7 +149,6 @@ export async function assertFleetAuthRolesAreSafe(
 async function assertSchemaIsolation(
   client: PoolClient,
   contracts: readonly FleetAuthSchemaAccessContract[],
-  welfareVerifierRole?: string,
 ): Promise<void> {
   const companionContracts = contracts.filter(contract => contract.kind === 'companion');
   const companionRoles = companionContracts.map((contract) => {
@@ -200,172 +193,6 @@ async function assertSchemaIsolation(
     }
   }
   await assertNoFleetAuthAccess(client, companionRoles);
-  if (welfareVerifierRole) {
-    for (const contract of contracts) {
-      await assertWelfareVerifierSchemaAccess(
-        client,
-        contract,
-        welfareVerifierRole,
-        true,
-      );
-    }
-  }
-}
-
-interface WelfareVerifierPrivilegeRow {
-  object_kind: 'schema' | 'relation' | 'column' | 'routine';
-  object_name: string;
-  privilege_type: string;
-  is_grantable: boolean;
-}
-
-interface WelfareVerifierDefaultPrivilegeRow {
-  owner_role: string;
-  schema_name: string;
-  object_type: string;
-  grantee_role: string;
-  privilege_type: string;
-  is_grantable: boolean;
-}
-
-interface WelfareVerifierExecutableRoutineRow {
-  routine_name: string;
-  identity_arguments: string;
-}
-
-async function assertNoWelfareVerifierDefaultPrivileges(
-  client: PoolClient,
-  schema: string,
-  welfareVerifierRole: string,
-): Promise<void> {
-  const defaults = await client.query<WelfareVerifierDefaultPrivilegeRow>(`
-    SELECT owner.rolname AS owner_role,
-           COALESCE(namespace.nspname, '*') AS schema_name,
-           default_acl.defaclobjtype::text AS object_type,
-           CASE WHEN acl.grantee = 0 THEN 'PUBLIC' ELSE grantee.rolname END AS grantee_role,
-           acl.privilege_type,
-           acl.is_grantable
-    FROM pg_default_acl AS default_acl
-    JOIN pg_roles AS owner ON owner.oid = default_acl.defaclrole
-    LEFT JOIN pg_namespace AS namespace ON namespace.oid = default_acl.defaclnamespace
-    CROSS JOIN LATERAL aclexplode(default_acl.defaclacl) AS acl
-    LEFT JOIN pg_roles AS grantee ON grantee.oid = acl.grantee
-    WHERE (default_acl.defaclnamespace = 0 OR namespace.nspname = $1)
-      AND CASE
-        WHEN acl.grantee = 0 THEN TRUE
-        ELSE grantee.rolname = $2 OR pg_has_role($2, acl.grantee, 'MEMBER')
-      END
-    ORDER BY owner_role, schema_name, object_type, grantee_role,
-             privilege_type, is_grantable
-  `, [schema, welfareVerifierRole]);
-  if (defaults.rows.length > 0) {
-    throw new Error(
-      `Fleet auth welfare verifier default privileges would widen schema access for ${schema}: `
-      + JSON.stringify(defaults.rows),
-    );
-  }
-}
-
-async function assertWelfareVerifierSchemaAccess(
-  client: PoolClient,
-  contract: FleetAuthSchemaAccessContract,
-  welfareVerifierRole: string,
-  requireExact: boolean,
-): Promise<void> {
-  // A default ACL is latent authority: even if the currently restored objects
-  // have the exact grants below, a later table/function/sequence creation could
-  // silently widen this gateway-only reader. Reject schema-local and global
-  // defaults granted directly, through PUBLIC, or through a membership target.
-  // The surrounding role-posture guard separately rejects membership edges,
-  // but this query keeps the ACL proof fail-closed when called independently.
-  await assertNoWelfareVerifierDefaultPrivileges(
-    client,
-    contract.schema,
-    welfareVerifierRole,
-  );
-  const privileges = await client.query<WelfareVerifierPrivilegeRow>(`
-    SELECT 'schema'::text AS object_kind,
-           namespace.nspname AS object_name,
-           acl.privilege_type,
-           acl.is_grantable
-    FROM pg_namespace AS namespace
-    CROSS JOIN LATERAL aclexplode(namespace.nspacl) AS acl
-    JOIN pg_roles AS grantee ON grantee.oid = acl.grantee
-    WHERE namespace.nspname = $1 AND grantee.rolname = $2
-    UNION ALL
-    SELECT 'relation'::text AS object_kind,
-           relation.relname AS object_name,
-           acl.privilege_type,
-           acl.is_grantable
-    FROM pg_class AS relation
-    JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
-    CROSS JOIN LATERAL aclexplode(relation.relacl) AS acl
-    JOIN pg_roles AS grantee ON grantee.oid = acl.grantee
-    WHERE namespace.nspname = $1 AND grantee.rolname = $2
-    UNION ALL
-    SELECT 'column'::text AS object_kind,
-           relation.relname || '.' || attribute.attname AS object_name,
-           acl.privilege_type,
-           acl.is_grantable
-    FROM pg_attribute AS attribute
-    JOIN pg_class AS relation ON relation.oid = attribute.attrelid
-    JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
-    CROSS JOIN LATERAL aclexplode(attribute.attacl) AS acl
-    JOIN pg_roles AS grantee ON grantee.oid = acl.grantee
-    WHERE namespace.nspname = $1 AND grantee.rolname = $2
-    UNION ALL
-    SELECT 'routine'::text AS object_kind,
-           routine.proname AS object_name,
-           acl.privilege_type,
-           acl.is_grantable
-    FROM pg_proc AS routine
-    JOIN pg_namespace AS namespace ON namespace.oid = routine.pronamespace
-    CROSS JOIN LATERAL aclexplode(routine.proacl) AS acl
-    JOIN pg_roles AS grantee ON grantee.oid = acl.grantee
-    WHERE namespace.nspname = $1 AND grantee.rolname = $2
-    ORDER BY object_kind, object_name, privilege_type, is_grantable
-  `, [contract.schema, welfareVerifierRole]);
-  const expected: WelfareVerifierPrivilegeRow[] = contract.kind === 'companion'
-    ? [
-        {
-          object_kind: 'relation',
-          object_name: 'agent_background_work_jobs',
-          privilege_type: 'SELECT',
-          is_grantable: false,
-        },
-        {
-          object_kind: 'schema',
-          object_name: contract.schema,
-          privilege_type: 'USAGE',
-          is_grantable: false,
-        },
-      ]
-    : [];
-  const expectedKeys = new Set(expected.map(row => JSON.stringify(row)));
-  const unexpected = privileges.rows.filter(row => !expectedKeys.has(JSON.stringify(row)));
-  const missing = requireExact
-    ? expected.filter(row => !privileges.rows.some(actual => (
-        JSON.stringify(actual) === JSON.stringify(row)
-      )))
-    : [];
-  const executableRoutines = requireExact && contract.kind === 'companion'
-    ? await client.query<WelfareVerifierExecutableRoutineRow>(`
-        SELECT routine.proname AS routine_name,
-               pg_get_function_identity_arguments(routine.oid) AS identity_arguments
-        FROM pg_proc AS routine
-        JOIN pg_namespace AS namespace ON namespace.oid = routine.pronamespace
-        WHERE namespace.nspname = $1
-          AND has_function_privilege($2, routine.oid, 'EXECUTE')
-        ORDER BY routine.proname, pg_get_function_identity_arguments(routine.oid)
-      `, [contract.schema, welfareVerifierRole])
-    : { rows: [] };
-  if (unexpected.length > 0 || missing.length > 0 || executableRoutines.rows.length > 0) {
-    throw new Error(
-      `Fleet auth welfare verifier schema access mismatch for ${contract.schema}: `
-      + `unexpected=${JSON.stringify(unexpected)}, missing=${JSON.stringify(missing)}, `
-      + `executableRoutines=${JSON.stringify(executableRoutines.rows)}`,
-    );
-  }
 }
 
 async function assertNoFleetAuthAccess(
@@ -552,7 +379,6 @@ export async function assertFleetAuthSchemaAccessTargets(options: {
   contracts: readonly FleetAuthSchemaAccessContract[];
   ownerRole: string;
   ownerDatabaseUrls: Readonly<Record<string, string>>;
-  welfareVerifier?: FleetAuthWelfareVerifierSchemaAccess;
 }): Promise<void> {
   const credentialSchemas = Object.keys(options.ownerDatabaseUrls).sort();
   const expectedSchemas = options.contracts.map(contract => contract.schema).sort();
@@ -585,48 +411,6 @@ export async function assertFleetAuthSchemaAccessTargets(options: {
       `);
       const expectedTarget = target.rows.at(0);
       if (!expectedTarget) throw new Error('Fleet auth family restore could not identify its target database');
-      if (options.welfareVerifier) {
-        const credential = parseExactPostgresCredential(
-          options.welfareVerifier.databaseUrl,
-          'Fleet auth family restore welfare verifier credential',
-        );
-        const role = assertValidRoleName(options.welfareVerifier.role, 'welfare verifier role');
-        if (credential.username !== role) {
-          throw new Error(
-            `Fleet auth family restore welfare verifier credential must authenticate as ${role}`,
-          );
-        }
-        const mappedRoles = [...new Set(options.contracts.flatMap(contract => (
-          [contract.ownerRole, ...contract.runtimeRoles]
-        )))];
-        if (mappedRoles.includes(role) || role === options.ownerRole) {
-          throw new Error('Fleet auth family restore welfare verifier role must be a distinct authority');
-        }
-        const verifierPool = createPostgresPool(options.welfareVerifier.databaseUrl, {
-          applicationName: 'fleet-auth-welfare-verifier-preflight',
-          max: 1,
-        });
-        try {
-          const verifierClient = await verifierPool.connect();
-          try {
-            await assertFleetAuthRolesAreSafe(verifierClient, [role], role);
-            const actualTarget = await verifierClient.query<{
-              database_name: string;
-              system_identifier: string;
-            }>(`
-              SELECT current_database() AS database_name,
-                     (pg_control_system()).system_identifier::text AS system_identifier
-            `);
-            if (JSON.stringify(actualTarget.rows.at(0)) !== JSON.stringify(expectedTarget)) {
-              throw new Error('Fleet auth family restore welfare verifier credential targets another database');
-            }
-          } finally {
-            verifierClient.release();
-          }
-        } finally {
-          await verifierPool.end();
-        }
-      }
       for (const contract of options.contracts) {
         const ownerDatabaseUrl = options.ownerDatabaseUrls[contract.schema];
         if (!ownerDatabaseUrl) {
@@ -683,7 +467,6 @@ export async function applyFleetAuthSchemaAccessContracts(options: {
   contracts: readonly FleetAuthSchemaAccessContract[];
   ownerDatabaseUrls: Readonly<Record<string, string>>;
   backupRole?: string;
-  welfareVerifierRole?: string;
 }): Promise<void> {
   const backupRole = options.backupRole === undefined
     ? undefined
@@ -691,16 +474,6 @@ export async function applyFleetAuthSchemaAccessContracts(options: {
   const mappedRuntimeRoles = [...new Set(options.contracts.flatMap(
     contract => contract.runtimeRoles,
   ))].sort();
-  const welfareVerifierRole = options.welfareVerifierRole === undefined
-    ? undefined
-    : assertValidRoleName(options.welfareVerifierRole, 'welfare verifier role');
-  if (welfareVerifierRole && [
-    ...mappedRuntimeRoles,
-    ...options.contracts.map(contract => contract.ownerRole),
-    ...(backupRole ? [backupRole] : []),
-  ].includes(welfareVerifierRole)) {
-    throw new Error('Fleet auth family restore welfare verifier role must be a distinct authority');
-  }
   const mappedRuntimeGrantees = mappedRuntimeRoles.map(quoteIdentifier).join(', ');
   for (const contract of options.contracts) {
     const ownerDatabaseUrl = options.ownerDatabaseUrls[contract.schema];
@@ -752,29 +525,10 @@ export async function applyFleetAuthSchemaAccessContracts(options: {
           + `foreignRoutines=${ownership?.foreign_routine_owner_count ?? 0}`,
         );
       }
-      if (welfareVerifierRole) {
-        await assertWelfareVerifierSchemaAccess(
-          client,
-          contract,
-          welfareVerifierRole,
-          false,
-        );
-      }
       await client.query(`REVOKE ALL ON SCHEMA ${schema} FROM PUBLIC`);
       await client.query(`REVOKE ALL ON ALL TABLES IN SCHEMA ${schema} FROM PUBLIC`);
       await client.query(`REVOKE ALL ON ALL SEQUENCES IN SCHEMA ${schema} FROM PUBLIC`);
       await client.query(`REVOKE ALL ON ALL FUNCTIONS IN SCHEMA ${schema} FROM PUBLIC`);
-      if (welfareVerifierRole && contract.kind === 'companion') {
-        // PostgreSQL implicitly grants PUBLIC EXECUTE on new routines when the
-        // owning role has no explicit default ACL. A per-schema REVOKE cannot
-        // subtract that global built-in default, so pin the companion owner's
-        // global routine default. The family contract above proves that this
-        // owner maps to exactly one companion schema and no sibling schema.
-        await client.query(
-          `ALTER DEFAULT PRIVILEGES FOR ROLE ${quoteIdentifier(contract.ownerRole)} `
-          + 'REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC',
-        );
-      }
       await client.query(`REVOKE ALL ON ALL TABLES IN SCHEMA ${schema} FROM ${mappedRuntimeGrantees}`);
       await client.query(`REVOKE ALL ON ALL SEQUENCES IN SCHEMA ${schema} FROM ${mappedRuntimeGrantees}`);
       await client.query(`REVOKE ALL ON ALL FUNCTIONS IN SCHEMA ${schema} FROM ${mappedRuntimeGrantees}`);
@@ -803,32 +557,10 @@ export async function applyFleetAuthSchemaAccessContracts(options: {
           backupRole,
         });
       }
-      if (welfareVerifierRole && contract.kind === 'companion') {
-        const grant = await grantWelfareVerifierReadAccessToTenantSchema(client, {
-          schema: contract.schema,
-          verifierRole: welfareVerifierRole,
-        });
-        if (!grant.relationGranted) {
-          throw new Error(
-            `Fleet auth family restore schema ${contract.schema} is missing agent_background_work_jobs`,
-          );
-        }
-      }
-      if (welfareVerifierRole) {
-        await assertWelfareVerifierSchemaAccess(
-          client,
-          contract,
-          welfareVerifierRole,
-          true,
-        );
-      }
       const allowedGrantees = [
         contract.ownerRole,
         ...(backupRole ? [backupRole] : []),
         ...contract.runtimeRoles,
-        ...(welfareVerifierRole && contract.kind === 'companion'
-          ? [welfareVerifierRole]
-          : []),
       ];
       const unexpectedGrantees = await client.query<{ role_name: string }>(`
         WITH acl_grantees AS (
@@ -885,7 +617,6 @@ export async function assertFleetAuthSchemaAccessIsolation(options: {
   databaseUrl: string;
   contracts: readonly FleetAuthSchemaAccessContract[];
   ownerRole: string;
-  welfareVerifierRole?: string;
 }): Promise<void> {
   const pool = createPostgresPool(options.databaseUrl, {
     applicationName: 'fleet-auth-schema-access-verification',
@@ -894,14 +625,8 @@ export async function assertFleetAuthSchemaAccessIsolation(options: {
   try {
     const client = await pool.connect();
     try {
-      const welfareVerifierRole = options.welfareVerifierRole === undefined
-        ? undefined
-        : assertValidRoleName(options.welfareVerifierRole, 'welfare verifier role');
       await assertMappedRolesAreSafe(client, options.contracts, options.ownerRole);
-      if (welfareVerifierRole) {
-        await assertFleetAuthRolesAreSafe(client, [welfareVerifierRole], options.ownerRole);
-      }
-      await assertSchemaIsolation(client, options.contracts, welfareVerifierRole);
+      await assertSchemaIsolation(client, options.contracts);
       const shared = options.contracts.find(contract => contract.kind === 'shared');
       if (!shared) throw new Error('Fleet auth schema access isolation requires a shared contract');
       await assertSharedMigrationAuthorityIsolation(

@@ -509,9 +509,10 @@ required owner files, seeds, and canonical modes before rollout.
   and ledger authority are provisioned explicitly (advisory-locked, idempotent,
   re-runnable as the repair path) and only verified at runtime.
 - **Tenancy is reciprocal.** Each companion's credential has exact own-schema +
-  shared DML authority and zero `fleet_auth` access; cross-schema grants reach
-  only dedicated gateway roles (backup, welfare verifier), never companion
-  runtime logins.
+  shared DML authority and zero `fleet_auth` access; the only cross-schema grant
+  reaches the dedicated gateway backup role, never a companion runtime login.
+  A fleet gateway reads no sibling schema at all: welfare grants are answered by
+  each companion's own runtime authority over `welfare.grant.verify`.
 
 ## Focused tests
 

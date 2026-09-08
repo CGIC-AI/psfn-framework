@@ -13,6 +13,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { createStaticCredentialVault } from '../../boundary/custody/credential-vault.js';
 import { resolveFleetAccessMode } from '../../boundary/fleet-auth/fleet-access-mode.js';
 import {
+  assertRetiredFleetWelfareVerifier,
   FLEET_AUTH_ENV_VAR,
   FLEET_AUTH_FILE_NAME,
   projectFleetAuthGardenMetadata,
@@ -419,6 +420,24 @@ describe('fleet-auth owner-file configuration', () => {
 
     // Absent is valid (the gateway degrades honestly without it).
     expect(validateFleetAuthConfig(config, 'fleet-auth.json').welfareVerifier).toBeUndefined();
+
+    // psfn-framework-znuav: the block is retired for fleets. It parses (the
+    // single-companion local verifier still reads its own schema through it),
+    // but a multi-companion deployment refuses by name rather than provisioning
+    // a fleet-wide reader for a consumer that no longer exists.
+    expect(() => assertRetiredFleetWelfareVerifier({
+      multiCompanion: true,
+      fleetAuth: withVerifier,
+    })).toThrow(/"welfareVerifier" authority is retired for multi-companion fleets/);
+    expect(() => assertRetiredFleetWelfareVerifier({
+      multiCompanion: true,
+      fleetAuth: withVerifier,
+    })).toThrow(/FLEET_AUTH_WELFARE_VERIFIER_DATABASE_URL/);
+    expect(() => assertRetiredFleetWelfareVerifier({
+      multiCompanion: false,
+      fleetAuth: withVerifier,
+    })).not.toThrow();
+    expect(() => assertRetiredFleetWelfareVerifier({ multiCompanion: true })).not.toThrow();
 
     // Unsafe role name rejected.
     expect(() => validateFleetAuthConfig({

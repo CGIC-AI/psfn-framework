@@ -407,7 +407,7 @@ export function normalizeRoomContent(content: string): string {
 }
 
 function featureKey(roomId: string, messageId: string): string {
-  return `${roomId} ${messageId}`;
+  return `${roomId}\0${messageId}`;
 }
 
 function matchAliasCue(

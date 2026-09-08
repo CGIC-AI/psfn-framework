@@ -87,6 +87,12 @@ describe('agent core runtime builder', () => {
     expect(memoryRuntime.slice(retrieverEnd)).toContain(
       'automataBusWorkerAccess: options.automataBusWorkerAccess',
     );
+    // mgdks.1: both eligible classes reach the durable terminal adapter, so the
+    // governed lifecycle can terminalize each of them exactly once.
+    expect(coreRuntimeSource).toContain('automataTerminalLifecycle: automataBus?.lifecycle');
+    expect(memoryRuntime.slice(retrieverEnd)).toContain(
+      'automataTerminalLifecycle: options.automataTerminalLifecycle',
+    );
     expect(agentMainSource).toContain('automataBusWorkerAccess: coreRuntime.automataBus!.workerAccess');
     expect(agentMainSource).toContain('automataLifecyclePort: coreRuntime.automataBus!.lifecycle');
   });

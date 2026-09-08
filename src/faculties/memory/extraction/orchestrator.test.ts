@@ -346,6 +346,33 @@ describe('runExtractionOrchestration durable children', () => {
     );
   });
 
+  it('leaves a preempted run resumable instead of terminalizing it', async () => {
+    const registry = await createAutomataRunRegistry();
+    const automataBusWorkerAccess = createAutomataBusAccess(registry);
+    const recorded: RecordedTerminal[] = [];
+    const automataTerminalLifecycle = createTerminalLifecycle({ recorded });
+    const preempted = new Error('model call preempted');
+    preempted.name = 'ModelCallPreemptedError';
+
+    await expect(runExtractionOrchestration(buildOptions({
+      turnId: '018f22a2-52b8-7a3a-8c16-25b7b14f7005',
+      llmClient: {
+        complete: vi.fn().mockRejectedValue(preempted),
+      } as ExtractionRunOptions['llmClient'],
+      automataBusWorkerAccess,
+      automataRunRegistry: registry,
+      automataTerminalLifecycle,
+    }))).rejects.toThrow('model call preempted');
+
+    // A retryable control signal defers the run; it never terminalizes it, so
+    // the same run can be executed again without a duplicate terminal event.
+    expect(registry.getRun(
+      '018f22a2-52b8-7a3a-8c16-25b7b14f7005:memory-extraction',
+    )).toMatchObject({ status: 'running' });
+    expect(recorded).toEqual([]);
+    expect(automataTerminalLifecycle.recordTerminalHandoff).not.toHaveBeenCalled();
+  });
+
   it('terminalizes the eligible run and records an observable error when the handoff fails', async () => {
     clearDiagnosticLogRingBufferForTests();
     const registry = await createAutomataRunRegistry();

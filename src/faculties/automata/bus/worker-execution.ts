@@ -290,10 +290,19 @@ export class AutomataBusWorkerRun {
    */
   settle(outcome: AutomataWorkerOutcome): Promise<AutomataWorkerSettlement> {
     if (this.settlement) return Promise.resolve(this.settlement);
-    this.settling ??= this.settleOnce(outcome).then(settlement => {
-      this.settlement = settlement;
-      return settlement;
-    });
+    this.settling ??= this.settleOnce(outcome).then(
+      settlement => {
+        this.settlement = settlement;
+        return settlement;
+      },
+      error => {
+        // A failed settlement is not a settlement. Both effects are idempotent
+        // (key-bound handoff, terminal-replay guard), so a caller that retries
+        // after a transient store failure can still reach a terminal state.
+        this.settling = null;
+        throw error;
+      },
+    );
     return this.settling;
   }
 

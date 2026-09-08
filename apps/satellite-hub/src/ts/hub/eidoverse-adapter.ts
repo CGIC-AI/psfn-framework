@@ -11,6 +11,7 @@ import {
   type EmbodiedSessionRegistry,
   type PsfnChannelContext,
   type SatelliteAttachmentOwnership,
+  type VisionCaptureImage,
 } from "./embodied-session.js";
 import {
   parseEidoverseBodyAction,
@@ -43,6 +44,15 @@ export interface EidoverseSayPublisher {
   say(text: string): Promise<void>;
 }
 
+/**
+ * Optional first-person vision. `capture` resolves to null whenever the world's
+ * renderer is absent, slow, or refusing — the turn then keeps only its text
+ * `look()` notes.
+ */
+export interface EidoverseSnapshotCaptureSource {
+  capture(sessionId: string): Promise<VisionCaptureImage | null>;
+}
+
 export interface EidoverseEmbodiedSessionLogger {
   warn(message: string): void;
 }
@@ -59,6 +69,11 @@ export interface EidoverseEmbodiedSessionDependencies {
    * `avatar_action` capability; absent, body requests fail closed.
    */
   body?: EidoverseBodyRunner;
+  /**
+   * Present only when snapshots are explicitly enabled and the claim profile
+   * grants the vision capability.
+   */
+  snapshot?: EidoverseSnapshotCaptureSource;
   logger?: EidoverseEmbodiedSessionLogger;
 }
 
@@ -152,8 +167,14 @@ export class EidoverseEmbodiedSessionAdapter {
     if (this.consumedUtteranceIds.has(utteranceId)) return null;
     this.consumedUtteranceIds.add(utteranceId);
 
-    const lookNotes = await this.lookContextNotes();
-    const channel = this.channelContext(input.region, ownership, lookNotes);
+    // Vision runs alongside the text look rather than after it: the door's
+    // renderer can take seconds, and neither call may serialize behind the
+    // other on the turn's critical path.
+    const [lookNotes, capture] = await Promise.all([
+      this.lookContextNotes(),
+      this.captureSnapshot(),
+    ]);
+    const channel = this.channelContext(input.region, ownership, lookNotes, capture);
     const controller = new AbortController();
     this.activeReplies.add(controller);
     this.deps.sessions.append(this.conversationId, { role: "user", content: userText });
@@ -200,6 +221,7 @@ export class EidoverseEmbodiedSessionAdapter {
     region: string | undefined,
     ownership: SatelliteAttachmentOwnership,
     lookNotes: NonNullable<PsfnChannelContext["contextNotes"]>,
+    capture: VisionCaptureImage | null,
   ): PsfnChannelContext {
     const normalizedRegion = normalizeOptional(region);
     const place = this.resolvePlace(normalizedRegion);
@@ -216,8 +238,29 @@ export class EidoverseEmbodiedSessionAdapter {
     return {
       ...base,
       ...(place.placeId ? { placeId: place.placeId } : {}),
+      // One first-person frame per turn, carried on the same seam Voxta uses:
+      // stripped metadata for the outbound channel record, the image itself
+      // only for the model turn.
+      ...(capture
+        ? {
+          visionCaptures: [stripVisionCaptureImageData(capture)],
+          visionCaptureImages: [capture],
+        }
+        : {}),
       ...(boundedContextNotes.length > 0 ? { contextNotes: boundedContextNotes } : {}),
     };
+  }
+
+  private async captureSnapshot(): Promise<VisionCaptureImage | null> {
+    const snapshot = this.deps.snapshot;
+    if (!snapshot) return null;
+    try {
+      return await snapshot.capture(this.conversationId);
+    } catch {
+      // A snapshot never fails a turn; the text look notes remain the tier.
+      (this.deps.logger ?? console).warn("Eidoverse snapshot failed");
+      return null;
+    }
   }
 
   private async lookContextNotes(): Promise<NonNullable<PsfnChannelContext["contextNotes"]>> {
@@ -263,6 +306,13 @@ function requireNonEmpty(value: string, field: string): string {
   const normalized = value.trim();
   if (!normalized) throw new Error(`${field} is required`);
   return normalized;
+}
+
+function stripVisionCaptureImageData(
+  capture: VisionCaptureImage,
+): NonNullable<PsfnChannelContext["visionCaptures"]>[number] {
+  const { dataBase64: _dataBase64, ...metadata } = capture;
+  return metadata;
 }
 
 function normalizeOptional(value: string | undefined): string | undefined {

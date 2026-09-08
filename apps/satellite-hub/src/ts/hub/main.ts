@@ -11,6 +11,11 @@ import {
   claimGrantsEidoverseBodyActions,
   loadEidoverseBodyRunnerConfig,
 } from "./eidoverse-body-runner.js";
+import {
+  EidoverseSnapshotSource,
+  claimGrantsEidoverseVision,
+  loadEidoverseSnapshotConfig,
+} from "./eidoverse-snapshot.js";
 import { createEidoverseProductionWakeLifecycle } from "./eidoverse-wake-runtime.js";
 import { RealtimeHubServer } from "./server.js";
 import { HomeAssistantClient } from "./home-assistant/client.js";
@@ -36,6 +41,16 @@ async function main(): Promise<void> {
         logger: { warn: (message) => console.warn(message) },
       })
     : null;
+  const eidoverseSnapshotConfig = eidoverseConfig
+    && claimGrantsEidoverseVision(config.psfn.satelliteClaim)
+    ? loadEidoverseSnapshotConfig(eidoverseConfig)
+    : null;
+  const eidoverseSnapshot = eidoverseSnapshotConfig
+    ? new EidoverseSnapshotSource(eidoverseSnapshotConfig, {
+        artifactsRoot: config.artifactsRoot,
+        logger: { warn: (message) => console.warn(message) },
+      })
+    : null;
   const server = new RealtimeHubServer(config, {
     eidoverse: eidoverseConfig && eidoverse
       ? {
@@ -45,6 +60,7 @@ async function main(): Promise<void> {
           onLookError: () => console.warn("Eidoverse MCP look failed"),
           say: eidoverse,
           ...(eidoverseBody ? { body: eidoverseBody } : {}),
+          ...(eidoverseSnapshot ? { snapshot: eidoverseSnapshot } : {}),
         }
       : null,
   });

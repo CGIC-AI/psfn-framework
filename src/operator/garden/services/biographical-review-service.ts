@@ -5,7 +5,10 @@ import {
   computeAutomaticSensitivity,
 } from '../../../faculties/memory/biographical/kernel.js';
 import { renderBiographicalClaimForReview } from '../../../faculties/memory/biographical/projection-rendering.js';
+import { biographicalCandidateDerivation } from '../../../faculties/memory/biographical/candidate-state.js';
 import type {
+  BiographicalCandidateDerivation,
+  BiographicalCandidateReceiptReason,
   BiographicalCandidateRecord,
   BiographicalClaim,
   BiographicalClaimSource,
@@ -18,7 +21,10 @@ import type {
   BiographicalReviewAuditRecord,
   BiographicalReviewReason,
 } from '../../../faculties/memory/biographical/review-audit.js';
-import type { BiographicalProfileStorePort } from '../../../faculties/memory/biographical/store-port.js';
+import type {
+  BiographicalClaimListOptions,
+  BiographicalProfileStorePort,
+} from '../../../faculties/memory/biographical/store-port.js';
 import {
   soleAdminFleetActor,
   type GardenRequestContext,
@@ -38,6 +44,15 @@ export interface AdminBiographicalClaimView {
   readonly id: string;
   readonly kind: BiographicalClaim['kind'];
   readonly status: BiographicalClaim['status'];
+  /** Staged review stage, present only while this claim still has a candidate row. */
+  readonly candidateStage?: BiographicalCandidateRecord['stage'];
+  /** Exact staged revision a human stage action must cite. */
+  readonly candidateRevision?: number;
+  /**
+   * Whether the asserted facts were derived from a human subject. Review policy
+   * never autoactivates human-derived facts, so the queue states it plainly.
+   */
+  readonly derivation: BiographicalCandidateDerivation;
   readonly subject: BiographicalClaim['subject'];
   readonly relatedSubject?: BiographicalClaim['relatedSubject'];
   readonly structuredValue: BiographicalClaim['value'];
@@ -102,6 +117,45 @@ export interface AdminBiographicalClaimList {
   readonly claims: readonly AdminBiographicalClaimView[];
 }
 
+/**
+ * Subject-centered listing filter (o61vb.14). A Contact Biography tab and the
+ * companion self view are the same bounded queue narrowed to one canonical
+ * identity; the filter never widens what a caller may see, because the fleet
+ * subject-relation gate still runs on every returned row.
+ */
+export interface AdminBiographicalClaimFilter {
+  readonly subjectContactId?: string;
+  readonly subjectCompanionId?: string;
+}
+
+function parseClaimFilter(
+  filter: AdminBiographicalClaimFilter | undefined,
+): Pick<BiographicalClaimListOptions, 'anySubjectIdentity'> {
+  if (filter === undefined) return {};
+  const contactId = filter.subjectContactId;
+  const companionId = filter.subjectCompanionId;
+  if (contactId !== undefined && companionId !== undefined) {
+    throw new BiographicalReviewError(
+      'malformed',
+      'a biography listing filters on one canonical subject, not both',
+    );
+  }
+  if (contactId !== undefined) {
+    return {
+      anySubjectIdentity: { kind: 'contact', contactId: nonEmpty(contactId, 'subjectContactId') },
+    };
+  }
+  if (companionId !== undefined) {
+    return {
+      anySubjectIdentity: {
+        kind: 'companion',
+        companionId: nonEmpty(companionId, 'subjectCompanionId'),
+      },
+    };
+  }
+  return {};
+}
+
 function candidateView(candidate: BiographicalCandidateRecord): AdminBiographicalCandidateView {
   return {
     id: candidate.id,
@@ -140,7 +194,25 @@ interface ParsedReviewInput {
   readonly actor: AdminBiographicalReviewActor;
   readonly grantId?: string;
   readonly grantedSensitivity?: SensitivityLevel;
+  /** Exact staged revision a stage action consumes. */
+  readonly candidateRevision?: number;
+  /** Closed human reviewer reason code stamped on the candidate receipt. */
+  readonly receiptReason?: BiographicalCandidateReceiptReason;
 }
+
+/**
+ * Reason codes a human reviewer may stamp on a stage decision. Closed on
+ * purpose: a human review reason is an auditable code, never review prose that
+ * would republish what the sources said.
+ */
+const HUMAN_STAGE_APPROVE_REASONS: readonly BiographicalCandidateReceiptReason[] = [
+  'reviewer_approved',
+];
+const HUMAN_STAGE_REJECT_REASONS: readonly BiographicalCandidateReceiptReason[] = [
+  'reviewer_rejected',
+  'reviewer_flagged_sensitive',
+  'reviewer_flagged_ambiguous',
+];
 
 export class BiographicalReviewError extends Error {
   constructor(
@@ -189,19 +261,24 @@ function parseReviewInput(
     throw new BiographicalReviewError('malformed', 'review input must be an exact object');
   }
   const action = value.action;
-  if (action !== 'approve' && action !== 'deny' && action !== 'revoke' && action !== 'regrant') {
+  if (
+    action !== 'approve' && action !== 'deny' && action !== 'revoke' && action !== 'regrant'
+    && action !== 'stage-approve' && action !== 'stage-reject'
+  ) {
     throw new BiographicalReviewError('malformed', 'review action is not supported');
   }
+  const isStageAction = action === 'stage-approve' || action === 'stage-reject';
+  const required = isStageAction
+    ? ['action', 'claimDigest', 'sourceSetDigest', 'candidateRevision'] as const
+    : ['action', 'claimDigest', 'sourceSetDigest'] as const;
   const optional = action === 'revoke'
     ? ['grantId'] as const
     : action === 'regrant'
       ? ['grantedSensitivity'] as const
-      : [] as const;
-  if (!hasExactKeys(
-    value,
-    ['action', 'claimDigest', 'sourceSetDigest'],
-    optional,
-  )) {
+      : isStageAction
+        ? ['reason'] as const
+        : [] as const;
+  if (!hasExactKeys(value, required, optional)) {
     throw new BiographicalReviewError('malformed', 'review input has unknown or missing fields');
   }
   const actor = parseActor(actorValue);
@@ -212,6 +289,30 @@ function parseReviewInput(
     sourceSetDigest: digest(value.sourceSetDigest, 'sourceSetDigest'),
     actor,
   };
+  if (isStageAction) {
+    const revision = value.candidateRevision;
+    if (typeof revision !== 'number' || !Number.isSafeInteger(revision) || revision < 1) {
+      throw new BiographicalReviewError(
+        'malformed',
+        'candidateRevision must be a positive safe integer',
+      );
+    }
+    const allowed = action === 'stage-approve'
+      ? HUMAN_STAGE_APPROVE_REASONS
+      : HUMAN_STAGE_REJECT_REASONS;
+    if (
+      value.reason !== undefined
+      && !(allowed as readonly string[]).includes(String(value.reason))
+    ) {
+      throw new BiographicalReviewError('malformed', 'stage reason code is not supported');
+    }
+    return {
+      ...base,
+      action,
+      candidateRevision: revision,
+      receiptReason: (value.reason as BiographicalCandidateReceiptReason | undefined) ?? allowed[0]!,
+    };
+  }
   if (action === 'revoke') {
     return { ...base, action, grantId: nonEmpty(value.grantId, 'grantId') };
   }
@@ -282,6 +383,7 @@ function claimView(
   rebuilds: readonly BiographicalRebuildRequest[],
   grants: readonly BiographicalSensitivityGrant[],
   now: Date,
+  candidate?: BiographicalCandidateRecord,
 ): AdminBiographicalClaimView {
   const automaticSensitivity = computeAutomaticSensitivity({
     kind: claim.kind,
@@ -306,6 +408,12 @@ function claimView(
     .map(rebuild => rebuild.reason);
   const withheldReasons = [
     ...(claim.status === 'active' ? [] : [`claim-status:${claim.status}`]),
+    // A staged candidate that has not reached `active` is the reason a claim is
+    // nonprojectable, and naming it is what tells a reviewer whether the ball is
+    // with the companion, with a human, or with nobody.
+    ...(candidate !== undefined && candidate.stage !== 'active'
+      ? [`candidate-stage:${candidate.stage}`]
+      : []),
     ...(currentDigestGrant === undefined
       ? pendingRebuildReasons.map(reason => `rebuild:${reason}`)
       : []),
@@ -314,6 +422,10 @@ function claimView(
     id: claim.id,
     kind: claim.kind,
     status: claim.status,
+    ...(candidate !== undefined
+      ? { candidateStage: candidate.stage, candidateRevision: candidate.revision }
+      : {}),
+    derivation: biographicalCandidateDerivation(claim),
     subject: claim.subject,
     ...(claim.relatedSubject !== undefined ? { relatedSubject: claim.relatedSubject } : {}),
     structuredValue: claim.value,
@@ -387,19 +499,38 @@ export class AdminBiographicalReviewService {
     await this.deps.close?.();
   }
 
-  async listClaims(context?: GardenRequestContext): Promise<AdminBiographicalClaimList> {
+  /**
+   * The exact staging record for one claim. A claim id is unique to one
+   * candidate row, so this is the claim's own review state; other rows share
+   * only the content digest.
+   */
+  private async candidateFor(
+    store: BiographicalProfileStorePort,
+    claimId: string,
+  ): Promise<BiographicalCandidateRecord | undefined> {
+    const rows = await store.listCandidates({ claimId, limit: this.deps.queryLimit });
+    return rows.at(-1);
+  }
+
+  async listClaims(
+    context?: GardenRequestContext,
+    filter?: AdminBiographicalClaimFilter,
+  ): Promise<AdminBiographicalClaimList> {
     const access = this.subjectAccessForRequest(context);
+    const subjectFilter = parseClaimFilter(filter);
     if (access === null) {
       const claims = await this.deps.store.listClaims({
         includeTerminal: true,
         limit: this.deps.queryLimit,
+        ...subjectFilter,
       });
       const views = await Promise.all(claims.map(async claim => {
-        const [rebuilds, grants] = await Promise.all([
+        const [rebuilds, grants, candidate] = await Promise.all([
           this.deps.store.listRebuilds({ claimId: claim.id, limit: this.deps.queryLimit }),
           this.deps.store.listGrantsForClaim(claim.id),
+          this.candidateFor(this.deps.store, claim.id),
         ]);
-        return claimView(claim, rebuilds, grants, this.now());
+        return claimView(claim, rebuilds, grants, this.now(), candidate);
       }));
       return { claims: views };
     }
@@ -414,6 +545,7 @@ export class AdminBiographicalReviewService {
         includeTerminal: true,
         offset,
         limit: this.deps.queryLimit,
+        ...subjectFilter,
       });
       if (candidates.length === 0) break;
       const evaluated = await Promise.all(candidates.map(async claim => ({
@@ -434,8 +566,11 @@ export class AdminBiographicalReviewService {
       if (candidates.length < this.deps.queryLimit) break;
     }
     const views = await Promise.all(authorized.map(async ({ claim, rebuilds }) => {
-      const grants = await this.deps.store.listGrantsForClaim(claim.id);
-      return claimView(claim, rebuilds, grants, this.now());
+      const [grants, candidate] = await Promise.all([
+        this.deps.store.listGrantsForClaim(claim.id),
+        this.candidateFor(this.deps.store, claim.id),
+      ]);
+      return claimView(claim, rebuilds, grants, this.now(), candidate);
     }));
     return { claims: views };
   }
@@ -459,20 +594,14 @@ export class AdminBiographicalReviewService {
     if (access !== null && !claimVisibleToSubject(claim, pendingRebuilds, access)) {
       throw new BiographicalReviewError('claim-not-found', 'biographical claim not found');
     }
-    const [grants, rebuilds, audits, candidates] = await Promise.all([
+    const [grants, rebuilds, audits, candidate] = await Promise.all([
       this.deps.store.listGrantsForClaim(claim.id),
       this.deps.store.listRebuilds({ claimId: claim.id, limit: this.deps.queryLimit }),
       this.deps.store.listReviewAudits(claim.id, this.deps.queryLimit),
-      this.deps.store.listCandidates({
-        claimDigest: claim.claimDigest,
-        limit: this.deps.queryLimit,
-      }),
+      this.candidateFor(this.deps.store, claim.id),
     ]);
-    // A claim id is unique to one candidate row, so the exact match is the
-    // staging record for this claim; other rows share only the content digest.
-    const candidate = candidates.find(record => record.claimId === claim.id);
     return {
-      claim: claimView(claim, rebuilds, grants, this.now()),
+      claim: claimView(claim, rebuilds, grants, this.now(), candidate),
       grants,
       rebuilds,
       audits,
@@ -553,9 +682,69 @@ export class AdminBiographicalReviewService {
         if (input.action !== 'revoke' && input.sourceSetDigest !== expectedSourceSetDigest) {
           throw new BiographicalReviewError('stale-source-set-digest', 'stale source-set digest');
         }
+        // Staged claims are governed by the receipt-gated candidate machine.
+        // Reading it here is what stops the claim-only approve/deny path from
+        // becoming an operator bypass around companion review.
+        const staged = await this.candidateFor(store, claim.id);
+        const stagingOpen = staged !== undefined && staged.stage !== 'active'
+          && staged.stage !== 'rejected' && staged.stage !== 'superseded';
+
         let reason: BiographicalReviewReason;
         let grantId: string | undefined;
-        if (input.action === 'approve') {
+        if (input.action === 'stage-approve' || input.action === 'stage-reject') {
+          if (staged === undefined) {
+            throw new BiographicalReviewError(
+              'candidate-not-found',
+              'this claim has no staged review candidate',
+            );
+          }
+          if (staged.revision !== input.candidateRevision) {
+            throw new BiographicalReviewError(
+              'stale-candidate-revision',
+              'stale candidate revision',
+            );
+          }
+          // Human review acts only on what companion review already handed
+          // forward. Any other stage — including a candidate the companion has
+          // not seen — fails closed rather than short-circuiting a stage.
+          if (staged.stage !== 'human_review') {
+            throw new BiographicalReviewError(
+              'invalid-state',
+              `candidate is in ${staged.stage}, not human review`,
+            );
+          }
+          if (input.action === 'stage-approve' && pendingDigestDrift !== undefined) {
+            throw new BiographicalReviewError(
+              'invalid-state',
+              'candidate cannot be activated while its sources have drifted',
+            );
+          }
+          await store.transitionCandidate({
+            candidateId: staged.id,
+            expectedRevision: staged.revision,
+            to: input.action === 'stage-approve' ? 'active' : 'rejected',
+            receipts: [{
+              authority: 'human',
+              decision: input.action === 'stage-approve' ? 'approved' : 'rejected',
+              actorAuthorityRef: input.actor.authorityRef,
+              ...(input.receiptReason !== undefined ? { reason: input.receiptReason } : {}),
+            }],
+            now: this.now(),
+          });
+          if (input.action === 'stage-reject') {
+            // Activation already flips the claim inside the candidate machine;
+            // rejection does not, so the claim would otherwise linger in
+            // `candidate` forever. Revoking it makes the refusal durable.
+            await store.transitionClaim({ claimId: claim.id, to: 'revoked', now: this.now() });
+          }
+          reason = input.action === 'stage-approve' ? 'stage-approved' : 'stage-rejected';
+        } else if (input.action === 'approve') {
+          if (stagingOpen) {
+            throw new BiographicalReviewError(
+              'invalid-state',
+              'this claim is under staged review; use the exact stage action',
+            );
+          }
           if (pendingDigestDrift !== undefined || (
             claim.status !== 'candidate'
             && claim.status !== 'quarantined'
@@ -566,6 +755,12 @@ export class AdminBiographicalReviewService {
           await store.transitionClaim({ claimId: claim.id, to: 'active', now: this.now() });
           reason = 'approved';
         } else if (input.action === 'deny') {
+          if (stagingOpen) {
+            throw new BiographicalReviewError(
+              'invalid-state',
+              'this claim is under staged review; use the exact stage action',
+            );
+          }
           if (
             claim.status !== 'candidate'
             && claim.status !== 'quarantined'

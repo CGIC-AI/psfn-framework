@@ -1,4 +1,18 @@
-const ENV_CREDENTIAL_NAME_PATTERN = /^[A-Z][A-Z0-9_]*$/;
+// ── Credential vault construction (gateway-only) ──
+//
+// Everything here materializes secrets: it builds a vault over a secret map,
+// selects the configured backend, talks to OpenBao over the network, and owns
+// the provider API-key env tables. Only the gateway may import this module by
+// value — the agent process must never hold secrets, and
+// src/app/agent/agent-import-boundary.test.ts enforces that on the static
+// import closure of src/app/agent/**.
+//
+// Shared and agent-reachable code depends on the secret-free half instead:
+// `shared/contracts/credential-contracts.ts` owns the reference shapes, the
+// `CredentialVaultPort` contract, and the resolvers that read a credential
+// through an injected port (psfn-framework-f77ca). Those symbols are
+// re-exported below so gateway-side call sites keep a single import.
+
 const CREDENTIAL_VAULT_BACKEND_ENV = 'CREDENTIAL_VAULT_BACKEND';
 const OPENBAO_KV_VERSION_DEFAULT = 2;
 
@@ -11,22 +25,30 @@ const PROVIDER_API_KEY_ENV_NAMES: Readonly<Record<string, readonly string[]>> = 
   openrouter: ['OPENROUTER_API_KEY'],
 });
 
-const HUGGING_FACE_TOKEN_ENV_NAMES = Object.freeze([
-  'HF_TOKEN',
-  'HF_ACCESS_TOKEN',
-  'HUGGINGFACE_HUB_TOKEN',
-  'TRANSFORMERS_HF_TOKEN',
-]);
-
 import type {
   CredentialReference,
-  EnvCredentialReference,
+  CredentialVaultPort,
+} from '../../shared/contracts/credential-contracts.js';
+import {
+  envCredential,
+  normalizeCredentialValue,
+  resolveOptionalCredentialReference,
+  resolveOptionalEnvCredential,
 } from '../../shared/contracts/credential-contracts.js';
 
 export type {
   CredentialReference,
+  CredentialVaultPort,
   EnvCredentialReference,
 } from '../../shared/contracts/credential-contracts.js';
+export {
+  envCredential,
+  resolveHuggingFaceToken,
+  resolveInlineOrEnvCredential,
+  resolveOptionalCredentialReference,
+  resolveOptionalEnvCredential,
+} from '../../shared/contracts/credential-contracts.js';
+
 export type CredentialVaultBackend = 'env' | 'openbao';
 
 export interface OpenBaoCredentialVaultConfig {
@@ -42,12 +64,6 @@ export interface CredentialVaultFactoryOptions {
   fetchImpl?: typeof fetch;
 }
 
-export interface CredentialVaultPort {
-  resolveOptional(reference: CredentialReference): string | undefined;
-  resolveRequired(reference: CredentialReference, description: string): string;
-  has(reference: CredentialReference): boolean;
-}
-
 export interface CredentialVaultConfigLike {
   credentialVault?: CredentialVaultPort;
   providerRegistry?: {
@@ -57,20 +73,6 @@ export interface CredentialVaultConfigLike {
       apiKeyRef?: CredentialReference;
     }>;
   };
-}
-
-function normalizeCredentialValue(value: unknown): string | undefined {
-  if (typeof value !== 'string') return undefined;
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
-
-function normalizeEnvCredentialName(envName: string): string {
-  const normalized = normalizeCredentialValue(envName);
-  if (!normalized || !ENV_CREDENTIAL_NAME_PATTERN.test(normalized)) {
-    throw new Error(`Invalid credential env name "${envName}"`);
-  }
-  return normalized;
 }
 
 function resolveProviderCredentialReferences(
@@ -88,13 +90,6 @@ function resolveProviderCredentialReferences(
     return [configuredRef];
   }
   return (PROVIDER_API_KEY_ENV_NAMES[normalized] ?? []).map((envName) => envCredential(envName));
-}
-
-export function envCredential(envName: string): EnvCredentialReference {
-  return {
-    kind: 'env',
-    envName: normalizeEnvCredentialName(envName),
-  };
 }
 
 export function createStaticCredentialVault(
@@ -290,38 +285,6 @@ export async function createCredentialVaultFromEnvironment(
   );
 }
 
-export function resolveOptionalEnvCredential(
-  vault: CredentialVaultPort | undefined,
-  envName: string,
-  fallbackEnv: NodeJS.ProcessEnv = process.env,
-): string | undefined {
-  return resolveOptionalCredentialReference(vault, envCredential(envName), fallbackEnv);
-}
-
-export function resolveOptionalCredentialReference(
-  vault: CredentialVaultPort | undefined,
-  reference: CredentialReference,
-  fallbackEnv: NodeJS.ProcessEnv = process.env,
-): string | undefined {
-  if (vault) {
-    return vault.resolveOptional(reference);
-  }
-  return normalizeCredentialValue(fallbackEnv[reference.envName]);
-}
-
-export function resolveInlineOrEnvCredential(
-  currentValue: unknown,
-  vault: CredentialVaultPort | undefined,
-  envName: string,
-  fallbackEnv: NodeJS.ProcessEnv = process.env,
-): string | undefined {
-  const inlineValue = normalizeCredentialValue(currentValue);
-  if (inlineValue) {
-    return inlineValue;
-  }
-  return resolveOptionalEnvCredential(vault, envName, fallbackEnv);
-}
-
 export function resolveProviderApiKey(
   provider: string,
   config: CredentialVaultConfigLike = {},
@@ -329,19 +292,6 @@ export function resolveProviderApiKey(
 ): string | undefined {
   for (const reference of resolveProviderCredentialReferences(provider, config)) {
     const value = resolveOptionalCredentialReference(config.credentialVault, reference, fallbackEnv);
-    if (value) {
-      return value;
-    }
-  }
-  return undefined;
-}
-
-export function resolveHuggingFaceToken(
-  config: Pick<CredentialVaultConfigLike, 'credentialVault'> = {},
-  fallbackEnv: NodeJS.ProcessEnv = process.env,
-): string | undefined {
-  for (const envName of HUGGING_FACE_TOKEN_ENV_NAMES) {
-    const value = resolveOptionalEnvCredential(config.credentialVault, envName, fallbackEnv);
     if (value) {
       return value;
     }

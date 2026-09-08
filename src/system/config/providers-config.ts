@@ -1,10 +1,10 @@
 import { join } from 'node:path';
 import type { CanonicalProviderRegistry, CanonicalProviderType, ProviderRegistryEntry } from '../../shared/contracts/runtime.js';
-import type { CredentialReference } from '../../boundary/custody/credential-vault.js';
-import type { SubstrateConfig } from './runtime-config-contracts.js';
 import {
   envCredential,
-} from '../../boundary/custody/credential-vault.js';
+  type CredentialReference,
+} from '../../shared/contracts/credential-contracts.js';
+import type { SubstrateConfig } from './runtime-config-contracts.js';
 import { loadRequiredJson } from './load-or-seed.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import { isRecord } from '../../shared/utils/types.js';

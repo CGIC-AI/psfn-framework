@@ -1,7 +1,7 @@
 import {
   envCredential,
   type CredentialReference,
-} from '../../boundary/custody/credential-vault.js';
+} from '../../shared/contracts/credential-contracts.js';
 import { createCompanionId, type CompanionId } from '../../shared/routing/companion-id.js';
 import { isRecord, isRfc4122Uuid } from '../../shared/utils/types.js';
 import { PostgresBuzzRecoveryStore } from '../../persistence/postgres/buzz-recovery-store.js';

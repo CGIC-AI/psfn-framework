@@ -1,7 +1,7 @@
 import {
   envCredential,
   type CredentialReference,
-} from '../../boundary/custody/credential-vault.js';
+} from '../../shared/contracts/credential-contracts.js';
 import { createPostgresPool } from '../../persistence/postgres.js';
 import { PostgresMulticaRuntimeLease } from '../../persistence/postgres/multica-runtime-lease.js';
 import { createCompanionId, type CompanionId } from '../../shared/routing/companion-id.js';

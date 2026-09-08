@@ -550,11 +550,11 @@
       "note": "Reviewed after the full AST child-traversal fix for psfn-framework-aicg6.32; existing call-site policy is acknowledged migration debt, not silently accepted as immutable code ownership."
     },
     {
-      "file": "src/boundary/custody/credential-vault.ts",
+      "file": "src/shared/contracts/credential-contracts.ts",
       "name": "ENV_CREDENTIAL_NAME_PATTERN",
       "value": "/^[A-Z][A-Z0-9_]*$/",
       "form": "regex",
-      "note": "Immutable parser/wire/schema contract ENV_CREDENTIAL_NAME_PATTERN; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning."
+      "note": "Immutable parser/wire/schema contract ENV_CREDENTIAL_NAME_PATTERN; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning (moved from boundary/custody/credential-vault.ts by psfn-framework-f77ca)."
     },
     {
       "file": "src/boundary/custody/runtime-credential-source.ts",

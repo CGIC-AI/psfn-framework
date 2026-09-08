@@ -130,6 +130,7 @@ import {
   emitHealthEvent,
   processObserverId,
   resolveHealthEventOwner,
+  stableHealthConditionCorrelationId,
 } from '../../shared/contracts/health-event.js';
 import {
   PostgresPoolOwner,
@@ -401,6 +402,11 @@ async function main(): Promise<void> {
         owner: resolveHealthEventOwner(config.companionId),
         severity: 'warning',
         code: 'human_escalation_ledger_saturated',
+        // One standing condition, not one incident per write while at the cap.
+        correlationId: stableHealthConditionCorrelationId(
+          'human_escalation_ledger_saturated',
+          resolveHealthEventOwner(config.companionId),
+        ),
         provenance: {
           process: 'agent',
           component: 'persistence',

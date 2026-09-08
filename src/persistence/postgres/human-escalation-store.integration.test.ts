@@ -264,4 +264,52 @@ describe('PostgresHumanEscalationStore bounds', () => {
         .toBe(BOUNDS.maxAttemptsPerEscalation);
     });
   });
+
+  it('ranks the answered ring by answer time, so a long-open row survives being answered', async () => {
+    await withStore(async ({ store }) => {
+      // Raised FIRST and left open while everything else came and went, so it
+      // is the oldest row in the table by raise time and the newest by answer
+      // time. Ranking the ring by raise time would evict it in the very
+      // statement that recorded the operator's decision.
+      const longOpen = await store.openOrReopen(facts({
+        dedupeKey: 'long-open',
+        sourceRef: 'ref-long-open',
+        raisedAtMs: NOW_MS,
+      }));
+      for (let index = 0; index < 3; index += 1) {
+        const record = await store.openOrReopen(facts({
+          dedupeKey: `later-${String(index)}`,
+          sourceRef: `ref-later-${String(index)}`,
+          raisedAtMs: NOW_MS + 1_000 + index,
+        }));
+        await store.applyResolution({
+          escalationId: record.escalationId,
+          expectedState: 'open',
+          resolution: {
+            state: 'resolved',
+            reason: 'handled',
+            actor: 'operator',
+            resolvedAtMs: NOW_MS + 2_000 + index,
+          },
+        });
+      }
+
+      const answered = await store.applyResolution({
+        escalationId: longOpen.escalationId,
+        expectedState: 'open',
+        resolution: {
+          state: 'resolved',
+          reason: 'handled',
+          actor: 'operator',
+          resolvedAtMs: NOW_MS + 9_000,
+        },
+      });
+
+      expect(answered).not.toBeNull();
+      // The row the caller was just handed is still there to be read back.
+      expect(await store.getById(longOpen.escalationId)).not.toBeNull();
+      const counts = await store.countByState();
+      expect(counts.resolved).toBe(BOUNDS.maxResolvedRowsPerKind);
+    });
+  });
 });

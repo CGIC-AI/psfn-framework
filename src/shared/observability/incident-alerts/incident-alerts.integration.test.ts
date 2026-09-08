@@ -11,6 +11,7 @@
 // real ring store, and the real Garden service, and then drives each of the
 // four acceptance scenarios plus healthy traffic end to end.
 
+import { DEFAULT_HUMAN_ESCALATION_CONFIG } from '../../../system/config/scheduler-config/human-escalation.js';
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createPostgresPool } from '../../../persistence/postgres.js';
@@ -116,7 +117,9 @@ async function withRuntime(
   });
   try {
     const store = await PostgresHealthEventStore.fromPool(pool, HEALTH_EVENT_ROW_CAP);
-    const escalations = await PostgresHumanEscalationStore.fromPool(pool);
+    const escalations = await PostgresHumanEscalationStore.fromPool(pool, {
+      bounds: DEFAULT_HUMAN_ESCALATION_CONFIG.retention,
+    });
     const eventBus = new EventBus();
     const sent: NotifyNtfyParams[] = [];
     let clock = NOW_MS;

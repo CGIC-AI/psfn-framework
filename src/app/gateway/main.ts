@@ -389,6 +389,11 @@ async function main(): Promise<void> {
           owner: { kind: 'system' },
           severity: 'warning',
           code: 'human_escalation_ledger_saturated',
+          // One standing condition, not one incident per write while at the cap.
+          correlationId: stableHealthConditionCorrelationId(
+            'human_escalation_ledger_saturated',
+            { kind: 'system' },
+          ),
           provenance: {
             process: 'gateway',
             component: 'persistence',

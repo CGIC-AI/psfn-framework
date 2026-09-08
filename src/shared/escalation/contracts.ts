@@ -546,6 +546,83 @@ export interface HumanEscalationListQuery {
 }
 
 /**
+ * What bounds the durable ledger (bead psfn-framework-yu03d).
+ *
+ * The health-event stream is a ring: every write prunes past its cap, because
+ * an observation nobody read is safe to lose. An escalation is not. A row here
+ * is a question this runtime asked a person, so the bound cannot be a plain
+ * ring — evicting an OPEN escalation would silently retract the question.
+ *
+ * The bound is therefore split along exactly that line:
+ *
+ *   * `resolvedRetentionMs` and `maxResolvedRowsPerKind` bound the ANSWERED
+ *     half. Both evictions are restricted in SQL to rows that are not open, so
+ *     an unanswered escalation is structurally not a candidate for either.
+ *   * `maxAttemptsPerEscalation` bounds the delivery-attempt ledger a
+ *     long-running condition accumulates, newest-first.
+ *   * `maxOpenRowsPerKind` bounds nothing by itself, and says so: it is the
+ *     count at which the ledger reports content-free saturation onto the health
+ *     stream. There is no eviction behind it, because the only way to shrink
+ *     the open half is for a human to answer.
+ *
+ * The values are owner-file owned (`scheduler.json` `humanEscalation.retention`)
+ * and required: a ledger that persists what a runtime asked a human must never
+ * come up without a declared bound.
+ */
+export interface HumanEscalationLedgerBounds {
+  /** How long an answered escalation stays readable before it is evicted. */
+  resolvedRetentionMs: number;
+  /** Newest answered escalations kept per kind; open rows are never evicted. */
+  maxResolvedRowsPerKind: number;
+  /** Newest recorded delivery attempts kept per escalation. */
+  maxAttemptsPerEscalation: number;
+  /** Open rows per kind at which the ledger reports saturation; never evicts. */
+  maxOpenRowsPerKind: number;
+}
+
+/**
+ * What one prune reported. Content-free: counts and the cap that was compared
+ * against, never a kind name, a dedupe key, or an owner.
+ */
+export interface HumanEscalationLedgerSaturation {
+  kind: HumanEscalationKind;
+  openRows: number;
+  maxOpenRowsPerKind: number;
+}
+
+/**
+ * Fail-closed admission for the owner-file bounds, taken wherever a ledger is
+ * constructed. Mirrors the health stream's positive-cap guard: there is no
+ * built-in fallback, so a missing or nonsensical bound is a startup failure.
+ */
+export function requireHumanEscalationLedgerBounds(
+  bounds: HumanEscalationLedgerBounds,
+): HumanEscalationLedgerBounds {
+  if (!isRecord(bounds)) {
+    throw new Error('Human escalation ledger requires the owner-file retention bounds');
+  }
+  for (const field of [
+    'resolvedRetentionMs',
+    'maxResolvedRowsPerKind',
+    'maxAttemptsPerEscalation',
+    'maxOpenRowsPerKind',
+  ] as const) {
+    const value = bounds[field];
+    if (!Number.isSafeInteger(value) || value < 1) {
+      throw new Error(
+        `Human escalation ledger requires a positive owner-file ${field}`,
+      );
+    }
+  }
+  return {
+    resolvedRetentionMs: bounds.resolvedRetentionMs,
+    maxResolvedRowsPerKind: bounds.maxResolvedRowsPerKind,
+    maxAttemptsPerEscalation: bounds.maxAttemptsPerEscalation,
+    maxOpenRowsPerKind: bounds.maxOpenRowsPerKind,
+  };
+}
+
+/**
  * Durable ledger seam. Postgres implements it in production; the in-memory
  * implementation beside it exists for tests and for the control plane's own
  * conformance suite, never as a runtime fallback — a missing ledger is a

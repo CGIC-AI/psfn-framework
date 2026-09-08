@@ -126,7 +126,11 @@ import {
 import {
   subscribeRefreshFailureHealthEvents,
 } from '../../shared/observability/refresh-failure-emitter.js';
-import { resolveHealthEventOwner } from '../../shared/contracts/health-event.js';
+import {
+  emitHealthEvent,
+  processObserverId,
+  resolveHealthEventOwner,
+} from '../../shared/contracts/health-event.js';
 import {
   PostgresPoolOwner,
   getPostgresPoolTelemetry,
@@ -385,6 +389,32 @@ async function main(): Promise<void> {
     onContactLifecycleRecoveryFailure: (error) => {
       log.error('Contact lifecycle recovery worker failed', {
         error: error instanceof Error ? error.message : String(error),
+      });
+    },
+    humanEscalationLedgerBounds: schedulerConfig.humanEscalation.retention,
+    // The open half of the ledger has no eviction: an unanswered escalation is
+    // a question a person still owes an answer to. Reaching the owner-file cap
+    // is therefore news, and it enters the same content-free health plane every
+    // other operational signal does — counts and the cap, no kind detail.
+    onHumanEscalationLedgerSaturated: (saturation) => {
+      void emitHealthEvent(eventBus, {
+        owner: resolveHealthEventOwner(config.companionId),
+        severity: 'warning',
+        code: 'human_escalation_ledger_saturated',
+        provenance: {
+          process: 'agent',
+          component: 'persistence',
+          observerId: processObserverId(),
+        },
+        observedAtMs: Date.now(),
+        evidence: {
+          openRowCount: saturation.openRows,
+          openRowCap: saturation.maxOpenRowsPerKind,
+        },
+      }).catch((error: unknown) => {
+        log.error('Human escalation ledger saturation health event failed', {
+          error: error instanceof Error ? error.message : String(error),
+        });
       });
     },
   });

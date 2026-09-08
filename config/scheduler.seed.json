@@ -50,7 +50,13 @@
       "operator_confirmation": { "sink": "garden_only", "cooldownMs": 0 },
       "cogsec_quarantine": { "sink": "garden_only", "cooldownMs": 0 }
     },
-    "listLimit": 100
+    "listLimit": 100,
+    "retention": {
+      "resolvedRetentionMs": 604800000,
+      "maxResolvedRowsPerKind": 256,
+      "maxAttemptsPerEscalation": 64,
+      "maxOpenRowsPerKind": 128
+    }
   },
   "backgroundWork": {
     "supervisor": {

@@ -36,8 +36,10 @@ import type { SandboxDeniedCapability } from '../../contracts/sandbox-analysis-c
  * `operator_alert_sinks_unconfigured` is the only member and the reason this
  * concept exists: a runtime that cannot deliver an operator alert is the one
  * fault nobody would otherwise be told about. It has no detector, no `closed`
- * partner, and no recovery event — the gateway emits it once per boot with its
- * own correlation id — so it is alerted on sight and never re-stated.
+ * partner, and no recovery event, so it is alerted on sight and never
+ * re-stated. Its correlation id is derived from the CONDITION rather than
+ * minted per boot (psfn-framework-yu03d), so a sinkless crash loop stays one
+ * incident and one open escalation instead of one of each per cycle.
  */
 const STANDALONE_INCIDENT_CODES = [
   'operator_alert_sinks_unconfigured',

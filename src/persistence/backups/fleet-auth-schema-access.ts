@@ -14,6 +14,7 @@ import { grantBackupReadAccessToTenantSchema } from '../postgres/backup-schema-a
 import {
   partitionRetiredGrantees,
   revokeRetiredFleetGranteesFromSchema,
+  type PostgresRetiredGranteeClient,
 } from '../postgres/retired-fleet-grantees.js';
 import { createComponentLogger } from '../../shared/logger.js';
 
@@ -471,7 +472,7 @@ export async function assertFleetAuthSchemaAccessTargets(options: {
 }
 
 async function readUnexpectedSchemaGrantees(
-  client: PoolClient,
+  client: PostgresRetiredGranteeClient,
   schema: string,
   allowedGrantees: readonly string[],
 ): Promise<string[]> {
@@ -520,8 +521,8 @@ async function readUnexpectedSchemaGrantees(
  * survive, and then it is warned about rather than refused. Every other
  * unexpected grantee, PUBLIC included, still fails closed.
  */
-async function assertExactSchemaGrantees(
-  client: PoolClient,
+export async function assertExactSchemaGrantees(
+  client: PostgresRetiredGranteeClient,
   input: {
     schema: string;
     allowedGrantees: readonly string[];

@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import type { FleetAuthConfig } from '../../system/config/fleet-auth-config.js';
 import type { DiscordEvidenceLifecyclePort } from './discord-evidence-broker-boundary.js';
@@ -280,6 +280,31 @@ function makeBroker(
 }
 
 describe('gateway fleet auth broker', () => {
+  it('binds browser display ownership to the principal and authority without exposing identity', () => {
+    const { broker } = makeBroker();
+    const context = {
+      principalId: '11111111-1111-4111-8111-111111111111',
+      authority: { authorityGeneration: 2, globalAuthEpoch: 7 },
+      session: { recordId: '22222222-2222-4222-8222-222222222222' },
+      human: { label: 'Discord user' },
+    };
+    const binding = broker.displayStateBinding(context);
+    expect(binding).toMatch(/^[0-9a-f]{64}$/u);
+    expect(broker.displayStateBinding(context)).toBe(binding);
+    const rotated = {
+      ...context,
+      session: { recordId: '33333333-3333-4333-8333-333333333333' },
+    };
+    expect(broker.displayStateBinding(rotated)).toBe(binding);
+    expect(broker.displayStateBinding({ ...context, principalId: '44444444-4444-4444-8444-444444444444' })).not.toBe(binding);
+    expect(broker.displayStateBinding({ ...context, authority: { authorityGeneration: 3, globalAuthEpoch: 7 } })).not.toBe(binding);
+    expect(broker.displayStateBinding({ ...context, authority: { authorityGeneration: 2, globalAuthEpoch: 8 } })).not.toBe(binding);
+    expect(binding).not.toContain(context.principalId);
+    expect(binding).not.toContain(context.session.recordId);
+    expect(binding).not.toBe(createHmac('sha256', 'session-pepper-at-least-thirty-two-bytes')
+      .update(context.principalId).digest('hex'));
+  });
+
   it('produces lifecycle-scoped OAuth proof without creating a login session', async () => {
     const { broker, store } = makeBroker(new FakeStore(), vi.fn<typeof fetch>()
       .mockResolvedValueOnce(response(200, {

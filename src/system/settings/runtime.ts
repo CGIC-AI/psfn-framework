@@ -164,6 +164,7 @@ const DIRECT_DEFINED_CONFIG_SETTINGS = [
   'shardMaxConcurrent',
   'shardHeartbeatStaleAfterMs',
   'shardHeartbeatDisconnectAfterMs',
+  'satelliteHeartbeatStaleAfterMs',
   'documentIngestMaxBytes',
   'documentIngestTextMaxBytes',
   'documentIngestPromptChars',
@@ -609,6 +610,7 @@ function getTier2TuningSnapshot(config: SubstrateConfig) {
     shardHeartbeatStaleAfterMs: config.shardHeartbeatStaleAfterMs ?? null,
     shardHeartbeatDisconnectAfterMs:
       config.shardHeartbeatDisconnectAfterMs ?? null,
+    satelliteHeartbeatStaleAfterMs: config.satelliteHeartbeatStaleAfterMs ?? null,
     documentIngestMaxBytes: config.documentIngestMaxBytes ?? null,
     documentIngestTextMaxBytes: config.documentIngestTextMaxBytes ?? null,
     documentIngestPromptChars: config.documentIngestPromptChars ?? null,
@@ -622,6 +624,7 @@ function getTier2TuningSnapshot(config: SubstrateConfig) {
     | 'shardMaxConcurrent'
     | 'shardHeartbeatStaleAfterMs'
     | 'shardHeartbeatDisconnectAfterMs'
+    | 'satelliteHeartbeatStaleAfterMs'
     | 'documentIngestMaxBytes'
     | 'documentIngestTextMaxBytes'
     | 'documentIngestPromptChars'

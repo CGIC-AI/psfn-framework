@@ -109,6 +109,14 @@ export interface WorldToolDeps {
    */
   applyVirtualMove?: (placeId: string) => void;
   /**
+   * Bounded device health for a physical place (bead psfn-framework-s7wq3).
+   * Returns `ok`/`degraded` only where a satellite heartbeat has actually been
+   * observed, and `undefined` otherwise — so this annotates the emanation
+   * choice without adding a badge to every place or any new prompt surface.
+   * Unwired ⇒ the field never appears.
+   */
+  resolvePlaceDeviceStatus?: (placeId: string) => 'ok' | 'degraded' | undefined;
+  /**
    * Context-system-note lane for the room-entry note (W5 entry event). The note
    * is delivered into the session channel the move was invoked from (resolved
    * off the turn's request context). Optional: unwired ⇒ the result reports the
@@ -278,6 +286,7 @@ function runList(deps: WorldToolDeps, params: WorldToolParams): string {
       placeId: place.placeId,
       displayName: place.displayName,
       kind: place.kind,
+      ...describeDeviceStatus(deps, place),
       affordances: place.affordances.map((affordance) => describeAffordance(place, affordance)),
     })),
   }, null, 2);
@@ -393,7 +402,11 @@ async function runControl(
  * with their kind; a `move` to them fails closed, so the model can see them
  * without being able to walk there.
  */
-function listExits(registry: PlacesRegistryConfig, destination: PlaceConfig): Array<Record<string, unknown>> {
+function listExits(
+  registry: PlacesRegistryConfig,
+  destination: PlaceConfig,
+  deps: WorldToolDeps,
+): Array<Record<string, unknown>> {
   return registry.places
     .filter((place) => place.siteId === destination.siteId && place.placeId !== destination.placeId)
     .map((place) => ({
@@ -401,7 +414,21 @@ function listExits(registry: PlacesRegistryConfig, destination: PlaceConfig): Ar
       displayName: place.displayName,
       kind: place.kind,
       movable: place.kind === 'virtual',
+      ...describeDeviceStatus(deps, place),
     }));
+}
+
+/**
+ * Emanation-time device status for one place. Physical places only: a virtual
+ * place has no device to be degraded. Absent observation renders nothing.
+ */
+function describeDeviceStatus(
+  deps: WorldToolDeps,
+  place: PlaceConfig,
+): { deviceStatus?: 'ok' | 'degraded' } {
+  if (place.kind !== 'physical') return {};
+  const status = deps.resolvePlaceDeviceStatus?.(place.placeId);
+  return status ? { deviceStatus: status } : {};
 }
 
 /** Resolve the invoking turn's session channel from the ambient request context. */
@@ -474,7 +501,7 @@ async function runMove(deps: WorldToolDeps, params: WorldToolParams): Promise<st
   }
 
   const description = place.description?.trim();
-  const exits = listExits(deps.placesRegistry, place);
+  const exits = listExits(deps.placesRegistry, place, deps);
   const alsoHere = occupants.map((occupant) => occupant.displayName);
   // MUD-style summary: destination description + who's here + exits.
   const summary = [

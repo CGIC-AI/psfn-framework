@@ -1,3 +1,4 @@
+import type { SatelliteDeviceHealthReader } from '../../shared/telemetry/satellite-device-health.js';
 import type { ShardExecutionPort } from '../../faculties/shards/port.js';
 import { createInProcessGardenAdminContract } from '../../operator/garden/local-admin-contract.js';
 import { createGatewayAdminToolHealthProvider } from '../../operator/garden/tool-health-provider.js';
@@ -62,6 +63,8 @@ export interface StartOptionalAdminTransportServerOptions {
   env?: NodeJS.ProcessEnv;
   config: SubstrateConfig;
   satelliteRegistryConfig: SatelliteRegistryConfig;
+  /** Shared hub device-health tracker (s7wq3), also read by the world tool. */
+  satelliteDeviceHealth?: SatelliteDeviceHealthReader | null;
   channelGroupMemory?: ChannelGroupMemoryConfig;
   gateway: GatewayClient;
   eventBus: EventBus;
@@ -219,6 +222,7 @@ export async function startOptionalAdminTransportServer(
     apiHost: options.apiHost,
     apiPort: options.apiPort,
     memoryStore: options.coreRuntime.memoryStore,
+    satelliteDeviceHealth: options.satelliteDeviceHealth ?? null,
     automataRunRegistry: options.automataRunRegistry,
     automataBusReadPort: options.automataBusReadPort,
     automataLessonReadPort: options.automataLessonReadPort,

@@ -166,6 +166,11 @@ import {
 } from './api-surface.js';
 import { startOptionalAdminTransportServer } from './admin-surface.js';
 import {
+  resolvePlaceDeviceStatus,
+  SatelliteDeviceHealthTracker,
+} from '../../shared/telemetry/satellite-device-health.js';
+import { resolveSatelliteHeartbeatStaleAfterMs } from '../../shared/telemetry/satellite-device-health-settings.js';
+import {
   buildAgentSchedulerRuntime,
 } from './scheduler-runtime.js';
 import {
@@ -1387,9 +1392,27 @@ async function main(): Promise<void> {
   // (resolveWorldRequirement). Effector control is staged OFF by default
   // (WORLD_CONTROL_RUNTIME_ENABLED) and, once enabled, additionally requires a
   // primary/trusted requester — resolved from the live turn request context.
+  // Hub device-health heartbeats (bead psfn-framework-s7wq3). Devices post
+  // `external.telemetry.heartbeat` through the authenticated telemetry ingest;
+  // before this tracker those beats were accepted and discarded. One tracker
+  // serves both surfaces the operator ruling names: the Garden operator view
+  // (full per-device health, always) and the companion's emanation choice
+  // (ok/degraded on a physical place she is weighing, and nowhere else).
+  const satelliteDeviceHealth = new SatelliteDeviceHealthTracker({
+    registry: () => satelliteRegistryConfig,
+    staleAfterMs: resolveSatelliteHeartbeatStaleAfterMs(config),
+  });
+  satelliteDeviceHealth.subscribe(eventBus);
+
   const worldOps = new GatewayWorldOps(gatewayOps);
   registerWorldTools(agentLoop, worldOps, {
     placesRegistry: placesRegistryConfig,
+    resolvePlaceDeviceStatus: placeId => resolvePlaceDeviceStatus(
+      satelliteRegistryConfig,
+      satelliteDeviceHealth,
+      placeId,
+      Date.now(),
+    ),
     resolveSituatedPlaceId: () => agentLoop.resolveCurrentSituatedPlaceId(),
     companionPresence: companionPresenceRuntime,
     applyVirtualMove: (placeId) => agentLoop.applyDeliberateVirtualMove(placeId),
@@ -1605,6 +1628,7 @@ async function main(): Promise<void> {
     env: process.env,
     config,
     satelliteRegistryConfig,
+    satelliteDeviceHealth,
     channelGroupMemory: discordChannelView.groupMemory,
     gateway,
     eventBus,

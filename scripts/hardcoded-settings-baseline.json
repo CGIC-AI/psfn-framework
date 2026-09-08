@@ -9043,6 +9043,12 @@
       "note": "Existing mutable policy candidate AdminDashboardDataService.getModelUsage.data.limit; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
+      "file": "src/operator/garden/services/custody-query-service.ts",
+      "name": "CUSTODY_SOURCE_PAGE_SIZE_MAX",
+      "value": "100",
+      "note": "Code-owned DoS guard on the read-only custody chain query (ccgdz.7), not a tuning knob: it bounds how many generations one audit request may scan, and it is coupled to the 400 error string the route returns. An operator-raisable page ceiling would let a single Garden request scan the whole retention horizon; the sibling Garden read services bound their pages the same way."
+    },
+    {
       "file": "src/operator/garden/services/episodic-memory-service.ts",
       "name": "DEFAULT_ARC_LIST_LIMIT",
       "value": "100"

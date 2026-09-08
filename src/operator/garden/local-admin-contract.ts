@@ -32,6 +32,11 @@ import {
 import { JsonGroupMemoryWatermarkStore } from '../../faculties/memory/extraction/group-ranges.js';
 import type { GroupMemoryBackfillExtractorPort } from '../../faculties/memory/extraction/group-backfill.js';
 import type { EpisodicStorePort } from '../../faculties/memory/episodic/store-port.js';
+import type {
+  CustodyChainDeliveryReadPort,
+  CustodyChainSnapshotReadPort,
+} from '../../core/cogsec/disclosure/custody-chain-query.js';
+import { GardenCustodyQueryService } from './services/custody-query-service.js';
 import {
   DEFAULT_PASS_INTERVAL_MS as DREAM_MEANING_PASS_INTERVAL_MS,
 } from '../../faculties/memory/episodic/dream-meaning-pass.js';
@@ -267,6 +272,11 @@ export interface InProcessGardenAdminContractOptions {
    */
   resolveMemorySubjectAccessContext?: () => MemorySubjectAccessContext;
   episodicStore?: EpisodicStorePort | null;
+  /**
+   * Read side of the custody chain (ccgdz.7). Absent when the runtime has
+   * no Postgres URL; the Garden surface then reports an explicit 503.
+   */
+  custodyChainReader?: (CustodyChainSnapshotReadPort & CustodyChainDeliveryReadPort) | null;
   /** Bounded read over the persisted health stream for the incident timeline. */
   healthEventStreamRead?: IncidentStreamRead | null;
   /** Durable ledger behind the human escalation attention surface (bznbn). */
@@ -830,6 +840,17 @@ export function createInProcessGardenAdminContract(
     doingMirror: options.doingMirrorService ?? null,
     episodicMemory: options.episodicStore
       ? new AdminEpisodicMemoryDataService(options.episodicStore)
+      : null,
+    // ccgdz.7: one reader serves both directions of the custody query, and the
+    // companion it is scoped to is the SAME `config.companionId` the delivery
+    // recorder stamped on the rows — so the query's owner predicate and the
+    // records' owner column are produced by one resolution, not two.
+    custodyQuery: options.custodyChainReader
+      ? new GardenCustodyQueryService({
+        snapshots: options.custodyChainReader,
+        deliveries: options.custodyChainReader,
+        companionId: options.config.companionId,
+      })
       : null,
     groupMemory: new AdminGroupMemoryDataService({
       ...(options.config.groupMemory ? { groupMemory: options.config.groupMemory } : {}),

@@ -78,7 +78,7 @@ function isCustodySourceKind(value: unknown): value is CustodySourceKind {
 const CUSTODY_VERSION_LABEL_PATTERN = /^[A-Za-z0-9_./-]{1,64}$/u;
 
 /** One admitted source's content-free custody row. */
-interface CustodySnapshotSource {
+export interface CustodySnapshotSource {
   readonly kind: CustodySourceKind;
   readonly ref: CustodyIdentity;
   readonly sensitivity: SensitivityLevel;

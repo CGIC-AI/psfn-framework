@@ -53,6 +53,7 @@ import type {
   AdminLetterService,
   AdminDoingMirrorService,
 } from './services/types.js';
+import type { AdminCustodyQueryService } from './services/custody-query-service.js';
 import type { AdminObserverEvalSidecarService } from './services/observer-eval-sidecar-service.js';
 import type { AdminIntakeQuarantineService } from './services/intake-quarantine-service.js';
 import type { AdminDriftReviewService } from './services/drift-review-service.js';
@@ -216,6 +217,13 @@ export interface GardenAdminDomainServices {
   letters?: AdminLetterService | null;
   doingMirror?: AdminDoingMirrorService | null;
   episodicMemory?: AdminEpisodicMemoryService | null;
+  /**
+   * Content-free custody chain query seam (ccgdz.7). Null when the runtime
+   * has no Postgres URL: the surface reports an explicit 503 rather than
+   * an empty chain, because "no backend" and "no custody" are different
+   * answers and only one of them is a finding.
+   */
+  custodyQuery?: AdminCustodyQueryService | null;
   groupMemory?: AdminGroupMemoryService | null;
   memory: AdminMemoryService;
   biographicalReview?: AdminBiographicalReviewService | null;

@@ -88,6 +88,8 @@ const queryPolicies: Readonly<Partial<Record<string, Readonly<Partial<Record<str
     '/api/admin/concerns': singleton(['includeResolved', 'includeExpired', 'limit', 'contactId']),
     '/api/admin/concerns/:concernId/arcs': singleton(['limit', 'provenanceRef']),
     '/api/admin/contacts': singleton(['limit', 'contactId', 'actor', 'field']),
+    '/api/admin/custody/chain': singleton(['turnId', 'deliveryRef']),
+    '/api/admin/custody/sources': singleton(['sourceRef', 'sourceDigest', 'limit', 'cursor']),
     '/api/admin/dashboard': singleton(['costWindow']),
     '/api/admin/dashboard/analysis-workbench-traces': singleton([]),
     '/api/admin/diagnostics': singleton(['windowMs', 'sinceMs', 'limit', 'includeFileLogs']),
@@ -229,6 +231,7 @@ const fixedRoutes: readonly RouteTuple[] = [
   ['GET', '/api/admin/concerns'], ['POST', '/api/admin/concerns/resolve-stale'],
   ['GET', '/api/admin/confirmations'], ['POST', '/api/admin/confirmations/resolve'],
   ['GET', '/api/admin/contact-approvals'], [['GET', 'POST'], '/api/admin/contacts'],
+  ['GET', '/api/admin/custody/chain'], ['GET', '/api/admin/custody/sources'],
   ['GET', '/api/admin/dashboard'], ['GET', '/api/admin/dashboard/analysis-workbench-traces'],
   ['GET', '/api/admin/diagnostics'],
   ['GET', '/api/admin/biographical-claims'],
@@ -362,7 +365,8 @@ const dynamicRoutes: readonly RouteTuple[] = [
 
 export const GARDEN_CLIENT_ROUTES = Object.freeze([
   '/', '/action-pipe', '/analysis-workbench', '/automata', '/autonomy', '/channels', '/charge-budget', '/chat',
-  '/cognitive-security/approvals', '/cognitive-security/drift', '/cognitive-security/firewall',
+  '/cognitive-security/approvals', '/cognitive-security/custody', '/cognitive-security/drift',
+  '/cognitive-security/firewall',
   '/cognitive-security/remediation', '/concerns', '/confirmations', '/contact-approvals', '/contacts',
   '/enrollment', '/escalations', '/evals/emotion-sidecar', '/episodic-memory', '/graph-proposals',
   '/identity',

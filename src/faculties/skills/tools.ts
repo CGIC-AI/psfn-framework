@@ -783,6 +783,32 @@ export function createSkillTool(
               return textResultWithError('skill action=update requires non-empty content.', true);
             }
 
+            const existing = runtime.getStore().getByName(name);
+            if (!existing) {
+              return textResultWithError(`Skill "${name.trim()}" does not exist`, true);
+            }
+
+            // lpxg3.3 AC6: a byte-identical rewrite is a no-op, and it is
+            // resolved BEFORE the write preflight. These exact bytes already
+            // hold whatever admission decision the loader gate made for them,
+            // so re-screening them would only re-emit the same companion-facing
+            // notice for content whose verdict has not changed. Nothing is
+            // written: no version, no history entry, no cache invalidation.
+            const proposedDescription = typeof params.description === 'string'
+              ? params.description
+              : undefined;
+            if (content === existing.content
+              && (proposedDescription === undefined
+                || proposedDescription === existing.description)) {
+              return textResult(JSON.stringify({
+                action: 'unchanged',
+                name: existing.name,
+                category: existing.category,
+                version: existing.version,
+                reason: 'identical content; existing admitted version reused',
+              }, null, 2));
+            }
+
             const screened = await screenSkillWrite('update', {
               content,
               ...(params.description !== undefined
@@ -791,11 +817,6 @@ export function createSkillTool(
             }, intake, toolCallId);
             if (!screened.allowed) {
               return textResult(INTAKE_FIREWALL_NOTICE_TEMPLATES.sinkHeld);
-            }
-
-            const existing = runtime.getStore().getByName(name);
-            if (!existing) {
-              return textResultWithError(`Skill "${name.trim()}" does not exist`, true);
             }
 
             // lpxg3.3: a revision binds to the version the author actually read.
@@ -820,22 +841,6 @@ export function createSkillTool(
                   true,
                 );
               }
-            }
-
-            // A byte-identical rewrite is a no-op: it must not burn a version,
-            // append a history entry, invalidate the admitted skill cache, or
-            // produce a second companion-facing notice for content that is
-            // already admitted (lpxg3.3 AC6).
-            if (screened.content === existing.content
-              && (screened.description === undefined
-                || screened.description === existing.description)) {
-              return textResult(JSON.stringify({
-                action: 'unchanged',
-                name: existing.name,
-                category: existing.category,
-                version: existing.version,
-                reason: 'identical content; existing admitted version reused',
-              }, null, 2));
             }
 
             const reason = normalizeReason(params.reason);

@@ -86,6 +86,17 @@ export const DUPLICATE_TOOL_CALL_SKIP_RESULT =
 export const SEQUENTIAL_DEPENDENCY_SKIP_RESULT =
   'Skipped because an earlier sequential tool call failed. Read the tool result and retry only the needed follow-up call.';
 
+/**
+ * The halt notice for a batch stopped by DEGRADED evidence rather than a
+ * failure (lpxg3.2). Saying "failed" here would be untrue — the earlier call
+ * ran and its content was held or unverdictable — and a false diagnostic is
+ * exactly what makes a companion retry the wrong thing.
+ */
+export const SEQUENTIAL_DEGRADED_EVIDENCE_SKIP_RESULT =
+  'Skipped because an earlier sequential tool call returned no usable evidence: its content was '
+  + 'withheld or could not be screened. Nothing failed. Continue from what you already have, or '
+  + 'retry only the follow-up call that does not depend on that read.';
+
 function isToolCallIdempotency(value: unknown): value is ToolCallIdempotency {
   return value === 'idempotent' || value === 'effectful';
 }
@@ -262,15 +273,22 @@ export function isToolResultOutcomeProjection(
     && typeof value.toolName === 'string';
 }
 
+/**
+ * Whether any observed result both matches `accepts` and came back with usable
+ * content. `partial_result` counts (lpxg3.2): the tool ran and delivered
+ * something — a sanitizing admission still hands the turn real output — so
+ * reading it as "this never happened" would rewrite a true companion claim as
+ * a false one. A hold, a missing verdict, and every failure do not count.
+ */
 export function hasSuccessfulToolCallOutcome(
   values: readonly unknown[],
   accepts: (result: ToolResultOutcomeProjection) => boolean = () => true,
 ): boolean {
-  return values.some((value) => (
-    isToolResultOutcomeProjection(value)
-    && accepts(value)
-    && resolveToolCallOutcome(value) === 'success'
-  ));
+  return values.some((value) => {
+    if (!isToolResultOutcomeProjection(value) || !accepts(value)) return false;
+    const outcome = resolveToolCallOutcome(value);
+    return outcome === 'success' || outcome === 'partial_result';
+  });
 }
 
 export function createEmptyToolCallOutcomeCounts(): ToolCallOutcomeCounts {

@@ -74,7 +74,11 @@ export function rejectsUnconfirmedToolExecutionClaim(input: {
     if (!isToolResultOutcomeProjection(message)) continue;
     const outcome = resolveToolCallOutcome(message);
     observedToolOutcomes.push({ toolName: message.toolName, outcome });
-    if (outcome === 'success') {
+    // lpxg3.2: a partial result is a call that ran and returned usable output;
+    // a hold or a missing screening verdict is a call that ran and returned
+    // nothing, so it belongs to neither bucket — it is not a claimable success
+    // and it is not a call that never executed.
+    if (outcome === 'success' || outcome === 'partial_result') {
       successfulToolNames.add(message.toolName);
       continue;
     }

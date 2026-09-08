@@ -850,6 +850,7 @@ async function main(): Promise<void> {
     },
     automataRetention: coreRuntime.automataRetention,
     doingMirrorService: coreRuntime.doingMirrorService,
+    biographySynthesis: coreRuntime.biographySynthesis,
   });
   // Letters land in their own L0 channel, which no completed turn ever points
   // the extractor at. Bind the bin to the same maybeExtract the post-turn path

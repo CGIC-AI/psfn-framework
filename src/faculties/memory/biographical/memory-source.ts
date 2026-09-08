@@ -50,6 +50,14 @@ export async function resolveLiveBiographicalMemorySource(input: {
     sensitivityAtProjection: memory.sensitivity,
     subjectEvidenceDigest: classification.evidenceDigest,
     consentFingerprint: digest(memory.consentFlags ?? {}),
+    // Candidate admission (o61vb.11) needs the exact owner-policy inputs on the
+    // snapshot. Neither field participates in the source-set digest, so adding
+    // them keeps stored claims and the read-time revalidator digest-identical.
+    sourceType: memory.type,
+    // Every non-active lifecycle is already an early return above: a deleted,
+    // superseded, recall-revoked, or non-current-classification memory never
+    // reaches here, so a resolved snapshot is by construction `active`.
+    lifecycleStateAtProjection: 'active',
     ...(memory.provenance?.channelId
       ? { sourceChannelId: memory.provenance.channelId }
       : {}),

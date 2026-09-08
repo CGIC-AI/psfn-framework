@@ -17,6 +17,7 @@ import { wirePostTurnActionRuntime } from '../startup/composition/post-turn-acti
 import type { PostTurnActionRuntime } from '../../core/agent/post-turn-action-runtime.js';
 import type { GatewayClient } from '../../boundary/gateway/client.js';
 import { SalienceDecay } from '../../faculties/memory/decay.js';
+import type { BiographySynthesisService } from '../../faculties/memory/biographical/synthesis-service.js';
 import type { MemoryStorePort } from '../../faculties/memory/memory-store-port.js';
 import { Scheduler } from '../../core/scheduler/scheduler.js';
 import { resolveHealthEventOwner } from '../../shared/contracts/health-event.js';
@@ -126,6 +127,8 @@ export interface BuildAgentSchedulerRuntimeOptions {
     companionId: string;
   };
   automataRetention?: { runBounded(nowMs?: number): Promise<unknown> };
+  /** Cross-silo biography candidate synthesis lane (o61vb.12). */
+  biographySynthesis?: Pick<BiographySynthesisService, 'run'>;
   /** Doing-mirror disposition lifecycle whose Letter deliveries this lane redrives. */
   doingMirrorService: Pick<DoingMirrorService, 'drainPendingLetters'>;
 }
@@ -201,6 +204,39 @@ export function registerSalienceDecayOperation(input: {
     name: 'Memory Salience Decay',
     description: 'Applies the configured memory weight decay pass to durable memories.',
     handler: () => salienceDecay.run(),
+    eligibility: { requiredTokens: ['memory.write'] },
+  });
+}
+
+export const BIOGRAPHY_SYNTHESIS_OPERATION_ID = 'biography-candidate-synthesis';
+
+/**
+ * Cross-silo portable biography candidate synthesis (o61vb.12). Runs on the
+ * serialized background-maintenance lane: it only ever stages review
+ * candidates, so a slow or skipped pass delays review rather than changing what
+ * the companion may say. Serialized maintenance ownership is hardened further
+ * by psfn-framework-o61vb.16.
+ */
+export function registerBiographySynthesisOperation(input: {
+  backgroundMaintenance: BackgroundMaintenanceRegistrar;
+  synthesis: Pick<BiographySynthesisService, 'run'>;
+  eventBus?: EventBus;
+}): void {
+  input.backgroundMaintenance.registerOperation({
+    id: BIOGRAPHY_SYNTHESIS_OPERATION_ID,
+    name: 'Biography Candidate Synthesis',
+    description:
+      'Mines subject-authorized memory silos for typed biography candidates and stages them '
+      + 'for companion and human review. Never activates a claim.',
+    handler: async () => {
+      const telemetry = await input.synthesis.run();
+      // Content-free: run counts only. No subject id, claim value, or source
+      // body ever reaches the event bus from this lane.
+      void input.eventBus?.emit('memory.biography.synthesis', {
+        ...telemetry,
+        timestamp: Date.now(),
+      });
+    },
     eligibility: { requiredTokens: ['memory.write'] },
   });
 }
@@ -479,6 +515,14 @@ export function buildAgentSchedulerRuntime(
     memoryStore: options.memoryStore,
     config: options.config,
   });
+
+  if (options.biographySynthesis) {
+    registerBiographySynthesisOperation({
+      backgroundMaintenance,
+      synthesis: options.biographySynthesis,
+      eventBus: options.eventBus,
+    });
+  }
 
   registerDoingMirrorLetterDrainOperation({
     backgroundMaintenance,

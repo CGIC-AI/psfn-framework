@@ -177,6 +177,127 @@ describe('PostgresBiographicalProfileStore — schema and roundtrip', () => {
     });
   });
 
+  it('lists staged candidates by exact stage and digest, and survives a restart', async () => {
+    await withStore(async (store, pool) => {
+      const policy = createDefaultBiographicalCandidatePolicy();
+      const socialContext = {
+        kind: 'companion_contact_dyad',
+        companionId: 'companion-invented-listing',
+        contactId: 'contact-invented-listing',
+      } as const;
+      const stage = async (title: string, ref: string) => await store.writeCandidate({
+        automataRunId: 'automata-run-invented-listing',
+        automataAuthorityRef: 'maintenance:biography-synthesis',
+        policy,
+        socialContext,
+        rationale: 'new_subject_claim',
+        claim: {
+          subject: contact('contact-invented-listing'),
+          kind: 'role',
+          value: { kind: 'role', schemaVersion: 1, roleType: 'creative', title },
+          basis: 'explicit',
+          confidence: 0.9,
+          sources: [source({
+            ref,
+            sourceType: 'semantic',
+            lifecycleStateAtProjection: 'active',
+          })],
+          validFrom: '2026-01-01T00:00:00.000Z',
+          now: NOW,
+        },
+      });
+      const first = await stage('Illustrator', 'memory:invented-listing-1');
+      const second = await stage('Sound designer', 'memory:invented-listing-2');
+      await store.transitionCandidate({
+        candidateId: second.id,
+        expectedRevision: 1,
+        to: 'companion_review',
+        receipts: [{
+          authority: 'automata',
+          decision: 'approved',
+          actorAuthorityRef: 'automata:biography-synthesis',
+          reason: 'synthesized',
+        }],
+        now: NOW,
+      });
+
+      // A fresh store instance proves the listing reads durable rows, not
+      // process state, so a restarted synthesis pass sees its own prior work.
+      const restarted = new PostgresBiographicalProfileStore(pool, () => NOW);
+      const synthesisStage = await restarted.listCandidates({
+        stages: ['automata_synthesis'],
+        limit: 10,
+      });
+      expect(synthesisStage.map(record => record.id)).toEqual([first.id]);
+      expect(synthesisStage[0]?.socialContext).toEqual(socialContext);
+      expect(synthesisStage[0]?.rationale).toBe('new_subject_claim');
+      expect(synthesisStage[0]?.receipts[0]?.reason).toBe('synthesized');
+
+      const byDigest = await restarted.listCandidates({
+        claimDigest: second.claimDigest,
+        limit: 10,
+      });
+      expect(byDigest.map(record => record.stage)).toEqual(['companion_review']);
+      expect(
+        (await restarted.listCandidates({
+          automataRunId: 'automata-run-invented-listing',
+          limit: 10,
+        })).length,
+      ).toBe(2);
+      await expect(
+        restarted.listCandidates({ limit: 0 }),
+      ).rejects.toThrow('positive safe integer');
+      await expect(
+        // @ts-expect-error an unknown stage filter must reject, not widen
+        restarted.listCandidates({ stages: ['invented_stage'], limit: 10 }),
+      ).rejects.toThrow('unknown biography candidate stage');
+    });
+  });
+
+  it('refuses to stage a candidate whose source exceeds the owner privacy policy', async () => {
+    await withStore(async (store) => {
+      const policy = createDefaultBiographicalCandidatePolicy();
+      const stageWith = async (overrides: Partial<BiographicalClaimSource>) =>
+        await store.writeCandidate({
+          automataRunId: 'automata-run-invented-privacy',
+          automataAuthorityRef: 'maintenance:biography-synthesis',
+          policy,
+          claim: {
+            subject: contact('contact-invented-privacy'),
+            kind: 'role',
+            value: {
+              kind: 'role',
+              schemaVersion: 1,
+              roleType: 'creative',
+              title: 'Illustrator',
+            },
+            basis: 'explicit',
+            confidence: 0.9,
+            sources: [source({
+              sourceType: 'semantic',
+              lifecycleStateAtProjection: 'active',
+              ...overrides,
+            })],
+            validFrom: '2026-01-01T00:00:00.000Z',
+            now: NOW,
+          },
+        });
+
+      // A private silo's content can never become a portable candidate: the
+      // persistence boundary re-applies owner policy even if a caller skipped
+      // the pre-model filter, and nothing is written on refusal.
+      await expect(stageWith({ sensitivityAtProjection: 'intimate' }))
+        .rejects.toThrow('sensitivity exceeds owner policy');
+      await expect(stageWith({ sourceType: 'emotional' }))
+        .rejects.toThrow('source type is unknown or excluded');
+      await expect(stageWith({ lifecycleStateAtProjection: 'quarantined' }))
+        .rejects.toThrow('lifecycle is unknown or excluded');
+      expect(await store.listCandidates({ limit: 10 })).toHaveLength(0);
+      expect(await store.listClaims({ subject: contact('contact-invented-privacy') }))
+        .toHaveLength(0);
+    });
+  });
+
   it('rejects an unknown claim kind at the database boundary', async () => {
     await withStore(async (store) => {
       await expect(

@@ -18,6 +18,8 @@ import {
   DOING_MIRROR_LETTER_DRAIN_OPERATION_ID,
   registerDoingMirrorLetterDrainOperation,
   registerSalienceDecayOperation,
+  BIOGRAPHY_SYNTHESIS_OPERATION_ID,
+  registerBiographySynthesisOperation,
 } from './scheduler-runtime.js';
 import { registerDurableBackgroundWorkSupervisorTask } from '../../core/agent/background-work/scheduler-task.js';
 
@@ -159,6 +161,66 @@ describe('agent scheduler runtime wiring', () => {
     expect(source).toContain('intervalMs: options.schedulerConfig.backgroundMaintenance.intervalMs');
     expect(source).not.toContain('options.config.salienceDecayIntervalMs');
     expect(source).not.toContain('intervalMs: options.config.maintenanceIntervalMs');
+  });
+
+  it('runs biography candidate synthesis on the maintenance lane with content-free telemetry', async () => {
+    const eventBus = new EventBus();
+    const scheduler = new Scheduler(eventBus);
+    const eligibilityGate = createEligibilityGate(() => ({
+      getTier: () => 'autonomous',
+      getGrantedTokens: () => new Set(),
+      has: () => true,
+    }));
+    const backgroundMaintenance = new BackgroundMaintenanceRegistry({
+      scheduler,
+      eligibilityGate,
+      intervalMs: 3_600_000,
+    });
+    const telemetry = {
+      automataRunId: 'biography-synthesis:invented',
+      targetsScanned: 2,
+      targetsSynthesized: 1,
+      sourcesScanned: 4,
+      sourcesAdmitted: 3,
+      sourcesWithheldByPolicy: 1,
+      candidatesEmitted: 2,
+      candidatesStaged: 1,
+      candidatesSuperseded: 0,
+      candidatesCoalesced: 0,
+      candidatesWithheld: 1,
+      candidatesDuplicate: 0,
+      targetsFailed: 0,
+    };
+    const emitted: unknown[] = [];
+    eventBus.on('memory.biography.synthesis', event => {
+      emitted.push(event);
+    });
+    registerBiographySynthesisOperation({
+      backgroundMaintenance,
+      synthesis: { run: async () => telemetry },
+      eventBus,
+    });
+
+    expect(scheduler.getTask('background-maintenance')).toMatchObject({
+      operations: [{ id: BIOGRAPHY_SYNTHESIS_OPERATION_ID }],
+    });
+    await scheduler.getTask('background-maintenance')?.handler();
+    expect(emitted).toHaveLength(1);
+    // Content-free by contract: counts and the run id, never a subject id,
+    // claim value, or source body.
+    expect(emitted[0]).toMatchObject(telemetry);
+    expect(Object.keys(emitted[0] as object).sort()).toEqual(
+      [...Object.keys(telemetry), 'timestamp'].sort(),
+    );
+
+    // Reachable from the real runtime: core-runtime constructs the service and
+    // main threads it into the scheduler runtime.
+    const schedulerSource = readFileSync(join(SRC_DIR, 'scheduler-runtime.ts'), 'utf-8');
+    const mainSource = readFileSync(join(SRC_DIR, 'main.ts'), 'utf-8');
+    const coreRuntimeSource = readFileSync(join(SRC_DIR, 'core-runtime.ts'), 'utf-8');
+    expect(schedulerSource).toContain('registerBiographySynthesisOperation({');
+    expect(mainSource).toContain('biographySynthesis: coreRuntime.biographySynthesis');
+    expect(coreRuntimeSource).toContain('new BiographySynthesisService({');
   });
 
   it('runs bounded shared-world caretaker cleanup on the scheduler-owned maintenance lane', async () => {

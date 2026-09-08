@@ -4,7 +4,24 @@ import { prepareBiographicalClaim } from './store-port.js';
 import type { BiographicalClaimWriteInput } from './store-port.js';
 import type { BiographicalClaimKind } from './types.js';
 
+/**
+ * The Recent Contact Shape refresh path admits only the stable value family it
+ * was built for.
+ */
 const PORTABLE_STABLE_KINDS: readonly BiographicalClaimKind[] = [
+  'role',
+  'stable-preference',
+  'shared-language',
+];
+
+/**
+ * Kinds the cross-silo biography automaton (o61vb.12) may propose. `name` is
+ * excluded on purpose: primary/alias naming is contact-identity authority with
+ * its own lifecycle, not a synthesized biography candidate.
+ */
+export const PORTABLE_BIOGRAPHY_CANDIDATE_KINDS: readonly BiographicalClaimKind[] = [
+  'nickname',
+  'relationship',
   'role',
   'stable-preference',
   'shared-language',
@@ -19,8 +36,13 @@ const PORTABLE_STABLE_KINDS: readonly BiographicalClaimKind[] = [
  */
 export function parsePortableStableCandidate(
   value: unknown,
-  options: { readonly now?: Date } = {},
+  options: {
+    readonly now?: Date;
+    /** Closed kind allowlist; defaults to the stable value family. */
+    readonly admittedKinds?: readonly BiographicalClaimKind[];
+  } = {},
 ): BiographicalClaimWriteInput {
+  const admittedKinds = options.admittedKinds ?? PORTABLE_STABLE_KINDS;
   if (
     !isRecord(value)
     || !hasExactKeys(
@@ -41,10 +63,10 @@ export function parsePortableStableCandidate(
   }
   if (
     typeof value.kind !== 'string'
-    || !(PORTABLE_STABLE_KINDS as readonly string[]).includes(value.kind)
+    || !(admittedKinds as readonly string[]).includes(value.kind)
   ) {
     throw new BiographicalClaimValidationError(
-      `portable stable candidate kind must be one of: ${PORTABLE_STABLE_KINDS.join(', ')}`,
+      `portable stable candidate kind must be one of: ${admittedKinds.join(', ')}`,
     );
   }
 

@@ -1223,12 +1223,13 @@ describe('ICP certification real process harness', () => {
       await pool.end();
     }
 
-    const socialCharge = fixture.companions.reduce((sum, companion) => {
-      const rolling = readRunChargeRollingWindowFromLedger(
-        resolveChargeLedgerPath(companion.companionDataDir),
-      );
-      return sum + (rolling.spentByLane.companion_social ?? 0);
-    }, 0);
+    const rollingWindows = await Promise.all(fixture.companions.map(companion => (
+      readRunChargeRollingWindowFromLedger(resolveChargeLedgerPath(companion.companionDataDir))
+    )));
+    const socialCharge = rollingWindows.reduce(
+      (sum, rolling) => sum + (rolling.spentByLane.companion_social ?? 0),
+      0,
+    );
     expect(socialCharge).toBeGreaterThan(0);
     expect(socialCharge).toBeLessThanOrEqual(8);
 

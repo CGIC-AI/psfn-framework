@@ -12,6 +12,10 @@ import {
   type PsfnChannelContext,
   type SatelliteAttachmentOwnership,
 } from "./embodied-session.js";
+import {
+  parseEidoverseBodyAction,
+  type EidoverseBodyRunner,
+} from "./eidoverse-body-runner.js";
 import type { FrameworkAgentAdapter } from "./framework-agent.js";
 import { EIDOVERSE_SAY_MAX_TEXT_LENGTH } from "./eidoverse-mcp.js";
 import type { SessionStore } from "./session-store.js";
@@ -50,6 +54,11 @@ export interface EidoverseEmbodiedSessionDependencies {
   look: EidoverseLookSource;
   onLookError?: () => void;
   say: EidoverseSayPublisher;
+  /**
+   * Allowlisted locomotion. Present only when the claim profile grants the
+   * `avatar_action` capability; absent, body requests fail closed.
+   */
+  body?: EidoverseBodyRunner;
   logger?: EidoverseEmbodiedSessionLogger;
 }
 
@@ -121,6 +130,21 @@ export class EidoverseEmbodiedSessionAdapter {
     }
   }
 
+  /**
+   * Accepts an allowlisted body action and starts it off the turn's critical
+   * path. Locomotion can block for the door's full walk budget, so nothing here
+   * is awaited; the outcome reaches the companion as a content-free context
+   * note on a later turn. An unallowlisted verb or a profile without the
+   * `avatar_action` capability is rejected before the door is touched.
+   */
+  submitBodyAction(name: string, args: unknown = {}): void {
+    const body = this.deps.body;
+    if (!body) {
+      throw new Error("Eidoverse body actions are not enabled for this capability profile");
+    }
+    body.submit(parseEidoverseBodyAction(name, args));
+  }
+
   async handleAddressedUtterance(input: EidoverseAddressedUtterance): Promise<string | null> {
     const ownership = this.requireConnection();
     const utteranceId = requireNonEmpty(input.utteranceId, "Eidoverse utterance ID");
@@ -184,7 +208,7 @@ export class EidoverseEmbodiedSessionAdapter {
       this.config.satelliteClaim.satelliteId,
       ownership,
     );
-    const contextNotes = [...lookNotes];
+    const contextNotes = [...(this.deps.body?.drainNotes() ?? []), ...lookNotes];
     if (place.contextNote) {
       contextNotes.push({ key: "eidoverse.place", text: place.contextNote });
     }

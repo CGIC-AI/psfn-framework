@@ -6,6 +6,11 @@ import {
   loadEidoverseMcpConfig,
   resolveEidoverseCredentialFromEnv,
 } from "./eidoverse-mcp.js";
+import {
+  EidoverseBodyRunner,
+  claimGrantsEidoverseBodyActions,
+  loadEidoverseBodyRunnerConfig,
+} from "./eidoverse-body-runner.js";
 import { createEidoverseProductionWakeLifecycle } from "./eidoverse-wake-runtime.js";
 import { RealtimeHubServer } from "./server.js";
 import { HomeAssistantClient } from "./home-assistant/client.js";
@@ -25,6 +30,12 @@ async function main(): Promise<void> {
         },
       })
     : null;
+  const eidoverseBody = eidoverseConfig && eidoverse
+    && claimGrantsEidoverseBodyActions(config.psfn.satelliteClaim)
+    ? new EidoverseBodyRunner(loadEidoverseBodyRunnerConfig(), eidoverse, {
+        logger: { warn: (message) => console.warn(message) },
+      })
+    : null;
   const server = new RealtimeHubServer(config, {
     eidoverse: eidoverseConfig && eidoverse
       ? {
@@ -33,6 +44,7 @@ async function main(): Promise<void> {
           look: eidoverse,
           onLookError: () => console.warn("Eidoverse MCP look failed"),
           say: eidoverse,
+          ...(eidoverseBody ? { body: eidoverseBody } : {}),
         }
       : null,
   });
@@ -56,6 +68,7 @@ async function main(): Promise<void> {
     await Promise.allSettled([
       control?.close(),
       homeAssistant?.close(),
+      eidoverseBody?.close(),
       eidoverseProduction ? eidoverseProduction.close() : server.close(),
     ]);
     throw error;
@@ -72,6 +85,7 @@ async function main(): Promise<void> {
     const results = await Promise.allSettled([
       control?.close(),
       homeAssistant?.close(),
+      eidoverseBody?.close(),
       eidoverseProduction ? eidoverseProduction.close() : server.close(),
     ]);
     const errors = results

@@ -420,6 +420,45 @@ describe('governed Automata Bus worker lifecycle', () => {
     expect(replayed.run.terminals).toHaveLength(1);
   });
 
+  it('lets a caller retry after a failed terminalization without duplicating the handoff', async () => {
+    let failNext = true;
+    const terminal = createTerminalPort();
+    const terminals: AutomataWorkerTerminalRequest[] = [];
+    const session = await openAutomataBusWorkerRun({
+      access: createAccess(),
+      run: {
+        begin: async () => ({
+          companionId: COMPANION_ID,
+          lineage: {
+            automatonClass: 'subagent.bounded',
+            runId: 'subagent-10',
+            taskId: 'task-10',
+            workerId: 'subagent-10',
+            sessionIds: ['session:subagent-10'],
+          },
+          attempt: 1,
+          execute: true,
+        }),
+        terminalize: async request => {
+          if (failNext) {
+            failNext = false;
+            throw new Error('run store unavailable');
+          }
+          terminals.push(request);
+        },
+      },
+      terminal: terminal.port,
+      briefingQuery: 'bounded work',
+    });
+    await expect(session.settle(completedOutcome())).rejects.toThrow('run store unavailable');
+    const settlement = await session.settle(completedOutcome());
+    expect(settlement.terminalized).toBe(true);
+    expect(terminals).toHaveLength(1);
+    // The retried handoff carries the same key, so the Bus stays exactly-once.
+    const keys = new Set(terminal.recorded.map(entry => entry.idempotencyKey));
+    expect(keys.size).toBe(1);
+  });
+
   it('never swallows a failed terminalization', async () => {
     const terminalizeError = new Error('run store unavailable');
     await expect(runClass({

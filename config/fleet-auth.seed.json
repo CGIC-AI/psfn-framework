@@ -54,14 +54,6 @@
     "migration": "fleet_auth_migration",
     "backupRestore": "fleet_auth_backup"
   },
-  "welfareVerifier": {
-    "role": "psfn_welfare_verifier",
-    "connectionLimit": 8,
-    "databaseUrlRef": {
-      "kind": "env",
-      "envName": "FLEET_AUTH_WELFARE_VERIFIER_DATABASE_URL"
-    }
-  },
   "verifierKeys": [
     {
       "issuer": "psfn-fleet-auth",

@@ -290,15 +290,6 @@ async function main(): Promise<void> {
               fleetAuth: {
                 backupRestoreDatabaseUrl: fleetAuthSecrets.database.backupRestoreUrl,
                 roles: config.fleetAuth.databaseRoles,
-                ...(config.fleetAuth.welfareVerifier
-                  && fleetAuthSecrets.database.welfareVerifierUrl
-                  ? {
-                      welfareVerifier: {
-                        databaseUrl: fleetAuthSecrets.database.welfareVerifierUrl,
-                        role: config.fleetAuth.welfareVerifier.role,
-                      },
-                    }
-                  : {}),
               },
             }
           : {}),
@@ -543,15 +534,6 @@ async function main(): Promise<void> {
         [DEFAULT_SHARED_WORLD_SCHEMA, companionDatabaseTopology.sharedMigration.databaseUrl],
       ]),
       schemaAccessContracts: sharedSchemaAccessContracts,
-      ...(config.fleetAuth.welfareVerifier
-        && fleetAuthSecrets.database.welfareVerifierUrl
-        ? {
-            welfareVerifier: {
-              role: config.fleetAuth.welfareVerifier.role,
-              databaseUrl: fleetAuthSecrets.database.welfareVerifierUrl,
-            },
-          }
-        : {}),
       backupConfig,
       ...(kubernetesHelm ? { kubernetesHelm } : {}),
     });

@@ -52,7 +52,10 @@ import {
   GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN_ENV,
 } from '../../boundary/gateway/companion-auth.js';
 import { resolveRuntimeCredentialFromEnvironment } from '../../boundary/custody/runtime-credential-source.js';
-import { resolveFleetAuthOwnerFile } from './fleet-auth-config.js';
+import {
+  assertRetiredFleetWelfareVerifier,
+  resolveFleetAuthOwnerFile,
+} from './fleet-auth-config.js';
 import {
   loadTestingHarnessGardenAdminConfig,
   resolveTestingHarnessGardenVerifierConfig,
@@ -384,6 +387,10 @@ function loadConfigForMode(
     ?? `${configuredCompanionDataDir}/${DEFAULT_COMPANION_CARD_FILE_NAME}`;
   const configuredPostgresSchema = parsePostgresSchemaEnv(env.COMPANION_PG_SCHEMA);
 
+  assertRetiredFleetWelfareVerifier({
+    multiCompanion,
+    ...(fleetAuthProjection?.kind === 'gateway' ? { fleetAuth: fleetAuthProjection.config } : {}),
+  });
   const companionFleet = resolveCompanionFleetPaths(
     rawCompanionFleet,
     runtimePathLayout.runtimeRootDir,

@@ -4,6 +4,9 @@ import type {
   AdminIcpCostView,
   AdminIcpRecentDeliveryEvent,
 } from '../../../../src/operator/garden/services/types.js';
+import type {
+  AdminIcpLifecycleAdmissionView,
+} from '../../../../src/operator/garden/services/types/icp-autonomy.js';
 
 type CostProjectionUnavailableReason = Extract<
   AdminIcpCostProjectionStatus,
@@ -14,6 +17,30 @@ export function canCancelIcpCandidate(candidate: AdminIcpCandidateView): boolean
   return candidate.status === 'pending'
     || candidate.status === 'deferred'
     || candidate.status === 'permitted';
+}
+
+/**
+ * A fenced companion is the only readmittable state (psfn-framework-2vd7s):
+ * readmission clears a durable admission bit, so an already-admitted companion
+ * offers no action rather than a no-op button.
+ */
+export function canReadmitCompanion(row: AdminIcpLifecycleAdmissionView): boolean {
+  return row.fenced;
+}
+
+/** One-line operator summary of the fleet's durable ICP admission state. */
+export function lifecycleAdmissionSummary(
+  rows: readonly AdminIcpLifecycleAdmissionView[],
+): string {
+  if (rows.length === 0) {
+    return 'No fleet manifest is wired in this process, so no admission state is readable.';
+  }
+  const fenced = rows.filter(row => row.fenced).length;
+  if (fenced === 0) {
+    return `All ${rows.length} manifest companion${rows.length === 1 ? ' is' : 's are'} admitted to ICP.`;
+  }
+  return `${fenced} of ${rows.length} manifest companions are lifecycle-fenced and refuse every `
+    + 'ICP permit until an operator readmits them explicitly.';
 }
 
 export function costState(cost: AdminIcpCostView): 'normal' | 'warning' | 'hard_stop' | 'unknown_cost' {
@@ -88,6 +115,7 @@ export function autonomySnapshotDigest(data: {
   quietState: unknown;
   runtimeEnabled: unknown;
   delivery: unknown;
+  lifecycleAdmission: unknown;
 }): string {
   return JSON.stringify({
     a: data.availability,
@@ -99,5 +127,6 @@ export function autonomySnapshotDigest(data: {
     q: data.quietState,
     rn: data.runtimeEnabled,
     d: data.delivery,
+    la: data.lifecycleAdmission,
   });
 }

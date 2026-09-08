@@ -6,9 +6,14 @@ import type {
   AdminIcpCostView,
   AdminIcpRecentDeliveryEvent,
 } from '../../../../src/operator/garden/services/types.js';
+import type {
+  AdminIcpLifecycleAdmissionView,
+} from '../../../../src/operator/garden/services/types/icp-autonomy.js';
 import {
   autonomySnapshotDigest,
   canCancelIcpCandidate,
+  canReadmitCompanion,
+  lifecycleAdmissionSummary,
   costProjectionUnavailableMessage,
   costState,
   deliveryOutcomeLabel,
@@ -95,6 +100,7 @@ describe('autonomy Garden view helpers', () => {
       costs: [],
       quietState: 'active',
       runtimeEnabled: true,
+      lifecycleAdmission: [{ companionId: 'a', local: true, fenced: false }],
       delivery: {
         currentAvailability: null,
         initiation: { invited: 0, delivered: 1 },
@@ -109,5 +115,41 @@ describe('autonomy Garden view helpers', () => {
       delivery: { ...snapshot.delivery, initiation: { invited: 0, delivered: 2 } },
     });
     expect(changed).not.toBe(digest);
+  });
+
+  // psfn-framework-2vd7s: a fenced companion is the only readmittable state, so
+  // the Garden offers the action exactly there and nowhere else.
+  it('offers readmission only for a lifecycle-fenced manifest companion', () => {
+    const fenced: AdminIcpLifecycleAdmissionView = {
+      companionId: 'a',
+      local: false,
+      fenced: true,
+    };
+    const admitted: AdminIcpLifecycleAdmissionView = { ...fenced, fenced: false };
+    expect(canReadmitCompanion(fenced)).toBe(true);
+    expect(canReadmitCompanion(admitted)).toBe(false);
+    expect(lifecycleAdmissionSummary([fenced, admitted]))
+      .toContain('1 of 2 manifest companions are lifecycle-fenced');
+    expect(lifecycleAdmissionSummary([admitted])).toContain('is admitted to ICP');
+    expect(lifecycleAdmissionSummary([])).toContain('No fleet manifest is wired');
+  });
+
+  it('re-renders the autonomy page when a manifest admission bit flips', () => {
+    const base = {
+      availability: [],
+      candidates: [],
+      episodes: [],
+      permits: [],
+      fatigue: [],
+      costs: [],
+      quietState: 'active',
+      runtimeEnabled: true,
+      delivery: null,
+      lifecycleAdmission: [{ companionId: 'a', local: true, fenced: false }],
+    };
+    expect(autonomySnapshotDigest({
+      ...base,
+      lifecycleAdmission: [{ companionId: 'a', local: true, fenced: true }],
+    })).not.toBe(autonomySnapshotDigest(base));
   });
 });

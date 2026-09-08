@@ -127,6 +127,12 @@ export const ICP_AUTONOMY_REASON_CODES = [
   'conversation_ended',
   'conversation_suppressed',
   'operator_cancelled',
+  // Explicit, audited operator readmission of a lifecycle-fenced companion
+  // (psfn-framework-2vd7s). Distinct from `operator_cancelled`: nothing was
+  // cancelled — the durable lifecycle-admission fence was cleared after the
+  // companion returned to the fleet manifest, and every view captured while it
+  // was fenced is invalidated by the same transition.
+  'lifecycle_readmitted',
   'delivery_failed',
   'inactivity_timeout',
   'dyad_not_found',

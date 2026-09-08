@@ -5,6 +5,7 @@ import type { IcpAdminProjectionStore } from '../../../persistence/postgres/icp-
 import type { IcpAutonomyReasonCode } from '../../../shared/contracts/icp-autonomy.js';
 import { isRecord } from '../../../shared/utils/types.js';
 import type { AdminSettingsService } from './types/settings.js';
+import { isRfc4122Uuid } from '../../../shared/utils/types.js';
 import type {
   AdminIcpAutonomyData,
   AdminIcpAutonomyService,
@@ -14,9 +15,13 @@ import type {
   AdminIcpDeliveryTelemetry,
   AdminIcpFatigueView,
   AdminIcpInitiationLifecycleCounts,
+  AdminIcpLifecycleAdmissionView,
   AdminIcpMessageLifecycleCounts,
   AdminIcpMutationResult,
   AdminIcpPermitView,
+  AdminIcpReadmitInput,
+  AdminIcpReadmitRefusal,
+  AdminIcpReadmitResult,
   AdminIcpRecentDeliveryEvent,
   AdminIcpTestInitiationInput,
   AdminIcpTestInitiationPort,
@@ -41,7 +46,30 @@ export interface AdminIcpAutonomyServiceDependencies {
    */
   countCompanionPeerContacts?: () => Promise<number>;
   testInitiation?: AdminIcpTestInitiationPort;
+  /**
+   * Companion identities on the CURRENT fleet manifest (companions.json), as the
+   * running process resolved them at boot (psfn-framework-2vd7s).
+   *
+   * Deliberately the boot-loaded projection and never a fresh disk read: the
+   * gateway's RPC authentication boundary and the connect-time lifecycle sweep
+   * both run on this same projection, so readmitting against a newer on-disk
+   * manifest would clear a fence for a companion the running gateway still
+   * refuses. Empty means "no manifest is wired", and every readmission refuses.
+   */
+  fleetCompanionIds?: readonly string[];
   now?: () => number;
+}
+
+/**
+ * Refusal of an explicit operator readmission (psfn-framework-2vd7s). Carries a
+ * machine-readable reason so the Garden route can answer 4xx with a legible
+ * cause instead of an undifferentiated 500.
+ */
+export class AdminIcpReadmissionRefusedError extends Error {
+  constructor(readonly refusal: AdminIcpReadmitRefusal, message: string) {
+    super(message);
+    this.name = 'AdminIcpReadmissionRefusedError';
+  }
 }
 
 function positiveInteger(value: number, field: string): number {
@@ -354,6 +382,7 @@ export class AdminIcpAutonomyDataService implements AdminIcpAutonomyService {
       local: lease.companionId === this.deps.localCompanionId,
       current: lease.issuedAtMs <= nowMs && lease.expiresAtMs > nowMs,
     }));
+    const lifecycleAdmission = await this.readLifecycleAdmission();
     const permitView = permits.map(projectPermit);
     const delivery = computeDeliveryTelemetry({
       availability: availabilityView,
@@ -391,6 +420,7 @@ export class AdminIcpAutonomyDataService implements AdminIcpAutonomyService {
       costProjection: projection.costProjection,
       feltImpulseFunnel,
       delivery,
+      lifecycleAdmission,
       reasonCounts: [...reasonCounts.entries()]
         .map(([reasonCode, count]) => ({ reasonCode, count }))
         .sort((left, right) => right.count - left.count
@@ -405,6 +435,85 @@ export class AdminIcpAutonomyDataService implements AdminIcpAutonomyService {
         transcripts: 'not_collected',
       },
     };
+  }
+
+  /**
+   * Explicitly readmit a lifecycle-fenced companion (psfn-framework-2vd7s).
+   *
+   * The connect-time sweep fences every companion that left companions.json, and
+   * nothing clears that bit implicitly — re-adding the companion and rebooting
+   * leaves it refused. This is the only surface that clears it, and it fails
+   * closed three ways before touching the store: no wired manifest refuses, a
+   * companion absent from the CURRENT manifest refuses, and a body whose
+   * confirmation does not echo the exact target refuses.
+   *
+   * Clearing is idempotent: an already-admitted companion returns
+   * `transitioned: false` and the invalidation generation does not move.
+   */
+  async readmitCompanion(input: AdminIcpReadmitInput): Promise<AdminIcpReadmitResult> {
+    if (!isRfc4122Uuid(input.companionId)) {
+      throw new Error('companionId must be a lowercase RFC-4122 UUID');
+    }
+    if (input.confirmCompanionId !== input.companionId) {
+      throw new AdminIcpReadmissionRefusedError(
+        'confirmation_mismatch',
+        'ICP readmission requires confirmCompanionId to echo the exact companion being readmitted',
+      );
+    }
+    const projectionStore = this.deps.projectionStore;
+    if (!projectionStore) {
+      throw new Error('ICP autonomy control backend unavailable');
+    }
+    const manifestCompanionIds = this.manifestCompanionIds();
+    if (manifestCompanionIds.length === 0) {
+      throw new AdminIcpReadmissionRefusedError(
+        'manifest_unavailable',
+        'ICP readmission requires a resolved companions.json fleet manifest; none is wired in this process',
+      );
+    }
+    if (!manifestCompanionIds.includes(input.companionId)) {
+      throw new AdminIcpReadmissionRefusedError(
+        'companion_not_on_manifest',
+        'ICP readmission refuses a companion that is absent from the current companions.json manifest; '
+        + 'add it back to the manifest and restart the gateway before readmitting',
+      );
+    }
+    const result = await projectionStore.shared.clearLifecycleAdmission(
+      input.companionId,
+      this.now(),
+    );
+    return {
+      ok: true,
+      companionId: result.companionId,
+      transitioned: result.transitioned,
+      revokedPermitCount: result.revokedPermits.length,
+      message: result.transitioned
+        ? 'Companion readmitted to ICP; the invalidation generation advanced once'
+        : 'Companion was already admitted to ICP; nothing changed',
+    };
+  }
+
+  private manifestCompanionIds(): readonly string[] {
+    const declared = this.deps.fleetCompanionIds ?? [];
+    if (declared.length > 0) return declared;
+    // Single-companion deployments run a one-entry companions.json; the runtime
+    // projects that as the local identity (see gateway api-surface bearer
+    // routing). Absent both, no manifest is wired and readmission refuses.
+    return this.deps.localCompanionId ? [this.deps.localCompanionId] : [];
+  }
+
+  private async readLifecycleAdmission(): Promise<AdminIcpLifecycleAdmissionView[]> {
+    const projectionStore = this.deps.projectionStore;
+    if (!projectionStore) return [];
+    const views: AdminIcpLifecycleAdmissionView[] = [];
+    for (const companionId of [...this.manifestCompanionIds()].sort()) {
+      views.push({
+        companionId,
+        local: companionId === this.deps.localCompanionId,
+        fenced: await projectionStore.shared.isLifecycleAdmissionFenced(companionId),
+      });
+    }
+    return views;
   }
 
   async cancelCandidate(input: AdminIcpCandidateCancelInput): Promise<AdminIcpMutationResult> {

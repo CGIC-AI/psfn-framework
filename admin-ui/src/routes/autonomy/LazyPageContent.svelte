@@ -6,17 +6,21 @@
     cancelIcpCandidate,
     emergencyDisableIcpAutonomy,
     getIcpAutonomyData,
+    readmitIcpCompanion,
     setIcpDoNotDisturb,
     type IcpAutonomyData,
   } from '$lib/api/endpoints/icp-autonomy';
   import type { AdminIcpCandidateView } from '../../../../src/operator/garden/services/types.js';
+  import type { AdminIcpLifecycleAdmissionView } from '../../../../src/operator/garden/services/types/icp-autonomy.js';
   import {
     autonomySnapshotDigest,
     canCancelIcpCandidate,
+    canReadmitCompanion,
     costProjectionUnavailableMessage,
     costState,
     deliveryOutcomeLabel,
     formatUsd,
+    lifecycleAdmissionSummary,
     recentDeliveryLabel,
   } from './autonomy-view';
   import { scopeGardenPath } from '$lib/fleet/companion-scope';
@@ -31,6 +35,7 @@
 
   type PendingAction =
     | { kind: 'cancel'; candidate: AdminIcpCandidateView }
+    | { kind: 'readmit'; companion: AdminIcpLifecycleAdmissionView }
     | { kind: 'dnd' }
     | { kind: 'disable' };
 
@@ -58,6 +63,14 @@
         body: 'This stops the selected local candidate. If it owns an issued permit, the permit is revoked before the candidate is cancelled.',
         context: `${pendingAction.candidate.source} · ${pendingAction.candidate.candidateId}`,
         label: 'Cancel candidate',
+      };
+    }
+    if (pendingAction.kind === 'readmit') {
+      return {
+        title: 'Readmit this companion to autonomy?',
+        body: 'This companion left companions.json, so the gateway durably fenced it: every ICP permit issue and consume refuses, and re-adding it to the manifest did not undo that. Readmitting clears the fence and advances the invalidation generation once, so any view captured while it was fenced fails closed.',
+        context: `${companionDisplayLabel(displayCompanions, pendingAction.companion.companionId)} · ${companionTechnicalLabel(pendingAction.companion.companionId)}. Refused unless the companion is on the manifest this gateway booted with.`,
+        label: 'Readmit companion',
       };
     }
     if (pendingAction.kind === 'dnd') {
@@ -112,9 +125,11 @@
     try {
       const result = action.kind === 'cancel'
         ? await cancelIcpCandidate(action.candidate.candidateId, action.candidate.revision)
-        : action.kind === 'dnd'
-          ? await setIcpDoNotDisturb()
-          : await emergencyDisableIcpAutonomy();
+        : action.kind === 'readmit'
+          ? await readmitIcpCompanion(action.companion.companionId)
+          : action.kind === 'dnd'
+            ? await setIcpDoNotDisturb()
+            : await emergencyDisableIcpAutonomy();
       mutationMessage = `${result.message}. Revoked permits: ${result.revokedPermitCount}.`;
       pendingAction = null;
       await loadData(true);
@@ -338,6 +353,26 @@
           </dl>
         </div>
       </div>
+    </section>
+
+    <section class="garden-section garden-table-shell card-garden overflow-hidden">
+      <div class="border-b border-bark-200 p-5">
+        <h2 class="font-serif text-lg font-semibold text-shadow-900">Fleet lifecycle admission</h2>
+        <p class="text-sm text-shadow-600">
+          Durable, non-expiring ICP admission for every companion on the manifest this process booted
+          with. A companion removed from <code>companions.json</code> is fenced at the next gateway
+          start and stays refused even after it is added back — readmission is always an explicit,
+          audited operator act, never a side effect of booting.
+        </p>
+        <p class="mt-1 text-sm text-shadow-700">{lifecycleAdmissionSummary(data.lifecycleAdmission)}</p>
+      </div>
+      {#if data.lifecycleAdmission.length === 0}
+        <p class="garden-empty p-5 text-sm text-shadow-600">No fleet manifest companions are readable in this process.</p>
+      {:else}
+        <div class="garden-table-scroll overflow-x-auto"><table class="garden-table w-full text-sm"><thead class="bg-bark-100 text-left text-xs uppercase tracking-wide text-shadow-500"><tr><th class="p-3">Companion</th><th class="p-3">Admission</th><th class="p-3"></th></tr></thead><tbody class="divide-y divide-bark-200">
+          {#each data.lifecycleAdmission as row (row.companionId)}<tr><td class="p-3 text-xs"><p>{row.local ? 'Local · ' : ''}{companionDisplayLabel(displayCompanions, row.companionId)}</p><details class="mt-1 text-shadow-500"><summary class="cursor-pointer">Technical details</summary><p class="mt-1 break-all font-mono">{companionTechnicalLabel(row.companionId)}</p></details></td><td class="p-3"><span class={`rounded-full px-2 py-1 text-xs ${row.fenced ? 'bg-wilt-100 text-wilt-700' : 'bg-moss-100 text-moss-700'}`}>{row.fenced ? 'lifecycle fenced' : 'admitted'}</span></td><td class="p-3 text-right"><button class="garden-action min-h-11 rounded border border-gold-400 px-2.5 py-1 text-xs font-medium text-gold-800 hover:bg-gold-50 disabled:opacity-40" disabled={!canReadmitCompanion(row) || mutating} onclick={() => (pendingAction = { kind: 'readmit', companion: row })}>Readmit</button></td></tr>{/each}
+        </tbody></table></div>
+      {/if}
     </section>
 
     <section class="garden-section garden-table-shell card-garden overflow-hidden">

@@ -628,6 +628,13 @@ export function createInProcessGardenAdminContract(
       feltImpulseFunnelStore: options.icpFeltImpulseFunnelStore ?? null,
       projectionStore: options.icpAdminProjectionStore ?? null,
       runtimeEnablement: options.icpRuntimeEnablement,
+      // psfn-framework-2vd7s: explicit lifecycle readmission is gated on the
+      // CURRENT manifest as this process resolved it at boot — the same
+      // projection the gateway's authentication boundary and the connect-time
+      // lifecycle sweep use — never a fresh companions.json disk read.
+      fleetCompanionIds: options.config.companionFleet?.companions.map(
+        companion => companion.companionId,
+      ) ?? [],
       ...(options.icpTestInitiation ? { testInitiation: options.icpTestInitiation } : {}),
       settingsService,
       operatorLeaseTtlMs:

@@ -219,6 +219,8 @@ function main(): number {
       // The exact set apps/satellite-hub reads: loadEidoverseMcpConfig() plus
       // the place-map path and the dereferenced join-token name.
       const expected = [
+        'EIDOVERSE_BODY_MAX_PENDING_NOTES',
+        'EIDOVERSE_BODY_WALK_TIMEOUT_MS',
         'EIDOVERSE_JOIN_TOKEN',
         'EIDOVERSE_MCP_AGENT_NAME',
         'EIDOVERSE_MCP_AMBIENT_SAY_DEBOUNCE_MS',
@@ -255,7 +257,13 @@ function main(): number {
       checkEnv(env, 'EIDOVERSE_MCP_REQUEST_TIMEOUT_MS', '10000');
       checkEnv(env, 'EIDOVERSE_MCP_PENDING_PINGS_POLL_INTERVAL_MS', '2000');
       checkEnv(env, 'EIDOVERSE_MCP_AMBIENT_SAY_DEBOUNCE_MS', '180000');
+      checkEnv(env, 'EIDOVERSE_BODY_WALK_TIMEOUT_MS', '95000');
+      checkEnv(env, 'EIDOVERSE_BODY_MAX_PENDING_NOTES', '4');
       checkEnv(env, 'EIDOVERSE_PLACE_MAP_PATH', '/app/config/eidoverse-place-map.json');
+      check(
+        !enabled.stdout.includes('EIDOVERSE_SNAPSHOT'),
+        'first-person vision renders nothing until it is explicitly enabled',
+      );
 
       const token = env.get('EIDOVERSE_JOIN_TOKEN');
       check(
@@ -392,6 +400,35 @@ function main(): number {
       );
     }
 
+    // ── Enabled with first-person vision ──
+    const snapshot = helmTemplate([write('snapshot', deepMergeEidoverse({
+      snapshot: { enabled: true, baseUrl: '', timeoutMs: 2500, maxBytes: 2000000 },
+    }))]);
+    check(snapshot.status === 0, 'render succeeds with eidoverse snapshots enabled', snapshot.stderr.trim());
+    if (snapshot.status === 0) {
+      const env = extractContainerEnv(snapshot.stdout, `${RELEASE_NAME}-satellite-hub`, 'satellite-hub');
+      checkEnv(env, 'EIDOVERSE_SNAPSHOT_ENABLED', 'true');
+      checkEnv(env, 'EIDOVERSE_SNAPSHOT_TIMEOUT_MS', '2500');
+      checkEnv(env, 'EIDOVERSE_SNAPSHOT_MAX_BYTES', '2000000');
+      check(
+        !env.has('EIDOVERSE_SNAPSHOT_BASE_URL'),
+        'an empty snapshot baseUrl leaves the hub to derive it from the world URL',
+      );
+    }
+    const snapshotBaseUrl = helmTemplate([write('snapshot-base-url', deepMergeEidoverse({
+      snapshot: {
+        enabled: true,
+        baseUrl: 'https://snapshots.example.net/world',
+        timeoutMs: 4000,
+        maxBytes: 4000000,
+      },
+    }))]);
+    if (snapshotBaseUrl.status === 0) {
+      const env = extractContainerEnv(snapshotBaseUrl.stdout, `${RELEASE_NAME}-satellite-hub`, 'satellite-hub');
+      checkEnv(env, 'EIDOVERSE_SNAPSHOT_BASE_URL', 'https://snapshots.example.net/world');
+    }
+    check(snapshotBaseUrl.status === 0, 'render succeeds with an explicit snapshot origin', snapshotBaseUrl.stderr.trim());
+
     // ── Fail-closed negatives ──
     // values.schema.json rejects the shape-level violations before any
     // template runs, so those cases assert the schema path; the rest reach
@@ -408,6 +445,23 @@ function main(): number {
       ['zero reconnect base', deepMergeEidoverse({ reconnectBaseMs: 0 }), "at '/satelliteHub/eidoverse/reconnectBaseMs': minimum"],
       ['inverted reconnect window', deepMergeEidoverse({ reconnectBaseMs: 9000 }), 'must be >= satelliteHub.eidoverse.reconnectBaseMs'],
       ['out-of-range egress port', deepMergeEidoverse({ egressPort: 70000 }), "at '/satelliteHub/eidoverse/egressPort': maximum"],
+      ['zero body walk timeout', deepMergeEidoverse({
+        body: { walkTimeoutMs: 0, maxPendingNotes: 4 },
+      }), "at '/satelliteHub/eidoverse/body/walkTimeoutMs': minimum"],
+      ['non-http snapshot origin', deepMergeEidoverse({
+        snapshot: { enabled: true, baseUrl: 'ws://world.example.net', timeoutMs: 4000, maxBytes: 4000000 },
+      }), "at '/satelliteHub/eidoverse/snapshot/baseUrl'"],
+      ['credential-bearing snapshot origin', deepMergeEidoverse({
+        snapshot: {
+          enabled: true,
+          baseUrl: 'https://user:pass@snapshots.example.net',
+          timeoutMs: 4000,
+          maxBytes: 4000000,
+        },
+      }), 'snapshot.baseUrl must be credential-free'],
+      ['zero snapshot size budget', deepMergeEidoverse({
+        snapshot: { enabled: true, baseUrl: '', timeoutMs: 4000, maxBytes: 0 },
+      }), "at '/satelliteHub/eidoverse/snapshot/maxBytes': minimum"],
       ['empty place map', deepMergeEidoverse({
         placeMap: { enabled: true, mountPath: '/app/config/eidoverse-place-map.json', worlds: {} },
       }), 'must contain at least one world'],

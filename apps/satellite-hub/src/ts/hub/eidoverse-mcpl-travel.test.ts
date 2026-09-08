@@ -5,6 +5,7 @@ import WebSocket from "ws";
 
 import { createHubDeviceAssertionIssuer } from "./device-assertion.js";
 import { createHubDeviceRegistryAuthority, type HubDeviceRegistry } from "./device-registry.js";
+import { EidoverseBodyRunner } from "./eidoverse-body-runner.js";
 import {
   EidoverseEmbodiedSessionAdapter,
   type EidoverseTravelPort,
@@ -42,8 +43,22 @@ class RecordingAgent implements FrameworkAgentAdapter {
 
 class RecordingDoor implements EidoverseTravelPort {
   readonly requested: string[] = [];
+  readonly walks: Array<{ x: number; z: number }> = [];
 
   constructor(private readonly refuse = false) {}
+
+  async walkTo(x: number, z: number): Promise<string> {
+    this.walks.push({ x, z });
+    return `arrived at (${x}, ${z})`;
+  }
+
+  async face(): Promise<string> {
+    return "facing";
+  }
+
+  async stop(): Promise<string> {
+    return "stopped";
+  }
 
   async look(): Promise<string> {
     return "An atrium.";
@@ -199,7 +214,9 @@ const DEVICE_ASSERTION_ISSUER = createHubDeviceAssertionIssuer({
   ttlSeconds: 30,
 });
 
-function registry(control: Array<"world_travel">): HubDeviceRegistry {
+type ControlGrant = Array<"world_travel" | "world_body">;
+
+function registry(control: ControlGrant): HubDeviceRegistry {
   return {
     schemaVersion: 1,
     devices: [{
@@ -226,7 +243,7 @@ function registry(control: Array<"world_travel">): HubDeviceRegistry {
   };
 }
 
-function hubConfig(control: Array<"world_travel">): HubConfig {
+function hubConfig(control: ControlGrant): HubConfig {
   return {
     textOnlyMode: true,
     bindHost: "127.0.0.1",
@@ -269,12 +286,19 @@ function hubConfig(control: Array<"world_travel">): HubConfig {
   };
 }
 
-async function travelOverTheWire(input: {
-  control: Array<"world_travel">;
-  world: string;
+async function commandOverTheWire(input: {
+  control: ControlGrant;
+  command: Record<string, unknown>;
+  resultType: "world.travel.result" | "world.body.result";
   door?: RecordingDoor | null;
+  withBody?: boolean;
 }): Promise<{ result: HubToClientMessage | undefined; door: RecordingDoor | null }> {
   const door = input.door === undefined ? new RecordingDoor() : input.door;
+  const body = door && input.withBody
+    ? new EidoverseBodyRunner({ walkTimeoutMs: 1_000, maxPendingNotes: 4 }, door, {
+      logger: { warn: () => undefined },
+    })
+    : null;
   const server = new RealtimeHubServer(hubConfig(input.control), {
     agent: new RecordingAgent(),
     eidoverse: door
@@ -284,6 +308,7 @@ async function travelOverTheWire(input: {
         look: door,
         say: door,
         travel: door,
+        ...(body ? { body } : {}),
       }
       : null,
   });
@@ -306,20 +331,34 @@ async function travelOverTheWire(input: {
       capabilities: { input: ["text"], output: ["text"], control: input.control, safety: [] },
     }));
     await waitFor(() => messages.some((message) => message.type === "hello.ack"));
-    socket.send(JSON.stringify({ type: "world.travel", world: input.world }));
-    await waitFor(() => messages.some((message) => message.type === "world.travel.result"));
+    socket.send(JSON.stringify(input.command));
+    await waitFor(() => messages.some((message) => message.type === input.resultType));
   } finally {
     if (socket) {
       const closing = socket;
       closing.close();
       await new Promise<void>((resolve) => closing.once("close", () => resolve()));
     }
+    await body?.close();
     await server.close();
   }
   return {
-    result: messages.find((message) => message.type === "world.travel.result"),
+    result: messages.find((message) => message.type === input.resultType),
     door,
   };
+}
+
+function travelOverTheWire(input: {
+  control: ControlGrant;
+  world: string;
+  door?: RecordingDoor | null;
+}): Promise<{ result: HubToClientMessage | undefined; door: RecordingDoor | null }> {
+  return commandOverTheWire({
+    control: input.control,
+    command: { type: "world.travel", world: input.world },
+    resultType: "world.travel.result",
+    ...(input.door === undefined ? {} : { door: input.door }),
+  });
 }
 
 test("an authorized satellite can move the emanation and is told the new place", async () => {
@@ -376,3 +415,61 @@ async function waitFor(predicate: () => boolean): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
 }
+
+test("an authorized satellite can submit an allowlisted body action on the same seam", async () => {
+  const { result, door } = await commandOverTheWire({
+    control: ["world_body"],
+    command: { type: "world.body", action: "walk_to", arguments: { x: 2, z: 3 } },
+    resultType: "world.body.result",
+    withBody: true,
+  });
+  assert.deepEqual(result, { type: "world.body.result", accepted: true, action: "walk_to" });
+  await waitFor(() => (door?.walks.length ?? 0) === 1);
+  assert.deepEqual(door?.walks, [{ x: 2, z: 3 }]);
+});
+
+test("a world-editing verb is refused before it reaches the door", async () => {
+  const { result, door } = await commandOverTheWire({
+    control: ["world_body"],
+    command: { type: "world.body", action: "world_verb", arguments: { verb: "spawn", args: {} } },
+    resultType: "world.body.result",
+    withBody: true,
+  });
+  assert.deepEqual(result, {
+    type: "world.body.result",
+    accepted: false,
+    action: "world_verb",
+    reason: "not_allowlisted",
+  });
+  assert.deepEqual(door?.walks, []);
+});
+
+test("body actions need their own capability, which travel authority does not confer", async () => {
+  const { result, door } = await commandOverTheWire({
+    control: ["world_travel"],
+    command: { type: "world.body", action: "stop" },
+    resultType: "world.body.result",
+    withBody: true,
+  });
+  assert.deepEqual(result, {
+    type: "world.body.result",
+    accepted: false,
+    action: "stop",
+    reason: "capability_denied",
+  });
+  assert.deepEqual(door?.walks, []);
+});
+
+test("a Hub whose profile grants no body runner refuses the command outright", async () => {
+  const { result } = await commandOverTheWire({
+    control: ["world_body"],
+    command: { type: "world.body", action: "stop" },
+    resultType: "world.body.result",
+  });
+  assert.deepEqual(result, {
+    type: "world.body.result",
+    accepted: false,
+    action: "stop",
+    reason: "not_configured",
+  });
+});

@@ -1045,6 +1045,25 @@ spec:
             {{- end }}
             - name: EIDOVERSE_MCP_AMBIENT_SAY_DEBOUNCE_MS
               value: {{ .Values.satelliteHub.eidoverse.ambientSayDebounceMs | quote }}
+            - name: EIDOVERSE_BODY_WALK_TIMEOUT_MS
+              value: {{ .Values.satelliteHub.eidoverse.body.walkTimeoutMs | int64 | quote }}
+            - name: EIDOVERSE_BODY_MAX_PENDING_NOTES
+              value: {{ .Values.satelliteHub.eidoverse.body.maxPendingNotes | int64 | quote }}
+            {{- if .Values.satelliteHub.eidoverse.snapshot.enabled }}
+            {{- /* loadEidoverseSnapshotConfig returns null unless
+                 EIDOVERSE_SNAPSHOT_ENABLED is exactly "true", so the disabled
+                 default renders none of these keys. */}}
+            - name: EIDOVERSE_SNAPSHOT_ENABLED
+              value: "true"
+            {{- with .Values.satelliteHub.eidoverse.snapshot.baseUrl }}
+            - name: EIDOVERSE_SNAPSHOT_BASE_URL
+              value: {{ . | quote }}
+            {{- end }}
+            - name: EIDOVERSE_SNAPSHOT_TIMEOUT_MS
+              value: {{ .Values.satelliteHub.eidoverse.snapshot.timeoutMs | int64 | quote }}
+            - name: EIDOVERSE_SNAPSHOT_MAX_BYTES
+              value: {{ .Values.satelliteHub.eidoverse.snapshot.maxBytes | int64 | quote }}
+            {{- end }}
             - name: {{ .Values.satelliteHub.eidoverse.tokenRef }}
               valueFrom:
                 secretKeyRef:

@@ -461,6 +461,27 @@ never back a ClusterIssuer. */ -}}
 {{- if lt (int $eidoverse.reconnectMaxMs) (int $eidoverse.reconnectBaseMs) -}}
 {{- fail "satelliteHub.eidoverse.reconnectMaxMs must be >= satelliteHub.eidoverse.reconnectBaseMs" -}}
 {{- end -}}
+{{- range $field := list "walkTimeoutMs" "maxPendingNotes" -}}
+{{- if lt (int (index $eidoverse.body $field)) 1 -}}
+{{- fail (printf "satelliteHub.eidoverse.body.%s must be a positive integer" $field) -}}
+{{- end -}}
+{{- end -}}
+{{- if $eidoverse.snapshot.enabled -}}
+{{- range $field := list "timeoutMs" "maxBytes" -}}
+{{- if lt (int (index $eidoverse.snapshot $field)) 1 -}}
+{{- fail (printf "satelliteHub.eidoverse.snapshot.%s must be a positive integer" $field) -}}
+{{- end -}}
+{{- end -}}
+{{- $snapshotBaseUrl := trim ($eidoverse.snapshot.baseUrl | default "") -}}
+{{- if $snapshotBaseUrl -}}
+{{- if not (regexMatch "^https?://" $snapshotBaseUrl) -}}
+{{- fail "satelliteHub.eidoverse.snapshot.baseUrl must be an http:// or https:// URL" -}}
+{{- end -}}
+{{- if regexMatch "^https?://[^/@]*@" $snapshotBaseUrl -}}
+{{- fail "satelliteHub.eidoverse.snapshot.baseUrl must be credential-free (no user:password@host)" -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- if or (lt (int $eidoverse.egressPort) 1) (gt (int $eidoverse.egressPort) 65535) -}}
 {{- fail "satelliteHub.eidoverse.egressPort must be within 1-65535" -}}
 {{- end -}}

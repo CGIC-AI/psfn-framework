@@ -11,7 +11,12 @@ import {
   type EmbodiedSessionRegistry,
   type PsfnChannelContext,
   type SatelliteAttachmentOwnership,
+  type VisionCaptureImage,
 } from "./embodied-session.js";
+import {
+  parseEidoverseBodyAction,
+  type EidoverseBodyRunner,
+} from "./eidoverse-body-runner.js";
 import type { FrameworkAgentAdapter } from "./framework-agent.js";
 import { EIDOVERSE_SAY_MAX_TEXT_LENGTH } from "./eidoverse-mcp.js";
 import type { SessionStore } from "./session-store.js";
@@ -47,6 +52,15 @@ export interface EidoverseSayPublisher {
 }
 
 /**
+ * Optional first-person vision. `capture` resolves to null whenever the world's
+ * renderer is absent, slow, or refusing — the turn then keeps only its text
+ * `look()` notes.
+ */
+export interface EidoverseSnapshotCaptureSource {
+  capture(sessionId: string): Promise<VisionCaptureImage | null>;
+}
+
+/**
  * The world-to-world move. Resolves with the door's arrival text and rejects on
  * refusal, timeout, or a dropped connection — the tool call's own return is the
  * arrival signal, so there is nothing else to wait for.
@@ -77,6 +91,16 @@ export interface EidoverseEmbodiedSessionDependencies {
   look: EidoverseLookSource;
   onLookError?: () => void;
   say: EidoverseSayPublisher;
+  /**
+   * Allowlisted locomotion. Present only when the claim profile grants the
+   * `avatar_action` capability; absent, body requests fail closed.
+   */
+  body?: EidoverseBodyRunner;
+  /**
+   * Present only when snapshots are explicitly enabled and the claim profile
+   * grants the vision capability.
+   */
+  snapshot?: EidoverseSnapshotCaptureSource;
   /** Present only on transports that can move between worlds (MCPL). */
   travel?: EidoverseTravelPort;
   logger?: EidoverseEmbodiedSessionLogger;
@@ -159,6 +183,21 @@ export class EidoverseEmbodiedSessionAdapter {
     }
   }
 
+  /**
+   * Accepts an allowlisted body action and starts it off the turn's critical
+   * path. Locomotion can block for the door's full walk budget, so nothing here
+   * is awaited; the outcome reaches the companion as a content-free context
+   * note on a later turn. An unallowlisted verb or a profile without the
+   * `avatar_action` capability is rejected before the door is touched.
+   */
+  submitBodyAction(name: string, args: unknown = {}): void {
+    const body = this.deps.body;
+    if (!body) {
+      throw new Error("Eidoverse body actions are not enabled for this capability profile");
+    }
+    body.submit(parseEidoverseBodyAction(name, args));
+  }
+
   async handleAddressedUtterance(input: EidoverseAddressedUtterance): Promise<string | null> {
     const ownership = this.requireConnection();
     const utteranceId = requireNonEmpty(input.utteranceId, "Eidoverse utterance ID");
@@ -166,8 +205,14 @@ export class EidoverseEmbodiedSessionAdapter {
     if (this.consumedUtteranceIds.has(utteranceId)) return null;
     this.consumedUtteranceIds.add(utteranceId);
 
-    const lookNotes = await this.lookContextNotes();
-    const channel = this.channelContext(input.region, ownership, lookNotes);
+    // Vision runs alongside the text look rather than after it: the door's
+    // renderer can take seconds, and neither call may serialize behind the
+    // other on the turn's critical path.
+    const [lookNotes, capture] = await Promise.all([
+      this.lookContextNotes(),
+      this.captureSnapshot(),
+    ]);
+    const channel = this.channelContext(input.region, ownership, lookNotes, capture);
     const controller = new AbortController();
     this.activeReplies.add(controller);
     this.deps.sessions.append(this.conversationId, { role: "user", content: userText });
@@ -267,6 +312,7 @@ export class EidoverseEmbodiedSessionAdapter {
     region: string | undefined,
     ownership: SatelliteAttachmentOwnership,
     lookNotes: NonNullable<PsfnChannelContext["contextNotes"]>,
+    capture: VisionCaptureImage | null,
   ): PsfnChannelContext {
     const normalizedRegion = normalizeOptional(region);
     const place = this.resolvePlace(normalizedRegion);
@@ -275,7 +321,7 @@ export class EidoverseEmbodiedSessionAdapter {
       this.config.satelliteClaim.satelliteId,
       ownership,
     );
-    const contextNotes = [...lookNotes];
+    const contextNotes = [...(this.deps.body?.drainNotes() ?? []), ...lookNotes];
     if (this.arrivalNote) contextNotes.push(this.arrivalNote);
     if (place.contextNote) {
       contextNotes.push({ key: "eidoverse.place", text: place.contextNote });
@@ -284,8 +330,29 @@ export class EidoverseEmbodiedSessionAdapter {
     return {
       ...base,
       ...(place.placeId ? { placeId: place.placeId } : {}),
+      // One first-person frame per turn, carried on the same seam Voxta uses:
+      // stripped metadata for the outbound channel record, the image itself
+      // only for the model turn.
+      ...(capture
+        ? {
+          visionCaptures: [stripVisionCaptureImageData(capture)],
+          visionCaptureImages: [capture],
+        }
+        : {}),
       ...(boundedContextNotes.length > 0 ? { contextNotes: boundedContextNotes } : {}),
     };
+  }
+
+  private async captureSnapshot(): Promise<VisionCaptureImage | null> {
+    const snapshot = this.deps.snapshot;
+    if (!snapshot) return null;
+    try {
+      return await snapshot.capture(this.conversationId);
+    } catch {
+      // A snapshot never fails a turn; the text look notes remain the tier.
+      (this.deps.logger ?? console).warn("Eidoverse snapshot failed");
+      return null;
+    }
   }
 
   private async lookContextNotes(): Promise<NonNullable<PsfnChannelContext["contextNotes"]>> {
@@ -331,6 +398,13 @@ function requireNonEmpty(value: string, field: string): string {
   const normalized = value.trim();
   if (!normalized) throw new Error(`${field} is required`);
   return normalized;
+}
+
+function stripVisionCaptureImageData(
+  capture: VisionCaptureImage,
+): NonNullable<PsfnChannelContext["visionCaptures"]>[number] {
+  const { dataBase64: _dataBase64, ...metadata } = capture;
+  return metadata;
 }
 
 function normalizeOptional(value: string | undefined): string | undefined {

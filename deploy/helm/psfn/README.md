@@ -147,6 +147,20 @@ Two operational consequences:
   `satelliteHub.eidoverse.egressCIDRs`/`egressPort`;
   `networkPolicy.satelliteHub.allowExternalEgress` only opens public 443.
 
+`satelliteHub.eidoverse.body` bounds the Hub-owned locomotion runner
+(`EIDOVERSE_BODY_*`). It always renders with the visitor path because the
+allowlist itself is the gate: `walk_to`/`face`/`stop` only, refused entirely
+unless the Hub's claim profile grants `avatar_action`. Keep `walkTimeoutMs`
+above the door's own ~90s walk budget.
+
+`satelliteHub.eidoverse.snapshot` renders the optional first-person vision
+environment (`EIDOVERSE_SNAPSHOT_*`) and is disabled by default; the disabled
+render contains no snapshot key. It needs a live spectator renderer attached to
+the world, which is a separate moving part from the world sequencer, so an
+enabled snapshot path still degrades to text `look()` notes rather than failing a
+turn. Leave `baseUrl` empty to let the Hub derive the origin from `worldUrl`;
+set it only for a separate credential-free `http://`/`https://` origin.
+
 `satelliteHub.eidoverse.placeMap` renders the optional Hub-owned world/region to
 `places.json` mapping into a ConfigMap mounted read-only at `mountPath`
 (`EIDOVERSE_PLACE_MAP_PATH`). The mapping is read-only and never creates or

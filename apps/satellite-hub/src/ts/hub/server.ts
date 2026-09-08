@@ -96,6 +96,8 @@ export class RealtimeHubServer {
   private readonly voxta: VoxtaFacade;
   private readonly companion: CompanionBridge | null;
   private readonly eidoverse: EidoverseEmbodiedSessionAdapter | null;
+  /** True only when a body runner was actually supplied for this emanation. */
+  private readonly eidoverseSupportsBodyActions: boolean;
   private readonly locationGeofence: HubLocationGeofence | null;
   private readonly companionBrowser: CompanionBrowserBridge | null;
 
@@ -111,7 +113,7 @@ export class RealtimeHubServer {
         Pick<EidoverseEmbodiedSessionConfig, "worldName" | "agentName">
         & Pick<
           EidoverseEmbodiedSessionDependencies,
-          "look" | "onLookError" | "say" | "travel" | "logger"
+          "look" | "onLookError" | "say" | "body" | "snapshot" | "travel" | "logger"
         >
       ) | null;
       locationNow?: () => number;
@@ -135,10 +137,13 @@ export class RealtimeHubServer {
           look: options.eidoverse.look,
           ...(options.eidoverse.onLookError ? { onLookError: options.eidoverse.onLookError } : {}),
           say: options.eidoverse.say,
+          ...(options.eidoverse.body ? { body: options.eidoverse.body } : {}),
+          ...(options.eidoverse.snapshot ? { snapshot: options.eidoverse.snapshot } : {}),
           ...(options.eidoverse.travel ? { travel: options.eidoverse.travel } : {}),
           ...(options.eidoverse.logger ? { logger: options.eidoverse.logger } : {}),
         })
       : null;
+    this.eidoverseSupportsBodyActions = Boolean(options.eidoverse?.body);
     this.companion = options.companion !== undefined
       ? options.companion
       : (config.companion ? new CompanionBridge(config.companion) : null);
@@ -198,6 +203,9 @@ export class RealtimeHubServer {
         this.config.deviceRegistry,
         this.locationGeofence,
         this.eidoverse ? (world) => this.handleEidoverseTravelRequest(world) : null,
+        this.eidoverseSupportsBodyActions
+          ? (name, args) => { this.submitEidoverseBodyAction(name, args); }
+          : null,
       );
       connection.run().catch((error) => {
         console.error("Realtime connection failed:", error);
@@ -228,6 +236,18 @@ export class RealtimeHubServer {
       throw new Error("Eidoverse embodied session is not configured");
     }
     return this.eidoverse.handleAddressedUtterance(input);
+  }
+
+  /**
+   * Hub-owned allowlisted body-action port for the Eidoverse world avatar.
+   * Submission returns immediately; the door-side walk runs off the turn's
+   * critical path and its content-free outcome reaches the next turn.
+   */
+  submitEidoverseBodyAction(name: string, args: unknown = {}): void {
+    if (!this.eidoverse) {
+      throw new Error("Eidoverse embodied session is not configured");
+    }
+    this.eidoverse.submitBodyAction(name, args);
   }
 
   /**
@@ -299,6 +319,9 @@ function resolveChannelType(config: HubConfig): string {
 /** Executes one authorized world move on behalf of a satellite connection. */
 type EidoverseTravelRequestHandler = (world: string) => Promise<EidoverseTravelOutcome>;
 
+/** Submits one authorized allowlisted body action. Throws when it is refused. */
+type EidoverseBodyActionHandler = (name: string, args: unknown) => void;
+
 class RealtimeConnection {
   private deviceId = `client-${Math.random().toString(16).slice(2, 10)}`;
   private deviceName = "Opanhome TS Client";
@@ -338,6 +361,11 @@ class RealtimeConnection {
      * unauthorized.
      */
     private readonly eidoverseTravel: EidoverseTravelRequestHandler | null = null,
+    /**
+     * Present only when the Hub's claim profile grants body actions. Null makes
+     * the `world.body` command structurally unavailable.
+     */
+    private readonly eidoverseBody: EidoverseBodyActionHandler | null = null,
   ) {
     this.authenticated = !this.deviceRegistry;
     if (!this.deviceRegistry) this.attachSatellite();
@@ -535,6 +563,9 @@ class RealtimeConnection {
         return;
       case "world.travel":
         await this.handleWorldTravel(message);
+        return;
+      case "world.body":
+        await this.handleWorldBodyAction(message);
         return;
       default:
         await this.send({
@@ -1001,6 +1032,50 @@ class RealtimeConnection {
         world: outcome.world,
         reason: outcome.reason,
       });
+  }
+
+  /**
+   * The companion-facing locomotion verb, on the same seam and the same two
+   * gates as `world.travel` — with its own capability, because walking across a
+   * room and leaving for another world are different powers. Acceptance means
+   * the action was submitted, not that the body finished it: a walk runs off
+   * the turn and its content-free outcome arrives as a later turn's note.
+   */
+  private async handleWorldBodyAction(
+    message: Extract<ClientToHubMessage, { type: "world.body" }>,
+  ): Promise<void> {
+    const action = typeof message.action === "string" ? message.action.trim() : "";
+    if (!this.eidoverseBody) {
+      await this.send({
+        type: "world.body.result",
+        accepted: false,
+        action,
+        reason: "not_configured",
+      });
+      return;
+    }
+    if (!this.authenticatedDevice || !this.capabilities.control.includes("world_body")) {
+      await this.send({
+        type: "world.body.result",
+        accepted: false,
+        action,
+        reason: "capability_denied",
+      });
+      return;
+    }
+    try {
+      this.eidoverseBody(action, message.arguments ?? {});
+    } catch {
+      console.warn("Eidoverse body action was refused");
+      await this.send({
+        type: "world.body.result",
+        accepted: false,
+        action,
+        reason: "not_allowlisted",
+      });
+      return;
+    }
+    await this.send({ type: "world.body.result", accepted: true, action });
   }
 
   private async handleArtifactPreviewRequest(

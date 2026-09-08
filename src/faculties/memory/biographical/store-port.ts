@@ -96,6 +96,17 @@ export interface BiographicalClaimWriteInput {
 export interface BiographicalClaimListOptions {
   readonly subject?: BiographicalSubjectRef;
   readonly relatedSubject?: BiographicalSubjectRef;
+  /**
+   * Matches a claim whose subject OR relatedSubject is this canonical identity.
+   * Contact- and companion-centered biography views need every claim one person
+   * is part of, on either side of a dyad, and filtering a bounded page after the
+   * fact would silently drop authorized rows. Identity only: the subject version
+   * is deliberately not part of the match, because a canonical person keeps one
+   * biography across merges rather than one per stored subject revision.
+   */
+  readonly anySubjectIdentity?:
+    | { readonly kind: 'companion'; readonly companionId: string }
+    | { readonly kind: 'contact'; readonly contactId: string };
   readonly kind?: BiographicalClaimKind;
   readonly status?: BiographicalClaimStatus;
   /** Include terminal (superseded/revoked) history rows. Defaults to false. */
@@ -158,6 +169,12 @@ export interface BiographicalCandidateWriteInput {
 export interface BiographicalCandidateListOptions {
   readonly stages?: readonly BiographicalCandidateStage[];
   readonly claimDigest?: string;
+  /**
+   * Exact claim identity. A claim digest is content-scoped and can be shared by
+   * several rows, so review surfaces that need *this* claim's staging record
+   * filter on the claim id instead.
+   */
+  readonly claimId?: string;
   readonly automataRunId?: string;
   readonly limit: number;
   readonly offset?: number;

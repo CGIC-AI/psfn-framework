@@ -6,13 +6,33 @@ import { exactPath, paramWithSuffix, prefixedParamPath } from './route-matchers.
 import type { AdminAuditTimelineAppender, AdminBodyReader, AdminApiRoute } from './routes/types.js';
 import { ADMIN_DYNAMIC_JSON_HEADERS, ADMIN_POLLED_QUEUE_JSON_HEADERS } from './routes/shared.js';
 import type { GardenRequestContext } from './garden-request-context.js';
+import { parseRequestUrl } from './request-url.js';
 import {
   AdminBiographicalReviewService,
   BiographicalReviewError,
+  type AdminBiographicalClaimFilter,
   type AdminBiographicalReviewActor,
 } from './services/biographical-review-service.js';
 
 const BIOGRAPHICAL_CLAIM_PREFIX = '/api/admin/biographical-claims/';
+const BIOGRAPHICAL_CLAIM_LIST_PATH = '/api/admin/biographical-claims';
+
+/**
+ * Subject-centered listing filter (o61vb.14). Exactly two canonical identity
+ * parameters are read; every other query parameter is ignored rather than
+ * becoming an unreviewed search surface over the biography store. Narrowing
+ * never widens authority: each returned row still passes the fleet
+ * subject-relation gate in the service.
+ */
+function claimListFilter(req: IncomingMessage): AdminBiographicalClaimFilter {
+  const query = parseRequestUrl(req, BIOGRAPHICAL_CLAIM_LIST_PATH).searchParams;
+  const contactId = query.get('subjectContactId');
+  const companionId = query.get('subjectCompanionId');
+  return {
+    ...(contactId !== null ? { subjectContactId: contactId } : {}),
+    ...(companionId !== null ? { subjectCompanionId: companionId } : {}),
+  };
+}
 
 function isAdminContext(
   context: GardenRequestContext | undefined,
@@ -60,8 +80,8 @@ export function buildAdminBiographicalReviewRoutes(options: {
   return [
     {
       method: 'GET',
-      match: exactPath('/api/admin/biographical-claims'),
-      handle: (_req, res, _params, context) => {
+      match: exactPath(BIOGRAPHICAL_CLAIM_LIST_PATH),
+      handle: (req, res, _params, context) => {
         if (!isAdminContext(context, 'memory.read')) {
           sendJson(res, 403, { error: 'Admin memory-read authority is required' });
           return;
@@ -70,7 +90,7 @@ export function buildAdminBiographicalReviewRoutes(options: {
           sendJson(res, 503, { error: 'Biographical review persistence is unavailable' });
           return;
         }
-        service.listClaims(context).then(
+        service.listClaims(context, claimListFilter(req)).then(
           result => sendJson(res, 200, result, ADMIN_POLLED_QUEUE_JSON_HEADERS),
           error => sendReviewError(res, error),
         );

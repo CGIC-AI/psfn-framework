@@ -4,7 +4,11 @@ import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from '../../core/agent/tool-surfa
 import { textResult, textResultWithError } from '../../core/tools/results.js';
 import type { SkillsRuntime } from './runtime.js';
 import type { SkillOwnership, SkillSource } from './types.js';
-import { detectDestructiveSkillContentReplace, type ManagedSkillRecord } from './store.js';
+import {
+  detectDestructiveSkillContentReplace,
+  SkillVersionConflictError,
+  type ManagedSkillRecord,
+} from './store.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import type { SelfAuthoredMutationIntakeRuntime } from '../../core/session/intake-sink-gating.js';
 import { INTAKE_FIREWALL_NOTICE_TEMPLATES } from '../../core/cogsec/intake-firewall-notice-templates.js';
@@ -150,6 +154,29 @@ function requireProposalString(params: Record<string, unknown>, key: string): st
   return value;
 }
 
+/**
+ * One wording for every lost-update refusal (lpxg3.3): the author is told which
+ * version they based the revision on, which one is live, and exactly how to
+ * redo the minimal change. Typed as invalid input so the turn records a
+ * rejection the author can act on rather than an opaque failure.
+ */
+function skillVersionConflictResult(
+  name: string,
+  baseVersion: number,
+  currentVersion: number,
+): ReturnType<typeof textResultWithError> {
+  return textResultWithError(
+    `Skill "${name}" changed since you read it: you based this update on `
+    + `v${baseVersion} but it is now v${currentVersion}. Read it again with `
+    + 'action=view and reapply your change so the other revision is not lost.',
+    true,
+    // Typed as invalid input: the base version the caller bound to is no longer
+    // current, and its canonical retry hint (try a different input) is exactly
+    // the re-read-and-reapply the message describes.
+    { errorClass: 'invalid_input' },
+  );
+}
+
 function applyApprovedSkillWrite(
   runtime: SkillsRuntime,
   kind: SkillWriteAction,
@@ -190,6 +217,7 @@ function applyApprovedSkillWrite(
         name,
         content: requireProposalString(params, 'content'),
         ...(description !== undefined ? { description } : {}),
+        expectedVersion: baseVersion,
       }, provenance);
       break;
     }
@@ -834,11 +862,10 @@ export function createSkillTool(
                 );
               }
               if (baseVersion !== existing.version) {
-                return textResultWithError(
-                  `Skill "${existing.name}" changed since you read it: you based this update on `
-                  + `v${baseVersion} but it is now v${existing.version}. Read it again with `
-                  + 'action=view and reapply your change so the other revision is not lost.',
-                  true,
+                return skillVersionConflictResult(
+                  existing.name,
+                  baseVersion,
+                  existing.version,
                 );
               }
             }
@@ -878,13 +905,31 @@ export function createSkillTool(
               return queuedSkillWriteResult('update', existing.name, entry, decision.cause);
             }
 
-            const updated = runtime.getStore().update({
-              name,
-              ...(screened.description !== undefined
-                ? { description: screened.description }
-                : {}),
-              content: screened.content,
-            }, { updatedBy: 'agent', ...(reason ? { reason } : {}) });
+            // lpxg3.3: the revision binds to the version this call actually read
+            // and screened. Screening is an await, so another writer can land
+            // between the read above and this write; the store's
+            // compare-and-swap refuses that lost update instead of clobbering
+            // it, whether or not the author declared a base_version.
+            let updated: ManagedSkillRecord;
+            try {
+              updated = runtime.getStore().update({
+                name,
+                ...(screened.description !== undefined
+                  ? { description: screened.description }
+                  : {}),
+                content: screened.content,
+                expectedVersion: existing.version,
+              }, { updatedBy: 'agent', ...(reason ? { reason } : {}) });
+            } catch (error) {
+              if (error instanceof SkillVersionConflictError) {
+                return skillVersionConflictResult(
+                  error.skillName,
+                  error.expectedVersion,
+                  error.currentVersion,
+                );
+              }
+              throw error;
+            }
             runtime.invalidate();
 
             return textResult(JSON.stringify({

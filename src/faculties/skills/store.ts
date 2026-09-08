@@ -156,6 +156,39 @@ export interface SkillUpdateInput {
   name: string;
   content: string;
   description?: string;
+  /**
+   * The version the caller actually read and screened this revision against.
+   * When present the write is a compare-and-swap: the store re-reads the record
+   * immediately before writing and refuses with {@link SkillVersionConflictError}
+   * if another writer landed in between. Callers that read, then await anything
+   * (a screener, an approval), must supply it — otherwise the second writer
+   * silently clobbers the first.
+   */
+  expectedVersion?: number;
+}
+
+/**
+ * A managed-skill write lost its compare-and-swap: the record on disk is no
+ * longer the version the caller read, so applying the revision would silently
+ * discard the other writer's change. Typed so the tool surface can tell the
+ * author exactly which version to re-read instead of reporting a generic
+ * failure.
+ */
+export class SkillVersionConflictError extends Error {
+  readonly skillName: string;
+  readonly expectedVersion: number;
+  readonly currentVersion: number;
+
+  constructor(skillName: string, expectedVersion: number, currentVersion: number) {
+    super(
+      `Skill "${skillName}" changed since it was read: expected v${expectedVersion}, `
+      + `found v${currentVersion}`,
+    );
+    this.name = 'SkillVersionConflictError';
+    this.skillName = skillName;
+    this.expectedVersion = expectedVersion;
+    this.currentVersion = currentVersion;
+  }
 }
 
 /**
@@ -315,6 +348,12 @@ export class SkillStore {
     const existing = this.getByName(name);
     if (!existing) {
       throw new Error(`Skill "${name}" does not exist`);
+    }
+    // Compare-and-swap against the record as it is NOW, not as the caller read
+    // it. A caller that screened, queued, or otherwise awaited between its read
+    // and this write would otherwise overwrite whatever landed in between.
+    if (input.expectedVersion !== undefined && existing.version !== input.expectedVersion) {
+      throw new SkillVersionConflictError(name, input.expectedVersion, existing.version);
     }
 
     const content = normalizeContent(input.content);

@@ -901,4 +901,51 @@ describe('skill reuse admission linkage', () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it('refuses the loser of two concurrent updates instead of clobbering it', async () => {
+    const { root, runtime } = setupSkillRuntime('skills-concurrent-update-');
+    try {
+      const tool = createSkillTool(runtime, undefined, AUTONOMOUS_GOVERNANCE);
+      await tool.execute('call-1', {
+        action: 'create',
+        name: 'contended-skill',
+        category: 'ops',
+        description: 'Concurrency test skill.',
+        content: '# Contended\n\n- Original step',
+      });
+
+      // Both revisions read v1, then await (screening) before writing. Without a
+      // compare-and-swap the second write silently discards the first, and
+      // omitting base_version made that the default.
+      const [first, second] = await Promise.all([
+        tool.execute('call-2', {
+          action: 'update',
+          name: 'contended-skill',
+          content: '# Contended\n\n- Original step\n- First author addition',
+        }),
+        tool.execute('call-3', {
+          action: 'update',
+          name: 'contended-skill',
+          content: '# Contended\n\n- Original step\n- Second author addition',
+        }),
+      ]);
+
+      const texts = [readText(first), readText(second)];
+      const applied = texts.filter(text => text.includes('"action": "updated"'));
+      const refused = texts.filter(text => /changed since you read it/i.test(text));
+      expect(applied).toHaveLength(1);
+      expect(refused).toHaveLength(1);
+      expect(refused[0]).toContain('v1');
+      expect(refused[0]).toContain('v2');
+
+      // Exactly one revision landed: the winner's, at v2, with no lost history.
+      const record = runtime.getStore().getByName('contended-skill');
+      expect(record?.version).toBe(2);
+      expect(record?.content).toContain('First author addition');
+      expect(record?.content).not.toContain('Second author addition');
+      expect(runtime.getStore().getHistory('contended-skill')).toHaveLength(2);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });

@@ -67,6 +67,14 @@ import type {
   SubsystemLaneStatus as CanonicalSubsystemLaneStatus,
 } from '../../../../src/operator/garden/services/subsystem-health-service.js';
 import type {
+  HumanEscalationSnapshot as CanonicalHumanEscalationSnapshot,
+} from '../../../../src/operator/garden/services/human-escalation-service.js';
+import type {
+  HumanEscalationRecord as CanonicalHumanEscalationRecord,
+  HumanEscalationResolutionReason as CanonicalHumanEscalationResolutionReason,
+  HumanEscalationResolutionState as CanonicalHumanEscalationResolutionState,
+} from '../../../../src/shared/escalation/contracts.js';
+import type {
   IncidentTimelineSnapshot as CanonicalIncidentTimelineSnapshot,
   IncidentTimelineScope as CanonicalIncidentTimelineScope,
 } from '../../../../src/operator/garden/services/incident-timeline-service.js';
@@ -896,6 +904,11 @@ export type IncidentSummary = CanonicalIncidentSummary;
 export type IncidentTimelineScope = CanonicalIncidentTimelineScope;
 
 export type IncidentTimelineSnapshot = CanonicalIncidentTimelineSnapshot;
+/** One thing this runtime is waiting on a human for (bead bznbn). */
+export type HumanEscalationRecord = CanonicalHumanEscalationRecord;
+export type HumanEscalationResolutionReason = CanonicalHumanEscalationResolutionReason;
+export type HumanEscalationResolutionState = CanonicalHumanEscalationResolutionState;
+export type HumanEscalationSnapshot = CanonicalHumanEscalationSnapshot;
 
 export type SubsystemHealthSnapshot = CanonicalSubsystemHealthSnapshot;
 

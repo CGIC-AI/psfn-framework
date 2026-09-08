@@ -11440,6 +11440,41 @@
       "value": "1024"
     },
     {
+      "file": "src/shared/escalation/contracts.ts",
+      "name": "HUMAN_ESCALATION_LIMITS.maxDetailPathChars",
+      "value": "128",
+      "form": "object-member",
+      "note": "Structural contract bound on the content-free escalation envelope (psfn-framework-bznbn), not tuning: it bounds a Garden route path whose shape is also pinned by a regex and a ledger CHECK constraint."
+    },
+    {
+      "file": "src/shared/escalation/contracts.ts",
+      "name": "HUMAN_ESCALATION_LIMITS.maxKeyChars",
+      "value": "256",
+      "form": "object-member",
+      "note": "Structural contract bound on the content-free escalation envelope (psfn-framework-bznbn), not tuning: it is mirrored by the ledger's own CHECK constraint, so the literal and the DDL must agree rather than track an owner file."
+    },
+    {
+      "file": "src/shared/escalation/contracts.ts",
+      "name": "HUMAN_ESCALATION_LIMITS.maxLabelChars",
+      "value": "64",
+      "form": "object-member",
+      "note": "Structural contract bound on the content-free escalation envelope (psfn-framework-bznbn), not tuning: these caps are what keep free text and unbounded payloads out of a ledger whose entire guarantee is that it holds neither, and relaxing one from an owner file would let an operator turn the guarantee off."
+    },
+    {
+      "file": "src/shared/escalation/contracts.ts",
+      "name": "HUMAN_ESCALATION_LIMITS.maxLabels",
+      "value": "8",
+      "form": "object-member",
+      "note": "Structural contract bound on the content-free escalation envelope (psfn-framework-bznbn), not tuning: these caps are what keep free text and unbounded payloads out of a ledger whose entire guarantee is that it holds neither, and relaxing one from an owner file would let an operator turn the guarantee off."
+    },
+    {
+      "file": "src/shared/escalation/contracts.ts",
+      "name": "HUMAN_ESCALATION_LIMITS.maxListLimit",
+      "value": "200",
+      "form": "object-member",
+      "note": "Structural read ceiling for the escalation ledger (psfn-framework-bznbn), mirroring MAX_HEALTH_EVENT_LIST_LIMIT: the operator-tunable page size is scheduler.json humanEscalation.listLimit, which is validated against this ceiling rather than replacing it."
+    },
+    {
       "file": "src/shared/log-rate-limit.ts",
       "name": "DEFAULT_MAX_KEYS",
       "value": "500"
@@ -12956,6 +12991,34 @@
       "value": "1_800_000",
       "form": "object-member",
       "note": "Canonical scheduler.json owner-file default for the runtime health detectors (psfn-framework-7qeo1.24.2-.4); operators tune healthDetectors.* in scheduler.json, the owner migration seeds this exact value into files written before the block existed, and every detector reads the loaded owner value rather than this literal, so it is a seed default rather than a code-owned policy constant."
+    },
+    {
+      "file": "src/system/config/scheduler-config/human-escalation.ts",
+      "name": "DEFAULT_HUMAN_ESCALATION_CONFIG.listLimit",
+      "value": "100",
+      "form": "object-member",
+      "note": "Canonical scheduler.json owner-file default for human escalation routing (psfn-framework-bznbn); operators tune humanEscalation.listLimit in scheduler.json, the owner migration seeds this exact value into files written before the block existed, and the Garden attention surface reads the loaded owner value rather than this literal."
+    },
+    {
+      "file": "src/system/config/scheduler-config/human-escalation.ts",
+      "name": "DEFAULT_HUMAN_ESCALATION_CONFIG.routes.cogsec_quarantine.cooldownMs",
+      "value": "0",
+      "form": "object-member",
+      "note": "Canonical scheduler.json owner-file default for human escalation routing (psfn-framework-bznbn); operators tune humanEscalation.* in scheduler.json, the owner migration seeds this exact value into files written before the block existed, and the control plane reads the loaded owner value rather than this literal."
+    },
+    {
+      "file": "src/system/config/scheduler-config/human-escalation.ts",
+      "name": "DEFAULT_HUMAN_ESCALATION_CONFIG.routes.operator_confirmation.cooldownMs",
+      "value": "0",
+      "form": "object-member",
+      "note": "Canonical scheduler.json owner-file default for human escalation routing (psfn-framework-bznbn); operators tune humanEscalation.* in scheduler.json, the owner migration seeds this exact value into files written before the block existed, and the control plane reads the loaded owner value rather than this literal."
+    },
+    {
+      "file": "src/system/config/scheduler-config/human-escalation.ts",
+      "name": "DEFAULT_HUMAN_ESCALATION_CONFIG.routes.runtime_incident.cooldownMs",
+      "value": "0",
+      "form": "object-member",
+      "note": "Canonical scheduler.json owner-file default for human escalation routing (psfn-framework-bznbn); operators tune humanEscalation.* in scheduler.json, the owner migration seeds this exact value into files written before the block existed, and the control plane reads the loaded owner value rather than this literal. Zero is additionally enforced by a cross-check so the incident path's realertCooldownMs stays the only clock."
     },
     {
       "file": "src/system/config/scheduler-config/introspection.ts",

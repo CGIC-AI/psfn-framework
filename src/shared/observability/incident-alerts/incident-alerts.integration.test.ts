@@ -16,6 +16,22 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createPostgresPool } from '../../../persistence/postgres.js';
 import { PostgresHealthEventStore } from '../../../persistence/postgres/health-event-store.js';
 import {
+  PostgresHumanEscalationStore,
+} from '../../../persistence/postgres/human-escalation-store.js';
+import {
+  createHumanEscalationControlPlane,
+} from '../../escalation/control-plane.js';
+import {
+  DEFAULT_HUMAN_ESCALATION_CONFIG,
+} from '../../../system/config/scheduler-config/human-escalation.js';
+import {
+  createOperatorAlertEscalationSink,
+} from '../../../boundary/gateway/human-escalation-operator-sink.js';
+import {
+  AdminHumanEscalationDataService,
+} from '../../../operator/garden/services/human-escalation-service.js';
+import { resolveHumanEscalation } from '../../escalation/control-plane.js';
+import {
   DEFAULT_POSTGRES_TEST_IMAGE,
   startPostgresTestHarness,
   type PostgresTestHarness,
@@ -67,6 +83,12 @@ afterAll(async () => {
 
 interface Runtime {
   store: PostgresHealthEventStore;
+  escalations: PostgresHumanEscalationStore;
+  /**
+   * A second control plane over the SAME durable ledger with an empty
+   * in-process state, which is what a restarted process actually is.
+   */
+  restartedPlane: () => ReturnType<typeof createHumanEscalationControlPlane<NotifyNtfyParams>>;
   eventBus: EventBus;
   sent: NotifyNtfyParams[];
   garden: AdminIncidentTimelineDataService;
@@ -91,6 +113,7 @@ async function withRuntime(
   });
   try {
     const store = await PostgresHealthEventStore.fromPool(pool, HEALTH_EVENT_ROW_CAP);
+    const escalations = await PostgresHumanEscalationStore.fromPool(pool);
     const eventBus = new EventBus();
     const sent: NotifyNtfyParams[] = [];
     let clock = NOW_MS;
@@ -115,7 +138,15 @@ async function withRuntime(
           config: () => CONFIG,
           now: () => clock,
         }),
-        resolveSink: () => sink,
+        // The alert reaches the same dispatcher through the governed escalation
+        // plane over the real ledger, exactly as the gateway and agent wire it.
+        escalation: createHumanEscalationControlPlane<NotifyNtfyParams>({
+          ledger: escalations,
+          routing: () => DEFAULT_HUMAN_ESCALATION_CONFIG.routes,
+          sinks: [createOperatorAlertEscalationSink({ resolveDispatcher: () => sink })],
+          now: () => clock,
+          logger: { info: () => undefined, warn: () => undefined },
+        }),
         policy: () => CONFIG.incidentAlerts,
         now: () => clock,
         logger: { info: () => undefined, warn: () => undefined, error: () => undefined },
@@ -125,6 +156,14 @@ async function withRuntime(
     try {
       await run({
         store,
+        escalations,
+        restartedPlane: () => createHumanEscalationControlPlane<NotifyNtfyParams>({
+          ledger: escalations,
+          routing: () => DEFAULT_HUMAN_ESCALATION_CONFIG.routes,
+          sinks: [createOperatorAlertEscalationSink({ resolveDispatcher: () => sink })],
+          now: () => clock,
+          logger: { info: () => undefined, warn: () => undefined },
+        }),
         eventBus,
         sent,
         garden: new AdminIncidentTimelineDataService({
@@ -367,6 +406,147 @@ describe('incident alert and Garden timeline over the persisted stream', () => {
         expect(await runtime.store.listRecent({ limit: 100 })).toEqual([]);
         const snapshot = await runtime.garden.getSnapshot();
         expect(snapshot.incidents).toEqual([]);
+      });
+    },
+    INTEGRATION_TIMEOUT_MS,
+  );
+  it(
+    'lands one durable escalation per incident, keyed on the alert\'s own idempotency key',
+    async () => {
+      await withRuntime(async (runtime) => {
+        const detectors = [createPostgresPressureDetector({
+          telemetry: () => stormingPools(3),
+          config: CONFIG.postgresPressure,
+        })];
+        for (let step = 0; step < 6; step += 1) {
+          runtime.setNow(NOW_MS + step * CYCLE_MS);
+          await runtime.runCycle(detectors);
+        }
+
+        const incidentId = soleAlertIncidentId(runtime.sent);
+        const rows = await runtime.escalations.list({ limit: 50 });
+        expect(rows).toHaveLength(1);
+        expect(rows[0]).toMatchObject({
+          kind: 'runtime_incident',
+          // The condition an operator resolves is the incident itself.
+          dedupeKey: incidentId,
+          sourceRef: incidentId,
+          state: 'open',
+          raiseCount: 1,
+          detailPath: '/subsystem-health',
+        });
+        expect(rows[0]!.labels).toContain('postgres_pool_pressure_opened');
+        // The attempt is keyed on exactly the key the alert carried.
+        await expect(runtime.escalations.findAttempt(runtime.sent[0]!.idempotencyKey ?? ''))
+          .resolves.toMatchObject({ sink: 'operator_alert', outcome: 'delivered' });
+        await expect(runtime.escalations.countByState()).resolves.toEqual({
+          open: 1,
+          acknowledged: 0,
+          resolved: 0,
+          dismissed: 0,
+        });
+      });
+    },
+    INTEGRATION_TIMEOUT_MS,
+  );
+
+  it(
+    'survives a restart: a redelivered alert dispatches nothing and writes no second row',
+    async () => {
+      await withRuntime(async (runtime) => {
+        const detectors = [createPostgresPressureDetector({
+          telemetry: () => stormingPools(3),
+          config: CONFIG.postgresPressure,
+        })];
+        for (let step = 0; step < 6; step += 1) {
+          runtime.setNow(NOW_MS + step * CYCLE_MS);
+          await runtime.runCycle(detectors);
+        }
+        const incidentId = soleAlertIncidentId(runtime.sent);
+        const idempotencyKey = runtime.sent[0]!.idempotencyKey ?? '';
+
+        // A fresh process with an empty in-memory ledger re-raising the same
+        // rendered alert. The durable attempt row is what makes it a no-op.
+        const replayed = await runtime.restartedPlane().raise({
+          kind: 'runtime_incident',
+          severity: 'critical',
+          owner: { kind: 'system' },
+          dedupeKey: incidentId,
+          idempotencyKey,
+          sourceRef: incidentId,
+          labels: ['postgres_pool_pressure_opened'],
+          evidence: { failureCount: 1 },
+          detailPath: '/subsystem-health',
+          raisedAtMs: NOW_MS,
+          notice: runtime.sent[0]!,
+        });
+
+        expect(replayed).toMatchObject({ status: 'replayed', outcome: 'delivered' });
+        expect(runtime.sent).toHaveLength(1);
+        const rows = await runtime.escalations.list({ limit: 50 });
+        expect(rows).toHaveLength(1);
+        expect(rows[0]!.raiseCount).toBe(1);
+        // ...and the durable raise count is what a restarted process derives its
+        // NEXT key from, so the re-alert after this boot is `:opened:2` rather
+        // than a re-minted `:opened:1` the ledger would refuse to dispatch.
+        await expect(runtime.restartedPlane().raiseCount('runtime_incident', incidentId))
+          .resolves.toBe(1);
+        expect(idempotencyKey).toBe(`${incidentId}:opened:1`);
+      });
+    },
+    INTEGRATION_TIMEOUT_MS,
+  );
+
+  it(
+    'lets a human resolve the escalation, and reopens it when the runtime restates it',
+    async () => {
+      await withRuntime(async (runtime) => {
+        const detectors = [createPostgresPressureDetector({
+          telemetry: () => stormingPools(3),
+          config: CONFIG.postgresPressure,
+        })];
+        for (let step = 0; step < 6; step += 1) {
+          runtime.setNow(NOW_MS + step * CYCLE_MS);
+          await runtime.runCycle(detectors);
+        }
+        const garden = new AdminHumanEscalationDataService({
+          ledger: runtime.escalations,
+          config: () => DEFAULT_HUMAN_ESCALATION_CONFIG,
+          now: () => NOW_MS,
+        });
+        const open = await garden.getSnapshot(['open']);
+        expect(open.escalations).toHaveLength(1);
+        const escalationId = open.escalations[0]!.escalationId;
+
+        await expect(garden.resolve({
+          escalationId,
+          state: 'resolved',
+          reason: 'handled',
+          actor: 'operator',
+        })).resolves.toMatchObject({ ok: true });
+        await expect(garden.getSnapshot(['open'])).resolves.toMatchObject({ escalations: [] });
+        // A second human decision on a terminal row is refused, not applied.
+        await expect(resolveHumanEscalation(runtime.escalations, {
+          escalationId,
+          state: 'dismissed',
+          reason: 'duplicate',
+          actor: 'operator',
+          resolvedAtMs: NOW_MS,
+        })).resolves.toMatchObject({ ok: false, status: 409 });
+
+        // The fault is still going, so the next re-alert reopens the same row
+        // rather than leaving a resolved escalation over a live incident.
+        runtime.setNow(NOW_MS + CONFIG.incidentAlerts.realertCooldownMs + CYCLE_MS);
+        await runtime.runCycle(detectors);
+
+        expect(runtime.sent.length).toBeGreaterThan(1);
+        const reopened = await garden.getSnapshot(['open']);
+        expect(reopened.escalations).toHaveLength(1);
+        expect(reopened.escalations[0]).toMatchObject({
+          escalationId,
+          state: 'open',
+          resolution: null,
+        });
       });
     },
     INTEGRATION_TIMEOUT_MS,

@@ -35,6 +35,9 @@ import { buildAdminPromptRoutes } from './routes/prompt-routes.js';
 import { buildAdminSchedulerRoutes } from './routes/scheduler-routes.js';
 import { buildAdminSubsystemHealthRoutes } from './routes/subsystem-health-routes.js';
 import { buildAdminIncidentRoutes } from './routes/incident-routes.js';
+import {
+  buildAdminHumanEscalationRoutes,
+} from './routes/human-escalation-routes.js';
 import { buildAdminPartnerAffectShadowRoutes } from './routes/partner-affect-shadow-routes.js';
 import { buildAdminAutomataRoutes } from './routes/automata-routes.js';
 import type { AdminPartnerAffectShadowService } from './services/partner-affect-shadow-service.js';
@@ -88,6 +91,9 @@ import type {
 } from './services/types.js';
 import type { AdminSubsystemHealthService } from './services/subsystem-health-service.js';
 import type { AdminIncidentTimelineService } from './services/incident-timeline-service.js';
+import type {
+  AdminHumanEscalationService,
+} from './services/human-escalation-service.js';
 import type { AdminToolConformanceService } from './services/tool-conformance-service.js';
 import type {
   AdminChatBootstrapApi,
@@ -337,6 +343,7 @@ export function buildAdminApiRoutes(options: {
   subjectAuditService?: AdminSubjectVisibleAuditService;
   subsystemHealthService?: AdminSubsystemHealthService | null;
   incidentTimelineService?: AdminIncidentTimelineService | null;
+  humanEscalationService?: AdminHumanEscalationService | null;
   partnerAffectShadowService?: AdminPartnerAffectShadowService | null;
   toolConformanceService?: AdminToolConformanceService | null;
   icpAutonomyService?: AdminIcpAutonomyService | null;
@@ -403,6 +410,7 @@ export function buildAdminApiRoutes(options: {
     subjectAuditService,
     subsystemHealthService,
     incidentTimelineService,
+    humanEscalationService,
     partnerAffectShadowService,
     toolConformanceService,
     icpAutonomyService,
@@ -1108,6 +1116,11 @@ export function buildAdminApiRoutes(options: {
     ...buildAdminSchedulerRoutes({ scheduler, withBody }),
     ...buildAdminSubsystemHealthRoutes({ subsystemHealth: subsystemHealthService }),
     ...buildAdminIncidentRoutes({ incidents: incidentTimelineService }),
+    ...buildAdminHumanEscalationRoutes({
+      escalations: humanEscalationService,
+      withBody,
+      appendAuditTimelineEntry,
+    }),
     ...buildAdminPartnerAffectShadowRoutes({ partnerAffectShadow: partnerAffectShadowService }),
     ...buildAdminToolConformanceRoutes({ toolConformance: toolConformanceService, withBody }),
     ...(icpAutonomyService

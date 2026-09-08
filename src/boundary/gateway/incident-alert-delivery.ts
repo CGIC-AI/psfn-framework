@@ -22,8 +22,17 @@
 // Delivery reuses the existing operator-alert seam unchanged: the gateway
 // satisfies {@link OperatorIncidentAlertSink} with its own dispatcher, the agent
 // with `GatewayClient.notifyOperator`. This module owns no sink, no retry, and
-// no fan-out policy — psfn-framework-bznbn owns that redesign and sequences
-// after this bead.
+// no fan-out policy.
+//
+// Since psfn-framework-bznbn it reaches that seam THROUGH the human escalation
+// control plane rather than beside it. The migration is deliberately additive:
+// the two questions above, the in-process ledger, the stream re-anchor, and the
+// rendered notification are untouched, and the alert an operator receives is
+// byte-identical. What the plane adds is a durable ledger row per incident, a
+// durable attempt row per `idempotencyKey`, and one Garden surface where an
+// operator can say what they did about it. It adds no second cooldown: the
+// owner file requires `humanEscalation.routes.runtime_incident.cooldownMs` to
+// be zero precisely so the clock below stays the only one.
 //
 // The alert-sink-unconfigured case is not an exception to any of the above. It
 // is an incident like the others, it is deduplicated like the others, and the
@@ -46,9 +55,19 @@ import type {
 import { createComponentLogger } from '../../shared/logger.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import type { NotifyNtfyParams, OperatorAlertResult } from './protocol.js';
+import type {
+  HumanEscalationControlPlane,
+} from '../../shared/escalation/control-plane.js';
 import { renderIncidentAlert } from './incident-alert-render.js';
 
 const log = createComponentLogger('IncidentAlertDelivery');
+
+/**
+ * Garden route the escalation deep-links to. The incident timeline already
+ * lists every incident under the id the alert carries, so the escalation points
+ * at that surface rather than minting a second view of the same rows.
+ */
+const INCIDENT_GARDEN_DETAIL_PATH = '/subsystem-health';
 
 /**
  * Delivery seam. Structurally satisfied by both
@@ -88,13 +107,19 @@ export type IncidentAlertOutcome =
 export interface IncidentAlertDeliveryOptions {
   investigator: IncidentInvestigator;
   /**
-   * Resolved per alert rather than injected once. The gateway subscribes this
-   * path before it builds its RPC server — it has to, because the
-   * `operator_alert_sinks_unconfigured` incident is emitted during startup —
-   * so the sink genuinely does not exist yet at that moment, and saying so is
-   * more honest than deferring the subscription and losing the event.
+   * The governed path to a human. Every alert this module decides to send is
+   * raised on the plane as a `runtime_incident`, which routes it to the same
+   * operator-alert dispatcher this module used to call directly, records the
+   * incident durably, and refuses to dispatch twice for one idempotency key.
+   *
+   * The dispatcher is still resolved per alert, one layer down in the sink
+   * adapter: the gateway subscribes this path before it builds its RPC server —
+   * it has to, because the `operator_alert_sinks_unconfigured` incident is
+   * emitted during startup — so the dispatcher genuinely does not exist yet at
+   * that moment, and saying so is more honest than deferring the subscription
+   * and losing the event.
    */
-  resolveSink: () => OperatorIncidentAlertSink | null;
+  escalation: HumanEscalationControlPlane<NotifyNtfyParams>;
   policy: () => IncidentAlertsConfig;
   now?: () => number;
   logger?: IncidentAlertLogger;
@@ -146,56 +171,102 @@ export function createIncidentAlertDelivery(
     }
   }
 
+  /**
+   * Content-free facts about one incident, in the escalation plane's shape.
+   * Every value is drawn from the health envelope's closed vocabularies, its
+   * numeric/boolean evidence, or its opaque identifiers — the same guarantee
+   * the rendered alert has, now enforced a second time by the plane's own
+   * label and evidence admission.
+   */
+  function escalationLabels(bundle: IncidentBundle): string[] {
+    const family = bundle.incident.family;
+    return family === null ? [bundle.incident.code] : [bundle.incident.code, family];
+  }
+
+  /**
+   * One alert, one key. The sequence comes from the DURABLE escalation ledger
+   * rather than the in-process ledger below, and that distinction is
+   * load-bearing: the in-process counter restarts at zero on every boot, so
+   * after a second restart it would re-mint a key an earlier process already
+   * recorded, and the plane would correctly refuse to dispatch it — silently
+   * costing an operator the re-alert that says the fault is still going. The
+   * in-process ledger keeps its own job, which is gating the cooldown.
+   */
   async function deliver(
     bundle: IncidentBundle,
     phase: IncidentStatementPhase,
-    sequence: number,
   ): Promise<IncidentAlertOutcome> {
     const incidentId = bundle.incident.incidentId;
-    const sink = options.resolveSink();
-    if (!sink) {
-      logger.error('Runtime incident could not be alerted: no operator alert sink is wired', {
-        incidentId,
-        phase,
-        code: bundle.incident.code,
-        severity: bundle.incident.severity,
-        component: bundle.incident.component,
-        ownerKind: bundle.incident.owner.kind,
-      });
-      return { status: 'undeliverable', incidentId, phase, reason: 'no_sink' };
+    const sequence = await options.escalation.raiseCount('runtime_incident', incidentId) + 1;
+    const notice = renderIncidentAlert(bundle, phase, sequence);
+    const idempotencyKey = notice.idempotencyKey;
+    if (!idempotencyKey) {
+      throw new Error('Rendered incident alerts must carry an idempotency key');
     }
-    let result: OperatorAlertResult;
-    try {
-      result = await sink.dispatch(renderIncidentAlert(bundle, phase, sequence));
-    } catch (error) {
-      // Contained but never swallowed: the dispatcher throws only when every
-      // configured sink failed, and that is itself operator-visible news.
-      logger.error('Runtime incident operator alert delivery failed', {
-        incidentId,
-        phase,
-        code: bundle.incident.code,
-        error: toErrorMessage(error),
-      });
-      return { status: 'undeliverable', incidentId, phase, reason: 'delivery_failed' };
-    }
-    if (result.outcome === 'unconfigured') {
-      logger.error('Runtime incident operator alert has nowhere to go', {
-        incidentId,
-        phase,
-        code: bundle.incident.code,
-        severity: bundle.incident.severity,
-        warning: result.warning,
-      });
-      return { status: 'undeliverable', incidentId, phase, reason: 'unconfigured' };
-    }
-    logger.info('Runtime incident operator alert delivered', {
-      incidentId,
-      phase,
-      code: bundle.incident.code,
+    const raised = await options.escalation.raise({
+      kind: 'runtime_incident',
       severity: bundle.incident.severity,
-      sinks: result.deliveries.map(delivery => `${delivery.sink}:${delivery.status}`),
+      owner: bundle.incident.owner,
+      // The condition an operator resolves is the INCIDENT; the attempt the
+      // plane deduplicates is this one rendered notice. Same two keys the alert
+      // path has always used, now durable.
+      dedupeKey: incidentId,
+      idempotencyKey,
+      sourceRef: incidentId,
+      labels: escalationLabels(bundle),
+      evidence: bundle.incident.evidence,
+      detailPath: INCIDENT_GARDEN_DETAIL_PATH,
+      raisedAtMs: now(),
+      notice,
     });
-    return { status: 'delivered', incidentId, phase };
+
+    if (raised.status === 'delivered') {
+      logger.info('Runtime incident operator alert delivered', {
+        incidentId,
+        phase,
+        code: bundle.incident.code,
+        severity: bundle.incident.severity,
+        escalationId: raised.escalationId,
+      });
+      return { status: 'delivered', incidentId, phase };
+    }
+    if (raised.status === 'undeliverable') {
+      if (raised.reason === 'no_sink') {
+        logger.error('Runtime incident could not be alerted: no operator alert sink is wired', {
+          incidentId,
+          phase,
+          code: bundle.incident.code,
+          severity: bundle.incident.severity,
+          component: bundle.incident.component,
+          ownerKind: bundle.incident.owner.kind,
+        });
+      } else if (raised.reason === 'unconfigured') {
+        logger.error('Runtime incident operator alert has nowhere to go', {
+          incidentId,
+          phase,
+          code: bundle.incident.code,
+          severity: bundle.incident.severity,
+        });
+      } else {
+        // Contained but never swallowed: the dispatcher throws only when every
+        // configured sink failed, and that is itself operator-visible news.
+        logger.error('Runtime incident operator alert delivery failed', {
+          incidentId,
+          phase,
+          code: bundle.incident.code,
+        });
+      }
+      return { status: 'undeliverable', incidentId, phase, reason: raised.reason };
+    }
+    // Everything below is a state the owner file makes unreachable for this
+    // kind, so reaching it means the routing invariants were bypassed rather
+    // than that an alert was quietly dropped. Failing loudly is the only
+    // outcome that does not silently lose a page.
+    throw new Error(
+      `Runtime incident ${incidentId} was escalated but not alerted (${raised.status}); `
+      + 'humanEscalation.routes.runtime_incident must route to operator_alert with a zero '
+      + 'cooldown, and each rendered alert must carry a fresh idempotency key',
+    );
   }
 
   return {
@@ -217,7 +288,7 @@ export function createIncidentAlertDelivery(
         }
         const bundle = await options.investigator.investigate(event);
         if (!bundle) return { status: 'ignored' };
-        const outcome = await deliver(bundle, 'closed', (existing?.alertCount ?? 0) + 1);
+        const outcome = await deliver(bundle, 'closed');
         remember(incidentId, {
           lastAlertAtMs: nowMs,
           alertCount: (existing?.alertCount ?? 0) + 1,
@@ -232,7 +303,7 @@ export function createIncidentAlertDelivery(
         }
         const bundle = await options.investigator.investigate(event);
         if (!bundle) return { status: 'ignored' };
-        const outcome = await deliver(bundle, 'opened', existing.alertCount + 1);
+        const outcome = await deliver(bundle, 'opened');
         remember(incidentId, {
           lastAlertAtMs: nowMs,
           alertCount: existing.alertCount + 1,
@@ -255,7 +326,7 @@ export function createIncidentAlertDelivery(
         }, policy.ledgerCapacity);
         return { status: 'suppressed', incidentId, reason: 'stated_by_earlier_process' };
       }
-      const outcome = await deliver(bundle, 'opened', 1);
+      const outcome = await deliver(bundle, 'opened');
       remember(incidentId, {
         lastAlertAtMs: nowMs,
         alertCount: 1,

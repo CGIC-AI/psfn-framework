@@ -72,6 +72,7 @@ import { IntrospectionLandmarkPostgresStore } from '../faculties/introspection/p
 import { assertSharedSchemaRuntimeAuthority } from './postgres/shared-schema.js';
 import { PostgresPartnerAffectShadowStore } from './postgres/partner-affect-shadow-store.js';
 import { PostgresHealthEventStore } from './postgres/health-event-store.js';
+import { PostgresHumanEscalationStore } from './postgres/human-escalation-store.js';
 import type { PartnerAffectShadowStorePort } from '../core/emotion/partner-affect/shadow-store-port.js';
 import { PostgresBackgroundWorkStore } from './postgres/background-work-store.js';
 import type { BackgroundWorkStorePort } from '../core/agent/background-work/store-port.js';
@@ -161,6 +162,8 @@ export interface AgentPersistenceRuntime {
    * detectors and the Garden incident timeline. Content-free by contract.
    */
   healthEventStore: PostgresHealthEventStore;
+  /** Durable ledger behind the human escalation control plane (bznbn). */
+  humanEscalationStore: PostgresHumanEscalationStore;
   /**
    * Shared-schema cross-companion presence store (sprint 10, W5a). Present
    * ONLY when multi-companion mode is enabled; flag-off never touches the
@@ -551,6 +554,10 @@ export async function createAgentPersistenceRuntime(
     partnerAffectShadowStore: await awaitPostgresStoreReadiness(
       'partner_affect_shadow',
       () => PostgresPartnerAffectShadowStore.connect(databaseUrl, { schema, role: tenantRole }),
+    ),
+    humanEscalationStore: await awaitPostgresStoreReadiness(
+      'human_escalations',
+      () => PostgresHumanEscalationStore.connect(databaseUrl, { schema, role: tenantRole }),
     ),
     healthEventStore: await awaitPostgresStoreReadiness(
       'runtime_health_stream',

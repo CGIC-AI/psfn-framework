@@ -18,6 +18,7 @@ export function Composer({
   controller,
   onSendText,
   onStopGeneration,
+  onStopVoicePlayback = controller.stopVoicePlayback,
   onToggleMic,
   targetLabel,
 }: {
@@ -27,13 +28,14 @@ export function Composer({
   controller: ComposerController;
   onSendText: (text: string) => void;
   onStopGeneration: () => void;
+  onStopVoicePlayback?: () => void;
   onToggleMic: () => void;
   targetLabel?: string;
 }) {
   function submit(event?: FormEvent<HTMLFormElement>) {
     event?.preventDefault();
     const text = controller.input.trim();
-    if (!text) return;
+    if (!canSend || !text) return;
     onSendText(text);
     controller.clearInput();
   }
@@ -111,7 +113,7 @@ export function Composer({
         generationStopActive={generationStopActive}
         hasText={Boolean(controller.input.trim())}
         onStopGeneration={onStopGeneration}
-        onStopVoicePlayback={controller.stopVoicePlayback}
+        onStopVoicePlayback={onStopVoicePlayback}
         voiceStopActive={voiceStopActive}
       />
     </form>

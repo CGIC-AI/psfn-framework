@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { renderHook, waitFor } from '@testing-library/react';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import {
   createInitialHubStreamState,
   reduceHubStreamState,
@@ -82,6 +82,18 @@ afterEach(() => {
 });
 
 describe('useVoicePlayback interruption bridge', () => {
+  it('stops the real Web Audio source immediately from the playback control', async () => {
+    vi.stubGlobal('AudioContext', FakeAudioContext);
+    const store = { consumeVoiceUtterance: vi.fn() };
+    const initial = stateWithQueuedAudio();
+    const { result } = renderHook(() => useVoicePlayback(initial.voicePlayback, store as never));
+    await waitFor(() => expect(result.current.active).toBe(true));
+    const playing = sources[0]!;
+    act(() => result.current.stop());
+    expect(playing.stop).toHaveBeenCalledOnce();
+    expect(result.current).toMatchObject({ active: false, mouthOpen: false });
+  });
+
   it.each([
     ['assistant.interrupted', (state: HubStreamState) => reduceHubStreamState(state, {
       type: 'hub.inbound' as const,
@@ -115,7 +127,7 @@ describe('useVoicePlayback interruption bridge', () => {
     rerender({ state: interrupt(initial) });
 
     await waitFor(() => expect(playing.stop).toHaveBeenCalled());
-    await waitFor(() => expect(result.current).toEqual({ active: false, mouthOpen: false }));
+    await waitFor(() => expect(result.current).toMatchObject({ active: false, mouthOpen: false }));
     unmount();
   });
 });

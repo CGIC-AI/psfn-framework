@@ -471,6 +471,13 @@ test("an MCPL turn with no renderer attached degrades to its text look notes", a
     true,
     "an absent renderer says so exactly once, without an address",
   );
+  // This is the case that guarantees a log line exists at all, so it is the
+  // one that can prove the warning path never prints the identity token.
+  assert.equal(
+    turn.warnings.every((message) => !message.includes(TOKEN)),
+    true,
+    `no log line may carry the identity token: ${turn.warnings.join(" | ")}`,
+  );
 });
 
 test("the identity token reaches neither the derived origin, the snapshot request, nor a log line", async (t) => {

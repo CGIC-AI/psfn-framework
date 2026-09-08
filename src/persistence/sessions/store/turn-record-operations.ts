@@ -14,10 +14,6 @@ import { fingerprintJournalArchiveGenerationIdentity } from './journal-chain-run
 import {
   slimTurnRecordSessionEntriesForAppend,
   resolveTurnRecordSessionEntries,
-  type TurnRecordContinuityWithheld,
-  type TurnRecordMessageWithheld,
-  type TurnRecordRecentEntryHealDrop,
-  type TurnRecordWireBodyWithheld,
 } from '../turn-record-session-refs.js';
 import { slimTurnRecordMemoryCandidatesForAppend } from '../turn-record-memory-refs.js';
 import type {
@@ -44,61 +40,12 @@ import {
 import type { ResolvedIndexedSession } from './channel-index.js';
 import type { SessionJournalRuntime } from './journal-runtime.js';
 import { syncLightweightSessionCacheFromIndex } from './session-chain-cache.js';
+import {
+  TurnRecordReadTelemetryWindow,
+  type TurnRecordReadWindowProvenance,
+} from './turn-record-read-telemetry.js';
 
 const log = createComponentLogger('SessionStore');
-
-/**
- * Process-lifetime count of turn-record `recentEntries` heal-drops (an id-backed
- * entry that was dropped on read because its L0 row is gone). Emitted as a stable
- * structured event with a running counter — mirroring the turn-record quarantine
- * telemetry in turn-records.ts, since no telemetry port is reachable from the
- * persistence layer. Lets operators distinguish legitimate redaction/rolloff
- * drops (this signal, expected) from structural ref corruption (fails closed
- * upstream and throws, never reaching here). See bead psfn-framework-hgw3.10.
- */
-let recentEntryHealDropCount = 0;
-function emitRecentEntryHealDrop(drop: TurnRecordRecentEntryHealDrop): void {
-  recentEntryHealDropCount += 1;
-  log.info('turn_record_recent_entry_heal_drop', {
-    ...drop,
-    healDropsThisProcess: recentEntryHealDropCount,
-  });
-}
-
-/**
- * Process-lifetime count of captured wire bodies withheld on read because a
- * source L0 entry they embedded was redacted/removed (bead psfn-framework-eb14).
- * Emitted as a stable structured event with a running counter, mirroring the
- * recentEntries heal-drop telemetry above — no telemetry port is reachable from
- * the persistence layer. Lets operators see redaction propagating into the
- * observability wire surface.
- */
-let wireBodyWithheldCount = 0;
-function emitWireBodyWithheld(event: TurnRecordWireBodyWithheld): void {
-  wireBodyWithheldCount += 1;
-  log.info('turn_record_wire_body_withheld', {
-    ...event,
-    wireBodiesWithheldThisProcess: wireBodyWithheldCount,
-  });
-}
-
-let turnMessageWithheldCount = 0;
-function emitTurnMessageWithheld(event: TurnRecordMessageWithheld): void {
-  turnMessageWithheldCount += 1;
-  log.info('turn_record_message_withheld', {
-    ...event,
-    messagesWithheldThisProcess: turnMessageWithheldCount,
-  });
-}
-
-let continuityWithheldCount = 0;
-function emitContinuityWithheld(event: TurnRecordContinuityWithheld): void {
-  continuityWithheldCount += 1;
-  log.info('turn_record_continuity_withheld', {
-    ...event,
-    continuityEntriesWithheldThisProcess: continuityWithheldCount,
-  });
-}
 
 /** Initial overscan multiplier for tombstone-filtered turn-record reads. */
 const TURN_RECORD_TOMBSTONE_OVERSCAN_FACTOR = 4;
@@ -291,21 +238,60 @@ export class SessionTurnRecordOperations {
    * body is withheld here if a source L0 entry it embedded was redacted/removed
    * (bead psfn-framework-eb14), emitting telemetry via emitWireBodyWithheld.
    */
-  private resolveTurnRecordSessionRefs(record: TurnRecord): TurnRecord {
-    return resolveTurnRecordSessionEntries(
-      record,
-      (channelId, minId, maxId) => this.context.getEntriesInRange(channelId, minId, maxId),
-      emitRecentEntryHealDrop,
-      emitWireBodyWithheld,
-      emitTurnMessageWithheld,
-      emitContinuityWithheld,
-    );
+  private resolveTurnRecordSessionRefs(
+    record: TurnRecord,
+    provenance: TurnRecordReadWindowProvenance,
+  ): TurnRecord {
+    return this.resolveTurnRecordSessionRefsInWindow([record], provenance)[0]!;
+  }
+
+  /**
+   * Resolves every record of ONE bounded read under a single telemetry window
+   * (bead psfn-framework-ylu4i), so a page that legitimately touches thousands
+   * of old-fat / ref-missing rows emits O(1) truthful aggregates instead of one
+   * info event per row. Resolution itself is unchanged: the same resolver, the
+   * same per-record decisions, and any thrown resolver error propagates
+   * untouched after the partial window is flushed as `windowCompleted: false`.
+   */
+  private resolveTurnRecordSessionRefsInWindow(
+    records: readonly TurnRecord[],
+    provenance: TurnRecordReadWindowProvenance,
+    outcome?: { readonly exhausted?: boolean },
+  ): TurnRecord[] {
+    const window = new TurnRecordReadTelemetryWindow(provenance);
+    let completed = false;
+    try {
+      const resolved = records.map((record) => {
+        const next = resolveTurnRecordSessionEntries(
+          record,
+          (channelId, minId, maxId) => this.context.getEntriesInRange(channelId, minId, maxId),
+          window.onHealDrop,
+          window.onWireBodyWithheld,
+          window.onMessageWithheld,
+          window.onContinuityWithheld,
+        );
+        window.countResolvedRecord();
+        return next;
+      });
+      completed = true;
+      return resolved;
+    } finally {
+      window.flush({
+        completed,
+        ...(outcome?.exhausted === undefined ? {} : { exhausted: outcome.exhausted }),
+      });
+    }
   }
 
   findTurnRecord(channelId: string, turnId: string): TurnRecord | null {
     const sessionId = this.context.resolveSessionId(channelId) ?? channelId;
     const record = this.context.turnRecordStore.findTurnRecord(sessionId, turnId);
-    return record ? this.resolveTurnRecordSessionRefs(record) : null;
+    return record
+      ? this.resolveTurnRecordSessionRefs(record, {
+        readOperation: 'findTurnRecord',
+        channelId,
+      })
+      : null;
   }
 
   /**
@@ -322,7 +308,10 @@ export class SessionTurnRecordOperations {
     const record = this.context.turnRecordStore.findTurnRecord(sourceChannelId, turnId);
     if (!record || record.channelId !== sourceChannelId) return null;
     return (record.sessionId ?? sourceChannelId) === logicalSessionId
-      ? this.resolveTurnRecordSessionRefs(record)
+      ? this.resolveTurnRecordSessionRefs(record, {
+        readOperation: 'findSourceTurnRecord',
+        channelId: sourceChannelId,
+      })
       : null;
   }
 
@@ -370,7 +359,10 @@ export class SessionTurnRecordOperations {
     }
     const owner = this.context.ensureChannelFullyLoaded(declaredOwnerSessionId);
     if (owner === null || owner.turnTombstones.has(normalizedTurnId)) return null;
-    return this.resolveTurnRecordSessionRefs(record);
+    return this.resolveTurnRecordSessionRefs(record, {
+      readOperation: 'resolveEligibleSourceTurnRecord',
+      channelId: normalizedSourceChannelId,
+    });
   }
 
   async findUniqueSourceTurnRecord(
@@ -447,8 +439,11 @@ export class SessionTurnRecordOperations {
       }
       : null);
     if (!resolved) {
-      return this.context.turnRecordStore.readRecentTurnRecords(sessionId, limit)
-        .map(record => this.resolveTurnRecordSessionRefs(record));
+      return this.resolveRecentTurnRecordWindow(
+        channelId,
+        limit,
+        this.context.turnRecordStore.readRecentTurnRecords(sessionId, limit),
+      );
     }
     const indexEntry = this.context.ensureChannelIndexEntry(
       resolved.sessionId,
@@ -469,11 +464,30 @@ export class SessionTurnRecordOperations {
       cache: cached ?? undefined,
     });
     if (tombstones.size === 0) {
-      return this.context.turnRecordStore.readRecentTurnRecords(sessionId, limit)
-        .map(record => this.resolveTurnRecordSessionRefs(record));
+      return this.resolveRecentTurnRecordWindow(
+        channelId,
+        limit,
+        this.context.turnRecordStore.readRecentTurnRecords(sessionId, limit),
+      );
     }
-    return this.readTombstoneFilteredTurnRecords(sessionId, limit, tombstones)
-      .map(record => this.resolveTurnRecordSessionRefs(record));
+    return this.resolveRecentTurnRecordWindow(
+      channelId,
+      limit,
+      this.readTombstoneFilteredTurnRecords(sessionId, limit, tombstones),
+    );
+  }
+
+  /** One bounded `getRecentTurnRecords` page shares one telemetry window. */
+  private resolveRecentTurnRecordWindow(
+    channelId: string,
+    limit: number,
+    records: readonly TurnRecord[],
+  ): TurnRecord[] {
+    return this.resolveTurnRecordSessionRefsInWindow(
+      records,
+      { readOperation: 'getRecentTurnRecords', channelId, limit },
+      { exhausted: records.length < limit },
+    );
   }
 
   /**
@@ -601,8 +615,11 @@ export class SessionTurnRecordOperations {
       });
       const exhaustedHistory = records.length < requested;
       if (filtered.length >= target || exhaustedHistory) {
-        return filtered.slice(-limit)
-          .map(record => this.resolveTurnRecordSessionRefs(record));
+        return this.resolveTurnRecordSessionRefsInWindow(
+          filtered.slice(-limit),
+          { readOperation: 'getRecentSourceTurnRecords', channelId: sourceChannelId, limit },
+          { exhausted: exhaustedHistory },
+        );
       }
       requested = Math.min(Number.MAX_SAFE_INTEGER, requested * 2);
     }
@@ -871,14 +888,16 @@ export class SessionTurnRecordOperations {
       throw new Error('TurnRecord store does not support bounded cursor paging');
     }
     const page = await readPage.call(this.context.turnRecordStore, sourceChannelId, limit, cursor);
-    const records = page.records
-      .filter((record) => {
+    const records = this.resolveTurnRecordSessionRefsInWindow(
+      page.records.filter((record) => {
         if (record.channelId !== sourceChannelId) return false;
         const ownerSessionId = record.sessionId ?? sourceChannelId;
         const owner = this.context.ensureChannelFullyLoaded(ownerSessionId);
         return owner !== null && !owner.turnTombstones.has(record.turnId);
-      })
-      .map(record => this.resolveTurnRecordSessionRefs(record));
+      }),
+      { readOperation: 'readSourceTurnRecordPage', channelId: sourceChannelId, limit },
+      { exhausted: page.exhausted },
+    );
     return {
       records,
       exhausted: page.exhausted,

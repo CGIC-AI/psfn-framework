@@ -553,6 +553,13 @@ export interface HumanEscalationLedgerPort {
    * condition outranks a human having previously closed it.
    */
   openOrReopen(facts: HumanEscalationFacts): Promise<HumanEscalationRecord>;
+  /**
+   * The escalation for one condition, without opening or touching it. It is how
+   * a caller learns how many times this runtime has already raised the
+   * condition — which is the only counter that survives a restart, and
+   * therefore the only safe source for a per-attempt idempotency key.
+   */
+  findByCondition(kind: HumanEscalationKind, dedupeKey: string): Promise<HumanEscalationRecord | null>;
   findAttempt(idempotencyKey: string): Promise<HumanEscalationAttempt | null>;
   recordAttempt(attempt: HumanEscalationAttempt): Promise<void>;
   /** Stamp the newest attempt that actually reached a sink. */

@@ -486,6 +486,12 @@ describe('incident alert and Garden timeline over the persisted stream', () => {
         const rows = await runtime.escalations.list({ limit: 50 });
         expect(rows).toHaveLength(1);
         expect(rows[0]!.raiseCount).toBe(1);
+        // ...and the durable raise count is what a restarted process derives its
+        // NEXT key from, so the re-alert after this boot is `:opened:2` rather
+        // than a re-minted `:opened:1` the ledger would refuse to dispatch.
+        await expect(runtime.restartedPlane().raiseCount('runtime_incident', incidentId))
+          .resolves.toBe(1);
+        expect(idempotencyKey).toBe(`${incidentId}:opened:1`);
       });
     },
     INTEGRATION_TIMEOUT_MS,

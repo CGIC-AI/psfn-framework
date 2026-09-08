@@ -1193,6 +1193,14 @@ export interface IntakeEnvelopeSnapshot {
   enforcementPosture?: 'shadow' | 'enforce';
   /** What the envelope covers on this message. */
   subject: IntakeEnvelopeSubject;
+  /**
+   * The content-addressed admission receipt issued for these exact bytes
+   * (psfn-framework-ccgdz.2), when screening issued one. Carrying it on the
+   * snapshot is what lets an admitted item be joined back to its ingress proof
+   * without re-screening. Its absence is never a claim about the content — the
+   * screening result names the reason separately.
+   */
+  receiptId?: string;
 }
 
 export function snapshotIntakeEnvelope(
@@ -1235,6 +1243,10 @@ export function parseIntakeEnvelopeSnapshot(
   if (typeof envelopeId !== 'string' || !envelopeId.trim()) {
     throw new Error(`${field}.envelopeId must be a non-empty string`);
   }
+  const receiptId = value.receiptId;
+  if (receiptId !== undefined && (typeof receiptId !== 'string' || !receiptId.trim())) {
+    throw new Error(`${field}.receiptId must be a non-empty string`);
+  }
   if (!isIntakeSourceClass(sourceClass)) {
     throw new Error(`${field}.sourceClass is not a known source class`);
   }
@@ -1268,6 +1280,7 @@ export function parseIntakeEnvelopeSnapshot(
     state,
     riskLabels,
     ...(enforcementPosture ? { enforcementPosture } : {}),
+    ...(receiptId !== undefined ? { receiptId: (receiptId as string).trim() } : {}),
     subject: subject.kind === 'body'
       ? { kind: 'body' }
       : { kind: 'attachment', index: subject.index as number },

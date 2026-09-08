@@ -2,8 +2,11 @@
   import { onMount, onDestroy } from 'svelte';
   import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
   import { getSubsystemHealth } from '$lib/api/endpoints/subsystem-health';
+  import { getIncidents } from '$lib/api/endpoints/incidents';
   import { createVisibilityAwarePoller } from '$lib/polling/visibility-aware-poller';
   import type {
+    IncidentSummary,
+    IncidentTimelineSnapshot,
     SubsystemHealthSnapshot,
     SubsystemLaneHealth,
     SubsystemLaneStatus,
@@ -15,6 +18,11 @@
   let error = $state('');
   let unavailable = $state(false);
   let lastLoadedAt = $state<number | null>(null);
+  // Incidents load independently of the in-memory lane snapshot: they read the
+  // persisted health stream, and a stream fault must not blank the whole page.
+  let incidents = $state<IncidentTimelineSnapshot | null>(null);
+  let incidentsUnavailable = $state(false);
+  let incidentsError = $state('');
 
   const eventLanes = $derived(
     (snapshot?.lanes ?? []).filter(lane => lane.source === 'event_bus'),
@@ -75,6 +83,27 @@
     return Object.entries(counts);
   }
 
+  function evidenceEntries(
+    evidence: Record<string, number | boolean | undefined>,
+  ): Array<[string, string]> {
+    return Object.entries(evidence)
+      .filter((entry): entry is [string, number | boolean] => entry[1] !== undefined)
+      .map(([key, value]) => [key, String(value)]);
+  }
+
+  function incidentSubject(incident: IncidentSummary): string {
+    return incident.family ?? incident.code;
+  }
+
+  function ownerLabel(owner: IncidentSummary['owner']): string {
+    return owner.kind === 'companion' ? `companion ${owner.companionId}` : 'system';
+  }
+
+  function formatWindow(windowMs: number): string {
+    const hours = windowMs / 3_600_000;
+    return hours >= 1 ? `${Math.round(hours)}h` : `${Math.round(windowMs / 60_000)}m`;
+  }
+
   function neverFiredNote(lane: SubsystemLaneHealth): string {
     return lane.source === 'event_bus'
       ? 'No data since process start'
@@ -85,6 +114,7 @@
     loading = true;
     error = '';
     unavailable = false;
+    void loadIncidents();
     try {
       snapshot = await getSubsystemHealth();
       lastLoadedAt = Date.now();
@@ -97,6 +127,21 @@
       }
     } finally {
       loading = false;
+    }
+  }
+
+  async function loadIncidents() {
+    incidentsError = '';
+    incidentsUnavailable = false;
+    try {
+      incidents = await getIncidents();
+    } catch (e) {
+      const message = e instanceof Error ? e.message : 'Failed to load incidents';
+      if (message.includes('503')) {
+        incidentsUnavailable = true;
+      } else {
+        incidentsError = message;
+      }
     }
   }
 
@@ -177,6 +222,109 @@
       </span>
       <span class="text-xs text-shadow-500">Auto-refreshes every 15s</span>
     </div>
+
+
+    <!-- Correlated runtime incidents: the same identity the operator alert carried. -->
+    <section class="space-y-3">
+      <h2 class="text-base font-serif font-semibold text-shadow-900">
+        Correlated incidents
+        <span class="text-xs font-sans font-normal text-shadow-500">
+          (durable health stream{#if incidents}, last {formatWindow(incidents.scope.windowMs)}, {
+            ownerLabel(incidents.scope.owner)
+          } and system{/if})
+        </span>
+      </h2>
+      {#if incidentsError}
+        <div class="card-garden p-4 border-l-4 border-l-wilt-400">
+          <p class="text-sm text-shadow-800">{incidentsError}</p>
+        </div>
+      {:else if incidentsUnavailable}
+        <div class="card-garden p-4 border-l-4 border-l-bark-300">
+          <p class="text-sm text-shadow-800">Incident timeline backend unavailable</p>
+          <p class="text-sm text-shadow-600 mt-2">
+            Incidents are reconstructed from the persisted health stream. Nothing is shown while
+            that stream cannot be read, rather than an empty list that would look quiet.
+          </p>
+        </div>
+      {:else if !incidents}
+        <div class="card-garden p-4 text-sm text-shadow-500 italic">Loading incidents...</div>
+      {:else if incidents.incidents.length === 0}
+        <div class="card-garden p-4 text-sm text-shadow-500 italic">
+          No correlated incidents in the last {formatWindow(incidents.scope.windowMs)}. A healthy
+          runtime records none.
+        </div>
+      {:else}
+        <div class="space-y-4">
+          {#each incidents.incidents as incident (incident.incidentId)}
+            <article
+              class="card-garden overflow-hidden border-l-4"
+              class:border-l-wilt-400={incident.status === 'open'}
+              class:border-l-moss-400={incident.status === 'closed'}
+            >
+              <div class="px-5 py-3 bg-bark-50 border-b border-bark-100 space-y-1">
+                <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+                  <span class="font-semibold text-shadow-900">{incidentSubject(incident)}</span>
+                  <span
+                    class="text-xs px-2 py-0.5 rounded-full"
+                    class:bg-wilt-100={incident.status === 'open'}
+                    class:text-wilt-600={incident.status === 'open'}
+                    class:bg-moss-100={incident.status === 'closed'}
+                    class:text-moss-700={incident.status === 'closed'}
+                  >{incident.status}</span>
+                  <span class="text-xs text-shadow-600">{incident.severity}</span>
+                  <span class="text-xs text-shadow-600">
+                    {incident.process} / {incident.component}
+                  </span>
+                  <span class="text-xs text-shadow-600">{ownerLabel(incident.owner)}</span>
+                </div>
+                <p class="font-mono text-xs text-shadow-500 break-all">
+                  incident {incident.incidentId}
+                </p>
+              </div>
+              <div class="px-5 py-3 text-xs space-y-2">
+                <div class="flex flex-wrap gap-x-4 gap-y-1 text-shadow-700">
+                  <span>opened {formatClock(incident.openedAtMs)}</span>
+                  <span>
+                    {incident.status === 'closed' && incident.closedAtMs !== null
+                      ? `closed ${formatClock(incident.closedAtMs)}`
+                      : `last observed ${formatRelative(incident.lastObservedAtMs)}`}
+                  </span>
+                  <span>occurrences: {incident.occurrenceCount}</span>
+                  <span>statements: {incident.statementCount}</span>
+                </div>
+                {#if evidenceEntries(incident.evidence).length > 0}
+                  <div class="flex flex-wrap gap-2">
+                    {#each evidenceEntries(incident.evidence) as [key, value] (key)}
+                      <span class="px-2 py-0.5 rounded bg-bark-100 text-shadow-700 font-mono">
+                        {key}={value}
+                      </span>
+                    {/each}
+                  </div>
+                {/if}
+                {#if incident.timeline.length > 0}
+                  <ol class="divide-y divide-bark-100 border-t border-bark-100 pt-1">
+                    {#each incident.timeline as entry (entry.eventId)}
+                      <li class="py-1 flex flex-wrap gap-x-3 gap-y-0.5 text-shadow-600">
+                        <span class="text-shadow-800">{formatClock(entry.recordedAtMs)}</span>
+                        <span class="font-mono">{entry.code}</span>
+                        <span>{entry.severity}</span>
+                        {#if entry.phase}<span>{entry.phase}</span>{/if}
+                        <span>x{entry.occurrenceCount}</span>
+                      </li>
+                    {/each}
+                  </ol>
+                  {#if incident.timelineTruncated}
+                    <p class="text-shadow-500 italic">
+                      Older statements of this incident are outside the bounded window.
+                    </p>
+                  {/if}
+                {/if}
+              </div>
+            </article>
+          {/each}
+        </div>
+      {/if}
+    </section>
 
     <!-- Content-free PostgreSQL ownership and pressure. No URLs, SQL, or row data. -->
     <section class="space-y-3">

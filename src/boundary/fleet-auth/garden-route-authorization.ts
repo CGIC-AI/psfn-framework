@@ -166,7 +166,14 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
   },
   {
     action: 'diagnostics.read', area: 'diagnostics', routeIds: [
-      ...ids('GET', ['/api/admin/diagnostics', '/api/admin/subsystem-health']),
+      ...ids('GET', [
+        '/api/admin/diagnostics',
+        '/api/admin/subsystem-health',
+        // Correlated runtime incidents share the subsystem-health page and its
+        // diagnostics reading, so they share its action rather than minting a
+        // second one for the same operator capability.
+        '/api/admin/incidents',
+      ]),
       ...pageIds(['/subsystem-health']),
     ],
   },

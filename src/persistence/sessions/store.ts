@@ -551,7 +551,7 @@ export class SessionStore implements TranscriptSearchPort {
    * and any owner priming does not reach is rebuilt fail-closed on first demand.
    */
   private turnTombstoneAuthorityCandidates(): StartupTombstoneAuthorityCandidate[] {
-    const candidates: StartupTombstoneAuthorityCandidate[] = [];
+    const candidates: Array<StartupTombstoneAuthorityCandidate & { lastTimestamp: number }> = [];
     for (const [sessionId, entry] of this.channelIndex.entries()) {
       const filePaths = entry.filenames.map(filename => join(this.sessionsDir, filename));
       if (filePaths.some(filePath => !existsSync(filePath))) continue;
@@ -563,9 +563,20 @@ export class SessionStore implements TranscriptSearchPort {
           sessionId,
           entry.activeTurnTombstoneIds,
         ),
+        lastTimestamp: entry.lastTimestamp ?? 0,
       });
     }
-    return candidates;
+    // Priming work is bounded by the same declared retention limit: warming more
+    // owners than the authority map can hold would fork a worker per session and
+    // then evict the result before anything could read it. Most-recent sessions
+    // are warmed first; the rest stay fail-closed on the lazy path.
+    return candidates
+      .sort((left, right) => (
+        right.lastTimestamp - left.lastTimestamp
+        || left.sessionId.localeCompare(right.sessionId)
+      ))
+      .slice(0, this.turnTombstoneAuthorityOwnerLimit)
+      .map(({ lastTimestamp: _lastTimestamp, ...candidate }) => candidate);
   }
 
   /**

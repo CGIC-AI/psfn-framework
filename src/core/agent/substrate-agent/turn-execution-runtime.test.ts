@@ -7631,6 +7631,47 @@ describe('handleMessageForTurn pre-response concurrency', () => {
       .toContain('A wooden pier at sunset');
   });
 
+  it('keeps the answer call on its own budget when retrieval outran the vision review window', async () => {
+    // Adversarial review C, P1: the single 120s vision budget was anchored at
+    // perception staging and then reused for the answer call, so a vision turn
+    // whose review SUCCEEDED could still be aborted mid-answer and reported as
+    // "vision unavailable" — a misattribution, since vision worked.
+    const realNow = Date.now;
+    let simulatedOffsetMs = 0;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => realNow() + simulatedOffsetMs);
+    try {
+      const fixture = visionMemoryFixture();
+      const review = fixture.analyze.getMockImplementation()!;
+      const refresh = fixture.refreshActiveMemoryContext.getMockImplementation()!;
+      // The vision review finishes INSIDE its own budget...
+      fixture.analyze.mockImplementation(async (...args: unknown[]) => {
+        simulatedOffsetMs += 60_000;
+        return await (review as (...a: unknown[]) => Promise<unknown>)(...args);
+      });
+      // ...and retrieval then runs past what remained of that window.
+      fixture.refreshActiveMemoryContext.mockImplementation(async (...args: unknown[]) => {
+        simulatedOffsetMs += 70_000;
+        return await (refresh as (...a: unknown[]) => Promise<unknown>)(...args);
+      });
+
+      const response = await handleMessageForTurn(
+        fixture.runtime,
+        visionMessage('msg-vision-slow-retrieval'),
+      );
+      await flushAsyncWork();
+
+      // Vision succeeded and the turn produced its real answer: the answer call
+      // ran, and no canned vision-unavailable notice replaced it.
+      expect(fixture.analyze).toHaveBeenCalledTimes(1);
+      expect(fixture.runtime.agent.prompt).toHaveBeenCalledTimes(1);
+      expect(response.content).toBe('assistant reply');
+      expect(JSON.stringify(response.metadata.diagnostics ?? {}))
+        .not.toContain('vision_prompt_unavailable');
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it('injects dedicated current-turn image review text before response generation', async () => {
     const eventBus = new EventBus();
     const buildContext = vi.fn(async () => ({

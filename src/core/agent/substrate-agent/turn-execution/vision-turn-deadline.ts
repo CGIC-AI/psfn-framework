@@ -8,10 +8,12 @@ const log = createComponentLogger('SubstrateAgent');
  * DNS retries) plus the vision model call; 30s proved too tight on slow
  * deployments where the model finished at ~70s.
  *
- * lpxg3.1: the anchor moved earlier in the turn (perception is now staged
- * before retrieval) but the budget itself did not change and is NOT restarted
- * per stage — `stageCurrentTurnPerception` computes one deadline and
- * `invokeAgentForTurn` reuses it for the prompt and recovery stages.
+ * One budget, one PHASE. Perception staging (which runs before retrieval since
+ * lpxg3.1) anchors it at the vision review; `invokeAgentForTurn` anchors a
+ * fresh one at prompt-stage start for the answer call, and vision recovery
+ * anchors its own again. Stretching a single anchored deadline across all of
+ * them would let retrieval and prompt assembly starve the answer call and then
+ * report the turn as vision-unavailable, which is not what happened.
  */
 export const VISION_TURN_TIMEOUT_MS = 120_000;
 

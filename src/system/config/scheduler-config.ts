@@ -80,6 +80,10 @@ import {
   type ToolUsageEvaluatorConfig,
 } from './scheduler-config/tool-usage.js';
 import {
+  validateBlindReviewerConfig,
+  type BlindReviewerConfig,
+} from './scheduler-config/blind-review.js';
+import {
   validateIntentionFollowUpSchedulerConfig,
   type IntentionFollowUpSchedulerConfig,
 } from './scheduler-config/intention-follow-up.js';
@@ -169,6 +173,11 @@ export {
   type ToolUsageEvaluatorWindow,
 } from './scheduler-config/tool-usage.js';
 export {
+  DEFAULT_BLIND_REVIEWER_CONFIG,
+  type BlindReviewBatchConfig,
+  type BlindReviewerConfig,
+} from './scheduler-config/blind-review.js';
+export {
   MAX_NEAR_TERM_FOLLOW_UP_HORIZON_MS,
 } from './scheduler-config/intention-follow-up.js';
 export {
@@ -203,6 +212,8 @@ export interface SchedulerRuntimeConfig {
   intentionFollowUp: IntentionFollowUpSchedulerConfig;
   icpAutonomy: IcpAutonomySchedulerConfig;
   introspectionAudit?: IntrospectionAuditConfig;
+  /** Continuous passive CogSec Blind Reviewer bounds (yxz0z.3). */
+  blindReviewer?: BlindReviewerConfig;
   backgroundWorkWelfare?: BackgroundWorkWelfareConfig;
   toolUsageEvaluator?: ToolUsageEvaluatorConfig;
 }
@@ -320,6 +331,9 @@ export function validateSchedulerConfig(
     ...(raw.introspectionAudit === undefined
       ? {}
       : { introspectionAudit: validateIntrospectionAuditConfig(raw.introspectionAudit, sourcePath) }),
+    ...(raw.blindReviewer === undefined
+      ? {}
+      : { blindReviewer: validateBlindReviewerConfig(raw.blindReviewer, sourcePath) }),
     ...(raw.backgroundWorkWelfare === undefined
       ? {}
       : { backgroundWorkWelfare: validateBackgroundWorkWelfareConfig(raw.backgroundWorkWelfare, sourcePath) }),

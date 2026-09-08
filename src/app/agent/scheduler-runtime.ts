@@ -105,6 +105,8 @@ const log = createComponentLogger('Agent');
 export { BACKGROUND_WORK_SUPERVISOR_TASK_ID };
 export const SHARED_WORLD_WIKI_CARETAKER_OPERATION_ID = 'shared-world-wiki-caretaker';
 export const AUTOMATA_BUS_REVIEWER_TASK_ID = 'automata-bus-reviewer';
+/** Background-maintenance operation id for the passive Blind Reviewer lane. */
+const BLIND_REVIEW_OPERATION_ID = 'cogsec.blind-review';
 const AUTOMATA_BUS_REVIEWER_CLASS: ProductionAutomataClassId = 'scheduler.automata_bus_reviewer';
 const AUTOMATA_BUS_REVIEWER_BRIEFING_QUERY = 'automata bus evidence review consistency';
 const SOCIAL_GRAPH_BUILDER_CLASS: ProductionAutomataClassId = 'memory.social_graph_builder';
@@ -154,6 +156,12 @@ export interface BuildAgentSchedulerRuntimeOptions {
   /** Composition-owned governed Bus lifecycle shared by this file's automata lanes. */
   automataLifecycle?: AutomataClassLifecycleRuntime;
   automataRetention?: { runBounded(nowMs?: number): Promise<unknown> };
+  /**
+   * Continuous passive CogSec Blind Reviewer (yxz0z.3). Shares the housekeeping
+   * cadence and applies its own owner-file interval as a due-gate on top of it.
+   * Observational only: it can raise an operator alert and nothing else.
+   */
+  blindReview?: { runIfDue(nowMs?: number): Promise<boolean> };
   /**
    * Persisted health stream and live pool telemetry this process's runtime
    * health detectors read (7qeo1.24.2-.4). The stream is required: the agent
@@ -611,6 +619,19 @@ export function buildAgentSchedulerRuntime(
       handler: async () => {
         await options.automataRetention!.runBounded();
       },
+    });
+  }
+
+  if (options.blindReview) {
+    backgroundMaintenance.registerOperation({
+      id: BLIND_REVIEW_OPERATION_ID,
+      name: 'CogSec Blind Review',
+      description: 'Reviews bounded reasoning/activity evidence off the hot path and may raise '
+        + 'a content-minimized operator alert; never blocks, holds, or alters a turn.',
+      handler: async () => {
+        await options.blindReview!.runIfDue();
+      },
+      eligibility: { requiredTokens: ['identity.read'] },
     });
   }
 

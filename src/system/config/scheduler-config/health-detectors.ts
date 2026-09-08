@@ -48,6 +48,17 @@ export interface BackgroundFailureDetectorConfig {
   windowMs: number;
 }
 
+/** Elapsed-time budgets past which a started job counts as stuck. */
+export interface StuckJobDetectorConfig {
+  /**
+   * Budget for an automata run between the moment it started (or, for a run
+   * still queued, was registered) and a terminal status.
+   */
+  automataRunBudgetMs: number;
+  /** Budget for a scheduler task between entering its handler and leaving it. */
+  schedulerTaskBudgetMs: number;
+}
+
 export interface HealthDetectorsConfig {
   /** Cadence of the single scheduler task that runs every detector. */
   intervalMs: number;
@@ -68,6 +79,7 @@ export interface HealthDetectorsConfig {
   incidentScanLimit: number;
   postgresPressure: PostgresPressureDetectorConfig;
   backgroundFailures: BackgroundFailureDetectorConfig;
+  stuckJobs: StuckJobDetectorConfig;
 }
 
 export const DEFAULT_HEALTH_DETECTORS_CONFIG: HealthDetectorsConfig = {
@@ -84,6 +96,10 @@ export const DEFAULT_HEALTH_DETECTORS_CONFIG: HealthDetectorsConfig = {
   backgroundFailures: {
     failureThreshold: 3,
     windowMs: 3_600_000,
+  },
+  stuckJobs: {
+    automataRunBudgetMs: 3_600_000,
+    schedulerTaskBudgetMs: 1_800_000,
   },
 };
 
@@ -115,6 +131,7 @@ export function validateHealthDetectorsConfig(
       'incidentScanLimit',
       'postgresPressure',
       'backgroundFailures',
+      'stuckJobs',
     ],
     `${sourcePath}.healthDetectors`,
     { errorPrefix: 'Invalid scheduler config' },
@@ -140,6 +157,13 @@ export function validateHealthDetectorsConfig(
     backgroundFailuresRaw,
     ['failureThreshold', 'windowMs'],
     `${sourcePath}.healthDetectors.backgroundFailures`,
+    { errorPrefix: 'Invalid scheduler config' },
+  );
+  const stuckJobsRaw = requireObject(root.stuckJobs, sourcePath, 'healthDetectors.stuckJobs');
+  assertNoUnknownKeys(
+    stuckJobsRaw,
+    ['automataRunBudgetMs', 'schedulerTaskBudgetMs'],
+    `${sourcePath}.healthDetectors.stuckJobs`,
     { errorPrefix: 'Invalid scheduler config' },
   );
 
@@ -182,6 +206,16 @@ export function validateHealthDetectorsConfig(
       windowMs: toInterval(
         backgroundFailuresRaw.windowMs,
         'healthDetectors.backgroundFailures.windowMs',
+      ),
+    },
+    stuckJobs: {
+      automataRunBudgetMs: toInterval(
+        stuckJobsRaw.automataRunBudgetMs,
+        'healthDetectors.stuckJobs.automataRunBudgetMs',
+      ),
+      schedulerTaskBudgetMs: toInterval(
+        stuckJobsRaw.schedulerTaskBudgetMs,
+        'healthDetectors.stuckJobs.schedulerTaskBudgetMs',
       ),
     },
   };

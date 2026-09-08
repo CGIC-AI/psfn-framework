@@ -98,6 +98,7 @@ import {
 } from '../../persistence/backups/service.js';
 import { Scheduler } from '../../core/scheduler/scheduler.js';
 import {
+  RUNTIME_HEALTH_DETECTOR_TASK_ID,
   registerRuntimeHealthDetectorTask,
 } from '../../core/scheduler/health-detector-task.js';
 import {
@@ -474,8 +475,9 @@ async function main(): Promise<void> {
     // than inventing a second cadence. A gateway without fleet auth therefore
     // runs no detector cycle: that gap is recorded on bead
     // psfn-framework-7qeo1.24.2 rather than papered over with a private timer.
+    const healthDetectorScheduler = fleetAuthBackupScheduler;
     registerRuntimeHealthDetectorTask({
-      scheduler: fleetAuthBackupScheduler,
+      scheduler: healthDetectorScheduler,
       intervalMs: startupHydration.schedulerConfig.healthDetectors.intervalMs,
       cycle: createRuntimeHealthDetectorCycle({
         stream: healthEventStore,
@@ -483,6 +485,11 @@ async function main(): Promise<void> {
         source: { owner: { kind: 'system' }, process: 'gateway' },
         config: startupHydration.schedulerConfig.healthDetectors,
         postgresPoolTelemetry: getPostgresPoolTelemetry,
+        // The gateway runs no automata; only its own scheduler task state.
+        stuckJobs: {
+          listTasks: () => healthDetectorScheduler.listTasks(),
+          ignoreTaskIds: [RUNTIME_HEALTH_DETECTOR_TASK_ID],
+        },
       }),
     });
     log.info('Gateway-owned fleet auth consistent backups enabled', {

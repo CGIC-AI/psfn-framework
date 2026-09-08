@@ -26,6 +26,7 @@ import {
 } from '../../contracts/health-event.js';
 import { createHealthDetectorCycle } from './cycle.js';
 import { createBackgroundFailureDetector } from './background-failures.js';
+import { createStuckJobDetector, type StuckJobRunView } from './stuck-jobs.js';
 import {
   createPostgresPressureDetector,
   type PostgresPoolOwnerPressure,
@@ -213,6 +214,66 @@ describe('runtime health detectors over the persisted stream', () => {
         await cycle.run();
         const closed = (await store.listRecent({ limit: 1_000 }))
           .filter(event => event.code === 'background_work_failures_closed');
+        expect(closed).toHaveLength(1);
+        expect(closed[0]!.correlationId).toBe(opened[0]!.correlationId);
+      });
+    },
+    INTEGRATION_TIMEOUT_MS,
+  );
+
+  it(
+    'records one incident for a stuck run and closes it when the run completes late',
+    async () => {
+      await withStore(async (store) => {
+        let clock = NOW_MS;
+        const runs: StuckJobRunView[] = [{
+          runId: 'automata-run-wedged',
+          status: 'running',
+          createdAtMs: NOW_MS,
+          startedAtMs: NOW_MS,
+        }];
+        const buildCycle = () => createHealthDetectorCycle({
+          detectors: [createStuckJobDetector({
+            config: DEFAULT_HEALTH_DETECTORS_CONFIG.stuckJobs,
+            listRuns: () => runs,
+          })],
+          stream: store,
+          publisher: { emit: (_event, data) => store.record(data.event) },
+          source: SOURCE,
+          policy: {
+            incidentWindowMs: DEFAULT_HEALTH_DETECTORS_CONFIG.incidentWindowMs,
+            cooldownMs: DEFAULT_HEALTH_DETECTORS_CONFIG.cooldownMs,
+            incidentScanLimit: DEFAULT_HEALTH_DETECTORS_CONFIG.incidentScanLimit,
+          },
+          now: () => clock,
+        });
+        const budgetMs = DEFAULT_HEALTH_DETECTORS_CONFIG.stuckJobs.automataRunBudgetMs;
+
+        // Inside the budget: a long run is not an incident.
+        let cycle = buildCycle();
+        clock = NOW_MS + budgetMs;
+        await cycle.run();
+        expect(await store.listRecent({ limit: 1_000 })).toEqual([]);
+
+        // Past it, then a restart: still one incident, not two.
+        for (let step = 1; step <= 20; step += 1) {
+          clock = NOW_MS + budgetMs + step * CYCLE_MS;
+          await cycle.run();
+          if (step === 10) cycle = buildCycle();
+        }
+        const opened = (await store.listRecent({ limit: 1_000 }))
+          .filter(event => event.code === 'stuck_runtime_job_opened');
+        expect(opened.length).toBeGreaterThan(1);
+        expect(new Set(opened.map(event => event.correlationId)).size).toBe(1);
+
+        // Late completion closes the episode exactly once.
+        runs[0]!.status = 'completed';
+        clock = NOW_MS + budgetMs + 21 * CYCLE_MS;
+        await cycle.run();
+        clock += CYCLE_MS;
+        await cycle.run();
+        const closed = (await store.listRecent({ limit: 1_000 }))
+          .filter(event => event.code === 'stuck_runtime_job_closed');
         expect(closed).toHaveLength(1);
         expect(closed[0]!.correlationId).toBe(opened[0]!.correlationId);
       });

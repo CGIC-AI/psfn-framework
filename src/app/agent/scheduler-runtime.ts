@@ -65,6 +65,7 @@ import {
   registerDurableBackgroundWorkSupervisorTask,
 } from '../../core/agent/background-work/scheduler-task.js';
 import {
+  RUNTIME_HEALTH_DETECTOR_TASK_ID,
   registerRuntimeHealthDetectorTask,
 } from '../../core/scheduler/health-detector-task.js';
 import {
@@ -76,6 +77,9 @@ import type {
 import type {
   PostgresPoolTelemetryReader,
 } from '../../shared/observability/health-detectors/postgres-pressure.js';
+import type {
+  StuckJobRunView,
+} from '../../shared/observability/health-detectors/stuck-jobs.js';
 import type { SchedulerRuntimeConfig } from '../../system/config/scheduler-config.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { SharedWorldWikiCaretakerService } from '../../faculties/wiki/shared-world-caretaker.js';
@@ -156,6 +160,12 @@ export interface BuildAgentSchedulerRuntimeOptions {
   healthDetectors: {
     stream: HealthDetectorStreamReader;
     postgresPoolTelemetry: PostgresPoolTelemetryReader;
+    /**
+     * Projection of the automata run registry's public runtime read view
+     * (7qeo1.24.4). Projected at the entrypoint so the run-lifecycle owner can
+     * reshape its record without touching the detector.
+     */
+    automataRuns: () => readonly StuckJobRunView[];
   };
   /** Doing-mirror disposition lifecycle whose Letter deliveries this lane redrives. */
   doingMirrorService: Pick<DoingMirrorService, 'drainPendingLetters'>;
@@ -492,6 +502,13 @@ export function buildAgentSchedulerRuntime(
       },
       config: options.schedulerConfig.healthDetectors,
       postgresPoolTelemetry: options.healthDetectors.postgresPoolTelemetry,
+      stuckJobs: {
+        listRuns: options.healthDetectors.automataRuns,
+        listTasks: () => scheduler.listTasks(),
+        // The cycle runs AS this task, so its own entry is `active` for the
+        // whole evaluation and would otherwise report itself as stuck.
+        ignoreTaskIds: [RUNTIME_HEALTH_DETECTOR_TASK_ID],
+      },
     }),
   });
 

@@ -7,7 +7,7 @@ import { ensureActiveTimezone } from '../../shared/time/active-timezone.js';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { loadConfig } from '../../system/config/load-config.js';
-import { createPostgresHealthEventStoreFromConfig } from '../../persistence/postgres/health-event-store.js';
+import { createGatewayHealthEventStore } from '../../persistence/postgres/health-event-store.js';
 import { subscribeHealthEventStream } from '../../shared/observability/health-event-stream.js';
 import { emitHealthEvent, processObserverId } from '../../shared/contracts/health-event.js';
 import { createComponentLogger } from '../../shared/logger.js';
@@ -328,7 +328,7 @@ async function main(): Promise<void> {
   // subscription would drop startup-time observations rather than fail.
   const healthEventStore = await awaitPostgresStoreReadiness(
     'runtime_health_stream',
-    () => createPostgresHealthEventStoreFromConfig(config),
+    () => createGatewayHealthEventStore(config),
   );
   const detachHealthEventStream = subscribeHealthEventStream({
     eventBus,
@@ -577,6 +577,12 @@ async function main(): Promise<void> {
       },
       observedAtMs: Date.now(),
       evidence: { configuredSinkCount: operatorAlerting.configuredSinks.length },
+    }).catch((error: unknown) => {
+      // The operator-visible error above is already logged. A health-plane
+      // fault must not abort gateway startup on top of it.
+      log.error('Operator-alerting health event emission failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
     });
   }
   const primaryDiscordCompanionId = bootstrap.channelsConfig.discord.companionId

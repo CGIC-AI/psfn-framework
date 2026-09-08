@@ -1269,7 +1269,7 @@ describe('BackgroundWorkSupervisor', () => {
       now: () => now,
       retryBaseDelayMs: 100,
       healthEventOwner: { kind: 'companion', companionId: HEALTH_COMPANION_ID as never },
-      executor: vi.fn().mockRejectedValue(new Error('embedding host unreachable at 10.0.0.7')),
+      executor: vi.fn().mockRejectedValue(new Error('embedding host unreachable at 192.0.2.7')),
     });
     const input = { ...makeInput('session-health', 'turn-health'), maxAttempts: 2 };
     await store.enqueue(input);
@@ -1295,7 +1295,7 @@ describe('BackgroundWorkSupervisor', () => {
     expect(event.provenance.subjectHash).toBe(hashHealthEventSubject('memory_extraction'));
     expect(event.evidence).toMatchObject({ attemptCount: 2, terminal: true });
     const serialized = JSON.stringify(event);
-    expect(serialized).not.toContain('10.0.0.7');
+    expect(serialized).not.toContain('192.0.2.7');
     expect(serialized).not.toContain('session-health');
     expect(serialized).not.toContain('memory_extraction');
   });

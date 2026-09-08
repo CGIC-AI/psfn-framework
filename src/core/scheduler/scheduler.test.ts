@@ -706,7 +706,7 @@ describe('Scheduler', () => {
           type: 'every',
           intervalMs: 1,
           handler: () => {
-            throw new Error('connection refused at 10.0.0.4:5432');
+            throw new Error('connection refused at 192.0.2.4:5432');
           },
           state: 'idle',
         });
@@ -724,7 +724,7 @@ describe('Scheduler', () => {
         // countable without the stream learning task names or error text.
         expect(event.provenance.subjectHash).toBe(hashHealthEventSubject('health-failure'));
         expect(event.evidence).toEqual({});
-        expect(JSON.stringify(event)).not.toContain('10.0.0.4');
+        expect(JSON.stringify(event)).not.toContain('192.0.2.4');
         expect(JSON.stringify(event)).not.toContain('Health Failure');
       } finally {
         nowSpy.mockRestore();

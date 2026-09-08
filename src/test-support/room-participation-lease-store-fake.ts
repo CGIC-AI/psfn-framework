@@ -136,4 +136,3 @@ function isAfter(
   if (timestampMs !== row.watermarkTimestampMs) return timestampMs > row.watermarkTimestampMs;
   return messageId > row.watermarkMessageId;
 }
-

@@ -856,9 +856,11 @@ async function main(): Promise<void> {
     companionAvailability,
     automataReviewer: {
       task: coreRuntime.automataBus!.reviewer,
-      registry: persistenceRuntime.automataRunRegistry,
       companionId: resolveCoreCompanionIdFromConfig(config),
     },
+    ...(coreRuntime.automataClassLifecycle
+      ? { automataLifecycle: coreRuntime.automataClassLifecycle }
+      : {}),
     automataRetention: coreRuntime.automataRetention,
     doingMirrorService: coreRuntime.doingMirrorService,
   });

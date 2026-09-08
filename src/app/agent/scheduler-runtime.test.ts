@@ -89,7 +89,7 @@ describe('agent scheduler runtime wiring', () => {
 
     registerAutomataBusReviewerTask({
       scheduler,
-      registry,
+      automataLifecycle: { registry },
       companionId: 'companion-a',
       task: {
         enabled: true,

@@ -68,8 +68,12 @@ import type { SchedulerRuntimeConfig } from '../../system/config/scheduler-confi
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { SharedWorldWikiCaretakerService } from '../../faculties/wiki/shared-world-caretaker.js';
 import { SENSITIVITY_LEVELS } from '../../system/trust/types.js';
-import type { AutomataRunRegistry } from '../../faculties/automata/run-registry.js';
 import type { AutomataBusReviewerTaskPort } from '../../faculties/automata/bus/reviewer-service.js';
+import type { ProductionAutomataClassId } from '../../faculties/automata/registry-contract.js';
+import {
+  runGovernedAutomataClass,
+  type AutomataClassLifecycleRuntime,
+} from '../../faculties/automata/bus/class-lifecycle.js';
 import {
   resolveCharacterCardHistoryPath,
   resolveMemoryJournalPath,
@@ -82,6 +86,10 @@ const log = createComponentLogger('Agent');
 export { BACKGROUND_WORK_SUPERVISOR_TASK_ID };
 export const SHARED_WORLD_WIKI_CARETAKER_OPERATION_ID = 'shared-world-wiki-caretaker';
 export const AUTOMATA_BUS_REVIEWER_TASK_ID = 'automata-bus-reviewer';
+const AUTOMATA_BUS_REVIEWER_CLASS: ProductionAutomataClassId = 'scheduler.automata_bus_reviewer';
+const AUTOMATA_BUS_REVIEWER_BRIEFING_QUERY = 'automata bus evidence review consistency';
+const SOCIAL_GRAPH_BUILDER_CLASS: ProductionAutomataClassId = 'memory.social_graph_builder';
+const SOCIAL_GRAPH_BUILDER_BRIEFING_QUERY = 'social graph proposal evidence scan';
 export const AUTOMATA_RETENTION_OPERATION_ID = 'automata-raw-session-retention';
 
 export interface AgentSchedulerRuntime {
@@ -122,9 +130,10 @@ export interface BuildAgentSchedulerRuntimeOptions {
   companionAvailability?: Pick<CompanionAvailabilityRuntime, 'run'>;
   automataReviewer?: {
     task: AutomataBusReviewerTaskPort;
-    registry: AutomataRunRegistry;
     companionId: string;
   };
+  /** Composition-owned governed Bus lifecycle shared by this file's automata lanes. */
+  automataLifecycle?: AutomataClassLifecycleRuntime;
   automataRetention?: { runBounded(nowMs?: number): Promise<unknown> };
   /** Doing-mirror disposition lifecycle whose Letter deliveries this lane redrives. */
   doingMirrorService: Pick<DoingMirrorService, 'drainPendingLetters'>;
@@ -133,7 +142,7 @@ export interface BuildAgentSchedulerRuntimeOptions {
 export function registerAutomataBusReviewerTask(input: {
   scheduler: Scheduler;
   task: AutomataBusReviewerTaskPort;
-  registry: AutomataRunRegistry;
+  automataLifecycle: AutomataClassLifecycleRuntime;
   companionId: string;
 }): void {
   if (!input.task.enabled) return;
@@ -149,39 +158,35 @@ export function registerAutomataBusReviewerTask(input: {
     state: 'idle',
     handler: async () => {
       const runId = `automata-bus-review:${randomUUID()}`;
-      const run = await input.registry.register({
-        runId,
-        automatonClass: 'scheduler.automata_bus_reviewer',
-        workerId: AUTOMATA_BUS_REVIEWER_TASK_ID,
-        taskId: AUTOMATA_BUS_REVIEWER_TASK_ID,
-        taskLabel: 'Review Automata Bus evidence',
-        taskSummary: 'Nominate and review a bounded batch of duplicate, contradiction, stale-evidence, and orphan-provenance candidates.',
-      });
-      await input.registry.transition(runId, {
-        status: 'running',
-        reason: 'scheduled_review_started',
-      });
-      try {
-        await input.task.run({
-          companionId: input.companionId,
+      await runGovernedAutomataClass({
+        runtime: input.automataLifecycle,
+        spec: {
+          automatonClass: AUTOMATA_BUS_REVIEWER_CLASS,
           runId,
-          audience: 'operator',
-          maxSensitivity: SENSITIVITY_LEVELS.at(-1)!,
-        });
-        await input.registry.transition(runId, {
-          status: 'completed',
-          reason: 'scheduled_review_completed',
-          outcome: 'completed',
-        });
-      } catch (error) {
-        await input.registry.transition(run.runId, {
-          status: 'failed',
-          reason: 'scheduled_review_failed',
-          outcome: 'blocked',
-          failureReason: error instanceof Error ? error.message : String(error),
-        });
-        throw error;
-      }
+          workerId: AUTOMATA_BUS_REVIEWER_TASK_ID,
+          taskId: AUTOMATA_BUS_REVIEWER_TASK_ID,
+          taskLabel: 'Review Automata Bus evidence',
+          taskSummary: 'Nominate and review a bounded batch of duplicate, contradiction, stale-evidence, and orphan-provenance candidates.',
+        },
+        briefingQuery: AUTOMATA_BUS_REVIEWER_BRIEFING_QUERY,
+        work: async () => {
+          const report = await input.task.run({
+            companionId: input.companionId,
+            runId,
+            audience: 'operator',
+            maxSensitivity: SENSITIVITY_LEVELS.at(-1)!,
+          });
+          // The reviewer writes its decisions through the governed mutation
+          // adapters rather than the worker tool, so the run would otherwise
+          // settle as a typed no-finding. The class-authored process summary is
+          // what makes its terminal handoff useful and queryable.
+          return {
+            value: report,
+            summary: `Automata Bus review: attempted=${report.attempted} `
+              + `skippedHandled=${report.skippedHandled} health=${report.health}`,
+          };
+        },
+      });
     },
   }, { skipFirstRun: true });
 }
@@ -444,11 +449,11 @@ export function buildAgentSchedulerRuntime(
       intervalMs: options.schedulerConfig.tickIntervalMs,
     });
   }
-  if (options.automataReviewer) {
+  if (options.automataReviewer && options.automataLifecycle) {
     registerAutomataBusReviewerTask({
       scheduler,
       task: options.automataReviewer.task,
-      registry: options.automataReviewer.registry,
+      automataLifecycle: options.automataLifecycle,
       companionId: options.automataReviewer.companionId,
     });
   }
@@ -609,13 +614,39 @@ export function buildAgentSchedulerRuntime(
         }
       },
     });
+    const automataLifecycle = options.automataLifecycle;
     backgroundMaintenance.registerOperation({
       id: SOCIAL_GRAPH_BUILDER_OPERATION_ID,
       name: 'Social Graph Builder',
       description:
         'Scans bounded room-memory evidence and creates operator-reviewed social-graph proposals.',
+      // The heuristic scan itself is unchanged; only run identity, briefing,
+      // tool formation, and settlement move into the governed Bus lifecycle.
       handler: async () => {
-        await socialGraphBuilder.run();
+        await runGovernedAutomataClass({
+          runtime: automataLifecycle,
+          spec: {
+            automatonClass: SOCIAL_GRAPH_BUILDER_CLASS,
+            runId: `social-graph-builder:${randomUUID()}`,
+            workerId: SOCIAL_GRAPH_BUILDER_OPERATION_ID,
+            taskId: SOCIAL_GRAPH_BUILDER_OPERATION_ID,
+            taskLabel: 'Build social-graph proposals',
+            taskSummary:
+              'Scan bounded room-memory evidence and propose operator-reviewed social-graph edges.',
+          },
+          briefingQuery: SOCIAL_GRAPH_BUILDER_BRIEFING_QUERY,
+          work: async () => {
+            const telemetry = await socialGraphBuilder.run();
+            // Counts only: contact identifiers, memory text, and evidence never
+            // reach the Bus, which carries process findings and not people.
+            return {
+              value: telemetry,
+              summary: `Social-graph builder: scanned=${telemetry.scanned} `
+                + `proposed=${telemetry.proposed} conflicts=${telemetry.conflicts} `
+                + `deduped=${telemetry.deduped}`,
+            };
+          },
+        });
       },
       eligibility: { requiredTokens: ['memory.write'] },
     });

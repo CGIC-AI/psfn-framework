@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import {
+  appendFileSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -657,8 +658,16 @@ export class SkillStore {
     const normalizedProvenance = normalizeProvenance(provenance);
     const deletedDocument = readFileSync(existing.absolutePath, 'utf-8');
     const archivePath = this.resolveArchivedHistoryPath(existing.name);
-    for (const entry of this.readHistoryEntries(existing.absolutePath)) {
-      appendJsonLine(archivePath, entry);
+    // Copy the journal's exact BYTES, not a re-serialization of the lines that
+    // happened to parse: a line this reader cannot understand is still part of
+    // the audit trail and must not disappear because it was archived.
+    const journalPath = this.resolveHistoryPath(existing.absolutePath);
+    if (existsSync(journalPath)) {
+      const journal = readFileSync(journalPath, 'utf-8');
+      if (journal.length > 0) {
+        mkdirSync(dirname(archivePath), { recursive: true });
+        appendFileSync(archivePath, journal.endsWith('\n') ? journal : `${journal}\n`, 'utf-8');
+      }
     }
     const tombstone: ManagedSkillHistoryEntry = {
       action: 'delete',

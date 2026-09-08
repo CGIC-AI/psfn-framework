@@ -208,6 +208,25 @@ describe('ReflectionNudgeTracker reuse loop', () => {
     // A turn whose census was never observed records nothing at all.
     expect(evidenceTracker.evaluate({ toolCalls: 5, usedThinkTool: false })).toBeNull();
     expect(recorded).toEqual([false, true]);
+
+    // A SIMPLE turn raises no opportunity but still answers for the skills it
+    // used: attribution must not slide onto the next complex turn.
+    expect(evidenceTracker.evaluate(complexTurn({ toolCalls: 1 }))).toBeNull();
+    expect(recorded).toEqual([false, true, true]);
+  });
+
+  it('never lets a telemetry failure reach the turn (sap72)', () => {
+    const failing = new ReflectionNudgeTracker({
+      config: { nudgeEveryNthTurn: 1 },
+      resolveAdmittedSkills: () => [RELEASE_SKILL],
+      resolveOutcomeEvidence: () => { throw new Error('telemetry file is unreadable'); },
+      recordPostUseOutcome: () => { throw new Error('telemetry file is unreadable'); },
+    });
+
+    // The opportunity still lands, ranked on relevance alone.
+    expect(failing.evaluate(complexTurn({
+      taskCue: 'walk through the release checklist and verify the release build',
+    }))).toContain('release-checklist');
   });
 
   it('offers the same skill at most once, so the loop never nags', () => {

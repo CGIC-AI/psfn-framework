@@ -103,6 +103,9 @@ describe('SkillUsageTelemetryStore debounced persistence (psfn-framework-ol0b)',
       ambiguousCount: 0,
       lastOutcomeAt: null,
     });
+    // The first turn after the upgrade answers for what IT used, never for a
+    // whole pre-existing history of uses.
+    expect(store.recordPostUseOutcome({ demonstratedValue: true })).toEqual([]);
   });
 
   it('serves reads from memory and coalesces many records into one debounced flush', () => {

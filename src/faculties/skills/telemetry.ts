@@ -442,6 +442,18 @@ export class SkillUsageTelemetryStore {
     }
     if (parsed.postUseWatermark !== undefined) {
       telemetry.postUseWatermark = readIsoTimestamp(parsed, 'postUseWatermark');
+    } else {
+      // A file written before post-use evidence existed carries a whole
+      // history of uses that no turn is answerable for. Seed the watermark at
+      // the latest recorded use so the first turn after the upgrade credits
+      // only what it actually used, not every skill ever opened (sap72).
+      const latestUse = Object.values(telemetry.skills)
+        .reduce<string | undefined>((latest, record) => (
+          record && (latest === undefined || record.lastUsedAt > latest)
+            ? record.lastUsedAt
+            : latest
+        ), undefined);
+      if (latestUse !== undefined) telemetry.postUseWatermark = latestUse;
     }
     return telemetry;
   }

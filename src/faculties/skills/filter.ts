@@ -1,6 +1,6 @@
 import { constants } from 'node:fs';
 import { access, readdir } from 'node:fs/promises';
-import { delimiter, join } from 'node:path';
+import { delimiter, join, sep } from 'node:path';
 import type { SkillsRuntimeConfig } from '../../system/config/skills-config.js';
 import { DEFAULT_SKILL_COLLECTION_LIMITS } from './loader.js';
 import type {
@@ -175,7 +175,11 @@ export function createBinaryAvailabilityProbe(
     for (const baseDir of searchPaths) {
       const names = await listDirectory(baseDir);
       for (const candidate of candidates) {
-        if (names !== null && !names.has(normalizeName(candidate))) continue;
+        // A declared name carrying a path separator resolves relative to the
+        // PATH entry, so a flat directory listing cannot answer it: probe it
+        // directly, exactly as the pre-memoized implementation did.
+        const listable = names !== null && !candidate.includes(sep) && !candidate.includes('/');
+        if (listable && !names.has(normalizeName(candidate))) continue;
         if (await isExecutable(baseDir, candidate)) return true;
       }
     }
@@ -280,14 +284,17 @@ export async function filterEligibleSkills(
   const evaluations: SkillEvaluation[] = [];
   const eligible: SkillEntry[] = [];
   const skipped: SkillSkipRecord[] = [];
-  const entryContext: SkillEligibilityContext = context.binaryCheckLedger
-    ? context
-    : {
-      ...context,
-      binaryCheckLedger: createSkillBinaryCheckLedger(
-        context.maxTotalBinaryChecks ?? context.runtimeConfig.eligibility.maxTotalBinaryChecks,
-      ),
-    };
+  // One ledger and one PATH-scan-memoizing probe per call when the caller
+  // supplies none: the runtime creates both once per snapshot build, but a
+  // direct caller must not silently degrade to a per-binary PATH walk or an
+  // unbounded aggregate.
+  const entryContext: SkillEligibilityContext = {
+    ...context,
+    isBinaryAvailable: context.isBinaryAvailable ?? createBinaryAvailabilityProbe().isAvailable,
+    binaryCheckLedger: context.binaryCheckLedger ?? createSkillBinaryCheckLedger(
+      context.maxTotalBinaryChecks ?? context.runtimeConfig.eligibility.maxTotalBinaryChecks,
+    ),
+  };
 
   for (const entry of entries) {
     const eligibility = await evaluateSkillEligibility(entry, entryContext);

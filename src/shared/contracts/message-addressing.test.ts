@@ -112,4 +112,59 @@ describe('message addressing contract', () => {
       },
     })).toThrow('direct-message evidence must match observer');
   });
+
+  it('accepts a telegram group envelope with a connector-translated author class', () => {
+    const parsed = parseMessageAddressingMetadata({
+      schemaVersion: 2,
+      source: 'telegram',
+      author: { authorId: 'tg-9', authorName: 'Morgan' },
+      observer: { authorId: 'tg-bot', authorName: 'Lyra' },
+      mentionedTargets: [{ authorId: 'tg-bot', authorName: 'Lyra' }],
+      channel: { scope: 'group', channelId: 'tg-chat-1' },
+      resolvedAddressee: {
+        kind: 'participants',
+        participants: [{ authorId: 'tg-bot', authorName: 'Lyra', evidence: ['mention'] }],
+      },
+      authorClass: { sourceClass: 'primary_user', roomRole: 'member', roomSize: 'small' },
+    });
+    expect(parsed.source).toBe('telegram');
+    expect(parsed.authorClass)
+      .toEqual({ sourceClass: 'primary_user', roomRole: 'member', roomSize: 'small' });
+  });
+
+  it('omits an unasserted author class instead of inventing a trusted default', () => {
+    const parsed = parseMessageAddressingMetadata({
+      schemaVersion: 2,
+      source: 'buzz',
+      author: { authorId: 'npub-1', authorName: 'Morgan' },
+      observer: { authorId: 'npub-bot', authorName: 'Lyra' },
+      mentionedTargets: [],
+      channel: { scope: 'group', channelId: 'buzz-1' },
+      resolvedAddressee: { kind: 'room', channelId: 'buzz-1' },
+    });
+    expect(parsed.authorClass).toBeUndefined();
+  });
+
+  it('rejects an unknown addressing source and an unknown author class member', () => {
+    const base = {
+      schemaVersion: 2,
+      author: { authorId: 'human-1', authorName: 'Morgan' },
+      observer: { authorId: 'bot-1', authorName: 'Lyra' },
+      mentionedTargets: [],
+      channel: { scope: 'group', channelId: 'channel-1' },
+      resolvedAddressee: { kind: 'room', channelId: 'channel-1' },
+    };
+    expect(() => parseMessageAddressingMetadata({ ...base, source: 'slack' }))
+      .toThrow('source must be one of discord, buzz, telegram');
+    expect(() => parseMessageAddressingMetadata({
+      ...base,
+      source: 'discord',
+      authorClass: { sourceClass: 'web_fetch', roomRole: 'member', roomSize: 'small' },
+    })).toThrow('authorClass.sourceClass');
+    expect(() => parseMessageAddressingMetadata({
+      ...base,
+      source: 'discord',
+      authorClass: { sourceClass: 'primary_user', roomRole: 'admin', roomSize: 'small' },
+    })).toThrow('authorClass.roomRole');
+  });
 });

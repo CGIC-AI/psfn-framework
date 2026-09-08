@@ -2408,13 +2408,17 @@ describe('SessionStore', () => {
     expect(index.channels[channelId].lastTimestamp).toBe(baseTimestamp + 1499);
   }, 20_000);
 
-  it('reads a bounded entry-id range without fully loading a large channel', () => {
+  it('reads a bounded entry-id range without fully loading a large channel', async () => {
     const channelId = 'api:bounded-range';
     appendSessionMessages(store, channelId, 1_500);
     const archivePort = createFilesystemSessionArchivePort();
     const fullReadSpy = vi.spyOn(archivePort, 'readJournalFile');
     const matchingReadSpy = vi.spyOn(archivePort, 'readJournalMatchingEntriesBackward');
     const reloaded = new SessionStore(dir, { sessionArchivePort: archivePort });
+    // Startup no longer establishes L0 tombstone authority inside the
+    // constructor (psfn-framework-5jx2v); the runtime warms it off-primary
+    // through the forked worker, so do the same before measuring the read.
+    await reloaded.primeTurnTombstoneAuthority();
     fullReadSpy.mockClear();
     matchingReadSpy.mockClear();
 
@@ -2427,7 +2431,7 @@ describe('SessionStore', () => {
     expect(fullReadSpy).not.toHaveBeenCalled();
   });
 
-  it('stops a bounded range scan below the requested IDs when the range contains a marker', () => {
+  it('stops a bounded range scan below the requested IDs when the range contains a marker', async () => {
     const channelId = 'api:bounded-range-marker';
     appendSessionMessages(store, channelId, 1_490);
     store.insertExtractionMarker(channelId, 1_490);
@@ -2451,7 +2455,9 @@ describe('SessionStore', () => {
     ));
     const fullReadSpy = vi.spyOn(archivePort, 'readJournalFile');
     const reloaded = new SessionStore(dir, { sessionArchivePort: archivePort });
+    await reloaded.primeTurnTombstoneAuthority();
     fullReadSpy.mockClear();
+    visitedIds.clear();
 
     expect(reloaded.getEntriesInRange(channelId, 1_490, 1_500).map(entry => entry.id)).toEqual([
       1_490,

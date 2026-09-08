@@ -109,6 +109,7 @@ export const SETTINGS_VALIDATION = {
   ledgerReadChunkBytes: { min: 4_096, max: 4_194_304 },
   ledgerReadMaxRowBytes: { min: 65_536, max: 67_108_864 },
   ledgerReadYieldRows: { min: 1, max: 100_000 },
+  sessionTombstoneAuthorityOwners: { min: 1, max: 100_000 },
   imageFalTimeoutMs: { min: 10_000, max: 3_600_000 },
   imageFalPollIntervalMs: { min: 100, max: 60_000 },
   imageComfyTimeoutMs: { min: 10_000, max: 3_600_000 },

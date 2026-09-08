@@ -24,6 +24,7 @@ import {
 } from './intake/fleet-screening.js';
 import { GatewayServer } from './server.js';
 import type { WelfareGrantVerifier } from './welfare-grant-verifier.js';
+import type { IntakeQuarantineEntry } from '../../core/cogsec/intake/quarantine-store.js';
 import type {
   ConfirmationEscalationProducerOptions,
 } from '../../system/capabilities/confirmation-escalation-producer.js';
@@ -70,6 +71,13 @@ export interface GatewayPrivilegedCoreBuildInput {
   };
   onEligibilityDecision?: (eventBus: EventBus, decision: EligibilityDecision) => void;
   icpConversationChargePolicyResolver?: IcpConversationChargePolicyResolver;
+  /**
+   * wtw7l: raises a CogSec quarantine hold onto the human escalation control
+   * plane. Resolved per hold rather than captured, because the plane is
+   * constructed after this core — the same late binding the gateway's incident
+   * alert sink uses. Absent leaves quarantine behaving exactly as before.
+   */
+  resolveQuarantineHoldEscalation?: () => ((entry: IntakeQuarantineEntry) => void) | null;
 }
 
 export interface GatewayPrivilegedCore {
@@ -331,11 +339,18 @@ export async function buildGatewayPrivilegedCore(
       discordEnabled: true,
       discordChannelId: input.bootstrap.channelsConfig.discord.operatorAlert?.channelId,
     }),
-    onQuarantineHeld: companionId => emitGardenQueueChanged(
-      eventBus,
-      'intake-quarantine',
-      companionId ?? input.config.companionId,
-    ),
+    onQuarantineHeld: (companionId, entry) => {
+      emitGardenQueueChanged(
+        eventBus,
+        'intake-quarantine',
+        companionId ?? input.config.companionId,
+      );
+      // wtw7l: the same hold, on the one surface a person is asked to look at.
+      // Resolved per hold rather than captured, because the escalation plane is
+      // constructed after this core — the same late-binding the incident alert
+      // sink beside it uses, and for the same startup-ordering reason.
+      input.resolveQuarantineHoldEscalation?.()?.(entry);
+    },
     onQuarantineExpired: (_companionId, { entry, expiredAtMs, reason }) => {
       void eventBus.emit('intake.quarantine.expired', {
         envelopeId: entry.id,

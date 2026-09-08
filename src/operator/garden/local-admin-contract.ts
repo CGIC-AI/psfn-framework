@@ -169,6 +169,9 @@ import {
   type IntakeReleaseRedeliveryPort,
 } from './services/intake-quarantine-service.js';
 import { createIntakeQuarantineStore } from '../../core/cogsec/intake/quarantine-store.js';
+import {
+  createQuarantineDecisionEscalationObserver,
+} from '../../core/cogsec/intake/quarantine-escalation-producer.js';
 import { createAdminDriftReviewService } from './services/drift-review-service.js';
 import { createDriftReviewCardStore } from '../../core/cogsec/drift/drift-review-card-store.js';
 import { CogSecEventStore } from '../../core/cogsec/events.js';
@@ -634,6 +637,13 @@ export function createInProcessGardenAdminContract(
   // LAZILY on first use: intake-policy.json is loaded on request (same lazy
   // posture as the settings service), so a missing owner file fails the
   // quarantine API call loudly instead of failing every Garden startup.
+  const escalationLedgers = [
+    options.humanEscalationLedger,
+    options.fleetSystemHumanEscalationLedger,
+  ].filter((ledger): ledger is HumanEscalationLedgerPort => Boolean(ledger));
+  const quarantineDecisionEscalation = escalationLedgers.length > 0
+    ? createQuarantineDecisionEscalationObserver({ ledgers: escalationLedgers })
+    : null;
   let quarantineStore: ReturnType<typeof createIntakeQuarantineStore> | null = null;
   const getQuarantineStore = (): ReturnType<typeof createIntakeQuarantineStore> => {
     if (!quarantineStore) {
@@ -643,6 +653,14 @@ export function createInProcessGardenAdminContract(
         {
           itemTtlHours: intakePolicy.quarantine.itemTtlHours,
           maxHeldItems: intakePolicy.quarantine.maxHeldItems,
+          // wtw7l: an operator's decision here is the domain resolution the
+          // escalation mirrors. It searches this companion's ledger and then
+          // the fleet's, because the hold that raised it was made by the
+          // gateway — which in fleet mode raises into the shared ledger
+          // (psfn-framework-e5r0s).
+          ...(quarantineDecisionEscalation
+            ? { onDecided: quarantineDecisionEscalation }
+            : {}),
           onExpired: ({ entry, expiredAtMs, reason }) => {
             void options.eventBus.emit('intake.quarantine.expired', {
               envelopeId: entry.id,

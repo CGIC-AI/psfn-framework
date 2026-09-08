@@ -1838,6 +1838,9 @@ async function main(): Promise<void> {
     chargePolicy: config.chargePolicy,
     personalProjects,
     contactStore,
+    ...(coreRuntime.automataClassLifecycle
+      ? { automataLifecycle: coreRuntime.automataClassLifecycle }
+      : {}),
   });
   // ── Weighted-thought outreach lane (E?/1xb.2) + Law 27 contradiction
   // dampening: extracted to startup/weighted-thought-outreach-lane.ts.
@@ -1951,6 +1954,9 @@ async function main(): Promise<void> {
     {
       eventBus,
       llmProvider,
+      ...(coreRuntime.automataClassLifecycle
+        ? { automataClassLifecycle: coreRuntime.automataClassLifecycle }
+        : {}),
       capabilityTier: config.capabilityTier,
       compositionalPolicy: config.compositionalPolicy,
       characterPromptVariablesProvider: buildCharacterPromptVariablesProvider(cardVersionStore),

@@ -135,20 +135,6 @@
     grid-template-columns: 1fr;
   }
 
-  .toast-layer.stacked {
-    bottom: calc(max(0.9rem, env(safe-area-inset-bottom)) + 146px);
-  }
-
-  .attachment-tray {
-    bottom: calc(max(0.9rem, env(safe-area-inset-bottom)) + 78px);
-    width: calc(100vw - 1rem);
-    grid-template-columns: 1fr;
-  }
-
-  .context-toast:not(:first-child) {
-    display: none;
-  }
-
   .overlay-drawer {
     width: 100vw;
     border-left: 0;

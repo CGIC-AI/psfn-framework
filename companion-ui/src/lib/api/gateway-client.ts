@@ -268,7 +268,7 @@ export class CompanionGatewayClient {
       throw this.emitLocalError('Selected shard has not been reauthorized', true);
     }
     if (options?.interrupt) {
-      this.interrupt();
+      if (this.session.capabilities?.control?.includes('interrupt')) this.interrupt();
       this.emitInbound({ type: 'action', data: 'pause-audio' });
     }
     const requestId = shardId

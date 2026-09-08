@@ -7,11 +7,9 @@ import {
   Mic,
   Paperclip,
   RefreshCw,
-  X,
 } from 'lucide-react';
 import type { ApprovalPanelState, ApprovalRequestView } from '../lib/approvals.js';
 import type { ArtifactShelfItem, ArtifactShelfState } from '../lib/artifacts.js';
-import type { AttachmentKind, PendingAttachment } from './types.js';
 
 export function ToastLayer({
   approvals,
@@ -20,7 +18,6 @@ export function ToastLayer({
   locationNotice,
   onApprovalDecision,
   onArtifactPreview,
-  stacked,
   updateReady,
   voiceNotice,
 }: {
@@ -30,7 +27,6 @@ export function ToastLayer({
   locationNotice: string | null;
   onApprovalDecision: (id: string, decision: 'approve' | 'deny') => void;
   onArtifactPreview: (artifactId: string) => void;
-  stacked: boolean;
   updateReady: boolean;
   voiceNotice: string | null;
 }) {
@@ -43,7 +39,7 @@ export function ToastLayer({
   if (!hasToasts) return null;
 
   return (
-    <section className={`toast-layer ${stacked ? 'stacked' : ''}`} aria-label="Contextual updates">
+    <section className="toast-layer" aria-label="Contextual updates" tabIndex={0}>
       {voiceNotice && (
         <article className="context-toast voice-toast">
           <Mic aria-hidden />
@@ -66,7 +62,7 @@ export function ToastLayer({
         <article className="context-toast error-toast">
           <AlertTriangle aria-hidden />
           <div>
-            <strong>Connection issue</strong>
+            <strong>Needs attention</strong>
             <p>{error}</p>
           </div>
         </article>
@@ -271,54 +267,13 @@ function approvalStatusLabel(status: ApprovalRequestView['status']): string {
   }
 }
 
-export function AttachmentTray({
-  attachments,
-  onRemove,
-}: {
-  attachments: PendingAttachment[];
-  onRemove: (id: string) => void;
-}) {
+export function AttachmentMenu() {
   return (
-    <section className="attachment-tray" aria-label="Pending attachments">
-      {attachments.map((attachment) => (
-        <article className="pending-attachment" key={attachment.id}>
-          {attachment.kind === 'file' ? <Paperclip aria-hidden /> : <Image aria-hidden />}
-          <div>
-            <strong>{attachment.name}</strong>
-            <p>{attachment.mediaType} · {formatFileSize(attachment.size)} · local only</p>
-          </div>
-          <button type="button" onClick={() => onRemove(attachment.id)} aria-label={`Remove ${attachment.name}`}>
-            <X aria-hidden />
-          </button>
-        </article>
-      ))}
-    </section>
-  );
-}
-
-export function AttachmentMenu({ onPick }: { onPick: (kind: AttachmentKind) => void }) {
-  return (
-    <div className="attachment-menu" role="menu">
-      <button type="button" role="menuitem" onClick={() => onPick('file')}>
-        <Paperclip aria-hidden />
-        Upload file
-      </button>
-      <button type="button" role="menuitem" onClick={() => onPick('image')}>
-        <Image aria-hidden />
-        Upload image
-      </button>
-      <button type="button" role="menuitem" onClick={() => onPick('camera')}>
-        <Camera aria-hidden />
-        Take photo
-      </button>
+    <div className="attachment-menu" role="menu" aria-label="Attachments unavailable">
+      <p>File and photo sharing is not available yet. You can paste text into your message.</p>
+      <button type="button" role="menuitem" disabled><Paperclip aria-hidden />Upload file</button>
+      <button type="button" role="menuitem" disabled><Image aria-hidden />Upload image</button>
+      <button type="button" role="menuitem" disabled><Camera aria-hidden />Take photo</button>
     </div>
   );
-}
-
-function formatFileSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  const kb = bytes / 1024;
-  if (kb < 1024) return `${kb.toFixed(kb >= 10 ? 0 : 1)} KB`;
-  const mb = kb / 1024;
-  return `${mb.toFixed(mb >= 10 ? 0 : 1)} MB`;
 }

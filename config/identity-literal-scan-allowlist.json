@@ -1931,6 +1931,24 @@
       "contains": "psfn",
       "reason": "The Hub proxy rejects browser-supplied x-psfn-* authority headers and checks the __Host-psfn_session cookie name; these are the framework's wire protocol identifiers, not a companion identity.",
       "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/boundary/gateway/incident-alert-render.ts",
+      "contains": "psfn",
+      "reason": "Incident alert rendering names the framework in operator-facing alert text; not a companion identity.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/persistence/postgres/human-escalation-store.ts",
+      "contains": "psfn",
+      "reason": "Human escalation persistence uses a project-scoped PostgreSQL application_name for operational connection attribution.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/shared/escalation/contracts.ts",
+      "contains": "psfn",
+      "reason": "The escalation contract's module comment names the framework; not a companion identity.",
+      "pattern": "identity-legacy-slug"
     }
   ]
 }

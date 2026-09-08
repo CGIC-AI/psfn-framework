@@ -221,5 +221,5 @@ export function blindReviewContentDigest(input: {
 
 /** Digest over an ordered batch of evidence. Order-sensitive by design. */
 export function blindReviewBatchDigest(items: readonly BlindReviewEvidenceItem[]): string {
-  return sha256Hex(items.map(item => item.contentDigest).join(' '));
+  return sha256Hex(items.map(item => item.contentDigest).join('\0'));
 }

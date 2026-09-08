@@ -93,6 +93,14 @@ describe('Garden fleet request capability target', () => {
     expect(() => compile(rawTarget, method)).toThrow(GardenRequestTargetError);
   });
 
+  it('admits the shared-workspace listing cursor through the real request path (9jld5)', () => {
+    const target = compile('/api/admin/shared-workspace?artifactCursor=notes%2Fplan.md');
+    expect(target.canonicalRequestTarget).toBe('/api/admin/shared-workspace?artifactCursor=notes%2Fplan.md');
+    expect(() => compile('/api/admin/shared-workspace?artifactCursor=a&artifactCursor=b'))
+      .toThrow(GardenRequestTargetError);
+    expect(() => compile('/api/admin/shared-workspace?limit=5')).toThrow(GardenRequestTargetError);
+  });
+
   it('rejects browser-controlled companion/workspace authority in every selector surface', () => {
     expect(() => compile('/api/admin/images/generated?companionId=other')).toThrow(/authority selector/u);
     expect(() => compileGatewayGardenRequestTarget({

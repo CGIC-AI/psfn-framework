@@ -18,7 +18,7 @@ export function Composer({
   controller,
   onSendText,
   onStopGeneration,
-  onStopVoicePlayback = controller.stopVoicePlayback,
+  onStopVoicePlayback,
   onToggleMic,
   targetLabel,
 }: {
@@ -28,7 +28,7 @@ export function Composer({
   controller: ComposerController;
   onSendText: (text: string) => void;
   onStopGeneration: () => void;
-  onStopVoicePlayback?: () => void;
+  onStopVoicePlayback: () => void;
   onToggleMic: () => void;
   targetLabel?: string;
 }) {
@@ -58,30 +58,7 @@ export function Composer({
         >
           <Plus aria-hidden />
         </button>
-        {controller.attachmentMenuOpen && <AttachmentMenu onPick={controller.openAttachmentPicker} />}
-        <input
-          ref={controller.fileInputRef}
-          className="hidden-file-input"
-          type="file"
-          multiple
-          onChange={(event) => controller.handleAttachmentFiles(event, 'file')}
-        />
-        <input
-          ref={controller.imageInputRef}
-          className="hidden-file-input"
-          type="file"
-          accept="image/*"
-          multiple
-          onChange={(event) => controller.handleAttachmentFiles(event, 'image')}
-        />
-        <input
-          ref={controller.cameraInputRef}
-          className="hidden-file-input"
-          type="file"
-          accept="image/*"
-          capture="environment"
-          onChange={(event) => controller.handleAttachmentFiles(event, 'camera')}
-        />
+        {controller.attachmentMenuOpen && <AttachmentMenu />}
       </div>
       <textarea
         ref={controller.inputRef}
@@ -95,18 +72,16 @@ export function Composer({
       />
       <div className="mic-control">
         <button
-          className={`composer-button mic-button ${controller.micActive ? 'active' : ''} ${controller.micMode}`}
+          className={`composer-button mic-button ${controller.micActive ? 'active' : ''} voice`}
           type="button"
           onClick={onToggleMic}
           disabled={!canSend}
-          title={controller.micMode === 'dictation' ? 'Dictation' : 'Voice chat'}
-          aria-label={controller.micMode === 'dictation' ? 'Toggle dictation' : 'Toggle voice chat'}
+          title="Voice chat sends spoken turns to your companion"
+          aria-label="Toggle voice chat"
         >
           <Mic aria-hidden />
         </button>
-        <button className="mic-mode" type="button" onClick={controller.toggleMicMode}>
-          {controller.micMode === 'dictation' ? 'Dictation' : 'Voice'}
-        </button>
+        <span className="mic-mode">Voice</span>
       </div>
       <StopOrSendButton
         canSend={canSend}

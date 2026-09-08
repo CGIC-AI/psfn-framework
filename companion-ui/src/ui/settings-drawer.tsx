@@ -11,7 +11,6 @@ import {
 import type { HubStreamState, HubStreamStore } from '../lib/stream/hub-stream.js';
 import type { FleetRosterCompanion } from '../lib/fleet-roster.js';
 import { DrawerHeader } from './overlay-drawer.js';
-import type { MicMode } from './types.js';
 import type { DeviceLocationStatus } from './use-device-location.js';
 import type { Z02LinkState } from './use-z02-link.js';
 import { Z02LinkSection } from './z02-link-section.js';
@@ -33,7 +32,6 @@ export function SettingsDrawer({
   activeCompanionId,
   companions,
   connecting,
-  micMode,
   spriteAnimations,
   display,
   companionLabel,
@@ -47,7 +45,6 @@ export function SettingsDrawer({
   onGuest,
   onLogin,
   onLogout,
-  onMicModeChange,
   onCompanionChange,
   onSpriteAnimationsChange,
   onLocationEnabledChange,
@@ -60,7 +57,6 @@ export function SettingsDrawer({
   activeCompanionId: string | null;
   companions: readonly FleetRosterCompanion[];
   connecting: boolean;
-  micMode: MicMode;
   spriteAnimations: boolean;
   display: CompanionDisplayController;
   companionLabel: string;
@@ -74,7 +70,6 @@ export function SettingsDrawer({
   onGuest: () => void;
   onLogin: () => void;
   onLogout: () => void;
-  onMicModeChange: (value: MicMode) => void;
   onCompanionChange: (companionId: string) => void;
   onSpriteAnimationsChange: (value: boolean) => void;
   onLocationEnabledChange: (value: boolean) => void;
@@ -146,15 +141,8 @@ export function SettingsDrawer({
 
         <section className="settings-section">
           <h2>Audio</h2>
-          <SegmentedControl
-            label="Mic mode"
-            options={[
-              { label: 'Dictation', value: 'dictation' },
-              { label: 'Voice', value: 'voice' },
-            ]}
-            value={micMode}
-            onChange={onMicModeChange}
-          />
+          <p>The microphone starts voice chat. Spoken turns are sent to the selected companion automatically.</p>
+          <p>Use the text composer when you want to review a message before sending it.</p>
         </section>
 
         <section className="settings-section">
@@ -269,30 +257,5 @@ function ToggleRow({ checked, label, onChange }: {
       <span>{label}</span>
       <input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} />
     </label>
-  );
-}
-
-function SegmentedControl<T extends string>({ label, onChange, options, value }: {
-  label: string;
-  onChange: (value: T) => void;
-  options: Array<{ label: string; value: T }>;
-  value: T;
-}) {
-  return (
-    <div className="segmented-field">
-      <span>{label}</span>
-      <div>
-        {options.map((option) => (
-          <button
-            className={value === option.value ? 'active' : ''}
-            type="button"
-            onClick={() => onChange(option.value)}
-            key={option.value}
-          >
-            {option.label}
-          </button>
-        ))}
-      </div>
-    </div>
   );
 }

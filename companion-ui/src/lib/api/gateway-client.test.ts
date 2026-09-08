@@ -313,6 +313,27 @@ describe('CompanionGatewayClient', () => {
     store.destroy();
   });
 
+  it('can send a second text-only message without claiming interruption capability', async () => {
+    const socket = new FakeSocket();
+    const requests = ['first', 'second'];
+    const client = new CompanionGatewayClient({ url: 'wss://fleet.example.test/companion-ui/companions/11111111-1111-4111-8111-111111111111/ws',
+      webSocketFactory: () => socket, requestIdFactory: () => requests.shift()! });
+    const connecting = client.connect();
+    socket.open();
+    socket.message({ ...READY, capabilities: ['text'] });
+    await connecting;
+    socket.sent.length = 0;
+    client.sendUserText('First', { interrupt: true });
+    socket.message({ schemaVersion: 1, type: 'result', requestId: 'first', ok: true,
+      result: { content: 'Reply.', channelId: 'attached-channel', inputTokens: 1, outputTokens: 1 } });
+    await flushAsyncMessage();
+    client.sendUserText('Second', { interrupt: true });
+    expect(socket.sent.map(frame => JSON.parse(String(frame)).resource)).toEqual([
+      'conversation.interact', 'conversation.interact',
+    ]);
+    expect(socket.closeCalls).toEqual([]);
+  });
+
   it('interrupts an active text conversation even when an idle microphone session remains open', async () => {
     const socket = new FakeSocket();
     const client = await connectClient(socket, ['audio-1', 'text-1', 'stop-1']);

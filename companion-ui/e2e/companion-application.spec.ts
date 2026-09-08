@@ -63,6 +63,7 @@ async function attachCluster(page: Page) {
         case 'shards.list': result = []; break;
         case 'conversation.interact': result = { content: `Reply from ${companionId === CANOPY ? 'Canopy' : 'Meadow'}: ${frame.body.content}`, channelId: `fixture-${companionId}`, inputTokens: 1, outputTokens: 1 }; break;
         case 'conversation.interrupt': result = { interrupted: true, interactionId: frame.body.interactionId }; break;
+        case 'confirmations.resolve': result = { id: frame.body.id, status: frame.body.decision === 'approve' ? 'approved' : 'denied', message: 'Recorded', executed: false }; break;
         case 'embodiment.status': result = { generation: 0, version: 0, primaryPresent: false, currentDeviceIsPrimary: false, lastDecision: null }; break;
         case 'embodiment.handoff': result = { generation: 1, version: 1, primaryPresent: true, currentDeviceIsPrimary: true, lastDecision: { decision: 'handoff', reason: 'user_requested', decidedAt: new Date().toISOString() } }; break;
         default: return;
@@ -104,6 +105,10 @@ test('routes chat and restores drafts by companion while approvals remain visibl
   await expect(page.getByRole('button', { name: 'Approve', exact: true })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: testInfo.outputPath('avatar-approval.png') });
+  await page.getByRole('button', { name: 'Thread', exact: true }).click();
+  await selectCompanion(page, 'Meadow');
+  await expect(page.getByText('Reply from Meadow: Meadow message', { exact: true })).toBeVisible();
+  await expect(page.getByText('Canopy draft', { exact: true })).toHaveCount(0);
 });
 
 test('loads a local VRM for one companion and clears it for another companion and logout', async ({ page }) => {
@@ -143,7 +148,10 @@ test('claims primary embodiment only after an explicit device handoff', async ({
 
 for (const boundary of ['companion selection', 'socket loss', 'approval polling'] as const) {
   test(`clears another tab’s same-label account state on ${boundary}`, async ({ page }) => {
-    const { switchAccount, sockets } = await attachCluster(page);
+  const { switchAccount, sockets } = await attachCluster(page);
+  await page.getByLabel('Message your companion', { exact: true }).fill('Previous Partner private message');
+  await page.getByRole('button', { name: 'Send message', exact: true }).click();
+  await expect(page.getByText('Reply from Canopy: Previous Partner private message', { exact: true })).toBeVisible();
     await page.getByLabel('Message your companion', { exact: true }).fill('Previous Partner private draft');
     await page.getByRole('button', { name: 'Open settings', exact: true }).click();
     await page.getByRole('button', { name: 'Animated sprite', exact: true }).click();
@@ -205,7 +213,29 @@ test('offers Stop for a typed spoken reply and keeps the chat when synthesis fai
   emit({ type: 'error-event', data: { message: 'A provider failure', scope: 'speech' } });
   await expect(page.getByText('Spoken reply unavailable. The text reply is still available in chat.', { exact: true })).toBeVisible();
   await expect(page.getByLabel('Message your companion', { exact: true })).toBeEnabled();
+  await expect(page.getByText('Reply from Canopy: Previous Partner private message', { exact: true })).toHaveCount(0);
   await page.waitForTimeout(750);
   await expect(page.getByText('Reply from Canopy: Tell me a story', { exact: true })).toBeVisible();
   expect(sockets.get(CANOPY)).toBe(socket);
+});
+
+test('keeps every approval actionable on a phone while a voice notice is visible', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const { sockets, frames } = await attachCluster(page);
+  await page.getByRole('button', { name: 'Avatar', exact: true }).click();
+  const emit = (event: unknown) => sockets.get(CANOPY)!.send(JSON.stringify({ schemaVersion: 1, type: 'event', event }));
+  emit({ type: 'error-event', data: { scope: 'speech', message: 'Unavailable' } });
+  for (const id of ['first', 'second']) emit({ type: 'approval.requested', data: {
+    id, title: `Review ${id} request`, requestedAt: new Date().toISOString(), redactedContext: 'A bounded request', status: 'pending',
+    sourceSystem: 'tool-access', attribution: { parentId: CANOPY, parentLabel: 'Canopy' }, action: 'read', scope: 'workspace', reason: 'Review requested', grantMode: { kind: 'once' },
+  } });
+  const second = page.locator('.approval-toast').filter({ hasText: 'Review second request' });
+  await second.getByRole('button', { name: 'Approve', exact: true }).click();
+  await expect(second.getByText('Approved', { exact: true })).toBeVisible();
+  expect(frames.find(frame => frame.resource === 'confirmations.resolve')).toEqual({
+    companionId: CANOPY, resource: 'confirmations.resolve', body: { id: 'second', decision: 'approve' },
+  });
+  const first = page.locator('.approval-toast').filter({ hasText: 'Review first request' });
+  await first.getByRole('button', { name: 'Deny', exact: true }).click();
+  await expect(first.getByText('Denied', { exact: true })).toBeVisible();
 });

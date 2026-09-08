@@ -355,16 +355,17 @@ interface McplVisionTurn {
 async function mcplVisionTurn(
   t: { after(fn: () => void): void },
   snap?: (request: http.IncomingMessage, response: http.ServerResponse) => void,
+  travelTo?: string,
 ): Promise<McplVisionTurn> {
   const door = await EidoverseMcplDoor.start({
     world: "commons",
     tokens: [TOKEN],
+    travelWorlds: ["annex"],
     ...(snap ? { snap } : {}),
   });
   const doorConfig = config(door);
   const snapshotConfig = loadEidoverseSnapshotConfig({
     transport: "mcpl",
-    worldName: doorConfig.worldName,
     agentName: doorConfig.agentName,
     doorUrl: doorConfig.doorUrl,
   }, {
@@ -396,6 +397,7 @@ async function mcplVisionTurn(
     agent,
     look: client,
     say: client,
+    travel: client,
     snapshot: new EidoverseSnapshotSource(snapshotConfig!, {
       artifactsRoot,
       logger: { warn },
@@ -411,6 +413,10 @@ async function mcplVisionTurn(
     await door.waitForHandshake();
     await door.registerChannel();
     adapter.connect();
+    if (travelTo) {
+      const outcome = await adapter.travelTo(travelTo);
+      assert.equal(outcome.accepted, true, "the door must admit the travel this turn follows");
+    }
     await door.deliver([
       door.message({
         text: "Quill: what do you see?",
@@ -453,6 +459,24 @@ test("an MCPL turn carries a first-person frame from the origin derived from the
     true,
     "the text look tier is unchanged by vision",
   );
+});
+
+test("vision follows the body into the world it travelled to", async (t) => {
+  // The boot world is `commons`; the door serves `/snap` per world and the
+  // avatar is present in exactly one of them, so a capture still naming the
+  // boot world would 404 for the rest of the process's life.
+  const turn = await mcplVisionTurn(t, (_request, response) => {
+    response.writeHead(200, { "content-type": "image/png", "content-length": PNG_BYTES.length });
+    response.end(PNG_BYTES);
+  }, "annex");
+
+  assert.deepEqual(turn.door.prepared, ["annex"], "the door moved the body");
+  assert.deepEqual(
+    turn.door.snapRequests,
+    ["/snap?world=annex&follow=companion&view=first"],
+    "the capture follows the live world, not the boot world",
+  );
+  assert.equal(turn.channel?.visionCaptureImages?.length, 1);
 });
 
 test("an MCPL turn with no renderer attached degrades to its text look notes", async (t) => {

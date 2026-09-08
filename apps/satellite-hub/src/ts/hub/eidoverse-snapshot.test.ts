@@ -105,7 +105,6 @@ test("an MCPL hub that asks for vision gets an origin or a boot failure, never a
   assert.equal(loadEidoverseSnapshotConfig(mcplOrigin(), {}), null, "vision is still off by default");
   assert.deepEqual(loadEidoverseSnapshotConfig(mcplOrigin(), { EIDOVERSE_SNAPSHOT_ENABLED: "true" }), {
     baseUrl: "https://world.invalid",
-    worldName: "demo-world",
     agentName: "Aster Example",
     timeoutMs: 4_000,
     maxBytes: 4_000_000,
@@ -118,7 +117,6 @@ test("an MCPL hub that asks for vision gets an origin or a boot failure, never a
     }),
     {
       baseUrl: "https://renderer.invalid/commons",
-      worldName: "demo-world",
       agentName: "Aster Example",
       timeoutMs: 4_000,
       maxBytes: 4_000_000,
@@ -140,7 +138,6 @@ test("snapshots stay disabled by default and only load for explicitly enabled hu
   assert.throws(() => loadEidoverseSnapshotConfig(mcp, { EIDOVERSE_SNAPSHOT_ENABLED: "yes" }));
   assert.deepEqual(loadEidoverseSnapshotConfig(mcp, { EIDOVERSE_SNAPSHOT_ENABLED: "true" }), {
     baseUrl: "http://192.0.2.61:8787/world",
-    worldName: "demo-world",
     agentName: "Aster Example",
     timeoutMs: 4_000,
     maxBytes: 4_000_000,
@@ -154,7 +151,6 @@ test("snapshots stay disabled by default and only load for explicitly enabled hu
     }),
     {
       baseUrl: "https://snapshots.invalid/world",
-      worldName: "demo-world",
       agentName: "Aster Example",
       timeoutMs: 1_500,
       maxBytes: 2_048,
@@ -195,7 +191,7 @@ test("a served frame becomes a persisted vision capture on the door's exact quer
     logger: { warn: () => undefined },
   });
 
-  const capture = await source.capture("eidoverse:abc123");
+  const capture = await source.capture("eidoverse:abc123", "demo-world");
   await server.close();
 
   assert.notEqual(capture, null);
@@ -270,7 +266,7 @@ test("every renderer failure mode degrades to text with no crash", async (t) => 
       artifactsRoot,
       logger: { warn: (message) => warnings.push(message) },
     });
-    const capture = await source.capture("eidoverse:abc123");
+    const capture = await source.capture("eidoverse:abc123", "demo-world");
     await server.close();
     assert.equal(capture, null, `${testCase.label} must degrade to text`);
     assert.equal(warnings.length, 1, `${testCase.label} logs exactly one sanitized warning`);
@@ -285,7 +281,7 @@ test("every renderer failure mode degrades to text with no crash", async (t) => 
     artifactsRoot,
     logger: { warn: () => undefined },
   });
-  assert.equal(await unreachable.capture("eidoverse:abc123"), null);
+  assert.equal(await unreachable.capture("eidoverse:abc123", "demo-world"), null);
   assert.deepEqual(
     fs.existsSync(path.join(artifactsRoot, "eidoverse-vision"))
       ? fs.readdirSync(path.join(artifactsRoot, "eidoverse-vision"))
@@ -384,7 +380,7 @@ test("a capture source that throws never fails the turn", async () => {
 function createAdapter(
   agent: FakeAgent,
   sessions: SessionStore,
-  snapshot: { capture(sessionId: string): Promise<never | null> } | EidoverseSnapshotSource,
+  snapshot: { capture(sessionId: string, world: string): Promise<never | null> } | EidoverseSnapshotSource,
   warnings?: string[],
 ): EidoverseEmbodiedSessionAdapter {
   return new EidoverseEmbodiedSessionAdapter({
@@ -430,7 +426,6 @@ function pollOrigin(): EidoverseSnapshotOrigin {
   const mcp = mcpConfig();
   return {
     transport: "poll",
-    worldName: mcp.worldName,
     agentName: mcp.agentName,
     worldUrl: mcp.worldUrl,
   };
@@ -440,7 +435,6 @@ function pollOrigin(): EidoverseSnapshotOrigin {
 function mcplOrigin(doorUrl = MCPL_DOOR_URL): EidoverseSnapshotOrigin {
   return {
     transport: "mcpl",
-    worldName: "demo-world",
     agentName: "Aster Example",
     doorUrl,
   };
@@ -448,14 +442,12 @@ function mcplOrigin(doorUrl = MCPL_DOOR_URL): EidoverseSnapshotOrigin {
 
 function snapshotConfig(baseUrl: string): {
   baseUrl: string;
-  worldName: string;
   agentName: string;
   timeoutMs: number;
   maxBytes: number;
 } {
   return {
     baseUrl,
-    worldName: "demo-world",
     agentName: "Aster Example",
     timeoutMs: SNAPSHOT_TIMEOUT_MS,
     maxBytes: SNAPSHOT_MAX_BYTES,

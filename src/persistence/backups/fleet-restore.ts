@@ -86,7 +86,6 @@ import {
   assertFleetAuthSchemaAccessIsolation,
   assertFleetAuthSchemaAccessTargets,
   type FleetAuthSchemaAccessContract,
-  type FleetAuthWelfareVerifierSchemaAccess,
   validateFleetAuthSchemaAccessContracts,
 } from './fleet-auth-schema-access.js';
 import { runMemorySubjectBackfillToCompletion } from '../../faculties/memory/postgres-store/subject-backfill.js';
@@ -188,7 +187,6 @@ export interface FleetAuthConsistentFamilyRestoreVerificationOptions {
   roles: FleetAuthFamilyDatabaseRoles;
   authorityFloors: FleetAuthAuthorityFloorStore;
   activationGeneration: number;
-  scratchWelfareVerifier?: FleetAuthWelfareVerifierSchemaAccess;
   pgRestoreBinary?: string;
   psqlBinary?: string;
 }
@@ -611,7 +609,6 @@ export async function restoreFleetAuthConsistentFamily(options: {
   activationGeneration: number;
   restoredAt?: string;
   schemaOwnerDatabaseUrls: Readonly<Record<string, string>>;
-  welfareVerifier?: FleetAuthWelfareVerifierSchemaAccess;
   pgRestoreBinary?: string;
   psqlBinary?: string;
   disposition?: FleetAuthConsistentFamilyRestoreDisposition;
@@ -679,7 +676,6 @@ export async function restoreFleetAuthConsistentFamily(options: {
       contracts: accessContracts,
       ownerRole: options.roles.backupRestore,
       ownerDatabaseUrls: options.schemaOwnerDatabaseUrls,
-      ...(options.welfareVerifier ? { welfareVerifier: options.welfareVerifier } : {}),
     });
     const markerState = await inspectFleetRestoreDatabaseMarker(postgres, operation);
     if (markerState === 'foreign') {
@@ -702,9 +698,6 @@ export async function restoreFleetAuthConsistentFamily(options: {
         databaseUrl: options.backupRestoreDatabaseUrl,
         contracts: accessContracts,
         ownerRole: options.roles.backupRestore,
-        ...(options.welfareVerifier
-          ? { welfareVerifierRole: options.welfareVerifier.role }
-          : {}),
       });
       if (disposition === 'verify-rollback') {
         await rollbackFleetAuthOwnedSchemas({
@@ -752,17 +745,11 @@ export async function restoreFleetAuthConsistentFamily(options: {
         contracts: accessContracts,
         ownerDatabaseUrls: options.schemaOwnerDatabaseUrls,
         backupRole: options.roles.backupRestore,
-        ...(options.welfareVerifier
-          ? { welfareVerifierRole: options.welfareVerifier.role }
-          : {}),
       });
       await assertFleetAuthSchemaAccessIsolation({
         databaseUrl: options.backupRestoreDatabaseUrl,
         contracts: accessContracts,
         ownerRole: options.roles.backupRestore,
-        ...(options.welfareVerifier
-          ? { welfareVerifierRole: options.welfareVerifier.role }
-          : {}),
       });
 
       for (const schema of restoredSchemas) {
@@ -975,9 +962,6 @@ export async function verifyFleetAuthConsistentFamilyRestore(
       authorityFloors: scratchFloors,
       activationGeneration: options.activationGeneration,
       schemaOwnerDatabaseUrls: options.scratchSchemaOwnerDatabaseUrls,
-      ...(options.scratchWelfareVerifier
-        ? { welfareVerifier: options.scratchWelfareVerifier }
-        : {}),
       disposition: 'verify-rollback',
       ...(options.pgRestoreBinary ? { pgRestoreBinary: options.pgRestoreBinary } : {}),
       ...(options.psqlBinary ? { psqlBinary: options.psqlBinary } : {}),

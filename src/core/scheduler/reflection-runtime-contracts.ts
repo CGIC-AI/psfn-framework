@@ -21,6 +21,7 @@ import type { SleepCycleEpisodeConsolidator } from '../../faculties/memory/episo
 import type { EpisodeArcWeaver } from '../../faculties/memory/episodic/arc-formation.js';
 import type { DreamMeaningPass } from '../../faculties/memory/episodic/dream-meaning-pass.js';
 import type { SleeptimeWikiPass } from '../../faculties/wiki/sleeptime-wiki-pass.js';
+import type { AutomataClassLifecycleRuntime } from '../../faculties/automata/bus/class-lifecycle.js';
 import type { NearTurnMemoryScopeClassifierPort } from '../../faculties/memory/near-turn-memory-lane.js';
 import type { ConversationalActivityWorksetPort } from '../session/conversational-activity-workset.js';
 import type { FleetMaintenanceCoordinator } from './fleet-maintenance-coordinator.js';
@@ -98,6 +99,12 @@ export interface ReflectionAgent {
 
 export interface ReflectionRuntimeOptions {
   eventBus?: EventBus;
+  /**
+   * Governed Automata Bus lifecycle shared by every eligible class. Absent only
+   * where no durable Automata runtime is composed; the scheduler lanes then run
+   * their unchanged worker logic Bus-blind rather than failing.
+   */
+  automataClassLifecycle?: AutomataClassLifecycleRuntime | null;
   llmProvider?: LLMProviderPort;
   capabilityTier?: CapabilityTier;
   compositionalPolicy?: CompositionalPolicyConfig;

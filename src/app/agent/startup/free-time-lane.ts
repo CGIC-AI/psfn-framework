@@ -10,6 +10,8 @@
 // were away" note is placed on the partner session via the shared summarizer;
 // empty "loafed" blocks surface nothing.
 
+import { randomUUID } from 'node:crypto';
+
 import type { SubstrateAgent } from '../../../core/agent/substrate-agent.js';
 import type { LLMProviderPort } from '../../../core/agent/contracts.js';
 import type { ContactStorePort } from '../../../core/contacts/contact-store-port.js';
@@ -21,6 +23,7 @@ import { summarizeRecentSessionEntries } from '../../../core/session/manager/com
 import {
   freeTimeWorkspaceChannelId,
   registerFreeTimeTasks,
+  type FreeTimeBlockResult,
   type FreeTimeRuntimeOptions,
 } from '../../../core/scheduler/free-time.js';
 import {
@@ -44,6 +47,11 @@ import { getRunChargeSnapshot, runWithChargeContext } from '../../../shared/tele
 import { getRequestContext } from '../../../primitives/llm/request-context.js';
 import { getVisibilityDisclosureCeiling } from '../../../system/trust/policy.js';
 import type { SchedulerRuntimeConfig as SchedulerConfig } from '../../../system/config/scheduler-config.js';
+import {
+  runGovernedAutomataClass,
+  type AutomataClassLifecycleRuntime,
+} from '../../../faculties/automata/bus/class-lifecycle.js';
+import type { ProductionAutomataClassId } from '../../../faculties/automata/registry-contract.js';
 
 export interface FreeTimeLaneDeps {
   scheduler: FreeTimeRuntimeOptions['scheduler'];
@@ -60,7 +68,16 @@ export interface FreeTimeLaneDeps {
   chargePolicy: ChargePolicyConfig | undefined;
   personalProjects: PersonalProjectLibrary;
   contactStore: Pick<ContactStorePort, 'getById'>;
+  /** Governed Automata Bus lifecycle. Absent where no durable Automata runtime is composed. */
+  automataLifecycle?: AutomataClassLifecycleRuntime;
 }
+
+const FREE_TIME_CLASS: ProductionAutomataClassId = 'scheduler.free_time';
+const FREE_TIME_WORKER_ID = 'free-time-lane';
+const FREE_TIME_TASK_LABEL = 'Free-time block';
+const FREE_TIME_TASK_SUMMARY =
+  'Run one bounded self-directed free-time block on the internal channel.';
+const FREE_TIME_BRIEFING_QUERY = 'free time self-directed work block';
 
 const log = createComponentLogger('FreeTimeLane');
 
@@ -109,6 +126,7 @@ export function registerFreeTimeLane(deps: FreeTimeLaneDeps): void {
     chargePolicy,
     personalProjects,
     contactStore,
+    automataLifecycle,
   } = deps;
 
   let selectedWorkspace: FreeTimeWorkspace | undefined;
@@ -214,17 +232,48 @@ export function registerFreeTimeLane(deps: FreeTimeLaneDeps): void {
     // The whole block runs inside a 'background' charge context so per-turn LLM
     // spend accumulates against the background lane; getRunChargeSnapshot lets
     // the runner read cumulative spend before each turn for the hard cap.
-    runBlock: ({ run }) => {
-      if (!chargePolicy) {
-        // No charge policy → run with a zero reader; the turn cap still bounds.
-        return run(() => 0);
+    runBlock: async ({ lane, run }) => {
+      const runCharged = (): Promise<FreeTimeBlockResult> => {
+        if (!chargePolicy) {
+          // No charge policy → run with a zero reader; the turn cap still bounds.
+          return run(() => 0);
+        }
+        return runWithChargeContext({
+          chargePolicy,
+          eventBus,
+          lane: 'background',
+          correlation: getRequestContext(),
+        }, () => run(() => getRunChargeSnapshot()?.spentByLane.background ?? 0));
+      };
+      // The block itself is unchanged; only its durable run identity, bounded
+      // briefing, governed tool, and terminal settlement move into the shared
+      // Bus lifecycle. The block's own turn/charge budget still bounds spend.
+      const outcome = await runGovernedAutomataClass({
+        runtime: automataLifecycle,
+        spec: {
+          automatonClass: FREE_TIME_CLASS,
+          runId: `free-time:${lane}:${randomUUID()}`,
+          workerId: FREE_TIME_WORKER_ID,
+          taskId: `free-time:${lane}`,
+          taskLabel: FREE_TIME_TASK_LABEL,
+          taskSummary: FREE_TIME_TASK_SUMMARY,
+        },
+        briefingQuery: FREE_TIME_BRIEFING_QUERY,
+        work: async () => {
+          const result = await runCharged();
+          // Counts and the block's own end reason only: no free-time content,
+          // workspace text, or partner material reaches the Bus.
+          return {
+            value: result,
+            summary: `Free-time ${result.lane} block: turnsUsed=${result.turnsUsed} `
+              + `activity=${result.activity} endReason=${result.endReason}`,
+          };
+        },
+      });
+      if (outcome.status === 'replayed') {
+        throw new Error('Free-time block re-entered an already terminal Automata run');
       }
-      return runWithChargeContext({
-        chargePolicy,
-        eventBus,
-        lane: 'background',
-        correlation: getRequestContext(),
-      }, () => run(() => getRunChargeSnapshot()?.spentByLane.background ?? 0));
+      return outcome.value;
     },
     // One free-time turn through the ordinary agent loop on the internal
     // channel. Internal channelId => isInternalSessionId() true => the loop

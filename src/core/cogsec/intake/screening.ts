@@ -470,7 +470,7 @@ export interface IntakeScreeningResult {
  * screening completed. The rest mirror `cogSecReceiptSuppression`: properties
  * of the RESULT that make it not a complete admission of fully screened bytes.
  */
-export const INTAKE_RECEIPT_ABSENCE_REASONS = [
+const INTAKE_RECEIPT_ABSENCE_REASONS = [
   'no_receipt_writer',
   'sync_screening',
   'clean_bubble',
@@ -491,7 +491,7 @@ export type IntakeReceiptAbsenceReason = typeof INTAKE_RECEIPT_ABSENCE_REASONS[n
  * answered the receipt question. The innermost path that knows the real reason
  * wins; outer wrappers only fill a genuine gap.
  */
-export function withIntakeReceiptAbsence(
+function withIntakeReceiptAbsence(
   result: IntakeScreeningResult,
   reason: IntakeReceiptAbsenceReason,
 ): IntakeScreeningResult {

@@ -55,6 +55,7 @@ import { formatGatewayRpcEndpoint } from '../../boundary/gateway/transport.js';
 import { buildGatewayPrivilegedCore } from '../../boundary/gateway/privileged-core.js';
 import { ShardWorkloadRegistry } from '../../faculties/shards/workload-registry.js';
 import {
+  CompanionAuthorityWelfareGrantVerifier,
   createWelfareGrantVerifier,
   type WelfareGrantVerifier,
 } from '../../boundary/gateway/welfare-grant-verifier.js';
@@ -852,12 +853,15 @@ async function main(): Promise<void> {
   let icpAutonomyStore: PostgresIcpSharedAutonomyStore | null = null;
   let icpFatigueRegulationStore: PostgresIcpFatigueRegulationReservationStore | null = null;
   let icpInitiationPolicyAuthority: GatewayIcpLocalPolicyCoordinator | null = null;
-  let requestIcpPolicyAgent: (
+  // One lazily-bound route to an authenticated companion agent's local
+  // authorities (ICP policy, welfare grants). Bound once the gateway server
+  // exists; every consumer is constructed before it and calls it later.
+  let requestCompanionAuthorityAgent: (
     companionId: string,
     method: string,
     params: unknown,
   ) => Promise<unknown> = async () => {
-    throw new Error('ICP local policy routing is not ready');
+    throw new Error('Companion authority routing is not ready');
   };
   let companionChannelLane: GatewayCompanionChannelLane | undefined;
   if (config.multiCompanion === true) {
@@ -890,7 +894,7 @@ async function main(): Promise<void> {
     const requiredFatigueRegulationStore = icpFatigueRegulationStore;
     icpInitiationPolicyAuthority = new GatewayIcpLocalPolicyCoordinator({
       requestCompanionAgent: async (companionId, method, params) => (
-        await requestIcpPolicyAgent(companionId, method, params)
+        await requestCompanionAuthorityAgent(companionId, method, params)
       ),
       readRelationshipPressure: async ({
         senderCompanionId,
@@ -934,46 +938,56 @@ async function main(): Promise<void> {
 
   // fxt1: gateway-side welfare grant verifier. Re-verifies a
   // caller-asserted `preemptionProtected` LLMWorkSpec against the background-work
-  // store (`welfare_claimed = true AND state = 'running'`, scoped to the
-  // authenticated companion's schema) before the gate honors it; the RPC
-  // handlers strip the flag on any failure (fail closed → preemptable).
+  // store (`welfare_claimed = true AND state = 'running'`, owned by the
+  // authenticated companion) before the gate honors it; the RPC handlers strip
+  // the flag on any failure (fail closed → preemptable).
   //
-  // psfn-framework-aqp2u: the verifier connects ONLY through the dedicated
-  // least-privilege welfare-verifier credential resolved from fleet-auth.json
-  // (`welfareVerifier`), never the companion runtime URL — a cross-schema
-  // USAGE/SELECT grant on a companion runtime role reaches the agent pods and
-  // breaches fleet sibling isolation. Absent the dedicated credential (no fleet
-  // auth, or the optional `welfareVerifier` block is omitted) ⇒ undefined ⇒
-  // every asserted flag is stripped (honest degradation to FIFO).
+  // psfn-framework-h248l.7: a FLEET verifies through each companion's own local
+  // authority over the authenticated reverse-RPC channel. The gateway opens no
+  // sibling background-work schema, needs no cross-tenant grant, and needs no
+  // dedicated verifier credential at all — which is exactly what an isolated-role
+  // topology can provide, and what the previous fleet-schema probe could not
+  // (it went unavailable at readiness and silently stripped every sibling's
+  // genuine welfare claim).
+  //
+  // psfn-framework-aqp2u: a SINGLE-companion gateway still reads its one shared
+  // schema directly, and only through the dedicated least-privilege
+  // welfare-verifier credential resolved from fleet-auth.json
+  // (`welfareVerifier`), never the companion runtime URL. Absent that credential
+  // ⇒ undefined ⇒ every asserted flag is stripped (honest degradation to FIFO).
   let welfareGrantVerifier: WelfareGrantVerifier | undefined;
-  const welfareVerifierDatabaseUrl = fleetAuthSecrets?.database.welfareVerifierUrl?.trim();
-  if (welfareVerifierDatabaseUrl) {
-    const verifier = createWelfareGrantVerifier({
-      databaseUrl: welfareVerifierDatabaseUrl,
-      ...(config.companionFleet
-        ? {
-            fleet: config.companionFleet.companions.map(companion => ({
-              companionId: companion.companionId,
-              postgresSchema: companion.postgresSchema,
-            })),
-          }
-        : (config.postgresSchema?.trim()
-          ? { postgresSchema: config.postgresSchema.trim() }
-          : {})),
+  if (config.companionFleet) {
+    welfareGrantVerifier = new CompanionAuthorityWelfareGrantVerifier({
+      companionIds: new Set(
+        config.companionFleet.companions.map(companion => companion.companionId),
+      ),
+      requestCompanionAgent: async (companionId, method, params) => (
+        await requestCompanionAuthorityAgent(companionId, method, params)
+      ),
     });
-    if (verifier) {
-      welfareGrantVerifier = await awaitOptionalPostgresStoreReadiness(
-        'welfare_grant_verifier',
-        async () => {
-          try {
-            await verifier.assertReady();
-            return verifier;
-          } catch (error) {
-            await verifier.close();
-            throw error;
-          }
-        },
-      );
+  } else {
+    const welfareVerifierDatabaseUrl = fleetAuthSecrets?.database.welfareVerifierUrl?.trim();
+    if (welfareVerifierDatabaseUrl) {
+      const verifier = createWelfareGrantVerifier({
+        databaseUrl: welfareVerifierDatabaseUrl,
+        ...(config.postgresSchema?.trim()
+          ? { postgresSchema: config.postgresSchema.trim() }
+          : {}),
+      });
+      if (verifier) {
+        welfareGrantVerifier = await awaitOptionalPostgresStoreReadiness(
+          'welfare_grant_verifier',
+          async () => {
+            try {
+              await verifier.assertReady();
+              return verifier;
+            } catch (error) {
+              await verifier.close();
+              throw error;
+            }
+          },
+        );
+      }
     }
   }
 
@@ -1023,7 +1037,7 @@ async function main(): Promise<void> {
       }),
     },
   });
-  requestIcpPolicyAgent = async (companionId, method, params) => (
+  requestCompanionAuthorityAgent = async (companionId, method, params) => (
     await gateway.requestCompanionAgent(companionId, method, params)
   );
   // The incident alert path becomes deliverable the moment the dispatcher does.

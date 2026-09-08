@@ -82,7 +82,8 @@ describe('Hardcoded-settings repository gate', () => {
     ]) {
       expect(identities).not.toContain(removedOrReconciled);
     }
-  });
+  // A whole-repository AST scan; under a loaded runner it exceeds the 10s default.
+  }, 60_000);
 
   it('passes when every matching constant is recorded in the baseline', () => {
     const root = makeFixture();

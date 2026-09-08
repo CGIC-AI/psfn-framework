@@ -270,6 +270,13 @@ export class TurnSupportRuntime {
         // stands because it describes the prompt that produced the delivered
         // reply; a recovered turn legitimately re-assembles, so this is
         // reported rather than treated as corruption — but never silently.
+        // 8nq3h: the ref below is STILL returned, unlike the custody
+        // snapshot's. `generationContextRef` is the deterministic
+        // `turn:<turnId>` key, so it resolves — but to the FIRST stored
+        // manifest, i.e. a sibling fold of this same turn rather than the
+        // assembly this call described. That caveat is documented on
+        // `TurnRecord.contextManifestRef`; a reader needing fold-exact proof
+        // uses `custodySnapshotRef`, whose absence on divergence is the claim.
         log.warn('Context source manifest diverged from the stored record for this turn', {
           turnId: input.turnId,
           requestId: input.requestId,

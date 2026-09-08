@@ -391,12 +391,6 @@ export async function invokeAgentForTurn(input: {
    * reused, so the vision model is called exactly once per turn.
    */
   stagedPerception?: StagedTurnPerception | null;
-  /**
-   * The turn's single vision budget, anchored at perception staging when the
-   * turn carries images. Absent (undefined) means "derive it here", preserving
-   * the pre-lpxg3.1 anchor for callers that do not stage perception.
-   */
-  visionTurnDeadlineAt?: number | null;
   observability: Pick<
     TurnExecutionObservability,
     'emitObservedTurnStage' | 'emitPerformanceStage' | 'emitTurnSnapshotInBackground' | 'emitTurnSnapshot'
@@ -438,13 +432,15 @@ export async function invokeAgentForTurn(input: {
   let runtimeContradictionDiagnostic: RuntimeContradictionDiagnostic | undefined;
   const turnIntent: string | null = toolTurnOutcome.intent;
   const isVisionTurn = hasVisionTurnInputs(message);
-  // One budget per turn, one anchor. When perception was staged before
-  // retrieval the deadline is already running from that earlier anchor and must
-  // NOT be restarted here — retrieval and prompt assembly sit inside the same
-  // 120s window they always shared with the vision call.
-  const visionTurnDeadlineAt = input.visionTurnDeadlineAt !== undefined
-    ? input.visionTurnDeadlineAt
-    : resolveVisionTurnDeadlineAt({ hasVisionInputs: isVisionTurn, anchorMs: promptStageStart });
+  // Anchored at prompt-stage start, which is where it has always been anchored.
+  // Perception staging (lpxg3.1) runs BEFORE this on its own budget: sharing one
+  // window across vision review, retrieval, prompt assembly and the answer call
+  // let a slow-but-successful vision turn have its real answer discarded and
+  // replaced with a "vision unavailable" notice that misnamed the failure.
+  const visionTurnDeadlineAt = resolveVisionTurnDeadlineAt({
+    hasVisionInputs: isVisionTurn,
+    anchorMs: promptStageStart,
+  });
   let providerRequestAt: number | null = null;
   let providerWarmState: 'warm' | 'cold' = 'cold';
   const markProviderRequest = (): void => {

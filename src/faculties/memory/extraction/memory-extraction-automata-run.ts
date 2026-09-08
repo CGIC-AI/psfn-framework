@@ -4,7 +4,11 @@ import type {
 } from '../../automata/bus/worker-access.js';
 import type { AutomataRunRecord } from '../../automata/registry-contract.js';
 import type { AutomataRunRegistry } from '../../automata/run-registry.js';
-import type { AutomataWorkerLineage } from '../../automata/terminal-lifecycle.js';
+import {
+  readCommittedAutomataTerminalHandoff,
+  type AutomataTerminalLifecyclePort,
+  type AutomataWorkerLineage,
+} from '../../automata/terminal-lifecycle.js';
 import type { ExtractionTriggerReason } from './types.js';
 
 const MEMORY_EXTRACTION_WORKER_ID = 'memory-extraction';
@@ -53,6 +57,7 @@ function assertExactMemoryExtractionRun(
 async function beginMemoryExtractionAutomataRun(
   registry: AutomataRunRegistry,
   input: BeginMemoryExtractionAutomataRunInput,
+  terminal: AutomataTerminalLifecyclePort | null | undefined,
 ): Promise<AutomataWorkerRunBinding> {
   let run = registry.getRun(input.runId);
   if (!run) {
@@ -85,8 +90,21 @@ async function beginMemoryExtractionAutomataRun(
       reason: 'memory_extraction_started',
       ...(input.createdAtMs === undefined ? {} : { atMs: input.createdAtMs }),
     });
+    return binding(run, true);
   }
-  return binding(run, true);
+  // Already running when this process opened it — either the background-work
+  // supervisor started it or a previous attempt crashed. A committed Bus
+  // terminal means the extraction already ran to a durable terminal and died
+  // before terminalizing the registry (psfn-framework-8n40k): re-running it
+  // would repeat a real, chargeable extraction model call. Skip the work and
+  // converge the registry on the durable terminal instead.
+  const committed = await readCommittedAutomataTerminalHandoff(
+    terminal,
+    lineageFromRun(run),
+    run.workerGeneration,
+  );
+  if (!committed) return binding(run, true);
+  return { ...binding(run, false), replayTerminal: committed };
 }
 
 /**
@@ -98,9 +116,10 @@ async function beginMemoryExtractionAutomataRun(
 export function createMemoryExtractionAutomataRunPort(
   registry: AutomataRunRegistry,
   input: BeginMemoryExtractionAutomataRunInput,
+  terminal?: AutomataTerminalLifecyclePort | null,
 ): AutomataWorkerRunPort {
   return {
-    begin: async () => await beginMemoryExtractionAutomataRun(registry, input),
+    begin: async () => await beginMemoryExtractionAutomataRun(registry, input, terminal),
     terminalize: async request => {
       if (request.lifecycleState === 'completed') {
         await completeMemoryExtractionAutomataRun(registry, input.runId, request.atMs);

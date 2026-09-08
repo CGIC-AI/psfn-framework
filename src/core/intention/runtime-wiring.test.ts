@@ -377,6 +377,34 @@ describe('intention runtime port hooks', () => {
     })).rejects.toThrow('Concern decision must include title or summary');
   });
 
+  it('announces an appraisal-created concern so lifecycle consumers can pick it up', async () => {
+    const emit = vi.fn(async () => undefined);
+    const hooks = createIntentionAppraisalHooks(makeConcernStore(), undefined, {
+      eventBus: { emit } as unknown as Parameters<typeof createIntentionAppraisalHooks>[2]['eventBus'],
+    });
+
+    await hooks.onIntentionConcernDecision({
+      decision: {
+        type: 'concern',
+        priority: 'high',
+        reason: 'User asked for a follow-up reminder.',
+        timing: 'soon',
+        concern: { title: 'Follow up on medication' },
+      },
+      channelId: 'api:test',
+      canonicalContactKey: 'contact-a',
+      sourceMessageId: 'msg-1',
+    });
+
+    // Ids and classification only: the concern's own text never crosses.
+    expect(emit).toHaveBeenCalledWith('intention.concern.created', expect.objectContaining({
+      concernId: 'created-concern',
+      source: 'appraisal',
+      contactId: 'contact-a',
+    }));
+    expect(JSON.stringify(emit.mock.calls[0])).not.toContain('medication');
+  });
+
   it('maps follow-up decisions and activation through the active port', async () => {
     const pendingFollowUpStore = makePendingFollowUpStore();
     const hooks = createIntentionAppraisalHooks(makeConcernStore(), pendingFollowUpStore);

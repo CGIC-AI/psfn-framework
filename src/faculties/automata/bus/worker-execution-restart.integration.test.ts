@@ -153,7 +153,11 @@ function runPortInput(createdAtMs: number) {
 async function openRun(process: Process, createdAtMs: number) {
   return await openAutomataBusWorkerRun({
     access: process.access,
-    run: createMemoryExtractionAutomataRunPort(process.registry, runPortInput(createdAtMs)),
+    run: createMemoryExtractionAutomataRunPort(
+      process.registry,
+      runPortInput(createdAtMs),
+      process.terminal,
+    ),
     terminal: process.terminal,
     briefingQuery: 'memory extraction response_turn',
   });
@@ -307,6 +311,18 @@ describe('governed Automata lifecycle restart certification', () => {
         outputRefs: [],
         occurredAtMs: Date.now(),
       })).rejects.toThrow(/is not registered/u);
+      // The crash-window guard's READ path is scoped the same way: an intruder
+      // cannot learn whether another companion's run is already terminal.
+      await expect(intruder.terminal.readTerminalHandoff({
+        idempotencyKey: 'cross-companion-key',
+        lineage: {
+          automatonClass: 'memory.extraction',
+          runId: RUN_ID,
+          taskId: TASK_ID,
+          workerId: 'memory-extraction',
+          sessionIds: [SESSION_ID],
+        },
+      })).rejects.toThrow(/is not registered/u);
       expect(await terminalEvents(intruder)).toHaveLength(0);
       expect(await terminalEvents(owner)).toHaveLength(1);
       await intruder.close();
@@ -404,7 +420,7 @@ describe('governed Automata lifecycle restart certification', () => {
     INTEGRATION_TIMEOUT_MS,
   );
 
-  it('converges the run registry on the durable terminal after a crash between handoff and terminalize', async () => {
+  it('does not re-run work after a crash between the handoff commit and terminalization', async () => {
     await withDatabase(async databaseUrl => {
       const spec: AutomataClassRunSpec = {
         automatonClass: 'shard.long_horizon',
@@ -415,11 +431,12 @@ describe('governed Automata lifecycle restart certification', () => {
         taskSummary: 'Execute one long-horizon shard workload to a terminal outcome.',
         sessionIds: ['shard:shard-public-example-crash-window'],
       };
+      let executions = 0;
 
-      // Crash INSIDE settle: the Bus handoff commits, then terminalization
-      // dies. This is the window psfn-framework-8n40k describes.
+      // Crash INSIDE settle: the work ran, the Bus handoff committed, then
+      // terminalization died. This is the window psfn-framework-8n40k describes.
       const crashed = await startProcess(databaseUrl, COMPANION_A);
-      const crashingRunPort = createAutomataClassRunPort(crashed.registry, spec);
+      const crashingRunPort = createAutomataClassRunPort(crashed.registry, spec, crashed.terminal);
       const opened = await openAutomataBusWorkerRun({
         access: crashed.access,
         run: {
@@ -429,12 +446,15 @@ describe('governed Automata lifecycle restart certification', () => {
         terminal: crashed.terminal,
         briefingQuery: spec.taskLabel,
       });
+      executions += 1;
+      // The durable terminal this attempt commits is a FAILURE, so a replay
+      // that recomputed its own outcome would visibly disagree with it.
       await expect(opened.settle({
-        lifecycleState: 'completed',
-        outcome: 'completed',
-        stateReason: 'run_completed',
-        resultKind: 'final',
-        summary: 'shard.long_horizon process result',
+        lifecycleState: 'failed',
+        outcome: 'blocked',
+        stateReason: 'run_failed',
+        failureReason: 'the first attempt failed',
+        resultKind: 'none',
       })).rejects.toThrow(/crashed before terminalize committed/u);
       const committed = await terminalEvents(crashed);
       expect(committed).toHaveLength(1);
@@ -443,35 +463,86 @@ describe('governed Automata lifecycle restart certification', () => {
       expect(crashed.registry.getRun(spec.runId)).toMatchObject({ status: 'running' });
       await crashed.close();
 
-      // Restart: the work re-runs and this time reports a DIFFERENT outcome.
+      // Restart: the governed class re-enters the same run. Its work must NOT
+      // run a second time — that is where a chargeable model call would be
+      // duplicated — and the registry converges on the durable Bus terminal.
       const restarted = await startProcess(databaseUrl, COMPANION_A);
-      const resumedRunPort = createAutomataClassRunPort(restarted.registry, spec);
-      const resumed = await openAutomataBusWorkerRun({
-        access: restarted.access,
-        run: resumedRunPort,
-        terminal: restarted.terminal,
+      const resumed = await runGovernedAutomataClass({
+        runtime: governedRuntime(restarted),
+        spec,
         briefingQuery: spec.taskLabel,
-      });
-      expect(resumed.binding.execute).toBe(true);
-      const settlement = await resumed.settle({
-        lifecycleState: 'failed',
-        outcome: 'blocked',
-        stateReason: 'run_failed',
-        failureReason: 'the post-crash re-run failed',
-        resultKind: 'none',
+        work: async () => {
+          executions += 1;
+          return { value: 'done', summary: 'work that must never run twice' };
+        },
       });
 
-      // One terminal event, re-read rather than recomputed: no degraded handoff.
-      expect(settlement.handoff).toMatchObject({ status: 'recorded', replay: true });
-      expect(settlement.terminalized).toBe(true);
+      expect(resumed).toEqual({ status: 'replayed' });
+      expect(executions).toBe(1);
+      // One terminal event: the replay neither re-recorded nor recomputed one.
       expect(await terminalEvents(restarted)).toHaveLength(1);
-      // The registry converges on the durable Bus finding, at its recorded time.
       expect(restarted.registry.getRun(spec.runId)).toMatchObject({
-        status: 'completed',
-        outcome: 'completed',
+        status: 'failed',
+        outcome: 'blocked',
+        failureReason: 'the first attempt failed',
         finishedAtMs: durableOccurredAt,
       });
-      expect(restarted.registry.getRun(spec.runId)?.failureReason).toBeUndefined();
+      await restarted.close();
+    });
+  }, INTEGRATION_TIMEOUT_MS);
+
+  it('does not re-run a chargeable memory extraction whose Bus terminal already committed', async () => {
+    await withDatabase(async databaseUrl => {
+      const createdAtMs = Date.now();
+
+      // Crash INSIDE settle on the memory-extraction adapter: the extraction
+      // model pass already ran and its terminal committed.
+      const crashed = await startProcess(databaseUrl, COMPANION_A);
+      const crashingRunPort = createMemoryExtractionAutomataRunPort(
+        crashed.registry,
+        runPortInput(createdAtMs),
+        crashed.terminal,
+      );
+      const opened = await openAutomataBusWorkerRun({
+        access: crashed.access,
+        run: {
+          begin: () => crashingRunPort.begin(),
+          terminalize: async () => { throw new Error('crashed before terminalize committed'); },
+        },
+        terminal: crashed.terminal,
+        briefingQuery: 'memory extraction response_turn',
+      });
+      expect(opened.binding.execute).toBe(true);
+      await expect(opened.settle({
+        lifecycleState: 'completed',
+        outcome: 'completed',
+        stateReason: 'memory_extraction_completed',
+        resultKind: 'final',
+        summary: 'Memory extraction process result: parsed=1; accepted=1; written=1.',
+      })).rejects.toThrow(/crashed before terminalize committed/u);
+      expect(await terminalEvents(crashed)).toHaveLength(1);
+      expect(crashed.registry.getRun(RUN_ID)).toMatchObject({ status: 'running' });
+      await crashed.close();
+
+      // Restart: the orchestrator's own short-circuit (`binding.execute` false)
+      // is what keeps `executeExtractionLlmPass` from running a second time.
+      const restarted = await startProcess(databaseUrl, COMPANION_A);
+      const resumed = await openRun(restarted, createdAtMs);
+      expect(resumed.binding.execute).toBe(false);
+      const settlement = await resumed.settle({
+        lifecycleState: 'completed',
+        outcome: 'completed',
+        stateReason: 'memory_extraction_completed',
+        resultKind: 'none',
+      });
+      expect(settlement.terminalized).toBe(true);
+      expect(settlement.handoff).toMatchObject({ status: 'recorded', replay: true });
+      expect(await terminalEvents(restarted)).toHaveLength(1);
+      expect(restarted.registry.getRun(RUN_ID)).toMatchObject({
+        automatonClass: 'memory.extraction',
+        status: 'completed',
+        outcome: 'completed',
+      });
       await restarted.close();
     });
   }, INTEGRATION_TIMEOUT_MS);

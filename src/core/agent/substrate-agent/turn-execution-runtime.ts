@@ -990,15 +990,20 @@ export async function handleMessageForTurn(
     // needed to understand it in the SAME response. Image turns only — a text
     // turn never enters this path and its user content is still built inside
     // `invokeAgentForTurn`. The staged build is handed straight to the
-    // invocation, so the vision model is called exactly once per turn, and the
-    // one 120s vision budget is anchored here instead of at prompt start.
+    // invocation, so the vision model is called exactly once per turn. The
+    // vision budget staged here covers the vision review ONLY: retrieval,
+    // prompt assembly and the answer call keep their own pre-existing anchor at
+    // prompt-stage start, so a slow-but-successful turn is never aborted and
+    // misreported as vision unavailable.
     // An ICP-recovered turn replays a response that already exists: it skips
     // `invokeAgentForTurn` entirely, so staging perception for it would pay for
     // intake screening and a vision model call whose result is discarded. Before
     // this bead the build lived inside the skipped invocation and cost nothing.
     const stagesPerception = recoveredResponse === undefined
       && turnRequiresPerceptionStaging(message);
-    const visionTurnDeadlineAt = resolveVisionTurnDeadlineAt({
+    // Scoped to the vision review itself. `invokeAgentForTurn` anchors its own
+    // budget at prompt-stage start for the answer call.
+    const visionStagingDeadlineAt = resolveVisionTurnDeadlineAt({
       hasVisionInputs: stagesPerception,
       anchorMs: Date.now(),
     });
@@ -1009,7 +1014,7 @@ export async function handleMessageForTurn(
         runtime,
         message,
         turnId,
-        visionTurnDeadlineAt,
+        visionTurnDeadlineAt: visionStagingDeadlineAt,
         turnCorrelationBase,
       });
       observability.emitPerformanceStage('perception_staging', {
@@ -1175,7 +1180,6 @@ export async function handleMessageForTurn(
           speakerRole,
           mutableState: invocationState,
           stagedPerception,
-          visionTurnDeadlineAt,
           observability,
         });
       } finally {

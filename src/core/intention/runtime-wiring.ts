@@ -1,4 +1,5 @@
 import type { ChannelType } from '../../shared/contracts/runtime.js';
+import type { EventBus } from '../../shared/event-bus.js';
 import type { ToolRegistrar } from '../agent/tool-registrar.js';
 import type {
   IntentionPostTurnHook,
@@ -204,6 +205,12 @@ export interface IntentionAppraisalHookOptions {
   nearTermFollowUpHorizonMs?: number;
   /** Durable long-range scheduler. Required whenever a decision crosses the configured horizon. */
   routeLongHorizonFollowUp?: (input: LongHorizonFollowUpInput) => Promise<string>;
+  /**
+   * Announces concerns this hook creates on `intention.concern.created`, so
+   * lifecycle consumers (the concern-derived weighted-thought producer) see the
+   * appraisal path as well as the candidate-review path.
+   */
+  eventBus?: Pick<EventBus, 'emit'>;
 }
 
 export function createIntentionAppraisalHooks(
@@ -253,6 +260,7 @@ export function createIntentionAppraisalHooks(
         ...(expiresAt ? { expiresAt } : {}),
         ...(formationVAD ? { formationVAD } : {}),
         ...(originIcpRootInitiationId ? { originIcpRootInitiationId } : {}),
+        ...(options.eventBus ? { eventBus: options.eventBus } : {}),
         sourceMessageId,
       });
     },

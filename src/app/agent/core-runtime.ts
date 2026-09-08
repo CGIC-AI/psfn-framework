@@ -1217,6 +1217,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
       ),
       nearTermFollowUpHorizonMs: options.intentionFollowUpHorizonMs,
       routeLongHorizonFollowUp: options.routeLongHorizonFollowUp,
+      eventBus,
     },
   );
   const intentionBehavioralHooks = createIntentionBehavioralPatternHooks(

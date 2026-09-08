@@ -26,7 +26,11 @@ import {
   subscribeIncidentAlerts,
   type OperatorIncidentAlertSink,
 } from '../../boundary/gateway/incident-alert-delivery.js';
-import { emitHealthEvent, processObserverId } from '../../shared/contracts/health-event.js';
+import {
+  emitHealthEvent,
+  processObserverId,
+  stableHealthConditionCorrelationId,
+} from '../../shared/contracts/health-event.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import {
   PostgresPoolOwner,
@@ -374,7 +378,34 @@ async function main(): Promise<void> {
   // must land a durable row even though nothing can page yet.
   const humanEscalationStore = await awaitPostgresStoreReadiness(
     'human_escalations',
-    () => createGatewayHumanEscalationStore(config),
+    () => createGatewayHumanEscalationStore(config, {
+      bounds: startupHydration.schedulerConfig.humanEscalation.retention,
+      // The open half of the ledger has no eviction: an unanswered escalation
+      // is a question a person still owes an answer to. Reaching the owner-file
+      // cap is therefore news, and it enters the same content-free health plane
+      // every other gateway signal does — counts and the cap, no kind detail.
+      onSaturated: (saturation) => {
+        void emitHealthEvent(eventBus, {
+          owner: { kind: 'system' },
+          severity: 'warning',
+          code: 'human_escalation_ledger_saturated',
+          provenance: {
+            process: 'gateway',
+            component: 'persistence',
+            observerId: processObserverId(),
+          },
+          observedAtMs: Date.now(),
+          evidence: {
+            openRowCount: saturation.openRows,
+            openRowCap: saturation.maxOpenRowsPerKind,
+          },
+        }).catch((error: unknown) => {
+          log.error('Human escalation ledger saturation health event failed', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+      },
+    }),
   );
   const humanEscalationControlPlane = createHumanEscalationControlPlane({
     ledger: humanEscalationStore,
@@ -653,6 +684,16 @@ async function main(): Promise<void> {
       owner: { kind: 'system' },
       severity: 'critical',
       code: 'operator_alert_sinks_unconfigured',
+      // Derived from the CONDITION, not minted per boot (psfn-framework-yu03d).
+      // The incident id an alert carries becomes the escalation's dedupe key,
+      // so a fresh id here would turn a sinkless crash loop into one incident,
+      // one alert, and one permanently unresolved escalation row per cycle.
+      // A runtime with no configured operator sink is the same fault every
+      // time, and this makes the ledger say so.
+      correlationId: stableHealthConditionCorrelationId(
+        'operator_alert_sinks_unconfigured',
+        { kind: 'system' },
+      ),
       provenance: {
         process: 'gateway',
         component: 'operator_alerting',

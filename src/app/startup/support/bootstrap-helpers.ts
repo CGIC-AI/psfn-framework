@@ -329,6 +329,7 @@ export function hydrateCanonicalStartupConfig(
     humanEscalation: {
       routes: { ...persistedScheduler.humanEscalation.routes },
       listLimit: persistedScheduler.humanEscalation.listLimit,
+      retention: { ...persistedScheduler.humanEscalation.retention },
     },
     backgroundWork: {
       supervisor: { ...persistedScheduler.backgroundWork.supervisor },

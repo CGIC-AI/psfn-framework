@@ -135,6 +135,14 @@ const HEALTH_EVENT_CODES = [
   'stuck_runtime_job_opened',
   /** That run or task finished, was cancelled, or left the retained view. */
   'stuck_runtime_job_closed',
+  /**
+   * The durable human escalation ledger holds at least as many OPEN rows for
+   * one kind as its owner-file cap allows (psfn-framework-yu03d). Open rows are
+   * structurally un-evictable — a condition a human has not answered is never
+   * deleted to make room — so the only honest response to the cap is to say so.
+   * Evidence carries counts and the cap, never a kind name or a dedupe key.
+   */
+  'human_escalation_ledger_saturated',
 ] as const;
 
 export type HealthEventCode = typeof HEALTH_EVENT_CODES[number];
@@ -245,6 +253,8 @@ const HEALTH_EVENT_EVIDENCE_KEYS = [
   'elapsedMs',
   'failureCount',
   'jobAgeMs',
+  'openRowCap',
+  'openRowCount',
   'poolCapacity',
   'queueDepth',
   'sampleCount',
@@ -604,6 +614,44 @@ export function validateHealthEvent(value: unknown): HealthEvent {
     recordedAtMs: normalizeTimestampMs(value.recordedAtMs, 'recordedAtMs'),
     evidence: normalizeEvidence(value.evidence),
   });
+}
+
+/**
+ * A correlation id that names a standing CONDITION rather than one observation
+ * of it (bead psfn-framework-yu03d).
+ *
+ * `createHealthEvent` mints a fresh `correlationId` when one is omitted, which
+ * is right for an episode a detector opens and later closes: each episode is a
+ * new incident. It is wrong for a condition that is simply true or false at
+ * boot — a runtime with no configured operator alert sink is the same fault on
+ * every restart, and a fresh id per boot turns a crash loop into one incident,
+ * one alert, and one unresolved escalation row PER CYCLE.
+ *
+ * The id is derived from the condition's own closed-vocabulary identity, so it
+ * is stable across processes and restarts and carries nothing else: a SHA-256
+ * over the code and owner, laid out as a name-based (version 5) UUID. Two
+ * runtimes observing the same condition for the same owner therefore agree on
+ * the id without coordinating, and no caller can smuggle content into it —
+ * every input is already a vocabulary member or a companion id.
+ */
+export function stableHealthConditionCorrelationId(
+  code: HealthEventCode,
+  owner: HealthEventOwner,
+): string {
+  const normalized = normalizeOwner(owner);
+  const digest = createHash('sha256')
+    .update(JSON.stringify([
+      'psfn.health.condition',
+      code,
+      normalized.kind,
+      normalized.kind === 'companion' ? normalized.companionId : null,
+    ]), 'utf8')
+    .digest('hex');
+  // Version 5 (name-based) and the RFC-4122 variant, so the result satisfies
+  // the same identifier contract every other correlation id here does.
+  const version = `5${digest.slice(13, 16)}`;
+  const variant = `${(((parseInt(digest.slice(16, 17), 16) & 0x3) | 0x8)).toString(16)}${digest.slice(17, 20)}`;
+  return `${digest.slice(0, 8)}-${digest.slice(8, 12)}-${version}-${variant}-${digest.slice(20, 32)}`;
 }
 
 /**

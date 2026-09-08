@@ -14,11 +14,22 @@
 // Every read goes back through `validateHumanEscalationRecord`: a row written
 // by a newer schema version, hand-edited, or corrupted fails loudly here rather
 // than reaching an operator surface as a half-typed object.
+//
+// It is also BOUNDED (bead psfn-framework-yu03d), and the shape of that bound
+// is the interesting part. The health-event stream beside it is a plain ring:
+// every write deletes past the cap, because an observation nobody read is safe
+// to lose. A row here is a question this runtime asked a person, so a plain
+// ring would silently retract an unanswered question. Every eviction statement
+// below therefore carries `state <> 'open'` in its own WHERE clause — an open
+// escalation is not merely ranked last, it is structurally not a candidate —
+// and the open half is reported onto the health stream rather than trimmed,
+// because the only thing that shrinks it is a human answering.
 
 import type { Pool, QueryResultRow } from 'pg';
 import {
   createPostgresPool,
   ensurePostgresSchema,
+  executeQuery,
   queryOne,
   queryRows,
 } from '../postgres.js';
@@ -28,13 +39,16 @@ import {
   HUMAN_ESCALATION_LIMITS,
   HUMAN_ESCALATION_SCHEMA_VERSION,
   HUMAN_ESCALATION_STATES,
+  requireHumanEscalationLedgerBounds,
   validateHumanEscalationRecord,
   type HumanEscalationAttempt,
   type HumanEscalationAttemptClaim,
   type HumanEscalationDeliveryOutcome,
   type HumanEscalationFacts,
   type HumanEscalationKind,
+  type HumanEscalationLedgerBounds,
   type HumanEscalationLedgerPort,
+  type HumanEscalationLedgerSaturation,
   type HumanEscalationListQuery,
   type HumanEscalationRecord,
   type HumanEscalationResolution,
@@ -73,6 +87,10 @@ interface AttemptRow extends QueryResultRow {
 
 interface StateCountRow extends QueryResultRow {
   state: string;
+  total: string | number;
+}
+
+interface OpenCountRow extends QueryResultRow {
   total: string | number;
 }
 
@@ -137,27 +155,74 @@ function normalizeListLimit(limit: number): number {
   return limit;
 }
 
+/**
+ * How the ledger reports that it is holding as many unanswered questions of one
+ * kind as the owner file admits. Deliberately a callback rather than a health
+ * emitter dependency: the store owns storage, and the entrypoint that already
+ * knows this process's health-event source owns what a health event looks like.
+ */
+export type HumanEscalationLedgerSaturationReporter = (
+  saturation: HumanEscalationLedgerSaturation,
+) => void;
+
+export interface PostgresHumanEscalationStoreOptions {
+  schema?: string;
+  role?: string;
+  /** Owner-file ledger bounds; required, with no built-in fallback. */
+  bounds: HumanEscalationLedgerBounds;
+  onSaturated?: HumanEscalationLedgerSaturationReporter;
+  now?: () => number;
+}
+
 export class PostgresHumanEscalationStore implements HumanEscalationLedgerPort {
-  private constructor(private readonly pool: Pool, private readonly ownsPool: boolean) {}
+  private constructor(
+    private readonly pool: Pool,
+    private readonly bounds: HumanEscalationLedgerBounds,
+    private readonly onSaturated: HumanEscalationLedgerSaturationReporter | null,
+    private readonly now: () => number,
+    private readonly ownsPool: boolean,
+  ) {}
 
   static async connect(
     databaseUrl: string,
-    options: { schema?: string; role?: string } = {},
+    options: PostgresHumanEscalationStoreOptions,
   ): Promise<PostgresHumanEscalationStore> {
+    const bounds = requireHumanEscalationLedgerBounds(options.bounds);
     const pool = createPostgresPool(databaseUrl, {
       applicationName: 'psfn-human-escalations',
       allowExitOnIdle: true,
       schema: options.schema,
       role: options.role,
     });
-    await ensurePostgresSchema(pool, POSTGRES_HUMAN_ESCALATION_MIGRATIONS);
-    return new PostgresHumanEscalationStore(pool, true);
+    try {
+      await ensurePostgresSchema(pool, POSTGRES_HUMAN_ESCALATION_MIGRATIONS);
+    } catch (error) {
+      await pool.end().catch(() => undefined);
+      throw error;
+    }
+    return new PostgresHumanEscalationStore(
+      pool,
+      bounds,
+      options.onSaturated ?? null,
+      options.now ?? (() => Date.now()),
+      true,
+    );
   }
 
   /** Test/embedding entry point: the caller owns the pool lifecycle. */
-  static async fromPool(pool: Pool): Promise<PostgresHumanEscalationStore> {
+  static async fromPool(
+    pool: Pool,
+    options: Omit<PostgresHumanEscalationStoreOptions, 'schema' | 'role'>,
+  ): Promise<PostgresHumanEscalationStore> {
+    const bounds = requireHumanEscalationLedgerBounds(options.bounds);
     await ensurePostgresSchema(pool, POSTGRES_HUMAN_ESCALATION_MIGRATIONS);
-    return new PostgresHumanEscalationStore(pool, false);
+    return new PostgresHumanEscalationStore(
+      pool,
+      bounds,
+      options.onSaturated ?? null,
+      options.now ?? (() => Date.now()),
+      false,
+    );
   }
 
   /**
@@ -206,7 +271,9 @@ export class PostgresHumanEscalationStore implements HumanEscalationLedgerPort {
     if (!row) {
       throw new Error('Human escalation ledger returned no row for an upserted escalation');
     }
-    return mapEscalationRow(row);
+    const record = mapEscalationRow(row);
+    await this.enforceBounds(record.kind);
+    return record;
   }
 
   async findByCondition(
@@ -258,7 +325,10 @@ export class PostgresHumanEscalationStore implements HumanEscalationLedgerPort {
       attempt.outcome,
       attempt.attemptedAtMs,
     ]);
-    if (claimed) return { claimed: true };
+    if (claimed) {
+      await this.pruneAttempts(attempt.escalationId, attempt.idempotencyKey);
+      return { claimed: true };
+    }
     const existing = await this.findAttempt(attempt.idempotencyKey);
     if (!existing) {
       throw new Error(
@@ -365,11 +435,93 @@ export class PostgresHumanEscalationStore implements HumanEscalationLedgerPort {
       input.resolution.actor,
       input.resolution.resolvedAtMs,
     ]);
-    return row ? mapEscalationRow(row) : null;
+    if (!row) return null;
+    const record = mapEscalationRow(row);
+    // An answered escalation is the only thing that ever ENTERS the evictable
+    // half, so this is the second and last place the bounds can be crossed.
+    await this.enforceBounds(record.kind);
+    return record;
   }
 
   async close(): Promise<void> {
     if (this.ownsPool) await this.pool.end();
+  }
+
+  /**
+   * The bound, applied after every write that can grow the ledger.
+   *
+   * Three statements, and the ordering matters only for cost: expiry first so
+   * the per-kind ring has less to rank. Every one of them names
+   * `state <> 'open'` (or an attempt row, which belongs to an escalation rather
+   * than to a person) in its own WHERE clause. That is the invariant this whole
+   * method exists for: an unanswered escalation is not ranked last and spared,
+   * it is never selected at all, so no reordering, clock skew, or cap value can
+   * make it a deletion candidate. Attempts cascade with their escalation.
+   */
+  private async enforceBounds(kind: HumanEscalationKind): Promise<void> {
+    const cutoffMs = this.now() - this.bounds.resolvedRetentionMs;
+    if (cutoffMs > 0) {
+      await executeQuery(this.pool, `
+        DELETE FROM human_escalations
+        WHERE state <> 'open' AND resolved_at_ms IS NOT NULL AND resolved_at_ms < $1
+      `, [cutoffMs]);
+    }
+    await executeQuery(this.pool, `
+      DELETE FROM human_escalations
+      WHERE escalation_id IN (
+        SELECT escalation_id
+        FROM human_escalations
+        WHERE kind = $1 AND state <> 'open'
+        ORDER BY last_raised_at_ms DESC, escalation_id DESC
+        OFFSET $2
+      )
+    `, [kind, this.bounds.maxResolvedRowsPerKind]);
+    await this.reportSaturation(kind);
+  }
+
+  /**
+   * The attempt ring, taken where attempts are created rather than on the next
+   * raise, so the bound holds exactly rather than one row late.
+   *
+   * The key just claimed is excluded from the candidates by name, not by its
+   * rank: the caller settles that row once the sink answers, and an eviction
+   * racing that settle would turn a delivered notice into "not in the ledger".
+   * A claim whose escalation is already at the cap therefore evicts the OLDEST
+   * attempt instead of itself, whatever a caller-supplied timestamp claims.
+   */
+  private async pruneAttempts(escalationId: string, claimedKey: string): Promise<void> {
+    await executeQuery(this.pool, `
+      DELETE FROM human_escalation_attempts
+      WHERE idempotency_key IN (
+        SELECT idempotency_key
+        FROM human_escalation_attempts
+        WHERE escalation_id = $1 AND idempotency_key <> $3
+        ORDER BY attempted_at_ms DESC, idempotency_key DESC
+        OFFSET $2
+      )
+    `, [escalationId, Math.max(0, this.bounds.maxAttemptsPerEscalation - 1), claimedKey]);
+  }
+
+  /**
+   * The open half has no eviction, so the only honest thing to do at the cap is
+   * to say so. Content-free by construction: the report carries this kind, the
+   * count, and the cap — the same three numbers an operator needs to decide
+   * whether to answer some escalations or raise the bound.
+   */
+  private async reportSaturation(kind: HumanEscalationKind): Promise<void> {
+    if (!this.onSaturated) return;
+    const row = await queryOne<OpenCountRow>(
+      this.pool,
+      `SELECT COUNT(*)::bigint AS total FROM human_escalations WHERE kind = $1 AND state = 'open'`,
+      [kind],
+    );
+    const openRows = row ? safeInteger(row.total, 'total') : 0;
+    if (openRows < this.bounds.maxOpenRowsPerKind) return;
+    this.onSaturated({
+      kind,
+      openRows,
+      maxOpenRowsPerKind: this.bounds.maxOpenRowsPerKind,
+    });
   }
 }
 
@@ -383,12 +535,19 @@ export class PostgresHumanEscalationStore implements HumanEscalationLedgerPort {
  * factory pins the tenant scope like its sibling stores — which is also why the
  * Garden attention surface reads the agent's ledger and says so.
  */
-export function createGatewayHumanEscalationStore(config: {
-  postgresDatabaseUrl?: string;
-}): Promise<PostgresHumanEscalationStore> {
+export function createGatewayHumanEscalationStore(
+  config: { postgresDatabaseUrl?: string },
+  options: {
+    bounds: HumanEscalationLedgerBounds;
+    onSaturated?: HumanEscalationLedgerSaturationReporter;
+  },
+): Promise<PostgresHumanEscalationStore> {
   const databaseUrl = config.postgresDatabaseUrl?.trim();
   if (!databaseUrl) {
     throw new Error('Human escalation ledger requires config.postgresDatabaseUrl');
   }
-  return PostgresHumanEscalationStore.connect(databaseUrl);
+  return PostgresHumanEscalationStore.connect(databaseUrl, {
+    bounds: options.bounds,
+    ...(options.onSaturated ? { onSaturated: options.onSaturated } : {}),
+  });
 }

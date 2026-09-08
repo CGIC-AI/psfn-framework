@@ -187,9 +187,29 @@ function addMissingHumanEscalation(
   candidate: Record<string, unknown>,
   addedPaths: string[],
 ): void {
-  if (candidate.humanEscalation !== undefined) return;
-  candidate.humanEscalation = structuredClone(DEFAULT_HUMAN_ESCALATION_CONFIG);
-  addedPaths.push('humanEscalation');
+  const existing = candidate.humanEscalation;
+  if (existing === undefined) {
+    candidate.humanEscalation = structuredClone(DEFAULT_HUMAN_ESCALATION_CONFIG);
+    addedPaths.push('humanEscalation');
+    return;
+  }
+  // A non-object here is operator corruption, not a missing key. Leave it for
+  // validation to reject with the real reason rather than silently overwriting.
+  if (!isRecord(existing)) return;
+  // psfn-framework-yu03d added `retention` to a block operators already had.
+  // Seed only the sub-keys an existing file could not have known about, and
+  // leave everything the operator did set untouched.
+  const seeded: Record<string, unknown> = { ...existing };
+  let changed = false;
+  for (const [key, value] of Object.entries(DEFAULT_HUMAN_ESCALATION_CONFIG)) {
+    if (seeded[key] !== undefined) continue;
+    seeded[key] = structuredClone(value);
+    addedPaths.push(`humanEscalation.${key}`);
+    changed = true;
+  }
+  if (changed) {
+    candidate.humanEscalation = seeded;
+  }
 }
 
 /**

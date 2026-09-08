@@ -341,7 +341,7 @@ describe('ReflectionJournalStore concernArc telemetry (vw3w.2)', () => {
     })).toThrow('Reflection journal concernArc requires a non-empty concernId');
   });
 
-  it('queries structured arcs by concern and provenance without exposing prompt prose', () => {
+  it('queries structured arcs by concern and provenance without exposing prompt prose', async () => {
     store.append({
       ...baseArcInput(),
       concernArc: {
@@ -366,7 +366,7 @@ describe('ReflectionJournalStore concernArc telemetry (vw3w.2)', () => {
       },
     });
 
-    const byConcern = store.listConcernArcs({ concernId: 'concern-1', limit: 10 });
+    const byConcern = await store.listConcernArcs({ concernId: 'concern-1', limit: 10 });
     expect(byConcern).toHaveLength(1);
     expect(byConcern[0]).toMatchObject({
       arc: { concernId: 'concern-1', resolutionGenerationId: 'generation-1' },
@@ -375,10 +375,10 @@ describe('ReflectionJournalStore concernArc telemetry (vw3w.2)', () => {
     expect(byConcern[0]).not.toHaveProperty('prompt');
     expect(byConcern[0]).not.toHaveProperty('reflection');
 
-    expect(store.listConcernArcs({
+    await expect(store.listConcernArcs({
       provenanceRef: 'decision:decision-2',
       limit: 10,
-    })).toEqual([
+    })).resolves.toEqual([
       expect.objectContaining({ arc: expect.objectContaining({ concernId: 'concern-2' }) }),
     ]);
   });

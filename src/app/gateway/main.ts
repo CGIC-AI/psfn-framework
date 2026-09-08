@@ -7,8 +7,12 @@ import { ensureActiveTimezone } from '../../shared/time/active-timezone.js';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { loadConfig } from '../../system/config/load-config.js';
-import { createGatewayHealthEventStore } from '../../persistence/postgres/health-event-store.js';
 import {
+  createFleetSystemHealthEventStore,
+  createGatewayHealthEventStore,
+} from '../../persistence/postgres/health-event-store.js';
+import {
+  createFleetSystemHumanEscalationStore,
   createGatewayHumanEscalationStore,
 } from '../../persistence/postgres/human-escalation-store.js';
 import {
@@ -355,9 +359,53 @@ async function main(): Promise<void> {
   // subscribed here — before the first gateway emitter below — because
   // `EventBus.emit` returns silently with no subscriber, so a later
   // subscription would drop startup-time observations rather than fail.
+  // e5r0s: in a FLEET, the gateway's observations belong to the whole fleet.
+  // Each companion's Garden runs in its own agent process against its own tenant
+  // schema, so a gateway that persisted into its own credential's scope was
+  // writing incidents — pool pressure, a missing operator sink — that no
+  // operator surface could ever read. In fleet mode it therefore writes its
+  // system-owned rows into the shared schema every companion can read; outside
+  // a fleet nothing changes, because there both processes already resolve to
+  // one table and a second would be the same rows under a second name.
+  // The open half of the escalation ledger has no eviction: an unanswered
+  // escalation is a question a person still owes an answer to. Reaching the
+  // owner-file cap is therefore news, and it enters the same content-free
+  // health plane every other gateway signal does — counts and the cap, no kind
+  // detail — under one standing condition id rather than one incident per write.
+  const reportEscalationLedgerSaturation = (saturation: {
+    openRows: number;
+    maxOpenRowsPerKind: number;
+  }): void => {
+    void emitHealthEvent(eventBus, {
+      owner: { kind: 'system' },
+      severity: 'warning',
+      code: 'human_escalation_ledger_saturated',
+      correlationId: stableHealthConditionCorrelationId(
+        'human_escalation_ledger_saturated',
+        { kind: 'system' },
+      ),
+      provenance: {
+        process: 'gateway',
+        component: 'persistence',
+        observerId: processObserverId(),
+      },
+      observedAtMs: Date.now(),
+      evidence: {
+        openRowCount: saturation.openRows,
+        openRowCap: saturation.maxOpenRowsPerKind,
+      },
+    }).catch((error: unknown) => {
+      log.error('Human escalation ledger saturation health event failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+  };
+  const fleetSystemObservability = config.companionFleet !== undefined;
   const healthEventStore = await awaitPostgresStoreReadiness(
-    'runtime_health_stream',
-    () => createGatewayHealthEventStore(config),
+    fleetSystemObservability ? 'fleet_system_health_stream' : 'runtime_health_stream',
+    () => (fleetSystemObservability
+      ? createFleetSystemHealthEventStore(config)
+      : createGatewayHealthEventStore(config)),
   );
   const detachHealthEventStream = subscribeHealthEventStream({
     eventBus,
@@ -377,40 +425,16 @@ async function main(): Promise<void> {
   // `operator_alert_sinks_unconfigured` incident is raised during startup and
   // must land a durable row even though nothing can page yet.
   const humanEscalationStore = await awaitPostgresStoreReadiness(
-    'human_escalations',
-    () => createGatewayHumanEscalationStore(config, {
-      bounds: startupHydration.schedulerConfig.humanEscalation.retention,
-      // The open half of the ledger has no eviction: an unanswered escalation
-      // is a question a person still owes an answer to. Reaching the owner-file
-      // cap is therefore news, and it enters the same content-free health plane
-      // every other gateway signal does — counts and the cap, no kind detail.
-      onSaturated: (saturation) => {
-        void emitHealthEvent(eventBus, {
-          owner: { kind: 'system' },
-          severity: 'warning',
-          code: 'human_escalation_ledger_saturated',
-          // One standing condition, not one incident per write while at the cap.
-          correlationId: stableHealthConditionCorrelationId(
-            'human_escalation_ledger_saturated',
-            { kind: 'system' },
-          ),
-          provenance: {
-            process: 'gateway',
-            component: 'persistence',
-            observerId: processObserverId(),
-          },
-          observedAtMs: Date.now(),
-          evidence: {
-            openRowCount: saturation.openRows,
-            openRowCap: saturation.maxOpenRowsPerKind,
-          },
-        }).catch((error: unknown) => {
-          log.error('Human escalation ledger saturation health event failed', {
-            error: error instanceof Error ? error.message : String(error),
-          });
-        });
-      },
-    }),
+    fleetSystemObservability ? 'fleet_system_human_escalations' : 'human_escalations',
+    () => (fleetSystemObservability
+      ? createFleetSystemHumanEscalationStore(config, {
+        bounds: startupHydration.schedulerConfig.humanEscalation.retention,
+        onSaturated: reportEscalationLedgerSaturation,
+      })
+      : createGatewayHumanEscalationStore(config, {
+        bounds: startupHydration.schedulerConfig.humanEscalation.retention,
+        onSaturated: reportEscalationLedgerSaturation,
+      })),
   );
   const humanEscalationControlPlane = createHumanEscalationControlPlane({
     ledger: humanEscalationStore,

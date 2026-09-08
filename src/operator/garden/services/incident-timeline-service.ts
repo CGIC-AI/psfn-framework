@@ -12,16 +12,21 @@
 // READ function, exactly like the incident investigator, so an operator page
 // cannot mutate the health plane it is displaying.
 //
-// Scope and its honest limit. The gateway and the agent each persist into their
-// own pool scope: the agent's store is pinned to its companion tenant schema in
-// fleet mode, the gateway's runs on its own credential's default search_path.
-// This service reads the stream of the process it runs in — the agent's — so it
-// shows every incident that landed in that table. Where both processes resolve
-// to the same table (a single-companion deployment sharing one database and
-// search_path) that is the unified gateway+agent view; where they do not, it is
-// this process's stream, and the surface says which by reporting the scope it
-// read. Joining two separately-credentialed stores into one operator view needs
-// a cross-process read seam that does not exist yet.
+// Scope, stated rather than implied (bead psfn-framework-e5r0s). This service
+// runs in the agent process and reads that process's tenant-pinned stream. In a
+// single-companion deployment the gateway resolves to the same table, so that
+// one read already IS the unified view. In fleet mode it is not: the gateway
+// writes into its own scope, and its incidents — a Postgres pool storm, a
+// missing operator sink — were invisible here. So in fleet mode a SECOND,
+// read-only stream is opened over the shared schema the gateway now writes its
+// system-owned observations into, and the two are merged.
+//
+// Merging does not widen what a companion may see. Both streams pass the same
+// tenancy fence below, which admits system-owned rows and this companion's own
+// and nothing else; the shared stream holds only system-owned rows by
+// construction, so the fence is what makes that a guarantee rather than a
+// convention. The snapshot reports every scope it actually read, so an operator
+// looking at an empty list can tell a quiet runtime from a partial view.
 
 import {
   resolveHealthEventOwner,
@@ -44,9 +49,19 @@ export interface IncidentTimelineScope {
   owner: HealthEventOwner;
   /** The process whose persisted stream was read. */
   process: 'agent';
+  /**
+   * Every stream actually read, newest contract first. `companion` is this
+   * process's tenant-pinned store; `fleet_system` is the shared-schema stream
+   * the gateway writes its system-owned observations into, present only when a
+   * fleet deployment wired it.
+   */
+  streams: readonly IncidentTimelineStream[];
   /** Lookback applied, from the owner file. */
   windowMs: number;
 }
+
+/** One persisted stream this snapshot was assembled from. */
+type IncidentTimelineStream = 'companion' | 'fleet_system';
 
 export interface IncidentTimelineSnapshot {
   generatedAt: number;
@@ -66,6 +81,12 @@ export interface AdminIncidentTimelineServiceOptions {
    * cannot write to the stream it renders.
    */
   readStream: IncidentStreamRead;
+  /**
+   * The fleet's system-owned stream, read-only, present only in fleet mode
+   * (bead psfn-framework-e5r0s). Absent in a single-companion deployment, where
+   * `readStream` already resolves to the table the gateway writes.
+   */
+  fleetSystemReadStream?: IncidentStreamRead;
   config: () => HealthDetectorsConfig;
   /** This runtime's companion identity; absent for a shard with no core tenancy. */
   companionId?: string;
@@ -82,18 +103,29 @@ export class AdminIncidentTimelineDataService implements AdminIncidentTimelineSe
   async getSnapshot(): Promise<IncidentTimelineSnapshot> {
     const config = this.options.config();
     const nowMs = (this.options.now ?? (() => Date.now()))();
-    const rows = await this.options.readStream({
+    const query = {
       sinceMs: Math.max(0, nowMs - config.incidentWindowMs),
       limit: config.incidentScanLimit,
-    });
+    };
+    // Each stream is bounded by the SAME owner-file scan limit rather than the
+    // two sharing one: a fleet incident must not be able to push this
+    // companion's own incidents out of its window, and vice versa.
+    const [companionRows, fleetRows] = await Promise.all([
+      this.options.readStream(query),
+      this.options.fleetSystemReadStream?.(query) ?? Promise.resolve([]),
+    ]);
+    const streams: IncidentTimelineStream[] = this.options.fleetSystemReadStream
+      ? ['companion', 'fleet_system']
+      : ['companion'];
     return {
       generatedAt: nowMs,
       scope: {
         owner: this.owner,
         process: 'agent',
+        streams,
         windowMs: config.incidentWindowMs,
       },
-      incidents: summarizeIncidents(this.visibleRows(rows), {
+      incidents: summarizeIncidents(this.visibleRows([...companionRows, ...fleetRows]), {
         timelineLimit: config.incidentAlerts.bundleEventLimit,
       }),
     };

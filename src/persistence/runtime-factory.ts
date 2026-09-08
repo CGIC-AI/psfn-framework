@@ -198,6 +198,20 @@ export interface AgentPersistenceRuntime {
   /** Durable ledger behind the human escalation control plane (bznbn). */
   humanEscalationStore: PostgresHumanEscalationStore;
   /**
+   * The fleet's SYSTEM-owned health stream and escalation ledger, in the shared
+   * schema (bead psfn-framework-e5r0s). Present ONLY in fleet mode, where the
+   * gateway persists into a pool scope this process cannot otherwise read; in a
+   * single-companion deployment the two stores above already resolve to the
+   * table the gateway writes, so these are absent rather than duplicated.
+   *
+   * Read by the Garden incident timeline and attention surface. The escalation
+   * ledger is also WRITTEN by them, and only there: a companion must be able to
+   * answer a fault the gateway saw, or the one place a human resolves things is
+   * read-only for exactly the faults nobody else can see.
+   */
+  fleetSystemHealthEventStore?: PostgresHealthEventStore;
+  fleetSystemHumanEscalationStore?: PostgresHumanEscalationStore;
+  /**
    * Shared-schema cross-companion presence store (sprint 10, W5a). Present
    * ONLY when multi-companion mode is enabled; flag-off never touches the
    * shared schema.
@@ -376,6 +390,29 @@ export async function createAgentPersistenceRuntime(
     ? await awaitPostgresStoreReadiness(
         'companion_presence',
         () => PostgresCompanionPresenceStore.connect(databaseUrl),
+      )
+    : undefined;
+  // e5r0s: the fleet's system-owned observability, opened read/answer-only over
+  // the shared schema. Gated on fleet tenancy for a reason that is not
+  // cosmetic: outside a fleet the gateway and this process resolve to the same
+  // table, so a second store would be the same rows under a second name.
+  const fleetSystemHealthEventStore = fleetTenancy
+    ? await awaitPostgresStoreReadiness(
+        'fleet_system_health_stream',
+        () => PostgresHealthEventStore.connectShared(
+          databaseUrl,
+          requireHealthEventStreamMaxRows(options.config.healthEventStreamMaxRows),
+          tenantRole ? { role: tenantRole } : {},
+        ),
+      )
+    : undefined;
+  const fleetSystemHumanEscalationStore = fleetTenancy
+    ? await awaitPostgresStoreReadiness(
+        'fleet_system_human_escalations',
+        () => PostgresHumanEscalationStore.connectShared(databaseUrl, {
+          ...(tenantRole ? { role: tenantRole } : {}),
+          bounds: options.humanEscalationLedgerBounds,
+        }),
       )
     : undefined;
   const fleetMaintenanceCoordinator = options.config.multiCompanion === true
@@ -644,6 +681,8 @@ export async function createAgentPersistenceRuntime(
     emosimProactivityStateStore,
     socialImpulseOutreachStore,
     ...(companionPresenceStore ? { companionPresenceStore } : {}),
+    ...(fleetSystemHealthEventStore ? { fleetSystemHealthEventStore } : {}),
+    ...(fleetSystemHumanEscalationStore ? { fleetSystemHumanEscalationStore } : {}),
     ...(icpInitiationCandidateStore ? { icpInitiationCandidateStore } : {}),
     ...(socialPotStore ? { socialPotStore } : {}),
     ...(speakingArbiterStore ? { speakingArbiterStore } : {}),

@@ -45,6 +45,7 @@ export type SubsystemPersonaId =
   | 'sleep_refinement'
   | 'arc_formation'
   | 'concern_review'
+  | 'biography_companion_review'
   | 'wiki_curation';
 
 export interface SubsystemPersonaSeed {
@@ -109,6 +110,16 @@ export const SUBSYSTEM_PERSONA_SEEDS: readonly SubsystemPersonaSeed[] = Object.f
     instructionKey: instructionKey('sleep_refinement'),
     instruction: 'give a remembered moment a truer title and shape so it keeps its meaning',
     consumers: ['src/faculties/memory/episodic/sleep-consolidation.ts'],
+  },
+  {
+    id: 'biography_companion_review',
+    labelKey: labelKey('biography_companion_review'),
+    label: 'sense of my own story',
+    instructionKey: instructionKey('biography_companion_review'),
+    instruction:
+      'look at what has been proposed about me and the people I know, and say plainly what is true, '
+      + 'what is mistaken, and what I would rather not carry',
+    consumers: ['src/faculties/memory/biographical/companion-review-service.ts'],
   },
   {
     id: 'arc_formation',

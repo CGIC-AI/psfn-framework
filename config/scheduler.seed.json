@@ -44,6 +44,14 @@
       "ledgerCapacity": 256
     }
   },
+  "humanEscalation": {
+    "routes": {
+      "runtime_incident": { "sink": "operator_alert", "cooldownMs": 0 },
+      "operator_confirmation": { "sink": "garden_only", "cooldownMs": 0 },
+      "cogsec_quarantine": { "sink": "garden_only", "cooldownMs": 0 }
+    },
+    "listLimit": 100
+  },
   "backgroundWork": {
     "supervisor": {
       "maxConcurrentSessions": 4,

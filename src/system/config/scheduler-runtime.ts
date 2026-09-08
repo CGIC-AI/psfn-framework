@@ -47,6 +47,10 @@ export function resolveRuntimeSchedulerConfig(
       stuckJobs: { ...persisted.healthDetectors.stuckJobs },
       incidentAlerts: { ...persisted.healthDetectors.incidentAlerts },
     },
+    humanEscalation: {
+      routes: { ...persisted.humanEscalation.routes },
+      listLimit: persisted.humanEscalation.listLimit,
+    },
     artifactLifecycle: { ...persisted.artifactLifecycle },
     episodicProcessing: { ...persisted.episodicProcessing },
     nearTurnMemory: {

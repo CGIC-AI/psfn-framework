@@ -18,6 +18,7 @@ import {
   DEFAULT_BACKGROUND_WORK_TUNING,
   DEFAULT_BACKGROUND_MAINTENANCE_CONFIG,
   DEFAULT_HEALTH_DETECTORS_CONFIG,
+  DEFAULT_HUMAN_ESCALATION_CONFIG,
   SCHEDULER_FILE_NAME,
   validateSchedulerConfig,
 } from './scheduler-config.js';
@@ -175,6 +176,23 @@ function addMissingHealthDetectors(
 }
 
 /**
+ * psfn-framework-bznbn: an owner file written before the human escalation
+ * control plane existed has no `humanEscalation` block, and would otherwise
+ * fail closed on a key it could not have known about. Seed the canonical
+ * default — runtime incidents keep paging through the operator alert sink, the
+ * other kinds stay on the Garden surface — and leave anything the operator did
+ * set untouched.
+ */
+function addMissingHumanEscalation(
+  candidate: Record<string, unknown>,
+  addedPaths: string[],
+): void {
+  if (candidate.humanEscalation !== undefined) return;
+  candidate.humanEscalation = structuredClone(DEFAULT_HUMAN_ESCALATION_CONFIG);
+  addedPaths.push('humanEscalation');
+}
+
+/**
  * psfn-framework-jp36.5.6: an owner file written before the channel-neutral room
  * signal existed has a `socialAutonomy` block with no `roomSignal`. Seed the
  * canonical default (signal disabled, no contextual room roles admitted) so the
@@ -276,6 +294,7 @@ export function migrateLegacySchedulerOwner(
       addMissingIntentionFollowUp(candidate, addedPaths);
       addMissingRoomParticipationLease(candidate, addedPaths);
       addMissingHealthDetectors(candidate, addedPaths);
+      addMissingHumanEscalation(candidate, addedPaths);
       addMissingRoomSignal(candidate, addedPaths);
 
       const validated = validateSchedulerConfig(candidate, filePath);
@@ -336,6 +355,7 @@ export function migrateLegacySchedulerOwner(
       addMissingIntentionFollowUp(candidate, addedPaths);
       addMissingRoomParticipationLease(candidate, addedPaths);
       addMissingHealthDetectors(candidate, addedPaths);
+      addMissingHumanEscalation(candidate, addedPaths);
       addMissingRoomSignal(candidate, addedPaths);
       if (addedPaths.length === 0) {
         validateSchedulerConfig(raw, filePath);

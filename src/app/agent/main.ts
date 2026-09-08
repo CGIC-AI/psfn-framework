@@ -115,6 +115,12 @@ import {
   type OperatorIncidentAlertSink,
 } from '../../boundary/gateway/incident-alert-delivery.js';
 import {
+  createHumanEscalationControlPlane,
+} from '../../shared/escalation/control-plane.js';
+import {
+  createOperatorAlertEscalationSink,
+} from '../../boundary/gateway/human-escalation-operator-sink.js';
+import {
   subscribeRefreshFailureHealthEvents,
 } from '../../shared/observability/refresh-failure-emitter.js';
 import { resolveHealthEventOwner } from '../../shared/contracts/health-event.js';
@@ -395,6 +401,16 @@ async function main(): Promise<void> {
   const agentIncidentAlertSink: OperatorIncidentAlertSink = {
     dispatch: params => gateway.notifyOperator(params),
   };
+  // The governed seam between "this needs a human" and the operator's mailbox.
+  // The incident path raises onto it; the Garden attention surface below reads
+  // and resolves the same tenant-pinned ledger.
+  const humanEscalationControlPlane = createHumanEscalationControlPlane({
+    ledger: persistenceRuntime.humanEscalationStore,
+    routing: () => schedulerConfig.humanEscalation.routes,
+    sinks: [createOperatorAlertEscalationSink({
+      resolveDispatcher: () => agentIncidentAlertSink,
+    })],
+  });
   const detachIncidentAlerts = subscribeIncidentAlerts({
     eventBus,
     delivery: createIncidentAlertDelivery({
@@ -402,7 +418,7 @@ async function main(): Promise<void> {
         readStream: query => persistenceRuntime.healthEventStore.listRecent(query),
         config: () => schedulerConfig.healthDetectors,
       }),
-      resolveSink: () => agentIncidentAlertSink,
+      escalation: humanEscalationControlPlane,
       policy: () => schedulerConfig.healthDetectors.incidentAlerts,
     }),
   });
@@ -1720,6 +1736,9 @@ async function main(): Promise<void> {
     // incident timeline renders the same incidents the alert path paged on,
     // and cannot write to the plane it renders.
     healthEventStreamRead: query => persistenceRuntime.healthEventStore.listRecent(query),
+    // Open human escalations, read and resolved on the same durable ledger the
+    // incident alert path raises onto.
+    humanEscalationLedger: persistenceRuntime.humanEscalationStore,
     subsystemOutputRefStore: backgroundWorkStore,
     operatorAlerting,
     pendingContactApprovals,
@@ -1821,6 +1840,7 @@ async function main(): Promise<void> {
       detachIncidentAlerts();
       detachHealthEventStream();
       await persistenceRuntime.healthEventStore.close();
+      await persistenceRuntime.humanEscalationStore.close();
       await postgresPoolOwner.close();
     },
     scheduler,

@@ -250,13 +250,26 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
     ], assurance: 'escalated', confirmation: 'explicit', approvals: ['cogsec'],
   },
   {
+    // The human escalation attention surface (bznbn) is the governed
+    // generalisation of this queue's outer control plane, so it shares the
+    // queue's read authority rather than minting a parallel capability for the
+    // same operator act of looking at what is waiting on a person.
     action: 'confirmations.read', area: 'confirmations', routeIds: [
-      ...ids('GET', ['/api/admin/confirmations']), ...pageIds(['/confirmations']),
+      ...ids('GET', ['/api/admin/confirmations', '/api/admin/escalations']),
+      ...pageIds(['/confirmations', '/escalations']),
     ],
   },
   {
     action: 'confirmations.manage', area: 'confirmations',
     routeIds: ids('POST', ['/api/admin/confirmations/resolve']),
+    confirmation: 'explicit',
+  },
+  {
+    // Recording what a human decided about an escalation is the same authority
+    // as resolving a confirmation: it never executes a domain decision, it
+    // records one, and the specialised workflow stays behind its own ceremony.
+    action: 'confirmations.resolve', area: 'confirmations',
+    routeIds: ids('POST', ['/api/admin/escalations/:id/resolve']),
     confirmation: 'explicit',
   },
   {

@@ -20,6 +20,16 @@ import {
   type OperatorIncidentAlertSink,
 } from './incident-alert-delivery.js';
 import type { NotifyNtfyParams, OperatorAlertResult } from './protocol.js';
+import {
+  createHumanEscalationControlPlane,
+} from '../../shared/escalation/control-plane.js';
+import {
+  createInMemoryHumanEscalationLedger,
+} from '../../shared/escalation/memory-ledger.js';
+import {
+  DEFAULT_HUMAN_ESCALATION_CONFIG,
+} from '../../system/config/scheduler-config/human-escalation.js';
+import { createOperatorAlertEscalationSink } from './human-escalation-operator-sink.js';
 
 const NOW_MS = 1_800_000_000_000;
 const MINUTE_MS = 60_000;
@@ -80,7 +90,17 @@ function harness(options: {
         config: () => config,
         now: () => clock,
       }),
-      resolveSink: () => sink,
+      // The alert path reaches the same fake dispatcher through the governed
+      // escalation plane, exactly as it does in the gateway and the agent. Only
+      // the fixture changes: every assertion below is on the outcomes and the
+      // rendered notification, which the migration must leave untouched.
+      escalation: createHumanEscalationControlPlane<NotifyNtfyParams>({
+        ledger: createInMemoryHumanEscalationLedger(),
+        routing: () => DEFAULT_HUMAN_ESCALATION_CONFIG.routes,
+        sinks: [createOperatorAlertEscalationSink({ resolveDispatcher: () => sink })],
+        now: () => clock,
+        logger: { info: () => undefined, warn: () => undefined },
+      }),
       policy: () => config.incidentAlerts,
       now: () => clock,
       logger: {

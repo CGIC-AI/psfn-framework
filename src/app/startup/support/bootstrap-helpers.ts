@@ -326,6 +326,10 @@ export function hydrateCanonicalStartupConfig(
       stuckJobs: { ...persistedScheduler.healthDetectors.stuckJobs },
       incidentAlerts: { ...persistedScheduler.healthDetectors.incidentAlerts },
     },
+    humanEscalation: {
+      routes: { ...persistedScheduler.humanEscalation.routes },
+      listLimit: persistedScheduler.humanEscalation.listLimit,
+    },
     backgroundWork: {
       supervisor: { ...persistedScheduler.backgroundWork.supervisor },
       postTurn: { ...persistedScheduler.backgroundWork.postTurn },

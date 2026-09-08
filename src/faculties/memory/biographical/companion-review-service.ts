@@ -503,7 +503,14 @@ export class BiographyCompanionReviewService {
    * Revision, reassignment, split and merge are one primitive: write the
    * superseding candidates, then close the reviewed one. History is never
    * mutated — the original proposal, its receipts, and its provenance stay
-   * exactly as they were, and each replacement restarts downstream review.
+   * exactly as they were.
+   *
+   * Every replacement lands in human review, never in the profile. The
+   * companion authored it, so it does not need a second companion pass, but it
+   * does need the human pass the original owed. This is also what keeps
+   * reassignment honest: a dyad proposal re-aimed at the companion's own self
+   * context would otherwise read as companion-derived and become
+   * autoactivation-eligible, so replacements simply never take that path.
    */
   private async supersede(input: {
     readonly store: BiographicalProfileStorePort;
@@ -530,15 +537,20 @@ export class BiographyCompanionReviewService {
         automataAuthorityRef: this.authorityRef,
         policy: input.policy,
         socialContext: proposal.socialContext,
-        rationale: 'contradicts_active_claim',
+        rationale: 'companion_revision',
         supersedesCandidateId: input.candidate.id,
       });
-      // The replacement is the companion's own proposal, so it does not need a
-      // second companion pass; it still needs everything downstream of that.
-      await input.store.transitionCandidate({
+      const inReview = await input.store.transitionCandidate({
         candidateId: written.id,
         expectedRevision: written.revision,
         to: 'companion_review',
+        receipts: [this.receipt('approved', reason)],
+        now: input.now,
+      });
+      await input.store.transitionCandidate({
+        candidateId: inReview.id,
+        expectedRevision: inReview.revision,
+        to: 'human_review',
         receipts: [this.receipt('approved', reason)],
         now: input.now,
       });

@@ -3055,15 +3055,17 @@ export const POSTGRES_OBSERVER_EVAL_SIDECAR_MIGRATIONS = [
 //  16 — companion-owned dyad lifecycle boundaries and revision fencing (84g0z.3)
 //  17 — fleet-wide heavy-maintenance baton, demand roster, and checkpoints
 //  18 — opaque process-instance fencing for fleet-maintenance holders
+//  19 — bounded durable room-participation lease (jp36.5.5)
+//  20 — non-expiring ICP lifecycle admission fence (h248l.9)
 export const SHARED_SCHEMA_NAME = 'shared';
 
 /** Ledger versions installed by POSTGRES_SHARED_MIGRATIONS (excluding wiki versions 3 and 8). */
 export const POSTGRES_SHARED_BASE_MIGRATION_VERSIONS = [
-  1, 2, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+  1, 2, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
 ] as const;
 /** Complete ledger across the base and shared-wiki chains. */
 export const POSTGRES_SHARED_ALL_MIGRATION_VERSIONS = [
-  1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+  1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
 ] as const;
 
 export const POSTGRES_SHARED_MIGRATIONS: readonly string[] = [
@@ -3901,6 +3903,38 @@ export const POSTGRES_SHARED_MIGRATIONS: readonly string[] = [
     ON room_participation_leases (channel_id, expires_at_ms) WHERE status = 'active';`,
   `INSERT INTO shared_schema_migrations (version, name)
     VALUES (19, 'room-participation-lease')
+    ON CONFLICT (version) DO NOTHING;`,
+  // Version 20 (sprint 12, psfn-framework-h248l.9): the non-expiring lifecycle
+  // ADMISSION bit, added to the existing per-companion invalidation-fence row
+  // rather than to a parallel membership registry.
+  //
+  // The generation below it is a freshness fence: it says "your captured view
+  // is stale", and a caller that re-captures immediately is admitted again.
+  // That is exactly wrong for companion removal — an unattended crash between
+  // "revoke permits" and "scale the workload down" leaves a window in which the
+  // removed companion captures the current generation and is admitted. This bit
+  // never expires and never clears implicitly, so removal survives the crash,
+  // the restart, and any amount of delay: permit issue/consume read it under the
+  // SAME `FOR UPDATE` row lock as the generation and refuse a fenced
+  // participant even against a freshly captured generation.
+  //
+  // Additive and safe on a live deployment: NOT NULL DEFAULT false is a
+  // metadata-only rewrite on modern PostgreSQL, and every existing row means
+  // "admitted", which is the pre-migration behavior exactly.
+  `ALTER TABLE icp_autonomy_invalidation_fences
+    ADD COLUMN IF NOT EXISTS lifecycle_fenced BOOLEAN NOT NULL DEFAULT false;`,
+  // Every lifecycle transition (fence AND clear) advances the generation and
+  // stamps evidence, so a fenced row can never sit at the pristine generation 0.
+  `ALTER TABLE icp_autonomy_invalidation_fences
+    DROP CONSTRAINT IF EXISTS icp_autonomy_invalidation_fences_lifecycle_evidence_check;`,
+  `ALTER TABLE icp_autonomy_invalidation_fences
+    ADD CONSTRAINT icp_autonomy_invalidation_fences_lifecycle_evidence_check
+      CHECK (NOT lifecycle_fenced OR generation > 0);`,
+  // The reconciler's "who is currently denied admission" read.
+  `CREATE INDEX IF NOT EXISTS idx_icp_autonomy_invalidation_fences_lifecycle_fenced
+    ON icp_autonomy_invalidation_fences (companion_id) WHERE lifecycle_fenced;`,
+  `INSERT INTO shared_schema_migrations (version, name)
+    VALUES (20, 'icp-lifecycle-admission-fence')
     ON CONFLICT (version) DO NOTHING;`,
 ];
 

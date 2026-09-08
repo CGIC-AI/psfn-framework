@@ -48,6 +48,22 @@ export interface IcpAutonomyInvalidationFence {
   };
 }
 
+/**
+ * Outcome of one lifecycle admission transition (psfn-framework-h248l.9).
+ *
+ * `transitioned` is false when the companion was already in the requested state:
+ * fencing and clearing are idempotent, and the invalidation generation advances
+ * exactly once per real transition, never once per call.
+ */
+export interface IcpLifecycleAdmissionResult {
+  companionId: string;
+  /** The durable, non-expiring admission bit AFTER this call. */
+  lifecycleFenced: boolean;
+  transitioned: boolean;
+  /** Permits revoked by this transition; empty when nothing changed. */
+  revokedPermits: IcpInitiationPermit[];
+}
+
 export class IcpAutonomyInvalidationConflictError extends Error {
   constructor(readonly reasonCode: IcpAutonomyReasonCode) {
     super(`ICP autonomy invalidated during permit operation: ${reasonCode}`);
@@ -194,6 +210,30 @@ export interface IcpInitiationPermitStorePort {
     knownCompanionIds: readonly string[],
     revokedAtMs: number,
   ): Promise<IcpInitiationPermit[]>;
+  /**
+   * Durably deny this companion ICP admission (psfn-framework-h248l.9).
+   *
+   * The generation fence above only says "your captured view is stale", so a
+   * caller that re-captures is admitted again — useless for companion removal,
+   * where an unattended crash before workload scale must not leave a window in
+   * which a freshly captured permit is admitted. This bit never expires and
+   * never clears implicitly.
+   *
+   * Under the companion's existing fence row lock, in one transaction:
+   * set the bit, advance the generation exactly once, and revoke every
+   * outstanding permit before returning. Idempotent — a second call on an
+   * already-fenced companion changes nothing and advances nothing.
+   */
+  fenceLifecycleAdmission(companionId: string, nowMs: number): Promise<IcpLifecycleAdmissionResult>;
+  /**
+   * Readmit a fenced companion. Explicit and idempotent, never implicit: the
+   * lifecycle reconciler calls it only after its own fresh-add or trusted-host
+   * reapproval guard has passed. Advances the generation exactly once so any
+   * view captured while the companion was fenced fails closed.
+   */
+  clearLifecycleAdmission(companionId: string, nowMs: number): Promise<IcpLifecycleAdmissionResult>;
+  /** Current durable admission state; false for a companion with no fence row. */
+  isLifecycleAdmissionFenced(companionId: string): Promise<boolean>;
 }
 
 export interface IcpSharedAutonomyStorePort extends

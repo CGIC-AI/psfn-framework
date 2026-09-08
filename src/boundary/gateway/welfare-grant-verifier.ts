@@ -122,7 +122,7 @@ class PostgresWelfareGrantVerifier implements WelfareGrantVerifier {
  * Bounded, content-free evidence for a fleet verification that could not be
  * completed. Never carries the job id (a bearer-ish token) or any store detail.
  */
-export type WelfareGrantVerifyFailureReason =
+type WelfareGrantVerifyFailureReason =
   | 'timeout'
   | 'method_unavailable'
   | 'malformed_response'

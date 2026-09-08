@@ -551,6 +551,20 @@
       "measuredBaselineMs": 11000,
       "baselineSource": "measured",
       "note": "psfn-framework-mgdks.1: governed Automata Bus lifecycle restart certification (durable run + exactly-once terminal event across a full process restart, cross-companion rejection, typed no-finding terminal) against the real containerized PostgreSQL harness. Focused local full-file wall baseline was 10.9s cold and 0.83s warm on 2026-09-07; the conservative 11s cold baseline is retained and 120s matches the repo integration cap while preserving headroom for cold image startup and shared harness-slot contention."
+    },
+    {
+      "file": "src/core/cogsec/intake/durable-admission.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": 1000,
+      "baselineSource": "measured",
+      "note": "psfn-framework-1fjvm.1/.2: skill activation and wiki serving gated on real PostgresCogSecReceiptStore verification across three simulated process restarts. Focused local full-file wall baseline was 0.73s on 2026-09-07 with a warm harness slot; the conservative 1.0s baseline is retained and 120s matches the repo integration cap, preserving headroom for cold image startup and shared harness-slot contention."
+    },
+    {
+      "file": "src/persistence/postgres/cogsec-receipt-store.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": 1000,
+      "baselineSource": "measured",
+      "note": "psfn-framework-1fjvm.3 receipt-port integration proof, unregistered when it landed on the S12 train and registered here by the 1fjvm.1/.2 admission lane so the policy gate passes. Focused local full-file wall baseline was 0.58s on 2026-09-07 with a warm harness slot; the conservative 1.0s baseline is retained and 120s matches the repo integration cap."
     }
   ]
 }

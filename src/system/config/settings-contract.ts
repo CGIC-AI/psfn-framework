@@ -342,6 +342,7 @@ const SETTINGS_INTEGER_FIELDS = new Set<string>([
   'shardMaxConcurrent',
   'shardHeartbeatStaleAfterMs',
   'shardHeartbeatDisconnectAfterMs',
+  'satelliteHeartbeatStaleAfterMs',
   'documentIngestMaxBytes',
   'documentIngestTextMaxBytes',
   'documentIngestPromptChars',

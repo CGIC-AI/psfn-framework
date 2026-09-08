@@ -277,6 +277,19 @@ export interface WikiRetrievalServiceDeps {
    * absence keeps retrieval unrestricted (byte-identical to single-companion).
    */
   getMultiCompanion?: () => boolean;
+  /**
+   * Content-addressed CogSec admission check for a PERSONAL wiki document
+   * (psfn-framework-1fjvm.2). Answers whether the document's exact canonical
+   * bytes, as they are on disk right now, hold an admitted receipt.
+   *
+   * Retrieval is the last seam before wiki text enters a prompt, so the check
+   * lives here as well as at projection time: chunks projected from an earlier,
+   * admitted version of a document that has since been restored, rewritten out
+   * of band, or held must not be served. Absent, retrieval behaves exactly as
+   * before. Shared-world matches come from a different store and are not
+   * covered by this personal check.
+   */
+  isPersonalDocumentAdmitted?: (documentId: string) => boolean;
   searchLimit?: number;
 }
 
@@ -537,6 +550,22 @@ export class WikiRetrievalService {
         correlation: request.correlation,
       });
       return { ...empty(), hardFailed: true, degradedError: message };
+    }
+    // psfn-framework-1fjvm.2: withhold personal documents whose exact canonical
+    // bytes are not admitted. This runs BEFORE the shared-world merge so the
+    // personal slice is filtered on its own terms, and it withholds rather than
+    // degrading the turn — the rest of the wiki still serves.
+    const isPersonalDocumentAdmitted = this.deps.isPersonalDocumentAdmitted;
+    if (isPersonalDocumentAdmitted) {
+      const candidateCount = matches.length;
+      matches = matches.filter((match) => isPersonalDocumentAdmitted(match.documentId));
+      if (matches.length !== candidateCount) {
+        log.warn('Wiki retrieval withheld unadmitted personal documents from the prompt', {
+          channelId: request.channelId,
+          withheld: candidateCount - matches.length,
+          candidateCount,
+        });
+      }
     }
     // s10f9 retrieval union: when the plan grants shared_world scopes, the
     // shared-schema projection is queried with EXACTLY those scopes and the

@@ -166,6 +166,11 @@ import {
 } from './api-surface.js';
 import { startOptionalAdminTransportServer } from './admin-surface.js';
 import {
+  resolvePlaceDeviceStatus,
+  SatelliteDeviceHealthTracker,
+} from '../../shared/telemetry/satellite-device-health.js';
+import { resolveSatelliteHeartbeatStaleAfterMs } from '../../shared/telemetry/satellite-device-health-settings.js';
+import {
   buildAgentSchedulerRuntime,
 } from './scheduler-runtime.js';
 import {
@@ -175,7 +180,10 @@ import {
   createSessionActivityTracker,
   writeStartupSessionMetadata,
 } from './session-activity.js';
-import { loadIntakePolicyConfig } from '../../system/config/intake-policy-config.js';
+import {
+  intakeReceiptTtlMs,
+  loadIntakePolicyConfig,
+} from '../../system/config/intake-policy-config.js';
 import { maybeCreateIntakeScreeningService } from '../../core/cogsec/intake/screening.js';
 import { COGSEC_INTAKE_FIREWALL_ISSUER_ID } from '../../shared/contracts/cogsec-receipt.js';
 import { loadPartnerAffectShadowConfig } from '../../system/config/partner-affect-shadow-config.js';
@@ -594,6 +602,9 @@ async function main(): Promise<void> {
     ...(persistedHubIdentityEnrollmentStore
       ? { hubIdentityEnrollmentStore: persistedHubIdentityEnrollmentStore }
       : {}),
+    // Durable admission receipts for executable skills and prompt-bearing wiki
+    // documents (psfn-framework-1fjvm.1/.2).
+    cogSecReceiptStore: persistenceRuntime.cogSecReceiptStore,
     automataRuntime: {
       registry: persistenceRuntime.automataRunRegistry,
       runs: persistenceRuntime.automataRunStore,
@@ -742,7 +753,7 @@ async function main(): Promise<void> {
     receipts: {
       store: persistenceRuntime.cogSecReceiptStore,
       issuerId: COGSEC_INTAKE_FIREWALL_ISSUER_ID,
-      ttlMs: intakePolicy.receipts.ttlHours * 3_600_000,
+      ttlMs: intakeReceiptTtlMs(intakePolicy.receipts),
     },
     // Durable quarantine hold (htm9.11): agent-side quarantine decisions land
     // in the same companion-data store the gateway writes and Garden reviews.
@@ -1252,7 +1263,14 @@ async function main(): Promise<void> {
   // non-private world knowledge into the wiki after episodes/memories settle.
   const sleeptimeWikiPass = new SleeptimeWikiPass({
     llmProvider,
+    // This pass holds its own store handle, so it carries no projection hook —
+    // and therefore no admission of its own. The gate is passed explicitly
+    // (psfn-framework-1fjvm.2) so model-generated synthesis is admitted before
+    // it counts as a written entry.
     wikiStore: new WikiStore(pathSnapshot.workspaceRoot),
+    ...(coreRuntime.wikiAdmissionGate
+      ? { admissionGate: coreRuntime.wikiAdmissionGate }
+      : {}),
     episodicStore,
     memoryStore,
     config: schedulerConfig.wikiPass,
@@ -1387,9 +1405,27 @@ async function main(): Promise<void> {
   // (resolveWorldRequirement). Effector control is staged OFF by default
   // (WORLD_CONTROL_RUNTIME_ENABLED) and, once enabled, additionally requires a
   // primary/trusted requester — resolved from the live turn request context.
+  // Hub device-health heartbeats (bead psfn-framework-s7wq3). Devices post
+  // `external.telemetry.heartbeat` through the authenticated telemetry ingest;
+  // before this tracker those beats were accepted and discarded. One tracker
+  // serves both surfaces the operator ruling names: the Garden operator view
+  // (full per-device health, always) and the companion's emanation choice
+  // (ok/degraded on a physical place she is weighing, and nowhere else).
+  const satelliteDeviceHealth = new SatelliteDeviceHealthTracker({
+    registry: () => satelliteRegistryConfig,
+    staleAfterMs: resolveSatelliteHeartbeatStaleAfterMs(config),
+  });
+  satelliteDeviceHealth.subscribe(eventBus);
+
   const worldOps = new GatewayWorldOps(gatewayOps);
   registerWorldTools(agentLoop, worldOps, {
     placesRegistry: placesRegistryConfig,
+    resolvePlaceDeviceStatus: placeId => resolvePlaceDeviceStatus(
+      satelliteRegistryConfig,
+      satelliteDeviceHealth,
+      placeId,
+      Date.now(),
+    ),
     resolveSituatedPlaceId: () => agentLoop.resolveCurrentSituatedPlaceId(),
     companionPresence: companionPresenceRuntime,
     applyVirtualMove: (placeId) => agentLoop.applyDeliberateVirtualMove(placeId),
@@ -1605,6 +1641,7 @@ async function main(): Promise<void> {
     env: process.env,
     config,
     satelliteRegistryConfig,
+    satelliteDeviceHealth,
     channelGroupMemory: discordChannelView.groupMemory,
     gateway,
     eventBus,

@@ -36,12 +36,12 @@ import {
   type IntakeRuleEngine,
   type IntakeRuleEngineStatus,
 } from './rule-engine.js';
-import { scanInvisibleText } from './invisible-text.js';
-import { INTAKE_DATAMARK_MARKER, scanDatamark } from './datamark.js';
-import { scanEncodingSmuggling } from './encoding-smuggling.js';
-import { scanUrls, type UrlScanOptions } from './urls.js';
-import { scanSecretsPii } from './secrets-pii.js';
-import { scanStructure } from './structure.js';
+import { INVISIBLE_TEXT_SCANNER_ID, scanInvisibleText } from './invisible-text.js';
+import { DATAMARK_SCANNER_ID, INTAKE_DATAMARK_MARKER, scanDatamark } from './datamark.js';
+import { ENCODING_SMUGGLING_SCANNER_ID, scanEncodingSmuggling } from './encoding-smuggling.js';
+import { scanUrls, URL_SCANNER_ID, type UrlScanOptions } from './urls.js';
+import { scanSecretsPii, SECRETS_PII_SCANNER_ID } from './secrets-pii.js';
+import { scanStructure, STRUCTURE_SCANNER_ID } from './structure.js';
 import { normalizeForIntakeSecurityProbe } from './security-normalization.js';
 import {
   capScanText,
@@ -135,6 +135,26 @@ export interface IntakeL1ScanReport {
   elapsedMs: number;
 }
 
+/**
+ * Every scanner `scan()` runs, in pipeline order. `scan()` always records one
+ * result per entry (a throwing scanner is recorded in `scannerErrors`
+ * instead), so this list is the complete, content-INDEPENDENT scanner set a
+ * caller needs to predict the screening contract of a future scan
+ * (psfn-framework-1fjvm.1/.2 durable admission). It is derived from the same
+ * constants the pipeline calls, and `scanners/index.test.ts` pins the two
+ * together, so adding a scanner without updating this list fails a test
+ * rather than silently changing a contract digest.
+ */
+export const INTAKE_L1_SCANNER_IDS: readonly string[] = [
+  INVISIBLE_TEXT_SCANNER_ID,
+  DATAMARK_SCANNER_ID,
+  STRUCTURE_SCANNER_ID,
+  INTAKE_RULE_ENGINE_SCANNER_ID,
+  ENCODING_SMUGGLING_SCANNER_ID,
+  URL_SCANNER_ID,
+  SECRETS_PII_SCANNER_ID,
+];
+
 export interface IntakeL1Scanner {
   scan(text: string, options: IntakeL1ScanOptions): IntakeL1ScanReport;
   /** Explicit hot reload of the rule file; throws on an invalid file. */
@@ -194,7 +214,7 @@ export function createIntakeL1Scanner(config: IntakeL1ScannerConfig = {}): Intak
     let truncated = rawCap.truncated;
 
     // 1. Invisible/zero-width detection on the RAW capped string.
-    const invisibleResult = run('l1.invisible_text', () => scanInvisibleText(capped, scope));
+    const invisibleResult = run(INVISIBLE_TEXT_SCANNER_ID, () => scanInvisibleText(capped, scope));
     const afterInvisible = invisibleResult?.sanitized ?? capped;
 
     // 2. Datamark forgery stripping on the stripped raw text. The active
@@ -203,7 +223,7 @@ export function createIntakeL1Scanner(config: IntakeL1ScannerConfig = {}): Intak
     const markers = options.datamarkMarkers
       ?? config.datamarkMarkers
       ?? [INTAKE_DATAMARK_MARKER];
-    const datamarkResult = run('l1.datamark', () => scanDatamark(
+    const datamarkResult = run(DATAMARK_SCANNER_ID, () => scanDatamark(
       afterInvisible,
       scope,
       { markers },
@@ -218,7 +238,7 @@ export function createIntakeL1Scanner(config: IntakeL1ScannerConfig = {}): Intak
 
     // 4. Keyword probes use the security-only projection. Content-oriented
     //    scanners and sanitizedText retain the content-preserving NFKC text.
-    run('l1.structure', () => scanStructure({
+    run(STRUCTURE_SCANNER_ID, () => scanStructure({
       originalLength: text.length,
       text: capped,
       truncated: rawCap.truncated,
@@ -228,14 +248,14 @@ export function createIntakeL1Scanner(config: IntakeL1ScannerConfig = {}): Intak
       INTAKE_RULE_ENGINE_SCANNER_ID,
       () => ruleEngine.scan(securityNormalized, scope),
     );
-    run('l1.encoding', () => scanEncodingSmuggling(
+    run(ENCODING_SMUGGLING_SCANNER_ID, () => scanEncodingSmuggling(
       securityNormalized,
       scope,
       ruleEngine.encodingPolicy(),
     ));
     const knownDomains = options.knownDomains ?? config.knownDomains;
     const schemeActions = options.schemeActions ?? config.schemeActions;
-    run('l1.urls', () => scanUrls(
+    run(URL_SCANNER_ID, () => scanUrls(
       normalized,
       scope,
       {
@@ -243,7 +263,7 @@ export function createIntakeL1Scanner(config: IntakeL1ScannerConfig = {}): Intak
         ...(schemeActions === undefined ? {} : { schemeActions }),
       },
     ));
-    const secretsResult = run('l1.secrets_pii', () => scanSecretsPii(normalized, scope));
+    const secretsResult = run(SECRETS_PII_SCANNER_ID, () => scanSecretsPii(normalized, scope));
 
     // A failed lazy rule reload must be visible on every report until fixed.
     if (ruleResult !== null) {

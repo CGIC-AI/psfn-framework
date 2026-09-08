@@ -91,6 +91,7 @@ export const SETTINGS_VALIDATION = {
   shardMaxConcurrent: { min: 1, max: 64 },
   shardHeartbeatStaleAfterMs: { min: 5_000, max: 3_600_000 },
   shardHeartbeatDisconnectAfterMs: { min: 10_000, max: 10_800_000 },
+  satelliteHeartbeatStaleAfterMs: { min: 5_000, max: 3_600_000 },
   // Max mirrors the API transport ceiling (MAX_FILE_DATA_CHARS in
   // src/channels/api/request-validation.ts caps one file part at 16 MiB
   // decoded) — operators may lower the ingest cap but never exceed it.

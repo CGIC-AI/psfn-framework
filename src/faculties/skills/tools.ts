@@ -607,7 +607,20 @@ async function buildSkillViewPayload(
       missingConfig: eligible.missingConfig,
       disabledByConfig: eligible.disabledByConfig,
     },
-    content: result.content,
+    // CogSec admission (psfn-framework-1fjvm.1): a body whose exact bytes are
+    // not admitted is replaced by the fixed operator-reviewed placeholder, so
+    // the view stays useful while the unadmitted document never reaches the
+    // model. The typed hold reason travels alongside it for the operator.
+    ...('held' in result
+      ? {
+        content: INTAKE_FIREWALL_NOTICE_TEMPLATES.withheldContent,
+        admission: {
+          admitted: false,
+          reason: result.held.reason,
+          details: result.held.details ?? [],
+        },
+      }
+      : { content: result.content }),
   };
 }
 

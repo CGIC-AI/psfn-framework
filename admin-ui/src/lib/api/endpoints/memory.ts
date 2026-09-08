@@ -17,7 +17,7 @@ import type {
   AdminBiographicalClaimList,
 } from '$lib/types';
 
-export type BiographicalPortabilityScope = 'origin_only' | 'universal' | 'subject_present';
+type BiographicalPortabilityScope = 'origin_only' | 'universal' | 'subject_present';
 
 export type BiographicalReviewRequest =
   | { action: 'approve' | 'deny'; claimDigest: string; sourceSetDigest: string }

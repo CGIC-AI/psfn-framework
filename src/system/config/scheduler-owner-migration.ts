@@ -17,6 +17,7 @@ import { canonicalOwnerFileMode } from './owner-file-modes.js';
 import {
   DEFAULT_BACKGROUND_WORK_TUNING,
   DEFAULT_BACKGROUND_MAINTENANCE_CONFIG,
+  DEFAULT_HEALTH_DETECTORS_CONFIG,
   SCHEDULER_FILE_NAME,
   validateSchedulerConfig,
 } from './scheduler-config.js';
@@ -132,6 +133,45 @@ function addMissingRoomParticipationLease(
 }
 
 /**
+ * psfn-framework-7qeo1.24.2-.4: an owner file written before the runtime health
+ * detectors existed has no `healthDetectors` block, and one written between two
+ * detector children has the block but not the newer child's sub-block. Both
+ * would otherwise fail the owner file closed on a key it could not have known
+ * about, so seed exactly the canonical defaults for whatever is absent and
+ * leave every value the operator did set untouched.
+ *
+ * Seeding per top-level sub-key rather than replacing the block is what makes
+ * this one function correct for every detector child: a later child adds its
+ * sub-block to the canonical default and this migration picks it up with no
+ * edit here.
+ */
+function addMissingHealthDetectors(
+  candidate: Record<string, unknown>,
+  addedPaths: string[],
+): void {
+  const existing = candidate.healthDetectors;
+  if (existing === undefined) {
+    candidate.healthDetectors = structuredClone(DEFAULT_HEALTH_DETECTORS_CONFIG);
+    addedPaths.push('healthDetectors');
+    return;
+  }
+  // A non-object here is operator corruption, not a missing key. Leave it for
+  // validation to reject with the real reason rather than silently overwriting.
+  if (!isRecord(existing)) return;
+  const seeded: Record<string, unknown> = { ...existing };
+  let changed = false;
+  for (const [key, value] of Object.entries(DEFAULT_HEALTH_DETECTORS_CONFIG)) {
+    if (seeded[key] !== undefined) continue;
+    seeded[key] = structuredClone(value);
+    addedPaths.push(`healthDetectors.${key}`);
+    changed = true;
+  }
+  if (changed) {
+    candidate.healthDetectors = seeded;
+  }
+}
+
+/**
  * Converts the pre-bundled scheduler owner shape into the canonical shared
  * background-maintenance cadence. Dry-run is the default. The candidate is
  * fully validated before an atomic replacement, and already-migrated files are
@@ -213,6 +253,7 @@ export function migrateLegacySchedulerOwner(
       addMissingIcpPolicyHolds(candidate, addedPaths);
       addMissingIntentionFollowUp(candidate, addedPaths);
       addMissingRoomParticipationLease(candidate, addedPaths);
+      addMissingHealthDetectors(candidate, addedPaths);
 
       const validated = validateSchedulerConfig(candidate, filePath);
       result = {
@@ -271,6 +312,7 @@ export function migrateLegacySchedulerOwner(
       addMissingIcpPolicyHolds(candidate, addedPaths);
       addMissingIntentionFollowUp(candidate, addedPaths);
       addMissingRoomParticipationLease(candidate, addedPaths);
+      addMissingHealthDetectors(candidate, addedPaths);
       if (addedPaths.length === 0) {
         validateSchedulerConfig(raw, filePath);
         assertSourceStillCurrent();

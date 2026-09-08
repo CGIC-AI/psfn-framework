@@ -18,8 +18,7 @@ import {
   emitHealthEvent,
   hashHealthEventSubject,
   processObserverId,
-  type HealthEventOwner,
-  type HealthEventProcess,
+  type HealthEventSource,
 } from '../../shared/contracts/health-event.js';
 import { DEFAULT_SCHEDULER_CONFIG } from './types.js';
 import { createComponentLogger } from '../../shared/logger.js';
@@ -238,20 +237,6 @@ function isWallClockTaskDue(
   return now >= currentSlotStart && lastRun < currentSlotStart;
 }
 
-/**
- * Identity a scheduler stamps on its health events (bead
- * psfn-framework-7qeo1.24.1). The Scheduler class runs in more than one
- * process and knows neither which one nor whose companion it serves, so the
- * entrypoint that constructs it declares that here. Absent, the scheduler
- * still runs and still emits `schedule.task.failed` — it simply contributes
- * nothing to the health plane, which is the honest state for a scheduler no
- * entrypoint has claimed.
- */
-export interface SchedulerHealthEventSource {
-  owner: HealthEventOwner;
-  process: HealthEventProcess;
-}
-
 export interface SchedulerRuntimeOptions {
   eligibilityGate?: EligibilityGate;
   onEligibilityDecision?: (decision: EligibilityDecision) => void;
@@ -259,7 +244,16 @@ export interface SchedulerRuntimeOptions {
     state: ScheduledTaskAvailability,
     handler: () => void | Promise<void>,
   ) => Promise<void>;
-  healthEventSource?: SchedulerHealthEventSource;
+  /**
+   * Identity the scheduler stamps on its health events (bead
+   * psfn-framework-7qeo1.24.1). The Scheduler class runs in more than one
+   * process and knows neither which one nor whose companion it serves, so the
+   * entrypoint that constructs it declares that here. Absent, the scheduler
+   * still runs and still emits `schedule.task.failed` — it simply contributes
+   * nothing to the health plane, which is the honest state for a scheduler no
+   * entrypoint has claimed.
+   */
+  healthEventSource?: HealthEventSource;
 }
 
 export class Scheduler {
@@ -268,7 +262,7 @@ export class Scheduler {
   private eligibilityGate?: EligibilityGate;
   private onEligibilityDecision?: (decision: EligibilityDecision) => void;
   private runProtectedTask?: SchedulerRuntimeOptions['runProtectedTask'];
-  private healthEventSource?: SchedulerHealthEventSource;
+  private healthEventSource?: HealthEventSource;
   private tasks = new Map<string, RuntimeScheduledTask>();
   private tickTimer: ReturnType<typeof setTimeout> | null = null;
   /** Absolute epoch (ms) the currently armed wake will fire at, or null when disarmed. */

@@ -24,6 +24,10 @@ import {
   type BackgroundMaintenanceConfig,
 } from './scheduler-config/maintenance.js';
 import {
+  validateHealthDetectorsConfig,
+  type HealthDetectorsConfig,
+} from './scheduler-config/health-detectors.js';
+import {
   validateSocialAutonomyConfig,
   type SocialAutonomyConfig,
 } from './scheduler-config/social-autonomy.js';
@@ -167,6 +171,9 @@ export {
 export {
   MAX_NEAR_TERM_FOLLOW_UP_HORIZON_MS,
 } from './scheduler-config/intention-follow-up.js';
+export {
+  DEFAULT_HEALTH_DETECTORS_CONFIG,
+} from './scheduler-config/health-detectors.js';
 
 export const SCHEDULER_FILE_NAME = 'scheduler.json';
 export const SCHEDULER_SEED_FILE_NAME = 'scheduler.seed.json';
@@ -175,6 +182,8 @@ export interface SchedulerRuntimeConfig {
   tickIntervalMs: number;
   heartbeatIntervalMs: number;
   backgroundMaintenance: BackgroundMaintenanceConfig;
+  /** Runtime health-detector thresholds, budgets, and cadence (7qeo1.24.2-.4). */
+  healthDetectors: HealthDetectorsConfig;
   backgroundWork: BackgroundWorkRuntimeTuning;
   artifactLifecycle: ArtifactLifecyclePolicyConfig;
   episodicProcessing: EpisodicProcessingRestWindowConfig;
@@ -286,6 +295,7 @@ export function validateSchedulerConfig(
     tickIntervalMs,
     heartbeatIntervalMs: toInterval(raw.heartbeatIntervalMs, 'heartbeatIntervalMs'),
     backgroundMaintenance,
+    healthDetectors: validateHealthDetectorsConfig(raw.healthDetectors, sourcePath),
     backgroundWork: validateBackgroundWorkConfig(raw.backgroundWork, sourcePath),
     artifactLifecycle: validateArtifactLifecycleConfig(raw.artifactLifecycle, sourcePath),
     episodicProcessing,

@@ -941,6 +941,26 @@ async function main(): Promise<void> {
     ...(fleetAuthPersistence?.contactLifecycleAuthority
       ? { contactLifecycleAuthority: fleetAuthPersistence.contactLifecycleAuthority }
       : {}),
+    // The confirmation queue becomes visible on the Garden attention surface
+    // (bead psfn-framework-wtw7l). Both halves of the flow live in this
+    // process, so one ledger sees the enqueue and the resolution; routing keeps
+    // the kind on `garden_only`, so adopting the plane pages nobody.
+    confirmationEscalation: {
+      plane: humanEscalationControlPlane,
+      ledger: humanEscalationStore,
+      // Rendered here rather than in the producer, because the producer must
+      // not learn what a notice looks like. Unused while the owner file routes
+      // this kind `garden_only`; an operator who reroutes it gets the entry id
+      // and the page that owns its detail, never the request's own parameters.
+      renderNotice: entry => ({
+        sender: {
+          kind: 'system' as const,
+          provenance: 'system.approvals.confirmation_escalation',
+        },
+        title: 'Confirmation awaiting an operator',
+        message: `Garden: /confirmations, confirmation ${entry.id}`,
+      }),
+    },
   });
   requestIcpPolicyAgent = async (companionId, method, params) => (
     await gateway.requestCompanionAgent(companionId, method, params)

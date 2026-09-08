@@ -98,6 +98,13 @@ export class RealtimeHubServer {
   private readonly eidoverse: EidoverseEmbodiedSessionAdapter | null;
   /** True only when a body runner was actually supplied for this emanation. */
   private readonly eidoverseSupportsBodyActions: boolean;
+  /**
+   * True only when a travel port was actually supplied. A deployment whose
+   * feature-set selection withholds `eidoverse.travel` gets no port, and the
+   * companion command is then refused as `not_configured` — the same shape a
+   * profile without a body runner already gets for `world.body`.
+   */
+  private readonly eidoverseSupportsTravel: boolean;
   private readonly locationGeofence: HubLocationGeofence | null;
   private readonly companionBrowser: CompanionBrowserBridge | null;
 
@@ -144,6 +151,7 @@ export class RealtimeHubServer {
         })
       : null;
     this.eidoverseSupportsBodyActions = Boolean(options.eidoverse?.body);
+    this.eidoverseSupportsTravel = Boolean(options.eidoverse?.travel);
     this.companion = options.companion !== undefined
       ? options.companion
       : (config.companion ? new CompanionBridge(config.companion) : null);
@@ -202,7 +210,9 @@ export class RealtimeHubServer {
         this.companion,
         this.config.deviceRegistry,
         this.locationGeofence,
-        this.eidoverse ? (world) => this.handleEidoverseTravelRequest(world) : null,
+        this.eidoverse && this.eidoverseSupportsTravel
+          ? (world) => this.handleEidoverseTravelRequest(world)
+          : null,
         this.eidoverseSupportsBodyActions
           ? (name, args) => { this.submitEidoverseBodyAction(name, args); }
           : null,

@@ -33,6 +33,8 @@ import {
 import type { EidoverseMcplConfig } from "./eidoverse-mcpl-config.js";
 import { EidoverseMcplResponder } from "./eidoverse-mcpl-responder.js";
 import {
+  disabledFeatureSetsForSelection,
+  EIDOVERSE_TRAVEL_FEATURE_SET,
   extractSingleToolText,
   hostManifestForCapabilities,
   isRecord,
@@ -164,7 +166,19 @@ export class EidoverseMcplClient {
    * belief untouched.
    */
   async travel(world: string): Promise<string> {
+    if (!this.grantsTravel()) {
+      // The operator withheld the feature set. Feature-set names carry no
+      // authority on the wire, so this refusal is the enforcement: the door is
+      // never asked.
+      this.logger.warn("Eidoverse MCPL travel is not in this hub's granted feature sets");
+      throw new EidoverseMcpRequestError("Eidoverse MCPL travel request failed");
+    }
     return this.callTool("travel", { world });
+  }
+
+  /** Whether this hub's own feature-set selection admits world-to-world travel. */
+  grantsTravel(): boolean {
+    return this.config.featureSets.includes(EIDOVERSE_TRAVEL_FEATURE_SET);
   }
 
   private async connectInitial(): Promise<void> {
@@ -262,6 +276,7 @@ export class EidoverseMcplClient {
     this.notify(session, MCPL_METHOD.initialized, {});
     await this.request(session, MCPL_METHOD.featureSetsUpdate, {
       enabled: [...this.config.featureSets],
+      disabled: disabledFeatureSetsForSelection(this.config.featureSets),
       effectiveCapabilities: [...this.config.effectiveCapabilities],
     }, this.config.handshakeTimeoutMs);
   }

@@ -11082,6 +11082,13 @@
     },
     {
       "file": "src/shared/contracts/settings-garden-contract.ts",
+      "name": "SETTINGS_GARDEN_FIELD_EXPOSURE.ledgerReadMaxRowBytes",
+      "value": "{ sectionId: 'sessions', surface: 'advanced' }",
+      "form": "object-member",
+      "note": "Canonical owner-file/schema metadata SETTINGS_GARDEN_FIELD_EXPOSURE.ledgerReadMaxRowBytes; the code literal defines Garden exposure for the owned settings.json contract rather than a parallel runtime override."
+    },
+    {
+      "file": "src/shared/contracts/settings-garden-contract.ts",
       "name": "SETTINGS_GARDEN_FIELD_EXPOSURE.memoryDeletionPolicy",
       "value": "{ sectionId: 'memory', surface: 'advanced' }",
       "form": "object-member",
@@ -11661,6 +11668,12 @@
       "file": "src/shared/utils/escaping.ts",
       "name": "PROMPT_EMBEDDED_TEXT_DEFAULT_MAX_LENGTH",
       "value": "256"
+    },
+    {
+      "file": "src/shared/utils/jsonl.ts",
+      "name": "DEFAULT_JSONL_READ_MAX_ROW_BYTES",
+      "value": "4 * 1024 * 1024",
+      "note": "Last-resort fallback for the owned settings.json key ledgerReadMaxRowBytes (psfn-framework-z3e2x); config/settings.seed.json carries the canonical default and backfills settings.json, so this literal only applies to direct programmatic construction in tests and tools."
     },
     {
       "file": "src/system/capabilities/safeguards.ts",
@@ -13757,6 +13770,13 @@
       "value": "{ min: 1, max: 100 }",
       "form": "object-member",
       "note": "Canonical validation bounds for the settings.json-owned intake screening failure alert threshold; this metadata constrains Garden edits and is not runtime policy."
+    },
+    {
+      "file": "src/system/settings/form.ts",
+      "name": "SETTINGS_VALIDATION.ledgerReadMaxRowBytes",
+      "value": "{ min: 65_536, max: 67_108_864 }",
+      "form": "object-member",
+      "note": "Canonical owner-file/schema metadata SETTINGS_VALIDATION.ledgerReadMaxRowBytes; the code literal defines owner-file validation bounds for the owned settings.json contract rather than a parallel runtime override."
     },
     {
       "file": "src/system/settings/form.ts",

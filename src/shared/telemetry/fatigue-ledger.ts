@@ -1,7 +1,13 @@
 import { randomUUID } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
 import type { EventBus } from '../event-bus.js';
-import { appendJsonLine } from '../utils/jsonl.js';
+import {
+  appendJsonLine,
+  resolveJsonLinesReadLimits,
+  streamJsonLines,
+  streamJsonLinesSync,
+  type JsonLinesReadLimitSettings,
+  type JsonLinesReadLimits,
+} from '../utils/jsonl.js';
 import type {
   FatigueBudgetDecision,
   FatigueBudgetEvent,
@@ -66,6 +72,10 @@ export interface FatigueLedgerData {
 
 export interface FatigueLedgerOptions {
   now?: () => number;
+  /** Owner-file bounded-read budgets (settings.json ledgerRead* keys). */
+  readLimitSettings?: JsonLinesReadLimitSettings | null;
+  /** Internal: entries already streamed by {@link FatigueLedger.open}. */
+  hydratedEntries?: FatigueLedgerEntry[];
 }
 
 interface MutableScopeSummary {
@@ -218,26 +228,46 @@ function assertLedgerEntry(value: unknown, lineNumber: number): asserts value is
   assertHardState(partialEvent.hardState, lineNumber);
 }
 
-function readLedgerEntries(path: string): FatigueLedgerEntry[] {
-  if (!existsSync(path)) {
-    return [];
-  }
-  const raw = readFileSync(path, 'utf-8');
-  if (raw.trim().length === 0) {
-    return [];
-  }
-  return raw.split('\n')
-    .filter(line => line.trim().length > 0)
-    .map((line, index) => {
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(line);
-      } catch (error) {
-        throw new Error(`Invalid fatigue ledger JSON at line ${index + 1}: ${String(error)}`);
-      }
-      assertLedgerEntry(parsed, index + 1);
-      return parsed;
-    });
+/**
+ * Bounded append-only hydration (psfn-framework-z3e2x): one physical row is
+ * retained at a time instead of a whole-file string plus a whole-file row
+ * array. Malformed rows still fail closed.
+ */
+function visitLedgerRows(collect: (entry: FatigueLedgerEntry) => void) {
+  return (parsed: unknown, context: { line: number }): void => {
+    assertLedgerEntry(parsed, context.line);
+    collect(parsed);
+  };
+}
+
+function fatigueLedgerParseError(path: string) {
+  return (context: { line: number; error: unknown }): never => {
+    throw new Error(
+      `Invalid fatigue ledger JSON at line ${context.line} of ${path}: ${String(context.error)}`,
+    );
+  };
+}
+
+function readLedgerEntriesSync(
+  path: string,
+  limits: JsonLinesReadLimits,
+): FatigueLedgerEntry[] {
+  const entries: FatigueLedgerEntry[] = [];
+  streamJsonLinesSync(path, limits, visitLedgerRows(entry => entries.push(entry)), {
+    onParseError: fatigueLedgerParseError(path),
+  });
+  return entries;
+}
+
+async function readLedgerEntriesStreaming(
+  path: string,
+  limits: JsonLinesReadLimits,
+): Promise<FatigueLedgerEntry[]> {
+  const entries: FatigueLedgerEntry[] = [];
+  await streamJsonLines(path, limits, visitLedgerRows(entry => entries.push(entry)), {
+    onParseError: fatigueLedgerParseError(path),
+  });
+  return entries;
 }
 
 function matchesQuery(entry: FatigueLedgerEntry, query: FatigueLedgerQuery): boolean {
@@ -363,6 +393,23 @@ function summarizeEntries(entries: readonly FatigueLedgerEntry[]): FatigueLedger
 }
 
 export class FatigueLedger {
+  /**
+   * Cooperative startup hydration: streams the append-only ledger with explicit
+   * event-loop yields so Garden/admin work keeps advancing on a multi-megabyte
+   * ledger (psfn-framework-z3e2x).
+   */
+  static async open(
+    path: string,
+    eventBus?: Pick<EventBus, 'on'> | null,
+    options: FatigueLedgerOptions = {},
+  ): Promise<FatigueLedger> {
+    const hydratedEntries = await readLedgerEntriesStreaming(
+      path,
+      resolveJsonLinesReadLimits(options.readLimitSettings),
+    );
+    return new FatigueLedger(path, eventBus, { ...options, hydratedEntries });
+  }
+
   private entries: FatigueLedgerEntry[];
   private unsubscribe?: () => void;
   private readonly now: () => number;
@@ -373,7 +420,8 @@ export class FatigueLedger {
     options: FatigueLedgerOptions = {},
   ) {
     this.now = options.now ?? (() => Date.now());
-    this.entries = readLedgerEntries(path);
+    this.entries = options.hydratedEntries
+      ?? readLedgerEntriesSync(path, resolveJsonLinesReadLimits(options.readLimitSettings));
     if (eventBus) {
       this.unsubscribe = eventBus.on('agent.fatigue', (event) => {
         this.recordFatigueEvent(event);

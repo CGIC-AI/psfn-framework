@@ -174,6 +174,9 @@ const DIRECT_DEFINED_CONFIG_SETTINGS = [
   'documentIngestTextMaxBytes',
   'documentIngestPromptChars',
   'documentIngestSidecarChars',
+  'ledgerReadChunkBytes',
+  'ledgerReadMaxRowBytes',
+  'ledgerReadYieldRows',
   'imageFalTimeoutMs',
   'imageFalPollIntervalMs',
   'imageComfyTimeoutMs',
@@ -632,6 +635,9 @@ function getTier2TuningSnapshot(config: SubstrateConfig) {
     documentIngestTextMaxBytes: config.documentIngestTextMaxBytes ?? null,
     documentIngestPromptChars: config.documentIngestPromptChars ?? null,
     documentIngestSidecarChars: config.documentIngestSidecarChars ?? null,
+    ledgerReadChunkBytes: config.ledgerReadChunkBytes ?? null,
+    ledgerReadMaxRowBytes: config.ledgerReadMaxRowBytes ?? null,
+    ledgerReadYieldRows: config.ledgerReadYieldRows ?? null,
     imageFalTimeoutMs: config.imageFalTimeoutMs ?? null,
     imageFalPollIntervalMs: config.imageFalPollIntervalMs ?? null,
     imageComfyTimeoutMs: config.imageComfyTimeoutMs ?? null,
@@ -646,6 +652,9 @@ function getTier2TuningSnapshot(config: SubstrateConfig) {
     | 'documentIngestTextMaxBytes'
     | 'documentIngestPromptChars'
     | 'documentIngestSidecarChars'
+    | 'ledgerReadChunkBytes'
+    | 'ledgerReadMaxRowBytes'
+    | 'ledgerReadYieldRows'
     | 'imageFalTimeoutMs'
     | 'imageFalPollIntervalMs'
     | 'imageComfyTimeoutMs'

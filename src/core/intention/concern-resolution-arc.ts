@@ -39,7 +39,7 @@ const ARC_SUBSTRATE_BOUNDARY = 'concern-resolution-arc';
 const ARC_PROMPT_MAX_CHARS = 200;
 
 export interface ConcernArcJournalSink {
-  hasEntry(id: string): boolean;
+  hasEntry(id: string): boolean | Promise<boolean>;
   appendOnce(id: string, input: ReflectionJournalEntryInput): unknown;
 }
 
@@ -155,7 +155,7 @@ export function createConcernResolutionArcRecorder(
       return;
     }
     const journalEntryId = `concern-arc-${event.resolutionGenerationId}`;
-    if (deps.journal.hasEntry(journalEntryId)) return;
+    if (await deps.journal.hasEntry(journalEntryId)) return;
     const entry = buildConcernResolutionArcEntry({
       concern,
       source: event.source,

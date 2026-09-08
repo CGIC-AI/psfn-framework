@@ -1,20 +1,30 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { createComponentLogger } from '../shared/logger.js';
-import { appendJsonLine } from '../shared/utils/jsonl.js';
+import {
+  appendJsonLine,
+  type ReadJsonLineContext,
+  type ReadJsonLineErrorContext,
+} from '../shared/utils/jsonl.js';
 
 const log = createComponentLogger('Jsonl');
 
 export { appendJsonLine } from '../shared/utils/jsonl.js';
+// Bounded append-only hydration lives in shared/utils so the telemetry ledgers
+// under shared/ can stream without importing upward into persistence/
+// (psfn-framework-z3e2x).
+export {
+  createJsonLinesReadStats,
+  resolveJsonLinesReadLimits,
+  streamJsonLines,
+  streamJsonLinesSync,
+  type JsonLinesReadLimits,
+  type JsonLinesReadLimitSettings,
+} from '../shared/utils/jsonl.js';
 
-export interface ReadJsonLineContext {
-  path: string;
-  line: number;
-  rawLine: string;
-}
-
-export interface ReadJsonLineErrorContext extends ReadJsonLineContext {
-  error: unknown;
-}
+export type {
+  ReadJsonLineContext,
+  ReadJsonLineErrorContext,
+} from '../shared/utils/jsonl.js';
 
 export interface ReadJsonLinesOptions {
   onError?: (context: ReadJsonLineErrorContext) => void;

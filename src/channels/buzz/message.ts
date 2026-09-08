@@ -54,6 +54,14 @@ export async function toBuzzSubstrateMessage(
     mentionedTargets,
     ...(thread ? { replyTarget: { messageId: thread.parentEventId } } : {}),
     channel,
+    // jp36.5.6: the same intake trust class this connector passes to body
+    // screening below. Nostr asserts neither a room role nor a member count, so
+    // both stay `unknown` — the untrusted/large case for participation policy.
+    authorClass: {
+      sourceClass: 'regular_contact',
+      roomRole: 'unknown',
+      roomSize: 'unknown',
+    },
     resolvedAddressee: mentionedTargets.length > 0
       ? {
           kind: 'participants',

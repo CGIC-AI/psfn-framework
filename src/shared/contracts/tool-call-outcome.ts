@@ -7,9 +7,51 @@ export const TOOL_CALL_OUTCOMES = [
   'policy_denial',
   'duplicate_skip',
   'dependency_skip',
+  'content_withheld',
+  'screening_unavailable',
+  'partial_result',
 ] as const;
 
 export type ToolCallOutcome = typeof TOOL_CALL_OUTCOMES[number];
+
+/**
+ * Degraded evidence (psfn-framework-lpxg3.2): the call itself ran, but what it
+ * returned is not the full requested evidence.
+ *
+ * - `content_withheld`: intake screening admitted nothing — the turn received a
+ *   fixed, content-free notice instead of the read.
+ * - `screening_unavailable`: the screener itself failed, so no verdict exists
+ *   and the content is withheld fail-closed.
+ * - `partial_result`: some of the requested evidence was delivered and some was
+ *   not (a sanitizing admission, or a tool that declares a bounded/truncated
+ *   read).
+ *
+ * These are deliberately NOT `success` and NOT `execution_failure`: protected
+ * self-work must be able to see that evidence is MISSING rather than read
+ * absence as fact, and must not treat a bounded hold as a broken tool.
+ */
+export const DEGRADED_EVIDENCE_TOOL_CALL_OUTCOMES = [
+  'content_withheld',
+  'screening_unavailable',
+  'partial_result',
+] as const;
+
+export type DegradedEvidenceToolCallOutcome =
+  typeof DEGRADED_EVIDENCE_TOOL_CALL_OUTCOMES[number];
+
+/**
+ * Whether a workflow author declared this evidence edge as load-bearing.
+ * Unknown semantics resolve to `required`: a caller that never states its
+ * dependency keeps the conservative, halting behavior.
+ */
+export type ToolCallEvidenceDependency = 'required' | 'optional';
+
+/**
+ * Structural, tool-DECLARED signal that a result carries only part of the
+ * requested evidence. Never inferred from result text (see the `classSource`
+ * rule below): a tool that wants partial semantics must say so.
+ */
+export const PARTIAL_TOOL_RESULT_DETAILS_KEY = 'partialResult';
 
 export type ToolCallOutcomeCounts = Record<ToolCallOutcome, number>;
 
@@ -43,6 +85,17 @@ export const DUPLICATE_TOOL_CALL_SKIP_RESULT =
 
 export const SEQUENTIAL_DEPENDENCY_SKIP_RESULT =
   'Skipped because an earlier sequential tool call failed. Read the tool result and retry only the needed follow-up call.';
+
+/**
+ * The halt notice for a batch stopped by DEGRADED evidence rather than a
+ * failure (lpxg3.2). Saying "failed" here would be untrue — the earlier call
+ * ran and its content was held or unverdictable — and a false diagnostic is
+ * exactly what makes a companion retry the wrong thing.
+ */
+export const SEQUENTIAL_DEGRADED_EVIDENCE_SKIP_RESULT =
+  'Skipped because an earlier sequential tool call returned no usable evidence: its content was '
+  + 'withheld or could not be screened. Nothing failed. Continue from what you already have, or '
+  + 'retry only the follow-up call that does not depend on that read.';
 
 function isToolCallIdempotency(value: unknown): value is ToolCallIdempotency {
   return value === 'idempotent' || value === 'effectful';
@@ -95,8 +148,46 @@ export function isToolCallOutcome(value: unknown): value is ToolCallOutcome {
     && (TOOL_CALL_OUTCOMES as readonly string[]).includes(value);
 }
 
+export function isDegradedEvidenceToolCallOutcome(
+  outcome: ToolCallOutcome,
+): outcome is DegradedEvidenceToolCallOutcome {
+  return (DEGRADED_EVIDENCE_TOOL_CALL_OUTCOMES as readonly string[]).includes(outcome);
+}
+
+/**
+ * Outcomes whose call produced something the turn can read. A withheld read
+ * DID execute and the turn received a typed, content-free notice explaining
+ * the hold, so it is not a tool failure — it is missing evidence. Calling it a
+ * failure would burn the per-signature failure budget and produce a
+ * companion-facing "notify the Operator" notice for a benign, bounded hold.
+ */
+const NON_FAILURE_TOOL_CALL_OUTCOMES: readonly ToolCallOutcome[] = [
+  'success',
+  'content_withheld',
+  'partial_result',
+];
+
 export function isToolCallErrorOutcome(outcome: ToolCallOutcome): boolean {
-  return outcome !== 'success';
+  return !NON_FAILURE_TOOL_CALL_OUTCOMES.includes(outcome);
+}
+
+/**
+ * Whether a sequential batch must stop after this outcome instead of running
+ * the calls queued behind it (psfn-framework-lpxg3.2).
+ *
+ * A real failure is always terminal. Degraded evidence is terminal only while
+ * the consumer has not declared the edge optional, so an optional withheld or
+ * unavailable read lets independent and degraded-tolerant work continue while
+ * an undeclared one keeps today's conservative halt. A partial result delivered
+ * evidence and never halts.
+ */
+export function blocksSequentialDependents(
+  outcome: ToolCallOutcome,
+  evidenceDependency: ToolCallEvidenceDependency,
+): boolean {
+  if (outcome === 'success' || outcome === 'partial_result') return false;
+  if (isDegradedEvidenceToolCallOutcome(outcome)) return evidenceDependency === 'required';
+  return true;
 }
 
 /**
@@ -131,6 +222,15 @@ function isValidationRejectionDetails(details: unknown): boolean {
 }
 
 /**
+ * A partial read is only ever tool-DECLARED. There is no text heuristic here:
+ * a diagnostic that happens to mention truncation stays whatever outcome its
+ * structured details describe.
+ */
+function isDeclaredPartialResultDetails(details: unknown): boolean {
+  return isRecord(details) && details[PARTIAL_TOOL_RESULT_DETAILS_KEY] === true;
+}
+
+/**
  * Classify a result returned from a tool implementation. Scheduler-owned
  * validation corrections and skips pass their explicit outcome instead.
  */
@@ -140,7 +240,8 @@ export function classifyExecutedToolCallOutcome(input: {
 }): ToolCallOutcome {
   if (isPolicyDenialDetails(input.details)) return 'policy_denial';
   if (isValidationRejectionDetails(input.details)) return 'validation_rejection';
-  return input.isError === true ? 'execution_failure' : 'success';
+  if (input.isError === true) return 'execution_failure';
+  return isDeclaredPartialResultDetails(input.details) ? 'partial_result' : 'success';
 }
 
 /**
@@ -172,15 +273,22 @@ export function isToolResultOutcomeProjection(
     && typeof value.toolName === 'string';
 }
 
+/**
+ * Whether any observed result both matches `accepts` and came back with usable
+ * content. `partial_result` counts (lpxg3.2): the tool ran and delivered
+ * something — a sanitizing admission still hands the turn real output — so
+ * reading it as "this never happened" would rewrite a true companion claim as
+ * a false one. A hold, a missing verdict, and every failure do not count.
+ */
 export function hasSuccessfulToolCallOutcome(
   values: readonly unknown[],
   accepts: (result: ToolResultOutcomeProjection) => boolean = () => true,
 ): boolean {
-  return values.some((value) => (
-    isToolResultOutcomeProjection(value)
-    && accepts(value)
-    && resolveToolCallOutcome(value) === 'success'
-  ));
+  return values.some((value) => {
+    if (!isToolResultOutcomeProjection(value) || !accepts(value)) return false;
+    const outcome = resolveToolCallOutcome(value);
+    return outcome === 'success' || outcome === 'partial_result';
+  });
 }
 
 export function createEmptyToolCallOutcomeCounts(): ToolCallOutcomeCounts {
@@ -191,6 +299,9 @@ export function createEmptyToolCallOutcomeCounts(): ToolCallOutcomeCounts {
     policy_denial: 0,
     duplicate_skip: 0,
     dependency_skip: 0,
+    content_withheld: 0,
+    screening_unavailable: 0,
+    partial_result: 0,
   };
 }
 

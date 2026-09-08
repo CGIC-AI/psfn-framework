@@ -325,10 +325,16 @@ export function resolveExplicitToolContract(input: {
     .filter((message) => {
       if (isHeldToolCallResult(message.details)) return false;
       const outcome = resolveToolCallOutcome(message);
+      // lpxg3.2: the degraded-evidence outcomes are ATTEMPTS — the tool ran.
+      // Leaving them out would make the guard re-prompt for a tool the
+      // companion already called and whose result was held or trimmed.
       return outcome === 'success'
         || outcome === 'execution_failure'
         || outcome === 'policy_denial'
-        || outcome === 'duplicate_skip';
+        || outcome === 'duplicate_skip'
+        || outcome === 'content_withheld'
+        || outcome === 'screening_unavailable'
+        || outcome === 'partial_result';
     })
     .map(message => message.toolName);
   let completedSequenceSteps = 0;

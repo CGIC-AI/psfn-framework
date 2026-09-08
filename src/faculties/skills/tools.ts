@@ -69,6 +69,8 @@ interface SkillToolParams extends SkillListParams {
   description?: string;
   version?: number;
   reason?: string;
+  /** action=update: the version this revision was based on (lpxg3.3). */
+  base_version?: number;
 }
 
 /**
@@ -665,6 +667,11 @@ export function createSkillTool(
       reason: Type.Optional(Type.String({
         description: 'Optional short rationale recorded as provenance for action=create|update|rollback.',
       })),
+      base_version: Type.Optional(Type.Integer({
+        description:
+          'Optional for action=update: the version you based this revision on. '
+          + 'The update is refused if the skill has changed since, so a concurrent revision is never overwritten.',
+      })),
     }),
     execute: async (toolCallId: string, params: SkillToolParams) => {
       try {
@@ -776,6 +783,32 @@ export function createSkillTool(
               return textResultWithError('skill action=update requires non-empty content.', true);
             }
 
+            const existing = runtime.getStore().getByName(name);
+            if (!existing) {
+              return textResultWithError(`Skill "${name.trim()}" does not exist`, true);
+            }
+
+            // lpxg3.3 AC6: a byte-identical rewrite is a no-op, and it is
+            // resolved BEFORE the write preflight. These exact bytes already
+            // hold whatever admission decision the loader gate made for them,
+            // so re-screening them would only re-emit the same companion-facing
+            // notice for content whose verdict has not changed. Nothing is
+            // written: no version, no history entry, no cache invalidation.
+            const proposedDescription = typeof params.description === 'string'
+              ? params.description
+              : undefined;
+            if (content === existing.content
+              && (proposedDescription === undefined
+                || proposedDescription === existing.description)) {
+              return textResult(JSON.stringify({
+                action: 'unchanged',
+                name: existing.name,
+                category: existing.category,
+                version: existing.version,
+                reason: 'identical content; existing admitted version reused',
+              }, null, 2));
+            }
+
             const screened = await screenSkillWrite('update', {
               content,
               ...(params.description !== undefined
@@ -786,9 +819,28 @@ export function createSkillTool(
               return textResult(INTAKE_FIREWALL_NOTICE_TEMPLATES.sinkHeld);
             }
 
-            const existing = runtime.getStore().getByName(name);
-            if (!existing) {
-              return textResultWithError(`Skill "${name.trim()}" does not exist`, true);
+            // lpxg3.3: a revision binds to the version the author actually read.
+            // Without the binding, two concurrent revisions silently last-write-
+            // wins; with it, the stale one is refused with the current version so
+            // the author can re-read and redo the minimal change.
+            const baseVersion = params.base_version;
+            if (baseVersion !== undefined) {
+              if (typeof baseVersion !== 'number'
+                || !Number.isInteger(baseVersion)
+                || baseVersion < 1) {
+                return textResultWithError(
+                  'skill action=update base_version must be a positive integer version number.',
+                  true,
+                );
+              }
+              if (baseVersion !== existing.version) {
+                return textResultWithError(
+                  `Skill "${existing.name}" changed since you read it: you based this update on `
+                  + `v${baseVersion} but it is now v${existing.version}. Read it again with `
+                  + 'action=view and reapply your change so the other revision is not lost.',
+                  true,
+                );
+              }
             }
 
             const reason = normalizeReason(params.reason);

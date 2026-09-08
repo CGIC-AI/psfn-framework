@@ -56,6 +56,12 @@ function toolOutcomeNarrative(
       return `${companionName}'s duplicate tool "${toolLabel}" call in ${channelLabel} was skipped without execution.`;
     case 'dependency_skip':
       return `${companionName}'s dependent tool "${toolLabel}" call in ${channelLabel} was skipped without execution.`;
+    case 'content_withheld':
+      return `${companionName}'s tool "${toolLabel}" call in ${channelLabel} ran, but intake screening withheld its content.`;
+    case 'screening_unavailable':
+      return `${companionName}'s tool "${toolLabel}" result in ${channelLabel} was withheld because intake screening could not reach a verdict.`;
+    case 'partial_result':
+      return `${companionName} completed tool "${toolLabel}" in ${channelLabel}, but only part of the requested evidence was returned.`;
   }
 }
 

@@ -3,6 +3,8 @@ import { relative, resolve, sep } from 'node:path';
 import {
   SKILLS_FILE_NAME,
   loadSkillsConfig,
+  DEFAULT_SKILL_REUSE_CONFIG,
+  type SkillReuseConfig,
   type SkillsRuntimeConfig,
 } from '../../system/config/skills-config.js';
 import { filterEligibleSkills } from './filter.js';
@@ -114,6 +116,12 @@ export class SkillsRuntime {
   private store: SkillStore;
   private telemetry: SkillUsageTelemetryStore;
   private cache: SkillSnapshotCache | null = null;
+  /**
+   * Reuse tuning as of the last cache build (psfn-framework-lpxg3.3). Cached so
+   * the per-turn reuse loop never re-reads the owner file; `null` until the
+   * first build, where the caller falls back to the contract defaults.
+   */
+  private cachedReuseConfig: SkillReuseConfig | null = null;
   private cacheGeneration = 0;
   private cacheBuild: {
     generation: number;
@@ -143,6 +151,26 @@ export class SkillsRuntime {
 
   getCachedPromptXml(): string {
     return this.cache?.snapshot.promptXml ?? '';
+  }
+
+  /**
+   * The CogSec-admitted, eligible skill entries already in the warm cache
+   * (psfn-framework-lpxg3.3). Synchronous and side-effect free: the quiet reuse
+   * loop reads the index the prompt for this turn was built from and adds no
+   * scan, read, or admission work of its own. An empty array means "no warm
+   * cache", never "no skills" — the caller treats it as no candidates.
+   */
+  getCachedAdmittedSkills(): readonly SkillEntry[] {
+    return this.cache?.snapshot.includedSkills ?? [];
+  }
+
+  /**
+   * Owner-file reuse bounds as of the last cache build, or the contract
+   * defaults before one. Synchronous and I/O free for the same reason as
+   * {@link getCachedAdmittedSkills}.
+   */
+  getCachedReuseConfig(): SkillReuseConfig {
+    return this.cachedReuseConfig ?? { ...DEFAULT_SKILL_REUSE_CONFIG };
   }
 
   async getSnapshot(): Promise<SkillSnapshot> {
@@ -467,6 +495,7 @@ export class SkillsRuntime {
 
   private async buildCache(generation: number): Promise<SkillSnapshotCache> {
     const runtimeConfig = this.loadRuntimeConfig();
+    this.cachedReuseConfig = runtimeConfig.reuse;
     const repoRoot = requireSkillsRepoRoot(this.options.repoRoot);
     const configuredDirectories = resolveSkillDirectories(runtimeConfig, repoRoot);
     const directories = this.mergeManagedDirectory(configuredDirectories);

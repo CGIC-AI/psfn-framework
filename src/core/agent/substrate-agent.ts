@@ -59,6 +59,7 @@ import {
   installAgentToolSchedulerPatch,
   type AgentRunAbortResult,
 } from '../../boundary/pi-agent/agent-loop-patch.js';
+import type { ToolCallEvidenceDependency } from '../../shared/contracts/tool-call-outcome.js';
 import { PromptCacheTurnRuntime } from './substrate-agent/turn-execution/prompt-cache-runtime.js';
 import { TurnRunReservation } from './substrate-agent/turn-run-reservation.js';
 import { TurnQueueIngressCoordinator } from './substrate-agent/turn-queue-ingress.js';
@@ -67,6 +68,7 @@ import { createEventBridge, type EventBridge } from './event-bridge.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import type { SkillsRuntime } from '../../faculties/skills/runtime.js';
 import { ReflectionNudgeTracker } from '../../faculties/skills/reflection-nudge.js';
+import { DEFAULT_SKILL_REUSE_CONFIG } from '../../system/config/skills-config.js';
 import type { IntrospectionTurnSensitivityDecisions } from '../../faculties/introspection/turn-sensitivity.js';
 import type { ToolCategory } from './tool-registrar.js';
 import {
@@ -345,7 +347,18 @@ export class SubstrateAgent {
    */
   private preToolHookGate: PreToolHookGate | null = null;
   private readonly appCache: AppCache;
-  private reflectionNudge = new ReflectionNudgeTracker();
+  /**
+   * The quiet reuse-and-revision loop (psfn-framework-lpxg3.3). Its candidates
+   * come from the CogSec-admitted skill cache the prompt was already built
+   * from, so reuse never bypasses admission and costs no extra scan; its
+   * bounds come from the skills owner file.
+   */
+  private reflectionNudge = new ReflectionNudgeTracker({
+    resolveAdmittedSkills: () => this.skillsRuntime?.getCachedAdmittedSkills() ?? [],
+    resolveConfig: () => (
+      this.skillsRuntime?.getCachedReuseConfig() ?? { ...DEFAULT_SKILL_REUSE_CONFIG }
+    ),
+  });
   private readonly promptCacheRuntime = new PromptCacheTurnRuntime();
   private readonly turnRunReservation = new TurnRunReservation();
   private readonly turnQueueIngress: TurnQueueIngressCoordinator;
@@ -441,6 +454,16 @@ export class SubstrateAgent {
    * Undefined until built — an outward social send with no lineage fails closed.
    */
   private currentTurnDisclosureLineage: DisclosureLineage | undefined;
+  /**
+   * Whether the turn in flight declared its read-only evidence edges optional
+   * (psfn-framework-lpxg3.2). Only the protected reflection tool-grounding stage
+   * does: it exists to GATHER optional evidence and can complete honestly from
+   * bounded starter evidence, so one withheld or unverdictable read must not
+   * abandon the rest of its sequential batch. Every other turn keeps the
+   * conservative `required` posture, and a real tool failure stays terminal in
+   * both.
+   */
+  private currentTurnEvidenceDependency: ToolCallEvidenceDependency = 'required';
   /**
    * mmo9.6.1: transport-agnostic cancellation identity of the CURRENT active
    * turn (from `message.routing.cancellationId` or the dispatch options).
@@ -755,6 +778,7 @@ export class SubstrateAgent {
     });
     installAgentToolSchedulerPatch(this.agent, {
       maxParallelToolCalls: DEFAULT_TOOL_SCHEDULER_MAX_PARALLEL,
+      resolveEvidenceDependency: () => this.currentTurnEvidenceDependency,
       // hrmrq.54: screen tool results at the scheduler seam, BEFORE they
       // enter the turn — the persistence-time screen alone let quarantined
       // content (e.g. an fs.read of a withheld document) reach the model
@@ -1884,6 +1908,7 @@ export class SubstrateAgent {
       // for the duration of this turn (cleared in finally — never leaks into
       // the next turn).
       this.currentTurnIntakeEnvelopes = message.routing?.intakeEnvelopes ?? [];
+      this.currentTurnEvidenceDependency = resolveTurnEvidenceDependency(message);
       // Fail closed: no lineage is published until the generation context is
       // folded this turn, so a social send before then is denied outward.
       this.currentTurnDisclosureLineage = undefined;
@@ -1908,6 +1933,7 @@ export class SubstrateAgent {
       } finally {
         this.currentTurnIntakeEnvelopes = [];
         this.currentTurnDisclosureLineage = undefined;
+        this.currentTurnEvidenceDependency = 'required';
       }
     });
   }
@@ -1972,4 +1998,22 @@ export class SubstrateAgent {
     this.sessionManager.recordIcpDeliveryObservation(observation);
   }
 
+}
+
+/**
+ * Which evidence-dependency posture a turn runs under (psfn-framework-lpxg3.2).
+ *
+ * Only the protected reflection TOOL-GROUNDING stage declares `optional`. That
+ * stage's whole contract is "gather only additional evidence that materially
+ * helps this private reflection", and the reflection template runtime already
+ * knows how to continue from bounded starter evidence and record an explicit
+ * degraded flag. Every other turn — including the reflection's own final output
+ * stage — keeps `required`, so an unstated dependency never relaxes on its own.
+ */
+export function resolveTurnEvidenceDependency(
+  message: SubstrateMessage,
+): ToolCallEvidenceDependency {
+  return message.routing?.reflectionTurn?.stage === 'tool_grounding'
+    ? 'optional'
+    : 'required';
 }

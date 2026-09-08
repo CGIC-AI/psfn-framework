@@ -25,6 +25,15 @@ function projectToolActivityPhase(
     case 'duplicate_skip':
     case 'dependency_skip':
       return 'skipped';
+    // lpxg3.2 degraded evidence: the call ran but returned less than it asked
+    // for. A hold is a rejection of the CONTENT, a missing screening verdict is
+    // a failure to deliver, and a partial read did complete.
+    case 'content_withheld':
+      return 'rejected';
+    case 'screening_unavailable':
+      return 'failed';
+    case 'partial_result':
+      return 'completed';
   }
 }
 

@@ -6,5 +6,11 @@
   "extraDirectories": [],
   "maxLoadedSkills": 32,
   "maxSkillChars": 24000,
-  "disabledSkills": []
+  "disabledSkills": [],
+  "reuse": {
+    "maxCandidates": 3,
+    "minRelevanceScore": 0.25,
+    "minToolCalls": 3,
+    "nudgeEveryNthTurn": 3
+  }
 }

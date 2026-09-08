@@ -2961,6 +2961,12 @@
       "value": "3"
     },
     {
+      "file": "src/core/agent/substrate-agent/turn-execution-runtime.ts",
+      "name": "SKILL_REUSE_TASK_CUE_MAX_CHARS",
+      "value": "600",
+      "note": "Bounded copy guard on the task cue handed to the lexical skill ranker; not a behavioral tuning value."
+    },
+    {
       "file": "src/core/agent/substrate-agent/turn-execution/agent-invocation.ts",
       "name": "invokeAgentForTurn.runCorrectivePromptLifecycle.arg0.timeoutStage",
       "value": "'agent_turn_runtime_contradiction_retry'",
@@ -8242,11 +8248,16 @@
       "note": "Existing mutable policy candidate scanSkillRoots.budget; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
-      "file": "src/faculties/skills/reflection-nudge.ts",
-      "name": "DEFAULT_CONFIG.minToolCalls",
+      "file": "src/faculties/skills/reuse.ts",
+      "name": "MAX_CUE_TOKENS",
+      "value": "32",
+      "note": "DoS guard bounding how much of a long cue the lexical ranker scans."
+    },
+    {
+      "file": "src/faculties/skills/reuse.ts",
+      "name": "MIN_CUE_TOKEN_LENGTH",
       "value": "3",
-      "form": "object-member",
-      "note": "Existing mutable policy candidate DEFAULT_CONFIG.minToolCalls; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Lexical tokenizer floor for the skill-reuse ranker; a shape constant of the matcher, not an operator policy."
     },
     {
       "file": "src/faculties/skills/store.ts",
@@ -8558,6 +8569,13 @@
     },
     {
       "file": "src/faculties/wiki/sleeptime-wiki-pass.ts",
+      "name": "SleeptimeWikiPass.resolveNearDuplicateTarget.found.limit",
+      "value": "3",
+      "form": "object-member",
+      "note": "Bounded candidate fan-out for near-duplicate detection; the operator-editable knob is wikiPass.nearDuplicateTitleSimilarity in scheduler.json."
+    },
+    {
+      "file": "src/faculties/wiki/sleeptime-wiki-pass.ts",
       "name": "SleeptimeWikiPass.run.$call:truncation:slice.arg1#1",
       "value": "200",
       "form": "truncation",
@@ -8572,10 +8590,9 @@
     },
     {
       "file": "src/faculties/wiki/sleeptime-wiki-pass.ts",
-      "name": "SleeptimeWikiPass.writeProposal.found.limit",
+      "name": "TITLE_TOKEN_MIN_LENGTH",
       "value": "3",
-      "form": "object-member",
-      "note": "Existing mutable policy candidate SleeptimeWikiPass.writeProposal.found.limit; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Lexical tokenizer floor for wiki near-duplicate title comparison; a shape constant of the matcher, not an operator policy."
     },
     {
       "file": "src/faculties/wiki/store.ts",
@@ -13261,6 +13278,27 @@
       "value": "{ min: 100, max: 3_600_000 }",
       "form": "object-member",
       "note": "Canonical owner-file/schema metadata SHELL_EXEC_SETTINGS_RANGES.timeoutMs; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
+    },
+    {
+      "file": "src/system/config/skills-config.ts",
+      "name": "DEFAULT_SKILL_REUSE_CONFIG.maxCandidates",
+      "value": "3",
+      "form": "object-member",
+      "note": "Skills owner-file default; operator-editable via skills.json reuse.maxCandidates."
+    },
+    {
+      "file": "src/system/config/skills-config.ts",
+      "name": "DEFAULT_SKILL_REUSE_CONFIG.minRelevanceScore",
+      "value": "0.25",
+      "form": "object-member",
+      "note": "Skills owner-file default; operator-editable via skills.json reuse.minRelevanceScore."
+    },
+    {
+      "file": "src/system/config/skills-config.ts",
+      "name": "DEFAULT_SKILL_REUSE_CONFIG.minToolCalls",
+      "value": "3",
+      "form": "object-member",
+      "note": "Skills owner-file default; operator-editable via skills.json reuse.minToolCalls."
     },
     {
       "file": "src/system/config/trust-policy-config.ts",

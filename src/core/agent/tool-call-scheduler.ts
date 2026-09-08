@@ -4,12 +4,16 @@ import type { AssistantMessage, ToolCall, ToolResultMessage } from '@earendil-wo
 import type { ScheduledAgentEvent } from './agent-loop-events.js';
 import type { ToolCallOutcome } from '../../shared/contracts/runtime.js';
 import {
+  blocksSequentialDependents,
   classifyExecutedToolCallOutcome,
   DUPLICATE_TOOL_CALL_SKIP_RESULT,
+  isDegradedEvidenceToolCallOutcome,
   isHeldToolCallResult,
   isToolCallErrorOutcome,
   resolveToolCallIdempotency,
+  SEQUENTIAL_DEGRADED_EVIDENCE_SKIP_RESULT,
   SEQUENTIAL_DEPENDENCY_SKIP_RESULT,
+  type ToolCallEvidenceDependency,
 } from '../../shared/contracts/tool-call-outcome.js';
 import { isInternalWhisperMessage, isSystemNoteMessage } from './messages.js';
 import type { ToolConcurrencyMeta, WirableTool } from './tool-wiring-validator.js';
@@ -95,6 +99,15 @@ export interface ToolCallSchedulerOptions {
    * tool result closed: unscreened content never enters the turn.
    */
   toolResultScreener?: ToolResultIntakeScreener;
+  /**
+   * Whether the CURRENT consumer declared its read-only evidence edges optional
+   * (psfn-framework-lpxg3.2). Protected self-work that can honestly continue
+   * from bounded starter evidence declares `optional`, so one withheld or
+   * unavailable optional read does not abandon the whole process. Absent or
+   * `required` keeps the conservative halt: unknown dependency semantics never
+   * relax on their own, and a real failure is terminal either way.
+   */
+  resolveEvidenceDependency?: () => ToolCallEvidenceDependency;
   /** Update turn disclosure state before this admitted result reaches the next model step. */
   onToolResultAdmitted?: (input: {
     toolName: string;
@@ -336,6 +349,16 @@ export async function executeToolCallsWithScheduler(
   };
 }
 
+/**
+ * Fail closed on an unstated dependency: only an explicit `optional` from the
+ * consumer relaxes the sequential halt.
+ */
+function resolveEvidenceDependency(
+  options: ToolCallSchedulerOptions,
+): ToolCallEvidenceDependency {
+  return options.resolveEvidenceDependency?.() === 'optional' ? 'optional' : 'required';
+}
+
 async function executeSequentialBatch(
   descriptors: ToolCallDescriptor[],
   context: ToolExecutionContext,
@@ -346,11 +369,17 @@ async function executeSequentialBatch(
   for (const descriptor of descriptors) {
     const result = await executeSingleToolCall(descriptor, context, options);
     results.push(result);
-    if (result.isError) {
+    const outcome = (result as ToolResultMessage & { outcome?: ToolCallOutcome }).outcome;
+    const halts = outcome
+      ? blocksSequentialDependents(outcome, resolveEvidenceDependency(options))
+      : result.isError === true;
+    if (halts) {
       return {
         toolResults: results,
         haltRemaining: true,
-        haltReasonText: SEQUENTIAL_DEPENDENCY_SKIP_RESULT,
+        haltReasonText: outcome && isDegradedEvidenceToolCallOutcome(outcome)
+          ? SEQUENTIAL_DEGRADED_EVIDENCE_SKIP_RESULT
+          : SEQUENTIAL_DEPENDENCY_SKIP_RESULT,
       };
     }
 
@@ -614,6 +643,16 @@ async function executeSingleToolCall(
               deliveredText,
               resultContentWithheld,
             );
+            // lpxg3.2: name what the turn actually received. A hold is not a
+            // success (reading it as one lets self-work treat withheld evidence
+            // as absence) and not an execution failure (the tool ran, and a
+            // benign hold must not burn the retry budget or raise a
+            // companion-facing operator notice). A sanitizing admission
+            // delivered part of the evidence, so it is a partial result.
+            if (outcome === 'success') {
+              outcome = resultContentWithheld ? 'content_withheld' : 'partial_result';
+              isError = isToolCallErrorOutcome(outcome);
+            }
           }
         }
       } catch (error) {
@@ -632,11 +671,26 @@ async function executeSingleToolCall(
           }],
           details: {},
         };
-        isError = true;
-        outcome = 'execution_failure';
+        // lpxg3.2: still fails closed — no content reaches the turn — but the
+        // outcome says WHY, so an optional-evidence consumer can continue on
+        // bounded starter evidence instead of abandoning the process, while a
+        // required consumer still halts.
+        outcome = 'screening_unavailable';
+        isError = isToolCallErrorOutcome(outcome);
         intakeScreening = undefined;
       }
     }
+  }
+
+  if (isDegradedEvidenceToolCallOutcome(outcome)) {
+    // Content-free: outcome name and dependency posture only, never the text,
+    // the finding, or the withheld bytes (lpxg3.2 AC6).
+    options.onTelemetry?.('agent.tools.evidence.degraded', {
+      toolName: toolCall.name,
+      toolCallId: toolCall.id,
+      outcome,
+      evidenceDependency: resolveEvidenceDependency(options),
+    });
   }
 
   if (cancelled) {

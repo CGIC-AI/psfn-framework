@@ -97,6 +97,18 @@ import {
   type AgentInvocationResult,
 } from './turn-execution/agent-invocation.js';
 import { createTurnExecutionObservability } from './turn-execution/observability.js';
+import {
+  countToolCallOutcomes,
+  type ToolCallOutcomeCounts,
+} from '../../../shared/contracts/tool-call-outcome.js';
+import { isToolResultAgentMessage } from './turn-records.js';
+
+/**
+ * Bound on the participant framing handed to the skill-reuse ranker
+ * (psfn-framework-lpxg3.3). The ranker is lexical and already caps the tokens
+ * it considers; this keeps a very long message from being copied at all.
+ */
+const SKILL_REUSE_TASK_CUE_MAX_CHARS = 600;
 import { assembleTurnPrompt } from './turn-execution/prompt-assembly.js';
 import { computePreTurnState, prepareTurnIdentityState } from './turn-execution/pre-turn-state.js';
 import {
@@ -1252,6 +1264,12 @@ export async function handleMessageForTurn(
     }
 
     const retrievalProvenanceRefs = observability.getRetrievalProvenanceRefs();
+    // lpxg3.2: a content-free census of what this turn's tool calls actually
+    // returned. Evidence-gathering callers read it to see that a read was
+    // withheld, unavailable, or partial rather than reading absence as fact.
+    const toolCallOutcomes: ToolCallOutcomeCounts = countToolCallOutcomes(
+      turnMessages.filter(isToolResultAgentMessage),
+    );
     const internalState = recoveredResponse?.metadata.internalState
       ? cloneInternalState(recoveredResponse.metadata.internalState)
       : await runtime.emotionSelfModelRuntime.computeInternalStateForTurn({
@@ -1615,6 +1633,7 @@ export async function handleMessageForTurn(
         internalStateSnapshotRef,
         metacognitiveFlags: cloneMetacognitiveFlags(metacognitiveFlags),
         ...(retrievalProvenanceRefs.length > 0 ? { retrievalProvenanceRefs } : {}),
+        ...(turnUsage.toolCalls > 0 ? { toolCallOutcomes } : {}),
         ...(Object.keys(responseDiagnostics).length > 0 ? { diagnostics: responseDiagnostics } : {}),
         ...(broadcastSafetyMeta ? { broadcastSafety: broadcastSafetyMeta } : {}),
         ...(responseFatigueMetadata ? { fatigue: responseFatigueMetadata } : {}),
@@ -1762,7 +1781,17 @@ export async function handleMessageForTurn(
 
     if (runtime.skillsRuntime) {
       const toolSummary = runtime.buildTurnToolSummary(turnMessages);
-      const nudge = runtime.evaluateReflectionNudge(toolSummary);
+      // lpxg3.3: the participant's own framing is the task cue for ranking
+      // owned skills, and the structural outcome census decides whether this
+      // turn demonstrated anything worth keeping. Both are bounded and
+      // content-free at the ranking seam — no skill body is read.
+      const nudge = runtime.evaluateReflectionNudge({
+        ...toolSummary,
+        ...(message.content.trim()
+          ? { taskCue: message.content.trim().slice(0, SKILL_REUSE_TASK_CUE_MAX_CHARS) }
+          : {}),
+        outcomes: toolCallOutcomes,
+      });
       if (nudge) {
         runtime.sessionManager.appendSystemNote(
           turnSessionIdentity.logicalSessionId,

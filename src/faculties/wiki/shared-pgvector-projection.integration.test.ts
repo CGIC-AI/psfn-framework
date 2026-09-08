@@ -181,7 +181,7 @@ describe('shared_wiki_chunks shared-schema integration (s10f9)', () => {
         const ledgerAgain = await pool.query<{ count: string }>(
           `SELECT COUNT(*)::text AS count FROM shared.shared_schema_migrations`,
         );
-        expect(ledgerAgain.rows[0]?.count).toBe('18');
+        expect(ledgerAgain.rows[0]?.count).toBe('19');
       } finally {
         await pool.end();
         await store.close();

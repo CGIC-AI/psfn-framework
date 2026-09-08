@@ -138,6 +138,15 @@ export class AdminWishlistDataService implements AdminWishlistService {
    * places exactly one Letter and writes the wish state through its source hook.
    * An action that would not change the disposition writes nothing, so a repeated
    * click never produces a second Letter.
+   *
+   * A wish that already carries a terminal `done` or `declined` disposition
+   * refuses every further disposition-changing action — `/respond` and
+   * `/acknowledge` as well as `/done` — with a 400 naming that terminal state
+   * (psfn-framework-nwtw1). This is deliberately fail-loud, and it is a
+   * behavior change: the earlier surface silently wrote an `operatorResponse`
+   * onto a wish the companion had already been told was finished, leaving the
+   * Letter it received and the wish record disagreeing with no trace. Reopening
+   * a closed wish is a new wish, not an edit of the closed one.
    */
   private async recordDisposition(
     wish: CompanionWish,

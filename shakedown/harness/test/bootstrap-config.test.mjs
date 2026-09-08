@@ -10,6 +10,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { resolveBootstrapConfig } from '../lib/bootstrap-config.mjs';
 
 const fixtureRoot = mkdtempSync(join(tmpdir(), 'psfn-bootstrap-config-'));
@@ -157,3 +158,63 @@ try {
 } finally {
   rmSync(fixtureRoot, { recursive: true, force: true });
 }
+
+// ── Reference companion card guard (psfn-framework-p2jr0 (4)) ──
+// The public sanitizer treats .png as binary and skips it, and
+// shakedown/companion/ is a subtree exemption on top of that, so nothing in the
+// repository reads the card the harness actually copies into every round.
+// bootstrap-config.mjs only proves the file exists. A future card swap could
+// therefore reintroduce a private persona — name, system prompt, or example
+// dialogue — with no gate objecting. This reads the real card's embedded
+// metadata and pins it to the generic reference persona.
+
+/** Extract the base64 `chara` tEXt chunk from a v2/v3 character card PNG. */
+function readCharacterCardMetadata(pngPath) {
+  const buffer = readFileSync(pngPath);
+  const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  assert.ok(buffer.subarray(0, 8).equals(PNG_SIGNATURE), `${pngPath} is not a PNG`);
+  let offset = 8;
+  while (offset + 8 <= buffer.length) {
+    const length = buffer.readUInt32BE(offset);
+    const type = buffer.toString('ascii', offset + 4, offset + 8);
+    if (type === 'IEND') break;
+    if (type === 'tEXt') {
+      const data = buffer.subarray(offset + 8, offset + 8 + length);
+      const separator = data.indexOf(0);
+      if (separator > 0 && data.toString('latin1', 0, separator) === 'chara') {
+        const encoded = data.subarray(separator + 1).toString('latin1');
+        return JSON.parse(Buffer.from(encoded, 'base64').toString('utf8'));
+      }
+    }
+    offset += 12 + length;
+  }
+  throw new Error(`${pngPath} carries no embedded character card metadata`);
+}
+
+const referenceCardPath = fileURLToPath(
+  new URL('../../companion/REFERENCE-COMPANION.png', import.meta.url),
+);
+const referenceCard = readCharacterCardMetadata(referenceCardPath);
+assert.equal(referenceCard.spec, 'chara_card_v3', 'reference card must stay a v3 character card');
+const referenceData = referenceCard.data;
+assert.ok(referenceData, 'reference card must carry a data object');
+assert.equal(
+  referenceData.name,
+  'Reference Companion',
+  'the shipped shakedown card must stay the generic reference persona, not a real companion',
+);
+for (const field of ['system_prompt', 'mes_example', 'first_mes', 'post_history_instructions']) {
+  assert.equal(
+    referenceData[field] ?? '',
+    '',
+    `reference card ${field} must stay empty; a populated one would ship a private persona`,
+  );
+}
+assert.deepEqual(
+  referenceData.alternate_greetings ?? [],
+  [],
+  'reference card must ship no alternate greetings',
+);
+assert.equal(referenceData.nickname ?? '', '', 'reference card must ship no nickname');
+
+console.log('reference companion card guard passed');

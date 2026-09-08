@@ -12,6 +12,7 @@ import type {
   ReflectionNoveltyGateConfig,
 } from '../../system/config/scheduler-config.js';
 import type { EventBus } from '../../shared/event-bus.js';
+import type { ToolCallOutcomeCounts } from '../../shared/contracts/tool-call-outcome.js';
 import type { LLMProviderPort } from '../agent/contracts.js';
 import type { PostTurnActionInferer } from '../agent/substrate-agent.js';
 import type { MemoryWriter } from '../../faculties/memory/writer.js';
@@ -84,6 +85,12 @@ export interface ReflectionAgent {
       internalStateSnapshotRef?: string;
       metacognitiveFlags?: unknown;
       retrievalProvenanceRefs?: string[];
+      /**
+       * Content-free census of what this turn's tool calls returned
+       * (psfn-framework-lpxg3.2). A protected reflection reads it to learn that
+       * an optional read was withheld, unverdictable, or partial.
+       */
+      toolCallOutcomes?: ToolCallOutcomeCounts;
     };
   }>;
   followUp?(message: SubstrateMessage): void;

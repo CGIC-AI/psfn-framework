@@ -155,5 +155,8 @@ export function resolveRuntimeSchedulerConfig(
     ...(persisted.introspectionAudit
       ? { introspectionAudit: { ...persisted.introspectionAudit } }
       : {}),
+    ...(persisted.blindReviewer
+      ? { blindReviewer: { ...persisted.blindReviewer } }
+      : {}),
   };
 }

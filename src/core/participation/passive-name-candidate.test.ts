@@ -408,4 +408,100 @@ describe('PassiveNameCandidateBuilder', () => {
       }
     });
   });
+
+  describe('relationship-scoped biography aliases (o61vb.17)', () => {
+    const ALIAS = 'Sunbeam loaf';
+    /** Resolves aliases only for the one speaker they are bound to. */
+    function aliasResolver(boundTo: string, aliases: readonly string[] = [ALIAS]) {
+      const calls: string[] = [];
+      return {
+        calls,
+        resolver: {
+          resolve: async (input: { source: string; transportParticipantId: string }) => {
+            calls.push(input.transportParticipantId);
+            return input.transportParticipantId === boundTo ? aliases : [];
+          },
+        },
+      };
+    }
+
+    it('creates a passive candidate when the bound speaker uses a reviewed nickname', async () => {
+      const { resolver, calls } = aliasResolver('human-alice');
+      const builder = makeBuilder({ aliasResolver: resolver });
+      const decision = await builder.build(
+        makeMessage({ content: 'hey sunbeam loaf, what do you think?' }),
+      );
+      expect(decision.status).toBe('created');
+      const canonical = await makeBuilder().build(
+        makeMessage({ id: 'msg-canonical', channelId: 'discord-other' }),
+      );
+      if (decision.status === 'created' && canonical.status === 'created') {
+        // An alias is an ordinary name cue: same trigger, same downstream path.
+        expect(decision.candidate.trigger).toBe('passive_name');
+        expect(decision.candidate.matchedName).toBe(true);
+        // The candidate carries nothing an alias match added. Its shape is
+        // exactly a canonical-name candidate's, so nothing downstream — the
+        // appraiser, the arbiter, telemetry — can tell how it was summoned or
+        // learn that a private nickname exists. The room text is the speaker's
+        // own published message and was already carried before this bead.
+        expect(Object.keys(decision.candidate).sort())
+          .toEqual(Object.keys(canonical.candidate).sort());
+      }
+      expect(calls).toEqual(['human-alice']);
+    });
+
+    it('does not match, and does not reveal, an alias used by an unrelated speaker', async () => {
+      const { resolver } = aliasResolver('human-alice');
+      const builder = makeBuilder({ aliasResolver: resolver });
+      const decision = await builder.build(
+        makeMessage({
+          id: 'msg-mallory',
+          authorId: 'human-mallory',
+          authorName: 'Mallory',
+          content: 'hey sunbeam loaf, what do you think?',
+        }),
+      );
+      // Exactly the suppression a companion with no aliases at all produces:
+      // the outcome is not an oracle for whether the nickname exists.
+      expectSuppressed(decision, 'no_name_match');
+    });
+
+    it('refuses an alias below the owner-file length floor', async () => {
+      const { resolver } = aliasResolver('human-alice', ['V']);
+      const builder = makeBuilder({
+        aliasResolver: resolver,
+        settings: { ...createDefaultPassiveNameCandidateSettings(), aliasMinLength: 3 },
+      });
+      expectSuppressed(
+        await builder.build(makeMessage({ content: 'v was right about that' })),
+        'no_name_match',
+      );
+    });
+
+    it('never consults the resolver once the canonical name already matched', async () => {
+      const { resolver, calls } = aliasResolver('human-alice');
+      const builder = makeBuilder({ aliasResolver: resolver });
+      const decision = await builder.build(makeMessage());
+      expect(decision.status).toBe('created');
+      // An already-named message costs no biography read at all.
+      expect(calls).toEqual([]);
+    });
+
+    it('cannot bypass the name-spam debounce window', async () => {
+      const { resolver } = aliasResolver('human-alice');
+      const builder = makeBuilder({ aliasResolver: resolver });
+      const first = await builder.build(
+        makeMessage({ id: 'msg-a', content: 'sunbeam loaf are you around' }),
+      );
+      expect(first.status).toBe('created');
+      // A second alias summons inside the window collapses exactly as a second
+      // canonical-name summons does: an alias is a cue, never an override.
+      expectSuppressed(
+        await builder.build(
+          makeMessage({ id: 'msg-b', content: 'sunbeam loaf still there?' }),
+        ),
+        'debounced',
+      );
+    });
+  });
 });

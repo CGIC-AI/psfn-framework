@@ -12405,6 +12405,13 @@
     },
     {
       "file": "src/system/config/participation-config.ts",
+      "name": "createDefaultPassiveNameCandidateSettings.aliasMinLength",
+      "value": "3",
+      "form": "object-member",
+      "note": "Canonical owner-file/schema metadata createDefaultPassiveNameCandidateSettings.aliasMinLength; the code literal is the seed default for the owned participation.passiveNameCandidates.aliasMinLength setting, which operators raise or lower in settings.json."
+    },
+    {
+      "file": "src/system/config/participation-config.ts",
       "name": "createDefaultEgressLeasePhaseSettings.minReplyConfidence",
       "value": "0.5",
       "form": "object-member",

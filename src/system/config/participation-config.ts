@@ -83,6 +83,14 @@ export interface PassiveNameCandidateSettings {
    * debounce entirely (every non-duplicate name-trigger creates a candidate).
    */
   debounceWindowMs: number;
+  /**
+   * Shortest reviewed biography alias that may act as a passive address cue
+   * (psfn-framework-o61vb.17). A one- or two-character alias such as `V` or
+   * `00` matches far too much ordinary room text to be a safe summons, so
+   * anything shorter than this is dropped before matching. Raising it is
+   * always safe; lowering it widens what counts as being called.
+   */
+  aliasMinLength: number;
 }
 
 export function createDefaultPassiveNameCandidateSettings(): PassiveNameCandidateSettings {
@@ -94,6 +102,7 @@ export function createDefaultPassiveNameCandidateSettings(): PassiveNameCandidat
     stalenessMs: 5 * 60 * 1000,
     dedupeHistoryPerChannel: 256,
     debounceWindowMs: 10 * 60 * 1000,
+    aliasMinLength: 3,
   };
 }
 
@@ -384,6 +393,7 @@ export function parsePassiveNameCandidateSettings(
       'stalenessMs',
       'dedupeHistoryPerChannel',
       'debounceWindowMs',
+      'aliasMinLength',
     ],
     fieldPath,
     { errorPrefix: PARTICIPATION_ERROR_PREFIX },
@@ -415,6 +425,10 @@ export function parsePassiveNameCandidateSettings(
     debounceWindowMs: participationFiniteInteger(
       record.debounceWindowMs ?? defaults.debounceWindowMs,
       `${fieldPath}.debounceWindowMs`,
+    ),
+    aliasMinLength: participationPositiveInteger(
+      record.aliasMinLength ?? defaults.aliasMinLength,
+      `${fieldPath}.aliasMinLength`,
     ),
   };
 }

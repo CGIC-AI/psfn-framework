@@ -156,6 +156,10 @@ import { createBiographySynthesisTargetPort } from '../../faculties/memory/biogr
 import { createDefaultBiographicalCandidatePolicy } from '../../system/config/biographical-candidate-policy.js';
 import type { BiographicalSubjectRef } from '../../faculties/memory/biographical/types.js';
 import { createRuntimeBiographicalProjection } from '../../faculties/memory/biographical/runtime-projection.js';
+import {
+  createBiographicalAliasResolver,
+  type BiographicalAliasResolver,
+} from '../../faculties/memory/biographical/alias-address.js';
 import { resolveCompanionIdFromConfig } from '../../core/identity/companion-runtime.js';
 import { createDefaultBiographicalDepthPolicy } from '../../system/config/biographical-depth-policy.js';
 import { awaitPostgresStoreReadiness } from '../../persistence/postgres/runtime-readiness.js';
@@ -357,6 +361,11 @@ export interface AgentCoreRuntime {
    * activates a human-derived fact.
    */
   biographyCompanionReview: BiographyCompanionReviewService;
+  /**
+   * Builds the reviewed relationship-scoped alias resolver (o61vb.17) for the
+   * participation lane, which owns the alias-length floor from scheduler.json.
+   */
+  biographicalAliasResolverFor: (minAliasLength: number) => BiographicalAliasResolver;
   /** Shared lazy durable model-usage query handle (b0yl.5); null on non-postgres. */
   getModelUsageQuery: () => ModelUsageQueryPort | null;
   icpAutonomyRuntime?: AgentFacingIcpAutonomyRuntime;
@@ -1016,13 +1025,28 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   const companionId = resolveCompanionIdFromConfig(config);
   const biographicalDepthPolicy = config.biographicalDepthPolicy
     ?? createDefaultBiographicalDepthPolicy();
+  const biographicalRevalidator = new MemoryBackedBiographicalSourceRevalidator(memoryStore);
   const biographicalProjection = createRuntimeBiographicalProjection({
     store: biographicalStore,
-    revalidator: new MemoryBackedBiographicalSourceRevalidator(memoryStore),
+    revalidator: biographicalRevalidator,
     contactStore,
     companionId,
     policy: biographicalDepthPolicy,
   });
+  // Reviewed relationship-scoped aliases as a passive address cue (o61vb.17).
+  // Read-only and deterministic: the participation gate compares the resolved
+  // aliases against room text and discards them, and an unrelated speaker
+  // resolves to nothing. The alias-length floor stays with its owner file, so
+  // the participation lane supplies it at wiring time rather than core runtime
+  // reaching for a second copy of scheduler.json.
+  const biographicalAliasResolverFor = (minAliasLength: number) =>
+    createBiographicalAliasResolver({
+      store: biographicalStore,
+      contactStore,
+      revalidator: biographicalRevalidator,
+      companionSubject: { kind: 'companion', companionId, subjectVersion: 1 },
+      minAliasLength,
+    });
 
   // Perception ingestion (S10 Workstream D). The bridge normalizes presence/face
   // telemetry into PerceptionEvents; the identity-claim resolver (bead .13) turns
@@ -1255,6 +1279,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     closeBiographicalProjection: () => biographicalPool.end(),
     biographySynthesis,
     biographyCompanionReview,
+    biographicalAliasResolverFor,
     // Durable model-usage query handle (b0yl.5): shared lazy store also used by
     // the self-diagnosis tool, reused by the tool-usage evaluator scheduler lane
     // so the two do not open separate pools.

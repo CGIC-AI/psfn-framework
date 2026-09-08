@@ -1,8 +1,11 @@
-// ── Human escalation routing policy (bead psfn-framework-bznbn) ──
+// ── Human escalation routing policy and ledger bounds (beads
+// psfn-framework-bznbn, psfn-framework-yu03d) ──
 //
-// Which kinds of "a human is needed" reach a person how, and how often. The
-// control plane owns no routing literal: it reads this block, so an operator
-// changes where an escalation goes without a release.
+// Which kinds of "a human is needed" reach a person how, how often, and how
+// much of that history the runtime keeps. The control plane and its durable
+// ledger own no routing or retention literal: they read this block, so an
+// operator changes where an escalation goes, and how long an answered one is
+// kept, without a release.
 //
 // It lives in `scheduler.json` beside `healthDetectors.incidentAlerts` because
 // that is already where this runtime's alert cadence and delivery policy live.
@@ -36,6 +39,7 @@ import {
   HUMAN_ESCALATION_SINKS,
   isHumanEscalationSinkId,
   type HumanEscalationKind,
+  type HumanEscalationLedgerBounds,
   type HumanEscalationSinkId,
 } from '../../../shared/escalation/contracts.js';
 import { isRecord } from '../../../shared/utils/types.js';
@@ -57,6 +61,8 @@ export interface HumanEscalationConfig {
   routes: Readonly<Record<HumanEscalationKind, HumanEscalationRouteConfig>>;
   /** Rows the Garden attention surface reads per refresh. */
   listLimit: number;
+  /** Durable ledger bounds; required, with no built-in fallback. */
+  retention: HumanEscalationLedgerBounds;
 }
 
 export const DEFAULT_HUMAN_ESCALATION_CONFIG: HumanEscalationConfig = {
@@ -72,6 +78,14 @@ export const DEFAULT_HUMAN_ESCALATION_CONFIG: HumanEscalationConfig = {
     cogsec_quarantine: { sink: 'garden_only', cooldownMs: 0 },
   },
   listLimit: 100,
+  retention: {
+    // A week is the window in which an operator reviewing what this runtime
+    // asked about still has the surrounding context to judge it.
+    resolvedRetentionMs: 604_800_000,
+    maxResolvedRowsPerKind: 256,
+    maxAttemptsPerEscalation: 64,
+    maxOpenRowsPerKind: 128,
+  },
 };
 
 function requireObject(raw: unknown, sourcePath: string, field: string): Record<string, unknown> {
@@ -108,15 +122,64 @@ function validateRoute(
   return { sink: route.sink, cooldownMs };
 }
 
+/**
+ * Fail closed on every bound. There is no built-in fallback and no partial
+ * block: a ledger that persists what a runtime asked a human must never come up
+ * without a declared bound, and a half-declared block is an operator edit that
+ * was interrupted, not a policy.
+ */
+function validateRetention(raw: unknown, sourcePath: string): HumanEscalationLedgerBounds {
+  const field = 'humanEscalation.retention';
+  const retention = requireObject(raw, sourcePath, field);
+  assertNoUnknownKeys(
+    retention,
+    [
+      'resolvedRetentionMs',
+      'maxResolvedRowsPerKind',
+      'maxAttemptsPerEscalation',
+      'maxOpenRowsPerKind',
+    ],
+    `${sourcePath}.${field}`,
+    { errorPrefix: 'Invalid scheduler config' },
+  );
+  const maxResolvedRowsPerKind = toPositiveInteger(
+    retention.maxResolvedRowsPerKind,
+    `${field}.maxResolvedRowsPerKind`,
+    1,
+  );
+  const maxOpenRowsPerKind = toPositiveInteger(
+    retention.maxOpenRowsPerKind,
+    `${field}.maxOpenRowsPerKind`,
+    1,
+  );
+  return {
+    resolvedRetentionMs: toPositiveInteger(
+      retention.resolvedRetentionMs,
+      `${field}.resolvedRetentionMs`,
+      1,
+    ),
+    maxResolvedRowsPerKind,
+    maxAttemptsPerEscalation: toPositiveInteger(
+      retention.maxAttemptsPerEscalation,
+      `${field}.maxAttemptsPerEscalation`,
+      1,
+    ),
+    maxOpenRowsPerKind,
+  };
+}
+
 export function validateHumanEscalationConfig(
   raw: unknown,
   sourcePath: string,
   crossChecks: { incidentRealertCooldownMs: number },
 ): HumanEscalationConfig {
   const root = requireObject(raw, sourcePath, 'humanEscalation');
-  assertNoUnknownKeys(root, ['routes', 'listLimit'], `${sourcePath}.humanEscalation`, {
-    errorPrefix: 'Invalid scheduler config',
-  });
+  assertNoUnknownKeys(
+    root,
+    ['routes', 'listLimit', 'retention'],
+    `${sourcePath}.humanEscalation`,
+    { errorPrefix: 'Invalid scheduler config' },
+  );
   const routesRaw = requireObject(root.routes, sourcePath, 'humanEscalation.routes');
   assertNoUnknownKeys(
     routesRaw,
@@ -166,5 +229,5 @@ export function validateHumanEscalationConfig(
     );
   }
 
-  return { routes, listLimit };
+  return { routes, listLimit, retention: validateRetention(root.retention, sourcePath) };
 }

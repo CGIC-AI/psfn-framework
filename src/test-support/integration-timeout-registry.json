@@ -18,7 +18,7 @@
       "timeoutMs": 120000,
       "measuredBaselineMs": 700,
       "baselineSource": "measured",
-      "note": "psfn-framework-7qeo1.24.5-.6: end-to-end incident path over the real containerized PostgreSQL health-event ring \u2014 detector cycle through the live event bus into the persisting sink and the deduplicated operator alert, then the Garden incident timeline reading the same store back under the identical incident id. Focused local full-file wall baseline was 0.65s on 2026-09-07 with a warm harness slot; 120s matches the repo integration cap and preserves headroom for cold image startup and shared harness-slot contention."
+      "note": "psfn-framework-7qeo1.24.5-.6: end-to-end incident path over the real containerized PostgreSQL health-event ring — detector cycle through the live event bus into the persisting sink and the deduplicated operator alert, then the Garden incident timeline reading the same store back under the identical incident id. Focused local full-file wall baseline was 0.65s on 2026-09-07 with a warm harness slot; 120s matches the repo integration cap and preserves headroom for cold image startup and shared harness-slot contention."
     },
     {
       "file": "src/persistence/postgres/letter-store.integration.test.ts",
@@ -621,6 +621,13 @@
       "measuredBaselineMs": 3000,
       "baselineSource": "measured",
       "note": "S12B custody chain query (psfn-framework-ccgdz.7): real-Postgres full-chain suite measured warm under 3s on 2026-09-08; 120s matches the repo integration cap with >2x headroom for cold container start."
+    },
+    {
+      "file": "src/persistence/postgres/human-escalation-store.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": 800,
+      "baselineSource": "measured",
+      "note": "psfn-framework-yu03d: durable escalation ledger bounds against the real containerized PostgreSQL harness - open rows never evicted, answered rows expired by retention and by the per-kind cap, attempt ring bounded, and a 25-cycle sinkless crash loop collapsing to one open row. Focused local full-file wall baseline was 0.76s on 2026-09-08 with a warm harness slot; 120s matches the repo integration cap and preserves headroom for cold image startup and shared harness-slot contention."
     }
   ]
 }

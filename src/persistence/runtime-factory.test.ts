@@ -1,3 +1,4 @@
+import { DEFAULT_HUMAN_ESCALATION_CONFIG } from '../system/config/scheduler-config/human-escalation.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MemoryStorePort } from '../faculties/memory/memory-store-port.js';
 import type { ContactStorePort } from '../core/contacts/contact-store-port.js';
@@ -253,6 +254,7 @@ describe('createAgentPersistenceRuntime', () => {
     );
 
     await expect(createAgentPersistenceRuntime({
+      humanEscalationLedgerBounds: DEFAULT_HUMAN_ESCALATION_CONFIG.retention,
       config: {
         databasePath: '/tmp/ignored.db',
         persistenceBackend: 'postgres',
@@ -280,6 +282,7 @@ describe('createAgentPersistenceRuntime', () => {
   it('runs authenticated contact recovery before returning and exposes a stoppable worker', async () => {
     const gateway = { executeContactLifecycle: vi.fn() };
     const runtime = await createAgentPersistenceRuntime({
+      humanEscalationLedgerBounds: DEFAULT_HUMAN_ESCALATION_CONFIG.retention,
       config: {
         databasePath: '/tmp/ignored.db',
         persistenceBackend: 'postgres',
@@ -317,6 +320,7 @@ describe('createAgentPersistenceRuntime', () => {
 
   it('fails closed when runtime persistence is not configured for postgres', async () => {
     await expect(createAgentPersistenceRuntime({
+      humanEscalationLedgerBounds: DEFAULT_HUMAN_ESCALATION_CONFIG.retention,
       config: {
         databasePath: '/tmp/companion.db',
         persistenceBackend: 'sqlite' as never,
@@ -338,6 +342,7 @@ describe('createAgentPersistenceRuntime', () => {
 
   it('rejects a sibling tenant schema before opening any persistence store', async () => {
     await expect(createAgentPersistenceRuntime({
+      humanEscalationLedgerBounds: DEFAULT_HUMAN_ESCALATION_CONFIG.retention,
       config: {
         databasePath: '/tmp/ignored.db',
         persistenceBackend: 'postgres',
@@ -383,6 +388,7 @@ describe('createAgentPersistenceRuntime', () => {
 
   it('selects postgres-backed memory, reflections, contacts, and intention stores through the factory', async () => {
     const runtime = await createAgentPersistenceRuntime({
+      humanEscalationLedgerBounds: DEFAULT_HUMAN_ESCALATION_CONFIG.retention,
       config: {
         databasePath: '/tmp/ignored.db',
         persistenceBackend: 'postgres',
@@ -523,6 +529,7 @@ describe('createAgentPersistenceRuntime', () => {
 
   it('connects tenant and shared-schema infrastructure for a one-entry fleet', async () => {
     const runtime = await createAgentPersistenceRuntime({
+      humanEscalationLedgerBounds: DEFAULT_HUMAN_ESCALATION_CONFIG.retention,
       config: {
         databasePath: '/tmp/ignored.db',
         persistenceBackend: 'postgres',
@@ -593,6 +600,7 @@ describe('createAgentPersistenceRuntime', () => {
     const localCompanionId = '11111111-1111-4111-8111-111111111111';
     const siblingCompanionId = '22222222-2222-4222-8222-222222222222';
     const runtime = await createAgentPersistenceRuntime({
+      humanEscalationLedgerBounds: DEFAULT_HUMAN_ESCALATION_CONFIG.retention,
       config: {
         databasePath: '/tmp/ignored.db',
         persistenceBackend: 'postgres',
@@ -646,6 +654,7 @@ describe('createAgentPersistenceRuntime', () => {
 
   it('threads the configured per-companion schema into every store and provisions it up front', async () => {
     await createAgentPersistenceRuntime({
+      humanEscalationLedgerBounds: DEFAULT_HUMAN_ESCALATION_CONFIG.retention,
       config: {
         databasePath: '/tmp/ignored.db',
         persistenceBackend: 'postgres',

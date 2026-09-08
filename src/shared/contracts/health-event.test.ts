@@ -5,6 +5,7 @@ import {
   hashHealthEventSubject,
   processObserverId,
   resolveHealthEventOwner,
+  stableHealthConditionCorrelationId,
   validateHealthEvent,
   type HealthEvent,
   type HealthEventInput,
@@ -255,5 +256,40 @@ describe('emitHealthEvent', () => {
     const publisher: HealthEventPublisher = { emit: async () => { await Promise.resolve(); } };
     await expect(emitHealthEvent(publisher, input({ observedAtMs: -1 })))
       .rejects.toThrow(/observedAtMs/u);
+  });
+});
+
+describe('stableHealthConditionCorrelationId', () => {
+  it('names the condition rather than the observation, so restarts agree', () => {
+    const first = stableHealthConditionCorrelationId(
+      'operator_alert_sinks_unconfigured',
+      { kind: 'system' },
+    );
+    const second = stableHealthConditionCorrelationId(
+      'operator_alert_sinks_unconfigured',
+      { kind: 'system' },
+    );
+
+    expect(first).toBe(second);
+    // A boot-independent id must still satisfy the envelope's own identifier
+    // contract, or the emitter it is written for would reject it.
+    expect(() => createHealthEvent(input({ correlationId: first }))).not.toThrow();
+  });
+
+  it('separates conditions, owners, and tenants', () => {
+    const system = stableHealthConditionCorrelationId(
+      'operator_alert_sinks_unconfigured',
+      { kind: 'system' },
+    );
+    const otherCode = stableHealthConditionCorrelationId(
+      'human_escalation_ledger_saturated',
+      { kind: 'system' },
+    );
+    const companion = stableHealthConditionCorrelationId(
+      'operator_alert_sinks_unconfigured',
+      resolveHealthEventOwner(COMPANION_ID),
+    );
+
+    expect(new Set([system, otherCode, companion]).size).toBe(3);
   });
 });

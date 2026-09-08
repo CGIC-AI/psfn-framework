@@ -50,6 +50,7 @@ export function resolveRuntimeSchedulerConfig(
     humanEscalation: {
       routes: { ...persisted.humanEscalation.routes },
       listLimit: persisted.humanEscalation.listLimit,
+      retention: { ...persisted.humanEscalation.retention },
     },
     artifactLifecycle: { ...persisted.artifactLifecycle },
     episodicProcessing: { ...persisted.episodicProcessing },

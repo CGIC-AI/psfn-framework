@@ -72,7 +72,11 @@ import { IntrospectionLandmarkPostgresStore } from '../faculties/introspection/p
 import { assertSharedSchemaRuntimeAuthority } from './postgres/shared-schema.js';
 import { PostgresPartnerAffectShadowStore } from './postgres/partner-affect-shadow-store.js';
 import { PostgresHealthEventStore } from './postgres/health-event-store.js';
-import { PostgresHumanEscalationStore } from './postgres/human-escalation-store.js';
+import {
+  PostgresHumanEscalationStore,
+  type HumanEscalationLedgerSaturationReporter,
+} from './postgres/human-escalation-store.js';
+import type { HumanEscalationLedgerBounds } from '../shared/escalation/contracts.js';
 import type { PartnerAffectShadowStorePort } from '../core/emotion/partner-affect/shadow-store-port.js';
 import { PostgresBackgroundWorkStore } from './postgres/background-work-store.js';
 import type { BackgroundWorkStorePort } from '../core/agent/background-work/store-port.js';
@@ -263,6 +267,15 @@ export interface CreateAgentPersistenceRuntimeOptions {
   primaryUserId?: string;
   contactLifecycleGateway?: ContactLifecycleGatewayPort;
   onContactLifecycleRecoveryFailure?: (error: unknown) => void;
+  /**
+   * Owner-file bounds for the durable escalation ledger
+   * (`scheduler.json` `humanEscalation.retention`, bead psfn-framework-yu03d).
+   * Required: this factory has no fallback bound, so an agent can never persist
+   * escalations without a declared one.
+   */
+  humanEscalationLedgerBounds: HumanEscalationLedgerBounds;
+  /** Content-free report when this companion's open half reaches its cap. */
+  onHumanEscalationLedgerSaturated?: HumanEscalationLedgerSaturationReporter;
 }
 
 /**
@@ -610,7 +623,14 @@ export async function createAgentPersistenceRuntime(
     ),
     humanEscalationStore: await awaitPostgresStoreReadiness(
       'human_escalations',
-      () => PostgresHumanEscalationStore.connect(databaseUrl, { schema, role: tenantRole }),
+      () => PostgresHumanEscalationStore.connect(databaseUrl, {
+        schema,
+        role: tenantRole,
+        bounds: options.humanEscalationLedgerBounds,
+        ...(options.onHumanEscalationLedgerSaturated
+          ? { onSaturated: options.onHumanEscalationLedgerSaturated }
+          : {}),
+      }),
     ),
     healthEventStore: await awaitPostgresStoreReadiness(
       'runtime_health_stream',

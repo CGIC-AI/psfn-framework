@@ -10,6 +10,7 @@ import {
   wireMemoryRuntime,
 } from '../../startup/composition/composition.js';
 import { createAgentPersistenceRuntime } from '../../../persistence/runtime-factory.js';
+import { DEFAULT_HUMAN_ESCALATION_CONFIG } from '../../../system/config/scheduler-config/human-escalation.js';
 import { resolveChargeLedgerPath } from '../../../persistence/layout.js';
 import { PostgresIcpFatigueRegulationReservationStore } from '../../../persistence/postgres/icp-fatigue-regulation-reservation-store.js';
 import { PostgresIcpAdminProjectionStore } from '../../../persistence/postgres/icp-admin-projection-store.js';
@@ -178,6 +179,7 @@ async function main(): Promise<void> {
     config: startup.config,
     pathSnapshot: startup.pathSnapshot,
     embeddingDims: CERTIFICATION_EMBEDDING_DIMS,
+    humanEscalationLedgerBounds: DEFAULT_HUMAN_ESCALATION_CONFIG.retention,
   });
   const contactStore = persistence.contactStore;
   if (!contactStore) throw new Error('ICP certification agent requires the Postgres contact store');

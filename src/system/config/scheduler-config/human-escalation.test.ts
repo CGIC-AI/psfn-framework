@@ -11,6 +11,7 @@ function block(overrides: Record<string, unknown> = {}): Record<string, unknown>
   return {
     routes: structuredClone(DEFAULT_HUMAN_ESCALATION_CONFIG.routes),
     listLimit: DEFAULT_HUMAN_ESCALATION_CONFIG.listLimit,
+    retention: structuredClone(DEFAULT_HUMAN_ESCALATION_CONFIG.retention),
     ...overrides,
   };
 }
@@ -89,5 +90,39 @@ describe('human escalation owner-file routing', () => {
       SOURCE,
       CROSS_CHECKS,
     )).toThrow(/quietHours/);
+  });
+
+  it('rejects a missing ledger retention block rather than defaulting a bound', () => {
+    const raw = block();
+    delete raw.retention;
+
+    expect(() => validateHumanEscalationConfig(raw, SOURCE, CROSS_CHECKS))
+      .toThrow(/humanEscalation\.retention must be an object/);
+  });
+
+  it('rejects a non-positive ledger bound', () => {
+    expect(() => validateHumanEscalationConfig(
+      block({
+        retention: {
+          ...structuredClone(DEFAULT_HUMAN_ESCALATION_CONFIG.retention),
+          maxOpenRowsPerKind: 0,
+        },
+      }),
+      SOURCE,
+      CROSS_CHECKS,
+    )).toThrow(/humanEscalation\.retention\.maxOpenRowsPerKind must be an integer >= 1/);
+  });
+
+  it('rejects an unknown ledger retention key', () => {
+    expect(() => validateHumanEscalationConfig(
+      block({
+        retention: {
+          ...structuredClone(DEFAULT_HUMAN_ESCALATION_CONFIG.retention),
+          evictOpenRows: true,
+        },
+      }),
+      SOURCE,
+      CROSS_CHECKS,
+    )).toThrow(/evictOpenRows/);
   });
 });

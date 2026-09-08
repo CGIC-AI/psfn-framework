@@ -78,7 +78,17 @@ export interface GatewayPrivilegedCoreBuildInput {
    * constructed after this core — the same late binding the gateway's incident
    * alert sink uses. Absent leaves quarantine behaving exactly as before.
    */
-  resolveQuarantineHoldEscalation?: () => ((entry: IntakeQuarantineEntry) => void) | null;
+  resolveQuarantineHoldEscalation?: () => (
+    (entry: IntakeQuarantineEntry, companionId?: string) => void
+  ) | null;
+  /**
+   * wtw7l: mirrors a TTL expiry onto the plane. An expired hold is a question
+   * nobody answered, and without this it would leave an open escalation row
+   * forever — the stale-row class psfn-framework-yu03d exists to fight. The
+   * human decision path is mirrored in the Garden process, where the decision
+   * is actually made.
+   */
+  resolveQuarantineExpiryEscalation?: () => ((entry: IntakeQuarantineEntry) => void) | null;
 }
 
 export interface GatewayPrivilegedCore {
@@ -349,10 +359,20 @@ export async function buildGatewayPrivilegedCore(
       // wtw7l: the same hold, on the one surface a person is asked to look at.
       // Resolved per hold rather than captured, because the escalation plane is
       // constructed after this core — the same late-binding the incident alert
-      // sink beside it uses, and for the same startup-ordering reason.
-      input.resolveQuarantineHoldEscalation?.()?.(entry);
+      // sink beside it uses, and for the same startup-ordering reason. The
+      // owning companion travels WITH the hold: one gateway screens for the
+      // whole fleet, so stamping this process's identity on every hold would
+      // hand one companion's quarantine to another companion's operator.
+      input.resolveQuarantineHoldEscalation?.()?.(
+        entry,
+        companionId ?? input.config.companionId,
+      );
     },
     onQuarantineExpired: (_companionId, { entry, expiredAtMs, reason }) => {
+      // wtw7l: a hold that timed out is a question nobody answered. Closing the
+      // escalation here is what stops the ledger accumulating one open row per
+      // expired item forever.
+      input.resolveQuarantineExpiryEscalation?.()?.(entry);
       void eventBus.emit('intake.quarantine.expired', {
         envelopeId: entry.id,
         ...(entry.sourceChannelId ? { sourceChannelId: entry.sourceChannelId } : {}),

@@ -21,6 +21,7 @@ import {
 
 const NOW_MS = 1_800_000_000_000;
 const COMPANION_ID = '11111111-1111-4111-8111-111111111111';
+const OTHER_COMPANION_ID = '22222222-2222-4222-8222-222222222222';
 const ENVELOPE_ID = '018f22a2-52b8-7a3a-8c16-25b7b14f7082';
 
 const ROUTING: HumanEscalationRoutingPolicy = {
@@ -86,27 +87,34 @@ function plane(ledger: HumanEscalationLedgerPort) {
 function stores(options: {
   holdLedger: HumanEscalationLedgerPort;
   decisionLedgers: readonly HumanEscalationLedgerPort[];
+  /** The companion a hold belongs to, as the fleet gateway supplies it. */
+  holdCompanionId?: string;
+  now?: () => number;
 }) {
+  const now = options.now ?? (() => NOW_MS);
   const path = join(dir, 'intake-quarantine.json');
+  const raise = createQuarantineHoldEscalationObserver({
+    plane: plane(options.holdLedger),
+    companionId: COMPANION_ID,
+    renderNotice: () => null,
+    now,
+  });
+  const resolve = createQuarantineDecisionEscalationObserver({
+    ledgers: options.decisionLedgers,
+    now,
+  });
   const holder = createIntakeQuarantineStore(path, {
     itemTtlHours: 24,
     maxHeldItems: 10,
-    now: () => NOW_MS,
-    onHeld: createQuarantineHoldEscalationObserver({
-      plane: plane(options.holdLedger),
-      companionId: COMPANION_ID,
-      renderNotice: () => null,
-      now: () => NOW_MS,
-    }),
+    now,
+    onHeld: entry => raise(entry, options.holdCompanionId),
+    onExpired: ({ entry }) => resolve(entry),
   });
   const decider = createIntakeQuarantineStore(path, {
     itemTtlHours: 24,
     maxHeldItems: 10,
-    now: () => NOW_MS,
-    onDecided: createQuarantineDecisionEscalationObserver({
-      ledgers: options.decisionLedgers,
-      now: () => NOW_MS,
-    }),
+    now,
+    onDecided: resolve,
   });
   return { holder, decider };
 }
@@ -178,5 +186,49 @@ describe('quarantine escalation producer', () => {
     // conditional on an operator surface being reachable.
     expect(held.status).toBe('held');
     expect(holder.getById(ENVELOPE_ID)?.status).toBe('held');
+  });
+
+  it('owns a hold by the companion it was made FOR, not by the process that made it', async () => {
+    // One gateway screens for the whole fleet. Stamping its own identity here
+    // would either mark another companion's quarantine system-owned — visible
+    // to every Garden — or hand it to the primary companion's operator.
+    const ledger = createInMemoryHumanEscalationLedger();
+    const { holder } = stores({
+      holdLedger: ledger,
+      decisionLedgers: [ledger],
+      holdCompanionId: OTHER_COMPANION_ID,
+    });
+
+    holder.hold({ envelope: envelope(), mode: 'enforce', rawText: 'held' });
+    await settle();
+
+    expect(await ledger.findByCondition('cogsec_quarantine', ENVELOPE_ID))
+      .toMatchObject({ owner: { kind: 'companion', companionId: OTHER_COMPANION_ID } });
+  });
+
+  it('closes the escalation when the hold window shuts with nobody answering', async () => {
+    const ledger = createInMemoryHumanEscalationLedger();
+    let nowMs = NOW_MS;
+    const { holder } = stores({
+      holdLedger: ledger,
+      decisionLedgers: [ledger],
+      now: () => nowMs,
+    });
+    holder.hold({ envelope: envelope(), mode: 'enforce', rawText: 'held' });
+    await settle();
+    expect(await ledger.findByCondition('cogsec_quarantine', ENVELOPE_ID))
+      .toMatchObject({ state: 'open' });
+
+    // An expiry never reaches `applyDecision`, so without the sweep hook this
+    // row would stay open on the operator surface forever.
+    nowMs = NOW_MS + 25 * 3_600_000;
+    holder.list();
+    await settle();
+
+    expect(await ledger.findByCondition('cogsec_quarantine', ENVELOPE_ID))
+      .toMatchObject({
+        state: 'resolved',
+        resolution: { reason: 'not_actionable', actor: 'system' },
+      });
   });
 });

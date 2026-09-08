@@ -21,7 +21,7 @@ const BIOGRAPHICAL_REVIEW_ACTIONS = [
 ] as const;
 export type BiographicalReviewAction = (typeof BIOGRAPHICAL_REVIEW_ACTIONS)[number];
 
-const BIOGRAPHICAL_REVIEW_REASONS = [
+export const BIOGRAPHICAL_REVIEW_REASONS = [
   'approved',
   'denied',
   'grant-revoked',

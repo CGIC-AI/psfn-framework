@@ -217,6 +217,10 @@ import { COGSEC_INTAKE_FIREWALL_ISSUER_ID } from '../../shared/contracts/cogsec-
 import { loadPartnerAffectShadowConfig } from '../../system/config/partner-affect-shadow-config.js';
 import { createPartnerAffectShadowIngestBridge } from '../../core/emotion/partner-affect/shadow-ingest-bridge.js';
 import { createIntakeQuarantineStore } from '../../core/cogsec/intake/quarantine-store.js';
+import {
+  createQuarantineDecisionEscalationObserver,
+  createQuarantineHoldEscalationObserver,
+} from '../../core/cogsec/intake/quarantine-escalation-producer.js';
 import { emitGardenQueueChanged } from '../../shared/garden-queue-change.js';
 import { enforceNetworkIsolationOnStartup } from './startup-guards.js';
 import {
@@ -819,12 +823,40 @@ async function main(): Promise<void> {
   const intakePolicy = loadIntakePolicyConfig(pathSnapshot.systemDataDir);
   // The canonical CogSec mode is always armed (shadow/boundary/strict), so the
   // durable quarantine writer is always constructed.
+  // wtw7l: this process holds too (the screening path below), so its holds
+  // reach the same operator surface the gateway's do — raised onto this
+  // companion's own plane and closed when the window shuts on them.
+  const quarantineHoldEscalation = createQuarantineHoldEscalationObserver({
+    plane: humanEscalationControlPlane,
+    ...(config.companionId ? { companionId: config.companionId } : {}),
+    // Rendered here, never in the producer. Unused while this kind routes
+    // `garden_only`; an operator who reroutes it gets the envelope id and the
+    // page that owns its detail, never the withheld content.
+    renderNotice: entry => ({
+      sender: {
+        kind: 'system' as const,
+        provenance: 'system.cogsec.quarantine_escalation',
+      },
+      title: 'Quarantined item awaiting an operator',
+      message: `Garden: /cognitive-security, item ${entry.id}`,
+    }),
+  });
+  const quarantineExpiryEscalation = createQuarantineDecisionEscalationObserver({
+    ledgers: [
+      persistenceRuntime.humanEscalationStore,
+      ...(persistenceRuntime.fleetSystemHumanEscalationStore
+        ? [persistenceRuntime.fleetSystemHumanEscalationStore]
+        : []),
+    ],
+  });
   const intakeQuarantineWriter = createIntakeQuarantineStore(
     resolveIntakeQuarantinePath(pathSnapshot.companionDataDir),
     {
       itemTtlHours: intakePolicy.quarantine.itemTtlHours,
       maxHeldItems: intakePolicy.quarantine.maxHeldItems,
+      onHeld: entry => quarantineHoldEscalation(entry),
       onExpired: ({ entry, expiredAtMs, reason }) => {
+        quarantineExpiryEscalation(entry);
         void eventBus.emit('intake.quarantine.expired', {
           envelopeId: entry.id,
           ...(entry.sourceChannelId ? { sourceChannelId: entry.sourceChannelId } : {}),

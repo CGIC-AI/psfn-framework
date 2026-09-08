@@ -232,7 +232,7 @@ describe('CompanionGatewayClient', () => {
     await expect(starting).rejects.toThrow(/closed during audio startup/u);
   });
 
-  it('interrupts only a server-confirmed audio turn without browser-supplied authority', async () => {
+  it('interrupts a server-confirmed audio session before and after its turn ends', async () => {
     const socket = new FakeSocket();
     const client = await connectClient(socket, ['audio-request-1']);
     const starting = client.pcmAudio.start();
@@ -260,6 +260,65 @@ describe('CompanionGatewayClient', () => {
       requestId: 'audio-request-1',
     });
     await flushAsyncMessage();
+    socket.sent.length = 0;
+    client.interrupt();
+    expect(socket.sent).toEqual([JSON.stringify({
+      schemaVersion: 1,
+      type: 'audio.interrupt',
+      requestId: 'audio-request-1',
+    })]);
+  });
+
+  it('can stop speech after the final text result without resending the conversation', async () => {
+    const socket = new FakeSocket();
+    const client = await connectClient(socket, ['text-1', 'stop-1']);
+    client.sendUserText('Tell me a story.');
+    socket.message({
+      schemaVersion: 1, type: 'result', requestId: 'text-1', ok: true,
+      result: { content: 'Once upon a time.', channelId: 'attached-channel', inputTokens: 5, outputTokens: 5 },
+    });
+    await flushAsyncMessage();
+    client.interrupt();
+    expect(JSON.parse(String(socket.sent[1]))).toEqual({
+      schemaVersion: 1, requestId: 'stop-1', action: 'companion.interact', resource: 'conversation.interrupt',
+      body: { interactionId: 'text-1' },
+    });
+    socket.message({
+      schemaVersion: 1, type: 'result', requestId: 'stop-1', ok: true,
+      result: { interrupted: false, interactionId: 'text-1' },
+    });
+    await flushAsyncMessage();
+    client.interrupt();
+    expect(socket.sent).toHaveLength(2);
+    expect(client.snapshot().state).toBe('ready');
+  });
+
+  it('interrupts an active text conversation even when an idle microphone session remains open', async () => {
+    const socket = new FakeSocket();
+    const client = await connectClient(socket, ['audio-1', 'text-1', 'stop-1']);
+    const starting = client.pcmAudio.start();
+    socket.message({ schemaVersion: 1, type: 'audio.ready', requestId: 'audio-1' });
+    await starting;
+    client.sendUserText('Tell me a story.');
+    client.interrupt();
+    expect(JSON.parse(String(socket.sent[2]))).toMatchObject({
+      requestId: 'stop-1', resource: 'conversation.interrupt', body: { interactionId: 'text-1' },
+    });
+  });
+
+  it.each(['disconnect', 'server-close'] as const)('drops a completed speech selector on %s', async mode => {
+    const socket = new FakeSocket();
+    const client = await connectClient(socket, ['text-1']);
+    client.sendUserText('Tell me a story.');
+    socket.message({
+      schemaVersion: 1, type: 'result', requestId: 'text-1', ok: true,
+      result: { content: 'Once upon a time.', channelId: 'attached-channel', inputTokens: 5, outputTokens: 5 },
+    });
+    await flushAsyncMessage();
+    if (mode === 'disconnect') client.disconnect();
+    else socket.serverClose(1000);
+    expect(() => client.interrupt()).not.toThrow();
+    expect(socket.sent).toHaveLength(1);
   });
 
   it('accepts the server-owned turn ending while an audio stop is draining', async () => {

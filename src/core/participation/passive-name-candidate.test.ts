@@ -487,6 +487,29 @@ describe('PassiveNameCandidateBuilder', () => {
       expect(calls).toEqual([]);
     });
 
+    it('resolves the speaker on the canonical identity channel, not the raw channel type', async () => {
+      const seen: { source: string; transportParticipantId: string }[] = [];
+      const builder = makeBuilder({
+        aliasResolver: {
+          resolve: async input => {
+            seen.push(input);
+            return [];
+          },
+        },
+      });
+      // A Discord voice room arrives as a `terminal` channel type; the contact
+      // store knows that speaker under `discord`. Passing the raw channel type
+      // would resolve nobody and silently disable aliases in voice rooms.
+      await builder.build(makeMessage({
+        channelType: 'terminal',
+        channelId: 'discord-voice:lounge',
+        content: 'anyone around',
+      }));
+      expect(seen).toEqual([
+        { source: 'discord', transportParticipantId: 'human-alice' },
+      ]);
+    });
+
     it('cannot bypass the name-spam debounce window', async () => {
       const { resolver } = aliasResolver('human-alice');
       const builder = makeBuilder({ aliasResolver: resolver });

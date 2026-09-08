@@ -133,6 +133,7 @@ describe('revokeCompanionPublicationChoice — immediate restriction', () => {
     const revoked = await revokeCompanionPublicationChoice({
       store: s,
       grantId: grant.id,
+      claimId: a.id,
       revoke: { reason: 'I changed my mind', now: NOW },
     });
     expect(revoked.revokedAt).toBeDefined();
@@ -202,6 +203,7 @@ describe('revokeCompanionPublicationChoice — immediate restriction', () => {
     await revokeCompanionPublicationChoice({
       store: s,
       grantId: grantA.id,
+      claimId: a.id,
       revoke: { reason: 'revoke A only', now: NOW },
     });
 

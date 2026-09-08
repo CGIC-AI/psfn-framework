@@ -105,7 +105,7 @@ export async function revokeCompanionPublicationChoice(input: {
   store: BiographicalProfileStorePort;
   grantId: string;
   /** Claim the revoked choice published; its portability reverts with the grant. */
-  claimId?: string;
+  claimId: string;
   revoke: Pick<BiographicalGrantRevokeInput, 'reason'> & { now?: Date };
 }): Promise<BiographicalSensitivityGrant> {
   const revoked = await input.store.revokeGrant(input.grantId, {
@@ -113,13 +113,13 @@ export async function revokeCompanionPublicationChoice(input: {
     ...(input.revoke.now !== undefined ? { now: input.revoke.now } : {}),
   });
   // Withdrawing the choice withdraws the reach it authorized. Tightening back
-  // to `origin_only` always succeeds, so a revoke can never be half-applied.
-  if (input.claimId !== undefined) {
-    await input.store.setClaimPortability({
-      claimId: input.claimId,
-      portabilityScope: 'origin_only',
-      ...(input.revoke.now !== undefined ? { now: input.revoke.now } : {}),
-    });
-  }
+  // to `origin_only` always succeeds, so a revoke can never be half-applied —
+  // and the claim id is required precisely so a caller cannot revoke the grant
+  // while leaving the claim universally portable.
+  await input.store.setClaimPortability({
+    claimId: input.claimId,
+    portabilityScope: 'origin_only',
+    ...(input.revoke.now !== undefined ? { now: input.revoke.now } : {}),
+  });
   return revoked;
 }

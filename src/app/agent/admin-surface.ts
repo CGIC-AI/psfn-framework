@@ -58,6 +58,9 @@ import type { AdminIcpTestInitiationPort } from '../../operator/garden/services/
 import type {
   IncidentStreamRead,
 } from '../../shared/observability/incident-alerts/investigator.js';
+import type {
+  HumanEscalationLedgerPort,
+} from '../../shared/escalation/contracts.js';
 
 export interface StartOptionalAdminTransportServerOptions {
   adminPort?: number;
@@ -94,6 +97,8 @@ export interface StartOptionalAdminTransportServerOptions {
    * an operator surface must not be able to write to the plane it renders.
    */
   healthEventStreamRead?: IncidentStreamRead | null;
+  /** Durable ledger behind the human escalation attention surface (bznbn). */
+  humanEscalationLedger?: HumanEscalationLedgerPort | null;
   subsystemOutputRefStore: Pick<BackgroundWorkStorePort, 'getSubsystemOutputProjection'>;
   /** Pending contact approvals queue (E3.4 contact-tracking policy gate). */
   pendingContactApprovals?: PendingContactApprovalStore | null;
@@ -240,6 +245,7 @@ export async function startOptionalAdminTransportServer(
     subsystemOutputRefStore: options.subsystemOutputRefStore,
     episodicStore: options.episodicStore ?? null,
     healthEventStreamRead: options.healthEventStreamRead ?? null,
+    humanEscalationLedger: options.humanEscalationLedger ?? null,
     sessionStore: options.coreRuntime.sessionStore,
     letterService: options.coreRuntime.letterService,
     doingMirrorService: options.coreRuntime.doingMirrorService,

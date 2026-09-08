@@ -142,6 +142,12 @@ import {
 import type {
   IncidentStreamRead,
 } from '../../shared/observability/incident-alerts/investigator.js';
+import {
+  AdminHumanEscalationDataService,
+} from './services/human-escalation-service.js';
+import type {
+  HumanEscalationLedgerPort,
+} from '../../shared/escalation/contracts.js';
 import { createAdminToolConformanceService } from './services/tool-conformance-service.js';
 import type { ToolConformanceRunner } from '../../core/agent/tool-conformance/runner.js';
 import type { GatewaySystemDataWriterPort } from '../../boundary/gateway/system-data-writer.js';
@@ -263,6 +269,8 @@ export interface InProcessGardenAdminContractOptions {
   episodicStore?: EpisodicStorePort | null;
   /** Bounded read over the persisted health stream for the incident timeline. */
   healthEventStreamRead?: IncidentStreamRead | null;
+  /** Durable ledger behind the human escalation attention surface (bznbn). */
+  humanEscalationLedger?: HumanEscalationLedgerPort | null;
   sessionStore: SessionStore;
   letterService?: LetterService | null;
   doingMirrorService?: DoingMirrorService | null;
@@ -472,6 +480,16 @@ export function createInProcessGardenAdminContract(
     ? new AdminIncidentTimelineDataService({
       readStream: options.healthEventStreamRead,
       config: () => configStore.loadScheduler().healthDetectors,
+      ...(options.config.companionId ? { companionId: options.config.companionId } : {}),
+    })
+    : null;
+  // The human escalation attention surface (bznbn) reads and resolves the same
+  // durable ledger the control plane raises onto, so an operator answers the
+  // escalation the runtime actually recorded rather than a projection of it.
+  const humanEscalations = options.humanEscalationLedger
+    ? new AdminHumanEscalationDataService({
+      ledger: options.humanEscalationLedger,
+      config: () => configStore.loadScheduler().humanEscalation,
       ...(options.config.companionId ? { companionId: options.config.companionId } : {}),
     })
     : null;
@@ -938,6 +956,7 @@ export function createInProcessGardenAdminContract(
     scheduler: schedulerService,
     subsystemHealth,
     incidents,
+    humanEscalations,
     partnerAffectShadow,
     toolConformance,
     icpAutonomy,

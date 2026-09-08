@@ -28,6 +28,10 @@ import {
   type HealthDetectorsConfig,
 } from './scheduler-config/health-detectors.js';
 import {
+  validateHumanEscalationConfig,
+  type HumanEscalationConfig,
+} from './scheduler-config/human-escalation.js';
+import {
   validateSocialAutonomyConfig,
   type SocialAutonomyConfig,
 } from './scheduler-config/social-autonomy.js';
@@ -178,6 +182,9 @@ export {
 export {
   DEFAULT_HEALTH_DETECTORS_CONFIG,
 } from './scheduler-config/health-detectors.js';
+export {
+  DEFAULT_HUMAN_ESCALATION_CONFIG,
+} from './scheduler-config/human-escalation.js';
 
 export const SCHEDULER_FILE_NAME = 'scheduler.json';
 export const SCHEDULER_SEED_FILE_NAME = 'scheduler.seed.json';
@@ -188,6 +195,8 @@ export interface SchedulerRuntimeConfig {
   backgroundMaintenance: BackgroundMaintenanceConfig;
   /** Runtime health-detector thresholds, budgets, and cadence (7qeo1.24.2-.4). */
   healthDetectors: HealthDetectorsConfig;
+  /** Where each kind of human escalation is routed, and how often (bznbn). */
+  humanEscalation: HumanEscalationConfig;
   backgroundWork: BackgroundWorkRuntimeTuning;
   artifactLifecycle: ArtifactLifecyclePolicyConfig;
   episodicProcessing: EpisodicProcessingRestWindowConfig;
@@ -297,11 +306,17 @@ export function validateSchedulerConfig(
     sourcePath,
   );
   const episodicProcessing = validateEpisodicProcessingConfig(raw.episodicProcessing, sourcePath);
+  // Validated before the record below so the escalation routing cross-check can
+  // name the incident re-alert cooldown it must not compete with.
+  const healthDetectors = validateHealthDetectorsConfig(raw.healthDetectors, sourcePath);
   const validated: SchedulerRuntimeConfig = {
     tickIntervalMs,
     heartbeatIntervalMs: toInterval(raw.heartbeatIntervalMs, 'heartbeatIntervalMs'),
     backgroundMaintenance,
-    healthDetectors: validateHealthDetectorsConfig(raw.healthDetectors, sourcePath),
+    healthDetectors,
+    humanEscalation: validateHumanEscalationConfig(raw.humanEscalation, sourcePath, {
+      incidentRealertCooldownMs: healthDetectors.incidentAlerts.realertCooldownMs,
+    }),
     backgroundWork: validateBackgroundWorkConfig(raw.backgroundWork, sourcePath),
     artifactLifecycle: validateArtifactLifecycleConfig(raw.artifactLifecycle, sourcePath),
     episodicProcessing,

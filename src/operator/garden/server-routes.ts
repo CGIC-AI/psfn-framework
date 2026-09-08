@@ -217,6 +217,7 @@ export function buildAdminRoutes(deps: AdminRouteDependencies): AdminRoute[] {
       subjectAuditService: deps.services.subjectAudit,
       subsystemHealthService: deps.services.subsystemHealth ?? null,
       incidentTimelineService: deps.services.incidents ?? null,
+      humanEscalationService: deps.services.humanEscalations ?? null,
       partnerAffectShadowService: deps.services.partnerAffectShadow ?? null,
       toolConformanceService: deps.services.toolConformance ?? null,
       settingsService: deps.services.settings,

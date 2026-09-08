@@ -70,6 +70,14 @@ export const POSTGRES_STORE_READINESS_CATALOG = {
       message: 'Runtime health-event stream schema migration failed',
     },
   },
+  human_escalations: {
+    label: 'human escalation ledger',
+    requirement: 'required',
+    failureDiagnostic: {
+      component: 'HumanEscalationStore',
+      message: 'Human escalation ledger schema migration failed',
+    },
+  },
   shared_wiki: { label: 'shared world wiki', requirement: 'required' },
   memory_ann_index: { label: 'memory ANN index', requirement: 'optional' },
   wiki_projection: { label: 'wiki projection', requirement: 'optional' },

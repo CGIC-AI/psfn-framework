@@ -63,6 +63,9 @@ import type { AdminEnrollmentService } from './services/enrollment-service.js';
 import type { AdminGraphProposalsService } from './services/graph-proposals-service.js';
 import type { AdminSubsystemHealthService } from './services/subsystem-health-service.js';
 import type { AdminIncidentTimelineService } from './services/incident-timeline-service.js';
+import type {
+  AdminHumanEscalationService,
+} from './services/human-escalation-service.js';
 import type { AdminPartnerAffectShadowService } from './services/partner-affect-shadow-service.js';
 import type { AdminToolConformanceService } from './services/tool-conformance-service.js';
 import type { AdminSharedWorkspaceService } from './services/shared-workspace-service.js';
@@ -228,6 +231,8 @@ export interface GardenAdminDomainServices {
   subsystemHealth?: AdminSubsystemHealthService | null;
   /** Correlated runtime incidents rebuilt from the persisted health stream. */
   incidents?: AdminIncidentTimelineService | null;
+  /** Open human escalations, read and resolved on the durable ledger (bznbn). */
+  humanEscalations?: AdminHumanEscalationService | null;
   /** Shadow-only Partner Affect inspection surface (docs/partner-affect.md slice 1). */
   partnerAffectShadow?: AdminPartnerAffectShadowService | null;
   toolConformance?: AdminToolConformanceService | null;

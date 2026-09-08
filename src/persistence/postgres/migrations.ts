@@ -4071,9 +4071,12 @@ export const POSTGRES_SHARED_MIGRATIONS: readonly string[] = [
   //
   // The DDL is the SAME statement list a per-companion runtime installs in its
   // own schema, shared from one definition above, so the projection can never
-  // drift out of readability. What differs is only who writes: nothing
-  // companion-owned belongs in these tables, and the reading services fence on
-  // owner regardless.
+  // drift out of readability. What differs is only who writes. These rows are
+  // MOSTLY system-owned — but one gateway screens for the whole fleet, so a
+  // quarantine hold it makes for one companion is raised here carrying THAT
+  // companion's ownership. The reading services fence on owner, and that fence
+  // is the guarantee that a companion's Garden sees the runtime's faults and
+  // its own and nothing else.
   //
   // Version 20 is deliberately skipped: it is reserved by the concurrent ICP
   // lifecycle-fence lane, and a version this chain claimed twice would make the

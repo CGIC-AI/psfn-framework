@@ -1,3 +1,5 @@
+import { BIOGRAPHICAL_REVIEW_REASONS } from '../../../faculties/memory/biographical/review-audit.js';
+import { POSTGRES_BIOGRAPHICAL_PROFILE_MIGRATIONS } from '../../../persistence/postgres/biographical-profile-migrations.js';
 import { describe, expect, it, vi } from 'vitest';
 
 import { requireGardenRouteAuthorization } from '../../../boundary/fleet-auth/garden-route-authorization.js';
@@ -666,6 +668,21 @@ describe('AdminBiographicalReviewService', () => {
       sourceSetDigest: dyad.sourceSetDigest,
       portabilityScope: 'everywhere',
     }, ACTOR)).rejects.toMatchObject({ reason: 'malformed' });
+  });
+
+  it('keeps every review reason the service can record inside the audit table constraint', () => {
+    // The service writes `reason` straight into `biographical_review_audits`,
+    // whose CHECK constraint is a hand-maintained copy of the same vocabulary.
+    // A reason the service can produce but the table refuses turns a reported
+    // failure into a constraint violation that masks the failure it was
+    // reporting — which is exactly what `portability-failed` would have done.
+    const constraint = POSTGRES_BIOGRAPHICAL_PROFILE_MIGRATIONS
+      .filter(statement => statement.includes('biographical_review_reason_check'))
+      .join('\n');
+
+    for (const reason of BIOGRAPHICAL_REVIEW_REASONS) {
+      expect(constraint, reason).toContain(`'${reason}'`);
+    }
   });
 
   it('reports a store fault during set-portability as a failure, not a refusal', async () => {

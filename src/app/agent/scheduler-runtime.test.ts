@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 import { EventBus } from '../../shared/event-bus.js';
 import { Scheduler } from '../../core/scheduler/scheduler.js';
+import type { FleetMaintenanceCoordinator } from '../../core/scheduler/fleet-maintenance-coordinator.js';
 import { BackgroundMaintenanceRegistry } from '../../core/scheduler/background-maintenance.js';
 import { createEligibilityGate } from '../../system/capabilities/eligibility.js';
 import type { MemoryStorePort } from '../../faculties/memory/memory-store-port.js';
@@ -18,14 +19,61 @@ import {
   DOING_MIRROR_LETTER_DRAIN_OPERATION_ID,
   registerDoingMirrorLetterDrainOperation,
   registerSalienceDecayOperation,
-  BIOGRAPHY_SYNTHESIS_OPERATION_ID,
-  registerBiographySynthesisOperation,
+  BIOGRAPHY_SYNTHESIS_TASK_ID,
+  registerBiographySynthesisTask,
   BIOGRAPHY_COMPANION_REVIEW_TASK_ID,
   registerBiographyCompanionReviewTask,
 } from './scheduler-runtime.js';
 import { registerDurableBackgroundWorkSupervisorTask } from '../../core/agent/background-work/scheduler-task.js';
 
 const SRC_DIR = dirname(fileURLToPath(import.meta.url));
+
+/**
+ * A fleet maintenance authority that grants (or refuses) the baton immediately.
+ * Only the seam the biography lanes actually use is implemented; anything else
+ * throwing is the point — a lane must not reach for authority it has no
+ * business using.
+ */
+function stubFleetMaintenance(options: { acquire?: 'acquired' | 'waiting' } = {}): {
+  coordinator: FleetMaintenanceCoordinator;
+  leaseDurationMs: number;
+  retryDelayMs: number;
+} {
+  const lease = {
+    companionId: 'companion-invented',
+    fencingToken: 1,
+    acquiredAtMs: 0,
+    expiresAtMs: 60_000,
+    phase: 'biography',
+    checkpointRef: null,
+    preemptRequested: false,
+  };
+  const coordinator = {
+    companionId: 'companion-invented',
+    manifestOrdinal: 0,
+    fleetSize: 1,
+    announceDemand: async () => undefined,
+    tryAcquire: async () => (
+      (options.acquire ?? 'acquired') === 'acquired'
+        ? { outcome: 'acquired' as const, lease }
+        : {
+          outcome: 'waiting' as const,
+          reason: 'held' as const,
+          holderCompanionId: 'companion-other',
+          nextCompanionId: null,
+          retryAtMs: null,
+        }
+    ),
+    renew: async () => lease,
+    commitCheckpoint: async () => ({ lease, disposition: 'continue' as const }),
+    release: async () => undefined,
+    requestForegroundPreemption: async () => false,
+    withdrawDemand: async () => undefined,
+    readCheckpoint: async () => null,
+    close: async () => undefined,
+  } satisfies FleetMaintenanceCoordinator;
+  return { coordinator, leaseDurationMs: 60_000, retryDelayMs: 30_000 };
+}
 
 describe('agent scheduler runtime wiring', () => {
   it('wires the core concern worker into the deadline-aware scheduler supervisor', () => {
@@ -165,21 +213,14 @@ describe('agent scheduler runtime wiring', () => {
     expect(source).not.toContain('intervalMs: options.config.maintenanceIntervalMs');
   });
 
-  it('runs biography candidate synthesis on the maintenance lane with content-free telemetry', async () => {
+  it('runs biography synthesis as a governed class under the fleet maintenance baton', async () => {
     const eventBus = new EventBus();
     const scheduler = new Scheduler(eventBus);
-    const eligibilityGate = createEligibilityGate(() => ({
-      getTier: () => 'autonomous',
-      getGrantedTokens: () => new Set(),
-      has: () => true,
-    }));
-    const backgroundMaintenance = new BackgroundMaintenanceRegistry({
-      scheduler,
-      eligibilityGate,
-      intervalMs: 3_600_000,
-    });
     const telemetry = {
       automataRunId: 'biography-synthesis:invented',
+      outcome: 'complete' as const,
+      targetsUnchanged: 1,
+      targetsRemaining: 0,
       targetsScanned: 2,
       targetsSynthesized: 1,
       sourcesScanned: 4,
@@ -197,16 +238,32 @@ describe('agent scheduler runtime wiring', () => {
     eventBus.on('memory.biography.synthesis', event => {
       emitted.push(event);
     });
-    registerBiographySynthesisOperation({
-      backgroundMaintenance,
-      synthesis: { run: async () => telemetry },
+    const boundaries: unknown[] = [];
+    registerBiographySynthesisTask({
+      scheduler,
+      synthesis: {
+        run: async control => {
+          boundaries.push(await control?.onSafeBoundary?.());
+          return telemetry;
+        },
+      },
+      intervalMs: 21_600_000,
+      fleetMaintenance: stubFleetMaintenance(),
       eventBus,
     });
 
-    expect(scheduler.getTask('background-maintenance')).toMatchObject({
-      operations: [{ id: BIOGRAPHY_SYNTHESIS_OPERATION_ID }],
+    const task = scheduler.getTask(BIOGRAPHY_SYNTHESIS_TASK_ID);
+    expect(task).toMatchObject({
+      intervalMs: 21_600_000,
+      // Heavy background cognition never runs mid-conversation, and it is NOT
+      // on the shared per-companion maintenance lane.
+      availability: 'do_not_disturb',
+      scheduleSource: 'settings.json > biographicalDepthPolicy.full.refreshIntervalMs',
     });
-    await scheduler.getTask('background-maintenance')?.handler();
+    expect(scheduler.getTask('background-maintenance')).toBeUndefined();
+    await task?.handler();
+    // The stage received a real checkpoint hook from the baton.
+    expect(boundaries).toEqual(['continue']);
     expect(emitted).toHaveLength(1);
     // Content-free by contract: counts and the run id, never a subject id,
     // claim value, or source body.
@@ -215,14 +272,41 @@ describe('agent scheduler runtime wiring', () => {
       [...Object.keys(telemetry), 'timestamp'].sort(),
     );
 
-    // Reachable from the real runtime: core-runtime constructs the service and
-    // main threads it into the scheduler runtime.
+    // Reachable from the real runtime: core-runtime constructs the service,
+    // main threads it and the fleet baton into the scheduler runtime.
     const schedulerSource = readFileSync(join(SRC_DIR, 'scheduler-runtime.ts'), 'utf-8');
     const mainSource = readFileSync(join(SRC_DIR, 'main.ts'), 'utf-8');
     const coreRuntimeSource = readFileSync(join(SRC_DIR, 'core-runtime.ts'), 'utf-8');
-    expect(schedulerSource).toContain('registerBiographySynthesisOperation({');
+    expect(schedulerSource).toContain('registerBiographySynthesisTask({');
     expect(mainSource).toContain('biographySynthesis: coreRuntime.biographySynthesis');
+    expect(mainSource).toContain('coordinator: persistenceRuntime.fleetMaintenanceCoordinator');
     expect(coreRuntimeSource).toContain('new BiographySynthesisService({');
+  });
+
+  it('cancels a biography stage that never won the fleet baton, without a useful handoff', async () => {
+    const scheduler = new Scheduler(new EventBus());
+    const emitted: unknown[] = [];
+    const eventBus = new EventBus();
+    eventBus.on('memory.biography.synthesis', event => {
+      emitted.push(event);
+    });
+    let ran = 0;
+    registerBiographySynthesisTask({
+      scheduler,
+      synthesis: {
+        run: async () => {
+          ran += 1;
+          throw new Error('a waiting lane must never run its worker logic');
+        },
+      },
+      intervalMs: 21_600_000,
+      fleetMaintenance: stubFleetMaintenance({ acquire: 'waiting' }),
+      eventBus,
+    });
+    await scheduler.getTask(BIOGRAPHY_SYNTHESIS_TASK_ID)?.handler();
+    expect(ran).toBe(0);
+    // A pass that did no work publishes no telemetry either.
+    expect(emitted).toEqual([]);
   });
 
   it('runs companion biography review as its own protected task on the owner-file cadence', async () => {
@@ -230,6 +314,9 @@ describe('agent scheduler runtime wiring', () => {
     const scheduler = new Scheduler(eventBus);
     const telemetry = {
       reviewRunId: 'biography-review:invented',
+      outcome: 'complete' as const,
+      unchanged: false,
+      candidatesRemaining: 0,
       candidatesConsidered: 3,
       candidatesOutsideAuthority: 1,
       candidatesReplayed: 0,

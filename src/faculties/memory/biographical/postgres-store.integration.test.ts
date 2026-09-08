@@ -260,6 +260,76 @@ describe('PostgresBiographicalProfileStore — schema and roundtrip', () => {
     });
   });
 
+  it('persists background-stage cursors and the staged review audit vocabulary', async () => {
+    await withStore(async (store, pool) => {
+      expect(await store.getStageCursor('biography_synthesis', 'contact:absent'))
+        .toBeUndefined();
+      const digest = 'c'.repeat(64);
+      await store.writeStageCursor({
+        stage: 'biography_synthesis',
+        cursorKey: 'contact:cursor-subject',
+        observedDigest: digest,
+        now: NOW,
+      });
+      // A durable cursor is what makes a no-change window free after restart.
+      const restarted = await createPostgresBiographicalProfileStore(pool);
+      expect(await restarted.getStageCursor('biography_synthesis', 'contact:cursor-subject'))
+        .toEqual({
+          stage: 'biography_synthesis',
+          cursorKey: 'contact:cursor-subject',
+          observedDigest: digest,
+          observedAt: NOW.toISOString(),
+        });
+      // Same key under a different stage is a different cursor.
+      expect(await restarted.getStageCursor(
+        'biography_companion_review',
+        'contact:cursor-subject',
+      )).toBeUndefined();
+      const next = 'd'.repeat(64);
+      await restarted.writeStageCursor({
+        stage: 'biography_synthesis',
+        cursorKey: 'contact:cursor-subject',
+        observedDigest: next,
+        now: NOW,
+      });
+      expect((await restarted.getStageCursor('biography_synthesis', 'contact:cursor-subject'))
+        ?.observedDigest).toBe(next);
+      // @ts-expect-error an unknown stage must reject rather than widen
+      await expect(restarted.getStageCursor('invented_stage', 'k')).rejects
+        .toThrow('unknown biography background stage');
+
+      // The o61vb.14/.15 review actions and reason codes must be accepted by
+      // the database, not just by the service that writes them.
+      const claim = await restarted.writeClaim({
+        subject: companion('purrs-audit-vocab'),
+        kind: 'nickname',
+        value: { kind: 'nickname', nickname: 'Sprout', scope: 'self' },
+        basis: 'observed',
+        confidence: 1,
+        sources: [source()],
+        now: NOW,
+      });
+      for (const [action, reason] of [
+        ['stage-approve', 'stage-approved'],
+        ['stage-reject', 'stage-rejected'],
+        ['set-portability', 'portability-set'],
+        ['set-portability', 'portability-refused'],
+      ] as const) {
+        await restarted.recordReviewAudit({
+          claimId: claim.id,
+          claimDigest: claim.claimDigest,
+          sourceSetDigest: claim.sourceSetDigest,
+          action,
+          decision: reason === 'portability-refused' ? 'denied' : 'allowed',
+          reason,
+          actorAuthorityRef: 'garden-standalone:operator',
+          now: NOW,
+        });
+      }
+      expect(await restarted.listReviewAudits(claim.id, 20)).toHaveLength(4);
+    });
+  });
+
   it('round-trips reviewed portability and an n-ary participant set across a restart', async () => {
     await withStore(async (store, pool) => {
       const publicSource = source({ sensitivityAtProjection: 'public' });
@@ -673,12 +743,16 @@ describe('PostgresBiographicalProfileStore — schema and roundtrip', () => {
       const first = await synthesis(store, ['memory-invented-service-1'], 'run-1').run();
       expect(first).toMatchObject({ candidatesStaged: 1, sourcesWithheldByPolicy: 1 });
 
-      // A restart is a fresh store instance and a fresh run id. The durable row
-      // written through the nested claim transaction must be found again, so
-      // the identical proposal writes nothing the second time.
+      // A restart is a fresh store instance and a fresh run id. The durable
+      // stage cursor written by the first pass survives it, so the unchanged
+      // silo is skipped entirely: idempotence costs zero model calls.
       const restarted = new PostgresBiographicalProfileStore(pool, () => NOW);
       const second = await synthesis(restarted, ['memory-invented-service-1'], 'run-2').run();
-      expect(second).toMatchObject({ candidatesStaged: 0, candidatesDuplicate: 1 });
+      expect(second).toMatchObject({
+        candidatesStaged: 0,
+        targetsUnchanged: 1,
+        outcome: 'complete',
+      });
       expect(await restarted.listCandidates({ limit: 10 })).toHaveLength(1);
 
       // Drifted evidence for the same claim supersedes rather than accumulates.

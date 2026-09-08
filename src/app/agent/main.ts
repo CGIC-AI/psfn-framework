@@ -952,6 +952,18 @@ async function main(): Promise<void> {
     },
     biographySynthesis: coreRuntime.biographySynthesis,
     biographyCompanionReview: coreRuntime.biographyCompanionReview,
+    // Biography synthesis and companion self-review are heavy background
+    // cognition, so they take the same fleet-wide serialized turn as sleeptime
+    // and episode synthesis rather than running in every companion at once.
+    ...(persistenceRuntime.fleetMaintenanceCoordinator
+      ? {
+          fleetMaintenance: {
+            coordinator: persistenceRuntime.fleetMaintenanceCoordinator,
+            leaseDurationMs: schedulerConfig.backgroundWork.supervisor.leaseDurationMs,
+            retryDelayMs: schedulerConfig.backgroundWork.supervisor.retryBaseDelayMs,
+          },
+        }
+      : {}),
   });
   // Letters land in their own L0 channel, which no completed turn ever points
   // the extractor at. Bind the bin to the same maybeExtract the post-turn path

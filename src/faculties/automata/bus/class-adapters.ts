@@ -84,6 +84,16 @@ export const AUTOMATA_CLASS_GOVERNED_ADAPTERS = [
     adapterModule: 'src/app/agent/scheduler-runtime.ts',
     busMode: 'single_pass',
   },
+  {
+    automatonClass: 'memory.biography_synthesis',
+    adapterModule: 'src/app/agent/scheduler-runtime.ts',
+    busMode: 'single_pass',
+  },
+  {
+    automatonClass: 'memory.biography_review',
+    adapterModule: 'src/app/agent/scheduler-runtime.ts',
+    busMode: 'single_pass',
+  },
 ] as const satisfies readonly AutomataClassGovernedAdapter[];
 
 /**

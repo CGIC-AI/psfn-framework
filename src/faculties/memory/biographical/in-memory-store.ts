@@ -38,6 +38,14 @@ import {
   type BiographicalPortabilityInput,
 } from './store-port.js';
 import {
+  assertBiographyStage,
+  assertStageCursorDigest,
+  assertStageCursorKey,
+  type BiographyStage,
+  type BiographyStageCursor,
+  type BiographyStageCursorWriteInput,
+} from './stage-cursor.js';
+import {
   assertCandidateClaimBinding,
   assertCandidateListLimit,
   deserializeCandidate,
@@ -133,6 +141,7 @@ export class InMemoryBiographicalProfileStore implements BiographicalProfileStor
   private readonly grants = new Map<string, StoredGrantRow>();
   private readonly rebuilds = new Map<string, StoredRebuildRow>();
   private readonly reviewAudits = new Map<string, BiographicalReviewAuditRecord>();
+  private readonly stageCursors = new Map<string, BiographyStageCursor>();
   private transactionTail: Promise<void> = Promise.resolve();
 
   constructor(private readonly now: () => Date = () => new Date()) {}
@@ -605,6 +614,28 @@ export class InMemoryBiographicalProfileStore implements BiographicalProfileStor
     operation: (store: BiographicalProfileStorePort) => Promise<T>,
   ): Promise<T> {
     return await this.runTransaction(operation);
+  }
+
+  async getStageCursor(
+    stage: BiographyStage,
+    cursorKey: string,
+  ): Promise<BiographyStageCursor | undefined> {
+    return this.stageCursors.get(
+      `${assertBiographyStage(stage)}\u0000${assertStageCursorKey(cursorKey)}`,
+    );
+  }
+
+  async writeStageCursor(
+    input: BiographyStageCursorWriteInput,
+  ): Promise<BiographyStageCursor> {
+    const cursor: BiographyStageCursor = {
+      stage: assertBiographyStage(input.stage),
+      cursorKey: assertStageCursorKey(input.cursorKey),
+      observedDigest: assertStageCursorDigest(input.observedDigest),
+      observedAt: (input.now ?? this.now()).toISOString(),
+    };
+    this.stageCursors.set(`${cursor.stage}\u0000${cursor.cursorKey}`, cursor);
+    return cursor;
   }
 
   async recordReviewAudit(

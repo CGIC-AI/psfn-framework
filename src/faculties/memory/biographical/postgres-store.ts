@@ -55,6 +55,15 @@ import type {
   BiographicalSubjectRef,
 } from './types.js';
 import {
+  assertBiographyStage,
+  assertStageCursorDigest,
+  assertStageCursorKey,
+  deserializeStageCursor,
+  type BiographyStage,
+  type BiographyStageCursor,
+  type BiographyStageCursorWriteInput,
+} from './stage-cursor.js';
+import {
   computeBiographicalRebuildId,
   deserializeBiographicalRebuildRequest,
 } from './lifecycle.js';
@@ -97,6 +106,13 @@ interface RebuildRow {
 
 interface ReviewAuditRow {
   audit_json: unknown;
+}
+
+interface StageCursorRow {
+  stage: string;
+  cursor_key: string;
+  observed_digest: string;
+  observed_at: string | Date;
 }
 
 function deserializeCandidateRow(row: CandidateRow): BiographicalCandidateRecord {
@@ -923,6 +939,43 @@ export class PostgresBiographicalProfileStore implements BiographicalProfileStor
       );
       return await operation(store);
     });
+  }
+
+  async getStageCursor(
+    stage: BiographyStage,
+    cursorKey: string,
+  ): Promise<BiographyStageCursor | undefined> {
+    const row = await this.queryOne<StageCursorRow>(
+      `SELECT stage, cursor_key, observed_digest, observed_at
+       FROM biographical_stage_cursors WHERE stage = $1 AND cursor_key = $2`,
+      [assertBiographyStage(stage), assertStageCursorKey(cursorKey)],
+    );
+    if (!row) return undefined;
+    return deserializeStageCursor({
+      stage: row.stage,
+      cursorKey: row.cursor_key,
+      observedDigest: row.observed_digest,
+      observedAt: new Date(row.observed_at).toISOString(),
+    });
+  }
+
+  async writeStageCursor(
+    input: BiographyStageCursorWriteInput,
+  ): Promise<BiographyStageCursor> {
+    const cursor: BiographyStageCursor = {
+      stage: assertBiographyStage(input.stage),
+      cursorKey: assertStageCursorKey(input.cursorKey),
+      observedDigest: assertStageCursorDigest(input.observedDigest),
+      observedAt: (input.now ?? this.now()).toISOString(),
+    };
+    await (this.client ?? this.pool).query(
+      `INSERT INTO biographical_stage_cursors (stage, cursor_key, observed_digest, observed_at)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (stage, cursor_key)
+       DO UPDATE SET observed_digest = EXCLUDED.observed_digest, observed_at = EXCLUDED.observed_at`,
+      [cursor.stage, cursor.cursorKey, cursor.observedDigest, cursor.observedAt],
+    );
+    return cursor;
   }
 
   async recordReviewAudit(

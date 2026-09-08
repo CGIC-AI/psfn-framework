@@ -312,8 +312,17 @@ description: bounded candidate
 # Body
 `);
       }
+      // The scan yields through setImmediate, so a re-arming immediate is the
+      // deterministic witness that the scan gave the event loop a turn; a
+      // zero-delay interval is a 1ms timer and can miss a fast scan entirely.
       let timerTicks = 0;
-      const timer = setInterval(() => { timerTicks += 1; }, 0);
+      let timerArmed = true;
+      const tick = (): void => {
+        if (!timerArmed) return;
+        timerTicks += 1;
+        setImmediate(tick);
+      };
+      setImmediate(tick);
       const scan = await scanSkillRoots(
         resolveSkillDirectories(makeConfig(), root),
         {
@@ -322,7 +331,7 @@ description: bounded candidate
             yieldEvery: 1,
           },
         },
-      ).finally(() => clearInterval(timer));
+      ).finally(() => { timerArmed = false; });
 
       expect(timerTicks).toBeGreaterThan(0);
       expect(scan.files).toEqual([]);

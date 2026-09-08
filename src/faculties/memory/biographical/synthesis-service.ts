@@ -62,6 +62,14 @@ const DYADIC_CANDIDATE_KINDS: readonly BiographicalClaimKind[] = [
 ];
 
 /**
+ * The only kind an n-ary group claim may take (o61vb.15 / uz787). This is the
+ * claim shape talking, not a tuning choice: `assertRelatedSubjectShape` refuses
+ * a participant set on any other kind precisely so a group fact can never come
+ * to read as a singular one.
+ */
+const GROUP_CANDIDATE_KINDS: readonly BiographicalClaimKind[] = ['shared-language'];
+
+/**
  * One canonical subject to scan, with the social context its candidates are
  * grouped under. Subject selection is runtime authority: the synthesizer never
  * chooses whom it is writing about.
@@ -116,6 +124,12 @@ export interface BiographySynthesisTelemetry {
   readonly candidatesWithheld: number;
   readonly candidatesDuplicate: number;
   readonly targetsFailed: number;
+  /**
+   * Pass declined before any model call because the fleet-wide pending budget
+   * was already full (a18qq). An operator draining `human_review` is what
+   * reopens synthesis; until then the pass costs one count query.
+   */
+  readonly pendingBudgetExhausted: boolean;
 }
 
 export interface BiographySynthesisServiceOptions {
@@ -140,15 +154,57 @@ interface CoalescedCandidate {
   readonly mergedCount: number;
 }
 
-function admittedKindsForSubject(
-  subject: BiographicalSubjectRef,
+/**
+ * uz787: which claim kinds a scan may propose, decided by the target's social
+ * context rather than by the subject alone.
+ *
+ * A `companion_group` target is anchored on the companion subject but is NOT an
+ * autobiography scan: `shared-language` is the only n-ary kind the claim shape
+ * admits (`assertRelatedSubjectShape`), so a group scan proposes that and
+ * nothing else. Without the group context a companion-subject scan keeps its
+ * existing rule: no dyadic kinds at all.
+ */
+function admittedKindsForTarget(
+  target: BiographySynthesisTarget,
 ): readonly BiographicalClaimKind[] {
-  return subject.kind === 'companion'
+  if (target.socialContext.kind === 'companion_group') {
+    return GROUP_CANDIDATE_KINDS;
+  }
+  return target.subject.kind === 'companion'
     ? PORTABLE_BIOGRAPHY_CANDIDATE_KINDS.filter(kind => !DYADIC_CANDIDATE_KINDS.includes(kind))
     : PORTABLE_BIOGRAPHY_CANDIDATE_KINDS;
 }
 
+/**
+ * The exact canonical participant set a group target binds, as canonical
+ * contact subjects. Sourced from the target's authority-issued social context —
+ * never from the model, which cannot name who was in the room.
+ */
+function groupParticipantsForTarget(
+  target: BiographySynthesisTarget,
+): readonly BiographicalSubjectRef[] | undefined {
+  if (target.socialContext.kind !== 'companion_group') return undefined;
+  return target.socialContext.contactIds.map(contactId => ({
+    kind: 'contact' as const,
+    contactId,
+    subjectVersion: 1,
+  }));
+}
+
 function subjectContextBlock(target: BiographySynthesisTarget): string {
+  // uz787: a group scan is anchored on the companion but is not autobiography.
+  // The participant set is stated as a fact of the scan, not as something to
+  // propose: the runtime already decided who was in the group, and a candidate
+  // that tries to name a different set is rejected by the claim shape.
+  if (target.socialContext.kind === 'companion_group') {
+    return [
+      'Subject kind: a group the companion is part of',
+      `Canonical companion id: ${target.socialContext.companionId}`,
+      `Canonical group participants: ${target.socialContext.contactIds.join(', ')}`,
+      'Only shared-language claims about this exact group are available in this scan.',
+      'The participant set is fixed by the runtime; do not propose a different one.',
+    ].join('\n');
+  }
   return target.subject.kind === 'companion'
     ? [
         'Subject kind: the companion themself (autobiography)',
@@ -196,6 +252,19 @@ export function stageCursorKeyForSubject(subject: BiographicalSubjectRef): strin
     : `contact:${subject.contactId}`;
 }
 
+/**
+ * Durable no-change cursor key for one target (uz787). Group targets share the
+ * companion subject, so keying on the subject alone would make every group
+ * overwrite the autobiography's cursor and each other's. The exact canonical
+ * participant set — which the group authority, not the model, decides — is what
+ * distinguishes them.
+ */
+export function stageCursorKeyForTarget(target: BiographySynthesisTarget): string {
+  const subjectKey = stageCursorKeyForSubject(target.subject);
+  if (target.socialContext.kind !== 'companion_group') return subjectKey;
+  return `${subjectKey}|group:${target.socialContext.contactIds.join(',')}`;
+}
+
 export class BiographySynthesisService {
   constructor(private readonly options: BiographySynthesisServiceOptions) {}
 
@@ -211,9 +280,31 @@ export class BiographySynthesisService {
   async run(control: BiographyStageControl = {}): Promise<BiographySynthesisTelemetry> {
     const policy = this.options.candidatePolicy();
     const automataRunId = this.options.newRunId?.() ?? `biography-synthesis:${crypto.randomUUID()}`;
-    const targets = await this.options.targets.listTargets(
-      policy.budgets.maxCandidatesPerAutomataRun,
-    );
+    // a18qq: spend nothing on work the pending cap is already certain to
+    // reject. `writeCandidate` throws 'biography candidate pending budget
+    // exhausted' AFTER the model call and coalescing, so without this read a
+    // saturated human-review backlog made every tick re-synthesize every
+    // changed target, throw at staging, and repeat on the next tick.
+    //
+    // This read is ADVISORY: it takes no lock, so the count can move before a
+    // candidate is staged. That is fine and deliberate — the authoritative
+    // check still runs under the capacity advisory lock inside writeCandidate,
+    // and it is the only thing that admits or refuses. This only decides
+    // whether spending a model call is worth attempting.
+    const pendingCount = await this.options.profileStore.countPendingCandidates();
+    const pendingHeadroom = policy.budgets.maxPendingCandidates - pendingCount;
+    const pendingBudgetExhausted = pendingHeadroom <= 0;
+    if (pendingBudgetExhausted) {
+      log.info('Biography synthesis pass skipped: pending candidate budget exhausted', {
+        pendingCount,
+        maxPendingCandidates: policy.budgets.maxPendingCandidates,
+      });
+    }
+    // Enumerating targets is pointless work when nothing can be staged, and it
+    // keeps the telemetry honest: zero targets scanned, zero model calls.
+    const targets = pendingBudgetExhausted
+      ? []
+      : await this.options.targets.listTargets(policy.budgets.maxCandidatesPerAutomataRun);
     let targetsSynthesized = 0;
     let sourcesScanned = 0;
     let sourcesAdmitted = 0;
@@ -226,7 +317,11 @@ export class BiographySynthesisService {
     let candidatesDuplicate = 0;
     let targetsFailed = 0;
     let targetsUnchanged = 0;
-    let runBudget = policy.budgets.maxCandidatesPerAutomataRun;
+    // The run budget is now bounded by BOTH the per-run cap and the remaining
+    // fleet-wide pending headroom, so a partially-full backlog stops the pass at
+    // the last candidate the cap could actually accept instead of synthesizing
+    // into a guaranteed staging failure.
+    let runBudget = Math.min(policy.budgets.maxCandidatesPerAutomataRun, pendingHeadroom);
     let outcomeState: BiographyStageOutcome = 'complete';
     let processed = 0;
 
@@ -282,6 +377,7 @@ export class BiographySynthesisService {
       candidatesWithheld,
       candidatesDuplicate,
       targetsFailed,
+      pendingBudgetExhausted,
     };
     this.options.onComplete?.(telemetry);
     return telemetry;
@@ -344,7 +440,7 @@ export class BiographySynthesisService {
     // silo costs one cursor read and zero model calls. It is checked after the
     // policy filter on purpose: a source becoming inadmissible changes the
     // digest and correctly re-opens the target.
-    const cursorKey = stageCursorKeyForSubject(target.subject);
+    const cursorKey = stageCursorKeyForTarget(target);
     const evidenceDigest = computeStageInputDigest(collection.evidence.map(
       entry => `${entry.source.ref}@${entry.source.revision}@${entry.source.evidenceDigest}`,
     ));
@@ -356,7 +452,8 @@ export class BiographySynthesisService {
       return { ...empty, unchanged: true };
     }
 
-    const admittedKinds = admittedKindsForSubject(target.subject);
+    const admittedKinds = admittedKindsForTarget(target);
+    const groupParticipants = groupParticipantsForTarget(target);
     const now = this.now();
     const response = await this.synthesize({ target, collection, candidateLimit, admittedKinds });
     const resolution = await resolveLiveBiographicalCandidates({
@@ -368,6 +465,9 @@ export class BiographySynthesisService {
       depth: target.depth,
       candidateLimit,
       admittedKinds,
+      // Authority-issued, so a model that names its own participants cannot
+      // change who a group claim binds.
+      ...(groupParticipants ? { participants: groupParticipants } : {}),
       now,
     });
 

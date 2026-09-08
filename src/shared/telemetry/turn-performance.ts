@@ -11,6 +11,9 @@ export const TURN_PERFORMANCE_STAGES = [
   'channel_queue_wait',
   'post_turn_drain_wait',
   'compaction_wait',
+  // lpxg3.1: current-turn perception (image intake screening + dedicated vision
+  // review) staged BEFORE retrieval so it can cue it. Image turns only.
+  'perception_staging',
   'context_assembly',
   'session_context_assembly',
   'emotion_observation',

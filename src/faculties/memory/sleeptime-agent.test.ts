@@ -4,6 +4,10 @@ import { tmpdir } from 'node:os';
 import { describe, it, expect, vi } from 'vitest';
 import type { InferredPostTurnAction, SubstrateMessage, AgentResponse } from '../../shared/contracts/runtime.js';
 import { EventBus } from '../../shared/event-bus.js';
+import {
+  RUNTIME_FALLBACK_NOTICE_SIGNATURE,
+  RUNTIME_FALLBACK_NOTICE_TEMPLATES,
+} from '../../shared/runtime-fallback-provenance.js';
 import { Scheduler } from '../../core/scheduler/scheduler.js';
 import { wirePostTurnActionRuntime } from '../../app/startup/composition/post-turn-actions.js';
 import { CoreMemoryStore } from '../core-memory/store.js';
@@ -695,6 +699,137 @@ describe('SleeptimeMemoryAgent', () => {
       resetRuntimeChannelClassificationEpochs();
       rmSync(tempDir, { recursive: true, force: true });
     }
+  });
+
+  // psfn-framework-f54sx (via ccgdz.8) — a runtime-authored fallback notice is
+  // delivered in her channel voice but the runtime wrote it, not her. It must
+  // never reach the orient-rewrite transcript, and it must never count as
+  // grounding evidence for a memory write about her. This is the entry-marker
+  // path (`metadata.runtimeFallbackProvenance`), not the text-signature
+  // backstop: the rejected write below paraphrases the notice rather than
+  // quoting it, so only the provenance marker can keep it out.
+  it('excludes a runtime-authored fallback notice from the orient transcript and grounding evidence (f54sx)', async () => {
+    const reviewAgent = makeReviewAgent(JSON.stringify({
+      orient: {
+        persona: 'Focused on careful gateway debugging.',
+        human: 'We debugged the gateway all evening.',
+        goals: 'Continue the gateway debugging work carefully.',
+      },
+      memory_writes: [
+        {
+          // Grounded in HER conversation: must survive.
+          text: 'We debugged the gateway all evening together.',
+          type: 'episodic',
+          importance: 0.8,
+          confidence: 0.9,
+          emotionalValence: 0.1,
+          tags: ['gateway'],
+          sensitivity: 'personal',
+        },
+        {
+          // Grounded ONLY in the runtime-authored notice: must be rejected.
+          text: 'Her image reader failed before she could inspect the attachment.',
+          type: 'semantic',
+          importance: 0.8,
+          confidence: 0.9,
+          emotionalValence: 0,
+          tags: ['vision'],
+          sensitivity: 'personal',
+        },
+      ],
+    }));
+    const memoryWriter = { write: vi.fn().mockResolvedValue({ action: 'created' }) };
+    const agent = new SleeptimeMemoryAgent(makeAgentOptions({
+      agent: reviewAgent,
+      sessionManager: {
+        resolveSessionChannelId: vi.fn((channelId: string) => channelId),
+        getRecentMessages: vi.fn().mockReturnValue([
+          {
+            id: 1,
+            channelId: 'terminal:test',
+            role: 'user',
+            content: 'We debugged the gateway all evening.',
+            timestamp: Date.now(),
+            metadata: '{}',
+          },
+          {
+            id: 2,
+            channelId: 'terminal:test',
+            role: 'assistant',
+            content: RUNTIME_FALLBACK_NOTICE_TEMPLATES.visionUnavailableImageOnly,
+            timestamp: Date.now(),
+            metadata: JSON.stringify({
+              runtimeFallbackProvenance: {
+                schemaVersion: 1,
+                authoredBy: 'runtime',
+                model: 'runtime-fallback',
+                strategy: 'runtime_nonfabricating_notice',
+              },
+            }),
+          },
+        ]),
+      },
+      memoryWriter,
+    }));
+
+    await agent.execute(makeSleeptimeAction());
+
+    // The notice never reaches the model-facing orient-rewrite transcript.
+    const reviewMessage = (reviewAgent.handleMessage as ReturnType<typeof vi.fn>)
+      .mock.calls[0]?.[0] as SubstrateMessage | undefined;
+    expect(reviewMessage).toBeDefined();
+    expect(reviewMessage!.content).toContain('We debugged the gateway all evening.');
+    expect(reviewMessage!.content).not.toContain(RUNTIME_FALLBACK_NOTICE_SIGNATURE);
+    expect(reviewMessage!.content).not.toContain('image reader');
+
+    // ...and it is not grounding evidence: only the conversation-grounded
+    // write survives the 1gpol gate.
+    expect(memoryWriter.write).toHaveBeenCalledTimes(1);
+    expect(memoryWriter.write).toHaveBeenCalledWith(expect.objectContaining({
+      text: 'We debugged the gateway all evening together.',
+    }));
+  });
+
+  // Control for the filter above: when a session's ONLY entries in range are
+  // runtime-authored notices there is no readable transcript at all, and the
+  // pass names that cause instead of silently reviewing runtime speech.
+  it('fails the session explicitly when every entry in range is runtime-authored (f54sx)', async () => {
+    const reviewAgent = makeReviewAgent('{}');
+    const memoryWriter = { write: vi.fn() };
+    const agent = new SleeptimeMemoryAgent(makeAgentOptions({
+      agent: reviewAgent,
+      sessionManager: {
+        resolveSessionChannelId: vi.fn((channelId: string) => channelId),
+        getRecentMessages: vi.fn().mockReturnValue([
+          {
+            id: 1,
+            channelId: 'terminal:test',
+            role: 'assistant',
+            content: RUNTIME_FALLBACK_NOTICE_TEMPLATES.visionUnavailableWithText,
+            timestamp: Date.now(),
+            metadata: JSON.stringify({
+              runtimeFallbackProvenance: {
+                schemaVersion: 1,
+                authoredBy: 'runtime',
+                model: 'runtime-fallback',
+                strategy: 'runtime_nonfabricating_notice',
+              },
+            }),
+          },
+        ]),
+      },
+      memoryWriter,
+    }));
+
+    const result = await agent.execute(makeSleeptimeAction());
+
+    expect(result).toMatchObject({
+      failures: [expect.objectContaining({
+        message: expect.stringContaining('runtime-authored notices'),
+      })],
+    });
+    expect(reviewAgent.handleMessage).not.toHaveBeenCalled();
+    expect(memoryWriter.write).not.toHaveBeenCalled();
   });
 
   it('rejects a fabricated benign memory write with no grounding, even at high confidence (1gpol)', async () => {

@@ -260,6 +260,87 @@ describe('PostgresBiographicalProfileStore — schema and roundtrip', () => {
     });
   });
 
+  // psfn-framework-a18qq — the advisory pending-budget read must count exactly
+  // what `writeCandidate` counts under the capacity lock, or synthesis either
+  // burns model calls it cannot stage or stops for a backlog that has drained.
+  it('counts pending candidates with the same predicate writeCandidate enforces (a18qq)', async () => {
+    await withStore(async (store, pool) => {
+      const policy = createDefaultBiographicalCandidatePolicy();
+      const stage = async (title: string, ref: string) => await store.writeCandidate({
+        automataRunId: 'automata-run-invented-pending-count',
+        automataAuthorityRef: 'maintenance:biography-synthesis',
+        policy,
+        socialContext: {
+          kind: 'companion_contact_dyad',
+          companionId: 'companion-invented-pending',
+          contactId: 'contact-invented-pending',
+        },
+        rationale: 'new_subject_claim',
+        claim: {
+          subject: contact('contact-invented-pending'),
+          kind: 'role',
+          value: { kind: 'role', schemaVersion: 1, roleType: 'creative', title },
+          basis: 'explicit',
+          confidence: 0.9,
+          sources: [source({ ref, sourceType: 'semantic', lifecycleStateAtProjection: 'active' })],
+          validFrom: '2026-01-01T00:00:00.000Z',
+          now: NOW,
+        },
+      });
+
+      expect(await store.countPendingCandidates()).toBe(0);
+      const first = await stage('Illustrator', 'memory:invented-pending-1');
+      const second = await stage('Sound designer', 'memory:invented-pending-2');
+      expect(await store.countPendingCandidates()).toBe(2);
+
+      // A candidate awaiting human review still occupies the budget...
+      await store.transitionCandidate({
+        candidateId: second.id,
+        expectedRevision: 1,
+        to: 'companion_review',
+        receipts: [{
+          authority: 'automata',
+          decision: 'approved',
+          actorAuthorityRef: 'automata:biography-synthesis',
+          reason: 'synthesized',
+        }],
+        now: NOW,
+      });
+      expect(await store.countPendingCandidates()).toBe(2);
+
+      // ...but a terminal one does not: draining the backlog reopens synthesis.
+      await store.transitionCandidate({
+        candidateId: first.id,
+        expectedRevision: 1,
+        to: 'companion_review',
+        receipts: [{
+          authority: 'automata',
+          decision: 'approved',
+          actorAuthorityRef: 'automata:biography-synthesis',
+          reason: 'synthesized',
+        }],
+        now: NOW,
+      });
+      await store.transitionCandidate({
+        candidateId: first.id,
+        expectedRevision: 2,
+        to: 'rejected',
+        receipts: [{
+          authority: 'companion',
+          decision: 'rejected',
+          actorAuthorityRef: 'companion:invented',
+          reason: 'reviewer_rejected',
+        }],
+        now: NOW,
+      });
+      expect(await store.countPendingCandidates()).toBe(1);
+
+      // Durable, not process state: a restarted pass reads the same count.
+      const restarted = new PostgresBiographicalProfileStore(pool, () => NOW);
+      expect(await restarted.countPendingCandidates()).toBe(1);
+    });
+  });
+
   it('persists background-stage cursors and the staged review audit vocabulary', async () => {
     await withStore(async (store, pool) => {
       expect(await store.getStageCursor('biography_synthesis', 'contact:absent'))

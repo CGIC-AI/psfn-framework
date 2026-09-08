@@ -371,6 +371,66 @@ describe('BiographyCompanionReviewService', () => {
     );
   });
 
+  // psfn-framework-uz787 — a claim that already binds an exact canonical
+  // participant set proves its own group context, so a reviewer may re-aim into
+  // it. Nothing is invented: the set comes from the claim under review.
+  it('offers a group context only when the reviewed claim already binds one (uz787)', async () => {
+    const store = new InMemoryBiographicalProfileStore(() => NOW);
+    const groupContext: BiographicalCandidateSocialContext = {
+      kind: 'companion_group',
+      companionId: COMPANION_ID,
+      contactIds: ['contact-a-invented', 'contact-b-invented'],
+    };
+    await store.writeCandidate({
+      automataRunId: 'biography-synthesis:invented-group',
+      automataAuthorityRef: 'maintenance:biography-synthesis',
+      policy: POLICY,
+      socialContext: groupContext,
+      rationale: 'new_subject_claim',
+      claim: {
+        subject: COMPANION,
+        participants: [
+          { kind: 'contact', contactId: 'contact-a-invented', subjectVersion: 1 },
+          { kind: 'contact', contactId: 'contact-b-invented', subjectVersion: 1 },
+        ],
+        kind: 'shared-language',
+        value: {
+          kind: 'shared-language',
+          schemaVersion: 1,
+          languageType: 'phrase',
+          phrase: "pier o'clock",
+          meaning: 'time to go and watch the sunset together',
+        },
+        basis: 'explicit',
+        confidence: 0.9,
+        sources: [source('memory:invented-group-1')],
+        now: NOW,
+      },
+    });
+
+    const reviewed = buildService({
+      store,
+      responses: [{ action: 'approve', reason: 'evidence_supports_claim' }],
+    });
+    await reviewed.service.run();
+
+    const rendered = reviewed.prompts[0]?.user ?? '';
+    expect(rendered).toContain(
+      'companion_group(companionId=companion-invented, '
+      + 'contactIds=[contact-a-invented, contact-b-invented])',
+    );
+
+    // A dyadic candidate proves no group, so no group context is offered.
+    const dyadStore = new InMemoryBiographicalProfileStore(() => NOW);
+    await stageCandidate({ store: dyadStore });
+    const dyadReviewed = buildService({
+      store: dyadStore,
+      responses: [{ action: 'approve', reason: 'evidence_supports_claim' }],
+    });
+    await dyadReviewed.service.run();
+    expect(dyadReviewed.prompts[0]?.user ?? '').not.toContain('companion_group(');
+  });
+
   it('fails closed on wrong-companion, unbound-source and unauthorized-context attempts', async () => {
     const store = new InMemoryBiographicalProfileStore(() => NOW);
     const candidate = await stageCandidate({ store });

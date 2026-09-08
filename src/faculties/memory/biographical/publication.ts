@@ -108,18 +108,30 @@ export async function revokeCompanionPublicationChoice(input: {
   claimId: string;
   revoke: Pick<BiographicalGrantRevokeInput, 'reason'> & { now?: Date };
 }): Promise<BiographicalSensitivityGrant> {
-  const revoked = await input.store.revokeGrant(input.grantId, {
-    reason: input.revoke.reason,
-    ...(input.revoke.now !== undefined ? { now: input.revoke.now } : {}),
+  // a18qq: the two writes are ONE transaction. Withdrawing the choice withdraws
+  // the reach it authorized, and the claim id is required precisely so a caller
+  // cannot revoke the grant while leaving the claim universally portable — but
+  // until now the comment asserting "a revoke can never be half-applied" was
+  // only an assertion: two independent transactions could leave a revoked grant
+  // beside a still-`universal` claim if the process died between them.
+  //
+  // Reading the claim first only picks the lock key (a claim's subject and kind
+  // are immutable); both writes happen inside the transaction, and either both
+  // land or neither does.
+  const claim = await input.store.getClaim(input.claimId);
+  if (claim === undefined) {
+    throw new Error(`cannot revoke a publication choice for an unknown claim: ${input.claimId}`);
+  }
+  return await input.store.runClaimTransaction(claim.subject, claim.kind, async store => {
+    const revoked = await store.revokeGrant(input.grantId, {
+      reason: input.revoke.reason,
+      ...(input.revoke.now !== undefined ? { now: input.revoke.now } : {}),
+    });
+    await store.setClaimPortability({
+      claimId: input.claimId,
+      portabilityScope: 'origin_only',
+      ...(input.revoke.now !== undefined ? { now: input.revoke.now } : {}),
+    });
+    return revoked;
   });
-  // Withdrawing the choice withdraws the reach it authorized. Tightening back
-  // to `origin_only` always succeeds, so a revoke can never be half-applied —
-  // and the claim id is required precisely so a caller cannot revoke the grant
-  // while leaving the claim universally portable.
-  await input.store.setClaimPortability({
-    claimId: input.claimId,
-    portabilityScope: 'origin_only',
-    ...(input.revoke.now !== undefined ? { now: input.revoke.now } : {}),
-  });
-  return revoked;
 }

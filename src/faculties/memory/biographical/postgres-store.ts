@@ -342,6 +342,22 @@ export class PostgresBiographicalProfileStore implements BiographicalProfileStor
     return candidate;
   }
 
+  /**
+   * Advisory pending-budget read (a18qq). Deliberately takes NO advisory lock
+   * and no transaction: it is a hint for the caller's spend decision, never the
+   * admission decision. `writeCandidate` re-counts the identical predicate
+   * under `pg_advisory_xact_lock` and is what actually admits or refuses.
+   */
+  async countPendingCandidates(): Promise<number> {
+    const row = await this.queryOne<{ pending_count: string }>(
+      `SELECT COUNT(*) FILTER (
+         WHERE stage NOT IN ('active', 'rejected', 'superseded')
+       )::text AS pending_count
+       FROM biographical_candidates`,
+    );
+    return Number(row?.pending_count ?? '0');
+  }
+
   async listCandidates(
     options: BiographicalCandidateListOptions,
   ): Promise<BiographicalCandidateRecord[]> {
